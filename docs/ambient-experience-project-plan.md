@@ -9,7 +9,7 @@ Review roles: Sol, Terra, Luna
 
 ## Outcome
 
-Deliver optional full-window snow/rain/Matrix effects, two ambient chat media panels, public YouTube search/playlists, optional connected-account playlists, configurable glow, custom placement/sizing, a live workflow/sub-agent view, and supported-platform native window opacity without weakening Cafe Code's security or long-session stability.
+Deliver optional full-window snow/rain/Matrix effects, two ambient chat media panels, public YouTube search/playlists, optional connected-account playlists, floating and cinema-workspace video presentations, configurable glow, custom placement/sizing, a live workflow/sub-agent view, and supported-platform native window opacity without weakening Cafe Code's security or long-session stability. Separately evaluate a conditional desktop Local Media Theater and projectM visualizer without treating native libVLC, audio-tap, or visualization feasibility as a shipping commitment.
 
 This plan intentionally delivers reviewable slices. Contract/scaffolding phases may merge only behind inactive feature gates; a user-visible feature may ship only when its renderer/server dependency and exit gate are clean.
 
@@ -17,17 +17,18 @@ This plan intentionally delivers reviewable slices. Contract/scaffolding phases 
 
 Each implementation slice has an author and a different auditor. Authors must not approve their own slice. The default rotation is:
 
-| Slice                      | Primary | Independent audit |
-| -------------------------- | ------- | ----------------- |
-| Contracts and settings     | Luna    | Sol               |
-| Atmosphere renderer        | Sol     | Terra             |
-| Media security and storage | Terra   | Luna              |
-| YouTube discovery/account  | Terra   | Sol               |
-| Workflow normalization     | Luna    | Terra             |
-| Workflow UI                | Spark   | Sol               |
-| Chat media interaction     | Spark   | Sol               |
-| Electron opacity           | Sol     | Luna              |
-| Integration/release        | Spark   | Terra, then Luna  |
+| Slice                         | Primary | Independent audit |
+| ----------------------------- | ------- | ----------------- |
+| Contracts and settings        | Luna    | Sol               |
+| Atmosphere renderer           | Sol     | Terra             |
+| Media security and storage    | Terra   | Luna              |
+| YouTube discovery/account     | Terra   | Sol               |
+| Workflow normalization        | Luna    | Terra             |
+| Workflow UI                   | Spark   | Sol               |
+| Chat media/cinema interaction | Spark   | Sol               |
+| Local media feasibility       | Terra   | Luna              |
+| Electron opacity              | Sol     | Luna              |
+| Integration/release           | Spark   | Terra, then Luna  |
 
 If an assigned model/agent is unavailable, preserve the role separation with another reviewer and record the substitution in the pull request.
 
@@ -52,6 +53,10 @@ Canon and threat model
         +--> external-browser OAuth/PKCE --> private playlist picker
         |
         +--> pure media geometry --> preset panels --> custom drag/resize
+        |                                  `--> stable player session --> cinema workspace
+        |
+        +--> Local Media native feasibility spike --> conditional native theater
+        |                                      `--> bounded PCM tap --> conditional projectM visualizer
         |
         +--> normalized orchestration activities
         |        `--> workflow reducer/snapshot --> plan/workflow panel
@@ -102,6 +107,7 @@ Goal: introduce safe, backward-compatible configuration with no renderer behavio
 Tasks:
 
 - Add flat bounded schemas and defaults for atmosphere, media layout, ambient image metadata, and glow.
+- Add shared `ambientVideoPresentationMode: floating | cinema` with canonical/backward-compatible default `floating`; include it in `ClientSettingsSchema`, `ClientSettingsPatch`, ambient key/reset vectors, and changed-settings summaries.
 - Add atomic `YouTubeSource` (`video | playlist | null`) with strict IDs and default `null`.
 - Use one shared `preset | custom` layout mode per media slot plus separate preset placement/size fields.
 - Add every key to `ClientSettingsPatch`.
@@ -126,6 +132,7 @@ Likely files:
 Tests:
 
 - old direct, legacy-wrapped, empty, and partial settings decode to all-off safe defaults;
+- missing/legacy `ambientVideoPresentationMode` decodes to `floating`; `floating` and `cinema` patches round-trip, other values reject atomically, and ambient reset/change-key parity includes the field;
 - a corrupt ambient field/group preserves unrelated valid settings and emits a normalized warning;
 - bounds, enum values, `"auto"`/hex colors, asset IDs, and malformed RPC patches are rejected atomically;
 - patch-key parity test remains clean;
@@ -464,7 +471,75 @@ Exit gate:
 - threat-model and Google-policy reviews are recorded;
 - Terra's slice is audited by Sol.
 
-## Phase 5 — Custom drag, resize, and accessibility
+## Phase 4C — YouTube Cinema workspace
+
+Goal: add an in-app, playback-preserving cinema layout without changing the default floating experience or conflating it with native YouTube fullscreen.
+
+Tasks:
+
+- Use the shared `ambientVideoPresentationMode: floating | cinema` Client Settings field, with `floating` as the backward-compatible default. Keep `ambientVideoLayoutMode: preset | custom` as floating geometry state; entering or exiting cinema patches only presentation mode and does not overwrite floating geometry.
+- Derive effective cinema locally from shared `cinema` intent plus `ambientVideoEnabled`, a non-null valid source, a ready local player renderer, and a fitting protected-player layout. Failed readiness, no source, disabled video, hydration, or insufficient space keeps normal chat visible and does not patch shared intent.
+- Keep native YouTube fullscreen player-owned and transient. Fullscreen temporarily supersedes the current in-app presentation and returns to that presentation on exit; Cafe Code does not fake fullscreen by stretching the iframe.
+- Build the canonical three-region layout: the existing project sidebar on the left, one unobstructed 16:9 YouTube player in the center, and the active chat rail on the right.
+- Treat the center iframe rectangle as protected. No Cafe-owned atmosphere, glow, image, chat control, popover, toast, dialog, onboarding, or shutdown visual may paint over or intersect it. Put required Cafe controls in the side regions or leave cinema before showing a surface that cannot fit.
+- Let the project sidebar and chat rail collapse and expand independently, with transient per-device state and accessible toggles. Give reclaimed space to the center player without changing the other rail.
+- Hoist one stable player/session owner and iframe host into an authenticated workspace shell above route-, project-, and thread-specific chat content. Key it by normalized YouTube source rather than navigation identity. `ChatView` only registers a measured floating anchor/portal target; neither route switches nor presentation changes reparent the iframe.
+- Preserve playback and source across project/thread switches and floating/cinema transitions. Disable and source replacement retain their existing stop/unmount behavior.
+- Preserve the last floating preset/custom mode and custom geometry. Exiting cinema restores the resolved floating presentation without a geometry write or jump.
+- Make ambient-image suppression render-only while cinema is locally effective. Never capture, restore, or patch shared image enable/source state. When cinema stops being effective, read the current authoritative image settings and local geometry so concurrent shared changes are not overwritten.
+- Base Plan/Workflow inline-versus-sheet behavior on measured chat-rail width. Force Diff into an existing sheet that avoids the player or locally suspend cinema while the stable playback session survives. Never create a fourth pane or patch shared presentation for these local layout decisions.
+- Add a pure responsive layout calculation that collapses rails before shrinking the player. Keep the protected 16:9 viewport at least 356 by 200 CSS pixels after rounding; when that cannot fit with reachable controls and safe-area insets, locally show the normal/floating-safe layout and a clear status without patching the shared `cinema` preference.
+- Add mode and rail keyboard controls, visible focus, semantic expanded/selected state, predictable focus entry/return, descriptive iframe title, and non-trapping focus order.
+- Define `Escape` so Cafe Code exits cinema only when native fullscreen is inactive and the iframe has not consumed the key. Preserve player/platform ownership of native fullscreen exit.
+
+Likely files:
+
+- shared presentation settings integration plus a renderer-local playback/session state module
+- an authenticated workspace-level `VideoSessionHost` (name illustrative) that owns the stable iframe
+- `apps/web/src/components/chat/ChatMediaOverlay.tsx`
+- `apps/web/src/components/chat/AmbientVideoPanel.tsx`
+- `apps/web/src/components/chat/ChatView.tsx` only for measured floating-anchor/portal-target registration
+- new cinema workspace layout and responsive geometry modules
+- authenticated root/workspace route shells above chat routes
+- browser tests for layout, focus, navigation identity, and fullscreen transitions
+
+Tests:
+
+- missing/legacy settings decode to floating, and entering/exiting cinema patches only `ambientVideoPresentationMode` without mutating floating layout mode or geometry;
+- shared presentation changes reach connected renderers while active playback, native fullscreen, and rail collapse state remain device-local;
+- effective cinema requires shared intent, enabled video, a source, local player readiness, and layout fit; every failed term leaves normal chat usable, shows no blank center, and preserves shared `cinema` intent;
+- floating, cinema workspace, and native fullscreen are distinct states with deterministic return transitions;
+- geometry/layer assertions prove that no Cafe-owned element intersects the iframe rectangle in cinema, including atmosphere, image/glow, scroll affordances, dialogs, toasts, onboarding, and shutdown;
+- left and right rails collapse independently by pointer and keyboard, expose correct semantic state, and transfer only their own space to the center;
+- project and thread switches preserve iframe DOM identity and parent, normalized source, player adapter identity, and playback intent while updating the surrounding rails;
+- entering/exiting cinema changes host layout without reparenting the iframe, and `ChatView` unmount/remount only changes the measured floating anchor registration;
+- source replacement and disable stop and unmount the old player exactly once;
+- repeated floating/cinema round trips restore preset/custom mode and normalized custom geometry without extra persistence writes;
+- ambient-image suppression writes no image settings; remote enable/disable/source changes made during cinema are read authoritatively when cinema locally suspends/exits;
+- Plan/Workflow uses measured chat-rail breakpoints for its sheet, and Diff uses a noncompeting sheet or local cinema suspension without iframe replacement or shared-setting writes;
+- responsive tests cover both rails open, either rail closed, both closed, browser zoom, safe areas, and the exact protected-player fit boundary without rendering below 356 by 200 CSS pixels or patching shared presentation;
+- focus enters and returns predictably, rail/mode controls are keyboard operable, cinema is not a focus trap, and the iframe title remains descriptive;
+- native fullscreen enter/exit returns to the prior floating or cinema state, while `Escape` ownership does not double-exit;
+- navigation, toggling, and error recovery do not duplicate iframes, listeners, player adapters, or playback telemetry.
+
+Manual checks:
+
+- floating remains the startup/default presentation and retains existing preset/custom behavior;
+- cinema shows the existing project sidebar, unobstructed center video, and usable right-side conversation;
+- project and thread switches do not interrupt audible/visible playback;
+- each rail can be collapsed and reopened without moving controls over the player;
+- native player fullscreen enters and returns to the prior in-app presentation on browser and Electron surfaces;
+- narrow windows and high zoom fail back clearly before the player or controls become unusable.
+
+Exit gate:
+
+- unit and browser tests for state, stable player lifecycle, responsive layout, layering, keyboard/focus, and fullscreen transitions pass;
+- no-source, disabled, player-not-ready/error, plan/workflow, diff, and fit-failure gates preserve normal chat, stable playback where available, and shared cinema intent;
+- a screen-reader and browser/Electron manual pass is recorded;
+- no Cafe-owned visual overlaps the cinema iframe in the recorded layout matrix;
+- Spark's slice is audited by Sol.
+
+## Phase 5A — Custom drag, resize, and accessibility
 
 Goal: add precise custom media positioning without disrupting chat interaction.
 
@@ -508,6 +583,77 @@ Exit gate:
 - a screen-reader/keyboard manual pass is recorded;
 - Spark's slice is audited by Sol.
 
+## Phase 5B — Local Media Theater feasibility and conditional implementation
+
+Goal: determine whether a secure, supportable native libVLC theater can ship, then implement it only if the feasibility gate passes.
+
+This phase is conditional. Its spike and decision record are required work; user-facing implementation is not authorized merely because the spike exists.
+
+Feasibility tasks:
+
+- Prototype a desktop-only libVLC process/native boundary without using or depending on a browser plugin. Compare: (a) native drawable/child-window output, (b) CPU video callbacks copied into renderer-owned canvas/WebGL textures, and (c) LibVLC 4 GPU/texture callbacks.
+- For native drawable, record OS compositor ownership, clipping/z-order/opacity/focus limitations, and accept that this route cannot promise DOM interleaving or a true project/chat overlay.
+- For CPU callbacks, benchmark decode-to-CPU copies, renderer upload, memory bandwidth, latency, color conversion, resolution/frame-rate ceilings, background throttling, and 16-hour resource stability.
+- For LibVLC 4 GPU/texture callbacks, prove API maturity and bindings plus D3D/Metal/Vulkan/OpenGL interop as applicable, synchronization, device-loss recovery, sandbox/process transfer, packaging, and cross-platform maintainability.
+- Record supported platforms/architectures, binary provenance, package size, startup cost, renderer/GPU composition behavior, crash isolation, update compatibility, installer/code-signing/notarization effects, and uninstall cleanup.
+- Complete legal/branding review. Record LGPL notices, license text, corresponding-source/relinking obligations, distribution of modified components, and whether product copy may use VLC marks; default to `Local Media` or `Local Media (libVLC)`.
+- Produce an explicit tested codec, container, playlist, subtitle, audio, and direct-stream protocol matrix. State clearly that the feature does not guarantee every codec/service, DRM, YouTube search/account parity, website URL extraction, or circumvention of third-party playback controls.
+- Threat-model local file capabilities, playlist parsing, network destinations, redirects, DNS rebinding, credentials, metadata/logging, native crashes, malformed-media decoder attacks, process ownership, and update cadence.
+- Define performance budgets for CPU/GPU, memory, decoder processes, textures, file handles, buffering, and teardown during the 16-hour target session.
+- Prototype a bounded libVLC decoded-PCM tap feeding `libprojectM`. Measure audio-thread blocking, ring-buffer overrun/underrun, FFT/render latency, preset-switch cost, renderer upload, CPU/GPU use, hidden/unfocused behavior, and 16-hour cleanup/stability.
+- Require the libVLC audio callback to be allocation-free, lock-free/nonblocking, and limited to bounded ring-buffer admission. Normalize sample rate, channel layout, and format off callback; drop oldest visualization input on overflow; cap audio-to-visual latency, render FPS/resolution/device-pixel-ratio, and guarantee that visualizer backpressure never reaches playback.
+- Prototype projectM analysis/rendering inside a crash-isolated, least-privileged native media worker. Do not load it in the sandboxed renderer/backend, callback into JavaScript, or send raw PCM/FFT/history through renderer/server IPC. Prove a typed minimal control/status bridge and bounded texture/fence-handle transfer for each proposed platform; treat any CPU-copy route as a separately measured architecture.
+- Inventory projectM core, bundled preset, texture-pack, and shader/input licenses. Version 1 is reviewed-bundled-presets-only. A future import gate must specify private content-addressed extraction; archive count/ratio/byte limits; traversal/absolute/symlink/reparse/include/external-reference rejection; texture count/dimension/decoded-pixel and transition caps; TOCTOU resistance; killable helper watchdog/device-reset recovery; and a malicious-input corpus.
+- Establish a photosensitivity-safe bundled-preset allowlist and a tested post-render temporal flash limiter for luminance and saturated-red flashes. Reduced motion must stop the PCM tap, FFT, projectM, and visualizer GPU work without stopping user-requested audio.
+- Classify PCM, FFT/spectrum, and analysis history as ephemeral sensitive media data that never leaves the native worker or enters IPC, persistence, synchronization, logs, telemetry, prompts, workflow, diagnostics, or crash dumps. Rendered visualizer output may cross only through the approved local texture/fence-handle path into the sandboxed renderer; it is never CPU-read back, persisted, logged, or sent through server/remote IPC, telemetry, prompts, workflow, diagnostics, or crash dumps.
+- Record that YouTube is not a PCM source: the IFrame API exposes no audio-sample interface, and the implementation must not extract, intercept, decode, proxy, or otherwise analyze YouTube audiovisual content. Keep any generic system-output capture idea in a separate feasibility record requiring capture consent/privacy, WASAPI/Core Audio/PipeWire support, device/feedback recovery, and written third-party policy review; it is unavailable while Cafe Code's YouTube player is active.
+
+Conditional implementation tasks, only after a recorded go decision:
+
+- Add an explicit desktop capability response and default-off feature gate. Browser deployments render an honest unsupported state and never fall back to an unreviewed HTML player.
+- Accept local files only through a native picker and a narrow desktop-local capability. Do not synchronize or log paths, and revalidate playlist entries at open time.
+- Support only approved local playlist formats and direct network schemes from the recorded matrix.
+- Put direct streams behind a narrow destination policy: reject URL credentials and unsupported schemes; validate every redirect and resolved address; block loopback, link-local, private, metadata, and rebinding destinations unless a separately reviewed local-network policy explicitly permits them; bound redirects, timeouts, buffering, response size, and retries.
+- Keep native media processes and file/network capabilities out of the sandboxed renderer. Use a typed, authenticated desktop bridge with structured reason codes and no arbitrary path, URL, argv, or native-command execution.
+- Add optional project/chat background or overlay presentation, distinct from YouTube Cinema, only if a renderer-owned CPU- or GPU-texture route passes the recorded performance and composition gate. A native-drawable implementation is limited to a dedicated theater region and MUST NOT advertise DOM overlay. Provide bounded opacity and readability treatments without obscuring focus, selection, composer state, or critical status.
+- Add explicit `Pass through` and `Interact` click modes. Pass-through sends pointer input to Cafe Code and retains a dedicated non-overlapping or keyboard media-control path; interact mode exposes the media surface, a visible mode indicator, and an immediate keyboard escape. No invisible layer captures input.
+- Define preset placement and bounded size before custom geometry. Preserve project/thread playback only when locally configured; disable, replace, shutdown, permission loss, and crash recovery release every native process, decoder, file handle, request, texture, and audio resource.
+- Add a one-action stop/disable path and clear recovery for decoder crash, unavailable codec, missing file, revoked file access, unsafe URL, offline stream, and unsupported platform.
+- Package required notices and corresponding-source/relinking material in every artifact whose feasibility record requires them.
+- If and only if the audio-visualizer feasibility record passes, add a default-off `Local Media visualizer` sourced exclusively from the approved Local Media PCM tap, with reviewed bundled presets, bounded preset switching, a runtime-schema-bounded desktop-local `{ enabled, bundledPresetId }` record, field-scoped recovery, reduced-motion behavior, and deterministic worker/audio/GPU teardown. Do not persist source, playback position, PCM, analysis state, or imported paths.
+
+Tests:
+
+- capability and feature gates prevent any browser/native work while unavailable or off;
+- architecture prototypes record comparable CPU/GPU, memory, copy count, latency, frame pacing, device-loss, resize, clipping, z-order, and 16-hour stability results on every proposed platform;
+- native-drawable builds expose only the dedicated theater presentation and cannot select or advertise DOM background/overlay;
+- CPU/GPU callback builds expose overlay only after automated composition tests and recorded performance budgets pass; fallback after device/texture failure removes the overlay claim rather than silently switching to an uncomposable native drawable;
+- renderer requests cannot open arbitrary paths, network destinations, processes, or libVLC options;
+- file selection capabilities are owner-local, narrow, revocable, not synchronized, and absent from logs/diagnostics;
+- malformed playlists, traversal, symlinks/reparse points, special files, changing files, and stale capabilities fail closed;
+- direct streams reject credentials, disallowed schemes/ports, redirects outside policy, private/link-local/loopback/metadata targets, mixed DNS answers, and DNS rebinding;
+- playlist and redirect entries are revalidated at point of use, with bounded timeout, buffering, retry, and cancellation;
+- fuzz/malformed-media fixtures cannot crash Cafe Code or leave orphaned native processes/resources;
+- pass-through mode preserves chat/project pointer, selection, drag, scroll, and keyboard behavior; interact mode is announced, keyboard escapable, and never invisibly captures input;
+- overlay opacity/readability remains bounded across themes, zoom, focus, critical dialogs, and narrow layouts;
+- project/thread preservation follows local policy, while disable, replace, shutdown, crash, and permission loss deterministically release native resources;
+- packaged-artifact tests verify native libraries, architecture, signing/notarization expectations, notices, license text, and required corresponding-source/relinking material;
+- the tested support matrix matches user-facing capability copy.
+- audio-file and approved Local Media playback feed bounded PCM to projectM without blocking decode/audio threads or chat rendering; pause/stop/disable/replace/crash/shutdown release every PCM, analysis, preset, graphics, and texture resource;
+- direct YouTube audio cannot be selected as a visualizer source, no iframe/media interception path exists, and any future generic system-audio experiment remains gated off while the Cafe YouTube player is active;
+- the audio callback remains allocation-free and nonblocking under ring overrun, format changes, device loss, and slow/hung visualization; overflow drops bounded visualization input without affecting playback; PCM/FFT/history remain inside the native worker; and rendered output crosses only by the approved local texture/fence handle and is never CPU-read back or admitted to server/remote IPC, logs, diagnostics, telemetry, prompts, workflow events, persistence, or crash dumps;
+- bundled preset tests enforce license inventory, the safe allowlist, temporal luminance/saturated-red flash thresholds, bounded switching, reduced-motion no-work behavior, hidden/unfocused policy, and malicious-preset failure isolation;
+- a future import test suite is mandatory before exposing import and covers archive bombs, texture bombs, traversal, absolute paths, symlinks/reparse points, shader includes, external file/network references, TOCTOU, malicious shaders, GPU timeout/reset, helper crash/restart, and complete cleanup;
+- helper crash, GPU hang/device loss, malformed status/handle messages, restart, and shutdown release every buffer/context/texture/fence handle while chat remains usable;
+- desktop-local visualizer settings default off, reject unknown preset IDs, recover their own corrupt fields without damaging unrelated settings, and Disable All does not report success until the PCM tap/worker is stopped or a retryable partial failure is reported.
+
+Exit gates:
+
+1. **Feasibility gate:** security, legal/licensing, branding, packaging, performance, and platform owners record a go/no-go decision plus the selected native-drawable, CPU-callback, or LibVLC 4 GPU/texture architecture and its platform matrix. A no-go ends the phase with no user-visible player.
+2. **Overlay gate:** a true project/chat DOM overlay is separately approved only after a renderer-owned texture route proves composition, device-loss recovery, and performance budgets. Native drawable alone cannot pass this gate.
+3. **Audio-visualizer gate:** Local Media visualization ships only after the bounded PCM tap, projectM packaging/licensing, preset security, reduced-motion behavior, renderer isolation, and long-session resource budgets pass. YouTube remains excluded as a direct audio source.
+4. **Conditional ship gate:** only after go, focused unit/integration/native-artifact tests and the release matrix pass, a long-session resource soak is recorded, user-facing capability copy matches the selected architecture, and Terra's implementation is audited by Luna.
+
 ## Phase 6 — Native whole-window opacity
 
 Goal: support bounded whole-window opacity on compatible Electron platforms.
@@ -525,7 +671,7 @@ Tasks:
 - If any window apply fails, best-effort reset every currently registered window to 1.00 and persist safe `{ enabled: false, opacity: 1 }`. If persistence after a successful apply fails, roll every window back to the previous effective value while preserving the remembered preference pair. Rollback/reset/recovery-persistence failure returns mixed-or-unknown/unknown state and a stable degraded reason rather than claiming agreement.
 - Keep the browser UI fully opaque and capability-gated.
 - Add the Appearance control now that a real capability query exists, plus reset/recovery and a legibility warning.
-- Create the one-action Restore Appearance/Disable all coordinator here. It resets backend ambient settings and desktop-local opacity, reports each result independently, and offers retry for any partial failure.
+- Create the one-action Restore Appearance/Disable all coordinator here. It resets backend ambient settings and desktop-local opacity and, when conditionally shipped, stops Local Media playback, its visualizer, PCM tap, and native worker. It reports each backend/native-media/opacity result independently, preserves successful changes, retries native teardown, and remains available until every requested subsystem is confirmed off.
 
 Likely files:
 
@@ -561,7 +707,7 @@ Tests:
 - serialized concurrent mutations cannot overwrite a later successful state;
 - restart after every success/failure path rehydrates the expected state;
 - theme changes do not overwrite opacity;
-- coordinated reset reports/retries a partial backend/local failure;
+- coordinated reset reports/retries independent backend/native-media/opacity failures and cannot report complete while a conditionally shipped PCM tap/worker remains live;
 - sandbox, context isolation, and Node integration remain unchanged.
 
 Manual checks:
@@ -586,12 +732,15 @@ Tasks:
 
 - Verify the one-action Disable all ambient features coordinator delivered in Phase 6.
 - Verify layer order among atmosphere, media, scroll pill, dialogs, command palette, onboarding, and shutdown.
+- Verify floating, cinema workspace, and native YouTube fullscreen remain distinct, with an unobstructed cinema player and stable playback across project/thread navigation.
 - Verify native opacity composes predictably with effects and media.
 - Run all combinations at boundaries, including both media slots and the plan/workflow panel.
+- If Local Media passed its conditional ship gate, include its native process, file/network policy, overlay click modes, package obligations, crash recovery, and resource teardown in every applicable release audit.
+- If the projectM visualizer passed its separate gate, include PCM privacy/redaction, callback/ring backpressure, worker/IPC isolation, photosensitivity limits, reduced-motion no-work behavior, bundled-preset licensing/security, crash/GPU-hang recovery, Disable All, and rollback in every applicable release audit.
 - Run long-session and repeated-toggle resource tests.
 - Verify shared settings update connected renderers without synchronizing playback, geometry, or native opacity.
 - Review user copy, privacy disclosure, unsupported-platform text, and recovery documentation.
-- Review logs/tests to ensure URLs, search terms, normalized video/playlist IDs, API keys, OAuth secrets/tokens/codes, playback events, upload filenames, image bytes, workflow payloads, prompts, and local paths are redacted.
+- Review logs/tests to ensure URLs, search terms, normalized video/playlist IDs, API keys, OAuth secrets/tokens/codes, playback events, upload filenames, image bytes, workflow payloads, prompts, local paths, PCM, FFT/spectrum values, analysis history, and visualizer frames are redacted.
 - Audit every changed file by someone other than its author.
 - Resolve and retest all findings.
 - Run and record a rollback/re-enable drill for renderer gates, workflow contract compatibility, public discovery, in-flight OAuth, token refresh, media teardown, and native opacity safe recovery.
@@ -612,23 +761,29 @@ Run focused tests during development, but the full commands are the release gate
 
 Cross-surface matrix:
 
-| Dimension       | Cases                                                                                            |
-| --------------- | ------------------------------------------------------------------------------------------------ |
-| Surface         | Electron, authenticated browser                                                                  |
-| Platform        | Windows, macOS, Linux X11/Wayland                                                                |
-| Theme           | Light, dark, system, custom accent                                                               |
-| Motion          | Normal, reduced motion, hidden, unfocused, background override                                   |
-| Layout          | Sidebar states, plan/workflow panel, diff panel, zoom, narrow/wide, multi-monitor                |
-| Atmosphere      | Off, snow, rain, Matrix; automatic/custom color; opacity/speed bounds                            |
-| Ambient media   | None, GIF only, YouTube only, both, invalid/offline                                              |
-| YouTube source  | URL video, URL playlist, public search, public playlist, owned playlist                          |
-| YouTube account | Unconfigured, disconnected, connecting, connected, expired/revoked, disconnecting                |
-| OAuth topology  | Local desktop/local backend, configured canonical HTTPS remote, unsupported topology             |
-| Position        | Both presets, collision case, custom edges/corners                                               |
-| Size            | Small, medium, large, custom min/max                                                             |
-| Workflow        | No agents, parallel/nested agents, reconnect, reduced fidelity, duplicate/out-of-order lifecycle |
-| Opacity         | Off/1.00, minimum, intermediate, unsupported, partial failure/recovery                           |
-| Lifecycle       | Startup, route/thread change, disable, replace, minimize/restore, restart                        |
+| Dimension         | Cases                                                                                            |
+| ----------------- | ------------------------------------------------------------------------------------------------ |
+| Surface           | Electron, authenticated browser                                                                  |
+| Platform          | Windows, macOS, Linux X11/Wayland                                                                |
+| Theme             | Light, dark, system, custom accent                                                               |
+| Motion            | Normal, reduced motion, hidden, unfocused, background override                                   |
+| Layout            | Sidebar states, plan/workflow panel, diff panel, zoom, narrow/wide, multi-monitor                |
+| Presentation      | Floating, cinema workspace, native YouTube fullscreen, return transitions                        |
+| Cinema rails      | Both open, left closed, right closed, both closed, protected-player fit failure                  |
+| Atmosphere        | Off, snow, rain, Matrix; automatic/custom color; opacity/speed bounds                            |
+| Ambient media     | None, GIF only, YouTube only, both, invalid/offline                                              |
+| YouTube source    | URL video, URL playlist, public search, public playlist, owned playlist                          |
+| YouTube account   | Unconfigured, disconnected, connecting, connected, expired/revoked, disconnecting                |
+| OAuth topology    | Local desktop/local backend, configured canonical HTTPS remote, unsupported topology             |
+| Position          | Both presets, collision case, custom edges/corners                                               |
+| Size              | Small, medium, large, custom min/max                                                             |
+| Local media gate  | No-go/absent, unsupported browser, off, available; only if Phase 5B reaches implementation       |
+| Local media input | Approved file/playlist/direct stream, revoked/missing, malformed, unsafe network; conditional    |
+| Local overlay     | Off, background, overlay; pass-through/interact; opacity/readability bounds; conditional         |
+| Audio visualizer  | Off, Local Media PCM/projectM, invalid preset, teardown; YouTube source rejected; conditional    |
+| Workflow          | No agents, parallel/nested agents, reconnect, reduced fidelity, duplicate/out-of-order lifecycle |
+| Opacity           | Off/1.00, minimum, intermediate, unsupported, partial failure/recovery                           |
+| Lifecycle         | Startup, route/project/thread change, mode switch, disable, replace, minimize/restore, restart   |
 
 Soak gate:
 
@@ -653,7 +808,7 @@ Each feature is independently default-off and gated by persisted settings. If a 
 
 1. force the affected atmosphere/media/workflow renderer gate or search/OAuth backend gate off independently;
 2. keep field/group-scoped settings recovery in the current writer; before a binary downgrade, back up the settings file because an older writer may discard unknown keys;
-3. unmount/stop the canvas, iframe, and image immediately; stop new search work, bound/discard transient caches, and let already-counted upstream quota remain accounted rather than retrying;
+3. unmount/stop the canvas, iframe, image, and any conditionally shipped native media session immediately; stop its PCM tap/projectM worker before releasing texture/fence handles, discard ephemeral PCM/FFT/history, stop new search/stream work, close native file/network/process capabilities, bound/discard transient caches, and let already-counted upstream quota remain accounted rather than retrying;
 4. invalidate in-flight PKCE state and close loopback listeners when account connection is gated off. Stop connect/refresh/playlist work but leave owner-only disconnect/revoke/delete available. Retain existing encrypted tokens for a reversible temporary rollback; only an explicit disconnect or security-incident runbook revokes/deletes them;
 5. retain a backward-compatible workflow snapshot/event contract while older clients exist. Gate the Workflow UI when it cannot understand the advertised contract version; reject late events from the disabled projection;
 6. keep the opacity bridge and recovery control available until every live window is confirmed at 1.00 and safe settings are confirmed persisted. If reset cannot be verified, abort bridge removal and use the safe-start/restart runbook;
@@ -673,26 +828,31 @@ Prefer these reviewable pull requests:
 5. ambient image store/upload and preset image panel;
 6. CSP/security headers, strict YouTube source parser, public search, and preset player;
 7. external-browser OAuth/token storage and owned-playlist picker;
-8. custom drag/resize and accessibility;
-9. Electron opacity capability, lifecycle sync, and Disable all coordination;
-10. integration polish, soak evidence, and release notes.
+8. YouTube Cinema workspace and stable player-session ownership;
+9. custom drag/resize and accessibility;
+10. Local Media native/PCM/projectM feasibility, threat model, licensing, preset-security, and packaging decision record;
+11. conditional Local Media and approved-PCM visualization implementation only after recorded go decisions;
+12. Electron opacity capability, lifecycle sync, and Disable all coordination;
+13. integration polish, soak evidence, and release notes.
 
-Do not combine broad Electron, HTTP security, asset storage, and drag/resize changes into one difficult-to-audit patch.
+Do not combine broad Electron, HTTP security, asset storage, native media, and drag/resize changes into one difficult-to-audit patch. A Local Media no-go omits pull request 11 and leaves the unsupported capability explicit.
 
 ## Completion ledger
 
 Update this table during implementation.
 
-| Phase                 | Author | Auditor      | Tests clean | Findings closed | Status  |
-| --------------------- | ------ | ------------ | ----------- | --------------- | ------- |
-| 0 Baseline            | Spark  | Sol          | —           | —               | Planned |
-| 1 Contracts/UI        | Luna   | Sol          | No          | No              | Planned |
-| 2 Atmosphere          | Sol    | Terra        | No          | No              | Planned |
-| 2A Workflow contract  | Luna   | Terra        | No          | No              | Planned |
-| 2B Workflow UI        | Spark  | Sol          | No          | No              | Planned |
-| 3 Ambient image       | Terra  | Luna         | No          | No              | Planned |
-| 4A YouTube/CSP/search | Terra  | Luna         | No          | No              | Planned |
-| 4B YouTube account    | Terra  | Sol          | No          | No              | Planned |
-| 5 Custom layout       | Spark  | Sol          | No          | No              | Planned |
-| 6 Native opacity      | Sol    | Luna         | No          | No              | Planned |
-| 7 Integration         | Spark  | Terra + Luna | No          | No              | Planned |
+| Phase                 | Author | Auditor      | Tests clean | Findings closed | Status           |
+| --------------------- | ------ | ------------ | ----------- | --------------- | ---------------- |
+| 0 Baseline            | Spark  | Sol          | —           | —               | Planned          |
+| 1 Contracts/UI        | Luna   | Sol          | No          | No              | Planned          |
+| 2 Atmosphere          | Sol    | Terra        | No          | No              | Planned          |
+| 2A Workflow contract  | Luna   | Terra        | No          | No              | Planned          |
+| 2B Workflow UI        | Spark  | Sol          | No          | No              | Planned          |
+| 3 Ambient image       | Terra  | Luna         | No          | No              | Planned          |
+| 4A YouTube/CSP/search | Terra  | Luna         | No          | No              | Planned          |
+| 4B YouTube account    | Terra  | Sol          | No          | No              | Planned          |
+| 4C YouTube Cinema     | Spark  | Sol          | No          | No              | Planned          |
+| 5A Custom layout      | Spark  | Sol          | No          | No              | Planned          |
+| 5B Local media        | Terra  | Luna         | No          | No              | Decision planned |
+| 6 Native opacity      | Sol    | Luna         | No          | No              | Planned          |
+| 7 Integration         | Spark  | Terra + Luna | No          | No              | Planned          |

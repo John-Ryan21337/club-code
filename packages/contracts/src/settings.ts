@@ -155,12 +155,19 @@ export const AmbientMediaPresetPlacement = Schema.Literals(["bottom-left", "bott
 export type AmbientMediaPresetPlacement = typeof AmbientMediaPresetPlacement.Type;
 export const AmbientMediaPresetSize = Schema.Literals(["small", "medium", "large"]);
 export type AmbientMediaPresetSize = typeof AmbientMediaPresetSize.Type;
+/**
+ * Shared presentation preference for the ambient video panel. Browser/native
+ * fullscreen remains transient because it is controlled by the host player.
+ */
+export const AmbientVideoPresentationMode = Schema.Literals(["floating", "cinema"]);
+export type AmbientVideoPresentationMode = typeof AmbientVideoPresentationMode.Type;
 
 export const DEFAULT_AMBIENT_VIDEO_ENABLED = false;
 export const DEFAULT_AMBIENT_VIDEO_SOURCE: YouTubeSource = null;
 export const DEFAULT_AMBIENT_VIDEO_LAYOUT_MODE: AmbientMediaLayoutMode = "preset";
 export const DEFAULT_AMBIENT_VIDEO_PRESET_PLACEMENT: AmbientMediaPresetPlacement = "bottom-right";
 export const DEFAULT_AMBIENT_VIDEO_PRESET_SIZE: AmbientMediaPresetSize = "medium";
+export const DEFAULT_AMBIENT_VIDEO_PRESENTATION_MODE: AmbientVideoPresentationMode = "floating";
 export const DEFAULT_AMBIENT_VIDEO_GLOW_ENABLED = false;
 
 // Ambient images intentionally use their own authenticated route and metadata
@@ -316,6 +323,9 @@ export const ClientSettingsSchema = Schema.Struct({
   ambientVideoPresetSize: AmbientMediaPresetSize.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_VIDEO_PRESET_SIZE)),
   ),
+  ambientVideoPresentationMode: AmbientVideoPresentationMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_VIDEO_PRESENTATION_MODE)),
+  ),
   ambientVideoGlowEnabled: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_VIDEO_GLOW_ENABLED)),
   ),
@@ -445,6 +455,7 @@ export const AMBIENT_CLIENT_SETTINGS_KEYS = [
   "ambientVideoLayoutMode",
   "ambientVideoPresetPlacement",
   "ambientVideoPresetSize",
+  "ambientVideoPresentationMode",
   "ambientVideoGlowEnabled",
   "ambientVideoGlowColor",
   "ambientVideoGlowOpacity",
@@ -473,6 +484,7 @@ export const DEFAULT_AMBIENT_CLIENT_SETTINGS: AmbientClientSettings = {
   ambientVideoLayoutMode: DEFAULT_AMBIENT_VIDEO_LAYOUT_MODE,
   ambientVideoPresetPlacement: DEFAULT_AMBIENT_VIDEO_PRESET_PLACEMENT,
   ambientVideoPresetSize: DEFAULT_AMBIENT_VIDEO_PRESET_SIZE,
+  ambientVideoPresentationMode: DEFAULT_AMBIENT_VIDEO_PRESENTATION_MODE,
   ambientVideoGlowEnabled: DEFAULT_AMBIENT_VIDEO_GLOW_ENABLED,
   ambientVideoGlowColor: DEFAULT_AMBIENT_COLOR,
   ambientVideoGlowOpacity: DEFAULT_AMBIENT_OPACITY,
@@ -1000,6 +1012,7 @@ export const ClientSettingsPatch = Schema.Struct({
   ambientVideoLayoutMode: Schema.optionalKey(AmbientMediaLayoutMode),
   ambientVideoPresetPlacement: Schema.optionalKey(AmbientMediaPresetPlacement),
   ambientVideoPresetSize: Schema.optionalKey(AmbientMediaPresetSize),
+  ambientVideoPresentationMode: Schema.optionalKey(AmbientVideoPresentationMode),
   ambientVideoGlowEnabled: Schema.optionalKey(Schema.Boolean),
   ambientVideoGlowColor: Schema.optionalKey(AmbientColor),
   ambientVideoGlowOpacity: Schema.optionalKey(AmbientOpacity),
