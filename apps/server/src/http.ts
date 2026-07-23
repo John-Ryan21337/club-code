@@ -9,8 +9,10 @@ import {
 } from "@cafecode/contracts/settings";
 import { decodeOtlpTraceRecords } from "@cafecode/shared/observability";
 import * as Data from "effect/Data";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
@@ -40,7 +42,7 @@ import {
   WebPushSubscriptionInput,
 } from "./notifications/WebPushNotifications.ts";
 import { ProjectFaviconResolver } from "./project/Services/ProjectFaviconResolver.ts";
-import { ServerAuth } from "./auth/Services/ServerAuth.ts";
+import { AuthError, ServerAuth } from "./auth/Services/ServerAuth.ts";
 import { respondToAuthError } from "./auth/http.ts";
 import { BrandingImageError, BrandingImageStore } from "./branding/BrandingImageStore.ts";
 import {
@@ -53,6 +55,10 @@ import {
   YouTubePublicDiscovery,
   YouTubePublicDiscoveryError,
 } from "./ambientMedia/YouTubePublicDiscovery.ts";
+import {
+  YouTubeAccountConnection,
+  YouTubeAccountConnectionError,
+} from "./ambientMedia/YouTubeAccountConnection.ts";
 import { ServerClientSettingsService } from "./serverClientSettings.ts";
 import { ServerEnvironment } from "./environment/Services/ServerEnvironment.ts";
 import {
@@ -92,13 +98,13 @@ const STATIC_CONTENT_SECURITY_POLICY = [
   // Keep this broad transport allowance isolated to connect-src; executable,
   // image, media, and frame sources remain explicitly constrained.
   "connect-src 'self' http: https: ws: wss:",
-  "frame-src https://www.youtube-nocookie.com",
+  "frame-src https://www.youtube-nocookie.com https://open.spotify.com",
   "manifest-src 'self'",
 ].join("; ");
 const STATIC_SECURITY_HEADERS = {
   "Content-Security-Policy": STATIC_CONTENT_SECURITY_POLICY,
   "Permissions-Policy":
-    'camera=(), fullscreen=(self "https://www.youtube-nocookie.com"), geolocation=(), microphone=(), payment=(), usb=()',
+    'camera=(), fullscreen=(self "https://www.youtube-nocookie.com" "https://open.spotify.com"), geolocation=(), microphone=(), payment=(), usb=()',
   "Referrer-Policy": "no-referrer",
   "X-Content-Type-Options": "nosniff",
   "X-Frame-Options": "DENY",
@@ -367,7 +373,18 @@ export const httpsCertificateRouteLayer = HttpRouter.add(
 const requireAuthenticatedRequest = Effect.gen(function* () {
   const request = yield* HttpServerRequest.HttpServerRequest;
   const serverAuth = yield* ServerAuth;
-  yield* serverAuth.authenticateHttpRequest(request);
+  return yield* serverAuth.authenticateHttpRequest(request);
+});
+
+const requireOwnerRequest = Effect.gen(function* () {
+  const session = yield* requireAuthenticatedRequest;
+  if (session.role !== "owner") {
+    return yield* new AuthError({
+      message: "Owner access required.",
+      status: 403,
+    });
+  }
+  return session;
 });
 
 const serverEnvironmentRouteHandler = Effect.gen(function* () {
@@ -824,6 +841,288 @@ export const youTubePublicDiscoveryRouteLayer = HttpRouter.add(
   ),
 );
 
+function respondToYouTubeAccountConnectionError(error: YouTubeAccountConnectionError) {
+  return Effect.succeed(
+    HttpServerResponse.jsonUnsafe(
+      { error: error.code },
+      {
+        status: error.status,
+        headers: {
+          ...browserApiCorsHeaders,
+          "Cache-Control": "no-store",
+        },
+      },
+    ),
+  );
+}
+
+export const youTubeAccountStartRouteLayer = HttpRouter.add(
+  "POST",
+  "/api/ambient-media/youtube/account/start",
+  Effect.gen(function* () {
+    const session = yield* requireOwnerRequest;
+    const result = yield* (yield* YouTubeAccountConnection).start(
+      session.sessionId,
+      session.expiresAt ? DateTime.toEpochMillis(session.expiresAt) : undefined,
+    );
+    return HttpServerResponse.jsonUnsafe(result, {
+      status: 202,
+      headers: {
+        ...browserApiCorsHeaders,
+        "Cache-Control": "no-store",
+      },
+    });
+  }).pipe(
+    Effect.catchTag("AuthError", respondToAuthError),
+    Effect.catchTag("YouTubeAccountConnectionError", respondToYouTubeAccountConnectionError),
+  ),
+);
+
+export const youTubeAccountStatusRouteLayer = HttpRouter.add(
+  "GET",
+  "/api/ambient-media/youtube/account/status",
+  Effect.gen(function* () {
+    const session = yield* requireOwnerRequest;
+    const result = yield* (yield* YouTubeAccountConnection).status(session.sessionId);
+    return HttpServerResponse.jsonUnsafe(result, {
+      status: 200,
+      headers: {
+        ...browserApiCorsHeaders,
+        "Cache-Control": "no-store",
+      },
+    });
+  }).pipe(Effect.catchTag("AuthError", respondToAuthError)),
+);
+
+export const youTubeAccountPlaylistsRouteLayer = HttpRouter.add(
+  "GET",
+  "/api/ambient-media/youtube/account/playlists",
+  Effect.gen(function* () {
+    const session = yield* requireOwnerRequest;
+    const playlists = yield* (yield* YouTubeAccountConnection).listOwnedPlaylists(
+      session.sessionId,
+    );
+    return HttpServerResponse.jsonUnsafe(
+      { playlists },
+      {
+        status: 200,
+        headers: {
+          ...browserApiCorsHeaders,
+          "Cache-Control": "no-store",
+        },
+      },
+    );
+  }).pipe(
+    Effect.catchTag("AuthError", respondToAuthError),
+    Effect.catchTag("YouTubeAccountConnectionError", respondToYouTubeAccountConnectionError),
+  ),
+);
+
+export const youTubeAccountDisconnectRouteLayer = HttpRouter.add(
+  "DELETE",
+  "/api/ambient-media/youtube/account",
+  Effect.gen(function* () {
+    const session = yield* requireOwnerRequest;
+    yield* (yield* YouTubeAccountConnection).disconnect(session.sessionId);
+    return HttpServerResponse.empty({
+      status: 204,
+      headers: {
+        ...browserApiCorsHeaders,
+        "Cache-Control": "no-store",
+      },
+    });
+  }).pipe(Effect.catchTag("AuthError", respondToAuthError)),
+);
+
+const youTubeAccountCallbackHandler = Effect.gen(function* () {
+  const request = yield* HttpServerRequest.HttpServerRequest;
+  const requestUrl = new URL(request.url, "http://127.0.0.1");
+  const remoteAddress = Option.getOrUndefined(request.remoteAddress);
+  const state = requestUrl.searchParams.get("state");
+  const code = requestUrl.searchParams.get("code");
+  if (
+    !remoteAddress ||
+    !isLoopbackRemoteAddress(remoteAddress) ||
+    isViaHttpsProxy(request.headers) ||
+    !state ||
+    !code ||
+    requestUrl.searchParams.has("error")
+  ) {
+    return yield* new YouTubeAccountConnectionError({
+      code: "invalid-callback",
+      status: 400,
+    });
+  }
+  yield* (yield* YouTubeAccountConnection).complete({ state, code });
+  return HttpServerResponse.text("YouTube connected. You may close this browser tab.", {
+    status: 200,
+    contentType: "text/plain; charset=utf-8",
+    headers: {
+      "Cache-Control": "no-store",
+      "Referrer-Policy": "no-referrer",
+      "X-Content-Type-Options": "nosniff",
+    },
+  });
+}).pipe(
+  Effect.catchTag("YouTubeAccountConnectionError", (error) =>
+    Effect.succeed(
+      HttpServerResponse.text(
+        error.code === "invalid-callback"
+          ? "This YouTube connection request is invalid or has expired."
+          : "YouTube could not be connected. Return to Cafe Code and try again.",
+        {
+          status: error.status,
+          contentType: "text/plain; charset=utf-8",
+          headers: {
+            "Cache-Control": "no-store",
+            "Referrer-Policy": "no-referrer",
+            "X-Content-Type-Options": "nosniff",
+          },
+        },
+      ),
+    ),
+  ),
+);
+
+export const youTubeAccountCallbackRouteLayer = HttpRouter.add(
+  "GET",
+  "/api/ambient-media/youtube/account/callback",
+  youTubeAccountCallbackHandler,
+).pipe(
+  // OAuth codes and state arrive in the callback query. Keep the request URL
+  // out of the optional HTTP request logger.
+  Layer.provide(HttpRouter.disableLogger),
+);
+
+const staticAndDevHandler = Effect.gen(function* () {
+  const request = yield* HttpServerRequest.HttpServerRequest;
+  const url = HttpServerRequest.toURL(request);
+
+  if (Option.isNone(url)) {
+    return HttpServerResponse.text("Bad Request", { status: 400 });
+  }
+
+  const config = yield* ServerConfig;
+  if (config.devUrl && isLoopbackHostname(url.value.hostname)) {
+    return HttpServerResponse.redirect(resolveDevRedirectUrl(config.devUrl, url.value), {
+      status: 302,
+    });
+  }
+
+  // HTTPS bootstrap: when HTTPS is enabled, do not serve the app over plain
+  // cleartext HTTP to other devices. External clients that did not arrive
+  // through the HTTPS proxy get a page explaining how to trust the self-signed
+  // certificate and a link to the secure site. We only intercept when we can
+  // positively confirm the peer is non-loopback, so the desktop app and the
+  // same-machine browser (loopback HTTP) are never affected. The certificate
+  // download route is a more specific route and is matched before this one, so
+  // it stays reachable over HTTP for bootstrapping.
+  if (config.httpsEnabled && config.httpsPort !== undefined) {
+    const remoteAddress = Option.getOrUndefined(request.remoteAddress);
+    const isExternalPeer = remoteAddress !== undefined && !isLoopbackRemoteAddress(remoteAddress);
+    if (isExternalPeer && !isViaHttpsProxy(request.headers)) {
+      return HttpServerResponse.text(
+        renderHttpsBootstrapPage({
+          hostname: url.value.hostname,
+          httpsPort: config.httpsPort,
+        }),
+        {
+          status: 200,
+          contentType: "text/html; charset=utf-8",
+          headers: { "Cache-Control": "no-store" },
+        },
+      );
+    }
+  }
+
+  const staticDir = config.staticDir ?? (config.devUrl ? yield* resolveStaticDir() : undefined);
+  if (!staticDir) {
+    return HttpServerResponse.text("No static directory configured and no dev URL set.", {
+      status: 503,
+    });
+  }
+
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const staticRoot = path.resolve(staticDir);
+  const staticRequestPath = url.value.pathname === "/" ? "/index.html" : url.value.pathname;
+  const rawStaticRelativePath = staticRequestPath.replace(/^[/\\]+/, "");
+  const hasRawLeadingParentSegment = rawStaticRelativePath.startsWith("..");
+  const staticRelativePath = path.normalize(rawStaticRelativePath).replace(/^[/\\]+/, "");
+  const hasPathTraversalSegment = staticRelativePath.startsWith("..");
+  if (
+    staticRelativePath.length === 0 ||
+    hasRawLeadingParentSegment ||
+    hasPathTraversalSegment ||
+    staticRelativePath.includes("\0")
+  ) {
+    return HttpServerResponse.text("Invalid static file path", { status: 400 });
+  }
+
+  const isWithinStaticRoot = (candidate: string) =>
+    candidate === staticRoot ||
+    candidate.startsWith(staticRoot.endsWith(path.sep) ? staticRoot : `${staticRoot}${path.sep}`);
+
+  let filePath = path.resolve(staticRoot, staticRelativePath);
+  if (!isWithinStaticRoot(filePath)) {
+    return HttpServerResponse.text("Invalid static file path", { status: 400 });
+  }
+
+  const ext = path.extname(filePath);
+  if (!ext) {
+    filePath = path.resolve(filePath, "index.html");
+    if (!isWithinStaticRoot(filePath)) {
+      return HttpServerResponse.text("Invalid static file path", { status: 400 });
+    }
+  }
+
+  const fileInfo = yield* fileSystem.stat(filePath).pipe(Effect.catch(() => Effect.succeed(null)));
+  if (!fileInfo || fileInfo.type !== "File") {
+    const indexPath = path.resolve(staticRoot, "index.html");
+    const indexInfo = yield* fileSystem
+      .stat(indexPath)
+      .pipe(Effect.catch(() => Effect.succeed(null)));
+    if (!indexInfo || indexInfo.type !== "File") {
+      return HttpServerResponse.text("Not Found", { status: 404 });
+    }
+    return yield* serveStaticFile({
+      filePath: indexPath,
+      requestPath: url.value.pathname,
+      isHtmlFallback: true,
+      acceptEncoding: request.headers["accept-encoding"],
+    });
+  }
+
+  return yield* serveStaticFile({
+    filePath,
+    requestPath: url.value.pathname,
+    isHtmlFallback: false,
+    acceptEncoding: request.headers["accept-encoding"],
+  });
+});
+
+export const youTubeAccountLoopbackCallbackRouteLayer = HttpRouter.add(
+  "GET",
+  "/",
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const requestUrl = HttpServerRequest.toURL(request);
+    if (
+      Option.isSome(requestUrl) &&
+      requestUrl.value.searchParams.has("state") &&
+      (requestUrl.value.searchParams.has("code") || requestUrl.value.searchParams.has("error"))
+    ) {
+      return yield* youTubeAccountCallbackHandler;
+    }
+    return yield* staticAndDevHandler;
+  }),
+).pipe(
+  // OAuth codes and state arrive in the callback query. Keep the request URL
+  // out of the optional HTTP request logger. Ordinary GET / requests also pass
+  // through here so the desktop callback can use Google's bare loopback origin.
+  Layer.provide(HttpRouter.disableLogger),
+);
+
 class DecodeOtlpTraceRecordsError extends Data.TaggedError("DecodeOtlpTraceRecordsError")<{
   readonly cause: unknown;
   readonly bodyJson: OtlpTracer.TraceData;
@@ -975,115 +1274,4 @@ export const projectFaviconRouteLayer = HttpRouter.add(
   }).pipe(Effect.catchTag("AuthError", respondToAuthError)),
 );
 
-export const staticAndDevRouteLayer = HttpRouter.add(
-  "GET",
-  "*",
-  Effect.gen(function* () {
-    const request = yield* HttpServerRequest.HttpServerRequest;
-    const url = HttpServerRequest.toURL(request);
-
-    if (Option.isNone(url)) {
-      return HttpServerResponse.text("Bad Request", { status: 400 });
-    }
-
-    const config = yield* ServerConfig;
-    if (config.devUrl && isLoopbackHostname(url.value.hostname)) {
-      return HttpServerResponse.redirect(resolveDevRedirectUrl(config.devUrl, url.value), {
-        status: 302,
-      });
-    }
-
-    // HTTPS bootstrap: when HTTPS is enabled, do not serve the app over plain
-    // cleartext HTTP to other devices. External clients that did not arrive
-    // through the HTTPS proxy get a page explaining how to trust the self-signed
-    // certificate and a link to the secure site. We only intercept when we can
-    // positively confirm the peer is non-loopback, so the desktop app and the
-    // same-machine browser (loopback HTTP) are never affected. The certificate
-    // download route is a more specific route and is matched before this one, so
-    // it stays reachable over HTTP for bootstrapping.
-    if (config.httpsEnabled && config.httpsPort !== undefined) {
-      const remoteAddress = Option.getOrUndefined(request.remoteAddress);
-      const isExternalPeer = remoteAddress !== undefined && !isLoopbackRemoteAddress(remoteAddress);
-      if (isExternalPeer && !isViaHttpsProxy(request.headers)) {
-        return HttpServerResponse.text(
-          renderHttpsBootstrapPage({
-            hostname: url.value.hostname,
-            httpsPort: config.httpsPort,
-          }),
-          {
-            status: 200,
-            contentType: "text/html; charset=utf-8",
-            headers: { "Cache-Control": "no-store" },
-          },
-        );
-      }
-    }
-
-    const staticDir = config.staticDir ?? (config.devUrl ? yield* resolveStaticDir() : undefined);
-    if (!staticDir) {
-      return HttpServerResponse.text("No static directory configured and no dev URL set.", {
-        status: 503,
-      });
-    }
-
-    const fileSystem = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
-    const staticRoot = path.resolve(staticDir);
-    const staticRequestPath = url.value.pathname === "/" ? "/index.html" : url.value.pathname;
-    const rawStaticRelativePath = staticRequestPath.replace(/^[/\\]+/, "");
-    const hasRawLeadingParentSegment = rawStaticRelativePath.startsWith("..");
-    const staticRelativePath = path.normalize(rawStaticRelativePath).replace(/^[/\\]+/, "");
-    const hasPathTraversalSegment = staticRelativePath.startsWith("..");
-    if (
-      staticRelativePath.length === 0 ||
-      hasRawLeadingParentSegment ||
-      hasPathTraversalSegment ||
-      staticRelativePath.includes("\0")
-    ) {
-      return HttpServerResponse.text("Invalid static file path", { status: 400 });
-    }
-
-    const isWithinStaticRoot = (candidate: string) =>
-      candidate === staticRoot ||
-      candidate.startsWith(staticRoot.endsWith(path.sep) ? staticRoot : `${staticRoot}${path.sep}`);
-
-    let filePath = path.resolve(staticRoot, staticRelativePath);
-    if (!isWithinStaticRoot(filePath)) {
-      return HttpServerResponse.text("Invalid static file path", { status: 400 });
-    }
-
-    const ext = path.extname(filePath);
-    if (!ext) {
-      filePath = path.resolve(filePath, "index.html");
-      if (!isWithinStaticRoot(filePath)) {
-        return HttpServerResponse.text("Invalid static file path", { status: 400 });
-      }
-    }
-
-    const fileInfo = yield* fileSystem
-      .stat(filePath)
-      .pipe(Effect.catch(() => Effect.succeed(null)));
-    if (!fileInfo || fileInfo.type !== "File") {
-      const indexPath = path.resolve(staticRoot, "index.html");
-      const indexInfo = yield* fileSystem
-        .stat(indexPath)
-        .pipe(Effect.catch(() => Effect.succeed(null)));
-      if (!indexInfo || indexInfo.type !== "File") {
-        return HttpServerResponse.text("Not Found", { status: 404 });
-      }
-      return yield* serveStaticFile({
-        filePath: indexPath,
-        requestPath: url.value.pathname,
-        isHtmlFallback: true,
-        acceptEncoding: request.headers["accept-encoding"],
-      });
-    }
-
-    return yield* serveStaticFile({
-      filePath,
-      requestPath: url.value.pathname,
-      isHtmlFallback: false,
-      acceptEncoding: request.headers["accept-encoding"],
-    });
-  }),
-);
+export const staticAndDevRouteLayer = HttpRouter.add("GET", "*", staticAndDevHandler);

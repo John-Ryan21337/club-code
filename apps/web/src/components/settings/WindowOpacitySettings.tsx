@@ -7,6 +7,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useSettings, useUpdateSettings } from "../../hooks/useSettings";
+import { localMediaStore, useLocalMediaState } from "../../localMedia";
 import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
 import { toastManager } from "../ui/toast";
@@ -42,6 +43,7 @@ function isOpaqueWindowState(state: DesktopWindowOpacityState): boolean {
 
 export function WindowOpacitySettings() {
   const settings = useSettings();
+  const localMedia = useLocalMediaState();
   const { updateSettingsAsync } = useUpdateSettings();
   const [state, setState] = useState<DesktopWindowOpacityState | null>(null);
   const [opacityDraft, setOpacityDraft] = useState(DEFAULT_DESKTOP_WINDOW_OPACITY);
@@ -117,12 +119,12 @@ export function WindowOpacitySettings() {
         if (requestSequence === requestSequenceRef.current) {
           pendingSignatureRef.current = null;
           setOpacityDraft(stateRef.current?.opacity ?? DEFAULT_DESKTOP_WINDOW_OPACITY);
+          toastManager.add({
+            title: "Could not change window opacity",
+            description: error instanceof Error ? error.message : "The desktop bridge failed.",
+            type: "error",
+          });
         }
-        toastManager.add({
-          title: "Could not change window opacity",
-          description: error instanceof Error ? error.message : "The desktop bridge failed.",
-          type: "error",
-        });
       } finally {
         if (requestSequence === requestSequenceRef.current) {
           pendingSignatureRef.current = null;
@@ -135,6 +137,7 @@ export function WindowOpacitySettings() {
 
   const disableAllAmbientFeatures = useCallback(async () => {
     const requestSequence = ++requestSequenceRef.current;
+    const hadLocalMedia = localMedia.source !== null;
     pendingSignatureRef.current = null;
     setPending(true);
     setDisableAllStatus({ message: "Restoring the default appearance...", error: false });
@@ -142,6 +145,22 @@ export function WindowOpacitySettings() {
     const failures: string[] = [];
     const warnings: string[] = [];
     try {
+      // Clear synchronously before the first await. A newer file selected while
+      // this operation is pending is a newer user choice and must not be revoked
+      // by this older restore request.
+      if (hadLocalMedia) {
+        try {
+          localMediaStore.clear();
+          outcomes.push("current local media");
+        } catch (error) {
+          failures.push(
+            error instanceof Error
+              ? `Local media: ${error.message}`
+              : "The current local media selection could not be cleared.",
+          );
+        }
+      }
+
       try {
         await updateSettingsAsync({
           fallingEffectsEnabled: false,
@@ -194,7 +213,14 @@ export function WindowOpacitySettings() {
         }
       }
 
-      const choicesKept = "Saved sources and choices were kept.";
+      const newerLocalMediaActive = localMediaStore.getSnapshot().source !== null;
+      const choicesKept = hadLocalMedia
+        ? newerLocalMediaActive
+          ? "Saved streaming and image sources and choices were kept. The local media selection present when restore began was cleared; a newer selection was kept."
+          : "Saved streaming and image sources and choices were kept. The current local media selection was cleared."
+        : newerLocalMediaActive
+          ? "Saved sources and choices were kept. A newer local media selection remains active."
+          : "Saved sources and choices were kept.";
       if (failures.length > 0) {
         const message =
           outcomes.length > 0
@@ -209,6 +235,15 @@ export function WindowOpacitySettings() {
           description: `${failures.join(" ")} ${choicesKept}`,
           type: "error",
         });
+      } else if (newerLocalMediaActive) {
+        const message =
+          "Appearance restore completed. A newer local media selection remains active.";
+        setDisableAllStatus({ message, error: false });
+        toastManager.add({
+          title: "Newer local media kept",
+          description: choicesKept,
+          type: "warning",
+        });
       } else if (warnings.length > 0) {
         const message = "Appearance is restored, but the desktop reported a recovery warning.";
         setDisableAllStatus({ message, error: false });
@@ -218,7 +253,9 @@ export function WindowOpacitySettings() {
           type: "warning",
         });
       } else {
-        const message = "All available ambient features are off. Saved choices were kept.";
+        const message = hadLocalMedia
+          ? "All available ambient features are off. Saved choices were kept; the current local media selection was cleared."
+          : "All available ambient features are off. Saved choices were kept.";
         setDisableAllStatus({ message, error: false });
         toastManager.add({
           title: "Ambient appearance disabled",
@@ -232,7 +269,7 @@ export function WindowOpacitySettings() {
         setPending(false);
       }
     }
-  }, [acceptState, updateSettingsAsync]);
+  }, [acceptState, localMedia.source, updateSettingsAsync]);
 
   const supported = state?.supported === true;
   const opacity = opacityDraft;
@@ -242,6 +279,7 @@ export function WindowOpacitySettings() {
     settings.fallingEffectsEnabled ||
     settings.ambientVideoEnabled ||
     settings.ambientImageEnabled ||
+    localMedia.source !== null ||
     nativeOpacityNeedsRecovery;
 
   return (
@@ -328,7 +366,7 @@ export function WindowOpacitySettings() {
 
       <SettingsRow
         title="Disable all ambient features"
-        description="Turn off falling effects, both ambient media panels and their visible glows, and native window opacity without deleting saved sources or choices."
+        description="Turn off falling effects, both ambient media panels and their visible glows, native window opacity, and the current local media selection. Saved streaming and image sources remain available."
         status={
           disableAllStatus ? (
             <span

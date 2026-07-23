@@ -20,7 +20,10 @@ import {
   type ServerRuntimeLayerDiagnosticsResult,
   type SourceControlDiscoveryResult,
 } from "@cafecode/contracts";
-import { MAX_SIDEBAR_BRAND_IMAGE_FILE_BYTES } from "@cafecode/contracts/settings";
+import {
+  type ClientSettings,
+  MAX_SIDEBAR_BRAND_IMAGE_FILE_BYTES,
+} from "@cafecode/contracts/settings";
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 import { page } from "vitest/browser";
@@ -37,6 +40,7 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { __resetLocalApiForTests } from "../../localApi";
+import { localMediaStore } from "../../localMedia";
 import { AppAtomRegistryProvider, resetAppAtomRegistryForTests } from "../../rpc/atomRegistry";
 import {
   getServerConfig,
@@ -640,6 +644,12 @@ function installClientSettingsNativeApi(desktopBridge: DesktopBridge) {
     server: {
       updateClientSettings,
     },
+    shell: {
+      openExternal: async (url: string) => {
+        const opened = await desktopBridge.openExternal(url);
+        if (!opened) throw new Error("Unable to open link.");
+      },
+    },
   } as unknown as LocalApi;
   return { updateClientSettings };
 }
@@ -655,6 +665,7 @@ describe("settings panels", () => {
   beforeEach(async () => {
     resetServerStateForTests();
     await __resetLocalApiForTests();
+    localMediaStore.clear();
     localStorage.clear();
     useUiStateStore.setState({ defaultAdvertisedEndpointKey: null });
     authAccessHarness.reset();
@@ -672,6 +683,7 @@ describe("settings panels", () => {
     document.body.innerHTML = "";
     resetServerStateForTests();
     await __resetLocalApiForTests();
+    localMediaStore.clear();
     authAccessHarness.reset();
   });
 
@@ -1194,7 +1206,7 @@ describe("settings panels", () => {
     });
   });
 
-  it("normalizes ambient video sources and commits native opacity on blur", async () => {
+  it("normalizes ambient streaming sources and commits native opacity on blur", async () => {
     const setWindowOpacityPreference = vi
       .fn<DesktopBridge["setWindowOpacityPreference"]>()
       .mockImplementation(async ({ enabled, opacity }) => ({
@@ -1224,9 +1236,9 @@ describe("settings panels", () => {
       </AppAtomRegistryProvider>,
     );
 
-    await expect.element(page.getByText("Ambient YouTube")).toBeInTheDocument();
+    await expect.element(page.getByText("Ambient streaming")).toBeInTheDocument();
     const sourceInput = document.querySelector(
-      'input[aria-label="YouTube video or playlist"]',
+      'input[aria-label="YouTube or Spotify media source"]',
     ) as HTMLInputElement | null;
     expect(sourceInput).not.toBeNull();
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(
@@ -1239,6 +1251,24 @@ describe("settings panels", () => {
     await vi.waitFor(() => {
       expect(updateClientSettings).toHaveBeenCalledWith({
         ambientVideoSource: { kind: "video", id: "dQw4w9WgXcQ" },
+        ambientVideoEnabled: true,
+      });
+    });
+
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(
+      sourceInput,
+      "https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M?si=discard-me",
+    );
+    sourceInput!.dispatchEvent(new Event("input", { bubbles: true }));
+    await page.getByRole("button", { name: "Apply", exact: true }).click();
+
+    await vi.waitFor(() => {
+      expect(updateClientSettings).toHaveBeenCalledWith({
+        ambientVideoSource: {
+          kind: "spotify",
+          entityType: "playlist",
+          id: "37i9dQZF1DXcBWIGoYBM5M",
+        },
         ambientVideoEnabled: true,
       });
     });
@@ -1369,6 +1399,96 @@ describe("settings panels", () => {
     await expect
       .element(page.getByText("All available ambient features are off. Saved choices were kept."))
       .toBeInTheDocument();
+  });
+
+  it("clears the current Local Media selection without persisting it when restoring appearance", async () => {
+    const desktopBridge = createDesktopBridgeStub();
+    window.desktopBridge = desktopBridge;
+    const { updateClientSettings } = installClientSettingsNativeApi(desktopBridge);
+    expect(
+      localMediaStore.selectFile(
+        new File(["private session media"], "private-session-video.mp4", {
+          type: "video/mp4",
+        }),
+      ),
+    ).toBe(true);
+    setServerConfigSnapshot(createBaseServerConfig());
+
+    mounted = await renderWithTestRouter(
+      <AppAtomRegistryProvider>
+        <AppearanceSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    const restore = page.getByRole("button", { name: "Restore appearance" });
+    await expect.element(restore).toBeEnabled();
+    await restore.click();
+
+    await vi.waitFor(() => {
+      expect(localMediaStore.getSnapshot().source).toBeNull();
+      expect(updateClientSettings).toHaveBeenCalledWith({
+        fallingEffectsEnabled: false,
+        ambientVideoEnabled: false,
+        ambientImageEnabled: false,
+      });
+    });
+    expect(updateClientSettings.mock.calls.at(-1)?.[0]).not.toHaveProperty("localMediaSource");
+    await expect
+      .element(
+        page.getByText(
+          "All available ambient features are off. Saved choices were kept; the current local media selection was cleared.",
+        ),
+      )
+      .toBeInTheDocument();
+  });
+
+  it("keeps a newer Local Media selection made while appearance restore is pending", async () => {
+    const desktopBridge = createDesktopBridgeStub();
+    window.desktopBridge = desktopBridge;
+    const { updateClientSettings } = installClientSettingsNativeApi(desktopBridge);
+    let resolveSettingsWrite!: (settings: ClientSettings) => void;
+    updateClientSettings.mockImplementationOnce(
+      () =>
+        new Promise<ClientSettings>((resolve) => {
+          resolveSettingsWrite = resolve;
+        }),
+    );
+    expect(
+      localMediaStore.selectFile(
+        new File(["old media"], "old-session-video.mp4", { type: "video/mp4" }),
+      ),
+    ).toBe(true);
+    setServerConfigSnapshot(createBaseServerConfig());
+
+    mounted = await renderWithTestRouter(
+      <AppAtomRegistryProvider>
+        <AppearanceSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    await page.getByRole("button", { name: "Restore appearance" }).click();
+    await vi.waitFor(() => {
+      expect(localMediaStore.getSnapshot().source).toBeNull();
+      expect(updateClientSettings).toHaveBeenCalledOnce();
+    });
+
+    expect(
+      localMediaStore.selectFile(
+        new File(["new media"], "new-session-video.mp4", { type: "video/mp4" }),
+      ),
+    ).toBe(true);
+    const newerSource = localMediaStore.getSnapshot().source;
+    resolveSettingsWrite(DEFAULT_CLIENT_SETTINGS);
+
+    await expect
+      .element(
+        page.getByText(
+          "Appearance restore completed. A newer local media selection remains active.",
+        ),
+      )
+      .toBeInTheDocument();
+    expect(localMediaStore.getSnapshot().source).toEqual(newerSource);
+    expect(updateClientSettings.mock.calls.at(-1)?.[0]).not.toHaveProperty("localMediaSource");
   });
 
   it("rolls back failed Disable All settings and reports a retryable partial result", async () => {
@@ -1523,6 +1643,150 @@ describe("settings panels", () => {
         ambientVideoEnabled: true,
       });
     });
+  });
+
+  it("does not enable a discovered YouTube source without player capability", async () => {
+    const desktopBridge = createDesktopBridgeStub();
+    window.desktopBridge = desktopBridge;
+    const { updateClientSettings } = installClientSettingsNativeApi(desktopBridge);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            results: [
+              {
+                kind: "video",
+                id: "dQw4w9WgXcQ",
+                title: "Discovery without playback",
+                thumbnail: null,
+              },
+            ],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      ),
+    );
+    setServerConfigSnapshot({
+      ...createBaseServerConfig(),
+      ambientExperienceCapabilities: {
+        ...DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES,
+        youtubePlayer: false,
+        youtubePublicDiscovery: true,
+        spotifyEmbed: false,
+      },
+    });
+
+    mounted = await renderWithTestRouter(
+      <AppAtomRegistryProvider>
+        <AppearanceSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    await page.getByLabelText("Search YouTube").fill("discovery only");
+    await page.getByRole("button", { name: "Search", exact: true }).click();
+    const result = page.getByRole("button", { name: /Discovery without playback/ });
+    await expect.element(result).toBeDisabled();
+
+    expect(updateClientSettings).not.toHaveBeenCalledWith({
+      ambientVideoSource: { kind: "video", id: "dQw4w9WgXcQ" },
+      ambientVideoEnabled: true,
+    });
+  });
+
+  it("loads and selects an owned YouTube playlist for a connected owner", async () => {
+    const desktopBridge = createDesktopBridgeStub();
+    window.desktopBridge = desktopBridge;
+    const { updateClientSettings } = installClientSettingsNativeApi(desktopBridge);
+    const playlistId = "PL1234567890";
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/api/ambient-media/youtube/account/status")) {
+        return new Response(JSON.stringify({ status: "connected" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url.endsWith("/api/ambient-media/youtube/account/playlists")) {
+        return new Response(
+          JSON.stringify({
+            playlists: [{ id: playlistId, title: "My coding mix", itemCount: 12 }],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response(JSON.stringify({ error: "unexpected-test-request" }), {
+        status: 500,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    setServerConfigSnapshot({
+      ...createBaseServerConfig(),
+      ambientExperienceCapabilities: {
+        ...DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES,
+        youtubePlayer: true,
+        youtubeAccountConnection: true,
+      },
+    });
+
+    mounted = await renderWithTestRouter(
+      <AppAtomRegistryProvider>
+        <AppearanceSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    await expect.element(page.getByText("My coding mix (12)")).toBeInTheDocument();
+    const selector = document.querySelector(
+      'select[aria-label="Owned YouTube playlist"]',
+    ) as HTMLSelectElement | null;
+    expect(selector).not.toBeNull();
+    Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")?.set?.call(
+      selector,
+      playlistId,
+    );
+    selector!.dispatchEvent(new Event("change", { bubbles: true }));
+
+    await vi.waitFor(() => {
+      expect(updateClientSettings).toHaveBeenCalledWith({
+        ambientVideoSource: { kind: "playlist", id: playlistId },
+        ambientVideoEnabled: true,
+      });
+    });
+
+    const openPlaylist = page.getByRole("button", { name: "Open selected in YouTube" });
+    await expect.element(openPlaylist).toBeEnabled();
+    await openPlaylist.click();
+    await vi.waitFor(() => {
+      expect(desktopBridge.openExternal).toHaveBeenCalledWith(
+        `https://www.youtube.com/playlist?list=${playlistId}`,
+      );
+    });
+  });
+
+  it("does not request owner account state when desktop account connection is unavailable", async () => {
+    const desktopBridge = createDesktopBridgeStub();
+    window.desktopBridge = desktopBridge;
+    installClientSettingsNativeApi(desktopBridge);
+    const fetchMock = vi.fn<typeof fetch>();
+    vi.stubGlobal("fetch", fetchMock);
+    setServerConfigSnapshot({
+      ...createBaseServerConfig(),
+      ambientExperienceCapabilities: {
+        ...DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES,
+        youtubePlayer: true,
+        youtubeAccountConnection: false,
+      },
+    });
+
+    mounted = await renderWithTestRouter(
+      <AppAtomRegistryProvider>
+        <AppearanceSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    await expect.element(page.getByRole("button", { name: "Open playlists" })).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("shows detected editor icons in the Files & Diffs default editor selector", async () => {

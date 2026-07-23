@@ -178,6 +178,15 @@ describe("client settings", () => {
     expect(pickAmbientSettings(decoded)).toEqual(DEFAULT_AMBIENT_CLIENT_SETTINGS);
   });
 
+  it("preserves legacy YouTube sources while accepting the additive Spotify source", () => {
+    const decoded = decodeClientSettings({
+      ambientVideoEnabled: true,
+      ambientVideoSource: { kind: "video", id: "dQw4w9WgXcQ" },
+    });
+
+    expect(decoded.ambientVideoSource).toEqual({ kind: "video", id: "dQw4w9WgXcQ" });
+  });
+
   it("round-trips the full ambient settings patch and reset vector", () => {
     const configured = decodeClientSettingsPatch({
       fallingEffectsEnabled: true,
@@ -292,7 +301,7 @@ describe("client settings", () => {
     });
   });
 
-  it("validates atomic YouTube sources", () => {
+  it("validates atomic YouTube and Spotify sources", () => {
     expect(
       decodeClientSettingsPatch({
         ambientVideoSource: { kind: "playlist", id: "PL1234567890" },
@@ -302,6 +311,21 @@ describe("client settings", () => {
     });
     expect(decodeClientSettingsPatch({ ambientVideoSource: null })).toEqual({
       ambientVideoSource: null,
+    });
+    expect(
+      decodeClientSettingsPatch({
+        ambientVideoSource: {
+          kind: "spotify",
+          entityType: "track",
+          id: "4uLU6hMCjMI75M1A2tKUQC",
+        },
+      }),
+    ).toEqual({
+      ambientVideoSource: {
+        kind: "spotify",
+        entityType: "track",
+        id: "4uLU6hMCjMI75M1A2tKUQC",
+      },
     });
 
     expect(() =>
@@ -322,6 +346,20 @@ describe("client settings", () => {
     expect(() =>
       decodeClientSettingsPatch({
         ambientVideoSource: { kind: "channel", id: "dQw4w9WgXcQ" },
+      }),
+    ).toThrow();
+    expect(() =>
+      decodeClientSettingsPatch({
+        ambientVideoSource: { kind: "spotify", entityType: "track", id: "too-short" },
+      }),
+    ).toThrow();
+    expect(() =>
+      decodeClientSettingsPatch({
+        ambientVideoSource: {
+          kind: "spotify",
+          entityType: "user",
+          id: "4uLU6hMCjMI75M1A2tKUQC",
+        },
       }),
     ).toThrow();
   });

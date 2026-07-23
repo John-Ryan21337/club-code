@@ -1452,6 +1452,19 @@ interface ComposerSendSnapshot {
   interactionMode: ProviderInteractionMode;
 }
 
+const buildAttachmentsForSnapshot = async (
+  snapshot: ComposerSendSnapshot,
+): Promise<OrchestrationUploadChatAttachment[]> =>
+  Promise.all(
+    snapshot.images.map(async (image) => ({
+      type: "image" as const,
+      name: image.name,
+      mimeType: image.mimeType,
+      sizeBytes: image.sizeBytes,
+      dataUrl: await readFileAsDataUrl(image.file),
+    })),
+  );
+
 interface FollowUpQueueItem extends ComposerSendSnapshot {
   id: string;
   environmentId: EnvironmentId;
@@ -1767,7 +1780,7 @@ function useLocalDispatchState(input: {
 }
 
 export default function ChatView(props: ChatViewProps) {
-  const { registerChatAnchor } = useAmbientVideoWorkspace();
+  const { registerChatAnchor, localMediaBackgroundEffective } = useAmbientVideoWorkspace();
   const {
     environmentId,
     threadId,
@@ -4580,19 +4593,6 @@ export default function ChatView(props: ChatViewProps) {
     };
   };
 
-  const buildAttachmentsForSnapshot = async (
-    snapshot: ComposerSendSnapshot,
-  ): Promise<OrchestrationUploadChatAttachment[]> =>
-    Promise.all(
-      snapshot.images.map(async (image) => ({
-        type: "image" as const,
-        name: image.name,
-        mimeType: image.mimeType,
-        sizeBytes: image.sizeBytes,
-        dataUrl: await readFileAsDataUrl(image.file),
-      })),
-    );
-
   const outgoingTextForSnapshot = (snapshot: ComposerSendSnapshot): string =>
     formatOutgoingPrompt({
       provider: snapshot.provider,
@@ -6152,7 +6152,12 @@ export default function ChatView(props: ChatViewProps) {
   const shouldRenderPlanSidebar = planSidebarOpen && hasPlanSidebarContent;
 
   return (
-    <div className="group/chat-view flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden bg-background">
+    <div
+      className={cn(
+        "group/chat-view flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden bg-background",
+        localMediaBackgroundEffective && "bg-background/55 backdrop-blur-[1px]",
+      )}
+    >
       {/* Top bar — hidden while the mobile composer has the on-screen keyboard
           open (data attribute set by ChatComposer) to maximize vertical room. */}
       <header

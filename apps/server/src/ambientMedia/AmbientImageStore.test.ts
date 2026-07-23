@@ -6,7 +6,11 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 
 import { ServerConfig } from "../config.ts";
-import { AmbientImageStore, AmbientImageStoreLive } from "./AmbientImageStore.ts";
+import {
+  AMBIENT_IMAGE_ORPHAN_GRACE_PERIOD_MS,
+  AmbientImageStore,
+  AmbientImageStoreLive,
+} from "./AmbientImageStore.ts";
 
 const tinyPng = Uint8Array.from(
   Buffer.from(
@@ -191,6 +195,102 @@ it.layer(NodeServices.layer)("ambient image store", (it) => {
       if (result._tag === "Failure") {
         assert.include(String(result.cause), "profile quota is full");
       }
+    }).pipe(Effect.provide(layer())),
+  );
+
+  it.effect("sweeps only old unreferenced assets after a final reference recheck", () =>
+    Effect.gen(function* () {
+      const store = yield* AmbientImageStore;
+      const fs = yield* FileSystem.FileSystem;
+      const referenced = yield* store.storeUploadedImage({
+        bytes: tinyPng,
+        declaredMimeType: "image/png",
+      });
+      const orphan = yield* store.storeUploadedImage({
+        bytes: tinyGif,
+        declaredMimeType: "image/gif",
+      });
+      const recent = yield* store.storeUploadedImage({
+        bytes: tinyWebp,
+        declaredMimeType: "image/webp",
+      });
+      const referencedFile = yield* store.resolveStoredImage(referenced.id);
+      const orphanFile = yield* store.resolveStoredImage(orphan.id);
+      const now = new Date("2026-07-23T12:00:00.000Z");
+      const old = new Date(now.getTime() - AMBIENT_IMAGE_ORPHAN_GRACE_PERIOD_MS - 1);
+      yield* fs.utimes(referencedFile.filePath, old, old);
+      yield* fs.utimes(orphanFile.filePath, old, old);
+
+      const checked: string[] = [];
+      const result = yield* store.sweepUnreferencedImages({
+        now,
+        isReferenced: (id) =>
+          Effect.sync(() => {
+            checked.push(id);
+            return id === referenced.id;
+          }),
+      });
+
+      assert.deepEqual(result, { eligible: 2, removed: 1 });
+      assert.deepEqual(checked.toSorted(), [orphan.id, orphan.id, referenced.id].toSorted());
+      assert.equal((yield* store.resolveStoredImage(referenced.id)).id, referenced.id);
+      assert.equal((yield* store.resolveStoredImage(recent.id)).id, recent.id);
+      const removed = yield* Effect.exit(store.resolveStoredImage(orphan.id));
+      assert.equal(removed._tag, "Failure");
+    }).pipe(Effect.provide(layer())),
+  );
+
+  it.effect("rechecks a candidate and preserves it when it becomes referenced", () =>
+    Effect.gen(function* () {
+      const store = yield* AmbientImageStore;
+      const fs = yield* FileSystem.FileSystem;
+      const asset = yield* store.storeUploadedImage({
+        bytes: tinyPng,
+        declaredMimeType: "image/png",
+      });
+      const stored = yield* store.resolveStoredImage(asset.id);
+      const now = new Date("2026-07-23T12:00:00.000Z");
+      const old = new Date(now.getTime() - AMBIENT_IMAGE_ORPHAN_GRACE_PERIOD_MS - 1);
+      yield* fs.utimes(stored.filePath, old, old);
+      let checks = 0;
+
+      const result = yield* store.sweepUnreferencedImages({
+        now,
+        isReferenced: () =>
+          Effect.sync(() => {
+            checks += 1;
+            return checks === 2;
+          }),
+      });
+
+      assert.deepEqual(result, { eligible: 1, removed: 0 });
+      assert.equal(checks, 2);
+      assert.equal((yield* store.resolveStoredImage(asset.id)).id, asset.id);
+    }).pipe(Effect.provide(layer())),
+  );
+
+  it.effect("honors a zero work limit and rejects non-finite sweep input", () =>
+    Effect.gen(function* () {
+      const store = yield* AmbientImageStore;
+      let checks = 0;
+      const noWork = yield* store.sweepUnreferencedImages({
+        maxAssets: 0,
+        isReferenced: () =>
+          Effect.sync(() => {
+            checks += 1;
+            return false;
+          }),
+      });
+      const invalid = yield* Effect.exit(
+        store.sweepUnreferencedImages({
+          maxAssets: Number.NaN,
+          isReferenced: () => Effect.succeed(false),
+        }),
+      );
+
+      assert.deepEqual(noWork, { eligible: 0, removed: 0 });
+      assert.equal(checks, 0);
+      assert.equal(invalid._tag, "Failure");
     }).pipe(Effect.provide(layer())),
   );
 });

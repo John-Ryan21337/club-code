@@ -1,6 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
 
 import {
+  assertRuntimeSelfTestResult,
   desktopSmokeChromiumSwitches,
   isReadyDesktopDebugSnapshot,
   parseRuntimeSmokeArgs,
@@ -10,6 +11,24 @@ import {
 } from "./native-desktop-runtime-smoke.ts";
 
 describe("native desktop runtime smoke", () => {
+  const successfulWindowsResult = {
+    ok: true,
+    platform: "win32",
+    arch: "x64",
+    isPackaged: true,
+    checks: {
+      safeStorage: true,
+      sqlite: true,
+      pty: true,
+      packagedResources: true,
+      packagedArtifactAudit: true,
+      updateMetadata: true,
+      managedRuntime: true,
+      windowOpacity: true,
+    },
+    failedChecks: [],
+  } as const;
+
   it("parses explicit app and resource paths", () => {
     const options = parseRuntimeSmokeArgs(["--app", "./Cafe Code", "--resources", "./Resources"]);
     assert.match(options.appPath, /Cafe Code$/);
@@ -86,6 +105,41 @@ describe("native desktop runtime smoke", () => {
         rendererLocalApiAvailable: false,
         rendererWebSocketConnected: false,
       },
+    );
+  });
+
+  it("accepts a complete packaged Windows runtime result", () => {
+    assert.deepEqual(
+      assertRuntimeSelfTestResult(successfulWindowsResult, "win32", "x64"),
+      successfulWindowsResult,
+    );
+  });
+
+  it("fails closed when packaged opacity evidence is missing or unsuccessful", () => {
+    for (const windowOpacity of [undefined, null, false]) {
+      const result = {
+        ...successfulWindowsResult,
+        checks: { ...successfulWindowsResult.checks, windowOpacity },
+      };
+      assert.throws(
+        () => assertRuntimeSelfTestResult(result, "win32", "x64"),
+        /runtime self-test failed/,
+      );
+    }
+  });
+
+  it("requires every packaged runtime boundary even when the aggregate says ok", () => {
+    assert.throws(
+      () =>
+        assertRuntimeSelfTestResult(
+          {
+            ...successfulWindowsResult,
+            checks: { ...successfulWindowsResult.checks, packagedArtifactAudit: false },
+          },
+          "win32",
+          "x64",
+        ),
+      /runtime self-test failed/,
     );
   });
 });

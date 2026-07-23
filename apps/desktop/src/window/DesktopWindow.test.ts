@@ -169,12 +169,15 @@ function makeTestLayer(input: {
 }
 
 describe("DesktopWindow", () => {
-  it("fails closed for packaged opacity until a platform has native smoke evidence", () => {
+  it("enables only platforms with native opacity smoke evidence in packaged builds", () => {
     assert.deepEqual(DesktopWindow.resolveDesktopWindowOpacityCapability("linux", false), {
       supported: false,
       reason: "unsupported-platform",
     });
     assert.deepEqual(DesktopWindow.resolveDesktopWindowOpacityCapability("win32", true), {
+      supported: true,
+    });
+    assert.deepEqual(DesktopWindow.resolveDesktopWindowOpacityCapability("darwin", true), {
       supported: false,
       reason: "release-not-validated",
     });
@@ -233,6 +236,41 @@ describe("DesktopWindow", () => {
           reason: null,
         });
         assert.deepEqual(fakeWindow.setOpacity.mock.calls, [[0.75]]);
+      }).pipe(Effect.provide(layer));
+    }),
+  );
+
+  it.effect("restores opaque settings when native opacity application fails", () =>
+    Effect.gen(function* () {
+      const fakeWindow = makeFakeBrowserWindow();
+      fakeWindow.setOpacity
+        .mockImplementationOnce(() => {
+          throw new Error("native setOpacity failed");
+        })
+        .mockImplementation(() => undefined);
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const layer = makeTestLayer({
+        window: fakeWindow.window,
+        createCount,
+        mainWindow,
+      });
+
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        const next = yield* desktopWindow.setWindowOpacityPreference({
+          enabled: true,
+          opacity: 0.75,
+        });
+
+        assert.deepEqual(next, {
+          supported: true,
+          enabled: false,
+          opacity: 1,
+          effectiveOpacity: 1,
+          reason: "apply-failed",
+        });
+        assert.deepEqual(fakeWindow.setOpacity.mock.calls, [[0.75], [1]]);
       }).pipe(Effect.provide(layer));
     }),
   );

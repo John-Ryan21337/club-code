@@ -27,8 +27,11 @@ import {
   ambientVideoPlayerShouldMount,
   youtubeEmbedUrl,
 } from "../../ambientVideo";
+import { spotifyEmbedUrl } from "../../spotify";
+import { localMediaStore, useLocalMediaElement, useLocalMediaState } from "../../localMedia";
 import { useSettings, useUpdateSettings } from "../../hooks/useSettings";
 import { useServerConfig } from "../../rpc/serverState";
+import { LocalMediaPanel } from "../chat/LocalMediaPanel";
 
 const FLOATING_HIDE_PANE_WIDTH = 640;
 const FLOATING_MARGIN = 16;
@@ -41,11 +44,13 @@ const KEYBOARD_RESIZE_STEP = 0.025;
 interface AmbientVideoWorkspaceContextValue {
   readonly registerChatAnchor: (element: HTMLElement | null) => void;
   readonly cinemaEffective: boolean;
+  readonly localMediaBackgroundEffective: boolean;
 }
 
 const AmbientVideoWorkspaceContext = createContext<AmbientVideoWorkspaceContextValue>({
   registerChatAnchor: () => undefined,
   cinemaEffective: false,
+  localMediaBackgroundEffective: false,
 });
 
 export function useAmbientVideoWorkspace(): AmbientVideoWorkspaceContextValue {
@@ -169,9 +174,11 @@ function resolveGlowColor(value: "auto" | string): string {
   return value === "auto" ? "var(--primary)" : value;
 }
 
-// oxlint-disable react/iframe-missing-sandbox -- The only iframe is hardcoded to youtube-nocookie.com, never user-controlled, and YouTube's player API requires scripts plus same-origin access.
+// oxlint-disable react/iframe-missing-sandbox -- Iframe origins are constructed only for
+// youtube-nocookie.com or open.spotify.com; neither accepts a user-controlled origin.
 export function AmbientVideoWorkspace({ children }: { readonly children: ReactNode }) {
   const settings = useSettings();
+  const localMedia = useLocalMediaState();
   const { updateSettings } = useUpdateSettings();
   const serverConfig = useServerConfig();
   const [rootElement, setRootElement] = useState<HTMLDivElement | null>(null);
@@ -183,19 +190,32 @@ export function AmbientVideoWorkspace({ children }: { readonly children: ReactNo
   const pendingGeometryRef = useRef<NormalizedAmbientMediaGeometry | null>(null);
   const interactionRef = useRef<PointerInteraction | null>(null);
   const animationFrameRef = useRef(0);
-  const cinemaHeadingRef = useRef<HTMLHeadingElement | null>(null);
+  const streamingCinemaHeadingRef = useRef<HTMLHeadingElement | null>(null);
+  const localCinemaHeadingRef = useRef<HTMLHeadingElement | null>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
-  const cinemaPreviouslyEffectiveRef = useRef(false);
+  const previousCinemaModeRef = useRef<"local" | "streaming" | null>(null);
   const [playerReadiness, setPlayerReadiness] = useState<{
     readonly sourceKey: string;
     readonly element: HTMLIFrameElement;
   } | null>(null);
   const rootRect = useElementRect(rootElement, rootElement);
   const anchorRect = useElementRect(chatAnchor, rootElement);
+  const localMediaElement = useLocalMediaElement();
+  const [localMediaPaused, setLocalMediaPaused] = useState(true);
 
-  const capabilityEnabled = serverConfig?.ambientExperienceCapabilities.youtubePlayer === true;
   const source = settings.ambientVideoSource;
-  const sourceKey = source === null ? null : `${source.kind}:${source.id}`;
+  const spotifySource = source?.kind === "spotify" ? source : null;
+  const capabilityEnabled =
+    source !== null &&
+    (spotifySource
+      ? serverConfig?.ambientExperienceCapabilities.spotifyEmbed === true
+      : serverConfig?.ambientExperienceCapabilities.youtubePlayer === true);
+  const sourceKey =
+    source === null
+      ? null
+      : source.kind === "spotify"
+        ? `spotify:${source.entityType}:${source.id}`
+        : `${source.kind}:${source.id}`;
   const playerReady =
     sourceKey !== null &&
     playerReadiness?.sourceKey === sourceKey &&
@@ -205,7 +225,24 @@ export function AmbientVideoWorkspace({ children }: { readonly children: ReactNo
   const cinemaRequested = settings.ambientVideoPresentationMode === "cinema";
   const cinemaLayoutFits =
     rootRect !== null && ambientVideoCinemaLayoutFits(rootRect.width, rootRect.height);
-  const cinemaEffective = locallyRenderable && playerReady && cinemaRequested && cinemaLayoutFits;
+  const localCinemaRequested =
+    localMedia.source !== null && localMedia.presentationMode === "cinema";
+  const localCinemaEffective = localCinemaRequested && cinemaLayoutFits;
+  const localMediaBackgroundEffective =
+    localMedia.source?.kind === "video" && localMedia.presentationMode === "background";
+  const localPresentationDominant = localCinemaRequested || localMediaBackgroundEffective;
+  const streamingCinemaEffective =
+    !localPresentationDominant &&
+    locallyRenderable &&
+    playerReady &&
+    cinemaRequested &&
+    cinemaLayoutFits;
+  const cinemaEffective = localCinemaEffective || streamingCinemaEffective;
+  const effectiveCinemaMode = localCinemaEffective
+    ? "local"
+    : streamingCinemaEffective
+      ? "streaming"
+      : null;
 
   const registerChatAnchor = useCallback((element: HTMLElement | null) => {
     setChatAnchor((current) => (current === element ? current : element));
@@ -218,6 +255,25 @@ export function AmbientVideoWorkspace({ children }: { readonly children: ReactNo
       setPlayerReadiness(null);
     }
   }, []);
+
+  useEffect(() => {
+    if (!localMediaElement) {
+      setLocalMediaPaused(true);
+      return;
+    }
+    const syncPlaybackState = () => setLocalMediaPaused(localMediaElement.paused);
+    syncPlaybackState();
+    localMediaElement.addEventListener("play", syncPlaybackState);
+    localMediaElement.addEventListener("pause", syncPlaybackState);
+    localMediaElement.addEventListener("ended", syncPlaybackState);
+    localMediaElement.addEventListener("emptied", syncPlaybackState);
+    return () => {
+      localMediaElement.removeEventListener("play", syncPlaybackState);
+      localMediaElement.removeEventListener("pause", syncPlaybackState);
+      localMediaElement.removeEventListener("ended", syncPlaybackState);
+      localMediaElement.removeEventListener("emptied", syncPlaybackState);
+    };
+  }, [localMediaElement]);
 
   const preset = useMemo(() => {
     if (!anchorRect) {
@@ -257,13 +313,14 @@ export function AmbientVideoWorkspace({ children }: { readonly children: ReactNo
   const floatingVisible =
     locallyRenderable &&
     !cinemaEffective &&
+    !localPresentationDominant &&
     anchorRect !== null &&
     anchorRect.width >= FLOATING_HIDE_PANE_WIDTH &&
     effectiveGeometry !== null;
   const playerShouldMount = ambientVideoPlayerShouldMount(
     locallyRenderable,
     floatingVisible,
-    cinemaEffective,
+    streamingCinemaEffective,
   );
 
   const commitGeometry = useCallback(
@@ -378,24 +435,30 @@ export function AmbientVideoWorkspace({ children }: { readonly children: ReactNo
   );
 
   useEffect(() => {
-    const wasEffective = cinemaPreviouslyEffectiveRef.current;
-    cinemaPreviouslyEffectiveRef.current = cinemaEffective;
-    if (cinemaEffective && !wasEffective) {
+    const previousMode = previousCinemaModeRef.current;
+    previousCinemaModeRef.current = effectiveCinemaMode;
+    if (effectiveCinemaMode !== null && previousMode === null) {
       previousFocusRef.current =
         document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    }
+    if (effectiveCinemaMode !== null) {
       const frame = window.requestAnimationFrame(() => {
-        cinemaHeadingRef.current?.focus();
+        const heading =
+          effectiveCinemaMode === "local"
+            ? localCinemaHeadingRef.current
+            : streamingCinemaHeadingRef.current;
+        heading?.focus();
       });
       return () => window.cancelAnimationFrame(frame);
     }
-    if (!cinemaEffective && wasEffective) {
+    if (effectiveCinemaMode === null && previousMode !== null) {
       const previousFocus = previousFocusRef.current;
       previousFocusRef.current = null;
       if (previousFocus?.isConnected) {
         previousFocus.focus();
       }
     }
-  }, [cinemaEffective]);
+  }, [effectiveCinemaMode]);
 
   useEffect(() => {
     if (!cinemaEffective) {
@@ -406,11 +469,15 @@ export function AmbientVideoWorkspace({ children }: { readonly children: ReactNo
         return;
       }
       event.preventDefault();
-      updateSettings({ ambientVideoPresentationMode: "floating" });
+      if (localCinemaEffective) {
+        localMediaStore.update({ presentationMode: "floating" });
+      } else {
+        updateSettings({ ambientVideoPresentationMode: "floating" });
+      }
     };
     window.addEventListener("keydown", exitCinemaOnEscape);
     return () => window.removeEventListener("keydown", exitCinemaOnEscape);
-  }, [cinemaEffective, updateSettings]);
+  }, [cinemaEffective, localCinemaEffective, updateSettings]);
 
   const nudgeGeometry = useCallback(
     (kind: PointerInteraction["kind"], key: string) => {
@@ -450,18 +517,18 @@ export function AmbientVideoWorkspace({ children }: { readonly children: ReactNo
   );
 
   const frameStyle = useMemo<CSSProperties>(() => {
-    if (cinemaEffective) {
+    if (streamingCinemaEffective) {
       return {};
     }
     if (!floatingVisible || !anchorRect || !effectiveGeometry) {
       return { display: "none" };
     }
     return geometryStyle(anchorRect, effectiveGeometry);
-  }, [anchorRect, cinemaEffective, effectiveGeometry, floatingVisible]);
+  }, [anchorRect, effectiveGeometry, floatingVisible, streamingCinemaEffective]);
 
   const contextValue = useMemo(
-    () => ({ registerChatAnchor, cinemaEffective }),
-    [cinemaEffective, registerChatAnchor],
+    () => ({ registerChatAnchor, cinemaEffective, localMediaBackgroundEffective }),
+    [cinemaEffective, localMediaBackgroundEffective, registerChatAnchor],
   );
 
   return (
@@ -475,8 +542,23 @@ export function AmbientVideoWorkspace({ children }: { readonly children: ReactNo
             : "grid-cols-1",
         )}
         data-ambient-video-presentation={cinemaEffective ? "cinema" : "floating"}
+        data-local-media-presentation={
+          localCinemaEffective
+            ? "cinema"
+            : localMediaBackgroundEffective
+              ? "background"
+              : "floating"
+        }
       >
-        {cinemaRequested && locallyRenderable && !cinemaEffective ? (
+        {localCinemaRequested && !localCinemaEffective ? (
+          <div
+            role="status"
+            className="pointer-events-none absolute top-3 left-1/2 z-30 -translate-x-1/2 rounded-full border border-border/80 bg-background/95 px-3 py-1.5 text-xs text-muted-foreground shadow-lg"
+          >
+            Local Media Cinema needs more window space; using the floating layout.
+          </div>
+        ) : null}
+        {cinemaRequested && locallyRenderable && !localPresentationDominant && !cinemaEffective ? (
           <div
             role="status"
             className="pointer-events-none absolute top-3 left-1/2 z-30 -translate-x-1/2 rounded-full border border-border/80 bg-background/95 px-3 py-1.5 text-xs text-muted-foreground shadow-lg"
@@ -492,22 +574,90 @@ export function AmbientVideoWorkspace({ children }: { readonly children: ReactNo
             cinemaEffective
               ? "col-start-2 row-start-1 overflow-hidden rounded-xl border"
               : "col-start-1 row-start-1",
+            localMediaBackgroundEffective && "relative z-10",
           )}
           data-ambient-chat-rail={cinemaEffective ? "true" : undefined}
         >
           {children}
         </div>
+        <LocalMediaPanel
+          backgroundEffective={localMediaBackgroundEffective}
+          cinemaEffective={localCinemaEffective}
+          cinemaHeadingRef={localCinemaHeadingRef}
+          floatingAnchor={anchorRect}
+        />
+        {localMediaBackgroundEffective ? (
+          <div
+            role="toolbar"
+            aria-label="Local video background controls"
+            className="absolute top-3 left-1/2 z-30 flex h-8 -translate-x-1/2 items-center gap-2 rounded-full border border-white/20 bg-black/75 px-3 text-xs text-white shadow-lg"
+          >
+            <span>Local video background</span>
+            <button
+              type="button"
+              aria-label={
+                localMediaPaused ? "Play local video background" : "Pause local video background"
+              }
+              aria-pressed={!localMediaPaused}
+              disabled={localMediaElement === null}
+              className="rounded px-1.5 py-1 text-[10px] hover:bg-white/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-50"
+              onClick={() => {
+                if (!localMediaElement) {
+                  return;
+                }
+                if (localMediaElement.paused) {
+                  void localMediaElement.play().catch(() => {
+                    // Browser media policy/decoder failures remain recoverable
+                    // through the normal floating native controls.
+                  });
+                } else {
+                  localMediaElement.pause();
+                }
+              }}
+            >
+              {localMediaPaused ? "Play" : "Pause"}
+            </button>
+            <button
+              type="button"
+              aria-pressed={localMedia.visualizerEnabled}
+              className="rounded px-1.5 py-1 text-[10px] hover:bg-white/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
+              onClick={() =>
+                localMediaStore.update({
+                  visualizerEnabled: !localMedia.visualizerEnabled,
+                })
+              }
+            >
+              Visualizer
+            </button>
+            <button
+              type="button"
+              className="inline-flex items-center gap-1 rounded px-1.5 py-1 hover:bg-white/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
+              onClick={() => localMediaStore.update({ presentationMode: "floating" })}
+            >
+              <PanelRightCloseIcon className="size-3.5" />
+              Exit
+            </button>
+            <button
+              type="button"
+              aria-label="Clear local video background"
+              className="rounded p-1 hover:bg-white/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
+              onClick={() => localMediaStore.clear()}
+            >
+              <XIcon className="size-3.5" />
+            </button>
+          </div>
+        ) : null}
 
         <section
-          aria-label="Ambient YouTube player"
+          aria-label="Ambient streaming player"
           className={cn(
             "group/ambient-video overflow-hidden rounded-xl border border-border/80 bg-black shadow-2xl",
-            cinemaEffective
+            streamingCinemaEffective
               ? "relative z-40 col-start-1 row-start-1 flex min-h-0 min-w-0 flex-col self-center"
               : "absolute z-20",
             settings.ambientVideoGlowEnabled && "ambient-media-glow",
           )}
-          data-ambient-protected-player={cinemaEffective ? "true" : undefined}
+          data-ambient-protected-player={streamingCinemaEffective ? "true" : undefined}
           style={
             {
               ...frameStyle,
@@ -522,33 +672,39 @@ export function AmbientVideoWorkspace({ children }: { readonly children: ReactNo
         >
           {source !== null && playerShouldMount ? (
             <iframe
-              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+              allow={
+                spotifySource
+                  ? "autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
+                  : "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+              }
               allowFullScreen
               className={cn(
                 "block w-full border-0 bg-black",
-                cinemaEffective ? "aspect-video" : "h-full",
+                streamingCinemaEffective ? "aspect-video" : "h-full",
               )}
               ref={registerPlayerFrame}
               referrerPolicy="strict-origin-when-cross-origin"
               sandbox="allow-scripts allow-same-origin allow-presentation allow-popups"
-              src={youtubeEmbedUrl(source)}
+              src={source.kind === "spotify" ? spotifyEmbedUrl(source) : youtubeEmbedUrl(source)}
               onLoad={(event) => {
                 if (sourceKey !== null) {
                   setPlayerReadiness({ sourceKey, element: event.currentTarget });
                 }
               }}
               title={
-                source.kind === "video"
-                  ? "Ambient YouTube video player"
-                  : "Ambient YouTube playlist player"
+                spotifySource
+                  ? `Ambient Spotify ${spotifySource.entityType} player`
+                  : source.kind === "video"
+                    ? "Ambient YouTube video player"
+                    : "Ambient YouTube playlist player"
               }
             />
           ) : null}
 
-          {cinemaEffective ? (
+          {streamingCinemaEffective ? (
             <div className="order-first flex h-10 shrink-0 items-center justify-between border-b border-white/15 bg-card px-3 text-xs text-foreground">
               <h2
-                ref={cinemaHeadingRef}
+                ref={streamingCinemaHeadingRef}
                 tabIndex={-1}
                 className="rounded-sm font-medium outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
@@ -575,7 +731,7 @@ export function AmbientVideoWorkspace({ children }: { readonly children: ReactNo
             </div>
           ) : null}
 
-          {!cinemaEffective && floatingVisible ? (
+          {!streamingCinemaEffective && floatingVisible ? (
             <>
               <button
                 type="button"

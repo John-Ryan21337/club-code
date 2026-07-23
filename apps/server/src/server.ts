@@ -12,6 +12,12 @@ import {
   ambientImageServeRouteLayer,
   ambientImageRemoveRouteLayer,
   ambientImageUploadRouteLayer,
+  youTubeAccountCallbackRouteLayer,
+  youTubeAccountDisconnectRouteLayer,
+  youTubeAccountLoopbackCallbackRouteLayer,
+  youTubeAccountPlaylistsRouteLayer,
+  youTubeAccountStartRouteLayer,
+  youTubeAccountStatusRouteLayer,
   youTubePublicDiscoveryRouteLayer,
   brandingSidebarImageServeRouteLayer,
   brandingSidebarImageUploadRouteLayer,
@@ -27,6 +33,7 @@ import {
   browserApiCorsLayer,
 } from "./http.ts";
 import { YouTubePublicDiscoveryLive } from "./ambientMedia/YouTubePublicDiscovery.ts";
+import { YouTubeAccountConnectionLive } from "./ambientMedia/YouTubeAccountConnection.ts";
 import { fixPath } from "./os-jank.ts";
 import { websocketRpcRouteLayer } from "./ws.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
@@ -346,6 +353,15 @@ const baseRoutesLayer = Layer.mergeAll(
   attachmentsRouteLayer,
 );
 
+export const youTubeAccountRoutesLayer = Layer.mergeAll(
+  youTubeAccountStartRouteLayer,
+  youTubeAccountStatusRouteLayer,
+  youTubeAccountPlaylistsRouteLayer,
+  youTubeAccountDisconnectRouteLayer,
+  youTubeAccountCallbackRouteLayer,
+  youTubeAccountLoopbackCallbackRouteLayer,
+);
+
 export const makeRoutesLayer = Layer.mergeAll(
   baseRoutesLayer,
   Layer.mergeAll(
@@ -407,7 +423,7 @@ export const makeServerLayer = Layer.unwrap(
     );
     const httpsSiblingLayer = Layer.effectDiscard(startHttpsSiblingServer);
     const serverApplicationLayer = Layer.mergeAll(
-      HttpRouter.serve(makeRoutesLayer, {
+      HttpRouter.serve(Layer.mergeAll(makeRoutesLayer, youTubeAccountRoutesLayer), {
         disableLogger: !config.logWebSocketEvents,
       }),
       httpListeningLayer,
@@ -420,6 +436,7 @@ export const makeServerLayer = Layer.unwrap(
       Layer.provideMerge(BrandingImageStoreLive),
       Layer.provide(AmbientImageStoreLive),
       Layer.provide(YouTubePublicDiscoveryLive),
+      Layer.provide(YouTubeAccountConnectionLive.pipe(Layer.provide(ExternalLauncher.layer))),
       Layer.provideMerge(ThreadDetailSubscriptionRegistryLive),
       Layer.provideMerge(HttpServerLive),
       Layer.provide(ObservabilityLive),

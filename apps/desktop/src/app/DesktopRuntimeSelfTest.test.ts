@@ -20,6 +20,7 @@ const makeDependencies = (
   packagedArtifactAudit: async () => true,
   updateMetadataPresent: async () => true,
   managedRuntimePresent: async () => null,
+  windowOpacityRoundTrip: async () => null,
   ...overrides,
 });
 
@@ -42,6 +43,7 @@ describe("DesktopRuntimeSelfTest", () => {
       packagedArtifactAudit: true,
       updateMetadata: true,
       managedRuntime: null,
+      windowOpacity: null,
     });
   });
 
@@ -55,6 +57,7 @@ describe("DesktopRuntimeSelfTest", () => {
         ptyRoundTrip: async () => false,
         packagedArtifactAudit: async () => false,
         managedRuntimePresent: async () => false,
+        windowOpacityRoundTrip: async () => false,
       }),
     );
 
@@ -64,8 +67,37 @@ describe("DesktopRuntimeSelfTest", () => {
       "pty",
       "packagedArtifactAudit",
       "managedRuntime",
+      "windowOpacity",
     ]);
     assert.notInclude(JSON.stringify(result), "private path");
     assert.notInclude(JSON.stringify(result), "token must not escape");
+  });
+
+  it("fails closed when an individual native check never settles", async () => {
+    const result = await collectDesktopRuntimeSelfTestResult(
+      makeDependencies({
+        platform: "win32",
+        windowOpacityRoundTrip: () => new Promise(() => undefined),
+      }),
+      { checkTimeoutMs: 5 },
+    );
+
+    assert.isFalse(result.ok);
+    assert.strictEqual(result.checks.windowOpacity, false);
+    assert.include(result.failedChecks, "windowOpacity");
+  });
+
+  it("bounds readiness so bootstrap cannot hang forever", async () => {
+    let failure: unknown;
+    try {
+      await collectDesktopRuntimeSelfTestResult(
+        makeDependencies({ whenReady: () => new Promise(() => undefined) }),
+        { checkTimeoutMs: 5 },
+      );
+    } catch (error) {
+      failure = error;
+    }
+    assert.instanceOf(failure, Error);
+    assert.include(failure.message, "timed out");
   });
 });

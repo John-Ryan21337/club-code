@@ -484,19 +484,25 @@ describe("ServerProvider", () => {
 });
 
 describe("AmbientExperienceCapabilities", () => {
-  it("defaults every omitted capability to disabled", () => {
-    expect(decodeAmbientExperienceCapabilities({})).toEqual({
-      version: 1,
+  it("fails closed when the capability object or individual fields are omitted", () => {
+    const disabled = {
+      version: 2,
       atmosphere: false,
       ambientImage: false,
       youtubePlayer: false,
       youtubePublicDiscovery: false,
       youtubeAccountConnection: false,
+      spotifyEmbed: false,
       workflowObservatory: false,
+    };
+    expect(decodeAmbientExperienceCapabilities(undefined)).toEqual(disabled);
+    expect(decodeAmbientExperienceCapabilities({})).toEqual({
+      ...disabled,
     });
   });
 
   it("rejects unsupported capability contract versions", () => {
-    expect(() => decodeAmbientExperienceCapabilities({ version: 2 })).toThrow();
+    expect(() => decodeAmbientExperienceCapabilities({ version: 1 })).toThrow();
+    expect(() => decodeAmbientExperienceCapabilities({ version: 3 })).toThrow();
   });
 });
