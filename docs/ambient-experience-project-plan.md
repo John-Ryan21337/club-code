@@ -1,6 +1,6 @@
 # Cafe Code Ambient Experience Project Plan
 
-Status: Implementation in progress — several gated slices are implemented with scoped validation; this is not a release-readiness claim.
+Status: Shipped v1 scope implemented and automated gates clean; manual, soak, platform-artifact, and conditional native-feasibility gates remain open.
 
 Implementation note: “Scoped checks run” below records only the focused checks currently evidenced for that slice. It does not mean the Phase 7 full command set, manual matrix, soak, CSP/package checks, or native-release evidence have passed.
 
@@ -13,7 +13,7 @@ Review roles: Sol, Terra, Luna
 
 ## Outcome
 
-Deliver optional full-window snow/rain/Matrix effects, two ambient chat media panels, public YouTube search/playlists, optional connected-account playlists, floating and cinema-workspace video presentations, configurable glow, custom placement/sizing, a live workflow/sub-agent view, and supported-platform native window opacity without weakening Cafe Code's security or long-session stability. Separately evaluate a conditional desktop Local Media Theater and projectM visualizer without treating native libVLC, audio-tap, or visualization feasibility as a shipping commitment.
+Deliver optional full-window snow/rain/Matrix effects, streaming and image chat media, session-only browser Local Media, public YouTube search/playlists, desktop-local owned-playlist discovery, floating/cinema/background presentations, configurable glow, custom placement/sizing, a live workflow/sub-agent view, and supported-platform native window opacity without weakening Cafe Code's security or long-session stability. Keep native libVLC/projectM as a separate conditional feasibility track: the shipped HTML Local Media player and its bounded blob-only visualizer are not a native-media commitment.
 
 This plan intentionally delivers reviewable slices. Contract/scaffolding phases may merge only behind inactive feature gates; a user-visible feature may ship only when its renderer/server dependency and exit gate are clean.
 
@@ -51,7 +51,7 @@ Canon and threat model
         |
         +--> authenticated ambient asset store --> ambient image panel
         |
-        +--> production CSP and policies --> YouTube parser/embed
+        +--> production CSP and policies --> YouTube/Spotify strict parser and official embeds
         |                                      ^
         +--> backend Data API key --> public search/playlists
         +--> external-browser OAuth/PKCE --> private playlist picker
@@ -83,10 +83,10 @@ Tasks:
 - Select and audit an implementable GIF parser/metadata mechanism for frame, duration, disposal/subframe, and cumulative-work validation. Avoid a native dependency unless packaged desktop validation justifies it.
 - Add reusable test fixtures for valid/invalid YouTube URLs, static raster uploads, bounded GIFs, malformed/truncated GIFs, animation bombs, APNG, and animated WebP.
 - Decide the YouTube Data API key/configuration path, quota budgets, cache/rate limits, exact result fields/branding, safe-search/region defaults, dedicated-client trace redaction, and static `i.ytimg.com` thumbnail-proxy rules.
-- Register/verify both allowed Google OAuth application modes: local packaged Electron uses a Desktop-app client with a temporary random-port `127.0.0.1` listener; configured browser/remote deployments use a Web-app client with one fixed canonical HTTPS callback. Record the exact `https://www.googleapis.com/auth/youtube.readonly` scope, privacy policy, encrypted token storage, owner-only authorization, and that this does not authenticate Premium playback in the iframe.
+- Register/verify the shipped Google OAuth topology: local packaged Electron uses a Desktop-app client and Google's bare loopback redirect form, `http://127.0.0.1:<backend-port>`, with the local backend's actual port and no added path. Record the exact `https://www.googleapis.com/auth/youtube.readonly` scope, owner-only authorization, bounded in-memory per-session tokens (no at-rest refresh token), and that this does not authenticate Premium playback in the iframe. Remote-web OAuth remains out of scope.
 - Inventory current release-readiness CSP work and every required source: inline boot code, Google Fonts, data/blob previews, workers/service worker, remote HTTP/WebSocket environments, Vite/HMR, browser production, and packaged Electron.
 - Inventory Codex/Claude normalized activity fields, provider fidelity, redaction guarantees, reconnect history, and maximum workflow graph/event sizes.
-- Confirm the canon's 12-pixel same-corner stack, aspect-ratio, 640-pixel hide, and 768-pixel custom-control rules against product mockups.
+- Confirm the implemented 12-pixel same-corner image stack, aspect-ratio handling, streaming-only 640-pixel floating hide rule, and bounded pointer/keyboard custom controls against product mockups. No 768-pixel/coarse-pointer fallback is currently implemented.
 - Confirm every media default/bound in the canon table, including opposite default corners, medium preset sizes, glow values, null sources/assets, and effective-empty behavior.
 - Record manual-test platforms available: Windows, macOS, Linux/X11/Wayland, and browser.
 - Define the release-native-opacity platform manifest and evidence record. It defaults empty; a release enables `win32` or `darwin` only after that exact artifact/version receives its native smoke result.
@@ -112,7 +112,7 @@ Tasks:
 
 - Add flat bounded schemas and defaults for atmosphere, media layout, ambient image metadata, and glow.
 - Add shared `ambientVideoPresentationMode: floating | cinema` with canonical/backward-compatible default `floating`; include it in `ClientSettingsSchema`, `ClientSettingsPatch`, ambient key/reset vectors, and changed-settings summaries.
-- Add atomic `YouTubeSource` (`video | playlist | null`) with strict IDs and default `null`.
+- Add atomic `AmbientVideoSource` (`YouTube video | YouTube playlist | Spotify entity | null`) with strict IDs and default `null`.
 - Use one shared `preset | custom` layout mode per media slot plus separate preset placement/size fields.
 - Add every key to `ClientSettingsPatch`.
 - Define `AmbientImageAsset` metadata and strict ID/URL/MIME/dimension schemas.
@@ -146,7 +146,7 @@ Tests:
 - local geometry migration clamps or resets corrupt data;
 - `null` -> video/playlist -> replacement/reset source transitions are atomic;
 - the complete canonical default/bounds vector round-trips, including `enabled: true` plus null source/asset as an effective empty state with no work;
-- first/remote entry into custom mode seeds missing local geometry from the resolved preset; narrow/coarse fallback never mutates shared mode or erases geometry.
+- first/remote entry into custom mode seeds missing local geometry from the resolved preset; pane changes re-clamp without mutating shared mode or erasing geometry.
 
 Exit gate:
 
@@ -212,22 +212,18 @@ Goal: create a provider-neutral, sanitized source for live workflow and sub-agen
 
 Tasks:
 
-- Define runtime-schema-backed workflow node/lifecycle/snapshot contracts with stable IDs, parent/path correlation, canonical statuses, timestamps, safe summaries, and `live | lifecycle-only | not-reported` fidelity.
-- Scope every snapshot/event by environment, configured provider instance, provider-process epoch, thread, and turn. Rotate the epoch on runtime restart even when the configured instance ID stays constant. Snapshots separately add revision/watermark, pagination cursors bind to that immutable revision, and live events carry the post-watermark monotonic sequence/cursor. Node IDs are stable only inside the scope key.
-- Normalize Codex `subAgentActivity`/`collab_agent_tool_call` and Claude task/sub-agent progress without inventing fields.
-- Preserve arbitrary-depth agent paths and correlation to turn/tool activity where providers expose it.
-- Project persisted current-turn activities into an immutable reconnect snapshot with a captured watermark, paginated from that snapshot while live events are buffered/subscribed from the watermark.
-- Build a pure bounded reducer that atomically swaps scope, rejects late out-of-scope revisions, is idempotent under duplicate events, and applies documented monotonic lifecycle precedence. Terminal state beats stale start/progress within an epoch; a new provider-instance epoch may reuse IDs.
+- Define a runtime-schema-backed version 1 workflow snapshot with bounded display-safe nodes, recent activity, omission counts, and `live | lifecycle-only | not-reported` fidelity.
+- Derive that snapshot in the renderer from the current thread's existing persisted orchestration activities, optionally scoped to the current turn. Reconnect uses the normal thread-detail resnapshot/subscription path; this slice adds no separate workflow event protocol, epoch, revision, watermark, or pagination cursor.
+- Project Codex collaboration/sub-agent activity and Claude task progress without inventing unavailable hierarchy, duration, or status.
+- Preserve provider-reported agent paths and parent correlation where available, with bounded depth and stable IDs within the derived projection.
+- Build a pure bounded projection that is deterministic under replay/order changes, de-duplicates activity IDs, and preserves terminal lifecycle precedence.
 - Keep raw provider payloads, hidden reasoning, secrets, and unredacted prompts outside the contract.
-- Version the normalized snapshot/event contract and expose capability/version plus updates through the existing orchestration environment boundary. Keep older server fields readable during the supported mixed-version window.
+- Version the renderer-ready snapshot contract and keep older orchestration activity fields readable.
 
 Likely files:
 
 - `packages/contracts/src/orchestration.ts` and tests
 - `packages/contracts/src/providerRuntime.ts` if canonical lifecycle types need extension
-- `apps/server/src/provider/Layers/CodexAdapter.ts` and tests
-- `apps/server/src/provider/Layers/ClaudeAdapter.ts` and tests
-- orchestration event persistence/snapshot services and tests
 - new `apps/web/src/workflowProjection.ts` and tests
 
 Tests:
@@ -235,18 +231,17 @@ Tests:
 - Codex hierarchy/start/interact/interrupt/terminal mapping;
 - Claude lifecycle-only/progress mapping;
 - unsupported provider fidelity and honest empty state;
-- duplicate, out-of-order, missing-parent, missing-terminal, reconnect, retry, and provider-restart sequences;
-- repeated IDs across turns/environments and across two process epochs with the same configured provider instance, thread switches, events during paginated snapshot, stale snapshot after live, terminal-before-start, and snapshot-plus-buffered-live handoff;
+- duplicate, replayed/out-of-order, missing-parent, missing-terminal, and terminal-before-start histories;
+- current-turn filtering, normalized path separators, conflicting terminal results, and root-target de-duplication;
 - arbitrary-depth paths remain bounded and cycle-free;
 - status is never inferred from elapsed silence alone;
 - redaction fixtures prove raw reasoning/secrets/prompts do not cross the normalized contract;
-- node/event caps and snapshot pagination prevent unbounded state.
-- compatible old/new client-server contract pairs negotiate the advertised version; unsupported versions fail to an honest unavailable state rather than partially decoding.
+- node and recent-activity caps plus omission counts prevent unbounded state.
 
 Exit gate:
 
 - contract, adapter, orchestration, and reducer tests pass;
-- sanitized snapshots reconstruct the current turn after reconnect;
+- sanitized projections reconstruct the current turn after the normal thread-detail reconnect;
 - Luna's slice is audited by Terra.
 
 ## Phase 2B — Workflow Observatory UI
@@ -262,7 +257,7 @@ Tasks:
 - Persist open/tab/expansion state in per-device `uiStateStore`, not Client Settings.
 - Virtualize/bound large activity lists and update only affected nodes.
 - Honor reduced motion with static indicators.
-- Add an operator/runtime Workflow UI gate independent of Client Settings. When disabled or contract-incompatible, stop subscriptions, clear the projection, and leave Plan available.
+- Add an operator/runtime Workflow UI gate independent of Client Settings. When disabled or contract-incompatible, hide/clear the derived Workflow projection and leave Plan plus the normal thread-detail lifecycle available.
 
 Likely files:
 
@@ -355,13 +350,13 @@ Goal: add narrowly permitted public video/playlist discovery and playback withou
 Tasks:
 
 - Add production Content Security Policy and supporting security headers.
-- Allow only the privacy-enhanced YouTube frame origin in renderer CSP; keep Data API and thumbnail access behind fixed backend outbound allowlists.
+- Allow only the privacy-enhanced YouTube and official Spotify Embed frame origins in renderer CSP; keep YouTube Data API access behind fixed backend outbound policy.
 - Define production and development directives for scripts/styles/fonts/images/media/workers/connections/frames and externalize or nonce/hash inline boot content.
 - Preserve tested saved remote HTTP/WebSocket environments without broadening `frame-src`.
 - Implement a pure strict URL parser that produces the atomic `YouTubeSource` union for canonical video and playlist URLs, with the canon's exact 11-character video and 10–80-character playlist schemas.
 - Persist only the normalized source kind and ID; never persist pasted URLs, search terms, or result payloads.
 - Build fixed privacy-enhanced video and playlist embed URLs with a safe parameter allowlist.
-- Render a lazy, sandboxed iframe with narrow permissions and a viewport that meets YouTube's minimum player dimensions.
+- Render a conditionally mounted sandboxed iframe with the exact reviewed YouTube/Spotify feature policies and a viewport that meets YouTube's minimum player dimensions.
 - Keep autoplay off until user interaction and unmount the iframe on disable/source replacement.
 - Add an authenticated Cafe Code backend search endpoint and dedicated Data API client. Keep the key in a scoped server secret accessor; redact its query parameter and full upstream URL/body before HTTP tracing/diagnostics. Validate and bound queries, debounce callers, enforce per-user/global rate and quota budgets, cache briefly, cap results/page tokens, and apply the Phase 0 safe-search/region policy.
 - Add an operator/runtime public-discovery gate and authenticated capability response. Disabling it rejects/cancels new search work and clears bounded transient caches without disabling strict URL entry or an already-selected public source.
@@ -394,7 +389,7 @@ Tests:
 - discovery-gate disable cancels/rejects new work, clears cache, preserves already-counted quota accounting, and re-enable starts clean without affecting URL entry;
 - search result text renders as text and YouTube attribution/thumbnail provenance remains intact;
 - thumbnail proxy rejects alternate hosts, credentials, redirects, DNS/private-address rebinding, unexpected paths/MIME, oversize/slow bodies, and malformed images; renderer CSP needs no YouTube thumbnail origin and invalid thumbnails use a placeholder;
-- exact iframe title, sandbox, referrer policy, lazy loading, feature policy, and minimum dimensions are asserted;
+- exact iframe title, sandbox (including the fixed-origin `allow-popups` concession), referrer policy, provider-specific feature policy, conditional mounting, and minimum dimensions are asserted;
 - iframe is absent while disabled and removed on disable;
 - the real Phase 3 image and YouTube iframe remain interactive while the atmosphere renders visually above them;
 - popup/top navigation attempts do not escape;
@@ -424,14 +419,14 @@ Goal: let the Cafe Code owner discover playlists from their own YouTube account 
 
 Tasks:
 
-- Implement owner-only Google OAuth Authorization Code with S256 PKCE using the external system browser and exactly the canon's two configured deployment modes. Local packaged Electron plus local backend uses a Desktop-app client and temporary random-port `127.0.0.1` listener; remote/backend browser use requires a Web-app client and one fixed pre-registered canonical HTTPS callback. All other topologies disable connection.
+- Implement owner-only Google OAuth Authorization Code with S256 PKCE using the external system browser and the canon's one shipped deployment mode: local packaged Electron plus its local backend, a Desktop-app client, and Google's bare `http://127.0.0.1:<backend-port>` loopback redirect. Browser/remote-web OAuth is unavailable.
 - Let the renderer request only a backend-created authorization transaction. Permit external opening/user navigation only to `https://accounts.google.com/o/oauth2/v2/auth`; never accept a renderer-supplied redirect or authorization URL.
-- Validate configured HTTPS origin/path and trusted-proxy rules at startup. Bind the loopback listener only to `127.0.0.1`, close it after one response/timeout, and handle port-allocation failure without fallback to a broad interface.
+- Derive the bare loopback redirect from the local backend's actual port, accept it only from a loopback peer, and never append an application path or fall back to a non-loopback/remote callback.
 - Use high-entropy, single-use, expiring `state` and PKCE verifier records; bind callbacks to the initiating Cafe Code owner/session and reject replay.
 - Request exactly `https://www.googleapis.com/auth/youtube.readonly` and forbid additional scopes in version 1. Complete Google consent-screen, verification, privacy-policy, and data-handling work before production release.
-- Exclude the callback from raw-query access logging. Send no-store/no-referrer headers, consume state atomically, exchange the code server-side, and `303` every outcome to a fixed query-free completion page. Expose only opaque transaction status to the initiating authenticated owner session.
-- Keep access/refresh tokens and OAuth client secrets in the backend secret store with an authenticated-encryption key outside that store. Never place them in Client Settings, renderer storage, URLs, logs, or workflow events.
-- Add an operator/runtime account-connection gate and capability response. Disabling it blocks new authorization, invalidates in-flight state/listeners, and stops refresh/playlist work while retaining encrypted tokens; owner-only disconnect/revoke/delete remains available even while gated off.
+- Exclude the callback from raw-query access logging. Send no-store/no-referrer headers, consume state atomically, exchange the code server-side, and return a fixed completion/error response. Expose only opaque transaction status to the initiating authenticated owner session.
+- Keep access/refresh tokens in a bounded in-memory grant for the initiating owner session. Never place them at rest, in Client Settings, renderer storage, URLs, logs, or workflow events.
+- Add an operator/runtime account-connection gate and capability response. Disabling it blocks new authorization, invalidates in-flight state, and stops refresh/playlist work; owner-only disconnect/revoke remains available while gated off.
 - Serialize token refresh, handle revocation/expiry, and provide explicit disconnect plus best-effort Google token revocation and local deletion.
 - Fetch the authorized user's playlists with the supported owned-playlist endpoint, then fetch bounded playlist items on demand. Keep private playlist metadata owner-only, permit in-app selection only when the supported embed can play the source, and route private/non-embeddable items to signed-in YouTube. Explain unavailable/special collections rather than fabricating them.
 - Label the action `Connect YouTube account`, not `Sign in to YouTube Premium`.
@@ -441,7 +436,7 @@ Tasks:
 Likely files:
 
 - contract runtime schemas for connection state, playlist summaries, and owner-only RPC/HTTP responses
-- server OAuth state/PKCE service, encrypted token store adapter, refresh coordinator, YouTube playlist service, routes, and tests
+- server OAuth state/PKCE service, bounded in-memory owner-session grant/refresh coordinator, YouTube playlist service, routes, and tests
 - server deployment configuration and operator documentation
 - web connection status, playlist picker, disconnect action, and browser tests
 - existing Electron external-browser helper/allowlist, without an embedded-login window
@@ -451,11 +446,11 @@ Tests:
 - non-owner and unauthenticated callers cannot start, complete, inspect, or disconnect a connection;
 - state mismatch, expired state, redirect replay, wrong initiator, missing PKCE verifier, denied consent, and malformed callback fail closed;
 - generated authorization requests use only the fixed Google authorization endpoint, S256, the exact read-only scope, and the one configured redirect; additional scopes and renderer-provided URLs/redirects are rejected;
-- local/remote topology detection, wrong Host/forwarded proto, untrusted proxy, redirect mismatch, loopback port collision, listener timeout/cleanup, and remote-client use of local loopback fail safely;
+- browser/remote-web use, callback mismatch, loopback port collision, session expiry, and local callback failure fail safely;
 - callback query/code/state never enter access/trace logs, diagnostics, error pages, redirect `Location`, referrers, renderer state, Client Settings, or workflow activity, including malformed and upstream-exchange failures;
 - concurrent requests cause one serialized refresh; expiry, revoked grants, upstream timeout, partial response, and disconnect-during-refresh recover consistently;
 - disconnect revokes best-effort, deletes local tokens, clears connection state, and leaves public search/URL entry usable;
-- account-gate disable invalidates in-flight transactions/listeners, blocks connect/refresh/list work, retains encrypted tokens, and still permits owner-only disconnect/revoke/delete; re-enable refreshes from a clean transaction;
+- account-gate disable invalidates in-flight transactions, blocks connect/refresh/list work, clears the memory-only grant, and still permits owner-only disconnect/revoke; re-enable starts a clean transaction;
 - owned playlists and items are owner-authorized, bounded/paginated, schema-validated, and sanitized without altering YouTube attribution;
 - private/non-embeddable playlists never leak to other Cafe Code sessions or claim in-app playability and instead use the external signed-in action;
 - unavailable special/private collections show honest empty/error states;
@@ -465,7 +460,7 @@ Tests:
 Manual checks:
 
 - external-browser consent returns to the initiating session without opening an embedded Google login;
-- connect, refresh/restart, select playlist, disconnect, and reconnect work;
+- connect, refresh within the active session, select playlist, disconnect, and reconnect work; restart intentionally requires a new connection;
 - `Open in signed-in YouTube` uses the user's normal browser session;
 - public search remains usable without connecting an account.
 
@@ -557,7 +552,7 @@ Tasks:
 - Persist once at interaction completion.
 - Add keyboard move/resize increments, reset, close, and focus order.
 - Clean up capture, cursor, selection, frames, and listeners on every termination path.
-- Fall back to the resolved preset safely on narrow/coarse-pointer layouts without mutating shared `layoutMode` or erasing local custom geometry.
+- Clamp custom geometry to the current measured pane while preserving normalized geometry across layout changes; keep pointer and keyboard controls available.
 - Re-clamp after sidebar, plan panel, viewport, display, and zoom changes.
 
 Likely files:
@@ -579,7 +574,7 @@ Tests:
 - corrupt or off-screen saved geometry recovers;
 - two panels remain independently operable;
 - first custom entry and remote custom-without-geometry seed from the current preset, while later preset/custom round trips retain local custom geometry;
-- 640-pixel hiding and 768-pixel fine-pointer custom fallback preserve geometry and do not auto-resume YouTube.
+- streaming-only 640-pixel floating hiding preserves source/settings, while ambient image and Local Media remain bounded; custom geometry survives pane changes.
 
 Exit gate:
 
@@ -587,11 +582,11 @@ Exit gate:
 - a screen-reader/keyboard manual pass is recorded;
 - Spark's slice is audited by Sol.
 
-## Phase 5B — Local Media Theater feasibility and conditional implementation
+## Phase 5B — Native Local Media Theater feasibility and conditional implementation
 
 Goal: determine whether a secure, supportable native libVLC theater can ship, then implement it only if the feasibility gate passes.
 
-This phase is conditional. Its spike and decision record are required work; user-facing implementation is not authorized merely because the spike exists.
+This phase is conditional. Its spike and decision record are required work; user-facing native implementation is not authorized merely because the spike exists. It is deliberately separate from the shipped Local Media v1 slice: v1 is a current-session browser HTML media player with a picker-created object URL, floating/custom/Cinema/video-background presentation, and a bounded blob-element Web Audio visualizer. It has no file-path bridge, VLC, projectM, direct stream, Spotify/YouTube PCM, DRM, or universal-codec claim.
 
 Feasibility tasks:
 
@@ -664,18 +659,17 @@ Goal: support bounded whole-window opacity on compatible Electron platforms.
 
 Tasks:
 
-- Add a runtime-schema-refined discriminated `WindowOpacityState`, stable `WindowOpacityReasonCode`, and typed get/set/reset plus state-change subscription bridge methods. State carries a monotonic revision and only valid unsupported/ready/recovered/degraded combinations of capability, confirmed/unknown persistence, consistent/mixed-or-unknown live opacity, and reason.
+- Add runtime-schema-backed `DesktopWindowOpacityPreference` and `DesktopWindowOpacityState` contracts with bounded opacity and stable nullable reasons: `unsupported-platform`, `release-not-validated`, `apply-failed`, `persistence-failed`, and `safe-reset-failed`.
 - Add dedicated IPC channels and trusted-web-contents handlers.
 - Add bounded `{ enabled, opacity }` to desktop-local `DesktopAppSettings` with backward-compatible defaults and atomic persistence.
 - Validate finite range in both renderer contract and main process.
 - Compute support from an injectable `DesktopEnvironment.platform` intersected with the release-native-opacity platform manifest; call `BrowserWindow.setOpacity` only for allowlisted `win32`/`darwin`. Return `release-not-validated` when Electron supports the platform but the artifact is not approved.
-- Put mutation and main-window registration/reveal under one serialized transaction/revision boundary. A window cannot reveal mid-mutation; closing windows are removed safely; reconcile the final registry before returning success.
-- Load and apply opacity before showing each newly created window. Make state subscription atomically register and immediately emit the current snapshot so hydration cannot miss a mutation; keep `getWindowOpacityState()` for diagnostics/retry. Broadcast every committed or degraded transition and ignore stale revisions. Theme sync never writes it.
-- On set/reset, capture previous confirmed settings and their effective value (`enabled ? opacity : 1`), apply the proposal to all registered live windows, then persist only after all applies succeed.
-- If any window apply fails, best-effort reset every currently registered window to 1.00 and persist safe `{ enabled: false, opacity: 1 }`. If persistence after a successful apply fails, roll every window back to the previous effective value while preserving the remembered preference pair. Rollback/reset/recovery-persistence failure returns mixed-or-unknown/unknown state and a stable degraded reason rather than claiming agreement.
+- Serialize get, set, and pre-reveal application with one mutex, and apply persisted opacity before showing each newly created window. Theme sync never writes it.
+- On set, capture previous settings and their effective value (`enabled ? opacity : 1`), apply the proposal to all registered live windows, then persist only after all applies succeed.
+- If any window apply fails, best-effort reset every live window to 1.00 and persist safe `{ enabled: false, opacity: 1 }`. If persistence after a successful apply fails, roll every window back to the previous effective value while preserving the remembered preference pair. A failed rollback/reset returns `effectiveOpacity: null` with `safe-reset-failed` rather than claiming agreement.
 - Keep the browser UI fully opaque and capability-gated.
 - Add the Appearance control now that a real capability query exists, plus reset/recovery and a legibility warning.
-- Create the one-action Restore Appearance/Disable all coordinator here. It resets backend ambient settings and desktop-local opacity and, when conditionally shipped, stops Local Media playback, its visualizer, PCM tap, and native worker. It reports each backend/native-media/opacity result independently, preserves successful changes, retries native teardown, and remains available until every requested subsystem is confirmed off.
+- Create the one-action Restore Appearance/Disable all coordinator. It disables backend ambient settings, clears current-document Local Media so playback/visualizer work stops, and disables desktop-local opacity while preserving saved ambient sources and choices. It reports backend and opacity results independently. If native media ships later, extend the coordinator to its PCM tap/worker with retryable teardown reporting.
 
 Likely files:
 
@@ -695,23 +689,22 @@ Tests:
 
 - only trusted web contents can call the methods;
 - `NaN`, infinities, strings, and out-of-range numbers are rejected;
-- table-driven allowlisted `win32`/`darwin` capability is true and get/set/reset return the authoritative bounded state;
+- table-driven allowlisted `win32`/`darwin` capability is true and get/set return the authoritative bounded state;
 - non-allowlisted Windows/macOS returns `release-not-validated`; injected Linux/browser returns `unsupported-platform`; both remain at 1.00 and never call the setter;
 - the release manifest schema rejects Linux/unknown platforms, defaults empty, and links each enabled artifact/platform to recorded smoke evidence;
 - old/missing desktop settings default opaque; corrupt opacity fields preserve unrelated desktop settings and recover to 1.00;
 - a new window receives persisted opacity before reveal;
 - settings UI hydrates persisted state and an `enabled: false` record applies 1.00;
-- thrown setter, partial multi-window apply, settings persistence, rollback, safe-reset, and recovery-persistence failures produce the exact confirmed/unknown persistence, consistent/mixed live state, and typed reason required by the contract;
-- runtime decoding rejects every invalid capability/status/persistence/live/reason combination and any ready/recovered opacity that differs from the confirmed effective value;
-- safe-settings persistence may be confirmed while a partial reset yields degraded mixed live state with `safe-reset-failed`;
+- thrown setter, partial multi-window apply, settings persistence, rollback, and safe-reset failures produce the exact effective opacity and stable reason required by the contract;
+- runtime decoding rejects malformed preferences/states and out-of-range opacity;
+- a failed rollback/reset returns `effectiveOpacity: null` with `safe-reset-failed`;
 - rollback from persisted `{ enabled: false, opacity: 0.70 }` restores effective 1.00 while retaining the remembered 0.70 slider;
-- deterministic create/close-during-apply, persist, rollback, and reset tests prove no window reveals or remains on a stale revision;
-- two open settings panels receive success, reset, rollback, and degraded broadcasts and ignore stale revisions;
-- mutation during initial subscription/hydration cannot be missed because registration emits an atomic current snapshot;
+- deterministic pre-reveal, multi-window apply, persist, rollback, and safe-reset tests cover the serialized lifecycle;
+- each settings panel hydrates through `getWindowOpacityState()` and applies mutations through `setWindowOpacityPreference()`;
 - serialized concurrent mutations cannot overwrite a later successful state;
 - restart after every success/failure path rehydrates the expected state;
 - theme changes do not overwrite opacity;
-- coordinated reset reports/retries independent backend/native-media/opacity failures and cannot report complete while a conditionally shipped PCM tap/worker remains live;
+- coordinated reset disables persisted ambient features, clears Local Media so playback/visualizer work stops, and reports independent backend/opacity outcomes; any future native PCM tap/worker must join that coordinator;
 - sandbox, context isolation, and Node integration remain unchanged.
 
 Manual checks:
@@ -765,29 +758,29 @@ Run focused tests during development, but the full commands are the release gate
 
 Cross-surface matrix:
 
-| Dimension         | Cases                                                                                            |
-| ----------------- | ------------------------------------------------------------------------------------------------ |
-| Surface           | Electron, authenticated browser                                                                  |
-| Platform          | Windows, macOS, Linux X11/Wayland                                                                |
-| Theme             | Light, dark, system, custom accent                                                               |
-| Motion            | Normal, reduced motion, hidden, unfocused, background override                                   |
-| Layout            | Sidebar states, plan/workflow panel, diff panel, zoom, narrow/wide, multi-monitor                |
-| Presentation      | Floating, cinema workspace, native YouTube fullscreen, return transitions                        |
-| Cinema rails      | Both open, left closed, right closed, both closed, protected-player fit failure                  |
-| Atmosphere        | Off, snow, rain, Matrix; automatic/custom color; opacity/speed bounds                            |
-| Ambient media     | None, GIF only, YouTube only, both, invalid/offline                                              |
-| YouTube source    | URL video, URL playlist, public search, public playlist, owned playlist                          |
-| YouTube account   | Unconfigured, disconnected, connecting, connected, expired/revoked, disconnecting                |
-| OAuth topology    | Local desktop/local backend, configured canonical HTTPS remote, unsupported topology             |
-| Position          | Both presets, collision case, custom edges/corners                                               |
-| Size              | Small, medium, large, custom min/max                                                             |
-| Local media gate  | No-go/absent, unsupported browser, off, available; only if Phase 5B reaches implementation       |
-| Local media input | Approved file/playlist/direct stream, revoked/missing, malformed, unsafe network; conditional    |
-| Local overlay     | Off, background, overlay; pass-through/interact; opacity/readability bounds; conditional         |
-| Audio visualizer  | Off, Local Media PCM/projectM, invalid preset, teardown; YouTube source rejected; conditional    |
-| Workflow          | No agents, parallel/nested agents, reconnect, reduced fidelity, duplicate/out-of-order lifecycle |
-| Opacity           | Off/1.00, minimum, intermediate, unsupported, partial failure/recovery                           |
-| Lifecycle         | Startup, route/project/thread change, mode switch, disable, replace, minimize/restore, restart   |
+| Dimension          | Cases                                                                                             |
+| ------------------ | ------------------------------------------------------------------------------------------------- |
+| Surface            | Electron, authenticated browser                                                                   |
+| Platform           | Windows, macOS, Linux X11/Wayland                                                                 |
+| Theme              | Light, dark, system, custom accent                                                                |
+| Motion             | Normal, reduced motion, hidden, unfocused, background override                                    |
+| Layout             | Sidebar states, plan/workflow panel, diff panel, zoom, narrow/wide, multi-monitor                 |
+| Presentation       | Floating, cinema workspace, local-video background, native player fullscreen, return transitions  |
+| Cinema rails       | Both open, left closed, right closed, both closed, protected-player fit failure                   |
+| Atmosphere         | Off, snow, rain, Matrix; automatic/custom color; opacity/speed bounds                             |
+| Ambient media      | None, GIF, YouTube, Spotify, Local Media, supported combinations, invalid/offline                 |
+| YouTube source     | URL video, URL playlist, public search, public playlist, owned playlist                           |
+| YouTube account    | Unconfigured, disconnected, connecting, connected, expired/revoked, disconnecting                 |
+| OAuth topology     | Local desktop/local backend; browser/remote capability absent                                     |
+| Position           | Both presets, collision case, custom edges/corners                                                |
+| Size               | Small, medium, large, custom min/max                                                              |
+| Local Media v1     | No selection, browser-supported audio/video, unsupported type/codec, replace, clear, document end |
+| Local presentation | Floating presets/custom, Cinema fallback, video background, opacity/readability, teardown         |
+| Local visualizer   | Off/on, play/pause, reduced motion, hidden/unfocused, bounded canvas/frame rate, teardown         |
+| Native extension   | No-go/absent or approved libVLC/projectM matrix; local/network/preset security cases conditional  |
+| Workflow           | No agents, parallel/nested agents, reconnect, reduced fidelity, duplicate/out-of-order lifecycle  |
+| Opacity            | Off/1.00, minimum, intermediate, unsupported, partial failure/recovery                            |
+| Lifecycle          | Startup, route/project/thread change, mode switch, disable, replace, minimize/restore, restart    |
 
 Soak gate:
 
@@ -813,8 +806,8 @@ Each feature is independently default-off and gated by persisted settings. If a 
 1. force the affected atmosphere/media/workflow renderer gate or search/OAuth backend gate off independently;
 2. keep field/group-scoped settings recovery in the current writer; before a binary downgrade, back up the settings file because an older writer may discard unknown keys;
 3. unmount/stop the canvas, iframe, image, and any conditionally shipped native media session immediately; stop its PCM tap/projectM worker before releasing texture/fence handles, discard ephemeral PCM/FFT/history, stop new search/stream work, close native file/network/process capabilities, bound/discard transient caches, and let already-counted upstream quota remain accounted rather than retrying;
-4. invalidate in-flight PKCE state and close loopback listeners when account connection is gated off. Stop connect/refresh/playlist work but leave owner-only disconnect/revoke/delete available. Retain existing encrypted tokens for a reversible temporary rollback; only an explicit disconnect or security-incident runbook revokes/deletes them;
-5. retain a backward-compatible workflow snapshot/event contract while older clients exist. Gate the Workflow UI when it cannot understand the advertised contract version; reject late events from the disabled projection;
+4. invalidate in-flight PKCE state when account connection is gated off. Stop connect/refresh/playlist work but leave owner-only disconnect/revoke available. The shipped grant is per-owner-session memory only, so restart, expiry, disconnect, or shutdown removes its tokens; no refresh token is retained at rest;
+5. retain a backward-compatible versioned workflow projection contract while older clients exist. Gate the Workflow UI when it cannot understand the snapshot version and clear the disabled derived projection;
 6. keep the opacity bridge and recovery control available until every live window is confirmed at 1.00 and safe settings are confirmed persisted. If reset cannot be verified, abort bridge removal and use the safe-start/restart runbook;
 7. retain security headers unless a tested replacement is deployed; and
 8. revert the smallest vertical slice, not unrelated settings or chat behavior.
@@ -831,10 +824,10 @@ Prefer these reviewable pull requests:
 4. read-only Plan/Workflow observatory UI;
 5. ambient image store/upload and preset image panel;
 6. CSP/security headers, strict YouTube source parser, public search, and preset player;
-7. external-browser OAuth/token storage and owned-playlist picker;
+7. desktop fixed-loopback OAuth with memory-only owner-session grants and owned-playlist picker;
 8. YouTube Cinema workspace and stable player-session ownership;
 9. custom drag/resize and accessibility;
-10. Local Media native/PCM/projectM feasibility, threat model, licensing, preset-security, and packaging decision record;
+10. browser-native session Local Media plus bounded blob-element visualizer; native/PCM/projectM feasibility, threat model, licensing, preset-security, and packaging decision record remain separately gated;
 11. conditional Local Media and approved-PCM visualization implementation only after recorded go decisions;
 12. Electron opacity capability, lifecycle sync, and Disable all coordination;
 13. integration polish, soak evidence, and release notes.
@@ -845,21 +838,21 @@ Do not combine broad Electron, HTTP security, asset storage, native media, and d
 
 This ledger records the current checkout rather than planned ownership. “Present” means implementation/tests exist in the checkout; it is not a claim that every phase exit criterion passed.
 
-| Phase                 | Recorded implementation author(s)                          | Independent audit record                                        | Focused checks                     | Current status                                                                        |
-| --------------------- | ---------------------------------------------------------- | --------------------------------------------------------------- | ---------------------------------- | ------------------------------------------------------------------------------------- |
-| 0 Baseline            | Not yet recorded                                           | Not yet recorded                                                | Not recorded                       | Planned; baseline, decision, and release-evidence gates remain open.                  |
-| 1 Contracts/UI        | Multiple contributors; per-slice authors not recorded here | Not yet recorded                                                | Present; run evidence not ledgered | Implemented in checkout; independent audit and phase exit gate remain open.           |
-| 2 Atmosphere          | Multiple contributors; per-slice authors not recorded here | Not yet recorded                                                | Present; run evidence not ledgered | Implemented in checkout; soak/manual/release gates remain open.                       |
-| 2A Workflow contract  | Multiple contributors; per-slice authors not recorded here | Not yet recorded                                                | Present; run evidence not ledgered | Implemented in checkout; independent audit and reconnect/security gates open.         |
-| 2B Workflow UI        | Multiple contributors; per-slice authors not recorded here | Not yet recorded                                                | Present; run evidence not ledgered | Implemented in checkout; accessibility/manual/performance gates open.                 |
-| 3 Ambient image       | Terra (ambient asset slice)                                | Luna remediation recorded; full independent audit not recorded  | Scoped server/web checks run       | Implemented and gated; full phase/release evidence remains open.                      |
-| 4A YouTube/CSP/search | Terra (server search); root (web search UI and CSP)        | Terra audited web integration; Sol audited search, CSP, privacy | Scoped and full checks passed      | Public discovery and restrictive production CSP are implemented and gated.            |
-| 4B YouTube account    | Not implemented                                            | Not applicable                                                  | Not run                            | Unshipped; account/OAuth capability remains conditional and off.                      |
-| 4C YouTube Cinema     | Multiple contributors; per-slice authors not recorded here | Not yet recorded                                                | Present; run evidence not ledgered | Implemented in checkout; lifecycle/layout/manual gates remain open.                   |
-| 5A Custom layout      | Multiple contributors; per-slice authors not recorded here | Not yet recorded                                                | Present; run evidence not ledgered | Implemented in checkout; pointer/accessibility/manual gates remain open.              |
-| 5B Local media        | Not implemented                                            | Not applicable                                                  | Not run                            | Conditional feasibility and ship decisions remain unmade; no player/visualizer.       |
-| 6 Native opacity      | Multiple contributors; per-slice authors not recorded here | Luna audited reset, rollback, and failure handling              | Scoped and full checks passed      | Code is present; release capability remains disabled without artifact smoke evidence. |
-| 7 Integration         | Root                                                       | Sol, Terra, and Luna audited separate cross-author slices       | Full automated gate passed         | Automated integration is clean; manual matrix, soak, and native release gates remain. |
+| Phase                         | Recorded implementation author(s)                          | Independent audit record                                                                         | Focused checks                                | Current status                                                                                                                                                         |
+| ----------------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0 Baseline                    | Not yet recorded                                           | Not yet recorded                                                                                 | Not recorded                                  | Planned; baseline, decision, and release-evidence gates remain open.                                                                                                   |
+| 1 Contracts/UI                | Multiple contributors; per-slice authors not recorded here | Not yet recorded                                                                                 | Present; run evidence not ledgered            | Implemented in checkout; independent audit and phase exit gate remain open.                                                                                            |
+| 2 Atmosphere                  | Multiple contributors; per-slice authors not recorded here | Not yet recorded                                                                                 | Present; run evidence not ledgered            | Implemented in checkout; soak/manual/release gates remain open.                                                                                                        |
+| 2A Workflow contract          | Multiple contributors; per-slice authors not recorded here | Not yet recorded                                                                                 | Present; run evidence not ledgered            | Implemented in checkout; independent audit and reconnect/security gates open.                                                                                          |
+| 2B Workflow UI                | Multiple contributors; per-slice authors not recorded here | Not yet recorded                                                                                 | Present; run evidence not ledgered            | Implemented in checkout; accessibility/manual/performance gates open.                                                                                                  |
+| 3 Ambient image               | Terra (ambient asset slice)                                | Luna remediation recorded; full independent audit not recorded                                   | Scoped server/web checks run                  | Implemented and gated; bounded grace-aged orphan sweep is present; full release evidence remains open.                                                                 |
+| 4A YouTube/Spotify/CSP/search | Terra (server search); root (web search UI and CSP)        | Terra audited Spotify/contracts; Sol audited search, CSP, privacy                                | Scoped and full checks passed                 | Public discovery, official Spotify Embed policy, and restrictive production CSP are implemented and gated.                                                             |
+| 4B YouTube account            | Luna (desktop account service); Terra (web integration)    | Root audited service concurrency/routes; Terra audited UI races, capability, reset, and privacy  | Service, route, client, browser checks passed | Desktop bare-loopback, owner-session in-memory playlist discovery is implemented and capability-gated; remote-web OAuth and at-rest tokens are unshipped.              |
+| 4C YouTube Cinema             | Multiple contributors; per-slice authors not recorded here | Not yet recorded                                                                                 | Present; run evidence not ledgered            | Implemented in checkout; lifecycle/layout/manual gates remain open.                                                                                                    |
+| 5A Custom layout              | Multiple contributors; per-slice authors not recorded here | Not yet recorded                                                                                 | Present; run evidence not ledgered            | Implemented in checkout; pointer/accessibility/manual gates remain open.                                                                                               |
+| 5B Local media                | Terra (browser-native Local Media v1)                      | Sol cross-audited panel lifecycle/anchor/accessibility; Terra audited Spotify/contracts boundary | Focused store/visualizer checks run           | Session-only HTML Local Media, floating/custom/Cinema/background, and blob-only bounded visualizer are implemented. Native libVLC/projectM feasibility remains unmade. |
+| 6 Native opacity              | Multiple contributors; per-slice authors not recorded here | Luna audited reset, rollback, and failure handling                                               | Scoped and full checks passed                 | Windows packaged native-smoke evidence is recorded; macOS/other artifacts remain fail-closed pending their own evidence.                                               |
+| 7 Integration                 | Root                                                       | Sol, Terra, and Luna audited separate cross-author slices                                        | Full automated gate passed                    | Automated integration is clean; manual matrix, soak, and native release gates remain.                                                                                  |
 
 ### Automated integration evidence
 
@@ -873,5 +866,9 @@ On 2026-07-23, the implementation checkout passed:
 - `corepack yarn workspace @cafecode/web test:browser`
 - `corepack yarn build:desktop`
 - `corepack yarn test:desktop-smoke`
+- `corepack yarn test:native-window-opacity`
+- `corepack yarn audit:repository`
+
+The Windows opacity probe also completed 50 consecutive post-remediation stress runs across two independent auditors with no failures (`1.0 → 0.8 → 1.0` each time).
 
 This evidence does not replace the remaining manual, soak, platform-artifact, security, licensing, or native dependency gates.

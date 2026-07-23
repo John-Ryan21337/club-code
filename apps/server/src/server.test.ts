@@ -65,7 +65,7 @@ const TEST_EPOCH = DateTime.makeUnsafe("1970-01-01T00:00:00.000Z");
 
 import type { ServerConfigShape } from "./config.ts";
 import { deriveServerPaths, ServerConfig } from "./config.ts";
-import { makeRoutesLayer } from "./server.ts";
+import { makeRoutesLayer, youTubeAccountRoutesLayer } from "./server.ts";
 import { WebPushNotificationsTest } from "./notifications/WebPushNotifications.ts";
 import * as NodeHttpServerCompression from "./nodeHttpServerCompression.ts";
 import { resolveAttachmentRelativePath } from "./attachmentPaths.ts";
@@ -112,6 +112,11 @@ import {
 import { BrandingImageStoreLive } from "./branding/BrandingImageStore.ts";
 import { AmbientImageStoreLive } from "./ambientMedia/AmbientImageStore.ts";
 import { YouTubePublicDiscoveryLive } from "./ambientMedia/YouTubePublicDiscovery.ts";
+import {
+  YouTubeAccountConnection,
+  YouTubeAccountConnectionError,
+  type YouTubeAccountConnectionShape,
+} from "./ambientMedia/YouTubeAccountConnection.ts";
 import {
   BrowserTraceCollector,
   type BrowserTraceCollectorShape,
@@ -469,6 +474,7 @@ const buildAppUnderTest = (options?: {
     serverEnvironment?: Partial<ServerEnvironmentShape>;
     repositoryIdentityResolver?: Partial<RepositoryIdentityResolverShape>;
     usageStats?: Partial<UsageStatsServiceShape>;
+    youtubeAccountConnection?: Partial<YouTubeAccountConnectionShape>;
   };
 }) =>
   Effect.gen(function* () {
@@ -635,10 +641,13 @@ const buildAppUnderTest = (options?: {
         })
       : VcsStatusBroadcaster.layer.pipe(Layer.provide(gitWorkflowLayer));
 
-    const servedRoutesLayer = HttpRouter.serve(makeRoutesLayer, {
-      disableListenLog: true,
-      disableLogger: true,
-    }).pipe(
+    const servedRoutesLayer = HttpRouter.serve(
+      Layer.mergeAll(makeRoutesLayer, youTubeAccountRoutesLayer),
+      {
+        disableListenLog: true,
+        disableLogger: true,
+      },
+    ).pipe(
       Layer.provide(
         Layer.mock(Keybindings)({
           loadConfigState: Effect.succeed({
@@ -965,6 +974,35 @@ const buildAppUnderTest = (options?: {
       Layer.provideMerge(BrandingImageStoreLive),
       Layer.provideMerge(AmbientImageStoreLive),
       Layer.provideMerge(YouTubePublicDiscoveryLive),
+      Layer.provide(
+        Layer.mock(YouTubeAccountConnection)({
+          start: () =>
+            Effect.fail(
+              new YouTubeAccountConnectionError({
+                code: "unavailable",
+                status: 503,
+              }),
+            ),
+          complete: () =>
+            Effect.fail(
+              new YouTubeAccountConnectionError({
+                code: "invalid-callback",
+                status: 400,
+              }),
+            ),
+          status: () => Effect.succeed({ status: "disconnected" as const }),
+          listOwnedPlaylists: () =>
+            Effect.fail(
+              new YouTubeAccountConnectionError({
+                code: "not-connected",
+                status: 409,
+              }),
+            ),
+          disconnect: () => Effect.void,
+          shutdown: () => Effect.void,
+          ...options?.layers?.youtubeAccountConnection,
+        }),
+      ),
       Layer.provide(layerConfig),
     );
 
@@ -1383,7 +1421,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.include(contentSecurityPolicy, "connect-src 'self' http: https: ws: wss:");
       assert.equal(
         contentSecurityPolicy.split("; ").find((directive) => directive.startsWith("frame-src ")),
-        "frame-src https://www.youtube-nocookie.com",
+        "frame-src https://www.youtube-nocookie.com https://open.spotify.com",
       );
       assert.include(contentSecurityPolicy, "object-src 'none'");
       assert.include(contentSecurityPolicy, "frame-ancestors 'none'");
@@ -1393,7 +1431,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.equal(getHeader(response.headers, "x-frame-options"), "DENY");
       assert.equal(
         getHeader(response.headers, "permissions-policy"),
-        'camera=(), fullscreen=(self "https://www.youtube-nocookie.com"), geolocation=(), microphone=(), payment=(), usb=()',
+        'camera=(), fullscreen=(self "https://www.youtube-nocookie.com" "https://open.spotify.com"), geolocation=(), microphone=(), payment=(), usb=()',
       );
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
@@ -2945,6 +2983,53 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.deepEqual(JSON.parse(oversized.body), { error: "payload-too-large" });
       assert.equal(unavailable.status, 503);
       assert.deepEqual((yield* unavailable.json) as unknown, { error: "unavailable" });
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("keeps YouTube account routes owner-gated, no-store, and fail-closed", () =>
+    Effect.gen(function* () {
+      let callbackInput: { readonly state: string; readonly code: string } | undefined;
+      yield* buildAppUnderTest({
+        layers: {
+          youtubeAccountConnection: {
+            complete: (input) =>
+              Effect.sync(() => {
+                callbackInput = input;
+              }),
+          },
+        },
+      });
+      const unauthenticated = yield* HttpClient.get("/api/ambient-media/youtube/account/status");
+      const cookie = yield* getAuthenticatedSessionCookieHeader();
+      const status = yield* HttpClient.get("/api/ambient-media/youtube/account/status", {
+        headers: { cookie },
+      });
+      const start = yield* HttpClient.post("/api/ambient-media/youtube/account/start", {
+        headers: { cookie },
+      });
+      const invalidCallback = yield* HttpClient.get("/api/ambient-media/youtube/account/callback");
+      const proxiedCallback = yield* HttpClient.get("/?state=proxied-state&code=proxied-code", {
+        headers: { "x-cafe-code-https-proxy": "1" },
+      });
+      const loopbackCallback = yield* HttpClient.get("/?state=opaque-state&code=oauth-code");
+
+      assert.equal(unauthenticated.status, 401);
+      assert.equal(status.status, 200);
+      assert.deepEqual((yield* status.json) as unknown, { status: "disconnected" });
+      assert.equal(status.headers["cache-control"], "no-store");
+      assert.equal(start.status, 503);
+      assert.deepEqual((yield* start.json) as unknown, { error: "unavailable" });
+      assert.equal(start.headers["cache-control"], "no-store");
+      assert.equal(invalidCallback.status, 400);
+      assert.equal(invalidCallback.headers["cache-control"], "no-store");
+      assert.equal(invalidCallback.headers["referrer-policy"], "no-referrer");
+      assert.equal(proxiedCallback.status, 400);
+      assert.equal(proxiedCallback.headers["cache-control"], "no-store");
+      assert.equal(proxiedCallback.headers["referrer-policy"], "no-referrer");
+      assert.equal(loopbackCallback.status, 200);
+      assert.equal(loopbackCallback.headers["cache-control"], "no-store");
+      assert.equal(loopbackCallback.headers["referrer-policy"], "no-referrer");
+      assert.deepEqual(callbackInput, { state: "opaque-state", code: "oauth-code" });
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

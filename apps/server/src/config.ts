@@ -87,6 +87,12 @@ export interface ServerConfigShape extends ServerDerivedPaths {
    */
   readonly youtubePublicDiscoveryApiKey?: string | undefined;
   /**
+   * Google OAuth Desktop client identifier used only by the local, session-only
+   * YouTube account connector. Authorization credentials are never stored in
+   * this configuration or on disk.
+   */
+  readonly youtubeOAuthDesktopClientId?: string | undefined;
+  /**
    * Process-level capability gates. These are not user settings: later route
    * and renderer slices must enforce them independently of saved preferences.
    */

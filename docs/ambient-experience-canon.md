@@ -1,11 +1,11 @@
 # Cafe Code Ambient Experience Canon
 
-Status: Proposed implementation canon
+Status: Implemented baseline with open completion and release gates
 
 Owner: Spark (integration)
 
 Reviewers: Sol (effects and desktop), Terra (media and security), Luna (contracts, delivery, and QA)
-Repository baseline: `dev` at `aea47f3a` (2026-07-22)
+Implementation status and test evidence are recorded in the project plan's completion ledger.
 
 ## Purpose
 
@@ -15,34 +15,38 @@ This document is the product and engineering source of truth for Cafe Code's opt
 2. an optional YouTube player inside the chat area;
 3. an optional uploaded ambient GIF/image inside the chat area;
 4. public YouTube search, public playlist selection, and optional YouTube account linking for owned-playlist discovery;
-5. optional glow around either media panel; and
-6. optional whole-window opacity in the Electron desktop app; and
-7. a live Workflow Observatory for plans, tool activity, and launched sub-agents; and
-8. a conditional projectM visualizer for approved Local Media audio sources.
+5. optional glow around either media panel;
+6. optional whole-window opacity in the Electron desktop app;
+7. a live Workflow Observatory for plans, tool activity, and launched sub-agents;
+8. session-only browser Local Media playback, including a bounded local-element visualizer; and
+9. a conditional native libVLC/projectM extension.
 
-Every feature is off by default. These features decorate Cafe Code; they must never weaken chat reliability, security, legibility, accessibility, or long-session performance.
+Ambient features default to off or no source selected. The Workflow Observatory is available but its panel starts closed. These features decorate or explain Cafe Code; they must never weaken chat reliability, security, legibility, accessibility, or long-session performance.
 
 Normative terms `MUST`, `SHOULD`, and `MAY` have their usual requirements meaning.
 
 ## Product model
 
-The visual experience is five independent systems:
+The visual experience is six independent systems:
 
-| System                         | Scope                                                       | Surfaces                          | Default                 |
-| ------------------------------ | ----------------------------------------------------------- | --------------------------------- | ----------------------- |
-| Window atmosphere              | Entire Cafe Code viewport, including sidebar and title area | Browser and Electron              | Off                     |
-| Chat media                     | Floating in the message pane or optional cinema workspace   | Browser and Electron              | Off                     |
-| Conditional Local Media/visual | Approved native playback and projectM output                | Approved Electron platforms only  | Unavailable/off         |
-| Window opacity                 | Entire native window, including text, media, and controls   | Supported Electron platforms only | 100% opaque             |
-| Workflow Observatory           | Current thread/turn workflow and provider-reported agents   | Browser and Electron              | Available, panel closed |
+| System                   | Scope                                                       | Surfaces                          | Default                 |
+| ------------------------ | ----------------------------------------------------------- | --------------------------------- | ----------------------- |
+| Window atmosphere        | Entire Cafe Code viewport, including sidebar and title area | Browser and Electron              | Off                     |
+| Chat media               | Floating in the message pane or optional cinema workspace   | Browser and Electron              | Off                     |
+| Local Media v1           | Session-only browser HTML media, floating/cinema/background | Browser and Electron              | Off/no file selected    |
+| Conditional native media | Future libVLC playback and projectM output                  | Approved Electron platforms only  | Unavailable/off         |
+| Window opacity           | Entire native window, including text, media, and controls   | Supported Electron platforms only | 100% opaque             |
+| Workflow Observatory     | Current thread/turn workflow and provider-reported agents   | Browser and Electron              | Available, panel closed |
 
-Turning one system on MUST NOT silently enable another. A single "Disable all ambient features" action MUST turn off the atmosphere, both media panels, their glow, any conditionally shipped Local Media playback/visualizer, its PCM tap/native worker, and native opacity without deleting the user's saved sources or choices. This action coordinates a backend Client Settings update with desktop-local native-media and opacity updates; each result is reported independently, successful changes are preserved, native resource teardown is retried after a partial failure, and the action remains available until every requested system is confirmed off.
+Turning one system on MUST NOT silently enable another. The implemented "Disable all ambient features" action turns off the backend-authoritative atmosphere, streaming panel, ambient image panel, and desktop-local opacity without deleting saved ambient sources or slider choices. It also clears current-document Local Media, which stops its playback/visualizer and revokes its object URL. Backend and opacity outcomes are reported independently.
+
+If the conditional native-media extension ever ships, the same action must stop its PCM tap/native worker and report retryable partial teardown failures before this canon's definition of complete can pass.
 
 The Workflow Observatory is operational UI, not an ambient effect. "Disable all ambient features" does not close it or discard workflow data.
 
 Ambient state is presentation state. It MUST NOT be written into a thread, prompt, message, project, activity log, or model context.
 
-Atmosphere/chat-media switches, sources, video presentation, colors, presets, and glow are shared backend-authoritative preferences and therefore update every connected authenticated renderer. Playback state, cinema rail state, custom geometry, native opacity, and every conditional Local Media/visualizer preference are per-device.
+Atmosphere/chat-media switches, streaming sources, video presentation, colors, presets, and glow are shared backend-authoritative preferences and therefore update every connected authenticated renderer. Local Media selection, playback state, cinema rail state, custom geometry, native opacity, and Local Media visualizer preference are current-device/session state; they never enter Client Settings.
 
 ## User-facing behavior
 
@@ -83,12 +87,13 @@ The three modes have stable meanings:
 
 ### Chat media
 
-Cafe Code supports two independent media slots that may be visible together:
+Cafe Code supports three independent media systems that may be visible together when their layouts permit:
 
-1. one YouTube video slot; and
-2. one uploaded ambient image slot, with animated GIF as the primary use case.
+1. one official streaming iframe slot for YouTube or Spotify;
+2. one uploaded ambient image slot, with animated GIF as the primary use case; and
+3. one session-only Local Media HTML audio/video selection.
 
-Each slot MUST provide:
+The streaming and image slots MUST each provide:
 
 - an enable/disable switch;
 - a source control;
@@ -100,33 +105,35 @@ Each slot MUST provide:
 - close/disable from the panel itself; and
 - reset placement/size.
 
-The YouTube source control also provides URL paste, public search, public playlist selection, optional account connection, and connected-account playlist discovery. An owned playlist is selectable for in-app playback only when the supported embed can play it; otherwise the picker provides the external signed-in YouTube action.
+Local Media v1 is intentionally current-session-only instead: its source is picked and cleared locally, and its presentation controls are specified in the Local Media section below.
+
+The streaming source control accepts validated YouTube video/public-playlist URLs and validated Spotify entity URLs/URIs. YouTube additionally provides public search, public playlist selection, optional account connection, and connected-account playlist discovery. An owned playlist is selectable for in-app playback only when the supported embed can play it; otherwise the picker provides the external signed-in YouTube action.
 
 Canonical persisted defaults and bounds are:
 
-| Field                          | Default        | Bounds/meaning                         |
-| ------------------------------ | -------------- | -------------------------------------- |
-| `ambientVideoEnabled`          | `false`        | Boolean                                |
-| `ambientVideoSource`           | `null`         | Valid atomic `YouTubeSource` or `null` |
-| `ambientVideoPresentationMode` | `floating`     | `floating` or `cinema`                 |
-| `ambientVideoLayoutMode`       | `preset`       | `preset` or `custom`                   |
-| `ambientVideoPresetPlacement`  | `bottom-right` | `bottom-left` or `bottom-right`        |
-| `ambientVideoPresetSize`       | `medium`       | `small`, `medium`, or `large`          |
-| `ambientVideoGlowEnabled`      | `false`        | Boolean                                |
-| `ambientVideoGlowColor`        | `auto`         | `"auto"` or valid `#RRGGBB` sRGB hex   |
-| `ambientVideoGlowOpacity`      | `0.35`         | 0.05–1.00                              |
-| `ambientImageEnabled`          | `false`        | Boolean                                |
-| `ambientImageAsset`            | `null`         | Valid `AmbientImageAsset` or `null`    |
-| `ambientImageLayoutMode`       | `preset`       | `preset` or `custom`                   |
-| `ambientImagePresetPlacement`  | `bottom-left`  | `bottom-left` or `bottom-right`        |
-| `ambientImagePresetSize`       | `medium`       | `small`, `medium`, or `large`          |
-| `ambientImageGlowEnabled`      | `false`        | Boolean                                |
-| `ambientImageGlowColor`        | `auto`         | `"auto"` or valid `#RRGGBB` sRGB hex   |
-| `ambientImageGlowOpacity`      | `0.35`         | 0.05–1.00                              |
+| Field                          | Default        | Bounds/meaning                                    |
+| ------------------------------ | -------------- | ------------------------------------------------- |
+| `ambientVideoEnabled`          | `false`        | Boolean                                           |
+| `ambientVideoSource`           | `null`         | Valid atomic YouTube or Spotify source, or `null` |
+| `ambientVideoPresentationMode` | `floating`     | `floating` or `cinema`                            |
+| `ambientVideoLayoutMode`       | `preset`       | `preset` or `custom`                              |
+| `ambientVideoPresetPlacement`  | `bottom-right` | `bottom-left` or `bottom-right`                   |
+| `ambientVideoPresetSize`       | `medium`       | `small`, `medium`, or `large`                     |
+| `ambientVideoGlowEnabled`      | `false`        | Boolean                                           |
+| `ambientVideoGlowColor`        | `auto`         | `"auto"` or valid `#RRGGBB` sRGB hex              |
+| `ambientVideoGlowOpacity`      | `0.35`         | 0.05–1.00                                         |
+| `ambientImageEnabled`          | `false`        | Boolean                                           |
+| `ambientImageAsset`            | `null`         | Valid `AmbientImageAsset` or `null`               |
+| `ambientImageLayoutMode`       | `preset`       | `preset` or `custom`                              |
+| `ambientImagePresetPlacement`  | `bottom-left`  | `bottom-left` or `bottom-right`                   |
+| `ambientImagePresetSize`       | `medium`       | `small`, `medium`, or `large`                     |
+| `ambientImageGlowEnabled`      | `false`        | Boolean                                           |
+| `ambientImageGlowColor`        | `auto`         | `"auto"` or valid `#RRGGBB` sRGB hex              |
+| `ambientImageGlowOpacity`      | `0.35`         | 0.05–1.00                                         |
 
 An enabled slot with a `null` source/asset is an effective empty state: it renders no panel, network, decode, or animation work and prompts for a source. It is not persisted as corrupt and becomes active automatically after a valid source is selected.
 
-The default positions are opposite corners. If both panels use the same preset corner, they stack vertically inward from that corner with a 12 CSS-pixel gap: video is nearest the bottom edge and image is above it. Both are re-clamped. If they do not fit, both step down through the preset sizes together; the narrow-layout rule applies if `small` still does not fit. Custom panels may overlap by explicit user choice.
+The default positions are opposite corners. If both panels use the same preset corner, the image stacks vertically inward above the video with a 12 CSS-pixel gap. The video keeps its resolved preset size; the image alone steps down through its preset sizes until the stack fits. If the smallest image still cannot fit, it moves to the opposite preset corner. Custom panels may overlap by explicit user choice.
 
 Preset sizes MUST be comfortable but subordinate to the conversation. The 16:9 video widths are 360, 480, and 640 CSS pixels, clamped without taking the embedded viewport below YouTube's 200-by-200 minimum. Ambient images preserve their intrinsic aspect ratio within equivalent bounding boxes.
 
@@ -134,9 +141,9 @@ Custom mode MUST support mouse or precise-pointer drag and resize. Video remains
 
 Custom geometry is stored as normalized `x`, `y`, and `width` fractions of the message-pane bounds; height is derived from the media aspect ratio. Geometry MUST be clamped after window, sidebar, plan-panel, zoom, or display changes so a panel and its controls cannot become unreachable. Pointer-up, pointer-cancel, lost capture, and window blur commit the most recent animation-frame-applied clamped geometry; unmount only cleans runtime resources.
 
-First entry into custom mode seeds local normalized geometry from the currently resolved preset. A renderer that receives shared custom mode without valid local geometry does the same. Narrow/coarse-pointer fallback never changes the shared layout mode or erases local custom geometry.
+First entry into custom mode seeds local normalized geometry from the currently resolved preset. A renderer that receives shared custom mode without valid local geometry does the same.
 
-Keyboard users MUST be able to move, resize, reset, close, and disable each panel. On small or coarse-pointer layouts, Cafe Code SHOULD use clamped preset placement and MUST NOT expose an unusable drag-only interface.
+Keyboard users can move and resize custom panels through explicit controls; pointer users use dedicated drag and resize handles rather than the iframe body. Panels clamp to the measured message-pane bounds. No separate coarse-pointer or 768-pixel fallback is implemented; that behavior remains an accessibility/manual-review gate rather than a shipped claim.
 
 In floating presentation, media panels live over the messages pane, not over the sidebar, header, composer, branch toolbar, plan panel, dialogs, or toasts. They MUST NOT enter the virtualized message list.
 
@@ -162,22 +169,33 @@ AND local protected-player layout fits
 
 If any term is false, the renderer keeps the normal chat layout (and a floating player only when that player is otherwise locally renderable), reports the local reason, and leaves the shared `cinema` preference unchanged. A missing source, blocked/unavailable player, startup hydration, or responsive fit failure MUST NOT create a blank center region. When the local condition recovers, the renderer may realize the still-current shared cinema preference without another settings write.
 
-Cinema workspace has the following canonical behavior:
+Cinema workspace has the following implemented behavior:
 
-- The center player preserves a 16:9 viewport and remains the primary surface. Cafe-owned atmosphere, glow, media, chat controls, popovers, toasts, dialogs, onboarding, and shutdown visuals MUST NOT paint over or intersect the iframe rectangle. YouTube's own iframe controls remain available.
-- The existing project sidebar and the right chat rail collapse and expand independently. Collapsing either gives its space to the center player; neither action changes the other rail's state.
-- The chat rail keeps the active conversation's header, timeline, branch affordances, and composer usable. It is a layout region, not an overlay over the player. Plan/Workflow chooses inline versus the existing sheet behavior from the measured chat-rail width, not the whole window width, and MUST NOT add a fourth pane beside the player.
-- Entering cinema preserves the last floating preset/custom mode and normalized custom geometry without rewriting them. Exiting cinema restores that floating mode and its resolved geometry.
-- Project and thread switches update the surrounding rails without remounting or replacing the active player. Playback and the selected source continue across those switches. Disabling the video slot or replacing its source still stops and unmounts the old player.
-- The player/session owner and stable iframe host therefore live above route-, project-, and thread-specific chat content and are keyed by the selected YouTube source, not by navigation identity. `ChatView` only registers the measured floating anchor/portal target used for placement; it never owns or reparents the iframe.
-- Ambient-image suppression is render-only. Effective cinema does not capture, restore, or patch `ambientImageEnabled`, `ambientImageAsset`, or any image geometry. The image panel is simply not rendered while cinema is locally effective. On exit or local suspension, the renderer reads the current authoritative shared image setting and current local geometry, so changes from another renderer made during cinema take effect normally. The image MUST NOT be placed over the cinema player.
-- Opening Diff either uses the existing sheet constrained away from the protected player or locally suspends effective cinema and shows the normal chat/diff layout while the stable player session survives. It never creates a fourth competing pane and never patches the shared presentation preference.
+- The center player preserves a 16:9 viewport, while the active chat remains a separate right-side rail. The existing project sidebar remains outside this two-column workspace.
+- Entering cinema preserves floating preset/custom settings and normalized geometry. Exiting cinema returns to the floating presentation without rewriting them.
+- The player host lives above route-, project-, and thread-specific chat content and is keyed by normalized source identity. `ChatView` registers the measured floating anchor; it does not own the iframe.
+- Ambient-image suppression is render-only. Effective cinema does not patch the image enabled state, asset, or geometry; the image returns from the current authoritative settings when cinema exits or is locally suspended.
+- The player is mounted only when the selected streaming source is locally renderable. Disabling the slot or replacing the source unmounts the previous iframe.
 
-On entry and every resize, cinema collapses rails before reducing the player. The player MUST remain 16:9 and satisfy YouTube's 200-by-200 minimum embedded viewport, which requires at least a 356-by-200 CSS-pixel 16:9 rectangle after rounding. When the app cannot fit that player plus reachable controls and safe-area insets, cinema is locally suspended in favor of the normal/floating-safe layout with a clear status; it MUST NOT render an undersized or covered iframe or patch the shared `cinema` preference.
+Cinema is effective only when the workspace is at least 712 by 264 CSS pixels and, for streaming media, the current iframe has reported ready. Otherwise Cafe Code keeps the normal layout, shows a local status when applicable, and preserves the shared `cinema` preference. The implementation does not currently provide independent cinema-specific collapse controls for the project sidebar and chat rail, nor a dedicated Diff/cinema suspension contract; those remain manual layout gates rather than shipped claims.
 
-Cinema controls require accessible names, visible state, and keyboard operation. Entering cinema records the invoking focus and moves focus to a stable cinema heading or the titled iframe; exiting restores focus when that target still exists. Each rail has a keyboard-operable toggle whose expanded state is exposed semantically. Cinema itself is not a focus trap. `Escape` exits Cafe Code cinema only when native fullscreen is not active and the iframe has not consumed the key; native fullscreen exit remains player/platform-owned.
+Cinema controls have accessible names and keyboard operation. The workspace provides an explicit exit action; native iframe fullscreen remains player/platform-owned.
 
-### Local Media Theater (conditional extension)
+### Spotify official Embed policy
+
+Spotify support is an official Spotify Embed iframe only. Cafe Code accepts a narrow list of canonical Spotify track, album, artist, playlist, show, and episode URLs/URIs, strips query/fragment material, stores only the validated entity type and 22-character ID, and constructs a fixed `open.spotify.com/embed/...` URL. It does not proxy Spotify media, accept arbitrary iframe URLs, collect Spotify passwords/cookies, claim a Premium-login handoff, or promise DRM/codec support.
+
+Spotify is not a Local Media input and is never a visualizer signal. Cafe Code does not extract, intercept, or analyze Spotify PCM, and it does not claim beat-synchronised or edge-colour-synchronised Spotify visuals. Playback, login, entitlement, and any ad/Premium behavior belong to Spotify's player.
+
+### Local Media v1 (shipped browser-native)
+
+`Local Media` v1 is a browser-native HTML `<audio>`/`<video>` player for one file chosen through the platform file picker. It accepts only browser-supported audio/video formats; a file's path, name, bytes, and selection are never persisted, logged, synchronized, or sent to the backend. The renderer creates one current-document `blob:` URL, revokes it when replaced or explicitly cleared, and keeps the selection and all presentation state in memory for the current document only. Ordinary panel/layout unmounts preserve the selection; closing or refreshing the document releases the remaining URL with the document.
+
+The selected media may use lower-corner presets, keyboard/mouse Custom drag and resize, Cinema with the project rail and chat rail, or—video only—a bounded-opacity, pointer-pass-through background veil with reachable pause/exit controls. Native media controls retain ownership of browser fullscreen. The player is honest HTML media: it has no file-path bridge, server, iframe, network-stream, Electron, libVLC, or universal-codec dependency.
+
+The optional v1 visualizer is default-off and attaches only to the renderer-owned selected `blob:` audio/video element. It uses a bounded Web Audio analyser/canvas branch, caps canvas/DPR/FPS/level changes, stops work for reduced motion, hidden/unfocused state and stopped playback, and tears its graph down with the panel. It cannot use YouTube or Spotify iframe audio, system audio, remote URLs, raw PCM export, projectM presets, or a synchronized third-party visual feed.
+
+### Native Local Media Theater (conditional extension)
 
 A future, separately gated `Local Media` theater MAY use native libVLC integration to play approved local files, direct network streams, and local playlists. It is distinct from YouTube Cinema and MUST NOT be presented as a way to bypass YouTube's iframe, account, Premium, or content restrictions. Product copy SHOULD use `Local Media` or `Local Media (libVLC)` unless a branding review approves use of VLC marks.
 
@@ -200,9 +218,9 @@ The overlay presentation remains optional and default-off. It MUST provide a rea
 
 Local files are opened only after explicit user selection and with the narrowest practical path capability; paths are not synchronized, logged, or exposed to browser clients. Playlist entries are revalidated when opened. Direct streams reject credentials in URLs, unsupported schemes, redirects outside policy, loopback/link-local/private destinations unless an explicit local-network policy allows them, and unsafe DNS rebinding. Network work has bounded redirects, timeouts, response size/buffering, and retry behavior. Secrets, full URLs, local paths, media titles, and playback history do not enter logs or Client Settings.
 
-Playback lifecycle is desktop-local. Route, project, and thread switches MAY preserve a running native session when the user chose that behavior, but disable, source replacement, app shutdown, permission loss, helper crash/GPU hang, or crash teardown MUST release native processes, decoders, file handles, network requests, textures, PCM buffers, projectM analysis/render state, and audio. Browser deployments show an honest unsupported state and do not silently substitute an HTML media element.
+Playback lifecycle is desktop-local. Route, project, and thread switches MAY preserve a running native session when the user chose that behavior, but disable, source replacement, app shutdown, permission loss, helper crash/GPU hang, or crash teardown MUST release native processes, decoders, file handles, network requests, textures, PCM buffers, projectM analysis/render state, and audio. Until this native extension passes its own gate, it remains absent; it neither replaces nor makes broader promises than the shipped browser-native v1 player.
 
-### Audio-reactive visualizer (conditional Local Media extension)
+### projectM audio-reactive visualizer (conditional native extension)
 
 If the Local Media feasibility gate passes, Cafe Code MAY integrate the open-source, MilkDrop-compatible `libprojectM` visualization engine. The supported direct signal path is decoded PCM owned by the approved local media pipeline:
 
@@ -287,13 +305,20 @@ Palette extraction from an uploaded, trusted local image MAY be considered later
 
 ### YouTube sources
 
-The persisted source is an atomic discriminated value:
+The persisted streaming source is an atomic discriminated value:
 
 ```ts
 type YouTubeSource =
   | { kind: "video"; id: YouTubeVideoId }
-  | { kind: "playlist"; id: YouTubePlaylistId }
-  | null;
+  | { kind: "playlist"; id: YouTubePlaylistId };
+
+type SpotifySource = {
+  kind: "spotify";
+  entityType: "track" | "album" | "artist" | "playlist" | "show" | "episode";
+  id: SpotifyEntityId;
+};
+
+type AmbientVideoSource = YouTubeSource | SpotifySource | null;
 ```
 
 The default is `null`. Video IDs match `[A-Za-z0-9_-]{11}`. Playlist IDs match `[A-Za-z0-9_-]{10,80}`; this intentionally bounded transport schema is validated again by YouTube rather than trying to infer every playlist prefix. A source update replaces the complete value; a partial object is invalid.
@@ -312,14 +337,14 @@ The renderer MUST build video and playlist sources from hard-coded privacy-enhan
 - `https://www.youtube-nocookie.com/embed/<video-id>`
 - `https://www.youtube-nocookie.com/embed/videoseries?list=<playlist-id>`
 
-It MUST use a normal sandboxed `iframe`, never Electron `webview`. The version 1 baseline is exact:
+It uses a normal sandboxed `iframe`, never Electron `webview`. The implemented iframe policy is exact:
 
-- `sandbox="allow-scripts allow-same-origin allow-presentation"`;
-- `allow="encrypted-media; fullscreen; picture-in-picture"` plus the boolean `allowfullscreen`;
-- `referrerpolicy="strict-origin-when-cross-origin"` and `loading="lazy"`; and
-- a fixed descriptive title.
+- `sandbox="allow-scripts allow-same-origin allow-presentation allow-popups"`;
+- YouTube `allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"`;
+- Spotify `allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"`;
+- the boolean `allowfullscreen`, `referrerpolicy="strict-origin-when-cross-origin"`, and a fixed descriptive title.
 
-No other sandbox or feature token is allowed without a separate compatibility/security test. In particular, omit every `allow-top-navigation*` token, `allow-popups`, `allow-popups-to-escape-sandbox`, `allow-downloads`, `allow-forms`, `allow-modals`, and `allow-pointer-lock`. Cafe Code provides its own explicit external-open action.
+The iframe is mounted only after capability, enabled state, validated source, and local layout policy allow it; it does not rely on `loading="lazy"`. `allow-popups` is the sole popup concession for fixed-origin official-player interactions. The sandbox omits every `allow-top-navigation*` token, `allow-popups-to-escape-sandbox`, `allow-downloads`, `allow-forms`, `allow-modals`, and `allow-pointer-lock`. No arbitrary iframe URL or broader sandbox token is accepted.
 
 Autoplay is off by default and playback begins only after a user gesture. Disabling or replacing the video MUST unmount the iframe so playback and network activity stop.
 
@@ -335,10 +360,7 @@ Public playlist URLs and public playlist search require no YouTube account. Sele
 
 Search thumbnails use an authenticated Cafe Code proxy, never renderer-selected remote URLs. The proxy accepts only API-returned HTTPS URLs on the static V1 host allowlist (`i.ytimg.com`) whose paths match the bounded YouTube thumbnail form, disables redirects, resolves/connects only to the validated public destination, caps bytes/time/dimensions/MIME, and returns its own safe content headers. Invalid thumbnails render a placeholder. Thus merely viewing search results does not directly connect the renderer to YouTube; starting playback or choosing the explicit external action still does.
 
-Connected-account playlist selection is optional and installation/profile-wide. Only a Cafe Code owner-authorized session may connect or disconnect the account. Version 1 supports exactly two configured deployment modes:
-
-- Local packaged Electron with its Cafe Code backend on the same machine uses a Google **Desktop app** client and a temporary `127.0.0.1` loopback listener on a random available port. It never uses `localhost`, binds no non-loopback interface, stops after one response/timeout, and is disabled when the app is connected to a remote backend.
-- Browser or Electron with a remote backend uses a Google **Web application** client only when the operator configures one fixed, pre-registered HTTPS callback on Cafe Code's externally reachable canonical origin. Startup validates the exact scheme/host/port/path against an allowlist; forwarded host/proto are trusted only from configured proxies. Otherwise account connection is disabled with operator guidance.
+Connected-account playlist selection is optional, desktop-local, and owner-session-scoped. Only a Cafe Code owner-authorized session may connect or disconnect. Version 1 supports one topology: a local packaged desktop app and its local backend use a Google **Desktop app** client with Google's loopback redirect form, `http://127.0.0.1:<backend-port>`, using the backend's actual port and no added path. The redirect never uses `localhost`; the callback accepts only a direct loopback peer and rejects requests forwarded through the HTTPS sibling. The flow is disabled for browser/remote-web backends.
 
 The renderer asks the backend to create an authorization transaction; it cannot supply a redirect or arbitrary external URL. Electron opens only the generated `https://accounts.google.com/o/oauth2/v2/auth` URL through the existing safe external-opening boundary. Browser clients open that same exact origin/path through a user-initiated navigation.
 
@@ -347,12 +369,12 @@ Authorization MUST:
 - use Google's external system browser, never an Electron iframe, `BrowserView`, `webview`, or embedded user-agent;
 - use Authorization Code with S256 PKCE, single-use expiring state/CSRF validation, the deployment-specific redirect above, and exactly `https://www.googleapis.com/auth/youtube.readonly`; no additional Google scope is allowed in version 1;
 - keep OAuth client configuration and refresh/access tokens out of the renderer and Client Settings;
-- encrypt tokens at rest in the backend secret store with an authenticated-encryption key outside that store, serialize refresh, and redact credentials and complete OAuth/Data API request URLs from logs/errors/tracing;
+- keep access/refresh tokens only in the bounded in-memory grant for the initiating owner session, serialize refresh, and redact credentials and complete OAuth/Data API request URLs from logs/errors/tracing;
 - provide connection status without exposing tokens;
 - support disconnect, local token deletion, and best-effort Google revocation; and
 - satisfy Google's app verification, homepage, privacy-policy, and consent requirements before public distribution.
 
-The callback route is excluded from raw-query access logging. It sends `Cache-Control: no-store` and a no-referrer policy, never renders or records its query, consumes state atomically, and exchanges the code server-side. Success and every failure end with a `303` to a fixed query-free completion page; only an opaque transaction status, readable by the initiating owner session through the authenticated backend, reports the outcome. Authorization codes, state, and exchange errors never enter browser history beyond Google's unavoidable callback navigation, referrers, renderer state, ordinary error pages, or diagnostics.
+The callback route is excluded from raw-query access logging. It sends `Cache-Control: no-store` and a no-referrer policy, never renders or records its query, consumes state atomically, and exchanges the code server-side. It returns a fixed plain completion/error response and the initiating owner session reads only its opaque connection status through the authenticated backend. Authorization codes, state, refresh/access tokens, and exchange errors never enter renderer state, persistence, diagnostics, or ordinary error pages beyond Google's unavoidable callback navigation.
 
 The account browser/API flow lists playlists that the YouTube Data API permits for the authenticated account. Private or otherwise non-embeddable playlists remain visible only to the authorized owner and offer `Open in signed-in YouTube`; Cafe Code MUST NOT imply that account linking makes them playable in the privacy-enhanced iframe. The UI MUST also explain that some system collections, including Watch Later/history where the API forbids access, may not appear.
 
@@ -373,7 +395,7 @@ Version 1 allows bounded animated GIF plus static PNG, JPEG, and WebP. APNG and 
 
 The upload reader MUST enforce its byte limit while streaming, independently of `Content-Length`; the header is advisory only. It aborts as soon as the limit is exceeded. The project MUST select and audit an implementable GIF metadata/parser mechanism before this slice begins, including malformed/truncated input.
 
-Uploads use an authenticated endpoint. Serving an asset requires the same authorization boundary. Ambient assets and their quota are scoped to the backend state directory/installation profile, matching the shared Client Settings they support; they are not keyed to a renewable session or individual session subject. Any authenticated session authorized to update Client Settings may upload/replace/remove, and authenticated sessions authorized to read those shared settings may fetch the currently referenced asset. Replace/remove makes the old asset eligible for profile-wide reference-checked deletion. A bounded, post-readiness background sweep uses a grace age, rechecks current references immediately before deletion, and processes limited batches so it cannot block startup or race a new reference. Temporary object URLs used for previews MUST be revoked.
+Uploads use an authenticated endpoint. Serving an asset requires the same authorization boundary. Ambient assets and their quota are scoped to the backend state directory/installation profile, matching the shared Client Settings they support; they are not keyed to a renewable session or individual session subject. Any authenticated session authorized to update Client Settings may upload/replace/remove, and authenticated sessions authorized to read those shared settings may fetch the currently referenced asset. Replace/remove makes the old asset eligible for profile-wide reference-checked deletion. The shipped bounded post-readiness orphan sweep uses a grace age, rechecks current references immediately before deletion, and processes limited batches so it cannot block startup or race a new reference. Temporary object URLs used for previews MUST be revoked.
 
 Reduced motion always prevents animated GIF playback. Cafe Code shows a non-animated placeholder rather than pretending an `<img>` can be paused. When hidden or unfocused, GIF mounting follows `continueBackgroundAnimations`; disabling/replacing always unmounts it. YouTube playback is user-controlled, is not treated as decorative animation, and may be suspended by the browser; disabling/replacing always unmounts it.
 
@@ -387,21 +409,21 @@ Version 1 means native whole-window opacity: text, controls, chat, effects, and 
 
 The renderer MUST request this through a typed, validated preload bridge. Only trusted Cafe Code web contents may invoke it. The main process owns the capability check and calls Electron's native window API. It MUST reject out-of-range, non-finite, and malformed values.
 
-The browser surface remains fully opaque. Desktop capability is the intersection of Electron platform support and an explicit release-build allowlist backed by a recorded native smoke result. Windows/macOS may be enabled only when present in that manifest; an unvalidated artifact shows a disabled `release-not-validated` reason and remains at 1.00. Electron's `BrowserWindow.setOpacity` is a no-op on Linux, so Linux is always `unsupported-platform` and Cafe Code MUST NOT claim that this version reproduces Konsole transparency on Linux/X11/Wayland.
+The browser surface remains fully opaque. Desktop capability is the intersection of Electron platform support and an explicit release-build allowlist backed by a recorded native smoke result. The packaged Windows path has recorded native-smoke evidence and may be advertised when its matching manifest evidence is present; macOS remains `release-not-validated` until its own packaged artifact passes, and Linux is `unsupported-platform`. Electron's `BrowserWindow.setOpacity` is a no-op on Linux, so Cafe Code MUST NOT claim that this version reproduces Konsole transparency on Linux/X11/Wayland.
 
 This feature MUST NOT turn on `transparent: true`, disable sandboxing, enable Node integration, or weaken context isolation. Those are separate architectural choices with different compositor and security consequences.
 
-The main process MUST load desktop-local opacity before creating/revealing each new main window and apply changes only on explicit updates. Theme/appearance sync MUST NOT overwrite it. Opacity mutation and main-window registration/reveal share one transaction/revision boundary: a new window cannot reveal mid-mutation, and a window destroyed during apply is removed without converting a successful apply into a phantom failure.
+The main process loads desktop-local opacity before revealing each new main window and applies changes only on explicit updates. Theme/appearance sync does not overwrite it. Opacity reads, writes, and pre-reveal application are serialized by one mutex.
 
-The service captures the previous confirmed settings and their effective value (`enabled ? opacity : 1`), applies the requested effective value to all registered live windows, and persists only after all applications succeed. If persistence fails, it restores that previous effective value—not the remembered slider value—to every live window while leaving the previous preference pair intact. If any window application fails, it best-effort resets every currently registered live window to 1.00 and persists safe `{ enabled: false, opacity: 1 }`. Before returning success it reconciles the current window registry under the same boundary.
+The service captures the previous settings and their effective value (`enabled ? opacity : 1`), applies the requested effective value to all registered live windows, and persists only after all applications succeed. If persistence fails, it restores that previous effective value—not the remembered slider value—to every live window while leaving the previous preference pair intact. If any window application fails, it best-effort resets every currently registered live window to 1.00 and persists safe `{ enabled: false, opacity: 1 }`.
 
-A rollback/reset or recovery-persistence failure remains an explicit degraded error with retry; the UI MUST NOT claim that live windows and disk agree. State represents confirmed-versus-unknown persistence and consistent-versus-mixed/unknown live opacity explicitly. Every committed or degraded transition increments a revision and is broadcast to all trusted Cafe Code renderers; controls ignore stale revisions.
+A rollback/reset failure returns `effectiveOpacity: null` with `safe-reset-failed`; the UI does not claim that live windows and disk agree. `apply-failed` and `persistence-failed` report recoverable failures with the confirmed effective value. The current bridge is request/response only; it has no revision counter or broadcast subscription.
 
 A recovery path MUST always exist:
 
 - starting with unsupported or corrupt settings yields opacity 1.00;
-- reset appearance returns opacity to 1.00;
-- the bridge/recovery control remains available during rollback until all live windows are confirmed consistent at 1.00 and safe settings are confirmed persisted; and
+- disabling opacity or using the appearance reset requests opacity 1.00;
+- the Appearance control exposes the returned recovery reason and remains retryable; and
 - a documented safe-start option or keyboard-accessible reset is required before permitting values below 0.65.
 
 ## Persistence and contracts
@@ -418,7 +440,7 @@ fallingEffectOpacity: number;
 fallingEffectSpeed: number;
 
 ambientVideoEnabled: boolean;
-ambientVideoSource: YouTubeSource;
+ambientVideoSource: AmbientVideoSource;
 ambientVideoPresentationMode: "floating" | "cinema";
 ambientVideoLayoutMode: "preset" | "custom";
 ambientVideoPresetPlacement: "bottom-left" | "bottom-right";
@@ -445,89 +467,38 @@ The patch schema MUST expose every new Client Settings key. Reset and changed-se
 
 The atomic `ambientVideoSource` union is the deliberate exception to flat high-churn controls. `ClientSettingsPatch` accepts only a complete valid source or `null`; source helpers build the replacement from normalized IDs.
 
-YouTube Data API keys, OAuth client configuration, tokens, connection state, search queries/results, playback, and page tokens do not belong in Client Settings. API configuration/tokens use backend config/secret storage; connection status comes from a dedicated owner-authorized API; discovery state is transient.
+YouTube Data API keys and OAuth client configuration do not belong in Client Settings. The shipped OAuth access/refresh grant is bounded backend memory for the initiating owner session only; connection status comes from a dedicated owner-authorized API and discovery state is transient. Search queries/results, playback, and page tokens are not settings.
 
-Workflow visualization does not add user preference fields to Client Settings. Provider-specific activities are normalized at the server boundary into runtime-schema-backed safe workflow lifecycle/snapshot data with stable node IDs, parent/path correlation where available, canonical status, timestamps, fidelity, and already-sanitized display fields.
+Workflow visualization does not add user preference fields to Client Settings. The renderer derives a versioned, bounded `WorkflowProjectionSnapshot` from the current thread's existing persisted orchestration activities, optionally scoped to the selected turn. Provider-specific payloads are projected only into display-safe node and recent-activity fields with canonical status and `live | lifecycle-only | not-reported` fidelity.
 
-Every snapshot/event carries a scope key `{ environmentId, providerInstanceId, providerEpochId, threadId, turnId }`. `providerEpochId` rotates whenever the provider process/runtime restarts even if its configured instance ID stays the same. Node IDs need be unique only within that scope key.
+The version 1 snapshot contains `nodes` (maximum 64), `recentActivities` (maximum 100), `sourceActivityCount`, `omittedNodeCount`, and `omittedActivityCount`. Display strings are bounded to 512 characters. It does not define a separate workflow event stream, provider epoch, snapshot revision, watermark, or pagination protocol. Reconnect behavior comes from Cafe Code's normal thread-detail resnapshot/subscription path and the projection is re-derived from the received activities.
 
-A snapshot separately adds `snapshotRevision` and `watermark`; pagination cursors are opaque and bound to that immutable revision. A live event separately adds a monotonic sequence/cursor after the watermark. The client subscribes from the watermark before applying buffered live events. It swaps/clears the projection only on scope-key change and rejects late, wrong-scope, or stale-order events.
-
-Lifecycle precedence is monotonic within a provider epoch: terminal states cannot be reopened by a stale start/progress event, while a new epoch may reuse provider IDs safely. Reconnect reconstruction uses persisted orchestration activity plus this snapshot/live handoff, not renderer-only guesses.
-
-Native opacity does not belong in Client Settings. `{ enabled, opacity }` is desktop-local shell state in `apps/desktop/src/settings/DesktopAppSettings.ts` and `desktop-settings.json`. It is loaded before window creation/reveal and queried/mutated through `DesktopBridge`, not the environment API. Runtime-schema-backed contracts provide `getWindowOpacityState`, `setWindowOpacityState`, `resetWindowOpacityState`, and `onWindowOpacityStateChanged`:
+Native opacity does not belong in Client Settings. `{ enabled, opacity }` is desktop-local shell state in `apps/desktop/src/settings/DesktopAppSettings.ts` and `desktop-settings.json`. It is loaded before window reveal and queried/mutated through `DesktopBridge`, not the environment API. Runtime-schema-backed contracts provide `getWindowOpacityState()` and `setWindowOpacityPreference(preference)`:
 
 ```ts
-type WindowOpacityReasonCode =
+type DesktopWindowOpacityPreference = {
+  enabled: boolean;
+  opacity: number; // 0.65 through 1.00
+};
+
+type DesktopWindowOpacityReason =
+  | null
   | "unsupported-platform"
   | "release-not-validated"
   | "apply-failed"
-  | "partial-apply-failed"
-  | "persist-failed"
-  | "rollback-failed"
-  | "safe-reset-failed"
-  | "state-diverged"
-  | "recovery-persist-failed";
+  | "persistence-failed"
+  | "safe-reset-failed";
 
-type WindowOpacityCapability =
-  | { supported: true; platform: "win32" | "darwin" }
-  | {
-      supported: false;
-      reasonCode: "unsupported-platform" | "release-not-validated";
-    };
-
-type OpacitySettings = { enabled: boolean; opacity: number };
-type ConfirmedOpacity = { kind: "confirmed"; settings: OpacitySettings };
-type UnknownOpacity = { kind: "unknown"; lastKnownSettings: OpacitySettings };
-type ConsistentOpacity = { kind: "consistent"; opacity: number };
-type MixedOpacity = { kind: "mixed-or-unknown" };
-
-type WindowOpacityState =
-  | {
-      revision: number;
-      status: "unsupported";
-      capability: {
-        supported: false;
-        reasonCode: "unsupported-platform" | "release-not-validated";
-      };
-      persisted: ConfirmedOpacity;
-      liveOpacity: { kind: "consistent"; opacity: 1 };
-      reasonCode: "unsupported-platform" | "release-not-validated";
-    }
-  | {
-      revision: number;
-      status: "ready";
-      capability: { supported: true; platform: "win32" | "darwin" };
-      persisted: ConfirmedOpacity;
-      liveOpacity: ConsistentOpacity;
-      reasonCode: null;
-    }
-  | {
-      revision: number;
-      status: "recovered";
-      capability: { supported: true; platform: "win32" | "darwin" };
-      persisted: ConfirmedOpacity;
-      liveOpacity: ConsistentOpacity;
-      reasonCode: "apply-failed" | "partial-apply-failed" | "persist-failed";
-    }
-  | ({
-      revision: number;
-      status: "degraded";
-      capability: { supported: true; platform: "win32" | "darwin" };
-      reasonCode:
-        | "rollback-failed"
-        | "safe-reset-failed"
-        | "state-diverged"
-        | "recovery-persist-failed";
-    } & (
-      | { persisted: UnknownOpacity; liveOpacity: ConsistentOpacity | MixedOpacity }
-      | { persisted: ConfirmedOpacity; liveOpacity: MixedOpacity }
-    ));
+type DesktopWindowOpacityState = {
+  supported: boolean;
+  enabled: boolean;
+  opacity: number;
+  effectiveOpacity: number | null;
+  reason: DesktopWindowOpacityReason;
+};
 ```
 
-Runtime-schema refinement also checks that `ready`/`recovered` consistent opacity equals the confirmed effective value and rejects every invalid capability/status/reason combination. In `ready` or `recovered`, confirmed disabled settings imply consistent opacity 1.00. A degraded state may legitimately have confirmed safe settings plus mixed live windows.
-
-UI copy maps from reason codes; arbitrary main-process error strings do not cross the bridge. `onWindowOpacityStateChanged` atomically registers the listener and immediately emits the current state, eliminating a get-then-subscribe gap; `getWindowOpacityState` remains available for diagnostics/retry. Each control keeps only the highest revision. A degraded state disables optimistic claims and exposes retry/safe-start guidance.
+`opacity` remembers the bounded slider preference. `effectiveOpacity` is the value confirmed across live windows, or `null` when a failed rollback/reset leaves the live registry unknown. UI copy maps from the stable reason values; the bridge does not expose arbitrary main-process error strings.
 
 ## Rendering architecture
 
@@ -593,7 +564,7 @@ The current Electron defaults remain mandatory:
 - `sandbox: true`; and
 - denied `window.open` with safe external opening.
 
-Before external iframe or discovery support ships, Cafe Code MUST add and test a Content Security Policy and related response headers. Renderer CSP must be restrictive and explicitly allow only the required YouTube privacy-enhanced frame origin; Data API and thumbnail network access remains in the backend's fixed outbound allowlists. Do not add a blanket `https:` source.
+Production responses ship with a restrictive Content Security Policy and related response headers. `frame-src` allows exactly `https://www.youtube-nocookie.com` and `https://open.spotify.com`; Data API access remains in the backend's fixed outbound policy. These exact origins and the absence of a blanket `https:` frame source are tested and must be preserved.
 
 At minimum, the release security work covers restrictive `default-src`, `script-src`, `style-src`, `font-src`, `img-src`, `media-src`, `worker-src`, `connect-src`, `frame-src`, `object-src`, `base-uri`, `form-action`, and `frame-ancestors`, plus a referrer policy, `X-Content-Type-Options`, and a minimal Permissions Policy. The design MUST inventory and test Cafe Code's inline boot script/style, Google Fonts, data/blob upload previews, workers/service worker, authenticated asset routes, user-selected remote HTTP/WebSocket environments, Vite/HMR development, browser production, and packaged Electron. Inline content uses a nonce/hash or is externalized. Any broad `connect-src` needed for saved environments is documented; `frame-src` remains exact. Development exceptions must not leak into production.
 
@@ -642,11 +613,12 @@ Desktop and browser are first-class surfaces.
 - Atmosphere spans either surface.
 - Native opacity is capability-gated to Electron.
 - Preset media sizes clamp to the messages pane.
-- When the messages pane is narrower than 640 CSS pixels, both media panels unmount and a compact "Ambient media hidden at this width" status appears in settings; YouTube does not auto-resume when the pane widens.
-- Custom handles require a fine pointer and at least 768 CSS pixels of messages-pane width; otherwise the last custom geometry is preserved while the panel uses its nearest safe preset.
+- A floating streaming iframe is unmounted while the messages pane is narrower than 640 CSS pixels. Its enabled/source preferences remain intact, so it may mount again when the pane widens.
+- Ambient images and Local Media do not share that 640-pixel hide rule; they remain bounded and clamp to their usable anchor.
+- Custom controls remain available through explicit pointer and keyboard handles. The implementation has no separate 768-pixel/fine-pointer fallback.
 - Opening the plan or diff panel recomputes floating-media bounds.
-- In effective cinema, Plan/Workflow uses the measured chat-rail width to choose inline or the existing sheet. Diff is forced into a sheet outside the protected player or locally suspends cinema while the stable playback session survives. Neither feature adds a fourth pane.
-- Cinema workspace collapses its left project sidebar and right chat rail independently before reducing its 16:9 player. If the protected player cannot remain at least 356 by 200 CSS pixels with reachable controls, the renderer locally uses the normal/floating-safe presentation while preserving the shared `cinema` preference.
+- In effective cinema, the player and chat occupy a two-column workspace inside the existing application shell. Plan/Workflow retains its existing responsive panel behavior.
+- Cinema becomes ineffective below its 712-by-264 CSS-pixel workspace threshold. The renderer uses the normal layout and preserves the shared `cinema` preference.
 - The 640-pixel floating-media hide rule does not independently unmount a player already in cinema; cinema uses the protected-player fit rule above.
 - Workflow uses the right-panel sheet on narrow layouts and remains keyboard navigable without a spatial graph.
 - Safe-area insets and on-screen keyboard behavior remain intact.
@@ -672,7 +644,7 @@ No analytics or telemetry is added by this feature without a separate product de
 ## Non-goals for the first release
 
 - arbitrary streaming providers or arbitrary iframe URLs;
-- Local Media Theater unless its separate feasibility and conditional ship gates pass;
+- native Local Media Theater/libVLC unless its separate feasibility and conditional ship gates pass; the shipped browser-native Local Media v1 remains session-only;
 - browser media plugins, DRM circumvention, website media-URL extraction, universal codec/service support, or YouTube feature parity through Local Media;
 - Electron `webview`;
 - embedded Google/YouTube login or cookie sharing;
@@ -681,7 +653,8 @@ No analytics or telemetry is added by this feature without a separate product de
 - background-only blur/acrylic/vibrancy;
 - Linux compositor-specific Konsole transparency;
 - live YouTube edge-color sampling;
-- audio visualizers outside the conditional Local Media/projectM path, including direct YouTube audio analysis;
+- audio visualizers outside the shipped blob-only Local Media v1 analyser and the separately conditional native Local Media/projectM path, including direct YouTube or Spotify audio analysis;
+- Spotify-synchronised visuals, edge-colour sampling, or PCM extraction;
 - generic system-audio capture unless its separate privacy, platform, performance, and third-party policy gates pass;
 - media tied to a thread or prompt;
 - per-particle physics editors;

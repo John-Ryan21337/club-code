@@ -123,6 +123,7 @@ import { ColorWheelPicker } from "./ColorWheelPicker";
 import { AmbientImageSettings } from "./AmbientImageSettings";
 import { WindowAtmosphereSettings } from "./WindowAtmosphereSettings";
 import { AmbientVideoSettings } from "./AmbientVideoSettings";
+import { LocalMediaSettings } from "./LocalMediaSettings";
 import { WindowOpacitySettings } from "./WindowOpacitySettings";
 
 const THEME_OPTIONS = [
@@ -1102,6 +1103,7 @@ export function AppearanceSettingsPanel() {
       <WindowAtmosphereSettings />
       <AmbientVideoSettings />
       <AmbientImageSettings />
+      <LocalMediaSettings />
       <WindowOpacitySettings />
     </SettingsPageContainer>
   );

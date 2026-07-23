@@ -41,8 +41,8 @@ const ambientCapabilityEnvironmentCases = [
     capability: "youtubePublicDiscovery",
   },
   {
-    environmentName: "CAFE_CODE_YOUTUBE_ACCOUNT_CONNECTION_ENABLED",
-    capability: "youtubeAccountConnection",
+    environmentName: "CAFE_CODE_SPOTIFY_EMBED_ENABLED",
+    capability: "spotifyEmbed",
   },
   {
     environmentName: "CAFE_CODE_WORKFLOW_OBSERVATORY_ENABLED",
@@ -62,10 +62,14 @@ const makeDesktopBootstrap = (
   ...overrides,
 });
 
-const resolveAmbientCapabilityConfig = (baseDir: string, env: Readonly<Record<string, string>>) =>
+const resolveAmbientCapabilityConfig = (
+  baseDir: string,
+  env: Readonly<Record<string, string>>,
+  mode: "web" | "desktop" = "web",
+) =>
   resolveServerConfig(
     {
-      mode: Option.some("web"),
+      mode: Option.some(mode),
       port: Option.some(3773),
       httpsPort: Option.none(),
       host: Option.none(),
@@ -265,6 +269,52 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     }),
   );
 
+  it.effect(
+    "enables YouTube account connection only for desktop mode with its flag and valid client ID",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const baseDir = yield* fs.makeTempDirectoryScoped({
+          prefix: "t3-cli-config-youtube-oauth-",
+        });
+        const validClientId = "1234567890-cafecodeclient.apps.googleusercontent.com";
+        const enabledEnvironment = {
+          CAFE_CODE_YOUTUBE_ACCOUNT_CONNECTION_ENABLED: "true",
+          CAFE_CODE_YOUTUBE_OAUTH_DESKTOP_CLIENT_ID: validClientId,
+        };
+
+        const enabled = yield* resolveAmbientCapabilityConfig(
+          baseDir,
+          enabledEnvironment,
+          "desktop",
+        );
+        expect(enabled.youtubeOAuthDesktopClientId).toBe(validClientId);
+        expect(enabled.ambientExperienceCapabilities.youtubeAccountConnection).toBe(true);
+
+        const webMode = yield* resolveAmbientCapabilityConfig(baseDir, enabledEnvironment, "web");
+        expect(webMode.ambientExperienceCapabilities.youtubeAccountConnection).toBe(false);
+
+        const missingClientId = yield* resolveAmbientCapabilityConfig(
+          baseDir,
+          { CAFE_CODE_YOUTUBE_ACCOUNT_CONNECTION_ENABLED: "true" },
+          "desktop",
+        );
+        expect(missingClientId.youtubeOAuthDesktopClientId).toBeUndefined();
+        expect(missingClientId.ambientExperienceCapabilities.youtubeAccountConnection).toBe(false);
+
+        const invalidClientId = yield* resolveAmbientCapabilityConfig(
+          baseDir,
+          {
+            CAFE_CODE_YOUTUBE_ACCOUNT_CONNECTION_ENABLED: "true",
+            CAFE_CODE_YOUTUBE_OAUTH_DESKTOP_CLIENT_ID: "not-a-google-desktop-client",
+          },
+          "desktop",
+        );
+        expect(invalidClientId.youtubeOAuthDesktopClientId).toBeUndefined();
+        expect(invalidClientId.ambientExperienceCapabilities.youtubeAccountConnection).toBe(false);
+      }),
+  );
+
   it.effect("keeps omitted and malformed ambient capability gates disabled", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -285,6 +335,19 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
           DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES,
         );
       }
+
+      const malformedAccountGate = yield* resolveAmbientCapabilityConfig(
+        baseDir,
+        {
+          CAFE_CODE_YOUTUBE_ACCOUNT_CONNECTION_ENABLED: "not-a-boolean",
+          CAFE_CODE_YOUTUBE_OAUTH_DESKTOP_CLIENT_ID:
+            "1234567890-cafecodeclient.apps.googleusercontent.com",
+        },
+        "desktop",
+      );
+      expect(malformedAccountGate.ambientExperienceCapabilities.youtubeAccountConnection).toBe(
+        false,
+      );
     }),
   );
 

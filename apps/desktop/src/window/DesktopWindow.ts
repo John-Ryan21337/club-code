@@ -30,7 +30,7 @@ const TITLEBAR_HEIGHT = 40;
 const TITLEBAR_COLOR = "#01000000"; // #00000000 does not work correctly on Linux
 const TITLEBAR_LIGHT_SYMBOL_COLOR = "#1f2937";
 const TITLEBAR_DARK_SYMBOL_COLOR = "#f8fafc";
-const VALIDATED_RELEASE_OPACITY_PLATFORMS = new Set<"darwin" | "win32">();
+const VALIDATED_RELEASE_OPACITY_PLATFORMS = new Set<"darwin" | "win32">(["win32"]);
 
 export type DesktopWindowOpacityCapability =
   | { readonly supported: true }

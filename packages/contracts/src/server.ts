@@ -770,7 +770,7 @@ export type ServerSignalProcessResult = typeof ServerSignalProcessResult.Type;
  * must never make an unavailable renderer or server feature executable. New
  * fields require a version bump and an explicit compatibility review.
  */
-export const AMBIENT_EXPERIENCE_CAPABILITIES_VERSION = 1 as const;
+export const AMBIENT_EXPERIENCE_CAPABILITIES_VERSION = 2 as const;
 
 export const DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES = {
   version: AMBIENT_EXPERIENCE_CAPABILITIES_VERSION,
@@ -779,7 +779,22 @@ export const DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES = {
   youtubePlayer: true,
   youtubePublicDiscovery: false,
   youtubeAccountConnection: false,
+  spotifyEmbed: true,
   workflowObservatory: true,
+} as const;
+
+// Runtime defaults advertise the features bundled with this version of Cafe
+// Code. Decoding is deliberately stricter: an omitted capability object can
+// come from an older or partial server and must not grant renderer features.
+const DISABLED_AMBIENT_EXPERIENCE_CAPABILITIES = {
+  version: AMBIENT_EXPERIENCE_CAPABILITIES_VERSION,
+  atmosphere: false,
+  ambientImage: false,
+  youtubePlayer: false,
+  youtubePublicDiscovery: false,
+  youtubeAccountConnection: false,
+  spotifyEmbed: false,
+  workflowObservatory: false,
 } as const;
 
 const AmbientExperienceCapabilityEnabled = Schema.Boolean.pipe(
@@ -795,8 +810,9 @@ export const AmbientExperienceCapabilities = Schema.Struct({
   youtubePlayer: AmbientExperienceCapabilityEnabled,
   youtubePublicDiscovery: AmbientExperienceCapabilityEnabled,
   youtubeAccountConnection: AmbientExperienceCapabilityEnabled,
+  spotifyEmbed: AmbientExperienceCapabilityEnabled,
   workflowObservatory: AmbientExperienceCapabilityEnabled,
-}).pipe(Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES)));
+}).pipe(Schema.withDecodingDefault(Effect.succeed(DISABLED_AMBIENT_EXPERIENCE_CAPABILITIES)));
 export type AmbientExperienceCapabilities = typeof AmbientExperienceCapabilities.Type;
 
 export const ServerConfig = Schema.Struct({

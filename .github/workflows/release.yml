@@ -142,6 +142,10 @@ jobs:
       - name: Build unsigned artifact
         run: corepack yarn ${{ matrix.command }}
 
+      - name: Smoke-test installed Windows artifact
+        if: matrix.name == 'windows-x64'
+        run: corepack yarn test:native-windows-artifact
+
       - name: Build lower-version AppImage probe
         if: matrix.name == 'linux-x64'
         env:

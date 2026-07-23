@@ -168,19 +168,40 @@ export const YouTubePlaylistId = TrimmedNonEmptyString.check(
   Schema.isPattern(/^[A-Za-z0-9_-]{10,80}$/),
 );
 export type YouTubePlaylistId = typeof YouTubePlaylistId.Type;
+const YouTubeVideoSource = Schema.Struct({
+  kind: Schema.Literal("video"),
+  id: YouTubeVideoId,
+});
+const YouTubePlaylistSource = Schema.Struct({
+  kind: Schema.Literal("playlist"),
+  id: YouTubePlaylistId,
+});
 export const YouTubeSource = Schema.NullOr(
-  Schema.Union([
-    Schema.Struct({
-      kind: Schema.Literal("video"),
-      id: YouTubeVideoId,
-    }),
-    Schema.Struct({
-      kind: Schema.Literal("playlist"),
-      id: YouTubePlaylistId,
-    }),
-  ]),
+  Schema.Union([YouTubeVideoSource, YouTubePlaylistSource]),
 );
 export type YouTubeSource = typeof YouTubeSource.Type;
+
+export const SpotifyEntityType = Schema.Literals([
+  "album",
+  "artist",
+  "episode",
+  "playlist",
+  "show",
+  "track",
+]);
+export type SpotifyEntityType = typeof SpotifyEntityType.Type;
+export const SpotifyEntityId = TrimmedNonEmptyString.check(Schema.isPattern(/^[A-Za-z0-9]{22}$/));
+export type SpotifyEntityId = typeof SpotifyEntityId.Type;
+export const SpotifySource = Schema.Struct({
+  kind: Schema.Literal("spotify"),
+  entityType: SpotifyEntityType,
+  id: SpotifyEntityId,
+});
+export type SpotifySource = typeof SpotifySource.Type;
+export const AmbientVideoSource = Schema.NullOr(
+  Schema.Union([YouTubeVideoSource, YouTubePlaylistSource, SpotifySource]),
+);
+export type AmbientVideoSource = typeof AmbientVideoSource.Type;
 
 export const AmbientMediaLayoutMode = Schema.Literals(["preset", "custom"]);
 export type AmbientMediaLayoutMode = typeof AmbientMediaLayoutMode.Type;
@@ -196,7 +217,7 @@ export const AmbientVideoPresentationMode = Schema.Literals(["floating", "cinema
 export type AmbientVideoPresentationMode = typeof AmbientVideoPresentationMode.Type;
 
 export const DEFAULT_AMBIENT_VIDEO_ENABLED = false;
-export const DEFAULT_AMBIENT_VIDEO_SOURCE: YouTubeSource = null;
+export const DEFAULT_AMBIENT_VIDEO_SOURCE: AmbientVideoSource = null;
 export const DEFAULT_AMBIENT_VIDEO_LAYOUT_MODE: AmbientMediaLayoutMode = "preset";
 export const DEFAULT_AMBIENT_VIDEO_PRESET_PLACEMENT: AmbientMediaPresetPlacement = "bottom-right";
 export const DEFAULT_AMBIENT_VIDEO_PRESET_SIZE: AmbientMediaPresetSize = "medium";
@@ -344,7 +365,7 @@ export const ClientSettingsSchema = Schema.Struct({
   ambientVideoEnabled: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_VIDEO_ENABLED)),
   ),
-  ambientVideoSource: YouTubeSource.pipe(
+  ambientVideoSource: AmbientVideoSource.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_VIDEO_SOURCE)),
   ),
   ambientVideoLayoutMode: AmbientMediaLayoutMode.pipe(
@@ -1068,7 +1089,7 @@ export const ClientSettingsPatch = Schema.Struct({
   fallingEffectOpacity: Schema.optionalKey(AmbientOpacity),
   fallingEffectSpeed: Schema.optionalKey(FallingEffectSpeed),
   ambientVideoEnabled: Schema.optionalKey(Schema.Boolean),
-  ambientVideoSource: Schema.optionalKey(YouTubeSource),
+  ambientVideoSource: Schema.optionalKey(AmbientVideoSource),
   ambientVideoLayoutMode: Schema.optionalKey(AmbientMediaLayoutMode),
   ambientVideoPresetPlacement: Schema.optionalKey(AmbientMediaPresetPlacement),
   ambientVideoPresetSize: Schema.optionalKey(AmbientMediaPresetSize),

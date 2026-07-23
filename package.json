@@ -30,6 +30,7 @@
     "test": "turbo run test",
     "test:desktop-smoke": "turbo run smoke-test --filter=@cafecode/desktop",
     "test:native-desktop-runtime": "node scripts/native-desktop-runtime-smoke.ts",
+    "test:native-window-opacity": "node scripts/run-window-opacity-native-smoke.ts",
     "test:native-linux-artifact": "node scripts/linux-native-artifact-smoke.ts",
     "test:native-windows-artifact": "node scripts/windows-native-artifact-smoke.ts",
     "test:native-macos-artifact": "node scripts/macos-native-artifact-smoke.ts",

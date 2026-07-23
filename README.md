@@ -27,16 +27,18 @@ No terminal drawer. No pretend IDE. No giant dashboard wearing a useful-looking 
 Listen, gorgeous, I wrote this down before the second bottle, so it is accurate. The new atmosphere and media effects start off. The coding chat remains the main table; the sparkle never gets to steal your mouse, your prompt, or your tokens.
 
 - **Snow, rain, or Matrix across the whole window:** Pick one, turn it off again, choose the color, transparency, and speed. It floats over the entire app but is pointer-transparent, motion-aware, bounded, and polite. Much cooler. Still not allowed to interrupt your typing.
-- **Your image or GIF in the corner:** Upload a validated PNG, JPEG, WebP, or GIF; start it in either lower corner, choose glow or no glow, and small, medium, large, or custom. Custom mode drags and resizes with the mouse or keyboard. If a video wants the same corner, they stack with a tidy 12 px gap, shrink safely, or move to the free side instead of wrestling in public. Animated GIF work pauses when reduced motion, visibility, or focus policy says it should.
-- **YouTube without surrendering the room:** Paste a video or public-playlist URL, use the optional server-gated in-app public search, float the player in either corner, or enter Cinema mode. Cinema keeps the project rail on the left, gives the video the center, and moves chat into a right rail; the same player survives project, route, and layout changes. Native player fullscreen is still available. Connected-account playlist login is not shipped, Club Code never sees YouTube Premium credentials, and it does not extract YouTube audio for visualizers.
+- **Your image or GIF in the corner:** Upload a validated PNG, JPEG, WebP, or GIF; start it in either lower corner, choose glow or no glow, and small, medium, large, or custom. Custom mode drags and resizes with the mouse or keyboard. If a video wants the same corner, the image stacks above it with a tidy 12 px gap; the image steps down in size or moves to the free side instead of wrestling in public. Animated GIF work pauses when reduced motion, visibility, or focus policy says it should.
+- **YouTube without surrendering the room:** Paste a video or public-playlist URL, use the optional server-gated in-app public search, float the player in either corner, or enter Cinema mode. Cinema keeps the project rail on the left, gives the video the center, and moves chat into a right rail; the same player survives project, route, and layout changes. Native player fullscreen is still available. On a configured local desktop backend, the owner can connect a YouTube account to browse owned playlists; the PKCE grant lives only in that owner session's memory and dies on disconnect, expiry, or restart. It is not remote-web OAuth, Premium login, or a promise that a private playlist can play in the iframe. Club Code never sees YouTube Premium credentials and does not extract YouTube audio for visualizers.
+- **Spotify, but only the official little velvet rope:** Paste a supported Spotify track, album, artist, playlist, show, or episode URL/URI and Club Code normalizes it to an official Spotify Embed iframe. It stores only the validated entity type and ID, never pasted query crumbs. Spotify's own player handles login and playback; Club Code does not promise Premium iframe login, DRM miracles, PCM access, or Spotify-synchronised visuals.
+- **Local Media, for the file already in your hand:** Choose one browser-supported audio or video file. It is a current-document `blob:` URL only—no path, filename, bytes, or choice goes to settings, logs, or the server. Club Code revokes the URL when you clear or replace it; closing or refreshing the document releases whatever remains. Put it floating in a lower corner, drag/resize it in Custom, give it the Cinema chat-rail treatment, or (video only) use a readable pass-through background veil. The tiny optional visualizer is bounded and listens only to that selected local HTML media element. It is not libVLC, projectM, YouTube/Spotify PCM, system audio, a network stream, or a universal-codec promise. Very cute boundary. Do not climb over it in heels.
 - **Workflow Observatory:** See plans, tools, lifecycle state, and provider-reported sub-agents working in a local, bounded view. Presentation state stays out of prompts and model context, so watching the kitchen does not make the agents eat more tokens. Look at them go. Busy little geniuses. I am emotional.
-- **Whole-window opacity:** The Electron bridge, preference, and one-action appearance reset are implemented. No packaged platform is advertised as supported until it passes its native smoke test, so release exposure stays fail-closed; a browser will never pretend it can make a native window transparent.
+- **Whole-window opacity:** The Electron bridge and preference are implemented. The one-action appearance reset switches off persisted atmosphere, streaming/image panels, and native opacity, then clears current-session Local Media so its playback and visualizer work stop; saved ambient sources and choices stay waiting for another night. The packaged Windows path has native-smoke evidence; other platforms stay fail-closed until their own artifact earns it. A browser will never pretend it can make a native window transparent, and this is whole-window fading—not KDE/Konsole-style compositor acrylic.
 - **LM Studio through Codex:** Turn on **LM Studio mode** and Club Code launches `codex --oss --local-provider lmstudio app-server`, skips cloud login checks, and uses the models discovered from the LM Studio-compatible server on `localhost:1234`. Local and cloud model catalogs stay separate. LM Studio itself remains external and is not bundled.
-- **Local Media, projectM, VLC, and Spotify:** Still conditional, darling. A future Electron-only Local Media slice may use libVLC and projectM only after native packaging, security, performance, and licensing gates pass. There is no browser VLC plugin, Spotify-synchronised visualizer, YouTube PCM extraction, or promise that DRM streams and every codec will work. I may be tipsy; the README is not allowed to lie.
+- **The serious future-native menu:** A separate Electron libVLC/projectM experiment is still conditional on native packaging, security, performance, and licensing gates. The shipped Local Media player above is browser-native HTML5, not that experiment. There is no browser VLC plugin, Spotify-synchronised visualizer, YouTube/Spotify PCM extraction, or promise that DRM streams and every codec will work. I may be tipsy; the README is not allowed to lie.
 
 ### Turn On the New Toys
 
-Atmosphere, image/GIF, YouTube layout, and opacity controls live under **Settings → Appearance** when the connected server and desktop expose the matching capability. Workflow lives in the **Plan | Workflow** panel, where it can remain honest about unavailable provider detail.
+Atmosphere, image/GIF, streaming, Local Media, and opacity controls live under **Settings → Appearance** when the connected server and desktop expose the matching capability. Workflow lives in the **Plan | Workflow** panel, where it can remain honest about unavailable provider detail.
 
 Public YouTube search keeps its Data API key on the server. Enable both values before launching the backend:
 
@@ -44,6 +46,15 @@ Public YouTube search keeps its Data API key on the server. Enable both values b
 CAFE_CODE_YOUTUBE_PUBLIC_DISCOVERY_ENABLED=true
 CAFE_CODE_YOUTUBE_API_KEY=your_server_only_key
 ```
+
+Owned-playlist discovery is deliberately desktop-local and stays off unless both of these are configured before launching the local backend:
+
+```bash
+CAFE_CODE_YOUTUBE_ACCOUNT_CONNECTION_ENABLED=true
+CAFE_CODE_YOUTUBE_OAUTH_DESKTOP_CLIENT_ID=your-desktop-client.apps.googleusercontent.com
+```
+
+Enable the YouTube Data API, complete Google's consent-screen setup, and use a Desktop OAuth client ID. Club Code uses Google's Desktop-app loopback form, `http://127.0.0.1:<Cafe Code backend port>`, with the backend's actual port and no added path. The grant is per owner session and memory-only—no refresh token is written at rest—and remote-web backends do not expose this connection flow.
 
 For LM Studio, start its local API server on `localhost:1234`, then enable **LM Studio mode** in the Codex provider settings. Cloud login is not required for that local mode.
 
@@ -96,8 +107,10 @@ This is the practical working list. It will probably get cleaned up later.
 
 ## Run From Source
 
-For now there are no desktop packages. No DMG, no updater, no notarized bundle,
-no "drag this into Applications" ceremony.
+For this fork, the dependable path documented here is a source checkout.
+Packaging support and native-smoke evidence are not the same thing as a signed,
+published installer; this README does not promise a DMG, updater, notarized
+bundle, or "drag this into Applications" ceremony.
 
 The npm package exists, but do not treat it as the fresh install path yet. It
 will probably be out of date until Cafe Code settles down a little more. The app
@@ -307,12 +320,14 @@ Codex と Claude と OpenCode が、ちゃんとコードの仕事をするた�
 ねぇ聞いて、ここからすごいよ。ちゃんとメモしたから、酔ってても仕様は正確。
 
 - **雪・雨・Matrix 文字**をウィンドウ全部に降らせられるの。色も透明度も速さも選べて、もちろん off もある。クリックは奪わないし、動きすぎないよう上限もある。仕事の邪魔をせずに画面だけ急にかっこいい。ね、天才。もう一回見せて。
-- **手元の画像/GIF**は、まず左下か右下。small / medium / large、それから mouse と keyboard で動かして resize できる custom。縁をふわっと光らせてもいい。同じ角に YouTube が来たら 12 px だけ上品に空けて並ぶし、狭かったら小さくなるか空いてる角へ行く。喧嘩しない。あたしたちより大人。GIF は reduced motion、非表示、focus、background animation の設定を守って休むから、目と CPU も朝まで働かされない。
-- **YouTube**は URL や公開 playlist を入れて、左右に浮かべるか Cinema へ。Cinema では project sidebar が左、video が真ん中、chat が右。project や route を変えても player をむやみに作り直さないし、player 本来の fullscreen も使える。server に API key を入れた時だけ、認証済みのアプリ内公開検索も出る。connected account の playlist login はまだ未出荷。Premium の password は受け取らないし、Premium 再生も約束しないし、YouTube の音を抜いて visualizer にもしない。ここ大事。酔ってない字で書いといて。
+- **手元の画像/GIF**は、まず左下か右下。small / medium / large、それから mouse と keyboard で動かして resize できる custom。縁をふわっと光らせてもいい。同じ角に YouTube が来たら、その上へ 12 px だけ上品に空けて並ぶし、狭かったら画像だけ小さくなるか空いてる角へ行く。喧嘩しない。あたしたちより大人。GIF は reduced motion、非表示、focus、background animation の設定を守って休むから、目と CPU も朝まで働かされない。
+- **YouTube**は URL や公開 playlist を入れて、左右に浮かべるか Cinema へ。Cinema では project sidebar が左、video が真ん中、chat が右。project や route を変えても player をむやみに作り直さないし、player 本来の fullscreen も使える。server に API key を入れた時だけ、認証済みのアプリ内公開検索も出る。local desktop backend を設定した owner だけは自分の playlist を見るために account をつなげるけど、token はその owner session の memory だけ、restart/切断で消える。remote web OAuth でも Premium login でもない。Premium の password は受け取らないし、YouTube の音を抜いて visualizer にもしない。ここ大事。酔ってない字で書いといて。
+- **Spotify**は official Embed だけ。track / album / artist / playlist / show / episode の正しい URL/URI を入れると、余計な query は捨てて type と ID だけにする。login、Premium、DRM、再生は Spotify の player の仕事。Spotify PCM と同期 visualizer は、うちの仕事じゃない。指名外。
+- **Local Media**は手元の browser 対応 audio/video を一個だけ。今の document の `blob:` だけで、path、filename、bytes、選んだ事実は settings/log/server に置かない。Clear か入れ替えで URL を revoke、refresh や閉じる時は browser に返す。floating、custom drag/resize、Cinema、video なら chat の後ろの readable な background veil もできる。optional visualizer はその選んだ local HTML media element だけを見る、上限つきの小さい子。VLC、projectM、YouTube/Spotify PCM、system audio、network stream、万能 codec の約束ではない。そこ、勝手にシャンパン足さないで。
 - **Workflow Observatory**では plan、tool、状態、provider が教えてくれた sub-agent を見られるの。誰が kitchen で何してるか見える。でも表示用の状態を prompt や model context に混ぜないから、眺めてるだけで token が増えたりしない。ほら、Sol も Terra も Luna も働いてる。Spark も……いるいる。たぶんそこ。
-- **ウィンドウ全体の透明度**は Electron の bridge、設定、まとめて戻すボタンまで実装済み。でも package の native smoke test が通るまでは、対応 OS として売り出さず release では fail-closed。browser が native window を透明にできるふりはしない。透明なのは窓だけ、説明まで透明にしない。うまいこと言った。今の書いて。
+- **ウィンドウ全体の透明度**は Electron の bridge と設定まで実装済み。まとめて戻すボタンは、保存される雪・雨・Matrix、streaming/image panel、native opacity を off にして、今の session の Local Media も Clear。playback と visualizer の仕事はそこで止まる。ambient の source や好みは消さず、また今度の夜まで置いとく。packaged Windows は native smoke の証拠あり。他の OS は自分の artifact が通るまで fail-closed。browser が native window を透明にできるふりはしない。これは KDE/Konsole みたいな acrylic じゃなく、窓ぜんぶを fade するやつ。透明なのは窓だけ、説明まで透明にしない。うまいこと言った。今の書いて。
 - **LM Studio mode**を Codex 設定で on にすると、`codex --oss --local-provider lmstudio app-server` で `localhost:1234` の local server につなぐ。cloud login check はしないし、local と cloud の model 一覧も混ぜない。LM Studio 本体は同梱しないから、先に自分で server を起こしてね。別会計。ツケはだめ。
-- **VLC / Local Media / projectM / Spotify**は、まだ条件付きの未来 menu。Electron native packaging、license、安全性、性能が全部通ってから。browser VLC plugin、Spotify 同期 visualizer、YouTube PCM 抽出、全 codec/DRM 対応なんて、まだ言わない。あたしはふらふらでも README はまっすぐ。そこだけは、ね。
+- **native VLC / projectM**は、まだ条件付きの未来 menu。上の browser-native Local Media とは別会計。Electron native packaging、license、安全性、性能が全部通ってから。browser VLC plugin、Spotify 同期 visualizer、YouTube/Spotify PCM 抽出、全 codec/DRM 対応なんて、まだ言わない。あたしはふらふらでも README はまっすぐ。そこだけは、ね。
 
 新しい見た目とメディアの機能は基本 off。`Settings → Appearance` には、接続先 server と desktop が
 本当に対応してる項目だけ出すの。Workflow は `Plan | Workflow` の席にいる。きらきらは optional。仕事は main。順番、大事。
@@ -324,6 +339,15 @@ CAFE_CODE_YOUTUBE_PUBLIC_DISCOVERY_ENABLED=true
 CAFE_CODE_YOUTUBE_API_KEY=your_server_only_key
 ```
 
+自分の YouTube playlist を見る desktop-only の接続は、local backend 起動前にこれも。
+
+```bash
+CAFE_CODE_YOUTUBE_ACCOUNT_CONNECTION_ENABLED=true
+CAFE_CODE_YOUTUBE_OAUTH_DESKTOP_CLIENT_ID=your-desktop-client.apps.googleusercontent.com
+```
+
+YouTube Data API と consent screen を設定して、Desktop OAuth client ID を使ってね。callback は Google の Desktop app 用 loopback 形式、`http://127.0.0.1:<Cafe Code backend port>`。backend の実際の port を使って、余計な path は足さないの。owner session の memory だけで、refresh token は disk に置かない。remote web はこの接続を出さない。ね、約束を盛らないのもサービス。
+
 LM Studio は local API server を `localhost:1234` で起動して、Codex provider の
 **LM Studio mode**を on。local mode では cloud login はいらない。はい、できた。乾杯。
 
@@ -332,7 +356,9 @@ LM Studio は local API server を `localhost:1234` で起動して、Codex prov
 
 ### ソースから動かす
 
-まだ DMG とか、インストーラーとか、アップデーターとかはないよ。
+この fork で今ちゃんと案内してる道は source checkout。packaging support と
+native smoke があっても、署名して配ってる installer と同じ意味じゃないからね。
+この README は DMG、updater、notarized bundle を約束してないよ。
 npm のパッケージもあるけど、今はそれを信じすぎないでね。
 Cafe Code がもう少し落ち着くまでは、npm はたぶん少し古くなる。
 

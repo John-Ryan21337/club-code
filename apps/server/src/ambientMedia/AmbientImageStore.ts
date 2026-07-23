@@ -12,6 +12,7 @@ import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Random from "effect/Random";
 import * as Semaphore from "effect/Semaphore";
@@ -23,6 +24,8 @@ const AMBIENT_IMAGE_SUBDIR = "ambient-media/images";
 /** Per-profile cap. Individual uploads have the separate contract byte cap. */
 const MAX_AMBIENT_IMAGE_PROFILE_BYTES = 10 * 1024 * 1024;
 const MAX_AMBIENT_IMAGE_PROFILE_ASSETS = 256;
+export const AMBIENT_IMAGE_ORPHAN_GRACE_PERIOD_MS = 24 * 60 * 60 * 1_000;
+export const AMBIENT_IMAGE_ORPHAN_SWEEP_MAX_ASSETS = 32;
 const AMBIENT_IMAGE_ID_PATTERN = /^sha256-[a-f0-9]{64}\.(?:gif|jpe?g|png|webp)$/;
 const MAX_GIF_FRAMES = 240;
 const MAX_GIF_CUMULATIVE_PIXELS = 64_000_000;
@@ -71,6 +74,16 @@ export interface AmbientImageStoreShape {
   readonly resolveStoredImage: (id: string) => Effect.Effect<StoredAmbientImage, AmbientImageError>;
   /** Removal is only exposed through the HTTP route after a settings-reference check. */
   readonly removeStoredImage: (id: string) => Effect.Effect<void, AmbientImageError>;
+  /**
+   * Bounded startup maintenance. The caller must keep the reference source
+   * quiescent while this runs; each candidate is checked again immediately
+   * before deletion.
+   */
+  readonly sweepUnreferencedImages: (input: {
+    readonly isReferenced: (id: string) => Effect.Effect<boolean>;
+    readonly now?: Date;
+    readonly maxAssets?: number;
+  }) => Effect.Effect<{ readonly eligible: number; readonly removed: number }, AmbientImageError>;
 }
 
 export class AmbientImageStore extends Context.Service<AmbientImageStore, AmbientImageStoreShape>()(
@@ -519,6 +532,68 @@ function makeStore() {
             );
           }),
         ),
+      sweepUnreferencedImages: (input) =>
+        mutationSemaphore
+          .withPermits(1)(
+            Effect.gen(function* () {
+              const now = input.now?.getTime() ?? Date.now();
+              if (!Number.isFinite(now)) {
+                return yield* Effect.fail(new Error("Ambient image sweep time must be finite."));
+              }
+              const requestedMax =
+                input.maxAssets === undefined
+                  ? AMBIENT_IMAGE_ORPHAN_SWEEP_MAX_ASSETS
+                  : Math.floor(input.maxAssets);
+              if (!Number.isFinite(requestedMax) || requestedMax < 0) {
+                return yield* Effect.fail(
+                  new Error("Ambient image sweep asset limit must be a finite positive number."),
+                );
+              }
+              const maxAssets = Math.min(AMBIENT_IMAGE_ORPHAN_SWEEP_MAX_ASSETS, requestedMax);
+              if (maxAssets === 0) return { eligible: 0, removed: 0 };
+              yield* fs.makeDirectory(directory, { recursive: true });
+              const entries = (yield* fs.readDirectory(directory, { recursive: false }))
+                .filter((entry) => AMBIENT_IMAGE_ID_PATTERN.test(entry))
+                .toSorted()
+                .slice(0, MAX_AMBIENT_IMAGE_PROFILE_ASSETS);
+              let eligible = 0;
+              let removed = 0;
+
+              for (const entry of entries) {
+                if (eligible >= maxAssets) break;
+                const filePath = resolvePath(entry);
+                const stat = yield* fs.stat(filePath);
+                if (
+                  stat.type !== "File" ||
+                  Option.isNone(stat.mtime) ||
+                  now - stat.mtime.value.getTime() < AMBIENT_IMAGE_ORPHAN_GRACE_PERIOD_MS
+                ) {
+                  continue;
+                }
+
+                eligible += 1;
+                if (yield* input.isReferenced(entry)) continue;
+                // Give an in-flight reference update a chance to settle, then
+                // fail closed with a final fresh read immediately before removal.
+                yield* Effect.yieldNow;
+                if (yield* input.isReferenced(entry)) continue;
+                yield* fs.remove(filePath, { force: true });
+                removed += 1;
+              }
+              return { eligible, removed };
+            }),
+          )
+          .pipe(
+            Effect.mapError(
+              (cause) =>
+                new AmbientImageError({
+                  code: "storage-failed",
+                  status: 500,
+                  message: "Ambient image maintenance could not be completed.",
+                  cause,
+                }),
+            ),
+          ),
     } satisfies AmbientImageStoreShape;
   });
 }
