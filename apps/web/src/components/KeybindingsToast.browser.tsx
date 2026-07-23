@@ -1,6 +1,8 @@
 import "../index.css";
 
 import {
+  CODEX_DEFAULT_AUTO_COMPACT_TOKEN_LIMIT,
+  DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES,
   DEFAULT_CLIENT_SETTINGS,
   DEFAULT_SERVER_SETTINGS,
   EnvironmentId,
@@ -130,6 +132,7 @@ function createBaseServerConfig(): ServerConfig {
       },
     },
     clientSettings: { ...DEFAULT_CLIENT_SETTINGS, onboardingCompleted: true },
+    ambientExperienceCapabilities: DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES,
   };
 }
 

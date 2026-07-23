@@ -119,6 +119,154 @@ export const DEFAULT_AMBIANCE_SURFACE_COMPOSER = true;
 // Empty string means "follow the accent color configured in Appearance".
 export const DEFAULT_AMBIANCE_COLOR = "";
 
+export const MIN_AMBIENT_OPACITY = 0.05;
+export const MAX_AMBIENT_OPACITY = 1;
+export const DEFAULT_AMBIENT_OPACITY = 0.35;
+export const MIN_FALLING_EFFECT_SPEED = 0.25;
+export const MAX_FALLING_EFFECT_SPEED = 4;
+export const DEFAULT_FALLING_EFFECT_SPEED = 1;
+
+export const HexColor = TrimmedNonEmptyString.check(Schema.isPattern(/^#[0-9A-Fa-f]{6}$/)).pipe(
+  Schema.decodeTo(
+    Schema.String,
+    SchemaTransformation.transformOrFail({
+      decode: (value) => Effect.succeed(value.toLowerCase()),
+      encode: (value) => Effect.succeed(value.toLowerCase()),
+    }),
+  ),
+);
+export type HexColor = typeof HexColor.Type;
+
+export const AmbientColor = Schema.Union([Schema.Literal("auto"), HexColor]);
+export type AmbientColor = typeof AmbientColor.Type;
+export const DEFAULT_AMBIENT_COLOR: AmbientColor = "auto";
+
+export const AmbientOpacity = Schema.Number.check(
+  Schema.isBetween({
+    minimum: MIN_AMBIENT_OPACITY,
+    maximum: MAX_AMBIENT_OPACITY,
+  }),
+);
+export type AmbientOpacity = typeof AmbientOpacity.Type;
+
+export const FallingEffectKind = Schema.Literals(["snow", "rain", "matrix"]);
+export type FallingEffectKind = typeof FallingEffectKind.Type;
+export const DEFAULT_FALLING_EFFECTS_ENABLED = false;
+export const DEFAULT_FALLING_EFFECT_KIND: FallingEffectKind = "snow";
+
+export const FallingEffectSpeed = Schema.Number.check(
+  Schema.isBetween({
+    minimum: MIN_FALLING_EFFECT_SPEED,
+    maximum: MAX_FALLING_EFFECT_SPEED,
+  }),
+);
+export type FallingEffectSpeed = typeof FallingEffectSpeed.Type;
+
+export const YouTubeVideoId = TrimmedNonEmptyString.check(Schema.isPattern(/^[A-Za-z0-9_-]{11}$/));
+export type YouTubeVideoId = typeof YouTubeVideoId.Type;
+export const YouTubePlaylistId = TrimmedNonEmptyString.check(
+  Schema.isPattern(/^[A-Za-z0-9_-]{10,80}$/),
+);
+export type YouTubePlaylistId = typeof YouTubePlaylistId.Type;
+export const YouTubeSource = Schema.NullOr(
+  Schema.Union([
+    Schema.Struct({
+      kind: Schema.Literal("video"),
+      id: YouTubeVideoId,
+    }),
+    Schema.Struct({
+      kind: Schema.Literal("playlist"),
+      id: YouTubePlaylistId,
+    }),
+  ]),
+);
+export type YouTubeSource = typeof YouTubeSource.Type;
+
+export const AmbientMediaLayoutMode = Schema.Literals(["preset", "custom"]);
+export type AmbientMediaLayoutMode = typeof AmbientMediaLayoutMode.Type;
+export const AmbientMediaPresetPlacement = Schema.Literals(["bottom-left", "bottom-right"]);
+export type AmbientMediaPresetPlacement = typeof AmbientMediaPresetPlacement.Type;
+export const AmbientMediaPresetSize = Schema.Literals(["small", "medium", "large"]);
+export type AmbientMediaPresetSize = typeof AmbientMediaPresetSize.Type;
+
+export const DEFAULT_AMBIENT_VIDEO_ENABLED = false;
+export const DEFAULT_AMBIENT_VIDEO_SOURCE: YouTubeSource = null;
+export const DEFAULT_AMBIENT_VIDEO_LAYOUT_MODE: AmbientMediaLayoutMode = "preset";
+export const DEFAULT_AMBIENT_VIDEO_PRESET_PLACEMENT: AmbientMediaPresetPlacement = "bottom-right";
+export const DEFAULT_AMBIENT_VIDEO_PRESET_SIZE: AmbientMediaPresetSize = "medium";
+export const DEFAULT_AMBIENT_VIDEO_GLOW_ENABLED = false;
+
+// Ambient images intentionally use their own authenticated route and metadata
+// type instead of overloading sidebar branding. The initial metadata ceilings
+// match the repository's already-audited raster settings boundary; the upload
+// pipeline must additionally enforce total-pixel and GIF work budgets from the
+// ambient-media threat model before it creates one of these records.
+export const MAX_AMBIENT_IMAGE_FILE_BYTES = 1_000_000;
+export const MAX_AMBIENT_IMAGE_DIMENSION = 4096;
+export const MAX_AMBIENT_IMAGE_PIXEL_COUNT = 16_777_216;
+export const MAX_AMBIENT_IMAGE_ID_LENGTH = 96;
+export const MAX_AMBIENT_IMAGE_URL_LENGTH = 256;
+export const AmbientImageAssetId = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(MAX_AMBIENT_IMAGE_ID_LENGTH),
+  Schema.isPattern(/^sha256-[a-f0-9]{64}\.(?:gif|jpe?g|png|webp)$/),
+);
+export type AmbientImageAssetId = typeof AmbientImageAssetId.Type;
+export const AmbientImageMimeType = Schema.Literals([
+  "image/gif",
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+]);
+export type AmbientImageMimeType = typeof AmbientImageMimeType.Type;
+const AmbientImageAssetFields = Schema.Struct({
+  id: AmbientImageAssetId,
+  url: TrimmedNonEmptyString.check(
+    Schema.isMaxLength(MAX_AMBIENT_IMAGE_URL_LENGTH),
+    Schema.isPattern(/^\/api\/ambient-media\/image\/sha256-[a-f0-9]{64}\.(?:gif|jpe?g|png|webp)$/),
+  ),
+  mimeType: AmbientImageMimeType,
+  width: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: MAX_AMBIENT_IMAGE_DIMENSION })),
+  height: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: MAX_AMBIENT_IMAGE_DIMENSION })),
+  sizeBytes: Schema.Int.check(
+    Schema.isBetween({ minimum: 1, maximum: MAX_AMBIENT_IMAGE_FILE_BYTES }),
+  ),
+});
+const ambientImageMimeTypeForId = (id: AmbientImageAssetId): AmbientImageMimeType => {
+  const extension = id.slice(id.lastIndexOf(".") + 1);
+  switch (extension) {
+    case "gif":
+      return "image/gif";
+    case "jpg":
+    case "jpeg":
+      return "image/jpeg";
+    case "png":
+      return "image/png";
+    case "webp":
+      return "image/webp";
+    default:
+      // `AmbientImageAssetId` already proves this cannot happen. Keep the
+      // mapping total so changing the ID schema requires updating this check.
+      throw new Error("unsupported ambient image extension");
+  }
+};
+export const AmbientImageAsset = AmbientImageAssetFields.check(
+  Schema.makeFilter((asset) =>
+    asset.url === `/api/ambient-media/image/${asset.id}` &&
+    asset.mimeType === ambientImageMimeTypeForId(asset.id) &&
+    asset.width * asset.height <= MAX_AMBIENT_IMAGE_PIXEL_COUNT
+      ? undefined
+      : "must use a matching authenticated asset URL and MIME type within the ambient image pixel budget",
+  ),
+);
+export type AmbientImageAsset = typeof AmbientImageAsset.Type;
+
+export const DEFAULT_AMBIENT_IMAGE_ENABLED = false;
+export const DEFAULT_AMBIENT_IMAGE_ASSET: AmbientImageAsset | null = null;
+export const DEFAULT_AMBIENT_IMAGE_LAYOUT_MODE: AmbientMediaLayoutMode = "preset";
+export const DEFAULT_AMBIENT_IMAGE_PRESET_PLACEMENT: AmbientMediaPresetPlacement = "bottom-left";
+export const DEFAULT_AMBIENT_IMAGE_PRESET_SIZE: AmbientMediaPresetSize = "medium";
+export const DEFAULT_AMBIENT_IMAGE_GLOW_ENABLED = false;
+
 export const SidebarProjectSortOrder = Schema.Literals(["updated_at", "created_at", "manual"]);
 export type SidebarProjectSortOrder = typeof SidebarProjectSortOrder.Type;
 export const DEFAULT_SIDEBAR_PROJECT_SORT_ORDER: SidebarProjectSortOrder = "updated_at";
@@ -170,6 +318,69 @@ export const ClientSettingsSchema = Schema.Struct({
   diffWordWrap: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   continueBackgroundAnimations: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_CONTINUE_BACKGROUND_ANIMATIONS)),
+  ),
+  fallingEffectsEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECTS_ENABLED)),
+  ),
+  fallingEffectKind: FallingEffectKind.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_KIND)),
+  ),
+  fallingEffectColor: AmbientColor.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_COLOR)),
+  ),
+  fallingEffectOpacity: AmbientOpacity.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_OPACITY)),
+  ),
+  fallingEffectSpeed: FallingEffectSpeed.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_SPEED)),
+  ),
+  ambientVideoEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_VIDEO_ENABLED)),
+  ),
+  ambientVideoSource: YouTubeSource.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_VIDEO_SOURCE)),
+  ),
+  ambientVideoLayoutMode: AmbientMediaLayoutMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_VIDEO_LAYOUT_MODE)),
+  ),
+  ambientVideoPresetPlacement: AmbientMediaPresetPlacement.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_VIDEO_PRESET_PLACEMENT)),
+  ),
+  ambientVideoPresetSize: AmbientMediaPresetSize.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_VIDEO_PRESET_SIZE)),
+  ),
+  ambientVideoGlowEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_VIDEO_GLOW_ENABLED)),
+  ),
+  ambientVideoGlowColor: AmbientColor.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_COLOR)),
+  ),
+  ambientVideoGlowOpacity: AmbientOpacity.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_OPACITY)),
+  ),
+  ambientImageEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_IMAGE_ENABLED)),
+  ),
+  ambientImageAsset: Schema.NullOr(AmbientImageAsset).pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_IMAGE_ASSET)),
+  ),
+  ambientImageLayoutMode: AmbientMediaLayoutMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_IMAGE_LAYOUT_MODE)),
+  ),
+  ambientImagePresetPlacement: AmbientMediaPresetPlacement.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_IMAGE_PRESET_PLACEMENT)),
+  ),
+  ambientImagePresetSize: AmbientMediaPresetSize.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_IMAGE_PRESET_SIZE)),
+  ),
+  ambientImageGlowEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_IMAGE_GLOW_ENABLED)),
+  ),
+  ambientImageGlowColor: AmbientColor.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_COLOR)),
+  ),
+  ambientImageGlowOpacity: AmbientOpacity.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_OPACITY)),
   ),
   showSidebarSearch: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SHOW_SIDEBAR_SEARCH)),
@@ -279,6 +490,58 @@ export const ClientSettingsSchema = Schema.Struct({
   ),
 });
 export type ClientSettings = typeof ClientSettingsSchema.Type;
+
+export const AMBIENT_CLIENT_SETTINGS_KEYS = [
+  "fallingEffectsEnabled",
+  "fallingEffectKind",
+  "fallingEffectColor",
+  "fallingEffectOpacity",
+  "fallingEffectSpeed",
+  "ambientVideoEnabled",
+  "ambientVideoSource",
+  "ambientVideoLayoutMode",
+  "ambientVideoPresetPlacement",
+  "ambientVideoPresetSize",
+  "ambientVideoGlowEnabled",
+  "ambientVideoGlowColor",
+  "ambientVideoGlowOpacity",
+  "ambientImageEnabled",
+  "ambientImageAsset",
+  "ambientImageLayoutMode",
+  "ambientImagePresetPlacement",
+  "ambientImagePresetSize",
+  "ambientImageGlowEnabled",
+  "ambientImageGlowColor",
+  "ambientImageGlowOpacity",
+] as const satisfies ReadonlyArray<keyof ClientSettings>;
+export type AmbientClientSettings = Pick<
+  ClientSettings,
+  (typeof AMBIENT_CLIENT_SETTINGS_KEYS)[number]
+>;
+
+export const DEFAULT_AMBIENT_CLIENT_SETTINGS: AmbientClientSettings = {
+  fallingEffectsEnabled: DEFAULT_FALLING_EFFECTS_ENABLED,
+  fallingEffectKind: DEFAULT_FALLING_EFFECT_KIND,
+  fallingEffectColor: DEFAULT_AMBIENT_COLOR,
+  fallingEffectOpacity: DEFAULT_AMBIENT_OPACITY,
+  fallingEffectSpeed: DEFAULT_FALLING_EFFECT_SPEED,
+  ambientVideoEnabled: DEFAULT_AMBIENT_VIDEO_ENABLED,
+  ambientVideoSource: DEFAULT_AMBIENT_VIDEO_SOURCE,
+  ambientVideoLayoutMode: DEFAULT_AMBIENT_VIDEO_LAYOUT_MODE,
+  ambientVideoPresetPlacement: DEFAULT_AMBIENT_VIDEO_PRESET_PLACEMENT,
+  ambientVideoPresetSize: DEFAULT_AMBIENT_VIDEO_PRESET_SIZE,
+  ambientVideoGlowEnabled: DEFAULT_AMBIENT_VIDEO_GLOW_ENABLED,
+  ambientVideoGlowColor: DEFAULT_AMBIENT_COLOR,
+  ambientVideoGlowOpacity: DEFAULT_AMBIENT_OPACITY,
+  ambientImageEnabled: DEFAULT_AMBIENT_IMAGE_ENABLED,
+  ambientImageAsset: DEFAULT_AMBIENT_IMAGE_ASSET,
+  ambientImageLayoutMode: DEFAULT_AMBIENT_IMAGE_LAYOUT_MODE,
+  ambientImagePresetPlacement: DEFAULT_AMBIENT_IMAGE_PRESET_PLACEMENT,
+  ambientImagePresetSize: DEFAULT_AMBIENT_IMAGE_PRESET_SIZE,
+  ambientImageGlowEnabled: DEFAULT_AMBIENT_IMAGE_GLOW_ENABLED,
+  ambientImageGlowColor: DEFAULT_AMBIENT_COLOR,
+  ambientImageGlowOpacity: DEFAULT_AMBIENT_OPACITY,
+};
 
 export const DEFAULT_CLIENT_SETTINGS: ClientSettings = Schema.decodeSync(ClientSettingsSchema)({});
 
@@ -770,6 +1033,27 @@ export const ClientSettingsPatch = Schema.Struct({
   diffIgnoreWhitespace: Schema.optionalKey(Schema.Boolean),
   diffWordWrap: Schema.optionalKey(Schema.Boolean),
   continueBackgroundAnimations: Schema.optionalKey(Schema.Boolean),
+  fallingEffectsEnabled: Schema.optionalKey(Schema.Boolean),
+  fallingEffectKind: Schema.optionalKey(FallingEffectKind),
+  fallingEffectColor: Schema.optionalKey(AmbientColor),
+  fallingEffectOpacity: Schema.optionalKey(AmbientOpacity),
+  fallingEffectSpeed: Schema.optionalKey(FallingEffectSpeed),
+  ambientVideoEnabled: Schema.optionalKey(Schema.Boolean),
+  ambientVideoSource: Schema.optionalKey(YouTubeSource),
+  ambientVideoLayoutMode: Schema.optionalKey(AmbientMediaLayoutMode),
+  ambientVideoPresetPlacement: Schema.optionalKey(AmbientMediaPresetPlacement),
+  ambientVideoPresetSize: Schema.optionalKey(AmbientMediaPresetSize),
+  ambientVideoGlowEnabled: Schema.optionalKey(Schema.Boolean),
+  ambientVideoGlowColor: Schema.optionalKey(AmbientColor),
+  ambientVideoGlowOpacity: Schema.optionalKey(AmbientOpacity),
+  ambientImageEnabled: Schema.optionalKey(Schema.Boolean),
+  ambientImageAsset: Schema.optionalKey(Schema.NullOr(AmbientImageAsset)),
+  ambientImageLayoutMode: Schema.optionalKey(AmbientMediaLayoutMode),
+  ambientImagePresetPlacement: Schema.optionalKey(AmbientMediaPresetPlacement),
+  ambientImagePresetSize: Schema.optionalKey(AmbientMediaPresetSize),
+  ambientImageGlowEnabled: Schema.optionalKey(Schema.Boolean),
+  ambientImageGlowColor: Schema.optionalKey(AmbientColor),
+  ambientImageGlowOpacity: Schema.optionalKey(AmbientOpacity),
   showSidebarSearch: Schema.optionalKey(Schema.Boolean),
   showSidebarMascot: Schema.optionalKey(Schema.Boolean),
   showSidebarAttribution: Schema.optionalKey(Schema.Boolean),

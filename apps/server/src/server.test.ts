@@ -9,6 +9,7 @@ import { brotliCompressSync, constants as zlibConstants, gzipSync } from "node:z
 
 import {
   CommandId,
+  DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES,
   DEFAULT_SERVER_SETTINGS,
   EnvironmentId,
   EventId,
@@ -499,6 +500,7 @@ const buildAppUnderTest = (options?: {
       desktopBootstrapToken: defaultDesktopBootstrapToken,
       autoBootstrapProjectFromCwd: false,
       logWebSocketEvents: false,
+      ambientExperienceCapabilities: DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES,
       ...options?.config,
     };
     const layerConfig = Layer.succeed(ServerConfig, config);
@@ -2446,9 +2448,18 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect("accepts websocket rpc handshake with a bootstrapped browser session cookie", () =>
+  it.effect("exposes configured ambient capabilities through authenticated websocket rpc", () =>
     Effect.gen(function* () {
-      yield* buildAppUnderTest();
+      const ambientExperienceCapabilities = {
+        ...DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES,
+        atmosphere: true,
+        youtubePlayer: true,
+      };
+      yield* buildAppUnderTest({
+        config: {
+          ambientExperienceCapabilities,
+        },
+      });
 
       const { response: bootstrapResponse, cookie } = yield* bootstrapBrowserSession();
 
@@ -2465,6 +2476,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
       assert.equal(response.environment.environmentId, testEnvironmentDescriptor.environmentId);
       assert.equal(response.auth.policy, "desktop-managed-local");
+      assert.deepEqual(response.ambientExperienceCapabilities, ambientExperienceCapabilities);
     }).pipe(Effect.provide(makeProductionHttpServerTestLayer())),
   );
 
@@ -3161,6 +3173,51 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
       assert.deepEqual(response.issues, []);
       assert.deepEqual(response.keybindings, [resolved]);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("rejects malformed ambient client settings patches without mutating settings", () =>
+    Effect.gen(function* () {
+      const persistedSettings = {
+        ...DEFAULT_CLIENT_SETTINGS,
+        timestampFormat: "24-hour" as const,
+        fallingEffectSpeed: 2,
+      };
+      let updateAttempts = 0;
+
+      yield* buildAppUnderTest({
+        layers: {
+          clientSettings: {
+            getSettings: Effect.succeed(persistedSettings),
+            updateSettings: () => {
+              updateAttempts += 1;
+              return Effect.die("malformed client settings patch reached the mutation service");
+            },
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const before = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) => client[WS_METHODS.serverGetClientSettings]({})),
+      );
+      const malformedUpdate = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.serverUpdateClientSettings]({
+            patch: {
+              fallingEffectSpeed: 99,
+            },
+          } as never),
+        ).pipe(Effect.exit),
+      );
+      const after = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) => client[WS_METHODS.serverGetClientSettings]({})),
+      );
+
+      assertTrue(malformedUpdate._tag === "Failure");
+      assert.equal(updateAttempts, 0);
+      assert.deepEqual(before, persistedSettings);
+      assert.deepEqual(after, persistedSettings);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

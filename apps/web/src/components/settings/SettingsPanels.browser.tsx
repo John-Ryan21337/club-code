@@ -3,6 +3,7 @@ import {
   type AuthAccessStreamEvent,
   type AuthAccessSnapshot,
   AuthSessionId,
+  DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES,
   DEFAULT_CLIENT_SETTINGS,
   DEFAULT_SERVER_SETTINGS,
   EnvironmentId,
@@ -232,6 +233,7 @@ function createBaseServerConfig(): ServerConfig {
     },
     settings: DEFAULT_SERVER_SETTINGS,
     clientSettings: { ...DEFAULT_CLIENT_SETTINGS, onboardingCompleted: true },
+    ambientExperienceCapabilities: DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES,
   };
 }
 

@@ -1,10 +1,15 @@
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vitest";
 
-import { ServerProvider, ServerRuntimeLayerDiagnosticsResult } from "./server.ts";
+import {
+  AmbientExperienceCapabilities,
+  ServerProvider,
+  ServerRuntimeLayerDiagnosticsResult,
+} from "./server.ts";
 
 const decodeServerProvider = Schema.decodeUnknownSync(ServerProvider);
 const decodeRuntimeLayerDiagnostics = Schema.decodeUnknownSync(ServerRuntimeLayerDiagnosticsResult);
+const decodeAmbientExperienceCapabilities = Schema.decodeUnknownSync(AmbientExperienceCapabilities);
 const PIPELINE_SENTINEL = "SECRET_PROMPT_MUST_NOT_SURVIVE";
 
 function providerPipelineFixture() {
@@ -475,5 +480,23 @@ describe("ServerProvider", () => {
         errors: [{ source: "", message: "bad" }],
       }),
     ).toThrow();
+  });
+});
+
+describe("AmbientExperienceCapabilities", () => {
+  it("defaults every omitted capability to disabled", () => {
+    expect(decodeAmbientExperienceCapabilities({})).toEqual({
+      version: 1,
+      atmosphere: false,
+      ambientImage: false,
+      youtubePlayer: false,
+      youtubePublicDiscovery: false,
+      youtubeAccountConnection: false,
+      workflowObservatory: false,
+    });
+  });
+
+  it("rejects unsupported capability contract versions", () => {
+    expect(() => decodeAmbientExperienceCapabilities({ version: 2 })).toThrow();
   });
 });

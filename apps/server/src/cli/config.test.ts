@@ -11,6 +11,7 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
 import {
+  DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES,
   DesktopBackendBootstrap,
   type DesktopBackendBootstrap as DesktopBackendBootstrapValue,
 } from "@cafecode/contracts";
@@ -21,6 +22,33 @@ import { resolveBaseDir } from "../os-jank.ts";
 import { resolveServerConfig } from "./config.ts";
 
 const encodeDesktopBootstrap = Schema.encodeEffect(Schema.fromJsonString(DesktopBackendBootstrap));
+
+const ambientCapabilityEnvironmentCases = [
+  {
+    environmentName: "CAFE_CODE_AMBIENT_ATMOSPHERE_ENABLED",
+    capability: "atmosphere",
+  },
+  {
+    environmentName: "CAFE_CODE_AMBIENT_IMAGE_ENABLED",
+    capability: "ambientImage",
+  },
+  {
+    environmentName: "CAFE_CODE_YOUTUBE_PLAYER_ENABLED",
+    capability: "youtubePlayer",
+  },
+  {
+    environmentName: "CAFE_CODE_YOUTUBE_PUBLIC_DISCOVERY_ENABLED",
+    capability: "youtubePublicDiscovery",
+  },
+  {
+    environmentName: "CAFE_CODE_YOUTUBE_ACCOUNT_CONNECTION_ENABLED",
+    capability: "youtubeAccountConnection",
+  },
+  {
+    environmentName: "CAFE_CODE_WORKFLOW_OBSERVATORY_ENABLED",
+    capability: "workflowObservatory",
+  },
+] as const;
 
 const makeDesktopBootstrap = (
   overrides: Partial<DesktopBackendBootstrapValue> = {},
@@ -34,6 +62,29 @@ const makeDesktopBootstrap = (
   ...overrides,
 });
 
+const resolveAmbientCapabilityConfig = (baseDir: string, env: Readonly<Record<string, string>>) =>
+  resolveServerConfig(
+    {
+      mode: Option.some("web"),
+      port: Option.some(3773),
+      httpsPort: Option.none(),
+      host: Option.none(),
+      baseDir: Option.some(baseDir),
+      cwd: Option.none(),
+      devUrl: Option.none(),
+      noBrowser: Option.some(true),
+      noHttps: Option.some(true),
+      bootstrapFd: Option.none(),
+      autoBootstrapProjectFromCwd: Option.none(),
+      logWebSocketEvents: Option.none(),
+    },
+    Option.none(),
+  ).pipe(
+    Effect.provide(
+      Layer.mergeAll(ConfigProvider.layer(ConfigProvider.fromEnv({ env })), NetService.layer),
+    ),
+  );
+
 it.layer(NodeServices.layer)("cli config resolution", (it) => {
   const defaultObservabilityConfig = {
     traceMinLevel: "Info",
@@ -45,6 +96,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     otlpMetricsUrl: undefined,
     otlpExportIntervalMs: 10_000,
     otlpServiceName: "cafe-code-server",
+    ambientExperienceCapabilities: DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES,
   } as const;
 
   const openBootstrapFd = Effect.fn(function* (payload: DesktopBackendBootstrapValue) {
@@ -177,6 +229,47 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
 
       expect(resolved.devUrl).toBeUndefined();
       expect(resolved.stateDir).toBe(derivedPaths.stateDir);
+    }),
+  );
+
+  it.effect("maps each ambient capability environment gate independently", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-cli-config-ambient-gates-" });
+
+      for (const testCase of ambientCapabilityEnvironmentCases) {
+        const resolved = yield* resolveAmbientCapabilityConfig(baseDir, {
+          [testCase.environmentName]: "true",
+        });
+
+        expect(resolved.ambientExperienceCapabilities).toEqual({
+          ...DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES,
+          [testCase.capability]: true,
+        });
+      }
+    }),
+  );
+
+  it.effect("keeps omitted and malformed ambient capability gates disabled", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const baseDir = yield* fs.makeTempDirectoryScoped({
+        prefix: "t3-cli-config-ambient-invalid-gates-",
+      });
+
+      const omitted = yield* resolveAmbientCapabilityConfig(baseDir, {});
+      expect(omitted.ambientExperienceCapabilities).toEqual(
+        DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES,
+      );
+
+      for (const testCase of ambientCapabilityEnvironmentCases) {
+        const malformed = yield* resolveAmbientCapabilityConfig(baseDir, {
+          [testCase.environmentName]: "not-a-boolean",
+        });
+        expect(malformed.ambientExperienceCapabilities).toEqual(
+          DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES,
+        );
+      }
     }),
   );
 
