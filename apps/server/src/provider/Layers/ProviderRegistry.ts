@@ -112,7 +112,17 @@ export const mergeProviderSnapshot = (
     ? nextProvider
     : {
         ...nextProvider,
-        models: mergeProviderModels(previousProvider.models, nextProvider.models),
+        // Codex cloud and Codex OSS are different model catalogs even when
+        // they share an instance id. Never carry cloud slugs into LM Studio
+        // (or stale local slugs back into cloud mode) across a settings-driven
+        // instance rebuild.
+        models:
+          previousProvider.driver === ProviderDriverKind.make("codex") &&
+          nextProvider.driver === ProviderDriverKind.make("codex") &&
+          previousProvider.auth.type !== nextProvider.auth.type &&
+          (previousProvider.auth.type === "local" || nextProvider.auth.type === "local")
+            ? nextProvider.models
+            : mergeProviderModels(previousProvider.models, nextProvider.models),
         // Carry forward event-sourced account rate limits when an incoming snapshot
         // omits them. Claude's periodic probe never sends a prompt, so it produces no
         // `accountRateLimits`; without this, each refresh would wipe the limits accrued

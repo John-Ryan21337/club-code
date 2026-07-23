@@ -733,6 +733,15 @@ export const CodexSettings = makeProviderSettingsSchema(
         },
       }),
     ),
+    ossMode: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(false)),
+      Schema.annotateKey({
+        title: "LM Studio mode",
+        description:
+          "Launch Codex with its LM Studio local provider. Start LM Studio's API server on localhost:1234 first.",
+        providerSettingsForm: { control: "switch" },
+      }),
+    ),
     homePath: TrimmedString.pipe(
       Schema.withDecodingDefault(Effect.succeed("")),
       Schema.annotateKey({
@@ -776,7 +785,14 @@ export const CodexSettings = makeProviderSettingsSchema(
     ),
   },
   {
-    order: ["runtimeSource", "binaryPath", "homePath", "shadowHomePath", "autoCompactTokenLimit"],
+    order: [
+      "runtimeSource",
+      "binaryPath",
+      "ossMode",
+      "homePath",
+      "shadowHomePath",
+      "autoCompactTokenLimit",
+    ],
   },
 );
 export type CodexSettings = typeof CodexSettings.Type;
@@ -981,6 +997,7 @@ const CodexSettingsPatch = Schema.Struct({
   enabled: Schema.optionalKey(Schema.Boolean),
   binaryPath: Schema.optionalKey(TrimmedString),
   runtimeSource: Schema.optionalKey(ProviderCliRuntimeSource),
+  ossMode: Schema.optionalKey(Schema.Boolean),
   homePath: Schema.optionalKey(TrimmedString),
   shadowHomePath: Schema.optionalKey(TrimmedString),
   customModels: Schema.optionalKey(Schema.Array(Schema.String)),

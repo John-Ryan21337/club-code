@@ -126,20 +126,24 @@ const EnvServerConfig = Config.all({
     Config.boolean,
   ),
   logWebSocketEvents: cafeCodeOptionalValueConfig("CAFE_CODE_LOG_WS_EVENTS", Config.boolean),
+  youtubePublicDiscoveryApiKey: cafeCodeOptionalValueConfig(
+    "CAFE_CODE_YOUTUBE_API_KEY",
+    Config.string,
+  ),
   ambientExperienceAtmosphereEnabled: cafeCodeConfigWithDefault(
     "CAFE_CODE_AMBIENT_ATMOSPHERE_ENABLED",
     Config.boolean,
-    false,
+    true,
   ),
   ambientExperienceImageEnabled: cafeCodeConfigWithDefault(
     "CAFE_CODE_AMBIENT_IMAGE_ENABLED",
     Config.boolean,
-    false,
+    true,
   ),
   ambientExperienceYoutubePlayerEnabled: cafeCodeConfigWithDefault(
     "CAFE_CODE_YOUTUBE_PLAYER_ENABLED",
     Config.boolean,
-    false,
+    true,
   ),
   ambientExperienceYoutubePublicDiscoveryEnabled: cafeCodeConfigWithDefault(
     "CAFE_CODE_YOUTUBE_PUBLIC_DISCOVERY_ENABLED",
@@ -154,7 +158,7 @@ const EnvServerConfig = Config.all({
   ambientExperienceWorkflowObservatoryEnabled: cafeCodeConfigWithDefault(
     "CAFE_CODE_WORKFLOW_OBSERVATORY_ENABLED",
     Config.boolean,
-    false,
+    true,
   ),
 });
 
@@ -413,6 +417,9 @@ export const resolveServerConfig = (
       desktopBootstrapToken,
       autoBootstrapProjectFromCwd,
       logWebSocketEvents,
+      ...(env.youtubePublicDiscoveryApiKey
+        ? { youtubePublicDiscoveryApiKey: env.youtubePublicDiscoveryApiKey }
+        : {}),
       ambientExperienceCapabilities,
       providerDaemon: bootstrap?.providerDaemon,
       providerSupervisor: undefined,

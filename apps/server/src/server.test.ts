@@ -16,6 +16,7 @@ import {
   GitCommandError,
   KeybindingRule,
   MessageId,
+  MAX_AMBIENT_IMAGE_FILE_BYTES,
   ExternalLauncherError,
   type OrchestrationThreadShell,
   type OrchestrationCommand,
@@ -109,6 +110,8 @@ import {
   type UsageStatsServiceShape,
 } from "./usageStats/Services/UsageStatsService.ts";
 import { BrandingImageStoreLive } from "./branding/BrandingImageStore.ts";
+import { AmbientImageStoreLive } from "./ambientMedia/AmbientImageStore.ts";
+import { YouTubePublicDiscoveryLive } from "./ambientMedia/YouTubePublicDiscovery.ts";
 import {
   BrowserTraceCollector,
   type BrowserTraceCollectorShape,
@@ -168,7 +171,7 @@ const testEnvironmentDescriptor = {
 };
 const tinyPngBytes = Uint8Array.from(
   Buffer.from(
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=",
     "base64",
   ),
 );
@@ -960,6 +963,8 @@ const buildAppUnderTest = (options?: {
       Layer.provide(workspaceAndProjectServicesLayer),
       Layer.provideMerge(FetchHttpClient.layer),
       Layer.provideMerge(BrandingImageStoreLive),
+      Layer.provideMerge(AmbientImageStoreLive),
+      Layer.provideMerge(YouTubePublicDiscoveryLive),
       Layer.provide(layerConfig),
     );
 
@@ -1366,6 +1371,30 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       const response = yield* HttpClient.get("/");
       assert.equal(response.status, 200);
       assert.include(yield* response.text, "router-static-ok");
+      const contentSecurityPolicy = getHeader(response.headers, "content-security-policy") ?? "";
+      assert.include(contentSecurityPolicy, "default-src 'self'");
+      assert.include(contentSecurityPolicy, "script-src 'self' 'wasm-unsafe-eval'");
+      assert.include(contentSecurityPolicy, "style-src 'self' https://fonts.googleapis.com");
+      assert.include(contentSecurityPolicy, "style-src-attr 'unsafe-inline'");
+      assert.include(contentSecurityPolicy, "font-src 'self' https://fonts.gstatic.com data:");
+      assert.include(contentSecurityPolicy, "img-src 'self' data: blob:");
+      assert.include(contentSecurityPolicy, "media-src 'self' blob:");
+      assert.include(contentSecurityPolicy, "worker-src 'self' blob:");
+      assert.include(contentSecurityPolicy, "connect-src 'self' http: https: ws: wss:");
+      assert.equal(
+        contentSecurityPolicy.split("; ").find((directive) => directive.startsWith("frame-src ")),
+        "frame-src https://www.youtube-nocookie.com",
+      );
+      assert.include(contentSecurityPolicy, "object-src 'none'");
+      assert.include(contentSecurityPolicy, "frame-ancestors 'none'");
+      assert.notInclude(contentSecurityPolicy, "'unsafe-eval'");
+      assert.equal(getHeader(response.headers, "referrer-policy"), "no-referrer");
+      assert.equal(getHeader(response.headers, "x-content-type-options"), "nosniff");
+      assert.equal(getHeader(response.headers, "x-frame-options"), "DENY");
+      assert.equal(
+        getHeader(response.headers, "permissions-policy"),
+        'camera=(), fullscreen=(self "https://www.youtube-nocookie.com"), geolocation=(), microphone=(), payment=(), usb=()',
+      );
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
@@ -2792,6 +2821,147 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.isFalse((yield* unsupportedResponse.text).includes("data:image"));
       assert.isFalse((yield* invalidResponse.text).includes("data:image"));
       assert.isFalse((yield* missingResponse.text).includes("data:image"));
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("uploads ambient images and bounds chunked bodies without Content-Length", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+      const cookie = yield* getAuthenticatedSessionCookieHeader();
+
+      const uploadResponse = yield* HttpClient.post("/api/ambient-media/image", {
+        headers: { cookie, "content-type": "image/png" },
+        body: HttpBody.uint8Array(tinyPngBytes, "image/png"),
+      });
+      const uploadBody = (yield* uploadResponse.json) as {
+        readonly ambientImage: { readonly id: string; readonly url: string };
+      };
+      assert.equal(uploadResponse.status, 200);
+      assert.match(uploadBody.ambientImage.id, /^sha256-[a-f0-9]{64}\.png$/);
+
+      const imageResponse = yield* HttpClient.get(uploadBody.ambientImage.url, {
+        headers: { cookie },
+      });
+      assert.equal(imageResponse.status, 200);
+      assert.deepEqual(
+        Array.from(new Uint8Array(yield* imageResponse.arrayBuffer)),
+        Array.from(tinyPngBytes),
+      );
+
+      const uploadUrl = yield* getHttpServerUrl("/api/ambient-media/image");
+      const oversizedStatus = yield* Effect.promise(
+        () =>
+          new Promise<number>((resolve, reject) => {
+            const request = NodeHttp.request(
+              uploadUrl,
+              {
+                method: "POST",
+                headers: {
+                  cookie,
+                  "content-type": "image/png",
+                  "transfer-encoding": "chunked",
+                },
+              },
+              (response) => {
+                response.resume();
+                response.on("end", () => resolve(response.statusCode ?? 0));
+              },
+            );
+            request.on("error", reject);
+            request.end(Buffer.alloc(MAX_AMBIENT_IMAGE_FILE_BYTES + 2));
+          }),
+      );
+      assert.equal(oversizedStatus, 413);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("guards public YouTube discovery with auth, capability, and a server-only key", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest({
+        config: {
+          ambientExperienceCapabilities: {
+            ...DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES,
+            youtubePublicDiscovery: true,
+          },
+        },
+      });
+      const unauthenticated = yield* HttpClient.post("/api/ambient-media/youtube/search", {
+        body: HttpBody.jsonUnsafe({ query: "ambient", maxResults: 8 }),
+      });
+      const cookie = yield* getAuthenticatedSessionCookieHeader();
+      const invalid = yield* HttpClient.post("/api/ambient-media/youtube/search", {
+        headers: { cookie },
+        body: HttpBody.jsonUnsafe({ query: "\n", maxResults: 8 }),
+      });
+      const malformed = yield* HttpClient.post("/api/ambient-media/youtube/search", {
+        headers: { cookie, "content-type": "application/json" },
+        body: HttpBody.text("{"),
+      });
+      const unavailable = yield* HttpClient.post("/api/ambient-media/youtube/search", {
+        headers: { cookie },
+        body: HttpBody.jsonUnsafe({ query: "ambient", maxResults: 8 }),
+      });
+      const discoveryUrl = yield* getHttpServerUrl("/api/ambient-media/youtube/search");
+      const oversized = yield* Effect.promise(
+        () =>
+          new Promise<{ readonly status: number; readonly body: string }>((resolve, reject) => {
+            const request = NodeHttp.request(
+              discoveryUrl,
+              {
+                method: "POST",
+                headers: {
+                  cookie,
+                  "content-type": "application/json",
+                  "transfer-encoding": "chunked",
+                },
+              },
+              (response) => {
+                const chunks: Buffer[] = [];
+                response.on("data", (chunk: Buffer) => chunks.push(chunk));
+                response.on("end", () =>
+                  resolve({
+                    status: response.statusCode ?? 0,
+                    body: Buffer.concat(chunks).toString("utf8"),
+                  }),
+                );
+              },
+            );
+            request.on("error", reject);
+            request.end(
+              JSON.stringify({
+                query: "x".repeat(1_100),
+                maxResults: 8,
+              }),
+            );
+          }),
+      );
+
+      assert.equal(unauthenticated.status, 401);
+      assert.equal(invalid.status, 400);
+      assert.deepEqual((yield* invalid.json) as unknown, { error: "invalid-query" });
+      assert.equal(malformed.status, 400);
+      assert.deepEqual((yield* malformed.json) as unknown, { error: "invalid-query" });
+      assert.equal(oversized.status, 413);
+      assert.deepEqual(JSON.parse(oversized.body), { error: "payload-too-large" });
+      assert.equal(unavailable.status, 503);
+      assert.deepEqual((yield* unavailable.json) as unknown, { error: "unavailable" });
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("rejects unauthenticated ambient image reads, uploads, and removals", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+      const id = `sha256-${"c".repeat(64)}.png`;
+      const uploadResponse = yield* HttpClient.post("/api/ambient-media/image", {
+        headers: { "content-type": "image/png" },
+        body: HttpBody.uint8Array(tinyPngBytes, "image/png"),
+      });
+      const imageResponse = yield* HttpClient.get(`/api/ambient-media/image/${id}`);
+      const removeResponse = yield* HttpClient.del(`/api/ambient-media/image/${id}`);
+
+      assert.equal(uploadResponse.status, 401);
+      assert.equal(imageResponse.status, 401);
+      assert.equal(removeResponse.status, 401);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

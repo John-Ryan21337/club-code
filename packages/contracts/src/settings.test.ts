@@ -7,7 +7,6 @@ import {
   ClientSettingsSchema,
   CodexSettings,
   ClaudeSettings,
-  CODEX_DEFAULT_AUTO_COMPACT_TOKEN_LIMIT,
   DEFAULT_AMBIENT_CLIENT_SETTINGS,
   DEFAULT_AMBIENT_COLOR,
   DEFAULT_AMBIENT_IMAGE_ASSET,
@@ -631,6 +630,21 @@ describe("provider settings", () => {
   it("defaults Codex and Claude provider runtime source to system", () => {
     expect(decodeCodexSettings({}).runtimeSource).toBe("system");
     expect(decodeClaudeSettings({}).runtimeSource).toBe("system");
+  });
+
+  it("defaults local model mode off and persists it through provider patches", () => {
+    expect(decodeCodexSettings({}).ossMode).toBe(false);
+    expect(
+      decodeServerSettingsPatch({
+        providers: {
+          codex: { ossMode: true },
+        },
+      }),
+    ).toEqual({
+      providers: {
+        codex: { ossMode: true },
+      },
+    });
   });
 
   it("accepts bundled provider runtime source in server settings patches", () => {

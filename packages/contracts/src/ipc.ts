@@ -314,6 +314,49 @@ export const DesktopServerExposureStateSchema = Schema.Struct({
   advertisedHost: Schema.NullOr(Schema.String),
 });
 
+export const MIN_DESKTOP_WINDOW_OPACITY = 0.65;
+export const MAX_DESKTOP_WINDOW_OPACITY = 1;
+export const DEFAULT_DESKTOP_WINDOW_OPACITY = 1;
+
+export const DesktopWindowOpacityValueSchema = Schema.Number.check(
+  Schema.isBetween({
+    minimum: MIN_DESKTOP_WINDOW_OPACITY,
+    maximum: MAX_DESKTOP_WINDOW_OPACITY,
+  }),
+);
+export type DesktopWindowOpacityValue = typeof DesktopWindowOpacityValueSchema.Type;
+
+export const DesktopWindowOpacityPreferenceSchema = Schema.Struct({
+  enabled: Schema.Boolean,
+  opacity: DesktopWindowOpacityValueSchema,
+});
+export type DesktopWindowOpacityPreference = typeof DesktopWindowOpacityPreferenceSchema.Type;
+
+export const DesktopWindowOpacityReasonSchema = Schema.NullOr(
+  Schema.Literals([
+    "unsupported-platform",
+    "release-not-validated",
+    "apply-failed",
+    "persistence-failed",
+    "safe-reset-failed",
+  ]),
+);
+export type DesktopWindowOpacityReason = typeof DesktopWindowOpacityReasonSchema.Type;
+
+/**
+ * Desktop-local opacity state. `opacity` remembers the slider preference while
+ * `effectiveOpacity` is the value confirmed for the live BrowserWindows.
+ * A null value means a failed rollback/reset left the live registry unknown.
+ */
+export const DesktopWindowOpacityStateSchema = Schema.Struct({
+  supported: Schema.Boolean,
+  enabled: Schema.Boolean,
+  opacity: DesktopWindowOpacityValueSchema,
+  effectiveOpacity: Schema.NullOr(DesktopWindowOpacityValueSchema),
+  reason: DesktopWindowOpacityReasonSchema,
+});
+export type DesktopWindowOpacityState = typeof DesktopWindowOpacityStateSchema.Type;
+
 export interface PickFolderOptions {
   initialPath?: string | null;
 }
@@ -366,6 +409,10 @@ export interface DesktopBridge {
   setServerExposureMode: (mode: DesktopServerExposureMode) => Promise<DesktopServerExposureState>;
   setServerHttpsEnabled: (enabled: boolean) => Promise<DesktopServerExposureState>;
   getAdvertisedEndpoints: () => Promise<readonly AdvertisedEndpoint[]>;
+  getWindowOpacityState: () => Promise<DesktopWindowOpacityState>;
+  setWindowOpacityPreference: (
+    preference: DesktopWindowOpacityPreference,
+  ) => Promise<DesktopWindowOpacityState>;
   pickFolder: (options?: PickFolderOptions) => Promise<string | null>;
   confirm: (message: string) => Promise<boolean>;
   setTheme: (theme: DesktopTheme) => Promise<void>;

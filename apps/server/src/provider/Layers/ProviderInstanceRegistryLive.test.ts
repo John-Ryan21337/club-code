@@ -38,7 +38,7 @@ import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 
 import { ServerConfig } from "../../config.ts";
 import { ClaudeDriver } from "../Drivers/ClaudeDriver.ts";
-import { CodexDriver } from "../Drivers/CodexDriver.ts";
+import { CodexDriver, resolveCodexAuthActions } from "../Drivers/CodexDriver.ts";
 import { NoOpProviderEventLoggers, ProviderEventLoggers } from "./ProviderEventLoggers.ts";
 import { makeProviderInstanceRegistry } from "./ProviderInstanceRegistryLive.ts";
 
@@ -53,6 +53,7 @@ const makeCodexConfig = (overrides: Partial<CodexSettings>): CodexSettings => ({
   enabled: false,
   binaryPath: "codex",
   runtimeSource: "system",
+  ossMode: false,
   homePath: "",
   shadowHomePath: "",
   customModels: [],
@@ -67,6 +68,23 @@ const makeClaudeConfig = (overrides: Partial<ClaudeSettings>): ClaudeSettings =>
   customModels: [],
   launchArgs: "",
   ...overrides,
+});
+
+it("never offers the cloud login action for Codex OSS", () => {
+  expect(
+    resolveCodexAuthActions({
+      ossMode: true,
+      runtimeSource: "bundled",
+      platform: "win32",
+    }),
+  ).toBeUndefined();
+  expect(
+    resolveCodexAuthActions({
+      ossMode: false,
+      runtimeSource: "bundled",
+      platform: "win32",
+    }),
+  ).toEqual({ login: true });
 });
 
 describe("ProviderInstanceRegistryLive — multi-instance codex slice", () => {

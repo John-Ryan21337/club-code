@@ -774,12 +774,12 @@ export const AMBIENT_EXPERIENCE_CAPABILITIES_VERSION = 1 as const;
 
 export const DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES = {
   version: AMBIENT_EXPERIENCE_CAPABILITIES_VERSION,
-  atmosphere: false,
-  ambientImage: false,
-  youtubePlayer: false,
+  atmosphere: true,
+  ambientImage: true,
+  youtubePlayer: true,
   youtubePublicDiscovery: false,
   youtubeAccountConnection: false,
-  workflowObservatory: false,
+  workflowObservatory: true,
 } as const;
 
 const AmbientExperienceCapabilityEnabled = Schema.Boolean.pipe(

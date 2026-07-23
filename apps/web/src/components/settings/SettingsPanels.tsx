@@ -120,6 +120,10 @@ import {
   uploadSidebarBrandImage,
 } from "../../brandingImages";
 import { ColorWheelPicker } from "./ColorWheelPicker";
+import { AmbientImageSettings } from "./AmbientImageSettings";
+import { WindowAtmosphereSettings } from "./WindowAtmosphereSettings";
+import { AmbientVideoSettings } from "./AmbientVideoSettings";
+import { WindowOpacitySettings } from "./WindowOpacitySettings";
 
 const THEME_OPTIONS = [
   {
@@ -402,6 +406,21 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.ambianceColor !== DEFAULT_UNIFIED_SETTINGS.ambianceColor
         ? ["Ambiance"]
         : []),
+      ...(settings.fallingEffectsEnabled !== DEFAULT_UNIFIED_SETTINGS.fallingEffectsEnabled
+        ? ["Falling effects"]
+        : []),
+      ...(settings.fallingEffectKind !== DEFAULT_UNIFIED_SETTINGS.fallingEffectKind
+        ? ["Falling effect"]
+        : []),
+      ...(settings.fallingEffectColor !== DEFAULT_UNIFIED_SETTINGS.fallingEffectColor
+        ? ["Falling effect color"]
+        : []),
+      ...(settings.fallingEffectOpacity !== DEFAULT_UNIFIED_SETTINGS.fallingEffectOpacity
+        ? ["Falling effect opacity"]
+        : []),
+      ...(settings.fallingEffectSpeed !== DEFAULT_UNIFIED_SETTINGS.fallingEffectSpeed
+        ? ["Falling effect speed"]
+        : []),
       ...(settings.appAccentColor !== DEFAULT_UNIFIED_SETTINGS.appAccentColor
         ? ["Accent color"]
         : []),
@@ -473,6 +492,11 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.showSidebarAttribution,
       settings.sidebarBrandImage,
       settings.sidebarStarSpeed,
+      settings.fallingEffectsEnabled,
+      settings.fallingEffectKind,
+      settings.fallingEffectColor,
+      settings.fallingEffectOpacity,
+      settings.fallingEffectSpeed,
       settings.themeAccentColor,
       settings.automaticGitFetchInterval,
       settings.enableAssistantStreaming,
@@ -512,6 +536,11 @@ export function useSettingsRestore(onRestored?: () => void) {
       ambianceSurfaceThread: DEFAULT_UNIFIED_SETTINGS.ambianceSurfaceThread,
       ambianceSurfaceComposer: DEFAULT_UNIFIED_SETTINGS.ambianceSurfaceComposer,
       ambianceColor: DEFAULT_UNIFIED_SETTINGS.ambianceColor,
+      fallingEffectsEnabled: DEFAULT_UNIFIED_SETTINGS.fallingEffectsEnabled,
+      fallingEffectKind: DEFAULT_UNIFIED_SETTINGS.fallingEffectKind,
+      fallingEffectColor: DEFAULT_UNIFIED_SETTINGS.fallingEffectColor,
+      fallingEffectOpacity: DEFAULT_UNIFIED_SETTINGS.fallingEffectOpacity,
+      fallingEffectSpeed: DEFAULT_UNIFIED_SETTINGS.fallingEffectSpeed,
       themeAccentColor: DEFAULT_UNIFIED_SETTINGS.themeAccentColor,
       defaultEditor: DEFAULT_UNIFIED_SETTINGS.defaultEditor,
       diffWordWrap: DEFAULT_UNIFIED_SETTINGS.diffWordWrap,
@@ -1070,6 +1099,10 @@ export function AppearanceSettingsPanel() {
           }
         />
       </SettingsSection>
+      <WindowAtmosphereSettings />
+      <AmbientVideoSettings />
+      <AmbientImageSettings />
+      <WindowOpacitySettings />
     </SettingsPageContainer>
   );
 }

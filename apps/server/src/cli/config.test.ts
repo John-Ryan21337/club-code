@@ -250,6 +250,21 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     }),
   );
 
+  it.effect("keeps the YouTube API key server-only and separate from its capability gate", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const baseDir = yield* fs.makeTempDirectoryScoped({
+        prefix: "t3-cli-config-youtube-key-",
+      });
+      const resolved = yield* resolveAmbientCapabilityConfig(baseDir, {
+        CAFE_CODE_YOUTUBE_API_KEY: "test-youtube-api-key",
+      });
+
+      expect(resolved.youtubePublicDiscoveryApiKey).toBe("test-youtube-api-key");
+      expect(resolved.ambientExperienceCapabilities.youtubePublicDiscovery).toBe(false);
+    }),
+  );
+
   it.effect("keeps omitted and malformed ambient capability gates disabled", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

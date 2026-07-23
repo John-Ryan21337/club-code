@@ -1,6 +1,10 @@
 # Cafe Code Ambient Experience Project Plan
 
-Status: Proposed delivery plan
+Status: Implementation in progress — several gated slices are implemented with scoped validation; this is not a release-readiness claim.
+
+Implementation note: “Scoped checks run” below records only the focused checks currently evidenced for that slice. It does not mean the Phase 7 full command set, manual matrix, soak, CSP/package checks, or native-release evidence have passed.
+
+Audit note: names are recorded only where the current implementation record establishes the scope. An absent or partial independent audit remains a release blocker.
 
 Canon: [ambient-experience-canon.md](./ambient-experience-canon.md)
 
@@ -839,20 +843,35 @@ Do not combine broad Electron, HTTP security, asset storage, native media, and d
 
 ## Completion ledger
 
-Update this table during implementation.
+This ledger records the current checkout rather than planned ownership. “Present” means implementation/tests exist in the checkout; it is not a claim that every phase exit criterion passed.
 
-| Phase                 | Author | Auditor      | Tests clean | Findings closed | Status           |
-| --------------------- | ------ | ------------ | ----------- | --------------- | ---------------- |
-| 0 Baseline            | Spark  | Sol          | —           | —               | Planned          |
-| 1 Contracts/UI        | Luna   | Sol          | No          | No              | Planned          |
-| 2 Atmosphere          | Sol    | Terra        | No          | No              | Planned          |
-| 2A Workflow contract  | Luna   | Terra        | No          | No              | Planned          |
-| 2B Workflow UI        | Spark  | Sol          | No          | No              | Planned          |
-| 3 Ambient image       | Terra  | Luna         | No          | No              | Planned          |
-| 4A YouTube/CSP/search | Terra  | Luna         | No          | No              | Planned          |
-| 4B YouTube account    | Terra  | Sol          | No          | No              | Planned          |
-| 4C YouTube Cinema     | Spark  | Sol          | No          | No              | Planned          |
-| 5A Custom layout      | Spark  | Sol          | No          | No              | Planned          |
-| 5B Local media        | Terra  | Luna         | No          | No              | Decision planned |
-| 6 Native opacity      | Sol    | Luna         | No          | No              | Planned          |
-| 7 Integration         | Spark  | Terra + Luna | No          | No              | Planned          |
+| Phase                 | Recorded implementation author(s)                          | Independent audit record                                        | Focused checks                     | Current status                                                                        |
+| --------------------- | ---------------------------------------------------------- | --------------------------------------------------------------- | ---------------------------------- | ------------------------------------------------------------------------------------- |
+| 0 Baseline            | Not yet recorded                                           | Not yet recorded                                                | Not recorded                       | Planned; baseline, decision, and release-evidence gates remain open.                  |
+| 1 Contracts/UI        | Multiple contributors; per-slice authors not recorded here | Not yet recorded                                                | Present; run evidence not ledgered | Implemented in checkout; independent audit and phase exit gate remain open.           |
+| 2 Atmosphere          | Multiple contributors; per-slice authors not recorded here | Not yet recorded                                                | Present; run evidence not ledgered | Implemented in checkout; soak/manual/release gates remain open.                       |
+| 2A Workflow contract  | Multiple contributors; per-slice authors not recorded here | Not yet recorded                                                | Present; run evidence not ledgered | Implemented in checkout; independent audit and reconnect/security gates open.         |
+| 2B Workflow UI        | Multiple contributors; per-slice authors not recorded here | Not yet recorded                                                | Present; run evidence not ledgered | Implemented in checkout; accessibility/manual/performance gates open.                 |
+| 3 Ambient image       | Terra (ambient asset slice)                                | Luna remediation recorded; full independent audit not recorded  | Scoped server/web checks run       | Implemented and gated; full phase/release evidence remains open.                      |
+| 4A YouTube/CSP/search | Terra (server search); root (web search UI and CSP)        | Terra audited web integration; Sol audited search, CSP, privacy | Scoped and full checks passed      | Public discovery and restrictive production CSP are implemented and gated.            |
+| 4B YouTube account    | Not implemented                                            | Not applicable                                                  | Not run                            | Unshipped; account/OAuth capability remains conditional and off.                      |
+| 4C YouTube Cinema     | Multiple contributors; per-slice authors not recorded here | Not yet recorded                                                | Present; run evidence not ledgered | Implemented in checkout; lifecycle/layout/manual gates remain open.                   |
+| 5A Custom layout      | Multiple contributors; per-slice authors not recorded here | Not yet recorded                                                | Present; run evidence not ledgered | Implemented in checkout; pointer/accessibility/manual gates remain open.              |
+| 5B Local media        | Not implemented                                            | Not applicable                                                  | Not run                            | Conditional feasibility and ship decisions remain unmade; no player/visualizer.       |
+| 6 Native opacity      | Multiple contributors; per-slice authors not recorded here | Luna audited reset, rollback, and failure handling              | Scoped and full checks passed      | Code is present; release capability remains disabled without artifact smoke evidence. |
+| 7 Integration         | Root                                                       | Sol, Terra, and Luna audited separate cross-author slices       | Full automated gate passed         | Automated integration is clean; manual matrix, soak, and native release gates remain. |
+
+### Automated integration evidence
+
+On 2026-07-23, the implementation checkout passed:
+
+- `corepack yarn fmt`
+- `corepack yarn fmt:check`
+- `corepack yarn lint`
+- `corepack yarn typecheck`
+- `$env:TZ='UTC'; Remove-Item Env:OPENSSL_CONF -ErrorAction SilentlyContinue; corepack yarn test`
+- `corepack yarn workspace @cafecode/web test:browser`
+- `corepack yarn build:desktop`
+- `corepack yarn test:desktop-smoke`
+
+This evidence does not replace the remaining manual, soak, platform-artifact, security, licensing, or native dependency gates.

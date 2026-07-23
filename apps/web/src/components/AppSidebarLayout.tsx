@@ -8,6 +8,7 @@ import {
   syncShortcutModifierStateFromKeyboardEvent,
 } from "../shortcutModifierState";
 import { useUiStateStore } from "../uiStateStore";
+import { AmbientVideoWorkspace } from "./ambient/AmbientVideoWorkspace";
 
 const THREAD_SIDEBAR_WIDTH_STORAGE_KEY = "chat_thread_sidebar_width";
 const THREAD_SIDEBAR_MIN_WIDTH = 13 * 16;
@@ -76,7 +77,7 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
         <ThreadSidebar />
         <SidebarRail />
       </Sidebar>
-      {children}
+      <AmbientVideoWorkspace>{children}</AmbientVideoWorkspace>
     </SidebarProvider>
   );
 }

@@ -93,6 +93,15 @@ describe("buildCodexAppServerArgs", () => {
     ]);
   });
 
+  it("uses the Codex OSS transport for local LM Studio sessions", () => {
+    assert.deepStrictEqual(buildCodexAppServerArgs({ responsesWebsockets: "disabled" }, true), [
+      "--oss",
+      "--local-provider",
+      "lmstudio",
+      "app-server",
+    ]);
+  });
+
   it("uses a Cafe-scoped OpenAI provider when Responses WebSockets are disabled", () => {
     assert.deepStrictEqual(buildCodexAppServerArgs({ responsesWebsockets: "disabled" }), [
       "app-server",

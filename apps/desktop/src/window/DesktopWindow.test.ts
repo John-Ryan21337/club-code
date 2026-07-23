@@ -18,6 +18,7 @@ import * as ElectronTheme from "../electron/ElectronTheme.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as DesktopServerExposure from "../backend/DesktopServerExposure.ts";
 import * as DesktopIpc from "../ipc/DesktopIpc.ts";
+import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopWindow from "./DesktopWindow.ts";
 
 const environmentInput = {
@@ -54,6 +55,7 @@ function makeFakeBrowserWindow() {
     once: vi.fn(),
     restore: vi.fn(),
     setBackgroundColor: vi.fn(),
+    setOpacity: vi.fn(),
     setTitle: vi.fn(),
     setTitleBarOverlay: vi.fn(),
     show: vi.fn(),
@@ -64,6 +66,7 @@ function makeFakeBrowserWindow() {
     window: window as unknown as Electron.BrowserWindow,
     loadURL: window.loadURL,
     openDevTools: webContents.openDevTools,
+    setOpacity: window.setOpacity,
   };
 }
 
@@ -159,12 +162,27 @@ function makeTestLayer(input: {
         electronThemeLayer,
         electronWindowLayer,
         desktopIpcLayer,
+        DesktopAppSettings.layerTest(),
       ),
     ),
   );
 }
 
 describe("DesktopWindow", () => {
+  it("fails closed for packaged opacity until a platform has native smoke evidence", () => {
+    assert.deepEqual(DesktopWindow.resolveDesktopWindowOpacityCapability("linux", false), {
+      supported: false,
+      reason: "unsupported-platform",
+    });
+    assert.deepEqual(DesktopWindow.resolveDesktopWindowOpacityCapability("win32", true), {
+      supported: false,
+      reason: "release-not-validated",
+    });
+    assert.deepEqual(DesktopWindow.resolveDesktopWindowOpacityCapability("darwin", false), {
+      supported: true,
+    });
+  });
+
   it.effect("does not open a development window until the backend is ready", () =>
     Effect.gen(function* () {
       const fakeWindow = makeFakeBrowserWindow();
@@ -185,6 +203,36 @@ describe("DesktopWindow", () => {
         assert.equal(yield* Ref.get(createCount), 1);
         assert.deepEqual(fakeWindow.loadURL.mock.calls[0], ["http://127.0.0.1:5733/"]);
         assert.equal(fakeWindow.openDevTools.mock.calls.length, 1);
+      }).pipe(Effect.provide(layer));
+    }),
+  );
+
+  it.effect("applies and remembers supported development window opacity", () =>
+    Effect.gen(function* () {
+      const fakeWindow = makeFakeBrowserWindow();
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const layer = makeTestLayer({
+        window: fakeWindow.window,
+        createCount,
+        mainWindow,
+      });
+
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        const next = yield* desktopWindow.setWindowOpacityPreference({
+          enabled: true,
+          opacity: 0.75,
+        });
+
+        assert.deepEqual(next, {
+          supported: true,
+          enabled: true,
+          opacity: 0.75,
+          effectiveOpacity: 0.75,
+          reason: null,
+        });
+        assert.deepEqual(fakeWindow.setOpacity.mock.calls, [[0.75]]);
       }).pipe(Effect.provide(layer));
     }),
   );

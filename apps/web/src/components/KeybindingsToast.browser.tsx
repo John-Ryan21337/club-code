@@ -1,7 +1,6 @@
 import "../index.css";
 
 import {
-  CODEX_DEFAULT_AUTO_COMPACT_TOKEN_LIMIT,
   DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES,
   DEFAULT_CLIENT_SETTINGS,
   DEFAULT_SERVER_SETTINGS,
@@ -117,6 +116,7 @@ function createBaseServerConfig(): ServerConfig {
           enabled: true,
           binaryPath: "",
           runtimeSource: "system",
+          ossMode: false,
           homePath: "",
           shadowHomePath: "",
           customModels: [],

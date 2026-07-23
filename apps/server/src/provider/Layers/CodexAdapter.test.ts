@@ -316,6 +316,7 @@ validationLayer("CodexAdapterLive validation", (it) => {
         binaryPath: "codex",
         cwd: process.cwd(),
         model: "gpt-5.3-codex",
+        ossMode: false,
         providerInstanceId: ProviderInstanceId.make("codex"),
         serviceTier: "fast",
         threadId: asThreadId("thread-1"),
@@ -556,6 +557,35 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
       }).pipe(Effect.provide(customLayer));
     },
   );
+
+  it.effect("propagates Codex OSS mode into runtime launch options", () => {
+    const localRuntimeFactory = makeRuntimeFactory();
+    const localLayer = Layer.effect(
+      CodexAdapter,
+      Effect.gen(function* () {
+        const codexConfig = decodeCodexSettings({ ossMode: true });
+        return yield* makeCodexAdapter(codexConfig, {
+          makeRuntime: localRuntimeFactory.factory,
+        });
+      }),
+    ).pipe(
+      Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
+      Layer.provideMerge(ServerSettingsService.layerTest()),
+      Layer.provideMerge(providerSessionDirectoryTestLayer),
+      Layer.provideMerge(NodeServices.layer),
+    );
+
+    return Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("codex"),
+        threadId: asThreadId("sess-local-model"),
+        runtimeMode: "full-access",
+      });
+
+      assert.equal(localRuntimeFactory.factory.mock.calls[0]?.[0].ossMode, true);
+    }).pipe(Effect.provide(localLayer));
+  });
 });
 
 const lifecycleRuntimeFactory = makeRuntimeFactory();

@@ -18,6 +18,7 @@ describe("ProviderSettingsForm helpers", () => {
     expect(deriveProviderSettingsFields(codex!).map((field) => field.key)).toEqual([
       "runtimeSource",
       "binaryPath",
+      "ossMode",
       "homePath",
       "shadowHomePath",
       "autoCompactTokenLimit",

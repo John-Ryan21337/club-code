@@ -19,6 +19,17 @@ export default mergeConfig(
       // concurrent runs to claim the next available port.
       strictPort: false,
     },
+    optimizeDeps: {
+      include: [
+        "@tanstack/react-router",
+        "react",
+        "react-dom",
+        "react-dom/client",
+        "react/jsx-dev-runtime",
+        "react/jsx-runtime",
+        "vitest-browser-react",
+      ],
+    },
     test: {
       include: ["src/components/**/*.browser.tsx"],
       browser: {

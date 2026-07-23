@@ -1,24 +1,53 @@
-# Cafe Code
+# Club Code
 
-![Cafe Code desktop screenshot](./docs/images/cafe-code-desktop.png)
+### Cafe Code, after hours
 
-Made in Japan with love.
+![Club Code desktop screenshot](./docs/images/cafe-code-desktop.png)
+
+Made in Japan with love, too much glitter, and absolutely no chance of catching the last train.
 
 **Warning**: Large parts of the application are currently under development and have been completely rewritten. It may take some time for the system to become stable.
 
-_Cafe Code is very small, barely does a thing at all. Chat goes in and chat comes out, soft and sweet, without a shout._
+_Heeey, darling. Come in, come in. Closer. I am not shouting; the room is just very far away. Club Code is the late-night fork of Cafe Code: chat goes in, work comes back, and nobody drags a fake IDE onto my dance floor. Snow in the window? Yes. A little movie in the corner? Yes. One more glass? Also yes. That one is probably unrelated._
 
-Cafe Code is a tiny desktop GUI for coding agents. It is a fork of [T3 Code](https://github.com/pingdotgg/t3code), with a basket of bug fixes, a little sweep-up, and some very opinionated trimming for people who want the agent chat and not much else.
+This repository is **Club Code**, an after-hours fork of [Cafe Code](https://github.com/cafeai/cafe-code), which began as a fork of [T3 Code](https://github.com/pingdotgg/t3code). The app still uses Cafe Code package, command, and data-directory names for compatibility. New sign outside; dependable regulars behind the bar.
 
-It is meant to stay light, calm, and out of the way — not freeze, drag, or get all sleepy like so many other clients do.
+It stays small, quick, and out of the way. No freezing, no dragging, no enormous dashboard getting sleepy on your shoulder.
 
-T3 Code said it wanted to be minimal. Cafe Code went even smaller.
+T3 Code wanted to be minimal. Cafe Code went smaller. Club Code put on nicer lights without making the room heavier.
 
 No terminal drawer. No pretend IDE. No giant dashboard wearing a useful-looking hat. If you want a console, use a real console. If you want to inspect code, open it in VS Code.
 
 <p align="center">
   <img src="./docs/images/cafe-code-character.png" alt="Cafe Code character" width="360" />
 </p>
+
+## Tonight’s Very Sensible Menu
+
+Listen, gorgeous, I wrote this down before the second bottle, so it is accurate. The new atmosphere and media effects start off. The coding chat remains the main table; the sparkle never gets to steal your mouse, your prompt, or your tokens.
+
+- **Snow, rain, or Matrix across the whole window:** Pick one, turn it off again, choose the color, transparency, and speed. It floats over the entire app but is pointer-transparent, motion-aware, bounded, and polite. Much cooler. Still not allowed to interrupt your typing.
+- **Your image or GIF in the corner:** Upload a validated PNG, JPEG, WebP, or GIF; start it in either lower corner, choose glow or no glow, and small, medium, large, or custom. Custom mode drags and resizes with the mouse or keyboard. If a video wants the same corner, they stack with a tidy 12 px gap, shrink safely, or move to the free side instead of wrestling in public. Animated GIF work pauses when reduced motion, visibility, or focus policy says it should.
+- **YouTube without surrendering the room:** Paste a video or public-playlist URL, use the optional server-gated in-app public search, float the player in either corner, or enter Cinema mode. Cinema keeps the project rail on the left, gives the video the center, and moves chat into a right rail; the same player survives project, route, and layout changes. Native player fullscreen is still available. Connected-account playlist login is not shipped, Club Code never sees YouTube Premium credentials, and it does not extract YouTube audio for visualizers.
+- **Workflow Observatory:** See plans, tools, lifecycle state, and provider-reported sub-agents working in a local, bounded view. Presentation state stays out of prompts and model context, so watching the kitchen does not make the agents eat more tokens. Look at them go. Busy little geniuses. I am emotional.
+- **Whole-window opacity:** The Electron bridge, preference, and one-action appearance reset are implemented. No packaged platform is advertised as supported until it passes its native smoke test, so release exposure stays fail-closed; a browser will never pretend it can make a native window transparent.
+- **LM Studio through Codex:** Turn on **LM Studio mode** and Club Code launches `codex --oss --local-provider lmstudio app-server`, skips cloud login checks, and uses the models discovered from the LM Studio-compatible server on `localhost:1234`. Local and cloud model catalogs stay separate. LM Studio itself remains external and is not bundled.
+- **Local Media, projectM, VLC, and Spotify:** Still conditional, darling. A future Electron-only Local Media slice may use libVLC and projectM only after native packaging, security, performance, and licensing gates pass. There is no browser VLC plugin, Spotify-synchronised visualizer, YouTube PCM extraction, or promise that DRM streams and every codec will work. I may be tipsy; the README is not allowed to lie.
+
+### Turn On the New Toys
+
+Atmosphere, image/GIF, YouTube layout, and opacity controls live under **Settings → Appearance** when the connected server and desktop expose the matching capability. Workflow lives in the **Plan | Workflow** panel, where it can remain honest about unavailable provider detail.
+
+Public YouTube search keeps its Data API key on the server. Enable both values before launching the backend:
+
+```bash
+CAFE_CODE_YOUTUBE_PUBLIC_DISCOVERY_ENABLED=true
+CAFE_CODE_YOUTUBE_API_KEY=your_server_only_key
+```
+
+For LM Studio, start its local API server on `localhost:1234`, then enable **LM Studio mode** in the Codex provider settings. Cloud login is not required for that local mode.
+
+Capability gates, operating-system support, native smoke tests, licensing, packaging, performance, and security reviews still decide what is exposed in a release. A sparkly sign is not a release commitment. Mm. Responsible.
 
 ## Why Fork?
 
@@ -78,12 +107,12 @@ itself.
 Mostly tested on macOS. Windows seems to work. Linux may need a little tweaking;
 I have not had enough time on it yet.
 
-Install Node.js 24.13.1 and Corepack, then run Cafe Code from a checkout. The
+Install Node.js 24.13.1 and Corepack, then run Club Code from a checkout. The
 repository pins the exact Yarn release through Corepack:
 
 ```bash
-git clone https://github.com/cafeai/cafe-code.git
-cd cafe-code
+git clone https://github.com/John-Ryan21337/club-code.git
+cd club-code
 corepack enable
 yarn install --immutable
 yarn build:desktop
@@ -138,7 +167,7 @@ browser credentials are retained only for the current browser session.
 If you want Codex or Claude to do it for you, paste this into the CLI:
 
 ```text
-Install Cafe Code from source. Clone https://github.com/cafeai/cafe-code.git, install Node.js 24.13.1 and Corepack, run corepack enable, run yarn install --immutable, run yarn build:desktop, then start it with yarn workspace @cafecode/desktop start. Also verify Codex CLI is installed and logged in with codex login, and Claude Code is installed and logged in with claude auth login if I want Claude support.
+Install Club Code from source. Clone https://github.com/John-Ryan21337/club-code.git, install Node.js 24.13.1 and Corepack, run corepack enable, run yarn install --immutable, run yarn build:desktop, then start it with yarn workspace @cafecode/desktop start. Also verify Codex CLI is installed and logged in with codex login, and Claude Code is installed and logged in with claude auth login if I want Claude support.
 ```
 
 The old npm path is still here for later, but it may lag behind current work:
@@ -260,26 +289,46 @@ yarn dist:desktop:deb:arm64
 The package is written to `release/`. Install the emitted file with your
 graphical package installer or with `sudo apt install ./release/<file>.deb`.
 
-## 日本語でちゅ
+## 日本語でも、もう一杯。え、もう一杯？
 
-Cafe Code は、Codex とか Claude とお話するための、
-ちいさめデスクトップアプリだわ。
+いらっしゃぁ〜い、Club Code へようこそぉ。ね、こっち座って。もっとこっち。
+あたし全然酔ってないよ？　シャンパン三杯と、たぶん Git の差分を一杯飲んだだけ。
+終電？　あれはもう行った。だいじょうぶ、歌舞伎町の午前三時には、終電は概念だから。お水どこ？
 
-T3 Code から fork して、
-バグ直して、重いところ軽くして、
-いらない機能はぽいぽいした。
+Club Code は Cafe Code の深夜版 fork なの。中の package 名とか command とか
+`.cafe-code` は互換性のため、そのまま Cafe Code。看板だけ Club Code。
+新しいお店なのに常連さんのボトルは消さない、そういう気づかい。えらくない？　えらい。乾杯。
 
-ターミナルいらない。
-でかいダッシュボードいらない。
-ボタンだらけの謎コックピットもいらない。
+Codex と Claude と OpenCode が、ちゃんとコードの仕事をするための小さいデスクトップアプリ。
+ターミナルのふりもしないし、IDE のふりもしないし、巨大 dashboard が急に
+「わたし仕事できます」みたいな顔で座ってこない。コードは VS Code、本物の console は本物の console。
+ここは chat と agent の仕事を見る席。小さいのに働く。あたしより働く。そこ比べなくていいからぁ。
 
-コード見たいなら VS Code ひらこ。
-コンソール使いたいなら、本物のコンソール使お。
+ねぇ聞いて、ここからすごいよ。ちゃんとメモしたから、酔ってても仕様は正確。
 
-Cafe Code は、チャットする。
-作業を見る。
-邪魔しない。
-それだけ。えらい。
+- **雪・雨・Matrix 文字**をウィンドウ全部に降らせられるの。色も透明度も速さも選べて、もちろん off もある。クリックは奪わないし、動きすぎないよう上限もある。仕事の邪魔をせずに画面だけ急にかっこいい。ね、天才。もう一回見せて。
+- **手元の画像/GIF**は、まず左下か右下。small / medium / large、それから mouse と keyboard で動かして resize できる custom。縁をふわっと光らせてもいい。同じ角に YouTube が来たら 12 px だけ上品に空けて並ぶし、狭かったら小さくなるか空いてる角へ行く。喧嘩しない。あたしたちより大人。GIF は reduced motion、非表示、focus、background animation の設定を守って休むから、目と CPU も朝まで働かされない。
+- **YouTube**は URL や公開 playlist を入れて、左右に浮かべるか Cinema へ。Cinema では project sidebar が左、video が真ん中、chat が右。project や route を変えても player をむやみに作り直さないし、player 本来の fullscreen も使える。server に API key を入れた時だけ、認証済みのアプリ内公開検索も出る。connected account の playlist login はまだ未出荷。Premium の password は受け取らないし、Premium 再生も約束しないし、YouTube の音を抜いて visualizer にもしない。ここ大事。酔ってない字で書いといて。
+- **Workflow Observatory**では plan、tool、状態、provider が教えてくれた sub-agent を見られるの。誰が kitchen で何してるか見える。でも表示用の状態を prompt や model context に混ぜないから、眺めてるだけで token が増えたりしない。ほら、Sol も Terra も Luna も働いてる。Spark も……いるいる。たぶんそこ。
+- **ウィンドウ全体の透明度**は Electron の bridge、設定、まとめて戻すボタンまで実装済み。でも package の native smoke test が通るまでは、対応 OS として売り出さず release では fail-closed。browser が native window を透明にできるふりはしない。透明なのは窓だけ、説明まで透明にしない。うまいこと言った。今の書いて。
+- **LM Studio mode**を Codex 設定で on にすると、`codex --oss --local-provider lmstudio app-server` で `localhost:1234` の local server につなぐ。cloud login check はしないし、local と cloud の model 一覧も混ぜない。LM Studio 本体は同梱しないから、先に自分で server を起こしてね。別会計。ツケはだめ。
+- **VLC / Local Media / projectM / Spotify**は、まだ条件付きの未来 menu。Electron native packaging、license、安全性、性能が全部通ってから。browser VLC plugin、Spotify 同期 visualizer、YouTube PCM 抽出、全 codec/DRM 対応なんて、まだ言わない。あたしはふらふらでも README はまっすぐ。そこだけは、ね。
+
+新しい見た目とメディアの機能は基本 off。`Settings → Appearance` には、接続先 server と desktop が
+本当に対応してる項目だけ出すの。Workflow は `Plan | Workflow` の席にいる。きらきらは optional。仕事は main。順番、大事。
+
+YouTube のアプリ内公開検索を使う server は、起動前にこれ。API key は browser に渡さないよ。
+
+```bash
+CAFE_CODE_YOUTUBE_PUBLIC_DISCOVERY_ENABLED=true
+CAFE_CODE_YOUTUBE_API_KEY=your_server_only_key
+```
+
+LM Studio は local API server を `localhost:1234` で起動して、Codex provider の
+**LM Studio mode**を on。local mode では cloud login はいらない。はい、できた。乾杯。
+
+実際の release は OS、能力 gate、native smoke test、license、security、performance 次第。
+看板が光ってても未出荷を「あるよぉ」って売らない。約束は出せる時だけ。大人でしょ。たぶん。
 
 ### ソースから動かす
 
@@ -291,8 +340,8 @@ Node.js 24.13.1 と Corepack を先に入れてね。Yarn のバージョンは
 リポジトリ側で固定してあるよ。
 
 ```bash
-git clone https://github.com/cafeai/cafe-code.git
-cd cafe-code
+git clone https://github.com/John-Ryan21337/club-code.git
+cd club-code
 corepack enable
 yarn install --immutable
 yarn build:desktop
@@ -337,7 +386,7 @@ Linux はまだあまり見れてないから、ちょっと調整がいるか�
 Codex とか Claude に丸投げするなら、これを投げてもいいよ。
 
 ```text
-Cafe Code をソースから入れてください。https://github.com/cafeai/cafe-code.git を clone して、Node.js 24.13.1 と Corepack を入れ、corepack enable、yarn install --immutable、yarn build:desktop、yarn workspace @cafecode/desktop start まで実行してください。Codex を使うなら codex login、Claude を使うなら claude auth login も確認してください。
+Club Code をソースから入れてください。https://github.com/John-Ryan21337/club-code.git を clone して、Node.js 24.13.1 と Corepack を入れ、corepack enable、yarn install --immutable、yarn build:desktop、yarn workspace @cafecode/desktop start まで実行してください。Codex を使うなら codex login、Claude を使うなら claude auth login も確認してください。
 ```
 
 npm 版は残しておくけど、今は古いかもしれない。
@@ -361,7 +410,7 @@ yarn test
 
 ## License
 
-Cafe Code is AGPL-3.0-or-later.
+Club Code is AGPL-3.0-or-later.
 
 The fork keeps the upstream attribution story intact; see the license and notice
 files for details.
