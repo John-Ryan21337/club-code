@@ -34,6 +34,7 @@ import { createModelCapabilities } from "@cafecode/shared/model";
 import { applyServerSettingsPatch } from "@cafecode/shared/serverSettings";
 
 import {
+  buildCodexProviderAppServerArgs,
   checkCodexCliProviderStatus,
   checkCodexProviderStatus,
   type CodexAppServerProviderSnapshot,
@@ -314,6 +315,16 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
   "ProviderRegistry",
   (it) => {
     describe("checkCodexProviderStatus", () => {
+      it("orders explicit LM Studio flags before the app-server subcommand", () => {
+        assert.deepStrictEqual(buildCodexProviderAppServerArgs(true), [
+          "--oss",
+          "--local-provider",
+          "lmstudio",
+          "app-server",
+        ]);
+        assert.deepStrictEqual(buildCodexProviderAppServerArgs(false), ["app-server"]);
+      });
+
       it.effect("uses the app-server account and model list for provider status", () =>
         Effect.gen(function* () {
           const status = yield* checkCodexProviderStatus(defaultCodexSettings, () =>
@@ -355,6 +366,50 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
               shortDescription: "Debug failing GitHub Actions checks",
             },
           ]);
+        }),
+      );
+
+      it.effect("labels Codex OSS sessions as local LM Studio without cloud login", () =>
+        Effect.gen(function* () {
+          let receivedOssMode = false;
+          const status = yield* checkCodexProviderStatus(
+            decodeCodexSettings({ ossMode: true }),
+            (input) => {
+              receivedOssMode = input.ossMode === true;
+              return Effect.succeed(
+                makeCodexProbeSnapshot({
+                  account: {
+                    account: null,
+                    requiresOpenaiAuth: true,
+                  },
+                }),
+              );
+            },
+          );
+
+          assert.strictEqual(receivedOssMode, true);
+          assert.strictEqual(status.status, "ready");
+          assert.strictEqual(status.auth.status, "unknown");
+          assert.strictEqual(status.auth.type, "local");
+          assert.strictEqual(status.auth.label, "LM Studio / Codex OSS");
+          assert.deepStrictEqual(
+            status.models.map((model) => model.slug),
+            ["gpt-live-codex"],
+          );
+          assert.match(status.message ?? "", /LM Studio/);
+        }),
+      );
+
+      it.effect("warns when a successful Codex OSS probe reports no local models", () =>
+        Effect.gen(function* () {
+          const status = yield* checkCodexProviderStatus(
+            decodeCodexSettings({ ossMode: true }),
+            () => Effect.succeed(makeCodexProbeSnapshot({ models: [] })),
+          );
+
+          assert.strictEqual(status.status, "warning");
+          assert.deepStrictEqual(status.models, []);
+          assert.match(status.message ?? "", /no local models/i);
         }),
       );
 
@@ -554,6 +609,48 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
 
         assert.deepStrictEqual(mergeProviderSnapshot(previousProvider, refreshedProvider).models, [
           ...previousProvider.models,
+        ]);
+      });
+
+      it("replaces Codex models when an instance crosses the cloud/local boundary", () => {
+        const cloudProvider = {
+          instanceId: ProviderInstanceId.make("codex"),
+          driver: ProviderDriverKind.make("codex"),
+          status: "ready",
+          enabled: true,
+          installed: true,
+          auth: { status: "authenticated", type: "chatgpt" },
+          checkedAt: "2026-04-14T00:00:00.000Z",
+          version: "1.0.0",
+          models: [
+            {
+              slug: "gpt-5.6-sol",
+              name: "GPT-5.6 Sol",
+              isCustom: false,
+              capabilities: null,
+            },
+          ],
+          slashCommands: [],
+          skills: [],
+        } as const satisfies ServerProvider;
+        const localProvider = {
+          ...cloudProvider,
+          auth: { status: "unknown", type: "local", label: "LM Studio / Codex OSS" },
+          models: [
+            {
+              slug: "local-model",
+              name: "Local Model",
+              isCustom: false,
+              capabilities: null,
+            },
+          ],
+        } as const satisfies ServerProvider;
+
+        assert.deepStrictEqual(mergeProviderSnapshot(cloudProvider, localProvider).models, [
+          ...localProvider.models,
+        ]);
+        assert.deepStrictEqual(mergeProviderSnapshot(localProvider, cloudProvider).models, [
+          ...cloudProvider.models,
         ]);
       });
 
@@ -1376,6 +1473,33 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
     });
 
     describe("checkCodexCliProviderStatus", () => {
+      it.effect("does not run cloud login checks or advertise cloud models in Codex OSS mode", () =>
+        Effect.gen(function* () {
+          const { layer, commands } = recordingMockSpawnerLayer((args) => {
+            assert.deepStrictEqual(args, ["--version"]);
+            return { stdout: "codex-cli 0.133.0\n", stderr: "", code: 0 };
+          });
+          const status = yield* checkCodexCliProviderStatus(
+            decodeCodexSettings({
+              ossMode: true,
+              customModels: ["local-model"],
+            }),
+          ).pipe(Effect.provide(layer));
+
+          assert.deepStrictEqual(
+            commands.map((command) => command.args),
+            [["--version"]],
+          );
+          assert.strictEqual(status.status, "warning");
+          assert.strictEqual(status.auth.status, "unknown");
+          assert.strictEqual(status.auth.type, "local");
+          assert.deepStrictEqual(
+            status.models.map((model) => model.slug),
+            ["local-model"],
+          );
+        }),
+      );
+
       it.effect("uses the Codex CLI login status path for lightweight provider status", () =>
         Effect.gen(function* () {
           const status = yield* checkCodexCliProviderStatus(defaultCodexSettings).pipe(

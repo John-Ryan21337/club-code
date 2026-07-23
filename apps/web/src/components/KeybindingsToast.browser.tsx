@@ -117,6 +117,7 @@ function createBaseServerConfig(): ServerConfig {
           enabled: true,
           binaryPath: "",
           runtimeSource: "system",
+          ossMode: false,
           homePath: "",
           shadowHomePath: "",
           customModels: [],

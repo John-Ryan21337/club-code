@@ -45,6 +45,9 @@ import {
 
 const CLIENT_SETTINGS_PERSISTENCE_ERROR_SCOPE = "[CLIENT_SETTINGS]";
 let clientSettingsImportAttempted = false;
+let settingsMutationRevision = 0;
+const serverFieldRevisions = new Map<string, number>();
+const clientFieldRevisions = new Map<string, number>();
 
 function subscribeClientSettings(listener: () => void): () => void {
   const unsubscribe = subscribeClientSettingsSnapshot(listener);
@@ -109,16 +112,7 @@ async function maybeImportLocalClientSettingsToServer(): Promise<void> {
   }
 }
 
-function persistClientSettings(settings: ClientSettings): void {
-  replaceClientSettingsSnapshot(settings);
-  void ensureLocalApi()
-    .persistence.setClientSettings(settings)
-    .catch((error) => {
-      console.error(`${CLIENT_SETTINGS_PERSISTENCE_ERROR_SCOPE} persist failed`, error);
-    });
-}
-
-function reportSettingsWriteFailure(scope: "server" | "client", error: unknown): void {
+function reportSettingsWriteFailure(scope: "server" | "client" | "unified", error: unknown): void {
   console.error(`${CLIENT_SETTINGS_PERSISTENCE_ERROR_SCOPE} ${scope} update failed`, error);
 }
 
@@ -143,6 +137,136 @@ function splitPatch(patch: Partial<UnifiedSettings>): {
     serverPatch: serverPatch as ServerSettingsPatch,
     clientPatch: clientPatch as ClientSettingsPatch,
   };
+}
+
+function markPatchRevision(patch: object, revisions: Map<string, number>, revision: number): void {
+  for (const key of Object.keys(patch)) {
+    revisions.set(key, revision);
+  }
+}
+
+function rollbackOptimisticPatch<T extends object>(
+  current: T,
+  previous: T,
+  optimistic: T,
+  patch: object,
+  revisions: Map<string, number>,
+  revision: number,
+): T {
+  const currentRecord = current as Record<string, unknown>;
+  const previousRecord = previous as Record<string, unknown>;
+  const optimisticRecord = optimistic as Record<string, unknown>;
+  let next: Record<string, unknown> | null = null;
+
+  for (const key of Object.keys(patch)) {
+    if (
+      revisions.get(key) === revision &&
+      Equal.equals(currentRecord[key], optimisticRecord[key])
+    ) {
+      next ??= { ...currentRecord };
+      next[key] = previousRecord[key];
+    }
+  }
+
+  return (next ?? current) as T;
+}
+
+async function applyUnifiedSettingsPatch(patch: Partial<UnifiedSettings>): Promise<void> {
+  const { serverPatch, clientPatch } = splitPatch(patch);
+  const writes: Promise<unknown>[] = [];
+  const revision = ++settingsMutationRevision;
+
+  if (Object.keys(serverPatch).length > 0) {
+    const currentServerConfig = getServerConfig();
+    if (currentServerConfig) {
+      const previousSettings = currentServerConfig.settings;
+      const optimisticSettings = applyServerSettingsPatch(previousSettings, serverPatch);
+      markPatchRevision(serverPatch, serverFieldRevisions, revision);
+      applySettingsUpdated(optimisticSettings);
+      writes.push(
+        ensureLocalApi()
+          .server.updateSettings(serverPatch)
+          .catch((error) => {
+            const latestSettings = getServerConfig()?.settings;
+            if (latestSettings) {
+              applySettingsUpdated(
+                rollbackOptimisticPatch(
+                  latestSettings,
+                  previousSettings,
+                  optimisticSettings,
+                  serverPatch,
+                  serverFieldRevisions,
+                  revision,
+                ),
+              );
+            }
+            throw error;
+          }),
+      );
+    } else {
+      writes.push(ensureLocalApi().server.updateSettings(serverPatch));
+    }
+  }
+
+  if (Object.keys(clientPatch).length > 0) {
+    const currentServerConfig = getServerConfig();
+    if (currentServerConfig) {
+      const previousClientSettings = currentServerConfig.clientSettings;
+      const optimisticClientSettings = applyClientSettingsPatch(
+        previousClientSettings,
+        clientPatch,
+      );
+      markPatchRevision(clientPatch, clientFieldRevisions, revision);
+      applyClientSettingsUpdated(optimisticClientSettings);
+      writes.push(
+        ensureLocalApi()
+          .server.updateClientSettings(clientPatch)
+          .catch((error) => {
+            const latestClientSettings = getServerConfig()?.clientSettings;
+            if (latestClientSettings) {
+              applyClientSettingsUpdated(
+                rollbackOptimisticPatch(
+                  latestClientSettings,
+                  previousClientSettings,
+                  optimisticClientSettings,
+                  clientPatch,
+                  clientFieldRevisions,
+                  revision,
+                ),
+              );
+            }
+            throw error;
+          }),
+      );
+    } else {
+      const previousClientSettings = getClientSettingsSnapshot();
+      const optimisticClientSettings = applyClientSettingsPatch(
+        previousClientSettings,
+        clientPatch,
+      );
+      markPatchRevision(clientPatch, clientFieldRevisions, revision);
+      replaceClientSettingsSnapshot(optimisticClientSettings);
+      writes.push(
+        ensureLocalApi()
+          .persistence.setClientSettings(optimisticClientSettings)
+          .catch((error) => {
+            replaceClientSettingsSnapshot(
+              rollbackOptimisticPatch(
+                getClientSettingsSnapshot(),
+                previousClientSettings,
+                optimisticClientSettings,
+                clientPatch,
+                clientFieldRevisions,
+                revision,
+              ),
+            );
+            throw error;
+          }),
+      );
+    }
+  }
+
+  await Promise.all(writes);
 }
 
 // ── Hooks ────────────────────────────────────────────────────────────
@@ -212,47 +336,15 @@ export function useSettings<T = UnifiedSettings>(selector?: (s: UnifiedSettings)
  */
 export function useUpdateSettings() {
   const updateSettings = useCallback((patch: Partial<UnifiedSettings>) => {
-    const { serverPatch, clientPatch } = splitPatch(patch);
-
-    if (Object.keys(serverPatch).length > 0) {
-      const currentServerConfig = getServerConfig();
-      if (currentServerConfig) {
-        applySettingsUpdated(applyServerSettingsPatch(currentServerConfig.settings, serverPatch));
-      }
-      // Fire-and-forget RPC — push will reconcile on success
-      try {
-        void ensureLocalApi()
-          .server.updateSettings(serverPatch)
-          .catch((error) => {
-            reportSettingsWriteFailure("server", error);
-          });
-      } catch (error) {
-        reportSettingsWriteFailure("server", error);
-      }
-    }
-
-    if (Object.keys(clientPatch).length > 0) {
-      const currentServerConfig = getServerConfig();
-      if (currentServerConfig) {
-        const nextClientSettings = applyClientSettingsPatch(
-          currentServerConfig.clientSettings,
-          clientPatch,
-        );
-        applyClientSettingsUpdated(nextClientSettings);
-        try {
-          void ensureLocalApi()
-            .server.updateClientSettings(clientPatch)
-            .catch((error) => {
-              reportSettingsWriteFailure("client", error);
-            });
-        } catch (error) {
-          reportSettingsWriteFailure("client", error);
-        }
-      } else {
-        persistClientSettings(applyClientSettingsPatch(getClientSettingsSnapshot(), clientPatch));
-      }
-    }
+    void applyUnifiedSettingsPatch(patch).catch((error) => {
+      reportSettingsWriteFailure("unified", error);
+    });
   }, []);
+
+  const updateSettingsAsync = useCallback(
+    (patch: Partial<UnifiedSettings>) => applyUnifiedSettingsPatch(patch),
+    [],
+  );
 
   const resetSettings = useCallback(() => {
     updateSettings(DEFAULT_UNIFIED_SETTINGS);
@@ -260,11 +352,15 @@ export function useUpdateSettings() {
 
   return {
     updateSettings,
+    updateSettingsAsync,
     resetSettings,
   };
 }
 
 export function __resetClientSettingsPersistenceForTests(): void {
   clientSettingsImportAttempted = false;
+  settingsMutationRevision = 0;
+  serverFieldRevisions.clear();
+  clientFieldRevisions.clear();
   resetClientSettingsPersistenceStateForTests();
 }

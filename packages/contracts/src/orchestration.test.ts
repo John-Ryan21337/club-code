@@ -23,6 +23,8 @@ import {
   ThreadTurnStartRequestedPayload,
   ProviderJournalMessageRepairResult,
   ProviderThreadAssistantMessagesRepairResult,
+  WorkflowProjectionSnapshot,
+  WORKFLOW_PROJECTION_MAX_NODES,
 } from "./orchestration.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 
@@ -55,6 +57,68 @@ const decodeProviderJournalMessageRepairResult = Schema.decodeUnknownEffect(
 );
 const decodeProviderThreadAssistantMessagesRepairResult = Schema.decodeUnknownEffect(
   ProviderThreadAssistantMessagesRepairResult,
+);
+const decodeWorkflowProjectionSnapshot = Schema.decodeUnknownEffect(WorkflowProjectionSnapshot);
+
+it.effect("workflow projection accepts honest unavailable fields and canonical statuses", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeWorkflowProjectionSnapshot({
+      version: 1,
+      fidelity: "lifecycle-only",
+      nodes: [
+        {
+          id: "task:one",
+          parentId: null,
+          path: null,
+          name: null,
+          taskLabel: "Audit the adapter",
+          status: "waiting",
+          elapsedSeconds: null,
+          latestActivitySummary: null,
+          lastActivityAt: null,
+          activityCount: 1,
+          depth: 0,
+        },
+      ],
+      recentActivities: [],
+      sourceActivityCount: 1,
+      omittedNodeCount: 0,
+      omittedActivityCount: 0,
+    });
+
+    assert.strictEqual(parsed.nodes[0]?.status, "waiting");
+    assert.strictEqual(parsed.nodes[0]?.elapsedSeconds, null);
+  }),
+);
+
+it.effect("workflow projection rejects node collections above the wire cap", () =>
+  Effect.gen(function* () {
+    const result = yield* Effect.exit(
+      decodeWorkflowProjectionSnapshot({
+        version: 1,
+        fidelity: "live",
+        nodes: Array.from({ length: WORKFLOW_PROJECTION_MAX_NODES + 1 }, (_, index) => ({
+          id: `agent:${index}`,
+          parentId: null,
+          path: null,
+          name: null,
+          taskLabel: null,
+          status: "running",
+          elapsedSeconds: null,
+          latestActivitySummary: null,
+          lastActivityAt: null,
+          activityCount: 1,
+          depth: 0,
+        })),
+        recentActivities: [],
+        sourceActivityCount: WORKFLOW_PROJECTION_MAX_NODES + 1,
+        omittedNodeCount: 0,
+        omittedActivityCount: 0,
+      }),
+    );
+
+    assert.strictEqual(result._tag, "Failure");
+  }),
 );
 
 it.effect("trims branded ids and command string fields at decode boundaries", () =>

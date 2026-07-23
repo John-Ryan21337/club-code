@@ -572,6 +572,21 @@ describe("provider settings", () => {
     expect(decodeClaudeSettings({}).runtimeSource).toBe("system");
   });
 
+  it("defaults local model mode off and persists it through provider patches", () => {
+    expect(decodeCodexSettings({}).ossMode).toBe(false);
+    expect(
+      decodeServerSettingsPatch({
+        providers: {
+          codex: { ossMode: true },
+        },
+      }),
+    ).toEqual({
+      providers: {
+        codex: { ossMode: true },
+      },
+    });
+  });
+
   it("accepts bundled provider runtime source in server settings patches", () => {
     expect(
       decodeServerSettingsPatch({

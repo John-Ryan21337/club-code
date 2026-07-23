@@ -14,6 +14,8 @@ import {
   setNavigationSidebarOpen,
   setProjectExpanded,
   setThreadPlanSidebarOpen,
+  setThreadRightPanelTab,
+  setThreadWorkflowNodeExpanded,
   syncProjects,
   syncThreads,
   type UiState,
@@ -25,6 +27,8 @@ function makeUiState(overrides: Partial<UiState> = {}): UiState {
     projectOrder: [],
     threadLastVisitedAtById: {},
     threadPlanSidebarOpenById: {},
+    threadRightPanelTabById: {},
+    threadWorkflowNodeExpandedById: {},
     defaultAdvertisedEndpointKey: null,
     navigationSidebarOpen: true,
     ...overrides,
@@ -88,6 +92,33 @@ describe("uiStateStore pure functions", () => {
     expect(collapsed.navigationSidebarOpen).toBe(false);
     expect(expanded.navigationSidebarOpen).toBe(true);
     expect(setNavigationSidebarOpen(expanded, true)).toBe(expanded);
+  });
+
+  it("stores the selected Plan/Workflow tab per thread", () => {
+    const initialState = makeUiState();
+    const selected = setThreadRightPanelTab(initialState, "env:thread-1", "workflow");
+
+    expect(selected.threadRightPanelTabById).toEqual({
+      "env:thread-1": "workflow",
+    });
+    expect(setThreadRightPanelTab(selected, "env:thread-1", "workflow")).toBe(selected);
+  });
+
+  it("stores workflow node expansion per thread and stable node id", () => {
+    const initialState = makeUiState();
+    const expanded = setThreadWorkflowNodeExpanded(
+      initialState,
+      "env:thread-1",
+      "agent:auditor",
+      true,
+    );
+
+    expect(expanded.threadWorkflowNodeExpandedById).toEqual({
+      "env:thread-1": { "agent:auditor": true },
+    });
+    expect(setThreadWorkflowNodeExpanded(expanded, "env:thread-1", "agent:auditor", true)).toBe(
+      expanded,
+    );
   });
 
   it("reorderProjects moves all member keys of a multi-member group together", () => {

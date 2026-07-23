@@ -40,6 +40,8 @@ function makeFakeCodexBinary(
     requireFastServiceTier?: boolean;
     requireReasoningEffort?: string;
     forbidReasoningEffort?: boolean;
+    ossMode?: boolean;
+    requireOssMode?: boolean;
     stdinMustContain?: string;
     stdinMustNotContain?: string;
   },
@@ -228,6 +230,8 @@ function withFakeCodexCli<A, E, R>(
     requireFastServiceTier?: boolean;
     requireReasoningEffort?: string;
     forbidReasoningEffort?: boolean;
+    ossMode?: boolean;
+    requireOssMode?: boolean;
     stdinMustContain?: string;
     stdinMustNotContain?: string;
   },
@@ -277,13 +281,18 @@ function withFakeCodexSpawner<A, E, R>(
     requireFastServiceTier?: boolean;
     requireReasoningEffort?: string;
     forbidReasoningEffort?: boolean;
+    ossMode?: boolean;
+    requireOssMode?: boolean;
     stdinMustContain?: string;
     stdinMustNotContain?: string;
   },
   effectFn: (textGeneration: TextGenerationShape) => Effect.Effect<A, E, R>,
 ) {
   return Effect.gen(function* () {
-    const config = decodeCodexSettings({ binaryPath: "fake-codex" });
+    const config = decodeCodexSettings({
+      binaryPath: "fake-codex",
+      ...(input.ossMode === undefined ? {} : { ossMode: input.ossMode }),
+    });
     const spawner = ChildProcessSpawner.make((unknownCommand) =>
       Effect.gen(function* () {
         const command = unknownCommand as unknown as CapturedCodexCommand;
@@ -303,6 +312,14 @@ function withFakeCodexSpawner<A, E, R>(
         );
 
         expect(command.command).toBe("fake-codex");
+        if (input.requireOssMode) {
+          expect(command.args.slice(0, 4)).toEqual([
+            "--oss",
+            "--local-provider",
+            "lmstudio",
+            "exec",
+          ]);
+        }
         expect(outputPath).toBeTypeOf("string");
         if (outputPath !== undefined) {
           writeFileSync(outputPath, input.output);
@@ -393,6 +410,27 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGeneration", (it) => {
             ]),
           }),
       ),
+  );
+
+  it.effect("forwards local model mode to Codex text generation", () =>
+    withFakeCodexSpawner(
+      {
+        output: JSON.stringify({
+          subject: "Generate with local model",
+          body: "",
+        }),
+        ossMode: true,
+        requireOssMode: true,
+      },
+      (textGeneration) =>
+        textGeneration.generateCommitMessage({
+          cwd: process.cwd(),
+          branch: "feature/local-model",
+          stagedSummary: "M README.md",
+          stagedPatch: "diff --git a/README.md b/README.md",
+          modelSelection: DEFAULT_TEST_MODEL_SELECTION,
+        }),
+    ),
   );
 
   it.effect("defaults git text generation codex effort to low", () =>

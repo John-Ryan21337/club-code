@@ -1,6 +1,28 @@
 @import "tailwindcss";
 @import "katex/dist/katex.min.css";
 
+@container chat-column (max-width: 200px) {
+  [data-chat-input-bar="true"] {
+    padding-inline: 0.5rem;
+  }
+}
+
+.ambient-media-glow {
+  box-shadow:
+    0 0 18px
+      color-mix(
+        in srgb,
+        var(--ambient-media-glow-color) calc(var(--ambient-media-glow-opacity) * 70%),
+        transparent
+      ),
+    0 0 46px
+      color-mix(
+        in srgb,
+        var(--ambient-media-glow-color) calc(var(--ambient-media-glow-opacity) * 45%),
+        transparent
+      );
+}
+
 @custom-variant dark (&:is(.dark, .dark *));
 /* Window Controls Overlay: active when Electron exposes native titlebar control geometry. */
 @custom-variant wco (&:is(.wco, .wco *));

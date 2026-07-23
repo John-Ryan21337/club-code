@@ -1,6 +1,10 @@
 import {
+  DEFAULT_DESKTOP_WINDOW_OPACITY,
+  MAX_DESKTOP_WINDOW_OPACITY,
+  MIN_DESKTOP_WINDOW_OPACITY,
   DesktopServerExposureModeSchema,
   DesktopUpdateChannelSchema,
+  type DesktopWindowOpacityPreference,
   type DesktopServerExposureMode,
   type DesktopUpdateChannel,
 } from "@cafecode/contracts";
@@ -25,6 +29,8 @@ export interface DesktopSettings {
   readonly serverHttpsEnabled: boolean;
   readonly updateChannel: DesktopUpdateChannel;
   readonly updateChannelConfiguredByUser: boolean;
+  readonly windowOpacityEnabled: boolean;
+  readonly windowOpacity: number;
 }
 
 export interface DesktopSettingsChange {
@@ -37,6 +43,8 @@ export const DEFAULT_DESKTOP_SETTINGS: DesktopSettings = {
   serverHttpsEnabled: true,
   updateChannel: "latest",
   updateChannelConfiguredByUser: false,
+  windowOpacityEnabled: false,
+  windowOpacity: DEFAULT_DESKTOP_WINDOW_OPACITY,
 };
 
 const DesktopSettingsDocument = Schema.Struct({
@@ -44,6 +52,11 @@ const DesktopSettingsDocument = Schema.Struct({
   serverHttpsEnabled: Schema.optionalKey(Schema.Boolean),
   updateChannel: Schema.optionalKey(DesktopUpdateChannelSchema),
   updateChannelConfiguredByUser: Schema.optionalKey(Schema.Boolean),
+  // Keep these fields unknown at the document boundary so a corrupt opacity
+  // preference can recover independently without discarding unrelated desktop
+  // settings. `normalizeDesktopSettingsDocument` performs the bounded decode.
+  windowOpacityEnabled: Schema.optionalKey(Schema.Unknown),
+  windowOpacity: Schema.optionalKey(Schema.Unknown),
 });
 
 type DesktopSettingsDocument = typeof DesktopSettingsDocument.Type;
@@ -78,6 +91,9 @@ export interface DesktopAppSettingsShape {
   readonly setUpdateChannel: (
     channel: DesktopUpdateChannel,
   ) => Effect.Effect<DesktopSettingsChange, DesktopSettingsWriteError>;
+  readonly setWindowOpacityPreference: (
+    preference: DesktopWindowOpacityPreference,
+  ) => Effect.Effect<DesktopSettingsChange, DesktopSettingsWriteError>;
 }
 
 export class DesktopAppSettings extends Context.Service<
@@ -102,6 +118,12 @@ function normalizeDesktopSettingsDocument(
   const updateChannelConfiguredByUser =
     parsed.updateChannelConfiguredByUser === true ||
     (isLegacySettings && Option.contains(parsedUpdateChannel, "nightly"));
+  const windowOpacityValid =
+    typeof parsed.windowOpacity === "number" &&
+    Number.isFinite(parsed.windowOpacity) &&
+    parsed.windowOpacity >= MIN_DESKTOP_WINDOW_OPACITY &&
+    parsed.windowOpacity <= MAX_DESKTOP_WINDOW_OPACITY;
+  const windowOpacity = windowOpacityValid ? parsed.windowOpacity : defaultSettings.windowOpacity;
 
   return {
     serverExposureMode:
@@ -111,6 +133,8 @@ function normalizeDesktopSettingsDocument(
       ? Option.getOrElse(parsedUpdateChannel, () => defaultSettings.updateChannel)
       : defaultSettings.updateChannel,
     updateChannelConfiguredByUser,
+    windowOpacityEnabled: windowOpacityValid && parsed.windowOpacityEnabled === true,
+    windowOpacity,
   };
 }
 
@@ -131,6 +155,12 @@ function toDesktopSettingsDocument(
   }
   if (settings.updateChannelConfiguredByUser !== defaults.updateChannelConfiguredByUser) {
     document.updateChannelConfiguredByUser = settings.updateChannelConfiguredByUser;
+  }
+  if (settings.windowOpacityEnabled !== defaults.windowOpacityEnabled) {
+    document.windowOpacityEnabled = settings.windowOpacityEnabled;
+  }
+  if (settings.windowOpacity !== defaults.windowOpacity) {
+    document.windowOpacity = settings.windowOpacity;
   }
 
   return document;
@@ -167,6 +197,20 @@ function setUpdateChannel(
         ...settings,
         updateChannel: requestedChannel,
         updateChannelConfiguredByUser: true,
+      };
+}
+
+function setWindowOpacityPreference(
+  settings: DesktopSettings,
+  preference: DesktopWindowOpacityPreference,
+): DesktopSettings {
+  return settings.windowOpacityEnabled === preference.enabled &&
+    settings.windowOpacity === preference.opacity
+    ? settings
+    : {
+        ...settings,
+        windowOpacityEnabled: preference.enabled,
+        windowOpacity: preference.opacity,
       };
 }
 
@@ -261,6 +305,15 @@ export const layer = Layer.effect(
         persist((settings) => setUpdateChannel(settings, channel)).pipe(
           Effect.withSpan("desktop.settings.setUpdateChannel", { attributes: { channel } }),
         ),
+      setWindowOpacityPreference: (preference) =>
+        persist((settings) => setWindowOpacityPreference(settings, preference)).pipe(
+          Effect.withSpan("desktop.settings.setWindowOpacityPreference", {
+            attributes: {
+              enabled: preference.enabled,
+              opacity: preference.opacity,
+            },
+          }),
+        ),
     });
   }),
 );
@@ -290,6 +343,8 @@ export const layerTest = (initialSettings: DesktopSettings = DEFAULT_DESKTOP_SET
         setServerHttpsEnabled: (enabled) =>
           update((settings) => setServerHttpsEnabled(settings, enabled)),
         setUpdateChannel: (channel) => update((settings) => setUpdateChannel(settings, channel)),
+        setWindowOpacityPreference: (preference) =>
+          update((settings) => setWindowOpacityPreference(settings, preference)),
       });
     }),
   );

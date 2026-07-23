@@ -9,6 +9,10 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { ServerConfig } from "./config.ts";
 import {
   attachmentsRouteLayer,
+  ambientImageServeRouteLayer,
+  ambientImageRemoveRouteLayer,
+  ambientImageUploadRouteLayer,
+  youTubePublicDiscoveryRouteLayer,
   brandingSidebarImageServeRouteLayer,
   brandingSidebarImageUploadRouteLayer,
   clientDebugLogRouteLayer,
@@ -22,6 +26,7 @@ import {
   staticAndDevRouteLayer,
   browserApiCorsLayer,
 } from "./http.ts";
+import { YouTubePublicDiscoveryLive } from "./ambientMedia/YouTubePublicDiscovery.ts";
 import { fixPath } from "./os-jank.ts";
 import { websocketRpcRouteLayer } from "./ws.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
@@ -65,6 +70,7 @@ import { ProviderRegistryLive } from "./provider/Layers/ProviderRegistry.ts";
 import { ServerSettingsLive } from "./serverSettings.ts";
 import { ServerClientSettingsLive } from "./serverClientSettings.ts";
 import { BrandingImageStoreLive } from "./branding/BrandingImageStore.ts";
+import { AmbientImageStoreLive } from "./ambientMedia/AmbientImageStore.ts";
 import { ProjectFaviconResolverLive } from "./project/Layers/ProjectFaviconResolver.ts";
 import { RepositoryIdentityResolverLive } from "./project/Layers/RepositoryIdentityResolver.ts";
 import { WorkspaceEntriesLive } from "./workspace/Layers/WorkspaceEntries.ts";
@@ -321,7 +327,7 @@ const RuntimeServicesLive = ServerRuntimeStartupLive.pipe(
   Layer.provideMerge(RuntimeDependenciesLive),
 );
 
-export const makeRoutesLayer = Layer.mergeAll(
+const baseRoutesLayer = Layer.mergeAll(
   authAdminPasswordClearRouteLayer,
   authAdminPasswordSetRouteLayer,
   authAdminPasswordStatusRouteLayer,
@@ -338,6 +344,16 @@ export const makeRoutesLayer = Layer.mergeAll(
   authSessionRouteLayer,
   authWebSocketTokenRouteLayer,
   attachmentsRouteLayer,
+);
+
+export const makeRoutesLayer = Layer.mergeAll(
+  baseRoutesLayer,
+  Layer.mergeAll(
+    ambientImageServeRouteLayer,
+    ambientImageUploadRouteLayer,
+    ambientImageRemoveRouteLayer,
+  ),
+  youTubePublicDiscoveryRouteLayer,
   brandingSidebarImageServeRouteLayer,
   brandingSidebarImageUploadRouteLayer,
   clientDebugLogRouteLayer,
@@ -402,6 +418,8 @@ export const makeServerLayer = Layer.unwrap(
     return serverApplicationLayer.pipe(
       Layer.provideMerge(RuntimeServicesLive),
       Layer.provideMerge(BrandingImageStoreLive),
+      Layer.provide(AmbientImageStoreLive),
+      Layer.provide(YouTubePublicDiscoveryLive),
       Layer.provideMerge(ThreadDetailSubscriptionRegistryLive),
       Layer.provideMerge(HttpServerLive),
       Layer.provide(ObservabilityLive),

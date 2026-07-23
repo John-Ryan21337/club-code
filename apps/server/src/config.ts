@@ -82,6 +82,11 @@ export interface ServerConfigShape extends ServerDerivedPaths {
   readonly autoBootstrapProjectFromCwd: boolean;
   readonly logWebSocketEvents: boolean;
   /**
+   * Optional server-only key for the deliberately gated public YouTube search
+   * route. It must never be copied into contracts, settings, or diagnostics.
+   */
+  readonly youtubePublicDiscoveryApiKey?: string | undefined;
+  /**
    * Process-level capability gates. These are not user settings: later route
    * and renderer slices must enforce them independently of saved preferences.
    */

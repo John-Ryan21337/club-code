@@ -3,7 +3,10 @@ import {
   CAFE_CODE_ENVIRONMENT_ENDPOINT_PATH,
   CAFE_CODE_HTTPS_CERTIFICATE_PATH,
 } from "@cafecode/shared/environmentEndpoint";
-import { MAX_SIDEBAR_BRAND_IMAGE_FILE_BYTES } from "@cafecode/contracts/settings";
+import {
+  MAX_AMBIENT_IMAGE_FILE_BYTES,
+  MAX_SIDEBAR_BRAND_IMAGE_FILE_BYTES,
+} from "@cafecode/contracts/settings";
 import { decodeOtlpTraceRecords } from "@cafecode/shared/observability";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
@@ -40,6 +43,17 @@ import { ProjectFaviconResolver } from "./project/Services/ProjectFaviconResolve
 import { ServerAuth } from "./auth/Services/ServerAuth.ts";
 import { respondToAuthError } from "./auth/http.ts";
 import { BrandingImageError, BrandingImageStore } from "./branding/BrandingImageStore.ts";
+import {
+  AMBIENT_IMAGE_ROUTE_PREFIX,
+  AmbientImageError,
+  AmbientImageStore,
+} from "./ambientMedia/AmbientImageStore.ts";
+import {
+  parseYouTubeDiscoveryInput,
+  YouTubePublicDiscovery,
+  YouTubePublicDiscoveryError,
+} from "./ambientMedia/YouTubePublicDiscovery.ts";
+import { ServerClientSettingsService } from "./serverClientSettings.ts";
 import { ServerEnvironment } from "./environment/Services/ServerEnvironment.ts";
 import {
   browserApiCorsAllowedHeaders,
@@ -57,6 +71,38 @@ const HTML_CACHE_CONTROL = "no-store";
 const PWA_CONTROL_FILE_CACHE_CONTROL = "no-cache";
 const STATIC_FILE_CACHE_CONTROL = "public, max-age=3600";
 const BRANDING_IMAGE_ROUTE_PREFIX = "/api/branding/sidebar-image/";
+const YOUTUBE_DISCOVERY_REQUEST_MAX_BYTES = 1_024;
+const STATIC_CONTENT_SECURITY_POLICY = [
+  "default-src 'self'",
+  "base-uri 'self'",
+  "object-src 'none'",
+  "frame-ancestors 'none'",
+  "form-action 'self'",
+  // The packaged diff/syntax worker instantiates its bundled Oniguruma WASM.
+  // `wasm-unsafe-eval` permits that compilation without enabling JavaScript eval.
+  "script-src 'self' 'wasm-unsafe-eval'",
+  "style-src 'self' https://fonts.googleapis.com",
+  "style-src-elem 'self' https://fonts.googleapis.com",
+  "style-src-attr 'unsafe-inline'",
+  "font-src 'self' https://fonts.gstatic.com data:",
+  "img-src 'self' data: blob:",
+  "media-src 'self' blob:",
+  "worker-src 'self' blob:",
+  // Saved Cafe Code environments are user-selected HTTP(S)/WS(S) origins.
+  // Keep this broad transport allowance isolated to connect-src; executable,
+  // image, media, and frame sources remain explicitly constrained.
+  "connect-src 'self' http: https: ws: wss:",
+  "frame-src https://www.youtube-nocookie.com",
+  "manifest-src 'self'",
+].join("; ");
+const STATIC_SECURITY_HEADERS = {
+  "Content-Security-Policy": STATIC_CONTENT_SECURITY_POLICY,
+  "Permissions-Policy":
+    'camera=(), fullscreen=(self "https://www.youtube-nocookie.com"), geolocation=(), microphone=(), payment=(), usb=()',
+  "Referrer-Policy": "no-referrer",
+  "X-Content-Type-Options": "nosniff",
+  "X-Frame-Options": "DENY",
+} as const;
 
 export const browserApiCorsLayer = HttpRouter.cors({
   allowedMethods: [...browserApiCorsAllowedMethods],
@@ -147,6 +193,7 @@ function staticResponseHeaders(input: {
   return {
     "Cache-Control": input.cacheControl,
     Vary: "Accept-Encoding",
+    ...STATIC_SECURITY_HEADERS,
     ...(input.contentEncoding ? { "Content-Encoding": input.contentEncoding } : {}),
   };
 }
@@ -371,6 +418,20 @@ const respondToBrandingImageError = (error: BrandingImageError) =>
     });
   });
 
+const respondToAmbientImageError = (error: AmbientImageError) =>
+  Effect.gen(function* () {
+    if (error.status >= 500) {
+      yield* Effect.logError("ambient image route failed", {
+        code: error.code,
+        cause: error.cause,
+      });
+    }
+    return HttpServerResponse.text(error.message, {
+      status: error.status,
+      headers: browserApiCorsHeaders,
+    });
+  });
+
 function decodeBrandingImageId(rawId: string): string | null {
   try {
     return decodeURIComponent(rawId);
@@ -553,6 +614,213 @@ export const brandingSidebarImageServeRouteLayer = HttpRouter.add(
   }).pipe(
     Effect.catchTag("AuthError", respondToAuthError),
     Effect.catchTag("BrandingImageError", respondToBrandingImageError),
+  ),
+);
+
+export const ambientImageUploadRouteLayer = HttpRouter.add(
+  "POST",
+  "/api/ambient-media/image",
+  Effect.gen(function* () {
+    yield* requireAuthenticatedRequest;
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const contentLength = Number.parseInt(request.headers["content-length"] ?? "", 10);
+    if (Number.isFinite(contentLength) && contentLength > MAX_AMBIENT_IMAGE_FILE_BYTES) {
+      return HttpServerResponse.text("Ambient image is too large.", {
+        status: 413,
+        headers: browserApiCorsHeaders,
+      });
+    }
+    // Content-Length is only a fast reject. The request reader has its own
+    // hard limit, so chunked, absent, invalid, or underreported lengths cannot
+    // make the server retain an arbitrarily large body.
+    const body = yield* request.arrayBuffer.pipe(
+      Effect.provideService(
+        HttpServerRequest.MaxBodySize,
+        FileSystem.Size(MAX_AMBIENT_IMAGE_FILE_BYTES + 1),
+      ),
+      Effect.mapError(
+        (cause) =>
+          new AmbientImageError({
+            code: "too-large",
+            status: 413,
+            message: "Ambient image is too large.",
+            cause,
+          }),
+      ),
+    );
+    if (body.byteLength > MAX_AMBIENT_IMAGE_FILE_BYTES) {
+      return yield* new AmbientImageError({
+        code: "too-large",
+        status: 413,
+        message: "Ambient image is too large.",
+      });
+    }
+    const ambientImage = yield* (yield* AmbientImageStore).storeUploadedImage({
+      bytes: new Uint8Array(body),
+      ...(request.headers["content-type"]
+        ? { declaredMimeType: request.headers["content-type"] }
+        : {}),
+    });
+    return HttpServerResponse.jsonUnsafe(
+      { ambientImage },
+      { status: 200, headers: browserApiCorsHeaders },
+    );
+  }).pipe(
+    Effect.catchTag("AuthError", respondToAuthError),
+    Effect.catchTag("AmbientImageError", respondToAmbientImageError),
+  ),
+);
+
+export const ambientImageServeRouteLayer = HttpRouter.add(
+  "GET",
+  `${AMBIENT_IMAGE_ROUTE_PREFIX}*`,
+  Effect.gen(function* () {
+    yield* requireAuthenticatedRequest;
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const url = HttpServerRequest.toURL(request);
+    if (Option.isNone(url)) return HttpServerResponse.text("Bad Request", { status: 400 });
+    let id: string;
+    try {
+      id = decodeURIComponent(url.value.pathname.slice(AMBIENT_IMAGE_ROUTE_PREFIX.length));
+    } catch {
+      return HttpServerResponse.text("Ambient image was not found.", {
+        status: 404,
+        headers: browserApiCorsHeaders,
+      });
+    }
+    const stored = yield* (yield* AmbientImageStore).resolveStoredImage(id);
+    return yield* HttpServerResponse.file(stored.filePath, {
+      status: 200,
+      contentType: stored.mimeType,
+      headers: { "Cache-Control": PRIVATE_HASHED_ASSET_CACHE_CONTROL, ...browserApiCorsHeaders },
+    }).pipe(
+      Effect.catch((cause) =>
+        Effect.fail(
+          new AmbientImageError({
+            code: "storage-failed",
+            status: 500,
+            message: "Ambient image could not be loaded.",
+            cause,
+          }),
+        ),
+      ),
+    );
+  }).pipe(
+    Effect.catchTag("AuthError", respondToAuthError),
+    Effect.catchTag("AmbientImageError", respondToAmbientImageError),
+  ),
+);
+
+export const ambientImageRemoveRouteLayer = HttpRouter.add(
+  "DELETE",
+  `${AMBIENT_IMAGE_ROUTE_PREFIX}*`,
+  Effect.gen(function* () {
+    yield* requireAuthenticatedRequest;
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const url = HttpServerRequest.toURL(request);
+    if (Option.isNone(url)) return HttpServerResponse.text("Bad Request", { status: 400 });
+    let id: string;
+    try {
+      id = decodeURIComponent(url.value.pathname.slice(AMBIENT_IMAGE_ROUTE_PREFIX.length));
+    } catch {
+      return HttpServerResponse.text("Ambient image was not found.", { status: 404 });
+    }
+    const settings = yield* (yield* ServerClientSettingsService).getSettings;
+    if (settings.ambientImageAsset?.id === id) {
+      return HttpServerResponse.text("Ambient image is still selected in shared settings.", {
+        status: 409,
+        headers: browserApiCorsHeaders,
+      });
+    }
+    yield* (yield* AmbientImageStore).removeStoredImage(id);
+    return HttpServerResponse.empty({ status: 204, headers: browserApiCorsHeaders });
+  }).pipe(
+    Effect.catchTag("AuthError", respondToAuthError),
+    Effect.catchTag("AmbientImageError", respondToAmbientImageError),
+  ),
+);
+
+function respondToYouTubePublicDiscoveryError(error: YouTubePublicDiscoveryError) {
+  return Effect.succeed(
+    HttpServerResponse.jsonUnsafe(
+      { error: error.code },
+      { status: error.status, headers: browserApiCorsHeaders },
+    ),
+  );
+}
+
+export const youTubePublicDiscoveryRouteLayer = HttpRouter.add(
+  "POST",
+  "/api/ambient-media/youtube/search",
+  Effect.gen(function* () {
+    yield* requireAuthenticatedRequest;
+    const config = yield* ServerConfig;
+    if (!config.ambientExperienceCapabilities.youtubePublicDiscovery) {
+      return yield* new YouTubePublicDiscoveryError({ code: "unavailable", status: 503 });
+    }
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const contentLength = Number.parseInt(request.headers["content-length"] ?? "", 10);
+    if (Number.isFinite(contentLength) && contentLength > YOUTUBE_DISCOVERY_REQUEST_MAX_BYTES) {
+      return yield* new YouTubePublicDiscoveryError({
+        code: "payload-too-large",
+        status: 413,
+      });
+    }
+    const bodyBytes = yield* request.arrayBuffer.pipe(
+      // Read one byte beyond the accepted size so chunked and underreported
+      // requests get the same explicit 413 as Content-Length fast rejects.
+      Effect.provideService(
+        HttpServerRequest.MaxBodySize,
+        FileSystem.Size(YOUTUBE_DISCOVERY_REQUEST_MAX_BYTES + 1),
+      ),
+      Effect.mapError(
+        () =>
+          new YouTubePublicDiscoveryError({
+            code: "payload-too-large",
+            status: 413,
+          }),
+      ),
+    );
+    if (bodyBytes.byteLength > YOUTUBE_DISCOVERY_REQUEST_MAX_BYTES) {
+      return yield* new YouTubePublicDiscoveryError({
+        code: "payload-too-large",
+        status: 413,
+      });
+    }
+    const body = yield* Effect.try({
+      try: () => JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bodyBytes)) as unknown,
+      catch: () => new YouTubePublicDiscoveryError({ code: "invalid-query", status: 400 }),
+    });
+    if (typeof body !== "object" || body === null || Array.isArray(body)) {
+      return yield* new YouTubePublicDiscoveryError({ code: "invalid-query", status: 400 });
+    }
+    const record = body as Record<string, unknown>;
+    const maxResults =
+      record.maxResults === undefined
+        ? null
+        : typeof record.maxResults === "number" && Number.isInteger(record.maxResults)
+          ? String(record.maxResults)
+          : "";
+    const input = parseYouTubeDiscoveryInput({
+      query: typeof record.query === "string" ? record.query : null,
+      maxResults,
+    });
+    if (!input)
+      return yield* new YouTubePublicDiscoveryError({ code: "invalid-query", status: 400 });
+    const results = yield* (yield* YouTubePublicDiscovery).search({
+      query: input.query,
+      maxResults: input.maxResults,
+      // Do not use forwarding headers: they are client-controlled unless a
+      // trusted reverse-proxy boundary explicitly establishes them.
+      clientId: Option.getOrUndefined(request.remoteAddress) ?? "unknown",
+    });
+    return HttpServerResponse.jsonUnsafe(
+      { results },
+      { status: 200, headers: browserApiCorsHeaders },
+    );
+  }).pipe(
+    Effect.catchTag("AuthError", respondToAuthError),
+    Effect.catchTag("YouTubePublicDiscoveryError", respondToYouTubePublicDiscoveryError),
   ),
 );
 

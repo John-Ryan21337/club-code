@@ -341,6 +341,77 @@ export const OrchestrationThreadActivity = Schema.Struct({
 });
 export type OrchestrationThreadActivity = typeof OrchestrationThreadActivity.Type;
 
+export const WORKFLOW_PROJECTION_MAX_NODES = 64;
+export const WORKFLOW_PROJECTION_MAX_RECENT_ACTIVITIES = 100;
+export const WORKFLOW_PROJECTION_MAX_TEXT_CHARS = 512;
+
+const WorkflowProjectionText = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(WORKFLOW_PROJECTION_MAX_TEXT_CHARS),
+);
+const WorkflowNodeId = TrimmedNonEmptyString.check(Schema.isMaxLength(256));
+
+export const WorkflowAgentStatus = Schema.Literals([
+  "queued",
+  "running",
+  "waiting",
+  "completed",
+  "failed",
+  "interrupted",
+  "unknown",
+]);
+export type WorkflowAgentStatus = typeof WorkflowAgentStatus.Type;
+
+export const WorkflowProviderFidelity = Schema.Literals(["live", "lifecycle-only", "not-reported"]);
+export type WorkflowProviderFidelity = typeof WorkflowProviderFidelity.Type;
+
+/**
+ * A bounded, display-safe workflow node projected from persisted orchestration
+ * activity. Nullable fields are deliberate: providers do not all report
+ * hierarchy, labels, duration, or live inner work.
+ */
+export const WorkflowAgentNode = Schema.Struct({
+  id: WorkflowNodeId,
+  parentId: Schema.NullOr(WorkflowNodeId),
+  path: Schema.NullOr(WorkflowProjectionText),
+  name: Schema.NullOr(WorkflowProjectionText),
+  taskLabel: Schema.NullOr(WorkflowProjectionText),
+  status: WorkflowAgentStatus,
+  elapsedSeconds: Schema.NullOr(NonNegativeInt),
+  latestActivitySummary: Schema.NullOr(WorkflowProjectionText),
+  lastActivityAt: Schema.NullOr(IsoDateTime),
+  activityCount: NonNegativeInt,
+  depth: NonNegativeInt.check(Schema.isLessThanOrEqualTo(32)),
+});
+export type WorkflowAgentNode = typeof WorkflowAgentNode.Type;
+
+export const WorkflowRecentActivity = Schema.Struct({
+  id: EventId,
+  nodeId: Schema.NullOr(WorkflowNodeId),
+  kind: WorkflowProjectionText,
+  summary: WorkflowProjectionText,
+  tone: OrchestrationThreadActivityTone,
+  status: Schema.NullOr(WorkflowAgentStatus),
+  createdAt: IsoDateTime,
+});
+export type WorkflowRecentActivity = typeof WorkflowRecentActivity.Type;
+
+/**
+ * Renderer-ready reconnect projection. It contains no raw provider payload,
+ * prompt, reasoning text, or locally inferred elapsed duration.
+ */
+export const WorkflowProjectionSnapshot = Schema.Struct({
+  version: Schema.Literal(1),
+  fidelity: WorkflowProviderFidelity,
+  nodes: Schema.Array(WorkflowAgentNode).check(Schema.isMaxLength(WORKFLOW_PROJECTION_MAX_NODES)),
+  recentActivities: Schema.Array(WorkflowRecentActivity).check(
+    Schema.isMaxLength(WORKFLOW_PROJECTION_MAX_RECENT_ACTIVITIES),
+  ),
+  sourceActivityCount: NonNegativeInt,
+  omittedNodeCount: NonNegativeInt,
+  omittedActivityCount: NonNegativeInt,
+});
+export type WorkflowProjectionSnapshot = typeof WorkflowProjectionSnapshot.Type;
+
 const OrchestrationLatestTurnState = Schema.Literals([
   "running",
   "interrupted",

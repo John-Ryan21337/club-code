@@ -38,8 +38,13 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { __resetLocalApiForTests } from "../../localApi";
 import { AppAtomRegistryProvider, resetAppAtomRegistryForTests } from "../../rpc/atomRegistry";
-import { resetServerStateForTests, setServerConfigSnapshot } from "../../rpc/serverState";
+import {
+  getServerConfig,
+  resetServerStateForTests,
+  setServerConfigSnapshot,
+} from "../../rpc/serverState";
 import { useUiStateStore } from "../../uiStateStore";
+import { toastManager } from "../ui/toast";
 import { ConnectionsSettings } from "./ConnectionsSettings";
 import { DiagnosticsSettingsPanel } from "./DiagnosticsSettings";
 import {
@@ -500,6 +505,8 @@ const createDesktopBridgeStub = (overrides?: {
   readonly setUpdateChannel?: DesktopBridge["setUpdateChannel"];
   readonly sourceUpdateState?: DesktopSourceUpdateState;
   readonly checkSourceUpdate?: DesktopBridge["checkSourceUpdate"];
+  readonly getWindowOpacityState?: DesktopBridge["getWindowOpacityState"];
+  readonly setWindowOpacityPreference?: DesktopBridge["setWindowOpacityPreference"];
 }): DesktopBridge => {
   const idleUpdateState: DesktopUpdateState = {
     enabled: false,
@@ -574,6 +581,24 @@ const createDesktopBridgeStub = (overrides?: {
         advertisedHost: null,
       })),
     getAdvertisedEndpoints: vi.fn().mockResolvedValue(overrides?.advertisedEndpoints ?? []),
+    getWindowOpacityState:
+      overrides?.getWindowOpacityState ??
+      vi.fn().mockResolvedValue({
+        supported: false,
+        enabled: false,
+        opacity: 1,
+        effectiveOpacity: 1,
+        reason: "unsupported-platform",
+      }),
+    setWindowOpacityPreference:
+      overrides?.setWindowOpacityPreference ??
+      vi.fn().mockImplementation(async ({ opacity }) => ({
+        supported: false,
+        enabled: false,
+        opacity,
+        effectiveOpacity: 1,
+        reason: "unsupported-platform",
+      })),
     pickFolder: vi.fn().mockResolvedValue(null),
     confirm: vi.fn().mockResolvedValue(false),
     setTheme: vi.fn().mockResolvedValue(undefined),
@@ -1133,11 +1158,370 @@ describe("settings panels", () => {
       expect(updateClientSettings).toHaveBeenCalledWith({ continueBackgroundAnimations: true });
     });
 
+    await expect.element(page.getByText("Window atmosphere")).toBeInTheDocument();
+    await expect.element(page.getByText("Matrix", { exact: true })).not.toBeInTheDocument();
+    await page.getByLabelText("Show falling effects").click();
+
+    await vi.waitFor(() => {
+      expect(updateClientSettings).toHaveBeenCalledWith({ fallingEffectsEnabled: true });
+    });
+
+    await page.getByText("Matrix", { exact: true }).click();
+
+    await vi.waitFor(() => {
+      expect(updateClientSettings).toHaveBeenCalledWith({ fallingEffectKind: "matrix" });
+    });
+
+    setColorInput("Falling effect color", "#22c55e");
+
+    await vi.waitFor(() => {
+      expect(updateClientSettings).toHaveBeenCalledWith({ fallingEffectColor: "#22c55e" });
+    });
+
+    await page.getByLabelText("Increase falling effect opacity").click();
+    await page.getByLabelText("Increase falling effect speed").click();
+
+    await vi.waitFor(() => {
+      expect(updateClientSettings).toHaveBeenCalledWith({ fallingEffectOpacity: 0.4 });
+      expect(updateClientSettings).toHaveBeenCalledWith({ fallingEffectSpeed: 1.25 });
+    });
+
     await expect.element(page.getByText("Sidebar star speed")).toBeInTheDocument();
     await page.getByLabelText("Increase sidebar star speed").click();
 
     await vi.waitFor(() => {
       expect(updateClientSettings).toHaveBeenCalledWith({ sidebarStarSpeed: 1.25 });
+    });
+  });
+
+  it("normalizes ambient video sources and commits native opacity on blur", async () => {
+    const setWindowOpacityPreference = vi
+      .fn<DesktopBridge["setWindowOpacityPreference"]>()
+      .mockImplementation(async ({ enabled, opacity }) => ({
+        supported: true,
+        enabled,
+        opacity,
+        effectiveOpacity: enabled ? opacity : 1,
+        reason: null,
+      }));
+    const desktopBridge = createDesktopBridgeStub({
+      getWindowOpacityState: vi.fn().mockResolvedValue({
+        supported: true,
+        enabled: false,
+        opacity: 1,
+        effectiveOpacity: 1,
+        reason: null,
+      }),
+      setWindowOpacityPreference,
+    });
+    window.desktopBridge = desktopBridge;
+    const { updateClientSettings } = installClientSettingsNativeApi(desktopBridge);
+    setServerConfigSnapshot(createBaseServerConfig());
+
+    mounted = await renderWithTestRouter(
+      <AppAtomRegistryProvider>
+        <AppearanceSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    await expect.element(page.getByText("Ambient YouTube")).toBeInTheDocument();
+    const sourceInput = document.querySelector(
+      'input[aria-label="YouTube video or playlist"]',
+    ) as HTMLInputElement | null;
+    expect(sourceInput).not.toBeNull();
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(
+      sourceInput,
+      "https://youtu.be/dQw4w9WgXcQ?t=7",
+    );
+    sourceInput!.dispatchEvent(new Event("input", { bubbles: true }));
+    await page.getByRole("button", { name: "Apply", exact: true }).click();
+
+    await vi.waitFor(() => {
+      expect(updateClientSettings).toHaveBeenCalledWith({
+        ambientVideoSource: { kind: "video", id: "dQw4w9WgXcQ" },
+        ambientVideoEnabled: true,
+      });
+    });
+
+    const searchInput = document.querySelector(
+      'input[aria-label="Search YouTube"]',
+    ) as HTMLInputElement | null;
+    expect(searchInput?.disabled).toBe(false);
+
+    await expect.element(page.getByText("Window transparency and safety")).toBeInTheDocument();
+    const opacityInput = document.querySelector(
+      'input[aria-label="Desktop window opacity"]',
+    ) as HTMLInputElement | null;
+    expect(opacityInput).not.toBeNull();
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(
+      opacityInput,
+      "0.75",
+    );
+    opacityInput!.dispatchEvent(new Event("input", { bubbles: true }));
+    opacityInput!.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+
+    await vi.waitFor(() => {
+      expect(setWindowOpacityPreference).toHaveBeenCalledWith({
+        enabled: false,
+        opacity: 0.75,
+      });
+    });
+  });
+
+  it("disables ambient rendering without erasing saved choices or accepting a stale opacity read", async () => {
+    type OpacityState = Awaited<ReturnType<DesktopBridge["getWindowOpacityState"]>>;
+    let resolveInitialOpacity!: (state: OpacityState) => void;
+    const initialOpacity = new Promise<OpacityState>((resolve) => {
+      resolveInitialOpacity = resolve;
+    });
+    const getWindowOpacityState = vi
+      .fn<DesktopBridge["getWindowOpacityState"]>()
+      .mockImplementationOnce(() => initialOpacity)
+      .mockResolvedValueOnce({
+        supported: true,
+        enabled: true,
+        opacity: 0.68,
+        effectiveOpacity: 0.68,
+        reason: null,
+      });
+    const setWindowOpacityPreference = vi
+      .fn<DesktopBridge["setWindowOpacityPreference"]>()
+      .mockResolvedValue({
+        supported: true,
+        enabled: false,
+        opacity: 0.68,
+        effectiveOpacity: 1,
+        reason: null,
+      });
+    const desktopBridge = createDesktopBridgeStub({
+      getWindowOpacityState,
+      setWindowOpacityPreference,
+    });
+    window.desktopBridge = desktopBridge;
+    const { updateClientSettings } = installClientSettingsNativeApi(desktopBridge);
+    const savedVideoSource = { kind: "video" as const, id: "dQw4w9WgXcQ" };
+    const config = createBaseServerConfig();
+    setServerConfigSnapshot({
+      ...config,
+      clientSettings: {
+        ...config.clientSettings,
+        fallingEffectsEnabled: true,
+        fallingEffectKind: "matrix",
+        ambientVideoEnabled: true,
+        ambientVideoSource: savedVideoSource,
+        ambientVideoGlowEnabled: true,
+        ambientImageEnabled: true,
+        ambientImageGlowEnabled: true,
+      },
+    });
+
+    mounted = await renderWithTestRouter(
+      <AppAtomRegistryProvider>
+        <AppearanceSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    await vi.waitFor(() => {
+      expect(getWindowOpacityState).toHaveBeenCalledTimes(1);
+    });
+    await page.getByRole("button", { name: "Restore appearance" }).click();
+
+    await vi.waitFor(() => {
+      expect(updateClientSettings).toHaveBeenCalledWith({
+        fallingEffectsEnabled: false,
+        ambientVideoEnabled: false,
+        ambientImageEnabled: false,
+      });
+      expect(setWindowOpacityPreference).toHaveBeenCalledWith({
+        enabled: false,
+        opacity: 0.68,
+      });
+    });
+
+    const persistedPatch = updateClientSettings.mock.calls.at(-1)?.[0];
+    expect(persistedPatch).not.toHaveProperty("ambientVideoSource");
+    expect(persistedPatch).not.toHaveProperty("ambientVideoGlowEnabled");
+    expect(persistedPatch).not.toHaveProperty("ambientImageGlowEnabled");
+    expect(getServerConfig()?.clientSettings).toMatchObject({
+      fallingEffectsEnabled: false,
+      fallingEffectKind: "matrix",
+      ambientVideoEnabled: false,
+      ambientVideoSource: savedVideoSource,
+      ambientVideoGlowEnabled: true,
+      ambientImageEnabled: false,
+      ambientImageGlowEnabled: true,
+    });
+
+    resolveInitialOpacity({
+      supported: true,
+      enabled: true,
+      opacity: 0.42,
+      effectiveOpacity: 0.42,
+      reason: null,
+    });
+    await vi.waitFor(() => {
+      expect(
+        document
+          .querySelector('[aria-label="Transparent desktop window"]')
+          ?.getAttribute("aria-checked"),
+      ).toBe("false");
+    });
+    await expect
+      .element(page.getByText("All available ambient features are off. Saved choices were kept."))
+      .toBeInTheDocument();
+  });
+
+  it("rolls back failed Disable All settings and reports a retryable partial result", async () => {
+    const desktopBridge = createDesktopBridgeStub({
+      getWindowOpacityState: vi.fn().mockResolvedValue({
+        supported: true,
+        enabled: true,
+        opacity: 0.76,
+        effectiveOpacity: 0.76,
+        reason: null,
+      }),
+      setWindowOpacityPreference: vi.fn().mockResolvedValue({
+        supported: true,
+        enabled: false,
+        opacity: 0.76,
+        effectiveOpacity: 1,
+        reason: null,
+      }),
+    });
+    window.desktopBridge = desktopBridge;
+    const { updateClientSettings } = installClientSettingsNativeApi(desktopBridge);
+    updateClientSettings.mockRejectedValue(new Error("settings RPC unavailable"));
+    const toastSpy = vi.spyOn(toastManager, "add");
+    const config = createBaseServerConfig();
+    setServerConfigSnapshot({
+      ...config,
+      clientSettings: {
+        ...config.clientSettings,
+        fallingEffectsEnabled: true,
+        ambientVideoEnabled: true,
+        ambientVideoGlowEnabled: true,
+      },
+    });
+
+    mounted = await renderWithTestRouter(
+      <AppAtomRegistryProvider>
+        <AppearanceSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    await page.getByRole("button", { name: "Restore appearance" }).click();
+
+    await vi.waitFor(() => {
+      expect(getServerConfig()?.clientSettings).toMatchObject({
+        fallingEffectsEnabled: true,
+        ambientVideoEnabled: true,
+        ambientVideoGlowEnabled: true,
+      });
+      expect(toastSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "Appearance only partly restored",
+          type: "error",
+        }),
+      );
+    });
+    await expect
+      .element(page.getByRole("alert"))
+      .toHaveTextContent("Appearance was only partly restored");
+    await expect.element(page.getByRole("button", { name: "Restore appearance" })).toBeEnabled();
+  });
+
+  it("does not let an older failed optimistic write roll back a newer setting choice", async () => {
+    let rejectFirstWrite!: (error: Error) => void;
+    const firstWrite = new Promise<never>((_resolve, reject) => {
+      rejectFirstWrite = reject;
+    });
+    const desktopBridge = createDesktopBridgeStub();
+    window.desktopBridge = desktopBridge;
+    const { updateClientSettings } = installClientSettingsNativeApi(desktopBridge);
+    updateClientSettings
+      .mockImplementationOnce(() => firstWrite)
+      .mockResolvedValue(DEFAULT_CLIENT_SETTINGS);
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    setServerConfigSnapshot(createBaseServerConfig());
+
+    mounted = await renderWithTestRouter(
+      <AppAtomRegistryProvider>
+        <AppearanceSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    const effectsSwitch = page.getByRole("switch", { name: "Show falling effects" });
+    await effectsSwitch.click();
+    await vi.waitFor(() => {
+      expect(updateClientSettings).toHaveBeenCalledWith({ fallingEffectsEnabled: true });
+    });
+    await effectsSwitch.click();
+    await vi.waitFor(() => {
+      expect(updateClientSettings).toHaveBeenCalledWith({ fallingEffectsEnabled: false });
+    });
+
+    rejectFirstWrite(new Error("older write failed"));
+    await vi.waitFor(() => {
+      expect(consoleErrorSpy).toHaveBeenCalled();
+      expect(getServerConfig()?.clientSettings.fallingEffectsEnabled).toBe(false);
+    });
+  });
+
+  it("searches public YouTube results in-app and selects a normalized source", async () => {
+    const desktopBridge = createDesktopBridgeStub();
+    window.desktopBridge = desktopBridge;
+    const { updateClientSettings } = installClientSettingsNativeApi(desktopBridge);
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          results: [
+            {
+              kind: "video",
+              id: "dQw4w9WgXcQ",
+              title: "Late-night coding mix",
+              thumbnail: null,
+            },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    setServerConfigSnapshot({
+      ...createBaseServerConfig(),
+      ambientExperienceCapabilities: {
+        ...DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES,
+        youtubePlayer: true,
+        youtubePublicDiscovery: true,
+      },
+    });
+
+    mounted = await renderWithTestRouter(
+      <AppAtomRegistryProvider>
+        <AppearanceSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    await page.getByLabelText("Search YouTube").fill("late night coding");
+    await page.getByRole("button", { name: "Search", exact: true }).click();
+    await expect.element(page.getByText("Late-night coding mix")).toBeInTheDocument();
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const discoveryUrl = new URL(String(fetchMock.mock.calls[0]?.[0]));
+    expect(discoveryUrl.pathname).toBe("/api/ambient-media/youtube/search");
+    expect(discoveryUrl.search).toBe("");
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({
+      method: "POST",
+      credentials: "include",
+      body: JSON.stringify({ query: "late night coding", maxResults: 8 }),
+    });
+
+    await page.getByText("Late-night coding mix").click();
+    await vi.waitFor(() => {
+      expect(updateClientSettings).toHaveBeenCalledWith({
+        ambientVideoSource: { kind: "video", id: "dQw4w9WgXcQ" },
+        ambientVideoEnabled: true,
+      });
     });
   });
 

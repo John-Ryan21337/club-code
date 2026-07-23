@@ -25,7 +25,11 @@ export interface PersistedUiState {
   defaultAdvertisedEndpointKey?: string | null;
   navigationSidebarOpen?: boolean;
   threadPlanSidebarOpenById?: Record<string, boolean>;
+  threadRightPanelTabById?: Record<string, RightPanelTab>;
+  threadWorkflowNodeExpandedById?: Record<string, Record<string, boolean>>;
 }
+
+export type RightPanelTab = "plan" | "workflow";
 
 export interface UiProjectState {
   projectExpandedById: Record<string, boolean>;
@@ -41,6 +45,10 @@ export interface UiThreadState {
    * choices and must survive new task updates for that thread.
    */
   threadPlanSidebarOpenById: Record<string, boolean>;
+  /** Selected Plan/Workflow tab, kept on this device and scoped to a thread. */
+  threadRightPanelTabById: Record<string, RightPanelTab>;
+  /** Explicit workflow card expansion choices keyed by thread and stable node id. */
+  threadWorkflowNodeExpandedById: Record<string, Record<string, boolean>>;
 }
 
 export interface UiEndpointState {
@@ -72,6 +80,8 @@ const initialState: UiState = {
   projectOrder: [],
   threadLastVisitedAtById: {},
   threadPlanSidebarOpenById: {},
+  threadRightPanelTabById: {},
+  threadWorkflowNodeExpandedById: {},
   defaultAdvertisedEndpointKey: null,
   navigationSidebarOpen: true,
 };
@@ -118,6 +128,10 @@ function readPersistedState(): UiState {
       navigationSidebarOpen:
         typeof parsed.navigationSidebarOpen === "boolean" ? parsed.navigationSidebarOpen : true,
       threadPlanSidebarOpenById: sanitizeBooleanRecord(parsed.threadPlanSidebarOpenById),
+      threadRightPanelTabById: sanitizeRightPanelTabRecord(parsed.threadRightPanelTabById),
+      threadWorkflowNodeExpandedById: sanitizeNestedBooleanRecord(
+        parsed.threadWorkflowNodeExpandedById,
+      ),
     };
   } catch {
     return initialState;
@@ -132,6 +146,35 @@ function sanitizeBooleanRecord(input: unknown): Record<string, boolean> {
     Object.entries(input as Record<string, unknown>).filter(
       (entry): entry is [string, boolean] => entry[0].length > 0 && typeof entry[1] === "boolean",
     ),
+  );
+}
+
+function sanitizeRightPanelTabRecord(input: unknown): Record<string, RightPanelTab> {
+  if (input === null || typeof input !== "object" || Array.isArray(input)) {
+    return {};
+  }
+  return Object.fromEntries(
+    Object.entries(input as Record<string, unknown>).filter(
+      (entry): entry is [string, RightPanelTab] =>
+        entry[0].length > 0 && (entry[1] === "plan" || entry[1] === "workflow"),
+    ),
+  );
+}
+
+function sanitizeNestedBooleanRecord(input: unknown): Record<string, Record<string, boolean>> {
+  if (input === null || typeof input !== "object" || Array.isArray(input)) {
+    return {};
+  }
+  return Object.fromEntries(
+    Object.entries(input as Record<string, unknown>).flatMap(([threadId, value]) => {
+      if (threadId.length === 0) return [];
+      const nodeState = Object.fromEntries(
+        Object.entries(sanitizeBooleanRecord(value))
+          .filter(([nodeId]) => nodeId.length <= 256)
+          .slice(0, 64),
+      );
+      return Object.keys(nodeState).length > 0 ? [[threadId, nodeState]] : [];
+    }),
   );
 }
 
@@ -184,6 +227,8 @@ export function persistState(state: UiState): void {
         defaultAdvertisedEndpointKey: state.defaultAdvertisedEndpointKey,
         navigationSidebarOpen: state.navigationSidebarOpen,
         threadPlanSidebarOpenById: state.threadPlanSidebarOpenById,
+        threadRightPanelTabById: state.threadRightPanelTabById,
+        threadWorkflowNodeExpandedById: state.threadWorkflowNodeExpandedById,
       } satisfies PersistedUiState),
     );
     if (!legacyKeysCleanedUp) {
@@ -382,6 +427,16 @@ export function syncThreads(state: UiState, threads: readonly SyncThreadInput[])
       retainedThreadIds.has(threadId),
     ),
   );
+  const nextThreadRightPanelTabById = Object.fromEntries(
+    Object.entries(state.threadRightPanelTabById).filter(([threadId]) =>
+      retainedThreadIds.has(threadId),
+    ),
+  );
+  const nextThreadWorkflowNodeExpandedById = Object.fromEntries(
+    Object.entries(state.threadWorkflowNodeExpandedById).filter(([threadId]) =>
+      retainedThreadIds.has(threadId),
+    ),
+  );
   for (const thread of threads) {
     if (
       nextThreadLastVisitedAtById[thread.key] === undefined &&
@@ -393,7 +448,9 @@ export function syncThreads(state: UiState, threads: readonly SyncThreadInput[])
   }
   if (
     recordsEqual(state.threadLastVisitedAtById, nextThreadLastVisitedAtById) &&
-    recordsEqual(state.threadPlanSidebarOpenById, nextThreadPlanSidebarOpenById)
+    recordsEqual(state.threadPlanSidebarOpenById, nextThreadPlanSidebarOpenById) &&
+    recordsEqual(state.threadRightPanelTabById, nextThreadRightPanelTabById) &&
+    recordsEqual(state.threadWorkflowNodeExpandedById, nextThreadWorkflowNodeExpandedById)
   ) {
     return state;
   }
@@ -401,6 +458,8 @@ export function syncThreads(state: UiState, threads: readonly SyncThreadInput[])
     ...state,
     threadLastVisitedAtById: nextThreadLastVisitedAtById,
     threadPlanSidebarOpenById: nextThreadPlanSidebarOpenById,
+    threadRightPanelTabById: nextThreadRightPanelTabById,
+    threadWorkflowNodeExpandedById: nextThreadWorkflowNodeExpandedById,
   };
 }
 
@@ -426,9 +485,21 @@ export function removeThreadUiForNonPrimaryEnvironment(
       isThreadUiKeyForPrimaryEnvironment(threadKey, primaryEnvironmentId),
     ),
   );
+  const threadRightPanelTabById = Object.fromEntries(
+    Object.entries(state.threadRightPanelTabById).filter(([threadKey]) =>
+      isThreadUiKeyForPrimaryEnvironment(threadKey, primaryEnvironmentId),
+    ),
+  );
+  const threadWorkflowNodeExpandedById = Object.fromEntries(
+    Object.entries(state.threadWorkflowNodeExpandedById).filter(([threadKey]) =>
+      isThreadUiKeyForPrimaryEnvironment(threadKey, primaryEnvironmentId),
+    ),
+  );
   if (
     recordsEqual(state.threadLastVisitedAtById, threadLastVisitedAtById) &&
-    recordsEqual(state.threadPlanSidebarOpenById, threadPlanSidebarOpenById)
+    recordsEqual(state.threadPlanSidebarOpenById, threadPlanSidebarOpenById) &&
+    recordsEqual(state.threadRightPanelTabById, threadRightPanelTabById) &&
+    recordsEqual(state.threadWorkflowNodeExpandedById, threadWorkflowNodeExpandedById)
   ) {
     return state;
   }
@@ -436,6 +507,8 @@ export function removeThreadUiForNonPrimaryEnvironment(
     ...state,
     threadLastVisitedAtById,
     threadPlanSidebarOpenById,
+    threadRightPanelTabById,
+    threadWorkflowNodeExpandedById,
   };
 }
 
@@ -463,17 +536,32 @@ export function markThreadVisited(state: UiState, threadId: string, visitedAt?: 
 export function clearThreadUi(state: UiState, threadId: string): UiState {
   const hasVisitedState = threadId in state.threadLastVisitedAtById;
   const hasPlanSidebarState = threadId in state.threadPlanSidebarOpenById;
-  if (!hasVisitedState && !hasPlanSidebarState) {
+  const hasRightPanelTabState = threadId in state.threadRightPanelTabById;
+  const hasWorkflowExpansionState = threadId in state.threadWorkflowNodeExpandedById;
+  if (
+    !hasVisitedState &&
+    !hasPlanSidebarState &&
+    !hasRightPanelTabState &&
+    !hasWorkflowExpansionState
+  ) {
     return state;
   }
   const nextThreadLastVisitedAtById = { ...state.threadLastVisitedAtById };
   const nextThreadPlanSidebarOpenById = { ...state.threadPlanSidebarOpenById };
+  const nextThreadRightPanelTabById = { ...state.threadRightPanelTabById };
+  const nextThreadWorkflowNodeExpandedById = {
+    ...state.threadWorkflowNodeExpandedById,
+  };
   delete nextThreadLastVisitedAtById[threadId];
   delete nextThreadPlanSidebarOpenById[threadId];
+  delete nextThreadRightPanelTabById[threadId];
+  delete nextThreadWorkflowNodeExpandedById[threadId];
   return {
     ...state,
     threadLastVisitedAtById: nextThreadLastVisitedAtById,
     threadPlanSidebarOpenById: nextThreadPlanSidebarOpenById,
+    threadRightPanelTabById: nextThreadRightPanelTabById,
+    threadWorkflowNodeExpandedById: nextThreadWorkflowNodeExpandedById,
   };
 }
 
@@ -486,6 +574,45 @@ export function setThreadPlanSidebarOpen(state: UiState, threadId: string, open:
     threadPlanSidebarOpenById: {
       ...state.threadPlanSidebarOpenById,
       [threadId]: open,
+    },
+  };
+}
+
+export function setThreadRightPanelTab(
+  state: UiState,
+  threadId: string,
+  tab: RightPanelTab,
+): UiState {
+  if (state.threadRightPanelTabById[threadId] === tab) {
+    return state;
+  }
+  return {
+    ...state,
+    threadRightPanelTabById: {
+      ...state.threadRightPanelTabById,
+      [threadId]: tab,
+    },
+  };
+}
+
+export function setThreadWorkflowNodeExpanded(
+  state: UiState,
+  threadId: string,
+  nodeId: string,
+  expanded: boolean,
+): UiState {
+  const threadState = state.threadWorkflowNodeExpandedById[threadId] ?? {};
+  if (threadState[nodeId] === expanded) {
+    return state;
+  }
+  return {
+    ...state,
+    threadWorkflowNodeExpandedById: {
+      ...state.threadWorkflowNodeExpandedById,
+      [threadId]: {
+        ...threadState,
+        [nodeId]: expanded,
+      },
     },
   };
 }
@@ -585,6 +712,8 @@ interface UiStateStore extends UiState {
   markThreadVisited: (threadId: string, visitedAt?: string) => void;
   clearThreadUi: (threadId: string) => void;
   setThreadPlanSidebarOpen: (threadId: string, open: boolean) => void;
+  setThreadRightPanelTab: (threadId: string, tab: RightPanelTab) => void;
+  setThreadWorkflowNodeExpanded: (threadId: string, nodeId: string, expanded: boolean) => void;
   setDefaultAdvertisedEndpointKey: (key: string | null) => void;
   setNavigationSidebarOpen: (open: boolean) => void;
   toggleProject: (projectId: string) => void;
@@ -606,6 +735,10 @@ export const useUiStateStore = create<UiStateStore>((set) => ({
   clearThreadUi: (threadId) => set((state) => clearThreadUi(state, threadId)),
   setThreadPlanSidebarOpen: (threadId, open) =>
     set((state) => setThreadPlanSidebarOpen(state, threadId, open)),
+  setThreadRightPanelTab: (threadId, tab) =>
+    set((state) => setThreadRightPanelTab(state, threadId, tab)),
+  setThreadWorkflowNodeExpanded: (threadId, nodeId, expanded) =>
+    set((state) => setThreadWorkflowNodeExpanded(state, threadId, nodeId, expanded)),
   setDefaultAdvertisedEndpointKey: (key) =>
     set((state) => setDefaultAdvertisedEndpointKey(state, key)),
   setNavigationSidebarOpen: (open) => set((state) => setNavigationSidebarOpen(state, open)),

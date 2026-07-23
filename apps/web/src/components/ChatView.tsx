@@ -79,7 +79,8 @@ import {
   useStore,
 } from "../store";
 import { createProjectSelectorByRef, createThreadSelectorByRef } from "../storeSelectors";
-import { useUiStateStore } from "../uiStateStore";
+import { type RightPanelTab, useUiStateStore } from "../uiStateStore";
+import { deriveWorkflowProjection } from "../workflowProjection";
 import {
   buildPlanImplementationThreadTitle,
   buildPlanImplementationPrompt,
@@ -149,6 +150,8 @@ import {
 import { ChatHeader } from "./chat/ChatHeader";
 import { type ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { NoActiveThreadState } from "./NoActiveThreadState";
+import { ChatMediaOverlay } from "./chat/ChatMediaOverlay";
+import { useAmbientVideoWorkspace } from "./ambient/AmbientVideoWorkspace";
 import { resolveEffectiveEnvMode, resolveEnvironmentOptionLabel } from "./BranchToolbar.logic";
 import { ProviderStatusBanner } from "./chat/ProviderStatusBanner";
 import { ThreadErrorBanner } from "./chat/ThreadErrorBanner";
@@ -202,6 +205,7 @@ const IMAGE_ONLY_BOOTSTRAP_PROMPT =
   "[User attached one or more images without additional text. Respond using the conversation context and the attached image(s).]";
 const EMPTY_ACTIVITIES: OrchestrationThreadActivity[] = [];
 const EMPTY_PROPOSED_PLANS: Thread["proposedPlans"] = [];
+const EMPTY_BOOLEAN_RECORD: Readonly<Record<string, boolean>> = {};
 const DEBUG_SNAPSHOT_VERSION = 11;
 const DEBUG_TEXT_PREVIEW_LIMIT = 120;
 const DEBUG_JSON_PREVIEW_LIMIT = 600;
@@ -1763,6 +1767,7 @@ function useLocalDispatchState(input: {
 }
 
 export default function ChatView(props: ChatViewProps) {
+  const { registerChatAnchor } = useAmbientVideoWorkspace();
   const {
     environmentId,
     threadId,
@@ -1793,6 +1798,16 @@ export default function ChatView(props: ChatViewProps) {
     routeKind === "server" ? store.threadPlanSidebarOpenById[routeThreadKey] : undefined,
   );
   const setPersistedPlanSidebarOpen = useUiStateStore((store) => store.setThreadPlanSidebarOpen);
+  const persistedRightPanelTab = useUiStateStore(
+    (store) => store.threadRightPanelTabById[routeThreadKey],
+  );
+  const workflowNodeExpandedById = useUiStateStore(
+    (store) => store.threadWorkflowNodeExpandedById[routeThreadKey] ?? EMPTY_BOOLEAN_RECORD,
+  );
+  const setPersistedRightPanelTab = useUiStateStore((store) => store.setThreadRightPanelTab);
+  const setPersistedWorkflowNodeExpanded = useUiStateStore(
+    (store) => store.setThreadWorkflowNodeExpanded,
+  );
   const settings = useSettings();
   const setStickyComposerModelSelection = useComposerDraftStore(
     (store) => store.setStickyModelSelection,
@@ -2712,8 +2727,28 @@ export default function ChatView(props: ChatViewProps) {
     () => deriveActivePlanState(threadActivities, activeLatestTurn?.turnId ?? undefined),
     [activeLatestTurn?.turnId, threadActivities],
   );
-  const hasPlanSidebarContent = Boolean(activePlan || sidebarProposedPlan);
+  const workflowSnapshot = useMemo(
+    () =>
+      deriveWorkflowProjection({
+        activities: threadActivities,
+        turnId: activeLatestTurn?.turnId ?? null,
+        providerName: activeThread?.session?.provider ?? selectedProvider,
+      }),
+    [activeLatestTurn?.turnId, activeThread?.session?.provider, selectedProvider, threadActivities],
+  );
+  const hasPlanSidebarContent = Boolean(activeThread);
   const planSidebarLabel = sidebarProposedPlan || interactionMode === "plan" ? "Plan" : "Tasks";
+  const rightPanelTab: RightPanelTab =
+    persistedRightPanelTab ?? (activePlan || sidebarProposedPlan ? "plan" : "workflow");
+  const handleRightPanelTabChange = useCallback(
+    (tab: RightPanelTab) => setPersistedRightPanelTab(routeThreadKey, tab),
+    [routeThreadKey, setPersistedRightPanelTab],
+  );
+  const handleWorkflowNodeExpandedChange = useCallback(
+    (nodeId: string, expanded: boolean) =>
+      setPersistedWorkflowNodeExpanded(routeThreadKey, nodeId, expanded),
+    [routeThreadKey, setPersistedWorkflowNodeExpanded],
+  );
   const showPlanFollowUpPrompt =
     pendingUserInputs.length === 0 &&
     interactionMode === "plan" &&
@@ -6157,9 +6192,9 @@ export default function ChatView(props: ChatViewProps) {
       {/* Main content area with optional plan sidebar */}
       <div className="flex min-h-0 min-w-0 flex-1">
         {/* Chat column */}
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <div className="@container/chat-column flex min-h-0 min-w-0 flex-1 flex-col">
           {/* Messages Wrapper */}
-          <div className="relative flex min-h-0 flex-1 flex-col">
+          <div ref={registerChatAnchor} className="relative flex min-h-0 flex-1 flex-col">
             {/* Messages — LegendList handles virtualization and scrolling internally */}
             <MessagesTimeline
               key={activeThread.id}
@@ -6194,6 +6229,7 @@ export default function ChatView(props: ChatViewProps) {
             />
 
             {/* scroll to bottom pill — shown when user has scrolled away from the bottom */}
+            <ChatMediaOverlay />
             {showScrollToBottom && (
               <div className="pointer-events-none absolute bottom-1 left-1/2 z-30 flex -translate-x-1/2 justify-center py-1.5">
                 <button
@@ -6210,6 +6246,7 @@ export default function ChatView(props: ChatViewProps) {
 
           {/* Input bar */}
           <div
+            data-chat-input-bar="true"
             className={cn(
               "pl-[calc(env(safe-area-inset-left)+0.75rem)] pr-[calc(env(safe-area-inset-right)+0.75rem)] pt-1.5 sm:pl-[calc(env(safe-area-inset-left)+1.25rem)] sm:pr-[calc(env(safe-area-inset-right)+1.25rem)] sm:pt-2",
               // NOTE: intentionally NOT adding env(safe-area-inset-bottom) here.
@@ -6254,7 +6291,7 @@ export default function ChatView(props: ChatViewProps) {
                   activeProposedPlan={activeProposedPlan}
                   activePlan={activePlan as { turnId?: TurnId } | null}
                   sidebarProposedPlan={sidebarProposedPlan as { turnId?: TurnId } | null}
-                  planSidebarLabel={planSidebarLabel}
+                  planSidebarLabel="Plan / Workflow"
                   planSidebarOpen={shouldRenderPlanSidebar}
                   runtimeMode={runtimeMode}
                   interactionMode={interactionMode}
@@ -6357,8 +6394,13 @@ export default function ChatView(props: ChatViewProps) {
             markdownCwd={gitCwd ?? undefined}
             workspaceRoot={activeWorkspaceRoot}
             timestampFormat={timestampFormat}
+            activeTab={rightPanelTab}
+            workflowSnapshot={workflowSnapshot}
+            workflowNodeExpandedById={workflowNodeExpandedById}
             mode="sidebar"
             onClose={closePlanSidebar}
+            onActiveTabChange={handleRightPanelTabChange}
+            onWorkflowNodeExpandedChange={handleWorkflowNodeExpandedChange}
           />
         ) : null}
       </div>
@@ -6374,8 +6416,13 @@ export default function ChatView(props: ChatViewProps) {
             markdownCwd={gitCwd ?? undefined}
             workspaceRoot={activeWorkspaceRoot}
             timestampFormat={timestampFormat}
+            activeTab={rightPanelTab}
+            workflowSnapshot={workflowSnapshot}
+            workflowNodeExpandedById={workflowNodeExpandedById}
             mode="sheet"
             onClose={closePlanSidebar}
+            onActiveTabChange={handleRightPanelTabChange}
+            onWorkflowNodeExpandedChange={handleWorkflowNodeExpandedChange}
           />
         </RightPanelSheet>
       ) : null}
