@@ -1,8 +1,8 @@
-# Cafe Code
+# Club Code, a fork of Cafe Club - A bit more bumpin
 
 ![Cafe Code desktop screenshot](./docs/images/cafe-code-desktop.png)
 
-Made in Japan with love.
+Made in Japan with love, and polished in Silicon Valley -- a global production.
 
 **Warning**: Large parts of the application are currently under development and have been completely rewritten. It may take some time for the system to become stable.
 
