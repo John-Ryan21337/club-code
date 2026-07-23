@@ -1,7 +1,11 @@
 import * as NetService from "@cafecode/shared/Net";
 import { cafeCodeConfigWithDefault, cafeCodeOptionalValueConfig } from "@cafecode/shared/compatEnv";
 import { parsePersistedServerObservabilitySettings } from "@cafecode/shared/serverSettings";
-import { DesktopBackendBootstrap, PortSchema } from "@cafecode/contracts";
+import {
+  AMBIENT_EXPERIENCE_CAPABILITIES_VERSION,
+  DesktopBackendBootstrap,
+  PortSchema,
+} from "@cafecode/contracts";
 import * as Config from "effect/Config";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -122,6 +126,36 @@ const EnvServerConfig = Config.all({
     Config.boolean,
   ),
   logWebSocketEvents: cafeCodeOptionalValueConfig("CAFE_CODE_LOG_WS_EVENTS", Config.boolean),
+  ambientExperienceAtmosphereEnabled: cafeCodeConfigWithDefault(
+    "CAFE_CODE_AMBIENT_ATMOSPHERE_ENABLED",
+    Config.boolean,
+    false,
+  ),
+  ambientExperienceImageEnabled: cafeCodeConfigWithDefault(
+    "CAFE_CODE_AMBIENT_IMAGE_ENABLED",
+    Config.boolean,
+    false,
+  ),
+  ambientExperienceYoutubePlayerEnabled: cafeCodeConfigWithDefault(
+    "CAFE_CODE_YOUTUBE_PLAYER_ENABLED",
+    Config.boolean,
+    false,
+  ),
+  ambientExperienceYoutubePublicDiscoveryEnabled: cafeCodeConfigWithDefault(
+    "CAFE_CODE_YOUTUBE_PUBLIC_DISCOVERY_ENABLED",
+    Config.boolean,
+    false,
+  ),
+  ambientExperienceYoutubeAccountConnectionEnabled: cafeCodeConfigWithDefault(
+    "CAFE_CODE_YOUTUBE_ACCOUNT_CONNECTION_ENABLED",
+    Config.boolean,
+    false,
+  ),
+  ambientExperienceWorkflowObservatoryEnabled: cafeCodeConfigWithDefault(
+    "CAFE_CODE_WORKFLOW_OBSERVATORY_ENABLED",
+    Config.boolean,
+    false,
+  ),
 });
 
 export interface CliServerFlags {
@@ -336,6 +370,15 @@ export const resolveServerConfig = (
       () => (mode === "desktop" ? "127.0.0.1" : undefined),
     );
     const logLevel = Option.getOrElse(cliLogLevel, () => env.logLevel);
+    const ambientExperienceCapabilities = {
+      version: AMBIENT_EXPERIENCE_CAPABILITIES_VERSION,
+      atmosphere: env.ambientExperienceAtmosphereEnabled,
+      ambientImage: env.ambientExperienceImageEnabled,
+      youtubePlayer: env.ambientExperienceYoutubePlayerEnabled,
+      youtubePublicDiscovery: env.ambientExperienceYoutubePublicDiscoveryEnabled,
+      youtubeAccountConnection: env.ambientExperienceYoutubeAccountConnectionEnabled,
+      workflowObservatory: env.ambientExperienceWorkflowObservatoryEnabled,
+    } as const;
 
     const config: ServerConfigShape = {
       logLevel,
@@ -370,6 +413,7 @@ export const resolveServerConfig = (
       desktopBootstrapToken,
       autoBootstrapProjectFromCwd,
       logWebSocketEvents,
+      ambientExperienceCapabilities,
       providerDaemon: bootstrap?.providerDaemon,
       providerSupervisor: undefined,
     };

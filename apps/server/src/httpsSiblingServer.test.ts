@@ -1,6 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeSocket from "@effect/platform-node/NodeSocket";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import { DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES } from "@cafecode/contracts";
 import { assert, it } from "@effect/vitest";
 import * as Http from "node:http";
 import * as Https from "node:https";
@@ -118,6 +119,7 @@ const makeHttpsTestConfig = Effect.gen(function* () {
     desktopBootstrapToken: undefined,
     autoBootstrapProjectFromCwd: false,
     logWebSocketEvents: false,
+    ambientExperienceCapabilities: DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES,
     providerDaemon: undefined,
     providerSupervisor: undefined,
   } satisfies ServerConfigShape;

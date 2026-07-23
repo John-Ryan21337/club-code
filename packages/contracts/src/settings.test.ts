@@ -2,16 +2,35 @@ import { describe, expect, it } from "vitest";
 import * as Schema from "effect/Schema";
 
 import {
+  AMBIENT_CLIENT_SETTINGS_KEYS,
   ClientSettingsPatch,
   ClientSettingsSchema,
   CodexSettings,
   ClaudeSettings,
   CODEX_DEFAULT_AUTO_COMPACT_TOKEN_LIMIT,
+  DEFAULT_AMBIENT_CLIENT_SETTINGS,
+  DEFAULT_AMBIENT_COLOR,
+  DEFAULT_AMBIENT_IMAGE_ASSET,
+  DEFAULT_AMBIENT_IMAGE_ENABLED,
+  DEFAULT_AMBIENT_IMAGE_GLOW_ENABLED,
+  DEFAULT_AMBIENT_IMAGE_LAYOUT_MODE,
+  DEFAULT_AMBIENT_IMAGE_PRESET_PLACEMENT,
+  DEFAULT_AMBIENT_IMAGE_PRESET_SIZE,
+  DEFAULT_AMBIENT_OPACITY,
+  DEFAULT_AMBIENT_VIDEO_ENABLED,
+  DEFAULT_AMBIENT_VIDEO_GLOW_ENABLED,
+  DEFAULT_AMBIENT_VIDEO_LAYOUT_MODE,
+  DEFAULT_AMBIENT_VIDEO_PRESET_PLACEMENT,
+  DEFAULT_AMBIENT_VIDEO_PRESET_SIZE,
+  DEFAULT_AMBIENT_VIDEO_SOURCE,
   DEFAULT_APP_ACCENT_COLOR,
   DEFAULT_BRAND_WORDMARK_PREFIX,
   DEFAULT_CHAT_COPY_FORMAT,
   DEFAULT_CLIENT_SETTINGS,
   DEFAULT_CONTINUE_BACKGROUND_ANIMATIONS,
+  DEFAULT_FALLING_EFFECT_KIND,
+  DEFAULT_FALLING_EFFECT_SPEED,
+  DEFAULT_FALLING_EFFECTS_ENABLED,
   DEFAULT_POWER_SAVE_BLOCKER_MODE,
   DEFAULT_SHOW_SIDEBAR_ATTRIBUTION,
   DEFAULT_SIDEBAR_BRAND_IMAGE_DATA_URL,
@@ -20,20 +39,44 @@ import {
   DEFAULT_SHOW_SIDEBAR_MASCOT,
   DEFAULT_SHOW_SIDEBAR_SEARCH,
   DEFAULT_THEME_ACCENT_COLOR,
+  MAX_AMBIENT_IMAGE_DIMENSION,
+  MAX_AMBIENT_IMAGE_FILE_BYTES,
+  MAX_AMBIENT_OPACITY,
   MAX_BRAND_WORDMARK_PREFIX_LENGTH,
+  MAX_FALLING_EFFECT_SPEED,
   MAX_SIDEBAR_BRAND_IMAGE_DATA_URL_LENGTH,
   MAX_SIDEBAR_BRAND_IMAGE_FILE_BYTES,
   MAX_SIDEBAR_BRAND_IMAGE_ID_LENGTH,
   MAX_SIDEBAR_STAR_SPEED,
+  MIN_AMBIENT_OPACITY,
+  MIN_FALLING_EFFECT_SPEED,
   MIN_SIDEBAR_STAR_SPEED,
   ServerSettingsPatch,
+  type AmbientClientSettings,
+  type ClientSettings,
 } from "./settings.ts";
 
 const decodeClientSettings = Schema.decodeSync(ClientSettingsSchema);
 const decodeClientSettingsPatch = Schema.decodeUnknownSync(ClientSettingsPatch);
+const encodeClientSettings = Schema.encodeSync(ClientSettingsSchema);
 const decodeCodexSettings = Schema.decodeSync(CodexSettings);
 const decodeClaudeSettings = Schema.decodeSync(ClaudeSettings);
 const decodeServerSettingsPatch = Schema.decodeUnknownSync(ServerSettingsPatch);
+
+const ambientImageAsset = {
+  id: "sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.gif",
+  url: "/api/ambient-media/image/sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.gif",
+  mimeType: "image/gif" as const,
+  width: 640,
+  height: 360,
+  sizeBytes: 512_000,
+};
+
+function pickAmbientSettings(settings: ClientSettings): AmbientClientSettings {
+  return Object.fromEntries(
+    AMBIENT_CLIENT_SETTINGS_KEYS.map((key) => [key, settings[key]]),
+  ) as AmbientClientSettings;
+}
 
 describe("client settings", () => {
   it("defaults power-save blocking to off", () => {
@@ -92,6 +135,267 @@ describe("client settings", () => {
     expect(decodeClientSettings({}).sidebarStarSpeed).toBe(1);
     expect(decodeClientSettings({}).themeAccentColor).toBe("");
     expect(decodeClientSettings({}).appAccentColor).toBe("");
+  });
+
+  it("defaults every ambient preference to the canonical reset vector", () => {
+    expect(DEFAULT_AMBIENT_CLIENT_SETTINGS).toEqual({
+      fallingEffectsEnabled: DEFAULT_FALLING_EFFECTS_ENABLED,
+      fallingEffectKind: DEFAULT_FALLING_EFFECT_KIND,
+      fallingEffectColor: DEFAULT_AMBIENT_COLOR,
+      fallingEffectOpacity: DEFAULT_AMBIENT_OPACITY,
+      fallingEffectSpeed: DEFAULT_FALLING_EFFECT_SPEED,
+      ambientVideoEnabled: DEFAULT_AMBIENT_VIDEO_ENABLED,
+      ambientVideoSource: DEFAULT_AMBIENT_VIDEO_SOURCE,
+      ambientVideoLayoutMode: DEFAULT_AMBIENT_VIDEO_LAYOUT_MODE,
+      ambientVideoPresetPlacement: DEFAULT_AMBIENT_VIDEO_PRESET_PLACEMENT,
+      ambientVideoPresetSize: DEFAULT_AMBIENT_VIDEO_PRESET_SIZE,
+      ambientVideoGlowEnabled: DEFAULT_AMBIENT_VIDEO_GLOW_ENABLED,
+      ambientVideoGlowColor: DEFAULT_AMBIENT_COLOR,
+      ambientVideoGlowOpacity: DEFAULT_AMBIENT_OPACITY,
+      ambientImageEnabled: DEFAULT_AMBIENT_IMAGE_ENABLED,
+      ambientImageAsset: DEFAULT_AMBIENT_IMAGE_ASSET,
+      ambientImageLayoutMode: DEFAULT_AMBIENT_IMAGE_LAYOUT_MODE,
+      ambientImagePresetPlacement: DEFAULT_AMBIENT_IMAGE_PRESET_PLACEMENT,
+      ambientImagePresetSize: DEFAULT_AMBIENT_IMAGE_PRESET_SIZE,
+      ambientImageGlowEnabled: DEFAULT_AMBIENT_IMAGE_GLOW_ENABLED,
+      ambientImageGlowColor: DEFAULT_AMBIENT_COLOR,
+      ambientImageGlowOpacity: DEFAULT_AMBIENT_OPACITY,
+    });
+    expect(pickAmbientSettings(DEFAULT_CLIENT_SETTINGS)).toEqual(DEFAULT_AMBIENT_CLIENT_SETTINGS);
+    expect(pickAmbientSettings(decodeClientSettings({}))).toEqual(DEFAULT_AMBIENT_CLIENT_SETTINGS);
+  });
+
+  it("adds ambient defaults when decoding an older partial settings document", () => {
+    const decoded = decodeClientSettings({
+      timestampFormat: "24-hour",
+      showSidebarMascot: false,
+    });
+
+    expect(decoded.timestampFormat).toBe("24-hour");
+    expect(decoded.showSidebarMascot).toBe(false);
+    expect(pickAmbientSettings(decoded)).toEqual(DEFAULT_AMBIENT_CLIENT_SETTINGS);
+  });
+
+  it("round-trips the full ambient settings patch and reset vector", () => {
+    const configured = decodeClientSettingsPatch({
+      fallingEffectsEnabled: true,
+      fallingEffectKind: "matrix",
+      fallingEffectColor: "  #12AbEf  ",
+      fallingEffectOpacity: MAX_AMBIENT_OPACITY,
+      fallingEffectSpeed: MAX_FALLING_EFFECT_SPEED,
+      ambientVideoEnabled: true,
+      ambientVideoSource: { kind: "video", id: "dQw4w9WgXcQ" },
+      ambientVideoLayoutMode: "custom",
+      ambientVideoPresetPlacement: "bottom-left",
+      ambientVideoPresetSize: "large",
+      ambientVideoGlowEnabled: true,
+      ambientVideoGlowColor: "#ABCDEF",
+      ambientVideoGlowOpacity: MIN_AMBIENT_OPACITY,
+      ambientImageEnabled: true,
+      ambientImageAsset,
+      ambientImageLayoutMode: "custom",
+      ambientImagePresetPlacement: "bottom-right",
+      ambientImagePresetSize: "small",
+      ambientImageGlowEnabled: true,
+      ambientImageGlowColor: "#123456",
+      ambientImageGlowOpacity: MAX_AMBIENT_OPACITY,
+    });
+
+    expect(configured).toEqual({
+      fallingEffectsEnabled: true,
+      fallingEffectKind: "matrix",
+      fallingEffectColor: "#12abef",
+      fallingEffectOpacity: MAX_AMBIENT_OPACITY,
+      fallingEffectSpeed: MAX_FALLING_EFFECT_SPEED,
+      ambientVideoEnabled: true,
+      ambientVideoSource: { kind: "video", id: "dQw4w9WgXcQ" },
+      ambientVideoLayoutMode: "custom",
+      ambientVideoPresetPlacement: "bottom-left",
+      ambientVideoPresetSize: "large",
+      ambientVideoGlowEnabled: true,
+      ambientVideoGlowColor: "#abcdef",
+      ambientVideoGlowOpacity: MIN_AMBIENT_OPACITY,
+      ambientImageEnabled: true,
+      ambientImageAsset,
+      ambientImageLayoutMode: "custom",
+      ambientImagePresetPlacement: "bottom-right",
+      ambientImagePresetSize: "small",
+      ambientImageGlowEnabled: true,
+      ambientImageGlowColor: "#123456",
+      ambientImageGlowOpacity: MAX_AMBIENT_OPACITY,
+    });
+
+    const resetPatch = decodeClientSettingsPatch(DEFAULT_AMBIENT_CLIENT_SETTINGS);
+    const reset = decodeClientSettings({
+      ...DEFAULT_CLIENT_SETTINGS,
+      ...configured,
+      ...resetPatch,
+    });
+    expect(pickAmbientSettings(reset)).toEqual(DEFAULT_AMBIENT_CLIENT_SETTINGS);
+  });
+
+  it("canonicalizes every explicit ambient color while preserving auto", () => {
+    expect(
+      decodeClientSettingsPatch({
+        fallingEffectColor: "  #12AbEf  ",
+        ambientVideoGlowColor: "#ABCDEF",
+        ambientImageGlowColor: "#aBc123",
+      }),
+    ).toEqual({
+      fallingEffectColor: "#12abef",
+      ambientVideoGlowColor: "#abcdef",
+      ambientImageGlowColor: "#abc123",
+    });
+    expect(
+      decodeClientSettingsPatch({
+        fallingEffectColor: "auto",
+        ambientVideoGlowColor: "auto",
+        ambientImageGlowColor: "auto",
+      }),
+    ).toEqual({
+      fallingEffectColor: "auto",
+      ambientVideoGlowColor: "auto",
+      ambientImageGlowColor: "auto",
+    });
+  });
+
+  it("canonicalizes ambient colors when encoding settings", () => {
+    const encoded = encodeClientSettings({
+      ...DEFAULT_CLIENT_SETTINGS,
+      fallingEffectColor: "#ABCDEF",
+      ambientVideoGlowColor: "#12AbEf",
+      ambientImageGlowColor: "#aBc123",
+    });
+
+    expect(encoded.fallingEffectColor).toBe("#abcdef");
+    expect(encoded.ambientVideoGlowColor).toBe("#12abef");
+    expect(encoded.ambientImageGlowColor).toBe("#abc123");
+  });
+
+  it("accepts effective-empty ambient media states", () => {
+    expect(
+      decodeClientSettingsPatch({
+        ambientVideoEnabled: true,
+        ambientVideoSource: null,
+        ambientImageEnabled: true,
+        ambientImageAsset: null,
+      }),
+    ).toEqual({
+      ambientVideoEnabled: true,
+      ambientVideoSource: null,
+      ambientImageEnabled: true,
+      ambientImageAsset: null,
+    });
+  });
+
+  it("validates atomic YouTube sources", () => {
+    expect(
+      decodeClientSettingsPatch({
+        ambientVideoSource: { kind: "playlist", id: "PL1234567890" },
+      }),
+    ).toEqual({
+      ambientVideoSource: { kind: "playlist", id: "PL1234567890" },
+    });
+    expect(decodeClientSettingsPatch({ ambientVideoSource: null })).toEqual({
+      ambientVideoSource: null,
+    });
+
+    expect(() =>
+      decodeClientSettingsPatch({
+        ambientVideoSource: { kind: "video" },
+      }),
+    ).toThrow();
+    expect(() =>
+      decodeClientSettingsPatch({
+        ambientVideoSource: { kind: "video", id: "too-short" },
+      }),
+    ).toThrow();
+    expect(() =>
+      decodeClientSettingsPatch({
+        ambientVideoSource: { kind: "playlist", id: "short" },
+      }),
+    ).toThrow();
+    expect(() =>
+      decodeClientSettingsPatch({
+        ambientVideoSource: { kind: "channel", id: "dQw4w9WgXcQ" },
+      }),
+    ).toThrow();
+  });
+
+  it("bounds ambient colors, opacity, speed, and layout enums", () => {
+    expect(
+      decodeClientSettingsPatch({
+        fallingEffectColor: "auto",
+        fallingEffectOpacity: MIN_AMBIENT_OPACITY,
+        fallingEffectSpeed: MIN_FALLING_EFFECT_SPEED,
+        ambientVideoGlowOpacity: MAX_AMBIENT_OPACITY,
+      }),
+    ).toEqual({
+      fallingEffectColor: "auto",
+      fallingEffectOpacity: MIN_AMBIENT_OPACITY,
+      fallingEffectSpeed: MIN_FALLING_EFFECT_SPEED,
+      ambientVideoGlowOpacity: MAX_AMBIENT_OPACITY,
+    });
+
+    for (const invalidPatch of [
+      { fallingEffectColor: "#12345" },
+      { fallingEffectColor: "red" },
+      { fallingEffectOpacity: MIN_AMBIENT_OPACITY - 0.01 },
+      { fallingEffectOpacity: MAX_AMBIENT_OPACITY + 0.01 },
+      { fallingEffectOpacity: Number.NaN },
+      { fallingEffectSpeed: MIN_FALLING_EFFECT_SPEED - 0.01 },
+      { fallingEffectSpeed: MAX_FALLING_EFFECT_SPEED + 0.01 },
+      { ambientVideoLayoutMode: "floating" },
+      { ambientVideoPresetPlacement: "top-left" },
+      { ambientImagePresetSize: "extra-large" },
+    ]) {
+      expect(() => decodeClientSettingsPatch(invalidPatch)).toThrow();
+    }
+  });
+
+  it("validates ambient image metadata independently of upload bytes", () => {
+    expect(decodeClientSettingsPatch({ ambientImageAsset })).toEqual({
+      ambientImageAsset,
+    });
+    expect(
+      decodeClientSettingsPatch({
+        ambientImageAsset: {
+          ...ambientImageAsset,
+          width: MAX_AMBIENT_IMAGE_DIMENSION,
+          height: MAX_AMBIENT_IMAGE_DIMENSION,
+          sizeBytes: MAX_AMBIENT_IMAGE_FILE_BYTES,
+        },
+      }),
+    ).toEqual({
+      ambientImageAsset: {
+        ...ambientImageAsset,
+        width: MAX_AMBIENT_IMAGE_DIMENSION,
+        height: MAX_AMBIENT_IMAGE_DIMENSION,
+        sizeBytes: MAX_AMBIENT_IMAGE_FILE_BYTES,
+      },
+    });
+
+    for (const ambientImageAssetPatch of [
+      { ...ambientImageAsset, id: "ambient.gif" },
+      { ...ambientImageAsset, url: "https://example.com/ambient.gif" },
+      {
+        ...ambientImageAsset,
+        url: "/api/ambient-media/image/sha256-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.gif",
+      },
+      {
+        ...ambientImageAsset,
+        id: "sha256-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png",
+      },
+      { ...ambientImageAsset, mimeType: "image/png" },
+      { ...ambientImageAsset, mimeType: "image/svg+xml" },
+      { ...ambientImageAsset, width: 0 },
+      { ...ambientImageAsset, height: MAX_AMBIENT_IMAGE_DIMENSION + 1 },
+      { ...ambientImageAsset, sizeBytes: MAX_AMBIENT_IMAGE_FILE_BYTES + 1 },
+    ]) {
+      expect(() =>
+        decodeClientSettingsPatch({ ambientImageAsset: ambientImageAssetPatch }),
+      ).toThrow();
+    }
   });
 
   it("accepts only supported power-save blocker modes in patches", () => {
