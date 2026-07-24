@@ -343,7 +343,7 @@ export const DesktopServerExposureStateSchema = Schema.Struct({
 
 export const MIN_DESKTOP_WINDOW_OPACITY = 0.65;
 export const MAX_DESKTOP_WINDOW_OPACITY = 1;
-export const DEFAULT_DESKTOP_WINDOW_OPACITY = 1;
+export const DEFAULT_DESKTOP_WINDOW_OPACITY = 0.84;
 
 export const DesktopWindowOpacityValueSchema = Schema.Number.check(
   Schema.isBetween({

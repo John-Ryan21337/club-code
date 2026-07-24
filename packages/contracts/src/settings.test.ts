@@ -9,6 +9,8 @@ import {
   ClaudeSettings,
   CODEX_DEFAULT_AUTO_COMPACT_TOKEN_LIMIT,
   CODEX_ULTRA_CACHING_AUTO_COMPACT_TOKEN_LIMIT,
+  CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET,
+  CLUB_CODE_FIRST_RUN_CLIENT_SETTINGS,
   DEFAULT_AMBIENT_CLIENT_SETTINGS,
   DEFAULT_AMBIENT_COLOR,
   DEFAULT_AMBIENT_IMAGE_ASSET,
@@ -187,6 +189,56 @@ describe("client settings", () => {
     expect(decodeClientSettings({}).appAccentColor).toBe("");
     expect(decodeClientSettings({}).workflowObservatoryEnabled).toBe(true);
     expect(decodeClientSettings({}).workflowStallWarningSeconds).toBe(180);
+  });
+
+  it("keeps conservative defaults separate from the Club Code first-run profile", () => {
+    expect(DEFAULT_CLIENT_SETTINGS.fallingEffectsEnabled).toBe(false);
+    expect(DEFAULT_CLIENT_SETTINGS.fallingEffectMatrixColorMode).toBe("fixed");
+    expect(DEFAULT_CLIENT_SETTINGS.ambientVideoEnabled).toBe(false);
+    expect(DEFAULT_CLIENT_SETTINGS.ambientImageEnabled).toBe(false);
+    expect(DEFAULT_CLIENT_SETTINGS.providerUsageWidgetEnabled).toBe(false);
+    expect(DEFAULT_CLIENT_SETTINGS.modelPacingEnabled).toBe(false);
+
+    expect(CLUB_CODE_FIRST_RUN_CLIENT_SETTINGS).toEqual({
+      ...DEFAULT_CLIENT_SETTINGS,
+      fallingEffectsEnabled: true,
+      fallingEffectKind: "matrix",
+      fallingEffectMatrixColorMode: "rainbow",
+      fallingEffectOpacity: 0.55,
+      fallingEffectSpeed: 4,
+      fallingEffectDensity: 2.5,
+      fallingEffectJapaneseRatio: 0.45,
+      fallingEffect2chEnriched: true,
+      fallingEffectLiveWorkVocabulary: true,
+      fallingEffectActivityLinks: true,
+      fallingEffectActivityLinkColorMode: "matrix",
+      ambientVideoEnabled: true,
+      ambientVideoSource: null,
+      ambientVideoLayoutMode: "custom",
+      ambientVideoPresetPlacement: "bottom-right",
+      ambientVideoPresetSize: "large",
+      ambientVideoPresentationMode: "floating",
+      ambientVideoGlowEnabled: true,
+      ambientVideoGlowMode: "adaptive",
+      ambientVideoGlowColor: "auto",
+      ambientVideoGlowOpacity: 0.65,
+      ambientImageEnabled: true,
+      ambientImageAsset: CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET,
+      ambientImagePresentationMode: "floating",
+      ambientImageLayoutMode: "preset",
+      ambientImagePresetPlacement: "bottom-left",
+      ambientImagePresetSize: "large",
+      ambientImageGlowEnabled: true,
+      ambientImageGlowColor: "auto",
+      ambientImageGlowOpacity: 0.35,
+      workflowObservatoryEnabled: true,
+      providerUsageWidgetEnabled: true,
+      providerUsagePollMinutes: 2,
+      modelPacingEnabled: true,
+      modelPacingReservePercent: 5,
+    });
+    expect(CLUB_CODE_FIRST_RUN_CLIENT_SETTINGS.onboardingCompleted).toBe(false);
+    expect(CLUB_CODE_FIRST_RUN_CLIENT_SETTINGS.dismissedFirstRunHints).toEqual([]);
   });
 
   it("keeps the workflow silence warning bounded and patchable", () => {
