@@ -216,7 +216,7 @@ export function queuedFollowUpActionTitle(input: {
   if (input.phase !== "running") {
     return "Send this queued follow-up now.";
   }
-  return "Cafe Code will send this follow-up as soon as the active turn can accept it.";
+  return "Club Code will send this follow-up as soon as the active turn can accept it.";
 }
 
 export interface RekeyQueuedFollowUpsInput<

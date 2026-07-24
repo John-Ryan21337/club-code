@@ -34,6 +34,13 @@ const environmentInput = {
 } satisfies DesktopEnvironment.MakeDesktopEnvironmentInput;
 
 function makeFakeBrowserWindow() {
+  const mainFrame = {
+    origin: "http://127.0.0.1:5733",
+    isDestroyed: vi.fn(() => false),
+  };
+  const session = {
+    setDisplayMediaRequestHandler: vi.fn(),
+  };
   const webContents = {
     copyImageAt: vi.fn(),
     isLoadingMainFrame: vi.fn(() => false),
@@ -43,6 +50,8 @@ function makeFakeBrowserWindow() {
     replaceMisspelling: vi.fn(),
     send: vi.fn(),
     setWindowOpenHandler: vi.fn(),
+    mainFrame,
+    session,
   };
 
   const window = {
@@ -116,6 +125,7 @@ const electronThemeLayer = Layer.succeed(ElectronTheme.ElectronTheme, {
 const desktopIpcLayer = Layer.succeed(DesktopIpc.DesktopIpc, {
   trustWebContents: () => Effect.void,
   handle: () => Effect.void,
+  handleFromSender: () => Effect.void,
   handleSync: () => Effect.void,
 } satisfies DesktopIpc.DesktopIpcShape);
 

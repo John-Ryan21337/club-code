@@ -1,15 +1,22 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  approveSessionAudioCaptureStream,
+  calculateLocalMediaAudioFeatures,
+  calculateLocalMediaAudioSignalLevel,
+  createLocalMediaAudioFeatureState,
+  DEFAULT_LOCAL_MEDIA_VISUALIZER_SETTINGS,
   fitLocalMediaVisualizerCanvas,
   isApprovedLocalMediaVisualizerElement,
   LocalMediaAudioVisualizerController,
   LOCAL_MEDIA_VISUALIZER_MAX_CANVAS_EDGE,
   LOCAL_MEDIA_VISUALIZER_MAX_CANVAS_PIXELS,
   LOCAL_MEDIA_VISUALIZER_MAX_LEVEL_STEP,
+  revokeSessionAudioCaptureStream,
   shouldVisualizeLocalMedia,
   updateLocalMediaVisualizerLevels,
 } from "./localMediaAudioVisualizer";
+import { localMediaAudioSignalStore } from "./localMediaAudioSignal";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -61,10 +68,30 @@ describe("local media audio visualizer policy", () => {
     ).toBe(false);
   });
 
-  it("admits only marked object-URL audio/video elements", () => {
+  it("admits only marked browser object URLs and owner-bound VLC URLs", () => {
     vi.stubGlobal("document", { baseURI: "http://localhost/" });
     expect(isApprovedLocalMediaVisualizerElement(mediaElement({}))).toBe(true);
-    expect(isApprovedLocalMediaVisualizerElement(mediaElement({ tagName: "VIDEO" }))).toBe(true);
+    expect(
+      isApprovedLocalMediaVisualizerElement(
+        mediaElement({ tagName: "VIDEO", provenance: "browser" }),
+      ),
+    ).toBe(true);
+    expect(
+      isApprovedLocalMediaVisualizerElement(
+        mediaElement({
+          provenance: "vlc",
+          source: `cafecode-media://stream/${"v".repeat(43)}`,
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      isApprovedLocalMediaVisualizerElement(
+        mediaElement({
+          provenance: "vlc",
+          source: `cafecode-media://stream/${"v".repeat(43)}?leak=true`,
+        }),
+      ),
+    ).toBe(false);
     expect(
       isApprovedLocalMediaVisualizerElement(
         mediaElement({ source: "https://www.youtube.com/watch?v=dQw4w9WgXcQ" }),
@@ -116,9 +143,41 @@ describe("local media audio visualizer policy", () => {
     }
   });
 
+  it("reduces the approved spectrum to one bounded ephemeral activity level", () => {
+    expect(calculateLocalMediaAudioSignalLevel(new Uint8Array())).toBe(0);
+    expect(calculateLocalMediaAudioSignalLevel(new Uint8Array([0, 0, 0]))).toBe(0);
+    expect(calculateLocalMediaAudioSignalLevel(new Uint8Array([255, 255]))).toBe(1);
+    expect(calculateLocalMediaAudioSignalLevel(new Uint8Array([128]))).toBeGreaterThan(0.49);
+  });
+
+  it("reduces frequency bins to bounded coarse bands and a transient beat scalar", () => {
+    const state = createLocalMediaAudioFeatureState();
+    const quiet = calculateLocalMediaAudioFeatures(new Uint8Array(128), 48_000, 256, state);
+    const bassHit = new Uint8Array(128);
+    bassHit[0] = 255;
+    bassHit[1] = 255;
+    const hit = calculateLocalMediaAudioFeatures(bassHit, 48_000, 256, state);
+    const repeated = calculateLocalMediaAudioFeatures(bassHit, 48_000, 256, state);
+    const treble = new Uint8Array(128);
+    treble.fill(220, 24, 64);
+    const high = calculateLocalMediaAudioFeatures(treble, 48_000, 256, state);
+
+    expect(quiet).toEqual({ level: 0, bass: 0, mid: 0, treble: 0, beat: 0 });
+    expect(hit.bass).toBe(1);
+    expect(hit.beat).toBeGreaterThan(0.5);
+    expect(repeated.beat).toBeLessThan(hit.beat);
+    expect(high.treble).toBeGreaterThan(high.bass);
+    for (const features of [hit, repeated, high]) {
+      expect(Object.values(features).every((value) => value >= 0 && value <= 1)).toBe(true);
+    }
+  });
+
   it("builds one bounded analysis branch, pauses frames, and tears down deterministically", async () => {
     vi.stubGlobal("document", { baseURI: "http://localhost/" });
-    const media = mediaElement({}) as HTMLMediaElement & { paused: boolean; ended: boolean };
+    const media = mediaElement({
+      provenance: "vlc",
+      source: `cafecode-media://stream/${"v".repeat(43)}`,
+    }) as HTMLMediaElement & { paused: boolean; ended: boolean };
     Object.assign(media, { paused: false, ended: false });
 
     const clearRect = vi.fn();
@@ -193,10 +252,26 @@ describe("local media audio visualizer policy", () => {
     expect(canvas.width * canvas.height).toBeLessThanOrEqual(
       LOCAL_MEDIA_VISUALIZER_MAX_CANVAS_PIXELS,
     );
+    expect(localMediaAudioSignalStore.getSnapshot().active).toBe(false);
+
+    await controller.sync(false, {
+      ...DEFAULT_LOCAL_MEDIA_VISUALIZER_SETTINGS,
+      publishMatrixSignal: true,
+    });
+    expect(frames.size).toBe(1);
+    const signalFrame = [...frames.entries()][0];
+    expect(signalFrame).toBeDefined();
+    frames.delete(signalFrame![0]);
+    signalFrame![1](200);
+    expect(localMediaAudioSignalStore.getSnapshot()).toMatchObject({
+      active: true,
+      sampledAt: 200,
+    });
 
     await controller.sync(false);
     expect(frames.size).toBe(0);
     expect(source.disconnect).toHaveBeenCalledWith(analyser);
+    expect(localMediaAudioSignalStore.getSnapshot().active).toBe(false);
     expect(audioContext.suspend).not.toHaveBeenCalled();
 
     await controller.sync(true);
@@ -210,13 +285,121 @@ describe("local media audio visualizer policy", () => {
       configurable: true,
       value: "https://open.spotify.com/track/example",
     });
-    await controller.sync(true);
+    await controller.sync(true, {
+      ...DEFAULT_LOCAL_MEDIA_VISUALIZER_SETTINGS,
+      publishMatrixSignal: true,
+    });
     expect(source.connect).toHaveBeenCalledTimes(3);
+    expect(localMediaAudioSignalStore.getSnapshot().active).toBe(false);
 
     await controller.destroy();
     expect(source.disconnect).toHaveBeenCalledWith();
     expect(analyser.disconnect).toHaveBeenCalledOnce();
     expect(audioContext.close).toHaveBeenCalledOnce();
     expect(clearRect).toHaveBeenCalled();
+  });
+
+  it("publishes Matrix features from an explicitly approved display stream without echoing it", async () => {
+    const audioTrack = { readyState: "live" } as MediaStreamTrack;
+    const stream = {
+      getAudioTracks: () => [audioTrack],
+    } as unknown as MediaStream;
+    approveSessionAudioCaptureStream(stream);
+
+    const source = { connect: vi.fn(), disconnect: vi.fn() };
+    const analyser = {
+      disconnect: vi.fn(),
+      fftSize: 0,
+      smoothingTimeConstant: 0,
+      minDecibels: 0,
+      maxDecibels: 0,
+      frequencyBinCount: 128,
+      getByteFrequencyData: vi.fn(),
+    };
+    const audioContext = {
+      state: "running",
+      sampleRate: 48_000,
+      destination: {},
+      createMediaStreamSource: vi.fn(() => source),
+      createAnalyser: vi.fn(() => analyser),
+      resume: vi.fn(),
+      suspend: vi.fn(async () => {
+        audioContext.state = "suspended";
+      }),
+      close: vi.fn(async () => {
+        audioContext.state = "closed";
+      }),
+    };
+    const canvas = {
+      width: 1,
+      height: 1,
+      getBoundingClientRect: () => ({ width: 320, height: 180 }),
+      getContext: () => ({
+        clearRect: vi.fn(),
+        fillRect: vi.fn(),
+        fillStyle: "",
+      }),
+    } as unknown as HTMLCanvasElement;
+    const scheduledFrames: FrameRequestCallback[] = [];
+    const controller = new LocalMediaAudioVisualizerController(stream, canvas, {
+      createAudioContext: () => audioContext as unknown as AudioContext,
+      requestAnimationFrame: vi.fn((callback) => {
+        scheduledFrames.push(callback);
+        return 1;
+      }),
+      cancelAnimationFrame: vi.fn(),
+      devicePixelRatio: () => 1,
+    });
+
+    await controller.sync(true, {
+      ...DEFAULT_LOCAL_MEDIA_VISUALIZER_SETTINGS,
+      publishMatrixSignal: true,
+    });
+    expect(audioContext.createMediaStreamSource).toHaveBeenCalledWith(stream);
+    expect(source.connect).toHaveBeenCalledWith(analyser);
+    expect(source.connect).not.toHaveBeenCalledWith(audioContext.destination);
+    scheduledFrames[0]?.(100);
+    expect(analyser.getByteFrequencyData).toHaveBeenCalledOnce();
+    expect(localMediaAudioSignalStore.getSnapshot()).toMatchObject({
+      active: true,
+      level: 0,
+      bass: 0,
+      mid: 0,
+      treble: 0,
+      beat: 0,
+      sampledAt: 100,
+    });
+
+    await controller.sync(false);
+    expect(audioContext.suspend).toHaveBeenCalledOnce();
+    await controller.destroy();
+    revokeSessionAudioCaptureStream(stream);
+  });
+
+  it("rejects an unapproved MediaStream even when Matrix publication is requested", async () => {
+    const stream = {
+      getAudioTracks: () => [{ readyState: "live" }],
+    } as unknown as MediaStream;
+    const createAudioContext = vi.fn();
+    const canvas = {
+      width: 1,
+      height: 1,
+      getBoundingClientRect: () => ({ width: 320, height: 180 }),
+      getContext: () => ({ clearRect: vi.fn() }),
+    } as unknown as HTMLCanvasElement;
+    const controller = new LocalMediaAudioVisualizerController(stream, canvas, {
+      createAudioContext,
+      requestAnimationFrame: vi.fn(),
+      cancelAnimationFrame: vi.fn(),
+      devicePixelRatio: () => 1,
+    });
+
+    await controller.sync(true, {
+      ...DEFAULT_LOCAL_MEDIA_VISUALIZER_SETTINGS,
+      publishMatrixSignal: true,
+    });
+    expect(createAudioContext).not.toHaveBeenCalled();
+    expect(localMediaAudioSignalStore.getSnapshot().active).toBe(false);
+    await controller.destroy();
   });
 });

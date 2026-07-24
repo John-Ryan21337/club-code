@@ -153,10 +153,10 @@ export function selectInstalledWindowsExecutables(fileNames: readonly string[]):
   readonly uninstaller: string;
 } {
   const appMatches = fileNames.filter((fileName) =>
-    /^Cafe Code(?: \([^)]+\))?\.exe$/u.test(fileName),
+    /^Club Code(?: \([^)]+\))?\.exe$/u.test(fileName),
   );
   const uninstallerMatches = fileNames.filter((fileName) =>
-    /^Uninstall Cafe Code(?: \([^)]+\))?\.exe$/u.test(fileName),
+    /^Uninstall Club Code(?: \([^)]+\))?\.exe$/u.test(fileName),
   );
   if (appMatches.length !== 1 || uninstallerMatches.length !== 1) {
     throw new Error(
@@ -285,7 +285,7 @@ export async function runWindowsNativeArtifactSmoke(
   }
   const installer = join(releaseDir, selectWindowsInstaller(await readdir(releaseDir)));
   const smokeRoot = await mkdtemp(join(tmpdir(), "cafecode-windows-artifact-smoke-"));
-  const installDir = join(smokeRoot, "Cafe Code");
+  const installDir = join(smokeRoot, "Club Code");
   const managedRoot = join(process.env.LOCALAPPDATA ?? "", "CafeCode", "managed");
   const pathBefore = await readUserPathRegistry();
   let uninstallerPath: string | undefined;

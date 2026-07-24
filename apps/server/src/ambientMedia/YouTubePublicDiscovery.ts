@@ -125,6 +125,8 @@ function isSafeThumbnailUrl(value: unknown): value is string {
       url.port === "" &&
       url.username === "" &&
       url.password === "" &&
+      url.search === "" &&
+      url.hash === "" &&
       /^\/vi\/[A-Za-z0-9_-]{11}\/[A-Za-z0-9._-]{1,64}\.(?:jpg|webp)$/u.test(url.pathname)
     );
   } catch {

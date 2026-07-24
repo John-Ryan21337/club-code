@@ -70,6 +70,7 @@ import {
 } from "../Services/ProviderSessionDirectory.ts";
 import { type EventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import { ProviderEventLoggers } from "./ProviderEventLoggers.ts";
+import { closeAgentBrowserBridge, getAgentBrowserBridge } from "../AgentBrowserBridge.ts";
 const isModelSelection = Schema.is(ModelSelection);
 const isProviderAdapterProcessError = Schema.is(ProviderAdapterProcessError);
 const CODEX_NO_ROLLOUT_FOUND_PATTERN = /\bno rollout found for thread id\b/i;
@@ -890,6 +891,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         const instanceInfo = yield* registry.getInstanceInfo(resolvedInstanceId);
         const resolvedProvider = instanceInfo.driverKind;
         metricProvider = resolvedProvider;
+        getAgentBrowserBridge().revokeWhenThreadProviderChanges(threadId, resolvedInstanceId);
         if (parsed.provider !== undefined && parsed.provider !== resolvedProvider) {
           return yield* toValidationError(
             "ProviderService.startSession",
@@ -904,7 +906,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         if (!instanceInfo.enabled) {
           return yield* toValidationError(
             "ProviderService.startSession",
-            `Provider instance '${resolvedInstanceId}' is disabled in Cafe Code settings.`,
+            `Provider instance '${resolvedInstanceId}' is disabled in Club Code settings.`,
           );
         }
         const persistedBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
@@ -1216,6 +1218,10 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           "provider.thread_id": input.threadId,
           "provider.turn_id": input.turnId,
         });
+        getAgentBrowserBridge().revokeForIdentity(
+          { threadId: routed.threadId, providerInstanceId: routed.instanceId },
+          "Grant revoked because the provider turn was interrupted.",
+        );
         yield* routed.adapter.interruptTurn(routed.threadId, input.turnId);
       }).pipe(
         withMetrics({
@@ -1318,6 +1324,10 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           "provider.thread_id": input.threadId,
         });
         if (routed.isActive) {
+          getAgentBrowserBridge().revokeForIdentity(
+            { threadId: routed.threadId, providerInstanceId: routed.instanceId },
+            "Grant revoked because the provider session stopped.",
+          );
           yield* routed.adapter.stopSession(routed.threadId);
         }
         yield* directory.upsert({
@@ -1357,6 +1367,10 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       const restartedAt = yield* nowIso;
       const activeSessions = yield* adapter.listSessions();
       const activeThreadIds = new Set(activeSessions.map((session) => session.threadId));
+      getAgentBrowserBridge().revokeForProviderInstance(
+        input.instanceId,
+        "Grant revoked because the provider runtime restarted.",
+      );
 
       yield* Effect.annotateCurrentSpan({
         "provider.operation": "restart-runtime",
@@ -1692,6 +1706,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   });
 
   const runStopAll = Effect.fn("runStopAll")(function* () {
+    getAgentBrowserBridge().revoke({ reason: "thread-changed" });
     const currentAdapters = yield* getAdapterEntries;
     const stopAllTimestamp = yield* nowIso;
     const activeSessions = yield* Effect.forEach(currentAdapters, ([instanceId, adapter]) =>
@@ -1771,10 +1786,15 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       Effect.catchCause((cause) =>
         Effect.logWarning("failed to stop provider service", { cause: Cause.pretty(cause) }),
       ),
+      Effect.andThen(Effect.promise(() => closeAgentBrowserBridge())),
     ),
   );
 
   return {
+    grantAgentBrowser: (input) => Effect.sync(() => getAgentBrowserBridge().grant(input)),
+    revokeAgentBrowser: (input) => Effect.sync(() => getAgentBrowserBridge().revoke(input)),
+    pollAgentBrowser: (input) => Effect.sync(() => getAgentBrowserBridge().poll(input)),
+    completeAgentBrowser: (input) => Effect.sync(() => getAgentBrowserBridge().complete(input)),
     startSession,
     sendTurn,
     steerTurn,

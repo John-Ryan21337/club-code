@@ -8,8 +8,10 @@ import { useCountUp } from "../stats/useCountUp";
 import { PROVIDER_ICON_BY_PROVIDER } from "../chat/providerIconUtils";
 import { Skeleton } from "../ui/skeleton";
 import { Switch } from "../ui/switch";
+import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 import {
+  buildUsageTokenEfficiencyView,
   buildUsageTokenBreakdownView,
   formatUsageModelLabel,
   formatUsagePercentage,
@@ -218,6 +220,142 @@ function TokenBreakdownSection({
   );
 }
 
+function TokenEfficiencySection({ usage }: { usage: UsageStatsGetResult["tokenBreakdown"] }) {
+  const efficiency = useMemo(() => buildUsageTokenEfficiencyView(usage), [usage]);
+
+  return (
+    <SettingsSection
+      title="Token efficiency by model"
+      headerAction={
+        efficiency.cachedInputTokens > 0 ? (
+          <span className="text-[11px] tabular-nums text-muted-foreground">
+            {integerFormat.format(efficiency.cachedInputTokens)} cache-reused
+          </span>
+        ) : null
+      }
+    >
+      <div className="border-b border-border/60 px-4 py-3 text-[11px] leading-relaxed text-muted-foreground sm:px-5">
+        Cache reuse is reported by the provider. Context removed is observed when the live context
+        shrinks after compaction. They are separate efficiency signals—not an additive billing
+        estimate. Cache writes are shown as overhead.
+      </div>
+
+      {efficiency.providers.length > 0 ? (
+        <div
+          aria-label="Token efficiency by provider and model"
+          className="divide-y divide-border/60"
+        >
+          {efficiency.providers.map((providerUsage) => {
+            const ProviderIcon = PROVIDER_ICON_BY_PROVIDER[providerUsage.provider];
+            return (
+              <div key={providerUsage.provider} className="px-4 py-4 sm:px-5">
+                <div className="flex items-center gap-2.5">
+                  <span className="flex size-7 shrink-0 items-center justify-center rounded-md border border-border/70 bg-muted/35 text-foreground/80">
+                    {ProviderIcon ? <ProviderIcon aria-hidden className="size-3.5" /> : null}
+                  </span>
+                  <span className="text-[13px] font-semibold text-foreground">
+                    {formatUsageProviderLabel(providerUsage.provider)}
+                  </span>
+                </div>
+
+                <div className="mt-3 ml-9 space-y-4 border-l border-border/60 pl-3">
+                  {providerUsage.models.map((modelUsage) => {
+                    const cacheWidth =
+                      efficiency.maxModelCachedInputTokens > 0
+                        ? Math.min(
+                            100,
+                            (modelUsage.cachedInputTokens / efficiency.maxModelCachedInputTokens) *
+                              100,
+                          )
+                        : 0;
+                    const compactedWidth =
+                      efficiency.maxModelCompactedInputTokens > 0
+                        ? Math.min(
+                            100,
+                            (modelUsage.compactedInputTokens /
+                              efficiency.maxModelCompactedInputTokens) *
+                              100,
+                          )
+                        : 0;
+                    return (
+                      <div key={modelUsage.model} className="min-w-0">
+                        <div
+                          className="truncate font-mono text-[11px] font-medium text-foreground/85"
+                          title={formatUsageModelLabel(modelUsage.model)}
+                        >
+                          {formatUsageModelLabel(modelUsage.model)}
+                        </div>
+                        <div className="mt-2 grid gap-2.5">
+                          <div>
+                            <div className="flex items-center justify-between gap-3 text-[10px]">
+                              <span className="text-muted-foreground">Cache-reused input</span>
+                              <span className="font-medium tabular-nums text-foreground/80">
+                                {integerFormat.format(modelUsage.cachedInputTokens)}
+                              </span>
+                            </div>
+                            <div
+                              aria-label={`${formatUsageModelLabel(modelUsage.model)} cache-reused input`}
+                              aria-valuemax={efficiency.maxModelCachedInputTokens}
+                              aria-valuemin={0}
+                              aria-valuenow={modelUsage.cachedInputTokens}
+                              className="mt-1 h-1 overflow-hidden rounded-full bg-muted"
+                              role="meter"
+                            >
+                              <div
+                                aria-hidden
+                                className="h-full rounded-full bg-emerald-500/65"
+                                style={{ width: `${cacheWidth}%` }}
+                              />
+                            </div>
+                          </div>
+                          <div>
+                            <div className="flex items-center justify-between gap-3 text-[10px]">
+                              <span className="text-muted-foreground">
+                                Context removed after compaction
+                              </span>
+                              <span className="font-medium tabular-nums text-foreground/80">
+                                {integerFormat.format(modelUsage.compactedInputTokens)}
+                              </span>
+                            </div>
+                            <div
+                              aria-label={`${formatUsageModelLabel(modelUsage.model)} context removed`}
+                              aria-valuemax={efficiency.maxModelCompactedInputTokens}
+                              aria-valuemin={0}
+                              aria-valuenow={modelUsage.compactedInputTokens}
+                              className="mt-1 h-1 overflow-hidden rounded-full bg-muted"
+                              role="meter"
+                            >
+                              <div
+                                aria-hidden
+                                className="h-full rounded-full bg-sky-500/65"
+                                style={{ width: `${compactedWidth}%` }}
+                              />
+                            </div>
+                          </div>
+                          <div className="flex items-center justify-between gap-3 text-[10px] text-muted-foreground/75">
+                            <span>Cache-written input (overhead)</span>
+                            <span className="tabular-nums">
+                              {integerFormat.format(modelUsage.cacheWriteInputTokens)}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <p className="px-4 py-6 text-center text-xs text-muted-foreground sm:px-5">
+          Cache reuse and observed compaction will appear when a provider reports them.
+        </p>
+      )}
+    </SettingsSection>
+  );
+}
+
 export function UsageStatsPanel() {
   const settings = useSettings();
   const { updateSettings } = useUpdateSettings();
@@ -331,6 +469,8 @@ export function UsageStatsPanel() {
         lifetimeOutputTokens={initial?.totals.outputTokens ?? 0}
       />
 
+      <TokenEfficiencySection usage={initial?.tokenBreakdown ?? []} />
+
       <SettingsSection title="Activity">
         <div className="px-4 py-4 sm:px-5">
           {initial ? (
@@ -351,7 +491,7 @@ export function UsageStatsPanel() {
       <SettingsSection title="Data collection">
         <SettingsRow
           title="Collect usage statistics"
-          description="Track tokens, chats, and generating time across all your Cafe Code use. Data never leaves this machine; turning collection off pauses the counters without clearing them."
+          description="Track tokens, chats, and generating time across all your Club Code use. Data never leaves this machine; turning collection off pauses the counters without clearing them."
           control={
             <Switch
               checked={settings.usageStatsEnabled}
@@ -360,6 +500,87 @@ export function UsageStatsPanel() {
               }}
               aria-label="Collect usage statistics"
             />
+          }
+        />
+        <SettingsRow
+          title="Sidebar provider usage"
+          description="Show authenticated Codex and Claude session/weekly usage windows and their next reset times in the top-left sidebar. Club Code polls only lightweight account-usage metadata."
+          control={
+            <Switch
+              checked={settings.providerUsageWidgetEnabled}
+              onCheckedChange={(checked) => {
+                updateSettings({ providerUsageWidgetEnabled: Boolean(checked) });
+              }}
+              aria-label="Show provider usage in sidebar"
+            />
+          }
+        />
+        <SettingsRow
+          title="Usage polling interval"
+          description="Refresh provider usage every 1–5 minutes while Club Code is visible."
+          control={
+            <Select
+              disabled={!settings.providerUsageWidgetEnabled}
+              value={String(settings.providerUsagePollMinutes)}
+              onValueChange={(value) => {
+                const minutes = Number(value);
+                if (Number.isInteger(minutes) && minutes >= 1 && minutes <= 5) {
+                  updateSettings({ providerUsagePollMinutes: minutes });
+                }
+              }}
+            >
+              <SelectTrigger className="w-28" aria-label="Provider usage polling interval">
+                <SelectValue>{settings.providerUsagePollMinutes} min</SelectValue>
+              </SelectTrigger>
+              <SelectPopup align="end" alignItemWithTrigger={false}>
+                {[1, 2, 3, 4, 5].map((minutes) => (
+                  <SelectItem hideIndicator key={minutes} value={String(minutes)}>
+                    {minutes} min
+                  </SelectItem>
+                ))}
+              </SelectPopup>
+            </Select>
+          }
+        />
+        <SettingsRow
+          title="Model Pacing"
+          description="Compare real provider-reported usage with an even-spend target for the time left before each reset. Recommendations are advisory and never reroute chats or claim token or dollar savings."
+          control={
+            <Switch
+              checked={settings.modelPacingEnabled}
+              disabled={!settings.providerUsageWidgetEnabled}
+              onCheckedChange={(checked) => {
+                updateSettings({ modelPacingEnabled: Boolean(checked) });
+              }}
+              aria-label="Enable Model Pacing"
+            />
+          }
+        />
+        <SettingsRow
+          title="Pacing reserve buffer"
+          description="Keep this percentage of each reported allowance unused at reset. The even-spend target is calculated against the remainder."
+          control={
+            <Select
+              disabled={!settings.providerUsageWidgetEnabled || !settings.modelPacingEnabled}
+              value={String(settings.modelPacingReservePercent)}
+              onValueChange={(value) => {
+                const percent = Number(value);
+                if (Number.isInteger(percent) && percent >= 0 && percent <= 50) {
+                  updateSettings({ modelPacingReservePercent: percent });
+                }
+              }}
+            >
+              <SelectTrigger className="w-28" aria-label="Model Pacing reserve buffer">
+                <SelectValue>{settings.modelPacingReservePercent}%</SelectValue>
+              </SelectTrigger>
+              <SelectPopup align="end" alignItemWithTrigger={false}>
+                {[0, 5, 10, 15, 20, 25, 30, 40, 50].map((percent) => (
+                  <SelectItem hideIndicator key={percent} value={String(percent)}>
+                    {percent}%
+                  </SelectItem>
+                ))}
+              </SelectPopup>
+            </Select>
           }
         />
       </SettingsSection>

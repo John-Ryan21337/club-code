@@ -524,7 +524,7 @@ const devRunnerCli = Command.make("dev-runner", {
     Argument.withDescription("Development mode to run."),
   ),
   cafeCodeHome: Flag.string("home-dir").pipe(
-    Flag.withDescription("Base directory for all Cafe Code data (env: CAFE_CODE_HOME)."),
+    Flag.withDescription("Base directory for all Club Code data (env: CAFE_CODE_HOME)."),
     Flag.withFallbackConfig(optionalStringConfig("CAFE_CODE_HOME")),
   ),
   noBrowser: Flag.boolean("no-browser").pipe(

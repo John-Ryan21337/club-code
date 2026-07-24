@@ -1,15 +1,28 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 
 import { useSettings } from "../hooks/useSettings";
 import { useTheme } from "../hooks/useTheme";
+import { localMediaAudioSignalStore } from "../localMediaAudioSignal";
 import { useServerConfig } from "../rpc/serverState";
+import { useStore } from "../store";
+import { decodeMatrixWorkVocabulary, selectMatrixWorkVocabularyKey } from "../matrixWorkVocabulary";
+import {
+  createMatrixActivityAnimationState,
+  decodeMatrixActivityEvents,
+  drawMatrixActivityAnimation,
+  selectMatrixActivityEventsKey,
+  updateMatrixActivityAnimationInPlace,
+} from "../matrixActivityOverlay";
 import {
   advanceAtmosphereSceneInPlace,
+  applyMatrixWorkVocabularyInPlace,
+  createMatrixColorAnimationState,
   createAtmosphereScene,
   createSeededRandom,
   drawAtmosphereScene,
   fitAtmosphereDpr,
   resolveAtmosphereColor,
+  resolveMatrixAtmosphereColorFrame,
   shouldAnimateAtmosphere,
   type AtmosphereScene,
 } from "../windowAtmosphere";
@@ -21,12 +34,31 @@ function sceneSeed(kind: "snow" | "rain" | "matrix", width: number, height: numb
   return (kindSeed ^ Math.round(width * 31) ^ Math.round(height * 131)) >>> 0;
 }
 
+function textSeed(value: string): number {
+  let seed = 0x811c9dc5;
+  for (let index = 0; index < value.length; index += 1) {
+    seed = Math.imul(seed ^ value.charCodeAt(index), 0x01000193);
+  }
+  return seed >>> 0;
+}
+
 export function WindowAtmosphere() {
   const enabled = useSettings((settings) => settings.fallingEffectsEnabled);
   const kind = useSettings((settings) => settings.fallingEffectKind);
   const configuredColor = useSettings((settings) => settings.fallingEffectColor);
+  const matrixColorMode = useSettings((settings) => settings.fallingEffectMatrixColorMode);
   const opacity = useSettings((settings) => settings.fallingEffectOpacity);
   const speed = useSettings((settings) => settings.fallingEffectSpeed);
+  const density = useSettings((settings) => settings.fallingEffectDensity);
+  const japaneseRatio = useSettings((settings) => settings.fallingEffectJapaneseRatio);
+  const enriched2ch = useSettings((settings) => settings.fallingEffect2chEnriched);
+  const liveWorkVocabularyEnabled = useSettings(
+    (settings) => settings.fallingEffectLiveWorkVocabulary,
+  );
+  const activityLinksEnabled = useSettings((settings) => settings.fallingEffectActivityLinks);
+  const activityLinkColorMode = useSettings(
+    (settings) => settings.fallingEffectActivityLinkColorMode,
+  );
   const continueBackgroundAnimations = useSettings(
     (settings) => settings.continueBackgroundAnimations,
   );
@@ -34,6 +66,33 @@ export function WindowAtmosphere() {
   const serverConfig = useServerConfig();
   const atmosphereAvailable = serverConfig?.ambientExperienceCapabilities.atmosphere === true;
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const sceneRef = useRef<AtmosphereScene | null>(null);
+  const matrixWorkVocabularyKey = useStore((state) =>
+    liveWorkVocabularyEnabled && kind === "matrix" ? selectMatrixWorkVocabularyKey(state) : "",
+  );
+  const matrixWorkVocabulary = useMemo(
+    () => decodeMatrixWorkVocabulary(matrixWorkVocabularyKey),
+    [matrixWorkVocabularyKey],
+  );
+  const matrixWorkVocabularyRef = useRef(matrixWorkVocabulary);
+  matrixWorkVocabularyRef.current = matrixWorkVocabulary;
+  const matrixActivityEventsKey = useStore((state) =>
+    activityLinksEnabled && kind === "matrix" ? selectMatrixActivityEventsKey(state) : "",
+  );
+  const matrixActivityEvents = useMemo(
+    () => decodeMatrixActivityEvents(matrixActivityEventsKey),
+    [matrixActivityEventsKey],
+  );
+
+  useEffect(() => {
+    const scene = sceneRef.current;
+    if (!scene) return;
+    applyMatrixWorkVocabularyInPlace(
+      scene,
+      matrixWorkVocabulary,
+      createSeededRandom(textSeed(matrixWorkVocabularyKey)),
+    );
+  }, [matrixWorkVocabulary, matrixWorkVocabularyKey]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -48,6 +107,9 @@ export function WindowAtmosphere() {
 
     const reducedMotion = window.matchMedia(REDUCED_MOTION_QUERY);
     let scene: AtmosphereScene | null = null;
+    const matrixColorState = createMatrixColorAnimationState();
+    const matrixActivityState = createMatrixActivityAnimationState();
+    const wallClockOffset = Date.now() - performance.now();
     let animationFrame: number | null = null;
     let lastFrameTime: number | null = null;
 
@@ -76,23 +138,59 @@ export function WindowAtmosphere() {
         width,
         height,
         createSeededRandom(sceneSeed(kind, width, height)),
+        density,
+        japaneseRatio,
+        enriched2ch,
+        matrixWorkVocabularyRef.current,
       );
+      sceneRef.current = scene;
+    };
+
+    const renderScene = (timestamp: number, reducedMotionActive: boolean) => {
+      if (!scene) {
+        return;
+      }
+      const elapsedSeconds =
+        reducedMotionActive || lastFrameTime === null ? 0 : (timestamp - lastFrameTime) / 1_000;
+      lastFrameTime = timestamp;
+      advanceAtmosphereSceneInPlace(scene, elapsedSeconds, speed);
+      const matrixColorFrame =
+        kind === "matrix"
+          ? resolveMatrixAtmosphereColorFrame(
+              matrixColorMode,
+              configuredColor,
+              resolvedTheme === "dark",
+              timestamp,
+              localMediaAudioSignalStore.getSnapshot(),
+              matrixColorState,
+            )
+          : undefined;
+      const color =
+        matrixColorFrame?.color ??
+        resolveAtmosphereColor(kind, configuredColor, resolvedTheme === "dark");
+      drawAtmosphereScene(context, scene, color, opacity, matrixColorFrame);
+      if (matrixColorFrame && activityLinksEnabled) {
+        updateMatrixActivityAnimationInPlace(
+          matrixActivityState,
+          matrixActivityEvents,
+          wallClockOffset + timestamp,
+          scene.particles.length,
+          reducedMotionActive,
+        );
+        drawMatrixActivityAnimation(
+          context,
+          scene,
+          matrixActivityState,
+          opacity,
+          activityLinkColorMode,
+          matrixColorFrame,
+        );
+      }
     };
 
     const drawFrame = (timestamp: number) => {
       animationFrame = null;
-      if (!scene) {
-        return;
-      }
-      const elapsedSeconds = lastFrameTime === null ? 0 : (timestamp - lastFrameTime) / 1_000;
-      lastFrameTime = timestamp;
-      advanceAtmosphereSceneInPlace(scene, elapsedSeconds, speed);
-      drawAtmosphereScene(
-        context,
-        scene,
-        resolveAtmosphereColor(kind, configuredColor, resolvedTheme === "dark"),
-        opacity,
-      );
+      renderScene(timestamp, false);
       animationFrame = window.requestAnimationFrame(drawFrame);
     };
 
@@ -107,7 +205,9 @@ export function WindowAtmosphere() {
 
       if (!canAnimate) {
         cancelAnimation();
-        if (scene) {
+        if (scene && reducedMotion.matches && kind === "matrix" && activityLinksEnabled) {
+          renderScene(performance.now(), true);
+        } else if (scene) {
           context.clearRect(0, 0, scene.width, scene.height);
         }
         return;
@@ -133,6 +233,7 @@ export function WindowAtmosphere() {
 
     return () => {
       cancelAnimation();
+      sceneRef.current = null;
       context.clearRect(0, 0, canvas.width, canvas.height);
       document.removeEventListener("visibilitychange", syncAnimation);
       window.removeEventListener("focus", syncAnimation);
@@ -142,10 +243,17 @@ export function WindowAtmosphere() {
     };
   }, [
     atmosphereAvailable,
+    activityLinkColorMode,
+    activityLinksEnabled,
     configuredColor,
     continueBackgroundAnimations,
+    density,
     enabled,
+    enriched2ch,
+    japaneseRatio,
     kind,
+    matrixColorMode,
+    matrixActivityEvents,
     opacity,
     resolvedTheme,
     speed,

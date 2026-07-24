@@ -120,6 +120,7 @@ function createBaseServerConfig(): ServerConfig {
           homePath: "",
           shadowHomePath: "",
           customModels: [],
+          ultraCaching: false,
         },
         claudeAgent: {
           enabled: true,
@@ -128,6 +129,7 @@ function createBaseServerConfig(): ServerConfig {
           homePath: "",
           customModels: [],
           launchArgs: "",
+          ultraCaching: false,
         },
       },
     },

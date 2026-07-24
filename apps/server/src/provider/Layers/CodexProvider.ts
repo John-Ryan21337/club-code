@@ -998,7 +998,7 @@ export function buildCodexInitializeParams(): CodexSchema.V1InitializeParams {
   return {
     clientInfo: {
       name: "cafecode_desktop",
-      title: "Cafe Code Desktop",
+      title: "Club Code Desktop",
       version: packageJson.version,
     },
     capabilities: {
@@ -1038,7 +1038,7 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
   const initialize = yield* client.request("initialize", {
     clientInfo: {
       name: "cafecode_desktop",
-      title: "Cafe Code Desktop",
+      title: "Club Code Desktop",
       version: "0.1.0",
     },
     capabilities: {
@@ -1224,7 +1224,7 @@ const makePendingCodexProvider = (
           version: null,
           status: "warning",
           auth: { status: "unknown" },
-          message: "Codex is disabled in Cafe Code settings.",
+          message: "Codex is disabled in Club Code settings.",
         },
       });
     }
@@ -1309,7 +1309,7 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
         version: null,
         status: "warning",
         auth: { status: "unknown" },
-        message: "Codex is disabled in Cafe Code settings.",
+        message: "Codex is disabled in Club Code settings.",
       },
     });
   }
@@ -1332,7 +1332,7 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
     const installed = !isCodexAppServerSpawnError(error);
     const missingMessage =
       codexSettings.runtimeSource === "bundled"
-        ? "Cafe Code bundled Codex runtime is not installed or not configured."
+        ? "Club Code bundled Codex runtime is not installed or not configured."
         : "Codex CLI (`codex`) is not installed or not on PATH.";
     return buildServerProvider({
       presentation: CODEX_PRESENTATION,
@@ -1435,7 +1435,7 @@ export const checkCodexCliProviderStatus = Effect.fn("checkCodexCliProviderStatu
         version: null,
         status: "warning",
         auth: { status: "unknown" },
-        message: "Codex is disabled in Cafe Code settings.",
+        message: "Codex is disabled in Club Code settings.",
       },
     });
   }
@@ -1521,7 +1521,7 @@ export const checkCodexCliProviderStatus = Effect.fn("checkCodexCliProviderStatu
           label: "LM Studio / Codex OSS",
         },
         message:
-          "Local model mode is configured. Cafe Code has not checked LM Studio availability or its model list yet.",
+          "Local model mode is configured. Club Code has not checked LM Studio availability or its model list yet.",
       },
     });
   }

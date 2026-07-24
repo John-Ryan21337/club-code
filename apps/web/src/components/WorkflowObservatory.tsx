@@ -12,14 +12,18 @@ import {
   CircleAlertIcon,
   CircleDashedIcon,
   Clock3Icon,
+  ListTreeIcon,
+  NetworkIcon,
   PauseIcon,
   StopCircleIcon,
 } from "lucide-react";
-import { memo, type ReactNode } from "react";
+import { memo, type ReactNode, useEffect, useState } from "react";
 
 import type { ActivePlanState } from "../session-logic";
 import { formatTimestamp } from "../timestampFormat";
 import { Badge } from "./ui/badge";
+import { Button } from "./ui/button";
+import { WorkflowGraph } from "./WorkflowGraph";
 
 function statusPresentation(status: WorkflowAgentStatus): {
   readonly icon: ReactNode;
@@ -44,6 +48,12 @@ function statusPresentation(status: WorkflowAgentStatus): {
         icon: <PauseIcon aria-hidden="true" className="size-3.5" />,
         label: "Waiting",
         className: "text-violet-400",
+      };
+    case "idle":
+      return {
+        icon: <PauseIcon aria-hidden="true" className="size-3.5" />,
+        label: "Idle",
+        className: "text-slate-400",
       };
     case "completed":
       return {
@@ -87,55 +97,128 @@ function nodeTitle(node: WorkflowAgentNode): string {
   return node.name ?? node.path ?? node.taskLabel ?? "Unnamed agent";
 }
 
+const TERMINAL_STATUSES = new Set<WorkflowAgentStatus>(["completed", "failed", "interrupted"]);
+const STALL_MONITORED_STATUSES = new Set<WorkflowAgentStatus>(["running", "waiting"]);
+
+function formatDuration(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`;
+  const hours = Math.floor(seconds / 3_600);
+  const minutes = Math.floor((seconds % 3_600) / 60);
+  const remainderSeconds = seconds % 60;
+  return [
+    ...(hours > 0 ? [`${hours}h`] : []),
+    ...(minutes > 0 ? [`${minutes}m`] : []),
+    ...(hours === 0 && remainderSeconds > 0 ? [`${remainderSeconds}s`] : []),
+  ].join(" ");
+}
+
+function ageInSeconds(iso: string | null, nowMs: number): number | null {
+  if (!iso) return null;
+  const timestamp = Date.parse(iso);
+  if (!Number.isFinite(timestamp)) return null;
+  return Math.max(0, Math.floor((nowMs - timestamp) / 1_000));
+}
+
+function useWorkflowClock(nodes: ReadonlyArray<WorkflowAgentNode>): number {
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  const hasActiveNode = nodes.some((node) => !TERMINAL_STATUSES.has(node.status));
+
+  useEffect(() => {
+    if (!hasActiveNode) return;
+    const interval = window.setInterval(() => setNowMs(Date.now()), 1_000);
+    return () => window.clearInterval(interval);
+  }, [hasActiveNode]);
+
+  return nowMs;
+}
+
 const WorkflowNodeCard = memo(function WorkflowNodeCard({
   node,
   expanded,
   onExpandedChange,
+  timestampFormat,
+  nowMs,
+  stallWarningSeconds,
 }: {
   readonly node: WorkflowAgentNode;
   readonly expanded: boolean;
   readonly onExpandedChange: (expanded: boolean) => void;
+  readonly timestampFormat: TimestampFormat;
+  readonly nowMs: number;
+  readonly stallWarningSeconds: number;
 }) {
   const status = statusPresentation(node.status);
+  const lastActivityAgeSeconds = ageInSeconds(node.lastActivityAt, nowMs);
+  const observedRuntimeSeconds = ageInSeconds(node.startedAt, nowMs);
+  const possiblyStalled =
+    STALL_MONITORED_STATUSES.has(node.status) &&
+    lastActivityAgeSeconds !== null &&
+    lastActivityAgeSeconds >= stallWarningSeconds;
   return (
     <li className="list-none" style={{ paddingInlineStart: `${Math.min(node.depth, 8) * 10}px` }}>
-      <details
-        open={expanded}
-        onToggle={(event) => onExpandedChange(event.currentTarget.open)}
-        className="group rounded-lg border border-border/50 bg-background/45 px-2.5 py-2"
-      >
-        <summary className="cursor-pointer list-none rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60">
-          <div className="flex min-w-0 items-start justify-between gap-2">
-            <div className="min-w-0">
-              <p className="truncate text-[12px] font-medium text-foreground/90">
-                {nodeTitle(node)}
-              </p>
-              <p className="mt-0.5 truncate text-[10px] text-muted-foreground/55">
-                {node.path ?? "Parent/path not reported"}
-              </p>
-            </div>
-            <span
-              className={`flex shrink-0 items-center gap-1 text-[10px] font-medium ${status.className}`}
-            >
-              {status.icon}
-              {status.label}
+      <div className="rounded-lg border border-border/50 bg-background/45 px-2.5 py-2">
+        <button
+          type="button"
+          aria-expanded={expanded}
+          aria-label={`${expanded ? "Collapse" : "Expand"} ${nodeTitle(node)} agent details`}
+          onClick={() => onExpandedChange(!expanded)}
+          className="flex w-full min-w-0 cursor-pointer items-start justify-between gap-2 rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+        >
+          <span className="min-w-0">
+            <span className="block truncate text-[12px] font-medium text-foreground/90">
+              {nodeTitle(node)}
             </span>
+            <span className="mt-0.5 block truncate text-[10px] text-muted-foreground/55">
+              {node.path ?? "Parent/path not reported"}
+            </span>
+          </span>
+          <span
+            className={`flex shrink-0 items-center gap-1 text-[10px] font-medium ${status.className}`}
+          >
+            {status.icon}
+            {status.label}
+          </span>
+        </button>
+        {expanded ? (
+          <div className="mt-2 space-y-1 border-t border-border/40 pt-2">
+            <p className="text-[11px] leading-relaxed text-muted-foreground/75">
+              {node.taskLabel ?? "Task label not reported"}
+            </p>
+            <p className="text-[10px] text-muted-foreground/55">
+              {node.elapsedSeconds === null
+                ? observedRuntimeSeconds === null || TERMINAL_STATUSES.has(node.status)
+                  ? "Provider duration unavailable"
+                  : `Observed runtime: ${formatDuration(observedRuntimeSeconds)}`
+                : `Provider duration: ${node.elapsedSeconds}s`}
+            </p>
+            <p className="text-[10px] leading-relaxed text-muted-foreground/65">
+              <span className="font-medium text-muted-foreground/80">Current activity: </span>
+              {node.latestActivitySummary ?? "Not reported"}
+            </p>
+            <p className="text-[10px] leading-relaxed text-muted-foreground/55">
+              <span className="font-medium text-muted-foreground/75">Last activity: </span>
+              {node.lastActivityAt && lastActivityAgeSeconds !== null ? (
+                <time dateTime={node.lastActivityAt} title={node.lastActivityAt}>
+                  {formatTimestamp(node.lastActivityAt, timestampFormat)} (
+                  {formatDuration(lastActivityAgeSeconds)} ago)
+                </time>
+              ) : (
+                "Not reported"
+              )}
+            </p>
+            {possiblyStalled ? (
+              <p
+                role="status"
+                className="rounded-md border border-amber-400/30 bg-amber-400/10 px-2 py-1 text-[10px] leading-relaxed text-amber-300"
+              >
+                Possibly stalled warning: no provider-reported activity for{" "}
+                {formatDuration(lastActivityAgeSeconds)} (warning threshold:{" "}
+                {formatDuration(stallWarningSeconds)}). This is not proof the agent stopped.
+              </p>
+            ) : null}
           </div>
-        </summary>
-        <div className="mt-2 space-y-1 border-t border-border/40 pt-2">
-          <p className="text-[11px] leading-relaxed text-muted-foreground/75">
-            {node.taskLabel ?? "Task label not reported"}
-          </p>
-          <p className="text-[10px] text-muted-foreground/55">
-            {node.elapsedSeconds === null
-              ? "Duration unavailable"
-              : `Provider duration: ${node.elapsedSeconds}s`}
-          </p>
-          <p className="text-[10px] leading-relaxed text-muted-foreground/65">
-            {node.latestActivitySummary ?? "No recent activity"}
-          </p>
-        </div>
-      </details>
+        ) : null}
+      </div>
     </li>
   );
 });
@@ -177,14 +260,18 @@ export const WorkflowObservatory = memo(function WorkflowObservatory({
   activePlan,
   expandedNodeById,
   onNodeExpandedChange,
+  stallWarningSeconds,
 }: {
   readonly snapshot: WorkflowProjectionSnapshot;
   readonly timestampFormat: TimestampFormat;
   readonly activePlan: ActivePlanState | null;
   readonly expandedNodeById: Readonly<Record<string, boolean>>;
   readonly onNodeExpandedChange: (nodeId: string, expanded: boolean) => void;
+  readonly stallWarningSeconds: number;
 }) {
   const shouldVirtualize = snapshot.recentActivities.length > 20;
+  const nowMs = useWorkflowClock(snapshot.nodes);
+  const [agentView, setAgentView] = useState<"list" | "graph">("list");
 
   return (
     <div className="space-y-4 p-3">
@@ -234,12 +321,44 @@ export const WorkflowObservatory = memo(function WorkflowObservatory({
           >
             Agents and tasks
           </h2>
-          <Badge variant="secondary" className="h-5 rounded-md px-1.5 text-[9px]">
-            {fidelityLabel(snapshot.fidelity)}
-          </Badge>
+          <div className="flex items-center gap-1">
+            <Button
+              aria-pressed={agentView === "list"}
+              onClick={() => setAgentView("list")}
+              size="xs"
+              variant={agentView === "list" ? "secondary" : "ghost"}
+            >
+              <ListTreeIcon />
+              List
+            </Button>
+            <Button
+              aria-pressed={agentView === "graph"}
+              onClick={() => setAgentView("graph")}
+              size="xs"
+              variant={agentView === "graph" ? "secondary" : "ghost"}
+            >
+              <NetworkIcon />
+              Graph
+            </Button>
+            <Badge variant="secondary" className="h-5 rounded-md px-1.5 text-[9px]">
+              {fidelityLabel(snapshot.fidelity)}
+            </Badge>
+          </div>
         </div>
+        {snapshot.providerLabel || snapshot.modelLabel ? (
+          <p className="rounded-md border border-border/45 bg-background/35 px-2 py-1 text-[10px] text-muted-foreground/65">
+            {snapshot.providerLabel
+              ? `Provider: ${snapshot.providerLabel}`
+              : "Provider: not reported"}
+            {snapshot.modelLabel
+              ? ` · Selected model: ${snapshot.modelLabel}`
+              : " · Selected model: not reported"}
+          </p>
+        ) : null}
 
-        {snapshot.nodes.length > 0 ? (
+        {snapshot.nodes.length > 0 && agentView === "graph" ? (
+          <WorkflowGraph nodes={snapshot.nodes} />
+        ) : snapshot.nodes.length > 0 ? (
           <ul aria-label="Provider-reported workflow" className="space-y-1.5">
             {snapshot.nodes.map((node) => (
               <WorkflowNodeCard
@@ -252,6 +371,9 @@ export const WorkflowObservatory = memo(function WorkflowObservatory({
                     node.status !== "interrupted")
                 }
                 onExpandedChange={(expanded) => onNodeExpandedChange(node.id, expanded)}
+                timestampFormat={timestampFormat}
+                nowMs={nowMs}
+                stallWarningSeconds={stallWarningSeconds}
               />
             ))}
           </ul>

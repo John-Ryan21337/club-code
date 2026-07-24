@@ -86,7 +86,7 @@ const proxyHttpRequest = (input: {
     if (!input.response.headersSent) {
       input.response.writeHead(502, { "content-type": "text/plain; charset=utf-8" });
     }
-    input.response.end("Cafe Code HTTPS proxy could not reach the local backend.");
+    input.response.end("Club Code HTTPS proxy could not reach the local backend.");
   });
 
   input.request.pipe(proxyRequest);

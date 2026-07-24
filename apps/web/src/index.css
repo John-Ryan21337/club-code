@@ -8,6 +8,7 @@
 }
 
 .ambient-media-glow {
+  transition: box-shadow 700ms ease;
   box-shadow:
     0 0 18px
       color-mix(
@@ -21,6 +22,64 @@
         var(--ambient-media-glow-color) calc(var(--ambient-media-glow-opacity) * 45%),
         transparent
       );
+}
+
+.ambient-media-glow-adaptive {
+  box-shadow:
+    0 -20px 34px -8px
+      color-mix(
+        in srgb,
+        var(--ambient-media-glow-top) calc(var(--ambient-media-glow-opacity) * 78%),
+        transparent
+      ),
+    22px 0 36px -8px
+      color-mix(
+        in srgb,
+        var(--ambient-media-glow-right) calc(var(--ambient-media-glow-opacity) * 78%),
+        transparent
+      ),
+    0 20px 34px -8px
+      color-mix(
+        in srgb,
+        var(--ambient-media-glow-bottom) calc(var(--ambient-media-glow-opacity) * 78%),
+        transparent
+      ),
+    -22px 0 36px -8px
+      color-mix(
+        in srgb,
+        var(--ambient-media-glow-left) calc(var(--ambient-media-glow-opacity) * 78%),
+        transparent
+      ),
+    0 -42px 78px -24px
+      color-mix(
+        in srgb,
+        var(--ambient-media-glow-top) calc(var(--ambient-media-glow-opacity) * 46%),
+        transparent
+      ),
+    44px 0 82px -24px
+      color-mix(
+        in srgb,
+        var(--ambient-media-glow-right) calc(var(--ambient-media-glow-opacity) * 46%),
+        transparent
+      ),
+    0 42px 78px -24px
+      color-mix(
+        in srgb,
+        var(--ambient-media-glow-bottom) calc(var(--ambient-media-glow-opacity) * 46%),
+        transparent
+      ),
+    -44px 0 82px -24px
+      color-mix(
+        in srgb,
+        var(--ambient-media-glow-left) calc(var(--ambient-media-glow-opacity) * 46%),
+        transparent
+      );
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ambient-media-glow {
+    transition: none;
+  }
 }
 
 @custom-variant dark (&:is(.dark, .dark *));

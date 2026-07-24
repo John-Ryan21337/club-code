@@ -3,7 +3,7 @@ import type {
   VcsStatusRemoteResult,
   VcsStatusStreamEvent,
 } from "@cafecode/contracts";
-import { ORCHESTRATION_WS_METHODS } from "@cafecode/contracts";
+import { ORCHESTRATION_WS_METHODS, WS_METHODS } from "@cafecode/contracts";
 import * as Effect from "effect/Effect";
 import { describe, expect, it, vi } from "vitest";
 
@@ -38,6 +38,43 @@ const baseRemoteStatus: VcsStatusRemoteResult = {
 };
 
 describe("wsRpcClient", () => {
+  it("routes bounded workspace observatory requests through their unary RPC methods", async () => {
+    const rpcMethod = vi.fn(() =>
+      Effect.succeed({
+        relativePath: "",
+        entries: [],
+        truncated: false,
+      }),
+    );
+    const transport = {
+      dispose: vi.fn(async () => undefined),
+      reconnect: vi.fn(async () => undefined),
+      request: vi.fn(
+        async <TSuccess>(
+          execute: (client: WsRpcProtocolClient) => Effect.Effect<TSuccess, Error, never>,
+        ) =>
+          Effect.runPromise(
+            execute({
+              [WS_METHODS.workspaceObservatoryTree]: rpcMethod,
+            } as unknown as WsRpcProtocolClient),
+          ),
+      ) as unknown as WsTransport["request"],
+      requestStream: vi.fn(),
+      subscribe: vi.fn(() => () => undefined),
+    } satisfies Pick<
+      WsTransport,
+      "dispose" | "reconnect" | "request" | "requestStream" | "subscribe"
+    >;
+    const client = createWsRpcClient(transport as unknown as WsTransport);
+
+    await expect(client.workspaceObservatory.tree({ cwd: "/workspace" })).resolves.toEqual({
+      relativePath: "",
+      entries: [],
+      truncated: false,
+    });
+    expect(rpcMethod).toHaveBeenCalledWith({ cwd: "/workspace" });
+  });
+
   it("retries an interrupted durable command with the same command id", async () => {
     const rpcMethod = vi.fn(() => Effect.succeed({ sequence: 99 }));
     let requestAttempt = 0;

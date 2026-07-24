@@ -42,7 +42,13 @@ vi.mock("../../environments/runtime", () => ({
 }));
 
 vi.mock("../../hooks/useSettings", () => ({
-  useSettings: () => ({ usageStatsEnabled: true }),
+  useSettings: () => ({
+    usageStatsEnabled: true,
+    providerUsageWidgetEnabled: false,
+    providerUsagePollMinutes: 2,
+    modelPacingEnabled: false,
+    modelPacingReservePercent: 10,
+  }),
   useUpdateSettings: () => ({ updateSettings: usageHarness.updateSettings }),
 }));
 
@@ -79,9 +85,30 @@ describe("UsageStatsPanel", () => {
         ...snapshot,
         days: [snapshot.today],
         tokenBreakdown: [
-          { provider: "codex", model: "gpt-5.6-codex", outputTokens: 100_000 },
-          { provider: "codex", model: "gpt-5.6-codex-mini", outputTokens: 25_000 },
-          { provider: "claudeAgent", model: "claude-opus-5", outputTokens: 75_000 },
+          {
+            provider: "codex",
+            model: "gpt-5.6-codex",
+            outputTokens: 100_000,
+            cachedInputTokens: 850_000,
+            cacheWriteInputTokens: 45_000,
+            compactedInputTokens: 120_000,
+          },
+          {
+            provider: "codex",
+            model: "gpt-5.6-codex-mini",
+            outputTokens: 25_000,
+            cachedInputTokens: 90_000,
+            cacheWriteInputTokens: 8_000,
+            compactedInputTokens: 0,
+          },
+          {
+            provider: "claudeAgent",
+            model: "claude-opus-5",
+            outputTokens: 75_000,
+            cachedInputTokens: 300_000,
+            cacheWriteInputTokens: 30_000,
+            compactedInputTokens: 40_000,
+          },
         ],
       },
       snapshot,
@@ -98,17 +125,28 @@ describe("UsageStatsPanel", () => {
   it("renders stored provider and model token attribution with earlier usage separated", async () => {
     mounted = await render(<UsageStatsPanel />);
 
+    const outputBreakdown = page.getByLabelText("Token usage by provider and model");
     await expect.element(page.getByText("Tokens by provider and model")).toBeVisible();
     await expect.element(page.getByText("200,000 attributed")).toBeVisible();
-    await expect.element(page.getByText("Codex", { exact: true })).toBeVisible();
-    await expect.element(page.getByText("Claude", { exact: true })).toBeVisible();
-    await expect.element(page.getByText("gpt-5.6-codex", { exact: true })).toBeVisible();
-    await expect.element(page.getByText("gpt-5.6-codex-mini", { exact: true })).toBeVisible();
-    await expect.element(page.getByText("claude-opus-5", { exact: true })).toBeVisible();
+    await expect.element(outputBreakdown.getByText("Codex", { exact: true })).toBeVisible();
+    await expect.element(outputBreakdown.getByText("Claude", { exact: true })).toBeVisible();
+    await expect.element(outputBreakdown.getByText("gpt-5.6-codex", { exact: true })).toBeVisible();
+    await expect
+      .element(outputBreakdown.getByText("gpt-5.6-codex-mini", { exact: true }))
+      .toBeVisible();
+    await expect.element(outputBreakdown.getByText("claude-opus-5", { exact: true })).toBeVisible();
     await expect.element(page.getByText("Earlier usage")).toBeVisible();
     await expect
       .element(page.getByText("Recorded before provider and model attribution"))
       .toBeVisible();
+    await expect.element(page.getByText("Token efficiency by model")).toBeVisible();
+    await expect.element(page.getByText("1,240,000 cache-reused")).toBeVisible();
+    await expect
+      .element(page.getByRole("meter", { name: "gpt-5.6-codex cache-reused input" }))
+      .toHaveAttribute("aria-valuenow", "850000");
+    await expect
+      .element(page.getByRole("meter", { name: "claude-opus-5 context removed" }))
+      .toHaveAttribute("aria-valuenow", "40000");
     expect(usageHarness.getUsageStats).toHaveBeenCalledTimes(1);
     expect(usageHarness.subscribeUsageStats).toHaveBeenCalledTimes(1);
   });
@@ -133,5 +171,18 @@ describe("UsageStatsPanel", () => {
         ),
       )
       .toBeVisible();
+  });
+
+  it("explains that Model Pacing is advisory and requires the usage widget", async () => {
+    mounted = await render(<UsageStatsPanel />);
+
+    await expect.element(page.getByText("Model Pacing", { exact: true })).toBeVisible();
+    await expect
+      .element(page.getByText(/never reroute chats or claim token or dollar savings/i))
+      .toBeVisible();
+    await expect.element(page.getByRole("switch", { name: "Enable Model Pacing" })).toBeDisabled();
+    await expect
+      .element(page.getByRole("combobox", { name: "Model Pacing reserve buffer" }))
+      .toBeDisabled();
   });
 });

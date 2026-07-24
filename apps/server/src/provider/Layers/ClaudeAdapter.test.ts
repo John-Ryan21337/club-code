@@ -41,6 +41,7 @@ import { ServerSettingsService } from "../../serverSettings.ts";
 import { ProviderAdapterValidationError } from "../Errors.ts";
 import type { ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts";
 import {
+  CLAUDE_ULTRA_CACHING_APPEND_PROMPT,
   claudeProjectDirectoryName,
   encodeClaudeProjectDirectoryName,
   makeClaudeAdapter,
@@ -415,6 +416,73 @@ describe("ClaudeAdapterLive", () => {
       Effect.provide(harness.layer),
     );
   });
+
+  it.effect("injects the authenticated browser MCP only into in-memory query options", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "approval-required",
+      });
+
+      const server = harness.getLastCreateQueryInput()?.options.mcpServers?.club_browser;
+      assert.ok(server && server.type === "http");
+      assert.match(server.url, /^http:\/\/127\.0\.0\.1:\d+\/mcp$/);
+      assert.match(server.headers?.Authorization ?? "", /^Bearer [A-Za-z0-9_-]{40,}$/);
+      assert.equal(server.headers?.["X-Cafe-Browser-Thread"], THREAD_ID);
+      assert.equal(server.headers?.["X-Cafe-Browser-Provider"], "claudeAgent");
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("keeps Claude's preset prompt cacheable when ultra caching is enabled", () => {
+    const harness = makeHarness({ claudeConfig: { ultraCaching: true } });
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "approval-required",
+      });
+
+      assert.deepEqual(harness.getLastCreateQueryInput()?.options.systemPrompt, {
+        type: "preset",
+        preset: "claude_code",
+        excludeDynamicSections: true,
+        append: CLAUDE_ULTRA_CACHING_APPEND_PROMPT,
+      });
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect(
+    "leaves Claude's default system-prompt behavior intact when ultra caching is off",
+    () => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        yield* adapter.startSession({
+          threadId: THREAD_ID,
+          provider: ProviderDriverKind.make("claudeAgent"),
+          runtimeMode: "approval-required",
+        });
+
+        assert.deepEqual(harness.getLastCreateQueryInput()?.options.systemPrompt, {
+          type: "preset",
+          preset: "claude_code",
+        });
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    },
+  );
 
   it.effect("uses bypass permissions for full-access claude sessions", () => {
     const harness = makeHarness();
@@ -2401,6 +2469,10 @@ describe("ClaudeAdapterLive", () => {
               usedTokens: 411_815,
               lastUsedTokens: 411_815,
               inputTokens: 411_812,
+              cachedInputTokens: 15_939,
+              lastCachedInputTokens: 15_939,
+              cacheWriteInputTokens: 395_871,
+              lastCacheWriteInputTokens: 395_871,
               outputTokens: 3,
               maxTokens: 1_000_000,
             },
@@ -2416,6 +2488,12 @@ describe("ClaudeAdapterLive", () => {
               lastUsedTokens: 411_815,
               totalProcessedTokens: 821_983,
               inputTokens: 411_812,
+              cachedInputTokens: 15_939,
+              lastCachedInputTokens: 15_939,
+              totalCachedInputTokens: 31_878,
+              cacheWriteInputTokens: 395_871,
+              lastCacheWriteInputTokens: 395_871,
+              totalCacheWriteInputTokens: 788_309,
               outputTokens: 3,
               maxTokens: 1_000_000,
             },
@@ -3107,6 +3185,12 @@ describe("ClaudeAdapterLive", () => {
             usedTokens: 24542,
             lastUsedTokens: 24542,
             inputTokens: 23863,
+            cachedInputTokens: 21144,
+            lastCachedInputTokens: 21144,
+            totalCachedInputTokens: 21144,
+            cacheWriteInputTokens: 2715,
+            lastCacheWriteInputTokens: 2715,
+            totalCacheWriteInputTokens: 2715,
             outputTokens: 679,
             maxTokens: 200000,
           },

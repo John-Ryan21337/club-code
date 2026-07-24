@@ -25,18 +25,29 @@ import { scopeThreadRef } from "@cafecode/client-runtime";
 import {
   DEFAULT_UNIFIED_SETTINGS,
   DEFAULT_APP_ACCENT_COLOR,
+  DEFAULT_AUTO_NUDGE_BACKGROUND_CONTINUATION,
+  DEFAULT_AUTO_NUDGE_MAX_MINUTES,
+  DEFAULT_AUTO_NUDGE_MAX_ROUNDS,
   DEFAULT_BRAND_WORDMARK_PREFIX,
   DEFAULT_CONTINUE_BACKGROUND_ANIMATIONS,
   DEFAULT_SHOW_SIDEBAR_ATTRIBUTION,
   DEFAULT_SIDEBAR_BRAND_IMAGE,
   DEFAULT_SIDEBAR_STAR_SPEED,
+  DEFAULT_WORKFLOW_OBSERVATORY_ENABLED,
+  DEFAULT_WORKFLOW_STALL_WARNING_SECONDS,
   DEFAULT_SHOW_SIDEBAR_MASCOT,
   DEFAULT_SHOW_SIDEBAR_SEARCH,
   DEFAULT_THEME_ACCENT_COLOR,
   MAX_BRAND_WORDMARK_PREFIX_LENGTH,
+  MAX_AUTO_NUDGE_MAX_MINUTES,
+  MAX_AUTO_NUDGE_MAX_ROUNDS,
   MAX_SIDEBAR_BRAND_IMAGE_FILE_BYTES,
   MAX_SIDEBAR_STAR_SPEED,
   MIN_SIDEBAR_STAR_SPEED,
+  MIN_AUTO_NUDGE_MAX_MINUTES,
+  MIN_AUTO_NUDGE_MAX_ROUNDS,
+  MIN_WORKFLOW_STALL_WARNING_SECONDS,
+  MAX_WORKFLOW_STALL_WARNING_SECONDS,
   type ChatCopyFormat,
   type DefaultEditorSelection,
   type PowerSaveBlockerMode,
@@ -45,6 +56,7 @@ import { createModelSelection } from "@cafecode/shared/model";
 import * as Duration from "effect/Duration";
 import * as Equal from "effect/Equal";
 import { APP_VERSION } from "../../branding";
+import { getBackgroundAutoNudgeController } from "../../backgroundAutoNudger";
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import { TraitsPicker } from "../chat/TraitsPicker";
 import { useTheme } from "../../hooks/useTheme";
@@ -125,6 +137,8 @@ import { WindowAtmosphereSettings } from "./WindowAtmosphereSettings";
 import { AmbientVideoSettings } from "./AmbientVideoSettings";
 import { LocalMediaSettings } from "./LocalMediaSettings";
 import { WindowOpacitySettings } from "./WindowOpacitySettings";
+import { isProjectHiddenForMeeting } from "../../meetingPrivacy";
+import { useUiStateStore } from "../../uiStateStore";
 
 const THEME_OPTIONS = [
   {
@@ -154,6 +168,32 @@ function clampSidebarStarSpeed(value: number | null): number {
     return DEFAULT_SIDEBAR_STAR_SPEED;
   }
   return Math.min(MAX_SIDEBAR_STAR_SPEED, Math.max(MIN_SIDEBAR_STAR_SPEED, value));
+}
+
+function clampWorkflowStallWarningSeconds(value: number | null): number {
+  if (value === null || !Number.isFinite(value)) {
+    return DEFAULT_WORKFLOW_STALL_WARNING_SECONDS;
+  }
+  return Math.round(
+    Math.min(
+      MAX_WORKFLOW_STALL_WARNING_SECONDS,
+      Math.max(MIN_WORKFLOW_STALL_WARNING_SECONDS, value),
+    ),
+  );
+}
+
+function clampAutoNudgeMaxRounds(value: number | null): number {
+  if (value === null || !Number.isFinite(value)) return DEFAULT_AUTO_NUDGE_MAX_ROUNDS;
+  return Math.round(
+    Math.min(MAX_AUTO_NUDGE_MAX_ROUNDS, Math.max(MIN_AUTO_NUDGE_MAX_ROUNDS, value)),
+  );
+}
+
+function clampAutoNudgeMaxMinutes(value: number | null): number {
+  if (value === null || !Number.isFinite(value)) return DEFAULT_AUTO_NUDGE_MAX_MINUTES;
+  return Math.round(
+    Math.min(MAX_AUTO_NUDGE_MAX_MINUTES, Math.max(MIN_AUTO_NUDGE_MAX_MINUTES, value)),
+  );
 }
 
 const TIMESTAMP_FORMAT_LABELS = {
@@ -407,6 +447,14 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.ambianceColor !== DEFAULT_UNIFIED_SETTINGS.ambianceColor
         ? ["Ambiance"]
         : []),
+      ...(settings.workflowObservatoryEnabled !==
+      DEFAULT_UNIFIED_SETTINGS.workflowObservatoryEnabled
+        ? ["Agent workflow observatory"]
+        : []),
+      ...(settings.workflowStallWarningSeconds !==
+      DEFAULT_UNIFIED_SETTINGS.workflowStallWarningSeconds
+        ? ["Workflow silence warning"]
+        : []),
       ...(settings.fallingEffectsEnabled !== DEFAULT_UNIFIED_SETTINGS.fallingEffectsEnabled
         ? ["Falling effects"]
         : []),
@@ -421,6 +469,16 @@ export function useSettingsRestore(onRestored?: () => void) {
         : []),
       ...(settings.fallingEffectSpeed !== DEFAULT_UNIFIED_SETTINGS.fallingEffectSpeed
         ? ["Falling effect speed"]
+        : []),
+      ...(settings.fallingEffectDensity !== DEFAULT_UNIFIED_SETTINGS.fallingEffectDensity
+        ? ["Falling effect density"]
+        : []),
+      ...(settings.fallingEffectJapaneseRatio !==
+      DEFAULT_UNIFIED_SETTINGS.fallingEffectJapaneseRatio
+        ? ["Japanese glyph ratio"]
+        : []),
+      ...(settings.fallingEffect2chEnriched !== DEFAULT_UNIFIED_SETTINGS.fallingEffect2chEnriched
+        ? ["2ch-inspired Matrix enrichment"]
         : []),
       ...(settings.appAccentColor !== DEFAULT_UNIFIED_SETTINGS.appAccentColor
         ? ["Accent color"]
@@ -493,11 +551,16 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.showSidebarAttribution,
       settings.sidebarBrandImage,
       settings.sidebarStarSpeed,
+      settings.workflowObservatoryEnabled,
+      settings.workflowStallWarningSeconds,
       settings.fallingEffectsEnabled,
       settings.fallingEffectKind,
       settings.fallingEffectColor,
       settings.fallingEffectOpacity,
       settings.fallingEffectSpeed,
+      settings.fallingEffectDensity,
+      settings.fallingEffectJapaneseRatio,
+      settings.fallingEffect2chEnriched,
       settings.themeAccentColor,
       settings.automaticGitFetchInterval,
       settings.enableAssistantStreaming,
@@ -537,11 +600,16 @@ export function useSettingsRestore(onRestored?: () => void) {
       ambianceSurfaceThread: DEFAULT_UNIFIED_SETTINGS.ambianceSurfaceThread,
       ambianceSurfaceComposer: DEFAULT_UNIFIED_SETTINGS.ambianceSurfaceComposer,
       ambianceColor: DEFAULT_UNIFIED_SETTINGS.ambianceColor,
+      workflowObservatoryEnabled: DEFAULT_UNIFIED_SETTINGS.workflowObservatoryEnabled,
+      workflowStallWarningSeconds: DEFAULT_UNIFIED_SETTINGS.workflowStallWarningSeconds,
       fallingEffectsEnabled: DEFAULT_UNIFIED_SETTINGS.fallingEffectsEnabled,
       fallingEffectKind: DEFAULT_UNIFIED_SETTINGS.fallingEffectKind,
       fallingEffectColor: DEFAULT_UNIFIED_SETTINGS.fallingEffectColor,
       fallingEffectOpacity: DEFAULT_UNIFIED_SETTINGS.fallingEffectOpacity,
       fallingEffectSpeed: DEFAULT_UNIFIED_SETTINGS.fallingEffectSpeed,
+      fallingEffectDensity: DEFAULT_UNIFIED_SETTINGS.fallingEffectDensity,
+      fallingEffectJapaneseRatio: DEFAULT_UNIFIED_SETTINGS.fallingEffectJapaneseRatio,
+      fallingEffect2chEnriched: DEFAULT_UNIFIED_SETTINGS.fallingEffect2chEnriched,
       themeAccentColor: DEFAULT_UNIFIED_SETTINGS.themeAccentColor,
       defaultEditor: DEFAULT_UNIFIED_SETTINGS.defaultEditor,
       diffWordWrap: DEFAULT_UNIFIED_SETTINGS.diffWordWrap,
@@ -755,7 +823,7 @@ export function AppearanceSettingsPanel() {
       <SettingsSection title="Appearance">
         <SettingsRow
           title="Theme"
-          description="Choose how Cafe Code looks across the app."
+          description="Choose how Club Code looks across the app."
           resetAction={
             theme !== "system" ? (
               <SettingResetButton label="theme" onClick={() => setTheme("system")} />
@@ -1000,7 +1068,7 @@ export function AppearanceSettingsPanel() {
 
         <SettingsRow
           title="Background animations"
-          description="Keep decorative animations running when Cafe Code is hidden or unfocused."
+          description="Keep decorative animations running when Club Code is hidden or unfocused."
           resetAction={
             settings.continueBackgroundAnimations !==
             DEFAULT_UNIFIED_SETTINGS.continueBackgroundAnimations ? (
@@ -1022,6 +1090,110 @@ export function AppearanceSettingsPanel() {
               }
               aria-label="Keep animations running in background"
             />
+          }
+        />
+
+        <SettingsRow
+          title="Auto Nudge background continuation"
+          description="Allow one explicitly selected chat to continue after you navigate away. Default off; the owned chat still stops on manual activity, queued work, provider trouble, or its hard caps."
+          resetAction={
+            settings.autoNudgeBackgroundContinuation !==
+            DEFAULT_UNIFIED_SETTINGS.autoNudgeBackgroundContinuation ? (
+              <SettingResetButton
+                label="Auto Nudge background continuation"
+                onClick={() =>
+                  updateSettings({
+                    autoNudgeBackgroundContinuation: DEFAULT_AUTO_NUDGE_BACKGROUND_CONTINUATION,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.autoNudgeBackgroundContinuation}
+              onCheckedChange={(checked) => {
+                const enabled = Boolean(checked);
+                if (!enabled) {
+                  getBackgroundAutoNudgeController().stop(
+                    "Background continuation was disabled in settings.",
+                  );
+                }
+                updateSettings({ autoNudgeBackgroundContinuation: enabled });
+              }}
+              aria-label="Allow Auto Nudge background continuation"
+            />
+          }
+        />
+
+        <SettingsRow
+          title="Auto Nudge round cap"
+          description="Maximum automated prompts in one explicitly started background run."
+          resetAction={
+            settings.autoNudgeMaxRounds !== DEFAULT_UNIFIED_SETTINGS.autoNudgeMaxRounds ? (
+              <SettingResetButton
+                label="Auto Nudge round cap"
+                onClick={() =>
+                  updateSettings({ autoNudgeMaxRounds: DEFAULT_AUTO_NUDGE_MAX_ROUNDS })
+                }
+              />
+            ) : null
+          }
+          control={
+            <NumberField
+              value={settings.autoNudgeMaxRounds}
+              min={MIN_AUTO_NUDGE_MAX_ROUNDS}
+              max={MAX_AUTO_NUDGE_MAX_ROUNDS}
+              step={1}
+              size="sm"
+              className="w-28"
+              onValueChange={(value) =>
+                updateSettings({ autoNudgeMaxRounds: clampAutoNudgeMaxRounds(value) })
+              }
+            >
+              <NumberFieldGroup>
+                <NumberFieldDecrement aria-label="Decrease Auto Nudge round cap" />
+                <NumberFieldInput aria-label="Auto Nudge maximum rounds" />
+                <NumberFieldIncrement aria-label="Increase Auto Nudge round cap" />
+              </NumberFieldGroup>
+            </NumberField>
+          }
+        />
+
+        <SettingsRow
+          title="Auto Nudge time cap"
+          description="Maximum elapsed time for one background run, including provider work."
+          resetAction={
+            settings.autoNudgeMaxMinutes !== DEFAULT_UNIFIED_SETTINGS.autoNudgeMaxMinutes ? (
+              <SettingResetButton
+                label="Auto Nudge time cap"
+                onClick={() =>
+                  updateSettings({ autoNudgeMaxMinutes: DEFAULT_AUTO_NUDGE_MAX_MINUTES })
+                }
+              />
+            ) : null
+          }
+          control={
+            <div className="flex items-center gap-2">
+              <NumberField
+                value={settings.autoNudgeMaxMinutes}
+                min={MIN_AUTO_NUDGE_MAX_MINUTES}
+                max={MAX_AUTO_NUDGE_MAX_MINUTES}
+                step={5}
+                size="sm"
+                className="w-28"
+                onValueChange={(value) =>
+                  updateSettings({ autoNudgeMaxMinutes: clampAutoNudgeMaxMinutes(value) })
+                }
+              >
+                <NumberFieldGroup>
+                  <NumberFieldDecrement aria-label="Decrease Auto Nudge time cap" />
+                  <NumberFieldInput aria-label="Auto Nudge maximum minutes" />
+                  <NumberFieldIncrement aria-label="Increase Auto Nudge time cap" />
+                </NumberFieldGroup>
+              </NumberField>
+              <span className="text-xs text-muted-foreground">minutes</span>
+            </div>
           }
         />
 
@@ -1059,6 +1231,77 @@ export function AppearanceSettingsPanel() {
             </div>
           }
         />
+
+        <SettingsRow
+          title="Agent workflow observatory"
+          description="Show the Plan panel's Workflow tab with provider-reported agent hierarchy and activity. Turning this off hides the tab; it never stops agent work."
+          resetAction={
+            settings.workflowObservatoryEnabled !==
+            DEFAULT_UNIFIED_SETTINGS.workflowObservatoryEnabled ? (
+              <SettingResetButton
+                label="agent workflow observatory"
+                onClick={() =>
+                  updateSettings({
+                    workflowObservatoryEnabled: DEFAULT_WORKFLOW_OBSERVATORY_ENABLED,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.workflowObservatoryEnabled}
+              onCheckedChange={(checked) =>
+                updateSettings({ workflowObservatoryEnabled: Boolean(checked) })
+              }
+              aria-label="Show agent workflow observatory"
+            />
+          }
+        />
+
+        {settings.workflowObservatoryEnabled ? (
+          <SettingsRow
+            title="Workflow silence warning"
+            description="Warn when a running or waiting agent has no provider-reported activity for this long. It is a 'possibly stalled' warning, never proof that work stopped."
+            resetAction={
+              settings.workflowStallWarningSeconds !==
+              DEFAULT_UNIFIED_SETTINGS.workflowStallWarningSeconds ? (
+                <SettingResetButton
+                  label="workflow silence warning"
+                  onClick={() =>
+                    updateSettings({
+                      workflowStallWarningSeconds: DEFAULT_WORKFLOW_STALL_WARNING_SECONDS,
+                    })
+                  }
+                />
+              ) : null
+            }
+            control={
+              <div className="flex items-center gap-2">
+                <NumberField
+                  value={settings.workflowStallWarningSeconds}
+                  min={MIN_WORKFLOW_STALL_WARNING_SECONDS}
+                  max={MAX_WORKFLOW_STALL_WARNING_SECONDS}
+                  step={30}
+                  size="sm"
+                  className="w-28"
+                  onValueChange={(value) =>
+                    updateSettings({
+                      workflowStallWarningSeconds: clampWorkflowStallWarningSeconds(value),
+                    })
+                  }
+                >
+                  <NumberFieldGroup>
+                    <NumberFieldDecrement aria-label="Decrease workflow silence warning" />
+                    <NumberFieldInput aria-label="Workflow silence warning seconds" />
+                    <NumberFieldIncrement aria-label="Increase workflow silence warning" />
+                  </NumberFieldGroup>
+                </NumberField>
+                <span className="text-xs text-muted-foreground">seconds</span>
+              </div>
+            }
+          />
+        ) : null}
 
         <SettingsRow
           title="Time format"
@@ -1539,7 +1782,7 @@ export function SystemSettingsPanel() {
       <SettingsSection title="System">
         <SettingsRow
           title="Keep awake"
-          description="Prevent your computer and screen from sleeping while Cafe Code is working."
+          description="Prevent your computer and screen from sleeping while Club Code is working."
           resetAction={
             settings.powerSaveBlockerMode !== DEFAULT_UNIFIED_SETTINGS.powerSaveBlockerMode ? (
               <SettingResetButton
@@ -2159,6 +2402,14 @@ export function ProviderSettingsPanel() {
 
 export function ArchivedThreadsPanel() {
   const projects = useStore(useShallow(selectProjectsAcrossEnvironments));
+  const meetingPrivacyEnabled = useUiStateStore((state) => state.meetingPrivacyEnabled);
+  const meetingPrivacyHiddenProjectKeys = useUiStateStore(
+    (state) => state.meetingPrivacyHiddenProjectKeys,
+  );
+  const meetingPrivacyHiddenProjectKeySet = useMemo(
+    () => new Set(meetingPrivacyHiddenProjectKeys),
+    [meetingPrivacyHiddenProjectKeys],
+  );
   const { unarchiveThread, confirmAndDeleteThread } = useThreadActions();
   const environmentIds = useMemo(
     () => [...new Set(projects.map((project) => project.environmentId))],
@@ -2196,6 +2447,14 @@ export function ArchivedThreadsPanel() {
     );
 
     return [...projectsByEnvironmentAndId.values()]
+      .filter(
+        (project) =>
+          !isProjectHiddenForMeeting({
+            enabled: meetingPrivacyEnabled,
+            hiddenProjectKeys: meetingPrivacyHiddenProjectKeySet,
+            project,
+          }),
+      )
       .map((project) => ({
         project,
         threads: threads
@@ -2210,7 +2469,7 @@ export function ArchivedThreadsPanel() {
           }),
       }))
       .filter((group) => group.threads.length > 0);
-  }, [archivedSnapshots]);
+  }, [archivedSnapshots, meetingPrivacyEnabled, meetingPrivacyHiddenProjectKeySet]);
 
   const handleArchivedThreadContextMenu = useCallback(
     async (threadRef: ScopedThreadRef, position: { x: number; y: number }) => {
@@ -2338,6 +2597,14 @@ export function ArchivedThreadsPanel() {
 
 export function RecentlyDeletedThreadsPanel() {
   const projects = useStore(useShallow(selectProjectsAcrossEnvironments));
+  const meetingPrivacyEnabled = useUiStateStore((state) => state.meetingPrivacyEnabled);
+  const meetingPrivacyHiddenProjectKeys = useUiStateStore(
+    (state) => state.meetingPrivacyHiddenProjectKeys,
+  );
+  const meetingPrivacyHiddenProjectKeySet = useMemo(
+    () => new Set(meetingPrivacyHiddenProjectKeys),
+    [meetingPrivacyHiddenProjectKeys],
+  );
   const { restoreThread, hardDeleteThread } = useThreadActions();
   const [isEmptyingRecycleBin, setIsEmptyingRecycleBin] = useState(false);
   const environmentIds = useMemo(
@@ -2376,6 +2643,14 @@ export function RecentlyDeletedThreadsPanel() {
     );
 
     return [...projectsByEnvironmentAndId.values()]
+      .filter(
+        (project) =>
+          !isProjectHiddenForMeeting({
+            enabled: meetingPrivacyEnabled,
+            hiddenProjectKeys: meetingPrivacyHiddenProjectKeySet,
+            project,
+          }),
+      )
       .map((project) => ({
         project,
         threads: threads
@@ -2390,7 +2665,7 @@ export function RecentlyDeletedThreadsPanel() {
           }),
       }))
       .filter((group) => group.threads.length > 0);
-  }, [deletedSnapshots]);
+  }, [deletedSnapshots, meetingPrivacyEnabled, meetingPrivacyHiddenProjectKeySet]);
   const deletedThreadRefs = useMemo(
     () => collectRecentlyDeletedThreadRefs(deletedGroups),
     [deletedGroups],

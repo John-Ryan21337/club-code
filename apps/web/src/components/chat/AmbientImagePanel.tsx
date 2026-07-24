@@ -2,8 +2,9 @@ import type {
   AmbientImageAsset,
   AmbientMediaLayoutMode,
   AmbientMediaPresetSize,
+  AmbientImagePresentationMode,
 } from "@cafecode/contracts/settings";
-import { Maximize2Icon, MoveIcon, XIcon } from "lucide-react";
+import { ChevronLeftIcon, ChevronRightIcon, Maximize2Icon, MoveIcon, XIcon } from "lucide-react";
 import {
   type CSSProperties,
   type PointerEvent as ReactPointerEvent,
@@ -163,6 +164,10 @@ export function resolveAmbientImagePresetPresentation(input: {
 
 export function AmbientImagePanel({
   asset,
+  cycleAssets,
+  cycleEnabled,
+  cycleSeconds,
+  presentationMode,
   layoutMode,
   size,
   placement,
@@ -174,6 +179,10 @@ export function AmbientImagePanel({
   onDisable,
 }: {
   readonly asset: AmbientImageAsset;
+  readonly cycleAssets: readonly AmbientImageAsset[];
+  readonly cycleEnabled: boolean;
+  readonly cycleSeconds: number;
+  readonly presentationMode: AmbientImagePresentationMode;
   readonly layoutMode: AmbientMediaLayoutMode;
   readonly size: AmbientMediaPresetSize;
   readonly placement: "bottom-left" | "bottom-right";
@@ -184,6 +193,28 @@ export function AmbientImagePanel({
   readonly continueBackgroundAnimations: boolean;
   readonly onDisable: () => void;
 }) {
+  const cycle = useMemo(() => {
+    const requested = cycleEnabled && cycleAssets.length > 0 ? cycleAssets : [asset];
+    const seen = new Set<string>();
+    return requested.filter((candidate) => {
+      if (seen.has(candidate.id)) return false;
+      seen.add(candidate.id);
+      return true;
+    });
+  }, [asset, cycleAssets, cycleEnabled]);
+  const [cycleIndex, setCycleIndex] = useState(0);
+  const cycleKey = cycle.map((candidate) => candidate.id).join("|");
+  useEffect(() => setCycleIndex(0), [cycleKey]);
+  const activeAsset = cycle[cycleIndex % cycle.length] ?? asset;
+  useEffect(() => {
+    if (cycle.length < 2) return;
+    const delay = Math.min(3_600, Math.max(3, cycleSeconds)) * 1_000;
+    const interval = window.setInterval(
+      () => setCycleIndex((current) => (current + 1) % cycle.length),
+      delay,
+    );
+    return () => window.clearInterval(interval);
+  }, [cycle.length, cycleSeconds]);
   const [panelElement, setPanelElement] = useState<HTMLElement | null>(null);
   const pane = useParentSize(panelElement);
   const [customGeometry, setCustomGeometry] = useState<NormalizedAmbientMediaGeometry | null>(() =>
@@ -195,7 +226,7 @@ export function AmbientImagePanel({
   const [documentInactive, setDocumentInactive] = useState(() =>
     typeof document === "undefined" ? false : document.hidden || !document.hasFocus(),
   );
-  const aspectRatio = asset.width / asset.height;
+  const aspectRatio = activeAsset.width / activeAsset.height;
   const preset = useMemo(
     () =>
       resolveAmbientImagePresetPresentation({
@@ -360,27 +391,31 @@ export function AmbientImagePanel({
   }, []);
 
   const suspendAnimation =
-    asset.mimeType === "image/gif" &&
+    activeAsset.mimeType === "image/gif" &&
     (reducedMotion || (!continueBackgroundAnimations && documentInactive));
   const color = glowColor === "auto" ? "#7dd3fc" : glowColor;
-  const custom = layoutMode === "custom" && pane !== null && effectiveGeometry !== null;
+  const theater = presentationMode === "theater" && cycle.length > 1;
+  const custom = !theater && layoutMode === "custom" && pane !== null && effectiveGeometry !== null;
   return (
     <section
       ref={setPanelElement}
       aria-label="Ambient image"
       className={cn(
-        "pointer-events-auto absolute z-20 overflow-hidden rounded-xl border border-white/15 bg-black/30 shadow-lg",
-        !custom && (preset.placement === "bottom-left" ? "left-3" : "right-3"),
+        "pointer-events-auto absolute z-20 overflow-hidden border border-white/15 bg-black/30 shadow-lg",
+        theater ? "inset-0 rounded-none" : "rounded-xl",
+        !theater && !custom && (preset.placement === "bottom-left" ? "left-3" : "right-3"),
       )}
-      data-ambient-image-layout={custom ? "custom" : "preset"}
+      data-ambient-image-layout={theater ? "theater" : custom ? "custom" : "preset"}
       style={{
-        ...(custom
-          ? customStyle(pane, effectiveGeometry, aspectRatio)
-          : {
-              bottom: preset.bottom,
-              width: preset.width,
-              maxWidth: "calc(100% - 24px)",
-            }),
+        ...(theater
+          ? { inset: 0 }
+          : custom
+            ? customStyle(pane, effectiveGeometry, aspectRatio)
+            : {
+                bottom: preset.bottom,
+                width: preset.width,
+                maxWidth: "calc(100% - 24px)",
+              }),
         boxShadow: glow
           ? `0 0 28px color-mix(in srgb, ${color} ${Math.round(glowOpacity * 100)}%, transparent)`
           : undefined,
@@ -413,18 +448,52 @@ export function AmbientImagePanel({
       {suspendAnimation ? (
         <div className="flex h-full min-h-20 items-center justify-center bg-muted px-6 text-center text-xs text-muted-foreground">
           Animated image paused{" "}
-          {reducedMotion ? "for reduced motion" : "while Cafe Code is hidden or unfocused"}.
+          {reducedMotion ? "for reduced motion" : "while Club Code is hidden or unfocused"}.
         </div>
       ) : (
-        <img
-          src={resolveAmbientImageSrc(asset)}
-          alt=""
-          className={cn("block w-full object-contain", custom ? "h-full" : "h-auto")}
-          width={asset.width}
-          height={asset.height}
-          style={custom ? undefined : { maxHeight: "min(50vh, 420px)" }}
-        />
+        <>
+          {theater ? (
+            <img
+              src={resolveAmbientImageSrc(activeAsset)}
+              alt=""
+              aria-hidden="true"
+              className="absolute inset-0 h-full w-full scale-110 object-cover opacity-35 blur-2xl"
+            />
+          ) : null}
+          <img
+            src={resolveAmbientImageSrc(activeAsset)}
+            alt=""
+            className={cn(
+              "relative block w-full object-contain",
+              custom || theater ? "h-full" : "h-auto",
+            )}
+            width={activeAsset.width}
+            height={activeAsset.height}
+            style={custom || theater ? undefined : { maxHeight: "min(50vh, 420px)" }}
+          />
+        </>
       )}
+      {cycle.length > 1 ? (
+        <div className="absolute bottom-2 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1 rounded-full bg-black/65 p-1 text-xs text-white">
+          <button
+            type="button"
+            className="rounded p-1 hover:bg-white/20 focus-visible:ring-2 focus-visible:ring-white"
+            aria-label="Previous ambient image"
+            onClick={() => setCycleIndex((current) => (current - 1 + cycle.length) % cycle.length)}
+          >
+            <ChevronLeftIcon className="size-4" />
+          </button>
+          <span aria-live="polite">{`${cycleIndex + 1} / ${cycle.length}`}</span>
+          <button
+            type="button"
+            className="rounded p-1 hover:bg-white/20 focus-visible:ring-2 focus-visible:ring-white"
+            aria-label="Next ambient image"
+            onClick={() => setCycleIndex((current) => (current + 1) % cycle.length)}
+          >
+            <ChevronRightIcon className="size-4" />
+          </button>
+        </div>
+      ) : null}
       {custom ? (
         <button
           type="button"

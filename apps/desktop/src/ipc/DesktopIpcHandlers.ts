@@ -27,6 +27,27 @@ import { setPowerSaveBlockerState } from "./methods/powerSaveBlocker.ts";
 import { getDebugEndpointState, publishDebugSnapshot } from "./methods/debug.ts";
 import { getWindowOpacityState, setWindowOpacityPreference } from "./methods/windowOpacity.ts";
 import {
+  getCompletionSpeechCapability,
+  synthesizeCompletionSpeech,
+} from "./methods/completionSpeech.ts";
+import {
+  getLocalMediaCapability,
+  navigateLocalMedia,
+  pickLocalMedia,
+  releaseLocalMedia,
+} from "./methods/localMedia.ts";
+import {
+  clickEmbeddedBrowser,
+  closeEmbeddedBrowser,
+  controlEmbeddedBrowserHistory,
+  navigateEmbeddedBrowser,
+  openEmbeddedBrowser,
+  setEmbeddedBrowserBounds,
+  shareEmbeddedBrowser,
+  snapshotEmbeddedBrowser,
+  typeInEmbeddedBrowser,
+} from "./methods/embeddedBrowser.ts";
+import {
   confirm,
   getAppBranding,
   getLocalEnvironmentBootstrap,
@@ -62,6 +83,21 @@ export const installDesktopIpcHandlers = Effect.gen(function* () {
   yield* ipc.handle(getAdvertisedEndpoints);
   yield* ipc.handle(getWindowOpacityState);
   yield* ipc.handle(setWindowOpacityPreference);
+  yield* ipc.handle(getCompletionSpeechCapability);
+  yield* ipc.handle(synthesizeCompletionSpeech);
+  yield* ipc.handle(getLocalMediaCapability);
+  yield* ipc.handleFromSender(pickLocalMedia);
+  yield* ipc.handleFromSender(navigateLocalMedia);
+  yield* ipc.handleFromSender(releaseLocalMedia);
+  yield* ipc.handleFromSender(openEmbeddedBrowser);
+  yield* ipc.handleFromSender(closeEmbeddedBrowser);
+  yield* ipc.handleFromSender(setEmbeddedBrowserBounds);
+  yield* ipc.handleFromSender(shareEmbeddedBrowser);
+  yield* ipc.handleFromSender(navigateEmbeddedBrowser);
+  yield* ipc.handleFromSender(controlEmbeddedBrowserHistory);
+  yield* ipc.handleFromSender(snapshotEmbeddedBrowser);
+  yield* ipc.handleFromSender(clickEmbeddedBrowser);
+  yield* ipc.handleFromSender(typeInEmbeddedBrowser);
 
   yield* ipc.handle(pickFolder);
   yield* ipc.handle(confirm);

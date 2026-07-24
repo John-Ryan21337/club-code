@@ -1489,7 +1489,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
           assert.strictEqual(status.enabled, false);
           assert.strictEqual(status.status, "disabled");
           assert.strictEqual(status.installed, false);
-          assert.strictEqual(status.message, "Codex is disabled in Cafe Code settings.");
+          assert.strictEqual(status.message, "Codex is disabled in Club Code settings.");
         }),
       );
     });

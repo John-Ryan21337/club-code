@@ -53,12 +53,26 @@ export interface WsRpcClient {
   readonly dispose: () => Promise<void>;
   readonly reconnect: () => Promise<void>;
   readonly isHeartbeatFresh: () => boolean;
+  readonly agentBrowser: {
+    readonly grant: RpcUnaryMethod<typeof WS_METHODS.agentBrowserGrant>;
+    readonly revoke: RpcUnaryMethod<typeof WS_METHODS.agentBrowserRevoke>;
+    readonly poll: RpcUnaryMethod<typeof WS_METHODS.agentBrowserPoll>;
+    readonly complete: RpcUnaryMethod<typeof WS_METHODS.agentBrowserComplete>;
+  };
   readonly projects: {
     readonly searchEntries: RpcUnaryMethod<typeof WS_METHODS.projectsSearchEntries>;
     readonly writeFile: RpcUnaryMethod<typeof WS_METHODS.projectsWriteFile>;
   };
   readonly filesystem: {
     readonly browse: RpcUnaryMethod<typeof WS_METHODS.filesystemBrowse>;
+  };
+  readonly workspaceObservatory: {
+    readonly tree: RpcUnaryMethod<typeof WS_METHODS.workspaceObservatoryTree>;
+    readonly readFile: RpcUnaryMethod<typeof WS_METHODS.workspaceObservatoryReadFile>;
+    readonly databases: RpcUnaryMethod<typeof WS_METHODS.workspaceObservatoryDatabases>;
+    readonly tables: RpcUnaryMethod<typeof WS_METHODS.workspaceObservatoryTables>;
+    readonly rows: RpcUnaryMethod<typeof WS_METHODS.workspaceObservatoryRows>;
+    readonly activity: RpcUnaryMethod<typeof WS_METHODS.workspaceObservatoryActivity>;
   };
   readonly sourceControl: {
     readonly lookupRepository: RpcUnaryMethod<typeof WS_METHODS.sourceControlLookupRepository>;
@@ -99,7 +113,8 @@ export interface WsRpcClient {
     readonly getConfig: RpcUnaryNoArgMethod<typeof WS_METHODS.serverGetConfig>;
     /**
      * Refresh provider snapshots. Pass `{ instanceId }` to refresh a single
-     * configured instance; pass no argument (or `{}`) to refresh all.
+     * configured instance; add `usageOnly: true` for its account/rate-limit
+     * metadata only. Pass no argument (or `{}`) to refresh all.
      */
     readonly refreshProviders: (
       input?: RpcInput<typeof WS_METHODS.serverRefreshProviders>,
@@ -174,6 +189,14 @@ export function createWsRpcClient(transport: WsTransport): WsRpcClient {
       await transport.reconnect();
     },
     isHeartbeatFresh: () => transport.isHeartbeatFresh(),
+    agentBrowser: {
+      grant: (input) => transport.request((client) => client[WS_METHODS.agentBrowserGrant](input)),
+      revoke: (input) =>
+        transport.request((client) => client[WS_METHODS.agentBrowserRevoke](input)),
+      poll: (input) => transport.request((client) => client[WS_METHODS.agentBrowserPoll](input)),
+      complete: (input) =>
+        transport.request((client) => client[WS_METHODS.agentBrowserComplete](input)),
+    },
     projects: {
       searchEntries: (input) =>
         transport.request((client) => client[WS_METHODS.projectsSearchEntries](input)),
@@ -182,6 +205,44 @@ export function createWsRpcClient(transport: WsTransport): WsRpcClient {
     },
     filesystem: {
       browse: (input) => transport.request((client) => client[WS_METHODS.filesystemBrowse](input)),
+    },
+    workspaceObservatory: {
+      tree: (input) =>
+        transport.request((client) =>
+          client[WS_METHODS.workspaceObservatoryTree](input).pipe(
+            Effect.mapError((cause) => new Error(cause.message)),
+          ),
+        ),
+      readFile: (input) =>
+        transport.request((client) =>
+          client[WS_METHODS.workspaceObservatoryReadFile](input).pipe(
+            Effect.mapError((cause) => new Error(cause.message)),
+          ),
+        ),
+      databases: (input) =>
+        transport.request((client) =>
+          client[WS_METHODS.workspaceObservatoryDatabases](input).pipe(
+            Effect.mapError((cause) => new Error(cause.message)),
+          ),
+        ),
+      tables: (input) =>
+        transport.request((client) =>
+          client[WS_METHODS.workspaceObservatoryTables](input).pipe(
+            Effect.mapError((cause) => new Error(cause.message)),
+          ),
+        ),
+      rows: (input) =>
+        transport.request((client) =>
+          client[WS_METHODS.workspaceObservatoryRows](input).pipe(
+            Effect.mapError((cause) => new Error(cause.message)),
+          ),
+        ),
+      activity: (input) =>
+        transport.request((client) =>
+          client[WS_METHODS.workspaceObservatoryActivity](input).pipe(
+            Effect.mapError((cause) => new Error(cause.message)),
+          ),
+        ),
     },
     sourceControl: {
       lookupRepository: (input) =>

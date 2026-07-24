@@ -35,23 +35,23 @@ describe("Windows native artifact smoke", () => {
   it("selects stable and channel-branded installed executable pairs", () => {
     assert.deepEqual(
       selectInstalledWindowsExecutables([
-        "Cafe Code (Alpha).exe",
-        "Uninstall Cafe Code (Alpha).exe",
+        "Club Code (Alpha).exe",
+        "Uninstall Club Code (Alpha).exe",
         "resources",
       ]),
       {
-        app: "Cafe Code (Alpha).exe",
-        uninstaller: "Uninstall Cafe Code (Alpha).exe",
+        app: "Club Code (Alpha).exe",
+        uninstaller: "Uninstall Club Code (Alpha).exe",
       },
     );
     assert.deepEqual(
       selectInstalledWindowsExecutables([
-        "Cafe Code (Nightly).exe",
-        "Uninstall Cafe Code (Nightly).exe",
+        "Club Code (Nightly).exe",
+        "Uninstall Club Code (Nightly).exe",
       ]),
       {
-        app: "Cafe Code (Nightly).exe",
-        uninstaller: "Uninstall Cafe Code (Nightly).exe",
+        app: "Club Code (Nightly).exe",
+        uninstaller: "Uninstall Club Code (Nightly).exe",
       },
     );
   });
@@ -147,7 +147,7 @@ describe("Windows native artifact smoke", () => {
   it("waits for Windows uninstall side effects to remove the app executable", async () => {
     let attempts = 0;
     const waits: number[] = [];
-    const disappeared = await waitForPathToDisappear("C:\\temp\\Cafe Code\\Cafe Code.exe", {
+    const disappeared = await waitForPathToDisappear("C:\\temp\\Club Code\\Club Code.exe", {
       platform: "win32",
       exists: () => {
         attempts += 1;
@@ -163,7 +163,7 @@ describe("Windows native artifact smoke", () => {
   });
 
   it("fails fast for persistent uninstall leftovers on non-Windows", async () => {
-    const disappeared = await waitForPathToDisappear("/tmp/Cafe Code/Cafe Code.exe", {
+    const disappeared = await waitForPathToDisappear("/tmp/Club Code/Club Code.exe", {
       platform: "linux",
       exists: () => true,
       sleep: async () => undefined,

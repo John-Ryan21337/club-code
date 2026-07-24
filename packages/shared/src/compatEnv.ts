@@ -7,7 +7,7 @@ export type EnvRecord = Readonly<Record<string, string | undefined>>;
 
 export function cafeCodeEnvName(name: string): string {
   if (!name.startsWith(CAFE_CODE_ENV_PREFIX)) {
-    throw new Error(`Expected Cafe Code env var to start with ${CAFE_CODE_ENV_PREFIX}.`);
+    throw new Error(`Expected Club Code env var to start with ${CAFE_CODE_ENV_PREFIX}.`);
   }
   return name;
 }

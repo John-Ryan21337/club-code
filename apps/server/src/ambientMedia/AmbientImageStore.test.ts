@@ -4,12 +4,14 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import { MAX_AMBIENT_IMAGE_FILE_BYTES } from "@cafecode/contracts/settings";
 
 import { ServerConfig } from "../config.ts";
 import {
   AMBIENT_IMAGE_ORPHAN_GRACE_PERIOD_MS,
   AmbientImageStore,
   AmbientImageStoreLive,
+  MAX_AMBIENT_IMAGE_PROFILE_BYTES,
 } from "./AmbientImageStore.ts";
 
 const tinyPng = Uint8Array.from(
@@ -21,6 +23,35 @@ const tinyPng = Uint8Array.from(
 const tinyGif = Uint8Array.from(
   Buffer.from("R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==", "base64"),
 );
+const gifWithEncodedSize = (sizeBytes: number, fillByte = 0x61): Uint8Array => {
+  const prefix = tinyGif.subarray(0, tinyGif.byteLength - 1);
+  if (sizeBytes < tinyGif.byteLength + 5) {
+    throw new Error("Padded GIF fixture must have room for a comment extension.");
+  }
+
+  const bytes = new Uint8Array(sizeBytes);
+  bytes.set(prefix);
+  let offset = prefix.byteLength;
+  bytes[offset++] = 0x21;
+  bytes[offset++] = 0xfe;
+
+  // A GIF data sub-block contributes one length byte plus 1..255 data bytes.
+  // Avoid leaving a one-byte remainder, which cannot form a valid sub-block.
+  let subBlockBudget = sizeBytes - offset - 2;
+  while (subBlockBudget > 0) {
+    let blockBytes = Math.min(256, subBlockBudget);
+    if (subBlockBudget - blockBytes === 1) blockBytes -= 1;
+    if (blockBytes < 2) throw new Error("Invalid padded GIF fixture budget.");
+    bytes[offset++] = blockBytes - 1;
+    bytes.fill(fillByte, offset, offset + blockBytes - 1);
+    offset += blockBytes - 1;
+    subBlockBudget -= blockBytes;
+  }
+  bytes[offset++] = 0;
+  bytes[offset++] = 0x3b;
+  if (offset !== sizeBytes) throw new Error("Padded GIF fixture has the wrong encoded size.");
+  return bytes;
+};
 const tinyWebp = Uint8Array.from(
   Buffer.from("UklGRiIAAABXRUJQVlA4IBYAAAAwAQCdASoBAAEADsD+JaQAA3AAAAAA", "base64"),
 );
@@ -172,6 +203,40 @@ it.layer(NodeServices.layer)("ambient image store", (it) => {
       assert.equal(incompleteWebp._tag, "Failure");
       assert.equal(durationBomb._tag, "Failure");
       assert.equal(frameBomb._tag, "Failure");
+    }).pipe(Effect.provide(layer())),
+  );
+
+  it.effect("keeps the 80 MiB cycle replacement budget while rejecting an oversized upload", () =>
+    Effect.gen(function* () {
+      const store = yield* AmbientImageStore;
+      const firstAtLimit = yield* store.storeUploadedImage({
+        bytes: gifWithEncodedSize(MAX_AMBIENT_IMAGE_FILE_BYTES),
+        declaredMimeType: "image/gif",
+      });
+      const replacementAtLimit = yield* store.storeUploadedImage({
+        bytes: gifWithEncodedSize(MAX_AMBIENT_IMAGE_FILE_BYTES, 0x62),
+        declaredMimeType: "image/gif",
+      });
+      const thirdAsset = yield* store.storeUploadedImage({
+        bytes: tinyPng,
+        declaredMimeType: "image/png",
+      });
+      const fileOverflow = yield* Effect.exit(
+        store.storeUploadedImage({
+          bytes: new Uint8Array(MAX_AMBIENT_IMAGE_FILE_BYTES + 1),
+          declaredMimeType: "image/gif",
+        }),
+      );
+
+      assert.notEqual(firstAtLimit.id, replacementAtLimit.id);
+      assert.equal(firstAtLimit.sizeBytes, MAX_AMBIENT_IMAGE_FILE_BYTES);
+      assert.equal(replacementAtLimit.sizeBytes, MAX_AMBIENT_IMAGE_FILE_BYTES);
+      assert.equal(MAX_AMBIENT_IMAGE_PROFILE_BYTES, 160 * 1024 * 1024);
+      assert.equal(thirdAsset.mimeType, "image/png");
+      assert.equal(fileOverflow._tag, "Failure");
+      if (fileOverflow._tag === "Failure") {
+        assert.include(String(fileOverflow.cause), "Ambient image is too large");
+      }
     }).pipe(Effect.provide(layer())),
   );
 

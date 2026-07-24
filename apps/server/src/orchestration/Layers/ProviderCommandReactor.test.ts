@@ -1691,7 +1691,7 @@ describe("ProviderCommandReactor", () => {
       typeof codexTurnInput.input === "string"
         ? codexTurnInput.input
         : "";
-    expect(codexPrompt).toContain("You are taking over an existing Cafe Code chat");
+    expect(codexPrompt).toContain("You are taking over an existing Club Code chat");
     expect(codexPrompt).toContain("User:\nfirst claude turn");
     expect(codexPrompt).toContain("Assistant:\nClaude inspected the workspace");
     expect(codexPrompt).toContain("Current user request:\ncontinue with codex");
@@ -2754,7 +2754,7 @@ describe("ProviderCommandReactor", () => {
       kind: "provider.turn.steer.failed",
       payload: {
         detail:
-          "Cafe Code preserved this follow-up for automatic delivery after the active turn is ready.",
+          "Club Code preserved this follow-up for automatic delivery after the active turn is ready.",
         messageId: "user-message-steer-unsupported",
         retryableFollowUp: true,
         retryAfter: "active-turn",

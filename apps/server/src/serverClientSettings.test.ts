@@ -55,6 +55,7 @@ it.layer(NodeServices.layer)("server client settings", (it) => {
           brandWordmarkPrefix: "Acme",
           sidebarBrandImageDataUrl: legacyPngDataUrl,
           chatCopyFormat: "plainText",
+          autoNudgeMode: "steady-progress",
         }),
       );
 
@@ -73,6 +74,7 @@ it.layer(NodeServices.layer)("server client settings", (it) => {
       assert.equal(persisted.sidebarBrandImageDataUrl, "");
       assert.isFalse(raw.includes("data:image"));
       assert.equal(settings.chatCopyFormat, "plainText");
+      assert.equal(settings.autoNudgeMode, "steady-progress");
       assert.equal(settings.showSidebarMascot, DEFAULT_CLIENT_SETTINGS.showSidebarMascot);
     }).pipe(Effect.provide(makeServerClientSettingsLayer())),
   );
@@ -224,6 +226,7 @@ it.layer(NodeServices.layer)("server client settings", (it) => {
         defaultEditor: "cursor",
         powerSaveBlockerMode: "during-chats",
         showSidebarAttribution: false,
+        autoNudgeMode: "hardcore-fanout",
       });
       const raw = yield* fs.readFileString(config.clientSettingsPath);
       // @effect-diagnostics-next-line preferSchemaOverJson:off
@@ -233,6 +236,7 @@ it.layer(NodeServices.layer)("server client settings", (it) => {
       assert.equal(persisted.brandWordmarkPrefix, "Lab");
       assert.equal(persisted.defaultEditor, "cursor");
       assert.equal(persisted.powerSaveBlockerMode, "during-chats");
+      assert.equal(persisted.autoNudgeMode, "hardcore-fanout");
       assert.equal(persisted.showSidebarMascot, DEFAULT_CLIENT_SETTINGS.showSidebarMascot);
       assert.equal(persisted.chatCopyFormat, DEFAULT_CLIENT_SETTINGS.chatCopyFormat);
     }).pipe(Effect.provide(makeServerClientSettingsLayer())),

@@ -15,16 +15,17 @@ interface WorkflowProjectionInput {
   readonly activities: ReadonlyArray<OrchestrationThreadActivity>;
   readonly turnId?: string | null;
   readonly providerName?: string | null;
+  readonly modelName?: string | null;
 }
 
 interface MutableWorkflowNode {
   id: string;
   parentCandidateId: string | null;
-  parentCandidatePath: string | null;
   path: string | null;
   name: string | null;
   taskLabel: string | null;
   status: WorkflowAgentStatus;
+  startedAt: string | null;
   elapsedSeconds: number | null;
   latestActivitySummary: string | null;
   lastActivityAt: string | null;
@@ -98,6 +99,9 @@ function statusFromValue(value: unknown): WorkflowAgentStatus | null {
       return "running";
     case "waiting":
       return "waiting";
+    case "idle":
+    case "ready":
+      return "idle";
     case "completed":
     case "shutdown":
       return "completed";
@@ -160,15 +164,6 @@ function nameFromPath(path: string | null): string | null {
     .map((segment) => segment.trim())
     .filter(Boolean);
   return segments.at(-1) ?? null;
-}
-
-function parentPath(path: string | null): string | null {
-  if (!path) return null;
-  const segments = path
-    .split("/")
-    .map((segment) => segment.trim())
-    .filter(Boolean);
-  return segments.length > 1 ? segments.slice(0, -1).join("/") : null;
 }
 
 function isRootAgentPath(path: string | null): boolean {
@@ -336,10 +331,12 @@ function upsertNode(
     }
     existing.parentCandidateId ??= update.parentCandidateId ?? null;
     existing.path ??= update.path ?? null;
-    existing.parentCandidatePath ??= parentPath(update.path ?? null);
     existing.name ??= update.name ?? null;
     existing.taskLabel ??= update.taskLabel ?? null;
     existing.status = applyStatus(existing.status, update.status);
+    // The first provider/orchestration lifecycle event is the only safe start
+    // marker we have. Keep it stable under reconnect replay.
+    existing.startedAt ??= activity.createdAt;
     existing.elapsedSeconds ??= update.elapsedSeconds ?? null;
     existing.latestActivitySummary = summary ?? existing.latestActivitySummary;
     existing.lastActivityAt = activity.createdAt;
@@ -351,11 +348,11 @@ function upsertNode(
   nodes.set(update.id, {
     id: update.id,
     parentCandidateId: update.parentCandidateId ?? null,
-    parentCandidatePath: parentPath(update.path ?? null),
     path: update.path ?? null,
     name: update.name ?? null,
     taskLabel: update.taskLabel ?? null,
     status: update.status ?? "unknown",
+    startedAt: activity.createdAt,
     elapsedSeconds: update.elapsedSeconds ?? null,
     latestActivitySummary: summary,
     lastActivityAt: activity.createdAt,
@@ -369,6 +366,7 @@ export function deriveWorkflowProjection({
   activities,
   turnId,
   providerName,
+  modelName,
 }: WorkflowProjectionInput): WorkflowProjectionSnapshot {
   const scopedActivities = activities
     .filter((activity) => turnId === undefined || activity.turnId === turnId)
@@ -414,17 +412,12 @@ export function deriveWorkflowProjection({
     }
   }
 
-  const pathToId = new Map(
-    Array.from(nodes.values()).flatMap((node) =>
-      node.path ? [[node.path, node.id] as const] : [],
-    ),
-  );
   const immutableNodes: WorkflowAgentNode[] = Array.from(nodes.values()).map((node) => {
+    // Paths are display metadata. A shared path prefix is not proof that one
+    // agent spawned another, so graph edges require an explicit provider
+    // parent identifier from the collaboration event.
     const parentId =
-      (node.parentCandidateId && nodes.has(node.parentCandidateId)
-        ? node.parentCandidateId
-        : null) ??
-      (node.parentCandidatePath ? (pathToId.get(node.parentCandidatePath) ?? null) : null);
+      node.parentCandidateId && nodes.has(node.parentCandidateId) ? node.parentCandidateId : null;
     return {
       id: node.id,
       parentId,
@@ -432,6 +425,7 @@ export function deriveWorkflowProjection({
       name: node.name,
       taskLabel: node.taskLabel,
       status: node.status,
+      startedAt: node.startedAt,
       elapsedSeconds: node.elapsedSeconds,
       latestActivitySummary: node.latestActivitySummary,
       lastActivityAt: node.lastActivityAt,
@@ -445,6 +439,8 @@ export function deriveWorkflowProjection({
     fidelity:
       immutableNodes.length === 0 ? "not-reported" : liveSignalSeen ? "live" : "lifecycle-only",
     nodes: immutableNodes,
+    providerLabel: boundedText(providerName),
+    modelLabel: boundedText(modelName),
     recentActivities: recentActivities.toReversed(),
     sourceActivityCount: scopedActivities.length,
     omittedNodeCount: Math.max(0, attemptedNodeIds.size - immutableNodes.length),

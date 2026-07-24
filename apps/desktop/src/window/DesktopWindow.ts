@@ -24,6 +24,7 @@ import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as IpcChannels from "../ipc/channels.ts";
 import * as DesktopIpc from "../ipc/DesktopIpc.ts";
 import * as DesktopServerExposure from "../backend/DesktopServerExposure.ts";
+import { installTrustedFrameAudioCapture } from "./DesktopDisplayMediaCapture.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 
 const TITLEBAR_HEIGHT = 40;
@@ -322,6 +323,10 @@ const make = Effect.gen(function* () {
   const createWindow = Effect.fn("desktop.window.createWindow")(function* (
     backendHttpUrl: URL,
   ): Effect.fn.Return<Electron.BrowserWindow, DesktopWindowError> {
+    const rendererUrl = environment.isDevelopment
+      ? yield* resolveDesktopDevServerUrl(environment)
+      : backendHttpUrl.href;
+    const rendererOrigin = new URL(rendererUrl).origin;
     const iconPaths = yield* assets.iconPaths;
     const iconOption = getIconOption(iconPaths);
     const shouldUseDarkColors = yield* electronTheme.shouldUseDarkColors;
@@ -344,7 +349,11 @@ const make = Effect.gen(function* () {
       },
     });
     yield* opacityMutex.withPermits(1)(prepareWindowOpacity(window));
-    yield* desktopIpc.trustWebContents(window.webContents);
+    yield* desktopIpc.trustWebContents(window.webContents, rendererUrl);
+    const removeDisplayMediaCapture = installTrustedFrameAudioCapture(
+      window.webContents,
+      rendererOrigin,
+    );
 
     window.webContents.on("context-menu", (event, params) => {
       event.preventDefault();
@@ -400,6 +409,15 @@ const make = Effect.gen(function* () {
       }
       return { action: "deny" };
     });
+    const guardRendererNavigation = (
+      event: Electron.Event<Electron.WebContentsWillNavigateEventParams>,
+    ) => {
+      if (!DesktopIpc.isTrustedDesktopIpcNavigation(event.url, rendererUrl)) {
+        event.preventDefault();
+      }
+    };
+    window.webContents.on("will-navigate", guardRendererNavigation);
+    window.webContents.on("will-redirect", guardRendererNavigation);
 
     window.on("page-title-updated", (event) => {
       event.preventDefault();
@@ -445,15 +463,13 @@ const make = Effect.gen(function* () {
       void stopStartupCpuProfiler("desktop-window-revealed");
     });
 
+    void window.loadURL(rendererUrl);
     if (environment.isDevelopment) {
-      const devServerUrl = yield* resolveDesktopDevServerUrl(environment);
-      void window.loadURL(devServerUrl);
       window.webContents.openDevTools({ mode: "detach" });
-    } else {
-      void window.loadURL(backendHttpUrl.href);
     }
 
     window.on("closed", () => {
+      removeDisplayMediaCapture();
       void runPromise(electronWindow.clearMain(Option.some(window)));
     });
 

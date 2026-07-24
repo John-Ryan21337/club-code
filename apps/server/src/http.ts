@@ -16,6 +16,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 import { cast } from "effect/Function";
 import {
   HttpBody,
@@ -78,6 +79,11 @@ const PWA_CONTROL_FILE_CACHE_CONTROL = "no-cache";
 const STATIC_FILE_CACHE_CONTROL = "public, max-age=3600";
 const BRANDING_IMAGE_ROUTE_PREFIX = "/api/branding/sidebar-image/";
 const YOUTUBE_DISCOVERY_REQUEST_MAX_BYTES = 1_024;
+const AMBIENT_IMAGE_UPLOAD_BODY_TIMEOUT = "30 seconds";
+// Bound aggregate retained request memory while allowing a healthy upload to
+// proceed if another client stalls. Each permit can retain at most one capped
+// 10 MiB request body, and the timeout releases permits held by slow clients.
+const ambientImageUploadSemaphore = Semaphore.makeUnsafe(2);
 const STATIC_CONTENT_SECURITY_POLICY = [
   "default-src 'self'",
   "base-uri 'self'",
@@ -92,9 +98,9 @@ const STATIC_CONTENT_SECURITY_POLICY = [
   "style-src-attr 'unsafe-inline'",
   "font-src 'self' https://fonts.gstatic.com data:",
   "img-src 'self' data: blob:",
-  "media-src 'self' blob:",
+  "media-src 'self' blob: cafecode-media:",
   "worker-src 'self' blob:",
-  // Saved Cafe Code environments are user-selected HTTP(S)/WS(S) origins.
+  // Saved Club Code environments are user-selected HTTP(S)/WS(S) origins.
   // Keep this broad transport allowance isolated to connect-src; executable,
   // image, media, and frame sources remain explicitly constrained.
   "connect-src 'self' http: https: ws: wss:",
@@ -303,7 +309,7 @@ function renderHttpsBootstrapPage(input: {
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <meta name="robots" content="noindex" />
-<title>Cafe Code — secure connection required</title>
+<title>Club Code — secure connection required</title>
 <style>
   :root { color-scheme: light dark; }
   body { margin: 0; min-height: 100vh; display: grid; place-items: center;
@@ -325,7 +331,7 @@ function renderHttpsBootstrapPage(input: {
 <body>
   <div class="card">
     <h1>This server uses HTTPS</h1>
-    <p>For a secure connection, install Cafe Code's certificate on this device, then open the secure site.</p>
+    <p>For a secure connection, install Club Code's certificate on this device, then open the secure site.</p>
     <a class="btn primary" href="${certPathAttr}" download="cafe-code.crt">Download certificate</a>
     <a class="btn secondary" href="${secureOriginAttr}">Continue to secure site →</a>
     <ol>
@@ -650,34 +656,47 @@ export const ambientImageUploadRouteLayer = HttpRouter.add(
     // Content-Length is only a fast reject. The request reader has its own
     // hard limit, so chunked, absent, invalid, or underreported lengths cannot
     // make the server retain an arbitrarily large body.
-    const body = yield* request.arrayBuffer.pipe(
-      Effect.provideService(
-        HttpServerRequest.MaxBodySize,
-        FileSystem.Size(MAX_AMBIENT_IMAGE_FILE_BYTES + 1),
-      ),
-      Effect.mapError(
-        (cause) =>
-          new AmbientImageError({
+    const ambientImage = yield* ambientImageUploadSemaphore.withPermits(1)(
+      Effect.gen(function* () {
+        const bodyOption = yield* request.arrayBuffer.pipe(
+          Effect.provideService(
+            HttpServerRequest.MaxBodySize,
+            FileSystem.Size(MAX_AMBIENT_IMAGE_FILE_BYTES + 1),
+          ),
+          Effect.mapError(
+            (cause) =>
+              new AmbientImageError({
+                code: "too-large",
+                status: 413,
+                message: "Ambient image is too large.",
+                cause,
+              }),
+          ),
+          Effect.timeoutOption(AMBIENT_IMAGE_UPLOAD_BODY_TIMEOUT),
+        );
+        if (Option.isNone(bodyOption)) {
+          return yield* new AmbientImageError({
+            code: "storage-failed",
+            status: 408,
+            message: "Ambient image upload timed out.",
+          });
+        }
+        const body = bodyOption.value;
+        if (body.byteLength > MAX_AMBIENT_IMAGE_FILE_BYTES) {
+          return yield* new AmbientImageError({
             code: "too-large",
             status: 413,
             message: "Ambient image is too large.",
-            cause,
-          }),
-      ),
+          });
+        }
+        return yield* (yield* AmbientImageStore).storeUploadedImage({
+          bytes: new Uint8Array(body),
+          ...(request.headers["content-type"]
+            ? { declaredMimeType: request.headers["content-type"] }
+            : {}),
+        });
+      }),
     );
-    if (body.byteLength > MAX_AMBIENT_IMAGE_FILE_BYTES) {
-      return yield* new AmbientImageError({
-        code: "too-large",
-        status: 413,
-        message: "Ambient image is too large.",
-      });
-    }
-    const ambientImage = yield* (yield* AmbientImageStore).storeUploadedImage({
-      bytes: new Uint8Array(body),
-      ...(request.headers["content-type"]
-        ? { declaredMimeType: request.headers["content-type"] }
-        : {}),
-    });
     return HttpServerResponse.jsonUnsafe(
       { ambientImage },
       { status: 200, headers: browserApiCorsHeaders },
@@ -743,7 +762,10 @@ export const ambientImageRemoveRouteLayer = HttpRouter.add(
       return HttpServerResponse.text("Ambient image was not found.", { status: 404 });
     }
     const settings = yield* (yield* ServerClientSettingsService).getSettings;
-    if (settings.ambientImageAsset?.id === id) {
+    if (
+      settings.ambientImageAsset?.id === id ||
+      settings.ambientImageCycleAssets.some((asset) => asset.id === id)
+    ) {
       return HttpServerResponse.text("Ambient image is still selected in shared settings.", {
         status: 409,
         headers: browserApiCorsHeaders,
@@ -969,7 +991,7 @@ const youTubeAccountCallbackHandler = Effect.gen(function* () {
       HttpServerResponse.text(
         error.code === "invalid-callback"
           ? "This YouTube connection request is invalid or has expired."
-          : "YouTube could not be connected. Return to Cafe Code and try again.",
+          : "YouTube could not be connected. Return to Club Code and try again.",
         {
           status: error.status,
           contentType: "text/plain; charset=utf-8",

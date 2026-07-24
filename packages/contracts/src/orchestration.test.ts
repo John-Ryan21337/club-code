@@ -65,6 +65,8 @@ it.effect("workflow projection accepts honest unavailable fields and canonical s
     const parsed = yield* decodeWorkflowProjectionSnapshot({
       version: 1,
       fidelity: "lifecycle-only",
+      providerLabel: null,
+      modelLabel: null,
       nodes: [
         {
           id: "task:one",
@@ -73,6 +75,7 @@ it.effect("workflow projection accepts honest unavailable fields and canonical s
           name: null,
           taskLabel: "Audit the adapter",
           status: "waiting",
+          startedAt: null,
           elapsedSeconds: null,
           latestActivitySummary: null,
           lastActivityAt: null,
@@ -97,6 +100,8 @@ it.effect("workflow projection rejects node collections above the wire cap", () 
       decodeWorkflowProjectionSnapshot({
         version: 1,
         fidelity: "live",
+        providerLabel: null,
+        modelLabel: null,
         nodes: Array.from({ length: WORKFLOW_PROJECTION_MAX_NODES + 1 }, (_, index) => ({
           id: `agent:${index}`,
           parentId: null,
@@ -104,6 +109,7 @@ it.effect("workflow projection rejects node collections above the wire cap", () 
           name: null,
           taskLabel: null,
           status: "running",
+          startedAt: null,
           elapsedSeconds: null,
           latestActivitySummary: null,
           lastActivityAt: null,

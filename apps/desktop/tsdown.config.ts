@@ -20,4 +20,11 @@ export default defineConfig([
     ...shared,
     entry: ["src/preload.ts"],
   },
+  {
+    ...shared,
+    entry: ["src/browser/EmbeddedBrowserOcrWorker.ts"],
+    deps: {
+      alwaysBundle: (id) => id.startsWith("@cafecode/"),
+    },
+  },
 ]);

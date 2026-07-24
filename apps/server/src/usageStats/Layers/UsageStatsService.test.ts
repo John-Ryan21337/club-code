@@ -36,6 +36,7 @@ import { UsageStatsRepositoryLive } from "../../persistence/Layers/UsageStats.ts
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import { ServerSettingsService, type ServerSettingsShape } from "../../serverSettings.ts";
 import { UsageStatsService, type UsageStatsServiceShape } from "../Services/UsageStatsService.ts";
+import { localDayKey } from "../dayBuckets.ts";
 import { UsageStatsServiceLive } from "./UsageStatsService.ts";
 
 const THREAD_1 = ThreadId.make("thread-1");
@@ -177,7 +178,13 @@ function providerEventBase(
 function tokenUsageEvent(
   threadId: ThreadId,
   eventId: string,
-  usage: { outputTokens?: number; totalOutputTokens?: number },
+  usage: {
+    usedTokens?: number;
+    outputTokens?: number;
+    totalOutputTokens?: number;
+    totalCachedInputTokens?: number;
+    totalCacheWriteInputTokens?: number;
+  },
   provider: ProviderDriverKind = CODEX,
 ) {
   return {
@@ -257,6 +264,56 @@ describe("UsageStatsService", () => {
 
         const snapshot = yield* harness.service.snapshot;
         assert.equal(snapshot.totals.outputTokens, 100 + 560);
+      }),
+    ),
+  );
+
+  it.effect("tracks provider-reported cache reuse and observed compaction by model", () =>
+    withHarness((harness) =>
+      Effect.gen(function* () {
+        yield* harness.emitProvider({
+          ...providerEventBase(THREAD_1, "e0"),
+          type: "session.started",
+          payload: {},
+        });
+        yield* harness.emitProvider({
+          ...providerEventBase(THREAD_1, "e1"),
+          type: "turn.started",
+          payload: { model: "gpt-5.6-codex" },
+        });
+        yield* harness.emitProvider(
+          tokenUsageEvent(THREAD_1, "e2", {
+            usedTokens: 5_000,
+            totalOutputTokens: 10,
+            totalCachedInputTokens: 1_000,
+            totalCacheWriteInputTokens: 200,
+          }),
+        );
+        yield* harness.emitProvider({
+          ...providerEventBase(THREAD_1, "e3"),
+          type: "thread.state.changed",
+          payload: { state: "compacted" },
+        });
+        yield* harness.emitProvider(
+          tokenUsageEvent(THREAD_1, "e4", {
+            usedTokens: 1_800,
+            totalOutputTokens: 20,
+            totalCachedInputTokens: 1_600,
+            totalCacheWriteInputTokens: 250,
+          }),
+        );
+
+        yield* harness.service.flush;
+        assert.deepEqual((yield* harness.service.get).tokenBreakdown, [
+          {
+            provider: CODEX,
+            model: "gpt-5.6-codex",
+            outputTokens: 20,
+            cachedInputTokens: 1_600,
+            cacheWriteInputTokens: 250,
+            compactedInputTokens: 3_200,
+          },
+        ]);
       }),
     ),
   );
@@ -356,22 +413,31 @@ describe("UsageStatsService", () => {
         yield* harness.service.flush;
         const expectedRows = [
           {
-            day: "1970-01-01",
+            day: localDayKey(0),
             provider: CLAUDE,
             model: "claude-opus-5",
             outputTokens: 70,
+            cachedInputTokens: 0,
+            cacheWriteInputTokens: 0,
+            compactedInputTokens: 0,
           },
           {
-            day: "1970-01-01",
+            day: localDayKey(0),
             provider: CODEX,
             model: "gpt-5.6-codex",
             outputTokens: 125,
+            cachedInputTokens: 0,
+            cacheWriteInputTokens: 0,
+            compactedInputTokens: 0,
           },
           {
-            day: "1970-01-01",
+            day: localDayKey(0),
             provider: CODEX,
             model: "gpt-5.6-codex-mini",
             outputTokens: 50,
+            cachedInputTokens: 0,
+            cacheWriteInputTokens: 0,
+            compactedInputTokens: 0,
           },
         ];
         assert.deepEqual(yield* harness.repository.listTokenBreakdownDays, expectedRows);

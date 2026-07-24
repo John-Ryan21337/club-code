@@ -21,8 +21,17 @@ import { ServerConfig } from "../config.ts";
 
 export const AMBIENT_IMAGE_ROUTE_PREFIX = "/api/ambient-media/image/";
 const AMBIENT_IMAGE_SUBDIR = "ambient-media/images";
-/** Per-profile cap. Individual uploads have the separate contract byte cap. */
-const MAX_AMBIENT_IMAGE_PROFILE_BYTES = 10 * 1024 * 1024;
+/**
+ * A desktop folder selection may contain 24 individually validated images
+ * totaling 80 MiB. Settings intentionally keep the old cycle referenced until
+ * the entire replacement has uploaded and the settings write succeeds, so the
+ * profile must hold two maximum cycles during that short rollback window.
+ *
+ * This is a storage quota only: request bodies remain capped at 10 MiB, image
+ * dimensions/animation work are still validated, and HTTP accepts only two
+ * bounded uploads concurrently.
+ */
+export const MAX_AMBIENT_IMAGE_PROFILE_BYTES = 160 * 1024 * 1024;
 const MAX_AMBIENT_IMAGE_PROFILE_ASSETS = 256;
 export const AMBIENT_IMAGE_ORPHAN_GRACE_PERIOD_MS = 24 * 60 * 60 * 1_000;
 export const AMBIENT_IMAGE_ORPHAN_SWEEP_MAX_ASSETS = 32;
@@ -56,7 +65,7 @@ export type AmbientImageErrorCode =
 export class AmbientImageError extends Data.TaggedError("AmbientImageError")<{
   readonly code: AmbientImageErrorCode;
   readonly message: string;
-  readonly status: 400 | 404 | 413 | 415 | 500;
+  readonly status: 400 | 404 | 408 | 413 | 415 | 500;
   readonly cause?: unknown;
 }> {}
 

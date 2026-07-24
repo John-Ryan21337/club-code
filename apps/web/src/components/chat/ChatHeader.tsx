@@ -82,7 +82,7 @@ export const ChatHeader = memo(function ChatHeader({
   const shouldShowSourceRebuildBadgeValue = shouldShowSourceRebuildBadge(sourceUpdateState);
   const sourceUpdateTooltip =
     shouldShowSourceRebuildBadgeValue && sourceUpdateState?.trackedBranch
-      ? `Current checkout differs from the running Cafe Code build. Rebuild and restart to apply ${sourceUpdateState.trackedBranch}.`
+      ? `Current checkout differs from the running Club Code build. Rebuild and restart to apply ${sourceUpdateState.trackedBranch}.`
       : shouldShowSourceUpdateBadge && sourceUpdateState.remoteHash
         ? `Newer origin/${sourceUpdateState.trackedBranch} commit available: ${sourceUpdateState.remoteHash.slice(0, 12)}`
         : shouldShowSourceUpdateBadge

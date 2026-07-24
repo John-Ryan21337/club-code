@@ -195,13 +195,13 @@ export const runProviderSupervisorCommand = (flags: {
 export const providerDaemonCommand = Command.make("provider-daemon", {
   bootstrapFd: bootstrapFdFlag,
 }).pipe(
-  Command.withDescription("Run the minimal Cafe Code provider mini-daemon."),
+  Command.withDescription("Run the minimal Club Code provider mini-daemon."),
   Command.withHandler((flags) => runProviderDaemonCommand(flags)),
 );
 
 export const providerSupervisorCommand = Command.make("provider-supervisor", {
   bootstrapFd: bootstrapFdFlag,
 }).pipe(
-  Command.withDescription("Run the detached Cafe Code provider supervisor."),
+  Command.withDescription("Run the detached Club Code provider supervisor."),
   Command.withHandler((flags) => runProviderSupervisorCommand(flags)),
 );

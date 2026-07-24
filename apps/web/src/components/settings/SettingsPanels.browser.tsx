@@ -22,6 +22,7 @@ import {
 } from "@cafecode/contracts";
 import {
   type ClientSettings,
+  MAX_AMBIENT_IMAGE_FILE_BYTES,
   MAX_SIDEBAR_BRAND_IMAGE_FILE_BYTES,
 } from "@cafecode/contracts/settings";
 import * as DateTime from "effect/DateTime";
@@ -48,6 +49,7 @@ import {
   setServerConfigSnapshot,
 } from "../../rpc/serverState";
 import { useUiStateStore } from "../../uiStateStore";
+import { youtubeUrlQueueStore } from "../../youtubeUrlQueue";
 import { toastManager } from "../ui/toast";
 import { ConnectionsSettings } from "./ConnectionsSettings";
 import { DiagnosticsSettingsPanel } from "./DiagnosticsSettings";
@@ -614,6 +616,28 @@ const createDesktopBridgeStub = (overrides?: {
         reason: "unsupported-platform",
       })),
     pickFolder: vi.fn().mockResolvedValue(null),
+    getLocalMediaCapability: vi.fn().mockResolvedValue({
+      available: false,
+      engine: { label: "VLC", version: null, reason: "Unavailable in browser tests." },
+    }),
+    pickLocalMedia: vi.fn().mockResolvedValue(null),
+    releaseLocalMedia: vi.fn().mockResolvedValue(false),
+    openEmbeddedBrowser: vi.fn().mockRejectedValue(new Error("Not implemented in settings test")),
+    closeEmbeddedBrowser: vi.fn().mockRejectedValue(new Error("Not implemented in settings test")),
+    setEmbeddedBrowserBounds: vi
+      .fn()
+      .mockRejectedValue(new Error("Not implemented in settings test")),
+    shareEmbeddedBrowser: vi.fn().mockRejectedValue(new Error("Not implemented in settings test")),
+    navigateEmbeddedBrowser: vi
+      .fn()
+      .mockRejectedValue(new Error("Not implemented in settings test")),
+    controlEmbeddedBrowserHistory: vi
+      .fn()
+      .mockRejectedValue(new Error("Not implemented in settings test")),
+    snapshotEmbeddedBrowser: vi.fn().mockResolvedValue(null),
+    clickEmbeddedBrowser: vi.fn().mockRejectedValue(new Error("Not implemented in settings test")),
+    typeInEmbeddedBrowser: vi.fn().mockRejectedValue(new Error("Not implemented in settings test")),
+    onEmbeddedBrowserState: () => () => undefined,
     confirm: vi.fn().mockResolvedValue(false),
     setTheme: vi.fn().mockResolvedValue(undefined),
     showContextMenu: vi.fn().mockResolvedValue(null),
@@ -664,6 +688,20 @@ function installClientSettingsNativeApi(desktopBridge: DesktopBridge) {
   return { updateClientSettings };
 }
 
+function setColorInput(ariaLabel: string, value: string) {
+  const input = document.querySelector(
+    `input[aria-label="${ariaLabel}"]`,
+  ) as HTMLInputElement | null;
+  expect(input).not.toBeNull();
+  const inputValueSetter = Object.getOwnPropertyDescriptor(
+    HTMLInputElement.prototype,
+    "value",
+  )?.set;
+  inputValueSetter?.call(input, value);
+  input!.dispatchEvent(new Event("input", { bubbles: true }));
+  input!.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+}
+
 describe("settings panels", () => {
   let mounted:
     | (Awaited<ReturnType<typeof render>> & {
@@ -695,6 +733,24 @@ describe("settings panels", () => {
     await __resetLocalApiForTests();
     localMediaStore.clear();
     authAccessHarness.reset();
+  });
+
+  it("keeps ambient image folder selection unavailable outside the desktop shell", async () => {
+    setServerConfigSnapshot(createBaseServerConfig());
+    mounted = await renderWithTestRouter(
+      <AppAtomRegistryProvider>
+        <AppearanceSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+    await expect.element(page.getByText("Image folder cycling")).toBeInTheDocument();
+    await expect
+      .element(
+        page.getByText(
+          "Image-folder cycling is available in the Club Code desktop app. Browser sessions keep single-image upload only.",
+        ),
+      )
+      .toBeInTheDocument();
+    expect(document.querySelector('input[aria-label="Ambient image folder"]')).toBeNull();
   });
 
   it("hides owner pairing tools in browser-served loopback builds without remote exposure", async () => {
@@ -1024,7 +1080,7 @@ describe("settings panels", () => {
     });
   });
 
-  it("persists appearance preferences from Appearance settings", async () => {
+  it("keeps background Auto Nudge opt-in with visible conservative caps", async () => {
     const desktopBridge = createDesktopBridgeStub();
     window.desktopBridge = desktopBridge;
     const { updateClientSettings } = installClientSettingsNativeApi(desktopBridge);
@@ -1036,19 +1092,28 @@ describe("settings panels", () => {
       </AppAtomRegistryProvider>,
     );
 
-    const setColorInput = (ariaLabel: string, value: string) => {
-      const input = document.querySelector(
-        `input[aria-label="${ariaLabel}"]`,
-      ) as HTMLInputElement | null;
-      expect(input).not.toBeNull();
-      const inputValueSetter = Object.getOwnPropertyDescriptor(
-        HTMLInputElement.prototype,
-        "value",
-      )?.set;
-      inputValueSetter?.call(input, value);
-      input!.dispatchEvent(new Event("input", { bubbles: true }));
-      input!.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
-    };
+    await expect.element(page.getByText("Auto Nudge background continuation")).toBeInTheDocument();
+    await expect.element(page.getByLabelText("Auto Nudge maximum rounds")).toHaveValue("5");
+    await expect.element(page.getByLabelText("Auto Nudge maximum minutes")).toHaveValue("30");
+    await page.getByLabelText("Allow Auto Nudge background continuation").click();
+    await vi.waitFor(() => {
+      expect(updateClientSettings).toHaveBeenCalledWith({
+        autoNudgeBackgroundContinuation: true,
+      });
+    });
+  });
+
+  it("persists appearance preferences from Appearance settings", async () => {
+    const desktopBridge = createDesktopBridgeStub();
+    window.desktopBridge = desktopBridge;
+    const { updateClientSettings } = installClientSettingsNativeApi(desktopBridge);
+    setServerConfigSnapshot(createBaseServerConfig());
+
+    mounted = await renderWithTestRouter(
+      <AppAtomRegistryProvider>
+        <AppearanceSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
 
     await expect.element(page.getByText("Accent color")).toBeInTheDocument();
     setColorInput("Branding prefix", "Acme");
@@ -1077,6 +1142,24 @@ describe("settings panels", () => {
             status: 200,
             headers: { "content-type": "application/json" },
           },
+        );
+      }
+      if (url.endsWith("/api/ambient-media/image") && init?.method === "POST") {
+        const file = init.body as File;
+        const digest = file.name.startsWith("second") ? "b".repeat(64) : "a".repeat(64);
+        const extension = file.type === "image/gif" ? "gif" : "png";
+        return new Response(
+          JSON.stringify({
+            ambientImage: {
+              id: `sha256-${digest}.${extension}`,
+              url: `/api/ambient-media/image/sha256-${digest}.${extension}`,
+              mimeType: file.type,
+              width: 128,
+              height: 128,
+              sizeBytes: file.size,
+            },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
         );
       }
 
@@ -1138,6 +1221,49 @@ describe("settings panels", () => {
     await expect.element(page.getByText("Choose an image under 1 MB.")).toBeInTheDocument();
     expect(updateClientSettings).toHaveBeenCalledTimes(callsBeforeOversizedImage);
 
+    const ambientImageInput = document.querySelector(
+      'input[aria-label="Ambient image file"]',
+    ) as HTMLInputElement | null;
+    expect(ambientImageInput).not.toBeNull();
+    const oversizedAmbientImage = new File([], "ambient.gif", { type: "image/gif" });
+    Object.defineProperty(oversizedAmbientImage, "size", {
+      configurable: true,
+      value: MAX_AMBIENT_IMAGE_FILE_BYTES + 1,
+    });
+    const fetchCallsBeforeOversizedAmbientImage = uploadFetch.mock.calls.length;
+    Object.defineProperty(ambientImageInput, "files", {
+      configurable: true,
+      value: [oversizedAmbientImage],
+    });
+    ambientImageInput!.dispatchEvent(new Event("change", { bubbles: true }));
+
+    await expect.element(page.getByText("Choose an image up to 10 MiB.")).toBeInTheDocument();
+    expect(uploadFetch).toHaveBeenCalledTimes(fetchCallsBeforeOversizedAmbientImage);
+
+    const ambientDirectoryInput = document.querySelector(
+      'input[aria-label="Ambient image folder"]',
+    ) as HTMLInputElement | null;
+    expect(ambientDirectoryInput).not.toBeNull();
+    Object.defineProperty(ambientDirectoryInput, "files", {
+      configurable: true,
+      value: [
+        new File(["first"], "first.png", { type: "image/png" }),
+        new File(["second"], "second.gif", { type: "image/gif" }),
+      ],
+    });
+    ambientDirectoryInput!.dispatchEvent(new Event("change", { bubbles: true }));
+    await vi.waitFor(() => {
+      expect(updateClientSettings).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ambientImageCycleEnabled: true,
+          ambientImageCycleAssets: expect.arrayContaining([
+            expect.objectContaining({ mimeType: "image/png" }),
+            expect.objectContaining({ mimeType: "image/gif" }),
+          ]),
+        }),
+      );
+    });
+
     await expect.element(page.getByText("Accent color")).toBeInTheDocument();
     setColorInput("App accent color", "#dc2626");
 
@@ -1188,11 +1314,48 @@ describe("settings panels", () => {
       expect(updateClientSettings).toHaveBeenCalledWith({ fallingEffectsEnabled: true });
     });
 
+    await expect.element(page.getByText("Matrix color mode")).not.toBeInTheDocument();
     await page.getByText("Matrix", { exact: true }).click();
 
     await vi.waitFor(() => {
       expect(updateClientSettings).toHaveBeenCalledWith({ fallingEffectKind: "matrix" });
     });
+
+    await expect.element(page.getByText("Matrix color mode")).toBeInTheDocument();
+    await page.getByRole("radio", { name: "Rainbow", exact: true }).click();
+    await page.getByRole("radio", { name: "Rainbow Extra", exact: true }).click();
+    await page.getByRole("radio", { name: "Music reactive · uniform", exact: true }).click();
+    await page.getByRole("radio", { name: "Music reactive · Rainbow Extra", exact: true }).click();
+
+    await vi.waitFor(() => {
+      expect(updateClientSettings).toHaveBeenCalledWith({
+        fallingEffectMatrixColorMode: "rainbow",
+      });
+      expect(updateClientSettings).toHaveBeenCalledWith({
+        fallingEffectMatrixColorMode: "rainbow-extra",
+      });
+      expect(updateClientSettings).toHaveBeenCalledWith({
+        fallingEffectMatrixColorMode: "music-reactive",
+      });
+      expect(updateClientSettings).toHaveBeenCalledWith({
+        fallingEffectMatrixColorMode: "music-reactive-extra",
+      });
+    });
+    await expect.element(page.getByText(/never read an iframe or microphone/)).toBeInTheDocument();
+    await expect
+      .element(page.getByRole("radio", { name: "Random independent", exact: true }))
+      .not.toBeInTheDocument();
+    await page.getByLabelText("Show provider activity links in Matrix rain").click();
+    await page.getByRole("radio", { name: "Follow Matrix colors", exact: true }).click();
+    await vi.waitFor(() => {
+      expect(updateClientSettings).toHaveBeenCalledWith({ fallingEffectActivityLinks: true });
+      expect(updateClientSettings).toHaveBeenCalledWith({
+        fallingEffectActivityLinkColorMode: "matrix",
+      });
+    });
+    await expect
+      .element(page.getByText(/never invents data flow or renders prompts/))
+      .toBeInTheDocument();
 
     setColorInput("Falling effect color", "#22c55e");
 
@@ -1202,10 +1365,16 @@ describe("settings panels", () => {
 
     await page.getByLabelText("Increase falling effect opacity").click();
     await page.getByLabelText("Increase falling effect speed").click();
+    await page.getByLabelText("Increase falling effect density").click();
+    await page.getByLabelText("Increase Japanese glyph ratio").click();
+    await page.getByLabelText("Use 2ch-inspired Matrix enrichment").click();
 
     await vi.waitFor(() => {
       expect(updateClientSettings).toHaveBeenCalledWith({ fallingEffectOpacity: 0.4 });
       expect(updateClientSettings).toHaveBeenCalledWith({ fallingEffectSpeed: 1.25 });
+      expect(updateClientSettings).toHaveBeenCalledWith({ fallingEffectDensity: 1.25 });
+      expect(updateClientSettings).toHaveBeenCalledWith({ fallingEffectJapaneseRatio: 0.5 });
+      expect(updateClientSettings).toHaveBeenCalledWith({ fallingEffect2chEnriched: true });
     });
 
     await expect.element(page.getByText("Sidebar star speed")).toBeInTheDocument();
@@ -1217,6 +1386,7 @@ describe("settings panels", () => {
   });
 
   it("normalizes ambient streaming sources and commits native opacity on blur", async () => {
+    youtubeUrlQueueStore.clear();
     const setWindowOpacityPreference = vi
       .fn<DesktopBridge["setWindowOpacityPreference"]>()
       .mockImplementation(async ({ enabled, opacity }) => ({
@@ -1247,6 +1417,34 @@ describe("settings panels", () => {
     );
 
     await expect.element(page.getByText("Ambient streaming")).toBeInTheDocument();
+    await page.getByRole("button", { name: "EDM", exact: true }).click();
+    await expect.element(page.getByText("URL 1 of 19")).toBeInTheDocument();
+    await expect.element(page.getByText(/Accepted 19; skipped 1 invalid/)).toBeInTheDocument();
+    await expect
+      .element(page.getByRole("button", { name: "EDM", exact: true }))
+      .toHaveAttribute("aria-pressed", "true");
+    await page.getByRole("button", { name: "Japanese music", exact: true }).click();
+    await expect.element(page.getByText("URL 1 of 36")).toBeInTheDocument();
+    await expect.element(page.getByText(/Accepted 36; skipped 3 invalid/)).toBeInTheDocument();
+    await expect
+      .element(page.getByRole("button", { name: "Japanese music", exact: true }))
+      .toHaveAttribute("aria-pressed", "true");
+    await vi.waitFor(() => {
+      expect(updateClientSettings).toHaveBeenCalledWith({ ambientVideoEnabled: true });
+    });
+    await page.getByLabelText("Ambient video glow").click();
+    await vi.waitFor(() => {
+      expect(updateClientSettings).toHaveBeenCalledWith({ ambientVideoGlowEnabled: true });
+    });
+    await page.getByLabelText("Ambient video glow mode").click();
+    await page.getByText("Match video", { exact: true }).click();
+    await vi.waitFor(() => {
+      expect(updateClientSettings).toHaveBeenCalledWith({ ambientVideoGlowMode: "adaptive" });
+    });
+    await expect
+      .element(page.getByText(/Uses the current YouTube video artwork/))
+      .toBeInTheDocument();
+
     const sourceInput = document.querySelector(
       'input[aria-label="YouTube or Spotify media source"]',
     ) as HTMLInputElement | null;
@@ -2149,7 +2347,7 @@ describe("settings panels", () => {
     await expect.element(page.getByText("Enable network access?")).toBeInTheDocument();
     await expect
       .element(
-        page.getByText("Cafe Code will restart to expose this environment over the network."),
+        page.getByText("Club Code will restart to expose this environment over the network."),
       )
       .toBeInTheDocument();
     await page.getByRole("button", { name: "Restart and enable", exact: true }).click();
@@ -2182,7 +2380,7 @@ describe("settings panels", () => {
     await page.getByLabelText("Enable HTTPS").click();
     await expect.element(page.getByText("Disable HTTPS?")).toBeInTheDocument();
     await expect
-      .element(page.getByText("Cafe Code will restart to update the backend listener."))
+      .element(page.getByText("Club Code will restart to update the backend listener."))
       .toBeInTheDocument();
     await page.getByRole("button", { name: "Restart and disable", exact: true }).click();
     await vi.waitFor(() => {
@@ -2400,6 +2598,57 @@ describe("settings panels", () => {
 
       expect(availabilityIndex).toBeGreaterThanOrEqual(0);
       expect(resetScheduleIndex).toBeGreaterThan(availabilityIndex);
+    });
+  });
+
+  it("adds LM Studio as a selectable local provider instance", async () => {
+    const updateSettings = vi.fn<LocalApi["server"]["updateSettings"]>().mockResolvedValue({
+      ...DEFAULT_SERVER_SETTINGS,
+      providerInstances: {
+        [ProviderInstanceId.make("lmstudio")]: {
+          driver: ProviderDriverKind.make("codex"),
+          enabled: true,
+          displayName: "LM Studio",
+          config: { ossMode: true },
+        },
+      },
+    });
+    window.nativeApi = {
+      persistence: {
+        getClientSettings: vi.fn().mockResolvedValue(null),
+        setClientSettings: vi.fn().mockResolvedValue(undefined),
+      },
+      server: {
+        updateSettings,
+      },
+    } as unknown as LocalApi;
+    setServerConfigSnapshot(createBaseServerConfig());
+
+    mounted = await render(
+      <AppAtomRegistryProvider>
+        <ProviderSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    await page.getByRole("button", { name: "Add provider instance" }).click();
+    await page.getByText("LM Studio", { exact: true }).click();
+    await page.getByRole("button", { name: "Next" }).click();
+    await expect.element(page.getByLabelText("Instance ID")).toHaveValue("lmstudio");
+    await page.getByRole("button", { name: "Next" }).click();
+    await expect.element(page.getByText("Local LM Studio through Codex OSS")).toBeInTheDocument();
+    await page.getByRole("button", { name: "Add instance" }).click();
+
+    await vi.waitFor(() => {
+      expect(updateSettings).toHaveBeenCalledWith({
+        providerInstances: {
+          lmstudio: {
+            driver: ProviderDriverKind.make("codex"),
+            enabled: true,
+            displayName: "LM Studio",
+            config: { ossMode: true },
+          },
+        },
+      });
     });
   });
 

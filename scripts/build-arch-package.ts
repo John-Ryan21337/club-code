@@ -196,7 +196,7 @@ function parseArgs(argv: ReadonlyArray<string>): CliOptions {
       continue;
     }
     if (arg === "--help" || arg === "-h") {
-      writeStdout(`Build a local Arch Linux pacman package for Cafe Code.
+      writeStdout(`Build a local Arch Linux pacman package for Club Code.
 
 Usage:
   yarn dist:arch:local [options]
@@ -313,7 +313,7 @@ exec /opt/cafe-code/cafe-code.AppImage "$@"
     desktopTarget,
     `[Desktop Entry]
 Type=Application
-Name=Cafe Code
+Name=Club Code
 Comment=Minimal desktop GUI for coding agents
 Exec=cafe-code %U
 Icon=cafecode
@@ -337,7 +337,7 @@ StartupWMClass=cafecode
     "pkgdesc = Desktop GUI for coding agents such as Codex, Claude, and OpenCode",
     "url = https://github.com/cafeai/cafe-code",
     `builddate = ${String(unixNowSeconds())}`,
-    "packager = Cafe Code local package builder",
+    "packager = Club Code local package builder",
     `size = ${String(packageSize)}`,
     `arch = ${pacmanArch}`,
     "license = AGPL-3.0-or-later",

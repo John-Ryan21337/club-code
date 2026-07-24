@@ -17,7 +17,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 export const desktopDir = resolve(__dirname, "..");
 
-const macAppName = "Cafe Code";
+const macAppName = "Club Code";
 const macBundleIdentifier = "com.cafeai.cafecode";
 const macRuntimeLauncherVersion = 1;
 const macRuntimeDir = join(desktopDir, ".electron-runtime");
@@ -51,6 +51,7 @@ function readJsonFile(path) {
 function replacePlistString(plistPath, key, value) {
   const result = spawnSync("plutil", ["-replace", key, "-string", value, plistPath], {
     encoding: "utf8",
+    shell: false,
   });
   if (result.status !== 0) {
     const message = (result.stderr || result.stdout || "unknown plutil failure").trim();
