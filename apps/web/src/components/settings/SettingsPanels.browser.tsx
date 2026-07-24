@@ -1184,6 +1184,22 @@ describe("settings panels", () => {
       expect(updateClientSettings).toHaveBeenCalledWith({ fallingEffectKind: "matrix" });
     });
 
+    await expect.element(page.getByText("Matrix color mode")).toBeInTheDocument();
+    await page.getByText("Rainbow cycle", { exact: true }).click();
+    await page.getByText("Music reactive", { exact: true }).click();
+
+    await vi.waitFor(() => {
+      expect(updateClientSettings).toHaveBeenCalledWith({
+        fallingEffectMatrixColorMode: "rainbow",
+      });
+      expect(updateClientSettings).toHaveBeenCalledWith({
+        fallingEffectMatrixColorMode: "music-reactive",
+      });
+    });
+    await expect
+      .element(page.getByText(/YouTube and Spotify iframe players do not expose shared audio/))
+      .toBeInTheDocument();
+
     setColorInput("Falling effect color", "#22c55e");
 
     await vi.waitFor(() => {
@@ -1192,10 +1208,16 @@ describe("settings panels", () => {
 
     await page.getByLabelText("Increase falling effect opacity").click();
     await page.getByLabelText("Increase falling effect speed").click();
+    await page.getByLabelText("Increase falling effect density").click();
+    await page.getByLabelText("Increase Japanese glyph ratio").click();
+    await page.getByLabelText("Use enriched Japanese Matrix glyphs").click();
 
     await vi.waitFor(() => {
       expect(updateClientSettings).toHaveBeenCalledWith({ fallingEffectOpacity: 0.4 });
       expect(updateClientSettings).toHaveBeenCalledWith({ fallingEffectSpeed: 1.25 });
+      expect(updateClientSettings).toHaveBeenCalledWith({ fallingEffectDensity: 1.25 });
+      expect(updateClientSettings).toHaveBeenCalledWith({ fallingEffectJapaneseRatio: 0.5 });
+      expect(updateClientSettings).toHaveBeenCalledWith({ fallingEffectMatrixEnriched: true });
     });
 
     await expect.element(page.getByText("Sidebar star speed")).toBeInTheDocument();

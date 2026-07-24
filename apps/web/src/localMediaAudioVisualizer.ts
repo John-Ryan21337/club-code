@@ -117,6 +117,21 @@ export function updateLocalMediaVisualizerLevels(
   }
 }
 
+/**
+ * Converts the already-approved, bounded spectrum into one ephemeral level.
+ * This deliberately exposes no PCM, frequency bins, or analysis history to
+ * other renderer components.
+ */
+export function calculateLocalMediaAudioSignalLevel(frequencyData: Uint8Array): number {
+  if (frequencyData.length === 0) return 0;
+  let sumSquares = 0;
+  for (const sample of frequencyData) {
+    const normalized = sample / 255;
+    sumSquares += normalized * normalized;
+  }
+  return Math.min(1, Math.sqrt(sumSquares / frequencyData.length));
+}
+
 function clearCanvas(canvas: HTMLCanvasElement): void {
   canvas.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
 }
@@ -135,8 +150,10 @@ export class LocalMediaAudioVisualizerController {
   #lastRenderedAt = Number.NEGATIVE_INFINITY;
   #analyserConnected = false;
   #requested = false;
+  #analysisRequested = false;
   #destroyed = false;
   #activationGeneration = 0;
+  readonly #signalOwner = {};
 
   constructor(
     mediaElement: HTMLMediaElement,
@@ -159,15 +176,18 @@ export class LocalMediaAudioVisualizerController {
     if (this.#canvas.height !== size.height) this.#canvas.height = size.height;
   }
 
-  async sync(requested: boolean): Promise<void> {
+  async sync(requested: boolean, analysisRequested = false): Promise<void> {
     if (this.#destroyed) return;
-    this.#requested = requested && isApprovedLocalMediaVisualizerElement(this.#mediaElement);
+    const approved = isApprovedLocalMediaVisualizerElement(this.#mediaElement);
+    this.#requested = requested && approved;
+    this.#analysisRequested = (requested || analysisRequested) && approved;
     const generation = ++this.#activationGeneration;
     const playing = !this.#mediaElement.paused && !this.#mediaElement.ended;
 
     if (!playing) {
       this.#stopFrames();
       this.#disconnectAnalyser();
+      localMediaAudioSignalStore.clear(this.#signalOwner);
       clearCanvas(this.#canvas);
       if (this.#context?.state === "running") {
         await this.#context.suspend().catch(() => undefined);
@@ -175,7 +195,7 @@ export class LocalMediaAudioVisualizerController {
       return;
     }
 
-    if (!this.#context && this.#requested) {
+    if (!this.#context && this.#analysisRequested) {
       await this.#initializeGraph(generation);
     }
     if (this.#destroyed || generation !== this.#activationGeneration || !this.#context) return;
@@ -187,13 +207,15 @@ export class LocalMediaAudioVisualizerController {
     }
     if (this.#destroyed || generation !== this.#activationGeneration) return;
 
-    if (this.#requested && this.#context.state === "running") {
+    if (this.#analysisRequested && this.#context.state === "running") {
       this.#connectAnalyser();
-      this.resize();
+      if (this.#requested) this.resize();
+      else clearCanvas(this.#canvas);
       this.#requestFrame();
     } else {
       this.#stopFrames();
       this.#disconnectAnalyser();
+      localMediaAudioSignalStore.clear(this.#signalOwner);
       clearCanvas(this.#canvas);
     }
   }
@@ -202,6 +224,7 @@ export class LocalMediaAudioVisualizerController {
     if (this.#destroyed) return;
     this.#destroyed = true;
     this.#requested = false;
+    this.#analysisRequested = false;
     this.#activationGeneration += 1;
     this.#stopFrames();
     this.#disconnectAnalyser();
@@ -209,6 +232,7 @@ export class LocalMediaAudioVisualizerController {
     this.#analyser?.disconnect();
     this.#frequencyData?.fill(0);
     this.#levels.fill(0);
+    localMediaAudioSignalStore.clear(this.#signalOwner);
     clearCanvas(this.#canvas);
     const context = this.#context;
     this.#context = null;
@@ -223,7 +247,7 @@ export class LocalMediaAudioVisualizerController {
   async #initializeGraph(generation: number): Promise<void> {
     if (
       this.#destroyed ||
-      !this.#requested ||
+      !this.#analysisRequested ||
       !isApprovedLocalMediaVisualizerElement(this.#mediaElement)
     ) {
       return;
@@ -236,7 +260,7 @@ export class LocalMediaAudioVisualizerController {
     if (
       this.#destroyed ||
       generation !== this.#activationGeneration ||
-      !this.#requested ||
+      !this.#analysisRequested ||
       context.state !== "running"
     ) {
       await context.close().catch(() => undefined);
@@ -288,7 +312,7 @@ export class LocalMediaAudioVisualizerController {
     if (
       this.#frameHandle !== null ||
       this.#destroyed ||
-      !this.#requested ||
+      !this.#analysisRequested ||
       !this.#analyserConnected
     ) {
       return;
@@ -313,6 +337,13 @@ export class LocalMediaAudioVisualizerController {
     this.#lastRenderedAt = timestamp;
     analyser.getByteFrequencyData(frequencyData);
     updateLocalMediaVisualizerLevels(this.#levels, frequencyData);
+    localMediaAudioSignalStore.publish(
+      this.#signalOwner,
+      calculateLocalMediaAudioSignalLevel(frequencyData),
+      timestamp,
+    );
+
+    if (!this.#requested) return;
 
     const context = this.#canvas.getContext("2d");
     if (!context) return;
@@ -329,3 +360,4 @@ export class LocalMediaAudioVisualizerController {
     }
   }
 }
+import { localMediaAudioSignalStore } from "./localMediaAudioSignal";

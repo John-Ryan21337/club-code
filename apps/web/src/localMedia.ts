@@ -10,6 +10,8 @@ export interface LocalMediaSource {
   readonly kind: LocalMediaKind;
   /** A current-document object URL. It is never persisted or logged. */
   readonly objectUrl: string;
+  /** A safe, current-session display title. It is never a source path. */
+  readonly displayTitle: string;
 }
 
 export interface LocalMediaState {
@@ -34,16 +36,28 @@ export const LOCAL_MEDIA_INPUT_ACCEPT = [
   "audio/*",
   "video/*",
   ".aac",
+  ".aif",
+  ".aiff",
   ".flac",
   ".m4a",
   ".mp3",
   ".ogg",
   ".opus",
   ".wav",
+  ".wma",
+  ".3gp",
+  ".avi",
+  ".flv",
+  ".m2ts",
+  ".mkv",
+  ".mpeg",
+  ".mpg",
+  ".ts",
   ".webm",
   ".mp4",
   ".m4v",
   ".mov",
+  ".wmv",
 ].join(",");
 
 export const DEFAULT_LOCAL_MEDIA_STATE: LocalMediaState = {
@@ -59,37 +73,96 @@ export const DEFAULT_LOCAL_MEDIA_STATE: LocalMediaState = {
   visualizerEnabled: false,
 };
 
-interface FileLike extends Blob {
+export interface LocalMediaFile extends Blob {
   readonly type: string;
   readonly name?: string;
+}
+
+export interface LocalMediaSelectionMetadata {
+  /**
+   * An optional, caller-supplied media title. Source paths are reduced to a
+   * basename before they can enter in-memory state.
+   */
+  readonly displayTitle?: string;
 }
 
 function clampFinite(value: number, minimum: number, maximum: number, fallback: number): number {
   return Number.isFinite(value) ? Math.min(maximum, Math.max(minimum, value)) : fallback;
 }
 
-function classifyLocalMedia(file: FileLike): LocalMediaKind | null {
+function classifyLocalMedia(file: LocalMediaFile): LocalMediaKind | null {
   const mediaType = file.type.toLowerCase();
   if (mediaType.startsWith("audio/")) return "audio";
   if (mediaType.startsWith("video/")) return "video";
-  // Some browsers report an empty MIME type for local files. The name is read
-  // only for this one-time classifier and is never retained in state.
+  // Some browsers report an empty MIME type for local files. The name is used
+  // for one-time classification and to derive a safe display title only.
   const extension = file.name?.toLowerCase().match(/\.([a-z0-9]+)$/)?.[1];
-  if (["aac", "flac", "m4a", "mp3", "ogg", "opus", "wav"].includes(extension ?? "")) {
+  if (
+    ["aac", "aif", "aiff", "flac", "m4a", "mp3", "ogg", "opus", "wav", "wma"].includes(
+      extension ?? "",
+    )
+  ) {
     return "audio";
   }
-  if (["webm", "mp4", "m4v", "mov"].includes(extension ?? "")) return "video";
+  if (
+    [
+      "3gp",
+      "avi",
+      "flv",
+      "m2ts",
+      "m4v",
+      "mkv",
+      "mov",
+      "mp4",
+      "mpeg",
+      "mpg",
+      "ts",
+      "webm",
+      "wmv",
+    ].includes(extension ?? "")
+  ) {
+    return "video";
+  }
   return null;
+}
+
+const FALLBACK_DISPLAY_TITLE = "Untitled local media";
+
+function safeBasenameWithoutExtension(value: string): string {
+  const basename = value.trim().split(/[\\/]/).at(-1)?.trim() ?? "";
+  const extensionIndex = basename.lastIndexOf(".");
+  return extensionIndex > 0 ? basename.slice(0, extensionIndex).trim() : basename;
+}
+
+/**
+ * Keeps a human-readable title while ensuring source paths cannot be retained
+ * in local-media state. File names are reduced to their basename and extension.
+ */
+export function deriveLocalMediaDisplayTitle(
+  file: LocalMediaFile,
+  metadata: LocalMediaSelectionMetadata = {},
+): string {
+  const metadataTitle = metadata.displayTitle?.trim();
+  if (metadataTitle) {
+    const isSourcePath = /^(?:[a-z]:[\\/]|[\\/]{1,2}|file:\/\/)/i.test(metadataTitle);
+    const title = isSourcePath
+      ? safeBasenameWithoutExtension(metadataTitle)
+      : metadataTitle.replace(/[\r\n\t]/g, " ").trim();
+    if (title) return title;
+  }
+
+  return safeBasenameWithoutExtension(file.name ?? "") || FALLBACK_DISPLAY_TITLE;
 }
 
 export interface LocalMediaStore {
   readonly getSnapshot: () => LocalMediaState;
   readonly subscribe: (listener: () => void) => () => void;
   /**
-   * Replaces the current in-memory selection. The file itself, name, and path
-   * never leave the browser's file picker or enter persisted settings.
+   * Replaces the current in-memory selection. The file and source path never
+   * leave the browser's file picker or enter persisted settings; only a safe
+   * display title is kept for this session.
    */
-  readonly selectFile: (file: FileLike) => boolean;
+  readonly selectFile: (file: LocalMediaFile, metadata?: LocalMediaSelectionMetadata) => boolean;
   readonly clear: () => void;
   readonly update: (patch: Partial<Omit<LocalMediaState, "source">>) => void;
 }
@@ -112,14 +185,14 @@ export function createLocalMediaStore(
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
-    selectFile: (file) => {
+    selectFile: (file, metadata = {}) => {
       const kind = classifyLocalMedia(file);
       if (!kind) return false;
       const objectUrl = urlApi.createObjectURL(file);
       const previousUrl = state.source?.objectUrl;
       replace({
         ...state,
-        source: { kind, objectUrl },
+        source: { kind, objectUrl, displayTitle: deriveLocalMediaDisplayTitle(file, metadata) },
         // The background presentation is video-only. Switching to an audio
         // file must never strand its playback controls behind the chat.
         presentationMode:

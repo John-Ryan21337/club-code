@@ -1,6 +1,6 @@
 # Cafe Code Ambient Experience Project Plan
 
-Status: Shipped v1 scope implemented and automated gates clean; manual, soak, platform-artifact, and conditional native-feasibility gates remain open.
+Status: Shipped v1 scope implemented and automated gates clean; manual, soak, platform-artifact, and conditional native-feasibility gates remain open. Meeting presentation and communications-hub Phases 8 and 9 are planned and not implemented.
 
 Implementation note: “Scoped checks run” below records only the focused checks currently evidenced for that slice. It does not mean the Phase 7 full command set, manual matrix, soak, CSP/package checks, or native-release evidence have passed.
 
@@ -13,7 +13,7 @@ Review roles: Sol, Terra, Luna
 
 ## Outcome
 
-Deliver optional full-window snow/rain/Matrix effects, streaming and image chat media, session-only browser Local Media, public YouTube search/playlists, desktop-local owned-playlist discovery, floating/cinema/background presentations, configurable glow, custom placement/sizing, a live workflow/sub-agent view, and supported-platform native window opacity without weakening Cafe Code's security or long-session stability. Keep native libVLC/projectM as a separate conditional feasibility track: the shipped HTML Local Media player and its bounded blob-only visualizer are not a native-media commitment.
+Deliver optional full-window snow/rain/Matrix effects, streaming and image chat media, session-only browser Local Media, public YouTube search/playlists, desktop-local owned-playlist discovery, floating/cinema/background presentations, configurable glow, custom placement/sizing, a live workflow/sub-agent view, and supported-platform native window opacity without weakening Cafe Code's security or long-session stability. Keep native libVLC/projectM as a separate conditional feasibility track: the shipped HTML Local Media player and its bounded blob-only visualizer are not a native-media commitment. Future planned work adds per-project meeting privacy, a sanitized broadcast scene, bounded meeting outputs, and a supervised official-API communications hub; none of that future scope is claimed by the shipped-v1 evidence.
 
 This plan intentionally delivers reviewable slices. Contract/scaffolding phases may merge only behind inactive feature gates; a user-visible feature may ship only when its renderer/server dependency and exit gate are clean.
 
@@ -32,6 +32,8 @@ Each implementation slice has an author and a different auditor. Authors must no
 | Chat media/cinema interaction | Spark   | Sol               |
 | Local media feasibility       | Terra   | Luna              |
 | Electron opacity              | Sol     | Luna              |
+| Meeting privacy/broadcast     | Sol     | Terra             |
+| Messaging adapters/security   | Terra   | Luna              |
 | Integration/release           | Spark   | Terra, then Luna  |
 
 If an assigned model/agent is unavailable, preserve the role separation with another reviewer and record the substitution in the pull request.
@@ -65,10 +67,24 @@ Canon and threat model
         +--> normalized orchestration activities
         |        `--> workflow reducer/snapshot --> plan/workflow panel
         |
-        `--> desktop-local DesktopAppSettings
-                   `--> typed capability/IPC --> DesktopWindow native opacity
+        +--> desktop-local DesktopAppSettings
+        |          `--> typed capability/IPC --> DesktopWindow native opacity
+        |
+        +--> project privacy catalog --> sanitized broadcast scene
+        |                                  +--> Win10 1909 OBS DirectShow + external audio endpoint
+        |                                  +--> macOS OBS camera + external CoreAudio loopback
+        |                                  +--> Arch/KDE OBS + v4l2loopback + PipeWire
+        |                                  +--> visible Zoom SDK participant
+        |                                  +--> manual Google Meet camera/share
+        |                                  `--> separately gated future native helpers
+        |
+        `--> connector policy and secret store --> normalized supervised tools
+                                                   +--> Telegram Bot API
+                                                   +--> LINE Official Account webhook
+                                                   +--> WhatsApp Business Cloud webhook
+                                                   `--> Signal manual handoff only
 
-All vertical slices --> cross-surface integration --> soak/security/release audit
+All implemented vertical slices --> cross-surface integration --> soak/security/release audit
 ```
 
 ## Phase 0 — Baseline, decisions, and test fixtures
@@ -88,7 +104,7 @@ Tasks:
 - Inventory Codex/Claude normalized activity fields, provider fidelity, redaction guarantees, reconnect history, and maximum workflow graph/event sizes.
 - Confirm the implemented 12-pixel same-corner image stack, aspect-ratio handling, streaming-only 640-pixel floating hide rule, and bounded pointer/keyboard custom controls against product mockups. No 768-pixel/coarse-pointer fallback is currently implemented.
 - Confirm every media default/bound in the canon table, including opposite default corners, medium preset sizes, glow values, null sources/assets, and effective-empty behavior.
-- Record manual-test platforms available: Windows, macOS, Linux/X11/Wayland, and browser.
+- Record manual-test platforms available: Windows 10 1909/build 18363, declared macOS versions/architectures, Arch Linux/KDE Plasma X11 and Wayland, and browser. Later meeting-output work requires exact OBS/camera/audio/compositor/meeting-client versions rather than a broad operating-system label.
 - Define the release-native-opacity platform manifest and evidence record. It defaults empty; a release enables `win32` or `darwin` only after that exact artifact/version receives its native smoke result.
 
 Likely files:
@@ -165,7 +181,8 @@ Tasks:
 - Mount it once at the authenticated root.
 - Integrate existing document visibility/window focus/background-animation policy.
 - Add strict reduced-motion override.
-- Cap DPR, density, arrays, frame delta, and resize work.
+- Cap DPR, density (0.50–2.50x), arrays (snow 320, rain 440, Matrix 160), frame delta, and resize work.
+- Offer Matrix-only Japanese glyph ratio (0%–100%) and optional reviewed enrichment; preserve Roman-only output at 0%, use only single glyphs or rare intact bounded ASCII-art tokens, and never synthesize Japanese phrases.
 - Add named layer styling with `pointer-events: none` and `aria-hidden`.
 - Ensure Electron title drag regions and every app control remain interactive.
 - Place the canvas above app/media/glow but below chat affordances, dialogs, onboarding, toasts, and shutdown.
@@ -758,29 +775,29 @@ Run focused tests during development, but the full commands are the release gate
 
 Cross-surface matrix:
 
-| Dimension          | Cases                                                                                             |
-| ------------------ | ------------------------------------------------------------------------------------------------- |
-| Surface            | Electron, authenticated browser                                                                   |
-| Platform           | Windows, macOS, Linux X11/Wayland                                                                 |
-| Theme              | Light, dark, system, custom accent                                                                |
-| Motion             | Normal, reduced motion, hidden, unfocused, background override                                    |
-| Layout             | Sidebar states, plan/workflow panel, diff panel, zoom, narrow/wide, multi-monitor                 |
-| Presentation       | Floating, cinema workspace, local-video background, native player fullscreen, return transitions  |
-| Cinema rails       | Both open, left closed, right closed, both closed, protected-player fit failure                   |
-| Atmosphere         | Off, snow, rain, Matrix; automatic/custom color; opacity/speed bounds                             |
-| Ambient media      | None, GIF, YouTube, Spotify, Local Media, supported combinations, invalid/offline                 |
-| YouTube source     | URL video, URL playlist, public search, public playlist, owned playlist                           |
-| YouTube account    | Unconfigured, disconnected, connecting, connected, expired/revoked, disconnecting                 |
-| OAuth topology     | Local desktop/local backend; browser/remote capability absent                                     |
-| Position           | Both presets, collision case, custom edges/corners                                                |
-| Size               | Small, medium, large, custom min/max                                                              |
-| Local Media v1     | No selection, browser-supported audio/video, unsupported type/codec, replace, clear, document end |
-| Local presentation | Floating presets/custom, Cinema fallback, video background, opacity/readability, teardown         |
-| Local visualizer   | Off/on, play/pause, reduced motion, hidden/unfocused, bounded canvas/frame rate, teardown         |
-| Native extension   | No-go/absent or approved libVLC/projectM matrix; local/network/preset security cases conditional  |
-| Workflow           | No agents, parallel/nested agents, reconnect, reduced fidelity, duplicate/out-of-order lifecycle  |
-| Opacity            | Off/1.00, minimum, intermediate, unsupported, partial failure/recovery                            |
-| Lifecycle          | Startup, route/project/thread change, mode switch, disable, replace, minimize/restore, restart    |
+| Dimension          | Cases                                                                                                           |
+| ------------------ | --------------------------------------------------------------------------------------------------------------- |
+| Surface            | Electron, authenticated browser                                                                                 |
+| Platform           | Windows, macOS, Linux X11/Wayland                                                                               |
+| Theme              | Light, dark, system, custom accent                                                                              |
+| Motion             | Normal, reduced motion, hidden, unfocused, background override                                                  |
+| Layout             | Sidebar states, plan/workflow panel, diff panel, zoom, narrow/wide, multi-monitor                               |
+| Presentation       | Floating, cinema workspace, local-video background, native player fullscreen, return transitions                |
+| Cinema rails       | Both open, left closed, right closed, both closed, protected-player fit failure                                 |
+| Atmosphere         | Off, snow, rain, Matrix; automatic/custom color; opacity/speed/density bounds; Matrix Japanese ratio/enrichment |
+| Ambient media      | None, GIF, YouTube, Spotify, Local Media, supported combinations, invalid/offline                               |
+| YouTube source     | URL video, URL playlist, public search, public playlist, owned playlist                                         |
+| YouTube account    | Unconfigured, disconnected, connecting, connected, expired/revoked, disconnecting                               |
+| OAuth topology     | Local desktop/local backend; browser/remote capability absent                                                   |
+| Position           | Both presets, collision case, custom edges/corners                                                              |
+| Size               | Small, medium, large, custom min/max                                                                            |
+| Local Media v1     | No selection, browser-supported audio/video, unsupported type/codec, replace, clear, document end               |
+| Local presentation | Floating presets/custom, Cinema fallback, video background, opacity/readability, teardown                       |
+| Local visualizer   | Off/on, play/pause, reduced motion, hidden/unfocused, bounded canvas/frame rate, teardown                       |
+| Native extension   | No-go/absent or approved libVLC/projectM matrix; local/network/preset security cases conditional                |
+| Workflow           | No agents, parallel/nested agents, reconnect, reduced fidelity, duplicate/out-of-order lifecycle                |
+| Opacity            | Off/1.00, minimum, intermediate, unsupported, partial failure/recovery                                          |
+| Lifecycle          | Startup, route/project/thread change, mode switch, disable, replace, minimize/restore, restart                  |
 
 Soak gate:
 
@@ -799,6 +816,212 @@ Release gate:
 - canon and user-facing copy agree with actual capability;
 - rollback is understood.
 
+## Phase 8 — Meeting Safe Mode and broadcast outputs
+
+Status: Planned; no implementation or validation evidence is recorded.
+
+Goal: let an operator present Cafe Code without exposing hidden projects, then deliberately route an exact sanitized scene and selected Cafe Code audio into supported meeting software.
+
+This phase is divided into independently gated slices. A later slice MUST NOT make an earlier incomplete privacy boundary user-visible.
+
+### Phase 8A — Project privacy and sanitized scene
+
+Tasks:
+
+- Add a desktop-local, stable-project-ID privacy catalog with a persistent `hidden in meetings` flag, safe migration, bounded orphan cleanup, and a global Meeting Safe Mode switch that defaults off.
+- Add a keyboard-accessible management surface for hiding and unhiding projects. Its reveal flow must not place hidden names into the outgoing scene.
+- Inventory and redact every project-enumerating surface: project sidebar, quick switch/search, recent lists, title/breadcrumbs, hover text, notifications, TTS, workflow, file/database views, activity summaries, Matrix/status overlays, dialogs, and accessibility output.
+- When Meeting Safe Mode is enabled while a hidden project is active, transition atomically to a neutral holding scene or an operator-selected visible project before publishing the next broadcast frame.
+- Build a dedicated sanitized broadcast scene with explicit 720p/1080p output choices, a bounded maximum of 30 FPS, deterministic layer policy, exact-output preview, persistent local capture indicator, emergency stop, and safe stop on renderer/main-process shutdown.
+- Exclude native file pickers, permission prompts, OS notifications, other applications, devtools, secret/error dialogs, hidden/off-scene renderer surfaces, and controls that are not explicitly approved for broadcast.
+- Document and display that project hiding is presentation privacy, not deletion or agent/filesystem authorization.
+
+Likely files:
+
+- `packages/contracts/src/ipc.ts`
+- desktop-local settings/privacy catalog under `apps/desktop/src/settings`
+- trusted desktop IPC/preload methods under `apps/desktop/src/ipc`
+- project navigation and privacy settings under `apps/web/src/components`
+- a dedicated broadcast-scene module under `apps/web/src`
+- desktop scene/session ownership under `apps/desktop/src`
+
+Tests:
+
+- old, empty, malformed, and partially corrupt privacy records fail closed while preserving unrelated settings;
+- hide/unhide and Meeting Safe Mode survive restart without synchronizing to another owner/device;
+- a seeded sensitive project name and path never appears in any inventoried visible surface, broadcast scene text/accessibility output, captured frame fixture, notification, or TTS event;
+- enabling safe mode from a hidden active project never publishes an intermediate leaking frame;
+- native dialogs, devtools, other windows, and off-scene content cannot enter the scene;
+- preview and outgoing frame source are the same composition path;
+- start/stop/restart/crash paths release frames, timers, textures, and capture sessions; and
+- disabling Meeting Safe Mode does not start a camera, microphone, share, or meeting.
+
+Exit gate:
+
+- the complete leak inventory and adversarial seeded-value suite pass;
+- a reviewer verifies the exact outgoing preview and emergency stop on the packaged Windows artifact;
+- the distinction between presentation hiding and access control is prominent and tested; and
+- Phase 8A is independently audited before Phase 8B becomes user-visible.
+
+### Phase 8B — Cross-platform camera and meeting-audio routes
+
+The portable sanitized scene is app-native. Every camera, virtual microphone, audio loopback, kernel module, camera extension, or portal path in this slice is an external dependency until an exact target tuple passes its gate. There is no universal “works everywhere” capability.
+
+Target capability matrix:
+
+| Target                                | Video route                                                   | Audio route                                                         | Required evidence before enablement                                      |
+| ------------------------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| Windows 10 1909/build 18363           | Operator-installed OBS DirectShow virtual camera              | Separately installed compatible virtual-audio cable or manual share | Exact OBS/audio versions, registration, enumeration, meeting smoke       |
+| Supported macOS tuple                 | Operator-installed OBS camera component/extension             | Separately installed CoreAudio loopback such as BlackHole           | Exact macOS/OBS/loopback versions, approvals, enumeration, meeting smoke |
+| Arch Linux/KDE X11                    | OBS plus matching `v4l2loopback` with `exclusive_caps=1`      | PipeWire virtual sink/source or loopback                            | Kernel/module/OBS/PipeWire tuple and meeting smoke                       |
+| Arch Linux/KDE Plasma Wayland         | OBS plus `v4l2loopback`; XDG portal-approved source selection | PipeWire virtual sink/source or loopback                            | Portal consent plus compositor/backend and meeting smoke                 |
+| Windows 11 build 22000+ future native | Separately gated Media Foundation helper                      | External endpoint; process loopback only on build 20348+            | Signed/packaged helper and exact native-artifact evidence                |
+
+Tasks:
+
+- Expose the Phase 8A sanitized scene through a portable, bounded capture surface suitable for explicit OBS window/source selection without exposing authentication material or a broad local network listener.
+- Add capability diagnostics keyed by exact OS version/build, architecture, compositor/display server, OBS version/package, virtual-camera component, audio endpoint/configuration, and meeting client. Unknown or stale tuples fail closed.
+- Keep camera and audio independent, default-off, and operator selected. Cafe Code may verify observable devices/configuration but does not silently start, install, upgrade, downgrade, reconfigure, or claim ownership of external system components.
+- For Windows 10 1909/build 18363, use a specifically tested OBS Windows DirectShow virtual-camera component plus a separately installed compatible virtual-audio cable/endpoint. The Windows 11 `IMFVirtualCamera` and build-20348 process-loopback APIs are unavailable and MUST NOT be offered on this OS.
+- Record a pinned OBS version/source/checksum and audio-device version that actually pass on build 18363. OBS's broad “Windows 10” requirement is not enough to recommend the current/latest release. Until that record exists, show `version verification required` and keep the route disabled.
+- For macOS, require an exact supported macOS/OBS tuple. OBS 30 or newer on macOS 13 or newer may use its camera extension only after the operator approves it in system settings. Older camera plug-ins remain separately version-gated.
+- Require a separately installed compatible CoreAudio loopback device, such as BlackHole, when a meeting-client input device is needed. Support manual Audio MIDI Setup/aggregate-device guidance without silently installing, approving, or removing an extension/driver.
+- For Arch Linux/KDE, require an operator-installed OBS package, a `v4l2loopback` module built for the running kernel and configured with `exclusive_caps=1`, and explicit PipeWire virtual sink/source or loopback routing.
+- Treat KDE Plasma X11 and Wayland as different targets. On Wayland, use the XDG Desktop Portal ScreenCast selection flow and respect every visible consent, denial, cancellation, and session-lifetime boundary.
+- Add external-route setup tests for source inclusion, mute/gain guidance, observable levels, clipping, feedback, meeting-return exclusion, and protected/DRM limitations. Stop Cafe Code scene publication on disable/shutdown while stating that independently running OBS/system devices remain under operator control.
+- Keep future native helpers in separate decision records. Windows 11 camera/process-audio, macOS signed/notarized camera or CoreAudio extensions, and Linux packaged native helpers require their own security, permission, signing/package, install/uninstall, crash recovery, and exact artifact tests.
+- Do not ship unsigned/test-signed Windows drivers, silently bundled macOS extensions, or unreviewed Linux kernel modules/system configuration.
+
+Tests and manual checks:
+
+- unit-test capability-record decoding, exact tuple matching, stale/unknown-version rejection, lifecycle state, finite scene bounds, and camera/audio independence;
+- prove the captured source is equivalent within documented conversion tolerances to the previewed sanitized scene;
+- on Windows 10 1909/build 18363, verify the pinned OBS DirectShow camera and audio endpoint enumerate and transmit in both Zoom and Google Meet; otherwise record the route unavailable;
+- on each supported macOS tuple, verify camera-extension approval, external CoreAudio loopback/aggregate routing, device enumeration, Zoom/Meet transmission, revocation, and uninstall/recovery guidance;
+- on Arch Linux/KDE X11, verify kernel-matched `v4l2loopback exclusive_caps=1`, PipeWire routing, OBS output, Zoom/Meet browser enumeration, and teardown;
+- on Arch Linux/KDE Plasma Wayland, additionally verify the correct portal backend, explicit source-selection dialog, denial/cancel, session close, suspend/resume, and no consent bypass;
+- prove meeting return audio and unrelated applications remain absent from the documented routing setup;
+- exercise device changes, mute/gain, clipping, feedback, sleep/wake, app restart, OBS/device disappearance, and emergency stop;
+- verify zero Cafe Code scene-publication work while disabled and bounded resources during a one-hour pre-merge soak; and
+- verify every unsupported or untested tuple fails closed with accurate setup/version diagnostics.
+
+External dependencies:
+
+- Windows 10 1909: a compatibility-proven OBS release with DirectShow virtual camera plus a separately installed build-compatible virtual-audio endpoint;
+- macOS: a version-compatible OBS camera component/extension plus a separately installed compatible CoreAudio loopback device;
+- Arch Linux/KDE: a compatible OBS package, kernel-matched `v4l2loopback`, PipeWire/WirePlumber configuration, and a working KDE XDG Desktop Portal backend on Wayland;
+- operator permission and explicit device selection in Zoom/Google Meet; and
+- future native helpers only after their separate signed/packaged go decisions.
+
+Exit gate:
+
+- Windows 10 1909, a declared macOS tuple, Arch/KDE X11, and Arch/KDE Wayland each have an explicit pass/fail capability record rather than a broad platform claim;
+- every enabled tuple has exact component versions, setup steps, native/device enumeration, Zoom/Meet smoke evidence, and recovery guidance;
+- no camera or audio route starts without an explicit operator action or bypasses OS/portal consent;
+- unsupported, missing, denied, stale, and incompatible dependencies fail closed;
+- no unsigned driver, silently installed extension, or unreviewed kernel/module configuration is present in Cafe Code artifacts; and
+- Phase 8B is independently audited before meeting-provider automation becomes user-visible.
+
+### Phase 8C — Meeting-provider integration
+
+Tasks:
+
+- Add a Zoom Meeting SDK adapter only after registering the app, selecting the required authorization topology, and recording Marketplace/review, SDK-auth, attribution, host-permission, notice, content-access, and licensing requirements.
+- Gate the participant adapter by an exact OS/architecture/Zoom SDK/client compatibility record. Windows 10 1909 support is not inferred from another Windows build, and macOS or Arch/KDE use the normal Zoom client plus Phase 8B virtual devices until a separate official SDK adapter for that platform passes review and native tests.
+- Require a specific operator-approved meeting target, preview with camera/microphone off, visibly name the participant `Cafe Code`, and provide persistent transmit indicators plus an immediate leave/kill action.
+- Feed Zoom only the Phase 8A sanitized scene and Phase 8B selected audio. Do not expose raw desktop capture, meeting return audio, hidden recording/transcription, unattended joins, participant impersonation, or agent-handled login/2FA.
+- Revoke media immediately when operator/host permission is removed, the owner session ends, or the adapter loses authoritative meeting state.
+- Integrate Google Meet only through the normal operator-controlled client: select the validated virtual devices or manually share the sanitized window with supported audio.
+- Keep an optional Google Meet side-panel/main-stage add-on as a separate Marketplace-reviewed product decision.
+- Mark an autonomous outbound-camera/audio Google Meet participant as unsupported while the official Meet Media API remains receive-only. Browser/UI automation is not a supported substitute.
+
+Tests and manual checks:
+
+- Zoom join cannot occur without a fresh explicit operator command and exact visible meeting target;
+- participant name, initial camera/microphone-off state, preview, indicators, consent copy, leave, revocation, reconnect, and token redaction work in a reviewed test meeting;
+- no meeting credential, URL passcode, SDK token, content, transcript, or participant identity appears in logs, settings, workflow events, prompts, or diagnostics;
+- Meet copy and capability responses never claim outbound Media API support;
+- manual Meet and Zoom device/share paths use the same sanitized scene and selected audio verified in Phase 8B; and
+- shutdown, logout, provider error, and owner-session loss stop transmission deterministically.
+
+Exit gate:
+
+- the Zoom app/review/authorization dependencies are satisfied for the intended distribution scope;
+- required legal, participant, recording/content, permission, and revocation behavior is approved and tested;
+- Google Meet remains operator-controlled with no unsupported bot claim; and
+- Phase 8C receives an independent security/privacy audit.
+
+## Phase 9 — Supervised communications hub
+
+Status: Planned; no implementation or validation evidence is recorded.
+
+Goal: expose narrowly authorized official messaging-provider capabilities to the operator and agents without turning Cafe Code into an ambient personal-inbox scraper or autonomous sender.
+
+Delivery order:
+
+1. provider-neutral contracts, secret storage, grants, drafts, approvals, audit, retention, and attachment quarantine;
+2. Telegram Bot API using bot-addressed conversations;
+3. LINE Official Account Messaging API with verified webhook;
+4. WhatsApp Business Platform Cloud API with business-policy enforcement; and
+5. Signal manual handoff only.
+
+Tasks:
+
+- Define normalized bounded connector/account/conversation/message/attachment schemas without flattening provider-specific consent, window, template, quota, or escalation rules.
+- Store bot tokens, channel secrets, Meta system-user credentials, webhook secrets, and refresh/access material only in a backend-owned OS-protected secret store. Renderer responses expose connection/capability state and redacted labels only.
+- Implement exact capability grants keyed by connector, account, and chat/thread. The first agent-tool surface may list bounded granted metadata, read one bounded recent-message window, draft, and send only after operator review of the exact provider, account, recipient, text, and attachments.
+- Keep inbound-to-agent execution off by default. Optional command mode requires an allowlisted connector/account/chat/sender, explicit prefix or deliberate invocation, rate limits, replay/loop protection, visible audit, and one-action disable.
+- Never expose OTPs, recovery codes, passwords, cookies, tokens, payment data, whole inboxes, contact enumeration, bulk messaging, silent sending, autonomous linking, or provider login/2FA to an agent.
+- Treat all messages and attachments as untrusted input. Quarantine attachments, independently sniff type, cap encoded/decoded bytes and count, reject executables/unsupported content, and require explicit preview/approval before model or send access.
+- Implement Telegram through the official Bot API only. Do not ship TDLib full-user-account import, public-channel scraping, or background history harvesting in this phase. Add clear AI-use disclosure and explicit active/revocable consent for content intentionally submitted to the bot.
+- Implement LINE only for a LINE Official Account. Verify webhook signatures before parsing and document that LINE Login does not grant personal chat history.
+- Implement WhatsApp only for the WhatsApp Business Platform Cloud API. Enforce business-account/number setup, opt-in, approved-template and 24-hour conversation-window rules, fees/quotas, opt-out, and direct human escalation.
+- Implement Signal only as operator-controlled draft/copy/open handoff to the official Signal Desktop client. Do not read, scrape, monitor, or automatically send Signal messages.
+- Support bounded Telegram local long polling where permitted. Require a deliberately configured public HTTPS webhook or separately approved relay for LINE and WhatsApp.
+- Verify webhook signatures, configured account identity, timestamps where provided, event-ID deduplication, replay windows, body/attachment caps, rate limits, bounded queues, and idempotent send commands before model dispatch.
+- Define retention, export, unlink/revoke, local deletion, provider-side deletion limitations, and redacted audit behavior. Logs may contain only connector kind, normalized outcome, and opaque correlation IDs.
+- Keep connector content out of training, analytics, ambient summaries, prompt caches, workflow telemetry, and unrelated model context. Fetch only the minimum recent window required for an operator-authorized task.
+
+Likely files:
+
+- connector and tool schemas in `packages/contracts`
+- backend connector policy, grants, secret storage, webhook routes, idempotent command ledger, and adapters under `apps/server/src`
+- desktop protected-secret bridge where the existing backend secret store requires it
+- communications hub, connection settings, approval review, and audit UI under `apps/web/src`
+- provider-specific policy fixtures and security tests
+
+Tests:
+
+- capability grants cannot cross connector/account/chat boundaries and are revoked on disconnect, owner-session loss, or explicit removal;
+- renderer, logs, diagnostics, prompts, workflow events, process arguments, URLs, settings, and crash fixtures never contain connector secrets or forbidden sensitive message fields;
+- webhook fixtures reject missing/invalid signatures, wrong account, replayed/duplicate/stale events, oversized bodies, attachment bombs, and unsupported types before agent work starts;
+- send commands are idempotent and cannot bypass exact-recipient/content/attachment approval;
+- inbound messages cannot spawn or steer agents until command mode and every allowlist/prefix/rate boundary are satisfied;
+- malicious prompt instructions in messages/attachments cannot expand project, tool, approval, or connector capabilities;
+- Telegram sees only eligible bot conversations and consent state gates AI processing;
+- LINE refuses unsigned events and personal-login claims;
+- WhatsApp enforces opt-in, template/window, opt-out, rate, and human-escalation behavior;
+- Signal exposes no automated read/send implementation;
+- unlink/revoke clears credentials and pending work without deleting unrelated accounts; and
+- queues, polling, webhooks, recent-message windows, attachment storage, and audit records remain bounded during soak.
+
+External dependencies:
+
+- operator-created Telegram bot credentials;
+- LINE Official Account/channel credentials, public HTTPS webhook reachability, and provider quotas/fees;
+- Meta business portfolio, WhatsApp Business Account, business phone number, Cloud API credentials, public HTTPS webhook, and App Review/Advanced Access where the distribution topology requires them;
+- an optional separately operated webhook relay with its own threat model and availability/privacy commitments; and
+- the official Signal Desktop client for manual handoff.
+
+Exit gate:
+
+- provider terms/current official documentation are re-reviewed against the pinned adapter behavior;
+- threat model, secret storage, webhook verification, agent grants, approvals, attachment quarantine, retention, and deletion tests pass;
+- each enabled provider completes a real sandbox/test-account end-to-end run without policy exceptions;
+- Signal remains manual handoff and personal LINE/WhatsApp/Telegram account harvesting remains absent;
+- the full repository release gate and connector soak pass; and
+- each provider slice is audited by someone other than its author.
+
 ## Rollback strategy
 
 Each feature is independently default-off and gated by persisted settings. If a regression escapes:
@@ -809,8 +1032,10 @@ Each feature is independently default-off and gated by persisted settings. If a 
 4. invalidate in-flight PKCE state when account connection is gated off. Stop connect/refresh/playlist work but leave owner-only disconnect/revoke available. The shipped grant is per-owner-session memory only, so restart, expiry, disconnect, or shutdown removes its tokens; no refresh token is retained at rest;
 5. retain a backward-compatible versioned workflow projection contract while older clients exist. Gate the Workflow UI when it cannot understand the snapshot version and clear the disabled derived projection;
 6. keep the opacity bridge and recovery control available until every live window is confirmed at 1.00 and safe settings are confirmed persisted. If reset cannot be verified, abort bridge removal and use the safe-start/restart runbook;
-7. retain security headers unless a tested replacement is deployed; and
-8. revert the smallest vertical slice, not unrelated settings or chat behavior.
+7. stop Cafe Code scene publication, camera/audio helper sessions, and meeting participants before disabling their controls. Leave independently installed OBS, virtual-audio devices, macOS extensions, `v4l2loopback`, PipeWire configuration, and portal state under operator/system ownership; never uninstall or mutate them as rollback cleanup;
+8. disable each communications adapter and inbound command mode independently, reject new webhooks/sends, revoke pending agent grants/approvals, and retain owner-only unlink/revoke plus documented local-data deletion. Do not erase unrelated accounts or message records as a rollback shortcut;
+9. retain security headers unless a tested replacement is deployed; and
+10. revert the smallest vertical slice, not unrelated settings or chat behavior.
 
 Uploaded ambient assets are private user content. Normal replace/remove follows reference-checked deletion and orphan-sweep policy; rollback MUST NOT bulk-delete stored assets without an explicit migration and retention decision.
 
@@ -830,9 +1055,14 @@ Prefer these reviewable pull requests:
 10. browser-native session Local Media plus bounded blob-element visualizer; native/PCM/projectM feasibility, threat model, licensing, preset-security, and packaging decision record remain separately gated;
 11. conditional Local Media and approved-PCM visualization implementation only after recorded go decisions;
 12. Electron opacity capability, lifecycle sync, and Disable all coordination;
-13. integration polish, soak evidence, and release notes.
+13. integration polish, soak evidence, and release notes;
+14. Meeting Safe Mode privacy catalog, exhaustive redaction, and sanitized broadcast scene;
+15. exact-tuple external camera/audio capability diagnostics and validation for Windows 10 1909, macOS, and Arch/KDE;
+16. separately reviewed Zoom Meeting SDK participant after its vendor/platform gates;
+17. communications-hub contracts, protected secrets, grants, approvals, webhook security, quarantine, retention, and audit; and
+18. Telegram Bot, LINE Official Account, and WhatsApp Business adapters as separate provider slices, with Signal limited to manual handoff.
 
-Do not combine broad Electron, HTTP security, asset storage, native media, and drag/resize changes into one difficult-to-audit patch. A Local Media no-go omits pull request 11 and leaves the unsupported capability explicit.
+Do not combine broad Electron, HTTP security, asset storage, native media, system camera/audio dependencies, messaging providers, and drag/resize changes into one difficult-to-audit patch. A Local Media no-go omits pull request 11 and leaves the unsupported capability explicit. A failed platform/provider gate leaves only that exact capability unavailable rather than weakening another target's boundary.
 
 ## Completion ledger
 
@@ -842,7 +1072,7 @@ This ledger records the current checkout rather than planned ownership. “Prese
 | ----------------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 0 Baseline                    | Not yet recorded                                           | Not yet recorded                                                                                 | Not recorded                                  | Planned; baseline, decision, and release-evidence gates remain open.                                                                                                   |
 | 1 Contracts/UI                | Multiple contributors; per-slice authors not recorded here | Not yet recorded                                                                                 | Present; run evidence not ledgered            | Implemented in checkout; independent audit and phase exit gate remain open.                                                                                            |
-| 2 Atmosphere                  | Multiple contributors; per-slice authors not recorded here | Not yet recorded                                                                                 | Present; run evidence not ledgered            | Implemented in checkout; soak/manual/release gates remain open.                                                                                                        |
+| 2 Atmosphere                  | Multiple contributors; per-slice authors not recorded here | Not yet recorded                                                                                 | Present; run evidence not ledgered            | Implemented in checkout; bounded density plus Matrix Japanese ratio/enrichment controls and per-effect caps are present; soak/manual/release gates remain open.        |
 | 2A Workflow contract          | Multiple contributors; per-slice authors not recorded here | Not yet recorded                                                                                 | Present; run evidence not ledgered            | Implemented in checkout; independent audit and reconnect/security gates open.                                                                                          |
 | 2B Workflow UI                | Multiple contributors; per-slice authors not recorded here | Not yet recorded                                                                                 | Present; run evidence not ledgered            | Implemented in checkout; accessibility/manual/performance gates open.                                                                                                  |
 | 3 Ambient image               | Terra (ambient asset slice)                                | Luna remediation recorded; full independent audit not recorded                                   | Scoped server/web checks run                  | Implemented and gated; bounded grace-aged orphan sweep is present; full release evidence remains open.                                                                 |
@@ -853,6 +1083,8 @@ This ledger records the current checkout rather than planned ownership. “Prese
 | 5B Local media                | Terra (browser-native Local Media v1)                      | Sol cross-audited panel lifecycle/anchor/accessibility; Terra audited Spotify/contracts boundary | Focused store/visualizer checks run           | Session-only HTML Local Media, floating/custom/Cinema/background, and blob-only bounded visualizer are implemented. Native libVLC/projectM feasibility remains unmade. |
 | 6 Native opacity              | Multiple contributors; per-slice authors not recorded here | Luna audited reset, rollback, and failure handling                                               | Scoped and full checks passed                 | Windows packaged native-smoke evidence is recorded; macOS/other artifacts remain fail-closed pending their own evidence.                                               |
 | 7 Integration                 | Root                                                       | Sol, Terra, and Luna audited separate cross-author slices                                        | Full automated gate passed                    | Automated integration is clean; manual matrix, soak, and native release gates remain.                                                                                  |
+| 8 Meeting presentation        | Not yet recorded                                           | Not yet recorded                                                                                 | Not recorded                                  | Planned; Meeting Safe Mode, sanitized scene, target-specific external routes, and meeting adapters are not implemented.                                                |
+| 9 Communications hub          | Not yet recorded                                           | Not yet recorded                                                                                 | Not recorded                                  | Planned; official messaging adapters, supervised agent tools, webhook/secret boundaries, and Signal handoff are not implemented.                                       |
 
 ### Automated integration evidence
 

@@ -374,7 +374,7 @@ export function LocalMediaPanel({
           tabIndex={cinemaEffective ? -1 : undefined}
           className="rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-white"
         >
-          Local media · this session only
+          Local media · {source.displayTitle} · session only
         </h2>
         <div className="flex items-center gap-1">
           <button

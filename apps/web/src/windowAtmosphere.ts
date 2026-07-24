@@ -1,23 +1,54 @@
 import {
+  DEFAULT_FALLING_EFFECT_DENSITY,
+  DEFAULT_FALLING_EFFECT_JAPANESE_RATIO,
+  MAX_FALLING_EFFECT_DENSITY,
   MAX_FALLING_EFFECT_SPEED,
+  MIN_FALLING_EFFECT_DENSITY,
+  MIN_FALLING_EFFECT_JAPANESE_RATIO,
+  MAX_FALLING_EFFECT_JAPANESE_RATIO,
   MIN_FALLING_EFFECT_SPEED,
   type AmbientColor,
   type FallingEffectKind,
+  type FallingEffectMatrixColorMode,
 } from "@cafecode/contracts/settings";
 
 export const MAX_ATMOSPHERE_DPR = 2;
 /** Keep the backing canvas bounded even on an ultra-wide high-DPI display. */
 export const MAX_ATMOSPHERE_CANVAS_PIXELS = 8_388_608;
 export const MAX_ATMOSPHERE_FRAME_DELTA_SECONDS = 0.1;
+export const MATRIX_RAINBOW_CYCLE_MS = 18_000;
+export const MATRIX_MIN_AUDIO_REACTIVE_LEVEL = 0.015;
+const MATRIX_MAX_HUE_CHANGE_PER_SECOND = 110;
+const MATRIX_MAX_LIGHTNESS_CHANGE_PER_SECOND = 24;
 
-const MAX_PARTICLES_BY_KIND = {
-  snow: 160,
-  rain: 220,
-  matrix: 80,
+/** Hard per-scene limits: snow 320, rain 440, and Matrix 160 columns. */
+export const MAX_ATMOSPHERE_PARTICLES_BY_KIND = {
+  snow: 320,
+  rain: 440,
+  matrix: 160,
 } as const satisfies Record<FallingEffectKind, number>;
 
-const MATRIX_GLYPHS =
+/** Reviewed decorative Roman glyph pool; it intentionally contains no words or phrases. */
+export const MATRIX_ROMAN_GLYPHS =
   "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz@#$%&*+-=<>[]{}";
+/** Reviewed decorative kana and code/AI-context kanji; glyphs are never composed into phrases. */
+export const MATRIX_JAPANESE_GLYPHS =
+  "アイウエオカキクケコサシスセソタチツテトナニヌネノマミムメモヤユヨラリルレロワヲン電脳機械知能学習推論生成言語符号解析演算回路未来創造対話探索深層神経仮想現実夢夜光影零無限";
+/** Optional, tasteful Japanese net/board visual-culture glyphs, without hateful or sexual content. */
+export const MATRIX_ENRICHED_JAPANESE_GLYPHS = `${MATRIX_JAPANESE_GLYPHS}ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾅﾆﾇﾈﾉﾏﾐﾑﾒﾓﾗﾘﾙﾚﾛﾜﾝｰｯ､｡･「」()ｗ草乙神ｷﾀ`;
+/** Rare, intact, reviewed decorative AA tokens; they are never split into pseudo-phrases. */
+export const MATRIX_ENRICHED_JAPANESE_TOKENS = [
+  "∧＿∧",
+  "( ´∀｀)",
+  "(・∀・)",
+  "(=ﾟωﾟ)ﾉ",
+  "（´・ω・｀）",
+  "∧∧",
+  "(,,ﾟДﾟ)",
+] as const;
+export const MAX_MATRIX_TOKEN_FONT_SIZE = 18;
+export const MAX_MATRIX_TOKEN_WIDTH_PX = 144;
+const MATRIX_ENRICHED_TOKEN_PROBABILITY = 0.08;
 
 export interface AtmosphereParticle {
   x: number;
@@ -27,6 +58,8 @@ export interface AtmosphereParticle {
   size: number;
   phase: number;
   glyphOffset: number;
+  glyphs: string;
+  matrixToken: string | null;
 }
 
 export interface AtmosphereScene {
@@ -42,6 +75,23 @@ export interface AtmosphereAnimationState {
   readonly documentVisible: boolean;
   readonly windowFocused: boolean;
   readonly continueBackgroundAnimations: boolean;
+}
+
+/** One bounded level from an approved, direct local-media analyser. */
+export interface MatrixAudioSignal {
+  readonly active: boolean;
+  readonly level: number;
+  readonly sampledAt: number;
+}
+
+export interface MatrixColorAnimationState {
+  hue: number | null;
+  lightness: number | null;
+  lastUpdatedAt: number | null;
+}
+
+export function createMatrixColorAnimationState(): MatrixColorAnimationState {
+  return { hue: null, lightness: null, lastUpdatedAt: null };
 }
 
 export function createSeededRandom(seed: number): () => number {
@@ -72,6 +122,7 @@ export function calculateAtmosphereParticleCount(
   kind: FallingEffectKind,
   width: number,
   height: number,
+  requestedDensity = DEFAULT_FALLING_EFFECT_DENSITY,
 ): number {
   const safeWidth = Math.max(0, width);
   const safeHeight = Math.max(0, height);
@@ -84,7 +135,11 @@ export function calculateAtmosphereParticleCount(
       ? Math.ceil(safeWidth / 24)
       : Math.ceil((safeWidth * safeHeight) / (kind === "rain" ? 10_000 : 14_000));
   const minimum = kind === "matrix" ? 12 : 24;
-  return Math.min(MAX_PARTICLES_BY_KIND[kind], Math.max(minimum, requested));
+  const density = clampFallingEffectDensity(requestedDensity);
+  return Math.min(
+    MAX_ATMOSPHERE_PARTICLES_BY_KIND[kind],
+    Math.max(minimum, Math.ceil(requested * density)),
+  );
 }
 
 export function createAtmosphereScene(
@@ -92,8 +147,11 @@ export function createAtmosphereScene(
   width: number,
   height: number,
   random: () => number,
+  density = DEFAULT_FALLING_EFFECT_DENSITY,
+  japaneseRatio = DEFAULT_FALLING_EFFECT_JAPANESE_RATIO,
+  matrixEnriched = false,
 ): AtmosphereScene {
-  const count = calculateAtmosphereParticleCount(kind, width, height);
+  const count = calculateAtmosphereParticleCount(kind, width, height, density);
   const particles = Array.from({ length: count }, (_, index): AtmosphereParticle => {
     const matrixX = count > 0 ? ((index + 0.5) / count) * width : 0;
 
@@ -106,10 +164,24 @@ export function createAtmosphereScene(
         size: 10 + random() * 16,
         phase: random() * Math.PI * 2,
         glyphOffset: 0,
+        glyphs: "",
+        matrixToken: null,
       };
     }
 
     if (kind === "matrix") {
+      const usesJapanese = random() < clampFallingEffectJapaneseRatio(japaneseRatio);
+      const glyphs = usesJapanese
+        ? matrixEnriched
+          ? MATRIX_ENRICHED_JAPANESE_GLYPHS
+          : MATRIX_JAPANESE_GLYPHS
+        : MATRIX_ROMAN_GLYPHS;
+      const matrixToken =
+        usesJapanese && matrixEnriched && random() < MATRIX_ENRICHED_TOKEN_PROBABILITY
+          ? (MATRIX_ENRICHED_JAPANESE_TOKENS[
+              Math.floor(random() * MATRIX_ENRICHED_JAPANESE_TOKENS.length)
+            ] ?? null)
+          : null;
       return {
         x: matrixX,
         y: random() * height,
@@ -117,7 +189,9 @@ export function createAtmosphereScene(
         velocityY: 55 + random() * 85,
         size: 12 + Math.round(random() * 5),
         phase: random() * Math.PI * 2,
-        glyphOffset: Math.floor(random() * MATRIX_GLYPHS.length),
+        glyphOffset: Math.floor(random() * glyphs.length),
+        glyphs,
+        matrixToken,
       };
     }
 
@@ -129,6 +203,8 @@ export function createAtmosphereScene(
       size: 1.5 + random() * 3,
       phase: random() * Math.PI * 2,
       glyphOffset: 0,
+      glyphs: "",
+      matrixToken: null,
     };
   });
 
@@ -145,6 +221,23 @@ export function clampFallingEffectSpeed(speed: number): number {
     return 1;
   }
   return Math.min(MAX_FALLING_EFFECT_SPEED, Math.max(MIN_FALLING_EFFECT_SPEED, speed));
+}
+
+export function clampFallingEffectDensity(density: number): number {
+  if (!Number.isFinite(density)) {
+    return DEFAULT_FALLING_EFFECT_DENSITY;
+  }
+  return Math.min(MAX_FALLING_EFFECT_DENSITY, Math.max(MIN_FALLING_EFFECT_DENSITY, density));
+}
+
+export function clampFallingEffectJapaneseRatio(ratio: number): number {
+  if (!Number.isFinite(ratio)) {
+    return DEFAULT_FALLING_EFFECT_JAPANESE_RATIO;
+  }
+  return Math.min(
+    MAX_FALLING_EFFECT_JAPANESE_RATIO,
+    Math.max(MIN_FALLING_EFFECT_JAPANESE_RATIO, ratio),
+  );
 }
 
 export function advanceAtmosphereSceneInPlace(
@@ -178,7 +271,7 @@ export function advanceAtmosphereSceneInPlace(
     if (particle.y > scene.height + verticalMargin) {
       particle.y = -verticalMargin - ((particle.phase * 37) % Math.max(1, scene.height * 0.2));
       if (scene.kind === "matrix") {
-        particle.glyphOffset = (particle.glyphOffset + 17) % MATRIX_GLYPHS.length;
+        particle.glyphOffset = (particle.glyphOffset + 17) % particle.glyphs.length;
       }
     }
   }
@@ -200,6 +293,82 @@ export function resolveAtmosphereColor(
     return darkTheme ? "#38bdf8" : "#0369a1";
   }
   return darkTheme ? "#f8fafc" : "#64748b";
+}
+
+function wrapHue(hue: number): number {
+  return ((hue % 360) + 360) % 360;
+}
+
+function shortestHueDelta(from: number, to: number): number {
+  return ((to - from + 540) % 360) - 180;
+}
+
+function clampColorTransition(
+  current: number | null,
+  target: number,
+  maximumDelta: number,
+): number {
+  if (current === null) return target;
+  return current + Math.min(maximumDelta, Math.max(-maximumDelta, target - current));
+}
+
+/**
+ * Resolves Matrix-only palettes without allocating frame data. Music mode is
+ * intentionally driven only by a fresh approved local-media analyser sample;
+ * stale, absent, or quiet samples retain the configured fixed/auto color.
+ */
+export function resolveMatrixAtmosphereColor(
+  mode: FallingEffectMatrixColorMode,
+  configuredColor: AmbientColor,
+  darkTheme: boolean,
+  timestamp: number,
+  signal: MatrixAudioSignal,
+  state: MatrixColorAnimationState,
+): string {
+  const fallback = resolveAtmosphereColor("matrix", configuredColor, darkTheme);
+  const safeTimestamp = Number.isFinite(timestamp) ? Math.max(0, timestamp) : 0;
+  if (mode === "fixed") return fallback;
+
+  if (mode === "rainbow") {
+    const hue = wrapHue((safeTimestamp / MATRIX_RAINBOW_CYCLE_MS) * 360);
+    return `hsl(${hue.toFixed(1)} 88% ${darkTheme ? "62" : "40"}%)`;
+  }
+
+  const fresh =
+    signal.active &&
+    Number.isFinite(signal.sampledAt) &&
+    safeTimestamp >= signal.sampledAt &&
+    safeTimestamp - signal.sampledAt <= 1_500;
+  const level = Number.isFinite(signal.level) ? Math.min(1, Math.max(0, signal.level)) : 0;
+  if (!fresh || level < MATRIX_MIN_AUDIO_REACTIVE_LEVEL) {
+    state.hue = null;
+    state.lightness = null;
+    state.lastUpdatedAt = safeTimestamp;
+    return fallback;
+  }
+
+  const elapsedSeconds =
+    state.lastUpdatedAt === null
+      ? 0
+      : Math.min(
+          MAX_ATMOSPHERE_FRAME_DELTA_SECONDS,
+          Math.max(0, (safeTimestamp - state.lastUpdatedAt) / 1_000),
+        );
+  const targetHue = wrapHue(110 + level * 230 + Math.sin(safeTimestamp / 430) * level * 18);
+  const targetLightness = (darkTheme ? 47 : 35) + level * 30;
+  const maximumHueDelta = MATRIX_MAX_HUE_CHANGE_PER_SECOND * elapsedSeconds;
+  const maximumLightnessDelta = MATRIX_MAX_LIGHTNESS_CHANGE_PER_SECOND * elapsedSeconds;
+  const currentHue = state.hue;
+  state.hue =
+    currentHue === null
+      ? targetHue
+      : wrapHue(
+          currentHue +
+            clampColorTransition(0, shortestHueDelta(currentHue, targetHue), maximumHueDelta),
+        );
+  state.lightness = clampColorTransition(state.lightness, targetLightness, maximumLightnessDelta);
+  state.lastUpdatedAt = safeTimestamp;
+  return `hsl(${state.hue.toFixed(1)} ${(68 + level * 25).toFixed(1)}% ${state.lightness.toFixed(1)}%)`;
 }
 
 export function shouldAnimateAtmosphere(state: AtmosphereAnimationState): boolean {
@@ -246,19 +415,21 @@ export function drawAtmosphereScene(
     context.textAlign = "center";
     context.textBaseline = "middle";
     for (const particle of scene.particles) {
-      context.font = `${particle.size}px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace`;
+      const fontSize = Math.min(MAX_MATRIX_TOKEN_FONT_SIZE, particle.size);
+      context.font = `${fontSize}px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace`;
       for (let trailIndex = 7; trailIndex >= 0; trailIndex -= 1) {
         const glyphIndex =
           (particle.glyphOffset +
             trailIndex * 7 +
             Math.floor(Math.max(0, particle.y) / particle.size)) %
-          MATRIX_GLYPHS.length;
+          particle.glyphs.length;
         context.globalAlpha =
           trailIndex === 0 ? normalizedOpacity : normalizedOpacity * (1 - trailIndex / 8) * 0.7;
         context.fillText(
-          MATRIX_GLYPHS[glyphIndex] ?? "0",
+          particle.matrixToken ?? particle.glyphs[glyphIndex] ?? "0",
           particle.x,
           particle.y - trailIndex * particle.size,
+          MAX_MATRIX_TOKEN_WIDTH_PX,
         );
       }
     }

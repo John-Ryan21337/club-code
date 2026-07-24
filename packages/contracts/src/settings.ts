@@ -92,6 +92,13 @@ export const DEFAULT_AMBIENT_OPACITY = 0.35;
 export const MIN_FALLING_EFFECT_SPEED = 0.25;
 export const MAX_FALLING_EFFECT_SPEED = 4;
 export const DEFAULT_FALLING_EFFECT_SPEED = 1;
+export const MIN_FALLING_EFFECT_DENSITY = 0.5;
+export const MAX_FALLING_EFFECT_DENSITY = 2.5;
+export const DEFAULT_FALLING_EFFECT_DENSITY = 1;
+export const MIN_FALLING_EFFECT_JAPANESE_RATIO = 0;
+export const MAX_FALLING_EFFECT_JAPANESE_RATIO = 1;
+export const DEFAULT_FALLING_EFFECT_JAPANESE_RATIO = 0.45;
+export const DEFAULT_FALLING_EFFECT_MATRIX_ENRICHED = false;
 
 export const HexColor = TrimmedNonEmptyString.check(Schema.isPattern(/^#[0-9A-Fa-f]{6}$/)).pipe(
   Schema.decodeTo(
@@ -121,6 +128,12 @@ export type FallingEffectKind = typeof FallingEffectKind.Type;
 export const DEFAULT_FALLING_EFFECTS_ENABLED = false;
 export const DEFAULT_FALLING_EFFECT_KIND: FallingEffectKind = "snow";
 
+/** Matrix-only palette behavior. The persisted default deliberately keeps the
+ * original fixed/theme-aware color behavior for existing profiles. */
+export const FallingEffectMatrixColorMode = Schema.Literals(["fixed", "rainbow", "music-reactive"]);
+export type FallingEffectMatrixColorMode = typeof FallingEffectMatrixColorMode.Type;
+export const DEFAULT_FALLING_EFFECT_MATRIX_COLOR_MODE: FallingEffectMatrixColorMode = "fixed";
+
 export const FallingEffectSpeed = Schema.Number.check(
   Schema.isBetween({
     minimum: MIN_FALLING_EFFECT_SPEED,
@@ -128,6 +141,22 @@ export const FallingEffectSpeed = Schema.Number.check(
   }),
 );
 export type FallingEffectSpeed = typeof FallingEffectSpeed.Type;
+
+export const FallingEffectDensity = Schema.Number.check(
+  Schema.isBetween({
+    minimum: MIN_FALLING_EFFECT_DENSITY,
+    maximum: MAX_FALLING_EFFECT_DENSITY,
+  }),
+);
+export type FallingEffectDensity = typeof FallingEffectDensity.Type;
+
+export const FallingEffectJapaneseRatio = Schema.Number.check(
+  Schema.isBetween({
+    minimum: MIN_FALLING_EFFECT_JAPANESE_RATIO,
+    maximum: MAX_FALLING_EFFECT_JAPANESE_RATIO,
+  }),
+);
+export type FallingEffectJapaneseRatio = typeof FallingEffectJapaneseRatio.Type;
 
 export const YouTubeVideoId = TrimmedNonEmptyString.check(Schema.isPattern(/^[A-Za-z0-9_-]{11}$/));
 export type YouTubeVideoId = typeof YouTubeVideoId.Type;
@@ -323,11 +352,23 @@ export const ClientSettingsSchema = Schema.Struct({
   fallingEffectColor: AmbientColor.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_COLOR)),
   ),
+  fallingEffectMatrixColorMode: FallingEffectMatrixColorMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_MATRIX_COLOR_MODE)),
+  ),
   fallingEffectOpacity: AmbientOpacity.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_OPACITY)),
   ),
   fallingEffectSpeed: FallingEffectSpeed.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_SPEED)),
+  ),
+  fallingEffectDensity: FallingEffectDensity.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_DENSITY)),
+  ),
+  fallingEffectJapaneseRatio: FallingEffectJapaneseRatio.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_JAPANESE_RATIO)),
+  ),
+  fallingEffectMatrixEnriched: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_MATRIX_ENRICHED)),
   ),
   ambientVideoEnabled: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_VIDEO_ENABLED)),
@@ -469,8 +510,12 @@ export const AMBIENT_CLIENT_SETTINGS_KEYS = [
   "fallingEffectsEnabled",
   "fallingEffectKind",
   "fallingEffectColor",
+  "fallingEffectMatrixColorMode",
   "fallingEffectOpacity",
   "fallingEffectSpeed",
+  "fallingEffectDensity",
+  "fallingEffectJapaneseRatio",
+  "fallingEffectMatrixEnriched",
   "ambientVideoEnabled",
   "ambientVideoSource",
   "ambientVideoLayoutMode",
@@ -498,8 +543,12 @@ export const DEFAULT_AMBIENT_CLIENT_SETTINGS: AmbientClientSettings = {
   fallingEffectsEnabled: DEFAULT_FALLING_EFFECTS_ENABLED,
   fallingEffectKind: DEFAULT_FALLING_EFFECT_KIND,
   fallingEffectColor: DEFAULT_AMBIENT_COLOR,
+  fallingEffectMatrixColorMode: DEFAULT_FALLING_EFFECT_MATRIX_COLOR_MODE,
   fallingEffectOpacity: DEFAULT_AMBIENT_OPACITY,
   fallingEffectSpeed: DEFAULT_FALLING_EFFECT_SPEED,
+  fallingEffectDensity: DEFAULT_FALLING_EFFECT_DENSITY,
+  fallingEffectJapaneseRatio: DEFAULT_FALLING_EFFECT_JAPANESE_RATIO,
+  fallingEffectMatrixEnriched: DEFAULT_FALLING_EFFECT_MATRIX_ENRICHED,
   ambientVideoEnabled: DEFAULT_AMBIENT_VIDEO_ENABLED,
   ambientVideoSource: DEFAULT_AMBIENT_VIDEO_SOURCE,
   ambientVideoLayoutMode: DEFAULT_AMBIENT_VIDEO_LAYOUT_MODE,
@@ -1043,8 +1092,12 @@ export const ClientSettingsPatch = Schema.Struct({
   fallingEffectsEnabled: Schema.optionalKey(Schema.Boolean),
   fallingEffectKind: Schema.optionalKey(FallingEffectKind),
   fallingEffectColor: Schema.optionalKey(AmbientColor),
+  fallingEffectMatrixColorMode: Schema.optionalKey(FallingEffectMatrixColorMode),
   fallingEffectOpacity: Schema.optionalKey(AmbientOpacity),
   fallingEffectSpeed: Schema.optionalKey(FallingEffectSpeed),
+  fallingEffectDensity: Schema.optionalKey(FallingEffectDensity),
+  fallingEffectJapaneseRatio: Schema.optionalKey(FallingEffectJapaneseRatio),
+  fallingEffectMatrixEnriched: Schema.optionalKey(Schema.Boolean),
   ambientVideoEnabled: Schema.optionalKey(Schema.Boolean),
   ambientVideoSource: Schema.optionalKey(AmbientVideoSource),
   ambientVideoLayoutMode: Schema.optionalKey(AmbientMediaLayoutMode),

@@ -19,24 +19,52 @@ This document is the product and engineering source of truth for Cafe Code's opt
 6. optional whole-window opacity in the Electron desktop app;
 7. a live Workflow Observatory for plans, tool activity, and launched sub-agents;
 8. session-only browser Local Media playback, including a bounded local-element visualizer; and
-9. a conditional native libVLC/projectM extension.
+9. a conditional native libVLC/projectM extension;
+10. a planned Meeting Safe Mode, sanitized broadcast scene, and meeting-output integrations; and
+11. a planned supervised communications hub for officially supported messaging channels.
 
 Ambient features default to off or no source selected. The Workflow Observatory is available but its panel starts closed. These features decorate or explain Cafe Code; they must never weaken chat reliability, security, legibility, accessibility, or long-session performance.
+
+Items 10 and 11 are planned architecture only. They are not implemented by this canon update, and each capability remains unavailable until its project-plan exit gate is recorded as complete.
 
 Normative terms `MUST`, `SHOULD`, and `MAY` have their usual requirements meaning.
 
 ## Product model
 
-The visual experience is six independent systems:
+The visual experience is eight independent systems:
 
-| System                   | Scope                                                       | Surfaces                          | Default                 |
-| ------------------------ | ----------------------------------------------------------- | --------------------------------- | ----------------------- |
-| Window atmosphere        | Entire Cafe Code viewport, including sidebar and title area | Browser and Electron              | Off                     |
-| Chat media               | Floating in the message pane or optional cinema workspace   | Browser and Electron              | Off                     |
-| Local Media v1           | Session-only browser HTML media, floating/cinema/background | Browser and Electron              | Off/no file selected    |
-| Conditional native media | Future libVLC playback and projectM output                  | Approved Electron platforms only  | Unavailable/off         |
-| Window opacity           | Entire native window, including text, media, and controls   | Supported Electron platforms only | 100% opaque             |
-| Workflow Observatory     | Current thread/turn workflow and provider-reported agents   | Browser and Electron              | Available, panel closed |
+| System                   | Scope                                                        | Surfaces                          | Default                  |
+| ------------------------ | ------------------------------------------------------------ | --------------------------------- | ------------------------ |
+| Window atmosphere        | Entire Cafe Code viewport, including sidebar and title area  | Browser and Electron              | Off                      |
+| Chat media               | Floating in the message pane or optional cinema workspace    | Browser and Electron              | Off                      |
+| Local Media v1           | Session-only browser HTML media, floating/cinema/background  | Browser and Electron              | Off/no file selected     |
+| Conditional native media | Future libVLC playback and projectM output                   | Approved Electron platforms only  | Unavailable/off          |
+| Window opacity           | Entire native window, including text, media, and controls    | Supported Electron platforms only | 100% opaque              |
+| Workflow Observatory     | Current thread/turn workflow and provider-reported agents    | Browser and Electron              | Available, panel closed  |
+| Meeting presentation     | Project redaction, sanitized broadcast, camera/audio outputs | Approved Electron platforms only  | Unavailable/off          |
+| Communications hub       | Supervised official messaging-provider adapters              | Authenticated local owner only    | Unavailable/disconnected |
+
+Current-checkout status for the new systems is:
+
+| Capability                                            | Status              | Canonical boundary                                                                                    |
+| ----------------------------------------------------- | ------------------- | ----------------------------------------------------------------------------------------------------- |
+| Per-project hiding and global Meeting Safe Mode       | Planned             | Presentation privacy only; it does not revoke filesystem or agent access                              |
+| Sanitized broadcast scene                             | Planned             | Explicit previewed scene, never an indiscriminate desktop capture                                     |
+| Windows 10 1909 OBS/DirectShow camera route           | External dependency | A compatible OBS version must be pinned and tested; current-release compatibility is not assumed      |
+| Windows 10 1909 virtual-audio route                   | External dependency | Requires a separately installed compatible virtual-audio endpoint; no build-20348 process loopback    |
+| macOS OBS camera and CoreAudio routing                | External dependency | OBS camera component and separately installed loopback device must match the tested macOS version     |
+| Arch Linux/KDE OBS camera and PipeWire routing        | External dependency | Requires OBS, `v4l2loopback`, PipeWire nodes, and Wayland portal consent where applicable             |
+| Future Windows 11 Media Foundation virtual camera     | Planned             | Requires build 22000+; unavailable on Windows 10 1909/build 18363                                     |
+| Future Windows process-loopback audio mixer           | Planned             | Requires build 20348+; unavailable on Windows 10 1909/build 18363                                     |
+| Future Cafe Code native camera/audio platform helpers | Planned             | Separate signed/packaged artifact work; never inferred from the external OBS path                     |
+| OS-visible Cafe Code virtual microphone               | External dependency | Requires a separately installed virtual-audio device or a production signed-driver release pipeline   |
+| Visible operator-initiated Zoom participant           | Planned             | Zoom Meeting SDK credentials, authorization, review, and meeting consent remain external dependencies |
+| Manual Google Meet camera/window-share integration    | Planned             | The operator joins Meet and explicitly selects/shares Cafe Code                                       |
+| Autonomous outbound-media Google Meet participant bot | Unsupported         | The official Meet Media API does not provide a supported outbound media-sender path                   |
+| Telegram Bot API adapter                              | Planned             | Bot-addressed conversations only; no ambient personal-account import                                  |
+| LINE Official Account Messaging API adapter           | Planned             | Official Account, channel credentials, and verified public webhook are external dependencies          |
+| WhatsApp Business Cloud API adapter                   | Planned             | Business messaging only; Meta assets, review where applicable, opt-in, and policy controls required   |
+| Signal automated read/send adapter                    | Unsupported         | No supported bot/business API; only a planned operator-controlled manual handoff                      |
 
 Turning one system on MUST NOT silently enable another. The implemented "Disable all ambient features" action turns off the backend-authoritative atmosphere, streaming panel, ambient image panel, and desktop-local opacity without deleting saved ambient sources or slider choices. It also clears current-document Local Media, which stops its playback/visualizer and revokes its object URL. Backend and opacity outcomes are reported independently.
 
@@ -59,6 +87,7 @@ The Appearance settings panel MUST provide:
 - color;
 - effect transparency;
 - speed; and
+- density; and
 - a reset-to-default action.
 
 The switch is the off control. Turning it off preserves the last selected type, color, transparency, and speed. The radio group is available only while the switch is on.
@@ -67,13 +96,16 @@ The persisted numeric value is `opacity`, even if the interface says "Transparen
 
 Recommended bounds and defaults:
 
-| Setting          | Bounds                               | Default  |
-| ---------------- | ------------------------------------ | -------- |
-| Enabled          | Boolean                              | `false`  |
-| Type             | `snow`, `rain`, `matrix`             | `snow`   |
-| Color            | `"auto"` or valid `#RRGGBB` sRGB hex | `"auto"` |
-| Opacity          | 0.05–1.00                            | 0.35     |
-| Speed multiplier | 0.25–4.00                            | 1.00     |
+| Setting                           | Bounds                               | Default  |
+| --------------------------------- | ------------------------------------ | -------- |
+| Enabled                           | Boolean                              | `false`  |
+| Type                              | `snow`, `rain`, `matrix`             | `snow`   |
+| Color                             | `"auto"` or valid `#RRGGBB` sRGB hex | `"auto"` |
+| Opacity                           | 0.05–1.00                            | 0.35     |
+| Speed multiplier                  | 0.25–4.00                            | 1.00     |
+| Density multiplier                | 0.50–2.50, in 0.25 steps             | 1.00     |
+| Japanese glyph ratio (Matrix)     | 0%–100%, in 5% steps                 | 45%      |
+| Enriched Japanese glyphs (Matrix) | Boolean                              | `false`  |
 
 The effect MUST cover the viewport but MUST NOT intercept pointer, keyboard, drag-region, or screen-reader interaction. It MUST be clipped to the app window and must not create scrollbars.
 
@@ -426,6 +458,94 @@ A recovery path MUST always exist:
 - the Appearance control exposes the returned recovery reason and remains retryable; and
 - a documented safe-start option or keyboard-accessible reset is required before permitting values below 0.65.
 
+### Meeting Safe Mode and sanitized broadcast
+
+Meeting Safe Mode is a planned, desktop-local presentation-privacy profile. It defaults off and MUST provide:
+
+- a persistent per-project `hidden in meetings` choice and a global Meeting Safe Mode switch;
+- a management view that can reveal and unhide projects without briefly exposing them in the broadcast scene;
+- a neutral alias or omission for every hidden project in project navigation, quick switch/search, recent lists, window titles, breadcrumbs, tooltips, notifications, completion speech, Workflow Observatory, file/database views, activity summaries, Matrix/status overlays, and any other enumerating surface;
+- a safe transition when the currently open project becomes hidden, using a neutral holding scene or an explicitly selected visible project rather than leaking the previous content; and
+- an unmistakable local status indicator, preview, and one-action stop that are excluded from the outgoing scene only when excluding them cannot mislead the operator about capture state.
+
+Project hiding is not deletion, authorization, sandboxing, or agent-access control. Hidden projects remain on disk and may remain available to already-authorized agents. The UI and documentation MUST state that distinction. A future project-access policy must use a separate capability and may not infer authorization from presentation visibility.
+
+The virtual camera and meeting-share output MUST be rendered from a dedicated sanitized broadcast scene rather than a raw desktop capture. The scene mirrors only approved Cafe Code surfaces at a stable bounded resolution/frame rate and MUST exclude native file pickers, permission prompts, operating-system notifications, other applications, devtools, secret/error dialogs, hidden-project content, and off-scene renderer surfaces. The operator previews the exact outgoing scene before starting it. Capture state is explicit, defaults off, stops on shutdown/crash where the platform permits, and has a keyboard-accessible emergency stop.
+
+The broadcast renderer MUST apply the same secret, prompt, path, notification, and hidden-project redaction rules as the visible meeting-safe UI. Automated tests seed distinctive private project/path values and prove they do not appear in captured frames, scene text/accessibility output, notifications, or TTS. Disabling Meeting Safe Mode does not automatically start a camera, microphone, screen share, or meeting participant.
+
+### Meeting video, audio, and participant boundaries
+
+The sanitized broadcast scene is portable application code. Camera and audio-device delivery are platform integrations and MUST NOT be described as universally available. Capability is granted only for an exact tested tuple of operating-system version/build, architecture, display server/compositor, OBS version/package, camera component, audio-routing device/configuration, and meeting client. Missing, stale, or untested tuples fail closed and show setup/diagnostic guidance without starting capture.
+
+The current Windows target is Windows 10 1909/build 18363. That build cannot use `IMFVirtualCamera`, which requires build 22000, or process-loopback capture, which requires build 20348. Its planned delivery route is therefore:
+
+- an operator-installed OBS version that has been specifically compatibility-tested on build 18363;
+- OBS's Windows DirectShow virtual-camera component;
+- a separately installed, build-compatible virtual-audio cable/endpoint or manual meeting-client sound sharing; and
+- explicit selection of those devices in Zoom or Google Meet.
+
+OBS's current documentation broadly lists Windows 10, but that is not proof for build 18363 or for a particular current/future OBS release. Cafe Code MUST NOT recommend “latest” or claim Windows 10 1909 support until Phase 8 records a passing OBS version, source/checksum, DirectShow registration result, meeting-client enumeration result, and audio-device version. If no maintained compatible combination passes, the capability remains unavailable on that machine.
+
+The macOS route uses an operator-installed, version-compatible OBS Virtual Camera. On macOS 13 or newer, an approved OBS 30-or-newer tuple uses OBS's camera extension with explicit system approval; older macOS/OBS camera plug-ins remain version-specific and are not assumed compatible. Meeting audio uses either supported manual share-audio behavior or a separately installed compatible CoreAudio loopback device, optionally combined through Audio MIDI Setup. Cafe Code MUST NOT silently bundle, install, approve, or remove a camera extension or CoreAudio driver.
+
+The Arch Linux/KDE route uses an operator-installed and tested OBS package, a `v4l2loopback` kernel module matching the running kernel and configured with `exclusive_caps=1` for meeting-client compatibility, and an explicit PipeWire virtual sink/source or loopback configuration for audio. On KDE Plasma Wayland, any window/screen capture uses the XDG Desktop Portal ScreenCast flow and its user-visible source-selection consent; Cafe Code MUST NOT bypass, cache around, or simulate portal approval. X11 and Wayland are separate capability tuples. Cafe Code does not silently install kernel modules, mutate system PipeWire configuration, or assume an Arch package is equivalent to OBS's officially distributed builds.
+
+Camera video and meeting audio are separate capabilities. The external routing path MUST offer a setup test with per-source include/mute/gain guidance, level meters where observable, clipping/feedback checks, and meeting-return exclusion. It MUST stop its own scene publication on disable/shutdown and make no promise that protected or DRM-controlled media can be captured. Cafe Code cannot guarantee teardown of independently running OBS, kernel modules, or third-party audio devices and must say so.
+
+Future native helpers are separate planned projects rather than a hidden continuation of the external route. A Windows 11 Media Foundation camera helper requires build 22000+, current-user/session scope where supported, camera privacy handling, signing/packaging, and exact artifact evidence. Windows process-loopback audio requires build 20348+. Native macOS camera/audio extensions require Apple-compatible signing, notarization, packaging, permission, uninstall, and recovery evidence. Native Linux helpers require distribution/kernel/compositor packaging and security review. None may be advertised merely because the portable scene or an OBS path works.
+
+Exposing Cafe Code audio as an operating-system microphone remains an external dependency until either:
+
+1. the operator installs, configures, and explicitly selects a tested virtual-audio endpoint appropriate to the current platform; or
+2. Cafe Code establishes a production signed/packaged virtual-audio device program for that exact platform.
+
+No unsigned/test-signed driver, unreviewed kernel module, or silently installed system extension may ship. Manual window sharing with sound remains the no-driver fallback where the meeting client and current operating system support it.
+
+First-class target matrix:
+
+| Target                                     | Sanitized scene    | Camera delivery                                             | Meeting-audio delivery                                       | Current status                                |
+| ------------------------------------------ | ------------------ | ----------------------------------------------------------- | ------------------------------------------------------------ | --------------------------------------------- |
+| Windows 10 1909/build 18363                | Planned app-native | External OBS DirectShow virtual camera, exact version gated | External compatible virtual-audio cable or manual share      | External dependencies; compatibility unproven |
+| Supported macOS tuple                      | Planned app-native | External OBS camera component/extension, version gated      | External CoreAudio loopback such as BlackHole, version gated | External dependencies; exact tuple unproven   |
+| Arch Linux/KDE X11                         | Planned app-native | External OBS plus `v4l2loopback exclusive_caps=1`           | External PipeWire virtual sink/source or loopback            | External dependencies; exact tuple unproven   |
+| Arch Linux/KDE Plasma Wayland              | Planned app-native | OBS plus `v4l2loopback`; portal-approved source capture     | External PipeWire virtual sink/source or loopback            | External dependencies and portal consent      |
+| Windows 11 build 22000+ future native path | Planned app-native | Future signed/packaged Media Foundation helper              | External endpoint; process loopback only on build 20348+     | Planned future work, not a Win10 fallback     |
+
+Windows 10 1909, supported macOS, and Arch Linux/KDE are first-class validation targets for the external route. “First-class” means each receives explicit capability detection, setup diagnostics, privacy behavior, tests, and documented failure states; it does not convert external packages, kernel modules, drivers, extensions, or portal permission into shipped Cafe Code functionality.
+
+The planned Zoom adapter may join through the official Zoom Meeting SDK and feed the sanitized scene plus selected Cafe Code audio without an OS virtual device on an exact OS/architecture/SDK tuple that passes separate review and native tests. Every join MUST be operator initiated for a specific meeting, visibly identify itself as `Cafe Code`, preview with camera/microphone off, and require explicit enablement before transmitting. It MUST honor Zoom attribution, authorization, Marketplace/review, host-permission, notice, recording/content-access, revocation, and license requirements. It MUST provide an immediate leave/kill control and MUST NOT impersonate a person, join unattended, conceal recording/transcription, solve 2FA, or retain meeting content by default. Windows 10 1909 compatibility is not inferred from a newer Windows build; macOS and Arch/KDE use the normal Zoom client plus the validated external camera/audio route until a separately approved official SDK adapter exists for that target.
+
+Google Meet support is limited to operator-controlled use of the normal Meet client: select the validated Cafe Code virtual camera/virtual audio input, or manually share the sanitized window with supported audio. Cafe Code MAY later provide a separately reviewed Meet add-on for side-panel/main-stage UI. It MUST NOT advertise an autonomous Meet participant that sends outbound camera/audio through the Meet Media API unless Google publishes and the project separately approves an official outbound-media capability.
+
+### Supervised communications hub
+
+The planned communications hub uses provider adapters behind one bounded, auditable model. Provider support is deliberately narrower than “connect my personal inbox”:
+
+- Telegram uses the official Bot API. Only conversations in which a user intentionally contacts or adds the bot are eligible. Full-user-account TDLib import, public-channel scraping, and background harvesting are not part of this plan.
+- LINE uses the Messaging API for a LINE Official Account. LINE Login identifies a user but does not grant personal chat-history access.
+- WhatsApp uses the WhatsApp Business Platform Cloud API for opted-in business conversations. It is not a personal WhatsApp or WhatsApp Web inbox integration.
+- Signal has no supported bot/business API in this plan. Cafe Code may prepare an operator-approved draft and open the official Signal Desktop client, but it does not read, scrape, or send Signal messages automatically.
+
+Inbound messages MUST NOT automatically start or steer an agent by default. An optional command mode requires an explicit per-connector/account/chat allowlist, an unambiguous command prefix or equivalent deliberate invocation, sender authorization, rate limits, loop/replay protection, a visible audit record, and a one-action disable. Provider messages and attachments are untrusted input and MUST NOT override system, project, approval, or tool policy.
+
+Agent access is capability-scoped to an exact connector, account, and chat/thread. The initial tool surface is limited to:
+
+1. list bounded metadata for explicitly granted conversations;
+2. read a bounded recent-message window from one granted conversation;
+3. draft a reply without sending; and
+4. send only after an operator reviews the exact recipient, channel, text, and attachments and explicitly approves.
+
+There is no ambient whole-inbox grant, bulk messaging, contact enumeration, silent send, autonomous account linking, or delegation of authentication/2FA to an agent. OTPs, recovery codes, passwords, cookies, payment data, and provider tokens are redacted before model/tool context and cannot be requested by an agent tool.
+
+Connector credentials and webhook secrets live only in a backend-owned OS-protected secret store with restrictive permissions and explicit owner/session authorization. They never enter Client Settings, renderer storage, URLs, process arguments, logs, diagnostics, workflow events, prompts, summaries, crash reports, or exported transcripts. Account linking uses the provider's official external authorization flow. Disconnect/revoke clears local credentials and disables pending sends without deleting unrelated conversations.
+
+Telegram may use bounded local long polling where permitted. LINE and WhatsApp require a deliberately configured public HTTPS webhook or an optional separately operated relay. Every webhook implementation MUST verify the provider signature before parsing content, bind events to the configured account, enforce timestamp/replay windows where the provider supports them, deduplicate provider event IDs, rate limit, cap bodies/attachments, and return without starting unbounded model work. A relay is an external dependency and may not weaken end-to-end authentication.
+
+Attachments are quarantined before agent access, MIME-sniffed independently of filename, size/type/count bounded, and rejected when executable or unsupported. Retention is minimal and configurable; disconnect, conversation removal, and account deletion expose clear local-data deletion behavior. Logs contain only bounded connector kind, normalized outcome, and opaque correlation IDs—not message bodies, contact details, attachment names/content, or private provider identifiers.
+
+Provider-specific consent and policy remain authoritative. Telegram AI processing requires clear intended-use disclosure and explicit, active, revocable consent for submitted content. LINE and WhatsApp adapters enforce their account, messaging-window, template, opt-in, quota/fee, and human-escalation rules. Agents are visibly identified as automated assistance and MUST NOT impersonate the operator or another participant.
+
 ## Persistence and contracts
 
 Cross-surface atmosphere/media configuration belongs in `ClientSettingsSchema` and `ClientSettingsPatch`, with decoding defaults so older settings continue to load. Once authenticated, the backend remains authoritative as required by Cafe Code's settings architecture; local storage is bootstrap/fallback only.
@@ -438,6 +558,9 @@ fallingEffectKind: "snow" | "rain" | "matrix";
 fallingEffectColor: "auto" | HexColor;
 fallingEffectOpacity: number;
 fallingEffectSpeed: number;
+fallingEffectDensity: number;
+fallingEffectJapaneseRatio: number;
+fallingEffectMatrixEnriched: boolean;
 
 ambientVideoEnabled: boolean;
 ambientVideoSource: AmbientVideoSource;
@@ -523,12 +646,14 @@ Use one canvas rather than one DOM node per particle. Simulation and drawing SHO
 The engine MUST:
 
 - cap device-pixel ratio;
-- cap particle/column count by viewport area;
+- scale the viewport-derived particle/column count by the bounded density multiplier, then cap each scene at 320 snow particles, 440 rain particles, or 160 Matrix columns;
 - reuse bounded arrays instead of allocating per frame;
 - handle resize without unbounded growth;
 - avoid React state updates per frame;
 - stop and release its animation frame when disabled/unmounted; and
 - produce no network traffic.
+
+Matrix uses reviewed, decorative glyph pools: Roman ASCII letters/digits/symbols and Japanese kana plus AI/code-context kanji. `fallingEffectJapaneseRatio` deterministically selects the Japanese pool per Matrix trail; 0% selects only Roman glyphs and makes Japanese enrichment inert. When `fallingEffectMatrixEnriched` is enabled, the Japanese branch additionally admits half-width kana, tasteful Japanese net/board symbols, and a rare bounded list of intact ASCII-art cat tokens. Tokens are rendered as whole decorative canvas strings with capped font size/width; no pseudo-Japanese phrases, hateful/slur, or sexual content is generated.
 
 It MUST obey Cafe Code's existing document policy:
 
@@ -641,6 +766,20 @@ No analytics or telemetry is added by this feature without a separate product de
 - [YouTube Data API search](https://developers.google.com/youtube/v3/docs/search/list), [owned playlists](https://developers.google.com/youtube/v3/docs/playlists/list), and [playlist items](https://developers.google.com/youtube/v3/docs/playlistItems/list)
 - [projectM](https://github.com/projectM-visualizer/projectm)
 
+### Official capability basis for meeting and messaging work
+
+- [Windows Media Foundation `IMFVirtualCamera`](https://learn.microsoft.com/en-us/windows/win32/api/mfvirtualcamera/nn-mfvirtualcamera-imfvirtualcamera), [`MFCreateVirtualCamera`](https://learn.microsoft.com/en-us/windows/win32/api/mfvirtualcamera/nf-mfvirtualcamera-mfcreatevirtualcamera), and [process-loopback audio sample](https://learn.microsoft.com/en-us/samples/microsoft/windows-classic-samples/applicationloopbackaudio-sample/)
+- [Windows SYSVAD virtual-audio driver sample](https://learn.microsoft.com/en-us/samples/microsoft/windows-driver-samples/sysvad-virtual-audio-device-driver-sample/) and [driver-signing requirements](https://learn.microsoft.com/en-us/windows-hardware/drivers/install/driver-signing)
+- [Electron `webContents`](https://www.electronjs.org/docs/latest/api/web-contents/), [OBS system requirements](https://obsproject.com/kb/system-requirements), [OBS Virtual Camera guide](https://obsproject.com/kb/virtual-camera-guide), and [OBS platform-specific virtual-camera troubleshooting](https://obsproject.com/kb/virtual-camera-troubleshooting)
+- [OBS macOS desktop-audio capture guidance](https://obsproject.com/kb/macos-desktop-audio-capture-guide), [Apple Audio MIDI aggregate devices](https://support.apple.com/en-ie/guide/audio-midi-setup/ams6e21c3f61/mac), and the third-party [BlackHole CoreAudio loopback project](https://github.com/ExistentialAudio/BlackHole)
+- [OBS Linux `v4l2loopback` requirement](https://obsproject.com/kb/virtual-camera-troubleshooting), the upstream [`v4l2loopback` project](https://github.com/umlaeute/v4l2loopback), [PipeWire loopback/virtual sink-source support](https://docs.pipewire.org/1.2/page_module_loopback.html), and [XDG Desktop Portal ScreenCast consent flow](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.ScreenCast.html)
+- [Zoom Meeting SDK](https://developers.zoom.us/docs/meeting-sdk/), [Windows Meeting SDK](https://developers.zoom.us/docs/meeting-sdk/windows/), and [Meeting SDK authentication](https://developers.zoom.us/docs/meeting-sdk/auth/)
+- [Google Meet API overview](https://developers.google.com/workspace/meet/api/guides/overview), [Meet Media API overview](https://developers.google.com/workspace/meet/media-api/guides/overview), and [Meet add-on concepts](https://developers.google.com/workspace/meet/add-ons/guides/concepts)
+- [Telegram Bot API](https://core.telegram.org/bots/api), [Bot Developer Terms](https://telegram.org/tos/bot-developers), and [Telegram API terms](https://core.telegram.org/api/terms)
+- [LINE Messaging API setup](https://developers.line.biz/en/docs/messaging-api/getting-started/) and [webhook handling](https://developers.line.biz/en/docs/messaging-api/receiving-messages/)
+- [Meta WhatsApp Business Platform Cloud API](https://www.postman.com/meta/whatsapp-business-platform/documentation/wlk6lh4/whatsapp-cloud-api) and [WhatsApp Business Messaging Policy](https://whatsappbusiness.com/policy/)
+- [Signal developer documentation](https://signal.org/docs/), [linked-device behavior](https://support.signal.org/hc/en-us/articles/360007320551-Linked-Devices), and [Signal Terms](https://signal.org/legal/)
+
 ## Non-goals for the first release
 
 - arbitrary streaming providers or arbitrary iframe URLs;
@@ -663,6 +802,11 @@ No analytics or telemetry is added by this feature without a separate product de
 - new power-save behavior;
 - playback synchronization across clients;
 - retaining unbounded orphan media assets;
+- raw desktop/window capture as a substitute for the sanitized meeting scene;
+- covert or unattended meeting joins, participant impersonation, hidden recording/transcription, or agent handling of login/2FA;
+- an outbound-media Google Meet bot without a supported official sender API;
+- personal LINE or WhatsApp inbox access, Telegram user-account harvesting, or automated Signal read/send;
+- whole-inbox agent grants, silent/bulk messaging, or connector content used for model training;
 - exposing hidden reasoning or raw provider payloads; and
 - sub-agent control/steering from the Workflow Observatory.
 

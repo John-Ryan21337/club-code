@@ -21,16 +21,27 @@ function createUrlApi() {
 }
 
 describe("local media store", () => {
-  it("keeps only a current-session object URL and revokes it when replaced or cleared", () => {
+  it("keeps only a current-session object URL and display title, then revokes it when replaced or cleared", () => {
     const { api, created, revoked } = createUrlApi();
     const store = createLocalMediaStore(api);
-    const audio = { type: "audio/mpeg" } as Blob;
-    const video = { type: "video/mp4" } as Blob;
+    const audio = {
+      name: "C:\\private\\mixes\\night-drive.mp3",
+      type: "audio/mpeg",
+    } as unknown as Blob;
+    const video = { name: "clip.mp4", type: "video/mp4" } as unknown as Blob;
 
     expect(store.selectFile(audio)).toBe(true);
-    expect(store.getSnapshot().source).toEqual({ kind: "audio", objectUrl: "blob:local-media-1" });
+    expect(store.getSnapshot().source).toEqual({
+      kind: "audio",
+      objectUrl: "blob:local-media-1",
+      displayTitle: "night-drive",
+    });
     expect(store.selectFile(video)).toBe(true);
-    expect(store.getSnapshot().source).toEqual({ kind: "video", objectUrl: "blob:local-media-2" });
+    expect(store.getSnapshot().source).toEqual({
+      kind: "video",
+      objectUrl: "blob:local-media-2",
+      displayTitle: "clip",
+    });
     expect(revoked).toEqual(["blob:local-media-1"]);
 
     store.clear();
@@ -58,7 +69,74 @@ describe("local media store", () => {
     expect(store.selectFile({ name: "private-recording.mp3", type: "" } as unknown as Blob)).toBe(
       true,
     );
-    expect(store.getSnapshot().source).toEqual({ kind: "audio", objectUrl: "blob:local-media-1" });
+    expect(store.getSnapshot().source).toEqual({
+      kind: "audio",
+      objectUrl: "blob:local-media-1",
+      displayTitle: "private-recording",
+    });
+  });
+
+  it("uses supplied metadata titles without retaining an absolute path", () => {
+    const { api } = createUrlApi();
+    const store = createLocalMediaStore(api);
+
+    expect(
+      store.selectFile(
+        { name: "C:\\private\\recording.mp3", type: "audio/mpeg" } as unknown as Blob,
+        { displayTitle: "Studio cut" },
+      ),
+    ).toBe(true);
+    expect(store.getSnapshot().source).toEqual({
+      kind: "audio",
+      objectUrl: "blob:local-media-1",
+      displayTitle: "Studio cut",
+    });
+    expect(JSON.stringify(store.getSnapshot().source)).not.toContain("C:\\private");
+  });
+
+  it("reduces path-like metadata titles to a safe basename and falls back when no title exists", () => {
+    const { api } = createUrlApi();
+    const store = createLocalMediaStore(api);
+
+    expect(
+      store.selectFile({ name: "", type: "audio/mpeg" } as unknown as Blob, {
+        displayTitle: "C:\\private\\takes\\first-pass.wav",
+      }),
+    ).toBe(true);
+    expect(store.getSnapshot().source?.displayTitle).toBe("first-pass");
+
+    expect(
+      store.selectFile({ name: "", type: "audio/mpeg" } as unknown as Blob, {
+        displayTitle: "file:///private/takes/second-pass.wav",
+      }),
+    ).toBe(true);
+    expect(store.getSnapshot().source?.displayTitle).toBe("second-pass");
+
+    expect(store.selectFile({ name: "", type: "audio/mpeg" } as unknown as Blob)).toBe(true);
+    expect(store.getSnapshot().source?.displayTitle).toBe("Untitled local media");
+  });
+
+  it.each([
+    ["trailer.flv", "video"],
+    ["movie.mkv", "video"],
+    ["capture.avi", "video"],
+    ["archive.wmv", "video"],
+    ["feature.mpeg", "video"],
+    ["feature.mpg", "video"],
+    ["broadcast.ts", "video"],
+    ["disc.m2ts", "video"],
+    ["phone.3gp", "video"],
+    ["session.aiff", "audio"],
+    ["recording.wma", "audio"],
+  ] as const)("classifies common VLC format %s as %s when MIME type is absent", (name, kind) => {
+    const { api } = createUrlApi();
+    const store = createLocalMediaStore(api);
+
+    expect(store.selectFile({ name, type: "" } as unknown as Blob)).toBe(true);
+    expect(store.getSnapshot().source).toMatchObject({
+      kind,
+      displayTitle: name.slice(0, name.lastIndexOf(".")),
+    });
   });
 
   it("keeps presentation preferences ephemeral alongside the selected source", () => {

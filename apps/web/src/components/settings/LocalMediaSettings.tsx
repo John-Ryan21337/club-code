@@ -18,7 +18,7 @@ export function LocalMediaSettings() {
     event.currentTarget.value = "";
     if (!file) return;
     if (!localMediaStore.selectFile(file)) {
-      setSelectionError("Choose an audio or video file supported by this browser.");
+      setSelectionError("Choose a supported audio or video file.");
       return;
     }
     setSelectionError(null);
@@ -27,17 +27,21 @@ export function LocalMediaSettings() {
   const hasSource = state.source !== null;
 
   return (
-    <SettingsSection title="Local Media (browser-supported formats)">
+    <SettingsSection title="Local Media">
       <SettingsRow
         title="Choose local media"
-        description="Play one audio or video file in the chat area. The file stays in this document's memory only: no file path, contents, or selection is stored or sent to Cafe Code."
+        description="Play one audio or video file in the chat area. Browser playback depends on browser support; VLC-format fallback is available only in the desktop app. No file path or contents are stored or sent to Cafe Code."
         status={
           selectionError ? (
             <span role="alert" className="text-destructive">
               {selectionError}
             </span>
           ) : (
-            <span>Selection is never saved and ends when you clear it or refresh.</span>
+            <span>
+              {hasSource
+                ? `Current: ${state.source.displayTitle}. This title is session-only and ends when you clear it or refresh.`
+                : "No media selected. Any title is session-only and ends when you clear it or refresh."}
+            </span>
           )
         }
         control={

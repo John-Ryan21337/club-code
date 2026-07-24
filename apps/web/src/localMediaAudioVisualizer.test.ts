@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  calculateLocalMediaAudioSignalLevel,
   fitLocalMediaVisualizerCanvas,
   isApprovedLocalMediaVisualizerElement,
   LocalMediaAudioVisualizerController,
@@ -10,6 +11,7 @@ import {
   shouldVisualizeLocalMedia,
   updateLocalMediaVisualizerLevels,
 } from "./localMediaAudioVisualizer";
+import { localMediaAudioSignalStore } from "./localMediaAudioSignal";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -116,6 +118,13 @@ describe("local media audio visualizer policy", () => {
     }
   });
 
+  it("reduces the approved spectrum to one bounded ephemeral activity level", () => {
+    expect(calculateLocalMediaAudioSignalLevel(new Uint8Array())).toBe(0);
+    expect(calculateLocalMediaAudioSignalLevel(new Uint8Array([0, 0, 0]))).toBe(0);
+    expect(calculateLocalMediaAudioSignalLevel(new Uint8Array([255, 255]))).toBe(1);
+    expect(calculateLocalMediaAudioSignalLevel(new Uint8Array([128]))).toBeGreaterThan(0.49);
+  });
+
   it("builds one bounded analysis branch, pauses frames, and tears down deterministically", async () => {
     vi.stubGlobal("document", { baseURI: "http://localhost/" });
     const media = mediaElement({}) as HTMLMediaElement & { paused: boolean; ended: boolean };
@@ -194,9 +203,15 @@ describe("local media audio visualizer policy", () => {
       LOCAL_MEDIA_VISUALIZER_MAX_CANVAS_PIXELS,
     );
 
+    await controller.sync(false, true);
+    expect(frames.size).toBe(1);
+    expect(source.disconnect).not.toHaveBeenCalledWith(analyser);
+    expect(localMediaAudioSignalStore.getSnapshot().active).toBe(true);
+
     await controller.sync(false);
     expect(frames.size).toBe(0);
     expect(source.disconnect).toHaveBeenCalledWith(analyser);
+    expect(localMediaAudioSignalStore.getSnapshot().active).toBe(false);
     expect(audioContext.suspend).not.toHaveBeenCalled();
 
     await controller.sync(true);

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import { cn } from "../../lib/utils";
+import { useSettings } from "../../hooks/useSettings";
 import {
   LocalMediaAudioVisualizerController,
   shouldVisualizeLocalMedia,
@@ -24,9 +25,17 @@ export function LocalMediaAudioVisualizer({
   className,
 }: LocalMediaAudioVisualizerProps) {
   const [canvas, setCanvas] = useState<HTMLCanvasElement | null>(null);
+  const musicReactiveMatrix = useSettings(
+    (settings) =>
+      settings.fallingEffectsEnabled &&
+      settings.fallingEffectKind === "matrix" &&
+      settings.fallingEffectMatrixColorMode === "music-reactive",
+  );
   const enabledRef = useRef(enabled);
+  const musicReactiveMatrixRef = useRef(musicReactiveMatrix);
   const syncRef = useRef<() => void>(() => undefined);
   enabledRef.current = enabled;
+  musicReactiveMatrixRef.current = musicReactiveMatrix;
 
   useEffect(() => {
     if (!canvas || !mediaElement) return;
@@ -37,14 +46,21 @@ export function LocalMediaAudioVisualizer({
 
     const sync = () => {
       if (disposed) return;
-      void controller.sync(
-        shouldVisualizeLocalMedia({
-          enabled: enabledRef.current,
-          reducedMotion: motionQuery.matches,
-          visible: document.visibilityState === "visible",
-          focused: document.hasFocus(),
-        }),
-      );
+      const visualizerRequested = shouldVisualizeLocalMedia({
+        enabled: enabledRef.current,
+        reducedMotion: motionQuery.matches,
+        visible: document.visibilityState === "visible",
+        focused: document.hasFocus(),
+      });
+      // Matrix color can consume only this already-approved selected-file
+      // analyser. It never opens a microphone or reaches into iframe players.
+      const colorAnalysisRequested = shouldVisualizeLocalMedia({
+        enabled: musicReactiveMatrixRef.current,
+        reducedMotion: motionQuery.matches,
+        visible: document.visibilityState === "visible",
+        focused: document.hasFocus(),
+      });
+      void controller.sync(visualizerRequested, colorAnalysisRequested);
     };
     syncRef.current = sync;
     const scheduleInitialSync = () => {
@@ -85,7 +101,7 @@ export function LocalMediaAudioVisualizer({
 
   useEffect(() => {
     syncRef.current();
-  }, [enabled]);
+  }, [enabled, musicReactiveMatrix]);
 
   return (
     <canvas

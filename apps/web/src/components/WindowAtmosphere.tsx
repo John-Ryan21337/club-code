@@ -3,13 +3,16 @@ import { useEffect, useRef } from "react";
 import { useSettings } from "../hooks/useSettings";
 import { useTheme } from "../hooks/useTheme";
 import { useServerConfig } from "../rpc/serverState";
+import { localMediaAudioSignalStore } from "../localMediaAudioSignal";
 import {
   advanceAtmosphereSceneInPlace,
+  createMatrixColorAnimationState,
   createAtmosphereScene,
   createSeededRandom,
   drawAtmosphereScene,
   fitAtmosphereDpr,
   resolveAtmosphereColor,
+  resolveMatrixAtmosphereColor,
   shouldAnimateAtmosphere,
   type AtmosphereScene,
 } from "../windowAtmosphere";
@@ -25,8 +28,12 @@ export function WindowAtmosphere() {
   const enabled = useSettings((settings) => settings.fallingEffectsEnabled);
   const kind = useSettings((settings) => settings.fallingEffectKind);
   const configuredColor = useSettings((settings) => settings.fallingEffectColor);
+  const matrixColorMode = useSettings((settings) => settings.fallingEffectMatrixColorMode);
   const opacity = useSettings((settings) => settings.fallingEffectOpacity);
   const speed = useSettings((settings) => settings.fallingEffectSpeed);
+  const density = useSettings((settings) => settings.fallingEffectDensity);
+  const japaneseRatio = useSettings((settings) => settings.fallingEffectJapaneseRatio);
+  const matrixEnriched = useSettings((settings) => settings.fallingEffectMatrixEnriched);
   const continueBackgroundAnimations = useSettings(
     (settings) => settings.continueBackgroundAnimations,
   );
@@ -48,6 +55,7 @@ export function WindowAtmosphere() {
 
     const reducedMotion = window.matchMedia(REDUCED_MOTION_QUERY);
     let scene: AtmosphereScene | null = null;
+    const matrixColorState = createMatrixColorAnimationState();
     let animationFrame: number | null = null;
     let lastFrameTime: number | null = null;
 
@@ -76,6 +84,9 @@ export function WindowAtmosphere() {
         width,
         height,
         createSeededRandom(sceneSeed(kind, width, height)),
+        density,
+        japaneseRatio,
+        matrixEnriched,
       );
     };
 
@@ -87,12 +98,18 @@ export function WindowAtmosphere() {
       const elapsedSeconds = lastFrameTime === null ? 0 : (timestamp - lastFrameTime) / 1_000;
       lastFrameTime = timestamp;
       advanceAtmosphereSceneInPlace(scene, elapsedSeconds, speed);
-      drawAtmosphereScene(
-        context,
-        scene,
-        resolveAtmosphereColor(kind, configuredColor, resolvedTheme === "dark"),
-        opacity,
-      );
+      const color =
+        kind === "matrix"
+          ? resolveMatrixAtmosphereColor(
+              matrixColorMode,
+              configuredColor,
+              resolvedTheme === "dark",
+              timestamp,
+              localMediaAudioSignalStore.getSnapshot(),
+              matrixColorState,
+            )
+          : resolveAtmosphereColor(kind, configuredColor, resolvedTheme === "dark");
+      drawAtmosphereScene(context, scene, color, opacity);
       animationFrame = window.requestAnimationFrame(drawFrame);
     };
 
@@ -144,8 +161,12 @@ export function WindowAtmosphere() {
     atmosphereAvailable,
     configuredColor,
     continueBackgroundAnimations,
+    density,
+    japaneseRatio,
+    matrixEnriched,
     enabled,
     kind,
+    matrixColorMode,
     opacity,
     resolvedTheme,
     speed,

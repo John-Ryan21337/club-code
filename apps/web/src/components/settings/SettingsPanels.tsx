@@ -412,6 +412,17 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.fallingEffectSpeed !== DEFAULT_UNIFIED_SETTINGS.fallingEffectSpeed
         ? ["Falling effect speed"]
         : []),
+      ...(settings.fallingEffectDensity !== DEFAULT_UNIFIED_SETTINGS.fallingEffectDensity
+        ? ["Falling effect density"]
+        : []),
+      ...(settings.fallingEffectJapaneseRatio !==
+      DEFAULT_UNIFIED_SETTINGS.fallingEffectJapaneseRatio
+        ? ["Japanese glyph ratio"]
+        : []),
+      ...(settings.fallingEffectMatrixEnriched !==
+      DEFAULT_UNIFIED_SETTINGS.fallingEffectMatrixEnriched
+        ? ["Enriched Japanese Matrix glyphs"]
+        : []),
       ...(settings.appAccentColor !== DEFAULT_UNIFIED_SETTINGS.appAccentColor
         ? ["Accent color"]
         : []),
@@ -480,6 +491,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.fallingEffectColor,
       settings.fallingEffectOpacity,
       settings.fallingEffectSpeed,
+      settings.fallingEffectDensity,
+      settings.fallingEffectJapaneseRatio,
+      settings.fallingEffectMatrixEnriched,
       settings.themeAccentColor,
       settings.automaticGitFetchInterval,
       settings.enableAssistantStreaming,
@@ -516,6 +530,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       fallingEffectColor: DEFAULT_UNIFIED_SETTINGS.fallingEffectColor,
       fallingEffectOpacity: DEFAULT_UNIFIED_SETTINGS.fallingEffectOpacity,
       fallingEffectSpeed: DEFAULT_UNIFIED_SETTINGS.fallingEffectSpeed,
+      fallingEffectDensity: DEFAULT_UNIFIED_SETTINGS.fallingEffectDensity,
+      fallingEffectJapaneseRatio: DEFAULT_UNIFIED_SETTINGS.fallingEffectJapaneseRatio,
+      fallingEffectMatrixEnriched: DEFAULT_UNIFIED_SETTINGS.fallingEffectMatrixEnriched,
       themeAccentColor: DEFAULT_UNIFIED_SETTINGS.themeAccentColor,
       defaultEditor: DEFAULT_UNIFIED_SETTINGS.defaultEditor,
       diffWordWrap: DEFAULT_UNIFIED_SETTINGS.diffWordWrap,
