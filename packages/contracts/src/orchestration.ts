@@ -354,6 +354,7 @@ export const WorkflowAgentStatus = Schema.Literals([
   "queued",
   "running",
   "waiting",
+  "idle",
   "completed",
   "failed",
   "interrupted",
@@ -376,6 +377,8 @@ export const WorkflowAgentNode = Schema.Struct({
   name: Schema.NullOr(WorkflowProjectionText),
   taskLabel: Schema.NullOr(WorkflowProjectionText),
   status: WorkflowAgentStatus,
+  /** Provider/orchestration timestamp for the first observed lifecycle event. */
+  startedAt: Schema.NullOr(IsoDateTime),
   elapsedSeconds: Schema.NullOr(NonNegativeInt),
   latestActivitySummary: Schema.NullOr(WorkflowProjectionText),
   lastActivityAt: Schema.NullOr(IsoDateTime),
@@ -397,11 +400,16 @@ export type WorkflowRecentActivity = typeof WorkflowRecentActivity.Type;
 
 /**
  * Renderer-ready reconnect projection. It contains no raw provider payload,
- * prompt, reasoning text, or locally inferred elapsed duration.
+ * prompt or reasoning text. Durations are provider-reported; `startedAt` is
+ * an orchestration event timestamp and lets the renderer show a clearly
+ * labelled elapsed wall-clock age for active agents.
  */
 export const WorkflowProjectionSnapshot = Schema.Struct({
   version: Schema.Literal(1),
   fidelity: WorkflowProviderFidelity,
+  /** Thread routing metadata, never a provider account identifier. */
+  providerLabel: Schema.NullOr(WorkflowProjectionText),
+  modelLabel: Schema.NullOr(WorkflowProjectionText),
   nodes: Schema.Array(WorkflowAgentNode).check(Schema.isMaxLength(WORKFLOW_PROJECTION_MAX_NODES)),
   recentActivities: Schema.Array(WorkflowRecentActivity).check(
     Schema.isMaxLength(WORKFLOW_PROJECTION_MAX_RECENT_ACTIVITIES),

@@ -12,6 +12,10 @@ export function ChatMediaOverlay() {
   const media = useSettings((settings) => ({
     enabled: settings.ambientImageEnabled,
     asset: settings.ambientImageAsset,
+    cycleAssets: settings.ambientImageCycleAssets,
+    cycleEnabled: settings.ambientImageCycleEnabled,
+    cycleSeconds: settings.ambientImageCycleSeconds,
+    presentationMode: settings.ambientImagePresentationMode,
     layoutMode: settings.ambientImageLayoutMode,
     placement: settings.ambientImagePresetPlacement,
     size: settings.ambientImagePresetSize,
@@ -28,7 +32,11 @@ export function ChatMediaOverlay() {
   }));
   const serverConfig = useServerConfig();
   const { updateSettings } = useUpdateSettings();
-  const showAmbientImage = !cinemaEffective && media.enabled && media.asset !== null;
+  const firstAmbientImage = media.asset ?? media.cycleAssets[0] ?? null;
+  const showAmbientImage =
+    !cinemaEffective &&
+    media.enabled &&
+    (media.asset !== null || (media.cycleEnabled && media.cycleAssets.length > 0));
   const streamingCapability =
     media.videoSource?.kind === "spotify"
       ? serverConfig?.ambientExperienceCapabilities.spotifyEmbed === true
@@ -55,9 +63,13 @@ export function ChatMediaOverlay() {
   const stackedVideoSize = largestPresetSize(streamingStackedSize, localStackedSize);
   return (
     <>
-      {showAmbientImage && media.asset ? (
+      {showAmbientImage && firstAmbientImage ? (
         <AmbientImagePanel
-          asset={media.asset}
+          asset={firstAmbientImage}
+          cycleAssets={media.cycleAssets}
+          cycleEnabled={media.cycleEnabled}
+          cycleSeconds={media.cycleSeconds}
+          presentationMode={media.presentationMode}
           layoutMode={media.layoutMode}
           placement={media.placement}
           size={media.size}

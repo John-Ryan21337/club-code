@@ -264,11 +264,13 @@ describe("DesktopShellEnvironment", () => {
         LOCALAPPDATA: "C:\\Users\\testuser\\AppData\\Local",
         USERPROFILE: "C:\\Users\\testuser",
       };
+      const commands: ChildProcess.Command[] = [];
 
       yield* runShellEnvironment({
         env,
         platform: "win32",
         handler: (command) => {
+          commands.push(command);
           if (command._tag !== "StandardCommand") return "";
           const loadProfile = !command.args.includes("-NoProfile");
           return loadProfile
@@ -298,6 +300,22 @@ describe("DesktopShellEnvironment", () => {
       assert.equal(
         env.FNM_MULTISHELL_PATH,
         "C:\\Users\\testuser\\AppData\\Local\\fnm_multishells\\123",
+      );
+      assert.equal(commands.length, 2);
+      assert.isTrue(commands.every((command) => command._tag === "StandardCommand"));
+      const firstCommand = commands[0];
+      const secondCommand = commands[1];
+      assert.deepEqual(
+        firstCommand?._tag === "StandardCommand"
+          ? [firstCommand.command, ...firstCommand.args.slice(0, 4)]
+          : [],
+        ["pwsh.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command"],
+      );
+      assert.deepEqual(
+        secondCommand?._tag === "StandardCommand"
+          ? [secondCommand.command, ...secondCommand.args.slice(0, 3)]
+          : [],
+        ["pwsh.exe", "-NoLogo", "-NonInteractive", "-Command"],
       );
     }),
   );

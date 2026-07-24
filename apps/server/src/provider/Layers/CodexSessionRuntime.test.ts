@@ -19,6 +19,7 @@ import {
   buildCodexThreadSnapshotBackfillEvents,
   buildTurnStartParams,
   buildTurnSteerParams,
+  CODEX_ULTRA_CACHING_COMPACT_PROMPT,
   claimCodexSnapshotBackfillWatcher,
   codexAggregateNotificationMethod,
   codexAggregateTurnHasUnfinishedChildren,
@@ -1716,6 +1717,71 @@ describe("openCodexThread", () => {
         model_auto_compact_token_limit_scope: "total",
       });
     }
+  });
+
+  it("configures the browser MCP without serializing its bearer into app-server params", async () => {
+    let payload: unknown;
+    const client = {
+      raw: {
+        request: (_method: "thread/start" | "thread/resume", input: unknown) => {
+          payload = input;
+          return Effect.succeed(makeThreadOpenResponse("fresh-thread"));
+        },
+      },
+    };
+    const authorization = "Bearer test-secret-that-must-not-enter-json-rpc";
+    await Effect.runPromise(
+      openCodexThread({
+        client,
+        threadId: ThreadId.make("thread-browser"),
+        runtimeMode: "full-access",
+        cwd: "/tmp/project",
+        requestedModel: "gpt-5.3-codex",
+        serviceTier: undefined,
+        resumeThreadId: undefined,
+        agentBrowserMcp: {
+          url: "http://127.0.0.1:43210/mcp",
+          authorization,
+          threadId: ThreadId.make("thread-browser"),
+          providerInstanceId: ProviderInstanceId.make("codex"),
+        },
+      }),
+    );
+    const encoded = JSON.stringify(payload);
+    assert.doesNotMatch(encoded, /test-secret-that-must-not-enter-json-rpc/);
+    assert.match(encoded, /CAFE_CODE_AGENT_BROWSER_MCP_AUTHORIZATION/);
+    assert.match(encoded, /X-Cafe-Browser-Thread/);
+    assert.match(encoded, /thread-browser/);
+  });
+
+  it("uses the stable structured compact prompt only when ultra caching is enabled", async () => {
+    const calls: Array<{ method: "thread/start" | "thread/resume"; payload: unknown }> = [];
+    const client = {
+      raw: {
+        request: (method: "thread/start" | "thread/resume", payload: unknown) => {
+          calls.push({ method, payload });
+          return Effect.succeed(makeThreadOpenResponse("fresh-thread"));
+        },
+      },
+    };
+
+    await Effect.runPromise(
+      openCodexThread({
+        client,
+        threadId: ThreadId.make("thread-ultra-cache"),
+        runtimeMode: "full-access",
+        cwd: "/tmp/project",
+        requestedModel: "gpt-5.3-codex",
+        serviceTier: undefined,
+        resumeThreadId: undefined,
+        autoCompactTokenLimit: 120_000,
+        ultraCaching: true,
+      }),
+    );
+
+    const payload = calls[0]?.payload as { readonly config?: Record<string, unknown> };
+    assert.equal(payload.config?.compact_prompt, CODEX_ULTRA_CACHING_COMPACT_PROMPT);
+    assert.equal(payload.config?.model_auto_compact_token_limit, 120_000);
   });
 
   it("propagates non-recoverable resume failures", async () => {

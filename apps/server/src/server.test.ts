@@ -180,6 +180,35 @@ const tinyPngBytes = Uint8Array.from(
     "base64",
   ),
 );
+const tinyGifBytes = Uint8Array.from(
+  Buffer.from("R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==", "base64"),
+);
+const gifWithEncodedSize = (sizeBytes: number): Uint8Array => {
+  const prefix = tinyGifBytes.subarray(0, tinyGifBytes.byteLength - 1);
+  if (sizeBytes < tinyGifBytes.byteLength + 5) {
+    throw new Error("Padded GIF fixture must have room for a comment extension.");
+  }
+
+  const bytes = new Uint8Array(sizeBytes);
+  bytes.set(prefix);
+  let offset = prefix.byteLength;
+  bytes[offset++] = 0x21;
+  bytes[offset++] = 0xfe;
+  let subBlockBudget = sizeBytes - offset - 2;
+  while (subBlockBudget > 0) {
+    let blockBytes = Math.min(256, subBlockBudget);
+    if (subBlockBudget - blockBytes === 1) blockBytes -= 1;
+    if (blockBytes < 2) throw new Error("Invalid padded GIF fixture budget.");
+    bytes[offset++] = blockBytes - 1;
+    bytes.fill(0x61, offset, offset + blockBytes - 1);
+    offset += blockBytes - 1;
+    subBlockBudget -= blockBytes;
+  }
+  bytes[offset++] = 0;
+  bytes[offset++] = 0x3b;
+  if (offset !== sizeBytes) throw new Error("Padded GIF fixture has the wrong encoded size.");
+  return bytes;
+};
 const makeDefaultOrchestrationReadModel = () => {
   const now = "2026-01-01T00:00:00.000Z";
   return {
@@ -1411,12 +1440,15 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.include(yield* response.text, "router-static-ok");
       const contentSecurityPolicy = getHeader(response.headers, "content-security-policy") ?? "";
       assert.include(contentSecurityPolicy, "default-src 'self'");
-      assert.include(contentSecurityPolicy, "script-src 'self' 'wasm-unsafe-eval'");
+      assert.equal(
+        contentSecurityPolicy.split("; ").find((directive) => directive.startsWith("script-src ")),
+        "script-src 'self' 'wasm-unsafe-eval'",
+      );
       assert.include(contentSecurityPolicy, "style-src 'self' https://fonts.googleapis.com");
       assert.include(contentSecurityPolicy, "style-src-attr 'unsafe-inline'");
       assert.include(contentSecurityPolicy, "font-src 'self' https://fonts.gstatic.com data:");
       assert.include(contentSecurityPolicy, "img-src 'self' data: blob:");
-      assert.include(contentSecurityPolicy, "media-src 'self' blob:");
+      assert.include(contentSecurityPolicy, "media-src 'self' blob: cafecode-media:");
       assert.include(contentSecurityPolicy, "worker-src 'self' blob:");
       assert.include(contentSecurityPolicy, "connect-src 'self' http: https: ws: wss:");
       assert.equal(
@@ -2885,6 +2917,16 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         Array.from(new Uint8Array(yield* imageResponse.arrayBuffer)),
         Array.from(tinyPngBytes),
       );
+
+      const exactLimitResponse = yield* HttpClient.post("/api/ambient-media/image", {
+        headers: { cookie, "content-type": "image/gif" },
+        body: HttpBody.uint8Array(gifWithEncodedSize(MAX_AMBIENT_IMAGE_FILE_BYTES), "image/gif"),
+      });
+      assert.equal(exactLimitResponse.status, 200);
+      const exactLimitBody = (yield* exactLimitResponse.json) as {
+        readonly ambientImage: { readonly sizeBytes: number };
+      };
+      assert.equal(exactLimitBody.ambientImage.sizeBytes, MAX_AMBIENT_IMAGE_FILE_BYTES);
 
       const uploadUrl = yield* getHttpServerUrl("/api/ambient-media/image");
       const oversizedStatus = yield* Effect.promise(
@@ -4471,6 +4513,55 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         assert.equal(yield* Deferred.await(usageRefresh), defaultModelSelection.instanceId);
         assert.equal(yield* Ref.get(fullRefreshCalls), 0);
       }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("supports lightweight provider usage refreshes over RPC", () =>
+    Effect.gen(function* () {
+      const instanceId = ProviderInstanceId.make("codex_personal");
+      const usageRefreshCalls = yield* Ref.make<ReadonlyArray<ProviderInstanceId>>([]);
+      const fullRefreshCalls = yield* Ref.make(0);
+      const provider = {
+        instanceId,
+        driver: ProviderDriverKind.make("codex"),
+        enabled: true,
+        installed: true,
+        version: "0.145.0",
+        status: "ready" as const,
+        auth: { status: "authenticated" as const, type: "chatgpt" as const },
+        checkedAt: "2026-01-01T00:00:00.000Z",
+        models: [],
+        slashCommands: [],
+        skills: [],
+      };
+
+      yield* buildAppUnderTest({
+        layers: {
+          providerRegistry: {
+            getProviders: Effect.succeed([provider]),
+            refreshInstance: () =>
+              Ref.update(fullRefreshCalls, (count) => count + 1).pipe(Effect.as([provider])),
+            refreshInstanceAccountUsage: (refreshedInstanceId) =>
+              Ref.update(usageRefreshCalls, (calls) => [...calls, refreshedInstanceId]).pipe(
+                Effect.as([provider]),
+              ),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const result = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.serverRefreshProviders]({
+            instanceId,
+            usageOnly: true,
+          }),
+        ),
+      );
+
+      assert.deepEqual(result.providers, [provider]);
+      assert.deepEqual(yield* Ref.get(usageRefreshCalls), [instanceId]);
+      assert.equal(yield* Ref.get(fullRefreshCalls), 0);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
   it.effect("filters thread subscription events already covered by the snapshot", () =>

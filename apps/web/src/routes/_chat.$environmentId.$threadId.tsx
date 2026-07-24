@@ -10,6 +10,7 @@ import {
   useMemo,
   useState,
 } from "react";
+import { useShallow } from "zustand/react/shallow";
 
 import ChatView from "../components/ChatView";
 import { threadHasStarted } from "../components/ChatView.logic";
@@ -28,12 +29,19 @@ import {
 } from "../diffRouteSearch";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY } from "../rightPanelLayout";
-import { selectEnvironmentState, selectThreadExistsByRef, useStore } from "../store";
+import {
+  selectEnvironmentState,
+  selectProjectsAcrossEnvironments,
+  selectThreadExistsByRef,
+  useStore,
+} from "../store";
 import { createThreadSelectorByRef } from "../storeSelectors";
 import { resolveThreadRouteRef, buildThreadRouteParams } from "../threadRoutes";
 import { RightPanelSheet } from "../components/RightPanelSheet";
 import { Sidebar, SidebarInset, SidebarProvider, SidebarRail } from "~/components/ui/sidebar";
 import { usePrimaryEnvironmentId } from "../environments/primary";
+import { resolveMeetingPrivacyRouteDisposition } from "../meetingPrivacy";
+import { useUiStateStore } from "../uiStateStore";
 
 const DiffPanel = lazy(() => import("../components/DiffPanel"));
 const DIFF_INLINE_SIDEBAR_WIDTH_STORAGE_KEY = "chat_diff_sidebar_width";
@@ -226,6 +234,32 @@ function ChatThreadRouteView() {
     (store) => selectEnvironmentState(store, threadRef?.environmentId ?? null).bootstrapComplete,
   );
   const serverThread = useStore(useMemo(() => createThreadSelectorByRef(threadRef), [threadRef]));
+  const projects = useStore(useShallow(selectProjectsAcrossEnvironments));
+  const meetingPrivacyEnabled = useUiStateStore((state) => state.meetingPrivacyEnabled);
+  const meetingPrivacyHiddenProjectKeys = useUiStateStore(
+    (state) => state.meetingPrivacyHiddenProjectKeys,
+  );
+  const meetingPrivacyHiddenProjectKeySet = useMemo(
+    () => new Set(meetingPrivacyHiddenProjectKeys),
+    [meetingPrivacyHiddenProjectKeys],
+  );
+  const routeProject = useMemo(
+    () =>
+      serverThread
+        ? (projects.find(
+            (project) =>
+              project.environmentId === serverThread.environmentId &&
+              project.id === serverThread.projectId,
+          ) ?? null)
+        : null,
+    [projects, serverThread],
+  );
+  const meetingPrivacyRouteDisposition = resolveMeetingPrivacyRouteDisposition({
+    enabled: meetingPrivacyEnabled,
+    hiddenProjectKeys: meetingPrivacyHiddenProjectKeySet,
+    project: routeProject,
+  });
+  const routeProjectHiddenForMeeting = meetingPrivacyRouteDisposition === "redirect";
   const threadExists = useStore((store) => selectThreadExistsByRef(store, threadRef));
   const environmentHasServerThreads = useStore(
     (store) => selectEnvironmentState(store, threadRef?.environmentId ?? null).threadIds.length > 0,
@@ -243,6 +277,11 @@ function ChatThreadRouteView() {
     return store.hasDraftThreadsInEnvironment(threadRef.environmentId);
   });
   const routeThreadExists = threadExists || draftThreadExists;
+  const meetingPrivacyProjectResolutionPending =
+    meetingPrivacyEnabled &&
+    meetingPrivacyHiddenProjectKeys.length > 0 &&
+    routeThreadExists &&
+    meetingPrivacyRouteDisposition === "pending";
   const serverThreadStarted = threadHasStarted(serverThread);
   const environmentHasAnyThreads = environmentHasServerThreads || environmentHasDraftThreads;
   const diffOpen = search.diff === "1";
@@ -309,13 +348,27 @@ function ChatThreadRouteView() {
   }, [navigate, primaryEnvironmentId, routeMatchesPrimaryEnvironment, threadRef]);
 
   useEffect(() => {
+    if (!routeProjectHiddenForMeeting) {
+      return;
+    }
+    void navigate({ to: "/", replace: true });
+  }, [navigate, routeProjectHiddenForMeeting]);
+
+  useEffect(() => {
     if (!threadRef || !serverThreadStarted || !draftThread?.promotedTo) {
       return;
     }
     finalizePromotedDraftThreadByRef(threadRef);
   }, [draftThread?.promotedTo, serverThreadStarted, threadRef]);
 
-  if (!threadRef || !routeMatchesPrimaryEnvironment || !bootstrapComplete || !routeThreadExists) {
+  if (
+    !threadRef ||
+    !routeMatchesPrimaryEnvironment ||
+    !bootstrapComplete ||
+    !routeThreadExists ||
+    routeProjectHiddenForMeeting ||
+    meetingPrivacyProjectResolutionPending
+  ) {
     return null;
   }
 

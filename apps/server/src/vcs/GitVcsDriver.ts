@@ -827,7 +827,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
           });
         }
 
-        const message = `Cafe Code checkpoint ref=${input.checkpointRef}`;
+        const message = `Club Code checkpoint ref=${input.checkpointRef}`;
         const commitTreeResult = yield* execute({
           operation,
           cwd: input.cwd,

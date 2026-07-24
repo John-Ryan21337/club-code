@@ -45,7 +45,44 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   getWindowOpacityState: () => ipcRenderer.invoke(IpcChannels.GET_WINDOW_OPACITY_STATE_CHANNEL),
   setWindowOpacityPreference: (preference) =>
     ipcRenderer.invoke(IpcChannels.SET_WINDOW_OPACITY_PREFERENCE_CHANNEL, preference),
+  getCompletionSpeechCapability: () =>
+    ipcRenderer.invoke(IpcChannels.GET_COMPLETION_SPEECH_CAPABILITY_CHANNEL),
+  synthesizeCompletionSpeech: (input) =>
+    ipcRenderer.invoke(IpcChannels.SYNTHESIZE_COMPLETION_SPEECH_CHANNEL, input),
   pickFolder: (options) => ipcRenderer.invoke(IpcChannels.PICK_FOLDER_CHANNEL, options),
+  getLocalMediaCapability: () => ipcRenderer.invoke(IpcChannels.GET_LOCAL_MEDIA_CAPABILITY_CHANNEL),
+  pickLocalMedia: () => ipcRenderer.invoke(IpcChannels.PICK_LOCAL_MEDIA_CHANNEL),
+  navigateLocalMedia: (input) =>
+    ipcRenderer.invoke(IpcChannels.NAVIGATE_LOCAL_MEDIA_CHANNEL, input),
+  releaseLocalMedia: (input) => ipcRenderer.invoke(IpcChannels.RELEASE_LOCAL_MEDIA_CHANNEL, input),
+  openEmbeddedBrowser: (input = {}) =>
+    ipcRenderer.invoke(IpcChannels.EMBEDDED_BROWSER_OPEN_CHANNEL, input),
+  closeEmbeddedBrowser: (input) =>
+    ipcRenderer.invoke(IpcChannels.EMBEDDED_BROWSER_CLOSE_CHANNEL, input),
+  setEmbeddedBrowserBounds: (input) =>
+    ipcRenderer.invoke(IpcChannels.EMBEDDED_BROWSER_SET_BOUNDS_CHANNEL, input),
+  shareEmbeddedBrowser: (input) =>
+    ipcRenderer.invoke(IpcChannels.EMBEDDED_BROWSER_SHARE_CHANNEL, input),
+  navigateEmbeddedBrowser: (input) =>
+    ipcRenderer.invoke(IpcChannels.EMBEDDED_BROWSER_NAVIGATE_CHANNEL, input),
+  controlEmbeddedBrowserHistory: (input) =>
+    ipcRenderer.invoke(IpcChannels.EMBEDDED_BROWSER_HISTORY_CHANNEL, input),
+  snapshotEmbeddedBrowser: (input) =>
+    ipcRenderer.invoke(IpcChannels.EMBEDDED_BROWSER_SNAPSHOT_CHANNEL, input),
+  clickEmbeddedBrowser: (input) =>
+    ipcRenderer.invoke(IpcChannels.EMBEDDED_BROWSER_CLICK_CHANNEL, input),
+  typeInEmbeddedBrowser: (input) =>
+    ipcRenderer.invoke(IpcChannels.EMBEDDED_BROWSER_TYPE_CHANNEL, input),
+  onEmbeddedBrowserState: (listener) => {
+    const wrappedListener = (_event: Electron.IpcRendererEvent, state: unknown) => {
+      if (typeof state !== "object" || state === null) return;
+      listener(state as Parameters<typeof listener>[0]);
+    };
+    ipcRenderer.on(IpcChannels.EMBEDDED_BROWSER_STATE_CHANNEL, wrappedListener);
+    return () => {
+      ipcRenderer.removeListener(IpcChannels.EMBEDDED_BROWSER_STATE_CHANNEL, wrappedListener);
+    };
+  },
   confirm: (message) => ipcRenderer.invoke(IpcChannels.CONFIRM_CHANNEL, message),
   setTheme: (theme) => ipcRenderer.invoke(IpcChannels.SET_THEME_CHANNEL, theme),
   showContextMenu: (items, position) =>

@@ -31,7 +31,7 @@ function opacityStatus(state: DesktopWindowOpacityState | null): string | null {
     case "persistence-failed":
       return "The window was rolled back because the preference could not be saved.";
     case "safe-reset-failed":
-      return "Cafe Code could not confirm a complete recovery. Restart the desktop app.";
+      return "Club Code could not confirm a complete recovery. Restart the desktop app.";
     default:
       return null;
   }
@@ -286,7 +286,7 @@ export function WindowOpacitySettings() {
     <SettingsSection title="Window transparency and safety">
       <SettingsRow
         title="Transparent desktop window"
-        description="Make the entire native Cafe Code window translucent. Lower values can reduce text legibility."
+        description="Make the entire native Club Code window translucent. Lower values can reduce text legibility."
         status={
           opacityLoadFailed
             ? "The current native state is unknown. Restore the window to opaque, then retry."

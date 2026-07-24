@@ -367,7 +367,7 @@ function AddSavedEnvironmentDialog({ actions }: { actions: SavedEnvironmentActio
       <DialogPopup showCloseButton={!isSubmitting}>
         <DialogHeader>
           <DialogTitle>Add saved environment</DialogTitle>
-          <DialogDescription>Remote Cafe Code server</DialogDescription>
+          <DialogDescription>Remote Club Code server</DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit}>
           <DialogPanel className="flex flex-col gap-4">

@@ -200,7 +200,7 @@ export const checkSourceUpdateForTests = Effect.fn("desktop.sourceUpdates.check"
       status: "unavailable",
       runtimeHash,
       checkedAt,
-      message: "No git checkout was found for this Cafe Code install.",
+      message: "No git checkout was found for this Club Code install.",
     };
   }
 

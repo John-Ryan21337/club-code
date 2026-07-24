@@ -149,7 +149,7 @@ describe("providerLoginLauncher", () => {
       },
     });
 
-    expect(command).toContain('start "Cafe Code codex login" /D "C:\\Users\\throw"');
+    expect(command).toContain('start "Club Code codex login" /D "C:\\Users\\throw"');
     expect(command).toContain('"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"');
 
     const encodedCommand = command.match(/-EncodedCommand ([A-Za-z0-9+/=]+)$/)?.[1];

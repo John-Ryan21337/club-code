@@ -129,7 +129,7 @@ function quotePowerShellString(value: string): string {
 }
 
 export function buildProviderLoginPowerShellCommand(plan: ProviderLoginLaunchPlan): string {
-  const title = `Cafe Code ${plan.commandName} login`;
+  const title = `Club Code ${plan.commandName} login`;
   return [
     `$Host.UI.RawUI.WindowTitle = ${quotePowerShellString(title)}`,
     `& ${quotePowerShellString(plan.binaryPath)} login`,
@@ -165,7 +165,7 @@ function encodePowerShellCommand(command: string): string {
 export function buildProviderLoginCmdStartCommand(plan: ProviderLoginLaunchPlan): string {
   return [
     "start",
-    quoteCmdArgument(`Cafe Code ${plan.commandName} login`),
+    quoteCmdArgument(`Club Code ${plan.commandName} login`),
     "/D",
     quoteCmdArgument(plan.cwd),
     quoteCmdArgument(powerShellPath(plan.env)),

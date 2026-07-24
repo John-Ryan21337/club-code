@@ -200,7 +200,7 @@ export function resolveProviderRuntimeEnvironment(
       }),
       layout: null,
       unavailableReason:
-        "Cafe Code bundled provider runtimes are currently supported only on Windows.",
+        "Club Code bundled provider runtimes are currently supported only on Windows.",
     };
   }
 
@@ -216,7 +216,7 @@ export function resolveProviderRuntimeEnvironment(
       }),
       layout: null,
       unavailableReason:
-        "Cafe Code could not resolve a managed provider runtime root. Set LOCALAPPDATA or CAFE_CODE_MANAGED_RUNTIME_ROOT.",
+        "Club Code could not resolve a managed provider runtime root. Set LOCALAPPDATA or CAFE_CODE_MANAGED_RUNTIME_ROOT.",
     };
   }
 

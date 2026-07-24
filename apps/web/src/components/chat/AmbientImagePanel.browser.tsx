@@ -29,6 +29,10 @@ it("seeds custom image geometry and supports keyboard move and resize handles", 
     <div className="relative h-[800px] w-[1000px]">
       <AmbientImagePanel
         asset={asset}
+        cycleAssets={[]}
+        cycleEnabled={false}
+        cycleSeconds={20}
+        presentationMode="floating"
         layoutMode="custom"
         placement="bottom-left"
         size="medium"
@@ -79,4 +83,40 @@ it("seeds custom image geometry and supports keyboard move and resize handles", 
   );
   window.dispatchEvent(new PointerEvent("pointerup", { pointerId: 7 }));
   expect(readAmbientMediaGeometry("image")!.x).toBeGreaterThan(xBeforePointerDrag);
+});
+
+it("offers stable manual cycling and a theater presentation without changing custom geometry", async () => {
+  const secondAsset = {
+    ...asset,
+    id: `sha256-${"b".repeat(64)}.gif`,
+    url: `/api/ambient-media/image/sha256-${"b".repeat(64)}.gif`,
+    mimeType: "image/gif" as const,
+  };
+  await render(
+    <div className="relative h-[800px] w-[1000px]">
+      <AmbientImagePanel
+        asset={asset}
+        cycleAssets={[asset, secondAsset]}
+        cycleEnabled
+        cycleSeconds={20}
+        presentationMode="theater"
+        layoutMode="custom"
+        placement="bottom-left"
+        size="medium"
+        stackedVideoSize={null}
+        glow={false}
+        glowColor="auto"
+        glowOpacity={0.35}
+        continueBackgroundAnimations={false}
+        onDisable={vi.fn()}
+      />
+    </div>,
+  );
+  const panel = page.getByRole("region", { name: "Ambient image" });
+  await expect.element(panel).toHaveAttribute("data-ambient-image-layout", "theater");
+  await expect.element(page.getByText("1 / 2")).toBeVisible();
+  await userEvent.click(page.getByRole("button", { name: "Next ambient image" }));
+  await expect.element(page.getByText("2 / 2")).toBeVisible();
+  await userEvent.click(page.getByRole("button", { name: "Previous ambient image" }));
+  await expect.element(page.getByText("1 / 2")).toBeVisible();
 });

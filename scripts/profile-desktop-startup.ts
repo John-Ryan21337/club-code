@@ -552,7 +552,7 @@ async function generateIndex(outDir: string, summaries: readonly ProfileSummary[
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Cafe Code desktop startup profiles</title>
+<title>Club Code desktop startup profiles</title>
 <style>
 body{font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:24px;color:#111827;background:#f9fafb}
 a{color:#0f766e}table{border-collapse:collapse;background:white;width:100%;margin:16px 0}th,td{border-bottom:1px solid #e5e7eb;padding:7px 8px;text-align:left;font-size:13px}th{background:#f3f4f6}
@@ -560,7 +560,7 @@ code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
 </style>
 </head>
 <body>
-<h1>Cafe Code Desktop Startup Profiles</h1>
+<h1>Club Code Desktop Startup Profiles</h1>
 <table><thead><tr><th>Role</th><th>PID</th><th>Reason</th><th>CPU ms</th><th>Wall ms</th><th>Flamegraph</th><th>Raw</th></tr></thead><tbody>${rows}</tbody></table>
 ${topSections}
 </body>

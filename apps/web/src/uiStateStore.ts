@@ -2,6 +2,10 @@ import { Debouncer } from "@tanstack/react-pacer";
 import { parseScopedThreadKey } from "@cafecode/client-runtime";
 import type { EnvironmentId } from "@cafecode/contracts";
 import { create } from "zustand";
+import {
+  MAX_MEETING_PRIVACY_HIDDEN_PROJECTS,
+  sanitizeMeetingPrivacyHiddenProjectKeys,
+} from "./meetingPrivacy";
 
 export const PERSISTED_STATE_KEY = "cafe-code:ui-state:v1";
 const LEGACY_PERSISTED_STATE_KEYS = [
@@ -22,6 +26,8 @@ export interface PersistedUiState {
   collapsedProjectCwds?: string[];
   expandedProjectCwds?: string[];
   projectOrderCwds?: string[];
+  meetingPrivacyEnabled?: boolean;
+  meetingPrivacyHiddenProjectKeys?: string[];
   defaultAdvertisedEndpointKey?: string | null;
   navigationSidebarOpen?: boolean;
   threadPlanSidebarOpenById?: Record<string, boolean>;
@@ -34,6 +40,10 @@ export type RightPanelTab = "plan" | "workflow";
 export interface UiProjectState {
   projectExpandedById: Record<string, boolean>;
   projectOrder: string[];
+  /** Presentation-only project identities hidden while Meeting Privacy is enabled. */
+  meetingPrivacyHiddenProjectKeys: string[];
+  /** Device-local presentation mode. Never mutates projects, threads, or providers. */
+  meetingPrivacyEnabled: boolean;
 }
 
 export interface UiThreadState {
@@ -78,6 +88,8 @@ export interface SyncThreadInput {
 const initialState: UiState = {
   projectExpandedById: {},
   projectOrder: [],
+  meetingPrivacyHiddenProjectKeys: [],
+  meetingPrivacyEnabled: false,
   threadLastVisitedAtById: {},
   threadPlanSidebarOpenById: {},
   threadRightPanelTabById: {},
@@ -120,6 +132,11 @@ function readPersistedState(): UiState {
     hydratePersistedProjectState(parsed);
     return {
       ...initialState,
+      meetingPrivacyEnabled:
+        typeof parsed.meetingPrivacyEnabled === "boolean" ? parsed.meetingPrivacyEnabled : false,
+      meetingPrivacyHiddenProjectKeys: sanitizeMeetingPrivacyHiddenProjectKeys(
+        parsed.meetingPrivacyHiddenProjectKeys,
+      ),
       defaultAdvertisedEndpointKey:
         typeof parsed.defaultAdvertisedEndpointKey === "string" &&
         parsed.defaultAdvertisedEndpointKey.length > 0
@@ -224,6 +241,10 @@ export function persistState(state: UiState): void {
         collapsedProjectCwds,
         expandedProjectCwds,
         projectOrderCwds,
+        meetingPrivacyEnabled: state.meetingPrivacyEnabled,
+        meetingPrivacyHiddenProjectKeys: sanitizeMeetingPrivacyHiddenProjectKeys(
+          state.meetingPrivacyHiddenProjectKeys,
+        ),
         defaultAdvertisedEndpointKey: state.defaultAdvertisedEndpointKey,
         navigationSidebarOpen: state.navigationSidebarOpen,
         threadPlanSidebarOpenById: state.threadPlanSidebarOpenById,
@@ -638,6 +659,55 @@ export function setNavigationSidebarOpen(state: UiState, open: boolean): UiState
   };
 }
 
+export function setMeetingPrivacyEnabled(state: UiState, enabled: boolean): UiState {
+  if (state.meetingPrivacyEnabled === enabled) {
+    return state;
+  }
+  return {
+    ...state,
+    meetingPrivacyEnabled: enabled,
+  };
+}
+
+export function setProjectMeetingPrivacyHidden(
+  state: UiState,
+  projectKey: string,
+  hidden: boolean,
+): UiState {
+  const sanitizedProjectKey = sanitizeMeetingPrivacyHiddenProjectKeys([projectKey])[0];
+  if (!sanitizedProjectKey) {
+    return state;
+  }
+
+  const currentlyHidden = state.meetingPrivacyHiddenProjectKeys.includes(sanitizedProjectKey);
+  if (currentlyHidden === hidden) {
+    return state;
+  }
+  if (
+    hidden &&
+    state.meetingPrivacyHiddenProjectKeys.length >= MAX_MEETING_PRIVACY_HIDDEN_PROJECTS
+  ) {
+    return state;
+  }
+
+  return {
+    ...state,
+    meetingPrivacyHiddenProjectKeys: hidden
+      ? [...state.meetingPrivacyHiddenProjectKeys, sanitizedProjectKey]
+      : state.meetingPrivacyHiddenProjectKeys.filter((key) => key !== sanitizedProjectKey),
+  };
+}
+
+export function clearMeetingPrivacyHiddenProjects(state: UiState): UiState {
+  if (state.meetingPrivacyHiddenProjectKeys.length === 0) {
+    return state;
+  }
+  return {
+    ...state,
+    meetingPrivacyHiddenProjectKeys: [],
+  };
+}
+
 export function toggleProject(state: UiState, projectId: string): UiState {
   const expanded = state.projectExpandedById[projectId] ?? true;
   return {
@@ -716,6 +786,9 @@ interface UiStateStore extends UiState {
   setThreadWorkflowNodeExpanded: (threadId: string, nodeId: string, expanded: boolean) => void;
   setDefaultAdvertisedEndpointKey: (key: string | null) => void;
   setNavigationSidebarOpen: (open: boolean) => void;
+  setMeetingPrivacyEnabled: (enabled: boolean) => void;
+  setProjectMeetingPrivacyHidden: (projectKey: string, hidden: boolean) => void;
+  clearMeetingPrivacyHiddenProjects: () => void;
   toggleProject: (projectId: string) => void;
   setProjectExpanded: (projectId: string, expanded: boolean) => void;
   reorderProjects: (
@@ -742,6 +815,10 @@ export const useUiStateStore = create<UiStateStore>((set) => ({
   setDefaultAdvertisedEndpointKey: (key) =>
     set((state) => setDefaultAdvertisedEndpointKey(state, key)),
   setNavigationSidebarOpen: (open) => set((state) => setNavigationSidebarOpen(state, open)),
+  setMeetingPrivacyEnabled: (enabled) => set((state) => setMeetingPrivacyEnabled(state, enabled)),
+  setProjectMeetingPrivacyHidden: (projectKey, hidden) =>
+    set((state) => setProjectMeetingPrivacyHidden(state, projectKey, hidden)),
+  clearMeetingPrivacyHiddenProjects: () => set((state) => clearMeetingPrivacyHiddenProjects(state)),
   toggleProject: (projectId) => set((state) => toggleProject(state, projectId)),
   setProjectExpanded: (projectId, expanded) =>
     set((state) => setProjectExpanded(state, projectId, expanded)),

@@ -29,7 +29,7 @@ function resolveConnectionIssue(status: WsConnectionStatus): ConnectionIssue | n
 }
 
 function getConnectionDisplayName(status: WsConnectionStatus): string {
-  return status.connectionLabel?.trim() || "Cafe Code Server";
+  return status.connectionLabel?.trim() || "Club Code Server";
 }
 
 // A running total of attempts this outage rather than "N/8": the backoff cap is

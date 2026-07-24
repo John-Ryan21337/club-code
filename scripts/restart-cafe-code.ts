@@ -31,8 +31,8 @@ interface NormalizedRestartOptions extends RestartCafeCodeArgs {
 const usage = `Usage:
   yarn restart:desktop [options] [-- command ...]
 
-Schedules a detached Node helper that waits briefly, runs Cafe Code's killall entrypoint, then
-relaunches Cafe Code. The default launch command is:
+Schedules a detached Node helper that waits briefly, runs Club Code's killall entrypoint, then
+relaunches Club Code. The default launch command is:
   node apps/desktop/scripts/start-electron.mjs
 
 Options:
@@ -283,7 +283,7 @@ async function scheduleRestart(options: NormalizedRestartOptions): Promise<void>
 
   if (options.dryRun) {
     const launchCommand = options.launchCommand ?? defaultLaunchCommand();
-    console.log("Cafe Code restart dry run.");
+    console.log("Club Code restart dry run.");
     console.log(`helper: ${process.execPath} (${helperArgs.length} args)`);
     console.log(`launch: ${commandSummary(launchCommand)}`);
     console.log(`log: ${logPath}`);
@@ -309,7 +309,7 @@ async function scheduleRestart(options: NormalizedRestartOptions): Promise<void>
     closeSync(errFd);
   }
 
-  console.log(`Scheduled Cafe Code restart helper. Log: ${logPath}`);
+  console.log(`Scheduled Club Code restart helper. Log: ${logPath}`);
 }
 
 async function runHelper(options: NormalizedRestartOptions): Promise<void> {

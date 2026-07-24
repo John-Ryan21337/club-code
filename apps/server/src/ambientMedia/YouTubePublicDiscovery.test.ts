@@ -59,6 +59,19 @@ describe("YouTube public discovery", () => {
             },
           },
           {
+            id: { kind: "youtube#video", videoId: "9bZkp7q19f0" },
+            snippet: {
+              title: "A thumbnail with a forbidden query",
+              thumbnails: {
+                medium: {
+                  url: "https://i.ytimg.com/vi/9bZkp7q19f0/mqdefault.jpg?unbounded=1",
+                  width: 320,
+                  height: 180,
+                },
+              },
+            },
+          },
+          {
             id: { kind: "youtube#video", videoId: "dQw4w9WgXcQ" },
             snippet: { title: "Duplicate" },
           },
@@ -84,6 +97,12 @@ describe("YouTube public discovery", () => {
         },
       },
       { kind: "playlist", id: "PL1234567890", title: "A playlist", thumbnail: null },
+      {
+        kind: "video",
+        id: "9bZkp7q19f0",
+        title: "A thumbnail with a forbidden query",
+        thumbnail: null,
+      },
     ]);
   });
 

@@ -61,7 +61,7 @@ export const resolveNightlyReleaseMetadata = (
     baseVersion,
     version,
     tag: `v${version}`,
-    name: `Cafe Code Nightly ${version} (${shortSha})`,
+    name: `Club Code Nightly ${version} (${shortSha})`,
     shortSha,
   };
 };

@@ -146,7 +146,7 @@ class DesktopDebugServerStartError extends Data.TaggedError("DesktopDebugServerS
   override get message() {
     return this.cause instanceof Error
       ? this.cause.message
-      : "Cafe Code debug server failed to start.";
+      : "Club Code debug server failed to start.";
   }
 }
 
@@ -1419,7 +1419,7 @@ const startUnsafe: Effect.Effect<void, DesktopDebugServerStartError, Scope.Scope
             server.off("error", onError);
             const address = server.address();
             if (!isAddressInfo(address)) {
-              reject(new Error("Cafe Code debug server did not bind to a TCP address."));
+              reject(new Error("Club Code debug server did not bind to a TCP address."));
               return;
             }
             resolve(address.port);
@@ -1435,7 +1435,7 @@ const startUnsafe: Effect.Effect<void, DesktopDebugServerStartError, Scope.Scope
     state.startedAt = new Date().toISOString();
     state.url = `http://${DEBUG_HOST}:${port}${DEBUG_PATH}`;
     startEventLoopMonitor();
-    console.info(`[Cafe Code debug] ${state.url}`);
+    console.info(`[Club Code debug] ${state.url}`);
 
     yield* Effect.addFinalizer(() =>
       Effect.sync(() => {
@@ -1448,6 +1448,6 @@ const startUnsafe: Effect.Effect<void, DesktopDebugServerStartError, Scope.Scope
 
 export const start: Effect.Effect<void, never, Scope.Scope> = startUnsafe.pipe(
   Effect.catch((error) =>
-    Effect.logError("Cafe Code debug server failed to start", { cause: error.message }),
+    Effect.logError("Club Code debug server failed to start", { cause: error.message }),
   ),
 );

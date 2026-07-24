@@ -54,8 +54,21 @@ interface MutableDayTotals {
   userMessages: number;
 }
 
+interface MutableTokenBreakdown {
+  outputTokens: number;
+  cachedInputTokens: number;
+  cacheWriteInputTokens: number;
+  compactedInputTokens: number;
+}
+
 interface ThreadTracking {
   watermark: number | undefined;
+  cacheReadWatermark: number | undefined;
+  cacheWriteWatermark: number | undefined;
+  /** Latest provider-reported live context size, used around compaction. */
+  lastUsedTokens: number | undefined;
+  /** Pre-compaction context size awaiting the provider's next usage update. */
+  compactionBeforeTokens: number | undefined;
   /**
    * Whether this process saw the session begin. Session-cumulative token
    * counters observed without it (e.g. after reattaching to a provider
@@ -77,8 +90,34 @@ interface ThreadTracking {
   modelResolutionAttempted: boolean;
 }
 
-type PendingTokenBreakdowns = Map<string, Map<ProviderDriverKind, Map<string, number>>>;
-type TokenBreakdownTotals = Map<ProviderDriverKind, Map<string, number>>;
+type PendingTokenBreakdowns = Map<
+  string,
+  Map<ProviderDriverKind, Map<string, MutableTokenBreakdown>>
+>;
+type TokenBreakdownTotals = Map<ProviderDriverKind, Map<string, MutableTokenBreakdown>>;
+
+const emptyTokenBreakdown = (): MutableTokenBreakdown => ({
+  outputTokens: 0,
+  cachedInputTokens: 0,
+  cacheWriteInputTokens: 0,
+  compactedInputTokens: 0,
+});
+
+const hasTokenBreakdownDelta = (value: Partial<MutableTokenBreakdown>): boolean =>
+  (value.outputTokens ?? 0) > 0 ||
+  (value.cachedInputTokens ?? 0) > 0 ||
+  (value.cacheWriteInputTokens ?? 0) > 0 ||
+  (value.compactedInputTokens ?? 0) > 0;
+
+const mergeTokenBreakdown = (
+  target: MutableTokenBreakdown,
+  delta: Partial<MutableTokenBreakdown>,
+): void => {
+  target.outputTokens += delta.outputTokens ?? 0;
+  target.cachedInputTokens += delta.cachedInputTokens ?? 0;
+  target.cacheWriteInputTokens += delta.cacheWriteInputTokens ?? 0;
+  target.compactedInputTokens += delta.compactedInputTokens ?? 0;
+};
 
 /**
  * Best-effort output-token extraction from an opaque `turn.completed` usage
@@ -144,9 +183,9 @@ const makeUsageStatsService = Effect.gen(function* () {
   const addTokenBreakdownTotal = (
     provider: ProviderDriverKind,
     model: string,
-    outputTokens: number,
+    delta: Partial<MutableTokenBreakdown>,
   ): void => {
-    if (outputTokens <= 0) {
+    if (!hasTokenBreakdownDelta(delta)) {
       return;
     }
     let models = tokenBreakdownTotals.get(provider);
@@ -154,7 +193,9 @@ const makeUsageStatsService = Effect.gen(function* () {
       models = new Map();
       tokenBreakdownTotals.set(provider, models);
     }
-    models.set(model, (models.get(model) ?? 0) + outputTokens);
+    const entry = models.get(model) ?? emptyTokenBreakdown();
+    mergeTokenBreakdown(entry, delta);
+    models.set(model, entry);
     tokenBreakdownSnapshotDirty = true;
   };
 
@@ -169,10 +210,10 @@ const makeUsageStatsService = Effect.gen(function* () {
     }
     tokenBreakdownSnapshot = Array.from(tokenBreakdownTotals.entries())
       .flatMap(([provider, models]) =>
-        Array.from(models.entries(), ([model, outputTokens]) => ({
+        Array.from(models.entries(), ([model, counters]) => ({
           provider,
           model,
-          outputTokens,
+          ...counters,
         })),
       )
       .toSorted((left, right) => {
@@ -211,7 +252,7 @@ const makeUsageStatsService = Effect.gen(function* () {
   yield* repository.listTokenBreakdownDays.pipe(
     Effect.map((rows) => {
       for (const row of rows) {
-        addTokenBreakdownTotal(row.provider, row.model, row.outputTokens);
+        addTokenBreakdownTotal(row.provider, row.model, row);
       }
     }),
     // Aggregate usage remains useful if only the attribution ledger is
@@ -249,22 +290,26 @@ const makeUsageStatsService = Effect.gen(function* () {
   };
 
   /**
-   * Record the same output-token observation in the aggregate and attribution
-   * accumulators. The repository later commits both maps atomically.
+   * Record provider/model token observations. Output tokens also feed the
+   * historical aggregate; cache reads, cache writes, and observed compaction
+   * savings remain separate so the UI cannot misrepresent billing.
    */
-  const addOutputTokenDelta = (
+  const addTokenBreakdownDelta = (
     day: string,
-    outputTokens: number,
+    delta: Partial<MutableTokenBreakdown>,
     provider: ProviderDriverKind,
     model: string | undefined,
   ): void => {
-    if (outputTokens <= 0) {
+    if (!hasTokenBreakdownDelta(delta)) {
       return;
     }
-    addDelta(day, { outputTokens });
+    const outputTokens = delta.outputTokens ?? 0;
+    if (outputTokens > 0) {
+      addDelta(day, { outputTokens });
+    }
 
     const modelKey = model ?? UNKNOWN_USAGE_MODEL;
-    addTokenBreakdownTotal(provider, modelKey, outputTokens);
+    addTokenBreakdownTotal(provider, modelKey, delta);
 
     let providers = pendingTokenBreakdowns.get(day);
     if (providers === undefined) {
@@ -276,7 +321,9 @@ const makeUsageStatsService = Effect.gen(function* () {
       models = new Map();
       providers.set(provider, models);
     }
-    models.set(modelKey, (models.get(modelKey) ?? 0) + outputTokens);
+    const entry = models.get(modelKey) ?? emptyTokenBreakdown();
+    mergeTokenBreakdown(entry, delta);
+    models.set(modelKey, entry);
   };
 
   const track = (threadId: string): ThreadTracking => {
@@ -284,6 +331,10 @@ const makeUsageStatsService = Effect.gen(function* () {
     if (tracking === undefined) {
       tracking = {
         watermark: undefined,
+        cacheReadWatermark: undefined,
+        cacheWriteWatermark: undefined,
+        lastUsedTokens: undefined,
+        compactionBeforeTokens: undefined,
         witnessedSessionStart: false,
         sawTokenUsageThisTurn: false,
         accrueFromMs: undefined,
@@ -388,25 +439,72 @@ const makeUsageStatsService = Effect.gen(function* () {
         });
       }
 
+      case "thread.state.changed": {
+        if (event.payload.state === "compacted") {
+          const tracking = track(event.threadId);
+          if (
+            tracking.lastUsedTokens !== undefined &&
+            tracking.lastUsedTokens > 0 &&
+            tracking.compactionBeforeTokens === undefined
+          ) {
+            tracking.compactionBeforeTokens = tracking.lastUsedTokens;
+          }
+        }
+        return Effect.void;
+      }
+
       case "thread.token-usage.updated": {
         return Effect.gen(function* () {
           const now = yield* Clock.currentTimeMillis;
           const tracking = track(event.threadId);
           tracking.sawTokenUsageThisTurn = true;
-          const counter = selectOutputCounter(event.payload.usage);
-          if (counter === undefined) {
-            return;
+          const usage = event.payload.usage;
+          const delta: Partial<MutableTokenBreakdown> = {};
+
+          if (tracking.compactionBeforeTokens !== undefined) {
+            delta.compactedInputTokens = Math.max(
+              0,
+              Math.round(tracking.compactionBeforeTokens - usage.usedTokens),
+            );
+            tracking.compactionBeforeTokens = undefined;
           }
-          const countFirstObservation =
-            counter.kind === "per-message" || tracking.witnessedSessionStart;
-          const result = tokenDelta(tracking.watermark, counter.value, countFirstObservation);
-          tracking.watermark = result.watermark;
-          if (enabled && result.delta > 0) {
+          tracking.lastUsedTokens = usage.usedTokens;
+
+          const counter = selectOutputCounter(event.payload.usage);
+          if (counter !== undefined) {
+            const countFirstObservation =
+              counter.kind === "per-message" || tracking.witnessedSessionStart;
+            const result = tokenDelta(tracking.watermark, counter.value, countFirstObservation);
+            tracking.watermark = result.watermark;
+            delta.outputTokens = result.delta;
+          }
+
+          if (usage.totalCachedInputTokens !== undefined) {
+            const result = tokenDelta(
+              tracking.cacheReadWatermark,
+              usage.totalCachedInputTokens,
+              tracking.witnessedSessionStart,
+            );
+            tracking.cacheReadWatermark = result.watermark;
+            delta.cachedInputTokens = result.delta;
+          }
+
+          if (usage.totalCacheWriteInputTokens !== undefined) {
+            const result = tokenDelta(
+              tracking.cacheWriteWatermark,
+              usage.totalCacheWriteInputTokens,
+              tracking.witnessedSessionStart,
+            );
+            tracking.cacheWriteWatermark = result.watermark;
+            delta.cacheWriteInputTokens = result.delta;
+          }
+
+          if (enabled && hasTokenBreakdownDelta(delta)) {
             if (tracking.provider !== event.provider) {
               resetAttribution(tracking, event.provider);
             }
             yield* resolveTrackingModel(event.threadId, event.provider, tracking);
-            addOutputTokenDelta(localDayKey(now), result.delta, event.provider, tracking.model);
+            addTokenBreakdownDelta(localDayKey(now), delta, event.provider, tracking.model);
           }
         });
       }
@@ -424,7 +522,12 @@ const makeUsageStatsService = Effect.gen(function* () {
                 resetAttribution(tracking, event.provider);
               }
               yield* resolveTrackingModel(event.threadId, event.provider, tracking);
-              addOutputTokenDelta(localDayKey(now), outputTokens, event.provider, tracking.model);
+              addTokenBreakdownDelta(
+                localDayKey(now),
+                { outputTokens },
+                event.provider,
+                tracking.model,
+              );
             }
           }
           tracking.sawTokenUsageThisTurn = false;
@@ -476,11 +579,11 @@ const makeUsageStatsService = Effect.gen(function* () {
     const tokenBreakdownBatch = Array.from(pendingTokenBreakdowns.entries()).flatMap(
       ([day, providers]) =>
         Array.from(providers.entries()).flatMap(([provider, models]) =>
-          Array.from(models.entries(), ([model, outputTokens]) => ({
+          Array.from(models.entries(), ([model, counters]) => ({
             day,
             provider,
             model,
-            outputTokens,
+            ...counters,
           })),
         ),
     );
@@ -515,7 +618,9 @@ const makeUsageStatsService = Effect.gen(function* () {
               models = new Map();
               providers.set(row.provider, models);
             }
-            models.set(row.model, (models.get(row.model) ?? 0) + row.outputTokens);
+            const entry = models.get(row.model) ?? emptyTokenBreakdown();
+            mergeTokenBreakdown(entry, row);
+            models.set(row.model, entry);
           }
         }).pipe(
           Effect.flatMap(() => Effect.logError("usage stats: failed to flush deltas", { error })),

@@ -18,10 +18,10 @@ export class YouTubeAccountConnectionRequestError extends Error {
       code === "not-connected"
         ? "Connect your YouTube account before loading owned playlists."
         : code === "unavailable"
-          ? "YouTube account connection is unavailable in this Cafe Code session."
+          ? "YouTube account connection is unavailable in this Club Code session."
           : code === "invalid-response"
-            ? "Cafe Code received an invalid YouTube account response."
-            : "Cafe Code could not reach the YouTube account connector.",
+            ? "Club Code received an invalid YouTube account response."
+            : "Club Code could not reach the YouTube account connector.",
     );
     this.name = "YouTubeAccountConnectionRequestError";
   }

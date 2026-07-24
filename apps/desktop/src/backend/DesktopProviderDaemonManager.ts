@@ -147,7 +147,7 @@ class ProviderDaemonSpawnError extends Data.TaggedError("ProviderDaemonSpawnErro
   override get message() {
     return this.cause instanceof Error
       ? this.cause.message
-      : "Failed to spawn Cafe Code provider daemon.";
+      : "Failed to spawn Club Code provider daemon.";
   }
 }
 

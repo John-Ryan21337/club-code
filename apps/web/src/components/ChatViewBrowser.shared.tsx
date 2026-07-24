@@ -50,6 +50,11 @@ import { createAuthenticatedSessionHandlers } from "../../test/authHttpHandlers"
 import { BrowserWsRpcHarness, type NormalizedWsRpcRequestBody } from "../../test/wsRpcHarness";
 
 import { DEFAULT_CLIENT_SETTINGS } from "@cafecode/contracts/settings";
+import { __resetAutoNudgeTurnLedgerForTests } from "../autoNudger";
+import {
+  __resetBackgroundAutoNudgeControllerForTests,
+  getBackgroundAutoNudgeController,
+} from "../backgroundAutoNudger";
 
 vi.mock("../lib/gitStatusState", () => ({
   useGitStatus: () => ({ data: null, error: null, cause: null, isPending: false }),
@@ -1566,6 +1571,38 @@ function createDesktopBridgeForChatViewTests(
       reason: "unsupported-platform",
     }),
     pickFolder: async () => null,
+    getLocalMediaCapability: async () => ({
+      available: false,
+      engine: { label: "VLC", version: null, reason: "Unavailable in browser tests." },
+    }),
+    pickLocalMedia: async () => null,
+    releaseLocalMedia: async () => false,
+    openEmbeddedBrowser: async () => {
+      throw new Error("openEmbeddedBrowser not implemented in ChatView browser test");
+    },
+    closeEmbeddedBrowser: async () => {
+      throw new Error("closeEmbeddedBrowser not implemented in ChatView browser test");
+    },
+    setEmbeddedBrowserBounds: async () => {
+      throw new Error("setEmbeddedBrowserBounds not implemented in ChatView browser test");
+    },
+    shareEmbeddedBrowser: async () => {
+      throw new Error("shareEmbeddedBrowser not implemented in ChatView browser test");
+    },
+    navigateEmbeddedBrowser: async () => {
+      throw new Error("navigateEmbeddedBrowser not implemented in ChatView browser test");
+    },
+    controlEmbeddedBrowserHistory: async () => {
+      throw new Error("controlEmbeddedBrowserHistory not implemented in ChatView browser test");
+    },
+    snapshotEmbeddedBrowser: async () => null,
+    clickEmbeddedBrowser: async () => {
+      throw new Error("clickEmbeddedBrowser not implemented in ChatView browser test");
+    },
+    typeInEmbeddedBrowser: async () => {
+      throw new Error("typeInEmbeddedBrowser not implemented in ChatView browser test");
+    },
+    onEmbeddedBrowserState: () => () => undefined,
     confirm: async () => true,
     setTheme: async () => undefined,
     showContextMenu: async () => null,
@@ -1746,6 +1783,9 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
     resetSourceControlDiscoveryStateForTests();
     await setViewport(DEFAULT_VIEWPORT);
     localStorage.clear();
+    sessionStorage.clear();
+    __resetAutoNudgeTurnLedgerForTests({ clearSessionStorage: true });
+    __resetBackgroundAutoNudgeControllerForTests({ clearStorage: true });
     document.body.innerHTML = "";
     wsRequests.length = 0;
     customWsRpcResolver = null;
@@ -2922,7 +2962,7 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
       }
     });
 
-    it("attaches an image through the composer file picker", async () => {
+    it("defaults the composer picker to all files and attaches an image", async () => {
       const mounted = await mountChatView({
         viewport: DEFAULT_VIEWPORT,
         snapshot: createSnapshotForTargetUser({
@@ -2937,16 +2977,18 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
         const attachButton = await waitForElement(
           () =>
             document.querySelector<HTMLButtonElement>(
-              '[data-chat-composer-form="true"] button[aria-label="Attach image"]',
+              '[data-chat-composer-form="true"] button[aria-label="Attach files"]',
             ),
-          "Unable to find composer attach-image button.",
+          "Unable to find composer attach-files button.",
         );
 
         const fileInput = document.querySelector<HTMLInputElement>(
           '[data-chat-composer-form="true"] input[type="file"]',
         );
         expect(fileInput).toBeTruthy();
-        expect(fileInput!.accept).toBe("image/*");
+        // Omitting an accept filter makes the native picker open on "All
+        // files" instead of forcing users to switch away from Images for .txt.
+        expect(fileInput!.accept).toBe("");
         expect(fileInput!.multiple).toBe(true);
 
         // Tapping the button forwards to the hidden file input's native picker.
@@ -2983,7 +3025,266 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
       }
     });
 
-    it("exposes the attach-image button in the mobile keyboard overlay", async () => {
+    it("adds a selected .txt file to the message as bounded visible text", async () => {
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: createSnapshotForTargetUser({
+          targetMessageId: "msg-user-attach-text" as MessageId,
+          targetText: "attach text target",
+        }),
+      });
+
+      try {
+        await waitForComposerEditor();
+        useComposerDraftStore.getState().setPrompt(THREAD_REF, "Play this queue");
+        await waitForComposerText("Play this queue");
+
+        const fileInput = document.querySelector<HTMLInputElement>(
+          '[data-chat-composer-form="true"] input[type="file"]',
+        );
+        expect(fileInput).toBeTruthy();
+        expect(fileInput!.accept).toBe("");
+
+        const transfer = new DataTransfer();
+        transfer.items.add(
+          new File(["https://youtu.be/first\nhttps://youtu.be/second"], "youtube-queue.txt", {
+            // Windows/Electron can leave a selected .txt file's MIME type
+            // empty, so extension recognition is part of the real path.
+            type: "",
+          }),
+        );
+        fileInput!.files = transfer.files;
+        fileInput!.dispatchEvent(new Event("change", { bubbles: true }));
+
+        await new Promise((resolve) => window.setTimeout(resolve, 250));
+        expect(document.body.textContent).toContain("Text file added to this message");
+        await waitForComposerText(
+          [
+            "Play this queue",
+            "",
+            "[Attached text file: youtube-queue.txt]",
+            "https://youtu.be/first",
+            "https://youtu.be/second",
+            "[End attached text file: youtube-queue.txt]",
+          ].join("\n"),
+        );
+        expect(useComposerDraftStore.getState().getComposerDraft(THREAD_REF)?.prompt).toBe(
+          [
+            "Play this queue",
+            "",
+            "[Attached text file: youtube-queue.txt]",
+            "https://youtu.be/first",
+            "https://youtu.be/second",
+            "[End attached text file: youtube-queue.txt]",
+          ].join("\n"),
+        );
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
+    it("preserves typing that lands while a selected text file is being read", async () => {
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: createSnapshotForTargetUser({
+          targetMessageId: "msg-user-attach-text-race" as MessageId,
+          targetText: "attach text race target",
+        }),
+      });
+
+      try {
+        await waitForComposerEditor();
+        useComposerDraftStore.getState().setPrompt(THREAD_REF, "Before choosing");
+        await waitForComposerText("Before choosing");
+
+        const fileInput = document.querySelector<HTMLInputElement>(
+          '[data-chat-composer-form="true"] input[type="file"]',
+        );
+        expect(fileInput).toBeTruthy();
+        const transfer = new DataTransfer();
+        transfer.items.add(new File(["from the file"], "slow.txt", { type: "text/plain" }));
+        fileInput!.files = transfer.files;
+        fileInput!.dispatchEvent(new Event("change", { bubbles: true }));
+
+        // FileReader completes asynchronously. A real keystroke/store update in
+        // this gap must be the base for the attachment, not be overwritten by
+        // the prompt snapshot from picker time.
+        useComposerDraftStore.getState().setPrompt(THREAD_REF, "Typed after choosing");
+
+        const expected = [
+          "Typed after choosing",
+          "",
+          "[Attached text file: slow.txt]",
+          "from the file",
+          "[End attached text file: slow.txt]",
+        ].join("\n");
+        await waitForComposerText(expected);
+        expect(useComposerDraftStore.getState().getComposerDraft(THREAD_REF)?.prompt).toBe(
+          expected,
+        );
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
+    it("adds .txt files from paste and drop through the same persisted prompt path", async () => {
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: createSnapshotForTargetUser({
+          targetMessageId: "msg-user-paste-drop-text" as MessageId,
+          targetText: "paste drop text target",
+        }),
+      });
+
+      try {
+        const editor = await waitForComposerEditor();
+        useComposerDraftStore.getState().setPrompt(THREAD_REF, "Sources");
+        await waitForComposerText("Sources");
+
+        const pasteTransfer = new DataTransfer();
+        pasteTransfer.items.add(new File(["pasted text"], "pasted.txt", { type: "" }));
+        const pasteEvent = new Event("paste", { bubbles: true, cancelable: true });
+        Object.defineProperty(pasteEvent, "clipboardData", { value: pasteTransfer });
+        editor.dispatchEvent(pasteEvent);
+        expect(pasteEvent.defaultPrevented).toBe(true);
+
+        const afterPaste = [
+          "Sources",
+          "",
+          "[Attached text file: pasted.txt]",
+          "pasted text",
+          "[End attached text file: pasted.txt]",
+        ].join("\n");
+        await waitForComposerText(afterPaste);
+
+        const dropTransfer = new DataTransfer();
+        dropTransfer.items.add(new File(["dropped text"], "dropped.txt", { type: "text/plain" }));
+        const composerSurface = editor.closest<HTMLElement>(
+          "[data-chat-composer-mobile-collapsed]",
+        );
+        expect(composerSurface?.parentElement).toBeTruthy();
+        composerSurface!.parentElement!.dispatchEvent(
+          new DragEvent("drop", {
+            bubbles: true,
+            cancelable: true,
+            dataTransfer: dropTransfer,
+          }),
+        );
+
+        const expected = [
+          afterPaste,
+          "",
+          "[Attached text file: dropped.txt]",
+          "dropped text",
+          "[End attached text file: dropped.txt]",
+        ].join("\n");
+        await waitForComposerText(expected);
+        expect(useComposerDraftStore.getState().getComposerDraft(THREAD_REF)?.prompt).toBe(
+          expected,
+        );
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
+    it("shows visible errors for empty, binary, and oversized .txt files", async () => {
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: createSnapshotForTargetUser({
+          targetMessageId: "msg-user-attach-invalid-text" as MessageId,
+          targetText: "attach invalid text target",
+        }),
+      });
+
+      try {
+        await waitForComposerEditor();
+        const fileInput = document.querySelector<HTMLInputElement>(
+          '[data-chat-composer-form="true"] input[type="file"]',
+        );
+        expect(fileInput).toBeTruthy();
+
+        const selectFile = (file: File) => {
+          const transfer = new DataTransfer();
+          transfer.items.add(file);
+          fileInput!.files = transfer.files;
+          fileInput!.dispatchEvent(new Event("change", { bubbles: true }));
+        };
+
+        selectFile(new File([], "empty.txt", { type: "text/plain" }));
+        await vi.waitFor(
+          () => expect(document.body.textContent).toContain("'empty.txt' is empty."),
+          { timeout: 8_000, interval: 16 },
+        );
+
+        selectFile(
+          new File([new Uint8Array([0x61, 0x00, 0x62])], "binary.txt", {
+            type: "text/plain",
+          }),
+        );
+        await vi.waitFor(
+          () =>
+            expect(document.body.textContent).toContain(
+              "'binary.txt' is not valid UTF-8 or BOM-marked UTF-16 plain text.",
+            ),
+          { timeout: 8_000, interval: 16 },
+        );
+
+        selectFile(
+          new File([new Uint8Array(256 * 1024 + 1)], "oversized.txt", { type: "text/plain" }),
+        );
+        await vi.waitFor(
+          () =>
+            expect(document.body.textContent).toContain(
+              "'oversized.txt' exceeds the 256 KiB text-file limit.",
+            ),
+          { timeout: 8_000, interval: 16 },
+        );
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
+    it("reports an unsupported all-files selection instead of silently dropping it", async () => {
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: createSnapshotForTargetUser({
+          targetMessageId: "msg-user-attach-unsupported" as MessageId,
+          targetText: "attach unsupported target",
+        }),
+      });
+
+      try {
+        await waitForComposerEditor();
+        useComposerDraftStore.getState().setPrompt(THREAD_REF, "Keep this text");
+        await waitForComposerText("Keep this text");
+
+        const fileInput = document.querySelector<HTMLInputElement>(
+          '[data-chat-composer-form="true"] input[type="file"]',
+        );
+        expect(fileInput).toBeTruthy();
+        const transfer = new DataTransfer();
+        transfer.items.add(
+          new File([new Uint8Array([1, 2, 3])], "not-supported.zip", {
+            type: "application/zip",
+          }),
+        );
+        fileInput!.files = transfer.files;
+        fileInput!.dispatchEvent(new Event("change", { bubbles: true }));
+
+        await vi.waitFor(
+          () => {
+            expect(document.body.textContent).toContain("Some files were not added");
+            expect(document.body.textContent).toContain("Attach images or plain-text .txt files.");
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+        await waitForComposerText("Keep this text");
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
+    it("exposes the attach-files button in the mobile keyboard overlay", async () => {
       // Headless Chromium reports a fine pointer, so force the touch media query
       // the composer uses to detect on-screen-keyboard devices.
       const restoreTouchMediaQuery = forceOnScreenKeyboardMediaQuery();
@@ -3007,13 +3308,13 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
 
         // Focusing opens the on-screen-keyboard overlay, which hides the footer
         // and surfaces the attach control alongside the primary action so touch
-        // users can add an image without a paste/drag affordance.
+        // users can add a file without a paste/drag affordance.
         const overlayAttachButton = await waitForElement(
           () =>
             document.querySelector<HTMLButtonElement>(
-              '[data-chat-composer-mobile-pending-actions="true"] button[aria-label="Attach image"]',
+              '[data-chat-composer-mobile-pending-actions="true"] button[aria-label="Attach files"]',
             ),
-          "Unable to find mobile overlay attach-image button.",
+          "Unable to find mobile overlay attach-files button.",
         );
 
         const fileInput = document.querySelector<HTMLInputElement>(
@@ -3659,6 +3960,189 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
   }
 
   if (chatViewBrowserPart === "navigation") {
+    it("persists Auto Nudge globally across settings navigation, remount, and Stop", async () => {
+      let persistedMode = DEFAULT_CLIENT_SETTINGS.autoNudgeMode;
+      const resolveClientSettingsUpdate = (body: NormalizedWsRpcRequestBody) => {
+        if (body._tag !== WS_METHODS.serverUpdateClientSettings) return undefined;
+        const patch =
+          body.patch && typeof body.patch === "object"
+            ? (body.patch as { autoNudgeMode?: typeof persistedMode })
+            : {};
+        if (patch.autoNudgeMode) {
+          persistedMode = patch.autoNudgeMode;
+          fixture.serverConfig = {
+            ...fixture.serverConfig,
+            clientSettings: {
+              ...fixture.serverConfig.clientSettings,
+              autoNudgeMode: persistedMode,
+            },
+          };
+        }
+        return fixture.serverConfig.clientSettings;
+      };
+      const snapshot = createSnapshotForTargetUser({
+        targetMessageId: "msg-user-auto-nudge-persistence" as MessageId,
+        targetText: "auto nudge persistence",
+      });
+      let mounted: MountedChatView | null = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot,
+        resolveRpc: resolveClientSettingsUpdate,
+      });
+
+      try {
+        const modeSelect = page.getByRole("combobox", { name: "Auto nudge mode" });
+        await expect.element(modeSelect).toHaveTextContent("Off");
+        await modeSelect.click();
+        await page.getByRole("option", { name: "Steady progress" }).click();
+
+        await vi.waitFor(
+          () => {
+            expect(
+              wsRequests.some(
+                (request) =>
+                  request._tag === WS_METHODS.serverUpdateClientSettings &&
+                  (request.patch as { autoNudgeMode?: string } | undefined)?.autoNudgeMode ===
+                    "steady-progress",
+              ),
+            ).toBe(true);
+            expect(persistedMode).toBe("steady-progress");
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+        await expect.element(modeSelect).toHaveTextContent("Steady progress");
+
+        await mounted.router.navigate({ to: "/settings/general" });
+        await waitForURL(
+          mounted.router,
+          (path) => path.startsWith("/settings"),
+          "Settings navigation should unmount the chat.",
+        );
+        expect(document.querySelector('[data-auto-nudge-control="true"]')).toBeNull();
+
+        await mounted.router.navigate({
+          to: "/$environmentId/$threadId",
+          params: { environmentId: LOCAL_ENVIRONMENT_ID, threadId: THREAD_ID },
+        });
+        await expect
+          .element(page.getByRole("combobox", { name: "Auto nudge mode" }))
+          .toHaveTextContent("Steady progress");
+
+        await mounted.cleanup();
+        mounted = await mountChatView({
+          viewport: DEFAULT_VIEWPORT,
+          snapshot,
+          configureFixture: (nextFixture) => {
+            nextFixture.serverConfig = {
+              ...nextFixture.serverConfig,
+              clientSettings: {
+                ...nextFixture.serverConfig.clientSettings,
+                autoNudgeMode: persistedMode,
+              },
+            };
+          },
+          resolveRpc: resolveClientSettingsUpdate,
+        });
+        await expect
+          .element(page.getByRole("combobox", { name: "Auto nudge mode" }))
+          .toHaveTextContent("Steady progress");
+
+        await page.getByRole("button", { name: "Stop", exact: true }).click();
+        await vi.waitFor(
+          () => {
+            expect(persistedMode).toBe("off");
+            expect(
+              wsRequests.some(
+                (request) =>
+                  request._tag === WS_METHODS.serverUpdateClientSettings &&
+                  (request.patch as { autoNudgeMode?: string } | undefined)?.autoNudgeMode ===
+                    "off",
+              ),
+            ).toBe(true);
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+        await expect
+          .element(page.getByRole("combobox", { name: "Auto nudge mode" }))
+          .toHaveTextContent("Off");
+      } finally {
+        await mounted?.cleanup();
+      }
+    });
+
+    it("preserves one opted-in Auto Nudge owner after navigating away", async () => {
+      const baseSnapshot = createSnapshotForTargetUser({
+        targetMessageId: "msg-user-auto-nudge-background" as MessageId,
+        targetText: "background continuation",
+      });
+      const completedSnapshot: OrchestrationReadModel = {
+        ...baseSnapshot,
+        threads: baseSnapshot.threads.map((thread) => ({
+          ...thread,
+          latestTurn: {
+            turnId: "turn-auto-nudge-background" as TurnId,
+            state: "completed" as const,
+            requestedAt: isoAt(1_000),
+            startedAt: isoAt(1_001),
+            completedAt: isoAt(1_010),
+            assistantMessageId: null,
+          },
+          session: thread.session
+            ? {
+                ...thread.session,
+                status: "ready" as const,
+                activeTurnId: null,
+                updatedAt: isoAt(1_010),
+              }
+            : null,
+          updatedAt: isoAt(1_010),
+        })),
+      };
+      const resolveClientSettingsUpdate = (body: NormalizedWsRpcRequestBody) => {
+        if (body._tag !== WS_METHODS.serverUpdateClientSettings) return undefined;
+        fixture.serverConfig = {
+          ...fixture.serverConfig,
+          clientSettings: {
+            ...fixture.serverConfig.clientSettings,
+            ...(body.patch as Partial<typeof DEFAULT_CLIENT_SETTINGS>),
+          },
+        };
+        return fixture.serverConfig.clientSettings;
+      };
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: completedSnapshot,
+        resolveRpc: resolveClientSettingsUpdate,
+      });
+
+      try {
+        await page.getByRole("combobox", { name: "Auto nudge mode" }).click();
+        await page.getByRole("option", { name: "Steady progress" }).click();
+        await page.getByRole("switch", { name: "Continue this thread in background" }).click();
+        await expect.element(page.getByText(/Background active · 0\/5 rounds/)).toBeInTheDocument();
+
+        await mounted.router.navigate({ to: "/settings/general" });
+        await waitForURL(
+          mounted.router,
+          (path) => path.startsWith("/settings"),
+          "Settings navigation should unmount the owned chat.",
+        );
+
+        expect(getBackgroundAutoNudgeController().getSnapshot()).toMatchObject({
+          owner: {
+            environmentId: String(LOCAL_ENVIRONMENT_ID),
+            threadId: String(THREAD_ID),
+          },
+          status: "active",
+          sentRounds: 0,
+        });
+        expect(document.querySelector('[data-auto-nudge-control="true"]')).toBeNull();
+        expect(mounted.router.state.location.pathname.startsWith("/settings")).toBe(true);
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
     it("shows runtime mode descriptions in the desktop composer access select", async () => {
       setDraftThreadWithoutWorktree();
 
@@ -5851,7 +6335,7 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
             model: "gpt-5.3-codex-spark",
           },
           planMarkdown:
-            "# Imaginary Long-Range Plan: Cafe Code Adaptive Orchestration and Safe-Delay Execution Initiative",
+            "# Imaginary Long-Range Plan: Club Code Adaptive Orchestration and Safe-Delay Execution Initiative",
         }),
       });
 
@@ -5886,7 +6370,7 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
             model: "gpt-5.3-codex-spark",
           },
           planMarkdown:
-            "# Imaginary Long-Range Plan: Cafe Code Adaptive Orchestration and Safe-Delay Execution Initiative",
+            "# Imaginary Long-Range Plan: Club Code Adaptive Orchestration and Safe-Delay Execution Initiative",
         }),
       });
 

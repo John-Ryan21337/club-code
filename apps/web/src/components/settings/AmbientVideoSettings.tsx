@@ -3,6 +3,7 @@ import {
   DEFAULT_AMBIENT_OPACITY,
   DEFAULT_AMBIENT_VIDEO_ENABLED,
   DEFAULT_AMBIENT_VIDEO_GLOW_ENABLED,
+  DEFAULT_AMBIENT_VIDEO_GLOW_MODE,
   DEFAULT_AMBIENT_VIDEO_LAYOUT_MODE,
   DEFAULT_AMBIENT_VIDEO_PRESET_PLACEMENT,
   DEFAULT_AMBIENT_VIDEO_PRESET_SIZE,
@@ -10,7 +11,7 @@ import {
   DEFAULT_AMBIENT_VIDEO_SOURCE,
   type AmbientVideoSource,
 } from "@cafecode/contracts/settings";
-import { ExternalLinkIcon, LoaderIcon, SearchIcon } from "lucide-react";
+import { ExternalLinkIcon, FileTextIcon, LoaderIcon, SearchIcon } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { parseYouTubeSource, youtubeSourceInputValue } from "../../ambientVideo";
@@ -18,6 +19,16 @@ import { useSettings, useUpdateSettings } from "../../hooks/useSettings";
 import { ensureLocalApi } from "../../localApi";
 import { useServerConfig } from "../../rpc/serverState";
 import { parseSpotifySource, spotifySourceInputValue } from "../../spotify";
+import {
+  getYouTubeUrlQueueExample,
+  readYouTubeUrlQueueFile,
+  YOUTUBE_URL_QUEUE_EXAMPLES,
+  useYouTubeUrlQueue,
+  youtubeUrlQueueStore,
+  YouTubeUrlQueueFileError,
+  type YouTubeUrlQueueExampleId,
+  type YouTubeUrlQueueParseReport,
+} from "../../youtubeUrlQueue";
 import {
   disconnectYouTubeAccount,
   getYouTubeAccountConnectionStatus,
@@ -34,6 +45,7 @@ import {
   YouTubeDiscoveryError,
 } from "../../youtubeDiscovery";
 import { Button } from "../ui/button";
+import { AmbientAudioCaptureControl } from "../ambient/AmbientAudioCaptureControl";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
 import { toastManager } from "../ui/toast";
@@ -78,6 +90,16 @@ export function AmbientVideoSettings() {
   const [ownedPlaylists, setOwnedPlaylists] = useState<readonly YouTubeOwnedPlaylist[]>([]);
   const [youtubeAccountError, setYoutubeAccountError] = useState<string | null>(null);
   const [youtubeAccountPending, setYoutubeAccountPending] = useState(false);
+  const [queueReport, setQueueReport] = useState<YouTubeUrlQueueParseReport | null>(null);
+  const [queueError, setQueueError] = useState<string | null>(null);
+  const queueFileInputRef = useRef<HTMLInputElement | null>(null);
+  const youtubeUrlQueue = useYouTubeUrlQueue();
+  const selectedQueueExample =
+    youtubeUrlQueue.exampleId === null
+      ? null
+      : getYouTubeUrlQueueExample(youtubeUrlQueue.exampleId);
+  const displayedQueueReport =
+    queueReport ?? (selectedQueueExample === null ? null : youtubeUrlQueue.report);
   const searchAbortRef = useRef<AbortController | null>(null);
   const youtubeAccountRequestRef = useRef(0);
   const youtubeAccountOperationPendingRef = useRef(false);
@@ -88,6 +110,9 @@ export function AmbientVideoSettings() {
     settings.ambientVideoSource?.kind === "spotify"
       ? spotifyPlayerAvailable
       : youtubePlayerAvailable;
+  const effectiveSelectedPlayerAvailable = youtubeUrlQueue.active
+    ? youtubePlayerAvailable
+    : selectedPlayerAvailable;
   const publicDiscoveryAvailable =
     serverConfig?.ambientExperienceCapabilities.youtubePublicDiscovery === true;
   const accountConnectionAvailable =
@@ -101,6 +126,15 @@ export function AmbientVideoSettings() {
   useEffect(() => {
     setSourceDraft(ambientSourceInputValue(settings.ambientVideoSource));
   }, [settings.ambientVideoSource]);
+
+  useEffect(() => {
+    // Do not seed from temporary local defaults before the authoritative
+    // server snapshot arrives. Otherwise a saved source could be masked by
+    // the session-only default queue during startup.
+    youtubeUrlQueueStore.initializeBundledDefault(
+      serverConfig !== null && settings.ambientVideoSource === null,
+    );
+  }, [serverConfig, settings.ambientVideoSource]);
 
   useEffect(
     () => () => {
@@ -144,7 +178,7 @@ export function AmbientVideoSettings() {
       setYoutubeAccountError(
         error instanceof YouTubeAccountConnectionRequestError
           ? error.message
-          : "Cafe Code could not check the YouTube connection.",
+          : "Club Code could not check the YouTube connection.",
       );
     }
   }, []);
@@ -188,6 +222,7 @@ export function AmbientVideoSettings() {
       return;
     }
     setSourceError(null);
+    youtubeUrlQueueStore.clear();
     updateSettings({
       ambientVideoSource: source,
       ambientVideoEnabled: source === null ? settings.ambientVideoEnabled : true,
@@ -256,12 +291,59 @@ export function AmbientVideoSettings() {
         return;
       }
       const source = { kind: result.kind, id: result.id } as const;
+      youtubeUrlQueueStore.clear();
       setSourceDraft(youtubeSourceInputValue(source));
       setSourceError(null);
       updateSettings({
         ambientVideoSource: source,
         ambientVideoEnabled: true,
       });
+    },
+    [updateSettings, youtubePlayerAvailable],
+  );
+
+  const loadUrlQueue = useCallback(
+    async (file: File) => {
+      setQueueError(null);
+      try {
+        const result = await readYouTubeUrlQueueFile(file);
+        setQueueReport(result.report);
+        if (!youtubePlayerAvailable) {
+          setQueueError("This server has not enabled YouTube playback.");
+          return;
+        }
+        if (!youtubeUrlQueueStore.load(result)) {
+          setQueueError("No valid, unique single-video YouTube URLs were found.");
+          return;
+        }
+        updateSettings({ ambientVideoEnabled: true });
+      } catch (error) {
+        setQueueReport(null);
+        setQueueError(
+          error instanceof YouTubeUrlQueueFileError
+            ? error.message
+            : "Club Code could not read that local URL queue.",
+        );
+      }
+    },
+    [updateSettings, youtubePlayerAvailable],
+  );
+
+  const loadBundledQueue = useCallback(
+    (exampleId: YouTubeUrlQueueExampleId) => {
+      setQueueError(null);
+      if (!youtubePlayerAvailable) {
+        setQueueReport(null);
+        setQueueError("This server has not enabled YouTube playback.");
+        return;
+      }
+      if (!youtubeUrlQueueStore.loadExample(exampleId)) {
+        setQueueReport(null);
+        setQueueError("That bundled URL queue does not contain a playable YouTube URL.");
+        return;
+      }
+      setQueueReport(youtubeUrlQueueStore.getSnapshot().report);
+      updateSettings({ ambientVideoEnabled: true });
     },
     [updateSettings, youtubePlayerAvailable],
   );
@@ -286,7 +368,7 @@ export function AmbientVideoSettings() {
       setYoutubeAccountError(
         error instanceof YouTubeAccountConnectionRequestError
           ? error.message
-          : "Cafe Code could not start the YouTube connection.",
+          : "Club Code could not start the YouTube connection.",
       );
     } finally {
       youtubeAccountOperationPendingRef.current = false;
@@ -330,7 +412,7 @@ export function AmbientVideoSettings() {
       setYoutubeAccountError(
         error instanceof YouTubeAccountConnectionRequestError
           ? error.message
-          : "Cafe Code could not disconnect YouTube.",
+          : "Club Code could not disconnect YouTube.",
       );
     } finally {
       youtubeAccountOperationPendingRef.current = false;
@@ -363,13 +445,14 @@ export function AmbientVideoSettings() {
     <SettingsSection title="Ambient streaming">
       <SettingsRow
         title="Show streaming player"
-        description="Play a YouTube video/playlist or an official Spotify embed in the chat area. Cafe Code never receives either service's password."
+        description="Play a YouTube video/playlist or an official Spotify embed in the chat area. YouTube playlists include previous/next controls. Club Code never receives either service's password."
         status={
           !playerAvailable ? (
             <span className="text-amber-600 dark:text-amber-400">
               This server has not enabled YouTube or Spotify playback.
             </span>
-          ) : settings.ambientVideoSource !== null && !selectedPlayerAvailable ? (
+          ) : (youtubeUrlQueue.active || settings.ambientVideoSource !== null) &&
+            !effectiveSelectedPlayerAvailable ? (
             <span className="text-amber-600 dark:text-amber-400">
               The selected streaming provider is disabled on this server.
             </span>
@@ -379,7 +462,7 @@ export function AmbientVideoSettings() {
           <Switch
             aria-label="Show ambient streaming player"
             checked={settings.ambientVideoEnabled}
-            disabled={!playerAvailable || !selectedPlayerAvailable}
+            disabled={!playerAvailable || !effectiveSelectedPlayerAvailable}
             onCheckedChange={(ambientVideoEnabled) => updateSettings({ ambientVideoEnabled })}
           />
         }
@@ -387,7 +470,7 @@ export function AmbientVideoSettings() {
 
       <SettingsRow
         title="YouTube or Spotify source"
-        description="Paste a supported YouTube or Spotify URL. Cafe Code stores only the validated provider, entity type, and ID—not pasted query data."
+        description="Paste a supported YouTube or Spotify URL. Club Code stores only the validated provider, entity type, and ID—not pasted query data."
         status={sourceError ? <span className="text-destructive">{sourceError}</span> : null}
         control={
           <div className="flex w-full max-w-md items-center gap-2">
@@ -419,6 +502,7 @@ export function AmbientVideoSettings() {
                 onClick={() => {
                   setSourceDraft("");
                   setSourceError(null);
+                  youtubeUrlQueueStore.clear();
                   updateSettings({
                     ambientVideoEnabled: false,
                     ambientVideoSource: null,
@@ -433,8 +517,98 @@ export function AmbientVideoSettings() {
       />
 
       <SettingsRow
+        title="Session URL queue"
+        description="Start with a bundled example or choose a local .txt file containing one strict YouTube video URL per line. Japanese music populates a new, otherwise unchosen session by default without turning playback on. Blank/comment lines are ignored. Queue contents are never uploaded, logged, prompted, or saved to settings."
+        status={
+          queueError ? (
+            <span className="text-destructive">{queueError}</span>
+          ) : displayedQueueReport ? (
+            <span className="text-muted-foreground">
+              {selectedQueueExample ? `${selectedQueueExample.label}: ` : null}
+              Accepted {displayedQueueReport.accepted}; skipped {displayedQueueReport.invalid}{" "}
+              invalid, {displayedQueueReport.duplicates} duplicate, {displayedQueueReport.overflow}{" "}
+              beyond the 200-item limit, {displayedQueueReport.comments} comment, and{" "}
+              {displayedQueueReport.blank} blank lines.
+            </span>
+          ) : null
+        }
+        control={
+          <div className="flex w-full max-w-md flex-wrap items-center gap-2">
+            {YOUTUBE_URL_QUEUE_EXAMPLES.map((example) => (
+              <Button
+                aria-pressed={youtubeUrlQueue.exampleId === example.id}
+                disabled={!youtubePlayerAvailable}
+                key={example.id}
+                size="xs"
+                type="button"
+                variant={youtubeUrlQueue.exampleId === example.id ? "secondary" : "outline"}
+                onClick={() => loadBundledQueue(example.id)}
+              >
+                {example.label}
+              </Button>
+            ))}
+            <input
+              ref={queueFileInputRef}
+              aria-label="Choose YouTube URL queue text file"
+              className="sr-only"
+              accept=".txt,text/plain"
+              type="file"
+              onChange={(event) => {
+                const file = event.currentTarget.files?.[0];
+                event.currentTarget.value = "";
+                if (file) void loadUrlQueue(file);
+              }}
+            />
+            <Button
+              disabled={!youtubePlayerAvailable}
+              size="xs"
+              type="button"
+              variant="outline"
+              onClick={() => queueFileInputRef.current?.click()}
+            >
+              <FileTextIcon aria-hidden="true" className="size-3.5" />
+              Choose .txt
+            </Button>
+            {youtubeUrlQueue.active ? (
+              <>
+                <span className="text-xs text-muted-foreground">
+                  URL {youtubeUrlQueue.index + 1} of {youtubeUrlQueue.count}
+                </span>
+                <Button
+                  size="xs"
+                  type="button"
+                  variant="ghost"
+                  onClick={() => {
+                    youtubeUrlQueueStore.clear();
+                    setQueueReport(null);
+                    setQueueError(null);
+                  }}
+                >
+                  Clear queue
+                </Button>
+              </>
+            ) : null}
+          </div>
+        }
+      />
+
+      <SettingsRow
+        title="Audio-reactive visualizer"
+        description="For YouTube or Spotify, explicitly share this tab/window's audio with the local MilkDrop visualizer. Cross-origin players and DRM are never bypassed; capture is session-only and stops when the player is disabled or changed."
+        control={
+          <AmbientAudioCaptureControl
+            available={
+              settings.ambientVideoEnabled &&
+              (youtubeUrlQueue.active || settings.ambientVideoSource !== null) &&
+              (youtubeUrlQueue.active ? youtubePlayerAvailable : selectedPlayerAvailable)
+            }
+          />
+        }
+      />
+
+      <SettingsRow
         title="Search YouTube"
-        description="Search public videos and playlists without connecting an account. Cafe Code sends the query only to its configured YouTube Data API service."
+        description="Search public videos and playlists without connecting an account. Club Code sends the query only to its configured YouTube Data API service."
         status={
           searchError ? (
             <span className="text-destructive">{searchError}</span>
@@ -532,7 +706,7 @@ export function AmbientVideoSettings() {
         description={
           accountConnectionAvailable
             ? "Connect the active owner session in your system browser to choose from up to 50 owned playlists. The connection lives only in server memory and ends on disconnect or restart."
-            : "Open YouTube in your browser using its normal account sign-in, then paste an embeddable playlist URL above. Cafe Code never asks for your YouTube password or Premium status."
+            : "Open YouTube in your browser using its normal account sign-in, then paste an embeddable playlist URL above. Club Code never asks for your YouTube password or Premium status."
         }
         status={
           youtubeAccountError ? (
@@ -640,6 +814,7 @@ export function AmbientVideoSettings() {
                       (candidate) => candidate.id === event.currentTarget.value,
                     );
                     if (!playlist) return;
+                    youtubeUrlQueueStore.clear();
                     updateSettings({
                       ambientVideoSource: { kind: "playlist", id: playlist.id },
                       ambientVideoEnabled: true,
@@ -806,7 +981,7 @@ export function AmbientVideoSettings() {
 
       <SettingsRow
         title="Ambient glow"
-        description="Add a soft, fading color around the player edge."
+        description="Extend a soft color wash beyond the player, like bias lighting behind a TV."
         control={
           <Switch
             aria-label="Ambient video glow"
@@ -820,28 +995,61 @@ export function AmbientVideoSettings() {
         {settings.ambientVideoGlowEnabled ? (
           <div className="flex flex-wrap items-center gap-4 pb-3 text-xs text-muted-foreground">
             <label className="flex items-center gap-2">
-              Color
-              <input
-                aria-label="Ambient video glow color"
-                type="color"
-                value={
-                  settings.ambientVideoGlowColor === "auto"
-                    ? DEFAULT_GLOW_PICKER_COLOR
-                    : settings.ambientVideoGlowColor
-                }
-                onChange={(event) =>
-                  updateSettings({ ambientVideoGlowColor: event.currentTarget.value })
-                }
-              />
+              Mode
+              <Select
+                value={settings.ambientVideoGlowMode}
+                onValueChange={(value) => {
+                  if (value === "fixed" || value === "adaptive") {
+                    updateSettings({ ambientVideoGlowMode: value });
+                  }
+                }}
+              >
+                <SelectTrigger aria-label="Ambient video glow mode" className="w-36">
+                  <SelectValue>
+                    {settings.ambientVideoGlowMode === "adaptive" ? "Match video" : "Fixed color"}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectPopup align="start" alignItemWithTrigger={false}>
+                  <SelectItem hideIndicator value="fixed">
+                    Fixed color
+                  </SelectItem>
+                  <SelectItem hideIndicator value="adaptive">
+                    Match video
+                  </SelectItem>
+                </SelectPopup>
+              </Select>
             </label>
-            <Button
-              size="xs"
-              type="button"
-              variant="ghost"
-              onClick={() => updateSettings({ ambientVideoGlowColor: "auto" })}
-            >
-              Use accent
-            </Button>
+            {settings.ambientVideoGlowMode === "fixed" ? (
+              <>
+                <label className="flex items-center gap-2">
+                  Color
+                  <input
+                    aria-label="Ambient video glow color"
+                    type="color"
+                    value={
+                      settings.ambientVideoGlowColor === "auto"
+                        ? DEFAULT_GLOW_PICKER_COLOR
+                        : settings.ambientVideoGlowColor
+                    }
+                    onChange={(event) =>
+                      updateSettings({ ambientVideoGlowColor: event.currentTarget.value })
+                    }
+                  />
+                </label>
+                <Button
+                  size="xs"
+                  type="button"
+                  variant="ghost"
+                  onClick={() => updateSettings({ ambientVideoGlowColor: "auto" })}
+                >
+                  Use accent
+                </Button>
+              </>
+            ) : (
+              <span className="max-w-72">
+                Uses the current YouTube video artwork. Other players safely use the fixed color.
+              </span>
+            )}
             <label className="flex items-center gap-2">
               Intensity
               <input
@@ -869,7 +1077,10 @@ export function AmbientVideoSettings() {
         resetAction={
           <SettingResetButton
             label="ambient streaming player"
-            onClick={() =>
+            onClick={() => {
+              youtubeUrlQueueStore.clear();
+              setQueueReport(null);
+              setQueueError(null);
               updateSettings({
                 ambientVideoEnabled: DEFAULT_AMBIENT_VIDEO_ENABLED,
                 ambientVideoSource: DEFAULT_AMBIENT_VIDEO_SOURCE,
@@ -878,10 +1089,11 @@ export function AmbientVideoSettings() {
                 ambientVideoPresetSize: DEFAULT_AMBIENT_VIDEO_PRESET_SIZE,
                 ambientVideoPresentationMode: DEFAULT_AMBIENT_VIDEO_PRESENTATION_MODE,
                 ambientVideoGlowEnabled: DEFAULT_AMBIENT_VIDEO_GLOW_ENABLED,
+                ambientVideoGlowMode: DEFAULT_AMBIENT_VIDEO_GLOW_MODE,
                 ambientVideoGlowColor: DEFAULT_AMBIENT_COLOR,
                 ambientVideoGlowOpacity: DEFAULT_AMBIENT_OPACITY,
-              })
-            }
+              });
+            }}
           />
         }
       />

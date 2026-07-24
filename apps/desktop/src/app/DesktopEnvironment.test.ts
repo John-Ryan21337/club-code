@@ -116,7 +116,7 @@ describe("DesktopEnvironment", () => {
       assert.equal(environment.isDevelopment, false);
       assert.equal(environment.stateDir, environment.path.join(environment.baseDir, "userdata"));
       assert.equal(environment.branding.stageLabel, "Alpha");
-      assert.equal(environment.displayName, "Cafe Code (Alpha)");
+      assert.equal(environment.displayName, "Club Code (Alpha)");
       assert.equal(environment.userDataDirName, "cafecode");
       assert.equal(environment.appUserModelId, "com.cafeai.cafecode");
     }),

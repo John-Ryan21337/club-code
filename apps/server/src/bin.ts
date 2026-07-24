@@ -29,7 +29,7 @@ startStartupCpuProfiler({ role: resolveStartupProfilerRole(process.argv.slice(2)
 const CliRuntimeLayer = Layer.mergeAll(NodeServices.layer, NetService.layer, FetchHttpClient.layer);
 
 export const cli = Command.make("cafe-code", { ...sharedServerCommandFlags }).pipe(
-  Command.withDescription("Run the Cafe Code server."),
+  Command.withDescription("Run the Club Code server."),
   Command.withHandler((flags) => runServerCommand(flags)),
   Command.withSubcommands([
     startCommand,

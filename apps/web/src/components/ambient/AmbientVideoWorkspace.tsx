@@ -11,9 +11,17 @@ import {
   useRef,
   useState,
 } from "react";
-import { Maximize2Icon, MoveIcon, PanelRightCloseIcon, XIcon } from "lucide-react";
+import {
+  Maximize2Icon,
+  MoveIcon,
+  PanelRightCloseIcon,
+  SkipBackIcon,
+  SkipForwardIcon,
+  XIcon,
+} from "lucide-react";
 import { cn } from "~/lib/utils";
 
+import { ambientAudioCaptureStore, useAmbientAudioCapture } from "../../ambientAudioCapture";
 import {
   clampAmbientMediaGeometry,
   readAmbientMediaGeometry,
@@ -25,13 +33,29 @@ import {
   AMBIENT_VIDEO_PRESET_WIDTHS,
   ambientVideoCinemaLayoutFits,
   ambientVideoPlayerShouldMount,
+  ambientVideoSourceSupportsPlaylistNavigation,
   youtubeEmbedUrl,
 } from "../../ambientVideo";
+import { type AmbientEdgePalette, loadYouTubeEdgePalette } from "../../ambientVideoGlow";
 import { spotifyEmbedUrl } from "../../spotify";
 import { localMediaStore, useLocalMediaElement, useLocalMediaState } from "../../localMedia";
+import {
+  connectYouTubeQueueIframe,
+  connectYouTubePlaylistIframe,
+  connectYouTubeTransportIframe,
+  type YouTubePlaylistConnection,
+  type YouTubePlaylistController,
+  YOUTUBE_PLAYLIST_IFRAME_ID,
+} from "../../youtubeIframeCommands";
+import { useYouTubeUrlQueue, youtubeUrlQueueStore } from "../../youtubeUrlQueue";
+import { registerAtmosphereControlHandler } from "../../atmosphereControlBus";
 import { useSettings, useUpdateSettings } from "../../hooks/useSettings";
 import { useServerConfig } from "../../rpc/serverState";
 import { LocalMediaPanel } from "../chat/LocalMediaPanel";
+import { LocalMediaAudioVisualizer } from "../chat/LocalMediaAudioVisualizer";
+import { AmbientAudioCaptureControl } from "./AmbientAudioCaptureControl";
+import { YouTubePlaylistControls } from "./YouTubePlaylistControls";
+import { YouTubeUrlQueueControls } from "./YouTubeUrlQueueControls";
 
 const FLOATING_HIDE_PANE_WIDTH = 640;
 const FLOATING_MARGIN = 16;
@@ -40,6 +64,9 @@ const CUSTOM_MAX_WIDTH_FRACTION = 0.9;
 const VIDEO_ASPECT_RATIO = 16 / 9;
 const KEYBOARD_MOVE_STEP = 0.02;
 const KEYBOARD_RESIZE_STEP = 0.025;
+const FLOATING_PLAYLIST_CONTROLS_HEIGHT = 36;
+const YOUTUBE_MINIMUM_VIEWPORT_HEIGHT = 200;
+const ADAPTIVE_GLOW_LOAD_TIMEOUT_MS = 5_000;
 
 interface AmbientVideoWorkspaceContextValue {
   readonly registerChatAnchor: (element: HTMLElement | null) => void;
@@ -138,13 +165,22 @@ function presetGeometry(input: {
 function geometryStyle(
   anchor: MeasuredRect,
   geometry: NormalizedAmbientMediaGeometry,
+  extraHeight = 0,
 ): CSSProperties {
-  const width = geometry.width * anchor.width;
+  const requestedWidth = geometry.width * anchor.width;
+  const availablePlayerHeight = Math.max(0, anchor.height - extraHeight);
+  const width = Math.max(
+    0,
+    Math.min(requestedWidth, availablePlayerHeight * VIDEO_ASPECT_RATIO, anchor.width),
+  );
+  const height = width / VIDEO_ASPECT_RATIO + extraHeight;
+  const requestedLeft = anchor.left + geometry.x * anchor.width;
+  const requestedTop = anchor.top + geometry.y * anchor.height;
   return {
-    left: anchor.left + geometry.x * anchor.width,
-    top: anchor.top + geometry.y * anchor.height,
+    left: Math.max(anchor.left, Math.min(requestedLeft, anchor.left + anchor.width - width)),
+    top: Math.max(anchor.top, Math.min(requestedTop, anchor.top + anchor.height - height)),
     width,
-    height: width / VIDEO_ASPECT_RATIO,
+    height,
   };
 }
 
@@ -179,6 +215,8 @@ function resolveGlowColor(value: "auto" | string): string {
 export function AmbientVideoWorkspace({ children }: { readonly children: ReactNode }) {
   const settings = useSettings();
   const localMedia = useLocalMediaState();
+  const audioCapture = useAmbientAudioCapture();
+  const youtubeUrlQueue = useYouTubeUrlQueue();
   const { updateSettings } = useUpdateSettings();
   const serverConfig = useServerConfig();
   const [rootElement, setRootElement] = useState<HTMLDivElement | null>(null);
@@ -197,14 +235,35 @@ export function AmbientVideoWorkspace({ children }: { readonly children: ReactNo
   const [playerReadiness, setPlayerReadiness] = useState<{
     readonly sourceKey: string;
     readonly element: HTMLIFrameElement;
+    readonly status: "loaded" | YouTubePlaylistConnection["status"];
+    readonly controller: YouTubePlaylistController | null;
   } | null>(null);
+  const [youtubeTransportController, setYoutubeTransportController] =
+    useState<YouTubePlaylistController | null>(null);
+  const [currentYouTubeVideoId, setCurrentYouTubeVideoId] = useState<string | null>(null);
+  const [adaptiveGlowPalette, setAdaptiveGlowPalette] = useState<AmbientEdgePalette | null>(null);
   const rootRect = useElementRect(rootElement, rootElement);
   const anchorRect = useElementRect(chatAnchor, rootElement);
   const localMediaElement = useLocalMediaElement();
   const [localMediaPaused, setLocalMediaPaused] = useState(true);
 
-  const source = settings.ambientVideoSource;
+  useEffect(() => {
+    // The workspace normally mounts before Settings. Wait for the
+    // authoritative server snapshot so a persisted source always wins over
+    // the first-run Japanese example.
+    youtubeUrlQueueStore.initializeBundledDefault(
+      serverConfig !== null && settings.ambientVideoSource === null,
+    );
+  }, [serverConfig, settings.ambientVideoSource]);
+
+  const source = youtubeUrlQueue.currentSource ?? settings.ambientVideoSource;
+  const queueActive = youtubeUrlQueue.active && youtubeUrlQueue.currentSource !== null;
   const spotifySource = source?.kind === "spotify" ? source : null;
+  const sharedAudioMatrixReactive =
+    settings.fallingEffectsEnabled &&
+    settings.fallingEffectKind === "matrix" &&
+    (settings.fallingEffectMatrixColorMode === "music-reactive" ||
+      settings.fallingEffectMatrixColorMode === "music-reactive-extra");
   const capabilityEnabled =
     source !== null &&
     (spotifySource
@@ -215,11 +274,60 @@ export function AmbientVideoWorkspace({ children }: { readonly children: ReactNo
       ? null
       : source.kind === "spotify"
         ? `spotify:${source.entityType}:${source.id}`
-        : `${source.kind}:${source.id}`;
+        : source.kind === "playlist"
+          ? `${source.kind}:${source.id}:${source.videoId ?? ""}`
+          : queueActive
+            ? `queue:${youtubeUrlQueue.index}:${youtubeUrlQueue.revision}:${source.id}`
+            : `${source.kind}:${source.id}`;
+  const adaptiveYouTubeGlowEnabled =
+    settings.ambientVideoGlowEnabled &&
+    settings.ambientVideoGlowMode === "adaptive" &&
+    source !== null &&
+    source.kind !== "spotify";
+  const sourceInitialYouTubeVideoId =
+    source?.kind === "video"
+      ? source.id
+      : source?.kind === "playlist"
+        ? (source.videoId ?? null)
+        : null;
+
+  useEffect(
+    () => () => {
+      // Source replacement and workspace teardown always revoke the shared
+      // display stream; the user must explicitly approve the next source.
+      ambientAudioCaptureStore.stop();
+    },
+    [sourceKey],
+  );
+  useEffect(() => {
+    if (!settings.ambientVideoEnabled || !capabilityEnabled || sourceKey === null) {
+      ambientAudioCaptureStore.stop();
+    }
+  }, [capabilityEnabled, settings.ambientVideoEnabled, sourceKey]);
+  useEffect(() => {
+    if (audioCapture.status === "active" && !localMedia.visualizerEnabled) {
+      ambientAudioCaptureStore.stop();
+    }
+  }, [audioCapture.status, localMedia.visualizerEnabled]);
+  const sourceSupportsPlaylistNavigation = ambientVideoSourceSupportsPlaylistNavigation(source);
+  const sourceHasNavigation = sourceSupportsPlaylistNavigation || queueActive;
   const playerReady =
     sourceKey !== null &&
     playerReadiness?.sourceKey === sourceKey &&
-    playerReadiness.element.isConnected;
+    playerReadiness.element.isConnected &&
+    (sourceSupportsPlaylistNavigation
+      ? playerReadiness.status === "ready"
+      : playerReadiness.status === "loaded");
+  const youtubePlaylistController =
+    sourceSupportsPlaylistNavigation && playerReadiness?.status === "ready"
+      ? playerReadiness.controller
+      : null;
+  const youtubePlaylistStatus =
+    sourceSupportsPlaylistNavigation && playerReadiness?.sourceKey === sourceKey
+      ? playerReadiness.status === "loaded"
+        ? "connecting"
+        : playerReadiness.status
+      : "connecting";
   const locallyRenderable =
     capabilityEnabled && settings.ambientVideoEnabled && source !== null && anchorRect !== null;
   const cinemaRequested = settings.ambientVideoPresentationMode === "cinema";
@@ -253,8 +361,107 @@ export function AmbientVideoWorkspace({ children }: { readonly children: ReactNo
   const registerPlayerFrame = useCallback((element: HTMLIFrameElement | null) => {
     if (element === null) {
       setPlayerReadiness(null);
+      // Never retain an artwork-derived palette after its authenticated frame
+      // is gone. A remounted direct video restores its known source ID on load;
+      // playlists and queues wait for a fresh exact-origin info delivery.
+      setCurrentYouTubeVideoId(null);
+      setAdaptiveGlowPalette(null);
     }
   }, []);
+
+  const playlistFrame =
+    sourceSupportsPlaylistNavigation &&
+    sourceKey !== null &&
+    playerReadiness?.sourceKey === sourceKey
+      ? playerReadiness.element
+      : null;
+  useEffect(() => {
+    if (playlistFrame === null || sourceKey === null) return;
+    return connectYouTubePlaylistIframe(
+      playlistFrame,
+      (connection) => {
+        setPlayerReadiness((current) =>
+          current?.sourceKey === sourceKey && current.element === playlistFrame
+            ? {
+                ...current,
+                status: connection.status,
+                controller: connection.controller,
+              }
+            : current,
+        );
+      },
+      undefined,
+      (videoId) => setCurrentYouTubeVideoId(videoId),
+    );
+  }, [playlistFrame, sourceKey]);
+
+  const queueFrame =
+    queueActive && sourceKey !== null && playerReadiness?.sourceKey === sourceKey
+      ? playerReadiness.element
+      : null;
+  useEffect(() => {
+    if (queueFrame === null) return;
+    const revision = youtubeUrlQueue.revision;
+    return connectYouTubeQueueIframe(
+      queueFrame,
+      (event) => {
+        youtubeUrlQueueStore.advanceAutomatically(revision, event);
+      },
+      undefined,
+      (videoId) => setCurrentYouTubeVideoId(videoId),
+    );
+  }, [queueFrame, youtubeUrlQueue.revision]);
+
+  const transportFrame =
+    source?.kind !== "spotify" &&
+    !sourceSupportsPlaylistNavigation &&
+    !queueActive &&
+    sourceKey !== null &&
+    playerReadiness?.sourceKey === sourceKey
+      ? playerReadiness.element
+      : null;
+  useEffect(() => {
+    setYoutubeTransportController(null);
+    if (transportFrame === null) return;
+    return connectYouTubeTransportIframe(transportFrame, (connection) => {
+      setYoutubeTransportController(connection.controller);
+    });
+  }, [transportFrame]);
+  const activeYouTubeTransportController = youtubeTransportController ?? youtubePlaylistController;
+
+  useEffect(() => {
+    setCurrentYouTubeVideoId(sourceInitialYouTubeVideoId);
+    setAdaptiveGlowPalette(null);
+  }, [sourceInitialYouTubeVideoId, sourceKey]);
+
+  useEffect(() => {
+    if (!adaptiveYouTubeGlowEnabled || currentYouTubeVideoId === null) {
+      setAdaptiveGlowPalette(null);
+      return;
+    }
+    const controller = new AbortController();
+    let active = true;
+    const timeout = window.setTimeout(() => controller.abort(), ADAPTIVE_GLOW_LOAD_TIMEOUT_MS);
+    void loadYouTubeEdgePalette(currentYouTubeVideoId, { signal: controller.signal })
+      .then((palette) => {
+        if (active) {
+          setAdaptiveGlowPalette(palette);
+        }
+      })
+      .catch(() => {
+        if (active) {
+          setAdaptiveGlowPalette(null);
+        }
+      })
+      .finally(() => window.clearTimeout(timeout));
+    return () => {
+      active = false;
+      controller.abort();
+      window.clearTimeout(timeout);
+    };
+  }, [adaptiveYouTubeGlowEnabled, currentYouTubeVideoId]);
+
+  const effectiveAdaptiveGlowPalette = adaptiveYouTubeGlowEnabled ? adaptiveGlowPalette : null;
 
   useEffect(() => {
     if (!localMediaElement) {
@@ -274,6 +481,127 @@ export function AmbientVideoWorkspace({ children }: { readonly children: ReactNo
       localMediaElement.removeEventListener("emptied", syncPlaybackState);
     };
   }, [localMediaElement]);
+
+  useEffect(
+    () =>
+      registerAtmosphereControlHandler(async (command) => {
+        if (command.kind === "visualizer") {
+          if (command.action !== "toggle" || localMedia.source === null) {
+            return { handled: false, message: "The visualizer is not ready." };
+          }
+          const enabled = !localMedia.visualizerEnabled;
+          localMediaStore.update({ visualizerEnabled: enabled });
+          return {
+            handled: true,
+            message: enabled ? "Visualizer enabled." : "Visualizer disabled.",
+          };
+        }
+
+        if (
+          localMediaElement !== null &&
+          (command.action === "play" || command.action === "pause" || command.action === "stop")
+        ) {
+          if (command.action === "play") {
+            try {
+              await localMediaElement.play();
+              return { handled: true, message: "Local media playing." };
+            } catch {
+              return {
+                handled: true,
+                message: "Playback needs a click in the media player.",
+              };
+            }
+          }
+          localMediaElement.pause();
+          if (command.action === "stop") {
+            try {
+              localMediaElement.currentTime = 0;
+            } catch {
+              // A freshly attached VLC stream may not expose a seekable range.
+            }
+          }
+          return {
+            handled: true,
+            message: command.action === "stop" ? "Local media stopped." : "Local media paused.",
+          };
+        }
+
+        if (
+          activeYouTubeTransportController !== null &&
+          (command.action === "play" || command.action === "pause" || command.action === "stop")
+        ) {
+          if (command.action === "play") {
+            activeYouTubeTransportController.play();
+          } else if (command.action === "pause") {
+            activeYouTubeTransportController.pause();
+          } else {
+            activeYouTubeTransportController.stop();
+          }
+          return {
+            handled: true,
+            message:
+              command.action === "play"
+                ? "Requested YouTube playback."
+                : command.action === "pause"
+                  ? "Requested YouTube pause."
+                  : "Requested YouTube stop.",
+          };
+        }
+
+        if (command.action === "next" || command.action === "previous") {
+          if (queueActive) {
+            const moved =
+              command.action === "next"
+                ? youtubeUrlQueueStore.next()
+                : youtubeUrlQueueStore.previous();
+            return {
+              handled: true,
+              message: moved
+                ? command.action === "next"
+                  ? "Skipped to the next queued video."
+                  : "Returned to the previous queued video."
+                : "The URL queue cannot move yet.",
+            };
+          }
+          if (youtubePlaylistController !== null) {
+            if (command.action === "next") {
+              youtubePlaylistController.next();
+            } else {
+              youtubePlaylistController.previous();
+            }
+            return {
+              handled: true,
+              message:
+                command.action === "next"
+                  ? "Requested the next playlist video."
+                  : "Requested the previous playlist video.",
+            };
+          }
+        }
+
+        if (command.action === "play" && source !== null && !settings.ambientVideoEnabled) {
+          updateSettings({ ambientVideoEnabled: true });
+          return { handled: true, message: "Ambient streaming enabled." };
+        }
+        if (command.action === "stop" && source !== null && settings.ambientVideoEnabled) {
+          updateSettings({ ambientVideoEnabled: false });
+          return { handled: true, message: "Ambient streaming stopped." };
+        }
+
+        return { handled: false, message: "This player does not expose that control." };
+      }),
+    [
+      localMedia.source,
+      localMedia.visualizerEnabled,
+      localMediaElement,
+      queueActive,
+      settings.ambientVideoEnabled,
+      source,
+      updateSettings,
+      youtubePlaylistController,
+      activeYouTubeTransportController,
+    ],
+  );
 
   const preset = useMemo(() => {
     if (!anchorRect) {
@@ -316,6 +644,9 @@ export function AmbientVideoWorkspace({ children }: { readonly children: ReactNo
     !localPresentationDominant &&
     anchorRect !== null &&
     anchorRect.width >= FLOATING_HIDE_PANE_WIDTH &&
+    anchorRect.height >=
+      YOUTUBE_MINIMUM_VIEWPORT_HEIGHT +
+        (sourceHasNavigation ? FLOATING_PLAYLIST_CONTROLS_HEIGHT : 0) &&
     effectiveGeometry !== null;
   const playerShouldMount = ambientVideoPlayerShouldMount(
     locallyRenderable,
@@ -523,8 +854,18 @@ export function AmbientVideoWorkspace({ children }: { readonly children: ReactNo
     if (!floatingVisible || !anchorRect || !effectiveGeometry) {
       return { display: "none" };
     }
-    return geometryStyle(anchorRect, effectiveGeometry);
-  }, [anchorRect, effectiveGeometry, floatingVisible, streamingCinemaEffective]);
+    return geometryStyle(
+      anchorRect,
+      effectiveGeometry,
+      sourceHasNavigation ? FLOATING_PLAYLIST_CONTROLS_HEIGHT : 0,
+    );
+  }, [
+    anchorRect,
+    effectiveGeometry,
+    floatingVisible,
+    sourceHasNavigation,
+    streamingCinemaEffective,
+  ]);
 
   const contextValue = useMemo(
     () => ({ registerChatAnchor, cinemaEffective, localMediaBackgroundEffective }),
@@ -563,9 +904,11 @@ export function AmbientVideoWorkspace({ children }: { readonly children: ReactNo
             role="status"
             className="pointer-events-none absolute top-3 left-1/2 z-30 -translate-x-1/2 rounded-full border border-border/80 bg-background/95 px-3 py-1.5 text-xs text-muted-foreground shadow-lg"
           >
-            {!cinemaLayoutFits
-              ? "Cinema needs more window space; using the floating layout."
-              : "Loading the player before entering cinema."}
+            {sourceSupportsPlaylistNavigation && youtubePlaylistStatus === "unavailable"
+              ? "This playlist is unavailable. Use a public or embeddable unlisted playlist."
+              : !cinemaLayoutFits
+                ? "Cinema needs more window space; using the floating layout."
+                : "Loading the player before entering cinema."}
           </div>
         ) : null}
         <div
@@ -593,6 +936,24 @@ export function AmbientVideoWorkspace({ children }: { readonly children: ReactNo
             className="absolute top-3 left-1/2 z-30 flex h-8 -translate-x-1/2 items-center gap-2 rounded-full border border-white/20 bg-black/75 px-3 text-xs text-white shadow-lg"
           >
             <span>Local video background</span>
+            <button
+              type="button"
+              aria-label="Previous local video background"
+              disabled={localMedia.navigationPending}
+              className="rounded p-1 hover:bg-white/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white disabled:opacity-40"
+              onClick={() => void localMediaStore.navigate("previous")}
+            >
+              <SkipBackIcon className="size-3.5" />
+            </button>
+            <button
+              type="button"
+              aria-label="Next local video background"
+              disabled={localMedia.navigationPending}
+              className="rounded p-1 hover:bg-white/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white disabled:opacity-40"
+              onClick={() => void localMediaStore.navigate("next")}
+            >
+              <SkipForwardIcon className="size-3.5" />
+            </button>
             <button
               type="button"
               aria-label={
@@ -651,12 +1012,20 @@ export function AmbientVideoWorkspace({ children }: { readonly children: ReactNo
         <section
           aria-label="Ambient streaming player"
           className={cn(
-            "group/ambient-video overflow-hidden rounded-xl border border-border/80 bg-black shadow-2xl",
+            "group/ambient-video relative flex flex-col overflow-hidden rounded-xl border border-border/80 bg-black shadow-2xl",
             streamingCinemaEffective
-              ? "relative z-40 col-start-1 row-start-1 flex min-h-0 min-w-0 flex-col self-center"
+              ? "relative z-40 col-start-1 row-start-1 min-h-0 min-w-0 self-center"
               : "absolute z-20",
             settings.ambientVideoGlowEnabled && "ambient-media-glow",
+            effectiveAdaptiveGlowPalette !== null && "ambient-media-glow-adaptive",
           )}
+          data-ambient-video-glow-mode={
+            settings.ambientVideoGlowEnabled
+              ? effectiveAdaptiveGlowPalette === null
+                ? "fixed"
+                : "adaptive"
+              : "off"
+          }
           data-ambient-protected-player={streamingCinemaEffective ? "true" : undefined}
           style={
             {
@@ -665,6 +1034,14 @@ export function AmbientVideoWorkspace({ children }: { readonly children: ReactNo
                 ? {
                     "--ambient-media-glow-color": resolveGlowColor(settings.ambientVideoGlowColor),
                     "--ambient-media-glow-opacity": settings.ambientVideoGlowOpacity,
+                    ...(effectiveAdaptiveGlowPalette === null
+                      ? {}
+                      : {
+                          "--ambient-media-glow-top": effectiveAdaptiveGlowPalette.top,
+                          "--ambient-media-glow-right": effectiveAdaptiveGlowPalette.right,
+                          "--ambient-media-glow-bottom": effectiveAdaptiveGlowPalette.bottom,
+                          "--ambient-media-glow-left": effectiveAdaptiveGlowPalette.left,
+                        }),
                   }
                 : {}),
             } as CSSProperties
@@ -672,34 +1049,74 @@ export function AmbientVideoWorkspace({ children }: { readonly children: ReactNo
         >
           {source !== null && playerShouldMount ? (
             <iframe
+              key={sourceKey}
               allow={
                 spotifySource
                   ? "autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
                   : "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
               }
               allowFullScreen
-              className={cn(
-                "block w-full border-0 bg-black",
-                streamingCinemaEffective ? "aspect-video" : "h-full",
-              )}
+              className="block aspect-video w-full shrink-0 border-0 bg-black"
+              id={source.kind === "spotify" ? undefined : YOUTUBE_PLAYLIST_IFRAME_ID}
               ref={registerPlayerFrame}
               referrerPolicy="strict-origin-when-cross-origin"
               sandbox="allow-scripts allow-same-origin allow-presentation allow-popups"
-              src={source.kind === "spotify" ? spotifyEmbedUrl(source) : youtubeEmbedUrl(source)}
+              src={
+                source.kind === "spotify"
+                  ? spotifyEmbedUrl(source)
+                  : youtubeEmbedUrl(source, { autoplay: queueActive })
+              }
               onLoad={(event) => {
                 if (sourceKey !== null) {
-                  setPlayerReadiness({ sourceKey, element: event.currentTarget });
+                  const element = event.currentTarget;
+                  setCurrentYouTubeVideoId(sourceInitialYouTubeVideoId);
+                  setAdaptiveGlowPalette(null);
+                  setPlayerReadiness((current) =>
+                    current?.sourceKey === sourceKey &&
+                    current.element === element &&
+                    current.status !== "unavailable"
+                      ? current
+                      : {
+                          sourceKey,
+                          element,
+                          status: sourceSupportsPlaylistNavigation ? "connecting" : "loaded",
+                          controller: null,
+                        },
+                  );
                 }
               }}
               title={
                 spotifySource
                   ? `Ambient Spotify ${spotifySource.entityType} player`
-                  : source.kind === "video"
-                    ? "Ambient YouTube video player"
-                    : "Ambient YouTube playlist player"
+                  : queueActive
+                    ? "Ambient YouTube URL queue player"
+                    : source.kind === "video"
+                      ? "Ambient YouTube video player"
+                      : "Ambient YouTube playlist player"
               }
             />
           ) : null}
+          {audioCapture.status === "active" &&
+          (localMedia.visualizerEnabled || sharedAudioMatrixReactive) ? (
+            <LocalMediaAudioVisualizer
+              enabled={localMedia.visualizerEnabled}
+              mediaElement={null}
+              mediaStream={audioCapture.stream}
+              style={localMedia.visualizerStyle}
+              presetName={localMedia.visualizerPresetName}
+              autoCycle={localMedia.visualizerAutoCycle}
+              cycleSeconds={localMedia.visualizerCycleSeconds}
+              blendSeconds={localMedia.visualizerBlendSeconds}
+              onPresetChange={(visualizerPresetName) =>
+                localMediaStore.update({ visualizerPresetName })
+              }
+            />
+          ) : null}
+          <AmbientAudioCaptureControl
+            available={locallyRenderable}
+            compact
+            className="absolute bottom-2 left-2 z-30"
+          />
 
           {streamingCinemaEffective ? (
             <div className="order-first flex h-10 shrink-0 items-center justify-between border-b border-white/15 bg-card px-3 text-xs text-foreground">
@@ -711,6 +1128,14 @@ export function AmbientVideoWorkspace({ children }: { readonly children: ReactNo
                 Cinema workspace
               </h2>
               <div className="flex items-center gap-1">
+                {queueActive ? (
+                  <YouTubeUrlQueueControls />
+                ) : sourceSupportsPlaylistNavigation ? (
+                  <YouTubePlaylistControls
+                    controller={youtubePlaylistController}
+                    status={youtubePlaylistStatus}
+                  />
+                ) : null}
                 <button
                   type="button"
                   className="inline-flex items-center gap-1 rounded-md px-2 py-1 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -728,6 +1153,19 @@ export function AmbientVideoWorkspace({ children }: { readonly children: ReactNo
                   Disable video
                 </button>
               </div>
+            </div>
+          ) : null}
+
+          {!streamingCinemaEffective && floatingVisible && sourceHasNavigation ? (
+            <div className="order-last flex h-9 shrink-0 items-center justify-center border-t border-border/80 bg-card px-2 text-foreground">
+              {queueActive ? (
+                <YouTubeUrlQueueControls />
+              ) : (
+                <YouTubePlaylistControls
+                  controller={youtubePlaylistController}
+                  status={youtubePlaylistStatus}
+                />
+              )}
             </div>
           ) : null}
 
