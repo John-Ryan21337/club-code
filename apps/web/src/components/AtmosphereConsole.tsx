@@ -65,13 +65,13 @@ type Preferences = typeof PreferencesSchema.Type;
 
 const DEFAULT_PREFERENCES: Preferences = {
   open: true,
-  anchor: "bottom-left",
+  anchor: "custom",
   lmStudioEnabled: false,
   geometry: {
-    x: VIEWPORT_MARGIN,
+    x: 321,
     y: 280,
-    width: DEFAULT_WIDTH,
-    height: DEFAULT_HEIGHT,
+    width: 622,
+    height: 477.5,
   },
 };
 

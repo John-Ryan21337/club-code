@@ -348,6 +348,7 @@ const make = Effect.gen(function* () {
         sandbox: true,
       },
     });
+    window.maximize();
     yield* opacityMutex.withPermits(1)(prepareWindowOpacity(window));
     yield* desktopIpc.trustWebContents(window.webContents, rendererUrl);
     const removeDisplayMediaCapture = installTrustedFrameAudioCapture(

@@ -842,6 +842,66 @@ export const DEFAULT_AMBIENT_CLIENT_SETTINGS: AmbientClientSettings = {
 
 export const DEFAULT_CLIENT_SETTINGS: ClientSettings = Schema.decodeSync(ClientSettingsSchema)({});
 
+export const CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET: AmbientImageAsset = Schema.decodeSync(
+  AmbientImageAsset,
+)({
+  id: "sha256-8588e8b7fbd641dc21271be3c1f9d78a8b1449e44a0c9b951e3d3ad90f6d8f82.gif",
+  url: "/api/ambient-media/image/sha256-8588e8b7fbd641dc21271be3c1f9d78a8b1449e44a0c9b951e3d3ad90f6d8f82.gif",
+  mimeType: "image/gif",
+  width: 1080,
+  height: 1080,
+  sizeBytes: 2_042_330,
+});
+
+/**
+ * The branded first-run experience for a genuinely new Club Code profile.
+ *
+ * Keep this separate from `DEFAULT_CLIENT_SETTINGS`: schema decoding, malformed
+ * persisted documents, and ambient recovery intentionally retain the
+ * conservative defaults above. The server selects and persists this profile
+ * only when `client-settings.json` does not exist.
+ */
+export const CLUB_CODE_FIRST_RUN_CLIENT_SETTINGS: ClientSettings = Schema.decodeSync(
+  ClientSettingsSchema,
+)({
+  ...DEFAULT_CLIENT_SETTINGS,
+  fallingEffectsEnabled: true,
+  fallingEffectKind: "matrix",
+  fallingEffectMatrixColorMode: "rainbow",
+  fallingEffectOpacity: 0.55,
+  fallingEffectSpeed: 4,
+  fallingEffectDensity: 2.5,
+  fallingEffectJapaneseRatio: 0.45,
+  fallingEffect2chEnriched: true,
+  fallingEffectLiveWorkVocabulary: true,
+  fallingEffectActivityLinks: true,
+  fallingEffectActivityLinkColorMode: "matrix",
+  ambientVideoEnabled: true,
+  ambientVideoSource: null,
+  ambientVideoLayoutMode: "custom",
+  ambientVideoPresetPlacement: "bottom-right",
+  ambientVideoPresetSize: "large",
+  ambientVideoPresentationMode: "floating",
+  ambientVideoGlowEnabled: true,
+  ambientVideoGlowMode: "adaptive",
+  ambientVideoGlowColor: "auto",
+  ambientVideoGlowOpacity: 0.65,
+  ambientImageEnabled: true,
+  ambientImageAsset: CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET,
+  ambientImagePresentationMode: "floating",
+  ambientImageLayoutMode: "preset",
+  ambientImagePresetPlacement: "bottom-left",
+  ambientImagePresetSize: "large",
+  ambientImageGlowEnabled: true,
+  ambientImageGlowColor: "auto",
+  ambientImageGlowOpacity: 0.35,
+  workflowObservatoryEnabled: true,
+  providerUsageWidgetEnabled: true,
+  providerUsagePollMinutes: 2,
+  modelPacingEnabled: true,
+  modelPacingReservePercent: 5,
+});
+
 export type ClientSettingsKey = keyof ClientSettings;
 
 export const CLIENT_SETTINGS_KEYS = Object.keys(

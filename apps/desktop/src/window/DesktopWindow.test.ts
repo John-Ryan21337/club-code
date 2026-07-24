@@ -60,6 +60,7 @@ function makeFakeBrowserWindow() {
     isMinimized: vi.fn(() => false),
     isVisible: vi.fn(() => true),
     loadURL: vi.fn(() => Promise.resolve()),
+    maximize: vi.fn(),
     on: vi.fn(),
     once: vi.fn(),
     restore: vi.fn(),
@@ -74,6 +75,7 @@ function makeFakeBrowserWindow() {
   return {
     window: window as unknown as Electron.BrowserWindow,
     loadURL: window.loadURL,
+    maximize: window.maximize,
     openDevTools: webContents.openDevTools,
     setOpacity: window.setOpacity,
   };
@@ -146,9 +148,15 @@ function makeTestLayer(input: {
   readonly window: Electron.BrowserWindow;
   readonly createCount: Ref.Ref<number>;
   readonly mainWindow: Ref.Ref<Option.Option<Electron.BrowserWindow>>;
+  readonly createOptions?: Array<Electron.BrowserWindowConstructorOptions>;
 }) {
   const electronWindowLayer = Layer.succeed(ElectronWindow.ElectronWindow, {
-    create: () => Ref.update(input.createCount, (count) => count + 1).pipe(Effect.as(input.window)),
+    create: (options) =>
+      Effect.gen(function* () {
+        input.createOptions?.push(options);
+        yield* Ref.update(input.createCount, (count) => count + 1);
+        return input.window;
+      }),
     main: Ref.get(input.mainWindow),
     currentMainOrFirst: Ref.get(input.mainWindow),
     focusedMainOrFirst: Ref.get(input.mainWindow),
@@ -201,10 +209,12 @@ describe("DesktopWindow", () => {
       const fakeWindow = makeFakeBrowserWindow();
       const createCount = yield* Ref.make(0);
       const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const createOptions: Array<Electron.BrowserWindowConstructorOptions> = [];
       const layer = makeTestLayer({
         window: fakeWindow.window,
         createCount,
         mainWindow,
+        createOptions,
       });
 
       yield* Effect.gen(function* () {
@@ -214,6 +224,14 @@ describe("DesktopWindow", () => {
 
         yield* desktopWindow.handleBackendReady;
         assert.equal(yield* Ref.get(createCount), 1);
+        assert.equal(createOptions[0]?.show, false);
+        assert.equal(createOptions[0]?.minWidth, 840);
+        assert.equal(createOptions[0]?.minHeight, 620);
+        assert.equal(fakeWindow.maximize.mock.calls.length, 1);
+        assert.isTrue(
+          fakeWindow.maximize.mock.invocationCallOrder[0]! <
+            fakeWindow.loadURL.mock.invocationCallOrder[0]!,
+        );
         assert.deepEqual(fakeWindow.loadURL.mock.calls[0], ["http://127.0.0.1:5733/"]);
         assert.equal(fakeWindow.openDevTools.mock.calls.length, 1);
       }).pipe(Effect.provide(layer));

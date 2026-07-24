@@ -10,6 +10,7 @@ import {
   AMBIENT_CLIENT_SETTINGS_KEYS,
   ClientSettingsError,
   ClientSettingsSchema,
+  CLUB_CODE_FIRST_RUN_CLIENT_SETTINGS,
   DEFAULT_AMBIENT_CLIENT_SETTINGS,
   DEFAULT_CLIENT_SETTINGS,
   type ClientSettings,
@@ -261,7 +262,8 @@ const makeServerClientSettings = Effect.gen(function* () {
 
   const loadSettingsFromDisk = Effect.gen(function* () {
     if (!(yield* readConfigExists)) {
-      return DEFAULT_CLIENT_SETTINGS;
+      yield* writeSettingsAtomically(CLUB_CODE_FIRST_RUN_CLIENT_SETTINGS);
+      return CLUB_CODE_FIRST_RUN_CLIENT_SETTINGS;
     }
 
     const raw = yield* readRawConfig;

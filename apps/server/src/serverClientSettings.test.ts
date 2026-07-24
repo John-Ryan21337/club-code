@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   ClientSettingsPatch,
+  CLUB_CODE_FIRST_RUN_CLIENT_SETTINGS,
   DEFAULT_AMBIENT_CLIENT_SETTINGS,
   DEFAULT_CLIENT_SETTINGS,
   MAX_SIDEBAR_STAR_SPEED,
@@ -40,6 +41,24 @@ it.layer(NodeServices.layer)("server client settings", (it) => {
       });
       assert.throws(() => decodePatch({ sidebarStarSpeed: MAX_SIDEBAR_STAR_SPEED * 2 }));
     }),
+  );
+
+  it.effect("persists the Club Code first-run profile when the settings file is absent", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const config = yield* ServerConfig;
+      const service = yield* ServerClientSettingsService;
+
+      assert.isFalse(yield* fs.exists(config.clientSettingsPath));
+
+      const settings = yield* service.getSettings;
+      const raw = yield* fs.readFileString(config.clientSettingsPath);
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      const persisted = JSON.parse(raw) as typeof settings;
+
+      assert.deepEqual(settings, CLUB_CODE_FIRST_RUN_CLIENT_SETTINGS);
+      assert.deepEqual(persisted, CLUB_CODE_FIRST_RUN_CLIENT_SETTINGS);
+    }).pipe(Effect.provide(makeServerClientSettingsLayer())),
   );
 
   it.effect("migrates legacy desktop client-settings.json branding images", () =>
@@ -193,7 +212,7 @@ it.layer(NodeServices.layer)("server client settings", (it) => {
     }).pipe(Effect.provide(makeServerClientSettingsLayer())),
   );
 
-  it.effect("falls back the whole document when an unrelated setting is malformed", () =>
+  it.effect("keeps whole-document corruption on conservative schema defaults", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const config = yield* ServerConfig;
@@ -212,6 +231,7 @@ it.layer(NodeServices.layer)("server client settings", (it) => {
       const settings = yield* service.getSettings;
 
       assert.deepEqual(settings, DEFAULT_CLIENT_SETTINGS);
+      assert.notDeepEqual(settings, CLUB_CODE_FIRST_RUN_CLIENT_SETTINGS);
     }).pipe(Effect.provide(makeServerClientSettingsLayer())),
   );
 

@@ -95,7 +95,7 @@ describe("DesktopSettings", () => {
       updateChannel: "nightly",
       updateChannelConfiguredByUser: false,
       windowOpacityEnabled: false,
-      windowOpacity: 1,
+      windowOpacity: 0.84,
     } satisfies DesktopSettingsValue);
   });
 
@@ -190,7 +190,7 @@ describe("DesktopSettings", () => {
           updateChannel: "latest",
           updateChannelConfiguredByUser: false,
           windowOpacityEnabled: false,
-          windowOpacity: 1,
+          windowOpacity: 0.84,
         } satisfies DesktopSettingsValue);
       }),
     ),
@@ -275,7 +275,7 @@ describe("DesktopSettings", () => {
           updateChannel: "latest",
           updateChannelConfiguredByUser: false,
           windowOpacityEnabled: false,
-          windowOpacity: 1,
+          windowOpacity: 0.84,
         } satisfies DesktopSettingsValue);
       }),
     ),
@@ -296,7 +296,7 @@ describe("DesktopSettings", () => {
           updateChannel: "nightly",
           updateChannelConfiguredByUser: false,
           windowOpacityEnabled: false,
-          windowOpacity: 1,
+          windowOpacity: 0.84,
         } satisfies DesktopSettingsValue);
       }),
       { appVersion: "0.0.17-nightly.20260415.1" },

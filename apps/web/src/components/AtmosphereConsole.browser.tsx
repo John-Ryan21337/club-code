@@ -36,7 +36,17 @@ describe("AtmosphereConsole", () => {
     await render(<AtmosphereConsole />);
 
     const panel = page.getByRole("region", { name: "Atmosphere console" });
-    await expect.element(panel).toHaveAttribute("data-atmosphere-console-anchor", "bottom-left");
+    await expect.element(panel).toHaveAttribute("data-atmosphere-console-anchor", "custom");
+    const width = Math.min(622, Math.max(292, window.innerWidth - 24));
+    const height = Math.min(477.5, Math.max(188, window.innerHeight - 24));
+    expect(panel.element().style.left).toBe(
+      `${Math.min(321, Math.max(12, window.innerWidth - width - 12))}px`,
+    );
+    expect(panel.element().style.top).toBe(
+      `${Math.min(280, Math.max(12, window.innerHeight - height - 12))}px`,
+    );
+    expect(panel.element().style.width).toBe(`${width}px`);
+    expect(panel.element().style.height).toBe(`${height}px`);
 
     const command = page.getByLabelText("Tell Club Code what to change");
     await command.fill("matrix");
