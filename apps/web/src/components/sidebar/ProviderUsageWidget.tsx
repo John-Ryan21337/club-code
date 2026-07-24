@@ -27,11 +27,18 @@ interface UsageWindowRow {
   readonly identity: ModelPacingLimitIdentity;
 }
 
+interface UsageExhaustionNotice {
+  readonly key: string;
+  readonly label: string;
+  readonly message: string;
+}
+
 interface ProviderUsageRow {
   readonly instanceId: ServerProvider["instanceId"];
   readonly name: string;
   readonly checkedAt: string;
   readonly windows: ReadonlyArray<UsageWindowRow>;
+  readonly exhaustionNotices: ReadonlyArray<UsageExhaustionNotice>;
 }
 
 const clampPercent = (value: number): number => Math.max(0, Math.min(100, value));
@@ -109,6 +116,44 @@ function snapshotWindows(
   ].filter((row): row is UsageWindowRow => row !== null);
 }
 
+function snapshotExhaustionNotices(
+  snapshotKey: string,
+  snapshot: ServerProviderAccountRateLimitSnapshot,
+  provider: ServerProvider,
+): ReadonlyArray<UsageExhaustionNotice> {
+  const identity = identifyModelPacingLimit({
+    snapshotKey,
+    snapshot,
+    models: provider.models,
+  });
+  const notices: UsageExhaustionNotice[] = [];
+  const add = (suffix: string, message: string) => {
+    notices.push({
+      key: `${snapshotKey}:${suffix}`,
+      label: identity.label,
+      message,
+    });
+  };
+
+  if (snapshot.rateLimitReachedType) {
+    add("provider-reached", "The provider reports that this usage limit has been reached.");
+  }
+  if (snapshot.spendControlReached) {
+    add("spend-control", "The provider reports that this spend control has been reached.");
+  }
+  if ((snapshot.primary?.usedPercent ?? 0) >= 100) {
+    add("primary", "The current session window is exhausted.");
+  }
+  if ((snapshot.secondary?.usedPercent ?? 0) >= 100) {
+    add("secondary", "The weekly window is exhausted.");
+  }
+  if ((snapshot.individualLimit?.remainingPercent ?? 1) <= 0) {
+    add("individual", "The provider reports no remaining individual spend allowance.");
+  }
+
+  return notices;
+}
+
 export function buildProviderUsageRows(
   providers: ReadonlyArray<ServerProvider>,
 ): ReadonlyArray<ProviderUsageRow> {
@@ -128,7 +173,10 @@ export function buildProviderUsageRows(
     const windows = snapshots.flatMap(([key, snapshot]) =>
       snapshotWindows(key, snapshot, provider),
     );
-    if (windows.length === 0) {
+    const exhaustionNotices = snapshots.flatMap(([key, snapshot]) =>
+      snapshotExhaustionNotices(key, snapshot, provider),
+    );
+    if (windows.length === 0 && exhaustionNotices.length === 0) {
       return [];
     }
     return [
@@ -137,6 +185,7 @@ export function buildProviderUsageRows(
         name: provider.displayName ?? (provider.driver === "codex" ? "Codex" : "Claude"),
         checkedAt: provider.accountRateLimits.checkedAt,
         windows,
+        exhaustionNotices,
       },
     ];
   });
@@ -319,6 +368,7 @@ export function ProviderUsageWidget() {
       {settings.modelPacingEnabled ? (
         <p className="mt-1 text-[9px] leading-relaxed text-sidebar-foreground/45">
           Model Pacing reserves {settings.modelPacingReservePercent}% and never reroutes chats.
+          Provider-reported exhaustion overrides pace advice.
         </p>
       ) : null}
 
@@ -343,6 +393,16 @@ export function ProviderUsageWidget() {
                 </time>
               </div>
               <div className="space-y-2">
+                {provider.exhaustionNotices.map((notice) => (
+                  <div
+                    className="rounded border border-destructive/45 bg-destructive/10 px-1.5 py-1 text-[9px] font-medium leading-relaxed text-destructive"
+                    data-provider-usage-exhausted
+                    key={notice.key}
+                    role="alert"
+                  >
+                    {notice.label}: {notice.message}
+                  </div>
+                ))}
                 {provider.windows.map((window) => {
                   const reset = resetLabel(window.resetsAt);
                   const pacing = settings.modelPacingEnabled
