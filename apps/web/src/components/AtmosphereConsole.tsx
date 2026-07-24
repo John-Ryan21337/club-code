@@ -69,7 +69,7 @@ const DEFAULT_PREFERENCES: Preferences = {
   lmStudioEnabled: false,
   geometry: {
     x: VIEWPORT_MARGIN,
-    y: 280,
+    y: 340,
     width: DEFAULT_WIDTH,
     height: DEFAULT_HEIGHT,
   },

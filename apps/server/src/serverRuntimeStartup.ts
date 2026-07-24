@@ -1,6 +1,7 @@
 import {
   CommandId,
   DEFAULT_MODEL,
+  DEFAULT_AMBIENT_IMAGE_ASSET,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   type ModelSelection,
   ProjectId,
@@ -21,8 +22,9 @@ import * as Scope from "effect/Scope";
 import * as Context from "effect/Context";
 import * as Console from "effect/Console";
 import * as DateTime from "effect/DateTime";
+import * as FileSystem from "effect/FileSystem";
 
-import { ServerConfig } from "./config.ts";
+import { resolveStaticDir, ServerConfig } from "./config.ts";
 import { Keybindings } from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine.ts";
@@ -262,6 +264,71 @@ const runStartupPhase = <A, E, R>(phase: string, effect: Effect.Effect<A, E, R>)
     Effect.withSpan(`server.startup.${phase}`),
   );
 
+const seedDefaultAmbientImage = Effect.fn(function* (clientSettings: ServerClientSettingsService, ambientImages: AmbientImageStore) {
+  const settingsReady = yield* clientSettings.ready.pipe(
+    Effect.timeoutOption(CLIENT_SETTINGS_READY_FOR_MAINTENANCE_TIMEOUT),
+  );
+  if (Option.isNone(settingsReady)) {
+    yield* Effect.logWarning("ambient image default seed skipped", {
+      reason: "client-settings-not-ready",
+    });
+    return;
+  }
+
+  const settings = yield* clientSettings.getSettings;
+  if (
+    !settings.ambientImageEnabled ||
+    settings.ambientImageAsset?.id !== DEFAULT_AMBIENT_IMAGE_ASSET.id
+  ) {
+    return;
+  }
+
+  const alreadyStored = yield* ambientImages
+    .resolveStoredImage(DEFAULT_AMBIENT_IMAGE_ASSET.id)
+    .pipe(
+      Effect.as(true),
+      Effect.catch(() => Effect.succeed(false)),
+    );
+  if (alreadyStored) return;
+
+  const staticDir = yield* resolveStaticDir;
+  if (staticDir === undefined) {
+    yield* Effect.logWarning("ambient default image seed skipped", {
+      reason: "static-dir-unavailable",
+      id: DEFAULT_AMBIENT_IMAGE_ASSET.id,
+    });
+    return;
+  }
+
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const sourcePath = path.join(staticDir, "ambient-default.gif");
+  const sourceExists = yield* fs.exists(sourcePath).pipe(Effect.orElseSucceed(() => false));
+  if (!sourceExists) {
+    yield* Effect.logWarning("ambient default image seed skipped", {
+      reason: "source-missing",
+      sourcePath: sourcePath,
+      id: DEFAULT_AMBIENT_IMAGE_ASSET.id,
+    });
+    return;
+  }
+
+  const bytes = yield* fs.readFile(sourcePath);
+  const seededImage = yield* ambientImages.storeUploadedImage({ bytes });
+  if (seededImage.id !== DEFAULT_AMBIENT_IMAGE_ASSET.id) {
+    yield* Effect.logWarning("ambient default image seed id mismatch", {
+      expectedId: DEFAULT_AMBIENT_IMAGE_ASSET.id,
+      actualId: seededImage.id,
+    });
+    yield* clientSettings.updateSettings({ ambientImageAsset: seededImage });
+    return;
+  }
+
+  yield* Effect.logInfo("ambient default image seeded", {
+    ambientImageId: seededImage.id,
+  });
+});
+
 export const makeServerRuntimeStartup = Effect.gen(function* () {
   const serverConfig = yield* ServerConfig;
   const keybindings = yield* Keybindings;
@@ -354,6 +421,17 @@ export const makeServerRuntimeStartup = Effect.gen(function* () {
       }).pipe(
         Effect.catch((cause) =>
           Effect.logWarning("ambient image orphan sweep failed", {
+            cause,
+          }),
+        ),
+      ),
+    );
+
+    yield* runStartupPhase(
+      "ambient-images.default-seed",
+      seedDefaultAmbientImage(clientSettings, ambientImages).pipe(
+        Effect.catch((cause) =>
+          Effect.logWarning("ambient image default seed failed", {
             cause,
           }),
         ),

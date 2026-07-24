@@ -145,17 +145,17 @@ export type ModelPacingReservePercent = typeof ModelPacingReservePercent.Type;
 
 export const MIN_AMBIENT_OPACITY = 0.05;
 export const MAX_AMBIENT_OPACITY = 1;
-export const DEFAULT_AMBIENT_OPACITY = 0.35;
+export const DEFAULT_AMBIENT_OPACITY = 0.55;
 export const MIN_FALLING_EFFECT_SPEED = 0.25;
 export const MAX_FALLING_EFFECT_SPEED = 4;
-export const DEFAULT_FALLING_EFFECT_SPEED = 1;
+export const DEFAULT_FALLING_EFFECT_SPEED = 4;
 export const MIN_FALLING_EFFECT_DENSITY = 0.5;
 export const MAX_FALLING_EFFECT_DENSITY = 2.5;
-export const DEFAULT_FALLING_EFFECT_DENSITY = 1;
+export const DEFAULT_FALLING_EFFECT_DENSITY = 2.5;
 export const MIN_FALLING_EFFECT_JAPANESE_RATIO = 0;
 export const MAX_FALLING_EFFECT_JAPANESE_RATIO = 1;
-export const DEFAULT_FALLING_EFFECT_JAPANESE_RATIO = 0.45;
-export const DEFAULT_FALLING_EFFECT_MATRIX_ENRICHED = false;
+export const DEFAULT_FALLING_EFFECT_JAPANESE_RATIO = 0.5;
+export const DEFAULT_FALLING_EFFECT_MATRIX_ENRICHED = true;
 
 export const HexColor = TrimmedNonEmptyString.check(Schema.isPattern(/^#[0-9A-Fa-f]{6}$/)).pipe(
   Schema.decodeTo(
@@ -182,14 +182,14 @@ export type AmbientOpacity = typeof AmbientOpacity.Type;
 
 export const FallingEffectKind = Schema.Literals(["snow", "rain", "matrix"]);
 export type FallingEffectKind = typeof FallingEffectKind.Type;
-export const DEFAULT_FALLING_EFFECTS_ENABLED = false;
-export const DEFAULT_FALLING_EFFECT_KIND: FallingEffectKind = "snow";
+export const DEFAULT_FALLING_EFFECTS_ENABLED = true;
+export const DEFAULT_FALLING_EFFECT_KIND: FallingEffectKind = "matrix";
 
 /** Matrix-only palette behavior. The persisted default deliberately keeps the
  * original fixed/theme-aware color behavior for existing profiles. */
 export const FallingEffectMatrixColorMode = Schema.Literals(["fixed", "rainbow", "music-reactive"]);
 export type FallingEffectMatrixColorMode = typeof FallingEffectMatrixColorMode.Type;
-export const DEFAULT_FALLING_EFFECT_MATRIX_COLOR_MODE: FallingEffectMatrixColorMode = "fixed";
+export const DEFAULT_FALLING_EFFECT_MATRIX_COLOR_MODE: FallingEffectMatrixColorMode = "rainbow";
 
 export const FallingEffectSpeed = Schema.Number.check(
   Schema.isBetween({
@@ -270,8 +270,11 @@ export type AmbientMediaPresetSize = typeof AmbientMediaPresetSize.Type;
 export const AmbientVideoPresentationMode = Schema.Literals(["floating", "cinema"]);
 export type AmbientVideoPresentationMode = typeof AmbientVideoPresentationMode.Type;
 
-export const DEFAULT_AMBIENT_VIDEO_ENABLED = false;
-export const DEFAULT_AMBIENT_VIDEO_SOURCE: AmbientVideoSource = null;
+export const DEFAULT_AMBIENT_VIDEO_ENABLED = true;
+export const DEFAULT_AMBIENT_VIDEO_SOURCE: AmbientVideoSource = {
+  kind: "video",
+  id: "X4n3vMXv_9k",
+};
 export const DEFAULT_AMBIENT_VIDEO_LAYOUT_MODE: AmbientMediaLayoutMode = "preset";
 export const DEFAULT_AMBIENT_VIDEO_PRESET_PLACEMENT: AmbientMediaPresetPlacement = "bottom-right";
 export const DEFAULT_AMBIENT_VIDEO_PRESET_SIZE: AmbientMediaPresetSize = "medium";
@@ -347,8 +350,15 @@ export const AmbientImageAsset = AmbientImageAssetFields.check(
 );
 export type AmbientImageAsset = typeof AmbientImageAsset.Type;
 
-export const DEFAULT_AMBIENT_IMAGE_ENABLED = false;
-export const DEFAULT_AMBIENT_IMAGE_ASSET: AmbientImageAsset | null = null;
+export const DEFAULT_AMBIENT_IMAGE_ENABLED = true;
+export const DEFAULT_AMBIENT_IMAGE_ASSET: AmbientImageAsset = {
+  id: "sha256-8588e8b7fbd641dc21271be3c1f9d78a8b1449e44a0c9b951e3d3ad90f6d8f82.gif",
+  url: "/api/ambient-media/image/sha256-8588e8b7fbd641dc21271be3c1f9d78a8b1449e44a0c9b951e3d3ad90f6d8f82.gif",
+  mimeType: "image/gif",
+  width: 1080,
+  height: 1080,
+  sizeBytes: 2_042_330,
+};
 /** A deliberately small persistent queue. The source directory and its file
  * paths are never part of settings; each entry is an authenticated,
  * content-addressed server asset. */
