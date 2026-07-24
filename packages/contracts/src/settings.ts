@@ -185,6 +185,10 @@ export const DEFAULT_FALLING_EFFECT_SPEED = 1;
 export const MIN_FALLING_EFFECT_DENSITY = 0.5;
 export const MAX_FALLING_EFFECT_DENSITY = 2.5;
 export const DEFAULT_FALLING_EFFECT_DENSITY = 1;
+/**
+ * Probability that a Matrix stream uses the Japanese glyph pool and Japanese
+ * live-work terms. The remainder use Roman glyphs and English live-work terms.
+ */
 export const MIN_FALLING_EFFECT_JAPANESE_RATIO = 0;
 export const MAX_FALLING_EFFECT_JAPANESE_RATIO = 1;
 export const DEFAULT_FALLING_EFFECT_JAPANESE_RATIO = 0.45;

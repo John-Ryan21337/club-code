@@ -299,6 +299,96 @@ describe("local media audio visualizer policy", () => {
     expect(clearRect).toHaveBeenCalled();
   });
 
+  it("does not let a paused controller erase an actively publishing Matrix signal", async () => {
+    vi.stubGlobal("document", { baseURI: "http://localhost/" });
+
+    const createHarness = (paused: boolean) => {
+      const media = mediaElement({}) as HTMLMediaElement & {
+        paused: boolean;
+        ended: boolean;
+      };
+      Object.assign(media, { paused, ended: false });
+      const source = { connect: vi.fn(), disconnect: vi.fn() };
+      const analyser = {
+        disconnect: vi.fn(),
+        fftSize: 0,
+        smoothingTimeConstant: 0,
+        minDecibels: 0,
+        maxDecibels: 0,
+        frequencyBinCount: 128,
+        getByteFrequencyData: vi.fn((buffer: Uint8Array) => buffer.fill(160)),
+      };
+      const audioContext = {
+        state: "running",
+        sampleRate: 48_000,
+        destination: {},
+        createMediaElementSource: vi.fn(() => source),
+        createAnalyser: vi.fn(() => analyser),
+        resume: vi.fn(),
+        suspend: vi.fn(async () => {
+          audioContext.state = "suspended";
+        }),
+        close: vi.fn(async () => {
+          audioContext.state = "closed";
+        }),
+      };
+      const canvas = {
+        width: 1,
+        height: 1,
+        getBoundingClientRect: () => ({ width: 320, height: 180 }),
+        getContext: () => ({
+          clearRect: vi.fn(),
+          fillRect: vi.fn(),
+          fillStyle: "",
+        }),
+      } as unknown as HTMLCanvasElement;
+      const frames: FrameRequestCallback[] = [];
+      let nextFrame = 0;
+      const createAudioContext = vi.fn(() => audioContext as unknown as AudioContext);
+      const controller = new LocalMediaAudioVisualizerController(media, canvas, {
+        createAudioContext,
+        requestAnimationFrame: (callback) => {
+          frames.push(callback);
+          return ++nextFrame;
+        },
+        cancelAnimationFrame: vi.fn(),
+        devicePixelRatio: () => 1,
+      });
+      return { controller, createAudioContext, frames };
+    };
+
+    const active = createHarness(false);
+    const inactive = createHarness(true);
+    const matrixSignalSettings = {
+      ...DEFAULT_LOCAL_MEDIA_VISUALIZER_SETTINGS,
+      publishMatrixSignal: true,
+    };
+
+    await active.controller.sync(false, matrixSignalSettings);
+    active.frames.shift()?.(100);
+    expect(localMediaAudioSignalStore.getSnapshot()).toMatchObject({
+      active: true,
+      sampledAt: 100,
+    });
+
+    await inactive.controller.sync(false, matrixSignalSettings);
+    expect(inactive.createAudioContext).not.toHaveBeenCalled();
+    expect(localMediaAudioSignalStore.getSnapshot()).toMatchObject({
+      active: true,
+      sampledAt: 100,
+    });
+
+    active.frames.shift()?.(150);
+    expect(localMediaAudioSignalStore.getSnapshot()).toMatchObject({
+      active: true,
+      sampledAt: 150,
+    });
+
+    await inactive.controller.destroy();
+    await active.controller.destroy();
+    expect(localMediaAudioSignalStore.getSnapshot().active).toBe(false);
+  });
+
   it("publishes Matrix features from an explicitly approved display stream without echoing it", async () => {
     const audioTrack = { readyState: "live" } as MediaStreamTrack;
     const stream = {

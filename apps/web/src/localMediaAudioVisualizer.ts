@@ -362,9 +362,7 @@ export class LocalMediaAudioVisualizerController {
     this.#requested = requested && approved;
     this.#spectrumRequested = this.#requested && settings.style === "spectrum";
     this.#signalRequested = settings.publishMatrixSignal === true && approved;
-    if (this.#signalRequested) {
-      localMediaAudioSignalStore.claim(this.#signalOwner);
-    } else {
+    if (!this.#signalRequested) {
       localMediaAudioSignalStore.release(this.#signalOwner);
     }
     const generation = ++this.#activationGeneration;
@@ -399,6 +397,16 @@ export class LocalMediaAudioVisualizerController {
       await this.#context.resume().catch(() => undefined);
     }
     if (this.#destroyed || generation !== this.#activationGeneration) return;
+
+    // Claim only after an approved, playing input has a running graph and is
+    // ready to publish. A paused controller may still be mounted beside the
+    // active player; claiming before this point would erase the active
+    // controller's sample and make music-reactive Matrix color appear static.
+    if (this.#signalRequested && this.#context.state === "running") {
+      localMediaAudioSignalStore.claim(this.#signalOwner);
+    } else {
+      localMediaAudioSignalStore.release(this.#signalOwner);
+    }
 
     if (this.#requested && this.#context.state === "running") {
       if (settings.style === "milkdrop") {

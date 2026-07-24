@@ -35,6 +35,21 @@ describe("local media audio signal", () => {
     });
     store.publish(owner, { level: 0.5, bass: 0, mid: 0, treble: 0, beat: 0 }, Number.NaN);
     expect(store.getSnapshot().sampledAt).toBe(120);
+    store.publish(owner, { level: 0.9, bass: 1, mid: 1, treble: 1, beat: 1 }, 120);
+    store.publish(owner, { level: 0.9, bass: 1, mid: 1, treble: 1, beat: 1 }, 119);
+    expect(store.getSnapshot()).toMatchObject({
+      level: 0,
+      sampledAt: 120,
+    });
+    store.publish(owner, { level: 0.6, bass: 0.5, mid: 0.4, treble: 0.3, beat: 0.2 }, 121);
+    expect(store.getSnapshot()).toMatchObject({
+      level: 0.6,
+      bass: 0.5,
+      mid: 0.4,
+      treble: 0.3,
+      beat: 0.2,
+      sampledAt: 121,
+    });
   });
 
   it("does not let an outgoing owner publish or clear after a handoff", () => {

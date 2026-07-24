@@ -12,6 +12,7 @@ export const MAX_MATRIX_ACTIVITY_EVENTS = 24;
 export const MAX_MATRIX_ACTIVITY_LINKS = 8;
 export const MATRIX_ACTIVITY_TTL_MS = 2_200;
 export const MATRIX_ACTIVITY_PACKET_TRAVEL_MS = 720;
+export const MATRIX_ACTIVITY_LINK_PULSE_MS = 180;
 const MAX_ACTIVITY_RELATIONS = 4;
 const MAX_FUTURE_CLOCK_SKEW_MS = 250;
 const SAFE_RELATION_VALUE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/u;
@@ -38,6 +39,7 @@ export interface MatrixActivityLink {
   toAnchorIndex: number;
   category: MatrixActivityCategory;
   intensity: number;
+  linePulse: number;
   colorHue: number;
   packetProgress: number;
 }
@@ -154,12 +156,7 @@ function activityRelationHashes(payload: Record<string, unknown>): readonly numb
 
   const observed = isRecord(payload.observed) ? payload.observed : null;
   if (observed?.providerObserved === true) {
-    for (const [namespace, value] of [
-      ["tool", observed.toolId],
-      ["agent", observed.agentId],
-      ["operation", observed.operation],
-      ["dependency", observed.dependencyId],
-    ] as const) {
+    for (const [namespace, value] of [["tool", observed.toolId]] as const) {
       const hash = safeRelationHash(namespace, value);
       if (hash !== null && !hashes.includes(hash)) hashes.push(hash);
       if (hashes.length >= MAX_ACTIVITY_RELATIONS) break;
@@ -326,7 +323,7 @@ export function updateMatrixActivityAnimationInPlace(
 
   for (const event of events.slice(-MAX_MATRIX_ACTIVITY_EVENTS)) {
     const ageMs = nowMs - event.observedAtMs;
-    if (ageMs < -MAX_FUTURE_CLOCK_SKEW_MS || ageMs > MATRIX_ACTIVITY_TTL_MS) continue;
+    if (ageMs < -MAX_FUTURE_CLOCK_SKEW_MS || ageMs >= MATRIX_ACTIVITY_TTL_MS) continue;
     const intensity =
       Math.pow(1 - Math.max(0, ageMs) / MATRIX_ACTIVITY_TTL_MS, 2) * (reducedMotion ? 0.18 : 1);
     const anchorIndex = event.anchorSeed % particleCount;
@@ -346,6 +343,7 @@ export function updateMatrixActivityAnimationInPlace(
         previousAnchor !== undefined &&
         previousPulseIndex !== undefined &&
         previousAnchor !== anchorIndex &&
+        state.pulses[previousPulseIndex]?.category === event.category &&
         state.linkCount < MAX_MATRIX_ACTIVITY_LINKS
       ) {
         const fromAnchorIndex = Math.min(previousAnchor, anchorIndex);
@@ -353,13 +351,21 @@ export function updateMatrixActivityAnimationInPlace(
         const pair = fromAnchorIndex * 256 + toAnchorIndex;
         if (!state.linkPairs.has(pair)) {
           state.linkPairs.add(pair);
-          // The two explicitly correlated falling strings now carry a safe
-          // category -> operation pair. This replaces arbitrary decorative
-          // glyph meaning without retaining provider text or identifiers.
+          // A concrete provider item/tool identity and matching category are
+          // both required before two strings carry a category -> operation
+          // pair. Agent identity, repeated operation names, and cross-category
+          // events are deliberately too weak to imply a route.
           const previousPulse = state.pulses[previousPulseIndex];
           const currentPulse = state.pulses[currentPulseIndex];
           if (previousPulse) previousPulse.semanticRole = "category";
           if (currentPulse) currentPulse.semanticRole = "operation";
+          const linePulsePhase =
+            ((Math.max(0, ageMs) +
+              (((relationHash ^ event.anchorSeed) >>> 0) % MATRIX_ACTIVITY_LINK_PULSE_MS)) %
+              MATRIX_ACTIVITY_LINK_PULSE_MS) /
+            MATRIX_ACTIVITY_LINK_PULSE_MS;
+          const trianglePulse = 1 - Math.abs(linePulsePhase * 2 - 1);
+          const indicatorFlash = linePulsePhase < 0.12 ? 1 - linePulsePhase / 0.12 : 0;
           writeLink(state, state.linkCount, {
             fromAnchorIndex: previousAnchor,
             toAnchorIndex: anchorIndex,
@@ -368,6 +374,12 @@ export function updateMatrixActivityAnimationInPlace(
               intensity,
               state.pulses[previousPulseIndex]?.intensity ?? intensity,
             ),
+            // A short hash-phased indicator flash rides a softer triangular
+            // pulse. Both derive from event age, so no timer or retained
+            // animation state is required.
+            linePulse: reducedMotion
+              ? 1
+              : Math.min(1, 0.22 + trianglePulse * 0.28 + indicatorFlash * 0.78),
             colorHue: ((relationHash ^ event.anchorSeed) >>> 0) % 360,
             packetProgress: reducedMotion
               ? 0
@@ -554,8 +566,8 @@ export function drawMatrixActivityAnimation(
       colorMode === "matrix"
         ? resolveMatrixStreamColor(matrixColorFrame, from)
         : `hsl(${link.colorHue.toFixed(1)} 86% 62%)`;
-    context.globalAlpha = Math.min(0.28, safeOpacity * 0.38) * link.intensity;
-    context.lineWidth = 0.75 + link.intensity * 0.75;
+    context.globalAlpha = Math.min(0.28, safeOpacity * 0.38) * link.intensity * link.linePulse;
+    context.lineWidth = 0.75 + link.intensity * (0.35 + link.linePulse * 0.4);
     traceMatrixHexRoute(context, route);
     context.stroke();
 

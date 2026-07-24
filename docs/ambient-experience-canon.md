@@ -54,7 +54,7 @@ documentation use Club Code.
 | Requested area                                            | Current status              | Canonical boundary                                                                                                            |
 | --------------------------------------------------------- | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
 | Snow, rain, and Matrix over the whole window              | Implemented                 | Off switch, density, speed, opacity, color, motion and performance bounds                                                     |
-| Japanese/English Matrix mix, coding terms, 2ch and cat AA | Implemented                 | Reviewed pool; bounded safe activity labels and basenames only                                                                |
+| Roman/Japanese Matrix mix, coding terms, 2ch and cat AA   | Implemented                 | Reviewed glyph pool; matching English/Japanese live terms; bounded safe activity labels and basenames only                    |
 | Rainbow and music-reactive Matrix color                   | Landed - validation pending | Uniform and per-string rainbow/music modes reuse direct, VLC, or one explicitly approved display-audio signal                 |
 | Matrix project-activity pulses and links                  | Landed - validation pending | Network/database/build pulses; links require explicit provider correlation and carry bounded hex-routed packets               |
 | Movable local environment-control LLM                     | Implemented                 | Deterministic zero-token grammar first; fixed loopback LM Studio fallback only                                                |
@@ -114,9 +114,10 @@ The optional **Provider activity links** layer turns only safe,
 provider-observed network, database, and build/compile categories into brief
 Matrix pulses. At most 24 recent category/hash events and eight simultaneous
 links are retained, and visual state expires after roughly 2.2 seconds. A pulse
-may exist without a line. A line exists only when two events share an explicit
-safe tool, agent, operation, or dependency identity; temporal proximity and
-similar words are not enough.
+may exist without a line. A line exists only when two events have the same
+category and exact same provider-reported item or tool identity. A shared agent,
+operation label, dependency label, temporal proximity, or similar wording is
+not enough.
 
 Connected falling strings use reviewed semantic pairs—NETWORK/FETCH,
 DATABASE/QUERY, BUILD/COMPILE, or fixed Japanese counterparts according to the
@@ -132,7 +133,8 @@ work remain capped.
 The telemetry projection never retains or draws prompts, model output, command
 text/output, URLs, request bodies, SQL text/values, credentials, cookies, raw
 paths, raw audio, hidden operating-system traffic, or hidden reasoning. If a
-provider does not report an operation or relation, the rain does not claim it.
+provider does not report that same-category item/tool relation, the rain does
+not claim it.
 
 ### Ambient image directory cycling
 
@@ -284,9 +286,10 @@ closed. This is not an endless hidden worker or a second fan-out scheduler.
 
 Snow, rain, and Matrix effects cover the Club Code viewport without receiving
 pointer input. Controls include off/on, effect kind, fixed color, opacity,
-speed, density, and a 0-100% English-to-Japanese Matrix mix. The Matrix pool
-contains reviewed coding-flavored kana and kanji. Optional 2ch-inspired glyphs
-and intact cat AA are off by default.
+speed, density, and a 0-100% Roman-to-Japanese Matrix stream mix. The same ratio
+selects English or Japanese opt-in live terms. The Matrix pool contains reviewed
+coding-flavored kana and kanji. Optional 2ch-inspired glyphs and intact cat AA
+apply only to Japanese streams and are off by default.
 
 Matrix color has five modes:
 

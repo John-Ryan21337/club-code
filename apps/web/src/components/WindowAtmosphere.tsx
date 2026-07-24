@@ -10,6 +10,7 @@ import {
   createMatrixActivityAnimationState,
   decodeMatrixActivityEvents,
   drawMatrixActivityAnimation,
+  MATRIX_ACTIVITY_TTL_MS,
   selectMatrixActivityEventsKey,
   updateMatrixActivityAnimationInPlace,
 } from "../matrixActivityOverlay";
@@ -67,6 +68,7 @@ export function WindowAtmosphere() {
   const atmosphereAvailable = serverConfig?.ambientExperienceCapabilities.atmosphere === true;
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const sceneRef = useRef<AtmosphereScene | null>(null);
+  const invalidateStaticFrameRef = useRef<(() => void) | null>(null);
   const matrixWorkVocabularyKey = useStore((state) =>
     liveWorkVocabularyEnabled && kind === "matrix" ? selectMatrixWorkVocabularyKey(state) : "",
   );
@@ -83,6 +85,8 @@ export function WindowAtmosphere() {
     () => decodeMatrixActivityEvents(matrixActivityEventsKey),
     [matrixActivityEventsKey],
   );
+  const matrixActivityEventsRef = useRef(matrixActivityEvents);
+  matrixActivityEventsRef.current = matrixActivityEvents;
 
   useEffect(() => {
     const scene = sceneRef.current;
@@ -92,7 +96,12 @@ export function WindowAtmosphere() {
       matrixWorkVocabulary,
       createSeededRandom(textSeed(matrixWorkVocabularyKey)),
     );
+    invalidateStaticFrameRef.current?.();
   }, [matrixWorkVocabulary, matrixWorkVocabularyKey]);
+
+  useEffect(() => {
+    invalidateStaticFrameRef.current?.();
+  }, [matrixActivityEvents]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -109,9 +118,17 @@ export function WindowAtmosphere() {
     let scene: AtmosphereScene | null = null;
     const matrixColorState = createMatrixColorAnimationState();
     const matrixActivityState = createMatrixActivityAnimationState();
-    const wallClockOffset = Date.now() - performance.now();
     let animationFrame: number | null = null;
+    let resizeFrame: number | null = null;
+    let staticActivityExpiryTimer: number | null = null;
     let lastFrameTime: number | null = null;
+
+    const clearCanvasBitmap = () => {
+      context.save();
+      context.setTransform(1, 0, 0, 1, 0, 0);
+      context.clearRect(0, 0, canvas.width, canvas.height);
+      context.restore();
+    };
 
     const cancelAnimation = () => {
       if (animationFrame !== null) {
@@ -119,6 +136,47 @@ export function WindowAtmosphere() {
         animationFrame = null;
       }
       lastFrameTime = null;
+    };
+
+    const cancelStaticActivityExpiry = () => {
+      if (staticActivityExpiryTimer !== null) {
+        window.clearTimeout(staticActivityExpiryTimer);
+        staticActivityExpiryTimer = null;
+      }
+    };
+
+    const scheduleStaticActivityExpiry = (nowMs: number) => {
+      cancelStaticActivityExpiry();
+      if (
+        !scene ||
+        !reducedMotion.matches ||
+        kind !== "matrix" ||
+        !activityLinksEnabled ||
+        matrixActivityState.pulseCount === 0
+      ) {
+        return;
+      }
+
+      let nearestExpiryAtMs = Number.POSITIVE_INFINITY;
+      for (const event of matrixActivityEventsRef.current) {
+        const expiryAtMs = event.observedAtMs + MATRIX_ACTIVITY_TTL_MS;
+        if (Number.isFinite(expiryAtMs) && expiryAtMs > nowMs) {
+          nearestExpiryAtMs = Math.min(nearestExpiryAtMs, expiryAtMs);
+        }
+      }
+      if (!Number.isFinite(nearestExpiryAtMs)) {
+        return;
+      }
+
+      // The extra millisecond keeps the redraw on the expired side of the
+      // overlay's `age >= TTL` boundary even when the delay is integral.
+      const delayMs = Math.max(1, Math.ceil(nearestExpiryAtMs - nowMs) + 1);
+      staticActivityExpiryTimer = window.setTimeout(() => {
+        staticActivityExpiryTimer = null;
+        if (scene && reducedMotion.matches && kind === "matrix" && activityLinksEnabled) {
+          renderScene(performance.now(), true);
+        }
+      }, delayMs);
     };
 
     const resize = () => {
@@ -170,10 +228,11 @@ export function WindowAtmosphere() {
         resolveAtmosphereColor(kind, configuredColor, resolvedTheme === "dark");
       drawAtmosphereScene(context, scene, color, opacity, matrixColorFrame);
       if (matrixColorFrame && activityLinksEnabled) {
+        const activityNow = Date.now();
         updateMatrixActivityAnimationInPlace(
           matrixActivityState,
-          matrixActivityEvents,
-          wallClockOffset + timestamp,
+          matrixActivityEventsRef.current,
+          activityNow,
           scene.particles.length,
           reducedMotionActive,
         );
@@ -185,6 +244,9 @@ export function WindowAtmosphere() {
           activityLinkColorMode,
           matrixColorFrame,
         );
+        if (reducedMotionActive) {
+          scheduleStaticActivityExpiry(activityNow);
+        }
       }
     };
 
@@ -208,19 +270,34 @@ export function WindowAtmosphere() {
         if (scene && reducedMotion.matches && kind === "matrix" && activityLinksEnabled) {
           renderScene(performance.now(), true);
         } else if (scene) {
+          cancelStaticActivityExpiry();
           context.clearRect(0, 0, scene.width, scene.height);
         }
         return;
       }
 
+      cancelStaticActivityExpiry();
       if (animationFrame === null) {
         animationFrame = window.requestAnimationFrame(drawFrame);
       }
     };
 
+    const invalidateStaticFrame = () => {
+      if (scene && reducedMotion.matches && kind === "matrix" && activityLinksEnabled) {
+        renderScene(performance.now(), true);
+      }
+    };
+    invalidateStaticFrameRef.current = invalidateStaticFrame;
+
     const handleResize = () => {
-      resize();
-      syncAnimation();
+      if (resizeFrame !== null) {
+        return;
+      }
+      resizeFrame = window.requestAnimationFrame(() => {
+        resizeFrame = null;
+        resize();
+        syncAnimation();
+      });
     };
 
     resize();
@@ -233,8 +310,15 @@ export function WindowAtmosphere() {
 
     return () => {
       cancelAnimation();
+      cancelStaticActivityExpiry();
+      if (resizeFrame !== null) {
+        window.cancelAnimationFrame(resizeFrame);
+      }
+      if (invalidateStaticFrameRef.current === invalidateStaticFrame) {
+        invalidateStaticFrameRef.current = null;
+      }
       sceneRef.current = null;
-      context.clearRect(0, 0, canvas.width, canvas.height);
+      clearCanvasBitmap();
       document.removeEventListener("visibilitychange", syncAnimation);
       window.removeEventListener("focus", syncAnimation);
       window.removeEventListener("blur", syncAnimation);
@@ -253,7 +337,6 @@ export function WindowAtmosphere() {
     japaneseRatio,
     kind,
     matrixColorMode,
-    matrixActivityEvents,
     opacity,
     resolvedTheme,
     speed,

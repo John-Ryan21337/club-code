@@ -59,6 +59,7 @@ import {
   FilesSettingsPanel,
   ProviderSettingsPanel,
   SystemSettingsPanel,
+  useSettingsRestore,
 } from "./SettingsPanels";
 import { SourceControlSettingsPanel } from "./SourceControlSettings";
 
@@ -667,15 +668,23 @@ const createDesktopBridgeStub = (overrides?: {
 };
 
 function installClientSettingsNativeApi(desktopBridge: DesktopBridge) {
+  const updateSettings = vi
+    .fn<LocalApi["server"]["updateSettings"]>()
+    .mockResolvedValue(DEFAULT_SERVER_SETTINGS);
   const updateClientSettings = vi
     .fn<LocalApi["server"]["updateClientSettings"]>()
     .mockResolvedValue(DEFAULT_CLIENT_SETTINGS);
   window.nativeApi = {
+    dialogs: {
+      pickFolder: desktopBridge.pickFolder,
+      confirm: desktopBridge.confirm,
+    },
     persistence: {
       getClientSettings: desktopBridge.getClientSettings,
       setClientSettings: desktopBridge.setClientSettings,
     },
     server: {
+      updateSettings,
       updateClientSettings,
     },
     shell: {
@@ -685,7 +694,19 @@ function installClientSettingsNativeApi(desktopBridge: DesktopBridge) {
       },
     },
   } as unknown as LocalApi;
-  return { updateClientSettings };
+  return { updateSettings, updateClientSettings };
+}
+
+function SettingsRestoreHarness({ onRestored }: { readonly onRestored: () => void }) {
+  const { changedSettingLabels, restoreDefaults } = useSettingsRestore(onRestored);
+  return (
+    <>
+      <output aria-label="Changed settings">{changedSettingLabels.join(" | ")}</output>
+      <button type="button" onClick={() => void restoreDefaults()}>
+        Apply settings reset
+      </button>
+    </>
+  );
 }
 
 function setColorInput(ariaLabel: string, value: string) {
@@ -1315,19 +1336,39 @@ describe("settings panels", () => {
     });
 
     await expect.element(page.getByText("Matrix color mode")).not.toBeInTheDocument();
-    await page.getByText("Matrix", { exact: true }).click();
+    const snowEffect = page.getByRole("radio", { name: "Snow", exact: true });
+    const rainEffect = page.getByRole("radio", { name: "Rain", exact: true });
+    const matrixEffect = page.getByRole("radio", { name: "Matrix", exact: true });
+    await expect.element(snowEffect).toHaveAttribute("aria-checked", "true");
+    await rainEffect.click();
+    await vi.waitFor(() => {
+      expect(updateClientSettings).toHaveBeenCalledWith({ fallingEffectKind: "rain" });
+    });
+    await expect.element(rainEffect).toHaveAttribute("aria-checked", "true");
+    await snowEffect.click();
+    await vi.waitFor(() => {
+      expect(updateClientSettings).toHaveBeenCalledWith({ fallingEffectKind: "snow" });
+    });
+    await matrixEffect.click();
 
     await vi.waitFor(() => {
       expect(updateClientSettings).toHaveBeenCalledWith({ fallingEffectKind: "matrix" });
     });
+    await expect.element(matrixEffect).toHaveAttribute("aria-checked", "true");
 
     await expect.element(page.getByText("Matrix color mode")).toBeInTheDocument();
+    await expect.element(page.getByText("Roman / Japanese mix")).toBeInTheDocument();
     await page.getByRole("radio", { name: "Rainbow", exact: true }).click();
     await page.getByRole("radio", { name: "Rainbow Extra", exact: true }).click();
     await page.getByRole("radio", { name: "Music reactive · uniform", exact: true }).click();
     await page.getByRole("radio", { name: "Music reactive · Rainbow Extra", exact: true }).click();
+    await page.getByRole("radio", { name: "Fixed", exact: true }).click();
+    await page.getByRole("radio", { name: "Music reactive · Rainbow Extra", exact: true }).click();
 
     await vi.waitFor(() => {
+      expect(updateClientSettings).toHaveBeenCalledWith({
+        fallingEffectMatrixColorMode: "fixed",
+      });
       expect(updateClientSettings).toHaveBeenCalledWith({
         fallingEffectMatrixColorMode: "rainbow",
       });
@@ -1347,8 +1388,13 @@ describe("settings panels", () => {
       .not.toBeInTheDocument();
     await page.getByLabelText("Show provider activity links in Matrix rain").click();
     await page.getByRole("radio", { name: "Follow Matrix colors", exact: true }).click();
+    await page.getByRole("radio", { name: "Random independent", exact: true }).click();
+    await page.getByRole("radio", { name: "Follow Matrix colors", exact: true }).click();
     await vi.waitFor(() => {
       expect(updateClientSettings).toHaveBeenCalledWith({ fallingEffectActivityLinks: true });
+      expect(updateClientSettings).toHaveBeenCalledWith({
+        fallingEffectActivityLinkColorMode: "random",
+      });
       expect(updateClientSettings).toHaveBeenCalledWith({
         fallingEffectActivityLinkColorMode: "matrix",
       });
@@ -1366,8 +1412,9 @@ describe("settings panels", () => {
     await page.getByLabelText("Increase falling effect opacity").click();
     await page.getByLabelText("Increase falling effect speed").click();
     await page.getByLabelText("Increase falling effect density").click();
-    await page.getByLabelText("Increase Japanese glyph ratio").click();
+    await page.getByLabelText("Increase Japanese stream ratio").click();
     await page.getByLabelText("Use 2ch-inspired Matrix enrichment").click();
+    await page.getByLabelText("Use live work vocabulary in Matrix rain").click();
 
     await vi.waitFor(() => {
       expect(updateClientSettings).toHaveBeenCalledWith({ fallingEffectOpacity: 0.4 });
@@ -1375,6 +1422,24 @@ describe("settings panels", () => {
       expect(updateClientSettings).toHaveBeenCalledWith({ fallingEffectDensity: 1.25 });
       expect(updateClientSettings).toHaveBeenCalledWith({ fallingEffectJapaneseRatio: 0.5 });
       expect(updateClientSettings).toHaveBeenCalledWith({ fallingEffect2chEnriched: true });
+      expect(updateClientSettings).toHaveBeenCalledWith({
+        fallingEffectLiveWorkVocabulary: true,
+      });
+    });
+
+    await page.getByLabelText("Show falling effects").click();
+    await vi.waitFor(() => {
+      expect(updateClientSettings).toHaveBeenCalledWith({ fallingEffectsEnabled: false });
+    });
+    await expect.element(page.getByText("Matrix", { exact: true })).not.toBeInTheDocument();
+    expect(getServerConfig()?.clientSettings).toMatchObject({
+      fallingEffectsEnabled: false,
+      fallingEffectKind: "matrix",
+      fallingEffectMatrixColorMode: "music-reactive-extra",
+      fallingEffect2chEnriched: true,
+      fallingEffectLiveWorkVocabulary: true,
+      fallingEffectActivityLinks: true,
+      fallingEffectActivityLinkColorMode: "matrix",
     });
 
     await expect.element(page.getByText("Sidebar star speed")).toBeInTheDocument();
@@ -1382,6 +1447,64 @@ describe("settings panels", () => {
 
     await vi.waitFor(() => {
       expect(updateClientSettings).toHaveBeenCalledWith({ sidebarStarSpeed: 1.25 });
+    });
+  });
+
+  it("includes every Matrix preference in the global settings reset", async () => {
+    const confirm = vi.fn().mockResolvedValue(true);
+    const desktopBridge = {
+      ...createDesktopBridgeStub(),
+      confirm,
+    } satisfies DesktopBridge;
+    window.desktopBridge = desktopBridge;
+    const { updateClientSettings } = installClientSettingsNativeApi(desktopBridge);
+    const config = createBaseServerConfig();
+    setServerConfigSnapshot({
+      ...config,
+      clientSettings: {
+        ...config.clientSettings,
+        fallingEffectMatrixColorMode: "rainbow-extra",
+        fallingEffectLiveWorkVocabulary: true,
+        fallingEffectActivityLinks: true,
+        fallingEffectActivityLinkColorMode: "matrix",
+      },
+    });
+    const onRestored = vi.fn();
+
+    mounted = await renderWithTestRouter(
+      <AppAtomRegistryProvider>
+        <SettingsRestoreHarness onRestored={onRestored} />
+      </AppAtomRegistryProvider>,
+    );
+
+    await expect
+      .element(page.getByLabelText("Changed settings"))
+      .toHaveTextContent(
+        "Matrix color mode | Matrix live work vocabulary | Matrix activity links | Matrix activity link colors",
+      );
+    await page.getByRole("button", { name: "Apply settings reset" }).click();
+
+    await vi.waitFor(() => {
+      expect(confirm).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "Matrix color mode, Matrix live work vocabulary, Matrix activity links, Matrix activity link colors",
+        ),
+      );
+      expect(updateClientSettings).toHaveBeenCalledWith(
+        expect.objectContaining({
+          fallingEffectMatrixColorMode: "fixed",
+          fallingEffectLiveWorkVocabulary: false,
+          fallingEffectActivityLinks: false,
+          fallingEffectActivityLinkColorMode: "random",
+        }),
+      );
+      expect(getServerConfig()?.clientSettings).toMatchObject({
+        fallingEffectMatrixColorMode: "fixed",
+        fallingEffectLiveWorkVocabulary: false,
+        fallingEffectActivityLinks: false,
+        fallingEffectActivityLinkColorMode: "random",
+      });
+      expect(onRestored).toHaveBeenCalledOnce();
     });
   });
 

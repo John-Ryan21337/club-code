@@ -8,6 +8,7 @@ import {
   MAX_MATRIX_TOKEN_WIDTH_PX,
   MATRIX_2CH_AA_TOKENS,
   MATRIX_2CH_ENRICHED_GLYPHS,
+  MATRIX_JAPANESE_CODING_AI_TERMS,
   MATRIX_JAPANESE_GLYPHS,
   MATRIX_RAINBOW_CYCLE_MS,
   MATRIX_ROMAN_GLYPHS,
@@ -99,6 +100,40 @@ describe("window atmosphere", () => {
     expect(mixed.particles.some((particle) => particle.glyphs === MATRIX_JAPANESE_GLYPHS)).toBe(
       true,
     );
+  });
+
+  it("keeps the reviewed Japanese coding and AI vocabulary in the decorative pool", () => {
+    expect(MATRIX_JAPANESE_CODING_AI_TERMS).toEqual([
+      "電脳",
+      "機械",
+      "知能",
+      "学習",
+      "推論",
+      "生成",
+      "言語",
+      "符号",
+      "解析",
+      "演算",
+      "回路",
+      "未来",
+      "創造",
+      "対話",
+      "探索",
+      "深層",
+      "神経",
+      "仮想",
+      "現実",
+      "夢",
+      "夜",
+      "光",
+      "影",
+      "零",
+      "無限",
+    ]);
+    for (const term of MATRIX_JAPANESE_CODING_AI_TERMS) {
+      expect(MATRIX_JAPANESE_GLYPHS).toContain(term);
+    }
+    expect(MATRIX_JAPANESE_GLYPHS).not.toMatch(/\s/u);
   });
 
   it("uses the language ratio for opt-in work terms and refreshes them without moving columns", () => {

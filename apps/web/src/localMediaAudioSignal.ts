@@ -68,6 +68,7 @@ export function createLocalMediaAudioSignalStore(): LocalMediaAudioSignalStore {
     },
     publish: (currentOwner, features, sampledAt) => {
       if (owner !== currentOwner || !Number.isFinite(sampledAt)) return;
+      if (snapshot.active && sampledAt <= snapshot.sampledAt) return;
       snapshot = {
         active: true,
         level: normalizeLevel(features.level),

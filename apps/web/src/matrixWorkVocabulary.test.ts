@@ -37,7 +37,7 @@ describe("Matrix live work vocabulary", () => {
       }),
       activity("2", {
         itemType: "collab_agent_tool_call",
-        data: { item: { agentPath: "/root/auditor" } },
+        data: { item: { agentPath: "/root/auditor", kind: "started" } },
       }),
       activity("3", {
         itemType: "file_change",
@@ -46,12 +46,13 @@ describe("Matrix live work vocabulary", () => {
     ]);
 
     expect(vocabulary.english).toEqual(
-      expect.arrayContaining(["BUILD", "TEST", "TYPES", "RUN", "AUDIT", "AGENT", "WRITE"]),
+      expect.arrayContaining(["BUILD", "TEST", "TYPES", "RUN", "AGENT", "DELEGATE", "WRITE"]),
     );
     expect(vocabulary.japanese).toEqual(
-      expect.arrayContaining(["構築", "試験", "型検査", "実行", "監査", "分担", "書込"]),
+      expect.arrayContaining(["構築", "試験", "型検査", "実行", "エージェント", "分担", "書込"]),
     );
     expect(vocabulary.english).toContain("WindowAtmosphere.tsx");
+    expect(vocabulary.japanese).toContain("WindowAtmosphere.tsx");
   });
 
   it("does not classify free-form provider titles or detail text", () => {
@@ -60,10 +61,45 @@ describe("Matrix live work vocabulary", () => {
         itemType: "unclassified",
         title: "build audit database",
         detail: "SELECT secret FROM private_url",
+        data: {
+          arbitraryToolOutput: {
+            path: "invented-file.ts",
+            agentPath: "/root/auditor",
+            kind: "started",
+          },
+        },
       }),
     ]);
 
     expect(vocabulary).toEqual({ english: [], japanese: [] });
+  });
+
+  it("describes reported query/error/agent state without claiming search, recovery, or delegation", () => {
+    const vocabulary = deriveMatrixWorkVocabulary([
+      activity("7", {
+        observed: {
+          providerObserved: true,
+          operation: "query",
+        },
+      }),
+      activity(
+        "8",
+        {
+          itemType: "collab_agent_tool_call",
+          data: { item: { agentPath: "/root/worker", kind: "interacted" } },
+        },
+        { tone: "error" },
+      ),
+    ]);
+
+    expect(vocabulary.english).toEqual(expect.arrayContaining(["DATABASE", "AGENT", "ERROR"]));
+    expect(vocabulary.japanese).toEqual(
+      expect.arrayContaining(["データベース", "エージェント", "エラー"]),
+    );
+    expect(vocabulary.english).not.toContain("SEARCH");
+    expect(vocabulary.english).not.toContain("RECOVER");
+    expect(vocabulary.english).not.toContain("DELEGATE");
+    expect(vocabulary.japanese).not.toContain("分担");
   });
 
   it("never exposes summaries, command text, file contents, or secret-looking filenames", () => {
@@ -101,6 +137,10 @@ describe("Matrix live work vocabulary", () => {
       activity("5", { itemType: "web_search", title: "Search" }),
     ]);
 
+    expect(vocabulary).toMatchObject({
+      english: expect.arrayContaining(["SEARCH"]),
+      japanese: expect.arrayContaining(["検索"]),
+    });
     expect(decodeMatrixWorkVocabulary(encodeMatrixWorkVocabulary(vocabulary))).toEqual(vocabulary);
     expect(decodeMatrixWorkVocabulary("{broken")).toEqual({ english: [], japanese: [] });
   });
@@ -109,8 +149,8 @@ describe("Matrix live work vocabulary", () => {
     expect(
       decodeMatrixWorkVocabulary(
         JSON.stringify([
-          ["BUILD", "api_token.json", "abCDefGhIjKlMnOpQrStUvWxYz12"],
-          ["構築", "safe-file.ts"],
+          ["BUILD", "BUILD", "構築", "api_token.json", "abCDefGhIjKlMnOpQrStUvWxYz12"],
+          ["構築", "BUILD", "safe-file.ts"],
         ]),
       ),
     ).toEqual({ english: ["BUILD"], japanese: ["構築", "safe-file.ts"] });

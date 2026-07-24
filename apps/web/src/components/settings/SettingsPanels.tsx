@@ -464,6 +464,10 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.fallingEffectColor !== DEFAULT_UNIFIED_SETTINGS.fallingEffectColor
         ? ["Falling effect color"]
         : []),
+      ...(settings.fallingEffectMatrixColorMode !==
+      DEFAULT_UNIFIED_SETTINGS.fallingEffectMatrixColorMode
+        ? ["Matrix color mode"]
+        : []),
       ...(settings.fallingEffectOpacity !== DEFAULT_UNIFIED_SETTINGS.fallingEffectOpacity
         ? ["Falling effect opacity"]
         : []),
@@ -475,10 +479,22 @@ export function useSettingsRestore(onRestored?: () => void) {
         : []),
       ...(settings.fallingEffectJapaneseRatio !==
       DEFAULT_UNIFIED_SETTINGS.fallingEffectJapaneseRatio
-        ? ["Japanese glyph ratio"]
+        ? ["Matrix Roman/Japanese mix"]
         : []),
       ...(settings.fallingEffect2chEnriched !== DEFAULT_UNIFIED_SETTINGS.fallingEffect2chEnriched
         ? ["2ch-inspired Matrix enrichment"]
+        : []),
+      ...(settings.fallingEffectLiveWorkVocabulary !==
+      DEFAULT_UNIFIED_SETTINGS.fallingEffectLiveWorkVocabulary
+        ? ["Matrix live work vocabulary"]
+        : []),
+      ...(settings.fallingEffectActivityLinks !==
+      DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinks
+        ? ["Matrix activity links"]
+        : []),
+      ...(settings.fallingEffectActivityLinkColorMode !==
+      DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinkColorMode
+        ? ["Matrix activity link colors"]
         : []),
       ...(settings.appAccentColor !== DEFAULT_UNIFIED_SETTINGS.appAccentColor
         ? ["Accent color"]
@@ -556,11 +572,15 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.fallingEffectsEnabled,
       settings.fallingEffectKind,
       settings.fallingEffectColor,
+      settings.fallingEffectMatrixColorMode,
       settings.fallingEffectOpacity,
       settings.fallingEffectSpeed,
       settings.fallingEffectDensity,
       settings.fallingEffectJapaneseRatio,
       settings.fallingEffect2chEnriched,
+      settings.fallingEffectLiveWorkVocabulary,
+      settings.fallingEffectActivityLinks,
+      settings.fallingEffectActivityLinkColorMode,
       settings.themeAccentColor,
       settings.automaticGitFetchInterval,
       settings.enableAssistantStreaming,
@@ -605,11 +625,16 @@ export function useSettingsRestore(onRestored?: () => void) {
       fallingEffectsEnabled: DEFAULT_UNIFIED_SETTINGS.fallingEffectsEnabled,
       fallingEffectKind: DEFAULT_UNIFIED_SETTINGS.fallingEffectKind,
       fallingEffectColor: DEFAULT_UNIFIED_SETTINGS.fallingEffectColor,
+      fallingEffectMatrixColorMode: DEFAULT_UNIFIED_SETTINGS.fallingEffectMatrixColorMode,
       fallingEffectOpacity: DEFAULT_UNIFIED_SETTINGS.fallingEffectOpacity,
       fallingEffectSpeed: DEFAULT_UNIFIED_SETTINGS.fallingEffectSpeed,
       fallingEffectDensity: DEFAULT_UNIFIED_SETTINGS.fallingEffectDensity,
       fallingEffectJapaneseRatio: DEFAULT_UNIFIED_SETTINGS.fallingEffectJapaneseRatio,
       fallingEffect2chEnriched: DEFAULT_UNIFIED_SETTINGS.fallingEffect2chEnriched,
+      fallingEffectLiveWorkVocabulary: DEFAULT_UNIFIED_SETTINGS.fallingEffectLiveWorkVocabulary,
+      fallingEffectActivityLinks: DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinks,
+      fallingEffectActivityLinkColorMode:
+        DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinkColorMode,
       themeAccentColor: DEFAULT_UNIFIED_SETTINGS.themeAccentColor,
       defaultEditor: DEFAULT_UNIFIED_SETTINGS.defaultEditor,
       diffWordWrap: DEFAULT_UNIFIED_SETTINGS.diffWordWrap,

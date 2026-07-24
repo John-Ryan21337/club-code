@@ -42,8 +42,12 @@ const CONCEPTS = [
   { pattern: /\btypecheck|types?\b/iu, english: "TYPES", japanese: "型検査" },
   { pattern: /\blint|format|prettier|oxlint\b/iu, english: "CLEAN", japanese: "整形" },
   { pattern: /\bbuild|bundle|compile\b/iu, english: "BUILD", japanese: "構築" },
-  { pattern: /\bsearch|find|query\b/iu, english: "SEARCH", japanese: "検索" },
-  { pattern: /\bdatabase|sqlite|\bsql\b/iu, english: "DATABASE", japanese: "データベース" },
+  { pattern: /\bsearch|find\b/iu, english: "SEARCH", japanese: "検索" },
+  {
+    pattern: /\bdatabase|sqlite|\bsql\b|\bquery\b/iu,
+    english: "DATABASE",
+    japanese: "データベース",
+  },
   { pattern: /\bbrowser|portal|\bocr\b/iu, english: "BROWSER", japanese: "画面認識" },
   {
     pattern: /\byoutube|spotify|\bvlc\b|media|audio|video\b/iu,
@@ -56,21 +60,30 @@ const CONCEPTS = [
   { pattern: /\bcache|compact|context\b/iu, english: "CONTEXT", japanese: "文脈圧縮" },
 ] as const;
 
-const FIXED_VOCABULARY_TERMS = new Set<string>([
-  ...CONCEPTS.flatMap((concept) => [concept.english, concept.japanese]),
+const ENGLISH_FIXED_VOCABULARY_TERMS = new Set<string>([
+  ...CONCEPTS.map((concept) => concept.english),
   "AGENT",
   "WRITE",
   "READ",
   "RUN",
   "DELEGATE",
-  "RECOVER",
+  "ERROR",
   "WORK",
+]);
+
+const JAPANESE_FIXED_VOCABULARY_TERMS = new Set<string>([
+  ...CONCEPTS.map((concept) => concept.japanese),
+  "エージェント",
   "分担",
   "書込",
   "読込",
   "実行",
-  "復旧",
+  "エラー",
   "作業",
+]);
+const ALL_FIXED_VOCABULARY_TERMS = new Set([
+  ...ENGLISH_FIXED_VOCABULARY_TERMS,
+  ...JAPANESE_FIXED_VOCABULARY_TERMS,
 ]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -129,7 +142,7 @@ function isLikelyHighEntropyFileName(name: string): boolean {
   );
 }
 
-function isSafeDecodedTerm(value: unknown): value is string {
+function isSafeDecodedTerm(value: unknown, language: "english" | "japanese"): value is string {
   if (
     typeof value !== "string" ||
     value.length === 0 ||
@@ -137,7 +150,12 @@ function isSafeDecodedTerm(value: unknown): value is string {
   ) {
     return false;
   }
-  return FIXED_VOCABULARY_TERMS.has(value) || safeFileName(value) === value;
+  const fixedTerms =
+    language === "english" ? ENGLISH_FIXED_VOCABULARY_TERMS : JAPANESE_FIXED_VOCABULARY_TERMS;
+  return (
+    fixedTerms.has(value) ||
+    (!ALL_FIXED_VOCABULARY_TERMS.has(value) && safeFileName(value) === value)
+  );
 }
 
 function collectExplicitFileNames(
@@ -184,40 +202,38 @@ function classificationText(activity: OrchestrationThreadActivity): string {
   ]
     .filter((value): value is string => typeof value === "string")
     .map((value) => value.slice(0, 256))
+    .map((value) => value.replace(/[._/-]+/gu, " "))
     .join(" ");
 }
 
-function collectAgentCategory(
+function explicitAgentActivityKind(
   value: unknown,
-  english: string[],
-  englishSeen: Set<string>,
-  japanese: string[],
-  japaneseSeen: Set<string>,
   depth = 0,
-): void {
-  if (depth > 4 || !isRecord(value)) return;
-  for (const [key, nested] of Object.entries(value).slice(0, 64)) {
-    if (key === "agentPath" && typeof nested === "string") {
-      const name = nested
-        .trim()
-        .replaceAll("\\", "/")
-        .split("/")
-        .findLast((segment) => segment.length > 0);
-      if (name && SAFE_AGENT_NAME_PATTERN.test(name) && !SENSITIVE_FILE_PATTERN.test(name)) {
-        for (const concept of CONCEPTS) {
-          if (!concept.pattern.test(name)) continue;
-          pushBounded(english, englishSeen, concept.english);
-          pushBounded(japanese, japaneseSeen, concept.japanese);
-        }
-        pushBounded(english, englishSeen, "AGENT");
-        pushBounded(japanese, japaneseSeen, "分担");
-      }
-      continue;
-    }
-    if (typeof nested === "object" && nested !== null) {
-      collectAgentCategory(nested, english, englishSeen, japanese, japaneseSeen, depth + 1);
+): "started" | "interacted" | "interrupted" | null {
+  if (depth > 4 || !isRecord(value)) return null;
+  const path = value.agentPath;
+  const kind = value.kind;
+  if (typeof path === "string" && typeof kind === "string") {
+    const name = path
+      .trim()
+      .replaceAll("\\", "/")
+      .split("/")
+      .findLast((segment) => segment.length > 0);
+    if (
+      name &&
+      SAFE_AGENT_NAME_PATTERN.test(name) &&
+      !SENSITIVE_FILE_PATTERN.test(name) &&
+      (kind === "started" || kind === "interacted" || kind === "interrupted")
+    ) {
+      return kind;
     }
   }
+  for (const nested of Object.values(value).slice(0, 64)) {
+    if (typeof nested !== "object" || nested === null) continue;
+    const nestedKind = explicitAgentActivityKind(nested, depth + 1);
+    if (nestedKind) return nestedKind;
+  }
+  return null;
 }
 
 export function deriveMatrixWorkVocabulary(
@@ -246,12 +262,14 @@ export function deriveMatrixWorkVocabulary(
     const itemType = typeof payload?.itemType === "string" ? payload.itemType : "";
     const requestKind = typeof payload?.requestKind === "string" ? payload.requestKind : "";
     const requestType = typeof payload?.requestType === "string" ? payload.requestType : "";
-    if (itemType === "file_change" || requestKind === "file-change") {
+    const fileChangeActivity = itemType === "file_change" || requestKind === "file-change";
+    const fileReadActivity = requestKind === "file-read" || requestType === "file_read_approval";
+    if (fileChangeActivity) {
       pushBounded(english, englishSeen, "WRITE");
       pushBounded(japanese, japaneseSeen, "書込");
       classified = true;
     }
-    if (requestKind === "file-read" || requestType.includes("file_read")) {
+    if (fileReadActivity) {
       pushBounded(english, englishSeen, "READ");
       pushBounded(japanese, japaneseSeen, "読込");
       classified = true;
@@ -262,19 +280,24 @@ export function deriveMatrixWorkVocabulary(
       classified = true;
     }
     if (itemType === "collab_agent_tool_call") {
-      pushBounded(english, englishSeen, "DELEGATE");
-      pushBounded(japanese, japaneseSeen, "分担");
+      const agentKind = explicitAgentActivityKind(payload?.data);
+      pushBounded(english, englishSeen, "AGENT");
+      pushBounded(japanese, japaneseSeen, "エージェント");
+      if (agentKind === "started") {
+        pushBounded(english, englishSeen, "DELEGATE");
+        pushBounded(japanese, japaneseSeen, "分担");
+      }
       classified = true;
     }
     if (activity.tone === "error") {
-      pushBounded(english, englishSeen, "RECOVER");
-      pushBounded(japanese, japaneseSeen, "復旧");
+      pushBounded(english, englishSeen, "ERROR");
+      pushBounded(japanese, japaneseSeen, "エラー");
       classified = true;
     }
 
-    if (payload) {
+    if (payload && (fileChangeActivity || fileReadActivity)) {
       collectExplicitFileNames(payload.data, english, englishSeen);
-      collectAgentCategory(payload.data, english, englishSeen, japanese, japaneseSeen);
+      collectExplicitFileNames(payload.data, japanese, japaneseSeen);
     }
     if (!classified && activity.kind.startsWith("task.")) {
       pushBounded(english, englishSeen, "WORK");
@@ -302,8 +325,12 @@ export function decodeMatrixWorkVocabulary(value: string): MatrixWorkVocabulary 
       return EMPTY_VOCABULARY;
     }
     return {
-      english: parsed[0].filter(isSafeDecodedTerm).slice(0, MAX_MATRIX_WORK_TERMS_PER_LANGUAGE),
-      japanese: parsed[1].filter(isSafeDecodedTerm).slice(0, MAX_MATRIX_WORK_TERMS_PER_LANGUAGE),
+      english: [
+        ...new Set(parsed[0].filter((term): term is string => isSafeDecodedTerm(term, "english"))),
+      ].slice(0, MAX_MATRIX_WORK_TERMS_PER_LANGUAGE),
+      japanese: [
+        ...new Set(parsed[1].filter((term): term is string => isSafeDecodedTerm(term, "japanese"))),
+      ].slice(0, MAX_MATRIX_WORK_TERMS_PER_LANGUAGE),
     };
   } catch {
     return EMPTY_VOCABULARY;
