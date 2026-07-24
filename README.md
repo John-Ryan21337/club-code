@@ -1,6 +1,6 @@
 # Club Code, a fork of Cafe Club - A bit more bumpin
 
-![Cafe Code desktop screenshot](./docs/images/cafe-code-desktop.png)
+![Cafe Code desktop screenshot](./docs/images/Racoons.jpg)
 
 Made in Japan with love, and polished in Silicon Valley -- a global production.
 
