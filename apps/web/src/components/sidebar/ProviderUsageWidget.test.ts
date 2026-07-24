@@ -57,6 +57,7 @@ describe("buildProviderUsageRows", () => {
         instanceId: "codex",
         name: "Codex Personal",
         checkedAt: "2026-07-23T20:05:00.000Z",
+        exhaustionNotices: [],
         windows: [
           {
             key: "codex:primary",
@@ -88,5 +89,78 @@ describe("buildProviderUsageRows", () => {
         provider({ driver: "opencode" as ServerProvider["driver"] }),
       ]),
     ).toEqual([]);
+  });
+
+  it("surfaces provider-declared exhaustion even when no usage window is available", () => {
+    expect(
+      buildProviderUsageRows([
+        provider({
+          accountRateLimits: {
+            checkedAt: "2026-07-23T20:05:00.000Z",
+            rateLimits: {
+              limitId: "codex",
+              limitName: "Codex",
+              rateLimitReachedType: "primary",
+              spendControlReached: true,
+            },
+          },
+        }),
+      ]),
+    ).toMatchObject([
+      {
+        instanceId: "codex",
+        windows: [],
+        exhaustionNotices: [
+          {
+            key: "default:provider-reached",
+            label: "Codex (shared/account limit)",
+            message: "The provider reports that this usage limit has been reached.",
+          },
+          {
+            key: "default:spend-control",
+            label: "Codex (shared/account limit)",
+            message: "The provider reports that this spend control has been reached.",
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("marks exact exhausted session, weekly, and individual windows", () => {
+    expect(
+      buildProviderUsageRows([
+        provider({
+          accountRateLimits: {
+            checkedAt: "2026-07-23T20:05:00.000Z",
+            rateLimits: {
+              primary: { usedPercent: 100 },
+              secondary: { usedPercent: 100 },
+              individualLimit: {
+                limit: "$20",
+                remainingPercent: 0,
+                resetsAt: 1_785_500_000,
+                used: "$20",
+              },
+            },
+          },
+        }),
+      ])[0]?.exhaustionNotices,
+    ).toEqual([
+      {
+        key: "default:primary",
+        label: "default (shared/account limit)",
+        message: "The current session window is exhausted.",
+      },
+      {
+        key: "default:secondary",
+        label: "default (shared/account limit)",
+        message: "The weekly window is exhausted.",
+      },
+      {
+        key: "default:individual",
+        label: "default (shared/account limit)",
+        message: "The provider reports no remaining individual spend allowance.",
+      },
+    ]);
   });
 });
