@@ -273,7 +273,7 @@ export type AmbientVideoPresentationMode = typeof AmbientVideoPresentationMode.T
 export const DEFAULT_AMBIENT_VIDEO_ENABLED = true;
 export const DEFAULT_AMBIENT_VIDEO_SOURCE: AmbientVideoSource = {
   kind: "video",
-  id: "X4n3vMXv_9k",
+  id: "nXYz8u1cEmM",
 };
 export const DEFAULT_AMBIENT_VIDEO_LAYOUT_MODE: AmbientMediaLayoutMode = "preset";
 export const DEFAULT_AMBIENT_VIDEO_PRESET_PLACEMENT: AmbientMediaPresetPlacement = "bottom-right";
