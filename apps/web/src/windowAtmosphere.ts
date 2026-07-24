@@ -34,9 +34,36 @@ export const MAX_ATMOSPHERE_PARTICLES_BY_KIND = {
 /** Reviewed decorative Roman glyph pool; it intentionally contains no words or phrases. */
 export const MATRIX_ROMAN_GLYPHS =
   "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz@#$%&*+-=<>[]{}";
-/** Reviewed decorative kana and code/AI-context kanji; glyphs are never composed into phrases. */
-export const MATRIX_JAPANESE_GLYPHS =
-  "アイウエオカキクケコサシスセソタチツテトナニヌネノマミムメモヤユヨラリルレロワヲン電脳機械知能学習推論生成言語符号解析演算回路未来創造対話探索深層神経仮想現実夢夜光影零無限";
+/** Reviewed Japanese terms whose individual kanji fit a coding/AI atmosphere. */
+export const MATRIX_JAPANESE_CODING_AI_TERMS = [
+  "電脳",
+  "機械",
+  "知能",
+  "学習",
+  "推論",
+  "生成",
+  "言語",
+  "符号",
+  "解析",
+  "演算",
+  "回路",
+  "未来",
+  "創造",
+  "対話",
+  "探索",
+  "深層",
+  "神経",
+  "仮想",
+  "現実",
+  "夢",
+  "夜",
+  "光",
+  "影",
+  "零",
+  "無限",
+] as const;
+/** Reviewed decorative kana and coding/AI-context kanji; rendering selects individual glyphs. */
+export const MATRIX_JAPANESE_GLYPHS = `アイウエオカキクケコサシスセソタチツテトナニヌネノマミムメモヤユヨラリルレロワヲン${MATRIX_JAPANESE_CODING_AI_TERMS.join("")}`;
 /** Optional tasteful 2ch/net-culture glyphs, without hateful, sexual, or slur content. */
 export const MATRIX_2CH_ENRICHED_GLYPHS = `${MATRIX_JAPANESE_GLYPHS}ｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾅﾆﾇﾈﾉﾏﾐﾑﾒﾓﾗﾘﾙﾚﾛﾜﾝｰｯ､｡･「」()ｗ草乙神ｷﾀ`;
 /** Rare, intact, reviewed 2ch-style cat AA tokens; they are never split into pseudo-phrases. */

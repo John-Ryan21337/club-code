@@ -217,8 +217,8 @@ export function WindowAtmosphereSettings() {
             }
           />
           <SettingsRow
-            title="English / Japanese mix"
-            description="Move from fully English at 0% to fully Japanese at 100%. The mix applies to both decorative glyphs and live work terms."
+            title="Roman / Japanese mix"
+            description="At 0%, streams use Roman glyphs and English live terms. At 100%, they use Japanese glyphs and Japanese live terms."
             control={
               <div className="flex items-center gap-2">
                 <NumberField
@@ -235,9 +235,9 @@ export function WindowAtmosphereSettings() {
                   }
                 >
                   <NumberFieldGroup>
-                    <NumberFieldDecrement aria-label="Decrease Japanese glyph ratio" />
-                    <NumberFieldInput aria-label="Japanese glyph ratio percent" />
-                    <NumberFieldIncrement aria-label="Increase Japanese glyph ratio" />
+                    <NumberFieldDecrement aria-label="Decrease Japanese stream ratio" />
+                    <NumberFieldInput aria-label="Japanese stream ratio percent" />
+                    <NumberFieldIncrement aria-label="Increase Japanese stream ratio" />
                   </NumberFieldGroup>
                 </NumberField>
                 <span className="text-xs text-muted-foreground">%</span>
@@ -246,7 +246,7 @@ export function WindowAtmosphereSettings() {
           />
           <SettingsRow
             title="2ch-inspired glyph enrichment"
-            description="Add tasteful half-width kana, net-culture symbols, and rare intact cat AA tokens."
+            description="Add tasteful half-width kana, net-culture symbols, and rare intact cat AA tokens to Japanese streams. At 0% Japanese, this option has no visible effect."
             control={
               <Switch
                 checked={settings.fallingEffect2chEnriched}
@@ -272,7 +272,7 @@ export function WindowAtmosphereSettings() {
           />
           <SettingsRow
             title="Provider activity links"
-            description="Show short network, database, and build/compile pulses from provider-observed activity. Lines appear only when events share an explicit tool, agent, operation, or dependency relation; Club Code never invents data flow or renders prompts, commands, SQL values, URLs, credentials, or hidden OS traffic."
+            description="Show short network, database, and build/compile pulses from provider-observed activity. Lines appear only between same-category events with the exact same reported item or tool identity; Club Code never invents data flow or renders prompts, commands, SQL values, URLs, credentials, or hidden OS traffic."
             control={
               <Switch
                 checked={settings.fallingEffectActivityLinks}

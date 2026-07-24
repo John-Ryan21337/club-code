@@ -423,6 +423,28 @@ describe("client settings", () => {
     expect(pickAmbientSettings(reset)).toEqual(DEFAULT_AMBIENT_CLIENT_SETTINGS);
   });
 
+  it("accepts exactly the three falling effects and five Matrix color modes", () => {
+    for (const fallingEffectKind of ["snow", "rain", "matrix"] as const) {
+      expect(decodeClientSettingsPatch({ fallingEffectKind })).toEqual({ fallingEffectKind });
+    }
+    for (const fallingEffectMatrixColorMode of [
+      "fixed",
+      "rainbow",
+      "rainbow-extra",
+      "music-reactive",
+      "music-reactive-extra",
+    ] as const) {
+      expect(decodeClientSettingsPatch({ fallingEffectMatrixColorMode })).toEqual({
+        fallingEffectMatrixColorMode,
+      });
+    }
+    for (const fallingEffectActivityLinkColorMode of ["random", "matrix"] as const) {
+      expect(decodeClientSettingsPatch({ fallingEffectActivityLinkColorMode })).toEqual({
+        fallingEffectActivityLinkColorMode,
+      });
+    }
+  });
+
   it("canonicalizes every explicit ambient color while preserving auto", () => {
     expect(
       decodeClientSettingsPatch({
@@ -596,6 +618,8 @@ describe("client settings", () => {
     for (const invalidPatch of [
       { fallingEffectColor: "#12345" },
       { fallingEffectColor: "red" },
+      { fallingEffectsEnabled: "yes" },
+      { fallingEffectKind: "hail" },
       { fallingEffectMatrixColorMode: "beat-sync" },
       { fallingEffectOpacity: MIN_AMBIENT_OPACITY - 0.01 },
       { fallingEffectOpacity: MAX_AMBIENT_OPACITY + 0.01 },

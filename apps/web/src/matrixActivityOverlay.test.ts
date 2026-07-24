@@ -2,6 +2,7 @@ import { EventId, type OrchestrationThreadActivity } from "@cafecode/contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  MATRIX_ACTIVITY_LINK_PULSE_MS,
   MATRIX_ACTIVITY_TTL_MS,
   MAX_MATRIX_ACTIVITY_EVENTS,
   MAX_MATRIX_ACTIVITY_LINKS,
@@ -120,6 +121,40 @@ describe("Matrix provider activity overlay", () => {
       "category",
     ]);
 
+    const weaklyRelated = deriveMatrixActivityEvents([
+      activity("agent-a", "2026-07-23T12:00:00.900Z", {
+        itemType: "build",
+        observed: {
+          providerObserved: true,
+          agentId: "shared-agent",
+          operation: "compile",
+        },
+      }),
+      activity("agent-b", "2026-07-23T12:00:00.950Z", {
+        itemType: "build",
+        observed: {
+          providerObserved: true,
+          agentId: "shared-agent",
+          operation: "compile",
+        },
+      }),
+    ]);
+    updateMatrixActivityAnimationInPlace(state, weaklyRelated, now, 160, false);
+    expect(state.linkCount).toBe(0);
+
+    const crossCategory = deriveMatrixActivityEvents([
+      activity("cross-a", "2026-07-23T12:00:00.900Z", {
+        itemType: "build",
+        itemId: "shared-cross-category-tool",
+      }),
+      activity("cross-b", "2026-07-23T12:00:00.950Z", {
+        itemType: "web_search",
+        itemId: "shared-cross-category-tool",
+      }),
+    ]);
+    updateMatrixActivityAnimationInPlace(state, crossCategory, now, 160, false);
+    expect(state.linkCount).toBe(0);
+
     const related = deriveMatrixActivityEvents(
       Array.from({ length: 40 }, (_, index) =>
         activity(`related-${index}`, new Date(now - 100 + index).toISOString(), {
@@ -134,10 +169,16 @@ describe("Matrix provider activity overlay", () => {
     expect(
       state.pulses.slice(0, state.pulseCount).some((pulse) => pulse.semanticRole === "operation"),
     ).toBe(true);
+    const expiresAtBoundary = deriveMatrixActivityEvents([
+      activity("expiry-boundary", new Date(now).toISOString(), {
+        requestType: "compile",
+        itemId: "expiry-tool",
+      }),
+    ]);
     updateMatrixActivityAnimationInPlace(
       state,
-      related,
-      now + MATRIX_ACTIVITY_TTL_MS + 101,
+      expiresAtBoundary,
+      now + MATRIX_ACTIVITY_TTL_MS,
       160,
       false,
     );
@@ -180,6 +221,42 @@ describe("Matrix provider activity overlay", () => {
       expect(matrixHexRoutePointAt(route, 0)).toEqual(from);
       expect(matrixHexRoutePointAt(route, 1)).toEqual(to);
     }
+  });
+
+  it("pulsates real link lines without animation state and keeps reduced motion static", () => {
+    const now = Date.parse("2026-07-23T12:00:01.000Z");
+    const events = deriveMatrixActivityEvents([
+      activity("pulse-start", "2026-07-23T12:00:00.700Z", {
+        itemType: "web_search",
+        itemId: "shared-network-tool",
+      }),
+      activity("pulse-finish", "2026-07-23T12:00:00.900Z", {
+        requestKind: "fetch",
+        itemId: "shared-network-tool",
+      }),
+    ]);
+    const state = createMatrixActivityAnimationState();
+    const normalMotionSamples = Array.from({ length: 9 }, (_, index) => {
+      updateMatrixActivityAnimationInPlace(
+        state,
+        events,
+        now + (index * MATRIX_ACTIVITY_LINK_PULSE_MS) / 8,
+        20,
+        false,
+      );
+      return state.links[0]!.linePulse;
+    });
+    expect(Math.max(...normalMotionSamples) - Math.min(...normalMotionSamples)).toBeGreaterThan(
+      0.2,
+    );
+    expect(normalMotionSamples.every((sample) => sample >= 0.22 && sample <= 1)).toBe(true);
+
+    const reducedMotionSamples = [0, MATRIX_ACTIVITY_LINK_PULSE_MS / 2].map((offset) => {
+      updateMatrixActivityAnimationInPlace(state, events, now + offset, 20, true);
+      return state.links[0]!.linePulse;
+    });
+    expect(reducedMotionSamples).toEqual([1, 1]);
+    expect(state.links[0]!.intensity).toBeLessThan(0.18);
   });
 
   it("keeps reduced-motion routes dim and static and switches random/matrix colors", () => {
