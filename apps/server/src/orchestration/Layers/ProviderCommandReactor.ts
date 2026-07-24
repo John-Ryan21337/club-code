@@ -232,7 +232,7 @@ function composeProviderContinuationBootstrapInput(input: {
     input.currentUserInput ??
     "[No text was provided with this request. Use the attached input, if any, with the prior chat context.]";
   const prefix =
-    "You are taking over an existing Cafe Code chat in a new provider session.\n" +
+    "You are taking over an existing Club Code chat in a new provider session.\n" +
     "The previous provider session cannot be resumed by this provider, so Cafe is providing the visible prior chat transcript below. Use it as context for the current request; do not repeat or re-answer earlier messages unless asked.\n\n" +
     "Prior Cafe-visible chat transcript:\n";
   const suffix = `\n\nCurrent user request:\n${currentUserInput}`;
@@ -353,7 +353,7 @@ function findProviderAdapterProcessError(
 
 function sanitizeProviderFailureDetail(detail: string): string {
   return RAW_PROVIDER_PROCESS_FAILURE_PATTERN.test(detail)
-    ? "Provider runtime exited while starting. Cafe Code attempted automatic fresh-session recovery; if this repeats, check the selected provider account, model access, and local CLI install."
+    ? "Provider runtime exited while starting. Club Code attempted automatic fresh-session recovery; if this repeats, check the selected provider account, model access, and local CLI install."
     : detail;
 }
 
@@ -380,11 +380,11 @@ function detectCodexActiveTurnRunningStartFailure(cause: Cause.Cause<unknown>): 
 }
 
 function codexNonSteerableDetail(turnKind: CodexNonSteerableTurnKind): string {
-  return `Codex reported a ${turnKind} active turn. Cafe Code preserved this follow-up for automatic delivery after the active turn is ready.`;
+  return `Codex reported a ${turnKind} active turn. Club Code preserved this follow-up for automatic delivery after the active turn is ready.`;
 }
 
 function retryableFollowUpDetail(): string {
-  return "Cafe Code preserved this follow-up for automatic delivery after the active turn is ready.";
+  return "Club Code preserved this follow-up for automatic delivery after the active turn is ready.";
 }
 
 function isUnknownPendingApprovalRequestError(cause: Cause.Cause<ProviderServiceError>): boolean {
@@ -1247,7 +1247,7 @@ const make = Effect.gen(function* () {
             kind: "runtime.warning",
             summary: "Stranded steer recovered as next turn",
             detail:
-              "Cafe Code found a user steer that was recorded after the previous provider turn had already become terminal. It is submitting that message as the next turn on startup, matching upstream Codex CLI/TUI stale-active-turn recovery.",
+              "Club Code found a user steer that was recorded after the previous provider turn had already become terminal. It is submitting that message as the next turn on startup, matching upstream Codex CLI/TUI stale-active-turn recovery.",
             turnId: latestTurn.turnId,
             createdAt: recoveredAt,
             payload: {
@@ -1584,7 +1584,7 @@ const make = Effect.gen(function* () {
             kind: "runtime.warning",
             summary: "Active steer retried as next turn",
             detail:
-              "Codex reported that the runtime active turn had already ended. Cafe Code cleared the active-turn pointer and submitted this message as the next turn, matching upstream Codex CLI/TUI active-turn race handling.",
+              "Codex reported that the runtime active turn had already ended. Club Code cleared the active-turn pointer and submitted this message as the next turn, matching upstream Codex CLI/TUI active-turn race handling.",
             turnId: activeTurnId,
             createdAt: observedAt,
             payload: {
@@ -1648,7 +1648,7 @@ const make = Effect.gen(function* () {
         kind: "runtime.warning",
         summary: "Turn start routed to active steer",
         detail:
-          "Provider runtime still had an active turn while the projection accepted a new turn start. Cafe Code routed this message through the active turn's steering path instead of starting a second Codex turn, matching upstream Codex CLI/TUI pending-input behavior.",
+          "Provider runtime still had an active turn while the projection accepted a new turn start. Club Code routed this message through the active turn's steering path instead of starting a second Codex turn, matching upstream Codex CLI/TUI pending-input behavior.",
         turnId: activeTurnId,
         createdAt: event.payload.createdAt,
         payload: {
@@ -1771,7 +1771,7 @@ const make = Effect.gen(function* () {
           kind: "runtime.warning",
           summary: "Turn start retried as active steer",
           detail:
-            "Codex rejected a new turn because the provider daemon still had an active turn. Cafe Code retried the same message through the active turn's steering path, matching upstream Codex CLI/TUI pending-input behavior.",
+            "Codex rejected a new turn because the provider daemon still had an active turn. Club Code retried the same message through the active turn's steering path, matching upstream Codex CLI/TUI pending-input behavior.",
           turnId: turn.turnId,
           createdAt: observedAt,
           payload: {
@@ -1879,7 +1879,7 @@ const make = Effect.gen(function* () {
         kind: "runtime.warning",
         summary: "Interrupt retargeted to provider active turn",
         detail:
-          "Provider runtime reported a different active turn than the projection. Cafe Code used the provider-runtime turn id for the interrupt so Codex app-server receives the same target the upstream CLI/TUI would interrupt.",
+          "Provider runtime reported a different active turn than the projection. Club Code used the provider-runtime turn id for the interrupt so Codex app-server receives the same target the upstream CLI/TUI would interrupt.",
         turnId: runtimeActiveTurnId,
         createdAt: observedAt,
         payload: {
@@ -2084,7 +2084,7 @@ const make = Effect.gen(function* () {
       return yield* retrySteerAsNextTurn({
         summary: "Steer submitted as next turn",
         detail:
-          "No active provider turn remained by the time Cafe Code processed this steer. Cafe Code submitted the same message as the next turn, matching upstream Codex CLI/TUI active-turn reconciliation.",
+          "No active provider turn remained by the time Club Code processed this steer. Club Code submitted the same message as the next turn, matching upstream Codex CLI/TUI active-turn reconciliation.",
         staleTurnId: projectedSession?.activeTurnId ?? null,
         recovery: "turn-start-after-no-local-active-turn",
         provider: projectedSession?.providerName ?? undefined,
@@ -2097,7 +2097,7 @@ const make = Effect.gen(function* () {
       return yield* retrySteerAsNextTurn({
         summary: "Steer submitted as next turn",
         detail:
-          "The active provider session no longer had an active turn id. Cafe Code submitted the same message as the next turn, matching upstream Codex CLI/TUI active-turn reconciliation.",
+          "The active provider session no longer had an active turn id. Club Code submitted the same message as the next turn, matching upstream Codex CLI/TUI active-turn reconciliation.",
         staleTurnId: null,
         recovery: "turn-start-after-missing-active-turn-id",
         provider: activeSession.providerName ?? undefined,
@@ -2156,7 +2156,7 @@ const make = Effect.gen(function* () {
           kind: "runtime.warning",
           summary: "Steer retried as next turn",
           detail:
-            "Codex reported that the cached active turn had already ended. Cafe Code cleared the stale active-turn pointer and submitted this message as the next turn, matching upstream Codex CLI/TUI active-turn race handling.",
+            "Codex reported that the cached active turn had already ended. Club Code cleared the stale active-turn pointer and submitted this message as the next turn, matching upstream Codex CLI/TUI active-turn race handling.",
           turnId: staleTurnId,
           createdAt: observedAt,
           payload: {

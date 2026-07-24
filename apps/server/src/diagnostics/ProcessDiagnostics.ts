@@ -424,7 +424,7 @@ function assertDescendantPid(
 ): Effect.Effect<void, ProcessDiagnosticsError, ChildProcessSpawner.ChildProcessSpawner> {
   if (pid === process.pid) {
     return Effect.fail(
-      toProcessDiagnosticsError("Refusing to signal the Cafe Code server process."),
+      toProcessDiagnosticsError("Refusing to signal the Club Code server process."),
     );
   }
 
@@ -438,7 +438,7 @@ function assertDescendantPid(
         ? Effect.void
         : Effect.fail(
             toProcessDiagnosticsError(
-              `Process ${pid} is not a live descendant of the Cafe Code server.`,
+              `Process ${pid} is not a live descendant of the Club Code server.`,
             ),
           );
     }),

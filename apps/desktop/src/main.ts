@@ -41,6 +41,8 @@ import * as DesktopState from "./app/DesktopState.ts";
 import * as DesktopUpdates from "./updates/DesktopUpdates.ts";
 import * as DesktopSourceUpdates from "./updates/DesktopSourceUpdates.ts";
 import * as DesktopWindow from "./window/DesktopWindow.ts";
+import * as DesktopVlcMedia from "./media/DesktopVlcMedia.ts";
+import * as DesktopEmbeddedBrowser from "./browser/DesktopEmbeddedBrowser.ts";
 import { resolveLinuxSafeStoragePasswordStore } from "./app/LinuxSafeStorageCommandLine.ts";
 import {
   isDesktopRuntimeSelfTestEnabled,
@@ -95,6 +97,8 @@ const electronLayer = Layer.mergeAll(
   Layer.succeed(DesktopIpc.DesktopIpc, DesktopIpc.make(Electron.ipcMain)),
 );
 
+const desktopMediaLayer = DesktopVlcMedia.layer.pipe(Layer.provideMerge(electronLayer));
+
 const desktopFoundationLayer = Layer.mergeAll(
   DesktopState.layer,
   DesktopLifecycle.layerShutdown,
@@ -141,7 +145,8 @@ const desktopRuntimeLayer = ElectronProtocol.layerSchemePrivileges.pipe(
       Layer.provideMerge(NodeServices.layer),
       Layer.provideMerge(NodeHttpClient.layerUndici),
       Layer.provideMerge(NetService.layer),
-      Layer.provideMerge(electronLayer),
+      Layer.provideMerge(desktopMediaLayer),
+      Layer.provideMerge(DesktopEmbeddedBrowser.layer),
     ),
   ),
 );

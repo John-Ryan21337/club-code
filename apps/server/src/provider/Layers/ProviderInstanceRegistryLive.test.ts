@@ -59,6 +59,7 @@ const makeCodexConfig = (overrides: Partial<CodexSettings>): CodexSettings => ({
   shadowHomePath: "",
   customModels: [],
   autoCompactTokenLimit: CODEX_DEFAULT_AUTO_COMPACT_TOKEN_LIMIT,
+  ultraCaching: false,
   ...overrides,
 });
 
@@ -69,6 +70,7 @@ const makeClaudeConfig = (overrides: Partial<ClaudeSettings>): ClaudeSettings =>
   homePath: "",
   customModels: [],
   launchArgs: "",
+  ultraCaching: false,
   ...overrides,
 });
 

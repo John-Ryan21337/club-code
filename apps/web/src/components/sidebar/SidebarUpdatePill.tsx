@@ -49,14 +49,14 @@ export function SidebarUpdatePill() {
           toastManager.add({
             type: "error",
             title: "Could not open release",
-            description: "Open the Cafe Code releases page in your browser to install the DMG.",
+            description: "Open the Club Code releases page in your browser to install the DMG.",
           });
         })
         .catch(() => {
           toastManager.add({
             type: "error",
             title: "Could not open release",
-            description: "Open the Cafe Code releases page in your browser to install the DMG.",
+            description: "Open the Club Code releases page in your browser to install the DMG.",
           });
         });
       return;

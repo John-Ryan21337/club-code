@@ -47,6 +47,7 @@ import * as EffectCodexSchema from "effect-codex-app-server/schema";
 
 import { buildCodexInitializeParams } from "./CodexProvider.ts";
 import { expandHomePath } from "../../pathExpansion.ts";
+import type { AgentBrowserMcpConfig } from "../AgentBrowserBridge.ts";
 import {
   CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS,
   CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS,
@@ -74,6 +75,14 @@ const BENIGN_ERROR_LOG_SNIPPETS = [
 const CODEX_APP_SERVER_FORCE_KILL_AFTER = "2 seconds" as const;
 const CODEX_REMOTE_COMPACTION_V2_FEATURE_CONFIG_KEY = "features.remote_compaction_v2";
 const CODEX_LOCAL_ENVIRONMENT_ID = "local";
+const AGENT_BROWSER_AUTH_ENV = "CAFE_CODE_AGENT_BROWSER_MCP_AUTHORIZATION";
+export const CODEX_ULTRA_CACHING_COMPACT_PROMPT = [
+  "Create a compact, durable handoff for the next model invocation.",
+  "Use these headings: Objective and done criteria; Durable requirements and decisions; Repository, branch, and constraints; Completed work and validation; Active work and ownership; Blockers, failures, and risks; Key files and symbols; Exact next steps.",
+  "Preserve every unresolved user request, permission or safety constraint, material decision, failure, and validation result.",
+  "Prefer precise file and symbol references over copied source, repeated prose, raw tool output, or transient chatter.",
+  "Do not claim work is complete unless the transcript proves it.",
+].join("\n");
 // App-server and Cafe share the host clock. A small future allowance tolerates
 // clock adjustment without allowing a malformed provider timestamp to push
 // durable events arbitrarily far into the future.
@@ -285,6 +294,10 @@ export interface CodexSessionRuntimeOptions {
   // Per-provider-instance override for `model_auto_compact_token_limit`.
   // Defaults to `CODEX_DEFAULT_AUTO_COMPACT_TOKEN_LIMIT` when absent.
   readonly autoCompactTokenLimit?: number | undefined;
+  // Enables the stable structured compaction prompt. The caller also resolves
+  // the lower effective token ceiling so usage events report the real limit.
+  readonly ultraCaching?: boolean | undefined;
+  readonly agentBrowserMcp?: AgentBrowserMcpConfig | undefined;
 }
 
 export interface CodexSessionRuntimeSendTurnInput {
@@ -681,6 +694,8 @@ function buildThreadStartParams(input: {
   readonly serviceTier: CodexServiceTier | undefined;
   readonly additionalDirectories?: ReadonlyArray<string> | undefined;
   readonly autoCompactTokenLimit?: number | undefined;
+  readonly ultraCaching?: boolean | undefined;
+  readonly agentBrowserMcp?: AgentBrowserMcpConfig | undefined;
 }): CodexThreadStartParamsWithRuntimeWorkspaceRoots {
   const config = runtimeModeToThreadConfig(input.runtimeMode);
   const runtimeWorkspaceRoots = buildRuntimeWorkspaceRoots({
@@ -706,7 +721,24 @@ function buildThreadStartParams(input: {
     model_auto_compact_token_limit:
       input.autoCompactTokenLimit ?? CODEX_DEFAULT_AUTO_COMPACT_TOKEN_LIMIT,
     model_auto_compact_token_limit_scope: CODEX_DEFAULT_AUTO_COMPACT_TOKEN_LIMIT_SCOPE,
+    ...(input.ultraCaching ? { compact_prompt: CODEX_ULTRA_CACHING_COMPACT_PROMPT } : {}),
   };
+  if (input.agentBrowserMcp) {
+    threadConfig.mcp_servers = {
+      club_browser: {
+        url: input.agentBrowserMcp.url,
+        env_http_headers: {
+          Authorization: AGENT_BROWSER_AUTH_ENV,
+        },
+        http_headers: {
+          "X-Cafe-Browser-Thread": input.agentBrowserMcp.threadId,
+          "X-Cafe-Browser-Provider": input.agentBrowserMcp.providerInstanceId,
+        },
+        startup_timeout_sec: 5,
+        tool_timeout_sec: 95,
+      },
+    };
+  }
   if (input.runtimeMode === "auto-accept-edits" && input.additionalDirectories?.length) {
     threadConfig.sandbox_workspace_write = {
       writable_roots: input.additionalDirectories,
@@ -1415,6 +1447,8 @@ export const openCodexThread = (input: {
   readonly resumeThreadId: string | undefined;
   readonly additionalDirectories?: ReadonlyArray<string> | undefined;
   readonly autoCompactTokenLimit?: number | undefined;
+  readonly ultraCaching?: boolean | undefined;
+  readonly agentBrowserMcp?: AgentBrowserMcpConfig | undefined;
 }): Effect.Effect<CodexThreadOpenResponse, CodexErrors.CodexAppServerError> => {
   const resumeThreadId = input.resumeThreadId;
   const startParams = buildThreadStartParams({
@@ -1424,6 +1458,8 @@ export const openCodexThread = (input: {
     serviceTier: input.serviceTier,
     additionalDirectories: input.additionalDirectories,
     autoCompactTokenLimit: input.autoCompactTokenLimit,
+    ultraCaching: input.ultraCaching,
+    agentBrowserMcp: input.agentBrowserMcp,
   });
 
   if (resumeThreadId === undefined) {
@@ -2430,6 +2466,9 @@ export const makeCodexSessionRuntime = (
     const env = {
       ...(options.environment ?? process.env),
       ...(resolvedHomePath ? { CODEX_HOME: resolvedHomePath } : {}),
+      ...(options.agentBrowserMcp
+        ? { [AGENT_BROWSER_AUTH_ENV]: options.agentBrowserMcp.authorization }
+        : {}),
     };
     const appServerArgs = buildCodexAppServerArgs(options.transportPolicy, options.ossMode);
     const appServerCwd = options.appServerCwd ?? process.cwd();
@@ -3115,7 +3154,7 @@ export const makeCodexSessionRuntime = (
           method: "codex.turnProgress/reconciledFromThreadRead",
           turnId: input.turnId,
           message:
-            "Codex thread/read reported a terminal active turn; Cafe Code reconciled the session.",
+            "Codex thread/read reported a terminal active turn; Club Code reconciled the session.",
           payload: {
             providerThreadId: input.providerThreadId,
             turnId: input.turnId,
@@ -4373,7 +4412,7 @@ export const makeCodexSessionRuntime = (
             observedAt: options.transportPolicy.observedAt ?? null,
             providerId: CODEX_HTTP_FALLBACK_PROVIDER_ID,
             semantics:
-              "Cafe Code preserves Codex's official WebSocket-to-HTTP fallback decision across Cafe restarts.",
+              "Club Code preserves Codex's official WebSocket-to-HTTP fallback decision across Club Code restarts.",
           },
         });
       }
@@ -4392,6 +4431,8 @@ export const makeCodexSessionRuntime = (
         additionalDirectories: options.additionalDirectories,
         resumeThreadId: readResumeCursorThreadId(options.resumeCursor),
         autoCompactTokenLimit: options.autoCompactTokenLimit,
+        ultraCaching: options.ultraCaching,
+        agentBrowserMcp: options.agentBrowserMcp,
       });
 
       const providerThreadId = opened.thread.id;
@@ -4625,7 +4666,7 @@ export const makeCodexSessionRuntime = (
                 turnId: expectedTurnId,
                 itemId: activeContextCompaction.itemId,
                 message:
-                  "Codex context compaction is active; Cafe Code queued the steer as a follow-up instead of sending turn/steer.",
+                  "Codex context compaction is active; Club Code queued the steer as a follow-up instead of sending turn/steer.",
                 payload: diagnostics,
               });
               return yield* buildCodexActiveContextCompactionSteerError({
@@ -4669,7 +4710,7 @@ export const makeCodexSessionRuntime = (
                   method: "codex.turnSteer/noActiveTurnReconciled",
                   turnId: input.expectedTurnId,
                   message:
-                    "Codex app-server reported no active turn for turn/steer; Cafe Code cleared the active-turn pointer so the message can be retried as a new turn.",
+                    "Codex app-server reported no active turn for turn/steer; Club Code cleared the active-turn pointer so the message can be retried as a new turn.",
                   payload: {
                     providerThreadId,
                     requestedExpectedTurnId: input.expectedTurnId,
@@ -4710,7 +4751,7 @@ export const makeCodexSessionRuntime = (
                   method: "codex.turnSteer/retryAfterActiveTurnMismatch",
                   turnId: actualTurnId,
                   message:
-                    "Codex app-server reported a newer active turn; Cafe Code retried turn/steer with that turn id.",
+                    "Codex app-server reported a newer active turn; Club Code retried turn/steer with that turn id.",
                   payload: diagnostics,
                 });
                 return yield* requestSteer(actualTurnId);
@@ -4818,7 +4859,7 @@ export const makeCodexSessionRuntime = (
                   method: "codex.turnInterrupt/noActiveTurnReconciled",
                   turnId: effectiveTurnId,
                   message:
-                    "Codex app-server reported no active turn for turn/interrupt; Cafe Code cleared the active-turn pointer.",
+                    "Codex app-server reported no active turn for turn/interrupt; Club Code cleared the active-turn pointer.",
                   payload: {
                     providerThreadId,
                     requestedTurnId: effectiveTurnId,
@@ -4861,7 +4902,7 @@ export const makeCodexSessionRuntime = (
                   method: "codex.turnInterrupt/retryAfterActiveTurnMismatch",
                   turnId: actualTurnId,
                   message:
-                    "Codex app-server reported a different active turn; Cafe Code retried turn/interrupt with that turn id.",
+                    "Codex app-server reported a different active turn; Club Code retried turn/interrupt with that turn id.",
                   payload: diagnostics,
                 });
                 yield* updateSession(sessionRef, {

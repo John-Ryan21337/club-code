@@ -25,10 +25,10 @@ describe("compatEnv", () => {
 
   it("rejects names outside the Cafe Code namespace", () => {
     expect(() => readCafeCodeEnv({ HOME: "/tmp" }, "HOME")).toThrow(
-      "Expected Cafe Code env var to start with CAFE_CODE_",
+      "Expected Club Code env var to start with CAFE_CODE_",
     );
     expect(() => writeCafeCodeEnv({}, "PORT", "3773")).toThrow(
-      "Expected Cafe Code env var to start with CAFE_CODE_",
+      "Expected Club Code env var to start with CAFE_CODE_",
     );
   });
 });

@@ -1,4 +1,11 @@
-import { Maximize2Icon, MoveIcon, PanelRightCloseIcon, XIcon } from "lucide-react";
+import {
+  Maximize2Icon,
+  MoveIcon,
+  PanelRightCloseIcon,
+  SkipBackIcon,
+  SkipForwardIcon,
+  XIcon,
+} from "lucide-react";
 import {
   type CSSProperties,
   type PointerEvent as ReactPointerEvent,
@@ -22,6 +29,13 @@ import {
   useLocalMediaElement,
   useLocalMediaState,
 } from "../../localMedia";
+import {
+  LOCAL_MEDIA_GLOW_SAMPLE_INTERVAL_MS,
+  MAX_LOCAL_MEDIA_GLOW_CONSECUTIVE_FALLBACK_SAMPLES,
+  localMediaAdaptiveGlowShadow,
+  sampleLocalMediaVideoPalette,
+} from "../../localMediaVideoGlow";
+import type { AmbientEdgePalette } from "../../ambientVideoGlow";
 import { cn } from "~/lib/utils";
 import { LocalMediaAudioVisualizer } from "./LocalMediaAudioVisualizer";
 
@@ -129,9 +143,9 @@ function presetGeometry(
 }
 
 /**
- * A current-document HTML media panel. It deliberately accepts only an object
- * URL from the browser file picker; it has no path, network, iframe, server,
- * Electron, or persisted-settings dependency.
+ * A current-document HTML media panel. It accepts either a renderer object URL
+ * or the owner-bound desktop VLC custom protocol. Neither form exposes a
+ * source path to this component or persists the selection.
  */
 export interface LocalMediaPanelProps {
   readonly cinemaEffective: boolean;
@@ -154,6 +168,17 @@ export function LocalMediaPanel({
   const pendingGeometryRef = useRef<NormalizedAmbientMediaGeometry | null>(null);
   const animationFrameRef = useRef(0);
   const [playbackError, setPlaybackError] = useState(false);
+  const [adaptiveGlowPalette, setAdaptiveGlowPalette] = useState<AmbientEdgePalette | null>(null);
+  const navigateQueue = useCallback(async (direction: "previous" | "next") => {
+    setPlaybackError(false);
+    const advanced = await localMediaStore.navigate(direction);
+    if (!advanced) setPlaybackError(true);
+  }, []);
+  const handlePlaybackFailure = useCallback(async () => {
+    setPlaybackError(false);
+    const advanced = await localMediaStore.handlePlaybackFailure();
+    if (!advanced) setPlaybackError(true);
+  }, []);
 
   const ratio = source ? aspectRatio(source.kind) : 16 / 9;
   const preset = useMemo(
@@ -173,6 +198,95 @@ export function LocalMediaPanel({
     setGeometry(null);
     setPlaybackError(false);
   }, [source?.objectUrl]);
+
+  useEffect(() => {
+    setAdaptiveGlowPalette(null);
+    if (
+      source?.kind !== "video" ||
+      !state.glowEnabled ||
+      state.glowMode !== "adaptive" ||
+      backgroundEffective ||
+      mediaElement === null ||
+      !(mediaElement instanceof HTMLVideoElement) ||
+      mediaElement.dataset.localMediaSource !== source.engine ||
+      mediaElement.getAttribute("src") !== source.objectUrl
+    ) {
+      return;
+    }
+
+    // The shared element seam is also used by the audio visualizer. Verify
+    // that this exact current local/VLC video owns it before touching a frame;
+    // a ref replacement can otherwise briefly expose the previous element.
+    const video = mediaElement;
+    let disposed = false;
+    let timer: number | null = null;
+    let consecutiveFallbacks = 0;
+    const reducedMotion =
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+    const schedule = (delay = 0) => {
+      if (disposed || document.visibilityState === "hidden") return;
+      if (timer !== null) window.clearTimeout(timer);
+      timer = window.setTimeout(sample, delay);
+    };
+    const sample = () => {
+      timer = null;
+      if (disposed) return;
+      if (document.visibilityState !== "hidden") {
+        const palette = sampleLocalMediaVideoPalette(video);
+        // A tainted or temporarily unready VLC/direct frame must immediately
+        // return to the operator-selected fixed color rather than retaining a
+        // stale frame-derived glow.
+        setAdaptiveGlowPalette(palette);
+        consecutiveFallbacks = palette === null ? consecutiveFallbacks + 1 : 0;
+      }
+      if (
+        !reducedMotion &&
+        !video.paused &&
+        !video.ended &&
+        consecutiveFallbacks < MAX_LOCAL_MEDIA_GLOW_CONSECUTIVE_FALLBACK_SAMPLES
+      ) {
+        schedule(LOCAL_MEDIA_GLOW_SAMPLE_INTERVAL_MS);
+      }
+    };
+    const sampleCurrentFrame = () => {
+      // New decode/play/seek activity is a bounded opportunity to recover
+      // from an unready frame. It must not create an unbounded polling loop.
+      consecutiveFallbacks = 0;
+      schedule();
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "hidden") {
+        if (timer !== null) window.clearTimeout(timer);
+        timer = null;
+      } else {
+        schedule();
+      }
+    };
+
+    for (const eventName of ["loadeddata", "play", "playing", "pause", "seeked"] as const) {
+      video.addEventListener(eventName, sampleCurrentFrame);
+    }
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    schedule();
+    return () => {
+      disposed = true;
+      if (timer !== null) window.clearTimeout(timer);
+      for (const eventName of ["loadeddata", "play", "playing", "pause", "seeked"] as const) {
+        video.removeEventListener(eventName, sampleCurrentFrame);
+      }
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [
+    backgroundEffective,
+    mediaElement,
+    source?.engine,
+    source?.kind,
+    source?.objectUrl,
+    state.glowEnabled,
+    state.glowMode,
+  ]);
 
   useEffect(() => {
     if (
@@ -208,6 +322,14 @@ export function LocalMediaPanel({
   ]);
   const custom = effectiveGeometry !== null;
   const floatingGeometry = effectiveGeometry ?? preset;
+  const playerGlow =
+    state.glowEnabled && !backgroundEffective
+      ? state.glowMode === "adaptive" && adaptiveGlowPalette !== null
+        ? localMediaAdaptiveGlowShadow(adaptiveGlowPalette, state.glowOpacity)
+        : `0 0 28px color-mix(in srgb, ${state.glowColor} ${Math.round(
+            state.glowOpacity * 100,
+          )}%, transparent)`
+      : undefined;
 
   const commitGeometry = useCallback(
     (next: NormalizedAmbientMediaGeometry) => {
@@ -340,7 +462,7 @@ export function LocalMediaPanel({
       className={cn(
         "group/local-media overflow-hidden rounded-xl border border-white/15 bg-black/85 shadow-2xl",
         cinemaEffective
-          ? "relative z-40 col-start-1 row-start-1 flex min-h-0 min-w-0 self-center"
+          ? "relative z-40 col-start-1 row-start-1 flex min-h-0 min-w-0 self-stretch"
           : backgroundEffective
             ? "pointer-events-none absolute inset-0 z-0 rounded-none border-0 bg-transparent shadow-none"
             : "pointer-events-auto absolute z-30",
@@ -356,10 +478,7 @@ export function LocalMediaPanel({
           : floatingAnchor && floatingGeometry
             ? geometryStyle(floatingAnchor, floatingGeometry, ratio)
             : { display: "none" }),
-        boxShadow:
-          state.glowEnabled && !backgroundEffective
-            ? `0 0 28px color-mix(in srgb, ${state.glowColor} ${Math.round(state.glowOpacity * 100)}%, transparent)`
-            : undefined,
+        boxShadow: playerGlow,
       }}
     >
       <div
@@ -377,6 +496,24 @@ export function LocalMediaPanel({
           Local media · {source.displayTitle} · session only
         </h2>
         <div className="flex items-center gap-1">
+          <button
+            type="button"
+            aria-label="Previous local media"
+            disabled={state.navigationPending}
+            className="rounded p-1 hover:bg-white/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white disabled:opacity-40"
+            onClick={() => void navigateQueue("previous")}
+          >
+            <SkipBackIcon className="size-3.5" />
+          </button>
+          <button
+            type="button"
+            aria-label="Next local media"
+            disabled={state.navigationPending}
+            className="rounded p-1 hover:bg-white/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white disabled:opacity-40"
+            onClick={() => void navigateQueue("next")}
+          >
+            <SkipForwardIcon className="size-3.5" />
+          </button>
           <button
             type="button"
             aria-pressed={state.visualizerEnabled}
@@ -411,7 +548,9 @@ export function LocalMediaPanel({
           role="alert"
           className="flex min-h-24 items-center justify-center p-4 text-center text-xs text-white/80"
         >
-          This browser could not play the selected local media file.
+          {source.engine === "vlc"
+            ? "VLC could not continue streaming the selected local media file."
+            : "This browser could not play the selected local media file. Try Open with VLC in the desktop app."}
         </div>
       ) : source.kind === "video" ? (
         <div
@@ -435,25 +574,37 @@ export function LocalMediaPanel({
             )}
             controls={!backgroundEffective}
             controlsList="nodownload noremoteplayback"
+            crossOrigin={source.engine === "vlc" ? "anonymous" : undefined}
             disablePictureInPicture
             disableRemotePlayback
-            onError={() => setPlaybackError(true)}
+            onEnded={() => void localMediaStore.handlePlaybackEnded()}
+            onError={() => void handlePlaybackFailure()}
+            onPlaying={() => localMediaStore.markPlaybackSuccess()}
             preload="metadata"
             src={source.objectUrl}
-            data-local-media-source="selected-file"
+            data-local-media-source={source.engine}
             tabIndex={backgroundEffective ? -1 : undefined}
           />
           <LocalMediaAudioVisualizer
             {...(!backgroundEffective ? { className: "bottom-12" } : {})}
             enabled={state.visualizerEnabled}
             mediaElement={mediaElement}
+            style={state.visualizerStyle}
+            presetName={state.visualizerPresetName}
+            autoCycle={state.visualizerAutoCycle}
+            cycleSeconds={state.visualizerCycleSeconds}
+            blendSeconds={state.visualizerBlendSeconds}
+            showControls={!backgroundEffective}
+            onPresetChange={(visualizerPresetName) =>
+              localMediaStore.update({ visualizerPresetName })
+            }
           />
         </div>
       ) : (
         <div
           className={cn(
             "relative flex min-h-24 items-center p-4",
-            cinemaEffective && "w-full pt-12",
+            cinemaEffective ? "h-full min-h-[20rem] w-full pt-12" : "h-[calc(100%-2rem)] w-full",
           )}
         >
           <audio
@@ -461,14 +612,25 @@ export function LocalMediaPanel({
             className="relative z-10 w-full"
             controls
             controlsList="nodownload noremoteplayback"
-            onError={() => setPlaybackError(true)}
+            crossOrigin={source.engine === "vlc" ? "anonymous" : undefined}
+            onEnded={() => void localMediaStore.handlePlaybackEnded()}
+            onError={() => void handlePlaybackFailure()}
+            onPlaying={() => localMediaStore.markPlaybackSuccess()}
             preload="metadata"
             src={source.objectUrl}
-            data-local-media-source="selected-file"
+            data-local-media-source={source.engine}
           />
           <LocalMediaAudioVisualizer
             enabled={state.visualizerEnabled}
             mediaElement={mediaElement}
+            style={state.visualizerStyle}
+            presetName={state.visualizerPresetName}
+            autoCycle={state.visualizerAutoCycle}
+            cycleSeconds={state.visualizerCycleSeconds}
+            blendSeconds={state.visualizerBlendSeconds}
+            onPresetChange={(visualizerPresetName) =>
+              localMediaStore.update({ visualizerPresetName })
+            }
           />
         </div>
       )}

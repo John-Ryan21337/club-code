@@ -14,6 +14,18 @@ export function createEnvironmentApi(rpcClient: WsRpcClient): EnvironmentApi {
     filesystem: {
       browse: rpcClient.filesystem.browse,
     },
+    ...(rpcClient.workspaceObservatory
+      ? {
+          workspaceObservatory: {
+            tree: rpcClient.workspaceObservatory.tree,
+            readFile: rpcClient.workspaceObservatory.readFile,
+            databases: rpcClient.workspaceObservatory.databases,
+            tables: rpcClient.workspaceObservatory.tables,
+            rows: rpcClient.workspaceObservatory.rows,
+            activity: rpcClient.workspaceObservatory.activity,
+          },
+        }
+      : {}),
     sourceControl: {
       lookupRepository: rpcClient.sourceControl.lookupRepository,
       cloneRepository: rpcClient.sourceControl.cloneRepository,

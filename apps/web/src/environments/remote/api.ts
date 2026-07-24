@@ -49,7 +49,7 @@ async function fetchRemoteJson<T>(input: {
       ...(input.body !== undefined ? { body: JSON.stringify(input.body) } : {}),
     });
   } catch (error) {
-    throw new Error("Could not reach the remote Cafe Code server.", { cause: error });
+    throw new Error("Could not reach the remote Club Code server.", { cause: error });
   }
 
   if (!response.ok) {

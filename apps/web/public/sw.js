@@ -1,5 +1,5 @@
 /**
- * Cafe Code service worker — Web Push + PWA install.
+ * Club Code service worker — Web Push + PWA install.
  *
  * Renders push payloads from the server (see apps/server/src/notifications/
  * WebPushNotifications.ts) as system notifications and routes notification
@@ -31,7 +31,7 @@ self.addEventListener("push", (event) => {
   } catch {
     payload = {};
   }
-  const title = typeof payload.title === "string" && payload.title ? payload.title : "Cafe Code";
+  const title = typeof payload.title === "string" && payload.title ? payload.title : "Club Code";
   const body = typeof payload.body === "string" ? payload.body : "";
   const tag = typeof payload.tag === "string" && payload.tag ? payload.tag : "cafe-code";
   const threadPath = typeof payload.threadPath === "string" ? payload.threadPath : "/";

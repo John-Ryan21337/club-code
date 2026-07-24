@@ -181,13 +181,12 @@ const runCommandOutput = Effect.fn("desktop.shellEnvironment.runCommandOutput")(
   readonly command: string;
   readonly args: ReadonlyArray<string>;
   readonly timeout: Duration.Duration;
-  readonly shell?: boolean;
 }): Effect.fn.Return<string, never, ChildProcessSpawner.ChildProcessSpawner> {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   return yield* spawner
     .string(
       ChildProcess.make(input.command, input.args, {
-        shell: input.shell ?? false,
+        shell: false,
         stdin: "ignore",
         stdout: "pipe",
         stderr: "pipe",
@@ -252,7 +251,6 @@ const readWindowsEnvironment = Effect.fn("desktop.shellEnvironment.readWindowsEn
       const output = yield* runCommandOutput({
         command,
         args,
-        shell: true,
         timeout: LOGIN_SHELL_TIMEOUT,
       });
       const environment = extractEnvironment(output, names);

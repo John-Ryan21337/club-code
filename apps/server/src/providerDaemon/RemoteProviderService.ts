@@ -356,6 +356,13 @@ const makeRemoteProviderService = Effect.gen(function* () {
   }).pipe(Effect.forkScoped);
 
   const service: ProviderServiceShape = {
+    grantAgentBrowser: (input) =>
+      rpc(daemonConfig, { method: "agentBrowserGrant", payload: input }),
+    revokeAgentBrowser: (input) =>
+      rpc(daemonConfig, { method: "agentBrowserRevoke", payload: input }),
+    pollAgentBrowser: (input) => rpc(daemonConfig, { method: "agentBrowserPoll", payload: input }),
+    completeAgentBrowser: (input) =>
+      rpc(daemonConfig, { method: "agentBrowserComplete", payload: input }),
     startSession: (threadId, input) =>
       rpc(daemonConfig, {
         method: "startSession",

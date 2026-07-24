@@ -60,7 +60,7 @@ function codexAgentActivity(
 }
 
 describe("deriveWorkflowProjection", () => {
-  it("projects Codex paths into a stable hierarchy using explicit lifecycle only", () => {
+  it("does not infer Codex parentage from similarly prefixed paths", () => {
     const parent = codexAgentActivity("event-parent", 1, {
       agentThreadId: "thread-worker",
       agentPath: "workers",
@@ -86,7 +86,7 @@ describe("deriveWorkflowProjection", () => {
     expect(snapshot.fidelity).toBe("live");
     expect(snapshot.nodes).toHaveLength(2);
     expect(snapshot.nodes.find((node) => node.id === "agent:thread-audit")).toMatchObject({
-      parentId: "agent:thread-worker",
+      parentId: null,
       path: "workers/audit",
       name: "audit",
       status: "running",
@@ -152,7 +152,7 @@ describe("deriveWorkflowProjection", () => {
     expect(snapshot.nodes[0]?.status).toBe("interrupted");
   });
 
-  it("normalizes collaboration path separators before building hierarchy", () => {
+  it("normalizes collaboration path separators without creating inferred edges", () => {
     const parent = codexAgentActivity("event-parent-windows", 1, {
       agentThreadId: "thread-worker",
       agentPath: "workers",
@@ -172,7 +172,7 @@ describe("deriveWorkflowProjection", () => {
 
     expect(snapshot.nodes.find((node) => node.id === "agent:thread-audit")).toMatchObject({
       path: "workers/audit",
-      parentId: "agent:thread-worker",
+      parentId: null,
       name: "audit",
     });
   });
@@ -224,6 +224,39 @@ describe("deriveWorkflowProjection", () => {
       path: null,
       status: "completed",
       elapsedSeconds: 2,
+    });
+  });
+
+  it("preserves provider lifecycle start evidence and reports provider/model routing metadata", () => {
+    const started = codexAgentActivity("event-idle-start", 1, {
+      agentThreadId: "thread-idle",
+      agentPath: "workers/idle",
+      kind: "started",
+    });
+    const idle = activity("event-idle", 2, "tool.completed", {
+      itemType: "collab_agent_tool_call",
+      data: {
+        item: {
+          type: "collabAgentToolCall",
+          receiverThreadIds: ["thread-idle"],
+          agentsStates: { "thread-idle": { status: "idle" } },
+        },
+      },
+    });
+
+    const snapshot = deriveWorkflowProjection({
+      activities: [idle, started],
+      turnId,
+      providerName: "codex",
+      modelName: "gpt-5.6-codex",
+    });
+
+    expect(snapshot.providerLabel).toBe("codex");
+    expect(snapshot.modelLabel).toBe("gpt-5.6-codex");
+    expect(snapshot.nodes[0]).toMatchObject({
+      status: "idle",
+      startedAt: started.createdAt,
+      lastActivityAt: idle.createdAt,
     });
   });
 

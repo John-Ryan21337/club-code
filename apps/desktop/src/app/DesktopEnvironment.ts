@@ -83,7 +83,7 @@ export class DesktopEnvironment extends Context.Service<
   DesktopEnvironmentShape
 >()("cafecode/desktop/Environment") {}
 
-const APP_BASE_NAME = "Cafe Code";
+const APP_BASE_NAME = "Club Code";
 
 function resolveDesktopAppStageLabel(input: {
   readonly isDevelopment: boolean;

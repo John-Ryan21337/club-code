@@ -39,6 +39,12 @@ export const UsageStatsTokenBreakdownEntry = Schema.Struct({
   provider: ProviderDriverKind,
   model: UsageStatsModel,
   outputTokens: NonNegativeInt,
+  /** Input tokens the provider explicitly reported as cache reads. */
+  cachedInputTokens: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
+  /** Input tokens the provider explicitly reported as cache writes. */
+  cacheWriteInputTokens: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
+  /** Context tokens observably removed across a provider compaction boundary. */
+  compactedInputTokens: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
 });
 export type UsageStatsTokenBreakdownEntry = typeof UsageStatsTokenBreakdownEntry.Type;
 

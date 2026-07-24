@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   MAX_ATMOSPHERE_DPR,
@@ -11,6 +11,7 @@ import {
   MATRIX_ROMAN_GLYPHS,
   MATRIX_RAINBOW_CYCLE_MS,
   advanceAtmosphereSceneInPlace,
+  applyMatrixWorkVocabularyInPlace,
   calculateAtmosphereParticleCount,
   clampAtmosphereDpr,
   clampFallingEffectDensity,
@@ -18,10 +19,22 @@ import {
   createAtmosphereScene,
   createMatrixColorAnimationState,
   createSeededRandom,
+  drawAtmosphereScene,
   resolveAtmosphereColor,
   resolveMatrixAtmosphereColor,
   shouldAnimateAtmosphere,
 } from "./windowAtmosphere";
+import {
+  EMPTY_LOCAL_MEDIA_AUDIO_SIGNAL,
+  type LocalMediaAudioSignal,
+} from "./localMediaAudioSignal";
+
+function audioSignal(overrides: Partial<LocalMediaAudioSignal> = {}): LocalMediaAudioSignal {
+  return {
+    ...EMPTY_LOCAL_MEDIA_AUDIO_SIGNAL,
+    ...overrides,
+  };
+}
 
 function hueFromHsl(color: string): number {
   return Number(/^hsl\(([\d.]+)/.exec(color)?.[1]);

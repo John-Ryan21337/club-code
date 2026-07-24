@@ -88,12 +88,12 @@ export function isCliEntrypoint(
 }
 
 function printHelp() {
-  process.stdout.write(`Cafe Code ${packageJson.version}
+  process.stdout.write(`Club Code ${packageJson.version}
 
 Usage:
   cafe-code                 Launch the Electron desktop app
   cafe-code --server <args> Run the server CLI
-  cafe-code killall         Terminate running Cafe Code client/server processes
+  cafe-code killall         Terminate running Club Code client/server processes
   cafe-code-server <args>   Run the server CLI
 
 Common server example:
@@ -123,7 +123,7 @@ function spawnNode(scriptPath: string, args: readonly string[], env = process.en
 
 function launchServer(args: readonly string[]) {
   if (!existsSync(packageServerBin)) {
-    process.stderr.write(`Cafe Code server entrypoint is missing: ${packageServerBin}\n`);
+    process.stderr.write(`Club Code server entrypoint is missing: ${packageServerBin}\n`);
     process.exit(1);
   }
   spawnNode(packageServerBin, args);
@@ -133,7 +133,7 @@ function launchDesktop(args: readonly string[]) {
   const scriptPath = existsSync(stagedDesktopScript) ? stagedDesktopScript : repoDesktopScript;
   if (!existsSync(scriptPath)) {
     process.stderr.write(
-      "Cafe Code desktop runtime is missing. Reinstall the package or run the desktop build first.\n",
+      "Club Code desktop runtime is missing. Reinstall the package or run the desktop build first.\n",
     );
     process.exit(1);
   }

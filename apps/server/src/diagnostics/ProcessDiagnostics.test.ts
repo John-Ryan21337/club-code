@@ -405,7 +405,7 @@ describe("ProcessDiagnostics", () => {
         pid: 4242,
         signal: "SIGINT",
         signaled: false,
-        message: Option.some("Process 4242 is not a live descendant of the Cafe Code server."),
+        message: Option.some("Process 4242 is not a live descendant of the Club Code server."),
       });
     }),
   );

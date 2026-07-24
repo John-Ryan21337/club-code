@@ -14,7 +14,7 @@ function writeAscii(view: DataView, offset: number, value: string): void {
   }
 }
 
-function silentWavFile(): File {
+function silentWavFile(name = "private-session-audio.wav"): File {
   const buffer = new ArrayBuffer(45);
   const view = new DataView(buffer);
   writeAscii(view, 0, "RIFF");
@@ -30,7 +30,7 @@ function silentWavFile(): File {
   writeAscii(view, 36, "data");
   view.setUint32(40, 1, true);
   view.setUint8(44, 128);
-  return new File([buffer], "private-session-audio.wav", { type: "audio/wav" });
+  return new File([buffer], name, { type: "audio/wav" });
 }
 
 beforeEach(() => {
@@ -94,12 +94,91 @@ it("removes inaccessible native controls while a local video is a background", a
 
   try {
     const video = document.querySelector<HTMLVideoElement>(
-      'video[data-local-media-source="selected-file"]',
+      'video[data-local-media-source="browser"]',
     );
     expect(video).not.toBeNull();
     expect(video!.controls).toBe(false);
     expect(video!.tabIndex).toBe(-1);
     expect(video!.disablePictureInPicture).toBe(true);
+  } finally {
+    await screen.unmount();
+  }
+});
+
+it("gives an audio MilkDrop visualizer the full Cinema pane and exposes preset navigation", async () => {
+  expect(localMediaStore.selectFile(silentWavFile())).toBe(true);
+  localMediaStore.update({
+    presentationMode: "cinema",
+    visualizerEnabled: true,
+    visualizerStyle: "milkdrop",
+    visualizerAutoCycle: true,
+    visualizerCycleSeconds: 45,
+    visualizerBlendSeconds: 3,
+  });
+  const screen = await render(
+    <div className="grid h-[600px] w-[900px]">
+      <LocalMediaPanel
+        backgroundEffective={false}
+        cinemaEffective
+        cinemaHeadingRef={createRef<HTMLHeadingElement>()}
+        floatingAnchor={{ left: 0, top: 0, width: 900, height: 600 }}
+      />
+    </div>,
+  );
+
+  try {
+    const panel = page.getByRole("region", { name: "Local media player" });
+    await expect.element(panel).toHaveAttribute("data-local-media-presentation", "cinema");
+    expect(panel.element().getBoundingClientRect().height).toBeGreaterThanOrEqual(590);
+    await expect
+      .element(page.getByRole("toolbar", { name: "MilkDrop visualization controls" }))
+      .toBeVisible();
+    await expect.element(page.getByLabelText("Previous MilkDrop preset")).toBeVisible();
+    await expect.element(page.getByLabelText("Random MilkDrop preset")).toBeVisible();
+    await expect.element(page.getByLabelText("Next MilkDrop preset")).toBeVisible();
+    expect(
+      document.querySelectorAll('[data-testid="local-media-audio-visualizer"] canvas'),
+    ).toHaveLength(2);
+
+    localMediaStore.update({ visualizerStyle: "spectrum" });
+    await expect
+      .element(page.getByRole("toolbar", { name: "MilkDrop visualization controls" }))
+      .not.toBeInTheDocument();
+  } finally {
+    await screen.unmount();
+  }
+});
+
+it("shows queue position and supports previous, next, ended, and bounded error skip", async () => {
+  expect(
+    localMediaStore.selectFiles([
+      silentWavFile("one.wav"),
+      silentWavFile("two.wav"),
+      silentWavFile("three.wav"),
+    ]),
+  ).toBe(true);
+  const screen = await render(
+    <div className="relative h-[600px] w-[900px]">
+      <LocalMediaPanel
+        backgroundEffective={false}
+        cinemaEffective={false}
+        cinemaHeadingRef={createRef<HTMLHeadingElement>()}
+        floatingAnchor={{ left: 100, top: 50, width: 600, height: 400 }}
+      />
+    </div>,
+  );
+
+  try {
+    await expect.element(page.getByText(/Local media · one · 1\/3/)).toBeVisible();
+    await page.getByLabelText("Next local media").click();
+    await expect.element(page.getByText(/Local media · two · 2\/3/)).toBeVisible();
+    await page.getByLabelText("Previous local media").click();
+    await expect.element(page.getByText(/Local media · one · 1\/3/)).toBeVisible();
+
+    document.querySelector("audio")?.dispatchEvent(new Event("ended"));
+    await expect.element(page.getByText(/Local media · two · 2\/3/)).toBeVisible();
+    document.querySelector("audio")?.dispatchEvent(new Event("error"));
+    await expect.element(page.getByText(/Local media · three · 3\/3/)).toBeVisible();
   } finally {
     await screen.unmount();
   }

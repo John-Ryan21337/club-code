@@ -2,6 +2,7 @@ import { EnvironmentId, ProjectId, ThreadId } from "@cafecode/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  clearMeetingPrivacyHiddenProjects,
   clearThreadUi,
   hydratePersistedProjectState,
   markThreadVisited,
@@ -11,7 +12,9 @@ import {
   removeThreadUiForNonPrimaryEnvironment,
   reorderProjects,
   setDefaultAdvertisedEndpointKey,
+  setMeetingPrivacyEnabled,
   setNavigationSidebarOpen,
+  setProjectMeetingPrivacyHidden,
   setProjectExpanded,
   setThreadPlanSidebarOpen,
   setThreadRightPanelTab,
@@ -25,6 +28,8 @@ function makeUiState(overrides: Partial<UiState> = {}): UiState {
   return {
     projectExpandedById: {},
     projectOrder: [],
+    meetingPrivacyEnabled: false,
+    meetingPrivacyHiddenProjectKeys: [],
     threadLastVisitedAtById: {},
     threadPlanSidebarOpenById: {},
     threadRightPanelTabById: {},
@@ -92,6 +97,25 @@ describe("uiStateStore pure functions", () => {
     expect(collapsed.navigationSidebarOpen).toBe(false);
     expect(expanded.navigationSidebarOpen).toBe(true);
     expect(setNavigationSidebarOpen(expanded, true)).toBe(expanded);
+  });
+
+  it("stores bounded meeting privacy choices without mutating project state", () => {
+    const initialState = makeUiState({
+      projectExpandedById: { "environment-local:/secret": true },
+      projectOrder: ["environment-local:/secret"],
+    });
+
+    const hidden = setProjectMeetingPrivacyHidden(initialState, "environment-local:/secret", true);
+    const enabled = setMeetingPrivacyEnabled(hidden, true);
+    const revealed = setProjectMeetingPrivacyHidden(enabled, "environment-local:/secret", false);
+
+    expect(enabled.meetingPrivacyEnabled).toBe(true);
+    expect(enabled.meetingPrivacyHiddenProjectKeys).toEqual(["environment-local:/secret"]);
+    expect(enabled.projectExpandedById).toBe(initialState.projectExpandedById);
+    expect(enabled.projectOrder).toBe(initialState.projectOrder);
+    expect(revealed.meetingPrivacyHiddenProjectKeys).toEqual([]);
+    expect(setMeetingPrivacyEnabled(enabled, true)).toBe(enabled);
+    expect(clearMeetingPrivacyHiddenProjects(revealed)).toBe(revealed);
   });
 
   it("stores the selected Plan/Workflow tab per thread", () => {
@@ -613,6 +637,23 @@ describe("uiStateStore persistence round-trip", () => {
       localStorageStub.getItem(PERSISTED_STATE_KEY) ?? "{}",
     ) as PersistedUiState;
     expect(persisted.navigationSidebarOpen).toBe(false);
+  });
+
+  it("persists the device-local meeting privacy mode and hidden project identities", () => {
+    const state = setMeetingPrivacyEnabled(
+      setProjectMeetingPrivacyHidden(makeUiState(), "environment-local:C:\\private\\client", true),
+      true,
+    );
+
+    persistState(state);
+
+    const persisted = JSON.parse(
+      localStorageStub.getItem(PERSISTED_STATE_KEY) ?? "{}",
+    ) as PersistedUiState;
+    expect(persisted.meetingPrivacyEnabled).toBe(true);
+    expect(persisted.meetingPrivacyHiddenProjectKeys).toEqual([
+      "environment-local:C:\\private\\client",
+    ]);
   });
 
   it("persists explicit per-thread plan sidebar choices", () => {

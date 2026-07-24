@@ -12,6 +12,8 @@ import PlanSidebar from "./PlanSidebar";
 const workflowSnapshot: WorkflowProjectionSnapshot = {
   version: 1,
   fidelity: "lifecycle-only",
+  providerLabel: "codex",
+  modelLabel: "gpt-5.6-codex",
   nodes: [
     {
       id: "item:auditor",
@@ -20,6 +22,7 @@ const workflowSnapshot: WorkflowProjectionSnapshot = {
       name: "auditor",
       taskLabel: "<script>safe text only</script>",
       status: "running",
+      startedAt: "2026-07-23T11:59:00.000Z",
       elapsedSeconds: null,
       latestActivitySummary: null,
       lastActivityAt: "2026-07-23T12:00:00.000Z",
@@ -43,8 +46,15 @@ const workflowSnapshot: WorkflowProjectionSnapshot = {
   omittedActivityCount: 0,
 };
 
-function PlanWorkflowHarness() {
+function PlanWorkflowHarness({
+  workflowObservatoryEnabled = true,
+}: {
+  workflowObservatoryEnabled?: boolean;
+}) {
   const [activeTab, setActiveTab] = useState<RightPanelTab>("plan");
+  const [expandedNodeById, setExpandedNodeById] = useState<Record<string, boolean>>({
+    "item:auditor": true,
+  });
   return (
     <div className="h-[720px] w-[360px]">
       <PlanSidebar
@@ -60,9 +70,13 @@ function PlanWorkflowHarness() {
         timestampFormat="24-hour"
         activeTab={activeTab}
         workflowSnapshot={workflowSnapshot}
-        workflowNodeExpandedById={{}}
+        workflowNodeExpandedById={expandedNodeById}
+        workflowObservatoryEnabled={workflowObservatoryEnabled}
+        workflowStallWarningSeconds={180}
         onActiveTabChange={setActiveTab}
-        onWorkflowNodeExpandedChange={vi.fn()}
+        onWorkflowNodeExpandedChange={(nodeId, expanded) =>
+          setExpandedNodeById((previous) => ({ ...previous, [nodeId]: expanded }))
+        }
         onClose={vi.fn()}
       />
     </div>
@@ -89,8 +103,18 @@ it("switches from Plan to the semantic Workflow tree with honest unavailable fie
     .element(page.getByRole("list", { name: "Provider-reported workflow", exact: true }))
     .toBeVisible();
   await expect.element(page.getByText("Lifecycle only")).toBeVisible();
-  await expect.element(page.getByText("Duration unavailable")).toBeVisible();
-  await expect.element(page.getByText("No recent activity", { exact: true })).toBeVisible();
+  await expect
+    .element(page.getByText("Provider: codex · Selected model: gpt-5.6-codex"))
+    .toBeVisible();
+  await expect.element(page.getByText(/Possibly stalled warning:/)).toBeVisible();
+  await expect.element(page.getByText(/This is not proof the agent stopped\./)).toBeVisible();
   await expect.element(page.getByText("<script>safe text only</script>")).toBeVisible();
   await expect.element(page.getByText("Audit the adapter")).toBeVisible();
+});
+
+it("hides the Workflow tab when the local observatory preference is off", async () => {
+  await render(<PlanWorkflowHarness workflowObservatoryEnabled={false} />);
+
+  await expect.element(page.getByRole("tab", { name: "Plan" })).toBeVisible();
+  await expect.element(page.getByRole("tab", { name: "Workflow" })).not.toBeInTheDocument();
 });

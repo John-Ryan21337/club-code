@@ -11,6 +11,8 @@ import {
   type FallingEffectKind,
   type FallingEffectMatrixColorMode,
 } from "@cafecode/contracts/settings";
+import { hasFreshLocalMediaAudioSignal, type LocalMediaAudioSignal } from "./localMediaAudioSignal";
+import type { MatrixWorkVocabulary } from "./matrixWorkVocabulary";
 
 export const MAX_ATMOSPHERE_DPR = 2;
 /** Keep the backing canvas bounded even on an ultra-wide high-DPI display. */
@@ -216,6 +218,26 @@ export function createAtmosphereScene(
   };
 }
 
+/**
+ * Refresh the opt-in work terms without rebuilding or teleporting the falling
+ * scene. A deterministic caller-provided random source keeps tests and visual
+ * updates reproducible.
+ */
+export function applyMatrixWorkVocabularyInPlace(
+  scene: AtmosphereScene,
+  vocabulary: MatrixWorkVocabulary,
+  random: () => number,
+): void {
+  if (scene.kind !== "matrix") return;
+  for (const particle of scene.particles) {
+    const terms = particle.matrixLanguage === "japanese" ? vocabulary.japanese : vocabulary.english;
+    particle.matrixWorkToken =
+      particle.matrixToken === null && terms.length > 0 && random() < MATRIX_WORK_TOKEN_PROBABILITY
+        ? (terms[Math.floor(random() * terms.length)] ?? null)
+        : null;
+  }
+}
+
 export function clampFallingEffectSpeed(speed: number): number {
   if (!Number.isFinite(speed)) {
     return 1;
@@ -383,6 +405,7 @@ export function drawAtmosphereScene(
   scene: AtmosphereScene,
   color: string,
   opacity: number,
+  matrixColorFrame?: MatrixColorFrame,
 ): void {
   context.clearRect(0, 0, scene.width, scene.height);
   const normalizedOpacity = Math.min(1, Math.max(0, opacity));

@@ -30,31 +30,31 @@ describe("native desktop runtime smoke", () => {
   } as const;
 
   it("parses explicit app and resource paths", () => {
-    const options = parseRuntimeSmokeArgs(["--app", "./Cafe Code", "--resources", "./Resources"]);
-    assert.match(options.appPath, /Cafe Code$/);
+    const options = parseRuntimeSmokeArgs(["--app", "./Club Code", "--resources", "./Resources"]);
+    assert.match(options.appPath, /Club Code$/);
     assert.match(options.resourcesPath ?? "", /Resources$/);
   });
 
   it("derives native packaged resource locations", () => {
     assert.equal(
-      resolvePackagedResourcesPath("C:\\Cafe\\Cafe Code.exe", "win32"),
-      "C:\\Cafe\\resources",
+      resolvePackagedResourcesPath("C:\\Club\\Club Code.exe", "win32"),
+      "C:\\Club\\resources",
     );
     assert.equal(
       resolvePackagedResourcesPath(
-        "/Applications/Cafe Code.app/Contents/MacOS/Cafe Code",
+        "/Applications/Club Code.app/Contents/MacOS/Club Code",
         "darwin",
       ),
-      "/Applications/Cafe Code.app/Contents/Resources",
+      "/Applications/Club Code.app/Contents/Resources",
     );
   });
 
   it("extracts only a loopback desktop debug endpoint", () => {
     assert.equal(
-      readDebugUrl("noise [Cafe Code debug] http://127.0.0.1:4567/debug more"),
+      readDebugUrl("noise [Club Code debug] http://127.0.0.1:4567/debug more"),
       "http://127.0.0.1:4567/debug",
     );
-    assert.isUndefined(readDebugUrl("[Cafe Code debug] http://192.0.2.1:4567/debug"));
+    assert.isUndefined(readDebugUrl("[Club Code debug] http://192.0.2.1:4567/debug"));
   });
 
   it("disables Chromium sandboxing only for an explicit container smoke", () => {

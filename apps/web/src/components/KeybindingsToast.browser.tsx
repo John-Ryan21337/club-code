@@ -122,6 +122,7 @@ function createBaseServerConfig(): ServerConfig {
           shadowHomePath: "",
           customModels: [],
           autoCompactTokenLimit: CODEX_DEFAULT_AUTO_COMPACT_TOKEN_LIMIT,
+          ultraCaching: false,
         },
         claudeAgent: {
           enabled: true,
@@ -130,6 +131,7 @@ function createBaseServerConfig(): ServerConfig {
           homePath: "",
           customModels: [],
           launchArgs: "",
+          ultraCaching: false,
         },
       },
     },

@@ -178,6 +178,9 @@ function hasCafeCodeHint(command: string): boolean {
     lower.includes("cafe-code") ||
     lower.includes("cafecode") ||
     lower.includes("cafe code") ||
+    lower.includes("club-code") ||
+    lower.includes("clubcode") ||
+    lower.includes("club code") ||
     lower.includes("@cafeai/cafe-code")
   );
 }
@@ -251,7 +254,12 @@ function isCafeCodeWindowsAppExecutable(command: string): boolean {
     basename === "cafe code alpha" ||
     basename === "cafe code nightly" ||
     basename === "cafe code dev" ||
-    /^cafe code \((?:alpha|nightly|dev)\)$/iu.test(basename)
+    /^cafe code \((?:alpha|nightly|dev)\)$/iu.test(basename) ||
+    basename === "club code" ||
+    basename === "club code alpha" ||
+    basename === "club code nightly" ||
+    basename === "club code dev" ||
+    /^club code \((?:alpha|nightly|dev)\)$/iu.test(basename)
   );
 }
 
@@ -515,12 +523,12 @@ function formatKillallOutput(input: {
   readonly results: ReadonlyArray<CafeKillallTerminationResult>;
 }): string {
   if (input.targets.length === 0) {
-    return "No Cafe Code client/server processes found.";
+    return "No Club Code client/server processes found.";
   }
 
   if (input.dryRun) {
     return [
-      `Cafe Code killall dry run: ${input.targets.length} process(es) would be terminated.`,
+      `Club Code killall dry run: ${input.targets.length} process(es) would be terminated.`,
       ...input.targets.map(formatTargetLine),
     ].join("\n");
   }
@@ -529,7 +537,7 @@ function formatKillallOutput(input: {
     (result) => result.error !== null || result.stillAlive,
   ).length;
   return [
-    `Cafe Code killall targeted ${input.results.length} process(es); ${failedCount} failed or remained alive.`,
+    `Club Code killall targeted ${input.results.length} process(es); ${failedCount} failed or remained alive.`,
     ...input.results.map(formatResultLine),
   ].join("\n");
 }
@@ -547,13 +555,13 @@ export const runKillallCommand = (flags: { readonly dryRun: boolean }) =>
   });
 
 const dryRunFlag = Flag.boolean("dry-run").pipe(
-  Flag.withDescription("Print matching Cafe Code processes without signaling them."),
+  Flag.withDescription("Print matching Club Code processes without signaling them."),
   Flag.withDefault(false),
 );
 
 export const killallCommand = Command.make("killall", {
   dryRun: dryRunFlag,
 }).pipe(
-  Command.withDescription("Terminate running Cafe Code desktop, server, and provider processes."),
+  Command.withDescription("Terminate running Club Code desktop, server, and provider processes."),
   Command.withHandler((flags) => runKillallCommand(flags)),
 );

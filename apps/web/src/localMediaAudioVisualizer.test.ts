@@ -8,6 +8,7 @@ import {
   LOCAL_MEDIA_VISUALIZER_MAX_CANVAS_EDGE,
   LOCAL_MEDIA_VISUALIZER_MAX_CANVAS_PIXELS,
   LOCAL_MEDIA_VISUALIZER_MAX_LEVEL_STEP,
+  revokeSessionAudioCaptureStream,
   shouldVisualizeLocalMedia,
   updateLocalMediaVisualizerLevels,
 } from "./localMediaAudioVisualizer";
@@ -63,10 +64,30 @@ describe("local media audio visualizer policy", () => {
     ).toBe(false);
   });
 
-  it("admits only marked object-URL audio/video elements", () => {
+  it("admits only marked browser object URLs and owner-bound VLC URLs", () => {
     vi.stubGlobal("document", { baseURI: "http://localhost/" });
     expect(isApprovedLocalMediaVisualizerElement(mediaElement({}))).toBe(true);
-    expect(isApprovedLocalMediaVisualizerElement(mediaElement({ tagName: "VIDEO" }))).toBe(true);
+    expect(
+      isApprovedLocalMediaVisualizerElement(
+        mediaElement({ tagName: "VIDEO", provenance: "browser" }),
+      ),
+    ).toBe(true);
+    expect(
+      isApprovedLocalMediaVisualizerElement(
+        mediaElement({
+          provenance: "vlc",
+          source: `cafecode-media://stream/${"v".repeat(43)}`,
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      isApprovedLocalMediaVisualizerElement(
+        mediaElement({
+          provenance: "vlc",
+          source: `cafecode-media://stream/${"v".repeat(43)}?leak=true`,
+        }),
+      ),
+    ).toBe(false);
     expect(
       isApprovedLocalMediaVisualizerElement(
         mediaElement({ source: "https://www.youtube.com/watch?v=dQw4w9WgXcQ" }),
@@ -127,7 +148,10 @@ describe("local media audio visualizer policy", () => {
 
   it("builds one bounded analysis branch, pauses frames, and tears down deterministically", async () => {
     vi.stubGlobal("document", { baseURI: "http://localhost/" });
-    const media = mediaElement({}) as HTMLMediaElement & { paused: boolean; ended: boolean };
+    const media = mediaElement({
+      provenance: "vlc",
+      source: `cafecode-media://stream/${"v".repeat(43)}`,
+    }) as HTMLMediaElement & { paused: boolean; ended: boolean };
     Object.assign(media, { paused: false, ended: false });
 
     const clearRect = vi.fn();
@@ -202,6 +226,21 @@ describe("local media audio visualizer policy", () => {
     expect(canvas.width * canvas.height).toBeLessThanOrEqual(
       LOCAL_MEDIA_VISUALIZER_MAX_CANVAS_PIXELS,
     );
+    expect(localMediaAudioSignalStore.getSnapshot().active).toBe(false);
+
+    await controller.sync(false, {
+      ...DEFAULT_LOCAL_MEDIA_VISUALIZER_SETTINGS,
+      publishMatrixSignal: true,
+    });
+    expect(frames.size).toBe(1);
+    const signalFrame = [...frames.entries()][0];
+    expect(signalFrame).toBeDefined();
+    frames.delete(signalFrame![0]);
+    signalFrame![1](200);
+    expect(localMediaAudioSignalStore.getSnapshot()).toMatchObject({
+      active: true,
+      sampledAt: 200,
+    });
 
     await controller.sync(false, true);
     expect(frames.size).toBe(1);
@@ -225,13 +264,211 @@ describe("local media audio visualizer policy", () => {
       configurable: true,
       value: "https://open.spotify.com/track/example",
     });
-    await controller.sync(true);
+    await controller.sync(true, {
+      ...DEFAULT_LOCAL_MEDIA_VISUALIZER_SETTINGS,
+      publishMatrixSignal: true,
+    });
     expect(source.connect).toHaveBeenCalledTimes(3);
+    expect(localMediaAudioSignalStore.getSnapshot().active).toBe(false);
 
     await controller.destroy();
     expect(source.disconnect).toHaveBeenCalledWith();
     expect(analyser.disconnect).toHaveBeenCalledOnce();
     expect(audioContext.close).toHaveBeenCalledOnce();
     expect(clearRect).toHaveBeenCalled();
+  });
+
+  it("does not let a paused controller erase an actively publishing Matrix signal", async () => {
+    vi.stubGlobal("document", { baseURI: "http://localhost/" });
+
+    const createHarness = (paused: boolean) => {
+      const media = mediaElement({}) as HTMLMediaElement & {
+        paused: boolean;
+        ended: boolean;
+      };
+      Object.assign(media, { paused, ended: false });
+      const source = { connect: vi.fn(), disconnect: vi.fn() };
+      const analyser = {
+        disconnect: vi.fn(),
+        fftSize: 0,
+        smoothingTimeConstant: 0,
+        minDecibels: 0,
+        maxDecibels: 0,
+        frequencyBinCount: 128,
+        getByteFrequencyData: vi.fn((buffer: Uint8Array) => buffer.fill(160)),
+      };
+      const audioContext = {
+        state: "running",
+        sampleRate: 48_000,
+        destination: {},
+        createMediaElementSource: vi.fn(() => source),
+        createAnalyser: vi.fn(() => analyser),
+        resume: vi.fn(),
+        suspend: vi.fn(async () => {
+          audioContext.state = "suspended";
+        }),
+        close: vi.fn(async () => {
+          audioContext.state = "closed";
+        }),
+      };
+      const canvas = {
+        width: 1,
+        height: 1,
+        getBoundingClientRect: () => ({ width: 320, height: 180 }),
+        getContext: () => ({
+          clearRect: vi.fn(),
+          fillRect: vi.fn(),
+          fillStyle: "",
+        }),
+      } as unknown as HTMLCanvasElement;
+      const frames: FrameRequestCallback[] = [];
+      let nextFrame = 0;
+      const createAudioContext = vi.fn(() => audioContext as unknown as AudioContext);
+      const controller = new LocalMediaAudioVisualizerController(media, canvas, {
+        createAudioContext,
+        requestAnimationFrame: (callback) => {
+          frames.push(callback);
+          return ++nextFrame;
+        },
+        cancelAnimationFrame: vi.fn(),
+        devicePixelRatio: () => 1,
+      });
+      return { controller, createAudioContext, frames };
+    };
+
+    const active = createHarness(false);
+    const inactive = createHarness(true);
+    const matrixSignalSettings = {
+      ...DEFAULT_LOCAL_MEDIA_VISUALIZER_SETTINGS,
+      publishMatrixSignal: true,
+    };
+
+    await active.controller.sync(false, matrixSignalSettings);
+    active.frames.shift()?.(100);
+    expect(localMediaAudioSignalStore.getSnapshot()).toMatchObject({
+      active: true,
+      sampledAt: 100,
+    });
+
+    await inactive.controller.sync(false, matrixSignalSettings);
+    expect(inactive.createAudioContext).not.toHaveBeenCalled();
+    expect(localMediaAudioSignalStore.getSnapshot()).toMatchObject({
+      active: true,
+      sampledAt: 100,
+    });
+
+    active.frames.shift()?.(150);
+    expect(localMediaAudioSignalStore.getSnapshot()).toMatchObject({
+      active: true,
+      sampledAt: 150,
+    });
+
+    await inactive.controller.destroy();
+    await active.controller.destroy();
+    expect(localMediaAudioSignalStore.getSnapshot().active).toBe(false);
+  });
+
+  it("publishes Matrix features from an explicitly approved display stream without echoing it", async () => {
+    const audioTrack = { readyState: "live" } as MediaStreamTrack;
+    const stream = {
+      getAudioTracks: () => [audioTrack],
+    } as unknown as MediaStream;
+    approveSessionAudioCaptureStream(stream);
+
+    const source = { connect: vi.fn(), disconnect: vi.fn() };
+    const analyser = {
+      disconnect: vi.fn(),
+      fftSize: 0,
+      smoothingTimeConstant: 0,
+      minDecibels: 0,
+      maxDecibels: 0,
+      frequencyBinCount: 128,
+      getByteFrequencyData: vi.fn(),
+    };
+    const audioContext = {
+      state: "running",
+      sampleRate: 48_000,
+      destination: {},
+      createMediaStreamSource: vi.fn(() => source),
+      createAnalyser: vi.fn(() => analyser),
+      resume: vi.fn(),
+      suspend: vi.fn(async () => {
+        audioContext.state = "suspended";
+      }),
+      close: vi.fn(async () => {
+        audioContext.state = "closed";
+      }),
+    };
+    const canvas = {
+      width: 1,
+      height: 1,
+      getBoundingClientRect: () => ({ width: 320, height: 180 }),
+      getContext: () => ({
+        clearRect: vi.fn(),
+        fillRect: vi.fn(),
+        fillStyle: "",
+      }),
+    } as unknown as HTMLCanvasElement;
+    const scheduledFrames: FrameRequestCallback[] = [];
+    const controller = new LocalMediaAudioVisualizerController(stream, canvas, {
+      createAudioContext: () => audioContext as unknown as AudioContext,
+      requestAnimationFrame: vi.fn((callback) => {
+        scheduledFrames.push(callback);
+        return 1;
+      }),
+      cancelAnimationFrame: vi.fn(),
+      devicePixelRatio: () => 1,
+    });
+
+    await controller.sync(true, {
+      ...DEFAULT_LOCAL_MEDIA_VISUALIZER_SETTINGS,
+      publishMatrixSignal: true,
+    });
+    expect(audioContext.createMediaStreamSource).toHaveBeenCalledWith(stream);
+    expect(source.connect).toHaveBeenCalledWith(analyser);
+    expect(source.connect).not.toHaveBeenCalledWith(audioContext.destination);
+    scheduledFrames[0]?.(100);
+    expect(analyser.getByteFrequencyData).toHaveBeenCalledOnce();
+    expect(localMediaAudioSignalStore.getSnapshot()).toMatchObject({
+      active: true,
+      level: 0,
+      bass: 0,
+      mid: 0,
+      treble: 0,
+      beat: 0,
+      sampledAt: 100,
+    });
+
+    await controller.sync(false);
+    expect(audioContext.suspend).toHaveBeenCalledOnce();
+    await controller.destroy();
+    revokeSessionAudioCaptureStream(stream);
+  });
+
+  it("rejects an unapproved MediaStream even when Matrix publication is requested", async () => {
+    const stream = {
+      getAudioTracks: () => [{ readyState: "live" }],
+    } as unknown as MediaStream;
+    const createAudioContext = vi.fn();
+    const canvas = {
+      width: 1,
+      height: 1,
+      getBoundingClientRect: () => ({ width: 320, height: 180 }),
+      getContext: () => ({ clearRect: vi.fn() }),
+    } as unknown as HTMLCanvasElement;
+    const controller = new LocalMediaAudioVisualizerController(stream, canvas, {
+      createAudioContext,
+      requestAnimationFrame: vi.fn(),
+      cancelAnimationFrame: vi.fn(),
+      devicePixelRatio: () => 1,
+    });
+
+    await controller.sync(true, {
+      ...DEFAULT_LOCAL_MEDIA_VISUALIZER_SETTINGS,
+      publishMatrixSignal: true,
+    });
+    expect(createAudioContext).not.toHaveBeenCalled();
+    expect(localMediaAudioSignalStore.getSnapshot().active).toBe(false);
+    await controller.destroy();
   });
 });

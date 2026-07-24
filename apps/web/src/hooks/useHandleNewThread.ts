@@ -20,6 +20,7 @@ import { selectProjectsAcrossEnvironments, useStore } from "../store";
 import { createThreadSelectorByRef } from "../storeSelectors";
 import { resolveThreadRouteTarget } from "../threadRoutes";
 import { useUiStateStore } from "../uiStateStore";
+import { filterProjectsForMeetingPrivacy } from "../meetingPrivacy";
 import { useSettings } from "./useSettings";
 
 function useNewThreadState() {
@@ -167,7 +168,19 @@ export function useHandleNewThread() {
         : useComposerDraftStore.getState().getDraftSession(routeTarget.draftId)
       : null,
   );
-  const projects = useStore(useShallow((store) => selectProjectsAcrossEnvironments(store)));
+  const allProjects = useStore(useShallow((store) => selectProjectsAcrossEnvironments(store)));
+  const meetingPrivacyEnabled = useUiStateStore((store) => store.meetingPrivacyEnabled);
+  const meetingPrivacyHiddenProjectKeys = useUiStateStore(
+    (store) => store.meetingPrivacyHiddenProjectKeys,
+  );
+  const projects = useMemo(
+    () =>
+      filterProjectsForMeetingPrivacy(allProjects, {
+        enabled: meetingPrivacyEnabled,
+        hiddenProjectKeys: meetingPrivacyHiddenProjectKeys,
+      }),
+    [allProjects, meetingPrivacyEnabled, meetingPrivacyHiddenProjectKeys],
+  );
   const orderedProjects = useMemo(() => {
     return orderItemsByPreferredIds({
       items: projects,

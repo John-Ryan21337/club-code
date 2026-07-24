@@ -44,6 +44,9 @@ layer("UsageStatsRepository", (it) => {
             provider: CODEX,
             model: "gpt-5.6-codex",
             outputTokens: 120,
+            cachedInputTokens: 1_000,
+            cacheWriteInputTokens: 100,
+            compactedInputTokens: 400,
           },
         ],
       });
@@ -55,6 +58,9 @@ layer("UsageStatsRepository", (it) => {
             provider: CODEX,
             model: "gpt-5.6-codex",
             outputTokens: 30,
+            cachedInputTokens: 250,
+            cacheWriteInputTokens: 25,
+            compactedInputTokens: 75,
           },
         ],
       });
@@ -69,6 +75,9 @@ layer("UsageStatsRepository", (it) => {
           provider: CODEX,
           model: "gpt-5.6-codex",
           outputTokens: 150,
+          cachedInputTokens: 1_250,
+          cacheWriteInputTokens: 125,
+          compactedInputTokens: 475,
         },
       ]);
     }),
@@ -85,9 +94,33 @@ layer("UsageStatsRepository", (it) => {
           { day: "2026-08-01", generatingMs: 2000, outputTokens: 20, userMessages: 1 },
         ],
         tokenBreakdowns: [
-          { day: "2026-08-03", provider: CODEX, model: "gpt-b", outputTokens: 4 },
-          { day: "2026-08-03", provider: CLAUDE, model: "claude-a", outputTokens: 3 },
-          { day: "2026-08-03", provider: CODEX, model: "gpt-a", outputTokens: 3 },
+          {
+            day: "2026-08-03",
+            provider: CODEX,
+            model: "gpt-b",
+            outputTokens: 4,
+            cachedInputTokens: 0,
+            cacheWriteInputTokens: 0,
+            compactedInputTokens: 0,
+          },
+          {
+            day: "2026-08-03",
+            provider: CLAUDE,
+            model: "claude-a",
+            outputTokens: 3,
+            cachedInputTokens: 0,
+            cacheWriteInputTokens: 0,
+            compactedInputTokens: 0,
+          },
+          {
+            day: "2026-08-03",
+            provider: CODEX,
+            model: "gpt-a",
+            outputTokens: 3,
+            cachedInputTokens: 0,
+            cacheWriteInputTokens: 0,
+            compactedInputTokens: 0,
+          },
         ],
       });
 
@@ -95,9 +128,33 @@ layer("UsageStatsRepository", (it) => {
       const augustDays = rows.map((row) => row.day).filter((day) => day.startsWith("2026-08"));
       assert.deepEqual(augustDays, ["2026-08-01", "2026-08-03"]);
       assert.deepEqual(yield* repository.listTokenBreakdownDays, [
-        { day: "2026-08-03", provider: CLAUDE, model: "claude-a", outputTokens: 3 },
-        { day: "2026-08-03", provider: CODEX, model: "gpt-a", outputTokens: 3 },
-        { day: "2026-08-03", provider: CODEX, model: "gpt-b", outputTokens: 4 },
+        {
+          day: "2026-08-03",
+          provider: CLAUDE,
+          model: "claude-a",
+          outputTokens: 3,
+          cachedInputTokens: 0,
+          cacheWriteInputTokens: 0,
+          compactedInputTokens: 0,
+        },
+        {
+          day: "2026-08-03",
+          provider: CODEX,
+          model: "gpt-a",
+          outputTokens: 3,
+          cachedInputTokens: 0,
+          cacheWriteInputTokens: 0,
+          compactedInputTokens: 0,
+        },
+        {
+          day: "2026-08-03",
+          provider: CODEX,
+          model: "gpt-b",
+          outputTokens: 4,
+          cachedInputTokens: 0,
+          cacheWriteInputTokens: 0,
+          compactedInputTokens: 0,
+        },
       ]);
     }),
   );
@@ -116,6 +173,9 @@ layer("UsageStatsRepository", (it) => {
               provider: CODEX,
               model: "x".repeat(257),
               outputTokens: 7,
+              cachedInputTokens: 0,
+              cacheWriteInputTokens: 0,
+              compactedInputTokens: 0,
             },
           ],
         }),

@@ -22,12 +22,39 @@ import type {
 } from "./git.ts";
 import type { FilesystemBrowseInput, FilesystemBrowseResult } from "./filesystem.ts";
 import type {
+  WorkspaceObservatoryActivityInput,
+  WorkspaceObservatoryActivityResult,
+  WorkspaceObservatoryDatabaseInput,
+  WorkspaceObservatoryDatabaseResult,
+  WorkspaceObservatoryFileInput,
+  WorkspaceObservatoryFileResult,
+  WorkspaceObservatoryRowsResult,
+  WorkspaceObservatoryTableInput,
+  WorkspaceObservatoryTableResult,
+  WorkspaceObservatoryTreeInput,
+  WorkspaceObservatoryTreeResult,
+} from "./workspaceObservatory.ts";
+import type {
   ProjectSearchEntriesInput,
   ProjectSearchEntriesResult,
   ProjectWriteFileInput,
   ProjectWriteFileResult,
 } from "./project.ts";
 import type { ProviderInstanceId } from "./providerInstance.ts";
+import type {
+  EmbeddedBrowserActionResult,
+  EmbeddedBrowserClickInput,
+  EmbeddedBrowserHistoryActionInput,
+  EmbeddedBrowserNavigateInput,
+  EmbeddedBrowserOpenInput,
+  EmbeddedBrowserSetBoundsInput,
+  EmbeddedBrowserShareInput,
+  EmbeddedBrowserSnapshot,
+  EmbeddedBrowserSnapshotInput,
+  EmbeddedBrowserState,
+  EmbeddedBrowserTabInput,
+  EmbeddedBrowserTypeInput,
+} from "./embeddedBrowser.ts";
 import type {
   ServerConfig,
   ServerOpenSystemPromptFileResult,
@@ -83,7 +110,7 @@ import type {
   SourceControlRepositoryInfo,
   SourceControlRepositoryLookupInput,
 } from "./sourceControl.ts";
-import { EnvironmentId } from "./baseSchemas.ts";
+import { EnvironmentId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
 export interface ContextMenuItem<T extends string = string> {
   id: T;
@@ -371,6 +398,101 @@ export const DesktopPowerSaveBlockerStateSchema = Schema.Struct({
 });
 export type DesktopPowerSaveBlockerState = typeof DesktopPowerSaveBlockerStateSchema.Type;
 
+export const DESKTOP_LOCAL_MEDIA_TITLE_MAX_LENGTH = 256;
+export const DESKTOP_LOCAL_MEDIA_REASON_MAX_LENGTH = 512;
+export const DESKTOP_LOCAL_MEDIA_SESSION_ID_MAX_LENGTH = 128;
+export const DESKTOP_LOCAL_MEDIA_URL_MAX_LENGTH = 256;
+export const MAX_DESKTOP_LOCAL_MEDIA_QUEUE_ITEMS = 64;
+export const MAX_DESKTOP_LOCAL_MEDIA_QUEUE_BYTES = 64 * 1024 * 1024 * 1024;
+
+const DesktopLocalMediaTitleSchema = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(DESKTOP_LOCAL_MEDIA_TITLE_MAX_LENGTH),
+);
+const DesktopLocalMediaReasonTextSchema = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(DESKTOP_LOCAL_MEDIA_REASON_MAX_LENGTH),
+);
+const DesktopLocalMediaSessionIdSchema = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(DESKTOP_LOCAL_MEDIA_SESSION_ID_MAX_LENGTH),
+  Schema.isPattern(/^[A-Za-z0-9_-]{32,128}$/),
+);
+const DesktopLocalMediaPlaybackUrlSchema = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(DESKTOP_LOCAL_MEDIA_URL_MAX_LENGTH),
+  Schema.isPattern(/^cafecode-media:\/\/stream\/[A-Za-z0-9_-]{32,128}$/),
+);
+const DesktopLocalMediaEngineVersionSchema = Schema.NullOr(
+  TrimmedNonEmptyString.check(Schema.isMaxLength(DESKTOP_LOCAL_MEDIA_TITLE_MAX_LENGTH)),
+);
+
+export const DesktopLocalMediaKindSchema = Schema.Literals(["audio", "video"]);
+export type DesktopLocalMediaKind = typeof DesktopLocalMediaKindSchema.Type;
+
+export const DesktopLocalMediaEngineSchema = Schema.Struct({
+  label: Schema.Literal("VLC"),
+  version: DesktopLocalMediaEngineVersionSchema,
+  reason: Schema.NullOr(DesktopLocalMediaReasonTextSchema),
+});
+export type DesktopLocalMediaEngine = typeof DesktopLocalMediaEngineSchema.Type;
+
+export const DesktopLocalMediaCapabilitySchema = Schema.Union([
+  Schema.Struct({
+    available: Schema.Literal(true),
+    engine: Schema.Struct({
+      label: Schema.Literal("VLC"),
+      version: DesktopLocalMediaEngineVersionSchema,
+      reason: Schema.Null,
+    }),
+  }),
+  Schema.Struct({
+    available: Schema.Literal(false),
+    engine: Schema.Struct({
+      label: Schema.Literal("VLC"),
+      version: DesktopLocalMediaEngineVersionSchema,
+      reason: DesktopLocalMediaReasonTextSchema,
+    }),
+  }),
+]);
+export type DesktopLocalMediaCapability = typeof DesktopLocalMediaCapabilitySchema.Type;
+
+export const DesktopLocalMediaSelectionSchema = Schema.Struct({
+  sessionId: DesktopLocalMediaSessionIdSchema,
+  kind: DesktopLocalMediaKindSchema,
+  displayTitle: DesktopLocalMediaTitleSchema,
+  playbackUrl: DesktopLocalMediaPlaybackUrlSchema,
+  currentIndex: Schema.Int.check(
+    Schema.isBetween({ minimum: 0, maximum: MAX_DESKTOP_LOCAL_MEDIA_QUEUE_ITEMS - 1 }),
+  ),
+  totalItems: Schema.Int.check(
+    Schema.isBetween({ minimum: 1, maximum: MAX_DESKTOP_LOCAL_MEDIA_QUEUE_ITEMS }),
+  ),
+  engine: Schema.Struct({
+    label: Schema.Literal("VLC"),
+    version: DesktopLocalMediaEngineVersionSchema,
+    reason: Schema.Null,
+  }),
+}).check(
+  Schema.makeFilter((selection) =>
+    selection.currentIndex < selection.totalItems
+      ? undefined
+      : "currentIndex must identify an item in the bounded queue",
+  ),
+);
+export type DesktopLocalMediaSelection = typeof DesktopLocalMediaSelectionSchema.Type;
+
+export const DesktopLocalMediaNavigationDirectionSchema = Schema.Literals(["previous", "next"]);
+export type DesktopLocalMediaNavigationDirection =
+  typeof DesktopLocalMediaNavigationDirectionSchema.Type;
+
+export const DesktopLocalMediaNavigateInputSchema = Schema.Struct({
+  sessionId: DesktopLocalMediaSessionIdSchema,
+  direction: DesktopLocalMediaNavigationDirectionSchema,
+});
+export type DesktopLocalMediaNavigateInput = typeof DesktopLocalMediaNavigateInputSchema.Type;
+
+export const DesktopLocalMediaReleaseInputSchema = Schema.Struct({
+  sessionId: DesktopLocalMediaSessionIdSchema,
+});
+export type DesktopLocalMediaReleaseInput = typeof DesktopLocalMediaReleaseInputSchema.Type;
+
 export const PersistedSavedEnvironmentRecordSchema = Schema.Struct({
   environmentId: EnvironmentId,
   label: Schema.String,
@@ -389,6 +511,54 @@ export type DesktopDebugEndpointState = typeof DesktopDebugEndpointStateSchema.T
 
 export const DesktopRendererDebugSnapshotSchema = Schema.Record(Schema.String, Schema.Unknown);
 export type DesktopRendererDebugSnapshot = typeof DesktopRendererDebugSnapshotSchema.Type;
+
+export const CompletionSpeechLanguageSchema = Schema.Literals(["en", "ja"]);
+export type CompletionSpeechLanguage = typeof CompletionSpeechLanguageSchema.Type;
+
+export const CompletionSpeechGenderSchema = Schema.Literals(["female", "male"]);
+export type CompletionSpeechGender = typeof CompletionSpeechGenderSchema.Type;
+
+const DesktopCompletionSpeechTextSchema = Schema.String.check(Schema.isMaxLength(512));
+
+export const DesktopCompletionSpeechVoiceSchema = Schema.Struct({
+  name: DesktopCompletionSpeechTextSchema,
+  language: CompletionSpeechLanguageSchema,
+  culture: DesktopCompletionSpeechTextSchema,
+  gender: CompletionSpeechGenderSchema,
+});
+export type DesktopCompletionSpeechVoice = typeof DesktopCompletionSpeechVoiceSchema.Type;
+
+export const DesktopCompletionSpeechCapabilitySchema = Schema.Struct({
+  available: Schema.Boolean,
+  engine: Schema.Literal("Windows System.Speech"),
+  voices: Schema.Array(DesktopCompletionSpeechVoiceSchema).check(Schema.isMaxLength(128)),
+  reason: Schema.NullOr(DesktopCompletionSpeechTextSchema),
+});
+export type DesktopCompletionSpeechCapability = typeof DesktopCompletionSpeechCapabilitySchema.Type;
+
+export const DesktopCompletionSpeechSynthesizeInputSchema = Schema.Struct({
+  language: CompletionSpeechLanguageSchema,
+  gender: CompletionSpeechGenderSchema,
+});
+export type DesktopCompletionSpeechSynthesizeInput =
+  typeof DesktopCompletionSpeechSynthesizeInputSchema.Type;
+
+export const DesktopCompletionSpeechClipSchema = Schema.Struct({
+  language: CompletionSpeechLanguageSchema,
+  requestedGender: CompletionSpeechGenderSchema,
+  voice: DesktopCompletionSpeechVoiceSchema,
+  // A fixed, very short phrase produces a small PCM WAV. The main process
+  // enforces the decoded byte bound before encoding this renderer payload.
+  wavBase64: Schema.String.check(Schema.isMaxLength(1_500_000)),
+});
+export type DesktopCompletionSpeechClip = typeof DesktopCompletionSpeechClipSchema.Type;
+
+export const DesktopCompletionSpeechSynthesizeResultSchema = Schema.Struct({
+  clip: Schema.NullOr(DesktopCompletionSpeechClipSchema),
+  reason: Schema.NullOr(DesktopCompletionSpeechTextSchema),
+});
+export type DesktopCompletionSpeechSynthesizeResult =
+  typeof DesktopCompletionSpeechSynthesizeResultSchema.Type;
 
 export interface DesktopBridge {
   getAppBranding: () => DesktopAppBranding | null;
@@ -413,7 +583,33 @@ export interface DesktopBridge {
   setWindowOpacityPreference: (
     preference: DesktopWindowOpacityPreference,
   ) => Promise<DesktopWindowOpacityState>;
+  getCompletionSpeechCapability?: () => Promise<DesktopCompletionSpeechCapability>;
+  synthesizeCompletionSpeech?: (
+    input: DesktopCompletionSpeechSynthesizeInput,
+  ) => Promise<DesktopCompletionSpeechSynthesizeResult>;
   pickFolder: (options?: PickFolderOptions) => Promise<string | null>;
+  getLocalMediaCapability: () => Promise<DesktopLocalMediaCapability>;
+  pickLocalMedia: () => Promise<DesktopLocalMediaSelection | null>;
+  navigateLocalMedia?: (
+    input: DesktopLocalMediaNavigateInput,
+  ) => Promise<DesktopLocalMediaSelection | null>;
+  releaseLocalMedia: (input: DesktopLocalMediaReleaseInput) => Promise<boolean>;
+  openEmbeddedBrowser: (input?: EmbeddedBrowserOpenInput) => Promise<EmbeddedBrowserState>;
+  closeEmbeddedBrowser: (input: EmbeddedBrowserTabInput) => Promise<EmbeddedBrowserState>;
+  setEmbeddedBrowserBounds: (input: EmbeddedBrowserSetBoundsInput) => Promise<EmbeddedBrowserState>;
+  shareEmbeddedBrowser: (input: EmbeddedBrowserShareInput) => Promise<EmbeddedBrowserActionResult>;
+  navigateEmbeddedBrowser: (
+    input: EmbeddedBrowserNavigateInput,
+  ) => Promise<EmbeddedBrowserActionResult>;
+  controlEmbeddedBrowserHistory: (
+    input: EmbeddedBrowserHistoryActionInput,
+  ) => Promise<EmbeddedBrowserActionResult>;
+  snapshotEmbeddedBrowser: (
+    input: EmbeddedBrowserSnapshotInput,
+  ) => Promise<EmbeddedBrowserSnapshot | null>;
+  clickEmbeddedBrowser: (input: EmbeddedBrowserClickInput) => Promise<EmbeddedBrowserActionResult>;
+  typeInEmbeddedBrowser: (input: EmbeddedBrowserTypeInput) => Promise<EmbeddedBrowserActionResult>;
+  onEmbeddedBrowserState: (listener: (state: EmbeddedBrowserState) => void) => () => void;
   confirm: (message: string) => Promise<boolean>;
   setTheme: (theme: DesktopTheme) => Promise<void>;
   showContextMenu: <T extends string>(
@@ -525,6 +721,21 @@ export interface EnvironmentApi {
   };
   filesystem: {
     browse: (input: FilesystemBrowseInput) => Promise<FilesystemBrowseResult>;
+  };
+  /** Optional while a saved environment is connected to an older Cafe server. */
+  workspaceObservatory?: {
+    tree: (input: WorkspaceObservatoryTreeInput) => Promise<WorkspaceObservatoryTreeResult>;
+    readFile: (input: WorkspaceObservatoryFileInput) => Promise<WorkspaceObservatoryFileResult>;
+    databases: (
+      input: WorkspaceObservatoryTreeInput,
+    ) => Promise<readonly WorkspaceObservatoryDatabaseResult[]>;
+    tables: (
+      input: WorkspaceObservatoryDatabaseInput,
+    ) => Promise<readonly WorkspaceObservatoryTableResult[]>;
+    rows: (input: WorkspaceObservatoryTableInput) => Promise<WorkspaceObservatoryRowsResult>;
+    activity: (
+      input: WorkspaceObservatoryActivityInput,
+    ) => Promise<WorkspaceObservatoryActivityResult>;
   };
   sourceControl: {
     lookupRepository: (

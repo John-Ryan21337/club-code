@@ -1,6 +1,6 @@
 # Club Code
 
-### Cafe Code, after hours
+### The original Cafe Code, after hours — with the Club Code sign lit
 
 ![Club Code desktop screenshot](./docs/images/cafe-code-desktop.png)
 
@@ -16,10 +16,10 @@ It stays small, quick, and out of the way. No freezing, no dragging, no enormous
 
 T3 Code wanted to be minimal. Cafe Code went smaller. Club Code put on nicer lights without making the room heavier.
 
-No terminal drawer. No pretend IDE. No giant dashboard wearing a useful-looking hat. If you want a console, use a real console. If you want to inspect code, open it in VS Code.
+No terminal drawer. No editor pretending to be VS Code. The new observatories are read-only windows into work that is already happening; they do not quietly become another agent or another place that edits your files.
 
 <p align="center">
-  <img src="./docs/images/cafe-code-character.png" alt="Cafe Code character" width="360" />
+  <img src="./docs/images/cafe-code-character.png" alt="Club Code character" width="360" />
 </p>
 
 ## Tonight’s Very Sensible Menu
@@ -54,11 +54,11 @@ CAFE_CODE_YOUTUBE_ACCOUNT_CONNECTION_ENABLED=true
 CAFE_CODE_YOUTUBE_OAUTH_DESKTOP_CLIENT_ID=your-desktop-client.apps.googleusercontent.com
 ```
 
-Enable the YouTube Data API, complete Google's consent-screen setup, and use a Desktop OAuth client ID. Club Code uses Google's Desktop-app loopback form, `http://127.0.0.1:<Cafe Code backend port>`, with the backend's actual port and no added path. The grant is per owner session and memory-only—no refresh token is written at rest—and remote-web backends do not expose this connection flow.
+Enable the YouTube Data API, complete Google's consent-screen setup, and use a Desktop OAuth client ID. Club Code uses Google's Desktop-app loopback form, `http://127.0.0.1:<Club Code backend port>`, with the backend's actual port and no added path. The grant is per owner session and memory-only—no refresh token is written at rest—and remote-web backends do not expose this connection flow.
 
-For LM Studio, start its local API server on `localhost:1234`, then enable **LM Studio mode** in the Codex provider settings. Cloud login is not required for that local mode.
+For LM Studio, start its local API server on `localhost:1234`, open Settings > Providers, choose **Add provider**, then choose **LM Studio**. Club Code creates a separate local Codex OSS instance; select that instance in a chat just like any other provider. Cloud login is not required for the local instance, and an existing cloud Codex instance is left alone.
 
-Capability gates, operating-system support, native smoke tests, licensing, packaging, performance, and security reviews still decide what is exposed in a release. A sparkly sign is not a release commitment. Mm. Responsible.
+VLC must be installed for the desktop VLC lane. Native speech depends on voices installed in the operating system. YouTube search/account discovery requires the configuration above. Capability gates, operating-system support, native smoke tests, licensing, packaging, performance, and security reviews still decide what is exposed in a release. A sparkly sign is not a release commitment. Mm. Responsible.
 
 ## Why Fork?
 
@@ -67,13 +67,13 @@ Because the app should stay small, fast, and predictable.
 Bug fixes are welcome. Performance fixes are welcome. Reliability fixes are
 welcome. Security fixes are extra welcome.
 
-Feature requests need to pass the tiny-window test: does this make Cafe Code
+Feature requests need to pass the tiny-window test: does this make Club Code
 smaller, calmer, faster, easier to understand, lower CPU, lower memory, or less
 annoying when something fails?
 
 If yes, maybe.
 
-If it turns Cafe Code into a pretend IDE, a pretend terminal, a release
+If it turns Club Code into a pretend editor, a pretend terminal, a release
 dashboard, a project-management suite, or a museum of buttons, no.
 
 ## What Changed From T3 Code
@@ -83,11 +83,14 @@ This is the practical working list. It will probably get cleaned up later.
 - Completely rewrote the lifecycle system to be more inline with Codex and Claude.
 - Numerous bug fixes.
 - Excessive debugging information.
-- Rebranded the app around Cafe Code.
+- Rebranded the fork around Club Code while retaining Cafe Code package, command,
+  environment-variable, and data-path identifiers for compatibility.
 - Moved local app data into `~/.cafe-code`.
 - Removed the in-app terminal drawer and terminal UI.
 - Removed hosted web-app assumptions and focused the project on the Electron app.
-- Disabled update checks until Cafe Code has its own release path.
+- Added separate source-branch and packaged-release update checks. Packaged
+  download/install behavior remains platform- and artifact-gated; unsigned
+  artifacts are not publisher-authenticated.
 - Added a queue/follow-up workflow for prompts sent while a provider is running.
 - Added provider-aware queue actions: steer when supported, interrupt when that
   is the honest behavior.
@@ -108,17 +111,26 @@ This is the practical working list. It will probably get cleaned up later.
 ## Run From Source
 
 For this fork, the dependable path documented here is a source checkout.
-Packaging support and native-smoke evidence are not the same thing as a signed,
-published installer; this README does not promise a DMG, updater, notarized
-bundle, or "drag this into Applications" ceremony.
+Packaging and updater code exists, but build/native-smoke evidence is not the
+same thing as a signed, notarized, publisher-authenticated release. This source
+guide does not promise that a DMG, installer, or in-place update is available
+for the current checkout.
 
 The npm package exists, but do not treat it as the fresh install path yet. It
-will probably be out of date until Cafe Code settles down a little more. The app
+will probably be out of date until Club Code settles down a little more. The app
 is in pretty good shape now, but the fastest-moving build is still the repo
 itself.
 
-Mostly tested on macOS. Windows seems to work. Linux may need a little tweaking;
-I have not had enough time on it yet.
+Windows has recorded production-build, desktop-smoke, and native
+whole-window-opacity coverage. The Matrix color, adaptive-YouTube-glow,
+composer-text, bundled YouTube queue examples, and Japanese session-default
+slices passed the dated 2026-07-23 focused/composite evidence recorded in the
+project plan. That evidence predates the newer Matrix telemetry, ambient
+directory, LM Studio provider, observatory, provider-browser, background-nudge,
+local/VLC queue, and live-frame-glow changes; their focused and independent
+audit evidence is tracked separately while a fresh final composite run remains
+pending. macOS remains the most established upstream path. Linux may still need
+platform-specific tweaking.
 
 Install Node.js 24.13.1 and Corepack, then run Club Code from a checkout. The
 repository pins the exact Yarn release through Corepack:
@@ -127,21 +139,21 @@ repository pins the exact Yarn release through Corepack:
 git clone https://github.com/John-Ryan21337/club-code.git
 cd club-code
 corepack enable
-yarn install --immutable
-yarn build:desktop
-yarn workspace @cafecode/desktop start
+corepack yarn install --immutable
+corepack yarn build:desktop
+corepack yarn workspace @cafecode/desktop start
 ```
 
 Debug mode:
 
 ```bash
-yarn workspace @cafecode/desktop start --cafe-debug
+corepack yarn workspace @cafecode/desktop start --cafe-debug
 ```
 
 ### Browser Web UI Firewall Ports
 
-If you want to open the Cafe Code Web UI from another device on your LAN, first
-enable network/LAN access in Cafe Code, then allow the desktop backend ports
+If you want to open the Club Code Web UI from another device on your LAN, first
+enable network/LAN access in Club Code, then allow the desktop backend ports
 through your firewall. The default desktop ports are:
 
 - HTTPS/WSS Web UI: `3775/tcp`
@@ -150,29 +162,29 @@ through your firewall. The default desktop ports are:
 For `ufw`:
 
 ```bash
-sudo ufw allow 3775/tcp comment 'Cafe Code HTTPS'
-sudo ufw allow 3773/tcp comment 'Cafe Code HTTP'
+sudo ufw allow 3775/tcp comment 'Club Code HTTPS'
+sudo ufw allow 3773/tcp comment 'Club Code HTTP'
 ```
 
-For local development with `yarn dev:desktop`, the default ports are:
+For local development with `corepack yarn dev:desktop`, the default ports are:
 
 ```bash
-sudo ufw allow 13775/tcp comment 'Cafe Code dev HTTPS'
-sudo ufw allow 13773/tcp comment 'Cafe Code dev backend'
-sudo ufw allow 5733/tcp comment 'Cafe Code dev Vite'
+sudo ufw allow 13775/tcp comment 'Club Code dev HTTPS'
+sudo ufw allow 13773/tcp comment 'Club Code dev backend'
+sudo ufw allow 5733/tcp comment 'Club Code dev Vite'
 ```
 
-If Cafe Code prints a different port, or you run with `CAFE_CODE_PORT`,
+If Club Code prints a different port, or you run with `CAFE_CODE_PORT`,
 `CAFE_CODE_HTTPS_PORT`, `CAFE_CODE_DEV_INSTANCE`, or
 `CAFE_CODE_PORT_OFFSET`, allow the printed port instead.
 
 ### Saved Remote Servers
 
 The Connections settings can save direct connections to other reachable Cafe
-Code servers using a pairing URL or a host plus pairing code. Cafe Code scopes
+Code servers using a pairing URL or a host plus pairing code. Club Code scopes
 projects, threads, providers, and live subscriptions to the selected server.
 
-Cafe Code does not create SSH or Tailscale tunnels. Configure the network,
+Club Code does not create SSH or Tailscale tunnels. Configure the network,
 certificate, firewall, or reverse proxy separately, then use the server's
 pairing details. Desktop credentials are encrypted with Electron safe storage;
 browser credentials are retained only for the current browser session.
@@ -180,7 +192,7 @@ browser credentials are retained only for the current browser session.
 If you want Codex or Claude to do it for you, paste this into the CLI:
 
 ```text
-Install Club Code from source. Clone https://github.com/John-Ryan21337/club-code.git, install Node.js 24.13.1 and Corepack, run corepack enable, run yarn install --immutable, run yarn build:desktop, then start it with yarn workspace @cafecode/desktop start. Also verify Codex CLI is installed and logged in with codex login, and Claude Code is installed and logged in with claude auth login if I want Claude support.
+Install Club Code from source. Clone https://github.com/John-Ryan21337/club-code.git, install Node.js 24.13.1 and Corepack, run corepack enable, run corepack yarn install --immutable, run corepack yarn build:desktop, then start it with corepack yarn workspace @cafecode/desktop start. Also verify Codex CLI is installed and logged in with codex login, and Claude Code is installed and logged in with claude auth login if I want Claude support.
 ```
 
 The old npm path is still here for later, but it may lag behind current work:
@@ -191,34 +203,34 @@ npm install -g @cafeai/cafe-code
 cafe-code
 ```
 
-Cafe Code expects at least one provider to already be installed and
+Club Code expects at least one provider to already be installed and
 authenticated:
 
 - Codex: install [Codex CLI](https://developers.openai.com/codex/cli) and run `codex login`
 - Claude: install [Claude Code](https://claude.com/product/claude-code) and run `claude auth login`
-- OpenCode: install [OpenCode](https://opencode.ai/docs/) and configure at least one upstream provider, or configure Cafe Code with an existing OpenCode server URL
+- OpenCode: install [OpenCode](https://opencode.ai/docs/) and configure at least one upstream provider, or configure Club Code with an existing OpenCode server URL
 
-Cafe Code currently ships Codex, Claude, and OpenCode provider integrations.
+Club Code currently ships Codex, Claude, and OpenCode provider integrations.
 
 ## Local Development
 
 Run the app from a checkout:
 
 ```bash
-yarn install --immutable
-yarn start:desktop
+corepack yarn install --immutable
+corepack yarn start:desktop
 ```
 
 Run the desktop package directly:
 
 ```bash
-yarn workspace @cafecode/desktop start
+corepack yarn workspace @cafecode/desktop start
 ```
 
 Debug mode:
 
 ```bash
-yarn start:desktop:debug
+corepack yarn start:desktop:debug
 ```
 
 The app prints a localhost-only debug URL on startup.
@@ -226,10 +238,10 @@ The app prints a localhost-only debug URL on startup.
 Useful checks:
 
 ```bash
-yarn fmt
-yarn lint
-yarn typecheck
-yarn test
+corepack yarn fmt
+corepack yarn lint
+corepack yarn typecheck
+corepack yarn test
 ```
 
 ### Local Arch Package
@@ -237,15 +249,15 @@ yarn test
 Build a local pacman package from the Linux AppImage artifact:
 
 ```bash
-yarn install --immutable
-yarn dist:arch:local
+corepack yarn install --immutable
+corepack yarn dist:arch:local
 sudo pacman -U release/arch/cafe-code-*.pkg.tar.zst
 ```
 
 To build and install in one step:
 
 ```bash
-yarn dist:arch:local --install
+corepack yarn dist:arch:local --install
 ```
 
 This helper builds a package from the current checkout and does not publish
@@ -253,11 +265,14 @@ anything.
 
 ### AUR Source Package
 
-The `cafe-code` AUR target compiles Cafe Code from source and then packages the
-locally built AppImage. On Arch Linux, build it with:
+The compatibility-named `cafe-code` AUR directory is currently a legacy
+upstream recipe: it pins `cafeai/cafe-code` version `0.0.51`, not this Club Code
+checkout. It is useful as packaging scaffolding, but do not publish or install
+its result as current Club Code. To inspect/build that pinned recipe on Arch
+Linux:
 
 ```bash
-yarn dist:aur:cafe-code
+corepack yarn dist:aur:cafe-code
 ```
 
 The package is written to `packaging/aur/cafe-code/`. Its `PKGBUILD`, generated
@@ -265,8 +280,8 @@ The package is written to `packaging/aur/cafe-code/`. Its `PKGBUILD`, generated
 directory so it can also be used as the contents of the standalone AUR Git
 repository.
 
-To create the initial AUR listing, first create an AUR account and add your SSH
-public key. Then submit the package metadata:
+If you intentionally maintain that legacy upstream AUR listing, its metadata
+can be staged with:
 
 ```bash
 git clone ssh://aur@aur.archlinux.org/cafe-code.git ../aur-cafe-code
@@ -278,44 +293,43 @@ git commit -m "Initial cafe-code package"
 git push
 ```
 
-The current recipe uses the immutable published commit for version `0.0.51`
-because that version has no matching Git tag. For future releases, update
-`pkgver`, reset `pkgrel` to `1`, update the source commit and checksum, and
-regenerate `.SRCINFO` before pushing the AUR repository.
+Before this can become a Club Code AUR package, update the upstream URL, source
+commit/tag, checksums, version, package description/branding, and generated
+`.SRCINFO`, then audit the installed AppImage and launcher. Merely changing
+`pkgver` is not enough.
 
 ### Debian Package
 
 Build a Debian package for the host architecture:
 
 ```bash
-yarn install --immutable
-yarn dist:desktop:deb
+corepack yarn install --immutable
+corepack yarn dist:desktop:deb
 ```
 
 Explicit architecture targets are also available:
 
 ```bash
-yarn dist:desktop:deb:x64
-yarn dist:desktop:deb:arm64
+corepack yarn dist:desktop:deb:x64
+corepack yarn dist:desktop:deb:arm64
 ```
 
 The package is written to `release/`. Install the emitted file with your
 graphical package installer or with `sudo apt install ./release/<file>.deb`.
 
-## 日本語でも、もう一杯。え、もう一杯？
+## 日本語でも、もう一杯。え、まだ飲むのぉ？
 
-いらっしゃぁ〜い、Club Code へようこそぉ。ね、こっち座って。もっとこっち。
-あたし全然酔ってないよ？　シャンパン三杯と、たぶん Git の差分を一杯飲んだだけ。
-終電？　あれはもう行った。だいじょうぶ、歌舞伎町の午前三時には、終電は概念だから。お水どこ？
+いらっしゃぁ〜い、Club Code へようこそ。ね、こっち。もっとこっち座ってぇ。
+あたし？　全然酔ってないよ。シャンパン三杯と、Git の差分をロックで一杯だけ。
+終電は？　あ〜……行ったね。歌舞伎町の午前三時に終電の話する人、初めて見た。かわいい。お水ちょうだい。
 
-Club Code は Cafe Code の深夜版 fork なの。中の package 名とか command とか
-`.cafe-code` は互換性のため、そのまま Cafe Code。看板だけ Club Code。
-新しいお店なのに常連さんのボトルは消さない、そういう気づかい。えらくない？　えらい。乾杯。
+Club Code は Cafe Code の深夜 fork。表の看板は最初から **Club Code** だけど、
+package、command、`CAFE_CODE_*`、`.cafe-code` は互換性のため残してるの。
+名前を変えたからって常連さんのボトルまで捨てないでしょ？　そういうこと。あたし気が利くぅ。乾杯。
 
-Codex と Claude と OpenCode が、ちゃんとコードの仕事をするための小さいデスクトップアプリ。
-ターミナルのふりもしないし、IDE のふりもしないし、巨大 dashboard が急に
-「わたし仕事できます」みたいな顔で座ってこない。コードは VS Code、本物の console は本物の console。
-ここは chat と agent の仕事を見る席。小さいのに働く。あたしより働く。そこ比べなくていいからぁ。
+Codex、Claude、OpenCode、それから外で起こしてある LM Studio の model と話せる小さい desktop app。
+editor のふりも terminal のふりもしない。新しい file/database の席は見るだけ、勝手に書き換えない。
+ここは chat と agent の仕事を見る club。小さいのに朝まで働く。あたしも働いてるよ？　今これ説明してるし。
 
 ねぇ聞いて、ここからすごいよ。ちゃんとメモしたから、酔ってても仕様は正確。共有の雰囲気設定と、ちゃんと検査して upload した画像/GIF は private な ambient content として残るの。でも **Local Media だけは別腹**、今の document / session だけ。chat の席が主役なのも、クリックも prompt も token もキラキラに取られないのも、そこは絶対。
 
@@ -346,13 +360,14 @@ CAFE_CODE_YOUTUBE_ACCOUNT_CONNECTION_ENABLED=true
 CAFE_CODE_YOUTUBE_OAUTH_DESKTOP_CLIENT_ID=your-desktop-client.apps.googleusercontent.com
 ```
 
-YouTube Data API と consent screen を設定して、Desktop OAuth client ID を使ってね。callback は Google の Desktop app 用 loopback 形式、`http://127.0.0.1:<Cafe Code backend port>`。backend の実際の port を使って、余計な path は足さないの。owner session の memory だけで、refresh token は disk に置かない。remote web はこの接続を出さない。ね、約束を盛らないのもサービス。
+YouTube Data API と consent screen を設定して、Desktop OAuth client ID を使ってね。callback は Google の Desktop app 用 loopback 形式、`http://127.0.0.1:<Club Code backend port>`。backend の実際の port を使って、余計な path は足さないの。owner session の memory だけで、refresh token は disk に置かない。remote web はこの接続を出さない。ね、約束を盛らないのもサービス。
 
-LM Studio は local API server を `localhost:1234` で起動して、Codex provider の
-**LM Studio mode**を on。local mode では cloud login はいらない。はい、できた。乾杯。
+LM Studio は local API server を `localhost:1234` で起こして、Settings > Providers の
+**Add provider**から **LM Studio**を指名。別の local Codex OSS instance ができるから、chat で普通の provider みたいに選ぶの。local instance は cloud login いらないし、いつもの cloud Codex はそのまま。伝票わけた、はい乾杯。
 
-実際の release は OS、能力 gate、native smoke test、license、security、performance 次第。
-看板が光ってても未出荷を「あるよぉ」って売らない。約束は出せる時だけ。大人でしょ。たぶん。
+VLC lane には VLC の install、native voice には OS voice の install が必要。
+実際の release は OS、capability gate、native smoke、license、security、performance 次第。
+看板が光ってても未出荷を「あるよぉ」って売らない。約束は出せる時だけ。大人でしょ。たぶん。お水まだぁ？
 
 ### ソースから動かす
 
@@ -360,7 +375,7 @@ LM Studio は local API server を `localhost:1234` で起動して、Codex prov
 native smoke があっても、署名して配ってる installer と同じ意味じゃないからね。
 この README は DMG、updater、notarized bundle を約束してないよ。
 npm のパッケージもあるけど、今はそれを信じすぎないでね。
-Cafe Code がもう少し落ち着くまでは、npm はたぶん少し古くなる。
+Club Code がもう少し落ち着くまでは、npm はたぶん少し古くなる。
 
 Node.js 24.13.1 と Corepack を先に入れてね。Yarn のバージョンは
 リポジトリ側で固定してあるよ。
@@ -369,18 +384,18 @@ Node.js 24.13.1 と Corepack を先に入れてね。Yarn のバージョンは
 git clone https://github.com/John-Ryan21337/club-code.git
 cd club-code
 corepack enable
-yarn install --immutable
-yarn build:desktop
-yarn workspace @cafecode/desktop start
+corepack yarn install --immutable
+corepack yarn build:desktop
+corepack yarn workspace @cafecode/desktop start
 ```
 
 デバッグしたいならこれ。
 
 ```bash
-yarn workspace @cafecode/desktop start --cafe-debug
+corepack yarn workspace @cafecode/desktop start --cafe-debug
 ```
 
-LAN の別デバイスから Cafe Code の Web UI を開きたいなら、先に Cafe Code
+LAN の別デバイスから Club Code の Web UI を開きたいなら、先に Club Code
 側でネットワーク/LAN アクセスを有効にして、ファイアウォールでこのポートを開ける。
 
 - HTTPS/WSS Web UI: `3775/tcp`
@@ -389,30 +404,31 @@ LAN の別デバイスから Cafe Code の Web UI を開きたいなら、先に
 `ufw` ならこれ。
 
 ```bash
-sudo ufw allow 3775/tcp comment 'Cafe Code HTTPS'
-sudo ufw allow 3773/tcp comment 'Cafe Code HTTP'
+sudo ufw allow 3775/tcp comment 'Club Code HTTPS'
+sudo ufw allow 3773/tcp comment 'Club Code HTTP'
 ```
 
-`yarn dev:desktop` の開発中は、デフォルトではこっち。
+`corepack yarn dev:desktop` の開発中は、デフォルトではこっち。
 
 ```bash
-sudo ufw allow 13775/tcp comment 'Cafe Code dev HTTPS'
-sudo ufw allow 13773/tcp comment 'Cafe Code dev backend'
-sudo ufw allow 5733/tcp comment 'Cafe Code dev Vite'
+sudo ufw allow 13775/tcp comment 'Club Code dev HTTPS'
+sudo ufw allow 13773/tcp comment 'Club Code dev backend'
+sudo ufw allow 5733/tcp comment 'Club Code dev Vite'
 ```
 
-Cafe Code が別のポートを表示しているときや、`CAFE_CODE_PORT`、
+Club Code が別のポートを表示しているときや、`CAFE_CODE_PORT`、
 `CAFE_CODE_HTTPS_PORT`、`CAFE_CODE_DEV_INSTANCE`、`CAFE_CODE_PORT_OFFSET`
 を使っているときは、その表示されたポートを開けてね。
 
-だいたい macOS で見てる。Windows も動いてそう。
-Linux はまだあまり見れてないから、ちょっと調整がいるかも。
-でも今の Cafe Code は、けっこういいところまで来てる。
+Windows は production build、desktop smoke、whole-window opacity の native coverage が記録されてるよ。
+Matrix color、YouTube adaptive glow、composer text、bundled YouTube queue examples、Japanese session default は、project plan にある **2026-07-23 時点**の focused/composite gate を通過済み。39 本を盛って 36 本、EDM は 20 本から 19 本、短すぎる ID は酔ってても勝手に一文字足して誤魔化さないの。でもその記録は、その後に入った Matrix telemetry、ambient directory、LM Studio provider、observatory、provider browser、background nudge、local/VLC queue、live-frame glow より前。新しい子たちは focused test と independent audit を別々に記録中で、最後の fresh composite はまだ。昔の合格印を今日の bottle に貼り替えない、会計ちゃんとしてるでしょ。macOS は upstream でいちばん馴染んだ道。
+Linux はまだ platform-specific の調整がいるかも。
+でも今の Club Code は、けっこういいところまで来てる。
 
 Codex とか Claude に丸投げするなら、これを投げてもいいよ。
 
 ```text
-Club Code をソースから入れてください。https://github.com/John-Ryan21337/club-code.git を clone して、Node.js 24.13.1 と Corepack を入れ、corepack enable、yarn install --immutable、yarn build:desktop、yarn workspace @cafecode/desktop start まで実行してください。Codex を使うなら codex login、Claude を使うなら claude auth login も確認してください。
+Club Code をソースから入れてください。https://github.com/John-Ryan21337/club-code.git を clone して、Node.js 24.13.1 と Corepack を入れ、corepack enable、corepack yarn install --immutable、corepack yarn build:desktop、corepack yarn workspace @cafecode/desktop start まで実行してください。Codex を使うなら codex login、Claude を使うなら claude auth login も確認してください。
 ```
 
 npm 版は残しておくけど、今は古いかもしれない。
@@ -428,10 +444,10 @@ Claude を使うなら先に `claude auth login`。
 そこは自分でログインしておいてね。
 
 ```bash
-yarn fmt
-yarn lint
-yarn typecheck
-yarn test
+corepack yarn fmt
+corepack yarn lint
+corepack yarn typecheck
+corepack yarn test
 ```
 
 ## License

@@ -29,6 +29,7 @@ import * as DesktopState from "./DesktopState.ts";
 import * as DesktopUpdates from "../updates/DesktopUpdates.ts";
 import * as DesktopSourceUpdates from "../updates/DesktopSourceUpdates.ts";
 import * as DesktopDebugServer from "../debug/DesktopDebugServer.ts";
+import * as DesktopVlcMedia from "../media/DesktopVlcMedia.ts";
 
 const DEFAULT_DESKTOP_BACKEND_PORT = 3773;
 const DEFAULT_DESKTOP_BACKEND_HTTPS_PORT = 3775;
@@ -185,7 +186,7 @@ const handleFatalStartupError = Effect.fn("desktop.startup.handleFatalStartupErr
   const wasQuitting = yield* Ref.getAndSet(state.quitting, true);
   if (!wasQuitting) {
     yield* electronDialog.showErrorBox(
-      "Cafe Code failed to start",
+      "Club Code failed to start",
       `Stage: ${stage}\n${message}${detail}`,
     );
   }
@@ -411,6 +412,7 @@ const startup = Effect.gen(function* () {
   const updates = yield* DesktopUpdates.DesktopUpdates;
   const sourceUpdates = yield* DesktopSourceUpdates.DesktopSourceUpdates;
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
+  const vlcMedia = yield* DesktopVlcMedia.DesktopVlcMedia;
 
   yield* shellEnvironment.installIntoProcess;
   const userDataPath = yield* appIdentity.resolveUserDataPath;
@@ -436,6 +438,7 @@ const startup = Effect.gen(function* () {
   yield* logStartupInfo("app ready");
   yield* appIdentity.configure;
   yield* applicationMenu.configure;
+  yield* vlcMedia.registerProtocol;
   yield* electronProtocol.registerDesktopFileProtocol;
   yield* updates.configure;
   yield* sourceUpdates.configure;

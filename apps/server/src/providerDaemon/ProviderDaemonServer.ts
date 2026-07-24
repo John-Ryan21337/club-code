@@ -723,6 +723,26 @@ const executeRpcRequest = (
   request: ProviderDaemonRpcRequestValue,
 ): Effect.Effect<unknown, ProviderServiceError> => {
   switch (request.method) {
+    case "agentBrowserGrant":
+      return (
+        providerService.grantAgentBrowser?.(request.payload) ??
+        Effect.die(new Error("Agent browser bridge is unavailable."))
+      );
+    case "agentBrowserRevoke":
+      return (
+        providerService.revokeAgentBrowser?.(request.payload) ??
+        Effect.die(new Error("Agent browser bridge is unavailable."))
+      );
+    case "agentBrowserPoll":
+      return (
+        providerService.pollAgentBrowser?.(request.payload) ??
+        Effect.die(new Error("Agent browser bridge is unavailable."))
+      );
+    case "agentBrowserComplete":
+      return (
+        providerService.completeAgentBrowser?.(request.payload) ??
+        Effect.die(new Error("Agent browser bridge is unavailable."))
+      );
     case "startSession":
       return providerService.startSession(request.payload.threadId, request.payload);
     case "sendTurn":

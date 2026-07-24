@@ -828,8 +828,8 @@ export function resolveMockUpdateServerUrl(mockUpdateServerPort: number | undefi
 
 export function resolveDesktopProductName(version: string): string {
   return resolveDesktopUpdateChannel(version) === "nightly"
-    ? "Cafe Code (Nightly)"
-    : (desktopPackageJson.productName ?? "Cafe Code");
+    ? "Club Code (Nightly)"
+    : (desktopPackageJson.productName ?? "Club Code");
 }
 
 export function resolveLinuxDesktopBuildConfig(target: string): Record<string, unknown> {
@@ -840,7 +840,7 @@ export function resolveLinuxDesktopBuildConfig(target: string): Record<string, u
     category: "Development",
     synopsis: "Desktop GUI for coding agents",
     description:
-      "Cafe Code is a desktop GUI for coding agents such as Codex, Claude, and OpenCode.",
+      "Club Code is a desktop GUI for coding agents such as Codex, Claude, and OpenCode.",
     maintainer: "CafeAI <116491182+cafeai@users.noreply.github.com>",
     vendor: "CafeAI",
     desktop: {
@@ -1089,7 +1089,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     cafeCodeCommitHash: commitHash,
     private: true,
     description:
-      "Cafe Code is a desktop GUI for coding agents such as Codex, Claude, and OpenCode.",
+      "Club Code is a desktop GUI for coding agents such as Codex, Claude, and OpenCode.",
     author: "CafeAI",
     homepage: "https://github.com/cafeai/cafe-code",
     license: "AGPL-3.0-or-later",
@@ -1272,7 +1272,7 @@ const buildDesktopArtifactCli = Command.make("build-desktop-artifact", {
     Flag.optional,
   ),
 }).pipe(
-  Command.withDescription("Build a desktop artifact for Cafe Code."),
+  Command.withDescription("Build a desktop artifact for Club Code."),
   Command.withHandler((input) => Effect.flatMap(resolveBuildOptions(input), buildDesktopArtifact)),
 );
 

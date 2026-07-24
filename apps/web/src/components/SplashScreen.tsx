@@ -3,9 +3,9 @@ export function SplashScreen() {
     <div className="flex min-h-screen items-center justify-center bg-background">
       <div
         className="flex size-24 items-center justify-center"
-        aria-label="Cafe Code splash screen"
+        aria-label="Club Code splash screen"
       >
-        <img alt="Cafe Code" className="size-16 object-contain" src="/apple-touch-icon.png" />
+        <img alt="Club Code" className="size-16 object-contain" src="/apple-touch-icon.png" />
       </div>
     </div>
   );

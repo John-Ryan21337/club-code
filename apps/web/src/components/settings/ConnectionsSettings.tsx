@@ -1884,8 +1884,8 @@ export function ConnectionsSettings() {
                 </AlertDialogTitle>
                 <AlertDialogDescription>
                   {pendingDesktopServerExposureMode === "network-accessible"
-                    ? "Cafe Code will restart to expose this environment over the network."
-                    : "Cafe Code will restart and limit this environment back to this machine."}
+                    ? "Club Code will restart to expose this environment over the network."
+                    : "Club Code will restart and limit this environment back to this machine."}
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
@@ -1934,7 +1934,7 @@ export function ConnectionsSettings() {
                   {pendingDesktopServerHttpsEnabled ? "Enable HTTPS?" : "Disable HTTPS?"}
                 </AlertDialogTitle>
                 <AlertDialogDescription>
-                  Cafe Code will restart to update the backend listener.
+                  Club Code will restart to update the backend listener.
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>

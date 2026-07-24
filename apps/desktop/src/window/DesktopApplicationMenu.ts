@@ -52,7 +52,7 @@ const checkForUpdatesFromMenu: Effect.Effect<
     yield* electronDialog.showMessageBox({
       type: "info",
       title: "You're up to date!",
-      message: `Cafe Code ${updateState.currentVersion} is currently the newest version available.`,
+      message: `Club Code ${updateState.currentVersion} is currently the newest version available.`,
       buttons: ["OK"],
     });
   } else if (updateState.status === "error") {

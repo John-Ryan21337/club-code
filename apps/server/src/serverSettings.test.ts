@@ -130,6 +130,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         shadowHomePath: "",
         customModels: [],
         autoCompactTokenLimit: CODEX_DEFAULT_AUTO_COMPACT_TOKEN_LIMIT,
+        ultraCaching: false,
       });
       assert.deepEqual(next.providers.claudeAgent, {
         enabled: true,
@@ -138,6 +139,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         homePath: "",
         customModels: ["claude-custom"],
         launchArgs: "",
+        ultraCaching: false,
       });
       assert.match(
         yield* fileSystem.readFileString(serverConfig.settingsPath),
@@ -374,6 +376,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         shadowHomePath: "",
         customModels: [],
         autoCompactTokenLimit: CODEX_DEFAULT_AUTO_COMPACT_TOKEN_LIMIT,
+        ultraCaching: false,
       });
       assert.deepEqual(next.providers.claudeAgent, {
         enabled: true,
@@ -382,6 +385,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         homePath: "",
         customModels: [],
         launchArgs: "",
+        ultraCaching: false,
       });
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );

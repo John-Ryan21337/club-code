@@ -1,8 +1,8 @@
-# Cafe Code
+# Club Code
 
 A minimal AI chat harness for coding agents.
 
-Cafe Code is a tiny local UI for Codex and Claude. It is a fork of
+Club Code is a tiny local UI for Codex and Claude. It is a fork of
 [T3 Code](https://github.com/pingdotgg/t3code), trimmed down around one idea:
 type a prompt, let the agent work, and keep the interface quiet, fast, and out
 of your way.
@@ -12,7 +12,7 @@ use a real console. If you want to inspect code, open it in VS Code.
 
 ## Run From Source
 
-The npm package exists, but it may lag behind current work until Cafe Code
+The npm package exists, but it may lag behind current work until Club Code
 stabilizes. The freshest path is a source checkout from GitHub.
 
 Mostly tested on macOS. Windows seems to work. Linux may need some tweaking.
@@ -31,7 +31,7 @@ yarn workspace @cafecode/desktop start
 If you want Codex or Claude to install it for you, paste this:
 
 ```text
-Install Cafe Code from source. Clone https://github.com/cafeai/cafe-code.git, install Node.js 24.13.1 and Corepack, run corepack enable, run yarn install --immutable, run yarn build:desktop, then start it with yarn workspace @cafecode/desktop start. Also verify Codex CLI is installed and logged in with codex login, and Claude Code is installed and logged in with claude auth login if I want Claude support.
+Install Club Code from source. Clone the Club Code fork, install Node.js 24.13.1 and Corepack, run corepack enable, run yarn install --immutable, run yarn build:desktop, then start it with yarn workspace @cafecode/desktop start. Also verify Codex CLI is installed and logged in with codex login, and Claude Code is installed and logged in with claude auth login if I want Claude support.
 ```
 
 ## npm Path
@@ -40,7 +40,7 @@ Install Cafe Code from source. Clone https://github.com/cafeai/cafe-code.git, in
 npx @cafeai/cafe-code
 ```
 
-`npx` downloads the package if needed and starts Cafe Code immediately, but it
+`npx` downloads the package if needed and starts Club Code immediately, but it
 may be out of date for now.
 
 If you want a normal command on your machine:
@@ -50,7 +50,7 @@ npm install -g @cafeai/cafe-code
 cafe-code
 ```
 
-Cafe Code expects providers to already be installed and authenticated:
+Club Code expects providers to already be installed and authenticated:
 
 - Codex: install Codex CLI and run `codex login`
 - Claude: install Claude Code and run `claude auth login`

@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import type { DesktopLocalMediaSelection } from "@cafecode/contracts";
 
 import { createLocalMediaStore, DEFAULT_LOCAL_MEDIA_STATE } from "./localMedia";
 
@@ -60,6 +61,23 @@ describe("local media store", () => {
     expect(store.getSnapshot()).toEqual(DEFAULT_LOCAL_MEDIA_STATE);
     expect(created).toEqual([]);
     expect(revoked).toEqual([]);
+    expect(store.getSelectionRevision()).toBe(0);
+  });
+
+  it("advances a session-only selection revision for successful choices and clear intent", () => {
+    const { api } = createUrlApi();
+    const store = createLocalMediaStore(api);
+
+    expect(store.getSelectionRevision()).toBe(0);
+    expect(store.selectFile({ name: "song.mp3", type: "audio/mpeg" } as unknown as Blob)).toBe(
+      true,
+    );
+    expect(store.getSelectionRevision()).toBe(1);
+    store.clear();
+    expect(store.getSelectionRevision()).toBe(2);
+    // An empty Clear still invalidates an outstanding native picker.
+    store.clear();
+    expect(store.getSelectionRevision()).toBe(3);
   });
 
   it("accepts a known local media extension when the browser supplies no MIME type", () => {
@@ -144,6 +162,7 @@ describe("local media store", () => {
     const store = createLocalMediaStore(api);
     store.update({
       glowEnabled: true,
+      glowMode: "adaptive",
       glowOpacity: 0.5,
       layoutMode: "custom",
       presetPlacement: "bottom-left",
@@ -155,6 +174,7 @@ describe("local media store", () => {
     expect(store.getSnapshot()).toMatchObject({
       source: null,
       glowEnabled: true,
+      glowMode: "adaptive",
       glowOpacity: 0.5,
       layoutMode: "custom",
       presetPlacement: "bottom-left",

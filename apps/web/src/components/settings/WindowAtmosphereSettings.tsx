@@ -1,6 +1,10 @@
 import {
   DEFAULT_AMBIENT_COLOR,
   DEFAULT_AMBIENT_OPACITY,
+  DEFAULT_FALLING_EFFECT_2CH_ENRICHED,
+  DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_COLOR_MODE,
+  DEFAULT_FALLING_EFFECT_ACTIVITY_LINKS,
+  DEFAULT_FALLING_EFFECT_DENSITY,
   DEFAULT_FALLING_EFFECTS_ENABLED,
   DEFAULT_FALLING_EFFECT_JAPANESE_RATIO,
   DEFAULT_FALLING_EFFECT_KIND,
@@ -9,10 +13,14 @@ import {
   DEFAULT_FALLING_EFFECT_DENSITY,
   DEFAULT_FALLING_EFFECT_SPEED,
   MAX_AMBIENT_OPACITY,
+  MAX_FALLING_EFFECT_DENSITY,
+  MAX_FALLING_EFFECT_JAPANESE_RATIO,
   MAX_FALLING_EFFECT_SPEED,
   MAX_FALLING_EFFECT_DENSITY,
   MAX_FALLING_EFFECT_JAPANESE_RATIO,
   MIN_AMBIENT_OPACITY,
+  MIN_FALLING_EFFECT_DENSITY,
+  MIN_FALLING_EFFECT_JAPANESE_RATIO,
   MIN_FALLING_EFFECT_SPEED,
   MIN_FALLING_EFFECT_DENSITY,
   MIN_FALLING_EFFECT_JAPANESE_RATIO,
@@ -77,7 +85,7 @@ export function WindowAtmosphereSettings() {
     <SettingsSection title="Window atmosphere">
       <SettingsRow
         title="Falling effects"
-        description="Let snow, rain, or Matrix characters drift across the whole Cafe Code window."
+        description="Let snow, rain, or Matrix characters drift across the whole Club Code window."
         status={
           atmosphereAvailable ? null : (
             <span className="text-amber-600 dark:text-amber-400">

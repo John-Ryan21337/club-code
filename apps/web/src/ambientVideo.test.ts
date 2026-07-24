@@ -4,7 +4,9 @@ import {
   ambientVideoCinemaLayoutFits,
   ambientVideoPlayerShouldMount,
   ambientVideoPresetPosition,
+  ambientVideoSourceSupportsPlaylistNavigation,
   parseYouTubeSource,
+  youtubeEmbedUrl,
   youtubeSourceInputValue,
 } from "./ambientVideo";
 
@@ -14,7 +16,11 @@ describe("parseYouTubeSource", () => {
     ["https://youtu.be/dQw4w9WgXcQ?t=4", { kind: "video", id: "dQw4w9WgXcQ" }],
     [
       "https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PL1234567890",
-      { kind: "video", id: "dQw4w9WgXcQ" },
+      { kind: "playlist", id: "PL1234567890", videoId: "dQw4w9WgXcQ" },
+    ],
+    [
+      "https://youtu.be/dQw4w9WgXcQ?list=PL1234567890",
+      { kind: "playlist", id: "PL1234567890", videoId: "dQw4w9WgXcQ" },
     ],
     ["https://youtube.com/shorts/dQw4w9WgXcQ", { kind: "video", id: "dQw4w9WgXcQ" }],
     ["https://youtube.com/live/dQw4w9WgXcQ", { kind: "video", id: "dQw4w9WgXcQ" }],
@@ -32,6 +38,13 @@ describe("parseYouTubeSource", () => {
     "https://example.com/watch?v=dQw4w9WgXcQ",
     "https://youtube.com/watch?v=short",
     "https://youtube.com/playlist?list=short",
+    "http://youtube.com/watch?v=dQw4w9WgXcQ",
+    "https://user:password@youtube.com/watch?v=dQw4w9WgXcQ",
+    "https://youtube.com:444/watch?v=dQw4w9WgXcQ",
+    "https://youtube.com/not-supported?list=PL1234567890",
+    "https://youtube.com/watch?v=short&list=PL1234567890",
+    "https://youtube.com/watch?list=PL1234567890",
+    "https://youtu.be/dQw4w9WgXcQ/extra",
     "ftp://youtube.com/watch?v=dQw4w9WgXcQ",
     "javascript:dQw4w9WgXcQ",
   ])("rejects %s", (input) => {
@@ -65,6 +78,71 @@ describe("youtubeSourceInputValue", () => {
     expect(youtubeSourceInputValue({ kind: "playlist", id: "PL1234567890" })).toBe(
       "https://www.youtube.com/playlist?list=PL1234567890",
     );
+    expect(
+      youtubeSourceInputValue({
+        kind: "playlist",
+        id: "PL1234567890",
+        videoId: "dQw4w9WgXcQ",
+      }),
+    ).toBe("https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PL1234567890");
+  });
+});
+
+describe("youtubeEmbedUrl", () => {
+  it("enables the official player API on privacy-enhanced video and playlist embeds", () => {
+    const video = new URL(youtubeEmbedUrl({ kind: "video", id: "dQw4w9WgXcQ" }));
+    const playlist = new URL(youtubeEmbedUrl({ kind: "playlist", id: "PL1234567890" }));
+    const playlistItem = new URL(
+      youtubeEmbedUrl({
+        kind: "playlist",
+        id: "PL1234567890",
+        videoId: "dQw4w9WgXcQ",
+      }),
+    );
+
+    expect(video.origin).toBe("https://www.youtube-nocookie.com");
+    expect(video.pathname).toBe("/embed/dQw4w9WgXcQ");
+    expect(video.searchParams.get("enablejsapi")).toBe("1");
+    expect(video.searchParams.has("autoplay")).toBe(false);
+    expect(playlist.origin).toBe("https://www.youtube-nocookie.com");
+    expect(playlist.pathname).toBe("/embed/videoseries");
+    expect(playlist.searchParams.get("list")).toBe("PL1234567890");
+    expect(playlist.searchParams.get("enablejsapi")).toBe("1");
+    expect(playlistItem.pathname).toBe("/embed/dQw4w9WgXcQ");
+    expect(playlistItem.searchParams.get("list")).toBe("PL1234567890");
+  });
+
+  it("requests autoplay only when a session URL queue advances", () => {
+    const queueItem = new URL(
+      youtubeEmbedUrl({ kind: "video", id: "dQw4w9WgXcQ" }, { autoplay: true }),
+    );
+
+    expect(queueItem.searchParams.get("autoplay")).toBe("1");
+  });
+});
+
+describe("ambientVideoSourceSupportsPlaylistNavigation", () => {
+  it("offers Cafe-owned previous and next controls only for YouTube playlists", () => {
+    expect(
+      ambientVideoSourceSupportsPlaylistNavigation({
+        kind: "playlist",
+        id: "PL1234567890",
+      }),
+    ).toBe(true);
+    expect(
+      ambientVideoSourceSupportsPlaylistNavigation({
+        kind: "video",
+        id: "dQw4w9WgXcQ",
+      }),
+    ).toBe(false);
+    expect(
+      ambientVideoSourceSupportsPlaylistNavigation({
+        kind: "spotify",
+        entityType: "playlist",
+        id: "37i9dQZF1DXcBWIGoYBM5M",
+      }),
+    ).toBe(false);
+    expect(ambientVideoSourceSupportsPlaylistNavigation(null)).toBe(false);
   });
 });
 

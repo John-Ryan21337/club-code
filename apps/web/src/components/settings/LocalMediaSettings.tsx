@@ -1,6 +1,20 @@
-import { type ChangeEvent, useCallback, useRef, useState } from "react";
+import { type ChangeEvent, useCallback, useEffect, useRef, useState } from "react";
+import type { DesktopLocalMediaCapability } from "@cafecode/contracts";
 
-import { LOCAL_MEDIA_INPUT_ACCEPT, localMediaStore, useLocalMediaState } from "../../localMedia";
+import {
+  LOCAL_MEDIA_INPUT_ACCEPT,
+  MAX_LOCAL_MEDIA_VISUALIZER_BLEND_SECONDS,
+  MAX_LOCAL_MEDIA_VISUALIZER_CYCLE_SECONDS,
+  MIN_LOCAL_MEDIA_VISUALIZER_BLEND_SECONDS,
+  MIN_LOCAL_MEDIA_VISUALIZER_CYCLE_SECONDS,
+  localMediaStore,
+  useLocalMediaState,
+} from "../../localMedia";
+import {
+  adjacentMilkdropPresetName,
+  loadMilkdropPresetNames,
+  randomMilkdropPresetName,
+} from "../../milkdropVisualizer";
 import { Button } from "../ui/button";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
@@ -8,11 +22,24 @@ import { SettingsRow, SettingsSection } from "./settingsLayout";
 
 export function LocalMediaSettings() {
   const state = useLocalMediaState();
+  const desktopBridgeAvailable =
+    typeof window !== "undefined" && window.desktopBridge !== undefined;
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [selectionError, setSelectionError] = useState<string | null>(null);
+  const [desktopCapability, setDesktopCapability] = useState<DesktopLocalMediaCapability | null>(
+    null,
+  );
+  const [desktopCapabilityLoading, setDesktopCapabilityLoading] = useState(false);
+  const [desktopSelectionLoading, setDesktopSelectionLoading] = useState(false);
+  const desktopSelectionInFlightRef = useRef(false);
+  const [presetNames, setPresetNames] = useState<readonly string[]>([]);
+  const [presetCatalogStatus, setPresetCatalogStatus] = useState<
+    "idle" | "loading" | "ready" | "error"
+  >("idle");
+  const [presetQuery, setPresetQuery] = useState(state.visualizerPresetName ?? "");
 
   const chooseFile = useCallback((event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.currentTarget.files?.item(0) ?? null;
+    const files = event.currentTarget.files ? [...event.currentTarget.files] : [];
     // Allow choosing the same file again after clearing it. The File never enters
     // state; only the browser's current-document object URL does.
     event.currentTarget.value = "";
@@ -24,7 +51,122 @@ export function LocalMediaSettings() {
     setSelectionError(null);
   }, []);
 
+  useEffect(() => {
+    const bridge = window.desktopBridge;
+    if (!bridge) {
+      setDesktopCapability(null);
+      return;
+    }
+    let cancelled = false;
+    setDesktopCapabilityLoading(true);
+    void bridge.getLocalMediaCapability().then(
+      (capability) => {
+        if (!cancelled) {
+          setDesktopCapability(capability);
+          setDesktopCapabilityLoading(false);
+        }
+      },
+      () => {
+        if (!cancelled) {
+          setDesktopCapability({
+            available: false,
+            engine: {
+              label: "VLC",
+              version: null,
+              reason: "VLC availability could not be checked.",
+            },
+          });
+          setDesktopCapabilityLoading(false);
+        }
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const chooseWithVlc = useCallback(async () => {
+    const bridge = window.desktopBridge;
+    if (!bridge || desktopSelectionInFlightRef.current) {
+      return;
+    }
+    desktopSelectionInFlightRef.current = true;
+    const selectionRevision = localMediaStore.getSelectionRevision();
+    setDesktopSelectionLoading(true);
+    setSelectionError(null);
+    try {
+      const selection = await bridge.pickLocalMedia();
+      if (selection === null) {
+        return;
+      }
+      if (!selection || typeof selection.sessionId !== "string") {
+        setSelectionError("VLC returned an invalid local media session.");
+        return;
+      }
+      if (localMediaStore.getSelectionRevision() !== selectionRevision) {
+        // A newer browser-file choice or Clear action won while the native
+        // picker was open. Release the now-stale VLC process instead of
+        // overwriting the operator's newer intent.
+        await bridge.releaseLocalMedia({ sessionId: selection.sessionId }).catch(() => undefined);
+        return;
+      }
+      if (!localMediaStore.selectDesktopMedia(selection)) {
+        await bridge.releaseLocalMedia({ sessionId: selection.sessionId }).catch(() => undefined);
+        setSelectionError("VLC returned an invalid local media session.");
+      }
+    } catch {
+      setSelectionError("VLC could not open the selected media file.");
+    } finally {
+      desktopSelectionInFlightRef.current = false;
+      setDesktopSelectionLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    setPresetQuery(state.visualizerPresetName ?? "");
+  }, [state.visualizerPresetName]);
+
+  useEffect(() => {
+    const shouldLoadCatalog =
+      state.source !== null && state.visualizerEnabled && state.visualizerStyle === "milkdrop";
+    if (!shouldLoadCatalog || presetNames.length > 0) {
+      return;
+    }
+    let cancelled = false;
+    setPresetCatalogStatus("loading");
+    void loadMilkdropPresetNames().then(
+      (names) => {
+        if (cancelled) return;
+        setPresetNames(names);
+        setPresetCatalogStatus("ready");
+      },
+      () => {
+        if (!cancelled) setPresetCatalogStatus("error");
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [presetNames.length, state.source, state.visualizerEnabled, state.visualizerStyle]);
+
   const hasSource = state.source !== null;
+  const milkdropControlsEnabled =
+    hasSource &&
+    state.visualizerEnabled &&
+    state.visualizerStyle === "milkdrop" &&
+    presetCatalogStatus === "ready";
+
+  const selectPreset = useCallback((name: string | null) => {
+    localMediaStore.update({ visualizerPresetName: name });
+    setPresetQuery(name ?? "");
+  }, []);
+
+  const navigatePreset = useCallback(
+    (direction: -1 | 1) => {
+      selectPreset(adjacentMilkdropPresetName(presetNames, state.visualizerPresetName, direction));
+    },
+    [presetNames, selectPreset, state.visualizerPresetName],
+  );
 
   return (
     <SettingsSection title="Local Media">
@@ -52,6 +194,7 @@ export function LocalMediaSettings() {
               className="sr-only"
               type="file"
               accept={LOCAL_MEDIA_INPUT_ACCEPT}
+              multiple
               onChange={chooseFile}
             />
             <Button
@@ -60,8 +203,27 @@ export function LocalMediaSettings() {
               variant="outline"
               onClick={() => fileInputRef.current?.click()}
             >
-              Choose file
+              Direct queue
             </Button>
+            {desktopBridgeAvailable ? (
+              <Button
+                disabled={
+                  desktopCapabilityLoading ||
+                  desktopSelectionLoading ||
+                  desktopCapability?.available !== true
+                }
+                size="xs"
+                type="button"
+                variant="outline"
+                onClick={() => void chooseWithVlc()}
+              >
+                {desktopSelectionLoading
+                  ? "Opening…"
+                  : desktopCapabilityLoading
+                    ? "Checking VLC…"
+                    : "VLC queue"}
+              </Button>
+            ) : null}
             {hasSource ? (
               <Button
                 size="xs"
@@ -233,7 +395,7 @@ export function LocalMediaSettings() {
 
       <SettingsRow
         title="Player glow"
-        description="Add a soft, local visual glow around the media player."
+        description="Use one fixed color, or sample a tiny current frame from an approved direct/VLC video for bounded Ambilight-style edge colors. Unsupported or unavailable frames fall back to the fixed color."
         control={
           <Switch
             aria-label="Enable local media glow"
@@ -245,7 +407,30 @@ export function LocalMediaSettings() {
       >
         <div className="flex flex-wrap items-center gap-3 py-3">
           <label className="flex items-center gap-2 text-xs text-muted-foreground">
-            Color
+            Mode
+            <select
+              aria-label="Local media glow mode"
+              className="h-8 rounded border border-input bg-background px-2 text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={
+                !hasSource ||
+                !state.glowEnabled ||
+                state.source?.kind !== "video" ||
+                state.presentationMode === "background"
+              }
+              value={state.glowMode}
+              onChange={(event) => {
+                const glowMode = event.currentTarget.value;
+                if (glowMode === "fixed" || glowMode === "adaptive") {
+                  localMediaStore.update({ glowMode });
+                }
+              }}
+            >
+              <option value="fixed">Fixed</option>
+              <option value="adaptive">Adaptive video edges</option>
+            </select>
+          </label>
+          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+            {state.glowMode === "adaptive" ? "Fallback" : "Color"}
             <input
               aria-label="Local media glow color"
               className="h-8 w-12 cursor-pointer rounded border border-input bg-transparent p-1 disabled:cursor-not-allowed"
@@ -277,7 +462,7 @@ export function LocalMediaSettings() {
 
       <SettingsRow
         title="Audio visualizer"
-        description="A bounded spectrum display for this selected local file only. It never captures YouTube, Spotify, system audio, a microphone, or another app."
+        description="MilkDrop renders a locally bundled library of hundreds of reactive styles; Spectrum is the quieter classic view. Both directly analyse this session's selected browser or VLC media element. YouTube and Spotify require the separate, explicit shared-audio control; there is never a microphone fallback."
         control={
           <Switch
             aria-label="Enable local media audio visualizer"
@@ -286,7 +471,173 @@ export function LocalMediaSettings() {
             onCheckedChange={(visualizerEnabled) => localMediaStore.update({ visualizerEnabled })}
           />
         }
-      />
+        status={
+          <span>
+            Rapid motion and flashing imagery can affect photosensitive viewers. The visualizer
+            pauses when reduced motion is requested, the window loses focus, or the document is
+            hidden.
+          </span>
+        }
+      >
+        <div className="grid gap-4 py-3 sm:grid-cols-2">
+          <label className="flex flex-col gap-1.5 text-xs text-muted-foreground">
+            Style
+            <Select
+              disabled={!hasSource || !state.visualizerEnabled}
+              value={state.visualizerStyle}
+              onValueChange={(value) => {
+                if (value === "milkdrop" || value === "spectrum") {
+                  localMediaStore.update({ visualizerStyle: value });
+                }
+              }}
+            >
+              <SelectTrigger aria-label="Local media visualizer style">
+                <SelectValue>
+                  {state.visualizerStyle === "milkdrop"
+                    ? "MilkDrop · bundled presets"
+                    : "Spectrum · classic bars"}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectPopup align="start" alignItemWithTrigger={false}>
+                <SelectItem hideIndicator value="milkdrop">
+                  MilkDrop · bundled presets
+                </SelectItem>
+                <SelectItem hideIndicator value="spectrum">
+                  Spectrum · classic bars
+                </SelectItem>
+              </SelectPopup>
+            </Select>
+          </label>
+
+          {state.visualizerStyle === "milkdrop" ? (
+            <label className="flex flex-col gap-1.5 text-xs text-muted-foreground">
+              Search or browse preset
+              <input
+                aria-label="MilkDrop preset"
+                className="h-8 rounded-md border border-input bg-background px-2 text-xs text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={!milkdropControlsEnabled}
+                list="local-media-milkdrop-presets"
+                placeholder={
+                  presetCatalogStatus === "error"
+                    ? "Preset catalog unavailable"
+                    : presetCatalogStatus === "ready"
+                      ? `${presetNames.length} bundled presets`
+                      : "Loading bundled presets…"
+                }
+                value={presetQuery}
+                onBlur={() => setPresetQuery(state.visualizerPresetName ?? "")}
+                onChange={(event) => {
+                  const query = event.currentTarget.value;
+                  setPresetQuery(query);
+                  if (presetNames.includes(query)) {
+                    localMediaStore.update({ visualizerPresetName: query });
+                  }
+                }}
+              />
+              <datalist id="local-media-milkdrop-presets">
+                {presetNames.map((name) => (
+                  <option key={name} value={name} />
+                ))}
+              </datalist>
+            </label>
+          ) : null}
+        </div>
+
+        {state.visualizerStyle === "milkdrop" ? (
+          <div className="flex flex-wrap items-center gap-2 border-t border-border/60 py-3">
+            <Button
+              size="xs"
+              type="button"
+              variant="outline"
+              disabled={!milkdropControlsEnabled}
+              onClick={() => navigatePreset(-1)}
+            >
+              Previous preset
+            </Button>
+            <Button
+              size="xs"
+              type="button"
+              variant="outline"
+              disabled={!milkdropControlsEnabled}
+              onClick={() =>
+                selectPreset(randomMilkdropPresetName(presetNames, state.visualizerPresetName))
+              }
+            >
+              Surprise me
+            </Button>
+            <Button
+              size="xs"
+              type="button"
+              variant="outline"
+              disabled={!milkdropControlsEnabled}
+              onClick={() => navigatePreset(1)}
+            >
+              Next preset
+            </Button>
+            <span className="text-[11px] text-muted-foreground">
+              {presetCatalogStatus === "ready"
+                ? `${presetNames.length} bundled presets, loaded locally`
+                : presetCatalogStatus === "error"
+                  ? "The bundled preset catalog could not be loaded."
+                  : "The preset catalog loads only when MilkDrop is enabled."}
+            </span>
+          </div>
+        ) : null}
+
+        {state.visualizerStyle === "milkdrop" ? (
+          <div className="grid gap-4 border-t border-border/60 py-3 sm:grid-cols-2">
+            <label className="flex items-center gap-3 text-xs text-muted-foreground">
+              Auto-cycle
+              <Switch
+                aria-label="Auto-cycle MilkDrop presets"
+                checked={state.visualizerAutoCycle}
+                disabled={!hasSource || !state.visualizerEnabled}
+                onCheckedChange={(visualizerAutoCycle) =>
+                  localMediaStore.update({ visualizerAutoCycle })
+                }
+              />
+            </label>
+            <label className="flex items-center gap-2 text-xs text-muted-foreground">
+              Change every
+              <input
+                aria-label="MilkDrop auto-cycle interval"
+                className="w-28 accent-primary"
+                disabled={!hasSource || !state.visualizerEnabled || !state.visualizerAutoCycle}
+                max={MAX_LOCAL_MEDIA_VISUALIZER_CYCLE_SECONDS}
+                min={MIN_LOCAL_MEDIA_VISUALIZER_CYCLE_SECONDS}
+                step="5"
+                type="range"
+                value={state.visualizerCycleSeconds}
+                onChange={(event) =>
+                  localMediaStore.update({
+                    visualizerCycleSeconds: Number(event.currentTarget.value),
+                  })
+                }
+              />
+              <span className="w-10 tabular-nums">{state.visualizerCycleSeconds}s</span>
+            </label>
+            <label className="flex items-center gap-2 text-xs text-muted-foreground sm:col-span-2">
+              Preset blend
+              <input
+                aria-label="MilkDrop preset blend duration"
+                className="w-32 accent-primary"
+                disabled={!hasSource || !state.visualizerEnabled}
+                max={MAX_LOCAL_MEDIA_VISUALIZER_BLEND_SECONDS}
+                min={MIN_LOCAL_MEDIA_VISUALIZER_BLEND_SECONDS}
+                step="0.5"
+                type="range"
+                value={state.visualizerBlendSeconds}
+                onChange={(event) =>
+                  localMediaStore.update({
+                    visualizerBlendSeconds: Number(event.currentTarget.value),
+                  })
+                }
+              />
+              <span className="w-10 tabular-nums">{state.visualizerBlendSeconds}s</span>
+            </label>
+          </div>
+        ) : null}
+      </SettingsRow>
     </SettingsSection>
   );
 }

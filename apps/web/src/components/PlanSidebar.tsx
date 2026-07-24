@@ -1,4 +1,4 @@
-import { memo, useState, useCallback, type KeyboardEvent } from "react";
+import { memo, useState, useCallback, useMemo, type KeyboardEvent } from "react";
 import type { EnvironmentId, WorkflowProjectionSnapshot } from "@cafecode/contracts";
 import { type TimestampFormat } from "@cafecode/contracts/settings";
 import { Button } from "./ui/button";
@@ -65,6 +65,8 @@ interface PlanSidebarProps {
   activeTab: RightPanelTab;
   workflowSnapshot: WorkflowProjectionSnapshot;
   workflowNodeExpandedById: Readonly<Record<string, boolean>>;
+  workflowObservatoryEnabled: boolean;
+  workflowStallWarningSeconds: number;
   mode?: "sheet" | "sidebar";
   onClose: () => void;
   onActiveTabChange: (tab: RightPanelTab) => void;
@@ -82,6 +84,8 @@ const PlanSidebar = memo(function PlanSidebar({
   activeTab,
   workflowSnapshot,
   workflowNodeExpandedById,
+  workflowObservatoryEnabled,
+  workflowStallWarningSeconds,
   mode = "sidebar",
   onClose,
   onActiveTabChange,
@@ -94,6 +98,10 @@ const PlanSidebar = memo(function PlanSidebar({
   const planMarkdown = activeProposedPlan?.planMarkdown ?? null;
   const displayedPlanMarkdown = planMarkdown ? stripDisplayedPlanMarkdown(planMarkdown) : null;
   const planTitle = planMarkdown ? proposedPlanTitle(planMarkdown) : null;
+  const rightPanelTabs = useMemo<readonly RightPanelTab[]>(
+    () => (workflowObservatoryEnabled ? RIGHT_PANEL_TABS : ["plan"]),
+    [workflowObservatoryEnabled],
+  );
 
   const handleCopyPlan = useCallback(() => {
     if (!planMarkdown) return;
@@ -141,21 +149,21 @@ const PlanSidebar = memo(function PlanSidebar({
 
   const handleTabKeyDown = useCallback(
     (event: KeyboardEvent<HTMLButtonElement>, currentTab: RightPanelTab) => {
-      const currentIndex = RIGHT_PANEL_TABS.indexOf(currentTab);
+      const currentIndex = rightPanelTabs.indexOf(currentTab);
       const nextIndex =
         event.key === "ArrowRight" || event.key === "ArrowDown"
-          ? (currentIndex + 1) % RIGHT_PANEL_TABS.length
+          ? (currentIndex + 1) % rightPanelTabs.length
           : event.key === "ArrowLeft" || event.key === "ArrowUp"
-            ? (currentIndex - 1 + RIGHT_PANEL_TABS.length) % RIGHT_PANEL_TABS.length
+            ? (currentIndex - 1 + rightPanelTabs.length) % rightPanelTabs.length
             : event.key === "Home"
               ? 0
               : event.key === "End"
-                ? RIGHT_PANEL_TABS.length - 1
+                ? rightPanelTabs.length - 1
                 : null;
       if (nextIndex === null) return;
 
       event.preventDefault();
-      const nextTab = RIGHT_PANEL_TABS[nextIndex];
+      const nextTab = rightPanelTabs[nextIndex];
       if (!nextTab) return;
       onActiveTabChange(nextTab);
       event.currentTarget.parentElement
@@ -163,7 +171,7 @@ const PlanSidebar = memo(function PlanSidebar({
         .item(nextIndex)
         ?.focus();
     },
-    [onActiveTabChange],
+    [onActiveTabChange, rightPanelTabs],
   );
 
   return (
@@ -184,7 +192,7 @@ const PlanSidebar = memo(function PlanSidebar({
             aria-orientation="horizontal"
             className="flex items-center gap-1"
           >
-            {RIGHT_PANEL_TABS.map((tab) => (
+            {rightPanelTabs.map((tab) => (
               <Button
                 key={tab}
                 id={`right-panel-tab-${tab}`}
@@ -349,6 +357,7 @@ const PlanSidebar = memo(function PlanSidebar({
               activePlan={activePlan}
               expandedNodeById={workflowNodeExpandedById}
               onNodeExpandedChange={onWorkflowNodeExpandedChange}
+              stallWarningSeconds={workflowStallWarningSeconds}
             />
           </div>
         )}

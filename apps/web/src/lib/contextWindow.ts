@@ -50,6 +50,8 @@ export function deriveLatestContextWindowSnapshot(
     return {
       usedTokens,
       totalProcessedTokens: asFiniteNumber(payload?.totalProcessedTokens),
+      totalOutputTokens: asFiniteNumber(payload?.totalOutputTokens),
+      totalCachedInputTokens: asFiniteNumber(payload?.totalCachedInputTokens),
       maxTokens,
       remainingTokens,
       usedPercentage,
