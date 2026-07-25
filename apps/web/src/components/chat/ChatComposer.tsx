@@ -827,6 +827,8 @@ export interface ChatComposerProps {
 
   focusComposer: () => void;
   scheduleComposerFocus: () => void;
+  /** Cancels an armed, current-turn auto nudge as soon as the operator edits. */
+  onManualActivity?: () => void;
   setThreadError: (threadId: ThreadId | null, error: string | null) => void;
   onExpandImage: (preview: ExpandedImagePreview) => void;
 }
@@ -907,6 +909,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     togglePlanSidebar,
     focusComposer,
     scheduleComposerFocus,
+    onManualActivity,
     setThreadError,
     onExpandImage,
   } = props;
@@ -1739,6 +1742,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       expandedCursor: number,
       cursorAdjacentToMention: boolean,
     ) => {
+      onManualActivity?.();
       if (activePendingProgress?.activeQuestion && pendingUserInputs.length > 0) {
         setComposerCursor(nextCursor);
         setComposerTrigger(
@@ -1764,6 +1768,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       activePendingProgress?.activeQuestion,
       pendingUserInputs.length,
       onChangeActivePendingUserInputCustomAnswer,
+      onManualActivity,
       promptRef,
       setPrompt,
     ],
@@ -1788,6 +1793,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       ) {
         return false;
       }
+      onManualActivity?.();
       const next = replaceTextRange(promptRef.current, rangeStart, rangeEnd, replacement);
       const nextCursor = collapseExpandedComposerCursor(next.text, next.cursor);
       const nextExpandedCursor = expandCollapsedComposerCursor(next.text, nextCursor);
@@ -1817,6 +1823,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       activePendingProgress?.activeQuestion,
       activePendingUserInput,
       onChangeActivePendingUserInputCustomAnswer,
+      onManualActivity,
       promptRef,
       setPrompt,
     ],
