@@ -347,6 +347,54 @@ export type DesktopDebugEndpointState = typeof DesktopDebugEndpointStateSchema.T
 export const DesktopRendererDebugSnapshotSchema = Schema.Record(Schema.String, Schema.Unknown);
 export type DesktopRendererDebugSnapshot = typeof DesktopRendererDebugSnapshotSchema.Type;
 
+export const CompletionSpeechLanguageSchema = Schema.Literals(["en", "ja"]);
+export type CompletionSpeechLanguage = typeof CompletionSpeechLanguageSchema.Type;
+
+export const CompletionSpeechGenderSchema = Schema.Literals(["female", "male"]);
+export type CompletionSpeechGender = typeof CompletionSpeechGenderSchema.Type;
+
+const DesktopCompletionSpeechTextSchema = Schema.String.check(Schema.isMaxLength(512));
+
+export const DesktopCompletionSpeechVoiceSchema = Schema.Struct({
+  name: DesktopCompletionSpeechTextSchema,
+  language: CompletionSpeechLanguageSchema,
+  culture: DesktopCompletionSpeechTextSchema,
+  gender: CompletionSpeechGenderSchema,
+});
+export type DesktopCompletionSpeechVoice = typeof DesktopCompletionSpeechVoiceSchema.Type;
+
+export const DesktopCompletionSpeechCapabilitySchema = Schema.Struct({
+  available: Schema.Boolean,
+  engine: Schema.Literal("Windows System.Speech"),
+  voices: Schema.Array(DesktopCompletionSpeechVoiceSchema).check(Schema.isMaxLength(128)),
+  reason: Schema.NullOr(DesktopCompletionSpeechTextSchema),
+});
+export type DesktopCompletionSpeechCapability = typeof DesktopCompletionSpeechCapabilitySchema.Type;
+
+export const DesktopCompletionSpeechSynthesizeInputSchema = Schema.Struct({
+  language: CompletionSpeechLanguageSchema,
+  gender: CompletionSpeechGenderSchema,
+});
+export type DesktopCompletionSpeechSynthesizeInput =
+  typeof DesktopCompletionSpeechSynthesizeInputSchema.Type;
+
+export const DesktopCompletionSpeechClipSchema = Schema.Struct({
+  language: CompletionSpeechLanguageSchema,
+  requestedGender: CompletionSpeechGenderSchema,
+  voice: DesktopCompletionSpeechVoiceSchema,
+  // A fixed, very short phrase produces a small PCM WAV. The main process
+  // enforces the decoded byte bound before encoding this renderer payload.
+  wavBase64: Schema.String.check(Schema.isMaxLength(1_500_000)),
+});
+export type DesktopCompletionSpeechClip = typeof DesktopCompletionSpeechClipSchema.Type;
+
+export const DesktopCompletionSpeechSynthesizeResultSchema = Schema.Struct({
+  clip: Schema.NullOr(DesktopCompletionSpeechClipSchema),
+  reason: Schema.NullOr(DesktopCompletionSpeechTextSchema),
+});
+export type DesktopCompletionSpeechSynthesizeResult =
+  typeof DesktopCompletionSpeechSynthesizeResultSchema.Type;
+
 export interface DesktopBridge {
   getAppBranding: () => DesktopAppBranding | null;
   getLocalEnvironmentBootstrap: () => DesktopEnvironmentBootstrap | null;
@@ -366,6 +414,10 @@ export interface DesktopBridge {
   setServerExposureMode: (mode: DesktopServerExposureMode) => Promise<DesktopServerExposureState>;
   setServerHttpsEnabled: (enabled: boolean) => Promise<DesktopServerExposureState>;
   getAdvertisedEndpoints: () => Promise<readonly AdvertisedEndpoint[]>;
+  getCompletionSpeechCapability?: () => Promise<DesktopCompletionSpeechCapability>;
+  synthesizeCompletionSpeech?: (
+    input: DesktopCompletionSpeechSynthesizeInput,
+  ) => Promise<DesktopCompletionSpeechSynthesizeResult>;
   pickFolder: (options?: PickFolderOptions) => Promise<string | null>;
   confirm: (message: string) => Promise<boolean>;
   setTheme: (theme: DesktopTheme) => Promise<void>;

@@ -224,6 +224,7 @@ export interface DesktopIpcMethodRegistration<
     ResultDecodingServices,
     ResultEncodingServices
   >;
+  readonly strict?: true;
   readonly handler: (input: Payload) => Effect.Effect<Result, E, R>;
 }
 
@@ -261,7 +262,7 @@ export const makeIpcMethod = <
   return {
     channel: method.channel,
     handler: (raw) =>
-      decode(raw).pipe(
+      decode(raw, method.strict ? { onExcessProperty: "error" } : undefined).pipe(
         Effect.flatMap(method.handler),
         Effect.flatMap(encode),
         Effect.withSpan("desktop.ipc.method", { attributes: { channel: method.channel } }),

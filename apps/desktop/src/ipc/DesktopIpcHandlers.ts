@@ -26,6 +26,10 @@ import { checkSourceUpdate, getSourceUpdateState } from "./methods/sourceUpdates
 import { setPowerSaveBlockerState } from "./methods/powerSaveBlocker.ts";
 import { getDebugEndpointState, publishDebugSnapshot } from "./methods/debug.ts";
 import {
+  getCompletionSpeechCapability,
+  synthesizeCompletionSpeech,
+} from "./methods/completionSpeech.ts";
+import {
   confirm,
   getAppBranding,
   getLocalEnvironmentBootstrap,
@@ -59,6 +63,8 @@ export const installDesktopIpcHandlers = Effect.gen(function* () {
   yield* ipc.handle(setServerExposureMode);
   yield* ipc.handle(setServerHttpsEnabled);
   yield* ipc.handle(getAdvertisedEndpoints);
+  yield* ipc.handle(getCompletionSpeechCapability);
+  yield* ipc.handle(synthesizeCompletionSpeech);
 
   yield* ipc.handle(pickFolder);
   yield* ipc.handle(confirm);
