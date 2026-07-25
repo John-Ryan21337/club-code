@@ -104,6 +104,7 @@ function spawnLaunchPlan(plan, childEnv) {
   }
 
   return spawn(plan.command, plan.args, {
+    shell: false,
     stdio: "inherit",
     cwd: plan.cwd,
     env: childEnv,

@@ -51,6 +51,7 @@ function readJsonFile(path) {
 function replacePlistString(plistPath, key, value) {
   const result = spawnSync("plutil", ["-replace", key, "-string", value, plistPath], {
     encoding: "utf8",
+    shell: false,
   });
   if (result.status !== 0) {
     const message = (result.stderr || result.stdout || "unknown plutil failure").trim();
