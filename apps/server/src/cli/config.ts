@@ -1,7 +1,11 @@
 import * as NetService from "@cafecode/shared/Net";
 import { cafeCodeConfigWithDefault, cafeCodeOptionalValueConfig } from "@cafecode/shared/compatEnv";
 import { parsePersistedServerObservabilitySettings } from "@cafecode/shared/serverSettings";
-import { DesktopBackendBootstrap, PortSchema } from "@cafecode/contracts";
+import {
+  DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES,
+  DesktopBackendBootstrap,
+  PortSchema,
+} from "@cafecode/contracts";
 import * as Config from "effect/Config";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -370,6 +374,12 @@ export const resolveServerConfig = (
       desktopBootstrapToken,
       autoBootstrapProjectFromCwd,
       logWebSocketEvents,
+      // TODO(ambient-experience slices): this base skeleton does not yet wire
+      // per-capability environment gates (atmosphere, ambient image, YouTube,
+      // Spotify, workflow observatory). Each of those lands with its own
+      // feature slice; until then every capability reports its bundled
+      // default so `ServerConfigShape` always carries a value.
+      ambientExperienceCapabilities: DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES,
       providerDaemon: bootstrap?.providerDaemon,
       providerSupervisor: undefined,
     };

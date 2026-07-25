@@ -755,6 +755,59 @@ export const ServerSignalProcessResult = Schema.Struct({
 });
 export type ServerSignalProcessResult = typeof ServerSignalProcessResult.Type;
 
+/**
+ * Server-advertised ambient-experience capability set.
+ *
+ * This is deliberately an operator/runtime capability response rather than a
+ * user preference. A saved preference can remember a user's choice, but it
+ * must never make an unavailable renderer or server feature executable. New
+ * fields require a version bump and an explicit compatibility review.
+ */
+export const AMBIENT_EXPERIENCE_CAPABILITIES_VERSION = 2 as const;
+
+export const DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES = {
+  version: AMBIENT_EXPERIENCE_CAPABILITIES_VERSION,
+  atmosphere: true,
+  ambientImage: true,
+  youtubePlayer: true,
+  youtubePublicDiscovery: false,
+  youtubeAccountConnection: false,
+  spotifyEmbed: true,
+  workflowObservatory: true,
+} as const;
+
+// Runtime defaults advertise the features bundled with this version of Cafe
+// Code. Decoding is deliberately stricter: an omitted capability object can
+// come from an older or partial server and must not grant renderer features.
+const DISABLED_AMBIENT_EXPERIENCE_CAPABILITIES = {
+  version: AMBIENT_EXPERIENCE_CAPABILITIES_VERSION,
+  atmosphere: false,
+  ambientImage: false,
+  youtubePlayer: false,
+  youtubePublicDiscovery: false,
+  youtubeAccountConnection: false,
+  spotifyEmbed: false,
+  workflowObservatory: false,
+} as const;
+
+const AmbientExperienceCapabilityEnabled = Schema.Boolean.pipe(
+  Schema.withDecodingDefault(Effect.succeed(false)),
+);
+
+export const AmbientExperienceCapabilities = Schema.Struct({
+  version: Schema.Literal(AMBIENT_EXPERIENCE_CAPABILITIES_VERSION).pipe(
+    Schema.withDecodingDefault(Effect.succeed(AMBIENT_EXPERIENCE_CAPABILITIES_VERSION)),
+  ),
+  atmosphere: AmbientExperienceCapabilityEnabled,
+  ambientImage: AmbientExperienceCapabilityEnabled,
+  youtubePlayer: AmbientExperienceCapabilityEnabled,
+  youtubePublicDiscovery: AmbientExperienceCapabilityEnabled,
+  youtubeAccountConnection: AmbientExperienceCapabilityEnabled,
+  spotifyEmbed: AmbientExperienceCapabilityEnabled,
+  workflowObservatory: AmbientExperienceCapabilityEnabled,
+}).pipe(Schema.withDecodingDefault(Effect.succeed(DISABLED_AMBIENT_EXPERIENCE_CAPABILITIES)));
+export type AmbientExperienceCapabilities = typeof AmbientExperienceCapabilities.Type;
+
 export const ServerConfig = Schema.Struct({
   environment: ExecutionEnvironmentDescriptor,
   auth: ServerAuthDescriptor,
@@ -769,6 +822,7 @@ export const ServerConfig = Schema.Struct({
   observability: ServerObservability,
   settings: ServerSettings,
   clientSettings: ClientSettingsSchema,
+  ambientExperienceCapabilities: AmbientExperienceCapabilities,
 });
 export type ServerConfig = typeof ServerConfig.Type;
 

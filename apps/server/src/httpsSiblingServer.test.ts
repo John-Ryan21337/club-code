@@ -9,6 +9,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import { HttpServer } from "effect/unstable/http";
+import { DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES } from "@cafecode/contracts";
 
 import { deriveServerPaths, ServerConfig, type ServerConfigShape } from "./config.ts";
 import { startHttpsSiblingServer } from "./httpsSiblingServer.ts";
@@ -120,6 +121,7 @@ const makeHttpsTestConfig = Effect.gen(function* () {
     logWebSocketEvents: false,
     providerDaemon: undefined,
     providerSupervisor: undefined,
+    ambientExperienceCapabilities: DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES,
   } satisfies ServerConfigShape;
 });
 

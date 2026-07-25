@@ -3,6 +3,7 @@ import * as http from "node:http";
 import * as path from "node:path";
 
 import {
+  DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES,
   PROVIDER_DAEMON_LEASES_PATH,
   ProviderDaemonHealth,
   ProviderDaemonLeaseResponse,
@@ -148,6 +149,7 @@ const makeServerConfig = (baseDir: string) =>
       logWebSocketEvents: false,
       providerDaemon: undefined,
       providerSupervisor: undefined,
+      ambientExperienceCapabilities: DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES,
     } satisfies ServerConfigShape;
   });
 

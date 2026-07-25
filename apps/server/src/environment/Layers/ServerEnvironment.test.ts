@@ -7,6 +7,7 @@ import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as PlatformError from "effect/PlatformError";
+import { DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES } from "@cafecode/contracts";
 
 import { deriveServerPaths, ServerConfig, type ServerConfigShape } from "../../config.ts";
 import { ServerEnvironment } from "../Services/ServerEnvironment.ts";
@@ -44,6 +45,7 @@ const makeServerConfig = Effect.fn(function* (baseDir: string) {
     devUrl: undefined,
     noBrowser: false,
     startupPresentation: "browser",
+    ambientExperienceCapabilities: DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES,
   } satisfies ServerConfigShape;
 });
 

@@ -13,7 +13,11 @@ import * as LogLevel from "effect/LogLevel";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Context from "effect/Context";
-import type { ProviderDaemonClientConfig } from "@cafecode/contracts";
+import {
+  DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES,
+  type AmbientExperienceCapabilities,
+  type ProviderDaemonClientConfig,
+} from "@cafecode/contracts";
 
 export const DEFAULT_PORT = 3773;
 
@@ -77,6 +81,22 @@ export interface ServerConfigShape extends ServerDerivedPaths {
   readonly desktopBootstrapToken: string | undefined;
   readonly autoBootstrapProjectFromCwd: boolean;
   readonly logWebSocketEvents: boolean;
+  /**
+   * Optional server-only key for the deliberately gated public YouTube search
+   * route. It must never be copied into contracts, settings, or diagnostics.
+   */
+  readonly youtubePublicDiscoveryApiKey?: string | undefined;
+  /**
+   * Google OAuth Desktop client identifier used only by the local, session-only
+   * YouTube account connector. Authorization credentials are never stored in
+   * this configuration or on disk.
+   */
+  readonly youtubeOAuthDesktopClientId?: string | undefined;
+  /**
+   * Process-level capability gates. These are not user settings: later route
+   * and renderer slices must enforce them independently of saved preferences.
+   */
+  readonly ambientExperienceCapabilities: AmbientExperienceCapabilities;
   readonly providerDaemon?: ProviderDaemonClientConfig | undefined;
   readonly providerSupervisor?: ProviderDaemonClientConfig | undefined;
 }
@@ -186,6 +206,7 @@ export class ServerConfig extends Context.Service<ServerConfig, ServerConfigShap
           mode: "web",
           autoBootstrapProjectFromCwd: false,
           logWebSocketEvents: false,
+          ambientExperienceCapabilities: DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES,
           providerDaemon: undefined,
           providerSupervisor: undefined,
           port: 0,
