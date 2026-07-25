@@ -41,6 +41,12 @@ import {
   expandCollapsedComposerCursor,
   replaceTextRange,
 } from "../../composer-logic";
+import {
+  appendComposerTextFile,
+  isComposerTextFile,
+  normalizeComposerTextFileName,
+  readComposerTextFile,
+} from "../../composerTextFile";
 import { deriveComposerSendState, readFileAsDataUrl } from "../ChatView.logic";
 import {
   type ComposerImageAttachment,
@@ -179,6 +185,16 @@ const extendReplacementRangeForTrailingSpace = (
 
 function isInsideComposerFloatingLayer(element: Element): boolean {
   return element.closest(COMPOSER_FLOATING_LAYER_SELECTOR) !== null;
+}
+
+function composerDraftTargetsEqual(
+  left: ScopedThreadRef | DraftId,
+  right: ScopedThreadRef | DraftId,
+): boolean {
+  if (typeof left === "string" || typeof right === "string") {
+    return left === right;
+  }
+  return left.environmentId === right.environmentId && left.threadId === right.threadId;
 }
 
 const ComposerFooterModeControls = memo(function ComposerFooterModeControls(props: {
@@ -905,7 +921,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     handleRuntimeModeChange,
     handleInteractionModeChange,
     togglePlanSidebar,
-    focusComposer,
     scheduleComposerFocus,
     setThreadError,
     onExpandImage,
@@ -1215,6 +1230,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const mobileComposerExpandInFlightRef = useRef(false);
   const dragDepthRef = useRef(0);
   const composerFileInputRef = useRef<HTMLInputElement>(null);
+  const composerDraftTargetRef = useRef(composerDraftTarget);
+  composerDraftTargetRef.current = composerDraftTarget;
 
   // ------------------------------------------------------------------
   // Derived: composer send state
@@ -2154,15 +2171,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   // ------------------------------------------------------------------
   // Callbacks: images
   // ------------------------------------------------------------------
-  const addComposerImages = (files: File[]) => {
-    if (!activeThreadId || files.length === 0) return;
-    if (pendingUserInputs.length > 0) {
-      toastManager.add({
-        type: "error",
-        title: "Attach images after answering plan questions.",
-      });
-      return;
-    }
+  const addComposerImages = (files: File[]): string | null => {
+    if (!activeThreadId || files.length === 0) return null;
     const nextImages: ComposerImageAttachment[] = [];
     let nextImageCount = composerImagesRef.current.length;
     let error: string | null = null;
@@ -2196,6 +2206,96 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     } else if (nextImages.length > 1) {
       addComposerImagesToDraft(nextImages);
     }
+    return error;
+  };
+
+  const addComposerFiles = async (files: File[]) => {
+    const targetAtStart = composerDraftTarget;
+    if (!activeThreadId || files.length === 0) return;
+    if (pendingUserInputs.length > 0) {
+      toastManager.add({
+        type: "error",
+        title: "Attach files after answering plan questions.",
+      });
+      return;
+    }
+
+    const imageFiles = files.filter((file) => file.type.startsWith("image/"));
+    const textFiles = files.filter(
+      (file) => !file.type.startsWith("image/") && isComposerTextFile(file),
+    );
+    const unsupportedFile = files.find(
+      (file) => !file.type.startsWith("image/") && !isComposerTextFile(file),
+    );
+    let error = addComposerImages(imageFiles);
+    let addedTextFileCount = 0;
+
+    for (const file of textFiles.slice(0, PROVIDER_SEND_TURN_MAX_ATTACHMENTS)) {
+      const safeName = normalizeComposerTextFileName(file.name);
+      try {
+        const text = await readComposerTextFile(file);
+        const targetIsCurrent = composerDraftTargetsEqual(
+          composerDraftTargetRef.current,
+          targetAtStart,
+        );
+        const currentPrompt = targetIsCurrent
+          ? promptRef.current
+          : (getComposerDraft(targetAtStart)?.prompt ?? "");
+        const appended = appendComposerTextFile({
+          prompt: currentPrompt,
+          name: file.name,
+          text,
+        });
+        if (appended === null) {
+          error = `'${safeName}' does not fit within the message size limit.`;
+          continue;
+        }
+        if (targetIsCurrent) {
+          promptRef.current = appended;
+          // The file read resolves outside React's input event. Commit the new
+          // editor value before restoring focus so the contenteditable cannot
+          // report its stale pre-upload text and overwrite the attachment block.
+          flushSync(() => setComposerDraftPrompt(targetAtStart, appended));
+          const nextCursor = collapseExpandedComposerCursor(appended, appended.length);
+          setComposerCursor(nextCursor);
+          setComposerTrigger(detectComposerTrigger(appended, appended.length));
+        } else {
+          // Preserve the attachment on the draft where the read began without
+          // disturbing the newly selected thread's editor, cursor, or focus.
+          setComposerDraftPrompt(targetAtStart, appended);
+        }
+        addedTextFileCount += 1;
+      } catch (cause) {
+        error = cause instanceof Error ? cause.message : `Could not read '${safeName}'.`;
+      }
+    }
+
+    if (textFiles.length > PROVIDER_SEND_TURN_MAX_ATTACHMENTS) {
+      error = `You can add up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} text files at a time.`;
+    }
+    if (unsupportedFile) {
+      error = `Unsupported file type for '${normalizeComposerTextFileName(
+        unsupportedFile.name,
+      )}'. Attach images or plain-text .txt files.`;
+    }
+
+    if (addedTextFileCount > 0) {
+      toastManager.add({
+        type: "success",
+        title:
+          addedTextFileCount === 1
+            ? "Text file added to this message"
+            : `${addedTextFileCount} text files added to this message`,
+        description: "The file contents are visible in the composer and will be sent as text.",
+      });
+    }
+    if (error) {
+      toastManager.add({
+        type: "error",
+        title: "Some files were not added",
+        description: error,
+      });
+    }
     setThreadError(activeThreadId, error);
   };
 
@@ -2209,10 +2309,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const onComposerPaste = (event: React.ClipboardEvent<HTMLElement>) => {
     const files = Array.from(event.clipboardData.files);
     if (files.length === 0) return;
-    const imageFiles = files.filter((file) => file.type.startsWith("image/"));
-    if (imageFiles.length === 0) return;
     event.preventDefault();
-    addComposerImages(imageFiles);
+    void addComposerFiles(files);
   };
 
   const onComposerDragEnter = (event: React.DragEvent<HTMLDivElement>) => {
@@ -2246,13 +2344,17 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     dragDepthRef.current = 0;
     setIsDragOverComposer(false);
     const files = Array.from(event.dataTransfer.files);
-    addComposerImages(files);
-    focusComposer();
+    const targetAtDrop = composerDraftTarget;
+    void addComposerFiles(files).finally(() => {
+      if (composerDraftTargetsEqual(composerDraftTargetRef.current, targetAtDrop)) {
+        scheduleComposerFocus();
+      }
+    });
   };
 
-  // Touch devices can't paste or drag-drop images, so a file picker is the
-  // only practical way to attach on mobile; desktop gets the affordance too.
-  const openComposerImagePicker = () => {
+  // Touch devices can't paste or drag-drop files, so a file picker is the only
+  // practical way to attach on mobile; desktop gets the affordance too.
+  const openComposerFilePicker = () => {
     composerFileInputRef.current?.click();
   };
 
@@ -2261,8 +2363,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     // Reset so picking the same file again after removal still fires change.
     event.target.value = "";
     if (files.length === 0) return;
-    addComposerImages(files);
-    focusComposer();
+    const targetAtSelection = composerDraftTarget;
+    void addComposerFiles(files).finally(() => {
+      if (composerDraftTargetsEqual(composerDraftTargetRef.current, targetAtSelection)) {
+        scheduleComposerFocus();
+      }
+    });
   };
   const handleInterruptPrimaryAction = useCallback(() => {
     void onInterrupt();
@@ -2431,7 +2537,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       <input
         ref={composerFileInputRef}
         type="file"
-        accept="image/*"
         multiple
         className="hidden"
         tabIndex={-1}
@@ -2785,7 +2890,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                                 : "disconnected"
                             }`
                           : phase === "disconnected"
-                            ? "Ask for follow-up changes or attach images"
+                            ? "Ask for follow-up changes or attach files"
                             : "Ask anything, @tag files/folders, $use skills, or / for commands"
                 }
                 disabled={composerEditorDisabled}
@@ -2800,7 +2905,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                       preserveComposerFocusOnPointerDown
                       disabled={activeThreadId === null}
                       className="bg-background/80 hover:bg-background/90"
-                      onClick={openComposerImagePicker}
+                      onClick={openComposerFilePicker}
                     />
                   ) : null}
                   <ComposerPrimaryActions
@@ -2853,7 +2958,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               <div className="-m-1 flex min-w-0 flex-1 items-center gap-1 overflow-x-auto p-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                 <ComposerAttachImageButton
                   disabled={pendingUserInputs.length > 0 || activeThreadId === null}
-                  onClick={openComposerImagePicker}
+                  onClick={openComposerFilePicker}
                 />
                 <ProviderModelPicker
                   compact={isComposerFooterCompact}
