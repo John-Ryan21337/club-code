@@ -99,6 +99,21 @@ import {
 } from "./sourceControl.ts";
 import { UsageStatsGetResult, UsageStatsSnapshot } from "./usageStats.ts";
 import { VcsError } from "./vcs.ts";
+import {
+  WorkspaceObservatoryActivityInput,
+  WorkspaceObservatoryActivityResult,
+  WorkspaceObservatoryDatabaseInput,
+  WorkspaceObservatoryDatabaseResult,
+  WorkspaceObservatoryError,
+  WorkspaceObservatoryFileInput,
+  WorkspaceObservatoryFileResult,
+  WorkspaceObservatoryRowsResult,
+  WorkspaceObservatoryTableInput,
+  WorkspaceObservatoryTableResult,
+  WorkspaceObservatoryTreeInput,
+  WorkspaceObservatoryTreeResult,
+  WORKSPACE_OBSERVATORY_LIMITS,
+} from "./workspaceObservatory.ts";
 
 export const WS_METHODS = {
   // Project registry methods
@@ -114,6 +129,15 @@ export const WS_METHODS = {
 
   // Filesystem methods
   filesystemBrowse: "filesystem.browse",
+
+  // Read-only, environment-scoped workspace inspection. These intentionally
+  // do not share the general filesystem browser's path semantics.
+  workspaceObservatoryTree: "workspaceObservatory.tree",
+  workspaceObservatoryReadFile: "workspaceObservatory.readFile",
+  workspaceObservatoryDatabases: "workspaceObservatory.databases",
+  workspaceObservatoryTables: "workspaceObservatory.tables",
+  workspaceObservatoryRows: "workspaceObservatory.rows",
+  workspaceObservatoryActivity: "workspaceObservatory.activity",
 
   // VCS methods
   vcsPull: "vcs.pull",
@@ -321,6 +345,44 @@ export const WsFilesystemBrowseRpc = Rpc.make(WS_METHODS.filesystemBrowse, {
   payload: FilesystemBrowseInput,
   success: FilesystemBrowseResult,
   error: FilesystemBrowseError,
+});
+
+export const WsWorkspaceObservatoryTreeRpc = Rpc.make(WS_METHODS.workspaceObservatoryTree, {
+  payload: WorkspaceObservatoryTreeInput,
+  success: WorkspaceObservatoryTreeResult,
+  error: WorkspaceObservatoryError,
+});
+export const WsWorkspaceObservatoryReadFileRpc = Rpc.make(WS_METHODS.workspaceObservatoryReadFile, {
+  payload: WorkspaceObservatoryFileInput,
+  success: WorkspaceObservatoryFileResult,
+  error: WorkspaceObservatoryError,
+});
+export const WsWorkspaceObservatoryDatabasesRpc = Rpc.make(
+  WS_METHODS.workspaceObservatoryDatabases,
+  {
+    payload: WorkspaceObservatoryTreeInput,
+    success: Schema.Array(WorkspaceObservatoryDatabaseResult).check(
+      Schema.isMaxLength(WORKSPACE_OBSERVATORY_LIMITS.databases),
+    ),
+    error: WorkspaceObservatoryError,
+  },
+);
+export const WsWorkspaceObservatoryTablesRpc = Rpc.make(WS_METHODS.workspaceObservatoryTables, {
+  payload: WorkspaceObservatoryDatabaseInput,
+  success: Schema.Array(WorkspaceObservatoryTableResult).check(
+    Schema.isMaxLength(WORKSPACE_OBSERVATORY_LIMITS.databaseTables),
+  ),
+  error: WorkspaceObservatoryError,
+});
+export const WsWorkspaceObservatoryRowsRpc = Rpc.make(WS_METHODS.workspaceObservatoryRows, {
+  payload: WorkspaceObservatoryTableInput,
+  success: WorkspaceObservatoryRowsResult,
+  error: WorkspaceObservatoryError,
+});
+export const WsWorkspaceObservatoryActivityRpc = Rpc.make(WS_METHODS.workspaceObservatoryActivity, {
+  payload: WorkspaceObservatoryActivityInput,
+  success: WorkspaceObservatoryActivityResult,
+  error: WorkspaceObservatoryError,
 });
 
 export const WsSubscribeVcsStatusRpc = Rpc.make(WS_METHODS.subscribeVcsStatus, {
@@ -545,6 +607,12 @@ export const WsRpcGroup = RpcGroup.make(
   WsShellOpenInEditorRpc,
   WsShellOpenTerminalRpc,
   WsFilesystemBrowseRpc,
+  WsWorkspaceObservatoryTreeRpc,
+  WsWorkspaceObservatoryReadFileRpc,
+  WsWorkspaceObservatoryDatabasesRpc,
+  WsWorkspaceObservatoryTablesRpc,
+  WsWorkspaceObservatoryRowsRpc,
+  WsWorkspaceObservatoryActivityRpc,
   WsSubscribeVcsStatusRpc,
   WsVcsPullRpc,
   WsVcsRefreshStatusRpc,

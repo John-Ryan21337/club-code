@@ -22,6 +22,19 @@ import type {
 } from "./git.ts";
 import type { FilesystemBrowseInput, FilesystemBrowseResult } from "./filesystem.ts";
 import type {
+  WorkspaceObservatoryActivityInput,
+  WorkspaceObservatoryActivityResult,
+  WorkspaceObservatoryDatabaseInput,
+  WorkspaceObservatoryDatabaseResult,
+  WorkspaceObservatoryFileInput,
+  WorkspaceObservatoryFileResult,
+  WorkspaceObservatoryRowsResult,
+  WorkspaceObservatoryTableInput,
+  WorkspaceObservatoryTableResult,
+  WorkspaceObservatoryTreeInput,
+  WorkspaceObservatoryTreeResult,
+} from "./workspaceObservatory.ts";
+import type {
   ProjectSearchEntriesInput,
   ProjectSearchEntriesResult,
   ProjectWriteFileInput,
@@ -478,6 +491,21 @@ export interface EnvironmentApi {
   };
   filesystem: {
     browse: (input: FilesystemBrowseInput) => Promise<FilesystemBrowseResult>;
+  };
+  /** Optional while a saved environment is connected to an older Cafe server. */
+  workspaceObservatory?: {
+    tree: (input: WorkspaceObservatoryTreeInput) => Promise<WorkspaceObservatoryTreeResult>;
+    readFile: (input: WorkspaceObservatoryFileInput) => Promise<WorkspaceObservatoryFileResult>;
+    databases: (
+      input: WorkspaceObservatoryTreeInput,
+    ) => Promise<readonly WorkspaceObservatoryDatabaseResult[]>;
+    tables: (
+      input: WorkspaceObservatoryDatabaseInput,
+    ) => Promise<readonly WorkspaceObservatoryTableResult[]>;
+    rows: (input: WorkspaceObservatoryTableInput) => Promise<WorkspaceObservatoryRowsResult>;
+    activity: (
+      input: WorkspaceObservatoryActivityInput,
+    ) => Promise<WorkspaceObservatoryActivityResult>;
   };
   sourceControl: {
     lookupRepository: (

@@ -24,6 +24,7 @@ import {
   ProjectWriteFileError,
   OrchestrationReplayEventsError,
   FilesystemBrowseError,
+  WorkspaceObservatoryError,
   ThreadId,
   ServerProviderRuntimeRestartError,
   WS_METHODS,
@@ -63,6 +64,10 @@ import { ServerClientSettingsService } from "./serverClientSettings.ts";
 import { WorkspaceEntries } from "./workspace/Services/WorkspaceEntries.ts";
 import { WorkspaceFileSystem } from "./workspace/Services/WorkspaceFileSystem.ts";
 import { WorkspacePathOutsideRootError } from "./workspace/Services/WorkspacePaths.ts";
+import {
+  WorkspaceObservatory,
+  WorkspaceObservatoryFailure,
+} from "./workspace/WorkspaceObservatory.ts";
 import { VcsStatusBroadcaster } from "./vcs/VcsStatusBroadcaster.ts";
 import { VcsProvisioningService } from "./vcs/VcsProvisioningService.ts";
 import { GitWorkflowService } from "./git/GitWorkflowService.ts";
@@ -189,6 +194,7 @@ const makeWsRpcLayer = (
       const providerService = yield* ProviderService;
       const providerMaintenanceRunner = yield* ProviderMaintenanceRunner.ProviderMaintenanceRunner;
       const config = yield* ServerConfig;
+      const workspaceObservatory = new WorkspaceObservatory(config.dbPath, config.cwd);
       const lifecycleEvents = yield* ServerLifecycleEvents;
       const serverSettings = yield* ServerSettingsService;
       const clientSettings = yield* ServerClientSettingsService;
@@ -1196,6 +1202,96 @@ const makeWsRpcLayer = (
                   }),
               ),
             ),
+            { "rpc.aggregate": "workspace" },
+          ),
+        [WS_METHODS.workspaceObservatoryTree]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.workspaceObservatoryTree,
+            Effect.tryPromise({
+              try: () => workspaceObservatory.tree(input),
+              catch: (cause) =>
+                new WorkspaceObservatoryError({
+                  message:
+                    cause instanceof WorkspaceObservatoryFailure
+                      ? cause.message
+                      : "Unable to inspect this workspace.",
+                }),
+            }),
+            { "rpc.aggregate": "workspace" },
+          ),
+        [WS_METHODS.workspaceObservatoryReadFile]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.workspaceObservatoryReadFile,
+            Effect.tryPromise({
+              try: () => workspaceObservatory.readFile(input),
+              catch: (cause) =>
+                new WorkspaceObservatoryError({
+                  message:
+                    cause instanceof WorkspaceObservatoryFailure
+                      ? cause.message
+                      : "Unable to read this file.",
+                }),
+            }),
+            { "rpc.aggregate": "workspace" },
+          ),
+        [WS_METHODS.workspaceObservatoryDatabases]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.workspaceObservatoryDatabases,
+            Effect.tryPromise({
+              try: () => workspaceObservatory.databases(input),
+              catch: (cause) =>
+                new WorkspaceObservatoryError({
+                  message:
+                    cause instanceof WorkspaceObservatoryFailure
+                      ? cause.message
+                      : "Unable to list databases.",
+                }),
+            }),
+            { "rpc.aggregate": "workspace" },
+          ),
+        [WS_METHODS.workspaceObservatoryTables]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.workspaceObservatoryTables,
+            Effect.tryPromise({
+              try: () => workspaceObservatory.tables(input),
+              catch: (cause) =>
+                new WorkspaceObservatoryError({
+                  message:
+                    cause instanceof WorkspaceObservatoryFailure
+                      ? cause.message
+                      : "Unable to list database tables.",
+                }),
+            }),
+            { "rpc.aggregate": "workspace" },
+          ),
+        [WS_METHODS.workspaceObservatoryRows]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.workspaceObservatoryRows,
+            Effect.tryPromise({
+              try: () => workspaceObservatory.rows(input),
+              catch: (cause) =>
+                new WorkspaceObservatoryError({
+                  message:
+                    cause instanceof WorkspaceObservatoryFailure
+                      ? cause.message
+                      : "Unable to read database rows.",
+                }),
+            }),
+            { "rpc.aggregate": "workspace" },
+          ),
+        [WS_METHODS.workspaceObservatoryActivity]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.workspaceObservatoryActivity,
+            Effect.tryPromise({
+              try: () => workspaceObservatory.activity(input),
+              catch: (cause) =>
+                new WorkspaceObservatoryError({
+                  message:
+                    cause instanceof WorkspaceObservatoryFailure
+                      ? cause.message
+                      : "Unable to read observed activity.",
+                }),
+            }),
             { "rpc.aggregate": "workspace" },
           ),
         [WS_METHODS.subscribeVcsStatus]: (input) =>
