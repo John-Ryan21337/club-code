@@ -1402,6 +1402,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.equal(response.headers.get("vary"), "Accept-Encoding");
       assert.equal(response.headers.get("cache-control"), "public, max-age=31536000, immutable");
       assert.include(response.headers.get("content-type") ?? "", "javascript");
+      assert.equal(response.headers.get("x-content-type-options"), "nosniff");
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
@@ -1460,6 +1461,23 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.equal(response.headers.get("vary"), "Accept-Encoding");
       assert.equal(response.headers.get("cache-control"), "public, max-age=31536000, immutable");
       assert.equal(yield* Effect.promise(() => response.text()), "raw-ok");
+
+      const contentSecurityPolicy = response.headers.get("content-security-policy") ?? "";
+      assert.equal(
+        contentSecurityPolicy.split("; ").find((directive) => directive.startsWith("script-src ")),
+        "script-src 'self' 'wasm-unsafe-eval'",
+      );
+      assert.include(contentSecurityPolicy, "style-src 'self' https://fonts.googleapis.com");
+      assert.equal(
+        contentSecurityPolicy.split("; ").find((directive) => directive.startsWith("frame-src ")),
+        "frame-src https://www.youtube-nocookie.com https://open.spotify.com",
+      );
+      assert.equal(response.headers.get("x-frame-options"), "DENY");
+      assert.equal(response.headers.get("referrer-policy"), "no-referrer");
+      assert.equal(
+        response.headers.get("permissions-policy"),
+        'camera=(), fullscreen=(self "https://www.youtube-nocookie.com" "https://open.spotify.com"), geolocation=(), microphone=(), payment=(), usb=()',
+      );
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

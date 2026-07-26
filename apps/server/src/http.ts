@@ -57,6 +57,36 @@ const HTML_CACHE_CONTROL = "no-store";
 const PWA_CONTROL_FILE_CACHE_CONTROL = "no-cache";
 const STATIC_FILE_CACHE_CONTROL = "public, max-age=3600";
 const BRANDING_IMAGE_ROUTE_PREFIX = "/api/branding/sidebar-image/";
+const STATIC_CONTENT_SECURITY_POLICY = [
+  "default-src 'self'",
+  "base-uri 'self'",
+  "object-src 'none'",
+  "frame-ancestors 'none'",
+  "form-action 'self'",
+  // The packaged diff/syntax worker instantiates its bundled Oniguruma WASM.
+  // This permits WASM compilation without enabling arbitrary JavaScript eval.
+  "script-src 'self' 'wasm-unsafe-eval'",
+  "style-src 'self' https://fonts.googleapis.com",
+  "style-src-elem 'self' https://fonts.googleapis.com",
+  "style-src-attr 'unsafe-inline'",
+  "font-src 'self' https://fonts.gstatic.com data:",
+  "img-src 'self' data: blob:",
+  "media-src 'self' blob: cafecode-media:",
+  "worker-src 'self' blob:",
+  // Saved Cafe environments are explicitly user-selected HTTP(S)/WS(S)
+  // origins. Keep this transport allowance isolated to connect-src.
+  "connect-src 'self' http: https: ws: wss:",
+  "frame-src https://www.youtube-nocookie.com https://open.spotify.com",
+  "manifest-src 'self'",
+].join("; ");
+const STATIC_SECURITY_HEADERS = {
+  "Content-Security-Policy": STATIC_CONTENT_SECURITY_POLICY,
+  "Permissions-Policy":
+    'camera=(), fullscreen=(self "https://www.youtube-nocookie.com" "https://open.spotify.com"), geolocation=(), microphone=(), payment=(), usb=()',
+  "Referrer-Policy": "no-referrer",
+  "X-Content-Type-Options": "nosniff",
+  "X-Frame-Options": "DENY",
+} as const;
 
 export const browserApiCorsLayer = HttpRouter.cors({
   allowedMethods: [...browserApiCorsAllowedMethods],
@@ -147,6 +177,7 @@ function staticResponseHeaders(input: {
   return {
     "Cache-Control": input.cacheControl,
     Vary: "Accept-Encoding",
+    ...STATIC_SECURITY_HEADERS,
     ...(input.contentEncoding ? { "Content-Encoding": input.contentEncoding } : {}),
   };
 }
