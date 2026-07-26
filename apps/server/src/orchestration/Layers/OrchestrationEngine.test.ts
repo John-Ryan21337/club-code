@@ -472,6 +472,12 @@ describe("OrchestrationEngine", () => {
       ),
     );
     expect(events.filter((event) => event.type === "thread.turn-steer-requested")).toHaveLength(1);
+    const routedSteer = events.find(
+      (event): event is Extract<OrchestrationEvent, { type: "thread.turn-steer-requested" }> =>
+        event.type === "thread.turn-steer-requested" &&
+        event.payload.messageId === "msg-start-routes-to-steer",
+    );
+    expect(routedSteer?.payload.dispatchSource).toBeUndefined();
     const routedMessage = events.find(
       (event): event is Extract<OrchestrationEvent, { type: "thread.message-sent" }> =>
         event.type === "thread.message-sent" &&
@@ -486,6 +492,33 @@ describe("OrchestrationEngine", () => {
       ),
     ).toHaveLength(0);
 
+    await system.run(
+      engine.dispatch({
+        type: "thread.turn.steer",
+        commandId: CommandId.make("cmd-direct-auto-nudge-steer"),
+        threadId,
+        message: {
+          messageId: asMessageId("msg-direct-auto-nudge-steer"),
+          role: "user",
+          text: "continue automatically",
+          attachments: [],
+        },
+        dispatchSource: "auto-nudge",
+        createdAt: "2026-01-01T00:00:01.500Z",
+      }),
+    );
+    const eventsAfterDirectSteer = await system.run(
+      Stream.runCollect(engine.readEvents(0)).pipe(
+        Effect.map((chunk): OrchestrationEvent[] => Array.from(chunk)),
+      ),
+    );
+    const directSteer = eventsAfterDirectSteer.find(
+      (event): event is Extract<OrchestrationEvent, { type: "thread.turn-steer-requested" }> =>
+        event.type === "thread.turn-steer-requested" &&
+        event.payload.messageId === "msg-direct-auto-nudge-steer",
+    );
+    expect(directSteer?.payload.dispatchSource).toBe("auto-nudge");
+
     await expect(
       system.run(
         engine.dispatch({
@@ -499,6 +532,7 @@ describe("OrchestrationEngine", () => {
             attachments: [],
           },
           expectedSettledTurnId: TurnId.make("turn-completed-before-active"),
+          dispatchSource: "auto-nudge",
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
           runtimeMode: "approval-required",
           createdAt: "2026-01-01T00:00:02.000Z",
@@ -549,6 +583,7 @@ describe("OrchestrationEngine", () => {
           attachments: [],
         },
         expectedSettledTurnId: activeTurnId,
+        dispatchSource: "auto-nudge",
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         createdAt: "2026-01-01T00:00:04.000Z",
@@ -560,13 +595,58 @@ describe("OrchestrationEngine", () => {
         Effect.map((chunk): OrchestrationEvent[] => Array.from(chunk)),
       ),
     );
-    expect(
-      eventsAfterAcceptedAutomation.filter(
-        (event) =>
-          event.type === "thread.turn-start-requested" &&
-          event.payload.messageId === "msg-auto-nudge-matching-settled-turn",
+    const acceptedAutoNudgeStart = eventsAfterAcceptedAutomation.find(
+      (event): event is Extract<OrchestrationEvent, { type: "thread.turn-start-requested" }> =>
+        event.type === "thread.turn-start-requested" &&
+        event.payload.messageId === "msg-auto-nudge-matching-settled-turn",
+    );
+    expect(acceptedAutoNudgeStart?.payload.dispatchSource).toBe("auto-nudge");
+
+    const fallbackThreadId = ThreadId.make("thread-auto-nudge-steer-fallback");
+    await system.run(
+      engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-thread-auto-nudge-steer-fallback-create"),
+        threadId: fallbackThreadId,
+        projectId: asProjectId("project-start-routes-to-steer"),
+        title: "Fallback Thread",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("claudeAgent"),
+          model: "claude-opus-4-8",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      }),
+    );
+    await system.run(
+      engine.dispatch({
+        type: "thread.turn.steer",
+        commandId: CommandId.make("cmd-auto-nudge-steer-fallback"),
+        threadId: fallbackThreadId,
+        message: {
+          messageId: asMessageId("msg-auto-nudge-steer-fallback"),
+          role: "user",
+          text: "start after stale active-turn reconciliation",
+          attachments: [],
+        },
+        dispatchSource: "auto-nudge",
+        createdAt: "2026-01-01T00:00:05.000Z",
+      }),
+    );
+    const eventsAfterSteerFallback = await system.run(
+      Stream.runCollect(engine.readEvents(0)).pipe(
+        Effect.map((chunk): OrchestrationEvent[] => Array.from(chunk)),
       ),
-    ).toHaveLength(1);
+    );
+    const fallbackStart = eventsAfterSteerFallback.find(
+      (event): event is Extract<OrchestrationEvent, { type: "thread.turn-start-requested" }> =>
+        event.type === "thread.turn-start-requested" &&
+        event.payload.messageId === "msg-auto-nudge-steer-fallback",
+    );
+    expect(fallbackStart?.payload.dispatchSource).toBe("auto-nudge");
 
     await system.dispose();
   });

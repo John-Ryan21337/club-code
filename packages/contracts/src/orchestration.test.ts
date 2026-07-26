@@ -21,6 +21,7 @@ import {
   ThreadTurnStartCommand,
   ThreadCreatedPayload,
   ThreadTurnStartRequestedPayload,
+  ThreadTurnSteerRequestedPayload,
   ProviderJournalMessageRepairResult,
   ProviderThreadAssistantMessagesRepairResult,
 } from "./orchestration.ts";
@@ -32,6 +33,9 @@ const decodeProjectMetaUpdatedPayload = Schema.decodeUnknownEffect(ProjectMetaUp
 const decodeThreadTurnStartCommand = Schema.decodeUnknownEffect(ThreadTurnStartCommand);
 const decodeThreadTurnStartRequestedPayload = Schema.decodeUnknownEffect(
   ThreadTurnStartRequestedPayload,
+);
+const decodeThreadTurnSteerRequestedPayload = Schema.decodeUnknownEffect(
+  ThreadTurnSteerRequestedPayload,
 );
 const decodeOrchestrationLatestTurn = Schema.decodeUnknownEffect(OrchestrationLatestTurn);
 const decodeOrchestrationProposedPlan = Schema.decodeUnknownEffect(OrchestrationProposedPlan);
@@ -329,6 +333,7 @@ it.effect("decodes thread.turn.start defaults for provider and runtime mode", ()
     assert.strictEqual(parsed.modelSelection, undefined);
     assert.strictEqual(parsed.runtimeMode, DEFAULT_RUNTIME_MODE);
     assert.strictEqual(parsed.interactionMode, DEFAULT_PROVIDER_INTERACTION_MODE);
+    assert.strictEqual(parsed.dispatchSource, undefined);
   }),
 );
 
@@ -351,12 +356,14 @@ it.effect("preserves explicit provider and runtime mode in thread.turn.start", (
       },
       runtimeMode: "full-access",
       interactionMode: "auto",
+      dispatchSource: "auto-nudge",
       createdAt: "2026-01-01T00:00:00.000Z",
     });
     assert.strictEqual(parsed.modelSelection?.instanceId, "codex");
     assert.strictEqual(parsed.expectedSettledTurnId, "turn-before-auto-nudge");
     assert.strictEqual(parsed.runtimeMode, "full-access");
     assert.strictEqual(parsed.interactionMode, "auto");
+    assert.strictEqual(parsed.dispatchSource, "auto-nudge");
 
     const clientParsed = yield* decodeClientOrchestrationCommand({
       type: "thread.turn.start",
@@ -375,11 +382,13 @@ it.effect("preserves explicit provider and runtime mode in thread.turn.start", (
       },
       runtimeMode: "full-access",
       interactionMode: "auto",
+      dispatchSource: "auto-nudge",
       createdAt: "2026-01-01T00:00:01.000Z",
     });
     assert.strictEqual(clientParsed.type, "thread.turn.start");
     if (clientParsed.type === "thread.turn.start") {
       assert.strictEqual(clientParsed.expectedSettledTurnId, "turn-before-auto-nudge");
+      assert.strictEqual(clientParsed.dispatchSource, "auto-nudge");
     }
   }),
 );
@@ -404,10 +413,12 @@ it.effect("decodes thread.turn.steer for client upload and normalized command pa
           },
         ],
       },
+      dispatchSource: "auto-nudge",
       createdAt: "2026-01-01T00:00:00.000Z",
     });
     assert.strictEqual(clientParsed.type, "thread.turn.steer");
     assert.strictEqual(clientParsed.message.attachments[0]?.type, "image");
+    assert.strictEqual(clientParsed.dispatchSource, "auto-nudge");
 
     const normalizedParsed = yield* decodeOrchestrationCommand({
       type: "thread.turn.steer",
@@ -430,6 +441,7 @@ it.effect("decodes thread.turn.steer for client upload and normalized command pa
       createdAt: "2026-01-01T00:00:00.000Z",
     });
     assert.strictEqual(normalizedParsed.type, "thread.turn.steer");
+    assert.strictEqual(normalizedParsed.dispatchSource, undefined);
   }),
 );
 
@@ -753,7 +765,28 @@ it.effect(
       assert.strictEqual(parsed.runtimeMode, DEFAULT_RUNTIME_MODE);
       assert.strictEqual(parsed.interactionMode, DEFAULT_PROVIDER_INTERACTION_MODE);
       assert.strictEqual(parsed.sourceProposedPlan, undefined);
+      assert.strictEqual(parsed.dispatchSource, undefined);
     }),
+);
+
+it.effect("preserves dispatch provenance on start and steer request payloads", () =>
+  Effect.gen(function* () {
+    const start = yield* decodeThreadTurnStartRequestedPayload({
+      threadId: "thread-auto-start",
+      messageId: "msg-auto-start",
+      dispatchSource: "auto-nudge",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    const steer = yield* decodeThreadTurnSteerRequestedPayload({
+      threadId: "thread-auto-steer",
+      messageId: "msg-auto-steer",
+      dispatchSource: "auto-nudge",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    assert.strictEqual(start.dispatchSource, "auto-nudge");
+    assert.strictEqual(steer.dispatchSource, "auto-nudge");
+  }),
 );
 
 it.effect("decodes thread.turn-start-requested source proposed plan metadata when present", () =>

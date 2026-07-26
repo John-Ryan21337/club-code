@@ -557,6 +557,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             payload: {
               threadId: command.threadId,
               messageId: command.message.messageId,
+              ...(command.dispatchSource !== undefined
+                ? { dispatchSource: command.dispatchSource }
+                : {}),
               createdAt: command.createdAt,
             },
           };
@@ -630,6 +633,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           runtimeMode: targetThread.runtimeMode,
           interactionMode: targetThread.interactionMode,
           ...(sourceProposedPlan !== undefined ? { sourceProposedPlan } : {}),
+          ...(command.dispatchSource !== undefined
+            ? { dispatchSource: command.dispatchSource }
+            : {}),
           createdAt: command.createdAt,
         },
       };
@@ -710,6 +716,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             modelSelection: targetThread.modelSelection,
             runtimeMode: targetThread.runtimeMode,
             interactionMode: targetThread.interactionMode,
+            ...(command.dispatchSource !== undefined
+              ? { dispatchSource: command.dispatchSource }
+              : {}),
             createdAt: command.createdAt,
           },
         };
@@ -727,6 +736,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           threadId: command.threadId,
           messageId: command.message.messageId,
+          ...(command.dispatchSource !== undefined
+            ? { dispatchSource: command.dispatchSource }
+            : {}),
           createdAt: command.createdAt,
         },
       };
