@@ -11,6 +11,19 @@ export interface NormalizedAmbientMediaGeometry {
   readonly width: number;
 }
 
+export interface AmbientMediaGeometryClampOptions {
+  /** Media width divided by media height. */
+  readonly mediaAspectRatio?: number;
+  /** Message-pane width divided by message-pane height. */
+  readonly paneAspectRatio?: number;
+  readonly minimumWidth?: number;
+  readonly maximumWidth?: number;
+}
+
+export interface AmbientMediaGeometryWriteOptions extends AmbientMediaGeometryClampOptions {
+  readonly storage?: Storage | null;
+}
+
 export interface AmbientMediaGeometryDocument {
   readonly version: typeof AMBIENT_MEDIA_GEOMETRY_STORAGE_VERSION;
   readonly slots: {
@@ -76,25 +89,86 @@ function clamp(value: number, minimum: number, maximum: number): number {
   return Math.min(maximum, Math.max(minimum, value));
 }
 
-/**
- * Converts persisted finite values into a reachable viewport-independent
- * rectangle. Viewport- and aspect-ratio-aware limits are applied by the
- * renderer in the next layer of the stack.
- */
-export function clampAmbientMediaGeometry(value: unknown): NormalizedAmbientMediaGeometry | null {
-  const candidate = decodeCandidate(value);
-  if (candidate === null || candidate.width <= 0) {
+function resolveClampOptions(options: AmbientMediaGeometryClampOptions): {
+  readonly heightPerWidth: number | null;
+  readonly minimumWidth: number;
+  readonly maximumWidth: number;
+} | null {
+  const hasMediaAspectRatio = options.mediaAspectRatio !== undefined;
+  const hasPaneAspectRatio = options.paneAspectRatio !== undefined;
+  const minimumWidth = options.minimumWidth ?? 0;
+  const maximumWidth = options.maximumWidth ?? 1;
+
+  if (
+    hasMediaAspectRatio !== hasPaneAspectRatio ||
+    !Number.isFinite(minimumWidth) ||
+    !Number.isFinite(maximumWidth) ||
+    minimumWidth < 0 ||
+    minimumWidth > 1 ||
+    maximumWidth <= 0 ||
+    maximumWidth > 1 ||
+    minimumWidth > maximumWidth
+  ) {
     return null;
   }
 
-  const width = clamp(candidate.width, 0, 1);
-  if (width <= 0) {
-    return null;
+  let heightPerWidth: number | null = null;
+  if (hasMediaAspectRatio && hasPaneAspectRatio) {
+    const mediaAspectRatio = options.mediaAspectRatio!;
+    const paneAspectRatio = options.paneAspectRatio!;
+    if (
+      !Number.isFinite(mediaAspectRatio) ||
+      !Number.isFinite(paneAspectRatio) ||
+      mediaAspectRatio <= 0 ||
+      paneAspectRatio <= 0
+    ) {
+      return null;
+    }
+    heightPerWidth = paneAspectRatio / mediaAspectRatio;
+    if (!Number.isFinite(heightPerWidth) || heightPerWidth <= 0) {
+      return null;
+    }
   }
 
   return {
+    heightPerWidth,
+    minimumWidth,
+    maximumWidth,
+  };
+}
+
+/**
+ * Converts finite geometry into a reachable normalized rectangle. Supplying
+ * both aspect ratios derives height from the final width, preventing pane or
+ * media aspect changes from leaving the panel permanently off-screen.
+ */
+export function clampAmbientMediaGeometry(
+  value: unknown,
+  options: AmbientMediaGeometryClampOptions = {},
+): NormalizedAmbientMediaGeometry | null {
+  const candidate = decodeCandidate(value);
+  const bounds = resolveClampOptions(options);
+  if (candidate === null || bounds === null || candidate.width <= 0) {
+    return null;
+  }
+
+  const maximumReachableWidth =
+    bounds.heightPerWidth === null
+      ? bounds.maximumWidth
+      : Math.min(bounds.maximumWidth, 1 / bounds.heightPerWidth);
+  if (bounds.minimumWidth > maximumReachableWidth) {
+    return null;
+  }
+
+  const width = clamp(candidate.width, bounds.minimumWidth, maximumReachableWidth);
+  if (width <= 0) {
+    return null;
+  }
+  const normalizedHeight = bounds.heightPerWidth === null ? 0 : width * bounds.heightPerWidth;
+
+  return {
     x: clamp(candidate.x, 0, Math.max(0, 1 - width)),
-    y: clamp(candidate.y, 0, 1),
+    y: clamp(candidate.y, 0, Math.max(0, 1 - normalizedHeight)),
     width,
   };
 }
@@ -265,9 +339,10 @@ export function readAmbientMediaGeometry(
 export function writeAmbientMediaGeometry(
   slot: AmbientMediaSlot,
   value: unknown,
-  storage?: Storage | null,
+  options: AmbientMediaGeometryWriteOptions = {},
 ): boolean {
-  const geometry = clampAmbientMediaGeometry(value);
+  const { storage, ...clampOptions } = options;
+  const geometry = clampAmbientMediaGeometry(value, clampOptions);
   const resolvedStorage = resolveBrowserStorage(storage);
   if (geometry === null || resolvedStorage === null) {
     return false;
@@ -309,4 +384,43 @@ export function resetAmbientMediaGeometry(
 export function resetAllAmbientMediaGeometry(storage?: Storage | null): boolean {
   const resolvedStorage = resolveBrowserStorage(storage);
   return resolvedStorage === null ? false : removeDocument(resolvedStorage);
+}
+
+/**
+ * First entry into custom mode seeds from the caller's currently resolved
+ * preset rectangle. Existing usable local geometry always wins.
+ */
+export function readOrSeedAmbientMediaGeometry(
+  slot: AmbientMediaSlot,
+  createSeed: () => unknown,
+  storage?: Storage | null,
+): NormalizedAmbientMediaGeometry | null {
+  const resolvedStorage = resolveBrowserStorage(storage);
+  if (resolvedStorage === null) {
+    return null;
+  }
+
+  const result = readDocument(resolvedStorage);
+  if (result.status === "unavailable") {
+    return null;
+  }
+
+  const current = result.document.slots[slot] ?? null;
+  if (current !== null) {
+    return current;
+  }
+
+  const seed = clampAmbientMediaGeometry(createSeed());
+  if (seed === null) {
+    return null;
+  }
+
+  const persisted = persistDocument(resolvedStorage, {
+    version: AMBIENT_MEDIA_GEOMETRY_STORAGE_VERSION,
+    slots: {
+      ...result.document.slots,
+      [slot]: seed,
+    },
+  });
+  return persisted ? seed : null;
 }

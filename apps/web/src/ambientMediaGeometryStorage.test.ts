@@ -6,6 +6,7 @@ import {
   clampAmbientMediaGeometry,
   isNormalizedAmbientMediaGeometry,
   readAmbientMediaGeometry,
+  readOrSeedAmbientMediaGeometry,
   resetAllAmbientMediaGeometry,
   resetAmbientMediaGeometry,
   writeAmbientMediaGeometry,
@@ -51,11 +52,64 @@ describe("ambientMediaGeometryStorage", () => {
     expect(clampAmbientMediaGeometry({ x: 0, y: 0, width: Number.NaN })).toBeNull();
   });
 
+  it("derives height from final width after pane and product size clamping", () => {
+    expect(
+      clampAmbientMediaGeometry(
+        { x: 0.8, y: 0.8, width: 0.2 },
+        {
+          mediaAspectRatio: 1,
+          paneAspectRatio: 1,
+          minimumWidth: 0.6,
+          maximumWidth: 0.9,
+        },
+      ),
+    ).toEqual({
+      x: 0.4,
+      y: 0.4,
+      width: 0.6,
+    });
+    expect(
+      clampAmbientMediaGeometry(
+        { x: 0.8, y: 0.8, width: 0.8 },
+        {
+          mediaAspectRatio: 1,
+          paneAspectRatio: 2,
+        },
+      ),
+    ).toEqual({
+      x: 0.5,
+      y: 0,
+      width: 0.5,
+    });
+    expect(
+      clampAmbientMediaGeometry(
+        { x: 0, y: 0, width: 0.4 },
+        {
+          mediaAspectRatio: 1,
+        },
+      ),
+    ).toBeNull();
+    expect(
+      clampAmbientMediaGeometry(
+        { x: 0, y: 0, width: 0.4 },
+        {
+          mediaAspectRatio: 1,
+          paneAspectRatio: 2,
+          minimumWidth: 0.6,
+        },
+      ),
+    ).toBeNull();
+  });
+
   it("stores independent normalized geometry for video and image slots", () => {
     const storage = createLocalStorageStub();
 
-    expect(writeAmbientMediaGeometry("video", { x: 0.85, y: 0.2, width: 0.4 }, storage)).toBe(true);
-    expect(writeAmbientMediaGeometry("image", { x: 0.1, y: 0.7, width: 0.2 }, storage)).toBe(true);
+    expect(writeAmbientMediaGeometry("video", { x: 0.85, y: 0.2, width: 0.4 }, { storage })).toBe(
+      true,
+    );
+    expect(writeAmbientMediaGeometry("image", { x: 0.1, y: 0.7, width: 0.2 }, { storage })).toBe(
+      true,
+    );
 
     expect(readAmbientMediaGeometry("video", storage)).toEqual({
       x: 0.6,
@@ -66,6 +120,29 @@ describe("ambientMediaGeometryStorage", () => {
       x: 0.1,
       y: 0.7,
       width: 0.2,
+    });
+  });
+
+  it("enforces aspect-aware pane bounds at the persistence boundary", () => {
+    const storage = createLocalStorageStub();
+
+    expect(
+      writeAmbientMediaGeometry(
+        "image",
+        { x: 0.8, y: 0.8, width: 0.8 },
+        {
+          storage,
+          mediaAspectRatio: 1,
+          paneAspectRatio: 2,
+          minimumWidth: 0.1,
+          maximumWidth: 0.9,
+        },
+      ),
+    ).toBe(true);
+    expect(readAmbientMediaGeometry("image", storage)).toEqual({
+      x: 0.5,
+      y: 0,
+      width: 0.5,
     });
   });
 
@@ -141,25 +218,61 @@ describe("ambientMediaGeometryStorage", () => {
     };
 
     expect(readAmbientMediaGeometry("image", storage)).toBeNull();
-    expect(writeAmbientMediaGeometry("image", { x: 0, y: 0, width: 0.3 }, storage)).toBe(false);
+    expect(writeAmbientMediaGeometry("image", { x: 0, y: 0, width: 0.3 }, { storage })).toBe(false);
     expect(resetAmbientMediaGeometry("image", storage)).toBe(false);
     expect(setItem).not.toHaveBeenCalled();
     expect(removeItem).not.toHaveBeenCalled();
   });
 
   it("is inert when browser storage is unavailable", () => {
+    const createSeed = vi.fn<() => unknown>().mockReturnValue({ x: 0, y: 0, width: 0.3 });
     vi.stubGlobal("window", undefined);
 
     expect(readAmbientMediaGeometry("image")).toBeNull();
     expect(writeAmbientMediaGeometry("image", { x: 0, y: 0, width: 0.3 })).toBe(false);
     expect(resetAmbientMediaGeometry("image")).toBe(false);
     expect(resetAllAmbientMediaGeometry()).toBe(false);
+    expect(readOrSeedAmbientMediaGeometry("image", createSeed)).toBeNull();
+    expect(createSeed).not.toHaveBeenCalled();
+  });
+
+  it("seeds a missing slot once and retains it across later entries", () => {
+    const storage = createLocalStorageStub();
+    const createSeed = vi
+      .fn<() => unknown>()
+      .mockReturnValueOnce({ x: 0.8, y: 0.7, width: 0.3 })
+      .mockReturnValueOnce({ x: 0, y: 0, width: 0.2 });
+
+    expect(readOrSeedAmbientMediaGeometry("image", createSeed, storage)).toEqual({
+      x: 0.7,
+      y: 0.7,
+      width: 0.3,
+    });
+    expect(readOrSeedAmbientMediaGeometry("image", createSeed, storage)).toEqual({
+      x: 0.7,
+      y: 0.7,
+      width: 0.3,
+    });
+    expect(createSeed).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not claim a seed when persistence fails", () => {
+    const storage: Storage = {
+      ...createLocalStorageStub(),
+      setItem: () => {
+        throw new Error("write blocked");
+      },
+    };
+    const createSeed = vi.fn<() => unknown>().mockReturnValue({ x: 0, y: 0, width: 0.3 });
+
+    expect(readOrSeedAmbientMediaGeometry("image", createSeed, storage)).toBeNull();
+    expect(createSeed).toHaveBeenCalledOnce();
   });
 
   it("resets one slot without disturbing the other and can reset the document", () => {
     const storage = createLocalStorageStub();
-    writeAmbientMediaGeometry("video", { x: 0, y: 0, width: 0.4 }, storage);
-    writeAmbientMediaGeometry("image", { x: 0.6, y: 0.6, width: 0.4 }, storage);
+    writeAmbientMediaGeometry("video", { x: 0, y: 0, width: 0.4 }, { storage });
+    writeAmbientMediaGeometry("image", { x: 0.6, y: 0.6, width: 0.4 }, { storage });
 
     expect(resetAmbientMediaGeometry("video", storage)).toBe(true);
     expect(readAmbientMediaGeometry("video", storage)).toBeNull();
