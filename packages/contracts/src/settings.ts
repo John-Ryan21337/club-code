@@ -633,9 +633,26 @@ export const ObservabilitySettings = Schema.Struct({
 export type ObservabilitySettings = typeof ObservabilitySettings.Type;
 
 export const DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL = Duration.minutes(5);
+export const DEFAULT_DRAIN_FIRST_PACING_ENABLED = false;
+export const DEFAULT_DRAIN_FIRST_PACING_MINIMUM_PAUSE_MINUTES = 0;
+export const MIN_DRAIN_FIRST_PACING_MINIMUM_PAUSE_MINUTES = 0;
+export const MAX_DRAIN_FIRST_PACING_MINIMUM_PAUSE_MINUTES = 240;
+export const DrainFirstPacingMinimumPauseMinutes = Schema.Int.check(
+  Schema.isBetween({
+    minimum: MIN_DRAIN_FIRST_PACING_MINIMUM_PAUSE_MINUTES,
+    maximum: MAX_DRAIN_FIRST_PACING_MINIMUM_PAUSE_MINUTES,
+  }),
+);
+export type DrainFirstPacingMinimumPauseMinutes = typeof DrainFirstPacingMinimumPauseMinutes.Type;
 
 export const ServerSettings = Schema.Struct({
   enableAssistantStreaming: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  drainFirstPacingEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_DRAIN_FIRST_PACING_ENABLED)),
+  ),
+  drainFirstPacingMinimumPauseMinutes: DrainFirstPacingMinimumPauseMinutes.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_DRAIN_FIRST_PACING_MINIMUM_PAUSE_MINUTES)),
+  ),
   automaticGitFetchInterval: Schema.DurationFromMillis.pipe(
     Schema.withDecodingDefault(
       Effect.succeed(Duration.toMillis(DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL)),
@@ -747,6 +764,8 @@ const OpenCodeSettingsPatch = Schema.Struct({
 export const ServerSettingsPatch = Schema.Struct({
   // Server settings
   enableAssistantStreaming: Schema.optionalKey(Schema.Boolean),
+  drainFirstPacingEnabled: Schema.optionalKey(Schema.Boolean),
+  drainFirstPacingMinimumPauseMinutes: Schema.optionalKey(DrainFirstPacingMinimumPauseMinutes),
   automaticGitFetchInterval: Schema.optionalKey(Schema.DurationFromMillis),
   defaultThreadEnvMode: Schema.optionalKey(ThreadEnvMode),
   addProjectBaseDirectory: Schema.optionalKey(TrimmedString),

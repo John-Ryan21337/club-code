@@ -20,7 +20,10 @@ import {
   DEFAULT_CHAT_COPY_FORMAT,
   DEFAULT_CLIENT_SETTINGS,
   DEFAULT_CONTINUE_BACKGROUND_ANIMATIONS,
+  DEFAULT_DRAIN_FIRST_PACING_ENABLED,
+  DEFAULT_DRAIN_FIRST_PACING_MINIMUM_PAUSE_MINUTES,
   DEFAULT_POWER_SAVE_BLOCKER_MODE,
+  DEFAULT_SERVER_SETTINGS,
   DEFAULT_SHOW_SIDEBAR_ATTRIBUTION,
   DEFAULT_SIDEBAR_BRAND_IMAGE_DATA_URL,
   DEFAULT_SIDEBAR_BRAND_IMAGE,
@@ -29,6 +32,7 @@ import {
   DEFAULT_SHOW_SIDEBAR_SEARCH,
   DEFAULT_THEME_ACCENT_COLOR,
   MAX_BRAND_WORDMARK_PREFIX_LENGTH,
+  MAX_DRAIN_FIRST_PACING_MINIMUM_PAUSE_MINUTES,
   MAX_SIDEBAR_BRAND_IMAGE_DATA_URL_LENGTH,
   MAX_SIDEBAR_BRAND_IMAGE_FILE_BYTES,
   MAX_SIDEBAR_BRAND_IMAGE_ID_LENGTH,
@@ -36,7 +40,9 @@ import {
   MAX_SIDEBAR_STAR_SPEED,
   MIN_AMBIANCE_INTENSITY,
   MIN_SIDEBAR_STAR_SPEED,
+  MIN_DRAIN_FIRST_PACING_MINIMUM_PAUSE_MINUTES,
   ServerSettingsPatch,
+  ServerSettings,
 } from "./settings.ts";
 
 const decodeClientSettings = Schema.decodeSync(ClientSettingsSchema);
@@ -389,5 +395,54 @@ describe("provider settings", () => {
         },
       }),
     ).toThrow();
+  });
+});
+
+describe("drain-first pacing settings", () => {
+  it("exposes every server setting through ServerSettingsPatch", () => {
+    const patchKeys = new Set(Object.keys(ServerSettingsPatch.fields));
+    const missing = Object.keys(ServerSettings.fields).filter((key) => !patchKeys.has(key));
+    expect(missing).toEqual([]);
+  });
+
+  it("defaults pacing off with no additional pause floor", () => {
+    expect(DEFAULT_SERVER_SETTINGS.drainFirstPacingEnabled).toBe(
+      DEFAULT_DRAIN_FIRST_PACING_ENABLED,
+    );
+    expect(DEFAULT_SERVER_SETTINGS.drainFirstPacingMinimumPauseMinutes).toBe(
+      DEFAULT_DRAIN_FIRST_PACING_MINIMUM_PAUSE_MINUTES,
+    );
+  });
+
+  it("accepts only bounded whole-minute pause floors", () => {
+    expect(
+      decodeServerSettingsPatch({
+        drainFirstPacingEnabled: true,
+        drainFirstPacingMinimumPauseMinutes: MIN_DRAIN_FIRST_PACING_MINIMUM_PAUSE_MINUTES,
+      }),
+    ).toEqual({
+      drainFirstPacingEnabled: true,
+      drainFirstPacingMinimumPauseMinutes: MIN_DRAIN_FIRST_PACING_MINIMUM_PAUSE_MINUTES,
+    });
+    expect(
+      decodeServerSettingsPatch({
+        drainFirstPacingMinimumPauseMinutes: MAX_DRAIN_FIRST_PACING_MINIMUM_PAUSE_MINUTES,
+      }),
+    ).toEqual({
+      drainFirstPacingMinimumPauseMinutes: MAX_DRAIN_FIRST_PACING_MINIMUM_PAUSE_MINUTES,
+    });
+    for (const invalid of [
+      MIN_DRAIN_FIRST_PACING_MINIMUM_PAUSE_MINUTES - 1,
+      MAX_DRAIN_FIRST_PACING_MINIMUM_PAUSE_MINUTES + 1,
+      1.5,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+    ]) {
+      expect(() =>
+        decodeServerSettingsPatch({
+          drainFirstPacingMinimumPauseMinutes: invalid,
+        }),
+      ).toThrow();
+    }
   });
 });
