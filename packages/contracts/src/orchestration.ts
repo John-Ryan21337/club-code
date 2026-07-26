@@ -284,6 +284,7 @@ const SourceProposedPlanReference = Schema.Struct({
 export const OrchestrationSessionStatus = Schema.Literals([
   "idle",
   "starting",
+  "waiting-quota",
   "running",
   "ready",
   "interrupted",

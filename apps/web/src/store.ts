@@ -1202,6 +1202,7 @@ function toLegacySessionStatus(
 ): "connecting" | "ready" | "running" | "error" | "closed" {
   switch (status) {
     case "starting":
+    case "waiting-quota":
       return "connecting";
     case "running":
       return "running";

@@ -47,7 +47,11 @@ type DecideOrchestrationCommandResult =
   | ReadonlyArray<PlannedOrchestrationEvent>;
 
 function threadHasUnsettledTurnStart(thread: OrchestrationReadModel["threads"][number]): boolean {
-  if (thread.session?.status === "starting" || thread.session?.status === "running") {
+  if (
+    thread.session?.status === "starting" ||
+    thread.session?.status === "waiting-quota" ||
+    thread.session?.status === "running"
+  ) {
     return true;
   }
   if (thread.session?.activeTurnId !== null && thread.session?.activeTurnId !== undefined) {
@@ -555,7 +559,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         }
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
-          detail: `Thread '${command.threadId}' already has a turn starting or running. Queue a follow-up or steer the active turn instead of starting another turn.`,
+          detail: `Thread '${command.threadId}' already has a turn starting, waiting for provider quota, or running. Interrupt a quota wait, or queue/steer an active turn, instead of replacing it.`,
         });
       }
       const sourceProposedPlan = command.sourceProposedPlan;
@@ -666,6 +670,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      if (targetThread.session?.status === "waiting-quota") {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Thread '${command.threadId}' already has a manual turn waiting for provider quota; interrupt it before sending another prompt.`,
+        });
+      }
       const activeTurnId =
         targetThread.session?.status === "running" ? targetThread.session.activeTurnId : null;
       const userMessageEvent: Omit<OrchestrationEvent, "sequence"> = {

@@ -828,6 +828,23 @@ it.effect("decodes orchestration session runtime mode defaults", () =>
   }),
 );
 
+it.effect("decodes the durable provider-quota waiting session status", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeOrchestrationSession({
+      threadId: "thread-waiting-quota",
+      status: "waiting-quota",
+      providerName: "claudeAgent",
+      providerInstanceId: "claude-primary",
+      runtimeMode: "full-access",
+      activeTurnId: null,
+      lastError: null,
+      updatedAt: "2026-07-26T17:00:00.000Z",
+    });
+    assert.strictEqual(parsed.status, "waiting-quota");
+    assert.strictEqual(parsed.activeTurnId, null);
+  }),
+);
+
 it.effect("defaults proposed plan implementation metadata for historical rows", () =>
   Effect.gen(function* () {
     const parsed = yield* decodeOrchestrationProposedPlan({

@@ -903,6 +903,72 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-interrupt-clear
   },
 );
 
+it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-interrupt-quota-wait-")))(
+  "OrchestrationProjectionPipeline",
+  (it) => {
+    it.effect("persists interruption of a quota wait without a provider turn id", () =>
+      Effect.gen(function* () {
+        const projectionPipeline = yield* OrchestrationProjectionPipeline;
+        const eventStore = yield* OrchestrationEventStore;
+        const sql = yield* SqlClient.SqlClient;
+        const threadId = ThreadId.make("thread-interrupt-quota-wait");
+
+        yield* sql`
+          INSERT INTO projection_thread_sessions (
+            thread_id,
+            status,
+            provider_name,
+            provider_instance_id,
+            runtime_mode,
+            active_turn_id,
+            last_error,
+            updated_at
+          )
+          VALUES (
+            ${threadId},
+            'waiting-quota',
+            'claudeAgent',
+            'claude-primary',
+            'full-access',
+            NULL,
+            NULL,
+            '2026-07-26T17:00:00.000Z'
+          )
+        `;
+
+        const saved = yield* eventStore.append({
+          type: "thread.turn-interrupt-requested",
+          eventId: EventId.make("event-interrupt-quota-wait"),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: "2026-07-26T17:01:00.000Z",
+          commandId: CommandId.make("command-interrupt-quota-wait"),
+          causationEventId: null,
+          correlationId: CommandId.make("command-interrupt-quota-wait"),
+          metadata: {},
+          payload: {
+            threadId,
+            createdAt: "2026-07-26T17:01:00.000Z",
+          },
+        });
+        yield* projectionPipeline.projectEvent(saved);
+
+        const rows = yield* sql<{
+          readonly status: string;
+          readonly activeTurnId: string | null;
+        }>`
+          SELECT
+            status,
+            active_turn_id AS "activeTurnId"
+          FROM projection_thread_sessions
+          WHERE thread_id = ${threadId}
+        `;
+        assert.deepEqual(rows, [{ status: "interrupted", activeTurnId: null }]);
+      }),
+    );
+  },
+);
+
 it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-diff-completes-session-")))(
   "OrchestrationProjectionPipeline",
   (it) => {

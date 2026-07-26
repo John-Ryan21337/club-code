@@ -53,6 +53,11 @@ const SESSION_DRIVE: Record<OrchestrationSessionStatus | "idle", number> = {
   ready: 0.2,
   starting: 0.44,
   running: 0.62,
+  // A quota-held session is alive but deliberately making no progress until
+  // its provider window reopens, so it drives the sky no harder than idle.
+  // It is not settled: `stopped` and `interrupted` are terminal-ish and read
+  // as SETTLED_COLOR, whereas this session resumes on its own.
+  "waiting-quota": 0.16,
   interrupted: 0.1,
   stopped: 0.05,
   error: 0.85,

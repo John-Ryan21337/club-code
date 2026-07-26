@@ -807,6 +807,7 @@ export function projectEvent(
           thread.session !== null &&
           interruptMatchesSession &&
           (thread.session.status === "starting" ||
+            thread.session.status === "waiting-quota" ||
             thread.session.status === "running" ||
             thread.session.activeTurnId !== null);
         const shouldUpdateLatestTurn =

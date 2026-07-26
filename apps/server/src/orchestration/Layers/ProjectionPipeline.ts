@@ -1588,12 +1588,16 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           return;
         }
         const interruptedTurnId = event.payload.turnId ?? existingSession.value.activeTurnId;
-        if (interruptedTurnId === null || interruptedTurnId === undefined) {
+        if (
+          (interruptedTurnId === null || interruptedTurnId === undefined) &&
+          existingSession.value.status !== "waiting-quota"
+        ) {
           return;
         }
         if (
           existingSession.value.activeTurnId === null &&
           existingSession.value.status !== "starting" &&
+          existingSession.value.status !== "waiting-quota" &&
           existingSession.value.status !== "running"
         ) {
           return;

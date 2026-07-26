@@ -379,7 +379,7 @@ describe("OrchestrationEngine", () => {
           createdAt: "2026-01-01T00:00:01.000Z",
         }),
       ),
-    ).rejects.toThrow("already has a turn starting or running");
+    ).rejects.toThrow("already has a turn starting, waiting for provider quota, or running");
 
     const events = await system.run(
       Stream.runCollect(engine.readEvents(0)).pipe(

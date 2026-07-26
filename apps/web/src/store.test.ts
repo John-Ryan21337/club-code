@@ -1116,6 +1116,33 @@ describe("incremental orchestration updates", () => {
     expect(nextThread?.runtimeMode).toBe("approval-required");
   });
 
+  it("projects a quota wait as connecting without inventing an active provider turn", () => {
+    const thread = makeThread();
+    const state = makeState(thread);
+
+    const next = applyOrchestrationEvent(
+      state,
+      makeEvent("thread.session-set", {
+        threadId: thread.id,
+        session: {
+          threadId: thread.id,
+          status: "waiting-quota",
+          providerName: "claude",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: "2026-02-27T00:00:01.000Z",
+        },
+      }),
+      localEnvironmentId,
+    );
+
+    const nextThread = threadsOf(next)[0];
+    expect(nextThread?.session?.status).toBe("connecting");
+    expect(nextThread?.session?.orchestrationStatus).toBe("waiting-quota");
+    expect(nextThread?.session?.activeTurnId).toBeUndefined();
+  });
+
   it("preserves turn request time when a starting session becomes running", () => {
     const thread = makeThread();
     const state = makeState(thread);
