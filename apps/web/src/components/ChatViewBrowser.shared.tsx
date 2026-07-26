@@ -5599,6 +5599,44 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
   }
 
   if (chatViewBrowserPart === "layout") {
+    it("mounts the configured ambient image in the production chat layout", async () => {
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: createSnapshotForTargetUser({
+          targetMessageId: "msg-user-ambient-image" as MessageId,
+          targetText: "ambient image integration",
+        }),
+        configureFixture: (nextFixture) => {
+          nextFixture.serverConfig = {
+            ...nextFixture.serverConfig,
+            clientSettings: {
+              ...nextFixture.serverConfig.clientSettings,
+              ambientImageEnabled: true,
+              ambientImageAsset: {
+                id: `sha256-${"a".repeat(64)}.png`,
+                url: `/api/ambient-media/image/sha256-${"a".repeat(64)}.png`,
+                mimeType: "image/png",
+                width: 400,
+                height: 300,
+                sizeBytes: 1_024,
+              },
+            },
+          };
+        },
+      });
+
+      try {
+        const panel = await waitForElement(
+          () => document.querySelector<HTMLElement>('section[aria-label="Ambient image"]'),
+          "Unable to find the ambient image overlay.",
+        );
+        expect(panel.dataset.ambientImageLayout).toBe("preset");
+        expect(panel.closest(".relative.flex.min-h-0.flex-1.flex-col")).not.toBeNull();
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
     it("keeps long proposed plans lightweight until the user expands them", async () => {
       const mounted = await mountChatView({
         viewport: DEFAULT_VIEWPORT,

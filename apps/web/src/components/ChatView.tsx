@@ -147,6 +147,7 @@ import {
   shouldPreserveTimelineScrollReviewIntent,
 } from "./chat/MessagesTimeline.helpers";
 import { ChatHeader } from "./chat/ChatHeader";
+import { ChatMediaOverlay } from "./chat/ChatMediaOverlay";
 import { type ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { NoActiveThreadState } from "./NoActiveThreadState";
 import { resolveEffectiveEnvMode, resolveEnvironmentOptionLabel } from "./BranchToolbar.logic";
@@ -6192,6 +6193,8 @@ export default function ChatView(props: ChatViewProps) {
                 ? { onDebugScrollEvent: recordTimelineScrollDebugEvent }
                 : {})}
             />
+
+            <ChatMediaOverlay />
 
             {/* scroll to bottom pill — shown when user has scrolled away from the bottom */}
             {showScrollToBottom && (
