@@ -882,7 +882,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
         }),
       );
 
-      it.effect("returns the cached provider list when a manual refresh fails", () =>
+      it.effect("keeps cached status after full-refresh failures and throttles account usage", () =>
         Effect.gen(function* () {
           const codexDriver = ProviderDriverKind.make("codex");
           const codexInstanceId = ProviderInstanceId.make("codex");
@@ -912,6 +912,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
               checkedAt: "2026-04-29T10:01:00.000Z",
             },
           } as const satisfies ServerProvider;
+          const accountUsageRefreshes = yield* Ref.make(0);
           const instance = {
             instanceId: codexInstanceId,
             driverKind: codexDriver,
@@ -928,7 +929,9 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
               }),
               getSnapshot: Effect.succeed(cachedProvider),
               refresh: Effect.die(new Error("simulated refresh failure")),
-              refreshAccountUsage: Effect.succeed(usageRefreshedProvider),
+              refreshAccountUsage: Ref.update(accountUsageRefreshes, (count) => count + 1).pipe(
+                Effect.as(usageRefreshedProvider),
+              ),
               streamChanges: Stream.empty,
             },
             adapter: {} as ProviderInstance["adapter"],
@@ -969,6 +972,15 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
             assert.deepStrictEqual(yield* registry.refreshInstanceAccountUsage(codexInstanceId), [
               usageRefreshedProvider,
             ]);
+            assert.deepStrictEqual(yield* registry.refreshInstanceAccountUsage(codexInstanceId), [
+              usageRefreshedProvider,
+            ]);
+            assert.strictEqual(yield* Ref.get(accountUsageRefreshes), 1);
+            yield* TestClock.adjust("60 seconds");
+            assert.deepStrictEqual(yield* registry.refreshInstanceAccountUsage(codexInstanceId), [
+              usageRefreshedProvider,
+            ]);
+            assert.strictEqual(yield* Ref.get(accountUsageRefreshes), 2);
           }).pipe(Effect.provide(runtimeServices));
         }),
       );

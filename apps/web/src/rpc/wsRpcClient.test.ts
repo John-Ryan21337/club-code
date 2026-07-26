@@ -3,7 +3,7 @@ import type {
   VcsStatusRemoteResult,
   VcsStatusStreamEvent,
 } from "@cafecode/contracts";
-import { ORCHESTRATION_WS_METHODS } from "@cafecode/contracts";
+import { ORCHESTRATION_WS_METHODS, ProviderInstanceId, WS_METHODS } from "@cafecode/contracts";
 import * as Effect from "effect/Effect";
 import { describe, expect, it, vi } from "vitest";
 
@@ -38,6 +38,135 @@ const baseRemoteStatus: VcsStatusRemoteResult = {
 };
 
 describe("wsRpcClient", () => {
+  it("refreshes provider usage sequentially and returns sanitized ordered outcomes", async () => {
+    const activeRequests = new Set<string>();
+    let maxConcurrentRequests = 0;
+    const started: Array<string> = [];
+    const rpcMethod = vi.fn((input: { readonly instanceId: ProviderInstanceId }) =>
+      Effect.tryPromise({
+        try: async () => {
+          const instanceId = String(input.instanceId);
+          started.push(instanceId);
+          activeRequests.add(instanceId);
+          maxConcurrentRequests = Math.max(maxConcurrentRequests, activeRequests.size);
+          await new Promise((resolve) => setTimeout(resolve, 0));
+          activeRequests.delete(instanceId);
+          if (instanceId === "claude-work") {
+            throw new Error(`private failure for ${instanceId}`);
+          }
+          return { providers: [] };
+        },
+        catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause))),
+      }),
+    );
+    const requestMock = vi.fn(
+      async <TSuccess>(
+        execute: (client: WsRpcProtocolClient) => Effect.Effect<TSuccess, Error, never>,
+      ) =>
+        Effect.runPromise(
+          execute({
+            [WS_METHODS.serverRefreshProviderUsage]: rpcMethod,
+          } as unknown as WsRpcProtocolClient),
+        ),
+    );
+    const transport = {
+      dispose: vi.fn(async () => undefined),
+      reconnect: vi.fn(async () => undefined),
+      request: requestMock as unknown as WsTransport["request"],
+      requestStream: vi.fn(),
+      subscribe: vi.fn(() => () => undefined),
+    } satisfies Pick<
+      WsTransport,
+      "dispose" | "reconnect" | "request" | "requestStream" | "subscribe"
+    >;
+    const client = createWsRpcClient(transport as unknown as WsTransport);
+    const inputs = ["codex-personal", "claude-work", "codex-backup"].map((instanceId) => ({
+      instanceId: ProviderInstanceId.make(instanceId),
+    }));
+
+    const outcomes = await client.server.refreshProviderUsageSequentially(inputs);
+
+    expect(started).toEqual(inputs.map(({ instanceId }) => instanceId));
+    expect(maxConcurrentRequests).toBe(1);
+    expect(outcomes).toEqual([
+      { status: "fulfilled" },
+      { status: "rejected" },
+      { status: "fulfilled" },
+    ]);
+    expect(JSON.stringify(outcomes)).not.toContain("claude-work");
+    expect(JSON.stringify(outcomes)).not.toContain("private failure");
+  });
+
+  it("finishes the active usage refresh without starting later work after closure", async () => {
+    let allowAnotherStart = true;
+    const started: string[] = [];
+    const admissionChecks: Array<[string, number]> = [];
+    const rpcMethod = vi.fn((input: { readonly instanceId: ProviderInstanceId }) =>
+      Effect.sync(() => {
+        started.push(String(input.instanceId));
+        allowAnotherStart = false;
+        return { providers: [] };
+      }),
+    );
+    const requestMock = vi.fn(
+      async <TSuccess>(
+        execute: (client: WsRpcProtocolClient) => Effect.Effect<TSuccess, Error, never>,
+      ) =>
+        Effect.runPromise(
+          execute({
+            [WS_METHODS.serverRefreshProviderUsage]: rpcMethod,
+          } as unknown as WsRpcProtocolClient),
+        ),
+    );
+    const transport = {
+      dispose: vi.fn(async () => undefined),
+      reconnect: vi.fn(async () => undefined),
+      request: requestMock as unknown as WsTransport["request"],
+      requestStream: vi.fn(),
+      subscribe: vi.fn(() => () => undefined),
+    } satisfies Pick<
+      WsTransport,
+      "dispose" | "reconnect" | "request" | "requestStream" | "subscribe"
+    >;
+    const client = createWsRpcClient(transport as unknown as WsTransport);
+    const inputs = ["claude-work", "codex-personal", "codex-backup"].map((instanceId) => ({
+      instanceId: ProviderInstanceId.make(instanceId),
+    }));
+
+    const outcomes = await client.server.refreshProviderUsageSequentially(inputs, {
+      shouldStartNext: (input, index) => {
+        admissionChecks.push([String(input.instanceId), index]);
+        return allowAnotherStart;
+      },
+    });
+
+    expect(started).toEqual(["claude-work"]);
+    expect(admissionChecks).toEqual([
+      ["claude-work", 0],
+      ["codex-personal", 1],
+    ]);
+    expect(outcomes).toEqual([
+      { status: "fulfilled" },
+      { status: "not-started" },
+      { status: "not-started" },
+    ]);
+  });
+
+  it("fails closed with sanitized fixed-length outcomes when admission throws", async () => {
+    const client = createWsRpcClient({} as WsTransport);
+    const outcomes = await client.server.refreshProviderUsageSequentially(
+      ["one", "two"].map((instanceId) => ({ instanceId: ProviderInstanceId.make(instanceId) })),
+      {
+        shouldStartNext: () => {
+          throw new Error("private admission failure");
+        },
+      },
+    );
+
+    expect(outcomes).toEqual([{ status: "not-started" }, { status: "not-started" }]);
+    expect(JSON.stringify(outcomes)).not.toContain("private admission failure");
+  });
+
   it("retries an interrupted durable command with the same command id", async () => {
     const rpcMethod = vi.fn(() => Effect.succeed({ sequence: 99 }));
     let requestAttempt = 0;

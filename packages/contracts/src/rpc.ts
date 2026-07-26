@@ -133,6 +133,7 @@ export const WS_METHODS = {
   // Server meta
   serverGetConfig: "server.getConfig",
   serverRefreshProviders: "server.refreshProviders",
+  serverRefreshProviderUsage: "server.refreshProviderUsage",
   serverLoginProvider: "server.loginProvider",
   serverUpdateProvider: "server.updateProvider",
   serverRestartProviderRuntime: "server.restartProviderRuntime",
@@ -192,6 +193,21 @@ export const WsServerRefreshProvidersRpc = Rpc.make(WS_METHODS.serverRefreshProv
      * refreshes.
      */
     instanceId: Schema.optional(ProviderInstanceId),
+  }),
+  success: ServerProviderUpdatedPayload,
+});
+
+/**
+ * Refresh only account-usage metadata for one configured provider instance.
+ *
+ * This is intentionally a distinct RPC instead of a mode flag on
+ * `server.refreshProviders`: an older server must reject the unknown method
+ * rather than silently strip an unknown flag and perform a full provider
+ * probe.
+ */
+export const WsServerRefreshProviderUsageRpc = Rpc.make(WS_METHODS.serverRefreshProviderUsage, {
+  payload: Schema.Struct({
+    instanceId: ProviderInstanceId,
   }),
   success: ServerProviderUpdatedPayload,
 });
@@ -522,6 +538,7 @@ export const WsSubscribeUsageStatsRpc = Rpc.make(WS_METHODS.subscribeUsageStats,
 export const WsRpcGroup = RpcGroup.make(
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,
+  WsServerRefreshProviderUsageRpc,
   WsServerLoginProviderRpc,
   WsServerUpdateProviderRpc,
   WsServerRestartProviderRuntimeRpc,

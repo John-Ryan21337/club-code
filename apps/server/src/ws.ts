@@ -128,7 +128,9 @@ function doesActivityAffectShellStream(
 }
 
 const PROVIDER_STATUS_DEBOUNCE_MS = 200;
-const CODEX_PROMPT_USAGE_REFRESH_THROTTLE_MS = 60_000;
+// Connection-local defense: the registry applies a second per-instance,
+// server-wide window so separate tabs/connections cannot form a refresh burst.
+const PROVIDER_ACCOUNT_USAGE_REFRESH_THROTTLE_MS = 60_000;
 
 function toAuthAccessStreamEvent(
   change: BootstrapCredentialChange | SessionCredentialChange,
@@ -209,9 +211,27 @@ const makeWsRpcLayer = (
           }).pipe(Effect.as(DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL)),
         ),
       );
-      const codexPromptUsageRefreshAtRef = yield* Ref.make<ReadonlyMap<ProviderInstanceId, number>>(
+      const providerUsageRefreshAtRef = yield* Ref.make<ReadonlyMap<ProviderInstanceId, number>>(
         new Map(),
       );
+      const claimProviderAccountUsageRefresh = (instanceId: ProviderInstanceId) =>
+        Effect.gen(function* () {
+          const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
+          return yield* Ref.modify(providerUsageRefreshAtRef, (previous) => {
+            const active = new Map<ProviderInstanceId, number>();
+            for (const [candidateId, refreshedAt] of previous) {
+              const ageMs = nowMs - refreshedAt;
+              if (ageMs >= 0 && ageMs < PROVIDER_ACCOUNT_USAGE_REFRESH_THROTTLE_MS) {
+                active.set(candidateId, refreshedAt);
+              }
+            }
+            if (active.has(instanceId)) {
+              return [false, active] as const;
+            }
+            active.set(instanceId, nowMs);
+            return [true, active] as const;
+          });
+        });
       const sourceControlRepositories = yield* SourceControlRepositoryService;
       const bootstrapCredentials = yield* BootstrapCredentialService;
       const sessions = yield* SessionCredentialService;
@@ -563,19 +583,7 @@ const makeWsRpcLayer = (
             return;
           }
 
-          const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
-          const shouldRefresh = yield* Ref.modify(codexPromptUsageRefreshAtRef, (previous) => {
-            const previousRefreshAt = previous.get(instanceId);
-            if (
-              previousRefreshAt !== undefined &&
-              nowMs - previousRefreshAt < CODEX_PROMPT_USAGE_REFRESH_THROTTLE_MS
-            ) {
-              return [false, previous] as const;
-            }
-            const next = new Map(previous);
-            next.set(instanceId, nowMs);
-            return [true, next] as const;
-          });
+          const shouldRefresh = yield* claimProviderAccountUsageRefresh(instanceId);
           if (!shouldRefresh) {
             return;
           }
@@ -969,6 +977,22 @@ const makeWsRpcLayer = (
               ? providerRegistry.refreshInstance(input.instanceId)
               : providerRegistry.refresh()
             ).pipe(Effect.map((providers) => ({ providers }))),
+            { "rpc.aggregate": "server" },
+          ),
+        [WS_METHODS.serverRefreshProviderUsage]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverRefreshProviderUsage,
+            Effect.gen(function* () {
+              const providers = yield* providerRegistry.getProviders;
+              if (!providers.some((provider) => provider.instanceId === input.instanceId)) {
+                return { providers };
+              }
+              const shouldRefresh = yield* claimProviderAccountUsageRefresh(input.instanceId);
+              const refreshedProviders = shouldRefresh
+                ? yield* providerRegistry.refreshInstanceAccountUsage(input.instanceId)
+                : providers;
+              return { providers: refreshedProviders };
+            }),
             { "rpc.aggregate": "server" },
           ),
         [WS_METHODS.serverUpdateProvider]: (input) =>

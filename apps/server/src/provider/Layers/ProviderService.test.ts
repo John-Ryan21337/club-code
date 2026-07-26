@@ -76,6 +76,7 @@ const asThreadId = (value: string): ThreadId => ThreadId.make(value);
 const asTurnId = (value: string): TurnId => TurnId.make(value);
 const codexInstanceId = ProviderInstanceId.make("codex");
 const claudeAgentInstanceId = ProviderInstanceId.make("claudeAgent");
+const claudeWorkInstanceId = ProviderInstanceId.make("claude-work");
 const CODEX_DRIVER = ProviderDriverKind.make("codex");
 const CLAUDE_AGENT_DRIVER = ProviderDriverKind.make("claudeAgent");
 const TEST_DRIVER = ProviderDriverKind.make("testDriver");
@@ -308,15 +309,54 @@ const hasMetricSnapshot = (
       Object.entries(attributes).every(([key, value]) => snapshot.attributes?.[key] === value),
   );
 
-function makeProviderServiceLayer() {
+function makeProviderServiceLayer(
+  configuredClaudeInstanceId: ProviderInstanceId = claudeAgentInstanceId,
+) {
   const codex = makeFakeCodexAdapter();
   const claude = makeFakeCodexAdapter(CLAUDE_AGENT_DRIVER);
   const testDriver = makeFakeCodexAdapter(TEST_DRIVER);
-  const registry = makeAdapterRegistryMock({
+  const defaultRegistry = makeAdapterRegistryMock({
     [ProviderDriverKind.make("codex")]: codex.adapter,
     [ProviderDriverKind.make("claudeAgent")]: claude.adapter,
     [TEST_DRIVER]: testDriver.adapter,
   });
+  const registry: ProviderAdapterRegistryShape =
+    configuredClaudeInstanceId === claudeAgentInstanceId
+      ? defaultRegistry
+      : {
+          ...defaultRegistry,
+          getByInstance: (instanceId) =>
+            instanceId === configuredClaudeInstanceId
+              ? Effect.succeed(claude.adapter)
+              : instanceId === claudeAgentInstanceId
+                ? Effect.fail(new ProviderUnsupportedError({ provider: CLAUDE_AGENT_DRIVER }))
+                : defaultRegistry.getByInstance(instanceId),
+          getInstanceInfo: (instanceId) =>
+            instanceId === configuredClaudeInstanceId
+              ? Effect.succeed({
+                  instanceId,
+                  driverKind: CLAUDE_AGENT_DRIVER,
+                  displayName: "Claude Work",
+                  enabled: true,
+                  continuationIdentity: {
+                    driverKind: CLAUDE_AGENT_DRIVER,
+                    continuationKey: `claudeAgent:instance:${instanceId}`,
+                  },
+                })
+              : instanceId === claudeAgentInstanceId
+                ? Effect.fail(new ProviderUnsupportedError({ provider: CLAUDE_AGENT_DRIVER }))
+                : defaultRegistry.getInstanceInfo(instanceId),
+          listInstances: () =>
+            defaultRegistry
+              .listInstances()
+              .pipe(
+                Effect.map((instanceIds) =>
+                  instanceIds.map((instanceId) =>
+                    instanceId === claudeAgentInstanceId ? configuredClaudeInstanceId : instanceId,
+                  ),
+                ),
+              ),
+        };
 
   const providerAdapterLayer = Layer.succeed(ProviderAdapterRegistry, registry);
   const runtimeRepositoryLayer = ProviderSessionRuntimeRepositoryLive.pipe(
@@ -2443,6 +2483,55 @@ fanout.layer("ProviderServiceLive fanout", (it) => {
           true,
         );
       }),
+  );
+});
+
+const customClaudeFanout = makeProviderServiceLayer(claudeWorkInstanceId);
+customClaudeFanout.layer("ProviderServiceLive custom-instance fanout", (it) => {
+  beforeEach(customClaudeFanout.reset);
+
+  it.effect("attributes Claude rate-limit events to the non-default emitting instance", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const childThreadId = asThreadId("thread-claude-child-agent");
+      const eventsRef = yield* Ref.make<Array<ProviderRuntimeEvent>>([]);
+      const consumer = yield* Stream.runForEach(provider.streamEvents, (event) =>
+        Ref.update(eventsRef, (current) => [...current, event]),
+      ).pipe(Effect.forkChild);
+      yield* advanceTestClock(50);
+
+      customClaudeFanout.claude.emit({
+        type: "account.rate-limits.updated",
+        eventId: asEventId("evt-claude-child-rate-limit"),
+        provider: CLAUDE_AGENT_DRIVER,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        threadId: childThreadId,
+        payload: {
+          rateLimits: {
+            type: "rate_limit_event",
+            rate_limit_info: {
+              rateLimitType: "five_hour",
+              utilization: 0.42,
+              resetsAt: 1_767_225_600,
+            },
+          },
+        },
+      });
+      yield* advanceTestClock(50);
+
+      const events = yield* Ref.get(eventsRef);
+      yield* Fiber.interrupt(consumer);
+      const rateLimitEvent = events.find(
+        (event) =>
+          event.type === "account.rate-limits.updated" &&
+          event.eventId === asEventId("evt-claude-child-rate-limit"),
+      );
+
+      assert.equal(rateLimitEvent?.threadId, childThreadId);
+      assert.equal(rateLimitEvent?.provider, CLAUDE_AGENT_DRIVER);
+      assert.equal(rateLimitEvent?.providerInstanceId, claudeWorkInstanceId);
+      assert.notEqual(rateLimitEvent?.providerInstanceId, claudeAgentInstanceId);
+    }),
   );
 });
 

@@ -33,6 +33,7 @@ import {
   type ServerProviderUpdateState,
 } from "@cafecode/contracts";
 import * as Cause from "effect/Cause";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
 import * as FileSystem from "effect/FileSystem";
@@ -77,6 +78,10 @@ const makeManualProviderMaintenanceCapabilities = (provider: ProviderDriverKind)
     provider,
     packageName: null,
   });
+
+// Server-wide complement to the WebSocket connection-local throttle. Prompt
+// triggers and multiple clients share this registry.
+const ACCOUNT_USAGE_REFRESH_MIN_INTERVAL_MS = 60_000;
 
 const hasModelCapabilities = (model: ServerProvider["models"][number]): boolean =>
   (model.capabilities?.optionDescriptors?.length ?? 0) > 0;
@@ -286,6 +291,9 @@ export const ProviderRegistryLive = Layer.effect(
       ),
     );
     const providersRef = yield* Ref.make<ReadonlyArray<ServerProvider>>(cachedProviders);
+    const accountUsageRefreshAtRef = yield* Ref.make<ReadonlyMap<ProviderInstanceId, number>>(
+      new Map(),
+    );
     const maintenanceActionStatesRef = yield* Ref.make<
       ReadonlyMap<ProviderInstanceId, { readonly update?: ServerProviderUpdateState | undefined }>
     >(new Map());
@@ -556,6 +564,24 @@ export const ProviderRegistryLive = Layer.effect(
       const sources = yield* getLiveSources;
       const providerSource = sources.find((candidate) => candidate.instanceId === instanceId);
       if (!providerSource?.refreshAccountUsage) {
+        return yield* Ref.get(providersRef);
+      }
+      const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
+      const shouldRefresh = yield* Ref.modify(accountUsageRefreshAtRef, (previous) => {
+        const active = new Map<ProviderInstanceId, number>();
+        for (const [candidateId, refreshedAt] of previous) {
+          const ageMs = nowMs - refreshedAt;
+          if (ageMs >= 0 && ageMs < ACCOUNT_USAGE_REFRESH_MIN_INTERVAL_MS) {
+            active.set(candidateId, refreshedAt);
+          }
+        }
+        if (active.has(instanceId)) {
+          return [false, active] as const;
+        }
+        active.set(instanceId, nowMs);
+        return [true, active] as const;
+      });
+      if (!shouldRefresh) {
         return yield* Ref.get(providersRef);
       }
       return yield* providerSource.refreshAccountUsage.pipe(

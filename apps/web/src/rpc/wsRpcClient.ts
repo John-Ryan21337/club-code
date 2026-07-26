@@ -35,6 +35,23 @@ type RpcUnaryNoArgMethod<TTag extends RpcTag> =
     ? () => Promise<TSuccess>
     : never;
 
+export type ProviderUsageRefreshOutcome =
+  | { readonly status: "fulfilled" }
+  | { readonly status: "rejected" }
+  | { readonly status: "not-started" };
+
+export interface ProviderUsageRefreshSequenceOptions {
+  /**
+   * Checked immediately before each new request. Returning false never
+   * cancels the current request; it only prevents later requests from
+   * starting.
+   */
+  readonly shouldStartNext?: (
+    input: RpcInput<typeof WS_METHODS.serverRefreshProviderUsage>,
+    index: number,
+  ) => boolean;
+}
+
 type RpcStreamMethod<TTag extends RpcTag> =
   RpcMethod<TTag> extends (input: any, options?: any) => Stream.Stream<infer TEvent, any, any>
     ? (listener: (event: TEvent) => void, options?: StreamSubscriptionOptions) => () => void
@@ -104,6 +121,20 @@ export interface WsRpcClient {
     readonly refreshProviders: (
       input?: RpcInput<typeof WS_METHODS.serverRefreshProviders>,
     ) => ReturnType<RpcUnaryMethod<typeof WS_METHODS.serverRefreshProviders>>;
+    /**
+     * Refresh only account-usage metadata for one configured instance.
+     * Servers that predate this method fail closed instead of performing a
+     * broader provider probe.
+     */
+    readonly refreshProviderUsage: RpcUnaryMethod<typeof WS_METHODS.serverRefreshProviderUsage>;
+    /**
+     * Refresh usage for multiple instances one request at a time. Outcomes
+     * preserve input order but omit provider identity and raw errors.
+     */
+    readonly refreshProviderUsageSequentially: (
+      inputs: ReadonlyArray<RpcInput<typeof WS_METHODS.serverRefreshProviderUsage>>,
+      options?: ProviderUsageRefreshSequenceOptions,
+    ) => Promise<ReadonlyArray<ProviderUsageRefreshOutcome>>;
     readonly loginProvider: RpcUnaryMethod<typeof WS_METHODS.serverLoginProvider>;
     readonly updateProvider: RpcUnaryMethod<typeof WS_METHODS.serverUpdateProvider>;
     readonly restartProviderRuntime: RpcUnaryMethod<typeof WS_METHODS.serverRestartProviderRuntime>;
@@ -167,6 +198,10 @@ export interface WsRpcClient {
 }
 
 export function createWsRpcClient(transport: WsTransport): WsRpcClient {
+  const refreshProviderUsage: RpcUnaryMethod<typeof WS_METHODS.serverRefreshProviderUsage> = (
+    input,
+  ) => transport.request((client) => client[WS_METHODS.serverRefreshProviderUsage](input));
+
   return {
     dispose: () => transport.dispose(),
     reconnect: async () => {
@@ -231,6 +266,31 @@ export function createWsRpcClient(transport: WsTransport): WsRpcClient {
       getConfig: () => transport.request((client) => client[WS_METHODS.serverGetConfig]({})),
       refreshProviders: (input) =>
         transport.request((client) => client[WS_METHODS.serverRefreshProviders](input ?? {})),
+      refreshProviderUsage,
+      refreshProviderUsageSequentially: async (inputs, options) => {
+        const outcomes: Array<ProviderUsageRefreshOutcome> = [];
+        for (const [index, input] of inputs.entries()) {
+          let shouldStart = true;
+          try {
+            shouldStart = options?.shouldStartNext?.(input, index) !== false;
+          } catch {
+            shouldStart = false;
+          }
+          if (!shouldStart) {
+            for (let pendingIndex = index; pendingIndex < inputs.length; pendingIndex += 1) {
+              outcomes.push({ status: "not-started" });
+            }
+            break;
+          }
+          try {
+            await refreshProviderUsage(input);
+            outcomes.push({ status: "fulfilled" });
+          } catch {
+            outcomes.push({ status: "rejected" });
+          }
+        }
+        return outcomes;
+      },
       loginProvider: (input) =>
         transport.request((client) => client[WS_METHODS.serverLoginProvider](input)),
       updateProvider: (input) =>

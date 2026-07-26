@@ -4094,6 +4094,78 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("refreshes only account usage for targeted usage-monitor requests", () =>
+    Effect.gen(function* () {
+      const instanceId = ProviderInstanceId.make("claude-work");
+      const secondInstanceId = ProviderInstanceId.make("codex-personal");
+      const usageRefreshCalls = yield* Ref.make<Array<ProviderInstanceId>>([]);
+      const fullRefreshCalls = yield* Ref.make(0);
+      const provider = {
+        instanceId,
+        driver: ProviderDriverKind.make("claudeAgent"),
+        displayName: "Claude Work",
+        enabled: true,
+        installed: true,
+        version: "1.0.0",
+        status: "ready" as const,
+        auth: { status: "authenticated" as const },
+        checkedAt: "2026-01-01T00:00:00.000Z",
+        models: [],
+        slashCommands: [],
+        skills: [],
+      };
+      const providers = [
+        provider,
+        {
+          ...provider,
+          instanceId: secondInstanceId,
+          driver: ProviderDriverKind.make("codex"),
+          displayName: "Codex Personal",
+        },
+      ];
+
+      yield* buildAppUnderTest({
+        layers: {
+          providerRegistry: {
+            getProviders: Effect.succeed(providers),
+            refresh: () =>
+              Ref.update(fullRefreshCalls, (count) => count + 1).pipe(Effect.as(providers)),
+            refreshInstance: () =>
+              Ref.update(fullRefreshCalls, (count) => count + 1).pipe(Effect.as(providers)),
+            refreshInstanceAccountUsage: (requestedInstanceId) =>
+              Ref.update(usageRefreshCalls, (calls) => [...calls, requestedInstanceId]).pipe(
+                Effect.as(providers),
+              ),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const [targetedResult, throttledResult, secondInstanceResult] = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          Effect.gen(function* () {
+            const first = yield* client[WS_METHODS.serverRefreshProviderUsage]({
+              instanceId,
+            });
+            const second = yield* client[WS_METHODS.serverRefreshProviderUsage]({
+              instanceId,
+            });
+            const third = yield* client[WS_METHODS.serverRefreshProviderUsage]({
+              instanceId: secondInstanceId,
+            });
+            return [first, second, third] as const;
+          }),
+        ),
+      );
+
+      assert.deepEqual(targetedResult.providers, providers);
+      assert.deepEqual(throttledResult.providers, providers);
+      assert.deepEqual(secondInstanceResult.providers, providers);
+      assert.deepEqual(yield* Ref.get(usageRefreshCalls), [instanceId, secondInstanceId]);
+      assert.equal(yield* Ref.get(fullRefreshCalls), 0);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect(
     "refreshes Codex account usage without a full provider probe after prompt dispatch",
     () =>
