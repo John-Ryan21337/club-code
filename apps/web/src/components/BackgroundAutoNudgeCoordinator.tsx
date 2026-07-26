@@ -15,7 +15,7 @@ import {
 import { getAutoNudgeTurnLedger } from "../autoNudger";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { readEnvironmentApi } from "../environmentApi";
-import { useSettings } from "../hooks/useSettings";
+import { getClientSettings, useSettings } from "../hooks/useSettings";
 import { newCommandId, newMessageId } from "../lib/utils";
 import { useServerConfig } from "../rpc/serverState";
 import { useStore } from "../store";
@@ -115,14 +115,20 @@ export function BackgroundAutoNudgeCoordinator() {
               ? `${owner.environmentId}:${owner.threadId}:${latestTurn.turnId}`
               : null;
           const ledger = getAutoNudgeTurnLedger();
+          // Read after acquiring the dispatch lock. The coordinator can be
+          // notified by controller.start in the same microtask that publishes
+          // confirmed settings, before React has committed a new hook closure.
+          // A synchronous snapshot prevents that render gap from interpreting
+          // the just-confirmed enable as stale `false` and stopping the run.
+          const currentSettings = getClientSettings();
 
           const dispatch = controller.observe({
             nowMs: Date.now(),
             settings: {
-              mode: settings.autoNudgeMode,
-              enabled: settings.autoNudgeBackgroundContinuation,
-              maxRounds: settings.autoNudgeMaxRounds,
-              maxMinutes: settings.autoNudgeMaxMinutes,
+              mode: currentSettings.autoNudgeMode,
+              enabled: currentSettings.autoNudgeBackgroundContinuation,
+              maxRounds: currentSettings.autoNudgeMaxRounds,
+              maxMinutes: currentSettings.autoNudgeMaxMinutes,
             },
             thread:
               shell && summary
