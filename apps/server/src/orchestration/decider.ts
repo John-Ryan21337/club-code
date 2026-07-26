@@ -510,6 +510,18 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      if (
+        command.expectedSettledTurnId !== undefined &&
+        (targetThread.latestTurn?.turnId !== command.expectedSettledTurnId ||
+          targetThread.latestTurn.state !== "completed" ||
+          targetThread.latestTurn.completedAt === null ||
+          threadHasUnsettledTurnStart(targetThread))
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Thread '${command.threadId}' no longer has expected settled turn '${command.expectedSettledTurnId}'; automated follow-up was not started.`,
+        });
+      }
       if (threadHasUnsettledTurnStart(targetThread)) {
         const activeTurnId = activeTurnIdForSteer(targetThread);
         if (activeTurnId !== null) {

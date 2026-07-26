@@ -344,6 +344,7 @@ it.effect("preserves explicit provider and runtime mode in thread.turn.start", (
         text: "hello",
         attachments: [],
       },
+      expectedSettledTurnId: "turn-before-auto-nudge",
       modelSelection: {
         provider: "codex",
         model: "gpt-5.4",
@@ -353,8 +354,33 @@ it.effect("preserves explicit provider and runtime mode in thread.turn.start", (
       createdAt: "2026-01-01T00:00:00.000Z",
     });
     assert.strictEqual(parsed.modelSelection?.instanceId, "codex");
+    assert.strictEqual(parsed.expectedSettledTurnId, "turn-before-auto-nudge");
     assert.strictEqual(parsed.runtimeMode, "full-access");
     assert.strictEqual(parsed.interactionMode, "auto");
+
+    const clientParsed = yield* decodeClientOrchestrationCommand({
+      type: "thread.turn.start",
+      commandId: "cmd-turn-client-precondition",
+      threadId: "thread-1",
+      message: {
+        messageId: "msg-client-precondition",
+        role: "user",
+        text: "automated follow-up",
+        attachments: [],
+      },
+      expectedSettledTurnId: "turn-before-auto-nudge",
+      modelSelection: {
+        provider: "codex",
+        model: "gpt-5.4",
+      },
+      runtimeMode: "full-access",
+      interactionMode: "auto",
+      createdAt: "2026-01-01T00:00:01.000Z",
+    });
+    assert.strictEqual(clientParsed.type, "thread.turn.start");
+    if (clientParsed.type === "thread.turn.start") {
+      assert.strictEqual(clientParsed.expectedSettledTurnId, "turn-before-auto-nudge");
+    }
   }),
 );
 

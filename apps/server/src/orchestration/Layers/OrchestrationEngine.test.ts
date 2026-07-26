@@ -486,6 +486,88 @@ describe("OrchestrationEngine", () => {
       ),
     ).toHaveLength(0);
 
+    await expect(
+      system.run(
+        engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make("cmd-auto-nudge-start-must-not-steer"),
+          threadId,
+          message: {
+            messageId: asMessageId("msg-auto-nudge-must-not-steer"),
+            role: "user",
+            text: "automated follow-up",
+            attachments: [],
+          },
+          expectedSettledTurnId: TurnId.make("turn-completed-before-active"),
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          createdAt: "2026-01-01T00:00:02.000Z",
+        }),
+      ),
+    ).rejects.toThrow("no longer has expected settled turn");
+
+    const eventsAfterRejectedAutomation = await system.run(
+      Stream.runCollect(engine.readEvents(0)).pipe(
+        Effect.map((chunk): OrchestrationEvent[] => Array.from(chunk)),
+      ),
+    );
+    expect(
+      eventsAfterRejectedAutomation.filter(
+        (event) =>
+          event.type === "thread.message-sent" &&
+          event.payload.messageId === "msg-auto-nudge-must-not-steer",
+      ),
+    ).toHaveLength(0);
+
+    await system.run(
+      engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-settle-before-auto-nudge"),
+        threadId,
+        session: {
+          threadId,
+          status: "ready",
+          providerName: "claudeAgent",
+          providerInstanceId: ProviderInstanceId.make("claudeAgent"),
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: "2026-01-01T00:00:03.000Z",
+        },
+        createdAt: "2026-01-01T00:00:03.000Z",
+      }),
+    );
+    await system.run(
+      engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-auto-nudge-matching-settled-turn"),
+        threadId,
+        message: {
+          messageId: asMessageId("msg-auto-nudge-matching-settled-turn"),
+          role: "user",
+          text: "safe automated follow-up",
+          attachments: [],
+        },
+        expectedSettledTurnId: activeTurnId,
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: "2026-01-01T00:00:04.000Z",
+      }),
+    );
+
+    const eventsAfterAcceptedAutomation = await system.run(
+      Stream.runCollect(engine.readEvents(0)).pipe(
+        Effect.map((chunk): OrchestrationEvent[] => Array.from(chunk)),
+      ),
+    );
+    expect(
+      eventsAfterAcceptedAutomation.filter(
+        (event) =>
+          event.type === "thread.turn-start-requested" &&
+          event.payload.messageId === "msg-auto-nudge-matching-settled-turn",
+      ),
+    ).toHaveLength(1);
+
     await system.dispose();
   });
 
