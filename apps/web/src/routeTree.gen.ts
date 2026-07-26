@@ -27,6 +27,7 @@ import { Route as SettingsConnectionsRouteImport } from './routes/settings.conne
 import { Route as SettingsChatThreadsRouteImport } from './routes/settings.chat-threads'
 import { Route as SettingsArchivedRouteImport } from './routes/settings.archived'
 import { Route as SettingsAppearanceRouteImport } from './routes/settings.appearance'
+import { Route as SettingsAmbianceRouteImport } from './routes/settings.ambiance'
 import { Route as ChatDraftDraftIdRouteImport } from './routes/_chat.draft.$draftId'
 import { Route as ChatEnvironmentIdThreadIdRouteImport } from './routes/_chat.$environmentId.$threadId'
 
@@ -119,6 +120,11 @@ const SettingsAppearanceRoute = SettingsAppearanceRouteImport.update({
   path: '/appearance',
   getParentRoute: () => SettingsRoute,
 } as any)
+const SettingsAmbianceRoute = SettingsAmbianceRouteImport.update({
+  id: '/ambiance',
+  path: '/ambiance',
+  getParentRoute: () => SettingsRoute,
+} as any)
 const ChatDraftDraftIdRoute = ChatDraftDraftIdRouteImport.update({
   id: '/draft/$draftId',
   path: '/draft/$draftId',
@@ -135,6 +141,7 @@ export interface FileRoutesByFullPath {
   '/': typeof ChatIndexRoute
   '/pair': typeof PairRoute
   '/settings': typeof SettingsRouteWithChildren
+  '/settings/ambiance': typeof SettingsAmbianceRoute
   '/settings/appearance': typeof SettingsAppearanceRoute
   '/settings/archived': typeof SettingsArchivedRoute
   '/settings/chat-threads': typeof SettingsChatThreadsRoute
@@ -155,6 +162,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/pair': typeof PairRoute
   '/settings': typeof SettingsRouteWithChildren
+  '/settings/ambiance': typeof SettingsAmbianceRoute
   '/settings/appearance': typeof SettingsAppearanceRoute
   '/settings/archived': typeof SettingsArchivedRoute
   '/settings/chat-threads': typeof SettingsChatThreadsRoute
@@ -178,6 +186,7 @@ export interface FileRoutesById {
   '/_chat': typeof ChatRouteWithChildren
   '/pair': typeof PairRoute
   '/settings': typeof SettingsRouteWithChildren
+  '/settings/ambiance': typeof SettingsAmbianceRoute
   '/settings/appearance': typeof SettingsAppearanceRoute
   '/settings/archived': typeof SettingsArchivedRoute
   '/settings/chat-threads': typeof SettingsChatThreadsRoute
@@ -202,6 +211,7 @@ export interface FileRouteTypes {
     | '/'
     | '/pair'
     | '/settings'
+    | '/settings/ambiance'
     | '/settings/appearance'
     | '/settings/archived'
     | '/settings/chat-threads'
@@ -222,6 +232,7 @@ export interface FileRouteTypes {
   to:
     | '/pair'
     | '/settings'
+    | '/settings/ambiance'
     | '/settings/appearance'
     | '/settings/archived'
     | '/settings/chat-threads'
@@ -244,6 +255,7 @@ export interface FileRouteTypes {
     | '/_chat'
     | '/pair'
     | '/settings'
+    | '/settings/ambiance'
     | '/settings/appearance'
     | '/settings/archived'
     | '/settings/chat-threads'
@@ -397,6 +409,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsAppearanceRouteImport
       parentRoute: typeof SettingsRoute
     }
+    '/settings/ambiance': {
+      id: '/settings/ambiance'
+      path: '/ambiance'
+      fullPath: '/settings/ambiance'
+      preLoaderRoute: typeof SettingsAmbianceRouteImport
+      parentRoute: typeof SettingsRoute
+    }
     '/_chat/draft/$draftId': {
       id: '/_chat/draft/$draftId'
       path: '/draft/$draftId'
@@ -429,6 +448,7 @@ const ChatRouteChildren: ChatRouteChildren = {
 const ChatRouteWithChildren = ChatRoute._addFileChildren(ChatRouteChildren)
 
 interface SettingsRouteChildren {
+  SettingsAmbianceRoute: typeof SettingsAmbianceRoute
   SettingsAppearanceRoute: typeof SettingsAppearanceRoute
   SettingsArchivedRoute: typeof SettingsArchivedRoute
   SettingsChatThreadsRoute: typeof SettingsChatThreadsRoute
@@ -446,6 +466,7 @@ interface SettingsRouteChildren {
 }
 
 const SettingsRouteChildren: SettingsRouteChildren = {
+  SettingsAmbianceRoute: SettingsAmbianceRoute,
   SettingsAppearanceRoute: SettingsAppearanceRoute,
   SettingsArchivedRoute: SettingsArchivedRoute,
   SettingsChatThreadsRoute: SettingsChatThreadsRoute,

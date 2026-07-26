@@ -86,6 +86,39 @@ export const SidebarStarSpeed = Schema.Number.check(
 );
 export type SidebarStarSpeed = typeof SidebarStarSpeed.Type;
 
+// ── Ambiance (decorative weather layer) ────────────────────────────
+//
+// Purely cosmetic renderer state: an animated weather canvas drawn over the
+// app chrome. Off by default so fresh installs keep the plain sidebar stars.
+// All values are client settings so every connected renderer (Electron and
+// browser) shares the same ambiance once the backend syncs client settings.
+export const AmbianceEffect = Schema.Literals(["stars", "rain", "snow", "matrix", "fire"]);
+export type AmbianceEffect = typeof AmbianceEffect.Type;
+export const DEFAULT_AMBIANCE_ENABLED = false;
+export const DEFAULT_AMBIANCE_EFFECT: AmbianceEffect = "rain";
+export const MIN_AMBIANCE_INTENSITY = 0;
+export const MAX_AMBIANCE_INTENSITY = 1;
+export const DEFAULT_AMBIANCE_INTENSITY = 0.55;
+export const AmbianceIntensity = Schema.Number.check(
+  Schema.isBetween({
+    minimum: MIN_AMBIANCE_INTENSITY,
+    maximum: MAX_AMBIANCE_INTENSITY,
+  }),
+);
+export type AmbianceIntensity = typeof AmbianceIntensity.Type;
+// How much of the thread run the weather is allowed to react to:
+// "off" ignores thread state entirely, "session" follows session lifecycle
+// (starting/running/error/...), and "live" adds activity signals such as tool
+// bursts, approval holds, and completion clears.
+export const AmbianceReactMode = Schema.Literals(["off", "session", "live"]);
+export type AmbianceReactMode = typeof AmbianceReactMode.Type;
+export const DEFAULT_AMBIANCE_REACT_MODE: AmbianceReactMode = "live";
+export const DEFAULT_AMBIANCE_SURFACE_SIDEBAR = true;
+export const DEFAULT_AMBIANCE_SURFACE_THREAD = true;
+export const DEFAULT_AMBIANCE_SURFACE_COMPOSER = true;
+// Empty string means "follow the accent color configured in Appearance".
+export const DEFAULT_AMBIANCE_COLOR = "";
+
 export const SidebarProjectSortOrder = Schema.Literals(["updated_at", "created_at", "manual"]);
 export type SidebarProjectSortOrder = typeof SidebarProjectSortOrder.Type;
 export const DEFAULT_SIDEBAR_PROJECT_SORT_ORDER: SidebarProjectSortOrder = "updated_at";
@@ -160,6 +193,30 @@ export const ClientSettingsSchema = Schema.Struct({
   ).pipe(Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_BRAND_IMAGE_DATA_URL))),
   sidebarStarSpeed: SidebarStarSpeed.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_STAR_SPEED)),
+  ),
+  ambianceEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIANCE_ENABLED)),
+  ),
+  ambianceEffect: AmbianceEffect.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIANCE_EFFECT)),
+  ),
+  ambianceIntensity: AmbianceIntensity.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIANCE_INTENSITY)),
+  ),
+  ambianceReactMode: AmbianceReactMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIANCE_REACT_MODE)),
+  ),
+  ambianceSurfaceSidebar: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIANCE_SURFACE_SIDEBAR)),
+  ),
+  ambianceSurfaceThread: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIANCE_SURFACE_THREAD)),
+  ),
+  ambianceSurfaceComposer: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIANCE_SURFACE_COMPOSER)),
+  ),
+  ambianceColor: TrimmedString.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIANCE_COLOR)),
   ),
   themeAccentColor: TrimmedString.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_THEME_ACCENT_COLOR)),
@@ -738,6 +795,14 @@ export const ClientSettingsPatch = Schema.Struct({
   ),
   sidebarBrandImage: Schema.optionalKey(Schema.NullOr(SidebarBrandImageAsset)),
   sidebarStarSpeed: Schema.optionalKey(SidebarStarSpeed),
+  ambianceEnabled: Schema.optionalKey(Schema.Boolean),
+  ambianceEffect: Schema.optionalKey(AmbianceEffect),
+  ambianceIntensity: Schema.optionalKey(AmbianceIntensity),
+  ambianceReactMode: Schema.optionalKey(AmbianceReactMode),
+  ambianceSurfaceSidebar: Schema.optionalKey(Schema.Boolean),
+  ambianceSurfaceThread: Schema.optionalKey(Schema.Boolean),
+  ambianceSurfaceComposer: Schema.optionalKey(Schema.Boolean),
+  ambianceColor: Schema.optionalKey(TrimmedString),
   themeAccentColor: Schema.optionalKey(TrimmedString),
   appAccentColor: Schema.optionalKey(TrimmedString),
   defaultEditor: Schema.optionalKey(DefaultEditorSelection),

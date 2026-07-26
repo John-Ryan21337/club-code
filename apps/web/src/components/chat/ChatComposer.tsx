@@ -115,6 +115,7 @@ import { deriveLatestContextWindowSnapshot } from "../../lib/contextWindow";
 import { formatProviderSkillDisplayName } from "../../providerSkillPresentation";
 import { searchProviderSkills } from "../../providerSkillSearch";
 import { useHasOnScreenKeyboard } from "../../hooks/useMediaQuery";
+import { useSettings } from "../../hooks/useSettings";
 import { domSnapshot, mobileDebugLog } from "../../lib/mobileDebugLog";
 import {
   applyClaudePermissionMode,
@@ -1097,6 +1098,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
 
   const selectedPromptEffort = composerProviderState.promptEffort;
   const selectedModelOptionsForDispatch = composerProviderState.modelOptionsForDispatch;
+  // Ambiance composer surface: tint the frame ring with the current weather
+  // state color (via CSS variables owned by AmbianceLayer). Ultrathink's
+  // rainbow frame intentionally wins when both want the frame.
+  const ambianceComposerRing = useSettings(
+    (appSettings) => appSettings.ambianceEnabled && appSettings.ambianceSurfaceComposer,
+  );
   const composerProviderControls = useMemo(
     () => ({
       showInteractionModeToggle: getProviderInteractionModeToggle(
@@ -2479,7 +2486,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       <div
         className={cn(
           "group rounded-[22px] p-px transition-colors duration-200",
-          composerProviderState.composerFrameClassName,
+          composerProviderState.composerFrameClassName ??
+            (ambianceComposerRing ? "cafe-ambiance-composer-frame" : undefined),
         )}
         onDragEnter={onComposerDragEnter}
         onDragOver={onComposerDragOver}

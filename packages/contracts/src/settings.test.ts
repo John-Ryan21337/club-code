@@ -7,6 +7,14 @@ import {
   CodexSettings,
   ClaudeSettings,
   CODEX_DEFAULT_AUTO_COMPACT_TOKEN_LIMIT,
+  DEFAULT_AMBIANCE_COLOR,
+  DEFAULT_AMBIANCE_EFFECT,
+  DEFAULT_AMBIANCE_ENABLED,
+  DEFAULT_AMBIANCE_INTENSITY,
+  DEFAULT_AMBIANCE_REACT_MODE,
+  DEFAULT_AMBIANCE_SURFACE_COMPOSER,
+  DEFAULT_AMBIANCE_SURFACE_SIDEBAR,
+  DEFAULT_AMBIANCE_SURFACE_THREAD,
   DEFAULT_APP_ACCENT_COLOR,
   DEFAULT_BRAND_WORDMARK_PREFIX,
   DEFAULT_CHAT_COPY_FORMAT,
@@ -24,7 +32,9 @@ import {
   MAX_SIDEBAR_BRAND_IMAGE_DATA_URL_LENGTH,
   MAX_SIDEBAR_BRAND_IMAGE_FILE_BYTES,
   MAX_SIDEBAR_BRAND_IMAGE_ID_LENGTH,
+  MAX_AMBIANCE_INTENSITY,
   MAX_SIDEBAR_STAR_SPEED,
+  MIN_AMBIANCE_INTENSITY,
   MIN_SIDEBAR_STAR_SPEED,
   ServerSettingsPatch,
 } from "./settings.ts";
@@ -92,6 +102,57 @@ describe("client settings", () => {
     expect(decodeClientSettings({}).sidebarStarSpeed).toBe(1);
     expect(decodeClientSettings({}).themeAccentColor).toBe("");
     expect(decodeClientSettings({}).appAccentColor).toBe("");
+  });
+
+  it("defaults ambiance to off with rain, live reaction, and accent-following color", () => {
+    expect(DEFAULT_CLIENT_SETTINGS.ambianceEnabled).toBe(DEFAULT_AMBIANCE_ENABLED);
+    expect(DEFAULT_CLIENT_SETTINGS.ambianceEffect).toBe(DEFAULT_AMBIANCE_EFFECT);
+    expect(DEFAULT_CLIENT_SETTINGS.ambianceIntensity).toBe(DEFAULT_AMBIANCE_INTENSITY);
+    expect(DEFAULT_CLIENT_SETTINGS.ambianceReactMode).toBe(DEFAULT_AMBIANCE_REACT_MODE);
+    expect(DEFAULT_CLIENT_SETTINGS.ambianceSurfaceSidebar).toBe(DEFAULT_AMBIANCE_SURFACE_SIDEBAR);
+    expect(DEFAULT_CLIENT_SETTINGS.ambianceSurfaceThread).toBe(DEFAULT_AMBIANCE_SURFACE_THREAD);
+    expect(DEFAULT_CLIENT_SETTINGS.ambianceSurfaceComposer).toBe(DEFAULT_AMBIANCE_SURFACE_COMPOSER);
+    expect(DEFAULT_CLIENT_SETTINGS.ambianceColor).toBe(DEFAULT_AMBIANCE_COLOR);
+    expect(decodeClientSettings({}).ambianceEnabled).toBe(false);
+    expect(decodeClientSettings({}).ambianceEffect).toBe("rain");
+    expect(decodeClientSettings({}).ambianceIntensity).toBe(0.55);
+    expect(decodeClientSettings({}).ambianceReactMode).toBe("live");
+    expect(decodeClientSettings({}).ambianceColor).toBe("");
+  });
+
+  it("bounds ambiance patches to supported effects, modes, and intensity range", () => {
+    expect(
+      decodeClientSettingsPatch({
+        ambianceEnabled: true,
+        ambianceEffect: "snow",
+        ambianceIntensity: MAX_AMBIANCE_INTENSITY,
+        ambianceReactMode: "session",
+        ambianceSurfaceSidebar: false,
+        ambianceSurfaceThread: false,
+        ambianceSurfaceComposer: false,
+        ambianceColor: "  #48cfff  ",
+      }),
+    ).toEqual({
+      ambianceEnabled: true,
+      ambianceEffect: "snow",
+      ambianceIntensity: MAX_AMBIANCE_INTENSITY,
+      ambianceReactMode: "session",
+      ambianceSurfaceSidebar: false,
+      ambianceSurfaceThread: false,
+      ambianceSurfaceComposer: false,
+      ambianceColor: "#48cfff",
+    });
+    expect(decodeClientSettingsPatch({ ambianceIntensity: MIN_AMBIANCE_INTENSITY })).toEqual({
+      ambianceIntensity: MIN_AMBIANCE_INTENSITY,
+    });
+    expect(() => decodeClientSettingsPatch({ ambianceEffect: "hail" })).toThrow();
+    expect(() => decodeClientSettingsPatch({ ambianceReactMode: "sometimes" })).toThrow();
+    expect(() =>
+      decodeClientSettingsPatch({ ambianceIntensity: MAX_AMBIANCE_INTENSITY + 0.5 }),
+    ).toThrow();
+    expect(() =>
+      decodeClientSettingsPatch({ ambianceIntensity: MIN_AMBIANCE_INTENSITY - 0.5 }),
+    ).toThrow();
   });
 
   it("accepts only supported power-save blocker modes in patches", () => {
