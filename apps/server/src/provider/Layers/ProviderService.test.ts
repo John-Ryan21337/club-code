@@ -1102,6 +1102,24 @@ routing.layer("ProviderServiceLive routing", (it) => {
     }),
   );
 
+  it.effect("reports a missing user-input callback binding as a missing session", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const threadId = asThreadId("thread-without-user-input-binding");
+
+      const failure = yield* provider
+        .respondToUserInput({
+          threadId,
+          requestId: asRequestId("request-without-binding"),
+          answers: { target: "enterprise account executive" },
+        })
+        .pipe(Effect.flip);
+
+      assert.equal(failure instanceof ProviderSessionNotFoundError, true);
+      assert.equal(routing.codex.respondToUserInput.mock.calls.length, 0);
+    }),
+  );
+
   it.effect(
     "routes direct Codex sendTurn through steer while the adapter owns an active turn",
     () =>

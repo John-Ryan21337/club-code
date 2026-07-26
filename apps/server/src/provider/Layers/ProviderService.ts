@@ -791,10 +791,16 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     readonly threadId: ThreadId;
     readonly operation: string;
     readonly allowRecovery: boolean;
+    readonly missingBindingIsMissingSession?: boolean;
   }) {
     const bindingOption = yield* directory.getBinding(input.threadId);
     const binding = Option.getOrUndefined(bindingOption);
     if (!binding) {
+      if (input.missingBindingIsMissingSession) {
+        return yield* new ProviderSessionNotFoundError({
+          threadId: input.threadId,
+        });
+      }
       return yield* toValidationError(
         input.operation,
         `Cannot route thread '${input.threadId}' because no persisted provider binding exists.`,
@@ -1277,6 +1283,9 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         // Starting a replacement process here cannot recreate that callback
         // and can make a stale answer look acknowledged when it was not.
         allowRecovery: false,
+        // Unlike ordinary routing, absence of a durable binding here proves
+        // that no provider runtime can still own the one-shot callback.
+        missingBindingIsMissingSession: true,
       });
       metricProvider = routed.adapter.provider;
       if (!routed.isActive) {

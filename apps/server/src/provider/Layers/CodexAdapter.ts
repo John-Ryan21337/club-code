@@ -65,6 +65,7 @@ import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import {
   CodexResumeCursorSchema,
+  CodexSessionRuntimePendingUserInputNotFoundError,
   CodexSessionRuntimeThreadIdMissingError,
   makeCodexSessionRuntime,
   type CodexSessionRuntimeError,
@@ -78,6 +79,9 @@ const isCodexAppServerProcessExitedError = Schema.is(CodexErrors.CodexAppServerP
 const isCodexAppServerTransportError = Schema.is(CodexErrors.CodexAppServerTransportError);
 const isCodexSessionRuntimeThreadIdMissingError = Schema.is(
   CodexSessionRuntimeThreadIdMissingError,
+);
+const isCodexSessionRuntimePendingUserInputNotFoundError = Schema.is(
+  CodexSessionRuntimePendingUserInputNotFoundError,
 );
 const isCodexResumeCursorSchema = Schema.is(CodexResumeCursorSchema);
 
@@ -142,6 +146,16 @@ function mapCodexRuntimeError(
     return new ProviderAdapterSessionNotFoundError({
       provider: PROVIDER,
       threadId,
+      cause: error,
+    });
+  }
+
+  if (isCodexSessionRuntimePendingUserInputNotFoundError(error)) {
+    return new ProviderAdapterRequestError({
+      provider: PROVIDER,
+      method,
+      detail: error.message,
+      remoteErrorTag: error._tag,
       cause: error,
     });
   }
