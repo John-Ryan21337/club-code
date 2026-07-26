@@ -4,6 +4,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 
+import { unsupportedGpuTelemetry } from "./GpuTelemetry.ts";
 import type {
   HostSystemTelemetrySample,
   HostSystemTelemetrySamplerShape,
@@ -107,6 +108,32 @@ describe("ProjectSystemTelemetry", () => {
       expect(DateTime.toEpochMillis(result.sampledAt)).toBe(1_000);
       expect(fixture.hostCalls).toEqual([{ sampledAtMonotonicMs: 1_000, platform: "linux" }]);
       expect(fixture.volumeRoots).toEqual(["/selected/project"]);
+    }));
+
+  it("reports GPU as an explicit unsupported measurement until a probe exists", () =>
+    Effect.gen(function* () {
+      const fixture = makeFixture({});
+      const result = yield* fixture.telemetry.read({ projectId, workspaceRoot: "/project" });
+
+      // No probe ships in this slice, so the field is present and honest
+      // rather than absent or optimistically blank.
+      expect(result.gpu).toEqual(unsupportedGpuTelemetry());
+      expect(result.gpu.reason).toBe("unsupported");
+    }));
+
+  it("keeps the GPU field present when the volume read fails", () =>
+    Effect.gen(function* () {
+      const fixture = makeFixture({
+        volumeRead: async () => {
+          throw new Error("/private/project");
+        },
+      });
+      const result = yield* fixture.telemetry.read({ projectId, workspaceRoot: "/project" });
+
+      expect(result.gpu).toEqual(unsupportedGpuTelemetry());
+      expect(result.projectVolume).toEqual(unavailableProjectVolumeTelemetry());
+      expect(result.cpu).toEqual(availableHost.cpu);
+      expect(JSON.stringify(result)).not.toContain("private");
     }));
 
   it("returns the exact cached result inside one second", () =>

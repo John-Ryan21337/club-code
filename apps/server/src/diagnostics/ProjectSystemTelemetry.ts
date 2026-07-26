@@ -11,6 +11,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
+import { unsupportedGpuTelemetry } from "./GpuTelemetry.ts";
 import {
   makeHostSystemTelemetrySampler,
   makeLiveHostSystemTelemetryRuntime,
@@ -181,6 +182,11 @@ export function makeProjectSystemTelemetry(
       host = unavailableHostSample();
     }
 
+    // No GPU probe exists yet in this slice. The field is reported as an
+    // explicit unsupported measurement rather than omitted, so the transport
+    // contract is complete and no caller has to treat `gpu` as optional.
+    const gpu = unsupportedGpuTelemetry();
+
     const pending = Promise.resolve()
       .then(() => dependencies.volumeSampler.read(input.workspaceRoot))
       .then(
@@ -192,6 +198,7 @@ export function makeProjectSystemTelemetry(
           architecture,
           cpu: host.cpu,
           memory: host.memory,
+          gpu,
           projectVolume,
         }),
         () => ({
@@ -202,6 +209,7 @@ export function makeProjectSystemTelemetry(
           architecture,
           cpu: host.cpu,
           memory: host.memory,
+          gpu,
           projectVolume: unavailableProjectVolumeTelemetry(),
         }),
       )

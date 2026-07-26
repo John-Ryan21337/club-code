@@ -799,6 +799,12 @@ const buildAppUnderTest = (options?: {
                   utilizationPercent: null,
                   detail: "Memory telemetry is unavailable.",
                 },
+                gpu: {
+                  status: "unavailable",
+                  adapters: [],
+                  reason: "unsupported",
+                  detail: "No supported GPU telemetry source is available on this system.",
+                },
                 projectVolume: {
                   status: "unavailable",
                   totalBytes: null,
@@ -3244,6 +3250,12 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                       availableBytes: 500,
                       utilizationPercent: 50,
                       detail: null,
+                    },
+                    gpu: {
+                      status: "unavailable" as const,
+                      adapters: [],
+                      reason: "unsupported" as const,
+                      detail: "No supported GPU telemetry source is available on this system.",
                     },
                     projectVolume: {
                       status: "available" as const,

@@ -3,6 +3,10 @@ import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vitest";
 
 import {
+  MAX_GPU_ADAPTER_INDEX,
+  MAX_GPU_ADAPTER_NAME_LENGTH,
+  MAX_GPU_ADAPTERS,
+  MAX_GPU_MEMORY_BYTES,
   ServerProjectSystemTelemetryError,
   ServerProjectSystemTelemetryInput,
   ServerProjectSystemTelemetryResult,
@@ -33,6 +37,21 @@ function projectSystemTelemetryFixture() {
       usedBytes: 6_000,
       availableBytes: 2_000,
       utilizationPercent: 75,
+      detail: null,
+    },
+    gpu: {
+      status: "available",
+      adapters: [
+        {
+          index: 0,
+          name: "NVIDIA GeForce RTX 4090",
+          utilizationPercent: 15,
+          memoryTotalBytes: 25_757_220_864,
+          memoryUsedBytes: 3_589_128_192,
+          memoryUtilizationPercent: 13.93,
+        },
+      ],
+      reason: null,
       detail: null,
     },
     projectVolume: {
@@ -165,5 +184,104 @@ describe("ServerProjectSystemTelemetryResult", () => {
       utilizationPercent: 100,
       detail: null,
     });
+  });
+
+  it("pairs GPU status with adapters and a machine-readable reason", () => {
+    const input = projectSystemTelemetryFixture();
+    const unavailable = {
+      status: "unavailable" as const,
+      adapters: [],
+      reason: "unsupported" as const,
+      detail: "No supported GPU telemetry source is available on this system.",
+    };
+
+    expect(decodeProjectSystemTelemetry({ ...input, gpu: unavailable }).gpu).toEqual(unavailable);
+    for (const reason of ["unsupported", "probe-failed", "malformed"]) {
+      expect(
+        decodeProjectSystemTelemetry({ ...input, gpu: { ...unavailable, reason } }).gpu.reason,
+      ).toBe(reason);
+    }
+
+    // available requires at least one adapter and a null reason/detail
+    expect(() =>
+      decodeProjectSystemTelemetry({
+        ...input,
+        gpu: { status: "available", adapters: [], reason: null, detail: null },
+      }),
+    ).toThrow();
+    expect(() =>
+      decodeProjectSystemTelemetry({ ...input, gpu: { ...input.gpu, reason: "malformed" } }),
+    ).toThrow();
+    // unavailable must not carry adapters and needs a known reason
+    expect(() =>
+      decodeProjectSystemTelemetry({
+        ...input,
+        gpu: { ...unavailable, adapters: input.gpu.adapters },
+      }),
+    ).toThrow();
+    expect(() =>
+      decodeProjectSystemTelemetry({ ...input, gpu: { ...unavailable, reason: "no-driver" } }),
+    ).toThrow();
+  });
+
+  it("bounds GPU adapter cardinality at exactly the documented maximum", () => {
+    const input = projectSystemTelemetryFixture();
+    const adapter = input.gpu.adapters[0]!;
+    const build = (count: number) =>
+      Array.from({ length: count }, (_, index) => ({ ...adapter, index }));
+
+    const atLimit = decodeProjectSystemTelemetry({
+      ...input,
+      gpu: { ...input.gpu, adapters: build(MAX_GPU_ADAPTERS) },
+    });
+    expect(atLimit.gpu.status === "available" ? atLimit.gpu.adapters : []).toHaveLength(
+      MAX_GPU_ADAPTERS,
+    );
+
+    expect(() =>
+      decodeProjectSystemTelemetry({
+        ...input,
+        gpu: { ...input.gpu, adapters: build(MAX_GPU_ADAPTERS + 1) },
+      }),
+    ).toThrow();
+  });
+
+  it("bounds each GPU adapter field and rejects control characters in names", () => {
+    const input = projectSystemTelemetryFixture();
+    const adapter = input.gpu.adapters[0]!;
+    const rejects = (overrides: Record<string, unknown>) =>
+      expect(() =>
+        decodeProjectSystemTelemetry({
+          ...input,
+          gpu: { ...input.gpu, adapters: [{ ...adapter, ...overrides }] },
+        }),
+      ).toThrow();
+
+    rejects({ utilizationPercent: 101 });
+    rejects({ utilizationPercent: -1 });
+    rejects({ memoryUtilizationPercent: 100.1 });
+    rejects({ memoryTotalBytes: 0 });
+    rejects({ index: -1 });
+    rejects({ index: MAX_GPU_ADAPTER_INDEX + 1 });
+    rejects({ name: "" });
+    rejects({ name: "x".repeat(MAX_GPU_ADAPTER_NAME_LENGTH + 1) });
+    // `Schema.Int` alone would admit 1e300, so the explicit byte ceiling matters.
+    rejects({ memoryTotalBytes: 1e300 });
+    rejects({ memoryUsedBytes: MAX_GPU_MEMORY_BYTES + 2 });
+    for (const codePoint of [0x00, 0x1b, 0x9b, 0xad, 0x200d, 0x202e, 0x2028, 0xe000]) {
+      rejects({ name: `NVIDIA ${String.fromCodePoint(codePoint)} RTX` });
+    }
+
+    // The contract bounds per-field ranges only; the cross-field
+    // used-exceeds-total rule is enforced by the server-side parser.
+    expect(() =>
+      decodeProjectSystemTelemetry({
+        ...input,
+        gpu: {
+          ...input.gpu,
+          adapters: [{ ...adapter, memoryUsedBytes: adapter.memoryTotalBytes + 1 }],
+        },
+      }),
+    ).not.toThrow();
   });
 });
