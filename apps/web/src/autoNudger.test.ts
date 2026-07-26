@@ -220,6 +220,19 @@ describe("auto nudger safety gates", () => {
     ).toBe(false);
   });
 
+  it("rejects a scheduled send after the selected thread advances to another terminal turn", () => {
+    expect(
+      canDispatchAutoNudge({
+        scheduledTurnKey: eligible.terminalTurnKey,
+        current: {
+          ...eligible,
+          terminalTurnKey: "environment:thread:next-turn",
+        },
+        alreadyConsumed: false,
+      }),
+    ).toBe(false);
+  });
+
   it("invalidates a hidden-chat timer and safely re-arms a new visible turn", () => {
     let nextTimer = 1;
     let now = 1_000;
