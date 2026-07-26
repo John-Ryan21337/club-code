@@ -40,6 +40,8 @@ import {
   resolveThreadWorkspaceDirectories,
 } from "../../checkpointing/Utils.ts";
 import { increment, orchestrationEventsProcessedTotal } from "../../observability/Metrics.ts";
+import { ProjectionThreadActivityRepositoryLive } from "../../persistence/Layers/ProjectionThreadActivities.ts";
+import { ProjectionThreadActivityRepository } from "../../persistence/Services/ProjectionThreadActivities.ts";
 import { ProviderAdapterProcessError, ProviderAdapterRequestError } from "../../provider/Errors.ts";
 import type { ProviderServiceError } from "../../provider/Errors.ts";
 import { TextGeneration } from "../../textGeneration/TextGeneration.ts";
@@ -47,9 +49,29 @@ import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import {
+  USER_INPUT_CALLBACK_OWNERSHIP_LOST_KIND,
+  USER_INPUT_RECOVERY_ACCEPTED_KIND,
+  USER_INPUT_RECOVERY_MESSAGE_ID_PREFIX,
+  USER_INPUT_RECOVERY_PENDING_KIND,
+  composeStoppedSessionUserInputRecoveryMessage,
+  findPendingUserInputRecovery,
+  findUserInputCallbackOwnershipLoss,
+  findUserInputRequestContext,
+  hasResolvedUserInputRequest,
+  threadCarriesRecoveryContinuationMessage,
+  type PendingUserInputRecovery,
+  type UserInputCallbackOwnershipLoss,
+  userInputRecoveryIdentity,
+  userInputRecoveryMessageId,
+} from "../UserInputRecovery.ts";
+import {
   ProviderCommandReactor,
   type ProviderCommandReactorShape,
 } from "../Services/ProviderCommandReactor.ts";
+import {
+  classifyUserInputCallbackOwnershipLoss,
+  makeUserInputRecoveryDeliveryState,
+} from "../UserInputRecoveryRuntime.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
@@ -403,14 +425,6 @@ function isUnknownPendingApprovalRequestError(cause: Cause.Cause<ProviderService
   );
 }
 
-function isUnknownPendingUserInputRequestError(cause: Cause.Cause<ProviderServiceError>): boolean {
-  const error = findProviderAdapterRequestError(cause);
-  if (error) {
-    return error.detail.toLowerCase().includes("unknown pending user-input request");
-  }
-  return Cause.pretty(cause).toLowerCase().includes("unknown pending user-input request");
-}
-
 function stalePendingRequestDetail(
   requestKind: "approval" | "user-input",
   requestId: string,
@@ -445,6 +459,7 @@ function buildGeneratedWorktreeBranchName(raw: string): string {
 const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
+  const projectionThreadActivityRepository = yield* ProjectionThreadActivityRepository;
   const providerService = yield* ProviderService;
   const serverConfig = yield* ServerConfig;
   const gitWorkflow = yield* GitWorkflowService;
@@ -461,7 +476,7 @@ const make = Effect.gen(function* () {
     timeToLive: HANDLED_TURN_START_KEY_TTL,
     lookup: () => Effect.succeed(true),
   });
-
+  const userInputRecoveryDeliveryState = makeUserInputRecoveryDeliveryState();
   const hasHandledTurnStartRecently = (key: string) =>
     Cache.getOption(handledTurnStartKeys, key).pipe(
       Effect.flatMap((cached) =>
@@ -628,6 +643,156 @@ const make = Effect.gen(function* () {
       .getThreadDetailById(threadId)
       .pipe(Effect.map(Option.getOrUndefined));
   });
+
+  const resolveUserInputRecoveryView = (
+    thread: Pick<OrchestrationThread, "id" | "messages">,
+    filter: {
+      readonly requestId?: string;
+      readonly recoveryMessageId?: MessageId;
+    },
+  ) =>
+    projectionThreadActivityRepository
+      .listUserInputAccountingByThreadId({
+        threadId: thread.id,
+        ...filter,
+      })
+      .pipe(
+        Effect.map((activities) => ({
+          activities,
+          messages: thread.messages,
+        })),
+      );
+
+  const resolveProvenUserInputRecovery = Effect.fnUntraced(function* (input: {
+    readonly threadId: ThreadId;
+    readonly recoveryMessageId: MessageId;
+  }) {
+    if (!input.recoveryMessageId.startsWith(USER_INPUT_RECOVERY_MESSAGE_ID_PREFIX)) {
+      return undefined;
+    }
+    const thread = yield* resolveThread(input.threadId);
+    if (!thread) {
+      return undefined;
+    }
+    const recoveryView = yield* resolveUserInputRecoveryView(thread, {
+      recoveryMessageId: input.recoveryMessageId,
+    });
+    const pendingRecovery = findPendingUserInputRecovery(recoveryView, input.recoveryMessageId);
+    if (pendingRecovery === undefined) {
+      return undefined;
+    }
+    if (
+      userInputRecoveryMessageId(input.threadId, pendingRecovery.requestId) !==
+        pendingRecovery.recoveryMessageId ||
+      !threadCarriesRecoveryContinuationMessage(recoveryView, pendingRecovery)
+    ) {
+      yield* Effect.logWarning(
+        "provider command reactor refused to resolve user input from an unproven recovery message",
+        {
+          threadId: input.threadId,
+          requestId: pendingRecovery.requestId,
+          recoveryMessageId: pendingRecovery.recoveryMessageId,
+        },
+      );
+      return undefined;
+    }
+    return pendingRecovery;
+  });
+
+  const dispatchRecoveredUserInputProviderAcceptance = Effect.fnUntraced(function* (input: {
+    readonly threadId: ThreadId;
+    readonly recoveryMessageId: MessageId;
+    readonly acceptedAt: string;
+  }) {
+    const pendingRecovery = yield* resolveProvenUserInputRecovery(input);
+    if (pendingRecovery === undefined) {
+      return false;
+    }
+    const recoveryIdentity = userInputRecoveryIdentity(input.threadId, pendingRecovery.requestId);
+    yield* orchestrationEngine.dispatch({
+      type: "thread.activity.append",
+      commandId: CommandId.make(`server:user-input-recovery-accepted:${recoveryIdentity}`),
+      threadId: input.threadId,
+      activity: {
+        id: EventId.make(`user-input-recovery-accepted:${recoveryIdentity}`),
+        tone: "info",
+        kind: USER_INPUT_RECOVERY_ACCEPTED_KIND,
+        summary: "User input recovery accepted by provider",
+        payload: {
+          requestId: pendingRecovery.requestId,
+          recoveryMessageId: pendingRecovery.recoveryMessageId,
+          acceptedAt: input.acceptedAt,
+        },
+        turnId: pendingRecovery.requestTurnId,
+        createdAt: input.acceptedAt,
+      },
+      createdAt: input.acceptedAt,
+    });
+    return true;
+  });
+
+  const dispatchRecoveredUserInputResolution = Effect.fnUntraced(function* (input: {
+    readonly threadId: ThreadId;
+    readonly recoveryMessageId: MessageId;
+    readonly acceptedAt: string;
+  }) {
+    const pendingRecovery = yield* resolveProvenUserInputRecovery(input);
+    if (pendingRecovery === undefined) {
+      return false;
+    }
+    const recoveryIdentity = userInputRecoveryIdentity(input.threadId, pendingRecovery.requestId);
+    yield* orchestrationEngine.dispatch({
+      type: "thread.activity.append",
+      commandId: CommandId.make(`server:user-input-resolved:${recoveryIdentity}`),
+      threadId: input.threadId,
+      activity: {
+        id: EventId.make(`user-input-resolved:${recoveryIdentity}`),
+        tone: "info",
+        kind: "user-input.resolved",
+        summary: "User input continued in a new provider turn",
+        payload: {
+          requestId: pendingRecovery.requestId,
+          answers: pendingRecovery.answers,
+          resolution: "new-turn-after-provider-session-loss",
+          recoveryMessageId: pendingRecovery.recoveryMessageId,
+        },
+        turnId: pendingRecovery.requestTurnId,
+        createdAt: input.acceptedAt,
+      },
+      createdAt: input.acceptedAt,
+    });
+    return true;
+  });
+
+  const resolveRecoveredUserInputAfterProviderAcceptance = (input: {
+    readonly threadId: ThreadId;
+    readonly recoveryMessageId: MessageId;
+    readonly acceptedAt: string;
+  }) => {
+    userInputRecoveryDeliveryState.rememberAcceptedMessage(input.recoveryMessageId);
+    return dispatchRecoveredUserInputProviderAcceptance(input).pipe(
+      Effect.flatMap((accepted) =>
+        accepted ? dispatchRecoveredUserInputResolution(input) : Effect.succeed(false),
+      ),
+      Effect.tap((resolved) =>
+        resolved
+          ? Effect.sync(() =>
+              userInputRecoveryDeliveryState.forgetAcceptedMessage(input.recoveryMessageId),
+            )
+          : Effect.void,
+      ),
+      Effect.catchCause((cause) =>
+        Effect.logWarning(
+          "provider command reactor could not resolve a recovered user input after provider acceptance",
+          {
+            threadId: input.threadId,
+            recoveryMessageId: input.recoveryMessageId,
+            cause: Cause.pretty(cause),
+          },
+        ),
+      ),
+    );
+  };
 
   const recoverInterruptedTurnStartsOnStartup = Effect.fn("recoverInterruptedTurnStartsOnStartup")(
     function* () {
@@ -1821,12 +1986,25 @@ const make = Effect.gen(function* () {
     };
 
     yield* providerService.sendTurn(sendTurnRequest.value).pipe(
-      Effect.tap((turn) =>
-        markThreadRunningFromSendTurnResult({
+      Effect.tap(() =>
+        resolveRecoveredUserInputAfterProviderAcceptance({
           threadId: event.payload.threadId,
-          turnId: turn.turnId,
-          createdAt: event.payload.createdAt,
+          recoveryMessageId: event.payload.messageId,
+          acceptedAt: event.payload.createdAt,
         }),
+      ),
+      Effect.tap((turn) =>
+        userInputRecoveryDeliveryState.protectAcceptedBookkeeping(
+          {
+            threadId: event.payload.threadId,
+            recoveryMessageId: event.payload.messageId,
+          },
+          markThreadRunningFromSendTurnResult({
+            threadId: event.payload.threadId,
+            turnId: turn.turnId,
+            createdAt: event.payload.createdAt,
+          }),
+        ),
       ),
       Effect.catchCause((cause) => {
         const activeTurnId = detectCodexActiveTurnRunningStartFailure(cause);
@@ -2309,20 +2487,264 @@ const make = Effect.gen(function* () {
     function* (
       event: Extract<ProviderIntentEvent, { type: "thread.user-input-response-requested" }>,
     ) {
-      const thread = yield* resolveThread(event.payload.threadId);
-      if (!thread) {
+      const initialThread = yield* resolveThread(event.payload.threadId);
+      if (!initialThread) {
         return;
       }
-      const hasSession = thread.session && thread.session.status !== "stopped";
-      if (!hasSession) {
-        return yield* appendProviderFailureActivity({
+      const initialRecoveryView = yield* resolveUserInputRecoveryView(initialThread, {
+        requestId: event.payload.requestId,
+      });
+      if (hasResolvedUserInputRequest(initialRecoveryView, event.payload.requestId)) {
+        return;
+      }
+
+      const recoveryIdentity = userInputRecoveryIdentity(
+        event.payload.threadId,
+        event.payload.requestId,
+      );
+      const recoveryMessageId = userInputRecoveryMessageId(
+        event.payload.threadId,
+        event.payload.requestId,
+      );
+      const responseAttemptIdentity = userInputRecoveryIdentity(
+        event.payload.threadId,
+        `${event.payload.requestId}\0${String(event.commandId ?? event.eventId)}`,
+      );
+      const appendResolvedActivity = (input: { readonly createdAt: string }) =>
+        orchestrationEngine.dispatch({
+          type: "thread.activity.append",
+          commandId: CommandId.make(`server:user-input-resolved:${recoveryIdentity}`),
           threadId: event.payload.threadId,
-          kind: "provider.user-input.respond.failed",
-          summary: "Provider user input response failed",
-          detail: "No active provider session is bound to this thread.",
-          turnId: null,
-          createdAt: event.payload.createdAt,
-          requestId: event.payload.requestId,
+          activity: {
+            id: EventId.make(`user-input-resolved:${recoveryIdentity}`),
+            tone: "info",
+            kind: "user-input.resolved",
+            summary: "User input sent to provider",
+            payload: {
+              requestId: event.payload.requestId,
+              answers: event.payload.answers,
+              resolution: "provider-callback-forwarded",
+            },
+            turnId:
+              findUserInputRequestContext(initialRecoveryView, event.payload.requestId)?.turnId ??
+              null,
+            createdAt: input.createdAt,
+          },
+          createdAt: input.createdAt,
+        });
+
+      const recoverAnswerAsVisibleTurn = (input: {
+        readonly loss: UserInputCallbackOwnershipLoss;
+        readonly recordOwnershipLoss: boolean;
+        readonly pendingRecovery?: PendingUserInputRecovery;
+      }) =>
+        Effect.gen(function* () {
+          const thread = yield* resolveThread(event.payload.threadId);
+          if (!thread) {
+            return;
+          }
+          const recoveryView = yield* resolveUserInputRecoveryView(thread, {
+            requestId: event.payload.requestId,
+          });
+          if (hasResolvedUserInputRequest(recoveryView, event.payload.requestId)) {
+            return;
+          }
+          const pendingRecovery =
+            input.pendingRecovery ?? findPendingUserInputRecovery(recoveryView, recoveryMessageId);
+          const requestContext = findUserInputRequestContext(recoveryView, event.payload.requestId);
+          const recoveredAt = DateTime.formatIso(yield* DateTime.now);
+
+          // Once the provider has explicitly rejected this callback's
+          // ownership, remember that fact before attempting any continuation
+          // bookkeeping. A distinct Submit can then retry the durable visible
+          // turn without repeatedly calling a callback that no runtime owns.
+          if (input.recordOwnershipLoss) {
+            yield* orchestrationEngine.dispatch({
+              type: "thread.activity.append",
+              commandId: CommandId.make(
+                `server:user-input-callback-ownership-lost:${recoveryIdentity}`,
+              ),
+              threadId: event.payload.threadId,
+              activity: {
+                id: EventId.make(`user-input-callback-ownership-lost:${recoveryIdentity}`),
+                tone: "info",
+                kind: USER_INPUT_CALLBACK_OWNERSHIP_LOST_KIND,
+                summary: "Provider user input callback ownership ended",
+                payload: {
+                  requestId: event.payload.requestId,
+                  loss: input.loss,
+                },
+                turnId: pendingRecovery?.requestTurnId ?? requestContext?.turnId ?? null,
+                createdAt: recoveredAt,
+              },
+              createdAt: recoveredAt,
+            });
+          }
+
+          if (pendingRecovery === undefined && requestContext === undefined) {
+            return yield* appendProviderFailureActivity({
+              threadId: event.payload.threadId,
+              kind: "provider.user-input.respond.failed",
+              summary: "Provider user input response failed",
+              detail: stalePendingRequestDetail("user-input", event.payload.requestId),
+              turnId: null,
+              createdAt: event.payload.createdAt,
+              requestId: event.payload.requestId,
+            });
+          }
+
+          const recoveryAnswers = pendingRecovery?.answers ?? event.payload.answers;
+          const recoveryMessage =
+            pendingRecovery?.recoveryMessageText ??
+            composeStoppedSessionUserInputRecoveryMessage({
+              answers: recoveryAnswers,
+              questions: requestContext?.questions ?? [],
+            });
+          if (recoveryMessage === undefined) {
+            return yield* appendProviderFailureActivity({
+              threadId: event.payload.threadId,
+              kind: "provider.user-input.respond.failed",
+              summary: "Provider user input response failed",
+              detail:
+                "The provider callback is no longer available and the submitted structured response is too large to continue safely in one provider turn. Shorten the response and submit it again.",
+              turnId: pendingRecovery?.requestTurnId ?? requestContext?.turnId ?? null,
+              createdAt: event.payload.createdAt,
+              requestId: event.payload.requestId,
+            });
+          }
+
+          const recoveryMessageAlreadyExists = thread.messages.some(
+            (message) => message.id === recoveryMessageId,
+          );
+
+          if (input.recordOwnershipLoss && !recoveryMessageAlreadyExists) {
+            if (
+              input.loss === "session-missing" &&
+              thread.session !== null &&
+              (thread.session.status !== "stopped" || thread.session.activeTurnId !== null)
+            ) {
+              // A typed local/remote session-not-found result proves that the
+              // provider process no longer owns this callback. Reconcile only
+              // that proven boundary; transport failures never enter here.
+              yield* orchestrationEngine.dispatch({
+                type: "thread.session.set",
+                commandId: CommandId.make(
+                  `server:user-input-recovery-stop-session:${responseAttemptIdentity}`,
+                ),
+                threadId: event.payload.threadId,
+                session: {
+                  ...thread.session,
+                  status: "stopped",
+                  activeTurnId: null,
+                  updatedAt: recoveredAt,
+                },
+                createdAt: recoveredAt,
+              });
+            } else if (
+              input.loss === "callback-missing" &&
+              thread.session?.status === "running" &&
+              thread.session.activeTurnId === null
+            ) {
+              // The live process exists but explicitly does not own this old
+              // request. With no active turn, normalize the stale projection
+              // to ready so the continuation starts instead of being rejected
+              // as a phantom running turn.
+              yield* orchestrationEngine.dispatch({
+                type: "thread.session.set",
+                commandId: CommandId.make(
+                  `server:user-input-recovery-ready-session:${responseAttemptIdentity}`,
+                ),
+                threadId: event.payload.threadId,
+                session: {
+                  ...thread.session,
+                  status: "ready",
+                  activeTurnId: null,
+                  updatedAt: recoveredAt,
+                },
+                createdAt: recoveredAt,
+              });
+            }
+          }
+
+          // Persist the submitted answer separately from the visible message so
+          // a later queued-follow-up delivery can close the exact old request.
+          // The old card remains pending until sendTurn/steerTurn returns
+          // successfully; merely committing this command is not provider
+          // acceptance. The exact continuation text is persisted alongside the
+          // answer because delivery of *that* message is what proves the
+          // provider received the answer.
+          if (pendingRecovery === undefined) {
+            yield* orchestrationEngine.dispatch({
+              type: "thread.activity.append",
+              commandId: CommandId.make(
+                `server:user-input-recovery-pending:${responseAttemptIdentity}`,
+              ),
+              threadId: event.payload.threadId,
+              activity: {
+                id: EventId.make(`user-input-recovery-pending:${recoveryIdentity}`),
+                tone: "info",
+                kind: USER_INPUT_RECOVERY_PENDING_KIND,
+                summary: "User input recovery pending provider acceptance",
+                payload: {
+                  requestId: event.payload.requestId,
+                  answers: recoveryAnswers,
+                  recoveryMessageId,
+                  recoveryMessageText: recoveryMessage,
+                },
+                turnId: requestContext?.turnId ?? null,
+                createdAt: recoveredAt,
+              },
+              createdAt: recoveredAt,
+            });
+          }
+
+          // Re-dispatch on a distinct Submit even when the deterministic
+          // message already exists. That is required after a prior queued or
+          // rejected attempt; the decider routes it to a steer when a turn is
+          // active and to a new turn otherwise.
+          yield* orchestrationEngine.dispatch({
+            type: "thread.turn.start",
+            commandId: CommandId.make(`server:user-input-recovery-turn:${responseAttemptIdentity}`),
+            threadId: event.payload.threadId,
+            message: {
+              messageId: recoveryMessageId,
+              role: "user",
+              text: recoveryMessage,
+              attachments: [],
+            },
+            modelSelection: thread.modelSelection,
+            runtimeMode: thread.runtimeMode,
+            interactionMode: thread.interactionMode,
+            createdAt: recoveredAt,
+          });
+        }).pipe(
+          Effect.catchCause((recoveryCause) =>
+            appendProviderFailureActivity({
+              threadId: event.payload.threadId,
+              kind: "provider.user-input.respond.failed",
+              summary: "Provider user input recovery failed",
+              detail: `Cafe Code preserved the submitted answer, but could not start its visible continuation. Submit again to retry: ${formatFailureDetail(recoveryCause)}`,
+              turnId:
+                findUserInputRequestContext(initialRecoveryView, event.payload.requestId)?.turnId ??
+                null,
+              createdAt: event.payload.createdAt,
+              requestId: event.payload.requestId,
+            }),
+          ),
+        );
+
+      const pendingRecovery = findPendingUserInputRecovery(initialRecoveryView, recoveryMessageId);
+      const recordedOwnershipLoss = findUserInputCallbackOwnershipLoss(
+        initialRecoveryView,
+        event.payload.requestId,
+      );
+      if (pendingRecovery !== undefined || recordedOwnershipLoss !== undefined) {
+        return yield* recoverAnswerAsVisibleTurn({
+          loss:
+            recordedOwnershipLoss ??
+            (initialThread.session?.status === "stopped" ? "session-missing" : "callback-missing"),
+          recordOwnershipLoss: false,
+          ...(pendingRecovery !== undefined ? { pendingRecovery } : {}),
         });
       }
 
@@ -2333,19 +2755,31 @@ const make = Effect.gen(function* () {
           answers: event.payload.answers,
         })
         .pipe(
-          Effect.catchCause((cause) =>
-            appendProviderFailureActivity({
-              threadId: event.payload.threadId,
-              kind: "provider.user-input.respond.failed",
-              summary: "Provider user input response failed",
-              detail: isUnknownPendingUserInputRequestError(cause)
-                ? stalePendingRequestDetail("user-input", event.payload.requestId)
-                : Cause.pretty(cause),
-              turnId: null,
-              createdAt: event.payload.createdAt,
-              requestId: event.payload.requestId,
-            }),
-          ),
+          Effect.matchCauseEffect({
+            onFailure: (cause) => {
+              const ownershipLoss = classifyUserInputCallbackOwnershipLoss(cause);
+              return ownershipLoss !== undefined
+                ? recoverAnswerAsVisibleTurn({
+                    loss: ownershipLoss,
+                    recordOwnershipLoss: true,
+                  })
+                : appendProviderFailureActivity({
+                    threadId: event.payload.threadId,
+                    kind: "provider.user-input.respond.failed",
+                    summary: "Provider user input response failed",
+                    detail: formatFailureDetail(cause),
+                    turnId:
+                      findUserInputRequestContext(initialRecoveryView, event.payload.requestId)
+                        ?.turnId ?? null,
+                    createdAt: event.payload.createdAt,
+                    requestId: event.payload.requestId,
+                  });
+            },
+            onSuccess: () =>
+              appendResolvedActivity({
+                createdAt: event.payload.createdAt,
+              }),
+          }),
         );
     },
   );
@@ -2486,4 +2920,6 @@ const make = Effect.gen(function* () {
   } satisfies ProviderCommandReactorShape;
 });
 
-export const ProviderCommandReactorLive = Layer.effect(ProviderCommandReactor, make);
+export const ProviderCommandReactorLive = Layer.effect(ProviderCommandReactor, make).pipe(
+  Layer.provide(ProjectionThreadActivityRepositoryLive),
+);
