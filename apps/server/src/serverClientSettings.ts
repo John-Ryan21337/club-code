@@ -75,6 +75,13 @@ export interface ServerClientSettingsShape {
     patch: ClientSettingsPatch,
   ) => Effect.Effect<ClientSettings, ClientSettingsError>;
 
+  /**
+   * Serialize a settings-dependent side effect with settings writes and file
+   * watcher revalidation. The effect must stay bounded and must not call
+   * updateSettings recursively.
+   */
+  readonly withExclusiveAccess: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
+
   /** Stream of settings change events. */
   readonly streamChanges: Stream.Stream<ClientSettings>;
 }
@@ -93,20 +100,24 @@ export class ServerClientSettingsService extends Context.Service<
         });
         const currentSettingsRef = yield* Ref.make<ClientSettings>(initialSettings);
         const changesPubSub = yield* PubSub.unbounded<ClientSettings>();
+        const writeSemaphore = yield* Semaphore.make(1);
 
         return {
           start: Effect.void,
           ready: Effect.void,
           getSettings: Ref.get(currentSettingsRef),
           updateSettings: (patch) =>
-            Ref.get(currentSettingsRef).pipe(
-              Effect.map((currentSettings) => applyClientSettingsPatch(currentSettings, patch)),
-              Effect.flatMap(normalizeClientSettings),
-              Effect.tap((nextSettings) => Ref.set(currentSettingsRef, nextSettings)),
-              Effect.tap((nextSettings) =>
-                PubSub.publish(changesPubSub, nextSettings).pipe(Effect.asVoid),
+            writeSemaphore.withPermits(1)(
+              Ref.get(currentSettingsRef).pipe(
+                Effect.map((currentSettings) => applyClientSettingsPatch(currentSettings, patch)),
+                Effect.flatMap(normalizeClientSettings),
+                Effect.tap((nextSettings) => Ref.set(currentSettingsRef, nextSettings)),
+                Effect.tap((nextSettings) =>
+                  PubSub.publish(changesPubSub, nextSettings).pipe(Effect.asVoid),
+                ),
               ),
             ),
+          withExclusiveAccess: (effect) => writeSemaphore.withPermits(1)(effect),
           streamChanges: Stream.fromPubSub(changesPubSub),
         } satisfies ServerClientSettingsShape;
       }),
@@ -306,6 +317,7 @@ const makeServerClientSettings = Effect.gen(function* () {
           return next;
         }),
       ),
+    withExclusiveAccess: (effect) => writeSemaphore.withPermits(1)(effect),
     streamChanges: Stream.fromPubSub(changesPubSub),
   } satisfies ServerClientSettingsShape;
 });

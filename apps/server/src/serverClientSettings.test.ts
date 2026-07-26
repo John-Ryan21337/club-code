@@ -5,6 +5,7 @@ import {
   MAX_SIDEBAR_STAR_SPEED,
 } from "@cafecode/contracts";
 import { assert, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
@@ -119,6 +120,32 @@ it.layer(NodeServices.layer)("server client settings", (it) => {
       assert.equal(persisted.powerSaveBlockerMode, "during-chats");
       assert.equal(persisted.showSidebarMascot, DEFAULT_CLIENT_SETTINGS.showSidebarMascot);
       assert.equal(persisted.chatCopyFormat, DEFAULT_CLIENT_SETTINGS.chatCopyFormat);
+    }).pipe(Effect.provide(makeServerClientSettingsLayer())),
+  );
+
+  it.effect("serializes settings-dependent side effects with settings updates", () =>
+    Effect.gen(function* () {
+      const service = yield* ServerClientSettingsService;
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const updateStarted = yield* Deferred.make<void>();
+      const exclusive = yield* service
+        .withExclusiveAccess(
+          Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release))),
+        )
+        .pipe(Effect.forkScoped);
+
+      yield* Deferred.await(entered);
+      const update = yield* Deferred.succeed(updateStarted, undefined).pipe(
+        Effect.andThen(service.updateSettings({ brandWordmarkPrefix: "Serialized" })),
+        Effect.forkScoped,
+      );
+      yield* Deferred.await(updateStarted);
+      assert.notEqual((yield* service.getSettings).brandWordmarkPrefix, "Serialized");
+
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(exclusive);
+      assert.equal((yield* Fiber.join(update)).brandWordmarkPrefix, "Serialized");
     }).pipe(Effect.provide(makeServerClientSettingsLayer())),
   );
 
