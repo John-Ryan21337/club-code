@@ -1,6 +1,8 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
@@ -315,6 +317,64 @@ describe("DesktopWindow", () => {
           [false, "floating"],
         ]);
         assert.equal(fakeWindow.focus.mock.calls.length, 0);
+      }).pipe(Effect.provide(layer));
+    }),
+  );
+
+  it.effect("serializes concurrent preference writes around native apply and persistence", () =>
+    Effect.gen(function* () {
+      const fakeWindow = makeFakeBrowserWindow();
+      const firstPersistStarted = yield* Deferred.make<void>();
+      const releaseFirstPersist = yield* Deferred.make<void>();
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      let currentSettings = DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS;
+      let writeCount = 0;
+      const settings = {
+        get: Effect.sync(() => currentSettings),
+        load: Effect.sync(() => currentSettings),
+        setServerExposureMode: () => Effect.die("unexpected setServerExposureMode"),
+        setServerHttpsEnabled: () => Effect.die("unexpected setServerHttpsEnabled"),
+        setUpdateChannel: () => Effect.die("unexpected setUpdateChannel"),
+        setWindowAlwaysOnTopPreference: ({ enabled }) =>
+          Effect.gen(function* () {
+            writeCount += 1;
+            if (writeCount === 1) {
+              yield* Deferred.succeed(firstPersistStarted, undefined);
+              yield* Deferred.await(releaseFirstPersist);
+            }
+            currentSettings = { ...currentSettings, windowAlwaysOnTopEnabled: enabled };
+            return { settings: currentSettings, changed: true };
+          }),
+      } satisfies DesktopAppSettings.DesktopAppSettingsShape;
+      const layer = makeTestLayer({
+        window: fakeWindow.window,
+        createCount,
+        mainWindow,
+        settings,
+      });
+
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        const enableFiber = yield* desktopWindow
+          .setWindowAlwaysOnTopPreference({ enabled: true })
+          .pipe(Effect.forkChild);
+        yield* Deferred.await(firstPersistStarted);
+        const disableFiber = yield* desktopWindow
+          .setWindowAlwaysOnTopPreference({ enabled: false })
+          .pipe(Effect.forkChild);
+        yield* Effect.yieldNow;
+        assert.deepEqual(fakeWindow.setAlwaysOnTop.mock.calls, [[true, "floating"]]);
+
+        yield* Deferred.succeed(releaseFirstPersist, undefined);
+        yield* Fiber.join(enableFiber);
+        const finalState = yield* Fiber.join(disableFiber);
+        assert.deepEqual(fakeWindow.setAlwaysOnTop.mock.calls, [
+          [true, "floating"],
+          [false, "floating"],
+        ]);
+        assert.isFalse(finalState.enabled);
+        assert.isFalse(currentSettings.windowAlwaysOnTopEnabled);
       }).pipe(Effect.provide(layer));
     }),
   );
