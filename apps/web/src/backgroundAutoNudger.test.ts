@@ -745,6 +745,36 @@ describe("background auto nudge controller", () => {
     });
   });
 
+  it("pauses the owned run and records the dispatch when transport handoff fails", () => {
+    const controller = new BackgroundAutoNudgeController(null);
+    controller.start(owner, "2026-07-23T23:59:00.000Z", startedAt);
+    controller.observe(observation(startedAt));
+    const dueAt = Date.parse(controller.getSnapshot().scheduled?.dueAt ?? "");
+    const dispatch = controller.observe(observation(dueAt));
+    if (!dispatch) throw new Error("expected an Auto Nudge dispatch");
+
+    controller.markDispatchFailed(
+      dispatch.messageId,
+      "Environment transport is unavailable; background continuation paused.",
+      dueAt + 1,
+    );
+
+    expect(controller.getSnapshot()).toMatchObject({
+      owner,
+      status: "paused",
+      reason: "Environment transport is unavailable; background continuation paused.",
+      expectedAutomatedUserMessageAt: null,
+      expectedAutomatedUserMessageDeadlineAt: null,
+    });
+    expect(controller.getSnapshot().ledger.at(-1)).toMatchObject({
+      owner,
+      kind: "paused",
+      messageId: dispatch.messageId,
+      detail: "Environment transport is unavailable; background continuation paused.",
+    });
+    expect(controller.observe(observation(dueAt + 2))).toBeNull();
+  });
+
   it("pauses rather than extending a run when the system clock moves backwards", () => {
     const controller = new BackgroundAutoNudgeController(null);
     controller.start(owner, null, startedAt);
