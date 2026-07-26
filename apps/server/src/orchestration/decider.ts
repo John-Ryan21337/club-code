@@ -510,6 +510,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      if (command.dispatchSource === "auto-nudge" && command.expectedSettledTurnId === undefined) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Thread '${command.threadId}' received an automated follow-up without an expected settled turn; Auto Nudge was not started.`,
+        });
+      }
       if (
         command.expectedSettledTurnId !== undefined &&
         (targetThread.latestTurn?.turnId !== command.expectedSettledTurnId ||
@@ -678,6 +684,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      if (command.dispatchSource === "auto-nudge") {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Thread '${command.threadId}' rejected an Auto Nudge steer; automated follow-ups may only start from an expected settled turn.`,
+        });
+      }
       const activeTurnId =
         targetThread.session?.status === "running" ? targetThread.session.activeTurnId : null;
       const userMessageEvent: Omit<OrchestrationEvent, "sequence"> = {
