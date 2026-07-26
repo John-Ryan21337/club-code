@@ -4,11 +4,14 @@ import {
   AUTO_NUDGE_PROMPTS,
   AutoNudgeTimerController,
   AutoNudgeTurnLedger,
+  autoNudgeDispatchIdentityForTurn,
   autoNudgePromptForMode,
   canDispatchAutoNudge,
   canScheduleAutoNudge,
   consumeAutoNudgeTerminalForManualActivity,
   createAutoNudgeTurnLedger,
+  normalizeAutoNudgeTerminalTurnKey,
+  providerCanAcceptAutoNudgeTurn,
 } from "./autoNudger";
 
 const eligible = {
@@ -18,6 +21,19 @@ const eligible = {
   hasPendingWork: false,
   providerAvailable: true,
 };
+
+function providerWithRateLimits(rateLimits: {
+  readonly rateLimitReachedType?: string | null;
+  readonly spendControlReached?: boolean | null;
+  readonly primary?: { readonly usedPercent?: number | null } | null;
+  readonly secondary?: { readonly usedPercent?: number | null } | null;
+  readonly credits?: {
+    readonly hasCredits: boolean;
+    readonly unlimited: boolean;
+  } | null;
+}) {
+  return { accountRateLimits: { rateLimits } };
+}
 
 describe("auto nudger safety gates", () => {
   it("uses the exact, intentionally short prompts", () => {
@@ -36,6 +52,35 @@ describe("auto nudger safety gates", () => {
     expect(canScheduleAutoNudge({ ...eligible, providerAvailable: false })).toBe(false);
   });
 
+  it("fails closed for exhausted provider windows, spend controls, and credits", () => {
+    expect(providerCanAcceptAutoNudgeTurn(null)).toBe(true);
+    expect(
+      providerCanAcceptAutoNudgeTurn(providerWithRateLimits({ primary: { usedPercent: 99.9 } })),
+    ).toBe(true);
+    expect(
+      providerCanAcceptAutoNudgeTurn(providerWithRateLimits({ primary: { usedPercent: 100 } })),
+    ).toBe(false);
+    expect(
+      providerCanAcceptAutoNudgeTurn(providerWithRateLimits({ secondary: { usedPercent: 100 } })),
+    ).toBe(false);
+    expect(
+      providerCanAcceptAutoNudgeTurn(providerWithRateLimits({ rateLimitReachedType: "primary" })),
+    ).toBe(false);
+    expect(
+      providerCanAcceptAutoNudgeTurn(providerWithRateLimits({ spendControlReached: true })),
+    ).toBe(false);
+    expect(
+      providerCanAcceptAutoNudgeTurn(
+        providerWithRateLimits({ credits: { hasCredits: false, unlimited: false } }),
+      ),
+    ).toBe(false);
+    expect(
+      providerCanAcceptAutoNudgeTurn(
+        providerWithRateLimits({ credits: { hasCredits: false, unlimited: true } }),
+      ),
+    ).toBe(true);
+  });
+
   it("deduplicates a terminal turn, including repeated completion observations", () => {
     const ledger = new AutoNudgeTurnLedger();
     expect(ledger.has(eligible.terminalTurnKey)).toBe(false);
@@ -43,6 +88,23 @@ describe("auto nudger safety gates", () => {
     ledger.mark(eligible.terminalTurnKey);
     expect(ledger.has(eligible.terminalTurnKey)).toBe(true);
     expect(ledger.has("environment:thread:new-turn:2026-07-23T00:01:00.000Z")).toBe(false);
+  });
+
+  it("derives stable transport identities from the terminal turn boundary", () => {
+    const first = autoNudgeDispatchIdentityForTurn(eligible.terminalTurnKey);
+    const replay = autoNudgeDispatchIdentityForTurn(eligible.terminalTurnKey);
+    const next = autoNudgeDispatchIdentityForTurn("environment:thread:next-turn");
+
+    expect(replay).toEqual(first);
+    expect(next).not.toEqual(first);
+    expect(String(first.commandId)).toContain(eligible.terminalTurnKey);
+    expect(first.commandId).not.toBe(first.messageId);
+    expect(() => autoNudgeDispatchIdentityForTurn("x".repeat(513))).toThrow(
+      "bounded provider-confirmed terminal turn key",
+    );
+    expect(normalizeAutoNudgeTerminalTurnKey("x".repeat(512))).toBe("x".repeat(512));
+    expect(normalizeAutoNudgeTerminalTurnKey("x".repeat(513))).toBeNull();
+    expect(normalizeAutoNudgeTerminalTurnKey(" unsafe ")).toBeNull();
   });
 
   it("consumes a manual action before a countdown has been scheduled", () => {

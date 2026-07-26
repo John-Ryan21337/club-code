@@ -1,4 +1,9 @@
-import type { AutoNudgeMode } from "@cafecode/contracts";
+import {
+  CommandId,
+  MessageId,
+  type AutoNudgeMode,
+  type ServerProviderAccountRateLimitSnapshot,
+} from "@cafecode/contracts";
 
 export const AUTO_NUDGE_DELAY_MS = 5_000;
 
@@ -11,6 +16,53 @@ export const AUTO_NUDGE_PROMPTS: Readonly<Record<Exclude<AutoNudgeMode, "off">, 
 
 export function autoNudgePromptForMode(mode: AutoNudgeMode): string | null {
   return mode === "off" ? null : AUTO_NUDGE_PROMPTS[mode];
+}
+
+export interface AutoNudgeDispatchIdentity {
+  readonly commandId: CommandId;
+  readonly messageId: MessageId;
+}
+
+export function normalizeAutoNudgeTerminalTurnKey(value: unknown): string | null {
+  return isSafeTurnKey(value) ? value : null;
+}
+
+/**
+ * The terminal turn is the idempotency boundary, not a renderer timer. Stable
+ * transport identities let the orchestration command receipt collapse races
+ * between foreground tabs, background ownership, reloads, and lost ACKs.
+ */
+export function autoNudgeDispatchIdentityForTurn(
+  terminalTurnKey: string,
+): AutoNudgeDispatchIdentity {
+  const normalizedTurnKey = normalizeAutoNudgeTerminalTurnKey(terminalTurnKey);
+  if (!normalizedTurnKey) {
+    throw new Error("Auto Nudge requires a bounded provider-confirmed terminal turn key.");
+  }
+  return {
+    commandId: CommandId.make(`auto-nudge-command:${normalizedTurnKey}`),
+    messageId: MessageId.make(`auto-nudge-message:${normalizedTurnKey}`),
+  };
+}
+
+export function providerCanAcceptAutoNudgeTurn(
+  provider: {
+    readonly accountRateLimits?: {
+      readonly rateLimits: ServerProviderAccountRateLimitSnapshot;
+    };
+  } | null,
+): boolean {
+  const snapshot = provider?.accountRateLimits?.rateLimits;
+  if (!snapshot) return true;
+  if (snapshot.rateLimitReachedType || snapshot.spendControlReached) return false;
+  if (
+    (snapshot.primary?.usedPercent ?? 0) >= 100 ||
+    (snapshot.secondary?.usedPercent ?? 0) >= 100
+  ) {
+    return false;
+  }
+  const credits = snapshot.credits;
+  return credits === undefined || credits === null || credits.unlimited || credits.hasCredits;
 }
 
 export interface AutoNudgeEligibility {
@@ -127,7 +179,10 @@ export interface AutoNudgeLedgerStorage {
 
 function isSafeTurnKey(value: unknown): value is string {
   return (
-    typeof value === "string" && value.length > 0 && value.length <= MAX_AUTO_NUDGE_TURN_KEY_LENGTH
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= MAX_AUTO_NUDGE_TURN_KEY_LENGTH &&
+    value === value.trim()
   );
 }
 
