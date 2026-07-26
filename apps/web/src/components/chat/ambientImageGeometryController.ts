@@ -117,3 +117,62 @@ export function resolveAmbientImageKeyboardMove(input: {
     limits: input.limits,
   });
 }
+
+export function resolveAmbientImagePointerResize(input: {
+  readonly startGeometry: NormalizedAmbientMediaGeometry;
+  readonly startPointer: AmbientImagePointerPosition;
+  readonly currentPointer: AmbientImagePointerPosition;
+  readonly pane: AmbientImagePaneSize;
+  readonly mediaAspectRatio: number;
+  readonly limits: AmbientImageGeometryLimits;
+}): NormalizedAmbientMediaGeometry | null {
+  if (!hasUsablePane(input.pane)) {
+    return null;
+  }
+
+  return clampAmbientImageGeometryForPane({
+    geometry: {
+      ...input.startGeometry,
+      width: Math.max(
+        input.limits.minimumWidthPixels / input.pane.width,
+        input.startGeometry.width +
+          (input.currentPointer.clientX - input.startPointer.clientX) / input.pane.width,
+      ),
+    },
+    pane: input.pane,
+    mediaAspectRatio: input.mediaAspectRatio,
+    limits: input.limits,
+  });
+}
+
+export function resolveAmbientImageKeyboardResize(input: {
+  readonly geometry: NormalizedAmbientMediaGeometry;
+  readonly key: string;
+  readonly step: number;
+  readonly pane: AmbientImagePaneSize;
+  readonly mediaAspectRatio: number;
+  readonly limits: AmbientImageGeometryLimits;
+}): NormalizedAmbientMediaGeometry | null {
+  const direction =
+    input.key === "ArrowRight" || input.key === "ArrowDown"
+      ? 1
+      : input.key === "ArrowLeft" || input.key === "ArrowUp"
+        ? -1
+        : null;
+  if (direction === null || !Number.isFinite(input.step) || input.step <= 0) {
+    return null;
+  }
+
+  return clampAmbientImageGeometryForPane({
+    geometry: {
+      ...input.geometry,
+      width: Math.max(
+        input.limits.minimumWidthPixels / input.pane.width,
+        input.geometry.width + direction * input.step,
+      ),
+    },
+    pane: input.pane,
+    mediaAspectRatio: input.mediaAspectRatio,
+    limits: input.limits,
+  });
+}
