@@ -200,6 +200,18 @@ function makeDesktopBridge(overrides: Partial<DesktopBridge> = {}): DesktopBridg
       advertisedHost: null,
     }),
     getAdvertisedEndpoints: async () => [],
+    getWindowAlwaysOnTopState: async () => ({
+      supported: false,
+      enabled: false,
+      effectiveEnabled: false,
+      reason: "unsupported-platform",
+    }),
+    setWindowAlwaysOnTopPreference: async () => ({
+      supported: false,
+      enabled: false,
+      effectiveEnabled: false,
+      reason: "unsupported-platform",
+    }),
     pickFolder: async () => null,
     confirm: async () => true,
     setTheme: async () => undefined,

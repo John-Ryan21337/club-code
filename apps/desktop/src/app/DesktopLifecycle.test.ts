@@ -154,6 +154,13 @@ function makeLifecycleHarness(options?: {
       handleBackendReady: Effect.void,
       dispatchMenuAction: () => Effect.void,
       syncAppearance: Effect.void,
+      getWindowAlwaysOnTopState: Effect.succeed({
+        supported: false,
+        enabled: false,
+        effectiveEnabled: false,
+        reason: "unsupported-platform",
+      }),
+      setWindowAlwaysOnTopPreference: () => Effect.die("unexpected setWindowAlwaysOnTopPreference"),
     } satisfies DesktopWindow.DesktopWindowShape);
 
     const desktopEnvironmentLayer = Layer.succeed(DesktopEnvironment.DesktopEnvironment, {

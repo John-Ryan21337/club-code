@@ -42,6 +42,10 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   setServerHttpsEnabled: (enabled) =>
     ipcRenderer.invoke(IpcChannels.SET_SERVER_HTTPS_ENABLED_CHANNEL, enabled),
   getAdvertisedEndpoints: () => ipcRenderer.invoke(IpcChannels.GET_ADVERTISED_ENDPOINTS_CHANNEL),
+  getWindowAlwaysOnTopState: () =>
+    ipcRenderer.invoke(IpcChannels.GET_WINDOW_ALWAYS_ON_TOP_STATE_CHANNEL),
+  setWindowAlwaysOnTopPreference: (preference) =>
+    ipcRenderer.invoke(IpcChannels.SET_WINDOW_ALWAYS_ON_TOP_PREFERENCE_CHANNEL, preference),
   pickFolder: (options) => ipcRenderer.invoke(IpcChannels.PICK_FOLDER_CHANNEL, options),
   confirm: (message) => ipcRenderer.invoke(IpcChannels.CONFIRM_CHANNEL, message),
   setTheme: (theme) => ipcRenderer.invoke(IpcChannels.SET_THEME_CHANNEL, theme),

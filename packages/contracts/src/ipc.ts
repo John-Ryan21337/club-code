@@ -314,6 +314,35 @@ export const DesktopServerExposureStateSchema = Schema.Struct({
   advertisedHost: Schema.NullOr(Schema.String),
 });
 
+export const DesktopWindowAlwaysOnTopPreferenceSchema = Schema.Struct({
+  enabled: Schema.Boolean,
+});
+export type DesktopWindowAlwaysOnTopPreference =
+  typeof DesktopWindowAlwaysOnTopPreferenceSchema.Type;
+
+export const DesktopWindowAlwaysOnTopReasonSchema = Schema.NullOr(
+  Schema.Literals([
+    "window-manager-dependent",
+    "unsupported-platform",
+    "apply-failed",
+    "persistence-failed",
+    "safe-reset-failed",
+  ]),
+);
+export type DesktopWindowAlwaysOnTopReason = typeof DesktopWindowAlwaysOnTopReasonSchema.Type;
+
+/**
+ * Desktop-local whole-window stacking state. This controls the Cafe
+ * BrowserWindow, not a renderer surface or individual media element.
+ */
+export const DesktopWindowAlwaysOnTopStateSchema = Schema.Struct({
+  supported: Schema.Boolean,
+  enabled: Schema.Boolean,
+  effectiveEnabled: Schema.NullOr(Schema.Boolean),
+  reason: DesktopWindowAlwaysOnTopReasonSchema,
+});
+export type DesktopWindowAlwaysOnTopState = typeof DesktopWindowAlwaysOnTopStateSchema.Type;
+
 export interface PickFolderOptions {
   initialPath?: string | null;
 }
@@ -366,6 +395,10 @@ export interface DesktopBridge {
   setServerExposureMode: (mode: DesktopServerExposureMode) => Promise<DesktopServerExposureState>;
   setServerHttpsEnabled: (enabled: boolean) => Promise<DesktopServerExposureState>;
   getAdvertisedEndpoints: () => Promise<readonly AdvertisedEndpoint[]>;
+  getWindowAlwaysOnTopState: () => Promise<DesktopWindowAlwaysOnTopState>;
+  setWindowAlwaysOnTopPreference: (
+    preference: DesktopWindowAlwaysOnTopPreference,
+  ) => Promise<DesktopWindowAlwaysOnTopState>;
   pickFolder: (options?: PickFolderOptions) => Promise<string | null>;
   confirm: (message: string) => Promise<boolean>;
   setTheme: (theme: DesktopTheme) => Promise<void>;

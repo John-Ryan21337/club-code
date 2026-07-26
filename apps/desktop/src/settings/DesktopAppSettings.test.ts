@@ -19,6 +19,7 @@ const DesktopSettingsPatch = Schema.Struct({
   serverHttpsEnabled: Schema.optionalKey(Schema.Boolean),
   updateChannel: Schema.optionalKey(Schema.Literals(["latest", "nightly"])),
   updateChannelConfiguredByUser: Schema.optionalKey(Schema.Boolean),
+  windowAlwaysOnTopEnabled: Schema.optionalKey(Schema.Unknown),
 });
 
 const decodeDesktopSettingsPatch = Schema.decodeEffect(Schema.fromJsonString(DesktopSettingsPatch));
@@ -92,6 +93,7 @@ describe("DesktopSettings", () => {
       serverHttpsEnabled: true,
       updateChannel: "nightly",
       updateChannelConfiguredByUser: false,
+      windowAlwaysOnTopEnabled: false,
     } satisfies DesktopSettingsValue);
   });
 
@@ -104,6 +106,7 @@ describe("DesktopSettings", () => {
           serverHttpsEnabled: false,
           updateChannel: "latest",
           updateChannelConfiguredByUser: true,
+          windowAlwaysOnTopEnabled: false,
         });
 
         assert.deepEqual(yield* settings.load, {
@@ -111,6 +114,7 @@ describe("DesktopSettings", () => {
           serverHttpsEnabled: false,
           updateChannel: "latest",
           updateChannelConfiguredByUser: true,
+          windowAlwaysOnTopEnabled: false,
         } satisfies DesktopSettingsValue);
 
         const exposure = yield* settings.setServerExposureMode("local-only");
@@ -181,6 +185,7 @@ describe("DesktopSettings", () => {
           serverHttpsEnabled: true,
           updateChannel: "latest",
           updateChannelConfiguredByUser: false,
+          windowAlwaysOnTopEnabled: false,
         } satisfies DesktopSettingsValue);
       }),
     ),
@@ -224,6 +229,46 @@ describe("DesktopSettings", () => {
     ),
   );
 
+  it.effect("persists whole-window always-on-top independently of renderer settings", () =>
+    withSettings(
+      Effect.gen(function* () {
+        const environment = yield* DesktopEnvironment.DesktopEnvironment;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const settings = yield* DesktopAppSettings.DesktopAppSettings;
+
+        const changed = yield* settings.setWindowAlwaysOnTopPreference({ enabled: true });
+        assert.isTrue(changed.changed);
+
+        const persisted = yield* decodeDesktopSettingsPatch(
+          yield* fileSystem.readFileString(environment.desktopSettingsPath),
+        );
+        assert.deepEqual(persisted, {
+          windowAlwaysOnTopEnabled: true,
+        } satisfies typeof DesktopSettingsPatch.Type);
+      }),
+    ),
+  );
+
+  it.effect("fails a corrupt whole-window topmost preference closed", () =>
+    withSettings(
+      Effect.gen(function* () {
+        const settings = yield* DesktopAppSettings.DesktopAppSettings;
+        yield* writeSettingsPatch({
+          serverExposureMode: "network-accessible",
+          windowAlwaysOnTopEnabled: "yes",
+        });
+
+        assert.deepEqual(yield* settings.load, {
+          serverExposureMode: "network-accessible",
+          serverHttpsEnabled: true,
+          updateChannel: "latest",
+          updateChannelConfiguredByUser: false,
+          windowAlwaysOnTopEnabled: false,
+        } satisfies DesktopSettingsValue);
+      }),
+    ),
+  );
+
   it.effect("migrates legacy implicit update channels to the runtime default", () =>
     withSettings(
       Effect.gen(function* () {
@@ -238,6 +283,7 @@ describe("DesktopSettings", () => {
           serverHttpsEnabled: true,
           updateChannel: "nightly",
           updateChannelConfiguredByUser: false,
+          windowAlwaysOnTopEnabled: false,
         } satisfies DesktopSettingsValue);
       }),
       { appVersion: "0.0.17-nightly.20260415.1" },
@@ -252,6 +298,7 @@ describe("DesktopSettings", () => {
           serverExposureMode: "local-only",
           updateChannel: "latest",
           updateChannelConfiguredByUser: true,
+          windowAlwaysOnTopEnabled: false,
         });
 
         assert.deepEqual(yield* settings.load, {
@@ -259,6 +306,7 @@ describe("DesktopSettings", () => {
           serverHttpsEnabled: true,
           updateChannel: "latest",
           updateChannelConfiguredByUser: true,
+          windowAlwaysOnTopEnabled: false,
         } satisfies DesktopSettingsValue);
       }),
       { appVersion: "0.0.17-nightly.20260415.1" },

@@ -136,6 +136,14 @@ function makeManagerLayer(input: {
           handleBackendReady: Effect.void,
           dispatchMenuAction: () => Effect.void,
           syncAppearance: Effect.void,
+          getWindowAlwaysOnTopState: Effect.succeed({
+            supported: false,
+            enabled: false,
+            effectiveEnabled: false,
+            reason: "unsupported-platform",
+          }),
+          setWindowAlwaysOnTopPreference: () =>
+            Effect.die("unexpected setWindowAlwaysOnTopPreference"),
           ...input.desktopWindow,
         } satisfies DesktopWindow.DesktopWindowShape),
       ),

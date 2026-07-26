@@ -31,3 +31,6 @@ export const GET_SERVER_EXPOSURE_STATE_CHANNEL = "desktop:get-server-exposure-st
 export const SET_SERVER_EXPOSURE_MODE_CHANNEL = "desktop:set-server-exposure-mode";
 export const SET_SERVER_HTTPS_ENABLED_CHANNEL = "desktop:set-server-https-enabled";
 export const GET_ADVERTISED_ENDPOINTS_CHANNEL = "desktop:get-advertised-endpoints";
+export const GET_WINDOW_ALWAYS_ON_TOP_STATE_CHANNEL = "desktop:get-window-always-on-top-state";
+export const SET_WINDOW_ALWAYS_ON_TOP_PREFERENCE_CHANNEL =
+  "desktop:set-window-always-on-top-preference";

@@ -572,6 +572,18 @@ const createDesktopBridgeStub = (overrides?: {
         advertisedHost: null,
       })),
     getAdvertisedEndpoints: vi.fn().mockResolvedValue(overrides?.advertisedEndpoints ?? []),
+    getWindowAlwaysOnTopState: vi.fn().mockResolvedValue({
+      supported: false,
+      enabled: false,
+      effectiveEnabled: false,
+      reason: "unsupported-platform",
+    }),
+    setWindowAlwaysOnTopPreference: vi.fn().mockResolvedValue({
+      supported: false,
+      enabled: false,
+      effectiveEnabled: false,
+      reason: "unsupported-platform",
+    }),
     pickFolder: vi.fn().mockResolvedValue(null),
     confirm: vi.fn().mockResolvedValue(false),
     setTheme: vi.fn().mockResolvedValue(undefined),

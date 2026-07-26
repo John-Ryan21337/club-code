@@ -4,14 +4,20 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
+import * as Semaphore from "effect/Semaphore";
 
 import type * as Electron from "electron";
+import type {
+  DesktopWindowAlwaysOnTopPreference,
+  DesktopWindowAlwaysOnTopState,
+} from "@cafecode/contracts";
 
 import { stopStartupCpuProfiler } from "@cafecode/shared/startupProfiler";
 import * as DesktopAssets from "../app/DesktopAssets.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopObservability from "../app/DesktopObservability.ts";
 import * as DesktopState from "../app/DesktopState.ts";
+import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as ElectronMenu from "../electron/ElectronMenu.ts";
 import * as ElectronShell from "../electron/ElectronShell.ts";
 import * as ElectronTheme from "../electron/ElectronTheme.ts";
@@ -24,6 +30,31 @@ const TITLEBAR_HEIGHT = 40;
 const TITLEBAR_COLOR = "#01000000"; // #00000000 does not work correctly on Linux
 const TITLEBAR_LIGHT_SYMBOL_COLOR = "#1f2937";
 const TITLEBAR_DARK_SYMBOL_COLOR = "#f8fafc";
+const DESKTOP_ALWAYS_ON_TOP_LEVEL = "floating" as const;
+
+export type DesktopWindowAlwaysOnTopCapability =
+  | { readonly supported: true }
+  | {
+      readonly supported: false;
+      readonly reason: "window-manager-dependent" | "unsupported-platform";
+    };
+
+/**
+ * Electron's native API is stable on Windows and macOS. Linux support depends
+ * on the active X11/Wayland window manager, so Cafe fails closed there instead
+ * of claiming a topmost state it cannot confirm.
+ */
+export function resolveDesktopWindowAlwaysOnTopCapability(
+  platform: string,
+): DesktopWindowAlwaysOnTopCapability {
+  if (platform === "darwin" || platform === "win32") {
+    return { supported: true };
+  }
+  if (platform === "linux") {
+    return { supported: false, reason: "window-manager-dependent" };
+  }
+  return { supported: false, reason: "unsupported-platform" };
+}
 
 type WindowTitleBarOptions = Pick<
   Electron.BrowserWindowConstructorOptions,
@@ -39,7 +70,8 @@ type DesktopWindowRuntimeServices =
   | ElectronShell.ElectronShell
   | ElectronTheme.ElectronTheme
   | ElectronWindow.ElectronWindow
-  | DesktopIpc.DesktopIpc;
+  | DesktopIpc.DesktopIpc
+  | DesktopAppSettings.DesktopAppSettings;
 
 export class DesktopWindowDevServerUrlMissingError extends Data.TaggedError(
   "DesktopWindowDevServerUrlMissingError",
@@ -62,6 +94,10 @@ export interface DesktopWindowShape {
   readonly handleBackendReady: Effect.Effect<void, DesktopWindowError>;
   readonly dispatchMenuAction: (action: string) => Effect.Effect<void, DesktopWindowError>;
   readonly syncAppearance: Effect.Effect<void>;
+  readonly getWindowAlwaysOnTopState: Effect.Effect<DesktopWindowAlwaysOnTopState>;
+  readonly setWindowAlwaysOnTopPreference: (
+    preference: DesktopWindowAlwaysOnTopPreference,
+  ) => Effect.Effect<DesktopWindowAlwaysOnTopState>;
 }
 
 export class DesktopWindow extends Context.Service<DesktopWindow, DesktopWindowShape>()(
@@ -130,6 +166,39 @@ function syncWindowAppearance(
   });
 }
 
+class DesktopWindowAlwaysOnTopApplyError extends Data.TaggedError(
+  "DesktopWindowAlwaysOnTopApplyError",
+)<{
+  readonly cause: unknown;
+}> {}
+
+function applyWindowAlwaysOnTop(
+  window: Electron.BrowserWindow,
+  enabled: boolean,
+): Effect.Effect<void, DesktopWindowAlwaysOnTopApplyError> {
+  return Effect.try({
+    try: () => {
+      if (window.isDestroyed()) {
+        return;
+      }
+      window.setAlwaysOnTop(enabled, DESKTOP_ALWAYS_ON_TOP_LEVEL);
+      if (window.isAlwaysOnTop() !== enabled) {
+        throw new Error("BrowserWindow did not confirm the requested always-on-top state.");
+      }
+    },
+    catch: (cause) => new DesktopWindowAlwaysOnTopApplyError({ cause }),
+  });
+}
+
+function effectSucceeded<E, R>(effect: Effect.Effect<unknown, E, R>) {
+  return effect.pipe(
+    Effect.match({
+      onFailure: () => false,
+      onSuccess: () => true,
+    }),
+  );
+}
+
 type RevealSubscription = (listener: () => void) => void;
 
 function bindFirstRevealTrigger(
@@ -155,10 +224,99 @@ const make = Effect.gen(function* () {
   const electronTheme = yield* ElectronTheme.ElectronTheme;
   const electronWindow = yield* ElectronWindow.ElectronWindow;
   const desktopIpc = yield* DesktopIpc.DesktopIpc;
+  const desktopSettings = yield* DesktopAppSettings.DesktopAppSettings;
   const serverExposure = yield* DesktopServerExposure.DesktopServerExposure;
   const state = yield* DesktopState.DesktopState;
   const context = yield* Effect.context<DesktopWindowRuntimeServices>();
   const runPromise = Effect.runPromiseWith(context);
+  const alwaysOnTopCapability = resolveDesktopWindowAlwaysOnTopCapability(environment.platform);
+  const alwaysOnTopMutex = yield* Semaphore.make(1);
+
+  const alwaysOnTopState = (
+    settings: DesktopAppSettings.DesktopSettings,
+    reason: DesktopWindowAlwaysOnTopState["reason"] = null,
+    effectiveEnabled: boolean | null = settings.windowAlwaysOnTopEnabled,
+  ): DesktopWindowAlwaysOnTopState => ({
+    supported: alwaysOnTopCapability.supported,
+    enabled: alwaysOnTopCapability.supported && settings.windowAlwaysOnTopEnabled,
+    effectiveEnabled: alwaysOnTopCapability.supported ? effectiveEnabled : false,
+    reason: alwaysOnTopCapability.supported ? reason : alwaysOnTopCapability.reason,
+  });
+
+  const applyAllWindowAlwaysOnTop = (enabled: boolean) =>
+    electronWindow.syncAllAppearance((window) => applyWindowAlwaysOnTop(window, enabled));
+
+  const getWindowAlwaysOnTopState = alwaysOnTopMutex.withPermits(1)(
+    desktopSettings.get.pipe(Effect.map((settings) => alwaysOnTopState(settings))),
+  );
+
+  const persistSafeAlwaysOnTopPreference = desktopSettings.setWindowAlwaysOnTopPreference({
+    enabled: false,
+  });
+
+  const setWindowAlwaysOnTopPreferenceUnlocked = Effect.fn(
+    "desktop.window.setWindowAlwaysOnTopPreference",
+  )(function* (preference: DesktopWindowAlwaysOnTopPreference) {
+    const previous = yield* desktopSettings.get;
+    if (!alwaysOnTopCapability.supported) {
+      if (previous.windowAlwaysOnTopEnabled) {
+        yield* effectSucceeded(persistSafeAlwaysOnTopPreference);
+      }
+      return alwaysOnTopState(yield* desktopSettings.get);
+    }
+
+    if (!(yield* effectSucceeded(applyAllWindowAlwaysOnTop(preference.enabled)))) {
+      const resetSucceeded = yield* effectSucceeded(applyAllWindowAlwaysOnTop(false));
+      const safeSettingsSucceeded = yield* effectSucceeded(persistSafeAlwaysOnTopPreference);
+      return alwaysOnTopState(
+        yield* desktopSettings.get,
+        resetSucceeded && safeSettingsSucceeded ? "apply-failed" : "safe-reset-failed",
+        resetSucceeded ? false : null,
+      );
+    }
+
+    if (yield* effectSucceeded(desktopSettings.setWindowAlwaysOnTopPreference(preference))) {
+      return alwaysOnTopState(yield* desktopSettings.get, null, preference.enabled);
+    }
+
+    const resetSucceeded = yield* effectSucceeded(applyAllWindowAlwaysOnTop(false));
+    const safeSettingsSucceeded = yield* effectSucceeded(persistSafeAlwaysOnTopPreference);
+    return alwaysOnTopState(
+      yield* desktopSettings.get,
+      resetSucceeded && safeSettingsSucceeded ? "persistence-failed" : "safe-reset-failed",
+      resetSucceeded ? false : null,
+    );
+  });
+
+  const setWindowAlwaysOnTopPreference = (preference: DesktopWindowAlwaysOnTopPreference) =>
+    alwaysOnTopMutex.withPermits(1)(setWindowAlwaysOnTopPreferenceUnlocked(preference));
+
+  const prepareWindowAlwaysOnTop = (window: Electron.BrowserWindow) =>
+    Effect.gen(function* () {
+      const persistedSettings = yield* desktopSettings.get;
+      if (!alwaysOnTopCapability.supported) {
+        if (persistedSettings.windowAlwaysOnTopEnabled) {
+          yield* effectSucceeded(persistSafeAlwaysOnTopPreference);
+        }
+        return;
+      }
+
+      if (
+        yield* effectSucceeded(
+          applyWindowAlwaysOnTop(window, persistedSettings.windowAlwaysOnTopEnabled),
+        )
+      ) {
+        return;
+      }
+
+      const resetSucceeded = yield* effectSucceeded(applyWindowAlwaysOnTop(window, false));
+      const safeSettingsSucceeded = yield* effectSucceeded(persistSafeAlwaysOnTopPreference);
+      yield* logWindowWarning(
+        resetSucceeded && safeSettingsSucceeded
+          ? "persisted whole-window always-on-top could not be applied; restored normal stacking"
+          : "persisted whole-window always-on-top recovery could not be confirmed",
+      );
+    });
 
   const createWindow = Effect.fn("desktop.window.createWindow")(function* (
     backendHttpUrl: URL,
@@ -184,6 +342,7 @@ const make = Effect.gen(function* () {
         sandbox: true,
       },
     });
+    yield* alwaysOnTopMutex.withPermits(1)(prepareWindowAlwaysOnTop(window));
     yield* desktopIpc.trustWebContents(window.webContents);
 
     window.webContents.on("context-menu", (event, params) => {
@@ -368,6 +527,8 @@ const make = Effect.gen(function* () {
         syncWindowAppearance(window, shouldUseDarkColors),
       );
     }).pipe(Effect.withSpan("desktop.window.syncAppearance")),
+    getWindowAlwaysOnTopState,
+    setWindowAlwaysOnTopPreference,
   });
 });
 

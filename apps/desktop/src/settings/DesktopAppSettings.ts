@@ -1,6 +1,7 @@
 import {
   DesktopServerExposureModeSchema,
   DesktopUpdateChannelSchema,
+  type DesktopWindowAlwaysOnTopPreference,
   type DesktopServerExposureMode,
   type DesktopUpdateChannel,
 } from "@cafecode/contracts";
@@ -25,6 +26,7 @@ export interface DesktopSettings {
   readonly serverHttpsEnabled: boolean;
   readonly updateChannel: DesktopUpdateChannel;
   readonly updateChannelConfiguredByUser: boolean;
+  readonly windowAlwaysOnTopEnabled: boolean;
 }
 
 export interface DesktopSettingsChange {
@@ -37,6 +39,7 @@ export const DEFAULT_DESKTOP_SETTINGS: DesktopSettings = {
   serverHttpsEnabled: true,
   updateChannel: "latest",
   updateChannelConfiguredByUser: false,
+  windowAlwaysOnTopEnabled: false,
 };
 
 const DesktopSettingsDocument = Schema.Struct({
@@ -44,6 +47,7 @@ const DesktopSettingsDocument = Schema.Struct({
   serverHttpsEnabled: Schema.optionalKey(Schema.Boolean),
   updateChannel: Schema.optionalKey(DesktopUpdateChannelSchema),
   updateChannelConfiguredByUser: Schema.optionalKey(Schema.Boolean),
+  windowAlwaysOnTopEnabled: Schema.optionalKey(Schema.Unknown),
 });
 
 type DesktopSettingsDocument = typeof DesktopSettingsDocument.Type;
@@ -78,6 +82,9 @@ export interface DesktopAppSettingsShape {
   readonly setUpdateChannel: (
     channel: DesktopUpdateChannel,
   ) => Effect.Effect<DesktopSettingsChange, DesktopSettingsWriteError>;
+  readonly setWindowAlwaysOnTopPreference: (
+    preference: DesktopWindowAlwaysOnTopPreference,
+  ) => Effect.Effect<DesktopSettingsChange, DesktopSettingsWriteError>;
 }
 
 export class DesktopAppSettings extends Context.Service<
@@ -111,6 +118,7 @@ function normalizeDesktopSettingsDocument(
       ? Option.getOrElse(parsedUpdateChannel, () => defaultSettings.updateChannel)
       : defaultSettings.updateChannel,
     updateChannelConfiguredByUser,
+    windowAlwaysOnTopEnabled: parsed.windowAlwaysOnTopEnabled === true,
   };
 }
 
@@ -131,6 +139,9 @@ function toDesktopSettingsDocument(
   }
   if (settings.updateChannelConfiguredByUser !== defaults.updateChannelConfiguredByUser) {
     document.updateChannelConfiguredByUser = settings.updateChannelConfiguredByUser;
+  }
+  if (settings.windowAlwaysOnTopEnabled !== defaults.windowAlwaysOnTopEnabled) {
+    document.windowAlwaysOnTopEnabled = settings.windowAlwaysOnTopEnabled;
   }
 
   return document;
@@ -167,6 +178,18 @@ function setUpdateChannel(
         ...settings,
         updateChannel: requestedChannel,
         updateChannelConfiguredByUser: true,
+      };
+}
+
+function setWindowAlwaysOnTopPreference(
+  settings: DesktopSettings,
+  preference: DesktopWindowAlwaysOnTopPreference,
+): DesktopSettings {
+  return settings.windowAlwaysOnTopEnabled === preference.enabled
+    ? settings
+    : {
+        ...settings,
+        windowAlwaysOnTopEnabled: preference.enabled,
       };
 }
 
@@ -261,6 +284,12 @@ export const layer = Layer.effect(
         persist((settings) => setUpdateChannel(settings, channel)).pipe(
           Effect.withSpan("desktop.settings.setUpdateChannel", { attributes: { channel } }),
         ),
+      setWindowAlwaysOnTopPreference: (preference) =>
+        persist((settings) => setWindowAlwaysOnTopPreference(settings, preference)).pipe(
+          Effect.withSpan("desktop.settings.setWindowAlwaysOnTopPreference", {
+            attributes: { enabled: preference.enabled },
+          }),
+        ),
     });
   }),
 );
@@ -290,6 +319,8 @@ export const layerTest = (initialSettings: DesktopSettings = DEFAULT_DESKTOP_SET
         setServerHttpsEnabled: (enabled) =>
           update((settings) => setServerHttpsEnabled(settings, enabled)),
         setUpdateChannel: (channel) => update((settings) => setUpdateChannel(settings, channel)),
+        setWindowAlwaysOnTopPreference: (preference) =>
+          update((settings) => setWindowAlwaysOnTopPreference(settings, preference)),
       });
     }),
   );

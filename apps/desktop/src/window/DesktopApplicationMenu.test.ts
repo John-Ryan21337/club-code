@@ -74,6 +74,13 @@ const makeDesktopWindowLayer = (selectedAction: Deferred.Deferred<string>) =>
     handleBackendReady: Effect.void,
     dispatchMenuAction: (action) => Deferred.succeed(selectedAction, action).pipe(Effect.asVoid),
     syncAppearance: Effect.void,
+    getWindowAlwaysOnTopState: Effect.succeed({
+      supported: false,
+      enabled: false,
+      effectiveEnabled: false,
+      reason: "unsupported-platform",
+    }),
+    setWindowAlwaysOnTopPreference: () => Effect.die("unexpected setWindowAlwaysOnTopPreference"),
   } satisfies DesktopWindow.DesktopWindowShape);
 
 const makeElectronMenuLayer = (

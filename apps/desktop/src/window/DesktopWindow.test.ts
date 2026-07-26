@@ -18,6 +18,7 @@ import * as ElectronTheme from "../electron/ElectronTheme.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as DesktopServerExposure from "../backend/DesktopServerExposure.ts";
 import * as DesktopIpc from "../ipc/DesktopIpc.ts";
+import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopWindow from "./DesktopWindow.ts";
 
 const environmentInput = {
@@ -33,6 +34,7 @@ const environmentInput = {
 } satisfies DesktopEnvironment.MakeDesktopEnvironmentInput;
 
 function makeFakeBrowserWindow() {
+  let alwaysOnTop = false;
   const webContents = {
     copyImageAt: vi.fn(),
     isLoadingMainFrame: vi.fn(() => false),
@@ -46,6 +48,7 @@ function makeFakeBrowserWindow() {
 
   const window = {
     focus: vi.fn(),
+    isAlwaysOnTop: vi.fn(() => alwaysOnTop),
     isDestroyed: vi.fn(() => false),
     isMinimized: vi.fn(() => false),
     isVisible: vi.fn(() => true),
@@ -54,6 +57,9 @@ function makeFakeBrowserWindow() {
     once: vi.fn(),
     restore: vi.fn(),
     setBackgroundColor: vi.fn(),
+    setAlwaysOnTop: vi.fn((enabled: boolean) => {
+      alwaysOnTop = enabled;
+    }),
     setTitle: vi.fn(),
     setTitleBarOverlay: vi.fn(),
     show: vi.fn(),
@@ -64,6 +70,9 @@ function makeFakeBrowserWindow() {
     window: window as unknown as Electron.BrowserWindow,
     loadURL: window.loadURL,
     openDevTools: webContents.openDevTools,
+    focus: window.focus,
+    isAlwaysOnTop: window.isAlwaysOnTop,
+    setAlwaysOnTop: window.setAlwaysOnTop,
   };
 }
 
@@ -116,23 +125,30 @@ const desktopIpcLayer = Layer.succeed(DesktopIpc.DesktopIpc, {
   handleSync: () => Effect.void,
 } satisfies DesktopIpc.DesktopIpcShape);
 
-const desktopEnvironmentLayer = DesktopEnvironment.layer(environmentInput).pipe(
-  Layer.provide(
-    Layer.mergeAll(
-      NodeServices.layer,
-      DesktopConfig.layerTest({
-        CAFE_CODE_DESKTOP_DEV: "true",
-        CAFE_CODE_PORT: "3773",
-        VITE_DEV_SERVER_URL: "http://127.0.0.1:5733",
-      }),
+const makeDesktopEnvironmentLayer = (platform: NodeJS.Platform = environmentInput.platform) =>
+  DesktopEnvironment.layer({
+    ...environmentInput,
+    platform,
+  }).pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        NodeServices.layer,
+        DesktopConfig.layerTest({
+          CAFE_CODE_DESKTOP_DEV: "true",
+          CAFE_CODE_PORT: "3773",
+          VITE_DEV_SERVER_URL: "http://127.0.0.1:5733",
+        }),
+      ),
     ),
-  ),
-);
+  );
 
 function makeTestLayer(input: {
   readonly window: Electron.BrowserWindow;
   readonly createCount: Ref.Ref<number>;
   readonly mainWindow: Ref.Ref<Option.Option<Electron.BrowserWindow>>;
+  readonly initialSettings?: DesktopAppSettings.DesktopSettings;
+  readonly settings?: DesktopAppSettings.DesktopAppSettingsShape;
+  readonly platform?: NodeJS.Platform;
 }) {
   const electronWindowLayer = Layer.succeed(ElectronWindow.ElectronWindow, {
     create: () => Ref.update(input.createCount, (count) => count + 1).pipe(Effect.as(input.window)),
@@ -146,12 +162,16 @@ function makeTestLayer(input: {
     destroyAll: Effect.void,
     syncAllAppearance: (sync) => sync(input.window),
   } satisfies ElectronWindow.ElectronWindowShape);
+  const desktopSettingsLayer =
+    input.settings === undefined
+      ? DesktopAppSettings.layerTest(input.initialSettings)
+      : Layer.succeed(DesktopAppSettings.DesktopAppSettings, input.settings);
 
   return DesktopWindow.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
         desktopAssetsLayer,
-        desktopEnvironmentLayer,
+        makeDesktopEnvironmentLayer(input.platform),
         desktopServerExposureLayer,
         DesktopState.layer,
         electronMenuLayer,
@@ -159,12 +179,30 @@ function makeTestLayer(input: {
         electronThemeLayer,
         electronWindowLayer,
         desktopIpcLayer,
+        desktopSettingsLayer,
       ),
     ),
   );
 }
 
 describe("DesktopWindow", () => {
+  it("supports native whole-window topmost only where Electron can confirm it reliably", () => {
+    assert.deepEqual(DesktopWindow.resolveDesktopWindowAlwaysOnTopCapability("win32"), {
+      supported: true,
+    });
+    assert.deepEqual(DesktopWindow.resolveDesktopWindowAlwaysOnTopCapability("darwin"), {
+      supported: true,
+    });
+    assert.deepEqual(DesktopWindow.resolveDesktopWindowAlwaysOnTopCapability("linux"), {
+      supported: false,
+      reason: "window-manager-dependent",
+    });
+    assert.deepEqual(DesktopWindow.resolveDesktopWindowAlwaysOnTopCapability("freebsd"), {
+      supported: false,
+      reason: "unsupported-platform",
+    });
+  });
+
   it.effect("does not open a development window until the backend is ready", () =>
     Effect.gen(function* () {
       const fakeWindow = makeFakeBrowserWindow();
@@ -185,6 +223,195 @@ describe("DesktopWindow", () => {
         assert.equal(yield* Ref.get(createCount), 1);
         assert.deepEqual(fakeWindow.loadURL.mock.calls[0], ["http://127.0.0.1:5733/"]);
         assert.equal(fakeWindow.openDevTools.mock.calls.length, 1);
+      }).pipe(Effect.provide(layer));
+    }),
+  );
+
+  it.effect("toggles whole-window topmost without focusing the window", () =>
+    Effect.gen(function* () {
+      const fakeWindow = makeFakeBrowserWindow();
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const layer = makeTestLayer({
+        window: fakeWindow.window,
+        createCount,
+        mainWindow,
+      });
+
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        assert.deepEqual(yield* desktopWindow.setWindowAlwaysOnTopPreference({ enabled: true }), {
+          supported: true,
+          enabled: true,
+          effectiveEnabled: true,
+          reason: null,
+        });
+        assert.deepEqual(yield* desktopWindow.setWindowAlwaysOnTopPreference({ enabled: false }), {
+          supported: true,
+          enabled: false,
+          effectiveEnabled: false,
+          reason: null,
+        });
+        assert.deepEqual(fakeWindow.setAlwaysOnTop.mock.calls, [
+          [true, "floating"],
+          [false, "floating"],
+        ]);
+        assert.equal(fakeWindow.focus.mock.calls.length, 0);
+      }).pipe(Effect.provide(layer));
+    }),
+  );
+
+  it.effect("fails closed when native whole-window topmost application fails", () =>
+    Effect.gen(function* () {
+      const fakeWindow = makeFakeBrowserWindow();
+      fakeWindow.setAlwaysOnTop
+        .mockImplementationOnce(() => {
+          throw new Error("native setAlwaysOnTop failed");
+        })
+        .mockImplementation((enabled: boolean) => {
+          fakeWindow.isAlwaysOnTop.mockReturnValue(enabled);
+        });
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const layer = makeTestLayer({
+        window: fakeWindow.window,
+        createCount,
+        mainWindow,
+      });
+
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        assert.deepEqual(yield* desktopWindow.setWindowAlwaysOnTopPreference({ enabled: true }), {
+          supported: true,
+          enabled: false,
+          effectiveEnabled: false,
+          reason: "apply-failed",
+        });
+        assert.deepEqual(fakeWindow.setAlwaysOnTop.mock.calls, [
+          [true, "floating"],
+          [false, "floating"],
+        ]);
+      }).pipe(Effect.provide(layer));
+    }),
+  );
+
+  it.effect("fails closed without invoking native topmost on Linux window managers", () =>
+    Effect.gen(function* () {
+      const fakeWindow = makeFakeBrowserWindow();
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const layer = makeTestLayer({
+        window: fakeWindow.window,
+        createCount,
+        mainWindow,
+        platform: "linux",
+        initialSettings: {
+          ...DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS,
+          windowAlwaysOnTopEnabled: true,
+        },
+      });
+
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        assert.deepEqual(yield* desktopWindow.setWindowAlwaysOnTopPreference({ enabled: true }), {
+          supported: false,
+          enabled: false,
+          effectiveEnabled: false,
+          reason: "window-manager-dependent",
+        });
+        assert.equal(fakeWindow.setAlwaysOnTop.mock.calls.length, 0);
+        assert.equal((yield* desktopWindow.getWindowAlwaysOnTopState).enabled, false);
+      }).pipe(Effect.provide(layer));
+    }),
+  );
+
+  it.effect("restores normal stacking when whole-window topmost persistence fails", () =>
+    Effect.gen(function* () {
+      const fakeWindow = makeFakeBrowserWindow();
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      let currentSettings = DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS;
+      let alwaysOnTopWriteCount = 0;
+      const settings = {
+        get: Effect.sync(() => currentSettings),
+        load: Effect.sync(() => currentSettings),
+        setServerExposureMode: () => Effect.die("unexpected setServerExposureMode"),
+        setServerHttpsEnabled: () => Effect.die("unexpected setServerHttpsEnabled"),
+        setUpdateChannel: () => Effect.die("unexpected setUpdateChannel"),
+        setWindowAlwaysOnTopPreference: ({ enabled }) =>
+          Effect.suspend(() => {
+            alwaysOnTopWriteCount += 1;
+            if (alwaysOnTopWriteCount === 1) {
+              return Effect.fail("test persistence failure") as unknown as Effect.Effect<
+                DesktopAppSettings.DesktopSettingsChange,
+                DesktopAppSettings.DesktopSettingsWriteError
+              >;
+            }
+            currentSettings = {
+              ...currentSettings,
+              windowAlwaysOnTopEnabled: enabled,
+            };
+            return Effect.succeed({
+              settings: currentSettings,
+              changed: true,
+            });
+          }),
+      } satisfies DesktopAppSettings.DesktopAppSettingsShape;
+      const layer = makeTestLayer({
+        window: fakeWindow.window,
+        createCount,
+        mainWindow,
+        settings,
+      });
+
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        assert.deepEqual(yield* desktopWindow.setWindowAlwaysOnTopPreference({ enabled: true }), {
+          supported: true,
+          enabled: false,
+          effectiveEnabled: false,
+          reason: "persistence-failed",
+        });
+        assert.deepEqual(fakeWindow.setAlwaysOnTop.mock.calls, [
+          [true, "floating"],
+          [false, "floating"],
+        ]);
+        assert.equal(alwaysOnTopWriteCount, 2);
+      }).pipe(Effect.provide(layer));
+    }),
+  );
+
+  it.effect("reapplies the persisted topmost preference before each main window loads", () =>
+    Effect.gen(function* () {
+      const fakeWindow = makeFakeBrowserWindow();
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const layer = makeTestLayer({
+        window: fakeWindow.window,
+        createCount,
+        mainWindow,
+        initialSettings: {
+          ...DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS,
+          windowAlwaysOnTopEnabled: true,
+        },
+      });
+
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        yield* desktopWindow.createMain;
+        yield* Ref.set(mainWindow, Option.none());
+        yield* desktopWindow.createMain;
+
+        assert.deepEqual(fakeWindow.setAlwaysOnTop.mock.calls, [
+          [true, "floating"],
+          [true, "floating"],
+        ]);
+        assert.equal(fakeWindow.loadURL.mock.calls.length, 2);
+        assert.equal(
+          fakeWindow.setAlwaysOnTop.mock.invocationCallOrder[0]! <
+            fakeWindow.loadURL.mock.invocationCallOrder[0]!,
+          true,
+        );
       }).pipe(Effect.provide(layer));
     }),
   );
