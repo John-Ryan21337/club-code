@@ -76,13 +76,13 @@ const STATIC_CONTENT_SECURITY_POLICY = [
   // Saved Cafe environments are explicitly user-selected HTTP(S)/WS(S)
   // origins. Keep this transport allowance isolated to connect-src.
   "connect-src 'self' http: https: ws: wss:",
-  "frame-src https://www.youtube-nocookie.com https://open.spotify.com",
+  "frame-src https://www.youtube-nocookie.com",
   "manifest-src 'self'",
 ].join("; ");
 const STATIC_SECURITY_HEADERS = {
   "Content-Security-Policy": STATIC_CONTENT_SECURITY_POLICY,
   "Permissions-Policy":
-    'camera=(), fullscreen=(self "https://www.youtube-nocookie.com" "https://open.spotify.com"), geolocation=(), microphone=(), payment=(), usb=()',
+    'camera=(), fullscreen=(self "https://www.youtube-nocookie.com"), geolocation=(), microphone=(), payment=(), usb=()',
   "Referrer-Policy": "no-referrer",
   "X-Content-Type-Options": "nosniff",
   "X-Frame-Options": "DENY",

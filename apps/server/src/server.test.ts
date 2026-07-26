@@ -1470,13 +1470,13 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.include(contentSecurityPolicy, "style-src 'self' https://fonts.googleapis.com");
       assert.equal(
         contentSecurityPolicy.split("; ").find((directive) => directive.startsWith("frame-src ")),
-        "frame-src https://www.youtube-nocookie.com https://open.spotify.com",
+        "frame-src https://www.youtube-nocookie.com",
       );
       assert.equal(response.headers.get("x-frame-options"), "DENY");
       assert.equal(response.headers.get("referrer-policy"), "no-referrer");
       assert.equal(
         response.headers.get("permissions-policy"),
-        'camera=(), fullscreen=(self "https://www.youtube-nocookie.com" "https://open.spotify.com"), geolocation=(), microphone=(), payment=(), usb=()',
+        'camera=(), fullscreen=(self "https://www.youtube-nocookie.com"), geolocation=(), microphone=(), payment=(), usb=()',
       );
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );

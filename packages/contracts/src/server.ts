@@ -771,7 +771,7 @@ export const DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES = {
   youtubePlayer: true,
   youtubePublicDiscovery: false,
   youtubeAccountConnection: false,
-  spotifyEmbed: true,
+  spotifyEmbed: false,
   workflowObservatory: true,
 } as const;
 

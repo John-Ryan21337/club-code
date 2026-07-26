@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   AmbientExperienceCapabilities,
+  DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES,
   ServerProvider,
   ServerRuntimeLayerDiagnosticsResult,
 } from "./server.ts";
@@ -484,6 +485,10 @@ describe("ServerProvider", () => {
 });
 
 describe("AmbientExperienceCapabilities", () => {
+  it("does not advertise an unimplemented Spotify embed capability", () => {
+    expect(DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES.spotifyEmbed).toBe(false);
+  });
+
   it("fails closed when the capability object or individual fields are omitted", () => {
     const disabled = {
       version: 2,
