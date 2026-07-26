@@ -10,9 +10,13 @@ import {
 import { describe, expect, it } from "vitest";
 
 import {
+  USER_INPUT_CALLBACK_OWNERSHIP_LOST_KIND,
+  USER_INPUT_RECOVERY_ACCEPTED_KIND,
   USER_INPUT_RECOVERY_PENDING_KIND,
   composeStoppedSessionUserInputRecoveryMessage,
+  findAcceptedUserInputRecovery,
   findPendingUserInputRecovery,
+  findUserInputCallbackOwnershipLoss,
   findUserInputRequestContext,
   hasResolvedUserInputRequest,
   threadCarriesRecoveryContinuationMessage,
@@ -98,6 +102,36 @@ describe("stopped structured-input recovery policy", () => {
       turnId: null,
     });
     expect(findUserInputRequestContext({ activities }, "missing")).toBeUndefined();
+  });
+
+  it("recognizes only a typed durable callback-ownership loss marker", () => {
+    const activities = [
+      activity(USER_INPUT_CALLBACK_OWNERSHIP_LOST_KIND, {
+        requestId: "request-1",
+        loss: "session-missing",
+      }),
+      activity(USER_INPUT_CALLBACK_OWNERSHIP_LOST_KIND, {
+        requestId: "request-other",
+        loss: "callback-missing",
+      }),
+    ];
+
+    expect(findUserInputCallbackOwnershipLoss({ activities }, "request-1")).toBe("session-missing");
+    expect(
+      findUserInputCallbackOwnershipLoss(
+        {
+          activities: [
+            ...activities,
+            activity(USER_INPUT_CALLBACK_OWNERSHIP_LOST_KIND, {
+              requestId: "request-1",
+              loss: "transport-outage",
+            }),
+          ],
+        },
+        "request-1",
+      ),
+    ).toBe("session-missing");
+    expect(findUserInputCallbackOwnershipLoss({ activities }, "missing")).toBeUndefined();
   });
 
   it("composes a visible bounded answer using question text instead of opaque keys", () => {
@@ -204,6 +238,56 @@ describe("stopped structured-input recovery policy", () => {
         pending!,
       ),
     ).toBe(true);
+  });
+
+  it("recognizes durable provider acceptance only for the exact pending request and message", () => {
+    const requestId = "request-accepted";
+    const recoveryMessageId = userInputRecoveryMessageId(threadId, requestId);
+    const pending = {
+      requestId,
+      answers: { target: "engineering" },
+      recoveryMessageId,
+      recoveryMessageText: "durable continuation",
+      requestTurnId: turnId,
+    };
+    const acceptedAt = "2026-07-25T12:01:00.000Z";
+    const activities = [
+      activity(USER_INPUT_RECOVERY_ACCEPTED_KIND, {
+        requestId: "other-request",
+        recoveryMessageId,
+        acceptedAt,
+      }),
+      activity(USER_INPUT_RECOVERY_ACCEPTED_KIND, {
+        requestId,
+        recoveryMessageId: MessageId.make("user-input-recovery:other"),
+        acceptedAt,
+      }),
+      activity(USER_INPUT_RECOVERY_ACCEPTED_KIND, {
+        requestId,
+        recoveryMessageId,
+        acceptedAt,
+      }),
+    ];
+
+    expect(findAcceptedUserInputRecovery({ activities }, pending)).toEqual({
+      requestId,
+      recoveryMessageId,
+      acceptedAt,
+    });
+    expect(
+      findAcceptedUserInputRecovery(
+        {
+          activities: [
+            activity(USER_INPUT_RECOVERY_ACCEPTED_KIND, {
+              requestId,
+              recoveryMessageId,
+              acceptedAt: null,
+            }),
+          ],
+        },
+        pending,
+      ),
+    ).toBeUndefined();
   });
 
   it("refuses malformed, oversized, or already-resolved pending records", () => {

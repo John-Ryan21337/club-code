@@ -10,6 +10,8 @@ import {
 } from "@cafecode/contracts";
 
 export const USER_INPUT_RECOVERY_PENDING_KIND = "user-input.recovery-pending";
+export const USER_INPUT_RECOVERY_ACCEPTED_KIND = "user-input.recovery-accepted";
+export const USER_INPUT_CALLBACK_OWNERSHIP_LOST_KIND = "user-input.callback-ownership-lost";
 export const USER_INPUT_RECOVERY_MESSAGE_ID_PREFIX = "user-input-recovery:";
 
 const USER_INPUT_RECOVERY_MESSAGE_PREFIX =
@@ -40,6 +42,14 @@ export interface PendingUserInputRecovery {
   readonly recoveryMessageText: string;
   readonly requestTurnId: TurnId | null;
 }
+
+export interface AcceptedUserInputRecovery {
+  readonly requestId: string;
+  readonly recoveryMessageId: MessageId;
+  readonly acceptedAt: string;
+}
+
+export type UserInputCallbackOwnershipLoss = "callback-missing" | "session-missing";
 
 function readRecord(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -121,6 +131,26 @@ export function hasResolvedUserInputRequest(
   });
 }
 
+export function findUserInputCallbackOwnershipLoss(
+  thread: Pick<UserInputRecoveryThreadView, "activities">,
+  requestId: string,
+): UserInputCallbackOwnershipLoss | undefined {
+  for (let index = thread.activities.length - 1; index >= 0; index -= 1) {
+    const activity = thread.activities[index];
+    if (activity?.kind !== USER_INPUT_CALLBACK_OWNERSHIP_LOST_KIND) {
+      continue;
+    }
+    const payload = readRecord(activity.payload);
+    if (payload?.requestId !== requestId) {
+      continue;
+    }
+    if (payload.loss === "callback-missing" || payload.loss === "session-missing") {
+      return payload.loss;
+    }
+  }
+  return undefined;
+}
+
 export function findPendingUserInputRecovery(
   thread: UserInputRecoveryThreadView,
   recoveryMessageId: MessageId,
@@ -156,6 +186,39 @@ export function findPendingUserInputRecovery(
       recoveryMessageId,
       recoveryMessageText,
       requestTurnId: activity.turnId,
+    };
+  }
+  return undefined;
+}
+
+/**
+ * Find durable proof that the provider accepted the exact pending recovery.
+ *
+ * The request/message binding is checked against the pending record so an
+ * unrelated or malformed activity can never turn into an acknowledgement.
+ */
+export function findAcceptedUserInputRecovery(
+  thread: Pick<UserInputRecoveryThreadView, "activities">,
+  pendingRecovery: PendingUserInputRecovery,
+): AcceptedUserInputRecovery | undefined {
+  for (let index = thread.activities.length - 1; index >= 0; index -= 1) {
+    const activity = thread.activities[index];
+    if (activity?.kind !== USER_INPUT_RECOVERY_ACCEPTED_KIND) {
+      continue;
+    }
+    const payload = readRecord(activity.payload);
+    if (
+      payload?.requestId !== pendingRecovery.requestId ||
+      payload.recoveryMessageId !== pendingRecovery.recoveryMessageId ||
+      typeof payload.acceptedAt !== "string" ||
+      payload.acceptedAt.length === 0
+    ) {
+      continue;
+    }
+    return {
+      requestId: pendingRecovery.requestId,
+      recoveryMessageId: pendingRecovery.recoveryMessageId,
+      acceptedAt: payload.acceptedAt,
     };
   }
   return undefined;
