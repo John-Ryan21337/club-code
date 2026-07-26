@@ -212,6 +212,7 @@ import {
   type SidebarProjectSnapshot,
 } from "../sidebarProjectGrouping";
 import { SidebarProviderUpdatePill } from "./sidebar/SidebarProviderUpdatePill";
+import { ProviderUsageWidget } from "./sidebar/ProviderUsageWidget";
 import {
   SidebarTriggerWithUnreadDot,
   UnseenCompletionsDot,
@@ -4230,6 +4231,7 @@ export default function Sidebar() {
             <SettingsSidebarNav pathname={pathname} />
           </div>
           <div aria-hidden="true" className="hidden flex-1 group-data-[collapsible=icon]:block" />
+          <ProviderUsageWidget />
           <div className="hidden group-data-[collapsible=icon]:block">
             <SidebarChromeFooter />
           </div>
@@ -4287,6 +4289,7 @@ export default function Sidebar() {
             <SidebarSeparator />
           </div>
           <div aria-hidden="true" className="hidden flex-1 group-data-[collapsible=icon]:block" />
+          <ProviderUsageWidget />
           <SidebarChromeFooter />
         </>
       )}
