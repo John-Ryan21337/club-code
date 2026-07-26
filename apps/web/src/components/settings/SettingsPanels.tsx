@@ -120,6 +120,7 @@ import {
   uploadSidebarBrandImage,
 } from "../../brandingImages";
 import { ColorWheelPicker } from "./ColorWheelPicker";
+import { AmbientVideoSettings } from "../ambient/AmbientVideoSettings";
 
 const THEME_OPTIONS = [
   {
@@ -1044,6 +1045,7 @@ export function AppearanceSettingsPanel() {
           }
         />
       </SettingsSection>
+      <AmbientVideoSettings />
     </SettingsPageContainer>
   );
 }
