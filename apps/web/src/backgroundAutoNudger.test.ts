@@ -57,6 +57,54 @@ function observation(
 }
 
 describe("background auto nudge controller", () => {
+  it("dispatches exactly once after the owner navigates offscreen", () => {
+    const controller = new BackgroundAutoNudgeController(null);
+    controller.start(owner, "2026-07-23T23:59:00.000Z", startedAt);
+    controller.observe(observation(startedAt));
+    const dueAt = Date.parse(controller.getSnapshot().scheduled?.dueAt ?? "");
+
+    // No observation occurs while the thread route is offscreen. The global
+    // coordinator later observes the authoritative shell after the deadline.
+    expect(controller.observe(observation(dueAt + 10_000))).toMatchObject({
+      terminalTurnKey: "local:thread-a:turn-1",
+      messageId: "message-auto-1",
+    });
+    expect(controller.observe(observation(dueAt + 10_001))).toBeNull();
+    expect(
+      controller
+        .getSnapshot()
+        .ledger.filter(
+          (entry) => entry.kind === "sent" && entry.terminalTurnKey === "local:thread-a:turn-1",
+        ),
+    ).toHaveLength(1);
+  });
+
+  it("cannot dispatch when disabled while a terminal turn is armed", () => {
+    const controller = new BackgroundAutoNudgeController(null);
+    controller.start(owner, "2026-07-23T23:59:00.000Z", startedAt);
+    controller.observe(observation(startedAt));
+    const dueAt = Date.parse(controller.getSnapshot().scheduled?.dueAt ?? "");
+
+    expect(
+      controller.observe(
+        observation(dueAt, {
+          settings: {
+            mode: "steady-progress",
+            enabled: false,
+            maxRounds: 5,
+            maxMinutes: 30,
+          },
+        }),
+      ),
+    ).toBeNull();
+    expect(controller.observe(observation(dueAt + 1))).toBeNull();
+    expect(controller.getSnapshot()).toMatchObject({
+      owner: null,
+      status: "stopped",
+      reason: "Background continuation was disabled.",
+    });
+  });
+
   it("arms one owned thread, waits for the delay, and records an attributable send", () => {
     const { storage } = storageFixture();
     const controller = new BackgroundAutoNudgeController(storage);
@@ -140,6 +188,23 @@ describe("background auto nudge controller", () => {
     expect(firstDispatch).not.toBeNull();
     expect(secondDispatch).toBeNull();
     expect(secondWindow.getSnapshot().sentRounds).toBe(1);
+  });
+
+  it("pauses instead of dispatching when the durable exactly-once claim cannot be saved", () => {
+    const controller = new BackgroundAutoNudgeController({
+      getItem: () => null,
+      setItem: () => {
+        throw new Error("quota unavailable");
+      },
+      removeItem: () => undefined,
+    });
+    controller.start(owner, "2026-07-23T23:59:00.000Z", startedAt);
+
+    expect(controller.observe(observation(startedAt))).toBeNull();
+    expect(controller.getSnapshot()).toMatchObject({
+      status: "paused",
+      reason: "Durable background state could not be saved.",
+    });
   });
 
   it("pauses on manual activity, queued work, and provider trouble", () => {

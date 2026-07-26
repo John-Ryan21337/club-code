@@ -10,6 +10,7 @@ import { useSyncExternalStore } from "react";
 import { AUTO_NUDGE_DELAY_MS, autoNudgePromptForMode } from "./autoNudger";
 
 export const AUTO_NUDGE_BACKGROUND_STORAGE_KEY = "cafe-code.auto-nudge.background.v1";
+const AUTO_NUDGE_BACKGROUND_STORAGE_PROBE_KEY = "cafe-code.auto-nudge.background.probe.v1";
 const MAX_BACKGROUND_LEDGER_ENTRIES = 40;
 const MAX_BACKGROUND_STORAGE_CHARACTERS = 64_000;
 const MAX_SAFE_ID_LENGTH = 512;
@@ -257,6 +258,7 @@ export class BackgroundAutoNudgeController {
   private state: BackgroundAutoNudgeState;
   private readonly listeners = new Set<() => void>();
   private sequence = 0;
+  private storageWriteFailed = false;
 
   constructor(private readonly storage: BackgroundAutoNudgeStorage | null) {
     this.state = readState(storage);
@@ -280,14 +282,17 @@ export class BackgroundAutoNudgeController {
     return () => this.listeners.delete(listener);
   };
 
-  private write(next: BackgroundAutoNudgeState): void {
+  private write(next: BackgroundAutoNudgeState): boolean {
     this.state = next;
     try {
       this.storage?.setItem(AUTO_NUDGE_BACKGROUND_STORAGE_KEY, JSON.stringify(next));
     } catch {
-      // The in-memory safety state remains authoritative for this renderer.
+      // Never dispatch from an in-memory-only claim: another renderer could
+      // still observe the older durable state and submit the same turn.
+      this.storageWriteFailed = true;
     }
     for (const listener of this.listeners) listener();
+    return !this.storageWriteFailed;
   }
 
   private entry(
@@ -405,6 +410,10 @@ export class BackgroundAutoNudgeController {
     const owner = this.state.owner;
     if (!owner || this.state.status !== "active") return null;
 
+    if (this.storageWriteFailed) {
+      this.pause("Durable background state could not be saved.", input.nowMs);
+      return null;
+    }
     if (!validSettings(input.settings)) {
       this.stop("Background continuation was disabled.", input.nowMs);
       return null;
@@ -548,7 +557,7 @@ export class BackgroundAutoNudgeController {
     const messageId = input.newMessageId();
     const createdAt = new Date(input.nowMs).toISOString();
     const round = this.state.sentRounds + 1;
-    this.write(
+    const dispatchClaimPersisted = this.write(
       this.withEntry(
         {
           ...this.state,
@@ -566,6 +575,10 @@ export class BackgroundAutoNudgeController {
         }),
       ),
     );
+    if (!dispatchClaimPersisted) {
+      this.pause("Durable background state could not be saved.", input.nowMs);
+      return null;
+    }
     return { owner, terminalTurnKey: turnKey, prompt, messageId, createdAt, round };
   }
 }
@@ -579,7 +592,23 @@ export function getBackgroundAutoNudgeController(): BackgroundAutoNudgeControlle
 
 /** Background dispatch is intentionally unavailable without a cross-tab lock. */
 export function supportsBackgroundAutoNudgeDispatchLock(): boolean {
-  return typeof navigator !== "undefined" && typeof navigator.locks?.request === "function";
+  if (typeof navigator === "undefined" || typeof navigator.locks?.request !== "function") {
+    return false;
+  }
+  const storage = resolveStorage();
+  if (!storage) return false;
+  try {
+    const previous = storage.getItem(AUTO_NUDGE_BACKGROUND_STORAGE_PROBE_KEY);
+    storage.setItem(AUTO_NUDGE_BACKGROUND_STORAGE_PROBE_KEY, "1");
+    if (previous === null) {
+      storage.removeItem(AUTO_NUDGE_BACKGROUND_STORAGE_PROBE_KEY);
+    } else {
+      storage.setItem(AUTO_NUDGE_BACKGROUND_STORAGE_PROBE_KEY, previous);
+    }
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function useBackgroundAutoNudgeState(): BackgroundAutoNudgeState {
