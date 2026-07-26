@@ -5,6 +5,7 @@ import {
   PacingAdmissionCancelledError,
   PacingAdmissionCapacityError,
   PacingAdmissionDisposedError,
+  PacingAdmissionRetiredError,
   type PacingAdmissionClock,
   type PacingAdmissionKey,
 } from "./boundedPacingAdmission.ts";
@@ -882,6 +883,96 @@ describe("BoundedPacingAdmissionCoordinator", () => {
     expect(coordinator.activeCount).toBe(1);
     expect(adopted.release()).toBe(true);
     expect(coordinator.activeCount).toBe(0);
+  });
+
+  it("retires only the exact provider key and rejects its queued launches", async () => {
+    const { coordinator } = setup();
+    coordinator.observe(keyA, claudeObservation(0));
+    coordinator.observe(keyB, claudeObservation(0));
+    const waitingA = coordinator.submitNewLaunch({
+      kind: "new-launch",
+      key: keyA,
+      launch: () => "must-not-start",
+    });
+    const waitingB = coordinator.submitNewLaunch({
+      kind: "new-launch",
+      key: keyB,
+      launch: () => "other-key",
+    });
+
+    expect(coordinator.retireKey(keyA)).toBe(true);
+    expect(coordinator.retireKey(keyA)).toBe(false);
+    await expect(waitingA.promise).rejects.toBeInstanceOf(PacingAdmissionRetiredError);
+    expect(waitingA.cancel()).toBe(false);
+    expect(coordinator.waitingCount).toBe(1);
+
+    coordinator.observe(
+      keyB,
+      claudeObservation(RESET, {
+        usedPercent: 1,
+        resetsAtMs: RESET + WINDOW,
+      }),
+    );
+    await expect(waitingB.promise).resolves.toBe("other-key");
+  });
+
+  it("never interrupts active work when its provider key is retired", async () => {
+    const { coordinator } = setup();
+    let release!: () => void;
+    const active = coordinator.submitNewLaunch({
+      kind: "new-launch",
+      key: keyA,
+      launch: () => new Promise<string>((resolve) => (release = () => resolve("natural"))),
+    });
+
+    expect(coordinator.activeCount).toBe(1);
+    expect(coordinator.retireKey(keyA)).toBe(true);
+    expect(coordinator.activeCount).toBe(1);
+    await expect(
+      coordinator.submitNewLaunch({
+        kind: "new-launch",
+        key: keyA,
+        launch: () => "must-not-start",
+      }).promise,
+    ).rejects.toBeInstanceOf(PacingAdmissionRetiredError);
+    expect(() => coordinator.adoptActiveWork(keyA, "late-active")).toThrow(
+      PacingAdmissionRetiredError,
+    );
+
+    release();
+    await expect(active.promise).resolves.toBe("natural");
+    expect(coordinator.activeCount).toBe(0);
+  });
+
+  it("requires provider evidence before a retired key can launch again", async () => {
+    const { coordinator } = setup();
+    const observed = claudeObservation(0, { usedPercent: 1 });
+    coordinator.observe(keyA, observed);
+    expect(coordinator.retireKey(keyA)).toBe(true);
+
+    const beforeEvidence = coordinator.submitNewLaunch({
+      kind: "new-launch",
+      key: keyA,
+      launch: () => "before-evidence",
+    });
+    await expect(beforeEvidence.promise).rejects.toBeInstanceOf(PacingAdmissionRetiredError);
+
+    coordinator.observe(keyA, observed);
+    const replayedEvidence = coordinator.submitNewLaunch({
+      kind: "new-launch",
+      key: keyA,
+      launch: () => "replayed-evidence",
+    });
+    expect(coordinator.waitingCount).toBe(1);
+
+    coordinator.observe(
+      keyA,
+      claudeObservation(1, {
+        usedPercent: 1,
+        providerObservationSequence: requiredProviderSequence(observed) + 1,
+      }),
+    );
+    await expect(replayedEvidence.promise).resolves.toBe("replayed-evidence");
   });
 
   it("captures observations so caller mutation cannot reopen a draining gate", async () => {

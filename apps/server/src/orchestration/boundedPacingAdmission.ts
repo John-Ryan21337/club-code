@@ -92,7 +92,14 @@ export class PacingAdmissionDisposedError extends Error {
   }
 }
 
-type WaitingStatus = "waiting" | "starting" | "cancelled" | "disposed";
+export class PacingAdmissionRetiredError extends Error {
+  constructor() {
+    super("The provider pacing key was retired before launch.");
+    this.name = "PacingAdmissionRetiredError";
+  }
+}
+
+type WaitingStatus = "waiting" | "starting" | "cancelled" | "disposed" | "retired";
 
 interface WaitingEntry {
   readonly state: KeyState;
@@ -108,6 +115,7 @@ interface KeyState {
   readonly controller: DrainFirstPacingController;
   readonly waiting: WaitingEntry[];
   readonly activeWorkLeases: Map<string, PacingActiveWorkLease>;
+  retired: boolean;
   activeCount: number;
   nextObservationSequence: number;
   latestProviderObservationSequence: number | null;
@@ -277,6 +285,7 @@ export class BoundedPacingAdmissionCoordinator {
   ): DrainFirstPacingSnapshot {
     this.assertAvailable();
     const state = this.getOrCreateState(key);
+    state.retired = false;
     const capturedObservation = captureObservation(observation);
     const supportedAndEnabled =
       capturedObservation.enabled && capturedObservation.providerFamily !== "other";
@@ -461,6 +470,7 @@ export class BoundedPacingAdmissionCoordinator {
   adoptActiveWork(key: PacingAdmissionKey, activeWorkIdentity: string): PacingActiveWorkLease {
     this.assertAvailable();
     const state = this.getOrCreateState(key);
+    if (state.retired) throw new PacingAdmissionRetiredError();
     const identity = opaqueIdentityPart(activeWorkIdentity, "activeWorkIdentity");
     const existing = state.activeWorkLeases.get(identity);
     if (existing !== undefined) return existing;
@@ -490,6 +500,9 @@ export class BoundedPacingAdmissionCoordinator {
       state = this.getOrCreateState(request.key);
     } catch (error) {
       return this.rejectedAdmission<T>(error);
+    }
+    if (state.retired) {
+      return this.rejectedAdmission<T>(new PacingAdmissionRetiredError());
     }
 
     const dispatchSource = request.dispatchSource ?? "auto-nudge";
@@ -533,6 +546,35 @@ export class BoundedPacingAdmissionCoordinator {
   }
 
   /**
+   * Retires one exact provider key after its instance or account is removed.
+   *
+   * Work that has not started is rejected. Work that is already active keeps
+   * running naturally and remains in active accounting. A later provider
+   * observation for the same exact key explicitly reactivates it.
+   */
+  retireKey(key: PacingAdmissionKey): boolean {
+    this.assertAvailable();
+    const state = this.states.get(pacingAdmissionKeyIdentity(key));
+    if (state === undefined || state.retired) return false;
+
+    state.retired = true;
+    state.pacingObservationEnabled = false;
+    this.requireFreshCautionAuthorization(state);
+    state.claudeProbeArmed = false;
+    state.claudeProbeNextArmAtMs = null;
+
+    const error = new PacingAdmissionRetiredError();
+    while (state.waiting.length > 0) {
+      const entry = state.waiting[0]!;
+      entry.status = "retired";
+      this.removeWaiting(entry);
+      entry.reject(error);
+    }
+    this.scheduleWake();
+    return true;
+  }
+
+  /**
    * Rejects queued launches and releases coordinator resources. Active launch
    * promises continue naturally and receive no signal from this method.
    */
@@ -569,6 +611,7 @@ export class BoundedPacingAdmissionCoordinator {
       controller: new DrainFirstPacingController(),
       waiting: [],
       activeWorkLeases: new Map(),
+      retired: false,
       activeCount: 0,
       nextObservationSequence: 0,
       latestProviderObservationSequence: null,
@@ -818,6 +861,7 @@ export class BoundedPacingAdmissionCoordinator {
     if (this.disposed) return;
     let earliest: number | null = null;
     for (const state of this.states.values()) {
+      if (state.retired) continue;
       const snapshot = state.controller.getSnapshot();
       let candidate: number | null = null;
       if (snapshot.phase === "paused" && snapshot.resumeAtMs !== null) {
