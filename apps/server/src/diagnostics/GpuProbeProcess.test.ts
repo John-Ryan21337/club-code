@@ -65,21 +65,37 @@ function recordingSpawn(script: string) {
   return { calls, children, spawnProcess };
 }
 
-type FakeChild = ChildProcess & { readonly killSignals: string[] };
+type FakeChild = ChildProcess & {
+  readonly stdout: PassThrough | null;
+  readonly stderr: PassThrough | null;
+  readonly killSignals: string[];
+  readonly unrefCalls: number[];
+};
 
 /** A helper that can be made to never emit `close`, which a real one can do. */
-function makeFakeChild(options: { readonly withStdio?: boolean } = {}): FakeChild {
+function makeFakeChild(
+  options: {
+    readonly withStdio?: boolean;
+    readonly withStdout?: boolean;
+    readonly withStderr?: boolean;
+  } = {},
+): FakeChild {
   const killSignals: string[] = [];
   const withStdio = options.withStdio ?? true;
+  const unrefCalls: number[] = [];
   const child = new EventEmitter() as unknown as FakeChild;
   Object.assign(child, {
-    stdout: withStdio ? new PassThrough() : null,
-    stderr: withStdio ? new PassThrough() : null,
+    stdout: (options.withStdout ?? withStdio) ? new PassThrough() : null,
+    stderr: (options.withStderr ?? withStdio) ? new PassThrough() : null,
     stdin: null,
     killSignals,
+    unrefCalls,
     kill: (signal?: string) => {
       killSignals.push(signal ?? "SIGTERM");
       return true;
+    },
+    unref: () => {
+      unrefCalls.push(1);
     },
   });
   return child;
@@ -87,6 +103,22 @@ function makeFakeChild(options: { readonly withStdio?: boolean } = {}): FakeChil
 
 function fakeSpawn(child: ChildProcess) {
   return (() => child) as unknown as typeof spawn;
+}
+
+/**
+ * Resolves once the OS process has actually been reaped. `child.killed` only
+ * records that a signal was delivered, so termination assertions must wait for
+ * a real `exit` rather than trusting the kill request.
+ */
+function waitForRealTermination(child: ChildProcess, timeoutMs: number): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
+  return new Promise<void>((resolve) => {
+    const deadline = setTimeout(resolve, timeoutMs);
+    child.once("exit", () => {
+      clearTimeout(deadline);
+      resolve();
+    });
+  });
 }
 
 describe("validatedWindowsSystemRoot", () => {
@@ -498,7 +530,7 @@ describe("GpuProbeProcess output handling", () => {
 });
 
 describe("GpuProbeProcess lifetime bounds", () => {
-  it("settles a caller even when the helper never emits close", async () => {
+  it("settles and makes a final bounded reap attempt when the helper never terminates", async () => {
     vi.useFakeTimers();
     try {
       const child = makeFakeChild();
@@ -509,6 +541,8 @@ describe("GpuProbeProcess lifetime bounds", () => {
         spawnProcess: fakeSpawn(child),
         probeTimeoutMs: 1_000,
         forceSettleGraceMs: 250,
+        retiredReapGraceMs: 100,
+        shutdownCloseGraceMs: 50,
       });
 
       const pending = probe.read();
@@ -517,6 +551,10 @@ describe("GpuProbeProcess lifetime bounds", () => {
         settled = true;
       });
 
+      expect(() => {
+        child.emit("error", new Error("first kill error"));
+        child.emit("error", new Error("second kill error"));
+      }).not.toThrow();
       await vi.advanceTimersByTimeAsync(1_000);
       expect(child.killSignals).toEqual(["SIGKILL"]);
       expect(settled).toBe(false);
@@ -526,53 +564,184 @@ describe("GpuProbeProcess lifetime bounds", () => {
       expect(result.reason).toBe("probe-failed");
       // Killed once by the timeout and again by the force-settle deadline.
       expect(child.killSignals).toEqual(["SIGKILL", "SIGKILL"]);
+
+      await vi.advanceTimersByTimeAsync(100);
+      expect(child.killSignals).toEqual(["SIGKILL", "SIGKILL", "SIGKILL"]);
+
+      const closing = probe.close();
+      await vi.advanceTimersByTimeAsync(50);
+      await closing;
+      expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("keeps at most one live helper and refuses a second read until the first exits", async () => {
+  it("releases the active slot after bounded retirement and admits healthy replacements", async () => {
     vi.useFakeTimers();
     try {
-      const child = makeFakeChild();
+      const first = makeFakeChild();
+      const second = makeFakeChild();
+      const third = makeFakeChild();
+      const children = [first, second, third];
       let spawnCount = 0;
       const probe = makeGpuProbeProcessForTest({
         platform: "linux",
         env: {},
         isExecutableFile: () => true,
         spawnProcess: (() => {
+          const child = children[spawnCount];
           spawnCount += 1;
+          if (!child) throw new Error("unexpected fourth spawn");
           return child;
         }) as unknown as typeof spawn,
         probeTimeoutMs: 1_000,
         forceSettleGraceMs: 250,
+        retiredReapGraceMs: 100,
+        shutdownCloseGraceMs: 50,
       });
 
-      const first = probe.read();
-      await vi.advanceTimersByTimeAsync(1_250);
-      expect((await first).reason).toBe("probe-failed");
-
-      // The helper is force-settled but still live, so a second read must not
-      // stack another process behind it.
-      const second = await probe.read();
-      expect(second.reason).toBe("probe-failed");
+      const firstRead = probe.read();
+      const concurrent = await probe.read();
+      expect(concurrent.reason).toBe("probe-failed");
       expect(spawnCount).toBe(1);
 
-      // Once the OS reports the exit, the slot is released.
-      child.emit("close", 0);
-      await vi.advanceTimersByTimeAsync(0);
-      void probe.read();
-      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(1_250);
+      expect((await firstRead).reason).toBe("probe-failed");
+
+      const secondRead = probe.read();
       expect(spawnCount).toBe(2);
+      second.stdout!.write("NVIDIA A, 0, 15, 24564, 3421\n");
+      second.emit("close", 0);
+      expect((await secondRead).status).toBe("available");
+
+      // The original helper still has not terminated, but one bounded
+      // quarantine entry does not pin later healthy samples.
+      const thirdRead = probe.read();
+      expect(spawnCount).toBe(3);
+      third.stdout!.write("NVIDIA A, 0, 20, 24564, 4000\n");
+      third.emit("close", 0);
+      expect((await thirdRead).status).toBe("available");
+
+      const closing = probe.close();
+      await vi.advanceTimersByTimeAsync(50);
+      await closing;
+      expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("settles probe-failed when the runtime hands back null stdio streams", async () => {
+  it("opens a bounded circuit after two unreaped helpers and recovers on a late exit", async () => {
     vi.useFakeTimers();
     try {
-      const child = makeFakeChild({ withStdio: false });
+      const first = makeFakeChild();
+      const second = makeFakeChild();
+      const recovered = makeFakeChild();
+      const children = [first, second, recovered];
+      let spawnCount = 0;
+      const probe = makeGpuProbeProcessForTest({
+        platform: "linux",
+        env: {},
+        isExecutableFile: () => true,
+        spawnProcess: (() => {
+          const child = children[spawnCount];
+          spawnCount += 1;
+          if (!child) throw new Error("unbounded GPU helper admission");
+          return child;
+        }) as unknown as typeof spawn,
+        probeTimeoutMs: 1_000,
+        forceSettleGraceMs: 250,
+        retiredReapGraceMs: 100,
+        shutdownCloseGraceMs: 50,
+      });
+
+      const firstRead = probe.read();
+      await vi.advanceTimersByTimeAsync(1_250);
+      expect((await firstRead).reason).toBe("probe-failed");
+
+      const secondRead = probe.read();
+      await vi.advanceTimersByTimeAsync(1_250);
+      expect((await secondRead).reason).toBe("probe-failed");
+
+      // A third unkillable process is never started. The two-child cap is an
+      // explicit circuit breaker, not another permanently occupied active slot.
+      expect((await probe.read()).reason).toBe("probe-failed");
+      expect(spawnCount).toBe(2);
+
+      first.emit("exit", null, "SIGKILL");
+      await vi.advanceTimersByTimeAsync(0);
+
+      const recoveredRead = probe.read();
+      expect(spawnCount).toBe(3);
+      recovered.stdout!.write("NVIDIA A, 0, 25, 24564, 5000\n");
+      recovered.emit("close", 0);
+      expect((await recoveredRead).status).toBe("available");
+
+      const closing = probe.close();
+      await vi.advanceTimersByTimeAsync(50);
+      await closing;
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not consume circuit capacity when the helper exits but never closes", async () => {
+    vi.useFakeTimers();
+    try {
+      // A grandchild inheriting the pipes is the realistic reason `close` never
+      // arrives even though the helper itself exited. That must stay repeatable:
+      // an already-exited helper is not OS-unreaped and must never occupy the
+      // bounded quarantine that guards the circuit.
+      const children = [makeFakeChild(), makeFakeChild(), makeFakeChild(), makeFakeChild()];
+      let spawnCount = 0;
+      const probe = makeGpuProbeProcessForTest({
+        platform: "linux",
+        env: {},
+        isExecutableFile: () => true,
+        spawnProcess: (() => {
+          const child = children[spawnCount];
+          spawnCount += 1;
+          if (!child) throw new Error("unexpected extra spawn");
+          return child;
+        }) as unknown as typeof spawn,
+        probeTimeoutMs: 1_000,
+        forceSettleGraceMs: 250,
+        retiredReapGraceMs: 100,
+        shutdownCloseGraceMs: 50,
+      });
+
+      for (const child of children.slice(0, 3)) {
+        const pending = probe.read();
+        child.emit("exit", 0, null);
+        await vi.advanceTimersByTimeAsync(1_250);
+        expect((await pending).reason).toBe("probe-failed");
+        // Killed by the timeout and by force-settle, then dropped entirely: no
+        // quarantine entry, so no further reap deadline is scheduled.
+        expect(child.killSignals).toEqual(["SIGKILL", "SIGKILL"]);
+        expect(vi.getTimerCount()).toBe(0);
+      }
+
+      expect(spawnCount).toBe(3);
+      const healthy = children[3]!;
+      const healthyRead = probe.read();
+      expect(spawnCount).toBe(4);
+      healthy.stdout!.write("NVIDIA A, 0, 15, 24564, 3421\n");
+      healthy.emit("close", 0);
+      expect((await healthyRead).status).toBe("available");
+
+      await probe.close();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("still parses helper output delivered between exit and close", async () => {
+    vi.useFakeTimers();
+    try {
+      const child = makeFakeChild();
       const probe = makeGpuProbeProcessForTest({
         platform: "linux",
         env: {},
@@ -580,15 +749,251 @@ describe("GpuProbeProcess lifetime bounds", () => {
         spawnProcess: fakeSpawn(child),
         probeTimeoutMs: 1_000,
         forceSettleGraceMs: 250,
+        retiredReapGraceMs: 100,
+        shutdownCloseGraceMs: 50,
       });
 
       const pending = probe.read();
-      // The kill deadline is installed before stdio is touched, so this path is
-      // still bounded rather than depending on a `close` that may never arrive.
-      expect(child.killSignals).toEqual(["SIGKILL"]);
-      await vi.advanceTimersByTimeAsync(1_250);
+      child.stdout!.write("NVIDIA A, 0, 15, 24564, 3421\n");
+      // `exit` precedes the pipe drain. The read must not settle early and must
+      // not drop the buffered tail that arrives before `close`.
+      child.emit("exit", 0, null);
+      child.stdout!.write("NVIDIA B, 1, 80, 24564, 12000\n");
+      child.emit("close", 0);
 
+      const result = await pending;
+      expect(result.status).toBe("available");
+      expect(result.adapters.map((adapter) => adapter.index)).toEqual([0, 1]);
+      expect(decodeGpuTelemetry(result)).toEqual(result);
+
+      expect(vi.getTimerCount()).toBe(0);
+      await probe.close();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("restores circuit capacity when a quarantined helper finally closes", async () => {
+    vi.useFakeTimers();
+    try {
+      const first = makeFakeChild();
+      const second = makeFakeChild();
+      const recovered = makeFakeChild();
+      const children = [first, second, recovered];
+      let spawnCount = 0;
+      const probe = makeGpuProbeProcessForTest({
+        platform: "linux",
+        env: {},
+        isExecutableFile: () => true,
+        spawnProcess: (() => {
+          const child = children[spawnCount];
+          spawnCount += 1;
+          if (!child) throw new Error("unbounded GPU helper admission");
+          return child;
+        }) as unknown as typeof spawn,
+        probeTimeoutMs: 1_000,
+        forceSettleGraceMs: 250,
+        retiredReapGraceMs: 100,
+        shutdownCloseGraceMs: 50,
+      });
+
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const pending = probe.read();
+        await vi.advanceTimersByTimeAsync(1_250);
+        expect((await pending).reason).toBe("probe-failed");
+      }
+      expect(spawnCount).toBe(2);
+      expect((await probe.read()).reason).toBe("probe-failed");
+      expect(spawnCount).toBe(2);
+
+      second.emit("close", null, "SIGKILL");
+      await vi.advanceTimersByTimeAsync(0);
+
+      const recoveredRead = probe.read();
+      expect(spawnCount).toBe(3);
+      recovered.stdout!.write("NVIDIA A, 0, 25, 24564, 5000\n");
+      recovered.emit("close", 0);
+      expect((await recoveredRead).status).toBe("available");
+
+      const closing = probe.close();
+      await vi.advanceTimersByTimeAsync(50);
+      await closing;
+      expect(first.killSignals).toContain("SIGKILL");
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("isolates late retired-child events from the replacement read", async () => {
+    vi.useFakeTimers();
+    try {
+      const retired = makeFakeChild();
+      const replacement = makeFakeChild();
+      const children = [retired, replacement];
+      let spawnCount = 0;
+      const probe = makeGpuProbeProcessForTest({
+        platform: "linux",
+        env: {},
+        isExecutableFile: () => true,
+        spawnProcess: (() => children[spawnCount++]!) as unknown as typeof spawn,
+        probeTimeoutMs: 1_000,
+        forceSettleGraceMs: 250,
+        retiredReapGraceMs: 100,
+        shutdownCloseGraceMs: 50,
+      });
+
+      const retiredRead = probe.read();
+      let retiredResolutionCount = 0;
+      void retiredRead.then(() => {
+        retiredResolutionCount += 1;
+      });
+      await vi.advanceTimersByTimeAsync(1_250);
+      expect((await retiredRead).reason).toBe("probe-failed");
+      expect(retiredResolutionCount).toBe(1);
+
+      const replacementRead = probe.read();
+      let replacementSettled = false;
+      void replacementRead.then(() => {
+        replacementSettled = true;
+      });
+
+      // All of these belong to the retired record. They cannot settle, fail,
+      // or release the active replacement's admission slot.
+      expect(retired.stdout!.listenerCount("data")).toBe(0);
+      retired.stdout!.emit("data", "late, invalid, output");
+      retired.stderr!.emit("error", new Error("late retired stderr error"));
+      retired.emit("error", new Error("late retired error"));
+      retired.emit("exit", null, "SIGKILL");
+      retired.emit("close", 0);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(retiredResolutionCount).toBe(1);
+      expect(replacementSettled).toBe(false);
+      expect((await probe.read()).reason).toBe("probe-failed");
+      expect(spawnCount).toBe(2);
+
+      replacement.stdout!.write("NVIDIA A, 0, 30, 24564, 6000\n");
+      replacement.emit("close", 0);
+      expect((await replacementRead).status).toBe("available");
+
+      // Lifecycle handlers are detached after termination, while one static
+      // non-capturing error guard keeps an impossible-but-late error non-fatal.
+      expect(() => retired.emit("error", new Error("post-cleanup error"))).not.toThrow();
+
+      await probe.close();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("retires immediately and frees the slot when the runtime hands back null stdio", async () => {
+    vi.useFakeTimers();
+    try {
+      const child = makeFakeChild({ withStdio: false });
+      const replacement = makeFakeChild();
+      const children: FakeChild[] = [child, replacement];
+      let spawnCount = 0;
+      const probe = makeGpuProbeProcessForTest({
+        platform: "linux",
+        env: {},
+        isExecutableFile: () => true,
+        spawnProcess: (() => children[spawnCount++]!) as unknown as typeof spawn,
+        probeTimeoutMs: 1_000,
+        forceSettleGraceMs: 250,
+        retiredReapGraceMs: 100,
+        shutdownCloseGraceMs: 50,
+      });
+
+      const pending = probe.read();
+      // A read that can never observe output is retired at once instead of
+      // parking the single admission slot for the full force-settle window.
+      expect(child.killSignals).toEqual(["SIGKILL"]);
       expect((await pending).reason).toBe("probe-failed");
+
+      const replacementRead = probe.read();
+      expect(spawnCount).toBe(2);
+      replacement.stdout!.write("NVIDIA A, 0, 15, 24564, 3421\n");
+      replacement.emit("close", 0);
+      expect((await replacementRead).status).toBe("available");
+
+      // The unusable child receives exactly one bounded reap attempt.
+      await vi.advanceTimersByTimeAsync(100);
+      expect(child.killSignals).toEqual(["SIGKILL", "SIGKILL"]);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(child.killSignals).toEqual(["SIGKILL", "SIGKILL"]);
+
+      const closing = probe.close();
+      await vi.advanceTimersByTimeAsync(50);
+      await closing;
+      expect(child.unrefCalls).toEqual([1]);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("guards and destroys a partial stdio pipe before delayed errors can escape", async () => {
+    vi.useFakeTimers();
+    try {
+      const child = makeFakeChild({ withStdout: true, withStderr: false });
+      const probe = makeGpuProbeProcessForTest({
+        platform: "linux",
+        env: {},
+        isExecutableFile: () => true,
+        spawnProcess: fakeSpawn(child),
+        probeTimeoutMs: 1_000,
+        forceSettleGraceMs: 250,
+        retiredReapGraceMs: 100,
+        shutdownCloseGraceMs: 50,
+      });
+
+      expect((await probe.read()).reason).toBe("probe-failed");
+      expect(child.stdout!.destroyed).toBe(true);
+      expect(() =>
+        child.stdout!.emit("error", new Error("late partial-stdio error")),
+      ).not.toThrow();
+
+      const closing = probe.close();
+      await vi.advanceTimersByTimeAsync(50);
+      await closing;
+      expect(child.unrefCalls).toEqual([1]);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("removes a retired helper immediately when its close event finally arrives", async () => {
+    vi.useFakeTimers();
+    try {
+      const child = makeFakeChild();
+      const probe = makeGpuProbeProcessForTest({
+        platform: "linux",
+        env: {},
+        isExecutableFile: () => true,
+        spawnProcess: fakeSpawn(child),
+        probeTimeoutMs: 1_000,
+        forceSettleGraceMs: 250,
+        retiredReapGraceMs: 100,
+        shutdownCloseGraceMs: 5_000,
+      });
+
+      const pending = probe.read();
+      await vi.advanceTimersByTimeAsync(1_250);
+      expect((await pending).reason).toBe("probe-failed");
+
+      child.emit("close", null, "SIGKILL");
+      await vi.advanceTimersByTimeAsync(0);
+
+      let closeSettled = false;
+      void probe.close().then(() => {
+        closeSettled = true;
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(closeSettled).toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();
     }
@@ -612,8 +1017,10 @@ describe("GpuProbeProcess lifetime bounds", () => {
     const elapsed = performance.now() - startedAt;
 
     const child = recorder.children[0]!;
+    await waitForRealTermination(child, 10_000);
     // The OS process is actually gone, not merely abandoned by its promise.
-    expect(child.killed || child.exitCode !== null || child.signalCode !== null).toBe(true);
+    // `killed` alone would pass for a helper that survived the signal.
+    expect(child.exitCode !== null || child.signalCode !== null).toBe(true);
     expect(elapsed).toBeLessThan(10_000);
   });
 
@@ -633,16 +1040,146 @@ describe("GpuProbeProcess lifetime bounds", () => {
 
       void probe.read();
       await vi.advanceTimersByTimeAsync(1_250);
+      // Retirement releases admission but retains the Node process handle:
+      // the owner still promises a bounded shutdown reap and late-exit
+      // observation while it remains open.
+      expect(child.unrefCalls).toEqual([]);
 
       let closed = false;
       void probe.close().then(() => {
         closed = true;
       });
+      // The shutdown sweep kills immediately, but releasing the handle before
+      // its grace expires could let an otherwise-idle Node exit before close()
+      // settles.
+      await vi.advanceTimersByTimeAsync(0);
+      expect(child.killSignals).toContain("SIGKILL");
+      expect(child.unrefCalls).toEqual([]);
       await vi.advanceTimersByTimeAsync(499);
       expect(closed).toBe(false);
+      expect(child.unrefCalls).toEqual([]);
       await vi.advanceTimersByTimeAsync(1);
       expect(closed).toBe(true);
       expect(child.killSignals).toContain("SIGKILL");
+      expect(child.unrefCalls).toEqual([1]);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("finishes the shutdown sweep even if one child's cleanup throws", async () => {
+    vi.useFakeTimers();
+    try {
+      const hostile = makeFakeChild();
+      const healthy = makeFakeChild();
+      // Hostile listener bookkeeping and unref behavior must not abort the
+      // sweep, strand the second helper, retain tracking state, or reject close.
+      Object.assign(hostile, {
+        removeListener: () => {
+          throw new Error("hostile child cleanup");
+        },
+        unref: () => {
+          throw new Error("hostile child unref");
+        },
+      });
+      const children = [hostile, healthy];
+      let spawnCount = 0;
+      const probe = makeGpuProbeProcessForTest({
+        platform: "linux",
+        env: {},
+        isExecutableFile: () => true,
+        spawnProcess: (() => children[spawnCount++]!) as unknown as typeof spawn,
+        probeTimeoutMs: 1_000,
+        forceSettleGraceMs: 250,
+        retiredReapGraceMs: 100,
+        shutdownCloseGraceMs: 50,
+      });
+
+      const hostileRead = probe.read();
+      await vi.advanceTimersByTimeAsync(1_250);
+      expect((await hostileRead).reason).toBe("probe-failed");
+
+      const healthyRead = probe.read();
+      const closing = probe.close();
+      await vi.advanceTimersByTimeAsync(50);
+      await expect(closing).resolves.toBeUndefined();
+
+      expect((await healthyRead).reason).toBe("probe-failed");
+      expect(hostile.killSignals.length).toBeGreaterThan(0);
+      expect(healthy.killSignals).toEqual(["SIGKILL"]);
+      expect(healthy.unrefCalls).toEqual([1]);
+      expect(vi.getTimerCount()).toBe(0);
+      expect((await probe.read()).reason).toBe("probe-failed");
+      expect(spawnCount).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("disposes an active and a retired helper without double settlement or timer leaks", async () => {
+    vi.useFakeTimers();
+    try {
+      const retired = makeFakeChild();
+      const active = makeFakeChild();
+      const children = [retired, active];
+      let spawnCount = 0;
+      const probe = makeGpuProbeProcessForTest({
+        platform: "linux",
+        env: {},
+        isExecutableFile: () => true,
+        spawnProcess: (() => children[spawnCount++]!) as unknown as typeof spawn,
+        probeTimeoutMs: 1_000,
+        forceSettleGraceMs: 250,
+        retiredReapGraceMs: 100,
+        shutdownCloseGraceMs: 500,
+      });
+
+      const retiredRead = probe.read();
+      await vi.advanceTimersByTimeAsync(1_250);
+      expect((await retiredRead).reason).toBe("probe-failed");
+
+      const activeRead = probe.read();
+      let activeResolutionCount = 0;
+      void activeRead.then(() => {
+        activeResolutionCount += 1;
+      });
+
+      let closeSettled = false;
+      const firstClose = probe.close();
+      void firstClose.then(() => {
+        closeSettled = true;
+      });
+      expect(probe.close()).toBe(firstClose);
+      await vi.advanceTimersByTimeAsync(0);
+      expect((await activeRead).reason).toBe("probe-failed");
+      expect(activeResolutionCount).toBe(1);
+      expect(closeSettled).toBe(false);
+      expect(retired.killSignals).toEqual(["SIGKILL", "SIGKILL", "SIGKILL"]);
+      expect(active.killSignals).toEqual(["SIGKILL"]);
+
+      await vi.advanceTimersByTimeAsync(499);
+      expect(closeSettled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await firstClose;
+      expect(closeSettled).toBe(true);
+      expect(retired.unrefCalls).toEqual([1]);
+      expect(active.unrefCalls).toEqual([1]);
+      expect(vi.getTimerCount()).toBe(0);
+
+      expect((await probe.read()).reason).toBe("probe-failed");
+      expect(spawnCount).toBe(2);
+
+      // Owner disposal detached per-read closures. Late process and stream
+      // errors are swallowed by static guards and cannot re-settle the caller.
+      expect(() => retired.emit("error", new Error("late retired error"))).not.toThrow();
+      expect(() => active.emit("error", new Error("late active error"))).not.toThrow();
+      expect(() => active.stdout!.emit("error", new Error("late stdout error"))).not.toThrow();
+      active.emit("exit", null, "SIGKILL");
+      active.emit("close", 0);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(activeResolutionCount).toBe(1);
+      expect(vi.getTimerCount()).toBe(0);
     } finally {
       vi.useRealTimers();
     }

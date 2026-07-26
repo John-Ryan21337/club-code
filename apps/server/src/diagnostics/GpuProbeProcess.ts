@@ -16,9 +16,17 @@ const MAX_PROBE_OUTPUT_BYTES = 16_384;
 const PROBE_TIMEOUT_MS = 2_000;
 /** Extra time after the kill request before the caller is settled regardless. */
 const PROBE_FORCE_SETTLE_GRACE_MS = 500;
+/** One final bounded reap attempt after a helper has released its admission slot. */
+const PROBE_RETIRED_REAP_GRACE_MS = 1_000;
 const SHUTDOWN_CLOSE_GRACE_MS = 1_000;
-/** One helper at a time, host-wide. See `read` for why this is a hard cap. */
-const MAX_LIVE_HELPERS = 1;
+/** One probe may actively own the process boundary at a time. */
+const MAX_CONCURRENT_GPU_HELPERS = 1;
+/**
+ * Retain at most two OS-unreaped helpers: the original wedged process and one
+ * bounded recovery attempt. A second unreaped failure opens a fail-closed
+ * circuit until either child eventually exits or the owner is disposed.
+ */
+const MAX_UNREAPED_GPU_HELPERS = 2;
 
 // Fixed argv only: no caller input, workspace path, or configuration value
 // ever reaches this command line.
@@ -75,6 +83,7 @@ interface GpuProbeProcessOptions {
   readonly spawnProcess?: SpawnLike;
   readonly probeTimeoutMs?: number;
   readonly forceSettleGraceMs?: number;
+  readonly retiredReapGraceMs?: number;
   readonly shutdownCloseGraceMs?: number;
 }
 
@@ -234,14 +243,65 @@ function requestKill(child: ChildProcess): void {
   }
 }
 
+function requestUnref(child: ChildProcess): void {
+  try {
+    child.unref();
+  } catch {
+    /* best-effort */
+  }
+}
+
+function scheduleDeadline(callback: () => void, delayMs: number): ReturnType<typeof setTimeout> {
+  const deadline = setTimeout(callback, delayMs);
+  deadline.unref();
+  return deadline;
+}
+
+const swallowLateProcessError = () => {
+  // An OS-unreaped child can report a delayed spawn/runtime error after the
+  // owner has completed its bounded shutdown. Keep that event non-fatal
+  // without retaining the per-read closure.
+};
+
+const swallowLateStreamError = () => {
+  // Destroyed stdio may report a delayed error. The probe has already failed
+  // closed, so there is no result or diagnostic payload left to update.
+};
+
+interface TrackedGpuProbeChild {
+  readonly terminated: Promise<void>;
+  readonly stopForClose: () => void;
+  readonly detachAfterClose: () => void;
+}
+
+/**
+ * Shutdown must reach every tracked child. Per-record cleanup is isolated so
+ * one hostile process object cannot strand the rest or reject close().
+ */
+function forEachRecord(
+  records: ReadonlyArray<TrackedGpuProbeChild>,
+  step: (record: TrackedGpuProbeChild) => void,
+): void {
+  for (const record of records) {
+    try {
+      step(record);
+    } catch {
+      // Best effort: the bounded shutdown deadline remains authoritative.
+    }
+  }
+}
+
 /**
  * Owner for bounded, disposable GPU helper processes.
  *
  * Every read settles: the helper is third-party, and Node's `close` event
  * waits for the process *and* its stdio pipes, so a grandchild holding stdout
- * or an uninterruptible driver call can withhold it indefinitely. A force
- * deadline settles the caller either way, while the registry keeps the
- * still-live child visible to `close()` for shutdown reaping.
+ * or an uninterruptible driver call can withhold it indefinitely. The active
+ * admission slot is therefore released after a bounded force-settle deadline,
+ * while OS-unreaped children remain in a separately bounded quarantine for
+ * late exit observation and shutdown reaping. One replacement may run behind
+ * a wedged child; two unreaped children open a fail-closed circuit instead of
+ * allowing an unbounded process leak.
  */
 function makeGpuProbeProcessWithOptions(
   options: GpuProbeProcessOptions = {},
@@ -256,14 +316,19 @@ function makeGpuProbeProcessWithOptions(
     PROBE_FORCE_SETTLE_GRACE_MS,
     10_000,
   );
+  const retiredReapGraceMs = boundedPositiveInteger(
+    options.retiredReapGraceMs,
+    PROBE_RETIRED_REAP_GRACE_MS,
+    10_000,
+  );
   const shutdownCloseGraceMs = boundedPositiveInteger(
     options.shutdownCloseGraceMs,
     SHUTDOWN_CLOSE_GRACE_MS,
     10_000,
   );
 
-  const liveChildren = new Set<ChildProcess>();
-  const childClosed = new Map<ChildProcess, Promise<void>>();
+  const activeChildren = new Set<TrackedGpuProbeChild>();
+  const unreapedChildren = new Set<TrackedGpuProbeChild>();
   let closed = false;
   let closePromise: Promise<void> | null = null;
 
@@ -273,10 +338,13 @@ function makeGpuProbeProcessWithOptions(
         resolve(probeFailedGpuTelemetry());
         return;
       }
-      // A helper the OS has not reaped still counts. Refusing to start a
-      // second one keeps a wedged driver from stacking processes behind it;
-      // GPU telemetry stays explicitly unavailable instead.
-      if (liveChildren.size >= MAX_LIVE_HELPERS) {
+      // At most one logical probe is active. A single OS-unreaped predecessor
+      // may coexist with its replacement, but a second unreaped failure opens
+      // the circuit until a late exit releases quarantine capacity.
+      if (
+        activeChildren.size >= MAX_CONCURRENT_GPU_HELPERS ||
+        unreapedChildren.size >= MAX_UNREAPED_GPU_HELPERS
+      ) {
         resolve(probeFailedGpuTelemetry());
         return;
       }
@@ -300,86 +368,253 @@ function makeGpuProbeProcessWithOptions(
         return;
       }
 
-      liveChildren.add(child);
-      let signalClosed: (() => void) | undefined;
-      childClosed.set(
-        child,
-        new Promise<void>((resolveClosed) => {
-          signalClosed = resolveClosed;
-        }),
-      );
-
       let output = "";
       let failed = false;
       let settled = false;
+      let terminated = false;
+      let retired = false;
+      let admissionReleased = false;
+      let streamsDetached = false;
+      let lifecycleDetached = false;
       let killDeadline: ReturnType<typeof setTimeout> | undefined;
       let forceSettleDeadline: ReturnType<typeof setTimeout> | undefined;
+      let retiredReapDeadline: ReturnType<typeof setTimeout> | undefined;
+      let signalTerminated: (() => void) | undefined;
+      const termination = new Promise<void>((resolveTerminated) => {
+        signalTerminated = resolveTerminated;
+      });
+      let record: TrackedGpuProbeChild;
+
+      const clearReadDeadlines = () => {
+        if (killDeadline !== undefined) {
+          clearTimeout(killDeadline);
+          killDeadline = undefined;
+        }
+        if (forceSettleDeadline !== undefined) {
+          clearTimeout(forceSettleDeadline);
+          forceSettleDeadline = undefined;
+        }
+      };
+
+      const clearRetiredReapDeadline = () => {
+        if (retiredReapDeadline === undefined) return;
+        clearTimeout(retiredReapDeadline);
+        retiredReapDeadline = undefined;
+      };
 
       const settle = (ok: boolean) => {
         if (settled) return;
         settled = true;
-        if (killDeadline !== undefined) clearTimeout(killDeadline);
-        if (forceSettleDeadline !== undefined) clearTimeout(forceSettleDeadline);
-        resolve(ok && !failed ? parseGpuProbeOutput(output) : probeFailedGpuTelemetry());
+        clearReadDeadlines();
+        const result = ok && !failed ? parseGpuProbeOutput(output) : probeFailedGpuTelemetry();
+        output = "";
+        resolve(result);
       };
 
-      // Registry membership tracks the OS process, not the caller's promise, so
-      // a force-settled helper stays visible to `close()` until it truly exits.
-      const retire = () => {
-        liveChildren.delete(child);
-        childClosed.delete(child);
-        signalClosed?.();
+      const releaseAdmission = () => {
+        if (admissionReleased) return;
+        admissionReleased = true;
+        activeChildren.delete(record);
       };
 
-      // Registered before stdio is touched: Node can hand back null streams for
-      // EMFILE/ENFILE and emit the spawn error a tick later.
-      child.once("error", () => {
+      const markTerminated = () => {
+        if (terminated) return;
+        terminated = true;
+        clearRetiredReapDeadline();
+        unreapedChildren.delete(record);
+        signalTerminated?.();
+      };
+
+      const detachStreams = () => {
+        if (streamsDetached) return;
+        streamsDetached = true;
+        const stdout = child.stdout;
+        if (stdout) {
+          try {
+            stdout.removeListener("error", onStdoutError);
+            stdout.removeListener("data", onStdoutData);
+            stdout.on("error", swallowLateStreamError);
+            stdout.destroy();
+          } catch {
+            // Cleanup stays best-effort; the process kill and bounded owner
+            // shutdown remain authoritative.
+          }
+        }
+        const stderr = child.stderr;
+        if (stderr) {
+          try {
+            stderr.removeListener("error", onStderrError);
+            stderr.on("error", swallowLateStreamError);
+            stderr.destroy();
+          } catch {
+            // See stdout cleanup above.
+          }
+        }
+      };
+
+      const detachLifecycle = () => {
+        if (lifecycleDetached) return;
+        lifecycleDetached = true;
+        try {
+          child.removeListener("error", onChildError);
+        } catch {
+          // A hostile or partially initialized process object cannot block
+          // cleanup of the remaining tracked children.
+        }
+        try {
+          child.removeListener("exit", onChildExit);
+        } catch {
+          // See the error-listener cleanup above.
+        }
+        try {
+          child.removeListener("close", onChildClose);
+        } catch {
+          // See the error-listener cleanup above.
+        }
+        try {
+          child.on("error", swallowLateProcessError);
+        } catch {
+          // Owner shutdown remains bounded even if listener bookkeeping fails.
+        }
+      };
+
+      const onChildError = () => {
         failed = true;
-      });
-      child.once("close", (exitCode) => {
-        retire();
+      };
+      const onChildExit = () => {
+        markTerminated();
+        // A logically retired caller is already settled, so `close` is no
+        // longer needed for output completeness once the OS process exits.
+        if (admissionReleased) {
+          detachStreams();
+          detachLifecycle();
+        }
+      };
+      const onChildClose = (exitCode: number | null) => {
+        markTerminated();
+        releaseAdmission();
         settle(exitCode === 0);
-      });
-
-      killDeadline = setTimeout(() => {
+        detachStreams();
+        detachLifecycle();
+      };
+      const onStderrError = () => {
         failed = true;
         requestKill(child);
-      }, probeTimeoutMs);
-      forceSettleDeadline = setTimeout(() => {
+      };
+      const onStdoutError = () => {
+        failed = true;
+        requestKill(child);
+      };
+      const onStdoutData = (chunk: string) => {
+        if (failed || settled) return;
+        output += chunk;
+        if (Buffer.byteLength(output, "utf8") > MAX_PROBE_OUTPUT_BYTES) {
+          failed = true;
+          requestKill(child);
+        }
+      };
+
+      /**
+       * Retire this read from the active admission slot.
+       *
+       * Reached from the force-settle deadline and from stdio paths that can
+       * never observe output. Latched so a second call cannot overwrite and
+       * leak the one bounded reap deadline.
+       */
+      const retireAfterForceSettle = () => {
+        if (retired) return;
+        retired = true;
         failed = true;
         requestKill(child);
         settle(false);
-      }, probeTimeoutMs + forceSettleGraceMs);
+        releaseAdmission();
+        detachStreams();
+        if (terminated) {
+          detachLifecycle();
+          return;
+        }
 
-      if (!child.stdout || !child.stderr) {
+        // Admission guaranteed capacity before spawn, and there can be only
+        // one active child, so this insertion cannot exceed the hard cap.
+        unreapedChildren.add(record);
+        retiredReapDeadline = scheduleDeadline(() => {
+          retiredReapDeadline = undefined;
+          if (!terminated) requestKill(child);
+        }, retiredReapGraceMs);
+      };
+
+      const stopForClose = () => {
+        failed = true;
+        releaseAdmission();
+        clearRetiredReapDeadline();
+        requestKill(child);
+        settle(false);
+        detachStreams();
+      };
+
+      const detachAfterClose = () => {
+        releaseAdmission();
+        unreapedChildren.delete(record);
+        clearReadDeadlines();
+        clearRetiredReapDeadline();
+        detachStreams();
+        detachLifecycle();
+        output = "";
+        // Once the owner's bounded shutdown ends it no longer promises to
+        // observe an unkillable process. Release its Node process handle so an
+        // OS-stuck helper cannot keep the backend alive after that deadline,
+        // then resolve only this internal waiter.
+        if (!terminated) {
+          requestUnref(child);
+          terminated = true;
+          signalTerminated?.();
+        }
+      };
+
+      record = {
+        terminated: termination,
+        stopForClose,
+        detachAfterClose,
+      };
+      activeChildren.add(record);
+
+      // Registered before stdio is touched: Node can hand back null streams for
+      // EMFILE/ENFILE and emit the spawn error a tick later.
+      // `kill()` failures can emit more than one process-level error over the
+      // timeout, force-settle, reap, and shutdown attempts. A one-shot handler
+      // would make the second error fatal to the backend.
+      child.on("error", onChildError);
+      child.once("exit", onChildExit);
+      child.once("close", onChildClose);
+
+      killDeadline = scheduleDeadline(() => {
         failed = true;
         requestKill(child);
+      }, probeTimeoutMs);
+      forceSettleDeadline = scheduleDeadline(
+        retireAfterForceSettle,
+        probeTimeoutMs + forceSettleGraceMs,
+      );
+
+      // Node can hand back null streams for EMFILE/ENFILE, and stdio wiring can
+      // fail part-way. Either way this read can never observe output, so retire
+      // it now instead of parking the single admission slot until the regular
+      // force-settle deadline. Retirement also destroys any half-wired pipe and
+      // installs static error guards for delayed stream errors.
+      if (!child.stdout || !child.stderr) {
+        retireAfterForceSettle();
         return;
       }
 
       try {
-        child.stderr.on("error", () => {
-          failed = true;
-          requestKill(child);
-        });
+        child.stderr.on("error", onStderrError);
         // Drained and discarded: stderr is never accumulated, parsed, or logged.
         child.stderr.resume();
-        child.stdout.on("error", () => {
-          failed = true;
-          requestKill(child);
-        });
+        child.stdout.on("error", onStdoutError);
         child.stdout.setEncoding("utf8");
-        child.stdout.on("data", (chunk: string) => {
-          if (failed) return;
-          output += chunk;
-          if (Buffer.byteLength(output, "utf8") > MAX_PROBE_OUTPUT_BYTES) {
-            failed = true;
-            requestKill(child);
-          }
-        });
+        child.stdout.on("data", onStdoutData);
       } catch {
-        failed = true;
-        requestKill(child);
+        retireAfterForceSettle();
       }
     });
 
@@ -387,23 +622,24 @@ function makeGpuProbeProcessWithOptions(
     if (closePromise) return closePromise;
     closed = true;
     closePromise = (async () => {
-      const pendingClose = [...liveChildren].map(
-        (child) => childClosed.get(child) ?? Promise.resolve(),
-      );
-      for (const child of liveChildren) {
-        requestKill(child);
-      }
-      if (pendingClose.length === 0) return;
+      const records = [...new Set([...activeChildren, ...unreapedChildren])];
+      forEachRecord(records, (record) => record.stopForClose());
+      if (records.length === 0) return;
       let shutdownDeadline: ReturnType<typeof setTimeout> | undefined;
-      await Promise.race([
-        Promise.all(pendingClose).finally(() => {
-          if (shutdownDeadline !== undefined) clearTimeout(shutdownDeadline);
-        }),
-        // Returns even if the OS has not released an uninterruptible child.
-        new Promise<void>((resolveShutdown) => {
-          shutdownDeadline = setTimeout(resolveShutdown, shutdownCloseGraceMs);
-        }),
-      ]);
+      try {
+        await Promise.race([
+          Promise.all(records.map((record) => record.terminated)),
+          // Returns even if the OS has not released an uninterruptible child.
+          new Promise<void>((resolveShutdown) => {
+            shutdownDeadline = scheduleDeadline(resolveShutdown, shutdownCloseGraceMs);
+          }),
+        ]);
+      } finally {
+        if (shutdownDeadline !== undefined) clearTimeout(shutdownDeadline);
+        forEachRecord(records, (record) => record.detachAfterClose());
+        activeChildren.clear();
+        unreapedChildren.clear();
+      }
     })();
     return closePromise;
   };
