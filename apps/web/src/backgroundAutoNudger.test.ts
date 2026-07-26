@@ -103,6 +103,36 @@ describe("background auto nudge controller", () => {
     expect(secondWindow.getSnapshot()).toMatchObject({ owner, status: "active" });
   });
 
+  it("keeps in-memory state and skips cross-window listeners when storage is unavailable", () => {
+    const addEventListener = vi.fn();
+    vi.stubGlobal("window", {
+      get localStorage(): Storage {
+        throw new Error("Storage is unavailable.");
+      },
+      addEventListener,
+      removeEventListener: vi.fn(),
+    });
+
+    try {
+      __resetBackgroundAutoNudgeControllerForTests();
+      const controller = getBackgroundAutoNudgeController();
+      controller.start(owner, null, startedAt);
+      let notifications = 0;
+      controller.subscribe(() => {
+        notifications += 1;
+      });
+
+      controller.reloadFromStorage();
+
+      expect(controller.getSnapshot()).toMatchObject({ owner, status: "active" });
+      expect(notifications).toBe(0);
+      expect(addEventListener).not.toHaveBeenCalled();
+    } finally {
+      __resetBackgroundAutoNudgeControllerForTests();
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("synchronizes shared ownership when another renderer writes background state", () => {
     const { storage } = storageFixture();
     const storageListeners: Array<(event: { readonly key: string | null }) => void> = [];

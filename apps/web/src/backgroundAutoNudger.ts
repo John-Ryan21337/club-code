@@ -292,10 +292,12 @@ export class BackgroundAutoNudgeController {
 
   /**
    * A cross-tab dispatch lock reloads the durable state immediately before it
-   * evaluates a terminal turn. If persistence is unavailable or corrupt this
-   * becomes an empty, stopped state, which is safer than reusing stale memory.
+   * evaluates a terminal turn. Corrupt durable state becomes empty and stopped.
+   * A controller created without storage cannot acquire that lock, so a reload
+   * is an intentional no-op instead of erasing its in-memory display state.
    */
   reloadFromStorage(): void {
+    if (!this.storage) return;
     this.state = readState(this.storage);
     this.sequence = Math.max(this.sequence, this.state.ledger.length);
     for (const listener of this.listeners) listener();
@@ -622,8 +624,9 @@ let backgroundDispatchSupport: boolean | null = null;
 function makeSharedBackgroundAutoNudgeController(): BackgroundAutoNudgeController {
   removeSharedStorageListener?.();
   removeSharedStorageListener = null;
-  const controller = new BackgroundAutoNudgeController(resolveStorage());
-  if (typeof window !== "undefined") {
+  const storage = resolveStorage();
+  const controller = new BackgroundAutoNudgeController(storage);
+  if (storage && typeof window !== "undefined") {
     const onStorage = (event: StorageEvent) => {
       if (event.key === AUTO_NUDGE_BACKGROUND_STORAGE_KEY || event.key === null) {
         controller.reloadFromStorage();
