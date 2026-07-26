@@ -19,6 +19,7 @@ export function ChatMediaOverlay() {
     cycleEnabled: settings.ambientImageCycleEnabled,
     cycleSeconds: settings.ambientImageCycleSeconds,
     presentationMode: settings.ambientImagePresentationMode,
+    layoutMode: settings.ambientImageLayoutMode,
     placement: settings.ambientImagePresetPlacement,
     size: settings.ambientImagePresetSize,
     glow: settings.ambientImageGlowEnabled,
@@ -41,6 +42,7 @@ export function ChatMediaOverlay() {
           cycleEnabled={media.cycleEnabled}
           cycleSeconds={media.cycleSeconds}
           presentationMode={media.presentationMode}
+          layoutMode={media.layoutMode}
           placement={media.placement}
           size={media.size}
           stackedVideoSize={null}
