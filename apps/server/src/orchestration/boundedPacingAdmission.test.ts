@@ -12,6 +12,7 @@ import {
 const HOUR = 60 * 60 * 1_000;
 const WINDOW = 4 * HOUR;
 const RESET = WINDOW;
+let nextProviderObservationSequence = 0;
 
 class FakeClock implements PacingAdmissionClock {
   private time = 0;
@@ -84,6 +85,7 @@ function claudeObservation(
     stale: false,
     enabled: true,
     minimumPauseMs: 0,
+    providerObservationSequence: nextProviderObservationSequence++,
     ...patch,
   };
 }
@@ -98,10 +100,436 @@ function codexPauseObservation(observedAtMs: number) {
     stale: false,
     enabled: true,
     minimumPauseMs: 0,
+    providerObservationSequence: nextProviderObservationSequence++,
   };
 }
 
+function requiredProviderSequence(observation: ReturnType<typeof claudeObservation>): number {
+  const sequence = observation.providerObservationSequence;
+  if (sequence === null) throw new Error("The test observation must have a source sequence.");
+  return sequence;
+}
+
 describe("BoundedPacingAdmissionCoordinator", () => {
+  it("spends one fresh caution-band observation on only one simultaneous launch", async () => {
+    const { coordinator } = setup();
+    const observed = claudeObservation(0, {
+      usedPercent: 89,
+      providerObservationSequence: 10_000,
+    });
+    const sequence = requiredProviderSequence(observed);
+    coordinator.observe(keyA, observed);
+    const order: string[] = [];
+    const admissions = ["first", "second", "third"].map((name) =>
+      coordinator.submitNewLaunch({
+        kind: "new-launch",
+        key: keyA,
+        launch: () => order.push(name),
+      }),
+    );
+
+    await admissions[0]!.promise;
+    expect(order).toEqual(["first"]);
+    expect(coordinator.waitingCount).toBe(2);
+
+    // Replaying or mutating the same provider read cannot mint another grant.
+    (observed as { usedPercent: number }).usedPercent = 1;
+    coordinator.observe(keyA, observed);
+    coordinator.observe(keyA, {
+      ...observed,
+      usedPercent: 88,
+      providerObservationSequence: sequence,
+    });
+    coordinator.observe(keyA, {
+      ...observed,
+      usedPercent: 1,
+      providerObservationSequence: sequence - 1,
+    });
+    expect(order).toEqual(["first"]);
+
+    coordinator.observe(
+      keyA,
+      claudeObservation(1, {
+        usedPercent: 88,
+        providerObservationSequence: sequence + 1,
+      }),
+    );
+    await admissions[1]!.promise;
+    expect(order).toEqual(["first", "second"]);
+    expect(coordinator.waitingCount).toBe(1);
+
+    coordinator.observe(
+      keyA,
+      claudeObservation(2, {
+        usedPercent: 87,
+        providerObservationSequence: sequence + 2,
+      }),
+    );
+    await expect(admissions[2]!.promise).resolves.toBe(3);
+    expect(order).toEqual(["first", "second", "third"]);
+  });
+
+  it("consumes a caution authorization before invoking reentrant launch code", async () => {
+    const { coordinator } = setup();
+    const observed = claudeObservation(0, { usedPercent: 85 });
+    coordinator.observe(keyA, observed);
+    const order: string[] = [];
+    let nested!: ReturnType<BoundedPacingAdmissionCoordinator["submitNewLaunch"]>;
+    const outer = coordinator.submitNewLaunch({
+      kind: "new-launch",
+      key: keyA,
+      launch: () => {
+        order.push("outer");
+        nested = coordinator.submitNewLaunch({
+          kind: "new-launch",
+          key: keyA,
+          launch: () => order.push("nested"),
+        });
+      },
+    });
+
+    await outer.promise;
+    expect(order).toEqual(["outer"]);
+    expect(coordinator.waitingCount).toBe(1);
+
+    coordinator.observe(
+      keyA,
+      claudeObservation(1, {
+        usedPercent: 86,
+        providerObservationSequence: requiredProviderSequence(observed) + 1,
+      }),
+    );
+    await nested.promise;
+    expect(order).toEqual(["outer", "nested"]);
+  });
+
+  it("retains useful fan-out below the configured caution band", async () => {
+    const { coordinator } = setup();
+    coordinator.observe(keyA, claudeObservation(0, { usedPercent: 79 }));
+    const launches = Array.from({ length: 8 }, (_, index) =>
+      coordinator.submitNewLaunch({
+        kind: "new-launch",
+        key: keyA,
+        launch: () => index,
+      }),
+    );
+
+    await expect(Promise.all(launches.map(({ promise }) => promise))).resolves.toEqual([
+      0, 1, 2, 3, 4, 5, 6, 7,
+    ]);
+    expect(coordinator.waitingCount).toBe(0);
+  });
+
+  it("supports an explicit bounded multi-launch grant without making it unbounded", async () => {
+    const { coordinator } = setup({ maxCautionBandLaunchesPerObservation: 2 });
+    const observed = claudeObservation(0, { usedPercent: 80 });
+    coordinator.observe(keyA, observed);
+    const order: number[] = [];
+    const admissions = [0, 1, 2].map((index) =>
+      coordinator.submitNewLaunch({
+        kind: "new-launch",
+        key: keyA,
+        launch: () => order.push(index),
+      }),
+    );
+
+    await Promise.all([admissions[0]!.promise, admissions[1]!.promise]);
+    expect(order).toEqual([0, 1]);
+    expect(coordinator.waitingCount).toBe(1);
+
+    coordinator.observe(
+      keyA,
+      claudeObservation(1, {
+        usedPercent: 81,
+        providerObservationSequence: requiredProviderSequence(observed) + 1,
+      }),
+    );
+    await admissions[2]!.promise;
+    expect(order).toEqual([0, 1, 2]);
+  });
+
+  it("bounds reservation configuration", () => {
+    const common = { maxWaitingGlobal: 8, maxWaitingPerKey: 4, maxTrackedKeys: 4 };
+    expect(
+      () =>
+        new BoundedPacingAdmissionCoordinator({
+          ...common,
+          cautionBandStartPercent: 90,
+        }),
+    ).toThrow(RangeError);
+    expect(
+      () =>
+        new BoundedPacingAdmissionCoordinator({
+          ...common,
+          cautionBandStartPercent: Number.NaN,
+        }),
+    ).toThrow(RangeError);
+    expect(
+      () =>
+        new BoundedPacingAdmissionCoordinator({
+          ...common,
+          maxCautionBandLaunchesPerObservation: 65,
+        }),
+    ).toThrow(RangeError);
+  });
+
+  it("admits nothing at the 90% drain boundary", async () => {
+    const { coordinator } = setup();
+    const observed = claudeObservation(0, { usedPercent: 90 });
+    coordinator.observe(keyA, observed);
+    const launch = vi.fn(() => "must-wait");
+    const waiting = coordinator.submitNewLaunch({ kind: "new-launch", key: keyA, launch });
+
+    expect(launch).not.toHaveBeenCalled();
+    expect(coordinator.getSnapshot(keyA)?.phase).toBe("waiting-reset");
+
+    // Even a lower mutation of the same source read is not reset evidence.
+    coordinator.observe(keyA, { ...observed, usedPercent: 1 });
+    expect(launch).not.toHaveBeenCalled();
+    expect(waiting.cancel()).toBe(true);
+    await expect(waiting.promise).rejects.toBeInstanceOf(PacingAdmissionCancelledError);
+  });
+
+  it("requires a newer complete observation after stale or unknown quota evidence", async () => {
+    const { coordinator } = setup();
+    const initial = claudeObservation(0, { usedPercent: 85 });
+    coordinator.observe(keyA, initial);
+    const first = coordinator.submitNewLaunch({
+      kind: "new-launch",
+      key: keyA,
+      launch: () => "first",
+    });
+    const launch = vi.fn(() => "second");
+    const second = coordinator.submitNewLaunch({ kind: "new-launch", key: keyA, launch });
+    await first.promise;
+
+    coordinator.observe(
+      keyA,
+      claudeObservation(1, {
+        usedPercent: 86,
+        stale: true,
+        providerObservationSequence: requiredProviderSequence(initial) + 1,
+      }),
+    );
+    const unknownSequence = requiredProviderSequence(initial) + 2;
+    coordinator.observe(
+      keyA,
+      claudeObservation(2, {
+        usedPercent: null,
+        providerObservationSequence: unknownSequence,
+      }),
+    );
+    coordinator.observe(
+      keyA,
+      claudeObservation(3, {
+        usedPercent: 1,
+        providerObservationSequence: unknownSequence,
+      }),
+    );
+    coordinator.observe(
+      keyA,
+      claudeObservation(4, {
+        usedPercent: 1,
+        providerObservationSequence: null,
+      }),
+    );
+    expect(launch).not.toHaveBeenCalled();
+
+    coordinator.observe(
+      keyA,
+      claudeObservation(5, {
+        usedPercent: 84,
+        providerObservationSequence: unknownSequence + 1,
+      }),
+    );
+    await expect(second.promise).resolves.toBe("second");
+  });
+
+  it("does not release authorization on completion, cancellation, or clock advance", async () => {
+    const { clock, coordinator } = setup();
+    const observed = claudeObservation(0, { usedPercent: 85 });
+    coordinator.observe(keyA, observed);
+    const first = coordinator.submitNewLaunch({
+      kind: "new-launch",
+      key: keyA,
+      launch: () => "first",
+    });
+    const cancelled = coordinator.submitNewLaunch({
+      kind: "new-launch",
+      key: keyA,
+      launch: () => "cancelled",
+    });
+    const finalLaunch = vi.fn(() => "final");
+    const final = coordinator.submitNewLaunch({
+      kind: "new-launch",
+      key: keyA,
+      launch: finalLaunch,
+    });
+
+    await first.promise;
+    expect(cancelled.cancel()).toBe(true);
+    await expect(cancelled.promise).rejects.toBeInstanceOf(PacingAdmissionCancelledError);
+    clock.advanceTo(RESET - 1);
+    expect(finalLaunch).not.toHaveBeenCalled();
+
+    coordinator.observe(
+      keyA,
+      claudeObservation(RESET - 1, {
+        usedPercent: 86,
+        resetsAtMs: RESET + WINDOW,
+        providerObservationSequence: requiredProviderSequence(observed) + 1,
+      }),
+    );
+    await expect(final.promise).resolves.toBe("final");
+  });
+
+  it("spends grants permanently when launches throw or reject", async () => {
+    const { coordinator } = setup();
+    const initial = claudeObservation(0, { usedPercent: 85 });
+    coordinator.observe(keyA, initial);
+    const thrown = coordinator.submitNewLaunch({
+      kind: "new-launch",
+      key: keyA,
+      launch: () => {
+        throw new Error("sync");
+      },
+    });
+    await expect(thrown.promise).rejects.toThrow("sync");
+
+    const asyncLaunch = vi.fn(() => Promise.reject(new Error("async")));
+    const rejected = coordinator.submitNewLaunch({
+      kind: "new-launch",
+      key: keyA,
+      launch: asyncLaunch,
+    });
+    expect(asyncLaunch).not.toHaveBeenCalled();
+
+    coordinator.observe(
+      keyA,
+      claudeObservation(1, {
+        usedPercent: 86,
+        providerObservationSequence: requiredProviderSequence(initial) + 1,
+      }),
+    );
+    await expect(rejected.promise).rejects.toThrow("async");
+
+    const finalLaunch = vi.fn(() => "final");
+    const final = coordinator.submitNewLaunch({
+      kind: "new-launch",
+      key: keyA,
+      launch: finalLaunch,
+    });
+    expect(finalLaunch).not.toHaveBeenCalled();
+    coordinator.observe(
+      keyA,
+      claudeObservation(2, {
+        usedPercent: 87,
+        providerObservationSequence: requiredProviderSequence(initial) + 2,
+      }),
+    );
+    await expect(final.promise).resolves.toBe("final");
+  });
+
+  it("keeps caution reservations isolated by every exact key part", async () => {
+    const { coordinator } = setup();
+    const accountB = { ...keyA, providerAccountId: "account-b" };
+    const instanceB = { ...keyA, providerInstanceId: "claude-secondary" };
+    const environmentB = { ...keyA, environmentId: "environment-b" };
+    for (const key of [keyA, accountB, instanceB, environmentB]) {
+      coordinator.observe(key, claudeObservation(0, { usedPercent: 85 }));
+    }
+
+    const values = await Promise.all(
+      [keyA, accountB, instanceB, environmentB].map(
+        (key, index) =>
+          coordinator.submitNewLaunch({
+            kind: "new-launch",
+            key,
+            launch: () => index,
+          }).promise,
+      ),
+    );
+    expect(values).toEqual([0, 1, 2, 3]);
+
+    const blocked = [keyA, accountB, instanceB, environmentB].map((key) =>
+      coordinator.submitNewLaunch({ kind: "new-launch", key, launch: () => "blocked" }),
+    );
+    expect(coordinator.waitingCount).toBe(4);
+    for (const admission of blocked) admission.cancel();
+    await Promise.allSettled(blocked.map(({ promise }) => promise));
+  });
+
+  it("opens ordinary fan-out after a strictly newer provider reset", async () => {
+    const { coordinator } = setup();
+    const initial = claudeObservation(0, { usedPercent: 89 });
+    coordinator.observe(keyA, initial);
+    const first = coordinator.submitNewLaunch({
+      kind: "new-launch",
+      key: keyA,
+      launch: () => "first",
+    });
+    const queued = [0, 1, 2].map((index) =>
+      coordinator.submitNewLaunch({
+        kind: "new-launch",
+        key: keyA,
+        launch: () => index,
+      }),
+    );
+    await first.promise;
+    expect(coordinator.waitingCount).toBe(3);
+
+    coordinator.observe(
+      keyA,
+      claudeObservation(RESET, {
+        usedPercent: 1,
+        resetsAtMs: RESET + WINDOW,
+        providerObservationSequence: requiredProviderSequence(initial) + 1,
+      }),
+    );
+    await expect(Promise.all(queued.map(({ promise }) => promise))).resolves.toEqual([0, 1, 2]);
+  });
+
+  it("requires fresh evidence after pacing is disabled and re-enabled", async () => {
+    const { coordinator } = setup();
+    const initial = claudeObservation(0, { usedPercent: 85 });
+    const initialSequence = requiredProviderSequence(initial);
+    coordinator.observe(keyA, initial);
+    await coordinator.submitNewLaunch({
+      kind: "new-launch",
+      key: keyA,
+      launch: () => "initial",
+    }).promise;
+
+    coordinator.observe(keyA, {
+      ...initial,
+      enabled: false,
+      providerObservationSequence: initialSequence + 1,
+    });
+    await expect(
+      coordinator.submitNewLaunch({
+        kind: "new-launch",
+        key: keyA,
+        launch: () => "disabled",
+      }).promise,
+    ).resolves.toBe("disabled");
+
+    coordinator.observe(keyA, {
+      ...initial,
+      providerObservationSequence: initialSequence + 1,
+    });
+    const launch = vi.fn(() => "fresh");
+    const waiting = coordinator.submitNewLaunch({ kind: "new-launch", key: keyA, launch });
+    expect(launch).not.toHaveBeenCalled();
+
+    coordinator.observe(keyA, {
+      ...initial,
+      usedPercent: 84,
+      observedAtMs: 1,
+      providerObservationSequence: initialSequence + 2,
+    });
+    await expect(waiting.promise).resolves.toBe("fresh");
+  });
+
   it("closes before the next queued launch when a launch synchronously closes its gate", async () => {
     const { coordinator } = setup();
     const order: string[] = [];
@@ -396,10 +824,13 @@ describe("BoundedPacingAdmissionCoordinator", () => {
   it("disposes waiters without signalling active work", async () => {
     const { coordinator } = setup();
     let release!: () => void;
+    const launch = vi.fn(
+      () => new Promise<string>((resolve) => (release = () => resolve("natural"))),
+    );
     const active = coordinator.submitNewLaunch({
       kind: "new-launch",
       key: keyA,
-      launch: () => new Promise<string>((resolve) => (release = () => resolve("natural"))),
+      launch,
     });
     coordinator.observe(keyA, claudeObservation(0));
     const waiting = coordinator.submitNewLaunch({
@@ -412,6 +843,10 @@ describe("BoundedPacingAdmissionCoordinator", () => {
     await expect(waiting.promise).rejects.toBeInstanceOf(PacingAdmissionDisposedError);
     expect(waiting.cancel()).toBe(false);
     expect(coordinator.activeCount).toBe(1);
+    expect(launch).toHaveBeenCalledWith();
+    expect(
+      Object.getOwnPropertyNames(BoundedPacingAdmissionCoordinator.prototype).join(" "),
+    ).not.toMatch(/abort|interrupt|kill|stop|terminate/i);
     release();
     await expect(active.promise).resolves.toBe("natural");
     expect(coordinator.activeCount).toBe(0);
