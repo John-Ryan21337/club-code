@@ -1,7 +1,6 @@
 import {
   defaultInstanceIdForDriver,
   EnvironmentId,
-  MessageId,
   type ServerProvider,
   ThreadId,
 } from "@cafecode/contracts";
@@ -12,17 +11,26 @@ import {
   supportsBackgroundAutoNudgeDispatchLock,
   useBackgroundAutoNudgeState,
 } from "../backgroundAutoNudger";
-import { getAutoNudgeTurnLedger } from "../autoNudger";
+import {
+  autoNudgeDispatchIdentityForTurn,
+  getAutoNudgeTurnLedger,
+  normalizeAutoNudgeTerminalTurnKey,
+  providerCanAcceptAutoNudgeTurn,
+} from "../autoNudger";
 import { useComposerDraftStore } from "../composerDraftStore";
+import {
+  getConfirmedAutoNudgeArming,
+  useAutoNudgeSuppressedState,
+} from "../confirmedAutoNudgeArming";
 import { readEnvironmentApi } from "../environmentApi";
 import { getClientSettings, useSettings } from "../hooks/useSettings";
-import { newCommandId, newMessageId } from "../lib/utils";
-import { useServerConfig } from "../rpc/serverState";
+import { getServerConfig, useServerConfig } from "../rpc/serverState";
+import { isLatestTurnSettled } from "../session-logic";
 import { useStore } from "../store";
 
 const COORDINATOR_TICK_MS = 250;
 
-function providerCanAcceptTurn(provider: ServerProvider | null): boolean {
+function providerIsRuntimeReady(provider: ServerProvider | null): boolean {
   if (
     !provider ||
     provider.status !== "ready" ||
@@ -33,10 +41,7 @@ function providerCanAcceptTurn(provider: ServerProvider | null): boolean {
   ) {
     return false;
   }
-  const limits = provider.accountRateLimits?.rateLimits;
-  if (!limits) return true;
-  if (limits.rateLimitReachedType || limits.spendControlReached) return false;
-  return (limits.primary?.usedPercent ?? 0) < 100 && (limits.secondary?.usedPercent ?? 0) < 100;
+  return providerCanAcceptAutoNudgeTurn(provider);
 }
 
 /**
@@ -46,6 +51,7 @@ function providerCanAcceptTurn(provider: ServerProvider | null): boolean {
  */
 export function BackgroundAutoNudgeCoordinator() {
   const backgroundState = useBackgroundAutoNudgeState();
+  const autoNudgeSuppressed = useAutoNudgeSuppressedState();
   const settings = useSettings();
   const serverConfig = useServerConfig();
   const environmentStateById = useStore((store) => store.environmentStateById);
@@ -68,6 +74,7 @@ export function BackgroundAutoNudgeCoordinator() {
   useEffect(() => {
     const controller = getBackgroundAutoNudgeController();
     if (!backgroundState.owner || backgroundState.status !== "active") return;
+    let cancelled = false;
     // localStorage alone has no compare-and-swap. Chromium/Electron's lock
     // serializes reload -> consume -> transport handoff across renderer tabs;
     // an older browser pauses instead of permitting an ambiguous duplicate.
@@ -81,16 +88,18 @@ export function BackgroundAutoNudgeCoordinator() {
         "cafe-code.auto-nudge.background.dispatch.v1",
         { ifAvailable: true, mode: "exclusive" },
         (lock) => {
-          if (!lock) return;
+          if (!lock || cancelled) return;
           controller.reloadFromStorage();
           const currentState = controller.getSnapshot();
           const owner = currentState.owner;
           if (!owner || currentState.status !== "active") return;
 
-          const environment = environmentStateById[owner.environmentId];
+          const currentEnvironmentStateById = useStore.getState().environmentStateById;
+          const currentServerConfig = getServerConfig();
+          const environment = currentEnvironmentStateById[owner.environmentId];
           // Reload/remount must wait for the authoritative shell snapshot. Treating
           // an unhydrated store as a deleted thread would destroy valid ownership.
-          if (!environment?.bootstrapComplete || !serverConfig) return;
+          if (!environment?.bootstrapComplete || !currentServerConfig) return;
           const ownedThreadId = ThreadId.make(owner.threadId);
           const shell = environment?.threadShellById[ownedThreadId];
           const summary = environment?.sidebarThreadSummaryById[ownedThreadId];
@@ -101,19 +110,26 @@ export function BackgroundAutoNudgeCoordinator() {
             null;
           const providerInstanceId =
             session?.providerInstanceId ??
-            (session?.provider
-              ? defaultInstanceIdForDriver(session.provider)
-              : shell?.modelSelection.instanceId);
+            shell?.modelSelection.instanceId ??
+            (session?.provider ? defaultInstanceIdForDriver(session.provider) : undefined);
           const provider =
-            serverConfig?.providers.find((entry) => entry.instanceId === providerInstanceId) ??
-            null;
+            currentServerConfig.providers.find(
+              (entry) => entry.instanceId === providerInstanceId,
+            ) ?? null;
           const terminalTurnKey =
             shell &&
             latestTurn?.state === "completed" &&
             latestTurn.completedAt &&
-            session?.status === "ready"
-              ? `${owner.environmentId}:${owner.threadId}:${latestTurn.turnId}`
+            session?.status === "ready" &&
+            isLatestTurnSettled(latestTurn, session)
+              ? normalizeAutoNudgeTerminalTurnKey(
+                  `${owner.environmentId}:${owner.threadId}:${latestTurn.turnId}`,
+                )
               : null;
+          const currentOwnerComposerDraft = useComposerDraftStore.getState().getComposerDraft({
+            environmentId: EnvironmentId.make(owner.environmentId),
+            threadId: ownedThreadId,
+          });
           const ledger = getAutoNudgeTurnLedger();
           // Read after acquiring the dispatch lock. The coordinator can be
           // notified by controller.start in the same microtask that publishes
@@ -121,12 +137,15 @@ export function BackgroundAutoNudgeCoordinator() {
           // A synchronous snapshot prevents that render gap from interpreting
           // the just-confirmed enable as stale `false` and stopping the run.
           const currentSettings = getClientSettings();
+          const arming = getConfirmedAutoNudgeArming();
+          arming.synchronizeSuppressionFromStorage();
+          const executionSuppressed = arming.getSuppressedSnapshot();
 
           const dispatch = controller.observe({
             nowMs: Date.now(),
             settings: {
-              mode: currentSettings.autoNudgeMode,
-              enabled: currentSettings.autoNudgeBackgroundContinuation,
+              mode: executionSuppressed ? "off" : currentSettings.autoNudgeMode,
+              enabled: !executionSuppressed && currentSettings.autoNudgeBackgroundContinuation,
               maxRounds: currentSettings.autoNudgeMaxRounds,
               maxMinutes: currentSettings.autoNudgeMaxMinutes,
             },
@@ -138,6 +157,9 @@ export function BackgroundAutoNudgeCoordinator() {
                     terminalTurnKey,
                     latestUserMessageAt: summary.latestUserMessageAt,
                     sessionReady: session?.status === "ready",
+                    sessionStarting:
+                      session?.status === "connecting" ||
+                      session?.orchestrationStatus === "starting",
                     isRunning:
                       session?.status === "running" ||
                       session?.orchestrationStatus === "running" ||
@@ -146,16 +168,15 @@ export function BackgroundAutoNudgeCoordinator() {
                       summary.hasPendingApprovals ||
                       summary.hasPendingUserInput ||
                       summary.hasActionableProposedPlan ||
-                      Boolean(ownerComposerDraft?.prompt.trim()) ||
-                      (ownerComposerDraft?.images.length ?? 0) > 0 ||
+                      Boolean(currentOwnerComposerDraft?.prompt.trim()) ||
+                      (currentOwnerComposerDraft?.images.length ?? 0) > 0 ||
                       Boolean(shell.error),
-                    providerAvailable: providerCanAcceptTurn(provider),
+                    providerAvailable: providerIsRuntimeReady(provider),
                   }
                 : { exists: false },
             alreadyConsumed: (turnKey) => ledger.has(turnKey),
-            newMessageId: () => String(newMessageId()),
           });
-          if (!dispatch || !shell) return;
+          if (!dispatch || !shell || !latestTurn) return;
 
           // Consume before crossing the transport. A reload or lost ACK can skip one
           // nudge, but can never submit the same completed turn twice.
@@ -169,17 +190,19 @@ export function BackgroundAutoNudgeCoordinator() {
             return;
           }
 
+          const identity = autoNudgeDispatchIdentityForTurn(dispatch.terminalTurnKey);
           void api.orchestration
             .dispatchCommand({
               type: "thread.turn.start",
-              commandId: newCommandId(),
+              commandId: identity.commandId,
               threadId: shell.id,
               message: {
-                messageId: MessageId.make(dispatch.messageId),
+                messageId: identity.messageId,
                 role: "user",
                 text: dispatch.prompt,
                 attachments: [],
               },
+              expectedSettledTurnId: latestTurn.turnId,
               modelSelection: shell.modelSelection,
               titleSeed: shell.title,
               runtimeMode: shell.runtimeMode,
@@ -189,15 +212,21 @@ export function BackgroundAutoNudgeCoordinator() {
             .catch(() => {
               controller.markDispatchFailed(
                 dispatch.messageId,
-                "Provider or transport rejected the automated prompt; continuation paused.",
+                "Transport acknowledgement was indeterminate; continuation paused.",
               );
             });
         },
       )
       .catch(() => {
-        controller.pause("Background continuation could not acquire a cross-tab dispatch lock.");
+        if (!cancelled) {
+          controller.pause("Background continuation could not acquire a cross-tab dispatch lock.");
+        }
       });
+    return () => {
+      cancelled = true;
+    };
   }, [
+    autoNudgeSuppressed,
     backgroundState,
     environmentStateById,
     ownerComposerDraft,
