@@ -6,6 +6,7 @@ import {
   DEFAULT_AMBIENT_VIDEO_PRESENTATION_MODE,
   DEFAULT_AMBIENT_VIDEO_SOURCE,
 } from "@cafecode/contracts/settings";
+import { useEffect, useState } from "react";
 
 import { parseYouTubeSource, youtubeSourceInputValue } from "../../ambientVideo";
 import { useSettings, useUpdateSettings } from "../../hooks/useSettings";
@@ -15,10 +16,14 @@ import { Radio, RadioGroup } from "../ui/radio-group";
 import { Switch } from "../ui/switch";
 import { SettingResetButton, SettingsRow, SettingsSection } from "../settings/settingsLayout";
 
+const AMBIENT_YOUTUBE_URL_ERROR_ID = "ambient-youtube-url-error";
+
 export function AmbientVideoSettings() {
   const settings = useSettings();
   const { updateSettings } = useUpdateSettings();
   const serverConfig = useServerConfig();
+  const sourceInputValue = youtubeSourceInputValue(settings.ambientVideoSource);
+  const [sourceInputError, setSourceInputError] = useState<string | null>(null);
   const playerAvailable = serverConfig?.ambientExperienceCapabilities.youtubePlayer === true;
   const hasNonDefault =
     settings.ambientVideoEnabled !== DEFAULT_AMBIENT_VIDEO_ENABLED ||
@@ -27,6 +32,10 @@ export function AmbientVideoSettings() {
     settings.ambientVideoPresetSize !== DEFAULT_AMBIENT_VIDEO_PRESET_SIZE ||
     settings.ambientVideoPresentationMode !== DEFAULT_AMBIENT_VIDEO_PRESENTATION_MODE ||
     settings.ambientVideoKeepAboveContent !== DEFAULT_AMBIENT_VIDEO_KEEP_ABOVE_CONTENT;
+
+  useEffect(() => {
+    setSourceInputError(null);
+  }, [sourceInputValue]);
 
   return (
     <SettingsSection title="Ambient YouTube">
@@ -44,7 +53,8 @@ export function AmbientVideoSettings() {
           hasNonDefault ? (
             <SettingResetButton
               label="ambient YouTube"
-              onClick={() =>
+              onClick={() => {
+                setSourceInputError(null);
                 updateSettings({
                   ambientVideoEnabled: DEFAULT_AMBIENT_VIDEO_ENABLED,
                   ambientVideoSource: DEFAULT_AMBIENT_VIDEO_SOURCE,
@@ -52,8 +62,8 @@ export function AmbientVideoSettings() {
                   ambientVideoPresetSize: DEFAULT_AMBIENT_VIDEO_PRESET_SIZE,
                   ambientVideoPresentationMode: DEFAULT_AMBIENT_VIDEO_PRESENTATION_MODE,
                   ambientVideoKeepAboveContent: DEFAULT_AMBIENT_VIDEO_KEEP_ABOVE_CONTENT,
-                })
-              }
+                });
+              }}
             />
           ) : null
         }
@@ -69,17 +79,41 @@ export function AmbientVideoSettings() {
       <SettingsRow
         title="YouTube URL"
         description="Paste a supported HTTPS YouTube video or playlist URL, or an 11-character video ID."
+        status={
+          sourceInputError === null ? null : (
+            <span className="text-destructive" id={AMBIENT_YOUTUBE_URL_ERROR_ID} role="alert">
+              {sourceInputError}
+            </span>
+          )
+        }
         control={
           <DraftInput
             aria-label="Ambient YouTube URL"
+            aria-describedby={sourceInputError === null ? undefined : AMBIENT_YOUTUBE_URL_ERROR_ID}
+            aria-invalid={sourceInputError === null ? undefined : true}
             className="w-full sm:w-80"
             maxLength={2_048}
-            value={youtubeSourceInputValue(settings.ambientVideoSource)}
+            value={sourceInputValue}
+            onInput={() => setSourceInputError(null)}
             onCommit={(value) => {
+              if (value.trim().length === 0) {
+                setSourceInputError(null);
+                updateSettings({
+                  ambientVideoSource: null,
+                  ambientVideoEnabled: false,
+                });
+                return;
+              }
               const source = parseYouTubeSource(value);
+              if (source === null) {
+                setSourceInputError(
+                  "That is not a supported YouTube video or playlist. The current player was not changed.",
+                );
+                return;
+              }
+              setSourceInputError(null);
               updateSettings({
                 ambientVideoSource: source,
-                ...(source === null ? { ambientVideoEnabled: false } : {}),
               });
             }}
           />
