@@ -603,10 +603,27 @@ export class BackgroundAutoNudgeController {
 }
 
 let sharedController: BackgroundAutoNudgeController | null = null;
+let removeSharedStorageListener: (() => void) | null = null;
 let backgroundDispatchSupport: boolean | null = null;
 
+function makeSharedBackgroundAutoNudgeController(): BackgroundAutoNudgeController {
+  removeSharedStorageListener?.();
+  removeSharedStorageListener = null;
+  const controller = new BackgroundAutoNudgeController(resolveStorage());
+  if (typeof window !== "undefined") {
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === AUTO_NUDGE_BACKGROUND_STORAGE_KEY || event.key === null) {
+        controller.reloadFromStorage();
+      }
+    };
+    window.addEventListener("storage", onStorage);
+    removeSharedStorageListener = () => window.removeEventListener("storage", onStorage);
+  }
+  return controller;
+}
+
 export function getBackgroundAutoNudgeController(): BackgroundAutoNudgeController {
-  sharedController ??= new BackgroundAutoNudgeController(resolveStorage());
+  sharedController ??= makeSharedBackgroundAutoNudgeController();
   return sharedController;
 }
 
@@ -645,6 +662,8 @@ export function useBackgroundAutoNudgeState(): BackgroundAutoNudgeState {
 export function __resetBackgroundAutoNudgeControllerForTests(options?: {
   readonly clearStorage?: boolean;
 }): void {
+  removeSharedStorageListener?.();
+  removeSharedStorageListener = null;
   sharedController = null;
   backgroundDispatchSupport = null;
   if (!options?.clearStorage) return;

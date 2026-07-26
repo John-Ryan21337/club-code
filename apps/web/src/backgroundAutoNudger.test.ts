@@ -1,9 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   AUTO_NUDGE_PROJECTION_ACK_TIMEOUT_MS,
   AUTO_NUDGE_BACKGROUND_STORAGE_KEY,
   BackgroundAutoNudgeController,
+  __resetBackgroundAutoNudgeControllerForTests,
+  getBackgroundAutoNudgeController,
   type BackgroundAutoNudgeObservation,
 } from "./backgroundAutoNudger";
 import { autoNudgeDispatchIdentityForTurn } from "./autoNudger";
@@ -98,6 +100,44 @@ describe("background auto nudge controller", () => {
 
     expect(notifications).toBe(1);
     expect(secondWindow.getSnapshot()).toMatchObject({ owner, status: "active" });
+  });
+
+  it("synchronizes shared ownership when another renderer writes background state", () => {
+    const { storage } = storageFixture();
+    const storageListeners: Array<(event: { readonly key: string | null }) => void> = [];
+    vi.stubGlobal("window", {
+      localStorage: storage,
+      addEventListener: (
+        type: string,
+        listener: (event: { readonly key: string | null }) => void,
+      ) => {
+        if (type === "storage") storageListeners.push(listener);
+      },
+      removeEventListener: (
+        type: string,
+        listener: (event: { readonly key: string | null }) => void,
+      ) => {
+        if (type !== "storage") return;
+        const index = storageListeners.indexOf(listener);
+        if (index >= 0) storageListeners.splice(index, 1);
+      },
+    });
+
+    try {
+      __resetBackgroundAutoNudgeControllerForTests();
+      const observingWindow = getBackgroundAutoNudgeController();
+      const owningWindow = new BackgroundAutoNudgeController(storage);
+      expect(observingWindow.getSnapshot().owner).toBeNull();
+
+      owningWindow.start(owner, null, startedAt);
+      expect(storageListeners).toHaveLength(1);
+      storageListeners[0]?.({ key: AUTO_NUDGE_BACKGROUND_STORAGE_KEY });
+
+      expect(observingWindow.getSnapshot()).toMatchObject({ owner, status: "active" });
+    } finally {
+      __resetBackgroundAutoNudgeControllerForTests();
+      vi.unstubAllGlobals();
+    }
   });
 
   it("stays active while its dispatched turn is starting", () => {
