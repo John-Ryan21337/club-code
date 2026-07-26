@@ -90,29 +90,43 @@ function fakeSpawn(child: ChildProcess) {
 }
 
 describe("validatedWindowsSystemRoot", () => {
-  it("accepts an OS-shaped root and normalizes separators", () => {
+  it("accepts only a drive-root Windows directory and normalizes it", () => {
     expect(validatedWindowsSystemRoot({ SystemRoot: "C:\\Windows" })).toBe("C:\\Windows");
     expect(validatedWindowsSystemRoot({ SystemRoot: "C:/Windows/" })).toBe("C:\\Windows");
-    expect(validatedWindowsSystemRoot({ SystemRoot: "  D:\\WinNT  " })).toBe("D:\\WinNT");
-  });
-
-  it("falls back to the default root only when the variable is absent", () => {
-    expect(validatedWindowsSystemRoot({})).toBe("C:\\Windows");
-    expect(validatedWindowsSystemRoot({ SystemRoot: "   " })).toBe("C:\\Windows");
-  });
-
-  it("reads the variable case-insensitively and prefers SystemRoot over windir", () => {
-    expect(validatedWindowsSystemRoot({ systemroot: "C:\\Windows" })).toBe("C:\\Windows");
-    expect(validatedWindowsSystemRoot({ SYSTEMROOT: "E:\\Win" })).toBe("E:\\Win");
-    expect(validatedWindowsSystemRoot({ windir: "F:\\Win" })).toBe("F:\\Win");
-    expect(validatedWindowsSystemRoot({ SystemRoot: "C:\\Windows", windir: "Z:\\Evil" })).toBe(
-      "C:\\Windows",
+    expect(validatedWindowsSystemRoot({ SystemRoot: "  d:\\WINDOWS  ", SystemDrive: " d: " })).toBe(
+      "D:\\Windows",
     );
+  });
+
+  it("derives the root from SystemDrive or the C drive when the root is absent", () => {
+    expect(validatedWindowsSystemRoot({})).toBe("C:\\Windows");
+    expect(validatedWindowsSystemRoot({ SystemDrive: "C:" })).toBe("C:\\Windows");
+  });
+
+  it("reads variables case-insensitively and accepts a non-C root only with a matching drive", () => {
+    expect(validatedWindowsSystemRoot({ systemroot: "C:\\Windows" })).toBe("C:\\Windows");
+    expect(validatedWindowsSystemRoot({ windir: "F:\\Windows", systemdrive: "F:" })).toBe(
+      "F:\\Windows",
+    );
+    expect(
+      validatedWindowsSystemRoot({
+        SystemRoot: "f:/WINDOWS/",
+        windir: "F:\\Windows",
+        SystemDrive: "f:",
+      }),
+    ).toBe("F:\\Windows");
+    expect(validatedWindowsSystemRoot({ SystemRoot: "D:\\Windows" })).toBeNull();
+    expect(validatedWindowsSystemRoot({ SystemDrive: "D:" })).toBeNull();
+    expect(validatedWindowsSystemRoot({ SystemRoot: "D:\\Windows", SystemDrive: "C:" })).toBeNull();
   });
 
   it.each([
     { label: "parent traversal", value: "C:\\Windows\\..\\Users\\public" },
     { label: "current-directory segment", value: "C:\\Windows\\.\\x" },
+    { label: "nested user directory", value: "C:\\Users\\me\\evil" },
+    { label: "nested system directory", value: "C:\\Windows\\System32" },
+    { label: "non-Windows root name", value: "D:\\WinNT" },
+    { label: "Unicode case-fold lookalike", value: "C:\\Windowſ" },
     { label: "UNC share", value: "\\\\attacker\\share" },
     { label: "relative path", value: "Windows" },
     { label: "bare drive-relative", value: "C:Windows" },
@@ -121,9 +135,40 @@ describe("validatedWindowsSystemRoot", () => {
     { label: "quote injection", value: 'C:\\Windows" "' },
     { label: "embedded newline", value: "C:\\Windows\nC:\\Evil" },
     { label: "NUL byte", value: "C:\\Windows\u0000" },
-    { label: "oversized", value: `C:\\${"w".repeat(300)}` },
+    { label: "blank value", value: "   " },
   ])("rejects a tampered SystemRoot: $label", ({ value }) => {
     expect(validatedWindowsSystemRoot({ SystemRoot: value })).toBeNull();
+  });
+
+  it.each(["C", "C:\\", "C:evil", "\\\\host\\share", "C:\n"])(
+    "rejects a malformed SystemDrive: %s",
+    (SystemDrive) => {
+      expect(validatedWindowsSystemRoot({ SystemDrive })).toBeNull();
+    },
+  );
+
+  it("rejects conflicting root aliases and case-duplicate environment keys", () => {
+    expect(
+      validatedWindowsSystemRoot({
+        SystemRoot: "C:\\Windows",
+        windir: "D:\\Windows",
+        SystemDrive: "C:",
+      }),
+    ).toBeNull();
+    expect(
+      validatedWindowsSystemRoot({
+        SystemRoot: "C:\\Windows",
+        SYSTEMROOT: "C:\\Windows",
+        SystemDrive: "C:",
+      }),
+    ).toBeNull();
+    expect(
+      validatedWindowsSystemRoot({
+        SystemRoot: "C:\\Windows",
+        SystemDrive: "C:",
+        systemdrive: "C:",
+      }),
+    ).toBeNull();
   });
 });
 
@@ -137,6 +182,26 @@ describe("resolveTrustedGpuProbePath", () => {
 
     expect(resolved).toBe(WINDOWS_NVIDIA_SMI);
     expect(queried).toEqual([WINDOWS_NVIDIA_SMI]);
+  });
+
+  it("preserves a non-C Windows install only when the canonical root tuple agrees", () => {
+    const queried: string[] = [];
+    const expected = "D:\\Windows\\System32\\nvidia-smi.exe";
+    const resolved = resolveTrustedGpuProbePath(
+      "win32",
+      {
+        SystemRoot: "d:/WINDOWS/",
+        windir: "D:\\Windows",
+        SystemDrive: "d:",
+      },
+      (path) => {
+        queried.push(path);
+        return path === expected;
+      },
+    );
+
+    expect(resolved).toBe(expected);
+    expect(queried).toEqual([expected]);
   });
 
   it("resolves only distro-owned Linux paths, in order", () => {
@@ -181,9 +246,25 @@ describe("resolveTrustedGpuProbePath", () => {
   });
 
   it("refuses to resolve when SystemRoot is tampered with, even if a helper exists", () => {
+    const isExecutable = vi.fn(() => true);
     expect(
-      resolveTrustedGpuProbePath("win32", { SystemRoot: "C:\\Windows\\..\\Evil" }, () => true),
+      resolveTrustedGpuProbePath("win32", { SystemRoot: "C:\\Windows\\..\\Evil" }, isExecutable),
     ).toBeNull();
+    expect(
+      resolveTrustedGpuProbePath("win32", { SystemRoot: "C:\\Users\\me\\evil" }, isExecutable),
+    ).toBeNull();
+    expect(
+      resolveTrustedGpuProbePath(
+        "win32",
+        {
+          SystemRoot: "C:\\Windows",
+          SYSTEMROOT: "D:\\Windows",
+          SystemDrive: "C:",
+        },
+        isExecutable,
+      ),
+    ).toBeNull();
+    expect(isExecutable).not.toHaveBeenCalled();
   });
 
   it.each(["darwin", "freebsd", "android", "aix"] as const)(
@@ -195,22 +276,19 @@ describe("resolveTrustedGpuProbePath", () => {
 });
 
 describe("buildGpuProbeEnvironment", () => {
-  it("passes only the loader-neutral variables the helper needs", () => {
-    const environment = buildGpuProbeEnvironment({
-      SystemRoot: "C:\\Windows",
-      windir: "C:\\Windows",
-      SystemDrive: "C:",
-      TEMP: "C:\\Temp",
-      TMPDIR: "/tmp",
-    });
+  it("fails closed without forwarding inherited values when Windows root aliases conflict", () => {
+    const environment = buildGpuProbeEnvironment(
+      {
+        SystemRoot: "c:/WINDOWS/",
+        windir: "Z:\\Evil",
+        SystemDrive: "c:",
+        TEMP: "C:\\Temp",
+        TMPDIR: "/tmp",
+      },
+      "win32",
+    );
 
-    expect(environment).toEqual({
-      SystemRoot: "C:\\Windows",
-      windir: "C:\\Windows",
-      SystemDrive: "C:",
-      TEMP: "C:\\Temp",
-      TMPDIR: "/tmp",
-    });
+    expect(environment).toEqual({});
   });
 
   it.each([
@@ -228,19 +306,58 @@ describe("buildGpuProbeEnvironment", () => {
     "SHELL",
     "HOME",
   ])("drops the loader/secret variable %s", (name) => {
-    const environment = buildGpuProbeEnvironment({ [name]: "sensitive-value", TEMP: "/tmp" });
+    const environment = buildGpuProbeEnvironment(
+      { [name]: "sensitive-value", TEMP: "/tmp" },
+      "linux",
+    );
 
     expect(environment).toEqual({ TEMP: "/tmp" });
     expect(JSON.stringify(environment)).not.toContain("sensitive-value");
   });
 
-  it("matches allowed names case-insensitively and skips undefined values", () => {
-    expect(buildGpuProbeEnvironment({ systemroot: "a", TeMp: "b", TmP: "c" })).toEqual({
-      systemroot: "a",
+  it("matches temporary-variable names case-insensitively and skips undefined values", () => {
+    expect(buildGpuProbeEnvironment({ systemroot: "a", TeMp: "b", TmP: "c" }, "linux")).toEqual({
       TeMp: "b",
       TmP: "c",
     });
-    expect(buildGpuProbeEnvironment({ TEMP: undefined, PATH: "/bin" })).toEqual({});
+    expect(buildGpuProbeEnvironment({ TEMP: undefined, PATH: "/bin" }, "linux")).toEqual({});
+    expect(buildGpuProbeEnvironment({ TeMp: "/private/tmp", PATH: "/usr/bin" }, "darwin")).toEqual({
+      TeMp: "/private/tmp",
+    });
+  });
+
+  it("does not forward a rejected Windows root into the helper environment", () => {
+    expect(
+      buildGpuProbeEnvironment(
+        {
+          SystemRoot: "C:\\Users\\me\\evil",
+          windir: "C:\\Users\\me\\evil",
+          SystemDrive: "C:",
+          TEMP: "C:\\Temp",
+        },
+        "win32",
+      ),
+    ).toEqual({});
+  });
+
+  it("emits only canonical Windows root variables from an accepted tuple", () => {
+    expect(
+      buildGpuProbeEnvironment(
+        {
+          SYSTEMROOT: "d:/WINDOWS/",
+          WiNdIr: "D:\\Windows",
+          systemdrive: "d:",
+          TEMP: "D:\\Users\\me\\Temp",
+          TMP: "D:\\Users\\me\\Tmp",
+          PATH: "D:\\Users\\me\\bin",
+        },
+        "win32",
+      ),
+    ).toEqual({
+      SystemRoot: "D:\\Windows",
+      windir: "D:\\Windows",
+      SystemDrive: "D:",
+    });
   });
 });
 
@@ -267,7 +384,11 @@ describe("GpuProbeProcess spawn contract", () => {
     expect(call.shell).toBe(false);
     expect(call.stdio).toEqual(["ignore", "pipe", "pipe"]);
     expect(call.windowsHide).toBe(true);
-    expect(call.env).toEqual({ SystemRoot: "C:\\Windows" });
+    expect(call.env).toEqual({
+      SystemRoot: "C:\\Windows",
+      windir: "C:\\Windows",
+      SystemDrive: "C:",
+    });
     expect(result.status).toBe("available");
     expect(decodeGpuTelemetry(result)).toEqual(result);
   });

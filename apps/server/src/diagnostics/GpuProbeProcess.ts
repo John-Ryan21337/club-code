@@ -13,7 +13,6 @@ import {
 } from "./GpuTelemetry.ts";
 
 const MAX_PROBE_OUTPUT_BYTES = 16_384;
-const MAX_SYSTEM_ROOT_LENGTH = 200;
 const PROBE_TIMEOUT_MS = 2_000;
 /** Extra time after the kill request before the caller is settled regardless. */
 const PROBE_FORCE_SETTLE_GRACE_MS = 500;
@@ -29,7 +28,7 @@ const NVIDIA_SMI_ARGS = [
 ] as const;
 
 const NVIDIA_SMI_WINDOWS_SUBPATH = ["System32", "nvidia-smi.exe"] as const;
-const WINDOWS_DEFAULT_SYSTEM_ROOT = "C:\\Windows";
+const WINDOWS_DEFAULT_SYSTEM_DRIVE = "C";
 /**
  * Distro-package-owned locations only. `/usr/local/bin`, `~/.local/bin`,
  * workspace `node_modules/.bin`, and anything reachable through `PATH` are
@@ -39,12 +38,13 @@ const WINDOWS_DEFAULT_SYSTEM_ROOT = "C:\\Windows";
 const NVIDIA_SMI_LINUX_PATHS = ["/usr/bin/nvidia-smi", "/bin/nvidia-smi"] as const;
 
 /**
- * Drive-absolute, no UNC, no wildcards, no alternate data stream. `SystemRoot`
- * is OS-supplied in normal operation; validating it keeps a tampered
- * environment from redirecting the resolved executable.
+ * Windows 10/11 installs use a drive-root `Windows` directory. Accepting an
+ * arbitrary drive-absolute path would let a tampered environment redirect the
+ * recurring probe into a user-writable tree.
  */
-const WINDOWS_SYSTEM_ROOT_PATTERN = /^[A-Za-z]:[\\/][^<>:"|?*]+$/;
-/** Covers C0 and C1: a newline or NUL must not survive into a spawn path. */
+const WINDOWS_SYSTEM_ROOT_PATTERN = /^([A-Za-z]):[\\/][Ww][Ii][Nn][Dd][Oo][Ww][Ss][\\/]*$/u;
+const WINDOWS_SYSTEM_DRIVE_PATTERN = /^([A-Za-z]):$/u;
+/** Covers C0 and C1: a newline or NUL must not survive normalization. */
 const CONTROL_CHARACTER_PATTERN = /\p{Cc}/u;
 
 /**
@@ -57,14 +57,7 @@ const CONTROL_CHARACTER_PATTERN = /\p{Cc}/u;
  * therefore reports unsupported rather than being reached through a
  * caller-influenced variable.
  */
-const ALLOWED_ENVIRONMENT_NAMES = new Set([
-  "systemroot",
-  "windir",
-  "systemdrive",
-  "temp",
-  "tmp",
-  "tmpdir",
-]);
+const ALLOWED_POSIX_ENVIRONMENT_NAMES = new Set(["temp", "tmp", "tmpdir"]);
 
 export interface GpuProbeProcessShape {
   /** Never rejects. Resolves an explicit unavailable measurement on every failure path. */
@@ -85,18 +78,46 @@ interface GpuProbeProcessOptions {
   readonly shutdownCloseGraceMs?: number;
 }
 
-function readEnvironmentValue(env: NodeJS.ProcessEnv, name: string): string | undefined {
+type EnvironmentValue =
+  | { readonly state: "missing" }
+  | { readonly state: "ambiguous" }
+  | { readonly state: "present"; readonly value: string };
+
+/**
+ * `process.env` is case-insensitive on Windows, but injected/test environment
+ * objects can contain several spellings of the same key. Depending on object
+ * insertion order at a security boundary would make the chosen system root
+ * ambiguous, so duplicates fail closed even when their values happen to match.
+ */
+function readUniqueEnvironmentValue(env: NodeJS.ProcessEnv, name: string): EnvironmentValue {
   const wanted = name.toLowerCase();
+  let found: string | undefined;
   for (const [key, value] of Object.entries(env)) {
-    if (key.toLowerCase() === wanted && value !== undefined) return value;
+    if (key.toLowerCase() !== wanted || value === undefined) continue;
+    if (found !== undefined) return { state: "ambiguous" };
+    found = value;
   }
-  return undefined;
+  return found === undefined ? { state: "missing" } : { state: "present", value: found };
 }
 
-export function buildGpuProbeEnvironment(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+export function buildGpuProbeEnvironment(
+  source: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform,
+): NodeJS.ProcessEnv {
+  if (platform === "win32") {
+    const systemRoot = validatedWindowsSystemRoot(source);
+    if (systemRoot === null) return {};
+    const systemDrive = systemRoot.slice(0, 2);
+    return {
+      SystemRoot: systemRoot,
+      windir: systemRoot,
+      SystemDrive: systemDrive,
+    };
+  }
+
   const environment: NodeJS.ProcessEnv = {};
   for (const [name, value] of Object.entries(source)) {
-    if (value !== undefined && ALLOWED_ENVIRONMENT_NAMES.has(name.toLowerCase())) {
+    if (value !== undefined && ALLOWED_POSIX_ENVIRONMENT_NAMES.has(name.toLowerCase())) {
       environment[name] = value;
     }
   }
@@ -104,18 +125,58 @@ export function buildGpuProbeEnvironment(source: NodeJS.ProcessEnv): NodeJS.Proc
 }
 
 export function validatedWindowsSystemRoot(env: NodeJS.ProcessEnv): string | null {
-  const raw = (
-    readEnvironmentValue(env, "SystemRoot") ??
-    readEnvironmentValue(env, "windir") ??
-    ""
-  ).trim();
-  if (raw.length === 0) return WINDOWS_DEFAULT_SYSTEM_ROOT;
-  if (raw.length > MAX_SYSTEM_ROOT_LENGTH) return null;
-  if (CONTROL_CHARACTER_PATTERN.test(raw)) return null;
-  if (!WINDOWS_SYSTEM_ROOT_PATTERN.test(raw)) return null;
-  // Checked before normalization, which would silently collapse `..`.
-  if (raw.split(/[\\/]/).some((segment) => segment === "." || segment === "..")) return null;
-  return pathWin32.normalize(raw).replace(/[\\/]+$/u, "");
+  const systemRootValue = readUniqueEnvironmentValue(env, "SystemRoot");
+  const windowsDirectoryValue = readUniqueEnvironmentValue(env, "windir");
+  const systemDriveValue = readUniqueEnvironmentValue(env, "SystemDrive");
+  if (
+    systemRootValue.state === "ambiguous" ||
+    windowsDirectoryValue.state === "ambiguous" ||
+    systemDriveValue.state === "ambiguous"
+  ) {
+    return null;
+  }
+
+  const parseRoot = (raw: string): string | null => {
+    if (CONTROL_CHARACTER_PATTERN.test(raw)) return null;
+    const match = WINDOWS_SYSTEM_ROOT_PATTERN.exec(raw.trim());
+    const drive = match?.[1]?.toUpperCase();
+    return drive === undefined ? null : `${drive}:\\Windows`;
+  };
+  const systemRoot =
+    systemRootValue.state === "present" ? parseRoot(systemRootValue.value) : undefined;
+  const windowsDirectory =
+    windowsDirectoryValue.state === "present" ? parseRoot(windowsDirectoryValue.value) : undefined;
+  if (systemRoot === null || windowsDirectory === null) return null;
+  if (
+    systemRoot !== undefined &&
+    windowsDirectory !== undefined &&
+    systemRoot !== windowsDirectory
+  ) {
+    return null;
+  }
+
+  let configuredDrive: string | undefined;
+  if (systemDriveValue.state === "present") {
+    if (CONTROL_CHARACTER_PATTERN.test(systemDriveValue.value)) return null;
+    const match = WINDOWS_SYSTEM_DRIVE_PATTERN.exec(systemDriveValue.value.trim());
+    configuredDrive = match?.[1]?.toUpperCase();
+    if (configuredDrive === undefined) return null;
+  }
+
+  const trustedRoot = systemRoot ?? windowsDirectory;
+  if (trustedRoot === undefined) {
+    // Missing environment data may safely fall back only to the standard
+    // protected Windows directory. A non-C install needs the root/drive pair.
+    if (configuredDrive !== undefined && configuredDrive !== WINDOWS_DEFAULT_SYSTEM_DRIVE) {
+      return null;
+    }
+    return `${WINDOWS_DEFAULT_SYSTEM_DRIVE}:\\Windows`;
+  }
+
+  const rootDrive = trustedRoot.slice(0, 1);
+  if (configuredDrive !== undefined && configuredDrive !== rootDrive) return null;
+  if (rootDrive !== WINDOWS_DEFAULT_SYSTEM_DRIVE && configuredDrive === undefined) return null;
+  return pathWin32.normalize(`${rootDrive}:\\Windows`);
 }
 
 function isExecutableFileOnDisk(filePath: string, platform: NodeJS.Platform): boolean {
@@ -229,7 +290,7 @@ function makeGpuProbeProcessWithOptions(
       let child: ChildProcess;
       try {
         child = spawnProcess(command, [...NVIDIA_SMI_ARGS], {
-          env: buildGpuProbeEnvironment(environment),
+          env: buildGpuProbeEnvironment(environment, platform),
           shell: false,
           stdio: ["ignore", "pipe", "pipe"],
           windowsHide: true,
