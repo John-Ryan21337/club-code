@@ -8,6 +8,7 @@ import {
   ClaudeSettings,
   CODEX_DEFAULT_AUTO_COMPACT_TOKEN_LIMIT,
   DEFAULT_APP_ACCENT_COLOR,
+  DEFAULT_AUTO_NUDGE_MODE,
   DEFAULT_BRAND_WORDMARK_PREFIX,
   DEFAULT_CHAT_COPY_FORMAT,
   DEFAULT_CLIENT_SETTINGS,
@@ -92,6 +93,36 @@ describe("client settings", () => {
     expect(decodeClientSettings({}).sidebarStarSpeed).toBe(1);
     expect(decodeClientSettings({}).themeAccentColor).toBe("");
     expect(decodeClientSettings({}).appAccentColor).toBe("");
+  });
+
+  it("persists only the supported global auto-nudge modes and defaults safely off", () => {
+    expect(DEFAULT_CLIENT_SETTINGS.autoNudgeMode).toBe(DEFAULT_AUTO_NUDGE_MODE);
+    expect(decodeClientSettings({}).autoNudgeMode).toBe("off");
+    expect(decodeClientSettings({}).autoNudgeBackgroundContinuation).toBe(false);
+    expect(decodeClientSettings({}).autoNudgeMaxRounds).toBe(5);
+    expect(decodeClientSettings({}).autoNudgeMaxMinutes).toBe(30);
+    expect(decodeClientSettingsPatch({ autoNudgeMode: "hardcore-fanout" })).toEqual({
+      autoNudgeMode: "hardcore-fanout",
+    });
+    expect(decodeClientSettingsPatch({ autoNudgeMode: "steady-progress" })).toEqual({
+      autoNudgeMode: "steady-progress",
+    });
+    expect(() => decodeClientSettingsPatch({ autoNudgeMode: "forever" })).toThrow();
+    expect(
+      decodeClientSettingsPatch({
+        autoNudgeBackgroundContinuation: true,
+        autoNudgeMaxRounds: 20,
+        autoNudgeMaxMinutes: 120,
+      }),
+    ).toEqual({
+      autoNudgeBackgroundContinuation: true,
+      autoNudgeMaxRounds: 20,
+      autoNudgeMaxMinutes: 120,
+    });
+    expect(() => decodeClientSettingsPatch({ autoNudgeMaxRounds: 0 })).toThrow();
+    expect(() => decodeClientSettingsPatch({ autoNudgeMaxRounds: 21 })).toThrow();
+    expect(() => decodeClientSettingsPatch({ autoNudgeMaxMinutes: 4 })).toThrow();
+    expect(() => decodeClientSettingsPatch({ autoNudgeMaxMinutes: 121 })).toThrow();
   });
 
   it("accepts only supported power-save blocker modes in patches", () => {

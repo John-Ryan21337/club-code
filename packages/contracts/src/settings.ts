@@ -38,6 +38,30 @@ export const DEFAULT_THEME_ACCENT_COLOR = "";
 export const MIN_SIDEBAR_STAR_SPEED = 0.25;
 export const MAX_SIDEBAR_STAR_SPEED = 4;
 export const DEFAULT_SIDEBAR_STAR_SPEED = 1;
+export const AutoNudgeMode = Schema.Literals(["off", "hardcore-fanout", "steady-progress"]);
+export type AutoNudgeMode = typeof AutoNudgeMode.Type;
+export const DEFAULT_AUTO_NUDGE_MODE: AutoNudgeMode = "off";
+export const DEFAULT_AUTO_NUDGE_BACKGROUND_CONTINUATION = false;
+export const MIN_AUTO_NUDGE_MAX_ROUNDS = 1;
+export const MAX_AUTO_NUDGE_MAX_ROUNDS = 20;
+export const DEFAULT_AUTO_NUDGE_MAX_ROUNDS = 5;
+export const MIN_AUTO_NUDGE_MAX_MINUTES = 5;
+export const MAX_AUTO_NUDGE_MAX_MINUTES = 120;
+export const DEFAULT_AUTO_NUDGE_MAX_MINUTES = 30;
+export const AutoNudgeMaxRounds = Schema.Int.check(
+  Schema.isBetween({
+    minimum: MIN_AUTO_NUDGE_MAX_ROUNDS,
+    maximum: MAX_AUTO_NUDGE_MAX_ROUNDS,
+  }),
+);
+export type AutoNudgeMaxRounds = typeof AutoNudgeMaxRounds.Type;
+export const AutoNudgeMaxMinutes = Schema.Int.check(
+  Schema.isBetween({
+    minimum: MIN_AUTO_NUDGE_MAX_MINUTES,
+    maximum: MAX_AUTO_NUDGE_MAX_MINUTES,
+  }),
+);
+export type AutoNudgeMaxMinutes = typeof AutoNudgeMaxMinutes.Type;
 export const MAX_BRAND_WORDMARK_PREFIX_LENGTH = 64;
 export const MAX_SIDEBAR_BRAND_IMAGE_FILE_BYTES = 1_000_000;
 export const MAX_SIDEBAR_BRAND_IMAGE_DATA_URL_LENGTH =
@@ -160,6 +184,21 @@ export const ClientSettingsSchema = Schema.Struct({
   ).pipe(Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_BRAND_IMAGE_DATA_URL))),
   sidebarStarSpeed: SidebarStarSpeed.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_STAR_SPEED)),
+  ),
+  // Durable, device-wide policy. Background continuation is a separate,
+  // default-off permission and always has one explicit thread owner plus hard
+  // round/time caps in the renderer coordinator.
+  autoNudgeMode: AutoNudgeMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AUTO_NUDGE_MODE)),
+  ),
+  autoNudgeBackgroundContinuation: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AUTO_NUDGE_BACKGROUND_CONTINUATION)),
+  ),
+  autoNudgeMaxRounds: AutoNudgeMaxRounds.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AUTO_NUDGE_MAX_ROUNDS)),
+  ),
+  autoNudgeMaxMinutes: AutoNudgeMaxMinutes.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AUTO_NUDGE_MAX_MINUTES)),
   ),
   themeAccentColor: TrimmedString.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_THEME_ACCENT_COLOR)),
@@ -738,6 +777,10 @@ export const ClientSettingsPatch = Schema.Struct({
   ),
   sidebarBrandImage: Schema.optionalKey(Schema.NullOr(SidebarBrandImageAsset)),
   sidebarStarSpeed: Schema.optionalKey(SidebarStarSpeed),
+  autoNudgeMode: Schema.optionalKey(AutoNudgeMode),
+  autoNudgeBackgroundContinuation: Schema.optionalKey(Schema.Boolean),
+  autoNudgeMaxRounds: Schema.optionalKey(AutoNudgeMaxRounds),
+  autoNudgeMaxMinutes: Schema.optionalKey(AutoNudgeMaxMinutes),
   themeAccentColor: Schema.optionalKey(TrimmedString),
   appAccentColor: Schema.optionalKey(TrimmedString),
   defaultEditor: Schema.optionalKey(DefaultEditorSelection),
