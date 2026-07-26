@@ -38,8 +38,17 @@ export const ListProjectionThreadActivitiesInput = Schema.Struct({
 });
 export type ListProjectionThreadActivitiesInput = typeof ListProjectionThreadActivitiesInput.Type;
 
+export const ListProjectionUserInputAccountingInput = Schema.Struct({
+  threadId: ThreadId,
+  requestId: Schema.optional(Schema.String),
+  recoveryMessageId: Schema.optional(Schema.String),
+});
+export type ListProjectionUserInputAccountingInput =
+  typeof ListProjectionUserInputAccountingInput.Type;
+
 export const ProjectionUserInputActivityAccountingRow = Schema.Struct({
   activityId: EventId,
+  turnId: Schema.NullOr(TurnId),
   kind: Schema.String,
   payload: Schema.Unknown,
   createdAt: IsoDateTime,
@@ -89,7 +98,7 @@ export interface ProjectionThreadActivityRepositoryShape {
    * summaries.
    */
   readonly listUserInputAccountingByThreadId: (
-    input: ListProjectionThreadActivitiesInput,
+    input: ListProjectionUserInputAccountingInput,
   ) => Effect.Effect<
     ReadonlyArray<ProjectionUserInputActivityAccountingRow>,
     ProjectionRepositoryError

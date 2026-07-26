@@ -198,4 +198,84 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
       assert.strictEqual(count, 1);
     }),
   );
+
+  it.effect("lists request-scoped recovery accounting without an activity-history limit", () =>
+    Effect.gen(function* () {
+      const activities = yield* ProjectionThreadActivityRepository;
+      const threadId = ThreadId.make("thread-user-input-recovery-accounting");
+
+      yield* activities.upsert({
+        activityId: EventId.make("activity-recovery-accounting-requested"),
+        threadId,
+        turnId: null,
+        tone: "info",
+        kind: "user-input.requested",
+        summary: "Input requested",
+        payload: { requestId: "request-accounted", questions: [] },
+        createdAt: "2026-03-24T01:00:00.000Z",
+      });
+      yield* activities.upsert({
+        activityId: EventId.make("activity-recovery-accounting-pending"),
+        threadId,
+        turnId: null,
+        tone: "info",
+        kind: "user-input.recovery-pending",
+        summary: "Recovery pending",
+        payload: {
+          requestId: "request-accounted",
+          recoveryMessageId: "user-input-recovery:accounted",
+        },
+        createdAt: "2026-03-24T01:00:01.000Z",
+      });
+      yield* activities.upsert({
+        activityId: EventId.make("activity-recovery-accounting-other"),
+        threadId,
+        turnId: null,
+        tone: "info",
+        kind: "user-input.callback-ownership-lost",
+        summary: "Ownership ended",
+        payload: { requestId: "request-other", loss: "callback-missing" },
+        createdAt: "2026-03-24T01:00:02.000Z",
+      });
+      yield* activities.upsert({
+        activityId: EventId.make("activity-recovery-accounting-accepted"),
+        threadId,
+        turnId: null,
+        tone: "info",
+        kind: "user-input.recovery-accepted",
+        summary: "Recovery accepted",
+        payload: {
+          requestId: "request-accounted",
+          recoveryMessageId: "user-input-recovery:accounted",
+          acceptedAt: "2026-03-24T01:00:03.000Z",
+        },
+        createdAt: "2026-03-24T01:00:03.000Z",
+      });
+
+      const byRequest = yield* activities.listUserInputAccountingByThreadId({
+        threadId,
+        requestId: "request-accounted",
+      });
+      assert.deepStrictEqual(
+        byRequest.map((activity) => activity.activityId),
+        [
+          EventId.make("activity-recovery-accounting-requested"),
+          EventId.make("activity-recovery-accounting-pending"),
+          EventId.make("activity-recovery-accounting-accepted"),
+        ],
+      );
+
+      const byMessage = yield* activities.listUserInputAccountingByThreadId({
+        threadId,
+        recoveryMessageId: "user-input-recovery:accounted",
+      });
+      assert.deepStrictEqual(
+        byMessage.map((activity) => activity.activityId),
+        [
+          EventId.make("activity-recovery-accounting-pending"),
+          EventId.make("activity-recovery-accounting-accepted"),
+        ],
+      );
+    }),
+  );
 });

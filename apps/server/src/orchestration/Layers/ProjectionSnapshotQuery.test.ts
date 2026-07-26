@@ -2090,6 +2090,17 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             '2026-04-06T00:00:06.000Z'
           ),
           (
+            'hidden-user-input-recovery-pending',
+            'thread-turn-visible-page',
+            'turn-visible-page',
+            'info',
+            'user-input.recovery-pending',
+            'User input recovery pending provider acceptance',
+            '{"requestId":"request-1"}',
+            7,
+            '2026-04-06T00:00:07.000Z'
+          ),
+          (
             'visible-context-compaction',
             'thread-turn-visible-page',
             'turn-visible-page',
@@ -2097,8 +2108,8 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             'tool.started',
             'Context compaction started',
             '{"itemType":"context_compaction"}',
-            7,
-            '2026-04-06T00:00:07.000Z'
+            8,
+            '2026-04-06T00:00:08.000Z'
           ),
           (
             'visible-tool-completed',
@@ -2108,8 +2119,8 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             'tool.completed',
             'Read file',
             '{"detail":"Read src/index.ts"}',
-            8,
-            '2026-04-06T00:00:08.000Z'
+            9,
+            '2026-04-06T00:00:09.000Z'
           ),
           (
             'hidden-only-context-window',
@@ -2119,8 +2130,41 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             'context-window.updated',
             'Context window updated',
             '{}',
-            9,
-            '2026-04-06T00:00:09.000Z'
+            10,
+            '2026-04-06T00:00:10.000Z'
+          ),
+          (
+            'hidden-only-user-input-ownership',
+            'thread-turn-visible-page',
+            'turn-hidden-only',
+            'info',
+            'user-input.callback-ownership-lost',
+            'Provider user input callback ownership ended',
+            '{"requestId":"request-2"}',
+            11,
+            '2026-04-06T00:00:11.000Z'
+          ),
+          (
+            'hidden-user-input-recovery-accepted',
+            'thread-turn-visible-page',
+            'turn-visible-page',
+            'info',
+            'user-input.recovery-accepted',
+            'User input recovery accepted by provider',
+            '{"requestId":"request-1"}',
+            12,
+            '2026-04-06T00:00:12.000Z'
+          ),
+          (
+            'hidden-only-user-input-recovery-accepted',
+            'thread-turn-visible-page',
+            'turn-hidden-only',
+            'info',
+            'user-input.recovery-accepted',
+            'User input recovery accepted by provider',
+            '{"requestId":"request-2"}',
+            13,
+            '2026-04-06T00:00:13.000Z'
           )
       `;
 

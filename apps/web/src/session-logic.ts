@@ -516,6 +516,7 @@ export function deriveWorkLogEntries(
     .filter((activity) => activity.summary !== "Checkpoint captured")
     .filter((activity) => !isPlanBoundaryToolActivity(activity))
     .filter((activity) => !isRetryableSteerDeliveryActivity(activity))
+    .filter((activity) => !isInternalUserInputRecoveryActivity(activity))
     .map(toDerivedWorkLogEntry);
   return collapseDerivedWorkLogEntries(entries).map(
     ({ activityKind: _activityKind, collapseKey: _collapseKey, ...entry }) => entry,
@@ -589,6 +590,14 @@ function isRetryableSteerDeliveryActivity(activity: OrchestrationThreadActivity)
       ? (activity.payload as Record<string, unknown>)
       : null;
   return payload?.retryableFollowUp === true;
+}
+
+function isInternalUserInputRecoveryActivity(activity: OrchestrationThreadActivity): boolean {
+  return (
+    activity.kind === "user-input.recovery-pending" ||
+    activity.kind === "user-input.recovery-accepted" ||
+    activity.kind === "user-input.callback-ownership-lost"
+  );
 }
 
 function isPlanBoundaryToolActivity(activity: OrchestrationThreadActivity): boolean {

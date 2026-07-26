@@ -11,6 +11,7 @@ import { toPersistenceDecodeError, toPersistenceSqlError } from "../Errors.ts";
 import {
   DeleteProjectionThreadActivitiesInput,
   ListProjectionThreadActivitiesInput,
+  ListProjectionUserInputAccountingInput,
   ProjectionPendingUserInputCountRow,
   ProjectionThreadActivity,
   ProjectionThreadActivityRepository,
@@ -107,12 +108,15 @@ const makeProjectionThreadActivityRepository = Effect.gen(function* () {
   });
 
   const listProjectionUserInputAccountingRows = SqlSchema.findAll({
-    Request: ListProjectionThreadActivitiesInput,
+    Request: ListProjectionUserInputAccountingInput,
     Result: ProjectionUserInputActivityAccountingDbRowSchema,
-    execute: ({ threadId }) =>
-      sql`
+    execute: ({ threadId, requestId, recoveryMessageId }) => {
+      const requestIdFilter = requestId ?? null;
+      const recoveryMessageIdFilter = recoveryMessageId ?? null;
+      return sql`
         SELECT
           activity_id AS "activityId",
+          turn_id AS "turnId",
           kind,
           payload_json AS "payload",
           created_at AS "createdAt"
@@ -121,12 +125,27 @@ const makeProjectionThreadActivityRepository = Effect.gen(function* () {
           AND kind IN (
             'user-input.requested',
             'user-input.resolved',
-            'provider.user-input.respond.failed'
+            'provider.user-input.respond.failed',
+            'user-input.recovery-pending',
+            'user-input.recovery-accepted',
+            'user-input.callback-ownership-lost'
+          )
+          AND (
+            (${requestIdFilter} IS NULL AND ${recoveryMessageIdFilter} IS NULL)
+            OR (
+              ${requestIdFilter} IS NOT NULL
+              AND json_extract(payload_json, '$.requestId') = ${requestIdFilter}
+            )
+            OR (
+              ${recoveryMessageIdFilter} IS NOT NULL
+              AND json_extract(payload_json, '$.recoveryMessageId') = ${recoveryMessageIdFilter}
+            )
           )
         ORDER BY
           created_at ASC,
           activity_id ASC
-      `,
+      `;
+    },
   });
 
   const countPendingUserInputRows = SqlSchema.findOne({

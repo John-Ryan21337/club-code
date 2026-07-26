@@ -775,6 +775,35 @@ describe("deriveWorkLogEntries", () => {
     expect(entries.map((entry) => entry.id)).toEqual(["real-warning"]);
   });
 
+  it("hides internal user-input recovery bookkeeping from the work log", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "recovery-pending",
+        kind: "user-input.recovery-pending",
+        summary: "User input recovery pending provider acceptance",
+      }),
+      makeActivity({
+        id: "recovery-accepted",
+        kind: "user-input.recovery-accepted",
+        summary: "User input recovery accepted by provider",
+      }),
+      makeActivity({
+        id: "callback-ownership-lost",
+        kind: "user-input.callback-ownership-lost",
+        summary: "Provider user input callback ownership ended",
+      }),
+      makeActivity({
+        id: "real-warning",
+        kind: "runtime.warning",
+        summary: "Runtime warning",
+      }),
+    ];
+
+    expect(deriveWorkLogEntries(activities, undefined).map((entry) => entry.id)).toEqual([
+      "real-warning",
+    ]);
+  });
+
   it("uses payload detail as label for task.completed and preserves error tone", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({

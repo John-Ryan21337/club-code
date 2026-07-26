@@ -1120,6 +1120,11 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           AND kind != 'context-window.updated'
           AND kind != 'checkpoint.captured'
           AND kind != 'task.started'
+          AND kind NOT IN (
+            'user-input.recovery-pending',
+            'user-input.recovery-accepted',
+            'user-input.callback-ownership-lost'
+          )
           AND summary != 'Checkpoint captured'
           AND (
             kind != 'tool.started'
@@ -1149,6 +1154,11 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             AND kind != 'context-window.updated'
             AND kind != 'checkpoint.captured'
             AND kind != 'task.started'
+            AND kind NOT IN (
+              'user-input.recovery-pending',
+              'user-input.recovery-accepted',
+              'user-input.callback-ownership-lost'
+            )
             AND summary != 'Checkpoint captured'
             AND (
               kind != 'tool.started'
@@ -1188,6 +1198,11 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           AND kind != 'context-window.updated'
           AND kind != 'checkpoint.captured'
           AND kind != 'task.started'
+          AND kind NOT IN (
+            'user-input.recovery-pending',
+            'user-input.recovery-accepted',
+            'user-input.callback-ownership-lost'
+          )
           AND summary != 'Checkpoint captured'
           AND (
             kind != 'tool.started'
