@@ -42,11 +42,13 @@ import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
+import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import {
@@ -742,6 +744,7 @@ const buildAppUnderTest = (options?: {
             ready: Effect.void,
             getSettings: Effect.succeed(DEFAULT_CLIENT_SETTINGS),
             updateSettings: () => Effect.succeed(DEFAULT_CLIENT_SETTINGS),
+            withExclusiveAccess: (effect) => effect,
             streamChanges: Stream.empty,
             ...options?.layers?.clientSettings,
           }),
@@ -1354,6 +1357,7 @@ const getHeader = (headers: HeaderBag, name: string): string | null => {
 const assertBrowserApiCorsHeaders = (headers: HeaderBag) => {
   assert.equal(getHeader(headers, "access-control-allow-origin"), "*");
   assert.deepEqual(splitHeaderTokens(getHeader(headers, "access-control-allow-methods")), [
+    "DELETE",
     "GET",
     "OPTIONS",
     "POST",
@@ -2879,7 +2883,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect("rejects unauthenticated ambient image reads and uploads", () =>
+  it.effect("rejects unauthenticated ambient image reads, uploads, and removals", () =>
     Effect.gen(function* () {
       yield* buildAppUnderTest();
       const id = `sha256-${"c".repeat(64)}.png`;
@@ -2888,9 +2892,127 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         body: HttpBody.uint8Array(tinyPngBytes, "image/png"),
       });
       const imageResponse = yield* HttpClient.get(`/api/ambient-media/image/${id}`);
+      const removeResponse = yield* HttpClient.del(`/api/ambient-media/image/${id}`);
 
       assert.equal(uploadResponse.status, 401);
       assert.equal(imageResponse.status, 401);
+      assert.equal(removeResponse.status, 401);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("refuses to remove referenced ambient images and deletes unreferenced assets", () =>
+    Effect.gen(function* () {
+      const referencedId = `sha256-${"c".repeat(64)}.png`;
+      const cycleId = `sha256-${"d".repeat(64)}.png`;
+      yield* buildAppUnderTest({
+        layers: {
+          clientSettings: {
+            getSettings: Effect.succeed({
+              ...DEFAULT_CLIENT_SETTINGS,
+              ambientImageAsset: {
+                id: referencedId,
+                url: `/api/ambient-media/image/${referencedId}`,
+                mimeType: "image/png",
+                width: 1,
+                height: 1,
+                sizeBytes: tinyPngBytes.byteLength,
+              },
+              ambientImageCycleAssets: [
+                {
+                  id: cycleId,
+                  url: `/api/ambient-media/image/${cycleId}`,
+                  mimeType: "image/png",
+                  width: 1,
+                  height: 1,
+                  sizeBytes: tinyPngBytes.byteLength,
+                },
+              ],
+            }),
+          },
+        },
+      });
+      const cookie = yield* getAuthenticatedSessionCookieHeader();
+
+      const referencedResponse = yield* HttpClient.del(`/api/ambient-media/image/${referencedId}`, {
+        headers: { cookie },
+      });
+      const cycleResponse = yield* HttpClient.del(`/api/ambient-media/image/${cycleId}`, {
+        headers: { cookie },
+      });
+      assert.equal(referencedResponse.status, 409);
+      assert.equal(cycleResponse.status, 409);
+
+      const uploadResponse = yield* HttpClient.post("/api/ambient-media/image", {
+        headers: { cookie, "content-type": "image/png" },
+        body: HttpBody.uint8Array(tinyPngBytes, "image/png"),
+      });
+      const uploadBody = (yield* uploadResponse.json) as {
+        readonly ambientImage: { readonly id: string; readonly url: string };
+      };
+      const removeResponse = yield* HttpClient.del(uploadBody.ambientImage.url, {
+        headers: { cookie },
+      });
+      const readAfterRemove = yield* HttpClient.get(uploadBody.ambientImage.url, {
+        headers: { cookie },
+      });
+
+      assert.equal(removeResponse.status, 204);
+      assert.equal(readAfterRemove.status, 404);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("waits for a settings write before deciding whether an image is referenced", () =>
+    Effect.gen(function* () {
+      const id = `sha256-${"e".repeat(64)}.png`;
+      const settingsRef = yield* Ref.make(DEFAULT_CLIENT_SETTINGS);
+      const settingsWriteEntered = yield* Deferred.make<void>();
+      const releaseSettingsWrite = yield* Deferred.make<void>();
+      const deleteReachedLock = yield* Deferred.make<void>();
+      const writeSemaphore = yield* Semaphore.make(1);
+
+      yield* buildAppUnderTest({
+        layers: {
+          clientSettings: {
+            getSettings: Ref.get(settingsRef),
+            withExclusiveAccess: (effect) =>
+              Deferred.succeed(deleteReachedLock, undefined).pipe(
+                Effect.andThen(writeSemaphore.withPermits(1)(effect)),
+              ),
+          },
+        },
+      });
+      const cookie = yield* getAuthenticatedSessionCookieHeader();
+      const settingsWrite = yield* writeSemaphore
+        .withPermits(1)(
+          Deferred.succeed(settingsWriteEntered, undefined).pipe(
+            Effect.andThen(Deferred.await(releaseSettingsWrite)),
+            Effect.andThen(
+              Ref.set(settingsRef, {
+                ...DEFAULT_CLIENT_SETTINGS,
+                ambientImageAsset: {
+                  id,
+                  url: `/api/ambient-media/image/${id}`,
+                  mimeType: "image/png",
+                  width: 1,
+                  height: 1,
+                  sizeBytes: tinyPngBytes.byteLength,
+                },
+              }),
+            ),
+          ),
+        )
+        .pipe(Effect.forkScoped);
+
+      yield* Deferred.await(settingsWriteEntered);
+      const removal = yield* HttpClient.del(`/api/ambient-media/image/${id}`, {
+        headers: { cookie },
+      }).pipe(Effect.forkScoped);
+      yield* Deferred.await(deleteReachedLock);
+      yield* Deferred.succeed(releaseSettingsWrite, undefined);
+      yield* Fiber.join(settingsWrite);
+      const response = yield* Fiber.join(removal);
+
+      assert.equal(response.status, 409);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
@@ -2917,6 +3039,52 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
       assert.equal(uploadResponse.status, 404);
       assert.equal(imageResponse.status, 404);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("hides ambient image removal when the capability is disabled", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest({
+        config: {
+          ambientExperienceCapabilities: {
+            ...DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES,
+            ambientImage: false,
+          },
+        },
+      });
+      const cookie = yield* getAuthenticatedSessionCookieHeader();
+      const id = `sha256-${"c".repeat(64)}.png`;
+
+      const response = yield* HttpClient.del(`/api/ambient-media/image/${id}`, {
+        headers: { cookie },
+      });
+
+      assert.equal(response.status, 404);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("advertises ambient image removal to cross-origin browser clients", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+
+      const url = yield* getHttpServerUrl(`/api/ambient-media/image/sha256-${"a".repeat(64)}.png`);
+      const response = yield* Effect.promise(() =>
+        fetch(url, {
+          method: "OPTIONS",
+          headers: {
+            origin: crossOriginClientOrigin,
+            "access-control-request-method": "DELETE",
+            "access-control-request-headers": "authorization",
+          },
+        }),
+      );
+
+      assert.equal(response.status, 204);
+      assertBrowserApiCorsHeaders(response.headers);
+      assert.include(
+        splitHeaderTokens(response.headers.get("access-control-allow-methods")),
+        "DELETE",
+      );
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
@@ -3127,6 +3295,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.equal(response.status, 204);
       assert.equal(response.headers.get("access-control-allow-origin"), "*");
       assert.deepEqual(splitHeaderTokens(response.headers.get("access-control-allow-methods")), [
+        "DELETE",
         "GET",
         "OPTIONS",
         "POST",

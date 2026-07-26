@@ -49,6 +49,7 @@ import {
   AmbientImageError,
   AmbientImageStore,
 } from "./ambientMedia/AmbientImageStore.ts";
+import { ServerClientSettingsService } from "./serverClientSettings.ts";
 import { ServerEnvironment } from "./environment/Services/ServerEnvironment.ts";
 import {
   browserApiCorsAllowedHeaders,
@@ -702,6 +703,54 @@ export const ambientImageServeRouteLayer = HttpRouter.add(
           }),
         ),
       ),
+    );
+  }).pipe(
+    Effect.catchTag("AuthError", respondToAuthError),
+    Effect.catchTag("AmbientImageError", respondToAmbientImageError),
+  ),
+);
+
+export const ambientImageRemoveRouteLayer = HttpRouter.add(
+  "DELETE",
+  `${AMBIENT_IMAGE_ROUTE_PREFIX}*`,
+  Effect.gen(function* () {
+    yield* requireAuthenticatedRequest;
+    const config = yield* ServerConfig;
+    if (!config.ambientExperienceCapabilities.ambientImage) {
+      return HttpServerResponse.text("Not Found", {
+        status: 404,
+        headers: browserApiCorsHeaders,
+      });
+    }
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const url = HttpServerRequest.toURL(request);
+    if (Option.isNone(url)) return HttpServerResponse.text("Bad Request", { status: 400 });
+    let id: string;
+    try {
+      id = decodeURIComponent(url.value.pathname.slice(AMBIENT_IMAGE_ROUTE_PREFIX.length));
+    } catch {
+      return HttpServerResponse.text("Ambient image was not found.", {
+        status: 404,
+        headers: browserApiCorsHeaders,
+      });
+    }
+    const clientSettings = yield* ServerClientSettingsService;
+    const ambientImages = yield* AmbientImageStore;
+    return yield* clientSettings.withExclusiveAccess(
+      Effect.gen(function* () {
+        const settings = yield* clientSettings.getSettings;
+        if (
+          settings.ambientImageAsset?.id === id ||
+          settings.ambientImageCycleAssets.some((asset) => asset.id === id)
+        ) {
+          return HttpServerResponse.text("Ambient image is still selected in shared settings.", {
+            status: 409,
+            headers: browserApiCorsHeaders,
+          });
+        }
+        yield* ambientImages.removeStoredImage(id);
+        return HttpServerResponse.empty({ status: 204, headers: browserApiCorsHeaders });
+      }),
     );
   }).pipe(
     Effect.catchTag("AuthError", respondToAuthError),
