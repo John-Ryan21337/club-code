@@ -50,6 +50,14 @@ export interface NewLaunchAdmission<T> {
   cancel(): boolean;
 }
 
+export interface PacingActiveWorkLease {
+  /**
+   * Releases only the coordinator's accounting lease. It has no provider
+   * lifecycle handle and cannot stop or signal the adopted work.
+   */
+  release(): boolean;
+}
+
 export type PacingAdmissionObservation = Omit<
   PacingWindowObservation,
   "observationSequence" | "activeLaunchCount"
@@ -99,6 +107,7 @@ interface KeyState {
   readonly identity: string;
   readonly controller: DrainFirstPacingController;
   readonly waiting: WaitingEntry[];
+  readonly activeWorkLeases: Map<string, PacingActiveWorkLease>;
   activeCount: number;
   nextObservationSequence: number;
   latestProviderObservationSequence: number | null;
@@ -396,6 +405,33 @@ export class BoundedPacingAdmissionCoordinator {
     return count;
   }
 
+  /**
+   * Adopts provider work that was already active when this coordinator began
+   * observing it. Repeated adoption of the same identity is idempotent while
+   * that work remains active.
+   */
+  adoptActiveWork(key: PacingAdmissionKey, activeWorkIdentity: string): PacingActiveWorkLease {
+    this.assertAvailable();
+    const state = this.getOrCreateState(key);
+    const identity = opaqueIdentityPart(activeWorkIdentity, "activeWorkIdentity");
+    const existing = state.activeWorkLeases.get(identity);
+    if (existing !== undefined) return existing;
+
+    let released = false;
+    const lease: PacingActiveWorkLease = {
+      release: () => {
+        if (released) return false;
+        released = true;
+        state.activeWorkLeases.delete(identity);
+        this.finish(state);
+        return true;
+      },
+    };
+    state.activeWorkLeases.set(identity, lease);
+    state.activeCount += 1;
+    return lease;
+  }
+
   submitNewLaunch<T>(request: NewLaunchRequest<T>): NewLaunchAdmission<T> {
     if (this.disposed) {
       return this.rejectedAdmission<T>(new PacingAdmissionDisposedError());
@@ -484,6 +520,7 @@ export class BoundedPacingAdmissionCoordinator {
       identity,
       controller: new DrainFirstPacingController(),
       waiting: [],
+      activeWorkLeases: new Map(),
       activeCount: 0,
       nextObservationSequence: 0,
       latestProviderObservationSequence: null,

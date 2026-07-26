@@ -785,6 +785,46 @@ describe("BoundedPacingAdmissionCoordinator", () => {
     await expect(waiting.promise).resolves.toBe("started");
   });
 
+  it("adopts already-active work idempotently and waits for its natural release", async () => {
+    const { coordinator } = setup();
+    coordinator.observe(
+      keyA,
+      claudeObservation(0, {
+        usedPercent: null,
+        providerObservationSequence: null,
+      }),
+    );
+    const adopted = coordinator.adoptActiveWork(keyA, "thread-a");
+    const duplicate = coordinator.adoptActiveWork(keyA, "thread-a");
+    expect(duplicate).toBe(adopted);
+    expect(coordinator.activeCount).toBe(1);
+
+    const launch = vi.fn(() => "started");
+    const waiting = coordinator.submitNewLaunch({
+      kind: "new-launch",
+      key: keyA,
+      dispatchSource: "user",
+      launch,
+    });
+    expect(launch).not.toHaveBeenCalled();
+
+    expect(adopted.release()).toBe(true);
+    expect(adopted.release()).toBe(false);
+    expect(coordinator.activeCount).toBe(1);
+    await expect(waiting.promise).resolves.toBe("started");
+    expect(coordinator.activeCount).toBe(0);
+  });
+
+  it("does not release adopted provider work when the coordinator is disposed", () => {
+    const { coordinator } = setup();
+    const adopted = coordinator.adoptActiveWork(keyA, "thread-a");
+    coordinator.dispose();
+
+    expect(coordinator.activeCount).toBe(1);
+    expect(adopted.release()).toBe(true);
+    expect(coordinator.activeCount).toBe(0);
+  });
+
   it("captures observations so caller mutation cannot reopen a draining gate", async () => {
     const { coordinator } = setup();
     let release!: () => void;
