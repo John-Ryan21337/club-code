@@ -21,6 +21,10 @@ function alwaysOnTopStatus(state: DesktopWindowAlwaysOnTopState | null): string 
       return "Topmost mode was turned off because the preference could not be saved.";
     case "safe-reset-failed":
       return "Cafe could not confirm normal stacking. Restart the desktop app before retrying.";
+    case "native-state-mismatch":
+      return "The native window state no longer matches the saved preference. Reset it before retrying.";
+    case "native-state-unconfirmed":
+      return "Cafe could not confirm one native stacking state across its live windows. Reset it before retrying.";
     default:
       return null;
   }
@@ -46,6 +50,8 @@ export function WindowAlwaysOnTopSettings() {
 
   useEffect(() => {
     mountedRef.current = true;
+    setState(null);
+    setLoadFailed(false);
     if (!bridge) {
       return () => {
         mountedRef.current = false;
@@ -92,6 +98,20 @@ export function WindowAlwaysOnTopSettings() {
         }
       } catch (error: unknown) {
         if (mountedRef.current && requestSequence === requestSequenceRef.current) {
+          try {
+            const recovered = await bridge.getWindowAlwaysOnTopState();
+            if (mountedRef.current && requestSequence === requestSequenceRef.current) {
+              setLoadFailed(false);
+              acceptState(recovered);
+            }
+          } catch {
+            if (mountedRef.current && requestSequence === requestSequenceRef.current) {
+              setState(null);
+              setLoadFailed(true);
+            }
+          }
+        }
+        if (mountedRef.current && requestSequence === requestSequenceRef.current) {
           toastManager.add({
             title: "Could not change desktop stacking",
             description: error instanceof Error ? error.message : "The desktop bridge failed.",
@@ -125,7 +145,7 @@ export function WindowAlwaysOnTopSettings() {
         description="Keeps the entire Cafe Code desktop window above other applications on Windows 10/11 and macOS. This is separate from any in-app media stacking, and it does not detach or make only a video topmost."
         status={status}
         resetAction={
-          state?.enabled === true || state?.effectiveEnabled === null ? (
+          state && (state.enabled || state.effectiveEnabled !== false) ? (
             <SettingResetButton
               label="whole-window always-on-top"
               onClick={() => void applyPreference(false)}
@@ -136,7 +156,13 @@ export function WindowAlwaysOnTopSettings() {
           <Switch
             aria-label="Keep whole Cafe Code desktop window above other applications"
             checked={state?.enabled === true}
-            disabled={!supported || pending || loadFailed || state?.effectiveEnabled === null}
+            disabled={
+              !supported ||
+              pending ||
+              loadFailed ||
+              state?.effectiveEnabled === null ||
+              state?.reason === "native-state-mismatch"
+            }
             onCheckedChange={(enabled) => void applyPreference(enabled)}
           />
         }

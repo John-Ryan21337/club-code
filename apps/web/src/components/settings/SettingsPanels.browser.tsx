@@ -10,6 +10,7 @@ import {
   type DesktopSourceUpdateState,
   type DesktopUpdateChannel,
   type DesktopUpdateState,
+  type DesktopWindowAlwaysOnTopState,
   type LocalApi,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -1300,6 +1301,153 @@ describe("settings panels", () => {
       )
       .toBeInTheDocument();
     await expect.element(toggle).not.toBeChecked();
+  });
+
+  it("re-reads native stacking truth when a preference acknowledgement is lost", async () => {
+    const states: DesktopWindowAlwaysOnTopState[] = [
+      {
+        supported: true,
+        enabled: false,
+        effectiveEnabled: false,
+        reason: null,
+      },
+      {
+        supported: true,
+        enabled: true,
+        effectiveEnabled: true,
+        reason: null,
+      },
+    ];
+    const getWindowAlwaysOnTopState = vi
+      .fn<DesktopBridge["getWindowAlwaysOnTopState"]>()
+      .mockImplementation(async () => states.shift() ?? states[0]!);
+    const setWindowAlwaysOnTopPreference = vi
+      .fn<DesktopBridge["setWindowAlwaysOnTopPreference"]>()
+      .mockRejectedValue(new Error("response was lost"));
+    const desktopBridge = createDesktopBridgeStub({
+      getWindowAlwaysOnTopState,
+      setWindowAlwaysOnTopPreference,
+    });
+    window.desktopBridge = desktopBridge;
+    installClientSettingsNativeApi(desktopBridge);
+    setServerConfigSnapshot(createBaseServerConfig());
+
+    mounted = await renderWithTestRouter(
+      <AppAtomRegistryProvider>
+        <AppearanceSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    const toggle = page.getByLabelText(
+      "Keep whole Cafe Code desktop window above other applications",
+    );
+    await expect.element(toggle).not.toBeChecked();
+    await toggle.click();
+    await expect.element(toggle).toBeChecked();
+    expect(getWindowAlwaysOnTopState).toHaveBeenCalledTimes(2);
+  });
+
+  it("offers a safe reset instead of an ambiguous toggle when native state drifted", async () => {
+    const setWindowAlwaysOnTopPreference = vi
+      .fn<DesktopBridge["setWindowAlwaysOnTopPreference"]>()
+      .mockResolvedValue({
+        supported: true,
+        enabled: false,
+        effectiveEnabled: false,
+        reason: null,
+      });
+    const desktopBridge = createDesktopBridgeStub({
+      getWindowAlwaysOnTopState: vi.fn().mockResolvedValue({
+        supported: true,
+        enabled: false,
+        effectiveEnabled: true,
+        reason: "native-state-mismatch",
+      }),
+      setWindowAlwaysOnTopPreference,
+    });
+    window.desktopBridge = desktopBridge;
+    installClientSettingsNativeApi(desktopBridge);
+    setServerConfigSnapshot(createBaseServerConfig());
+
+    mounted = await renderWithTestRouter(
+      <AppAtomRegistryProvider>
+        <AppearanceSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    await expect
+      .element(page.getByText(/native window state no longer matches the saved preference/))
+      .toBeInTheDocument();
+    await expect
+      .element(page.getByLabelText("Keep whole Cafe Code desktop window above other applications"))
+      .toBeDisabled();
+    await page.getByLabelText("Reset whole-window always-on-top to default").click();
+    await vi.waitFor(() => {
+      expect(setWindowAlwaysOnTopPreference).toHaveBeenCalledWith({ enabled: false });
+    });
+  });
+
+  it("ignores a preference completion that arrives after the settings view unmounts", async () => {
+    let resolvePreference!: (state: DesktopWindowAlwaysOnTopState) => void;
+    const pendingPreference = new Promise<DesktopWindowAlwaysOnTopState>((resolve) => {
+      resolvePreference = resolve;
+    });
+    const firstBridge = createDesktopBridgeStub({
+      getWindowAlwaysOnTopState: vi.fn().mockResolvedValue({
+        supported: true,
+        enabled: false,
+        effectiveEnabled: false,
+        reason: null,
+      }),
+      setWindowAlwaysOnTopPreference: vi.fn(() => pendingPreference),
+    });
+    window.desktopBridge = firstBridge;
+    installClientSettingsNativeApi(firstBridge);
+    setServerConfigSnapshot(createBaseServerConfig());
+    mounted = await renderWithTestRouter(
+      <AppAtomRegistryProvider>
+        <AppearanceSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    const firstToggle = page.getByLabelText(
+      "Keep whole Cafe Code desktop window above other applications",
+    );
+    await expect.element(firstToggle).not.toBeChecked();
+    await firstToggle.click();
+    const teardown = mounted.cleanup ?? mounted.unmount;
+    await teardown?.();
+    mounted = null;
+
+    const replacementBridge = createDesktopBridgeStub({
+      getWindowAlwaysOnTopState: vi.fn().mockResolvedValue({
+        supported: true,
+        enabled: false,
+        effectiveEnabled: false,
+        reason: null,
+      }),
+    });
+    window.desktopBridge = replacementBridge;
+    installClientSettingsNativeApi(replacementBridge);
+    mounted = await renderWithTestRouter(
+      <AppAtomRegistryProvider>
+        <AppearanceSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+    const replacementToggle = page.getByLabelText(
+      "Keep whole Cafe Code desktop window above other applications",
+    );
+    await expect.element(replacementToggle).not.toBeChecked();
+
+    resolvePreference({
+      supported: true,
+      enabled: true,
+      effectiveEnabled: true,
+      reason: null,
+    });
+    await pendingPreference;
+    await Promise.resolve();
+    await expect.element(replacementToggle).not.toBeChecked();
   });
 
   it("shows detected editor icons in the Files & Diffs default editor selector", async () => {
