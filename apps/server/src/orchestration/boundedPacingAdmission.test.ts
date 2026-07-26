@@ -158,6 +158,33 @@ describe("BoundedPacingAdmissionCoordinator", () => {
     await expect(waiting.promise).resolves.toBe("started");
   });
 
+  it("captures observations so caller mutation cannot reopen a draining gate", async () => {
+    const { coordinator } = setup();
+    let release!: () => void;
+    const active = coordinator.submitNewLaunch({
+      kind: "new-launch",
+      key: keyA,
+      launch: () => new Promise<void>((resolve) => (release = resolve)),
+    });
+    const observation = claudeObservation(0);
+    coordinator.observe(keyA, observation);
+    const launch = vi.fn(() => "must-wait");
+    const waiting = coordinator.submitNewLaunch({ kind: "new-launch", key: keyA, launch });
+
+    Object.assign(observation, {
+      enabled: false,
+      providerFamily: "other",
+      usedPercent: 0,
+    });
+    release();
+    await active.promise;
+
+    expect(launch).not.toHaveBeenCalled();
+    expect(coordinator.getSnapshot(keyA)?.phase).toBe("waiting-reset");
+    expect(waiting.cancel()).toBe(true);
+    await expect(waiting.promise).rejects.toBeInstanceOf(PacingAdmissionCancelledError);
+  });
+
   it("makes cancellation atomic with launch start", async () => {
     const { coordinator } = setup();
     coordinator.observe(keyA, claudeObservation(0));
@@ -413,5 +440,36 @@ describe("BoundedPacingAdmissionCoordinator", () => {
     await expect(
       coordinator.submitNewLaunch({ kind: "new-launch", key: keyA, launch: () => "next" }).promise,
     ).resolves.toBe("next");
+  });
+
+  it("drains the hard queue bound without recursive synchronous-failure overflow", async () => {
+    const { clock, coordinator } = setup({
+      maxWaitingGlobal: 4_096,
+      maxWaitingPerKey: 512,
+      maxTrackedKeys: 8,
+    });
+    const promises: Promise<unknown>[] = [];
+    for (let keyIndex = 0; keyIndex < 8; keyIndex += 1) {
+      const key = { ...keyA, environmentId: `environment-${keyIndex}` };
+      coordinator.observe(key, codexPauseObservation(WINDOW * 0.1));
+      for (let entryIndex = 0; entryIndex < 512; entryIndex += 1) {
+        const promise = coordinator.submitNewLaunch({
+          kind: "new-launch",
+          key,
+          launch: () => {
+            throw new Error("expected launch failure");
+          },
+        }).promise;
+        void promise.catch(() => undefined);
+        promises.push(promise);
+      }
+    }
+
+    expect(() => clock.advanceTo(WINDOW * 0.2)).not.toThrow();
+    expect((await Promise.allSettled(promises)).every(({ status }) => status === "rejected")).toBe(
+      true,
+    );
+    expect(coordinator.activeCount).toBe(0);
+    expect(coordinator.waitingCount).toBe(0);
   });
 });

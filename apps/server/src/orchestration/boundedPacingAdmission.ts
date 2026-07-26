@@ -128,6 +128,19 @@ function isFreshResetObservation(observation: PacingAdmissionObservation): boole
   );
 }
 
+function captureObservation(observation: PacingAdmissionObservation): PacingAdmissionObservation {
+  return {
+    providerFamily: observation.providerFamily,
+    usedPercent: observation.usedPercent,
+    resetsAtMs: observation.resetsAtMs,
+    windowDurationMs: observation.windowDurationMs,
+    observedAtMs: observation.observedAtMs,
+    stale: observation.stale,
+    enabled: observation.enabled,
+    minimumPauseMs: observation.minimumPauseMs,
+  };
+}
+
 /**
  * A bounded, non-preemptive admission boundary for new provider launches.
  *
@@ -143,6 +156,7 @@ export class BoundedPacingAdmissionCoordinator {
   private readonly waiting: WaitingEntry[] = [];
   private wakeHandle: unknown | null = null;
   private wakeAtMs: number | null = null;
+  private drainInProgress = false;
   private disposed = false;
 
   constructor(options: BoundedPacingAdmissionOptions) {
@@ -170,21 +184,22 @@ export class BoundedPacingAdmissionCoordinator {
   ): DrainFirstPacingSnapshot {
     this.assertAvailable();
     const state = this.getOrCreateState(key);
+    const capturedObservation = captureObservation(observation);
 
     // A provider reset wait is released only by a complete, fresh provider
     // observation. A timer, stale cache entry, or malformed sample is not
     // evidence that quota reset.
     if (
       state.controller.getSnapshot().phase === "waiting-reset" &&
-      observation.enabled &&
-      observation.providerFamily !== "other" &&
-      !isFreshResetObservation(observation)
+      capturedObservation.enabled &&
+      capturedObservation.providerFamily !== "other" &&
+      !isFreshResetObservation(capturedObservation)
     ) {
       return state.controller.getSnapshot();
     }
 
-    state.latestObservation = observation;
-    const snapshot = this.applyPolicyObservation(state, observation);
+    state.latestObservation = capturedObservation;
+    const snapshot = this.applyPolicyObservation(state, capturedObservation);
     this.scheduleWake();
     this.drain();
     return snapshot;
@@ -315,17 +330,22 @@ export class BoundedPacingAdmissionCoordinator {
   }
 
   private drain(): void {
-    if (this.disposed) return;
-    while (true) {
-      const entry = this.waiting.find(
-        (candidate) =>
-          candidate.status === "waiting" && candidate.state.controller.canStartNewWork(),
-      );
-      if (entry === undefined) return;
-      this.start(entry);
-      // A launch thunk may synchronously close another gate, cancel a waiter,
-      // or dispose this coordinator. Re-scan after every start.
-      if (this.disposed) return;
+    if (this.disposed || this.drainInProgress) return;
+    this.drainInProgress = true;
+    try {
+      while (true) {
+        const entry = this.waiting.find(
+          (candidate) =>
+            candidate.status === "waiting" && candidate.state.controller.canStartNewWork(),
+        );
+        if (entry === undefined) return;
+        this.start(entry);
+        // A launch thunk may synchronously close another gate, cancel a
+        // waiter, or dispose this coordinator. Re-scan after every start.
+        if (this.disposed) return;
+      }
+    } finally {
+      this.drainInProgress = false;
     }
   }
 
