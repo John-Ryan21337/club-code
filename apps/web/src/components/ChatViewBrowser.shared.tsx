@@ -35,6 +35,15 @@ import { render } from "vitest-browser-react";
 
 import { useCommandPaletteStore } from "../commandPaletteStore";
 import { useComposerDraftStore, DraftId } from "../composerDraftStore";
+import {
+  __resetAutoNudgeTurnLedgerForTests,
+  autoNudgeDispatchIdentityForTurn,
+} from "../autoNudger";
+import {
+  __resetBackgroundAutoNudgeControllerForTests,
+  getBackgroundAutoNudgeController,
+} from "../backgroundAutoNudger";
+import { __resetConfirmedAutoNudgeArmingForTests } from "../confirmedAutoNudgeArming";
 import { __resetEnvironmentApiOverridesForTests } from "../environmentApi";
 import { isMacPlatform } from "../lib/utils";
 import { resetSourceControlDiscoveryStateForTests } from "../lib/sourceControlDiscoveryState";
@@ -326,6 +335,39 @@ function createSnapshotForTargetUser(options: {
   };
 }
 
+function withCompletedLatestTurn(
+  snapshot: OrchestrationReadModel,
+  turnId: TurnId,
+): OrchestrationReadModel {
+  return {
+    ...snapshot,
+    snapshotSequence: snapshot.snapshotSequence + 1,
+    threads: snapshot.threads.map((thread) =>
+      thread.id === THREAD_ID
+        ? {
+            ...thread,
+            latestTurn: {
+              turnId,
+              state: "completed",
+              requestedAt: isoAt(200),
+              startedAt: isoAt(201),
+              completedAt: isoAt(202),
+              assistantMessageId: null,
+            },
+            session: thread.session
+              ? {
+                  ...thread.session,
+                  status: "ready",
+                  activeTurnId: null,
+                  updatedAt: isoAt(202),
+                }
+              : null,
+          }
+        : thread,
+    ),
+  };
+}
+
 function buildFixture(snapshot: OrchestrationReadModel): TestFixture {
   return {
     snapshot,
@@ -470,6 +512,21 @@ function sendShellThreadUpsert(
     kind: "thread-upserted",
     sequence: fixture.snapshot.snapshotSequence,
     thread: shellThread,
+  });
+}
+
+function publishThreadSnapshot(threadId: ThreadId): void {
+  const thread = fixture.snapshot.threads.find((entry) => entry.id === threadId);
+  if (!thread) {
+    throw new Error(`Expected thread ${threadId} in snapshot.`);
+  }
+  sendShellThreadUpsert(threadId);
+  rpcHarness.emitStreamValue(ORCHESTRATION_WS_METHODS.subscribeThread, {
+    kind: "snapshot",
+    snapshot: {
+      snapshotSequence: fixture.snapshot.snapshotSequence,
+      thread,
+    },
   });
 }
 
@@ -1730,6 +1787,10 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
     resetSourceControlDiscoveryStateForTests();
     await setViewport(DEFAULT_VIEWPORT);
     localStorage.clear();
+    sessionStorage.clear();
+    __resetAutoNudgeTurnLedgerForTests({ clearSessionStorage: true });
+    __resetBackgroundAutoNudgeControllerForTests({ clearStorage: true });
+    __resetConfirmedAutoNudgeArmingForTests();
     document.body.innerHTML = "";
     wsRequests.length = 0;
     customWsRpcResolver = null;
@@ -2113,6 +2174,135 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
       }
     });
 
+    it("tags the foreground Auto Nudge turn-start dispatch", async () => {
+      const terminalTurnId = "turn-foreground-auto-nudge" as TurnId;
+      const snapshot = createSnapshotForTargetUser({
+        targetMessageId: "msg-user-foreground-auto-nudge" as MessageId,
+        targetText: "foreground auto nudge target",
+      });
+      const terminalTurnKey = `${LOCAL_ENVIRONMENT_ID}:${THREAD_ID}:${terminalTurnId}`;
+      const identity = autoNudgeDispatchIdentityForTurn(terminalTurnKey);
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot,
+        configureFixture: (nextFixture) => {
+          nextFixture.serverConfig = {
+            ...nextFixture.serverConfig,
+            clientSettings: {
+              ...nextFixture.serverConfig.clientSettings,
+              autoNudgeMode: "steady-progress",
+              autoNudgeBackgroundContinuation: false,
+            },
+          };
+        },
+        resolveRpc: (body) => {
+          if (body._tag === ORCHESTRATION_WS_METHODS.dispatchCommand) {
+            return { sequence: fixture.snapshot.snapshotSequence + 1 };
+          }
+          return undefined;
+        },
+      });
+
+      try {
+        fixture.snapshot = withCompletedLatestTurn(fixture.snapshot, terminalTurnId);
+        publishThreadSnapshot(THREAD_ID);
+        await vi.waitFor(
+          () => {
+            expect(
+              document.querySelector('[data-auto-nudge-control="true"]')?.textContent,
+            ).toContain("Next nudge in");
+          },
+          { timeout: 8_000, interval: 50 },
+        );
+        await vi.waitFor(
+          () => {
+            const request = wsRequests.find(
+              (entry) =>
+                entry._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+                entry.type === "thread.turn.start" &&
+                entry.commandId === identity.commandId,
+            );
+            expect(request).toMatchObject({
+              type: "thread.turn.start",
+              commandId: identity.commandId,
+              expectedSettledTurnId: terminalTurnId,
+              dispatchSource: "auto-nudge",
+            });
+          },
+          { timeout: 12_000, interval: 50 },
+        );
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
+    it("tags the root background coordinator Auto Nudge turn-start dispatch", async () => {
+      const terminalTurnId = "turn-background-auto-nudge" as TurnId;
+      const snapshot = createSnapshotForTargetUser({
+        targetMessageId: "msg-user-background-auto-nudge" as MessageId,
+        targetText: "background auto nudge target",
+      });
+      const terminalTurnKey = `${LOCAL_ENVIRONMENT_ID}:${THREAD_ID}:${terminalTurnId}`;
+      const identity = autoNudgeDispatchIdentityForTurn(terminalTurnKey);
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot,
+        configureFixture: (nextFixture) => {
+          nextFixture.serverConfig = {
+            ...nextFixture.serverConfig,
+            clientSettings: {
+              ...nextFixture.serverConfig.clientSettings,
+              autoNudgeMode: "steady-progress",
+              autoNudgeBackgroundContinuation: true,
+            },
+          };
+        },
+        resolveRpc: (body) => {
+          if (body._tag === ORCHESTRATION_WS_METHODS.dispatchCommand) {
+            return { sequence: fixture.snapshot.snapshotSequence + 1 };
+          }
+          return undefined;
+        },
+      });
+      const controller = getBackgroundAutoNudgeController();
+      const latestUserMessageAt =
+        snapshot.threads[0]?.messages.findLast((message) => message.role === "user")?.createdAt ??
+        null;
+
+      try {
+        controller.start(
+          {
+            environmentId: String(LOCAL_ENVIRONMENT_ID),
+            threadId: String(THREAD_ID),
+          },
+          latestUserMessageAt,
+        );
+        fixture.snapshot = withCompletedLatestTurn(fixture.snapshot, terminalTurnId);
+        publishThreadSnapshot(THREAD_ID);
+        await vi.waitFor(
+          () => {
+            const request = wsRequests.find(
+              (entry) =>
+                entry._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+                entry.type === "thread.turn.start" &&
+                entry.commandId === identity.commandId,
+            );
+            expect(request).toMatchObject({
+              type: "thread.turn.start",
+              commandId: identity.commandId,
+              expectedSettledTurnId: terminalTurnId,
+              dispatchSource: "auto-nudge",
+            });
+            expect(controller.getSnapshot().sentRounds).toBe(1);
+          },
+          { timeout: 12_000, interval: 50 },
+        );
+      } finally {
+        controller.stop("Browser test cleanup.");
+        await mounted.cleanup();
+      }
+    });
+
     it("sends bootstrap turn-starts and waits for server setup on first-send worktree drafts", async () => {
       useComposerDraftStore.setState({
         draftThreadsByThreadKey: {
@@ -2171,6 +2361,7 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
               | {
                   _tag: string;
                   type?: string;
+                  dispatchSource?: string;
                   bootstrap?: {
                     createThread?: { projectId?: string };
                     prepareWorktree?: { projectCwd?: string; baseBranch?: string; branch?: string };
@@ -2193,6 +2384,7 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
                 runSetupScript: true,
               },
             });
+            expect(dispatchRequest?.dispatchSource).toBeUndefined();
           },
           { timeout: 8_000, interval: 16 },
         );
@@ -3643,6 +3835,121 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
   }
 
   if (chatViewBrowserPart === "navigation") {
+    it("preserves background Auto Nudge through navigation and renderer reconnect", async () => {
+      const secondThreadId = "thread-auto-nudge-navigation-target" as ThreadId;
+      const snapshot = addThreadToSnapshot(
+        createSnapshotForTargetUser({
+          targetMessageId: "msg-user-auto-nudge-navigation" as MessageId,
+          targetText: "background continuation owner",
+        }),
+        secondThreadId,
+      );
+      const configureAutoNudge = (nextFixture: TestFixture) => {
+        nextFixture.serverConfig = {
+          ...nextFixture.serverConfig,
+          clientSettings: {
+            ...nextFixture.serverConfig.clientSettings,
+            autoNudgeMode: "steady-progress",
+            autoNudgeBackgroundContinuation: true,
+          },
+        };
+      };
+      let mounted: MountedChatView | null = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot,
+        configureFixture: configureAutoNudge,
+      });
+
+      try {
+        getBackgroundAutoNudgeController().start(
+          {
+            environmentId: String(LOCAL_ENVIRONMENT_ID),
+            threadId: String(THREAD_ID),
+          },
+          snapshot.threads[0]?.messages.findLast((message) => message.role === "user")?.createdAt ??
+            null,
+        );
+        await vi.waitFor(
+          () => {
+            expect(
+              document.querySelector('[data-auto-nudge-control="true"]')?.textContent,
+            ).toContain("Foreground paused while background owns this thread");
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+
+        await mounted.router.navigate({
+          to: "/$environmentId/$threadId",
+          params: {
+            environmentId: LOCAL_ENVIRONMENT_ID,
+            threadId: secondThreadId,
+          },
+        });
+        await waitForURL(
+          mounted.router,
+          (path) => path === serverThreadPath(secondThreadId),
+          "Route should switch away from the Auto Nudge owner.",
+        );
+        expect(getBackgroundAutoNudgeController().getSnapshot()).toMatchObject({
+          owner: {
+            environmentId: String(LOCAL_ENVIRONMENT_ID),
+            threadId: String(THREAD_ID),
+          },
+          status: "active",
+        });
+
+        await mounted.router.navigate({
+          to: "/$environmentId/$threadId",
+          params: {
+            environmentId: LOCAL_ENVIRONMENT_ID,
+            threadId: THREAD_ID,
+          },
+        });
+        await waitForURL(
+          mounted.router,
+          (path) => path === serverThreadPath(THREAD_ID),
+          "Route should return to the Auto Nudge owner.",
+        );
+        await vi.waitFor(
+          () => {
+            expect(
+              document.querySelector('[data-auto-nudge-control="true"]')?.textContent,
+            ).toContain("Foreground paused while background owns this thread");
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+
+        await mounted.cleanup();
+        mounted = null;
+        __resetBackgroundAutoNudgeControllerForTests();
+        __resetConfirmedAutoNudgeArmingForTests();
+
+        mounted = await mountChatView({
+          viewport: DEFAULT_VIEWPORT,
+          snapshot,
+          configureFixture: configureAutoNudge,
+        });
+        await vi.waitFor(
+          () => {
+            expect(getBackgroundAutoNudgeController().getSnapshot()).toMatchObject({
+              owner: {
+                environmentId: String(LOCAL_ENVIRONMENT_ID),
+                threadId: String(THREAD_ID),
+              },
+              status: "active",
+            });
+            expect(
+              document.querySelector('[data-auto-nudge-control="true"]')?.textContent,
+            ).toContain("Foreground paused while background owns this thread");
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+      } finally {
+        getBackgroundAutoNudgeController().stop("Browser test cleanup.");
+        await mounted?.cleanup();
+      }
+    });
+
     it("shows runtime mode descriptions in the desktop composer access select", async () => {
       setDraftThreadWithoutWorktree();
 
