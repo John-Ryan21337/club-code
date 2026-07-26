@@ -1023,6 +1023,7 @@ describe("settings panels", () => {
       expect(updateClientSettings).toHaveBeenCalledWith({ interfaceScalePercent: 105 });
     });
 
+    await expect.element(page.getByText("Window atmosphere", { exact: true })).toBeInTheDocument();
     setColorInput("Branding prefix", "Acme");
 
     await vi.waitFor(() => {
