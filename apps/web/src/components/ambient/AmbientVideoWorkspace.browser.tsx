@@ -4,6 +4,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { page } from "vitest/browser";
 import { render } from "vitest-browser-react";
 
+import {
+  AlertDialog,
+  AlertDialogDescription,
+  AlertDialogPopup,
+  AlertDialogTitle,
+} from "../ui/alert-dialog";
+import { Dialog, DialogDescription, DialogPopup, DialogTitle } from "../ui/dialog";
 import { AmbientVideoWorkspace } from "./AmbientVideoWorkspace";
 
 const mocks = vi.hoisted(() => ({
@@ -69,6 +76,25 @@ function updateMockCapability(enabled: boolean) {
     },
   };
   for (const listener of mocks.serverListeners) listener();
+}
+
+function expectOverlayAbovePlayer(overlaySelector: string) {
+  const player = document.querySelector<HTMLElement>('[data-testid="ambient-video-player"]');
+  const overlay = document.querySelector<HTMLElement>(overlaySelector);
+  expect(player).not.toBeNull();
+  expect(overlay).not.toBeNull();
+  if (!player || !overlay) return;
+
+  const playerZIndex = Number.parseInt(getComputedStyle(player).zIndex, 10);
+  const overlayZIndex = Number.parseInt(getComputedStyle(overlay).zIndex, 10);
+  expect(overlayZIndex).toBeGreaterThan(playerZIndex);
+
+  const playerBounds = player.getBoundingClientRect();
+  const topElement = document.elementFromPoint(
+    playerBounds.left + playerBounds.width / 2,
+    playerBounds.top + playerBounds.height / 2,
+  );
+  expect(topElement?.closest(overlaySelector)).not.toBeNull();
 }
 
 describe("AmbientVideoWorkspace", () => {
@@ -147,6 +173,44 @@ describe("AmbientVideoWorkspace", () => {
     expect(currentFrame).toBe(initialFrame);
     expect(currentFrame?.parentElement).toBe(initialParent);
     expect(currentFrame?.src).toBe(initialSource);
+  });
+
+  it("keeps a modal dialog above a raised player at their overlap point", async () => {
+    updateMockSettings({ ambientVideoKeepAboveContent: true });
+    await render(
+      <>
+        <AmbientVideoWorkspace />
+        <Dialog open>
+          <DialogPopup>
+            <DialogTitle>Player safety dialog</DialogTitle>
+            <DialogDescription>Must remain above third-party media.</DialogDescription>
+          </DialogPopup>
+        </Dialog>
+      </>,
+    );
+
+    await expect.element(page.getByText("Player safety dialog")).toBeInTheDocument();
+    expectOverlayAbovePlayer('[data-slot="dialog-viewport"]');
+  });
+
+  it("keeps a confirmation dialog above a raised player at their overlap point", async () => {
+    updateMockSettings({ ambientVideoKeepAboveContent: true });
+    await render(
+      <>
+        <AmbientVideoWorkspace />
+        <AlertDialog open>
+          <AlertDialogPopup>
+            <AlertDialogTitle>Player safety confirmation</AlertDialogTitle>
+            <AlertDialogDescription>
+              Security confirmations must remain above third-party media.
+            </AlertDialogDescription>
+          </AlertDialogPopup>
+        </AlertDialog>
+      </>,
+    );
+
+    await expect.element(page.getByText("Player safety confirmation")).toBeInTheDocument();
+    expectOverlayAbovePlayer('[data-slot="alert-dialog-viewport"]');
   });
 
   it("fails closed when the server capability is revoked", async () => {
