@@ -345,6 +345,65 @@ describe("BoundedPacingAdmissionCoordinator", () => {
     await expect(second.promise).resolves.toBe("second");
   });
 
+  it("invalidates stale admission authority without minting provider evidence", async () => {
+    const { coordinator } = setup();
+    const initial = claudeObservation(0, {
+      usedPercent: 50,
+      providerObservationSequence: 90_000,
+    });
+    coordinator.observe(keyA, initial);
+    await coordinator.submitNewLaunch({
+      kind: "new-launch",
+      key: keyA,
+      launch: () => "before-stale",
+    }).promise;
+
+    coordinator.invalidateQuotaEvidence(keyA, 1);
+    const launch = vi.fn(() => "after-fresh");
+    const waiting = coordinator.submitNewLaunch({
+      kind: "new-launch",
+      key: keyA,
+      launch,
+    });
+    expect(launch).not.toHaveBeenCalled();
+
+    coordinator.observe(keyA, {
+      ...initial,
+      observedAtMs: 1,
+    });
+    expect(launch).not.toHaveBeenCalled();
+
+    coordinator.observe(keyA, {
+      ...initial,
+      observedAtMs: 2,
+      providerObservationSequence: 90_001,
+    });
+    await expect(waiting.promise).resolves.toBe("after-fresh");
+  });
+
+  it("does not let stale invalidation override explicit disable", async () => {
+    const { coordinator } = setup();
+    const initial = claudeObservation(0, {
+      usedPercent: 95,
+      providerObservationSequence: 95_000,
+    });
+    coordinator.observe(keyA, initial);
+    coordinator.observe(keyA, {
+      ...initial,
+      enabled: false,
+      providerObservationSequence: 95_001,
+    });
+
+    expect(coordinator.invalidateQuotaEvidence(keyA, 1)?.phase).toBe("running");
+    await expect(
+      coordinator.submitNewLaunch({
+        kind: "new-launch",
+        key: keyA,
+        launch: () => "disabled",
+      }).promise,
+    ).resolves.toBe("disabled");
+  });
+
   it("admits only manual Claude bootstrap probes with bounded rearming", async () => {
     const { clock, coordinator } = setup();
     coordinator.observe(

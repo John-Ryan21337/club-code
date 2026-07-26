@@ -395,6 +395,54 @@ export class BoundedPacingAdmissionCoordinator {
     return this.states.get(pacingAdmissionKeyIdentity(key))?.controller.getSnapshot() ?? null;
   }
 
+  /**
+   * Conservatively expires local admission authority without inventing a new
+   * provider observation sequence. This operation can only close admission;
+   * reopening still requires newer provider evidence, explicit disable, or a
+   * bounded manual Claude probe.
+   */
+  invalidateQuotaEvidence(
+    key: PacingAdmissionKey,
+    observedAtMs: number,
+  ): DrainFirstPacingSnapshot | null {
+    this.assertAvailable();
+    if (!Number.isFinite(observedAtMs)) {
+      throw new RangeError("observedAtMs must be a finite local wall-clock timestamp.");
+    }
+    const state = this.states.get(pacingAdmissionKeyIdentity(key));
+    if (state === undefined) return null;
+    if (!state.pacingObservationEnabled) return state.controller.getSnapshot();
+
+    this.requireFreshCautionAuthorization(state);
+    state.claudeProbeArmed = false;
+    if (state.claudeProbeEverConsumed && state.claudeProbeNextArmAtMs === null) {
+      state.claudeProbeNextArmAtMs =
+        observedAtMs +
+        CLAUDE_PROBE_BACKOFF_MS[
+          Math.min(state.claudeProbeBackoffIndex, CLAUDE_PROBE_BACKOFF_MS.length - 1)
+        ]!;
+    }
+    if (
+      state.providerFamily === "claude" &&
+      !state.hasCompleteProviderObservation &&
+      !state.claudeProbeEverConsumed
+    ) {
+      state.claudeProbeArmed = true;
+    }
+
+    const snapshot =
+      state.latestObservation === null
+        ? state.controller.getSnapshot()
+        : this.applyPolicyObservation(state, {
+            ...state.latestObservation,
+            observedAtMs,
+            stale: true,
+          });
+    this.scheduleWake();
+    this.drain();
+    return snapshot;
+  }
+
   get waitingCount(): number {
     return this.waiting.length;
   }
