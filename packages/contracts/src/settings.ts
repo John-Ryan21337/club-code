@@ -112,6 +112,45 @@ export const SidebarThreadPreviewCount = Schema.Int.check(
 export type SidebarThreadPreviewCount = typeof SidebarThreadPreviewCount.Type;
 export const DEFAULT_SIDEBAR_THREAD_PREVIEW_COUNT: SidebarThreadPreviewCount = 6;
 
+export const YouTubeVideoId = TrimmedNonEmptyString.check(Schema.isPattern(/^[A-Za-z0-9_-]{11}$/));
+export type YouTubeVideoId = typeof YouTubeVideoId.Type;
+export const YouTubePlaylistId = TrimmedNonEmptyString.check(
+  Schema.isPattern(/^[A-Za-z0-9_-]{10,80}$/),
+);
+export type YouTubePlaylistId = typeof YouTubePlaylistId.Type;
+const YouTubeVideoSource = Schema.Struct({
+  kind: Schema.Literal("video"),
+  id: YouTubeVideoId,
+});
+const YouTubePlaylistSource = Schema.Struct({
+  kind: Schema.Literal("playlist"),
+  id: YouTubePlaylistId,
+  videoId: Schema.optionalKey(YouTubeVideoId),
+});
+export const YouTubeSource = Schema.NullOr(
+  Schema.Union([YouTubeVideoSource, YouTubePlaylistSource]),
+);
+export type YouTubeSource = typeof YouTubeSource.Type;
+
+export const AmbientVideoSource = YouTubeSource;
+export type AmbientVideoSource = typeof AmbientVideoSource.Type;
+export const AmbientMediaPresetPlacement = Schema.Literals(["bottom-left", "bottom-right"]);
+export type AmbientMediaPresetPlacement = typeof AmbientMediaPresetPlacement.Type;
+export const AmbientMediaPresetSize = Schema.Literals(["small", "medium", "large"]);
+export type AmbientMediaPresetSize = typeof AmbientMediaPresetSize.Type;
+/**
+ * Fullscreen is transient browser/player state; only shell-owned layout modes
+ * belong in persisted settings.
+ */
+export const AmbientVideoPresentationMode = Schema.Literals(["floating", "cinema"]);
+export type AmbientVideoPresentationMode = typeof AmbientVideoPresentationMode.Type;
+
+export const DEFAULT_AMBIENT_VIDEO_ENABLED = false;
+export const DEFAULT_AMBIENT_VIDEO_SOURCE: AmbientVideoSource = null;
+export const DEFAULT_AMBIENT_VIDEO_PRESET_PLACEMENT: AmbientMediaPresetPlacement = "bottom-right";
+export const DEFAULT_AMBIENT_VIDEO_PRESET_SIZE: AmbientMediaPresetSize = "medium";
+export const DEFAULT_AMBIENT_VIDEO_PRESENTATION_MODE: AmbientVideoPresentationMode = "floating";
+
 export const ClientSettingsSchema = Schema.Struct({
   autoOpenPlanSidebar: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   // Per-device first-run flow. `onboardingCompleted` gates the full-screen
@@ -213,6 +252,21 @@ export const ClientSettingsSchema = Schema.Struct({
   ),
   sidebarThreadPreviewCount: SidebarThreadPreviewCount.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_THREAD_PREVIEW_COUNT)),
+  ),
+  ambientVideoEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_VIDEO_ENABLED)),
+  ),
+  ambientVideoSource: AmbientVideoSource.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_VIDEO_SOURCE)),
+  ),
+  ambientVideoPresetPlacement: AmbientMediaPresetPlacement.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_VIDEO_PRESET_PLACEMENT)),
+  ),
+  ambientVideoPresetSize: AmbientMediaPresetSize.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_VIDEO_PRESET_SIZE)),
+  ),
+  ambientVideoPresentationMode: AmbientVideoPresentationMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_VIDEO_PRESENTATION_MODE)),
   ),
   timestampFormat: TimestampFormat.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_TIMESTAMP_FORMAT)),
@@ -770,6 +824,11 @@ export const ClientSettingsPatch = Schema.Struct({
   sidebarProjectSortOrder: Schema.optionalKey(SidebarProjectSortOrder),
   sidebarThreadSortOrder: Schema.optionalKey(SidebarThreadSortOrder),
   sidebarThreadPreviewCount: Schema.optionalKey(SidebarThreadPreviewCount),
+  ambientVideoEnabled: Schema.optionalKey(Schema.Boolean),
+  ambientVideoSource: Schema.optionalKey(AmbientVideoSource),
+  ambientVideoPresetPlacement: Schema.optionalKey(AmbientMediaPresetPlacement),
+  ambientVideoPresetSize: Schema.optionalKey(AmbientMediaPresetSize),
+  ambientVideoPresentationMode: Schema.optionalKey(AmbientVideoPresentationMode),
   timestampFormat: Schema.optionalKey(TimestampFormat),
   chatCopyFormat: Schema.optionalKey(ChatCopyFormat),
 });

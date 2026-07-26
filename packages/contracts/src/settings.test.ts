@@ -7,6 +7,11 @@ import {
   CodexSettings,
   ClaudeSettings,
   CODEX_DEFAULT_AUTO_COMPACT_TOKEN_LIMIT,
+  DEFAULT_AMBIENT_VIDEO_ENABLED,
+  DEFAULT_AMBIENT_VIDEO_PRESET_PLACEMENT,
+  DEFAULT_AMBIENT_VIDEO_PRESET_SIZE,
+  DEFAULT_AMBIENT_VIDEO_PRESENTATION_MODE,
+  DEFAULT_AMBIENT_VIDEO_SOURCE,
   DEFAULT_APP_ACCENT_COLOR,
   DEFAULT_BRAND_WORDMARK_PREFIX,
   DEFAULT_CHAT_COPY_FORMAT,
@@ -36,6 +41,89 @@ const decodeClaudeSettings = Schema.decodeSync(ClaudeSettings);
 const decodeServerSettingsPatch = Schema.decodeUnknownSync(ServerSettingsPatch);
 
 describe("client settings", () => {
+  it("defaults the ambient video player to off with no source", () => {
+    expect(DEFAULT_CLIENT_SETTINGS.ambientVideoEnabled).toBe(DEFAULT_AMBIENT_VIDEO_ENABLED);
+    expect(DEFAULT_CLIENT_SETTINGS.ambientVideoSource).toBe(DEFAULT_AMBIENT_VIDEO_SOURCE);
+    expect(DEFAULT_CLIENT_SETTINGS.ambientVideoPresetPlacement).toBe(
+      DEFAULT_AMBIENT_VIDEO_PRESET_PLACEMENT,
+    );
+    expect(DEFAULT_CLIENT_SETTINGS.ambientVideoPresetSize).toBe(DEFAULT_AMBIENT_VIDEO_PRESET_SIZE);
+    expect(DEFAULT_CLIENT_SETTINGS.ambientVideoPresentationMode).toBe(
+      DEFAULT_AMBIENT_VIDEO_PRESENTATION_MODE,
+    );
+    expect(decodeClientSettings({}).ambientVideoEnabled).toBe(false);
+    expect(decodeClientSettings({}).ambientVideoSource).toBeNull();
+  });
+
+  it("adds ambient video defaults when decoding an older partial settings document", () => {
+    const decoded = decodeClientSettings({
+      timestampFormat: "24-hour",
+      showSidebarMascot: false,
+    });
+
+    expect(decoded.timestampFormat).toBe("24-hour");
+    expect(decoded.showSidebarMascot).toBe(false);
+    expect(decoded.ambientVideoEnabled).toBe(DEFAULT_AMBIENT_VIDEO_ENABLED);
+    expect(decoded.ambientVideoSource).toBe(DEFAULT_AMBIENT_VIDEO_SOURCE);
+  });
+
+  it("validates atomic YouTube sources", () => {
+    expect(
+      decodeClientSettingsPatch({
+        ambientVideoSource: {
+          kind: "playlist",
+          id: "PL1234567890",
+          videoId: "dQw4w9WgXcQ",
+        },
+      }),
+    ).toEqual({
+      ambientVideoSource: {
+        kind: "playlist",
+        id: "PL1234567890",
+        videoId: "dQw4w9WgXcQ",
+      },
+    });
+    expect(decodeClientSettingsPatch({ ambientVideoSource: null })).toEqual({
+      ambientVideoSource: null,
+    });
+    expect(() =>
+      decodeClientSettingsPatch({ ambientVideoSource: { kind: "video", id: "too-short" } }),
+    ).toThrow();
+    expect(() =>
+      decodeClientSettingsPatch({ ambientVideoSource: { kind: "playlist", id: "short" } }),
+    ).toThrow();
+    expect(() =>
+      decodeClientSettingsPatch({
+        ambientVideoSource: {
+          kind: "playlist",
+          id: "PL1234567890",
+          videoId: "too-short",
+        },
+      }),
+    ).toThrow();
+  });
+
+  it("bounds ambient video layout enums in patches", () => {
+    expect(
+      decodeClientSettingsPatch({
+        ambientVideoEnabled: true,
+        ambientVideoPresetPlacement: "bottom-left",
+        ambientVideoPresetSize: "large",
+        ambientVideoPresentationMode: "cinema",
+      }),
+    ).toEqual({
+      ambientVideoEnabled: true,
+      ambientVideoPresetPlacement: "bottom-left",
+      ambientVideoPresetSize: "large",
+      ambientVideoPresentationMode: "cinema",
+    });
+    expect(() => decodeClientSettingsPatch({ ambientVideoPresetPlacement: "top-left" })).toThrow();
+    expect(() => decodeClientSettingsPatch({ ambientVideoPresetSize: "huge" })).toThrow();
+    expect(() =>
+      decodeClientSettingsPatch({ ambientVideoPresentationMode: "fullscreen" }),
+    ).toThrow();
+  });
+
   it("defaults power-save blocking to off", () => {
     expect(DEFAULT_CLIENT_SETTINGS.powerSaveBlockerMode).toBe(DEFAULT_POWER_SAVE_BLOCKER_MODE);
     expect(decodeClientSettings({}).powerSaveBlockerMode).toBe("off");
