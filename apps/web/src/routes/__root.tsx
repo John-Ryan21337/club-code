@@ -12,7 +12,6 @@ import { QueryClient, useQueryClient } from "@tanstack/react-query";
 
 import { APP_DISPLAY_NAME } from "../branding";
 import { AppSidebarLayout } from "../components/AppSidebarLayout";
-import { PersistentAmbientVideoHost } from "../components/ambient/PersistentAmbientVideoHost";
 import { CommandPalette } from "../components/CommandPalette";
 import { InitialBackendBootstrapSurface } from "../components/InitialBackendBootstrapSurface";
 import { OnboardingSurface } from "../components/OnboardingSurface";
@@ -164,7 +163,6 @@ function RootRouteView() {
         {primaryEnvironmentAuthenticated ? <ProviderUpdateLaunchNotification /> : null}
         {primaryEnvironmentAuthenticated ? <DesktopNotificationWatcher /> : null}
         {primaryEnvironmentAuthenticated ? <WebSocketConnectionCoordinator /> : null}
-        {primaryEnvironmentAuthenticated ? <PersistentAmbientVideoHost /> : null}
         {primaryEnvironmentAuthenticated ? (
           <WebSocketConnectionSurface>
             <InitialBackendBootstrapSurface>
