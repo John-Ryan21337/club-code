@@ -4,7 +4,7 @@ import type {
   AmbientMediaLayoutMode,
   AmbientMediaPresetSize,
 } from "@cafecode/contracts/settings";
-import { ChevronLeftIcon, ChevronRightIcon, MoveIcon, XIcon } from "lucide-react";
+import { ChevronLeftIcon, ChevronRightIcon, MoveIcon, ScalingIcon, XIcon } from "lucide-react";
 import {
   type CSSProperties,
   type PointerEvent as ReactPointerEvent,
@@ -27,7 +27,9 @@ import { cn } from "~/lib/utils";
 import {
   clampAmbientImageGeometryForPane,
   resolveAmbientImageKeyboardMove,
+  resolveAmbientImageKeyboardResize,
   resolveAmbientImagePointerMove,
+  resolveAmbientImagePointerResize,
   type AmbientImagePaneSize,
 } from "./ambientImageGeometryController";
 
@@ -50,12 +52,14 @@ const VIDEO_MINIMUM_PANE_WIDTH = 640;
 const CUSTOM_MINIMUM_WIDTH = 120;
 const CUSTOM_MAXIMUM_WIDTH_FRACTION = 0.9;
 const KEYBOARD_MOVE_STEP = 0.02;
+const KEYBOARD_RESIZE_STEP = 0.025;
 const CUSTOM_GEOMETRY_LIMITS = {
   minimumWidthPixels: CUSTOM_MINIMUM_WIDTH,
   maximumWidthFraction: CUSTOM_MAXIMUM_WIDTH_FRACTION,
 } as const;
 
-interface MoveInteraction {
+interface GeometryInteraction {
+  readonly kind: "move" | "resize";
   readonly pointerId: number;
   moved: boolean;
   readonly startClientX: number;
@@ -222,9 +226,10 @@ export function AmbientImagePanel({
   );
   const geometryRef = useRef(customGeometry);
   const customLayoutActiveRef = useRef(false);
-  const interactionRef = useRef<MoveInteraction | null>(null);
+  const interactionRef = useRef<GeometryInteraction | null>(null);
   const pendingGeometryRef = useRef<NormalizedAmbientMediaGeometry | null>(null);
   const animationFrameRef = useRef<number | null>(null);
+  const [interactionActive, setInteractionActive] = useState(false);
   const [reducedMotion, setReducedMotion] = useState(false);
   const [documentInactive, setDocumentInactive] = useState(() =>
     typeof document === "undefined" ? false : document.hidden || !document.hasFocus(),
@@ -367,7 +372,7 @@ export function AmbientImagePanel({
     [applyVisualGeometry, clampForCurrentPane, persistGeometry],
   );
 
-  const finishMove = useCallback(
+  const finishInteraction = useCallback(
     (pointerId?: number) => {
       const interaction = interactionRef.current;
       if (!interaction || (pointerId !== undefined && interaction.pointerId !== pointerId)) {
@@ -375,6 +380,7 @@ export function AmbientImagePanel({
       }
       const latest = flushPendingGeometry();
       interactionRef.current = null;
+      setInteractionActive(false);
       try {
         if (interaction.captureTarget.hasPointerCapture(interaction.pointerId)) {
           interaction.captureTarget.releasePointerCapture(interaction.pointerId);
@@ -395,7 +401,7 @@ export function AmbientImagePanel({
       if (!interaction || !pane || event.pointerId !== interaction.pointerId) {
         return;
       }
-      const next = resolveAmbientImagePointerMove({
+      const input = {
         startGeometry: interaction.startGeometry,
         startPointer: {
           clientX: interaction.startClientX,
@@ -408,14 +414,18 @@ export function AmbientImagePanel({
         pane,
         mediaAspectRatio: aspectRatio,
         limits: CUSTOM_GEOMETRY_LIMITS,
-      });
+      };
+      const next =
+        interaction.kind === "move"
+          ? resolveAmbientImagePointerMove(input)
+          : resolveAmbientImagePointerResize(input);
       if (next) {
         interaction.moved = true;
         scheduleVisualGeometry(next);
       }
     };
-    const finish = (event: PointerEvent) => finishMove(event.pointerId);
-    const finishOnBlur = () => finishMove();
+    const finish = (event: PointerEvent) => finishInteraction(event.pointerId);
+    const finishOnBlur = () => finishInteraction();
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", finish);
     window.addEventListener("pointercancel", finish);
@@ -426,7 +436,7 @@ export function AmbientImagePanel({
       window.removeEventListener("pointercancel", finish);
       window.removeEventListener("blur", finishOnBlur);
     };
-  }, [aspectRatio, finishMove, pane, scheduleVisualGeometry]);
+  }, [aspectRatio, finishInteraction, pane, scheduleVisualGeometry]);
 
   useEffect(
     () => () => {
@@ -440,8 +450,8 @@ export function AmbientImagePanel({
     [],
   );
 
-  const beginMove = useCallback(
-    (event: ReactPointerEvent<HTMLButtonElement>) => {
+  const beginInteraction = useCallback(
+    (kind: GeometryInteraction["kind"], event: ReactPointerEvent<HTMLButtonElement>) => {
       if (!effectiveGeometry || interactionRef.current !== null) {
         return;
       }
@@ -452,6 +462,7 @@ export function AmbientImagePanel({
         // Window-level listeners still provide a bounded fallback.
       }
       interactionRef.current = {
+        kind,
         pointerId: event.pointerId,
         moved: false,
         startClientX: event.clientX,
@@ -459,23 +470,28 @@ export function AmbientImagePanel({
         startGeometry: effectiveGeometry,
         captureTarget: event.currentTarget,
       };
+      setInteractionActive(true);
     },
     [effectiveGeometry],
   );
 
-  const nudgeMove = useCallback(
-    (key: string) => {
+  const adjustGeometryWithKeyboard = useCallback(
+    (kind: GeometryInteraction["kind"], key: string) => {
       if (!effectiveGeometry || !pane) {
         return;
       }
-      const next = resolveAmbientImageKeyboardMove({
+      const input = {
         geometry: effectiveGeometry,
         key,
-        step: KEYBOARD_MOVE_STEP,
+        step: kind === "move" ? KEYBOARD_MOVE_STEP : KEYBOARD_RESIZE_STEP,
         pane,
         mediaAspectRatio: aspectRatio,
         limits: CUSTOM_GEOMETRY_LIMITS,
-      });
+      };
+      const next =
+        kind === "move"
+          ? resolveAmbientImageKeyboardMove(input)
+          : resolveAmbientImageKeyboardResize(input);
       if (next) {
         commitGeometry(next);
       }
@@ -507,7 +523,8 @@ export function AmbientImagePanel({
         assetCount: cycle.length,
         continueBackgroundAnimations,
         documentInactive,
-      })
+      }) ||
+      interactionActive
     ) {
       return;
     }
@@ -517,7 +534,13 @@ export function AmbientImagePanel({
       delay,
     );
     return () => window.clearInterval(interval);
-  }, [continueBackgroundAnimations, cycle.length, cycleSeconds, documentInactive]);
+  }, [
+    continueBackgroundAnimations,
+    cycle.length,
+    cycleSeconds,
+    documentInactive,
+    interactionActive,
+  ]);
 
   const suspendAnimation =
     activeAsset.mimeType === "image/gif" &&
@@ -556,16 +579,33 @@ export function AmbientImagePanel({
           type="button"
           className="absolute top-1 left-1 z-10 touch-none cursor-move rounded bg-black/65 p-1 text-white hover:bg-black focus-visible:ring-2 focus-visible:ring-white"
           aria-label="Move ambient image; use arrow keys for precise movement"
-          onPointerDown={beginMove}
-          onLostPointerCapture={(event) => finishMove(event.pointerId)}
+          onPointerDown={(event) => beginInteraction("move", event)}
+          onLostPointerCapture={(event) => finishInteraction(event.pointerId)}
           onKeyDown={(event) => {
             if (event.key.startsWith("Arrow")) {
               event.preventDefault();
-              nudgeMove(event.key);
+              adjustGeometryWithKeyboard("move", event.key);
             }
           }}
         >
           <MoveIcon className="size-3" />
+        </button>
+      ) : null}
+      {custom ? (
+        <button
+          type="button"
+          className="absolute right-1 bottom-1 z-10 touch-none cursor-nwse-resize rounded bg-black/65 p-1 text-white hover:bg-black focus-visible:ring-2 focus-visible:ring-white"
+          aria-label="Resize ambient image; use arrow keys for precise sizing"
+          onPointerDown={(event) => beginInteraction("resize", event)}
+          onLostPointerCapture={(event) => finishInteraction(event.pointerId)}
+          onKeyDown={(event) => {
+            if (event.key.startsWith("Arrow")) {
+              event.preventDefault();
+              adjustGeometryWithKeyboard("resize", event.key);
+            }
+          }}
+        >
+          <ScalingIcon className="size-3" />
         </button>
       ) : null}
       <button

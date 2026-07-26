@@ -228,6 +228,81 @@ it("reseeds custom geometry after reset without requiring a remount", async () =
   });
 });
 
+it("pauses automatic cycling for an active geometry interaction and resumes afterward", async () => {
+  const secondAsset = {
+    ...asset,
+    id: `sha256-${"e".repeat(64)}.png`,
+    url: `/api/ambient-media/image/sha256-${"e".repeat(64)}.png`,
+  };
+  const setIntervalSpy = vi.spyOn(window, "setInterval");
+  const clearIntervalSpy = vi.spyOn(window, "clearInterval");
+  const countCycleIntervals = () =>
+    setIntervalSpy.mock.calls.filter(([, delay]) => delay === 20_000).length;
+
+  mounted = await render(
+    <div className="relative h-[800px] w-[1000px]">
+      <AmbientImagePanel
+        asset={asset}
+        cycleAssets={[asset, secondAsset]}
+        cycleEnabled
+        cycleSeconds={20}
+        presentationMode="floating"
+        layoutMode="custom"
+        placement="bottom-left"
+        size="medium"
+        stackedVideoSize={null}
+        glow={false}
+        glowColor="auto"
+        glowOpacity={0.35}
+        continueBackgroundAnimations
+        onDisable={vi.fn()}
+      />
+    </div>,
+  );
+
+  await vi.waitFor(() => {
+    expect(countCycleIntervals()).toBeGreaterThan(0);
+  });
+  let cycleCallIndex = -1;
+  setIntervalSpy.mock.calls.forEach(([, delay], index) => {
+    if (delay === 20_000) {
+      cycleCallIndex = index;
+    }
+  });
+  const cycleIntervalId = setIntervalSpy.mock.results[cycleCallIndex]?.value;
+  const move = page.getByRole("button", { name: /Move ambient image/ }).element();
+  Object.defineProperties(move, {
+    setPointerCapture: { configurable: true, value: vi.fn() },
+    hasPointerCapture: { configurable: true, value: () => true },
+    releasePointerCapture: { configurable: true, value: vi.fn() },
+  });
+
+  move.dispatchEvent(
+    new PointerEvent("pointerdown", {
+      bubbles: true,
+      cancelable: true,
+      pointerId: 31,
+      clientX: 100,
+      clientY: 100,
+    }),
+  );
+  await vi.waitFor(() => {
+    expect(clearIntervalSpy.mock.calls.some(([intervalId]) => intervalId === cycleIntervalId)).toBe(
+      true,
+    );
+  });
+  const cycleIntervalsWhilePaused = countCycleIntervals();
+  await new Promise<void>((resolve) => {
+    window.setTimeout(resolve, 50);
+  });
+  expect(countCycleIntervals()).toBe(cycleIntervalsWhilePaused);
+
+  window.dispatchEvent(new PointerEvent("pointerup", { pointerId: 31 }));
+  await vi.waitFor(() => {
+    expect(countCycleIntervals()).toBeGreaterThan(cycleIntervalsWhilePaused);
+  });
+});
+
 it("renders theater presentation for a single ambient image", async () => {
   mounted = await render(
     <div className="relative h-[800px] w-[1000px]">
@@ -396,12 +471,19 @@ it("moves custom images smoothly and persists exactly once on pointer release", 
   setItem.mockClear();
 
   const move = page.getByRole("button", { name: /Move ambient image/ }).element();
+  const resize = page.getByRole("button", { name: /Resize ambient image/ }).element();
   const setPointerCapture = vi.fn();
   const releasePointerCapture = vi.fn();
+  const resizeSetPointerCapture = vi.fn();
   Object.defineProperties(move, {
     setPointerCapture: { configurable: true, value: setPointerCapture },
     hasPointerCapture: { configurable: true, value: () => true },
     releasePointerCapture: { configurable: true, value: releasePointerCapture },
+  });
+  Object.defineProperties(resize, {
+    setPointerCapture: { configurable: true, value: resizeSetPointerCapture },
+    hasPointerCapture: { configurable: true, value: () => false },
+    releasePointerCapture: { configurable: true, value: vi.fn() },
   });
   move.focus();
   await userEvent.keyboard("{ArrowRight}");
@@ -417,6 +499,15 @@ it("moves custom images smoothly and persists exactly once on pointer release", 
       pointerId: 7,
       clientX: 100,
       clientY: 100,
+    }),
+  );
+  resize.dispatchEvent(
+    new PointerEvent("pointerdown", {
+      bubbles: true,
+      cancelable: true,
+      pointerId: 8,
+      clientX: 110,
+      clientY: 110,
     }),
   );
   window.dispatchEvent(
@@ -438,10 +529,88 @@ it("moves custom images smoothly and persists exactly once on pointer release", 
   window.dispatchEvent(new PointerEvent("pointerup", { pointerId: 7 }));
 
   expect(setPointerCapture).toHaveBeenCalledWith(7);
+  expect(resizeSetPointerCapture).not.toHaveBeenCalled();
   expect(releasePointerCapture).toHaveBeenCalledWith(7);
   expect(setItem).toHaveBeenCalledOnce();
   expect(readAmbientMediaGeometry("image")!.x).toBeGreaterThan(beforePointerMove.x);
   expect(readAmbientMediaGeometry("image")!.y).toBeGreaterThan(beforePointerMove.y);
+});
+
+it("resizes custom images smoothly and persists exactly once on pointer release", async () => {
+  const setItem = vi.spyOn(Storage.prototype, "setItem");
+  mounted = await render(
+    <div className="relative h-[800px] w-[1000px]">
+      <AmbientImagePanel
+        asset={asset}
+        cycleAssets={[]}
+        cycleEnabled={false}
+        cycleSeconds={20}
+        presentationMode="floating"
+        layoutMode="custom"
+        placement="bottom-left"
+        size="medium"
+        stackedVideoSize={null}
+        glow={false}
+        glowColor="auto"
+        glowOpacity={0.35}
+        continueBackgroundAnimations={false}
+        onDisable={vi.fn()}
+      />
+    </div>,
+  );
+
+  await expect
+    .element(page.getByRole("region", { name: "Ambient image" }))
+    .toHaveAttribute("data-ambient-image-layout", "custom");
+  const resize = page.getByRole("button", { name: /Resize ambient image/ }).element();
+  const setPointerCapture = vi.fn();
+  const releasePointerCapture = vi.fn();
+  Object.defineProperties(resize, {
+    setPointerCapture: { configurable: true, value: setPointerCapture },
+    hasPointerCapture: { configurable: true, value: () => true },
+    releasePointerCapture: { configurable: true, value: releasePointerCapture },
+  });
+  const initial = readAmbientMediaGeometry("image")!;
+  setItem.mockClear();
+
+  resize.focus();
+  await userEvent.keyboard("{ArrowRight}");
+  expect(setItem).toHaveBeenCalledOnce();
+  const beforePointerResize = readAmbientMediaGeometry("image")!;
+  expect(beforePointerResize.width).toBeGreaterThan(initial.width);
+  setItem.mockClear();
+
+  resize.dispatchEvent(
+    new PointerEvent("pointerdown", {
+      bubbles: true,
+      cancelable: true,
+      pointerId: 12,
+      clientX: 100,
+      clientY: 100,
+    }),
+  );
+  window.dispatchEvent(
+    new PointerEvent("pointermove", {
+      pointerId: 12,
+      clientX: 180,
+      clientY: 140,
+    }),
+  );
+  window.dispatchEvent(
+    new PointerEvent("pointermove", {
+      pointerId: 12,
+      clientX: 240,
+      clientY: 180,
+    }),
+  );
+
+  expect(setItem).not.toHaveBeenCalled();
+  window.dispatchEvent(new PointerEvent("pointerup", { pointerId: 12 }));
+
+  expect(setPointerCapture).toHaveBeenCalledWith(12);
+  expect(releasePointerCapture).toHaveBeenCalledWith(12);
+  expect(setItem).toHaveBeenCalledOnce();
+  expect(readAmbientMediaGeometry("image")!.width).toBeGreaterThan(beforePointerResize.width);
 });
 
 it("commits on lost capture but never writes an unfinished move during unmount", async () => {
