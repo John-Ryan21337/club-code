@@ -9,6 +9,8 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { ServerConfig } from "./config.ts";
 import {
   attachmentsRouteLayer,
+  ambientImageServeRouteLayer,
+  ambientImageUploadRouteLayer,
   brandingSidebarImageServeRouteLayer,
   brandingSidebarImageUploadRouteLayer,
   clientDebugLogRouteLayer,
@@ -65,6 +67,7 @@ import { ProviderRegistryLive } from "./provider/Layers/ProviderRegistry.ts";
 import { ServerSettingsLive } from "./serverSettings.ts";
 import { ServerClientSettingsLive } from "./serverClientSettings.ts";
 import { BrandingImageStoreLive } from "./branding/BrandingImageStore.ts";
+import { AmbientImageStoreLive } from "./ambientMedia/AmbientImageStore.ts";
 import { ProjectFaviconResolverLive } from "./project/Layers/ProjectFaviconResolver.ts";
 import { RepositoryIdentityResolverLive } from "./project/Layers/RepositoryIdentityResolver.ts";
 import { WorkspaceEntriesLive } from "./workspace/Layers/WorkspaceEntries.ts";
@@ -338,6 +341,8 @@ export const makeRoutesLayer = Layer.mergeAll(
   authSessionRouteLayer,
   authWebSocketTokenRouteLayer,
   attachmentsRouteLayer,
+  ambientImageServeRouteLayer,
+  ambientImageUploadRouteLayer,
   brandingSidebarImageServeRouteLayer,
   brandingSidebarImageUploadRouteLayer,
   clientDebugLogRouteLayer,
@@ -402,6 +407,7 @@ export const makeServerLayer = Layer.unwrap(
     return serverApplicationLayer.pipe(
       Layer.provideMerge(RuntimeServicesLive),
       Layer.provideMerge(BrandingImageStoreLive),
+      Layer.provide(AmbientImageStoreLive),
       Layer.provideMerge(ThreadDetailSubscriptionRegistryLive),
       Layer.provideMerge(HttpServerLive),
       Layer.provide(ObservabilityLive),

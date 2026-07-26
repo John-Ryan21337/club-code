@@ -16,6 +16,7 @@ import {
   GitCommandError,
   KeybindingRule,
   MessageId,
+  MAX_AMBIENT_IMAGE_FILE_BYTES,
   ExternalLauncherError,
   type OrchestrationThreadShell,
   type OrchestrationCommand,
@@ -109,6 +110,7 @@ import {
   type UsageStatsServiceShape,
 } from "./usageStats/Services/UsageStatsService.ts";
 import { BrandingImageStoreLive } from "./branding/BrandingImageStore.ts";
+import { AmbientImageStoreLive } from "./ambientMedia/AmbientImageStore.ts";
 import {
   BrowserTraceCollector,
   type BrowserTraceCollectorShape,
@@ -168,10 +170,39 @@ const testEnvironmentDescriptor = {
 };
 const tinyPngBytes = Uint8Array.from(
   Buffer.from(
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=",
     "base64",
   ),
 );
+const tinyGifBytes = Uint8Array.from(
+  Buffer.from("R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==", "base64"),
+);
+const gifWithEncodedSize = (sizeBytes: number): Uint8Array => {
+  const prefix = tinyGifBytes.subarray(0, tinyGifBytes.byteLength - 1);
+  if (sizeBytes < tinyGifBytes.byteLength + 5) {
+    throw new Error("Padded GIF fixture must have room for a comment extension.");
+  }
+
+  const bytes = new Uint8Array(sizeBytes);
+  bytes.set(prefix);
+  let offset = prefix.byteLength;
+  bytes[offset++] = 0x21;
+  bytes[offset++] = 0xfe;
+  let subBlockBudget = sizeBytes - offset - 2;
+  while (subBlockBudget > 0) {
+    let blockBytes = Math.min(256, subBlockBudget);
+    if (subBlockBudget - blockBytes === 1) blockBytes -= 1;
+    if (blockBytes < 2) throw new Error("Invalid padded GIF fixture budget.");
+    bytes[offset++] = blockBytes - 1;
+    bytes.fill(0x61, offset, offset + blockBytes - 1);
+    offset += blockBytes - 1;
+    subBlockBudget -= blockBytes;
+  }
+  bytes[offset++] = 0;
+  bytes[offset++] = 0x3b;
+  if (offset !== sizeBytes) throw new Error("Padded GIF fixture has the wrong encoded size.");
+  return bytes;
+};
 const makeDefaultOrchestrationReadModel = () => {
   const now = "2026-01-01T00:00:00.000Z";
   return {
@@ -960,6 +991,7 @@ const buildAppUnderTest = (options?: {
       Layer.provide(workspaceAndProjectServicesLayer),
       Layer.provideMerge(FetchHttpClient.layer),
       Layer.provideMerge(BrandingImageStoreLive),
+      Layer.provideMerge(AmbientImageStoreLive),
       Layer.provide(layerConfig),
     );
 
@@ -2782,6 +2814,109 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.isFalse((yield* unsupportedResponse.text).includes("data:image"));
       assert.isFalse((yield* invalidResponse.text).includes("data:image"));
       assert.isFalse((yield* missingResponse.text).includes("data:image"));
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("uploads ambient images and bounds chunked bodies without Content-Length", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+      const cookie = yield* getAuthenticatedSessionCookieHeader();
+
+      const uploadResponse = yield* HttpClient.post("/api/ambient-media/image", {
+        headers: { cookie, "content-type": "image/png" },
+        body: HttpBody.uint8Array(tinyPngBytes, "image/png"),
+      });
+      const uploadBody = (yield* uploadResponse.json) as {
+        readonly ambientImage: { readonly id: string; readonly url: string };
+      };
+      assert.equal(uploadResponse.status, 200);
+      assert.match(uploadBody.ambientImage.id, /^sha256-[a-f0-9]{64}\.png$/);
+
+      const imageResponse = yield* HttpClient.get(uploadBody.ambientImage.url, {
+        headers: { cookie },
+      });
+      assert.equal(imageResponse.status, 200);
+      assert.equal(imageResponse.headers["x-content-type-options"], "nosniff");
+      assert.deepEqual(
+        Array.from(new Uint8Array(yield* imageResponse.arrayBuffer)),
+        Array.from(tinyPngBytes),
+      );
+
+      const exactLimitResponse = yield* HttpClient.post("/api/ambient-media/image", {
+        headers: { cookie, "content-type": "image/gif" },
+        body: HttpBody.uint8Array(gifWithEncodedSize(MAX_AMBIENT_IMAGE_FILE_BYTES), "image/gif"),
+      });
+      assert.equal(exactLimitResponse.status, 200);
+      const exactLimitBody = (yield* exactLimitResponse.json) as {
+        readonly ambientImage: { readonly sizeBytes: number };
+      };
+      assert.equal(exactLimitBody.ambientImage.sizeBytes, MAX_AMBIENT_IMAGE_FILE_BYTES);
+
+      const uploadUrl = yield* getHttpServerUrl("/api/ambient-media/image");
+      const oversizedStatus = yield* Effect.promise(
+        () =>
+          new Promise<number>((resolve, reject) => {
+            const request = NodeHttp.request(
+              uploadUrl,
+              {
+                method: "POST",
+                headers: {
+                  cookie,
+                  "content-type": "image/png",
+                  "transfer-encoding": "chunked",
+                },
+              },
+              (response) => {
+                response.resume();
+                response.on("end", () => resolve(response.statusCode ?? 0));
+              },
+            );
+            request.on("error", reject);
+            request.end(Buffer.alloc(MAX_AMBIENT_IMAGE_FILE_BYTES + 2));
+          }),
+      );
+      assert.equal(oversizedStatus, 413);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("rejects unauthenticated ambient image reads and uploads", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+      const id = `sha256-${"c".repeat(64)}.png`;
+      const uploadResponse = yield* HttpClient.post("/api/ambient-media/image", {
+        headers: { "content-type": "image/png" },
+        body: HttpBody.uint8Array(tinyPngBytes, "image/png"),
+      });
+      const imageResponse = yield* HttpClient.get(`/api/ambient-media/image/${id}`);
+
+      assert.equal(uploadResponse.status, 401);
+      assert.equal(imageResponse.status, 401);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("hides ambient image upload and read routes when the capability is disabled", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest({
+        config: {
+          ambientExperienceCapabilities: {
+            ...DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES,
+            ambientImage: false,
+          },
+        },
+      });
+      const cookie = yield* getAuthenticatedSessionCookieHeader();
+      const id = `sha256-${"c".repeat(64)}.png`;
+
+      const uploadResponse = yield* HttpClient.post("/api/ambient-media/image", {
+        headers: { cookie, "content-type": "image/png" },
+        body: HttpBody.uint8Array(tinyPngBytes, "image/png"),
+      });
+      const imageResponse = yield* HttpClient.get(`/api/ambient-media/image/${id}`, {
+        headers: { cookie },
+      });
+
+      assert.equal(uploadResponse.status, 404);
+      assert.equal(imageResponse.status, 404);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
