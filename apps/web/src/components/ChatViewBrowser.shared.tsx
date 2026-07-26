@@ -3898,6 +3898,75 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
       }
     });
 
+    it("does not pause an owned background run when another thread is edited", async () => {
+      const secondThreadId = "thread-auto-nudge-unrelated-edit" as ThreadId;
+      const terminalTurnId = "turn-auto-nudge-unrelated-edit-owner" as TurnId;
+      const snapshot = addThreadToSnapshot(
+        createSnapshotForTargetUser({
+          targetMessageId: "msg-user-auto-nudge-unrelated-edit" as MessageId,
+          targetText: "background continuation owner",
+        }),
+        secondThreadId,
+      );
+      const terminalTurnKey = `${LOCAL_ENVIRONMENT_ID}:${THREAD_ID}:${terminalTurnId}`;
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot,
+        configureFixture: enableBackgroundAutoNudge,
+      });
+
+      try {
+        getBackgroundAutoNudgeController().start(
+          {
+            environmentId: String(LOCAL_ENVIRONMENT_ID),
+            threadId: String(THREAD_ID),
+          },
+          snapshot.threads[0]?.messages.findLast((message) => message.role === "user")?.createdAt ??
+            null,
+        );
+        fixture.snapshot = withCompletedLatestTurn(fixture.snapshot, terminalTurnId);
+        publishThreadSnapshot(THREAD_ID);
+
+        await mounted.router.navigate({
+          to: "/$environmentId/$threadId",
+          params: {
+            environmentId: LOCAL_ENVIRONMENT_ID,
+            threadId: secondThreadId,
+          },
+        });
+        await waitForURL(
+          mounted.router,
+          (path) => path === serverThreadPath(secondThreadId),
+          "Route should switch to the unrelated thread.",
+        );
+        await pressComposerKey("x");
+        const secondThreadKey = scopedThreadKey(
+          scopeThreadRef(LOCAL_ENVIRONMENT_ID, secondThreadId),
+        );
+        await vi.waitFor(
+          () => {
+            expect(
+              useComposerDraftStore.getState().draftsByThreadKey[secondThreadKey]?.prompt ?? "",
+            ).toBe("x");
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+
+        expect(getBackgroundAutoNudgeController().getSnapshot()).toMatchObject({
+          owner: {
+            environmentId: String(LOCAL_ENVIRONMENT_ID),
+            threadId: String(THREAD_ID),
+          },
+          status: "active",
+          reason: null,
+        });
+        expect(getAutoNudgeTurnLedger().has(terminalTurnKey)).toBe(false);
+      } finally {
+        getBackgroundAutoNudgeController().stop("Browser test cleanup.");
+        await mounted.cleanup();
+      }
+    });
+
     it("preserves background Auto Nudge through navigation and renderer reconnect", async () => {
       const secondThreadId = "thread-auto-nudge-navigation-target" as ThreadId;
       const snapshot = addThreadToSnapshot(
