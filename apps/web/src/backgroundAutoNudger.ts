@@ -22,6 +22,8 @@ const MAX_BACKGROUND_STORAGE_CHARACTERS = 64_000;
 // terminal key. Keep enough room to rehydrate those sent-ledger entries.
 const MAX_SAFE_ID_LENGTH = 640;
 export const AUTO_NUDGE_PROJECTION_ACK_TIMEOUT_MS = 60_000;
+const MAX_AUTO_NUDGE_PROJECTION_WINDOW_MS =
+  MAX_AUTO_NUDGE_MAX_MINUTES * 60_000 + AUTO_NUDGE_PROJECTION_ACK_TIMEOUT_MS;
 
 export interface BackgroundAutoNudgeThreadRef {
   readonly environmentId: string;
@@ -216,12 +218,16 @@ function readState(storage: BackgroundAutoNudgeStorage | null): BackgroundAutoNu
     )
       ? parsed.expectedAutomatedUserMessageDeadlineAt
       : null;
+    const projectionWindowMs =
+      expectedAutomatedUserMessageAt !== null && expectedAutomatedUserMessageDeadlineAt !== null
+        ? Date.parse(expectedAutomatedUserMessageDeadlineAt) -
+          Date.parse(expectedAutomatedUserMessageAt)
+        : Number.NaN;
     const expectedProjectionIsValid =
       expectedAutomatedUserMessageAt !== null &&
       expectedAutomatedUserMessageDeadlineAt !== null &&
-      Date.parse(expectedAutomatedUserMessageDeadlineAt) -
-        Date.parse(expectedAutomatedUserMessageAt) ===
-        AUTO_NUDGE_PROJECTION_ACK_TIMEOUT_MS;
+      projectionWindowMs >= AUTO_NUDGE_PROJECTION_ACK_TIMEOUT_MS &&
+      projectionWindowMs <= MAX_AUTO_NUDGE_PROJECTION_WINDOW_MS;
     return {
       owner,
       lastOwner,

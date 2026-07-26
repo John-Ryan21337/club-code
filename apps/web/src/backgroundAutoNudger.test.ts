@@ -507,6 +507,42 @@ describe("background auto nudge controller", () => {
     expect(controller.getSnapshot().status).toBe("active");
   });
 
+  it("preserves a resumed projection acknowledgement through durable reload", () => {
+    const { storage } = storageFixture();
+    const controller = new BackgroundAutoNudgeController(storage);
+    controller.start(owner, "2026-07-23T23:59:00.000Z", startedAt);
+    controller.observe(observation(startedAt));
+    const dueAt = Date.parse(controller.getSnapshot().scheduled?.dueAt ?? "");
+    const dispatch = controller.observe(observation(dueAt));
+    if (!dispatch) throw new Error("expected background dispatch");
+    const resumedAt = dueAt + AUTO_NUDGE_PROJECTION_ACK_TIMEOUT_MS + 1;
+
+    controller.pause("Paused by operator.", dueAt + 1);
+    controller.resume(resumedAt);
+    const afterReload = new BackgroundAutoNudgeController(storage);
+    expect(afterReload.getSnapshot().expectedAutomatedUserMessageAt).toBe(dispatch.createdAt);
+
+    afterReload.observe(
+      observation(resumedAt + 1, {
+        thread: existingThread({
+          latestUserMessageAt: dispatch.createdAt,
+          terminalTurnKey: null,
+          sessionReady: false,
+          isRunning: true,
+        }),
+        alreadyConsumed: () => true,
+      }),
+    );
+
+    expect(afterReload.getSnapshot()).toMatchObject({
+      status: "active",
+      reason: null,
+      baselineUserMessageAt: dispatch.createdAt,
+      expectedAutomatedUserMessageAt: null,
+      expectedAutomatedUserMessageDeadlineAt: null,
+    });
+  });
+
   it("recovers after durable storage becomes writable again", () => {
     const values = new Map<string, string>();
     let failWrites = true;
