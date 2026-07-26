@@ -16,6 +16,7 @@ import {
   getAutoNudgeTurnLedger,
   normalizeAutoNudgeTerminalTurnKey,
   providerCanAcceptAutoNudgeTurn,
+  withAutoNudgeDispatchSource,
 } from "../autoNudger";
 import { useComposerDraftStore } from "../composerDraftStore";
 import {
@@ -192,23 +193,28 @@ export function BackgroundAutoNudgeCoordinator() {
 
           const identity = autoNudgeDispatchIdentityForTurn(dispatch.terminalTurnKey);
           void api.orchestration
-            .dispatchCommand({
-              type: "thread.turn.start",
-              commandId: identity.commandId,
-              threadId: shell.id,
-              message: {
-                messageId: identity.messageId,
-                role: "user",
-                text: dispatch.prompt,
-                attachments: [],
-              },
-              expectedSettledTurnId: latestTurn.turnId,
-              modelSelection: shell.modelSelection,
-              titleSeed: shell.title,
-              runtimeMode: shell.runtimeMode,
-              interactionMode: shell.interactionMode,
-              createdAt: dispatch.createdAt,
-            })
+            .dispatchCommand(
+              withAutoNudgeDispatchSource(
+                {
+                  type: "thread.turn.start",
+                  commandId: identity.commandId,
+                  threadId: shell.id,
+                  message: {
+                    messageId: identity.messageId,
+                    role: "user",
+                    text: dispatch.prompt,
+                    attachments: [],
+                  },
+                  expectedSettledTurnId: latestTurn.turnId,
+                  modelSelection: shell.modelSelection,
+                  titleSeed: shell.title,
+                  runtimeMode: shell.runtimeMode,
+                  interactionMode: shell.interactionMode,
+                  createdAt: dispatch.createdAt,
+                },
+                identity,
+              ),
+            )
             .catch(() => {
               controller.markDispatchFailed(
                 dispatch.messageId,

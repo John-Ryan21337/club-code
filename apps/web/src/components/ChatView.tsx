@@ -128,6 +128,7 @@ import {
   getAutoNudgeTurnLedger,
   normalizeAutoNudgeTerminalTurnKey,
   providerCanAcceptAutoNudgeTurn,
+  withAutoNudgeDispatchSource,
 } from "../autoNudger";
 import {
   getConfirmedAutoNudgeArming,
@@ -5275,24 +5276,31 @@ export default function ChatView(props: ChatViewProps) {
             }
           : undefined;
       beginLocalDispatch({ preparingWorktree: false });
-      await api.orchestration.dispatchCommand({
-        type: "thread.turn.start",
-        commandId: autoNudgeInput?.commandId ?? newCommandId(),
-        threadId: threadIdForSend,
-        message: {
-          messageId: messageIdForSend,
-          role: "user",
-          text: outgoingMessageText,
-          attachments: turnAttachments,
-        },
-        ...(autoNudgeInput ? { expectedSettledTurnId: autoNudgeInput.expectedSettledTurnId } : {}),
-        modelSelection: ctxSelectedModelSelection,
-        titleSeed: title,
-        runtimeMode,
-        interactionMode,
-        ...(bootstrap ? { bootstrap } : {}),
-        createdAt: messageCreatedAt,
-      });
+      await api.orchestration.dispatchCommand(
+        withAutoNudgeDispatchSource(
+          {
+            type: "thread.turn.start",
+            commandId: autoNudgeInput?.commandId ?? newCommandId(),
+            threadId: threadIdForSend,
+            message: {
+              messageId: messageIdForSend,
+              role: "user",
+              text: outgoingMessageText,
+              attachments: turnAttachments,
+            },
+            ...(autoNudgeInput
+              ? { expectedSettledTurnId: autoNudgeInput.expectedSettledTurnId }
+              : {}),
+            modelSelection: ctxSelectedModelSelection,
+            titleSeed: title,
+            runtimeMode,
+            interactionMode,
+            ...(bootstrap ? { bootstrap } : {}),
+            createdAt: messageCreatedAt,
+          },
+          autoNudgeInput,
+        ),
+      );
       turnStartSucceeded = true;
     })().catch(async (err: unknown) => {
       if (
