@@ -6,6 +6,7 @@ import { page, userEvent } from "vitest/browser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
+import { AMBIENT_MEDIA_GEOMETRY_STORAGE_KEY } from "../../ambientMediaGeometryStorage";
 import { AmbientImageSettings } from "./AmbientImageSettings";
 
 const ambientAsset = {
@@ -63,6 +64,7 @@ describe("AmbientImageSettings", () => {
 
   beforeEach(() => {
     delete window.desktopBridge;
+    window.localStorage.clear();
     settingsHarness.settings = { ...DEFAULT_CLIENT_SETTINGS };
     settingsHarness.updateSettings.mockReset();
     settingsHarness.updateSettingsAsync.mockClear();
@@ -78,7 +80,7 @@ describe("AmbientImageSettings", () => {
     document.body.innerHTML = "";
   });
 
-  it("exposes bounded preset, cycle, and glow controls without claiming custom layout yet", async () => {
+  it("exposes bounded preset, custom layout, cycle, and glow controls", async () => {
     mounted = await render(<AmbientImageSettings />);
 
     await expect
@@ -90,7 +92,41 @@ describe("AmbientImageSettings", () => {
       .element(page.getByRole("group", { name: "Ambient image preset placement" }))
       .toBeVisible();
     await expect.element(page.getByRole("switch", { name: "Cycle ambient images" })).toBeDisabled();
-    expect(document.querySelector('[aria-label="Ambient image layout"]')).toBeNull();
+    await expect.element(page.getByLabelText("Ambient image layout")).toHaveValue("preset");
+  });
+
+  it("selects and resets device-local custom positioning", async () => {
+    settingsHarness.settings = {
+      ...DEFAULT_CLIENT_SETTINGS,
+      ambientImageLayoutMode: "custom",
+    };
+    window.localStorage.setItem(
+      AMBIENT_MEDIA_GEOMETRY_STORAGE_KEY,
+      JSON.stringify({
+        version: 1,
+        slots: { image: { x: 0.2, y: 0.3, width: 0.4 } },
+      }),
+    );
+    mounted = await render(<AmbientImageSettings />);
+
+    await userEvent.click(
+      page.getByRole("button", { name: "Reset custom ambient image layout to default" }),
+    );
+
+    expect(window.localStorage.getItem(AMBIENT_MEDIA_GEOMETRY_STORAGE_KEY)).toBeNull();
+    expect(settingsHarness.updateSettings).toHaveBeenCalledWith({
+      ambientImageLayoutMode: "preset",
+    });
+  });
+
+  it("enables custom positioning without changing the selected image", async () => {
+    mounted = await render(<AmbientImageSettings />);
+
+    await userEvent.selectOptions(page.getByLabelText("Ambient image layout"), "custom");
+
+    expect(settingsHarness.updateSettings).toHaveBeenCalledWith({
+      ambientImageLayoutMode: "custom",
+    });
   });
 
   it("restores ambient presentation defaults without deleting the selected asset", async () => {

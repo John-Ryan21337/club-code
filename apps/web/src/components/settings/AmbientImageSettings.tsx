@@ -3,6 +3,7 @@ import { type ChangeEvent, useCallback, useEffect, useRef, useState } from "reac
 
 import { prepareAmbientImageDirectory } from "../../ambientImageCycle";
 import { removeAmbientImage, uploadAmbientImage } from "../../ambientImages";
+import { resetAmbientMediaGeometry } from "../../ambientMediaGeometryStorage";
 import { useSettings, useUpdateSettings } from "../../hooks/useSettings";
 import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
@@ -311,6 +312,37 @@ export function AmbientImageSettings() {
         }
       />
       <SettingsRow
+        title="Layout"
+        description="Use a preset corner, or drag and resize a custom floating image. Custom placement is stored only on this device."
+        resetAction={
+          settings.ambientImageLayoutMode === "custom" ? (
+            <SettingResetButton
+              label="custom ambient image layout"
+              onClick={() => {
+                resetAmbientMediaGeometry("image");
+                updateSettings({ ambientImageLayoutMode: "preset" });
+              }}
+            />
+          ) : null
+        }
+        control={
+          <select
+            aria-label="Ambient image layout"
+            className="rounded border bg-background px-2 py-1 text-foreground"
+            value={settings.ambientImageLayoutMode}
+            onChange={(event) => {
+              const mode = event.currentTarget.value;
+              if (mode === "preset" || mode === "custom") {
+                updateSettings({ ambientImageLayoutMode: mode });
+              }
+            }}
+          >
+            <option value="preset">Preset</option>
+            <option value="custom">Custom</option>
+          </select>
+        }
+      />
+      <SettingsRow
         title="Preset placement"
         description="Choose the starting bottom corner for the preset image."
         control={
@@ -425,6 +457,7 @@ export function AmbientImageSettings() {
           <SettingResetButton
             label="ambient image"
             onClick={() => {
+              resetAmbientMediaGeometry("image");
               updateSettings({
                 ambientImageEnabled: false,
                 ambientImageCycleEnabled: false,
