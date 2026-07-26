@@ -30,11 +30,19 @@ export interface DrainFirstPacingSnapshot {
 
 const CODEX_CHECKPOINTS = [20, 40, 60, 80, 100] as const;
 
-type ValidPacingWindowObservation = PacingWindowObservation & {
-  readonly usedPercent: number;
+type ValidPacingWindowSchedule = PacingWindowObservation & {
   readonly resetsAtMs: number;
   readonly windowDurationMs: number;
 };
+
+type ValidPacingWindowObservation = ValidPacingWindowSchedule & {
+  readonly usedPercent: number;
+};
+
+type PacingResetWindowEvidence = Pick<
+  PacingWindowObservation,
+  "providerFamily" | "resetsAtMs" | "windowDurationMs" | "observedAtMs" | "stale"
+>;
 
 function clampUsedPercent(value: number | null): number | null {
   if (typeof value !== "number" || !Number.isFinite(value)) return null;
@@ -69,12 +77,10 @@ function isMinorWindowEstimateCorrection(
   );
 }
 
-function normalizeWindow(input: PacingWindowObservation): ValidPacingWindowObservation | null {
-  const usedPercent = clampUsedPercent(input.usedPercent);
+function normalizeWindowSchedule(input: PacingWindowObservation): ValidPacingWindowSchedule | null {
   const resetsAtMs = input.resetsAtMs;
   const windowDurationMs = input.windowDurationMs;
   if (
-    usedPercent === null ||
     !Number.isFinite(input.observedAtMs) ||
     typeof resetsAtMs !== "number" ||
     !Number.isFinite(resetsAtMs) ||
@@ -89,7 +95,6 @@ function normalizeWindow(input: PacingWindowObservation): ValidPacingWindowObser
   const activeLaunchCount = normalizeActiveLaunchCount(input.activeLaunchCount);
   return {
     ...input,
-    usedPercent,
     resetsAtMs,
     windowDurationMs,
     // An invalid active-work count is treated conservatively. If a quota
@@ -98,6 +103,13 @@ function normalizeWindow(input: PacingWindowObservation): ValidPacingWindowObser
     activeLaunchCount: activeLaunchCount ?? 1,
     minimumPauseMs: normalizeMinimumPauseMs(input.minimumPauseMs),
   };
+}
+
+function normalizeWindow(input: PacingWindowObservation): ValidPacingWindowObservation | null {
+  const schedule = normalizeWindowSchedule(input);
+  const usedPercent = clampUsedPercent(input.usedPercent);
+  if (schedule === null || usedPercent === null) return null;
+  return { ...schedule, usedPercent };
 }
 
 /**
@@ -120,6 +132,7 @@ export class DrainFirstPacingController {
   private generationRevision = 0;
   private releaseAfterDrain = false;
   private lastValidWindow: ValidPacingWindowObservation | null = null;
+  private lastTrustedWindowSchedule: ValidPacingWindowSchedule | null = null;
   private latestObservationSequence: number | null = null;
   private latestObservedAtMs: number | null = null;
 
@@ -129,6 +142,24 @@ export class DrainFirstPacingController {
 
   canStartNewWork(): boolean {
     return this.snapshot.phase === "running";
+  }
+
+  isStrictlyNewerResetWindow(input: PacingResetWindowEvidence): boolean {
+    const previous = this.lastTrustedWindowSchedule;
+    return (
+      !input.stale &&
+      Number.isFinite(input.observedAtMs) &&
+      typeof input.resetsAtMs === "number" &&
+      Number.isFinite(input.resetsAtMs) &&
+      input.resetsAtMs > input.observedAtMs &&
+      typeof input.windowDurationMs === "number" &&
+      Number.isFinite(input.windowDurationMs) &&
+      input.windowDurationMs > 0 &&
+      previous !== null &&
+      input.providerFamily === previous.providerFamily &&
+      input.observedAtMs >= previous.resetsAtMs &&
+      input.resetsAtMs > previous.resetsAtMs
+    );
   }
 
   observe(rawInput: PacingWindowObservation): DrainFirstPacingSnapshot {
@@ -170,7 +201,7 @@ export class DrainFirstPacingController {
     if (
       observedAtMs !== null &&
       previousObservedAtMs !== null &&
-      this.lastValidWindow !== null &&
+      this.lastTrustedWindowSchedule !== null &&
       observedAtMs < previousObservedAtMs
     ) {
       // The independently monotonic observation sequence proves this is a
@@ -178,13 +209,20 @@ export class DrainFirstPacingController {
       // trusted physical window and any concrete deadline by the same delta;
       // quota may be unavailable during the clock correction.
       const clockDeltaMs = observedAtMs - previousObservedAtMs;
-      this.lastValidWindow = {
-        ...this.lastValidWindow,
+      if (this.lastValidWindow !== null) {
+        this.lastValidWindow = {
+          ...this.lastValidWindow,
+          observedAtMs,
+          resetsAtMs: this.lastValidWindow.resetsAtMs + clockDeltaMs,
+        };
+      }
+      this.lastTrustedWindowSchedule = {
+        ...this.lastTrustedWindowSchedule,
         observedAtMs,
-        resetsAtMs: this.lastValidWindow.resetsAtMs + clockDeltaMs,
+        resetsAtMs: this.lastTrustedWindowSchedule.resetsAtMs + clockDeltaMs,
       };
       if (this.windowIdentity !== null) {
-        this.windowIdentity = `${this.lastValidWindow.providerFamily}:${this.lastValidWindow.resetsAtMs}:${this.lastValidWindow.windowDurationMs}`;
+        this.windowIdentity = `${this.lastTrustedWindowSchedule.providerFamily}:${this.lastTrustedWindowSchedule.resetsAtMs}:${this.lastTrustedWindowSchedule.windowDurationMs}`;
       }
       if (this.snapshot.resumeAtMs !== null) {
         this.snapshot = {
@@ -195,6 +233,10 @@ export class DrainFirstPacingController {
     }
 
     const input = normalizeWindow(rawInput);
+    const resetWindow =
+      input === null && this.isStrictlyNewerResetWindow(rawInput)
+        ? normalizeWindowSchedule(rawInput)
+        : null;
 
     if (
       this.snapshot.phase === "paused" &&
@@ -221,6 +263,9 @@ export class DrainFirstPacingController {
     }
 
     if (input === null) {
+      if (resetWindow !== null) {
+        return this.acceptResetWindow(resetWindow);
+      }
       return this.handleUnavailableObservation(
         observedAtMs,
         observedActiveLaunchCount,
@@ -267,6 +312,7 @@ export class DrainFirstPacingController {
     }
 
     this.lastValidWindow = input;
+    this.lastTrustedWindowSchedule = input;
     if (this.windowIdentity !== windowIdentity) {
       const wasStillDraining =
         this.snapshot.phase === "draining" &&
@@ -379,6 +425,27 @@ export class DrainFirstPacingController {
       },
       this.snapshot.checkpointPercent ?? 100,
     );
+  }
+
+  private acceptResetWindow(input: ValidPacingWindowSchedule): DrainFirstPacingSnapshot {
+    const windowIdentity = `${input.providerFamily}:${input.resetsAtMs}:${input.windowDurationMs}`;
+    const waitForActiveWork = input.activeLaunchCount > 0;
+    this.windowIdentity = windowIdentity;
+    this.generationRevision += 1;
+    this.crossed.clear();
+    this.releaseAfterDrain = waitForActiveWork;
+    this.lastValidWindow = null;
+    this.lastTrustedWindowSchedule = input;
+    this.snapshot = {
+      phase: waitForActiveWork ? "draining" : "running",
+      generation: `${windowIdentity}:${this.generationRevision}`,
+      checkpointPercent: null,
+      resumeAtMs: null,
+      reason: waitForActiveWork
+        ? "Quota reset observed; waiting for active work to finish before resuming."
+        : null,
+    };
+    return this.snapshot;
   }
 
   private nextAheadThreshold(input: ValidPacingWindowObservation): number | null {
@@ -496,6 +563,7 @@ export class DrainFirstPacingController {
     this.windowIdentity = null;
     this.releaseAfterDrain = false;
     this.lastValidWindow = null;
+    this.lastTrustedWindowSchedule = null;
     this.latestObservedAtMs = null;
     this.snapshot = {
       phase: "running",

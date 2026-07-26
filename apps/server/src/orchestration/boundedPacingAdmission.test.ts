@@ -489,6 +489,60 @@ describe("BoundedPacingAdmissionCoordinator", () => {
     await expect(Promise.all(queued.map(({ promise }) => promise))).resolves.toEqual([0, 1, 2]);
   });
 
+  it("grants one cautious launch for an advanced reset window without utilization", async () => {
+    const { coordinator } = setup();
+    let finishActive!: () => void;
+    const active = coordinator.submitNewLaunch({
+      kind: "new-launch",
+      key: keyA,
+      launch: () => new Promise<void>((resolve) => (finishActive = resolve)),
+    });
+    const initial = claudeObservation(0);
+    const initialSequence = requiredProviderSequence(initial);
+    coordinator.observe(keyA, initial);
+    const order: string[] = [];
+    const first = coordinator.submitNewLaunch({
+      kind: "new-launch",
+      key: keyA,
+      launch: () => order.push("first"),
+    });
+    const second = coordinator.submitNewLaunch({
+      kind: "new-launch",
+      key: keyA,
+      launch: () => order.push("second"),
+    });
+
+    coordinator.observe(
+      keyA,
+      claudeObservation(RESET - 1, {
+        usedPercent: null,
+        resetsAtMs: RESET + WINDOW,
+        providerObservationSequence: initialSequence + 1,
+      }),
+    );
+    expect(order).toEqual([]);
+
+    const resetEvidence = claudeObservation(RESET, {
+      usedPercent: null,
+      resetsAtMs: RESET + WINDOW,
+      providerObservationSequence: initialSequence + 2,
+    });
+    coordinator.observe(keyA, resetEvidence);
+    expect(coordinator.getSnapshot(keyA)?.phase).toBe("draining");
+    expect(order).toEqual([]);
+
+    finishActive();
+    await active.promise;
+    await first.promise;
+    expect(order).toEqual(["first"]);
+    expect(coordinator.waitingCount).toBe(1);
+
+    coordinator.observe(keyA, resetEvidence);
+    expect(order).toEqual(["first"]);
+    expect(second.cancel()).toBe(true);
+    await expect(second.promise).rejects.toBeInstanceOf(PacingAdmissionCancelledError);
+  });
+
   it("requires fresh evidence after pacing is disabled and re-enabled", async () => {
     const { coordinator } = setup();
     const initial = claudeObservation(0, { usedPercent: 85 });

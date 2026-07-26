@@ -157,8 +157,6 @@ export function pacingAdmissionKeyIdentity(key: PacingAdmissionKey): string {
 function isFreshResetObservation(observation: PacingAdmissionObservation): boolean {
   return (
     !observation.stale &&
-    typeof observation.usedPercent === "number" &&
-    Number.isFinite(observation.usedPercent) &&
     typeof observation.resetsAtMs === "number" &&
     Number.isFinite(observation.resetsAtMs) &&
     observation.resetsAtMs > observation.observedAtMs &&
@@ -288,19 +286,22 @@ export class BoundedPacingAdmissionCoordinator {
       return state.controller.getSnapshot();
     }
     state.latestProviderObservationSequence = sourceSequence;
+    const hasCompleteObservation = isCompleteFreshProviderObservation(capturedObservation);
+    const hasNewResetWindow =
+      !hasCompleteObservation && state.controller.isStrictlyNewerResetWindow(capturedObservation);
 
     // A provider reset wait is released only by a complete, fresh provider
-    // observation. A timer, stale cache entry, or malformed sample is not
-    // evidence that quota reset.
+    // observation or a strictly advanced provider-issued reset window. A
+    // timer, stale cache entry, or malformed sample is not reset evidence.
     if (
       state.controller.getSnapshot().phase === "waiting-reset" &&
-      !isCompleteFreshProviderObservation(capturedObservation)
+      !hasCompleteObservation &&
+      !hasNewResetWindow
     ) {
       return state.controller.getSnapshot();
     }
 
     state.latestObservation = capturedObservation;
-    const hasCompleteObservation = isCompleteFreshProviderObservation(capturedObservation);
     if (hasCompleteObservation) {
       if (capturedObservation.usedPercent >= this.cautionBandStartPercent) {
         state.cautionRestricted = true;
@@ -309,6 +310,14 @@ export class BoundedPacingAdmissionCoordinator {
       } else {
         this.allowUnrestrictedFanout(state);
       }
+    } else if (hasNewResetWindow) {
+      // Claude may omit utilization outside threshold bands. A strictly
+      // advanced provider-issued reset timestamp proves a new window, but not
+      // that broad fan-out is safe, so authorize only the bounded caution
+      // allowance until complete telemetry arrives.
+      state.cautionRestricted = true;
+      state.cautionAuthorizationSequence = sourceSequence;
+      state.cautionAuthorizationsRemaining = this.maxCautionBandLaunchesPerObservation;
     } else {
       // A newer but incomplete observation supersedes any unused grant. It
       // cannot be repaired or replayed later under the same source sequence.
@@ -316,7 +325,7 @@ export class BoundedPacingAdmissionCoordinator {
     }
     const snapshot = this.applyPolicyObservation(
       state,
-      hasCompleteObservation
+      hasCompleteObservation || hasNewResetWindow
         ? capturedObservation
         : {
             ...capturedObservation,
@@ -324,7 +333,7 @@ export class BoundedPacingAdmissionCoordinator {
             stale: true,
           },
     );
-    if (!state.controller.canStartNewWork() && state.cautionRestricted) {
+    if (!state.controller.canStartNewWork() && state.cautionRestricted && !hasNewResetWindow) {
       // Closing the policy gate also burns any unused authorization. Neither
       // a deadline nor active-work completion can restore it.
       this.requireFreshCautionAuthorization(state);
