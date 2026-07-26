@@ -7,13 +7,20 @@ import {
 } from "@cafecode/contracts";
 import { useSyncExternalStore } from "react";
 
-import { AUTO_NUDGE_DELAY_MS, autoNudgePromptForMode } from "./autoNudger";
+import {
+  AUTO_NUDGE_DELAY_MS,
+  autoNudgeDispatchIdentityForTurn,
+  autoNudgePromptForMode,
+  normalizeAutoNudgeTerminalTurnKey,
+} from "./autoNudger";
 
 export const AUTO_NUDGE_BACKGROUND_STORAGE_KEY = "cafe-code.auto-nudge.background.v1";
 const AUTO_NUDGE_BACKGROUND_STORAGE_PROBE_KEY = "cafe-code.auto-nudge.background.probe.v1";
 const MAX_BACKGROUND_LEDGER_ENTRIES = 40;
 const MAX_BACKGROUND_STORAGE_CHARACTERS = 64_000;
-const MAX_SAFE_ID_LENGTH = 512;
+// Transport identities include a short namespace plus the bounded 512-byte
+// terminal key. Keep enough room to rehydrate those sent-ledger entries.
+const MAX_SAFE_ID_LENGTH = 640;
 export const AUTO_NUDGE_PROJECTION_ACK_TIMEOUT_MS = 60_000;
 
 export interface BackgroundAutoNudgeThreadRef {
@@ -66,13 +73,13 @@ export interface BackgroundAutoNudgeObservation {
         readonly terminalTurnKey: string | null;
         readonly latestUserMessageAt: string | null;
         readonly sessionReady: boolean;
+        readonly sessionStarting: boolean;
         readonly isRunning: boolean;
         readonly hasPendingWork: boolean;
         readonly providerAvailable: boolean;
       }
     | { readonly exists: false };
   readonly alreadyConsumed: (turnKey: string) => boolean;
-  readonly newMessageId: () => string;
 }
 
 export interface BackgroundAutoNudgeDispatch {
@@ -105,7 +112,12 @@ const EMPTY_STATE: BackgroundAutoNudgeState = {
 };
 
 function safeId(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0 && value.length <= MAX_SAFE_ID_LENGTH;
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= MAX_SAFE_ID_LENGTH &&
+    value === value.trim()
+  );
 }
 
 function safeIso(value: unknown): value is string {
@@ -275,6 +287,7 @@ export class BackgroundAutoNudgeController {
   reloadFromStorage(): void {
     this.state = readState(this.storage);
     this.sequence = Math.max(this.sequence, this.state.ledger.length);
+    for (const listener of this.listeners) listener();
   }
 
   subscribe = (listener: () => void): (() => void) => {
@@ -286,6 +299,7 @@ export class BackgroundAutoNudgeController {
     this.state = next;
     try {
       this.storage?.setItem(AUTO_NUDGE_BACKGROUND_STORAGE_KEY, JSON.stringify(next));
+      this.storageWriteFailed = false;
     } catch {
       // Never dispatch from an in-memory-only claim: another renderer could
       // still observe the older durable state and submit the same turn.
@@ -358,7 +372,15 @@ export class BackgroundAutoNudgeController {
     if (!this.state.owner || this.state.status !== "paused") return;
     this.write(
       this.withEntry(
-        { ...this.state, status: "active", scheduled: null, reason: null },
+        {
+          ...this.state,
+          status: "active",
+          scheduled: null,
+          reason: null,
+          expectedAutomatedUserMessageDeadlineAt: this.state.expectedAutomatedUserMessageAt
+            ? new Date(nowMs + AUTO_NUDGE_PROJECTION_ACK_TIMEOUT_MS).toISOString()
+            : null,
+        },
         this.entry("resumed", "Background continuation resumed.", nowMs),
       ),
     );
@@ -484,23 +506,20 @@ export class BackgroundAutoNudgeController {
         expectedAutomatedUserMessageDeadlineAt: null,
       });
     }
-    if (
-      !input.thread.providerAvailable ||
-      (!input.thread.sessionReady && !input.thread.isRunning)
-    ) {
-      this.pause("Provider or transport is not ready.", input.nowMs);
-      return null;
-    }
     if (input.thread.hasPendingWork) {
       this.pause("Queued work or operator attention is pending.", input.nowMs);
       return null;
     }
-    if (input.thread.isRunning) {
+    if (input.thread.isRunning || input.thread.sessionStarting) {
       if (this.state.scheduled) this.write({ ...this.state, scheduled: null });
       return null;
     }
+    if (!input.thread.providerAvailable || !input.thread.sessionReady) {
+      this.pause("Provider or transport is not ready.", input.nowMs);
+      return null;
+    }
 
-    const turnKey = input.thread.terminalTurnKey;
+    const turnKey = normalizeAutoNudgeTerminalTurnKey(input.thread.terminalTurnKey);
     if (!turnKey) {
       if (this.state.scheduled) this.write({ ...this.state, scheduled: null });
       return null;
@@ -554,7 +573,7 @@ export class BackgroundAutoNudgeController {
 
     const prompt = autoNudgePromptForMode(input.settings.mode);
     if (!prompt) return null;
-    const messageId = input.newMessageId();
+    const messageId = String(autoNudgeDispatchIdentityForTurn(turnKey).messageId);
     const createdAt = new Date(input.nowMs).toISOString();
     const round = this.state.sentRounds + 1;
     const dispatchClaimPersisted = this.write(
@@ -584,6 +603,7 @@ export class BackgroundAutoNudgeController {
 }
 
 let sharedController: BackgroundAutoNudgeController | null = null;
+let backgroundDispatchSupport: boolean | null = null;
 
 export function getBackgroundAutoNudgeController(): BackgroundAutoNudgeController {
   sharedController ??= new BackgroundAutoNudgeController(resolveStorage());
@@ -592,11 +612,16 @@ export function getBackgroundAutoNudgeController(): BackgroundAutoNudgeControlle
 
 /** Background dispatch is intentionally unavailable without a cross-tab lock. */
 export function supportsBackgroundAutoNudgeDispatchLock(): boolean {
+  if (backgroundDispatchSupport !== null) return backgroundDispatchSupport;
   if (typeof navigator === "undefined" || typeof navigator.locks?.request !== "function") {
-    return false;
+    backgroundDispatchSupport = false;
+    return backgroundDispatchSupport;
   }
   const storage = resolveStorage();
-  if (!storage) return false;
+  if (!storage) {
+    backgroundDispatchSupport = false;
+    return backgroundDispatchSupport;
+  }
   try {
     const previous = storage.getItem(AUTO_NUDGE_BACKGROUND_STORAGE_PROBE_KEY);
     storage.setItem(AUTO_NUDGE_BACKGROUND_STORAGE_PROBE_KEY, "1");
@@ -605,10 +630,11 @@ export function supportsBackgroundAutoNudgeDispatchLock(): boolean {
     } else {
       storage.setItem(AUTO_NUDGE_BACKGROUND_STORAGE_PROBE_KEY, previous);
     }
-    return true;
+    backgroundDispatchSupport = true;
   } catch {
-    return false;
+    backgroundDispatchSupport = false;
   }
+  return backgroundDispatchSupport;
 }
 
 export function useBackgroundAutoNudgeState(): BackgroundAutoNudgeState {
@@ -620,6 +646,7 @@ export function __resetBackgroundAutoNudgeControllerForTests(options?: {
   readonly clearStorage?: boolean;
 }): void {
   sharedController = null;
+  backgroundDispatchSupport = null;
   if (!options?.clearStorage) return;
   try {
     resolveStorage()?.removeItem(AUTO_NUDGE_BACKGROUND_STORAGE_KEY);

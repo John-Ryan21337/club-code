@@ -6,6 +6,7 @@ import {
   BackgroundAutoNudgeController,
   type BackgroundAutoNudgeObservation,
 } from "./backgroundAutoNudger";
+import { autoNudgeDispatchIdentityForTurn } from "./autoNudger";
 
 function storageFixture() {
   const values = new Map<string, string>();
@@ -21,15 +22,20 @@ function storageFixture() {
 
 const owner = { environmentId: "local", threadId: "thread-a" };
 const startedAt = Date.parse("2026-07-24T00:00:00.000Z");
+const firstTerminalTurnKey = "local:thread-a:turn-1";
+const firstAutoNudgeMessageId = String(
+  autoNudgeDispatchIdentityForTurn(firstTerminalTurnKey).messageId,
+);
 type ExistingThread = Extract<BackgroundAutoNudgeObservation["thread"], { readonly exists: true }>;
 
 function existingThread(overrides: Partial<ExistingThread> = {}): ExistingThread {
   return {
     exists: true,
     archived: false,
-    terminalTurnKey: "local:thread-a:turn-1",
+    terminalTurnKey: firstTerminalTurnKey,
     latestUserMessageAt: "2026-07-23T23:59:00.000Z",
     sessionReady: true,
+    sessionStarting: false,
     isRunning: false,
     hasPendingWork: false,
     providerAvailable: true,
@@ -51,7 +57,6 @@ function observation(
     },
     thread: existingThread(),
     alreadyConsumed: () => false,
-    newMessageId: () => "message-auto-1",
     ...overrides,
   };
 }
@@ -66,17 +71,93 @@ describe("background auto nudge controller", () => {
     // No observation occurs while the thread route is offscreen. The global
     // coordinator later observes the authoritative shell after the deadline.
     expect(controller.observe(observation(dueAt + 10_000))).toMatchObject({
-      terminalTurnKey: "local:thread-a:turn-1",
-      messageId: "message-auto-1",
+      terminalTurnKey: firstTerminalTurnKey,
+      messageId: firstAutoNudgeMessageId,
     });
     expect(controller.observe(observation(dueAt + 10_001))).toBeNull();
     expect(
       controller
         .getSnapshot()
         .ledger.filter(
-          (entry) => entry.kind === "sent" && entry.terminalTurnKey === "local:thread-a:turn-1",
+          (entry) => entry.kind === "sent" && entry.terminalTurnKey === firstTerminalTurnKey,
         ),
     ).toHaveLength(1);
+  });
+
+  it("notifies subscribers when a cross-window lock reloads durable ownership", () => {
+    const { storage } = storageFixture();
+    const firstWindow = new BackgroundAutoNudgeController(storage);
+    const secondWindow = new BackgroundAutoNudgeController(storage);
+    let notifications = 0;
+    secondWindow.subscribe(() => {
+      notifications += 1;
+    });
+
+    firstWindow.start(owner, null, startedAt);
+    secondWindow.reloadFromStorage();
+
+    expect(notifications).toBe(1);
+    expect(secondWindow.getSnapshot()).toMatchObject({ owner, status: "active" });
+  });
+
+  it("stays active while its dispatched turn is starting", () => {
+    const controller = new BackgroundAutoNudgeController(null);
+    controller.start(owner, "2026-07-23T23:59:00.000Z", startedAt);
+    controller.observe(observation(startedAt));
+    const dueAt = Date.parse(controller.getSnapshot().scheduled?.dueAt ?? "");
+    expect(controller.observe(observation(dueAt))).not.toBeNull();
+
+    expect(
+      controller.observe(
+        observation(dueAt + 1, {
+          thread: existingThread({
+            terminalTurnKey: null,
+            sessionReady: false,
+            sessionStarting: true,
+          }),
+          alreadyConsumed: () => true,
+        }),
+      ),
+    ).toBeNull();
+    expect(controller.getSnapshot()).toMatchObject({
+      status: "active",
+      reason: null,
+      scheduled: null,
+    });
+  });
+
+  it("pauses for a genuinely closed session", () => {
+    const controller = new BackgroundAutoNudgeController(null);
+    controller.start(owner, "2026-07-23T23:59:00.000Z", startedAt);
+
+    controller.observe(
+      observation(startedAt, {
+        thread: existingThread({
+          sessionReady: false,
+          sessionStarting: false,
+          isRunning: false,
+        }),
+      }),
+    );
+
+    expect(controller.getSnapshot()).toMatchObject({
+      status: "paused",
+      reason: "Provider or transport is not ready.",
+    });
+  });
+
+  it("ignores an overlong terminal identity instead of throwing at dispatch time", () => {
+    const controller = new BackgroundAutoNudgeController(null);
+    controller.start(owner, "2026-07-23T23:59:00.000Z", startedAt);
+
+    expect(() =>
+      controller.observe(
+        observation(startedAt, {
+          thread: existingThread({ terminalTurnKey: "x".repeat(513) }),
+        }),
+      ),
+    ).not.toThrow();
+    expect(controller.getSnapshot().scheduled).toBeNull();
   });
 
   it("cannot dispatch when disabled while a terminal turn is armed", () => {
@@ -118,12 +199,12 @@ describe("background auto nudge controller", () => {
       owner,
       terminalTurnKey: "local:thread-a:turn-1",
       prompt: "Keep a few lanes going, make steady progress",
-      messageId: "message-auto-1",
+      messageId: firstAutoNudgeMessageId,
       round: 1,
     });
     expect(controller.getSnapshot().ledger.at(-1)).toMatchObject({
       kind: "sent",
-      messageId: "message-auto-1",
+      messageId: firstAutoNudgeMessageId,
       terminalTurnKey: "local:thread-a:turn-1",
     });
   });
@@ -168,6 +249,30 @@ describe("background auto nudge controller", () => {
       status: "active",
       baselineUserMessageAt: expectedAt,
       expectedAutomatedUserMessageAt: null,
+    });
+  });
+
+  it("rehydrates the deterministic identity for a maximum-length terminal key", () => {
+    const { storage } = storageFixture();
+    const terminalTurnKey = "t".repeat(512);
+    const controller = new BackgroundAutoNudgeController(storage);
+    controller.start(owner, "2026-07-23T23:59:00.000Z", startedAt);
+    controller.observe(
+      observation(startedAt, {
+        thread: existingThread({ terminalTurnKey }),
+      }),
+    );
+    const dueAt = Date.parse(controller.getSnapshot().scheduled?.dueAt ?? "");
+    const dispatch = controller.observe(
+      observation(dueAt, {
+        thread: existingThread({ terminalTurnKey }),
+      }),
+    );
+
+    expect(dispatch?.messageId.length).toBeGreaterThan(512);
+    expect(new BackgroundAutoNudgeController(storage).getSnapshot().ledger.at(-1)).toMatchObject({
+      terminalTurnKey,
+      messageId: dispatch?.messageId,
     });
   });
 
@@ -335,6 +440,59 @@ describe("background auto nudge controller", () => {
     });
   });
 
+  it("refreshes the projection deadline when an operator resumes", () => {
+    const controller = new BackgroundAutoNudgeController(null);
+    controller.start(owner, "2026-07-23T23:59:00.000Z", startedAt);
+    controller.observe(observation(startedAt));
+    const dueAt = Date.parse(controller.getSnapshot().scheduled?.dueAt ?? "");
+    controller.observe(observation(dueAt));
+    const resumedAt = dueAt + AUTO_NUDGE_PROJECTION_ACK_TIMEOUT_MS + 1;
+
+    controller.pause("Paused by operator.", dueAt + 1);
+    controller.resume(resumedAt);
+    expect(controller.getSnapshot().expectedAutomatedUserMessageDeadlineAt).toBe(
+      new Date(resumedAt + AUTO_NUDGE_PROJECTION_ACK_TIMEOUT_MS).toISOString(),
+    );
+
+    controller.observe(
+      observation(resumedAt, {
+        thread: existingThread({
+          terminalTurnKey: null,
+          sessionReady: false,
+          sessionStarting: true,
+        }),
+        alreadyConsumed: () => true,
+      }),
+    );
+    expect(controller.getSnapshot().status).toBe("active");
+  });
+
+  it("recovers after durable storage becomes writable again", () => {
+    const values = new Map<string, string>();
+    let failWrites = true;
+    const controller = new BackgroundAutoNudgeController({
+      getItem: (key) => values.get(key) ?? null,
+      setItem: (key, value) => {
+        if (failWrites) throw new Error("storage unavailable");
+        values.set(key, value);
+      },
+      removeItem: (key) => values.delete(key),
+    });
+    controller.start(owner, "2026-07-23T23:59:00.000Z", startedAt);
+
+    failWrites = false;
+    controller.observe(observation(startedAt));
+    expect(controller.getSnapshot().status).toBe("paused");
+
+    controller.resume(startedAt + 1);
+    controller.observe(observation(startedAt + 1));
+    expect(controller.getSnapshot()).toMatchObject({
+      status: "active",
+      reason: null,
+      scheduled: { terminalTurnKey: firstTerminalTurnKey },
+    });
+  });
+
   it("fails closed when the expected projection arrives after its ACK deadline", () => {
     const controller = new BackgroundAutoNudgeController(null);
     controller.start(owner, "2026-07-23T23:59:00.000Z", startedAt);
@@ -377,7 +535,7 @@ describe("background auto nudge controller", () => {
       expect.objectContaining({
         kind: "sent",
         terminalTurnKey: "local:thread-a:turn-1",
-        messageId: "message-auto-1",
+        messageId: firstAutoNudgeMessageId,
       }),
     );
   });
@@ -391,7 +549,7 @@ describe("background auto nudge controller", () => {
     controller.stop("operator stopped", dueAt + 1);
     controller.start({ environmentId: "local", threadId: "thread-b" }, null, dueAt + 2);
 
-    controller.markDispatchFailed("message-auto-1", "late rejection", dueAt + 3);
+    controller.markDispatchFailed(firstAutoNudgeMessageId, "late rejection", dueAt + 3);
 
     expect(controller.getSnapshot()).toMatchObject({
       owner: { environmentId: "local", threadId: "thread-b" },
