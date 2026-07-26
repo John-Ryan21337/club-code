@@ -38,6 +38,7 @@ import {
 } from "../Services/ProjectionPipeline.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import { ServerConfig } from "../../config.ts";
+import { decideOrchestrationCommand } from "../decider.ts";
 
 const asProjectId = (value: string): ProjectId => ProjectId.make(value);
 const asMessageId = (value: string): MessageId => MessageId.make(value);
@@ -596,6 +597,48 @@ describe("OrchestrationEngine", () => {
         createdAt: "2026-01-01T00:00:03.000Z",
       }),
     );
+
+    const settledReadModel = await system.readModel();
+    const staleActiveSessionReadModel = {
+      ...settledReadModel,
+      threads: settledReadModel.threads.map((thread) =>
+        thread.id === threadId && thread.session
+          ? Object.assign({}, thread, {
+              session: Object.assign({}, thread.session, { activeTurnId }),
+            })
+          : thread,
+      ),
+    };
+    expect(
+      staleActiveSessionReadModel.threads.find((thread) => thread.id === threadId),
+    ).toMatchObject({
+      latestTurn: { turnId: activeTurnId, state: "completed" },
+      session: { activeTurnId },
+    });
+    await expect(
+      Effect.runPromise(
+        decideOrchestrationCommand({
+          command: {
+            type: "thread.turn.start",
+            commandId: CommandId.make("cmd-auto-nudge-matching-but-active-session"),
+            threadId,
+            message: {
+              messageId: asMessageId("msg-auto-nudge-matching-but-active-session"),
+              role: "user",
+              text: "unsafe automated follow-up during an active session",
+              attachments: [],
+            },
+            expectedSettledTurnId: activeTurnId,
+            dispatchSource: "auto-nudge",
+            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+            runtimeMode: "approval-required",
+            createdAt: "2026-01-01T00:00:03.500Z",
+          },
+          readModel: staleActiveSessionReadModel,
+        }),
+      ),
+    ).rejects.toThrow("no longer has expected settled turn");
+
     await system.run(
       engine.dispatch({
         type: "thread.turn.start",
