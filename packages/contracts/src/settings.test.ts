@@ -7,6 +7,15 @@ import {
   CodexSettings,
   ClaudeSettings,
   CODEX_DEFAULT_AUTO_COMPACT_TOKEN_LIMIT,
+  DEFAULT_AMBIENT_IMAGE_ASSET,
+  DEFAULT_AMBIENT_IMAGE_CYCLE_ASSETS,
+  DEFAULT_AMBIENT_IMAGE_CYCLE_ENABLED,
+  DEFAULT_AMBIENT_IMAGE_CYCLE_SECONDS,
+  DEFAULT_AMBIENT_IMAGE_ENABLED,
+  DEFAULT_AMBIENT_IMAGE_LAYOUT_MODE,
+  DEFAULT_AMBIENT_IMAGE_PRESENTATION_MODE,
+  DEFAULT_AMBIENT_IMAGE_PRESET_PLACEMENT,
+  DEFAULT_AMBIENT_IMAGE_PRESET_SIZE,
   DEFAULT_APP_ACCENT_COLOR,
   DEFAULT_BRAND_WORDMARK_PREFIX,
   DEFAULT_CHAT_COPY_FORMAT,
@@ -21,6 +30,8 @@ import {
   DEFAULT_SHOW_SIDEBAR_SEARCH,
   DEFAULT_THEME_ACCENT_COLOR,
   MAX_BRAND_WORDMARK_PREFIX_LENGTH,
+  MAX_AMBIENT_IMAGE_CYCLE_ASSETS,
+  MAX_AMBIENT_IMAGE_FILE_BYTES,
   MAX_SIDEBAR_BRAND_IMAGE_DATA_URL_LENGTH,
   MAX_SIDEBAR_BRAND_IMAGE_FILE_BYTES,
   MAX_SIDEBAR_BRAND_IMAGE_ID_LENGTH,
@@ -36,6 +47,15 @@ const decodeClaudeSettings = Schema.decodeSync(ClaudeSettings);
 const decodeServerSettingsPatch = Schema.decodeUnknownSync(ServerSettingsPatch);
 
 describe("client settings", () => {
+  const ambientImageAsset = {
+    id: `sha256-${"a".repeat(64)}.gif`,
+    url: `/api/ambient-media/image/sha256-${"a".repeat(64)}.gif`,
+    mimeType: "image/gif" as const,
+    width: 640,
+    height: 360,
+    sizeBytes: 1024,
+  };
+
   it("defaults power-save blocking to off", () => {
     expect(DEFAULT_CLIENT_SETTINGS.powerSaveBlockerMode).toBe(DEFAULT_POWER_SAVE_BLOCKER_MODE);
     expect(decodeClientSettings({}).powerSaveBlockerMode).toBe("off");
@@ -92,6 +112,107 @@ describe("client settings", () => {
     expect(decodeClientSettings({}).sidebarStarSpeed).toBe(1);
     expect(decodeClientSettings({}).themeAccentColor).toBe("");
     expect(decodeClientSettings({}).appAccentColor).toBe("");
+  });
+
+  it("defaults ambient images off without retaining an asset", () => {
+    expect(DEFAULT_CLIENT_SETTINGS.ambientImageEnabled).toBe(DEFAULT_AMBIENT_IMAGE_ENABLED);
+    expect(DEFAULT_CLIENT_SETTINGS.ambientImageAsset).toBe(DEFAULT_AMBIENT_IMAGE_ASSET);
+    expect(DEFAULT_CLIENT_SETTINGS.ambientImageCycleAssets).toEqual(
+      DEFAULT_AMBIENT_IMAGE_CYCLE_ASSETS,
+    );
+    expect(DEFAULT_CLIENT_SETTINGS.ambientImageCycleEnabled).toBe(
+      DEFAULT_AMBIENT_IMAGE_CYCLE_ENABLED,
+    );
+    expect(DEFAULT_CLIENT_SETTINGS.ambientImageCycleSeconds).toBe(
+      DEFAULT_AMBIENT_IMAGE_CYCLE_SECONDS,
+    );
+    expect(DEFAULT_CLIENT_SETTINGS.ambientImagePresentationMode).toBe(
+      DEFAULT_AMBIENT_IMAGE_PRESENTATION_MODE,
+    );
+    expect(DEFAULT_CLIENT_SETTINGS.ambientImageLayoutMode).toBe(DEFAULT_AMBIENT_IMAGE_LAYOUT_MODE);
+    expect(DEFAULT_CLIENT_SETTINGS.ambientImagePresetPlacement).toBe(
+      DEFAULT_AMBIENT_IMAGE_PRESET_PLACEMENT,
+    );
+    expect(DEFAULT_CLIENT_SETTINGS.ambientImagePresetSize).toBe(DEFAULT_AMBIENT_IMAGE_PRESET_SIZE);
+  });
+
+  it("accepts bounded ambient image settings and normalizes glow colors", () => {
+    expect(
+      decodeClientSettingsPatch({
+        ambientImageEnabled: true,
+        ambientImageAsset,
+        ambientImageCycleAssets: [ambientImageAsset],
+        ambientImageCycleEnabled: true,
+        ambientImageCycleSeconds: 30,
+        ambientImagePresentationMode: "theater",
+        ambientImageLayoutMode: "custom",
+        ambientImagePresetPlacement: "bottom-right",
+        ambientImagePresetSize: "large",
+        ambientImageGlowEnabled: true,
+        ambientImageGlowColor: "#AABBCC",
+        ambientImageGlowOpacity: 0.5,
+      }),
+    ).toEqual({
+      ambientImageEnabled: true,
+      ambientImageAsset,
+      ambientImageCycleAssets: [ambientImageAsset],
+      ambientImageCycleEnabled: true,
+      ambientImageCycleSeconds: 30,
+      ambientImagePresentationMode: "theater",
+      ambientImageLayoutMode: "custom",
+      ambientImagePresetPlacement: "bottom-right",
+      ambientImagePresetSize: "large",
+      ambientImageGlowEnabled: true,
+      ambientImageGlowColor: "#aabbcc",
+      ambientImageGlowOpacity: 0.5,
+    });
+  });
+
+  it("rejects mismatched, oversized, duplicate, and malformed ambient image settings", () => {
+    expect(() =>
+      decodeClientSettingsPatch({
+        ambientImageAsset: {
+          ...ambientImageAsset,
+          url: `/api/ambient-media/image/sha256-${"b".repeat(64)}.gif`,
+        },
+      }),
+    ).toThrow();
+    expect(() =>
+      decodeClientSettingsPatch({
+        ambientImageAsset: {
+          ...ambientImageAsset,
+          mimeType: "image/png",
+        },
+      }),
+    ).toThrow();
+    expect(() =>
+      decodeClientSettingsPatch({
+        ambientImageAsset: {
+          ...ambientImageAsset,
+          sizeBytes: MAX_AMBIENT_IMAGE_FILE_BYTES + 1,
+        },
+      }),
+    ).toThrow();
+    expect(() =>
+      decodeClientSettingsPatch({
+        ambientImageCycleAssets: [ambientImageAsset, ambientImageAsset],
+      }),
+    ).toThrow();
+    expect(() =>
+      decodeClientSettingsPatch({
+        ambientImageCycleAssets: Array.from(
+          { length: MAX_AMBIENT_IMAGE_CYCLE_ASSETS + 1 },
+          (_, index) => ({
+            ...ambientImageAsset,
+            id: `sha256-${index.toString(16).padStart(64, "0")}.gif`,
+            url: `/api/ambient-media/image/sha256-${index.toString(16).padStart(64, "0")}.gif`,
+          }),
+        ),
+      }),
+    ).toThrow();
+    expect(() => decodeClientSettingsPatch({ ambientImageCycleSeconds: 2 })).toThrow();
+    expect(() => decodeClientSettingsPatch({ ambientImageCycleSeconds: 3_601 })).toThrow();
+    expect(() => decodeClientSettingsPatch({ ambientImageLayoutMode: "freeform" })).toThrow();
   });
 
   it("accepts only supported power-save blocker modes in patches", () => {

@@ -86,6 +86,139 @@ export const SidebarStarSpeed = Schema.Number.check(
 );
 export type SidebarStarSpeed = typeof SidebarStarSpeed.Type;
 
+export const MIN_AMBIENT_OPACITY = 0.05;
+export const MAX_AMBIENT_OPACITY = 1;
+export const DEFAULT_AMBIENT_OPACITY = 0.35;
+
+export const HexColor = TrimmedNonEmptyString.check(Schema.isPattern(/^#[0-9A-Fa-f]{6}$/)).pipe(
+  Schema.decodeTo(
+    Schema.String,
+    SchemaTransformation.transformOrFail({
+      decode: (value) => Effect.succeed(value.toLowerCase()),
+      encode: (value) => Effect.succeed(value.toLowerCase()),
+    }),
+  ),
+);
+export type HexColor = typeof HexColor.Type;
+
+export const AmbientColor = Schema.Union([Schema.Literal("auto"), HexColor]);
+export type AmbientColor = typeof AmbientColor.Type;
+export const DEFAULT_AMBIENT_COLOR: AmbientColor = "auto";
+
+export const AmbientOpacity = Schema.Number.check(
+  Schema.isBetween({
+    minimum: MIN_AMBIENT_OPACITY,
+    maximum: MAX_AMBIENT_OPACITY,
+  }),
+);
+export type AmbientOpacity = typeof AmbientOpacity.Type;
+
+export const AmbientMediaLayoutMode = Schema.Literals(["preset", "custom"]);
+export type AmbientMediaLayoutMode = typeof AmbientMediaLayoutMode.Type;
+export const AmbientMediaPresetPlacement = Schema.Literals(["bottom-left", "bottom-right"]);
+export type AmbientMediaPresetPlacement = typeof AmbientMediaPresetPlacement.Type;
+export const AmbientMediaPresetSize = Schema.Literals(["small", "medium", "large"]);
+export type AmbientMediaPresetSize = typeof AmbientMediaPresetSize.Type;
+
+// Ambient images intentionally use their own authenticated route and metadata
+// type instead of overloading sidebar branding. The upload pipeline accepts up
+// to 10 MiB of encoded image data and must additionally enforce total-pixel and
+// GIF work budgets from the ambient-media threat model before it creates one of
+// these records.
+export const MAX_AMBIENT_IMAGE_FILE_BYTES = 10 * 1024 * 1024;
+export const MAX_AMBIENT_IMAGE_DIMENSION = 4096;
+export const MAX_AMBIENT_IMAGE_PIXEL_COUNT = 16_777_216;
+export const MAX_AMBIENT_IMAGE_ID_LENGTH = 96;
+export const MAX_AMBIENT_IMAGE_URL_LENGTH = 256;
+export const AmbientImageAssetId = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(MAX_AMBIENT_IMAGE_ID_LENGTH),
+  Schema.isPattern(/^sha256-[a-f0-9]{64}\.(?:gif|jpe?g|png|webp)$/),
+);
+export type AmbientImageAssetId = typeof AmbientImageAssetId.Type;
+export const AmbientImageMimeType = Schema.Literals([
+  "image/gif",
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+]);
+export type AmbientImageMimeType = typeof AmbientImageMimeType.Type;
+const AmbientImageAssetFields = Schema.Struct({
+  id: AmbientImageAssetId,
+  url: TrimmedNonEmptyString.check(
+    Schema.isMaxLength(MAX_AMBIENT_IMAGE_URL_LENGTH),
+    Schema.isPattern(/^\/api\/ambient-media\/image\/sha256-[a-f0-9]{64}\.(?:gif|jpe?g|png|webp)$/),
+  ),
+  mimeType: AmbientImageMimeType,
+  width: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: MAX_AMBIENT_IMAGE_DIMENSION })),
+  height: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: MAX_AMBIENT_IMAGE_DIMENSION })),
+  sizeBytes: Schema.Int.check(
+    Schema.isBetween({ minimum: 1, maximum: MAX_AMBIENT_IMAGE_FILE_BYTES }),
+  ),
+});
+const ambientImageMimeTypeForId = (id: AmbientImageAssetId): AmbientImageMimeType => {
+  const extension = id.slice(id.lastIndexOf(".") + 1);
+  switch (extension) {
+    case "gif":
+      return "image/gif";
+    case "jpg":
+    case "jpeg":
+      return "image/jpeg";
+    case "png":
+      return "image/png";
+    case "webp":
+      return "image/webp";
+    default:
+      // `AmbientImageAssetId` already proves this cannot happen. Keep the
+      // mapping total so changing the ID schema requires updating this check.
+      throw new Error("unsupported ambient image extension");
+  }
+};
+export const AmbientImageAsset = AmbientImageAssetFields.check(
+  Schema.makeFilter((asset) =>
+    asset.url === `/api/ambient-media/image/${asset.id}` &&
+    asset.mimeType === ambientImageMimeTypeForId(asset.id) &&
+    asset.width * asset.height <= MAX_AMBIENT_IMAGE_PIXEL_COUNT
+      ? undefined
+      : "must use a matching authenticated asset URL and MIME type within the ambient image pixel budget",
+  ),
+);
+export type AmbientImageAsset = typeof AmbientImageAsset.Type;
+
+export const DEFAULT_AMBIENT_IMAGE_ENABLED = false;
+export const DEFAULT_AMBIENT_IMAGE_ASSET: AmbientImageAsset | null = null;
+/** A deliberately small persistent queue. The source directory and its file
+ * paths are never part of settings; each entry is an authenticated,
+ * content-addressed server asset. */
+export const MAX_AMBIENT_IMAGE_CYCLE_ASSETS = 24;
+export const AmbientImageCycleAssets = Schema.Array(AmbientImageAsset).check(
+  Schema.isMaxLength(MAX_AMBIENT_IMAGE_CYCLE_ASSETS),
+  Schema.makeFilter((assets) =>
+    new Set(assets.map((asset) => asset.id)).size === assets.length
+      ? undefined
+      : "must not contain duplicate image assets",
+  ),
+);
+export type AmbientImageCycleAssets = typeof AmbientImageCycleAssets.Type;
+export const MIN_AMBIENT_IMAGE_CYCLE_SECONDS = 3;
+export const MAX_AMBIENT_IMAGE_CYCLE_SECONDS = 3_600;
+export const AmbientImageCycleSeconds = Schema.Number.check(
+  Schema.isBetween({
+    minimum: MIN_AMBIENT_IMAGE_CYCLE_SECONDS,
+    maximum: MAX_AMBIENT_IMAGE_CYCLE_SECONDS,
+  }),
+);
+export type AmbientImageCycleSeconds = typeof AmbientImageCycleSeconds.Type;
+export const AmbientImagePresentationMode = Schema.Literals(["floating", "theater"]);
+export type AmbientImagePresentationMode = typeof AmbientImagePresentationMode.Type;
+export const DEFAULT_AMBIENT_IMAGE_CYCLE_ASSETS: AmbientImageCycleAssets = [];
+export const DEFAULT_AMBIENT_IMAGE_CYCLE_ENABLED = false;
+export const DEFAULT_AMBIENT_IMAGE_CYCLE_SECONDS = 20;
+export const DEFAULT_AMBIENT_IMAGE_PRESENTATION_MODE: AmbientImagePresentationMode = "floating";
+export const DEFAULT_AMBIENT_IMAGE_LAYOUT_MODE: AmbientMediaLayoutMode = "preset";
+export const DEFAULT_AMBIENT_IMAGE_PRESET_PLACEMENT: AmbientMediaPresetPlacement = "bottom-left";
+export const DEFAULT_AMBIENT_IMAGE_PRESET_SIZE: AmbientMediaPresetSize = "medium";
+export const DEFAULT_AMBIENT_IMAGE_GLOW_ENABLED = false;
+
 export const SidebarProjectSortOrder = Schema.Literals(["updated_at", "created_at", "manual"]);
 export type SidebarProjectSortOrder = typeof SidebarProjectSortOrder.Type;
 export const DEFAULT_SIDEBAR_PROJECT_SORT_ORDER: SidebarProjectSortOrder = "updated_at";
@@ -137,6 +270,42 @@ export const ClientSettingsSchema = Schema.Struct({
   diffWordWrap: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   continueBackgroundAnimations: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_CONTINUE_BACKGROUND_ANIMATIONS)),
+  ),
+  ambientImageEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_IMAGE_ENABLED)),
+  ),
+  ambientImageAsset: Schema.NullOr(AmbientImageAsset).pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_IMAGE_ASSET)),
+  ),
+  ambientImageCycleAssets: AmbientImageCycleAssets.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_IMAGE_CYCLE_ASSETS)),
+  ),
+  ambientImageCycleEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_IMAGE_CYCLE_ENABLED)),
+  ),
+  ambientImageCycleSeconds: AmbientImageCycleSeconds.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_IMAGE_CYCLE_SECONDS)),
+  ),
+  ambientImagePresentationMode: AmbientImagePresentationMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_IMAGE_PRESENTATION_MODE)),
+  ),
+  ambientImageLayoutMode: AmbientMediaLayoutMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_IMAGE_LAYOUT_MODE)),
+  ),
+  ambientImagePresetPlacement: AmbientMediaPresetPlacement.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_IMAGE_PRESET_PLACEMENT)),
+  ),
+  ambientImagePresetSize: AmbientMediaPresetSize.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_IMAGE_PRESET_SIZE)),
+  ),
+  ambientImageGlowEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_IMAGE_GLOW_ENABLED)),
+  ),
+  ambientImageGlowColor: AmbientColor.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_COLOR)),
+  ),
+  ambientImageGlowOpacity: AmbientOpacity.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_OPACITY)),
   ),
   showSidebarSearch: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SHOW_SIDEBAR_SEARCH)),
@@ -727,6 +896,18 @@ export const ClientSettingsPatch = Schema.Struct({
   diffIgnoreWhitespace: Schema.optionalKey(Schema.Boolean),
   diffWordWrap: Schema.optionalKey(Schema.Boolean),
   continueBackgroundAnimations: Schema.optionalKey(Schema.Boolean),
+  ambientImageEnabled: Schema.optionalKey(Schema.Boolean),
+  ambientImageAsset: Schema.optionalKey(Schema.NullOr(AmbientImageAsset)),
+  ambientImageCycleAssets: Schema.optionalKey(AmbientImageCycleAssets),
+  ambientImageCycleEnabled: Schema.optionalKey(Schema.Boolean),
+  ambientImageCycleSeconds: Schema.optionalKey(AmbientImageCycleSeconds),
+  ambientImagePresentationMode: Schema.optionalKey(AmbientImagePresentationMode),
+  ambientImageLayoutMode: Schema.optionalKey(AmbientMediaLayoutMode),
+  ambientImagePresetPlacement: Schema.optionalKey(AmbientMediaPresetPlacement),
+  ambientImagePresetSize: Schema.optionalKey(AmbientMediaPresetSize),
+  ambientImageGlowEnabled: Schema.optionalKey(Schema.Boolean),
+  ambientImageGlowColor: Schema.optionalKey(AmbientColor),
+  ambientImageGlowOpacity: Schema.optionalKey(AmbientOpacity),
   showSidebarSearch: Schema.optionalKey(Schema.Boolean),
   showSidebarMascot: Schema.optionalKey(Schema.Boolean),
   showSidebarAttribution: Schema.optionalKey(Schema.Boolean),
