@@ -789,6 +789,60 @@ describe("BoundedPacingAdmissionCoordinator", () => {
     await expect(waiting.promise).resolves.toBe("fresh");
   });
 
+  it("applies a same-evidence minimum pause update after active work drains", async () => {
+    const { clock, coordinator } = setup();
+    let release!: () => void;
+    const active = coordinator.submitNewLaunch({
+      kind: "new-launch",
+      key: keyA,
+      launch: () => new Promise<void>((resolve) => (release = resolve)),
+    });
+    clock.advanceTo(WINDOW * 0.1);
+    const observation = codexPauseObservation(clock.now());
+    coordinator.observe(keyA, observation);
+    expect(coordinator.getSnapshot(keyA)?.phase).toBe("draining");
+
+    coordinator.observe(keyA, {
+      ...observation,
+      minimumPauseMs: WINDOW * 0.4,
+    });
+    release();
+    await active.promise;
+
+    expect(coordinator.getSnapshot(keyA)).toMatchObject({
+      phase: "paused",
+      resumeAtMs: WINDOW * 0.5,
+    });
+  });
+
+  it("does not mint a caution authorization from a settings-only replay", async () => {
+    const { coordinator } = setup();
+    const observation = claudeObservation(0, { usedPercent: 85 });
+    coordinator.observe(keyA, observation);
+    await expect(
+      coordinator.submitNewLaunch({
+        kind: "new-launch",
+        key: keyA,
+        launch: () => "authorized",
+      }).promise,
+    ).resolves.toBe("authorized");
+
+    const launch = vi.fn(() => "must-wait");
+    const waiting = coordinator.submitNewLaunch({
+      kind: "new-launch",
+      key: keyA,
+      launch,
+    });
+    coordinator.observe(keyA, {
+      ...observation,
+      minimumPauseMs: 10 * 60_000,
+    });
+
+    expect(launch).not.toHaveBeenCalled();
+    expect(waiting.cancel()).toBe(true);
+    await expect(waiting.promise).rejects.toBeInstanceOf(PacingAdmissionCancelledError);
+  });
+
   it("closes before the next queued launch when a launch synchronously closes its gate", async () => {
     const { coordinator } = setup();
     const order: string[] = [];

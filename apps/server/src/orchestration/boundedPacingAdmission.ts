@@ -123,6 +123,7 @@ interface KeyState {
   cautionAuthorizationsRemaining: number;
   cautionRestricted: boolean;
   pacingObservationEnabled: boolean;
+  latestMinimumPauseMs: number;
   latestObservation: PacingAdmissionObservation | null;
   providerFamily: PacingWindowObservation["providerFamily"];
   hasCompleteProviderObservation: boolean;
@@ -287,6 +288,11 @@ export class BoundedPacingAdmissionCoordinator {
     const state = this.getOrCreateState(key);
     state.retired = false;
     const capturedObservation = captureObservation(observation);
+    const minimumPauseChanged = !Object.is(
+      capturedObservation.minimumPauseMs,
+      state.latestMinimumPauseMs,
+    );
+    state.latestMinimumPauseMs = capturedObservation.minimumPauseMs;
     const supportedAndEnabled =
       capturedObservation.enabled && capturedObservation.providerFamily !== "other";
     state.providerFamily = capturedObservation.providerFamily;
@@ -322,6 +328,17 @@ export class BoundedPacingAdmissionCoordinator {
         !state.claudeProbeEverConsumed
       ) {
         state.claudeProbeArmed = true;
+      }
+      if (!wasPacingObservationEnabled || minimumPauseChanged) {
+        state.latestObservation = capturedObservation;
+        const snapshot = this.applyPolicyObservation(state, {
+          ...capturedObservation,
+          usedPercent: null,
+          stale: true,
+        });
+        this.scheduleWake();
+        this.drain();
+        return snapshot;
       }
       this.scheduleWake();
       this.drain();
@@ -619,6 +636,7 @@ export class BoundedPacingAdmissionCoordinator {
       cautionAuthorizationsRemaining: 0,
       cautionRestricted: false,
       pacingObservationEnabled: false,
+      latestMinimumPauseMs: 0,
       latestObservation: null,
       providerFamily: "other",
       hasCompleteProviderObservation: false,
