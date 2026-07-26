@@ -695,6 +695,9 @@ const ThreadTurnStartBootstrap = Schema.Struct({
 
 export type ThreadTurnStartBootstrap = typeof ThreadTurnStartBootstrap.Type;
 
+export const TurnDispatchSource = Schema.Literals(["user", "auto-nudge"]);
+export type TurnDispatchSource = typeof TurnDispatchSource.Type;
+
 export const ThreadTurnStartCommand = Schema.Struct({
   type: Schema.Literal("thread.turn.start"),
   commandId: CommandId,
@@ -713,6 +716,7 @@ export const ThreadTurnStartCommand = Schema.Struct({
   ),
   bootstrap: Schema.optional(ThreadTurnStartBootstrap),
   sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
+  dispatchSource: Schema.optional(TurnDispatchSource),
   createdAt: IsoDateTime,
 });
 
@@ -732,6 +736,7 @@ const ClientThreadTurnStartCommand = Schema.Struct({
   interactionMode: ProviderInteractionMode,
   bootstrap: Schema.optional(ThreadTurnStartBootstrap),
   sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
+  dispatchSource: Schema.optional(TurnDispatchSource),
   createdAt: IsoDateTime,
 });
 
@@ -753,6 +758,7 @@ const ThreadTurnSteerCommand = Schema.Struct({
     text: Schema.String,
     attachments: Schema.Array(ChatAttachment),
   }),
+  dispatchSource: Schema.optional(TurnDispatchSource),
   createdAt: IsoDateTime,
 });
 
@@ -766,6 +772,7 @@ const ClientThreadTurnSteerCommand = Schema.Struct({
     text: Schema.String,
     attachments: Schema.Array(UploadChatAttachment),
   }),
+  dispatchSource: Schema.optional(TurnDispatchSource),
   createdAt: IsoDateTime,
 });
 
@@ -1164,6 +1171,7 @@ export const ThreadTurnStartRequestedPayload = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
   ),
   sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
+  dispatchSource: Schema.optional(TurnDispatchSource),
   createdAt: IsoDateTime,
 });
 
@@ -1176,6 +1184,7 @@ export const ThreadTurnInterruptRequestedPayload = Schema.Struct({
 export const ThreadTurnSteerRequestedPayload = Schema.Struct({
   threadId: ThreadId,
   messageId: MessageId,
+  dispatchSource: Schema.optional(TurnDispatchSource),
   createdAt: IsoDateTime,
 });
 

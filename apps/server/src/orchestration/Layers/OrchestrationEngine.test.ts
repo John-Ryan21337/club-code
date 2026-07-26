@@ -375,6 +375,7 @@ describe("OrchestrationEngine", () => {
           },
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
           runtimeMode: "approval-required",
+          dispatchSource: "auto-nudge",
           createdAt: "2026-01-01T00:00:01.000Z",
         }),
       ),
@@ -471,7 +472,12 @@ describe("OrchestrationEngine", () => {
         Effect.map((chunk): OrchestrationEvent[] => Array.from(chunk)),
       ),
     );
-    expect(events.filter((event) => event.type === "thread.turn-steer-requested")).toHaveLength(1);
+    const routedSteer = events.find(
+      (event): event is Extract<OrchestrationEvent, { type: "thread.turn-steer-requested" }> =>
+        event.type === "thread.turn-steer-requested" &&
+        event.payload.messageId === "msg-start-routes-to-steer",
+    );
+    expect(routedSteer?.payload.dispatchSource).toBe("auto-nudge");
     const routedMessage = events.find(
       (event): event is Extract<OrchestrationEvent, { type: "thread.message-sent" }> =>
         event.type === "thread.message-sent" &&
