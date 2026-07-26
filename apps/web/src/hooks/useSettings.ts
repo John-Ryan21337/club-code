@@ -42,6 +42,10 @@ import {
   subscribeClientSettingsSnapshot,
   writeClientSettingsHydrationPromise,
 } from "./clientSettingsState";
+import {
+  __resetConfirmedSettingsWriteQueueForTests,
+  enqueueConfirmedSettingsWrite,
+} from "../confirmedSettingsWriteQueue";
 
 const CLIENT_SETTINGS_PERSISTENCE_ERROR_SCOPE = "[CLIENT_SETTINGS]";
 let clientSettingsImportAttempted = false;
@@ -258,13 +262,47 @@ export function useUpdateSettings() {
     updateSettings(DEFAULT_UNIFIED_SETTINGS);
   }, [updateSettings]);
 
+  /**
+   * Persists client settings before publishing them to subscribers.
+   *
+   * Safety-sensitive features use this path when changing the setting and
+   * starting side effects must be one transaction from the operator's point
+   * of view. Unlike `updateSettings`, a rejected write is observable and does
+   * not leave an optimistic setting armed in memory.
+   */
+  const updateClientSettingsConfirmed = useCallback((patch: ClientSettingsPatch) => {
+    // Safety-sensitive toggles may be changed again while their previous RPC
+    // is still in flight. Preserve invocation order and calculate each write
+    // from the latest committed snapshot so the operator's last action wins.
+    return enqueueConfirmedSettingsWrite(async () => {
+      const currentServerConfig = getServerConfig();
+      try {
+        if (currentServerConfig) {
+          await ensureLocalApi().server.updateClientSettings(patch);
+          const latest = getServerConfig()?.clientSettings ?? currentServerConfig.clientSettings;
+          applyClientSettingsUpdated(applyClientSettingsPatch(latest, patch));
+          return;
+        }
+
+        const next = applyClientSettingsPatch(getClientSettingsSnapshot(), patch);
+        await ensureLocalApi().persistence.setClientSettings(next);
+        replaceClientSettingsSnapshot(next);
+      } catch (error) {
+        reportSettingsWriteFailure("client", error);
+        throw error;
+      }
+    });
+  }, []);
+
   return {
     updateSettings,
+    updateClientSettingsConfirmed,
     resetSettings,
   };
 }
 
 export function __resetClientSettingsPersistenceForTests(): void {
   clientSettingsImportAttempted = false;
+  __resetConfirmedSettingsWriteQueueForTests();
   resetClientSettingsPersistenceStateForTests();
 }
