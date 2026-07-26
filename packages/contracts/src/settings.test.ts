@@ -8,6 +8,7 @@ import {
   ClaudeSettings,
   CODEX_DEFAULT_AUTO_COMPACT_TOKEN_LIMIT,
   DEFAULT_AMBIENT_VIDEO_ENABLED,
+  DEFAULT_AMBIENT_VIDEO_KEEP_ABOVE_CONTENT,
   DEFAULT_AMBIENT_VIDEO_PRESET_PLACEMENT,
   DEFAULT_AMBIENT_VIDEO_PRESET_SIZE,
   DEFAULT_AMBIENT_VIDEO_PRESENTATION_MODE,
@@ -51,8 +52,12 @@ describe("client settings", () => {
     expect(DEFAULT_CLIENT_SETTINGS.ambientVideoPresentationMode).toBe(
       DEFAULT_AMBIENT_VIDEO_PRESENTATION_MODE,
     );
+    expect(DEFAULT_CLIENT_SETTINGS.ambientVideoKeepAboveContent).toBe(
+      DEFAULT_AMBIENT_VIDEO_KEEP_ABOVE_CONTENT,
+    );
     expect(decodeClientSettings({}).ambientVideoEnabled).toBe(false);
     expect(decodeClientSettings({}).ambientVideoSource).toBeNull();
+    expect(decodeClientSettings({}).ambientVideoKeepAboveContent).toBe(false);
   });
 
   it("adds ambient video defaults when decoding an older partial settings document", () => {
@@ -65,6 +70,7 @@ describe("client settings", () => {
     expect(decoded.showSidebarMascot).toBe(false);
     expect(decoded.ambientVideoEnabled).toBe(DEFAULT_AMBIENT_VIDEO_ENABLED);
     expect(decoded.ambientVideoSource).toBe(DEFAULT_AMBIENT_VIDEO_SOURCE);
+    expect(decoded.ambientVideoKeepAboveContent).toBe(DEFAULT_AMBIENT_VIDEO_KEEP_ABOVE_CONTENT);
   });
 
   it("validates atomic YouTube sources", () => {
@@ -110,12 +116,14 @@ describe("client settings", () => {
         ambientVideoPresetPlacement: "bottom-left",
         ambientVideoPresetSize: "large",
         ambientVideoPresentationMode: "cinema",
+        ambientVideoKeepAboveContent: true,
       }),
     ).toEqual({
       ambientVideoEnabled: true,
       ambientVideoPresetPlacement: "bottom-left",
       ambientVideoPresetSize: "large",
       ambientVideoPresentationMode: "cinema",
+      ambientVideoKeepAboveContent: true,
     });
     expect(() => decodeClientSettingsPatch({ ambientVideoPresetPlacement: "top-left" })).toThrow();
     expect(() => decodeClientSettingsPatch({ ambientVideoPresetSize: "huge" })).toThrow();

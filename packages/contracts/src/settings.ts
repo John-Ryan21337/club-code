@@ -150,6 +150,7 @@ export const DEFAULT_AMBIENT_VIDEO_SOURCE: AmbientVideoSource = null;
 export const DEFAULT_AMBIENT_VIDEO_PRESET_PLACEMENT: AmbientMediaPresetPlacement = "bottom-right";
 export const DEFAULT_AMBIENT_VIDEO_PRESET_SIZE: AmbientMediaPresetSize = "medium";
 export const DEFAULT_AMBIENT_VIDEO_PRESENTATION_MODE: AmbientVideoPresentationMode = "floating";
+export const DEFAULT_AMBIENT_VIDEO_KEEP_ABOVE_CONTENT = false;
 
 export const ClientSettingsSchema = Schema.Struct({
   autoOpenPlanSidebar: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
@@ -267,6 +268,9 @@ export const ClientSettingsSchema = Schema.Struct({
   ),
   ambientVideoPresentationMode: AmbientVideoPresentationMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_VIDEO_PRESENTATION_MODE)),
+  ),
+  ambientVideoKeepAboveContent: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_VIDEO_KEEP_ABOVE_CONTENT)),
   ),
   timestampFormat: TimestampFormat.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_TIMESTAMP_FORMAT)),
@@ -829,6 +833,7 @@ export const ClientSettingsPatch = Schema.Struct({
   ambientVideoPresetPlacement: Schema.optionalKey(AmbientMediaPresetPlacement),
   ambientVideoPresetSize: Schema.optionalKey(AmbientMediaPresetSize),
   ambientVideoPresentationMode: Schema.optionalKey(AmbientVideoPresentationMode),
+  ambientVideoKeepAboveContent: Schema.optionalKey(Schema.Boolean),
   timestampFormat: Schema.optionalKey(TimestampFormat),
   chatCopyFormat: Schema.optionalKey(ChatCopyFormat),
 });
