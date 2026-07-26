@@ -776,11 +776,71 @@ function createSnapshotWithSecondaryProject(options?: {
   };
 }
 
-function createSnapshotWithPendingUserInput(): OrchestrationReadModel {
+function createSnapshotWithPendingUserInput(options?: {
+  sessionStatus?: OrchestrationSessionStatus;
+  // Multi-select questions have no auto-advance on option click, so the
+  // footer Submit button (the form submit path through onSend/onSteer) is the
+  // only way to deliver the structured answer. Submit-gating tests need this
+  // shape to prove the button path dispatches.
+  multiSelect?: boolean;
+}): OrchestrationReadModel {
   const snapshot = createSnapshotForTargetUser({
     targetMessageId: "msg-user-pending-input-target" as MessageId,
     targetText: "question thread",
+    ...(options?.sessionStatus ? { sessionStatus: options.sessionStatus } : {}),
   });
+
+  const questions = options?.multiSelect
+    ? [
+        {
+          id: "scope",
+          header: "Scope",
+          question: "Which areas should this change cover?",
+          multiSelect: true,
+          options: [
+            {
+              label: "Tight",
+              description: "Touch only the footer layout logic.",
+            },
+            {
+              label: "Broad",
+              description: "Also adjust the related composer controls.",
+            },
+          ],
+        },
+      ]
+    : [
+        {
+          id: "scope",
+          header: "Scope",
+          question: "What should this change cover?",
+          options: [
+            {
+              label: "Tight",
+              description: "Touch only the footer layout logic.",
+            },
+            {
+              label: "Broad",
+              description: "Also adjust the related composer controls.",
+            },
+          ],
+        },
+        {
+          id: "risk",
+          header: "Risk",
+          question: "How aggressive should the imaginary plan be?",
+          options: [
+            {
+              label: "Conservative",
+              description: "Favor reliability and low-risk changes.",
+            },
+            {
+              label: "Balanced",
+              description: "Mix quick wins with one structural improvement.",
+            },
+          ],
+        },
+      ];
 
   return {
     ...snapshot,
@@ -796,38 +856,7 @@ function createSnapshotWithPendingUserInput(): OrchestrationReadModel {
                 summary: "User input requested",
                 payload: {
                   requestId: "req-browser-user-input",
-                  questions: [
-                    {
-                      id: "scope",
-                      header: "Scope",
-                      question: "What should this change cover?",
-                      options: [
-                        {
-                          label: "Tight",
-                          description: "Touch only the footer layout logic.",
-                        },
-                        {
-                          label: "Broad",
-                          description: "Also adjust the related composer controls.",
-                        },
-                      ],
-                    },
-                    {
-                      id: "risk",
-                      header: "Risk",
-                      question: "How aggressive should the imaginary plan be?",
-                      options: [
-                        {
-                          label: "Conservative",
-                          description: "Favor reliability and low-risk changes.",
-                        },
-                        {
-                          label: "Balanced",
-                          description: "Mix quick wins with one structural improvement.",
-                        },
-                      ],
-                    },
-                  ],
+                  questions,
                 },
                 turnId: null,
                 sequence: 1,
@@ -5751,6 +5780,254 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
           },
           { timeout: 8_000, interval: 16 },
         );
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
+    it("submits a pending user-input answer while the provider session is still connecting", async () => {
+      // Session status "starting" maps to the renderer "connecting" phase,
+      // which disables the ordinary composer editor and used to silently
+      // swallow pending-answer submits in the onSend busy gates. The
+      // multi-select question has no auto-advance, so the footer Submit
+      // button is the only submit affordance.
+      const mounted = await mountChatView({
+        viewport: WIDE_FOOTER_VIEWPORT,
+        snapshot: createSnapshotWithPendingUserInput({
+          sessionStatus: "starting",
+          multiSelect: true,
+        }),
+        resolveRpc: (body) => {
+          if (body._tag === ORCHESTRATION_WS_METHODS.dispatchCommand) {
+            return {
+              sequence: fixture.snapshot.snapshotSequence + 1,
+            };
+          }
+          return undefined;
+        },
+      });
+
+      try {
+        // Precondition for the regression: the connecting phase is active
+        // (ordinary composer editor disabled) while the pending card renders.
+        await waitForElement(
+          () =>
+            document.querySelector<HTMLElement>(
+              '[data-testid="composer-editor"][contenteditable="false"]',
+            ),
+          "Expected the composer editor to be disabled while the session is connecting.",
+        );
+
+        const option = await waitForButtonContainingText("Tight");
+        option.click();
+
+        const submitButton = await waitForButtonByText("Submit answer");
+        await vi.waitFor(
+          () => {
+            expect(submitButton.disabled).toBe(false);
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+        submitButton.click();
+
+        await vi.waitFor(
+          () => {
+            const respondRequests = wsRequests.filter(
+              (request) =>
+                request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+                request.type === "thread.user-input.respond",
+            );
+            expect(respondRequests).toHaveLength(1);
+            expect(respondRequests[0]).toMatchObject({
+              requestId: "req-browser-user-input",
+              answers: { scope: ["Tight"] },
+            });
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+
+        // The structured answer must never fall through into the ordinary
+        // send path and start a second chat turn.
+        const turnStartRequests = wsRequests.filter(
+          (request) =>
+            request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+            request.type === "thread.turn.start",
+        );
+        expect(turnStartRequests).toHaveLength(0);
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
+    it("keeps a failed pending user-input submit visible and retryable while connecting", async () => {
+      let respondAttempts = 0;
+      const mounted = await mountChatView({
+        viewport: WIDE_FOOTER_VIEWPORT,
+        snapshot: createSnapshotWithPendingUserInput({
+          sessionStatus: "starting",
+          multiSelect: true,
+        }),
+        resolveRpc: (body) => {
+          if (
+            body._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+            body.type === "thread.user-input.respond"
+          ) {
+            respondAttempts += 1;
+            // Definitive (non-transport-shaped) failure: the idempotent
+            // dispatch wrapper must not auto-retry it, so each attempt here
+            // is one user-visible submit.
+            return Promise.reject(new Error("Injected user-input respond failure."));
+          }
+          if (body._tag === ORCHESTRATION_WS_METHODS.dispatchCommand) {
+            return {
+              sequence: fixture.snapshot.snapshotSequence + 1,
+            };
+          }
+          return undefined;
+        },
+      });
+
+      try {
+        const option = await waitForButtonContainingText("Tight");
+        option.click();
+
+        const submitButton = await waitForButtonByText("Submit answer");
+        await vi.waitFor(
+          () => {
+            expect(submitButton.disabled).toBe(false);
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+        submitButton.click();
+
+        await vi.waitFor(
+          () => {
+            expect(respondAttempts).toBe(1);
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+
+        // The failure surfaces visibly instead of silently dropping the
+        // answer, and the pending card survives for a retry.
+        await waitForElement(
+          () => document.querySelector<HTMLButtonElement>('button[aria-label="Dismiss error"]'),
+          "Expected a visible thread error after the respond dispatch failed.",
+        );
+        const retryButton = await waitForButtonByText("Submit answer");
+        await vi.waitFor(
+          () => {
+            expect(retryButton.disabled).toBe(false);
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+        retryButton.click();
+
+        await vi.waitFor(
+          () => {
+            expect(respondAttempts).toBe(2);
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
+    it("dedupes repeated pending user-input submits while a respond dispatch is in flight", async () => {
+      const mounted = await mountChatView({
+        viewport: WIDE_FOOTER_VIEWPORT,
+        snapshot: createSnapshotWithPendingUserInput({ multiSelect: true }),
+        configureFixture: (currentFixture) => {
+          // The steer shortcut only resolves through configured keybindings,
+          // so provide the default mod+enter rule to exercise the onSteer
+          // pending-answer path from the keyboard.
+          currentFixture.serverConfig = {
+            ...currentFixture.serverConfig,
+            keybindings: [
+              {
+                command: "composer.steer",
+                shortcut: {
+                  key: "enter",
+                  metaKey: false,
+                  ctrlKey: false,
+                  shiftKey: false,
+                  altKey: false,
+                  modKey: true,
+                },
+                whenAst: { type: "identifier", name: "composerFocused" },
+              },
+            ],
+          };
+        },
+        resolveRpc: (body) => {
+          if (
+            body._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+            body.type === "thread.user-input.respond"
+          ) {
+            // Hold the respond in flight so follow-up submits race against
+            // an unresolved dispatch.
+            return new Promise(() => {});
+          }
+          if (body._tag === ORCHESTRATION_WS_METHODS.dispatchCommand) {
+            return {
+              sequence: fixture.snapshot.snapshotSequence + 1,
+            };
+          }
+          return undefined;
+        },
+      });
+
+      try {
+        const option = await waitForButtonContainingText("Tight");
+        option.click();
+
+        const submitButton = await waitForButtonByText("Submit answer");
+        await vi.waitFor(
+          () => {
+            expect(submitButton.disabled).toBe(false);
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+        submitButton.click();
+
+        // First dispatch is now held in flight.
+        await waitForButtonByText("Submitting...");
+
+        // Keyboard submits bypass the disabled Submit button: bare Enter goes
+        // through onSend, mod+Enter through onSteer. Both must dedupe against
+        // the in-flight respond instead of dispatching duplicates.
+        const composerEditor = await waitForComposerEditor();
+        composerEditor.focus();
+        const useMetaForMod = isMacPlatform(navigator.platform);
+        composerEditor.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            key: "Enter",
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+        composerEditor.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            key: "Enter",
+            metaKey: useMetaForMod,
+            ctrlKey: !useMetaForMod,
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+        const disabledSubmitButton = await waitForButtonByText("Submitting...");
+        disabledSubmitButton.click();
+
+        // Let any duplicate dispatch cross the mock transport before
+        // asserting the count stayed at one.
+        await new Promise((resolve) => window.setTimeout(resolve, 300));
+        const respondRequests = wsRequests.filter(
+          (request) =>
+            request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+            request.type === "thread.user-input.respond",
+        );
+        expect(respondRequests).toHaveLength(1);
+        await waitForButtonByText("Submitting...");
       } finally {
         await mounted.cleanup();
       }

@@ -1858,6 +1858,11 @@ export default function ChatView(props: ChatViewProps) {
   const [respondingUserInputRequestIds, setRespondingUserInputRequestIds] = useState<
     ApprovalRequestId[]
   >([]);
+  // Synchronous mirror of `respondingUserInputRequestIds` for the in-flight
+  // dedupe guard in onRespondToUserInput. Keyboard submits can re-enter that
+  // path before React flushes the state update, so the guard cannot rely on
+  // the rendered state alone.
+  const respondingUserInputRequestIdsRef = useRef<ApprovalRequestId[]>([]);
   const [pendingUserInputAnswersByRequestId, setPendingUserInputAnswersByRequestId] = useState<
     Record<string, Record<string, PendingUserInputDraftAnswer>>
   >({});
@@ -4948,6 +4953,21 @@ export default function ChatView(props: ChatViewProps) {
 
   const onSend = async (e?: { preventDefault: () => void }) => {
     e?.preventDefault();
+    // A visible pending user-input card owns the composer's submit action, so
+    // route submits to the structured-answer path before the ordinary send
+    // gates below. Those gates exist for starting/steering chat turns; a
+    // structured answer responds to an existing provider request and never
+    // starts a turn, and it must stay submittable while the composer is busy
+    // or the provider session is reconnecting — the pending Submit button
+    // stays enabled in those states, and gating first used to swallow the
+    // click silently (multi-select questions have no other submit
+    // affordance). Validation, per-request in-flight dedupe, and failure
+    // surfacing are owned by onAdvanceActivePendingUserInput /
+    // onRespondToUserInput.
+    if (activePendingProgress) {
+      onAdvanceActivePendingUserInput();
+      return;
+    }
     const api = readEnvironmentApi(environmentId);
     if (
       !api ||
@@ -4958,10 +4978,6 @@ export default function ChatView(props: ChatViewProps) {
       sendInFlightRef.current
     )
       return;
-    if (activePendingProgress) {
-      onAdvanceActivePendingUserInput();
-      return;
-    }
     const snapshot = readComposerSnapshotForDispatch();
     if (!snapshot) return;
     const {
@@ -5212,6 +5228,14 @@ export default function ChatView(props: ChatViewProps) {
 
   const onSteer = async (e?: { preventDefault: () => void }) => {
     e?.preventDefault();
+    // Mirror onSend: with a pending user-input card visible, the steer
+    // shortcut is just another way to submit the structured answer. Handle it
+    // before the steer gates so a busy or reconnecting composer cannot
+    // silently drop the submit (see onSend for the full rationale).
+    if (activePendingProgress) {
+      onAdvanceActivePendingUserInput();
+      return;
+    }
     if (
       !activeThread ||
       isSendBusy ||
@@ -5219,10 +5243,6 @@ export default function ChatView(props: ChatViewProps) {
       activeEnvironmentUnavailable ||
       sendInFlightRef.current
     ) {
-      return;
-    }
-    if (activePendingProgress) {
-      onAdvanceActivePendingUserInput();
       return;
     }
     const snapshot = readComposerSnapshotForDispatch();
@@ -5585,28 +5605,62 @@ export default function ChatView(props: ChatViewProps) {
 
   const onRespondToUserInput = useCallback(
     async (requestId: ApprovalRequestId, answers: Record<string, unknown>) => {
+      if (!activeThreadId) return;
+      // One respond dispatch per request at a time. The pending-card Submit
+      // button disables while responding, but keyboard submits (Enter /
+      // mod+Enter) re-enter this path without reading the button state, and a
+      // duplicate `thread.user-input.respond` for the same requestId would
+      // race the provider's single-use input callback.
+      if (respondingUserInputRequestIdsRef.current.includes(requestId)) {
+        return;
+      }
       const api = readEnvironmentApi(environmentId);
-      if (!api || !activeThreadId) return;
+      if (!api) {
+        // No live transport for this environment (e.g. the renderer is
+        // between reconnect attempts). Dropping the submit silently would
+        // leave a visibly enabled Submit button doing nothing, so surface a
+        // retryable error instead. The pending card only clears on a server
+        // `user-input.resolved` event, so submitting again after reconnect
+        // still works.
+        setThreadError(
+          activeThreadId,
+          "Couldn't submit the answer — no connection to the environment. Try again once it reconnects.",
+        );
+        return;
+      }
 
+      respondingUserInputRequestIdsRef.current = [
+        ...respondingUserInputRequestIdsRef.current,
+        requestId,
+      ];
       setRespondingUserInputRequestIds((existing) =>
         existing.includes(requestId) ? existing : [...existing, requestId],
       );
-      await api.orchestration
-        .dispatchCommand({
+      try {
+        await api.orchestration.dispatchCommand({
           type: "thread.user-input.respond",
           commandId: newCommandId(),
           threadId: activeThreadId,
           requestId,
           answers,
           createdAt: new Date().toISOString(),
-        })
-        .catch((err: unknown) => {
-          setThreadError(
-            activeThreadId,
-            err instanceof Error ? err.message : "Failed to submit user input.",
-          );
         });
-      setRespondingUserInputRequestIds((existing) => existing.filter((id) => id !== requestId));
+      } catch (err: unknown) {
+        // Keep failures visible and retryable: describeSendFailureMessage maps
+        // transport-drop fiber interruptions to an actionable message that
+        // survives sanitizeThreadErrorMessage. A try/catch/finally also
+        // covers a transport implementation that throws synchronously before
+        // returning its promise.
+        setThreadError(
+          activeThreadId,
+          describeSendFailureMessage(err, "Failed to submit user input."),
+        );
+      } finally {
+        respondingUserInputRequestIdsRef.current = respondingUserInputRequestIdsRef.current.filter(
+          (id) => id !== requestId,
+        );
+        setRespondingUserInputRequestIds((existing) => existing.filter((id) => id !== requestId));
+      }
     },
     [activeThreadId, environmentId, setThreadError],
   );
