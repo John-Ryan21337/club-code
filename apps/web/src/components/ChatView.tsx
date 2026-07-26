@@ -164,6 +164,7 @@ import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { MessagesTimeline } from "./chat/MessagesTimeline";
 import type { SubagentDetailSelection } from "./chat/SubagentDetailView";
 import { useTaskAtriumStore } from "./atrium/taskAtriumStore";
+import { ProjectTelemetryGraph } from "./chat/ProjectTelemetryGraph";
 import {
   isTimelineScrolledToEnd,
   shouldPreserveTimelineScrollReviewIntent,
@@ -6404,6 +6405,13 @@ export default function ChatView(props: ChatViewProps) {
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           {/* Messages Wrapper */}
           <div className="relative flex min-h-0 flex-1 flex-col">
+            {activeProject ? (
+              <ProjectTelemetryGraph
+                environmentId={activeProject.environmentId}
+                projectId={activeProject.id}
+                projectName={activeProject.name}
+              />
+            ) : null}
             {/* Messages — LegendList handles virtualization and scrolling internally */}
             <MessagesTimeline
               key={activeThread.id}

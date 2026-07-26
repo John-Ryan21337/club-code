@@ -940,7 +940,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
 
   if (rows.length === 0 && !isWorking && resolvedSelectedSubagent === null) {
     return (
-      <div className="flex h-full items-center justify-center">
+      <div className="flex min-h-0 flex-1 items-center justify-center">
         <p className="text-sm text-muted-foreground/30">
           Send a message to start the conversation.
         </p>
@@ -949,7 +949,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   }
 
   return (
-    <div className="relative h-full min-h-0 min-w-0 overflow-hidden">
+    <div className="relative min-h-0 min-w-0 flex-1 overflow-hidden">
       <TimelineRowCtx value={sharedState}>
         <TimelineRowActivityCtx value={activityState}>
           <div
