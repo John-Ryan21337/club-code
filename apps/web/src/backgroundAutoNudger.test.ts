@@ -171,6 +171,52 @@ describe("background auto nudge controller", () => {
     }
   });
 
+  it("reloads only relevant storage events and removes its shared listener on reset", () => {
+    const { storage } = storageFixture();
+    const storageListeners: Array<(event: { readonly key: string | null }) => void> = [];
+    vi.stubGlobal("window", {
+      localStorage: storage,
+      addEventListener: (
+        type: string,
+        listener: (event: { readonly key: string | null }) => void,
+      ) => {
+        if (type === "storage") storageListeners.push(listener);
+      },
+      removeEventListener: (
+        type: string,
+        listener: (event: { readonly key: string | null }) => void,
+      ) => {
+        if (type !== "storage") return;
+        const index = storageListeners.indexOf(listener);
+        if (index >= 0) storageListeners.splice(index, 1);
+      },
+    });
+
+    try {
+      __resetBackgroundAutoNudgeControllerForTests();
+      const observingWindow = getBackgroundAutoNudgeController();
+      let notifications = 0;
+      observingWindow.subscribe(() => {
+        notifications += 1;
+      });
+      expect(storageListeners).toHaveLength(1);
+
+      storageListeners[0]?.({ key: "unrelated.setting" });
+      expect(notifications).toBe(0);
+
+      new BackgroundAutoNudgeController(storage).start(owner, null, startedAt);
+      storageListeners[0]?.({ key: null });
+      expect(notifications).toBe(1);
+      expect(observingWindow.getSnapshot()).toMatchObject({ owner, status: "active" });
+
+      __resetBackgroundAutoNudgeControllerForTests();
+      expect(storageListeners).toHaveLength(0);
+    } finally {
+      __resetBackgroundAutoNudgeControllerForTests();
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("stays active while its dispatched turn is starting", () => {
     const controller = new BackgroundAutoNudgeController(null);
     controller.start(owner, "2026-07-23T23:59:00.000Z", startedAt);
