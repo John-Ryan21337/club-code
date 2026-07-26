@@ -17,6 +17,7 @@ export function AutoNudgeControl(props: {
   mode: AutoNudgeMode;
   countdownSeconds: number | null;
   disabled: boolean;
+  arming: boolean;
   backgroundEnabled: boolean;
   backgroundDispatchSupported: boolean;
   backgroundOwnedByThisThread: boolean;
@@ -33,12 +34,17 @@ export function AutoNudgeControl(props: {
   onStop: () => void;
 }) {
   const isActive = props.mode !== "off";
-  const status =
-    props.countdownSeconds === null
-      ? isActive
-        ? "Armed for the next safely settled turn"
-        : "Off"
-      : `Next nudge in ${props.countdownSeconds}s`;
+  const status = props.arming
+    ? "Saving mode"
+    : props.backgroundOwnedByThisThread
+      ? "Foreground paused while background owns this thread"
+      : props.disabled
+        ? "Unavailable for this thread"
+        : props.countdownSeconds === null
+          ? isActive
+            ? "Armed for the next safely settled turn"
+            : "Off"
+          : `Next nudge in ${props.countdownSeconds}s`;
 
   return (
     <div
@@ -46,7 +52,9 @@ export function AutoNudgeControl(props: {
       data-auto-nudge-control="true"
     >
       <div className="min-w-0">
-        <div className="font-medium text-foreground">Auto nudge - {status}</div>
+        <div className="font-medium text-foreground" aria-live="polite">
+          Auto nudge - {status}
+        </div>
         <p className="mt-0.5 text-muted-foreground">
           Mode is saved device-wide. Background continuation is opt-in, owns one thread, and stops
           at {props.backgroundMaxRounds} rounds or {props.backgroundMaxMinutes} minutes.
@@ -133,7 +141,7 @@ export function AutoNudgeControl(props: {
             Start new bounded run
           </Button>
         ) : null}
-        {isActive ? (
+        {isActive || props.arming ? (
           <Button type="button" size="sm" variant="outline" onClick={props.onStop}>
             Stop
           </Button>

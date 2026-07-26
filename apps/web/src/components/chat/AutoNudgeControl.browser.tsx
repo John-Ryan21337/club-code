@@ -13,6 +13,7 @@ function renderControl(overrides: Partial<ComponentProps<typeof AutoNudgeControl
       mode="steady-progress"
       countdownSeconds={null}
       disabled={false}
+      arming={false}
       backgroundEnabled={false}
       backgroundDispatchSupported
       backgroundOwnedByThisThread={false}
@@ -51,5 +52,15 @@ describe("AutoNudgeControl", () => {
       .element(page.getByRole("switch", { name: "Continue this thread in background" }))
       .toHaveAttribute("aria-disabled", "true");
     expect(onBackgroundChange).not.toHaveBeenCalled();
+  });
+
+  it("keeps Stop available while an enable write is still pending", async () => {
+    const onStop = vi.fn();
+    await renderControl({ mode: "off", disabled: true, arming: true, onStop });
+
+    await expect.element(page.getByText("Auto nudge - Saving mode")).toBeVisible();
+    await page.getByRole("button", { name: "Stop" }).click();
+
+    expect(onStop).toHaveBeenCalledTimes(1);
   });
 });
