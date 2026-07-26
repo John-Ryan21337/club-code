@@ -33,4 +33,33 @@ describe("desktop whole-window always-on-top contracts", () => {
       reason: "safe-reset-failed",
     });
   });
+
+  it("represents observed native state drift without collapsing it into saved intent", () => {
+    expect(
+      decodeState({
+        supported: true,
+        enabled: true,
+        effectiveEnabled: false,
+        reason: "native-state-mismatch",
+      }),
+    ).toEqual({
+      supported: true,
+      enabled: true,
+      effectiveEnabled: false,
+      reason: "native-state-mismatch",
+    });
+    expect(
+      decodeState({
+        supported: true,
+        enabled: true,
+        effectiveEnabled: null,
+        reason: "native-state-unconfirmed",
+      }),
+    ).toEqual({
+      supported: true,
+      enabled: true,
+      effectiveEnabled: null,
+      reason: "native-state-unconfirmed",
+    });
+  });
 });

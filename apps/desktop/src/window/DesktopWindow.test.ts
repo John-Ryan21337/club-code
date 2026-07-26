@@ -144,6 +144,7 @@ const makeDesktopEnvironmentLayer = (platform: NodeJS.Platform = environmentInpu
 
 function makeTestLayer(input: {
   readonly window: Electron.BrowserWindow;
+  readonly windows?: readonly Electron.BrowserWindow[];
   readonly createCount: Ref.Ref<number>;
   readonly mainWindow: Ref.Ref<Option.Option<Electron.BrowserWindow>>;
   readonly initialSettings?: DesktopAppSettings.DesktopSettings;
@@ -160,7 +161,8 @@ function makeTestLayer(input: {
     reveal: () => Effect.void,
     sendAll: () => Effect.void,
     destroyAll: Effect.void,
-    syncAllAppearance: (sync) => sync(input.window),
+    syncAllAppearance: (sync) =>
+      Effect.forEach(input.windows ?? [input.window], sync, { discard: true }),
   } satisfies ElectronWindow.ElectronWindowShape);
   const desktopSettingsLayer =
     input.settings === undefined
@@ -202,6 +204,62 @@ describe("DesktopWindow", () => {
       reason: "unsupported-platform",
     });
   });
+
+  it.effect(
+    "reports observed native state instead of treating saved intent as effective state",
+    () =>
+      Effect.gen(function* () {
+        const fakeWindow = makeFakeBrowserWindow();
+        const createCount = yield* Ref.make(0);
+        const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+        const layer = makeTestLayer({
+          window: fakeWindow.window,
+          createCount,
+          mainWindow,
+          initialSettings: {
+            ...DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS,
+            windowAlwaysOnTopEnabled: true,
+          },
+        });
+
+        yield* Effect.gen(function* () {
+          const desktopWindow = yield* DesktopWindow.DesktopWindow;
+          assert.deepEqual(yield* desktopWindow.getWindowAlwaysOnTopState, {
+            supported: true,
+            enabled: true,
+            effectiveEnabled: false,
+            reason: "native-state-mismatch",
+          });
+          assert.equal(fakeWindow.setAlwaysOnTop.mock.calls.length, 0);
+        }).pipe(Effect.provide(layer));
+      }),
+  );
+
+  it.effect("reports mixed live-window state as unconfirmed", () =>
+    Effect.gen(function* () {
+      const firstWindow = makeFakeBrowserWindow();
+      const secondWindow = makeFakeBrowserWindow();
+      secondWindow.isAlwaysOnTop.mockReturnValue(true);
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const layer = makeTestLayer({
+        window: firstWindow.window,
+        windows: [firstWindow.window, secondWindow.window],
+        createCount,
+        mainWindow,
+      });
+
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        assert.deepEqual(yield* desktopWindow.getWindowAlwaysOnTopState, {
+          supported: true,
+          enabled: false,
+          effectiveEnabled: null,
+          reason: "native-state-unconfirmed",
+        });
+      }).pipe(Effect.provide(layer));
+    }),
+  );
 
   it.effect("does not open a development window until the backend is ready", () =>
     Effect.gen(function* () {
@@ -291,6 +349,83 @@ describe("DesktopWindow", () => {
           [true, "floating"],
           [false, "floating"],
         ]);
+      }).pipe(Effect.provide(layer));
+    }),
+  );
+
+  it.effect("visits and safely resets every live window after a partial apply failure", () =>
+    Effect.gen(function* () {
+      const firstWindow = makeFakeBrowserWindow();
+      const secondWindow = makeFakeBrowserWindow();
+      secondWindow.setAlwaysOnTop.mockImplementationOnce(() => {
+        throw new Error("second window rejected topmost");
+      });
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const layer = makeTestLayer({
+        window: firstWindow.window,
+        windows: [firstWindow.window, secondWindow.window],
+        createCount,
+        mainWindow,
+      });
+
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        assert.deepEqual(yield* desktopWindow.setWindowAlwaysOnTopPreference({ enabled: true }), {
+          supported: true,
+          enabled: false,
+          effectiveEnabled: false,
+          reason: "apply-failed",
+        });
+        assert.deepEqual(firstWindow.setAlwaysOnTop.mock.calls, [
+          [true, "floating"],
+          [false, "floating"],
+        ]);
+        assert.deepEqual(secondWindow.setAlwaysOnTop.mock.calls, [
+          [true, "floating"],
+          [false, "floating"],
+        ]);
+        assert.isFalse(firstWindow.isAlwaysOnTop());
+        assert.isFalse(secondWindow.isAlwaysOnTop());
+      }).pipe(Effect.provide(layer));
+    }),
+  );
+
+  it.effect("continues a safe reset after one window rejects the reset", () =>
+    Effect.gen(function* () {
+      const firstWindow = makeFakeBrowserWindow();
+      const secondWindow = makeFakeBrowserWindow();
+      firstWindow.setAlwaysOnTop.mockImplementation((enabled: boolean) => {
+        if (!enabled) {
+          throw new Error("first window rejected safe reset");
+        }
+        firstWindow.isAlwaysOnTop.mockReturnValue(true);
+      });
+      secondWindow.setAlwaysOnTop.mockImplementationOnce(() => {
+        throw new Error("second window rejected topmost");
+      });
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const layer = makeTestLayer({
+        window: firstWindow.window,
+        windows: [firstWindow.window, secondWindow.window],
+        createCount,
+        mainWindow,
+      });
+
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        assert.deepEqual(yield* desktopWindow.setWindowAlwaysOnTopPreference({ enabled: true }), {
+          supported: true,
+          enabled: false,
+          effectiveEnabled: null,
+          reason: "safe-reset-failed",
+        });
+        assert.deepEqual(secondWindow.setAlwaysOnTop.mock.calls, [
+          [true, "floating"],
+          [false, "floating"],
+        ]);
+        assert.isFalse(secondWindow.isAlwaysOnTop());
       }).pipe(Effect.provide(layer));
     }),
   );

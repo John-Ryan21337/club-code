@@ -243,11 +243,77 @@ const make = Effect.gen(function* () {
     reason: alwaysOnTopCapability.supported ? reason : alwaysOnTopCapability.reason,
   });
 
+  /**
+   * Visit every live window even when one native call fails. Stopping at the
+   * first failure can leave a later window topmost after Cafe reports that it
+   * restored normal stacking.
+   */
   const applyAllWindowAlwaysOnTop = (enabled: boolean) =>
-    electronWindow.syncAllAppearance((window) => applyWindowAlwaysOnTop(window, enabled));
+    Effect.gen(function* () {
+      let succeeded = true;
+      yield* electronWindow.syncAllAppearance((window) =>
+        applyWindowAlwaysOnTop(window, enabled).pipe(
+          Effect.match({
+            onFailure: () => {
+              succeeded = false;
+            },
+            onSuccess: () => undefined,
+          }),
+        ),
+      );
+      return succeeded;
+    });
+
+  const observeAllWindowAlwaysOnTop = Effect.gen(function* () {
+    let observedWindowCount = 0;
+    let enabledWindowCount = 0;
+    let readFailed = false;
+
+    yield* electronWindow.syncAllAppearance((window) =>
+      Effect.try({
+        try: () => window.isAlwaysOnTop(),
+        catch: (cause) => cause,
+      }).pipe(
+        Effect.match({
+          onFailure: () => {
+            readFailed = true;
+          },
+          onSuccess: (enabled) => {
+            observedWindowCount += 1;
+            if (enabled) {
+              enabledWindowCount += 1;
+            }
+          },
+        }),
+      ),
+    );
+
+    if (
+      readFailed ||
+      observedWindowCount === 0 ||
+      (enabledWindowCount !== 0 && enabledWindowCount !== observedWindowCount)
+    ) {
+      return null;
+    }
+    return enabledWindowCount === observedWindowCount;
+  });
 
   const getWindowAlwaysOnTopState = alwaysOnTopMutex.withPermits(1)(
-    desktopSettings.get.pipe(Effect.map((settings) => alwaysOnTopState(settings))),
+    Effect.gen(function* () {
+      const settings = yield* desktopSettings.get;
+      if (!alwaysOnTopCapability.supported) {
+        return alwaysOnTopState(settings);
+      }
+
+      const effectiveEnabled = yield* observeAllWindowAlwaysOnTop;
+      const reason =
+        effectiveEnabled === null
+          ? "native-state-unconfirmed"
+          : effectiveEnabled === settings.windowAlwaysOnTopEnabled
+            ? null
+            : "native-state-mismatch";
+      return alwaysOnTopState(settings, reason, effectiveEnabled);
+    }),
   );
 
   const persistSafeAlwaysOnTopPreference = desktopSettings.setWindowAlwaysOnTopPreference({
@@ -265,8 +331,8 @@ const make = Effect.gen(function* () {
       return alwaysOnTopState(yield* desktopSettings.get);
     }
 
-    if (!(yield* effectSucceeded(applyAllWindowAlwaysOnTop(preference.enabled)))) {
-      const resetSucceeded = yield* effectSucceeded(applyAllWindowAlwaysOnTop(false));
+    if (!(yield* applyAllWindowAlwaysOnTop(preference.enabled))) {
+      const resetSucceeded = yield* applyAllWindowAlwaysOnTop(false);
       const safeSettingsSucceeded = yield* effectSucceeded(persistSafeAlwaysOnTopPreference);
       return alwaysOnTopState(
         yield* desktopSettings.get,
@@ -279,7 +345,7 @@ const make = Effect.gen(function* () {
       return alwaysOnTopState(yield* desktopSettings.get, null, preference.enabled);
     }
 
-    const resetSucceeded = yield* effectSucceeded(applyAllWindowAlwaysOnTop(false));
+    const resetSucceeded = yield* applyAllWindowAlwaysOnTop(false);
     const safeSettingsSucceeded = yield* effectSucceeded(persistSafeAlwaysOnTopPreference);
     return alwaysOnTopState(
       yield* desktopSettings.get,

@@ -327,6 +327,8 @@ export const DesktopWindowAlwaysOnTopReasonSchema = Schema.NullOr(
     "apply-failed",
     "persistence-failed",
     "safe-reset-failed",
+    "native-state-mismatch",
+    "native-state-unconfirmed",
   ]),
 );
 export type DesktopWindowAlwaysOnTopReason = typeof DesktopWindowAlwaysOnTopReasonSchema.Type;
