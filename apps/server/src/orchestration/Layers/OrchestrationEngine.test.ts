@@ -463,6 +463,7 @@ describe("OrchestrationEngine", () => {
         },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
+        dispatchSource: "auto-nudge",
         createdAt: "2026-01-01T00:00:01.000Z",
       }),
     );
