@@ -2163,6 +2163,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   // ------------------------------------------------------------------
   const addComposerImages = (files: File[]) => {
     if (!activeThreadId || files.length === 0) return;
+    onManualActivity?.();
     if (pendingUserInputs.length > 0) {
       toastManager.add({
         type: "error",
@@ -2207,6 +2208,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   };
 
   const removeComposerImage = (imageId: string) => {
+    onManualActivity?.();
     removeComposerImageFromDraft(imageId);
   };
 
