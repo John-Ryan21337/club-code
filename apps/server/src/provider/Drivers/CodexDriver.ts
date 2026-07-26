@@ -110,7 +110,11 @@ const withInstanceIdentity =
     ...(input.accentColor ? { accentColor: input.accentColor } : {}),
     ...(input.authActions ? { authActions: input.authActions } : {}),
     continuation: { groupKey: input.continuationGroupKey },
-    runtimeCapabilities: { ...snapshot.runtimeCapabilities, liveSteer: "supported" },
+    runtimeCapabilities: {
+      ...snapshot.runtimeCapabilities,
+      liveSteer: "supported",
+      threadGoals: "supported",
+    },
   });
 
 function sanitizeShadowHomeSegment(value: string): string {

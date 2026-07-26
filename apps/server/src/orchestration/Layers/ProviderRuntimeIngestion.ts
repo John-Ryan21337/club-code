@@ -106,9 +106,9 @@ const STREAMING_ASSISTANT_PUNCTUATION_FLUSH_REGEX = /[.!?。！？]\s*$/u;
 const STRICT_PROVIDER_LIFECYCLE_GUARD =
   readCafeCodeEnv(process.env, "CAFE_CODE_STRICT_PROVIDER_LIFECYCLE_GUARD") !== "0";
 
-type TurnStartRequestedDomainEvent = Extract<
+type RuntimeIngestionDomainEvent = Extract<
   OrchestrationEvent,
-  { type: "thread.turn-start-requested" }
+  { type: "thread.turn-start-requested" | "thread.goal-synced" }
 >;
 
 type RuntimeIngestionInput =
@@ -118,7 +118,7 @@ type RuntimeIngestionInput =
     }
   | {
       source: "domain";
-      event: TurnStartRequestedDomainEvent;
+      event: RuntimeIngestionDomainEvent;
     };
 
 function toTurnId(value: TurnId | string | undefined): TurnId | undefined {
@@ -870,6 +870,10 @@ const make = Effect.gen(function* () {
   const serverSettingsService = yield* ServerSettingsService;
   let lastPersistedProviderDaemonCursor = 0;
   let pendingProviderDaemonCursor = 0;
+  // Codex app-server owns goal continuation and emits the next turn itself.
+  // This bounded set bridges the intentional gap between one turn completing
+  // and the next goal turn starting, without manufacturing a Cafe prompt.
+  const activeGoalThreadIds = new Set<string>();
 
   const persistProviderDaemonCursor = (
     cursor: number,
@@ -1742,6 +1746,51 @@ const make = Effect.gen(function* () {
       const now = event.createdAt;
       const eventTurnId = toTurnId(event.turnId);
       const activeTurnId = thread.session?.activeTurnId ?? null;
+
+      if (event.type === "thread.goal.updated" || event.type === "thread.goal.cleared") {
+        const goalIsActive =
+          event.type === "thread.goal.updated" && event.payload.goal.status === "active";
+        if (goalIsActive) {
+          activeGoalThreadIds.add(thread.id);
+        } else {
+          activeGoalThreadIds.delete(thread.id);
+        }
+        yield* orchestrationEngine.dispatch({
+          type: "thread.goal.sync",
+          commandId: providerCommandId(event, "thread-goal-sync"),
+          threadId: thread.id,
+          goal: event.type === "thread.goal.updated" ? event.payload.goal : null,
+          createdAt: now,
+        });
+        const currentSession = thread.session;
+        if (currentSession !== null && activeTurnId === null) {
+          const nextStatus =
+            goalIsActive &&
+            (currentSession.status === "ready" || currentSession.status === "interrupted")
+              ? ("starting" as const)
+              : !goalIsActive && currentSession.status === "starting"
+                ? ("ready" as const)
+                : null;
+          if (nextStatus !== null) {
+            yield* orchestrationEngine.dispatch({
+              type: "thread.session.set",
+              commandId: providerCommandId(event, "thread-goal-session-state"),
+              threadId: thread.id,
+              session: {
+                ...currentSession,
+                status: nextStatus,
+                activeTurnId: null,
+                lastError: null,
+                updatedAt: now,
+              },
+              createdAt: now,
+            });
+          }
+        }
+      }
+
+      const activeGoalContinuationExpected = activeGoalThreadIds.has(thread.id);
+
       const terminalTurnRecovery =
         event.type === "turn.started" &&
         event.raw?.source === "codex.app-server.notification" &&
@@ -1918,6 +1967,13 @@ const make = Effect.gen(function* () {
               if (sessionRelevantThreadState === "idle" && nextActiveTurnId !== null) {
                 return "running";
               }
+              if (
+                sessionRelevantThreadState === "idle" &&
+                activeGoalContinuationExpected &&
+                event.provider === "codex"
+              ) {
+                return "starting";
+              }
               if (sessionRelevantThreadState === "idle" && hasPendingTurnStart) {
                 return "starting";
               }
@@ -1941,7 +1997,9 @@ const make = Effect.gen(function* () {
             case "turn.completed":
               return normalizeRuntimeTurnState(event.payload.state) === "failed"
                 ? "error"
-                : "ready";
+                : activeGoalContinuationExpected && event.provider === "codex"
+                  ? "starting"
+                  : "ready";
             case "session.started":
             case "thread.started":
               // Provider thread/session start notifications can arrive during an
@@ -1963,7 +2021,7 @@ const make = Effect.gen(function* () {
                 : event.type === "turn.completed" &&
                     normalizeRuntimeTurnState(event.payload.state) === "failed"
                   ? (event.payload.errorMessage ?? thread.session?.lastError ?? "Turn failed")
-                  : status === "ready"
+                  : status === "ready" || status === "starting"
                     ? null
                     : (thread.session?.lastError ?? null);
 
@@ -2350,7 +2408,17 @@ const make = Effect.gen(function* () {
       ).pipe(Effect.asVoid);
     });
 
-  const processDomainEvent = (_event: TurnStartRequestedDomainEvent) => Effect.void;
+  const processDomainEvent = (event: RuntimeIngestionDomainEvent) =>
+    Effect.sync(() => {
+      if (event.type !== "thread.goal-synced") {
+        return;
+      }
+      if (event.payload.goal?.status === "active") {
+        activeGoalThreadIds.add(event.payload.threadId);
+      } else {
+        activeGoalThreadIds.delete(event.payload.threadId);
+      }
+    });
 
   const processRuntimeEventOnce = (event: ProviderRuntimeEvent) =>
     Effect.gen(function* () {
@@ -2425,6 +2493,23 @@ const make = Effect.gen(function* () {
 
   const start: ProviderRuntimeIngestionShape["start"] = () =>
     Effect.gen(function* () {
+      // Rehydrate the bounded process-local continuation index from the
+      // message-free command read model. Loading thread detail on every token
+      // event would put a SQLite query on the provider streaming hot path.
+      yield* Effect.gen(function* () {
+        const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+        for (const thread of readModel.threads) {
+          if (thread.goal?.status === "active") {
+            activeGoalThreadIds.add(thread.id);
+          }
+        }
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("provider goal continuation index hydration failed", {
+            cause: Cause.pretty(cause),
+          }),
+        ),
+      );
       yield* Effect.forkScoped(
         Stream.runForEach(providerService.streamEvents, (event) =>
           worker.enqueue({ source: "runtime", event }),
@@ -2432,7 +2517,7 @@ const make = Effect.gen(function* () {
       );
       yield* Effect.forkScoped(
         Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
-          if (event.type !== "thread.turn-start-requested") {
+          if (event.type !== "thread.turn-start-requested" && event.type !== "thread.goal-synced") {
             return Effect.void;
           }
           return worker.enqueue({ source: "domain", event });

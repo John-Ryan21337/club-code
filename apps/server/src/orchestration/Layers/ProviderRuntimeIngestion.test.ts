@@ -389,6 +389,102 @@ describe("ProviderRuntimeIngestion", () => {
     expect(thread.session?.lastError).toBe("turn failed");
   });
 
+  it("keeps an active Codex goal non-idle across provider-owned continuation turns", async () => {
+    const harness = await createHarness();
+    const startedAt = "2026-01-01T00:00:01.000Z";
+    const completedAt = "2026-01-01T00:00:02.000Z";
+    const goalCompletedAt = "2026-01-01T00:00:03.000Z";
+
+    harness.emit({
+      type: "thread.goal.updated",
+      eventId: asEventId("evt-goal-active"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: startedAt,
+      payload: {
+        goal: {
+          threadId: asThreadId("thread-1"),
+          objective: "Finish the proof",
+          status: "active",
+          tokenBudget: null,
+          tokensUsed: 0,
+          timeUsedSeconds: 0,
+          createdAt: startedAt,
+          updatedAt: startedAt,
+        },
+      },
+    });
+
+    await waitForThread(
+      harness.readModel,
+      (thread) => thread.goal?.status === "active" && thread.session?.status === "starting",
+    );
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-goal-turn-started"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: startedAt,
+      turnId: asTurnId("goal-turn-1"),
+    });
+
+    await waitForThread(
+      harness.readModel,
+      (thread) =>
+        thread.session?.status === "running" && thread.session.activeTurnId === "goal-turn-1",
+    );
+
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-goal-turn-completed"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: completedAt,
+      turnId: asTurnId("goal-turn-1"),
+      payload: { state: "completed" },
+    });
+
+    await waitForThread(
+      harness.readModel,
+      (thread) =>
+        thread.goal?.status === "active" &&
+        thread.session?.status === "starting" &&
+        thread.session.activeTurnId === null,
+    );
+
+    harness.emit({
+      type: "thread.goal.updated",
+      eventId: asEventId("evt-goal-complete"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: goalCompletedAt,
+      payload: {
+        goal: {
+          threadId: asThreadId("thread-1"),
+          objective: "Finish the proof",
+          status: "complete",
+          tokenBudget: null,
+          tokensUsed: 512,
+          timeUsedSeconds: 2,
+          createdAt: startedAt,
+          updatedAt: goalCompletedAt,
+        },
+      },
+    });
+
+    const thread = await waitForThread(
+      harness.readModel,
+      (entry) => entry.goal?.status === "complete" && entry.session?.status === "ready",
+    );
+    expect(thread.goal).toMatchObject({
+      objective: "Finish the proof",
+      status: "complete",
+      tokensUsed: 512,
+      timeUsedSeconds: 2,
+    });
+  });
+
   it("publishes provider turn ingestion quiescence after processing turn completion", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";

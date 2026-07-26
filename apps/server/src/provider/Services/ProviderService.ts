@@ -21,6 +21,11 @@ import type {
   ProviderSendTurnInput,
   ProviderSession,
   ProviderSessionStartInput,
+  ProviderThreadGoal,
+  ProviderThreadGoalClearInput,
+  ProviderThreadGoalClearResult,
+  ProviderThreadGoalGetInput,
+  ProviderThreadGoalSetInput,
   ServerProviderRuntimeRestartInput,
   ProviderSteerTurnInput,
   ProviderStopSessionInput,
@@ -130,6 +135,27 @@ export interface ProviderServiceShape {
   readonly getInstanceInfo: (
     instanceId: ProviderInstanceId,
   ) => Effect.Effect<ProviderInstanceRoutingInfo, ProviderServiceError>;
+
+  /**
+   * Read a provider-owned durable goal for a Cafe thread.
+   */
+  readonly getGoal?: (
+    input: ProviderThreadGoalGetInput,
+  ) => Effect.Effect<ProviderThreadGoal | null, ProviderServiceError>;
+
+  /**
+   * Create or update a provider-owned durable goal.
+   */
+  readonly setGoal?: (
+    input: ProviderThreadGoalSetInput,
+  ) => Effect.Effect<ProviderThreadGoal, ProviderServiceError>;
+
+  /**
+   * Clear a provider-owned durable goal.
+   */
+  readonly clearGoal?: (
+    input: ProviderThreadGoalClearInput,
+  ) => Effect.Effect<ProviderThreadGoalClearResult, ProviderServiceError>;
 
   /**
    * Read provider-owned thread history for the selected Cafe thread.

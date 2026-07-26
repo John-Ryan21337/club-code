@@ -17,6 +17,9 @@ import type {
   ProviderSession,
   ProviderSessionStartInput,
   ProviderSteerTurnInput,
+  ProviderThreadGoal,
+  ProviderThreadGoalClearResult,
+  ProviderThreadGoalSetInput,
   ThreadId,
   ProviderTurnSteerResult,
   ProviderTurnStartResult,
@@ -27,6 +30,7 @@ import type * as Stream from "effect/Stream";
 
 export type ProviderSessionModelSwitchMode = "in-session" | "unsupported";
 export type ProviderLiveSteerSupport = "supported" | "unsupported";
+export type ProviderThreadGoalSupport = "supported" | "unsupported";
 
 export interface ProviderAdapterCapabilities {
   /**
@@ -37,6 +41,13 @@ export interface ProviderAdapterCapabilities {
    * Declares whether the adapter accepts user guidance while a turn is already running.
    */
   readonly liveSteer: ProviderLiveSteerSupport;
+  /**
+   * Declares whether this provider exposes Codex-style durable thread goals.
+   *
+   * This remains optional while decoding adapters built before the goal
+   * capability existed; absence is always interpreted as unsupported.
+   */
+  readonly threadGoals?: ProviderThreadGoalSupport;
 }
 
 export interface ProviderThreadTurnSnapshot {
@@ -108,6 +119,26 @@ export interface ProviderAdapterShape<TError> {
    * Stop one provider session.
    */
   readonly stopSession: (threadId: ThreadId) => Effect.Effect<void, TError>;
+
+  /**
+   * Read the provider-owned goal for a materialized thread.
+   *
+   * Goal methods are present only when `threadGoals` is supported. The
+   * provider-native thread id must remain encapsulated by the adapter.
+   */
+  readonly getGoal?: (threadId: ThreadId) => Effect.Effect<ProviderThreadGoal | null, TError>;
+
+  /**
+   * Create or update a provider-owned goal.
+   */
+  readonly setGoal?: (
+    input: ProviderThreadGoalSetInput,
+  ) => Effect.Effect<ProviderThreadGoal, TError>;
+
+  /**
+   * Clear a provider-owned goal.
+   */
+  readonly clearGoal?: (threadId: ThreadId) => Effect.Effect<ProviderThreadGoalClearResult, TError>;
 
   /**
    * List currently active provider sessions for this adapter.

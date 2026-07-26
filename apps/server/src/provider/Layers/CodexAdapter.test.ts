@@ -14,6 +14,8 @@ import {
   type ProviderApprovalDecision,
   type ProviderEvent,
   type ProviderSession,
+  type ProviderThreadGoal,
+  type ProviderThreadGoalSetInput,
   type ProviderTurnStartResult,
   type ProviderUserInputAnswers,
   ThreadId,
@@ -149,6 +151,23 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
   interruptTurn(turnId?: TurnId) {
     return Effect.promise(() => this.interruptTurnImpl(turnId));
   }
+
+  getGoal = Effect.succeed<ProviderThreadGoal | null>(null);
+
+  setGoal(input: Omit<ProviderThreadGoalSetInput, "threadId">) {
+    return Effect.succeed({
+      threadId: this.options.threadId,
+      objective: input.objective ?? "Test goal",
+      status: input.status ?? "active",
+      tokenBudget: input.tokenBudget ?? null,
+      tokensUsed: 0,
+      timeUsedSeconds: 0,
+      createdAt: this.now,
+      updatedAt: this.now,
+    } satisfies ProviderThreadGoal);
+  }
+
+  clearGoal = Effect.succeed({ cleared: true });
 
   readThread = Effect.promise(() => this.readThreadImpl());
 

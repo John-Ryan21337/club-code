@@ -10,6 +10,9 @@ import {
   type ProviderInteractionMode,
   type ProviderRequestKind,
   type ProviderSession,
+  ProviderThreadGoal,
+  type ProviderThreadGoalClearResult,
+  type ProviderThreadGoalSetInput,
   type ProviderTurnSteerResult,
   type ProviderTurnStartResult,
   type ProviderUserInputAnswers,
@@ -60,6 +63,7 @@ import {
 const decodeV2TurnStartResponse = Schema.decodeUnknownEffect(EffectCodexSchema.V2TurnStartResponse);
 const decodeV2TurnSteerParams = Schema.decodeUnknownEffect(EffectCodexSchema.V2TurnSteerParams);
 const decodeV2TurnSteerResponse = Schema.decodeUnknownEffect(EffectCodexSchema.V2TurnSteerResponse);
+const decodeProviderThreadGoal = Schema.decodeUnknownEffect(ProviderThreadGoal);
 
 const PROVIDER = ProviderDriverKind.make("codex");
 
@@ -321,6 +325,11 @@ export interface CodexSessionRuntimeShape {
     input: CodexSessionRuntimeSteerTurnInput,
   ) => Effect.Effect<ProviderTurnSteerResult, CodexSessionRuntimeError>;
   readonly interruptTurn: (turnId?: TurnId) => Effect.Effect<void, CodexSessionRuntimeError>;
+  readonly getGoal: Effect.Effect<ProviderThreadGoal | null, CodexSessionRuntimeError>;
+  readonly setGoal: (
+    input: Omit<ProviderThreadGoalSetInput, "threadId">,
+  ) => Effect.Effect<ProviderThreadGoal, CodexSessionRuntimeError>;
+  readonly clearGoal: Effect.Effect<ProviderThreadGoalClearResult, CodexSessionRuntimeError>;
   readonly readThread: Effect.Effect<CodexThreadSnapshot, CodexSessionRuntimeError>;
   readonly rollbackThread: (
     numTurns: number,
@@ -1674,10 +1683,35 @@ function shouldSuppressChildConversationNotification(method: string): boolean {
     method === "thread/compacted" ||
     method === "thread/name/updated" ||
     method === "thread/tokenUsage/updated" ||
+    method === "thread/goal/updated" ||
+    method === "thread/goal/cleared" ||
     method === "turn/started" ||
     method === "turn/completed" ||
     method === "turn/plan/updated" ||
     method === "item/plan/delta"
+  );
+}
+
+export function shouldForwardCodexRootGoalNotification(
+  notification: CodexServerNotification,
+  rootProviderThreadId: string | undefined,
+): boolean {
+  if (
+    notification.method !== "thread/goal/updated" &&
+    notification.method !== "thread/goal/cleared"
+  ) {
+    return true;
+  }
+
+  // The TUI keeps each provider thread on a separate event channel. Cafe
+  // aggregates child-agent channels into one visible thread, so it must add
+  // this explicit root check before canonicalizing a goal. Otherwise a child
+  // thread goal could overwrite the parent goal projection.
+  const notificationThreadId = readNotificationThreadId(notification);
+  return (
+    rootProviderThreadId !== undefined &&
+    notificationThreadId !== undefined &&
+    notificationThreadId === rootProviderThreadId
   );
 }
 
@@ -2082,6 +2116,31 @@ function timestampSecondsToIso(timestampSeconds: number | null | undefined): str
     return undefined;
   }
   return DateTime.formatIso(DateTime.makeUnsafe(timestampSeconds * 1_000));
+}
+
+function normalizeCodexThreadGoal(
+  goal:
+    | EffectCodexSchema.V2ThreadGoalGetResponse__ThreadGoal
+    | EffectCodexSchema.V2ThreadGoalSetResponse__ThreadGoal
+    | EffectCodexSchema.V2ThreadGoalUpdatedNotification__ThreadGoal,
+  cafeThreadId: ThreadId,
+): Effect.Effect<ProviderThreadGoal, CodexSessionRuntimeError> {
+  const createdAt = timestampSecondsToIso(goal.createdAt);
+  const updatedAt = timestampSecondsToIso(goal.updatedAt);
+  return decodeProviderThreadGoal({
+    threadId: cafeThreadId,
+    objective: goal.objective,
+    status: goal.status,
+    tokenBudget: goal.tokenBudget ?? null,
+    tokensUsed: goal.tokensUsed,
+    timeUsedSeconds: goal.timeUsedSeconds,
+    createdAt,
+    updatedAt,
+  }).pipe(
+    Effect.mapError((error) =>
+      toProtocolParseError("Invalid thread goal payload from Codex app-server", error),
+    ),
+  );
 }
 
 function timestampSecondsToMillis(
@@ -3896,6 +3955,9 @@ export const makeCodexSessionRuntime = (
         const payload = notification.params;
         const route = readCodexNotificationRouteFields(notification);
         const rootProviderThreadId = yield* currentSessionProviderThreadId;
+        if (!shouldForwardCodexRootGoalNotification(notification, rootProviderThreadId)) {
+          return;
+        }
         const collabReceiverTurns = new Map(yield* Ref.get(collabReceiverTurnsRef));
         const childRoute = resolveCodexChildConversationNotification(
           collabReceiverTurns,
@@ -4864,7 +4926,71 @@ export const makeCodexSessionRuntime = (
               }),
             ),
           );
+          // Upstream Codex TUI pauses an active goal when the user interrupts
+          // the current task. Cafe awaits this update before its adapter may
+          // retire the app-server process, otherwise a restart can revive a
+          // goal the user explicitly stopped.
+          yield* Effect.gen(function* () {
+            const response = yield* client.request("thread/goal/get", {
+              threadId: providerThreadId,
+            });
+            if (response.goal?.status !== "active") {
+              return;
+            }
+            yield* client.request("thread/goal/set", {
+              threadId: providerThreadId,
+              status: "paused",
+            });
+          }).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("codex.goal.pause-after-interrupt-failed", {
+                threadId: options.threadId,
+                providerInstanceId: options.providerInstanceId ?? PROVIDER,
+                cause: Cause.pretty(cause),
+              }).pipe(
+                Effect.andThen(
+                  emitEvent({
+                    kind: "notification",
+                    threadId: options.threadId,
+                    method: "thread/goal/pauseFailed",
+                    message:
+                      "Codex stopped the turn, but the active goal could not be paused. Cafe Code will resynchronize it on the next session start.",
+                    payload: {
+                      operation: "pause-after-user-interrupt",
+                      willRetryOnSessionStart: true,
+                    },
+                  }),
+                ),
+              ),
+            ),
+          );
         }),
+      getGoal: Effect.gen(function* () {
+        const providerThreadId = yield* readProviderThreadId;
+        const response = yield* client.request("thread/goal/get", {
+          threadId: providerThreadId,
+        });
+        return response.goal
+          ? yield* normalizeCodexThreadGoal(response.goal, options.threadId)
+          : null;
+      }),
+      setGoal: (input) =>
+        Effect.gen(function* () {
+          const providerThreadId = yield* readProviderThreadId;
+          const response = yield* client.request("thread/goal/set", {
+            threadId: providerThreadId,
+            ...(input.objective !== undefined ? { objective: input.objective } : {}),
+            ...(input.status !== undefined ? { status: input.status } : {}),
+            ...(input.tokenBudget !== undefined ? { tokenBudget: input.tokenBudget } : {}),
+          });
+          return yield* normalizeCodexThreadGoal(response.goal, options.threadId);
+        }),
+      clearGoal: Effect.gen(function* () {
+        const providerThreadId = yield* readProviderThreadId;
+        return yield* client.request("thread/goal/clear", {
+          threadId: providerThreadId,
+        });
+      }),
       readThread: Effect.gen(function* () {
         const providerThreadId = yield* readProviderThreadId;
         const response = yield* client.request("thread/read", {

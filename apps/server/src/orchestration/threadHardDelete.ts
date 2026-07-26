@@ -128,6 +128,10 @@ export const hardDeleteThreadLocalData = Effect.fn("hardDeleteThreadLocalData")(
         WHERE thread_id = ${input.threadId}
       `;
       yield* sql`
+        DELETE FROM projection_thread_goals
+        WHERE thread_id = ${input.threadId}
+      `;
+      yield* sql`
         DELETE FROM projection_pending_approvals
         WHERE thread_id = ${input.threadId}
       `;

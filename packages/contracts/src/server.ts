@@ -209,8 +209,14 @@ export type ServerProviderAvailability = typeof ServerProviderAvailability.Type;
 export const ServerProviderLiveSteerSupport = Schema.Literals(["supported", "unsupported"]);
 export type ServerProviderLiveSteerSupport = typeof ServerProviderLiveSteerSupport.Type;
 
+export const ServerProviderThreadGoalSupport = Schema.Literals(["supported", "unsupported"]);
+export type ServerProviderThreadGoalSupport = typeof ServerProviderThreadGoalSupport.Type;
+
 export const ServerProviderRuntimeCapabilities = Schema.Struct({
   liveSteer: ServerProviderLiveSteerSupport.pipe(
+    Schema.withDecodingDefault(Effect.succeed("unsupported" as const)),
+  ),
+  threadGoals: ServerProviderThreadGoalSupport.pipe(
     Schema.withDecodingDefault(Effect.succeed("unsupported" as const)),
   ),
 });

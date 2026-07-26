@@ -816,6 +816,99 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    case "thread.goal.set": {
+      const thread = yield* requireThreadNotArchived({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      if (
+        command.objective === undefined &&
+        command.status === undefined &&
+        command.tokenBudget === undefined
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "A goal update must change objective, status, or token budget.",
+        });
+      }
+      if (
+        command.replaceExisting === true &&
+        (command.objective === undefined || command.objective === null)
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Replacing a goal requires a new objective.",
+        });
+      }
+      if (
+        command.expectedUpdatedAt !== undefined &&
+        command.expectedUpdatedAt !== (thread.goal?.updatedAt ?? null)
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail:
+            "The provider goal changed after this editor opened. Refresh the goal and apply the change again.",
+        });
+      }
+      return {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.goal-set-requested",
+        payload: {
+          threadId: command.threadId,
+          ...(command.objective !== undefined ? { objective: command.objective } : {}),
+          ...(command.status !== undefined ? { status: command.status } : {}),
+          ...(command.tokenBudget !== undefined ? { tokenBudget: command.tokenBudget } : {}),
+          ...(command.replaceExisting !== undefined
+            ? { replaceExisting: command.replaceExisting }
+            : {}),
+          ...(command.expectedUpdatedAt !== undefined
+            ? { expectedUpdatedAt: command.expectedUpdatedAt }
+            : {}),
+          createdAt: command.createdAt,
+        },
+      };
+    }
+
+    case "thread.goal.clear": {
+      const thread = yield* requireThreadNotArchived({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      if (
+        command.expectedUpdatedAt !== undefined &&
+        command.expectedUpdatedAt !== (thread.goal?.updatedAt ?? null)
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail:
+            "The provider goal changed after this editor opened. Refresh the goal before clearing it.",
+        });
+      }
+      return {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.goal-clear-requested",
+        payload: {
+          threadId: command.threadId,
+          ...(command.expectedUpdatedAt !== undefined
+            ? { expectedUpdatedAt: command.expectedUpdatedAt }
+            : {}),
+          createdAt: command.createdAt,
+        },
+      };
+    }
+
     case "thread.session.set": {
       yield* requireThread({
         readModel,
@@ -837,6 +930,33 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ...(command.terminalTurnRecovery !== undefined
             ? { terminalTurnRecovery: command.terminalTurnRecovery }
             : {}),
+        },
+      };
+    }
+
+    case "thread.goal.sync": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      if (command.goal !== null && command.goal.threadId !== command.threadId) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: "Provider goal thread identity does not match the Cafe thread.",
+        });
+      }
+      return {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.goal-synced",
+        payload: {
+          threadId: command.threadId,
+          goal: command.goal,
         },
       };
     }

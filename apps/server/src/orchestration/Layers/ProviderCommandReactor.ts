@@ -74,7 +74,9 @@ type ProviderIntentEvent = Extract<
       | "thread.turn-steer-requested"
       | "thread.approval-response-requested"
       | "thread.user-input-response-requested"
-      | "thread.session-stop-requested";
+      | "thread.session-stop-requested"
+      | "thread.goal-set-requested"
+      | "thread.goal-clear-requested";
   }
 >;
 
@@ -498,7 +500,10 @@ const make = Effect.gen(function* () {
       | "provider.turn.interrupt.failed"
       | "provider.approval.respond.failed"
       | "provider.user-input.respond.failed"
-      | "provider.session.stop.failed";
+      | "provider.session.stop.failed"
+      | "provider.goal.set.failed"
+      | "provider.goal.clear.failed"
+      | "provider.goal.replace.failed";
     readonly summary: string;
     readonly detail: string;
     readonly turnId: TurnId | null;
@@ -689,6 +694,44 @@ const make = Effect.gen(function* () {
     },
   );
 
+  const resumeActiveCodexGoalsOnStartup = Effect.fn("resumeActiveCodexGoalsOnStartup")(
+    function* () {
+      const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+      const activeGoalThreads = readModel.threads.filter(
+        (thread) =>
+          thread.deletedAt === null &&
+          thread.archivedAt === null &&
+          thread.goal?.status === "active",
+      );
+      yield* Effect.forEach(
+        activeGoalThreads,
+        (thread) =>
+          Effect.gen(function* () {
+            const instanceId =
+              thread.session?.providerInstanceId ?? thread.modelSelection.instanceId;
+            const capabilities = yield* providerService.getCapabilities(instanceId);
+            if (capabilities.threadGoals !== "supported") {
+              return;
+            }
+            // Codex app-server owns automatic continuation. Materializing or
+            // adopting the session is sufficient; Cafe must never manufacture
+            // a hidden continuation prompt from the goal objective.
+            yield* ensureSessionForThread(thread.id, thread.goal!.updatedAt, { thread });
+          }).pipe(
+            Effect.catchCause(() =>
+              Effect.logWarning("provider goal resume failed during startup", {
+                threadId: thread.id,
+                providerInstanceId:
+                  thread.session?.providerInstanceId ?? thread.modelSelection.instanceId,
+                // Goal objectives are user content and are deliberately absent.
+              }),
+            ),
+          ),
+        { concurrency: 2, discard: true },
+      );
+    },
+  );
+
   const ensureSessionForThread = Effect.fn("ensureSessionForThread")(function* (
     threadId: ThreadId,
     createdAt: string,
@@ -821,6 +864,40 @@ const make = Effect.gen(function* () {
         runtimeMode: desiredRuntimeMode,
       });
 
+    const syncGoalAfterSessionMaterialization = (session: ProviderSession) =>
+      Effect.gen(function* () {
+        if (session.providerInstanceId === undefined || providerService.getGoal === undefined) {
+          return;
+        }
+        const capabilities = yield* providerService.getCapabilities(session.providerInstanceId);
+        if (capabilities.threadGoals !== "supported") {
+          return;
+        }
+
+        // Keep the startup read and any immediately following goal mutation on
+        // the reactor's serial command path. Sending a synthetic snapshot
+        // through the independent provider-event bridge can let a delayed
+        // pre-mutation "no goal" observation erase a newer RPC response.
+        const goal = yield* providerService.getGoal({ threadId });
+        const observedAt = DateTime.formatIso(yield* DateTime.now);
+        yield* orchestrationEngine.dispatch({
+          type: "thread.goal.sync",
+          commandId: CommandId.make(`provider-goal-session-sync:${crypto.randomUUID()}`),
+          threadId,
+          goal,
+          createdAt: observedAt,
+        });
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("provider goal session materialization sync failed", {
+            threadId,
+            provider: session.provider,
+            providerInstanceId: session.providerInstanceId,
+            cause: Cause.pretty(cause),
+          }),
+        ),
+      );
+
     const bindSessionToThread = (session: ProviderSession) =>
       Effect.gen(function* () {
         if (session.providerInstanceId === undefined) {
@@ -848,6 +925,7 @@ const make = Effect.gen(function* () {
           },
           createdAt,
         });
+        yield* syncGoalAfterSessionMaterialization(session);
       });
 
     const existingSessionThreadId =
@@ -2381,6 +2459,150 @@ const make = Effect.gen(function* () {
     });
   });
 
+  const appendGoalOperationFailure = (input: {
+    readonly threadId: ThreadId;
+    readonly operation: "set" | "clear" | "replace";
+    readonly createdAt: string;
+    readonly unsupported?: boolean;
+  }) =>
+    appendProviderFailureActivity({
+      threadId: input.threadId,
+      kind: `provider.goal.${input.operation}.failed`,
+      summary:
+        input.operation === "clear"
+          ? "Goal was not cleared"
+          : input.operation === "replace"
+            ? "Goal replacement was not completed"
+            : "Goal update was not applied",
+      detail:
+        input.unsupported === true
+          ? "This provider does not expose Codex-compatible durable goal controls."
+          : input.operation === "replace"
+            ? "The provider did not complete the ordered clear-and-create replacement. The synchronized goal state will follow the provider's authoritative notifications."
+            : "The provider did not apply the goal operation. The previously synchronized goal state was left unchanged.",
+      turnId: null,
+      createdAt: input.createdAt,
+    });
+
+  const requireGoalServiceForThread = Effect.fn("requireGoalServiceForThread")(function* (
+    thread: OrchestrationThread,
+    createdAt: string,
+  ) {
+    const instanceId = thread.session?.providerInstanceId ?? thread.modelSelection.instanceId;
+    const capabilities = yield* providerService.getCapabilities(instanceId);
+    if (
+      capabilities.threadGoals !== "supported" ||
+      providerService.getGoal === undefined ||
+      providerService.setGoal === undefined ||
+      providerService.clearGoal === undefined
+    ) {
+      return null;
+    }
+    yield* ensureSessionForThread(thread.id, createdAt, { thread });
+    return {
+      getGoal: providerService.getGoal,
+      setGoal: providerService.setGoal,
+      clearGoal: providerService.clearGoal,
+    };
+  });
+
+  const processGoalSetRequested = Effect.fn("processGoalSetRequested")(function* (
+    event: Extract<ProviderIntentEvent, { type: "thread.goal-set-requested" }>,
+  ) {
+    const thread = yield* resolveThread(event.payload.threadId);
+    if (!thread) {
+      return;
+    }
+    const goalService = yield* requireGoalServiceForThread(thread, event.payload.createdAt);
+    if (goalService === null) {
+      yield* appendGoalOperationFailure({
+        threadId: thread.id,
+        operation: "set",
+        createdAt: event.payload.createdAt,
+        unsupported: true,
+      });
+      return;
+    }
+    const replaceExisting = event.payload.replaceExisting === true;
+    const applyGoalUpdate = Effect.gen(function* () {
+      const goalSetInput = replaceExisting
+        ? yield* goalService.clearGoal({ threadId: thread.id }).pipe(
+            Effect.as({
+              threadId: thread.id,
+              objective: event.payload.objective!,
+              status: "active" as const,
+              tokenBudget: null,
+            }),
+          )
+        : {
+            threadId: thread.id,
+            ...(event.payload.objective !== undefined
+              ? { objective: event.payload.objective }
+              : {}),
+            ...(event.payload.status !== undefined ? { status: event.payload.status } : {}),
+            ...(event.payload.tokenBudget !== undefined
+              ? { tokenBudget: event.payload.tokenBudget }
+              : {}),
+          };
+      return yield* goalService.setGoal(goalSetInput);
+    });
+    yield* applyGoalUpdate.pipe(
+      Effect.flatMap((goal) =>
+        orchestrationEngine.dispatch({
+          type: "thread.goal.sync",
+          commandId: CommandId.make(`provider-goal-set:${event.eventId}`),
+          threadId: thread.id,
+          goal,
+          createdAt: goal.updatedAt,
+        }),
+      ),
+      Effect.catchCause(() =>
+        appendGoalOperationFailure({
+          threadId: thread.id,
+          operation: replaceExisting ? "replace" : "set",
+          createdAt: event.payload.createdAt,
+        }),
+      ),
+    );
+  });
+
+  const processGoalClearRequested = Effect.fn("processGoalClearRequested")(function* (
+    event: Extract<ProviderIntentEvent, { type: "thread.goal-clear-requested" }>,
+  ) {
+    const thread = yield* resolveThread(event.payload.threadId);
+    if (!thread) {
+      return;
+    }
+    const goalService = yield* requireGoalServiceForThread(thread, event.payload.createdAt);
+    if (goalService === null) {
+      yield* appendGoalOperationFailure({
+        threadId: thread.id,
+        operation: "clear",
+        createdAt: event.payload.createdAt,
+        unsupported: true,
+      });
+      return;
+    }
+    yield* goalService.clearGoal({ threadId: thread.id }).pipe(
+      Effect.flatMap(() =>
+        orchestrationEngine.dispatch({
+          type: "thread.goal.sync",
+          commandId: CommandId.make(`provider-goal-clear:${event.eventId}`),
+          threadId: thread.id,
+          goal: null,
+          createdAt: event.payload.createdAt,
+        }),
+      ),
+      Effect.catchCause(() =>
+        appendGoalOperationFailure({
+          threadId: thread.id,
+          operation: "clear",
+          createdAt: event.payload.createdAt,
+        }),
+      ),
+    );
+  });
+
   const processDomainEvent = Effect.fn("processDomainEvent")(function* (
     event: ProviderIntentEvent,
   ) {
@@ -2425,6 +2647,12 @@ const make = Effect.gen(function* () {
       case "thread.session-stop-requested":
         yield* processSessionStopRequested(event);
         return;
+      case "thread.goal-set-requested":
+        yield* processGoalSetRequested(event);
+        return;
+      case "thread.goal-clear-requested":
+        yield* processGoalClearRequested(event);
+        return;
     }
   });
 
@@ -2460,6 +2688,13 @@ const make = Effect.gen(function* () {
         ),
       ),
     );
+    yield* resumeActiveCodexGoalsOnStartup().pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("provider command reactor failed to resume active goals", {
+          cause: Cause.pretty(cause),
+        }),
+      ),
+    );
 
     const processEvent = Effect.fn("processEvent")(function* (event: OrchestrationEvent) {
       if (
@@ -2469,7 +2704,9 @@ const make = Effect.gen(function* () {
         event.type === "thread.turn-steer-requested" ||
         event.type === "thread.approval-response-requested" ||
         event.type === "thread.user-input-response-requested" ||
-        event.type === "thread.session-stop-requested"
+        event.type === "thread.session-stop-requested" ||
+        event.type === "thread.goal-set-requested" ||
+        event.type === "thread.goal-clear-requested"
       ) {
         return yield* worker.enqueue(event);
       }

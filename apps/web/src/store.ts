@@ -275,6 +275,7 @@ function mapThread(thread: OrchestrationThread, environmentId: EnvironmentId): T
     worktreePath: thread.worktreePath,
     turnDiffSummaries: thread.checkpoints.map(mapTurnDiffSummary),
     activities: thread.activities.map((activity) => ({ ...activity })),
+    goal: thread.goal ?? null,
   };
 }
 
@@ -418,6 +419,10 @@ function cloneThreadContextForDuplicate(input: {
     pendingSourceProposedPlan: latestTurn?.sourceProposedPlan,
     session: null,
     error: null,
+    // A duplicate carries visible conversation context into a fresh provider
+    // session. Provider-owned goal continuation state must never cross that
+    // new session boundary.
+    goal: null,
     messages: sourceThread.messages.map((message) => ({
       ...message,
       id: copiedThreadScopedId(targetThread.id, message.id) as MessageId,
@@ -1741,6 +1746,7 @@ function applyEnvironmentOrchestrationEvent(
           activities: [],
           checkpoints: [],
           session: null,
+          goal: null,
         },
         environmentId,
       );
@@ -1853,6 +1859,13 @@ function applyEnvironmentOrchestrationEvent(
         ...thread,
         interactionMode: event.payload.interactionMode,
         updatedAt: event.payload.updatedAt,
+      }));
+
+    case "thread.goal-synced":
+      return updateThreadState(state, event.payload.threadId, (thread) => ({
+        ...thread,
+        goal: event.payload.goal,
+        updatedAt: event.occurredAt,
       }));
 
     case "thread.turn-start-requested":

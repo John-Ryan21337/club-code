@@ -76,6 +76,8 @@ const MUTATING_RPC_METHODS = new Set<ProviderDaemonRpcRequest["method"]>([
   "respondToUserInput",
   "stopSession",
   "restartProviderRuntime",
+  "setGoal",
+  "clearGoal",
   "rollbackConversation",
 ]);
 const PROVIDER_DAEMON_REPLAY_OVERLAP_EVENTS = 1_000;
@@ -388,6 +390,9 @@ const makeRemoteProviderService = Effect.gen(function* () {
       rpc(daemonConfig, { method: "getInstanceInfo", payload: { instanceId } }).pipe(
         Effect.map((info) => decodeInstanceRoutingInfo(info) as ProviderInstanceRoutingInfo),
       ),
+    getGoal: (input) => rpc(daemonConfig, { method: "getGoal", payload: input }),
+    setGoal: (input) => rpc(daemonConfig, { method: "setGoal", payload: input }),
+    clearGoal: (input) => rpc(daemonConfig, { method: "clearGoal", payload: input }),
     rollbackConversation: (input) =>
       rpc(daemonConfig, { method: "rollbackConversation", payload: input }),
     get streamEvents(): ProviderServiceShape["streamEvents"] {

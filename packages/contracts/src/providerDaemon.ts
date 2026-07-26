@@ -13,6 +13,13 @@ import {
   ProviderTurnSteerResult,
   ProviderTurnStartResult,
 } from "./provider.ts";
+import {
+  ProviderThreadGoal,
+  ProviderThreadGoalClearInput,
+  ProviderThreadGoalClearResult,
+  ProviderThreadGoalGetInput,
+  ProviderThreadGoalSetInput,
+} from "./providerGoal.ts";
 import { ProviderRuntimeEvent } from "./providerRuntime.ts";
 import { ProviderPipelineDiagnostics } from "./providerPipelineDiagnostics.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
@@ -369,6 +376,10 @@ export type ProviderDaemonLeaseResponse = typeof ProviderDaemonLeaseResponse.Typ
 export const ProviderDaemonAdapterCapabilities = Schema.Struct({
   sessionModelSwitch: Schema.Literals(["in-session", "unsupported"]),
   liveSteer: Schema.Literals(["supported", "unsupported"]),
+  // Optional on the wire so a newly built desktop can still interrogate an
+  // adopted daemon from before goal capability negotiation existed. Missing
+  // always means unsupported.
+  threadGoals: Schema.optional(Schema.Literals(["supported", "unsupported"])),
 });
 export type ProviderDaemonAdapterCapabilities = typeof ProviderDaemonAdapterCapabilities.Type;
 
@@ -492,6 +503,20 @@ export const ProviderDaemonRpcRequest = Schema.Union([
     payload: GetInstanceInfoPayload,
   }),
   Schema.Struct({
+    method: Schema.Literal("getGoal"),
+    payload: ProviderThreadGoalGetInput,
+  }),
+  Schema.Struct({
+    method: Schema.Literal("setGoal"),
+    commandId: Schema.optional(ProviderDaemonCommandId),
+    payload: ProviderThreadGoalSetInput,
+  }),
+  Schema.Struct({
+    method: Schema.Literal("clearGoal"),
+    commandId: Schema.optional(ProviderDaemonCommandId),
+    payload: ProviderThreadGoalClearInput,
+  }),
+  Schema.Struct({
     method: Schema.Literal("rollbackConversation"),
     commandId: Schema.optional(ProviderDaemonCommandId),
     payload: RollbackConversationPayload,
@@ -511,5 +536,8 @@ export const ProviderDaemonRpcResultByMethod = {
   listSessions: Schema.Array(ProviderSession),
   getCapabilities: ProviderDaemonAdapterCapabilities,
   getInstanceInfo: ProviderDaemonInstanceRoutingInfo,
+  getGoal: Schema.NullOr(ProviderThreadGoal),
+  setGoal: ProviderThreadGoal,
+  clearGoal: ProviderThreadGoalClearResult,
   rollbackConversation: Schema.Void,
 } as const;

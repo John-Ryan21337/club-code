@@ -232,7 +232,10 @@ export function buildServerProvider(input: {
     slashCommands: [...(input.slashCommands ?? [])],
     skills: [...(input.skills ?? [])],
     ...(input.probe.accountRateLimits ? { accountRateLimits: input.probe.accountRateLimits } : {}),
-    runtimeCapabilities: input.runtimeCapabilities ?? { liveSteer: "unsupported" },
+    runtimeCapabilities: input.runtimeCapabilities ?? {
+      liveSteer: "unsupported",
+      threadGoals: "unsupported",
+    },
     ...(versionAdvisory ? { versionAdvisory } : {}),
   };
 }
