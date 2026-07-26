@@ -19,6 +19,7 @@ import { InitialBackendBootstrapSurface } from "../components/InitialBackendBoot
 import { OnboardingSurface } from "../components/OnboardingSurface";
 import { DesktopNotificationWatcher } from "../components/DesktopNotificationWatcher";
 import { ProviderUpdateLaunchNotification } from "../components/ProviderUpdateLaunchNotification";
+import { WindowAtmosphere } from "../components/WindowAtmosphere";
 import {
   WebSocketConnectionCoordinator,
   WebSocketConnectionSurface,
@@ -164,6 +165,7 @@ function RootRouteView() {
         <TaskAtriumOverlay />
         <AmbianceLayer />
         <PowerSaveBlockerSync />
+        <WindowAtmosphere />
         {primaryEnvironmentAuthenticated ? <EventRouter /> : null}
         {primaryEnvironmentAuthenticated ? <ProviderUpdateLaunchNotification /> : null}
         {primaryEnvironmentAuthenticated ? <DesktopNotificationWatcher /> : null}
