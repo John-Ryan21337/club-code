@@ -164,8 +164,7 @@ export class ConfirmedAutoNudgeArming {
     }
     try {
       this.suppressionStorage.removeItem(AUTO_NUDGE_SUPPRESSION_STORAGE_KEY);
-      const cleared =
-        this.suppressionStorage.getItem(AUTO_NUDGE_SUPPRESSION_STORAGE_KEY) === null;
+      const cleared = this.suppressionStorage.getItem(AUTO_NUDGE_SUPPRESSION_STORAGE_KEY) === null;
       if (!cleared) this.durableStorageAvailable = false;
       this.setSuppressed(!cleared && this.failClosedWithoutDurableStorage);
       return !this.suppressed;

@@ -388,6 +388,17 @@ function buildFixture(snapshot: OrchestrationReadModel): TestFixture {
   };
 }
 
+function enableBackgroundAutoNudge(nextFixture: TestFixture): void {
+  nextFixture.serverConfig = {
+    ...nextFixture.serverConfig,
+    clientSettings: {
+      ...nextFixture.serverConfig.clientSettings,
+      autoNudgeMode: "steady-progress",
+      autoNudgeBackgroundContinuation: true,
+    },
+  };
+}
+
 function addThreadToSnapshot(
   snapshot: OrchestrationReadModel,
   threadId: ThreadId,
@@ -3844,20 +3855,10 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
         }),
         secondThreadId,
       );
-      const configureAutoNudge = (nextFixture: TestFixture) => {
-        nextFixture.serverConfig = {
-          ...nextFixture.serverConfig,
-          clientSettings: {
-            ...nextFixture.serverConfig.clientSettings,
-            autoNudgeMode: "steady-progress",
-            autoNudgeBackgroundContinuation: true,
-          },
-        };
-      };
       let mounted: MountedChatView | null = await mountChatView({
         viewport: DEFAULT_VIEWPORT,
         snapshot,
-        configureFixture: configureAutoNudge,
+        configureFixture: enableBackgroundAutoNudge,
       });
 
       try {
@@ -3927,7 +3928,7 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
         mounted = await mountChatView({
           viewport: DEFAULT_VIEWPORT,
           snapshot,
-          configureFixture: configureAutoNudge,
+          configureFixture: enableBackgroundAutoNudge,
         });
         await vi.waitFor(
           () => {
@@ -3937,6 +3938,7 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
                 threadId: String(THREAD_ID),
               },
               status: "active",
+              reason: null,
             });
             expect(
               document.querySelector('[data-auto-nudge-control="true"]')?.textContent,

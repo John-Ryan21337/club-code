@@ -1742,7 +1742,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       expandedCursor: number,
       cursorAdjacentToMention: boolean,
     ) => {
-      onManualActivity?.();
+      // Lexical can publish its initial value while a remounted renderer is
+      // hydrating the existing draft. Only a real text change is operator
+      // activity; treating hydration as activity pauses a background run on
+      // every route remount or reconnect.
+      if (nextPrompt !== promptRef.current) {
+        onManualActivity?.();
+      }
       if (activePendingProgress?.activeQuestion && pendingUserInputs.length > 0) {
         setComposerCursor(nextCursor);
         setComposerTrigger(
