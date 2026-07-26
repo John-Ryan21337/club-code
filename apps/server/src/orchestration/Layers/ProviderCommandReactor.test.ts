@@ -12,6 +12,7 @@ import {
   ProviderSession,
   ProviderDriverKind,
   ProviderInstanceId,
+  PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
 } from "@cafecode/contracts";
 import { createModelSelection } from "@cafecode/shared/model";
 import {
@@ -31,6 +32,7 @@ import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as PubSub from "effect/PubSub";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { deriveServerPaths, ServerConfig } from "../../config.ts";
@@ -57,6 +59,11 @@ import {
   providerErrorLabelFromInstanceHint,
   ProviderCommandReactorLive,
 } from "./ProviderCommandReactor.ts";
+import {
+  composeStoppedSessionUserInputRecoveryMessage,
+  userInputRecoveryIdentity,
+  userInputRecoveryMessageId,
+} from "../UserInputRecovery.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
@@ -93,7 +100,10 @@ async function waitFor(
 
 describe("ProviderCommandReactor", () => {
   let runtime: ManagedRuntime.ManagedRuntime<
-    OrchestrationEngineService | ProviderCommandReactor | ProjectionSnapshotQuery,
+    | OrchestrationEngineService
+    | ProviderCommandReactor
+    | ProjectionSnapshotQuery
+    | SqlClient.SqlClient,
     unknown
   > | null = null;
   let scope: Scope.Closeable | null = null;
@@ -411,6 +421,7 @@ describe("ProviderCommandReactor", () => {
       ),
       Layer.provideMerge(ServerSettingsService.layerTest()),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
+      Layer.provideMerge(SqlitePersistenceMemory),
       Layer.provideMerge(NodeServices.layer),
     );
     runtime = ManagedRuntime.make(layer);
@@ -418,6 +429,7 @@ describe("ProviderCommandReactor", () => {
     const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
     const snapshotQuery = await runtime.runPromise(Effect.service(ProjectionSnapshotQuery));
     const reactor = await runtime.runPromise(Effect.service(ProviderCommandReactor));
+    const sql = await runtime.runPromise(Effect.service(SqlClient.SqlClient));
     scope = await Effect.runPromise(Scope.make("sequential"));
     const startReactor = () => Effect.runPromise(reactor.start().pipe(Scope.provide(scope!)));
     if (input?.startReactor !== false) {
@@ -480,6 +492,7 @@ describe("ProviderCommandReactor", () => {
 
     return {
       engine,
+      sql,
       readModel: () => Effect.runPromise(snapshotQuery.getSnapshot()),
       startSession,
       sendTurn,
@@ -499,6 +512,70 @@ describe("ProviderCommandReactor", () => {
       drain,
       markThreadReady,
     };
+  }
+
+  // oxlint-disable-next-line unicorn/consistent-function-scoping
+  async function appendPendingUserInput(
+    harness: Awaited<ReturnType<typeof createHarness>>,
+    requestId: string,
+    answerKey = "answer",
+  ): Promise<void> {
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.make(`cmd-user-input-requested-${requestId}`),
+        threadId: ThreadId.make("thread-1"),
+        activity: {
+          id: EventId.make(`activity-user-input-requested-${requestId}`),
+          tone: "info",
+          kind: "user-input.requested",
+          summary: "User input requested",
+          payload: {
+            requestId,
+            questions: [{ id: answerKey, question: "Which value should be used?" }],
+          },
+          turnId: null,
+          createdAt: "2026-01-01T00:00:00.000Z",
+        },
+        createdAt: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+  }
+
+  async function submitUserInput(
+    harness: Awaited<ReturnType<typeof createHarness>>,
+    requestId: string,
+    commandId: string,
+    answers: Readonly<Record<string, string>> = { answer: "Enterprise" },
+  ): Promise<void> {
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.user-input.respond",
+        commandId: CommandId.make(commandId),
+        threadId: ThreadId.make("thread-1"),
+        requestId: asApprovalRequestId(requestId),
+        answers,
+        createdAt: "2026-01-01T00:00:01.000Z",
+      }),
+    );
+  }
+
+  async function waitForResolvedInput(
+    harness: Awaited<ReturnType<typeof createHarness>>,
+    requestId: string,
+  ): Promise<void> {
+    await waitFor(async () => {
+      const thread = (await harness.readModel()).threads.find(
+        (entry) => entry.id === ThreadId.make("thread-1"),
+      );
+      return (
+        thread?.activities.some(
+          (activity) =>
+            activity.kind === "user-input.resolved" &&
+            (activity.payload as { requestId?: unknown }).requestId === requestId,
+        ) ?? false
+      );
+    });
   }
 
   it("clears interrupted turn starts on startup without resending provider work", async () => {
@@ -3021,6 +3098,401 @@ describe("ProviderCommandReactor", () => {
       expect(activityKinds).not.toContain("user-input.recovery-accepted");
       expect(activityKinds).not.toContain("user-input.resolved");
     }
+  });
+
+  it("recovers an input after its request ages out of rendered thread detail", async () => {
+    const harness = await createHarness();
+    const requestId = "aged-out-recovery";
+    const threadId = ThreadId.make("thread-1");
+    await appendPendingUserInput(harness, requestId);
+    await Effect.runPromise(harness.sql`
+      WITH RECURSIVE filler(value) AS (
+        SELECT 1
+        UNION ALL
+        SELECT value + 1 FROM filler WHERE value < 501
+      )
+      INSERT INTO projection_thread_activities (
+        activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at
+      )
+      SELECT
+        'activity-aging-filler-' || printf('%03d', value),
+        'thread-1',
+        NULL,
+        'info',
+        'runtime.warning',
+        'Unrelated activity',
+        '{}',
+        1000 + value,
+        '2026-01-01T00:00:01.000Z'
+      FROM filler
+    `);
+    harness.respondToUserInput.mockImplementation(() =>
+      Effect.fail(new ProviderSessionNotFoundError({ threadId })),
+    );
+
+    await submitUserInput(harness, requestId, "cmd-aged-out-recovery");
+    await waitForResolvedInput(harness, requestId);
+    expect(harness.respondToUserInput).toHaveBeenCalledTimes(1);
+    expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps an oversized answer retryable without sending a partial continuation", async () => {
+    const harness = await createHarness();
+    const requestId = "oversized-recovery";
+    const threadId = ThreadId.make("thread-1");
+    await appendPendingUserInput(harness, requestId);
+    harness.respondToUserInput.mockImplementation(() =>
+      Effect.fail(new ProviderSessionNotFoundError({ threadId })),
+    );
+
+    await submitUserInput(harness, requestId, "cmd-oversized-recovery", {
+      answer: "A".repeat(PROVIDER_SEND_TURN_MAX_INPUT_CHARS + 1),
+    });
+    await waitFor(async () => {
+      const thread = (await harness.readModel()).threads.find((entry) => entry.id === threadId);
+      return (
+        thread?.activities.some(
+          (activity) =>
+            activity.kind === "provider.user-input.respond.failed" &&
+            (activity.payload as { detail?: unknown }).detail?.toString().includes("too large"),
+        ) ?? false
+      );
+    });
+    expect(harness.startSession).not.toHaveBeenCalled();
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+    expect(
+      (await harness.readModel()).threads
+        .find((entry) => entry.id === threadId)
+        ?.messages.some((message) => message.id.startsWith("user-input-recovery:")),
+    ).toBe(false);
+
+    await submitUserInput(harness, requestId, "cmd-shortened-recovery", {
+      answer: "Use the enterprise role.",
+    });
+    await waitForResolvedInput(harness, requestId);
+    expect(harness.respondToUserInput).toHaveBeenCalledTimes(1);
+    expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves two outstanding answers after their original runtime is gone", async () => {
+    const harness = await createHarness();
+    const threadId = ThreadId.make("thread-1");
+    await appendPendingUserInput(harness, "first-recovery", "role");
+    await appendPendingUserInput(harness, "second-recovery", "location");
+    harness.respondToUserInput.mockImplementation(() =>
+      Effect.fail(new ProviderSessionNotFoundError({ threadId })),
+    );
+
+    await submitUserInput(harness, "first-recovery", "cmd-first-recovery", {
+      role: "Enterprise",
+    });
+    await waitForResolvedInput(harness, "first-recovery");
+    await harness.markThreadReady(threadId, "2026-01-01T00:00:02.000Z");
+    await submitUserInput(harness, "second-recovery", "cmd-second-recovery", {
+      location: "Remote",
+    });
+    await waitForResolvedInput(harness, "second-recovery");
+
+    const recoveryMessages =
+      (await harness.readModel()).threads
+        .find((entry) => entry.id === threadId)
+        ?.messages.filter((message) => message.id.startsWith("user-input-recovery:")) ?? [];
+    expect(recoveryMessages).toHaveLength(2);
+    expect(recoveryMessages.some((message) => message.text.includes("Enterprise"))).toBe(true);
+    expect(recoveryMessages.some((message) => message.text.includes("Remote"))).toBe(true);
+    expect(harness.respondToUserInput).toHaveBeenCalledTimes(2);
+    expect(harness.sendTurn).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries a rejected recovery only after a distinct Submit", async () => {
+    const harness = await createHarness();
+    const requestId = "retryable-recovery";
+    await appendPendingUserInput(harness, requestId);
+    harness.respondToUserInput.mockImplementation(() =>
+      Effect.fail(new ProviderSessionNotFoundError({ threadId: ThreadId.make("thread-1") })),
+    );
+    harness.sendTurn.mockImplementationOnce(
+      () =>
+        Effect.fail(
+          new ProviderAdapterRequestError({
+            provider: "codex",
+            method: "turn/start",
+            detail: "provider rejected continuation",
+          }),
+        ) as never,
+    );
+
+    await submitUserInput(harness, requestId, "cmd-recovery-first");
+    await waitFor(async () => {
+      const thread = (await harness.readModel()).threads.find(
+        (entry) => entry.id === ThreadId.make("thread-1"),
+      );
+      return (
+        harness.sendTurn.mock.calls.length === 1 &&
+        thread?.activities.some((activity) => activity.kind === "provider.turn.start.failed") ===
+          true
+      );
+    });
+    expect(
+      (await harness.readModel()).threads
+        .find((entry) => entry.id === ThreadId.make("thread-1"))
+        ?.activities.some((activity) => activity.kind === "user-input.resolved"),
+    ).toBe(false);
+
+    await submitUserInput(harness, requestId, "cmd-recovery-retry");
+    await waitForResolvedInput(harness, requestId);
+    expect(harness.respondToUserInput).toHaveBeenCalledTimes(1);
+    expect(harness.sendTurn).toHaveBeenCalledTimes(2);
+  });
+
+  it("requires the exact durable recovery message before resolving an input", async () => {
+    const harness = await createHarness();
+    const requestId = "proven-recovery";
+    const threadId = ThreadId.make("thread-1");
+    const recoveryMessageId = userInputRecoveryMessageId(threadId, requestId);
+    await appendPendingUserInput(harness, requestId);
+    harness.respondToUserInput.mockImplementation(() =>
+      Effect.fail(new ProviderSessionNotFoundError({ threadId })),
+    );
+    harness.sendTurn.mockImplementationOnce(
+      () =>
+        Effect.fail(
+          new ProviderAdapterRequestError({
+            provider: "codex",
+            method: "turn/start",
+            detail: "first delivery rejected",
+          }),
+        ) as never,
+    );
+    await submitUserInput(harness, requestId, "cmd-proof-arm");
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+    const recoveryText = (await harness.readModel()).threads
+      .find((entry) => entry.id === threadId)
+      ?.messages.find((message) => message.id === recoveryMessageId)?.text;
+    expect(recoveryText).toContain("Enterprise");
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-forged-recovery"),
+        threadId,
+        message: {
+          messageId: recoveryMessageId,
+          role: "user",
+          text: "This text does not carry the durable answer.",
+          attachments: [],
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: "2026-01-01T00:00:02.000Z",
+      }),
+    );
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+    await waitForEventLoopTurn();
+    expect(
+      (await harness.readModel()).threads
+        .find((entry) => entry.id === threadId)
+        ?.activities.some((activity) => activity.kind === "user-input.resolved"),
+    ).toBe(false);
+
+    await harness.markThreadReady(threadId, "2026-01-01T00:00:03.000Z");
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-authentic-recovery"),
+        threadId,
+        message: {
+          messageId: recoveryMessageId,
+          role: "user",
+          text: recoveryText!,
+          attachments: [],
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: "2026-01-01T00:00:04.000Z",
+      }),
+    );
+    await waitForResolvedInput(harness, requestId);
+    expect(harness.sendTurn).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps an accepted recovery turn healthy when resolution bookkeeping fails", async () => {
+    const harness = await createHarness();
+    const requestId = "bookkeeping-recovery";
+    const threadId = ThreadId.make("thread-1");
+    await appendPendingUserInput(harness, requestId);
+    harness.respondToUserInput.mockImplementation(() =>
+      Effect.fail(new ProviderSessionNotFoundError({ threadId })),
+    );
+    const poisonedResolution = await Effect.runPromise(
+      Effect.exit(
+        harness.engine.dispatch({
+          type: "thread.activity.append",
+          commandId: CommandId.make(
+            `server:user-input-resolved:${userInputRecoveryIdentity(threadId, requestId)}`,
+          ),
+          threadId: ThreadId.make("missing-thread"),
+          activity: {
+            id: EventId.make("poisoned-user-input-resolution"),
+            tone: "info",
+            kind: "runtime.warning",
+            summary: "Rejected bookkeeping command",
+            payload: {},
+            turnId: null,
+            createdAt: "2026-01-01T00:00:00.000Z",
+          },
+          createdAt: "2026-01-01T00:00:00.000Z",
+        }),
+      ),
+    );
+    expect(Exit.isFailure(poisonedResolution)).toBe(true);
+
+    await submitUserInput(harness, requestId, "cmd-bookkeeping-recovery");
+    await waitFor(async () => {
+      const thread = (await harness.readModel()).threads.find((entry) => entry.id === threadId);
+      return (
+        harness.sendTurn.mock.calls.length === 1 &&
+        thread?.activities.some((activity) => activity.kind === "user-input.recovery-accepted") ===
+          true
+      );
+    });
+    const thread = (await harness.readModel()).threads.find((entry) => entry.id === threadId);
+    expect(
+      thread?.activities.some((activity) => activity.kind === "provider.turn.start.failed"),
+    ).toBe(false);
+    expect(thread?.activities.some((activity) => activity.kind === "user-input.resolved")).toBe(
+      false,
+    );
+    expect(thread?.session).toMatchObject({ status: "running", activeTurnId: "turn-1" });
+
+    await submitUserInput(harness, requestId, "cmd-bookkeeping-retry");
+    await harness.drain();
+    expect(harness.respondToUserInput).toHaveBeenCalledTimes(1);
+    expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+    expect(harness.steerTurn).not.toHaveBeenCalled();
+  });
+
+  it("uses durable acceptance after restart without redelivering the answer", async () => {
+    const harness = await createHarness({ startReactor: false });
+    const threadId = ThreadId.make("thread-1");
+    const requestId = "accepted-before-restart";
+    const answers = { answer: "Enterprise" };
+    const recoveryMessageId = userInputRecoveryMessageId(threadId, requestId);
+    const recoveryIdentity = userInputRecoveryIdentity(threadId, requestId);
+    const recoveryText = composeStoppedSessionUserInputRecoveryMessage({
+      answers,
+      questions: [{ id: "answer", question: "Which value should be used?" }],
+    });
+    expect(recoveryText).toBeDefined();
+    await appendPendingUserInput(harness, requestId);
+    await Effect.runPromise(
+      Effect.all(
+        [
+          harness.engine.dispatch({
+            type: "thread.activity.append",
+            commandId: CommandId.make("cmd-durable-recovery-pending"),
+            threadId,
+            activity: {
+              id: EventId.make(`user-input-recovery-pending:${recoveryIdentity}`),
+              tone: "info",
+              kind: "user-input.recovery-pending",
+              summary: "Recovery pending provider acceptance",
+              payload: {
+                requestId,
+                answers,
+                recoveryMessageId,
+                recoveryMessageText: recoveryText!,
+              },
+              turnId: null,
+              createdAt: "2026-01-01T00:00:00.000Z",
+            },
+            createdAt: "2026-01-01T00:00:00.000Z",
+          }),
+          harness.engine.dispatch({
+            type: "thread.turn.start",
+            commandId: CommandId.make("cmd-durable-recovery-message"),
+            threadId,
+            message: {
+              messageId: recoveryMessageId,
+              role: "user",
+              text: recoveryText!,
+              attachments: [],
+            },
+            runtimeMode: "approval-required",
+            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+            createdAt: "2026-01-01T00:00:00.000Z",
+          }),
+          harness.engine.dispatch({
+            type: "thread.activity.append",
+            commandId: CommandId.make(`server:user-input-recovery-accepted:${recoveryIdentity}`),
+            threadId,
+            activity: {
+              id: EventId.make(`user-input-recovery-accepted:${recoveryIdentity}`),
+              tone: "info",
+              kind: "user-input.recovery-accepted",
+              summary: "Recovery accepted by provider",
+              payload: {
+                requestId,
+                recoveryMessageId,
+                acceptedAt: "2026-01-01T00:00:01.000Z",
+              },
+              turnId: null,
+              createdAt: "2026-01-01T00:00:01.000Z",
+            },
+            createdAt: "2026-01-01T00:00:01.000Z",
+          }),
+        ],
+        { concurrency: 1 },
+      ),
+    );
+
+    await harness.startReactor();
+    await submitUserInput(harness, requestId, "cmd-after-restart", answers);
+    await waitForResolvedInput(harness, requestId);
+    expect(harness.respondToUserInput).not.toHaveBeenCalled();
+    expect(harness.startSession).not.toHaveBeenCalled();
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+    expect(harness.steerTurn).not.toHaveBeenCalled();
+  });
+
+  it("deduplicates a concurrent resubmit while recovery delivery is in flight", async () => {
+    const harness = await createHarness();
+    const requestId = "concurrent-recovery";
+    const threadId = ThreadId.make("thread-1");
+    const recoveryMessageId = userInputRecoveryMessageId(threadId, requestId);
+    await appendPendingUserInput(harness, requestId);
+    harness.respondToUserInput.mockImplementation(() =>
+      Effect.fail(new ProviderSessionNotFoundError({ threadId })),
+    );
+    let releaseSend: (() => void) | undefined;
+    const sendGate = new Promise<void>((resolve) => {
+      releaseSend = resolve;
+    });
+    harness.sendTurn.mockImplementation(() =>
+      Effect.promise(() => sendGate).pipe(
+        Effect.as({ threadId, turnId: asTurnId("turn-concurrent") }),
+      ),
+    );
+
+    await submitUserInput(harness, requestId, "cmd-concurrent-first");
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    await submitUserInput(harness, requestId, "cmd-concurrent-second");
+    await waitForEventLoopTurn();
+    expect(harness.respondToUserInput).toHaveBeenCalledTimes(1);
+    expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+    expect(harness.steerTurn).not.toHaveBeenCalled();
+
+    releaseSend?.();
+    await waitForResolvedInput(harness, requestId);
+    const thread = (await harness.readModel()).threads.find((entry) => entry.id === threadId);
+    expect(thread?.messages.filter((message) => message.id === recoveryMessageId)).toHaveLength(1);
+    expect(
+      thread?.activities.filter(
+        (activity) =>
+          activity.kind === "user-input.resolved" &&
+          (activity.payload as { requestId?: unknown }).requestId === requestId,
+      ),
+    ).toHaveLength(1);
   });
 
   it("reacts to thread.session.stop by stopping provider session and clearing thread session state", async () => {

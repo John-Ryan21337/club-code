@@ -54,6 +54,7 @@ import {
   USER_INPUT_RECOVERY_MESSAGE_ID_PREFIX,
   USER_INPUT_RECOVERY_PENDING_KIND,
   composeStoppedSessionUserInputRecoveryMessage,
+  findAcceptedUserInputRecovery,
   findPendingUserInputRecovery,
   findUserInputCallbackOwnershipLoss,
   findUserInputRequestContext,
@@ -1790,12 +1791,25 @@ const make = Effect.gen(function* () {
           });
 
           yield* providerService.sendTurn(sendTurnRequest).pipe(
-            Effect.tap((turn) =>
-              markThreadRunningFromSendTurnResult({
+            Effect.tap(() =>
+              resolveRecoveredUserInputAfterProviderAcceptance({
                 threadId: event.payload.threadId,
-                turnId: turn.turnId,
-                createdAt: observedAt,
+                recoveryMessageId: event.payload.messageId,
+                acceptedAt: observedAt,
               }),
+            ),
+            Effect.tap((turn) =>
+              userInputRecoveryDeliveryState.protectAcceptedBookkeeping(
+                {
+                  threadId: event.payload.threadId,
+                  recoveryMessageId: event.payload.messageId,
+                },
+                markThreadRunningFromSendTurnResult({
+                  threadId: event.payload.threadId,
+                  turnId: turn.turnId,
+                  createdAt: observedAt,
+                }),
+              ),
             ),
           );
         }).pipe(
@@ -1825,62 +1839,75 @@ const make = Effect.gen(function* () {
         },
       });
 
-      yield* providerService
-        .steerTurn({
-          threadId: event.payload.threadId,
-          expectedTurnId: activeTurnId,
-          ...(normalizedInput ? { input: normalizedInput } : {}),
-          ...(normalizedAttachments.length > 0 ? { attachments: normalizedAttachments } : {}),
-        })
-        .pipe(
-          Effect.tap((turn) =>
-            Effect.gen(function* () {
-              const updatedAt = DateTime.formatIso(yield* DateTime.now);
-              yield* setThreadSession({
-                threadId: event.payload.threadId,
-                session: {
+      yield* userInputRecoveryDeliveryState.forkTrackedDelivery(
+        event.payload.messageId,
+        providerService
+          .steerTurn({
+            threadId: event.payload.threadId,
+            expectedTurnId: activeTurnId,
+            ...(normalizedInput ? { input: normalizedInput } : {}),
+            ...(normalizedAttachments.length > 0 ? { attachments: normalizedAttachments } : {}),
+          })
+          .pipe(
+            Effect.tap((turn) =>
+              Effect.gen(function* () {
+                const updatedAt = DateTime.formatIso(yield* DateTime.now);
+                yield* resolveRecoveredUserInputAfterProviderAcceptance({
                   threadId: event.payload.threadId,
-                  status: "running",
-                  providerName: runtimeActiveSession.provider,
-                  providerInstanceId: runtimeActiveSession.providerInstanceId,
-                  runtimeMode: runtimeActiveSession.runtimeMode ?? thread.runtimeMode,
-                  activeTurnId: turn.turnId,
-                  lastError: null,
-                  updatedAt,
-                },
-                createdAt: updatedAt,
-              });
+                  recoveryMessageId: event.payload.messageId,
+                  acceptedAt: updatedAt,
+                });
+                yield* userInputRecoveryDeliveryState.protectAcceptedBookkeeping(
+                  {
+                    threadId: event.payload.threadId,
+                    recoveryMessageId: event.payload.messageId,
+                  },
+                  setThreadSession({
+                    threadId: event.payload.threadId,
+                    session: {
+                      threadId: event.payload.threadId,
+                      status: "running",
+                      providerName: runtimeActiveSession.provider,
+                      providerInstanceId: runtimeActiveSession.providerInstanceId,
+                      runtimeMode: runtimeActiveSession.runtimeMode ?? thread.runtimeMode,
+                      activeTurnId: turn.turnId,
+                      lastError: null,
+                      updatedAt,
+                    },
+                    createdAt: updatedAt,
+                  }),
+                );
+              }),
+            ),
+            Effect.catchCause((cause) => {
+              if (isCodexNoActiveTurnToSteerFailure(cause)) {
+                return recoverNoActiveTurnSteerAsStart(cause);
+              }
+              const codexNonSteerableTurnKind = detectCodexNonSteerableTurnKind(cause);
+              const unsupportedLiveSteer = isUnsupportedLiveSteerFailure(cause);
+              const retryableFollowUp =
+                codexNonSteerableTurnKind !== undefined || unsupportedLiveSteer;
+              if (retryableFollowUp) {
+                return appendProviderFailureActivity({
+                  threadId: event.payload.threadId,
+                  kind: "provider.turn.steer.failed",
+                  summary: "Provider steer queued",
+                  detail:
+                    codexNonSteerableTurnKind !== undefined
+                      ? codexNonSteerableDetail(codexNonSteerableTurnKind)
+                      : retryableFollowUpDetail(),
+                  turnId: activeTurnId,
+                  createdAt: event.payload.createdAt,
+                  messageId: event.payload.messageId,
+                  retryableFollowUp: true,
+                  retryAfter: "active-turn",
+                  ...(codexNonSteerableTurnKind !== undefined ? { codexNonSteerableTurnKind } : {}),
+                });
+              }
+              return recoverTurnStartFailure(cause);
             }),
           ),
-          Effect.catchCause((cause) => {
-            if (isCodexNoActiveTurnToSteerFailure(cause)) {
-              return recoverNoActiveTurnSteerAsStart(cause);
-            }
-            const codexNonSteerableTurnKind = detectCodexNonSteerableTurnKind(cause);
-            const unsupportedLiveSteer = isUnsupportedLiveSteerFailure(cause);
-            const retryableFollowUp =
-              codexNonSteerableTurnKind !== undefined || unsupportedLiveSteer;
-            if (retryableFollowUp) {
-              return appendProviderFailureActivity({
-                threadId: event.payload.threadId,
-                kind: "provider.turn.steer.failed",
-                summary: "Provider steer queued",
-                detail:
-                  codexNonSteerableTurnKind !== undefined
-                    ? codexNonSteerableDetail(codexNonSteerableTurnKind)
-                    : retryableFollowUpDetail(),
-                turnId: activeTurnId,
-                createdAt: event.payload.createdAt,
-                messageId: event.payload.messageId,
-                retryableFollowUp: true,
-                retryAfter: "active-turn",
-                ...(codexNonSteerableTurnKind !== undefined ? { codexNonSteerableTurnKind } : {}),
-              });
-            }
-            return recoverTurnStartFailure(cause);
-          }),
-          Effect.forkScoped,
-        );
+      );
       return;
     }
 
@@ -1922,12 +1949,25 @@ const make = Effect.gen(function* () {
             ...(normalizedAttachments.length > 0 ? { attachments: normalizedAttachments } : {}),
           })
           .pipe(
-            Effect.tap((turn) =>
-              markThreadRunningFromSendTurnResult({
+            Effect.tap(() =>
+              resolveRecoveredUserInputAfterProviderAcceptance({
                 threadId: event.payload.threadId,
-                turnId: turn.turnId,
-                createdAt: observedAt,
+                recoveryMessageId: event.payload.messageId,
+                acceptedAt: observedAt,
               }),
+            ),
+            Effect.tap((turn) =>
+              userInputRecoveryDeliveryState.protectAcceptedBookkeeping(
+                {
+                  threadId: event.payload.threadId,
+                  recoveryMessageId: event.payload.messageId,
+                },
+                markThreadRunningFromSendTurnResult({
+                  threadId: event.payload.threadId,
+                  turnId: turn.turnId,
+                  createdAt: observedAt,
+                }),
+              ),
             ),
           );
 
@@ -1985,34 +2025,36 @@ const make = Effect.gen(function* () {
       );
     };
 
-    yield* providerService.sendTurn(sendTurnRequest.value).pipe(
-      Effect.tap(() =>
-        resolveRecoveredUserInputAfterProviderAcceptance({
-          threadId: event.payload.threadId,
-          recoveryMessageId: event.payload.messageId,
-          acceptedAt: event.payload.createdAt,
-        }),
-      ),
-      Effect.tap((turn) =>
-        userInputRecoveryDeliveryState.protectAcceptedBookkeeping(
-          {
+    yield* userInputRecoveryDeliveryState.forkTrackedDelivery(
+      event.payload.messageId,
+      providerService.sendTurn(sendTurnRequest.value).pipe(
+        Effect.tap(() =>
+          resolveRecoveredUserInputAfterProviderAcceptance({
             threadId: event.payload.threadId,
             recoveryMessageId: event.payload.messageId,
-          },
-          markThreadRunningFromSendTurnResult({
-            threadId: event.payload.threadId,
-            turnId: turn.turnId,
-            createdAt: event.payload.createdAt,
+            acceptedAt: event.payload.createdAt,
           }),
         ),
+        Effect.tap((turn) =>
+          userInputRecoveryDeliveryState.protectAcceptedBookkeeping(
+            {
+              threadId: event.payload.threadId,
+              recoveryMessageId: event.payload.messageId,
+            },
+            markThreadRunningFromSendTurnResult({
+              threadId: event.payload.threadId,
+              turnId: turn.turnId,
+              createdAt: event.payload.createdAt,
+            }),
+          ),
+        ),
+        Effect.catchCause((cause) => {
+          const activeTurnId = detectCodexActiveTurnRunningStartFailure(cause);
+          return activeTurnId !== undefined
+            ? recoverActiveCodexStartAsSteer(activeTurnId, cause)
+            : recoverTurnStartFailure(cause);
+        }),
       ),
-      Effect.catchCause((cause) => {
-        const activeTurnId = detectCodexActiveTurnRunningStartFailure(cause);
-        return activeTurnId !== undefined
-          ? recoverActiveCodexStartAsSteer(activeTurnId, cause)
-          : recoverTurnStartFailure(cause);
-      }),
-      Effect.forkScoped,
     );
   });
 
@@ -2218,12 +2260,25 @@ const make = Effect.gen(function* () {
         });
 
         yield* providerService.sendTurn(sendTurnRequest).pipe(
-          Effect.tap((turn) =>
-            markThreadRunningFromSendTurnResult({
+          Effect.tap(() =>
+            resolveRecoveredUserInputAfterProviderAcceptance({
               threadId: event.payload.threadId,
-              turnId: turn.turnId,
-              createdAt: observedAt,
+              recoveryMessageId: event.payload.messageId,
+              acceptedAt: observedAt,
             }),
+          ),
+          Effect.tap((turn) =>
+            userInputRecoveryDeliveryState.protectAcceptedBookkeeping(
+              {
+                threadId: event.payload.threadId,
+                recoveryMessageId: event.payload.messageId,
+              },
+              markThreadRunningFromSendTurnResult({
+                threadId: event.payload.threadId,
+                turnId: turn.turnId,
+                createdAt: observedAt,
+              }),
+            ),
           ),
         );
       }).pipe(
@@ -2371,12 +2426,25 @@ const make = Effect.gen(function* () {
         });
 
         yield* providerService.sendTurn(sendTurnRequest).pipe(
-          Effect.tap((turn) =>
-            markThreadRunningFromSendTurnResult({
+          Effect.tap(() =>
+            resolveRecoveredUserInputAfterProviderAcceptance({
               threadId: event.payload.threadId,
-              turnId: turn.turnId,
-              createdAt: observedAt,
+              recoveryMessageId: event.payload.messageId,
+              acceptedAt: observedAt,
             }),
+          ),
+          Effect.tap((turn) =>
+            userInputRecoveryDeliveryState.protectAcceptedBookkeeping(
+              {
+                threadId: event.payload.threadId,
+                recoveryMessageId: event.payload.messageId,
+              },
+              markThreadRunningFromSendTurnResult({
+                threadId: event.payload.threadId,
+                turnId: turn.turnId,
+                createdAt: observedAt,
+              }),
+            ),
           ),
         );
       }).pipe(
@@ -2399,45 +2467,57 @@ const make = Effect.gen(function* () {
     // `turn/started` notification. Keep this operation separate so a follow-up
     // typed during an active turn cannot violate Codex's one-active-turn
     // invariant by starting another turn.
-    yield* providerService
-      .steerTurn({
-        threadId: event.payload.threadId,
-        expectedTurnId: activeSession.activeTurnId,
-        ...(normalizedInput ? { input: normalizedInput } : {}),
-        ...(normalizedAttachments.length > 0 ? { attachments: normalizedAttachments } : {}),
-      })
-      .pipe(
-        Effect.catchCause((cause) => {
-          if (isCodexNoActiveTurnToSteerFailure(cause)) {
-            return recoverStaleCodexSteerAsTurnStart(cause);
-          }
-          const codexNonSteerableTurnKind = detectCodexNonSteerableTurnKind(cause);
-          const unsupportedLiveSteer = isUnsupportedLiveSteerFailure(cause);
-          const retryableFollowUp = codexNonSteerableTurnKind !== undefined || unsupportedLiveSteer;
-          return appendProviderFailureActivity({
-            threadId: event.payload.threadId,
-            kind: "provider.turn.steer.failed",
-            summary: "Provider steer failed",
-            detail:
-              codexNonSteerableTurnKind !== undefined
-                ? codexNonSteerableDetail(codexNonSteerableTurnKind)
-                : unsupportedLiveSteer
-                  ? retryableFollowUpDetail()
-                  : formatFailureDetail(cause),
-            turnId: thread.session?.activeTurnId ?? null,
-            createdAt: event.payload.createdAt,
-            messageId: event.payload.messageId,
-            ...(retryableFollowUp
-              ? {
-                  retryableFollowUp: true,
-                  retryAfter: "active-turn" as const,
-                  ...(codexNonSteerableTurnKind !== undefined ? { codexNonSteerableTurnKind } : {}),
-                }
-              : {}),
-          });
-        }),
-        Effect.forkScoped,
-      );
+    yield* userInputRecoveryDeliveryState.forkTrackedDelivery(
+      event.payload.messageId,
+      providerService
+        .steerTurn({
+          threadId: event.payload.threadId,
+          expectedTurnId: activeSession.activeTurnId,
+          ...(normalizedInput ? { input: normalizedInput } : {}),
+          ...(normalizedAttachments.length > 0 ? { attachments: normalizedAttachments } : {}),
+        })
+        .pipe(
+          Effect.tap(() =>
+            resolveRecoveredUserInputAfterProviderAcceptance({
+              threadId: event.payload.threadId,
+              recoveryMessageId: event.payload.messageId,
+              acceptedAt: event.payload.createdAt,
+            }),
+          ),
+          Effect.catchCause((cause) => {
+            if (isCodexNoActiveTurnToSteerFailure(cause)) {
+              return recoverStaleCodexSteerAsTurnStart(cause);
+            }
+            const codexNonSteerableTurnKind = detectCodexNonSteerableTurnKind(cause);
+            const unsupportedLiveSteer = isUnsupportedLiveSteerFailure(cause);
+            const retryableFollowUp =
+              codexNonSteerableTurnKind !== undefined || unsupportedLiveSteer;
+            return appendProviderFailureActivity({
+              threadId: event.payload.threadId,
+              kind: "provider.turn.steer.failed",
+              summary: "Provider steer failed",
+              detail:
+                codexNonSteerableTurnKind !== undefined
+                  ? codexNonSteerableDetail(codexNonSteerableTurnKind)
+                  : unsupportedLiveSteer
+                    ? retryableFollowUpDetail()
+                    : formatFailureDetail(cause),
+              turnId: thread.session?.activeTurnId ?? null,
+              createdAt: event.payload.createdAt,
+              messageId: event.payload.messageId,
+              ...(retryableFollowUp
+                ? {
+                    retryableFollowUp: true,
+                    retryAfter: "active-turn" as const,
+                    ...(codexNonSteerableTurnKind !== undefined
+                      ? { codexNonSteerableTurnKind }
+                      : {}),
+                  }
+                : {}),
+            });
+          }),
+        ),
+    );
   });
 
   const processApprovalResponseRequested = Effect.fn("processApprovalResponseRequested")(function* (
@@ -2551,6 +2631,10 @@ const make = Effect.gen(function* () {
           }
           const pendingRecovery =
             input.pendingRecovery ?? findPendingUserInputRecovery(recoveryView, recoveryMessageId);
+          const acceptedRecovery =
+            pendingRecovery === undefined
+              ? undefined
+              : findAcceptedUserInputRecovery(recoveryView, pendingRecovery);
           const requestContext = findUserInputRequestContext(recoveryView, event.payload.requestId);
           const recoveredAt = DateTime.formatIso(yield* DateTime.now);
 
@@ -2591,6 +2675,22 @@ const make = Effect.gen(function* () {
               createdAt: event.payload.createdAt,
               requestId: event.payload.requestId,
             });
+          }
+
+          if (userInputRecoveryDeliveryState.hasDeliveryInFlight(recoveryMessageId)) {
+            return;
+          }
+
+          if (
+            acceptedRecovery !== undefined ||
+            userInputRecoveryDeliveryState.hasAcceptedMessage(recoveryMessageId)
+          ) {
+            yield* resolveRecoveredUserInputAfterProviderAcceptance({
+              threadId: event.payload.threadId,
+              recoveryMessageId,
+              acceptedAt: acceptedRecovery?.acceptedAt ?? recoveredAt,
+            });
+            return;
           }
 
           const recoveryAnswers = pendingRecovery?.answers ?? event.payload.answers;
