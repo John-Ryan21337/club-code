@@ -105,6 +105,7 @@ import {
   SettingsSection,
   useRelativeTimeTick,
 } from "./settingsLayout";
+import { WindowAlwaysOnTopSettings } from "./WindowAlwaysOnTopSettings";
 import { ProjectFavicon } from "../ProjectFavicon";
 import {
   useServerAvailableEditors,
@@ -1044,6 +1045,7 @@ export function AppearanceSettingsPanel() {
           }
         />
       </SettingsSection>
+      <WindowAlwaysOnTopSettings />
     </SettingsPageContainer>
   );
 }
