@@ -56,6 +56,8 @@ import { ThreadDetailSubscriptionRegistryLive } from "./orchestration/Layers/Thr
 import { RuntimeReceiptBusLive } from "./orchestration/Layers/RuntimeReceiptBus.ts";
 import { ProviderRuntimeIngestionLive } from "./orchestration/Layers/ProviderRuntimeIngestion.ts";
 import { ProviderCommandReactorLive } from "./orchestration/Layers/ProviderCommandReactor.ts";
+import { ProviderPacingAdmissionLive } from "./orchestration/Layers/ProviderPacingAdmission.ts";
+import { ProviderPacingObservationReactorLive } from "./orchestration/Layers/ProviderPacingObservationReactor.ts";
 import { CheckpointReactorLive } from "./orchestration/Layers/CheckpointReactor.ts";
 import { WebPushNotificationsLive } from "./notifications/WebPushNotifications.ts";
 import { ThreadDeletionReactorLive } from "./orchestration/Layers/ThreadDeletionReactor.ts";
@@ -136,6 +138,7 @@ const ReactorLayerLive = Layer.empty.pipe(
   Layer.provideMerge(OrchestrationReactorLive),
   Layer.provideMerge(ProviderRuntimeIngestionLive),
   Layer.provideMerge(ProviderCommandReactorLive),
+  Layer.provideMerge(ProviderPacingObservationReactorLive),
   Layer.provideMerge(CheckpointReactorLive),
   Layer.provideMerge(ThreadDeletionReactorLive),
   Layer.provideMerge(WebPushNotificationsLive),
@@ -277,7 +280,7 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   Layer.provideMerge(ProviderRuntimeLayerLive),
   Layer.provideMerge(PersistenceLayerLive),
   Layer.provideMerge(KeybindingsLive),
-  Layer.provideMerge(ProviderRegistryLive),
+  Layer.provideMerge(Layer.mergeAll(ProviderRegistryLive, ProviderPacingAdmissionLive)),
   // The instance registry is the new routing keystone — text generation,
   // adapter lookup, and runtime ingestion all resolve `ProviderInstanceId`
   // through this layer. Built-in drivers come from `BUILT_IN_DRIVERS`;
