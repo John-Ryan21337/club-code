@@ -36,6 +36,11 @@ export interface BoundedPacingAdmissionOptions {
 export interface NewLaunchRequest<T> {
   readonly kind: "new-launch";
   readonly key: PacingAdmissionKey;
+  /**
+   * Only an explicitly user-originated launch may consume the bounded Claude
+   * telemetry probe. Missing provenance is conservatively automation.
+   */
+  readonly dispatchSource?: "user" | "auto-nudge";
   readonly launch: () => T | PromiseLike<T>;
 }
 
@@ -83,6 +88,7 @@ type WaitingStatus = "waiting" | "starting" | "cancelled" | "disposed";
 
 interface WaitingEntry {
   readonly state: KeyState;
+  readonly dispatchSource: "user" | "auto-nudge";
   readonly launch: () => unknown | PromiseLike<unknown>;
   readonly resolve: (value: unknown) => void;
   readonly reject: (reason: unknown) => void;
@@ -101,6 +107,12 @@ interface KeyState {
   cautionRestricted: boolean;
   pacingObservationEnabled: boolean;
   latestObservation: PacingAdmissionObservation | null;
+  providerFamily: PacingWindowObservation["providerFamily"];
+  hasCompleteProviderObservation: boolean;
+  claudeProbeArmed: boolean;
+  claudeProbeEverConsumed: boolean;
+  claudeProbeBackoffIndex: number;
+  claudeProbeNextArmAtMs: number | null;
 }
 
 const systemClock: PacingAdmissionClock = {
@@ -117,6 +129,7 @@ const DEFAULT_CAUTION_BAND_START_PERCENT = 80;
 const DEFAULT_MAX_CAUTION_BAND_LAUNCHES = 1;
 const PROVIDER_DRAIN_CLOSURE_PERCENT = 90;
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
+const CLAUDE_PROBE_BACKOFF_MS = [5 * 60_000, 15 * 60_000, 60 * 60_000] as const;
 
 function boundedPositiveInteger(value: number, name: string, maximum: number): number {
   if (!Number.isSafeInteger(value) || value <= 0 || value > maximum) {
@@ -258,6 +271,7 @@ export class BoundedPacingAdmissionCoordinator {
     const capturedObservation = captureObservation(observation);
     const supportedAndEnabled =
       capturedObservation.enabled && capturedObservation.providerFamily !== "other";
+    state.providerFamily = capturedObservation.providerFamily;
     const sourceSequence = providerObservationSequence(
       capturedObservation.providerObservationSequence,
     );
@@ -269,6 +283,7 @@ export class BoundedPacingAdmissionCoordinator {
     if (!supportedAndEnabled) {
       if (strictlyNewer) state.latestProviderObservationSequence = sourceSequence;
       state.pacingObservationEnabled = false;
+      this.disableClaudeProbe(state);
       this.allowUnrestrictedFanout(state);
       state.latestObservation = capturedObservation;
       const snapshot = this.applyPolicyObservation(state, capturedObservation);
@@ -283,9 +298,19 @@ export class BoundedPacingAdmissionCoordinator {
       // A replay is not a new provider read. In particular, enabling pacing
       // again cannot reuse the observation that preceded an explicit disable.
       if (!wasPacingObservationEnabled) this.requireFreshCautionAuthorization(state);
+      if (
+        capturedObservation.providerFamily === "claude" &&
+        !state.hasCompleteProviderObservation &&
+        !state.claudeProbeEverConsumed
+      ) {
+        state.claudeProbeArmed = true;
+      }
+      this.scheduleWake();
+      this.drain();
       return state.controller.getSnapshot();
     }
     state.latestProviderObservationSequence = sourceSequence;
+    this.burnClaudeProbeOnNewObservation(state);
     const hasCompleteObservation = isCompleteFreshProviderObservation(capturedObservation);
     const hasNewResetWindow =
       !hasCompleteObservation && state.controller.isStrictlyNewerResetWindow(capturedObservation);
@@ -298,11 +323,15 @@ export class BoundedPacingAdmissionCoordinator {
       !hasCompleteObservation &&
       !hasNewResetWindow
     ) {
+      this.scheduleWake();
       return state.controller.getSnapshot();
     }
 
     state.latestObservation = capturedObservation;
     if (hasCompleteObservation) {
+      state.hasCompleteProviderObservation = true;
+      state.claudeProbeBackoffIndex = 0;
+      state.claudeProbeNextArmAtMs = null;
       if (capturedObservation.usedPercent >= this.cautionBandStartPercent) {
         state.cautionRestricted = true;
         state.cautionAuthorizationSequence = capturedObservation.providerObservationSequence;
@@ -311,6 +340,8 @@ export class BoundedPacingAdmissionCoordinator {
         this.allowUnrestrictedFanout(state);
       }
     } else if (hasNewResetWindow) {
+      state.claudeProbeBackoffIndex = 0;
+      state.claudeProbeNextArmAtMs = null;
       // Claude may omit utilization outside threshold bands. A strictly
       // advanced provider-issued reset timestamp proves a new window, but not
       // that broad fan-out is safe, so authorize only the bounded caution
@@ -322,6 +353,13 @@ export class BoundedPacingAdmissionCoordinator {
       // A newer but incomplete observation supersedes any unused grant. It
       // cannot be repaired or replayed later under the same source sequence.
       this.requireFreshCautionAuthorization(state);
+      if (
+        capturedObservation.providerFamily === "claude" &&
+        !state.hasCompleteProviderObservation &&
+        !state.claudeProbeEverConsumed
+      ) {
+        state.claudeProbeArmed = true;
+      }
     }
     const snapshot = this.applyPolicyObservation(
       state,
@@ -338,6 +376,7 @@ export class BoundedPacingAdmissionCoordinator {
       // a deadline nor active-work completion can restore it.
       this.requireFreshCautionAuthorization(state);
     }
+    this.armClaudeProbeIfDue(state, this.clock.now());
     this.scheduleWake();
     this.drain();
     return snapshot;
@@ -369,7 +408,8 @@ export class BoundedPacingAdmissionCoordinator {
       return this.rejectedAdmission<T>(error);
     }
 
-    if (!this.canAdmitNewLaunch(state)) {
+    const dispatchSource = request.dispatchSource ?? "auto-nudge";
+    if (!this.canAdmitNewLaunch(state, dispatchSource)) {
       if (this.waiting.length >= this.maxWaitingGlobal) {
         return this.rejectedAdmission<T>(
           new PacingAdmissionCapacityError("The global pacing wait limit was reached."),
@@ -392,6 +432,7 @@ export class BoundedPacingAdmissionCoordinator {
     });
     const entry: WaitingEntry = {
       state,
+      dispatchSource,
       launch: request.launch,
       resolve,
       reject,
@@ -451,6 +492,12 @@ export class BoundedPacingAdmissionCoordinator {
       cautionRestricted: false,
       pacingObservationEnabled: false,
       latestObservation: null,
+      providerFamily: "other",
+      hasCompleteProviderObservation: false,
+      claudeProbeArmed: false,
+      claudeProbeEverConsumed: false,
+      claudeProbeBackoffIndex: 0,
+      claudeProbeNextArmAtMs: null,
     };
     this.states.set(identity, state);
     return state;
@@ -475,7 +522,7 @@ export class BoundedPacingAdmissionCoordinator {
     state.cautionAuthorizationsRemaining = 0;
   }
 
-  private canAdmitNewLaunch(state: KeyState): boolean {
+  private canAdmitNormally(state: KeyState): boolean {
     return (
       state.controller.canStartNewWork() &&
       (!state.cautionRestricted ||
@@ -486,12 +533,54 @@ export class BoundedPacingAdmissionCoordinator {
   }
 
   private consumeCautionAuthorization(state: KeyState): boolean {
-    if (!this.canAdmitNewLaunch(state)) return false;
+    if (!this.canAdmitNormally(state)) return false;
     if (!state.cautionRestricted) return true;
     state.cautionAuthorizationsRemaining -= 1;
     if (state.cautionAuthorizationsRemaining === 0) {
       state.cautionAuthorizationSequence = null;
     }
+    return true;
+  }
+
+  private canAdmitNewLaunch(state: KeyState, dispatchSource: "user" | "auto-nudge"): boolean {
+    return (
+      this.canAdmitNormally(state) ||
+      (dispatchSource === "user" &&
+        state.providerFamily === "claude" &&
+        state.pacingObservationEnabled &&
+        state.claudeProbeArmed &&
+        state.activeCount === 0)
+    );
+  }
+
+  private consumeAdmission(entry: WaitingEntry): boolean {
+    if (this.consumeCautionAuthorization(entry.state)) return true;
+    const state = entry.state;
+    if (
+      entry.dispatchSource !== "user" ||
+      state.providerFamily !== "claude" ||
+      !state.pacingObservationEnabled ||
+      !state.claudeProbeArmed ||
+      state.activeCount !== 0
+    ) {
+      return false;
+    }
+
+    // Burn before invoking user code so reentrant submissions cannot share the
+    // probe. The policy remains closed; this is evidence acquisition, not a
+    // fabricated quota reset.
+    state.claudeProbeArmed = false;
+    state.claudeProbeEverConsumed = true;
+    const backoffIndex = Math.min(
+      state.claudeProbeBackoffIndex,
+      CLAUDE_PROBE_BACKOFF_MS.length - 1,
+    );
+    state.claudeProbeNextArmAtMs = this.clock.now() + CLAUDE_PROBE_BACKOFF_MS[backoffIndex]!;
+    state.claudeProbeBackoffIndex = Math.min(
+      state.claudeProbeBackoffIndex + 1,
+      CLAUDE_PROBE_BACKOFF_MS.length - 1,
+    );
+    this.scheduleWake();
     return true;
   }
 
@@ -510,7 +599,9 @@ export class BoundedPacingAdmissionCoordinator {
     try {
       while (true) {
         const entry = this.waiting.find(
-          (candidate) => candidate.status === "waiting" && this.canAdmitNewLaunch(candidate.state),
+          (candidate) =>
+            candidate.status === "waiting" &&
+            this.canAdmitNewLaunch(candidate.state, candidate.dispatchSource),
         );
         if (entry === undefined) return;
         this.start(entry);
@@ -526,7 +617,7 @@ export class BoundedPacingAdmissionCoordinator {
   private start(entry: WaitingEntry): void {
     // Consume synchronously before invoking user code. A reentrant submission
     // therefore observes the depleted grant and cannot join the same fan-out.
-    if (!this.consumeCautionAuthorization(entry.state)) return;
+    if (!this.consumeAdmission(entry)) return;
     entry.status = "starting";
     this.removeWaiting(entry);
     entry.state.activeCount += 1;
@@ -584,10 +675,58 @@ export class BoundedPacingAdmissionCoordinator {
       state.activeCount === 0 &&
       state.waiting.length === 0 &&
       state.latestObservation === null &&
+      !state.pacingObservationEnabled &&
       state.controller.getSnapshot().phase === "running"
     ) {
       this.states.delete(state.identity);
     }
+  }
+
+  private disableClaudeProbe(state: KeyState): void {
+    state.hasCompleteProviderObservation = false;
+    state.claudeProbeArmed = false;
+    state.claudeProbeEverConsumed = true;
+    state.claudeProbeBackoffIndex = Math.max(1, state.claudeProbeBackoffIndex);
+    state.claudeProbeNextArmAtMs = this.clock.now() + CLAUDE_PROBE_BACKOFF_MS[0];
+  }
+
+  private burnClaudeProbeOnNewObservation(state: KeyState): void {
+    state.claudeProbeArmed = false;
+    state.claudeProbeNextArmAtMs = state.claudeProbeEverConsumed
+      ? this.clock.now() +
+        CLAUDE_PROBE_BACKOFF_MS[
+          Math.min(state.claudeProbeBackoffIndex, CLAUDE_PROBE_BACKOFF_MS.length - 1)
+        ]!
+      : null;
+  }
+
+  private armClaudeProbeIfDue(state: KeyState, now: number): void {
+    if (
+      state.providerFamily !== "claude" ||
+      !state.pacingObservationEnabled ||
+      state.claudeProbeArmed
+    ) {
+      return;
+    }
+    const snapshot = state.controller.getSnapshot();
+    if (!state.hasCompleteProviderObservation && !state.claudeProbeEverConsumed) {
+      state.claudeProbeArmed = true;
+      return;
+    }
+    if (
+      state.cautionRestricted &&
+      state.claudeProbeNextArmAtMs !== null &&
+      state.claudeProbeNextArmAtMs <= now
+    ) {
+      state.claudeProbeArmed = true;
+      return;
+    }
+    if (snapshot.phase !== "waiting-reset" || snapshot.resumeAtMs === null) return;
+    const eligibleAtMs = Math.max(
+      snapshot.resumeAtMs,
+      state.claudeProbeNextArmAtMs ?? snapshot.resumeAtMs,
+    );
+    if (eligibleAtMs <= now) state.claudeProbeArmed = true;
   }
 
   private scheduleWake(): void {
@@ -595,8 +734,31 @@ export class BoundedPacingAdmissionCoordinator {
     let earliest: number | null = null;
     for (const state of this.states.values()) {
       const snapshot = state.controller.getSnapshot();
-      if (snapshot.phase !== "paused" || snapshot.resumeAtMs === null) continue;
-      earliest = earliest === null ? snapshot.resumeAtMs : Math.min(earliest, snapshot.resumeAtMs);
+      let candidate: number | null = null;
+      if (snapshot.phase === "paused" && snapshot.resumeAtMs !== null) {
+        candidate = snapshot.resumeAtMs;
+      } else if (
+        state.providerFamily === "claude" &&
+        state.pacingObservationEnabled &&
+        !state.claudeProbeArmed &&
+        state.cautionRestricted &&
+        state.claudeProbeNextArmAtMs !== null
+      ) {
+        candidate =
+          snapshot.phase === "waiting-reset" && snapshot.resumeAtMs !== null
+            ? Math.max(snapshot.resumeAtMs, state.claudeProbeNextArmAtMs)
+            : state.claudeProbeNextArmAtMs;
+      } else if (
+        state.providerFamily === "claude" &&
+        state.pacingObservationEnabled &&
+        !state.claudeProbeArmed &&
+        snapshot.phase === "waiting-reset" &&
+        snapshot.resumeAtMs !== null
+      ) {
+        candidate = snapshot.resumeAtMs;
+      }
+      if (candidate === null) continue;
+      earliest = earliest === null ? candidate : Math.min(earliest, candidate);
     }
     if (earliest === this.wakeAtMs) return;
     this.clearWake();
@@ -635,6 +797,9 @@ export class BoundedPacingAdmissionCoordinator {
         observedAtMs: now,
         stale: true,
       });
+    }
+    for (const state of this.states.values()) {
+      this.armClaudeProbeIfDue(state, now);
     }
     this.scheduleWake();
     this.drain();

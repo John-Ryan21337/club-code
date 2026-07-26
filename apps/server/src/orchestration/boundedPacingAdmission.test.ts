@@ -345,6 +345,151 @@ describe("BoundedPacingAdmissionCoordinator", () => {
     await expect(second.promise).resolves.toBe("second");
   });
 
+  it("admits only manual Claude bootstrap probes with bounded rearming", async () => {
+    const { clock, coordinator } = setup();
+    coordinator.observe(
+      keyA,
+      claudeObservation(0, {
+        usedPercent: null,
+        providerObservationSequence: null,
+      }),
+    );
+    const order: string[] = [];
+    const automatic = coordinator.submitNewLaunch({
+      kind: "new-launch",
+      key: keyA,
+      dispatchSource: "auto-nudge",
+      launch: () => order.push("automatic"),
+    });
+    const first = coordinator.submitNewLaunch({
+      kind: "new-launch",
+      key: keyA,
+      dispatchSource: "user",
+      launch: () => order.push("first"),
+    });
+    const second = coordinator.submitNewLaunch({
+      kind: "new-launch",
+      key: keyA,
+      dispatchSource: "user",
+      launch: () => order.push("second"),
+    });
+
+    await first.promise;
+    expect(order).toEqual(["first"]);
+    expect(coordinator.waitingCount).toBe(2);
+
+    clock.advanceTo(5 * 60_000 - 1);
+    expect(order).toEqual(["first"]);
+    clock.advanceTo(5 * 60_000);
+    await second.promise;
+    expect(order).toEqual(["first", "second"]);
+
+    clock.advanceTo(20 * 60_000);
+    expect(order).toEqual(["first", "second"]);
+    expect(automatic.cancel()).toBe(true);
+    await expect(automatic.promise).rejects.toBeInstanceOf(PacingAdmissionCancelledError);
+  });
+
+  it("burns a Claude probe before invoking reentrant launch code", async () => {
+    const { coordinator } = setup();
+    coordinator.observe(
+      keyA,
+      claudeObservation(0, {
+        usedPercent: null,
+        providerObservationSequence: null,
+      }),
+    );
+    const order: string[] = [];
+    let nested!: ReturnType<BoundedPacingAdmissionCoordinator["submitNewLaunch"]>;
+    const outer = coordinator.submitNewLaunch({
+      kind: "new-launch",
+      key: keyA,
+      dispatchSource: "user",
+      launch: () => {
+        order.push("outer");
+        nested = coordinator.submitNewLaunch({
+          kind: "new-launch",
+          key: keyA,
+          dispatchSource: "user",
+          launch: () => order.push("nested"),
+        });
+      },
+    });
+
+    await outer.promise;
+    expect(order).toEqual(["outer"]);
+    expect(coordinator.waitingCount).toBe(1);
+    expect(nested.cancel()).toBe(true);
+    await expect(nested.promise).rejects.toBeInstanceOf(PacingAdmissionCancelledError);
+  });
+
+  it("burns an armed Claude probe on newer evidence and applies the next backoff", async () => {
+    const { clock, coordinator } = setup();
+    coordinator.observe(
+      keyA,
+      claudeObservation(0, {
+        usedPercent: null,
+        providerObservationSequence: null,
+      }),
+    );
+    await coordinator.submitNewLaunch({
+      kind: "new-launch",
+      key: keyA,
+      dispatchSource: "user",
+      launch: () => "first",
+    }).promise;
+    const launch = vi.fn(() => "second");
+    const second = coordinator.submitNewLaunch({
+      kind: "new-launch",
+      key: keyA,
+      dispatchSource: "user",
+      launch,
+    });
+
+    clock.advanceTo(1);
+    coordinator.observe(
+      keyA,
+      claudeObservation(1, {
+        usedPercent: null,
+        providerObservationSequence: 100_000,
+      }),
+    );
+    clock.advanceTo(5 * 60_000);
+    expect(launch).not.toHaveBeenCalled();
+    clock.advanceTo(1 + 15 * 60_000);
+    await expect(second.promise).resolves.toBe("second");
+  });
+
+  it("arms one manual probe at a Claude reset deadline without opening the policy", async () => {
+    const { clock, coordinator } = setup();
+    coordinator.observe(keyA, claudeObservation(0));
+    const order: string[] = [];
+    const manual = coordinator.submitNewLaunch({
+      kind: "new-launch",
+      key: keyA,
+      dispatchSource: "user",
+      launch: () => order.push("manual"),
+    });
+    const automatic = coordinator.submitNewLaunch({
+      kind: "new-launch",
+      key: keyA,
+      dispatchSource: "auto-nudge",
+      launch: () => order.push("automatic"),
+    });
+
+    clock.advanceTo(RESET - 1);
+    expect(order).toEqual([]);
+    clock.advanceTo(RESET);
+    await manual.promise;
+    expect(order).toEqual(["manual"]);
+    expect(coordinator.getSnapshot(keyA)?.phase).toBe("waiting-reset");
+
+    clock.advanceTo(RESET + 5 * 60_000);
+    expect(order).toEqual(["manual"]);
+    expect(automatic.cancel()).toBe(true);
+    await expect(automatic.promise).rejects.toBeInstanceOf(PacingAdmissionCancelledError);
+  });
+
   it("does not release authorization on completion, cancellation, or clock advance", async () => {
     const { clock, coordinator } = setup();
     const observed = claudeObservation(0, { usedPercent: 85 });
