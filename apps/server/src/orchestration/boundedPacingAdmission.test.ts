@@ -291,6 +291,50 @@ describe("BoundedPacingAdmissionCoordinator", () => {
     await expect(waiting.promise).rejects.toBeInstanceOf(PacingAdmissionCancelledError);
   });
 
+  it("does not restrict a healthy low-usage key merely because telemetry omits utilization", async () => {
+    const { coordinator } = setup();
+    const initial = claudeObservation(0, { usedPercent: 10 });
+    coordinator.observe(keyA, initial);
+    await expect(
+      coordinator.submitNewLaunch({ kind: "new-launch", key: keyA, launch: () => "first" }).promise,
+    ).resolves.toBe("first");
+
+    coordinator.observe(
+      keyA,
+      claudeObservation(1, {
+        usedPercent: null,
+        providerObservationSequence: requiredProviderSequence(initial) + 1,
+      }),
+    );
+    await expect(
+      coordinator.submitNewLaunch({ kind: "new-launch", key: keyA, launch: () => "second" })
+        .promise,
+    ).resolves.toBe("second");
+  });
+
+  it("keeps a first sequenced Claude observation without utilization conservatively bounded", async () => {
+    const { coordinator } = setup();
+    coordinator.observe(keyA, claudeObservation(0, { usedPercent: null }));
+    const automaticLaunch = vi.fn(() => "automatic");
+    const automatic = coordinator.submitNewLaunch({
+      kind: "new-launch",
+      key: keyA,
+      dispatchSource: "auto-nudge",
+      launch: automaticLaunch,
+    });
+    const manual = coordinator.submitNewLaunch({
+      kind: "new-launch",
+      key: keyA,
+      dispatchSource: "user",
+      launch: () => "manual-probe",
+    });
+
+    await expect(manual.promise).resolves.toBe("manual-probe");
+    expect(automaticLaunch).not.toHaveBeenCalled();
+    expect(automatic.cancel()).toBe(true);
+    await expect(automatic.promise).rejects.toBeInstanceOf(PacingAdmissionCancelledError);
+  });
+
   it("requires a newer complete observation after stale or unknown quota evidence", async () => {
     const { coordinator } = setup();
     const initial = claudeObservation(0, { usedPercent: 85 });

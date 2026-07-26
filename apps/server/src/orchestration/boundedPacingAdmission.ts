@@ -385,9 +385,16 @@ export class BoundedPacingAdmissionCoordinator {
       state.cautionAuthorizationSequence = sourceSequence;
       state.cautionAuthorizationsRemaining = this.maxCautionBandLaunchesPerObservation;
     } else {
-      // A newer but incomplete observation supersedes any unused grant. It
-      // cannot be repaired or replayed later under the same source sequence.
-      this.requireFreshCautionAuthorization(state);
+      // A newer but incomplete observation supersedes any unused grant, so an
+      // *existing* caution authorization cannot be repaired or replayed under
+      // the same source sequence. It must not, however, newly restrict a key
+      // that was not already caution-banded: Claude commonly omits
+      // utilization outside threshold bands, and a healthy/unrestricted key
+      // must keep failing open (matching the pure policy's own unavailable-
+      // telemetry behavior) rather than being closed by this common gap.
+      if (state.cautionRestricted || !state.hasCompleteProviderObservation) {
+        this.requireFreshCautionAuthorization(state);
+      }
       if (
         capturedObservation.providerFamily === "claude" &&
         !state.hasCompleteProviderObservation &&
