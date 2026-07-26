@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parseClaudeRateLimitUpdate } from "./claudeRateLimits.ts";
+import { parseClaudeRateLimitUpdate, readClaudeRateLimitStatus } from "./claudeRateLimits.ts";
 
 describe("parseClaudeRateLimitUpdate", () => {
   it("maps a five_hour event (full SDK shape) to the primary window, scaling utilization to a percentage", () => {
@@ -17,6 +17,7 @@ describe("parseClaudeRateLimitUpdate", () => {
 
     expect(update).toEqual({
       slot: "primary",
+      status: "allowed_warning",
       window: { usedPercent: 25, windowDurationMins: 300, resetsAt: 1782274800 },
     });
   });
@@ -32,6 +33,7 @@ describe("parseClaudeRateLimitUpdate", () => {
 
     expect(update).toEqual({
       slot: "primary",
+      status: "allowed",
       window: { windowDurationMins: 300, resetsAt: 1782274800 },
     });
     expect(update?.window.usedPercent).toBeUndefined();
@@ -87,5 +89,46 @@ describe("parseClaudeRateLimitUpdate", () => {
       rate_limit_info: { rateLimitType: "five_hour", resetsAt: 1782274800, utilization: 1 },
     });
     expect(update?.window.usedPercent).toBe(100);
+  });
+
+  it("preserves a genuine provider-issued rejection status", () => {
+    const update = parseClaudeRateLimitUpdate({
+      rate_limit_info: {
+        status: "rejected",
+        rateLimitType: "five_hour",
+        resetsAt: 1782274800,
+        utilization: 1,
+      },
+    });
+    expect(update?.status).toBe("rejected");
+  });
+
+  it("reads a rejection even when the provider omits a displayable window type", () => {
+    expect(
+      readClaudeRateLimitStatus({
+        type: "rate_limit_event",
+        rate_limit_info: { status: "rejected" },
+      }),
+    ).toBe("rejected");
+    expect(
+      readClaudeRateLimitStatus({
+        rate_limit_info: { status: "rejected", rateLimitType: "overage" },
+      }),
+    ).toBe("rejected");
+    expect(readClaudeRateLimitStatus({ status: "rejected" })).toBe("rejected");
+  });
+
+  it("omits status rather than misclassifying an unrecognized or missing value", () => {
+    const unrecognized = parseClaudeRateLimitUpdate({
+      rate_limit_info: { status: "some_future_status", rateLimitType: "five_hour", resetsAt: 1 },
+    });
+    expect(unrecognized?.status).toBeUndefined();
+    expect(unrecognized).not.toHaveProperty("status");
+
+    const missing = parseClaudeRateLimitUpdate({
+      rate_limit_info: { rateLimitType: "five_hour", resetsAt: 1 },
+    });
+    expect(missing?.status).toBeUndefined();
+    expect(missing).not.toHaveProperty("status");
   });
 });

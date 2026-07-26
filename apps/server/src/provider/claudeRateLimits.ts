@@ -14,6 +14,12 @@
  * missing we emit a window with only `resetsAt`; the UI then shows the reset and reports
  * usage as "unknown" rather than fabricating a percentage.
  *
+ * The pinned `@anthropic-ai/claude-agent-sdk` also types `rate_limit_info.status` as
+ * `'allowed' | 'allowed_warning' | 'rejected'` — `'rejected'` is the SDK's own genuine
+ * quota/session-limit rejection signal (Cafe's 429-equivalent for Claude), distinct from
+ * transport/auth/overload failures. Callers should prefer this structured field over
+ * matching on display text such as the SDK's `USAGE_LIMIT_ERROR_PREFIXES` alpha export.
+ *
  * @module claudeRateLimits
  */
 import type { ServerProviderAccountRateLimitWindow } from "@cafecode/contracts";
@@ -23,9 +29,24 @@ const SEVEN_DAY_WINDOW_MINS = 10_080;
 
 export type ClaudeRateLimitSlot = "primary" | "secondary";
 
+/** Verbatim `rate_limit_info.status` from the pinned Claude Agent SDK's `SDKRateLimitInfo`. */
+export type ClaudeRateLimitStatus = "allowed" | "allowed_warning" | "rejected";
+
+const KNOWN_RATE_LIMIT_STATUSES: ReadonlySet<string> = new Set<ClaudeRateLimitStatus>([
+  "allowed",
+  "allowed_warning",
+  "rejected",
+]);
+
 export interface ClaudeRateLimitWindowUpdate {
   readonly slot: ClaudeRateLimitSlot;
   readonly window: ServerProviderAccountRateLimitWindow;
+  /**
+   * The SDK's own rejection classification, omitted when the raw payload's
+   * `status` is missing or not one of the SDK's known literals (forward
+   * compatible with a future SDK status value rather than misclassifying it).
+   */
+  readonly status?: ClaudeRateLimitStatus;
 }
 
 function readFiniteNumber(value: unknown): number | undefined {
@@ -53,7 +74,20 @@ function extractRateLimitInfo(raw: unknown): Record<string, unknown> | undefined
   if (!record) return undefined;
   const nested = asRecord(record.rate_limit_info);
   if (nested) return nested;
-  return "rateLimitType" in record ? record : undefined;
+  return "rateLimitType" in record || "status" in record ? record : undefined;
+}
+
+/**
+ * Reads the provider's structured admission status independently of whether
+ * the event describes a window Cafe currently displays. Rejection events may
+ * omit `rateLimitType`, so callers enforcing admission must not depend on the
+ * display-window parser returning a slot.
+ */
+export function readClaudeRateLimitStatus(raw: unknown): ClaudeRateLimitStatus | undefined {
+  const info = extractRateLimitInfo(raw);
+  return typeof info?.status === "string" && KNOWN_RATE_LIMIT_STATUSES.has(info.status)
+    ? (info.status as ClaudeRateLimitStatus)
+    : undefined;
 }
 
 function slotForRateLimitType(rateLimitType: unknown): ClaudeRateLimitSlot | undefined {
@@ -87,6 +121,7 @@ export function parseClaudeRateLimitUpdate(raw: unknown): ClaudeRateLimitWindowU
   const utilization = readFiniteNumber(info.utilization);
   const usedPercent = utilization !== undefined ? utilization * 100 : undefined;
   const resetsAt = readPositiveInteger(info.resetsAt);
+  const status = readClaudeRateLimitStatus(info);
 
   const window: ServerProviderAccountRateLimitWindow = {
     ...(usedPercent !== undefined ? { usedPercent } : {}),
@@ -94,5 +129,5 @@ export function parseClaudeRateLimitUpdate(raw: unknown): ClaudeRateLimitWindowU
     ...(resetsAt !== undefined ? { resetsAt } : {}),
   };
 
-  return { slot, window };
+  return { slot, window, ...(status !== undefined ? { status } : {}) };
 }
