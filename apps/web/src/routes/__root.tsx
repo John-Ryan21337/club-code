@@ -16,6 +16,7 @@ import { CommandPalette } from "../components/CommandPalette";
 import { InitialBackendBootstrapSurface } from "../components/InitialBackendBootstrapSurface";
 import { OnboardingSurface } from "../components/OnboardingSurface";
 import { DesktopNotificationWatcher } from "../components/DesktopNotificationWatcher";
+import { BackgroundAutoNudgeCoordinator } from "../components/BackgroundAutoNudgeCoordinator";
 import { ProviderUpdateLaunchNotification } from "../components/ProviderUpdateLaunchNotification";
 import {
   WebSocketConnectionCoordinator,
@@ -159,6 +160,7 @@ function RootRouteView() {
         <EnvironmentConnectionManagerBootstrap />
         <AppearanceSettingsSync />
         <PowerSaveBlockerSync />
+        {primaryEnvironmentAuthenticated ? <BackgroundAutoNudgeCoordinator /> : null}
         {primaryEnvironmentAuthenticated ? <EventRouter /> : null}
         {primaryEnvironmentAuthenticated ? <ProviderUpdateLaunchNotification /> : null}
         {primaryEnvironmentAuthenticated ? <DesktopNotificationWatcher /> : null}
