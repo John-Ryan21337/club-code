@@ -17,7 +17,7 @@ import {
 export const AUTO_NUDGE_BACKGROUND_STORAGE_KEY = "cafe-code.auto-nudge.background.v1";
 const AUTO_NUDGE_BACKGROUND_STORAGE_PROBE_KEY = "cafe-code.auto-nudge.background.probe.v1";
 const MAX_BACKGROUND_LEDGER_ENTRIES = 40;
-const MAX_BACKGROUND_STORAGE_CHARACTERS = 64_000;
+const MAX_BACKGROUND_STORAGE_CHARACTERS = 192_000;
 // Transport identities include a short namespace plus the bounded 512-byte
 // terminal key. Keep enough room to rehydrate those sent-ledger entries.
 const MAX_SAFE_ID_LENGTH = 640;
@@ -37,6 +37,7 @@ export interface BackgroundAutoNudgeLedgerEntry {
   readonly at: string;
   readonly kind: "started" | "scheduled" | "sent" | "paused" | "resumed" | "stopped";
   readonly detail: string;
+  readonly owner?: BackgroundAutoNudgeThreadRef;
   readonly terminalTurnKey?: string;
   readonly messageId?: string;
 }
@@ -198,6 +199,10 @@ function readState(storage: BackgroundAutoNudgeStorage | null): BackgroundAutoNu
                 entry.kind === "stopped") &&
               typeof entry.detail === "string" &&
               entry.detail.length <= 300 &&
+              (entry.owner === undefined ||
+                (entry.owner !== null &&
+                  safeId(entry.owner.environmentId) &&
+                  safeId(entry.owner.threadId))) &&
               (entry.terminalTurnKey === undefined || safeId(entry.terminalTurnKey)) &&
               (entry.messageId === undefined || safeId(entry.messageId)),
             ),
@@ -335,9 +340,11 @@ export class BackgroundAutoNudgeController {
     state: BackgroundAutoNudgeState,
     entry: BackgroundAutoNudgeLedgerEntry,
   ): BackgroundAutoNudgeState {
+    const entryOwner = state.owner ?? state.lastOwner;
+    const attributedEntry = entryOwner ? { ...entry, owner: entryOwner } : entry;
     return {
       ...state,
-      ledger: trimLedger([...state.ledger, entry]),
+      ledger: trimLedger([...state.ledger, attributedEntry]),
     };
   }
 
@@ -692,4 +699,11 @@ export function isLastBackgroundAutoNudgeOwner(
   owner: BackgroundAutoNudgeThreadRef,
 ): boolean {
   return sameOwner(state.lastOwner, owner);
+}
+
+export function backgroundAutoNudgeLedgerForOwner(
+  state: BackgroundAutoNudgeState,
+  owner: BackgroundAutoNudgeThreadRef,
+): readonly BackgroundAutoNudgeLedgerEntry[] {
+  return state.ledger.filter((entry) => sameOwner(entry.owner ?? null, owner));
 }

@@ -109,9 +109,9 @@ import { newCommandId, newDraftId, newMessageId, newThreadId } from "~/lib/utils
 import { getProviderModelCapabilities, resolveSelectableProvider } from "../providerModels";
 import { useSettings, useUpdateSettings } from "../hooks/useSettings";
 import {
+  backgroundAutoNudgeLedgerForOwner,
   getBackgroundAutoNudgeController,
   isBackgroundAutoNudgeOwner,
-  isLastBackgroundAutoNudgeOwner,
   supportsBackgroundAutoNudgeDispatchLock,
   useBackgroundAutoNudgeState,
 } from "../backgroundAutoNudger";
@@ -1832,12 +1832,6 @@ export default function ChatView(props: ChatViewProps) {
   const backgroundAutoNudgeOwnerForRoute =
     routeKind === "server" &&
     isBackgroundAutoNudgeOwner(backgroundAutoNudgeState, {
-      environmentId,
-      threadId,
-    });
-  const backgroundAutoNudgeLastOwnerForRoute =
-    routeKind === "server" &&
-    isLastBackgroundAutoNudgeOwner(backgroundAutoNudgeState, {
       environmentId,
       threadId,
     });
@@ -6546,7 +6540,12 @@ export default function ChatView(props: ChatViewProps) {
                   backgroundMaxMinutes={settings.autoNudgeMaxMinutes}
                   backgroundReason={backgroundAutoNudgeState.reason}
                   backgroundLedger={
-                    backgroundAutoNudgeLastOwnerForRoute ? backgroundAutoNudgeState.ledger : []
+                    routeKind === "server"
+                      ? backgroundAutoNudgeLedgerForOwner(backgroundAutoNudgeState, {
+                          environmentId,
+                          threadId,
+                        })
+                      : []
                   }
                   onModeChange={(mode) => {
                     cancelScheduledAutoNudge(mode === "off");

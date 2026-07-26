@@ -5,6 +5,7 @@ import {
   AUTO_NUDGE_BACKGROUND_STORAGE_KEY,
   BackgroundAutoNudgeController,
   __resetBackgroundAutoNudgeControllerForTests,
+  backgroundAutoNudgeLedgerForOwner,
   getBackgroundAutoNudgeController,
   type BackgroundAutoNudgeObservation,
 } from "./backgroundAutoNudger";
@@ -613,6 +614,40 @@ describe("background auto nudge controller", () => {
         terminalTurnKey: "local:thread-a:turn-1",
         messageId: firstAutoNudgeMessageId,
       }),
+    );
+  });
+
+  it("keeps visible ledger attribution exact after ownership transfers", () => {
+    const { storage } = storageFixture();
+    const firstOwner = owner;
+    const secondOwner = { environmentId: "local", threadId: "thread-b" };
+    const controller = new BackgroundAutoNudgeController(storage);
+    controller.start(firstOwner, "2026-07-23T23:59:00.000Z", startedAt);
+    controller.observe(observation(startedAt));
+    const dueAt = Date.parse(controller.getSnapshot().scheduled?.dueAt ?? "");
+    controller.observe(observation(dueAt));
+    controller.stop("Transferred by operator.", dueAt + 1);
+    controller.start(secondOwner, null, dueAt + 2);
+
+    const afterReload = new BackgroundAutoNudgeController(storage).getSnapshot();
+    const firstOwnerLedger = backgroundAutoNudgeLedgerForOwner(afterReload, firstOwner);
+    const secondOwnerLedger = backgroundAutoNudgeLedgerForOwner(afterReload, secondOwner);
+
+    expect(firstOwnerLedger).toContainEqual(
+      expect.objectContaining({
+        owner: firstOwner,
+        kind: "sent",
+        terminalTurnKey: firstTerminalTurnKey,
+      }),
+    );
+    expect(secondOwnerLedger).toEqual([
+      expect.objectContaining({
+        owner: secondOwner,
+        kind: "started",
+      }),
+    ]);
+    expect(secondOwnerLedger).not.toContainEqual(
+      expect.objectContaining({ terminalTurnKey: firstTerminalTurnKey }),
     );
   });
 
