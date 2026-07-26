@@ -7,9 +7,14 @@ export interface PacingWindowObservation {
   readonly usedPercent: number | null;
   readonly resetsAtMs: number | null;
   readonly windowDurationMs: number | null;
+  /** Local acquisition order; monotonic across clock changes and never provider-supplied. */
+  readonly observationSequence: number;
+  /** Local admission-owner count, sampled synchronously when this observation is applied. */
+  readonly activeLaunchCount: number;
+  /** Local wall-clock time sampled by the admission owner, never a provider timestamp. */
   readonly observedAtMs: number;
+  /** Whether the quota fields, rather than the two local fields above, are stale. */
   readonly stale: boolean;
-  readonly inFlightCount: number;
   readonly enabled: boolean;
   /** Zero keeps the provider-window schedule authoritative. */
   readonly minimumPauseMs: number;
@@ -36,9 +41,32 @@ function clampUsedPercent(value: number | null): number | null {
   return Math.min(100, Math.max(0, value));
 }
 
-function normalizeInFlightCount(value: number): number | null {
-  if (!Number.isFinite(value) || value < 0) return null;
-  return Math.floor(value);
+function normalizeActiveLaunchCount(value: number): number | null {
+  return Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+function normalizeObservationSequence(value: number): number | null {
+  return Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+function normalizeMinimumPauseMs(value: number): number {
+  if (value === Number.POSITIVE_INFINITY) return value;
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+function isMinorWindowEstimateCorrection(
+  previous: ValidPacingWindowObservation,
+  current: ValidPacingWindowObservation,
+): boolean {
+  const toleranceMs = 60_000;
+  // Compare with the last accepted estimate so bounded refinements may
+  // accumulate without disguising a reset into the next physical window.
+  return (
+    previous.providerFamily === current.providerFamily &&
+    current.observedAtMs < previous.resetsAtMs &&
+    Math.abs(previous.resetsAtMs - current.resetsAtMs) <= toleranceMs &&
+    Math.abs(previous.windowDurationMs - current.windowDurationMs) <= toleranceMs
+  );
 }
 
 function normalizeWindow(input: PacingWindowObservation): ValidPacingWindowObservation | null {
@@ -58,7 +86,7 @@ function normalizeWindow(input: PacingWindowObservation): ValidPacingWindowObser
     return null;
   }
 
-  const inFlightCount = normalizeInFlightCount(input.inFlightCount);
+  const activeLaunchCount = normalizeActiveLaunchCount(input.activeLaunchCount);
   return {
     ...input,
     usedPercent,
@@ -67,9 +95,8 @@ function normalizeWindow(input: PacingWindowObservation): ValidPacingWindowObser
     // An invalid active-work count is treated conservatively. If a quota
     // boundary closes during that observation, admission remains in draining
     // until a later observation proves that active work reached zero.
-    inFlightCount: inFlightCount ?? 1,
-    minimumPauseMs:
-      Number.isFinite(input.minimumPauseMs) && input.minimumPauseMs > 0 ? input.minimumPauseMs : 0,
+    activeLaunchCount: activeLaunchCount ?? 1,
+    minimumPauseMs: normalizeMinimumPauseMs(input.minimumPauseMs),
   };
 }
 
@@ -93,10 +120,11 @@ export class DrainFirstPacingController {
   private generationRevision = 0;
   private releaseAfterDrain = false;
   private lastValidWindow: ValidPacingWindowObservation | null = null;
-  private latestObservationAtMs: number | null = null;
+  private latestObservationSequence: number | null = null;
+  private latestObservedAtMs: number | null = null;
 
   getSnapshot(): DrainFirstPacingSnapshot {
-    return this.snapshot;
+    return { ...this.snapshot };
   }
 
   canStartNewWork(): boolean {
@@ -104,26 +132,69 @@ export class DrainFirstPacingController {
   }
 
   observe(rawInput: PacingWindowObservation): DrainFirstPacingSnapshot {
-    if (!rawInput.enabled || rawInput.providerFamily === "other") {
-      return this.reset("Pacing is disabled or unsupported for this provider.", true);
+    return { ...this.applyObservation(rawInput) };
+  }
+
+  private applyObservation(rawInput: PacingWindowObservation): DrainFirstPacingSnapshot {
+    const observationSequence = normalizeObservationSequence(rawInput.observationSequence);
+    const pacingDisabledOrUnsupported = !rawInput.enabled || rawInput.providerFamily === "other";
+    if (observationSequence === null) {
+      if (pacingDisabledOrUnsupported) {
+        return this.reset("Pacing is disabled or unsupported for this provider.");
+      }
+      return this.handleInvalidObservationOrder();
     }
-
-    const observedAtMs = Number.isFinite(rawInput.observedAtMs) ? rawInput.observedAtMs : null;
-    const observedInFlightCount = normalizeInFlightCount(rawInput.inFlightCount);
-
-    // Usage snapshots can arrive after a newer poll has already advanced the
-    // state machine. An older quota generation must never reopen (or replace
-    // the drain schedule of) a gate closed by newer evidence.
     if (
-      observedAtMs !== null &&
-      this.latestObservationAtMs !== null &&
-      observedAtMs < this.latestObservationAtMs
+      this.latestObservationSequence !== null &&
+      observationSequence <= this.latestObservationSequence
     ) {
       return this.snapshot;
     }
-    if (observedAtMs !== null) {
-      this.latestObservationAtMs = observedAtMs;
+    this.latestObservationSequence = observationSequence;
+
+    if (pacingDisabledOrUnsupported) {
+      // Settings state is ordered by the same local acquisition sequence as
+      // quota data. Preserve that sequence across disable/re-enable so a late
+      // pre-disable sample cannot reopen or re-close the new policy state.
+      return this.reset("Pacing is disabled or unsupported for this provider.");
     }
+
+    const observedAtMs = Number.isFinite(rawInput.observedAtMs) ? rawInput.observedAtMs : null;
+    const previousObservedAtMs = this.latestObservedAtMs;
+    if (observedAtMs !== null) {
+      this.latestObservedAtMs = observedAtMs;
+    }
+    const observedActiveLaunchCount = normalizeActiveLaunchCount(rawInput.activeLaunchCount);
+    const currentMinimumPauseMs = normalizeMinimumPauseMs(rawInput.minimumPauseMs);
+
+    if (
+      observedAtMs !== null &&
+      previousObservedAtMs !== null &&
+      this.lastValidWindow !== null &&
+      observedAtMs < previousObservedAtMs
+    ) {
+      // The independently monotonic observation sequence proves this is a
+      // newer acquisition despite the wall clock moving backward. Shift the
+      // trusted physical window and any concrete deadline by the same delta;
+      // quota may be unavailable during the clock correction.
+      const clockDeltaMs = observedAtMs - previousObservedAtMs;
+      this.lastValidWindow = {
+        ...this.lastValidWindow,
+        observedAtMs,
+        resetsAtMs: this.lastValidWindow.resetsAtMs + clockDeltaMs,
+      };
+      if (this.windowIdentity !== null) {
+        this.windowIdentity = `${this.lastValidWindow.providerFamily}:${this.lastValidWindow.resetsAtMs}:${this.lastValidWindow.windowDurationMs}`;
+      }
+      if (this.snapshot.resumeAtMs !== null) {
+        this.snapshot = {
+          ...this.snapshot,
+          resumeAtMs: Math.max(observedAtMs, this.snapshot.resumeAtMs + clockDeltaMs),
+        };
+      }
+    }
+
+    const input = normalizeWindow(rawInput);
 
     if (
       (this.snapshot.phase === "paused" || this.snapshot.phase === "waiting-reset") &&
@@ -131,10 +202,10 @@ export class DrainFirstPacingController {
       observedAtMs !== null &&
       observedAtMs >= this.snapshot.resumeAtMs
     ) {
-      if (observedInFlightCount === null) {
+      if (observedActiveLaunchCount === null) {
         return this.snapshot;
       }
-      if (observedInFlightCount > 0) {
+      if (observedActiveLaunchCount > 0) {
         this.releaseAfterDrain = true;
         this.snapshot = {
           ...this.snapshot,
@@ -143,26 +214,40 @@ export class DrainFirstPacingController {
           reason: "The pacing deadline passed; waiting for active work to finish before resuming.",
         };
       } else {
-        // Reopen the completed checkpoint, then evaluate this same
-        // observation. A later threshold may already be ahead of schedule.
-        this.reset("The pacing clock deadline passed; evaluating the current quota window.");
+        // Keep generation/checkpoint memory for this physical provider window,
+        // then evaluate the same observation for any later threshold.
+        this.releaseCompletedDrain();
       }
     }
 
-    const input = normalizeWindow(rawInput);
     if (input === null) {
-      return this.handleUnavailableObservation(observedAtMs, observedInFlightCount);
+      return this.handleUnavailableObservation(
+        observedAtMs,
+        observedActiveLaunchCount,
+        currentMinimumPauseMs,
+      );
     }
 
     // Aging telemetry cannot reopen a gate that a concrete, previously fresh
     // quota observation already closed or replace its trusted reset schedule.
     if (input.stale) {
-      return this.handleUnavailableObservation(observedAtMs, observedInFlightCount);
+      return this.handleUnavailableObservation(
+        observedAtMs,
+        observedActiveLaunchCount,
+        currentMinimumPauseMs,
+      );
     }
 
-    const windowIdentity = `${input.providerFamily}:${input.resetsAtMs}:${input.windowDurationMs}`;
     const previousValidWindow = this.lastValidWindow;
     const hasConcreteClosedGate = this.snapshot.phase !== "running";
+    const observedWindowIdentity = `${input.providerFamily}:${input.resetsAtMs}:${input.windowDurationMs}`;
+    const windowIdentity =
+      !hasConcreteClosedGate &&
+      this.windowIdentity !== null &&
+      previousValidWindow !== null &&
+      isMinorWindowEstimateCorrection(previousValidWindow, input)
+        ? this.windowIdentity
+        : observedWindowIdentity;
     if (
       this.windowIdentity !== null &&
       this.windowIdentity !== windowIdentity &&
@@ -174,14 +259,18 @@ export class DrainFirstPacingController {
       // quota window reset. While a concrete gate is closed, accept a new
       // generation only after the previously trusted reset deadline. This
       // prevents ordinary provider estimate corrections from releasing work.
-      return this.handleUnavailableObservation(observedAtMs, observedInFlightCount);
+      return this.handleUnavailableObservation(
+        observedAtMs,
+        observedActiveLaunchCount,
+        currentMinimumPauseMs,
+      );
     }
 
     this.lastValidWindow = input;
     if (this.windowIdentity !== windowIdentity) {
       const wasStillDraining =
         this.snapshot.phase === "draining" &&
-        input.inFlightCount > 0 &&
+        input.activeLaunchCount > 0 &&
         this.windowIdentity !== null;
       const previousCheckpoint = this.snapshot.checkpointPercent;
       this.windowIdentity = windowIdentity;
@@ -231,17 +320,9 @@ export class DrainFirstPacingController {
           reason: `Draining active work at the ${threshold}% quota checkpoint.`,
         };
       }
-      if (input.inFlightCount > 0) return this.snapshot;
+      if (input.activeLaunchCount > 0) return this.snapshot;
       if (this.releaseAfterDrain) {
-        this.releaseAfterDrain = false;
-        this.snapshot = {
-          ...this.snapshot,
-          phase: "running",
-          checkpointPercent: null,
-          resumeAtMs: null,
-          reason: null,
-        };
-        return this.snapshot;
+        return this.releaseCompletedDrain();
       }
       return this.pauseAfterDrain(input, this.snapshot.checkpointPercent ?? 100);
     }
@@ -253,7 +334,8 @@ export class DrainFirstPacingController {
 
   private handleUnavailableObservation(
     observedAtMs: number | null,
-    observedInFlightCount: number | null,
+    observedActiveLaunchCount: number | null,
+    minimumPauseMs: number,
   ): DrainFirstPacingSnapshot {
     if (this.snapshot.phase === "running") {
       // Preserve the trusted generation/checkpoint memory while admission is
@@ -272,8 +354,12 @@ export class DrainFirstPacingController {
       return this.snapshot;
     }
 
-    if (observedInFlightCount === null || observedInFlightCount > 0) {
+    if (observedActiveLaunchCount === null || observedActiveLaunchCount > 0) {
       return this.snapshot;
+    }
+
+    if (this.releaseAfterDrain) {
+      return this.releaseCompletedDrain();
     }
 
     const lastValidWindow = this.lastValidWindow;
@@ -281,14 +367,15 @@ export class DrainFirstPacingController {
       return this.snapshot;
     }
     if (observedAtMs !== null && observedAtMs >= lastValidWindow.resetsAtMs) {
-      return this.reset("The quota window ended after active work drained.");
+      return this.releaseCompletedDrain();
     }
 
     return this.pauseAfterDrain(
       {
         ...lastValidWindow,
         observedAtMs: observedAtMs ?? lastValidWindow.observedAtMs,
-        inFlightCount: 0,
+        activeLaunchCount: 0,
+        minimumPauseMs,
       },
       this.snapshot.checkpointPercent ?? 100,
     );
@@ -328,7 +415,7 @@ export class DrainFirstPacingController {
     input: ValidPacingWindowObservation,
     threshold: number,
   ): DrainFirstPacingSnapshot {
-    if (input.inFlightCount > 0) {
+    if (input.activeLaunchCount > 0) {
       this.snapshot = {
         phase: "draining",
         generation: this.snapshot.generation,
@@ -383,14 +470,33 @@ export class DrainFirstPacingController {
     return this.snapshot;
   }
 
-  private reset(reason: string, resetObservationClock = false): DrainFirstPacingSnapshot {
+  private handleInvalidObservationOrder(): DrainFirstPacingSnapshot {
+    if (this.snapshot.phase !== "running") return this.snapshot;
+    this.snapshot = {
+      ...this.snapshot,
+      reason: "Quota observation order is unavailable; pacing fails open.",
+    };
+    return this.snapshot;
+  }
+
+  private releaseCompletedDrain(): DrainFirstPacingSnapshot {
+    this.releaseAfterDrain = false;
+    this.snapshot = {
+      ...this.snapshot,
+      phase: "running",
+      checkpointPercent: null,
+      resumeAtMs: null,
+      reason: null,
+    };
+    return this.snapshot;
+  }
+
+  private reset(reason: string): DrainFirstPacingSnapshot {
     this.crossed.clear();
     this.windowIdentity = null;
     this.releaseAfterDrain = false;
     this.lastValidWindow = null;
-    if (resetObservationClock) {
-      this.latestObservationAtMs = null;
-    }
+    this.latestObservedAtMs = null;
     this.snapshot = {
       phase: "running",
       generation: null,
