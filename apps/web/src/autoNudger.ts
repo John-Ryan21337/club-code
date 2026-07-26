@@ -2,7 +2,9 @@ import {
   CommandId,
   MessageId,
   type AutoNudgeMode,
+  type ClientOrchestrationCommand,
   type ServerProviderAccountRateLimitSnapshot,
+  type TurnDispatchSource,
 } from "@cafecode/contracts";
 
 export const AUTO_NUDGE_DELAY_MS = 5_000;
@@ -18,9 +20,41 @@ export function autoNudgePromptForMode(mode: AutoNudgeMode): string | null {
   return mode === "off" ? null : AUTO_NUDGE_PROMPTS[mode];
 }
 
+export const AUTO_NUDGE_DISPATCH_SOURCE = "auto-nudge" as const satisfies TurnDispatchSource;
+
 export interface AutoNudgeDispatchIdentity {
   readonly commandId: CommandId;
   readonly messageId: MessageId;
+  readonly dispatchSource: typeof AUTO_NUDGE_DISPATCH_SOURCE;
+}
+
+type ClientTurnDispatchCommand = Extract<
+  ClientOrchestrationCommand,
+  { readonly type: "thread.turn.start" | "thread.turn.steer" }
+>;
+
+export function withAutoNudgeDispatchSource<const Command extends ClientTurnDispatchCommand>(
+  command: Command,
+  identity: AutoNudgeDispatchIdentity,
+): Command & { readonly dispatchSource: typeof AUTO_NUDGE_DISPATCH_SOURCE };
+export function withAutoNudgeDispatchSource<const Command extends ClientTurnDispatchCommand>(
+  command: Command,
+  identity: undefined,
+): Command;
+export function withAutoNudgeDispatchSource<const Command extends ClientTurnDispatchCommand>(
+  command: Command,
+  identity: AutoNudgeDispatchIdentity | undefined,
+): Command | (Command & { readonly dispatchSource: typeof AUTO_NUDGE_DISPATCH_SOURCE });
+export function withAutoNudgeDispatchSource<const Command extends ClientTurnDispatchCommand>(
+  command: Command,
+  identity: AutoNudgeDispatchIdentity | undefined,
+): Command | (Command & { readonly dispatchSource: typeof AUTO_NUDGE_DISPATCH_SOURCE }) {
+  return identity === undefined
+    ? command
+    : {
+        ...command,
+        dispatchSource: identity.dispatchSource,
+      };
 }
 
 export function normalizeAutoNudgeTerminalTurnKey(value: unknown): string | null {
@@ -42,6 +76,7 @@ export function autoNudgeDispatchIdentityForTurn(
   return {
     commandId: CommandId.make(`auto-nudge-command:${normalizedTurnKey}`),
     messageId: MessageId.make(`auto-nudge-message:${normalizedTurnKey}`),
+    dispatchSource: AUTO_NUDGE_DISPATCH_SOURCE,
   };
 }
 

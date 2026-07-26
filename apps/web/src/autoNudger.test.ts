@@ -1,3 +1,4 @@
+import { ThreadId, TurnId } from "@cafecode/contracts";
 import { describe, expect, it } from "vitest";
 import {
   AUTO_NUDGE_DELAY_MS,
@@ -12,6 +13,7 @@ import {
   createAutoNudgeTurnLedger,
   normalizeAutoNudgeTerminalTurnKey,
   providerCanAcceptAutoNudgeTurn,
+  withAutoNudgeDispatchSource,
 } from "./autoNudger";
 
 const eligible = {
@@ -21,6 +23,28 @@ const eligible = {
   hasPendingWork: false,
   providerAvailable: true,
 };
+
+function commandForAutoNudgeTest(
+  identity: ReturnType<typeof autoNudgeDispatchIdentityForTurn>,
+  threadId: string,
+  expectedTurnId: string,
+) {
+  return {
+    type: "thread.turn.start" as const,
+    commandId: identity.commandId,
+    threadId: ThreadId.make(threadId),
+    message: {
+      messageId: identity.messageId,
+      role: "user" as const,
+      text: "Continue.",
+      attachments: [],
+    },
+    expectedSettledTurnId: TurnId.make(expectedTurnId),
+    runtimeMode: "approval-required" as const,
+    interactionMode: "default" as const,
+    createdAt: "2026-07-26T00:00:00.000Z",
+  };
+}
 
 function providerWithRateLimits(rateLimits: {
   readonly rateLimitReachedType?: string | null;
@@ -99,12 +123,38 @@ describe("auto nudger safety gates", () => {
     expect(next).not.toEqual(first);
     expect(String(first.commandId)).toContain(eligible.terminalTurnKey);
     expect(first.commandId).not.toBe(first.messageId);
+    expect(first.dispatchSource).toBe("auto-nudge");
     expect(() => autoNudgeDispatchIdentityForTurn("x".repeat(513))).toThrow(
       "bounded provider-confirmed terminal turn key",
     );
     expect(normalizeAutoNudgeTerminalTurnKey("x".repeat(512))).toBe("x".repeat(512));
     expect(normalizeAutoNudgeTerminalTurnKey("x".repeat(513))).toBeNull();
     expect(normalizeAutoNudgeTerminalTurnKey(" unsafe ")).toBeNull();
+  });
+
+  it("tags foreground and background dispatches while leaving ordinary sends untagged", () => {
+    const backgroundIdentity = autoNudgeDispatchIdentityForTurn("environment:background:turn");
+    const foregroundIdentity = autoNudgeDispatchIdentityForTurn("environment:foreground:turn");
+
+    const background = withAutoNudgeDispatchSource(
+      commandForAutoNudgeTest(backgroundIdentity, "thread-background", "turn-background"),
+      backgroundIdentity,
+    );
+    const foreground = withAutoNudgeDispatchSource(
+      commandForAutoNudgeTest(foregroundIdentity, "thread-foreground", "turn-foreground"),
+      foregroundIdentity,
+    );
+    const ordinaryCommand = commandForAutoNudgeTest(
+      autoNudgeDispatchIdentityForTurn("environment:ordinary:identity-only"),
+      "thread-ordinary",
+      "turn-ordinary",
+    );
+    const ordinary = withAutoNudgeDispatchSource(ordinaryCommand, undefined);
+
+    expect(background.dispatchSource).toBe("auto-nudge");
+    expect(foreground.dispatchSource).toBe("auto-nudge");
+    expect(ordinary).toBe(ordinaryCommand);
+    expect("dispatchSource" in ordinary).toBe(false);
   });
 
   it("consumes a manual action before a countdown has been scheduled", () => {
