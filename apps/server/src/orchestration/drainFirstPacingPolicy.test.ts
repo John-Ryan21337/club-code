@@ -157,7 +157,7 @@ describe("DrainFirstPacingController", () => {
     expect(drained.resumeAtMs).toBe(RESET);
   });
 
-  it("does not reopen at a deadline while any provider work is still active", () => {
+  it("requires provider reset evidence after a waiting-reset deadline", () => {
     const pacing = new DrainFirstPacingController();
     const fourHours = 4 * 60 * 60 * 1_000;
     pacing.observe(
@@ -178,7 +178,7 @@ describe("DrainFirstPacingController", () => {
           activeLaunchCount: 1,
         }),
       ).phase,
-    ).toBe("draining");
+    ).toBe("waiting-reset");
     expect(pacing.canStartNewWork()).toBe(false);
 
     expect(
@@ -188,6 +188,20 @@ describe("DrainFirstPacingController", () => {
           usedPercent: 94,
           windowDurationMs: fourHours,
           observedAtMs: RESET + 1,
+          activeLaunchCount: 0,
+        }),
+      ).phase,
+    ).toBe("waiting-reset");
+    expect(pacing.canStartNewWork()).toBe(false);
+
+    expect(
+      pacing.observe(
+        observation({
+          providerFamily: "claude",
+          usedPercent: 2,
+          resetsAtMs: RESET + fourHours,
+          windowDurationMs: fourHours,
+          observedAtMs: RESET + 2,
           activeLaunchCount: 0,
         }),
       ).phase,

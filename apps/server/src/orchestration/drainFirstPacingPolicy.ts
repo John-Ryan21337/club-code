@@ -197,7 +197,7 @@ export class DrainFirstPacingController {
     const input = normalizeWindow(rawInput);
 
     if (
-      (this.snapshot.phase === "paused" || this.snapshot.phase === "waiting-reset") &&
+      this.snapshot.phase === "paused" &&
       this.snapshot.resumeAtMs !== null &&
       observedAtMs !== null &&
       observedAtMs >= this.snapshot.resumeAtMs
