@@ -6,6 +6,7 @@ import {
   type ErrorComponentProps,
   useLocation,
   useNavigate,
+  useRouter,
 } from "@tanstack/react-router";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { QueryClient, useQueryClient } from "@tanstack/react-query";
@@ -209,6 +210,7 @@ function DesktopShutdownOverlay() {
 }
 
 function RootRouteErrorView({ error, reset }: ErrorComponentProps) {
+  const router = useRouter();
   const message = errorMessage(error);
   const details = errorDetails(error);
 
@@ -229,7 +231,13 @@ function RootRouteErrorView({ error, reset }: ErrorComponentProps) {
         <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{message}</p>
 
         <div className="mt-5 flex flex-wrap gap-2">
-          <Button size="sm" onClick={() => reset()}>
+          <Button
+            size="sm"
+            onClick={() => {
+              reset();
+              void router.invalidate({ sync: true });
+            }}
+          >
             Try again
           </Button>
           <Button size="sm" variant="outline" onClick={() => window.location.reload()}>
