@@ -45,6 +45,9 @@ import {
 
 const CLIENT_SETTINGS_PERSISTENCE_ERROR_SCOPE = "[CLIENT_SETTINGS]";
 let clientSettingsImportAttempted = false;
+let localClientSettingsWriteTail: Promise<void> = Promise.resolve();
+let localClientSettingsMutationRevision = 0;
+const localClientSettingsFieldRevisions = new Map<string, number>();
 
 function subscribeClientSettings(listener: () => void): () => void {
   const unsubscribe = subscribeClientSettingsSnapshot(listener);
@@ -109,13 +112,30 @@ async function maybeImportLocalClientSettingsToServer(): Promise<void> {
   }
 }
 
-function persistClientSettings(settings: ClientSettings): void {
-  replaceClientSettingsSnapshot(settings);
-  void ensureLocalApi()
-    .persistence.setClientSettings(settings)
-    .catch((error) => {
-      console.error(`${CLIENT_SETTINGS_PERSISTENCE_ERROR_SCOPE} persist failed`, error);
-    });
+function markLocalClientSettingsRevision(patch: ClientSettingsPatch, revision: number): void {
+  for (const key of Object.keys(patch)) {
+    localClientSettingsFieldRevisions.set(key, revision);
+  }
+}
+
+function enqueueLocalClientSettingsWrite(write: () => Promise<void>): Promise<void> {
+  const queuedWrite = localClientSettingsWriteTail.then(write);
+  localClientSettingsWriteTail = queuedWrite.catch(() => undefined);
+  return queuedWrite;
+}
+
+function persistClientSettings(patch: ClientSettingsPatch): void {
+  const revision = ++localClientSettingsMutationRevision;
+  markLocalClientSettingsRevision(patch, revision);
+  replaceClientSettingsSnapshot(applyClientSettingsPatch(getClientSettingsSnapshot(), patch));
+  void enqueueLocalClientSettingsWrite(async () => {
+    // Persist the latest optimistic snapshot when this queued turn begins.
+    // This composes ordinary updates with confirmed writes that may have
+    // completed while this write was waiting.
+    await ensureLocalApi().persistence.setClientSettings(getClientSettingsSnapshot());
+  }).catch((error) => {
+    console.error(`${CLIENT_SETTINGS_PERSISTENCE_ERROR_SCOPE} persist failed`, error);
+  });
 }
 
 function reportSettingsWriteFailure(scope: "server" | "client", error: unknown): void {
@@ -143,6 +163,64 @@ function splitPatch(patch: Partial<UnifiedSettings>): {
     serverPatch: serverPatch as ServerSettingsPatch,
     clientPatch: clientPatch as ClientSettingsPatch,
   };
+}
+
+async function applyUnifiedSettingsPatch(patch: Partial<UnifiedSettings>): Promise<void> {
+  const { serverPatch, clientPatch } = splitPatch(patch);
+  const writes: Promise<void>[] = [];
+
+  // Confirmed writes intentionally do not update the optimistic snapshots used
+  // by `updateSettings`. A rejected asset-selection write must leave the prior
+  // selection intact so its cleanup path cannot strand the UI on a deleted URL.
+  // Connected clients reconcile from the authoritative server-config stream.
+  if (Object.keys(serverPatch).length > 0) {
+    writes.push(
+      ensureLocalApi()
+        .server.updateSettings(serverPatch)
+        .then(() => undefined),
+    );
+  }
+
+  if (Object.keys(clientPatch).length > 0) {
+    const currentServerConfig = getServerConfig();
+    if (currentServerConfig) {
+      writes.push(
+        ensureLocalApi()
+          .server.updateClientSettings(clientPatch)
+          .then(() => undefined),
+      );
+    } else {
+      // Browser-only persistence stores complete snapshots. Serialize confirmed
+      // and optimistic writes through one queue. Per-field revisions keep an
+      // earlier confirmation from replacing a later optimistic value.
+      const revision = ++localClientSettingsMutationRevision;
+      markLocalClientSettingsRevision(clientPatch, revision);
+      const confirmedWrite = enqueueLocalClientSettingsWrite(async () => {
+        const nextClientSettings = applyClientSettingsPatch(
+          getClientSettingsSnapshot(),
+          clientPatch,
+        );
+        await ensureLocalApi().persistence.setClientSettings(nextClientSettings);
+        const currentClientSettings = getClientSettingsSnapshot();
+        const currentRecord = currentClientSettings as Record<string, unknown>;
+        const confirmedRecord = nextClientSettings as Record<string, unknown>;
+        let reconciledRecord: Record<string, unknown> | null = null;
+        for (const key of Object.keys(clientPatch)) {
+          if (localClientSettingsFieldRevisions.get(key) !== revision) {
+            continue;
+          }
+          reconciledRecord ??= { ...currentRecord };
+          reconciledRecord[key] = confirmedRecord[key];
+        }
+        if (reconciledRecord !== null) {
+          replaceClientSettingsSnapshot(reconciledRecord as ClientSettings);
+        }
+      });
+      writes.push(confirmedWrite);
+    }
+  }
+
+  await Promise.all(writes);
 }
 
 // ── Hooks ────────────────────────────────────────────────────────────
@@ -249,10 +327,15 @@ export function useUpdateSettings() {
           reportSettingsWriteFailure("client", error);
         }
       } else {
-        persistClientSettings(applyClientSettingsPatch(getClientSettingsSnapshot(), clientPatch));
+        persistClientSettings(clientPatch);
       }
     }
   }, []);
+
+  const updateSettingsAsync = useCallback(
+    (patch: Partial<UnifiedSettings>) => applyUnifiedSettingsPatch(patch),
+    [],
+  );
 
   const resetSettings = useCallback(() => {
     updateSettings(DEFAULT_UNIFIED_SETTINGS);
@@ -260,11 +343,15 @@ export function useUpdateSettings() {
 
   return {
     updateSettings,
+    updateSettingsAsync,
     resetSettings,
   };
 }
 
 export function __resetClientSettingsPersistenceForTests(): void {
   clientSettingsImportAttempted = false;
+  localClientSettingsWriteTail = Promise.resolve();
+  localClientSettingsMutationRevision = 0;
+  localClientSettingsFieldRevisions.clear();
   resetClientSettingsPersistenceStateForTests();
 }
