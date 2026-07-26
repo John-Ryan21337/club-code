@@ -42,7 +42,11 @@ vi.mock("../../environments/runtime", () => ({
 }));
 
 vi.mock("../../hooks/useSettings", () => ({
-  useSettings: () => ({ usageStatsEnabled: true }),
+  useSettings: () => ({
+    usageStatsEnabled: true,
+    providerUsageWidgetEnabled: false,
+    providerUsagePollMinutes: 2,
+  }),
   useUpdateSettings: () => ({ updateSettings: usageHarness.updateSettings }),
 }));
 
@@ -133,5 +137,16 @@ describe("UsageStatsPanel", () => {
         ),
       )
       .toBeVisible();
+  });
+
+  it("keeps the provider monitor opt-in and disables its interval while off", async () => {
+    mounted = await render(<UsageStatsPanel />);
+
+    await expect.element(page.getByText("Provider usage monitor", { exact: true })).toBeVisible();
+    await expect.element(page.getByLabelText("Provider usage refresh interval")).toBeDisabled();
+    await page.getByLabelText("View usage monitor").click();
+    expect(usageHarness.updateSettings).toHaveBeenCalledWith({
+      providerUsageWidgetEnabled: true,
+    });
   });
 });

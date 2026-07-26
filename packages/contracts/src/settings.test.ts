@@ -13,6 +13,8 @@ import {
   DEFAULT_CLIENT_SETTINGS,
   DEFAULT_CONTINUE_BACKGROUND_ANIMATIONS,
   DEFAULT_POWER_SAVE_BLOCKER_MODE,
+  DEFAULT_PROVIDER_USAGE_POLL_MINUTES,
+  DEFAULT_PROVIDER_USAGE_WIDGET_ENABLED,
   DEFAULT_SHOW_SIDEBAR_ATTRIBUTION,
   DEFAULT_SIDEBAR_BRAND_IMAGE_DATA_URL,
   DEFAULT_SIDEBAR_BRAND_IMAGE,
@@ -21,10 +23,12 @@ import {
   DEFAULT_SHOW_SIDEBAR_SEARCH,
   DEFAULT_THEME_ACCENT_COLOR,
   MAX_BRAND_WORDMARK_PREFIX_LENGTH,
+  MAX_PROVIDER_USAGE_POLL_MINUTES,
   MAX_SIDEBAR_BRAND_IMAGE_DATA_URL_LENGTH,
   MAX_SIDEBAR_BRAND_IMAGE_FILE_BYTES,
   MAX_SIDEBAR_BRAND_IMAGE_ID_LENGTH,
   MAX_SIDEBAR_STAR_SPEED,
+  MIN_PROVIDER_USAGE_POLL_MINUTES,
   MIN_SIDEBAR_STAR_SPEED,
   ServerSettingsPatch,
 } from "./settings.ts";
@@ -44,6 +48,49 @@ describe("client settings", () => {
   it("defaults chat selection copy to Markdown", () => {
     expect(DEFAULT_CLIENT_SETTINGS.chatCopyFormat).toBe(DEFAULT_CHAT_COPY_FORMAT);
     expect(decodeClientSettings({}).chatCopyFormat).toBe("markdown");
+  });
+
+  it("defaults the provider usage monitor off with a bounded refresh interval", () => {
+    expect(DEFAULT_CLIENT_SETTINGS.providerUsageWidgetEnabled).toBe(
+      DEFAULT_PROVIDER_USAGE_WIDGET_ENABLED,
+    );
+    expect(DEFAULT_CLIENT_SETTINGS.providerUsagePollMinutes).toBe(
+      DEFAULT_PROVIDER_USAGE_POLL_MINUTES,
+    );
+    expect(decodeClientSettings({})).toMatchObject({
+      providerUsageWidgetEnabled: false,
+      providerUsagePollMinutes: 2,
+    });
+  });
+
+  it("accepts only bounded integer provider usage refresh intervals", () => {
+    expect(
+      decodeClientSettingsPatch({
+        providerUsageWidgetEnabled: true,
+        providerUsagePollMinutes: MIN_PROVIDER_USAGE_POLL_MINUTES,
+      }),
+    ).toEqual({
+      providerUsageWidgetEnabled: true,
+      providerUsagePollMinutes: MIN_PROVIDER_USAGE_POLL_MINUTES,
+    });
+    expect(
+      decodeClientSettingsPatch({
+        providerUsagePollMinutes: MAX_PROVIDER_USAGE_POLL_MINUTES,
+      }),
+    ).toEqual({
+      providerUsagePollMinutes: MAX_PROVIDER_USAGE_POLL_MINUTES,
+    });
+    expect(() =>
+      decodeClientSettingsPatch({
+        providerUsagePollMinutes: MIN_PROVIDER_USAGE_POLL_MINUTES - 1,
+      }),
+    ).toThrow();
+    expect(() =>
+      decodeClientSettingsPatch({
+        providerUsagePollMinutes: MAX_PROVIDER_USAGE_POLL_MINUTES + 1,
+      }),
+    ).toThrow();
+    expect(() => decodeClientSettingsPatch({ providerUsagePollMinutes: 1.5 })).toThrow();
   });
 
   it("accepts only supported chat copy formats in patches", () => {

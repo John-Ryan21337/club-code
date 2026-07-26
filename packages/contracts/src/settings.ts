@@ -38,6 +38,10 @@ export const DEFAULT_THEME_ACCENT_COLOR = "";
 export const MIN_SIDEBAR_STAR_SPEED = 0.25;
 export const MAX_SIDEBAR_STAR_SPEED = 4;
 export const DEFAULT_SIDEBAR_STAR_SPEED = 1;
+export const DEFAULT_PROVIDER_USAGE_WIDGET_ENABLED = false;
+export const MIN_PROVIDER_USAGE_POLL_MINUTES = 1;
+export const MAX_PROVIDER_USAGE_POLL_MINUTES = 5;
+export const DEFAULT_PROVIDER_USAGE_POLL_MINUTES = 2;
 export const MAX_BRAND_WORDMARK_PREFIX_LENGTH = 64;
 export const MAX_SIDEBAR_BRAND_IMAGE_FILE_BYTES = 1_000_000;
 export const MAX_SIDEBAR_BRAND_IMAGE_DATA_URL_LENGTH =
@@ -85,6 +89,14 @@ export const SidebarStarSpeed = Schema.Number.check(
   }),
 );
 export type SidebarStarSpeed = typeof SidebarStarSpeed.Type;
+
+export const ProviderUsagePollMinutes = Schema.Int.check(
+  Schema.isBetween({
+    minimum: MIN_PROVIDER_USAGE_POLL_MINUTES,
+    maximum: MAX_PROVIDER_USAGE_POLL_MINUTES,
+  }),
+);
+export type ProviderUsagePollMinutes = typeof ProviderUsagePollMinutes.Type;
 
 export const SidebarProjectSortOrder = Schema.Literals(["updated_at", "created_at", "manual"]);
 export type SidebarProjectSortOrder = typeof SidebarProjectSortOrder.Type;
@@ -160,6 +172,12 @@ export const ClientSettingsSchema = Schema.Struct({
   ).pipe(Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_BRAND_IMAGE_DATA_URL))),
   sidebarStarSpeed: SidebarStarSpeed.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_STAR_SPEED)),
+  ),
+  providerUsageWidgetEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_USAGE_WIDGET_ENABLED)),
+  ),
+  providerUsagePollMinutes: ProviderUsagePollMinutes.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_USAGE_POLL_MINUTES)),
   ),
   themeAccentColor: TrimmedString.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_THEME_ACCENT_COLOR)),
@@ -738,6 +756,8 @@ export const ClientSettingsPatch = Schema.Struct({
   ),
   sidebarBrandImage: Schema.optionalKey(Schema.NullOr(SidebarBrandImageAsset)),
   sidebarStarSpeed: Schema.optionalKey(SidebarStarSpeed),
+  providerUsageWidgetEnabled: Schema.optionalKey(Schema.Boolean),
+  providerUsagePollMinutes: Schema.optionalKey(ProviderUsagePollMinutes),
   themeAccentColor: Schema.optionalKey(TrimmedString),
   appAccentColor: Schema.optionalKey(TrimmedString),
   defaultEditor: Schema.optionalKey(DefaultEditorSelection),

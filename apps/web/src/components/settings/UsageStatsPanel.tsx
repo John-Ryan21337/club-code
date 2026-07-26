@@ -1,11 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { UsageStatsGetResult, UsageStatsSnapshot } from "@cafecode/contracts";
+import {
+  MAX_PROVIDER_USAGE_POLL_MINUTES,
+  MIN_PROVIDER_USAGE_POLL_MINUTES,
+  type ProviderUsagePollMinutes,
+} from "@cafecode/contracts/settings";
 
 import { getPrimaryEnvironmentConnection } from "~/environments/runtime";
 import { useSettings, useUpdateSettings } from "../../hooks/useSettings";
 import { ActivityHeatmap } from "../stats/ActivityHeatmap";
 import { useCountUp } from "../stats/useCountUp";
 import { PROVIDER_ICON_BY_PROVIDER } from "../chat/providerIconUtils";
+import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Skeleton } from "../ui/skeleton";
 import { Switch } from "../ui/switch";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
@@ -360,6 +366,56 @@ export function UsageStatsPanel() {
               }}
               aria-label="Collect usage statistics"
             />
+          }
+        />
+      </SettingsSection>
+
+      <SettingsSection title="Provider usage monitor">
+        <SettingsRow
+          title="View usage monitor"
+          description="Show one sanitized row for every configured provider instance, including providers that are disabled, unavailable, unauthenticated, or waiting for usage data."
+          control={
+            <Switch
+              aria-label="View usage monitor"
+              checked={settings.providerUsageWidgetEnabled}
+              onCheckedChange={(checked) => {
+                updateSettings({ providerUsageWidgetEnabled: Boolean(checked) });
+              }}
+            />
+          }
+        />
+        <SettingsRow
+          title="Usage refresh interval"
+          description="Refresh eligible providers one at a time while the monitor is visible. Hiding or disabling the monitor lets an active refresh finish, then starts no more."
+          control={
+            <Select
+              disabled={!settings.providerUsageWidgetEnabled}
+              onValueChange={(value) => {
+                const minutes = Number(value);
+                if (
+                  !Number.isInteger(minutes) ||
+                  minutes < MIN_PROVIDER_USAGE_POLL_MINUTES ||
+                  minutes > MAX_PROVIDER_USAGE_POLL_MINUTES
+                ) {
+                  return;
+                }
+                updateSettings({
+                  providerUsagePollMinutes: minutes as ProviderUsagePollMinutes,
+                });
+              }}
+              value={String(settings.providerUsagePollMinutes)}
+            >
+              <SelectTrigger aria-label="Provider usage refresh interval" className="w-28">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectPopup>
+                {[1, 2, 3, 4, 5].map((minutes) => (
+                  <SelectItem key={minutes} value={String(minutes)}>
+                    {minutes} {minutes === 1 ? "minute" : "minutes"}
+                  </SelectItem>
+                ))}
+              </SelectPopup>
+            </Select>
           }
         />
       </SettingsSection>
