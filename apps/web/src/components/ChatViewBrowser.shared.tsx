@@ -36,6 +36,7 @@ import { render } from "vitest-browser-react";
 import { useCommandPaletteStore } from "../commandPaletteStore";
 import { useComposerDraftStore, DraftId } from "../composerDraftStore";
 import {
+  AUTO_NUDGE_DELAY_MS,
   __resetAutoNudgeTurnLedgerForTests,
   autoNudgeDispatchIdentityForTurn,
   getAutoNudgeTurnLedger,
@@ -2243,6 +2244,50 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
           },
           { timeout: 12_000, interval: 50 },
         );
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
+    it("does not advance a settled turn while structured user input is pending", async () => {
+      const terminalTurnId = "turn-auto-nudge-pending-input" as TurnId;
+      const snapshot = createSnapshotWithPendingUserInput();
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot,
+        configureFixture: (nextFixture) => {
+          nextFixture.serverConfig = {
+            ...nextFixture.serverConfig,
+            clientSettings: {
+              ...nextFixture.serverConfig.clientSettings,
+              autoNudgeMode: "steady-progress",
+              autoNudgeBackgroundContinuation: false,
+            },
+          };
+        },
+        resolveRpc: (body) => {
+          if (body._tag === ORCHESTRATION_WS_METHODS.dispatchCommand) {
+            return { sequence: fixture.snapshot.snapshotSequence + 1 };
+          }
+          return undefined;
+        },
+      });
+
+      try {
+        fixture.snapshot = withCompletedLatestTurn(fixture.snapshot, terminalTurnId);
+        publishThreadSnapshot(THREAD_ID);
+        await expect.element(page.getByText("What should this change cover?")).toBeVisible();
+        await new Promise((resolve) => setTimeout(resolve, AUTO_NUDGE_DELAY_MS + 1_000));
+
+        expect(
+          wsRequests.some(
+            (entry) =>
+              entry._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+              entry.type === "thread.turn.start" &&
+              entry.dispatchSource === "auto-nudge",
+          ),
+        ).toBe(false);
+        await expect.element(page.getByText("What should this change cover?")).toBeVisible();
       } finally {
         await mounted.cleanup();
       }
