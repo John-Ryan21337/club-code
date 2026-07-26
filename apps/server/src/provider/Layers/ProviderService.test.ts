@@ -43,6 +43,7 @@ import {
   ProviderAdapterProcessError,
   ProviderAdapterRequestError,
   ProviderAdapterSessionNotFoundError,
+  ProviderSessionNotFoundError,
   ProviderUnsupportedError,
   ProviderValidationError,
   type ProviderAdapterError,
@@ -1058,6 +1059,46 @@ routing.layer("ProviderServiceLive routing", (it) => {
         assert.equal(startPayload.threadId, session.threadId);
       }
       assert.equal(routing.codex.sendTurn.mock.calls.length, 1);
+    }),
+  );
+
+  it.effect("does not start a replacement session for a stopped user-input callback", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const threadId = asThreadId("thread-stopped-user-input-callback");
+
+      yield* provider.startSession(threadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId,
+        runtimeMode: "approval-required",
+      });
+      yield* provider.stopSession({ threadId });
+      routing.codex.startSession.mockClear();
+      routing.codex.respondToUserInput.mockClear();
+
+      const failure = yield* provider
+        .respondToUserInput({
+          threadId,
+          requestId: asRequestId("request-from-stopped-runtime"),
+          answers: { target: "enterprise account executive" },
+        })
+        .pipe(Effect.flip);
+
+      assert.equal(failure instanceof ProviderSessionNotFoundError, true);
+      assert.equal(routing.codex.startSession.mock.calls.length, 0);
+      assert.equal(routing.codex.respondToUserInput.mock.calls.length, 0);
+
+      // Refusing the dead callback must not damage the durable binding: the
+      // visible continuation turn still has to be able to resume the thread.
+      yield* provider.sendTurn({
+        threadId,
+        input: "continue with the durable answer",
+        attachments: [],
+      });
+      assert.equal(routing.codex.startSession.mock.calls.length, 1);
+      assert.equal(routing.codex.sendTurn.mock.calls.length >= 1, true);
+      assert.equal(routing.codex.respondToUserInput.mock.calls.length, 0);
     }),
   );
 

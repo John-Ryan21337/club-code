@@ -55,6 +55,7 @@ import {
 import {
   ProviderAdapterProcessError,
   type ProviderAdapterError,
+  ProviderSessionNotFoundError,
   ProviderValidationError,
 } from "../Errors.ts";
 import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
@@ -1272,9 +1273,17 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       const routed = yield* resolveRoutableSession({
         threadId: input.threadId,
         operation: "ProviderService.respondToUserInput",
-        allowRecovery: true,
+        // Pending user-input callbacks belong to one live provider process.
+        // Starting a replacement process here cannot recreate that callback
+        // and can make a stale answer look acknowledged when it was not.
+        allowRecovery: false,
       });
       metricProvider = routed.adapter.provider;
+      if (!routed.isActive) {
+        return yield* new ProviderSessionNotFoundError({
+          threadId: input.threadId,
+        });
+      }
       yield* Effect.annotateCurrentSpan({
         "provider.operation": "respond-to-user-input",
         "provider.kind": routed.adapter.provider,
