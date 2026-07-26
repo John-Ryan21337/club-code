@@ -30,16 +30,25 @@ import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnap
 import { OrchestrationReactor } from "./orchestration/Services/OrchestrationReactor.ts";
 import { ServerLifecycleEvents } from "./serverLifecycleEvents.ts";
 import { ServerSettingsService } from "./serverSettings.ts";
-import { ServerClientSettingsService } from "./serverClientSettings.ts";
+import {
+  ServerClientSettingsService,
+  type ServerClientSettingsShape,
+} from "./serverClientSettings.ts";
 import { ServerEnvironment } from "./environment/Services/ServerEnvironment.ts";
 import { ServerAuth } from "./auth/Services/ServerAuth.ts";
 import { ProviderSessionReaper } from "./provider/Services/ProviderSessionReaper.ts";
+import {
+  AmbientImageStore,
+  type AmbientImageStoreShape,
+} from "./ambientMedia/AmbientImageStore.ts";
 import {
   formatHeadlessServeOutput,
   formatHostForUrl,
   isWildcardHost,
   issueHeadlessServeAccessInfo,
 } from "./startupAccess.ts";
+
+const CLIENT_SETTINGS_READY_FOR_MAINTENANCE_TIMEOUT = "5 seconds";
 
 export class ServerRuntimeStartupError extends Data.TaggedError("ServerRuntimeStartupError")<{
   readonly message: string;
@@ -259,6 +268,48 @@ const runStartupPhase = <A, E, R>(phase: string, effect: Effect.Effect<A, E, R>)
     Effect.withSpan(`server.startup.${phase}`),
   );
 
+export const sweepAmbientImagesAfterClientSettingsReady = (input: {
+  readonly clientSettings: Pick<
+    ServerClientSettingsShape,
+    "getSettings" | "ready" | "withExclusiveAccess"
+  >;
+  readonly ambientImages: Pick<AmbientImageStoreShape, "sweepUnreferencedImages">;
+}) =>
+  Effect.gen(function* () {
+    const settingsReady = yield* input.clientSettings.ready.pipe(
+      Effect.timeoutOption(CLIENT_SETTINGS_READY_FOR_MAINTENANCE_TIMEOUT),
+    );
+    if (Option.isNone(settingsReady)) {
+      yield* Effect.logWarning("ambient image orphan sweep skipped", {
+        cause: "client settings did not become ready before the maintenance deadline",
+      });
+      return;
+    }
+
+    const result = yield* input.clientSettings.withExclusiveAccess(
+      input.ambientImages.sweepUnreferencedImages({
+        isReferenced: (id) =>
+          input.clientSettings.getSettings.pipe(
+            Effect.map(
+              (settings) =>
+                settings.ambientImageAsset?.id === id ||
+                settings.ambientImageCycleAssets.some((asset) => asset.id === id),
+            ),
+            // Storage cleanup always fails closed when the current settings
+            // reference cannot be confirmed.
+            Effect.catch(() => Effect.succeed(true)),
+          ),
+      }),
+    );
+    yield* Effect.logDebug("ambient image orphan sweep complete", result);
+  }).pipe(
+    Effect.catch((cause) =>
+      Effect.logWarning("ambient image orphan sweep failed", {
+        cause,
+      }),
+    ),
+  );
+
 export const makeServerRuntimeStartup = Effect.gen(function* () {
   const serverConfig = yield* ServerConfig;
   const keybindings = yield* Keybindings;
@@ -267,6 +318,7 @@ export const makeServerRuntimeStartup = Effect.gen(function* () {
   const lifecycleEvents = yield* ServerLifecycleEvents;
   const serverSettings = yield* ServerSettingsService;
   const clientSettings = yield* ServerClientSettingsService;
+  const ambientImages = yield* AmbientImageStore;
   const serverEnvironment = yield* ServerEnvironment;
 
   const commandGate = yield* makeCommandGate;
@@ -319,6 +371,14 @@ export const makeServerRuntimeStartup = Effect.gen(function* () {
         ),
         Effect.forkScoped,
       ),
+    );
+
+    yield* runStartupPhase(
+      "ambient-images.orphan-sweep",
+      sweepAmbientImagesAfterClientSettingsReady({
+        clientSettings,
+        ambientImages,
+      }),
     );
 
     yield* Effect.logDebug("startup phase: starting orchestration reactors");
