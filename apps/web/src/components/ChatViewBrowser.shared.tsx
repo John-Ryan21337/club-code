@@ -38,6 +38,7 @@ import { useComposerDraftStore, DraftId } from "../composerDraftStore";
 import {
   __resetAutoNudgeTurnLedgerForTests,
   autoNudgeDispatchIdentityForTurn,
+  getAutoNudgeTurnLedger,
 } from "../autoNudger";
 import {
   __resetBackgroundAutoNudgeControllerForTests,
@@ -3846,6 +3847,57 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
   }
 
   if (chatViewBrowserPart === "navigation") {
+    it("does not pause or consume Auto Nudge for an empty composer submit", async () => {
+      const terminalTurnId = "turn-empty-auto-nudge-submit" as TurnId;
+      const snapshot = createSnapshotForTargetUser({
+        targetMessageId: "msg-user-empty-auto-nudge-submit" as MessageId,
+        targetText: "background continuation owner",
+      });
+      const terminalTurnKey = `${LOCAL_ENVIRONMENT_ID}:${THREAD_ID}:${terminalTurnId}`;
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot,
+        configureFixture: enableBackgroundAutoNudge,
+      });
+
+      try {
+        getBackgroundAutoNudgeController().start(
+          {
+            environmentId: String(LOCAL_ENVIRONMENT_ID),
+            threadId: String(THREAD_ID),
+          },
+          snapshot.threads[0]?.messages.findLast((message) => message.role === "user")?.createdAt ??
+            null,
+        );
+        fixture.snapshot = withCompletedLatestTurn(fixture.snapshot, terminalTurnId);
+        publishThreadSnapshot(THREAD_ID);
+        await vi.waitFor(
+          () => {
+            expect(
+              document.querySelector('[data-auto-nudge-control="true"]')?.textContent,
+            ).toContain("Foreground paused while background owns this thread");
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+        expect(getAutoNudgeTurnLedger().has(terminalTurnKey)).toBe(false);
+
+        await pressComposerKey("Enter");
+
+        expect(getBackgroundAutoNudgeController().getSnapshot()).toMatchObject({
+          owner: {
+            environmentId: String(LOCAL_ENVIRONMENT_ID),
+            threadId: String(THREAD_ID),
+          },
+          status: "active",
+          reason: null,
+        });
+        expect(getAutoNudgeTurnLedger().has(terminalTurnKey)).toBe(false);
+      } finally {
+        getBackgroundAutoNudgeController().stop("Browser test cleanup.");
+        await mounted.cleanup();
+      }
+    });
+
     it("preserves background Auto Nudge through navigation and renderer reconnect", async () => {
       const secondThreadId = "thread-auto-nudge-navigation-target" as ThreadId;
       const snapshot = addThreadToSnapshot(

@@ -5041,9 +5041,6 @@ export default function ChatView(props: ChatViewProps) {
     autoNudgeInput?: AutoNudgeSendInput,
   ) => {
     e?.preventDefault();
-    if (!autoNudgeInput) {
-      recordManualAutoNudgeActivity();
-    }
     const api = readEnvironmentApi(environmentId);
     if (
       !api ||
@@ -5056,6 +5053,7 @@ export default function ChatView(props: ChatViewProps) {
       return;
     if (activePendingProgress) {
       if (!autoNudgeInput) {
+        recordManualAutoNudgeActivity();
         onAdvanceActivePendingUserInput();
       }
       return;
@@ -5096,11 +5094,13 @@ export default function ChatView(props: ChatViewProps) {
     if (delivery === "queue") {
       if (autoNudgeInput) return;
       if (!hasSendableContent) return;
+      recordManualAutoNudgeActivity();
       pinTimelineToEndForLocalMessage();
       enqueueFollowUpSnapshot(snapshot);
       return;
     }
     if (!autoNudgeInput && showPlanFollowUpPrompt && activeProposedPlan) {
+      recordManualAutoNudgeActivity();
       const followUp = resolvePlanFollowUpSubmission({
         draftText: trimmed,
         planMarkdown: activeProposedPlan.planMarkdown,
@@ -5120,6 +5120,7 @@ export default function ChatView(props: ChatViewProps) {
         ? parseStandaloneComposerSlashCommand(trimmed)
         : null;
     if (standaloneSlashCommand) {
+      recordManualAutoNudgeActivity();
       handleInteractionModeChange(standaloneSlashCommand);
       promptRef.current = "";
       clearComposerDraftContent(composerDraftTarget);
@@ -5145,6 +5146,9 @@ export default function ChatView(props: ChatViewProps) {
       return;
     }
 
+    if (!autoNudgeInput) {
+      recordManualAutoNudgeActivity();
+    }
     setSendInFlight(true);
     beginLocalDispatch({ preparingWorktree: Boolean(baseBranchForWorktree) });
 
@@ -5512,7 +5516,6 @@ export default function ChatView(props: ChatViewProps) {
 
   const onSteer = async (e?: { preventDefault: () => void }) => {
     e?.preventDefault();
-    recordManualAutoNudgeActivity();
     if (
       !activeThread ||
       isSendBusy ||
@@ -5523,6 +5526,7 @@ export default function ChatView(props: ChatViewProps) {
       return;
     }
     if (activePendingProgress) {
+      recordManualAutoNudgeActivity();
       onAdvanceActivePendingUserInput();
       return;
     }
@@ -5542,6 +5546,7 @@ export default function ChatView(props: ChatViewProps) {
       await onSend(e);
       return;
     }
+    recordManualAutoNudgeActivity();
     if (delivery === "queue") {
       pinTimelineToEndForLocalMessage();
       enqueueFollowUpSnapshot(snapshot);
