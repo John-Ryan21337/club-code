@@ -1,6 +1,7 @@
 import "../index.css";
 
 import {
+  DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES,
   DEFAULT_CLIENT_SETTINGS,
   DEFAULT_SERVER_SETTINGS,
   EnvironmentId,
@@ -130,6 +131,7 @@ function createBaseServerConfig(): ServerConfig {
       },
     },
     clientSettings: { ...DEFAULT_CLIENT_SETTINGS, onboardingCompleted: true },
+    ambientExperienceCapabilities: DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES,
   };
 }
 
