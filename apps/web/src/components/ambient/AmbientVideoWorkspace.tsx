@@ -14,6 +14,10 @@ const PRESET_WIDTHS: Readonly<Record<AmbientMediaPresetSize, number>> = {
   medium: 480,
   large: 640,
 };
+const PLAYER_Z_INDEX = {
+  normal: 30,
+  aboveContent: 45,
+} as const;
 
 function floatingPosition(placement: AmbientMediaPresetPlacement): CSSProperties {
   return placement === "bottom-left"
@@ -22,16 +26,20 @@ function floatingPosition(placement: AmbientMediaPresetPlacement): CSSProperties
 }
 
 function playerStyle(input: {
+  readonly keepAboveContent: boolean;
   readonly placement: AmbientMediaPresetPlacement;
   readonly presentationMode: AmbientVideoPresentationMode;
   readonly size: AmbientMediaPresetSize;
 }): CSSProperties {
+  const zIndex = input.keepAboveContent ? PLAYER_Z_INDEX.aboveContent : PLAYER_Z_INDEX.normal;
+
   if (input.presentationMode === "cinema") {
     return {
       left: "50%",
       top: "1rem",
       width: "min(960px, calc(100vw - 2rem))",
       transform: "translateX(-50%)",
+      zIndex,
     };
   }
 
@@ -39,6 +47,7 @@ function playerStyle(input: {
   return {
     ...floatingPosition(input.placement),
     width: `min(${width}px, calc(100vw - 2rem))`,
+    zIndex,
   };
 }
 
@@ -64,10 +73,12 @@ export function AmbientVideoWorkspace() {
   return (
     <section
       aria-label="Ambient YouTube player"
-      className="fixed z-30 overflow-hidden rounded-xl border border-border/60 bg-black shadow-2xl"
+      className="fixed overflow-hidden rounded-xl border border-border/60 bg-black shadow-2xl"
+      data-keep-above-content={settings.ambientVideoKeepAboveContent}
       data-presentation-mode={settings.ambientVideoPresentationMode}
       data-testid="ambient-video-player"
       style={playerStyle({
+        keepAboveContent: settings.ambientVideoKeepAboveContent,
         placement: settings.ambientVideoPresetPlacement,
         presentationMode: settings.ambientVideoPresentationMode,
         size: settings.ambientVideoPresetSize,

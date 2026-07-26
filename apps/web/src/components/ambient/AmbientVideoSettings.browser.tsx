@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
     ambientVideoPresetPlacement: "bottom-right" as const,
     ambientVideoPresetSize: "medium" as const,
     ambientVideoPresentationMode: "floating" as const,
+    ambientVideoKeepAboveContent: true,
   },
   updateSettings: vi.fn(),
   serverConfig: {
@@ -50,6 +51,10 @@ describe("AmbientVideoSettings", () => {
     });
     await page.getByLabelText("Show ambient YouTube player").click();
     expect(mocks.updateSettings).toHaveBeenCalledWith({ ambientVideoEnabled: false });
+    await page.getByLabelText("Keep ambient YouTube above app content").click();
+    expect(mocks.updateSettings).toHaveBeenCalledWith({
+      ambientVideoKeepAboveContent: false,
+    });
   });
 
   it("resets the complete player preference atomically", async () => {
@@ -62,6 +67,7 @@ describe("AmbientVideoSettings", () => {
       ambientVideoPresetPlacement: "bottom-right",
       ambientVideoPresetSize: "medium",
       ambientVideoPresentationMode: "floating",
+      ambientVideoKeepAboveContent: false,
     });
   });
 });

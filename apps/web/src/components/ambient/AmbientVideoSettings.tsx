@@ -1,5 +1,6 @@
 import {
   DEFAULT_AMBIENT_VIDEO_ENABLED,
+  DEFAULT_AMBIENT_VIDEO_KEEP_ABOVE_CONTENT,
   DEFAULT_AMBIENT_VIDEO_PRESET_PLACEMENT,
   DEFAULT_AMBIENT_VIDEO_PRESET_SIZE,
   DEFAULT_AMBIENT_VIDEO_PRESENTATION_MODE,
@@ -24,7 +25,8 @@ export function AmbientVideoSettings() {
     settings.ambientVideoSource !== DEFAULT_AMBIENT_VIDEO_SOURCE ||
     settings.ambientVideoPresetPlacement !== DEFAULT_AMBIENT_VIDEO_PRESET_PLACEMENT ||
     settings.ambientVideoPresetSize !== DEFAULT_AMBIENT_VIDEO_PRESET_SIZE ||
-    settings.ambientVideoPresentationMode !== DEFAULT_AMBIENT_VIDEO_PRESENTATION_MODE;
+    settings.ambientVideoPresentationMode !== DEFAULT_AMBIENT_VIDEO_PRESENTATION_MODE ||
+    settings.ambientVideoKeepAboveContent !== DEFAULT_AMBIENT_VIDEO_KEEP_ABOVE_CONTENT;
 
   return (
     <SettingsSection title="Ambient YouTube">
@@ -49,6 +51,7 @@ export function AmbientVideoSettings() {
                   ambientVideoPresetPlacement: DEFAULT_AMBIENT_VIDEO_PRESET_PLACEMENT,
                   ambientVideoPresetSize: DEFAULT_AMBIENT_VIDEO_PRESET_SIZE,
                   ambientVideoPresentationMode: DEFAULT_AMBIENT_VIDEO_PRESENTATION_MODE,
+                  ambientVideoKeepAboveContent: DEFAULT_AMBIENT_VIDEO_KEEP_ABOVE_CONTENT,
                 })
               }
             />
@@ -125,6 +128,19 @@ export function AmbientVideoSettings() {
               </label>
             ))}
           </RadioGroup>
+        }
+      />
+      <SettingsRow
+        title="Keep above app content"
+        description="Raise the player above chat and Settings inside Cafe Code. This does not keep the desktop window above other applications."
+        control={
+          <Switch
+            aria-label="Keep ambient YouTube above app content"
+            checked={settings.ambientVideoKeepAboveContent}
+            onCheckedChange={(checked) =>
+              updateSettings({ ambientVideoKeepAboveContent: Boolean(checked) })
+            }
+          />
         }
       />
       <SettingsRow

@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
     ambientVideoPresetPlacement: "bottom-right" as "bottom-left" | "bottom-right",
     ambientVideoPresetSize: "medium" as "small" | "medium" | "large",
     ambientVideoPresentationMode: "floating" as "floating" | "cinema",
+    ambientVideoKeepAboveContent: false,
   },
   settingsListeners: new Set<() => void>(),
   serverListeners: new Set<() => void>(),
@@ -79,6 +80,7 @@ describe("AmbientVideoWorkspace", () => {
       ambientVideoPresetPlacement: "bottom-right",
       ambientVideoPresetSize: "medium",
       ambientVideoPresentationMode: "floating",
+      ambientVideoKeepAboveContent: false,
     });
     updateMockCapability(true);
   });
@@ -116,6 +118,29 @@ describe("AmbientVideoWorkspace", () => {
     await expect
       .element(page.getByTestId("ambient-video-player"))
       .toHaveAttribute("data-presentation-mode", "cinema");
+    const currentFrame = document.querySelector<HTMLIFrameElement>(
+      'iframe[title="Ambient YouTube video player"]',
+    );
+    expect(currentFrame).toBe(initialFrame);
+    expect(currentFrame?.parentElement).toBe(initialParent);
+    expect(currentFrame?.src).toBe(initialSource);
+  });
+
+  it("raises the existing player above app content without replacing its iframe", async () => {
+    await render(<AmbientVideoWorkspace />);
+    const player = page.getByTestId("ambient-video-player");
+    const initialFrame = document.querySelector<HTMLIFrameElement>(
+      'iframe[title="Ambient YouTube video player"]',
+    );
+    const initialParent = initialFrame?.parentElement;
+    const initialSource = initialFrame?.src;
+
+    await expect.element(player).toHaveAttribute("data-keep-above-content", "false");
+    await expect.element(player).toHaveStyle({ zIndex: "30" });
+    updateMockSettings({ ambientVideoKeepAboveContent: true });
+
+    await expect.element(player).toHaveAttribute("data-keep-above-content", "true");
+    await expect.element(player).toHaveStyle({ zIndex: "45" });
     const currentFrame = document.querySelector<HTMLIFrameElement>(
       'iframe[title="Ambient YouTube video player"]',
     );
