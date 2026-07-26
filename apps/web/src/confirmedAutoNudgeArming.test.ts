@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  AUTO_NUDGE_SUPPRESSION_CLEAR_STORAGE_KEY,
   AUTO_NUDGE_SUPPRESSION_STORAGE_KEY,
   type AutoNudgeSuppressionStorage,
   ConfirmedAutoNudgeArming,
@@ -136,7 +137,7 @@ describe("confirmed auto nudge arming", () => {
     await expect(pendingEnable).resolves.toBe(false);
     expect(start).not.toHaveBeenCalled();
     expect(coordinator.getSuppressedSnapshot()).toBe(true);
-    expect(storage.getItem(AUTO_NUDGE_SUPPRESSION_STORAGE_KEY)).toBe("1");
+    expect(storage.getItem(AUTO_NUDGE_SUPPRESSION_STORAGE_KEY)).not.toBeNull();
     expect(new ConfirmedAutoNudgeArming(storage).getSuppressedSnapshot()).toBe(true);
   });
 
@@ -154,8 +155,34 @@ describe("confirmed auto nudge arming", () => {
 
     expect(coordinator.getSnapshot()).toBe(false);
     expect(coordinator.getSuppressedSnapshot()).toBe(true);
-    expect(storage.getItem(AUTO_NUDGE_SUPPRESSION_STORAGE_KEY)).toBe("1");
+    expect(storage.getItem(AUTO_NUDGE_SUPPRESSION_STORAGE_KEY)).not.toBeNull();
     expect(start).not.toHaveBeenCalled();
+  });
+
+  it("does not let an older enable clear a Stop from another renderer", async () => {
+    const storage = memoryStorage();
+    const persistence = deferred();
+    const stoppingRenderer = new ConfirmedAutoNudgeArming(storage, true);
+    stoppingRenderer.suppress();
+    const earlierStopToken = storage.getItem(AUTO_NUDGE_SUPPRESSION_STORAGE_KEY);
+    const enablingRenderer = new ConfirmedAutoNudgeArming(storage, true);
+    const start = vi.fn();
+    const pendingEnable = enablingRenderer.arm({
+      persistEnabled: () => persistence.promise,
+      start,
+      clearSuppression: true,
+    });
+
+    stoppingRenderer.suppress();
+    const newerStopToken = storage.getItem(AUTO_NUDGE_SUPPRESSION_STORAGE_KEY);
+    expect(newerStopToken).not.toBeNull();
+    expect(newerStopToken).not.toBe(earlierStopToken);
+    persistence.resolve();
+
+    await expect(pendingEnable).resolves.toBe(false);
+    expect(start).not.toHaveBeenCalled();
+    expect(enablingRenderer.getSuppressedSnapshot()).toBe(true);
+    expect(storage.getItem(AUTO_NUDGE_SUPPRESSION_STORAGE_KEY)).toBe(newerStopToken);
   });
 
   it("clears a stop latch only after an explicit enable is confirmed", async () => {
@@ -182,7 +209,8 @@ describe("confirmed auto nudge arming", () => {
       }),
     ).resolves.toBe(true);
     expect(coordinator.getSuppressedSnapshot()).toBe(false);
-    expect(storage.getItem(AUTO_NUDGE_SUPPRESSION_STORAGE_KEY)).toBeNull();
+    expect(storage.getItem(AUTO_NUDGE_SUPPRESSION_STORAGE_KEY)).not.toBeNull();
+    expect(new ConfirmedAutoNudgeArming(storage, true).getSuppressedSnapshot()).toBe(false);
     expect(start).toHaveBeenCalledTimes(1);
   });
 
@@ -196,7 +224,7 @@ describe("confirmed auto nudge arming", () => {
     coordinator.synchronizeSuppressionFromStorage();
     expect(coordinator.getSuppressedSnapshot()).toBe(true);
 
-    storage.removeItem(AUTO_NUDGE_SUPPRESSION_STORAGE_KEY);
+    storage.setItem(AUTO_NUDGE_SUPPRESSION_CLEAR_STORAGE_KEY, "1");
     coordinator.synchronizeSuppressionFromStorage();
     expect(coordinator.getSuppressedSnapshot()).toBe(false);
     expect(listener).toHaveBeenCalledTimes(2);
@@ -216,6 +244,43 @@ describe("confirmed auto nudge arming", () => {
     };
 
     expect(new ConfirmedAutoNudgeArming(deniedStorage, true).getSuppressedSnapshot()).toBe(true);
+  });
+
+  it("fails closed on a later storage outage and recovers through an explicit enable", async () => {
+    const values = new Map<string, string>();
+    let storageUnavailable = false;
+    const storage: AutoNudgeSuppressionStorage = {
+      getItem: (key) => {
+        if (storageUnavailable) throw new Error("storage unavailable");
+        return values.get(key) ?? null;
+      },
+      setItem: (key, value) => {
+        if (storageUnavailable) throw new Error("storage unavailable");
+        values.set(key, value);
+      },
+      removeItem: (key) => {
+        if (storageUnavailable) throw new Error("storage unavailable");
+        values.delete(key);
+      },
+    };
+    const coordinator = new ConfirmedAutoNudgeArming(storage, true);
+    const start = vi.fn();
+    expect(coordinator.getSuppressedSnapshot()).toBe(false);
+
+    storageUnavailable = true;
+    coordinator.synchronizeSuppressionFromStorage();
+    expect(coordinator.getSuppressedSnapshot()).toBe(true);
+
+    storageUnavailable = false;
+    await expect(
+      coordinator.arm({
+        persistEnabled: () => Promise.resolve(),
+        start,
+        clearSuppression: true,
+      }),
+    ).resolves.toBe(true);
+    expect(coordinator.getSuppressedSnapshot()).toBe(false);
+    expect(start).toHaveBeenCalledTimes(1);
   });
 
   it("does not arm execution when a confirmed enable still cannot clear durable suppression", async () => {
@@ -244,15 +309,17 @@ describe("confirmed auto nudge arming", () => {
     expect(start).not.toHaveBeenCalled();
   });
 
-  it("does not resurrect execution when the suppression key cannot be removed", async () => {
+  it("does not resurrect execution when the Stop generation cannot be acknowledged", async () => {
     const values = new Map<string, string>();
     const storage: AutoNudgeSuppressionStorage = {
       getItem: (key) => values.get(key) ?? null,
-      setItem: (key, value) => values.set(key, value),
-      removeItem: (key) => {
-        if (key === AUTO_NUDGE_SUPPRESSION_STORAGE_KEY) {
-          throw new Error("suppression key is locked");
+      setItem: (key, value) => {
+        if (key === AUTO_NUDGE_SUPPRESSION_CLEAR_STORAGE_KEY) {
+          throw new Error("clear acknowledgement is unavailable");
         }
+        values.set(key, value);
+      },
+      removeItem: (key) => {
         values.delete(key);
       },
     };
@@ -268,7 +335,7 @@ describe("confirmed auto nudge arming", () => {
       }),
     ).resolves.toBe(false);
 
-    expect(values.get(AUTO_NUDGE_SUPPRESSION_STORAGE_KEY)).toBe("1");
+    expect(values.get(AUTO_NUDGE_SUPPRESSION_STORAGE_KEY)).not.toBeNull();
     expect(coordinator.getSuppressedSnapshot()).toBe(true);
     expect(start).not.toHaveBeenCalled();
   });

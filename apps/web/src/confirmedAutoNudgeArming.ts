@@ -1,6 +1,8 @@
 import { useSyncExternalStore } from "react";
 
 export const AUTO_NUDGE_SUPPRESSION_STORAGE_KEY = "cafe-code.auto-nudge.suppressed.v1";
+export const AUTO_NUDGE_SUPPRESSION_CLEAR_STORAGE_KEY =
+  "cafe-code.auto-nudge.suppressed-through.v1";
 const AUTO_NUDGE_SUPPRESSION_PROBE_KEY = "cafe-code.auto-nudge.suppressed.probe.v1";
 
 export interface AutoNudgeSuppressionStorage {
@@ -25,13 +27,18 @@ function resolveSuppressionStorage(): AutoNudgeSuppressionStorage | null {
   if (storages.length === 0) return null;
   return {
     getItem: (key) => {
+      let readableStorages = 0;
       for (const storage of storages) {
         try {
           const value = storage.getItem(key);
+          readableStorages += 1;
           if (value !== null) return value;
         } catch {
           // Try the next available browser storage.
         }
+      }
+      if (readableStorages === 0) {
+        throw new Error("Auto Nudge suppression storage is unavailable.");
       }
       return null;
     },
@@ -61,13 +68,29 @@ function resolveSuppressionStorage(): AutoNudgeSuppressionStorage | null {
   };
 }
 
-function readSuppressed(storage: AutoNudgeSuppressionStorage | null): boolean {
-  if (!storage) return false;
+function readSuppressionState(storage: AutoNudgeSuppressionStorage | null): {
+  readonly available: boolean;
+  readonly suppressed: boolean;
+} {
+  if (!storage) return { available: false, suppressed: false };
   try {
-    return storage.getItem(AUTO_NUDGE_SUPPRESSION_STORAGE_KEY) !== null;
+    const stopToken = storage.getItem(AUTO_NUDGE_SUPPRESSION_STORAGE_KEY);
+    return {
+      available: true,
+      suppressed:
+        stopToken !== null &&
+        storage.getItem(AUTO_NUDGE_SUPPRESSION_CLEAR_STORAGE_KEY) !== stopToken,
+    };
   } catch {
-    return false;
+    return { available: false, suppressed: false };
   }
+}
+
+function newSuppressionToken(): string {
+  const randomUuid = globalThis.crypto?.randomUUID?.();
+  return randomUuid
+    ? `v1:${randomUuid}`
+    : `v1:${Date.now()}:${Math.random().toString(36).slice(2)}`;
 }
 
 function suppressionStorageIsWritable(storage: AutoNudgeSuppressionStorage | null): boolean {
@@ -98,8 +121,9 @@ export class ConfirmedAutoNudgeArming {
     private readonly failClosedWithoutDurableStorage = false,
   ) {
     this.durableStorageAvailable = suppressionStorageIsWritable(suppressionStorage);
+    const suppressionState = readSuppressionState(suppressionStorage);
     this.suppressed =
-      readSuppressed(suppressionStorage) ||
+      suppressionState.suppressed ||
       (failClosedWithoutDurableStorage && !this.durableStorageAvailable);
   }
 
@@ -135,7 +159,7 @@ export class ConfirmedAutoNudgeArming {
   suppress(): void {
     this.generation += 1;
     try {
-      this.suppressionStorage?.setItem(AUTO_NUDGE_SUPPRESSION_STORAGE_KEY, "1");
+      this.suppressionStorage?.setItem(AUTO_NUDGE_SUPPRESSION_STORAGE_KEY, newSuppressionToken());
       this.durableStorageAvailable = this.suppressionStorage !== null;
     } catch {
       // The in-memory latch still keeps this renderer fail-closed.
@@ -150,21 +174,60 @@ export class ConfirmedAutoNudgeArming {
    * explicit, successfully persisted enable cleared the stop latch.
    */
   synchronizeSuppressionFromStorage(): void {
+    const suppressionState = readSuppressionState(this.suppressionStorage);
+    if (!suppressionState.available) {
+      this.durableStorageAvailable = false;
+    }
     this.setSuppressed(
-      readSuppressed(this.suppressionStorage) ||
+      suppressionState.suppressed ||
         (this.failClosedWithoutDurableStorage && !this.durableStorageAvailable),
     );
   }
 
-  private clearSuppression(): boolean {
+  private readSuppressionToken(): string | null | undefined {
+    if (!this.suppressionStorage) return undefined;
+    try {
+      return this.suppressionStorage.getItem(AUTO_NUDGE_SUPPRESSION_STORAGE_KEY);
+    } catch {
+      return undefined;
+    }
+  }
+
+  private clearSuppression(expectedSuppressionToken: string | null | undefined): boolean {
     this.durableStorageAvailable = suppressionStorageIsWritable(this.suppressionStorage);
     if (!this.suppressionStorage || !this.durableStorageAvailable) {
       this.setSuppressed(this.failClosedWithoutDurableStorage);
       return !this.suppressed;
     }
     try {
-      this.suppressionStorage.removeItem(AUTO_NUDGE_SUPPRESSION_STORAGE_KEY);
-      const cleared = this.suppressionStorage.getItem(AUTO_NUDGE_SUPPRESSION_STORAGE_KEY) === null;
+      const currentSuppressionToken = this.suppressionStorage.getItem(
+        AUTO_NUDGE_SUPPRESSION_STORAGE_KEY,
+      );
+      if (
+        expectedSuppressionToken !== undefined &&
+        currentSuppressionToken !== expectedSuppressionToken
+      ) {
+        // Another renderer issued Stop after this enable began. Never let an
+        // older settings acknowledgement clear that newer execution boundary.
+        this.setSuppressed(true);
+        return false;
+      }
+      if (currentSuppressionToken === null) {
+        this.setSuppressed(false);
+        return true;
+      }
+      // Acknowledge the observed Stop generation instead of deleting it.
+      // Separate monotonic tokens avoid a get/remove race erasing a newer Stop
+      // written by another renderer between those two storage operations.
+      this.suppressionStorage.setItem(
+        AUTO_NUDGE_SUPPRESSION_CLEAR_STORAGE_KEY,
+        currentSuppressionToken,
+      );
+      const cleared =
+        this.suppressionStorage.getItem(AUTO_NUDGE_SUPPRESSION_STORAGE_KEY) ===
+          currentSuppressionToken &&
+        this.suppressionStorage.getItem(AUTO_NUDGE_SUPPRESSION_CLEAR_STORAGE_KEY) ===
+          currentSuppressionToken;
       if (!cleared) this.durableStorageAvailable = false;
       this.setSuppressed(!cleared && this.failClosedWithoutDurableStorage);
       return !this.suppressed;
@@ -186,13 +249,14 @@ export class ConfirmedAutoNudgeArming {
     clearSuppression?: boolean;
   }): Promise<boolean> {
     const generation = this.generation + 1;
+    const suppressionTokenAtArm = input.clearSuppression ? this.readSuppressionToken() : undefined;
     this.generation = generation;
     this.setArming(true);
     try {
       await input.persistEnabled();
       if (this.generation !== generation) return false;
       if (input.clearSuppression) {
-        if (!this.clearSuppression()) return false;
+        if (!this.clearSuppression(suppressionTokenAtArm)) return false;
       }
       input.start();
       return true;
@@ -211,7 +275,10 @@ function makeSharedConfirmedAutoNudgeArming(): ConfirmedAutoNudgeArming {
   const arming = new ConfirmedAutoNudgeArming(storage, true);
   if (typeof window !== "undefined") {
     const onStorage = (event: StorageEvent) => {
-      if (event.key === AUTO_NUDGE_SUPPRESSION_STORAGE_KEY) {
+      if (
+        event.key === AUTO_NUDGE_SUPPRESSION_STORAGE_KEY ||
+        event.key === AUTO_NUDGE_SUPPRESSION_CLEAR_STORAGE_KEY
+      ) {
         arming.synchronizeSuppressionFromStorage();
       }
     };
