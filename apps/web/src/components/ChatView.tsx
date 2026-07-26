@@ -107,7 +107,15 @@ import { cn } from "~/lib/utils";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { newCommandId, newDraftId, newMessageId, newThreadId } from "~/lib/utils";
 import { getProviderModelCapabilities, resolveSelectableProvider } from "../providerModels";
-import { useSettings } from "../hooks/useSettings";
+import { useSettings, useUpdateSettings } from "../hooks/useSettings";
+import {
+  getBackgroundAutoNudgeController,
+  isBackgroundAutoNudgeOwner,
+  isLastBackgroundAutoNudgeOwner,
+  supportsBackgroundAutoNudgeDispatchLock,
+  useBackgroundAutoNudgeState,
+} from "../backgroundAutoNudger";
+import { ConfirmedAutoNudgeArming } from "../confirmedAutoNudgeArming";
 import { resolveAppModelSelectionForInstance } from "../modelSelection";
 import {
   deriveLogicalProjectKeyFromSettings,
@@ -126,6 +134,7 @@ import {
   type FollowUpQueueViewItem,
   type SteeringFollowUpViewItem,
 } from "./chat/ChatComposer";
+import { AutoNudgeControl } from "./chat/AutoNudgeControl";
 import {
   canExpandQueuedFollowUpText,
   canStartQueuedFollowUpTurn,
@@ -1794,6 +1803,31 @@ export default function ChatView(props: ChatViewProps) {
   );
   const setPersistedPlanSidebarOpen = useUiStateStore((store) => store.setThreadPlanSidebarOpen);
   const settings = useSettings();
+  const { updateClientSettingsConfirmed } = useUpdateSettings();
+  const backgroundAutoNudgeState = useBackgroundAutoNudgeState();
+  const backgroundAutoNudgeOwnerForRoute =
+    routeKind === "server" &&
+    isBackgroundAutoNudgeOwner(backgroundAutoNudgeState, {
+      environmentId,
+      threadId,
+    });
+  const backgroundAutoNudgeLastOwnerForRoute =
+    routeKind === "server" &&
+    isLastBackgroundAutoNudgeOwner(backgroundAutoNudgeState, {
+      environmentId,
+      threadId,
+    });
+  const autoNudgeArmingRef = useRef(new ConfirmedAutoNudgeArming());
+  const [autoNudgeArming, setAutoNudgeArming] = useState(false);
+  useEffect(
+    () => () => {
+      // TanStack may reuse ChatView while the thread route changes. Invalidate
+      // an enable write for the previous owner as well as writes that resolve
+      // after a full unmount.
+      autoNudgeArmingRef.current.invalidate();
+    },
+    [environmentId, threadId],
+  );
   const setStickyComposerModelSelection = useComposerDraftStore(
     (store) => store.setStickyModelSelection,
   );
@@ -4946,8 +4980,15 @@ export default function ChatView(props: ChatViewProps) {
     recordFollowUpQueueDebugAttempt,
   ]);
 
+  const recordManualAutoNudgeActivity = useCallback(() => {
+    if (backgroundAutoNudgeOwnerForRoute) {
+      getBackgroundAutoNudgeController().pause("Manual composer activity detected.");
+    }
+  }, [backgroundAutoNudgeOwnerForRoute]);
+
   const onSend = async (e?: { preventDefault: () => void }) => {
     e?.preventDefault();
+    recordManualAutoNudgeActivity();
     const api = readEnvironmentApi(environmentId);
     if (
       !api ||
@@ -5212,6 +5253,7 @@ export default function ChatView(props: ChatViewProps) {
 
   const onSteer = async (e?: { preventDefault: () => void }) => {
     e?.preventDefault();
+    recordManualAutoNudgeActivity();
     if (
       !activeThread ||
       isSendBusy ||
@@ -6224,6 +6266,120 @@ export default function ChatView(props: ChatViewProps) {
             <div className="relative isolate">
               <ComposerBannerStack className="relative z-0" items={composerBannerItems} />
               <div className="relative z-10">
+                <AutoNudgeControl
+                  mode={settings.autoNudgeMode}
+                  countdownSeconds={null}
+                  disabled={!isServerThread || autoNudgeArming}
+                  backgroundEnabled={settings.autoNudgeBackgroundContinuation}
+                  backgroundDispatchSupported={supportsBackgroundAutoNudgeDispatchLock()}
+                  backgroundOwnedByThisThread={backgroundAutoNudgeOwnerForRoute}
+                  backgroundStatus={backgroundAutoNudgeState.status}
+                  backgroundRounds={backgroundAutoNudgeState.sentRounds}
+                  backgroundMaxRounds={settings.autoNudgeMaxRounds}
+                  backgroundMaxMinutes={settings.autoNudgeMaxMinutes}
+                  backgroundReason={backgroundAutoNudgeState.reason}
+                  backgroundLedger={
+                    backgroundAutoNudgeLastOwnerForRoute ? backgroundAutoNudgeState.ledger : []
+                  }
+                  onModeChange={(mode) => {
+                    autoNudgeArmingRef.current.invalidate();
+                    if (mode === "off") {
+                      getBackgroundAutoNudgeController().stop("Auto Nudge mode was turned off.");
+                    }
+                    void autoNudgeArmingRef.current
+                      .arm({
+                        persistEnabled: () =>
+                          updateClientSettingsConfirmed({
+                            autoNudgeMode: mode,
+                            ...(mode === "off" ? { autoNudgeBackgroundContinuation: false } : {}),
+                          }),
+                        start: () => undefined,
+                        setArming: setAutoNudgeArming,
+                      })
+                      .catch(() => {
+                        toastManager.add(
+                          stackedThreadToast({
+                            type: "error",
+                            title: "Failed to update Auto Nudge",
+                            description: "The previous saved mode remains active.",
+                          }),
+                        );
+                      });
+                  }}
+                  onBackgroundChange={(enabled) => {
+                    if (!activeThread || !isServerThread) return;
+
+                    if (!enabled) {
+                      autoNudgeArmingRef.current.invalidate();
+                      setAutoNudgeArming(false);
+                      getBackgroundAutoNudgeController().stop(
+                        "Background continuation stopped by the operator.",
+                      );
+                      void updateClientSettingsConfirmed({
+                        autoNudgeBackgroundContinuation: false,
+                      }).catch(() => {
+                        toastManager.add(
+                          stackedThreadToast({
+                            type: "error",
+                            title: "Failed to save Auto Nudge",
+                            description:
+                              "The current run was stopped, but the saved background setting could not be updated.",
+                          }),
+                        );
+                      });
+                      return;
+                    }
+
+                    const owner = {
+                      environmentId: activeThread.environmentId,
+                      threadId: activeThread.id,
+                    };
+                    const latestUserMessageAt =
+                      activeThread.messages.findLast((message) => message.role === "user")
+                        ?.createdAt ?? null;
+                    void autoNudgeArmingRef.current
+                      .arm({
+                        persistEnabled: () =>
+                          updateClientSettingsConfirmed({
+                            autoNudgeBackgroundContinuation: true,
+                          }),
+                        start: () =>
+                          getBackgroundAutoNudgeController().start(owner, latestUserMessageAt),
+                        setArming: setAutoNudgeArming,
+                      })
+                      .catch(() => {
+                        toastManager.add(
+                          stackedThreadToast({
+                            type: "error",
+                            title: "Failed to start background Auto Nudge",
+                            description: "The setting was not saved, so no background run started.",
+                          }),
+                        );
+                      });
+                  }}
+                  onPauseBackground={() =>
+                    getBackgroundAutoNudgeController().pause("Paused by the operator.")
+                  }
+                  onResumeBackground={() => getBackgroundAutoNudgeController().resume()}
+                  onStop={() => {
+                    autoNudgeArmingRef.current.invalidate();
+                    setAutoNudgeArming(false);
+                    getBackgroundAutoNudgeController().stop("Auto Nudge stopped by the operator.");
+                    void updateClientSettingsConfirmed({
+                      autoNudgeMode: "off",
+                      autoNudgeBackgroundContinuation: false,
+                    }).catch(() => {
+                      toastManager.add(
+                        stackedThreadToast({
+                          type: "error",
+                          title: "Failed to save Auto Nudge",
+                          description:
+                            "The current run was stopped, but the saved settings could not be updated.",
+                        }),
+                      );
+                    });
+                  }}
+                />
                 <ChatComposer
                   composerRef={composerRef}
                   composerDraftTarget={composerDraftTarget}
@@ -6277,6 +6433,7 @@ export default function ChatView(props: ChatViewProps) {
                   scheduleStickToBottom={scrollToEnd}
                   onSend={onSend}
                   onSteer={onSteer}
+                  onManualActivity={recordManualAutoNudgeActivity}
                   onToggleFollowUpQueueItem={onToggleFollowUpQueueItem}
                   onActivateFollowUpQueueItem={onActivateFollowUpQueueItem}
                   onRemoveFollowUpQueueItem={onRemoveFollowUpQueueItem}
