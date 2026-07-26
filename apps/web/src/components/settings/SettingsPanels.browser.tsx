@@ -1004,6 +1004,7 @@ describe("settings panels", () => {
     };
 
     await expect.element(page.getByText("Accent color")).toBeInTheDocument();
+    await expect.element(page.getByText("Window atmosphere", { exact: true })).toBeInTheDocument();
     setColorInput("Branding prefix", "Acme");
 
     await vi.waitFor(() => {
