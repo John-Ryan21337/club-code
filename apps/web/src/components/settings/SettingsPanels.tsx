@@ -108,6 +108,7 @@ import {
 import { ProjectFavicon } from "../ProjectFavicon";
 import {
   useServerAvailableEditors,
+  useServerConfig,
   useServerObservability,
   useServerProviders,
 } from "../../rpc/serverState";
@@ -120,6 +121,7 @@ import {
   uploadSidebarBrandImage,
 } from "../../brandingImages";
 import { ColorWheelPicker } from "./ColorWheelPicker";
+import { AmbientImageSettings } from "./AmbientImageSettings";
 
 const THEME_OPTIONS = [
   {
@@ -618,6 +620,7 @@ export function AppearanceSettingsPanel() {
   const { theme, setTheme } = useTheme();
   const settings = useSettings();
   const { updateSettings } = useUpdateSettings();
+  const serverConfig = useServerConfig();
   const sidebarImageInputRef = useRef<HTMLInputElement | null>(null);
   const sidebarImagePreviewUrlRef = useRef<string | null>(null);
   const [sidebarImageError, setSidebarImageError] = useState<string | null>(null);
@@ -1044,6 +1047,9 @@ export function AppearanceSettingsPanel() {
           }
         />
       </SettingsSection>
+      {serverConfig?.ambientExperienceCapabilities.ambientImage === true ? (
+        <AmbientImageSettings />
+      ) : null}
     </SettingsPageContainer>
   );
 }

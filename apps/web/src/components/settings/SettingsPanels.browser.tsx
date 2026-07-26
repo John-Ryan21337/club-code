@@ -1004,6 +1004,9 @@ describe("settings panels", () => {
     };
 
     await expect.element(page.getByText("Accent color")).toBeInTheDocument();
+    await expect
+      .element(page.getByRole("heading", { name: "Ambient image", exact: true }))
+      .toBeInTheDocument();
     setColorInput("Branding prefix", "Acme");
 
     await vi.waitFor(() => {
@@ -1139,6 +1142,29 @@ describe("settings panels", () => {
     await vi.waitFor(() => {
       expect(updateClientSettings).toHaveBeenCalledWith({ sidebarStarSpeed: 1.25 });
     });
+  });
+
+  it("hides ambient image settings when the server capability is disabled", async () => {
+    const desktopBridge = createDesktopBridgeStub();
+    window.desktopBridge = desktopBridge;
+    installClientSettingsNativeApi(desktopBridge);
+    const serverConfig = createBaseServerConfig();
+    setServerConfigSnapshot({
+      ...serverConfig,
+      ambientExperienceCapabilities: {
+        ...serverConfig.ambientExperienceCapabilities,
+        ambientImage: false,
+      },
+    });
+
+    mounted = await renderWithTestRouter(
+      <AppAtomRegistryProvider>
+        <AppearanceSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    await expect.element(page.getByText("Accent color")).toBeInTheDocument();
+    expect(document.querySelector('[aria-label="Show ambient image"]')).toBeNull();
   });
 
   it("shows detected editor icons in the Files & Diffs default editor selector", async () => {
