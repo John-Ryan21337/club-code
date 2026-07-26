@@ -2,6 +2,43 @@
   "schemaVersion": 1,
   "models": [
     {
+      "slug": "claude-opus-5",
+      "name": "Claude Opus 5",
+      "isCustom": false,
+      "minimumClaudeCodeVersion": "2.1.219",
+      "capabilities": {
+        "optionDescriptors": [
+          {
+            "id": "effort",
+            "label": "Reasoning",
+            "type": "select",
+            "options": [
+              { "id": "low", "label": "Low" },
+              { "id": "medium", "label": "Medium" },
+              { "id": "high", "label": "High", "isDefault": true },
+              { "id": "xhigh", "label": "Extra High" },
+              { "id": "max", "label": "Max" },
+              { "id": "ultrathink", "label": "Ultrathink" }
+            ],
+            "currentValue": "high",
+            "promptInjectedValues": ["ultrathink"]
+          },
+          {
+            "id": "fastMode",
+            "label": "Fast Mode",
+            "type": "boolean"
+          },
+          {
+            "id": "contextWindow",
+            "label": "Context Window",
+            "type": "select",
+            "options": [{ "id": "1m", "label": "1M", "isDefault": true }],
+            "currentValue": "1m"
+          }
+        ]
+      }
+    },
+    {
       "slug": "claude-fable-5",
       "name": "Claude Fable 5",
       "isCustom": false,
@@ -57,6 +94,11 @@
             ],
             "currentValue": "xhigh",
             "promptInjectedValues": ["ultrathink"]
+          },
+          {
+            "id": "fastMode",
+            "label": "Fast Mode",
+            "type": "boolean"
           },
           {
             "id": "contextWindow",
@@ -127,11 +169,6 @@
             "promptInjectedValues": ["ultrathink"]
           },
           {
-            "id": "fastMode",
-            "label": "Fast Mode",
-            "type": "boolean"
-          },
-          {
             "id": "contextWindow",
             "label": "Context Window",
             "type": "select",
@@ -161,11 +198,6 @@
               { "id": "max", "label": "Max" }
             ],
             "currentValue": "high"
-          },
-          {
-            "id": "fastMode",
-            "label": "Fast Mode",
-            "type": "boolean"
           }
         ]
       }

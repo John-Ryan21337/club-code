@@ -536,6 +536,29 @@ describe("ClaudeAdapterLive", () => {
     const instanceId = ProviderInstanceId.make("claudeAgent");
     const cases = [
       {
+        name: "Opus 5 defaults to high effort and its fixed 1M context",
+        selection: createModelSelection(instanceId, "claude-opus-5"),
+        expected: {
+          model: "claude-opus-5[1m]",
+          effort: "high",
+          context: 1000000,
+          settings: {},
+        },
+      },
+      {
+        name: "Opus 5 supports max effort and fast mode",
+        selection: createModelSelection(instanceId, "claude-opus-5", [
+          { id: "effort", value: "max" },
+          { id: "fastMode", value: true },
+        ]),
+        expected: {
+          model: "claude-opus-5[1m]",
+          effort: "max",
+          context: 1000000,
+          settings: { fastMode: true },
+        },
+      },
+      {
         name: "Opus 4.7 default effort",
         selection: createModelSelection(instanceId, "claude-opus-4-7"),
         expected: { model: "claude-opus-4-7", effort: "xhigh", context: 200000, settings: {} },
@@ -588,7 +611,19 @@ describe("ClaudeAdapterLive", () => {
         expected: { model: "claude-sonnet-4-6", effort: "high", context: 200000, settings: {} },
       },
       {
-        name: "Opus supports fast mode",
+        name: "Opus 4.8 supports fast mode",
+        selection: createModelSelection(instanceId, "claude-opus-4-8", [
+          { id: "fastMode", value: true },
+        ]),
+        expected: {
+          model: "claude-opus-4-8",
+          effort: "xhigh",
+          context: 200000,
+          settings: { fastMode: true },
+        },
+      },
+      {
+        name: "Opus 4.6 ignores removed fast mode",
         selection: createModelSelection(instanceId, "claude-opus-4-6", [
           { id: "fastMode", value: true },
         ]),
@@ -596,7 +631,7 @@ describe("ClaudeAdapterLive", () => {
           model: "claude-opus-4-6",
           effort: "high",
           context: 200000,
-          settings: { fastMode: true },
+          settings: {},
         },
       },
       {
@@ -2485,6 +2520,75 @@ describe("ClaudeAdapterLive", () => {
         runtimeEvents.some((event) => event.type === "runtime.warning"),
         false,
       );
+      runtimeEventsFiber.interruptUnsafe();
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("reports a requested Claude fast-mode fallback once per upstream status", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const context = yield* Effect.context<never>();
+      const runFork = Effect.runForkWith(context);
+      const adapter = yield* ClaudeAdapter;
+      const runtimeEvents: Array<ProviderRuntimeEvent> = [];
+      const runtimeEventsFiber = runFork(
+        Stream.runForEach(adapter.streamEvents, (event) =>
+          Effect.sync(() => {
+            runtimeEvents.push(event);
+          }),
+        ),
+      );
+
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        modelSelection: createModelSelection(
+          ProviderInstanceId.make("claudeAgent"),
+          "claude-opus-5",
+          [{ id: "fastMode", value: true }],
+        ),
+        runtimeMode: "full-access",
+      });
+      yield* Effect.yieldNow;
+      yield* Effect.yieldNow;
+      runtimeEvents.length = 0;
+
+      const fastModeFallback = {
+        type: "system",
+        subtype: "init",
+        fast_mode_state: "off",
+        fast_mode_disabled_reason: "sdk_opt_in_required",
+        capabilities: [],
+        session_id: "sdk-session-fast-mode",
+        uuid: "fast-mode-fallback",
+      } as unknown as SDKMessage;
+      harness.query.emit(fastModeFallback);
+      harness.query.emit({
+        ...fastModeFallback,
+        uuid: "fast-mode-fallback-duplicate",
+      } as unknown as SDKMessage);
+      yield* Effect.yieldNow;
+      yield* Effect.yieldNow;
+      yield* Effect.yieldNow;
+
+      const warnings = runtimeEvents.filter((event) => event.type === "runtime.warning");
+      assert.equal(warnings.length, 1);
+      const warning = warnings[0];
+      assert.equal(warning?.type, "runtime.warning");
+      if (warning?.type === "runtime.warning") {
+        assert.equal(
+          warning.payload.message,
+          "Claude could not activate the requested fast mode; this session is continuing at standard speed.",
+        );
+        assert.deepEqual(warning.payload.detail, {
+          fastModeState: "off",
+          fastModeDisabledReason: "sdk_opt_in_required",
+        });
+      }
+
       runtimeEventsFiber.interruptUnsafe();
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),

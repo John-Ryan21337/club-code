@@ -8,6 +8,8 @@
  */
 import {
   type CanUseTool,
+  type FastModeDisabledReason,
+  type FastModeState,
   query,
   type SDKControlInterruptResponse,
   type Options as ClaudeQueryOptions,
@@ -313,8 +315,10 @@ interface ClaudeSessionContext {
   readonly backgroundTaskIds: Set<string>;
   readonly promptLifecycleByUuid: Map<string, ClaudePromptLifecycleState>;
   readonly capabilities: Set<string>;
+  readonly fastModeRequested: boolean;
   turnState: ClaudeTurnState | undefined;
   deferredTurnResult: ClaudeDeferredTurnResult | undefined;
+  lastFastModeNoticeKey: string | undefined;
   lastKnownContextWindow: number | undefined;
   lastKnownTokenUsage: ThreadTokenUsageSnapshot | undefined;
   lastAssistantUuid: string | undefined;
@@ -326,7 +330,7 @@ interface ClaudeSessionContext {
 
 interface ClaudeQueryRuntime extends AsyncIterable<SDKMessage> {
   readonly interrupt: () => Promise<SDKControlInterruptResponse | undefined>;
-  // The 0.3.216 runtime implements this control request, but its public Query
+  // The 0.3.220 runtime implements this control request, but its public Query
   // interface has not exposed the method yet. Keep it optional for older SDKs.
   readonly cancelAsyncMessage?: (messageUuid: string) => Promise<boolean>;
   readonly setModel: (model?: string) => Promise<void>;
@@ -2319,6 +2323,50 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     });
   });
 
+  const reportClaudeFastModeStatus = Effect.fn("reportClaudeFastModeStatus")(function* (
+    context: ClaudeSessionContext,
+    message: {
+      readonly fast_mode_state?: FastModeState;
+      readonly fast_mode_disabled_reason?: FastModeDisabledReason;
+    },
+  ) {
+    if (!context.fastModeRequested) {
+      return;
+    }
+
+    const state = message.fast_mode_state;
+    const reason = message.fast_mode_disabled_reason;
+    if (state === "on" && reason === undefined) {
+      // Clear the dedupe key so a later cooldown or eligibility change remains
+      // visible even when it repeats a status seen before this healthy period.
+      context.lastFastModeNoticeKey = undefined;
+      return;
+    }
+
+    const noticeKey = `${state ?? "unknown"}:${reason ?? "none"}`;
+    if (context.lastFastModeNoticeKey === noticeKey) {
+      return;
+    }
+
+    let notice: string | undefined;
+    if (state === "cooldown") {
+      notice =
+        "Claude fast mode is cooling down after a rate limit; this session is continuing at standard speed.";
+    } else if (reason !== undefined) {
+      notice =
+        "Claude could not activate the requested fast mode; this session is continuing at standard speed.";
+    }
+    if (notice === undefined) {
+      return;
+    }
+
+    context.lastFastModeNoticeKey = noticeKey;
+    yield* emitRuntimeWarning(context, notice, {
+      fastModeState: state,
+      fastModeDisabledReason: reason,
+    });
+  });
+
   const emitClaudeProcessStderr = Effect.fn("emitClaudeProcessStderr")(function* (
     context: ClaudeSessionContext,
     line: string,
@@ -3229,6 +3277,8 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       return;
     }
 
+    yield* reportClaudeFastModeStatus(context, message);
+
     const status = turnStatusFromResult(message);
     const resultErrors = "errors" in message && Array.isArray(message.errors) ? message.errors : [];
     const authFailure = isClaudeAuthFailureResult(message);
@@ -3444,6 +3494,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
             context.capabilities.add(capability);
           }
         }
+        yield* reportClaudeFastModeStatus(context, message);
         yield* offerRuntimeEvent({
           ...base,
           type: "session.configured",
@@ -4839,8 +4890,10 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         backgroundTaskIds: new Set(),
         promptLifecycleByUuid: new Map(),
         capabilities: new Set(),
+        fastModeRequested: fastMode,
         turnState: undefined,
         deferredTurnResult: undefined,
+        lastFastModeNoticeKey: undefined,
         lastKnownContextWindow: selectedContextWindowTokens,
         lastKnownTokenUsage: undefined,
         lastAssistantUuid: undefined,

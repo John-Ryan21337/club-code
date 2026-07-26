@@ -81,7 +81,10 @@ describe("normalizeModelSlug", () => {
     expect(normalizeModelSlug("5.3")).toBe("gpt-5.3-codex");
     expect(normalizeModelSlug("fable", claude)).toBe("claude-fable-5");
     expect(normalizeModelSlug("fable[1m]", claude)).toBe("claude-fable-5");
-    expect(normalizeModelSlug("opus", claude)).toBe("claude-opus-4-8");
+    expect(normalizeModelSlug("default", claude)).toBe("claude-opus-5");
+    expect(normalizeModelSlug("opus", claude)).toBe("claude-opus-5");
+    expect(normalizeModelSlug("opus-5", claude)).toBe("claude-opus-5");
+    expect(normalizeModelSlug("opus[1m]", claude)).toBe("claude-opus-5");
     expect(normalizeModelSlug("opus-4.7", claude)).toBe("claude-opus-4-7");
     expect(normalizeModelSlug("sonnet", claude)).toBe("claude-sonnet-5");
     expect(normalizeModelSlug("sonnet[1m]", claude)).toBe("claude-sonnet-5");

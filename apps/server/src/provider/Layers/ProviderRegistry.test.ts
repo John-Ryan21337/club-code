@@ -1809,7 +1809,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
             version: "2.1.110",
             slugs: [] as Array<string>,
             upgrade:
-              "Claude Code v2.1.110 is too old for Claude Fable 5. Upgrade to v2.1.170 or newer to access it.",
+              "Claude Code v2.1.110 is too old for Claude Opus 5. Upgrade to v2.1.219 or newer to access it.",
           },
           { version: "2.1.111", slugs: ["claude-opus-4-7"] },
           { version: "2.1.154", slugs: ["claude-opus-4-7", "claude-opus-4-8"] },
@@ -1818,8 +1818,23 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
             version: "2.1.197",
             slugs: ["claude-opus-4-7", "claude-opus-4-8", "claude-fable-5", "claude-sonnet-5"],
           },
+          {
+            version: "2.1.218",
+            slugs: ["claude-opus-4-7", "claude-opus-4-8", "claude-fable-5", "claude-sonnet-5"],
+          },
+          {
+            version: "2.1.219",
+            slugs: [
+              "claude-opus-5",
+              "claude-opus-4-7",
+              "claude-opus-4-8",
+              "claude-fable-5",
+              "claude-sonnet-5",
+            ],
+          },
         ];
         const gatedSlugs = [
+          "claude-opus-5",
           "claude-opus-4-7",
           "claude-opus-4-8",
           "claude-fable-5",
@@ -1878,6 +1893,44 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
             : undefined,
           ["low", "medium", "high", "xhigh", "max", "ultrathink"],
         );
+
+        const opus5 = getBuiltInClaudeModelsForVersion("2.1.219").find(
+          (model) => model.slug === "claude-opus-5",
+        );
+        const opus5Descriptors = opus5?.capabilities?.optionDescriptors ?? [];
+        const opus5Effort = opus5Descriptors.find(
+          (descriptor) => descriptor.type === "select" && descriptor.id === "effort",
+        );
+        const opus5Context = opus5Descriptors.find(
+          (descriptor) => descriptor.type === "select" && descriptor.id === "contextWindow",
+        );
+        assert.deepStrictEqual(
+          opus5Effort?.type === "select"
+            ? opus5Effort.options.find((option) => option.isDefault)
+            : undefined,
+          { id: "high", label: "High", isDefault: true },
+        );
+        assert.deepStrictEqual(
+          opus5Context?.type === "select"
+            ? opus5Context.options.map((option) => option.id)
+            : undefined,
+          ["1m"],
+        );
+        assert.equal(
+          opus5Descriptors.some(
+            (descriptor) => descriptor.type === "boolean" && descriptor.id === "fastMode",
+          ),
+          true,
+        );
+
+        const fastModeSlugs = getBuiltInClaudeModelsForVersion("2.1.219")
+          .filter((model) =>
+            model.capabilities?.optionDescriptors?.some(
+              (descriptor) => descriptor.type === "boolean" && descriptor.id === "fastMode",
+            ),
+          )
+          .map((model) => model.slug);
+        assert.deepStrictEqual(fastModeSlugs, ["claude-opus-5", "claude-opus-4-8"]);
       });
 
       it("formats Claude subscription labels without probing the provider", () => {
