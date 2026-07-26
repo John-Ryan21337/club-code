@@ -20,6 +20,16 @@ export interface BoundedPacingAdmissionOptions {
   readonly maxWaitingGlobal: number;
   readonly maxWaitingPerKey: number;
   readonly maxTrackedKeys: number;
+  /**
+   * At or above this usage percentage, a complete provider observation grants
+   * only a bounded number of launches. The default is 80.
+   */
+  readonly cautionBandStartPercent?: number;
+  /**
+   * Launch authorizations granted by one fresh caution-band observation.
+   * The default is one and the hard maximum is 64.
+   */
+  readonly maxCautionBandLaunchesPerObservation?: number;
   readonly clock?: PacingAdmissionClock;
 }
 
@@ -38,7 +48,15 @@ export interface NewLaunchAdmission<T> {
 export type PacingAdmissionObservation = Omit<
   PacingWindowObservation,
   "observationSequence" | "activeLaunchCount"
->;
+> & {
+  /**
+   * Monotonic evidence from the provider-observation owner, scoped to one
+   * admission key and coordinator lifetime. The integration must increment it
+   * only after a provider usage read completes and must preserve it when that
+   * same read is replayed. Local wall-clock time is not sufficient evidence.
+   */
+  readonly providerObservationSequence: number | null;
+};
 
 export class PacingAdmissionCapacityError extends Error {
   constructor(message: string) {
@@ -77,6 +95,11 @@ interface KeyState {
   readonly waiting: WaitingEntry[];
   activeCount: number;
   nextObservationSequence: number;
+  latestProviderObservationSequence: number | null;
+  cautionAuthorizationSequence: number | null;
+  cautionAuthorizationsRemaining: number;
+  cautionRestricted: boolean;
+  pacingObservationEnabled: boolean;
   latestObservation: PacingAdmissionObservation | null;
 }
 
@@ -89,11 +112,29 @@ const systemClock: PacingAdmissionClock = {
 const HARD_MAX_WAITING_GLOBAL = 4_096;
 const HARD_MAX_WAITING_PER_KEY = 512;
 const HARD_MAX_TRACKED_KEYS = 1_024;
+const HARD_MAX_CAUTION_BAND_LAUNCHES = 64;
+const DEFAULT_CAUTION_BAND_START_PERCENT = 80;
+const DEFAULT_MAX_CAUTION_BAND_LAUNCHES = 1;
+const PROVIDER_DRAIN_CLOSURE_PERCENT = 90;
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
 function boundedPositiveInteger(value: number, name: string, maximum: number): number {
   if (!Number.isSafeInteger(value) || value <= 0 || value > maximum) {
     throw new RangeError(`${name} must be a positive safe integer no greater than ${maximum}.`);
+  }
+  return value;
+}
+
+function boundedCautionBandStart(value: number): number {
+  if (
+    typeof value !== "number" ||
+    !Number.isFinite(value) ||
+    value < 0 ||
+    value >= PROVIDER_DRAIN_CLOSURE_PERCENT
+  ) {
+    throw new RangeError(
+      `cautionBandStartPercent must be between 0 (inclusive) and ${PROVIDER_DRAIN_CLOSURE_PERCENT} (exclusive).`,
+    );
   }
   return value;
 }
@@ -128,6 +169,27 @@ function isFreshResetObservation(observation: PacingAdmissionObservation): boole
   );
 }
 
+function providerObservationSequence(value: number | null): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+function isCompleteFreshProviderObservation(
+  observation: PacingAdmissionObservation,
+): observation is PacingAdmissionObservation & {
+  readonly providerObservationSequence: number;
+  readonly usedPercent: number;
+  readonly resetsAtMs: number;
+  readonly windowDurationMs: number;
+} {
+  return (
+    isFreshResetObservation(observation) &&
+    typeof observation.usedPercent === "number" &&
+    observation.usedPercent >= 0 &&
+    observation.usedPercent <= 100 &&
+    providerObservationSequence(observation.providerObservationSequence) !== null
+  );
+}
+
 function captureObservation(observation: PacingAdmissionObservation): PacingAdmissionObservation {
   return {
     providerFamily: observation.providerFamily,
@@ -138,6 +200,7 @@ function captureObservation(observation: PacingAdmissionObservation): PacingAdmi
     stale: observation.stale,
     enabled: observation.enabled,
     minimumPauseMs: observation.minimumPauseMs,
+    providerObservationSequence: observation.providerObservationSequence,
   };
 }
 
@@ -151,6 +214,8 @@ export class BoundedPacingAdmissionCoordinator {
   private readonly maxWaitingGlobal: number;
   private readonly maxWaitingPerKey: number;
   private readonly maxTrackedKeys: number;
+  private readonly cautionBandStartPercent: number;
+  private readonly maxCautionBandLaunchesPerObservation: number;
   private readonly clock: PacingAdmissionClock;
   private readonly states = new Map<string, KeyState>();
   private readonly waiting: WaitingEntry[] = [];
@@ -175,6 +240,14 @@ export class BoundedPacingAdmissionCoordinator {
       "maxTrackedKeys",
       HARD_MAX_TRACKED_KEYS,
     );
+    this.cautionBandStartPercent = boundedCautionBandStart(
+      options.cautionBandStartPercent ?? DEFAULT_CAUTION_BAND_START_PERCENT,
+    );
+    this.maxCautionBandLaunchesPerObservation = boundedPositiveInteger(
+      options.maxCautionBandLaunchesPerObservation ?? DEFAULT_MAX_CAUTION_BAND_LAUNCHES,
+      "maxCautionBandLaunchesPerObservation",
+      HARD_MAX_CAUTION_BAND_LAUNCHES,
+    );
     this.clock = options.clock ?? systemClock;
   }
 
@@ -185,21 +258,77 @@ export class BoundedPacingAdmissionCoordinator {
     this.assertAvailable();
     const state = this.getOrCreateState(key);
     const capturedObservation = captureObservation(observation);
+    const supportedAndEnabled =
+      capturedObservation.enabled && capturedObservation.providerFamily !== "other";
+    const sourceSequence = providerObservationSequence(
+      capturedObservation.providerObservationSequence,
+    );
+    const strictlyNewer =
+      sourceSequence !== null &&
+      (state.latestProviderObservationSequence === null ||
+        sourceSequence > state.latestProviderObservationSequence);
+
+    if (!supportedAndEnabled) {
+      if (strictlyNewer) state.latestProviderObservationSequence = sourceSequence;
+      state.pacingObservationEnabled = false;
+      this.allowUnrestrictedFanout(state);
+      state.latestObservation = capturedObservation;
+      const snapshot = this.applyPolicyObservation(state, capturedObservation);
+      this.scheduleWake();
+      this.drain();
+      return snapshot;
+    }
+
+    const wasPacingObservationEnabled = state.pacingObservationEnabled;
+    state.pacingObservationEnabled = true;
+    if (!strictlyNewer) {
+      // A replay is not a new provider read. In particular, enabling pacing
+      // again cannot reuse the observation that preceded an explicit disable.
+      if (!wasPacingObservationEnabled) this.requireFreshCautionAuthorization(state);
+      return state.controller.getSnapshot();
+    }
+    state.latestProviderObservationSequence = sourceSequence;
 
     // A provider reset wait is released only by a complete, fresh provider
     // observation. A timer, stale cache entry, or malformed sample is not
     // evidence that quota reset.
     if (
       state.controller.getSnapshot().phase === "waiting-reset" &&
-      capturedObservation.enabled &&
-      capturedObservation.providerFamily !== "other" &&
-      !isFreshResetObservation(capturedObservation)
+      !isCompleteFreshProviderObservation(capturedObservation)
     ) {
       return state.controller.getSnapshot();
     }
 
     state.latestObservation = capturedObservation;
-    const snapshot = this.applyPolicyObservation(state, capturedObservation);
+    const hasCompleteObservation = isCompleteFreshProviderObservation(capturedObservation);
+    if (hasCompleteObservation) {
+      if (capturedObservation.usedPercent >= this.cautionBandStartPercent) {
+        state.cautionRestricted = true;
+        state.cautionAuthorizationSequence = capturedObservation.providerObservationSequence;
+        state.cautionAuthorizationsRemaining = this.maxCautionBandLaunchesPerObservation;
+      } else {
+        this.allowUnrestrictedFanout(state);
+      }
+    } else {
+      // A newer but incomplete observation supersedes any unused grant. It
+      // cannot be repaired or replayed later under the same source sequence.
+      this.requireFreshCautionAuthorization(state);
+    }
+    const snapshot = this.applyPolicyObservation(
+      state,
+      hasCompleteObservation
+        ? capturedObservation
+        : {
+            ...capturedObservation,
+            usedPercent: null,
+            stale: true,
+          },
+    );
+    if (!state.controller.canStartNewWork() && state.cautionRestricted) {
+      // Closing the policy gate also burns any unused authorization. Neither
+      // a deadline nor active-work completion can restore it.
+      this.requireFreshCautionAuthorization(state);
+    }
     this.scheduleWake();
     this.drain();
     return snapshot;
@@ -231,7 +360,7 @@ export class BoundedPacingAdmissionCoordinator {
       return this.rejectedAdmission<T>(error);
     }
 
-    if (!state.controller.canStartNewWork()) {
+    if (!this.canAdmitNewLaunch(state)) {
       if (this.waiting.length >= this.maxWaitingGlobal) {
         return this.rejectedAdmission<T>(
           new PacingAdmissionCapacityError("The global pacing wait limit was reached."),
@@ -307,6 +436,11 @@ export class BoundedPacingAdmissionCoordinator {
       waiting: [],
       activeCount: 0,
       nextObservationSequence: 0,
+      latestProviderObservationSequence: null,
+      cautionAuthorizationSequence: null,
+      cautionAuthorizationsRemaining: 0,
+      cautionRestricted: false,
+      pacingObservationEnabled: false,
       latestObservation: null,
     };
     this.states.set(identity, state);
@@ -318,6 +452,38 @@ export class BoundedPacingAdmissionCoordinator {
       promise: Promise.reject(error),
       cancel: () => false,
     };
+  }
+
+  private allowUnrestrictedFanout(state: KeyState): void {
+    state.cautionRestricted = false;
+    state.cautionAuthorizationSequence = null;
+    state.cautionAuthorizationsRemaining = 0;
+  }
+
+  private requireFreshCautionAuthorization(state: KeyState): void {
+    state.cautionRestricted = true;
+    state.cautionAuthorizationSequence = null;
+    state.cautionAuthorizationsRemaining = 0;
+  }
+
+  private canAdmitNewLaunch(state: KeyState): boolean {
+    return (
+      state.controller.canStartNewWork() &&
+      (!state.cautionRestricted ||
+        (state.cautionAuthorizationsRemaining > 0 &&
+          state.cautionAuthorizationSequence !== null &&
+          state.cautionAuthorizationSequence === state.latestProviderObservationSequence))
+    );
+  }
+
+  private consumeCautionAuthorization(state: KeyState): boolean {
+    if (!this.canAdmitNewLaunch(state)) return false;
+    if (!state.cautionRestricted) return true;
+    state.cautionAuthorizationsRemaining -= 1;
+    if (state.cautionAuthorizationsRemaining === 0) {
+      state.cautionAuthorizationSequence = null;
+    }
+    return true;
   }
 
   private cancelWaiting(entry: WaitingEntry): boolean {
@@ -335,8 +501,7 @@ export class BoundedPacingAdmissionCoordinator {
     try {
       while (true) {
         const entry = this.waiting.find(
-          (candidate) =>
-            candidate.status === "waiting" && candidate.state.controller.canStartNewWork(),
+          (candidate) => candidate.status === "waiting" && this.canAdmitNewLaunch(candidate.state),
         );
         if (entry === undefined) return;
         this.start(entry);
@@ -350,6 +515,9 @@ export class BoundedPacingAdmissionCoordinator {
   }
 
   private start(entry: WaitingEntry): void {
+    // Consume synchronously before invoking user code. A reentrant submission
+    // therefore observes the depleted grant and cannot join the same fan-out.
+    if (!this.consumeCautionAuthorization(entry.state)) return;
     entry.status = "starting";
     this.removeWaiting(entry);
     entry.state.activeCount += 1;
