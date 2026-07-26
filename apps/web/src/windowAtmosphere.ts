@@ -309,3 +309,64 @@ export function shouldAnimateAtmosphere(state: AtmosphereAnimationState): boolea
   if (!state.enabled || state.reducedMotion) return false;
   return state.continueBackgroundAnimations || (state.documentVisible && state.windowFocused);
 }
+
+export function drawAtmosphereScene(
+  context: CanvasRenderingContext2D,
+  scene: AtmosphereScene,
+  color: string,
+  opacity: number,
+  matrixColorFrame?: MatrixColorFrame,
+): void {
+  context.clearRect(0, 0, scene.width, scene.height);
+  const normalizedOpacity = Math.min(1, Math.max(0, opacity));
+  if (normalizedOpacity === 0) return;
+
+  context.save();
+  context.fillStyle = color;
+  context.strokeStyle = color;
+
+  if (scene.kind === "snow") {
+    context.globalAlpha = normalizedOpacity;
+    for (const particle of scene.particles) {
+      context.beginPath();
+      context.arc(particle.x, particle.y, particle.size, 0, Math.PI * 2);
+      context.fill();
+    }
+  } else if (scene.kind === "rain") {
+    context.globalAlpha = normalizedOpacity;
+    context.lineCap = "round";
+    for (const particle of scene.particles) {
+      context.lineWidth = Math.max(0.75, particle.size / 12);
+      context.beginPath();
+      context.moveTo(particle.x, particle.y);
+      context.lineTo(particle.x + particle.velocityX * 0.025, particle.y + particle.size);
+      context.stroke();
+    }
+  } else {
+    context.textAlign = "center";
+    context.textBaseline = "middle";
+    for (const particle of scene.particles) {
+      context.fillStyle =
+        matrixColorFrame === undefined
+          ? color
+          : resolveMatrixStreamColor(matrixColorFrame, particle);
+      context.font = `${particle.size}px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace`;
+      for (let trailIndex = 7; trailIndex >= 0; trailIndex -= 1) {
+        const glyphIndex =
+          (particle.glyphOffset +
+            trailIndex * 7 +
+            Math.floor(Math.max(0, particle.y) / particle.size)) %
+          particle.glyphs.length;
+        context.globalAlpha =
+          trailIndex === 0 ? normalizedOpacity : normalizedOpacity * (1 - trailIndex / 8) * 0.7;
+        context.fillText(
+          particle.glyphs[glyphIndex] ?? "0",
+          particle.x,
+          particle.y - trailIndex * particle.size,
+        );
+      }
+    }
+  }
+
+  context.restore();
+}
