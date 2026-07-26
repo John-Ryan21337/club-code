@@ -51,6 +51,10 @@ import type {
   ServerUpsertKeybindingResult,
 } from "./server.ts";
 import type { ServerRemoveKeybindingInput, ServerUpsertKeybindingInput } from "./server.ts";
+import type {
+  ServerProjectSystemTelemetryInput,
+  ServerProjectSystemTelemetryResult,
+} from "./systemTelemetry.ts";
 import * as Schema from "effect/Schema";
 import type {
   ClientOrchestrationCommand,
@@ -482,6 +486,16 @@ export interface EnvironmentApi {
   providerInteractions?: {
     respond: (input: ProviderRespondToInteractionInput) => Promise<void>;
     resolveUrl: (input: ProviderResolveInteractionUrlInput) => Promise<string>;
+  };
+  systemTelemetry: {
+    /**
+     * Read host CPU/RAM and only the filesystem volume that contains the
+     * server-authoritative workspace root for this project. Callers cannot
+     * provide an arbitrary path.
+     */
+    readProject: (
+      input: ServerProjectSystemTelemetryInput,
+    ) => Promise<ServerProjectSystemTelemetryResult>;
   };
   projects: {
     searchEntries: (input: ProjectSearchEntriesInput) => Promise<ProjectSearchEntriesResult>;

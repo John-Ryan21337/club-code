@@ -3,7 +3,7 @@ import type {
   VcsStatusRemoteResult,
   VcsStatusStreamEvent,
 } from "@cafecode/contracts";
-import { ORCHESTRATION_WS_METHODS, WS_METHODS } from "@cafecode/contracts";
+import { ORCHESTRATION_WS_METHODS, ProjectId, WS_METHODS } from "@cafecode/contracts";
 import * as Effect from "effect/Effect";
 import { describe, expect, it, vi } from "vitest";
 
@@ -38,6 +38,28 @@ const baseRemoteStatus: VcsStatusRemoteResult = {
 };
 
 describe("wsRpcClient", () => {
+  it("routes project telemetry through its dedicated RPC without accepting a path", async () => {
+    const projectId = ProjectId.make("project-telemetry");
+    const rpcMethod = vi.fn(() => Effect.succeed({ projectId } as never));
+    const requestMock = vi.fn(
+      async <TSuccess>(
+        execute: (client: WsRpcProtocolClient) => Effect.Effect<TSuccess, Error, never>,
+      ) =>
+        Effect.runPromise(
+          execute({
+            [WS_METHODS.serverGetProjectSystemTelemetry]: rpcMethod,
+          } as unknown as WsRpcProtocolClient),
+        ),
+    );
+    const transport = {
+      request: requestMock,
+      subscribe: vi.fn(() => () => undefined),
+    };
+    const client = createWsRpcClient(transport as unknown as WsTransport);
+    await client.server.getProjectSystemTelemetry({ projectId });
+    expect(rpcMethod).toHaveBeenCalledWith({ projectId });
+  });
+
   it("routes dictation credentials through their dedicated untraced RPC methods", async () => {
     const getStatus = vi.fn(() => Effect.succeed({ configured: true, canManage: true }));
     const setApiKey = vi.fn(() => Effect.succeed({ configured: true, canManage: true }));

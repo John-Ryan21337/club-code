@@ -2,9 +2,17 @@ import * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vitest";
 
-import { ServerProjectSystemTelemetryResult } from "./systemTelemetry.ts";
+import {
+  ServerProjectSystemTelemetryError,
+  ServerProjectSystemTelemetryInput,
+  ServerProjectSystemTelemetryResult,
+} from "./systemTelemetry.ts";
 
 const decodeProjectSystemTelemetry = Schema.decodeUnknownSync(ServerProjectSystemTelemetryResult);
+const decodeProjectSystemTelemetryInput = Schema.decodeUnknownSync(
+  ServerProjectSystemTelemetryInput,
+);
+const encodeProjectSystemTelemetryError = Schema.encodeSync(ServerProjectSystemTelemetryError);
 
 function projectSystemTelemetryFixture() {
   return {
@@ -40,6 +48,31 @@ function projectSystemTelemetryFixture() {
 }
 
 describe("ServerProjectSystemTelemetryResult", () => {
+  it("accepts only a project ID at the endpoint boundary", () => {
+    const parsed = decodeProjectSystemTelemetryInput({
+      projectId: "project-1",
+      workspaceRoot: "/renderer-controlled",
+    });
+
+    expect(parsed).toEqual({ projectId: "project-1" });
+    expect("workspaceRoot" in parsed).toBe(false);
+  });
+
+  it("uses bounded lookup failures without a raw cause field", () => {
+    const failure = new ServerProjectSystemTelemetryError({
+      kind: "project-lookup-failed",
+      message: "Failed to resolve the selected project.",
+    });
+    const encoded = encodeProjectSystemTelemetryError(failure);
+
+    expect(encoded).toMatchObject({
+      _tag: "ServerProjectSystemTelemetryError",
+      kind: "project-lookup-failed",
+      message: "Failed to resolve the selected project.",
+    });
+    expect("cause" in encoded).toBe(false);
+  });
+
   it("decodes bounded, project-volume-scoped telemetry", () => {
     const parsed = decodeProjectSystemTelemetry(projectSystemTelemetryFixture());
 

@@ -2,6 +2,26 @@ import * as Schema from "effect/Schema";
 
 import { NonNegativeInt, PositiveInt, ProjectId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
+export const ServerProjectSystemTelemetryInput = Schema.Struct({
+  projectId: ProjectId,
+});
+export type ServerProjectSystemTelemetryInput = typeof ServerProjectSystemTelemetryInput.Type;
+
+export const ServerProjectSystemTelemetryErrorKind = Schema.Literals([
+  "project-not-found",
+  "project-lookup-failed",
+]);
+export type ServerProjectSystemTelemetryErrorKind =
+  typeof ServerProjectSystemTelemetryErrorKind.Type;
+
+export class ServerProjectSystemTelemetryError extends Schema.TaggedErrorClass<ServerProjectSystemTelemetryError>()(
+  "ServerProjectSystemTelemetryError",
+  {
+    kind: ServerProjectSystemTelemetryErrorKind,
+    message: TrimmedNonEmptyString,
+  },
+) {}
+
 const ServerSystemTelemetryPercent = Schema.Number.check(
   Schema.isBetween({ minimum: 0, maximum: 100 }),
 );

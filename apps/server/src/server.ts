@@ -106,6 +106,7 @@ import { OpenAiRealtimeDictationLive } from "./dictation/Layers/OpenAiRealtimeDi
 import { ServerAuthLive } from "./auth/Layers/ServerAuth.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
+import * as ProjectSystemTelemetry from "./diagnostics/ProjectSystemTelemetry.ts";
 import * as RuntimeLayerDiagnostics from "./diagnostics/RuntimeLayerDiagnostics.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer.ts";
@@ -321,6 +322,7 @@ const RuntimeDependenciesLive = RuntimeCoreWithDiagnosticsLive.pipe(
   // Misc.
   Layer.provideMerge(ProcessDiagnostics.layer),
   Layer.provideMerge(ProcessResourceMonitor.layer),
+  Layer.provideMerge(ProjectSystemTelemetry.layer),
   Layer.provideMerge(TraceDiagnostics.layer),
   Layer.provideMerge(ExternalLauncher.layer),
   Layer.provideMerge(ServerLifecycleEventsLive),

@@ -295,6 +295,9 @@ const SubagentActivityPresenceRowSchema = Schema.Struct({
   hasSubagentActivity: NonNegativeInt,
 });
 const ProjectionProjectLookupRowSchema = ProjectionProjectDbRowSchema;
+const ProjectionProjectWorkspaceRootRowSchema = Schema.Struct({
+  workspaceRoot: Schema.String,
+});
 const ProjectionThreadIdLookupRowSchema = Schema.Struct({
   threadId: ThreadId,
 });
@@ -1136,6 +1139,19 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           deleted_at AS "deletedAt"
+        FROM projection_projects
+        WHERE project_id = ${projectId}
+          AND deleted_at IS NULL
+        LIMIT 1
+      `,
+  });
+
+  const getActiveProjectWorkspaceRootById = SqlSchema.findOneOption({
+    Request: ProjectIdLookupInput,
+    Result: ProjectionProjectWorkspaceRootRowSchema,
+    execute: ({ projectId }) =>
+      sql`
+        SELECT workspace_root AS "workspaceRoot"
         FROM projection_projects
         WHERE project_id = ${projectId}
           AND deleted_at IS NULL
@@ -3601,6 +3617,19 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       ),
     );
 
+  const getProjectWorkspaceRootById: ProjectionSnapshotQueryShape["getProjectWorkspaceRootById"] = (
+    projectId,
+  ) =>
+    getActiveProjectWorkspaceRootById({ projectId }).pipe(
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "ProjectionSnapshotQuery.getProjectWorkspaceRootById:query",
+          "ProjectionSnapshotQuery.getProjectWorkspaceRootById:decodeRow",
+        ),
+      ),
+      Effect.map(Option.map((project) => project.workspaceRoot)),
+    );
+
   const getFirstActiveThreadIdByProjectId: ProjectionSnapshotQueryShape["getFirstActiveThreadIdByProjectId"] =
     (projectId) =>
       getFirstActiveThreadIdByProject({ projectId }).pipe(
@@ -4371,6 +4400,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     getCounts,
     getActiveProjectByWorkspaceRoot,
     getProjectShellById,
+    getProjectWorkspaceRootById,
     getFirstActiveThreadIdByProjectId,
     getThreadCheckpointContext,
     getThreadShellById,

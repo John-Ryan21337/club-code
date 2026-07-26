@@ -25,6 +25,7 @@ import {
   ProjectWriteFileError,
   OrchestrationReplayEventsError,
   FilesystemBrowseError,
+  ServerProjectSystemTelemetryError,
   ThreadId,
   ServerProviderRuntimeRestartError,
   DictationError,
@@ -77,6 +78,7 @@ import { ServerEnvironment } from "./environment/Services/ServerEnvironment.ts";
 import { ServerAuth } from "./auth/Services/ServerAuth.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
+import * as ProjectSystemTelemetry from "./diagnostics/ProjectSystemTelemetry.ts";
 import * as RuntimeLayerDiagnostics from "./diagnostics/RuntimeLayerDiagnostics.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import * as SourceControlDiscoveryLayer from "./sourceControl/SourceControlDiscovery.ts";
@@ -228,6 +230,7 @@ const makeWsRpcLayer = (
       const sessions = yield* SessionCredentialService;
       const processDiagnostics = yield* ProcessDiagnostics.ProcessDiagnostics;
       const processResourceMonitor = yield* ProcessResourceMonitor.ProcessResourceMonitor;
+      const projectSystemTelemetry = yield* ProjectSystemTelemetry.ProjectSystemTelemetry;
       const runtimeLayerDiagnostics = yield* RuntimeLayerDiagnostics.RuntimeLayerDiagnostics;
       addProviderWebSocketDiagnostics({ connectionOpenCount: 1 });
       const connectionFlowControl = makeWebSocketConnectionFlowControl();
@@ -1241,6 +1244,36 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.serverGetProcessDiagnostics, processDiagnostics.read, {
             "rpc.aggregate": "server",
           }),
+        [WS_METHODS.serverGetProjectSystemTelemetry]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverGetProjectSystemTelemetry,
+            projectionSnapshotQuery.getProjectWorkspaceRootById(input.projectId).pipe(
+              Effect.mapError(
+                () =>
+                  new ServerProjectSystemTelemetryError({
+                    kind: "project-lookup-failed",
+                    message: "Failed to resolve the selected project.",
+                  }),
+              ),
+              Effect.flatMap((project) =>
+                Option.match(project, {
+                  onNone: () =>
+                    Effect.fail(
+                      new ServerProjectSystemTelemetryError({
+                        kind: "project-not-found",
+                        message: "The selected project is no longer available.",
+                      }),
+                    ),
+                  onSome: (workspaceRoot) =>
+                    projectSystemTelemetry.read({
+                      projectId: input.projectId,
+                      workspaceRoot,
+                    }),
+                }),
+              ),
+            ),
+            { "rpc.aggregate": "server" },
+          ),
         [WS_METHODS.serverGetProcessResourceHistory]: (input) =>
           observeRpcEffect(
             WS_METHODS.serverGetProcessResourceHistory,
