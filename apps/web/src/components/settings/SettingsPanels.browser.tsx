@@ -1339,12 +1339,16 @@ describe("settings panels", () => {
     await page.getByRole("radio", { name: "Rainbow Extra", exact: true }).click();
     await page.getByRole("radio", { name: "Music reactive · uniform", exact: true }).click();
     await page.getByRole("radio", { name: "Music reactive · Rainbow Extra", exact: true }).click();
+    await page.getByLabelText("Increase Matrix color-cycle speed").click();
     await page.getByRole("radio", { name: "Fixed", exact: true }).click();
     await page.getByRole("radio", { name: "Music reactive · Rainbow Extra", exact: true }).click();
 
     await vi.waitFor(() => {
       expect(updateClientSettings).toHaveBeenCalledWith({
         fallingEffectMatrixColorMode: "fixed",
+      });
+      expect(updateClientSettings).toHaveBeenCalledWith({
+        fallingEffectMatrixColorCycleSpeed: 1.25,
       });
       expect(updateClientSettings).toHaveBeenCalledWith({
         fallingEffectMatrixColorMode: "rainbow",
@@ -1451,6 +1455,7 @@ describe("settings panels", () => {
       fallingEffectsEnabled: false,
       fallingEffectKind: "matrix",
       fallingEffectMatrixColorMode: "music-reactive-extra",
+      fallingEffectMatrixColorCycleSpeed: 1.25,
       fallingEffect2chEnriched: true,
       fallingEffectLiveWorkVocabulary: true,
       fallingEffectActivityLinks: true,
@@ -1483,6 +1488,7 @@ describe("settings panels", () => {
       clientSettings: {
         ...config.clientSettings,
         fallingEffectMatrixColorMode: "rainbow-extra",
+        fallingEffectMatrixColorCycleSpeed: 32,
         fallingEffectLiveWorkVocabulary: true,
         fallingEffectActivityLinks: true,
         fallingEffectActivityLinkNetworkEnabled: false,
@@ -1503,19 +1509,20 @@ describe("settings panels", () => {
     await expect
       .element(page.getByLabelText("Changed settings"))
       .toHaveTextContent(
-        "Matrix color mode | Matrix live work vocabulary | Matrix activity links | Matrix activity link inputs | Matrix activity link colors",
+        "Matrix color mode | Matrix color-cycle speed | Matrix live work vocabulary | Matrix activity links | Matrix activity link inputs | Matrix activity link colors",
       );
     await page.getByRole("button", { name: "Apply settings reset" }).click();
 
     await vi.waitFor(() => {
       expect(confirm).toHaveBeenCalledWith(
         expect.stringContaining(
-          "Matrix color mode, Matrix live work vocabulary, Matrix activity links, Matrix activity link inputs, Matrix activity link colors",
+          "Matrix color mode, Matrix color-cycle speed, Matrix live work vocabulary, Matrix activity links, Matrix activity link inputs, Matrix activity link colors",
         ),
       );
       expect(updateClientSettings).toHaveBeenCalledWith(
         expect.objectContaining({
           fallingEffectMatrixColorMode: "fixed",
+          fallingEffectMatrixColorCycleSpeed: 1,
           fallingEffectLiveWorkVocabulary: false,
           fallingEffectActivityLinks: false,
           fallingEffectActivityLinkNetworkEnabled: true,
@@ -1527,6 +1534,7 @@ describe("settings panels", () => {
       );
       expect(getServerConfig()?.clientSettings).toMatchObject({
         fallingEffectMatrixColorMode: "fixed",
+        fallingEffectMatrixColorCycleSpeed: 1,
         fallingEffectLiveWorkVocabulary: false,
         fallingEffectActivityLinks: false,
         fallingEffectActivityLinkNetworkEnabled: true,

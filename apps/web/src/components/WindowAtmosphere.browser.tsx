@@ -19,11 +19,13 @@ const mocks = vi.hoisted(() => ({
   selectedActivityInputSelections: [] as unknown[],
   selectedVocabularyThreadRefs: [] as unknown[],
   drawnActivityLinkCounts: [] as number[],
+  matrixColorCycleSpeeds: [] as number[],
   settings: {
     fallingEffectsEnabled: true,
     fallingEffectKind: "matrix" as const,
     fallingEffectColor: "auto" as const,
     fallingEffectMatrixColorMode: "rainbow-extra" as const,
+    fallingEffectMatrixColorCycleSpeed: 32,
     fallingEffectOpacity: 0.35,
     fallingEffectSpeed: 1,
     fallingEffectDensity: 1,
@@ -130,13 +132,16 @@ vi.mock("../windowAtmosphere", () => ({
   fitAtmosphereDpr: () => 1,
   advanceAtmosphereSceneInPlace: vi.fn(),
   applyMatrixWorkVocabularyInPlace: mocks.applyMatrixWorkVocabularyInPlace,
-  resolveMatrixAtmosphereColorFrame: () => ({
-    color: "#4ade80",
-    perStream: true,
-    baseHue: 120,
-    saturation: 88,
-    lightness: 62,
-  }),
+  resolveMatrixAtmosphereColorFrame: (...args: unknown[]) => {
+    mocks.matrixColorCycleSpeeds.push(args[6] as number);
+    return {
+      color: "#4ade80",
+      perStream: true,
+      baseHue: 120,
+      saturation: 88,
+      lightness: 62,
+    };
+  },
   resolveAtmosphereColor: () => "#4ade80",
   drawAtmosphereScene: mocks.drawAtmosphereScene,
   shouldAnimateAtmosphere: (state: { reducedMotion: boolean }) => !state.reducedMotion,
@@ -162,6 +167,7 @@ beforeEach(() => {
   mocks.activityEventsKey = "activity-1";
   mocks.activityObservedAtMs = Date.now();
   mocks.workVocabularyKey = "";
+  mocks.settings.fallingEffectMatrixColorCycleSpeed = 32;
   mocks.settings.fallingEffectActivityLinks = true;
   mocks.settings.fallingEffectActivityLinkNetworkEnabled = true;
   mocks.settings.fallingEffectActivityLinkDatabaseEnabled = true;
@@ -171,6 +177,7 @@ beforeEach(() => {
   mocks.selectedActivityInputSelections = [];
   mocks.selectedVocabularyThreadRefs = [];
   mocks.drawnActivityLinkCounts = [];
+  mocks.matrixColorCycleSpeeds = [];
   mocks.createAtmosphereScene.mockClear();
   mocks.updateMatrixActivityAnimationInPlace.mockReset();
   mocks.updateMatrixActivityAnimationInPlace.mockImplementation(
@@ -281,6 +288,18 @@ describe("WindowAtmosphere", () => {
       environmentId,
       threadId: secondThreadId,
     });
+    expect(mocks.createAtmosphereScene).toHaveBeenCalledTimes(1);
+  });
+
+  it("forwards color-cycle speed changes without reseeding the Matrix scene", async () => {
+    (reducedMotionQuery as unknown as { matches: boolean }).matches = true;
+    mounted = await render(<WindowAtmosphere selectedThreadRef={TEST_SELECTED_THREAD_REF} />);
+    await expect.poll(() => mocks.matrixColorCycleSpeeds.at(-1)).toBe(32);
+
+    mocks.settings.fallingEffectMatrixColorCycleSpeed = 64;
+    await mounted.rerender(<WindowAtmosphere selectedThreadRef={TEST_SELECTED_THREAD_REF} />);
+
+    expect(mocks.matrixColorCycleSpeeds.at(-1)).toBe(64);
     expect(mocks.createAtmosphereScene).toHaveBeenCalledTimes(1);
   });
 

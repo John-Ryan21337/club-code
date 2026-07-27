@@ -1,11 +1,14 @@
 import {
   DEFAULT_FALLING_EFFECT_DENSITY,
   DEFAULT_FALLING_EFFECT_JAPANESE_RATIO,
+  DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
   MAX_FALLING_EFFECT_DENSITY,
   MAX_FALLING_EFFECT_JAPANESE_RATIO,
+  MAX_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
   MAX_FALLING_EFFECT_SPEED,
   MIN_FALLING_EFFECT_DENSITY,
   MIN_FALLING_EFFECT_JAPANESE_RATIO,
+  MIN_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
   MIN_FALLING_EFFECT_SPEED,
   type AmbientColor,
   type FallingEffectKind,
@@ -290,6 +293,16 @@ export function clampFallingEffectSpeed(speed: number): number {
   return Math.min(MAX_FALLING_EFFECT_SPEED, Math.max(MIN_FALLING_EFFECT_SPEED, speed));
 }
 
+export function clampMatrixColorCycleSpeed(speed: number): number {
+  if (!Number.isFinite(speed)) {
+    return DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED;
+  }
+  return Math.min(
+    MAX_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
+    Math.max(MIN_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED, speed),
+  );
+}
+
 export function clampFallingEffectDensity(density: number): number {
   if (!Number.isFinite(density)) {
     return DEFAULT_FALLING_EFFECT_DENSITY;
@@ -396,9 +409,11 @@ export function resolveMatrixAtmosphereColorFrame(
   timestamp: number,
   signal: LocalMediaAudioSignal,
   state: MatrixColorAnimationState,
+  requestedColorCycleSpeed = DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
 ): MatrixColorFrame {
   const fallback = resolveAtmosphereColor("matrix", configuredColor, darkTheme);
   const safeTimestamp = Number.isFinite(timestamp) ? Math.max(0, timestamp) : 0;
+  const colorCycleSpeed = clampMatrixColorCycleSpeed(requestedColorCycleSpeed);
   if (mode === "fixed") {
     return {
       color: fallback,
@@ -410,7 +425,7 @@ export function resolveMatrixAtmosphereColorFrame(
   }
 
   if (mode === "rainbow" || mode === "rainbow-extra") {
-    const hue = wrapHue((safeTimestamp / MATRIX_RAINBOW_CYCLE_MS) * 360);
+    const hue = wrapHue((safeTimestamp / MATRIX_RAINBOW_CYCLE_MS) * 360 * colorCycleSpeed);
     const saturation = 88;
     const lightness = darkTheme ? 62 : 40;
     return {
@@ -464,7 +479,9 @@ export function resolveMatrixAtmosphereColorFrame(
   state.hue =
     state.hue === null
       ? spectralHue
-      : wrapHue(state.hue + cycleRate * elapsedSeconds + beatImpulse);
+      : // The operator controls continuous color motion; one-shot beat energy
+        // remains signal-defined so a fast shimmer cannot amplify beat jumps.
+        wrapHue(state.hue + cycleRate * elapsedSeconds * colorCycleSpeed + beatImpulse);
   const targetLightness = (darkTheme ? 45 : 33) + level * 22 + bass * 4 + beat * 10;
   state.lightness = approach(
     state.lightness,
@@ -492,6 +509,7 @@ export function resolveMatrixAtmosphereColor(
   timestamp: number,
   signal: LocalMediaAudioSignal,
   state: MatrixColorAnimationState,
+  requestedColorCycleSpeed = DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
 ): string {
   return resolveMatrixAtmosphereColorFrame(
     mode,
@@ -500,6 +518,7 @@ export function resolveMatrixAtmosphereColor(
     timestamp,
     signal,
     state,
+    requestedColorCycleSpeed,
   ).color;
 }
 

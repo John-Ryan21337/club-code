@@ -182,6 +182,13 @@ export const DEFAULT_AMBIENT_OPACITY = 0.35;
 export const MIN_FALLING_EFFECT_SPEED = 0.25;
 export const MAX_FALLING_EFFECT_SPEED = 4;
 export const DEFAULT_FALLING_EFFECT_SPEED = 1;
+/**
+ * Independent hue-cycle multiplier. The upper bound is intentionally high
+ * enough for a visible shimmer, but changes no particle or canvas draw budget.
+ */
+export const MIN_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED = 0.25;
+export const MAX_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED = 64;
+export const DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED = 1;
 export const MIN_FALLING_EFFECT_DENSITY = 0.5;
 export const MAX_FALLING_EFFECT_DENSITY = 2.5;
 export const DEFAULT_FALLING_EFFECT_DENSITY = 1;
@@ -260,6 +267,14 @@ export const FallingEffectMatrixColorMode = Schema.Literals([
 ]);
 export type FallingEffectMatrixColorMode = typeof FallingEffectMatrixColorMode.Type;
 export const DEFAULT_FALLING_EFFECT_MATRIX_COLOR_MODE: FallingEffectMatrixColorMode = "fixed";
+
+export const FallingEffectMatrixColorCycleSpeed = Schema.Number.check(
+  Schema.isBetween({
+    minimum: MIN_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
+    maximum: MAX_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
+  }),
+);
+export type FallingEffectMatrixColorCycleSpeed = typeof FallingEffectMatrixColorCycleSpeed.Type;
 
 export const FallingEffectSpeed = Schema.Number.check(
   Schema.isBetween({
@@ -536,6 +551,9 @@ export const ClientSettingsSchema = Schema.Struct({
   fallingEffectMatrixColorMode: FallingEffectMatrixColorMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_MATRIX_COLOR_MODE)),
   ),
+  fallingEffectMatrixColorCycleSpeed: FallingEffectMatrixColorCycleSpeed.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED)),
+  ),
   fallingEffectOpacity: AmbientOpacity.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_OPACITY)),
   ),
@@ -791,6 +809,7 @@ export const AMBIENT_CLIENT_SETTINGS_KEYS = [
   "fallingEffectKind",
   "fallingEffectColor",
   "fallingEffectMatrixColorMode",
+  "fallingEffectMatrixColorCycleSpeed",
   "fallingEffectOpacity",
   "fallingEffectSpeed",
   "fallingEffectDensity",
@@ -836,6 +855,7 @@ export const DEFAULT_AMBIENT_CLIENT_SETTINGS: AmbientClientSettings = {
   fallingEffectKind: DEFAULT_FALLING_EFFECT_KIND,
   fallingEffectColor: DEFAULT_AMBIENT_COLOR,
   fallingEffectMatrixColorMode: DEFAULT_FALLING_EFFECT_MATRIX_COLOR_MODE,
+  fallingEffectMatrixColorCycleSpeed: DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
   fallingEffectOpacity: DEFAULT_AMBIENT_OPACITY,
   fallingEffectSpeed: DEFAULT_FALLING_EFFECT_SPEED,
   fallingEffectDensity: DEFAULT_FALLING_EFFECT_DENSITY,
@@ -1479,6 +1499,7 @@ export const ClientSettingsPatch = Schema.Struct({
   fallingEffectKind: Schema.optionalKey(FallingEffectKind),
   fallingEffectColor: Schema.optionalKey(AmbientColor),
   fallingEffectMatrixColorMode: Schema.optionalKey(FallingEffectMatrixColorMode),
+  fallingEffectMatrixColorCycleSpeed: Schema.optionalKey(FallingEffectMatrixColorCycleSpeed),
   fallingEffectOpacity: Schema.optionalKey(AmbientOpacity),
   fallingEffectSpeed: Schema.optionalKey(FallingEffectSpeed),
   fallingEffectDensity: Schema.optionalKey(FallingEffectDensity),

@@ -56,6 +56,7 @@ import {
   DEFAULT_FALLING_EFFECT_JAPANESE_RATIO,
   DEFAULT_FALLING_EFFECT_KIND,
   DEFAULT_FALLING_EFFECT_LIVE_WORK_VOCABULARY,
+  DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
   DEFAULT_FALLING_EFFECT_MATRIX_COLOR_MODE,
   DEFAULT_FALLING_EFFECT_SPEED,
   DEFAULT_FALLING_EFFECTS_ENABLED,
@@ -79,6 +80,7 @@ import {
   MAX_BRAND_WORDMARK_PREFIX_LENGTH,
   MAX_FALLING_EFFECT_DENSITY,
   MAX_FALLING_EFFECT_JAPANESE_RATIO,
+  MAX_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
   MAX_FALLING_EFFECT_SPEED,
   MAX_MODEL_PACING_RESERVE_PERCENT,
   MAX_PROVIDER_USAGE_POLL_MINUTES,
@@ -91,6 +93,7 @@ import {
   MIN_AMBIENT_OPACITY,
   MIN_FALLING_EFFECT_DENSITY,
   MIN_FALLING_EFFECT_JAPANESE_RATIO,
+  MIN_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
   MIN_FALLING_EFFECT_SPEED,
   MIN_MODEL_PACING_RESERVE_PERCENT,
   MIN_PROVIDER_USAGE_POLL_MINUTES,
@@ -207,6 +210,9 @@ describe("client settings", () => {
   it("keeps conservative defaults separate from the Club Code first-run profile", () => {
     expect(DEFAULT_CLIENT_SETTINGS.fallingEffectsEnabled).toBe(false);
     expect(DEFAULT_CLIENT_SETTINGS.fallingEffectMatrixColorMode).toBe("fixed");
+    expect(DEFAULT_CLIENT_SETTINGS.fallingEffectMatrixColorCycleSpeed).toBe(
+      DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
+    );
     expect(DEFAULT_CLIENT_SETTINGS.ambientVideoEnabled).toBe(false);
     expect(DEFAULT_CLIENT_SETTINGS.ambientImageEnabled).toBe(false);
     expect(DEFAULT_CLIENT_SETTINGS.providerUsageWidgetEnabled).toBe(false);
@@ -409,6 +415,7 @@ describe("client settings", () => {
       fallingEffectKind: DEFAULT_FALLING_EFFECT_KIND,
       fallingEffectColor: DEFAULT_AMBIENT_COLOR,
       fallingEffectMatrixColorMode: DEFAULT_FALLING_EFFECT_MATRIX_COLOR_MODE,
+      fallingEffectMatrixColorCycleSpeed: DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
       fallingEffectOpacity: DEFAULT_AMBIENT_OPACITY,
       fallingEffectSpeed: DEFAULT_FALLING_EFFECT_SPEED,
       fallingEffectDensity: DEFAULT_FALLING_EFFECT_DENSITY,
@@ -458,6 +465,9 @@ describe("client settings", () => {
     expect(decoded.timestampFormat).toBe("24-hour");
     expect(decoded.showSidebarMascot).toBe(false);
     expect(decoded.fallingEffectMatrixColorMode).toBe("fixed");
+    expect(decoded.fallingEffectMatrixColorCycleSpeed).toBe(
+      DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
+    );
     expect(pickAmbientSettings(decoded)).toEqual(DEFAULT_AMBIENT_CLIENT_SETTINGS);
   });
 
@@ -476,6 +486,7 @@ describe("client settings", () => {
       fallingEffectKind: "matrix",
       fallingEffectColor: "  #12AbEf  ",
       fallingEffectMatrixColorMode: "music-reactive",
+      fallingEffectMatrixColorCycleSpeed: MAX_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
       fallingEffectOpacity: MAX_AMBIENT_OPACITY,
       fallingEffectSpeed: MAX_FALLING_EFFECT_SPEED,
       fallingEffectDensity: MAX_FALLING_EFFECT_DENSITY,
@@ -513,6 +524,7 @@ describe("client settings", () => {
       fallingEffectKind: "matrix",
       fallingEffectColor: "#12abef",
       fallingEffectMatrixColorMode: "music-reactive",
+      fallingEffectMatrixColorCycleSpeed: MAX_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
       fallingEffectOpacity: MAX_AMBIENT_OPACITY,
       fallingEffectSpeed: MAX_FALLING_EFFECT_SPEED,
       fallingEffectDensity: MAX_FALLING_EFFECT_DENSITY,
@@ -710,11 +722,12 @@ describe("client settings", () => {
     ).toThrow();
   });
 
-  it("bounds ambient colors, Matrix color modes, opacity, speed, density, Japanese ratio, and layout enums", () => {
+  it("bounds ambient colors, Matrix color modes and cycle speed, opacity, motion, density, Japanese ratio, and layout enums", () => {
     expect(
       decodeClientSettingsPatch({
         fallingEffectColor: "auto",
         fallingEffectMatrixColorMode: "rainbow-extra",
+        fallingEffectMatrixColorCycleSpeed: MIN_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
         fallingEffectOpacity: MIN_AMBIENT_OPACITY,
         fallingEffectSpeed: MIN_FALLING_EFFECT_SPEED,
         fallingEffectDensity: MIN_FALLING_EFFECT_DENSITY,
@@ -733,6 +746,7 @@ describe("client settings", () => {
     ).toEqual({
       fallingEffectColor: "auto",
       fallingEffectMatrixColorMode: "rainbow-extra",
+      fallingEffectMatrixColorCycleSpeed: MIN_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
       fallingEffectOpacity: MIN_AMBIENT_OPACITY,
       fallingEffectSpeed: MIN_FALLING_EFFECT_SPEED,
       fallingEffectDensity: MIN_FALLING_EFFECT_DENSITY,
@@ -760,6 +774,13 @@ describe("client settings", () => {
       { fallingEffectsEnabled: "yes" },
       { fallingEffectKind: "hail" },
       { fallingEffectMatrixColorMode: "beat-sync" },
+      {
+        fallingEffectMatrixColorCycleSpeed: MIN_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED - 0.01,
+      },
+      {
+        fallingEffectMatrixColorCycleSpeed: MAX_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED + 0.01,
+      },
+      { fallingEffectMatrixColorCycleSpeed: Number.NaN },
       { fallingEffectOpacity: MIN_AMBIENT_OPACITY - 0.01 },
       { fallingEffectOpacity: MAX_AMBIENT_OPACITY + 0.01 },
       { fallingEffectOpacity: Number.NaN },

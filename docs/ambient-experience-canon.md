@@ -362,11 +362,12 @@ capability. An existing explicit desktop setting remains untouched.
 The first-run Client Settings profile contains these explicit presentation
 values:
 
-- Matrix is enabled in regular uniform `rainbow` mode at `0.55` opacity, speed
-  `4`, density `2.5`, and Japanese ratio `0.45`. Rainbow Extra remains
-  selectable but is not the first-run mode. 2ch enrichment, bounded live-work
-  vocabulary, all four activity-link category inputs, activity links, and
-  Matrix-colored link routes are enabled.
+- Matrix is enabled in regular uniform `rainbow` mode at `0.55` opacity, falling
+  speed `4`, color-cycle speed `1` (the original 18-second cycle), density
+  `2.5`, and Japanese ratio `0.45`. Rainbow Extra remains selectable but is not
+  the first-run mode. 2ch enrichment, bounded live-work vocabulary, all four
+  activity-link category inputs, activity links, and Matrix-colored link routes
+  are enabled.
 - The ambient-video surface is enabled with a null source, custom layout with
   bottom-right/large as its preset fallback, floating presentation, and
   adaptive auto glow at `0.65`. The bundled Japanese URL example becomes the
@@ -388,10 +389,17 @@ SQL, URLs, secrets, raw paths, or unreported activity.
 
 Snow, rain, and Matrix effects cover the Club Code viewport without receiving
 pointer input. Controls include off/on, effect kind, fixed color, opacity,
-speed, density, and a 0-100% Roman-to-Japanese Matrix stream mix. The same ratio
-selects English or Japanese switchable live terms. The Matrix pool contains
-reviewed coding-flavored kana and kanji. Optional 2ch-inspired glyphs and intact
-cat AA apply only to Japanese streams. Their conservative
+falling speed, density, and a 0-100% Roman-to-Japanese Matrix stream mix. Matrix
+also has an independent persisted `0.25`-`64` color-cycle multiplier: `1`
+preserves the original 18-second rainbow while the highest values provide a
+rapid shimmer without increasing particles or per-frame draw work. The
+multiplier drives Rainbow and Rainbow Extra hue motion and the continuous hue
+drift of music-reactive modes; beat impulses retain their signal-defined size.
+Matrix-colored activity links, packets, endpoints, and telemetry lettering use
+the same resolved color frame. The same language ratio selects English or
+Japanese switchable live terms. The Matrix pool contains reviewed
+coding-flavored kana and kanji. Optional 2ch-inspired glyphs and intact cat AA
+apply only to Japanese streams. Their conservative
 compatibility/recovery default is off; the explicit fresh-install profile
 enables them, and the operator can disable them independently.
 
