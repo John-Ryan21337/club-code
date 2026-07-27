@@ -32,6 +32,9 @@ export const MAX_MATRIX_ACTIVITY_PACKET_DRAWS = 30;
 export const MATRIX_ACTIVITY_MIN_PACKETS_PER_LINK = 2;
 export const MATRIX_ACTIVITY_PACKET_TRAIL_PROGRESS = 0.12;
 export const MATRIX_ACTIVITY_LINK_PULSE_MS = 180;
+/** Circular lettering is intentionally limited because Canvas text is rendered one glyph at a time. */
+export const MAX_MATRIX_ACTIVITY_TELEMETRY_RINGS = 6;
+export const MAX_MATRIX_ACTIVITY_TELEMETRY_GLYPHS = 28;
 const MAX_ACTIVITY_RELATIONS = 4;
 const MAX_FUTURE_CLOCK_SKEW_MS = 250;
 const SAFE_RELATION_VALUE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/u;
@@ -74,6 +77,8 @@ export interface MatrixActivityPulse {
 export interface MatrixActivityLink {
   fromAnchorIndex: number;
   toAnchorIndex: number;
+  /** Only this endpoint may receive linked-operation telemetry lettering. */
+  operationAnchorIndex: number;
   category: MatrixActivityCategory;
   intensity: number;
   linePulse: number;
@@ -409,6 +414,19 @@ export function resolveMatrixActivityTerm(
   return terms[semanticRole === "category" ? 0 : 1];
 }
 
+/**
+ * This label describes an exact provider-reported lifecycle correlation. It
+ * deliberately does not claim a byte rate: activity events contain no
+ * provider-observed byte count or measurement interval.
+ */
+export function resolveMatrixActivityTelemetryLabel(
+  category: MatrixActivityCategory,
+  language: "english" | "japanese" | null,
+): string {
+  const operation = resolveMatrixActivityTerm(category, "operation", language);
+  return `${operation} • VERIFIED •`.slice(0, MAX_MATRIX_ACTIVITY_TELEMETRY_GLYPHS);
+}
+
 function writePulse(
   state: MatrixActivityAnimationState,
   index: number,
@@ -607,6 +625,7 @@ export function updateMatrixActivityAnimationInPlace(
     writeLink(state, state.linkCount, {
       fromAnchorIndex: previous.anchorIndex,
       toAnchorIndex: current.anchorIndex,
+      operationAnchorIndex: current.anchorIndex,
       category: current.event.category,
       // The newest exact lifecycle event owns the visual TTL. The older
       // endpoint remains only as bounded correlation evidence.
@@ -899,6 +918,61 @@ function drawMatrixActivityPulse(
   );
 }
 
+/**
+ * `linkColorHue` is retained on a pulse so shared endpoints have stable
+ * paint, but a hue alone is not correlation evidence. Recheck the bounded
+ * link list before putting VERIFIED text on an endpoint.
+ */
+function isVerifiedMatrixActivityOperationEndpoint(
+  state: MatrixActivityAnimationState,
+  pulse: MatrixActivityPulse,
+): boolean {
+  if (pulse.semanticRole !== "operation" || pulse.linkColorHue === null) return false;
+  for (let index = 0; index < state.linkCount; index += 1) {
+    const link = state.links[index];
+    if (
+      link &&
+      link.category === pulse.category &&
+      link.operationAnchorIndex === pulse.anchorIndex &&
+      link.colorHue === pulse.linkColorHue
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function drawMatrixActivityTelemetryRing(
+  context: CanvasRenderingContext2D,
+  particle: AtmosphereScene["particles"][number],
+  category: MatrixActivityCategory,
+  paint: string,
+  safeOpacity: number,
+  intensity: number,
+): void {
+  const label = resolveMatrixActivityTelemetryLabel(category, particle.matrixLanguage);
+  const glyphCount = Math.min(MAX_MATRIX_ACTIVITY_TELEMETRY_GLYPHS, label.length);
+  if (glyphCount === 0) return;
+
+  const radius = Math.min(30, Math.max(20, particle.size * 1.65));
+  const glyphAngle = (Math.PI * 2) / glyphCount;
+  context.save();
+  context.translate(particle.x, particle.y);
+  context.fillStyle = paint;
+  context.globalAlpha = safeOpacity * intensity;
+  context.font = "7px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+  context.textAlign = "center";
+  context.textBaseline = "middle";
+  for (let index = 0; index < glyphCount; index += 1) {
+    // The outer restore resets the accumulated turn after the final glyph.
+    // This avoids one save/restore pair per glyph while retaining the same
+    // center-relative transform for every bounded ring.
+    if (index > 0) context.rotate(glyphAngle);
+    context.fillText(label[index]!, 0, -radius);
+  }
+  context.restore();
+}
+
 export function drawMatrixActivityAnimation(
   context: CanvasRenderingContext2D,
   scene: AtmosphereScene,
@@ -976,23 +1050,43 @@ export function drawMatrixActivityAnimation(
       }
     }
   }
+  let telemetryRingCount = 0;
   for (let index = 0; index < state.pulseCount; index += 1) {
     const pulse = state.pulses[index]!;
     const particle = scene.particles[pulse.anchorIndex];
     if (!particle) continue;
+    // Matrix routes may interpolate their two endpoint colors. Keep endpoint
+    // lettering on its own existing glyph paint; random routes already share
+    // that exact hue with both endpoint glyphs and the route.
+    const pulsePaint =
+      colorMode === "matrix"
+        ? resolveMatrixStreamColor(matrixColorFrame, particle)
+        : pulse.linkColorHue === null
+          ? CATEGORY_COLOR[pulse.category]
+          : randomMatrixActivityColor(pulse.linkColorHue);
     drawMatrixActivityPulse(
       context,
       particle,
       pulse.category,
       pulse.semanticRole,
-      colorMode === "matrix"
-        ? resolveMatrixStreamColor(matrixColorFrame, particle)
-        : pulse.linkColorHue === null
-          ? CATEGORY_COLOR[pulse.category]
-          : randomMatrixActivityColor(pulse.linkColorHue),
+      pulsePaint,
       safeOpacity,
       pulse.intensity,
     );
+    if (
+      telemetryRingCount < MAX_MATRIX_ACTIVITY_TELEMETRY_RINGS &&
+      isVerifiedMatrixActivityOperationEndpoint(state, pulse)
+    ) {
+      drawMatrixActivityTelemetryRing(
+        context,
+        particle,
+        pulse.category,
+        pulsePaint,
+        safeOpacity,
+        pulse.intensity,
+      );
+      telemetryRingCount += 1;
+    }
   }
   context.restore();
 }
