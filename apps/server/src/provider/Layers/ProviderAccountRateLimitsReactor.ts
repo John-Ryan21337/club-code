@@ -4,11 +4,11 @@
  *
  * Claude Code emits `rate_limit_event` (5h / weekly window reset + utilization) on its
  * normal session stream; the Claude adapter re-emits it as the `account.rate-limits.updated`
- * runtime event. Unlike Codex (whose limits come from the periodic probe), Claude has no
- * probe-time source — the probe never sends a prompt — so we consume the event here and
- * merge each window into the instance's `accountRateLimits` via the registry. From there it
- * reaches the UI through the existing snapshot change pipeline. We never call any usage
- * endpoint or touch the OAuth token; Claude Code does that internally and pushes us the event.
+ * runtime event. We consume that authoritative live-turn update here and merge its dated
+ * window into the instance's `accountRateLimits` via the registry. The separate, explicit
+ * Provider Usage poll may supply a fuller snapshot while the widget is enabled; this event
+ * path neither invokes that poll nor touches its disposable Query. From here the merged
+ * snapshot reaches the UI through the existing snapshot change pipeline.
  *
  * This is a self-starting daemon layer: building it forks a scoped consumer of
  * `ProviderService.streamEvents` (a fresh PubSub subscription, independent of the other

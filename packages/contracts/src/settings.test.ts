@@ -238,9 +238,7 @@ describe("client settings", () => {
       ambientImageGlowColor: "auto",
       ambientImageGlowOpacity: 0.35,
       workflowObservatoryEnabled: true,
-      providerUsageWidgetEnabled: true,
       providerUsagePollMinutes: 2,
-      modelPacingEnabled: true,
       modelPacingReservePercent: 5,
     });
     expect(CLUB_CODE_FIRST_RUN_CLIENT_SETTINGS.onboardingCompleted).toBe(false);

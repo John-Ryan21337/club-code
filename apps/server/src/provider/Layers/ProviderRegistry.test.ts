@@ -53,6 +53,7 @@ import {
 } from "./ProviderInstanceRegistryHydration.ts";
 import {
   haveProvidersChanged,
+  mergeProviderAccountRateLimitWindow,
   mergeProviderSnapshot,
   mergeProviderSnapshots,
   ProviderRegistryLive,
@@ -661,7 +662,11 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
           status: "ready",
           enabled: true,
           installed: true,
-          auth: { status: "authenticated" },
+          auth: {
+            status: "authenticated",
+            type: "max",
+            email: "operator@example.test",
+          },
           checkedAt: "2026-04-14T00:00:00.000Z",
           version: "2026.04.09-f2b0fcd",
           models: [],
@@ -672,8 +677,8 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
             checkedAt: "2026-04-14T00:00:00.000Z",
           },
         } as const satisfies ServerProvider;
-        // The Claude probe never sends a prompt, so its refreshed snapshot carries no
-        // accountRateLimits — the merge must keep the previously accrued limits.
+        // The normal Claude health probe does not run the explicit usage poll,
+        // so its refreshed snapshot carries no accountRateLimits.
         const { accountRateLimits: _omitted, ...withoutRateLimits } = previousProvider;
         const refreshedProvider = {
           ...withoutRateLimits,
@@ -683,6 +688,127 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
         assert.deepStrictEqual(
           mergeProviderSnapshot(previousProvider, refreshedProvider).accountRateLimits,
           previousProvider.accountRateLimits,
+        );
+      });
+
+      it("merges a Claude event into keyed windows without re-dating paid facts", () => {
+        const polledAt = "2026-04-14T00:00:00.000Z";
+        const eventAt = "2026-04-14T00:11:00.000Z";
+        const polledProvider = {
+          instanceId: ProviderInstanceId.make("claudeAgent"),
+          driver: ProviderDriverKind.make("claudeAgent"),
+          status: "ready",
+          enabled: true,
+          installed: true,
+          auth: { status: "authenticated", type: "max", email: "me@example.test" },
+          checkedAt: polledAt,
+          version: "2.1.216",
+          models: [],
+          slashCommands: [],
+          skills: [],
+          accountRateLimits: {
+            rateLimits: {
+              limitId: "claude",
+              primary: { usedPercent: 20, checkedAt: polledAt },
+              secondary: { usedPercent: 40, checkedAt: polledAt },
+            },
+            rateLimitsByLimitId: {
+              claude: {
+                limitId: "claude",
+                primary: { usedPercent: 20, checkedAt: polledAt },
+                secondary: { usedPercent: 40, checkedAt: polledAt },
+              },
+            },
+            paidUsage: {
+              status: "enabled",
+              used: "12",
+              limit: "50",
+              currency: "USD",
+              checkedAt: polledAt,
+            },
+            checkedAt: polledAt,
+          },
+        } as const satisfies ServerProvider;
+
+        const merged = mergeProviderAccountRateLimitWindow(polledProvider, {
+          slot: "primary",
+          window: { usedPercent: 55, windowDurationMins: 300 },
+          checkedAt: eventAt,
+        });
+
+        assert.strictEqual(
+          merged.accountRateLimits?.rateLimitsByLimitId?.claude?.primary?.usedPercent,
+          55,
+        );
+        assert.strictEqual(
+          merged.accountRateLimits?.rateLimitsByLimitId?.claude?.primary?.checkedAt,
+          eventAt,
+        );
+        assert.strictEqual(
+          merged.accountRateLimits?.rateLimitsByLimitId?.claude?.secondary?.checkedAt,
+          polledAt,
+        );
+        assert.strictEqual(merged.accountRateLimits?.paidUsage?.checkedAt, polledAt);
+        assert.strictEqual(merged.accountRateLimits?.checkedAt, eventAt);
+      });
+
+      it("clears Claude account usage across logout or observable account churn", () => {
+        const previousProvider = {
+          instanceId: ProviderInstanceId.make("claudeAgent"),
+          driver: ProviderDriverKind.make("claudeAgent"),
+          status: "ready",
+          enabled: true,
+          installed: true,
+          auth: {
+            status: "authenticated",
+            type: "claude.ai",
+            email: "old@example.test",
+          },
+          checkedAt: "2026-04-14T00:00:00.000Z",
+          version: "2026.04.09-f2b0fcd",
+          models: [],
+          slashCommands: [],
+          skills: [],
+          accountRateLimits: {
+            rateLimits: { primary: { usedPercent: 88, windowDurationMins: 300 } },
+            paidUsage: {
+              status: "enabled",
+              used: "12",
+              limit: "50",
+              currency: "USD",
+            },
+            checkedAt: "2026-04-14T00:00:00.000Z",
+          },
+        } as const satisfies ServerProvider;
+        const { accountRateLimits: _omitted, ...withoutRateLimits } = previousProvider;
+
+        assert.strictEqual(
+          mergeProviderSnapshot(previousProvider, {
+            ...withoutRateLimits,
+            auth: { status: "unauthenticated", type: "claude.ai" },
+          }).accountRateLimits,
+          undefined,
+        );
+        assert.strictEqual(
+          mergeProviderSnapshot(previousProvider, {
+            ...withoutRateLimits,
+            auth: {
+              status: "authenticated",
+              type: "claude.ai",
+              email: "new@example.test",
+            },
+          }).accountRateLimits,
+          undefined,
+        );
+        assert.strictEqual(
+          mergeProviderSnapshot(previousProvider, {
+            ...withoutRateLimits,
+            auth: {
+              status: "authenticated",
+              type: "claude.ai",
+            },
+          }).accountRateLimits,
+          undefined,
         );
       });
 
@@ -1676,7 +1802,9 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
               },
               credits: {
                 has_credits: true,
-                unlimited: false,
+                // Unlimited credit bucket plus a finite spend control: the
+                // effective paid status must remain capped/enabled.
+                unlimited: true,
                 balance: "9.99",
               },
               spend_control_reached: true,
@@ -1743,6 +1871,18 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
             remainingPercent: 0,
             resetsAt: 1_780_200_000,
             used: "100.00",
+          });
+          const paidCheckedAt = status.accountRateLimits?.checkedAt;
+          assert.isDefined(paidCheckedAt);
+          assert.deepStrictEqual(status.accountRateLimits?.paidUsage, {
+            status: "enabled",
+            checkedAt: paidCheckedAt,
+            balance: "9.99",
+            used: "100.00",
+            limit: "100.00",
+            utilizationPercent: 100,
+            remainingPercent: 0,
+            resetsAt: 1_780_200_000,
           });
           assert.strictEqual(status.accountRateLimits?.rateLimitResetCredits?.availableCount, 2);
           assert.deepStrictEqual(status.accountRateLimits?.rateLimitResetCredits?.credits, [

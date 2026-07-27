@@ -504,7 +504,7 @@ export function UsageStatsPanel() {
         />
         <SettingsRow
           title="Sidebar provider usage"
-          description="Show authenticated Codex and Claude session/weekly usage windows and their next reset times in the top-left sidebar. Club Code polls only lightweight account-usage metadata."
+          description="Show every configured provider and poll supported account limits in the sidebar. This is off until you enable it. Claude subscription polling is experimental and its provider command scans local Claude transcripts internally; Club Code retains only reduced usage totals, never transcript or behavior data."
           control={
             <Switch
               checked={settings.providerUsageWidgetEnabled}
@@ -517,7 +517,7 @@ export function UsageStatsPanel() {
         />
         <SettingsRow
           title="Usage polling interval"
-          description="Refresh provider usage every 1–5 minutes while Club Code is visible."
+          description="Refresh provider-reported plan limits and paid/extra usage every 1–5 minutes while Club Code is visible. Every configured provider remains listed, including unsupported or unavailable ones."
           control={
             <Select
               disabled={!settings.providerUsageWidgetEnabled}

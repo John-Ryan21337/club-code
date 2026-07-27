@@ -1,4 +1,5 @@
 import type { ServerProvider, ServerProviderAccountRateLimits } from "@cafecode/contracts";
+import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -17,6 +18,8 @@ interface ProviderSnapshotState {
   readonly snapshot: ServerProvider;
   readonly enrichmentGeneration: number;
 }
+
+const ACCOUNT_USAGE_REFRESH_COOLDOWN_MS = 30_000;
 
 interface SingleFlight<A, E> {
   readonly current: Effect.Effect<Deferred.Deferred<A, E> | null>;
@@ -108,6 +111,7 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
   // snapshot. Keep those writes serialized even though duplicate calls of the
   // same operation are coalesced independently below.
   const snapshotMutationSemaphore = yield* Semaphore.make(1);
+  const lastAccountUsageAttemptRef = yield* Ref.make<number | null>(null);
   const changesPubSub = yield* Effect.acquireRelease(
     PubSub.unbounded<ServerProvider>(),
     PubSub.shutdown,
@@ -259,14 +263,33 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
   });
 
   const refreshAccountUsageSnapshot = Effect.fn("refreshAccountUsageSnapshot")(function* () {
-    // A full status refresh includes account usage. If one is already active,
-    // share its result instead of issuing a second authenticated HTTP request.
+    // A full status refresh may include account usage. Share it first, then
+    // issue a usage-only refresh only when that result is not itself fresh
+    // (Claude's health probe intentionally does not scan account usage).
     const activeFullRefresh = yield* fullRefreshSingleFlight.current;
     if (activeFullRefresh !== null) {
-      return yield* Deferred.await(activeFullRefresh);
+      const refreshed = yield* Deferred.await(activeFullRefresh);
+      const now = yield* Clock.currentTimeMillis;
+      const checkedAt = refreshed.accountRateLimits
+        ? Date.parse(refreshed.accountRateLimits.checkedAt)
+        : Number.NaN;
+      if (Number.isFinite(checkedAt) && now - checkedAt < ACCOUNT_USAGE_REFRESH_COOLDOWN_MS) {
+        return refreshed;
+      }
     }
     return yield* accountUsageSingleFlight.run(
-      snapshotMutationSemaphore.withPermits(1)(applyAccountUsageBase()),
+      Effect.gen(function* () {
+        const now = yield* Clock.currentTimeMillis;
+        const admitted = yield* Ref.modify(lastAccountUsageAttemptRef, (lastAttempt) =>
+          lastAttempt !== null && now - lastAttempt < ACCOUNT_USAGE_REFRESH_COOLDOWN_MS
+            ? ([false, lastAttempt] as const)
+            : ([true, now] as const),
+        );
+        if (!admitted) {
+          return (yield* Ref.get(snapshotStateRef)).snapshot;
+        }
+        return yield* snapshotMutationSemaphore.withPermits(1)(applyAccountUsageBase());
+      }),
     );
   });
 

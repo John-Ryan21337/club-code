@@ -77,7 +77,7 @@ documentation use Club Code.
 | Pixel OCR/image recognition                               | Not implemented             | DOM/accessibility text exists, but there is no screenshot or pixel-recognition worker                                              |
 | Inbox email-code retrieval                                | Not implemented             | The operator-only transient secret field is not an inbox connector or 2FA automation                                               |
 | Persistent Auto Nudge                                     | Landed - validation pending | Optional one-thread background ownership has hard round/time caps, durable dedupe, visible history, and stop/pause controls        |
-| Usage windows and Model Pacing                            | Partial                     | Reported windows and advisory pacing exist; no autonomous routing or spend scheduling                                              |
+| Provider usage, paid/extra usage, and Model Pacing        | Landed - validation pending | Every configured provider remains visible; only provider-reported facts are shown; pacing remains advisory                         |
 | Ultra Caching and hierarchical summaries                  | Partial                     | Stable handoffs and earlier compaction exist; no persistent multi-level summary index                                              |
 | Auditor-as-fixer workflow                                 | Partial                     | Installable cross-project skill exists; Club Code does not automatically enforce or orchestrate it                                 |
 | Tokens-saved meter per model                              | Partial                     | Honest provider cache/compaction counters exist; exact counterfactual savings cannot be measured                                   |
@@ -325,8 +325,9 @@ values:
   availability may still prevent playback.
 - The bundled ambience GIF is seeded into the managed ambient store and starts
   bottom-left/large/floating with auto glow at `0.35`.
-- Workflow Observatory, the provider usage widget at a two-minute poll, and
-  advisory Model Pacing with a 5% reserve are enabled.
+- Workflow Observatory is enabled. Provider Usage and advisory Model Pacing
+  remain off until the operator enables them; their prepared values are a
+  two-minute poll and a 5% reserve.
 
 These settings remain independently editable and can be disabled. Default-on
 live-work terms and activity links still use only the bounded and sanitized
@@ -571,12 +572,54 @@ durable 40-entry ledger, and stop conditions are defined above. Unsupported or
 denied locking makes background continuation unavailable. Auto Nudge is not an
 immortal background agent, an all-chat scheduler, or unbounded fan-out.
 
-The optional top-left/sidebar Usage widget polls provider-reported Codex and
-Claude windows at the configured one-to-five-minute cadence. It shows a meter,
-remaining allowance, and reset timing only when the provider exposes them.
-Model Pacing compares reported allowance, reset time, and an operator reserve.
-It is advisory and does not silently switch models, schedule agents, or spend
-quota.
+The optional top-left/sidebar Usage widget is default-off and requires an
+operator to enable it. It lists every configured provider
+instance, including disabled, unavailable, unauthenticated, unsupported, and
+no-data states. While Club Code is visible it polls only authenticated instances
+that explicitly declare account-usage support, at the configured
+one-to-five-minute cadence. The server enforces a per-instance cooldown, so
+staggered windows or tabs cannot multiply provider subprocesses; repeated
+manual refreshes inside that cooldown reuse the last result. A failed or
+malformed refresh retains the last known-good provider snapshot. Plan windows
+and paid facts carry their own observation time, so a fresh live rate event
+cannot re-date an older weekly window or paid balance. Old values remain
+visible only with a stale label.
+
+Codex usage uses the supported account-usage path and may include plan windows,
+an exact provider-formatted paid-credit balance, spend used/limit,
+provider-reported remaining percentage, and reset time. Amount strings are
+opaque: Club Code does not prepend a currency, convert units, or infer that an
+unlabelled number is dollars.
+
+Claude plan and extra-usage polling is experimental and is offered only for
+the documented `pro`, `max`, `team`, and `enterprise` subscription auth types
+on Claude Code 2.1.216 or newer. API-key, Bedrock, Vertex, older CLI, unknown
+identity, and unsupported sessions are not refreshable. Each poll creates a
+separate bounded, no-prompt Agent SDK query, waits only for initialization and
+the structured usage control response, strictly reduces it to plan windows and
+extra-usage facts, binds those facts to the already checked account identity,
+and tears it down. It never reuses, steers, pauses, resumes, or interrupts an
+active chat Query. The upstream control internally scans local Claude
+transcripts to calculate behavior attribution; enabling Provider Usage is
+therefore explicit consent to that provider-side scan. Club Code discards the
+behavior result and retains no transcript-derived detail. Claude may report extra usage used,
+monthly limit, utilization, and an explicit currency; it does not report a
+separate current paid balance, so the widget says that the balance is not
+reported instead of deriving one. Session cost estimates, transcript behavior,
+skills, account identity, and raw control payloads are discarded. Account
+switches, unknown identity, and unsupported SDK/CLI pairs fail closed and leave
+no usage attached to the wrong account.
+
+Providers such as OpenCode that expose no account-usage source remain visible
+with an explicit unsupported state. Platform availability follows the selected
+provider runtime; the renderer does not claim Codex or Claude usage support on
+an OS/architecture where that provider is unavailable.
+
+Model Pacing compares trustworthy, non-stale reported plan allowance, reset
+time, and an operator reserve. Paid balances and extra-usage limits are
+informational and do not grant authority to spend. Pacing is advisory and does
+not silently switch models, schedule agents, interrupt in-progress work, or
+spend quota.
 
 The efficiency display reports available cache-read, cache-write, and observed
 compaction data by driver/model. It is not an additive billing estimate. An
@@ -774,6 +817,10 @@ complete:
   thumbnail is a live frame or overlay its UI inside foreign fullscreen.
 - Exact counterfactual tokens or dollars saved cannot be claimed without a
   provider-issued measurement source.
+- Claude subscription usage is exposed by an explicitly experimental Agent SDK
+  control method. A Cafe Code product PR must retain the experimental/fail-closed
+  boundary and complete Anthropic authentication/product-policy review before
+  enabling claude.ai subscription polling for third-party users.
 - Email-code support, if ever added, is an explicit connector with least
   privilege and user approval. It is not autonomous login or authentication
   bypass.
@@ -799,8 +846,10 @@ bounded run state, and 40-entry ledger are bounded per-device browser storage.
 OAuth tokens, raw local paths, VLC session tokens, browser secrets, captured
 audio, browser-tool bearers/headers/typed values, prompt text, and file contents
 are excluded from ordinary settings, the durable provider command ledger, and
-telemetry. Provider-backed usage aggregates by driver/model rather than
-configured account identity.
+telemetry. Provider usage snapshots exclude credentials, account IDs, raw
+provider payloads, Claude session-cost estimates, and transcript-derived
+behavior. Usage is displayed per configured instance without exposing its
+provider account identity.
 
 ## Release acceptance
 

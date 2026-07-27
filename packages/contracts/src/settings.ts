@@ -868,9 +868,7 @@ export const CLUB_CODE_FIRST_RUN_CLIENT_SETTINGS: ClientSettings = Schema.decode
   ambientImageGlowColor: "auto",
   ambientImageGlowOpacity: 0.35,
   workflowObservatoryEnabled: true,
-  providerUsageWidgetEnabled: true,
   providerUsagePollMinutes: 2,
-  modelPacingEnabled: true,
   modelPacingReservePercent: 5,
 });
 

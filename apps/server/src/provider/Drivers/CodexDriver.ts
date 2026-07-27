@@ -112,7 +112,14 @@ const withInstanceIdentity =
     ...(input.accentColor ? { accentColor: input.accentColor } : {}),
     ...(input.authActions ? { authActions: input.authActions } : {}),
     continuation: { groupKey: input.continuationGroupKey },
-    runtimeCapabilities: { ...snapshot.runtimeCapabilities, liveSteer: "supported" },
+    runtimeCapabilities: {
+      ...snapshot.runtimeCapabilities,
+      liveSteer: "supported",
+      accountUsage:
+        snapshot.auth.type === "chatgpt" || snapshot.accountRateLimits
+          ? "supported"
+          : "unsupported",
+    },
   });
 
 function sanitizeShadowHomeSegment(value: string): string {

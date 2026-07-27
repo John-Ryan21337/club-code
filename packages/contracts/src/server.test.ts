@@ -157,6 +157,15 @@ describe("ServerProvider", () => {
       models: [],
       accountRateLimits: {
         checkedAt: "2026-04-10T00:00:00.000Z",
+        paidUsage: {
+          status: "enabled",
+          balance: "24.50",
+          used: "5.50",
+          limit: "30.00",
+          utilizationPercent: 18.333,
+          remainingPercent: 81.667,
+          currency: "USD",
+        },
         rateLimitResetCredits: {
           availableCount: 2,
           credits: [
@@ -194,12 +203,42 @@ describe("ServerProvider", () => {
           },
         },
       },
+      runtimeCapabilities: {
+        liveSteer: "supported",
+      },
     });
 
     expect(parsed.accountRateLimits?.rateLimits.primary?.windowDurationMins).toBe(300);
     expect(parsed.accountRateLimits?.rateLimitsByLimitId?.codex?.primary?.usedPercent).toBe(42.5);
     expect(parsed.accountRateLimits?.rateLimitResetCredits?.availableCount).toBe(2);
     expect(parsed.accountRateLimits?.rateLimitResetCredits?.credits?.[0]?.id).toBe("credit-1");
+    expect(parsed.accountRateLimits?.paidUsage).toEqual({
+      status: "enabled",
+      balance: "24.50",
+      used: "5.50",
+      limit: "30.00",
+      utilizationPercent: 18.333,
+      remainingPercent: 81.667,
+      currency: "USD",
+    });
+    expect(parsed.runtimeCapabilities).toEqual({
+      liveSteer: "supported",
+    });
+    if (!parsed.accountRateLimits) {
+      throw new Error("Expected decoded account rate limits.");
+    }
+    expect(() =>
+      decodeServerProvider({
+        ...parsed,
+        accountRateLimits: {
+          ...parsed.accountRateLimits,
+          paidUsage: {
+            status: "enabled",
+            utilizationPercent: 101,
+          },
+        },
+      }),
+    ).toThrow();
   });
 
   it("decodes lightweight runtime layer diagnostics", () => {

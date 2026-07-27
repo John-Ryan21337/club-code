@@ -40,6 +40,7 @@ export const ServerConfigIssue = Schema.Union([
 export type ServerConfigIssue = typeof ServerConfigIssue.Type;
 
 const ServerConfigIssues = Schema.Array(ServerConfigIssue);
+const Percent = Schema.Number.check(Schema.isBetween({ minimum: 0, maximum: 100 }));
 
 export const ServerProviderState = Schema.Literals(["ready", "warning", "error", "disabled"]);
 export type ServerProviderState = typeof ServerProviderState.Type;
@@ -71,6 +72,7 @@ export const ServerProviderAccountRateLimitWindow = Schema.Struct({
   usedPercent: Schema.optionalKey(Schema.NullOr(Schema.Number)),
   windowDurationMins: Schema.optionalKey(Schema.NullOr(NonNegativeInt)),
   resetsAt: Schema.optionalKey(Schema.NullOr(NonNegativeInt)),
+  checkedAt: Schema.optionalKey(IsoDateTime),
 });
 export type ServerProviderAccountRateLimitWindow = typeof ServerProviderAccountRateLimitWindow.Type;
 
@@ -89,6 +91,26 @@ export const ServerProviderAccountSpendControlLimit = Schema.Struct({
 });
 export type ServerProviderAccountSpendControlLimit =
   typeof ServerProviderAccountSpendControlLimit.Type;
+
+/**
+ * Provider-reported paid or extra-usage facts.
+ *
+ * Monetary strings are deliberately opaque. A provider may include a currency
+ * code separately, but consumers must not infer a currency from an unlabelled
+ * balance, limit, or usage value.
+ */
+export const ServerProviderPaidUsage = Schema.Struct({
+  status: Schema.Literals(["enabled", "disabled", "unlimited"]),
+  checkedAt: Schema.optionalKey(IsoDateTime),
+  balance: Schema.optionalKey(Schema.NullOr(TrimmedNonEmptyString)),
+  used: Schema.optionalKey(Schema.NullOr(TrimmedNonEmptyString)),
+  limit: Schema.optionalKey(Schema.NullOr(TrimmedNonEmptyString)),
+  utilizationPercent: Schema.optionalKey(Schema.NullOr(Percent)),
+  remainingPercent: Schema.optionalKey(Schema.NullOr(Percent)),
+  currency: Schema.optionalKey(Schema.NullOr(TrimmedNonEmptyString)),
+  resetsAt: Schema.optionalKey(Schema.NullOr(NonNegativeInt)),
+});
+export type ServerProviderPaidUsage = typeof ServerProviderPaidUsage.Type;
 
 export const ServerProviderAccountRateLimitSnapshot = Schema.Struct({
   limitId: Schema.optionalKey(Schema.NullOr(TrimmedNonEmptyString)),
@@ -149,6 +171,7 @@ export const ServerProviderAccountRateLimits = Schema.Struct({
   rateLimitResetCredits: Schema.optionalKey(
     Schema.NullOr(ServerProviderAccountRateLimitResetCredits),
   ),
+  paidUsage: Schema.optionalKey(Schema.NullOr(ServerProviderPaidUsage)),
   checkedAt: IsoDateTime,
 });
 export type ServerProviderAccountRateLimits = typeof ServerProviderAccountRateLimits.Type;
@@ -209,10 +232,21 @@ export type ServerProviderAvailability = typeof ServerProviderAvailability.Type;
 export const ServerProviderLiveSteerSupport = Schema.Literals(["supported", "unsupported"]);
 export type ServerProviderLiveSteerSupport = typeof ServerProviderLiveSteerSupport.Type;
 
+export const ServerProviderAccountUsageSupport = Schema.Literals([
+  "supported",
+  "experimental",
+  "unsupported",
+]);
+export type ServerProviderAccountUsageSupport = typeof ServerProviderAccountUsageSupport.Type;
+
 export const ServerProviderRuntimeCapabilities = Schema.Struct({
   liveSteer: ServerProviderLiveSteerSupport.pipe(
     Schema.withDecodingDefault(Effect.succeed("unsupported" as const)),
   ),
+  // Optional for snapshots produced by pre-capability servers. New servers
+  // always stamp this field; retaining absence lets renderers distinguish a
+  // legacy snapshot containing real usage from an explicit unsupported claim.
+  accountUsage: Schema.optionalKey(ServerProviderAccountUsageSupport),
 });
 export type ServerProviderRuntimeCapabilities = typeof ServerProviderRuntimeCapabilities.Type;
 
