@@ -19,6 +19,8 @@ import {
   MAX_MATRIX_ACTIVITY_EVENTS,
   MAX_MATRIX_ACTIVITY_LINKS,
   MAX_MATRIX_ACTIVITY_PACKET_DRAWS,
+  MAX_MATRIX_ACTIVITY_TELEMETRY_GLYPHS,
+  MAX_MATRIX_ACTIVITY_TELEMETRY_RINGS,
   createMatrixActivityAnimationState,
   createMatrixHexRoute,
   decodeMatrixActivityEvents,
@@ -28,6 +30,7 @@ import {
   matrixHexRoutePointAt,
   resolveMatrixActivityPacketCount,
   resolveMatrixActivityPacketProgress,
+  resolveMatrixActivityTelemetryLabel,
   resolveMatrixActivityTerm,
   resolveMatrixActivityTrailIntervals,
   selectMatrixActivityEventsKey,
@@ -89,17 +92,24 @@ interface RecordedCanvasDraw {
   readonly alpha: number;
   readonly kind: "fill" | "stroke" | "text";
   readonly lineWidth: number;
+  readonly maxWidth?: number;
   readonly style: string | RecordedGradient;
   readonly text?: string;
+  readonly x?: number;
+  readonly y?: number;
 }
 
 function createRecordingContext(): {
   readonly context: CanvasRenderingContext2D;
   readonly draws: RecordedCanvasDraw[];
   readonly gradients: RecordedGradient[];
+  readonly rotations: number[];
+  readonly translations: Array<readonly [number, number]>;
 } {
   const draws: RecordedCanvasDraw[] = [];
   const gradients: RecordedGradient[] = [];
+  const rotations: number[] = [];
+  const translations: Array<readonly [number, number]> = [];
   const context = {
     arc: vi.fn(),
     beginPath: vi.fn(),
@@ -137,6 +147,9 @@ function createRecordingContext(): {
         lineWidth: number;
       },
       text: string,
+      x: number,
+      y: number,
+      maxWidth?: number,
     ) {
       draws.push({
         alpha: this.globalAlpha,
@@ -144,6 +157,9 @@ function createRecordingContext(): {
         lineWidth: this.lineWidth,
         style: this.fillStyle,
         text,
+        x,
+        y,
+        ...(maxWidth === undefined ? {} : { maxWidth }),
       });
     }),
     font: "",
@@ -154,6 +170,9 @@ function createRecordingContext(): {
     moveTo: vi.fn(),
     rect: vi.fn(),
     restore: vi.fn(),
+    rotate: vi.fn((angle: number) => {
+      rotations.push(angle);
+    }),
     save: vi.fn(),
     stroke: vi.fn(
       function (this: {
@@ -172,8 +191,11 @@ function createRecordingContext(): {
     strokeStyle: "",
     textAlign: "",
     textBaseline: "",
+    translate: vi.fn((x: number, y: number) => {
+      translations.push([x, y]);
+    }),
   } as unknown as CanvasRenderingContext2D;
-  return { context, draws, gradients };
+  return { context, draws, gradients, rotations, translations };
 }
 
 describe("Matrix provider activity overlay", () => {
@@ -782,7 +804,9 @@ describe("Matrix provider activity overlay", () => {
       UNIFORM_MATRIX_FRAME,
     );
 
-    expect(recording.draws.filter((draw) => draw.kind === "text")).toHaveLength(3);
+    expect(
+      recording.draws.filter((draw) => draw.kind === "text" && draw.maxWidth === 144),
+    ).toHaveLength(3);
     // Two base routes, repeated packet trails, and one circle per unique endpoint.
     expect(recording.draws.filter((draw) => draw.kind === "stroke")).toHaveLength(
       2 + 2 * MATRIX_ACTIVITY_PACKET_COUNT + 3,
@@ -797,6 +821,182 @@ describe("Matrix provider activity overlay", () => {
     expect(resolveMatrixActivityTerm("database", "operation", "english")).toBe("QUERY");
     expect(resolveMatrixActivityTerm("build", "category", "english")).toBe("BUILD");
     expect(resolveMatrixActivityTerm("build", "operation", "japanese")).toBe("コンパイル");
+  });
+
+  it("uses exact bounded operation labels for verified telemetry rings without claiming rate", () => {
+    expect(resolveMatrixActivityTelemetryLabel("network", "english")).toBe("FETCH • VERIFIED •");
+    expect(resolveMatrixActivityTelemetryLabel("database", "japanese")).toBe("照会 • VERIFIED •");
+    expect(resolveMatrixActivityTelemetryLabel("build", null)).toBe("COMPILE • VERIFIED •");
+    for (const category of ["network", "database", "build"] as const) {
+      for (const language of ["english", "japanese", null] as const) {
+        const label = resolveMatrixActivityTelemetryLabel(category, language);
+        expect(label.length).toBeLessThanOrEqual(MAX_MATRIX_ACTIVITY_TELEMETRY_GLYPHS);
+        expect(label).not.toMatch(/(?:B\/?S|BPS|BYTE|KB|MB|GB|RATE|THROUGHPUT|\/S)/u);
+      }
+    }
+  });
+
+  it("draws circular text only around verified linked operation endpoints", () => {
+    const now = Date.parse("2026-07-23T12:00:01.000Z");
+    const linkedEvents = deriveMatrixActivityEvents([
+      activity("ring-start", "2026-07-23T12:00:00.800Z", {
+        itemType: "build",
+        itemId: "ring-build",
+      }),
+      activity("ring-complete", "2026-07-23T12:00:01.000Z", {
+        requestKind: "compile",
+        itemId: "ring-build",
+      }),
+    ]);
+    const scene = createAtmosphereScene("matrix", 640, 480, createSeededRandom(55), undefined, 0);
+    const linkedState = createMatrixActivityAnimationState();
+    updateMatrixActivityAnimationInPlace(
+      linkedState,
+      linkedEvents,
+      now,
+      scene.particles.length,
+      false,
+    );
+    const linked = createRecordingContext();
+    drawMatrixActivityAnimation(
+      linked.context,
+      scene,
+      linkedState,
+      0.64,
+      "random",
+      UNIFORM_MATRIX_FRAME,
+    );
+
+    const operationPulse = linkedState.pulses.find((pulse) => pulse.semanticRole === "operation")!;
+    const operationParticle = scene.particles[operationPulse.anchorIndex]!;
+    const label = resolveMatrixActivityTelemetryLabel(
+      operationPulse.category,
+      operationParticle.matrixLanguage,
+    );
+    const ringGlyphs = linked.draws.filter(
+      (draw) => draw.kind === "text" && draw.maxWidth === undefined,
+    );
+    expect(ringGlyphs.map((draw) => draw.text).join("")).toBe(label);
+    expect(ringGlyphs).toHaveLength(label.length);
+    expect(linked.translations).toEqual([[operationParticle.x, operationParticle.y]]);
+    expect(linked.rotations).toHaveLength(label.length - 1);
+    expect(linked.rotations.every((angle) => angle === (Math.PI * 2) / label.length)).toBe(true);
+    expect(linked.context.save).toHaveBeenCalledTimes(2);
+    expect(linked.context.restore).toHaveBeenCalledTimes(2);
+    const expectedPaint = `hsl(${operationPulse.linkColorHue!.toFixed(1)} 86% 62%)`;
+    expect(ringGlyphs.every((draw) => draw.style === expectedPaint)).toBe(true);
+    expect(ringGlyphs.every((draw) => draw.alpha === 0.64)).toBe(true);
+
+    const standaloneState = createMatrixActivityAnimationState();
+    updateMatrixActivityAnimationInPlace(
+      standaloneState,
+      [
+        {
+          anchorSeed: 3,
+          category: "network",
+          observedAtMs: now,
+          relationHashes: [73],
+        },
+      ],
+      now,
+      scene.particles.length,
+      false,
+    );
+    const standalone = createRecordingContext();
+    drawMatrixActivityAnimation(
+      standalone.context,
+      scene,
+      standaloneState,
+      0.64,
+      "random",
+      UNIFORM_MATRIX_FRAME,
+    );
+    expect(standalone.translations).toEqual([]);
+    expect(standalone.rotations).toEqual([]);
+    expect(
+      standalone.draws.filter((draw) => draw.kind === "text" && draw.maxWidth === undefined),
+    ).toEqual([]);
+
+    // Rendering must not treat a role/hue pair as sufficient evidence: only
+    // the current bounded link topology can authorize VERIFIED lettering.
+    const unverifiedOperationState = createMatrixActivityAnimationState();
+    unverifiedOperationState.pulses.push({
+      anchorIndex: 4,
+      category: "build",
+      intensity: 1,
+      linkColorHue: 45,
+      semanticRole: "operation",
+    });
+    unverifiedOperationState.pulseCount = 1;
+    const unverifiedOperation = createRecordingContext();
+    drawMatrixActivityAnimation(
+      unverifiedOperation.context,
+      scene,
+      unverifiedOperationState,
+      0.64,
+      "random",
+      UNIFORM_MATRIX_FRAME,
+    );
+    expect(unverifiedOperation.translations).toEqual([]);
+    expect(
+      unverifiedOperation.draws.filter(
+        (draw) => draw.kind === "text" && draw.maxWidth === undefined,
+      ),
+    ).toEqual([]);
+  });
+
+  it("caps circular telemetry work independently from the bounded pulse count", () => {
+    const now = Date.parse("2026-07-23T12:00:01.000Z");
+    const scene = createAtmosphereScene("matrix", 800, 600, createSeededRandom(71), undefined, 0);
+    const state = createMatrixActivityAnimationState();
+    const eligibleCount = Math.min(
+      Math.floor(scene.particles.length / 2),
+      Math.floor(MAX_MATRIX_ACTIVITY_EVENTS / 2),
+      MAX_MATRIX_ACTIVITY_LINKS,
+      MAX_MATRIX_ACTIVITY_TELEMETRY_RINGS + 4,
+    );
+    expect(eligibleCount).toBeGreaterThan(MAX_MATRIX_ACTIVITY_TELEMETRY_RINGS);
+    const events = Array.from({ length: eligibleCount }, (_, index) => {
+      const category = index % 2 === 0 ? ("database" as const) : ("build" as const);
+      const relationHash = index + 1;
+      return [
+        {
+          anchorSeed: index * 2,
+          category,
+          observedAtMs: now - 100,
+          relationHashes: [relationHash],
+        },
+        {
+          anchorSeed: index * 2 + 1,
+          category,
+          observedAtMs: now,
+          relationHashes: [relationHash],
+        },
+      ];
+    }).flat();
+    updateMatrixActivityAnimationInPlace(state, events, now, scene.particles.length, false);
+    expect(state.linkCount).toBe(eligibleCount);
+    const recording = createRecordingContext();
+    drawMatrixActivityAnimation(
+      recording.context,
+      scene,
+      state,
+      0.8,
+      "random",
+      UNIFORM_MATRIX_FRAME,
+    );
+
+    const ringGlyphs = recording.draws.filter(
+      (draw) => draw.kind === "text" && draw.maxWidth === undefined,
+    );
+    expect(recording.translations).toHaveLength(MAX_MATRIX_ACTIVITY_TELEMETRY_RINGS);
+    expect(ringGlyphs.length).toBeLessThanOrEqual(
+      MAX_MATRIX_ACTIVITY_TELEMETRY_RINGS * MAX_MATRIX_ACTIVITY_TELEMETRY_GLYPHS,
+    );
+    expect(recording.context.save).toHaveBeenCalledTimes(1 + MAX_MATRIX_ACTIVITY_TELEMETRY_RINGS);
+    expect(recording.context.restore).toHaveBeenCalledTimes(
+      1 + MAX_MATRIX_ACTIVITY_TELEMETRY_RINGS,
+    );
   });
 
   it("uses only 0°/±60° axial segments and advances packets by total route length", () => {
@@ -880,6 +1080,7 @@ describe("Matrix provider activity overlay", () => {
       state.links.push({
         fromAnchorIndex: 0,
         toAnchorIndex: 1,
+        operationAnchorIndex: 0,
         category: "network",
         intensity: 1,
         linePulse: 1,
@@ -1004,6 +1205,32 @@ describe("Matrix provider activity overlay", () => {
     const reducedStrokes = reduced.draws.filter((draw) => draw.kind === "stroke");
     expect(reducedStrokes).toHaveLength(3);
     expect(reducedStrokes.map((draw) => draw.lineWidth)).toEqual([1.5, 1.75, 1.75]);
+    const reducedRingGlyphs = reduced.draws.filter(
+      (draw) => draw.kind === "text" && draw.maxWidth === undefined,
+    );
+    const laterReduced = createRecordingContext();
+    updateMatrixActivityAnimationInPlace(
+      state,
+      events,
+      now + MATRIX_ACTIVITY_LINK_PULSE_MS / 2,
+      20,
+      true,
+    );
+    drawMatrixActivityAnimation(
+      laterReduced.context,
+      scene,
+      state,
+      0.73,
+      "random",
+      UNIFORM_MATRIX_FRAME,
+    );
+    expect(laterReduced.translations).toEqual(reduced.translations);
+    expect(laterReduced.rotations).toEqual(reduced.rotations);
+    expect(
+      laterReduced.draws
+        .filter((draw) => draw.kind === "text" && draw.maxWidth === undefined)
+        .map((draw) => draw.text),
+    ).toEqual(reducedRingGlyphs.map((draw) => draw.text));
 
     const moving = createRecordingContext();
     updateMatrixActivityAnimationInPlace(state, events, now, scene.particles.length, false);
@@ -1083,6 +1310,16 @@ describe("Matrix provider activity overlay", () => {
       "fill",
     ]);
     expect(gradientPaintDraws.every((draw) => draw.alpha === 0.66)).toBe(true);
+    const operationParticle = scene.particles[link.operationAnchorIndex]!;
+    const operationPaint = resolveMatrixStreamColor(PER_STREAM_MATRIX_FRAME, operationParticle);
+    const ringGlyphs = recording.draws.filter(
+      (draw) => draw.kind === "text" && draw.maxWidth === undefined,
+    );
+    expect(ringGlyphs).toHaveLength(
+      resolveMatrixActivityTelemetryLabel("network", operationParticle.matrixLanguage).length,
+    );
+    expect(ringGlyphs.every((draw) => draw.style === operationPaint)).toBe(true);
+    expect(ringGlyphs.every((draw) => draw.alpha === 0.66)).toBe(true);
     expect(
       recording.draws
         .filter((draw) => draw.kind === "stroke" || draw.kind === "text")

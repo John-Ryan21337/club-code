@@ -146,6 +146,17 @@ hue. Matrix mode follows the selected Matrix palette and interpolates between
 independently cycling endpoint colors. Activity marks use the same configured
 opacity cap as Matrix glyph heads and remain legible until a short terminal
 fade; no activity draw raises its canvas alpha above that cap.
+The operation endpoint of up to six verified correlated routes also carries
+bounded circular lettering such as `FETCH • VERIFIED •`. The ring text uses
+only the reviewed operation vocabulary, the linked endpoint's existing glyph
+paint (the shared route hue in random mode and its Matrix stream color in
+Matrix mode), and glyph-head opacity;
+standalone pulses do not receive a telemetry ring. `VERIFIED` means only that
+the two safe lifecycle events share the exact provider-reported relation
+identity. It does not claim that Club Code measured network throughput. A real
+bytes-per-second label requires provider-observed byte counts and a trustworthy
+measurement interval through a separately reviewed contract; animation cadence
+is never presented as a transfer rate.
 Reduced-motion removes packet
 travel, rapid flashes, and continuously repainted fading while retaining the
 same static route until its bounded expiry. Full-screen opacity, event/link
