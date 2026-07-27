@@ -27,6 +27,7 @@ import {
   resolveMatrixAtmosphereColorFrame,
   shouldAnimateAtmosphere,
   type AtmosphereScene,
+  type MatrixColorFrame,
 } from "../windowAtmosphere";
 
 const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
@@ -94,6 +95,7 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const sceneRef = useRef<AtmosphereScene | null>(null);
   const invalidateCommittedFrameRef = useRef<(() => void) | null>(null);
+  const invalidateStaticMatrixColorFrameRef = useRef<(() => void) | null>(null);
   const matrixWorkVocabularyKey = useStore((state) =>
     liveWorkVocabularyEnabled && kind === "matrix"
       ? selectMatrixWorkVocabularyKey(state, selectedThreadRef)
@@ -106,12 +108,20 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
   const matrixWorkVocabularyRef = useRef(matrixWorkVocabulary);
   const matrixActivityEventsKey = useStore((state) =>
     activityLinksEnabled && kind === "matrix"
-      ? selectMatrixActivityEventsKey(state, selectedThreadRef, {
-          network: activityLinkNetworkEnabled,
-          database: activityLinkDatabaseEnabled,
-          build: activityLinkBuildEnabled,
-          agent: activityLinkAgentEnabled,
-        })
+      ? selectMatrixActivityEventsKey(
+          state,
+          selectedThreadRef,
+          {
+            network: activityLinkNetworkEnabled,
+            database: activityLinkDatabaseEnabled,
+            build: activityLinkBuildEnabled,
+            agent: activityLinkAgentEnabled,
+          },
+          {
+            nowMs: Date.now(),
+            requestedTtlMs: activityLinkRetentionSeconds * 1_000,
+          },
+        )
       : "",
   );
   const matrixActivityEvents = useMemo(
@@ -132,6 +142,7 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
 
   useLayoutEffect(() => {
     matrixColorCycleSpeedRef.current = matrixColorCycleSpeed;
+    invalidateStaticMatrixColorFrameRef.current?.();
     invalidateCommittedFrameRef.current?.();
   }, [matrixColorCycleSpeed]);
 
@@ -174,6 +185,7 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
     let resizeFrame: number | null = null;
     let staticActivityExpiryTimer: number | null = null;
     let lastFrameTime: number | null = null;
+    let staticReducedMotionMatrixColorFrame: MatrixColorFrame | null = null;
 
     const clearCanvasBitmap = () => {
       context.save();
@@ -195,6 +207,10 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
         window.clearTimeout(staticActivityExpiryTimer);
         staticActivityExpiryTimer = null;
       }
+    };
+
+    const invalidateStaticMatrixColorFrame = () => {
+      staticReducedMotionMatrixColorFrame = null;
     };
 
     const scheduleStaticActivityExpiry = (nowMs: number) => {
@@ -270,18 +286,26 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
         reducedMotionActive || lastFrameTime === null ? 0 : (timestamp - lastFrameTime) / 1_000;
       lastFrameTime = timestamp;
       advanceAtmosphereSceneInPlace(scene, elapsedSeconds, speed);
+      if (!reducedMotionActive) {
+        staticReducedMotionMatrixColorFrame = null;
+      }
       const matrixColorFrame =
         kind === "matrix"
-          ? resolveMatrixAtmosphereColorFrame(
-              matrixColorMode,
-              configuredColor,
-              resolvedTheme === "dark",
-              timestamp,
-              localMediaAudioSignalStore.getSnapshot(),
-              matrixColorState,
-              matrixColorCycleSpeedRef.current,
-            )
+          ? reducedMotionActive && staticReducedMotionMatrixColorFrame !== null
+            ? staticReducedMotionMatrixColorFrame
+            : resolveMatrixAtmosphereColorFrame(
+                matrixColorMode,
+                configuredColor,
+                resolvedTheme === "dark",
+                timestamp,
+                localMediaAudioSignalStore.getSnapshot(),
+                matrixColorState,
+                matrixColorCycleSpeedRef.current,
+              )
           : undefined;
+      if (reducedMotionActive && matrixColorFrame !== undefined) {
+        staticReducedMotionMatrixColorFrame = matrixColorFrame;
+      }
       const color =
         matrixColorFrame?.color ??
         resolveAtmosphereColor(kind, configuredColor, resolvedTheme === "dark");
@@ -353,6 +377,7 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
       }
     };
     invalidateCommittedFrameRef.current = invalidateCommittedFrame;
+    invalidateStaticMatrixColorFrameRef.current = invalidateStaticMatrixColorFrame;
 
     const handleResize = () => {
       if (resizeFrame !== null) {
@@ -381,6 +406,9 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
       }
       if (invalidateCommittedFrameRef.current === invalidateCommittedFrame) {
         invalidateCommittedFrameRef.current = null;
+      }
+      if (invalidateStaticMatrixColorFrameRef.current === invalidateStaticMatrixColorFrame) {
+        invalidateStaticMatrixColorFrameRef.current = null;
       }
       sceneRef.current = null;
       clearCanvasBitmap();

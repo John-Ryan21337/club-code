@@ -10,6 +10,7 @@ import {
   MATRIX_2CH_ENRICHED_GLYPHS,
   MATRIX_JAPANESE_CODING_AI_TERMS,
   MATRIX_JAPANESE_GLYPHS,
+  MATRIX_MAX_UNIFORM_RAINBOW_SPEED,
   MATRIX_RAINBOW_CYCLE_MS,
   MATRIX_ROMAN_GLYPHS,
   advanceAtmosphereSceneInPlace,
@@ -344,6 +345,28 @@ describe("window atmosphere", () => {
         64,
       ),
     ).toBe("hsl(180.0 88.0% 62.0%)");
+    expect(
+      resolveMatrixAtmosphereColorFrame(
+        "rainbow",
+        "auto",
+        true,
+        MATRIX_RAINBOW_CYCLE_MS / (64 * 2),
+        noSignal,
+        createMatrixColorAnimationState(),
+        64,
+      ).perStream,
+    ).toBe(true);
+    expect(
+      resolveMatrixAtmosphereColorFrame(
+        "rainbow",
+        "auto",
+        true,
+        MATRIX_RAINBOW_CYCLE_MS / (MATRIX_MAX_UNIFORM_RAINBOW_SPEED * 2),
+        noSignal,
+        createMatrixColorAnimationState(),
+        MATRIX_MAX_UNIFORM_RAINBOW_SPEED,
+      ).perStream,
+    ).toBe(false);
     expect(clampMatrixColorCycleSpeed(Number.NaN)).toBe(1);
     expect(clampMatrixColorCycleSpeed(0)).toBe(0.25);
     expect(clampMatrixColorCycleSpeed(1_000)).toBe(64);
@@ -352,10 +375,10 @@ describe("window atmosphere", () => {
   it("scales music-reactive continuous hue drift without multiplying beat impulses", () => {
     const signal = audioSignal({
       active: true,
-      level: 0.4,
-      bass: 0.5,
-      mid: 0.3,
-      treble: 0.2,
+      level: 0.1,
+      bass: 0.1,
+      mid: 0.05,
+      treble: 0.02,
       beat: 0,
       sampledAt: 1_000,
     });
@@ -383,6 +406,40 @@ describe("window atmosphere", () => {
     };
 
     expect(hueDeltaAt(4)).toBeCloseTo(hueDeltaAt(1) * 4);
+  });
+
+  it("caps high-speed music hue motion after applying the shimmer multiplier", () => {
+    const signal = audioSignal({
+      active: true,
+      level: 1,
+      bass: 1,
+      mid: 1,
+      treble: 1,
+      beat: 0,
+      sampledAt: 1_000,
+    });
+    const state = createMatrixColorAnimationState();
+    const first = resolveMatrixAtmosphereColorFrame(
+      "music-reactive",
+      "auto",
+      true,
+      1_000,
+      signal,
+      state,
+      64,
+    );
+    const second = resolveMatrixAtmosphereColorFrame(
+      "music-reactive",
+      "auto",
+      true,
+      1_100,
+      signal,
+      state,
+      64,
+    );
+    const hueDelta = (second.baseHue! - first.baseHue! + 360) % 360;
+
+    expect(hueDelta).toBeLessThanOrEqual(11.000_001);
   });
 
   it("gives Rainbow Extra streams deterministic independent hue phases", () => {

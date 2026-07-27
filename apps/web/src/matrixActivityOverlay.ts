@@ -83,6 +83,17 @@ export interface MatrixActivityEvent {
   readonly relationHashes: readonly number[];
 }
 
+/**
+ * A deterministic retention window for deciding which provider observations
+ * may consume the bounded Matrix activity payload. Supplying `nowMs` avoids
+ * letting routes already expired at the caller's configured TTL crowd newer
+ * pulses out of the 24-event budget.
+ */
+export interface MatrixActivityRetentionWindow {
+  readonly nowMs?: number;
+  readonly requestedTtlMs?: number;
+}
+
 export interface MatrixActivityPulse {
   anchorIndex: number;
   category: MatrixActivityCategory;
@@ -305,6 +316,96 @@ function activityRelationHashes(
 }
 
 /**
+ * Preserve the newest bounded set of exact lifecycle pairs before filling the
+ * remaining visual budget with standalone activity. A verified route must not
+ * disappear merely because newer, unrelated provider observations arrived.
+ */
+function resolveMatrixActivityRouteTtlMs(requestedTtlMs: number | undefined): number {
+  return typeof requestedTtlMs === "number" && Number.isFinite(requestedTtlMs)
+    ? Math.min(
+        MAX_MATRIX_ACTIVITY_TTL_MS,
+        Math.max(MIN_MATRIX_ACTIVITY_TTL_MS, Math.round(requestedTtlMs)),
+      )
+    : DEFAULT_MATRIX_ACTIVITY_ROUTE_TTL_MS;
+}
+
+function resolveMatrixActivityRetentionReferenceMs(
+  events: readonly MatrixActivityEvent[],
+  requestedNowMs: number | undefined,
+): number {
+  if (typeof requestedNowMs === "number" && Number.isFinite(requestedNowMs)) {
+    return requestedNowMs;
+  }
+  let newestObservedAtMs = Number.NEGATIVE_INFINITY;
+  for (const event of events) {
+    if (Number.isFinite(event.observedAtMs)) {
+      newestObservedAtMs = Math.max(newestObservedAtMs, event.observedAtMs);
+    }
+  }
+  return Number.isFinite(newestObservedAtMs) ? newestObservedAtMs : 0;
+}
+
+function selectBoundedMatrixActivityEvents(
+  events: readonly MatrixActivityEvent[],
+  retentionWindow: MatrixActivityRetentionWindow = {},
+): readonly MatrixActivityEvent[] {
+  if (events.length <= MAX_MATRIX_ACTIVITY_EVENTS) return events;
+
+  const referenceNowMs = resolveMatrixActivityRetentionReferenceMs(events, retentionWindow.nowMs);
+  const routeTtlMs = resolveMatrixActivityRouteTtlMs(retentionWindow.requestedTtlMs);
+
+  const selectedOffsets = new Set<number>();
+  const newestOffsetByRelation = new Map<string, number>();
+  const resolvedRelations = new Set<string>();
+  for (let offset = events.length - 1; offset >= 0; offset -= 1) {
+    const event = events[offset]!;
+    for (const relationHash of event.relationHashes.slice(0, MAX_ACTIVITY_RELATIONS)) {
+      if (!Number.isSafeInteger(relationHash) || relationHash < 0) continue;
+      const relationKey = `${event.category}:${relationHash}`;
+      if (resolvedRelations.has(relationKey)) continue;
+      const newestOffset = newestOffsetByRelation.get(relationKey);
+      if (newestOffset === undefined) {
+        newestOffsetByRelation.set(relationKey, offset);
+        continue;
+      }
+
+      resolvedRelations.add(relationKey);
+      const newest = events[newestOffset]!;
+      const correlationDurationMs = newest.observedAtMs - event.observedAtMs;
+      if (
+        !Number.isFinite(correlationDurationMs) ||
+        correlationDurationMs < 0 ||
+        correlationDurationMs > MATRIX_ACTIVITY_MAX_CORRELATION_MS
+      ) {
+        continue;
+      }
+      if (
+        newest.observedAtMs <= referenceNowMs - routeTtlMs ||
+        newest.observedAtMs > referenceNowMs + MAX_FUTURE_CLOCK_SKEW_MS
+      ) {
+        continue;
+      }
+      const additionalEvents =
+        Number(!selectedOffsets.has(offset)) + Number(!selectedOffsets.has(newestOffset));
+      if (selectedOffsets.size + additionalEvents > MAX_MATRIX_ACTIVITY_EVENTS) continue;
+      selectedOffsets.add(offset);
+      selectedOffsets.add(newestOffset);
+    }
+  }
+
+  for (
+    let offset = events.length - 1;
+    offset >= 0 && selectedOffsets.size < MAX_MATRIX_ACTIVITY_EVENTS;
+    offset -= 1
+  ) {
+    selectedOffsets.add(offset);
+  }
+  return [...selectedOffsets]
+    .toSorted((left, right) => left - right)
+    .map((offset) => events[offset]!);
+}
+
+/**
  * Converts provider projection activity into category/timing/hash-only events.
  * Summary, prompt, command output, SQL values, URLs, paths, and raw relation
  * identifiers are never retained.
@@ -312,6 +413,7 @@ function activityRelationHashes(
 export function deriveMatrixActivityEvents(
   activities: readonly OrchestrationThreadActivity[],
   inputSelection: MatrixActivityInputSelection = ALL_MATRIX_ACTIVITY_INPUTS,
+  retentionWindow: MatrixActivityRetentionWindow = {},
 ): readonly MatrixActivityEvent[] {
   if (!hasSelectedMatrixActivityInput(inputSelection)) return [];
 
@@ -331,19 +433,20 @@ export function deriveMatrixActivityEvents(
       relationHashes: activityRelationHashes(activity, payload),
     });
   }
-  return events.slice(-MAX_MATRIX_ACTIVITY_EVENTS);
+  return selectBoundedMatrixActivityEvents(events, retentionWindow);
 }
 
-export function encodeMatrixActivityEvents(events: readonly MatrixActivityEvent[]): string {
+export function encodeMatrixActivityEvents(
+  events: readonly MatrixActivityEvent[],
+  retentionWindow: MatrixActivityRetentionWindow = {},
+): string {
   return JSON.stringify(
-    events
-      .slice(-MAX_MATRIX_ACTIVITY_EVENTS)
-      .map((event) => [
-        event.anchorSeed,
-        CATEGORY_CODE[event.category],
-        event.observedAtMs,
-        event.relationHashes.slice(0, MAX_ACTIVITY_RELATIONS),
-      ]),
+    selectBoundedMatrixActivityEvents(events, retentionWindow).map((event) => [
+      event.anchorSeed,
+      CATEGORY_CODE[event.category],
+      event.observedAtMs,
+      event.relationHashes.slice(0, MAX_ACTIVITY_RELATIONS),
+    ]),
   );
 }
 
@@ -352,7 +455,7 @@ export function decodeMatrixActivityEvents(value: string): readonly MatrixActivi
   try {
     const parsed = JSON.parse(value) as unknown;
     if (!Array.isArray(parsed)) return [];
-    return parsed.slice(-MAX_MATRIX_ACTIVITY_EVENTS).flatMap((entry) => {
+    const events = parsed.flatMap((entry) => {
       if (
         !Array.isArray(entry) ||
         entry.length !== 4 ||
@@ -379,6 +482,7 @@ export function decodeMatrixActivityEvents(value: string): readonly MatrixActivi
         },
       ];
     });
+    return selectBoundedMatrixActivityEvents(events);
   } catch {
     return [];
   }
@@ -392,6 +496,7 @@ export function selectMatrixActivityEventsKey(
   state: AppState,
   selectedThreadRef: ScopedThreadRef | null = null,
   inputSelection: MatrixActivityInputSelection = ALL_MATRIX_ACTIVITY_INPUTS,
+  retentionWindow: MatrixActivityRetentionWindow = {},
 ): string {
   if (!isRecord(state) || !isRecord(selectedThreadRef)) return "";
   const environmentId = ownDataProperty(selectedThreadRef, "environmentId");
@@ -413,7 +518,10 @@ export function selectMatrixActivityEventsKey(
     const activity = ownDataProperty(byId, id);
     return isMatrixThreadActivity(activity) ? [activity] : [];
   });
-  return encodeMatrixActivityEvents(deriveMatrixActivityEvents(activities, inputSelection));
+  return encodeMatrixActivityEvents(
+    deriveMatrixActivityEvents(activities, inputSelection, retentionWindow),
+    retentionWindow,
+  );
 }
 
 export function createMatrixActivityAnimationState(): MatrixActivityAnimationState {
@@ -496,14 +604,12 @@ export function updateMatrixActivityAnimationInPlace(
   if (!Number.isSafeInteger(particleCount) || particleCount <= 0 || !Number.isFinite(nowMs)) {
     return state;
   }
-  const ttlMs = Number.isFinite(requestedTtlMs)
-    ? Math.min(
-        MAX_MATRIX_ACTIVITY_TTL_MS,
-        Math.max(MIN_MATRIX_ACTIVITY_TTL_MS, Math.round(requestedTtlMs)),
-      )
-    : DEFAULT_MATRIX_ACTIVITY_ROUTE_TTL_MS;
+  const ttlMs = resolveMatrixActivityRouteTtlMs(requestedTtlMs);
 
-  const boundedEvents = events.slice(-MAX_MATRIX_ACTIVITY_EVENTS);
+  const boundedEvents = selectBoundedMatrixActivityEvents(events, {
+    nowMs,
+    requestedTtlMs: ttlMs,
+  });
   interface PreparedEvent {
     readonly event: MatrixActivityEvent;
     readonly eventOffset: number;
@@ -967,9 +1073,10 @@ function drawMatrixActivityPulse(
 function isVerifiedMatrixActivityOperationEndpoint(
   state: MatrixActivityAnimationState,
   pulse: MatrixActivityPulse,
+  renderedLinkCount: number,
 ): boolean {
   if (pulse.semanticRole !== "operation" || pulse.linkColorHue === null) return false;
-  for (let index = 0; index < state.linkCount; index += 1) {
+  for (let index = 0; index < renderedLinkCount; index += 1) {
     const link = state.links[index];
     if (
       link &&
@@ -981,6 +1088,19 @@ function isVerifiedMatrixActivityOperationEndpoint(
     }
   }
   return false;
+}
+
+function resolveRenderedMatrixActivityCount(
+  requestedCount: number,
+  availableCount: number,
+  maximumCount: number,
+): number {
+  if (!Number.isFinite(requestedCount) || !Number.isFinite(availableCount)) return 0;
+  return Math.min(
+    maximumCount,
+    Math.max(0, Math.floor(requestedCount)),
+    Math.max(0, Math.floor(availableCount)),
+  );
 }
 
 function drawMatrixActivityTelemetryRing(
@@ -1022,7 +1142,18 @@ export function drawMatrixActivityAnimation(
   colorMode: FallingEffectActivityLinkColorMode,
   matrixColorFrame: MatrixColorFrame,
 ): void {
-  if (scene.kind !== "matrix" || (state.pulseCount === 0 && state.linkCount === 0)) return;
+  if (scene.kind !== "matrix") return;
+  const renderedLinkCount = resolveRenderedMatrixActivityCount(
+    state.linkCount,
+    state.links.length,
+    MAX_MATRIX_ACTIVITY_LINKS,
+  );
+  const renderedPulseCount = resolveRenderedMatrixActivityCount(
+    state.pulseCount,
+    state.pulses.length,
+    MAX_MATRIX_ACTIVITY_EVENTS,
+  );
+  if (renderedPulseCount === 0 && renderedLinkCount === 0) return;
   const safeOpacity = Math.min(1, Math.max(0, atmosphereOpacity));
   if (safeOpacity === 0) return;
 
@@ -1031,11 +1162,6 @@ export function drawMatrixActivityAnimation(
   context.rect(0, 0, scene.width, scene.height);
   context.clip();
   context.lineCap = "round";
-  const renderedLinkCount = Math.min(
-    MAX_MATRIX_ACTIVITY_LINKS,
-    Math.max(0, Math.floor(state.linkCount)),
-    state.links.length,
-  );
   const packetCount = resolveMatrixActivityPacketCount(renderedLinkCount);
   for (let index = 0; index < renderedLinkCount; index += 1) {
     const link = state.links[index]!;
@@ -1092,7 +1218,7 @@ export function drawMatrixActivityAnimation(
     }
   }
   let telemetryRingCount = 0;
-  for (let index = 0; index < state.pulseCount; index += 1) {
+  for (let index = 0; index < renderedPulseCount; index += 1) {
     const pulse = state.pulses[index]!;
     const particle = scene.particles[pulse.anchorIndex];
     if (!particle) continue;
@@ -1116,7 +1242,7 @@ export function drawMatrixActivityAnimation(
     );
     if (
       telemetryRingCount < MAX_MATRIX_ACTIVITY_TELEMETRY_RINGS &&
-      isVerifiedMatrixActivityOperationEndpoint(state, pulse)
+      isVerifiedMatrixActivityOperationEndpoint(state, pulse, renderedLinkCount)
     ) {
       drawMatrixActivityTelemetryRing(
         context,
