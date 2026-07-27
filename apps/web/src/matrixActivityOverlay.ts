@@ -81,6 +81,16 @@ export interface MatrixActivityEvent {
   readonly observedAtMs: number;
   /** Hashes only: raw provider IDs and operation names never reach the canvas. */
   readonly relationHashes: readonly number[];
+  /**
+   * One canonical provider-observed agent dispatch can be visualized as a
+   * category -> operation route even when that provider emits no separate
+   * lifecycle start. This is one verified event with two decorative anchors,
+   * not a second provider event or a throughput measurement.
+   */
+  readonly verifiedAgentDispatch?: {
+    readonly operationAnchorSeed: number;
+    readonly relationHash: number;
+  };
 }
 
 /**
@@ -315,6 +325,194 @@ function activityRelationHashes(
   return hashes;
 }
 
+const PROVIDER_TOOL_LIFECYCLE_KIND = /^tool\.(?:started|updated|completed)$/u;
+
+function isExplicitlyProviderObserved(payload: Record<string, unknown>): boolean {
+  const observed = isRecord(payload.observed) ? payload.observed : null;
+  return observed?.providerObserved === true;
+}
+
+/**
+ * Raw lifecycle identities exist only in this bounded renderer derivation.
+ * They are never encoded or retained by the canvas.
+ */
+function exactLifecycleRelationIdentity(
+  activity: OrchestrationThreadActivity,
+  payload: Record<string, unknown>,
+): string | null {
+  if (!PROVIDER_TOOL_LIFECYCLE_KIND.test(activity.kind) || activity.turnId === null) {
+    return null;
+  }
+  const turnId = String(activity.turnId);
+  const itemType = ownDataProperty(payload, "itemType");
+  const itemId = ownDataProperty(payload, "itemId");
+  if (
+    !SAFE_RELATION_VALUE.test(turnId) ||
+    typeof itemType !== "string" ||
+    !SAFE_RELATION_VALUE.test(itemType) ||
+    typeof itemId !== "string" ||
+    !SAFE_RELATION_VALUE.test(itemId)
+  ) {
+    return null;
+  }
+  return JSON.stringify(["turn", turnId, "type", itemType, "item", itemId]);
+}
+
+interface LifecycleCategoryAttestation {
+  category: MatrixActivityCategory | null;
+  completionCategory: MatrixActivityCategory | null;
+  completionObservedAtMs: number | null;
+  completionSourceOffset: number | null;
+  completionAttestationCount: number;
+  conflicted: boolean;
+  lifecycleEventCount: number;
+}
+
+function collectLifecycleCategoryAttestations(
+  activities: readonly OrchestrationThreadActivity[],
+): ReadonlyMap<string, LifecycleCategoryAttestation> {
+  const attestations = new Map<string, LifecycleCategoryAttestation>();
+  for (let sourceOffset = 0; sourceOffset < activities.length; sourceOffset += 1) {
+    const activity = activities[sourceOffset]!;
+    const payload = isRecord(activity.payload) ? activity.payload : null;
+    if (!payload) continue;
+    const relationIdentity = exactLifecycleRelationIdentity(activity, payload);
+    if (relationIdentity === null) continue;
+
+    const existing = attestations.get(relationIdentity) ?? {
+      category: null,
+      completionCategory: null,
+      completionObservedAtMs: null,
+      completionSourceOffset: null,
+      completionAttestationCount: 0,
+      conflicted: false,
+      lifecycleEventCount: 0,
+    };
+    existing.lifecycleEventCount += 1;
+    if (isExplicitlyProviderObserved(payload)) {
+      const category = activityCategory(activity, payload);
+      if (category === null) {
+        // An explicit but malformed or internally conflicting attestation
+        // invalidates propagation for this exact lifecycle identity.
+        existing.conflicted = true;
+      } else if (existing.category !== null && existing.category !== category) {
+        existing.conflicted = true;
+      } else {
+        existing.category = category;
+      }
+      if (activity.kind === "tool.completed") {
+        existing.completionAttestationCount += 1;
+        const observedAtMs = Date.parse(activity.createdAt);
+        if (
+          category === null ||
+          !Number.isFinite(observedAtMs) ||
+          (existing.completionCategory !== null && existing.completionCategory !== category)
+        ) {
+          existing.conflicted = true;
+        } else {
+          existing.completionCategory = category;
+          existing.completionObservedAtMs = observedAtMs;
+          existing.completionSourceOffset = sourceOffset;
+        }
+      }
+    }
+    attestations.set(relationIdentity, existing);
+  }
+  return attestations;
+}
+
+function propagatedLifecycleCategory(
+  activity: OrchestrationThreadActivity,
+  payload: Record<string, unknown>,
+  attestations: ReadonlyMap<string, LifecycleCategoryAttestation>,
+  sourceOffset: number,
+): MatrixActivityCategory | null {
+  const directCategory = activityCategory(activity, payload);
+  if (directCategory !== null || isExplicitlyProviderObserved(payload)) {
+    return directCategory;
+  }
+  if (activity.kind !== "tool.started") return null;
+  const relationIdentity = exactLifecycleRelationIdentity(activity, payload);
+  if (relationIdentity === null) return null;
+  const attestation = attestations.get(relationIdentity);
+  const startedAtMs = Date.parse(activity.createdAt);
+  if (
+    !attestation ||
+    attestation.conflicted ||
+    attestation.completionAttestationCount !== 1 ||
+    attestation.category === null ||
+    attestation.completionCategory !== attestation.category ||
+    attestation.completionObservedAtMs === null ||
+    attestation.completionSourceOffset === null ||
+    sourceOffset >= attestation.completionSourceOffset ||
+    !Number.isFinite(startedAtMs)
+  ) {
+    return null;
+  }
+  const durationMs = attestation.completionObservedAtMs - startedAtMs;
+  return durationMs >= 0 && durationMs <= MATRIX_ACTIVITY_MAX_CORRELATION_MS
+    ? attestation.category
+    : null;
+}
+
+function deriveVerifiedAgentDispatch(
+  activity: OrchestrationThreadActivity,
+  payload: Record<string, unknown>,
+  category: MatrixActivityCategory,
+  attestations: ReadonlyMap<string, LifecycleCategoryAttestation>,
+  anchorSeed: number,
+  relationHashes: readonly number[],
+): MatrixActivityEvent["verifiedAgentDispatch"] {
+  if (
+    category !== "agent" ||
+    activity.kind !== "tool.completed" ||
+    ownDataProperty(payload, "itemType") !== "collab_agent_tool_call" ||
+    !isExplicitlyProviderObserved(payload)
+  ) {
+    return undefined;
+  }
+  const relationIdentity = exactLifecycleRelationIdentity(activity, payload);
+  const attestation = relationIdentity === null ? undefined : attestations.get(relationIdentity);
+  if (
+    relationIdentity === null ||
+    !attestation ||
+    attestation.conflicted ||
+    attestation.category !== "agent" ||
+    attestation.completionCategory !== "agent" ||
+    attestation.completionAttestationCount !== 1 ||
+    attestation.lifecycleEventCount !== 1
+  ) {
+    return undefined;
+  }
+  const relationHash = relationHashes[0];
+  if (!Number.isSafeInteger(relationHash) || relationHash === undefined || relationHash < 0) {
+    return undefined;
+  }
+  return {
+    operationAnchorSeed: hashSafeIdentity(
+      JSON.stringify(["verified-agent-dispatch-operation", anchorSeed]),
+    ),
+    relationHash: hashSafeRelationIdentity(
+      JSON.stringify(["verified-agent-dispatch", relationHash]),
+    ),
+  };
+}
+
+function isValidVerifiedAgentDispatch(event: MatrixActivityEvent): event is MatrixActivityEvent & {
+  readonly verifiedAgentDispatch: NonNullable<MatrixActivityEvent["verifiedAgentDispatch"]>;
+} {
+  const route = event.verifiedAgentDispatch;
+  return (
+    event.category === "agent" &&
+    route !== undefined &&
+    Number.isInteger(route.operationAnchorSeed) &&
+    route.operationAnchorSeed >= 0 &&
+    route.operationAnchorSeed <= 0xffffffff &&
+    Number.isSafeInteger(route.relationHash) &&
+    route.relationHash >= 0
+  );
+}
+
 /**
  * Preserve the newest bounded set of exact lifecycle pairs before filling the
  * remaining visual budget with standalone activity. A verified route must not
@@ -355,6 +553,27 @@ function selectBoundedMatrixActivityEvents(
   const routeTtlMs = resolveMatrixActivityRouteTtlMs(retentionWindow.requestedTtlMs);
 
   const selectedOffsets = new Set<number>();
+  const selectedSingleEventRelations = new Set<string>();
+  let selectedSingleEventRoutes = 0;
+  for (
+    let offset = events.length - 1;
+    offset >= 0 && selectedSingleEventRoutes < MAX_MATRIX_ACTIVITY_LINKS;
+    offset -= 1
+  ) {
+    const event = events[offset]!;
+    if (!isValidVerifiedAgentDispatch(event)) continue;
+    const relationKey = `agent-dispatch:${event.verifiedAgentDispatch.relationHash}`;
+    if (selectedSingleEventRelations.has(relationKey)) continue;
+    if (
+      event.observedAtMs <= referenceNowMs - routeTtlMs ||
+      event.observedAtMs > referenceNowMs + MAX_FUTURE_CLOCK_SKEW_MS
+    ) {
+      continue;
+    }
+    selectedSingleEventRelations.add(relationKey);
+    selectedOffsets.add(offset);
+    selectedSingleEventRoutes += 1;
+  }
   const newestOffsetByRelation = new Map<string, number>();
   const resolvedRelations = new Set<string>();
   for (let offset = events.length - 1; offset >= 0; offset -= 1) {
@@ -417,20 +636,34 @@ export function deriveMatrixActivityEvents(
 ): readonly MatrixActivityEvent[] {
   if (!hasSelectedMatrixActivityInput(inputSelection)) return [];
 
+  const sourceActivities = activities.slice(-MAX_MATRIX_ACTIVITY_SOURCE_ACTIVITIES);
+  const attestations = collectLifecycleCategoryAttestations(sourceActivities);
   const events: MatrixActivityEvent[] = [];
-  for (const activity of activities.slice(-MAX_MATRIX_ACTIVITY_SOURCE_ACTIVITIES)) {
+  for (let sourceOffset = 0; sourceOffset < sourceActivities.length; sourceOffset += 1) {
+    const activity = sourceActivities[sourceOffset]!;
     const payload = isRecord(activity.payload) ? activity.payload : null;
     if (!payload) continue;
-    const category = activityCategory(activity, payload);
+    const category = propagatedLifecycleCategory(activity, payload, attestations, sourceOffset);
     const observedAtMs = Date.parse(activity.createdAt);
     if (category === null || inputSelection[category] !== true || !Number.isFinite(observedAtMs)) {
       continue;
     }
+    const anchorSeed = hashSafeIdentity(String(activity.id));
+    const relationHashes = activityRelationHashes(activity, payload);
+    const verifiedAgentDispatch = deriveVerifiedAgentDispatch(
+      activity,
+      payload,
+      category,
+      attestations,
+      anchorSeed,
+      relationHashes,
+    );
     events.push({
-      anchorSeed: hashSafeIdentity(String(activity.id)),
+      anchorSeed,
       category,
       observedAtMs,
-      relationHashes: activityRelationHashes(activity, payload),
+      relationHashes,
+      ...(verifiedAgentDispatch !== undefined ? { verifiedAgentDispatch } : {}),
     });
   }
   return selectBoundedMatrixActivityEvents(events, retentionWindow);
@@ -441,12 +674,21 @@ export function encodeMatrixActivityEvents(
   retentionWindow: MatrixActivityRetentionWindow = {},
 ): string {
   return JSON.stringify(
-    selectBoundedMatrixActivityEvents(events, retentionWindow).map((event) => [
-      event.anchorSeed,
-      CATEGORY_CODE[event.category],
-      event.observedAtMs,
-      event.relationHashes.slice(0, MAX_ACTIVITY_RELATIONS),
-    ]),
+    selectBoundedMatrixActivityEvents(events, retentionWindow).map((event) => {
+      const encoded: Array<number | readonly number[]> = [
+        event.anchorSeed,
+        CATEGORY_CODE[event.category],
+        event.observedAtMs,
+        event.relationHashes.slice(0, MAX_ACTIVITY_RELATIONS),
+      ];
+      if (isValidVerifiedAgentDispatch(event)) {
+        encoded.push([
+          event.verifiedAgentDispatch.operationAnchorSeed,
+          event.verifiedAgentDispatch.relationHash,
+        ]);
+      }
+      return encoded;
+    }),
   );
 }
 
@@ -458,7 +700,7 @@ export function decodeMatrixActivityEvents(value: string): readonly MatrixActivi
     const events = parsed.flatMap((entry) => {
       if (
         !Array.isArray(entry) ||
-        entry.length !== 4 ||
+        (entry.length !== 4 && entry.length !== 5) ||
         !Number.isInteger(entry[0]) ||
         entry[0] < 0 ||
         entry[0] > 0xffffffff ||
@@ -470,6 +712,20 @@ export function decodeMatrixActivityEvents(value: string): readonly MatrixActivi
       }
       const category = CODE_CATEGORY[entry[1]];
       if (category === undefined) return [];
+      const encodedAgentDispatch = entry[4];
+      if (
+        encodedAgentDispatch !== undefined &&
+        (category !== "agent" ||
+          !Array.isArray(encodedAgentDispatch) ||
+          encodedAgentDispatch.length !== 2 ||
+          !Number.isInteger(encodedAgentDispatch[0]) ||
+          encodedAgentDispatch[0] < 0 ||
+          encodedAgentDispatch[0] > 0xffffffff ||
+          !Number.isSafeInteger(encodedAgentDispatch[1]) ||
+          encodedAgentDispatch[1] < 0)
+      ) {
+        return [];
+      }
       const relationHashes = entry[3]
         .filter((hash): hash is number => Number.isSafeInteger(hash) && hash >= 0)
         .slice(0, MAX_ACTIVITY_RELATIONS);
@@ -479,6 +735,14 @@ export function decodeMatrixActivityEvents(value: string): readonly MatrixActivi
           category,
           observedAtMs: entry[2],
           relationHashes,
+          ...(encodedAgentDispatch !== undefined
+            ? {
+                verifiedAgentDispatch: {
+                  operationAnchorSeed: encodedAgentDispatch[0] as number,
+                  relationHash: encodedAgentDispatch[1] as number,
+                },
+              }
+            : {}),
         },
       ];
     });
@@ -711,6 +975,33 @@ export function updateMatrixActivityAnimationInPlace(
   // otherwise share a string whose semantic role cannot be both operation and
   // category at once.
   const candidates: LinkCandidate[] = [];
+  // Some providers report an agent delegation as one completed canonical
+  // tool event. Give that one verified dispatch two deterministic decorative
+  // anchors; this does not synthesize another provider event or claim traffic.
+  for (let eventOffset = preparedEvents.length - 1; eventOffset >= 0; eventOffset -= 1) {
+    const prepared = preparedEvents[eventOffset];
+    if (!prepared?.routeLive || !isValidVerifiedAgentDispatch(prepared.event)) continue;
+    let operationAnchorIndex =
+      prepared.event.verifiedAgentDispatch.operationAnchorSeed % particleCount;
+    if (operationAnchorIndex === prepared.anchorIndex) {
+      if (particleCount < 2) continue;
+      operationAnchorIndex = (operationAnchorIndex + 1) % particleCount;
+    }
+    candidates.push({
+      previous: prepared,
+      current: {
+        ...prepared,
+        event: {
+          anchorSeed: prepared.event.verifiedAgentDispatch.operationAnchorSeed,
+          category: prepared.event.category,
+          observedAtMs: prepared.event.observedAtMs,
+          relationHashes: [],
+        },
+        anchorIndex: operationAnchorIndex,
+      },
+      relationHash: prepared.event.verifiedAgentDispatch.relationHash,
+    });
+  }
   for (let eventOffset = preparedEvents.length - 1; eventOffset >= 0; eventOffset -= 1) {
     const prepared = preparedEvents[eventOffset];
     if (!prepared) continue;
