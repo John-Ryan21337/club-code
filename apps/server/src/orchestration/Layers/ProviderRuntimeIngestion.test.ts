@@ -1764,6 +1764,40 @@ describe("ProviderRuntimeIngestion", () => {
     emitItem("item.completed", "evt-matrix-build-completed", buildItemId, "command_execution", {
       command: sensitiveBuildCommand,
     });
+    const headlessBuildItemId = asItemId("item-headless-build");
+    emitItem(
+      "item.started",
+      "evt-matrix-headless-build-started",
+      headlessBuildItemId,
+      "command_execution",
+      undefined,
+    );
+    emitItem(
+      "item.completed",
+      "evt-matrix-headless-build-completed",
+      headlessBuildItemId,
+      "command_execution",
+      {
+        command: "powershell.exe -Command '$null | corepack yarn typecheck'",
+      },
+    );
+    const classifiedHeadlessBuildItemId = asItemId("item-classified-headless-build");
+    const classifiedHeadlessBuildCommand =
+      "powershell.exe -Command '$null | corepack yarn workspace @cafecode/web typecheck'";
+    emitItem(
+      "item.started",
+      "evt-matrix-classified-headless-build-started",
+      classifiedHeadlessBuildItemId,
+      "command_execution",
+      { command: classifiedHeadlessBuildCommand },
+    );
+    emitItem(
+      "item.completed",
+      "evt-matrix-classified-headless-build-completed",
+      classifiedHeadlessBuildItemId,
+      "command_execution",
+      { command: classifiedHeadlessBuildCommand },
+    );
     emitItem(
       "item.completed",
       "evt-matrix-database-completed",
@@ -1958,6 +1992,22 @@ describe("ProviderRuntimeIngestion", () => {
       expect(JSON.stringify(payload.observed)).not.toMatch(
         /super-private|token|command|path|url|sql|item-build/iu,
       );
+    }
+    expect(payloadFor("evt-matrix-headless-build-started").observed).toBeUndefined();
+    expect(payloadFor("evt-matrix-headless-build-completed").observed).toEqual({
+      providerObserved: true,
+      activityType: "build",
+    });
+    expect(payloadFor("evt-matrix-headless-build-completed").itemId).toBe(headlessBuildItemId);
+    for (const eventId of [
+      "evt-matrix-classified-headless-build-started",
+      "evt-matrix-classified-headless-build-completed",
+    ]) {
+      expect(payloadFor(eventId).observed).toEqual({
+        providerObserved: true,
+        activityType: "build",
+      });
+      expect(payloadFor(eventId).itemId).toBe(classifiedHeadlessBuildItemId);
     }
     expect(payloadFor("evt-matrix-database-completed").observed).toEqual({
       providerObserved: true,

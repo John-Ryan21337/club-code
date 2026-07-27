@@ -313,6 +313,333 @@ describe("Matrix provider activity overlay", () => {
     );
   });
 
+  it("attests an unclassified lifecycle start only from one exact matching completion", () => {
+    const now = Date.parse("2026-07-23T12:00:01.000Z");
+    const turnId = TurnId.make("turn-live-command");
+    const started = activity(
+      "live-command-started",
+      new Date(now - 100).toISOString(),
+      {
+        itemType: "command_execution",
+        itemId: "live-command-item",
+      },
+      "tool.started",
+      turnId,
+    );
+    const completed = activity(
+      "live-command-completed",
+      new Date(now - 50).toISOString(),
+      {
+        itemType: "command_execution",
+        itemId: "live-command-item",
+        data: {
+          command:
+            "powershell.exe -Command '$null | corepack yarn workspace @cafecode/web typecheck'",
+        },
+        observed: { providerObserved: true, activityType: "build" },
+      },
+      "tool.completed",
+      turnId,
+    );
+    const events = deriveMatrixActivityEvents([started, completed]);
+
+    expect(events).toHaveLength(2);
+    expect(events.map((event) => event.category)).toEqual(["build", "build"]);
+    expect(events[0]?.relationHashes).toEqual(events[1]?.relationHashes);
+    expect(JSON.stringify(events)).not.toMatch(/live-command|powershell|corepack|typecheck/iu);
+
+    const animation = createMatrixActivityAnimationState();
+    updateMatrixActivityAnimationInPlace(animation, events, now, 160, false);
+    expect(animation.linkCount).toBe(1);
+    expect(animation.links[0]).toMatchObject({ category: "build" });
+
+    const crossTurn = deriveMatrixActivityEvents([
+      started,
+      activity(
+        "cross-turn-completed",
+        new Date(now - 40).toISOString(),
+        {
+          itemType: "command_execution",
+          itemId: "live-command-item",
+          observed: { providerObserved: true, activityType: "build" },
+        },
+        "tool.completed",
+        TurnId.make("turn-other-command"),
+      ),
+    ]);
+    expect(crossTurn).toHaveLength(1);
+
+    const crossType = deriveMatrixActivityEvents([
+      started,
+      activity(
+        "cross-type-completed",
+        new Date(now - 30).toISOString(),
+        {
+          itemType: "dynamic_tool_call",
+          itemId: "live-command-item",
+          observed: { providerObserved: true, activityType: "build" },
+        },
+        "tool.completed",
+        turnId,
+      ),
+    ]);
+    expect(crossType).toHaveLength(1);
+
+    const postCompletionStart = deriveMatrixActivityEvents([
+      completed,
+      activity(
+        "post-completion-start",
+        new Date(now - 25).toISOString(),
+        {
+          itemType: "command_execution",
+          itemId: "live-command-item",
+        },
+        "tool.started",
+        turnId,
+      ),
+    ]);
+    expect(postCompletionStart).toHaveLength(1);
+
+    const reversedAtEqualTimestamp = deriveMatrixActivityEvents([
+      activity(
+        "equal-time-completion-first",
+        new Date(now - 20).toISOString(),
+        {
+          itemType: "command_execution",
+          itemId: "equal-time-item",
+          observed: { providerObserved: true, activityType: "build" },
+        },
+        "tool.completed",
+        turnId,
+      ),
+      activity(
+        "equal-time-start-second",
+        new Date(now - 20).toISOString(),
+        {
+          itemType: "command_execution",
+          itemId: "equal-time-item",
+        },
+        "tool.started",
+        turnId,
+      ),
+    ]);
+    expect(reversedAtEqualTimestamp).toHaveLength(1);
+
+    const unclassifiedUpdate = deriveMatrixActivityEvents([
+      activity(
+        "unclassified-update",
+        new Date(now - 75).toISOString(),
+        {
+          itemType: "command_execution",
+          itemId: "live-command-item",
+        },
+        "tool.updated",
+        turnId,
+      ),
+      completed,
+    ]);
+    expect(unclassifiedUpdate).toHaveLength(1);
+
+    const staleStart = deriveMatrixActivityEvents([
+      activity(
+        "stale-start",
+        new Date(now - MATRIX_ACTIVITY_MAX_CORRELATION_MS - 1_000).toISOString(),
+        {
+          itemType: "command_execution",
+          itemId: "live-command-item",
+        },
+        "tool.started",
+        turnId,
+      ),
+      completed,
+    ]);
+    expect(staleStart).toHaveLength(1);
+
+    const duplicateCompletion = deriveMatrixActivityEvents([
+      started,
+      completed,
+      activity(
+        "duplicate-completion",
+        new Date(now - 10).toISOString(),
+        {
+          itemType: "command_execution",
+          itemId: "live-command-item",
+          observed: { providerObserved: true, activityType: "build" },
+        },
+        "tool.completed",
+        turnId,
+      ),
+    ]);
+    expect(duplicateCompletion).toHaveLength(2);
+
+    const conflicting = deriveMatrixActivityEvents([
+      started,
+      activity(
+        "conflicting-build",
+        new Date(now - 25).toISOString(),
+        {
+          itemType: "command_execution",
+          itemId: "live-command-item",
+          observed: { providerObserved: true, activityType: "build" },
+        },
+        "tool.updated",
+        turnId,
+      ),
+      activity(
+        "conflicting-database",
+        new Date(now - 20).toISOString(),
+        {
+          itemType: "command_execution",
+          itemId: "live-command-item",
+          observed: { providerObserved: true, activityType: "database" },
+        },
+        "tool.completed",
+        turnId,
+      ),
+    ]);
+    expect(conflicting.map((event) => event.category)).toEqual(["build", "database"]);
+    const conflictingAnimation = createMatrixActivityAnimationState();
+    updateMatrixActivityAnimationInPlace(conflictingAnimation, conflicting, now, 160, false);
+    expect(conflictingAnimation.linkCount).toBe(0);
+
+    const malformedAttestation = deriveMatrixActivityEvents([
+      started,
+      activity(
+        "malformed-attestation",
+        new Date(now - 15).toISOString(),
+        {
+          itemType: "command_execution",
+          itemId: "live-command-item",
+          observed: { providerObserved: true, activityType: "not-a-category" },
+        },
+        "tool.updated",
+        turnId,
+      ),
+      completed,
+    ]);
+    expect(malformedAttestation).toHaveLength(1);
+    expect(malformedAttestation[0]?.anchorSeed).toBe(
+      deriveMatrixActivityEvents([completed])[0]?.anchorSeed,
+    );
+  });
+
+  it("draws one honest verified route for a lone canonical agent dispatch", () => {
+    const now = Date.parse("2026-07-23T12:00:01.000Z");
+    const loneDispatch = activity(
+      "provider-agent-dispatch-completed",
+      new Date(now - 25).toISOString(),
+      {
+        itemType: "collab_agent_tool_call",
+        itemId: "private-provider-agent-item",
+        observed: { providerObserved: true, activityType: "agent" },
+        data: {
+          task: "private delegated work",
+          agentName: "private agent name",
+        },
+      },
+      "tool.completed",
+      TurnId.make("private-provider-agent-turn"),
+    );
+    const events = deriveMatrixActivityEvents([loneDispatch]);
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      category: "agent",
+      verifiedAgentDispatch: {
+        operationAnchorSeed: expect.any(Number),
+        relationHash: expect.any(Number),
+      },
+    });
+    const encoded = encodeMatrixActivityEvents(events);
+    expect(encoded).not.toMatch(/private|provider|agent-item|agent-turn|delegated|agent name/iu);
+    expect(decodeMatrixActivityEvents(encoded)).toEqual(events);
+
+    const animation = createMatrixActivityAnimationState();
+    updateMatrixActivityAnimationInPlace(animation, events, now, 160, false);
+    expect(animation.linkCount).toBe(1);
+    expect(animation.pulseCount).toBe(2);
+    expect(animation.links[0]).toMatchObject({ category: "agent" });
+    expect(
+      animation.pulses.slice(0, animation.pulseCount).map((pulse) => pulse.semanticRole),
+    ).toEqual(["category", "operation"]);
+
+    const paired = deriveMatrixActivityEvents([
+      activity(
+        "provider-agent-dispatch-started",
+        new Date(now - 50).toISOString(),
+        {
+          itemType: "collab_agent_tool_call",
+          itemId: "private-provider-agent-item",
+          observed: { providerObserved: true, activityType: "agent" },
+        },
+        "tool.started",
+        TurnId.make("private-provider-agent-turn"),
+      ),
+      loneDispatch,
+    ]);
+    expect(paired).toHaveLength(2);
+    expect(paired.every((event) => event.verifiedAgentDispatch === undefined)).toBe(true);
+
+    for (const ineligible of [
+      activity(
+        "agent-start-only",
+        new Date(now - 10).toISOString(),
+        {
+          itemType: "collab_agent_tool_call",
+          itemId: "agent-start-only-item",
+          observed: { providerObserved: true, activityType: "agent" },
+        },
+        "tool.started",
+      ),
+      activity("agent-not-attested", new Date(now - 9).toISOString(), {
+        itemType: "collab_agent_tool_call",
+        itemId: "agent-not-attested-item",
+      }),
+      activity("agent-wrong-item-type", new Date(now - 8).toISOString(), {
+        itemType: "command_execution",
+        itemId: "agent-wrong-item-type-item",
+        observed: { providerObserved: true, activityType: "agent" },
+      }),
+      activity(
+        "agent-without-turn",
+        new Date(now - 7).toISOString(),
+        {
+          itemType: "collab_agent_tool_call",
+          itemId: "agent-without-turn-item",
+          observed: { providerObserved: true, activityType: "agent" },
+        },
+        "tool.completed",
+        null,
+      ),
+    ]) {
+      expect(deriveMatrixActivityEvents([ineligible])[0]?.verifiedAgentDispatch).toBeUndefined();
+    }
+
+    expect(decodeMatrixActivityEvents(JSON.stringify([[1, 0, now, [], [2, 3]]]))).toEqual([]);
+    expect(decodeMatrixActivityEvents(JSON.stringify([[1, 3, now, [], [2, -1]]]))).toEqual([]);
+  });
+
+  it("keeps single-event dispatch routes inside the existing event and link caps", () => {
+    const now = Date.parse("2026-07-23T12:00:01.000Z");
+    const events = Array.from({ length: MAX_MATRIX_ACTIVITY_EVENTS + 10 }, (_, index) => ({
+      anchorSeed: index * 2,
+      category: "agent" as const,
+      observedAtMs: now - index,
+      relationHashes: [],
+      verifiedAgentDispatch: {
+        operationAnchorSeed: index * 2 + 1,
+        relationHash: index + 1,
+      },
+    }));
+    const decoded = decodeMatrixActivityEvents(encodeMatrixActivityEvents(events));
+    expect(decoded).toHaveLength(MAX_MATRIX_ACTIVITY_EVENTS);
+
+    const animation = createMatrixActivityAnimationState();
+    updateMatrixActivityAnimationInPlace(animation, decoded, now, 256, false);
+    expect(animation.linkCount).toBe(MAX_MATRIX_ACTIVITY_LINKS);
+    expect(animation.pulseCount).toBeLessThanOrEqual(MAX_MATRIX_ACTIVITY_EVENTS);
+  });
+
   it("filters activity categories before encoding and permits all inputs to be unchecked", () => {
     const activities = [
       activity("network-filter", "2026-07-23T12:00:00.000Z", {
