@@ -10,6 +10,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   MATRIX_ACTIVITY_LINK_PULSE_MS,
   MATRIX_ACTIVITY_MAX_CORRELATION_MS,
+  MATRIX_ACTIVITY_PACKET_COUNT,
   MATRIX_ACTIVITY_TERMINAL_FADE_MS,
   MATRIX_ACTIVITY_TTL_MS,
   MAX_MATRIX_ACTIVITY_ENCODED_CHARS,
@@ -776,8 +777,10 @@ describe("Matrix provider activity overlay", () => {
     );
 
     expect(recording.draws.filter((draw) => draw.kind === "text")).toHaveLength(3);
-    // Two base routes, two packet trails, and one circle per unique endpoint.
-    expect(recording.draws.filter((draw) => draw.kind === "stroke")).toHaveLength(7);
+    // Two base routes, repeated packet trails, and one circle per unique endpoint.
+    expect(recording.draws.filter((draw) => draw.kind === "stroke")).toHaveLength(
+      2 + 2 * MATRIX_ACTIVITY_PACKET_COUNT + 3,
+    );
     expect(recording.draws.every((draw) => draw.alpha === 0.61)).toBe(true);
   });
 
@@ -917,11 +920,19 @@ describe("Matrix provider activity overlay", () => {
     drawMatrixActivityAnimation(moving.context, scene, state, 0.73, "random", UNIFORM_MATRIX_FRAME);
     expect(moving.draws.every((draw) => draw.style === randomColor)).toBe(true);
     expect(moving.draws.every((draw) => draw.alpha === 0.73)).toBe(true);
-    expect(moving.draws.filter((draw) => draw.kind === "fill")).toHaveLength(1);
+    expect(moving.draws.filter((draw) => draw.kind === "fill")).toHaveLength(
+      MATRIX_ACTIVITY_PACKET_COUNT,
+    );
     const movingStrokes = moving.draws.filter((draw) => draw.kind === "stroke");
-    expect(movingStrokes).toHaveLength(4);
-    expect(movingStrokes[1]!.lineWidth).toBeGreaterThan(movingStrokes[0]!.lineWidth);
-    expect(movingStrokes.slice(2).map((draw) => draw.lineWidth)).toEqual([1.75, 1.75]);
+    expect(movingStrokes).toHaveLength(1 + MATRIX_ACTIVITY_PACKET_COUNT + 2);
+    expect(
+      movingStrokes
+        .slice(1, 1 + MATRIX_ACTIVITY_PACKET_COUNT)
+        .every((draw) => draw.lineWidth > movingStrokes[0]!.lineWidth),
+    ).toBe(true);
+    expect(
+      movingStrokes.slice(1 + MATRIX_ACTIVITY_PACKET_COUNT).map((draw) => draw.lineWidth),
+    ).toEqual([1.75, 1.75]);
     expect(moving.draws.filter((draw) => draw.kind === "text").map((draw) => draw.text)).toEqual(
       expect.arrayContaining(["BUILD", "COMPILE"]),
     );
@@ -972,7 +983,15 @@ describe("Matrix provider activity overlay", () => {
     const gradientPaintDraws = recording.draws.filter(
       (draw) => draw.style === recording.gradients[0],
     );
-    expect(gradientPaintDraws.map((draw) => draw.kind)).toEqual(["stroke", "stroke", "fill"]);
+    expect(gradientPaintDraws.map((draw) => draw.kind)).toEqual([
+      "stroke",
+      "stroke",
+      "fill",
+      "stroke",
+      "fill",
+      "stroke",
+      "fill",
+    ]);
     expect(gradientPaintDraws.every((draw) => draw.alpha === 0.66)).toBe(true);
     expect(
       recording.draws
@@ -1028,8 +1047,12 @@ describe("Matrix provider activity overlay", () => {
 
     expect(events).toHaveLength(2);
     expect(animation.linkCount).toBe(1);
-    expect(recording.draws.filter((draw) => draw.kind === "stroke")).toHaveLength(4);
-    expect(recording.draws.filter((draw) => draw.kind === "fill")).toHaveLength(1);
+    expect(recording.draws.filter((draw) => draw.kind === "stroke")).toHaveLength(
+      1 + MATRIX_ACTIVITY_PACKET_COUNT + 2,
+    );
+    expect(recording.draws.filter((draw) => draw.kind === "fill")).toHaveLength(
+      MATRIX_ACTIVITY_PACKET_COUNT,
+    );
     expect(recording.draws.every((draw) => draw.alpha === 0.5)).toBe(true);
     expect(recording.draws.every((draw) => draw.style === UNIFORM_MATRIX_FRAME.color)).toBe(true);
   });

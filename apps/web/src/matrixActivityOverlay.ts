@@ -10,8 +10,8 @@ import {
 
 export const MAX_MATRIX_ACTIVITY_EVENTS = 24;
 export const MAX_MATRIX_ACTIVITY_ENCODED_CHARS = 8_192;
-export const MAX_MATRIX_ACTIVITY_LINKS = 8;
-export const MATRIX_ACTIVITY_TTL_MS = 2_200;
+export const MAX_MATRIX_ACTIVITY_LINKS = 12;
+export const MATRIX_ACTIVITY_TTL_MS = 8_000;
 /** Keep links fully legible until this short terminal fade begins. */
 export const MATRIX_ACTIVITY_TERMINAL_FADE_MS = 400;
 // Keep this aligned with the per-thread activity retention cap in store.ts.
@@ -21,6 +21,8 @@ const MAX_MATRIX_ACTIVITY_SOURCE_ACTIVITIES = 500;
 /** A single provider turn may legitimately contain a full-day build or migration. */
 export const MATRIX_ACTIVITY_MAX_CORRELATION_MS = 24 * 60 * 60 * 1_000;
 export const MATRIX_ACTIVITY_PACKET_TRAVEL_MS = 720;
+/** Repeated packets make each real correlated route easy to see without inventing extra traffic. */
+export const MATRIX_ACTIVITY_PACKET_COUNT = 3;
 export const MATRIX_ACTIVITY_LINK_PULSE_MS = 180;
 const MAX_ACTIVITY_RELATIONS = 4;
 const MAX_FUTURE_CLOCK_SKEW_MS = 250;
@@ -857,18 +859,22 @@ export function drawMatrixActivityAnimation(
     context.stroke();
 
     if (!state.reducedMotion) {
-      const packet = matrixHexRoutePointAt(route, link.packetProgress);
-      const trailProgress = Math.max(0, link.packetProgress - 0.12);
-      context.strokeStyle = linkPaint;
-      context.globalAlpha = safeOpacity * link.intensity;
-      context.lineWidth = 1.25 + link.linePulse;
-      traceMatrixHexRouteInterval(context, route, trailProgress, link.packetProgress);
-      context.stroke();
-      context.fillStyle = linkPaint;
-      context.globalAlpha = safeOpacity * link.intensity;
-      context.beginPath();
-      context.arc(packet.x, packet.y, 1 + link.intensity * 1.4, 0, Math.PI * 2);
-      context.fill();
+      for (let packetIndex = 0; packetIndex < MATRIX_ACTIVITY_PACKET_COUNT; packetIndex += 1) {
+        const packetProgress =
+          (link.packetProgress + packetIndex / MATRIX_ACTIVITY_PACKET_COUNT) % 1;
+        const packet = matrixHexRoutePointAt(route, packetProgress);
+        const trailProgress = Math.max(0, packetProgress - 0.12);
+        context.strokeStyle = linkPaint;
+        context.globalAlpha = safeOpacity * link.intensity;
+        context.lineWidth = 1.25 + link.linePulse;
+        traceMatrixHexRouteInterval(context, route, trailProgress, packetProgress);
+        context.stroke();
+        context.fillStyle = linkPaint;
+        context.globalAlpha = safeOpacity * link.intensity;
+        context.beginPath();
+        context.arc(packet.x, packet.y, 1 + link.intensity * 1.4, 0, Math.PI * 2);
+        context.fill();
+      }
     }
   }
   for (let index = 0; index < state.pulseCount; index += 1) {
