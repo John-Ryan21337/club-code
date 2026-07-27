@@ -1942,12 +1942,29 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
             version: "2.1.197",
             slugs: ["claude-opus-4-7", "claude-opus-4-8", "claude-fable-5", "claude-sonnet-5"],
           },
+          {
+            version: "2.1.218",
+            slugs: ["claude-opus-4-7", "claude-opus-4-8", "claude-fable-5", "claude-sonnet-5"],
+            upgrade:
+              "Claude Code v2.1.218 is too old for Claude Opus 5. Upgrade to v2.1.219 or newer to access it.",
+          },
+          {
+            version: "2.1.219",
+            slugs: [
+              "claude-opus-4-7",
+              "claude-opus-4-8",
+              "claude-fable-5",
+              "claude-sonnet-5",
+              "claude-opus-5",
+            ],
+          },
         ];
         const gatedSlugs = [
           "claude-opus-4-7",
           "claude-opus-4-8",
           "claude-fable-5",
           "claude-sonnet-5",
+          "claude-opus-5",
         ];
 
         for (const testCase of cases) {
@@ -2001,6 +2018,35 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
             ? sonnetEffort.options.map((option) => option.id)
             : undefined,
           ["low", "medium", "high", "xhigh", "max", "ultrathink"],
+        );
+
+        const opus5 = getBuiltInClaudeModelsForVersion("2.1.219").find(
+          (model) => model.slug === "claude-opus-5",
+        );
+        const opus5Descriptors = opus5?.capabilities?.optionDescriptors ?? [];
+        const opus5Effort = opus5Descriptors.find(
+          (descriptor) => descriptor.type === "select" && descriptor.id === "effort",
+        );
+        assert.deepStrictEqual(
+          opus5Effort?.type === "select"
+            ? opus5Effort.options.map((option) => option.id)
+            : undefined,
+          ["low", "medium", "high", "xhigh", "max", "ultrathink"],
+        );
+        assert.strictEqual(
+          opus5Descriptors.some(
+            (descriptor) => descriptor.type === "boolean" && descriptor.id === "fastMode",
+          ),
+          true,
+        );
+        const opus5Context = opus5Descriptors.find(
+          (descriptor) => descriptor.type === "select" && descriptor.id === "contextWindow",
+        );
+        assert.deepStrictEqual(
+          opus5Context?.type === "select"
+            ? opus5Context.options.map((option) => option.id)
+            : undefined,
+          ["200k", "1m"],
         );
       });
 
