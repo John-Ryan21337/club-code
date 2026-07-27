@@ -1299,17 +1299,20 @@ const findClaudeSessionIdByMessageUuid = Effect.fn(
   return undefined;
 });
 
-function classifyToolItemType(toolName: string): CanonicalItemType {
-  const normalized = toolName.toLowerCase();
-  if (normalized.includes("agent")) {
-    return "collab_agent_tool_call";
-  }
-  if (
-    normalized === "task" ||
-    normalized === "agent" ||
-    normalized.includes("subagent") ||
-    normalized.includes("sub-agent")
-  ) {
+type ClaudeToolUseSource = "tool_use" | "server_tool_use" | "mcp_tool_use";
+
+// Claude Code's documented built-in delegation tool is `Agent`; `Task` remains
+// its supported legacy alias. Do not infer delegation from a custom/MCP name:
+// Matrix marks this category VERIFIED, so a false positive would overclaim work
+// that the provider never delegated.
+const CLAUDE_DELEGATION_TOOL_NAMES = new Set(["agent", "task"]);
+
+function classifyToolItemType(
+  toolName: string,
+  source: ClaudeToolUseSource = "tool_use",
+): CanonicalItemType {
+  const normalized = toolName.trim().toLowerCase();
+  if (source === "tool_use" && CLAUDE_DELEGATION_TOOL_NAMES.has(normalized)) {
     return "collab_agent_tool_call";
   }
   if (
@@ -1398,7 +1401,11 @@ function extractPlanStepsFromTodoInput(input: Record<string, unknown>): PlanStep
     }));
 }
 
-function summarizeToolRequest(toolName: string, input: Record<string, unknown>): string {
+function summarizeToolRequest(
+  toolName: string,
+  input: Record<string, unknown>,
+  itemType = classifyToolItemType(toolName),
+): string {
   const commandValue = input.command ?? input.cmd;
   const command = typeof commandValue === "string" ? commandValue : undefined;
   if (command && command.trim().length > 0) {
@@ -1406,7 +1413,6 @@ function summarizeToolRequest(toolName: string, input: Record<string, unknown>):
   }
 
   // For agent/subagent tools, prefer human-readable description or prompt over raw JSON
-  const itemType = classifyToolItemType(toolName);
   if (itemType === "collab_agent_tool_call") {
     const description =
       typeof input.description === "string" ? input.description.trim() : undefined;
@@ -2957,13 +2963,13 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       }
 
       const toolName = block.name;
-      const itemType = classifyToolItemType(toolName);
+      const itemType = classifyToolItemType(toolName, block.type);
       const toolInput =
         typeof block.input === "object" && block.input !== null
           ? (block.input as Record<string, unknown>)
           : {};
       const itemId = block.id;
-      const detail = summarizeToolRequest(toolName, toolInput);
+      const detail = summarizeToolRequest(toolName, toolInput, itemType);
       const inputFingerprint =
         Object.keys(toolInput).length > 0 ? toolInputFingerprint(toolInput) : undefined;
 

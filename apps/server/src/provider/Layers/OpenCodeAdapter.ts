@@ -76,6 +76,8 @@ interface OpenCodeSessionContext {
   readonly partById: Map<string, Part>;
   readonly emittedTextByPartId: Map<string, string>;
   readonly completedAssistantPartIds: Set<string>;
+  /** A native `subtask` part is one observed delegation, never inferred from a tool name. */
+  readonly observedSubtaskPartIds: Set<string>;
   readonly turns: Array<OpenCodeTurnSnapshot>;
   activeTurnId: TurnId | undefined;
   activeAgent: string | undefined;
@@ -190,13 +192,6 @@ function toToolLifecycleItemType(toolName: string): ToolLifecycleItemType {
   }
   if (normalized.includes("image")) {
     return "image_view";
-  }
-  if (
-    normalized.includes("task") ||
-    normalized.includes("agent") ||
-    normalized.includes("subtask")
-  ) {
-    return "collab_agent_tool_call";
   }
   return "dynamic_tool_call";
 }
@@ -728,6 +723,29 @@ export function makeOpenCodeAdapter(
             yield* emitAssistantTextDelta(context, part, turnId, event);
           }
 
+          // The v2 SDK models actual delegation as a `subtask` part. Its
+          // prompt, description, and agent name are provider-private, so this
+          // emits only the fixed canonical lifecycle fact. In particular, a
+          // custom/MCP tool whose name happens to contain "agent" must never
+          // become a VERIFIED Matrix delegation route.
+          if (part.type === "subtask" && !context.observedSubtaskPartIds.has(part.id)) {
+            context.observedSubtaskPartIds.add(part.id);
+            yield* emit({
+              ...(yield* buildEventBase({
+                threadId: context.session.threadId,
+                turnId,
+                itemId: part.id,
+                raw: event,
+              })),
+              type: "item.started",
+              payload: {
+                itemType: "collab_agent_tool_call",
+                status: "inProgress",
+                title: "Subagent task",
+              },
+            });
+          }
+
           if (part.type === "tool") {
             const itemType = toToolLifecycleItemType(part.tool);
             const title =
@@ -1111,6 +1129,7 @@ export function makeOpenCodeAdapter(
           emittedTextByPartId: new Map(),
           messageRoleById: new Map(),
           completedAssistantPartIds: new Set(),
+          observedSubtaskPartIds: new Set(),
           turns: [],
           activeTurnId: undefined,
           activeAgent: undefined,
