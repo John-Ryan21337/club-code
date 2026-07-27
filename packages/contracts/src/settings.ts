@@ -211,6 +211,7 @@ export const DEFAULT_FALLING_EFFECT_ACTIVITY_LINKS = false;
 export const DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_NETWORK_ENABLED = true;
 export const DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_DATABASE_ENABLED = true;
 export const DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_BUILD_ENABLED = true;
+export const DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_AGENT_ENABLED = true;
 export const FallingEffectActivityLinkColorMode = Schema.Literals(["random", "matrix"]);
 export type FallingEffectActivityLinkColorMode = typeof FallingEffectActivityLinkColorMode.Type;
 export const DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_COLOR_MODE: FallingEffectActivityLinkColorMode =
@@ -569,6 +570,9 @@ export const ClientSettingsSchema = Schema.Struct({
   fallingEffectActivityLinkBuildEnabled: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_BUILD_ENABLED)),
   ),
+  fallingEffectActivityLinkAgentEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_AGENT_ENABLED)),
+  ),
   fallingEffectActivityLinkColorMode: FallingEffectActivityLinkColorMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_COLOR_MODE)),
   ),
@@ -797,6 +801,7 @@ export const AMBIENT_CLIENT_SETTINGS_KEYS = [
   "fallingEffectActivityLinkNetworkEnabled",
   "fallingEffectActivityLinkDatabaseEnabled",
   "fallingEffectActivityLinkBuildEnabled",
+  "fallingEffectActivityLinkAgentEnabled",
   "fallingEffectActivityLinkColorMode",
   "ambientVideoEnabled",
   "ambientVideoSource",
@@ -841,6 +846,7 @@ export const DEFAULT_AMBIENT_CLIENT_SETTINGS: AmbientClientSettings = {
   fallingEffectActivityLinkNetworkEnabled: DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_NETWORK_ENABLED,
   fallingEffectActivityLinkDatabaseEnabled: DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_DATABASE_ENABLED,
   fallingEffectActivityLinkBuildEnabled: DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_BUILD_ENABLED,
+  fallingEffectActivityLinkAgentEnabled: DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_AGENT_ENABLED,
   fallingEffectActivityLinkColorMode: DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_COLOR_MODE,
   ambientVideoEnabled: DEFAULT_AMBIENT_VIDEO_ENABLED,
   ambientVideoSource: DEFAULT_AMBIENT_VIDEO_SOURCE,
@@ -904,6 +910,7 @@ export const CLUB_CODE_FIRST_RUN_CLIENT_SETTINGS: ClientSettings = Schema.decode
   fallingEffectActivityLinkNetworkEnabled: true,
   fallingEffectActivityLinkDatabaseEnabled: true,
   fallingEffectActivityLinkBuildEnabled: true,
+  fallingEffectActivityLinkAgentEnabled: true,
   fallingEffectActivityLinkColorMode: "matrix",
   ambientVideoEnabled: true,
   ambientVideoSource: null,
@@ -1482,6 +1489,7 @@ export const ClientSettingsPatch = Schema.Struct({
   fallingEffectActivityLinkNetworkEnabled: Schema.optionalKey(Schema.Boolean),
   fallingEffectActivityLinkDatabaseEnabled: Schema.optionalKey(Schema.Boolean),
   fallingEffectActivityLinkBuildEnabled: Schema.optionalKey(Schema.Boolean),
+  fallingEffectActivityLinkAgentEnabled: Schema.optionalKey(Schema.Boolean),
   fallingEffectActivityLinkColorMode: Schema.optionalKey(FallingEffectActivityLinkColorMode),
   ambientVideoEnabled: Schema.optionalKey(Schema.Boolean),
   ambientVideoSource: Schema.optionalKey(AmbientVideoSource),

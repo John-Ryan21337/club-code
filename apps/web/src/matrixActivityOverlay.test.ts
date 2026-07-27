@@ -225,6 +225,32 @@ describe("Matrix provider activity overlay", () => {
           operation: "compile",
         },
       }),
+      activity(
+        "agent-started",
+        "2026-07-23T12:00:00.210Z",
+        {
+          itemType: "collab_agent_tool_call",
+          itemId: "tool-agent",
+          observed: {
+            providerObserved: true,
+            activityType: "agent",
+          },
+        },
+        "tool.started",
+      ),
+      activity(
+        "agent-completed",
+        "2026-07-23T12:00:00.220Z",
+        {
+          itemType: "collab_agent_tool_call",
+          itemId: "tool-agent",
+          observed: {
+            providerObserved: true,
+            activityType: "agent",
+          },
+        },
+        "tool.completed",
+      ),
       activity("freeform-only", "2026-07-23T12:00:00.250Z", {
         itemType: "command_execution",
         itemId: "must-not-classify",
@@ -264,10 +290,16 @@ describe("Matrix provider activity overlay", () => {
       ),
     ]);
 
-    expect(events.map((event) => event.category)).toEqual(["network", "database", "build"]);
+    expect(events.map((event) => event.category)).toEqual([
+      "network",
+      "database",
+      "build",
+      "agent",
+      "agent",
+    ]);
     const encoded = encodeMatrixActivityEvents(events);
     expect(encoded).not.toMatch(
-      /curl|password|example|token|hunter2|SELECT|secret|credential|tool-network|turn-matrix/iu,
+      /curl|password|example|token|hunter2|SELECT|secret|credential|tool-network|tool-agent|turn-matrix/iu,
     );
     expect(decodeMatrixActivityEvents(encoded)).toEqual(events);
     expect(decodeMatrixActivityEvents("[".repeat(MAX_MATRIX_ACTIVITY_ENCODED_CHARS + 1))).toEqual(
@@ -291,6 +323,11 @@ describe("Matrix provider activity overlay", () => {
         itemId: "build-filter-tool",
         observed: { providerObserved: true, activityType: "build" },
       }),
+      activity("agent-filter", "2026-07-23T12:00:00.300Z", {
+        itemType: "collab_agent_tool_call",
+        itemId: "agent-filter-tool",
+        observed: { providerObserved: true, activityType: "agent" },
+      }),
     ];
 
     expect(
@@ -298,6 +335,7 @@ describe("Matrix provider activity overlay", () => {
         network: true,
         database: false,
         build: true,
+        agent: false,
       }).map((event) => event.category),
     ).toEqual(["network", "build"]);
     expect(
@@ -306,6 +344,7 @@ describe("Matrix provider activity overlay", () => {
           network: false,
           database: false,
           build: false,
+          agent: false,
         }),
       ),
     ).toBe("[]");
@@ -319,12 +358,14 @@ describe("Matrix provider activity overlay", () => {
         network: false,
         database: false,
         build: false,
+        agent: false,
       }),
     ).toEqual([]);
     expect(deriveMatrixActivityEvents(activities).map((event) => event.category)).toEqual([
       "network",
       "database",
       "build",
+      "agent",
     ]);
   });
 
@@ -387,7 +428,7 @@ describe("Matrix provider activity overlay", () => {
             environmentId: selectedEnvironmentId,
             threadId: selectedThreadId,
           },
-          { network: false, database: false, build: false },
+          { network: false, database: false, build: false, agent: false },
         ),
       ),
     ).toEqual([]);
@@ -403,7 +444,7 @@ describe("Matrix provider activity overlay", () => {
           environmentId: selectedEnvironmentId,
           threadId: selectedThreadId,
         },
-        { network: false, database: false, build: false },
+        { network: false, database: false, build: false, agent: false },
       ),
     ).toBe("[]");
     expect(selectMatrixActivityEventsKey(state, null)).toBe("");
@@ -821,13 +862,16 @@ describe("Matrix provider activity overlay", () => {
     expect(resolveMatrixActivityTerm("database", "operation", "english")).toBe("QUERY");
     expect(resolveMatrixActivityTerm("build", "category", "english")).toBe("BUILD");
     expect(resolveMatrixActivityTerm("build", "operation", "japanese")).toBe("コンパイル");
+    expect(resolveMatrixActivityTerm("agent", "category", "english")).toBe("AGENT");
+    expect(resolveMatrixActivityTerm("agent", "operation", "japanese")).toBe("委任");
   });
 
   it("uses exact bounded operation labels for verified telemetry rings without claiming rate", () => {
     expect(resolveMatrixActivityTelemetryLabel("network", "english")).toBe("FETCH • VERIFIED •");
     expect(resolveMatrixActivityTelemetryLabel("database", "japanese")).toBe("照会 • VERIFIED •");
     expect(resolveMatrixActivityTelemetryLabel("build", null)).toBe("COMPILE • VERIFIED •");
-    for (const category of ["network", "database", "build"] as const) {
+    expect(resolveMatrixActivityTelemetryLabel("agent", null)).toBe("DISPATCH • VERIFIED •");
+    for (const category of ["network", "database", "build", "agent"] as const) {
       for (const language of ["english", "japanese", null] as const) {
         const label = resolveMatrixActivityTelemetryLabel(category, language);
         expect(label.length).toBeLessThanOrEqual(MAX_MATRIX_ACTIVITY_TELEMETRY_GLYPHS);
@@ -1328,7 +1372,7 @@ describe("Matrix provider activity overlay", () => {
     expect(recording.draws.every((draw) => draw.style !== "#ffffff")).toBe(true);
   });
 
-  it("renders a selected-thread lifecycle through selector, codec, animation, and canvas", () => {
+  it("renders a real selected-thread agent lifecycle through the complete canvas path", () => {
     const environmentId = EnvironmentId.make("environment-render-integration");
     const threadId = ThreadId.make("thread-render-integration");
     const now = Date.parse("2026-07-23T12:00:01.000Z");
@@ -1336,13 +1380,21 @@ describe("Matrix provider activity overlay", () => {
       activity(
         "integration-start",
         "2026-07-23T12:00:00.800Z",
-        { itemType: "build", itemId: "integration-build" },
+        {
+          itemType: "collab_agent_tool_call",
+          itemId: "integration-agent",
+          observed: { providerObserved: true, activityType: "agent" },
+        },
         "tool.started",
       ),
       activity(
         "integration-complete",
         "2026-07-23T12:00:01.000Z",
-        { itemType: "build", itemId: "integration-build" },
+        {
+          itemType: "collab_agent_tool_call",
+          itemId: "integration-agent",
+          observed: { providerObserved: true, activityType: "agent" },
+        },
         "tool.completed",
       ),
     ];
@@ -1373,6 +1425,7 @@ describe("Matrix provider activity overlay", () => {
     );
 
     expect(events).toHaveLength(2);
+    expect(events.every((event) => event.category === "agent")).toBe(true);
     expect(animation.linkCount).toBe(1);
     expect(recording.draws.filter((draw) => draw.kind === "stroke")).toHaveLength(
       1 + MATRIX_ACTIVITY_PACKET_COUNT + 2,

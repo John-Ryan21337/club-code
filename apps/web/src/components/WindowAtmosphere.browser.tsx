@@ -34,6 +34,7 @@ const mocks = vi.hoisted(() => ({
     fallingEffectActivityLinkNetworkEnabled: true as boolean,
     fallingEffectActivityLinkDatabaseEnabled: true as boolean,
     fallingEffectActivityLinkBuildEnabled: true as boolean,
+    fallingEffectActivityLinkAgentEnabled: true as boolean,
     fallingEffectActivityLinkColorMode: "matrix" as const,
     continueBackgroundAnimations: false,
   } satisfies Partial<UnifiedSettings>,
@@ -92,7 +93,7 @@ vi.mock("../matrixActivityOverlay", () => ({
   selectMatrixActivityEventsKey: (
     state: { activityEventsKey: string },
     selectedThreadRef: unknown,
-    inputSelection: { network: boolean; database: boolean; build: boolean },
+    inputSelection: { network: boolean; database: boolean; build: boolean; agent: boolean },
   ) => {
     mocks.selectedActivityThreadRefs.push(selectedThreadRef);
     mocks.selectedActivityInputSelections.push(inputSelection);
@@ -165,6 +166,7 @@ beforeEach(() => {
   mocks.settings.fallingEffectActivityLinkNetworkEnabled = true;
   mocks.settings.fallingEffectActivityLinkDatabaseEnabled = true;
   mocks.settings.fallingEffectActivityLinkBuildEnabled = true;
+  mocks.settings.fallingEffectActivityLinkAgentEnabled = true;
   mocks.selectedActivityThreadRefs = [];
   mocks.selectedActivityInputSelections = [];
   mocks.selectedVocabularyThreadRefs = [];
@@ -260,6 +262,7 @@ describe("WindowAtmosphere", () => {
       network: true,
       database: true,
       build: true,
+      agent: true,
     });
     expect(mocks.selectedVocabularyThreadRefs.at(-1)).toEqual({
       environmentId,
@@ -291,12 +294,14 @@ describe("WindowAtmosphere", () => {
     mocks.settings.fallingEffectActivityLinkNetworkEnabled = false;
     mocks.settings.fallingEffectActivityLinkDatabaseEnabled = false;
     mocks.settings.fallingEffectActivityLinkBuildEnabled = false;
+    mocks.settings.fallingEffectActivityLinkAgentEnabled = false;
     await mounted.rerender(<WindowAtmosphere selectedThreadRef={TEST_SELECTED_THREAD_REF} />);
 
     expect(mocks.selectedActivityInputSelections.at(-1)).toEqual({
       network: false,
       database: false,
       build: false,
+      agent: false,
     });
     expect(mocks.updateMatrixActivityAnimationInPlace).toHaveBeenLastCalledWith(
       expect.anything(),

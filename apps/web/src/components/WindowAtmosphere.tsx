@@ -71,6 +71,9 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
   const activityLinkBuildEnabled = useSettings(
     (settings) => settings.fallingEffectActivityLinkBuildEnabled,
   );
+  const activityLinkAgentEnabled = useSettings(
+    (settings) => settings.fallingEffectActivityLinkAgentEnabled,
+  );
   const activityLinkColorMode = useSettings(
     (settings) => settings.fallingEffectActivityLinkColorMode,
   );
@@ -99,6 +102,7 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
           network: activityLinkNetworkEnabled,
           database: activityLinkDatabaseEnabled,
           build: activityLinkBuildEnabled,
+          agent: activityLinkAgentEnabled,
         })
       : "",
   );

@@ -39,22 +39,29 @@ const MAX_ACTIVITY_RELATIONS = 4;
 const MAX_FUTURE_CLOCK_SKEW_MS = 250;
 const SAFE_RELATION_VALUE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/u;
 
-export type MatrixActivityCategory = "network" | "database" | "build";
+export type MatrixActivityCategory = "network" | "database" | "build" | "agent";
 
 export interface MatrixActivityInputSelection {
   readonly network: boolean;
   readonly database: boolean;
   readonly build: boolean;
+  readonly agent: boolean;
 }
 
 export const ALL_MATRIX_ACTIVITY_INPUTS: MatrixActivityInputSelection = {
   network: true,
   database: true,
   build: true,
+  agent: true,
 };
 
 function hasSelectedMatrixActivityInput(selection: MatrixActivityInputSelection): boolean {
-  return selection.network === true || selection.database === true || selection.build === true;
+  return (
+    selection.network === true ||
+    selection.database === true ||
+    selection.build === true ||
+    selection.agent === true
+  );
 }
 
 export interface MatrixActivityEvent {
@@ -118,15 +125,17 @@ const CATEGORY_COLOR: Record<MatrixActivityCategory, string> = {
   network: "#38bdf8",
   database: "#a78bfa",
   build: "#fbbf24",
+  agent: "#f472b6",
 };
 
 const CATEGORY_CODE: Record<MatrixActivityCategory, number> = {
   network: 0,
   database: 1,
   build: 2,
+  agent: 3,
 };
 
-const CODE_CATEGORY = ["network", "database", "build"] as const;
+const CODE_CATEGORY = ["network", "database", "build", "agent"] as const;
 const CATEGORY_TERM: Record<
   MatrixActivityCategory,
   Record<"english" | "japanese", readonly [category: string, operation: string]>
@@ -142,6 +151,10 @@ const CATEGORY_TERM: Record<
   build: {
     english: ["BUILD", "COMPILE"],
     japanese: ["構築", "コンパイル"],
+  },
+  agent: {
+    english: ["AGENT", "DISPATCH"],
+    japanese: ["エージェント", "委任"],
   },
 };
 
@@ -222,6 +235,7 @@ const STRUCTURED_ACTIVITY_CATEGORIES = new Map<string, MatrixActivityCategory>([
   ["compile", "build"],
   ["compiler", "build"],
   ["transpile", "build"],
+  ["agent", "agent"],
 ]);
 
 function collectActivityCategory(value: unknown, categories: Set<MatrixActivityCategory>): void {

@@ -119,19 +119,20 @@ the signal. Signal loss, source replacement, capture stop, staleness, and
 teardown clear the reactive state.
 
 The optional **Provider activity links** layer turns only safe,
-provider-observed network, database, and build/compile categories into brief
-Matrix pulses. The master switch retains three independent checkboxes:
-**Network / web**, **Database / query**, and **Build / compile**. All three
-category inputs default on when absent so older settings retain their behavior;
-clearing all three produces no activity events, pulses, or links. At most 24
+provider-observed network, database, build/compile, and exact agent-delegation
+lifecycles into brief Matrix pulses. The master switch retains four independent
+checkboxes: **Network / web**, **Database / query**, **Build / compile**, and
+**Agent / delegation**. All four category inputs default on when absent so
+older settings retain their behavior; clearing all four produces no activity
+events, pulses, or links. At most 24
 recent category/hash events and 12 simultaneous links are retained, and visual
 state expires after eight seconds. A pulse may exist without a
 line. A line exists only when two events have the same category and exact same
-provider-reported item or tool identity. A shared agent, operation label,
+provider-reported item or tool identity. A shared agent name, operation label,
 dependency label, temporal proximity, or similar wording is not enough.
 
 Connected falling strings use reviewed semantic pairs—NETWORK/FETCH,
-DATABASE/QUERY, BUILD/COMPILE, or fixed Japanese counterparts according to the
+DATABASE/QUERY, BUILD/COMPILE, AGENT/DISPATCH, or fixed Japanese counterparts according to the
 string's existing language assignment—rather than random glyph meaning or raw
 provider identifiers. Routes use horizontal and +/-60-degree hex-grid segments.
 Up to three evenly spaced packets repeatedly travel over each real correlated
@@ -364,7 +365,7 @@ values:
 - Matrix is enabled in regular uniform `rainbow` mode at `0.55` opacity, speed
   `4`, density `2.5`, and Japanese ratio `0.45`. Rainbow Extra remains
   selectable but is not the first-run mode. 2ch enrichment, bounded live-work
-  vocabulary, all three activity-link category inputs, activity links, and
+  vocabulary, all four activity-link category inputs, activity links, and
   Matrix-colored link routes are enabled.
 - The ambient-video surface is enabled with a null source, custom layout with
   bottom-right/large as its preset fallback, floating presentation, and

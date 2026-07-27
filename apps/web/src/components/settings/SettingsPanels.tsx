@@ -475,7 +475,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.fallingEffectActivityLinkDatabaseEnabled !==
         DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinkDatabaseEnabled ||
       settings.fallingEffectActivityLinkBuildEnabled !==
-        DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinkBuildEnabled
+        DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinkBuildEnabled ||
+      settings.fallingEffectActivityLinkAgentEnabled !==
+        DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinkAgentEnabled
         ? ["Matrix activity link inputs"]
         : []),
       ...(settings.fallingEffectActivityLinkColorMode !==
@@ -569,6 +571,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.fallingEffectActivityLinkNetworkEnabled,
       settings.fallingEffectActivityLinkDatabaseEnabled,
       settings.fallingEffectActivityLinkBuildEnabled,
+      settings.fallingEffectActivityLinkAgentEnabled,
       settings.fallingEffectActivityLinkColorMode,
       settings.themeAccentColor,
       settings.automaticGitFetchInterval,
@@ -628,6 +631,8 @@ export function useSettingsRestore(onRestored?: () => void) {
         DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinkDatabaseEnabled,
       fallingEffectActivityLinkBuildEnabled:
         DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinkBuildEnabled,
+      fallingEffectActivityLinkAgentEnabled:
+        DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinkAgentEnabled,
       fallingEffectActivityLinkColorMode:
         DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinkColorMode,
       themeAccentColor: DEFAULT_UNIFIED_SETTINGS.themeAccentColor,

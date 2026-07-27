@@ -1378,12 +1378,18 @@ describe("settings panels", () => {
       name: "Build / compile",
       exact: true,
     });
+    const agentActivityInput = page.getByRole("checkbox", {
+      name: "Agent / delegation",
+      exact: true,
+    });
     await expect.element(networkActivityInput).toHaveAttribute("aria-checked", "true");
     await expect.element(databaseActivityInput).toHaveAttribute("aria-checked", "true");
     await expect.element(buildActivityInput).toHaveAttribute("aria-checked", "true");
+    await expect.element(agentActivityInput).toHaveAttribute("aria-checked", "true");
     await networkActivityInput.click();
     await databaseActivityInput.click();
     await buildActivityInput.click();
+    await agentActivityInput.click();
     await page.getByRole("radio", { name: "Follow Matrix colors", exact: true }).click();
     await page.getByRole("radio", { name: "Random independent", exact: true }).click();
     await page.getByRole("radio", { name: "Follow Matrix colors", exact: true }).click();
@@ -1397,6 +1403,9 @@ describe("settings panels", () => {
       });
       expect(updateClientSettings).toHaveBeenCalledWith({
         fallingEffectActivityLinkBuildEnabled: false,
+      });
+      expect(updateClientSettings).toHaveBeenCalledWith({
+        fallingEffectActivityLinkAgentEnabled: false,
       });
       expect(updateClientSettings).toHaveBeenCalledWith({
         fallingEffectActivityLinkColorMode: "random",
@@ -1448,6 +1457,7 @@ describe("settings panels", () => {
       fallingEffectActivityLinkNetworkEnabled: false,
       fallingEffectActivityLinkDatabaseEnabled: false,
       fallingEffectActivityLinkBuildEnabled: false,
+      fallingEffectActivityLinkAgentEnabled: false,
       fallingEffectActivityLinkColorMode: "matrix",
     });
 
@@ -1478,6 +1488,7 @@ describe("settings panels", () => {
         fallingEffectActivityLinkNetworkEnabled: false,
         fallingEffectActivityLinkDatabaseEnabled: false,
         fallingEffectActivityLinkBuildEnabled: false,
+        fallingEffectActivityLinkAgentEnabled: false,
         fallingEffectActivityLinkColorMode: "matrix",
       },
     });
@@ -1510,6 +1521,7 @@ describe("settings panels", () => {
           fallingEffectActivityLinkNetworkEnabled: true,
           fallingEffectActivityLinkDatabaseEnabled: true,
           fallingEffectActivityLinkBuildEnabled: true,
+          fallingEffectActivityLinkAgentEnabled: true,
           fallingEffectActivityLinkColorMode: "random",
         }),
       );
@@ -1520,6 +1532,7 @@ describe("settings panels", () => {
         fallingEffectActivityLinkNetworkEnabled: true,
         fallingEffectActivityLinkDatabaseEnabled: true,
         fallingEffectActivityLinkBuildEnabled: true,
+        fallingEffectActivityLinkAgentEnabled: true,
         fallingEffectActivityLinkColorMode: "random",
       });
       expect(onRestored).toHaveBeenCalledOnce();
