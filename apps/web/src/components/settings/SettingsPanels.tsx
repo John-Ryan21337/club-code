@@ -25,9 +25,6 @@ import { scopeThreadRef } from "@cafecode/client-runtime";
 import {
   DEFAULT_UNIFIED_SETTINGS,
   DEFAULT_APP_ACCENT_COLOR,
-  DEFAULT_AUTO_NUDGE_BACKGROUND_CONTINUATION,
-  DEFAULT_AUTO_NUDGE_MAX_MINUTES,
-  DEFAULT_AUTO_NUDGE_MAX_ROUNDS,
   DEFAULT_BRAND_WORDMARK_PREFIX,
   DEFAULT_CONTINUE_BACKGROUND_ANIMATIONS,
   DEFAULT_SHOW_SIDEBAR_ATTRIBUTION,
@@ -39,13 +36,9 @@ import {
   DEFAULT_SHOW_SIDEBAR_SEARCH,
   DEFAULT_THEME_ACCENT_COLOR,
   MAX_BRAND_WORDMARK_PREFIX_LENGTH,
-  MAX_AUTO_NUDGE_MAX_MINUTES,
-  MAX_AUTO_NUDGE_MAX_ROUNDS,
   MAX_SIDEBAR_BRAND_IMAGE_FILE_BYTES,
   MAX_SIDEBAR_STAR_SPEED,
   MIN_SIDEBAR_STAR_SPEED,
-  MIN_AUTO_NUDGE_MAX_MINUTES,
-  MIN_AUTO_NUDGE_MAX_ROUNDS,
   MIN_WORKFLOW_STALL_WARNING_SECONDS,
   MAX_WORKFLOW_STALL_WARNING_SECONDS,
   type ChatCopyFormat,
@@ -56,7 +49,6 @@ import { createModelSelection } from "@cafecode/shared/model";
 import * as Duration from "effect/Duration";
 import * as Equal from "effect/Equal";
 import { APP_VERSION } from "../../branding";
-import { getBackgroundAutoNudgeController } from "../../backgroundAutoNudger";
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import { TraitsPicker } from "../chat/TraitsPicker";
 import { useTheme } from "../../hooks/useTheme";
@@ -179,20 +171,6 @@ function clampWorkflowStallWarningSeconds(value: number | null): number {
       MAX_WORKFLOW_STALL_WARNING_SECONDS,
       Math.max(MIN_WORKFLOW_STALL_WARNING_SECONDS, value),
     ),
-  );
-}
-
-function clampAutoNudgeMaxRounds(value: number | null): number {
-  if (value === null || !Number.isFinite(value)) return DEFAULT_AUTO_NUDGE_MAX_ROUNDS;
-  return Math.round(
-    Math.min(MAX_AUTO_NUDGE_MAX_ROUNDS, Math.max(MIN_AUTO_NUDGE_MAX_ROUNDS, value)),
-  );
-}
-
-function clampAutoNudgeMaxMinutes(value: number | null): number {
-  if (value === null || !Number.isFinite(value)) return DEFAULT_AUTO_NUDGE_MAX_MINUTES;
-  return Math.round(
-    Math.min(MAX_AUTO_NUDGE_MAX_MINUTES, Math.max(MIN_AUTO_NUDGE_MAX_MINUTES, value)),
   );
 }
 
@@ -1106,110 +1084,6 @@ export function AppearanceSettingsPanel() {
               }
               aria-label="Keep animations running in background"
             />
-          }
-        />
-
-        <SettingsRow
-          title="Auto Nudge background continuation"
-          description="Allow one explicitly selected chat to continue after you navigate away. Default off; the owned chat still stops on manual activity, queued work, provider trouble, or its hard caps."
-          resetAction={
-            settings.autoNudgeBackgroundContinuation !==
-            DEFAULT_UNIFIED_SETTINGS.autoNudgeBackgroundContinuation ? (
-              <SettingResetButton
-                label="Auto Nudge background continuation"
-                onClick={() =>
-                  updateSettings({
-                    autoNudgeBackgroundContinuation: DEFAULT_AUTO_NUDGE_BACKGROUND_CONTINUATION,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <Switch
-              checked={settings.autoNudgeBackgroundContinuation}
-              onCheckedChange={(checked) => {
-                const enabled = Boolean(checked);
-                if (!enabled) {
-                  getBackgroundAutoNudgeController().stop(
-                    "Background continuation was disabled in settings.",
-                  );
-                }
-                updateSettings({ autoNudgeBackgroundContinuation: enabled });
-              }}
-              aria-label="Allow Auto Nudge background continuation"
-            />
-          }
-        />
-
-        <SettingsRow
-          title="Auto Nudge round cap"
-          description="Maximum automated prompts in one explicitly started background run."
-          resetAction={
-            settings.autoNudgeMaxRounds !== DEFAULT_UNIFIED_SETTINGS.autoNudgeMaxRounds ? (
-              <SettingResetButton
-                label="Auto Nudge round cap"
-                onClick={() =>
-                  updateSettings({ autoNudgeMaxRounds: DEFAULT_AUTO_NUDGE_MAX_ROUNDS })
-                }
-              />
-            ) : null
-          }
-          control={
-            <NumberField
-              value={settings.autoNudgeMaxRounds}
-              min={MIN_AUTO_NUDGE_MAX_ROUNDS}
-              max={MAX_AUTO_NUDGE_MAX_ROUNDS}
-              step={1}
-              size="sm"
-              className="w-28"
-              onValueChange={(value) =>
-                updateSettings({ autoNudgeMaxRounds: clampAutoNudgeMaxRounds(value) })
-              }
-            >
-              <NumberFieldGroup>
-                <NumberFieldDecrement aria-label="Decrease Auto Nudge round cap" />
-                <NumberFieldInput aria-label="Auto Nudge maximum rounds" />
-                <NumberFieldIncrement aria-label="Increase Auto Nudge round cap" />
-              </NumberFieldGroup>
-            </NumberField>
-          }
-        />
-
-        <SettingsRow
-          title="Auto Nudge time cap"
-          description="Maximum elapsed time for one background run, including provider work."
-          resetAction={
-            settings.autoNudgeMaxMinutes !== DEFAULT_UNIFIED_SETTINGS.autoNudgeMaxMinutes ? (
-              <SettingResetButton
-                label="Auto Nudge time cap"
-                onClick={() =>
-                  updateSettings({ autoNudgeMaxMinutes: DEFAULT_AUTO_NUDGE_MAX_MINUTES })
-                }
-              />
-            ) : null
-          }
-          control={
-            <div className="flex items-center gap-2">
-              <NumberField
-                value={settings.autoNudgeMaxMinutes}
-                min={MIN_AUTO_NUDGE_MAX_MINUTES}
-                max={MAX_AUTO_NUDGE_MAX_MINUTES}
-                step={5}
-                size="sm"
-                className="w-28"
-                onValueChange={(value) =>
-                  updateSettings({ autoNudgeMaxMinutes: clampAutoNudgeMaxMinutes(value) })
-                }
-              >
-                <NumberFieldGroup>
-                  <NumberFieldDecrement aria-label="Decrease Auto Nudge time cap" />
-                  <NumberFieldInput aria-label="Auto Nudge maximum minutes" />
-                  <NumberFieldIncrement aria-label="Increase Auto Nudge time cap" />
-                </NumberFieldGroup>
-              </NumberField>
-              <span className="text-xs text-muted-foreground">minutes</span>
-            </div>
           }
         />
 

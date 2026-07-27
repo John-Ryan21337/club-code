@@ -648,9 +648,9 @@ export const ClientSettingsSchema = Schema.Struct({
   modelPacingReservePercent: ModelPacingReservePercent.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_MODEL_PACING_RESERVE_PERCENT)),
   ),
-  // Durable, device-wide policy. Background continuation is a separate,
-  // default-off permission and always has one explicit thread owner plus hard
-  // round/time caps in the renderer coordinator.
+  // Legacy device-wide defaults retained for decode compatibility and the
+  // one-time migration into the renderer's exact-thread policy registry.
+  // New Auto Nudge writes are thread-scoped; these fields are not authoritative.
   autoNudgeMode: AutoNudgeMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_AUTO_NUDGE_MODE)),
   ),

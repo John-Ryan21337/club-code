@@ -74,6 +74,41 @@ describe("auto nudger safety gates", () => {
     expect(afterReload.has(eligible.terminalTurnKey)).toBe(true);
   });
 
+  it("reloads a durable claim made by another renderer before dispatch", () => {
+    const storageValues = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => storageValues.get(key) ?? null,
+      setItem: (key: string, value: string) => storageValues.set(key, value),
+      removeItem: (key: string) => storageValues.delete(key),
+    };
+    const firstWindow = createAutoNudgeTurnLedger(storage);
+    const secondWindow = createAutoNudgeTurnLedger(storage);
+
+    firstWindow.mark(eligible.terminalTurnKey);
+    expect(secondWindow.has(eligible.terminalTurnKey)).toBe(false);
+    secondWindow.reloadFromStorage();
+
+    expect(secondWindow.has(eligible.terminalTurnKey)).toBe(true);
+  });
+
+  it("merges stale renderer claims instead of overwriting another thread's ledger", () => {
+    const storageValues = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => storageValues.get(key) ?? null,
+      setItem: (key: string, value: string) => storageValues.set(key, value),
+      removeItem: (key: string) => storageValues.delete(key),
+    };
+    const firstWindow = createAutoNudgeTurnLedger(storage);
+    const secondWindow = createAutoNudgeTurnLedger(storage);
+
+    firstWindow.mark("environment:thread-a:turn-1");
+    secondWindow.mark("environment:thread-b:turn-1");
+    firstWindow.reloadFromStorage();
+
+    expect(firstWindow.has("environment:thread-a:turn-1")).toBe(true);
+    expect(firstWindow.has("environment:thread-b:turn-1")).toBe(true);
+  });
+
   it("fails closed before parsing an oversized persisted ledger", () => {
     const storage = {
       getItem: () => `["${eligible.terminalTurnKey}"]${" ".repeat(200_000)}`,

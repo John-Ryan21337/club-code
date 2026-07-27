@@ -21,6 +21,12 @@ function storageFixture() {
 
 const owner = { environmentId: "local", threadId: "thread-a" };
 const startedAt = Date.parse("2026-07-24T00:00:00.000Z");
+const backgroundPolicy = {
+  mode: "steady-progress" as const,
+  backgroundContinuation: true,
+  maxRounds: 5,
+  maxMinutes: 30,
+};
 type ExistingThread = Extract<BackgroundAutoNudgeObservation["thread"], { readonly exists: true }>;
 
 function existingThread(overrides: Partial<ExistingThread> = {}): ExistingThread {
@@ -43,12 +49,6 @@ function observation(
 ): BackgroundAutoNudgeObservation {
   return {
     nowMs,
-    settings: {
-      mode: "steady-progress",
-      enabled: true,
-      maxRounds: 5,
-      maxMinutes: 30,
-    },
     thread: existingThread(),
     alreadyConsumed: () => false,
     newMessageId: () => "message-auto-1",
@@ -60,7 +60,7 @@ describe("background auto nudge controller", () => {
   it("arms one owned thread, waits for the delay, and records an attributable send", () => {
     const { storage } = storageFixture();
     const controller = new BackgroundAutoNudgeController(storage);
-    controller.start(owner, "2026-07-23T23:59:00.000Z", startedAt);
+    controller.start(owner, "2026-07-23T23:59:00.000Z", backgroundPolicy, startedAt);
 
     expect(controller.observe(observation(startedAt))).toBeNull();
     const dueAt = Date.parse(controller.getSnapshot().scheduled?.dueAt ?? "");
@@ -75,6 +75,7 @@ describe("background auto nudge controller", () => {
     });
     expect(controller.getSnapshot().ledger.at(-1)).toMatchObject({
       kind: "sent",
+      owner,
       messageId: "message-auto-1",
       terminalTurnKey: "local:thread-a:turn-1",
     });
@@ -83,7 +84,7 @@ describe("background auto nudge controller", () => {
   it("rehydrates without dispatching the same consumed terminal turn after reload", () => {
     const { storage, values } = storageFixture();
     const beforeReload = new BackgroundAutoNudgeController(storage);
-    beforeReload.start(owner, "2026-07-23T23:59:00.000Z", startedAt);
+    beforeReload.start(owner, "2026-07-23T23:59:00.000Z", backgroundPolicy, startedAt);
     beforeReload.observe(observation(startedAt));
     const dueAt = Date.parse(beforeReload.getSnapshot().scheduled?.dueAt ?? "");
     expect(beforeReload.observe(observation(dueAt))).not.toBeNull();
@@ -126,7 +127,7 @@ describe("background auto nudge controller", () => {
   it("makes a second shared-storage controller re-read the durable claim before dispatch", () => {
     const { storage } = storageFixture();
     const firstWindow = new BackgroundAutoNudgeController(storage);
-    firstWindow.start(owner, "2026-07-23T23:59:00.000Z", startedAt);
+    firstWindow.start(owner, "2026-07-23T23:59:00.000Z", backgroundPolicy, startedAt);
     const secondWindow = new BackgroundAutoNudgeController(storage);
     firstWindow.observe(observation(startedAt));
     const dueAt = Date.parse(firstWindow.getSnapshot().scheduled?.dueAt ?? "");
@@ -164,7 +165,7 @@ describe("background auto nudge controller", () => {
       ],
     ] as const) {
       const controller = new BackgroundAutoNudgeController(null);
-      controller.start(owner, "2026-07-23T23:59:00.000Z", startedAt);
+      controller.start(owner, "2026-07-23T23:59:00.000Z", backgroundPolicy, startedAt);
       expect(controller.observe(observation(startedAt, { thread }))).toBeNull();
       expect(controller.getSnapshot()).toMatchObject({ status: "paused", reason: label });
     }
@@ -172,41 +173,22 @@ describe("background auto nudge controller", () => {
 
   it("stops for a missing thread and exhausts conservative round and time caps", () => {
     const missing = new BackgroundAutoNudgeController(null);
-    missing.start(owner, null, startedAt);
+    missing.start(owner, null, backgroundPolicy, startedAt);
     missing.observe(observation(startedAt, { thread: { exists: false } }));
     expect(missing.getSnapshot()).toMatchObject({ status: "stopped", owner: null });
 
     const rounds = new BackgroundAutoNudgeController(null);
-    rounds.start(owner, "2026-07-23T23:59:00.000Z", startedAt);
-    rounds.observe(
-      observation(startedAt, {
-        settings: {
-          mode: "steady-progress",
-          enabled: true,
-          maxRounds: 1,
-          maxMinutes: 30,
-        },
-      }),
+    rounds.start(
+      owner,
+      "2026-07-23T23:59:00.000Z",
+      { ...backgroundPolicy, maxRounds: 1 },
+      startedAt,
     );
+    rounds.observe(observation(startedAt));
     const dueAt = Date.parse(rounds.getSnapshot().scheduled?.dueAt ?? "");
-    rounds.observe(
-      observation(dueAt, {
-        settings: {
-          mode: "steady-progress",
-          enabled: true,
-          maxRounds: 1,
-          maxMinutes: 30,
-        },
-      }),
-    );
+    rounds.observe(observation(dueAt));
     rounds.observe(
       observation(dueAt + 1, {
-        settings: {
-          mode: "steady-progress",
-          enabled: true,
-          maxRounds: 1,
-          maxMinutes: 30,
-        },
         thread: existingThread({
           terminalTurnKey: "local:thread-a:turn-2",
           latestUserMessageAt: new Date(dueAt).toISOString(),
@@ -216,29 +198,20 @@ describe("background auto nudge controller", () => {
     expect(rounds.getSnapshot()).toMatchObject({ status: "exhausted", sentRounds: 1 });
 
     const time = new BackgroundAutoNudgeController(null);
-    time.start(owner, null, startedAt);
-    time.observe(
-      observation(startedAt + 5 * 60_000, {
-        settings: {
-          mode: "steady-progress",
-          enabled: true,
-          maxRounds: 5,
-          maxMinutes: 5,
-        },
-      }),
-    );
+    time.start(owner, null, { ...backgroundPolicy, maxMinutes: 5 }, startedAt);
+    time.observe(observation(startedAt + 5 * 60_000));
     expect(time.getSnapshot()).toMatchObject({ status: "exhausted" });
   });
 
   it("invalidates a scheduled dispatch when stopped, paused, or the observed turn changes", () => {
     const controller = new BackgroundAutoNudgeController(null);
-    controller.start(owner, "2026-07-23T23:59:00.000Z", startedAt);
+    controller.start(owner, "2026-07-23T23:59:00.000Z", backgroundPolicy, startedAt);
     controller.observe(observation(startedAt));
     const firstDueAt = Date.parse(controller.getSnapshot().scheduled?.dueAt ?? "");
-    controller.pause("Paused by operator.", startedAt + 1);
+    controller.pause(owner, "Paused by operator.", startedAt + 1);
     expect(controller.observe(observation(firstDueAt))).toBeNull();
 
-    controller.resume(firstDueAt + 1);
+    controller.resume(owner, firstDueAt + 1);
     controller.observe(
       observation(firstDueAt + 1, {
         thread: existingThread({
@@ -247,13 +220,13 @@ describe("background auto nudge controller", () => {
       }),
     );
     expect(controller.getSnapshot().scheduled?.terminalTurnKey).toBe("local:thread-a:turn-2");
-    controller.stop("Stopped by operator.", firstDueAt + 2);
+    controller.stop(owner, "Stopped by operator.", firstDueAt + 2);
     expect(controller.observe(observation(firstDueAt + 10_000))).toBeNull();
   });
 
   it("pauses when a consumed send never projects its automated user row", () => {
     const controller = new BackgroundAutoNudgeController(null);
-    controller.start(owner, "2026-07-23T23:59:00.000Z", startedAt);
+    controller.start(owner, "2026-07-23T23:59:00.000Z", backgroundPolicy, startedAt);
     controller.observe(observation(startedAt));
     const dueAt = Date.parse(controller.getSnapshot().scheduled?.dueAt ?? "");
     expect(controller.observe(observation(dueAt))).not.toBeNull();
@@ -272,7 +245,7 @@ describe("background auto nudge controller", () => {
 
   it("fails closed when the expected projection arrives after its ACK deadline", () => {
     const controller = new BackgroundAutoNudgeController(null);
-    controller.start(owner, "2026-07-23T23:59:00.000Z", startedAt);
+    controller.start(owner, "2026-07-23T23:59:00.000Z", backgroundPolicy, startedAt);
     controller.observe(observation(startedAt));
     const dueAt = Date.parse(controller.getSnapshot().scheduled?.dueAt ?? "");
     controller.observe(observation(dueAt));
@@ -297,14 +270,14 @@ describe("background auto nudge controller", () => {
 
   it("retains sent terminal identities through bounded status-ledger churn", () => {
     const controller = new BackgroundAutoNudgeController(null);
-    controller.start(owner, "2026-07-23T23:59:00.000Z", startedAt);
+    controller.start(owner, "2026-07-23T23:59:00.000Z", backgroundPolicy, startedAt);
     controller.observe(observation(startedAt));
     const dueAt = Date.parse(controller.getSnapshot().scheduled?.dueAt ?? "");
     controller.observe(observation(dueAt));
 
     for (let index = 0; index < 50; index += 1) {
-      controller.pause(`operator pause ${index}`, dueAt + index + 1);
-      controller.resume(dueAt + index + 1);
+      controller.pause(owner, `operator pause ${index}`, dueAt + index + 1);
+      controller.resume(owner, dueAt + index + 1);
     }
 
     expect(controller.getSnapshot().ledger).toHaveLength(40);
@@ -319,12 +292,17 @@ describe("background auto nudge controller", () => {
 
   it("does not let a late transport rejection pause a replacement run", () => {
     const controller = new BackgroundAutoNudgeController(null);
-    controller.start(owner, "2026-07-23T23:59:00.000Z", startedAt);
+    controller.start(owner, "2026-07-23T23:59:00.000Z", backgroundPolicy, startedAt);
     controller.observe(observation(startedAt));
     const dueAt = Date.parse(controller.getSnapshot().scheduled?.dueAt ?? "");
     controller.observe(observation(dueAt));
-    controller.stop("operator stopped", dueAt + 1);
-    controller.start({ environmentId: "local", threadId: "thread-b" }, null, dueAt + 2);
+    controller.stop(owner, "operator stopped", dueAt + 1);
+    controller.start(
+      { environmentId: "local", threadId: "thread-b" },
+      null,
+      backgroundPolicy,
+      dueAt + 2,
+    );
 
     controller.markDispatchFailed("message-auto-1", "late rejection", dueAt + 3);
 
@@ -337,7 +315,7 @@ describe("background auto nudge controller", () => {
 
   it("pauses rather than extending a run when the system clock moves backwards", () => {
     const controller = new BackgroundAutoNudgeController(null);
-    controller.start(owner, null, startedAt);
+    controller.start(owner, null, backgroundPolicy, startedAt);
 
     controller.observe(observation(startedAt - 1));
 
@@ -350,7 +328,7 @@ describe("background auto nudge controller", () => {
   it("fails closed for a persisted scheduled date that cannot be a five-second delay", () => {
     const { storage, values } = storageFixture();
     const beforeReload = new BackgroundAutoNudgeController(storage);
-    beforeReload.start(owner, "2026-07-23T23:59:00.000Z", startedAt);
+    beforeReload.start(owner, "2026-07-23T23:59:00.000Z", backgroundPolicy, startedAt);
     beforeReload.observe(observation(startedAt));
     const persisted = JSON.parse(values.get(AUTO_NUDGE_BACKGROUND_STORAGE_KEY) ?? "{}") as {
       scheduled?: { dueAt: string };
@@ -366,5 +344,104 @@ describe("background auto nudge controller", () => {
       status: "paused",
       reason: "The scheduled nudge deadline is invalid or the system clock moved backwards.",
     });
+  });
+
+  it("captures the exact owner's mode and caps durably for the run", () => {
+    const { storage } = storageFixture();
+    const firstWindow = new BackgroundAutoNudgeController(storage);
+    firstWindow.start(
+      owner,
+      "2026-07-23T23:59:00.000Z",
+      {
+        mode: "hardcore-fanout",
+        backgroundContinuation: true,
+        maxRounds: 1,
+        maxMinutes: 5,
+      },
+      startedAt,
+    );
+
+    const afterReload = new BackgroundAutoNudgeController(storage);
+    expect(afterReload.getSnapshot().runPolicy).toEqual({
+      mode: "hardcore-fanout",
+      backgroundContinuation: true,
+      maxRounds: 1,
+      maxMinutes: 5,
+    });
+    afterReload.observe(observation(startedAt));
+    const dueAt = Date.parse(afterReload.getSnapshot().scheduled?.dueAt ?? "");
+    expect(afterReload.observe(observation(dueAt))).toMatchObject({
+      prompt: "Fan out and keep going",
+      round: 1,
+    });
+    afterReload.observe(
+      observation(dueAt + 1, {
+        thread: existingThread({
+          terminalTurnKey: "local:thread-a:turn-2",
+          latestUserMessageAt: new Date(dueAt).toISOString(),
+        }),
+      }),
+    );
+    expect(afterReload.getSnapshot().status).toBe("exhausted");
+  });
+
+  it("never lets another thread's disabled policy stop the active owner", () => {
+    const controller = new BackgroundAutoNudgeController(null);
+    controller.start(owner, null, backgroundPolicy, startedAt);
+
+    controller.synchronizePolicy(
+      { environmentId: "local", threadId: "thread-b" },
+      { ...backgroundPolicy, mode: "off", backgroundContinuation: false },
+      startedAt + 1,
+    );
+    expect(controller.getSnapshot()).toMatchObject({ owner, status: "active" });
+
+    controller.synchronizePolicy(
+      owner,
+      { ...backgroundPolicy, mode: "off", backgroundContinuation: false },
+      startedAt + 2,
+    );
+    expect(controller.getSnapshot()).toMatchObject({ owner: null, status: "stopped" });
+  });
+
+  it("does not dispatch or interrupt while the provider agent is in progress", () => {
+    const controller = new BackgroundAutoNudgeController(null);
+    controller.start(owner, "2026-07-23T23:59:00.000Z", backgroundPolicy, startedAt);
+    controller.observe(observation(startedAt));
+    const dueAt = Date.parse(controller.getSnapshot().scheduled?.dueAt ?? "");
+
+    expect(
+      controller.observe(
+        observation(dueAt, {
+          thread: existingThread({
+            isRunning: true,
+            sessionReady: false,
+            terminalTurnKey: null,
+          }),
+        }),
+      ),
+    ).toBeNull();
+    expect(controller.getSnapshot()).toMatchObject({
+      owner,
+      status: "active",
+      sentRounds: 0,
+      scheduled: null,
+    });
+  });
+
+  it("fails closed for a legacy active owner until that exact owner is migrated", () => {
+    const { storage, values } = storageFixture();
+    const beforeReload = new BackgroundAutoNudgeController(storage);
+    beforeReload.start(owner, null, backgroundPolicy, startedAt);
+    const persisted = JSON.parse(values.get(AUTO_NUDGE_BACKGROUND_STORAGE_KEY) ?? "{}") as {
+      runPolicy?: unknown;
+    };
+    delete persisted.runPolicy;
+    values.set(AUTO_NUDGE_BACKGROUND_STORAGE_KEY, JSON.stringify(persisted));
+
+    const afterReload = new BackgroundAutoNudgeController(storage);
+    expect(afterReload.getSnapshot()).toMatchObject({ owner, runPolicy: null, status: "active" });
+    expect(afterReload.observe(observation(startedAt))).toBeNull();
+    expect(afterReload.getSnapshot()).toMatchObject({ owner: null, status: "stopped" });
   });
 });
