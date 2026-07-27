@@ -485,7 +485,21 @@ function AmbianceCanvas() {
     };
   }, [surfaceComposer]);
 
-  const canvasStyle = useMemo(() => ({ contain: "strict" }) as const, []);
+  // Canvas is a replaced element, and `contain: strict` includes size
+  // containment. Chromium therefore cannot derive a used size from `inset: 0`
+  // alone and collapses the visible box to 0x0 even though the backing bitmap
+  // is populated. Keep containment for paint/layout isolation, but give the
+  // fixed canvas explicit viewport dimensions so its CSS and bitmap geometry
+  // describe the same surface.
+  const canvasStyle = useMemo(
+    () =>
+      ({
+        contain: "strict",
+        height: "100dvh",
+        width: "100vw",
+      }) as const,
+    [],
+  );
 
   return (
     <canvas
