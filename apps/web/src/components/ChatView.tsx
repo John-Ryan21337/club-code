@@ -109,7 +109,7 @@ import { cn } from "~/lib/utils";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { newCommandId, newDraftId, newMessageId, newThreadId } from "~/lib/utils";
 import { getProviderModelCapabilities, resolveSelectableProvider } from "../providerModels";
-import { useSettings, useUpdateSettings } from "../hooks/useSettings";
+import { useSettings } from "../hooks/useSettings";
 import { resolveAppModelSelectionForInstance } from "../modelSelection";
 import {
   deriveLogicalProjectKeyFromSettings,
@@ -233,19 +233,6 @@ const IMAGE_ONLY_BOOTSTRAP_PROMPT =
 const EMPTY_ACTIVITIES: OrchestrationThreadActivity[] = [];
 const EMPTY_PROPOSED_PLANS: Thread["proposedPlans"] = [];
 const EMPTY_BOOLEAN_RECORD: Readonly<Record<string, boolean>> = {};
-function providerAccountCanAcceptTurn(provider: ServerProvider | null): boolean {
-  const snapshot = provider?.accountRateLimits?.rateLimits;
-  if (!snapshot) return true;
-  if (snapshot.rateLimitReachedType || snapshot.spendControlReached) return false;
-  if (
-    (snapshot.primary?.usedPercent ?? 0) >= 100 ||
-    (snapshot.secondary?.usedPercent ?? 0) >= 100
-  ) {
-    return false;
-  }
-  const credits = snapshot.credits;
-  return credits === undefined || credits === null || credits.unlimited || credits.hasCredits;
-}
 const DEBUG_SNAPSHOT_VERSION = 11;
 const DEBUG_TEXT_PREVIEW_LIMIT = 120;
 const DEBUG_JSON_PREVIEW_LIMIT = 600;
@@ -1880,7 +1867,6 @@ export default function ChatView(props: ChatViewProps) {
     (store) => store.setThreadWorkflowNodeExpanded,
   );
   const settings = useSettings();
-  const { updateSettings: updateClientSettings } = useUpdateSettings();
   const setStickyComposerModelSelection = useComposerDraftStore(
     (store) => store.setStickyModelSelection,
   );
