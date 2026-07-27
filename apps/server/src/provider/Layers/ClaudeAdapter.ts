@@ -292,6 +292,15 @@ interface ToolInFlight {
   readonly input: Record<string, unknown>;
   readonly partialInputJson: string;
   readonly lastEmittedInputFingerprint?: string;
+  /**
+   * The delegating `Agent`/`Task` tool_use id when this call came from a
+   * sub-agent rather than the orchestrator. Agent SDK 0.3.216 forwards a
+   * sub-agent's `tool_use`/`tool_result` blocks into the parent stream by
+   * default with `parent_tool_use_id` set, so delegated work already reaches
+   * this adapter; carrying the id lets consumers attribute it instead of
+   * seeing it as the orchestrator's own activity.
+   */
+  readonly parentToolUseId?: string;
 }
 
 type RuntimeFork = <A, E>(effect: Effect.Effect<A, E, never>) => Fiber.Fiber<A, E>;
@@ -2925,6 +2934,15 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       const inputFingerprint =
         Object.keys(toolInput).length > 0 ? toolInputFingerprint(toolInput) : undefined;
 
+      // A non-empty `parent_tool_use_id` means this block belongs to a
+      // sub-agent's turn, not the orchestrator's. Treat only a non-empty
+      // string as attribution so a malformed value degrades to "unattributed"
+      // rather than inventing a delegating tool that does not exist.
+      const parentToolUseId =
+        typeof message.parent_tool_use_id === "string" && message.parent_tool_use_id.length > 0
+          ? message.parent_tool_use_id
+          : undefined;
+
       const tool: ToolInFlight = {
         itemId,
         itemType,
@@ -2934,6 +2952,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         input: toolInput,
         partialInputJson: "",
         ...(inputFingerprint ? { lastEmittedInputFingerprint: inputFingerprint } : {}),
+        ...(parentToolUseId ? { parentToolUseId } : {}),
       };
       context.inFlightTools.set(index, tool);
 
@@ -2954,6 +2973,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           data: {
             toolName: tool.toolName,
             input: toolInput,
+            ...(tool.parentToolUseId ? { parentToolUseId: tool.parentToolUseId } : {}),
           },
         },
         providerRefs: nativeProviderRefs(context, {
