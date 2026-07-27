@@ -1949,6 +1949,78 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect("does not mistake an MCP tool name containing agent for a delegation", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 8).pipe(
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "Look up the current browser user agent.",
+        attachments: [],
+      });
+
+      harness.query.emit({
+        type: "stream_event",
+        session_id: "sdk-session-mcp-agent-name",
+        uuid: "stream-mcp-agent-name",
+        parent_tool_use_id: null,
+        event: {
+          type: "content_block_start",
+          index: 0,
+          content_block: {
+            type: "mcp_tool_use",
+            id: "tool-mcp-agent-name",
+            name: "mcp__browser__user_agent_lookup",
+            input: {},
+          },
+        },
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
+        type: "assistant",
+        session_id: "sdk-session-mcp-agent-name",
+        uuid: "assistant-mcp-agent-name",
+        parent_tool_use_id: null,
+        message: {
+          id: "assistant-message-mcp-agent-name",
+          content: [{ type: "text", text: "Done" }],
+        },
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        errors: [],
+        session_id: "sdk-session-mcp-agent-name",
+        uuid: "result-mcp-agent-name",
+      } as unknown as SDKMessage);
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+      const toolStarted = runtimeEvents.find((event) => event.type === "item.started");
+      assert.equal(toolStarted?.type, "item.started");
+      if (toolStarted?.type === "item.started") {
+        assert.equal(toolStarted.payload.itemType, "mcp_tool_call");
+        assert.equal(toolStarted.payload.title, "MCP tool call");
+      }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("treats user-aborted Claude results as interrupted without a runtime error", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
