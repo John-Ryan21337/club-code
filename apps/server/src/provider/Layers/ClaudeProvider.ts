@@ -3,6 +3,7 @@ import {
   type ModelCapabilities,
   type ModelSelection,
   ProviderDriverKind,
+  type ServerProviderAuth,
   ServerProviderModel as ServerProviderModelSchema,
   type ServerProviderModel,
   type ServerProviderSlashCommand,
@@ -38,6 +39,7 @@ import {
   type ServerProviderDraft,
 } from "../providerSnapshot.ts";
 import { makeClaudeEnvironment } from "../Drivers/ClaudeHome.ts";
+import { parseClaudeAccountUsage } from "../claudeAccountUsage.ts";
 import claudeModelCatalog from "./ClaudeModelCatalog.json" with { type: "json" };
 
 const DEFAULT_CLAUDE_MODEL_CAPABILITIES: ModelCapabilities = createModelCapabilities({
@@ -322,6 +324,7 @@ function claudeAuthMetadata(input: {
 // ── SDK capability probe ────────────────────────────────────────────
 
 const CAPABILITIES_PROBE_TIMEOUT_MS = 8_000;
+const ACCOUNT_USAGE_PROBE_TIMEOUT_MS = 12_000;
 
 function nonEmptyProbeString(value: string): string | undefined {
   const candidate = value.trim();
@@ -467,6 +470,109 @@ const probeClaudeCapabilities = (
       }),
     ),
     Effect.timeoutOption(CAPABILITIES_PROBE_TIMEOUT_MS),
+    Effect.result,
+    Effect.map((result) => {
+      if (Result.isFailure(result)) return undefined;
+      return Option.isSome(result.success) ? result.success.value : undefined;
+    }),
+  );
+};
+
+/**
+ * Poll Claude's unstable structured `/usage` control method in a disposable,
+ * no-prompt SDK query. This subprocess is independent of every live provider
+ * turn: it never steers, interrupts, resumes, or shares a Query with a chat.
+ *
+ * The experimental response is decoded through a strict redaction boundary.
+ * Unsupported SDK/CLI pairs, timeouts, transport errors, and malformed shapes
+ * return `undefined`, allowing the managed provider to retain its last known
+ * good snapshot and expose staleness through `checkedAt`.
+ */
+type ClaudeUsageProbeQueryFactory = (input: Parameters<typeof claudeQuery>[0]) => {
+  readonly initializationResult: () => Promise<unknown>;
+  readonly usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: () => Promise<unknown>;
+};
+
+function normalizedAccountBinding(value: string | undefined): string | undefined {
+  const normalized = value?.trim().toLowerCase();
+  return normalized ? normalized : undefined;
+}
+
+function matchesExpectedClaudeAccount(
+  expectedAuth: ServerProviderAuth,
+  initialization: unknown,
+): boolean {
+  const init = initialization as
+    | {
+        readonly account?: {
+          readonly email?: string;
+          readonly subscriptionType?: string;
+          readonly tokenSource?: string;
+        };
+      }
+    | undefined;
+  const actualAuth = claudeAuthMetadata({
+    subscriptionType: init?.account?.subscriptionType,
+    authMethod: init?.account?.tokenSource,
+  });
+  const expectedEmail = normalizedAccountBinding(expectedAuth.email);
+  const actualEmail = normalizedAccountBinding(init?.account?.email);
+  const expectedType = normalizedAccountBinding(expectedAuth.type);
+  const actualType = normalizedAccountBinding(actualAuth?.type);
+
+  // A subscription plan is shared by many accounts and is not an identity.
+  // Require the same email on both probes, then use auth type as an additional
+  // check when available. This closes same-plan account-switch races.
+  if (!expectedEmail || !actualEmail || expectedEmail !== actualEmail) return false;
+  if (expectedType && expectedType !== actualType) return false;
+  return true;
+}
+
+const probeClaudeAccountUsage = (
+  claudeSettings: ClaudeSettings,
+  expectedAuth: ServerProviderAuth,
+  environment: NodeJS.ProcessEnv = process.env,
+  queryFactory: ClaudeUsageProbeQueryFactory = claudeQuery,
+) => {
+  const abort = new AbortController();
+  return Effect.gen(function* () {
+    const claudeEnvironment = yield* makeClaudeEnvironment(claudeSettings, environment);
+    const raw = yield* Effect.tryPromise(async () => {
+      const q = queryFactory({
+        // Never yield: initialization and the control request do not create a
+        // model turn or send user text to Anthropic.
+        // oxlint-disable-next-line require-yield
+        prompt: (async function* (): AsyncGenerator<SDKUserMessage> {
+          await waitForAbortSignal(abort.signal);
+        })(),
+        options: {
+          persistSession: false,
+          pathToClaudeCodeExecutable: claudeSettings.binaryPath,
+          abortController: abort,
+          // Usage needs only the resolved provider home/auth environment. Do
+          // not load project/local settings, hooks, plugins, or MCP config into
+          // this telemetry-only subprocess.
+          settingSources: [],
+          allowedTools: [],
+          env: claudeEnvironment,
+          stderr: () => {},
+        },
+      });
+      const initialization = await q.initializationResult();
+      if (!matchesExpectedClaudeAccount(expectedAuth, initialization)) {
+        return undefined;
+      }
+      return q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET();
+    });
+    const checkedAt = DateTime.formatIso(yield* DateTime.now);
+    return parseClaudeAccountUsage(raw, checkedAt);
+  }).pipe(
+    Effect.ensuring(
+      Effect.sync(() => {
+        if (!abort.signal.aborted) abort.abort();
+      }),
+    ),
+    Effect.timeoutOption(ACCOUNT_USAGE_PROBE_TIMEOUT_MS),
     Effect.result,
     Effect.map((result) => {
       if (Result.isFailure(result)) return undefined;
@@ -713,4 +819,4 @@ export const makePendingClaudeProvider = (
     });
   });
 
-export { probeClaudeCapabilities };
+export { probeClaudeAccountUsage, probeClaudeCapabilities };

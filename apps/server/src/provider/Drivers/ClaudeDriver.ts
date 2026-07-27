@@ -23,6 +23,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { HttpClient } from "effect/unstable/http";
 import { ChildProcessSpawner } from "effect/unstable/process";
+import { compareSemverVersions, parseSemver } from "@cafecode/shared/semver";
 
 import { makeClaudeTextGeneration } from "../../textGeneration/ClaudeTextGeneration.ts";
 import { ServerConfig } from "../../config.ts";
@@ -31,6 +32,7 @@ import { makeClaudeAdapter } from "../Layers/ClaudeAdapter.ts";
 import {
   checkClaudeProviderStatus,
   makePendingClaudeProvider,
+  probeClaudeAccountUsage,
   probeClaudeCapabilities,
 } from "../Layers/ClaudeProvider.ts";
 import { installBundledAuditAndRepairSkill } from "../BundledAuditAndRepairSkill.ts";
@@ -60,6 +62,25 @@ const decodeClaudeSettings = Schema.decodeSync(ClaudeSettings);
 const DRIVER_KIND = ProviderDriverKind.make("claudeAgent");
 const SNAPSHOT_REFRESH_INTERVAL = Duration.minutes(5);
 const CAPABILITIES_PROBE_TTL = Duration.minutes(5);
+const CLAUDE_ACCOUNT_USAGE_MINIMUM_VERSION = "2.1.216";
+const CLAUDE_SUBSCRIPTION_AUTH_TYPES = new Set(["pro", "max", "team", "enterprise"]);
+
+export function supportsClaudeAccountUsage(
+  snapshot: Pick<ServerProvider, "auth" | "version">,
+): boolean {
+  const authType = snapshot.auth.type?.trim().toLowerCase();
+  const accountEmail = snapshot.auth.email?.trim();
+  return (
+    snapshot.auth.status === "authenticated" &&
+    authType !== undefined &&
+    CLAUDE_SUBSCRIPTION_AUTH_TYPES.has(authType) &&
+    accountEmail !== undefined &&
+    accountEmail.length > 0 &&
+    snapshot.version !== null &&
+    parseSemver(snapshot.version) !== null &&
+    compareSemverVersions(snapshot.version, CLAUDE_ACCOUNT_USAGE_MINIMUM_VERSION) >= 0
+  );
+}
 
 function isClaudeNativeCommandPath(commandPath: string): boolean {
   const normalized = normalizeCommandPath(commandPath);
@@ -122,6 +143,7 @@ const withInstanceIdentity =
       // create/get/update/clear control plane. Keep it in the work log and do
       // not expose Codex goal controls for Claude instances.
       threadGoals: "unsupported",
+      accountUsage: supportsClaudeAccountUsage(snapshot) ? "experimental" : "unsupported",
     },
   });
 
@@ -265,6 +287,15 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
         initialSnapshot: (settings) =>
           makePendingClaudeProvider(settings).pipe(Effect.map(stampIdentity)),
         checkProvider,
+        // Account usage is an independent disposable no-prompt Query. It never
+        // shares lifecycle state with an active Claude turn, so sidebar polling
+        // cannot interrupt or pause agents.
+        refreshAccountUsage: ({ settings, snapshot }) =>
+          supportsClaudeAccountUsage(snapshot)
+            ? probeClaudeAccountUsage(settings, snapshot.auth, effectiveEnvironment).pipe(
+                Effect.provideService(Path.Path, path),
+              )
+            : Effect.succeed(undefined),
         enrichSnapshot: ({ snapshot, publishSnapshot }) =>
           enrichProviderSnapshotWithVersionAdvisory(snapshot, maintenanceCapabilities).pipe(
             Effect.provideService(HttpClient.HttpClient, httpClient),

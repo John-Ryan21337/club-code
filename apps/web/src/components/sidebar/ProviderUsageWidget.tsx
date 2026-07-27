@@ -2,6 +2,7 @@ import type {
   ServerProvider,
   ServerProviderAccountRateLimitSnapshot,
   ServerProviderAccountRateLimitWindow,
+  ServerProviderPaidUsage,
 } from "@cafecode/contracts";
 import { GaugeIcon, RefreshCwIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -25,6 +26,7 @@ interface UsageWindowRow {
   readonly resetsAt: number | null;
   readonly window: ServerProviderAccountRateLimitWindow;
   readonly identity: ModelPacingLimitIdentity;
+  readonly stale: boolean;
 }
 
 interface UsageExhaustionNotice {
@@ -33,15 +35,31 @@ interface UsageExhaustionNotice {
   readonly message: string;
 }
 
+type ProviderUsageState =
+  | "available"
+  | "unsupported"
+  | "disabled"
+  | "unavailable"
+  | "unauthenticated"
+  | "auth-unknown"
+  | "no-data";
+
 interface ProviderUsageRow {
   readonly instanceId: ServerProvider["instanceId"];
   readonly name: string;
-  readonly checkedAt: string;
+  readonly driver: ServerProvider["driver"];
+  readonly state: ProviderUsageState;
+  readonly stateMessage: string | null;
+  readonly checkedAt: string | null;
+  readonly stale: boolean;
   readonly windows: ReadonlyArray<UsageWindowRow>;
   readonly exhaustionNotices: ReadonlyArray<UsageExhaustionNotice>;
+  readonly paidUsage: ServerProviderPaidUsage | null;
+  readonly paidUsageStale: boolean;
 }
 
 const clampPercent = (value: number): number => Math.max(0, Math.min(100, value));
+const MIN_STALE_AFTER_MS = 10 * 60_000;
 
 function durationLabel(minutes: number | null | undefined): string | null {
   if (typeof minutes !== "number" || !Number.isFinite(minutes) || minutes <= 0) {
@@ -96,6 +114,7 @@ function windowRow(
     resetsAt,
     window,
     identity,
+    stale: false,
   };
 }
 
@@ -154,46 +173,175 @@ function snapshotExhaustionNotices(
   return notices;
 }
 
+function providerUsageName(provider: ServerProvider): string {
+  if (provider.displayName) return provider.displayName;
+  if (provider.driver === "codex") return "Codex";
+  if (provider.driver === "claudeAgent") return "Claude";
+  if (provider.driver === "opencode") return "OpenCode";
+  return provider.driver;
+}
+
+function providerAccountUsageSupport(
+  provider: ServerProvider,
+): "supported" | "experimental" | "unsupported" {
+  const declared = provider.runtimeCapabilities?.accountUsage;
+  if (declared) return declared;
+  // Legacy snapshots may contain genuine provider usage without the newer
+  // capability marker. Data wins over an absent declaration.
+  if (provider.accountRateLimits) {
+    return provider.driver === "claudeAgent" ? "experimental" : "supported";
+  }
+  return "unsupported";
+}
+
+export function canRefreshProviderUsage(provider: ServerProvider): boolean {
+  return (
+    providerAccountUsageSupport(provider) !== "unsupported" &&
+    provider.availability !== "unavailable" &&
+    provider.enabled &&
+    provider.installed &&
+    provider.auth.status === "authenticated"
+  );
+}
+
+function baseProviderUsageState(provider: ServerProvider): {
+  readonly state: ProviderUsageState;
+  readonly message: string | null;
+} {
+  if (provider.availability === "unavailable") {
+    return {
+      state: "unavailable",
+      message: "This configured provider driver is unavailable in the current build.",
+    };
+  }
+  if (!provider.enabled || provider.status === "disabled") {
+    return { state: "disabled", message: "Provider usage polling is disabled with this provider." };
+  }
+  if (!provider.installed) {
+    return {
+      state: "unavailable",
+      message: "The configured provider runtime is not currently available.",
+    };
+  }
+  if (provider.auth.status === "unauthenticated") {
+    return { state: "unauthenticated", message: "Sign in to read provider-reported usage." };
+  }
+  if (provider.auth.status === "unknown") {
+    return {
+      state: "auth-unknown",
+      message: "Authentication is unknown, so account usage is not being claimed.",
+    };
+  }
+  // A provider event or legacy snapshot can contain genuine usage even when
+  // the current runtime cannot poll. Display those dated facts, but keep
+  // `canRefreshProviderUsage` capability-gated.
+  if (provider.accountRateLimits) {
+    return { state: "available", message: null };
+  }
+  if (providerAccountUsageSupport(provider) === "unsupported") {
+    return {
+      state: "unsupported",
+      message: "This provider does not expose account usage to Club Code.",
+    };
+  }
+  return {
+    state: "no-data",
+    message: "No provider-reported account usage has been received yet.",
+  };
+}
+
 export function buildProviderUsageRows(
   providers: ReadonlyArray<ServerProvider>,
+  options: {
+    readonly nowMs?: number;
+    readonly pollMinutes?: number;
+  } = {},
 ): ReadonlyArray<ProviderUsageRow> {
-  return providers.flatMap((provider) => {
-    if (
-      (provider.driver !== "codex" && provider.driver !== "claudeAgent") ||
-      provider.auth.status !== "authenticated" ||
-      !provider.accountRateLimits
-    ) {
-      return [];
+  const nowMs = options.nowMs ?? Date.now();
+  const staleAfterMs = Math.max(MIN_STALE_AFTER_MS, (options.pollMinutes ?? 2) * 2 * 60_000);
+
+  return providers.map((provider) => {
+    const baseState = baseProviderUsageState(provider);
+    const accountRateLimits = provider.accountRateLimits;
+    if (!accountRateLimits) {
+      return {
+        instanceId: provider.instanceId,
+        name: providerUsageName(provider),
+        driver: provider.driver,
+        state: baseState.state,
+        stateMessage: baseState.message,
+        checkedAt: null,
+        stale: false,
+        windows: [],
+        exhaustionNotices: [],
+        paidUsage: null,
+        paidUsageStale: false,
+      };
     }
-    const byLimitId = provider.accountRateLimits.rateLimitsByLimitId;
+
+    const byLimitId = accountRateLimits.rateLimitsByLimitId;
     const snapshots =
       byLimitId && Object.keys(byLimitId).length > 0
         ? Object.entries(byLimitId)
-        : [["default", provider.accountRateLimits.rateLimits] as const];
-    const windows = snapshots.flatMap(([key, snapshot]) =>
+        : [["default", accountRateLimits.rateLimits] as const];
+    const windows: UsageWindowRow[] = [];
+    for (const row of snapshots.flatMap(([key, snapshot]) =>
       snapshotWindows(key, snapshot, provider),
-    );
+    )) {
+      const windowCheckedAtMs = Date.parse(row.window.checkedAt ?? accountRateLimits.checkedAt);
+      windows.push({
+        ...row,
+        stale: !Number.isFinite(windowCheckedAtMs) || nowMs - windowCheckedAtMs > staleAfterMs,
+      });
+    }
     const exhaustionNotices = snapshots.flatMap(([key, snapshot]) =>
       snapshotExhaustionNotices(key, snapshot, provider),
     );
-    if (windows.length === 0 && exhaustionNotices.length === 0) {
-      return [];
-    }
-    return [
-      {
-        instanceId: provider.instanceId,
-        name: provider.displayName ?? (provider.driver === "codex" ? "Codex" : "Claude"),
-        checkedAt: provider.accountRateLimits.checkedAt,
-        windows,
-        exhaustionNotices,
-      },
-    ];
+    const paidUsage = accountRateLimits.paidUsage ?? null;
+    const hasReportedFacts =
+      windows.length > 0 || exhaustionNotices.length > 0 || paidUsage !== null;
+    const checkedAtMs = Date.parse(accountRateLimits.checkedAt);
+    const stale = !Number.isFinite(checkedAtMs) || nowMs - checkedAtMs > staleAfterMs;
+    const paidCheckedAtMs = paidUsage
+      ? Date.parse(paidUsage.checkedAt ?? accountRateLimits.checkedAt)
+      : Number.NaN;
+    const paidUsageStale =
+      paidUsage !== null &&
+      (!Number.isFinite(paidCheckedAtMs) || nowMs - paidCheckedAtMs > staleAfterMs);
+    const state =
+      baseState.state === "available" && !hasReportedFacts ? ("no-data" as const) : baseState.state;
+    const stateMessage =
+      state === "no-data"
+        ? "The provider reports no subscription limits for this authentication method."
+        : baseState.message;
+
+    return {
+      instanceId: provider.instanceId,
+      name: providerUsageName(provider),
+      driver: provider.driver,
+      state,
+      stateMessage,
+      checkedAt: accountRateLimits.checkedAt,
+      stale,
+      windows,
+      exhaustionNotices,
+      paidUsage,
+      paidUsageStale,
+    };
   });
 }
 
 function formatPercent(value: number): string {
   const rounded = Math.round(value * 10) / 10;
   return `${Number.isInteger(rounded) ? rounded : rounded.toFixed(1)}%`;
+}
+
+function formatPaidValue(value: string, currency: string | null | undefined): string {
+  return currency ? `${currency} ${value}` : value;
+}
+
+function paidUsageLabel(driver: ServerProvider["driver"]): string {
+  return driver === "claudeAgent" ? "Extra usage" : "Paid usage";
 }
 
 function contextualRecommendation(
@@ -225,11 +373,7 @@ export function ProviderUsageWidget() {
   const currentRefreshableInstanceIds = useMemo(
     () =>
       providers
-        .filter(
-          (provider) =>
-            (provider.driver === "codex" || provider.driver === "claudeAgent") &&
-            provider.auth.status === "authenticated",
-        )
+        .filter(canRefreshProviderUsage)
         .map((provider) => provider.instanceId)
         .toSorted(),
     [providers],
@@ -244,7 +388,14 @@ export function ProviderUsageWidget() {
             .map((instanceId) => instanceId as (typeof currentRefreshableInstanceIds)[number]),
     [refreshableKey],
   );
-  const rows = useMemo(() => buildProviderUsageRows(providers), [providers]);
+  const rows = useMemo(
+    () =>
+      buildProviderUsageRows(providers, {
+        nowMs,
+        pollMinutes: settings.providerUsagePollMinutes,
+      }),
+    [nowMs, providers, settings.providerUsagePollMinutes],
+  );
 
   const refresh = useCallback(async () => {
     if (
@@ -272,6 +423,7 @@ export function ProviderUsageWidget() {
         }
       }
       setRefreshFailed(failed);
+      setNowMs(Date.now());
     } catch {
       // The primary environment can disappear between the visibility check
       // and the RPC lookup. Polling is optional UI telemetry; contain that
@@ -306,7 +458,7 @@ export function ProviderUsageWidget() {
   }, [refresh, settings.providerUsagePollMinutes, settings.providerUsageWidgetEnabled]);
 
   useEffect(() => {
-    if (!settings.modelPacingEnabled) {
+    if (!settings.providerUsageWidgetEnabled) {
       return;
     }
     let intervalId: number | undefined;
@@ -335,7 +487,7 @@ export function ProviderUsageWidget() {
       stopClock();
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
-  }, [settings.modelPacingEnabled]);
+  }, [settings.providerUsageWidgetEnabled]);
 
   if (!settings.providerUsageWidgetEnabled) {
     return null;
@@ -374,62 +526,111 @@ export function ProviderUsageWidget() {
 
       {rows.length > 0 ? (
         <div className="mt-2 space-y-3">
-          {rows.map((provider) => (
-            <div key={provider.instanceId}>
-              <div className="mb-1.5 flex items-center justify-between gap-2">
-                <span className="truncate text-[10px] font-medium text-sidebar-foreground/75">
-                  {provider.name}
-                </span>
-                <time
-                  className="shrink-0 text-[9px] tabular-nums text-sidebar-foreground/40"
-                  dateTime={provider.checkedAt}
-                  title={`Checked ${new Date(provider.checkedAt).toLocaleString()}`}
-                >
-                  checked{" "}
-                  {new Date(provider.checkedAt).toLocaleTimeString([], {
-                    hour: "numeric",
-                    minute: "2-digit",
-                  })}
-                </time>
-              </div>
-              <div className="space-y-2">
-                {provider.exhaustionNotices.map((notice) => (
-                  <div
-                    className="rounded border border-destructive/45 bg-destructive/10 px-1.5 py-1 text-[9px] font-medium leading-relaxed text-destructive"
-                    data-provider-usage-exhausted
-                    key={notice.key}
-                    role="alert"
-                  >
-                    {notice.label}: {notice.message}
+          {rows.map((provider) => {
+            const paidPercent =
+              provider.paidUsage &&
+              typeof provider.paidUsage.utilizationPercent === "number" &&
+              Number.isFinite(provider.paidUsage.utilizationPercent)
+                ? clampPercent(provider.paidUsage.utilizationPercent)
+                : null;
+            const paidReset = resetLabel(provider.paidUsage?.resetsAt ?? null);
+            return (
+              <div key={provider.instanceId}>
+                <div className="mb-1.5 flex items-center justify-between gap-2">
+                  <span className="truncate text-[10px] font-medium text-sidebar-foreground/75">
+                    {provider.name}
+                  </span>
+                  <div className="flex shrink-0 items-center gap-1 text-[9px]">
+                    {provider.stale ? (
+                      <span
+                        className="font-medium text-amber-600 dark:text-amber-400"
+                        data-provider-usage-stale
+                        role="status"
+                      >
+                        stale
+                      </span>
+                    ) : null}
+                    {provider.checkedAt ? (
+                      <time
+                        className="tabular-nums text-sidebar-foreground/40"
+                        dateTime={provider.checkedAt}
+                        title={`Checked ${new Date(provider.checkedAt).toLocaleString()}`}
+                      >
+                        checked{" "}
+                        {new Date(provider.checkedAt).toLocaleTimeString([], {
+                          hour: "numeric",
+                          minute: "2-digit",
+                        })}
+                      </time>
+                    ) : null}
                   </div>
-                ))}
-                {provider.windows.map((window) => {
-                  const reset = resetLabel(window.resetsAt);
-                  const pacing = settings.modelPacingEnabled
-                    ? calculateModelPacing({
-                        window: window.window,
-                        nowMs,
-                        reservePercent: settings.modelPacingReservePercent,
-                      })
-                    : null;
-                  return (
-                    <div key={window.key}>
-                      <div className="flex items-center justify-between gap-2 text-[9px]">
-                        <span className="min-w-0 truncate text-sidebar-foreground/55">
-                          {window.label}
-                        </span>
-                        <span className="shrink-0 font-medium tabular-nums text-sidebar-foreground/75">
-                          {window.usedPercent === null
-                            ? "usage unknown"
-                            : `${Math.round(window.usedPercent * 10) / 10}% used`}
-                        </span>
+                </div>
+                <div className="space-y-2">
+                  {provider.stateMessage ? (
+                    <div
+                      className="rounded border border-sidebar-border/60 bg-sidebar-accent/35 px-1.5 py-1 text-[9px] leading-relaxed text-sidebar-foreground/55"
+                      data-provider-usage-state={provider.state}
+                    >
+                      {provider.stateMessage}
+                    </div>
+                  ) : null}
+                  {provider.stale && provider.state === "available" ? (
+                    <div className="rounded border border-amber-500/35 bg-amber-500/10 px-1.5 py-1 text-[9px] leading-relaxed text-amber-700 dark:text-amber-300">
+                      Showing the last provider-reported values; recent refreshes have not produced
+                      newer data.
+                    </div>
+                  ) : null}
+                  {provider.state === "available" && provider.paidUsage ? (
+                    <div
+                      className="rounded border border-primary/25 bg-primary/5 px-1.5 py-1.5 text-[9px] leading-relaxed text-sidebar-foreground/65"
+                      data-provider-paid-usage
+                      data-provider-paid-usage-stale={provider.paidUsageStale || undefined}
+                    >
+                      <div className="flex items-center justify-between gap-2 font-medium text-sidebar-foreground/75">
+                        <span>{paidUsageLabel(provider.driver)}</span>
+                        <span className="capitalize">{provider.paidUsage.status}</span>
                       </div>
-                      {window.usedPercent !== null ? (
+                      {provider.paidUsage.balance ? (
+                        <div className="mt-0.5 flex justify-between gap-2 tabular-nums">
+                          <span>Current balance</span>
+                          <span className="truncate font-medium">
+                            {formatPaidValue(
+                              provider.paidUsage.balance,
+                              provider.paidUsage.currency,
+                            )}
+                          </span>
+                        </div>
+                      ) : provider.paidUsage.status === "enabled" ? (
+                        <div className="mt-0.5 text-sidebar-foreground/45">
+                          Current balance is not reported by this provider.
+                        </div>
+                      ) : null}
+                      {provider.paidUsage.used || provider.paidUsage.limit ? (
+                        <div className="mt-0.5 flex justify-between gap-2 tabular-nums">
+                          <span>Used / limit</span>
+                          <span className="truncate font-medium">
+                            {provider.paidUsage.used
+                              ? formatPaidValue(
+                                  provider.paidUsage.used,
+                                  provider.paidUsage.currency,
+                                )
+                              : "unknown"}{" "}
+                            /{" "}
+                            {provider.paidUsage.limit
+                              ? formatPaidValue(
+                                  provider.paidUsage.limit,
+                                  provider.paidUsage.currency,
+                                )
+                              : "unknown"}
+                          </span>
+                        </div>
+                      ) : null}
+                      {paidPercent !== null ? (
                         <div
-                          aria-label={`${provider.name} ${window.label}`}
+                          aria-label={`${provider.name} paid usage`}
                           aria-valuemax={100}
                           aria-valuemin={0}
-                          aria-valuenow={window.usedPercent}
+                          aria-valuenow={paidPercent}
                           className="mt-1 h-1 overflow-hidden rounded-full bg-sidebar-border/70"
                           role="meter"
                         >
@@ -437,63 +638,153 @@ export function ProviderUsageWidget() {
                             aria-hidden
                             className={cn(
                               "h-full rounded-full",
-                              window.usedPercent >= 90
+                              paidPercent >= 90
                                 ? "bg-destructive/80"
-                                : window.usedPercent >= 70
+                                : paidPercent >= 70
                                   ? "bg-amber-500/75"
                                   : "bg-primary/70",
                             )}
-                            style={{ width: `${window.usedPercent}%` }}
+                            style={{ width: `${paidPercent}%` }}
                           />
                         </div>
                       ) : null}
-                      {reset ? (
-                        <div className="mt-0.5 text-right text-[9px] tabular-nums text-sidebar-foreground/40">
-                          resets {reset}
+                      {typeof provider.paidUsage.remainingPercent === "number" &&
+                      Number.isFinite(provider.paidUsage.remainingPercent) ? (
+                        <div className="mt-0.5 text-right tabular-nums text-sidebar-foreground/45">
+                          {formatPercent(clampPercent(provider.paidUsage.remainingPercent))}{" "}
+                          remaining
                         </div>
                       ) : null}
-                      {pacing ? (
+                      {paidReset ? (
+                        <div className="text-right tabular-nums text-sidebar-foreground/40">
+                          resets {paidReset}
+                        </div>
+                      ) : null}
+                      {provider.paidUsageStale ? (
                         <div
-                          className={cn(
-                            "mt-1 rounded border px-1.5 py-1 text-[9px] leading-relaxed",
-                            pacing.status === "over-pace"
-                              ? "border-amber-500/35 bg-amber-500/10 text-amber-700 dark:text-amber-300"
-                              : pacing.status === "under-pace"
-                                ? "border-primary/30 bg-primary/10 text-sidebar-foreground/75"
-                                : "border-sidebar-border/60 bg-sidebar-accent/35 text-sidebar-foreground/60",
-                          )}
-                          data-model-pacing-status={pacing.status}
+                          className="mt-0.5 font-medium text-amber-700 dark:text-amber-300"
+                          role="status"
                         >
-                          <div className="flex flex-wrap justify-between gap-x-2 tabular-nums">
-                            <span>
-                              {pacing.remainingPercent === null
-                                ? "remaining unknown"
-                                : `${formatPercent(pacing.remainingPercent)} remaining`}
-                            </span>
-                            <span>{formatModelPacingDuration(pacing.timeToResetMs)}</span>
-                          </div>
-                          {pacing.targetUsedPercent !== null &&
-                          pacing.targetRemainingPercent !== null ? (
-                            <div className="text-sidebar-foreground/50 tabular-nums">
-                              Target now: {formatPercent(pacing.targetUsedPercent)} used /{" "}
-                              {formatPercent(pacing.targetRemainingPercent)} remaining
-                            </div>
-                          ) : null}
-                          <div className="font-medium">
-                            {contextualRecommendation(pacing, window.identity)}
-                          </div>
+                          Paid usage is stale; showing the last provider-reported values.
                         </div>
                       ) : null}
                     </div>
-                  );
-                })}
+                  ) : null}
+                  {provider.state === "available"
+                    ? provider.exhaustionNotices.map((notice) => (
+                        <div
+                          className="rounded border border-destructive/45 bg-destructive/10 px-1.5 py-1 text-[9px] font-medium leading-relaxed text-destructive"
+                          data-provider-usage-exhausted
+                          key={notice.key}
+                          role="alert"
+                        >
+                          {notice.label}: {notice.message}
+                        </div>
+                      ))
+                    : null}
+                  {provider.state === "available"
+                    ? provider.windows.map((window) => {
+                        const reset = resetLabel(window.resetsAt);
+                        const pacing =
+                          settings.modelPacingEnabled && !window.stale
+                            ? calculateModelPacing({
+                                window: window.window,
+                                nowMs,
+                                reservePercent: settings.modelPacingReservePercent,
+                              })
+                            : null;
+                        return (
+                          <div key={window.key}>
+                            <div className="flex items-center justify-between gap-2 text-[9px]">
+                              <span className="min-w-0 truncate text-sidebar-foreground/55">
+                                {window.label}
+                              </span>
+                              <span className="shrink-0 font-medium tabular-nums text-sidebar-foreground/75">
+                                {window.usedPercent === null
+                                  ? "usage unknown"
+                                  : `${Math.round(window.usedPercent * 10) / 10}% used`}
+                              </span>
+                            </div>
+                            {window.stale ? (
+                              <div
+                                className="mt-0.5 text-right font-medium text-amber-700 dark:text-amber-300"
+                                role="status"
+                              >
+                                stale provider value
+                              </div>
+                            ) : null}
+                            {window.usedPercent !== null ? (
+                              <div
+                                aria-label={`${provider.name} ${window.label}`}
+                                aria-valuemax={100}
+                                aria-valuemin={0}
+                                aria-valuenow={window.usedPercent}
+                                className="mt-1 h-1 overflow-hidden rounded-full bg-sidebar-border/70"
+                                role="meter"
+                              >
+                                <div
+                                  aria-hidden
+                                  className={cn(
+                                    "h-full rounded-full",
+                                    window.usedPercent >= 90
+                                      ? "bg-destructive/80"
+                                      : window.usedPercent >= 70
+                                        ? "bg-amber-500/75"
+                                        : "bg-primary/70",
+                                  )}
+                                  style={{ width: `${window.usedPercent}%` }}
+                                />
+                              </div>
+                            ) : null}
+                            {reset ? (
+                              <div className="mt-0.5 text-right text-[9px] tabular-nums text-sidebar-foreground/40">
+                                resets {reset}
+                              </div>
+                            ) : null}
+                            {pacing ? (
+                              <div
+                                className={cn(
+                                  "mt-1 rounded border px-1.5 py-1 text-[9px] leading-relaxed",
+                                  pacing.status === "over-pace"
+                                    ? "border-amber-500/35 bg-amber-500/10 text-amber-700 dark:text-amber-300"
+                                    : pacing.status === "under-pace"
+                                      ? "border-primary/30 bg-primary/10 text-sidebar-foreground/75"
+                                      : "border-sidebar-border/60 bg-sidebar-accent/35 text-sidebar-foreground/60",
+                                )}
+                                data-model-pacing-status={pacing.status}
+                              >
+                                <div className="flex flex-wrap justify-between gap-x-2 tabular-nums">
+                                  <span>
+                                    {pacing.remainingPercent === null
+                                      ? "remaining unknown"
+                                      : `${formatPercent(pacing.remainingPercent)} remaining`}
+                                  </span>
+                                  <span>{formatModelPacingDuration(pacing.timeToResetMs)}</span>
+                                </div>
+                                {pacing.targetUsedPercent !== null &&
+                                pacing.targetRemainingPercent !== null ? (
+                                  <div className="text-sidebar-foreground/50 tabular-nums">
+                                    Target now: {formatPercent(pacing.targetUsedPercent)} used /{" "}
+                                    {formatPercent(pacing.targetRemainingPercent)} remaining
+                                  </div>
+                                ) : null}
+                                <div className="font-medium">
+                                  {contextualRecommendation(pacing, window.identity)}
+                                </div>
+                              </div>
+                            ) : null}
+                          </div>
+                        );
+                      })
+                    : null}
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       ) : (
         <p className="mt-2 text-[10px] leading-relaxed text-sidebar-foreground/50">
-          Usage appears when an authenticated provider reports limits.
+          No provider instances are configured.
         </p>
       )}
       {refreshFailed ? (

@@ -1051,7 +1051,18 @@ const makeWsRpcLayer = (
             WS_METHODS.serverRefreshProviders,
             (input.instanceId !== undefined
               ? input.usageOnly === true
-                ? providerRegistry.refreshInstanceAccountUsage(input.instanceId)
+                ? clientSettings.getSettings.pipe(
+                    Effect.flatMap((settings) =>
+                      settings.providerUsageWidgetEnabled
+                        ? providerRegistry.refreshInstanceAccountUsage(
+                            input.instanceId as ProviderInstanceId,
+                          )
+                        : providerRegistry.getProviders,
+                    ),
+                    // Consent lookup is a fail-closed authorization boundary
+                    // for the experimental provider poll.
+                    Effect.catch(() => providerRegistry.getProviders),
+                  )
                 : providerRegistry.refreshInstance(input.instanceId)
               : providerRegistry.refresh()
             ).pipe(Effect.map((providers) => ({ providers }))),

@@ -453,4 +453,45 @@ describe("makeManagedServerProvider", () => {
       }),
     ),
   );
+
+  it.effect("cools down staggered usage polls per provider instance", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const releaseInitialCheck = yield* Deferred.make<void>();
+        const usageCalls = yield* Ref.make(0);
+        const provider = yield* makeManagedServerProvider<TestSettings>({
+          maintenanceCapabilities,
+          getSettings: Effect.succeed({ enabled: true }),
+          streamSettings: Stream.empty,
+          haveSettingsChanged: (previous, next) => previous.enabled !== next.enabled,
+          initialSnapshot: () => Effect.succeed(initialSnapshot),
+          checkProvider: Deferred.await(releaseInitialCheck).pipe(Effect.as(refreshedSnapshot)),
+          refreshAccountUsage: () =>
+            Ref.update(usageCalls, (count) => count + 1).pipe(
+              Effect.as(refreshedAccountRateLimits),
+            ),
+          refreshInterval: "1 hour",
+        });
+
+        const initialUpdate = yield* Stream.take(provider.streamChanges, 1).pipe(
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+        yield* Effect.yieldNow;
+        yield* Deferred.succeed(releaseInitialCheck, undefined);
+        yield* Fiber.join(initialUpdate);
+
+        const refreshAccountUsage = provider.refreshAccountUsage;
+        assert.isDefined(refreshAccountUsage);
+        if (!refreshAccountUsage) return;
+
+        const first = yield* refreshAccountUsage;
+        const second = yield* refreshAccountUsage;
+
+        assert.strictEqual(yield* Ref.get(usageCalls), 1);
+        assert.deepStrictEqual(first.accountRateLimits, refreshedAccountRateLimits);
+        assert.deepStrictEqual(second.accountRateLimits, refreshedAccountRateLimits);
+      }),
+    ),
+  );
 });
