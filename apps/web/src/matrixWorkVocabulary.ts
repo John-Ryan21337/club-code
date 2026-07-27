@@ -28,6 +28,22 @@ const PATH_KEYS = new Set([
   "old_path",
 ]);
 
+/**
+ * Item types that represent real tool work and may therefore contribute file
+ * basenames. Sub-agent work reaches the parent thread as these same ordinary
+ * item types, so this is what lets delegated activity name the rain. Item
+ * types carrying no file identity of their own (`web_search`, `image_view`,
+ * `context_compaction`) and unclassified provider output are deliberately
+ * absent.
+ */
+const FILE_BEARING_WORK_ITEM_TYPES = new Set([
+  "file_change",
+  "command_execution",
+  "mcp_tool_call",
+  "dynamic_tool_call",
+  "collab_agent_tool_call",
+]);
+
 const SENSITIVE_FILE_PATTERN =
   /(?:^|[._-])(?:auth|cookie|credential|private|password|passwd|secret|session|token)(?:[._-]|$)/iu;
 const SENSITIVE_EXTENSION_PATTERN = /\.(?:env|key|p12|pfx|pem)$/iu;
@@ -291,6 +307,8 @@ export function deriveMatrixWorkVocabulary(
     const requestType = typeof payload?.requestType === "string" ? payload.requestType : "";
     const fileChangeActivity = itemType === "file_change" || requestKind === "file-change";
     const fileReadActivity = requestKind === "file-read" || requestType === "file_read_approval";
+    const toolWorkActivity =
+      FILE_BEARING_WORK_ITEM_TYPES.has(itemType) || requestKind === "command";
     if (fileChangeActivity) {
       pushBounded(english, englishSeen, "WRITE");
       pushBounded(japanese, japaneseSeen, "書込");
@@ -322,7 +340,20 @@ export function deriveMatrixWorkVocabulary(
       classified = true;
     }
 
-    if (payload && (fileChangeActivity || fileReadActivity)) {
+    // Every agent working in the thread contributes file vocabulary, not just
+    // the orchestrator's own file-change/file-read activities. Codex aggregates
+    // a sub-agent's `item/*` notifications onto the initiating parent turn, so
+    // delegated work arrives here as an ordinary tool/command item. Gating this
+    // on file-change/file-read therefore discarded the majority of referenced
+    // files and left the rain narrow while sub-agents were busy.
+    //
+    // Only recognised tool-work item types participate. An unclassified item is
+    // provider output Cafe could not attribute to a known tool, so its paths
+    // stay out rather than letting arbitrary output name the rain. This also
+    // still reads only the structured PATH_KEYS allowlist through
+    // `safeFileName`, so free-form command, prompt, and output text remains
+    // uninspected and only redacted basenames can ever surface.
+    if (payload && (fileChangeActivity || fileReadActivity || toolWorkActivity)) {
       collectExplicitFileNames(payload.data, english, englishSeen);
       collectExplicitFileNames(payload.data, japanese, japaneseSeen);
     }

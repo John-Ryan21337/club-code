@@ -81,6 +81,53 @@ describe("Matrix live work vocabulary", () => {
     expect(vocabulary).toEqual({ english: [], japanese: [] });
   });
 
+  it("names files referenced by delegated sub-agent tool work, not just file changes", () => {
+    // Codex aggregates a sub-agent's `item/*` notifications onto the initiating
+    // parent turn, so delegated work reaches the thread as these ordinary tool
+    // item types. None of them is a file_change, yet each references a file the
+    // rain should be able to name.
+    const vocabulary = deriveMatrixWorkVocabulary([
+      activity("20", {
+        itemType: "dynamic_tool_call",
+        data: { item: { tool: "Read", input: { file_path: "M:/repo/apps/web/src/spread.ts" } } },
+      }),
+      activity("21", {
+        itemType: "mcp_tool_call",
+        data: { item: { input: { path: "crates/web/src/instrument_api.rs" } } },
+      }),
+      activity("22", {
+        itemType: "command_execution",
+        data: { item: { changes: [{ newPath: "packages/contracts/src/settings.ts" }] } },
+      }),
+    ]);
+
+    expect(vocabulary.english).toContain("spread.ts");
+    expect(vocabulary.english).toContain("instrument_api.rs");
+    expect(vocabulary.english).toContain("settings.ts");
+    expect(vocabulary.japanese).toContain("spread.ts");
+    // Only the basename is ever surfaced; directories must not leak.
+    for (const term of [...vocabulary.english, ...vocabulary.japanese]) {
+      expect(term).not.toContain("/");
+      expect(term).not.toContain("\\");
+    }
+  });
+
+  it("still refuses file names from item types that carry no tool-work identity", () => {
+    const vocabulary = deriveMatrixWorkVocabulary([
+      activity("23", {
+        itemType: "web_search",
+        data: { item: { input: { path: "should-not-appear.ts" } } },
+      }),
+      activity("24", {
+        itemType: "context_compaction",
+        data: { item: { input: { path: "also-not-here.ts" } } },
+      }),
+    ]);
+
+    expect(vocabulary.english).not.toContain("should-not-appear.ts");
+    expect(vocabulary.english).not.toContain("also-not-here.ts");
+  });
+
   it("describes reported query/error/agent state without claiming search, recovery, or delegation", () => {
     const vocabulary = deriveMatrixWorkVocabulary([
       activity("7", {
