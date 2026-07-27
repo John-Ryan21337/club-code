@@ -37,6 +37,15 @@ import { render } from "vitest-browser-react";
 import { useCommandPaletteStore } from "../commandPaletteStore";
 import { useComposerDraftStore, DraftId } from "../composerDraftStore";
 import { __resetEnvironmentApiOverridesForTests } from "../environmentApi";
+import { __resetAutoNudgeTurnLedgerForTests } from "../autoNudger";
+import {
+  __resetBackgroundAutoNudgeControllerForTests,
+  getBackgroundAutoNudgeController,
+} from "../backgroundAutoNudger";
+import {
+  __resetAutoNudgeThreadPolicyStoreForTests,
+  getAutoNudgeThreadPolicyStore,
+} from "../autoNudgeThreadPolicy";
 import { isMacPlatform } from "../lib/utils";
 import { resetSourceControlDiscoveryStateForTests } from "../lib/sourceControlDiscoveryState";
 import { __resetLocalApiForTests } from "../localApi";
@@ -50,11 +59,6 @@ import { createAuthenticatedSessionHandlers } from "../../test/authHttpHandlers"
 import { BrowserWsRpcHarness, type NormalizedWsRpcRequestBody } from "../../test/wsRpcHarness";
 
 import { DEFAULT_CLIENT_SETTINGS } from "@cafecode/contracts/settings";
-import { __resetAutoNudgeTurnLedgerForTests } from "../autoNudger";
-import {
-  __resetBackgroundAutoNudgeControllerForTests,
-  getBackgroundAutoNudgeController,
-} from "../backgroundAutoNudger";
 
 vi.mock("../lib/gitStatusState", () => ({
   useGitStatus: () => ({ data: null, error: null, cause: null, isPending: false }),
@@ -1784,8 +1788,9 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
     await setViewport(DEFAULT_VIEWPORT);
     localStorage.clear();
     sessionStorage.clear();
-    __resetAutoNudgeTurnLedgerForTests({ clearSessionStorage: true });
-    __resetBackgroundAutoNudgeControllerForTests({ clearStorage: true });
+    __resetAutoNudgeTurnLedgerForTests();
+    __resetBackgroundAutoNudgeControllerForTests();
+    __resetAutoNudgeThreadPolicyStoreForTests();
     document.body.innerHTML = "";
     wsRequests.length = 0;
     customWsRpcResolver = null;
@@ -3960,184 +3965,175 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
   }
 
   if (chatViewBrowserPart === "navigation") {
-    it("persists Auto Nudge globally across settings navigation, remount, and Stop", async () => {
-      let persistedMode = DEFAULT_CLIENT_SETTINGS.autoNudgeMode;
-      const resolveClientSettingsUpdate = (body: NormalizedWsRpcRequestBody) => {
-        if (body._tag !== WS_METHODS.serverUpdateClientSettings) return undefined;
-        const patch =
-          body.patch && typeof body.patch === "object"
-            ? (body.patch as { autoNudgeMode?: typeof persistedMode })
-            : {};
-        if (patch.autoNudgeMode) {
-          persistedMode = patch.autoNudgeMode;
-          fixture.serverConfig = {
-            ...fixture.serverConfig,
-            clientSettings: {
-              ...fixture.serverConfig.clientSettings,
-              autoNudgeMode: persistedMode,
-            },
-          };
-        }
-        return fixture.serverConfig.clientSettings;
+    it("keeps Auto Nudge enabled only for its exact background thread across navigation", async () => {
+      const secondThreadId = "thread-auto-nudge-disabled" as ThreadId;
+      let snapshot = addThreadToSnapshot(
+        createSnapshotForTargetUser({
+          targetMessageId: "msg-user-auto-nudge-owner" as MessageId,
+          targetText: "auto nudge owner",
+        }),
+        secondThreadId,
+      );
+      snapshot = {
+        ...snapshot,
+        threads: snapshot.threads.map((thread) =>
+          thread.id === secondThreadId
+            ? {
+                ...thread,
+                messages: [
+                  createUserMessage({
+                    id: "msg-user-auto-nudge-disabled" as MessageId,
+                    text: "disabled thread must stay disabled",
+                    offsetSeconds: 100,
+                  }),
+                  createAssistantMessage({
+                    id: "msg-assistant-auto-nudge-disabled" as MessageId,
+                    text: "settled",
+                    offsetSeconds: 101,
+                  }),
+                ],
+                latestTurn: {
+                  turnId: "turn-auto-nudge-disabled" as TurnId,
+                  state: "completed" as const,
+                  requestedAt: isoAt(98),
+                  startedAt: isoAt(99),
+                  completedAt: isoAt(102),
+                  assistantMessageId: "msg-assistant-auto-nudge-disabled" as MessageId,
+                },
+                updatedAt: isoAt(102),
+                session: thread.session
+                  ? { ...thread.session, status: "ready" as const, updatedAt: isoAt(102) }
+                  : null,
+              }
+            : thread,
+        ),
       };
-      const snapshot = createSnapshotForTargetUser({
-        targetMessageId: "msg-user-auto-nudge-persistence" as MessageId,
-        targetText: "auto nudge persistence",
-      });
-      let mounted: MountedChatView | null = await mountChatView({
+      const mounted = await mountChatView({
         viewport: DEFAULT_VIEWPORT,
         snapshot,
-        resolveRpc: resolveClientSettingsUpdate,
       });
 
       try {
-        const modeSelect = page.getByRole("combobox", { name: "Auto nudge mode" });
-        await expect.element(modeSelect).toHaveTextContent("Off");
-        await modeSelect.click();
-        await page.getByRole("option", { name: "Steady progress" }).click();
+        const modeSelect = await waitForElement(
+          () => document.querySelector<HTMLButtonElement>('button[aria-label="Auto nudge mode"]'),
+          "Unable to find Auto Nudge mode select.",
+        );
+        expect(modeSelect.textContent).toContain("Off");
+        modeSelect.click();
+        (await waitForSelectItemContainingText("Steady progress")).click();
 
+        const ownerRef = {
+          environmentId: String(LOCAL_ENVIRONMENT_ID),
+          threadId: String(THREAD_ID),
+        };
         await vi.waitFor(
           () => {
-            expect(
-              wsRequests.some(
-                (request) =>
-                  request._tag === WS_METHODS.serverUpdateClientSettings &&
-                  (request.patch as { autoNudgeMode?: string } | undefined)?.autoNudgeMode ===
-                    "steady-progress",
-              ),
-            ).toBe(true);
-            expect(persistedMode).toBe("steady-progress");
+            expect(getAutoNudgeThreadPolicyStore().getPolicy(ownerRef).mode).toBe(
+              "steady-progress",
+            );
           },
           { timeout: 8_000, interval: 16 },
         );
-        await expect.element(modeSelect).toHaveTextContent("Steady progress");
+        const backgroundSwitch = await waitForElement(
+          () =>
+            document.querySelector<HTMLElement>(
+              '[aria-label="Continue this thread in background"]',
+            ),
+          "Unable to find background continuation switch.",
+        );
+        backgroundSwitch.click();
+        await vi.waitFor(
+          () => {
+            expect(getAutoNudgeThreadPolicyStore().getPolicy(ownerRef)).toMatchObject({
+              mode: "steady-progress",
+              backgroundContinuation: true,
+            });
+            expect(getBackgroundAutoNudgeController().getSnapshot()).toMatchObject({
+              owner: ownerRef,
+              status: "active",
+            });
+          },
+          { timeout: 8_000, interval: 16 },
+        );
 
-        await mounted.router.navigate({ to: "/settings/general" });
+        await mounted.router.navigate({ to: "/settings/appearance" });
         await waitForURL(
           mounted.router,
-          (path) => path.startsWith("/settings"),
-          "Settings navigation should unmount the chat.",
+          (path) => path === "/settings/appearance",
+          "Settings navigation should complete.",
         );
-        expect(document.querySelector('[data-auto-nudge-control="true"]')).toBeNull();
-
         await mounted.router.navigate({
           to: "/$environmentId/$threadId",
           params: { environmentId: LOCAL_ENVIRONMENT_ID, threadId: THREAD_ID },
         });
-        await expect
-          .element(page.getByRole("combobox", { name: "Auto nudge mode" }))
-          .toHaveTextContent("Steady progress");
-
-        await mounted.cleanup();
-        mounted = await mountChatView({
-          viewport: DEFAULT_VIEWPORT,
-          snapshot,
-          configureFixture: (nextFixture) => {
-            nextFixture.serverConfig = {
-              ...nextFixture.serverConfig,
-              clientSettings: {
-                ...nextFixture.serverConfig.clientSettings,
-                autoNudgeMode: persistedMode,
-              },
-            };
-          },
-          resolveRpc: resolveClientSettingsUpdate,
-        });
-        await expect
-          .element(page.getByRole("combobox", { name: "Auto nudge mode" }))
-          .toHaveTextContent("Steady progress");
-
-        await page.getByRole("button", { name: "Stop", exact: true }).click();
+        await waitForURL(
+          mounted.router,
+          (path) => path === serverThreadPath(THREAD_ID),
+          "Owner thread should reopen after settings.",
+        );
         await vi.waitFor(
           () => {
-            expect(persistedMode).toBe("off");
-            expect(
-              wsRequests.some(
-                (request) =>
-                  request._tag === WS_METHODS.serverUpdateClientSettings &&
-                  (request.patch as { autoNudgeMode?: string } | undefined)?.autoNudgeMode ===
-                    "off",
-              ),
-            ).toBe(true);
+            const restoredMode = document.querySelector<HTMLButtonElement>(
+              'button[aria-label="Auto nudge mode"]',
+            );
+            const restoredSwitch = document.querySelector<HTMLElement>(
+              '[aria-label="Continue this thread in background"]',
+            );
+            const restoredRounds = document.querySelector<HTMLInputElement>(
+              '[aria-label="Auto Nudge maximum rounds for this thread"]',
+            );
+            const restoredMinutes = document.querySelector<HTMLInputElement>(
+              '[aria-label="Auto Nudge maximum minutes for this thread"]',
+            );
+            expect(restoredMode?.textContent).toContain("Steady progress");
+            expect(restoredSwitch?.getAttribute("aria-checked")).toBe("true");
+            expect(restoredRounds?.value).toBe("5");
+            expect(restoredMinutes?.value).toBe("30");
           },
           { timeout: 8_000, interval: 16 },
         );
-        await expect
-          .element(page.getByRole("combobox", { name: "Auto nudge mode" }))
-          .toHaveTextContent("Off");
-      } finally {
-        await mounted?.cleanup();
-      }
-    });
 
-    it("preserves one opted-in Auto Nudge owner after navigating away", async () => {
-      const baseSnapshot = createSnapshotForTargetUser({
-        targetMessageId: "msg-user-auto-nudge-background" as MessageId,
-        targetText: "background continuation",
-      });
-      const completedSnapshot: OrchestrationReadModel = {
-        ...baseSnapshot,
-        threads: baseSnapshot.threads.map((thread) => ({
-          ...thread,
-          latestTurn: {
-            turnId: "turn-auto-nudge-background" as TurnId,
-            state: "completed" as const,
-            requestedAt: isoAt(1_000),
-            startedAt: isoAt(1_001),
-            completedAt: isoAt(1_010),
-            assistantMessageId: null,
-          },
-          session: thread.session
-            ? {
-                ...thread.session,
-                status: "ready" as const,
-                activeTurnId: null,
-                updatedAt: isoAt(1_010),
-              }
-            : null,
-          updatedAt: isoAt(1_010),
-        })),
-      };
-      const resolveClientSettingsUpdate = (body: NormalizedWsRpcRequestBody) => {
-        if (body._tag !== WS_METHODS.serverUpdateClientSettings) return undefined;
-        fixture.serverConfig = {
-          ...fixture.serverConfig,
-          clientSettings: {
-            ...fixture.serverConfig.clientSettings,
-            ...(body.patch as Partial<typeof DEFAULT_CLIENT_SETTINGS>),
-          },
-        };
-        return fixture.serverConfig.clientSettings;
-      };
-      const mounted = await mountChatView({
-        viewport: DEFAULT_VIEWPORT,
-        snapshot: completedSnapshot,
-        resolveRpc: resolveClientSettingsUpdate,
-      });
-
-      try {
-        await page.getByRole("combobox", { name: "Auto nudge mode" }).click();
-        await page.getByRole("option", { name: "Steady progress" }).click();
-        await page.getByRole("switch", { name: "Continue this thread in background" }).click();
-        await expect.element(page.getByText(/Background active · 0\/5 rounds/)).toBeInTheDocument();
-
-        await mounted.router.navigate({ to: "/settings/general" });
+        await mounted.router.navigate({
+          to: "/$environmentId/$threadId",
+          params: { environmentId: LOCAL_ENVIRONMENT_ID, threadId: secondThreadId },
+        });
         await waitForURL(
           mounted.router,
-          (path) => path.startsWith("/settings"),
-          "Settings navigation should unmount the owned chat.",
+          (path) => path === serverThreadPath(secondThreadId),
+          "Disabled thread navigation should complete.",
+        );
+        await vi.waitFor(
+          () => {
+            const disabledMode = document.querySelector<HTMLButtonElement>(
+              'button[aria-label="Auto nudge mode"]',
+            );
+            const disabledSwitch = document.querySelector<HTMLElement>(
+              '[aria-label="Continue this thread in background"]',
+            );
+            expect(disabledMode?.textContent).toContain("Off");
+            expect(disabledSwitch?.getAttribute("aria-checked")).toBe("false");
+            expect(
+              getAutoNudgeThreadPolicyStore().getPolicy({
+                environmentId: String(LOCAL_ENVIRONMENT_ID),
+                threadId: String(secondThreadId),
+              }).mode,
+            ).toBe("off");
+            expect(
+              wsRequests.some(
+                (request) =>
+                  request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+                  request.type === "thread.turn.start" &&
+                  request.threadId === secondThreadId,
+              ),
+            ).toBe(false);
+          },
+          { timeout: 8_000, interval: 16 },
         );
 
-        expect(getBackgroundAutoNudgeController().getSnapshot()).toMatchObject({
-          owner: {
-            environmentId: String(LOCAL_ENVIRONMENT_ID),
-            threadId: String(THREAD_ID),
-          },
-          status: "active",
-          sentRounds: 0,
-        });
-        expect(document.querySelector('[data-auto-nudge-control="true"]')).toBeNull();
-        expect(mounted.router.state.location.pathname.startsWith("/settings")).toBe(true);
+        expect(getBackgroundAutoNudgeController().getSnapshot().owner).toEqual(ownerRef);
+        expect(getAutoNudgeThreadPolicyStore().getPolicy(ownerRef).backgroundContinuation).toBe(
+          true,
+        );
       } finally {
         await mounted.cleanup();
       }

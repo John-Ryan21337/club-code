@@ -1,9 +1,22 @@
 import type { AutoNudgeMode } from "~/autoNudger";
+import {
+  MAX_AUTO_NUDGE_MAX_MINUTES,
+  MAX_AUTO_NUDGE_MAX_ROUNDS,
+  MIN_AUTO_NUDGE_MAX_MINUTES,
+  MIN_AUTO_NUDGE_MAX_ROUNDS,
+} from "@cafecode/contracts";
 import type {
   BackgroundAutoNudgeLedgerEntry,
   BackgroundAutoNudgeStatus,
 } from "~/backgroundAutoNudger";
 import { Button } from "../ui/button";
+import {
+  NumberField,
+  NumberFieldDecrement,
+  NumberFieldGroup,
+  NumberFieldIncrement,
+  NumberFieldInput,
+} from "../ui/number-field";
 import { Select, SelectItem, SelectPopup, SelectTrigger } from "../ui/select";
 import { Switch } from "../ui/switch";
 
@@ -27,6 +40,8 @@ export function AutoNudgeControl(props: {
   backgroundReason: string | null;
   backgroundLedger: readonly BackgroundAutoNudgeLedgerEntry[];
   onModeChange: (mode: AutoNudgeMode) => void;
+  onMaxRoundsChange: (rounds: number) => void;
+  onMaxMinutesChange: (minutes: number) => void;
   onBackgroundChange: (enabled: boolean) => void;
   onPauseBackground: () => void;
   onResumeBackground: () => void;
@@ -35,9 +50,11 @@ export function AutoNudgeControl(props: {
   const isActive = props.mode !== "off";
   const status =
     props.countdownSeconds === null
-      ? isActive
-        ? "Armed for the next safely settled turn"
-        : "Off"
+      ? props.backgroundOwnedByThisThread
+        ? `Background ${props.backgroundStatus}`
+        : isActive
+          ? "Armed for the next safely settled turn"
+          : "Off"
       : `Next nudge in ${props.countdownSeconds}s`;
 
   return (
@@ -48,8 +65,8 @@ export function AutoNudgeControl(props: {
       <div className="min-w-0">
         <div className="font-medium text-foreground">Auto nudge - {status}</div>
         <p className="mt-0.5 text-muted-foreground">
-          Mode is saved device-wide. Background continuation is opt-in, owns one thread, and stops
-          at {props.backgroundMaxRounds} rounds or {props.backgroundMaxMinutes} minutes.
+          Mode is saved for this thread only. Background continuation is opt-in, owns one thread,
+          and stops at {props.backgroundMaxRounds} rounds or {props.backgroundMaxMinutes} minutes.
         </p>
         {props.backgroundOwnedByThisThread ? (
           <div className="mt-1 text-muted-foreground" aria-live="polite">
@@ -64,8 +81,8 @@ export function AutoNudgeControl(props: {
         ) : null}
         {!props.backgroundDispatchSupported ? (
           <div className="mt-1 text-muted-foreground" role="status">
-            Background continuation is unavailable in this browser because it cannot safely
-            coordinate multiple windows.
+            Automatic dispatch is unavailable in this browser because it cannot safely coordinate
+            multiple windows.
           </div>
         ) : null}
         {props.backgroundLedger.length > 0 ? (
@@ -112,6 +129,63 @@ export function AutoNudgeControl(props: {
             onCheckedChange={(checked) => props.onBackgroundChange(Boolean(checked))}
           />
           Continue this thread in background
+        </label>
+        <label className="flex items-center gap-1 whitespace-nowrap text-muted-foreground">
+          Rounds
+          <NumberField
+            value={props.backgroundMaxRounds}
+            min={MIN_AUTO_NUDGE_MAX_ROUNDS}
+            max={MAX_AUTO_NUDGE_MAX_ROUNDS}
+            step={1}
+            size="sm"
+            className="w-24"
+            disabled={props.disabled}
+            onValueChange={(value) => {
+              if (value !== null && Number.isFinite(value)) {
+                props.onMaxRoundsChange(
+                  Math.round(
+                    Math.min(MAX_AUTO_NUDGE_MAX_ROUNDS, Math.max(MIN_AUTO_NUDGE_MAX_ROUNDS, value)),
+                  ),
+                );
+              }
+            }}
+          >
+            <NumberFieldGroup>
+              <NumberFieldDecrement aria-label="Decrease Auto Nudge round cap" />
+              <NumberFieldInput aria-label="Auto Nudge maximum rounds for this thread" />
+              <NumberFieldIncrement aria-label="Increase Auto Nudge round cap" />
+            </NumberFieldGroup>
+          </NumberField>
+        </label>
+        <label className="flex items-center gap-1 whitespace-nowrap text-muted-foreground">
+          Minutes
+          <NumberField
+            value={props.backgroundMaxMinutes}
+            min={MIN_AUTO_NUDGE_MAX_MINUTES}
+            max={MAX_AUTO_NUDGE_MAX_MINUTES}
+            step={5}
+            size="sm"
+            className="w-24"
+            disabled={props.disabled}
+            onValueChange={(value) => {
+              if (value !== null && Number.isFinite(value)) {
+                props.onMaxMinutesChange(
+                  Math.round(
+                    Math.min(
+                      MAX_AUTO_NUDGE_MAX_MINUTES,
+                      Math.max(MIN_AUTO_NUDGE_MAX_MINUTES, value),
+                    ),
+                  ),
+                );
+              }
+            }}
+          >
+            <NumberFieldGroup>
+              <NumberFieldDecrement aria-label="Decrease Auto Nudge time cap" />
+              <NumberFieldInput aria-label="Auto Nudge maximum minutes for this thread" />
+              <NumberFieldIncrement aria-label="Increase Auto Nudge time cap" />
+            </NumberFieldGroup>
+          </NumberField>
         </label>
         {props.backgroundOwnedByThisThread && props.backgroundStatus === "active" ? (
           <Button type="button" size="sm" variant="outline" onClick={props.onPauseBackground}>

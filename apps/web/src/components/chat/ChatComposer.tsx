@@ -2327,8 +2327,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       nextImageCount += 1;
     }
     if (nextImages.length === 1 && nextImages[0]) {
+      onManualActivity?.();
       addComposerImage(nextImages[0]);
     } else if (nextImages.length > 1) {
+      onManualActivity?.();
       addComposerImagesToDraft(nextImages);
     }
     return error;
@@ -2426,6 +2428,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   };
 
   const removeComposerImage = (imageId: string) => {
+    if (composerImagesRef.current.some((image) => image.id === imageId)) {
+      onManualActivity?.();
+    }
     removeComposerImageFromDraft(imageId);
   };
 
