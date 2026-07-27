@@ -13,15 +13,18 @@ import {
   DEFAULT_FALLING_EFFECT_JAPANESE_RATIO,
   DEFAULT_FALLING_EFFECT_KIND,
   DEFAULT_FALLING_EFFECT_LIVE_WORK_VOCABULARY,
+  DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
   DEFAULT_FALLING_EFFECT_MATRIX_COLOR_MODE,
   DEFAULT_FALLING_EFFECT_SPEED,
   MAX_AMBIENT_OPACITY,
   MAX_FALLING_EFFECT_DENSITY,
   MAX_FALLING_EFFECT_JAPANESE_RATIO,
+  MAX_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
   MAX_FALLING_EFFECT_SPEED,
   MIN_AMBIENT_OPACITY,
   MIN_FALLING_EFFECT_DENSITY,
   MIN_FALLING_EFFECT_JAPANESE_RATIO,
+  MIN_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
   MIN_FALLING_EFFECT_SPEED,
 } from "@cafecode/contracts/settings";
 
@@ -48,6 +51,16 @@ function clampFallingEffectSpeed(value: number | null): number {
     return DEFAULT_FALLING_EFFECT_SPEED;
   }
   return Math.min(MAX_FALLING_EFFECT_SPEED, Math.max(MIN_FALLING_EFFECT_SPEED, value));
+}
+
+function clampMatrixColorCycleSpeed(value: number | null): number {
+  if (value === null || !Number.isFinite(value)) {
+    return DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED;
+  }
+  return Math.min(
+    MAX_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
+    Math.max(MIN_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED, value),
+  );
 }
 
 function clampFallingEffectDensity(value: number | null): number {
@@ -98,6 +111,8 @@ export function WindowAtmosphereSettings() {
           settings.fallingEffectKind !== DEFAULT_FALLING_EFFECT_KIND ||
           settings.fallingEffectColor !== DEFAULT_AMBIENT_COLOR ||
           settings.fallingEffectMatrixColorMode !== DEFAULT_FALLING_EFFECT_MATRIX_COLOR_MODE ||
+          settings.fallingEffectMatrixColorCycleSpeed !==
+            DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED ||
           settings.fallingEffectOpacity !== DEFAULT_AMBIENT_OPACITY ||
           settings.fallingEffectSpeed !== DEFAULT_FALLING_EFFECT_SPEED ||
           settings.fallingEffectDensity !== DEFAULT_FALLING_EFFECT_DENSITY ||
@@ -124,6 +139,8 @@ export function WindowAtmosphereSettings() {
                   fallingEffectKind: DEFAULT_FALLING_EFFECT_KIND,
                   fallingEffectColor: DEFAULT_AMBIENT_COLOR,
                   fallingEffectMatrixColorMode: DEFAULT_FALLING_EFFECT_MATRIX_COLOR_MODE,
+                  fallingEffectMatrixColorCycleSpeed:
+                    DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
                   fallingEffectOpacity: DEFAULT_AMBIENT_OPACITY,
                   fallingEffectSpeed: DEFAULT_FALLING_EFFECT_SPEED,
                   fallingEffectDensity: DEFAULT_FALLING_EFFECT_DENSITY,
@@ -235,6 +252,35 @@ export function WindowAtmosphereSettings() {
                   </label>
                 ))}
               </RadioGroup>
+            }
+          />
+          <SettingsRow
+            title="Matrix color-cycle speed"
+            description="Controls hue motion independently of how fast the glyphs fall. 1x is the original 18-second rainbow; 16x to 64x creates a rapid shimmer. Music-reactive modes multiply their continuous hue drift while preserving beat impulses. Reduced-motion mode still stops animation."
+            control={
+              <div className="flex items-center gap-2">
+                <NumberField
+                  value={settings.fallingEffectMatrixColorCycleSpeed}
+                  min={MIN_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED}
+                  max={MAX_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED}
+                  step={0.25}
+                  disabled={settings.fallingEffectMatrixColorMode === "fixed"}
+                  size="sm"
+                  className="w-28"
+                  onValueChange={(value) =>
+                    updateSettings({
+                      fallingEffectMatrixColorCycleSpeed: clampMatrixColorCycleSpeed(value),
+                    })
+                  }
+                >
+                  <NumberFieldGroup>
+                    <NumberFieldDecrement aria-label="Decrease Matrix color-cycle speed" />
+                    <NumberFieldInput aria-label="Matrix color-cycle speed multiplier" />
+                    <NumberFieldIncrement aria-label="Increase Matrix color-cycle speed" />
+                  </NumberFieldGroup>
+                </NumberField>
+                <span className="text-xs text-muted-foreground">x</span>
+              </div>
             }
           />
           <SettingsRow

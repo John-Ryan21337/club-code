@@ -436,6 +436,10 @@ export function useSettingsRestore(onRestored?: () => void) {
       DEFAULT_UNIFIED_SETTINGS.fallingEffectMatrixColorMode
         ? ["Matrix color mode"]
         : []),
+      ...(settings.fallingEffectMatrixColorCycleSpeed !==
+      DEFAULT_UNIFIED_SETTINGS.fallingEffectMatrixColorCycleSpeed
+        ? ["Matrix color-cycle speed"]
+        : []),
       ...(settings.fallingEffectOpacity !== DEFAULT_UNIFIED_SETTINGS.fallingEffectOpacity
         ? ["Falling effect opacity"]
         : []),
@@ -543,6 +547,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.fallingEffectKind,
       settings.fallingEffectColor,
       settings.fallingEffectMatrixColorMode,
+      settings.fallingEffectMatrixColorCycleSpeed,
       settings.fallingEffectOpacity,
       settings.fallingEffectSpeed,
       settings.fallingEffectDensity,
@@ -592,6 +597,8 @@ export function useSettingsRestore(onRestored?: () => void) {
       fallingEffectKind: DEFAULT_UNIFIED_SETTINGS.fallingEffectKind,
       fallingEffectColor: DEFAULT_UNIFIED_SETTINGS.fallingEffectColor,
       fallingEffectMatrixColorMode: DEFAULT_UNIFIED_SETTINGS.fallingEffectMatrixColorMode,
+      fallingEffectMatrixColorCycleSpeed:
+        DEFAULT_UNIFIED_SETTINGS.fallingEffectMatrixColorCycleSpeed,
       fallingEffectOpacity: DEFAULT_UNIFIED_SETTINGS.fallingEffectOpacity,
       fallingEffectSpeed: DEFAULT_UNIFIED_SETTINGS.fallingEffectSpeed,
       fallingEffectDensity: DEFAULT_UNIFIED_SETTINGS.fallingEffectDensity,
