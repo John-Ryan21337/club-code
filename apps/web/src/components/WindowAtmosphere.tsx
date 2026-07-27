@@ -56,6 +56,7 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
   const matrixColorCycleSpeed = useSettings(
     (settings) => settings.fallingEffectMatrixColorCycleSpeed,
   );
+  const matrixColorCycleSpeedRef = useRef(matrixColorCycleSpeed);
   const opacity = useSettings((settings) => settings.fallingEffectOpacity);
   const speed = useSettings((settings) => settings.fallingEffectSpeed);
   const density = useSettings((settings) => settings.fallingEffectDensity);
@@ -124,6 +125,11 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
     matrixWorkVocabularyRef.current = matrixWorkVocabulary;
     matrixActivityEventsRef.current = matrixActivityEvents;
   }, [matrixActivityEvents, matrixWorkVocabulary]);
+
+  useLayoutEffect(() => {
+    matrixColorCycleSpeedRef.current = matrixColorCycleSpeed;
+    invalidateCommittedFrameRef.current?.();
+  }, [matrixColorCycleSpeed]);
 
   useLayoutEffect(() => {
     const scene = sceneRef.current;
@@ -258,7 +264,7 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
               timestamp,
               localMediaAudioSignalStore.getSnapshot(),
               matrixColorState,
-              matrixColorCycleSpeed,
+              matrixColorCycleSpeedRef.current,
             )
           : undefined;
       const color =
@@ -380,7 +386,6 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
     japaneseRatio,
     kind,
     matrixColorMode,
-    matrixColorCycleSpeed,
     opacity,
     resolvedTheme,
     speed,
