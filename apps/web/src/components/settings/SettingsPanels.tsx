@@ -492,6 +492,14 @@ export function useSettingsRestore(onRestored?: () => void) {
       DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinks
         ? ["Matrix activity links"]
         : []),
+      ...(settings.fallingEffectActivityLinkNetworkEnabled !==
+        DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinkNetworkEnabled ||
+      settings.fallingEffectActivityLinkDatabaseEnabled !==
+        DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinkDatabaseEnabled ||
+      settings.fallingEffectActivityLinkBuildEnabled !==
+        DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinkBuildEnabled
+        ? ["Matrix activity link inputs"]
+        : []),
       ...(settings.fallingEffectActivityLinkColorMode !==
       DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinkColorMode
         ? ["Matrix activity link colors"]
@@ -580,6 +588,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.fallingEffect2chEnriched,
       settings.fallingEffectLiveWorkVocabulary,
       settings.fallingEffectActivityLinks,
+      settings.fallingEffectActivityLinkNetworkEnabled,
+      settings.fallingEffectActivityLinkDatabaseEnabled,
+      settings.fallingEffectActivityLinkBuildEnabled,
       settings.fallingEffectActivityLinkColorMode,
       settings.themeAccentColor,
       settings.automaticGitFetchInterval,
@@ -633,6 +644,12 @@ export function useSettingsRestore(onRestored?: () => void) {
       fallingEffect2chEnriched: DEFAULT_UNIFIED_SETTINGS.fallingEffect2chEnriched,
       fallingEffectLiveWorkVocabulary: DEFAULT_UNIFIED_SETTINGS.fallingEffectLiveWorkVocabulary,
       fallingEffectActivityLinks: DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinks,
+      fallingEffectActivityLinkNetworkEnabled:
+        DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinkNetworkEnabled,
+      fallingEffectActivityLinkDatabaseEnabled:
+        DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinkDatabaseEnabled,
+      fallingEffectActivityLinkBuildEnabled:
+        DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinkBuildEnabled,
       fallingEffectActivityLinkColorMode:
         DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinkColorMode,
       themeAccentColor: DEFAULT_UNIFIED_SETTINGS.themeAccentColor,

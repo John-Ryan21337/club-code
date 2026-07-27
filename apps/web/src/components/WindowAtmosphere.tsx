@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef } from "react";
+import type { ScopedThreadRef } from "@cafecode/contracts";
+import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
 
 import { useSettings } from "../hooks/useSettings";
 import { useTheme } from "../hooks/useTheme";
@@ -30,6 +31,10 @@ import {
 
 const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
 
+export interface WindowAtmosphereProps {
+  readonly selectedThreadRef?: ScopedThreadRef | null;
+}
+
 function sceneSeed(kind: "snow" | "rain" | "matrix", width: number, height: number): number {
   const kindSeed = kind === "snow" ? 0x534e4f57 : kind === "rain" ? 0x5241494e : 0x4d415458;
   return (kindSeed ^ Math.round(width * 31) ^ Math.round(height * 131)) >>> 0;
@@ -43,7 +48,7 @@ function textSeed(value: string): number {
   return seed >>> 0;
 }
 
-export function WindowAtmosphere() {
+export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereProps = {}) {
   const enabled = useSettings((settings) => settings.fallingEffectsEnabled);
   const kind = useSettings((settings) => settings.fallingEffectKind);
   const configuredColor = useSettings((settings) => settings.fallingEffectColor);
@@ -57,6 +62,15 @@ export function WindowAtmosphere() {
     (settings) => settings.fallingEffectLiveWorkVocabulary,
   );
   const activityLinksEnabled = useSettings((settings) => settings.fallingEffectActivityLinks);
+  const activityLinkNetworkEnabled = useSettings(
+    (settings) => settings.fallingEffectActivityLinkNetworkEnabled,
+  );
+  const activityLinkDatabaseEnabled = useSettings(
+    (settings) => settings.fallingEffectActivityLinkDatabaseEnabled,
+  );
+  const activityLinkBuildEnabled = useSettings(
+    (settings) => settings.fallingEffectActivityLinkBuildEnabled,
+  );
   const activityLinkColorMode = useSettings(
     (settings) => settings.fallingEffectActivityLinkColorMode,
   );
@@ -68,27 +82,43 @@ export function WindowAtmosphere() {
   const atmosphereAvailable = serverConfig?.ambientExperienceCapabilities.atmosphere === true;
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const sceneRef = useRef<AtmosphereScene | null>(null);
-  const invalidateStaticFrameRef = useRef<(() => void) | null>(null);
+  const invalidateCommittedFrameRef = useRef<(() => void) | null>(null);
   const matrixWorkVocabularyKey = useStore((state) =>
-    liveWorkVocabularyEnabled && kind === "matrix" ? selectMatrixWorkVocabularyKey(state) : "",
+    liveWorkVocabularyEnabled && kind === "matrix"
+      ? selectMatrixWorkVocabularyKey(state, selectedThreadRef)
+      : "",
   );
   const matrixWorkVocabulary = useMemo(
     () => decodeMatrixWorkVocabulary(matrixWorkVocabularyKey),
     [matrixWorkVocabularyKey],
   );
   const matrixWorkVocabularyRef = useRef(matrixWorkVocabulary);
-  matrixWorkVocabularyRef.current = matrixWorkVocabulary;
   const matrixActivityEventsKey = useStore((state) =>
-    activityLinksEnabled && kind === "matrix" ? selectMatrixActivityEventsKey(state) : "",
+    activityLinksEnabled && kind === "matrix"
+      ? selectMatrixActivityEventsKey(state, selectedThreadRef, {
+          network: activityLinkNetworkEnabled,
+          database: activityLinkDatabaseEnabled,
+          build: activityLinkBuildEnabled,
+        })
+      : "",
   );
   const matrixActivityEvents = useMemo(
     () => decodeMatrixActivityEvents(matrixActivityEventsKey),
     [matrixActivityEventsKey],
   );
   const matrixActivityEventsRef = useRef(matrixActivityEvents);
-  matrixActivityEventsRef.current = matrixActivityEvents;
 
-  useEffect(() => {
+  // Publish route-scoped signals only after React commits the route, then
+  // update the existing scene before the browser can paint it. Mutating these
+  // refs during render can expose an uncommitted destination thread to the
+  // independent animation loop; a passive effect can leave the prior thread's
+  // work terms visible for one frame.
+  useLayoutEffect(() => {
+    matrixWorkVocabularyRef.current = matrixWorkVocabulary;
+    matrixActivityEventsRef.current = matrixActivityEvents;
+  }, [matrixActivityEvents, matrixWorkVocabulary]);
+
+  useLayoutEffect(() => {
     const scene = sceneRef.current;
     if (!scene) return;
     applyMatrixWorkVocabularyInPlace(
@@ -96,11 +126,11 @@ export function WindowAtmosphere() {
       matrixWorkVocabulary,
       createSeededRandom(textSeed(matrixWorkVocabularyKey)),
     );
-    invalidateStaticFrameRef.current?.();
+    invalidateCommittedFrameRef.current?.();
   }, [matrixWorkVocabulary, matrixWorkVocabularyKey]);
 
-  useEffect(() => {
-    invalidateStaticFrameRef.current?.();
+  useLayoutEffect(() => {
+    invalidateCommittedFrameRef.current?.();
   }, [matrixActivityEvents]);
 
   useEffect(() => {
@@ -267,7 +297,7 @@ export function WindowAtmosphere() {
 
       if (!canAnimate) {
         cancelAnimation();
-        if (scene && reducedMotion.matches && kind === "matrix" && activityLinksEnabled) {
+        if (scene && reducedMotion.matches && kind === "matrix") {
           renderScene(performance.now(), true);
         } else if (scene) {
           cancelStaticActivityExpiry();
@@ -282,12 +312,17 @@ export function WindowAtmosphere() {
       }
     };
 
-    const invalidateStaticFrame = () => {
-      if (scene && reducedMotion.matches && kind === "matrix" && activityLinksEnabled) {
+    const invalidateCommittedFrame = () => {
+      if (scene && reducedMotion.matches && kind === "matrix") {
         renderScene(performance.now(), true);
+      } else if (scene) {
+        // The bitmap may still contain a prior route's filenames or activity
+        // labels. Clear it synchronously at commit; the next permitted
+        // animation frame paints only the newly published thread.
+        clearCanvasBitmap();
       }
     };
-    invalidateStaticFrameRef.current = invalidateStaticFrame;
+    invalidateCommittedFrameRef.current = invalidateCommittedFrame;
 
     const handleResize = () => {
       if (resizeFrame !== null) {
@@ -314,8 +349,8 @@ export function WindowAtmosphere() {
       if (resizeFrame !== null) {
         window.cancelAnimationFrame(resizeFrame);
       }
-      if (invalidateStaticFrameRef.current === invalidateStaticFrame) {
-        invalidateStaticFrameRef.current = null;
+      if (invalidateCommittedFrameRef.current === invalidateCommittedFrame) {
+        invalidateCommittedFrameRef.current = null;
       }
       sceneRef.current = null;
       clearCanvasBitmap();
