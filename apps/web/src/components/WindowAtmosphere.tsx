@@ -81,6 +81,10 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
   const activityLinkColorMode = useSettings(
     (settings) => settings.fallingEffectActivityLinkColorMode,
   );
+  const activityLinkRetentionSeconds = useSettings(
+    (settings) => settings.fallingEffectActivityLinkRetentionSeconds,
+  );
+  const activityLinkRetentionMsRef = useRef(activityLinkRetentionSeconds * 1_000);
   const continueBackgroundAnimations = useSettings(
     (settings) => settings.continueBackgroundAnimations,
   );
@@ -130,6 +134,11 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
     matrixColorCycleSpeedRef.current = matrixColorCycleSpeed;
     invalidateCommittedFrameRef.current?.();
   }, [matrixColorCycleSpeed]);
+
+  useLayoutEffect(() => {
+    activityLinkRetentionMsRef.current = activityLinkRetentionSeconds * 1_000;
+    invalidateCommittedFrameRef.current?.();
+  }, [activityLinkRetentionSeconds]);
 
   useLayoutEffect(() => {
     const scene = sceneRef.current;
@@ -202,9 +211,15 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
 
       let nearestExpiryAtMs = Number.POSITIVE_INFINITY;
       for (const event of matrixActivityEventsRef.current) {
-        const expiryAtMs = event.observedAtMs + MATRIX_ACTIVITY_TTL_MS;
-        if (Number.isFinite(expiryAtMs) && expiryAtMs > nowMs) {
-          nearestExpiryAtMs = Math.min(nearestExpiryAtMs, expiryAtMs);
+        const pulseExpiryAtMs = event.observedAtMs + MATRIX_ACTIVITY_TTL_MS;
+        if (Number.isFinite(pulseExpiryAtMs) && pulseExpiryAtMs > nowMs) {
+          nearestExpiryAtMs = Math.min(nearestExpiryAtMs, pulseExpiryAtMs);
+        }
+        if (matrixActivityState.linkCount > 0) {
+          const routeExpiryAtMs = event.observedAtMs + activityLinkRetentionMsRef.current;
+          if (Number.isFinite(routeExpiryAtMs) && routeExpiryAtMs > nowMs) {
+            nearestExpiryAtMs = Math.min(nearestExpiryAtMs, routeExpiryAtMs);
+          }
         }
       }
       if (!Number.isFinite(nearestExpiryAtMs)) {
@@ -279,6 +294,7 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
           activityNow,
           scene.particles.length,
           reducedMotionActive,
+          activityLinkRetentionMsRef.current,
         );
         drawMatrixActivityAnimation(
           context,

@@ -1,5 +1,10 @@
 import type { OrchestrationThreadActivity, ScopedThreadRef } from "@cafecode/contracts";
-import type { FallingEffectActivityLinkColorMode } from "@cafecode/contracts/settings";
+import {
+  DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
+  MAX_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
+  MIN_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
+  type FallingEffectActivityLinkColorMode,
+} from "@cafecode/contracts/settings";
 
 import type { AppState } from "./store";
 import {
@@ -11,7 +16,13 @@ import {
 export const MAX_MATRIX_ACTIVITY_EVENTS = 24;
 export const MAX_MATRIX_ACTIVITY_ENCODED_CHARS = 8_192;
 export const MAX_MATRIX_ACTIVITY_LINKS = 12;
+/** Standalone activity pulses retain the original short, non-configurable lifetime. */
 export const MATRIX_ACTIVITY_TTL_MS = 8_000;
+/** Default visibility for an already verified route; callers may supply the persisted bounded TTL. */
+export const DEFAULT_MATRIX_ACTIVITY_ROUTE_TTL_MS =
+  DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS * 1_000;
+const MIN_MATRIX_ACTIVITY_TTL_MS = MIN_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS * 1_000;
+const MAX_MATRIX_ACTIVITY_TTL_MS = MAX_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS * 1_000;
 /** Keep links fully legible until this short terminal fade begins. */
 export const MATRIX_ACTIVITY_TERMINAL_FADE_MS = 400;
 // Keep this aligned with the per-thread activity retention cap in store.ts.
@@ -463,7 +474,9 @@ function writeLink(
 
 /**
  * Reuses its arrays/maps on every frame. Reduced motion keeps a static route
- * while disabling the traveling packet.
+ * while disabling the traveling packet. The requested TTL changes only exact
+ * correlated routes and their endpoints; standalone pulses keep their fixed
+ * short lifetime.
  */
 export function updateMatrixActivityAnimationInPlace(
   state: MatrixActivityAnimationState,
@@ -471,6 +484,7 @@ export function updateMatrixActivityAnimationInPlace(
   nowMs: number,
   particleCount: number,
   reducedMotion: boolean,
+  requestedTtlMs = DEFAULT_MATRIX_ACTIVITY_ROUTE_TTL_MS,
 ): MatrixActivityAnimationState {
   state.pulseCount = 0;
   state.linkCount = 0;
@@ -482,6 +496,12 @@ export function updateMatrixActivityAnimationInPlace(
   if (!Number.isSafeInteger(particleCount) || particleCount <= 0 || !Number.isFinite(nowMs)) {
     return state;
   }
+  const ttlMs = Number.isFinite(requestedTtlMs)
+    ? Math.min(
+        MAX_MATRIX_ACTIVITY_TTL_MS,
+        Math.max(MIN_MATRIX_ACTIVITY_TTL_MS, Math.round(requestedTtlMs)),
+      )
+    : DEFAULT_MATRIX_ACTIVITY_ROUTE_TTL_MS;
 
   const boundedEvents = events.slice(-MAX_MATRIX_ACTIVITY_EVENTS);
   interface PreparedEvent {
@@ -489,8 +509,10 @@ export function updateMatrixActivityAnimationInPlace(
     readonly eventOffset: number;
     readonly ageMs: number;
     readonly anchorIndex: number;
-    readonly intensity: number;
-    readonly live: boolean;
+    readonly pulseIntensity: number;
+    readonly pulseLive: boolean;
+    readonly routeIntensity: number;
+    readonly routeLive: boolean;
   }
   interface LinkCandidate {
     readonly previous: PreparedEvent;
@@ -512,20 +534,25 @@ export function updateMatrixActivityAnimationInPlace(
     }
     const ageMs = nowMs - event.observedAtMs;
     if (ageMs < -MAX_FUTURE_CLOCK_SKEW_MS) continue;
-    const live = ageMs < MATRIX_ACTIVITY_TTL_MS;
+    const pulseLive = ageMs < MATRIX_ACTIVITY_TTL_MS;
+    const routeLive = ageMs < ttlMs;
     preparedEvents[eventOffset] = {
       event,
       eventOffset,
       ageMs,
       anchorIndex: event.anchorSeed % particleCount,
-      intensity: live
+      pulseIntensity: pulseLive
         ? Math.min(
             1,
             Math.max(0, MATRIX_ACTIVITY_TTL_MS - Math.max(0, ageMs)) /
               MATRIX_ACTIVITY_TERMINAL_FADE_MS,
           )
         : 0,
-      live,
+      pulseLive,
+      routeIntensity: routeLive
+        ? Math.min(1, Math.max(0, ttlMs - Math.max(0, ageMs)) / MATRIX_ACTIVITY_TERMINAL_FADE_MS)
+        : 0,
+      routeLive,
     };
   }
 
@@ -592,7 +619,7 @@ export function updateMatrixActivityAnimationInPlace(
       }
       state.resolvedRelationHashes.add(relationKey);
       const current = preparedEvents[currentEventOffset];
-      if (!current?.live || current.anchorIndex === prepared.anchorIndex) continue;
+      if (!current?.routeLive || current.anchorIndex === prepared.anchorIndex) continue;
       const correlationDurationMs = current.event.observedAtMs - prepared.event.observedAtMs;
       if (
         !Number.isFinite(correlationDurationMs) ||
@@ -623,9 +650,9 @@ export function updateMatrixActivityAnimationInPlace(
       Number(!state.pulseIndexByAnchor.has(previous.anchorIndex)) +
       Number(!state.pulseIndexByAnchor.has(current.anchorIndex));
     if (state.pulseCount + missingPulseCount > MAX_MATRIX_ACTIVITY_EVENTS) continue;
-    const previousPulseIndex = ensurePulse(previous, current.intensity, "category", colorHue);
+    const previousPulseIndex = ensurePulse(previous, current.routeIntensity, "category", colorHue);
     if (previousPulseIndex === undefined) continue;
-    const currentPulseIndex = ensurePulse(current, current.intensity, "operation", colorHue);
+    const currentPulseIndex = ensurePulse(current, current.routeIntensity, "operation", colorHue);
     if (currentPulseIndex === undefined) continue;
 
     state.linkPairs.add(pair);
@@ -643,7 +670,7 @@ export function updateMatrixActivityAnimationInPlace(
       category: current.event.category,
       // The newest exact lifecycle event owns the visual TTL. The older
       // endpoint remains only as bounded correlation evidence.
-      intensity: current.intensity,
+      intensity: current.routeIntensity,
       linePulse: reducedMotion
         ? 1
         : Math.min(1, 0.22 + trianglePulse * 0.28 + indicatorFlash * 0.78),
@@ -660,8 +687,8 @@ export function updateMatrixActivityAnimationInPlace(
   // overwrite a connected string's fixed category -> operation role.
   for (let eventOffset = preparedEvents.length - 1; eventOffset >= 0; eventOffset -= 1) {
     const prepared = preparedEvents[eventOffset];
-    if (!prepared?.live) continue;
-    ensurePulse(prepared, prepared.intensity, "category", null);
+    if (!prepared?.pulseLive) continue;
+    ensurePulse(prepared, prepared.pulseIntensity, "category", null);
   }
   return state;
 }

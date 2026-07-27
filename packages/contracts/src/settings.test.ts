@@ -52,6 +52,7 @@ import {
   DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_COLOR_MODE,
   DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_DATABASE_ENABLED,
   DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_NETWORK_ENABLED,
+  DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
   DEFAULT_FALLING_EFFECT_DENSITY,
   DEFAULT_FALLING_EFFECT_JAPANESE_RATIO,
   DEFAULT_FALLING_EFFECT_KIND,
@@ -81,6 +82,7 @@ import {
   MAX_FALLING_EFFECT_DENSITY,
   MAX_FALLING_EFFECT_JAPANESE_RATIO,
   MAX_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
+  MAX_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
   MAX_FALLING_EFFECT_SPEED,
   MAX_MODEL_PACING_RESERVE_PERCENT,
   MAX_PROVIDER_USAGE_POLL_MINUTES,
@@ -94,6 +96,7 @@ import {
   MIN_FALLING_EFFECT_DENSITY,
   MIN_FALLING_EFFECT_JAPANESE_RATIO,
   MIN_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
+  MIN_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
   MIN_FALLING_EFFECT_SPEED,
   MIN_MODEL_PACING_RESERVE_PERCENT,
   MIN_PROVIDER_USAGE_POLL_MINUTES,
@@ -429,6 +432,8 @@ describe("client settings", () => {
       fallingEffectActivityLinkBuildEnabled: DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_BUILD_ENABLED,
       fallingEffectActivityLinkAgentEnabled: DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_AGENT_ENABLED,
       fallingEffectActivityLinkColorMode: DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_COLOR_MODE,
+      fallingEffectActivityLinkRetentionSeconds:
+        DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
       ambientVideoEnabled: DEFAULT_AMBIENT_VIDEO_ENABLED,
       ambientVideoSource: DEFAULT_AMBIENT_VIDEO_SOURCE,
       ambientVideoLayoutMode: DEFAULT_AMBIENT_VIDEO_LAYOUT_MODE,
@@ -499,6 +504,7 @@ describe("client settings", () => {
       fallingEffectActivityLinkBuildEnabled: false,
       fallingEffectActivityLinkAgentEnabled: true,
       fallingEffectActivityLinkColorMode: "matrix",
+      fallingEffectActivityLinkRetentionSeconds: MAX_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
       ambientVideoEnabled: true,
       ambientVideoSource: { kind: "video", id: "dQw4w9WgXcQ" },
       ambientVideoLayoutMode: "custom",
@@ -537,6 +543,7 @@ describe("client settings", () => {
       fallingEffectActivityLinkBuildEnabled: false,
       fallingEffectActivityLinkAgentEnabled: true,
       fallingEffectActivityLinkColorMode: "matrix",
+      fallingEffectActivityLinkRetentionSeconds: MAX_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
       ambientVideoEnabled: true,
       ambientVideoSource: { kind: "video", id: "dQw4w9WgXcQ" },
       ambientVideoLayoutMode: "custom",
@@ -740,6 +747,8 @@ describe("client settings", () => {
         fallingEffectActivityLinkBuildEnabled: false,
         fallingEffectActivityLinkAgentEnabled: false,
         fallingEffectActivityLinkColorMode: "random",
+        fallingEffectActivityLinkRetentionSeconds:
+          MIN_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
         ambientVideoGlowOpacity: MAX_AMBIENT_OPACITY,
         ambientVideoGlowMode: "adaptive",
       }),
@@ -759,6 +768,7 @@ describe("client settings", () => {
       fallingEffectActivityLinkBuildEnabled: false,
       fallingEffectActivityLinkAgentEnabled: false,
       fallingEffectActivityLinkColorMode: "random",
+      fallingEffectActivityLinkRetentionSeconds: MIN_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
       ambientVideoGlowOpacity: MAX_AMBIENT_OPACITY,
       ambientVideoGlowMode: "adaptive",
     });
@@ -800,6 +810,15 @@ describe("client settings", () => {
       { fallingEffectActivityLinkBuildEnabled: "yes" },
       { fallingEffectActivityLinkAgentEnabled: "yes" },
       { fallingEffectActivityLinkColorMode: "category" },
+      {
+        fallingEffectActivityLinkRetentionSeconds:
+          MIN_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS - 1,
+      },
+      {
+        fallingEffectActivityLinkRetentionSeconds:
+          MAX_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS + 1,
+      },
+      { fallingEffectActivityLinkRetentionSeconds: 30.5 },
       { ambientVideoLayoutMode: "floating" },
       { ambientVideoPresentationMode: "fullscreen" },
       { ambientVideoGlowMode: "live-frames" },

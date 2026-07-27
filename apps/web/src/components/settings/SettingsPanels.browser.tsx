@@ -1397,6 +1397,7 @@ describe("settings panels", () => {
     await page.getByRole("radio", { name: "Follow Matrix colors", exact: true }).click();
     await page.getByRole("radio", { name: "Random independent", exact: true }).click();
     await page.getByRole("radio", { name: "Follow Matrix colors", exact: true }).click();
+    await page.getByLabelText("Increase verified route visibility").click();
     await vi.waitFor(() => {
       expect(updateClientSettings).toHaveBeenCalledWith({ fallingEffectActivityLinks: true });
       expect(updateClientSettings).toHaveBeenCalledWith({
@@ -1416,6 +1417,9 @@ describe("settings panels", () => {
       });
       expect(updateClientSettings).toHaveBeenCalledWith({
         fallingEffectActivityLinkColorMode: "matrix",
+      });
+      expect(updateClientSettings).toHaveBeenCalledWith({
+        fallingEffectActivityLinkRetentionSeconds: 31,
       });
     });
     await expect
@@ -1464,6 +1468,7 @@ describe("settings panels", () => {
       fallingEffectActivityLinkBuildEnabled: false,
       fallingEffectActivityLinkAgentEnabled: false,
       fallingEffectActivityLinkColorMode: "matrix",
+      fallingEffectActivityLinkRetentionSeconds: 31,
     });
 
     await expect.element(page.getByText("Sidebar star speed")).toBeInTheDocument();
@@ -1496,6 +1501,7 @@ describe("settings panels", () => {
         fallingEffectActivityLinkBuildEnabled: false,
         fallingEffectActivityLinkAgentEnabled: false,
         fallingEffectActivityLinkColorMode: "matrix",
+        fallingEffectActivityLinkRetentionSeconds: 90,
       },
     });
     const onRestored = vi.fn();
@@ -1509,14 +1515,14 @@ describe("settings panels", () => {
     await expect
       .element(page.getByLabelText("Changed settings"))
       .toHaveTextContent(
-        "Matrix color mode | Matrix color-cycle speed | Matrix live work vocabulary | Matrix activity links | Matrix activity link inputs | Matrix activity link colors",
+        "Matrix color mode | Matrix color-cycle speed | Matrix live work vocabulary | Matrix activity links | Matrix activity link inputs | Matrix activity link colors | Matrix verified route visibility",
       );
     await page.getByRole("button", { name: "Apply settings reset" }).click();
 
     await vi.waitFor(() => {
       expect(confirm).toHaveBeenCalledWith(
         expect.stringContaining(
-          "Matrix color mode, Matrix color-cycle speed, Matrix live work vocabulary, Matrix activity links, Matrix activity link inputs, Matrix activity link colors",
+          "Matrix color mode, Matrix color-cycle speed, Matrix live work vocabulary, Matrix activity links, Matrix activity link inputs, Matrix activity link colors, Matrix verified route visibility",
         ),
       );
       expect(updateClientSettings).toHaveBeenCalledWith(
@@ -1530,6 +1536,7 @@ describe("settings panels", () => {
           fallingEffectActivityLinkBuildEnabled: true,
           fallingEffectActivityLinkAgentEnabled: true,
           fallingEffectActivityLinkColorMode: "random",
+          fallingEffectActivityLinkRetentionSeconds: 30,
         }),
       );
       expect(getServerConfig()?.clientSettings).toMatchObject({
@@ -1542,6 +1549,7 @@ describe("settings panels", () => {
         fallingEffectActivityLinkBuildEnabled: true,
         fallingEffectActivityLinkAgentEnabled: true,
         fallingEffectActivityLinkColorMode: "random",
+        fallingEffectActivityLinkRetentionSeconds: 30,
       });
       expect(onRestored).toHaveBeenCalledOnce();
     });

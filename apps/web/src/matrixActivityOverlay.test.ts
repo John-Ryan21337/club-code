@@ -5,9 +5,15 @@ import {
   TurnId,
   type OrchestrationThreadActivity,
 } from "@cafecode/contracts";
+import {
+  DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
+  MAX_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
+  MIN_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
+} from "@cafecode/contracts/settings";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  DEFAULT_MATRIX_ACTIVITY_ROUTE_TTL_MS,
   MATRIX_ACTIVITY_LINK_PULSE_MS,
   MATRIX_ACTIVITY_MAX_CORRELATION_MS,
   MATRIX_ACTIVITY_MIN_PACKETS_PER_LINK,
@@ -766,7 +772,84 @@ describe("Matrix provider activity overlay", () => {
     updateMatrixActivityAnimationInPlace(state, overLimit, now, 160, false);
     expect(state.linkCount).toBe(0);
 
-    updateMatrixActivityAnimationInPlace(state, events, now + MATRIX_ACTIVITY_TTL_MS, 160, false);
+    updateMatrixActivityAnimationInPlace(
+      state,
+      events,
+      now + DEFAULT_MATRIX_ACTIVITY_ROUTE_TTL_MS,
+      160,
+      false,
+    );
+    expect(state.pulseCount).toBe(0);
+    expect(state.linkCount).toBe(0);
+  });
+
+  it("uses only the bounded requested TTL to retain an already verified exact route", () => {
+    const now = Date.parse("2026-07-23T12:00:01.000Z");
+    const events = deriveMatrixActivityEvents([
+      activity("retained-start", "2026-07-23T12:00:00.800Z", {
+        itemType: "web_search",
+        itemId: "retained-exact-route",
+      }),
+      activity("retained-complete", "2026-07-23T12:00:01.000Z", {
+        requestKind: "fetch",
+        itemId: "retained-exact-route",
+      }),
+    ]);
+    const state = createMatrixActivityAnimationState();
+    const minimumTtlMs = MIN_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS * 1_000;
+    const maximumTtlMs = MAX_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS * 1_000;
+    const standaloneEvent = deriveMatrixActivityEvents([
+      activity("standalone", "2026-07-23T12:00:01.000Z", {
+        itemType: "web_search",
+        itemId: "unpaired-provider-event",
+      }),
+    ]);
+
+    expect(MATRIX_ACTIVITY_TTL_MS).toBe(8_000);
+    expect(DEFAULT_MATRIX_ACTIVITY_ROUTE_TTL_MS).toBe(
+      DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS * 1_000,
+    );
+    updateMatrixActivityAnimationInPlace(
+      state,
+      standaloneEvent,
+      now + MATRIX_ACTIVITY_TTL_MS,
+      160,
+      false,
+      maximumTtlMs,
+    );
+    expect(state.pulseCount).toBe(0);
+    expect(state.linkCount).toBe(0);
+
+    updateMatrixActivityAnimationInPlace(
+      state,
+      events,
+      now + minimumTtlMs,
+      160,
+      false,
+      minimumTtlMs,
+    );
+    expect(state.pulseCount).toBe(0);
+    expect(state.linkCount).toBe(0);
+
+    updateMatrixActivityAnimationInPlace(
+      state,
+      events,
+      now + minimumTtlMs,
+      160,
+      false,
+      maximumTtlMs,
+    );
+    expect(state.linkCount).toBe(1);
+    expect(state.links[0]!.intensity).toBe(1);
+
+    updateMatrixActivityAnimationInPlace(
+      state,
+      events,
+      now + maximumTtlMs,
+      160,
+      false,
+      Number.MAX_SAFE_INTEGER,
+    );
     expect(state.pulseCount).toBe(0);
     expect(state.linkCount).toBe(0);
   });
@@ -1188,7 +1271,7 @@ describe("Matrix provider activity overlay", () => {
     updateMatrixActivityAnimationInPlace(
       state,
       events,
-      completedAt + MATRIX_ACTIVITY_TTL_MS - MATRIX_ACTIVITY_TERMINAL_FADE_MS,
+      completedAt + DEFAULT_MATRIX_ACTIVITY_ROUTE_TTL_MS - MATRIX_ACTIVITY_TERMINAL_FADE_MS,
       20,
       false,
     );
@@ -1196,7 +1279,7 @@ describe("Matrix provider activity overlay", () => {
     updateMatrixActivityAnimationInPlace(
       state,
       events,
-      completedAt + MATRIX_ACTIVITY_TTL_MS - MATRIX_ACTIVITY_TERMINAL_FADE_MS / 2,
+      completedAt + DEFAULT_MATRIX_ACTIVITY_ROUTE_TTL_MS - MATRIX_ACTIVITY_TERMINAL_FADE_MS / 2,
       20,
       false,
     );
