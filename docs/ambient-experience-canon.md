@@ -39,6 +39,11 @@ documentation use Club Code.
 
 - Chat and provider truth remain primary. Presentation cannot invent a running,
   completed, stalled, authenticated, or usage state.
+- Follow-up intent never becomes an implicit stop. Native provider steering is
+  used only when the current runtime snapshot and active-turn identity prove it
+  safe; otherwise the per-thread queue waits for a normal turn boundary. A
+  missing, stale, or changing capability snapshot cannot interrupt provider
+  work.
 - Decorative, media, browser, observatory, pacing, and alert features are
   operator-switchable or capability-gated. A fresh-install presentation
   profile may initialize explicit visual settings, but they do not silently add
@@ -78,6 +83,7 @@ documentation use Club Code.
 | Inbox email-code retrieval                                | Not implemented             | The operator-only transient secret field is not an inbox connector or 2FA automation                                               |
 | Persistent Auto Nudge                                     | Landed - validation pending | Optional one-thread background ownership has hard round/time caps, durable dedupe, visible history, and stop/pause controls        |
 | Provider usage, paid/extra usage, and Model Pacing        | Landed - validation pending | Every configured provider remains visible; only provider-reported facts are shown; pacing remains advisory                         |
+| Non-interrupting cross-provider follow-ups                | Landed - validation pending | Native live steer where explicitly supported; otherwise the per-thread queue waits and only an explicit Stop may interrupt         |
 | Ultra Caching and hierarchical summaries                  | Partial                     | Stable handoffs and earlier compaction exist; no persistent multi-level summary index                                              |
 | Auditor-as-fixer workflow                                 | Partial                     | Installable cross-project skill exists; Club Code does not automatically enforce or orchestrate it                                 |
 | Tokens-saved meter per model                              | Partial                     | Honest provider cache/compaction counters exist; exact counterfactual savings cannot be measured                                   |
@@ -262,6 +268,33 @@ change, thread/provider change, expiry, request limit, interrupt/stop, provider
 restart, or shutdown. Completion rechecks tab/origin identity before returning
 a result. OpenCode remains unavailable until it has an equally safe ephemeral
 per-session injection path.
+
+### Non-interrupting provider steering
+
+A follow-up submitted while a provider turn is running is accepted as
+thread-scoped intent. When the current provider snapshot explicitly advertises
+live steering and the renderer can bind the request to the concrete active
+turn, Club Code uses the provider's native steering path. Every supported model
+on the Claude adapter, including Opus, Sonnet, and Fable, receives that input
+through its long-lived streaming prompt queue; Codex uses its expected-turn
+steering command.
+
+If live steering is unsupported, temporarily unavailable, missing from a
+snapshot, stale, or no longer bound to the projected active turn, the follow-up
+stays in the renderer's per-thread queue. Its action remains visibly waiting
+and disabled while the turn runs, then the normal queue controller sends it
+after a provider-confirmed safe boundary. Capability refresh, navigation,
+provider choice, and model choice cannot convert that intent into a stop.
+OpenCode and any future configured provider follow the same fail-closed rule
+until their adapter explicitly proves native live steering support.
+
+Only the operator's explicit Stop control may dispatch
+`thread.turn.interrupt`. Queue activation, steering fallback, Auto Nudge,
+provider-status churn, renderer reconnect, and model pacing never invoke Stop
+on the operator's behalf. Tests cover supported native steering,
+unsupported/missing and changing capability waiting, an accessible inert
+waiting control, cross-driver capability snapshots, and Claude's zero-interrupt
+streaming-input path.
 
 ### Bounded background Auto Nudge
 

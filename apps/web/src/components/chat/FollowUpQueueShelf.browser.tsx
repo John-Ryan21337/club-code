@@ -31,6 +31,7 @@ describe("FollowUpQueueShelf", () => {
         ]}
         actionLabel="Send"
         actionTitle="Club Code will send this follow-up as soon as the active turn can accept it."
+        actionEnabled={true}
         onToggleExpanded={onToggleExpanded}
         onAction={onAction}
         onRemove={onRemove}
@@ -82,6 +83,7 @@ describe("FollowUpQueueShelf", () => {
         ]}
         actionLabel="Send"
         actionTitle="Club Code will send this follow-up as soon as the active turn can accept it."
+        actionEnabled={true}
         onToggleExpanded={onToggleExpanded}
         onAction={onAction}
         onRemove={vi.fn()}
@@ -132,6 +134,7 @@ describe("FollowUpQueueShelf", () => {
         ]}
         actionLabel="Send"
         actionTitle="Club Code will send this follow-up as soon as the active turn can accept it."
+        actionEnabled={true}
         onToggleExpanded={vi.fn()}
         onAction={vi.fn()}
         onRemove={onRemove}
@@ -182,6 +185,7 @@ describe("FollowUpQueueShelf", () => {
         ]}
         actionLabel="Send"
         actionTitle="Club Code will send this follow-up as soon as the active turn can accept it."
+        actionEnabled={true}
         onToggleExpanded={vi.fn()}
         onAction={onAction}
         onRemove={onRemove}
@@ -241,6 +245,7 @@ describe("FollowUpQueueShelf", () => {
         ]}
         actionLabel="Send"
         actionTitle="Club Code will send this follow-up as soon as the active turn can accept it."
+        actionEnabled={true}
         onToggleExpanded={onToggleExpanded}
         onAction={vi.fn()}
         onRemove={vi.fn()}
@@ -257,6 +262,103 @@ describe("FollowUpQueueShelf", () => {
         images: [{ src: expect.stringContaining("data:image/png;base64,"), name: "cat.png" }],
         index: 0,
       });
+    } finally {
+      await screen.unmount();
+      host.remove();
+    }
+  });
+
+  it("keeps a waiting follow-up inert while the active provider cannot safely steer", async () => {
+    const onAction = vi.fn();
+    const host = document.createElement("div");
+    document.body.append(host);
+
+    const screen = await render(
+      <FollowUpQueueShelf
+        items={[
+          {
+            id: "queued-waiting",
+            preview: "do not interrupt the active turn",
+            promptText: "do not interrupt the active turn",
+            images: [],
+            queuedAt: "2026-07-27T00:00:00.000Z",
+            expanded: false,
+            canExpand: false,
+            blockedReason: null,
+          },
+        ]}
+        actionLabel="Waiting"
+        actionTitle="Club Code will send this follow-up as soon as the active turn can accept it."
+        actionEnabled={false}
+        onToggleExpanded={vi.fn()}
+        onAction={onAction}
+        onRemove={vi.fn()}
+        onClear={vi.fn()}
+        onExpandImage={vi.fn()}
+      />,
+      { container: host },
+    );
+
+    try {
+      const waitingButton = page.getByRole("button", {
+        name: "Waiting. Club Code will send this follow-up as soon as the active turn can accept it.",
+      });
+      await expect.element(waitingButton).toHaveAttribute("aria-disabled", "true");
+      const waitingElement = host.querySelector<HTMLButtonElement>('button[aria-disabled="true"]');
+      expect(waitingElement).not.toBeNull();
+      waitingElement?.focus();
+      expect(document.activeElement).toBe(waitingElement);
+      waitingElement?.click();
+      expect(onAction).not.toHaveBeenCalled();
+    } finally {
+      await screen.unmount();
+      host.remove();
+    }
+  });
+
+  it("keeps an individually blocked follow-up inert even when the shelf action is enabled", async () => {
+    const onAction = vi.fn();
+    const host = document.createElement("div");
+    document.body.append(host);
+
+    const screen = await render(
+      <FollowUpQueueShelf
+        items={[
+          {
+            id: "queued-blocked",
+            preview: "wait for the failed attachment to be retried",
+            promptText: "wait for the failed attachment to be retried",
+            images: [],
+            queuedAt: "2026-07-27T00:00:00.000Z",
+            expanded: false,
+            canExpand: false,
+            blockedReason: "Attachment upload must be retried.",
+          },
+        ]}
+        actionLabel="Steer"
+        actionTitle="Steer this queued follow-up into the active turn without interrupting it."
+        actionEnabled={true}
+        onToggleExpanded={vi.fn()}
+        onAction={onAction}
+        onRemove={vi.fn()}
+        onClear={vi.fn()}
+        onExpandImage={vi.fn()}
+      />,
+      { container: host },
+    );
+
+    try {
+      const blockedButton = page.getByRole("button", {
+        name: "Steer. Attachment upload must be retried.",
+      });
+      await expect.element(blockedButton).toHaveAttribute("aria-disabled", "true");
+      await expect
+        .element(blockedButton)
+        .toHaveAttribute("title", "Attachment upload must be retried.");
+      const blockedElement = host.querySelector<HTMLButtonElement>('button[aria-disabled="true"]');
+      expect(blockedElement).not.toBeNull();
+      blockedElement?.click();
+      expect(onAction).not.toHaveBeenCalled();
     } finally {
       await screen.unmount();
       host.remove();

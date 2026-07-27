@@ -546,6 +546,7 @@ export function FollowUpQueueShelf(props: {
   steeringItems?: readonly SteeringFollowUpViewItem[];
   actionLabel: string;
   actionTitle: string;
+  actionEnabled: boolean;
   onToggleExpanded: (itemId: string) => void;
   onAction: (itemId: string) => void;
   onRemove: (itemId: string) => void;
@@ -616,6 +617,8 @@ export function FollowUpQueueShelf(props: {
         ))}
         {props.items.map((item) => {
           const retryStatus = automaticSteerRetryStatus(item);
+          const itemActionEnabled = props.actionEnabled && item.blockedReason === null;
+          const itemActionTitle = item.blockedReason ?? props.actionTitle;
           return (
             <div key={item.id} className="rounded-xl border border-border/45 bg-background/42 p-2">
               <div className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)_auto_auto] items-center gap-2">
@@ -661,9 +664,20 @@ export function FollowUpQueueShelf(props: {
                     type="button"
                     variant="ghost"
                     size="sm"
-                    className="cafe-followup-steer-button h-7 shrink-0 px-2 transition-colors"
-                    title={props.actionTitle}
-                    onClick={() => props.onAction(item.id)}
+                    className="cafe-followup-steer-button h-7 shrink-0 px-2 transition-colors aria-disabled:cursor-wait aria-disabled:opacity-60"
+                    title={itemActionTitle}
+                    aria-label={
+                      itemActionEnabled
+                        ? props.actionLabel
+                        : `${props.actionLabel}. ${itemActionTitle}`
+                    }
+                    aria-disabled={!itemActionEnabled}
+                    onClick={() => {
+                      if (!itemActionEnabled) {
+                        return;
+                      }
+                      props.onAction(item.id);
+                    }}
                   >
                     {props.actionLabel}
                   </Button>
@@ -809,6 +823,7 @@ export interface ChatComposerProps {
   steeringFollowUpItems: readonly SteeringFollowUpViewItem[];
   followUpQueueActionLabel: string;
   followUpQueueActionTitle: string;
+  followUpQueueActionEnabled: boolean;
 
   // Refs the parent needs kept in sync
   promptRef: React.RefObject<string>;
@@ -906,6 +921,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     steeringFollowUpItems,
     followUpQueueActionLabel,
     followUpQueueActionTitle,
+    followUpQueueActionEnabled,
     promptRef,
     composerRef,
     composerImagesRef,
@@ -2658,6 +2674,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         steeringItems={steeringFollowUpItems}
         actionLabel={followUpQueueActionLabel}
         actionTitle={followUpQueueActionTitle}
+        actionEnabled={followUpQueueActionEnabled}
         onToggleExpanded={onToggleFollowUpQueueItem}
         onAction={onActivateFollowUpQueueItem}
         onRemove={onRemoveFollowUpQueueItem}
