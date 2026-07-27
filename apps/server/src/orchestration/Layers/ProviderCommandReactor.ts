@@ -1968,6 +1968,73 @@ const make = Effect.gen(function* () {
         },
       });
     }
+
+    const pauseAndSynchronizeCodexGoal = Effect.gen(function* () {
+      const provider = runtimeSession?.provider ?? thread.session?.providerName;
+      if (
+        provider !== ProviderDriverKind.make("codex") ||
+        providerService.getGoal === undefined ||
+        providerService.setGoal === undefined
+      ) {
+        return;
+      }
+
+      // Codex TUI pauses an active goal when the user interrupts. The adapter
+      // performs that provider-local operation before returning, but the
+      // provider's final accounting notification can race the pause event and
+      // leave Cafe's durable projection showing the older active state. Read
+      // the authoritative goal after the interrupt, retry the pause once when
+      // necessary, and bind the result back to the Cafe thread aggregate.
+      const observedGoal = yield* providerService.getGoal({
+        threadId: event.payload.threadId,
+      });
+      const synchronizedGoal =
+        observedGoal?.status === "active"
+          ? yield* providerService.setGoal({
+              threadId: event.payload.threadId,
+              status: "paused",
+            })
+          : observedGoal;
+      const synchronizedAt = synchronizedGoal?.updatedAt ?? DateTime.formatIso(yield* DateTime.now);
+      yield* orchestrationEngine.dispatch({
+        type: "thread.goal.sync",
+        commandId: CommandId.make(`provider-goal-interrupt-sync:${crypto.randomUUID()}`),
+        threadId: event.payload.threadId,
+        goal: synchronizedGoal,
+        createdAt: synchronizedAt,
+      });
+    }).pipe(
+      // Goal reconciliation must never turn an already-successful Stop into a
+      // failed interrupt. Keep the terminal interruption barrier in force,
+      // report only metadata in the work log, and retry from provider state on
+      // the next session materialization.
+      Effect.timeout("5 seconds"),
+      Effect.catchCause((cause) =>
+        Effect.gen(function* () {
+          const observedAt = DateTime.formatIso(yield* DateTime.now);
+          yield* Effect.logWarning("codex goal pause synchronization after interrupt failed", {
+            threadId: event.payload.threadId,
+            providerInstanceId:
+              runtimeSession?.providerInstanceId ?? thread.session?.providerInstanceId ?? null,
+            cause: Cause.pretty(cause),
+          });
+          yield* appendProviderDiagnosticActivity({
+            threadId: event.payload.threadId,
+            kind: "runtime.warning",
+            summary: "Goal pause synchronization deferred",
+            detail:
+              "Codex accepted the turn interrupt, but Cafe Code could not immediately confirm the provider goal pause. The interrupted lifecycle barrier remains active, and provider goal state will be synchronized again when the session materializes.",
+            turnId: activeTurnId ?? null,
+            createdAt: observedAt,
+            payload: {
+              operation: "pause-goal-after-user-interrupt",
+              retryOnSessionMaterialization: true,
+            },
+          });
+        }),
+      ),
+    );
+
     yield* providerService
       .interruptTurn({
         threadId: event.payload.threadId,
@@ -1977,12 +2044,13 @@ const make = Effect.gen(function* () {
         Effect.flatMap(() =>
           Effect.gen(function* () {
             const interruptedAt = DateTime.formatIso(yield* DateTime.now);
+            yield* pauseAndSynchronizeCodexGoal;
             yield* appendProviderDiagnosticActivity({
               threadId: event.payload.threadId,
               kind: "provider.turn.interrupt.completed",
               summary: "Provider turn interrupt completed",
               detail:
-                "Provider accepted the active turn interrupt; pending Codex steers may now be replayed safely as a new turn.",
+                "Provider accepted the active turn interrupt. Cafe Code retained any uncommitted input without starting another turn; only an explicit send or interrupt-and-send action may release it.",
               turnId: activeTurnId ?? null,
               createdAt: interruptedAt,
               payload: {

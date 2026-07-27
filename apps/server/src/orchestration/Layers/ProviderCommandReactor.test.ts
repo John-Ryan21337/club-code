@@ -2163,6 +2163,73 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
+  it("pauses and durably synchronizes an active Codex goal after interrupt", async () => {
+    const harness = await createHarness({ threadGoals: "supported" });
+    const threadId = ThreadId.make("thread-1");
+    const turnId = asTurnId("turn-with-active-goal");
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.goal.set",
+        commandId: CommandId.make("cmd-goal-before-interrupt"),
+        threadId,
+        objective: "Continue autonomously",
+        status: "active",
+        tokenBudget: null,
+        expectedUpdatedAt: null,
+        createdAt: "2026-01-01T00:00:01.000Z",
+      }),
+    );
+    await waitFor(() => harness.setGoal.mock.calls.length === 1);
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-running-session-before-goal-interrupt"),
+        threadId,
+        session: {
+          threadId,
+          status: "running",
+          providerName: "codex",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          runtimeMode: "approval-required",
+          activeTurnId: turnId,
+          lastError: null,
+          updatedAt: "2026-01-01T00:00:02.000Z",
+        },
+        createdAt: "2026-01-01T00:00:02.000Z",
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.interrupt",
+        commandId: CommandId.make("cmd-interrupt-active-goal"),
+        threadId,
+        turnId,
+        createdAt: "2026-01-01T00:00:03.000Z",
+      }),
+    );
+
+    await waitFor(() => harness.interruptTurn.mock.calls.length === 1);
+    await waitFor(() => harness.setGoal.mock.calls.length === 2);
+    expect(harness.setGoal.mock.calls[1]?.[0]).toEqual({
+      threadId,
+      status: "paused",
+    });
+
+    await waitFor(async () => {
+      const readModel = await harness.readModel();
+      return readModel.threads.find((entry) => entry.id === threadId)?.goal?.status === "paused";
+    });
+    const readModel = await harness.readModel();
+    const thread = readModel.threads.find((entry) => entry.id === threadId);
+    expect(thread?.goal?.status).toBe("paused");
+    expect(
+      thread?.activities.some((activity) => activity.kind === "provider.turn.interrupt.completed"),
+    ).toBe(true);
+  });
+
   it("retargets provider interrupts to the runtime active turn when projection is stale", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";

@@ -128,6 +128,7 @@ import {
   type SteeringFollowUpViewItem,
 } from "./chat/ChatComposer";
 import {
+  canAutoStartQueuedFollowUpTurn,
   canExpandQueuedFollowUpText,
   canStartQueuedFollowUpTurn,
   decideQueuedFollowUpAction,
@@ -1527,6 +1528,12 @@ interface PendingSteerInterruptRecovery {
   readonly requestedAt: string;
 }
 
+interface ManualStopBarrier {
+  readonly threadId: ThreadId;
+  readonly interruptedTurnId: TurnId | null;
+  readonly requestedAt: string;
+}
+
 function pendingSteerDispatchesForThread(
   current: Record<string, PendingSteerDispatch>,
   threadId: ThreadId,
@@ -1946,6 +1953,10 @@ export default function ChatView(props: ChatViewProps) {
   >({});
   const [pendingSteerInterruptRecoveryByThreadId, setPendingSteerInterruptRecoveryByThreadId] =
     useState<Record<string, PendingSteerInterruptRecovery>>({});
+  // The main Stop control is not the queue row's interrupt-and-submit action.
+  // Keep recovered and ordinary queued input available, but prevent the queue
+  // watchdog from converting a user cancellation into a fresh provider turn.
+  const manualStopBarrierByThreadIdRef = useRef<Record<string, ManualStopBarrier>>({});
   const desktopDebugEnabled = useDesktopDebugEnabled();
   const [desktopDebugRevision, setDesktopDebugRevision] = useState(0);
   const lastDesktopDebugSnapshotPublishedAtMsRef = useRef(0);
@@ -2018,6 +2029,28 @@ export default function ChatView(props: ChatViewProps) {
       }
       pendingSteerInterruptRecoveryByThreadIdRef.current = next;
       setPendingSteerInterruptRecoveryByThreadId(next);
+      if (desktopDebugEnabled) {
+        setDesktopDebugRevision((revision) => revision + 1);
+      }
+    },
+    [desktopDebugEnabled],
+  );
+  const updateManualStopBarrier = useCallback(
+    (threadId: ThreadId, barrier: ManualStopBarrier | null) => {
+      const current = manualStopBarrierByThreadIdRef.current;
+      if (barrier === null) {
+        if (!(threadId in current)) {
+          return;
+        }
+        const next = { ...current };
+        delete next[threadId];
+        manualStopBarrierByThreadIdRef.current = next;
+      } else {
+        manualStopBarrierByThreadIdRef.current = {
+          ...current,
+          [threadId]: barrier,
+        };
+      }
       if (desktopDebugEnabled) {
         setDesktopDebugRevision((revision) => revision + 1);
       }
@@ -3398,6 +3431,10 @@ export default function ChatView(props: ChatViewProps) {
       activeThreadId !== null
         ? (pendingSteerInterruptRecoveryByThreadIdRef.current[activeThreadId] ?? null)
         : null;
+    const activeManualStopBarrier =
+      activeThreadId !== null
+        ? (manualStopBarrierByThreadIdRef.current[activeThreadId] ?? null)
+        : null;
     const queueBlockers: string[] = [];
     if (activeFollowUpQueue.length === 0) {
       queueBlockers.push("queue-empty");
@@ -3413,6 +3450,9 @@ export default function ChatView(props: ChatViewProps) {
     }
     if (activePendingSteerInterruptRecovery !== null) {
       queueBlockers.push("pending-steer-interrupt-recovery");
+    }
+    if (activeManualStopBarrier !== null) {
+      queueBlockers.push("manual-stop-barrier");
     }
     if (followUpQueueVisibleWorking) {
       queueBlockers.push("thread-visible-working");
@@ -3750,6 +3790,7 @@ export default function ChatView(props: ChatViewProps) {
                   pendingMessageCount: activePendingSteerInterruptRecovery.pendingMessageIds.length,
                   requestedAt: activePendingSteerInterruptRecovery.requestedAt,
                 },
+          activeManualStopBarrier,
           followUpQueuePhase,
           followUpQueueUiIdle,
           followUpQueueVisibleWorking,
@@ -3880,6 +3921,7 @@ export default function ChatView(props: ChatViewProps) {
               model: pending.snapshot.model,
             })),
         },
+        manualStopBarriers: manualStopBarrierByThreadIdRef.current,
         dispatchDebug: followUpQueueDebugRef.current,
         items: activeFollowUpQueue.map((item, index) => ({
           index,
@@ -5100,6 +5142,9 @@ export default function ChatView(props: ChatViewProps) {
         ? parseStandaloneComposerGoalCommand(trimmed)
         : null;
     if (standaloneGoalCommand !== null) {
+      if (standaloneGoalCommand.action === "set" || standaloneGoalCommand.action === "resume") {
+        updateManualStopBarrier(activeThread.id, null);
+      }
       try {
         const goal = activeThread.goal ?? null;
         switch (standaloneGoalCommand.action) {
@@ -5162,6 +5207,9 @@ export default function ChatView(props: ChatViewProps) {
       scheduleComposerFocus();
       return;
     }
+    // Sending new user intent explicitly releases a prior Stop barrier. The
+    // queue watchdog itself never clears this state.
+    updateManualStopBarrier(activeThread.id, null);
     const delivery = decideFollowUpDelivery({
       phase: followUpQueuePhase,
       requestedSteer: false,
@@ -5417,6 +5465,7 @@ export default function ChatView(props: ChatViewProps) {
       imageCount: snapshot.images.length,
     });
     if (!hasSendableContent) return;
+    updateManualStopBarrier(activeThread.id, null);
     const delivery = decideFollowUpDelivery({
       phase: followUpQueuePhase,
       requestedSteer: true,
@@ -5517,6 +5566,7 @@ export default function ChatView(props: ChatViewProps) {
     }
 
     const turnId = activeThread.session?.activeTurnId ?? undefined;
+    updateManualStopBarrier(item.threadId, null);
     armPendingSteerInterruptRecovery(activeThread);
     recordFollowUpQueueDebugAttempt("manual-interrupt", "interrupt-requested", {
       threadId: item.threadId,
@@ -5562,6 +5612,9 @@ export default function ChatView(props: ChatViewProps) {
     );
     if (!item) return;
 
+    // Clicking a specific queued row is explicit delivery intent and is the
+    // renderer equivalent of upstream's interrupt-and-submit path.
+    updateManualStopBarrier(item.threadId, null);
     const action = decideQueuedFollowUpAction({
       phase: followUpQueuePhase,
       liveSteerSupported: activeProviderLiveSteerAvailable,
@@ -5652,7 +5705,7 @@ export default function ChatView(props: ChatViewProps) {
             activeTurnId: queuedThread.session?.activeTurnId ?? null,
             sessionUpdatedAt: queuedThread.session?.updatedAt ?? null,
           });
-          return canStartQueuedFollowUpTurn({
+          return canAutoStartQueuedFollowUpTurn({
             queueLength,
             firstItemBlocked: item.blockedReason != null,
             isWorking: queuedPhase === "running",
@@ -5661,6 +5714,8 @@ export default function ChatView(props: ChatViewProps) {
             isDispatchInFlight:
               queueDispatchInFlightRef.current ||
               queuedFollowUpPendingDispatchByThreadIdRef.current[item.threadId] !== undefined,
+            manualStopBarrierActive:
+              manualStopBarrierByThreadIdRef.current[item.threadId] !== undefined,
           });
         },
       });
@@ -5715,6 +5770,11 @@ export default function ChatView(props: ChatViewProps) {
     const api = readEnvironmentApi(environmentId);
     if (!api || !activeThread) return;
     const turnId = activeThread.session?.activeTurnId ?? undefined;
+    updateManualStopBarrier(activeThread.id, {
+      threadId: activeThread.id,
+      interruptedTurnId: turnId ?? activeThread.latestTurn?.turnId ?? null,
+      requestedAt: new Date().toISOString(),
+    });
     armPendingSteerInterruptRecovery(activeThread);
     try {
       await api.orchestration.dispatchCommand({

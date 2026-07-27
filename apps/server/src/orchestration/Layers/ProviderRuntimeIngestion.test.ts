@@ -485,6 +485,123 @@ describe("ProviderRuntimeIngestion", () => {
     });
   });
 
+  it("keeps an interrupted Codex goal terminal despite delayed active-goal accounting", async () => {
+    const harness = await createHarness();
+    const goalCreatedAt = "2026-01-01T00:00:01.000Z";
+    const interruptedAt = "2026-01-01T00:00:03.000Z";
+    const threadId = asThreadId("thread-1");
+    const turnId = asTurnId("goal-turn-interrupted");
+
+    harness.emit({
+      type: "thread.goal.updated",
+      eventId: asEventId("evt-interrupted-goal-active"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId,
+      createdAt: goalCreatedAt,
+      payload: {
+        goal: {
+          threadId,
+          objective: "Continue until stopped",
+          status: "active",
+          tokenBudget: null,
+          tokensUsed: 0,
+          timeUsedSeconds: 0,
+          createdAt: goalCreatedAt,
+          updatedAt: goalCreatedAt,
+        },
+      },
+    });
+    await waitForThread(
+      harness.readModel,
+      (thread) => thread.goal?.status === "active" && thread.session?.status === "starting",
+    );
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-interrupted-goal-turn-started"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId,
+      createdAt: "2026-01-01T00:00:02.000Z",
+      turnId,
+    });
+    await waitForThread(
+      harness.readModel,
+      (thread) => thread.session?.status === "running" && thread.session.activeTurnId === turnId,
+    );
+
+    harness.emit({
+      type: "thread.state.changed",
+      eventId: asEventId("evt-interrupted-goal-thread-idle"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId,
+      createdAt: interruptedAt,
+      payload: { state: "idle" },
+    });
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-interrupted-goal-turn-completed"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId,
+      createdAt: interruptedAt,
+      turnId,
+      payload: { state: "interrupted" },
+    });
+
+    await waitForThread(
+      harness.readModel,
+      (thread) => thread.session?.status === "interrupted" && thread.session.activeTurnId === null,
+    );
+
+    // Codex can emit one final active goal snapshot carrying usage accounting
+    // after turn/completed. It must not reopen the explicitly stopped turn.
+    harness.emit({
+      type: "thread.goal.updated",
+      eventId: asEventId("evt-interrupted-goal-late-accounting"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId,
+      createdAt: "2026-01-01T00:00:03.001Z",
+      payload: {
+        goal: {
+          threadId,
+          objective: "Continue until stopped",
+          status: "active",
+          tokenBudget: null,
+          tokensUsed: 1_024,
+          timeUsedSeconds: 2,
+          createdAt: goalCreatedAt,
+          updatedAt: interruptedAt,
+        },
+      },
+    });
+
+    const thread = await waitForThread(
+      harness.readModel,
+      (entry) =>
+        entry.goal?.tokensUsed === 1_024 &&
+        entry.session?.status === "interrupted" &&
+        entry.session.activeTurnId === null,
+    );
+    expect(thread.goal?.status).toBe("active");
+    expect(thread.session?.status).toBe("interrupted");
+
+    harness.emit({
+      type: "thread.state.changed",
+      eventId: asEventId("evt-interrupted-goal-late-idle"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId,
+      createdAt: "2026-01-01T00:00:03.002Z",
+      payload: { state: "idle" },
+    });
+    const afterLateIdle = await waitForThread(
+      harness.readModel,
+      (entry) =>
+        entry.session?.status === "interrupted" &&
+        entry.session.activeTurnId === null &&
+        entry.session.updatedAt === "2026-01-01T00:00:03.002Z",
+    );
+    expect(afterLateIdle.session?.status).toBe("interrupted");
+  });
+
   it("publishes provider turn ingestion quiescence after processing turn completion", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
