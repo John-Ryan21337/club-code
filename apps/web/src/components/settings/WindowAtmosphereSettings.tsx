@@ -7,6 +7,7 @@ import {
   DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_COLOR_MODE,
   DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_DATABASE_ENABLED,
   DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_NETWORK_ENABLED,
+  DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
   DEFAULT_FALLING_EFFECT_ACTIVITY_LINKS,
   DEFAULT_FALLING_EFFECT_DENSITY,
   DEFAULT_FALLING_EFFECTS_ENABLED,
@@ -20,11 +21,13 @@ import {
   MAX_FALLING_EFFECT_DENSITY,
   MAX_FALLING_EFFECT_JAPANESE_RATIO,
   MAX_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
+  MAX_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
   MAX_FALLING_EFFECT_SPEED,
   MIN_AMBIENT_OPACITY,
   MIN_FALLING_EFFECT_DENSITY,
   MIN_FALLING_EFFECT_JAPANESE_RATIO,
   MIN_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
+  MIN_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
   MIN_FALLING_EFFECT_SPEED,
 } from "@cafecode/contracts/settings";
 
@@ -68,6 +71,16 @@ function clampFallingEffectDensity(value: number | null): number {
     return DEFAULT_FALLING_EFFECT_DENSITY;
   }
   return Math.min(MAX_FALLING_EFFECT_DENSITY, Math.max(MIN_FALLING_EFFECT_DENSITY, value));
+}
+
+function clampMatrixActivityLinkRetentionSeconds(value: number | null): number {
+  if (value === null || !Number.isFinite(value)) {
+    return DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS;
+  }
+  return Math.min(
+    MAX_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
+    Math.max(MIN_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS, Math.round(value)),
+  );
 }
 
 function clampFallingEffectJapaneseRatioPercent(value: number | null): number {
@@ -129,6 +142,8 @@ export function WindowAtmosphereSettings() {
             DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_AGENT_ENABLED ||
           settings.fallingEffectActivityLinkColorMode !==
             DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_COLOR_MODE ||
+          settings.fallingEffectActivityLinkRetentionSeconds !==
+            DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS ||
           settings.fallingEffectLiveWorkVocabulary !==
             DEFAULT_FALLING_EFFECT_LIVE_WORK_VOCABULARY ? (
             <SettingResetButton
@@ -157,6 +172,8 @@ export function WindowAtmosphereSettings() {
                     DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_AGENT_ENABLED,
                   fallingEffectActivityLinkColorMode:
                     DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_COLOR_MODE,
+                  fallingEffectActivityLinkRetentionSeconds:
+                    DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
                   fallingEffectLiveWorkVocabulary: DEFAULT_FALLING_EFFECT_LIVE_WORK_VOCABULARY,
                 })
               }
@@ -437,6 +454,35 @@ export function WindowAtmosphereSettings() {
                       </label>
                     ))}
                   </RadioGroup>
+                }
+              />
+              <SettingsRow
+                title="Verified route visibility"
+                description="Keep an already verified exact provider route visible for this many seconds. Longer visibility only replays the same bounded decorative packets; it never creates activity, measures throughput, or raises the link, packet, or ring caps."
+                control={
+                  <div className="flex items-center gap-2">
+                    <NumberField
+                      value={settings.fallingEffectActivityLinkRetentionSeconds}
+                      min={MIN_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS}
+                      max={MAX_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS}
+                      step={1}
+                      size="sm"
+                      className="w-28"
+                      onValueChange={(value) =>
+                        updateSettings({
+                          fallingEffectActivityLinkRetentionSeconds:
+                            clampMatrixActivityLinkRetentionSeconds(value),
+                        })
+                      }
+                    >
+                      <NumberFieldGroup>
+                        <NumberFieldDecrement aria-label="Decrease verified route visibility" />
+                        <NumberFieldInput aria-label="Verified route visibility seconds" />
+                        <NumberFieldIncrement aria-label="Increase verified route visibility" />
+                      </NumberFieldGroup>
+                    </NumberField>
+                    <span className="text-xs text-muted-foreground">seconds</span>
+                  </div>
                 }
               />
             </>

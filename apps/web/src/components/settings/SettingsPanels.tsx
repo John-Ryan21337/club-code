@@ -478,6 +478,10 @@ export function useSettingsRestore(onRestored?: () => void) {
       DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinkColorMode
         ? ["Matrix activity link colors"]
         : []),
+      ...(settings.fallingEffectActivityLinkRetentionSeconds !==
+      DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinkRetentionSeconds
+        ? ["Matrix verified route visibility"]
+        : []),
       ...(settings.appAccentColor !== DEFAULT_UNIFIED_SETTINGS.appAccentColor
         ? ["Accent color"]
         : []),
@@ -560,6 +564,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.fallingEffectActivityLinkBuildEnabled,
       settings.fallingEffectActivityLinkAgentEnabled,
       settings.fallingEffectActivityLinkColorMode,
+      settings.fallingEffectActivityLinkRetentionSeconds,
       settings.themeAccentColor,
       settings.automaticGitFetchInterval,
       settings.enableAssistantStreaming,
@@ -616,6 +621,8 @@ export function useSettingsRestore(onRestored?: () => void) {
         DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinkAgentEnabled,
       fallingEffectActivityLinkColorMode:
         DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinkColorMode,
+      fallingEffectActivityLinkRetentionSeconds:
+        DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinkRetentionSeconds,
       themeAccentColor: DEFAULT_UNIFIED_SETTINGS.themeAccentColor,
       defaultEditor: DEFAULT_UNIFIED_SETTINGS.defaultEditor,
       diffWordWrap: DEFAULT_UNIFIED_SETTINGS.diffWordWrap,

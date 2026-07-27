@@ -190,6 +190,22 @@ export const FallingEffectActivityLinkColorMode = Schema.Literals(["random", "ma
 export type FallingEffectActivityLinkColorMode = typeof FallingEffectActivityLinkColorMode.Type;
 export const DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_COLOR_MODE: FallingEffectActivityLinkColorMode =
   "random";
+/**
+ * Controls only how long an already verified exact provider route remains
+ * visible. It never creates activity events or claims measured throughput.
+ */
+export const MIN_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS = 8;
+export const MAX_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS = 120;
+export const DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS = 30;
+export const FallingEffectActivityLinkRetentionSeconds = Schema.Number.check(
+  Schema.isInt(),
+  Schema.isBetween({
+    minimum: MIN_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
+    maximum: MAX_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
+  }),
+);
+export type FallingEffectActivityLinkRetentionSeconds =
+  typeof FallingEffectActivityLinkRetentionSeconds.Type;
 
 export const HexColor = TrimmedNonEmptyString.check(Schema.isPattern(/^#[0-9A-Fa-f]{6}$/)).pipe(
   Schema.decodeTo(
@@ -561,6 +577,11 @@ export const ClientSettingsSchema = Schema.Struct({
   fallingEffectActivityLinkColorMode: FallingEffectActivityLinkColorMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_COLOR_MODE)),
   ),
+  fallingEffectActivityLinkRetentionSeconds: FallingEffectActivityLinkRetentionSeconds.pipe(
+    Schema.withDecodingDefault(
+      Effect.succeed(DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS),
+    ),
+  ),
   ambientVideoEnabled: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_VIDEO_ENABLED)),
   ),
@@ -765,6 +786,7 @@ export const AMBIENT_CLIENT_SETTINGS_KEYS = [
   "fallingEffectActivityLinkBuildEnabled",
   "fallingEffectActivityLinkAgentEnabled",
   "fallingEffectActivityLinkColorMode",
+  "fallingEffectActivityLinkRetentionSeconds",
   "ambientVideoEnabled",
   "ambientVideoSource",
   "ambientVideoLayoutMode",
@@ -811,6 +833,7 @@ export const DEFAULT_AMBIENT_CLIENT_SETTINGS: AmbientClientSettings = {
   fallingEffectActivityLinkBuildEnabled: DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_BUILD_ENABLED,
   fallingEffectActivityLinkAgentEnabled: DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_AGENT_ENABLED,
   fallingEffectActivityLinkColorMode: DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_COLOR_MODE,
+  fallingEffectActivityLinkRetentionSeconds: DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
   ambientVideoEnabled: DEFAULT_AMBIENT_VIDEO_ENABLED,
   ambientVideoSource: DEFAULT_AMBIENT_VIDEO_SOURCE,
   ambientVideoLayoutMode: DEFAULT_AMBIENT_VIDEO_LAYOUT_MODE,
@@ -1468,6 +1491,9 @@ export const ClientSettingsPatch = Schema.Struct({
   fallingEffectActivityLinkBuildEnabled: Schema.optionalKey(Schema.Boolean),
   fallingEffectActivityLinkAgentEnabled: Schema.optionalKey(Schema.Boolean),
   fallingEffectActivityLinkColorMode: Schema.optionalKey(FallingEffectActivityLinkColorMode),
+  fallingEffectActivityLinkRetentionSeconds: Schema.optionalKey(
+    FallingEffectActivityLinkRetentionSeconds,
+  ),
   ambientVideoEnabled: Schema.optionalKey(Schema.Boolean),
   ambientVideoSource: Schema.optionalKey(AmbientVideoSource),
   ambientVideoLayoutMode: Schema.optionalKey(AmbientMediaLayoutMode),

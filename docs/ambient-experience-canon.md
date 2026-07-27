@@ -126,8 +126,12 @@ checkboxes: **Network / web**, **Database / query**, **Build / compile**, and
 older settings retain their behavior; clearing all four produces no activity
 events, pulses, or links. At most 24
 recent category/hash events and 12 simultaneous links are retained, and visual
-state expires after eight seconds. A pulse may exist without a
-line. A line exists only when two events have the same category and exact same
+state has a persisted **Verified route visibility** control from 8 to 120
+seconds, defaulting to 30 seconds. This duration only keeps an already verified
+exact route and its bounded decorative packet replay visible longer; it never
+creates provider activity, infers event frequency, or claims throughput.
+Unpaired standalone pulses retain their fixed eight-second lifetime. A pulse
+may exist without a line. A line exists only when two events have the same category and exact same
 provider-reported item or tool identity. A shared agent name, operation label,
 dependency label, temporal proximity, or similar wording is not enough.
 
