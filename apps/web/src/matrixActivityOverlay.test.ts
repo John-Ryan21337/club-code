@@ -10,12 +10,15 @@ import { describe, expect, it, vi } from "vitest";
 import {
   MATRIX_ACTIVITY_LINK_PULSE_MS,
   MATRIX_ACTIVITY_MAX_CORRELATION_MS,
+  MATRIX_ACTIVITY_MIN_PACKETS_PER_LINK,
   MATRIX_ACTIVITY_PACKET_COUNT,
+  MATRIX_ACTIVITY_PACKET_TRAIL_PROGRESS,
   MATRIX_ACTIVITY_TERMINAL_FADE_MS,
   MATRIX_ACTIVITY_TTL_MS,
   MAX_MATRIX_ACTIVITY_ENCODED_CHARS,
   MAX_MATRIX_ACTIVITY_EVENTS,
   MAX_MATRIX_ACTIVITY_LINKS,
+  MAX_MATRIX_ACTIVITY_PACKET_DRAWS,
   createMatrixActivityAnimationState,
   createMatrixHexRoute,
   decodeMatrixActivityEvents,
@@ -23,7 +26,10 @@ import {
   drawMatrixActivityAnimation,
   encodeMatrixActivityEvents,
   matrixHexRoutePointAt,
+  resolveMatrixActivityPacketCount,
+  resolveMatrixActivityPacketProgress,
   resolveMatrixActivityTerm,
+  resolveMatrixActivityTrailIntervals,
   selectMatrixActivityEventsKey,
   updateMatrixActivityAnimationInPlace,
 } from "./matrixActivityOverlay";
@@ -819,6 +825,90 @@ describe("Matrix provider activity overlay", () => {
       expect(matrixHexRoutePointAt(route, 0)).toEqual(from);
       expect(matrixHexRoutePointAt(route, 1)).toEqual(to);
     }
+  });
+
+  it("staggers packets distinctly and preserves a full trail across the cyclic route boundary", () => {
+    const packetProgresses = Array.from({ length: MATRIX_ACTIVITY_PACKET_COUNT }, (_, index) =>
+      resolveMatrixActivityPacketProgress(0.94, index, MATRIX_ACTIVITY_PACKET_COUNT),
+    );
+
+    expect(new Set(packetProgresses.map((progress) => progress.toFixed(6))).size).toBe(
+      MATRIX_ACTIVITY_PACKET_COUNT,
+    );
+    expect(packetProgresses[0]).toBeCloseTo(0.94);
+    expect(packetProgresses[1]).toBeCloseTo(0.273333);
+    expect(packetProgresses[2]).toBeCloseTo(0.606667);
+
+    const wrapped = resolveMatrixActivityTrailIntervals(0.05);
+    expect(wrapped).toHaveLength(2);
+    expect(wrapped[0]!.startProgress).toBeCloseTo(0.93);
+    expect(wrapped[0]!.endProgress).toBe(1);
+    expect(wrapped[1]!.startProgress).toBe(0);
+    expect(wrapped[1]!.endProgress).toBeCloseTo(0.05);
+    expect(
+      wrapped.reduce((total, interval) => total + interval.endProgress - interval.startProgress, 0),
+    ).toBeCloseTo(MATRIX_ACTIVITY_PACKET_TRAIL_PROGRESS);
+    const ordinary = resolveMatrixActivityTrailIntervals(0.5);
+    expect(ordinary).toHaveLength(1);
+    expect(ordinary[0]!.startProgress).toBeCloseTo(0.38);
+    expect(ordinary[0]!.endProgress).toBe(0.5);
+    const exactBoundary = resolveMatrixActivityTrailIntervals(0);
+    expect(exactBoundary).toHaveLength(1);
+    expect(exactBoundary[0]!.startProgress).toBeCloseTo(0.88);
+    expect(exactBoundary[0]!.endProgress).toBe(1);
+  });
+
+  it("keeps repeated packet instances within the Pi-class frame budget", () => {
+    expect(resolveMatrixActivityPacketCount(0)).toBe(0);
+    expect(resolveMatrixActivityPacketCount(1)).toBe(MATRIX_ACTIVITY_PACKET_COUNT);
+    expect(resolveMatrixActivityPacketCount(10)).toBe(MATRIX_ACTIVITY_PACKET_COUNT);
+    expect(resolveMatrixActivityPacketCount(11)).toBe(MATRIX_ACTIVITY_MIN_PACKETS_PER_LINK);
+    expect(resolveMatrixActivityPacketCount(MAX_MATRIX_ACTIVITY_LINKS)).toBe(
+      MATRIX_ACTIVITY_MIN_PACKETS_PER_LINK,
+    );
+    for (let linkCount = 1; linkCount <= MAX_MATRIX_ACTIVITY_LINKS; linkCount += 1) {
+      expect(linkCount * resolveMatrixActivityPacketCount(linkCount)).toBeLessThanOrEqual(
+        MAX_MATRIX_ACTIVITY_PACKET_DRAWS,
+      );
+    }
+
+    const scene = createAtmosphereScene("matrix", 640, 480, createSeededRandom(97), undefined, 0);
+    expect(scene.particles.length).toBeGreaterThan(1);
+    const state = createMatrixActivityAnimationState();
+    const packetCount = resolveMatrixActivityPacketCount(MAX_MATRIX_ACTIVITY_LINKS);
+    for (let index = 0; index < MAX_MATRIX_ACTIVITY_LINKS; index += 1) {
+      state.links.push({
+        fromAnchorIndex: 0,
+        toAnchorIndex: 1,
+        category: "network",
+        intensity: 1,
+        linePulse: 1,
+        colorHue: index,
+        packetProgress: 0.1,
+      });
+    }
+    state.linkCount = MAX_MATRIX_ACTIVITY_LINKS;
+    const recording = createRecordingContext();
+    drawMatrixActivityAnimation(
+      recording.context,
+      scene,
+      state,
+      0.8,
+      "random",
+      UNIFORM_MATRIX_FRAME,
+    );
+    expect(recording.draws.filter((draw) => draw.kind === "fill")).toHaveLength(
+      MAX_MATRIX_ACTIVITY_LINKS * packetCount,
+    );
+    expect(recording.draws.filter((draw) => draw.kind === "fill").length).toBeLessThanOrEqual(
+      MAX_MATRIX_ACTIVITY_PACKET_DRAWS,
+    );
+    // At progress 0.1, the first packet on every route contributes two
+    // contiguous trail intervals (end -> 1, then 0 -> packet) instead of
+    // snapping to a shortened trail at the origin.
+    expect(recording.draws.filter((draw) => draw.kind === "stroke")).toHaveLength(
+      MAX_MATRIX_ACTIVITY_LINKS * (packetCount + 2),
+    );
   });
 
   it("keeps links fully visible until a short terminal fade and makes reduced motion static", () => {

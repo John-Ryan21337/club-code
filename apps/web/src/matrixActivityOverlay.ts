@@ -23,6 +23,14 @@ export const MATRIX_ACTIVITY_MAX_CORRELATION_MS = 24 * 60 * 60 * 1_000;
 export const MATRIX_ACTIVITY_PACKET_TRAVEL_MS = 720;
 /** Repeated packets make each real correlated route easy to see without inventing extra traffic. */
 export const MATRIX_ACTIVITY_PACKET_COUNT = 3;
+/**
+ * Bound decorative packet instances per frame for Pi-class GPUs. A packet
+ * paints one circle and one trail, with at most one extra trail stroke when
+ * that trail wraps over the route boundary.
+ */
+export const MAX_MATRIX_ACTIVITY_PACKET_DRAWS = 30;
+export const MATRIX_ACTIVITY_MIN_PACKETS_PER_LINK = 2;
+export const MATRIX_ACTIVITY_PACKET_TRAIL_PROGRESS = 0.12;
 export const MATRIX_ACTIVITY_LINK_PULSE_MS = 180;
 const MAX_ACTIVITY_RELATIONS = 4;
 const MAX_FUTURE_CLOCK_SKEW_MS = 250;
@@ -94,6 +102,11 @@ export interface MatrixHexRoute {
   readonly points: readonly MatrixHexPoint[];
   readonly segmentLengths: readonly number[];
   readonly totalLength: number;
+}
+
+export interface MatrixActivityProgressInterval {
+  readonly startProgress: number;
+  readonly endProgress: number;
 }
 
 const CATEGORY_COLOR: Record<MatrixActivityCategory, string> = {
@@ -718,6 +731,80 @@ export function matrixHexRoutePointAt(
   return route.points.at(-1)!;
 }
 
+function normalizeMatrixActivityCycleProgress(requestedProgress: number): number {
+  if (!Number.isFinite(requestedProgress)) return 0;
+  const normalized = requestedProgress % 1;
+  return normalized < 0 ? normalized + 1 : normalized;
+}
+
+/**
+ * Resolve the packet density from the number of routes that can actually be
+ * drawn. The route count is capped independently so corrupted renderer state
+ * cannot bypass the frame budget.
+ */
+export function resolveMatrixActivityPacketCount(requestedLinkCount: number): number {
+  if (!Number.isFinite(requestedLinkCount)) return 0;
+  const linkCount = Math.min(
+    MAX_MATRIX_ACTIVITY_LINKS,
+    Math.max(0, Math.floor(requestedLinkCount)),
+  );
+  if (linkCount === 0) return 0;
+  return Math.min(
+    MATRIX_ACTIVITY_PACKET_COUNT,
+    Math.max(
+      MATRIX_ACTIVITY_MIN_PACKETS_PER_LINK,
+      Math.floor(MAX_MATRIX_ACTIVITY_PACKET_DRAWS / linkCount),
+    ),
+  );
+}
+
+/** Return one deterministic, evenly staggered packet position on a cyclic route. */
+export function resolveMatrixActivityPacketProgress(
+  baseProgress: number,
+  requestedPacketIndex: number,
+  requestedPacketCount: number,
+): number {
+  if (!Number.isFinite(requestedPacketCount)) {
+    return normalizeMatrixActivityCycleProgress(baseProgress);
+  }
+  const packetCount = Math.min(
+    MATRIX_ACTIVITY_PACKET_COUNT,
+    Math.max(1, Math.floor(requestedPacketCount)),
+  );
+  const packetIndex = Number.isFinite(requestedPacketIndex)
+    ? Math.min(packetCount - 1, Math.max(0, Math.floor(requestedPacketIndex)))
+    : 0;
+  return normalizeMatrixActivityCycleProgress(baseProgress + packetIndex / packetCount);
+}
+
+/**
+ * Split a fixed-length cyclic packet trail into one or two bounded route
+ * intervals. Returning the tail-end interval first preserves travel order when
+ * the trail crosses progress zero.
+ */
+export function resolveMatrixActivityTrailIntervals(
+  packetProgress: number,
+  requestedTrailProgress = MATRIX_ACTIVITY_PACKET_TRAIL_PROGRESS,
+): readonly MatrixActivityProgressInterval[] {
+  const endProgress = normalizeMatrixActivityCycleProgress(packetProgress);
+  const trailProgress = Number.isFinite(requestedTrailProgress)
+    ? Math.min(1, Math.max(0, requestedTrailProgress))
+    : MATRIX_ACTIVITY_PACKET_TRAIL_PROGRESS;
+  if (trailProgress === 0) return [];
+  if (endProgress >= trailProgress) {
+    return [{ startProgress: endProgress - trailProgress, endProgress }];
+  }
+
+  const wrappedStartProgress = 1 - (trailProgress - endProgress);
+  if (endProgress === 0) {
+    return [{ startProgress: wrappedStartProgress, endProgress: 1 }];
+  }
+  return [
+    { startProgress: wrappedStartProgress, endProgress: 1 },
+    { startProgress: 0, endProgress },
+  ];
+}
+
 function traceMatrixHexRoute(context: CanvasRenderingContext2D, route: MatrixHexRoute): void {
   const first = route.points[0];
   if (!first) return;
@@ -829,7 +916,13 @@ export function drawMatrixActivityAnimation(
   context.rect(0, 0, scene.width, scene.height);
   context.clip();
   context.lineCap = "round";
-  for (let index = 0; index < state.linkCount; index += 1) {
+  const renderedLinkCount = Math.min(
+    MAX_MATRIX_ACTIVITY_LINKS,
+    Math.max(0, Math.floor(state.linkCount)),
+    state.links.length,
+  );
+  const packetCount = resolveMatrixActivityPacketCount(renderedLinkCount);
+  for (let index = 0; index < renderedLinkCount; index += 1) {
     const link = state.links[index]!;
     const from = scene.particles[link.fromAnchorIndex];
     const to = scene.particles[link.toAnchorIndex];
@@ -859,16 +952,22 @@ export function drawMatrixActivityAnimation(
     context.stroke();
 
     if (!state.reducedMotion) {
-      for (let packetIndex = 0; packetIndex < MATRIX_ACTIVITY_PACKET_COUNT; packetIndex += 1) {
-        const packetProgress =
-          (link.packetProgress + packetIndex / MATRIX_ACTIVITY_PACKET_COUNT) % 1;
+      // These repeated packets are decorative replay of one verified link,
+      // never evidence of event multiplicity, throughput, or transfer rate.
+      for (let packetIndex = 0; packetIndex < packetCount; packetIndex += 1) {
+        const packetProgress = resolveMatrixActivityPacketProgress(
+          link.packetProgress,
+          packetIndex,
+          packetCount,
+        );
         const packet = matrixHexRoutePointAt(route, packetProgress);
-        const trailProgress = Math.max(0, packetProgress - 0.12);
         context.strokeStyle = linkPaint;
         context.globalAlpha = safeOpacity * link.intensity;
         context.lineWidth = 1.25 + link.linePulse;
-        traceMatrixHexRouteInterval(context, route, trailProgress, packetProgress);
-        context.stroke();
+        for (const interval of resolveMatrixActivityTrailIntervals(packetProgress)) {
+          traceMatrixHexRouteInterval(context, route, interval.startProgress, interval.endProgress);
+          context.stroke();
+        }
         context.fillStyle = linkPaint;
         context.globalAlpha = safeOpacity * link.intensity;
         context.beginPath();
