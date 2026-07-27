@@ -310,6 +310,16 @@ function createRuntimeLayerDiagnosticsResult(): ServerRuntimeLayerDiagnosticsRes
         lastEventAt: "2036-04-07T00:00:00.000Z",
         notes: ["Provider daemon health summary."],
       },
+      {
+        role: "provider-supervisor",
+        status: "not-configured",
+        pid: null,
+        rssBytes: 0,
+        cpuPercent: 0,
+        uptimeLabel: null,
+        lastEventAt: null,
+        notes: ["Optional provider supervisor is not configured; providers run in the daemon."],
+      },
     ],
     orchestrator: {
       latestEventSequence: 10,
@@ -401,7 +411,7 @@ function createRuntimeLayerDiagnosticsResult(): ServerRuntimeLayerDiagnosticsRes
     providerSupervisor: {
       configured: false,
       reachable: false,
-      status: "offline",
+      status: "not-configured",
       pid: null,
       ppid: null,
       transport: null,
@@ -1602,6 +1612,15 @@ describe("settings panels", () => {
     await expect
       .element(page.getByRole("heading", { name: "Provider Supervisor", exact: true }))
       .toBeInTheDocument();
+    await expect.element(page.getByText("not-configured", { exact: true })).toBeInTheDocument();
+    await expect
+      .element(
+        page.getByText(
+          "Optional provider supervisor is not configured; providers run in the daemon.",
+          { exact: true },
+        ),
+      )
+      .toBeInTheDocument();
     await openLogsButton.click();
 
     expect(openInEditor).toHaveBeenCalledWith("/repo/project/.t3/logs", "cursor");
@@ -1679,6 +1698,58 @@ describe("settings panels", () => {
     expect(updateProvider).toHaveBeenCalledWith({
       provider: ProviderDriverKind.make("codex"),
       instanceId: ProviderInstanceId.make("codex"),
+    });
+  });
+
+  it("shows Codex reset availability above the reset schedule", async () => {
+    const codexProvider: ServerProvider = {
+      ...createOutdatedProvider("codex"),
+      accountRateLimits: {
+        checkedAt: "2026-07-27T00:00:00.000Z",
+        rateLimits: {
+          limitId: "codex",
+          primary: {
+            usedPercent: 25,
+            windowDurationMins: 300,
+            resetsAt: 1_784_944_800,
+          },
+          secondary: {
+            usedPercent: 50,
+            windowDurationMins: 10_080,
+            resetsAt: 1_785_549_600,
+          },
+        },
+        rateLimitResetCredits: {
+          availableCount: 2,
+          credits: null,
+        },
+      },
+    };
+    setServerConfigSnapshot({
+      ...createBaseServerConfig(),
+      providers: [codexProvider],
+    });
+
+    mounted = await render(
+      <AppAtomRegistryProvider>
+        <ProviderSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    await expect
+      .element(page.getByText("Usage limit resets available: 2", { exact: true }))
+      .toBeInTheDocument();
+    await vi.waitFor(() => {
+      const lines = Array.from(document.querySelectorAll<HTMLParagraphElement>("p"));
+      const availabilityIndex = lines.findIndex(
+        (line) => line.textContent === "Usage limit resets available: 2",
+      );
+      const resetScheduleIndex = lines.findIndex((line) =>
+        line.textContent?.includes("Weekly reset:"),
+      );
+
+      expect(availabilityIndex).toBeGreaterThanOrEqual(0);
+      expect(resetScheduleIndex).toBeGreaterThan(availabilityIndex);
     });
   });
 

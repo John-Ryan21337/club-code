@@ -1672,8 +1672,9 @@ export function DiagnosticsSettingsPanel() {
             value={runtimeData ? formatCount(runtimeData.providerDaemon.activeSessionCount) : "..."}
           />
           <StatBlock
-            label="Streams"
+            label="Event Streams"
             value={runtimeData ? formatCount(runtimeData.providerDaemon.activeStreamCount) : "..."}
+            tooltip="Connected consumers of the daemon event journal. This is transport activity, not the number of active model turns."
           />
         </StatsGrid>
         <StatsGrid>
@@ -1817,9 +1818,17 @@ export function DiagnosticsSettingsPanel() {
           />
           <StatBlock
             label="Reachable"
-            value={runtimeData ? (runtimeData.providerSupervisor.reachable ? "Yes" : "No") : "..."}
-            tone={
+            value={
               runtimeData
+                ? !runtimeData.providerSupervisor.configured
+                  ? "n/a"
+                  : runtimeData.providerSupervisor.reachable
+                    ? "Yes"
+                    : "No"
+                : "..."
+            }
+            tone={
+              runtimeData?.providerSupervisor.configured
                 ? runtimeLayerStatusTone(runtimeData.providerSupervisor.status)
                 : "default"
             }
@@ -1829,10 +1838,11 @@ export function DiagnosticsSettingsPanel() {
             value={runtimeData ? String(runtimeData.providerSupervisor.pid ?? "n/a") : "..."}
           />
           <StatBlock
-            label="Streams"
+            label="Event Streams"
             value={
               runtimeData ? formatCount(runtimeData.providerSupervisor.activeStreamCount) : "..."
             }
+            tooltip="Connected consumers of the optional supervisor event journal. This is transport activity, not the number of active model turns."
           />
         </StatsGrid>
         <ProviderSupervisorTable data={runtimeData} loading={isRuntimeInitialLoading} />

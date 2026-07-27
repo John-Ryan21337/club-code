@@ -505,6 +505,7 @@ export const ServerRuntimeLayerStatus = Schema.Literals([
   "offline",
   "degraded",
   "unknown",
+  "not-configured",
 ]);
 export type ServerRuntimeLayerStatus = typeof ServerRuntimeLayerStatus.Type;
 

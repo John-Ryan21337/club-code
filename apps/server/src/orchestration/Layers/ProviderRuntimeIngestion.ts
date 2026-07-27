@@ -38,6 +38,7 @@ import {
   PROVIDER_DAEMON_RUNTIME_CURSOR_PROJECTOR,
   readProviderDaemonRuntimeEventCursor,
 } from "../../providerDaemon/ProviderDaemonRuntimeCursor.ts";
+import { recordProviderRuntimeIngestionCursor } from "../../providerDaemon/ProviderRuntimeIngestionProgress.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import {
@@ -2446,6 +2447,14 @@ const make = Effect.gen(function* () {
       };
       const alreadyProcessed = yield* Cache.getOption(processedRuntimeEventIds, eventKey);
       if (Option.isSome(alreadyProcessed)) {
+        const replayedProviderDaemonCursor = readProviderDaemonRuntimeEventCursor(event);
+        if (replayedProviderDaemonCursor !== undefined) {
+          // A reconnect can replay an event that this process already applied.
+          // It is still valid cursor progress: advancing it prevents the overlap
+          // window from looking like backend ingestion lag indefinitely.
+          recordProviderRuntimeIngestionCursor(replayedProviderDaemonCursor);
+          yield* persistProviderDaemonCursor(replayedProviderDaemonCursor);
+        }
         yield* Effect.logDebug("skipping replayed provider runtime event").pipe(
           Effect.annotateLogs({
             eventId: event.eventId,
@@ -2464,6 +2473,10 @@ const make = Effect.gen(function* () {
       yield* Cache.set(processedRuntimeEventIds, eventKey, true);
       const providerDaemonCursor = readProviderDaemonRuntimeEventCursor(event);
       if (providerDaemonCursor !== undefined) {
+        // Record only after the canonical event has been fully processed. The
+        // diagnostics cursor therefore never outruns chat/orchestration state,
+        // while the durable checkpoint can remain intentionally batched.
+        recordProviderRuntimeIngestionCursor(providerDaemonCursor);
         yield* persistProviderDaemonCursor(providerDaemonCursor);
       }
       yield* publishTurnIngestionQuiesced();
