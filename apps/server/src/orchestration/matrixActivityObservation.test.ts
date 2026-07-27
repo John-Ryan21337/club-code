@@ -2,12 +2,26 @@ import { describe, expect, it } from "vitest";
 
 import { classifyMatrixActivityObservation } from "./matrixActivityObservation.ts";
 
-const observation = (activityType: "network" | "database" | "build") => ({
+const observation = (activityType: "network" | "database" | "build" | "agent") => ({
   providerObserved: true,
   activityType,
 });
 
 describe("classifyMatrixActivityObservation", () => {
+  it("classifies an exact canonical agent lifecycle without inspecting provider content", () => {
+    const result = classifyMatrixActivityObservation({
+      itemType: "collab_agent_tool_call",
+      data: {
+        prompt: "private delegated task",
+        description: "private agent name",
+      },
+    });
+
+    expect(result).toEqual(observation("agent"));
+    expect(Object.keys(result ?? {}).toSorted()).toEqual(["activityType", "providerObserved"]);
+    expect(JSON.stringify(result)).not.toMatch(/private|task|name/iu);
+  });
+
   it("classifies canonical web searches without inspecting provider content", () => {
     const result = classifyMatrixActivityObservation({
       itemType: "web_search",

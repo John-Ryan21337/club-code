@@ -1,6 +1,6 @@
 import type { CanonicalItemType } from "@cafecode/contracts";
 
-export type MatrixActivityType = "network" | "database" | "build";
+export type MatrixActivityType = "network" | "database" | "build" | "agent";
 
 export interface MatrixActivityObservation {
   readonly providerObserved: true;
@@ -30,6 +30,10 @@ const OBSERVATIONS = {
   build: Object.freeze({
     providerObserved: true,
     activityType: "build",
+  }),
+  agent: Object.freeze({
+    providerObserved: true,
+    activityType: "agent",
   }),
 } as const satisfies Record<MatrixActivityType, MatrixActivityObservation>;
 
@@ -108,6 +112,12 @@ const SERVER_TOOL_IDENTITIES: Readonly<
       "compile",
       "compile_project",
     ]),
+  },
+  // Agent communication uses one exact canonical lifecycle item type below;
+  // arbitrary MCP server/tool names must not be reinterpreted as orchestration.
+  agent: {
+    servers: new Set(),
+    tools: new Set(),
   },
 };
 
@@ -687,6 +697,9 @@ function commandFromSanitizedData(data: unknown): string | undefined {
 export function classifyMatrixActivityObservation(
   input: MatrixActivityObservationInput,
 ): MatrixActivityObservation | undefined {
+  if (input.itemType === "collab_agent_tool_call") {
+    return OBSERVATIONS.agent;
+  }
   if (input.itemType === "web_search") {
     return classifyExactWebSearchData(input.data) ? OBSERVATIONS.network : undefined;
   }

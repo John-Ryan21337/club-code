@@ -2,6 +2,7 @@ import {
   DEFAULT_AMBIENT_COLOR,
   DEFAULT_AMBIENT_OPACITY,
   DEFAULT_FALLING_EFFECT_2CH_ENRICHED,
+  DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_AGENT_ENABLED,
   DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_BUILD_ENABLED,
   DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_COLOR_MODE,
   DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_DATABASE_ENABLED,
@@ -109,6 +110,8 @@ export function WindowAtmosphereSettings() {
             DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_DATABASE_ENABLED ||
           settings.fallingEffectActivityLinkBuildEnabled !==
             DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_BUILD_ENABLED ||
+          settings.fallingEffectActivityLinkAgentEnabled !==
+            DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_AGENT_ENABLED ||
           settings.fallingEffectActivityLinkColorMode !==
             DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_COLOR_MODE ||
           settings.fallingEffectLiveWorkVocabulary !==
@@ -133,6 +136,8 @@ export function WindowAtmosphereSettings() {
                     DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_DATABASE_ENABLED,
                   fallingEffectActivityLinkBuildEnabled:
                     DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_BUILD_ENABLED,
+                  fallingEffectActivityLinkAgentEnabled:
+                    DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_AGENT_ENABLED,
                   fallingEffectActivityLinkColorMode:
                     DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_COLOR_MODE,
                   fallingEffectLiveWorkVocabulary: DEFAULT_FALLING_EFFECT_LIVE_WORK_VOCABULARY,
@@ -288,7 +293,7 @@ export function WindowAtmosphereSettings() {
           />
           <SettingsRow
             title="Provider activity links"
-            description="Show short network, database, and build/compile pulses from provider-observed activity. Lines appear only between same-category events with the exact same reported item or tool identity; Club Code never invents data flow or renders prompts, commands, SQL values, URLs, credentials, or hidden OS traffic."
+            description="Show short network, database, build/compile, and agent-delegation pulses from provider-observed activity. Lines appear only between same-category events with the exact same reported item or tool identity; Club Code never invents data flow or renders prompts, commands, SQL values, URLs, credentials, or hidden OS traffic."
             control={
               <Switch
                 checked={settings.fallingEffectActivityLinks}
@@ -342,6 +347,17 @@ export function WindowAtmosphereSettings() {
                         }
                       />
                       <span>Build / compile</span>
+                    </label>
+                    <label className="flex cursor-pointer items-center gap-1.5 text-xs font-medium">
+                      <Checkbox
+                        checked={settings.fallingEffectActivityLinkAgentEnabled}
+                        onCheckedChange={(checked) =>
+                          updateSettings({
+                            fallingEffectActivityLinkAgentEnabled: Boolean(checked),
+                          })
+                        }
+                      />
+                      <span>Agent / delegation</span>
                     </label>
                   </div>
                 }

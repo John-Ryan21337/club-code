@@ -1733,7 +1733,7 @@ describe("ProviderRuntimeIngestion", () => {
       type: "item.started" | "item.updated" | "item.completed",
       eventId: string,
       itemId: ReturnType<typeof asItemId>,
-      itemType: "command_execution" | "dynamic_tool_call" | "web_search",
+      itemType: "command_execution" | "dynamic_tool_call" | "collab_agent_tool_call" | "web_search",
       data: unknown,
       provider = type === "item.updated" ? "claude" : "codex",
     ) => {
@@ -1784,6 +1784,28 @@ describe("ProviderRuntimeIngestion", () => {
         query: "private prompt",
         url: "https://credential.example.test",
       },
+    );
+    const agentItemId = asItemId("item-agent-dispatch");
+    emitItem(
+      "item.started",
+      "evt-matrix-agent-started",
+      agentItemId,
+      "collab_agent_tool_call",
+      undefined,
+    );
+    emitItem(
+      "item.completed",
+      "evt-matrix-agent-completed",
+      agentItemId,
+      "collab_agent_tool_call",
+      {
+        toolName: "Task",
+        input: {
+          description: "private agent name",
+          prompt: "private delegated task",
+        },
+      },
+      "claude",
     );
     const openCodeItemId = asItemId("item-opencode-build");
     for (const [type, status] of [
@@ -1945,6 +1967,15 @@ describe("ProviderRuntimeIngestion", () => {
       providerObserved: true,
       activityType: "network",
     });
+    for (const eventId of ["evt-matrix-agent-started", "evt-matrix-agent-completed"]) {
+      const payload = payloadFor(eventId);
+      expect(payload.itemId).toBe(agentItemId);
+      expect(payload.observed).toEqual({
+        providerObserved: true,
+        activityType: "agent",
+      });
+      expect(JSON.stringify(payload.observed)).not.toMatch(/private|agent name|delegated|task/iu);
+    }
     for (const status of ["pending", "running", "completed"]) {
       const payload = payloadFor(`evt-matrix-opencode-${status}`);
       expect(payload.itemId).toBe(openCodeItemId);
