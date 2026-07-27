@@ -1724,6 +1724,252 @@ describe("ProviderRuntimeIngestion", () => {
     expect(rawOutput?.content).toMatch(/^\[content omitted: \d+ chars, \d+ lines\]$/);
   });
 
+  it("projects privacy-safe Matrix categories and exact identity across real tool lifecycles", async () => {
+    const harness = await createHarness();
+    const threadId = asThreadId("thread-1");
+    const turnId = asTurnId("turn-matrix-activity");
+    const buildItemId = asItemId("item-build");
+    const emitItem = (
+      type: "item.started" | "item.updated" | "item.completed",
+      eventId: string,
+      itemId: ReturnType<typeof asItemId>,
+      itemType: "command_execution" | "dynamic_tool_call" | "web_search",
+      data: unknown,
+      provider = type === "item.updated" ? "claude" : "codex",
+    ) => {
+      harness.emit({
+        type,
+        eventId: asEventId(eventId),
+        provider: ProviderDriverKind.make(provider),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        threadId,
+        turnId,
+        itemId,
+        payload: {
+          itemType,
+          status: type === "item.completed" ? "completed" : "inProgress",
+          data,
+        },
+      });
+    };
+
+    const sensitiveBuildCommand =
+      '"C:\\\\Windows\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe" -Command "corepack yarn build:desktop --token super-private-matrix-token"';
+    emitItem("item.started", "evt-matrix-build-started", buildItemId, "command_execution", {
+      item: { command: sensitiveBuildCommand },
+    });
+    emitItem("item.updated", "evt-matrix-build-updated", buildItemId, "command_execution", {
+      command: sensitiveBuildCommand,
+    });
+    emitItem("item.completed", "evt-matrix-build-completed", buildItemId, "command_execution", {
+      command: sensitiveBuildCommand,
+    });
+    emitItem(
+      "item.completed",
+      "evt-matrix-database-completed",
+      asItemId("item-database"),
+      "command_execution",
+      {
+        toolName: "Bash",
+        input: { command: "sqlite3 private-workspace.db" },
+      },
+    );
+    emitItem(
+      "item.completed",
+      "evt-matrix-network-completed",
+      asItemId("item-network"),
+      "web_search",
+      {
+        item: { type: "webSearch" },
+        query: "private prompt",
+        url: "https://credential.example.test",
+      },
+    );
+    const openCodeItemId = asItemId("item-opencode-build");
+    for (const [type, status] of [
+      ["item.started", "pending"],
+      ["item.updated", "running"],
+      ["item.completed", "completed"],
+    ] as const) {
+      emitItem(
+        type,
+        `evt-matrix-opencode-${status}`,
+        openCodeItemId,
+        "command_execution",
+        {
+          tool: "bash",
+          state: {
+            status,
+            input: { command: "corepack yarn build:desktop" },
+          },
+        },
+        "opencode",
+      );
+    }
+    const openCodeMcpTools = [
+      {
+        itemId: asItemId("item-opencode-network"),
+        tool: "playwright_navigate",
+        itemType: "dynamic_tool_call",
+        eventLabel: "network-mcp",
+        activityType: "network",
+        input: { url: "https://private.example.test/account?token=secret" },
+      },
+      {
+        itemId: asItemId("item-opencode-web-network"),
+        tool: "web_navigate",
+        itemType: "web_search",
+        eventLabel: "web-network",
+        activityType: "network",
+        input: { url: "https://private.example.test/account?token=secret" },
+      },
+      {
+        itemId: asItemId("item-opencode-database"),
+        tool: "postgres_query",
+        itemType: "dynamic_tool_call",
+        eventLabel: "database",
+        activityType: "database",
+        input: { query: "select private_column from private_table" },
+      },
+    ] as const;
+    for (const descriptor of openCodeMcpTools) {
+      for (const [type, state] of [
+        [
+          "item.started",
+          {
+            status: "pending",
+            input: descriptor.input,
+            raw: JSON.stringify(descriptor.input),
+          },
+        ],
+        [
+          "item.updated",
+          {
+            status: "running",
+            input: descriptor.input,
+            title: "Private provider title",
+            time: { start: 1_000 },
+          },
+        ],
+        [
+          "item.completed",
+          {
+            status: "completed",
+            input: descriptor.input,
+            output: "private provider output",
+            title: "Private provider title",
+            metadata: {},
+            time: { start: 1_000, end: 2_000 },
+          },
+        ],
+      ] as const) {
+        emitItem(
+          type,
+          `evt-matrix-opencode-${descriptor.eventLabel}-${state.status}`,
+          descriptor.itemId,
+          descriptor.itemType,
+          {
+            tool: descriptor.tool,
+            state,
+          },
+          "opencode",
+        );
+      }
+    }
+    emitItem(
+      "item.completed",
+      "evt-matrix-opencode-lookalike-completed",
+      asItemId("item-opencode-lookalike"),
+      "dynamic_tool_call",
+      {
+        tool: "my_playwright_navigate",
+        state: {
+          status: "completed",
+          input: { url: "https://private.example.test" },
+          output: "private provider output",
+          title: "Private provider title",
+          metadata: {},
+          time: { start: 1_000, end: 2_000 },
+        },
+      },
+      "opencode",
+    );
+    emitItem(
+      "item.completed",
+      "evt-matrix-unknown-completed",
+      asItemId("item-unknown"),
+      "command_execution",
+      {
+        command: "echo build database network https://credential.example.test",
+      },
+    );
+
+    const thread = await waitForThread(harness.readModel, (entry) =>
+      entry.activities.some(
+        (activity: ProviderRuntimeTestActivity) => activity.id === "evt-matrix-unknown-completed",
+      ),
+    );
+    const payloadFor = (eventId: string): Record<string, unknown> => {
+      const activity = thread.activities.find(
+        (entry: ProviderRuntimeTestActivity) => entry.id === eventId,
+      );
+      return activity?.payload && typeof activity.payload === "object"
+        ? (activity.payload as Record<string, unknown>)
+        : {};
+    };
+
+    for (const eventId of [
+      "evt-matrix-build-started",
+      "evt-matrix-build-updated",
+      "evt-matrix-build-completed",
+    ]) {
+      const payload = payloadFor(eventId);
+      expect(payload.itemId).toBe(buildItemId);
+      expect(payload.observed).toEqual({
+        providerObserved: true,
+        activityType: "build",
+      });
+      expect(Object.keys(payload.observed as Record<string, unknown>).toSorted()).toEqual([
+        "activityType",
+        "providerObserved",
+      ]);
+      expect(JSON.stringify(payload.observed)).not.toMatch(
+        /super-private|token|command|path|url|sql|item-build/iu,
+      );
+    }
+    expect(payloadFor("evt-matrix-database-completed").observed).toEqual({
+      providerObserved: true,
+      activityType: "database",
+    });
+    expect(payloadFor("evt-matrix-network-completed").observed).toEqual({
+      providerObserved: true,
+      activityType: "network",
+    });
+    for (const status of ["pending", "running", "completed"]) {
+      const payload = payloadFor(`evt-matrix-opencode-${status}`);
+      expect(payload.itemId).toBe(openCodeItemId);
+      expect(payload.observed).toEqual({
+        providerObserved: true,
+        activityType: "build",
+      });
+    }
+    for (const descriptor of openCodeMcpTools) {
+      for (const status of ["pending", "running", "completed"]) {
+        const payload = payloadFor(`evt-matrix-opencode-${descriptor.eventLabel}-${status}`);
+        expect(payload.itemId).toBe(descriptor.itemId);
+        expect(payload.observed).toEqual({
+          providerObserved: true,
+          activityType: descriptor.activityType,
+        });
+        expect(JSON.stringify(payload.observed)).not.toMatch(
+          /private|token|query|url|output|title/iu,
+        );
+      }
+    }
+    expect(payloadFor("evt-matrix-opencode-lookalike-completed").observed).toBeUndefined();
+    expect(payloadFor("evt-matrix-unknown-completed").observed).toBeUndefined();
+  });
+
   it("projects Codex context compaction item lifecycle into visible tool activity", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";

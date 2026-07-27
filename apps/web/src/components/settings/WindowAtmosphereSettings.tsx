@@ -2,7 +2,10 @@ import {
   DEFAULT_AMBIENT_COLOR,
   DEFAULT_AMBIENT_OPACITY,
   DEFAULT_FALLING_EFFECT_2CH_ENRICHED,
+  DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_BUILD_ENABLED,
   DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_COLOR_MODE,
+  DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_DATABASE_ENABLED,
+  DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_NETWORK_ENABLED,
   DEFAULT_FALLING_EFFECT_ACTIVITY_LINKS,
   DEFAULT_FALLING_EFFECT_DENSITY,
   DEFAULT_FALLING_EFFECTS_ENABLED,
@@ -24,6 +27,7 @@ import {
 import { useSettings, useUpdateSettings } from "../../hooks/useSettings";
 import { useServerConfig } from "../../rpc/serverState";
 import { Button } from "../ui/button";
+import { Checkbox } from "../ui/checkbox";
 import {
   NumberField,
   NumberFieldDecrement,
@@ -99,6 +103,12 @@ export function WindowAtmosphereSettings() {
           settings.fallingEffectJapaneseRatio !== DEFAULT_FALLING_EFFECT_JAPANESE_RATIO ||
           settings.fallingEffect2chEnriched !== DEFAULT_FALLING_EFFECT_2CH_ENRICHED ||
           settings.fallingEffectActivityLinks !== DEFAULT_FALLING_EFFECT_ACTIVITY_LINKS ||
+          settings.fallingEffectActivityLinkNetworkEnabled !==
+            DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_NETWORK_ENABLED ||
+          settings.fallingEffectActivityLinkDatabaseEnabled !==
+            DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_DATABASE_ENABLED ||
+          settings.fallingEffectActivityLinkBuildEnabled !==
+            DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_BUILD_ENABLED ||
           settings.fallingEffectActivityLinkColorMode !==
             DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_COLOR_MODE ||
           settings.fallingEffectLiveWorkVocabulary !==
@@ -117,6 +127,12 @@ export function WindowAtmosphereSettings() {
                   fallingEffectJapaneseRatio: DEFAULT_FALLING_EFFECT_JAPANESE_RATIO,
                   fallingEffect2chEnriched: DEFAULT_FALLING_EFFECT_2CH_ENRICHED,
                   fallingEffectActivityLinks: DEFAULT_FALLING_EFFECT_ACTIVITY_LINKS,
+                  fallingEffectActivityLinkNetworkEnabled:
+                    DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_NETWORK_ENABLED,
+                  fallingEffectActivityLinkDatabaseEnabled:
+                    DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_DATABASE_ENABLED,
+                  fallingEffectActivityLinkBuildEnabled:
+                    DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_BUILD_ENABLED,
                   fallingEffectActivityLinkColorMode:
                     DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_COLOR_MODE,
                   fallingEffectLiveWorkVocabulary: DEFAULT_FALLING_EFFECT_LIVE_WORK_VOCABULARY,
@@ -284,37 +300,84 @@ export function WindowAtmosphereSettings() {
             }
           />
           {settings.fallingEffectActivityLinks ? (
-            <SettingsRow
-              title="Activity link colors"
-              description="Random gives each real link an independent deterministic hue. Matrix follows the selected uniform or per-stream Matrix color animation."
-              control={
-                <RadioGroup
-                  value={settings.fallingEffectActivityLinkColorMode}
-                  onValueChange={(value) => {
-                    if (value === "random" || value === "matrix") {
-                      updateSettings({ fallingEffectActivityLinkColorMode: value });
-                    }
-                  }}
-                  aria-label="Matrix activity link color mode"
-                  className="flex-row gap-4"
-                >
-                  {(
-                    [
-                      ["random", "Random independent"],
-                      ["matrix", "Follow Matrix colors"],
-                    ] as const
-                  ).map(([value, label]) => (
-                    <label
-                      key={value}
-                      className="flex cursor-pointer items-center gap-1.5 text-xs font-medium"
-                    >
-                      <Radio value={value} />
-                      <span>{label}</span>
+            <>
+              <SettingsRow
+                title="Activity inputs"
+                description="Choose which safe provider-observed activity categories may create Matrix pulses and connecting lines. Clear every checkbox to show no activity overlay."
+                control={
+                  <div
+                    role="group"
+                    aria-label="Matrix activity link inputs"
+                    className="flex flex-wrap justify-end gap-x-4 gap-y-2"
+                  >
+                    <label className="flex cursor-pointer items-center gap-1.5 text-xs font-medium">
+                      <Checkbox
+                        checked={settings.fallingEffectActivityLinkNetworkEnabled}
+                        onCheckedChange={(checked) =>
+                          updateSettings({
+                            fallingEffectActivityLinkNetworkEnabled: Boolean(checked),
+                          })
+                        }
+                      />
+                      <span>Network / web</span>
                     </label>
-                  ))}
-                </RadioGroup>
-              }
-            />
+                    <label className="flex cursor-pointer items-center gap-1.5 text-xs font-medium">
+                      <Checkbox
+                        checked={settings.fallingEffectActivityLinkDatabaseEnabled}
+                        onCheckedChange={(checked) =>
+                          updateSettings({
+                            fallingEffectActivityLinkDatabaseEnabled: Boolean(checked),
+                          })
+                        }
+                      />
+                      <span>Database / query</span>
+                    </label>
+                    <label className="flex cursor-pointer items-center gap-1.5 text-xs font-medium">
+                      <Checkbox
+                        checked={settings.fallingEffectActivityLinkBuildEnabled}
+                        onCheckedChange={(checked) =>
+                          updateSettings({
+                            fallingEffectActivityLinkBuildEnabled: Boolean(checked),
+                          })
+                        }
+                      />
+                      <span>Build / compile</span>
+                    </label>
+                  </div>
+                }
+              />
+              <SettingsRow
+                title="Activity link colors"
+                description="Random gives each real link an independent deterministic hue. Matrix follows the selected uniform or per-stream Matrix color animation."
+                control={
+                  <RadioGroup
+                    value={settings.fallingEffectActivityLinkColorMode}
+                    onValueChange={(value) => {
+                      if (value === "random" || value === "matrix") {
+                        updateSettings({ fallingEffectActivityLinkColorMode: value });
+                      }
+                    }}
+                    aria-label="Matrix activity link color mode"
+                    className="flex-row gap-4"
+                  >
+                    {(
+                      [
+                        ["random", "Random independent"],
+                        ["matrix", "Follow Matrix colors"],
+                      ] as const
+                    ).map(([value, label]) => (
+                      <label
+                        key={value}
+                        className="flex cursor-pointer items-center gap-1.5 text-xs font-medium"
+                      >
+                        <Radio value={value} />
+                        <span>{label}</span>
+                      </label>
+                    ))}
+                  </RadioGroup>
+                }
+              />
+            </>
           ) : null}
         </>
       ) : null}

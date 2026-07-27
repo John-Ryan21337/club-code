@@ -1,14 +1,23 @@
 import "../index.css";
 
+import { EnvironmentId, ThreadId } from "@cafecode/contracts";
 import type { UnifiedSettings } from "@cafecode/contracts/settings";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { page } from "vitest/browser";
 import { render } from "vitest-browser-react";
 
+const TEST_SELECTED_THREAD_REF = {
+  environmentId: EnvironmentId.make("environment-matrix-test"),
+  threadId: ThreadId.make("thread-matrix-test"),
+} as const;
+
 const mocks = vi.hoisted(() => ({
   activityEventsKey: "activity-1",
   activityObservedAtMs: 10_000,
   workVocabularyKey: "",
+  selectedActivityThreadRefs: [] as unknown[],
+  selectedActivityInputSelections: [] as unknown[],
+  selectedVocabularyThreadRefs: [] as unknown[],
   drawnActivityLinkCounts: [] as number[],
   settings: {
     fallingEffectsEnabled: true,
@@ -21,7 +30,10 @@ const mocks = vi.hoisted(() => ({
     fallingEffectJapaneseRatio: 0.5,
     fallingEffect2chEnriched: true,
     fallingEffectLiveWorkVocabulary: true,
-    fallingEffectActivityLinks: true,
+    fallingEffectActivityLinks: true as boolean,
+    fallingEffectActivityLinkNetworkEnabled: true as boolean,
+    fallingEffectActivityLinkDatabaseEnabled: true as boolean,
+    fallingEffectActivityLinkBuildEnabled: true as boolean,
     fallingEffectActivityLinkColorMode: "matrix" as const,
     continueBackgroundAnimations: false,
   } satisfies Partial<UnifiedSettings>,
@@ -62,13 +74,32 @@ vi.mock("../store", () => ({
 }));
 
 vi.mock("../matrixWorkVocabulary", () => ({
-  selectMatrixWorkVocabularyKey: (state: { workVocabularyKey: string }) => state.workVocabularyKey,
-  decodeMatrixWorkVocabulary: () => ({ english: [], japanese: [] }),
+  selectMatrixWorkVocabularyKey: (
+    state: { workVocabularyKey: string },
+    selectedThreadRef: unknown,
+  ) => {
+    mocks.selectedVocabularyThreadRefs.push(selectedThreadRef);
+    return selectedThreadRef === null ? "" : state.workVocabularyKey;
+  },
+  decodeMatrixWorkVocabulary: (key: string) => ({
+    english: key ? [key] : [],
+    japanese: [],
+  }),
 }));
 
 vi.mock("../matrixActivityOverlay", () => ({
   MATRIX_ACTIVITY_TTL_MS: 2_200,
-  selectMatrixActivityEventsKey: (state: { activityEventsKey: string }) => state.activityEventsKey,
+  selectMatrixActivityEventsKey: (
+    state: { activityEventsKey: string },
+    selectedThreadRef: unknown,
+    inputSelection: { network: boolean; database: boolean; build: boolean },
+  ) => {
+    mocks.selectedActivityThreadRefs.push(selectedThreadRef);
+    mocks.selectedActivityInputSelections.push(inputSelection);
+    return selectedThreadRef === null || !Object.values(inputSelection).some(Boolean)
+      ? ""
+      : state.activityEventsKey;
+  },
   decodeMatrixActivityEvents: (key: string) =>
     key
       ? [
@@ -130,6 +161,13 @@ beforeEach(() => {
   mocks.activityEventsKey = "activity-1";
   mocks.activityObservedAtMs = Date.now();
   mocks.workVocabularyKey = "";
+  mocks.settings.fallingEffectActivityLinks = true;
+  mocks.settings.fallingEffectActivityLinkNetworkEnabled = true;
+  mocks.settings.fallingEffectActivityLinkDatabaseEnabled = true;
+  mocks.settings.fallingEffectActivityLinkBuildEnabled = true;
+  mocks.selectedActivityThreadRefs = [];
+  mocks.selectedActivityInputSelections = [];
+  mocks.selectedVocabularyThreadRefs = [];
   mocks.drawnActivityLinkCounts = [];
   mocks.createAtmosphereScene.mockClear();
   mocks.updateMatrixActivityAnimationInPlace.mockReset();
@@ -205,10 +243,148 @@ describe("WindowAtmosphere", () => {
     expect(bounds.height).toBe(window.innerHeight);
   });
 
+  it("scopes both Matrix signals to the selected routed thread without reseeding", async () => {
+    const environmentId = EnvironmentId.make("environment-matrix");
+    const firstThreadId = ThreadId.make("thread-first");
+    const secondThreadId = ThreadId.make("thread-second");
+    mounted = await render(
+      <WindowAtmosphere selectedThreadRef={{ environmentId, threadId: firstThreadId }} />,
+    );
+    await expect.poll(() => mocks.createAtmosphereScene.mock.calls.length).toBe(1);
+
+    expect(mocks.selectedActivityThreadRefs.at(-1)).toEqual({
+      environmentId,
+      threadId: firstThreadId,
+    });
+    expect(mocks.selectedActivityInputSelections.at(-1)).toEqual({
+      network: true,
+      database: true,
+      build: true,
+    });
+    expect(mocks.selectedVocabularyThreadRefs.at(-1)).toEqual({
+      environmentId,
+      threadId: firstThreadId,
+    });
+
+    await mounted.rerender(
+      <WindowAtmosphere selectedThreadRef={{ environmentId, threadId: secondThreadId }} />,
+    );
+
+    expect(mocks.selectedActivityThreadRefs.at(-1)).toEqual({
+      environmentId,
+      threadId: secondThreadId,
+    });
+    expect(mocks.selectedVocabularyThreadRefs.at(-1)).toEqual({
+      environmentId,
+      threadId: secondThreadId,
+    });
+    expect(mocks.createAtmosphereScene).toHaveBeenCalledTimes(1);
+  });
+
+  it("filters all unchecked activity inputs and repaints without reseeding", async () => {
+    (reducedMotionQuery as unknown as { matches: boolean }).matches = true;
+    mounted = await render(<WindowAtmosphere selectedThreadRef={TEST_SELECTED_THREAD_REF} />);
+    await expect.poll(() => mocks.drawAtmosphereScene.mock.calls.length).toBeGreaterThan(0);
+
+    mocks.drawAtmosphereScene.mockClear();
+    mocks.updateMatrixActivityAnimationInPlace.mockClear();
+    mocks.settings.fallingEffectActivityLinkNetworkEnabled = false;
+    mocks.settings.fallingEffectActivityLinkDatabaseEnabled = false;
+    mocks.settings.fallingEffectActivityLinkBuildEnabled = false;
+    await mounted.rerender(<WindowAtmosphere selectedThreadRef={TEST_SELECTED_THREAD_REF} />);
+
+    expect(mocks.selectedActivityInputSelections.at(-1)).toEqual({
+      network: false,
+      database: false,
+      build: false,
+    });
+    expect(mocks.updateMatrixActivityAnimationInPlace).toHaveBeenLastCalledWith(
+      expect.anything(),
+      [],
+      expect.any(Number),
+      12,
+      true,
+    );
+    expect(mocks.drawAtmosphereScene).toHaveBeenCalledTimes(1);
+    expect(mocks.createAtmosphereScene).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears committed thread signals before a reduced-motion null-route paint", async () => {
+    (reducedMotionQuery as unknown as { matches: boolean }).matches = true;
+    mocks.workVocabularyKey = "work-first";
+    mounted = await render(<WindowAtmosphere selectedThreadRef={TEST_SELECTED_THREAD_REF} />);
+    await expect.poll(() => mocks.drawAtmosphereScene.mock.calls.length).toBeGreaterThan(0);
+
+    mocks.applyMatrixWorkVocabularyInPlace.mockClear();
+    mocks.drawAtmosphereScene.mockClear();
+    mocks.updateMatrixActivityAnimationInPlace.mockClear();
+    await mounted.rerender(<WindowAtmosphere selectedThreadRef={null} />);
+
+    expect(mocks.selectedActivityThreadRefs.at(-1)).toBeNull();
+    expect(mocks.selectedVocabularyThreadRefs.at(-1)).toBeNull();
+    expect(mocks.applyMatrixWorkVocabularyInPlace).toHaveBeenLastCalledWith(
+      expect.anything(),
+      { english: [], japanese: [] },
+      expect.any(Function),
+    );
+    expect(mocks.updateMatrixActivityAnimationInPlace).toHaveBeenLastCalledWith(
+      expect.anything(),
+      [],
+      expect.any(Number),
+      12,
+      true,
+    );
+    expect(mocks.applyMatrixWorkVocabularyInPlace.mock.invocationCallOrder.at(-1)).toBeLessThan(
+      mocks.drawAtmosphereScene.mock.invocationCallOrder[0]!,
+    );
+    expect(mocks.createAtmosphereScene).toHaveBeenCalledTimes(1);
+  });
+
+  it("repaints reduced-motion vocabulary before paint when activity links are disabled", async () => {
+    (reducedMotionQuery as unknown as { matches: boolean }).matches = true;
+    mocks.settings.fallingEffectActivityLinks = false;
+    mocks.workVocabularyKey = "work-first";
+    mounted = await render(<WindowAtmosphere selectedThreadRef={TEST_SELECTED_THREAD_REF} />);
+    await expect.poll(() => mocks.drawAtmosphereScene.mock.calls.length).toBeGreaterThan(0);
+
+    mocks.applyMatrixWorkVocabularyInPlace.mockClear();
+    mocks.drawAtmosphereScene.mockClear();
+    mocks.updateMatrixActivityAnimationInPlace.mockClear();
+    mocks.workVocabularyKey = "work-second";
+    await mounted.rerender(<WindowAtmosphere selectedThreadRef={TEST_SELECTED_THREAD_REF} />);
+
+    expect(mocks.applyMatrixWorkVocabularyInPlace).toHaveBeenLastCalledWith(
+      expect.anything(),
+      { english: ["work-second"], japanese: [] },
+      expect.any(Function),
+    );
+    expect(mocks.drawAtmosphereScene).toHaveBeenCalledTimes(1);
+    expect(mocks.applyMatrixWorkVocabularyInPlace.mock.invocationCallOrder.at(-1)).toBeLessThan(
+      mocks.drawAtmosphereScene.mock.invocationCallOrder[0]!,
+    );
+    expect(mocks.updateMatrixActivityAnimationInPlace).not.toHaveBeenCalled();
+
+    mocks.applyMatrixWorkVocabularyInPlace.mockClear();
+    mocks.drawAtmosphereScene.mockClear();
+    await mounted.rerender(<WindowAtmosphere selectedThreadRef={null} />);
+
+    expect(mocks.applyMatrixWorkVocabularyInPlace).toHaveBeenLastCalledWith(
+      expect.anything(),
+      { english: [], japanese: [] },
+      expect.any(Function),
+    );
+    expect(mocks.drawAtmosphereScene).toHaveBeenCalledTimes(1);
+    expect(mocks.applyMatrixWorkVocabularyInPlace.mock.invocationCallOrder.at(-1)).toBeLessThan(
+      mocks.drawAtmosphereScene.mock.invocationCallOrder[0]!,
+    );
+    expect(mocks.updateMatrixActivityAnimationInPlace).not.toHaveBeenCalled();
+    expect(mocks.createAtmosphereScene).toHaveBeenCalledTimes(1);
+  });
+
   it("updates live activity with the current wall clock and coalesces resize bursts", async () => {
     const dateNow = vi.spyOn(Date, "now").mockReturnValue(10_000);
     mocks.activityObservedAtMs = 9_000;
-    mounted = await render(<WindowAtmosphere />);
+    mounted = await render(<WindowAtmosphere selectedThreadRef={TEST_SELECTED_THREAD_REF} />);
     await expect.poll(() => mocks.createAtmosphereScene.mock.calls.length).toBe(1);
 
     runNextFrame(1_000);
@@ -223,7 +399,7 @@ describe("WindowAtmosphere", () => {
     mocks.activityEventsKey = "activity-2";
     mocks.activityObservedAtMs = 19_000;
     dateNow.mockReturnValue(20_000);
-    await mounted.rerender(<WindowAtmosphere />);
+    await mounted.rerender(<WindowAtmosphere selectedThreadRef={TEST_SELECTED_THREAD_REF} />);
     expect(mocks.createAtmosphereScene).toHaveBeenCalledTimes(1);
 
     runNextFrame(1_016);
@@ -252,14 +428,14 @@ describe("WindowAtmosphere", () => {
 
   it("repaints static reduced-motion activity and work terms without reseeding", async () => {
     (reducedMotionQuery as unknown as { matches: boolean }).matches = true;
-    mounted = await render(<WindowAtmosphere />);
+    mounted = await render(<WindowAtmosphere selectedThreadRef={TEST_SELECTED_THREAD_REF} />);
     await expect.poll(() => mocks.drawAtmosphereScene.mock.calls.length).toBe(1);
     expect(frameCallbacks.size).toBe(0);
     expect(mocks.createAtmosphereScene).toHaveBeenCalledTimes(1);
 
     mocks.drawAtmosphereScene.mockClear();
     mocks.activityEventsKey = "activity-2";
-    await mounted.rerender(<WindowAtmosphere />);
+    await mounted.rerender(<WindowAtmosphere selectedThreadRef={TEST_SELECTED_THREAD_REF} />);
     expect(mocks.drawAtmosphereScene).toHaveBeenCalledTimes(1);
     expect(mocks.updateMatrixActivityAnimationInPlace).toHaveBeenLastCalledWith(
       expect.anything(),
@@ -274,7 +450,7 @@ describe("WindowAtmosphere", () => {
 
     mocks.drawAtmosphereScene.mockClear();
     mocks.workVocabularyKey = "work-2";
-    await mounted.rerender(<WindowAtmosphere />);
+    await mounted.rerender(<WindowAtmosphere selectedThreadRef={TEST_SELECTED_THREAD_REF} />);
     expect(mocks.applyMatrixWorkVocabularyInPlace).toHaveBeenCalledTimes(1);
     expect(mocks.drawAtmosphereScene).toHaveBeenCalledTimes(1);
     expect(mocks.createAtmosphereScene).toHaveBeenCalledTimes(1);
@@ -302,7 +478,7 @@ describe("WindowAtmosphere", () => {
     (reducedMotionQuery as unknown as { matches: boolean }).matches = true;
     mocks.activityObservedAtMs = 100_000;
 
-    mounted = await render(<WindowAtmosphere />);
+    mounted = await render(<WindowAtmosphere selectedThreadRef={TEST_SELECTED_THREAD_REF} />);
     expect(mocks.drawnActivityLinkCounts).toEqual([1]);
     expect(setTimeout).toHaveBeenCalledTimes(1);
     expect(setTimeout.mock.calls[0]?.[1]).toBe(2_201);

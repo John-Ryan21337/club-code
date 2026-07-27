@@ -51,6 +51,7 @@ import {
   hasRenderableAssistantText,
 } from "../providerAssistantCompletionText.ts";
 import { AssistantStreamTextCommitment } from "../providerAssistantStreamCommitment.ts";
+import { classifyMatrixActivityObservation } from "../matrixActivityObservation.ts";
 import { sanitizeProviderToolData } from "@cafecode/shared/activityPayloadSanitizer";
 import { ServerSettingsService } from "../../serverSettings.ts";
 
@@ -784,6 +785,10 @@ function runtimeEventToActivities(
       const sanitizedData = sanitizeProviderToolData(event.payload.data, {
         itemType: event.payload.itemType,
       });
+      const observed = classifyMatrixActivityObservation({
+        itemType: event.payload.itemType,
+        data: sanitizedData,
+      });
       return [
         {
           id: event.eventId,
@@ -793,8 +798,10 @@ function runtimeEventToActivities(
           summary: event.payload.title ?? "Tool updated",
           payload: {
             itemType: event.payload.itemType,
+            ...(event.itemId !== undefined ? { itemId: event.itemId } : {}),
             ...(event.payload.status ? { status: event.payload.status } : {}),
             ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
+            ...(observed !== undefined ? { observed } : {}),
             ...(sanitizedData !== undefined ? { data: sanitizedData } : {}),
           },
           turnId: toTurnId(event.turnId) ?? null,
@@ -810,6 +817,10 @@ function runtimeEventToActivities(
       const sanitizedData = sanitizeProviderToolData(event.payload.data, {
         itemType: event.payload.itemType,
       });
+      const observed = classifyMatrixActivityObservation({
+        itemType: event.payload.itemType,
+        data: sanitizedData,
+      });
       return [
         {
           id: event.eventId,
@@ -822,6 +833,7 @@ function runtimeEventToActivities(
             ...(event.itemId !== undefined ? { itemId: event.itemId } : {}),
             ...(event.payload.title !== undefined ? { title: event.payload.title } : {}),
             ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
+            ...(observed !== undefined ? { observed } : {}),
             ...(sanitizedData !== undefined ? { data: sanitizedData } : {}),
           },
           turnId: toTurnId(event.turnId) ?? null,
@@ -834,6 +846,13 @@ function runtimeEventToActivities(
       if (!isToolLifecycleItemType(event.payload.itemType)) {
         return [];
       }
+      const sanitizedData = sanitizeProviderToolData(event.payload.data, {
+        itemType: event.payload.itemType,
+      });
+      const observed = classifyMatrixActivityObservation({
+        itemType: event.payload.itemType,
+        data: sanitizedData,
+      });
       return [
         {
           id: event.eventId,
@@ -846,6 +865,7 @@ function runtimeEventToActivities(
             ...(event.itemId !== undefined ? { itemId: event.itemId } : {}),
             ...(event.payload.title !== undefined ? { title: event.payload.title } : {}),
             ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
+            ...(observed !== undefined ? { observed } : {}),
           },
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,

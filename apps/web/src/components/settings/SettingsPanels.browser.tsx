@@ -1376,12 +1376,41 @@ describe("settings panels", () => {
     await expect
       .element(page.getByRole("radio", { name: "Random independent", exact: true }))
       .not.toBeInTheDocument();
+    await expect.element(page.getByLabelText("Network / web")).not.toBeInTheDocument();
     await page.getByLabelText("Show provider activity links in Matrix rain").click();
+    await expect.element(page.getByText("Activity inputs", { exact: true })).toBeInTheDocument();
+    const networkActivityInput = page.getByRole("checkbox", {
+      name: "Network / web",
+      exact: true,
+    });
+    const databaseActivityInput = page.getByRole("checkbox", {
+      name: "Database / query",
+      exact: true,
+    });
+    const buildActivityInput = page.getByRole("checkbox", {
+      name: "Build / compile",
+      exact: true,
+    });
+    await expect.element(networkActivityInput).toHaveAttribute("aria-checked", "true");
+    await expect.element(databaseActivityInput).toHaveAttribute("aria-checked", "true");
+    await expect.element(buildActivityInput).toHaveAttribute("aria-checked", "true");
+    await networkActivityInput.click();
+    await databaseActivityInput.click();
+    await buildActivityInput.click();
     await page.getByRole("radio", { name: "Follow Matrix colors", exact: true }).click();
     await page.getByRole("radio", { name: "Random independent", exact: true }).click();
     await page.getByRole("radio", { name: "Follow Matrix colors", exact: true }).click();
     await vi.waitFor(() => {
       expect(updateClientSettings).toHaveBeenCalledWith({ fallingEffectActivityLinks: true });
+      expect(updateClientSettings).toHaveBeenCalledWith({
+        fallingEffectActivityLinkNetworkEnabled: false,
+      });
+      expect(updateClientSettings).toHaveBeenCalledWith({
+        fallingEffectActivityLinkDatabaseEnabled: false,
+      });
+      expect(updateClientSettings).toHaveBeenCalledWith({
+        fallingEffectActivityLinkBuildEnabled: false,
+      });
       expect(updateClientSettings).toHaveBeenCalledWith({
         fallingEffectActivityLinkColorMode: "random",
       });
@@ -1429,6 +1458,9 @@ describe("settings panels", () => {
       fallingEffect2chEnriched: true,
       fallingEffectLiveWorkVocabulary: true,
       fallingEffectActivityLinks: true,
+      fallingEffectActivityLinkNetworkEnabled: false,
+      fallingEffectActivityLinkDatabaseEnabled: false,
+      fallingEffectActivityLinkBuildEnabled: false,
       fallingEffectActivityLinkColorMode: "matrix",
     });
 
@@ -1456,6 +1488,9 @@ describe("settings panels", () => {
         fallingEffectMatrixColorMode: "rainbow-extra",
         fallingEffectLiveWorkVocabulary: true,
         fallingEffectActivityLinks: true,
+        fallingEffectActivityLinkNetworkEnabled: false,
+        fallingEffectActivityLinkDatabaseEnabled: false,
+        fallingEffectActivityLinkBuildEnabled: false,
         fallingEffectActivityLinkColorMode: "matrix",
       },
     });
@@ -1470,14 +1505,14 @@ describe("settings panels", () => {
     await expect
       .element(page.getByLabelText("Changed settings"))
       .toHaveTextContent(
-        "Matrix color mode | Matrix live work vocabulary | Matrix activity links | Matrix activity link colors",
+        "Matrix color mode | Matrix live work vocabulary | Matrix activity links | Matrix activity link inputs | Matrix activity link colors",
       );
     await page.getByRole("button", { name: "Apply settings reset" }).click();
 
     await vi.waitFor(() => {
       expect(confirm).toHaveBeenCalledWith(
         expect.stringContaining(
-          "Matrix color mode, Matrix live work vocabulary, Matrix activity links, Matrix activity link colors",
+          "Matrix color mode, Matrix live work vocabulary, Matrix activity links, Matrix activity link inputs, Matrix activity link colors",
         ),
       );
       expect(updateClientSettings).toHaveBeenCalledWith(
@@ -1485,6 +1520,9 @@ describe("settings panels", () => {
           fallingEffectMatrixColorMode: "fixed",
           fallingEffectLiveWorkVocabulary: false,
           fallingEffectActivityLinks: false,
+          fallingEffectActivityLinkNetworkEnabled: true,
+          fallingEffectActivityLinkDatabaseEnabled: true,
+          fallingEffectActivityLinkBuildEnabled: true,
           fallingEffectActivityLinkColorMode: "random",
         }),
       );
@@ -1492,6 +1530,9 @@ describe("settings panels", () => {
         fallingEffectMatrixColorMode: "fixed",
         fallingEffectLiveWorkVocabulary: false,
         fallingEffectActivityLinks: false,
+        fallingEffectActivityLinkNetworkEnabled: true,
+        fallingEffectActivityLinkDatabaseEnabled: true,
+        fallingEffectActivityLinkBuildEnabled: true,
         fallingEffectActivityLinkColorMode: "random",
       });
       expect(onRestored).toHaveBeenCalledOnce();

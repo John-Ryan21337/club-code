@@ -171,6 +171,13 @@ export const DEFAULT_FALLING_EFFECT_LIVE_WORK_VOCABULARY = false;
  * category-only activity timing can reveal when project work is happening.
  */
 export const DEFAULT_FALLING_EFFECT_ACTIVITY_LINKS = false;
+/**
+ * Category inputs remain enabled by default so enabling the master activity
+ * links switch preserves the pre-filter behavior for older settings documents.
+ */
+export const DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_NETWORK_ENABLED = true;
+export const DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_DATABASE_ENABLED = true;
+export const DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_BUILD_ENABLED = true;
 export const FallingEffectActivityLinkColorMode = Schema.Literals(["random", "matrix"]);
 export type FallingEffectActivityLinkColorMode = typeof FallingEffectActivityLinkColorMode.Type;
 export const DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_COLOR_MODE: FallingEffectActivityLinkColorMode =
@@ -516,6 +523,19 @@ export const ClientSettingsSchema = Schema.Struct({
   fallingEffectActivityLinks: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_ACTIVITY_LINKS)),
   ),
+  fallingEffectActivityLinkNetworkEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(
+      Effect.succeed(DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_NETWORK_ENABLED),
+    ),
+  ),
+  fallingEffectActivityLinkDatabaseEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(
+      Effect.succeed(DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_DATABASE_ENABLED),
+    ),
+  ),
+  fallingEffectActivityLinkBuildEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_BUILD_ENABLED)),
+  ),
   fallingEffectActivityLinkColorMode: FallingEffectActivityLinkColorMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_COLOR_MODE)),
   ),
@@ -717,6 +737,9 @@ export const AMBIENT_CLIENT_SETTINGS_KEYS = [
   "fallingEffect2chEnriched",
   "fallingEffectLiveWorkVocabulary",
   "fallingEffectActivityLinks",
+  "fallingEffectActivityLinkNetworkEnabled",
+  "fallingEffectActivityLinkDatabaseEnabled",
+  "fallingEffectActivityLinkBuildEnabled",
   "fallingEffectActivityLinkColorMode",
   "ambientVideoEnabled",
   "ambientVideoSource",
@@ -758,6 +781,9 @@ export const DEFAULT_AMBIENT_CLIENT_SETTINGS: AmbientClientSettings = {
   fallingEffect2chEnriched: DEFAULT_FALLING_EFFECT_2CH_ENRICHED,
   fallingEffectLiveWorkVocabulary: DEFAULT_FALLING_EFFECT_LIVE_WORK_VOCABULARY,
   fallingEffectActivityLinks: DEFAULT_FALLING_EFFECT_ACTIVITY_LINKS,
+  fallingEffectActivityLinkNetworkEnabled: DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_NETWORK_ENABLED,
+  fallingEffectActivityLinkDatabaseEnabled: DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_DATABASE_ENABLED,
+  fallingEffectActivityLinkBuildEnabled: DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_BUILD_ENABLED,
   fallingEffectActivityLinkColorMode: DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_COLOR_MODE,
   ambientVideoEnabled: DEFAULT_AMBIENT_VIDEO_ENABLED,
   ambientVideoSource: DEFAULT_AMBIENT_VIDEO_SOURCE,
@@ -818,6 +844,9 @@ export const CLUB_CODE_FIRST_RUN_CLIENT_SETTINGS: ClientSettings = Schema.decode
   fallingEffect2chEnriched: true,
   fallingEffectLiveWorkVocabulary: true,
   fallingEffectActivityLinks: true,
+  fallingEffectActivityLinkNetworkEnabled: true,
+  fallingEffectActivityLinkDatabaseEnabled: true,
+  fallingEffectActivityLinkBuildEnabled: true,
   fallingEffectActivityLinkColorMode: "matrix",
   ambientVideoEnabled: true,
   ambientVideoSource: null,
@@ -1408,6 +1437,9 @@ export const ClientSettingsPatch = Schema.Struct({
   fallingEffect2chEnriched: Schema.optionalKey(Schema.Boolean),
   fallingEffectLiveWorkVocabulary: Schema.optionalKey(Schema.Boolean),
   fallingEffectActivityLinks: Schema.optionalKey(Schema.Boolean),
+  fallingEffectActivityLinkNetworkEnabled: Schema.optionalKey(Schema.Boolean),
+  fallingEffectActivityLinkDatabaseEnabled: Schema.optionalKey(Schema.Boolean),
+  fallingEffectActivityLinkBuildEnabled: Schema.optionalKey(Schema.Boolean),
   fallingEffectActivityLinkColorMode: Schema.optionalKey(FallingEffectActivityLinkColorMode),
   ambientVideoEnabled: Schema.optionalKey(Schema.Boolean),
   ambientVideoSource: Schema.optionalKey(AmbientVideoSource),
