@@ -118,8 +118,8 @@ Matrix pulses. The master switch retains three independent checkboxes:
 **Network / web**, **Database / query**, and **Build / compile**. All three
 category inputs default on when absent so older settings retain their behavior;
 clearing all three produces no activity events, pulses, or links. At most 24
-recent category/hash events and eight simultaneous links are retained, and
-visual state expires after roughly 2.2 seconds. A pulse may exist without a
+recent category/hash events and 12 simultaneous links are retained, and visual
+state expires after eight seconds. A pulse may exist without a
 line. A line exists only when two events have the same category and exact same
 provider-reported item or tool identity. A shared agent, operation label,
 dependency label, temporal proximity, or similar wording is not enough.
@@ -128,8 +128,10 @@ Connected falling strings use reviewed semantic pairs—NETWORK/FETCH,
 DATABASE/QUERY, BUILD/COMPILE, or fixed Japanese counterparts according to the
 string's existing language assignment—rather than random glyph meaning or raw
 provider identifiers. Routes use horizontal and +/-60-degree hex-grid segments.
-A packet travels over the total polyline length with a short fading trail. Each
-route, packet, and trail shares one deterministic hue in Random mode, while a
+Three evenly spaced packets repeatedly travel over each real correlated route
+with short fading trails, making sparse provider events easier to see without
+inventing additional activity. Each route, packet, and trail shares one
+deterministic hue in Random mode, while a
 glyph shared by multiple routes renders once using its newest attached route's
 hue. Matrix mode follows the selected Matrix palette and interpolates between
 independently cycling endpoint colors. Activity marks use the same configured
