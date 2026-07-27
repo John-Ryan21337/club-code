@@ -456,7 +456,7 @@ describe("Matrix provider activity overlay", () => {
     expect(selectMatrixActivityEventsKey(state, null)).toBe("");
   });
 
-  it("correlates a selected-thread lifecycle across more than 160 unrelated retained rows", () => {
+  it("retains a selected-thread verified route across more than 160 newer qualifying activities", () => {
     const environmentId = EnvironmentId.make("environment-long-lifecycle");
     const threadId = ThreadId.make("thread-long-lifecycle");
     const now = Date.parse("2026-07-23T12:10:00.000Z");
@@ -475,10 +475,10 @@ describe("Matrix provider activity overlay", () => {
         `unrelated-${index}`,
         new Date(now - 59_000 + index).toISOString(),
         {
-          detail: `unclassified provider row ${index}`,
+          itemType: "web_search",
           itemId: `unrelated-tool-${index}`,
         },
-        "runtime.note",
+        "tool.updated",
       ),
     );
     const completed = activity("long-lifecycle-completed", new Date(now).toISOString(), {
@@ -506,9 +506,69 @@ describe("Matrix provider activity overlay", () => {
     const animation = createMatrixActivityAnimationState();
     updateMatrixActivityAnimationInPlace(animation, events, now, 160, false);
 
-    expect(events).toHaveLength(2);
+    expect(events).toHaveLength(MAX_MATRIX_ACTIVITY_EVENTS);
+    expect(events.filter((event) => event.category === "build")).toHaveLength(2);
     expect(animation.linkCount).toBe(1);
     expect(animation.links[0]).toMatchObject({ category: "build" });
+  });
+
+  it("does not let expired route pairs crowd fresh activity out of the bounded payload", () => {
+    const environmentId = EnvironmentId.make("environment-expired-lifecycle");
+    const threadId = ThreadId.make("thread-expired-lifecycle");
+    const now = Date.parse("2026-07-23T12:10:00.000Z");
+    const expiredPairs = Array.from({ length: MAX_MATRIX_ACTIVITY_LINKS }, (_, index) => {
+      const startedAt = now - 12 * 60 * 60 * 1_000 + index * 1_000;
+      const itemId = `expired-lifecycle-tool-${index}`;
+      return [
+        activity(
+          `expired-lifecycle-start-${index}`,
+          new Date(startedAt).toISOString(),
+          { itemType: "build", itemId },
+          "tool.started",
+        ),
+        activity(`expired-lifecycle-completed-${index}`, new Date(startedAt + 100).toISOString(), {
+          itemType: "build",
+          itemId,
+        }),
+      ];
+    }).flat();
+    const fresh = activity(
+      "fresh-standalone-after-expired-lifecycles",
+      new Date(now - 10).toISOString(),
+      { itemType: "web_search", itemId: "fresh-network-tool" },
+    );
+    const retained = [...expiredPairs, fresh];
+    const state = {
+      environmentStateById: {
+        [environmentId]: {
+          activityIdsByThreadId: {
+            [threadId]: retained.map((entry) => entry.id),
+          },
+          activityByThreadId: {
+            [threadId]: Object.fromEntries(retained.map((entry) => [entry.id, entry])),
+          },
+        },
+      },
+    } as unknown as AppState;
+
+    const events = decodeMatrixActivityEvents(
+      selectMatrixActivityEventsKey(
+        state,
+        { environmentId, threadId },
+        { network: true, database: true, build: true, agent: true },
+        { nowMs: now, requestedTtlMs: 30_000 },
+      ),
+    );
+    const animation = createMatrixActivityAnimationState();
+    updateMatrixActivityAnimationInPlace(animation, events, now, 160, false, 30_000);
+
+    expect(events).toHaveLength(MAX_MATRIX_ACTIVITY_EVENTS);
+    expect(events).toContainEqual(
+      expect.objectContaining({ category: "network", observedAtMs: now - 10 }),
+    );
+    expect(animation.linkCount).toBe(0);
+    expect(animation.pulseCount).toBe(1);
+    expect(animation.pulses[0]).toMatchObject({ category: "network", semanticRole: "category" });
   });
 
   it("fails closed for prototype-key routes and malformed route state", () => {
@@ -1070,6 +1130,68 @@ describe("Matrix provider activity overlay", () => {
         (draw) => draw.kind === "text" && draw.maxWidth === undefined,
       ),
     ).toEqual([]);
+  });
+
+  it("bounds hostile pulse and link counters by their populated capped arrays", () => {
+    const scene = createAtmosphereScene("matrix", 800, 600, createSeededRandom(101), undefined, 0);
+    const hostileLinks = createMatrixActivityAnimationState();
+    hostileLinks.pulses.push({
+      anchorIndex: 0,
+      category: "build",
+      intensity: 1,
+      linkColorHue: 45,
+      semanticRole: "operation",
+    });
+    hostileLinks.links.push({
+      fromAnchorIndex: 1,
+      toAnchorIndex: 0,
+      operationAnchorIndex: 0,
+      category: "build",
+      intensity: 1,
+      linePulse: 1,
+      colorHue: 45,
+      packetProgress: 0,
+    });
+    hostileLinks.pulseCount = 1;
+    hostileLinks.linkCount = Number.MAX_SAFE_INTEGER;
+    const linkRecording = createRecordingContext();
+
+    expect(() =>
+      drawMatrixActivityAnimation(
+        linkRecording.context,
+        scene,
+        hostileLinks,
+        0.64,
+        "random",
+        UNIFORM_MATRIX_FRAME,
+      ),
+    ).not.toThrow();
+    expect(linkRecording.translations).toHaveLength(1);
+
+    const hostilePulses = createMatrixActivityAnimationState();
+    hostilePulses.pulses.push({
+      anchorIndex: 0,
+      category: "build",
+      intensity: 1,
+      linkColorHue: null,
+      semanticRole: "category",
+    });
+    hostilePulses.pulseCount = Number.MAX_SAFE_INTEGER;
+    const pulseRecording = createRecordingContext();
+
+    expect(() =>
+      drawMatrixActivityAnimation(
+        pulseRecording.context,
+        scene,
+        hostilePulses,
+        0.64,
+        "random",
+        UNIFORM_MATRIX_FRAME,
+      ),
+    ).not.toThrow();
+    expect(
+      pulseRecording.draws.filter((draw) => draw.kind === "text" && draw.maxWidth === 144),
+    ).toHaveLength(1);
   });
 
   it("caps circular telemetry work independently from the bounded pulse count", () => {

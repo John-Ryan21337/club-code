@@ -273,7 +273,7 @@ export function WindowAtmosphereSettings() {
           />
           <SettingsRow
             title="Matrix color-cycle speed"
-            description="Controls hue motion independently of how fast the glyphs fall. 1x is the original 18-second rainbow; 16x to 64x creates a rapid shimmer. Music-reactive modes multiply their continuous hue drift while preserving beat impulses. Reduced-motion mode still stops animation."
+            description="Controls hue motion independently of how fast the glyphs fall. 1x is the original 18-second rainbow; 16x to 64x creates a rapid shimmer. At the fastest uniform Rainbow rate, colors distribute per stream to avoid synchronized full-field flashing. Music-reactive drift remains safety-capped and preserves beat impulses. Reduced-motion mode still stops animation."
             control={
               <div className="flex items-center gap-2">
                 <NumberField

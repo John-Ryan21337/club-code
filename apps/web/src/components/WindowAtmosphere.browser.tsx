@@ -20,6 +20,8 @@ const mocks = vi.hoisted(() => ({
   selectedVocabularyThreadRefs: [] as unknown[],
   drawnActivityLinkCounts: [] as number[],
   matrixColorCycleSpeeds: [] as number[],
+  matrixColorTimestamps: [] as number[],
+  drawnMatrixColors: [] as string[],
   settings: {
     fallingEffectsEnabled: true,
     fallingEffectKind: "matrix" as const,
@@ -135,8 +137,9 @@ vi.mock("../windowAtmosphere", () => ({
   applyMatrixWorkVocabularyInPlace: mocks.applyMatrixWorkVocabularyInPlace,
   resolveMatrixAtmosphereColorFrame: (...args: unknown[]) => {
     mocks.matrixColorCycleSpeeds.push(args[6] as number);
+    mocks.matrixColorTimestamps.push(args[3] as number);
     return {
-      color: "#4ade80",
+      color: `hsl(${String(args[3])})`,
       perStream: true,
       baseHue: 120,
       saturation: 88,
@@ -180,6 +183,8 @@ beforeEach(() => {
   mocks.selectedVocabularyThreadRefs = [];
   mocks.drawnActivityLinkCounts = [];
   mocks.matrixColorCycleSpeeds = [];
+  mocks.matrixColorTimestamps = [];
+  mocks.drawnMatrixColors = [];
   mocks.createAtmosphereScene.mockClear();
   mocks.updateMatrixActivityAnimationInPlace.mockReset();
   mocks.updateMatrixActivityAnimationInPlace.mockImplementation(
@@ -202,7 +207,10 @@ beforeEach(() => {
     const state = args[2] as { linkCount: number };
     mocks.drawnActivityLinkCounts.push(state.linkCount);
   });
-  mocks.drawAtmosphereScene.mockClear();
+  mocks.drawAtmosphereScene.mockReset();
+  mocks.drawAtmosphereScene.mockImplementation((...args: unknown[]) => {
+    mocks.drawnMatrixColors.push(args[2] as string);
+  });
   mocks.applyMatrixWorkVocabularyInPlace.mockClear();
   nextFrameId = 1;
   frameCallbacks = new Map();
@@ -508,6 +516,22 @@ describe("WindowAtmosphere", () => {
     await mounted.rerender(<WindowAtmosphere selectedThreadRef={TEST_SELECTED_THREAD_REF} />);
     expect(mocks.applyMatrixWorkVocabularyInPlace).toHaveBeenCalledTimes(1);
     expect(mocks.drawAtmosphereScene).toHaveBeenCalledTimes(1);
+    expect(mocks.createAtmosphereScene).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the reduced-motion Matrix palette static through unrelated repaints", async () => {
+    (reducedMotionQuery as unknown as { matches: boolean }).matches = true;
+    const performanceNow = vi.spyOn(performance, "now").mockReturnValue(1_000);
+    mounted = await render(<WindowAtmosphere selectedThreadRef={TEST_SELECTED_THREAD_REF} />);
+    await expect.poll(() => mocks.drawnMatrixColors.length).toBeGreaterThan(0);
+    const initialColor = mocks.drawnMatrixColors.at(-1);
+
+    performanceNow.mockReturnValue(2_000);
+    mocks.activityEventsKey = "activity-2";
+    await mounted.rerender(<WindowAtmosphere selectedThreadRef={TEST_SELECTED_THREAD_REF} />);
+
+    expect(mocks.matrixColorTimestamps).toEqual([1_000]);
+    expect(mocks.drawnMatrixColors.at(-1)).toBe(initialColor);
     expect(mocks.createAtmosphereScene).toHaveBeenCalledTimes(1);
   });
 

@@ -23,6 +23,10 @@ export const MAX_ATMOSPHERE_CANVAS_PIXELS = 8_388_608;
 export const MAX_ATMOSPHERE_FRAME_DELTA_SECONDS = 0.1;
 export const MATRIX_RAINBOW_CYCLE_MS = 18_000;
 export const MATRIX_MIN_AUDIO_REACTIVE_LEVEL = 0.015;
+/** Avoid synchronized full-field rainbow cycling in the 3–30 Hz flash-sensitive range. */
+export const MATRIX_MAX_UNIFORM_RAINBOW_CYCLES_PER_SECOND = 3;
+export const MATRIX_MAX_UNIFORM_RAINBOW_SPEED =
+  (MATRIX_RAINBOW_CYCLE_MS / 1_000) * MATRIX_MAX_UNIFORM_RAINBOW_CYCLES_PER_SECOND;
 const MATRIX_MAX_HUE_CHANGE_PER_SECOND = 110;
 const MATRIX_MAX_LIGHTNESS_CHANGE_PER_SECOND = 42;
 const MATRIX_AUDIO_BEAT_HUE_IMPULSE_DEGREES = 22;
@@ -430,7 +434,11 @@ export function resolveMatrixAtmosphereColorFrame(
     const lightness = darkTheme ? 62 : 40;
     return {
       color: hslColor(hue, saturation, lightness),
-      perStream: mode === "rainbow-extra",
+      // Keep a requested 64x shimmer visibly fast, but distribute it across
+      // the scene instead of synchronizing a large-area color transition.
+      // The seeded stream phases preserve the same color distribution while
+      // its hues move, rather than flashing the entire field in lockstep.
+      perStream: mode === "rainbow-extra" || colorCycleSpeed > MATRIX_MAX_UNIFORM_RAINBOW_SPEED,
       baseHue: hue,
       saturation,
       lightness,
@@ -473,6 +481,7 @@ export function resolveMatrixAtmosphereColorFrame(
     MATRIX_MAX_HUE_CHANGE_PER_SECOND,
     14 + level * 30 + bass * 18 + mid * 28 + treble * 42,
   );
+  const continuousHueRate = Math.min(MATRIX_MAX_HUE_CHANGE_PER_SECOND, cycleRate * colorCycleSpeed);
   const newSignalSample =
     state.lastSignalSampledAt === null || signal.sampledAt > state.lastSignalSampledAt;
   const beatImpulse = newSignalSample ? beat * MATRIX_AUDIO_BEAT_HUE_IMPULSE_DEGREES : 0;
@@ -481,7 +490,7 @@ export function resolveMatrixAtmosphereColorFrame(
       ? spectralHue
       : // The operator controls continuous color motion; one-shot beat energy
         // remains signal-defined so a fast shimmer cannot amplify beat jumps.
-        wrapHue(state.hue + cycleRate * elapsedSeconds * colorCycleSpeed + beatImpulse);
+        wrapHue(state.hue + continuousHueRate * elapsedSeconds + beatImpulse);
   const targetLightness = (darkTheme ? 45 : 33) + level * 22 + bass * 4 + beat * 10;
   state.lightness = approach(
     state.lightness,
