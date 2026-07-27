@@ -134,10 +134,13 @@ Connected falling strings use reviewed semantic pairs—NETWORK/FETCH,
 DATABASE/QUERY, BUILD/COMPILE, or fixed Japanese counterparts according to the
 string's existing language assignment—rather than random glyph meaning or raw
 provider identifiers. Routes use horizontal and +/-60-degree hex-grid segments.
-Three evenly spaced packets repeatedly travel over each real correlated route
-with short fading trails, making sparse provider events easier to see without
-inventing additional activity. Each route, packet, and trail shares one
-deterministic hue in Random mode, while a
+Up to three evenly spaced packets repeatedly travel over each real correlated
+route with short fading trails, making sparse provider events easier to see
+without inventing additional activity or implying throughput. Packet trails
+wrap continuously across the route boundary. The renderer uses three packets
+per route through ten visible links and two at the 11- and 12-link cap, bounding
+decorative packet instances to 30 per frame for Pi-class devices. Each route,
+packet, and trail shares one deterministic hue in Random mode, while a
 glyph shared by multiple routes renders once using its newest attached route's
 hue. Matrix mode follows the selected Matrix palette and interpolates between
 independently cycling endpoint colors. Activity marks use the same configured
