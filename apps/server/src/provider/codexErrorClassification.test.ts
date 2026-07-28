@@ -46,6 +46,11 @@ describe("classifyCodexErrorInfo", () => {
         "someFutureCodexErrorLiteral" as unknown as Parameters<typeof classifyCodexErrorInfo>[0],
       ),
     ).toBe("other");
+    expect(
+      classifyCodexErrorInfo({
+        someFutureCodexErrorObject: {},
+      } as unknown as Parameters<typeof classifyCodexErrorInfo>[0]),
+    ).toBe("other");
   });
 });
 

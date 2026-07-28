@@ -75,10 +75,18 @@ export function classifyCodexErrorInfo(
   }
 
   if ("activeTurnNotSteerable" in codexErrorInfo) return "not_steerable";
-  // httpConnectionFailed / responseStreamConnectionFailed /
-  // responseStreamDisconnected / responseTooManyFailedAttempts are all
-  // transport-level connectivity failures, not provider-issued rejections.
-  return "connection";
+  if (
+    "httpConnectionFailed" in codexErrorInfo ||
+    "responseStreamConnectionFailed" in codexErrorInfo ||
+    "responseStreamDisconnected" in codexErrorInfo ||
+    "responseTooManyFailedAttempts" in codexErrorInfo
+  ) {
+    // These four generated variants are transport-level connectivity
+    // failures, not provider-issued rejections.
+    return "connection";
+  }
+  // Forward-compatible with a future object-shaped SDK variant.
+  return "other";
 }
 
 /** Whether `codexErrorInfo` is a genuine Codex usage/session-limit rejection. */
