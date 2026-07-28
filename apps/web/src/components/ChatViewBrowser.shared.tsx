@@ -1712,6 +1712,14 @@ async function mountChatView(options: {
   await waitForAppBootstrap();
   await waitForLayout();
 
+  // The Atmosphere console has its own browser suite. Keep this full-app
+  // fixture focused on ChatView behavior by closing the global default-open
+  // panel before callers interact with controls beneath it.
+  document
+    .querySelector<HTMLButtonElement>('button[aria-label="Close atmosphere console"]')
+    ?.click();
+  await waitForLayout();
+
   const cleanup = async () => {
     customWsRpcResolver = null;
     await screen.unmount();
@@ -3998,7 +4006,7 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
   }
 
   if (chatViewBrowserPart === "navigation") {
-    it("keeps the exact ambient YouTube player alive through Settings navigation", async () => {
+    it("keeps the exact ambient YouTube player alive through Settings navigation and resize", async () => {
       const mounted = await mountChatView({
         viewport: DEFAULT_VIEWPORT,
         snapshot: createSnapshotForTargetUser({
@@ -4077,11 +4085,15 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
         await mounted.setContainerSize({ width: 600, height: DEFAULT_VIEWPORT.height });
         await vi.waitFor(
           () => {
-            expect(
-              document.querySelector<HTMLIFrameElement>(
-                'iframe[title="Ambient YouTube video player"]',
-              ),
-            ).toBeNull();
+            const resizedFrame = document.querySelector<HTMLIFrameElement>(
+              'iframe[title="Ambient YouTube video player"]',
+            );
+            expect(resizedFrame).toBe(initialFrame);
+            expect(resizedFrame?.parentElement).toBe(initialParent);
+            expect(resizedFrame?.src).toBe(initialSource);
+            expect(document.querySelectorAll("iframe[src*='youtube-nocookie.com']")).toHaveLength(
+              1,
+            );
           },
           { timeout: 8_000, interval: 16 },
         );
@@ -4259,19 +4271,46 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
       try {
         const arming = getConfirmedAutoNudgeArming();
         expect(arming.getSuppressedSnapshot()).toBe(false);
+        const modeTrigger = page.getByRole("combobox", { name: "Auto nudge mode" });
+        const modeTriggerElement = modeTrigger.element() as HTMLButtonElement;
+        expect(modeTriggerElement.disabled).toBe(false);
         // Cookies are host-scoped but localStorage events are origin/port
         // scoped. Reproduce another renderer's Stop without notifying this
         // renderer's stale React snapshot.
         document.cookie = `${encodeURIComponent(AUTO_NUDGE_SUPPRESSION_STORAGE_KEY)}=${encodeURIComponent("v1:other-localhost-port")}; Path=/; Max-Age=3600; SameSite=Strict`;
         expect(arming.getSuppressedSnapshot()).toBe(false);
 
-        await page.getByRole("combobox", { name: "Auto nudge mode" }).click();
-        await page.getByRole("option", { name: "Steady progress" }).click();
+        // Exercise the late race synchronously when the stale control is still
+        // enabled. The coordinator may instead converge first and disable the
+        // trigger; both paths must preserve the durable Stop.
+        if (!modeTriggerElement.disabled) {
+          modeTriggerElement.click();
+          await vi.waitFor(
+            () => {
+              const optionAvailable = Array.from(
+                document.querySelectorAll<HTMLElement>('[role="option"]'),
+              ).some((option) => option.textContent?.trim() === "Steady progress");
+              expect(modeTriggerElement.disabled || optionAvailable).toBe(true);
+            },
+            { timeout: 8_000, interval: 16 },
+          );
+          const steadyProgressOption = Array.from(
+            document.querySelectorAll<HTMLElement>('[role="option"]'),
+          ).find((option) => option.textContent?.trim() === "Steady progress");
+          if (!modeTriggerElement.disabled) {
+            expect(steadyProgressOption).toBeTruthy();
+            steadyProgressOption?.click();
+          }
+        }
 
         await expect
           .element(page.getByText("Emergency Stop all is blocking Auto Nudge in every thread."))
           .toBeInTheDocument();
+        await expect.element(modeTrigger).toBeDisabled();
         expect(arming.getSuppressedSnapshot()).toBe(true);
+        expect(document.cookie).toContain(
+          `${encodeURIComponent(AUTO_NUDGE_SUPPRESSION_STORAGE_KEY)}=${encodeURIComponent("v1:other-localhost-port")}`,
+        );
         expect(
           wsRequests.some(
             (request) =>
