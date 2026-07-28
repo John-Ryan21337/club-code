@@ -7,6 +7,7 @@ import {
   clearShortcutModifierState,
   syncShortcutModifierStateFromKeyboardEvent,
 } from "../shortcutModifierState";
+import { useStore } from "../store";
 import { useUiStateStore } from "../uiStateStore";
 import { AmbientVideoWorkspace } from "./ambient/AmbientVideoWorkspace";
 
@@ -15,6 +16,7 @@ const THREAD_SIDEBAR_MIN_WIDTH = 13 * 16;
 const THREAD_MAIN_CONTENT_MIN_WIDTH = 40 * 16;
 export function AppSidebarLayout({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
+  const activeEnvironmentId = useStore((state) => state.activeEnvironmentId);
   const navigationSidebarOpen = useUiStateStore((state) => state.navigationSidebarOpen);
   const setNavigationSidebarOpen = useUiStateStore((state) => state.setNavigationSidebarOpen);
 
@@ -77,7 +79,15 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
         <ThreadSidebar />
         <SidebarRail />
       </Sidebar>
-      <AmbientVideoWorkspace>{children}</AmbientVideoWorkspace>
+      {/*
+       * Settings remains inside the same environment-scoped workspace so its
+       * player iframe survives route changes. Changing to an unrelated saved
+       * environment deliberately remounts the streaming player instead of
+       * carrying an iframe's playback/controller state across server identities.
+       */}
+      <AmbientVideoWorkspace environmentScopeKey={activeEnvironmentId ?? "unassigned-environment"}>
+        {children}
+      </AmbientVideoWorkspace>
     </SidebarProvider>
   );
 }

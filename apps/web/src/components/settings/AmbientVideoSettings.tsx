@@ -518,7 +518,7 @@ export function AmbientVideoSettings() {
 
       <SettingsRow
         title="Session URL queue"
-        description="Start with a bundled example or choose a local .txt file containing one strict YouTube video URL per line. Japanese music populates a new, otherwise unchosen session by default without turning playback on. Blank/comment lines are ignored. Queue contents are never uploaded, logged, prompted, or saved to settings."
+        description="Start with a bundled example or choose a local .txt file containing one strict YouTube video URL per line. During playback, videos that YouTube reports as unavailable or not allowed to be embedded are skipped automatically. Japanese music populates a new, otherwise unchosen session by default without turning playback on. Blank/comment lines are ignored. Queue contents are never uploaded, logged, prompted, or saved to settings."
         status={
           queueError ? (
             <span className="text-destructive">{queueError}</span>

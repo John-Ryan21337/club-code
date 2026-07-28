@@ -1,3 +1,4 @@
+# During playback, YouTube videos that are unavailable or disallow embedding are skipped automatically.
 https://www.youtube.com/watch?v=VGG0coMYaRQ
 https://www.youtube.com/watch?v=2javfeqlYAU
 https://www.youtube.com/watch?v=3fRncVSb_YA

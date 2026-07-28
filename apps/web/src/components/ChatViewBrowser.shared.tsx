@@ -3998,6 +3998,98 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
   }
 
   if (chatViewBrowserPart === "navigation") {
+    it("keeps the exact ambient YouTube player alive through Settings navigation", async () => {
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: createSnapshotForTargetUser({
+          targetMessageId: "msg-user-youtube-settings-continuity" as MessageId,
+          targetText: "youtube settings continuity",
+        }),
+        configureFixture: (nextFixture) => {
+          nextFixture.serverConfig = {
+            ...nextFixture.serverConfig,
+            clientSettings: {
+              ...nextFixture.serverConfig.clientSettings,
+              ambientVideoEnabled: true,
+              ambientVideoSource: { kind: "video", id: "dQw4w9WgXcQ" },
+              ambientVideoPresentationMode: "floating",
+            },
+            ambientExperienceCapabilities: {
+              ...nextFixture.serverConfig.ambientExperienceCapabilities,
+              youtubePlayer: true,
+            },
+          };
+        },
+      });
+
+      try {
+        const initialFrame = await waitForElement(
+          () =>
+            document.querySelector<HTMLIFrameElement>(
+              'iframe[title="Ambient YouTube video player"]',
+            ),
+          "The configured ambient YouTube player should mount in chat.",
+        );
+        const initialParent = initialFrame.parentElement;
+        const initialSource = initialFrame.src;
+
+        await mounted.router.navigate({ to: "/settings" });
+        await waitForURL(
+          mounted.router,
+          (pathname) => pathname.startsWith("/settings"),
+          "Settings navigation should settle.",
+        );
+        await waitForLayout();
+
+        const frameInSettings = document.querySelector<HTMLIFrameElement>(
+          'iframe[title="Ambient YouTube video player"]',
+        );
+        expect(frameInSettings).toBe(initialFrame);
+        expect(frameInSettings?.parentElement).toBe(initialParent);
+        expect(frameInSettings?.src).toBe(initialSource);
+        expect(document.querySelectorAll("iframe[src*='youtube-nocookie.com']")).toHaveLength(1);
+
+        await mounted.router.navigate({
+          to: "/$environmentId/$threadId",
+          params: { environmentId: LOCAL_ENVIRONMENT_ID, threadId: THREAD_ID },
+        });
+        await waitForURL(
+          mounted.router,
+          (pathname) => pathname === serverThreadPath(THREAD_ID),
+          "Chat navigation should settle after leaving Settings.",
+        );
+        await waitForLayout();
+
+        const returnedFrame = document.querySelector<HTMLIFrameElement>(
+          'iframe[title="Ambient YouTube video player"]',
+        );
+        expect(returnedFrame).toBe(initialFrame);
+        expect(returnedFrame?.parentElement).toBe(initialParent);
+        expect(returnedFrame?.src).toBe(initialSource);
+        expect(document.querySelectorAll("iframe[src*='youtube-nocookie.com']")).toHaveLength(1);
+
+        await mounted.router.navigate({ to: "/settings" });
+        await waitForURL(
+          mounted.router,
+          (pathname) => pathname.startsWith("/settings"),
+          "Settings navigation should settle before resizing.",
+        );
+        await mounted.setContainerSize({ width: 600, height: DEFAULT_VIEWPORT.height });
+        await vi.waitFor(
+          () => {
+            expect(
+              document.querySelector<HTMLIFrameElement>(
+                'iframe[title="Ambient YouTube video player"]',
+              ),
+            ).toBeNull();
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
     it("saves distinct Auto Nudge prompts to exact same-project threads without arming either", async () => {
       const secondThreadId = "thread-auto-nudge-b" as ThreadId;
       let snapshot = addThreadToSnapshot(

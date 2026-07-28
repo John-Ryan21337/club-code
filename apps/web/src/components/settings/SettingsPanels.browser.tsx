@@ -1583,6 +1583,13 @@ describe("settings panels", () => {
     );
 
     await expect.element(page.getByText("Ambient streaming")).toBeInTheDocument();
+    await expect
+      .element(
+        page.getByText(
+          /videos that YouTube reports as unavailable or not allowed to be embedded are skipped automatically/i,
+        ),
+      )
+      .toBeInTheDocument();
     await page.getByRole("button", { name: "EDM", exact: true }).click();
     await expect.element(page.getByText("URL 1 of 19")).toBeInTheDocument();
     await expect.element(page.getByText(/Accepted 19; skipped 1 invalid/)).toBeInTheDocument();

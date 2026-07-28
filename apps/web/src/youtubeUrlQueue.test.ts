@@ -89,13 +89,22 @@ describe("session-only YouTube URL queue", () => {
     expect(
       YOUTUBE_URL_QUEUE_EXAMPLES.find(({ id }) => id === "japanese")
         ?.text.trim()
-        .split(/\r?\n/),
+        .split(/\r?\n/)
+        .filter((line) => !line.startsWith("#")),
     ).toEqual(youtubeWatchUrls(JAPANESE_SOURCE_VIDEO_IDS));
     expect(
       YOUTUBE_URL_QUEUE_EXAMPLES.find(({ id }) => id === "edm")
         ?.text.trim()
-        .split(/\r?\n/),
+        .split(/\r?\n/)
+        .filter((line) => !line.startsWith("#")),
     ).toEqual(youtubeWatchUrls(EDM_SOURCE_VIDEO_IDS));
+    expect(
+      YOUTUBE_URL_QUEUE_EXAMPLES.every(({ text }) =>
+        text.startsWith(
+          "# During playback, YouTube videos that are unavailable or disallow embedding are skipped automatically.",
+        ),
+      ),
+    ).toBe(true);
     expect(JAPANESE_SOURCE_VIDEO_IDS).toHaveLength(39);
     expect(EDM_SOURCE_VIDEO_IDS).toHaveLength(20);
 

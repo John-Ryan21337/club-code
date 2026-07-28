@@ -14,7 +14,7 @@ import { render } from "vitest-browser-react";
 import { AppAtomRegistryProvider } from "../../rpc/atomRegistry";
 import { resetServerStateForTests, setServerConfigSnapshot } from "../../rpc/serverState";
 import { __resetYouTubeUrlQueueForTests, youtubeUrlQueueStore } from "../../youtubeUrlQueue";
-import { AmbientVideoWorkspace } from "./AmbientVideoWorkspace";
+import { AmbientVideoWorkspace, useAmbientVideoWorkspace } from "./AmbientVideoWorkspace";
 
 let mounted: Awaited<ReturnType<typeof render>> | null = null;
 
@@ -60,6 +60,15 @@ function makeConfig(
       youtubePlayer: true,
     },
   };
+}
+
+function TestChatAnchor() {
+  const { registerChatAnchor } = useAmbientVideoWorkspace();
+  return (
+    <main ref={registerChatAnchor} style={{ width: "900px", height: "600px" }}>
+      Chat workspace
+    </main>
+  );
 }
 
 beforeEach(() => {
@@ -113,4 +122,57 @@ it("does not let temporary defaults mask a persisted source that arrives after m
     active: false,
     currentSource: null,
   });
+});
+
+it("remounts a retained player when its environment scope changes", async () => {
+  const config = makeConfig({ kind: "video", id: "dQw4w9WgXcQ" });
+  setServerConfigSnapshot({
+    ...config,
+    clientSettings: {
+      ...config.clientSettings,
+      ambientVideoEnabled: true,
+      ambientVideoPresentationMode: "floating",
+    },
+  });
+  mounted = await render(
+    <AppAtomRegistryProvider>
+      <AmbientVideoWorkspace environmentScopeKey="environment-a">
+        <TestChatAnchor />
+      </AmbientVideoWorkspace>
+    </AppAtomRegistryProvider>,
+  );
+
+  await expect
+    .poll(() =>
+      document.querySelector<HTMLIFrameElement>('iframe[title="Ambient YouTube video player"]'),
+    )
+    .not.toBeNull();
+  const firstFrame = document.querySelector<HTMLIFrameElement>(
+    'iframe[title="Ambient YouTube video player"]',
+  );
+  expect(firstFrame).not.toBeNull();
+
+  await mounted.rerender(
+    <AppAtomRegistryProvider>
+      <AmbientVideoWorkspace environmentScopeKey="environment-b">
+        <TestChatAnchor />
+      </AmbientVideoWorkspace>
+    </AppAtomRegistryProvider>,
+  );
+
+  await expect
+    .poll(
+      () =>
+        document.querySelector<HTMLIFrameElement>(
+          'iframe[title="Ambient YouTube video player"]',
+        ) !== firstFrame,
+    )
+    .toBe(true);
+  const secondFrame = document.querySelector<HTMLIFrameElement>(
+    'iframe[title="Ambient YouTube video player"]',
+  );
+  expect(firstFrame?.isConnected).toBe(false);
+  expect(secondFrame).not.toBeNull();
+  expect(secondFrame).not.toBe(firstFrame);
+  expect(secondFrame?.src).toBe(firstFrame?.src);
 });

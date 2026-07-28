@@ -91,6 +91,13 @@ interface MeasuredRect {
   readonly height: number;
 }
 
+interface NormalizedMeasuredRect {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+}
+
 function sameRect(left: MeasuredRect | null, right: MeasuredRect): boolean {
   return (
     left !== null &&
@@ -142,6 +149,66 @@ function useElementRect(
   }, [element, relativeTo]);
 
   return rect;
+}
+
+function sameNormalizedRect(
+  left: NormalizedMeasuredRect | null,
+  right: NormalizedMeasuredRect,
+): boolean {
+  return (
+    left !== null &&
+    left.x === right.x &&
+    left.y === right.y &&
+    left.width === right.width &&
+    left.height === right.height
+  );
+}
+
+/**
+ * Keep the most recent chat rail geometry while route content temporarily has
+ * no chat anchor (notably Settings). Retaining normalized geometry lets the
+ * shell resize safely while Settings is open: a newly narrow window still
+ * trips the normal hidden-player safety gate instead of leaving invisible
+ * playback alive.
+ */
+function useRetainedElementRect(
+  element: HTMLElement | null,
+  relativeTo: HTMLElement | null,
+  containerRect: MeasuredRect | null,
+): MeasuredRect | null {
+  const measuredRect = useElementRect(element, relativeTo);
+  const [retainedRect, setRetainedRect] = useState<NormalizedMeasuredRect | null>(null);
+
+  useLayoutEffect(() => {
+    if (
+      measuredRect === null ||
+      containerRect === null ||
+      containerRect.width <= 0 ||
+      containerRect.height <= 0
+    ) {
+      return;
+    }
+    const next = {
+      x: (measuredRect.left - containerRect.left) / containerRect.width,
+      y: (measuredRect.top - containerRect.top) / containerRect.height,
+      width: measuredRect.width / containerRect.width,
+      height: measuredRect.height / containerRect.height,
+    };
+    setRetainedRect((current) => (sameNormalizedRect(current, next) ? current : next));
+  }, [containerRect, measuredRect]);
+
+  if (measuredRect !== null) {
+    return measuredRect;
+  }
+  if (retainedRect === null || containerRect === null) {
+    return null;
+  }
+  return {
+    left: containerRect.left + retainedRect.x * containerRect.width,
+    top: containerRect.top + retainedRect.y * containerRect.height,
+    width: retainedRect.width * containerRect.width,
+    height: retainedRect.height * containerRect.height,
+  };
 }
 
 function presetGeometry(input: {
@@ -212,7 +279,13 @@ function resolveGlowColor(value: "auto" | string): string {
 
 // oxlint-disable react/iframe-missing-sandbox -- Iframe origins are constructed only for
 // youtube-nocookie.com or open.spotify.com; neither accepts a user-controlled origin.
-export function AmbientVideoWorkspace({ children }: { readonly children: ReactNode }) {
+export function AmbientVideoWorkspace({
+  children,
+  environmentScopeKey = "unassigned-environment",
+}: {
+  readonly children: ReactNode;
+  readonly environmentScopeKey?: string;
+}) {
   const settings = useSettings();
   const localMedia = useLocalMediaState();
   const audioCapture = useAmbientAudioCapture();
@@ -243,7 +316,7 @@ export function AmbientVideoWorkspace({ children }: { readonly children: ReactNo
   const [currentYouTubeVideoId, setCurrentYouTubeVideoId] = useState<string | null>(null);
   const [adaptiveGlowPalette, setAdaptiveGlowPalette] = useState<AmbientEdgePalette | null>(null);
   const rootRect = useElementRect(rootElement, rootElement);
-  const anchorRect = useElementRect(chatAnchor, rootElement);
+  const anchorRect = useRetainedElementRect(chatAnchor, rootElement, rootRect);
   const localMediaElement = useLocalMediaElement();
   const [localMediaPaused, setLocalMediaPaused] = useState(true);
 
@@ -269,7 +342,7 @@ export function AmbientVideoWorkspace({ children }: { readonly children: ReactNo
     (spotifySource
       ? serverConfig?.ambientExperienceCapabilities.spotifyEmbed === true
       : serverConfig?.ambientExperienceCapabilities.youtubePlayer === true);
-  const sourceKey =
+  const unscopedSourceKey =
     source === null
       ? null
       : source.kind === "spotify"
@@ -279,6 +352,8 @@ export function AmbientVideoWorkspace({ children }: { readonly children: ReactNo
           : queueActive
             ? `queue:${youtubeUrlQueue.index}:${youtubeUrlQueue.revision}:${source.id}`
             : `${source.kind}:${source.id}`;
+  const sourceKey =
+    unscopedSourceKey === null ? null : JSON.stringify([environmentScopeKey, unscopedSourceKey]);
   const adaptiveYouTubeGlowEnabled =
     settings.ambientVideoGlowEnabled &&
     settings.ambientVideoGlowMode === "adaptive" &&
