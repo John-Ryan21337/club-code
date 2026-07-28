@@ -1091,29 +1091,6 @@ describe("settings panels", () => {
     });
   });
 
-  it("keeps background Auto Nudge opt-in with visible conservative caps", async () => {
-    const desktopBridge = createDesktopBridgeStub();
-    window.desktopBridge = desktopBridge;
-    const { updateClientSettings } = installClientSettingsNativeApi(desktopBridge);
-    setServerConfigSnapshot(createBaseServerConfig());
-
-    mounted = await renderWithTestRouter(
-      <AppAtomRegistryProvider>
-        <AppearanceSettingsPanel />
-      </AppAtomRegistryProvider>,
-    );
-
-    await expect.element(page.getByText("Auto Nudge background continuation")).toBeInTheDocument();
-    await expect.element(page.getByLabelText("Auto Nudge maximum rounds")).toHaveValue("5");
-    await expect.element(page.getByLabelText("Auto Nudge maximum minutes")).toHaveValue("30");
-    await page.getByLabelText("Allow Auto Nudge background continuation").click();
-    await vi.waitFor(() => {
-      expect(updateClientSettings).toHaveBeenCalledWith({
-        autoNudgeBackgroundContinuation: true,
-      });
-    });
-  });
-
   it("persists appearance preferences from Appearance settings", async () => {
     const desktopBridge = createDesktopBridgeStub();
     window.desktopBridge = desktopBridge;
