@@ -2,13 +2,18 @@ import {
   DEFAULT_FALLING_EFFECT_DENSITY,
   DEFAULT_FALLING_EFFECT_JAPANESE_RATIO,
   DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
+  DEFAULT_FALLING_EFFECT_MATRIX_WALK_END_FONT_SIZE,
+  DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE,
+  FALLING_EFFECT_MATRIX_WALK_FONT_SIZE_STEP,
   MAX_FALLING_EFFECT_DENSITY,
   MAX_FALLING_EFFECT_JAPANESE_RATIO,
   MAX_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
+  MAX_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE,
   MAX_FALLING_EFFECT_SPEED,
   MIN_FALLING_EFFECT_DENSITY,
   MIN_FALLING_EFFECT_JAPANESE_RATIO,
   MIN_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
+  MIN_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE,
   MIN_FALLING_EFFECT_SPEED,
   type AmbientColor,
   type FallingEffectKind,
@@ -92,9 +97,6 @@ const MATRIX_WORK_TOKEN_PROBABILITY = 0.34;
 const MATRIX_PERSPECTIVE_FONT_MIN_PX = 8;
 const MATRIX_PERSPECTIVE_FONT_MAX_PX = 24;
 const MATRIX_PERSPECTIVE_FONT_STEP_PX = 0.5;
-export const MATRIX_WALK_FONT_MIN_PX = 1;
-export const MATRIX_WALK_FONT_MAX_PX = 72;
-export const MATRIX_WALK_FONT_STEP_PX = 0.01;
 const MATRIX_FONT_FAMILY = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
 const MATRIX_PERSPECTIVE_FONTS = Array.from(
   {
@@ -107,9 +109,12 @@ const MATRIX_PERSPECTIVE_FONTS = Array.from(
     `${MATRIX_PERSPECTIVE_FONT_MIN_PX + index * MATRIX_PERSPECTIVE_FONT_STEP_PX}px ${MATRIX_FONT_FAMILY}`,
 );
 const MATRIX_WALK_FONT_COUNT =
-  Math.round((MATRIX_WALK_FONT_MAX_PX - MATRIX_WALK_FONT_MIN_PX) / MATRIX_WALK_FONT_STEP_PX) + 1;
+  Math.round(
+    (MAX_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE - MIN_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE) /
+      FALLING_EFFECT_MATRIX_WALK_FONT_SIZE_STEP,
+  ) + 1;
 /**
- * Walk modes may address 7,101 two-decimal font sizes. Populate that bounded
+ * Walk modes may address a bounded set of two-decimal font sizes. Populate that
  * table lazily so ordinary Flat/Forward/Reverse/Warp sessions pay no startup
  * or allocation cost for sizes they never render.
  */
@@ -164,7 +169,10 @@ export interface MatrixColorFrame {
 export interface AtmosphereProjectedPoint {
   x: number;
   y: number;
+  /** Absolute particle/glyph scaling relative to this particle's intrinsic size. */
   scale: number;
+  /** Normalized perspective ratio used by bounded connector decorations. */
+  depthScale: number;
 }
 
 export function createMatrixColorAnimationState(): MatrixColorAnimationState {
@@ -609,18 +617,32 @@ function resolveMatrixPerspectiveFont(size: number, scale: number): string {
   return MATRIX_PERSPECTIVE_FONTS[index]!;
 }
 
-function quantizeMatrixWalkFontSize(requestedSize: number): number {
-  const safeSize = Number.isFinite(requestedSize) ? requestedSize : MATRIX_WALK_FONT_MIN_PX;
+function quantizeMatrixWalkFontSize(requestedSize: number, fallbackSize: number): number {
+  const safeSize = Number.isFinite(requestedSize) ? requestedSize : fallbackSize;
   const index = Math.min(
     MATRIX_WALK_FONT_COUNT - 1,
-    Math.max(0, Math.round((safeSize - MATRIX_WALK_FONT_MIN_PX) / MATRIX_WALK_FONT_STEP_PX)),
+    Math.max(
+      0,
+      Math.round(
+        (safeSize - MIN_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE) /
+          FALLING_EFFECT_MATRIX_WALK_FONT_SIZE_STEP,
+      ),
+    ),
   );
-  return MATRIX_WALK_FONT_MIN_PX + index * MATRIX_WALK_FONT_STEP_PX;
+  return (
+    MIN_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE + index * FALLING_EFFECT_MATRIX_WALK_FONT_SIZE_STEP
+  );
 }
 
 function resolveMatrixWalkFont(size: number, scale: number): string {
-  const fontSize = quantizeMatrixWalkFontSize(size * scale);
-  const index = Math.round((fontSize - MATRIX_WALK_FONT_MIN_PX) / MATRIX_WALK_FONT_STEP_PX);
+  const fontSize = quantizeMatrixWalkFontSize(
+    size * scale,
+    DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE,
+  );
+  const index = Math.round(
+    (fontSize - MIN_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE) /
+      FALLING_EFFECT_MATRIX_WALK_FONT_SIZE_STEP,
+  );
   return (MATRIX_WALK_FONTS[index] ??= `${fontSize.toFixed(2)}px ${MATRIX_FONT_FAMILY}`);
 }
 
@@ -628,8 +650,9 @@ function resolveMatrixWalkFont(size: number, scale: number): string {
  * Applies the reviewed forward/Warp geometry to every atmosphere kind. The
  * output object is caller-owned so the draw loop performs no per-particle
  * allocation. Reverse mirrors the depth ramp while preserving falling motion.
- * Walk modes retain that geometry but expand the visual size across a
- * two-decimal 1px-to-72px range before normal canvas clipping and recycling.
+ * Walk modes retain that geometry but expand the visual size across the
+ * configured two-decimal pixel endpoints before normal canvas clipping and
+ * recycling.
  */
 export function resolveAtmosphereProjectedPointInPlace(
   output: AtmosphereProjectedPoint,
@@ -638,6 +661,8 @@ export function resolveAtmosphereProjectedPointInPlace(
   sourceX: number,
   sourceY: number,
   motionMode: FallingEffectMatrixMotionMode,
+  requestedWalkStartFontSize = DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE,
+  requestedWalkEndFontSize = DEFAULT_FALLING_EFFECT_MATRIX_WALK_END_FONT_SIZE,
 ): void {
   const safeX = Number.isFinite(sourceX) ? sourceX : 0;
   const safeY = Number.isFinite(sourceY) ? sourceY : 0;
@@ -645,6 +670,7 @@ export function resolveAtmosphereProjectedPointInPlace(
     output.x = safeX;
     output.y = safeY;
     output.scale = 1;
+    output.depthScale = 1;
     return;
   }
 
@@ -672,12 +698,26 @@ export function resolveAtmosphereProjectedPointInPlace(
     const perspectiveScale = 0.58 + projectedDepth * 0.72;
     output.x = scene.width * 0.5 + (safeX - scene.width * 0.5) * perspectiveScale;
     output.y = safeY;
-    output.scale = walk
-      ? quantizeMatrixWalkFontSize(
-          MATRIX_WALK_FONT_MIN_PX +
-            projectedDepth * (MATRIX_WALK_FONT_MAX_PX - MATRIX_WALK_FONT_MIN_PX),
-        ) / Math.max(MATRIX_WALK_FONT_MIN_PX, particle.size)
-      : 0.72 + projectedDepth * 0.55;
+    if (walk) {
+      const walkStartFontSize = quantizeMatrixWalkFontSize(
+        requestedWalkStartFontSize,
+        DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE,
+      );
+      const walkEndFontSize = quantizeMatrixWalkFontSize(
+        requestedWalkEndFontSize,
+        DEFAULT_FALLING_EFFECT_MATRIX_WALK_END_FONT_SIZE,
+      );
+      const targetFontSize = quantizeMatrixWalkFontSize(
+        walkStartFontSize + projectedDepth * (walkEndFontSize - walkStartFontSize),
+        walkStartFontSize,
+      );
+      output.scale =
+        targetFontSize / Math.max(MIN_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE, particle.size);
+      output.depthScale = targetFontSize / walkStartFontSize;
+    } else {
+      output.scale = 0.72 + projectedDepth * 0.55;
+      output.depthScale = output.scale;
+    }
     return;
   }
 
@@ -691,6 +731,7 @@ export function resolveAtmosphereProjectedPointInPlace(
   output.x = centerX + Math.cos(angle) * radius;
   output.y = centerY + Math.sin(angle) * radius;
   output.scale = 0.4 + depth * 0.95;
+  output.depthScale = output.scale;
 }
 
 export function drawAtmosphereScene(
@@ -700,6 +741,8 @@ export function drawAtmosphereScene(
   opacity: number,
   matrixColorFrame?: MatrixColorFrame,
   motionMode: FallingEffectMatrixMotionMode = "flat",
+  walkStartFontSize = DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE,
+  walkEndFontSize = DEFAULT_FALLING_EFFECT_MATRIX_WALK_END_FONT_SIZE,
 ): void {
   context.clearRect(0, 0, scene.width, scene.height);
   const normalizedOpacity = Math.min(1, Math.max(0, opacity));
@@ -710,8 +753,8 @@ export function drawAtmosphereScene(
   context.save();
   context.fillStyle = color;
   context.strokeStyle = color;
-  const projectedFrom: AtmosphereProjectedPoint = { x: 0, y: 0, scale: 1 };
-  const projectedTo: AtmosphereProjectedPoint = { x: 0, y: 0, scale: 1 };
+  const projectedFrom: AtmosphereProjectedPoint = { x: 0, y: 0, scale: 1, depthScale: 1 };
+  const projectedTo: AtmosphereProjectedPoint = { x: 0, y: 0, scale: 1, depthScale: 1 };
 
   if (scene.kind === "snow") {
     context.globalAlpha = normalizedOpacity;
@@ -723,6 +766,8 @@ export function drawAtmosphereScene(
         particle.x,
         particle.y,
         motionMode,
+        walkStartFontSize,
+        walkEndFontSize,
       );
       context.beginPath();
       context.arc(
@@ -745,6 +790,8 @@ export function drawAtmosphereScene(
         particle.x,
         particle.y,
         motionMode,
+        walkStartFontSize,
+        walkEndFontSize,
       );
       resolveAtmosphereProjectedPointInPlace(
         projectedTo,
@@ -753,6 +800,8 @@ export function drawAtmosphereScene(
         particle.x + particle.velocityX * 0.025,
         particle.y + particle.size,
         motionMode,
+        walkStartFontSize,
+        walkEndFontSize,
       );
       context.lineWidth = Math.max(
         0.75,
@@ -784,6 +833,8 @@ export function drawAtmosphereScene(
           particle.x,
           sourceY,
           motionMode,
+          walkStartFontSize,
+          walkEndFontSize,
         );
         if (motionMode === "walk-forward" || motionMode === "walk-reverse") {
           context.font = resolveMatrixWalkFont(particle.size, projectedFrom.scale);

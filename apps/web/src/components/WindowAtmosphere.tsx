@@ -64,6 +64,10 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
   );
   const matrixColorCycleSpeedRef = useRef(matrixColorCycleSpeed);
   const motionMode = useSettings((settings) => settings.fallingEffectMatrixMotionMode);
+  const walkStartFontSize = useSettings(
+    (settings) => settings.fallingEffectMatrixWalkStartFontSize,
+  );
+  const walkEndFontSize = useSettings((settings) => settings.fallingEffectMatrixWalkEndFontSize);
   const opacity = useSettings((settings) => settings.fallingEffectOpacity);
   const speed = useSettings((settings) => settings.fallingEffectSpeed);
   const density = useSettings((settings) => settings.fallingEffectDensity);
@@ -322,7 +326,16 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
       const color =
         matrixColorFrame?.color ??
         resolveAtmosphereColor(kind, configuredColor, resolvedTheme === "dark");
-      drawAtmosphereScene(context, scene, color, renderOpacity, matrixColorFrame, motionMode);
+      drawAtmosphereScene(
+        context,
+        scene,
+        color,
+        renderOpacity,
+        matrixColorFrame,
+        motionMode,
+        walkStartFontSize,
+        walkEndFontSize,
+      );
       if (matrixColorFrame && activityLinksEnabled) {
         const activityNow = Date.now();
         updateMatrixActivityAnimationInPlace(
@@ -341,6 +354,8 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
           activityLinkColorMode,
           matrixColorFrame,
           motionMode,
+          walkStartFontSize,
+          walkEndFontSize,
         );
         if (reducedMotionActive) {
           scheduleStaticActivityExpiry(activityNow);
@@ -454,6 +469,8 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
     opacity,
     resolvedTheme,
     speed,
+    walkEndFontSize,
+    walkStartFontSize,
   ]);
 
   if (!enabled || !atmosphereAvailable) {

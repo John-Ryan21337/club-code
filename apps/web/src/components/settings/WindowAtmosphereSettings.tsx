@@ -17,20 +17,26 @@ import {
   DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
   DEFAULT_FALLING_EFFECT_MATRIX_COLOR_MODE,
   DEFAULT_FALLING_EFFECT_MATRIX_MOTION_MODE,
+  DEFAULT_FALLING_EFFECT_MATRIX_WALK_END_FONT_SIZE,
+  DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE,
   DEFAULT_FALLING_EFFECT_SPEED,
+  FALLING_EFFECT_MATRIX_WALK_FONT_SIZE_STEP,
   MAX_AMBIENT_OPACITY,
   MAX_FALLING_EFFECT_DENSITY,
   MAX_FALLING_EFFECT_JAPANESE_RATIO,
   MAX_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
+  MAX_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE,
   MAX_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
   MAX_FALLING_EFFECT_SPEED,
   MIN_AMBIENT_OPACITY,
   MIN_FALLING_EFFECT_DENSITY,
   MIN_FALLING_EFFECT_JAPANESE_RATIO,
   MIN_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
+  MIN_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE,
   MIN_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
   MIN_FALLING_EFFECT_SPEED,
 } from "@cafecode/contracts/settings";
+import { useEffect, useState } from "react";
 
 import { useSettings, useUpdateSettings } from "../../hooks/useSettings";
 import { useServerConfig } from "../../rpc/serverState";
@@ -64,6 +70,89 @@ function clampMatrixColorCycleSpeed(value: number | null): number {
   return Math.min(
     MAX_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
     Math.max(MIN_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED, value),
+  );
+}
+
+function clampMatrixWalkFontSize(value: number | null, fallback: number): number {
+  if (value === null || !Number.isFinite(value)) {
+    return fallback;
+  }
+  const clamped = Math.min(
+    MAX_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE,
+    Math.max(MIN_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE, value),
+  );
+  return Number(
+    (
+      Math.round(clamped / FALLING_EFFECT_MATRIX_WALK_FONT_SIZE_STEP) *
+      FALLING_EFFECT_MATRIX_WALK_FONT_SIZE_STEP
+    ).toFixed(2),
+  );
+}
+
+interface MatrixWalkFontSizeFieldProps {
+  decrementLabel: string;
+  fallback: number;
+  incrementLabel: string;
+  inputLabel: string;
+  onCommit: (value: number) => void;
+  value: number;
+}
+
+function MatrixWalkFontSizeField({
+  decrementLabel,
+  fallback,
+  incrementLabel,
+  inputLabel,
+  onCommit,
+  value,
+}: MatrixWalkFontSizeFieldProps) {
+  const [draftValue, setDraftValue] = useState<number | null>(value);
+
+  useEffect(() => {
+    setDraftValue(value);
+  }, [value]);
+
+  return (
+    <NumberField
+      value={draftValue}
+      min={MIN_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE}
+      max={MAX_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE}
+      step={FALLING_EFFECT_MATRIX_WALK_FONT_SIZE_STEP}
+      smallStep={FALLING_EFFECT_MATRIX_WALK_FONT_SIZE_STEP}
+      largeStep={1}
+      snapOnStep
+      format={{ minimumFractionDigits: 2, maximumFractionDigits: 2 }}
+      size="sm"
+      className="w-32"
+      onValueChange={setDraftValue}
+      onValueCommitted={(nextValue) => {
+        const normalizedValue = clampMatrixWalkFontSize(nextValue, fallback);
+        setDraftValue(normalizedValue);
+        onCommit(normalizedValue);
+      }}
+    >
+      <NumberFieldGroup>
+        <NumberFieldDecrement aria-label={decrementLabel} />
+        <NumberFieldInput
+          aria-label={inputLabel}
+          onFocus={(event) => {
+            // Base UI places the caret at the end on first focus. Selecting the
+            // complete formatted value instead lets direct typing, paste, and
+            // browser autofill replace it rather than append to (for example)
+            // "1.00".
+            event.preventBaseUIHandler();
+            event.currentTarget.select();
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              event.currentTarget.blur();
+            }
+          }}
+        />
+        <NumberFieldIncrement aria-label={incrementLabel} />
+      </NumberFieldGroup>
+    </NumberField>
   );
 }
 
@@ -116,6 +205,10 @@ export function WindowAtmosphereSettings() {
     settings.fallingEffectMatrixColorCycleSpeed !==
       DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED ||
     settings.fallingEffectMatrixMotionMode !== DEFAULT_FALLING_EFFECT_MATRIX_MOTION_MODE ||
+    settings.fallingEffectMatrixWalkStartFontSize !==
+      DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE ||
+    settings.fallingEffectMatrixWalkEndFontSize !==
+      DEFAULT_FALLING_EFFECT_MATRIX_WALK_END_FONT_SIZE ||
     settings.fallingEffectOpacity !== DEFAULT_AMBIENT_OPACITY ||
     settings.fallingEffectSpeed !== DEFAULT_FALLING_EFFECT_SPEED ||
     settings.fallingEffectDensity !== DEFAULT_FALLING_EFFECT_DENSITY ||
@@ -161,6 +254,10 @@ export function WindowAtmosphereSettings() {
                   fallingEffectMatrixColorCycleSpeed:
                     DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
                   fallingEffectMatrixMotionMode: DEFAULT_FALLING_EFFECT_MATRIX_MOTION_MODE,
+                  fallingEffectMatrixWalkStartFontSize:
+                    DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE,
+                  fallingEffectMatrixWalkEndFontSize:
+                    DEFAULT_FALLING_EFFECT_MATRIX_WALK_END_FONT_SIZE,
                   fallingEffectOpacity: DEFAULT_AMBIENT_OPACITY,
                   fallingEffectSpeed: DEFAULT_FALLING_EFFECT_SPEED,
                   fallingEffectDensity: DEFAULT_FALLING_EFFECT_DENSITY,
@@ -235,7 +332,7 @@ export function WindowAtmosphereSettings() {
       {controlsEnabled ? (
         <SettingsRow
           title="Atmosphere motion"
-          description="Flat preserves classic falling geometry. Forward and Reverse add subtle depth travel; Warp sends the same particles through a bounded center tunnel. Walk Forward and Walk Reverse add fluid 1px-to-72px near/far scaling."
+          description="Flat preserves classic falling geometry. Forward and Reverse add subtle depth travel; Warp sends the same particles through a bounded center tunnel. Walk Forward and Walk Reverse use the configurable near/far sizes below."
           control={
             <RadioGroup
               value={settings.fallingEffectMatrixMotionMode}
@@ -273,6 +370,49 @@ export function WindowAtmosphereSettings() {
                 </label>
               ))}
             </RadioGroup>
+          }
+        />
+      ) : null}
+
+      {controlsEnabled ? (
+        <SettingsRow
+          title="Walk perspective sizes"
+          description="Set the absolute far and near particle sizes from 0.01px to 144.00px. Walk Reverse mirrors the same endpoints. Values persist at 0.01px resolution."
+          control={
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-muted-foreground">Start</span>
+                <MatrixWalkFontSizeField
+                  value={settings.fallingEffectMatrixWalkStartFontSize}
+                  fallback={DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE}
+                  inputLabel="Walk start font size"
+                  decrementLabel="Decrease Walk start font size"
+                  incrementLabel="Increase Walk start font size"
+                  onCommit={(value) =>
+                    updateSettings({
+                      fallingEffectMatrixWalkStartFontSize: value,
+                    })
+                  }
+                />
+                <span className="text-xs text-muted-foreground">px</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-muted-foreground">End</span>
+                <MatrixWalkFontSizeField
+                  value={settings.fallingEffectMatrixWalkEndFontSize}
+                  fallback={DEFAULT_FALLING_EFFECT_MATRIX_WALK_END_FONT_SIZE}
+                  inputLabel="Walk end font size"
+                  decrementLabel="Decrease Walk end font size"
+                  incrementLabel="Increase Walk end font size"
+                  onCommit={(value) =>
+                    updateSettings({
+                      fallingEffectMatrixWalkEndFontSize: value,
+                    })
+                  }
+                />
+                <span className="text-xs text-muted-foreground">px</span>
+              </div>
+            </div>
           }
         />
       ) : null}

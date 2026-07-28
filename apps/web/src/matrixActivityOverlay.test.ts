@@ -1646,8 +1646,10 @@ describe("Matrix provider activity overlay", () => {
     const to = scene.particles[1]!;
     from.x = 60;
     from.y = 0;
+    from.size = 3;
     to.x = 340;
     to.y = scene.height;
+    to.size = 90;
     const state = createMatrixActivityAnimationState();
     state.links.push({
       fromAnchorIndex: 0,
@@ -1685,10 +1687,13 @@ describe("Matrix provider activity overlay", () => {
       "random",
       UNIFORM_MATRIX_FRAME,
       "walk-forward",
+      12,
+      24,
     );
     const walkStrokes = walk.draws.filter((draw) => draw.kind === "stroke");
     expect(walkStrokes).toHaveLength(MATRIX_ACTIVITY_DEPTH_ROUTE_SEGMENTS);
-    expect(walkStrokes[0]!.lineWidth).toBeLessThan(walkStrokes.at(-1)!.lineWidth);
+    expect(walkStrokes[0]!.lineWidth).toBeCloseTo(1.5 * 1.0625);
+    expect(walkStrokes.at(-1)!.lineWidth).toBeCloseTo(1.5 * 1.9375);
     expect(
       walkStrokes.every(
         (draw) => draw.lineWidth > 0 && draw.lineWidth <= MAX_MATRIX_ACTIVITY_DEPTH_LINE_WIDTH,
@@ -1704,10 +1709,31 @@ describe("Matrix provider activity overlay", () => {
       "random",
       UNIFORM_MATRIX_FRAME,
       "walk-reverse",
+      12,
+      24,
     );
     const reverseWalkStrokes = reverseWalk.draws.filter((draw) => draw.kind === "stroke");
     expect(reverseWalkStrokes).toHaveLength(MATRIX_ACTIVITY_DEPTH_ROUTE_SEGMENTS);
-    expect(reverseWalkStrokes[0]!.lineWidth).toBeGreaterThan(reverseWalkStrokes.at(-1)!.lineWidth);
+    expect(reverseWalkStrokes[0]!.lineWidth).toBeCloseTo(1.5 * 1.9375);
+    expect(reverseWalkStrokes.at(-1)!.lineWidth).toBeCloseTo(1.5 * 1.0625);
+
+    const equalEndpoints = createRecordingContext();
+    drawMatrixActivityAnimation(
+      equalEndpoints.context,
+      scene,
+      state,
+      0.8,
+      "random",
+      UNIFORM_MATRIX_FRAME,
+      "walk-forward",
+      17.25,
+      17.25,
+    );
+    expect(
+      equalEndpoints.draws
+        .filter((draw) => draw.kind === "stroke")
+        .every((draw) => draw.lineWidth === 1.5),
+    ).toBe(true);
 
     state.reducedMotion = false;
     const movingWalk = createRecordingContext();
@@ -1719,8 +1745,29 @@ describe("Matrix provider activity overlay", () => {
       "random",
       UNIFORM_MATRIX_FRAME,
       "walk-forward",
+      12,
+      24,
     );
     expect(movingWalk.arcRadii).toHaveLength(MATRIX_ACTIVITY_PACKET_COUNT);
+    const expectedPacketRadii = Array.from(
+      { length: MATRIX_ACTIVITY_PACKET_COUNT },
+      (_, packetIndex) => {
+        const progress = resolveMatrixActivityPacketProgress(
+          state.links[0]!.packetProgress,
+          packetIndex,
+          MATRIX_ACTIVITY_PACKET_COUNT,
+        );
+        return 2.4 * (1 + progress);
+      },
+    );
+    for (let index = 0; index < expectedPacketRadii.length; index += 1) {
+      expect(movingWalk.arcRadii[index]).toBeCloseTo(expectedPacketRadii[index]!, 10);
+    }
+    expect(
+      movingWalk.draws.filter((draw) => draw.kind === "stroke")[
+        MATRIX_ACTIVITY_DEPTH_ROUTE_SEGMENTS
+      ]!.lineWidth,
+    ).toBeCloseTo(2.25 * 1.85);
     expect(
       movingWalk.arcRadii.every(
         (radius) => radius > 0 && radius <= MAX_MATRIX_ACTIVITY_DEPTH_PACKET_RADIUS,
