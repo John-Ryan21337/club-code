@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@cafecode/contracts";
+import {
+  DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+  EnvironmentId,
+  ProjectId,
+  ProviderInstanceId,
+  ThreadId,
+} from "@cafecode/contracts";
 import type { Thread } from "../types";
 import {
   buildThreadActionItems,
@@ -32,6 +38,7 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     worktreePath: null,
     turnDiffSummaries: [],
     activities: [],
+    autoNudge: DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
     ...overrides,
   };
 }

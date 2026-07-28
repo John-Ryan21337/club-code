@@ -131,8 +131,8 @@ export function AutoNudgeControl(props: AutoNudgeControlProps) {
         ) : null}
         {props.globallySuppressed ? (
           <div className="mt-1 text-destructive" role="status">
-            Emergency Stop all is blocking Auto Nudge in every thread. Saved thread settings remain
-            in place, but no automatic handoff is allowed until you explicitly allow Auto Nudge
+            Emergency Stop all is blocking Auto Nudge in every thread. Saved prompts and limits
+            remain, but every thread is being forced Off until you explicitly allow Auto Nudge
             again.
           </div>
         ) : null}

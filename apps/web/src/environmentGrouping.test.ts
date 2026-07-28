@@ -78,6 +78,7 @@ function makeEmptyEnvironmentState(): EnvironmentState {
     threadShellById: {},
     threadSessionById: {},
     threadTurnStateById: {},
+    threadAutoNudgeConfigById: {},
     messageIdsByThreadId: {},
     messageByThreadId: {},
     activityIdsByThreadId: {},

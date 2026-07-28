@@ -2,6 +2,8 @@ import { scopeThreadRef } from "@cafecode/client-runtime";
 import {
   CheckpointRef,
   DEFAULT_MODEL,
+  DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+  DEFAULT_THREAD_AUTO_NUDGE_SUMMARY,
   EnvironmentId,
   EventId,
   MessageId,
@@ -86,6 +88,7 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     latestTurn: null,
     branch: null,
     worktreePath: null,
+    autoNudge: DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
     ...overrides,
   };
 }
@@ -131,6 +134,18 @@ function makeState(thread: Thread): AppState {
         updatedAt: thread.updatedAt,
         branch: thread.branch,
         worktreePath: thread.worktreePath,
+        autoNudge: {
+          authorityRevision: thread.autoNudge.authorityRevision,
+          mode: thread.autoNudge.mode,
+          backgroundContinuation: thread.autoNudge.backgroundContinuation,
+          maxRounds: thread.autoNudge.maxRounds,
+          maxMinutes: thread.autoNudge.maxMinutes,
+          armedAt: thread.autoNudge.armedAt,
+          baselineSettledTurnId: thread.autoNudge.baselineSettledTurnId,
+          lastDispatchedSettledTurnId: thread.autoNudge.lastDispatchedSettledTurnId,
+          roundsDispatched: thread.autoNudge.roundsDispatched,
+          lastDispatchedAt: thread.autoNudge.lastDispatchedAt,
+        },
       },
     },
     threadSessionById: {
@@ -143,6 +158,9 @@ function makeState(thread: Thread): AppState {
           ? { pendingSourceProposedPlan: thread.pendingSourceProposedPlan }
           : {}),
       },
+    },
+    threadAutoNudgeConfigById: {
+      [thread.id]: thread.autoNudge,
     },
     messageIdsByThreadId: {
       [thread.id]: thread.messages.map((message) => message.id),
@@ -193,6 +211,7 @@ function makeEmptyState(overrides: Partial<AppState & EnvironmentState> = {}): A
     threadShellById: {},
     threadSessionById: {},
     threadTurnStateById: {},
+    threadAutoNudgeConfigById: {},
     messageIdsByThreadId: {},
     messageByThreadId: {},
     activityIdsByThreadId: {},
@@ -309,6 +328,49 @@ describe("environment state removal", () => {
 });
 
 describe("thread selection memoization", () => {
+  it("keeps the full prompt in exact thread detail while shell state remains prompt-free", () => {
+    const thread = makeThread();
+    const sentinelPrompt = "THREAD_A_SECRET_AUTO_NUDGE_PROMPT";
+    const configured = applyOrchestrationEvent(
+      makeState(thread),
+      makeEvent("thread.auto-nudge-configured", {
+        threadId: thread.id,
+        config: {
+          ...DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+          authorityRevision: 1,
+          mode: "steady-progress",
+          prompt: sentinelPrompt,
+          armedAt: "2026-02-27T00:00:00.000Z",
+        },
+      }),
+      localEnvironmentId,
+    );
+
+    expect(
+      selectThreadByRef(configured, scopeThreadRef(localEnvironmentId, thread.id))?.autoNudge
+        .prompt,
+    ).toBe(sentinelPrompt);
+    expect(
+      "prompt" in (localEnvironmentStateOf(configured).threadShellById[thread.id]?.autoNudge ?? {}),
+    ).toBe(false);
+
+    const stopped = applyOrchestrationEvent(
+      configured,
+      makeEvent("thread.auto-nudge-stopped", {
+        threadId: thread.id,
+        authorityRevision: 2,
+        stoppedAt: "2026-02-27T00:01:00.000Z",
+      }),
+      localEnvironmentId,
+    );
+    const stoppedConfig = selectThreadByRef(
+      stopped,
+      scopeThreadRef(localEnvironmentId, thread.id),
+    )?.autoNudge;
+    expect(stoppedConfig?.mode).toBe("off");
+    expect(stoppedConfig?.prompt).toBe(sentinelPrompt);
+  });
+
   it("does not rewrite shell state for structurally equal model selections", () => {
     const thread = makeThread();
     const state = makeState(thread);
@@ -337,6 +399,7 @@ describe("thread selection memoization", () => {
         hasPendingApprovals: false,
         hasPendingUserInput: false,
         hasActionableProposedPlan: false,
+        autoNudge: DEFAULT_THREAD_AUTO_NUDGE_SUMMARY,
       },
     };
 

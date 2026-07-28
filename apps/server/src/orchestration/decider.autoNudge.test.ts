@@ -623,7 +623,7 @@ it.effect("cannot forge a client timestamp to extend an elapsed server time cap"
   }),
 );
 
-it.effect("advances Stop once, then keeps repeated Off stops revision-stable", () =>
+it.effect("advances every distinct Stop so an in-flight Off configure cannot re-arm later", () =>
   Effect.gen(function* () {
     yield* TestClock.setTime(Date.parse(SERVER_NOW));
     const initial = makeReadModel([
@@ -661,10 +661,10 @@ it.effect("advances Stop once, then keeps repeated Off stops revision-stable", (
     const repeatedStopEvents = asPlannedEvents(repeatedStop);
     assert.equal(repeatedStopEvents[0]?.type, "thread.auto-nudge-stopped");
     if (repeatedStopEvents[0]?.type === "thread.auto-nudge-stopped") {
-      assert.equal(repeatedStopEvents[0].payload.authorityRevision, 6);
+      assert.equal(repeatedStopEvents[0].payload.authorityRevision, 7);
     }
     const repeatedlyStopped = yield* projectPlannedEvents(stopped, repeatedStopEvents);
-    assert.equal(repeatedlyStopped.threads[0]?.autoNudge.authorityRevision, 6);
+    assert.equal(repeatedlyStopped.threads[0]?.autoNudge.authorityRevision, 7);
 
     const staleConfigure = yield* Effect.flip(
       decideOrchestrationCommand({
@@ -684,6 +684,50 @@ it.effect("advances Stop once, then keeps repeated Off stops revision-stable", (
       }),
     );
     assert.match(staleConfigure.detail, /revision.*stale/i);
+
+    const initiallyOff = makeReadModel([
+      makeThread({
+        id: THREAD_B,
+        latestTurnId: TURN_COMPLETED,
+        autoNudge: {
+          ...DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+          authorityRevision: 12,
+          prompt: "saved while off",
+        },
+      }),
+    ]);
+    const stopBeforeConfigure = yield* decideOrchestrationCommand({
+      readModel: initiallyOff,
+      command: {
+        type: "thread.auto-nudge.stop",
+        commandId: CommandId.make("command-stop-before-inflight-configure"),
+        threadId: THREAD_B,
+        createdAt: SERVER_NOW,
+      },
+    });
+    const stoppedBeforeConfigure = yield* projectPlannedEvents(
+      initiallyOff,
+      asPlannedEvents(stopBeforeConfigure),
+    );
+    assert.equal(stoppedBeforeConfigure.threads[0]?.autoNudge.authorityRevision, 13);
+    const inFlightConfigure = yield* Effect.flip(
+      decideOrchestrationCommand({
+        readModel: stoppedBeforeConfigure,
+        command: {
+          type: "thread.auto-nudge.configure",
+          commandId: CommandId.make("command-inflight-configure-after-stop"),
+          threadId: THREAD_B,
+          expectedAuthorityRevision: 12,
+          mode: "steady-progress",
+          prompt: "must remain revoked",
+          backgroundContinuation: true,
+          maxRounds: 5,
+          maxMinutes: 30,
+          createdAt: SERVER_NOW,
+        },
+      }),
+    );
+    assert.match(inFlightConfigure.detail, /revision.*stale/i);
 
     const staleDispatch = yield* Effect.flip(
       decideOrchestrationCommand({

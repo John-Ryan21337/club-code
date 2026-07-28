@@ -100,9 +100,11 @@ function nextAutoNudgeAuthorityRevision(input: {
 }
 
 function revokeAutoNudgeAuthorityRevision(current: ThreadAutoNudgeConfig): number {
-  if (current.mode === "off") {
-    return current.authorityRevision;
-  }
+  // Every distinct Stop is a revocation barrier, even when the projection is
+  // currently Off. A configure command formed against that Off revision can
+  // still be in flight from another renderer and arrive after Stop; keeping
+  // the revision stable would let it re-arm paid work. Command-receipt
+  // idempotency handles retries of the same Stop command id.
   return Math.min(current.authorityRevision + 1, THREAD_AUTO_NUDGE_MAX_AUTHORITY_REVISION);
 }
 

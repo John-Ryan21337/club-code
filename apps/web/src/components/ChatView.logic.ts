@@ -1,4 +1,5 @@
 import {
+  DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
   type EnvironmentId,
   ProjectId,
   type ModelSelection,
@@ -45,6 +46,7 @@ export function buildLocalDraftThread(
     turnDiffSummaries: [],
     activities: [],
     proposedPlans: [],
+    autoNudge: DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
   };
 }
 

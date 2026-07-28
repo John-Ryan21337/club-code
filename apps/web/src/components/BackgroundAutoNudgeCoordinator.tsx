@@ -1,28 +1,26 @@
 import {
   defaultInstanceIdForDriver,
-  EnvironmentId,
-  MessageId,
   type ServerProvider,
-  ThreadId,
+  type ThreadAutoNudgeSummary,
 } from "@cafecode/contracts";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
-import {
-  getBackgroundAutoNudgeController,
-  supportsBackgroundAutoNudgeDispatchLock,
-  useBackgroundAutoNudgeState,
-} from "../backgroundAutoNudger";
-import { getAutoNudgeTurnLedger } from "../autoNudger";
+import { AUTO_NUDGE_DELAY_MS, getAutoNudgeTurnLedger } from "../autoNudger";
 import { useComposerDraftStore } from "../composerDraftStore";
 import {
   getConfirmedAutoNudgeArming,
   useAutoNudgeSuppressedState,
 } from "../confirmedAutoNudgeArming";
 import { readEnvironmentApi } from "../environmentApi";
-import { getClientSettings, useSettings } from "../hooks/useSettings";
+import {
+  getSavedEnvironmentRuntimeState,
+  useSavedEnvironmentRuntimeStore,
+} from "../environments/runtime";
+import { readPrimaryEnvironmentDescriptor } from "../environments/primary";
 import { newCommandId, newMessageId } from "../lib/utils";
-import { getServerConfig, useServerConfig } from "../rpc/serverState";
+import { useServerConfig } from "../rpc/serverState";
 import { useStore } from "../store";
+import type { ThreadShell } from "../types";
 
 const COORDINATOR_TICK_MS = 250;
 
@@ -43,215 +41,205 @@ function providerCanAcceptTurn(provider: ServerProvider | null): boolean {
   return (limits.primary?.usedPercent ?? 0) < 100 && (limits.secondary?.usedPercent ?? 0) < 100;
 }
 
+function authorityKey(
+  shell: ThreadShell,
+  config: ThreadAutoNudgeSummary,
+  completedTurnId: string,
+): string {
+  return `${shell.environmentId}:${shell.id}:${completedTurnId}:${config.authorityRevision}`;
+}
+
+function stopKey(shell: ThreadShell, config: ThreadAutoNudgeSummary): string {
+  return `${shell.environmentId}:${shell.id}:${config.authorityRevision}`;
+}
+
 /**
- * Owns the opt-in continuation lifecycle above every ChatView. It observes the
- * all-thread shell projection, so route navigation and settings remounts do not
- * become execution or cancellation signals.
+ * Schedules every independently opted-in thread from prompt-free shell state.
+ *
+ * The renderer is only a timer. The exact environment server rechecks the
+ * thread, authority revision, terminal turn, caps, and background permission,
+ * then reads that thread's persisted prompt. Concurrent renderers may race,
+ * but only one serialized command can consume a terminal turn.
  */
 export function BackgroundAutoNudgeCoordinator() {
-  const backgroundState = useBackgroundAutoNudgeState();
-  const autoNudgeSuppressed = useAutoNudgeSuppressedState();
-  const settings = useSettings();
+  const globallySuppressed = useAutoNudgeSuppressedState();
   const serverConfig = useServerConfig();
+  const savedEnvironmentRuntimeById = useSavedEnvironmentRuntimeStore((state) => state.byId);
   const environmentStateById = useStore((store) => store.environmentStateById);
-  const ownerComposerDraft = useComposerDraftStore((store) => {
-    const owner = backgroundState.owner;
-    if (!owner) return null;
-    return store.getComposerDraft({
-      environmentId: EnvironmentId.make(owner.environmentId),
-      threadId: ThreadId.make(owner.threadId),
-    });
-  });
   const [tick, setTick] = useState(0);
+  const eligibleSinceByAuthorityRef = useRef(new Map<string, number>());
+  const attemptedAuthoritiesRef = useRef(new Set<string>());
+  const stopRequestsRef = useRef(new Set<string>());
 
   useEffect(() => {
-    if (backgroundState.status !== "active") return;
-    const timer = window.setInterval(() => setTick((value) => value + 1), COORDINATOR_TICK_MS);
+    const timer = window.setInterval(() => {
+      setTick((value) => value + 1);
+    }, COORDINATOR_TICK_MS);
     return () => window.clearInterval(timer);
-  }, [backgroundState.status]);
+  }, []);
 
   useEffect(() => {
-    const controller = getBackgroundAutoNudgeController();
-    if (!backgroundState.owner || backgroundState.status !== "active") return;
-    const observedOwner = backgroundState.owner;
-    let cancelled = false;
-    // localStorage alone has no compare-and-swap. Chromium/Electron's lock
-    // serializes reload -> consume -> transport handoff across renderer tabs;
-    // an older browser pauses instead of permitting an ambiguous duplicate.
-    if (!supportsBackgroundAutoNudgeDispatchLock()) {
-      controller.pause(
-        observedOwner,
-        "Background continuation requires a cross-tab dispatch lock.",
-      );
-      return;
-    }
+    const nowMs = Date.now();
+    const observedAuthorityKeys = new Set<string>();
+    const liveAuthorityKeys = new Set<string>();
+    const liveStopKeys = new Set<string>();
 
-    void navigator.locks
-      .request(
-        "club-code.auto-nudge.background.dispatch.v1",
-        { ifAvailable: true, mode: "exclusive" },
-        (lock) => {
-          if (!lock || cancelled) return;
-          controller.reloadFromStorage();
-          const currentState = controller.getSnapshot();
-          const owner = currentState.owner;
-          if (!owner || currentState.status !== "active") return;
+    for (const environment of Object.values(environmentStateById)) {
+      if (!environment.bootstrapComplete) continue;
 
-          const currentEnvironmentStateById = useStore.getState().environmentStateById;
-          const currentServerConfig = getServerConfig();
-          const environment = currentEnvironmentStateById[owner.environmentId];
-          // Reload/remount must wait for the authoritative shell snapshot. Treating
-          // an unhydrated store as a deleted thread would destroy valid ownership.
-          if (!environment?.bootstrapComplete || !currentServerConfig) return;
-          const ownedThreadId = ThreadId.make(owner.threadId);
-          const shell = environment?.threadShellById[ownedThreadId];
-          const summary = environment?.sidebarThreadSummaryById[ownedThreadId];
-          const session = environment?.threadSessionById[ownedThreadId] ?? summary?.session ?? null;
-          const latestTurn =
-            environment?.threadTurnStateById[ownedThreadId]?.latestTurn ??
-            summary?.latestTurn ??
-            null;
-          const providerInstanceId =
-            session?.providerInstanceId ??
-            (session?.provider
-              ? defaultInstanceIdForDriver(session.provider)
-              : shell?.modelSelection.instanceId);
-          const provider =
-            currentServerConfig.providers.find(
-              (entry) => entry.instanceId === providerInstanceId,
-            ) ?? null;
-          const terminalTurnKey =
-            shell &&
-            latestTurn?.state === "completed" &&
-            latestTurn.completedAt &&
-            session?.status === "ready"
-              ? `${owner.environmentId}:${owner.threadId}:${latestTurn.turnId}`
-              : null;
-          const currentOwnerComposerDraft = useComposerDraftStore.getState().getComposerDraft({
-            environmentId: EnvironmentId.make(owner.environmentId),
-            threadId: ownedThreadId,
-          });
-          const ledger = getAutoNudgeTurnLedger();
-          // Read after acquiring the dispatch lock. Stop writes its durable
-          // suppression barrier before settings persistence, so a stale React
-          // closure or an older enable write cannot authorize another dispatch.
-          const currentSettings = getClientSettings();
-          const arming = getConfirmedAutoNudgeArming();
-          arming.synchronizeSuppressionFromStorage();
-          const executionSuppressed = arming.getSuppressedSnapshot();
+      for (const threadId of environment.threadIds) {
+        const shell = environment.threadShellById[threadId];
+        if (!shell) continue;
+        const config = shell.autoNudge;
 
-          const dispatch = controller.observe({
-            nowMs: Date.now(),
-            settings: {
-              mode: executionSuppressed ? "off" : currentSettings.autoNudgeMode,
-              enabled: !executionSuppressed && currentSettings.autoNudgeBackgroundContinuation,
-              maxRounds: currentSettings.autoNudgeMaxRounds,
-              maxMinutes: currentSettings.autoNudgeMaxMinutes,
-            },
-            thread:
-              shell && summary
-                ? {
-                    exists: true,
-                    archived: shell.archivedAt !== null,
-                    terminalTurnKey,
-                    latestUserMessageAt: summary.latestUserMessageAt,
-                    sessionReady: session?.status === "ready",
-                    isRunning:
-                      session?.status === "running" ||
-                      session?.orchestrationStatus === "running" ||
-                      latestTurn?.state === "running",
-                    hasPendingWork:
-                      summary.hasPendingApprovals ||
-                      summary.hasPendingUserInput ||
-                      summary.hasActionableProposedPlan ||
-                      Boolean(currentOwnerComposerDraft?.prompt.trim()) ||
-                      (currentOwnerComposerDraft?.images.length ?? 0) > 0 ||
-                      Boolean(shell.error),
-                    providerAvailable: providerCanAcceptTurn(provider),
-                  }
-                : { exists: false },
-            alreadyConsumed: (turnKey) => ledger.has(turnKey),
-            newMessageId: () => String(newMessageId()),
-          });
-          if (!dispatch || !shell) return;
-
+        if (globallySuppressed) {
+          if (config.mode === "off") continue;
+          const requestKey = stopKey(shell, config);
+          liveStopKeys.add(requestKey);
+          if (stopRequestsRef.current.has(requestKey)) continue;
           const api = readEnvironmentApi(shell.environmentId);
-          if (!api) {
-            controller.markDispatchFailed(
-              dispatch.owner,
-              dispatch.messageId,
-              "Environment transport is unavailable; background continuation paused.",
-            );
-            return;
-          }
-
-          // Re-read at the last synchronous boundary before transport. Another
-          // renderer can press Stop while this callback is evaluating the
-          // projection; that newer barrier must invalidate the prepared send.
-          if (cancelled || !arming.confirmExecutionAuthorized()) {
-            controller.stop(dispatch.owner, "Auto Nudge stopped before transport handoff.");
-            return;
-          }
-
-          // Consume before crossing the transport. A reload or lost ACK can skip one
-          // nudge, but can never submit the same completed turn twice. Once the
-          // following transport call begins, Stop cannot retract provider work
-          // that has already been handed off.
-          ledger.mark(dispatch.terminalTurnKey);
-          if (cancelled || !arming.confirmExecutionAuthorized()) {
-            controller.stop(dispatch.owner, "Auto Nudge stopped before transport handoff.");
-            return;
-          }
-
+          if (!api) continue;
+          stopRequestsRef.current.add(requestKey);
           void api.orchestration
             .dispatchCommand({
-              type: "thread.turn.start",
+              type: "thread.auto-nudge.stop",
               commandId: newCommandId(),
               threadId: shell.id,
-              message: {
-                messageId: MessageId.make(dispatch.messageId),
-                role: "user",
-                text: dispatch.prompt,
-                attachments: [],
-              },
-              modelSelection: shell.modelSelection,
-              titleSeed: shell.title,
-              runtimeMode: shell.runtimeMode,
-              interactionMode: shell.interactionMode,
-              createdAt: dispatch.createdAt,
+              createdAt: new Date().toISOString(),
             })
             .catch(() => {
-              controller.markDispatchFailed(
-                dispatch.owner,
-                dispatch.messageId,
-                "Provider or transport rejected the automated prompt; continuation paused.",
-              );
+              stopRequestsRef.current.delete(requestKey);
             });
-        },
-      )
-      .catch(() => {
-        if (!cancelled) {
-          controller.pause(
-            observedOwner,
-            "Background continuation could not acquire a cross-tab dispatch lock.",
-          );
+          continue;
         }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    autoNudgeSuppressed,
-    backgroundState,
-    environmentStateById,
-    ownerComposerDraft,
-    serverConfig,
-    settings.autoNudgeBackgroundContinuation,
-    settings.autoNudgeMaxMinutes,
-    settings.autoNudgeMaxRounds,
-    settings.autoNudgeMode,
-    tick,
-  ]);
+
+        if (
+          config.mode === "off" ||
+          !config.backgroundContinuation ||
+          shell.archivedAt !== null ||
+          config.roundsDispatched >= config.maxRounds ||
+          config.armedAt === null
+        ) {
+          continue;
+        }
+
+        const armedAtMs = Date.parse(config.armedAt);
+        if (!Number.isFinite(armedAtMs) || nowMs - armedAtMs >= config.maxMinutes * 60_000) {
+          continue;
+        }
+
+        const summary = environment.sidebarThreadSummaryById[threadId];
+        const session = environment.threadSessionById[threadId] ?? summary?.session ?? null;
+        const latestTurn =
+          environment.threadTurnStateById[threadId]?.latestTurn ?? summary?.latestTurn ?? null;
+        if (
+          !summary ||
+          !session ||
+          session.status !== "ready" ||
+          latestTurn?.state !== "completed" ||
+          !latestTurn.completedAt ||
+          latestTurn.turnId === config.baselineSettledTurnId ||
+          latestTurn.turnId === config.lastDispatchedSettledTurnId
+        ) {
+          continue;
+        }
+
+        const key = authorityKey(shell, config, latestTurn.turnId);
+        liveAuthorityKeys.add(key);
+        const draft = useComposerDraftStore.getState().getComposerDraft({
+          environmentId: shell.environmentId,
+          threadId: shell.id,
+        });
+        if (
+          summary.hasPendingApprovals ||
+          summary.hasPendingUserInput ||
+          summary.hasActionableProposedPlan ||
+          Boolean(draft?.prompt.trim()) ||
+          (draft?.images.length ?? 0) > 0 ||
+          Boolean(shell.error)
+        ) {
+          continue;
+        }
+
+        const providerInstanceId =
+          session.providerInstanceId ??
+          (session.provider
+            ? defaultInstanceIdForDriver(session.provider)
+            : shell.modelSelection.instanceId);
+        const environmentServerConfig =
+          shell.environmentId === readPrimaryEnvironmentDescriptor()?.environmentId
+            ? serverConfig
+            : getSavedEnvironmentRuntimeState(shell.environmentId).serverConfig;
+        const provider =
+          environmentServerConfig?.providers.find(
+            (entry) => entry.instanceId === providerInstanceId,
+          ) ?? null;
+        if (!providerCanAcceptTurn(provider)) continue;
+
+        observedAuthorityKeys.add(key);
+        if (getAutoNudgeTurnLedger().has(key)) {
+          continue;
+        }
+
+        const eligibleSince = eligibleSinceByAuthorityRef.current.get(key);
+        if (eligibleSince === undefined) {
+          eligibleSinceByAuthorityRef.current.set(key, nowMs);
+          continue;
+        }
+        if (
+          nowMs - eligibleSince < AUTO_NUDGE_DELAY_MS ||
+          attemptedAuthoritiesRef.current.has(key)
+        ) {
+          continue;
+        }
+
+        const api = readEnvironmentApi(shell.environmentId);
+        if (!api) continue;
+
+        const arming = getConfirmedAutoNudgeArming();
+        arming.synchronizeSuppressionFromStorage();
+        if (!arming.confirmExecutionAuthorized()) continue;
+
+        // Consume locally before transport and never retry an uncertain result.
+        // Server-side revision/terminal checks remain the actual authority.
+        attemptedAuthoritiesRef.current.add(key);
+        if (!arming.confirmExecutionAuthorized()) continue;
+        getAutoNudgeTurnLedger().mark(key);
+
+        void api.orchestration
+          .dispatchCommand({
+            type: "thread.auto-nudge.dispatch",
+            commandId: newCommandId(),
+            threadId: shell.id,
+            expectedAuthorityRevision: config.authorityRevision,
+            completedTurnId: latestTurn.turnId,
+            dispatchSource: "background",
+            messageId: newMessageId(),
+            createdAt: new Date().toISOString(),
+          })
+          .catch(() => {
+            // Fail closed. A new projection revision or terminal turn creates a
+            // different key and is the only condition that permits another try.
+          });
+      }
+    }
+
+    for (const key of eligibleSinceByAuthorityRef.current.keys()) {
+      if (!observedAuthorityKeys.has(key)) {
+        eligibleSinceByAuthorityRef.current.delete(key);
+      }
+    }
+    for (const key of attemptedAuthoritiesRef.current) {
+      if (!liveAuthorityKeys.has(key)) {
+        attemptedAuthoritiesRef.current.delete(key);
+      }
+    }
+    for (const key of stopRequestsRef.current) {
+      if (!liveStopKeys.has(key)) {
+        stopRequestsRef.current.delete(key);
+      }
+    }
+  }, [environmentStateById, globallySuppressed, savedEnvironmentRuntimeById, serverConfig, tick]);
 
   return null;
 }
