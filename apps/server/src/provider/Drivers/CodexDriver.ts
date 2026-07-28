@@ -63,6 +63,7 @@ import {
   codexContinuationIdentity,
   materializeCodexShadowHome,
   resolveCodexHomeLayout,
+  type CodexShadowHomeAuthSource,
 } from "./CodexHomeLayout.ts";
 const decodeCodexSettings = Schema.decodeSync(CodexSettings);
 
@@ -156,6 +157,15 @@ export function resolveCodexAuthActions(input: {
     : undefined;
 }
 
+export function resolveCodexShadowHomeAuthSource(
+  config: Pick<CodexSettings, "ossMode" | "homePath" | "shadowHomePath">,
+): CodexShadowHomeAuthSource {
+  if (config.ossMode) return "none";
+  return config.homePath.trim().length === 0 && config.shadowHomePath.trim().length > 0
+    ? "shadow"
+    : "shared";
+}
+
 export function resolveCodexRuntimeEnvironment(
   config: Pick<CodexSettings, "ossMode" | "ossBaseUrl">,
   environment: NodeJS.ProcessEnv,
@@ -188,14 +198,10 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
       const processEnv = mergeProviderInstanceEnvironment(environment);
       const layoutConfig = withDefaultCodexShadowHome({ instanceId, config });
       const homeLayout = yield* resolveCodexHomeLayout(layoutConfig);
-      // A default Cafe-created shadow overlays the user's normal ~/.codex auth
-      // so CLI re-login repairs Cafe automatically. An explicit shadow-only
-      // instance is different: users configure those paths to hold separate
-      // Codex accounts, so its own auth.json is the source of truth.
-      const authSource =
-        config.homePath.trim().length === 0 && config.shadowHomePath.trim().length > 0
-          ? "shadow"
-          : "shared";
+      // Cloud instances either refresh from the shared login or preserve an
+      // explicitly configured shadow login. OSS instances need neither and
+      // must not receive a copy of unrelated cloud credentials.
+      const authSource = resolveCodexShadowHomeAuthSource(config);
       const continuationIdentity = codexContinuationIdentity(homeLayout);
       const stampIdentity = withInstanceIdentity({
         instanceId,

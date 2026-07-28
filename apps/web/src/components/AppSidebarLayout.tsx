@@ -35,11 +35,12 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
     return activeDraftSession?.environmentId ?? null;
   }, [activeDraftSession?.environmentId, routeTarget]);
   const retainedRouteEnvironmentIdRef = useRef<typeof routeEnvironmentId>(null);
+  const settingsRouteActive = pathname === "/settings" || pathname.startsWith("/settings/");
   const environmentScope = resolveAmbientVideoEnvironmentScope({
     routeEnvironmentId,
     retainedRouteEnvironmentId: retainedRouteEnvironmentIdRef.current,
     activeEnvironmentId,
-    settingsRouteActive: pathname === "/settings" || pathname.startsWith("/settings/"),
+    settingsRouteActive,
   });
   const navigationSidebarOpen = useUiStateStore((state) => state.navigationSidebarOpen);
   const setNavigationSidebarOpen = useUiStateStore((state) => state.setNavigationSidebarOpen);
@@ -113,7 +114,10 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
        * environment deliberately remounts the streaming player instead of
        * carrying an iframe's playback/controller state across server identities.
        */}
-      <AmbientVideoWorkspace environmentScopeKey={environmentScope.scopeKey}>
+      <AmbientVideoWorkspace
+        environmentScopeKey={environmentScope.scopeKey}
+        retainPlayerWithoutAnchor={settingsRouteActive}
+      >
         {children}
       </AmbientVideoWorkspace>
     </SidebarProvider>

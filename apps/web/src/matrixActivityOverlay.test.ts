@@ -580,6 +580,10 @@ describe("Matrix provider activity overlay", () => {
     ]);
     expect(paired).toHaveLength(2);
     expect(paired.every((event) => event.verifiedAgentDispatch === undefined)).toBe(true);
+    const pairedAnimation = createMatrixActivityAnimationState();
+    updateMatrixActivityAnimationInPlace(pairedAnimation, paired, now, 160, false);
+    expect(pairedAnimation.linkCount).toBe(1);
+    expect(pairedAnimation.links[0]).toMatchObject({ category: "agent" });
 
     for (const ineligible of [
       activity(

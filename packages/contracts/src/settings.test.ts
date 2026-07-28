@@ -1098,8 +1098,13 @@ describe("provider settings", () => {
       "http://host.docker.internal:1234/v1",
       "http://100.100.100.200:1234/v1",
       "http://169.254.169.254:1234/v1",
+      "https://100.100.100.200/v1",
+      "https://169.254.169.254/v1",
       "http://[fe80::25]:1234/v1",
       "http://[fd00:ec2::254]:1234/v1",
+      "https://[fd00:ec2::254]/v1",
+      "https://metadata.google.internal/v1",
+      "https://metadata.google.internal./v1",
       "http://192.168.1.25:1234/not-the-api-root",
     ]) {
       expect(() => decodeCodexSettings({ ossBaseUrl: value }), value).toThrow();

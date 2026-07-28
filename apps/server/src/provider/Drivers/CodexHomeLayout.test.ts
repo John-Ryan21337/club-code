@@ -254,6 +254,31 @@ it.layer(NodeServices.layer)("CodexHomeLayout", (it) => {
       }),
     );
 
+    it.effect("removes cloud auth from a credential-free shadow home", () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const sharedHome = yield* makeTempDir("t3code-codex-shared-");
+        const shadowRoot = yield* makeTempDir("t3code-codex-shadow-root-");
+        const shadowHome = path.join(shadowRoot, "shadow");
+
+        yield* writeTextFile(path.join(sharedHome, "auth.json"), '{"shared":true}\n');
+        yield* writeTextFile(path.join(shadowHome, "auth.json"), '{"stale":true}\n');
+
+        const layout = yield* resolveCodexHomeLayout(
+          decodeCodexSettings({
+            homePath: sharedHome,
+            shadowHomePath: shadowHome,
+          }),
+        );
+
+        yield* materializeCodexShadowHome(layout, { authSource: "none" });
+
+        expect(yield* fileSystem.exists(path.join(sharedHome, "auth.json"))).toBe(true);
+        expect(yield* fileSystem.exists(path.join(shadowHome, "auth.json"))).toBe(false);
+      }),
+    );
+
     it.effect(
       "does not create shadow auth from shared auth when the shadow is the auth source",
       () =>

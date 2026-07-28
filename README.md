@@ -63,7 +63,7 @@ Club Code’s additions are meant to cooperate instead of becoming a pile of unr
 - **Persisted private ambient content:** validated uploaded ambient images/GIFs are stored by the local server and referenced by Client Settings. Replacement/removal uses reference-aware cleanup; selected directory and relative paths are never persisted. This is not the same lifecycle as Local Media.
 - **Session-only by design:** local file URLs, direct/VLC queues plus layout/glow/visualizer state and custom drag coordinates, `.txt` YouTube queues, owner playlist grants, display-audio streams, browser snapshots/sensitive fields, provider-browser grants/bearers, VLC playback tokens, and the active Atmosphere Console command. Closing or clearing the owning surface tears these down. A chat `.txt` selection becomes ordinary visible draft text, so it follows the draft/message lifecycle rather than the media queue lifecycle.
 - **Read-only views:** Workflow/Workspace Observatory projections, file previews, and SQLite panes. They do not write to files or databases and do not silently add their contents to model context.
-- **External capabilities required:** public YouTube search needs a server-side API key; owned-playlist discovery needs the explicitly enabled desktop OAuth client; VLC playback needs an installed VLC; native voices must be installed in the OS; LM Studio must already be serving locally; whole-window opacity and supervised-browser actions must pass their desktop capability checks.
+- **External capabilities required:** public YouTube search needs a server-side API key; owned-playlist discovery needs the explicitly enabled desktop OAuth client; VLC playback needs an installed VLC; native voices must be installed in the OS; LM Studio must already be serving on loopback or a reachable trusted network endpoint; whole-window opacity and supervised-browser actions must pass their desktop capability checks.
 - **Compatibility names remain on purpose:** the product says **Club Code**, while `@cafecode/*`, `cafe-code`, `CAFE_CODE_*`, `.cafe-code`, and existing protocol/data identifiers remain where changing them would break upstream compatibility or existing installs.
 
 ### Turn On the New Toys
@@ -86,7 +86,7 @@ CAFE_CODE_YOUTUBE_OAUTH_DESKTOP_CLIENT_ID=your-desktop-client.apps.googleusercon
 
 Enable the YouTube Data API, complete Google's consent-screen setup, and use a Desktop OAuth client ID. Club Code uses Google's Desktop-app loopback form, `http://127.0.0.1:<Club Code backend port>`, with the backend's actual port and no added path. The grant is per owner session and memory-only—no refresh token is written at rest—and remote-web backends do not expose this connection flow.
 
-For LM Studio, start its local API server on `localhost:1234`, open Settings > Providers, choose **Add provider**, then choose **LM Studio**. Club Code creates a separate local Codex OSS instance; select that instance in a chat just like any other provider. Cloud login is not required for the local instance, and an existing cloud Codex instance is left alone.
+For LM Studio, start its OpenAI-compatible API server, open Settings > Providers, choose **Add provider**, then choose **LM Studio**. Loopback defaults to `http://127.0.0.1:1234/v1`; a trusted machine on the LAN can instead use its literal private IP, such as `http://192.168.1.50:1234/v1`. Club Code creates a separate Codex OSS instance for that endpoint; select it in a chat just like any other provider. Cloud login is not required for the LM Studio instance, and an existing cloud Codex instance is left alone.
 
 VLC must be installed for the desktop VLC lane. Native speech depends on voices installed in the operating system. YouTube search/account discovery requires the configuration above. Capability gates, operating-system support, native smoke tests, licensing, packaging, performance, and security reviews still decide what is exposed in a release. A sparkly sign is not a release commitment. Mm. Responsible.
 
@@ -379,7 +379,7 @@ editor のふりも terminal のふりもしない。新しい file/database の
 - **Ultra Caching**は、Codex の stable structured handoff と 120k の早め compaction ceiling、Claude の stable compact handoff で、持ち回る context を軽くして cache-friendly にする。効果は provider 次第だから、実測 counter で見る。persistent な階層 summary/index はまだない。bundled **Audit and Repair** skill は reviewer がその場で直して test まで持つけど、Club Code が自動で何周も orchestrate/enforce する workflow ではまだない。audit 済みの頭を別の fixer にもう一度説明しないぶん、recontext token を無駄にしにくい。ね、ちゃんと考えてるでしょ。褒めて。
 - **Completion Audio**は default off、同じ turn が `running → completed` になった時だけ。短い original 二音 ping、または一個 5 MiB / 15 秒までの local MP3/WAV を最大八個、device の browser storage に置いて cycle。声は固定の「Task complete.」「作業が完了しました。」だけで prompt は読まない。英/日と male/female preference を別に選べて、Windows native なら日本語左＋英語右を同時、または逆。female は日本語なら Haruka、次に Ayumi、英語なら Zira を優先するよ。Haruka も Ayumi もいなければ英語 voice で日本語のふりをせず「入ってない」と言って、Microsoft の Add voices 案内と refresh button を出す。入れて戻れば見つけるからね、かわいく喋る準備だけしておいて。browser fallback は center/sequential と正直に表示。voice pack は同梱してないし、macOS/Linux に Windows と同じ native stereo path はまだない。ずっと喋らない。完成だけ。あたしより静か。
 - **窓全体の透明度**は native Electron window に 65〜100% の安全な範囲で適用。packaged Windows は smoke 済み、未検証 surface は fail-closed。KDE/Konsole acrylic や blur、完全に消える窓そのものじゃなく窓全体の fade。まとめて reset すれば atmosphere/media/opacity を止めて session media も clear。透明なのは窓だけ、責任まで透明にはしない。
-- **Local model**は Settings > Providers に **LM Studio**ってちゃんと別の指名札があるの。選ぶと普通の chat/thread で使える別 routing の Codex OSS instance を作って、`codex --oss --local-provider lmstudio app-server` で外に起こした `localhost:1234` へ行く。cloud login check は local mode では不要、local と cloud の model list も混ぜないし、いつもの Codex 指名を勝手に着替えさせない。LM Studio 本体は同梱しないから先に起こしてね。別会計、そこだけは泥酔でも伝票を混ぜない。
+- **Local model**は Settings > Providers に **LM Studio**ってちゃんと別の指名札があるの。選ぶと普通の chat/thread で使える別 routing の Codex OSS instance を作って、`codex --oss --local-provider lmstudio app-server` で外に起こした OpenAI-compatible API へ行く。既定は loopback の `http://127.0.0.1:1234/v1`、信頼できる LAN 上の別マシンなら `http://192.168.1.50:1234/v1` のような private IP も使える。cloud login check は local mode では不要、local と cloud の model list も混ぜないし、いつもの Codex 指名を勝手に着替えさせない。LM Studio 本体は同梱しないから先に起こしてね。別会計、そこだけは泥酔でも伝票を混ぜない。
 
 ### で、実際どう使うの？　もう一杯ぶんだけ説明するね
 
@@ -400,7 +400,7 @@ editor のふりも terminal のふりもしない。新しい file/database の
 - **private に保存:** 検査済みの ambient image/GIF は一枚でも cycle 分でも local server に保存して、Client Settings から参照する。replace/remove は reference を確認して片付けて、選んだ directory path と relative path は保存しない。Local Media と同じ一夜だけの扱いじゃないよ。
 - **session が終われば片付け:** local file URL と direct/VLC queue、layout・glow・visualizer state と custom 座標、YouTube の `.txt` queue、owner playlist grant、display-audio stream、browser snapshot/sensitive field、provider-browser grant/bearer、VLC playback token、いま打った Atmosphere Console command。clear/close した席のものは残さない。chat で選んだ `.txt` は見える普通の draft text になるから、media queue じゃなく draft/message の寿命についていく。忘れ物管理、厳しめ。
 - **見るだけ:** Workflow/Workspace の projection、file preview、SQLite pane。file/database に書かないし、見えた内容を勝手に model context へ入れない。見学席から厨房に包丁投げない。
-- **外で用意が必要:** YouTube 公開検索は server-side API key、owner playlist は明示的に有効化した desktop OAuth client、VLC lane は installed VLC、native speech は installed OS voice、LM Studio は起動済み local server、opacity/browser assisted action は desktop capability check。ないものを「ありますぅ」で通さない。歌舞伎町でもそこは契約書。
+- **外で用意が必要:** YouTube 公開検索は server-side API key、owner playlist は明示的に有効化した desktop OAuth client、VLC lane は installed VLC、native speech は installed OS voice、LM Studio は loopback または到達可能な信頼済み network endpoint で起動済み server、opacity/browser assisted action は desktop capability check。ないものを「ありますぅ」で通さない。歌舞伎町でもそこは契約書。
 - **昔の名前が残るところ:** 看板と UI は **Club Code**。でも `@cafecode/*`、`cafe-code`、`CAFE_CODE_*`、`.cafe-code`、既存 protocol/data ID は compatibility が壊れる場所では残す。改名祝いで常連のボトル札まで捨てたら怒られるでしょ。そういうこと。
 
 飾りは全部 switch で戻せる。本当に真っさらな Club Code だけ上の first-round profile、既存 settings はそのまま。
@@ -424,8 +424,8 @@ CAFE_CODE_YOUTUBE_OAUTH_DESKTOP_CLIENT_ID=your-desktop-client.apps.googleusercon
 
 YouTube Data API と consent screen を設定して、Desktop OAuth client ID を使ってね。callback は Google の Desktop app 用 loopback 形式、`http://127.0.0.1:<Club Code backend port>`。backend の実際の port を使って、余計な path は足さないの。owner session の memory だけで、refresh token は disk に置かない。remote web はこの接続を出さない。ね、約束を盛らないのもサービス。
 
-LM Studio は local API server を `localhost:1234` で起こして、Settings > Providers の
-**Add provider**から **LM Studio**を指名。別の local Codex OSS instance ができるから、chat で普通の provider みたいに選ぶの。local instance は cloud login いらないし、いつもの cloud Codex はそのまま。伝票わけた、はい乾杯。
+LM Studio は OpenAI-compatible API server を起こして、Settings > Providers の
+**Add provider**から **LM Studio**を指名。既定は `http://127.0.0.1:1234/v1`、信頼できる LAN の別マシンなら literal private IP も入力できる。endpoint ごとに別の Codex OSS instance ができるから、chat で普通の provider みたいに選ぶの。LM Studio instance は cloud login いらないし、いつもの cloud Codex はそのまま。伝票わけた、はい乾杯。
 
 VLC lane には VLC の install、native voice には OS voice の install が必要。
 実際の release は OS、capability gate、native smoke、license、security、performance 次第。

@@ -124,7 +124,7 @@ it("does not let temporary defaults mask a persisted source that arrives after m
   });
 });
 
-it("remounts a retained player when its environment scope changes", async () => {
+it("retains the exact player through Settings and remounts it across environments", async () => {
   const config = makeConfig({ kind: "video", id: "dQw4w9WgXcQ" });
   setServerConfigSnapshot({
     ...config,
@@ -152,6 +152,47 @@ it("remounts a retained player when its environment scope changes", async () => 
   );
   expect(firstFrame).not.toBeNull();
 
+  // Settings replaces the route child and removes the chat anchor. The
+  // long-lived workspace must retain both its geometry and the exact iframe
+  // node so YouTube playback/controller state is not restarted.
+  await mounted.rerender(
+    <AppAtomRegistryProvider>
+      <AmbientVideoWorkspace environmentScopeKey="environment-a" retainPlayerWithoutAnchor>
+        <main>Settings</main>
+      </AmbientVideoWorkspace>
+    </AppAtomRegistryProvider>,
+  );
+  await new Promise<void>((resolve) => {
+    window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve()));
+  });
+  expect(firstFrame?.isConnected).toBe(true);
+  expect(
+    document.querySelector<HTMLIFrameElement>('iframe[title="Ambient YouTube video player"]'),
+  ).toBe(firstFrame);
+  await mounted.rerender(
+    <AppAtomRegistryProvider>
+      <AmbientVideoWorkspace environmentScopeKey="environment-a" retainPlayerWithoutAnchor>
+        <main data-settings-revision="2">Settings</main>
+      </AmbientVideoWorkspace>
+    </AppAtomRegistryProvider>,
+  );
+  expect(firstFrame?.isConnected).toBe(true);
+  expect(
+    document.querySelector<HTMLIFrameElement>('iframe[title="Ambient YouTube video player"]'),
+  ).toBe(firstFrame);
+
+  // An environment boundary is stronger than route persistence. Even while
+  // Settings has no chat anchor, the old frame must be discarded so no
+  // controller/playback state crosses server identities. The replacement can
+  // wait until the destination environment has a visible chat anchor.
+  await mounted.rerender(
+    <AppAtomRegistryProvider>
+      <AmbientVideoWorkspace environmentScopeKey="environment-b" retainPlayerWithoutAnchor>
+        <main>Settings</main>
+      </AmbientVideoWorkspace>
+    </AppAtomRegistryProvider>,
+  );
+  expect(firstFrame?.isConnected).toBe(false);
   await mounted.rerender(
     <AppAtomRegistryProvider>
       <AmbientVideoWorkspace environmentScopeKey="environment-b">
@@ -159,19 +200,14 @@ it("remounts a retained player when its environment scope changes", async () => 
       </AmbientVideoWorkspace>
     </AppAtomRegistryProvider>,
   );
-
   await expect
-    .poll(
-      () =>
-        document.querySelector<HTMLIFrameElement>(
-          'iframe[title="Ambient YouTube video player"]',
-        ) !== firstFrame,
+    .poll(() =>
+      document.querySelector<HTMLIFrameElement>('iframe[title="Ambient YouTube video player"]'),
     )
-    .toBe(true);
+    .not.toBeNull();
   const secondFrame = document.querySelector<HTMLIFrameElement>(
     'iframe[title="Ambient YouTube video player"]',
   );
-  expect(firstFrame?.isConnected).toBe(false);
   expect(secondFrame).not.toBeNull();
   expect(secondFrame).not.toBe(firstFrame);
   expect(secondFrame?.src).toBe(firstFrame?.src);

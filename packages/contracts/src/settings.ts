@@ -1135,13 +1135,22 @@ function isPrivateOrLoopbackIpv4(hostname: string): boolean {
 function isPrivateOrLoopbackIpv6(hostname: string): boolean {
   const normalized = hostname.replace(/^\[|\]$/gu, "").toLowerCase();
   if (normalized === "::1") return true;
-  // AWS exposes instance metadata at this IPv6 ULA. It is never a valid
-  // default LM Studio target, and allowing it would turn the provider status
-  // probe into a local SSRF primitive.
-  if (normalized === "fd00:ec2::254") return false;
   const firstSegment = normalized.split(":")[0] ?? "";
   const firstValue = Number.parseInt(firstSegment, 16);
   return Number.isFinite(firstValue) && firstValue >= 0xfc00 && firstValue <= 0xfdff;
+}
+
+function isKnownCloudMetadataHost(hostname: string): boolean {
+  const normalized = hostname
+    .replace(/^\[|\]$/gu, "")
+    .replace(/\.$/u, "")
+    .toLowerCase();
+  return (
+    normalized === "169.254.169.254" ||
+    normalized === "100.100.100.200" ||
+    normalized === "fd00:ec2::254" ||
+    normalized === "metadata.google.internal"
+  );
 }
 
 function isPrivateOrLoopbackLmStudioHost(hostname: string): boolean {
@@ -1161,7 +1170,9 @@ function isPrivateOrLoopbackLmStudioHost(hostname: string): boolean {
  * rejected over HTTP: a syntax-only check cannot prove their resolution stays
  * private, so accepting them would make the "private network" boundary
  * vulnerable to DNS rebinding. Hostnames remain available over HTTPS, where
- * normal certificate verification authenticates the selected endpoint.
+ * normal certificate verification authenticates the selected endpoint. Known
+ * cloud metadata endpoints are rejected for either protocol so HTTPS cannot
+ * turn model discovery or status probes into a local SSRF primitive.
  */
 export function validateLmStudioBaseUrl(value: string): string | null {
   const trimmed = value.trim();
@@ -1185,6 +1196,9 @@ export function validateLmStudioBaseUrl(value: string): string | null {
   }
   if (url.search.length > 0 || url.hash.length > 0) {
     return "LM Studio server URL must not contain a query string or fragment.";
+  }
+  if (isKnownCloudMetadataHost(url.hostname)) {
+    return "LM Studio server URL must not target a cloud metadata service.";
   }
   if (url.protocol === "http:" && !isPrivateOrLoopbackLmStudioHost(url.hostname)) {
     return "Plain HTTP is allowed only for localhost or a literal private/loopback IP address. Use an IP address or HTTPS so DNS cannot redirect the endpoint.";

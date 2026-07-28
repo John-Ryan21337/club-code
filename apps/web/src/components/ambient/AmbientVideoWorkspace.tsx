@@ -178,9 +178,11 @@ function useRetainedElementRect(
 ): MeasuredRect | null {
   const [measurement, setMeasurement] = useState<{
     readonly measuredRect: MeasuredRect | null;
+    readonly retainedMeasuredRect: MeasuredRect | null;
     readonly retainedRect: NormalizedMeasuredRect | null;
   }>({
     measuredRect: null,
+    retainedMeasuredRect: null,
     retainedRect: null,
   });
 
@@ -196,34 +198,46 @@ function useRetainedElementRect(
     const measure = () => {
       window.cancelAnimationFrame(frame);
       frame = window.requestAnimationFrame(() => {
+        // A route replacement can queue a ResizeObserver delivery for the old
+        // chat node just before React clears its ref. Detached/zero geometry
+        // must not overwrite the last usable anchor or the player will unmount
+        // on the next render while Settings is open.
+        if (!element.isConnected || !relativeTo.isConnected) {
+          return;
+        }
         const elementRect = element.getBoundingClientRect();
         const rootRect = relativeTo.getBoundingClientRect();
+        if (
+          elementRect.width <= 0 ||
+          elementRect.height <= 0 ||
+          rootRect.width <= 0 ||
+          rootRect.height <= 0
+        ) {
+          return;
+        }
         const measuredRect = {
           left: elementRect.left - rootRect.left,
           top: elementRect.top - rootRect.top,
           width: elementRect.width,
           height: elementRect.height,
         };
-        const retainedRect =
-          rootRect.width > 0 && rootRect.height > 0
-            ? {
-                x: measuredRect.left / rootRect.width,
-                y: measuredRect.top / rootRect.height,
-                width: measuredRect.width / rootRect.width,
-                height: measuredRect.height / rootRect.height,
-              }
-            : null;
+        const retainedRect = {
+          x: measuredRect.left / rootRect.width,
+          y: measuredRect.top / rootRect.height,
+          width: measuredRect.width / rootRect.width,
+          height: measuredRect.height / rootRect.height,
+        };
 
         setMeasurement((current) => {
           const measuredRectUnchanged = sameRect(current.measuredRect, measuredRect);
-          const retainedRectUnchanged =
-            retainedRect === null || sameNormalizedRect(current.retainedRect, retainedRect);
+          const retainedRectUnchanged = sameNormalizedRect(current.retainedRect, retainedRect);
           if (measuredRectUnchanged && retainedRectUnchanged) {
             return current;
           }
           return {
             measuredRect,
-            retainedRect: retainedRect ?? current.retainedRect,
+            retainedMeasuredRect: measuredRect,
+            retainedRect,
           };
         });
       });
@@ -246,15 +260,24 @@ function useRetainedElementRect(
   if (measurement.measuredRect !== null) {
     return measurement.measuredRect;
   }
-  if (measurement.retainedRect === null || containerRect === null) {
-    return null;
+  if (
+    measurement.retainedRect !== null &&
+    containerRect !== null &&
+    containerRect.width > 0 &&
+    containerRect.height > 0
+  ) {
+    return {
+      left: containerRect.left + measurement.retainedRect.x * containerRect.width,
+      top: containerRect.top + measurement.retainedRect.y * containerRect.height,
+      width: measurement.retainedRect.width * containerRect.width,
+      height: measurement.retainedRect.height * containerRect.height,
+    };
   }
-  return {
-    left: containerRect.left + measurement.retainedRect.x * containerRect.width,
-    top: containerRect.top + measurement.retainedRect.y * containerRect.height,
-    width: measurement.retainedRect.width * containerRect.width,
-    height: measurement.retainedRect.height * containerRect.height,
-  };
+  // Route swaps can briefly clear or collapse the shell measurement before
+  // the retained normalized geometry can be reprojected. Keep the last exact
+  // chat rect during that gap so a long-lived iframe is never unmounted merely
+  // because Settings removed its anchor.
+  return measurement.retainedMeasuredRect;
 }
 
 function presetGeometry(input: {
@@ -328,9 +351,11 @@ function resolveGlowColor(value: "auto" | string): string {
 export function AmbientVideoWorkspace({
   children,
   environmentScopeKey = "unassigned-environment",
+  retainPlayerWithoutAnchor = false,
 }: {
   readonly children: ReactNode;
   readonly environmentScopeKey?: string;
+  readonly retainPlayerWithoutAnchor?: boolean;
 }) {
   const settings = useSettings();
   const localMedia = useLocalMediaState();
@@ -356,6 +381,10 @@ export function AmbientVideoWorkspace({
     readonly element: HTMLIFrameElement;
     readonly status: "loaded" | YouTubePlaylistConnection["status"];
     readonly controller: YouTubePlaylistController | null;
+  } | null>(null);
+  const mountedPlayerRef = useRef<{
+    readonly sourceKey: string;
+    readonly element: HTMLIFrameElement;
   } | null>(null);
   const [youtubeTransportController, setYoutubeTransportController] =
     useState<YouTubePlaylistController | null>(null);
@@ -479,16 +508,24 @@ export function AmbientVideoWorkspace({
   const registerRootElement = useCallback((element: HTMLDivElement | null) => {
     setRootElement((current) => (current === element ? current : element));
   }, []);
-  const registerPlayerFrame = useCallback((element: HTMLIFrameElement | null) => {
-    if (element === null) {
+  const registerPlayerFrame = useCallback(
+    (element: HTMLIFrameElement | null) => {
+      if (element !== null && sourceKey !== null) {
+        mountedPlayerRef.current = { sourceKey, element };
+        return;
+      }
+      if (mountedPlayerRef.current?.sourceKey === sourceKey) {
+        mountedPlayerRef.current = null;
+      }
       setPlayerReadiness(null);
       // Never retain an artwork-derived palette after its authenticated frame
       // is gone. A remounted direct video restores its known source ID on load;
       // playlists and queues wait for a fresh exact-origin info delivery.
       setCurrentYouTubeVideoId(null);
       setAdaptiveGlowPalette(null);
-    }
-  }, []);
+    },
+    [sourceKey],
+  );
 
   const playlistFrame =
     sourceSupportsPlaylistNavigation &&
@@ -769,11 +806,15 @@ export function AmbientVideoWorkspace({
       YOUTUBE_MINIMUM_VIEWPORT_HEIGHT +
         (sourceHasNavigation ? FLOATING_PLAYLIST_CONTROLS_HEIGHT : 0) &&
     effectiveGeometry !== null;
-  const playerShouldMount = ambientVideoPlayerShouldMount(
-    locallyRenderable,
-    floatingVisible,
-    streamingCinemaEffective,
-  );
+  const retainMountedPlayer =
+    retainPlayerWithoutAnchor &&
+    chatAnchor === null &&
+    sourceKey !== null &&
+    mountedPlayerRef.current?.sourceKey === sourceKey &&
+    mountedPlayerRef.current.element.isConnected;
+  const playerShouldMount =
+    ambientVideoPlayerShouldMount(locallyRenderable, floatingVisible, streamingCinemaEffective) ||
+    retainMountedPlayer;
 
   const commitGeometry = useCallback(
     (geometry: NormalizedAmbientMediaGeometry) => {

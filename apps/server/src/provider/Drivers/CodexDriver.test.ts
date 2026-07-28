@@ -4,7 +4,11 @@ import { CodexSettings, ProviderInstanceId } from "@cafecode/contracts";
 import * as Schema from "effect/Schema";
 import { describe, it } from "vitest";
 
-import { resolveCodexRuntimeEnvironment, withDefaultCodexShadowHome } from "./CodexDriver.ts";
+import {
+  resolveCodexRuntimeEnvironment,
+  resolveCodexShadowHomeAuthSource,
+  withDefaultCodexShadowHome,
+} from "./CodexDriver.ts";
 
 const decodeCodexSettings = Schema.decodeSync(CodexSettings);
 
@@ -74,5 +78,41 @@ describe("resolveCodexRuntimeEnvironment", () => {
   it("does not inject the LM Studio endpoint into a cloud Codex instance", () => {
     const environment = { KEEP_ME: "yes" };
     assert.equal(resolveCodexRuntimeEnvironment(decodeCodexSettings({}), environment), environment);
+  });
+});
+
+describe("resolveCodexShadowHomeAuthSource", () => {
+  it("keeps LM Studio shadow homes free of cloud credentials", () => {
+    assert.equal(
+      resolveCodexShadowHomeAuthSource(
+        decodeCodexSettings({
+          ossMode: true,
+          homePath: "",
+          shadowHomePath: "~/.cafe-code/codex-homes/lmstudio",
+        }),
+      ),
+      "none",
+    );
+  });
+
+  it("preserves the existing cloud auth source rules", () => {
+    assert.equal(
+      resolveCodexShadowHomeAuthSource(
+        decodeCodexSettings({
+          homePath: "",
+          shadowHomePath: "~/.cafe-code/codex-homes/work",
+        }),
+      ),
+      "shadow",
+    );
+    assert.equal(
+      resolveCodexShadowHomeAuthSource(
+        decodeCodexSettings({
+          homePath: "~/.codex",
+          shadowHomePath: "~/.cafe-code/codex-homes/work",
+        }),
+      ),
+      "shared",
+    );
   });
 });
