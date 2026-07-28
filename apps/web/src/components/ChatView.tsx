@@ -12,6 +12,8 @@ import {
   type ServerProvider,
   type ScopedThreadRef,
   type ThreadId,
+  THREAD_AUTO_NUDGE_PROMPT_MAX_CHARS,
+  type ThreadAutoNudgeConfig,
   type TurnId,
   OrchestrationThreadActivity,
   ProviderInteractionMode,
@@ -75,7 +77,9 @@ import {
 import {
   selectProjectByRef,
   selectProjectsAcrossEnvironments,
+  selectEnvironmentState,
   selectThreadByRef,
+  selectThreadShellsAcrossEnvironments,
   selectThreadsAcrossEnvironments,
   useStore,
 } from "../store";
@@ -192,19 +196,9 @@ import {
   getAutoNudgeTurnLedger,
 } from "../autoNudger";
 import {
-  getBackgroundAutoNudgeController,
-  isBackgroundAutoNudgeOwner,
-  isLastBackgroundAutoNudgeOwner,
-  useBackgroundAutoNudgeState,
-} from "../backgroundAutoNudger";
-import {
-  AUTO_NUDGE_EXECUTION_LOCK_NAME,
-  getAutoNudgeThreadPolicyStore,
-  supportsAutoNudgeExecutionLock,
-  useAutoNudgeThreadPolicy,
-  type AutoNudgeThreadPolicy,
-} from "../autoNudgeThreadPolicy";
-import { getConfirmedAutoNudgeArming } from "../confirmedAutoNudgeArming";
+  getConfirmedAutoNudgeArming,
+  useAutoNudgeSuppressedState,
+} from "../confirmedAutoNudgeArming";
 import { useComposerHandleContext } from "../composerHandleContext";
 import {
   useServerAvailableEditors,
@@ -214,6 +208,10 @@ import {
 } from "~/rpc/serverState";
 import { describeSendFailureMessage, sanitizeThreadErrorMessage } from "~/rpc/transportError";
 import { retainThreadDetailSubscription } from "../environments/runtime/service";
+import {
+  hasSavedEnvironmentRegistryHydrated,
+  listSavedEnvironmentRecords,
+} from "../environments/runtime";
 import { RightPanelSheet } from "./RightPanelSheet";
 import { deriveDebugWaitReasons } from "./chat/debugWaitReasons";
 import {
@@ -234,6 +232,47 @@ const IMAGE_ONLY_BOOTSTRAP_PROMPT =
 const EMPTY_ACTIVITIES: OrchestrationThreadActivity[] = [];
 const EMPTY_PROPOSED_PLANS: Thread["proposedPlans"] = [];
 const EMPTY_BOOLEAN_RECORD: Readonly<Record<string, boolean>> = {};
+
+interface AutoNudgeForegroundDispatchAuthority {
+  readonly contextKey: string;
+  readonly terminalTurnKey: string;
+  readonly environmentId: EnvironmentId;
+  readonly threadId: ThreadId;
+  readonly authorityRevision: ThreadAutoNudgeConfig["authorityRevision"];
+  readonly completedTurnId: TurnId;
+}
+
+interface AutoNudgeConfigureValues {
+  readonly mode: AutoNudgeMode;
+  readonly prompt: string;
+  readonly backgroundContinuation: boolean;
+  readonly maxRounds: ThreadAutoNudgeConfig["maxRounds"];
+  readonly maxMinutes: ThreadAutoNudgeConfig["maxMinutes"];
+}
+
+type AutoNudgeClearBlocker = "configuration-pending" | "environment-unavailable" | "thread-enabled";
+
+function autoNudgeClearBlockerDescription(blocker: AutoNudgeClearBlocker): string {
+  return blocker === "configuration-pending"
+    ? "A thread configuration command is still settling. Keep Emergency Stop all active and retry after the server has acknowledged it."
+    : blocker === "environment-unavailable"
+      ? "At least one known environment is disconnected or still hydrating. Keep Emergency Stop all active, reconnect it, and retry after every thread can be confirmed Off."
+      : "One or more known threads still project Auto Nudge as enabled. Keep Emergency Stop all active and retry after every thread shows Off.";
+}
+
+function providerAccountCanAcceptTurn(provider: ServerProvider | null): boolean {
+  const snapshot = provider?.accountRateLimits?.rateLimits;
+  if (!snapshot) return true;
+  if (snapshot.rateLimitReachedType || snapshot.spendControlReached) return false;
+  if (
+    (snapshot.primary?.usedPercent ?? 0) >= 100 ||
+    (snapshot.secondary?.usedPercent ?? 0) >= 100
+  ) {
+    return false;
+  }
+  const credits = snapshot.credits;
+  return credits === undefined || credits === null || credits.unlimited || credits.hasCredits;
+}
 const DEBUG_SNAPSHOT_VERSION = 11;
 const DEBUG_TEXT_PREVIEW_LIMIT = 120;
 const DEBUG_JSON_PREVIEW_LIMIT = 600;
@@ -1848,6 +1887,13 @@ export default function ChatView(props: ChatViewProps) {
       [routeKind, routeThreadRef],
     ),
   );
+  const activeAutoNudgeConfig = useStore((store) =>
+    routeKind === "server"
+      ? (selectEnvironmentState(store, routeThreadRef.environmentId).threadAutoNudgeConfigById[
+          routeThreadRef.threadId
+        ] ?? null)
+      : null,
+  );
   const setStoreThreadError = useStore((store) => store.setError);
   const markThreadVisited = useUiStateStore((store) => store.markThreadVisited);
   const activeThreadLastVisitedAt = useUiStateStore((store) =>
@@ -1868,6 +1914,7 @@ export default function ChatView(props: ChatViewProps) {
     (store) => store.setThreadWorkflowNodeExpanded,
   );
   const settings = useSettings();
+  const autoNudgeSuppressed = useAutoNudgeSuppressedState();
   const setStickyComposerModelSelection = useComposerDraftStore(
     (store) => store.setStickyModelSelection,
   );
@@ -1927,6 +1974,70 @@ export default function ChatView(props: ChatViewProps) {
     Record<string, string | null>
   >({});
   const [isConnecting, _setIsConnecting] = useState(false);
+  const [autoNudgePendingWrites, setAutoNudgePendingWrites] = useState<
+    Record<
+      string,
+      {
+        readonly kind: "mode" | "background" | "prompt";
+        readonly generation: number;
+      }
+    >
+  >({});
+  const autoNudgeWriteInFlightByScopeRef = useRef(
+    new Map<
+      string,
+      {
+        readonly kind: "mode" | "background" | "prompt";
+        readonly generation: number;
+      }
+    >(),
+  );
+  const autoNudgePendingWriteForContext = (
+    scopeKey: string | null,
+  ): {
+    readonly kind: "mode" | "background" | "prompt";
+    readonly generation: number;
+  } | null => (scopeKey ? (autoNudgePendingWrites[scopeKey] ?? null) : null);
+  const autoNudgeWriteGenerationRef = useRef(0);
+  const autoNudgeContextKeyRef = useRef<string | null>(null);
+  const [autoNudgeCountdownSeconds, setAutoNudgeCountdownSeconds] = useState<number | null>(null);
+  const [autoNudgeActivityRevision, setAutoNudgeActivityRevision] = useState(0);
+  const autoNudgeLedgerRef = useRef(getAutoNudgeTurnLedger());
+  // Keep the latest settled terminal identity available to synchronous
+  // composer handlers. A user can type before the scheduling effect has had
+  // a chance to arm its timer; that interaction still consumes this turn.
+  const autoNudgeTerminalTurnKeyRef = useRef<string | null>(null);
+  const [autoNudgeTimerController] = useState(
+    () =>
+      new AutoNudgeTimerController({
+        now: () => Date.now(),
+        setTimeout: (callback, delayMs) => window.setTimeout(callback, delayMs),
+        clearTimeout: (timer) => window.clearTimeout(timer),
+        setInterval: (callback, intervalMs) => window.setInterval(callback, intervalMs),
+        clearInterval: (timer) => window.clearInterval(timer),
+      }),
+  );
+  const cancelScheduledAutoNudge = useCallback(
+    (consumeScheduledTurn: boolean) => {
+      const scheduledTurnKey = autoNudgeTimerController.scheduledTurnKey;
+      if (consumeScheduledTurn && scheduledTurnKey) {
+        // A manual action/stop must never turn into a delayed send when the
+        // operator clears the composer again.
+        autoNudgeLedgerRef.current.mark(scheduledTurnKey);
+      }
+      autoNudgeTimerController.cancel();
+      setAutoNudgeCountdownSeconds(null);
+    },
+    [autoNudgeTimerController],
+  );
+  const recordManualAutoNudgeActivity = useCallback(() => {
+    consumeAutoNudgeTerminalForManualActivity(
+      autoNudgeLedgerRef.current,
+      autoNudgeTerminalTurnKeyRef.current,
+    );
+    cancelScheduledAutoNudge(true);
+    setAutoNudgeActivityRevision((revision) => revision + 1);
+  }, [cancelScheduledAutoNudge]);
   const [isRevertingCheckpoint, setIsRevertingCheckpoint] = useState(false);
   const [respondingRequestIds, setRespondingRequestIds] = useState<ApprovalRequestId[]>([]);
   const [respondingUserInputRequestIds, setRespondingUserInputRequestIds] = useState<
@@ -2223,6 +2334,14 @@ export default function ChatView(props: ChatViewProps) {
   const allProjects = useStore(useShallow(selectProjectsAcrossEnvironments));
   const allThreads = useStore(useShallow(selectThreadsAcrossEnvironments));
   const activeThreadId = activeThread?.id ?? null;
+  const autoNudgeMode: AutoNudgeMode = activeAutoNudgeConfig?.mode ?? "off";
+  const autoNudgeContextKey =
+    isServerThread && activeThread
+      ? scopedThreadKey(scopeThreadRef(activeThread.environmentId, activeThread.id))
+      : null;
+  autoNudgeContextKeyRef.current = autoNudgeContextKey;
+  const autoNudgePendingWrite = autoNudgePendingWriteForContext(autoNudgeContextKey);
+  const autoNudgeArming = autoNudgePendingWrite !== null;
   const recordFollowUpQueueDebugAttempt = useCallback(
     (
       source: string,
@@ -5150,13 +5269,10 @@ export default function ChatView(props: ChatViewProps) {
     recordFollowUpQueueDebugAttempt,
   ]);
 
-  const onSend = async (
-    e?: { preventDefault: () => void },
-    dispatchSource: "operator" | "auto-nudge" = "operator",
-  ) => {
+  const onSend = async (e?: { preventDefault: () => void }) => {
     e?.preventDefault();
-    // A real operator send (and the auto sender after its final re-check)
-    // invalidates any outstanding countdown before touching the provider.
+    // A real operator send invalidates any outstanding countdown before
+    // touching the provider.
     recordManualAutoNudgeActivity();
     const api = readEnvironmentApi(environmentId);
     if (
@@ -5371,16 +5487,6 @@ export default function ChatView(props: ChatViewProps) {
             }
           : undefined;
       beginLocalDispatch({ preparingWorktree: false });
-      // Preparing a turn can await metadata, settings, and attachments. Stop
-      // may arrive during any of those awaits, so the earlier timer check is
-      // insufficient: re-read the durable barrier immediately before the
-      // costly turn-start handoff.
-      if (
-        dispatchSource === "auto-nudge" &&
-        !getConfirmedAutoNudgeArming().confirmExecutionAuthorized()
-      ) {
-        throw new Error("Auto Nudge stopped before transport handoff.");
-      }
       await api.orchestration.dispatchCommand({
         type: "thread.turn.start",
         commandId: newCommandId(),
@@ -5437,17 +5543,30 @@ export default function ChatView(props: ChatViewProps) {
     }
   };
 
-  const autoNudgeTerminalTurnKey =
+  const autoNudgeCompletedTurnId =
     isServerThread &&
     activeThread &&
     activeLatestTurn?.state === "completed" &&
     activeLatestTurn.completedAt &&
     latestTurnSettled &&
     activeThread.session?.status === "ready"
-      ? `${activeThread.environmentId}:${activeThread.id}:${activeLatestTurn.turnId}`
+      ? activeLatestTurn.turnId
       : null;
-  const autoNudgeLatestUserMessageAt =
-    activeThread?.messages.findLast((message) => message.role === "user")?.createdAt ?? null;
+  const autoNudgeConfigAccountsForCompletedTurn =
+    autoNudgeCompletedTurnId !== null &&
+    (activeAutoNudgeConfig?.baselineSettledTurnId === autoNudgeCompletedTurnId ||
+      activeAutoNudgeConfig?.lastDispatchedSettledTurnId === autoNudgeCompletedTurnId);
+  const autoNudgeTerminalTurnKey =
+    autoNudgeContextKey !== null &&
+    autoNudgeCompletedTurnId !== null &&
+    activeAutoNudgeConfig !== null &&
+    activeAutoNudgeConfig.mode !== "off" &&
+    activeAutoNudgeConfig.prompt.trim().length > 0 &&
+    activeAutoNudgeConfig.roundsDispatched < activeAutoNudgeConfig.maxRounds &&
+    !activeAutoNudgeConfig.backgroundContinuation &&
+    !autoNudgeConfigAccountsForCompletedTurn
+      ? `${autoNudgeContextKey}:${autoNudgeCompletedTurnId}:${activeAutoNudgeConfig.authorityRevision}`
+      : null;
   autoNudgeTerminalTurnKeyRef.current = autoNudgeTerminalTurnKey;
   const autoNudgeHasPendingWork =
     isWorking ||
@@ -5466,35 +5585,21 @@ export default function ChatView(props: ChatViewProps) {
     Boolean(activeThread?.error) ||
     showPlanFollowUpPrompt;
   const autoNudgeProviderAvailable =
-    autoNudgeProviderCanAcceptTurn(activeProviderStatus) &&
-    !activeEnvironmentUnavailable &&
-    supportsAutoNudgeExecutionLock();
-  useEffect(() => {
-    if (
-      !autoNudgeThreadRef ||
-      !backgroundAutoNudgeOwnerForRoute ||
-      backgroundAutoNudgeState.status !== "active" ||
-      !autoNudgeHasPendingWork
-    ) {
-      return;
-    }
-    void runAutoNudgeMutation(() => {
-      const controller = getBackgroundAutoNudgeController();
-      controller.reloadFromStorage();
-      controller.pause(autoNudgeThreadRef, "Queued work or operator attention is pending.");
-    });
-  }, [
-    autoNudgeHasPendingWork,
-    autoNudgeThreadRef,
-    backgroundAutoNudgeOwnerForRoute,
-    backgroundAutoNudgeState.status,
-    runAutoNudgeMutation,
-  ]);
+    activeProviderStatus?.status === "ready" &&
+    activeProviderStatus.enabled &&
+    activeProviderStatus.installed &&
+    activeProviderStatus.availability !== "unavailable" &&
+    activeProviderStatus.auth.status === "authenticated" &&
+    providerAccountCanAcceptTurn(activeProviderStatus) &&
+    !activeEnvironmentUnavailable;
   const autoNudgeEligibilityInput = {
     terminalTurnKey: autoNudgeTerminalTurnKey,
-    // The root coordinator exclusively owns an opted-in background thread,
-    // including while visible, so a foreground timer cannot race it.
-    mode: backgroundAutoNudgeOwnerForRoute ? ("off" as const) : autoNudgePolicy.mode,
+    // Server-configured background continuation owns its own dispatch lane.
+    // The visible foreground must not race it for the same completed turn.
+    mode:
+      autoNudgeSuppressed || activeAutoNudgeConfig?.backgroundContinuation
+        ? ("off" as const)
+        : autoNudgeMode,
     hasManualActivity: promptRef.current.trim().length > 0 || composerImagesRef.current.length > 0,
     hasPendingWork: autoNudgeHasPendingWork,
     providerAvailable: autoNudgeProviderAvailable,
@@ -5502,25 +5607,25 @@ export default function ChatView(props: ChatViewProps) {
   const autoNudgeEligible = canScheduleAutoNudge(autoNudgeEligibilityInput);
   const autoNudgeEligibilityRef = useRef(autoNudgeEligibilityInput);
   autoNudgeEligibilityRef.current = autoNudgeEligibilityInput;
-  const autoNudgeDispatchRef = useRef<
-    ((mode: AutoNudgeThreadPolicy["mode"]) => Promise<void>) | null
-  >(null);
-  autoNudgeDispatchRef.current = async (mode) => {
-    if (!getConfirmedAutoNudgeArming().confirmExecutionAuthorized()) return;
-    const prompt = autoNudgePromptForMode(mode);
-    if (!prompt) return;
-    promptRef.current = prompt;
-    composerImagesRef.current = [];
-    setComposerDraftPrompt(composerDraftTarget, prompt);
-    // Keep this adjacent to `onSend`; its internal pre-turn check closes the
-    // remaining window introduced by asynchronous turn preparation.
-    if (!getConfirmedAutoNudgeArming().confirmExecutionAuthorized()) return;
-    await onSend(undefined, "auto-nudge");
-  };
+  const autoNudgeForegroundDispatchAuthority: AutoNudgeForegroundDispatchAuthority | null =
+    autoNudgeContextKey !== null &&
+    autoNudgeTerminalTurnKey !== null &&
+    autoNudgeCompletedTurnId !== null &&
+    activeThread &&
+    activeAutoNudgeConfig
+      ? {
+          contextKey: autoNudgeContextKey,
+          terminalTurnKey: autoNudgeTerminalTurnKey,
+          environmentId: activeThread.environmentId,
+          threadId: activeThread.id,
+          authorityRevision: activeAutoNudgeConfig.authorityRevision,
+          completedTurnId: autoNudgeCompletedTurnId,
+        }
+      : null;
+  const autoNudgeForegroundDispatchAuthorityRef =
+    useRef<AutoNudgeForegroundDispatchAuthority | null>(null);
+  autoNudgeForegroundDispatchAuthorityRef.current = autoNudgeForegroundDispatchAuthority;
 
-  const autoNudgeContextKey = activeThread
-    ? `${activeThread.environmentId}:${activeThread.id}:${activeThread.projectId}`
-    : null;
   const previousAutoNudgeContextKeyRef = useRef<string | null>(null);
   useEffect(() => {
     const previousContextKey = previousAutoNudgeContextKeyRef.current;
@@ -5528,9 +5633,8 @@ export default function ChatView(props: ChatViewProps) {
     if (previousContextKey === null || previousContextKey === autoNudgeContextKey) {
       return;
     }
-    // A policy may remain enabled, but a foreground timer belongs to exactly
-    // one visible thread. Cancel without consuming so returning can re-evaluate
-    // that thread's still-current completed turn from a fresh snapshot.
+    // A timer belongs to one exact environment/thread. Cancel without
+    // consuming so returning can re-evaluate that thread's server authority.
     cancelScheduledAutoNudge(false);
   }, [autoNudgeContextKey, cancelScheduledAutoNudge]);
 
@@ -5582,10 +5686,46 @@ export default function ChatView(props: ChatViewProps) {
             ledger.mark(scheduledTurnKey);
             await autoNudgeDispatchRef.current?.(currentPolicy.mode);
           })
-          .catch(() => {
-            // Lock/dispatch failures fail closed. A claim made before a
-            // transport failure is intentionally not replayed.
-          });
+        ) {
+          return;
+        }
+        const authority = autoNudgeForegroundDispatchAuthorityRef.current;
+        if (
+          !authority ||
+          authority.contextKey !== autoNudgeContextKeyRef.current ||
+          authority.terminalTurnKey !== scheduledTurnKey
+        ) {
+          return;
+        }
+        const api = readEnvironmentApi(authority.environmentId);
+        if (!api) return;
+        const command = {
+          type: "thread.auto-nudge.dispatch" as const,
+          commandId: newCommandId(),
+          threadId: authority.threadId,
+          expectedAuthorityRevision: authority.authorityRevision,
+          completedTurnId: authority.completedTurnId,
+          dispatchSource: "foreground" as const,
+          messageId: newMessageId(),
+          createdAt: new Date().toISOString(),
+        };
+        // Consume before transport. Any rejection fails closed; the server is
+        // the execution authority and independently validates revision/turn.
+        autoNudgeLedgerRef.current.mark(scheduledTurnKey);
+        // A storage event can trail Emergency Stop all. Re-read its durable
+        // barrier on the line immediately before the transport handoff.
+        if (!getConfirmedAutoNudgeArming().confirmExecutionAuthorized()) return;
+        void api.orchestration.dispatchCommand(command).catch(() => {
+          if (autoNudgeContextKeyRef.current !== authority.contextKey) return;
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Auto Nudge was not dispatched",
+              description:
+                "This thread's saved authority changed or the environment became unavailable.",
+            }),
+          );
+        });
       },
     });
 
@@ -5593,7 +5733,6 @@ export default function ChatView(props: ChatViewProps) {
   }, [
     autoNudgeActivityRevision,
     autoNudgeEligible,
-    autoNudgePolicy.mode,
     autoNudgeTerminalTurnKey,
     autoNudgeThreadRef,
     autoNudgeTimerController,
@@ -5606,6 +5745,316 @@ export default function ChatView(props: ChatViewProps) {
     },
     [cancelScheduledAutoNudge],
   );
+
+  const configureActiveThreadAutoNudge = async (
+    values: AutoNudgeConfigureValues,
+    kind: "mode" | "background" | "prompt",
+  ): Promise<void> => {
+    const targetThread = isServerThread ? activeThread : null;
+    const targetConfig = activeAutoNudgeConfig;
+    const targetContextKey = autoNudgeContextKey;
+    const api = targetThread ? readEnvironmentApi(targetThread.environmentId) : undefined;
+    if (!targetThread || !targetConfig || !targetContextKey || !api) {
+      if (autoNudgeContextKeyRef.current === targetContextKey) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Failed to save Auto Nudge",
+            description: "This thread's environment is not connected.",
+          }),
+        );
+      }
+      throw new Error("The thread environment is not connected.");
+    }
+    if (values.mode !== "off" && values.prompt.trim().length === 0) {
+      throw new Error("An enabled Auto Nudge configuration requires a prompt.");
+    }
+    if (autoNudgeWriteInFlightByScopeRef.current.has(targetContextKey)) {
+      throw new Error("An Auto Nudge configuration write is already pending for this thread.");
+    }
+
+    const generation = autoNudgeWriteGenerationRef.current + 1;
+    autoNudgeWriteGenerationRef.current = generation;
+    const pendingWrite = { kind, generation } as const;
+    autoNudgeWriteInFlightByScopeRef.current.set(targetContextKey, pendingWrite);
+    setAutoNudgePendingWrites((pending) => ({
+      ...pending,
+      [targetContextKey]: pendingWrite,
+    }));
+    const commonCommand = {
+      type: "thread.auto-nudge.configure" as const,
+      commandId: newCommandId(),
+      threadId: targetThread.id,
+      expectedAuthorityRevision: targetConfig.authorityRevision,
+      prompt: values.prompt,
+      maxRounds: values.maxRounds,
+      maxMinutes: values.maxMinutes,
+      createdAt: new Date().toISOString(),
+    };
+    const command =
+      values.mode === "off"
+        ? {
+            ...commonCommand,
+            mode: "off" as const,
+            backgroundContinuation: false as const,
+          }
+        : {
+            ...commonCommand,
+            mode: values.mode,
+            backgroundContinuation: values.backgroundContinuation,
+          };
+    try {
+      await api.orchestration.dispatchCommand(command);
+    } catch (error) {
+      if (
+        autoNudgeContextKeyRef.current === targetContextKey &&
+        autoNudgeWriteGenerationRef.current === generation
+      ) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Failed to save Auto Nudge",
+            description:
+              "This thread changed or became unavailable. Its previous Auto Nudge settings remain in effect.",
+          }),
+        );
+      }
+      throw error;
+    } finally {
+      if (
+        autoNudgeWriteInFlightByScopeRef.current.get(targetContextKey)?.generation === generation
+      ) {
+        autoNudgeWriteInFlightByScopeRef.current.delete(targetContextKey);
+      }
+      setAutoNudgePendingWrites((pending) => {
+        if (pending[targetContextKey]?.generation !== generation) return pending;
+        const { [targetContextKey]: _completed, ...remaining } = pending;
+        return remaining;
+      });
+    }
+  };
+
+  const onAutoNudgeModeChange = (mode: AutoNudgeMode): void => {
+    const config = activeAutoNudgeConfig;
+    if (!config) return;
+    if (mode === "off") {
+      // Turning execution off is cost-sensitive. Use the unconditional
+      // exact-thread Stop so a stale expected revision cannot leave it armed.
+      onStopAutoNudgeThread();
+      return;
+    }
+    cancelScheduledAutoNudge(false);
+    if (autoNudgeSuppressed) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Emergency Stop all is active",
+          description:
+            "Allow Auto Nudge again only after every known thread has been confirmed Off.",
+        }),
+      );
+      return;
+    }
+    const prompt =
+      config.prompt.trim().length === 0 ? (autoNudgePromptForMode(mode) ?? "") : config.prompt;
+    void configureActiveThreadAutoNudge(
+      {
+        mode,
+        prompt,
+        backgroundContinuation: config.backgroundContinuation,
+        maxRounds: config.maxRounds,
+        maxMinutes: config.maxMinutes,
+      },
+      "mode",
+    ).catch(() => undefined);
+  };
+
+  const onAutoNudgeBackgroundChange = (enabled: boolean): void => {
+    const config = activeAutoNudgeConfig;
+    if (!config || config.mode === "off") return;
+    if (!enabled) {
+      // There is no unconditional background-only revocation command. Stop
+      // the exact thread rather than risk a stale configure leaving paid
+      // background work active; foreground can be re-enabled explicitly.
+      onStopAutoNudgeThread();
+      return;
+    }
+    cancelScheduledAutoNudge(false);
+    if (autoNudgeSuppressed) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Emergency Stop all is active",
+          description:
+            "Background continuation cannot be enabled until every known thread is confirmed Off.",
+        }),
+      );
+      return;
+    }
+    void configureActiveThreadAutoNudge(
+      {
+        mode: config.mode,
+        prompt: config.prompt,
+        backgroundContinuation: true,
+        maxRounds: config.maxRounds,
+        maxMinutes: config.maxMinutes,
+      },
+      "background",
+    ).catch(() => undefined);
+  };
+
+  const onSaveAutoNudgePrompt = (prompt: string): Promise<void> => {
+    const config = activeAutoNudgeConfig;
+    if (!config) return Promise.reject(new Error("No persisted thread is active."));
+    // Emergency Stop all is an execution barrier. Prompt edits remain useful,
+    // but saving one while suppressed must never recreate execution authority.
+    const mode = autoNudgeSuppressed ? ("off" as const) : config.mode;
+    return configureActiveThreadAutoNudge(
+      {
+        mode,
+        prompt,
+        backgroundContinuation: mode === "off" ? false : config.backgroundContinuation,
+        maxRounds: config.maxRounds,
+        maxMinutes: config.maxMinutes,
+      },
+      "prompt",
+    );
+  };
+
+  function onStopAutoNudgeThread(): void {
+    const targetThread = isServerThread ? activeThread : null;
+    const targetContextKey = autoNudgeContextKey;
+    const api = targetThread ? readEnvironmentApi(targetThread.environmentId) : undefined;
+    cancelScheduledAutoNudge(true);
+    autoNudgeWriteGenerationRef.current += 1;
+    setAutoNudgePendingWrites((pending) => {
+      if (!targetContextKey || pending[targetContextKey] === undefined) return pending;
+      const { [targetContextKey]: _stopped, ...remaining } = pending;
+      return remaining;
+    });
+    if (!targetThread || !targetContextKey || !api) {
+      if (autoNudgeContextKeyRef.current === targetContextKey) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Could not stop this thread",
+            description:
+              "Its environment is disconnected. Emergency Stop all remains available as a device-wide fail-closed barrier.",
+          }),
+        );
+      }
+      return;
+    }
+    const command = {
+      type: "thread.auto-nudge.stop" as const,
+      commandId: newCommandId(),
+      threadId: targetThread.id,
+      createdAt: new Date().toISOString(),
+    };
+    void api.orchestration.dispatchCommand(command).catch(() => {
+      if (autoNudgeContextKeyRef.current !== targetContextKey) return;
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Could not stop this thread",
+          description:
+            "The exact-thread Stop was not acknowledged. Retry when this environment is connected, or use Emergency Stop all.",
+        }),
+      );
+    });
+  }
+
+  const onEmergencyStopAllAutoNudge = (): void => {
+    cancelScheduledAutoNudge(true);
+    autoNudgeWriteGenerationRef.current += 1;
+    setAutoNudgePendingWrites({});
+    // The coordinator observes this durable, cross-renderer barrier and
+    // revokes every enabled server configuration. No project setting is used.
+    getConfirmedAutoNudgeArming().suppress();
+  };
+
+  const onAllowAutoNudgeAgain = (): void => {
+    const readClearBlocker = (): AutoNudgeClearBlocker | null => {
+      if (!hasSavedEnvironmentRegistryHydrated()) return "environment-unavailable";
+      // A configure RPC issued before Emergency Stop may not have reached the
+      // server yet. Even if every current shell says Off, clearing the latch
+      // before that RPC settles could expose authority that arrives later.
+      if (autoNudgeWriteInFlightByScopeRef.current.size > 0) return "configuration-pending";
+      const state = useStore.getState();
+      const shells = selectThreadShellsAcrossEnvironments(state);
+      const knownEnvironmentIds = new Set<EnvironmentId>();
+      const primaryEnvironment = readPrimaryEnvironmentDescriptor();
+      if (primaryEnvironment) knownEnvironmentIds.add(primaryEnvironment.environmentId);
+      for (const environment of listSavedEnvironmentRecords()) {
+        knownEnvironmentIds.add(environment.environmentId);
+      }
+      for (const shell of shells) {
+        knownEnvironmentIds.add(shell.environmentId);
+      }
+      for (const environmentId of knownEnvironmentIds) {
+        if (
+          !readEnvironmentApi(environmentId) ||
+          !selectEnvironmentState(state, environmentId).bootstrapComplete
+        ) {
+          return "environment-unavailable";
+        }
+      }
+      return shells.some((shell) => shell.autoNudge.mode !== "off") ? "thread-enabled" : null;
+    };
+    const blockerAtClick = readClearBlocker();
+    if (blockerAtClick) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Still stopping Auto Nudge threads",
+          description: autoNudgeClearBlockerDescription(blockerAtClick),
+        }),
+      );
+      return;
+    }
+
+    const stillStoppingError = new Error("Known Auto Nudge threads are not confirmed Off.");
+    let blockerBeforeClear: AutoNudgeClearBlocker | null = null;
+    void getConfirmedAutoNudgeArming()
+      .arm({
+        persistEnabled: async () => {
+          // Re-read connectivity, hydration, and every shell immediately
+          // before the arming helper clears its durable latch. An offline
+          // environment may still hold enabled authority that this renderer
+          // cannot see, and revocations can arrive after the click.
+          blockerBeforeClear = readClearBlocker();
+          if (blockerBeforeClear) throw stillStoppingError;
+        },
+        start: () => undefined,
+        clearSuppression: true,
+      })
+      .then((cleared) => {
+        if (cleared) return;
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Auto Nudge remains stopped",
+            description:
+              "The durable Emergency Stop barrier could not be cleared safely. Retry after checking this device's storage and thread connections.",
+          }),
+        );
+      })
+      .catch((error) => {
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title:
+              error === stillStoppingError
+                ? "Still stopping Auto Nudge threads"
+                : "Auto Nudge remains stopped",
+            description:
+              error === stillStoppingError && blockerBeforeClear
+                ? autoNudgeClearBlockerDescription(blockerBeforeClear)
+                : "The durable Emergency Stop barrier could not be cleared safely.",
+          }),
+        );
+      });
+  };
 
   const onSteer = async (e?: { preventDefault: () => void }) => {
     e?.preventDefault();
@@ -6676,33 +7125,24 @@ export default function ChatView(props: ChatViewProps) {
                 <AutoNudgeControl
                   mode={autoNudgePolicy.mode}
                   countdownSeconds={autoNudgeCountdownSeconds}
-                  disabled={!isServerThread}
-                  backgroundEnabled={
-                    backgroundAutoNudgeState.owner !== null && !backgroundAutoNudgeOwnerForRoute
-                  }
-                  backgroundDispatchSupported={supportsAutoNudgeExecutionLock()}
-                  backgroundOwnedByThisThread={backgroundAutoNudgeOwnerForRoute}
-                  backgroundStatus={backgroundAutoNudgeState.status}
-                  backgroundRounds={backgroundAutoNudgeState.sentRounds}
-                  backgroundMaxRounds={autoNudgePolicy.maxRounds}
-                  backgroundMaxMinutes={autoNudgePolicy.maxMinutes}
-                  backgroundReason={backgroundAutoNudgeState.reason}
-                  backgroundLedger={
-                    backgroundAutoNudgeLastOwnerForRoute
-                      ? backgroundAutoNudgeState.ledger.filter(
-                          (entry) =>
-                            entry.owner?.environmentId === autoNudgeThreadRef?.environmentId &&
-                            entry.owner?.threadId === autoNudgeThreadRef?.threadId,
-                        )
-                      : []
-                  }
-                  onModeChange={changeAutoNudgeMode}
-                  onMaxRoundsChange={(maxRounds) => changeAutoNudgeLimits({ maxRounds })}
-                  onMaxMinutesChange={(maxMinutes) => changeAutoNudgeLimits({ maxMinutes })}
-                  onBackgroundChange={changeAutoNudgeBackground}
-                  onPauseBackground={pauseAutoNudgeBackground}
-                  onResumeBackground={resumeAutoNudgeBackground}
-                  onStop={stopAutoNudge}
+                  disabled={!isServerThread || !activeAutoNudgeConfig}
+                  arming={autoNudgeArming}
+                  backgroundEnabled={activeAutoNudgeConfig?.backgroundContinuation ?? false}
+                  roundsDispatched={activeAutoNudgeConfig?.roundsDispatched ?? 0}
+                  maxRounds={activeAutoNudgeConfig?.maxRounds ?? 5}
+                  maxMinutes={activeAutoNudgeConfig?.maxMinutes ?? 30}
+                  globallySuppressed={autoNudgeSuppressed}
+                  promptScopeKey={autoNudgeContextKey ?? routeThreadKey}
+                  persistedPrompt={activeAutoNudgeConfig?.prompt ?? ""}
+                  promptMaxLength={THREAD_AUTO_NUDGE_PROMPT_MAX_CHARS}
+                  promptSaving={autoNudgeArming}
+                  promptEditable={Boolean(isServerThread && activeAutoNudgeConfig)}
+                  onSavePrompt={onSaveAutoNudgePrompt}
+                  onModeChange={onAutoNudgeModeChange}
+                  onBackgroundChange={onAutoNudgeBackgroundChange}
+                  onStop={onStopAutoNudgeThread}
+                  onEmergencyStopAll={onEmergencyStopAllAutoNudge}
+                  onAllowAutoNudgeAgain={onAllowAutoNudgeAgain}
                 />
                 <ChatComposer
                   composerRef={composerRef}
