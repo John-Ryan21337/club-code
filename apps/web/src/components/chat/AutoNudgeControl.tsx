@@ -73,6 +73,7 @@ export function AutoNudgeControl(props: {
         <p className="mt-0.5 text-muted-foreground">
           Mode is saved for this thread only. Background continuation is opt-in, owns one thread,
           and stops at {props.backgroundMaxRounds} rounds or {props.backgroundMaxMinutes} minutes.
+          Stop blocks future handoffs but cannot retract a prompt already handed to a provider.
         </p>
         {props.backgroundOwnedByThisThread ? (
           <div className="mt-1 text-muted-foreground" aria-live="polite">
@@ -213,7 +214,7 @@ export function AutoNudgeControl(props: {
             Start new bounded run
           </Button>
         ) : null}
-        {isActive || props.arming ? (
+        {isActive || props.arming || props.backgroundOwnedByThisThread ? (
           <Button type="button" size="sm" variant="outline" onClick={props.onStop}>
             Stop
           </Button>

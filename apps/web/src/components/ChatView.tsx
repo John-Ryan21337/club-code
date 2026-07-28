@@ -204,6 +204,7 @@ import {
   useAutoNudgeThreadPolicy,
   type AutoNudgeThreadPolicy,
 } from "../autoNudgeThreadPolicy";
+import { getConfirmedAutoNudgeArming } from "../confirmedAutoNudgeArming";
 import { useComposerHandleContext } from "../composerHandleContext";
 import {
   useServerAvailableEditors,
@@ -5149,7 +5150,10 @@ export default function ChatView(props: ChatViewProps) {
     recordFollowUpQueueDebugAttempt,
   ]);
 
-  const onSend = async (e?: { preventDefault: () => void }) => {
+  const onSend = async (
+    e?: { preventDefault: () => void },
+    dispatchSource: "operator" | "auto-nudge" = "operator",
+  ) => {
     e?.preventDefault();
     // A real operator send (and the auto sender after its final re-check)
     // invalidates any outstanding countdown before touching the provider.
@@ -5367,6 +5371,16 @@ export default function ChatView(props: ChatViewProps) {
             }
           : undefined;
       beginLocalDispatch({ preparingWorktree: false });
+      // Preparing a turn can await metadata, settings, and attachments. Stop
+      // may arrive during any of those awaits, so the earlier timer check is
+      // insufficient: re-read the durable barrier immediately before the
+      // costly turn-start handoff.
+      if (
+        dispatchSource === "auto-nudge" &&
+        !getConfirmedAutoNudgeArming().confirmExecutionAuthorized()
+      ) {
+        throw new Error("Auto Nudge stopped before transport handoff.");
+      }
       await api.orchestration.dispatchCommand({
         type: "thread.turn.start",
         commandId: newCommandId(),
@@ -5492,12 +5506,16 @@ export default function ChatView(props: ChatViewProps) {
     ((mode: AutoNudgeThreadPolicy["mode"]) => Promise<void>) | null
   >(null);
   autoNudgeDispatchRef.current = async (mode) => {
+    if (!getConfirmedAutoNudgeArming().confirmExecutionAuthorized()) return;
     const prompt = autoNudgePromptForMode(mode);
     if (!prompt) return;
     promptRef.current = prompt;
     composerImagesRef.current = [];
     setComposerDraftPrompt(composerDraftTarget, prompt);
-    await onSend();
+    // Keep this adjacent to `onSend`; its internal pre-turn check closes the
+    // remaining window introduced by asynchronous turn preparation.
+    if (!getConfirmedAutoNudgeArming().confirmExecutionAuthorized()) return;
+    await onSend(undefined, "auto-nudge");
   };
 
   const autoNudgeContextKey = activeThread
@@ -5555,6 +5573,10 @@ export default function ChatView(props: ChatViewProps) {
             ) {
               return;
             }
+            // A storage event from another renderer can trail its synchronous
+            // Stop write. Re-read the durable barrier while still holding the
+            // exact-thread dispatch lock.
+            if (!getConfirmedAutoNudgeArming().confirmExecutionAuthorized()) return;
             // Persist the claim before transport. A failure may skip a nudge,
             // but no reload or second window may duplicate one.
             ledger.mark(scheduledTurnKey);

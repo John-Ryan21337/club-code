@@ -4,6 +4,7 @@ export const AUTO_NUDGE_SUPPRESSION_STORAGE_KEY = "cafe-code.auto-nudge.suppress
 export const AUTO_NUDGE_SUPPRESSION_CLEAR_STORAGE_KEY =
   "cafe-code.auto-nudge.suppressed-through.v1";
 const AUTO_NUDGE_SUPPRESSION_PROBE_KEY = "cafe-code.auto-nudge.suppressed.probe.v1";
+const AUTO_NUDGE_SUPPRESSION_COOKIE_MAX_AGE_SECONDS = 400 * 24 * 60 * 60;
 
 export interface AutoNudgeSuppressionStorage {
   getItem(key: string): string | null;
@@ -12,60 +13,86 @@ export interface AutoNudgeSuppressionStorage {
 }
 
 function resolveSuppressionStorage(): AutoNudgeSuppressionStorage | null {
-  if (typeof window === "undefined") return null;
-  const storages: AutoNudgeSuppressionStorage[] = [];
+  if (typeof window === "undefined" || typeof document === "undefined") return null;
+  const browserDocument = document;
+  let storageSignal: AutoNudgeSuppressionStorage | null = null;
   try {
-    storages.push(window.localStorage);
+    storageSignal = window.localStorage;
   } catch {
-    // sessionStorage still preserves Stop across a same-tab reload.
+    // A first-party cookie remains the port-independent durable barrier.
   }
-  try {
-    if (!storages.includes(window.sessionStorage)) storages.push(window.sessionStorage);
-  } catch {
-    // The in-memory latch remains the final fail-closed fallback.
-  }
-  if (storages.length === 0) return null;
-  return {
+
+  const readCookie = (key: string): string | null => {
+    const encodedKey = encodeURIComponent(key);
+    for (const segment of browserDocument.cookie.split(";")) {
+      const trimmed = segment.trim();
+      const separator = trimmed.indexOf("=");
+      if (separator < 0 || trimmed.slice(0, separator) !== encodedKey) continue;
+      try {
+        return decodeURIComponent(trimmed.slice(separator + 1));
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  };
+  const writeCookie = (key: string, value: string): void => {
+    browserDocument.cookie = `${encodeURIComponent(key)}=${encodeURIComponent(value)}; Path=/; Max-Age=${AUTO_NUDGE_SUPPRESSION_COOKIE_MAX_AGE_SECONDS}; SameSite=Strict`;
+    if (readCookie(key) !== value) {
+      throw new Error("Auto Nudge suppression cookie is unavailable.");
+    }
+  };
+  const removeCookie = (key: string): void => {
+    browserDocument.cookie = `${encodeURIComponent(key)}=; Path=/; Max-Age=0; SameSite=Strict`;
+    if (readCookie(key) !== null) {
+      throw new Error("Auto Nudge suppression cookie could not be removed.");
+    }
+  };
+
+  const storage: AutoNudgeSuppressionStorage = {
     getItem: (key) => {
-      let readableStorages = 0;
-      for (const storage of storages) {
-        try {
-          const value = storage.getItem(key);
-          readableStorages += 1;
-          if (value !== null) return value;
-        } catch {
-          // Try the next available browser storage.
-        }
+      const cookieValue = readCookie(key);
+      if (cookieValue !== null) return cookieValue;
+      try {
+        return storageSignal?.getItem(key) ?? null;
+      } catch {
+        return null;
       }
-      if (readableStorages === 0) {
-        throw new Error("Auto Nudge suppression storage is unavailable.");
-      }
-      return null;
     },
     setItem: (key, value) => {
-      for (const storage of storages) {
-        try {
-          storage.setItem(key, value);
-          return;
-        } catch {
-          // Fall back to the next storage only when the preferred one fails.
-        }
+      writeCookie(key, value);
+      try {
+        // localStorage is only a same-origin change signal. The cookie is the
+        // authoritative barrier because cookies survive a desktop port move.
+        storageSignal?.setItem(key, value);
+      } catch {
+        // Final handoff checks read the cookie even when this signal is full.
       }
-      throw new Error("Auto Nudge suppression storage is unavailable.");
     },
     removeItem: (key) => {
-      let removals = 0;
-      for (const storage of storages) {
-        try {
-          storage.removeItem(key);
-          removals += 1;
-        } catch {
-          // Best effort across every available browser storage.
-        }
+      removeCookie(key);
+      try {
+        storageSignal?.removeItem(key);
+      } catch {
+        // Cookie removal is the authoritative operation.
       }
-      if (removals === 0) throw new Error("Auto Nudge suppression storage is unavailable.");
     },
   };
+
+  // Migrate a Stop written by the localStorage-only implementation and align
+  // its notification copy with the authoritative cookie.
+  for (const key of [
+    AUTO_NUDGE_SUPPRESSION_STORAGE_KEY,
+    AUTO_NUDGE_SUPPRESSION_CLEAR_STORAGE_KEY,
+  ]) {
+    try {
+      const value = storage.getItem(key);
+      if (value !== null) storage.setItem(key, value);
+    } catch {
+      // Construction probes below keep execution fail-closed.
+    }
+  }
+  return storage;
 }
 
 function readSuppressionState(storage: AutoNudgeSuppressionStorage | null): {
@@ -74,12 +101,14 @@ function readSuppressionState(storage: AutoNudgeSuppressionStorage | null): {
 } {
   if (!storage) return { available: false, suppressed: false };
   try {
-    const stopToken = storage.getItem(AUTO_NUDGE_SUPPRESSION_STORAGE_KEY);
+    const stopTokenBefore = storage.getItem(AUTO_NUDGE_SUPPRESSION_STORAGE_KEY);
+    const clearToken = storage.getItem(AUTO_NUDGE_SUPPRESSION_CLEAR_STORAGE_KEY);
+    const stopTokenAfter = storage.getItem(AUTO_NUDGE_SUPPRESSION_STORAGE_KEY);
     return {
       available: true,
       suppressed:
-        stopToken !== null &&
-        storage.getItem(AUTO_NUDGE_SUPPRESSION_CLEAR_STORAGE_KEY) !== stopToken,
+        stopTokenBefore !== stopTokenAfter ||
+        (stopTokenAfter !== null && clearToken !== stopTokenAfter),
     };
   } catch {
     return { available: false, suppressed: false };
@@ -124,7 +153,8 @@ export class ConfirmedAutoNudgeArming {
     const suppressionState = readSuppressionState(suppressionStorage);
     this.suppressed =
       suppressionState.suppressed ||
-      (failClosedWithoutDurableStorage && !this.durableStorageAvailable);
+      (failClosedWithoutDurableStorage &&
+        (!suppressionState.available || !this.durableStorageAvailable));
   }
 
   getSnapshot = (): boolean => this.arming;
@@ -173,15 +203,28 @@ export class ConfirmedAutoNudgeArming {
    * Reconcile a storage event from another renderer. A matching clear token
    * means an explicit, successfully persisted enable acknowledged that Stop.
    */
-  synchronizeSuppressionFromStorage(): void {
+  synchronizeSuppressionFromStorage(options?: { readonly verifyDurability?: boolean }): void {
+    if (options?.verifyDurability) {
+      this.durableStorageAvailable = suppressionStorageIsWritable(this.suppressionStorage);
+    }
     const suppressionState = readSuppressionState(this.suppressionStorage);
     if (!suppressionState.available) {
       this.durableStorageAvailable = false;
     }
     this.setSuppressed(
       suppressionState.suppressed ||
-        (this.failClosedWithoutDurableStorage && !this.durableStorageAvailable),
+        (this.failClosedWithoutDurableStorage &&
+          (!suppressionState.available || !this.durableStorageAvailable)),
     );
+  }
+
+  /**
+   * Revalidate the durable Stop barrier at the final synchronous boundary
+   * before a renderer hands an automated prompt to transport.
+   */
+  confirmExecutionAuthorized(): boolean {
+    this.synchronizeSuppressionFromStorage({ verifyDurability: true });
+    return !this.suppressed;
   }
 
   private readSuppressionToken(): string | null | undefined {
@@ -213,6 +256,13 @@ export class ConfirmedAutoNudgeArming {
         return false;
       }
       if (currentSuppressionToken === null) {
+        if (
+          this.suppressionStorage.getItem(AUTO_NUDGE_SUPPRESSION_STORAGE_KEY) !==
+          currentSuppressionToken
+        ) {
+          this.setSuppressed(true);
+          return false;
+        }
         this.setSuppressed(false);
         return true;
       }
@@ -223,11 +273,13 @@ export class ConfirmedAutoNudgeArming {
         AUTO_NUDGE_SUPPRESSION_CLEAR_STORAGE_KEY,
         currentSuppressionToken,
       );
+      const stopTokenBefore = this.suppressionStorage.getItem(AUTO_NUDGE_SUPPRESSION_STORAGE_KEY);
+      const clearToken = this.suppressionStorage.getItem(AUTO_NUDGE_SUPPRESSION_CLEAR_STORAGE_KEY);
+      const stopTokenAfter = this.suppressionStorage.getItem(AUTO_NUDGE_SUPPRESSION_STORAGE_KEY);
       const cleared =
-        this.suppressionStorage.getItem(AUTO_NUDGE_SUPPRESSION_STORAGE_KEY) ===
-          currentSuppressionToken &&
-        this.suppressionStorage.getItem(AUTO_NUDGE_SUPPRESSION_CLEAR_STORAGE_KEY) ===
-          currentSuppressionToken;
+        stopTokenBefore === currentSuppressionToken &&
+        stopTokenAfter === currentSuppressionToken &&
+        clearToken === currentSuppressionToken;
       if (!cleared) this.durableStorageAvailable = false;
       this.setSuppressed(!cleared && this.failClosedWithoutDurableStorage);
       return !this.suppressed;
@@ -274,16 +326,20 @@ function makeSharedConfirmedAutoNudgeArming(): ConfirmedAutoNudgeArming {
   const storage = resolveSuppressionStorage();
   const arming = new ConfirmedAutoNudgeArming(storage, true);
   if (typeof window !== "undefined") {
+    const browserWindow = window;
     const onStorage = (event: StorageEvent) => {
       if (
         event.key === AUTO_NUDGE_SUPPRESSION_STORAGE_KEY ||
         event.key === AUTO_NUDGE_SUPPRESSION_CLEAR_STORAGE_KEY
       ) {
-        arming.synchronizeSuppressionFromStorage();
+        // Storage events are infrequent and represent a cross-window
+        // authorization change, so re-probe durability here. Ordinary
+        // coordinator reads stay side-effect free.
+        arming.synchronizeSuppressionFromStorage({ verifyDurability: true });
       }
     };
-    window.addEventListener("storage", onStorage);
-    removeSharedStorageListener = () => window.removeEventListener("storage", onStorage);
+    browserWindow.addEventListener("storage", onStorage);
+    removeSharedStorageListener = () => browserWindow.removeEventListener("storage", onStorage);
   }
   return arming;
 }
@@ -308,6 +364,17 @@ export function useAutoNudgeSuppressedState(): boolean {
   );
 }
 
-export function __resetConfirmedAutoNudgeArmingForTests(): void {
+export function __resetConfirmedAutoNudgeArmingForTests(options?: {
+  readonly clearStorage?: boolean;
+}): void {
+  if (options?.clearStorage) {
+    const storage = resolveSuppressionStorage();
+    try {
+      storage?.removeItem(AUTO_NUDGE_SUPPRESSION_STORAGE_KEY);
+      storage?.removeItem(AUTO_NUDGE_SUPPRESSION_CLEAR_STORAGE_KEY);
+    } catch {
+      // The reconstructed runtime below remains fail-closed.
+    }
+  }
   sharedConfirmedAutoNudgeArming = makeSharedConfirmedAutoNudgeArming();
 }

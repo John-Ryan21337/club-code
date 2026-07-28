@@ -51,4 +51,18 @@ describe("AutoNudgeControl", () => {
 
     expect(onStop).toHaveBeenCalledTimes(1);
   });
+
+  it("keeps Stop available for a background owner even when the saved mode is off", async () => {
+    const onStop = vi.fn();
+    await renderControl({
+      mode: "off",
+      backgroundOwnedByThisThread: true,
+      backgroundStatus: "active",
+      onStop,
+    });
+
+    await page.getByRole("button", { name: "Stop" }).click();
+
+    expect(onStop).toHaveBeenCalledTimes(1);
+  });
 });

@@ -171,15 +171,30 @@ export function BackgroundAutoNudgeCoordinator() {
           });
           if (!dispatch || !shell) return;
 
-          // Consume before crossing the transport. A reload or lost ACK can skip one
-          // nudge, but can never submit the same completed turn twice.
-          ledger.mark(dispatch.terminalTurnKey);
           const api = readEnvironmentApi(shell.environmentId);
           if (!api) {
             controller.markDispatchFailed(
               dispatch.messageId,
               "Environment transport is unavailable; background continuation paused.",
             );
+            return;
+          }
+
+          // Re-read at the last synchronous boundary before transport. Another
+          // renderer can press Stop while this callback is evaluating the
+          // projection; that newer barrier must invalidate the prepared send.
+          if (cancelled || !arming.confirmExecutionAuthorized()) {
+            controller.stop("Auto Nudge stopped before transport handoff.");
+            return;
+          }
+
+          // Consume before crossing the transport. A reload or lost ACK can skip one
+          // nudge, but can never submit the same completed turn twice. Once the
+          // following transport call begins, Stop cannot retract provider work
+          // that has already been handed off.
+          ledger.mark(dispatch.terminalTurnKey);
+          if (cancelled || !arming.confirmExecutionAuthorized()) {
+            controller.stop("Auto Nudge stopped before transport handoff.");
             return;
           }
 

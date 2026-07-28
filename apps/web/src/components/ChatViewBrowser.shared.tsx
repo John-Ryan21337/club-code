@@ -59,6 +59,7 @@ import { createAuthenticatedSessionHandlers } from "../../test/authHttpHandlers"
 import { BrowserWsRpcHarness, type NormalizedWsRpcRequestBody } from "../../test/wsRpcHarness";
 
 import { DEFAULT_CLIENT_SETTINGS } from "@cafecode/contracts/settings";
+import { __resetConfirmedAutoNudgeArmingForTests } from "../confirmedAutoNudgeArming";
 
 vi.mock("../lib/gitStatusState", () => ({
   useGitStatus: () => ({ data: null, error: null, cause: null, isPending: false }),
@@ -1788,9 +1789,10 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
     await setViewport(DEFAULT_VIEWPORT);
     localStorage.clear();
     sessionStorage.clear();
-    __resetAutoNudgeTurnLedgerForTests();
-    __resetBackgroundAutoNudgeControllerForTests();
+    __resetAutoNudgeTurnLedgerForTests({ clearSessionStorage: true });
+    __resetBackgroundAutoNudgeControllerForTests({ clearStorage: true });
     __resetAutoNudgeThreadPolicyStoreForTests();
+    __resetConfirmedAutoNudgeArmingForTests({ clearStorage: true });
     document.body.innerHTML = "";
     wsRequests.length = 0;
     customWsRpcResolver = null;
