@@ -1,5 +1,6 @@
 import type { OrchestrationEvent, OrchestrationReadModel, ThreadId } from "@cafecode/contracts";
 import {
+  DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
   EventId,
   MessageId,
   OrchestrationCheckpointSummary,
@@ -25,6 +26,9 @@ import {
   ThreadDeletedPayload,
   ThreadRestoredPayload,
   ThreadInteractionModeSetPayload,
+  ThreadAutoNudgeConfiguredPayload,
+  ThreadAutoNudgeDispatchedPayload,
+  ThreadAutoNudgeStoppedPayload,
   ThreadMetaUpdatedPayload,
   ThreadProposedPlanUpsertedPayload,
   ThreadRuntimeModeSetPayload,
@@ -399,6 +403,7 @@ export function projectEvent(
             updatedAt: payload.updatedAt,
             archivedAt: null,
             deletedAt: null,
+            autoNudge: DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
             messages: [],
             activities: [],
             checkpoints: [],
@@ -528,6 +533,88 @@ export function projectEvent(
             updatedAt: payload.updatedAt,
           }),
         })),
+      );
+
+    case "thread.auto-nudge-configured":
+      return decodeForEvent(
+        ThreadAutoNudgeConfiguredPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          threads: updateThread(nextBase.threads, payload.threadId, {
+            autoNudge: payload.config,
+            updatedAt: event.occurredAt,
+          }),
+        })),
+      );
+
+    case "thread.auto-nudge-stopped":
+      return decodeForEvent(
+        ThreadAutoNudgeStoppedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread) {
+            return nextBase;
+          }
+          const current = thread.autoNudge ?? DEFAULT_THREAD_AUTO_NUDGE_CONFIG;
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              autoNudge: {
+                authorityRevision: payload.authorityRevision,
+                mode: "off",
+                prompt: current.prompt,
+                backgroundContinuation: false,
+                maxRounds: current.maxRounds,
+                maxMinutes: current.maxMinutes,
+                armedAt: null,
+                baselineSettledTurnId: null,
+                lastDispatchedSettledTurnId: null,
+                roundsDispatched: 0,
+                lastDispatchedAt: null,
+              },
+              updatedAt: payload.stoppedAt,
+            }),
+          };
+        }),
+      );
+
+    case "thread.auto-nudge-dispatched":
+      return decodeForEvent(
+        ThreadAutoNudgeDispatchedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread) {
+            return nextBase;
+          }
+          const current = thread.autoNudge ?? DEFAULT_THREAD_AUTO_NUDGE_CONFIG;
+          if (current.mode === "off" || current.authorityRevision !== payload.authorityRevision) {
+            return nextBase;
+          }
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              autoNudge: {
+                ...current,
+                lastDispatchedSettledTurnId: payload.completedTurnId,
+                roundsDispatched: payload.roundsDispatched,
+                lastDispatchedAt: payload.dispatchedAt,
+              },
+              updatedAt: payload.dispatchedAt,
+            }),
+          };
+        }),
       );
 
     case "thread.turn-start-requested":
@@ -909,30 +996,35 @@ export function projectEvent(
           .slice(-MAX_THREAD_CHECKPOINTS);
 
         const preservesTurnLifecycle = payload.status === "missing";
+        const promotesLatestTurn =
+          thread.latestTurn === null || thread.latestTurn.turnId === payload.turnId;
 
         return {
           ...nextBase,
           threads: updateThread(nextBase.threads, payload.threadId, {
             checkpoints,
-            // `turn.diff.updated` is a change signal, not a provider lifecycle
-            // event. Its synthetic `missing` checkpoint records diagnostic
-            // metadata only and must never close or manufacture a turn.
-            latestTurn: preservesTurnLifecycle
-              ? thread.latestTurn
-              : {
-                  turnId: payload.turnId,
-                  state: checkpointStatusToLatestTurnState(payload.status),
-                  requestedAt:
-                    thread.latestTurn?.turnId === payload.turnId
-                      ? thread.latestTurn.requestedAt
-                      : payload.completedAt,
-                  startedAt:
-                    thread.latestTurn?.turnId === payload.turnId
-                      ? (thread.latestTurn.startedAt ?? payload.completedAt)
-                      : payload.completedAt,
-                  completedAt: payload.completedAt,
-                  assistantMessageId: payload.assistantMessageId,
-                },
+            // A diff is asynchronous checkpoint evidence, not ordering
+            // authority for provider turns. It may complete its own current
+            // turn, but must never replace a different non-null latest turn:
+            // an older turn's checkpoint can finish after a newer turn starts.
+            // Synthetic `missing` checkpoints additionally preserve lifecycle.
+            latestTurn:
+              preservesTurnLifecycle || !promotesLatestTurn
+                ? thread.latestTurn
+                : {
+                    turnId: payload.turnId,
+                    state: checkpointStatusToLatestTurnState(payload.status),
+                    requestedAt:
+                      thread.latestTurn?.turnId === payload.turnId
+                        ? thread.latestTurn.requestedAt
+                        : payload.completedAt,
+                    startedAt:
+                      thread.latestTurn?.turnId === payload.turnId
+                        ? (thread.latestTurn.startedAt ?? payload.completedAt)
+                        : payload.completedAt,
+                    completedAt: payload.completedAt,
+                    assistantMessageId: payload.assistantMessageId,
+                  },
             updatedAt: event.occurredAt,
           }),
         };

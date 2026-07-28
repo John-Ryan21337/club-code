@@ -68,7 +68,10 @@ function isThreadDetailEvent(event: OrchestrationEvent): boolean {
     event.type === "thread.activity-appended" ||
     event.type === "thread.turn-diff-completed" ||
     event.type === "thread.reverted" ||
-    event.type === "thread.session-set"
+    event.type === "thread.session-set" ||
+    event.type === "thread.auto-nudge-configured" ||
+    event.type === "thread.auto-nudge-stopped" ||
+    event.type === "thread.auto-nudge-dispatched"
   );
 }
 

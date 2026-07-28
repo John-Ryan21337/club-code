@@ -163,6 +163,79 @@ describe("OrchestrationSubscriptionHub", () => {
     );
   });
 
+  it("routes Auto Nudge detail events to the exact thread only", async () => {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const live = yield* PubSub.unbounded<OrchestrationEvent>();
+          const engine: OrchestrationEngineShape = {
+            readEvents: () => Stream.empty,
+            dispatch: () => Effect.die("unused"),
+            diagnosticsSnapshot: Effect.die("unused"),
+            streamDomainEvents: Stream.fromPubSub(live),
+          };
+          const hub = yield* makeOrchestrationSubscriptionHub({
+            orchestrationEngine: engine,
+            initialCursor: 0,
+            pollInterval: Duration.hours(1),
+          });
+          const targetThreadId = ThreadId.make("thread-auto-nudge-target");
+          const otherThreadId = ThreadId.make("thread-auto-nudge-other");
+          const event = {
+            sequence: 1,
+            eventId: EventId.make("event-auto-nudge-target"),
+            type: "thread.auto-nudge-configured",
+            aggregateKind: "thread",
+            aggregateId: targetThreadId,
+            occurredAt: "2026-07-28T00:00:00.000Z",
+            commandId: CommandId.make("command-auto-nudge-target"),
+            causationEventId: null,
+            correlationId: CommandId.make("command-auto-nudge-target"),
+            metadata: {},
+            payload: {
+              threadId: targetThreadId,
+              config: {
+                authorityRevision: 1,
+                mode: "steady-progress",
+                prompt: "exact thread prompt",
+                backgroundContinuation: false,
+                maxRounds: 5,
+                maxMinutes: 30,
+                armedAt: "2026-07-28T00:00:00.000Z",
+                baselineSettledTurnId: null,
+                lastDispatchedSettledTurnId: null,
+                roundsDispatched: 0,
+                lastDispatchedAt: null,
+              },
+            },
+          } satisfies Extract<OrchestrationEvent, { type: "thread.auto-nudge-configured" }>;
+
+          yield* yieldHub;
+          yield* PubSub.publish(live, event);
+          yield* yieldHub;
+
+          const target = yield* Stream.runHead(
+            hub.eventsFrom({
+              fromSequenceExclusive: 0,
+              route: { kind: "thread", threadId: targetThreadId },
+            }),
+          );
+          expect(Option.getOrThrow(target)).toEqual(event);
+
+          const unrelated = yield* Stream.runHead(
+            hub.eventsFrom({
+              fromSequenceExclusive: 0,
+              route: { kind: "thread", threadId: otherThreadId },
+            }),
+          ).pipe(Effect.forkScoped);
+          yield* yieldHub;
+          expect(unrelated.pollUnsafe()).toBeUndefined();
+          yield* Fiber.interrupt(unrelated);
+        }),
+      ),
+    );
+  });
+
   it("coalesces only replaceable updates and preserves protected barriers", async () => {
     await Effect.runPromise(
       Effect.scoped(

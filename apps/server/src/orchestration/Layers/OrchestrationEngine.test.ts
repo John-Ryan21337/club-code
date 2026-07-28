@@ -2,10 +2,12 @@ import {
   CheckpointRef,
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
+  DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
   MessageId,
   ProjectId,
   ThreadId,
   TurnId,
+  type OrchestrationCommand,
   type OrchestrationEvent,
   ProviderInstanceId,
 } from "@cafecode/contracts";
@@ -142,6 +144,7 @@ describe("OrchestrationEngine", () => {
           runtimeMode: "full-access" as const,
           branch: null,
           worktreePath: null,
+          autoNudge: DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
           latestTurn: null,
           createdAt: "2026-03-03T00:00:02.000Z",
           updatedAt: "2026-03-03T00:00:03.000Z",
@@ -724,6 +727,7 @@ describe("OrchestrationEngine", () => {
     expect(events.map((event) => event.type)).toEqual([
       "project.created",
       "thread.created",
+      "thread.auto-nudge-stopped",
       "thread.deleted",
     ]);
     await system.dispose();
@@ -1293,17 +1297,161 @@ describe("OrchestrationEngine", () => {
       ),
     ).rejects.toThrow("projection failed");
 
-    await expect(
-      runtime.runPromise(
-        engine.dispatch({
-          type: "thread.archive",
-          commandId: CommandId.make("cmd-thread-archive-sync-retry"),
-          threadId: ThreadId.make("thread-sync"),
-        }),
-      ),
-    ).rejects.toThrow("already archived");
+    const retry = await runtime.runPromise(
+      engine.dispatch({
+        type: "thread.archive",
+        commandId: CommandId.make("cmd-thread-archive-sync-retry"),
+        threadId: ThreadId.make("thread-sync"),
+      }),
+    );
+    expect(retry.sequence).toBe(5);
+    expect(events.map((event) => event.type)).toEqual([
+      "project.created",
+      "thread.created",
+      "thread.auto-nudge-stopped",
+      "thread.auto-nudge-stopped",
+      "thread.archived",
+    ]);
 
     await runtime.dispose();
+  });
+
+  it("atomically admits one concurrent Auto Nudge dispatch and deduplicates its retry", async () => {
+    const system = await createOrchestrationSystem();
+    const { engine } = system;
+    const createdAt = new Date().toISOString();
+    const projectId = asProjectId("project-auto-nudge-atomic");
+    const threadId = ThreadId.make("thread-auto-nudge-atomic");
+    const completedTurnId = asTurnId("turn-auto-nudge-atomic");
+
+    await system.run(
+      engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.make("cmd-project-auto-nudge-atomic"),
+        projectId,
+        title: "Auto Nudge Atomic Project",
+        workspaceRoot: "/tmp/project-auto-nudge-atomic",
+        defaultModelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        createdAt,
+      }),
+    );
+    await system.run(
+      engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-thread-auto-nudge-atomic"),
+        threadId,
+        projectId,
+        title: "Auto Nudge atomic thread",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      }),
+    );
+    await system.run(
+      engine.dispatch({
+        type: "thread.auto-nudge.configure",
+        commandId: CommandId.make("cmd-auto-nudge-atomic-configure"),
+        threadId,
+        expectedAuthorityRevision: 0,
+        mode: "steady-progress",
+        prompt: "Persisted exact-thread atomic prompt",
+        backgroundContinuation: false,
+        maxRounds: 5,
+        maxMinutes: 60,
+        createdAt,
+      }),
+    );
+    await system.run(
+      engine.dispatch({
+        type: "thread.turn.diff.complete",
+        commandId: CommandId.make("cmd-auto-nudge-atomic-terminal"),
+        threadId,
+        turnId: completedTurnId,
+        completedAt: createdAt,
+        checkpointRef: asCheckpointRef("refs/t3/checkpoints/thread-auto-nudge-atomic/turn/1"),
+        status: "ready",
+        files: [],
+        checkpointTurnCount: 1,
+        createdAt,
+      }),
+    );
+
+    const candidates = [
+      {
+        type: "thread.auto-nudge.dispatch",
+        commandId: CommandId.make("cmd-auto-nudge-atomic-dispatch-a"),
+        threadId,
+        expectedAuthorityRevision: 1,
+        completedTurnId,
+        dispatchSource: "foreground",
+        messageId: asMessageId("msg-auto-nudge-atomic-a"),
+        createdAt,
+      },
+      {
+        type: "thread.auto-nudge.dispatch",
+        commandId: CommandId.make("cmd-auto-nudge-atomic-dispatch-b"),
+        threadId,
+        expectedAuthorityRevision: 1,
+        completedTurnId,
+        dispatchSource: "foreground",
+        messageId: asMessageId("msg-auto-nudge-atomic-b"),
+        createdAt,
+      },
+    ] as const satisfies ReadonlyArray<
+      Extract<OrchestrationCommand, { type: "thread.auto-nudge.dispatch" }>
+    >;
+
+    const results = await Promise.allSettled(
+      candidates.map((command) => system.run(engine.dispatch(command))),
+    );
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
+    const winnerIndex = results.findIndex((result) => result.status === "fulfilled");
+    expect(winnerIndex).toBeGreaterThanOrEqual(0);
+    const winner = candidates[winnerIndex];
+    if (winner === undefined) {
+      throw new Error("Expected one Auto Nudge dispatch winner.");
+    }
+
+    const eventsAfterRace = await system.run(
+      Stream.runCollect(engine.readEvents(0)).pipe(
+        Effect.map((chunk): OrchestrationEvent[] => Array.from(chunk)),
+      ),
+    );
+    const raceEvents = eventsAfterRace.filter(
+      (event) =>
+        event.commandId === candidates[0].commandId || event.commandId === candidates[1].commandId,
+    );
+    expect(raceEvents.map((event) => event.type)).toEqual([
+      "thread.auto-nudge-dispatched",
+      "thread.message-sent",
+      "thread.turn-start-requested",
+    ]);
+    expect(raceEvents.every((event) => event.commandId === winner.commandId)).toBe(true);
+    const messageEvent = raceEvents.find((event) => event.type === "thread.message-sent");
+    expect(messageEvent?.type === "thread.message-sent" ? messageEvent.payload.text : null).toBe(
+      "Persisted exact-thread atomic prompt",
+    );
+
+    const beforeRetryCount = eventsAfterRace.length;
+    await system.run(engine.dispatch(winner));
+    const eventsAfterRetry = await system.run(
+      Stream.runCollect(engine.readEvents(0)).pipe(
+        Effect.map((chunk): OrchestrationEvent[] => Array.from(chunk)),
+      ),
+    );
+    expect(eventsAfterRetry).toHaveLength(beforeRetryCount);
+
+    await system.dispose();
   });
 
   it("fails command dispatch when command invariants are violated", async () => {

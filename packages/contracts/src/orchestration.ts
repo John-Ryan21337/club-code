@@ -20,6 +20,18 @@ import {
   TurnId,
 } from "./baseSchemas.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
+import {
+  AutoNudgeEnabledMode,
+  AutoNudgeMaxMinutes,
+  AutoNudgeMaxRounds,
+  StoredThreadAutoNudgePrompt,
+  ThreadAutoNudgeAuthorityRevision,
+  ThreadAutoNudgeConfig,
+  ThreadAutoNudgeConfigWithDefault,
+  ThreadAutoNudgeDispatchSource,
+  ThreadAutoNudgePrompt,
+  ThreadAutoNudgeSummaryWithDefault,
+} from "./autoNudge.ts";
 
 export const ORCHESTRATION_WS_METHODS = {
   dispatchCommand: "orchestration.dispatchCommand",
@@ -455,6 +467,8 @@ export const OrchestrationThread = Schema.Struct({
   updatedAt: IsoDateTime,
   archivedAt: Schema.NullOr(IsoDateTime).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   deletedAt: Schema.NullOr(IsoDateTime),
+  /** Full prompt-bearing configuration is detail-only and exact-thread scoped. */
+  autoNudge: ThreadAutoNudgeConfigWithDefault,
   messages: Schema.Array(OrchestrationMessage),
   proposedPlans: Schema.Array(OrchestrationProposedPlan).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
@@ -502,6 +516,8 @@ export const OrchestrationThreadShell = Schema.Struct({
   updatedAt: IsoDateTime,
   archivedAt: Schema.NullOr(IsoDateTime).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
   deletedAt: Schema.NullOr(IsoDateTime).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
+  /** Prompt-free scheduling state. Shell snapshots never expose Auto Nudge text. */
+  autoNudge: ThreadAutoNudgeSummaryWithDefault,
   session: Schema.NullOr(OrchestrationSession),
   latestUserMessageAt: Schema.NullOr(IsoDateTime),
   hasPendingApprovals: Schema.Boolean,
@@ -740,6 +756,61 @@ const ThreadInteractionModeSetCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const ThreadAutoNudgeConfigureCommandFields = {
+  type: Schema.Literal("thread.auto-nudge.configure"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  expectedAuthorityRevision: ThreadAutoNudgeAuthorityRevision,
+  maxRounds: AutoNudgeMaxRounds,
+  maxMinutes: AutoNudgeMaxMinutes,
+  createdAt: IsoDateTime,
+} as const;
+
+/**
+ * Saving a thread prompt while Auto Nudge is off is a configuration write,
+ * never dispatch authority. The off variant accepts an empty stored prompt
+ * and requires background continuation to be false. Only enabled variants
+ * require a non-empty prompt and may grant background authority.
+ */
+const ThreadAutoNudgeConfigureCommand = Schema.Union([
+  Schema.Struct({
+    ...ThreadAutoNudgeConfigureCommandFields,
+    mode: Schema.Literal("off"),
+    prompt: StoredThreadAutoNudgePrompt,
+    backgroundContinuation: Schema.Literal(false),
+  }),
+  Schema.Struct({
+    ...ThreadAutoNudgeConfigureCommandFields,
+    mode: AutoNudgeEnabledMode,
+    prompt: ThreadAutoNudgePrompt,
+    backgroundContinuation: Schema.Boolean,
+  }),
+]);
+
+const ThreadAutoNudgeStopCommand = Schema.Struct({
+  type: Schema.Literal("thread.auto-nudge.stop"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  createdAt: IsoDateTime,
+});
+
+/**
+ * Automated dispatch carries only exact authority/correlation data. The
+ * server sources the prompt from the persisted thread configuration after all
+ * serial invariants pass, so a stale or compromised renderer cannot smuggle a
+ * different thread's text into this path.
+ */
+const ThreadAutoNudgeDispatchCommand = Schema.Struct({
+  type: Schema.Literal("thread.auto-nudge.dispatch"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  expectedAuthorityRevision: ThreadAutoNudgeAuthorityRevision,
+  completedTurnId: TurnId,
+  dispatchSource: ThreadAutoNudgeDispatchSource,
+  messageId: MessageId,
+  createdAt: IsoDateTime,
+});
+
 const ThreadTurnStartBootstrapCreateThread = Schema.Struct({
   projectId: ProjectId,
   title: TrimmedNonEmptyString,
@@ -765,6 +836,9 @@ const ThreadTurnStartBootstrap = Schema.Struct({
 
 export type ThreadTurnStartBootstrap = typeof ThreadTurnStartBootstrap.Type;
 
+export const TurnDispatchSource = Schema.Literals(["user", "auto-nudge"]);
+export type TurnDispatchSource = typeof TurnDispatchSource.Type;
+
 export const ThreadTurnStartCommand = Schema.Struct({
   type: Schema.Literal("thread.turn.start"),
   commandId: CommandId,
@@ -783,6 +857,7 @@ export const ThreadTurnStartCommand = Schema.Struct({
   ),
   bootstrap: Schema.optional(ThreadTurnStartBootstrap),
   sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
+  dispatchSource: Schema.optional(TurnDispatchSource),
   createdAt: IsoDateTime,
 });
 
@@ -802,6 +877,7 @@ const ClientThreadTurnStartCommand = Schema.Struct({
   interactionMode: ProviderInteractionMode,
   bootstrap: Schema.optional(ThreadTurnStartBootstrap),
   sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
+  dispatchSource: Schema.optional(TurnDispatchSource),
   createdAt: IsoDateTime,
 });
 
@@ -823,6 +899,7 @@ const ThreadTurnSteerCommand = Schema.Struct({
     text: Schema.String,
     attachments: Schema.Array(ChatAttachment),
   }),
+  dispatchSource: Schema.optional(TurnDispatchSource),
   createdAt: IsoDateTime,
 });
 
@@ -836,6 +913,7 @@ const ClientThreadTurnSteerCommand = Schema.Struct({
     text: Schema.String,
     attachments: Schema.Array(UploadChatAttachment),
   }),
+  dispatchSource: Schema.optional(TurnDispatchSource),
   createdAt: IsoDateTime,
 });
 
@@ -885,6 +963,9 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadMetaUpdateCommand,
   ThreadRuntimeModeSetCommand,
   ThreadInteractionModeSetCommand,
+  ThreadAutoNudgeConfigureCommand,
+  ThreadAutoNudgeStopCommand,
+  ThreadAutoNudgeDispatchCommand,
   ThreadTurnStartCommand,
   ThreadTurnInterruptCommand,
   ThreadTurnSteerCommand,
@@ -909,6 +990,9 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadMetaUpdateCommand,
   ThreadRuntimeModeSetCommand,
   ThreadInteractionModeSetCommand,
+  ThreadAutoNudgeConfigureCommand,
+  ThreadAutoNudgeStopCommand,
+  ThreadAutoNudgeDispatchCommand,
   ClientThreadTurnStartCommand,
   ThreadTurnInterruptCommand,
   ClientThreadTurnSteerCommand,
@@ -1038,6 +1122,9 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.meta-updated",
   "thread.runtime-mode-set",
   "thread.interaction-mode-set",
+  "thread.auto-nudge-configured",
+  "thread.auto-nudge-stopped",
+  "thread.auto-nudge-dispatched",
   "thread.message-sent",
   "thread.message.assistant-repair-applied",
   "thread.turn-start-requested",
@@ -1153,6 +1240,27 @@ export const ThreadInteractionModeSetPayload = Schema.Struct({
   updatedAt: IsoDateTime,
 });
 
+export const ThreadAutoNudgeConfiguredPayload = Schema.Struct({
+  threadId: ThreadId,
+  config: ThreadAutoNudgeConfig,
+});
+
+export const ThreadAutoNudgeStoppedPayload = Schema.Struct({
+  threadId: ThreadId,
+  authorityRevision: ThreadAutoNudgeAuthorityRevision,
+  stoppedAt: IsoDateTime,
+});
+
+export const ThreadAutoNudgeDispatchedPayload = Schema.Struct({
+  threadId: ThreadId,
+  authorityRevision: ThreadAutoNudgeAuthorityRevision,
+  completedTurnId: TurnId,
+  dispatchSource: ThreadAutoNudgeDispatchSource,
+  messageId: MessageId,
+  roundsDispatched: NonNegativeInt,
+  dispatchedAt: IsoDateTime,
+});
+
 export const ThreadMessageSentPayload = Schema.Struct({
   threadId: ThreadId,
   messageId: MessageId,
@@ -1191,6 +1299,7 @@ export const ThreadTurnStartRequestedPayload = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
   ),
   sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
+  dispatchSource: Schema.optional(TurnDispatchSource),
   createdAt: IsoDateTime,
 });
 
@@ -1203,6 +1312,7 @@ export const ThreadTurnInterruptRequestedPayload = Schema.Struct({
 export const ThreadTurnSteerRequestedPayload = Schema.Struct({
   threadId: ThreadId,
   messageId: MessageId,
+  dispatchSource: Schema.optional(TurnDispatchSource),
   createdAt: IsoDateTime,
 });
 
@@ -1344,6 +1454,21 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.interaction-mode-set"),
     payload: ThreadInteractionModeSetPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.auto-nudge-configured"),
+    payload: ThreadAutoNudgeConfiguredPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.auto-nudge-stopped"),
+    payload: ThreadAutoNudgeStoppedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.auto-nudge-dispatched"),
+    payload: ThreadAutoNudgeDispatchedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

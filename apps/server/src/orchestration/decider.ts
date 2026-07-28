@@ -2,6 +2,12 @@ import type {
   OrchestrationCommand,
   OrchestrationEvent,
   OrchestrationReadModel,
+  OrchestrationThread,
+  ThreadAutoNudgeConfig,
+} from "@cafecode/contracts";
+import {
+  DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+  THREAD_AUTO_NUDGE_MAX_AUTHORITY_REVISION,
 } from "@cafecode/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -72,6 +78,44 @@ function activeTurnIdForSteer(
     return thread.latestTurn.turnId;
   }
   return null;
+}
+
+function currentThreadAutoNudgeConfig(thread: OrchestrationThread): ThreadAutoNudgeConfig {
+  return thread.autoNudge ?? DEFAULT_THREAD_AUTO_NUDGE_CONFIG;
+}
+
+function nextAutoNudgeAuthorityRevision(input: {
+  readonly command: OrchestrationCommand;
+  readonly current: ThreadAutoNudgeConfig;
+}): Effect.Effect<number, OrchestrationCommandInvariantError> {
+  if (input.current.authorityRevision >= THREAD_AUTO_NUDGE_MAX_AUTHORITY_REVISION) {
+    return Effect.fail(
+      new OrchestrationCommandInvariantError({
+        commandType: input.command.type,
+        detail: "Auto Nudge authority revision is exhausted and cannot be advanced safely.",
+      }),
+    );
+  }
+  return Effect.succeed(input.current.authorityRevision + 1);
+}
+
+function revokeAutoNudgeAuthorityRevision(current: ThreadAutoNudgeConfig): number {
+  if (current.mode === "off") {
+    return current.authorityRevision;
+  }
+  return Math.min(current.authorityRevision + 1, THREAD_AUTO_NUDGE_MAX_AUTHORITY_REVISION);
+}
+
+function rejectAutoNudgeCommand(
+  command: OrchestrationCommand,
+  detail: string,
+): Effect.Effect<never, OrchestrationCommandInvariantError> {
+  return Effect.fail(
+    new OrchestrationCommandInvariantError({
+      commandType: command.type,
+      detail,
+    }),
+  );
 }
 
 const decideCommandSequence = Effect.fn("decideCommandSequence")(function* ({
@@ -315,13 +359,29 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.delete": {
-      yield* requireThread({
+      const targetThread = yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
       });
       const occurredAt = yield* nowIso;
-      return {
+      const current = currentThreadAutoNudgeConfig(targetThread);
+      const authorityRevision = revokeAutoNudgeAuthorityRevision(current);
+      const stopEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.auto-nudge-stopped",
+        payload: {
+          threadId: command.threadId,
+          authorityRevision,
+          stoppedAt: occurredAt,
+        },
+      };
+      const deletedEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...withEventBase({
           aggregateKind: "thread",
           aggregateId: command.threadId,
@@ -334,6 +394,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           deletedAt: occurredAt,
         },
       };
+      return [stopEvent, deletedEvent];
     }
 
     case "thread.restore": {
@@ -365,13 +426,29 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.archive": {
-      yield* requireThreadNotArchived({
+      const targetThread = yield* requireThreadNotArchived({
         readModel,
         command,
         threadId: command.threadId,
       });
       const occurredAt = yield* nowIso;
-      return {
+      const current = currentThreadAutoNudgeConfig(targetThread);
+      const authorityRevision = revokeAutoNudgeAuthorityRevision(current);
+      const stopEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.auto-nudge-stopped",
+        payload: {
+          threadId: command.threadId,
+          authorityRevision,
+          stoppedAt: occurredAt,
+        },
+      };
+      const archivedEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...withEventBase({
           aggregateKind: "thread",
           aggregateId: command.threadId,
@@ -385,6 +462,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           updatedAt: occurredAt,
         },
       };
+      return [stopEvent, archivedEvent];
     }
 
     case "thread.unarchive": {
@@ -504,6 +582,259 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    case "thread.auto-nudge.configure": {
+      const targetThread = yield* requireThreadNotArchived({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      if (targetThread.deletedAt !== null) {
+        return yield* rejectAutoNudgeCommand(
+          command,
+          `Thread '${command.threadId}' is in the Recycle Bin and cannot enable Auto Nudge.`,
+        );
+      }
+
+      const current = currentThreadAutoNudgeConfig(targetThread);
+      if (command.expectedAuthorityRevision !== current.authorityRevision) {
+        return yield* rejectAutoNudgeCommand(
+          command,
+          `Auto Nudge authority revision for thread '${command.threadId}' is stale.`,
+        );
+      }
+      const authorityRevision = yield* nextAutoNudgeAuthorityRevision({
+        command,
+        current,
+      });
+      const configuredAt = yield* nowIso;
+      const baselineSettledTurnId =
+        targetThread.latestTurn?.state === "completed" &&
+        targetThread.latestTurn.completedAt !== null
+          ? targetThread.latestTurn.turnId
+          : null;
+      const config: ThreadAutoNudgeConfig =
+        command.mode === "off"
+          ? {
+              authorityRevision,
+              mode: "off",
+              prompt: command.prompt,
+              backgroundContinuation: false,
+              maxRounds: command.maxRounds,
+              maxMinutes: command.maxMinutes,
+              armedAt: null,
+              baselineSettledTurnId: null,
+              lastDispatchedSettledTurnId: null,
+              roundsDispatched: 0,
+              lastDispatchedAt: null,
+            }
+          : {
+              authorityRevision,
+              mode: command.mode,
+              prompt: command.prompt,
+              backgroundContinuation: command.backgroundContinuation,
+              maxRounds: command.maxRounds,
+              maxMinutes: command.maxMinutes,
+              armedAt: configuredAt,
+              baselineSettledTurnId,
+              lastDispatchedSettledTurnId: null,
+              roundsDispatched: 0,
+              lastDispatchedAt: null,
+            };
+
+      return {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: configuredAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.auto-nudge-configured",
+        payload: {
+          threadId: command.threadId,
+          config,
+        },
+      };
+    }
+
+    case "thread.auto-nudge.stop": {
+      const targetThread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const current = currentThreadAutoNudgeConfig(targetThread);
+      const authorityRevision = revokeAutoNudgeAuthorityRevision(current);
+      const stoppedAt = yield* nowIso;
+
+      return {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: stoppedAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.auto-nudge-stopped",
+        payload: {
+          threadId: command.threadId,
+          authorityRevision,
+          stoppedAt,
+        },
+      };
+    }
+
+    case "thread.auto-nudge.dispatch": {
+      const targetThread = yield* requireThreadNotArchived({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      if (targetThread.deletedAt !== null) {
+        return yield* rejectAutoNudgeCommand(
+          command,
+          `Thread '${command.threadId}' is in the Recycle Bin and cannot dispatch Auto Nudge.`,
+        );
+      }
+
+      const config = currentThreadAutoNudgeConfig(targetThread);
+      if (config.mode === "off") {
+        return yield* rejectAutoNudgeCommand(
+          command,
+          `Auto Nudge is off for thread '${command.threadId}'.`,
+        );
+      }
+      if (command.expectedAuthorityRevision !== config.authorityRevision) {
+        return yield* rejectAutoNudgeCommand(
+          command,
+          `Auto Nudge authority revision for thread '${command.threadId}' is stale.`,
+        );
+      }
+      if (targetThread.messages.some((message) => message.id === command.messageId)) {
+        return yield* rejectAutoNudgeCommand(
+          command,
+          `Auto Nudge message '${command.messageId}' already exists on thread '${command.threadId}'.`,
+        );
+      }
+      if (command.dispatchSource === "background" && !config.backgroundContinuation) {
+        return yield* rejectAutoNudgeCommand(
+          command,
+          `Background Auto Nudge is not enabled for thread '${command.threadId}'.`,
+        );
+      }
+      if (
+        targetThread.latestTurn === null ||
+        targetThread.latestTurn.state !== "completed" ||
+        targetThread.latestTurn.completedAt === null ||
+        targetThread.latestTurn.turnId !== command.completedTurnId
+      ) {
+        return yield* rejectAutoNudgeCommand(
+          command,
+          `Auto Nudge dispatch for thread '${command.threadId}' does not target its exact current completed turn.`,
+        );
+      }
+      if (config.baselineSettledTurnId === command.completedTurnId) {
+        return yield* rejectAutoNudgeCommand(
+          command,
+          `Auto Nudge dispatch for thread '${command.threadId}' targets the configuration baseline turn.`,
+        );
+      }
+      if (config.lastDispatchedSettledTurnId === command.completedTurnId) {
+        return yield* rejectAutoNudgeCommand(
+          command,
+          `Auto Nudge already dispatched for completed turn '${command.completedTurnId}'.`,
+        );
+      }
+      if (threadHasUnsettledTurnStart(targetThread)) {
+        return yield* rejectAutoNudgeCommand(
+          command,
+          `Thread '${command.threadId}' has pending or running provider work.`,
+        );
+      }
+      if (config.roundsDispatched >= config.maxRounds) {
+        return yield* rejectAutoNudgeCommand(
+          command,
+          `Auto Nudge round cap is exhausted for thread '${command.threadId}'.`,
+        );
+      }
+
+      const dispatchedAt = yield* nowIso;
+      const armedAtMs = Date.parse(config.armedAt);
+      const dispatchedAtMs = Date.parse(dispatchedAt);
+      const maxDurationMs = config.maxMinutes * 60_000;
+      if (
+        !Number.isFinite(armedAtMs) ||
+        !Number.isFinite(dispatchedAtMs) ||
+        dispatchedAtMs < armedAtMs ||
+        dispatchedAtMs - armedAtMs >= maxDurationMs
+      ) {
+        return yield* rejectAutoNudgeCommand(
+          command,
+          `Auto Nudge time cap is exhausted or invalid for thread '${command.threadId}'.`,
+        );
+      }
+
+      const roundsDispatched = config.roundsDispatched + 1;
+      const dispatchEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: dispatchedAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.auto-nudge-dispatched",
+        payload: {
+          threadId: command.threadId,
+          authorityRevision: config.authorityRevision,
+          completedTurnId: command.completedTurnId,
+          dispatchSource: command.dispatchSource,
+          messageId: command.messageId,
+          roundsDispatched,
+          dispatchedAt,
+        },
+      };
+      const userMessageEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: dispatchedAt,
+          commandId: command.commandId,
+        }),
+        causationEventId: dispatchEvent.eventId,
+        type: "thread.message-sent",
+        payload: {
+          threadId: command.threadId,
+          messageId: command.messageId,
+          role: "user",
+          text: config.prompt,
+          attachments: [],
+          turnId: null,
+          streaming: false,
+          createdAt: dispatchedAt,
+          updatedAt: dispatchedAt,
+        },
+      };
+      const turnStartRequestedEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: dispatchedAt,
+          commandId: command.commandId,
+        }),
+        causationEventId: userMessageEvent.eventId,
+        type: "thread.turn-start-requested",
+        payload: {
+          threadId: command.threadId,
+          messageId: command.messageId,
+          modelSelection: targetThread.modelSelection,
+          runtimeMode: targetThread.runtimeMode,
+          interactionMode: targetThread.interactionMode,
+          dispatchSource: "auto-nudge",
+          createdAt: dispatchedAt,
+        },
+      };
+
+      return [dispatchEvent, userMessageEvent, turnStartRequestedEvent];
+    }
+
     case "thread.turn.start": {
       const targetThread = yield* requireThread({
         readModel,
@@ -545,6 +876,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             payload: {
               threadId: command.threadId,
               messageId: command.message.messageId,
+              ...(command.dispatchSource !== undefined
+                ? { dispatchSource: command.dispatchSource }
+                : {}),
               createdAt: command.createdAt,
             },
           };
@@ -618,6 +952,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           runtimeMode: targetThread.runtimeMode,
           interactionMode: targetThread.interactionMode,
           ...(sourceProposedPlan !== undefined ? { sourceProposedPlan } : {}),
+          ...(command.dispatchSource !== undefined
+            ? { dispatchSource: command.dispatchSource }
+            : {}),
           createdAt: command.createdAt,
         },
       };
@@ -698,6 +1035,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             modelSelection: targetThread.modelSelection,
             runtimeMode: targetThread.runtimeMode,
             interactionMode: targetThread.interactionMode,
+            ...(command.dispatchSource !== undefined
+              ? { dispatchSource: command.dispatchSource }
+              : {}),
             createdAt: command.createdAt,
           },
         };
@@ -715,6 +1055,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           threadId: command.threadId,
           messageId: command.message.messageId,
+          ...(command.dispatchSource !== undefined
+            ? { dispatchSource: command.dispatchSource }
+            : {}),
           createdAt: command.createdAt,
         },
       };
@@ -774,12 +1117,29 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.checkpoint.revert": {
-      yield* requireThread({
+      const targetThread = yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
       });
-      return {
+      const stoppedAt = yield* nowIso;
+      const stopEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: stoppedAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.auto-nudge-stopped",
+        payload: {
+          threadId: command.threadId,
+          authorityRevision: revokeAutoNudgeAuthorityRevision(
+            currentThreadAutoNudgeConfig(targetThread),
+          ),
+          stoppedAt,
+        },
+      };
+      const revertEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...withEventBase({
           aggregateKind: "thread",
           aggregateId: command.threadId,
@@ -793,6 +1153,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           createdAt: command.createdAt,
         },
       };
+      return [stopEvent, revertEvent];
     }
 
     case "thread.session.stop": {
@@ -981,12 +1342,29 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.revert.complete": {
-      yield* requireThread({
+      const targetThread = yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
       });
-      return {
+      const stoppedAt = yield* nowIso;
+      const stopEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: stoppedAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.auto-nudge-stopped",
+        payload: {
+          threadId: command.threadId,
+          authorityRevision: revokeAutoNudgeAuthorityRevision(
+            currentThreadAutoNudgeConfig(targetThread),
+          ),
+          stoppedAt,
+        },
+      };
+      const revertedEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...withEventBase({
           aggregateKind: "thread",
           aggregateId: command.threadId,
@@ -999,6 +1377,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           turnCount: command.turnCount,
         },
       };
+      return [stopEvent, revertedEvent];
     }
 
     case "thread.activity.append": {

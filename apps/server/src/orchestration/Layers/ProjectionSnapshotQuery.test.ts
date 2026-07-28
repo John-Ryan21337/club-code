@@ -28,6 +28,7 @@ const asTurnId = (value: string): TurnId => TurnId.make(value);
 const asMessageId = (value: string): MessageId => MessageId.make(value);
 const asEventId = (value: string): EventId => EventId.make(value);
 const asCheckpointRef = (value: string): CheckpointRef => CheckpointRef.make(value);
+const secretAutoNudgePrompt = "DO-NOT-FAN-OUT-SECRET-PROMPT";
 
 const projectionSnapshotLayer = it.layer(
   OrchestrationProjectionSnapshotQueryLive.pipe(
@@ -86,6 +87,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           interaction_mode,
           branch,
           worktree_path,
+          auto_nudge_json,
           latest_turn_id,
           latest_user_message_at,
           pending_approval_count,
@@ -104,6 +106,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           'default',
           NULL,
           NULL,
+          '{"authorityRevision":7,"mode":"steady-progress","prompt":"DO-NOT-FAN-OUT-SECRET-PROMPT","backgroundContinuation":true,"maxRounds":5,"maxMinutes":30,"armedAt":"2026-02-24T00:00:02.500Z","baselineSettledTurnId":null,"lastDispatchedSettledTurnId":null,"roundsDispatched":0,"lastDispatchedAt":null}',
           'turn-1',
           '2026-02-24T00:00:04.000Z',
           1,
@@ -303,6 +306,19 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           runtimeMode: "full-access",
           branch: null,
           worktreePath: null,
+          autoNudge: {
+            authorityRevision: 7,
+            mode: "steady-progress",
+            prompt: secretAutoNudgePrompt,
+            backgroundContinuation: true,
+            maxRounds: 5,
+            maxMinutes: 30,
+            armedAt: "2026-02-24T00:00:02.500Z",
+            baselineSettledTurnId: null,
+            lastDispatchedSettledTurnId: null,
+            roundsDispatched: 0,
+            lastDispatchedAt: null,
+          },
           latestTurn: {
             turnId: asTurnId("turn-1"),
             state: "completed",
@@ -376,6 +392,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       ]);
 
       const shellSnapshot = yield* snapshotQuery.getShellSnapshot();
+      assert.isFalse(JSON.stringify(shellSnapshot).includes(secretAutoNudgePrompt));
       assert.equal(shellSnapshot.snapshotSequence, 5);
       assert.deepEqual(shellSnapshot.projects, [
         {
@@ -414,6 +431,18 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           runtimeMode: "full-access",
           branch: null,
           worktreePath: null,
+          autoNudge: {
+            authorityRevision: 7,
+            mode: "steady-progress",
+            backgroundContinuation: true,
+            maxRounds: 5,
+            maxMinutes: 30,
+            armedAt: "2026-02-24T00:00:02.500Z",
+            baselineSettledTurnId: null,
+            lastDispatchedSettledTurnId: null,
+            roundsDispatched: 0,
+            lastDispatchedAt: null,
+          },
           latestTurn: {
             turnId: asTurnId("turn-1"),
             state: "completed",

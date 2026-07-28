@@ -1,5 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
+  DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+  DEFAULT_THREAD_AUTO_NUDGE_SUMMARY,
   ProjectId,
   ThreadId,
   TurnId,
@@ -77,6 +79,7 @@ function makeReadModel(
       runtimeMode: "full-access" as const,
       branch: null,
       worktreePath: null,
+      autoNudge: DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
       createdAt: now,
       updatedAt: now,
       archivedAt: null,
@@ -201,7 +204,14 @@ describe("ProviderSessionReaper", () => {
           getThreadShellById: (threadId) =>
             Effect.succeed(
               input.readModel.threads.find((thread) => thread.id === threadId)
-                ? Option.some(input.readModel.threads.find((thread) => thread.id === threadId)!)
+                ? Option.some({
+                    ...input.readModel.threads.find((thread) => thread.id === threadId)!,
+                    autoNudge: DEFAULT_THREAD_AUTO_NUDGE_SUMMARY,
+                    latestUserMessageAt: null,
+                    hasPendingApprovals: false,
+                    hasPendingUserInput: false,
+                    hasActionableProposedPlan: false,
+                  })
                 : Option.none(),
             ),
           getPostTerminalStaleSteerCandidateThreadIds: () => Effect.die("unused"),

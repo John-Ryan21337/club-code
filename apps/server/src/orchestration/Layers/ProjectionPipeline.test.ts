@@ -174,6 +174,177 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
     }),
   );
 
+  it.effect("persists exact-thread Auto Nudge authority and ignores stale accounting", () =>
+    Effect.gen(function* () {
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const eventStore = yield* OrchestrationEventStore;
+      const sql = yield* SqlClient.SqlClient;
+      const threadId = ThreadId.make("thread-auto-nudge-pipeline");
+      const now = "2026-07-28T12:00:00.000Z";
+
+      yield* eventStore.append({
+        type: "project.created",
+        eventId: EventId.make("event-auto-nudge-project"),
+        aggregateKind: "project",
+        aggregateId: ProjectId.make("project-auto-nudge-pipeline"),
+        occurredAt: now,
+        commandId: CommandId.make("command-auto-nudge-project"),
+        causationEventId: null,
+        correlationId: CommandId.make("command-auto-nudge-project"),
+        metadata: {},
+        payload: {
+          projectId: ProjectId.make("project-auto-nudge-pipeline"),
+          title: "Auto Nudge Pipeline",
+          workspaceRoot: "/tmp/auto-nudge-pipeline",
+          defaultModelSelection: null,
+          scripts: [],
+          createdAt: now,
+          updatedAt: now,
+        },
+      });
+      yield* eventStore.append({
+        type: "thread.created",
+        eventId: EventId.make("event-auto-nudge-thread"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: now,
+        commandId: CommandId.make("command-auto-nudge-thread"),
+        causationEventId: null,
+        correlationId: CommandId.make("command-auto-nudge-thread"),
+        metadata: {},
+        payload: {
+          threadId,
+          projectId: ProjectId.make("project-auto-nudge-pipeline"),
+          title: "Auto Nudge thread",
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("codex"),
+            model: "gpt-5.6-sol",
+          },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          createdAt: now,
+          updatedAt: now,
+        },
+      });
+      yield* eventStore.append({
+        type: "thread.auto-nudge-configured",
+        eventId: EventId.make("event-auto-nudge-configured"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: now,
+        commandId: CommandId.make("command-auto-nudge-configured"),
+        causationEventId: null,
+        correlationId: CommandId.make("command-auto-nudge-configured"),
+        metadata: {},
+        payload: {
+          threadId,
+          config: {
+            authorityRevision: 4,
+            mode: "steady-progress",
+            prompt: "Persist this exact thread prompt",
+            backgroundContinuation: true,
+            maxRounds: 6,
+            maxMinutes: 45,
+            armedAt: now,
+            baselineSettledTurnId: null,
+            lastDispatchedSettledTurnId: null,
+            roundsDispatched: 0,
+            lastDispatchedAt: null,
+          },
+        },
+      });
+
+      yield* projectionPipeline.bootstrap;
+
+      const readConfig = Effect.fn("readAutoNudgeConfig")(function* () {
+        const rows = yield* sql<{ readonly json: string }>`
+          SELECT auto_nudge_json AS "json"
+          FROM projection_threads
+          WHERE thread_id = ${threadId}
+        `;
+        return JSON.parse(rows[0]?.json ?? "{}") as Record<string, unknown>;
+      });
+
+      const configured = yield* readConfig();
+      assert.equal(configured.mode, "steady-progress");
+      assert.equal(configured.prompt, "Persist this exact thread prompt");
+      assert.equal(configured.authorityRevision, 4);
+
+      yield* eventStore.append({
+        type: "thread.auto-nudge-dispatched",
+        eventId: EventId.make("event-auto-nudge-stale-dispatch"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: "2026-07-28T12:01:00.000Z",
+        commandId: CommandId.make("command-auto-nudge-stale-dispatch"),
+        causationEventId: null,
+        correlationId: CommandId.make("command-auto-nudge-stale-dispatch"),
+        metadata: {},
+        payload: {
+          threadId,
+          authorityRevision: 3,
+          completedTurnId: TurnId.make("turn-auto-nudge-stale"),
+          dispatchSource: "foreground",
+          messageId: MessageId.make("message-auto-nudge-stale"),
+          roundsDispatched: 99,
+          dispatchedAt: "2026-07-28T12:01:00.000Z",
+        },
+      });
+      yield* eventStore.append({
+        type: "thread.auto-nudge-dispatched",
+        eventId: EventId.make("event-auto-nudge-dispatch"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: "2026-07-28T12:02:00.000Z",
+        commandId: CommandId.make("command-auto-nudge-dispatch"),
+        causationEventId: null,
+        correlationId: CommandId.make("command-auto-nudge-dispatch"),
+        metadata: {},
+        payload: {
+          threadId,
+          authorityRevision: 4,
+          completedTurnId: TurnId.make("turn-auto-nudge"),
+          dispatchSource: "foreground",
+          messageId: MessageId.make("message-auto-nudge"),
+          roundsDispatched: 1,
+          dispatchedAt: "2026-07-28T12:02:00.000Z",
+        },
+      });
+      yield* projectionPipeline.bootstrap;
+
+      const dispatched = yield* readConfig();
+      assert.equal(dispatched.lastDispatchedSettledTurnId, "turn-auto-nudge");
+      assert.equal(dispatched.roundsDispatched, 1);
+
+      yield* eventStore.append({
+        type: "thread.auto-nudge-stopped",
+        eventId: EventId.make("event-auto-nudge-stopped"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: "2026-07-28T12:03:00.000Z",
+        commandId: CommandId.make("command-auto-nudge-stopped"),
+        causationEventId: null,
+        correlationId: CommandId.make("command-auto-nudge-stopped"),
+        metadata: {},
+        payload: {
+          threadId,
+          authorityRevision: 5,
+          stoppedAt: "2026-07-28T12:03:00.000Z",
+        },
+      });
+      yield* projectionPipeline.bootstrap;
+
+      const stopped = yield* readConfig();
+      assert.equal(stopped.mode, "off");
+      assert.equal(stopped.prompt, "Persist this exact thread prompt");
+      assert.equal(stopped.backgroundContinuation, false);
+      assert.equal(stopped.authorityRevision, 5);
+      assert.equal(stopped.roundsDispatched, 0);
+    }),
+  );
+
   it.effect("duplicates thread context without copying provider session state", () =>
     Effect.gen(function* () {
       const projectionPipeline = yield* OrchestrationProjectionPipeline;
@@ -1451,7 +1622,7 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-late-backfill-l
           eventId: EventId.make("evt-late-backfill-old-diff"),
           aggregateKind: "thread",
           aggregateId: threadId,
-          occurredAt: "2026-05-26T11:15:00.000Z",
+          occurredAt: "2026-05-26T12:15:00.000Z",
           commandId: CommandId.make("cmd-late-backfill-old-diff"),
           causationEventId: null,
           correlationId: CommandId.make("cmd-late-backfill-old-diff"),
@@ -1464,7 +1635,9 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-late-backfill-l
             status: "ready",
             files: [],
             assistantMessageId: MessageId.make("assistant-late-backfill-old"),
-            completedAt: "2026-05-26T11:15:00.000Z",
+            // Checkpoint capture for the older turn finishes after the newer
+            // provider turn has already become latest and completed.
+            completedAt: "2026-05-26T12:15:00.000Z",
           },
         });
         yield* appendAndProject({
@@ -1514,7 +1687,7 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-late-backfill-l
         assert.deepEqual(rows, [
           {
             latestTurnId: "turn-late-backfill-new",
-            threadUpdatedAt: "2026-05-26T12:10:00.000Z",
+            threadUpdatedAt: "2026-05-26T12:15:00.000Z",
             sessionStatus: "ready",
             activeTurnId: null,
             sessionUpdatedAt: "2026-05-26T12:10:00.000Z",

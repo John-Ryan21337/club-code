@@ -11,6 +11,8 @@ import {
   OrchestrationCommand,
   OrchestrationEvent,
   OrchestrationLatestTurn,
+  OrchestrationThread,
+  OrchestrationThreadShell,
   ProjectCreatedPayload,
   ProjectMetaUpdatedPayload,
   OrchestrationProposedPlan,
@@ -51,6 +53,8 @@ const decodeThreadDuplicatedPayload = Schema.decodeUnknownEffect(ThreadDuplicate
 const decodeOrchestrationCommand = Schema.decodeUnknownEffect(OrchestrationCommand);
 const decodeClientOrchestrationCommand = Schema.decodeUnknownEffect(ClientOrchestrationCommand);
 const decodeOrchestrationEvent = Schema.decodeUnknownEffect(OrchestrationEvent);
+const decodeOrchestrationThread = Schema.decodeUnknownEffect(OrchestrationThread);
+const decodeOrchestrationThreadShell = Schema.decodeUnknownEffect(OrchestrationThreadShell);
 const decodeThreadMetaUpdatedPayload = Schema.decodeUnknownEffect(ThreadMetaUpdatedPayload);
 const decodeProviderJournalMessageRepairResult = Schema.decodeUnknownEffect(
   ProviderJournalMessageRepairResult,
@@ -59,6 +63,122 @@ const decodeProviderThreadAssistantMessagesRepairResult = Schema.decodeUnknownEf
   ProviderThreadAssistantMessagesRepairResult,
 );
 const decodeWorkflowProjectionSnapshot = Schema.decodeUnknownEffect(WorkflowProjectionSnapshot);
+
+const threadBase = {
+  id: "thread-auto-nudge",
+  projectId: "project-auto-nudge",
+  title: "Auto Nudge thread",
+  modelSelection: { instanceId: "codex", model: "gpt-5.6-sol" },
+  runtimeMode: "full-access",
+  interactionMode: "default",
+  branch: null,
+  worktreePath: null,
+  latestTurn: null,
+  createdAt: "2026-07-28T00:00:00.000Z",
+  updatedAt: "2026-07-28T00:00:00.000Z",
+  archivedAt: null,
+  deletedAt: null,
+} as const;
+
+it.effect("Auto Nudge configure distinguishes off prompt storage from execution authority", () =>
+  Effect.gen(function* () {
+    const off = yield* decodeClientOrchestrationCommand({
+      type: "thread.auto-nudge.configure",
+      commandId: "command-off-save",
+      threadId: threadBase.id,
+      expectedAuthorityRevision: 0,
+      mode: "off",
+      prompt: "",
+      backgroundContinuation: false,
+      maxRounds: 5,
+      maxMinutes: 30,
+      createdAt: "2026-07-28T00:00:01.000Z",
+    });
+    assert.strictEqual(off.type, "thread.auto-nudge.configure");
+    if (off.type === "thread.auto-nudge.configure") {
+      assert.strictEqual(off.mode, "off");
+      assert.strictEqual(off.prompt, "");
+    }
+
+    const enabled = yield* decodeClientOrchestrationCommand({
+      type: "thread.auto-nudge.configure",
+      commandId: "command-enable",
+      threadId: threadBase.id,
+      expectedAuthorityRevision: 1,
+      mode: "steady-progress",
+      prompt: "First line\nSecond line",
+      backgroundContinuation: true,
+      maxRounds: 5,
+      maxMinutes: 30,
+      createdAt: "2026-07-28T00:00:02.000Z",
+    });
+    assert.strictEqual(enabled.type, "thread.auto-nudge.configure");
+    if (enabled.type === "thread.auto-nudge.configure") {
+      assert.strictEqual(enabled.prompt, "First line\nSecond line");
+    }
+
+    const blankEnabled = yield* Effect.exit(
+      decodeClientOrchestrationCommand({
+        type: "thread.auto-nudge.configure",
+        commandId: "command-blank-enable",
+        threadId: threadBase.id,
+        expectedAuthorityRevision: 1,
+        mode: "steady-progress",
+        prompt: " \n ",
+        backgroundContinuation: false,
+        maxRounds: 5,
+        maxMinutes: 30,
+        createdAt: "2026-07-28T00:00:03.000Z",
+      }),
+    );
+    assert.strictEqual(blankEnabled._tag, "Failure");
+  }),
+);
+
+it.effect("Auto Nudge dispatch carries no client prompt", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeClientOrchestrationCommand({
+      type: "thread.auto-nudge.dispatch",
+      commandId: "command-dispatch",
+      threadId: threadBase.id,
+      expectedAuthorityRevision: 4,
+      completedTurnId: "turn-completed",
+      dispatchSource: "foreground",
+      messageId: "message-auto-nudge",
+      createdAt: "2026-07-28T00:05:00.000Z",
+      prompt: "renderer supplied text must be discarded",
+    });
+    assert.strictEqual(parsed.type, "thread.auto-nudge.dispatch");
+    assert.strictEqual("prompt" in parsed, false);
+  }),
+);
+
+it.effect("thread detail and shell decode missing Auto Nudge state to disabled defaults", () =>
+  Effect.gen(function* () {
+    const detail = yield* decodeOrchestrationThread({
+      ...threadBase,
+      messages: [],
+      proposedPlans: [],
+      activities: [],
+      checkpoints: [],
+      session: null,
+    });
+    assert.strictEqual(detail.autoNudge.mode, "off");
+    assert.strictEqual(detail.autoNudge.authorityRevision, 0);
+    assert.strictEqual(detail.autoNudge.prompt, "");
+
+    const shell = yield* decodeOrchestrationThreadShell({
+      ...threadBase,
+      session: null,
+      latestUserMessageAt: null,
+      hasPendingApprovals: false,
+      hasPendingUserInput: false,
+      hasActionableProposedPlan: false,
+    });
+    assert.strictEqual(shell.autoNudge.mode, "off");
+    assert.strictEqual("prompt" in shell.autoNudge, false);
+  }),
+);
 
 it.effect("workflow projection accepts honest unavailable fields and canonical statuses", () =>
   Effect.gen(function* () {
