@@ -522,7 +522,9 @@ describe("WindowAtmosphere", () => {
     await expect.poll(() => mocks.drawAtmosphereScene.mock.calls.length).toBe(1);
     expect(frameCallbacks.size).toBe(0);
     expect(mocks.createAtmosphereScene).toHaveBeenCalledTimes(1);
-    expect(mocks.applyMatrixWorkVocabularyInPlace).toHaveBeenCalledTimes(1);
+    // Initial vocabulary is injected while creating the scene. The in-place
+    // updater is reserved for later exact-thread vocabulary changes.
+    expect(mocks.applyMatrixWorkVocabularyInPlace).toHaveBeenCalledTimes(0);
 
     mocks.drawAtmosphereScene.mockClear();
     mocks.activityEventsKey = "activity-2";
