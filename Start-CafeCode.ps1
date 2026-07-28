@@ -47,6 +47,24 @@ function Resolve-FirstApplicationPath {
   return $null
 }
 
+function Remove-MissingOpenSslConfigOverride {
+  $configuredPath = $env:OPENSSL_CONF
+  if ([string]::IsNullOrWhiteSpace($configuredPath)) {
+    return $false
+  }
+
+  $normalizedPath = $configuredPath.Trim().Trim('"')
+  if (Test-Path -LiteralPath $normalizedPath -PathType Leaf) {
+    return $false
+  }
+
+  # OPENSSL_CONF is sometimes left behind by an uninstalled database or SDK.
+  # Remove only this launcher's inherited copy: the machine/user environment is
+  # untouched, while OpenSSL can fall back to its own valid default config.
+  Remove-Item Env:OPENSSL_CONF -ErrorAction SilentlyContinue
+  return $true
+}
+
 function Invoke-StartCafeCode {
   param(
     [switch]$Wait,
@@ -77,6 +95,12 @@ function Invoke-StartCafeCode {
   # the helper the backend uses to mint the local certificate is not discoverable.
   # Use CommandType Application so aliases/functions cannot spoof this readiness
   # check; if OpenSSL exists, let the normal desktop settings/exposure flow decide.
+  $removedMissingOpenSslConfig = Remove-MissingOpenSslConfigOverride
+  if ($removedMissingOpenSslConfig) {
+    "Inherited OPENSSL_CONF did not name an existing file; ignored it for this Club Code launch." |
+      Add-Content -LiteralPath $launcherLog
+  }
+
   $opensslPath = Resolve-FirstApplicationPath -Names @("openssl.exe", "openssl")
 
   if ([string]::IsNullOrWhiteSpace($opensslPath)) {
