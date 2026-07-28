@@ -273,8 +273,8 @@ const ServerClientSettingsLayerLive = ServerClientSettingsLive.pipe(
   Layer.provide(BrandingImageStoreLive),
 );
 
-const ProviderPacingRuntimeLive = ProviderPacingAdmissionLive.pipe(
-  Layer.provideMerge(ProviderPacingActiveTurnLifecycleLive),
+const ProviderPacingRuntimeLive = ProviderPacingActiveTurnLifecycleLive.pipe(
+  Layer.provideMerge(ProviderPacingAdmissionLive),
 );
 
 const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
