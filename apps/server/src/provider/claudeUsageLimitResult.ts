@@ -52,7 +52,9 @@ export function isClaudeUsageLimitResult(message: unknown): boolean {
   if (record === undefined || record.type !== "result" || record.is_error !== true) {
     return false;
   }
-  if (record.api_error_status === USAGE_LIMIT_API_ERROR_STATUS) return true;
+  if (record.api_error_status !== undefined && record.api_error_status !== null) {
+    return record.api_error_status === USAGE_LIMIT_API_ERROR_STATUS;
+  }
 
   const text = primaryResultText(record);
   return text !== undefined && USAGE_LIMIT_ERROR_PREFIXES.some((prefix) => text.startsWith(prefix));

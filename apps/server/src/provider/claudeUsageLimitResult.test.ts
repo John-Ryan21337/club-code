@@ -56,6 +56,20 @@ describe("isClaudeUsageLimitResult", () => {
     ).toBe(false);
   });
 
+  it("lets a structured non-429 status outrank a conflicting usage-limit prefix", () => {
+    for (const apiErrorStatus of [401, 529]) {
+      expect(
+        isClaudeUsageLimitResult({
+          type: "result",
+          subtype: "success",
+          is_error: true,
+          api_error_status: apiErrorStatus,
+          result: "You've hit your session limit, resets 11:30am (America/Los_Angeles)",
+        }),
+      ).toBe(false);
+    }
+  });
+
   it("does not classify a successful, non-error result", () => {
     expect(
       isClaudeUsageLimitResult({
