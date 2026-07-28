@@ -1,6 +1,7 @@
 import "../index.css";
 
 import {
+  DEFAULT_THREAD_AUTO_NUDGE_SUMMARY,
   EnvironmentId,
   type OrchestrationShellSnapshot,
   ProjectId,
@@ -74,6 +75,7 @@ function createShellSnapshot(): OrchestrationShellSnapshot {
         hasPendingApprovals: false,
         hasPendingUserInput: false,
         hasActionableProposedPlan: false,
+        autoNudge: DEFAULT_THREAD_AUTO_NUDGE_SUMMARY,
       },
     ],
     updatedAt: NOW_ISO,

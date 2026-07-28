@@ -5,6 +5,8 @@ import {
   DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES,
   DEFAULT_CLIENT_SETTINGS,
   DEFAULT_SERVER_SETTINGS,
+  DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+  DEFAULT_THREAD_AUTO_NUDGE_SUMMARY,
   EnvironmentId,
   ORCHESTRATION_WS_METHODS,
   type MessageId,
@@ -191,6 +193,7 @@ function createMinimalSnapshot(): OrchestrationReadModel {
         activities: [],
         proposedPlans: [],
         checkpoints: [],
+        autoNudge: DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
         session: {
           threadId: THREAD_ID,
           status: "ready",
@@ -238,6 +241,7 @@ function toShellSnapshot(snapshot: OrchestrationReadModel) {
       hasPendingApprovals: false,
       hasPendingUserInput: false,
       hasActionableProposedPlan: false,
+      autoNudge: DEFAULT_THREAD_AUTO_NUDGE_SUMMARY,
     })),
     updatedAt: snapshot.updatedAt,
   };

@@ -1,5 +1,6 @@
 import { scopeThreadRef } from "@cafecode/client-runtime";
 import {
+  DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
   EnvironmentId,
   ProjectId,
   ProviderDriverKind,
@@ -308,6 +309,7 @@ const makeThread = (input?: {
   worktreePath: null,
   turnDiffSummaries: [],
   activities: [],
+  autoNudge: DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
 });
 
 function setStoreThreads(threads: ReadonlyArray<ReturnType<typeof makeThread>>) {
@@ -351,6 +353,18 @@ function setStoreThreads(threads: ReadonlyArray<ReturnType<typeof makeThread>>) 
           updatedAt: thread.updatedAt,
           branch: thread.branch,
           worktreePath: thread.worktreePath,
+          autoNudge: {
+            authorityRevision: thread.autoNudge.authorityRevision,
+            mode: thread.autoNudge.mode,
+            backgroundContinuation: thread.autoNudge.backgroundContinuation,
+            maxRounds: thread.autoNudge.maxRounds,
+            maxMinutes: thread.autoNudge.maxMinutes,
+            armedAt: thread.autoNudge.armedAt,
+            baselineSettledTurnId: thread.autoNudge.baselineSettledTurnId,
+            lastDispatchedSettledTurnId: thread.autoNudge.lastDispatchedSettledTurnId,
+            roundsDispatched: thread.autoNudge.roundsDispatched,
+            lastDispatchedAt: thread.autoNudge.lastDispatchedAt,
+          },
         },
       ]),
     ),
@@ -365,6 +379,9 @@ function setStoreThreads(threads: ReadonlyArray<ReturnType<typeof makeThread>>) 
             : {}),
         },
       ]),
+    ),
+    threadAutoNudgeConfigById: Object.fromEntries(
+      threads.map((thread) => [thread.id, thread.autoNudge]),
     ),
     messageIdsByThreadId: Object.fromEntries(
       threads.map((thread) => [thread.id, thread.messages.map((message) => message.id)]),
@@ -549,6 +566,7 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
       worktreePath: null,
       turnDiffSummaries: [],
       activities: [],
+      autoNudge: DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
     });
 
     expect(
@@ -586,6 +604,7 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
       worktreePath: null,
       turnDiffSummaries: [],
       activities: [],
+      autoNudge: DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
     });
 
     expect(
@@ -667,6 +686,7 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
       worktreePath: null,
       turnDiffSummaries: [],
       activities: [],
+      autoNudge: DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
     });
 
     expect(
@@ -710,6 +730,7 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
       worktreePath: null,
       turnDiffSummaries: [],
       activities: [],
+      autoNudge: DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
     });
 
     expect(
@@ -753,6 +774,7 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
       worktreePath: null,
       turnDiffSummaries: [],
       activities: [],
+      autoNudge: DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
     });
 
     expect(
@@ -803,6 +825,7 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
       worktreePath: null,
       turnDiffSummaries: [],
       activities: [],
+      autoNudge: DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
     });
 
     expect(
