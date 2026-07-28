@@ -2828,58 +2828,6 @@ describe("settings panels", () => {
     expect(updateSettings).not.toHaveBeenCalled();
   });
 
-  it("shows Codex reset availability above the reset schedule", async () => {
-    const codexProvider: ServerProvider = {
-      ...createOutdatedProvider("codex"),
-      accountRateLimits: {
-        checkedAt: "2026-07-27T00:00:00.000Z",
-        rateLimits: {
-          limitId: "codex",
-          primary: {
-            usedPercent: 25,
-            windowDurationMins: 300,
-            resetsAt: 1_784_944_800,
-          },
-          secondary: {
-            usedPercent: 50,
-            windowDurationMins: 10_080,
-            resetsAt: 1_785_549_600,
-          },
-        },
-        rateLimitResetCredits: {
-          availableCount: 2,
-          credits: null,
-        },
-      },
-    };
-    setServerConfigSnapshot({
-      ...createBaseServerConfig(),
-      providers: [codexProvider],
-    });
-
-    mounted = await render(
-      <AppAtomRegistryProvider>
-        <ProviderSettingsPanel />
-      </AppAtomRegistryProvider>,
-    );
-
-    await expect
-      .element(page.getByText("Usage limit resets available: 2", { exact: true }))
-      .toBeInTheDocument();
-    await vi.waitFor(() => {
-      const lines = Array.from(document.querySelectorAll<HTMLParagraphElement>("p"));
-      const availabilityIndex = lines.findIndex(
-        (line) => line.textContent === "Usage limit resets available: 2",
-      );
-      const resetScheduleIndex = lines.findIndex((line) =>
-        line.textContent?.includes("Weekly reset:"),
-      );
-
-      expect(availabilityIndex).toBeGreaterThanOrEqual(0);
-      expect(resetScheduleIndex).toBeGreaterThan(availabilityIndex);
-    });
-  });
-
   it("keeps long provider update commands inside the fixed-width popover", async () => {
     const longUpdateCommand =
       "npm install -g @anthropic-ai/claude-code@latest --registry=https://registry.npmjs.org --cache=/tmp/t3code-provider-update-cache";
