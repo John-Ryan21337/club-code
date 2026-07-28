@@ -1143,6 +1143,36 @@ describe("incremental orchestration updates", () => {
     expect(nextThread?.session?.activeTurnId).toBeUndefined();
   });
 
+  it("settles a live quota wait when Stop has no provider turn id", () => {
+    const thread = makeThread({
+      session: {
+        provider: "claude" as never,
+        status: "connecting",
+        orchestrationStatus: "waiting-quota",
+        activeTurnId: undefined,
+        createdAt: "2026-02-27T00:00:00.000Z",
+        updatedAt: "2026-02-27T00:00:01.000Z",
+      },
+    });
+
+    const next = applyOrchestrationEvent(
+      makeState(thread),
+      makeEvent("thread.turn-interrupt-requested", {
+        threadId: thread.id,
+        createdAt: "2026-02-27T00:00:02.000Z",
+      }),
+      localEnvironmentId,
+    );
+
+    expect(threadsOf(next)[0]?.session).toMatchObject({
+      status: "ready",
+      orchestrationStatus: "interrupted",
+      activeTurnId: undefined,
+      updatedAt: "2026-02-27T00:00:02.000Z",
+    });
+    expect(threadsOf(next)[0]?.latestTurn).toBeNull();
+  });
+
   it("preserves turn request time when a starting session becomes running", () => {
     const thread = makeThread();
     const state = makeState(thread);

@@ -1897,7 +1897,22 @@ function applyEnvironmentOrchestrationEvent(
 
     case "thread.turn-interrupt-requested": {
       if (event.payload.turnId === undefined) {
-        return state;
+        return updateThreadState(state, event.payload.threadId, (thread) => {
+          if (thread.session?.orchestrationStatus !== "waiting-quota") {
+            return thread;
+          }
+          return {
+            ...thread,
+            session: {
+              ...thread.session,
+              status: "ready",
+              orchestrationStatus: "interrupted",
+              activeTurnId: undefined,
+              updatedAt: maxIso(thread.session.updatedAt, event.payload.createdAt),
+            },
+            updatedAt: event.occurredAt,
+          };
+        });
       }
       return updateThreadState(state, event.payload.threadId, (thread) => {
         const latestTurn = thread.latestTurn;
