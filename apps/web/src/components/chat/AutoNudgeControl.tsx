@@ -1,24 +1,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 
 import type { AutoNudgeMode } from "~/autoNudger";
-import {
-  MAX_AUTO_NUDGE_MAX_MINUTES,
-  MAX_AUTO_NUDGE_MAX_ROUNDS,
-  MIN_AUTO_NUDGE_MAX_MINUTES,
-  MIN_AUTO_NUDGE_MAX_ROUNDS,
-} from "@cafecode/contracts";
-import type {
-  BackgroundAutoNudgeLedgerEntry,
-  BackgroundAutoNudgeStatus,
-} from "~/backgroundAutoNudger";
 import { Button } from "../ui/button";
-import {
-  NumberField,
-  NumberFieldDecrement,
-  NumberFieldGroup,
-  NumberFieldIncrement,
-  NumberFieldInput,
-} from "../ui/number-field";
 import { Select, SelectItem, SelectPopup, SelectTrigger } from "../ui/select";
 import { Switch } from "../ui/switch";
 import { Textarea } from "../ui/textarea";
@@ -35,14 +18,10 @@ export interface AutoNudgeControlProps {
   readonly disabled: boolean;
   readonly arming: boolean;
   readonly backgroundEnabled: boolean;
-  readonly backgroundDispatchSupported: boolean;
-  readonly backgroundOwnedByThisThread: boolean;
-  readonly backgroundStatus: BackgroundAutoNudgeStatus;
-  readonly backgroundRounds: number;
-  readonly backgroundMaxRounds: number;
-  readonly backgroundMaxMinutes: number;
-  readonly backgroundReason: string | null;
-  readonly backgroundLedger: readonly BackgroundAutoNudgeLedgerEntry[];
+  readonly roundsDispatched: number;
+  readonly maxRounds: number;
+  readonly maxMinutes: number;
+  readonly globallySuppressed: boolean;
   /**
    * Opaque identity for the exact environment/thread pair. This deliberately
    * resets an unsaved draft even when two threads have identical saved text.
@@ -51,12 +30,13 @@ export interface AutoNudgeControlProps {
   readonly persistedPrompt: string;
   readonly promptMaxLength: number;
   readonly promptSaving: boolean;
+  readonly promptEditable: boolean;
   readonly onSavePrompt: (prompt: string) => Promise<void> | void;
   readonly onModeChange: (mode: AutoNudgeMode) => void;
   readonly onBackgroundChange: (enabled: boolean) => void;
-  readonly onPauseBackground: () => void;
-  readonly onResumeBackground: () => void;
   readonly onStop: () => void;
+  readonly onEmergencyStopAll: () => void;
+  readonly onAllowAutoNudgeAgain: () => void;
 }
 
 export function AutoNudgeControl(props: AutoNudgeControlProps) {
@@ -75,28 +55,31 @@ export function AutoNudgeControl(props: AutoNudgeControlProps) {
     setDraftPrompt(props.persistedPrompt);
     setLocalSavePending(false);
     setSaveFailed(false);
-  }, [props.persistedPrompt, props.promptScopeKey]);
+  }, [props.persistedPrompt, props.promptEditable, props.promptScopeKey]);
   const isActive = props.mode !== "off";
   const promptSaving = props.promptSaving || localSavePending;
+  const promptInputDisabled = !props.promptEditable || promptSaving;
   const promptChanged = draftPrompt !== props.persistedPrompt;
   const promptIsBlank = draftPrompt.trim().length === 0;
   const promptIsTooLong = draftPrompt.length > props.promptMaxLength;
   const promptIsValid = !promptIsTooLong && (!isActive || !promptIsBlank);
-  const promptStatus = saveFailed
-    ? "Prompt could not be saved. Try again."
-    : promptSaving
-      ? "Saving prompt"
-      : isActive && promptIsBlank
-        ? "Prompt cannot be empty"
-        : promptIsTooLong
-          ? `Prompt exceeds the ${props.promptMaxLength}-character limit`
-          : promptChanged
-            ? "Unsaved changes"
-            : "Saved";
-  const status = props.arming
-    ? "Saving mode"
-    : props.backgroundOwnedByThisThread
-      ? "Foreground paused while background owns this thread"
+  const promptStatus = !props.promptEditable
+    ? "Prompt unavailable for this thread"
+    : saveFailed
+      ? "Prompt could not be saved. Try again."
+      : promptSaving
+        ? "Saving prompt"
+        : isActive && promptIsBlank
+          ? "Prompt cannot be empty"
+          : promptIsTooLong
+            ? `Prompt exceeds the ${props.promptMaxLength}-character limit`
+            : promptChanged
+              ? "Unsaved changes"
+              : "Saved";
+  const status = props.globallySuppressed
+    ? "Emergency stop is active"
+    : props.arming
+      ? "Saving this thread"
       : props.disabled
         ? "Unavailable for this thread"
         : props.countdownSeconds === null
@@ -106,7 +89,7 @@ export function AutoNudgeControl(props: AutoNudgeControlProps) {
           : `Next nudge in ${props.countdownSeconds}s`;
 
   const savePrompt = async () => {
-    if (!promptChanged || !promptIsValid || promptSaving) return;
+    if (!props.promptEditable || !promptChanged || !promptIsValid || promptSaving) return;
     const scopeAtSave = props.promptScopeKey;
     const attempt = saveAttemptRef.current + 1;
     saveAttemptRef.current = attempt;
@@ -135,48 +118,29 @@ export function AutoNudgeControl(props: AutoNudgeControlProps) {
           Auto nudge - {status}
         </div>
         <p className="mt-0.5 text-muted-foreground">
-          Mode and prompt are saved only for this thread. Background continuation is opt-in and
-          stops at {props.backgroundMaxRounds} rounds or {props.backgroundMaxMinutes} minutes. Stop
-          blocks future handoffs but cannot retract a prompt already handed to a provider.
+          Mode, prompt, and limits are saved only for this thread. Background continuation is opt-in
+          and stops at {props.maxRounds} rounds or {props.maxMinutes} minutes. Stop this thread
+          blocks only its future handoffs; Emergency Stop all blocks every thread. Neither action
+          can retract a prompt already handed to a provider.
         </p>
-        {props.backgroundOwnedByThisThread ? (
-          <div className="mt-1 text-muted-foreground" aria-live="polite">
-            Background {props.backgroundStatus} · {props.backgroundRounds}/
-            {props.backgroundMaxRounds} rounds
-            {props.backgroundReason ? ` · ${props.backgroundReason}` : ""}
-          </div>
-        ) : props.backgroundEnabled ? (
+        {props.backgroundEnabled ? (
           <div className="mt-1 text-muted-foreground">
-            Another thread owns background continuation. Turn this on here to transfer ownership.
+            Background continuation is enabled for this thread - {props.roundsDispatched}/
+            {props.maxRounds} rounds dispatched.
           </div>
         ) : null}
-        {!props.backgroundDispatchSupported ? (
-          <div className="mt-1 text-muted-foreground" role="status">
-            Automatic dispatch is unavailable in this browser because it cannot safely coordinate
-            multiple windows.
+        {props.globallySuppressed ? (
+          <div className="mt-1 text-destructive" role="status">
+            Emergency Stop all is blocking Auto Nudge in every thread. Saved thread settings remain
+            in place, but no automatic handoff is allowed until you explicitly allow Auto Nudge
+            again.
           </div>
-        ) : null}
-        {props.backgroundLedger.length > 0 ? (
-          <details className="mt-1">
-            <summary className="cursor-pointer text-muted-foreground">
-              Automation ledger for this thread
-            </summary>
-            <ol className="mt-1 max-h-48 list-decimal space-y-0.5 overflow-y-auto pl-4 text-muted-foreground">
-              {props.backgroundLedger.map((entry) => (
-                <li key={entry.id}>
-                  {entry.detail}
-                  {entry.messageId ? ` Message ${entry.messageId}.` : ""}
-                  {entry.terminalTurnKey ? ` Terminal ${entry.terminalTurnKey}.` : ""}
-                </li>
-              ))}
-            </ol>
-          </details>
         ) : null}
       </div>
       <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
         <Select
           value={props.mode}
-          disabled={props.disabled}
+          disabled={props.disabled || props.arming || props.globallySuppressed}
           onValueChange={(value) => {
             if (value === "off" || value === "hardcore-fanout" || value === "steady-progress") {
               props.onModeChange(value);
@@ -194,95 +158,34 @@ export function AutoNudgeControl(props: AutoNudgeControlProps) {
         </Select>
         <label className="flex items-center gap-2 whitespace-nowrap text-muted-foreground">
           <Switch
-            checked={props.backgroundOwnedByThisThread}
-            disabled={props.disabled || props.mode === "off" || !props.backgroundDispatchSupported}
+            checked={props.backgroundEnabled}
+            disabled={
+              props.disabled || props.arming || props.globallySuppressed || props.mode === "off"
+            }
             aria-label="Continue this thread in background"
             onCheckedChange={(checked) => props.onBackgroundChange(Boolean(checked))}
           />
           Continue this thread in background
         </label>
-        <label className="flex items-center gap-1 whitespace-nowrap text-muted-foreground">
-          Rounds
-          <NumberField
-            value={props.backgroundMaxRounds}
-            min={MIN_AUTO_NUDGE_MAX_ROUNDS}
-            max={MAX_AUTO_NUDGE_MAX_ROUNDS}
-            step={1}
-            size="sm"
-            className="w-24"
-            disabled={props.disabled}
-            onValueChange={(value) => {
-              if (value !== null && Number.isFinite(value)) {
-                props.onMaxRoundsChange(
-                  Math.round(
-                    Math.min(MAX_AUTO_NUDGE_MAX_ROUNDS, Math.max(MIN_AUTO_NUDGE_MAX_ROUNDS, value)),
-                  ),
-                );
-              }
-            }}
-          >
-            <NumberFieldGroup>
-              <NumberFieldDecrement aria-label="Decrease Auto Nudge round cap" />
-              <NumberFieldInput aria-label="Auto Nudge maximum rounds for this thread" />
-              <NumberFieldIncrement aria-label="Increase Auto Nudge round cap" />
-            </NumberFieldGroup>
-          </NumberField>
-        </label>
-        <label className="flex items-center gap-1 whitespace-nowrap text-muted-foreground">
-          Minutes
-          <NumberField
-            value={props.backgroundMaxMinutes}
-            min={MIN_AUTO_NUDGE_MAX_MINUTES}
-            max={MAX_AUTO_NUDGE_MAX_MINUTES}
-            step={5}
-            size="sm"
-            className="w-24"
-            disabled={props.disabled}
-            onValueChange={(value) => {
-              if (value !== null && Number.isFinite(value)) {
-                props.onMaxMinutesChange(
-                  Math.round(
-                    Math.min(
-                      MAX_AUTO_NUDGE_MAX_MINUTES,
-                      Math.max(MIN_AUTO_NUDGE_MAX_MINUTES, value),
-                    ),
-                  ),
-                );
-              }
-            }}
-          >
-            <NumberFieldGroup>
-              <NumberFieldDecrement aria-label="Decrease Auto Nudge time cap" />
-              <NumberFieldInput aria-label="Auto Nudge maximum minutes for this thread" />
-              <NumberFieldIncrement aria-label="Increase Auto Nudge time cap" />
-            </NumberFieldGroup>
-          </NumberField>
-        </label>
-        {props.backgroundOwnedByThisThread && props.backgroundStatus === "active" ? (
-          <Button type="button" size="sm" variant="outline" onClick={props.onPauseBackground}>
-            Pause
+        {isActive || props.arming || props.backgroundEnabled ? (
+          <Button type="button" size="sm" variant="outline" onClick={props.onStop}>
+            Stop this thread
           </Button>
         ) : null}
-        {props.backgroundOwnedByThisThread && props.backgroundStatus === "paused" ? (
-          <Button type="button" size="sm" variant="outline" onClick={props.onResumeBackground}>
-            Resume
+        {props.globallySuppressed ? (
+          <Button type="button" size="sm" variant="outline" onClick={props.onAllowAutoNudgeAgain}>
+            Allow Auto Nudge again
           </Button>
-        ) : null}
-        {props.backgroundOwnedByThisThread && props.backgroundStatus === "exhausted" ? (
+        ) : (
           <Button
             type="button"
             size="sm"
-            variant="outline"
-            onClick={() => props.onBackgroundChange(true)}
+            variant="destructive-outline"
+            onClick={props.onEmergencyStopAll}
           >
-            Start new bounded run
+            Emergency Stop all
           </Button>
-        ) : null}
-        {isActive || props.arming || props.backgroundOwnedByThisThread ? (
-          <Button type="button" size="sm" variant="outline" onClick={props.onStop}>
-            Stop
-          </Button>
-        ) : null}
+        )}
       </div>
       <form
         className="order-last w-full border-t border-border/50 pt-2"
@@ -310,9 +213,9 @@ export function AutoNudgeControl(props: AutoNudgeControlProps) {
           rows={3}
           value={draftPrompt}
           maxLength={props.promptMaxLength}
-          disabled={promptSaving}
+          disabled={promptInputDisabled}
           aria-describedby={`${promptHelpId} ${promptStatusId}`}
-          aria-invalid={promptChanged && !promptIsValid ? true : undefined}
+          aria-invalid={props.promptEditable && promptChanged && !promptIsValid ? true : undefined}
           onChange={(event) => {
             setDraftPrompt(event.currentTarget.value);
             setSaveFailed(false);
@@ -320,16 +223,18 @@ export function AutoNudgeControl(props: AutoNudgeControlProps) {
         />
         <div className="mt-1 flex flex-wrap items-center justify-between gap-2">
           <p id={promptHelpId} className="text-muted-foreground">
-            {props.mode === "off"
-              ? "Auto Nudge is off. Saving this text does not enable it."
-              : "This text is used only by this thread."}{" "}
+            {!props.promptEditable
+              ? "Open a persisted thread to edit its prompt."
+              : props.mode === "off"
+                ? "Auto Nudge is off. Saving this text does not enable it."
+                : "This text is used only by this thread."}{" "}
             {draftPrompt.length}/{props.promptMaxLength}
           </p>
           <Button
             type="submit"
             size="sm"
             variant="outline"
-            disabled={!promptChanged || !promptIsValid || promptSaving}
+            disabled={!props.promptEditable || !promptChanged || !promptIsValid || promptSaving}
           >
             {promptSaving ? "Saving prompt…" : "Save prompt"}
           </Button>
