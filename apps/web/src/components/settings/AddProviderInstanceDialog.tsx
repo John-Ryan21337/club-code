@@ -3,7 +3,12 @@
 import { CheckIcon } from "lucide-react";
 import { Radio as RadioPrimitive } from "@base-ui/react/radio";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ProviderInstanceId, ProviderDriverKind } from "@cafecode/contracts";
+import {
+  DEFAULT_LM_STUDIO_BASE_URL,
+  ProviderInstanceId,
+  ProviderDriverKind,
+  validateLmStudioBaseUrl,
+} from "@cafecode/contracts";
 
 import { useSettings, useUpdateSettings } from "../../hooks/useSettings";
 import { cn } from "../../lib/utils";
@@ -129,6 +134,13 @@ export function AddProviderInstanceDialog({ open, onOpenChange }: AddProviderIns
   const wizardStepSummaries = [creationOption.label, previewLabel, null] as const;
 
   const configDraft = configByTemplate[templateId] ?? EMPTY_CONFIG_DRAFT;
+  const lmStudioBaseUrl =
+    typeof configDraft.ossBaseUrl === "string"
+      ? configDraft.ossBaseUrl
+      : DEFAULT_LM_STUDIO_BASE_URL;
+  const lmStudioBaseUrlError =
+    templateId === LM_STUDIO_PROVIDER_TEMPLATE_ID ? validateLmStudioBaseUrl(lmStudioBaseUrl) : null;
+  const showLmStudioBaseUrlError = hasAttemptedSubmit && lmStudioBaseUrlError !== null;
   const setConfigDraft = useCallback(
     (config: Record<string, unknown> | undefined) => {
       setConfigByTemplate((existing) => {
@@ -146,7 +158,7 @@ export function AddProviderInstanceDialog({ open, onOpenChange }: AddProviderIns
 
   const handleSave = useCallback(() => {
     setHasAttemptedSubmit(true);
-    if (instanceIdError !== null) return;
+    if (instanceIdError !== null || lmStudioBaseUrlError !== null) return;
 
     const nextInstance = buildProviderCreationConfig({
       templateId,
@@ -187,6 +199,7 @@ export function AddProviderInstanceDialog({ open, onOpenChange }: AddProviderIns
     configByTemplate,
     instanceId,
     instanceIdError,
+    lmStudioBaseUrlError,
     label,
     accentColor,
     onOpenChange,
@@ -384,16 +397,47 @@ export function AddProviderInstanceDialog({ open, onOpenChange }: AddProviderIns
               </div>
 
               {templateId === LM_STUDIO_PROVIDER_TEMPLATE_ID && wizardStep === 2 ? (
-                <div className="grid gap-2 rounded-lg border border-primary/25 bg-primary/5 p-3">
-                  <p className="text-sm font-medium text-foreground">
-                    Local LM Studio through Codex OSS
-                  </p>
-                  <p className="text-xs text-muted-foreground">
-                    Club Code will create an ordinary selectable provider instance with LM Studio
-                    mode locked on. Start LM Studio&apos;s OpenAI-compatible server on
-                    127.0.0.1:1234 and load a model first. This local instance does not require a
-                    cloud login.
-                  </p>
+                <div className="grid gap-4">
+                  <div className="grid gap-2 rounded-lg border border-primary/25 bg-primary/5 p-3">
+                    <p className="text-sm font-medium text-foreground">
+                      LM Studio through Codex OSS
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      This creates an independently selectable provider instance with cloud login
+                      disabled. Start LM Studio&apos;s OpenAI-compatible server, load a model, and
+                      allow network serving in LM Studio when using another machine.
+                    </p>
+                  </div>
+                  <label className="grid gap-1.5">
+                    <span className="text-xs font-medium text-foreground">
+                      LM Studio server URL
+                    </span>
+                    <Input
+                      className="bg-background"
+                      value={lmStudioBaseUrl}
+                      onChange={(event) =>
+                        setConfigDraft({
+                          ...configDraft,
+                          ossBaseUrl: event.target.value,
+                        })
+                      }
+                      placeholder={DEFAULT_LM_STUDIO_BASE_URL}
+                      spellCheck={false}
+                      aria-invalid={showLmStudioBaseUrlError}
+                    />
+                    {showLmStudioBaseUrlError ? (
+                      <span className="text-[11px] text-destructive">{lmStudioBaseUrlError}</span>
+                    ) : (
+                      <span className="text-[11px] text-muted-foreground">
+                        Use <code>{DEFAULT_LM_STUDIO_BASE_URL}</code> on this computer, or a private
+                        LAN address such as <code>http://192.168.1.50:1234/v1</code>. Workspace
+                        context is sent to this endpoint. Codex&apos;s built-in LM Studio provider
+                        cannot send LM Studio API tokens, so an endpoint with LM Studio&apos;s
+                        Require Authentication enabled will reject it. Use loopback or protect
+                        network access with a trusted private network, VPN, or firewall.
+                      </span>
+                    )}
+                  </label>
                 </div>
               ) : driverSettingsFields.length > 0 ? (
                 <div className={cn("grid gap-4", wizardStep !== 2 && "hidden")}>

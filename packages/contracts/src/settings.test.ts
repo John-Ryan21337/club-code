@@ -55,6 +55,7 @@ import {
   DEFAULT_FALLING_EFFECT_MATRIX_MOTION_MODE,
   DEFAULT_FALLING_EFFECT_SPEED,
   DEFAULT_FALLING_EFFECTS_ENABLED,
+  DEFAULT_LM_STUDIO_BASE_URL,
   DEFAULT_MODEL_PACING_ENABLED,
   DEFAULT_MODEL_PACING_RESERVE_PERCENT,
   DEFAULT_POWER_SAVE_BLOCKER_MODE,
@@ -95,7 +96,9 @@ import {
   MIN_SIDEBAR_STAR_SPEED,
   MAX_WORKFLOW_STALL_WARNING_SECONDS,
   MIN_WORKFLOW_STALL_WARNING_SECONDS,
+  normalizeLmStudioBaseUrl,
   ServerSettingsPatch,
+  validateLmStudioBaseUrl,
   type AmbientClientSettings,
   type ClientSettings,
 } from "./settings.ts";
@@ -1040,19 +1043,67 @@ describe("provider settings", () => {
     expect(decodeClaudeSettings({}).runtimeSource).toBe("system");
   });
 
-  it("defaults local model mode off and persists it through provider patches", () => {
+  it("defaults local model mode off with a loopback endpoint and persists network endpoints", () => {
     expect(decodeCodexSettings({}).ossMode).toBe(false);
+    expect(decodeCodexSettings({}).ossBaseUrl).toBe(DEFAULT_LM_STUDIO_BASE_URL);
     expect(
       decodeServerSettingsPatch({
         providers: {
-          codex: { ossMode: true },
+          codex: {
+            ossMode: true,
+            ossBaseUrl: "http://192.168.50.8:1234/v1",
+          },
         },
       }),
     ).toEqual({
       providers: {
-        codex: { ossMode: true },
+        codex: {
+          ossMode: true,
+          ossBaseUrl: "http://192.168.50.8:1234/v1",
+        },
       },
     });
+  });
+
+  it("accepts loopback, LAN, and HTTPS LM Studio API roots and normalizes /v1", () => {
+    for (const value of [
+      "http://localhost:1234/v1",
+      "http://127.0.0.1:1234",
+      "http://10.20.30.40:1234/v1",
+      "http://172.16.0.1:1234/v1",
+      "http://172.31.255.254:1234/v1",
+      "http://192.168.1.25:1234/v1",
+      "http://lm-workstation:1234/v1",
+      "http://lm-workstation.local:1234/v1/",
+      "http://host.docker.internal:1234/v1",
+      "http://[::1]:1234/v1",
+      "http://[fd00::25]:1234/v1",
+      "http://[fe80::25]:1234/v1",
+      "https://models.example.com/team/v1",
+    ]) {
+      expect(validateLmStudioBaseUrl(value), value).toBeNull();
+    }
+    expect(normalizeLmStudioBaseUrl(" http://192.168.1.25:1234/ ")).toBe(
+      "http://192.168.1.25:1234/v1",
+    );
+    expect(normalizeLmStudioBaseUrl("https://models.example.com/team/v1/")).toBe(
+      "https://models.example.com/team/v1",
+    );
+  });
+
+  it("rejects unsafe or ambiguous LM Studio endpoints", () => {
+    for (const value of [
+      "file:///tmp/lmstudio",
+      "http://user:secret@127.0.0.1:1234/v1",
+      "http://127.0.0.1:1234/v1?token=secret",
+      "http://public.example.com:1234/v1",
+      "http://192.168.1.25:1234/not-the-api-root",
+    ]) {
+      expect(() => decodeCodexSettings({ ossBaseUrl: value }), value).toThrow();
+    }
+    expect(decodeCodexSettings({ ossBaseUrl: "https://public.example.com/v1" }).ossBaseUrl).toBe(
+      "https://public.example.com/v1",
+    );
   });
 
   it("accepts bundled provider runtime source in server settings patches", () => {

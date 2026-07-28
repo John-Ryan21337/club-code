@@ -596,6 +596,9 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
         const codexConfig = decodeCodexSettings({ ossMode: true });
         return yield* makeCodexAdapter(codexConfig, {
           makeRuntime: localRuntimeFactory.factory,
+          environment: {
+            CODEX_OSS_BASE_URL: "http://192.168.20.15:1234/v1",
+          },
         });
       }),
     ).pipe(
@@ -614,6 +617,10 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
       });
 
       assert.equal(localRuntimeFactory.factory.mock.calls[0]?.[0].ossMode, true);
+      assert.equal(
+        localRuntimeFactory.factory.mock.calls[0]?.[0].environment?.CODEX_OSS_BASE_URL,
+        "http://192.168.20.15:1234/v1",
+      );
     }).pipe(Effect.provide(localLayer));
   });
 });

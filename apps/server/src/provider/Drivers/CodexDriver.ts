@@ -21,7 +21,12 @@
  *
  * @module provider/Drivers/CodexDriver
  */
-import { CodexSettings, ProviderDriverKind, type ServerProvider } from "@cafecode/contracts";
+import {
+  CodexSettings,
+  normalizeLmStudioBaseUrl,
+  ProviderDriverKind,
+  type ServerProvider,
+} from "@cafecode/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -151,6 +156,20 @@ export function resolveCodexAuthActions(input: {
     : undefined;
 }
 
+export function resolveCodexRuntimeEnvironment(
+  config: Pick<CodexSettings, "ossMode" | "ossBaseUrl">,
+  environment: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv {
+  if (!config.ossMode) return environment;
+  return {
+    ...environment,
+    // Codex's built-in `lmstudio` provider reads this process-scoped
+    // override. Keeping it on the per-instance environment avoids mutating
+    // process.env and lets loopback and LAN instances coexist safely.
+    CODEX_OSS_BASE_URL: normalizeLmStudioBaseUrl(config.ossBaseUrl),
+  };
+}
+
 export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
   driverKind: DRIVER_KIND,
   metadata: {
@@ -243,7 +262,7 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
         binaryPath: runtime.binaryPath,
         homePath: homeLayout.effectiveHomePath ?? "",
       } satisfies CodexSettings;
-      const effectiveEnvironment = runtime.env;
+      const effectiveEnvironment = resolveCodexRuntimeEnvironment(effectiveConfig, runtime.env);
       const maintenanceCapabilities =
         effectiveConfig.runtimeSource === "bundled"
           ? runtime.maintenanceCapabilities

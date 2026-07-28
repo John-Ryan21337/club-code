@@ -5,6 +5,7 @@ import {
   AuthSessionId,
   DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES,
   DEFAULT_CLIENT_SETTINGS,
+  DEFAULT_LM_STUDIO_BASE_URL,
   DEFAULT_SERVER_SETTINGS,
   EnvironmentId,
   type DesktopBridge,
@@ -2721,7 +2722,10 @@ describe("settings panels", () => {
           driver: ProviderDriverKind.make("codex"),
           enabled: true,
           displayName: "LM Studio",
-          config: { ossMode: true },
+          config: {
+            ossMode: true,
+            ossBaseUrl: "http://192.168.50.25:1234/v1",
+          },
         },
       },
     });
@@ -2747,7 +2751,17 @@ describe("settings panels", () => {
     await page.getByRole("button", { name: "Next" }).click();
     await expect.element(page.getByLabelText("Instance ID")).toHaveValue("lmstudio");
     await page.getByRole("button", { name: "Next" }).click();
-    await expect.element(page.getByText("Local LM Studio through Codex OSS")).toBeInTheDocument();
+    await expect.element(page.getByText("LM Studio through Codex OSS")).toBeInTheDocument();
+    await expect
+      .element(page.getByLabelText("LM Studio server URL"))
+      .toHaveValue(DEFAULT_LM_STUDIO_BASE_URL);
+    await page.getByLabelText("LM Studio server URL").fill("http://models.example.com/v1");
+    await page.getByRole("button", { name: "Add instance" }).click();
+    await expect
+      .element(page.getByText(/Plain HTTP is allowed only for loopback or private\/LAN hosts/))
+      .toBeInTheDocument();
+    expect(updateSettings).not.toHaveBeenCalled();
+    await page.getByLabelText("LM Studio server URL").fill("http://192.168.50.25:1234/v1");
     await page.getByRole("button", { name: "Add instance" }).click();
 
     await vi.waitFor(() => {
@@ -2757,7 +2771,10 @@ describe("settings panels", () => {
             driver: ProviderDriverKind.make("codex"),
             enabled: true,
             displayName: "LM Studio",
-            config: { ossMode: true },
+            config: {
+              ossMode: true,
+              ossBaseUrl: "http://192.168.50.25:1234/v1",
+            },
           },
         },
       });

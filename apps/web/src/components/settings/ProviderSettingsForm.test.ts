@@ -19,6 +19,7 @@ describe("ProviderSettingsForm helpers", () => {
       "runtimeSource",
       "binaryPath",
       "ossMode",
+      "ossBaseUrl",
       "homePath",
       "shadowHomePath",
       "autoCompactTokenLimit",
