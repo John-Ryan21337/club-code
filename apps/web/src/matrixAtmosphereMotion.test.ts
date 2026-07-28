@@ -1,6 +1,9 @@
+import type { FallingEffectMatrixMotionMode } from "@cafecode/contracts/settings";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  MATRIX_WALK_FONT_MAX_PX,
+  MATRIX_WALK_FONT_MIN_PX,
   drawAtmosphereScene,
   resolveAtmosphereProjectedPointInPlace,
   resolveAtmosphereRenderOpacity,
@@ -37,7 +40,7 @@ function project(
   particle: AtmosphereParticle,
   x: number,
   y: number,
-  mode: "flat" | "forward" | "reverse" | "tunnel",
+  mode: FallingEffectMatrixMotionMode,
 ): AtmosphereProjectedPoint {
   const output = { x: 0, y: 0, scale: 0 };
   resolveAtmosphereProjectedPointInPlace(output, scene, particle, x, y, mode);
@@ -49,6 +52,7 @@ function createContextRecorder() {
   const moves: Array<readonly [number, number]> = [];
   const lines: Array<readonly [number, number]> = [];
   const texts: Array<readonly [string, number, number, number | undefined]> = [];
+  const fonts: string[] = [];
   const context = {
     clearRect: vi.fn(),
     save: vi.fn(),
@@ -59,9 +63,16 @@ function createContextRecorder() {
     arc: vi.fn((x: number, y: number, radius: number) => arcs.push([x, y, radius])),
     moveTo: vi.fn((x: number, y: number) => moves.push([x, y])),
     lineTo: vi.fn((x: number, y: number) => lines.push([x, y])),
-    fillText: vi.fn((text: string, x: number, y: number, maxWidth?: number) =>
-      texts.push([text, x, y, maxWidth]),
-    ),
+    fillText: vi.fn(function (
+      this: { font: string },
+      text: string,
+      x: number,
+      y: number,
+      maxWidth?: number,
+    ) {
+      fonts.push(this.font);
+      texts.push([text, x, y, maxWidth]);
+    }),
     fillStyle: "",
     strokeStyle: "",
     globalAlpha: 1,
@@ -71,7 +82,7 @@ function createContextRecorder() {
     textBaseline: "alphabetic",
     font: "",
   } as unknown as CanvasRenderingContext2D;
-  return { context, arcs, moves, lines, texts };
+  return { context, arcs, moves, lines, texts, fonts };
 }
 
 describe("atmosphere motion projection", () => {
@@ -105,6 +116,47 @@ describe("atmosphere motion projection", () => {
       expect(nearForward.scale + nearReverse.scale).toBeCloseTo(1.99, 10);
       expect(farForward.scale + farReverse.scale).toBeCloseTo(1.99, 10);
     }
+  });
+
+  it("mirrors fluid 1.00px-to-72.00px Walk depth for every effect kind", () => {
+    for (const kind of ["snow", "rain", "matrix"] as const) {
+      const particle = createParticle();
+      const scene = createScene(kind, particle);
+      const topForward = project(scene, particle, 80, 0, "walk-forward");
+      const bottomForward = project(scene, particle, 80, scene.height, "walk-forward");
+      const topReverse = project(scene, particle, 80, 0, "walk-reverse");
+      const bottomReverse = project(scene, particle, 80, scene.height, "walk-reverse");
+
+      expect(topForward.scale * particle.size).toBeCloseTo(MATRIX_WALK_FONT_MIN_PX, 10);
+      expect(bottomForward.scale * particle.size).toBeCloseTo(MATRIX_WALK_FONT_MAX_PX, 10);
+      expect(topReverse.scale * particle.size).toBeCloseTo(MATRIX_WALK_FONT_MAX_PX, 10);
+      expect(bottomReverse.scale * particle.size).toBeCloseTo(MATRIX_WALK_FONT_MIN_PX, 10);
+      expect(topForward.y).toBe(0);
+      expect(bottomForward.y).toBe(scene.height);
+      expect(topReverse.y).toBe(0);
+      expect(bottomReverse.y).toBe(scene.height);
+
+      const intermediate = project(scene, particle, 80, scene.height * 0.432_187, "walk-forward");
+      const intermediateSize = intermediate.scale * particle.size;
+      expect(intermediateSize * 100).toBeCloseTo(Math.round(intermediateSize * 100), 10);
+    }
+  });
+
+  it("renders Walk Matrix glyphs with two-decimal endpoint font sizes", () => {
+    const particle = createParticle({ y: 0 });
+    const scene = createScene("matrix", particle);
+    const forwardTop = createContextRecorder();
+    drawAtmosphereScene(forwardTop.context, scene, "#00ff00", 0.6, undefined, "walk-forward");
+    expect(forwardTop.fonts.at(-1)).toMatch(/^1\.00px /u);
+
+    particle.y = scene.height;
+    const forwardBottom = createContextRecorder();
+    drawAtmosphereScene(forwardBottom.context, scene, "#00ff00", 0.6, undefined, "walk-forward");
+    expect(forwardBottom.fonts.at(-1)).toMatch(/^72\.00px /u);
+
+    const reverseBottom = createContextRecorder();
+    drawAtmosphereScene(reverseBottom.context, scene, "#00ff00", 0.6, undefined, "walk-reverse");
+    expect(reverseBottom.fonts.at(-1)).toMatch(/^1\.00px /u);
   });
 
   it("routes Warp from the exact center to a bounded radial far plane", () => {

@@ -92,6 +92,10 @@ const MATRIX_WORK_TOKEN_PROBABILITY = 0.34;
 const MATRIX_PERSPECTIVE_FONT_MIN_PX = 8;
 const MATRIX_PERSPECTIVE_FONT_MAX_PX = 24;
 const MATRIX_PERSPECTIVE_FONT_STEP_PX = 0.5;
+export const MATRIX_WALK_FONT_MIN_PX = 1;
+export const MATRIX_WALK_FONT_MAX_PX = 72;
+export const MATRIX_WALK_FONT_STEP_PX = 0.01;
+const MATRIX_FONT_FAMILY = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
 const MATRIX_PERSPECTIVE_FONTS = Array.from(
   {
     length:
@@ -100,8 +104,16 @@ const MATRIX_PERSPECTIVE_FONTS = Array.from(
       1,
   },
   (_, index) =>
-    `${MATRIX_PERSPECTIVE_FONT_MIN_PX + index * MATRIX_PERSPECTIVE_FONT_STEP_PX}px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace`,
+    `${MATRIX_PERSPECTIVE_FONT_MIN_PX + index * MATRIX_PERSPECTIVE_FONT_STEP_PX}px ${MATRIX_FONT_FAMILY}`,
 );
+const MATRIX_WALK_FONT_COUNT =
+  Math.round((MATRIX_WALK_FONT_MAX_PX - MATRIX_WALK_FONT_MIN_PX) / MATRIX_WALK_FONT_STEP_PX) + 1;
+/**
+ * Walk modes may address 7,101 two-decimal font sizes. Populate that bounded
+ * table lazily so ordinary Flat/Forward/Reverse/Warp sessions pay no startup
+ * or allocation cost for sizes they never render.
+ */
+const MATRIX_WALK_FONTS: Array<string | undefined> = [];
 
 export interface AtmosphereParticle {
   x: number;
@@ -597,10 +609,27 @@ function resolveMatrixPerspectiveFont(size: number, scale: number): string {
   return MATRIX_PERSPECTIVE_FONTS[index]!;
 }
 
+function quantizeMatrixWalkFontSize(requestedSize: number): number {
+  const safeSize = Number.isFinite(requestedSize) ? requestedSize : MATRIX_WALK_FONT_MIN_PX;
+  const index = Math.min(
+    MATRIX_WALK_FONT_COUNT - 1,
+    Math.max(0, Math.round((safeSize - MATRIX_WALK_FONT_MIN_PX) / MATRIX_WALK_FONT_STEP_PX)),
+  );
+  return MATRIX_WALK_FONT_MIN_PX + index * MATRIX_WALK_FONT_STEP_PX;
+}
+
+function resolveMatrixWalkFont(size: number, scale: number): string {
+  const fontSize = quantizeMatrixWalkFontSize(size * scale);
+  const index = Math.round((fontSize - MATRIX_WALK_FONT_MIN_PX) / MATRIX_WALK_FONT_STEP_PX);
+  return (MATRIX_WALK_FONTS[index] ??= `${fontSize.toFixed(2)}px ${MATRIX_FONT_FAMILY}`);
+}
+
 /**
  * Applies the reviewed forward/Warp geometry to every atmosphere kind. The
  * output object is caller-owned so the draw loop performs no per-particle
  * allocation. Reverse mirrors the depth ramp while preserving falling motion.
+ * Walk modes retain that geometry but expand the visual size across a
+ * two-decimal 1px-to-72px range before normal canvas clipping and recycling.
  */
 export function resolveAtmosphereProjectedPointInPlace(
   output: AtmosphereProjectedPoint,
@@ -628,12 +657,27 @@ export function resolveAtmosphereProjectedPointInPlace(
     Math.max(0, (safeY + verticalMargin) / Math.max(1, scene.height + verticalMargin * 2)),
   );
 
-  if (motionMode === "forward" || motionMode === "reverse") {
-    const projectedDepth = motionMode === "reverse" ? 1 - depth : depth;
+  if (
+    motionMode === "forward" ||
+    motionMode === "reverse" ||
+    motionMode === "walk-forward" ||
+    motionMode === "walk-reverse"
+  ) {
+    const reverse = motionMode === "reverse" || motionMode === "walk-reverse";
+    const walk = motionMode === "walk-forward" || motionMode === "walk-reverse";
+    const geometryDepth = walk
+      ? Math.min(1, Math.max(0, safeY / Math.max(1, scene.height)))
+      : depth;
+    const projectedDepth = reverse ? 1 - geometryDepth : geometryDepth;
     const perspectiveScale = 0.58 + projectedDepth * 0.72;
     output.x = scene.width * 0.5 + (safeX - scene.width * 0.5) * perspectiveScale;
     output.y = safeY;
-    output.scale = 0.72 + projectedDepth * 0.55;
+    output.scale = walk
+      ? quantizeMatrixWalkFontSize(
+          MATRIX_WALK_FONT_MIN_PX +
+            projectedDepth * (MATRIX_WALK_FONT_MAX_PX - MATRIX_WALK_FONT_MIN_PX),
+        ) / Math.max(MATRIX_WALK_FONT_MIN_PX, particle.size)
+      : 0.72 + projectedDepth * 0.55;
     return;
   }
 
@@ -729,7 +773,7 @@ export function drawAtmosphereScene(
           : resolveMatrixStreamColor(matrixColorFrame, particle);
       if (motionMode === "flat") {
         const fontSize = Math.min(MAX_MATRIX_TOKEN_FONT_SIZE, particle.size);
-        context.font = `${fontSize}px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace`;
+        context.font = `${fontSize}px ${MATRIX_FONT_FAMILY}`;
       }
       for (let trailIndex = 7; trailIndex >= 0; trailIndex -= 1) {
         const sourceY = particle.y - trailIndex * particle.size;
@@ -741,7 +785,9 @@ export function drawAtmosphereScene(
           sourceY,
           motionMode,
         );
-        if (motionMode !== "flat") {
+        if (motionMode === "walk-forward" || motionMode === "walk-reverse") {
+          context.font = resolveMatrixWalkFont(particle.size, projectedFrom.scale);
+        } else if (motionMode !== "flat") {
           context.font = resolveMatrixPerspectiveFont(particle.size, projectedFrom.scale);
         }
         const glyphIndex =

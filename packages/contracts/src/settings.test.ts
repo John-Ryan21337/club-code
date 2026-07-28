@@ -541,7 +541,14 @@ describe("client settings", () => {
         fallingEffectActivityLinkColorMode,
       });
     }
-    for (const fallingEffectMatrixMotionMode of ["flat", "forward", "reverse", "tunnel"] as const) {
+    for (const fallingEffectMatrixMotionMode of [
+      "flat",
+      "forward",
+      "reverse",
+      "tunnel",
+      "walk-forward",
+      "walk-reverse",
+    ] as const) {
       expect(decodeClientSettingsPatch({ fallingEffectMatrixMotionMode })).toEqual({
         fallingEffectMatrixMotionMode,
       });

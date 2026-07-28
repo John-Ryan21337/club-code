@@ -54,6 +54,8 @@ describe("WindowAtmosphereSettings motion", () => {
         ["Forward", "forward"],
         ["Reverse", "reverse"],
         ["Warp", "tunnel"],
+        ["Walk Forward", "walk-forward"],
+        ["Walk Reverse", "walk-reverse"],
       ] as const) {
         const choice = page.getByRole("radio", { name: label, exact: true });
         await expect.element(choice).toBeInTheDocument();

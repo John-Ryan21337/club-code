@@ -235,7 +235,7 @@ export function WindowAtmosphereSettings() {
       {controlsEnabled ? (
         <SettingsRow
           title="Atmosphere motion"
-          description="Flat preserves classic falling geometry. Forward and Reverse add depth travel; Warp sends the same particles through a bounded center tunnel."
+          description="Flat preserves classic falling geometry. Forward and Reverse add subtle depth travel; Warp sends the same particles through a bounded center tunnel. Walk Forward and Walk Reverse add fluid 1px-to-72px near/far scaling."
           control={
             <RadioGroup
               value={settings.fallingEffectMatrixMotionMode}
@@ -244,7 +244,9 @@ export function WindowAtmosphereSettings() {
                   value === "flat" ||
                   value === "forward" ||
                   value === "reverse" ||
-                  value === "tunnel"
+                  value === "tunnel" ||
+                  value === "walk-forward" ||
+                  value === "walk-reverse"
                 ) {
                   updateSettings({ fallingEffectMatrixMotionMode: value });
                 }
@@ -258,6 +260,8 @@ export function WindowAtmosphereSettings() {
                   ["forward", "Forward"],
                   ["reverse", "Reverse"],
                   ["tunnel", "Warp"],
+                  ["walk-forward", "Walk Forward"],
+                  ["walk-reverse", "Walk Reverse"],
                 ] as const
               ).map(([value, label]) => (
                 <label
