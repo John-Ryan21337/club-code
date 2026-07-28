@@ -224,6 +224,19 @@ Important files:
 
 Cafe Code's Codex adapter uses `codex app-server`, which speaks JSON-RPC over stdio by default. Official docs describe the app-server protocol as JSON-RPC-like messages where requests have `id`, responses echo the `id`, and notifications omit `id`. The official app-server websocket listener is experimental/unsupported; Cafe should keep using stdio JSONL for local app-server control unless upstream changes that recommendation.
 
+Codex OSS instances may use the pinned built-in LM Studio provider by launching
+`codex --oss --local-provider lmstudio` and setting `CODEX_OSS_BASE_URL` only in that provider
+instance's child-process environment. Never mutate the backend's global `process.env`: the same
+instance-scoped environment must reach status/model discovery, app-server sessions, and
+`codex exec` text generation so cloud Codex and multiple LM Studio endpoints can coexist. The
+default endpoint is `http://127.0.0.1:1234/v1`. Because endpoint validation is syntax-only and
+cannot pin DNS, plain HTTP may target only `localhost` or a literal loopback/RFC1918/ULA address
+(with known metadata endpoints excluded); DNS names require HTTPS so normal certificate
+verification authenticates the destination. Plain HTTP remains unencrypted even on a private
+network. The pinned built-in provider has no `env_key` or bearer-token hook, so do not claim that
+it supports LM Studio's Require Authentication mode, and do not describe HTTPS as client
+authorization. Use loopback or a separately protected private network, VPN, or firewall.
+
 Codex threads receive the process-local embedded-browser MCP server through per-thread
 `mcp_servers.club_browser` config. Keep the bearer credential in the child-only
 `CAFE_CODE_AGENT_BROWSER_MCP_AUTHORIZATION` environment variable referenced by

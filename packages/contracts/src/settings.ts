@@ -1128,35 +1128,26 @@ function isPrivateOrLoopbackIpv4(hostname: string): boolean {
     octets[0] === 10 ||
     octets[0] === 127 ||
     (octets[0] === 172 && octets[1]! >= 16 && octets[1]! <= 31) ||
-    (octets[0] === 192 && octets[1] === 168) ||
-    (octets[0] === 169 && octets[1] === 254) ||
-    (octets[0] === 100 && octets[1]! >= 64 && octets[1]! <= 127)
+    (octets[0] === 192 && octets[1] === 168)
   );
 }
 
 function isPrivateOrLoopbackIpv6(hostname: string): boolean {
   const normalized = hostname.replace(/^\[|\]$/gu, "").toLowerCase();
   if (normalized === "::1") return true;
+  // AWS exposes instance metadata at this IPv6 ULA. It is never a valid
+  // default LM Studio target, and allowing it would turn the provider status
+  // probe into a local SSRF primitive.
+  if (normalized === "fd00:ec2::254") return false;
   const firstSegment = normalized.split(":")[0] ?? "";
   const firstValue = Number.parseInt(firstSegment, 16);
-  return (
-    (Number.isFinite(firstValue) && firstValue >= 0xfc00 && firstValue <= 0xfdff) ||
-    (Number.isFinite(firstValue) && firstValue >= 0xfe80 && firstValue <= 0xfebf)
-  );
+  return Number.isFinite(firstValue) && firstValue >= 0xfc00 && firstValue <= 0xfdff;
 }
 
 function isPrivateOrLoopbackLmStudioHost(hostname: string): boolean {
   const normalized = hostname.toLowerCase();
   return (
     normalized === "localhost" ||
-    normalized.endsWith(".localhost") ||
-    normalized === "host.docker.internal" ||
-    normalized === "gateway.docker.internal" ||
-    !normalized.includes(".") ||
-    normalized.endsWith(".local") ||
-    normalized.endsWith(".lan") ||
-    normalized.endsWith(".home") ||
-    normalized.endsWith(".home.arpa") ||
     isPrivateOrLoopbackIpv4(normalized) ||
     isPrivateOrLoopbackIpv6(normalized)
   );
@@ -1164,9 +1155,13 @@ function isPrivateOrLoopbackLmStudioHost(hostname: string): boolean {
 
 /**
  * Validate an LM Studio OpenAI-compatible API root without performing DNS or
- * network I/O. Plain HTTP is intentionally limited to loopback/private LAN
- * hosts because prompts and workspace context cross this endpoint. Public
- * hosts remain available over HTTPS.
+ * network I/O. Plain HTTP is intentionally limited to localhost or literal
+ * loopback/RFC1918/ULA addresses because prompts and workspace context cross
+ * this endpoint. Hostnames (including single-label and mDNS-style names) are
+ * rejected over HTTP: a syntax-only check cannot prove their resolution stays
+ * private, so accepting them would make the "private network" boundary
+ * vulnerable to DNS rebinding. Hostnames remain available over HTTPS, where
+ * normal certificate verification authenticates the selected endpoint.
  */
 export function validateLmStudioBaseUrl(value: string): string | null {
   const trimmed = value.trim();
@@ -1192,7 +1187,7 @@ export function validateLmStudioBaseUrl(value: string): string | null {
     return "LM Studio server URL must not contain a query string or fragment.";
   }
   if (url.protocol === "http:" && !isPrivateOrLoopbackLmStudioHost(url.hostname)) {
-    return "Plain HTTP is allowed only for loopback or private/LAN hosts. Use HTTPS for other hosts.";
+    return "Plain HTTP is allowed only for localhost or a literal private/loopback IP address. Use an IP address or HTTPS so DNS cannot redirect the endpoint.";
   }
 
   const pathname = url.pathname.replace(/\/+$/gu, "");
@@ -1261,7 +1256,7 @@ export const CodexSettings = makeProviderSettingsSchema(
       Schema.annotateKey({
         title: "LM Studio server URL",
         description:
-          "OpenAI-compatible API root for LM Studio. Supports loopback and private/LAN HTTP addresses, plus HTTPS endpoints. Codex's built-in LM Studio provider cannot send LM Studio API tokens, so protect network access with a trusted private network, VPN, or firewall.",
+          "OpenAI-compatible API root for LM Studio. Plain HTTP accepts localhost or literal private/LAN IP addresses; hostnames require HTTPS to prevent DNS redirection. Codex's built-in LM Studio provider cannot send LM Studio API tokens, so protect network access with a trusted private network, VPN, or firewall.",
         providerSettingsForm: {
           placeholder: DEFAULT_LM_STUDIO_BASE_URL,
           clearWhenEmpty: "omit",

@@ -139,7 +139,7 @@ export function AddProviderInstanceDialog({ open, onOpenChange }: AddProviderIns
       ? configDraft.ossBaseUrl
       : DEFAULT_LM_STUDIO_BASE_URL;
   const lmStudioBaseUrlError =
-    templateId === LM_STUDIO_PROVIDER_TEMPLATE_ID ? validateLmStudioBaseUrl(lmStudioBaseUrl) : null;
+    driver === DEFAULT_DRIVER_KIND ? validateLmStudioBaseUrl(lmStudioBaseUrl) : null;
   const showLmStudioBaseUrlError = hasAttemptedSubmit && lmStudioBaseUrlError !== null;
   const setConfigDraft = useCallback(
     (config: Record<string, unknown> | undefined) => {
@@ -433,8 +433,10 @@ export function AddProviderInstanceDialog({ open, onOpenChange }: AddProviderIns
                         LAN address such as <code>http://192.168.1.50:1234/v1</code>. Workspace
                         context is sent to this endpoint. Codex&apos;s built-in LM Studio provider
                         cannot send LM Studio API tokens, so an endpoint with LM Studio&apos;s
-                        Require Authentication enabled will reject it. Use loopback or protect
-                        network access with a trusted private network, VPN, or firewall.
+                        Require Authentication enabled will reject it. Plain HTTP is unencrypted and
+                        accepts only localhost or a literal private IP so DNS cannot redirect the
+                        endpoint. Use loopback or protect network access with a trusted private
+                        network, VPN, or firewall.
                       </span>
                     )}
                   </label>
@@ -448,6 +450,9 @@ export function AddProviderInstanceDialog({ open, onOpenChange }: AddProviderIns
                     variant="dialog"
                     onChange={setConfigDraft}
                   />
+                  {showLmStudioBaseUrlError && driver === DEFAULT_DRIVER_KIND ? (
+                    <span className="text-[11px] text-destructive">{lmStudioBaseUrlError}</span>
+                  ) : null}
                 </div>
               ) : wizardStep === 2 ? (
                 <div className="grid gap-2">

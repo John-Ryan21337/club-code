@@ -8,6 +8,7 @@ import {
   readProviderConfigBoolean,
   readProviderConfigNumber,
   readProviderConfigString,
+  validateProviderSettingsFieldValue,
 } from "./ProviderSettingsForm";
 
 describe("ProviderSettingsForm helpers", () => {
@@ -294,5 +295,22 @@ describe("ProviderSettingsForm helpers", () => {
         200_000,
       ),
     ).toBe(200_000);
+  });
+
+  it("rejects an unsafe LM Studio URL before an existing instance config is replaced", () => {
+    const codex = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("codex")];
+    expect(codex).toBeDefined();
+    const field = deriveProviderSettingsFields(codex!).find(
+      (candidate) => candidate.key === "ossBaseUrl",
+    );
+    expect(field).toBeDefined();
+
+    expect(validateProviderSettingsFieldValue(field!, "http://models.example.com/v1")).toMatch(
+      /literal private\/loopback IP/,
+    );
+    expect(validateProviderSettingsFieldValue(field!, "http://192.168.20.15:1234/v1")).toBeNull();
+    // Clearing an optional stored override intentionally restores the decoded
+    // loopback default instead of persisting an invalid empty value.
+    expect(validateProviderSettingsFieldValue(field!, "")).toBeNull();
   });
 });

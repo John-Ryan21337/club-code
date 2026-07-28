@@ -2758,7 +2758,7 @@ describe("settings panels", () => {
     await page.getByLabelText("LM Studio server URL").fill("http://models.example.com/v1");
     await page.getByRole("button", { name: "Add instance" }).click();
     await expect
-      .element(page.getByText(/Plain HTTP is allowed only for loopback or private\/LAN hosts/))
+      .element(page.getByText(/Plain HTTP is allowed only for localhost or a literal private/))
       .toBeInTheDocument();
     expect(updateSettings).not.toHaveBeenCalled();
     await page.getByLabelText("LM Studio server URL").fill("http://192.168.50.25:1234/v1");
@@ -2778,6 +2778,105 @@ describe("settings panels", () => {
           },
         },
       });
+    });
+  });
+
+  it("keeps an existing LM Studio instance intact when its edited URL is unsafe", async () => {
+    const updateSettings = vi.fn<LocalApi["server"]["updateSettings"]>().mockResolvedValue({
+      ...DEFAULT_SERVER_SETTINGS,
+    });
+    window.nativeApi = {
+      persistence: {
+        getClientSettings: vi.fn().mockResolvedValue(null),
+        setClientSettings: vi.fn().mockResolvedValue(undefined),
+      },
+      server: {
+        updateSettings,
+      },
+    } as unknown as LocalApi;
+    setServerConfigSnapshot({
+      ...createBaseServerConfig(),
+      settings: {
+        ...DEFAULT_SERVER_SETTINGS,
+        providerInstances: {
+          [ProviderInstanceId.make("lmstudio")]: {
+            driver: ProviderDriverKind.make("codex"),
+            enabled: true,
+            displayName: "LM Studio",
+            config: {
+              ossMode: true,
+              ossBaseUrl: "http://192.168.50.25:1234/v1",
+            },
+          },
+        },
+      },
+    });
+
+    mounted = await render(
+      <AppAtomRegistryProvider>
+        <ProviderSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    await page.getByRole("button", { name: "Open LM Studio settings" }).click();
+    await page.getByLabelText("LM Studio server URL").fill("http://models.example.com/v1");
+    await page.getByText("New chat defaults and configuration for this provider instance.").click();
+
+    await expect
+      .element(page.getByText(/Plain HTTP is allowed only for localhost or a literal private/))
+      .toBeInTheDocument();
+    expect(updateSettings).not.toHaveBeenCalled();
+  });
+
+  it("shows Codex reset availability above the reset schedule", async () => {
+    const codexProvider: ServerProvider = {
+      ...createOutdatedProvider("codex"),
+      accountRateLimits: {
+        checkedAt: "2026-07-27T00:00:00.000Z",
+        rateLimits: {
+          limitId: "codex",
+          primary: {
+            usedPercent: 25,
+            windowDurationMins: 300,
+            resetsAt: 1_784_944_800,
+          },
+          secondary: {
+            usedPercent: 50,
+            windowDurationMins: 10_080,
+            resetsAt: 1_785_549_600,
+          },
+        },
+        rateLimitResetCredits: {
+          availableCount: 2,
+          credits: null,
+        },
+      },
+    };
+    setServerConfigSnapshot({
+      ...createBaseServerConfig(),
+      providers: [codexProvider],
+    });
+
+    mounted = await render(
+      <AppAtomRegistryProvider>
+        <ProviderSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    await expect
+      .element(page.getByText("Usage limit resets available: 2", { exact: true }))
+      .toBeInTheDocument();
+    await vi.waitFor(() => {
+      const lines = Array.from(document.querySelectorAll<HTMLParagraphElement>("p"));
+      const availabilityIndex = lines.findIndex(
+        (line) => line.textContent === "Usage limit resets available: 2",
+      );
+      const resetScheduleIndex = lines.findIndex((line) =>
+        line.textContent?.includes("Weekly reset:"),
+      );
+
+      expect(availabilityIndex).toBeGreaterThanOrEqual(0);
+      expect(resetScheduleIndex).toBeGreaterThan(availabilityIndex);
     });
   });
 

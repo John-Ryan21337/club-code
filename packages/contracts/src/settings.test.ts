@@ -1065,7 +1065,7 @@ describe("provider settings", () => {
     });
   });
 
-  it("accepts loopback, LAN, and HTTPS LM Studio API roots and normalizes /v1", () => {
+  it("accepts literal loopback, private LAN, and HTTPS LM Studio API roots", () => {
     for (const value of [
       "http://localhost:1234/v1",
       "http://127.0.0.1:1234",
@@ -1073,12 +1073,8 @@ describe("provider settings", () => {
       "http://172.16.0.1:1234/v1",
       "http://172.31.255.254:1234/v1",
       "http://192.168.1.25:1234/v1",
-      "http://lm-workstation:1234/v1",
-      "http://lm-workstation.local:1234/v1/",
-      "http://host.docker.internal:1234/v1",
       "http://[::1]:1234/v1",
       "http://[fd00::25]:1234/v1",
-      "http://[fe80::25]:1234/v1",
       "https://models.example.com/team/v1",
     ]) {
       expect(validateLmStudioBaseUrl(value), value).toBeNull();
@@ -1097,10 +1093,18 @@ describe("provider settings", () => {
       "http://user:secret@127.0.0.1:1234/v1",
       "http://127.0.0.1:1234/v1?token=secret",
       "http://public.example.com:1234/v1",
+      "http://lm-workstation:1234/v1",
+      "http://lm-workstation.local:1234/v1",
+      "http://host.docker.internal:1234/v1",
+      "http://100.100.100.200:1234/v1",
+      "http://169.254.169.254:1234/v1",
+      "http://[fe80::25]:1234/v1",
+      "http://[fd00:ec2::254]:1234/v1",
       "http://192.168.1.25:1234/not-the-api-root",
     ]) {
       expect(() => decodeCodexSettings({ ossBaseUrl: value }), value).toThrow();
     }
+    expect(validateLmStudioBaseUrl("http://lm-workstation:1234/v1")).toMatch(/DNS/);
     expect(decodeCodexSettings({ ossBaseUrl: "https://public.example.com/v1" }).ossBaseUrl).toBe(
       "https://public.example.com/v1",
     );
