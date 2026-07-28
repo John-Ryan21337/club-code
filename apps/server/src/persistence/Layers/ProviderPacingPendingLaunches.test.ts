@@ -36,6 +36,59 @@ layer("ProviderPacingPendingLaunchRepository", (it) => {
     }),
   );
 
+  it.effect("claims one immutable source atomically without replacing the winner", () =>
+    Effect.gen(function* () {
+      const repository = yield* ProviderPacingPendingLaunchRepository;
+      const winner = {
+        sourceEventId: EventId.make("event-claim-winner"),
+        sourceSequence: 47,
+        threadId: ThreadId.make("thread-claim"),
+        providerInstanceId: claudeInstanceId,
+        dispatchSource: "user" as const,
+        requestedAt: "2026-07-26T17:00:00.000Z",
+      };
+      const loser = {
+        ...winner,
+        sourceEventId: EventId.make("event-claim-loser"),
+        sourceSequence: 48,
+        requestedAt: "2026-07-26T17:00:01.000Z",
+      };
+
+      assert.isTrue(yield* repository.insertIfAbsent(winner));
+      assert.isFalse(yield* repository.insertIfAbsent(loser));
+      assert.deepStrictEqual(
+        Option.getOrNull(yield* repository.getByThreadId({ threadId: winner.threadId })),
+        winner,
+      );
+      yield* repository.deleteByThreadId({ threadId: winner.threadId });
+    }),
+  );
+
+  it.effect("allows only one concurrent claimant for the same source event", () =>
+    Effect.gen(function* () {
+      const repository = yield* ProviderPacingPendingLaunchRepository;
+      const sourceEventId = EventId.make("event-concurrent-claim");
+      const sourceSequence = 49;
+      const results = yield* Effect.all(
+        [ThreadId.make("thread-claim-a"), ThreadId.make("thread-claim-b")].map((threadId) =>
+          repository.insertIfAbsent({
+            sourceEventId,
+            sourceSequence,
+            threadId,
+            providerInstanceId: claudeInstanceId,
+            dispatchSource: "user",
+            requestedAt: "2026-07-26T17:00:00.000Z",
+          }),
+        ),
+        { concurrency: "unbounded" },
+      );
+
+      assert.deepStrictEqual(results.toSorted(), [false, true]);
+      yield* repository.deleteByThreadId({ threadId: ThreadId.make("thread-claim-a") });
+      yield* repository.deleteByThreadId({ threadId: ThreadId.make("thread-claim-b") });
+    }),
+  );
+
   it.effect("replaces one thread atomically and lists waits in requested order", () =>
     Effect.gen(function* () {
       const repository = yield* ProviderPacingPendingLaunchRepository;

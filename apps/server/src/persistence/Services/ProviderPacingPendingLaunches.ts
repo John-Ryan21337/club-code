@@ -29,6 +29,13 @@ export const GetProviderPacingPendingLaunchInput = Schema.Struct({
 export type GetProviderPacingPendingLaunchInput = typeof GetProviderPacingPendingLaunchInput.Type;
 
 export interface ProviderPacingPendingLaunchRepositoryShape {
+  /**
+   * Atomically claims the durable slot for one manual launch. Returns false
+   * when either the thread or immutable source event is already claimed.
+   */
+  readonly insertIfAbsent: (
+    launch: ProviderPacingPendingLaunch,
+  ) => Effect.Effect<boolean, ProjectionRepositoryError>;
   readonly upsert: (
     launch: ProviderPacingPendingLaunch,
   ) => Effect.Effect<void, ProjectionRepositoryError>;

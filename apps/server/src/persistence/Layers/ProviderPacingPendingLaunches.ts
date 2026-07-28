@@ -1,5 +1,6 @@
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
@@ -14,6 +15,32 @@ import {
 
 const makeProviderPacingPendingLaunchRepository = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
+
+  const insertPendingLaunchIfAbsent = SqlSchema.findOneOption({
+    Request: ProviderPacingPendingLaunch,
+    Result: Schema.Struct({ threadId: ProviderPacingPendingLaunch.fields.threadId }),
+    execute: (launch) =>
+      sql`
+        INSERT INTO provider_pacing_pending_launches (
+          thread_id,
+          source_event_id,
+          source_sequence,
+          provider_instance_id,
+          dispatch_source,
+          requested_at
+        )
+        VALUES (
+          ${launch.threadId},
+          ${launch.sourceEventId},
+          ${launch.sourceSequence},
+          ${launch.providerInstanceId},
+          ${launch.dispatchSource},
+          ${launch.requestedAt}
+        )
+        ON CONFLICT DO NOTHING
+        RETURNING thread_id AS "threadId"
+      `,
+  });
 
   const upsertPendingLaunch = SqlSchema.void({
     Request: ProviderPacingPendingLaunch,
@@ -92,6 +119,13 @@ const makeProviderPacingPendingLaunchRepository = Effect.gen(function* () {
     upsertPendingLaunch(launch).pipe(
       Effect.mapError(toPersistenceSqlError("ProviderPacingPendingLaunchRepository.upsert:query")),
     );
+  const insertIfAbsent: ProviderPacingPendingLaunchRepositoryShape["insertIfAbsent"] = (launch) =>
+    insertPendingLaunchIfAbsent(launch).pipe(
+      Effect.map(Option.isSome),
+      Effect.mapError(
+        toPersistenceSqlError("ProviderPacingPendingLaunchRepository.insertIfAbsent:query"),
+      ),
+    );
   const getByThreadId: ProviderPacingPendingLaunchRepositoryShape["getByThreadId"] = (input) =>
     getPendingLaunch(input).pipe(
       Effect.mapError(
@@ -113,6 +147,7 @@ const makeProviderPacingPendingLaunchRepository = Effect.gen(function* () {
     );
 
   return {
+    insertIfAbsent,
     upsert,
     getByThreadId,
     listAll,
