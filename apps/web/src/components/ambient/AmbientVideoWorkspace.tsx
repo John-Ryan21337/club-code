@@ -176,38 +176,84 @@ function useRetainedElementRect(
   relativeTo: HTMLElement | null,
   containerRect: MeasuredRect | null,
 ): MeasuredRect | null {
-  const measuredRect = useElementRect(element, relativeTo);
-  const [retainedRect, setRetainedRect] = useState<NormalizedMeasuredRect | null>(null);
+  const [measurement, setMeasurement] = useState<{
+    readonly measuredRect: MeasuredRect | null;
+    readonly retainedRect: NormalizedMeasuredRect | null;
+  }>({
+    measuredRect: null,
+    retainedRect: null,
+  });
 
   useLayoutEffect(() => {
-    if (
-      measuredRect === null ||
-      containerRect === null ||
-      containerRect.width <= 0 ||
-      containerRect.height <= 0
-    ) {
+    if (!element || !relativeTo) {
+      setMeasurement((current) =>
+        current.measuredRect === null ? current : { ...current, measuredRect: null },
+      );
       return;
     }
-    const next = {
-      x: (measuredRect.left - containerRect.left) / containerRect.width,
-      y: (measuredRect.top - containerRect.top) / containerRect.height,
-      width: measuredRect.width / containerRect.width,
-      height: measuredRect.height / containerRect.height,
-    };
-    setRetainedRect((current) => (sameNormalizedRect(current, next) ? current : next));
-  }, [containerRect, measuredRect]);
 
-  if (measuredRect !== null) {
-    return measuredRect;
+    let frame = 0;
+    const measure = () => {
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => {
+        const elementRect = element.getBoundingClientRect();
+        const rootRect = relativeTo.getBoundingClientRect();
+        const measuredRect = {
+          left: elementRect.left - rootRect.left,
+          top: elementRect.top - rootRect.top,
+          width: elementRect.width,
+          height: elementRect.height,
+        };
+        const retainedRect =
+          rootRect.width > 0 && rootRect.height > 0
+            ? {
+                x: measuredRect.left / rootRect.width,
+                y: measuredRect.top / rootRect.height,
+                width: measuredRect.width / rootRect.width,
+                height: measuredRect.height / rootRect.height,
+              }
+            : null;
+
+        setMeasurement((current) => {
+          const measuredRectUnchanged = sameRect(current.measuredRect, measuredRect);
+          const retainedRectUnchanged =
+            retainedRect === null || sameNormalizedRect(current.retainedRect, retainedRect);
+          if (measuredRectUnchanged && retainedRectUnchanged) {
+            return current;
+          }
+          return {
+            measuredRect,
+            retainedRect: retainedRect ?? current.retainedRect,
+          };
+        });
+      });
+    };
+
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    if (element !== relativeTo) {
+      observer.observe(relativeTo);
+    }
+    window.addEventListener("resize", measure);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      observer.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [element, relativeTo]);
+
+  if (measurement.measuredRect !== null) {
+    return measurement.measuredRect;
   }
-  if (retainedRect === null || containerRect === null) {
+  if (measurement.retainedRect === null || containerRect === null) {
     return null;
   }
   return {
-    left: containerRect.left + retainedRect.x * containerRect.width,
-    top: containerRect.top + retainedRect.y * containerRect.height,
-    width: retainedRect.width * containerRect.width,
-    height: retainedRect.height * containerRect.height,
+    left: containerRect.left + measurement.retainedRect.x * containerRect.width,
+    top: containerRect.top + measurement.retainedRect.y * containerRect.height,
+    width: measurement.retainedRect.width * containerRect.width,
+    height: measurement.retainedRect.height * containerRect.height,
   };
 }
 
