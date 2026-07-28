@@ -2100,17 +2100,18 @@ export function ProviderSettingsPanel() {
               <TooltipTrigger
                 render={
                   <Button
-                    size="icon-xs"
-                    variant="ghost"
-                    className="size-5 rounded-sm p-0 text-muted-foreground hover:text-foreground"
+                    size="xs"
+                    variant="outline"
+                    className="h-7 gap-1.5 px-2 text-xs"
                     onClick={() => setIsAddInstanceDialogOpen(true)}
                     aria-label="Add provider instance"
                   >
                     <PlusIcon className="size-3" />
+                    <span>Add provider</span>
                   </Button>
                 }
               />
-              <TooltipPopup side="top">Add provider instance</TooltipPopup>
+              <TooltipPopup side="top">Add Codex, Claude, OpenCode, or LM Studio</TooltipPopup>
             </Tooltip>
             <Tooltip>
               <TooltipTrigger

@@ -2746,7 +2746,9 @@ describe("settings panels", () => {
       </AppAtomRegistryProvider>,
     );
 
-    await page.getByRole("button", { name: "Add provider instance" }).click();
+    const addProviderButton = page.getByRole("button", { name: "Add provider instance" });
+    await expect.element(addProviderButton).toHaveTextContent("Add provider");
+    await addProviderButton.click();
     await page.getByText("LM Studio", { exact: true }).click();
     await page.getByRole("button", { name: "Next" }).click();
     await expect.element(page.getByLabelText("Instance ID")).toHaveValue("lmstudio");
