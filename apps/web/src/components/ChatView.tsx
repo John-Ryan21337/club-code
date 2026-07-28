@@ -189,6 +189,7 @@ import {
 import {
   AUTO_NUDGE_DELAY_MS,
   AutoNudgeTimerController,
+  type AutoNudgeMode,
   autoNudgePromptForMode,
   canDispatchAutoNudge,
   canScheduleAutoNudge,
@@ -2237,92 +2238,6 @@ export default function ChatView(props: ChatViewProps) {
   );
   const isServerThread = routeKind === "server" && serverThread !== undefined;
   const activeThread = isServerThread ? serverThread : localDraftThread;
-  const autoNudgeThreadRef = useMemo(
-    () =>
-      routeKind === "server"
-        ? { environmentId: String(environmentId), threadId: String(threadId) }
-        : null,
-    [environmentId, routeKind, threadId],
-  );
-  const autoNudgePolicy = useAutoNudgeThreadPolicy(autoNudgeThreadRef);
-  const backgroundAutoNudgeState = useBackgroundAutoNudgeState();
-  const backgroundAutoNudgeOwnerForRoute =
-    autoNudgeThreadRef !== null &&
-    isBackgroundAutoNudgeOwner(backgroundAutoNudgeState, autoNudgeThreadRef);
-  const backgroundAutoNudgeLastOwnerForRoute =
-    autoNudgeThreadRef !== null &&
-    isLastBackgroundAutoNudgeOwner(backgroundAutoNudgeState, autoNudgeThreadRef);
-  const [autoNudgeCountdownSeconds, setAutoNudgeCountdownSeconds] = useState<number | null>(null);
-  const [autoNudgeActivityRevision, setAutoNudgeActivityRevision] = useState(0);
-  const autoNudgeLedgerRef = useRef(getAutoNudgeTurnLedger());
-  const autoNudgeTerminalTurnKeyRef = useRef<string | null>(null);
-  const [autoNudgeTimerController] = useState(
-    () =>
-      new AutoNudgeTimerController({
-        now: () => Date.now(),
-        setTimeout: (callback, delayMs) => window.setTimeout(callback, delayMs),
-        clearTimeout: (timer) => window.clearTimeout(timer),
-        setInterval: (callback, intervalMs) => window.setInterval(callback, intervalMs),
-        clearInterval: (timer) => window.clearInterval(timer),
-      }),
-  );
-  const runAutoNudgeMutation = useCallback(
-    async (mutation: () => void | Promise<void>): Promise<void> => {
-      if (!supportsAutoNudgeExecutionLock()) {
-        await mutation();
-        return;
-      }
-      let ranMutation = false;
-      try {
-        await navigator.locks.request(
-          AUTO_NUDGE_EXECUTION_LOCK_NAME,
-          { mode: "exclusive" },
-          async (lock) => {
-            if (!lock) return;
-            ranMutation = true;
-            await mutation();
-          },
-        );
-      } catch {
-        // Automatic execution also fails closed when the lock service is
-        // unhealthy. Preserve the operator's local Off/policy action.
-        if (!ranMutation) await mutation();
-      }
-    },
-    [],
-  );
-  const cancelScheduledAutoNudge = useCallback(
-    (consumeScheduledTurn: boolean) => {
-      const scheduledTurnKey = autoNudgeTimerController.scheduledTurnKey;
-      if (consumeScheduledTurn && scheduledTurnKey) {
-        autoNudgeLedgerRef.current.mark(scheduledTurnKey);
-      }
-      autoNudgeTimerController.cancel();
-      setAutoNudgeCountdownSeconds(null);
-    },
-    [autoNudgeTimerController],
-  );
-  const recordManualAutoNudgeActivity = useCallback(() => {
-    const terminalTurnKey = autoNudgeTerminalTurnKeyRef.current;
-    autoNudgeLedgerRef.current.reloadFromStorage();
-    consumeAutoNudgeTerminalForManualActivity(autoNudgeLedgerRef.current, terminalTurnKey);
-    cancelScheduledAutoNudge(true);
-    if (autoNudgeThreadRef && backgroundAutoNudgeOwnerForRoute) {
-      void runAutoNudgeMutation(() => {
-        autoNudgeLedgerRef.current.reloadFromStorage();
-        consumeAutoNudgeTerminalForManualActivity(autoNudgeLedgerRef.current, terminalTurnKey);
-        const controller = getBackgroundAutoNudgeController();
-        controller.reloadFromStorage();
-        controller.pause(autoNudgeThreadRef, "Manual composer activity detected.");
-      });
-    }
-    setAutoNudgeActivityRevision((revision) => revision + 1);
-  }, [
-    autoNudgeThreadRef,
-    backgroundAutoNudgeOwnerForRoute,
-    cancelScheduledAutoNudge,
-    runAutoNudgeMutation,
-  ]);
   const runtimeMode = composerRuntimeMode ?? activeThread?.runtimeMode ?? DEFAULT_RUNTIME_MODE;
   const interactionMode =
     composerInteractionMode ?? activeThread?.interactionMode ?? DEFAULT_INTERACTION_MODE;
@@ -5640,13 +5555,14 @@ export default function ChatView(props: ChatViewProps) {
 
   useEffect(() => {
     const terminalTurnKey = autoNudgeTerminalTurnKey;
-    autoNudgeLedgerRef.current.reloadFromStorage();
     const alreadySent = terminalTurnKey !== null && autoNudgeLedgerRef.current.has(terminalTurnKey);
-    if (!autoNudgeEligible || !autoNudgeThreadRef || terminalTurnKey === null || alreadySent) {
+    if (!autoNudgeEligible || terminalTurnKey === null || alreadySent) {
       cancelScheduledAutoNudge(false);
       return;
     }
-    if (autoNudgeTimerController.scheduledTurnKey === terminalTurnKey) return;
+    if (autoNudgeTimerController.scheduledTurnKey === terminalTurnKey) {
+      return;
+    }
 
     cancelScheduledAutoNudge(false);
     autoNudgeTimerController.schedule({
@@ -5655,36 +5571,13 @@ export default function ChatView(props: ChatViewProps) {
       onCountdown: setAutoNudgeCountdownSeconds,
       onDispatch: (scheduledTurnKey) => {
         setAutoNudgeCountdownSeconds(null);
-        void navigator.locks
-          .request(AUTO_NUDGE_EXECUTION_LOCK_NAME, { mode: "exclusive" }, async (lock) => {
-            if (!lock) return;
-            const policyStore = getAutoNudgeThreadPolicyStore();
-            policyStore.reloadFromStorage();
-            const currentPolicy = policyStore.getPolicy(autoNudgeThreadRef);
-            const ledger = autoNudgeLedgerRef.current;
-            ledger.reloadFromStorage();
-            const currentEligibility = {
-              ...autoNudgeEligibilityRef.current,
-              mode: currentPolicy.mode,
-            };
-            if (
-              currentPolicy.backgroundContinuation ||
-              !canDispatchAutoNudge({
-                scheduledTurnKey,
-                current: currentEligibility,
-                alreadyConsumed: ledger.has(scheduledTurnKey),
-              })
-            ) {
-              return;
-            }
-            // A storage event from another renderer can trail its synchronous
-            // Stop write. Re-read the durable barrier while still holding the
-            // exact-thread dispatch lock.
-            if (!getConfirmedAutoNudgeArming().confirmExecutionAuthorized()) return;
-            // Persist the claim before transport. A failure may skip a nudge,
-            // but no reload or second window may duplicate one.
-            ledger.mark(scheduledTurnKey);
-            await autoNudgeDispatchRef.current?.(currentPolicy.mode);
+        // Re-read every safety condition after the visible delay. A stale
+        // closure must never submit against a changed thread/provider state.
+        if (
+          !canDispatchAutoNudge({
+            scheduledTurnKey,
+            current: autoNudgeEligibilityRef.current,
+            alreadyConsumed: autoNudgeLedgerRef.current.has(scheduledTurnKey),
           })
         ) {
           return;
@@ -5729,12 +5622,13 @@ export default function ChatView(props: ChatViewProps) {
       },
     });
 
-    return () => cancelScheduledAutoNudge(false);
+    return () => {
+      cancelScheduledAutoNudge(false);
+    };
   }, [
     autoNudgeActivityRevision,
     autoNudgeEligible,
     autoNudgeTerminalTurnKey,
-    autoNudgeThreadRef,
     autoNudgeTimerController,
     cancelScheduledAutoNudge,
   ]);
@@ -6910,100 +6804,6 @@ export default function ChatView(props: ChatViewProps) {
     void onRevertToTurnCountRef.current(targetTurnCount);
   }, []);
 
-  const changeAutoNudgeMode = (mode: AutoNudgeThreadPolicy["mode"]) => {
-    if (!autoNudgeThreadRef) return;
-    cancelScheduledAutoNudge(mode === "off");
-    void runAutoNudgeMutation(() => {
-      const policyStore = getAutoNudgeThreadPolicyStore();
-      const controller = getBackgroundAutoNudgeController();
-      policyStore.reloadFromStorage();
-      controller.reloadFromStorage();
-      const policy = policyStore.setPolicy(autoNudgeThreadRef, { mode });
-      if (mode === "off") {
-        controller.stop(autoNudgeThreadRef, "Auto Nudge was turned off for this thread.");
-      } else {
-        controller.synchronizePolicy(autoNudgeThreadRef, policy);
-      }
-    });
-  };
-  const changeAutoNudgeLimits = (
-    patch: Pick<Partial<AutoNudgeThreadPolicy>, "maxRounds" | "maxMinutes">,
-  ) => {
-    if (!autoNudgeThreadRef) return;
-    void runAutoNudgeMutation(() => {
-      const policyStore = getAutoNudgeThreadPolicyStore();
-      const controller = getBackgroundAutoNudgeController();
-      policyStore.reloadFromStorage();
-      controller.reloadFromStorage();
-      const policy = policyStore.setPolicy(autoNudgeThreadRef, patch);
-      controller.synchronizePolicy(autoNudgeThreadRef, policy);
-    });
-  };
-  const changeAutoNudgeBackground = (enabled: boolean) => {
-    if (!autoNudgeThreadRef || !activeThread || !isServerThread) return;
-    cancelScheduledAutoNudge(false);
-    void runAutoNudgeMutation(() => {
-      const policyStore = getAutoNudgeThreadPolicyStore();
-      const controller = getBackgroundAutoNudgeController();
-      policyStore.reloadFromStorage();
-      controller.reloadFromStorage();
-      const previousOwner = controller.getSnapshot().owner;
-      if (enabled) {
-        if (
-          previousOwner &&
-          (previousOwner.environmentId !== autoNudgeThreadRef.environmentId ||
-            previousOwner.threadId !== autoNudgeThreadRef.threadId)
-        ) {
-          policyStore.setPolicy(previousOwner, { backgroundContinuation: false });
-        }
-        const policy = policyStore.setPolicy(autoNudgeThreadRef, {
-          backgroundContinuation: true,
-        });
-        if (!controller.start(autoNudgeThreadRef, autoNudgeLatestUserMessageAt, policy)) return;
-        if (autoNudgeHasPendingWork) {
-          controller.pause(autoNudgeThreadRef, "Queued work or operator attention is pending.");
-        }
-        return;
-      }
-      policyStore.setPolicy(autoNudgeThreadRef, { backgroundContinuation: false });
-      controller.stop(autoNudgeThreadRef, "Background continuation stopped by the operator.");
-    });
-  };
-  const pauseAutoNudgeBackground = () => {
-    if (!autoNudgeThreadRef) return;
-    void runAutoNudgeMutation(() => {
-      const controller = getBackgroundAutoNudgeController();
-      controller.reloadFromStorage();
-      controller.pause(autoNudgeThreadRef, "Paused by the operator.");
-    });
-  };
-  const resumeAutoNudgeBackground = () => {
-    if (!autoNudgeThreadRef) return;
-    void runAutoNudgeMutation(() => {
-      const policyStore = getAutoNudgeThreadPolicyStore();
-      const controller = getBackgroundAutoNudgeController();
-      policyStore.reloadFromStorage();
-      controller.reloadFromStorage();
-      controller.synchronizePolicy(autoNudgeThreadRef, policyStore.getPolicy(autoNudgeThreadRef));
-      controller.resume(autoNudgeThreadRef);
-    });
-  };
-  const stopAutoNudge = () => {
-    if (!autoNudgeThreadRef) return;
-    cancelScheduledAutoNudge(true);
-    void runAutoNudgeMutation(() => {
-      const policyStore = getAutoNudgeThreadPolicyStore();
-      const controller = getBackgroundAutoNudgeController();
-      policyStore.reloadFromStorage();
-      controller.reloadFromStorage();
-      policyStore.setPolicy(autoNudgeThreadRef, {
-        mode: "off",
-        backgroundContinuation: false,
-      });
-      controller.stop(autoNudgeThreadRef, "Auto Nudge stopped by the operator.");
-    });
-  };
-
   // Empty state: no active thread
   if (!activeThread) {
     return <NoActiveThreadState />;
@@ -7136,7 +6936,7 @@ export default function ChatView(props: ChatViewProps) {
               <ComposerBannerStack className="relative z-0" items={composerBannerItems} />
               <div className="relative z-10">
                 <AutoNudgeControl
-                  mode={autoNudgePolicy.mode}
+                  mode={autoNudgeMode}
                   countdownSeconds={autoNudgeCountdownSeconds}
                   disabled={!isServerThread || !activeAutoNudgeConfig}
                   arming={autoNudgeArming}

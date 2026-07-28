@@ -29,6 +29,7 @@ import {
   MAX_MATRIX_ACTIVITY_TELEMETRY_RINGS,
   createMatrixActivityAnimationState,
   createMatrixHexRoute,
+  createMatrixTunnelRoute,
   decodeMatrixActivityEvents,
   deriveMatrixActivityEvents,
   drawMatrixActivityAnimation,
@@ -1601,6 +1602,21 @@ describe("Matrix provider activity overlay", () => {
       expect(matrixHexRoutePointAt(route, 0)).toEqual(from);
       expect(matrixHexRoutePointAt(route, 1)).toEqual(to);
     }
+  });
+
+  it("routes Warp activity links through the exact tunnel center", () => {
+    const from = { x: 40, y: 80 };
+    const to = { x: 360, y: 180 };
+    const center = { x: 200, y: 120 };
+    const route = createMatrixTunnelRoute(from, to, center);
+
+    expect(route.points).toEqual([from, center, to]);
+    expect(matrixHexRoutePointAt(route, 0)).toEqual(from);
+    expect(matrixHexRoutePointAt(route, 1)).toEqual(to);
+    expect(route.totalLength).toBe(
+      Math.hypot(center.x - from.x, center.y - from.y) +
+        Math.hypot(to.x - center.x, to.y - center.y),
+    );
   });
 
   it("staggers packets distinctly and preserves a full trail across the cyclic route boundary", () => {

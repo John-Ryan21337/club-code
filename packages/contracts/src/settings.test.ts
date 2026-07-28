@@ -52,6 +52,7 @@ import {
   DEFAULT_FALLING_EFFECT_LIVE_WORK_VOCABULARY,
   DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
   DEFAULT_FALLING_EFFECT_MATRIX_COLOR_MODE,
+  DEFAULT_FALLING_EFFECT_MATRIX_MOTION_MODE,
   DEFAULT_FALLING_EFFECT_SPEED,
   DEFAULT_FALLING_EFFECTS_ENABLED,
   DEFAULT_MODEL_PACING_ENABLED,
@@ -359,6 +360,7 @@ describe("client settings", () => {
       fallingEffectColor: DEFAULT_AMBIENT_COLOR,
       fallingEffectMatrixColorMode: DEFAULT_FALLING_EFFECT_MATRIX_COLOR_MODE,
       fallingEffectMatrixColorCycleSpeed: DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
+      fallingEffectMatrixMotionMode: DEFAULT_FALLING_EFFECT_MATRIX_MOTION_MODE,
       fallingEffectOpacity: DEFAULT_AMBIENT_OPACITY,
       fallingEffectSpeed: DEFAULT_FALLING_EFFECT_SPEED,
       fallingEffectDensity: DEFAULT_FALLING_EFFECT_DENSITY,
@@ -413,6 +415,9 @@ describe("client settings", () => {
     expect(decoded.fallingEffectMatrixColorCycleSpeed).toBe(
       DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
     );
+    expect(decoded.fallingEffectMatrixMotionMode).toBe(
+      DEFAULT_FALLING_EFFECT_MATRIX_MOTION_MODE,
+    );
     expect(pickAmbientSettings(decoded)).toEqual(DEFAULT_AMBIENT_CLIENT_SETTINGS);
   });
 
@@ -432,6 +437,7 @@ describe("client settings", () => {
       fallingEffectColor: "  #12AbEf  ",
       fallingEffectMatrixColorMode: "music-reactive",
       fallingEffectMatrixColorCycleSpeed: MAX_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
+      fallingEffectMatrixMotionMode: "tunnel",
       fallingEffectOpacity: MAX_AMBIENT_OPACITY,
       fallingEffectSpeed: MAX_FALLING_EFFECT_SPEED,
       fallingEffectDensity: MAX_FALLING_EFFECT_DENSITY,
@@ -471,6 +477,7 @@ describe("client settings", () => {
       fallingEffectColor: "#12abef",
       fallingEffectMatrixColorMode: "music-reactive",
       fallingEffectMatrixColorCycleSpeed: MAX_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
+      fallingEffectMatrixMotionMode: "tunnel",
       fallingEffectOpacity: MAX_AMBIENT_OPACITY,
       fallingEffectSpeed: MAX_FALLING_EFFECT_SPEED,
       fallingEffectDensity: MAX_FALLING_EFFECT_DENSITY,
@@ -513,7 +520,7 @@ describe("client settings", () => {
     expect(pickAmbientSettings(reset)).toEqual(DEFAULT_AMBIENT_CLIENT_SETTINGS);
   });
 
-  it("accepts exactly the three falling effects and five Matrix color modes", () => {
+  it("accepts the bounded effect, color, motion, and activity modes", () => {
     for (const fallingEffectKind of ["snow", "rain", "matrix"] as const) {
       expect(decodeClientSettingsPatch({ fallingEffectKind })).toEqual({ fallingEffectKind });
     }
@@ -531,6 +538,11 @@ describe("client settings", () => {
     for (const fallingEffectActivityLinkColorMode of ["random", "matrix"] as const) {
       expect(decodeClientSettingsPatch({ fallingEffectActivityLinkColorMode })).toEqual({
         fallingEffectActivityLinkColorMode,
+      });
+    }
+    for (const fallingEffectMatrixMotionMode of ["flat", "forward", "reverse", "tunnel"] as const) {
+      expect(decodeClientSettingsPatch({ fallingEffectMatrixMotionMode })).toEqual({
+        fallingEffectMatrixMotionMode,
       });
     }
   });
@@ -675,6 +687,7 @@ describe("client settings", () => {
         fallingEffectColor: "auto",
         fallingEffectMatrixColorMode: "rainbow-extra",
         fallingEffectMatrixColorCycleSpeed: MIN_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
+        fallingEffectMatrixMotionMode: "reverse",
         fallingEffectOpacity: MIN_AMBIENT_OPACITY,
         fallingEffectSpeed: MIN_FALLING_EFFECT_SPEED,
         fallingEffectDensity: MIN_FALLING_EFFECT_DENSITY,
@@ -696,6 +709,7 @@ describe("client settings", () => {
       fallingEffectColor: "auto",
       fallingEffectMatrixColorMode: "rainbow-extra",
       fallingEffectMatrixColorCycleSpeed: MIN_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
+      fallingEffectMatrixMotionMode: "reverse",
       fallingEffectOpacity: MIN_AMBIENT_OPACITY,
       fallingEffectSpeed: MIN_FALLING_EFFECT_SPEED,
       fallingEffectDensity: MIN_FALLING_EFFECT_DENSITY,
@@ -724,6 +738,7 @@ describe("client settings", () => {
       { fallingEffectsEnabled: "yes" },
       { fallingEffectKind: "hail" },
       { fallingEffectMatrixColorMode: "beat-sync" },
+      { fallingEffectMatrixMotionMode: "hyperspace" },
       {
         fallingEffectMatrixColorCycleSpeed: MIN_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED - 0.01,
       },

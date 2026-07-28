@@ -13,6 +13,7 @@ import {
   type AmbientColor,
   type FallingEffectKind,
   type FallingEffectMatrixColorMode,
+  type FallingEffectMatrixMotionMode,
 } from "@cafecode/contracts/settings";
 import { hasFreshLocalMediaAudioSignal, type LocalMediaAudioSignal } from "./localMediaAudioSignal";
 import type { MatrixWorkVocabulary } from "./matrixWorkVocabulary";
@@ -22,6 +23,7 @@ export const MAX_ATMOSPHERE_DPR = 2;
 export const MAX_ATMOSPHERE_CANVAS_PIXELS = 8_388_608;
 export const MAX_ATMOSPHERE_FRAME_DELTA_SECONDS = 0.1;
 export const MATRIX_RAINBOW_CYCLE_MS = 18_000;
+export const REDUCED_MOTION_ATMOSPHERE_OPACITY_SCALE = 0.55;
 export const MATRIX_MIN_AUDIO_REACTIVE_LEVEL = 0.015;
 /** Avoid synchronized full-field rainbow cycling in the 3–30 Hz flash-sensitive range. */
 export const MATRIX_MAX_UNIFORM_RAINBOW_CYCLES_PER_SECOND = 3;
@@ -87,6 +89,19 @@ export const MAX_MATRIX_TOKEN_FONT_SIZE = 18;
 export const MAX_MATRIX_TOKEN_WIDTH_PX = 144;
 const MATRIX_2CH_TOKEN_PROBABILITY = 0.08;
 const MATRIX_WORK_TOKEN_PROBABILITY = 0.34;
+const MATRIX_PERSPECTIVE_FONT_MIN_PX = 8;
+const MATRIX_PERSPECTIVE_FONT_MAX_PX = 24;
+const MATRIX_PERSPECTIVE_FONT_STEP_PX = 0.5;
+const MATRIX_PERSPECTIVE_FONTS = Array.from(
+  {
+    length:
+      (MATRIX_PERSPECTIVE_FONT_MAX_PX - MATRIX_PERSPECTIVE_FONT_MIN_PX) /
+        MATRIX_PERSPECTIVE_FONT_STEP_PX +
+      1,
+  },
+  (_, index) =>
+    `${MATRIX_PERSPECTIVE_FONT_MIN_PX + index * MATRIX_PERSPECTIVE_FONT_STEP_PX}px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace`,
+);
 
 export interface AtmosphereParticle {
   x: number;
@@ -124,18 +139,24 @@ export interface MatrixColorAnimationState {
   lastSignalSampledAt: number | null;
 }
 
-export function createMatrixColorAnimationState(): MatrixColorAnimationState {
-  return { hue: null, lightness: null, lastUpdatedAt: null, lastSignalSampledAt: null };
-}
-
 export interface MatrixColorFrame {
   /** Uniform/fallback color and the color used by non-extra modes. */
   readonly color: string;
-  /** Extra modes resolve one deterministic hue phase for each stream. */
+  /** Extra modes resolve one deterministic hue phase for each Matrix stream. */
   readonly perStream: boolean;
   readonly baseHue: number | null;
   readonly saturation: number | null;
   readonly lightness: number | null;
+}
+
+export interface AtmosphereProjectedPoint {
+  x: number;
+  y: number;
+  scale: number;
+}
+
+export function createMatrixColorAnimationState(): MatrixColorAnimationState {
+  return { hue: null, lightness: null, lastUpdatedAt: null, lastSignalSampledAt: null };
 }
 
 export function createSeededRandom(seed: number): () => number {
@@ -549,11 +570,83 @@ export function resolveMatrixStreamColor(
   return hslColor(frame.baseHue + phaseDegrees, frame.saturation, frame.lightness);
 }
 
-export function shouldAnimateAtmosphere(state: AtmosphereAnimationState): boolean {
-  if (!state.enabled || state.reducedMotion) {
-    return false;
-  }
+export function shouldShowAtmosphere(state: AtmosphereAnimationState): boolean {
+  if (!state.enabled) return false;
   return state.continueBackgroundAnimations || (state.documentVisible && state.windowFocused);
+}
+
+export function shouldAnimateAtmosphere(state: AtmosphereAnimationState): boolean {
+  if (state.reducedMotion) return false;
+  return shouldShowAtmosphere(state);
+}
+
+export function resolveAtmosphereRenderOpacity(opacity: number, staticFrame: boolean): number {
+  if (!staticFrame) return opacity;
+  const normalized = Number.isFinite(opacity) ? Math.min(1, Math.max(0, opacity)) : 0;
+  return normalized * REDUCED_MOTION_ATMOSPHERE_OPACITY_SCALE;
+}
+
+function resolveMatrixPerspectiveFont(size: number, scale: number): string {
+  const scaledSize = Math.min(
+    MATRIX_PERSPECTIVE_FONT_MAX_PX,
+    Math.max(MATRIX_PERSPECTIVE_FONT_MIN_PX, size * scale),
+  );
+  const index = Math.round(
+    (scaledSize - MATRIX_PERSPECTIVE_FONT_MIN_PX) / MATRIX_PERSPECTIVE_FONT_STEP_PX,
+  );
+  return MATRIX_PERSPECTIVE_FONTS[index]!;
+}
+
+/**
+ * Applies the reviewed forward/Warp geometry to every atmosphere kind. The
+ * output object is caller-owned so the draw loop performs no per-particle
+ * allocation. Reverse mirrors the depth ramp while preserving falling motion.
+ */
+export function resolveAtmosphereProjectedPointInPlace(
+  output: AtmosphereProjectedPoint,
+  scene: AtmosphereScene,
+  particle: AtmosphereParticle,
+  sourceX: number,
+  sourceY: number,
+  motionMode: FallingEffectMatrixMotionMode,
+): void {
+  const safeX = Number.isFinite(sourceX) ? sourceX : 0;
+  const safeY = Number.isFinite(sourceY) ? sourceY : 0;
+  if (motionMode === "flat") {
+    output.x = safeX;
+    output.y = safeY;
+    output.scale = 1;
+    return;
+  }
+
+  const verticalMargin = Math.max(
+    1,
+    scene.kind === "matrix" ? particle.size * 8 : particle.size * 2,
+  );
+  const depth = Math.min(
+    1,
+    Math.max(0, (safeY + verticalMargin) / Math.max(1, scene.height + verticalMargin * 2)),
+  );
+
+  if (motionMode === "forward" || motionMode === "reverse") {
+    const projectedDepth = motionMode === "reverse" ? 1 - depth : depth;
+    const perspectiveScale = 0.58 + projectedDepth * 0.72;
+    output.x = scene.width * 0.5 + (safeX - scene.width * 0.5) * perspectiveScale;
+    output.y = safeY;
+    output.scale = 0.72 + projectedDepth * 0.55;
+    return;
+  }
+
+  const centerX = scene.width * 0.5;
+  const centerY = scene.height * 0.5;
+  const angle =
+    (safeX / Math.max(1, scene.width)) * Math.PI * 2 -
+    Math.PI * 0.5 +
+    Math.sin(particle.phase) * 0.08;
+  const radius = Math.max(scene.width, scene.height) * 0.74 * depth * depth;
+  output.x = centerX + Math.cos(angle) * radius;
+  output.y = centerY + Math.sin(angle) * radius;
+  output.scale = 0.4 + depth * 0.95;
 }
 
 export function drawAtmosphereScene(
@@ -562,6 +655,7 @@ export function drawAtmosphereScene(
   color: string,
   opacity: number,
   matrixColorFrame?: MatrixColorFrame,
+  motionMode: FallingEffectMatrixMotionMode = "flat",
 ): void {
   context.clearRect(0, 0, scene.width, scene.height);
   const normalizedOpacity = Math.min(1, Math.max(0, opacity));
@@ -572,22 +666,57 @@ export function drawAtmosphereScene(
   context.save();
   context.fillStyle = color;
   context.strokeStyle = color;
+  const projectedFrom: AtmosphereProjectedPoint = { x: 0, y: 0, scale: 1 };
+  const projectedTo: AtmosphereProjectedPoint = { x: 0, y: 0, scale: 1 };
 
   if (scene.kind === "snow") {
     context.globalAlpha = normalizedOpacity;
     for (const particle of scene.particles) {
+      resolveAtmosphereProjectedPointInPlace(
+        projectedFrom,
+        scene,
+        particle,
+        particle.x,
+        particle.y,
+        motionMode,
+      );
       context.beginPath();
-      context.arc(particle.x, particle.y, particle.size, 0, Math.PI * 2);
+      context.arc(
+        projectedFrom.x,
+        projectedFrom.y,
+        particle.size * projectedFrom.scale,
+        0,
+        Math.PI * 2,
+      );
       context.fill();
     }
   } else if (scene.kind === "rain") {
     context.globalAlpha = normalizedOpacity;
     context.lineCap = "round";
     for (const particle of scene.particles) {
-      context.lineWidth = Math.max(0.75, particle.size / 12);
+      resolveAtmosphereProjectedPointInPlace(
+        projectedFrom,
+        scene,
+        particle,
+        particle.x,
+        particle.y,
+        motionMode,
+      );
+      resolveAtmosphereProjectedPointInPlace(
+        projectedTo,
+        scene,
+        particle,
+        particle.x + particle.velocityX * 0.025,
+        particle.y + particle.size,
+        motionMode,
+      );
+      context.lineWidth = Math.max(
+        0.75,
+        (particle.size / 12) * (projectedFrom.scale + projectedTo.scale) * 0.5,
+      );
       context.beginPath();
-      context.moveTo(particle.x, particle.y);
-      context.lineTo(particle.x + particle.velocityX * 0.025, particle.y + particle.size);
+      context.moveTo(projectedFrom.x, projectedFrom.y);
+      context.lineTo(projectedTo.x, projectedTo.y);
       context.stroke();
     }
   } else {
@@ -598,9 +727,23 @@ export function drawAtmosphereScene(
         matrixColorFrame === undefined
           ? color
           : resolveMatrixStreamColor(matrixColorFrame, particle);
-      const fontSize = Math.min(MAX_MATRIX_TOKEN_FONT_SIZE, particle.size);
-      context.font = `${fontSize}px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace`;
+      if (motionMode === "flat") {
+        const fontSize = Math.min(MAX_MATRIX_TOKEN_FONT_SIZE, particle.size);
+        context.font = `${fontSize}px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace`;
+      }
       for (let trailIndex = 7; trailIndex >= 0; trailIndex -= 1) {
+        const sourceY = particle.y - trailIndex * particle.size;
+        resolveAtmosphereProjectedPointInPlace(
+          projectedFrom,
+          scene,
+          particle,
+          particle.x,
+          sourceY,
+          motionMode,
+        );
+        if (motionMode !== "flat") {
+          context.font = resolveMatrixPerspectiveFont(particle.size, projectedFrom.scale);
+        }
         const glyphIndex =
           (particle.glyphOffset +
             trailIndex * 7 +
@@ -615,9 +758,9 @@ export function drawAtmosphereScene(
           (trailIndex === 0 ? (particle.matrixToken ?? particle.matrixWorkToken) : null) ??
             particle.glyphs[glyphIndex] ??
             "0",
-          particle.x,
-          particle.y - trailIndex * particle.size,
-          MAX_MATRIX_TOKEN_WIDTH_PX,
+          projectedFrom.x,
+          projectedFrom.y,
+          MAX_MATRIX_TOKEN_WIDTH_PX * projectedFrom.scale,
         );
       }
     }

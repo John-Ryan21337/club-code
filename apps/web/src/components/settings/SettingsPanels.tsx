@@ -125,6 +125,10 @@ import {
 } from "../../brandingImages";
 import { ColorWheelPicker } from "./ColorWheelPicker";
 import { AmbientImageSettings } from "./AmbientImageSettings";
+import {
+  createMatrixAtmosphereRestorePatch,
+  listChangedMatrixAtmosphereSettingLabels,
+} from "./matrixAtmosphereSettings";
 import { WindowAtmosphereSettings } from "./WindowAtmosphereSettings";
 import { AmbientVideoSettings } from "./AmbientVideoSettings";
 import { LocalMediaSettings } from "./LocalMediaSettings";
@@ -432,14 +436,23 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.fallingEffectColor !== DEFAULT_UNIFIED_SETTINGS.fallingEffectColor
         ? ["Falling effect color"]
         : []),
-      ...(settings.fallingEffectMatrixColorMode !==
-      DEFAULT_UNIFIED_SETTINGS.fallingEffectMatrixColorMode
-        ? ["Matrix color mode"]
-        : []),
-      ...(settings.fallingEffectMatrixColorCycleSpeed !==
-      DEFAULT_UNIFIED_SETTINGS.fallingEffectMatrixColorCycleSpeed
-        ? ["Matrix color-cycle speed"]
-        : []),
+      ...listChangedMatrixAtmosphereSettingLabels({
+        fallingEffectMatrixColorMode: settings.fallingEffectMatrixColorMode,
+        fallingEffectMatrixColorCycleSpeed: settings.fallingEffectMatrixColorCycleSpeed,
+        fallingEffectMatrixMotionMode: settings.fallingEffectMatrixMotionMode,
+        fallingEffect2chEnriched: settings.fallingEffect2chEnriched,
+        fallingEffectLiveWorkVocabulary: settings.fallingEffectLiveWorkVocabulary,
+        fallingEffectActivityLinks: settings.fallingEffectActivityLinks,
+        fallingEffectActivityLinkNetworkEnabled:
+          settings.fallingEffectActivityLinkNetworkEnabled,
+        fallingEffectActivityLinkDatabaseEnabled:
+          settings.fallingEffectActivityLinkDatabaseEnabled,
+        fallingEffectActivityLinkBuildEnabled: settings.fallingEffectActivityLinkBuildEnabled,
+        fallingEffectActivityLinkAgentEnabled: settings.fallingEffectActivityLinkAgentEnabled,
+        fallingEffectActivityLinkColorMode: settings.fallingEffectActivityLinkColorMode,
+        fallingEffectActivityLinkRetentionSeconds:
+          settings.fallingEffectActivityLinkRetentionSeconds,
+      }),
       ...(settings.fallingEffectOpacity !== DEFAULT_UNIFIED_SETTINGS.fallingEffectOpacity
         ? ["Falling effect opacity"]
         : []),
@@ -452,35 +465,6 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.fallingEffectJapaneseRatio !==
       DEFAULT_UNIFIED_SETTINGS.fallingEffectJapaneseRatio
         ? ["Matrix Roman/Japanese mix"]
-        : []),
-      ...(settings.fallingEffect2chEnriched !== DEFAULT_UNIFIED_SETTINGS.fallingEffect2chEnriched
-        ? ["2ch-inspired Matrix enrichment"]
-        : []),
-      ...(settings.fallingEffectLiveWorkVocabulary !==
-      DEFAULT_UNIFIED_SETTINGS.fallingEffectLiveWorkVocabulary
-        ? ["Matrix live work vocabulary"]
-        : []),
-      ...(settings.fallingEffectActivityLinks !==
-      DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinks
-        ? ["Matrix activity links"]
-        : []),
-      ...(settings.fallingEffectActivityLinkNetworkEnabled !==
-        DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinkNetworkEnabled ||
-      settings.fallingEffectActivityLinkDatabaseEnabled !==
-        DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinkDatabaseEnabled ||
-      settings.fallingEffectActivityLinkBuildEnabled !==
-        DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinkBuildEnabled ||
-      settings.fallingEffectActivityLinkAgentEnabled !==
-        DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinkAgentEnabled
-        ? ["Matrix activity link inputs"]
-        : []),
-      ...(settings.fallingEffectActivityLinkColorMode !==
-      DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinkColorMode
-        ? ["Matrix activity link colors"]
-        : []),
-      ...(settings.fallingEffectActivityLinkRetentionSeconds !==
-      DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinkRetentionSeconds
-        ? ["Matrix verified route visibility"]
         : []),
       ...(settings.appAccentColor !== DEFAULT_UNIFIED_SETTINGS.appAccentColor
         ? ["Accent color"]
@@ -552,6 +536,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.fallingEffectColor,
       settings.fallingEffectMatrixColorMode,
       settings.fallingEffectMatrixColorCycleSpeed,
+      settings.fallingEffectMatrixMotionMode,
       settings.fallingEffectOpacity,
       settings.fallingEffectSpeed,
       settings.fallingEffectDensity,
@@ -601,28 +586,11 @@ export function useSettingsRestore(onRestored?: () => void) {
       fallingEffectsEnabled: DEFAULT_UNIFIED_SETTINGS.fallingEffectsEnabled,
       fallingEffectKind: DEFAULT_UNIFIED_SETTINGS.fallingEffectKind,
       fallingEffectColor: DEFAULT_UNIFIED_SETTINGS.fallingEffectColor,
-      fallingEffectMatrixColorMode: DEFAULT_UNIFIED_SETTINGS.fallingEffectMatrixColorMode,
-      fallingEffectMatrixColorCycleSpeed:
-        DEFAULT_UNIFIED_SETTINGS.fallingEffectMatrixColorCycleSpeed,
+      ...createMatrixAtmosphereRestorePatch(),
       fallingEffectOpacity: DEFAULT_UNIFIED_SETTINGS.fallingEffectOpacity,
       fallingEffectSpeed: DEFAULT_UNIFIED_SETTINGS.fallingEffectSpeed,
       fallingEffectDensity: DEFAULT_UNIFIED_SETTINGS.fallingEffectDensity,
       fallingEffectJapaneseRatio: DEFAULT_UNIFIED_SETTINGS.fallingEffectJapaneseRatio,
-      fallingEffect2chEnriched: DEFAULT_UNIFIED_SETTINGS.fallingEffect2chEnriched,
-      fallingEffectLiveWorkVocabulary: DEFAULT_UNIFIED_SETTINGS.fallingEffectLiveWorkVocabulary,
-      fallingEffectActivityLinks: DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinks,
-      fallingEffectActivityLinkNetworkEnabled:
-        DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinkNetworkEnabled,
-      fallingEffectActivityLinkDatabaseEnabled:
-        DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinkDatabaseEnabled,
-      fallingEffectActivityLinkBuildEnabled:
-        DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinkBuildEnabled,
-      fallingEffectActivityLinkAgentEnabled:
-        DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinkAgentEnabled,
-      fallingEffectActivityLinkColorMode:
-        DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinkColorMode,
-      fallingEffectActivityLinkRetentionSeconds:
-        DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinkRetentionSeconds,
       themeAccentColor: DEFAULT_UNIFIED_SETTINGS.themeAccentColor,
       defaultEditor: DEFAULT_UNIFIED_SETTINGS.defaultEditor,
       diffWordWrap: DEFAULT_UNIFIED_SETTINGS.diffWordWrap,
@@ -1260,6 +1228,7 @@ export function AppearanceSettingsPanel() {
     </SettingsPageContainer>
   );
 }
+
 
 export function ChatSettingsPanel() {
   const settings = useSettings();

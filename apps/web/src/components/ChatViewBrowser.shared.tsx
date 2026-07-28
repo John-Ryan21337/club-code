@@ -39,15 +39,6 @@ import { render } from "vitest-browser-react";
 import { useCommandPaletteStore } from "../commandPaletteStore";
 import { useComposerDraftStore, DraftId } from "../composerDraftStore";
 import { __resetEnvironmentApiOverridesForTests } from "../environmentApi";
-import { __resetAutoNudgeTurnLedgerForTests } from "../autoNudger";
-import {
-  __resetBackgroundAutoNudgeControllerForTests,
-  getBackgroundAutoNudgeController,
-} from "../backgroundAutoNudger";
-import {
-  __resetAutoNudgeThreadPolicyStoreForTests,
-  getAutoNudgeThreadPolicyStore,
-} from "../autoNudgeThreadPolicy";
 import { isMacPlatform } from "../lib/utils";
 import { resetSourceControlDiscoveryStateForTests } from "../lib/sourceControlDiscoveryState";
 import { __resetLocalApiForTests } from "../localApi";

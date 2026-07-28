@@ -24,10 +24,11 @@ const mocks = vi.hoisted(() => ({
   drawnMatrixColors: [] as string[],
   settings: {
     fallingEffectsEnabled: true,
-    fallingEffectKind: "matrix" as const,
+    fallingEffectKind: "matrix" as "snow" | "rain" | "matrix",
     fallingEffectColor: "auto" as const,
     fallingEffectMatrixColorMode: "rainbow-extra" as const,
     fallingEffectMatrixColorCycleSpeed: 32,
+    fallingEffectMatrixMotionMode: "flat" as "flat" | "forward" | "reverse" | "tunnel",
     fallingEffectOpacity: 0.35,
     fallingEffectSpeed: 1,
     fallingEffectDensity: 1,
@@ -43,8 +44,8 @@ const mocks = vi.hoisted(() => ({
     fallingEffectActivityLinkRetentionSeconds: 30,
     continueBackgroundAnimations: false,
   } satisfies Partial<UnifiedSettings>,
-  createAtmosphereScene: vi.fn(() => ({
-    kind: "matrix" as const,
+  createAtmosphereScene: vi.fn((kind: "snow" | "rain" | "matrix" = "matrix") => ({
+    kind,
     width: 1_024,
     height: 768,
     particles: Array.from({ length: 12 }, () => ({})),
@@ -147,8 +148,27 @@ vi.mock("../windowAtmosphere", () => ({
     };
   },
   resolveAtmosphereColor: () => "#4ade80",
+  resolveAtmosphereRenderOpacity: (opacity: number, staticFrame: boolean) =>
+    staticFrame ? opacity * 0.55 : opacity,
   drawAtmosphereScene: mocks.drawAtmosphereScene,
-  shouldAnimateAtmosphere: (state: { reducedMotion: boolean }) => !state.reducedMotion,
+  shouldShowAtmosphere: (state: {
+    enabled: boolean;
+    documentVisible: boolean;
+    windowFocused: boolean;
+    continueBackgroundAnimations: boolean;
+  }) =>
+    state.enabled &&
+    (state.continueBackgroundAnimations || (state.documentVisible && state.windowFocused)),
+  shouldAnimateAtmosphere: (state: {
+    enabled: boolean;
+    reducedMotion: boolean;
+    documentVisible: boolean;
+    windowFocused: boolean;
+    continueBackgroundAnimations: boolean;
+  }) =>
+    !state.reducedMotion &&
+    state.enabled &&
+    (state.continueBackgroundAnimations || (state.documentVisible && state.windowFocused)),
 }));
 
 import { WindowAtmosphere } from "./WindowAtmosphere";
@@ -171,7 +191,9 @@ beforeEach(() => {
   mocks.activityEventsKey = "activity-1";
   mocks.activityObservedAtMs = Date.now();
   mocks.workVocabularyKey = "";
+  mocks.settings.fallingEffectKind = "matrix";
   mocks.settings.fallingEffectMatrixColorCycleSpeed = 32;
+  mocks.settings.fallingEffectMatrixMotionMode = "flat";
   mocks.settings.fallingEffectActivityLinks = true;
   mocks.settings.fallingEffectActivityLinkNetworkEnabled = true;
   mocks.settings.fallingEffectActivityLinkDatabaseEnabled = true;
@@ -185,7 +207,13 @@ beforeEach(() => {
   mocks.matrixColorCycleSpeeds = [];
   mocks.matrixColorTimestamps = [];
   mocks.drawnMatrixColors = [];
-  mocks.createAtmosphereScene.mockClear();
+  mocks.createAtmosphereScene.mockReset();
+  mocks.createAtmosphereScene.mockImplementation((kind = "matrix") => ({
+    kind,
+    width: 1_024,
+    height: 768,
+    particles: Array.from({ length: 12 }, () => ({})),
+  }));
   mocks.updateMatrixActivityAnimationInPlace.mockReset();
   mocks.updateMatrixActivityAnimationInPlace.mockImplementation(
     (
@@ -494,6 +522,7 @@ describe("WindowAtmosphere", () => {
     await expect.poll(() => mocks.drawAtmosphereScene.mock.calls.length).toBe(1);
     expect(frameCallbacks.size).toBe(0);
     expect(mocks.createAtmosphereScene).toHaveBeenCalledTimes(1);
+    expect(mocks.applyMatrixWorkVocabularyInPlace).toHaveBeenCalledTimes(1);
 
     mocks.drawAtmosphereScene.mockClear();
     mocks.activityEventsKey = "activity-2";
@@ -512,6 +541,7 @@ describe("WindowAtmosphere", () => {
     expect(mocks.createAtmosphereScene).toHaveBeenCalledTimes(1);
 
     mocks.drawAtmosphereScene.mockClear();
+    mocks.applyMatrixWorkVocabularyInPlace.mockClear();
     mocks.workVocabularyKey = "work-2";
     await mounted.rerender(<WindowAtmosphere selectedThreadRef={TEST_SELECTED_THREAD_REF} />);
     expect(mocks.applyMatrixWorkVocabularyInPlace).toHaveBeenCalledTimes(1);
@@ -533,6 +563,34 @@ describe("WindowAtmosphere", () => {
     expect(mocks.matrixColorTimestamps).toEqual([1_000]);
     expect(mocks.drawnMatrixColors.at(-1)).toBe(initialColor);
     expect(mocks.createAtmosphereScene).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes Flat, Forward, Reverse, and Warp through for snow, rain, and Matrix", async () => {
+    (reducedMotionQuery as unknown as { matches: boolean }).matches = true;
+    mounted = await render(<WindowAtmosphere selectedThreadRef={TEST_SELECTED_THREAD_REF} />);
+
+    for (const kind of ["snow", "rain", "matrix"] as const) {
+      for (const motionMode of ["flat", "forward", "reverse", "tunnel"] as const) {
+        mocks.settings.fallingEffectKind = kind;
+        mocks.settings.fallingEffectMatrixMotionMode = motionMode;
+        await mounted.rerender(
+          <WindowAtmosphere selectedThreadRef={TEST_SELECTED_THREAD_REF} />,
+        );
+
+        expect(mocks.createAtmosphereScene).toHaveBeenLastCalledWith(
+          kind,
+          expect.any(Number),
+          expect.any(Number),
+          expect.any(Function),
+          expect.any(Number),
+          expect.any(Number),
+          expect.any(Boolean),
+          expect.any(Object),
+        );
+        expect(mocks.drawAtmosphereScene.mock.calls.at(-1)?.[5]).toBe(motionMode);
+        expect(frameCallbacks.size).toBe(0);
+      }
+    }
   });
 
   it("expires a reduced-motion static activity link with one bounded timer", async () => {
