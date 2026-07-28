@@ -451,7 +451,6 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
     kind,
     matrixColorMode,
     motionMode,
-    motionMode,
     opacity,
     resolvedTheme,
     speed,

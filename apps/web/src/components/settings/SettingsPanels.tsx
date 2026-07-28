@@ -443,10 +443,8 @@ export function useSettingsRestore(onRestored?: () => void) {
         fallingEffect2chEnriched: settings.fallingEffect2chEnriched,
         fallingEffectLiveWorkVocabulary: settings.fallingEffectLiveWorkVocabulary,
         fallingEffectActivityLinks: settings.fallingEffectActivityLinks,
-        fallingEffectActivityLinkNetworkEnabled:
-          settings.fallingEffectActivityLinkNetworkEnabled,
-        fallingEffectActivityLinkDatabaseEnabled:
-          settings.fallingEffectActivityLinkDatabaseEnabled,
+        fallingEffectActivityLinkNetworkEnabled: settings.fallingEffectActivityLinkNetworkEnabled,
+        fallingEffectActivityLinkDatabaseEnabled: settings.fallingEffectActivityLinkDatabaseEnabled,
         fallingEffectActivityLinkBuildEnabled: settings.fallingEffectActivityLinkBuildEnabled,
         fallingEffectActivityLinkAgentEnabled: settings.fallingEffectActivityLinkAgentEnabled,
         fallingEffectActivityLinkColorMode: settings.fallingEffectActivityLinkColorMode,
@@ -1228,7 +1226,6 @@ export function AppearanceSettingsPanel() {
     </SettingsPageContainer>
   );
 }
-
 
 export function ChatSettingsPanel() {
   const settings = useSettings();

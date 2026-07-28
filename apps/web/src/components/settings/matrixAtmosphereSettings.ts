@@ -40,8 +40,7 @@ export function createMatrixAtmosphereRestorePatch(): Pick<
 > {
   return {
     fallingEffectMatrixColorMode: DEFAULT_UNIFIED_SETTINGS.fallingEffectMatrixColorMode,
-    fallingEffectMatrixColorCycleSpeed:
-      DEFAULT_UNIFIED_SETTINGS.fallingEffectMatrixColorCycleSpeed,
+    fallingEffectMatrixColorCycleSpeed: DEFAULT_UNIFIED_SETTINGS.fallingEffectMatrixColorCycleSpeed,
     fallingEffectMatrixMotionMode: DEFAULT_UNIFIED_SETTINGS.fallingEffectMatrixMotionMode,
     fallingEffect2chEnriched: DEFAULT_UNIFIED_SETTINGS.fallingEffect2chEnriched,
     fallingEffectLiveWorkVocabulary: DEFAULT_UNIFIED_SETTINGS.fallingEffectLiveWorkVocabulary,

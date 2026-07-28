@@ -575,9 +575,7 @@ describe("WindowAtmosphere", () => {
       for (const motionMode of ["flat", "forward", "reverse", "tunnel"] as const) {
         mocks.settings.fallingEffectKind = kind;
         mocks.settings.fallingEffectMatrixMotionMode = motionMode;
-        await mounted.rerender(
-          <WindowAtmosphere selectedThreadRef={TEST_SELECTED_THREAD_REF} />,
-        );
+        await mounted.rerender(<WindowAtmosphere selectedThreadRef={TEST_SELECTED_THREAD_REF} />);
 
         expect(mocks.createAtmosphereScene).toHaveBeenLastCalledWith(
           kind,

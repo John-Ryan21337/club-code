@@ -300,23 +300,6 @@ const DEBUG_SECRET_REDACTIONS: ReadonlyArray<readonly [RegExp, string]> = [
   [/\bBearer\s+[A-Za-z0-9._~+/=-]{16,}\b/g, "Bearer [redacted]"],
 ];
 
-function autoNudgeProviderCanAcceptTurn(provider: ServerProvider | null): boolean {
-  if (
-    !provider ||
-    provider.status !== "ready" ||
-    !provider.enabled ||
-    !provider.installed ||
-    provider.availability === "unavailable" ||
-    provider.auth.status !== "authenticated"
-  ) {
-    return false;
-  }
-  const limits = provider.accountRateLimits?.rateLimits;
-  if (!limits) return true;
-  if (limits.rateLimitReachedType || limits.spendControlReached) return false;
-  return (limits.primary?.usedPercent ?? 0) < 100 && (limits.secondary?.usedPercent ?? 0) < 100;
-}
-
 function redactDebugSecrets(value: string): string {
   let redacted = value;
   for (const [pattern, replacement] of DEBUG_SECRET_REDACTIONS) {

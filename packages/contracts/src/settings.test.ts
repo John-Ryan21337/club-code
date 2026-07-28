@@ -415,9 +415,7 @@ describe("client settings", () => {
     expect(decoded.fallingEffectMatrixColorCycleSpeed).toBe(
       DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
     );
-    expect(decoded.fallingEffectMatrixMotionMode).toBe(
-      DEFAULT_FALLING_EFFECT_MATRIX_MOTION_MODE,
-    );
+    expect(decoded.fallingEffectMatrixMotionMode).toBe(DEFAULT_FALLING_EFFECT_MATRIX_MOTION_MODE);
     expect(pickAmbientSettings(decoded)).toEqual(DEFAULT_AMBIENT_CLIENT_SETTINGS);
   });
 
