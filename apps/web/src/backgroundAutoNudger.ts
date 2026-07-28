@@ -24,6 +24,7 @@ export type BackgroundAutoNudgeStatus = "active" | "paused" | "stopped" | "exhau
 export interface BackgroundAutoNudgeLedgerEntry {
   readonly id: string;
   readonly at: string;
+  readonly owner: BackgroundAutoNudgeThreadRef;
   readonly kind: "started" | "scheduled" | "sent" | "paused" | "resumed" | "stopped";
   readonly detail: string;
   readonly owner?: BackgroundAutoNudgeThreadRef;
@@ -150,29 +151,33 @@ function readState(storage: BackgroundAutoNudgeStorage | null): BackgroundAutoNu
       parsed.status === "exhausted"
         ? parsed.status
         : "stopped";
-    const ledger = Array.isArray(parsed.ledger)
-      ? trimLedger(
-          parsed.ledger.filter((entry): entry is BackgroundAutoNudgeLedgerEntry =>
-            Boolean(
-              entry &&
-              safeId(entry.id) &&
-              safeIso(entry.at) &&
-              (entry.kind === "started" ||
-                entry.kind === "scheduled" ||
-                entry.kind === "sent" ||
-                entry.kind === "paused" ||
-                entry.kind === "resumed" ||
-                entry.kind === "stopped") &&
-              typeof entry.detail === "string" &&
-              entry.detail.length <= 300 &&
-              (entry.owner === undefined ||
-                (safeId(entry.owner.environmentId) && safeId(entry.owner.threadId))) &&
-              (entry.terminalTurnKey === undefined || safeId(entry.terminalTurnKey)) &&
-              (entry.messageId === undefined || safeId(entry.messageId)),
+    const ledgerOwner = owner ?? lastOwner;
+    const ledger =
+      Array.isArray(parsed.ledger) && ledgerOwner
+        ? trimLedger(
+            parsed.ledger.filter((entry): entry is BackgroundAutoNudgeLedgerEntry =>
+              Boolean(
+                entry &&
+                safeId(entry.id) &&
+                safeIso(entry.at) &&
+                entry.owner &&
+                safeId(entry.owner.environmentId) &&
+                safeId(entry.owner.threadId) &&
+                sameOwner(entry.owner, ledgerOwner) &&
+                (entry.kind === "started" ||
+                  entry.kind === "scheduled" ||
+                  entry.kind === "sent" ||
+                  entry.kind === "paused" ||
+                  entry.kind === "resumed" ||
+                  entry.kind === "stopped") &&
+                typeof entry.detail === "string" &&
+                entry.detail.length <= 300 &&
+                (entry.terminalTurnKey === undefined || safeId(entry.terminalTurnKey)) &&
+                (entry.messageId === undefined || safeId(entry.messageId)),
+              ),
             ),
-          ),
-        )
-      : [];
+          )
+        : [];
     const scheduled =
       parsed.scheduled &&
       safeId(parsed.scheduled.terminalTurnKey) &&
@@ -298,20 +303,19 @@ export class BackgroundAutoNudgeController {
   }
 
   private entry(
+    owner: BackgroundAutoNudgeThreadRef,
     kind: BackgroundAutoNudgeLedgerEntry["kind"],
     detail: string,
     nowMs: number,
     extra?: Pick<BackgroundAutoNudgeLedgerEntry, "terminalTurnKey" | "messageId">,
-    ownerOverride?: BackgroundAutoNudgeThreadRef,
   ): BackgroundAutoNudgeLedgerEntry {
     this.sequence += 1;
-    const entryOwner = ownerOverride ?? this.state.owner;
     return {
       id: `${nowMs}-${this.sequence}`,
       at: new Date(nowMs).toISOString(),
+      owner,
       kind,
       detail: detail.slice(0, 300),
-      ...(entryOwner ? { owner: entryOwner } : {}),
       ...extra,
     };
   }
@@ -339,6 +343,8 @@ export class BackgroundAutoNudgeController {
     ) {
       return false;
     }
+    if (this.state.owner && !sameOwner(this.state.owner, owner)) return false;
+    const retainedLedger = sameOwner(this.state.lastOwner, owner) ? this.state.ledger : [];
     const next: BackgroundAutoNudgeState = {
       owner,
       lastOwner: owner,
@@ -351,13 +357,10 @@ export class BackgroundAutoNudgeController {
       expectedAutomatedUserMessageDeadlineAt: null,
       scheduled: null,
       reason: null,
-      ledger: this.state.ledger,
+      ledger: retainedLedger,
     };
     this.write(
-      this.withEntry(
-        next,
-        this.entry("started", "Background continuation started.", nowMs, undefined, owner),
-      ),
+      this.withEntry(next, this.entry(owner, "started", "Background continuation started.", nowMs)),
     );
     return true;
   }
@@ -383,32 +386,34 @@ export class BackgroundAutoNudgeController {
     this.write({ ...this.state, runPolicy: { ...policy } });
   }
 
-  pause(owner: BackgroundAutoNudgeThreadRef, reason: string, nowMs = Date.now()): void {
-    if (!sameOwner(this.state.owner, owner) || this.state.status !== "active") return;
+  pause(owner: BackgroundAutoNudgeThreadRef, reason: string, nowMs = Date.now()): boolean {
+    if (!sameOwner(this.state.owner, owner) || this.state.status !== "active") return false;
     this.write(
       this.withEntry(
         { ...this.state, status: "paused", scheduled: null, reason },
-        this.entry("paused", reason, nowMs),
+        this.entry(owner, "paused", reason, nowMs),
       ),
     );
+    return true;
   }
 
-  resume(owner: BackgroundAutoNudgeThreadRef, nowMs = Date.now()): void {
-    if (!sameOwner(this.state.owner, owner) || this.state.status !== "paused") return;
+  resume(owner: BackgroundAutoNudgeThreadRef, nowMs = Date.now()): boolean {
+    if (!sameOwner(this.state.owner, owner) || this.state.status !== "paused") return false;
     this.write(
       this.withEntry(
         { ...this.state, status: "active", scheduled: null, reason: null },
-        this.entry("resumed", "Background continuation resumed.", nowMs),
+        this.entry(owner, "resumed", "Background continuation resumed.", nowMs),
       ),
     );
+    return true;
   }
 
   stop(
     owner: BackgroundAutoNudgeThreadRef,
     reason = "Stopped by the operator.",
     nowMs = Date.now(),
-  ): void {
-    if (!sameOwner(this.state.owner, owner)) return;
+  ): boolean {
+    if (!sameOwner(this.state.owner, owner)) return false;
     this.write(
       this.withEntry(
         {
@@ -422,14 +427,27 @@ export class BackgroundAutoNudgeController {
           expectedAutomatedUserMessageAt: null,
           expectedAutomatedUserMessageDeadlineAt: null,
         },
-        this.entry("stopped", reason, nowMs),
+        this.entry(owner, "stopped", reason, nowMs),
       ),
     );
+    return true;
   }
 
-  markDispatchFailed(messageId: string, reason: string, nowMs = Date.now()): void {
+  stopAll(reason = "All background continuation stopped.", nowMs = Date.now()): boolean {
+    const owner = this.state.owner;
+    if (!owner) return false;
+    return this.stop(owner, reason, nowMs);
+  }
+
+  markDispatchFailed(
+    owner: BackgroundAutoNudgeThreadRef,
+    messageId: string,
+    reason: string,
+    nowMs = Date.now(),
+  ): void {
     // An async transport rejection can arrive after Stop, a new run, or an
     // ownership transfer. Only the still-pending dispatch may change state.
+    if (!sameOwner(this.state.owner, owner)) return;
     if (this.state.expectedAutomatedUserMessageAt === null) return;
     const pendingEntry = this.state.ledger.findLast(
       (entry) => entry.kind === "sent" && entry.messageId === messageId,
@@ -445,7 +463,7 @@ export class BackgroundAutoNudgeController {
           expectedAutomatedUserMessageAt: null,
           expectedAutomatedUserMessageDeadlineAt: null,
         },
-        this.entry("paused", reason, nowMs, { messageId }),
+        this.entry(owner, "paused", reason, nowMs, { messageId }),
       ),
     );
   }
@@ -481,7 +499,7 @@ export class BackgroundAutoNudgeController {
       this.write({
         ...this.withEntry(
           { ...this.state, status: "exhausted", scheduled: null, reason },
-          this.entry("paused", reason, input.nowMs),
+          this.entry(owner, "paused", reason, input.nowMs),
         ),
       });
       return null;
@@ -491,7 +509,7 @@ export class BackgroundAutoNudgeController {
       this.write(
         this.withEntry(
           { ...this.state, status: "exhausted", scheduled: null, reason },
-          this.entry("paused", reason, input.nowMs),
+          this.entry(owner, "paused", reason, input.nowMs),
         ),
       );
       return null;
@@ -580,7 +598,7 @@ export class BackgroundAutoNudgeController {
       this.write(
         this.withEntry(
           { ...this.state, scheduled: { terminalTurnKey: turnKey, dueAt } },
-          this.entry("scheduled", "Next bounded nudge scheduled.", input.nowMs, {
+          this.entry(owner, "scheduled", "Next bounded nudge scheduled.", input.nowMs, {
             terminalTurnKey: turnKey,
           }),
         ),
@@ -615,7 +633,7 @@ export class BackgroundAutoNudgeController {
           ).toISOString(),
           scheduled: null,
         },
-        this.entry("sent", `Automated nudge ${round} dispatched.`, input.nowMs, {
+        this.entry(owner, "sent", `Automated nudge ${round} dispatched.`, input.nowMs, {
           terminalTurnKey: turnKey,
           messageId,
         }),

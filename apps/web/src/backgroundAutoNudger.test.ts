@@ -22,6 +22,7 @@ function storageFixture() {
 }
 
 const owner = { environmentId: "local", threadId: "thread-a" };
+const replacementOwner = { environmentId: "local", threadId: "thread-b" };
 const startedAt = Date.parse("2026-07-24T00:00:00.000Z");
 const backgroundPolicy = {
   mode: "steady-progress" as const,
@@ -78,6 +79,81 @@ describe("background auto nudge controller", () => {
     expect(notifications).toBe(1);
   });
 
+  it("does not let start silently replace a different active owner", () => {
+    const controller = new BackgroundAutoNudgeController(null);
+    expect(controller.start(owner, "2026-07-23T23:59:00.000Z", startedAt)).toBe(true);
+
+    expect(controller.start(replacementOwner, null, startedAt + 1)).toBe(false);
+
+    expect(controller.getSnapshot()).toMatchObject({
+      owner,
+      lastOwner: owner,
+      status: "active",
+      baselineUserMessageAt: "2026-07-23T23:59:00.000Z",
+    });
+    expect(controller.getSnapshot().ledger).toHaveLength(1);
+    expect(controller.getSnapshot().ledger[0]).toMatchObject({ owner, kind: "started" });
+  });
+
+  it("transfers only when the caller names the exact current owner", () => {
+    const controller = new BackgroundAutoNudgeController(null);
+    controller.start(owner, "2026-07-23T23:59:00.000Z", startedAt);
+    const staleExpectedOwner = { environmentId: "remote", threadId: owner.threadId };
+
+    expect(controller.transfer(staleExpectedOwner, replacementOwner, null, startedAt + 1)).toBe(
+      false,
+    );
+    expect(controller.getSnapshot()).toMatchObject({ owner, status: "active" });
+
+    expect(controller.transfer(owner, replacementOwner, null, startedAt + 2)).toBe(true);
+    expect(controller.getSnapshot()).toMatchObject({
+      owner: replacementOwner,
+      lastOwner: replacementOwner,
+      status: "active",
+    });
+  });
+
+  it("does not carry one thread's ledger through an explicit ownership transfer", () => {
+    const { storage } = storageFixture();
+    const controller = new BackgroundAutoNudgeController(storage);
+    controller.start(owner, "2026-07-23T23:59:00.000Z", startedAt);
+    controller.observe(observation(startedAt));
+    const dueAt = Date.parse(controller.getSnapshot().scheduled?.dueAt ?? "");
+    expect(controller.observe(observation(dueAt))).not.toBeNull();
+    expect(
+      controller.getSnapshot().ledger.some((entry) => entry.owner.threadId === "thread-a"),
+    ).toBe(true);
+
+    expect(
+      controller.transfer(owner, replacementOwner, "2026-07-23T23:59:00.000Z", dueAt + 1),
+    ).toBe(true);
+
+    const transferred = controller.getSnapshot();
+    expect(transferred.ledger).toHaveLength(1);
+    expect(transferred.ledger.every((entry) => entry.owner.threadId === "thread-b")).toBe(true);
+    expect(transferred.ledger.some((entry) => entry.messageId === "message-auto-1")).toBe(false);
+    expect(new BackgroundAutoNudgeController(storage).getSnapshot().ledger).toEqual(
+      transferred.ledger,
+    );
+  });
+
+  it("discards legacy persisted ledger rows that have no exact owner", () => {
+    const { storage, values } = storageFixture();
+    const controller = new BackgroundAutoNudgeController(storage);
+    controller.start(owner, null, startedAt);
+    const persisted = JSON.parse(values.get(AUTO_NUDGE_BACKGROUND_STORAGE_KEY) ?? "{}") as {
+      ledger?: Array<Record<string, unknown>>;
+    };
+    if (!persisted.ledger?.[0]) throw new Error("expected a persisted ledger row");
+    delete persisted.ledger[0].owner;
+    values.set(AUTO_NUDGE_BACKGROUND_STORAGE_KEY, JSON.stringify(persisted));
+
+    const rehydrated = new BackgroundAutoNudgeController(storage).getSnapshot();
+
+    expect(rehydrated).toMatchObject({ owner, status: "active" });
+    expect(rehydrated.ledger).toEqual([]);
+  });
+
   it("synchronizes a Stop written by another renderer", () => {
     const { storage } = storageFixture();
     const storageListeners: Array<(event: { readonly key: string | null }) => void> = [];
@@ -107,7 +183,7 @@ describe("background auto nudge controller", () => {
       storageListeners[0]?.({ key: AUTO_NUDGE_BACKGROUND_STORAGE_KEY });
       expect(observingWindow.getSnapshot()).toMatchObject({ owner, status: "active" });
 
-      stoppingWindow.stop("Stopped in another renderer.", startedAt + 1);
+      stoppingWindow.stop(owner, "Stopped in another renderer.", startedAt + 1);
       storageListeners[0]?.({ key: AUTO_NUDGE_BACKGROUND_STORAGE_KEY });
 
       expect(observingWindow.getSnapshot()).toMatchObject({
@@ -354,7 +430,7 @@ describe("background auto nudge controller", () => {
     );
   });
 
-  it("does not let a late transport rejection pause a replacement run", () => {
+  it("does not let stale owner callbacks mutate a replacement after explicit transfer", () => {
     const controller = new BackgroundAutoNudgeController(null);
     controller.start(owner, "2026-07-23T23:59:00.000Z", backgroundPolicy, startedAt);
     controller.observe(observation(startedAt));
@@ -370,10 +446,46 @@ describe("background auto nudge controller", () => {
 
     controller.markDispatchFailed("message-auto-1", "late rejection", dueAt + 3);
 
+    expect(controller.pause(owner, "stale pause", startedAt + 2)).toBe(false);
+    expect(controller.stop(owner, "stale stop", startedAt + 3)).toBe(false);
     expect(controller.getSnapshot()).toMatchObject({
-      owner: { environmentId: "local", threadId: "thread-b" },
+      owner: replacementOwner,
       status: "active",
       reason: null,
+    });
+
+    expect(controller.pause(replacementOwner, "current pause", startedAt + 4)).toBe(true);
+    expect(controller.resume(owner, startedAt + 5)).toBe(false);
+    expect(controller.getSnapshot()).toMatchObject({
+      owner: replacementOwner,
+      status: "paused",
+      reason: "current pause",
+    });
+    expect(controller.resume(replacementOwner, startedAt + 6)).toBe(true);
+
+    controller.observe(
+      observation(startedAt + 7, {
+        thread: existingThread({ terminalTurnKey: "local:thread-b:turn-1" }),
+        newMessageId: () => "message-auto-b",
+      }),
+    );
+    const dueAt = Date.parse(controller.getSnapshot().scheduled?.dueAt ?? "");
+    expect(
+      controller.observe(
+        observation(dueAt, {
+          thread: existingThread({ terminalTurnKey: "local:thread-b:turn-1" }),
+          newMessageId: () => "message-auto-b",
+        }),
+      ),
+    ).not.toBeNull();
+
+    controller.markDispatchFailed(owner, "message-auto-b", "late rejection", dueAt + 1);
+
+    expect(controller.getSnapshot()).toMatchObject({
+      owner: replacementOwner,
+      status: "active",
+      reason: null,
+      expectedAutomatedUserMessageAt: new Date(dueAt).toISOString(),
     });
   });
 

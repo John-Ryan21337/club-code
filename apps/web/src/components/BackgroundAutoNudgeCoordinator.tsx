@@ -73,12 +73,16 @@ export function BackgroundAutoNudgeCoordinator() {
   useEffect(() => {
     const controller = getBackgroundAutoNudgeController();
     if (!backgroundState.owner || backgroundState.status !== "active") return;
+    const observedOwner = backgroundState.owner;
     let cancelled = false;
     // localStorage alone has no compare-and-swap. Chromium/Electron's lock
     // serializes reload -> consume -> transport handoff across renderer tabs;
     // an older browser pauses instead of permitting an ambiguous duplicate.
     if (!supportsBackgroundAutoNudgeDispatchLock()) {
-      controller.pause("Background continuation requires a cross-tab dispatch lock.");
+      controller.pause(
+        observedOwner,
+        "Background continuation requires a cross-tab dispatch lock.",
+      );
       return;
     }
 
@@ -174,6 +178,7 @@ export function BackgroundAutoNudgeCoordinator() {
           const api = readEnvironmentApi(shell.environmentId);
           if (!api) {
             controller.markDispatchFailed(
+              dispatch.owner,
               dispatch.messageId,
               "Environment transport is unavailable; background continuation paused.",
             );
@@ -184,7 +189,7 @@ export function BackgroundAutoNudgeCoordinator() {
           // renderer can press Stop while this callback is evaluating the
           // projection; that newer barrier must invalidate the prepared send.
           if (cancelled || !arming.confirmExecutionAuthorized()) {
-            controller.stop("Auto Nudge stopped before transport handoff.");
+            controller.stop(dispatch.owner, "Auto Nudge stopped before transport handoff.");
             return;
           }
 
@@ -194,7 +199,7 @@ export function BackgroundAutoNudgeCoordinator() {
           // that has already been handed off.
           ledger.mark(dispatch.terminalTurnKey);
           if (cancelled || !arming.confirmExecutionAuthorized()) {
-            controller.stop("Auto Nudge stopped before transport handoff.");
+            controller.stop(dispatch.owner, "Auto Nudge stopped before transport handoff.");
             return;
           }
 
@@ -217,6 +222,7 @@ export function BackgroundAutoNudgeCoordinator() {
             })
             .catch(() => {
               controller.markDispatchFailed(
+                dispatch.owner,
                 dispatch.messageId,
                 "Provider or transport rejected the automated prompt; continuation paused.",
               );
@@ -225,7 +231,10 @@ export function BackgroundAutoNudgeCoordinator() {
       )
       .catch(() => {
         if (!cancelled) {
-          controller.pause("Background continuation could not acquire a cross-tab dispatch lock.");
+          controller.pause(
+            observedOwner,
+            "Background continuation could not acquire a cross-tab dispatch lock.",
+          );
         }
       });
     return () => {
