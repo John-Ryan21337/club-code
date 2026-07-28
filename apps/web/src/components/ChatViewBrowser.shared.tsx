@@ -770,6 +770,7 @@ function createSnapshotWithSecondaryProject(options?: {
             lastError: null,
             updatedAt: isoAt(31),
           },
+          autoNudge: DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
           archivedAt: null,
         },
       ]
@@ -802,6 +803,7 @@ function createSnapshotWithSecondaryProject(options?: {
             lastError: null,
             updatedAt: isoAt(25),
           },
+          autoNudge: DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
           archivedAt: isoAt(26),
         },
       ]
