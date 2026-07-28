@@ -84,6 +84,7 @@ const mocks = vi.hoisted(() => ({
   serverConfig: null as TestServerConfig | null,
   confirmExecutionAuthorized: vi.fn(),
   synchronizeSuppressionFromStorage: vi.fn(),
+  getSuppressedSnapshot: vi.fn(),
 }));
 
 vi.mock("../autoNudger", async (importOriginal) => {
@@ -107,6 +108,7 @@ vi.mock("../confirmedAutoNudgeArming", () => ({
   getConfirmedAutoNudgeArming: () => ({
     synchronizeSuppressionFromStorage: mocks.synchronizeSuppressionFromStorage,
     confirmExecutionAuthorized: mocks.confirmExecutionAuthorized,
+    getSuppressedSnapshot: mocks.getSuppressedSnapshot,
   }),
 }));
 
@@ -276,6 +278,8 @@ beforeEach(() => {
   mocks.confirmExecutionAuthorized.mockReset();
   mocks.confirmExecutionAuthorized.mockImplementation(() => !mocks.executionBlocked);
   mocks.synchronizeSuppressionFromStorage.mockReset();
+  mocks.getSuppressedSnapshot.mockReset();
+  mocks.getSuppressedSnapshot.mockImplementation(() => mocks.executionBlocked);
   __resetAutoNudgeTurnLedgerForTests({ clearSessionStorage: true });
 });
 
@@ -418,6 +422,37 @@ describe("BackgroundAutoNudgeCoordinator exact-thread authority", () => {
       }),
     ]);
     expect(commands(dispatchB).some((command) => command.threadId === "thread-off")).toBe(false);
+  });
+
+  it("reconciles a cross-port durable Stop before evaluating foreground-only authority", async () => {
+    mocks.executionBlocked = true;
+    const dispatch = installEnvironmentApi("environment-a");
+    const foregroundOnly = threadFixture({
+      environmentId: "environment-a",
+      threadId: "thread-foreground-only",
+      completedTurnId: "turn-foreground-only",
+      autoNudge: {
+        authorityRevision: 17,
+        backgroundContinuation: false,
+      },
+    });
+    mocks.environmentStateById = {
+      "environment-a": environmentFixture("environment-a", [foregroundOnly]),
+    };
+
+    await render(<BackgroundAutoNudgeCoordinator />);
+    await waitForCalls(dispatch, 1);
+
+    expect(mocks.synchronizeSuppressionFromStorage).toHaveBeenCalled();
+    expect(commands(dispatch)).toEqual([
+      expect.objectContaining({
+        type: "thread.auto-nudge.stop",
+        threadId: "thread-foreground-only",
+      }),
+    ]);
+    expect(
+      commands(dispatch).some((command) => command.type === "thread.auto-nudge.dispatch"),
+    ).toBe(false);
   });
 
   it("drops delayed authority when an identically keyed route is replaced", async () => {

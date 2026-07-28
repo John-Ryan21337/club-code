@@ -63,6 +63,7 @@ import { BrowserWsRpcHarness, type NormalizedWsRpcRequestBody } from "../../test
 import { DEFAULT_CLIENT_SETTINGS } from "@cafecode/contracts/settings";
 import { __resetAutoNudgeTurnLedgerForTests } from "../autoNudger";
 import {
+  AUTO_NUDGE_SUPPRESSION_STORAGE_KEY,
   __resetConfirmedAutoNudgeArmingForTests,
   getConfirmedAutoNudgeArming,
 } from "../confirmedAutoNudgeArming";
@@ -4149,6 +4150,53 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
           .toBeDisabled();
       } finally {
         resolveConfigure({ sequence: snapshot.snapshotSequence + 1 });
+        await mounted.cleanup();
+      }
+    });
+
+    it("blocks enable when a different localhost port has durably stopped Auto Nudge", async () => {
+      let snapshot = createSnapshotForTargetUser({
+        targetMessageId: "msg-user-auto-nudge-cross-port-stop" as MessageId,
+        targetText: "cross-port durable Stop",
+      });
+      snapshot = setThreadAutoNudgeConfig(snapshot, THREAD_ID, {
+        ...DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+        authorityRevision: 13,
+        prompt: "Saved exact-thread prompt",
+      });
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot,
+        resolveRpc: (body) =>
+          body._tag === ORCHESTRATION_WS_METHODS.dispatchCommand
+            ? { sequence: snapshot.snapshotSequence + 1 }
+            : undefined,
+      });
+
+      try {
+        const arming = getConfirmedAutoNudgeArming();
+        expect(arming.getSuppressedSnapshot()).toBe(false);
+        // Cookies are host-scoped but localStorage events are origin/port
+        // scoped. Reproduce another renderer's Stop without notifying this
+        // renderer's stale React snapshot.
+        document.cookie = `${encodeURIComponent(AUTO_NUDGE_SUPPRESSION_STORAGE_KEY)}=${encodeURIComponent("v1:other-localhost-port")}; Path=/; Max-Age=3600; SameSite=Strict`;
+        expect(arming.getSuppressedSnapshot()).toBe(false);
+
+        await page.getByRole("combobox", { name: "Auto nudge mode" }).click();
+        await page.getByRole("option", { name: "Steady progress" }).click();
+
+        await expect
+          .element(page.getByText("Emergency Stop all is blocking Auto Nudge in every thread."))
+          .toBeInTheDocument();
+        expect(arming.getSuppressedSnapshot()).toBe(true);
+        expect(
+          wsRequests.some(
+            (request) =>
+              request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+              request.type === "thread.auto-nudge.configure",
+          ),
+        ).toBe(false);
+      } finally {
         await mounted.cleanup();
       }
     });

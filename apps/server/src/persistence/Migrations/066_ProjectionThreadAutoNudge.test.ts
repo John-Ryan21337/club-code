@@ -1,11 +1,15 @@
+import { ThreadAutoNudgeConfig } from "@cafecode/contracts";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { runMigrations } from "../Migrations.ts";
 import * as TestSqliteClient from "../TestSqliteClient.ts";
 import ProjectionThreadGoals from "./062_ProjectionThreadGoals.ts";
 import { DEFAULT_THREAD_AUTO_NUDGE_JSON } from "./066_ProjectionThreadAutoNudge.ts";
+
+const decodeThreadAutoNudgeConfig = Schema.decodeUnknownEffect(ThreadAutoNudgeConfig);
 
 describe("066_ProjectionThreadAutoNudge", () => {
   it.effect("adds disabled exact-thread authority without consulting legacy settings", () =>
@@ -81,8 +85,9 @@ describe("066_ProjectionThreadAutoNudge", () => {
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
 
-      // Reproduce the pre-release branch exactly: goals occupied 62, pacing
-      // compatibility 64 was absent, and Auto Nudge advanced the ledger to 65.
+      // Reproduce a fork-collision database: goals occupied 62, pacing
+      // compatibility 64 was absent, and the pre-release Auto Nudge migration
+      // advanced the ledger to 65.
       yield* runMigrations({ toMigrationInclusive: 61 });
       yield* ProjectionThreadGoals;
       yield* sql`
@@ -117,7 +122,7 @@ describe("066_ProjectionThreadAutoNudge", () => {
         DEFAULT '{"authorityRevision":0,"mode":"off","prompt":"","backgroundContinuation":false,"maxRounds":5,"maxMinutes":30,"armedAt":null,"baselineSettledTurnId":null,"lastDispatchedSettledTurnId":null,"roundsDispatched":0,"lastDispatchedAt":null}'
       `;
       const oldAuthority =
-        '{"authorityRevision":7,"mode":"steady","prompt":"keep this exact thread moving","backgroundContinuation":false,"maxRounds":3,"maxMinutes":12,"armedAt":"2026-07-28T00:00:01.000Z","baselineSettledTurnId":"turn-7","lastDispatchedSettledTurnId":null,"roundsDispatched":0,"lastDispatchedAt":null}';
+        '{"authorityRevision":7,"mode":"steady-progress","prompt":"keep this exact thread moving","backgroundContinuation":false,"maxRounds":3,"maxMinutes":12,"armedAt":"2026-07-28T00:00:01.000Z","baselineSettledTurnId":"turn-7","lastDispatchedSettledTurnId":null,"roundsDispatched":0,"lastDispatchedAt":null}';
       yield* sql`
         UPDATE projection_threads
         SET auto_nudge_json = ${oldAuthority}
@@ -163,6 +168,11 @@ describe("066_ProjectionThreadAutoNudge", () => {
         WHERE thread_id = 'thread-old-65'
       `;
       assert.equal(rows[0]?.autoNudgeJson, oldAuthority);
+      const decodedAuthority = yield* decodeThreadAutoNudgeConfig(
+        JSON.parse(rows[0]?.autoNudgeJson ?? "{}"),
+      );
+      assert.equal(decodedAuthority.mode, "steady-progress");
+      assert.equal(decodedAuthority.prompt, "keep this exact thread moving");
     }).pipe(Effect.provide(TestSqliteClient.layerMemory())),
   );
 });

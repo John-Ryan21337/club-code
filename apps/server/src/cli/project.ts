@@ -1,6 +1,6 @@
 import {
   CommandId,
-  OrchestrationReadModel,
+  OrchestrationShellSnapshot,
   ProjectId,
   type ClientOrchestrationCommand,
 } from "@cafecode/contracts";
@@ -97,8 +97,9 @@ const runLiveServerRequest = <A, E extends Error, R>(
     return yield* handle(response);
   }).pipe(withProjectCliLiveServerTimeout);
 
-const decodeOrchestrationReadModelResponse = (response: HttpClientResponse.HttpClientResponse) =>
-  HttpClientResponse.schemaBodyJson(OrchestrationReadModel)(response);
+const decodeOrchestrationShellSnapshotResponse = (
+  response: HttpClientResponse.HttpClientResponse,
+) => HttpClientResponse.schemaBodyJson(OrchestrationShellSnapshot)(response);
 
 const readErrorMessageFromResponse = (response: HttpClientResponse.HttpClientResponse) =>
   HttpClientResponse.schemaBodyJson(OrchestrationHttpErrorResponse)(response).pipe(
@@ -137,7 +138,7 @@ const resolveProjectTitle = Effect.fn("resolveProjectTitle")(function* (
 });
 
 const findActiveProjectTarget = Effect.fn("findActiveProjectTarget")(function* (input: {
-  readonly snapshot: OrchestrationReadModel;
+  readonly snapshot: OrchestrationShellSnapshot;
   readonly identifier: string;
 }) {
   const trimmedIdentifier = input.identifier.trim();
@@ -145,7 +146,7 @@ const findActiveProjectTarget = Effect.fn("findActiveProjectTarget")(function* (
     return yield* new ProjectCommandError({ message: "Project identifier cannot be empty." });
   }
 
-  const activeProjects = input.snapshot.projects.filter((project) => project.deletedAt === null);
+  const activeProjects = input.snapshot.projects;
   const exactIdMatch = activeProjects.find((project) => project.id === trimmedIdentifier);
   if (exactIdMatch) {
     return {
@@ -188,7 +189,7 @@ const fetchLiveOrchestrationSnapshot = (origin: string, bearerToken: string) =>
       HttpClientRequest.bearerToken(bearerToken),
     ),
     HttpClientResponse.matchStatus({
-      "2xx": decodeOrchestrationReadModelResponse,
+      "2xx": decodeOrchestrationShellSnapshotResponse,
       orElse: (response) =>
         readErrorMessageFromResponse(response).pipe(
           Effect.flatMap((message) => Effect.fail(new ProjectCommandError({ message }))),
@@ -221,7 +222,7 @@ const dispatchLiveOrchestrationCommand = (
 
 const getOfflineSnapshot = Effect.fn("getOfflineSnapshot")(function* () {
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
-  return yield* projectionSnapshotQuery.getSnapshot();
+  return yield* projectionSnapshotQuery.getShellSnapshot();
 });
 
 const tryResolveLiveProjectExecutionMode = Effect.fn("tryResolveLiveProjectExecutionMode")(
@@ -252,7 +253,7 @@ const tryResolveLiveProjectExecutionMode = Effect.fn("tryResolveLiveProjectExecu
 const runProjectMutation = Effect.fn("runProjectMutation")(function* (
   flags: CliAuthLocationFlags,
   run: (input: {
-    readonly snapshot: OrchestrationReadModel;
+    readonly snapshot: OrchestrationShellSnapshot;
     readonly dispatch: (
       command: ProjectCliDispatchCommand,
     ) => Effect.Effect<void, Error, FileSystem.FileSystem | HttpClient.HttpClient | Path.Path>;
@@ -327,14 +328,14 @@ const projectAddCommand = Command.make("add", {
         snapshot,
         dispatch,
       }: {
-        readonly snapshot: OrchestrationReadModel;
+        readonly snapshot: OrchestrationShellSnapshot;
         readonly dispatch: (
           command: ProjectCliDispatchCommand,
         ) => Effect.Effect<void, Error, FileSystem.FileSystem | HttpClient.HttpClient | Path.Path>;
       }) {
         const workspaceRoot = yield* normalizeWorkspaceRootForProjectCommand(flags.workspaceRoot);
         const existingProject = snapshot.projects.find(
-          (project) => project.deletedAt === null && project.workspaceRoot === workspaceRoot,
+          (project) => project.workspaceRoot === workspaceRoot,
         );
         if (existingProject) {
           return yield* new ProjectCommandError({
@@ -373,7 +374,7 @@ const projectRemoveCommand = Command.make("remove", {
         snapshot,
         dispatch,
       }: {
-        readonly snapshot: OrchestrationReadModel;
+        readonly snapshot: OrchestrationShellSnapshot;
         readonly dispatch: (
           command: ProjectCliDispatchCommand,
         ) => Effect.Effect<void, Error, FileSystem.FileSystem | HttpClient.HttpClient | Path.Path>;
@@ -408,7 +409,7 @@ const projectRenameCommand = Command.make("rename", {
         snapshot,
         dispatch,
       }: {
-        readonly snapshot: OrchestrationReadModel;
+        readonly snapshot: OrchestrationShellSnapshot;
         readonly dispatch: (
           command: ProjectCliDispatchCommand,
         ) => Effect.Effect<void, Error, FileSystem.FileSystem | HttpClient.HttpClient | Path.Path>;

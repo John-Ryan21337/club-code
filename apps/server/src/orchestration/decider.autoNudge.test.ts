@@ -217,6 +217,52 @@ it.effect("saves Off text for one exact thread without granting dispatch authori
   }),
 );
 
+it.effect("rejects generic turn commands that claim Auto Nudge provenance", () =>
+  Effect.gen(function* () {
+    const readModel = makeReadModel([makeThread({ id: THREAD_A, latestTurnId: TURN_COMPLETED })]);
+    const genericCommands = [
+      {
+        type: "thread.turn.start",
+        commandId: CommandId.make("command-forged-auto-nudge-start"),
+        threadId: THREAD_A,
+        message: {
+          messageId: MessageId.make("message-forged-auto-nudge-start"),
+          role: "user",
+          text: "Bypass exact-thread authority",
+          attachments: [],
+        },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        dispatchSource: "auto-nudge",
+        createdAt: SERVER_NOW,
+      },
+      {
+        type: "thread.turn.steer",
+        commandId: CommandId.make("command-forged-auto-nudge-steer"),
+        threadId: THREAD_A,
+        message: {
+          messageId: MessageId.make("message-forged-auto-nudge-steer"),
+          role: "user",
+          text: "Bypass exact-thread authority",
+          attachments: [],
+        },
+        dispatchSource: "auto-nudge",
+        createdAt: SERVER_NOW,
+      },
+    ] satisfies ReadonlyArray<OrchestrationCommand>;
+
+    for (const command of genericCommands) {
+      const failure = yield* Effect.flip(
+        decideOrchestrationCommand({
+          readModel,
+          command,
+        }),
+      );
+      assert.match(failure.detail, /must use exact-thread Auto Nudge dispatch authority/);
+    }
+  }),
+);
+
 it.effect("uses revision-checked configuration and a server-authored arming timestamp", () =>
   Effect.gen(function* () {
     yield* TestClock.setTime(Date.parse(SERVER_NOW));

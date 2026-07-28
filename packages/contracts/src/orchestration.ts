@@ -877,7 +877,9 @@ const ClientThreadTurnStartCommand = Schema.Struct({
   interactionMode: ProviderInteractionMode,
   bootstrap: Schema.optional(ThreadTurnStartBootstrap),
   sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
-  dispatchSource: Schema.optional(TurnDispatchSource),
+  // Automated turns must enter through thread.auto-nudge.dispatch so the
+  // server can re-check exact-thread authority and source the saved prompt.
+  dispatchSource: Schema.optional(Schema.Literal("user")),
   createdAt: IsoDateTime,
 });
 
@@ -913,7 +915,7 @@ const ClientThreadTurnSteerCommand = Schema.Struct({
     text: Schema.String,
     attachments: Schema.Array(UploadChatAttachment),
   }),
-  dispatchSource: Schema.optional(TurnDispatchSource),
+  dispatchSource: Schema.optional(Schema.Literal("user")),
   createdAt: IsoDateTime,
 });
 

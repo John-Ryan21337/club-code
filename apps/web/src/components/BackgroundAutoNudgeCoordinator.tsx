@@ -83,6 +83,14 @@ export function BackgroundAutoNudgeCoordinator() {
     const observedAuthorityKeys = new Set<string>();
     const liveAuthorityKeys = new Set<string>();
     const liveStopKeys = new Set<string>();
+    const arming = getConfirmedAutoNudgeArming();
+
+    // localStorage change events do not cross localhost ports. Re-read the
+    // host-scoped durable cookie on every coordinator pass so a renderer on a
+    // previous desktop port converges enabled foreground-only threads to Off
+    // even though it never reaches an automated dispatch handoff.
+    arming.synchronizeSuppressionFromStorage();
+    const suppressionActive = globallySuppressed || arming.getSuppressedSnapshot();
 
     for (const environment of Object.values(environmentStateById)) {
       if (!environment.bootstrapComplete) continue;
@@ -92,7 +100,7 @@ export function BackgroundAutoNudgeCoordinator() {
         if (!shell) continue;
         const config = shell.autoNudge;
 
-        if (globallySuppressed) {
+        if (suppressionActive) {
           if (config.mode === "off") continue;
           const requestKey = stopKey(shell, config);
           liveStopKeys.add(requestKey);
@@ -196,8 +204,6 @@ export function BackgroundAutoNudgeCoordinator() {
         const api = readEnvironmentApi(shell.environmentId);
         if (!api) continue;
 
-        const arming = getConfirmedAutoNudgeArming();
-        arming.synchronizeSuppressionFromStorage();
         if (!arming.confirmExecutionAuthorized()) continue;
 
         // Consume locally before transport and never retry an uncertain result.

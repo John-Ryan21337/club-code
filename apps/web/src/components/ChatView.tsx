@@ -5769,6 +5769,19 @@ export default function ChatView(props: ChatViewProps) {
     if (values.mode !== "off" && values.prompt.trim().length === 0) {
       throw new Error("An enabled Auto Nudge configuration requires a prompt.");
     }
+    if (values.mode !== "off" && !getConfirmedAutoNudgeArming().confirmExecutionAuthorized()) {
+      if (autoNudgeContextKeyRef.current === targetContextKey) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Emergency Stop all is active",
+            description:
+              "This thread was not enabled because the durable Emergency Stop barrier is active.",
+          }),
+        );
+      }
+      throw new Error("The durable Auto Nudge suppression barrier is active.");
+    }
     if (autoNudgeWriteInFlightByScopeRef.current.has(targetContextKey)) {
       throw new Error("An Auto Nudge configuration write is already pending for this thread.");
     }

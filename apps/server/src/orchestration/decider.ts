@@ -838,6 +838,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.turn.start": {
+      if (command.dispatchSource === "auto-nudge") {
+        return yield* rejectAutoNudgeCommand(
+          command,
+          "Automated turns must use exact-thread Auto Nudge dispatch authority.",
+        );
+      }
       const targetThread = yield* requireThread({
         readModel,
         command,
@@ -994,6 +1000,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.turn.steer": {
+      if (command.dispatchSource === "auto-nudge") {
+        return yield* rejectAutoNudgeCommand(
+          command,
+          "Automated turns must use exact-thread Auto Nudge dispatch authority.",
+        );
+      }
       const targetThread = yield* requireThread({
         readModel,
         command,
