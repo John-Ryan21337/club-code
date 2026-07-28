@@ -8,6 +8,7 @@ import {
 } from "./autoNudgeThreadPolicy";
 
 export const AUTO_NUDGE_BACKGROUND_STORAGE_KEY = "club-code.auto-nudge.background.v1";
+const AUTO_NUDGE_BACKGROUND_STORAGE_PROBE_KEY = "club-code.auto-nudge.background.probe.v1";
 const MAX_BACKGROUND_LEDGER_ENTRIES = 40;
 const MAX_BACKGROUND_STORAGE_CHARACTERS = 64_000;
 const MAX_SAFE_ID_LENGTH = 512;
@@ -261,15 +262,20 @@ export class BackgroundAutoNudgeController {
 
   /**
    * A cross-tab dispatch lock reloads the durable state immediately before it
-   * evaluates a terminal turn. If persistence is unavailable or corrupt this
-   * becomes an empty, stopped state, which is safer than reusing stale memory.
+   * evaluates a terminal turn. Corrupt durable state becomes empty and stopped.
+   * A controller created without storage cannot acquire that lock, so a reload
+   * is an intentional no-op instead of erasing its in-memory display state.
    */
   reloadFromStorage(): void {
-    const next = readState(this.storage);
-    if (JSON.stringify(next) === JSON.stringify(this.state)) return;
-    this.state = next;
+    if (!this.storage) return;
+    const previousState = this.state;
+    this.state = readState(this.storage);
     this.sequence = Math.max(this.sequence, this.state.ledger.length);
-    this.emit();
+    // The coordinator reloads under its dispatch lock. Emitting for an
+    // unchanged snapshot would retrigger that effect indefinitely because
+    // deserialization creates a fresh object each time.
+    if (JSON.stringify(previousState) === JSON.stringify(this.state)) return;
+    for (const listener of this.listeners) listener();
   }
 
   subscribe = (listener: () => void): (() => void) => {
@@ -620,29 +626,56 @@ export class BackgroundAutoNudgeController {
 }
 
 let sharedController: BackgroundAutoNudgeController | null = null;
-let removeStorageListener: (() => void) | null = null;
+let removeSharedStorageListener: (() => void) | null = null;
+let backgroundDispatchSupport: boolean | null = null;
 
-export function getBackgroundAutoNudgeController(): BackgroundAutoNudgeController {
-  if (sharedController) return sharedController;
-  sharedController = new BackgroundAutoNudgeController(resolveStorage());
-  if (typeof window !== "undefined") {
+function makeSharedBackgroundAutoNudgeController(): BackgroundAutoNudgeController {
+  removeSharedStorageListener?.();
+  removeSharedStorageListener = null;
+  const storage = resolveStorage();
+  const controller = new BackgroundAutoNudgeController(storage);
+  if (storage && typeof window !== "undefined") {
     const onStorage = (event: StorageEvent) => {
-      if (
-        event.storageArea === window.localStorage &&
-        event.key === AUTO_NUDGE_BACKGROUND_STORAGE_KEY
-      ) {
-        sharedController?.reloadFromStorage();
+      if (event.key === AUTO_NUDGE_BACKGROUND_STORAGE_KEY || event.key === null) {
+        controller.reloadFromStorage();
       }
     };
     window.addEventListener("storage", onStorage);
-    removeStorageListener = () => window.removeEventListener("storage", onStorage);
+    removeSharedStorageListener = () => window.removeEventListener("storage", onStorage);
   }
+  return controller;
+}
+
+export function getBackgroundAutoNudgeController(): BackgroundAutoNudgeController {
+  sharedController ??= makeSharedBackgroundAutoNudgeController();
   return sharedController;
 }
 
 /** Background dispatch is intentionally unavailable without a cross-tab lock. */
 export function supportsBackgroundAutoNudgeDispatchLock(): boolean {
-  return supportsAutoNudgeExecutionLock();
+  if (backgroundDispatchSupport !== null) return backgroundDispatchSupport;
+  if (typeof navigator === "undefined" || typeof navigator.locks?.request !== "function") {
+    backgroundDispatchSupport = false;
+    return backgroundDispatchSupport;
+  }
+  const storage = resolveStorage();
+  if (!storage) {
+    backgroundDispatchSupport = false;
+    return backgroundDispatchSupport;
+  }
+  try {
+    const previous = storage.getItem(AUTO_NUDGE_BACKGROUND_STORAGE_PROBE_KEY);
+    storage.setItem(AUTO_NUDGE_BACKGROUND_STORAGE_PROBE_KEY, "1");
+    if (previous === null) {
+      storage.removeItem(AUTO_NUDGE_BACKGROUND_STORAGE_PROBE_KEY);
+    } else {
+      storage.setItem(AUTO_NUDGE_BACKGROUND_STORAGE_PROBE_KEY, previous);
+    }
+    backgroundDispatchSupport = true;
+  } catch {
+    backgroundDispatchSupport = false;
+  }
+  return backgroundDispatchSupport;
 }
 
 export function useBackgroundAutoNudgeState(): BackgroundAutoNudgeState {
@@ -653,9 +686,10 @@ export function useBackgroundAutoNudgeState(): BackgroundAutoNudgeState {
 export function __resetBackgroundAutoNudgeControllerForTests(options?: {
   readonly clearStorage?: boolean;
 }): void {
-  removeStorageListener?.();
-  removeStorageListener = null;
+  removeSharedStorageListener?.();
+  removeSharedStorageListener = null;
   sharedController = null;
+  backgroundDispatchSupport = null;
   if (!options?.clearStorage) return;
   try {
     resolveStorage()?.removeItem(AUTO_NUDGE_BACKGROUND_STORAGE_KEY);

@@ -13,15 +13,15 @@ import {
   useBackgroundAutoNudgeState,
 } from "../backgroundAutoNudger";
 import { getAutoNudgeTurnLedger } from "../autoNudger";
-import {
-  AUTO_NUDGE_EXECUTION_LOCK_NAME,
-  getAutoNudgeThreadPolicyStore,
-} from "../autoNudgeThreadPolicy";
 import { useComposerDraftStore } from "../composerDraftStore";
+import {
+  getConfirmedAutoNudgeArming,
+  useAutoNudgeSuppressedState,
+} from "../confirmedAutoNudgeArming";
 import { readEnvironmentApi } from "../environmentApi";
-import { useSettings } from "../hooks/useSettings";
+import { getClientSettings, useSettings } from "../hooks/useSettings";
 import { newCommandId, newMessageId } from "../lib/utils";
-import { useServerConfig } from "../rpc/serverState";
+import { getServerConfig, useServerConfig } from "../rpc/serverState";
 import { useStore } from "../store";
 
 const COORDINATOR_TICK_MS = 250;
@@ -50,13 +50,18 @@ function providerCanAcceptTurn(provider: ServerProvider | null): boolean {
  */
 export function BackgroundAutoNudgeCoordinator() {
   const backgroundState = useBackgroundAutoNudgeState();
+  const autoNudgeSuppressed = useAutoNudgeSuppressedState();
   const settings = useSettings();
   const serverConfig = useServerConfig();
   const environmentStateById = useStore((store) => store.environmentStateById);
-  // Subscribe to draft-map revisions so a newly typed owner draft triggers a
-  // prompt coordinator pass. The exact owner draft is resolved again under
-  // the execution lock after durable ownership is reloaded.
-  const composerDraftsByThreadKey = useComposerDraftStore((store) => store.draftsByThreadKey);
+  const ownerComposerDraft = useComposerDraftStore((store) => {
+    const owner = backgroundState.owner;
+    if (!owner) return null;
+    return store.getComposerDraft({
+      environmentId: EnvironmentId.make(owner.environmentId),
+      threadId: ThreadId.make(owner.threadId),
+    });
+  });
   const [tick, setTick] = useState(0);
 
   useEffect(() => {
@@ -68,168 +73,154 @@ export function BackgroundAutoNudgeCoordinator() {
   useEffect(() => {
     const controller = getBackgroundAutoNudgeController();
     if (!backgroundState.owner || backgroundState.status !== "active") return;
+    let cancelled = false;
     // localStorage alone has no compare-and-swap. Chromium/Electron's lock
     // serializes reload -> consume -> transport handoff across renderer tabs;
     // an older browser pauses instead of permitting an ambiguous duplicate.
     if (!supportsBackgroundAutoNudgeDispatchLock()) {
-      controller.pause(
-        backgroundState.owner,
-        "Background continuation requires a cross-tab dispatch lock.",
-      );
+      controller.pause("Background continuation requires a cross-tab dispatch lock.");
       return;
     }
 
     void navigator.locks
-      .request(AUTO_NUDGE_EXECUTION_LOCK_NAME, { ifAvailable: true, mode: "exclusive" }, (lock) => {
-        if (!lock) return;
-        controller.reloadFromStorage();
-        const policyStore = getAutoNudgeThreadPolicyStore();
-        policyStore.reloadFromStorage();
-        let currentState = controller.getSnapshot();
-        const owner = currentState.owner;
-        if (!owner || currentState.status !== "active") return;
+      .request(
+        "club-code.auto-nudge.background.dispatch.v1",
+        { ifAvailable: true, mode: "exclusive" },
+        (lock) => {
+          if (!lock || cancelled) return;
+          controller.reloadFromStorage();
+          const currentState = controller.getSnapshot();
+          const owner = currentState.owner;
+          if (!owner || currentState.status !== "active") return;
 
-        let ownerPolicy = policyStore.getPolicy(owner);
-        // One narrow migration path preserves an already-running v1 owner.
-        // Legacy device-wide settings are never copied to arbitrary focused
-        // threads: only the exact durable owner may inherit them once.
-        if (
-          !currentState.runPolicy &&
-          !policyStore.hasPolicy(owner) &&
-          settings.autoNudgeBackgroundContinuation &&
-          settings.autoNudgeMode !== "off"
-        ) {
-          ownerPolicy = policyStore.setPolicy(owner, {
-            mode: settings.autoNudgeMode,
-            backgroundContinuation: true,
-            maxRounds: settings.autoNudgeMaxRounds,
-            maxMinutes: settings.autoNudgeMaxMinutes,
+          const currentEnvironmentStateById = useStore.getState().environmentStateById;
+          const currentServerConfig = getServerConfig();
+          const environment = currentEnvironmentStateById[owner.environmentId];
+          // Reload/remount must wait for the authoritative shell snapshot. Treating
+          // an unhydrated store as a deleted thread would destroy valid ownership.
+          if (!environment?.bootstrapComplete || !currentServerConfig) return;
+          const ownedThreadId = ThreadId.make(owner.threadId);
+          const shell = environment?.threadShellById[ownedThreadId];
+          const summary = environment?.sidebarThreadSummaryById[ownedThreadId];
+          const session = environment?.threadSessionById[ownedThreadId] ?? summary?.session ?? null;
+          const latestTurn =
+            environment?.threadTurnStateById[ownedThreadId]?.latestTurn ??
+            summary?.latestTurn ??
+            null;
+          const providerInstanceId =
+            session?.providerInstanceId ??
+            (session?.provider
+              ? defaultInstanceIdForDriver(session.provider)
+              : shell?.modelSelection.instanceId);
+          const provider =
+            currentServerConfig.providers.find(
+              (entry) => entry.instanceId === providerInstanceId,
+            ) ?? null;
+          const terminalTurnKey =
+            shell &&
+            latestTurn?.state === "completed" &&
+            latestTurn.completedAt &&
+            session?.status === "ready"
+              ? `${owner.environmentId}:${owner.threadId}:${latestTurn.turnId}`
+              : null;
+          const currentOwnerComposerDraft = useComposerDraftStore.getState().getComposerDraft({
+            environmentId: EnvironmentId.make(owner.environmentId),
+            threadId: ownedThreadId,
           });
-        }
-        controller.synchronizePolicy(owner, ownerPolicy);
-        currentState = controller.getSnapshot();
-        if (
-          !currentState.owner ||
-          currentState.status !== "active" ||
-          currentState.owner.environmentId !== owner.environmentId ||
-          currentState.owner.threadId !== owner.threadId
-        ) {
-          return;
-        }
+          const ledger = getAutoNudgeTurnLedger();
+          // Read after acquiring the dispatch lock. Stop writes its durable
+          // suppression barrier before settings persistence, so a stale React
+          // closure or an older enable write cannot authorize another dispatch.
+          const currentSettings = getClientSettings();
+          const arming = getConfirmedAutoNudgeArming();
+          arming.synchronizeSuppressionFromStorage();
+          const executionSuppressed = arming.getSuppressedSnapshot();
 
-        const environment = environmentStateById[owner.environmentId];
-        // Reload/remount must wait for the authoritative shell snapshot. Treating
-        // an unhydrated store as a deleted thread would destroy valid ownership.
-        if (!environment?.bootstrapComplete || !serverConfig) return;
-        const ownedThreadId = ThreadId.make(owner.threadId);
-        const ownerComposerDraft = useComposerDraftStore.getState().getComposerDraft({
-          environmentId: EnvironmentId.make(owner.environmentId),
-          threadId: ownedThreadId,
-        });
-        const shell = environment?.threadShellById[ownedThreadId];
-        const summary = environment?.sidebarThreadSummaryById[ownedThreadId];
-        const session = environment?.threadSessionById[ownedThreadId] ?? summary?.session ?? null;
-        const latestTurn =
-          environment?.threadTurnStateById[ownedThreadId]?.latestTurn ??
-          summary?.latestTurn ??
-          null;
-        const providerInstanceId =
-          session?.providerInstanceId ??
-          (session?.provider
-            ? defaultInstanceIdForDriver(session.provider)
-            : shell?.modelSelection.instanceId);
-        const provider =
-          serverConfig?.providers.find((entry) => entry.instanceId === providerInstanceId) ?? null;
-        const terminalTurnKey =
-          shell &&
-          latestTurn?.state === "completed" &&
-          latestTurn.completedAt &&
-          session?.status === "ready"
-            ? `${owner.environmentId}:${owner.threadId}:${latestTurn.turnId}`
-            : null;
-        const ledger = getAutoNudgeTurnLedger();
-        ledger.reloadFromStorage();
-
-        const dispatch = controller.observe({
-          nowMs: Date.now(),
-          thread:
-            shell && summary
-              ? {
-                  exists: true,
-                  archived: shell.archivedAt !== null,
-                  terminalTurnKey,
-                  latestUserMessageAt: summary.latestUserMessageAt,
-                  sessionReady: session?.status === "ready",
-                  isRunning:
-                    session?.status === "running" ||
-                    session?.orchestrationStatus === "running" ||
-                    latestTurn?.state === "running",
-                  hasPendingWork:
-                    summary.hasPendingApprovals ||
-                    summary.hasPendingUserInput ||
-                    summary.hasActionableProposedPlan ||
-                    Boolean(ownerComposerDraft?.prompt.trim()) ||
-                    (ownerComposerDraft?.images.length ?? 0) > 0 ||
-                    Boolean(shell.error),
-                  providerAvailable: providerCanAcceptTurn(provider),
-                }
-              : { exists: false },
-          alreadyConsumed: (turnKey) => ledger.has(turnKey),
-          newMessageId: () => String(newMessageId()),
-        });
-        if (!controller.getSnapshot().owner && ownerPolicy.backgroundContinuation) {
-          policyStore.setPolicy(owner, { backgroundContinuation: false });
-        }
-        if (!dispatch || !shell) return;
-
-        // Consume before crossing the transport. A reload or lost ACK can skip one
-        // nudge, but can never submit the same completed turn twice.
-        ledger.mark(dispatch.terminalTurnKey);
-        const api = readEnvironmentApi(shell.environmentId);
-        if (!api) {
-          controller.markDispatchFailed(
-            dispatch.messageId,
-            "Environment transport is unavailable; background continuation paused.",
-          );
-          return;
-        }
-
-        void api.orchestration
-          .dispatchCommand({
-            type: "thread.turn.start",
-            commandId: newCommandId(),
-            threadId: shell.id,
-            message: {
-              messageId: MessageId.make(dispatch.messageId),
-              role: "user",
-              text: dispatch.prompt,
-              attachments: [],
+          const dispatch = controller.observe({
+            nowMs: Date.now(),
+            settings: {
+              mode: executionSuppressed ? "off" : currentSettings.autoNudgeMode,
+              enabled: !executionSuppressed && currentSettings.autoNudgeBackgroundContinuation,
+              maxRounds: currentSettings.autoNudgeMaxRounds,
+              maxMinutes: currentSettings.autoNudgeMaxMinutes,
             },
-            modelSelection: shell.modelSelection,
-            titleSeed: shell.title,
-            runtimeMode: shell.runtimeMode,
-            interactionMode: shell.interactionMode,
-            createdAt: dispatch.createdAt,
-          })
-          .catch(() => {
+            thread:
+              shell && summary
+                ? {
+                    exists: true,
+                    archived: shell.archivedAt !== null,
+                    terminalTurnKey,
+                    latestUserMessageAt: summary.latestUserMessageAt,
+                    sessionReady: session?.status === "ready",
+                    isRunning:
+                      session?.status === "running" ||
+                      session?.orchestrationStatus === "running" ||
+                      latestTurn?.state === "running",
+                    hasPendingWork:
+                      summary.hasPendingApprovals ||
+                      summary.hasPendingUserInput ||
+                      summary.hasActionableProposedPlan ||
+                      Boolean(currentOwnerComposerDraft?.prompt.trim()) ||
+                      (currentOwnerComposerDraft?.images.length ?? 0) > 0 ||
+                      Boolean(shell.error),
+                    providerAvailable: providerCanAcceptTurn(provider),
+                  }
+                : { exists: false },
+            alreadyConsumed: (turnKey) => ledger.has(turnKey),
+            newMessageId: () => String(newMessageId()),
+          });
+          if (!dispatch || !shell) return;
+
+          // Consume before crossing the transport. A reload or lost ACK can skip one
+          // nudge, but can never submit the same completed turn twice.
+          ledger.mark(dispatch.terminalTurnKey);
+          const api = readEnvironmentApi(shell.environmentId);
+          if (!api) {
             controller.markDispatchFailed(
               dispatch.messageId,
-              "Provider or transport rejected the automated prompt; continuation paused.",
+              "Environment transport is unavailable; background continuation paused.",
             );
-          });
-      })
+            return;
+          }
+
+          void api.orchestration
+            .dispatchCommand({
+              type: "thread.turn.start",
+              commandId: newCommandId(),
+              threadId: shell.id,
+              message: {
+                messageId: MessageId.make(dispatch.messageId),
+                role: "user",
+                text: dispatch.prompt,
+                attachments: [],
+              },
+              modelSelection: shell.modelSelection,
+              titleSeed: shell.title,
+              runtimeMode: shell.runtimeMode,
+              interactionMode: shell.interactionMode,
+              createdAt: dispatch.createdAt,
+            })
+            .catch(() => {
+              controller.markDispatchFailed(
+                dispatch.messageId,
+                "Provider or transport rejected the automated prompt; continuation paused.",
+              );
+            });
+        },
+      )
       .catch(() => {
-        if (backgroundState.owner) {
-          controller.pause(
-            backgroundState.owner,
-            "Background continuation could not acquire a cross-tab dispatch lock.",
-          );
+        if (!cancelled) {
+          controller.pause("Background continuation could not acquire a cross-tab dispatch lock.");
         }
       });
+    return () => {
+      cancelled = true;
+    };
   }, [
+    autoNudgeSuppressed,
     backgroundState,
-    composerDraftsByThreadKey,
     environmentStateById,
+    ownerComposerDraft,
     serverConfig,
     settings.autoNudgeBackgroundContinuation,
     settings.autoNudgeMaxMinutes,

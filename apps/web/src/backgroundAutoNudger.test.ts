@@ -1,9 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   AUTO_NUDGE_PROJECTION_ACK_TIMEOUT_MS,
   AUTO_NUDGE_BACKGROUND_STORAGE_KEY,
+  __resetBackgroundAutoNudgeControllerForTests,
   BackgroundAutoNudgeController,
+  getBackgroundAutoNudgeController,
   type BackgroundAutoNudgeObservation,
 } from "./backgroundAutoNudger";
 
@@ -57,6 +59,68 @@ function observation(
 }
 
 describe("background auto nudge controller", () => {
+  it("notifies subscribers when a cross-window lock reloads durable ownership", () => {
+    const { storage } = storageFixture();
+    const firstWindow = new BackgroundAutoNudgeController(storage);
+    const secondWindow = new BackgroundAutoNudgeController(storage);
+    let notifications = 0;
+    secondWindow.subscribe(() => {
+      notifications += 1;
+    });
+
+    firstWindow.start(owner, null, startedAt);
+    secondWindow.reloadFromStorage();
+
+    expect(notifications).toBe(1);
+    expect(secondWindow.getSnapshot()).toMatchObject({ owner, status: "active" });
+
+    secondWindow.reloadFromStorage();
+    expect(notifications).toBe(1);
+  });
+
+  it("synchronizes a Stop written by another renderer", () => {
+    const { storage } = storageFixture();
+    const storageListeners: Array<(event: { readonly key: string | null }) => void> = [];
+    vi.stubGlobal("window", {
+      localStorage: storage,
+      addEventListener: (
+        type: string,
+        listener: (event: { readonly key: string | null }) => void,
+      ) => {
+        if (type === "storage") storageListeners.push(listener);
+      },
+      removeEventListener: (
+        type: string,
+        listener: (event: { readonly key: string | null }) => void,
+      ) => {
+        if (type !== "storage") return;
+        const index = storageListeners.indexOf(listener);
+        if (index >= 0) storageListeners.splice(index, 1);
+      },
+    });
+
+    try {
+      __resetBackgroundAutoNudgeControllerForTests();
+      const observingWindow = getBackgroundAutoNudgeController();
+      const stoppingWindow = new BackgroundAutoNudgeController(storage);
+      stoppingWindow.start(owner, null, startedAt);
+      storageListeners[0]?.({ key: AUTO_NUDGE_BACKGROUND_STORAGE_KEY });
+      expect(observingWindow.getSnapshot()).toMatchObject({ owner, status: "active" });
+
+      stoppingWindow.stop("Stopped in another renderer.", startedAt + 1);
+      storageListeners[0]?.({ key: AUTO_NUDGE_BACKGROUND_STORAGE_KEY });
+
+      expect(observingWindow.getSnapshot()).toMatchObject({
+        owner: null,
+        status: "stopped",
+        reason: "Stopped in another renderer.",
+      });
+    } finally {
+      __resetBackgroundAutoNudgeControllerForTests();
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("arms one owned thread, waits for the delay, and records an attributable send", () => {
     const { storage } = storageFixture();
     const controller = new BackgroundAutoNudgeController(storage);
