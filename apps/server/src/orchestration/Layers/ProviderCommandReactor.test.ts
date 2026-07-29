@@ -71,9 +71,11 @@ const asTurnId = (value: string): TurnId => TurnId.make(value);
 const deriveServerPathsSync = (baseDir: string, devUrl: URL | undefined) =>
   Effect.runSync(deriveServerPaths(baseDir, devUrl).pipe(Effect.provide(NodeServices.layer)));
 
+const WAIT_FOR_EXPECTATION_TIMEOUT_MS = process.platform === "win32" ? 10_000 : 2_000;
+
 async function waitFor(
   predicate: () => boolean | Promise<boolean>,
-  timeoutMs = 2000,
+  timeoutMs = WAIT_FOR_EXPECTATION_TIMEOUT_MS,
 ): Promise<void> {
   const deadline = performance.now() + timeoutMs;
   while (true) {
