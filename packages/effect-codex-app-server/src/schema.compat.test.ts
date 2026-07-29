@@ -44,11 +44,13 @@ it("decodes 0.146 app-tool and remote-skill presentation metadata", () => {
     name: "workspace_read",
     title: "Workspace read",
   });
-  const skillInterface = Schema.decodeUnknownSync(CodexSchema.V2SkillsListResponse__SkillInterface)({
-    displayName: "Remote skill",
-    iconSmallUrl: "https://example.invalid/small.png",
-    iconLargeUrl: "https://example.invalid/large.png",
-  });
+  const skillInterface = Schema.decodeUnknownSync(CodexSchema.V2SkillsListResponse__SkillInterface)(
+    {
+      displayName: "Remote skill",
+      iconSmallUrl: "https://example.invalid/small.png",
+      iconLargeUrl: "https://example.invalid/large.png",
+    },
+  );
 
   assert.equal(tool.isEnabled, true);
   assert.equal(tool.isReadOnly, true);
