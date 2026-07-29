@@ -89,6 +89,7 @@ const CODEX_TRANSPORT_POLICY_PERSISTENCE_ENV = "CAFE_CODE_PERSIST_CODEX_HTTP_FAL
 const CODEX_WEBSOCKET_FALLBACK_REASON = "responses_websocket_stream_disconnected";
 const CODEX_TURN_DIFF_PREVIEW_CHARS = 4_096;
 const CODEX_HOOK_OUTPUT_PREVIEW_CHARS = 4_096;
+const CODEX_PLUGIN_ATTRIBUTION_MAX_CHARS = 512;
 
 class CodexTransportPolicyFileError extends Data.TaggedError("CodexTransportPolicyFileError")<{
   readonly cause: unknown;
@@ -587,7 +588,52 @@ function toCanonicalItemType(raw: string | undefined | null): CanonicalItemType 
   return "unknown";
 }
 
-function itemTitle(itemType: CanonicalItemType): string | undefined {
+function boundedSingleLine(value: string | undefined | null, maxChars: number): string | undefined {
+  const normalized = value
+    ?.replace(/[\p{Cc}\p{Bidi_Control}]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalized) {
+    return undefined;
+  }
+  return normalized.length > maxChars ? `${normalized.slice(0, maxChars - 3)}...` : normalized;
+}
+
+function safePluginScriptPath(value: string | undefined | null): string | undefined {
+  const candidate = boundedSingleLine(value, CODEX_PLUGIN_ATTRIBUTION_MAX_CHARS);
+  if (!candidate) {
+    return undefined;
+  }
+
+  // Codex 0.146 documents `scriptPath` as a trusted, plugin-relative path.
+  // Validate that invariant again at Cafe's display boundary so a malformed or
+  // future provider cannot make an absolute or parent-traversing path look like
+  // first-party plugin attribution in the work log.
+  const normalized = candidate.replaceAll("\\", "/");
+  if (
+    normalized.startsWith("/") ||
+    /^[A-Za-z]:\//.test(normalized) ||
+    normalized.split("/").some((segment) => segment === "..")
+  ) {
+    return undefined;
+  }
+  return normalized;
+}
+
+function pluginCommandAttribution(item: CodexLifecycleItem): string | undefined {
+  if (item.type !== "commandExecution") {
+    return undefined;
+  }
+
+  const pluginId = boundedSingleLine(item.pluginId, CODEX_PLUGIN_ATTRIBUTION_MAX_CHARS);
+  if (!pluginId) {
+    return undefined;
+  }
+  const scriptPath = safePluginScriptPath(item.scriptPath);
+  return scriptPath ? `${pluginId} (${scriptPath})` : pluginId;
+}
+
+function itemTitle(itemType: CanonicalItemType, item: CodexLifecycleItem): string | undefined {
   switch (itemType) {
     case "assistant_message":
       return "Assistant message";
@@ -598,7 +644,7 @@ function itemTitle(itemType: CanonicalItemType): string | undefined {
     case "plan":
       return "Plan";
     case "command_execution":
-      return "Ran command";
+      return pluginCommandAttribution(item) ? "Ran plugin command" : "Ran command";
     case "file_change":
       return "File change";
     case "mcp_tool_call":
@@ -647,9 +693,11 @@ function itemDetail(item: CodexLifecycleItem): string | undefined {
   for (const candidate of candidates) {
     const trimmed = typeof candidate === "string" ? trimText(candidate) : undefined;
     if (!trimmed) continue;
-    return trimmed;
+    const attribution = pluginCommandAttribution(item);
+    return attribution ? `${trimmed}\nPlugin: ${attribution}` : trimmed;
   }
-  return undefined;
+  const attribution = pluginCommandAttribution(item);
+  return attribution ? `Plugin: ${attribution}` : undefined;
 }
 
 type CodexHookRun =
@@ -1099,6 +1147,7 @@ function mapItemLifecycle(
   }
 
   const detail = itemDetail(item);
+  const title = itemTitle(itemType, item);
   const status =
     lifecycle === "item.started"
       ? "inProgress"
@@ -1112,7 +1161,7 @@ function mapItemLifecycle(
     payload: {
       itemType,
       ...(status ? { status } : {}),
-      ...(itemTitle(itemType) ? { title: itemTitle(itemType) } : {}),
+      ...(title ? { title } : {}),
       ...(detail ? { detail } : {}),
       ...(event.payload !== undefined ? { data: event.payload } : {}),
     },
