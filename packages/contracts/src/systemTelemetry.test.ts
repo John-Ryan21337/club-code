@@ -7,6 +7,10 @@ import {
   MAX_GPU_ADAPTER_NAME_LENGTH,
   MAX_GPU_ADAPTERS,
   MAX_GPU_MEMORY_BYTES,
+  MAX_HARDWARE_TEMPERATURE_CELSIUS,
+  MAX_TEMPERATURE_SENSOR_LABEL_LENGTH,
+  MAX_TEMPERATURE_SENSORS,
+  MIN_HARDWARE_TEMPERATURE_CELSIUS,
   ServerProjectSystemTelemetryError,
   ServerProjectSystemTelemetryInput,
   ServerProjectSystemTelemetryResult,
@@ -289,6 +293,9 @@ describe("ServerProjectSystemTelemetryResult", () => {
     rejects({ utilizationPercent: 101 });
     rejects({ utilizationPercent: -1 });
     rejects({ memoryUtilizationPercent: 100.1 });
+    rejects({ temperatureCelsius: MIN_HARDWARE_TEMPERATURE_CELSIUS - 0.1 });
+    rejects({ temperatureCelsius: MAX_HARDWARE_TEMPERATURE_CELSIUS + 0.1 });
+    rejects({ temperatureCelsius: Number.NaN });
     rejects({ memoryTotalBytes: 0 });
     rejects({ index: -1 });
     rejects({ index: MAX_GPU_ADAPTER_INDEX + 1 });
@@ -312,5 +319,108 @@ describe("ServerProjectSystemTelemetryResult", () => {
         },
       }),
     ).not.toThrow();
+  });
+
+  it("accepts only bounded, classified, measured Celsius temperature sensors", () => {
+    const input = projectSystemTelemetryFixture();
+    const temperatures = {
+      version: 1 as const,
+      status: "available" as const,
+      sensors: [
+        {
+          kind: "gpu" as const,
+          label: "NVIDIA GeForce RTX 4090 GPU 0",
+          temperatureCelsius: 48,
+          source: "nvidia-smi" as const,
+        },
+      ],
+      reason: null,
+      detail: null,
+    };
+    expect(decodeProjectSystemTelemetry({ ...input, temperatures }).temperatures).toEqual(
+      temperatures,
+    );
+
+    for (const temperatureCelsius of [
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      MIN_HARDWARE_TEMPERATURE_CELSIUS - 0.1,
+      MAX_HARDWARE_TEMPERATURE_CELSIUS + 0.1,
+    ]) {
+      expect(() =>
+        decodeProjectSystemTelemetry({
+          ...input,
+          temperatures: {
+            ...temperatures,
+            sensors: [{ ...temperatures.sensors[0], temperatureCelsius }],
+          },
+        }),
+      ).toThrow();
+    }
+    expect(() =>
+      decodeProjectSystemTelemetry({
+        ...input,
+        temperatures: {
+          ...temperatures,
+          sensors: Array.from({ length: MAX_TEMPERATURE_SENSORS + 1 }, (_, index) => ({
+            ...temperatures.sensors[0],
+            label: `GPU ${index}`,
+          })),
+        },
+      }),
+    ).toThrow();
+    expect(() =>
+      decodeProjectSystemTelemetry({
+        ...input,
+        temperatures: {
+          ...temperatures,
+          sensors: [
+            {
+              ...temperatures.sensors[0],
+              label: "x".repeat(MAX_TEMPERATURE_SENSOR_LABEL_LENGTH + 1),
+            },
+          ],
+        },
+      }),
+    ).toThrow();
+    expect(() =>
+      decodeProjectSystemTelemetry({
+        ...input,
+        temperatures: {
+          ...temperatures,
+          sensors: [{ ...temperatures.sensors[0], label: "GPU\u202e0" }],
+        },
+      }),
+    ).toThrow();
+  });
+
+  it("keeps unsupported temperature telemetry explicit and value-free", () => {
+    const input = projectSystemTelemetryFixture();
+    const unavailable = {
+      version: 1 as const,
+      status: "unavailable" as const,
+      sensors: [],
+      reason: "unsupported" as const,
+      detail: "No supported hardware temperature source is available on this system.",
+    };
+    expect(
+      decodeProjectSystemTelemetry({ ...input, temperatures: unavailable }).temperatures,
+    ).toEqual(unavailable);
+    expect(() =>
+      decodeProjectSystemTelemetry({
+        ...input,
+        temperatures: {
+          ...unavailable,
+          sensors: [
+            {
+              kind: "ambient",
+              label: "Estimated case",
+              temperatureCelsius: 22,
+              source: "linux-hwmon",
+            },
+          ],
+        },
+      }),
+    ).toThrow();
   });
 });

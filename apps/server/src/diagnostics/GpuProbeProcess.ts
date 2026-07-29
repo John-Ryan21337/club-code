@@ -31,7 +31,7 @@ const MAX_UNREAPED_GPU_HELPERS = 2;
 // Fixed argv only: no caller input, workspace path, or configuration value
 // ever reaches this command line.
 const NVIDIA_SMI_ARGS = [
-  "--query-gpu=name,index,utilization.gpu,memory.total,memory.used",
+  "--query-gpu=name,index,utilization.gpu,memory.total,memory.used,temperature.gpu",
   "--format=csv,noheader,nounits",
 ] as const;
 

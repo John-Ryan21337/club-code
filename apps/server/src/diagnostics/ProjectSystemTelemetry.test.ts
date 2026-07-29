@@ -17,6 +17,7 @@ import type {
   HostSystemTelemetrySample,
   HostSystemTelemetrySamplerShape,
 } from "./HostSystemTelemetry.ts";
+import type { HostTemperatureTelemetrySamplerShape } from "./HostTemperatureTelemetry.ts";
 import {
   makeProjectSystemTelemetry,
   PROJECT_SYSTEM_TELEMETRY_MINIMUM_SAMPLE_INTERVAL_MS,
@@ -24,6 +25,7 @@ import {
 } from "./ProjectSystemTelemetry.ts";
 import type { ProjectVolumeSamplerShape } from "./ProjectVolumeSampler.ts";
 import { unavailableProjectVolumeTelemetry } from "./ProjectVolumeTelemetry.ts";
+import { unavailableTemperatureTelemetry } from "./TemperatureTelemetry.ts";
 
 const projectId = ProjectId.make("project-system-telemetry-test");
 const availableHost: HostSystemTelemetrySample = {
@@ -67,6 +69,7 @@ function makeFixture(input: {
   readonly gpuRead?: HostGpuTelemetrySamplerShape["sample"];
   readonly gpuSampler?: HostGpuTelemetrySamplerShape;
   readonly networkSample?: HostNetworkTelemetrySamplerShape["sample"];
+  readonly temperatureSample?: HostTemperatureTelemetrySamplerShape["sample"];
   readonly platform?: () => string;
   readonly architecture?: () => string;
 }) {
@@ -91,6 +94,9 @@ function makeFixture(input: {
   const networkSampler: HostNetworkTelemetrySamplerShape = {
     sample: input.networkSample ?? (async () => unavailableNetworkTelemetry()),
   };
+  const temperatureSampler: HostTemperatureTelemetrySamplerShape = {
+    sample: input.temperatureSample ?? (async () => unavailableTemperatureTelemetry("unsupported")),
+  };
   const runtime: ProjectSystemTelemetryRuntime = {
     nowMillis: now,
     nowMonotonicMillis: now,
@@ -102,6 +108,7 @@ function makeFixture(input: {
       hostSampler,
       networkSampler,
       gpuSampler,
+      temperatureSampler,
       volumeSampler,
       runtime,
     }),
@@ -111,6 +118,55 @@ function makeFixture(input: {
 }
 
 describe("ProjectSystemTelemetry", () => {
+  it("merges measured GPU temperatures with optional host hardware sensors", () =>
+    Effect.gen(function* () {
+      const fixture = makeFixture({
+        gpuRead: async () => ({
+          status: "available",
+          reason: null,
+          detail: null,
+          adapters: [
+            {
+              index: 0,
+              name: "NVIDIA RTX",
+              utilizationPercent: 20,
+              memoryTotalBytes: 1_000,
+              memoryUsedBytes: 100,
+              memoryUtilizationPercent: 10,
+              temperatureCelsius: 48,
+            },
+          ],
+        }),
+        temperatureSample: async () => ({
+          version: 1,
+          status: "available",
+          sensors: [
+            {
+              kind: "cpu",
+              label: "CPU Package",
+              temperatureCelsius: 62,
+              source: "libre-hardware-monitor",
+            },
+          ],
+          reason: null,
+          detail: null,
+        }),
+      });
+      const result = yield* fixture.telemetry.read({ projectId, workspaceRoot: "/project" });
+
+      expect(result.temperatures?.status).toBe("available");
+      expect(
+        result.temperatures?.status === "available" ? result.temperatures.sensors : [],
+      ).toEqual([
+        expect.objectContaining({ kind: "cpu", temperatureCelsius: 62 }),
+        expect.objectContaining({
+          kind: "gpu",
+          temperatureCelsius: 48,
+          source: "nvidia-smi",
+        }),
+      ]);
+    }));
+
   it("combines host and exact-project volume telemetry with bounded metadata", () =>
     Effect.gen(function* () {
       const fixture = makeFixture({});

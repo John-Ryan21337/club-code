@@ -23,7 +23,7 @@ const WINDOWS_NVIDIA_SMI = "C:\\Windows\\System32\\nvidia-smi.exe";
 const LINUX_NVIDIA_SMI = "/usr/bin/nvidia-smi";
 
 const EXPECTED_ARGS = [
-  "--query-gpu=name,index,utilization.gpu,memory.total,memory.used",
+  "--query-gpu=name,index,utilization.gpu,memory.total,memory.used,temperature.gpu",
   "--format=csv,noheader,nounits",
 ];
 

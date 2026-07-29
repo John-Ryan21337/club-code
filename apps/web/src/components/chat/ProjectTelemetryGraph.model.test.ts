@@ -8,8 +8,10 @@ import {
   deriveProjectTelemetryStrokePalette,
   formatTelemetryBytes,
   normalizeTelemetryRateHistory,
+  normalizeTemperatureHistory,
   PROJECT_TELEMETRY_METRIC_KEYS,
   projectTelemetryGpuAdapter,
+  projectTelemetryTemperatureAdapter,
   toProjectTelemetryHistoryPoint,
   type ProjectTelemetryHistoryPoint,
 } from "./ProjectTelemetryGraph.model";
@@ -85,11 +87,18 @@ function historyPoint(sampledAtMs: number): ProjectTelemetryHistoryPoint {
     networkTransmitBytesPerSecond: sampledAtMs,
     gpuPercent: null,
     vramPercent: null,
+    temperatureCpuCelsius: null,
+    temperatureGpuCelsius: null,
+    temperatureMemoryCelsius: null,
+    temperatureVramCelsius: null,
+    temperatureStorageCelsius: null,
+    temperatureAmbientCelsius: null,
+    temperatureOtherCelsius: null,
   };
 }
 
 describe("ProjectTelemetryGraph model", () => {
-  it("derives six distinct monitor strokes from a fixed Matrix color", () => {
+  it("derives distinct monitor strokes from a fixed Matrix color", () => {
     const palette = deriveProjectTelemetryStrokePalette({
       color: "#4ade80",
       perStream: false,
@@ -166,6 +175,56 @@ describe("ProjectTelemetryGraph model", () => {
     expect(normalizeTelemetryRateHistory([null, 0, 2_000, 1_000])).toEqual([null, 0, 100, 50]);
     expect(normalizeTelemetryRateHistory([0, 0])).toEqual([0, 0]);
     expect(normalizeTelemetryRateHistory([Number.NaN, -1])).toEqual([null, null]);
+  });
+
+  it("projects only measured temperature classes and keeps unsupported sensors unavailable", () => {
+    const telemetry = {
+      ...telemetryFixture(),
+      temperatures: {
+        version: 1,
+        status: "available",
+        sensors: [
+          {
+            kind: "gpu",
+            label: "GPU 0",
+            temperatureCelsius: 48,
+            source: "nvidia-smi",
+          },
+          {
+            kind: "gpu",
+            label: "GPU 1",
+            temperatureCelsius: 34,
+            source: "nvidia-smi",
+          },
+          {
+            kind: "storage",
+            label: "NVMe Composite",
+            temperatureCelsius: 42,
+            source: "linux-hwmon",
+          },
+        ],
+        reason: null,
+        detail: null,
+      },
+    } as ServerProjectSystemTelemetryResult;
+    const temperatures = projectTelemetryTemperatureAdapter(telemetry);
+    const point = toProjectTelemetryHistoryPoint(
+      telemetry,
+      projectTelemetryGpuAdapter(telemetry),
+      temperatures,
+    );
+
+    expect(temperatures.gpu).toMatchObject({ celsius: 48 });
+    expect(temperatures.storage).toMatchObject({ celsius: 42 });
+    expect(temperatures.memory.celsius).toBeNull();
+    expect(temperatures.vram.celsius).toBeNull();
+    expect(temperatures.ambient.celsius).toBeNull();
+    expect(point).toMatchObject({
+      temperatureGpuCelsius: 48,
+      temperatureStorageCelsius: 42,
+      temperatureMemoryCelsius: null,
+    });
+    expect(normalizeTemperatureHistory([null, -20, 50, 120, 250])).toEqual([null, 0, 50, 100, 100]);
   });
 
   it("projects CPU, RAM, and project-volume utilization while GPU remains honest", () => {

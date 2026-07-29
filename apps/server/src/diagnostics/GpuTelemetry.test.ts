@@ -186,6 +186,24 @@ describe("gpuTelemetryFromRawSamples", () => {
 });
 
 describe("parseGpuProbeOutput", () => {
+  it("preserves measured GPU Celsius and omits an unavailable temperature", () => {
+    const measured = parseGpuProbeOutput("NVIDIA A, 0, 15, 24564, 3421, 48\n");
+    expect(measured.status === "available" ? measured.adapters[0]?.temperatureCelsius : null).toBe(
+      48,
+    );
+
+    const unavailable = parseGpuProbeOutput("NVIDIA A, 0, 15, 24564, 3421, N/A\n");
+    expect(unavailable.status).toBe("available");
+    expect(
+      unavailable.status === "available" ? "temperatureCelsius" in unavailable.adapters[0]! : true,
+    ).toBe(false);
+    const empty = parseGpuProbeOutput("NVIDIA A, 0, 15, 24564, 3421, \n");
+    expect(empty.status).toBe("available");
+    expect(empty.status === "available" ? "temperatureCelsius" in empty.adapters[0]! : true).toBe(
+      false,
+    );
+  });
+
   it("parses a multi-adapter CSV body with CRLF endings and trailing blank lines", () => {
     const result = parseGpuProbeOutput(
       "NVIDIA A, 0, 15, 24564, 3421\r\nNVIDIA B, 1, 80, 24564, 12000\r\n\r\n",

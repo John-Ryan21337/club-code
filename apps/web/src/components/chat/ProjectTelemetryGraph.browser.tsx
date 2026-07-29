@@ -70,6 +70,21 @@ function telemetryFixture(input: {
       reason: "unsupported",
       detail: "GPU telemetry is unavailable from this backend.",
     },
+    temperatures: {
+      version: 1,
+      status: "available",
+      sensors: [
+        { kind: "cpu", label: "CPU Package", temperatureCelsius: 62, source: "linux-hwmon" },
+        { kind: "gpu", label: "GPU Core", temperatureCelsius: 48, source: "nvidia-smi" },
+        { kind: "memory", label: "DIMM", temperatureCelsius: 39, source: "linux-hwmon" },
+        { kind: "vram", label: "GPU Memory", temperatureCelsius: 70, source: "linux-hwmon" },
+        { kind: "storage", label: "NVMe", temperatureCelsius: 42, source: "linux-hwmon" },
+        { kind: "ambient", label: "System", temperatureCelsius: 26, source: "linux-hwmon" },
+        { kind: "other", label: "Chipset", temperatureCelsius: 45, source: "linux-hwmon" },
+      ],
+      reason: null,
+      detail: null,
+    },
     projectVolume: {
       status: "available",
       totalBytes: 10 * 1024 ** 3,
@@ -138,7 +153,7 @@ describe("ProjectTelemetryGraph", () => {
       expect(panel).not.toBeNull();
       expect(getComputedStyle(panel!).backgroundColor).toBe("rgba(0, 0, 0, 0)");
       const cards = [...document.querySelectorAll<HTMLElement>("[data-project-telemetry-card]")];
-      expect(cards).toHaveLength(6);
+      expect(cards).toHaveLength(13);
       expect(
         cards.every((card) => getComputedStyle(card).backgroundColor === "rgba(0, 0, 0, 0)"),
       ).toBe(true);
@@ -149,14 +164,14 @@ describe("ProjectTelemetryGraph", () => {
       expect(panel?.dataset.matrixPaletteMotion).toBe("frozen");
 
       const series = [...document.querySelectorAll<SVGElement>("[data-project-telemetry-series]")];
-      expect(series).toHaveLength(6);
+      expect(series).toHaveLength(13);
       const firstStrokes = series.map((svg) => {
         const paths = [...svg.querySelectorAll("path")];
         expect(paths).toHaveLength(2);
         expect(paths.every((path) => path.getAttribute("stroke")?.startsWith("var("))).toBe(true);
         return getComputedStyle(paths[1]!).stroke;
       });
-      expect(new Set(firstStrokes).size).toBe(6);
+      expect(new Set(firstStrokes).size).toBe(13);
 
       matrixColorFrameStore.publish(
         matrixPaletteOwner,
@@ -177,7 +192,7 @@ describe("ProjectTelemetryGraph", () => {
       const nextStrokes = series.map(
         (svg) => getComputedStyle(svg.querySelectorAll("path")[1]!).stroke,
       );
-      expect(new Set(nextStrokes).size).toBe(6);
+      expect(new Set(nextStrokes).size).toBe(13);
       nextStrokes.forEach((stroke, index) => expect(stroke).not.toBe(firstStrokes[index]));
 
       await page.getByLabelText("Collapse project resource graphs").click();
@@ -684,6 +699,43 @@ describe("ProjectTelemetryGraph", () => {
       expect(document.body.textContent).toContain("last successful");
     } finally {
       diagnostic.mockRestore();
+      await mounted.unmount();
+    }
+  });
+
+  it("renders unsupported temperature classes explicitly unavailable without estimates", async () => {
+    const mounted = await render(
+      <ProjectTelemetryGraph
+        environmentId={environmentA}
+        pollIntervalMs={Number.MAX_SAFE_INTEGER}
+        projectId={projectA}
+        readTelemetry={vi.fn(async () => ({
+          ...telemetryFixture({ projectId: projectA }),
+          temperatures: {
+            version: 1 as const,
+            status: "available" as const,
+            sensors: [
+              {
+                kind: "gpu" as const,
+                label: "NVIDIA GPU 0",
+                temperatureCelsius: 48,
+                source: "nvidia-smi" as const,
+              },
+            ],
+            reason: null,
+            detail: null,
+          },
+        }))}
+      />,
+    );
+    try {
+      await page.getByLabelText("Expand Resources").click();
+      await expect.element(page.getByLabelText(/^GPU temp: 48°C/i)).toBeVisible();
+      await expect.element(page.getByLabelText(/^RAM temp: Unavailable/i)).toBeVisible();
+      await expect.element(page.getByLabelText(/^VRAM temp: Unavailable/i)).toBeVisible();
+      await expect.element(page.getByLabelText(/^Disk temp: Unavailable/i)).toBeVisible();
+      await expect.element(page.getByLabelText(/^Case \/ ambient: Unavailable/i)).toBeVisible();
+    } finally {
       await mounted.unmount();
     }
   });

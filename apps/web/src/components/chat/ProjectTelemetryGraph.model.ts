@@ -12,6 +12,13 @@ export const PROJECT_TELEMETRY_METRIC_KEYS = [
   "network",
   "gpu",
   "vram",
+  "tempCpu",
+  "tempGpu",
+  "tempMemory",
+  "tempVram",
+  "tempStorage",
+  "tempAmbient",
+  "tempOther",
 ] as const;
 export type ProjectTelemetryMetricKey = (typeof PROJECT_TELEMETRY_METRIC_KEYS)[number];
 export type ProjectTelemetryStrokePalette = Readonly<Record<ProjectTelemetryMetricKey, string>>;
@@ -25,6 +32,13 @@ export interface ProjectTelemetryHistoryPoint {
   readonly networkTransmitBytesPerSecond: number | null;
   readonly gpuPercent: number | null;
   readonly vramPercent: number | null;
+  readonly temperatureCpuCelsius: number | null;
+  readonly temperatureGpuCelsius: number | null;
+  readonly temperatureMemoryCelsius: number | null;
+  readonly temperatureVramCelsius: number | null;
+  readonly temperatureStorageCelsius: number | null;
+  readonly temperatureAmbientCelsius: number | null;
+  readonly temperatureOtherCelsius: number | null;
 }
 
 export interface ProjectTelemetryGpuProjection {
@@ -40,15 +54,37 @@ export type ProjectTelemetryGpuAdapter = (
   telemetry: ServerProjectSystemTelemetryResult,
 ) => ProjectTelemetryGpuProjection;
 
+export const PROJECT_TELEMETRY_TEMPERATURE_KINDS = [
+  "cpu",
+  "gpu",
+  "memory",
+  "vram",
+  "storage",
+  "ambient",
+  "other",
+] as const;
+export type ProjectTelemetryTemperatureKind = (typeof PROJECT_TELEMETRY_TEMPERATURE_KINDS)[number];
+export interface ProjectTelemetryTemperatureMetric {
+  readonly celsius: number | null;
+  readonly detail: string;
+}
+export type ProjectTelemetryTemperatureProjection = Readonly<
+  Record<ProjectTelemetryTemperatureKind, ProjectTelemetryTemperatureMetric>
+>;
+
 interface HslColor {
   readonly hue: number;
   readonly saturation: number;
   readonly lightness: number;
 }
 
-const UNIFORM_METRIC_HUE_OFFSETS = [0, -18, 18, -34, 34, 50] as const;
-const PER_STREAM_METRIC_HUE_OFFSETS = [0, 60, 120, 180, 240, 300] as const;
-const METRIC_LIGHTNESS_OFFSETS = [0, 5, -5, 9, -9, 14] as const;
+const UNIFORM_METRIC_HUE_OFFSETS = [
+  0, -18, 18, -34, 34, 50, -50, 68, -68, 86, -86, 104, -104,
+] as const;
+const PER_STREAM_METRIC_HUE_OFFSETS = [
+  0, 28, 56, 84, 112, 140, 168, 196, 224, 252, 280, 308, 336,
+] as const;
+const METRIC_LIGHTNESS_OFFSETS = [0, 5, -5, 9, -9, 14, -14, 3, -3, 7, -7, 11, -11] as const;
 
 function clamp(value: number, minimum: number, maximum: number): number {
   return Math.min(maximum, Math.max(minimum, value));
@@ -240,9 +276,78 @@ export const projectTelemetryGpuAdapter: ProjectTelemetryGpuAdapter = (telemetry
   };
 };
 
+const unavailableTemperatureProjection = (
+  detail = "Hardware temperature telemetry is unavailable from this backend.",
+): ProjectTelemetryTemperatureProjection =>
+  Object.fromEntries(
+    PROJECT_TELEMETRY_TEMPERATURE_KINDS.map((kind) => [kind, { celsius: null, detail }]),
+  ) as unknown as ProjectTelemetryTemperatureProjection;
+
+/**
+ * Publish the hottest measured sensor in each class while retaining a count in
+ * the detail. Missing classes stay null; utilization is never used to infer a
+ * temperature.
+ */
+export function projectTelemetryTemperatureAdapter(
+  telemetry: ServerProjectSystemTelemetryResult,
+): ProjectTelemetryTemperatureProjection {
+  const temperatures = (telemetry as unknown as { readonly temperatures?: unknown }).temperatures;
+  if (!temperatures || typeof temperatures !== "object") return unavailableTemperatureProjection();
+  const record = temperatures as Record<string, unknown>;
+  const detail = readDetail(record, "Hardware temperature telemetry is unavailable.");
+  if (
+    record.version !== 1 ||
+    record.status !== "available" ||
+    !Array.isArray(record.sensors) ||
+    record.sensors.length === 0 ||
+    record.sensors.length > 64
+  ) {
+    return unavailableTemperatureProjection(detail);
+  }
+
+  const grouped = new Map<ProjectTelemetryTemperatureKind, number[]>();
+  for (const sensor of record.sensors) {
+    if (!sensor || typeof sensor !== "object") return unavailableTemperatureProjection(detail);
+    const sensorRecord = sensor as Record<string, unknown>;
+    const kind = sensorRecord.kind;
+    const celsius = sensorRecord.temperatureCelsius;
+    if (
+      typeof kind !== "string" ||
+      !PROJECT_TELEMETRY_TEMPERATURE_KINDS.includes(kind as ProjectTelemetryTemperatureKind) ||
+      typeof celsius !== "number" ||
+      !Number.isFinite(celsius) ||
+      celsius < -100 ||
+      celsius > 250
+    ) {
+      return unavailableTemperatureProjection(detail);
+    }
+    const typedKind = kind as ProjectTelemetryTemperatureKind;
+    grouped.set(typedKind, [...(grouped.get(typedKind) ?? []), celsius]);
+  }
+
+  return Object.fromEntries(
+    PROJECT_TELEMETRY_TEMPERATURE_KINDS.map((kind) => {
+      const values = grouped.get(kind) ?? [];
+      return [
+        kind,
+        values.length === 0
+          ? {
+              celsius: null,
+              detail: `No supported ${kind} temperature sensor reported.`,
+            }
+          : {
+              celsius: Math.max(...values),
+              detail: `Hottest of ${values.length} measured ${kind} sensor${values.length === 1 ? "" : "s"}.`,
+            },
+      ];
+    }),
+  ) as unknown as ProjectTelemetryTemperatureProjection;
+}
+
 export function toProjectTelemetryHistoryPoint(
   telemetry: ServerProjectSystemTelemetryResult,
   gpu: ProjectTelemetryGpuProjection,
+  temperatures = projectTelemetryTemperatureAdapter(telemetry),
 ): ProjectTelemetryHistoryPoint {
   return {
     sampledAtMs: DateTime.toEpochMillis(telemetry.sampledAt),
@@ -259,6 +364,13 @@ export function toProjectTelemetryHistoryPoint(
       telemetry.network.status === "available" ? telemetry.network.transmitBytesPerSecond : null,
     gpuPercent: gpu.gpuPercent,
     vramPercent: gpu.vramPercent,
+    temperatureCpuCelsius: temperatures.cpu.celsius,
+    temperatureGpuCelsius: temperatures.gpu.celsius,
+    temperatureMemoryCelsius: temperatures.memory.celsius,
+    temperatureVramCelsius: temperatures.vram.celsius,
+    temperatureStorageCelsius: temperatures.storage.celsius,
+    temperatureAmbientCelsius: temperatures.ambient.celsius,
+    temperatureOtherCelsius: temperatures.other.celsius,
   };
 }
 
@@ -319,6 +431,19 @@ export function normalizeTelemetryRateHistory(
   }
   return values.map((value) =>
     value !== null && Number.isSafeInteger(value) && value >= 0 ? (value / peak) * 100 : null,
+  );
+}
+
+/** Map real Celsius values onto sparkline coordinates without changing labels. */
+export function normalizeTemperatureHistory(
+  values: readonly (number | null)[],
+): readonly (number | null)[] {
+  const minimum = -20;
+  const maximum = 120;
+  return values.map((value) =>
+    value !== null && Number.isFinite(value) && value >= -100 && value <= 250
+      ? ((Math.min(maximum, Math.max(minimum, value)) - minimum) / (maximum - minimum)) * 100
+      : null,
   );
 }
 

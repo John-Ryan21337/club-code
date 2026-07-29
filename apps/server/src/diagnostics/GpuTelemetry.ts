@@ -3,6 +3,8 @@ import {
   MAX_GPU_ADAPTER_NAME_LENGTH,
   MAX_GPU_ADAPTERS,
   MAX_GPU_MEMORY_BYTES,
+  MAX_HARDWARE_TEMPERATURE_CELSIUS,
+  MIN_HARDWARE_TEMPERATURE_CELSIUS,
   type ServerSystemGpuAdapterTelemetry,
   type ServerSystemGpuTelemetry,
   type ServerSystemGpuUnavailableReason,
@@ -20,7 +22,8 @@ const GPU_TELEMETRY_DETAIL: Readonly<Record<ServerSystemGpuUnavailableReason, st
 };
 
 const BYTES_PER_MEBIBYTE = 1_024 * 1_024;
-const CSV_FIELD_COUNT = 5;
+const LEGACY_CSV_FIELD_COUNT = 5;
+const CSV_FIELD_COUNT = 6;
 
 /**
  * Mirrors the contract-level name rule so a rejected name fails here, in the
@@ -36,6 +39,7 @@ export interface RawGpuAdapterSample {
   readonly utilizationPercent: string;
   readonly memoryTotalMebibytes: string;
   readonly memoryUsedMebibytes: string;
+  readonly temperatureCelsius?: string;
 }
 
 export function unavailableGpuTelemetry(
@@ -116,6 +120,14 @@ function parseGpuAdapter(sample: RawGpuAdapterSample): ServerSystemGpuAdapterTel
   const memoryUtilizationPercent = boundedPercent(memoryUsedBytes, memoryTotalBytes);
   if (memoryUtilizationPercent === null) return null;
 
+  const temperatureCelsius =
+    sample.temperatureCelsius === undefined
+      ? undefined
+      : parseBoundedNumber(
+          sample.temperatureCelsius,
+          MIN_HARDWARE_TEMPERATURE_CELSIUS,
+          MAX_HARDWARE_TEMPERATURE_CELSIUS,
+        );
   return {
     index,
     name,
@@ -123,7 +135,17 @@ function parseGpuAdapter(sample: RawGpuAdapterSample): ServerSystemGpuAdapterTel
     memoryTotalBytes,
     memoryUsedBytes,
     memoryUtilizationPercent,
+    ...(temperatureCelsius === null || temperatureCelsius === undefined
+      ? {}
+      : { temperatureCelsius }),
   };
+}
+
+function parseBoundedNumber(raw: string, minimum: number, maximum: number): number | null {
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return null;
+  const value = Number(trimmed);
+  return Number.isFinite(value) && value >= minimum && value <= maximum ? value : null;
 }
 
 /**
@@ -159,8 +181,15 @@ export function gpuTelemetryFromRawSamples(
 
 function parseCsvLine(line: string): RawGpuAdapterSample | null {
   const fields = line.split(",");
-  if (fields.length !== CSV_FIELD_COUNT) return null;
-  const [name, index, utilizationPercent, memoryTotalMebibytes, memoryUsedMebibytes] = fields;
+  if (fields.length !== CSV_FIELD_COUNT && fields.length !== LEGACY_CSV_FIELD_COUNT) return null;
+  const [
+    name,
+    index,
+    utilizationPercent,
+    memoryTotalMebibytes,
+    memoryUsedMebibytes,
+    temperatureCelsius,
+  ] = fields;
   if (
     name === undefined ||
     index === undefined ||
@@ -176,11 +205,13 @@ function parseCsvLine(line: string): RawGpuAdapterSample | null {
     utilizationPercent: utilizationPercent.trim(),
     memoryTotalMebibytes: memoryTotalMebibytes.trim(),
     memoryUsedMebibytes: memoryUsedMebibytes.trim(),
+    ...(temperatureCelsius === undefined ? {} : { temperatureCelsius: temperatureCelsius.trim() }),
   };
 }
 
 /**
- * Pure text-to-contract boundary for `name,index,utilization,total,used` CSV
+ * Pure text-to-contract boundary for
+ * `name,index,utilization,total,used,temperature.gpu` CSV
  * rows with no header and no units. Total function: every input maps to a
  * valid `ServerSystemGpuTelemetry`, never a throw.
  */

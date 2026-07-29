@@ -102,6 +102,11 @@ export const MAX_GPU_ADAPTER_NAME_LENGTH = 200;
 export const MAX_GPU_ADAPTER_INDEX = 4_095;
 export const MAX_GPU_MEMORY_BYTES = Number.MAX_SAFE_INTEGER;
 const MAX_GPU_DETAIL_LENGTH = 160;
+export const MIN_HARDWARE_TEMPERATURE_CELSIUS = -100;
+export const MAX_HARDWARE_TEMPERATURE_CELSIUS = 250;
+export const MAX_TEMPERATURE_SENSORS = 64;
+export const MAX_TEMPERATURE_SENSOR_LABEL_LENGTH = 120;
+const MAX_TEMPERATURE_DETAIL_LENGTH = 180;
 
 /**
  * Adapter names originate in a third-party vendor tool, so they are treated as
@@ -141,6 +146,16 @@ export const ServerSystemGpuAdapterTelemetry = Schema.Struct({
   memoryTotalBytes: PositiveInt.check(Schema.isLessThanOrEqualTo(MAX_GPU_MEMORY_BYTES)),
   memoryUsedBytes: NonNegativeInt.check(Schema.isLessThanOrEqualTo(MAX_GPU_MEMORY_BYTES)),
   memoryUtilizationPercent: ServerSystemTelemetryPercent,
+  // Older remote backends omit this field. A missing value is different from
+  // zero and remains unavailable in the renderer.
+  temperatureCelsius: Schema.optional(
+    Schema.Number.check(
+      Schema.isBetween({
+        minimum: MIN_HARDWARE_TEMPERATURE_CELSIUS,
+        maximum: MAX_HARDWARE_TEMPERATURE_CELSIUS,
+      }),
+    ),
+  ),
 });
 export type ServerSystemGpuAdapterTelemetry = typeof ServerSystemGpuAdapterTelemetry.Type;
 
@@ -164,6 +179,78 @@ export const ServerSystemGpuTelemetry = Schema.Union([
   }),
 ]);
 export type ServerSystemGpuTelemetry = typeof ServerSystemGpuTelemetry.Type;
+
+export const ServerSystemTemperatureSensorKind = Schema.Literals([
+  "cpu",
+  "gpu",
+  "memory",
+  "vram",
+  "storage",
+  "ambient",
+  "other",
+]);
+export type ServerSystemTemperatureSensorKind = typeof ServerSystemTemperatureSensorKind.Type;
+
+export const ServerSystemTemperatureSource = Schema.Literals([
+  "nvidia-smi",
+  "libre-hardware-monitor",
+  "open-hardware-monitor",
+  "linux-hwmon",
+]);
+export type ServerSystemTemperatureSource = typeof ServerSystemTemperatureSource.Type;
+
+const ServerSystemTemperatureSensorLabel = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(MAX_TEMPERATURE_SENSOR_LABEL_LENGTH),
+  Schema.isPattern(GPU_ADAPTER_NAME_PATTERN),
+);
+
+export const ServerSystemTemperatureSensor = Schema.Struct({
+  kind: ServerSystemTemperatureSensorKind,
+  label: ServerSystemTemperatureSensorLabel,
+  temperatureCelsius: Schema.Number.check(
+    Schema.isBetween({
+      minimum: MIN_HARDWARE_TEMPERATURE_CELSIUS,
+      maximum: MAX_HARDWARE_TEMPERATURE_CELSIUS,
+    }),
+  ),
+  source: ServerSystemTemperatureSource,
+});
+export type ServerSystemTemperatureSensor = typeof ServerSystemTemperatureSensor.Type;
+
+export const ServerSystemTemperatureUnavailableReason = Schema.Literals([
+  "unsupported",
+  "probe-failed",
+  "malformed",
+  "stale",
+]);
+export type ServerSystemTemperatureUnavailableReason =
+  typeof ServerSystemTemperatureUnavailableReason.Type;
+
+/**
+ * Versioned, bounded hardware-sensor projection. Only measured Celsius values
+ * cross the RPC boundary; missing sensor classes remain absent rather than
+ * being inferred from utilization or neighbouring components.
+ */
+export const ServerSystemTemperatureTelemetry = Schema.Union([
+  Schema.Struct({
+    version: Schema.Literal(1),
+    status: Schema.Literal("available"),
+    sensors: Schema.Array(ServerSystemTemperatureSensor).check(
+      Schema.isMinLength(1),
+      Schema.isMaxLength(MAX_TEMPERATURE_SENSORS),
+    ),
+    reason: Schema.Null,
+    detail: Schema.Null,
+  }),
+  Schema.Struct({
+    version: Schema.Literal(1),
+    status: Schema.Literal("unavailable"),
+    sensors: Schema.Array(ServerSystemTemperatureSensor).check(Schema.isMaxLength(0)),
+    reason: ServerSystemTemperatureUnavailableReason,
+    detail: TrimmedNonEmptyString.check(Schema.isMaxLength(MAX_TEMPERATURE_DETAIL_LENGTH)),
+  }),
+]);
+export type ServerSystemTemperatureTelemetry = typeof ServerSystemTemperatureTelemetry.Type;
 
 export const ServerProjectVolumeTelemetry = Schema.Union([
   Schema.Struct({
@@ -201,6 +288,9 @@ export const ServerProjectSystemTelemetryResult = Schema.Struct({
   memory: ServerSystemMemoryTelemetry,
   network: ServerSystemNetworkTelemetry,
   gpu: ServerSystemGpuTelemetry,
+  // Optional only for backwards compatibility with already-running remote
+  // backends. Current servers always publish version 1.
+  temperatures: Schema.optional(ServerSystemTemperatureTelemetry),
   projectVolume: ServerProjectVolumeTelemetry,
 });
 export type ServerProjectSystemTelemetryResult = typeof ServerProjectSystemTelemetryResult.Type;

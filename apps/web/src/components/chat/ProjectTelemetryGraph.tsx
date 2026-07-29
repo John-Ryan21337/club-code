@@ -15,6 +15,7 @@ import {
   Maximize2Icon,
   MemoryStickIcon,
   NetworkIcon,
+  ThermometerIcon,
 } from "lucide-react";
 import {
   type CSSProperties,
@@ -49,12 +50,15 @@ import {
   deriveProjectTelemetryStrokePalette,
   formatTelemetryBytes,
   normalizeTelemetryRateHistory,
+  normalizeTemperatureHistory,
   PROJECT_TELEMETRY_METRIC_KEYS,
   PROJECT_TELEMETRY_HISTORY_LIMIT,
   projectTelemetryGpuAdapter,
+  projectTelemetryTemperatureAdapter,
   type ProjectTelemetryGpuAdapter,
   type ProjectTelemetryGpuProjection,
   type ProjectTelemetryHistoryPoint,
+  type ProjectTelemetryTemperatureProjection,
   toProjectTelemetryHistoryPoint,
 } from "./ProjectTelemetryGraph.model";
 
@@ -76,6 +80,13 @@ const PROJECT_TELEMETRY_COLOR_VARIABLES = {
   network: "--cafe-project-telemetry-network",
   gpu: "--cafe-project-telemetry-gpu",
   vram: "--cafe-project-telemetry-vram",
+  tempCpu: "--cafe-project-telemetry-temp-cpu",
+  tempGpu: "--cafe-project-telemetry-temp-gpu",
+  tempMemory: "--cafe-project-telemetry-temp-memory",
+  tempVram: "--cafe-project-telemetry-temp-vram",
+  tempStorage: "--cafe-project-telemetry-temp-storage",
+  tempAmbient: "--cafe-project-telemetry-temp-ambient",
+  tempOther: "--cafe-project-telemetry-temp-other",
 } as const;
 const PROJECT_TELEMETRY_COLORS = {
   cpu: "var(--cafe-project-telemetry-cpu, #4ade80)",
@@ -84,6 +95,13 @@ const PROJECT_TELEMETRY_COLORS = {
   network: "var(--cafe-project-telemetry-network, #4fd9a5)",
   gpu: "var(--cafe-project-telemetry-gpu, #92c85f)",
   vram: "var(--cafe-project-telemetry-vram, #42d9bd)",
+  tempCpu: "var(--cafe-project-telemetry-temp-cpu, #4ade80)",
+  tempGpu: "var(--cafe-project-telemetry-temp-gpu, #65dc76)",
+  tempMemory: "var(--cafe-project-telemetry-temp-memory, #7ccf68)",
+  tempVram: "var(--cafe-project-telemetry-temp-vram, #4fd9a5)",
+  tempStorage: "var(--cafe-project-telemetry-temp-storage, #92c85f)",
+  tempAmbient: "var(--cafe-project-telemetry-temp-ambient, #42d9bd)",
+  tempOther: "var(--cafe-project-telemetry-temp-other, #57c7ff)",
 } as const;
 
 type ReadProjectTelemetry = (
@@ -95,6 +113,7 @@ interface TelemetryViewState {
   readonly targetKey: string;
   readonly snapshot: ServerProjectSystemTelemetryResult | null;
   readonly gpu: ProjectTelemetryGpuProjection;
+  readonly temperatures: ProjectTelemetryTemperatureProjection;
   readonly history: readonly ProjectTelemetryHistoryPoint[];
   readonly status: "loading" | "ready" | "unavailable";
 }
@@ -131,6 +150,7 @@ function emptyViewState(targetKey: string): TelemetryViewState {
     targetKey,
     snapshot: null,
     gpu: projectTelemetryGpuAdapter({} as ServerProjectSystemTelemetryResult),
+    temperatures: projectTelemetryTemperatureAdapter({} as ServerProjectSystemTelemetryResult),
     history: [],
     status: "loading",
   };
@@ -218,12 +238,24 @@ function telemetryGapPoint(): ProjectTelemetryHistoryPoint {
     networkTransmitBytesPerSecond: null,
     gpuPercent: null,
     vramPercent: null,
+    temperatureCpuCelsius: null,
+    temperatureGpuCelsius: null,
+    temperatureMemoryCelsius: null,
+    temperatureVramCelsius: null,
+    temperatureStorageCelsius: null,
+    temperatureAmbientCelsius: null,
+    temperatureOtherCelsius: null,
   };
 }
 
 function formatPercent(value: number | null): string {
   if (value === null) return "Unavailable";
   return `${value < 10 ? value.toFixed(1).replace(/\.0$/, "") : Math.round(value)}%`;
+}
+
+function formatTemperature(value: number | null): string {
+  if (value === null) return "Unavailable";
+  return `${Number(value.toFixed(1))}\u00b0C`;
 }
 
 function exactBytesTitle(label: string, bytes: number | null): string | undefined {
@@ -234,6 +266,7 @@ function TelemetrySparkline(props: {
   readonly label: string;
   readonly color: string;
   readonly values: readonly (number | null)[];
+  readonly measurement?: "utilization" | "temperature";
 }) {
   const path = buildTelemetrySparklinePath(props.values);
   const latestIndex = props.values.findLastIndex((value) => value !== null);
@@ -246,13 +279,13 @@ function TelemetrySparkline(props: {
 
   return (
     <svg
-      aria-label={`${props.label} utilization history`}
+      aria-label={`${props.label} ${props.measurement ?? "utilization"} history`}
       className="h-7 w-full overflow-visible"
       data-project-telemetry-series={props.label}
       role="img"
       viewBox="0 0 100 24"
     >
-      <title>{`${props.label} bounded recent utilization history`}</title>
+      <title>{`${props.label} bounded recent ${props.measurement ?? "utilization"} history`}</title>
       <path d="M 0 6 H 100 M 0 12 H 100 M 0 18 H 100" opacity="0.12" stroke={props.color} />
       {path ? (
         <path
@@ -278,6 +311,7 @@ function TelemetryCard(props: {
   readonly title?: string | undefined;
   readonly color: string;
   readonly history: readonly (number | null)[];
+  readonly historyMeasurement?: "utilization" | "temperature";
 }) {
   const Icon = props.icon;
   return (
@@ -297,7 +331,14 @@ function TelemetryCard(props: {
           {props.value}
         </span>
       </div>
-      <TelemetrySparkline color={props.color} label={props.label} values={props.history} />
+      <TelemetrySparkline
+        color={props.color}
+        label={props.label}
+        {...(props.historyMeasurement === undefined
+          ? {}
+          : { measurement: props.historyMeasurement })}
+        values={props.history}
+      />
       <div className="truncate text-xs text-muted-foreground">{props.detail}</div>
     </div>
   );
@@ -574,8 +615,9 @@ export function ProjectTelemetryGraph({
             throw Object.assign(new Error(), { name: "ProjectTelemetryProjectMismatch" });
           }
           const gpu = activeRequest.gpuAdapter(telemetry);
+          const temperatures = projectTelemetryTemperatureAdapter(telemetry);
           const point = {
-            ...toProjectTelemetryHistoryPoint(telemetry, gpu),
+            ...toProjectTelemetryHistoryPoint(telemetry, gpu, temperatures),
             sampledAtMs: Date.now(),
           };
           runnerRef.current.failureReported = false;
@@ -587,6 +629,7 @@ export function ProjectTelemetryGraph({
             targetKey: activeRequest.targetKey,
             snapshot: telemetry,
             gpu,
+            temperatures,
             history: appendBoundedTelemetryHistory(
               current.history,
               point,
@@ -729,6 +772,57 @@ export function ProjectTelemetryGraph({
       : visibleView.gpu.vramAvailableBytes === null
         ? `${visibleView.gpu.vramDetail} · selected environment`
         : `${formatTelemetryBytes(visibleView.gpu.vramAvailableBytes)} available · selected environment`;
+  const temperatureCards = [
+    {
+      key: "cpu",
+      label: "CPU temp",
+      color: colors.tempCpu,
+      metric: visibleView.temperatures.cpu,
+      history: visibleView.history.map((point) => point.temperatureCpuCelsius),
+    },
+    {
+      key: "gpu",
+      label: "GPU temp",
+      color: colors.tempGpu,
+      metric: visibleView.temperatures.gpu,
+      history: visibleView.history.map((point) => point.temperatureGpuCelsius),
+    },
+    {
+      key: "memory",
+      label: "RAM temp",
+      color: colors.tempMemory,
+      metric: visibleView.temperatures.memory,
+      history: visibleView.history.map((point) => point.temperatureMemoryCelsius),
+    },
+    {
+      key: "vram",
+      label: "VRAM temp",
+      color: colors.tempVram,
+      metric: visibleView.temperatures.vram,
+      history: visibleView.history.map((point) => point.temperatureVramCelsius),
+    },
+    {
+      key: "storage",
+      label: "Disk temp",
+      color: colors.tempStorage,
+      metric: visibleView.temperatures.storage,
+      history: visibleView.history.map((point) => point.temperatureStorageCelsius),
+    },
+    {
+      key: "ambient",
+      label: "Case / ambient",
+      color: colors.tempAmbient,
+      metric: visibleView.temperatures.ambient,
+      history: visibleView.history.map((point) => point.temperatureAmbientCelsius),
+    },
+    {
+      key: "other",
+      label: "Other temp",
+      color: colors.tempOther,
+      metric: visibleView.temperatures.other,
+      history: visibleView.history.map((point) => point.temperatureOtherCelsius),
+    },
+  ] as const;
   const lastSample =
     visibleView.snapshot === null
       ? null
@@ -888,6 +982,33 @@ export function ProjectTelemetryGraph({
                     : formatPercent(telemetryUnavailable ? null : visibleView.gpu.vramPercent)
                 }
               />
+              <div className="col-span-2 mt-1 flex items-center gap-1 text-xs font-semibold uppercase tracking-[0.1em] text-muted-foreground">
+                <ThermometerIcon className="size-3" />
+                Hardware temperatures
+              </div>
+              {temperatureCards.map((card) => (
+                <TelemetryCard
+                  color={card.color}
+                  detail={
+                    gpuLoading
+                      ? "Waiting"
+                      : telemetryUnavailable
+                        ? "Telemetry unavailable"
+                        : `${card.metric.detail} · selected environment`
+                  }
+                  history={normalizeTemperatureHistory(card.history)}
+                  historyMeasurement="temperature"
+                  icon={ThermometerIcon}
+                  key={card.key}
+                  label={card.label}
+                  title="Measured host sensor temperature only; unavailable values are never estimated."
+                  value={
+                    gpuLoading
+                      ? "Waiting"
+                      : formatTemperature(telemetryUnavailable ? null : card.metric.celsius)
+                  }
+                />
+              ))}
             </div>
           </div>
           <button
