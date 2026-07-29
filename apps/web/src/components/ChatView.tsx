@@ -25,11 +25,7 @@ import {
   createModelSelection,
   resolvePromptInjectedEffort,
 } from "@cafecode/shared/model";
-import {
-  CODEX_AUTO_COMPACT_POLICY_SOURCE,
-  CODEX_DEFAULT_AUTO_COMPACT_TOKEN_LIMIT,
-  CODEX_DEFAULT_AUTO_COMPACT_TOKEN_LIMIT_SCOPE,
-} from "@cafecode/shared/codexCompaction";
+import { CODEX_AUTO_COMPACT_POLICY_SOURCE } from "@cafecode/shared/codexCompaction";
 import { truncate } from "@cafecode/shared/String";
 import { Debouncer } from "@tanstack/react-pacer";
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
@@ -448,29 +444,30 @@ function summarizeDebugCodexCompaction(
     readDebugNumber(latestContextWindowPayload?.lastInputTokens) ??
     readDebugNumber(latestContextWindowPayload?.inputTokens);
   const latestPayloadLimit = readDebugNumber(latestContextWindowPayload?.autoCompactTokenLimit);
-  // The adapter reports the provider instance's configured
-  // `autoCompactTokenLimit` on every token-usage event. Prefer that observed
-  // value over Cafe's bare default so this debug summary does not claim
-  // 200,000 for an instance configured with a different limit.
-  const effectiveAutoCompactTokenLimit =
-    latestPayloadLimit ?? CODEX_DEFAULT_AUTO_COMPACT_TOKEN_LIMIT;
   const latestCompactionActivity = compactionActivities.at(-1) ?? null;
 
   return {
     policy: {
       enabled: true,
       source: CODEX_AUTO_COMPACT_POLICY_SOURCE,
-      autoCompactTokenLimit: effectiveAutoCompactTokenLimit,
-      autoCompactTokenLimitScope: CODEX_DEFAULT_AUTO_COMPACT_TOKEN_LIMIT_SCOPE,
-      appliesTo: ["thread/start", "thread/resume"],
-      latestTokenUsagePayloadLimit: latestPayloadLimit,
+      thresholdResolution:
+        latestPayloadLimit === null
+          ? "upstream-model-metadata-or-codex-config"
+          : "explicit-cafe-provider-override",
+      explicitCafeOverride: latestPayloadLimit,
+      // App-server owns the default threshold and scope. Cafe cannot infer a
+      // precise resolved threshold from the effective-window token event
+      // without duplicating model metadata logic that changes upstream.
+      resolvedThresholdReportedByProvider: false,
     },
     latestContextWindow: {
       usedTokens: latestUsedTokens,
       inputTokens: latestInputTokens,
       maxTokens: readDebugNumber(latestContextWindowPayload?.maxTokens),
-      abovePolicyLimit:
-        latestUsedTokens !== null && latestUsedTokens >= effectiveAutoCompactTokenLimit,
+      aboveExplicitCafeOverride:
+        latestPayloadLimit !== null && latestUsedTokens !== null
+          ? latestUsedTokens >= latestPayloadLimit
+          : null,
     },
     activity: {
       contextCompactionActivityCount: compactionActivities.length,

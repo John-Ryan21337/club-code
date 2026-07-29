@@ -178,6 +178,12 @@ export function readProviderConfigNumber(
   return typeof value === "number" && Number.isFinite(value) ? value : defaultValue;
 }
 
+function readOptionalProviderConfigNumber(config: unknown, key: string): number | undefined {
+  if (config === null || typeof config !== "object") return undefined;
+  const value = (config as Record<string, unknown>)[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
 export function nextProviderConfigWithFieldValue(
   config: unknown,
   field: ProviderSettingsFieldModel,
@@ -347,7 +353,7 @@ function ProviderSettingsFieldRow({
 
   if (field.control === "number") {
     const currentValue = String(
-      readProviderConfigNumber(value, field.key, field.defaultNumberValue ?? 0),
+      readOptionalProviderConfigNumber(value, field.key) ?? field.defaultNumberValue ?? "",
     );
 
     return (

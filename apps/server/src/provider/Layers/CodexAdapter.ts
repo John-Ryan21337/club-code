@@ -495,7 +495,7 @@ function persistCodexTransportPolicy(
 
 function normalizeCodexTokenUsage(
   usage: EffectCodexSchema.V2ThreadTokenUsageUpdatedNotification["tokenUsage"],
-  autoCompactTokenLimit: number,
+  autoCompactTokenLimit: number | undefined,
 ): ThreadTokenUsageSnapshot | undefined {
   const totalProcessedTokens = usage.total.totalTokens;
   const usedTokens = usage.last.totalTokens;
@@ -536,7 +536,7 @@ function normalizeCodexTokenUsage(
       ? { lastReasoningOutputTokens: reasoningOutputTokens }
       : {}),
     compactsAutomatically: true,
-    autoCompactTokenLimit,
+    ...(autoCompactTokenLimit !== undefined ? { autoCompactTokenLimit } : {}),
   };
 }
 
@@ -1171,7 +1171,7 @@ function mapItemLifecycle(
 function mapToRuntimeEvents(
   event: ProviderEvent,
   canonicalThreadId: ThreadId,
-  autoCompactTokenLimit: number,
+  autoCompactTokenLimit: number | undefined,
 ): ReadonlyArray<ProviderRuntimeEvent> {
   if (event.kind === "error") {
     if (!event.message) {
@@ -2669,7 +2669,9 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
             ? { resumeCursor: input.resumeCursor }
             : {}),
           runtimeMode: input.runtimeMode,
-          autoCompactTokenLimit: codexConfig.autoCompactTokenLimit,
+          ...(codexConfig.autoCompactTokenLimit !== undefined
+            ? { autoCompactTokenLimit: codexConfig.autoCompactTokenLimit }
+            : {}),
           ...(input.modelSelection?.instanceId === boundInstanceId
             ? { model: input.modelSelection.model }
             : {}),

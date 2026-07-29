@@ -4,7 +4,6 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { describe, it } from "vitest";
 import { ProviderInstanceId, ProviderItemId, ThreadId, TurnId } from "@cafecode/contracts";
-import { CODEX_DEFAULT_AUTO_COMPACT_TOKEN_LIMIT } from "@cafecode/shared/codexCompaction";
 import * as CodexErrors from "effect-codex-app-server/errors";
 import * as CodexRpc from "effect-codex-app-server/rpc";
 import * as EffectCodexSchema from "effect-codex-app-server/schema";
@@ -1646,8 +1645,6 @@ describe("openCodexThread", () => {
       };
       assert.deepStrictEqual(payload.config, {
         "features.remote_compaction_v2": false,
-        model_auto_compact_token_limit: CODEX_DEFAULT_AUTO_COMPACT_TOKEN_LIMIT,
-        model_auto_compact_token_limit_scope: "total",
       });
       assert.deepStrictEqual(payload.environments, [
         {
@@ -1660,7 +1657,7 @@ describe("openCodexThread", () => {
     }
   });
 
-  it("preserves workspace-write roots alongside Codex auto-compaction overrides", async () => {
+  it("preserves workspace-write roots without injecting Codex compaction defaults", async () => {
     const calls: Array<{ method: "thread/start" | "thread/resume"; payload: unknown }> = [];
     const client = {
       raw: {
@@ -1695,8 +1692,6 @@ describe("openCodexThread", () => {
     };
     assert.deepStrictEqual(payload.config, {
       "features.remote_compaction_v2": false,
-      model_auto_compact_token_limit: CODEX_DEFAULT_AUTO_COMPACT_TOKEN_LIMIT,
-      model_auto_compact_token_limit_scope: "total",
       sandbox_workspace_write: {
         writable_roots: ["/tmp/extra"],
       },
@@ -1756,7 +1751,6 @@ describe("openCodexThread", () => {
       assert.deepStrictEqual(payload.config, {
         "features.remote_compaction_v2": false,
         model_auto_compact_token_limit: 150_000,
-        model_auto_compact_token_limit_scope: "total",
       });
     }
   });

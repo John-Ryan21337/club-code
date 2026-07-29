@@ -21,10 +21,6 @@ import {
   TurnId,
 } from "@cafecode/contracts";
 import { normalizeModelSlug } from "@cafecode/shared/model";
-import {
-  CODEX_DEFAULT_AUTO_COMPACT_TOKEN_LIMIT,
-  CODEX_DEFAULT_AUTO_COMPACT_TOKEN_LIMIT_SCOPE,
-} from "@cafecode/shared/codexCompaction";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
@@ -278,8 +274,9 @@ export interface CodexSessionRuntimeOptions {
   readonly serviceTier?: CodexServiceTier | undefined;
   readonly additionalDirectories?: ReadonlyArray<string> | undefined;
   readonly resumeCursor?: CodexResumeCursor;
-  // Per-provider-instance override for `model_auto_compact_token_limit`.
-  // Defaults to `CODEX_DEFAULT_AUTO_COMPACT_TOKEN_LIMIT` when absent.
+  // Optional per-provider-instance override for
+  // `model_auto_compact_token_limit`. When absent, app-server owns threshold
+  // resolution exactly as it does for the official Codex CUI.
   readonly autoCompactTokenLimit?: number | undefined;
 }
 
@@ -688,14 +685,11 @@ function buildThreadStartParams(input: {
     cwd: input.cwd,
     additionalDirectories: input.additionalDirectories,
   });
-  // Upstream Codex 0.143.0 only auto-compacts when the resolved model info or
-  // request config supplies `model_auto_compact_token_limit`. Current Codex
-  // model metadata can advertise a large context window while leaving that
-  // limit null, so Cafe passes the documented request-config override for
-  // Cafe-managed threads instead of mutating the user's shared
-  // `~/.codex/config.toml`. The shared constant documents why Cafe defaults to
-  // 200k instead of the older 100k override; the per-instance
-  // `autoCompactTokenLimit` provider setting lets a user override that default.
+  // Codex rust-v0.146.0 derives an absent auto-compaction threshold as 90% of
+  // the resolved raw model context window, clamps explicit overrides to that
+  // ceiling, and defaults its accounting scope to `total`. Do not duplicate
+  // those defaults here: model metadata changes independently of Cafe, and an
+  // injected limit caused Cafe sessions to compact earlier than the CUI.
   const threadConfig: Record<string, unknown> = {
     // Upstream Codex rust-v0.143.0 marks remote_compaction_v2 stable and
     // default-enabled, but its compaction request still builds the normal
@@ -704,10 +698,12 @@ function buildThreadStartParams(input: {
     // image model, so this remains a deliberate Cafe reliability quarantine
     // until a live long-context compaction smoke verifies the v2 path.
     [CODEX_REMOTE_COMPACTION_V2_FEATURE_CONFIG_KEY]: false,
-    model_auto_compact_token_limit:
-      input.autoCompactTokenLimit ?? CODEX_DEFAULT_AUTO_COMPACT_TOKEN_LIMIT,
-    model_auto_compact_token_limit_scope: CODEX_DEFAULT_AUTO_COMPACT_TOKEN_LIMIT_SCOPE,
   };
+  if (input.autoCompactTokenLimit !== undefined) {
+    // This is an explicit user override. App-server still applies its upstream
+    // context-window clamp and the user's upstream scope configuration.
+    threadConfig.model_auto_compact_token_limit = input.autoCompactTokenLimit;
+  }
   if (input.runtimeMode === "auto-accept-edits" && input.additionalDirectories?.length) {
     threadConfig.sandbox_workspace_write = {
       writable_roots: input.additionalDirectories,

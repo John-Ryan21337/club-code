@@ -168,7 +168,7 @@ describe("ProviderSettingsForm helpers", () => {
     expect(readProviderConfigBoolean({}, "experimental", true)).toBe(true);
   });
 
-  it("sources the Codex auto-compact token limit as a labeled numeric field", () => {
+  it("sources the optional Codex auto-compact override as a labeled numeric field", () => {
     const codex = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("codex")];
     expect(codex).toBeDefined();
 
@@ -177,15 +177,15 @@ describe("ProviderSettingsForm helpers", () => {
     );
 
     expect(field).toMatchObject({
-      label: "Auto-compact token limit",
+      label: "Auto-compact override",
       description:
-        "Controls when Codex automatically compacts Cafe-managed threads. Default is 200,000 tokens.",
+        "Optional token threshold override. Leave blank to use Codex app-server's model-specific automatic compaction policy.",
       control: "number",
-      defaultNumberValue: 200_000,
       step: 1_000,
       minimum: 1,
       integerOnly: true,
     });
+    expect(field?.defaultNumberValue).toBeUndefined();
   });
 
   it("stores valid numeric field input as a number", () => {
@@ -194,7 +194,6 @@ describe("ProviderSettingsForm helpers", () => {
       control: "number",
       label: "Auto-compact token limit",
       clearWhenEmpty: "omit",
-      defaultNumberValue: 200_000,
       minimum: 1,
       integerOnly: true,
     } as const;
@@ -205,33 +204,12 @@ describe("ProviderSettingsForm helpers", () => {
     });
   });
 
-  it("omits numeric fields reset to their decoded default", () => {
-    const field = {
-      key: "autoCompactTokenLimit",
-      control: "number",
-      label: "Auto-compact token limit",
-      clearWhenEmpty: "omit",
-      defaultNumberValue: 200_000,
-      minimum: 1,
-      integerOnly: true,
-    } as const;
-
-    expect(
-      nextProviderConfigWithFieldValue(
-        { forkOwned: 1, autoCompactTokenLimit: 150_000 },
-        field,
-        "200000",
-      ),
-    ).toEqual({ forkOwned: 1 });
-  });
-
   it("clears numeric fields when the input is emptied", () => {
     const field = {
       key: "autoCompactTokenLimit",
       control: "number",
       label: "Auto-compact token limit",
       clearWhenEmpty: "omit",
-      defaultNumberValue: 200_000,
       minimum: 1,
       integerOnly: true,
     } as const;
@@ -249,7 +227,6 @@ describe("ProviderSettingsForm helpers", () => {
         control: "number",
         label: "Auto-compact token limit",
         clearWhenEmpty: "omit",
-        defaultNumberValue: 200_000,
         minimum: 1,
         integerOnly: true,
       } as const;

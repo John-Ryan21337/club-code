@@ -6,7 +6,6 @@ import {
   ClientSettingsSchema,
   CodexSettings,
   ClaudeSettings,
-  CODEX_DEFAULT_AUTO_COMPACT_TOKEN_LIMIT,
   DEFAULT_AMBIANCE_COLOR,
   DEFAULT_AMBIANCE_EFFECT,
   DEFAULT_AMBIANCE_ENABLED,
@@ -348,9 +347,8 @@ describe("provider settings", () => {
     ).toThrow();
   });
 
-  it("defaults the Codex auto-compact token limit to 200,000 tokens", () => {
-    expect(CODEX_DEFAULT_AUTO_COMPACT_TOKEN_LIMIT).toBe(200_000);
-    expect(decodeCodexSettings({}).autoCompactTokenLimit).toBe(200_000);
+  it("leaves the Codex auto-compact limit unset for upstream resolution", () => {
+    expect(decodeCodexSettings({}).autoCompactTokenLimit).toBeUndefined();
   });
 
   it("decodes a configured Codex auto-compact token limit", () => {
