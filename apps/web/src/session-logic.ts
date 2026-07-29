@@ -387,8 +387,10 @@ export function deriveActivePlanState(
 ): ActivePlanState | null {
   const ordered = [...activities].toSorted(compareActivitiesByOrder);
   const allPlanActivities = ordered.filter((activity) => activity.kind === "turn.plan.updated");
-  // Prefer plan from the current turn; fall back to the most recent plan from any turn
-  // so that TodoWrite tasks persist across follow-up messages.
+  // Codex and Claude both emit complete checklist snapshots rather than
+  // per-step patches. Prefer the current turn's newest snapshot, then retain
+  // the prior turn's final snapshot across follow-up turns just as the Codex
+  // TUI retains its last update_plan progress.
   const latest = Option.firstSomeOf([
     ...(latestTurnId
       ? Arr.findLast(allPlanActivities, (activity) => activity.turnId === latestTurnId)

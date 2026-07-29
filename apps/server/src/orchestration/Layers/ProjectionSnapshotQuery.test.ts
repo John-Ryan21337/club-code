@@ -19,6 +19,7 @@ import { RepositoryIdentityResolverLive } from "../../project/Layers/RepositoryI
 import { ORCHESTRATION_PROJECTOR_NAMES } from "./ProjectionPipeline.ts";
 import {
   OrchestrationProjectionSnapshotQueryLive,
+  THREAD_DETAIL_ACTIVITY_LIMIT,
   THREAD_DETAIL_MESSAGE_LIMIT,
 } from "./ProjectionSnapshotQuery.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
@@ -1935,6 +1936,164 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         assert.equal(detail.value.messages.length, THREAD_DETAIL_MESSAGE_LIMIT);
         assert.equal(detail.value.messages[0]?.id, "message-0006");
         assert.equal(detail.value.messages.at(-1)?.id, "message-2005");
+      }
+    }),
+  );
+
+  it.effect("retains the latest task-plan snapshot beyond the activity tail cap", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+
+      yield* sql`
+        INSERT INTO projection_projects (
+          project_id,
+          title,
+          workspace_root,
+          default_model_selection_json,
+          scripts_json,
+          created_at,
+          updated_at,
+          deleted_at
+        )
+        VALUES (
+          'project-task-plan-cap',
+          'Project',
+          '/tmp/project-task-plan-cap',
+          '{"provider":"codex","model":"gpt-5-codex"}',
+          '[]',
+          '2026-04-07T00:00:00.000Z',
+          '2026-04-07T00:00:00.000Z',
+          NULL
+        )
+      `;
+      yield* sql`
+        INSERT INTO projection_threads (
+          thread_id,
+          project_id,
+          title,
+          model_selection_json,
+          runtime_mode,
+          interaction_mode,
+          branch,
+          worktree_path,
+          latest_turn_id,
+          latest_user_message_at,
+          pending_approval_count,
+          pending_user_input_count,
+          has_actionable_proposed_plan,
+          created_at,
+          updated_at,
+          deleted_at
+        )
+        VALUES (
+          'thread-task-plan-cap',
+          'project-task-plan-cap',
+          'Thread',
+          '{"provider":"codex","model":"gpt-5-codex"}',
+          'full-access',
+          'default',
+          NULL,
+          NULL,
+          'turn-task-plan',
+          NULL,
+          0,
+          0,
+          0,
+          '2026-04-07T00:00:00.000Z',
+          '2026-04-07T00:00:00.000Z',
+          NULL
+        )
+      `;
+      yield* sql`
+        INSERT INTO projection_thread_activities (
+          activity_id,
+          thread_id,
+          turn_id,
+          tone,
+          kind,
+          summary,
+          payload_json,
+          sequence,
+          created_at
+        )
+        VALUES
+          (
+            'task-plan-obsolete',
+            'thread-task-plan-cap',
+            'turn-task-plan',
+            'info',
+            'turn.plan.updated',
+            'Plan updated',
+            '{"plan":[{"step":"Obsolete","status":"pending"}]}',
+            1,
+            '2026-04-07T00:00:01.000Z'
+          ),
+          (
+            'task-plan-latest',
+            'thread-task-plan-cap',
+            'turn-task-plan',
+            'info',
+            'turn.plan.updated',
+            'Plan updated',
+            '{"explanation":"Current snapshot","plan":[{"step":"Inspect","status":"completed"},{"step":"Implement","status":"inProgress"}]}',
+            2,
+            '2026-04-07T00:00:02.000Z'
+          )
+      `;
+      yield* sql`
+        WITH RECURSIVE activity_numbers(index_value) AS (
+          SELECT 1
+          UNION ALL
+          SELECT index_value + 1
+          FROM activity_numbers
+          WHERE index_value < ${THREAD_DETAIL_ACTIVITY_LIMIT}
+        )
+        INSERT INTO projection_thread_activities (
+          activity_id,
+          thread_id,
+          turn_id,
+          tone,
+          kind,
+          summary,
+          payload_json,
+          sequence,
+          created_at
+        )
+        SELECT
+          printf('task-plan-tail-%04d', index_value),
+          'thread-task-plan-cap',
+          'turn-task-plan',
+          'tool',
+          'tool.completed',
+          printf('activity %04d', index_value),
+          '{}',
+          index_value + 2,
+          printf(
+            '2026-04-07T%02d:%02d:%02d.000Z',
+            (index_value + 2) / 3600,
+            ((index_value + 2) / 60) % 60,
+            (index_value + 2) % 60
+          )
+        FROM activity_numbers
+      `;
+
+      const detail = yield* snapshotQuery.getThreadDetailById(
+        ThreadId.make("thread-task-plan-cap"),
+      );
+      assert.equal(detail._tag, "Some");
+      if (detail._tag === "Some") {
+        const activities = detail.value.activities;
+        assert.equal(activities.length, THREAD_DETAIL_ACTIVITY_LIMIT + 1);
+        assert.equal(activities[0]?.id, asEventId("task-plan-latest"));
+        assert.equal(
+          activities.filter((activity) => activity.kind === "turn.plan.updated").length,
+          1,
+        );
+        assert.equal(
+          activities.some((activity) => activity.id === asEventId("task-plan-obsolete")),
+          false,
+        );
       }
     }),
   );

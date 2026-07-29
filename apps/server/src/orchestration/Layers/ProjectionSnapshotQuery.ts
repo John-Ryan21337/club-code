@@ -1108,6 +1108,25 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             created_at DESC,
             activity_id DESC
           LIMIT ${THREAD_DETAIL_ACTIVITY_LIMIT}
+        ),
+        latest_task_plan_activity_id AS (
+          SELECT activity_id
+          FROM projection_thread_activities
+          WHERE thread_id = ${threadId}
+            AND kind = 'turn.plan.updated'
+          ORDER BY
+            CASE WHEN sequence IS NULL THEN 0 ELSE 1 END DESC,
+            sequence DESC,
+            created_at DESC,
+            activity_id DESC
+          LIMIT 1
+        ),
+        retained_activity_ids AS (
+          SELECT activity_id
+          FROM recent_activity_ids
+          UNION
+          SELECT activity_id
+          FROM latest_task_plan_activity_id
         )
         SELECT
           activities.activity_id AS "activityId",
@@ -1120,8 +1139,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           activities.sequence,
           activities.created_at AS "createdAt"
         FROM projection_thread_activities activities
-        INNER JOIN recent_activity_ids recent
-          ON recent.activity_id = activities.activity_id
+        INNER JOIN retained_activity_ids retained
+          ON retained.activity_id = activities.activity_id
         ORDER BY
           CASE WHEN activities.sequence IS NULL THEN 0 ELSE 1 END ASC,
           activities.sequence ASC,

@@ -1194,6 +1194,46 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
     }),
   );
 
+  it.effect("maps each Codex task-list update as one complete turn-scoped snapshot", () =>
+    Effect.gen(function* () {
+      const { adapter, runtime } = yield* startLifecycleRuntime();
+      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+
+      yield* runtime.emit({
+        id: asEventId("evt-task-plan-updated"),
+        kind: "notification",
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        method: "turn/plan/updated",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-1"),
+        payload: {
+          threadId: "provider-thread-1",
+          turnId: "turn-1",
+          explanation: "Refined after inspection",
+          plan: [
+            { step: "Inspect workspace", status: "completed" },
+            { step: "Implement fix", status: "inProgress" },
+            { step: "Verify behavior", status: "pending" },
+          ],
+        },
+      } satisfies ProviderEvent);
+
+      const firstEvent = yield* Fiber.join(firstEventFiber);
+      assert.equal(firstEvent._tag, "Some");
+      if (firstEvent._tag !== "Some" || firstEvent.value.type !== "turn.plan.updated") {
+        return;
+      }
+      assert.equal(firstEvent.value.turnId, asTurnId("turn-1"));
+      assert.equal(firstEvent.value.payload.explanation, "Refined after inspection");
+      assert.deepStrictEqual(firstEvent.value.payload.plan, [
+        { step: "Inspect workspace", status: "completed" },
+        { step: "Implement fix", status: "inProgress" },
+        { step: "Verify behavior", status: "pending" },
+      ]);
+    }),
+  );
+
   it.effect("maps completed plan items to canonical proposed-plan completion events", () =>
     Effect.gen(function* () {
       const { adapter, runtime } = yield* startLifecycleRuntime();

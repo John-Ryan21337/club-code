@@ -320,6 +320,25 @@ describe("Codex child conversation routing", () => {
         suppressLifecycle: true,
       },
     );
+    assert.deepStrictEqual(
+      resolveCodexChildConversationNotification(
+        routes,
+        {
+          method: "turn/plan/updated",
+          params: {
+            threadId: "thread-child",
+            turnId: "turn-child",
+            explanation: "Child-only checklist",
+            plan: [{ step: "Inspect child workspace", status: "inProgress" }],
+          },
+        },
+        "thread-parent",
+      ),
+      {
+        parentTurnId,
+        suppressLifecycle: true,
+      },
+    );
   });
 
   it("forwards goal notifications only from the root provider thread", () => {
