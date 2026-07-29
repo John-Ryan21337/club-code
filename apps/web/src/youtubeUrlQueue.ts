@@ -4,18 +4,22 @@ import type { YouTubeSource } from "@cafecode/contracts/settings";
 
 import edmYouTubeUrlQueueText from "../../../examples/youtube-url-queues/EDMYoutubeList.txt?raw";
 import japaneseYouTubeUrlQueueText from "../../../examples/youtube-url-queues/JPMusic.txt?raw";
+import kpopYouTubeUrlQueueText from "../../../examples/youtube-url-queues/KPOPList.txt?raw";
 import { parseYouTubeSource } from "./ambientVideo";
 
 export const YOUTUBE_URL_QUEUE_MAX_BYTES = 256 * 1_024;
 export const YOUTUBE_URL_QUEUE_MAX_LINES = 1_000;
 export const YOUTUBE_URL_QUEUE_MAX_ITEMS = 200;
 export const YOUTUBE_URL_QUEUE_MAX_URL_LENGTH = 2_048;
+export const YOUTUBE_URL_QUEUE_MAX_SAVED_LISTS = 32;
+export const YOUTUBE_URL_QUEUE_LIBRARY_STORAGE_KEY = "club-code:youtube-url-queue-library:v1";
 export const DEFAULT_YOUTUBE_URL_QUEUE_EXAMPLE_ID = "japanese";
 
-export type YouTubeUrlQueueExampleId = "japanese" | "edm";
+export type YouTubeUrlQueueExampleId = "japanese" | "edm" | "kpop";
 
 export interface YouTubeUrlQueueExample {
   readonly id: YouTubeUrlQueueExampleId;
+  readonly logicalName: string;
   readonly label: string;
   readonly text: string;
 }
@@ -23,13 +27,21 @@ export interface YouTubeUrlQueueExample {
 export const YOUTUBE_URL_QUEUE_EXAMPLES: readonly YouTubeUrlQueueExample[] = [
   {
     id: "japanese",
+    logicalName: "JPMusic",
     label: "Japanese music",
     text: japaneseYouTubeUrlQueueText,
   },
   {
     id: "edm",
+    logicalName: "EDMYoutubeList",
     label: "EDM",
     text: edmYouTubeUrlQueueText,
+  },
+  {
+    id: "kpop",
+    logicalName: "KPOPList",
+    label: "K-pop",
+    text: kpopYouTubeUrlQueueText,
   },
 ];
 
@@ -63,6 +75,7 @@ export interface YouTubeUrlQueueSnapshot {
   readonly revision: number;
   readonly report: YouTubeUrlQueueParseReport | null;
   readonly automaticPaused: boolean;
+  readonly listId: string | null;
   readonly exampleId: YouTubeUrlQueueExampleId | null;
 }
 
@@ -70,6 +83,7 @@ export interface YouTubeUrlQueueStore {
   readonly getSnapshot: () => YouTubeUrlQueueSnapshot;
   readonly subscribe: (listener: () => void) => () => void;
   readonly load: (result: YouTubeUrlQueueParseResult) => boolean;
+  readonly loadList: (listId: string) => boolean;
   readonly loadExample: (exampleId: YouTubeUrlQueueExampleId) => boolean;
   readonly initializeBundledDefault: (allowed: boolean) => boolean;
   readonly clear: () => void;
@@ -91,6 +105,7 @@ const EMPTY_SNAPSHOT: YouTubeUrlQueueSnapshot = {
   revision: 0,
   report: null,
   automaticPaused: false,
+  listId: null,
   exampleId: null,
 };
 
@@ -213,10 +228,326 @@ export async function readYouTubeUrlQueueFile(
   if (file.size > YOUTUBE_URL_QUEUE_MAX_BYTES) {
     throw new YouTubeUrlQueueFileError("The URL queue exceeds the 256 KB session limit.");
   }
-  if (file.type && file.type !== "text/plain") {
+  const mediaType = file.type.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+  if (mediaType && mediaType !== "text/plain" && mediaType !== "application/octet-stream") {
     throw new YouTubeUrlQueueFileError("Choose a plain-text URL queue.");
   }
   return parseYouTubeUrlQueueText(await file.text());
+}
+
+export interface YouTubeUrlQueueListOption {
+  readonly id: string;
+  readonly logicalName: string;
+  readonly label: string;
+  readonly result: YouTubeUrlQueueParseResult;
+  readonly source: "bundled" | "imported";
+  readonly replacesBundled: boolean;
+  readonly exampleId: YouTubeUrlQueueExampleId | null;
+}
+
+export interface YouTubeUrlQueueLibraryImportResult {
+  readonly option: YouTubeUrlQueueListOption;
+  readonly result: YouTubeUrlQueueParseResult;
+  readonly replaced: boolean;
+  readonly persisted: boolean;
+}
+
+export interface YouTubeUrlQueueLibraryStorage {
+  readonly getItem: (key: string) => string | null;
+  readonly setItem: (key: string, value: string) => void;
+  readonly removeItem: (key: string) => void;
+}
+
+export interface YouTubeUrlQueueLibraryStore {
+  readonly getSnapshot: () => readonly YouTubeUrlQueueListOption[];
+  readonly subscribe: (listener: () => void) => () => void;
+  readonly resolve: (id: string) => YouTubeUrlQueueListOption | null;
+  readonly upsert: (
+    logicalName: string,
+    result: YouTubeUrlQueueParseResult,
+  ) => YouTubeUrlQueueLibraryImportResult;
+  /** @internal Test-only reset for isolated renderer lifecycle coverage. */
+  readonly resetForTests: (clearStorage?: boolean) => void;
+}
+
+interface SavedYouTubeUrlQueueList {
+  readonly key: string;
+  readonly logicalName: string;
+  readonly videoIds: readonly string[];
+}
+
+const SAVED_LIBRARY_VERSION = 1;
+const VIDEO_ID_PATTERN = /^[A-Za-z0-9_-]{11}$/;
+
+function resolveYouTubeUrlQueueLibraryStorage(): YouTubeUrlQueueLibraryStorage | null {
+  if (typeof window === "undefined") return null;
+  try {
+    return window.localStorage;
+  } catch {
+    return null;
+  }
+}
+
+function normalizedLogicalName(value: string): string {
+  const logicalName = value.normalize("NFKC").trim().replace(/\s+/g, " ");
+  const containsForbiddenCharacter = Array.from(logicalName).some((character) => {
+    const codePoint = character.codePointAt(0) ?? 0;
+    return codePoint <= 0x1f || codePoint === 0x7f || character === "/" || character === "\\";
+  });
+  if (
+    logicalName.length === 0 ||
+    logicalName.length > 64 ||
+    // Keep button labels printable and prevent a filename from masquerading
+    // as nested UI or a path when restored on another browser launch.
+    containsForbiddenCharacter
+  ) {
+    throw new YouTubeUrlQueueFileError(
+      "Use a playlist filename with 1 to 64 printable characters.",
+    );
+  }
+  return logicalName;
+}
+
+export function youtubeUrlQueueLogicalNameFromFileName(fileName: string): string {
+  if (!fileName.toLowerCase().endsWith(".txt")) {
+    throw new YouTubeUrlQueueFileError("Choose a plain .txt file.");
+  }
+  return normalizedLogicalName(fileName.slice(0, -4));
+}
+
+function logicalNameKey(logicalName: string): string {
+  return normalizedLogicalName(logicalName).toLocaleLowerCase("en-US");
+}
+
+function customListId(key: string): string {
+  return `custom:${encodeURIComponent(key)}`;
+}
+
+function parsePersistedLibrary(raw: string | null): SavedYouTubeUrlQueueList[] {
+  if (raw === null || raw.length > YOUTUBE_URL_QUEUE_MAX_BYTES) return [];
+  try {
+    const decoded = JSON.parse(raw) as {
+      readonly version?: unknown;
+      readonly lists?: unknown;
+    };
+    if (decoded.version !== SAVED_LIBRARY_VERSION || !Array.isArray(decoded.lists)) return [];
+
+    const lists: SavedYouTubeUrlQueueList[] = [];
+    const seenKeys = new Set<string>();
+    for (const candidate of decoded.lists.slice(0, YOUTUBE_URL_QUEUE_MAX_SAVED_LISTS)) {
+      if (typeof candidate !== "object" || candidate === null) continue;
+      const record = candidate as {
+        readonly logicalName?: unknown;
+        readonly videoIds?: unknown;
+      };
+      if (typeof record.logicalName !== "string" || !Array.isArray(record.videoIds)) continue;
+      let logicalName: string;
+      let key: string;
+      try {
+        logicalName = normalizedLogicalName(record.logicalName);
+        key = logicalNameKey(logicalName);
+      } catch {
+        continue;
+      }
+      if (seenKeys.has(key)) continue;
+      const videoIds: string[] = [];
+      const seenVideoIds = new Set<string>();
+      for (const videoId of record.videoIds.slice(0, YOUTUBE_URL_QUEUE_MAX_ITEMS)) {
+        if (
+          typeof videoId !== "string" ||
+          !VIDEO_ID_PATTERN.test(videoId) ||
+          seenVideoIds.has(videoId)
+        ) {
+          continue;
+        }
+        seenVideoIds.add(videoId);
+        videoIds.push(videoId);
+      }
+      if (videoIds.length === 0) continue;
+      seenKeys.add(key);
+      lists.push({ key, logicalName, videoIds });
+    }
+    return lists;
+  } catch {
+    return [];
+  }
+}
+
+function resultFromSavedList(list: SavedYouTubeUrlQueueList): YouTubeUrlQueueParseResult {
+  return {
+    videoIds: list.videoIds,
+    report: {
+      accepted: list.videoIds.length,
+      blank: 0,
+      comments: 0,
+      duplicates: 0,
+      invalid: 0,
+      overflow: 0,
+      totalLines: list.videoIds.length,
+    },
+  };
+}
+
+function libraryOptions(
+  savedLists: readonly SavedYouTubeUrlQueueList[],
+): readonly YouTubeUrlQueueListOption[] {
+  const savedByKey = new Map(savedLists.map((list) => [list.key, list] as const));
+  const bundledKeys = new Set<string>();
+  const options: YouTubeUrlQueueListOption[] = YOUTUBE_URL_QUEUE_EXAMPLES.map((example) => {
+    const key = logicalNameKey(example.logicalName);
+    bundledKeys.add(key);
+    const replacement = savedByKey.get(key);
+    return {
+      id: example.id,
+      logicalName: example.logicalName,
+      label: example.label,
+      result:
+        replacement === undefined
+          ? parseYouTubeUrlQueueText(example.text)
+          : resultFromSavedList(replacement),
+      source: replacement === undefined ? "bundled" : "imported",
+      replacesBundled: replacement !== undefined,
+      exampleId: example.id,
+    };
+  });
+  for (const list of savedLists) {
+    if (bundledKeys.has(list.key)) continue;
+    options.push({
+      id: customListId(list.key),
+      logicalName: list.logicalName,
+      label: list.logicalName,
+      result: resultFromSavedList(list),
+      source: "imported",
+      replacesBundled: false,
+      exampleId: null,
+    });
+  }
+  return options;
+}
+
+export function createYouTubeUrlQueueLibraryStore(
+  storage: YouTubeUrlQueueLibraryStorage | null = resolveYouTubeUrlQueueLibraryStorage(),
+): YouTubeUrlQueueLibraryStore {
+  let savedLists = parsePersistedLibrary(
+    (() => {
+      try {
+        return storage?.getItem(YOUTUBE_URL_QUEUE_LIBRARY_STORAGE_KEY) ?? null;
+      } catch {
+        return null;
+      }
+    })(),
+  );
+  let snapshot = libraryOptions(savedLists);
+  const listeners = new Set<() => void>();
+  const emit = () => {
+    snapshot = libraryOptions(savedLists);
+    for (const listener of listeners) listener();
+  };
+  const persist = (): boolean => {
+    if (storage === null) return false;
+    try {
+      storage.setItem(
+        YOUTUBE_URL_QUEUE_LIBRARY_STORAGE_KEY,
+        JSON.stringify({
+          version: SAVED_LIBRARY_VERSION,
+          lists: savedLists.map(({ logicalName, videoIds }) => ({ logicalName, videoIds })),
+        }),
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  return {
+    getSnapshot: () => snapshot,
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    resolve: (id) => snapshot.find((option) => option.id === id) ?? null,
+    upsert: (logicalNameInput, result) => {
+      const logicalName = normalizedLogicalName(logicalNameInput);
+      const key = logicalNameKey(logicalName);
+      const boundedVideoIds = [...new Set(result.videoIds)].filter((videoId) =>
+        VIDEO_ID_PATTERN.test(videoId),
+      );
+      if (boundedVideoIds.length === 0) {
+        throw new YouTubeUrlQueueFileError(
+          "No valid, unique single-video YouTube URLs were found.",
+        );
+      }
+      const existingIndex = savedLists.findIndex((list) => list.key === key);
+      const replacesBundled = YOUTUBE_URL_QUEUE_EXAMPLES.some(
+        (example) => logicalNameKey(example.logicalName) === key,
+      );
+      if (existingIndex < 0 && savedLists.length >= YOUTUBE_URL_QUEUE_MAX_SAVED_LISTS) {
+        throw new YouTubeUrlQueueFileError(
+          `The local playlist library is limited to ${YOUTUBE_URL_QUEUE_MAX_SAVED_LISTS} named lists.`,
+        );
+      }
+      const replacement: SavedYouTubeUrlQueueList = {
+        key,
+        logicalName,
+        videoIds: boundedVideoIds.slice(0, YOUTUBE_URL_QUEUE_MAX_ITEMS),
+      };
+      savedLists =
+        existingIndex < 0
+          ? [...savedLists, replacement]
+          : savedLists.map((list, index) => (index === existingIndex ? replacement : list));
+      const persisted = persist();
+      emit();
+      const example = YOUTUBE_URL_QUEUE_EXAMPLES.find(
+        (candidate) => logicalNameKey(candidate.logicalName) === key,
+      );
+      const optionId = example?.id ?? customListId(key);
+      const option = snapshot.find((candidate) => candidate.id === optionId);
+      if (!option) {
+        throw new Error("The imported YouTube playlist was not added to the local library.");
+      }
+      return {
+        option,
+        result: {
+          videoIds: replacement.videoIds,
+          report: {
+            ...result.report,
+            accepted: replacement.videoIds.length,
+          },
+        },
+        replaced: existingIndex >= 0 || replacesBundled,
+        persisted,
+      };
+    },
+    resetForTests: (clearStorage = true) => {
+      savedLists = [];
+      if (clearStorage && storage !== null) {
+        try {
+          storage.removeItem(YOUTUBE_URL_QUEUE_LIBRARY_STORAGE_KEY);
+        } catch {
+          // Storage can be disabled; the in-memory test reset still succeeds.
+        }
+      }
+      emit();
+    },
+  };
+}
+
+export const youtubeUrlQueueLibraryStore = createYouTubeUrlQueueLibraryStore();
+
+export async function importYouTubeUrlQueueFile(
+  file: Pick<File, "name" | "size" | "text" | "type">,
+): Promise<YouTubeUrlQueueLibraryImportResult> {
+  const logicalName = youtubeUrlQueueLogicalNameFromFileName(file.name);
+  const result = await readYouTubeUrlQueueFile(file);
+  return youtubeUrlQueueLibraryStore.upsert(logicalName, result);
+}
+
+export function useYouTubeUrlQueueLibrary(): readonly YouTubeUrlQueueListOption[] {
+  return useSyncExternalStore(
+    youtubeUrlQueueLibraryStore.subscribe,
+    youtubeUrlQueueLibraryStore.getSnapshot,
+    youtubeUrlQueueLibraryStore.getSnapshot,
+  );
 }
 
 export function createYouTubeUrlQueueStore(): YouTubeUrlQueueStore {
@@ -243,7 +574,11 @@ export function createYouTubeUrlQueueStore(): YouTubeUrlQueueStore {
     });
     return true;
   };
-  const load = (result: YouTubeUrlQueueParseResult, exampleId: YouTubeUrlQueueExampleId | null) => {
+  const load = (
+    result: YouTubeUrlQueueParseResult,
+    listId: string | null,
+    exampleId: YouTubeUrlQueueExampleId | null,
+  ) => {
     const bounded = result.videoIds.slice(0, YOUTUBE_URL_QUEUE_MAX_ITEMS);
     if (bounded.length === 0) return false;
     videoIds = bounded;
@@ -256,6 +591,7 @@ export function createYouTubeUrlQueueStore(): YouTubeUrlQueueStore {
       revision: snapshot.revision + 1,
       report: result.report,
       automaticPaused: false,
+      listId,
       exampleId,
     });
     return true;
@@ -267,14 +603,21 @@ export function createYouTubeUrlQueueStore(): YouTubeUrlQueueStore {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
-    load: (result) => load(result, null),
-    loadExample: (exampleId) => load(parseYouTubeUrlQueueExample(exampleId), exampleId),
+    load: (result) => load(result, null, null),
+    loadList: (listId) => {
+      const option = youtubeUrlQueueLibraryStore.resolve(listId);
+      return option === null ? false : load(option.result, option.id, option.exampleId);
+    },
+    loadExample: (exampleId) => {
+      const option = youtubeUrlQueueLibraryStore.resolve(exampleId);
+      return option === null ? false : load(option.result, option.id, exampleId);
+    },
     initializeBundledDefault: (allowed) => {
       if (!allowed || snapshot.revision !== 0) return false;
-      return load(
-        parseYouTubeUrlQueueExample(DEFAULT_YOUTUBE_URL_QUEUE_EXAMPLE_ID),
-        DEFAULT_YOUTUBE_URL_QUEUE_EXAMPLE_ID,
-      );
+      const option = youtubeUrlQueueLibraryStore.resolve(DEFAULT_YOUTUBE_URL_QUEUE_EXAMPLE_ID);
+      return option === null
+        ? false
+        : load(option.result, option.id, DEFAULT_YOUTUBE_URL_QUEUE_EXAMPLE_ID);
     },
     clear: () => {
       videoIds = [];
@@ -316,9 +659,10 @@ export function createYouTubeUrlQueueStore(): YouTubeUrlQueueStore {
 
 export const youtubeUrlQueueStore = createYouTubeUrlQueueStore();
 
-/** @internal Keeps browser tests from leaking a session-only queue between cases. */
+/** @internal Keeps browser tests from leaking queue or library state between cases. */
 export function __resetYouTubeUrlQueueForTests(): void {
   youtubeUrlQueueStore.resetForTests();
+  youtubeUrlQueueLibraryStore.resetForTests();
 }
 
 export function useYouTubeUrlQueue(): YouTubeUrlQueueSnapshot {

@@ -3,11 +3,13 @@ import {
   CommandId,
   CorrelationId,
   EventId,
+  ManualFollowUpId,
   MessageId,
   ProjectId,
   ThreadId,
   TurnId,
   ProviderInstanceId,
+  type OrchestrationEvent,
 } from "@cafecode/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
@@ -171,6 +173,347 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
       for (const row of stateRows) {
         assert.equal(row.lastAppliedSequence, 3);
       }
+    }),
+  );
+
+  it.effect("projects a retried prompt-free reservation once and finalizes it in place", () =>
+    Effect.gen(function* () {
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const sql = yield* SqlClient.SqlClient;
+      const threadId = ThreadId.make("thread-manual-reservation-replay");
+      const projectId = ProjectId.make("project-manual-reservation-replay");
+      const followUpId = ManualFollowUpId.make("manual-follow-up-reservation-replay");
+      const messageId = MessageId.make("message-manual-follow-up-reservation-replay");
+      const reservationCommandId = CommandId.make("command-manual-reservation-replay");
+      const reservedAt = "2026-07-28T00:00:00.000Z";
+      const dispatch = {
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5.6-sol",
+        },
+        titleSeed: "Reservation replay",
+        runtimeMode: "full-access" as const,
+        interactionMode: "default" as const,
+      };
+
+      yield* projectionPipeline.projectEvent({
+        sequence: 1,
+        eventId: EventId.make("event-project-manual-reservation-replay"),
+        aggregateKind: "project",
+        aggregateId: projectId,
+        occurredAt: reservedAt,
+        commandId: CommandId.make("command-project-manual-reservation-replay"),
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        type: "project.created",
+        payload: {
+          projectId,
+          title: "Reservation replay",
+          workspaceRoot: "/tmp/manual-reservation-replay",
+          defaultModelSelection: dispatch.modelSelection,
+          scripts: [],
+          createdAt: reservedAt,
+          updatedAt: reservedAt,
+        },
+      });
+      yield* projectionPipeline.projectEvent({
+        sequence: 2,
+        eventId: EventId.make("event-thread-manual-reservation-replay"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: reservedAt,
+        commandId: CommandId.make("command-thread-manual-reservation-replay"),
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        type: "thread.created",
+        payload: {
+          threadId,
+          projectId,
+          title: "Reservation replay",
+          modelSelection: dispatch.modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          createdAt: reservedAt,
+          updatedAt: reservedAt,
+        },
+      });
+
+      const reservedEvent = {
+        sequence: 3,
+        eventId: EventId.make("event-manual-reservation-replay"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: reservedAt,
+        commandId: reservationCommandId,
+        causationEventId: null,
+        correlationId: reservationCommandId,
+        metadata: {},
+        type: "thread.manual-follow-up-reserved",
+        payload: {
+          threadId,
+          item: {
+            id: followUpId,
+            messageId,
+            dispatch,
+            status: "reserving",
+            reservationCommandId,
+            enqueuedAt: reservedAt,
+          },
+        },
+      } as const satisfies Extract<
+        OrchestrationEvent,
+        { type: "thread.manual-follow-up-reserved" }
+      >;
+      yield* projectionPipeline.projectEvent(reservedEvent);
+      yield* projectionPipeline.projectEvent(reservedEvent);
+
+      const afterReservation = yield* sql<{ readonly manualFollowUpsJson: string }>`
+        SELECT manual_follow_ups_json AS "manualFollowUpsJson"
+        FROM projection_threads
+        WHERE thread_id = ${threadId}
+      `;
+      const reservedItems = JSON.parse(afterReservation[0]?.manualFollowUpsJson ?? "[]") as Array<{
+        readonly id: string;
+        readonly status: string;
+      }>;
+      assert.equal(reservedItems.length, 1);
+      assert.equal(reservedItems[0]?.id, followUpId);
+      assert.equal(reservedItems[0]?.status, "reserving");
+
+      const enqueuedEvent = {
+        sequence: 4,
+        eventId: EventId.make("event-manual-enqueue-replay"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: "2026-07-28T00:00:10.000Z",
+        commandId: CommandId.make("command-manual-enqueue-replay"),
+        causationEventId: null,
+        correlationId: CommandId.make("command-manual-enqueue-replay"),
+        metadata: {},
+        type: "thread.manual-follow-up-enqueued",
+        payload: {
+          threadId,
+          item: {
+            id: followUpId,
+            reservationCommandId,
+            message: {
+              messageId,
+              role: "user",
+              text: "Finalize exactly once.",
+              attachments: [],
+            },
+            dispatch,
+            status: "queued",
+            enqueuedAt: reservedAt,
+            activatedAt: null,
+            activationCommandId: null,
+          },
+        },
+      } as const satisfies Extract<
+        OrchestrationEvent,
+        { type: "thread.manual-follow-up-enqueued" }
+      >;
+      yield* projectionPipeline.projectEvent(enqueuedEvent);
+      yield* projectionPipeline.projectEvent(enqueuedEvent);
+
+      const afterFinalization = yield* sql<{ readonly manualFollowUpsJson: string }>`
+        SELECT manual_follow_ups_json AS "manualFollowUpsJson"
+        FROM projection_threads
+        WHERE thread_id = ${threadId}
+      `;
+      const finalizedItems: unknown = JSON.parse(afterFinalization[0]?.manualFollowUpsJson ?? "[]");
+      assert.deepEqual(finalizedItems, [
+        {
+          id: followUpId,
+          reservationCommandId,
+          message: {
+            messageId,
+            role: "user",
+            text: "Finalize exactly once.",
+            attachments: [],
+          },
+          dispatch,
+          status: "queued",
+          enqueuedAt: reservedAt,
+          activatedAt: null,
+          activationCommandId: null,
+        },
+      ]);
+    }),
+  );
+
+  it.effect("persists exact-thread Auto Nudge authority and ignores stale accounting", () =>
+    Effect.gen(function* () {
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const eventStore = yield* OrchestrationEventStore;
+      const sql = yield* SqlClient.SqlClient;
+      const threadId = ThreadId.make("thread-auto-nudge-pipeline");
+      const now = "2026-07-28T12:00:00.000Z";
+
+      yield* eventStore.append({
+        type: "project.created",
+        eventId: EventId.make("event-auto-nudge-project"),
+        aggregateKind: "project",
+        aggregateId: ProjectId.make("project-auto-nudge-pipeline"),
+        occurredAt: now,
+        commandId: CommandId.make("command-auto-nudge-project"),
+        causationEventId: null,
+        correlationId: CommandId.make("command-auto-nudge-project"),
+        metadata: {},
+        payload: {
+          projectId: ProjectId.make("project-auto-nudge-pipeline"),
+          title: "Auto Nudge Pipeline",
+          workspaceRoot: "/tmp/auto-nudge-pipeline",
+          defaultModelSelection: null,
+          scripts: [],
+          createdAt: now,
+          updatedAt: now,
+        },
+      });
+      yield* eventStore.append({
+        type: "thread.created",
+        eventId: EventId.make("event-auto-nudge-thread"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: now,
+        commandId: CommandId.make("command-auto-nudge-thread"),
+        causationEventId: null,
+        correlationId: CommandId.make("command-auto-nudge-thread"),
+        metadata: {},
+        payload: {
+          threadId,
+          projectId: ProjectId.make("project-auto-nudge-pipeline"),
+          title: "Auto Nudge thread",
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("codex"),
+            model: "gpt-5.6-sol",
+          },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          createdAt: now,
+          updatedAt: now,
+        },
+      });
+      yield* eventStore.append({
+        type: "thread.auto-nudge-configured",
+        eventId: EventId.make("event-auto-nudge-configured"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: now,
+        commandId: CommandId.make("command-auto-nudge-configured"),
+        causationEventId: null,
+        correlationId: CommandId.make("command-auto-nudge-configured"),
+        metadata: {},
+        payload: {
+          threadId,
+          config: {
+            authorityRevision: 4,
+            mode: "steady-progress",
+            prompt: "Persist this exact thread prompt",
+            backgroundContinuation: true,
+            maxRounds: 6,
+            maxMinutes: 45,
+            armedAt: now,
+            baselineSettledTurnId: null,
+            lastDispatchedSettledTurnId: null,
+            roundsDispatched: 0,
+            lastDispatchedAt: null,
+          },
+        },
+      });
+
+      yield* projectionPipeline.bootstrap;
+
+      const readConfig = Effect.fn("readAutoNudgeConfig")(function* () {
+        const rows = yield* sql<{ readonly json: string }>`
+          SELECT auto_nudge_json AS "json"
+          FROM projection_threads
+          WHERE thread_id = ${threadId}
+        `;
+        return JSON.parse(rows[0]?.json ?? "{}") as Record<string, unknown>;
+      });
+
+      const configured = yield* readConfig();
+      assert.equal(configured.mode, "steady-progress");
+      assert.equal(configured.prompt, "Persist this exact thread prompt");
+      assert.equal(configured.authorityRevision, 4);
+
+      yield* eventStore.append({
+        type: "thread.auto-nudge-dispatched",
+        eventId: EventId.make("event-auto-nudge-stale-dispatch"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: "2026-07-28T12:01:00.000Z",
+        commandId: CommandId.make("command-auto-nudge-stale-dispatch"),
+        causationEventId: null,
+        correlationId: CommandId.make("command-auto-nudge-stale-dispatch"),
+        metadata: {},
+        payload: {
+          threadId,
+          authorityRevision: 3,
+          completedTurnId: TurnId.make("turn-auto-nudge-stale"),
+          dispatchSource: "foreground",
+          messageId: MessageId.make("message-auto-nudge-stale"),
+          roundsDispatched: 99,
+          dispatchedAt: "2026-07-28T12:01:00.000Z",
+        },
+      });
+      yield* eventStore.append({
+        type: "thread.auto-nudge-dispatched",
+        eventId: EventId.make("event-auto-nudge-dispatch"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: "2026-07-28T12:02:00.000Z",
+        commandId: CommandId.make("command-auto-nudge-dispatch"),
+        causationEventId: null,
+        correlationId: CommandId.make("command-auto-nudge-dispatch"),
+        metadata: {},
+        payload: {
+          threadId,
+          authorityRevision: 4,
+          completedTurnId: TurnId.make("turn-auto-nudge"),
+          dispatchSource: "foreground",
+          messageId: MessageId.make("message-auto-nudge"),
+          roundsDispatched: 1,
+          dispatchedAt: "2026-07-28T12:02:00.000Z",
+        },
+      });
+      yield* projectionPipeline.bootstrap;
+
+      const dispatched = yield* readConfig();
+      assert.equal(dispatched.lastDispatchedSettledTurnId, "turn-auto-nudge");
+      assert.equal(dispatched.roundsDispatched, 1);
+
+      yield* eventStore.append({
+        type: "thread.auto-nudge-stopped",
+        eventId: EventId.make("event-auto-nudge-stopped"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: "2026-07-28T12:03:00.000Z",
+        commandId: CommandId.make("command-auto-nudge-stopped"),
+        causationEventId: null,
+        correlationId: CommandId.make("command-auto-nudge-stopped"),
+        metadata: {},
+        payload: {
+          threadId,
+          authorityRevision: 5,
+          stoppedAt: "2026-07-28T12:03:00.000Z",
+        },
+      });
+      yield* projectionPipeline.bootstrap;
+
+      const stopped = yield* readConfig();
+      assert.equal(stopped.mode, "off");
+      assert.equal(stopped.prompt, "Persist this exact thread prompt");
+      assert.equal(stopped.backgroundContinuation, false);
+      assert.equal(stopped.authorityRevision, 5);
+      assert.equal(stopped.roundsDispatched, 0);
     }),
   );
 
@@ -1451,7 +1794,7 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-late-backfill-l
           eventId: EventId.make("evt-late-backfill-old-diff"),
           aggregateKind: "thread",
           aggregateId: threadId,
-          occurredAt: "2026-05-26T11:15:00.000Z",
+          occurredAt: "2026-05-26T12:15:00.000Z",
           commandId: CommandId.make("cmd-late-backfill-old-diff"),
           causationEventId: null,
           correlationId: CommandId.make("cmd-late-backfill-old-diff"),
@@ -1464,7 +1807,9 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-late-backfill-l
             status: "ready",
             files: [],
             assistantMessageId: MessageId.make("assistant-late-backfill-old"),
-            completedAt: "2026-05-26T11:15:00.000Z",
+            // Checkpoint capture for the older turn finishes after the newer
+            // provider turn has already become latest and completed.
+            completedAt: "2026-05-26T12:15:00.000Z",
           },
         });
         yield* appendAndProject({
@@ -1514,7 +1859,7 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-late-backfill-l
         assert.deepEqual(rows, [
           {
             latestTurnId: "turn-late-backfill-new",
-            threadUpdatedAt: "2026-05-26T12:10:00.000Z",
+            threadUpdatedAt: "2026-05-26T12:15:00.000Z",
             sessionStatus: "ready",
             activeTurnId: null,
             sessionUpdatedAt: "2026-05-26T12:10:00.000Z",

@@ -6,7 +6,7 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 
 import type * as Electron from "electron";
-import { vi } from "vitest";
+import { expect, vi } from "vitest";
 
 import * as DesktopAssets from "../app/DesktopAssets.ts";
 import * as DesktopConfig from "../app/DesktopConfig.ts";
@@ -40,9 +40,13 @@ function makeFakeBrowserWindow() {
   };
   const session = {
     setDisplayMediaRequestHandler: vi.fn(),
+    setPermissionCheckHandler: vi.fn(),
+    setPermissionRequestHandler: vi.fn(),
   };
   const webContents = {
     copyImageAt: vi.fn(),
+    getURL: vi.fn(() => "http://127.0.0.1:5733/thread/local"),
+    isDestroyed: vi.fn(() => false),
     isLoadingMainFrame: vi.fn(() => false),
     on: vi.fn(),
     once: vi.fn(),
@@ -76,8 +80,11 @@ function makeFakeBrowserWindow() {
     window: window as unknown as Electron.BrowserWindow,
     loadURL: window.loadURL,
     maximize: window.maximize,
+    on: window.on,
     openDevTools: webContents.openDevTools,
     setOpacity: window.setOpacity,
+    setPermissionCheckHandler: session.setPermissionCheckHandler,
+    setPermissionRequestHandler: session.setPermissionRequestHandler,
   };
 }
 
@@ -187,6 +194,37 @@ function makeTestLayer(input: {
 }
 
 describe("DesktopWindow", () => {
+  it("rolls back earlier media handlers when a later installation fails", () => {
+    const removeDisplayMediaCapture = vi.fn();
+    const cameraFailure = new Error("camera handler installation failed");
+
+    expect(() =>
+      DesktopWindow.installDesktopMediaPermissionBoundaries(
+        () => removeDisplayMediaCapture,
+        () => {
+          throw cameraFailure;
+        },
+      ),
+    ).toThrow(cameraFailure);
+    expect(removeDisplayMediaCapture).toHaveBeenCalledOnce();
+  });
+
+  it("attempts both media-handler removals once even when one throws", () => {
+    const removeDisplayMediaCapture = vi.fn();
+    const removeCameraPermission = vi.fn(() => {
+      throw new Error("camera handler removal failed");
+    });
+    const remove = DesktopWindow.installDesktopMediaPermissionBoundaries(
+      () => removeDisplayMediaCapture,
+      () => removeCameraPermission,
+    );
+
+    expect(remove).not.toThrow();
+    expect(remove).not.toThrow();
+    expect(removeCameraPermission).toHaveBeenCalledOnce();
+    expect(removeDisplayMediaCapture).toHaveBeenCalledOnce();
+  });
+
   it("enables only platforms with native opacity smoke evidence in packaged builds", () => {
     assert.deepEqual(DesktopWindow.resolveDesktopWindowOpacityCapability("linux", false), {
       supported: false,
@@ -234,6 +272,22 @@ describe("DesktopWindow", () => {
         );
         assert.deepEqual(fakeWindow.loadURL.mock.calls[0], ["http://127.0.0.1:5733/"]);
         assert.equal(fakeWindow.openDevTools.mock.calls.length, 1);
+        assert.equal(fakeWindow.setPermissionCheckHandler.mock.calls.length, 1);
+        assert.equal(fakeWindow.setPermissionRequestHandler.mock.calls.length, 1);
+        assert.isTrue(
+          fakeWindow.setPermissionCheckHandler.mock.invocationCallOrder[0]! <
+            fakeWindow.loadURL.mock.invocationCallOrder[0]!,
+        );
+        assert.isTrue(
+          fakeWindow.setPermissionRequestHandler.mock.invocationCallOrder[0]! <
+            fakeWindow.loadURL.mock.invocationCallOrder[0]!,
+        );
+
+        const closedListener = fakeWindow.on.mock.calls.find(([event]) => event === "closed")?.[1];
+        assert.isFunction(closedListener);
+        closedListener?.();
+        assert.deepEqual(fakeWindow.setPermissionCheckHandler.mock.lastCall, [null]);
+        assert.deepEqual(fakeWindow.setPermissionRequestHandler.mock.lastCall, [null]);
       }).pipe(Effect.provide(layer));
     }),
   );

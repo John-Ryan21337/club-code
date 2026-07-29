@@ -1,3 +1,4 @@
+import { DEFAULT_FALLING_EFFECT_DENSITY } from "@cafecode/contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -73,7 +74,7 @@ describe("window atmosphere", () => {
     expect(calculateAtmosphereParticleCount("matrix", 20_000, 20_000, 2.5)).toBe(
       MAX_ATMOSPHERE_PARTICLES_BY_KIND.matrix,
     );
-    expect(clampFallingEffectDensity(Number.NaN)).toBe(1);
+    expect(clampFallingEffectDensity(Number.NaN)).toBe(DEFAULT_FALLING_EFFECT_DENSITY);
     expect(clampFallingEffectDensity(99)).toBe(2.5);
   });
 

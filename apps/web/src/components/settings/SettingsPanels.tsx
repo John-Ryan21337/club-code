@@ -64,6 +64,7 @@ import {
 } from "../../modelSelection";
 import {
   deriveProviderInstanceEntries,
+  isLmStudioProviderInstance,
   sortProviderInstanceEntries,
 } from "../../providerInstances";
 import { ensureLocalApi, readLocalApi } from "../../localApi";
@@ -95,7 +96,13 @@ import {
   type ProviderUpdateCandidate,
 } from "../ProviderUpdateLaunchNotification.logic";
 import { ProviderInstanceCard } from "./ProviderInstanceCard";
+import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
 import { DRIVER_OPTIONS, getDriverOption } from "./providerDriverMeta";
+import {
+  LM_STUDIO_LOCAL_DISPLAY_NAME,
+  LM_STUDIO_PROVIDER_TEMPLATE_ID,
+  type ProviderCreationTemplateId,
+} from "./providerInstanceCreation";
 import {
   buildEmptyRecycleBinConfirmationMessage,
   buildProviderInstanceUpdatePatch,
@@ -125,12 +132,18 @@ import {
 } from "../../brandingImages";
 import { ColorWheelPicker } from "./ColorWheelPicker";
 import { AmbientImageSettings } from "./AmbientImageSettings";
+import {
+  createMatrixAtmosphereRestorePatch,
+  listChangedMatrixAtmosphereSettingLabels,
+} from "./matrixAtmosphereSettings";
 import { WindowAtmosphereSettings } from "./WindowAtmosphereSettings";
+import { ClockWeatherSettings } from "./ClockWeatherSettings";
 import { AmbientVideoSettings } from "./AmbientVideoSettings";
 import { LocalMediaSettings } from "./LocalMediaSettings";
 import { WindowOpacitySettings } from "./WindowOpacitySettings";
 import { isProjectHiddenForMeeting } from "../../meetingPrivacy";
 import { useUiStateStore } from "../../uiStateStore";
+import { SettingsProfiles } from "./SettingsProfiles";
 
 const THEME_OPTIONS = [
   {
@@ -397,6 +410,16 @@ export function useSettingsRestore(onRestored?: () => void) {
       DEFAULT_UNIFIED_SETTINGS.continueBackgroundAnimations
         ? ["Background animations"]
         : []),
+      ...(settings.worldClockEnabled !== DEFAULT_UNIFIED_SETTINGS.worldClockEnabled ||
+      settings.worldClockStyle !== DEFAULT_UNIFIED_SETTINGS.worldClockStyle ||
+      settings.worldClockWeatherEnabled !== DEFAULT_UNIFIED_SETTINGS.worldClockWeatherEnabled ||
+      settings.worldClockLocationIds.length !==
+        DEFAULT_UNIFIED_SETTINGS.worldClockLocationIds.length ||
+      settings.worldClockLocationIds.some(
+        (locationId, index) => locationId !== DEFAULT_UNIFIED_SETTINGS.worldClockLocationIds[index],
+      )
+        ? ["World clock and weather"]
+        : []),
       ...(settings.showSidebarMascot !== DEFAULT_UNIFIED_SETTINGS.showSidebarMascot
         ? ["Sidebar mascot"]
         : []),
@@ -426,20 +449,34 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.fallingEffectsEnabled !== DEFAULT_UNIFIED_SETTINGS.fallingEffectsEnabled
         ? ["Falling effects"]
         : []),
+      ...(settings.fallingEffectsOverCinemaEnabled !==
+      DEFAULT_UNIFIED_SETTINGS.fallingEffectsOverCinemaEnabled
+        ? ["Falling effects over cinema video"]
+        : []),
       ...(settings.fallingEffectKind !== DEFAULT_UNIFIED_SETTINGS.fallingEffectKind
         ? ["Falling effect"]
         : []),
       ...(settings.fallingEffectColor !== DEFAULT_UNIFIED_SETTINGS.fallingEffectColor
         ? ["Falling effect color"]
         : []),
-      ...(settings.fallingEffectMatrixColorMode !==
-      DEFAULT_UNIFIED_SETTINGS.fallingEffectMatrixColorMode
-        ? ["Matrix color mode"]
-        : []),
-      ...(settings.fallingEffectMatrixColorCycleSpeed !==
-      DEFAULT_UNIFIED_SETTINGS.fallingEffectMatrixColorCycleSpeed
-        ? ["Matrix color-cycle speed"]
-        : []),
+      ...listChangedMatrixAtmosphereSettingLabels({
+        fallingEffectMatrixBaseFontSize: settings.fallingEffectMatrixBaseFontSize,
+        fallingEffectMatrixColorMode: settings.fallingEffectMatrixColorMode,
+        fallingEffectMatrixColorCycleSpeed: settings.fallingEffectMatrixColorCycleSpeed,
+        fallingEffectMatrixMotionMode: settings.fallingEffectMatrixMotionMode,
+        fallingEffectMatrixWalkStartFontSize: settings.fallingEffectMatrixWalkStartFontSize,
+        fallingEffectMatrixWalkEndFontSize: settings.fallingEffectMatrixWalkEndFontSize,
+        fallingEffect2chEnriched: settings.fallingEffect2chEnriched,
+        fallingEffectLiveWorkVocabulary: settings.fallingEffectLiveWorkVocabulary,
+        fallingEffectActivityLinks: settings.fallingEffectActivityLinks,
+        fallingEffectActivityLinkNetworkEnabled: settings.fallingEffectActivityLinkNetworkEnabled,
+        fallingEffectActivityLinkDatabaseEnabled: settings.fallingEffectActivityLinkDatabaseEnabled,
+        fallingEffectActivityLinkBuildEnabled: settings.fallingEffectActivityLinkBuildEnabled,
+        fallingEffectActivityLinkAgentEnabled: settings.fallingEffectActivityLinkAgentEnabled,
+        fallingEffectActivityLinkColorMode: settings.fallingEffectActivityLinkColorMode,
+        fallingEffectActivityLinkRetentionSeconds:
+          settings.fallingEffectActivityLinkRetentionSeconds,
+      }),
       ...(settings.fallingEffectOpacity !== DEFAULT_UNIFIED_SETTINGS.fallingEffectOpacity
         ? ["Falling effect opacity"]
         : []),
@@ -453,34 +490,15 @@ export function useSettingsRestore(onRestored?: () => void) {
       DEFAULT_UNIFIED_SETTINGS.fallingEffectJapaneseRatio
         ? ["Matrix Roman/Japanese mix"]
         : []),
-      ...(settings.fallingEffect2chEnriched !== DEFAULT_UNIFIED_SETTINGS.fallingEffect2chEnriched
-        ? ["2ch-inspired Matrix enrichment"]
-        : []),
-      ...(settings.fallingEffectLiveWorkVocabulary !==
-      DEFAULT_UNIFIED_SETTINGS.fallingEffectLiveWorkVocabulary
-        ? ["Matrix live work vocabulary"]
-        : []),
-      ...(settings.fallingEffectActivityLinks !==
-      DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinks
-        ? ["Matrix activity links"]
-        : []),
-      ...(settings.fallingEffectActivityLinkNetworkEnabled !==
-        DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinkNetworkEnabled ||
-      settings.fallingEffectActivityLinkDatabaseEnabled !==
-        DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinkDatabaseEnabled ||
-      settings.fallingEffectActivityLinkBuildEnabled !==
-        DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinkBuildEnabled ||
-      settings.fallingEffectActivityLinkAgentEnabled !==
-        DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinkAgentEnabled
-        ? ["Matrix activity link inputs"]
-        : []),
-      ...(settings.fallingEffectActivityLinkColorMode !==
-      DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinkColorMode
-        ? ["Matrix activity link colors"]
-        : []),
-      ...(settings.fallingEffectActivityLinkRetentionSeconds !==
-      DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinkRetentionSeconds
-        ? ["Matrix verified route visibility"]
+      ...(settings.ambianceEnabled !== DEFAULT_UNIFIED_SETTINGS.ambianceEnabled ||
+      settings.ambianceEffect !== DEFAULT_UNIFIED_SETTINGS.ambianceEffect ||
+      settings.ambianceIntensity !== DEFAULT_UNIFIED_SETTINGS.ambianceIntensity ||
+      settings.ambianceReactMode !== DEFAULT_UNIFIED_SETTINGS.ambianceReactMode ||
+      settings.ambianceSurfaceSidebar !== DEFAULT_UNIFIED_SETTINGS.ambianceSurfaceSidebar ||
+      settings.ambianceSurfaceThread !== DEFAULT_UNIFIED_SETTINGS.ambianceSurfaceThread ||
+      settings.ambianceSurfaceComposer !== DEFAULT_UNIFIED_SETTINGS.ambianceSurfaceComposer ||
+      settings.ambianceColor !== DEFAULT_UNIFIED_SETTINGS.ambianceColor
+        ? ["Ambiance"]
         : []),
       ...(settings.appAccentColor !== DEFAULT_UNIFIED_SETTINGS.appAccentColor
         ? ["Accent color"]
@@ -529,10 +547,22 @@ export function useSettingsRestore(onRestored?: () => void) {
     ],
     [
       isGitWritingModelDirty,
+      settings.ambianceColor,
+      settings.ambianceEffect,
+      settings.ambianceEnabled,
+      settings.ambianceIntensity,
+      settings.ambianceReactMode,
+      settings.ambianceSurfaceComposer,
+      settings.ambianceSurfaceSidebar,
+      settings.ambianceSurfaceThread,
       settings.autoOpenPlanSidebar,
       settings.confirmThreadArchive,
       settings.confirmThreadDelete,
       settings.continueBackgroundAnimations,
+      settings.worldClockEnabled,
+      settings.worldClockLocationIds,
+      settings.worldClockStyle,
+      settings.worldClockWeatherEnabled,
       settings.addProjectBaseDirectory,
       settings.defaultThreadEnvMode,
       settings.diffIgnoreWhitespace,
@@ -548,10 +578,15 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.workflowObservatoryEnabled,
       settings.workflowStallWarningSeconds,
       settings.fallingEffectsEnabled,
+      settings.fallingEffectsOverCinemaEnabled,
       settings.fallingEffectKind,
       settings.fallingEffectColor,
+      settings.fallingEffectMatrixBaseFontSize,
       settings.fallingEffectMatrixColorMode,
       settings.fallingEffectMatrixColorCycleSpeed,
+      settings.fallingEffectMatrixMotionMode,
+      settings.fallingEffectMatrixWalkStartFontSize,
+      settings.fallingEffectMatrixWalkEndFontSize,
       settings.fallingEffectOpacity,
       settings.fallingEffectSpeed,
       settings.fallingEffectDensity,
@@ -588,6 +623,10 @@ export function useSettingsRestore(onRestored?: () => void) {
     updateSettings({
       timestampFormat: DEFAULT_UNIFIED_SETTINGS.timestampFormat,
       continueBackgroundAnimations: DEFAULT_UNIFIED_SETTINGS.continueBackgroundAnimations,
+      worldClockEnabled: DEFAULT_UNIFIED_SETTINGS.worldClockEnabled,
+      worldClockStyle: DEFAULT_UNIFIED_SETTINGS.worldClockStyle,
+      worldClockLocationIds: DEFAULT_UNIFIED_SETTINGS.worldClockLocationIds,
+      worldClockWeatherEnabled: DEFAULT_UNIFIED_SETTINGS.worldClockWeatherEnabled,
       appAccentColor: DEFAULT_UNIFIED_SETTINGS.appAccentColor,
       showSidebarSearch: DEFAULT_UNIFIED_SETTINGS.showSidebarSearch,
       showSidebarMascot: DEFAULT_UNIFIED_SETTINGS.showSidebarMascot,
@@ -599,30 +638,22 @@ export function useSettingsRestore(onRestored?: () => void) {
       workflowObservatoryEnabled: DEFAULT_UNIFIED_SETTINGS.workflowObservatoryEnabled,
       workflowStallWarningSeconds: DEFAULT_UNIFIED_SETTINGS.workflowStallWarningSeconds,
       fallingEffectsEnabled: DEFAULT_UNIFIED_SETTINGS.fallingEffectsEnabled,
+      fallingEffectsOverCinemaEnabled: DEFAULT_UNIFIED_SETTINGS.fallingEffectsOverCinemaEnabled,
       fallingEffectKind: DEFAULT_UNIFIED_SETTINGS.fallingEffectKind,
       fallingEffectColor: DEFAULT_UNIFIED_SETTINGS.fallingEffectColor,
-      fallingEffectMatrixColorMode: DEFAULT_UNIFIED_SETTINGS.fallingEffectMatrixColorMode,
-      fallingEffectMatrixColorCycleSpeed:
-        DEFAULT_UNIFIED_SETTINGS.fallingEffectMatrixColorCycleSpeed,
+      ...createMatrixAtmosphereRestorePatch(),
       fallingEffectOpacity: DEFAULT_UNIFIED_SETTINGS.fallingEffectOpacity,
       fallingEffectSpeed: DEFAULT_UNIFIED_SETTINGS.fallingEffectSpeed,
       fallingEffectDensity: DEFAULT_UNIFIED_SETTINGS.fallingEffectDensity,
       fallingEffectJapaneseRatio: DEFAULT_UNIFIED_SETTINGS.fallingEffectJapaneseRatio,
-      fallingEffect2chEnriched: DEFAULT_UNIFIED_SETTINGS.fallingEffect2chEnriched,
-      fallingEffectLiveWorkVocabulary: DEFAULT_UNIFIED_SETTINGS.fallingEffectLiveWorkVocabulary,
-      fallingEffectActivityLinks: DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinks,
-      fallingEffectActivityLinkNetworkEnabled:
-        DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinkNetworkEnabled,
-      fallingEffectActivityLinkDatabaseEnabled:
-        DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinkDatabaseEnabled,
-      fallingEffectActivityLinkBuildEnabled:
-        DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinkBuildEnabled,
-      fallingEffectActivityLinkAgentEnabled:
-        DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinkAgentEnabled,
-      fallingEffectActivityLinkColorMode:
-        DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinkColorMode,
-      fallingEffectActivityLinkRetentionSeconds:
-        DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinkRetentionSeconds,
+      ambianceEnabled: DEFAULT_UNIFIED_SETTINGS.ambianceEnabled,
+      ambianceEffect: DEFAULT_UNIFIED_SETTINGS.ambianceEffect,
+      ambianceIntensity: DEFAULT_UNIFIED_SETTINGS.ambianceIntensity,
+      ambianceReactMode: DEFAULT_UNIFIED_SETTINGS.ambianceReactMode,
+      ambianceSurfaceSidebar: DEFAULT_UNIFIED_SETTINGS.ambianceSurfaceSidebar,
+      ambianceSurfaceThread: DEFAULT_UNIFIED_SETTINGS.ambianceSurfaceThread,
+      ambianceSurfaceComposer: DEFAULT_UNIFIED_SETTINGS.ambianceSurfaceComposer,
+      ambianceColor: DEFAULT_UNIFIED_SETTINGS.ambianceColor,
       themeAccentColor: DEFAULT_UNIFIED_SETTINGS.themeAccentColor,
       defaultEditor: DEFAULT_UNIFIED_SETTINGS.defaultEditor,
       diffWordWrap: DEFAULT_UNIFIED_SETTINGS.diffWordWrap,
@@ -833,6 +864,8 @@ export function AppearanceSettingsPanel() {
 
   return (
     <SettingsPageContainer>
+      <SettingsProfiles />
+
       <SettingsSection title="Appearance">
         <SettingsRow
           title="Theme"
@@ -1252,6 +1285,7 @@ export function AppearanceSettingsPanel() {
           }
         />
       </SettingsSection>
+      <ClockWeatherSettings />
       <WindowAtmosphereSettings />
       <AmbientVideoSettings />
       <AmbientImageSettings />
@@ -1737,6 +1771,22 @@ export function SystemSettingsPanel() {
       <SettingsSection title="About">
         <AboutVersionSection />
         <SettingsRow
+          title="Alpha software / アルファ版"
+          description={
+            <span className="block space-y-2" data-alpha-software-disclaimer="true">
+              <span className="block" lang="en">
+                Club Code is alpha/testing software. It is provided without warranties or claims of
+                reliability, fitness for a particular purpose, or uninterrupted operation. Use it at
+                your own risk, keep backups of important work, and verify important results.
+              </span>
+              <span className="block" lang="ja">
+                Club Code
+                は現在テスト中のアルファ版ソフトウェアです。信頼性、特定目的への適合性、無停止動作などについて、いかなる保証または表明も行いません。利用者ご自身の責任で使用し、重要なデータはバックアップし、重要な結果は確認してください。
+              </span>
+            </span>
+          }
+        />
+        <SettingsRow
           title="Diagnostics"
           description={diagnosticsDescription}
           control={
@@ -1756,6 +1806,9 @@ export function ProviderSettingsPanel() {
   const serverProviders = useServerProviders();
   const [isRefreshingProviders, setIsRefreshingProviders] = useState(false);
   const [isAddInstanceDialogOpen, setIsAddInstanceDialogOpen] = useState(false);
+  const [initialProviderTemplateId, setInitialProviderTemplateId] = useState<
+    ProviderCreationTemplateId | undefined
+  >(undefined);
   const [updatingProviderDrivers, setUpdatingProviderDrivers] = useState<
     ReadonlySet<ProviderDriverKind>
   >(() => new Set());
@@ -2030,6 +2083,7 @@ export function ProviderSettingsPanel() {
       });
     }
   }
+  const hasLmStudioInstance = rows.some((row) => isLmStudioProviderInstance(row.instance));
 
   const updateProviderInstance = (
     row: InstanceRow,
@@ -2134,17 +2188,21 @@ export function ProviderSettingsPanel() {
               <TooltipTrigger
                 render={
                   <Button
-                    size="icon-xs"
-                    variant="ghost"
-                    className="size-5 rounded-sm p-0 text-muted-foreground hover:text-foreground"
-                    onClick={() => setIsAddInstanceDialogOpen(true)}
+                    size="xs"
+                    variant="outline"
+                    className="h-7 gap-1.5 px-2 text-xs"
+                    onClick={() => {
+                      setInitialProviderTemplateId(undefined);
+                      setIsAddInstanceDialogOpen(true);
+                    }}
                     aria-label="Add provider instance"
                   >
                     <PlusIcon className="size-3" />
+                    <span>Add provider</span>
                   </Button>
                 }
               />
-              <TooltipPopup side="top">Add provider instance</TooltipPopup>
+              <TooltipPopup side="top">Add Codex, Claude, OpenCode, or LM Studio</TooltipPopup>
             </Tooltip>
             <Tooltip>
               <TooltipTrigger
@@ -2170,6 +2228,55 @@ export function ProviderSettingsPanel() {
           </div>
         }
       >
+        {!hasLmStudioInstance ? (
+          <div
+            className="border-t border-border/60 first:border-t-0"
+            data-provider-setup="lmstudio"
+          >
+            <div className="px-4 py-3.5 sm:px-5">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="min-w-0 flex-1 space-y-1">
+                  <div className="flex min-w-0 flex-wrap items-center gap-2">
+                    <ProviderInstanceIcon
+                      driverKind={ProviderDriverKind.make("codex")}
+                      displayName={LM_STUDIO_LOCAL_DISPLAY_NAME}
+                      showBadge
+                      statusDotClassName="bg-muted-foreground/50"
+                      className="size-5"
+                      iconClassName="size-4 text-foreground/80"
+                      badgeClassName="right-[-0.125rem] bottom-[-0.125rem] h-3 min-w-3 text-[7px]"
+                    />
+                    <h3 className="truncate text-[13px] font-semibold tracking-[-0.01em] text-foreground">
+                      {LM_STUDIO_LOCAL_DISPLAY_NAME}
+                    </h3>
+                    <span className="rounded bg-muted/60 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                      Not configured
+                    </span>
+                  </div>
+                  <p className="text-xs text-muted-foreground/80">
+                    Connect this computer or a private-LAN LM Studio server. Available chat models
+                    appear in the main model picker after the server is running and provider status
+                    is refreshed. OpenCode is a separate provider.
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="outline"
+                  className="h-7 shrink-0 gap-1.5 px-2 text-xs"
+                  onClick={() => {
+                    setInitialProviderTemplateId(LM_STUDIO_PROVIDER_TEMPLATE_ID);
+                    setIsAddInstanceDialogOpen(true);
+                  }}
+                  aria-label="Set up LM Studio Local"
+                >
+                  <PlusIcon className="size-3.5" />
+                  Set up
+                </Button>
+              </div>
+            </div>
+          </div>
+        ) : null}
         {rows.map((row) => {
           const driverOption = getDriverOption(row.driver);
           const liveProvider = serverProviders.find(
@@ -2303,7 +2410,13 @@ export function ProviderSettingsPanel() {
 
       <AddProviderInstanceDialog
         open={isAddInstanceDialogOpen}
-        onOpenChange={setIsAddInstanceDialogOpen}
+        initialTemplateId={initialProviderTemplateId}
+        onOpenChange={(open) => {
+          setIsAddInstanceDialogOpen(open);
+          if (!open) {
+            setInitialProviderTemplateId(undefined);
+          }
+        }}
       />
     </SettingsPageContainer>
   );

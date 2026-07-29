@@ -1,18 +1,27 @@
 import {
   DEFAULT_FALLING_EFFECT_DENSITY,
   DEFAULT_FALLING_EFFECT_JAPANESE_RATIO,
+  DEFAULT_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE,
   DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
+  DEFAULT_FALLING_EFFECT_MATRIX_WALK_END_FONT_SIZE,
+  DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE,
+  FALLING_EFFECT_MATRIX_WALK_FONT_SIZE_STEP,
   MAX_FALLING_EFFECT_DENSITY,
   MAX_FALLING_EFFECT_JAPANESE_RATIO,
+  MAX_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE,
   MAX_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
+  MAX_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE,
   MAX_FALLING_EFFECT_SPEED,
   MIN_FALLING_EFFECT_DENSITY,
   MIN_FALLING_EFFECT_JAPANESE_RATIO,
+  MIN_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE,
   MIN_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
+  MIN_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE,
   MIN_FALLING_EFFECT_SPEED,
   type AmbientColor,
   type FallingEffectKind,
   type FallingEffectMatrixColorMode,
+  type FallingEffectMatrixMotionMode,
 } from "@cafecode/contracts/settings";
 import { hasFreshLocalMediaAudioSignal, type LocalMediaAudioSignal } from "./localMediaAudioSignal";
 import type { MatrixWorkVocabulary } from "./matrixWorkVocabulary";
@@ -22,6 +31,7 @@ export const MAX_ATMOSPHERE_DPR = 2;
 export const MAX_ATMOSPHERE_CANVAS_PIXELS = 8_388_608;
 export const MAX_ATMOSPHERE_FRAME_DELTA_SECONDS = 0.1;
 export const MATRIX_RAINBOW_CYCLE_MS = 18_000;
+export const REDUCED_MOTION_ATMOSPHERE_OPACITY_SCALE = 0.55;
 export const MATRIX_MIN_AUDIO_REACTIVE_LEVEL = 0.015;
 /** Avoid synchronized full-field rainbow cycling in the 3–30 Hz flash-sensitive range. */
 export const MATRIX_MAX_UNIFORM_RAINBOW_CYCLES_PER_SECOND = 3;
@@ -87,6 +97,28 @@ export const MAX_MATRIX_TOKEN_FONT_SIZE = 18;
 export const MAX_MATRIX_TOKEN_WIDTH_PX = 144;
 const MATRIX_2CH_TOKEN_PROBABILITY = 0.08;
 const MATRIX_WORK_TOKEN_PROBABILITY = 0.34;
+const MATRIX_PERSPECTIVE_FONT_MIN_PX = 1;
+const MATRIX_PERSPECTIVE_FONT_MAX_PX = MAX_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE;
+const MATRIX_PERSPECTIVE_FONT_STEP_PX = 0.5;
+const MATRIX_FONT_FAMILY = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+const MATRIX_PERSPECTIVE_FONTS = Array.from(
+  {
+    length:
+      (MATRIX_PERSPECTIVE_FONT_MAX_PX - MATRIX_PERSPECTIVE_FONT_MIN_PX) /
+        MATRIX_PERSPECTIVE_FONT_STEP_PX +
+      1,
+  },
+  (_, index) =>
+    `${MATRIX_PERSPECTIVE_FONT_MIN_PX + index * MATRIX_PERSPECTIVE_FONT_STEP_PX}px ${MATRIX_FONT_FAMILY}`,
+);
+/**
+ * Walk modes may address a bounded set of whole-pixel font sizes. Populate
+ * that table lazily so ordinary Flat/Forward/Reverse/Warp sessions pay no
+ * startup or allocation cost for sizes they never render. Projection depth
+ * and position remain continuous; only the browser font strings are bucketed
+ * to keep font-cache and canvas pressure bounded.
+ */
+const MATRIX_WALK_FONTS: Array<string | undefined> = [];
 
 export interface AtmosphereParticle {
   x: number;
@@ -124,18 +156,27 @@ export interface MatrixColorAnimationState {
   lastSignalSampledAt: number | null;
 }
 
-export function createMatrixColorAnimationState(): MatrixColorAnimationState {
-  return { hue: null, lightness: null, lastUpdatedAt: null, lastSignalSampledAt: null };
-}
-
 export interface MatrixColorFrame {
   /** Uniform/fallback color and the color used by non-extra modes. */
   readonly color: string;
-  /** Extra modes resolve one deterministic hue phase for each stream. */
+  /** Extra modes resolve one deterministic hue phase for each Matrix stream. */
   readonly perStream: boolean;
   readonly baseHue: number | null;
   readonly saturation: number | null;
   readonly lightness: number | null;
+}
+
+export interface AtmosphereProjectedPoint {
+  x: number;
+  y: number;
+  /** Absolute particle/glyph scaling relative to this particle's intrinsic size. */
+  scale: number;
+  /** Normalized perspective ratio used by bounded connector decorations. */
+  depthScale: number;
+}
+
+export function createMatrixColorAnimationState(): MatrixColorAnimationState {
+  return { hue: null, lightness: null, lastUpdatedAt: null, lastSignalSampledAt: null };
 }
 
 export function createSeededRandom(seed: number): () => number {
@@ -549,11 +590,193 @@ export function resolveMatrixStreamColor(
   return hslColor(frame.baseHue + phaseDegrees, frame.saturation, frame.lightness);
 }
 
-export function shouldAnimateAtmosphere(state: AtmosphereAnimationState): boolean {
-  if (!state.enabled || state.reducedMotion) {
-    return false;
-  }
+export function shouldShowAtmosphere(state: AtmosphereAnimationState): boolean {
+  if (!state.enabled) return false;
   return state.continueBackgroundAnimations || (state.documentVisible && state.windowFocused);
+}
+
+export function shouldAnimateAtmosphere(state: AtmosphereAnimationState): boolean {
+  if (state.reducedMotion) return false;
+  return shouldShowAtmosphere(state);
+}
+
+export function resolveAtmosphereRenderOpacity(opacity: number, staticFrame: boolean): number {
+  if (!staticFrame) return opacity;
+  const normalized = Number.isFinite(opacity) ? Math.min(1, Math.max(0, opacity)) : 0;
+  return normalized * REDUCED_MOTION_ATMOSPHERE_OPACITY_SCALE;
+}
+
+function resolveMatrixPerspectiveFont(size: number, scale: number): string {
+  const scaledSize = Math.min(
+    MATRIX_PERSPECTIVE_FONT_MAX_PX,
+    Math.max(MATRIX_PERSPECTIVE_FONT_MIN_PX, size * scale),
+  );
+  const index = Math.round(
+    (scaledSize - MATRIX_PERSPECTIVE_FONT_MIN_PX) / MATRIX_PERSPECTIVE_FONT_STEP_PX,
+  );
+  return MATRIX_PERSPECTIVE_FONTS[index]!;
+}
+
+function resolveMatrixBaseFontScale(requestedSize: number): number {
+  const safeSize = Number.isFinite(requestedSize)
+    ? requestedSize
+    : DEFAULT_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE;
+  const boundedSize = Math.min(
+    MAX_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE,
+    Math.max(MIN_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE, safeSize),
+  );
+  return boundedSize / DEFAULT_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE;
+}
+
+function clampMatrixWalkFontSize(requestedSize: number, fallbackSize: number): number {
+  const safeSize = Number.isFinite(requestedSize) ? requestedSize : fallbackSize;
+  return Math.min(
+    MAX_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE,
+    Math.max(MIN_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE, safeSize),
+  );
+}
+
+function quantizeMatrixWalkFontSize(requestedSize: number, fallbackSize: number): number {
+  const boundedSize = clampMatrixWalkFontSize(requestedSize, fallbackSize);
+  return (
+    Math.round(boundedSize / FALLING_EFFECT_MATRIX_WALK_FONT_SIZE_STEP) *
+    FALLING_EFFECT_MATRIX_WALK_FONT_SIZE_STEP
+  );
+}
+
+function resolveMatrixWalkFont(size: number, scale: number): string {
+  const fontSize = quantizeMatrixWalkFontSize(
+    size * scale,
+    DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE,
+  );
+  const index = Math.round(
+    (fontSize - MIN_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE) /
+      FALLING_EFFECT_MATRIX_WALK_FONT_SIZE_STEP,
+  );
+  return (MATRIX_WALK_FONTS[index] ??= `${fontSize.toFixed(0)}px ${MATRIX_FONT_FAMILY}`);
+}
+
+/**
+ * Keep Matrix's generated outer columns on the viewport edges while retaining
+ * the reviewed center convergence/expansion cue for interior columns.
+ *
+ * Matrix columns are generated at half-column insets rather than x=0/width.
+ * Applying the old center-linear perspective scale directly to those bounded
+ * coordinates created triangular empty bands at the far top/bottom plane. We
+ * first normalize that generated column domain onto [-1, 1], then blend the
+ * perspective scale back to 1 at the edges. The derivative remains positive
+ * for the reviewed 0.58..1.30 range, so columns keep their order and density
+ * changes smoothly without extra particles, tiling, or draw calls.
+ */
+function resolveDirectionalPerspectiveX(
+  scene: AtmosphereScene,
+  sourceX: number,
+  perspectiveScale: number,
+): number {
+  const centerX = scene.width * 0.5;
+  if (scene.kind !== "matrix" || scene.width <= 0 || scene.particles.length < 2) {
+    return centerX + (sourceX - centerX) * perspectiveScale;
+  }
+
+  const outerColumnInset = scene.width / (scene.particles.length * 2);
+  const generatedColumnSpan = scene.width - outerColumnInset * 2;
+  if (generatedColumnSpan <= 0) {
+    return centerX;
+  }
+
+  const normalizedColumnX = Math.min(
+    1,
+    Math.max(-1, ((sourceX - outerColumnInset) / generatedColumnSpan) * 2 - 1),
+  );
+  const edgePreservingScale =
+    perspectiveScale + (1 - perspectiveScale) * Math.abs(normalizedColumnX);
+  return centerX + normalizedColumnX * centerX * edgePreservingScale;
+}
+
+/**
+ * Applies the reviewed forward/Warp geometry to every atmosphere kind. The
+ * output object is caller-owned so the draw loop performs no per-particle
+ * allocation. Reverse mirrors the depth ramp while preserving falling motion.
+ * Walk modes retain that geometry but expand visual size continuously across
+ * the configured endpoints before normal canvas clipping and recycling. Only
+ * Matrix font strings are quantized later, at the glyph-cache boundary.
+ */
+export function resolveAtmosphereProjectedPointInPlace(
+  output: AtmosphereProjectedPoint,
+  scene: AtmosphereScene,
+  particle: AtmosphereParticle,
+  sourceX: number,
+  sourceY: number,
+  motionMode: FallingEffectMatrixMotionMode,
+  requestedWalkStartFontSize = DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE,
+  requestedWalkEndFontSize = DEFAULT_FALLING_EFFECT_MATRIX_WALK_END_FONT_SIZE,
+): void {
+  const safeX = Number.isFinite(sourceX) ? sourceX : 0;
+  const safeY = Number.isFinite(sourceY) ? sourceY : 0;
+  if (motionMode === "flat") {
+    output.x = safeX;
+    output.y = safeY;
+    output.scale = 1;
+    output.depthScale = 1;
+    return;
+  }
+
+  const verticalMargin = Math.max(
+    1,
+    scene.kind === "matrix" ? particle.size * 8 : particle.size * 2,
+  );
+  const depth = Math.min(
+    1,
+    Math.max(0, (safeY + verticalMargin) / Math.max(1, scene.height + verticalMargin * 2)),
+  );
+
+  if (
+    motionMode === "forward" ||
+    motionMode === "reverse" ||
+    motionMode === "walk-forward" ||
+    motionMode === "walk-reverse"
+  ) {
+    const reverse = motionMode === "reverse" || motionMode === "walk-reverse";
+    const walk = motionMode === "walk-forward" || motionMode === "walk-reverse";
+    const geometryDepth = walk
+      ? Math.min(1, Math.max(0, safeY / Math.max(1, scene.height)))
+      : depth;
+    const projectedDepth = reverse ? 1 - geometryDepth : geometryDepth;
+    const perspectiveScale = 0.58 + projectedDepth * 0.72;
+    output.x = resolveDirectionalPerspectiveX(scene, safeX, perspectiveScale);
+    output.y = safeY;
+    if (walk) {
+      const walkStartFontSize = clampMatrixWalkFontSize(
+        requestedWalkStartFontSize,
+        DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE,
+      );
+      const walkEndFontSize = clampMatrixWalkFontSize(
+        requestedWalkEndFontSize,
+        DEFAULT_FALLING_EFFECT_MATRIX_WALK_END_FONT_SIZE,
+      );
+      const targetFontSize =
+        walkStartFontSize + projectedDepth * (walkEndFontSize - walkStartFontSize);
+      output.scale =
+        targetFontSize / Math.max(MIN_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE, particle.size);
+      output.depthScale = targetFontSize / walkStartFontSize;
+    } else {
+      output.scale = 0.72 + projectedDepth * 0.55;
+      output.depthScale = output.scale;
+    }
+    return;
+  }
+
+  const centerX = scene.width * 0.5;
+  const centerY = scene.height * 0.5;
+  const angle =
+    (safeX / Math.max(1, scene.width)) * Math.PI * 2 -
+    Math.PI * 0.5 +
+    Math.sin(particle.phase) * 0.08;
+  const radius = Math.max(scene.width, scene.height) * 0.74 * depth * depth;
+  output.x = centerX + Math.cos(angle) * radius;
+  output.y = centerY + Math.sin(angle) * radius;
+  output.scale = 0.4 + depth * 0.95;
+  output.depthScale = output.scale;
 }
 
 export function drawAtmosphereScene(
@@ -562,6 +785,10 @@ export function drawAtmosphereScene(
   color: string,
   opacity: number,
   matrixColorFrame?: MatrixColorFrame,
+  motionMode: FallingEffectMatrixMotionMode = "flat",
+  walkStartFontSize = DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE,
+  walkEndFontSize = DEFAULT_FALLING_EFFECT_MATRIX_WALK_END_FONT_SIZE,
+  matrixBaseFontSize = DEFAULT_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE,
 ): void {
   context.clearRect(0, 0, scene.width, scene.height);
   const normalizedOpacity = Math.min(1, Math.max(0, opacity));
@@ -572,22 +799,64 @@ export function drawAtmosphereScene(
   context.save();
   context.fillStyle = color;
   context.strokeStyle = color;
+  const matrixBaseFontScale = resolveMatrixBaseFontScale(matrixBaseFontSize);
+  const projectedFrom: AtmosphereProjectedPoint = { x: 0, y: 0, scale: 1, depthScale: 1 };
+  const projectedTo: AtmosphereProjectedPoint = { x: 0, y: 0, scale: 1, depthScale: 1 };
 
   if (scene.kind === "snow") {
     context.globalAlpha = normalizedOpacity;
     for (const particle of scene.particles) {
+      resolveAtmosphereProjectedPointInPlace(
+        projectedFrom,
+        scene,
+        particle,
+        particle.x,
+        particle.y,
+        motionMode,
+        walkStartFontSize,
+        walkEndFontSize,
+      );
       context.beginPath();
-      context.arc(particle.x, particle.y, particle.size, 0, Math.PI * 2);
+      context.arc(
+        projectedFrom.x,
+        projectedFrom.y,
+        particle.size * projectedFrom.scale,
+        0,
+        Math.PI * 2,
+      );
       context.fill();
     }
   } else if (scene.kind === "rain") {
     context.globalAlpha = normalizedOpacity;
     context.lineCap = "round";
     for (const particle of scene.particles) {
-      context.lineWidth = Math.max(0.75, particle.size / 12);
+      resolveAtmosphereProjectedPointInPlace(
+        projectedFrom,
+        scene,
+        particle,
+        particle.x,
+        particle.y,
+        motionMode,
+        walkStartFontSize,
+        walkEndFontSize,
+      );
+      resolveAtmosphereProjectedPointInPlace(
+        projectedTo,
+        scene,
+        particle,
+        particle.x + particle.velocityX * 0.025,
+        particle.y + particle.size,
+        motionMode,
+        walkStartFontSize,
+        walkEndFontSize,
+      );
+      context.lineWidth = Math.max(
+        0.75,
+        (particle.size / 12) * (projectedFrom.scale + projectedTo.scale) * 0.5,
+      );
       context.beginPath();
-      context.moveTo(particle.x, particle.y);
-      context.lineTo(particle.x + particle.velocityX * 0.025, particle.y + particle.size);
+      context.moveTo(projectedFrom.x, projectedFrom.y);
+      context.lineTo(projectedTo.x, projectedTo.y);
       context.stroke();
     }
   } else {
@@ -598,9 +867,29 @@ export function drawAtmosphereScene(
         matrixColorFrame === undefined
           ? color
           : resolveMatrixStreamColor(matrixColorFrame, particle);
-      const fontSize = Math.min(MAX_MATRIX_TOKEN_FONT_SIZE, particle.size);
-      context.font = `${fontSize}px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace`;
+      if (motionMode === "flat") {
+        context.font = resolveMatrixPerspectiveFont(particle.size, matrixBaseFontScale);
+      }
       for (let trailIndex = 7; trailIndex >= 0; trailIndex -= 1) {
+        const sourceY = particle.y - trailIndex * particle.size;
+        resolveAtmosphereProjectedPointInPlace(
+          projectedFrom,
+          scene,
+          particle,
+          particle.x,
+          sourceY,
+          motionMode,
+          walkStartFontSize,
+          walkEndFontSize,
+        );
+        if (motionMode === "walk-forward" || motionMode === "walk-reverse") {
+          context.font = resolveMatrixWalkFont(particle.size, projectedFrom.scale);
+        } else if (motionMode !== "flat") {
+          context.font = resolveMatrixPerspectiveFont(
+            particle.size,
+            projectedFrom.scale * matrixBaseFontScale,
+          );
+        }
         const glyphIndex =
           (particle.glyphOffset +
             trailIndex * 7 +
@@ -615,9 +904,9 @@ export function drawAtmosphereScene(
           (trailIndex === 0 ? (particle.matrixToken ?? particle.matrixWorkToken) : null) ??
             particle.glyphs[glyphIndex] ??
             "0",
-          particle.x,
-          particle.y - trailIndex * particle.size,
-          MAX_MATRIX_TOKEN_WIDTH_PX,
+          projectedFrom.x,
+          projectedFrom.y,
+          MAX_MATRIX_TOKEN_WIDTH_PX * projectedFrom.scale,
         );
       }
     }

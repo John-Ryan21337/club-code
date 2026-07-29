@@ -11,25 +11,36 @@ import {
   DEFAULT_FALLING_EFFECT_ACTIVITY_LINKS,
   DEFAULT_FALLING_EFFECT_DENSITY,
   DEFAULT_FALLING_EFFECTS_ENABLED,
+  DEFAULT_FALLING_EFFECTS_OVER_CINEMA_ENABLED,
   DEFAULT_FALLING_EFFECT_JAPANESE_RATIO,
   DEFAULT_FALLING_EFFECT_KIND,
   DEFAULT_FALLING_EFFECT_LIVE_WORK_VOCABULARY,
   DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
   DEFAULT_FALLING_EFFECT_MATRIX_COLOR_MODE,
+  DEFAULT_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE,
+  DEFAULT_FALLING_EFFECT_MATRIX_MOTION_MODE,
+  DEFAULT_FALLING_EFFECT_MATRIX_WALK_END_FONT_SIZE,
+  DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE,
   DEFAULT_FALLING_EFFECT_SPEED,
+  FALLING_EFFECT_MATRIX_WALK_FONT_SIZE_STEP,
   MAX_AMBIENT_OPACITY,
   MAX_FALLING_EFFECT_DENSITY,
   MAX_FALLING_EFFECT_JAPANESE_RATIO,
   MAX_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
+  MAX_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE,
+  MAX_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE,
   MAX_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
   MAX_FALLING_EFFECT_SPEED,
   MIN_AMBIENT_OPACITY,
   MIN_FALLING_EFFECT_DENSITY,
   MIN_FALLING_EFFECT_JAPANESE_RATIO,
   MIN_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
+  MIN_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE,
+  MIN_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE,
   MIN_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
   MIN_FALLING_EFFECT_SPEED,
 } from "@cafecode/contracts/settings";
+import { useEffect, useState } from "react";
 
 import { useSettings, useUpdateSettings } from "../../hooks/useSettings";
 import { useServerConfig } from "../../rpc/serverState";
@@ -63,6 +74,91 @@ function clampMatrixColorCycleSpeed(value: number | null): number {
   return Math.min(
     MAX_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
     Math.max(MIN_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED, value),
+  );
+}
+
+function clampWholePixelFontSize(
+  value: number | null,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+): number {
+  if (value === null || !Number.isFinite(value)) {
+    return fallback;
+  }
+  return Math.round(Math.min(maximum, Math.max(minimum, value)));
+}
+
+interface WholePixelFontSizeFieldProps {
+  decrementLabel: string;
+  fallback: number;
+  incrementLabel: string;
+  inputLabel: string;
+  maximum: number;
+  minimum: number;
+  onCommit: (value: number) => void;
+  value: number;
+}
+
+function WholePixelFontSizeField({
+  decrementLabel,
+  fallback,
+  incrementLabel,
+  inputLabel,
+  maximum,
+  minimum,
+  onCommit,
+  value,
+}: WholePixelFontSizeFieldProps) {
+  const [draftValue, setDraftValue] = useState<number | null>(() =>
+    clampWholePixelFontSize(value, fallback, minimum, maximum),
+  );
+
+  useEffect(() => {
+    setDraftValue(clampWholePixelFontSize(value, fallback, minimum, maximum));
+  }, [fallback, maximum, minimum, value]);
+
+  return (
+    <NumberField
+      value={draftValue}
+      min={minimum}
+      max={maximum}
+      step={FALLING_EFFECT_MATRIX_WALK_FONT_SIZE_STEP}
+      smallStep={FALLING_EFFECT_MATRIX_WALK_FONT_SIZE_STEP}
+      largeStep={10}
+      snapOnStep
+      format={{ minimumFractionDigits: 0, maximumFractionDigits: 0 }}
+      size="sm"
+      className="w-32"
+      onValueChange={setDraftValue}
+      onValueCommitted={(nextValue) => {
+        const normalizedValue = clampWholePixelFontSize(nextValue, fallback, minimum, maximum);
+        setDraftValue(normalizedValue);
+        onCommit(normalizedValue);
+      }}
+    >
+      <NumberFieldGroup>
+        <NumberFieldDecrement aria-label={decrementLabel} />
+        <NumberFieldInput
+          aria-label={inputLabel}
+          onFocus={(event) => {
+            // Base UI places the caret at the end on first focus. Selecting the
+            // complete formatted value instead lets direct typing, paste, and
+            // browser autofill replace it rather than append to (for example)
+            // "1".
+            event.preventBaseUIHandler();
+            event.currentTarget.select();
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              event.currentTarget.blur();
+            }
+          }}
+        />
+        <NumberFieldIncrement aria-label={incrementLabel} />
+      </NumberFieldGroup>
+    </NumberField>
   );
 }
 
@@ -106,6 +202,40 @@ export function WindowAtmosphereSettings() {
   const { updateSettings } = useUpdateSettings();
   const serverConfig = useServerConfig();
   const atmosphereAvailable = serverConfig?.ambientExperienceCapabilities.atmosphere === true;
+  const controlsEnabled = atmosphereAvailable && settings.fallingEffectsEnabled;
+  const hasNonDefaultValue =
+    settings.fallingEffectsEnabled !== DEFAULT_FALLING_EFFECTS_ENABLED ||
+    settings.fallingEffectsOverCinemaEnabled !== DEFAULT_FALLING_EFFECTS_OVER_CINEMA_ENABLED ||
+    settings.fallingEffectKind !== DEFAULT_FALLING_EFFECT_KIND ||
+    settings.fallingEffectMatrixBaseFontSize !== DEFAULT_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE ||
+    settings.fallingEffectColor !== DEFAULT_AMBIENT_COLOR ||
+    settings.fallingEffectMatrixColorMode !== DEFAULT_FALLING_EFFECT_MATRIX_COLOR_MODE ||
+    settings.fallingEffectMatrixColorCycleSpeed !==
+      DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED ||
+    settings.fallingEffectMatrixMotionMode !== DEFAULT_FALLING_EFFECT_MATRIX_MOTION_MODE ||
+    settings.fallingEffectMatrixWalkStartFontSize !==
+      DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE ||
+    settings.fallingEffectMatrixWalkEndFontSize !==
+      DEFAULT_FALLING_EFFECT_MATRIX_WALK_END_FONT_SIZE ||
+    settings.fallingEffectOpacity !== DEFAULT_AMBIENT_OPACITY ||
+    settings.fallingEffectSpeed !== DEFAULT_FALLING_EFFECT_SPEED ||
+    settings.fallingEffectDensity !== DEFAULT_FALLING_EFFECT_DENSITY ||
+    settings.fallingEffectJapaneseRatio !== DEFAULT_FALLING_EFFECT_JAPANESE_RATIO ||
+    settings.fallingEffect2chEnriched !== DEFAULT_FALLING_EFFECT_2CH_ENRICHED ||
+    settings.fallingEffectLiveWorkVocabulary !== DEFAULT_FALLING_EFFECT_LIVE_WORK_VOCABULARY ||
+    settings.fallingEffectActivityLinks !== DEFAULT_FALLING_EFFECT_ACTIVITY_LINKS ||
+    settings.fallingEffectActivityLinkNetworkEnabled !==
+      DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_NETWORK_ENABLED ||
+    settings.fallingEffectActivityLinkDatabaseEnabled !==
+      DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_DATABASE_ENABLED ||
+    settings.fallingEffectActivityLinkBuildEnabled !==
+      DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_BUILD_ENABLED ||
+    settings.fallingEffectActivityLinkAgentEnabled !==
+      DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_AGENT_ENABLED ||
+    settings.fallingEffectActivityLinkColorMode !==
+      DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_COLOR_MODE ||
+    settings.fallingEffectActivityLinkRetentionSeconds !==
+      DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS;
 
   return (
     <SettingsSection title="Window atmosphere">
@@ -120,42 +250,24 @@ export function WindowAtmosphereSettings() {
           )
         }
         resetAction={
-          settings.fallingEffectsEnabled !== DEFAULT_FALLING_EFFECTS_ENABLED ||
-          settings.fallingEffectKind !== DEFAULT_FALLING_EFFECT_KIND ||
-          settings.fallingEffectColor !== DEFAULT_AMBIENT_COLOR ||
-          settings.fallingEffectMatrixColorMode !== DEFAULT_FALLING_EFFECT_MATRIX_COLOR_MODE ||
-          settings.fallingEffectMatrixColorCycleSpeed !==
-            DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED ||
-          settings.fallingEffectOpacity !== DEFAULT_AMBIENT_OPACITY ||
-          settings.fallingEffectSpeed !== DEFAULT_FALLING_EFFECT_SPEED ||
-          settings.fallingEffectDensity !== DEFAULT_FALLING_EFFECT_DENSITY ||
-          settings.fallingEffectJapaneseRatio !== DEFAULT_FALLING_EFFECT_JAPANESE_RATIO ||
-          settings.fallingEffect2chEnriched !== DEFAULT_FALLING_EFFECT_2CH_ENRICHED ||
-          settings.fallingEffectActivityLinks !== DEFAULT_FALLING_EFFECT_ACTIVITY_LINKS ||
-          settings.fallingEffectActivityLinkNetworkEnabled !==
-            DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_NETWORK_ENABLED ||
-          settings.fallingEffectActivityLinkDatabaseEnabled !==
-            DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_DATABASE_ENABLED ||
-          settings.fallingEffectActivityLinkBuildEnabled !==
-            DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_BUILD_ENABLED ||
-          settings.fallingEffectActivityLinkAgentEnabled !==
-            DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_AGENT_ENABLED ||
-          settings.fallingEffectActivityLinkColorMode !==
-            DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_COLOR_MODE ||
-          settings.fallingEffectActivityLinkRetentionSeconds !==
-            DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS ||
-          settings.fallingEffectLiveWorkVocabulary !==
-            DEFAULT_FALLING_EFFECT_LIVE_WORK_VOCABULARY ? (
+          hasNonDefaultValue ? (
             <SettingResetButton
               label="window atmosphere"
               onClick={() =>
                 updateSettings({
                   fallingEffectsEnabled: DEFAULT_FALLING_EFFECTS_ENABLED,
+                  fallingEffectsOverCinemaEnabled: DEFAULT_FALLING_EFFECTS_OVER_CINEMA_ENABLED,
                   fallingEffectKind: DEFAULT_FALLING_EFFECT_KIND,
+                  fallingEffectMatrixBaseFontSize: DEFAULT_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE,
                   fallingEffectColor: DEFAULT_AMBIENT_COLOR,
                   fallingEffectMatrixColorMode: DEFAULT_FALLING_EFFECT_MATRIX_COLOR_MODE,
                   fallingEffectMatrixColorCycleSpeed:
                     DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
+                  fallingEffectMatrixMotionMode: DEFAULT_FALLING_EFFECT_MATRIX_MOTION_MODE,
+                  fallingEffectMatrixWalkStartFontSize:
+                    DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE,
+                  fallingEffectMatrixWalkEndFontSize:
+                    DEFAULT_FALLING_EFFECT_MATRIX_WALK_END_FONT_SIZE,
                   fallingEffectOpacity: DEFAULT_AMBIENT_OPACITY,
                   fallingEffectSpeed: DEFAULT_FALLING_EFFECT_SPEED,
                   fallingEffectDensity: DEFAULT_FALLING_EFFECT_DENSITY,
@@ -192,7 +304,7 @@ export function WindowAtmosphereSettings() {
         }
       />
 
-      {atmosphereAvailable && settings.fallingEffectsEnabled ? (
+      {controlsEnabled ? (
         <SettingsRow
           title="Effect"
           description="Choose what falls through the window."
@@ -227,9 +339,137 @@ export function WindowAtmosphereSettings() {
         />
       ) : null}
 
-      {atmosphereAvailable &&
-      settings.fallingEffectsEnabled &&
-      settings.fallingEffectKind === "matrix" ? (
+      {controlsEnabled && settings.fallingEffectKind === "matrix" ? (
+        <SettingsRow
+          title="Matrix base font size"
+          description="Sets the baseline Matrix glyph size for Flat, Forward, Reverse, and Warp. Rain and snow geometry are unchanged. Walk modes continue to use their absolute Start and End sizes."
+          control={
+            <div className="flex items-center gap-2">
+              <WholePixelFontSizeField
+                value={settings.fallingEffectMatrixBaseFontSize}
+                fallback={DEFAULT_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE}
+                minimum={MIN_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE}
+                maximum={MAX_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE}
+                inputLabel="Matrix base font size"
+                decrementLabel="Decrease Matrix base font size"
+                incrementLabel="Increase Matrix base font size"
+                onCommit={(value) => updateSettings({ fallingEffectMatrixBaseFontSize: value })}
+              />
+              <span className="text-xs text-muted-foreground">px</span>
+            </div>
+          }
+        />
+      ) : null}
+
+      {controlsEnabled ? (
+        <SettingsRow
+          title="Show over cinema video"
+          description="Keep only the selected falling snow, rain, or Matrix glyphs visible over the video area in Cinema workspace. Provider activity connectors stay behind the player, and video controls remain interactive. Off by default."
+          control={
+            <Switch
+              checked={settings.fallingEffectsOverCinemaEnabled}
+              onCheckedChange={(checked) =>
+                updateSettings({ fallingEffectsOverCinemaEnabled: Boolean(checked) })
+              }
+              aria-label="Overlay cinema video with falling atmosphere"
+            />
+          }
+        />
+      ) : null}
+
+      {controlsEnabled ? (
+        <SettingsRow
+          title="Atmosphere motion"
+          description="Flat preserves classic falling geometry. Forward and Reverse add subtle depth travel; Warp sends the same particles through a bounded center tunnel. Walk Forward and Walk Reverse use the configurable near/far sizes below."
+          control={
+            <RadioGroup
+              value={settings.fallingEffectMatrixMotionMode}
+              onValueChange={(value) => {
+                if (
+                  value === "flat" ||
+                  value === "forward" ||
+                  value === "reverse" ||
+                  value === "tunnel" ||
+                  value === "walk-forward" ||
+                  value === "walk-reverse"
+                ) {
+                  updateSettings({ fallingEffectMatrixMotionMode: value });
+                }
+              }}
+              aria-label="Atmosphere motion"
+              className="flex-row flex-wrap gap-4"
+            >
+              {(
+                [
+                  ["flat", "Flat"],
+                  ["forward", "Forward"],
+                  ["reverse", "Reverse"],
+                  ["tunnel", "Warp"],
+                  ["walk-forward", "Walk Forward"],
+                  ["walk-reverse", "Walk Reverse"],
+                ] as const
+              ).map(([value, label]) => (
+                <label
+                  key={value}
+                  className="flex cursor-pointer items-center gap-1.5 text-xs font-medium"
+                >
+                  <Radio value={value} />
+                  <span>{label}</span>
+                </label>
+              ))}
+            </RadioGroup>
+          }
+        />
+      ) : null}
+
+      {controlsEnabled ? (
+        <SettingsRow
+          title="Walk perspective sizes"
+          description="Set the absolute far and near particle sizes from 1px to 144px. Walk Reverse mirrors the same endpoints. Position, depth, and line scaling remain continuously interpolated; Matrix glyph font strings use 1px cache buckets to reduce local font-cache and canvas load."
+          control={
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-muted-foreground">Start</span>
+                <WholePixelFontSizeField
+                  value={settings.fallingEffectMatrixWalkStartFontSize}
+                  fallback={DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE}
+                  minimum={MIN_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE}
+                  maximum={MAX_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE}
+                  inputLabel="Walk start font size"
+                  decrementLabel="Decrease Walk start font size"
+                  incrementLabel="Increase Walk start font size"
+                  onCommit={(value) =>
+                    updateSettings({
+                      fallingEffectMatrixWalkStartFontSize: value,
+                    })
+                  }
+                />
+                <span className="text-xs text-muted-foreground">px</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-muted-foreground">End</span>
+                <WholePixelFontSizeField
+                  value={settings.fallingEffectMatrixWalkEndFontSize}
+                  fallback={DEFAULT_FALLING_EFFECT_MATRIX_WALK_END_FONT_SIZE}
+                  minimum={MIN_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE}
+                  maximum={MAX_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE}
+                  inputLabel="Walk end font size"
+                  decrementLabel="Decrease Walk end font size"
+                  incrementLabel="Increase Walk end font size"
+                  onCommit={(value) =>
+                    updateSettings({
+                      fallingEffectMatrixWalkEndFontSize: value,
+                    })
+                  }
+                />
+                <span className="text-xs text-muted-foreground">px</span>
+              </div>
+            </div>
+          }
+        />
+      ) : null}
+
+      {controlsEnabled && settings.fallingEffectKind === "matrix" ? (
         <>
           <SettingsRow
             title="Matrix color mode"
@@ -356,7 +596,7 @@ export function WindowAtmosphereSettings() {
           />
           <SettingsRow
             title="Provider activity links"
-            description="Show short network, database, build/compile, and agent-delegation pulses from provider-observed activity. Lines appear only between same-category events with the exact same reported item or tool identity; Club Code never invents data flow or renders prompts, commands, SQL values, URLs, credentials, or hidden OS traffic."
+            description="Show short network/web, database, build/compile, and agent-delegation pulses from recognized provider tool lifecycle events. This is not raw bandwidth or system-wide activity monitoring: a connector appears only when Codex (including Codex-OSS-compatible transports), Claude, or OpenCode emits matching events for the same tool item. A local model appears only when its provider emits that lifecycle. Club Code never invents data flow or renders prompts, commands, SQL values, URLs, credentials, or hidden OS activity."
             control={
               <Switch
                 checked={settings.fallingEffectActivityLinks}

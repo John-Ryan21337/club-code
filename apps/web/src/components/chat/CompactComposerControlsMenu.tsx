@@ -1,6 +1,11 @@
-import { type ProviderDriverKind, ProviderInteractionMode, RuntimeMode } from "@cafecode/contracts";
+import {
+  type ProviderDriverKind,
+  ProviderInteractionMode,
+  type ProviderThreadGoalStatus,
+  RuntimeMode,
+} from "@cafecode/contracts";
 import { memo, type ReactNode } from "react";
-import { EllipsisIcon, ListTodoIcon } from "lucide-react";
+import { EllipsisIcon, ListTodoIcon, TargetIcon } from "lucide-react";
 import { Button } from "../ui/button";
 import {
   CLAUDE_PERMISSION_MODE_OPTIONS,
@@ -17,6 +22,7 @@ import {
   MenuSeparator as MenuDivider,
   MenuTrigger,
 } from "../ui/menu";
+import { threadGoalStatusLabel } from "./ThreadGoalControl";
 
 export const CompactComposerControlsMenu = memo(function CompactComposerControlsMenu(props: {
   activePlan: boolean;
@@ -26,11 +32,14 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
   planSidebarOpen: boolean;
   runtimeMode: RuntimeMode;
   showInteractionModeToggle: boolean;
+  showGoalControl?: boolean;
+  goalStatus?: ProviderThreadGoalStatus | null;
   traitsMenuContent?: ReactNode;
   onToggleInteractionMode: () => void;
   onClaudePermissionModeChange: (mode: ClaudePermissionMode) => void;
   onTogglePlanSidebar: () => void;
   onRuntimeModeChange: (mode: RuntimeMode) => void;
+  onOpenGoal?: () => void;
 }) {
   const isClaude = props.provider === "claudeAgent";
   const claudePermissionMode = deriveClaudePermissionMode({
@@ -107,6 +116,17 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
               <MenuRadioItem value="auto-accept-edits">Auto-accept edits</MenuRadioItem>
               <MenuRadioItem value="full-access">Full access</MenuRadioItem>
             </MenuRadioGroup>
+          </>
+        ) : null}
+        {props.showGoalControl ? (
+          <>
+            <MenuDivider />
+            <MenuItem onClick={props.onOpenGoal}>
+              <TargetIcon className="size-4 shrink-0" />
+              {props.goalStatus == null
+                ? "Goal"
+                : `Goal: ${threadGoalStatusLabel(props.goalStatus)}`}
+            </MenuItem>
           </>
         ) : null}
         {props.activePlan ? (

@@ -757,11 +757,12 @@ describe("CheckpointReactor", () => {
       payload: { state: "completed" },
     });
 
-    await waitForThread(
-      harness.readModel,
-      (entry) =>
-        entry.latestTurn?.turnId === "turn-4" &&
-        entry.checkpoints.some((checkpoint) => checkpoint.checkpointTurnCount === 4),
+    // This harness does not run ProviderRuntimeIngestion, so the checkpoint
+    // diff is the only projected evidence for turn 4. A checkpoint diff may
+    // not replace a different latest turn; wait only for the checkpoint state
+    // this reactor owns instead of treating it as provider lifecycle authority.
+    await waitForThread(harness.readModel, (entry) =>
+      entry.checkpoints.some((checkpoint) => checkpoint.checkpointTurnCount === 4),
     );
     await harness.drain();
 

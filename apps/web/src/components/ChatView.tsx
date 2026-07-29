@@ -4,6 +4,9 @@ import {
   defaultInstanceIdForDriver,
   type EnvironmentId,
   type DesktopRendererDebugSnapshot,
+  type CommandId,
+  type ManualFollowUpActivationMode,
+  type ManualFollowUpId,
   MessageId,
   type ModelSelection,
   type ProjectId,
@@ -12,6 +15,8 @@ import {
   type ServerProvider,
   type ScopedThreadRef,
   type ThreadId,
+  THREAD_AUTO_NUDGE_PROMPT_MAX_CHARS,
+  type ThreadAutoNudgeConfig,
   type TurnId,
   OrchestrationThreadActivity,
   ProviderInteractionMode,
@@ -32,7 +37,15 @@ import {
 } from "@cafecode/shared/codexCompaction";
 import { truncate } from "@cafecode/shared/String";
 import { Debouncer } from "@tanstack/react-pacer";
-import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type RefObject,
+} from "react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useShallow } from "zustand/react/shallow";
 import { useGitStatus } from "~/lib/gitStatusState";
@@ -45,6 +58,7 @@ import { buildEphemeralBrowserDispatchPrompt } from "../embeddedBrowserChatHando
 import { parseDiffRouteSearch, stripDiffSearchParams } from "../diffRouteSearch";
 import {
   collapseExpandedComposerCursor,
+  parseStandaloneComposerGoalCommand,
   parseStandaloneComposerSlashCommand,
 } from "../composer-logic";
 import {
@@ -73,9 +87,10 @@ import {
   type PendingUserInputDraftAnswer,
 } from "../pendingUserInput";
 import {
-  selectProjectByRef,
   selectProjectsAcrossEnvironments,
+  selectEnvironmentState,
   selectThreadByRef,
+  selectThreadShellsAcrossEnvironments,
   selectThreadsAcrossEnvironments,
   useStore,
 } from "../store";
@@ -93,6 +108,7 @@ import {
   type ChatMessage,
   type SessionPhase,
   type Thread,
+  type ThreadManualFollowUp,
   type TurnDiffSummary,
 } from "../types";
 import { useTheme } from "../hooks/useTheme";
@@ -107,7 +123,13 @@ import PlanSidebar from "./PlanSidebar";
 import { ChevronDownIcon, TriangleAlertIcon } from "lucide-react";
 import { cn } from "~/lib/utils";
 import { stackedThreadToast, toastManager } from "./ui/toast";
-import { newCommandId, newDraftId, newMessageId, newThreadId } from "~/lib/utils";
+import {
+  newCommandId,
+  newDraftId,
+  newManualFollowUpId,
+  newMessageId,
+  newThreadId,
+} from "~/lib/utils";
 import { getProviderModelCapabilities, resolveSelectableProvider } from "../providerModels";
 import { useSettings } from "../hooks/useSettings";
 import { resolveAppModelSelectionForInstance } from "../modelSelection";
@@ -129,24 +151,33 @@ import {
   type SteeringFollowUpViewItem,
 } from "./chat/ChatComposer";
 import {
+  appendOperatorFollowUp,
+  canAutomaticallyActivateQueuedFollowUp,
+  canAutoStartQueuedFollowUpTurn,
   canExpandQueuedFollowUpText,
   canStartQueuedFollowUpTurn,
   collectRetainedFollowUpThreadTargets,
   decideQueuedFollowUpAction,
   decideFollowUpDelivery,
+  followUpQueueStateKey,
   hasQueuedFollowUpDispatchBeenObserved,
+  isQueuedFollowUpHead,
   isLiveSteerAvailableForThread,
   previewQueuedFollowUpText,
   queuedFollowUpActionLabel,
   queuedFollowUpActionTitle,
   readRetryableSteerFailurePayload,
   rekeyQueuedFollowUpsForActiveThread,
+  releaseQueuedFollowUpDispatchClaim,
   selectQueuedFollowUpDispatchCandidate,
+  shouldQueueOperatorFollowUp,
+  tryClaimQueuedFollowUpDispatch,
 } from "./chat/followUpQueue";
 import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { WorkspaceObservatory } from "./WorkspaceObservatory";
 import { MessagesTimeline } from "./chat/MessagesTimeline";
+import { ProjectTelemetryGraph } from "./chat/ProjectTelemetryGraph";
 import {
   isTimelineScrolledToEnd,
   shouldPreserveTimelineScrollReviewIntent,
@@ -154,6 +185,11 @@ import {
 import { ChatHeader } from "./chat/ChatHeader";
 import { AutoNudgeControl } from "./chat/AutoNudgeControl";
 import { type ExpandedImagePreview } from "./chat/ExpandedImagePreview";
+import {
+  ThreadGoalDialog,
+  type ThreadGoalDialogMode,
+  type ThreadGoalSetPatch,
+} from "./chat/ThreadGoalControl";
 import { NoActiveThreadState } from "./NoActiveThreadState";
 import { ChatMediaOverlay } from "./chat/ChatMediaOverlay";
 import { useAmbientVideoWorkspace } from "./ambient/AmbientVideoWorkspace";
@@ -185,25 +221,19 @@ import {
 import {
   AUTO_NUDGE_DELAY_MS,
   AutoNudgeTimerController,
+  type AutoNudgeMode,
   autoNudgePromptForMode,
   canDispatchAutoNudge,
   canScheduleAutoNudge,
   consumeAutoNudgeTerminalForManualActivity,
   getAutoNudgeTurnLedger,
+  isAutoNudgeWithinTimeCap,
 } from "../autoNudger";
+import { manualFollowUpPriorityStore } from "../manualFollowUpPriorityStore";
 import {
-  getBackgroundAutoNudgeController,
-  isBackgroundAutoNudgeOwner,
-  isLastBackgroundAutoNudgeOwner,
-  useBackgroundAutoNudgeState,
-} from "../backgroundAutoNudger";
-import {
-  AUTO_NUDGE_EXECUTION_LOCK_NAME,
-  getAutoNudgeThreadPolicyStore,
-  supportsAutoNudgeExecutionLock,
-  useAutoNudgeThreadPolicy,
-  type AutoNudgeThreadPolicy,
-} from "../autoNudgeThreadPolicy";
+  getConfirmedAutoNudgeArming,
+  useAutoNudgeSuppressedState,
+} from "../confirmedAutoNudgeArming";
 import { useComposerHandleContext } from "../composerHandleContext";
 import {
   useServerAvailableEditors,
@@ -211,8 +241,16 @@ import {
   useServerKeybindings,
   useServerTerminal,
 } from "~/rpc/serverState";
-import { describeSendFailureMessage, sanitizeThreadErrorMessage } from "~/rpc/transportError";
+import {
+  describeSendFailureMessage,
+  isIndeterminateTransportError,
+  sanitizeThreadErrorMessage,
+} from "~/rpc/transportError";
 import { retainThreadDetailSubscription } from "../environments/runtime/service";
+import {
+  hasSavedEnvironmentRegistryHydrated,
+  listSavedEnvironmentRecords,
+} from "../environments/runtime";
 import { RightPanelSheet } from "./RightPanelSheet";
 import { deriveDebugWaitReasons } from "./chat/debugWaitReasons";
 import {
@@ -232,7 +270,51 @@ const IMAGE_ONLY_BOOTSTRAP_PROMPT =
   "[User attached one or more images without additional text. Respond using the conversation context and the attached image(s).]";
 const EMPTY_ACTIVITIES: OrchestrationThreadActivity[] = [];
 const EMPTY_PROPOSED_PLANS: Thread["proposedPlans"] = [];
+const EMPTY_MANUAL_FOLLOW_UPS: readonly ThreadManualFollowUp[] = [];
 const EMPTY_BOOLEAN_RECORD: Readonly<Record<string, boolean>> = {};
+
+interface AutoNudgeForegroundDispatchAuthority {
+  readonly contextKey: string;
+  readonly terminalTurnKey: string;
+  readonly environmentId: EnvironmentId;
+  readonly threadId: ThreadId;
+  readonly authorityRevision: ThreadAutoNudgeConfig["authorityRevision"];
+  readonly completedTurnId: TurnId;
+  readonly armedAt: ThreadAutoNudgeConfig["armedAt"];
+  readonly maxMinutes: ThreadAutoNudgeConfig["maxMinutes"];
+}
+
+interface AutoNudgeConfigureValues {
+  readonly mode: AutoNudgeMode;
+  readonly prompt: string;
+  readonly backgroundContinuation: boolean;
+  readonly maxRounds: ThreadAutoNudgeConfig["maxRounds"];
+  readonly maxMinutes: ThreadAutoNudgeConfig["maxMinutes"];
+}
+
+type AutoNudgeClearBlocker = "configuration-pending" | "environment-unavailable" | "thread-enabled";
+
+function autoNudgeClearBlockerDescription(blocker: AutoNudgeClearBlocker): string {
+  return blocker === "configuration-pending"
+    ? "A thread configuration command is still settling. Keep Emergency Stop all active and retry after the server has acknowledged it."
+    : blocker === "environment-unavailable"
+      ? "At least one known environment is disconnected or still hydrating. Keep Emergency Stop all active, reconnect it, and retry after every thread can be confirmed Off."
+      : "One or more known threads still project Auto Nudge as enabled. Keep Emergency Stop all active and retry after every thread shows Off.";
+}
+
+function providerAccountCanAcceptTurn(provider: ServerProvider | null): boolean {
+  const snapshot = provider?.accountRateLimits?.rateLimits;
+  if (!snapshot) return true;
+  if (snapshot.rateLimitReachedType || snapshot.spendControlReached) return false;
+  if (
+    (snapshot.primary?.usedPercent ?? 0) >= 100 ||
+    (snapshot.secondary?.usedPercent ?? 0) >= 100
+  ) {
+    return false;
+  }
+  const credits = snapshot.credits;
+  return credits === undefined || credits === null || credits.unlimited || credits.hasCredits;
+}
 const DEBUG_SNAPSHOT_VERSION = 11;
 const DEBUG_TEXT_PREVIEW_LIMIT = 120;
 const DEBUG_JSON_PREVIEW_LIMIT = 600;
@@ -259,22 +341,21 @@ const DEBUG_SECRET_REDACTIONS: ReadonlyArray<readonly [RegExp, string]> = [
   [/\bBearer\s+[A-Za-z0-9._~+/=-]{16,}\b/g, "Bearer [redacted]"],
 ];
 
-function autoNudgeProviderCanAcceptTurn(provider: ServerProvider | null): boolean {
-  if (
-    !provider ||
-    provider.status !== "ready" ||
-    !provider.enabled ||
-    !provider.installed ||
-    provider.availability === "unavailable" ||
-    provider.auth.status !== "authenticated"
-  ) {
-    return false;
-  }
-  const limits = provider.accountRateLimits?.rateLimits;
-  if (!limits) return true;
-  if (limits.rateLimitReachedType || limits.spendControlReached) return false;
-  return (limits.primary?.usedPercent ?? 0) < 100 && (limits.secondary?.usedPercent ?? 0) < 100;
+interface ThreadGoalDialogRequest {
+  readonly open: boolean;
+  readonly revision: number;
+  readonly mode: ThreadGoalDialogMode;
+  readonly seedObjective: string | null;
+  readonly confirmReplacement: boolean;
 }
+
+const CLOSED_THREAD_GOAL_DIALOG: ThreadGoalDialogRequest = {
+  open: false,
+  revision: 0,
+  mode: "summary",
+  seedObjective: null,
+  confirmReplacement: false,
+};
 
 function redactDebugSecrets(value: string): string {
   let redacted = value;
@@ -1043,6 +1124,23 @@ function summarizeDebugSession(session: Thread["session"]) {
   };
 }
 
+function summarizeDebugGoal(goal: Thread["goal"]) {
+  if (!goal) {
+    return null;
+  }
+  // Goal objectives are user-authored prompt content. The debug endpoint only
+  // needs lifecycle/accounting fields to diagnose continuation behavior.
+  return {
+    status: goal.status,
+    tokenBudgetConfigured: goal.tokenBudget !== null,
+    tokenBudget: goal.tokenBudget,
+    tokensUsed: goal.tokensUsed,
+    timeUsedSeconds: goal.timeUsedSeconds,
+    createdAt: goal.createdAt,
+    updatedAt: goal.updatedAt,
+  };
+}
+
 function activityIsLifecycleRelevant(activity: OrchestrationThreadActivity): boolean {
   return (
     activity.kind === "runtime.warning" ||
@@ -1127,11 +1225,13 @@ function summarizeDebugThreadLifecycle(thread: Thread, nowMs: number) {
   ].filter((value): value is string => value !== null);
 
   return {
+    environmentId: thread.environmentId,
     id: thread.id,
     title: thread.title,
     projectId: thread.projectId,
     phase,
     session: summarizeDebugSession(session),
+    goal: summarizeDebugGoal(thread.goal),
     latestTurn: summarizeDebugLatestTurn(latestTurn),
     latestTurnSettled,
     activeTurnId,
@@ -1515,9 +1615,21 @@ const buildAttachmentsForSnapshot = async (
   );
 
 interface FollowUpQueueItem extends ComposerSendSnapshot {
-  id: string;
+  id: ManualFollowUpId;
+  messageId: MessageId;
+  reservationCommandId: CommandId;
+  enqueueCommandId: CommandId;
+  enqueueStatus: "pending" | "reserving" | "reserved" | "submitting" | "acknowledged" | "rejected";
+  enqueueRetryAfterMs: number;
+  titleSeed: string;
   environmentId: EnvironmentId;
   threadId: ThreadId;
+  /**
+   * Exact one-shot target for a local first-turn draft promotion. A queued
+   * operator command must never follow navigation to an unrelated server
+   * thread merely because the draft projection disappeared.
+   */
+  serverHandoffTarget: ScopedThreadRef | null;
   queuedAt: string;
   expanded: boolean;
   blockedReason: string | null;
@@ -1553,12 +1665,32 @@ interface PendingSteerInterruptRecovery {
   readonly requestedAt: string;
 }
 
+function followUpThreadMapKey(environmentId: EnvironmentId, threadId: ThreadId): string {
+  return followUpQueueStateKey({ environmentId, threadId });
+}
+
+function manualFollowUpMapKey(
+  environmentId: EnvironmentId,
+  threadId: ThreadId,
+  followUpId: ManualFollowUpId,
+): string {
+  return JSON.stringify([environmentId, threadId, followUpId]);
+}
+
+interface ManualStopBarrier {
+  readonly environmentId: EnvironmentId;
+  readonly threadId: ThreadId;
+  readonly interruptedTurnId: TurnId | null;
+  readonly requestedAt: string;
+}
+
 function pendingSteerDispatchesForThread(
   current: Record<string, PendingSteerDispatch>,
+  environmentId: EnvironmentId,
   threadId: ThreadId,
 ): PendingSteerDispatch[] {
   return Object.values(current)
-    .filter((pending) => pending.threadId === threadId)
+    .filter((pending) => pending.environmentId === environmentId && pending.threadId === threadId)
     .toSorted((left, right) => left.dispatchedAt.localeCompare(right.dispatchedAt));
 }
 
@@ -1847,6 +1979,13 @@ export default function ChatView(props: ChatViewProps) {
       [routeKind, routeThreadRef],
     ),
   );
+  const activeAutoNudgeConfig = useStore((store) =>
+    routeKind === "server"
+      ? (selectEnvironmentState(store, routeThreadRef.environmentId).threadAutoNudgeConfigById[
+          routeThreadRef.threadId
+        ] ?? null)
+      : null,
+  );
   const setStoreThreadError = useStore((store) => store.setError);
   const markThreadVisited = useUiStateStore((store) => store.markThreadVisited);
   const activeThreadLastVisitedAt = useUiStateStore((store) =>
@@ -1867,6 +2006,7 @@ export default function ChatView(props: ChatViewProps) {
     (store) => store.setThreadWorkflowNodeExpanded,
   );
   const settings = useSettings();
+  const autoNudgeSuppressed = useAutoNudgeSuppressedState();
   const setStickyComposerModelSelection = useComposerDraftStore(
     (store) => store.setStickyModelSelection,
   );
@@ -1918,6 +2058,8 @@ export default function ChatView(props: ChatViewProps) {
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [timelineAutoFollowTail, setTimelineAutoFollowTail] = useState(true);
   const [expandedImage, setExpandedImage] = useState<ExpandedImagePreview | null>(null);
+  const [threadGoalDialog, setThreadGoalDialog] =
+    useState<ThreadGoalDialogRequest>(CLOSED_THREAD_GOAL_DIALOG);
   const [optimisticUserMessages, setOptimisticUserMessages] = useState<ChatMessage[]>([]);
   const [stickTimelineToEndRevision, setStickTimelineToEndRevision] = useState(0);
   const optimisticUserMessagesRef = useRef(optimisticUserMessages);
@@ -1926,6 +2068,70 @@ export default function ChatView(props: ChatViewProps) {
     Record<string, string | null>
   >({});
   const [isConnecting, _setIsConnecting] = useState(false);
+  const [autoNudgePendingWrites, setAutoNudgePendingWrites] = useState<
+    Record<
+      string,
+      {
+        readonly kind: "mode" | "background" | "prompt" | "limits";
+        readonly generation: number;
+      }
+    >
+  >({});
+  const autoNudgeWriteInFlightByScopeRef = useRef(
+    new Map<
+      string,
+      {
+        readonly kind: "mode" | "background" | "prompt" | "limits";
+        readonly generation: number;
+      }
+    >(),
+  );
+  const autoNudgePendingWriteForContext = (
+    scopeKey: string | null,
+  ): {
+    readonly kind: "mode" | "background" | "prompt" | "limits";
+    readonly generation: number;
+  } | null => (scopeKey ? (autoNudgePendingWrites[scopeKey] ?? null) : null);
+  const autoNudgeWriteGenerationRef = useRef(0);
+  const autoNudgeContextKeyRef = useRef<string | null>(null);
+  const [autoNudgeCountdownSeconds, setAutoNudgeCountdownSeconds] = useState<number | null>(null);
+  const [autoNudgeActivityRevision, setAutoNudgeActivityRevision] = useState(0);
+  const autoNudgeLedgerRef = useRef(getAutoNudgeTurnLedger());
+  // Keep the latest settled terminal identity available to synchronous
+  // composer handlers. A user can type before the scheduling effect has had
+  // a chance to arm its timer; that interaction still consumes this turn.
+  const autoNudgeTerminalTurnKeyRef = useRef<string | null>(null);
+  const [autoNudgeTimerController] = useState(
+    () =>
+      new AutoNudgeTimerController({
+        now: () => Date.now(),
+        setTimeout: (callback, delayMs) => window.setTimeout(callback, delayMs),
+        clearTimeout: (timer) => window.clearTimeout(timer),
+        setInterval: (callback, intervalMs) => window.setInterval(callback, intervalMs),
+        clearInterval: (timer) => window.clearInterval(timer),
+      }),
+  );
+  const cancelScheduledAutoNudge = useCallback(
+    (consumeScheduledTurn: boolean) => {
+      const scheduledTurnKey = autoNudgeTimerController.scheduledTurnKey;
+      if (consumeScheduledTurn && scheduledTurnKey) {
+        // A manual action/stop must never turn into a delayed send when the
+        // operator clears the composer again.
+        autoNudgeLedgerRef.current.mark(scheduledTurnKey);
+      }
+      autoNudgeTimerController.cancel();
+      setAutoNudgeCountdownSeconds(null);
+    },
+    [autoNudgeTimerController],
+  );
+  const recordManualAutoNudgeActivity = useCallback(() => {
+    consumeAutoNudgeTerminalForManualActivity(
+      autoNudgeLedgerRef.current,
+      autoNudgeTerminalTurnKeyRef.current,
+    );
+    cancelScheduledAutoNudge(true);
+    setAutoNudgeActivityRevision((revision) => revision + 1);
+  }, [cancelScheduledAutoNudge]);
   const [isRevertingCheckpoint, setIsRevertingCheckpoint] = useState(false);
   const [respondingRequestIds, setRespondingRequestIds] = useState<ApprovalRequestId[]>([]);
   const [respondingUserInputRequestIds, setRespondingUserInputRequestIds] = useState<
@@ -1939,8 +2145,10 @@ export default function ChatView(props: ChatViewProps) {
   const [draftPlanSidebarOpenByThreadKey, setDraftPlanSidebarOpenByThreadKey] = useState<
     Record<string, boolean>
   >({});
-  const shouldUsePlanSidebarSheet = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
+  const viewportUsesPlanSidebarSheet = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
+  const viewportMatchesMobile = useMediaQuery("max-md");
   const isMobile = useIsMobile();
+  const shouldUsePlanSidebarSheet = isMobile || viewportUsesPlanSidebarSheet;
   const hasOnScreenKeyboard = useHasOnScreenKeyboard();
   const draftPlanSidebarOpen =
     routeKind === "draft" ? draftPlanSidebarOpenByThreadKey[routeThreadKey] : undefined;
@@ -1969,6 +2177,21 @@ export default function ChatView(props: ChatViewProps) {
   const attachmentPreviewPromotionInFlightByMessageIdRef = useRef<Record<string, true>>({});
   const sendInFlightRef = useRef(false);
   const queueDispatchInFlightRef = useRef(false);
+  const manualFollowUpEnqueueInFlightIdsRef = useRef(new Set<ManualFollowUpId>());
+  const manualFollowUpActivationInFlightKeysRef = useRef(new Set<string>());
+  const manualFollowUpCancellationInFlightKeysRef = useRef(new Set<string>());
+  const manualFollowUpCancellationRequestedKeysRef = useRef(new Set<string>());
+  const manualFollowUpCancellationCommandsRef = useRef(
+    new Map<string, { readonly commandId: CommandId; readonly createdAt: string }>(),
+  );
+  const manualFollowUpCancellationRetryAfterMsRef = useRef(new Map<string, number>());
+  const manualFollowUpDurablyReservedKeysRef = useRef(new Set<string>());
+  const pendingManualFollowUpCancellationKeysRef = useRef(new Set<string>());
+  const [manualFollowUpUiRevision, setManualFollowUpUiRevision] = useState(0);
+  const [expandedDurableManualFollowUpIds, setExpandedDurableManualFollowUpIds] = useState<
+    ReadonlySet<ManualFollowUpId>
+  >(() => new Set());
+  const claimedQueuedSteerItemIdsRef = useRef(new Set<string>());
   const pendingSteerDispatchByMessageIdRef = useRef<Record<string, PendingSteerDispatch>>({});
   const [pendingSteerDispatchByMessageId, setPendingSteerDispatchByMessageId] = useState<
     Record<string, PendingSteerDispatch>
@@ -1978,6 +2201,10 @@ export default function ChatView(props: ChatViewProps) {
   >({});
   const [pendingSteerInterruptRecoveryByThreadId, setPendingSteerInterruptRecoveryByThreadId] =
     useState<Record<string, PendingSteerInterruptRecovery>>({});
+  // The main Stop control is not the queue row's interrupt-and-submit action.
+  // Keep recovered and ordinary queued input available, but prevent the queue
+  // watchdog from converting a user cancellation into a fresh provider turn.
+  const manualStopBarrierByThreadKeyRef = useRef<Record<string, ManualStopBarrier>>({});
   const desktopDebugEnabled = useDesktopDebugEnabled();
   const [desktopDebugRevision, setDesktopDebugRevision] = useState(0);
   const lastDesktopDebugSnapshotPublishedAtMsRef = useRef(0);
@@ -2056,6 +2283,29 @@ export default function ChatView(props: ChatViewProps) {
     },
     [desktopDebugEnabled],
   );
+  const updateManualStopBarrier = useCallback(
+    (targetEnvironmentId: EnvironmentId, threadId: ThreadId, barrier: ManualStopBarrier | null) => {
+      const threadKey = followUpThreadMapKey(targetEnvironmentId, threadId);
+      const current = manualStopBarrierByThreadKeyRef.current;
+      if (barrier === null) {
+        if (!(threadKey in current)) {
+          return;
+        }
+        const next = { ...current };
+        delete next[threadKey];
+        manualStopBarrierByThreadKeyRef.current = next;
+      } else {
+        manualStopBarrierByThreadKeyRef.current = {
+          ...current,
+          [threadKey]: barrier,
+        };
+      }
+      if (desktopDebugEnabled) {
+        setDesktopDebugRevision((revision) => revision + 1);
+      }
+    },
+    [desktopDebugEnabled],
+  );
   useEffect(() => {
     if (!desktopDebugEnabled) {
       return;
@@ -2081,6 +2331,23 @@ export default function ChatView(props: ChatViewProps) {
   const dispatchFollowUpTurnStartRef = useRef<((item: FollowUpQueueItem) => Promise<void>) | null>(
     null,
   );
+  const dispatchProjectedManualFollowUpRef = useRef<
+    | ((
+        thread: Thread,
+        item: ThreadManualFollowUp,
+        source: string,
+        activationMode: ManualFollowUpActivationMode,
+      ) => Promise<void>)
+    | null
+  >(null);
+  const dispatchManualFollowUpCancellationRef = useRef<
+    | ((
+        targetEnvironmentId: EnvironmentId,
+        targetThreadId: ThreadId,
+        followUpId: ManualFollowUpId,
+      ) => Promise<boolean>)
+    | null
+  >(null);
   const dispatchQueuedSteerRetryRef = useRef<((item: FollowUpQueueItem) => Promise<void>) | null>(
     null,
   );
@@ -2095,6 +2362,7 @@ export default function ChatView(props: ChatViewProps) {
     Record<string, QueuedFollowUpPendingDispatch>
   >(queuedFollowUpPendingDispatchByThreadId);
   queuedFollowUpPendingDispatchByThreadIdRef.current = queuedFollowUpPendingDispatchByThreadId;
+  const manualFollowUpPriorityOwner = useRef<object>({}).current;
   const desktopDebugEnabledRef = useRef(desktopDebugEnabled);
   desktopDebugEnabledRef.current = desktopDebugEnabled;
 
@@ -2125,92 +2393,6 @@ export default function ChatView(props: ChatViewProps) {
   );
   const isServerThread = routeKind === "server" && serverThread !== undefined;
   const activeThread = isServerThread ? serverThread : localDraftThread;
-  const autoNudgeThreadRef = useMemo(
-    () =>
-      routeKind === "server"
-        ? { environmentId: String(environmentId), threadId: String(threadId) }
-        : null,
-    [environmentId, routeKind, threadId],
-  );
-  const autoNudgePolicy = useAutoNudgeThreadPolicy(autoNudgeThreadRef);
-  const backgroundAutoNudgeState = useBackgroundAutoNudgeState();
-  const backgroundAutoNudgeOwnerForRoute =
-    autoNudgeThreadRef !== null &&
-    isBackgroundAutoNudgeOwner(backgroundAutoNudgeState, autoNudgeThreadRef);
-  const backgroundAutoNudgeLastOwnerForRoute =
-    autoNudgeThreadRef !== null &&
-    isLastBackgroundAutoNudgeOwner(backgroundAutoNudgeState, autoNudgeThreadRef);
-  const [autoNudgeCountdownSeconds, setAutoNudgeCountdownSeconds] = useState<number | null>(null);
-  const [autoNudgeActivityRevision, setAutoNudgeActivityRevision] = useState(0);
-  const autoNudgeLedgerRef = useRef(getAutoNudgeTurnLedger());
-  const autoNudgeTerminalTurnKeyRef = useRef<string | null>(null);
-  const [autoNudgeTimerController] = useState(
-    () =>
-      new AutoNudgeTimerController({
-        now: () => Date.now(),
-        setTimeout: (callback, delayMs) => window.setTimeout(callback, delayMs),
-        clearTimeout: (timer) => window.clearTimeout(timer),
-        setInterval: (callback, intervalMs) => window.setInterval(callback, intervalMs),
-        clearInterval: (timer) => window.clearInterval(timer),
-      }),
-  );
-  const runAutoNudgeMutation = useCallback(
-    async (mutation: () => void | Promise<void>): Promise<void> => {
-      if (!supportsAutoNudgeExecutionLock()) {
-        await mutation();
-        return;
-      }
-      let ranMutation = false;
-      try {
-        await navigator.locks.request(
-          AUTO_NUDGE_EXECUTION_LOCK_NAME,
-          { mode: "exclusive" },
-          async (lock) => {
-            if (!lock) return;
-            ranMutation = true;
-            await mutation();
-          },
-        );
-      } catch {
-        // Automatic execution also fails closed when the lock service is
-        // unhealthy. Preserve the operator's local Off/policy action.
-        if (!ranMutation) await mutation();
-      }
-    },
-    [],
-  );
-  const cancelScheduledAutoNudge = useCallback(
-    (consumeScheduledTurn: boolean) => {
-      const scheduledTurnKey = autoNudgeTimerController.scheduledTurnKey;
-      if (consumeScheduledTurn && scheduledTurnKey) {
-        autoNudgeLedgerRef.current.mark(scheduledTurnKey);
-      }
-      autoNudgeTimerController.cancel();
-      setAutoNudgeCountdownSeconds(null);
-    },
-    [autoNudgeTimerController],
-  );
-  const recordManualAutoNudgeActivity = useCallback(() => {
-    const terminalTurnKey = autoNudgeTerminalTurnKeyRef.current;
-    autoNudgeLedgerRef.current.reloadFromStorage();
-    consumeAutoNudgeTerminalForManualActivity(autoNudgeLedgerRef.current, terminalTurnKey);
-    cancelScheduledAutoNudge(true);
-    if (autoNudgeThreadRef && backgroundAutoNudgeOwnerForRoute) {
-      void runAutoNudgeMutation(() => {
-        autoNudgeLedgerRef.current.reloadFromStorage();
-        consumeAutoNudgeTerminalForManualActivity(autoNudgeLedgerRef.current, terminalTurnKey);
-        const controller = getBackgroundAutoNudgeController();
-        controller.reloadFromStorage();
-        controller.pause(autoNudgeThreadRef, "Manual composer activity detected.");
-      });
-    }
-    setAutoNudgeActivityRevision((revision) => revision + 1);
-  }, [
-    autoNudgeThreadRef,
-    backgroundAutoNudgeOwnerForRoute,
-    cancelScheduledAutoNudge,
-    runAutoNudgeMutation,
-  ]);
   const runtimeMode = composerRuntimeMode ?? activeThread?.runtimeMode ?? DEFAULT_RUNTIME_MODE;
   const interactionMode =
     composerInteractionMode ?? activeThread?.interactionMode ?? DEFAULT_INTERACTION_MODE;
@@ -2221,7 +2403,16 @@ export default function ChatView(props: ChatViewProps) {
   // drive the environment picker in BranchToolbar.
   const allProjects = useStore(useShallow(selectProjectsAcrossEnvironments));
   const allThreads = useStore(useShallow(selectThreadsAcrossEnvironments));
+  const allThreadShells = useStore(useShallow(selectThreadShellsAcrossEnvironments));
   const activeThreadId = activeThread?.id ?? null;
+  const autoNudgeMode: AutoNudgeMode = activeAutoNudgeConfig?.mode ?? "off";
+  const autoNudgeContextKey =
+    isServerThread && activeThread
+      ? scopedThreadKey(scopeThreadRef(activeThread.environmentId, activeThread.id))
+      : null;
+  autoNudgeContextKeyRef.current = autoNudgeContextKey;
+  const autoNudgePendingWrite = autoNudgePendingWriteForContext(autoNudgeContextKey);
+  const autoNudgeArming = autoNudgePendingWrite !== null;
   const recordFollowUpQueueDebugAttempt = useCallback(
     (
       source: string,
@@ -2248,61 +2439,144 @@ export default function ChatView(props: ChatViewProps) {
     },
     [activeThreadId, desktopDebugEnabled],
   );
-  const knownThreadIds = useMemo(
-    () => new Set<string>(allThreads.map((thread) => thread.id)),
+  const knownScopedThreadKeys = useMemo(
+    () =>
+      new Set(allThreads.map((thread) => followUpThreadMapKey(thread.environmentId, thread.id))),
     [allThreads],
   );
-  const previousActiveThreadIdRef = useRef<ThreadId | null>(null);
+  const previousActiveThreadRef = useRef<ScopedThreadRef | null>(null);
   useEffect(() => {
-    if (!activeThreadId) {
+    if (!activeThread) {
       return;
     }
 
-    const previousActiveThreadId = previousActiveThreadIdRef.current;
-    if (previousActiveThreadId !== activeThreadId) {
-      previousActiveThreadIdRef.current = activeThreadId;
-    }
+    const activeRef = scopeThreadRef(activeThread.environmentId, activeThread.id);
+    const previousActiveRef = previousActiveThreadRef.current;
+    previousActiveThreadRef.current = activeRef;
 
     setFollowUpQueueByThreadId((existing) =>
-      rekeyQueuedFollowUpsForActiveThread({
-        queuesByThreadId: existing,
-        activeThreadId,
-        previousActiveThreadId,
-        knownThreadIds,
+      rekeyQueuedFollowUpsForActiveThread<EnvironmentId, ThreadId, FollowUpQueueItem>({
+        queuesByThreadKey: existing,
+        activeTarget: activeRef,
+        activeThreadIsServerBacked: isServerThread,
+        previousActiveTarget: previousActiveRef,
+        knownThreadKeys: knownScopedThreadKeys,
       }),
     );
-  }, [activeThreadId, knownThreadIds]);
-  const setQueuedFollowUpPendingDispatch = useCallback(
-    (pending: QueuedFollowUpPendingDispatch | null, targetThreadId: ThreadId) => {
-      const current = queuedFollowUpPendingDispatchByThreadIdRef.current;
-      if (pending === null) {
-        if (!(targetThreadId in current)) return;
-        const next = { ...current };
-        delete next[targetThreadId];
-        queuedFollowUpPendingDispatchByThreadIdRef.current = next;
-        setQueuedFollowUpPendingDispatchByThreadId(next);
-        return;
-      }
+  }, [activeThread, isServerThread, knownScopedThreadKeys]);
+  useEffect(() => {
+    const threadsByKey = new Map(
+      allThreads.map((thread) => [followUpThreadMapKey(thread.environmentId, thread.id), thread]),
+    );
+    const current = followUpQueueByThreadIdRef.current;
+    let next: Record<string, FollowUpQueueItem[]> | null = null;
+    const expandedIds = new Set<ManualFollowUpId>();
 
-      const existing = current[targetThreadId];
-      if (
-        existing?.environmentId === pending.environmentId &&
-        existing.threadId === pending.threadId &&
-        existing.messageId === pending.messageId &&
-        existing.dispatchedAt === pending.dispatchedAt
-      ) {
-        return;
-      }
-      queuedFollowUpPendingDispatchByThreadIdRef.current = {
-        ...current,
-        [targetThreadId]: pending,
-      };
-      setQueuedFollowUpPendingDispatchByThreadId(
-        queuedFollowUpPendingDispatchByThreadIdRef.current,
+    for (const [threadKey, items] of Object.entries(current)) {
+      const projectedItemsById = new Map(
+        (threadsByKey.get(threadKey)?.manualFollowUps ?? EMPTY_MANUAL_FOLLOW_UPS).map((item) => [
+          item.id,
+          item,
+        ]),
       );
-    },
-    [],
-  );
+      if (projectedItemsById.size === 0) {
+        continue;
+      }
+      const retained: FollowUpQueueItem[] = [];
+      let removedAny = false;
+      for (const item of items) {
+        const projectedItem = projectedItemsById.get(item.id);
+        if (projectedItem === undefined || projectedItem.status === "reserving") {
+          retained.push(item);
+          continue;
+        }
+        removedAny = true;
+        manualFollowUpEnqueueInFlightIdsRef.current.delete(item.id);
+        if (item.expanded) {
+          expandedIds.add(item.id);
+        }
+        revokeQueuedFollowUpPreviewUrls(item);
+      }
+      if (!removedAny) {
+        continue;
+      }
+      next ??= { ...current };
+      if (retained.length === 0) {
+        delete next[threadKey];
+      } else {
+        next[threadKey] = retained;
+      }
+    }
+
+    if (next !== null) {
+      followUpQueueByThreadIdRef.current = next;
+      setFollowUpQueueByThreadId(next);
+    }
+    if (expandedIds.size > 0) {
+      setExpandedDurableManualFollowUpIds((existing) => {
+        const nextExpanded = new Set(existing);
+        for (const id of expandedIds) {
+          nextExpanded.add(id);
+        }
+        return nextExpanded;
+      });
+    }
+  }, [allThreads]);
+  useEffect(() => {
+    const queuedKeys = new Set<string>();
+    const cancelableKeys = new Set<string>();
+    const projectedKeys = new Set<string>();
+    const localKeys = new Set(
+      Object.values(followUpQueueByThreadIdRef.current).flatMap((items) =>
+        items.map((item) => manualFollowUpMapKey(item.environmentId, item.threadId, item.id)),
+      ),
+    );
+    for (const thread of allThreads) {
+      for (const item of thread.manualFollowUps) {
+        const itemKey = manualFollowUpMapKey(thread.environmentId, thread.id, item.id);
+        projectedKeys.add(itemKey);
+        manualFollowUpDurablyReservedKeysRef.current.add(itemKey);
+        if (item.status === "queued") {
+          queuedKeys.add(itemKey);
+        }
+        if (item.status !== "handoff") {
+          cancelableKeys.add(itemKey);
+          if (manualFollowUpCancellationRequestedKeysRef.current.has(itemKey)) {
+            void dispatchManualFollowUpCancellationRef.current?.(
+              thread.environmentId,
+              thread.id,
+              item.id,
+            );
+          }
+        }
+      }
+    }
+    let changed = false;
+    for (const key of manualFollowUpActivationInFlightKeysRef.current) {
+      if (!queuedKeys.has(key)) {
+        manualFollowUpActivationInFlightKeysRef.current.delete(key);
+        changed = true;
+      }
+    }
+    for (const key of pendingManualFollowUpCancellationKeysRef.current) {
+      if (!cancelableKeys.has(key)) {
+        pendingManualFollowUpCancellationKeysRef.current.delete(key);
+        changed = true;
+      }
+    }
+    for (const key of manualFollowUpDurablyReservedKeysRef.current) {
+      if (
+        !projectedKeys.has(key) &&
+        !localKeys.has(key) &&
+        !manualFollowUpCancellationRequestedKeysRef.current.has(key)
+      ) {
+        manualFollowUpDurablyReservedKeysRef.current.delete(key);
+      }
+    }
+    if (changed) {
+      setManualFollowUpUiRevision((revision) => revision + 1);
+    }
+  }, [allThreads]);
   const activeLatestTurn = activeThread?.latestTurn ?? null;
   const recordTimelineScrollDebugEvent = useCallback((input: TimelineScrollDebugEventInput) => {
     if (!desktopDebugEnabledRef.current) {
@@ -2353,9 +2627,16 @@ export default function ChatView(props: ChatViewProps) {
         const queuedItem: FollowUpQueueItem = {
           ...pending.snapshot,
           images: pending.snapshot.images.map(cloneComposerImageForRetry),
-          id: newMessageId(),
+          id: newManualFollowUpId(),
+          messageId: newMessageId(),
+          reservationCommandId: newCommandId(),
+          enqueueCommandId: newCommandId(),
+          enqueueStatus: "pending",
+          enqueueRetryAfterMs: 0,
+          titleSeed: thread.title,
           environmentId: pending.environmentId,
           threadId: pending.threadId,
+          serverHandoffTarget: null,
           queuedAt: activity.createdAt,
           expanded: false,
           blockedReason: null,
@@ -2378,9 +2659,10 @@ export default function ChatView(props: ChatViewProps) {
 
         setFollowUpQueueByThreadId((existing) => ({
           ...existing,
-          [pending.threadId]: [
+          [followUpThreadMapKey(pending.environmentId, pending.threadId)]: [
             queuedItem,
-            ...(existing[pending.threadId] ?? EMPTY_FOLLOW_UP_QUEUE),
+            ...(existing[followUpThreadMapKey(pending.environmentId, pending.threadId)] ??
+              EMPTY_FOLLOW_UP_QUEUE),
           ],
         }));
       }
@@ -2392,10 +2674,13 @@ export default function ChatView(props: ChatViewProps) {
       return;
     }
 
-    const threadsById = new Map(allThreads.map((thread) => [thread.id, thread]));
+    const threadsById = new Map(
+      allThreads.map((thread) => [followUpThreadMapKey(thread.environmentId, thread.id), thread]),
+    );
 
     for (const recovery of recoveries) {
-      const thread = threadsById.get(recovery.threadId);
+      const recoveryKey = followUpThreadMapKey(recovery.environmentId, recovery.threadId);
+      const thread = threadsById.get(recoveryKey);
       if (thread === undefined) {
         continue;
       }
@@ -2405,11 +2690,11 @@ export default function ChatView(props: ChatViewProps) {
           threadId: recovery.threadId,
         });
         updatePendingSteerInterruptRecoveries((current) => {
-          if (!(recovery.threadId in current)) {
+          if (!(recoveryKey in current)) {
             return current;
           }
           const next = { ...current };
-          delete next[recovery.threadId];
+          delete next[recoveryKey];
           return next;
         });
         continue;
@@ -2427,11 +2712,11 @@ export default function ChatView(props: ChatViewProps) {
       );
 
       updatePendingSteerInterruptRecoveries((current) => {
-        if (!(recovery.threadId in current)) {
+        if (!(recoveryKey in current)) {
           return current;
         }
         const next = { ...current };
-        delete next[recovery.threadId];
+        delete next[recoveryKey];
         return next;
       });
 
@@ -2451,10 +2736,19 @@ export default function ChatView(props: ChatViewProps) {
       const queuedItem: FollowUpQueueItem = {
         ...firstPendingSteer.snapshot,
         promptText: merged.promptText,
-        images: merged.images.map(cloneComposerImageForRetry),
-        id: newMessageId(),
+        // The merge helper already creates the queue-owned blob previews.
+        // Cloning again here would orphan one object URL per attachment.
+        images: merged.images,
+        id: newManualFollowUpId(),
+        messageId: newMessageId(),
+        reservationCommandId: newCommandId(),
+        enqueueCommandId: newCommandId(),
+        enqueueStatus: "pending",
+        enqueueRetryAfterMs: 0,
+        titleSeed: thread.title,
         environmentId: recovery.environmentId,
         threadId: recovery.threadId,
+        serverHandoffTarget: null,
         queuedAt: new Date().toISOString(),
         expanded: false,
         blockedReason: null,
@@ -2487,10 +2781,7 @@ export default function ChatView(props: ChatViewProps) {
       // steer still waiting inside Codex.
       setFollowUpQueueByThreadId((existing) => ({
         ...existing,
-        [recovery.threadId]: [
-          queuedItem,
-          ...(existing[recovery.threadId] ?? EMPTY_FOLLOW_UP_QUEUE),
-        ],
+        [recoveryKey]: [queuedItem, ...(existing[recoveryKey] ?? EMPTY_FOLLOW_UP_QUEUE)],
       }));
       recordFollowUpQueueDebugAttempt("pending-steer-interrupt", "requeued-merged-steers", {
         threadId: recovery.threadId,
@@ -2510,13 +2801,16 @@ export default function ChatView(props: ChatViewProps) {
       return;
     }
 
-    const threadsById = new Map(allThreads.map((thread) => [thread.id, thread]));
+    const threadsById = new Map(
+      allThreads.map((thread) => [followUpThreadMapKey(thread.environmentId, thread.id), thread]),
+    );
     updatePendingSteerDispatches((current) => {
       let next: Record<string, PendingSteerDispatch> | null = null;
       for (const [messageId, pending] of Object.entries(current)) {
-        const thread = threadsById.get(pending.threadId);
+        const pendingThreadKey = followUpThreadMapKey(pending.environmentId, pending.threadId);
+        const thread = threadsById.get(pendingThreadKey);
         const interruptRecovery =
-          pendingSteerInterruptRecoveryByThreadIdRef.current[pending.threadId];
+          pendingSteerInterruptRecoveryByThreadIdRef.current[pendingThreadKey];
         if (
           interruptRecovery?.pendingMessageIds.some((pendingMessageId) => {
             return String(pendingMessageId) === messageId;
@@ -3246,6 +3540,82 @@ export default function ChatView(props: ChatViewProps) {
   }, [activeProviderInstanceId, providerStatuses, selectedProvider]);
   const activeProviderLiveSteerSupported =
     activeProviderStatus?.runtimeCapabilities?.liveSteer === "supported";
+  const goalControlsSupported =
+    isServerThread &&
+    activeProviderStatus?.driver === "codex" &&
+    activeProviderStatus.runtimeCapabilities?.threadGoals === "supported";
+  const openThreadGoalDialog = useCallback(
+    (input?: {
+      readonly mode?: ThreadGoalDialogMode;
+      readonly seedObjective?: string | null;
+      readonly confirmReplacement?: boolean;
+    }) => {
+      if (!goalControlsSupported) return;
+      setThreadGoalDialog((current) => ({
+        open: true,
+        revision: current.revision + 1,
+        mode: input?.mode ?? ((activeThread?.goal ?? null) === null ? "edit" : "summary"),
+        seedObjective: input?.seedObjective ?? null,
+        confirmReplacement: input?.confirmReplacement ?? false,
+      }));
+    },
+    [activeThread?.goal, goalControlsSupported],
+  );
+  const closeThreadGoalDialog = useCallback(() => {
+    setThreadGoalDialog((current) =>
+      current.open
+        ? {
+            ...current,
+            open: false,
+          }
+        : current,
+    );
+  }, []);
+
+  useEffect(() => {
+    closeThreadGoalDialog();
+  }, [closeThreadGoalDialog, routeThreadKey]);
+
+  const setThreadGoal = useCallback(
+    async (patch: ThreadGoalSetPatch) => {
+      if (!activeThread || !goalControlsSupported) {
+        throw new Error("The current provider does not support thread goals.");
+      }
+      const api = readEnvironmentApi(activeThread.environmentId);
+      if (!api) {
+        throw new Error("Cafe Code is not connected.");
+      }
+      await api.orchestration.dispatchCommand({
+        type: "thread.goal.set",
+        commandId: newCommandId(),
+        threadId: activeThread.id,
+        ...(patch.objective !== undefined ? { objective: patch.objective } : {}),
+        ...(patch.status !== undefined ? { status: patch.status } : {}),
+        ...(patch.tokenBudget !== undefined ? { tokenBudget: patch.tokenBudget } : {}),
+        ...(patch.replaceExisting !== undefined ? { replaceExisting: patch.replaceExisting } : {}),
+        expectedUpdatedAt: activeThread.goal?.updatedAt ?? null,
+        createdAt: new Date().toISOString(),
+      });
+    },
+    [activeThread, goalControlsSupported],
+  );
+
+  const clearThreadGoal = useCallback(async () => {
+    if (!activeThread || !goalControlsSupported) {
+      throw new Error("The current provider does not support thread goals.");
+    }
+    const api = readEnvironmentApi(activeThread.environmentId);
+    if (!api) {
+      throw new Error("Cafe Code is not connected.");
+    }
+    await api.orchestration.dispatchCommand({
+      type: "thread.goal.clear",
+      commandId: newCommandId(),
+      threadId: activeThread.id,
+      expectedUpdatedAt: activeThread.goal?.updatedAt ?? null,
+      createdAt: new Date().toISOString(),
+    });
+  }, [activeThread, goalControlsSupported]);
   const activeProviderLiveSteerAvailable = isLiveSteerAvailableForThread({
     liveSteerSupported: activeProviderLiveSteerSupported,
     provider: activeThread?.session?.provider ?? null,
@@ -3258,35 +3628,92 @@ export default function ChatView(props: ChatViewProps) {
       scopeThreadRef(item.environmentId, item.threadId),
     );
   }, []);
-  const resolveProjectForThread = useCallback(
-    (thread: Thread) =>
-      selectProjectByRef(
-        useStore.getState(),
-        scopeProjectRef(thread.environmentId, thread.projectId),
-      ),
-    [],
-  );
   const isThreadEnvironmentUnavailable = useCallback((_thread: Thread): boolean => false, []);
-  const activeFollowUpQueue =
-    activeThreadId !== null
-      ? (followUpQueueByThreadId[activeThreadId] ?? EMPTY_FOLLOW_UP_QUEUE)
+  const activeFollowUpThreadKey =
+    activeThread === undefined
+      ? null
+      : followUpThreadMapKey(activeThread.environmentId, activeThread.id);
+  const activeFollowUpThreadKeyRef = useRef(activeFollowUpThreadKey);
+  activeFollowUpThreadKeyRef.current = activeFollowUpThreadKey;
+  const activeProjectedManualFollowUps =
+    isServerThread && activeThread ? activeThread.manualFollowUps : EMPTY_MANUAL_FOLLOW_UPS;
+  const activeProjectedManualFollowUpIds = useMemo(
+    () => new Set(activeProjectedManualFollowUps.map((item) => item.id)),
+    [activeProjectedManualFollowUps],
+  );
+  const activeLocalFollowUps =
+    activeFollowUpThreadKey !== null
+      ? (followUpQueueByThreadId[activeFollowUpThreadKey] ?? EMPTY_FOLLOW_UP_QUEUE)
       : EMPTY_FOLLOW_UP_QUEUE;
+  const activeFollowUpQueue = activeLocalFollowUps.filter(
+    (item) => !activeProjectedManualFollowUpIds.has(item.id),
+  );
+  const activeOperatorDispatchInFlight = isSendBusy || sendInFlightRef.current;
   const retainedFollowUpThreadRefs = useMemo(() => {
     const targets = collectRetainedFollowUpThreadTargets({
       queueGroups: Object.values(followUpQueueByThreadId),
       pendingTurnStarts: Object.values(queuedFollowUpPendingDispatchByThreadId),
+      pendingDirectDispatches:
+        activeThread !== undefined && activeOperatorDispatchInFlight
+          ? [scopeThreadRef(activeThread.environmentId, activeThread.id)]
+          : [],
       pendingSteers: Object.values(pendingSteerDispatchByMessageId),
+      pendingInterruptRecoveries: Object.values(pendingSteerInterruptRecoveryByThreadId),
+      projectedManualFollowUps: allThreadShells
+        .filter((shell) => shell.manualFollowUpCount > 0)
+        .map((shell) => scopeThreadRef(shell.environmentId, shell.id)),
     });
     return targets.map((target) => scopeThreadRef(target.environmentId, target.threadId));
   }, [
+    activeOperatorDispatchInFlight,
+    activeThread,
+    allThreadShells,
     followUpQueueByThreadId,
     pendingSteerDispatchByMessageId,
+    pendingSteerInterruptRecoveryByThreadId,
     queuedFollowUpPendingDispatchByThreadId,
   ]);
-  const totalFollowUpQueueLength = useMemo(
-    () => Object.values(followUpQueueByThreadId).reduce((total, items) => total + items.length, 0),
-    [followUpQueueByThreadId],
+  useLayoutEffect(() => {
+    manualFollowUpPriorityStore.replace(manualFollowUpPriorityOwner, retainedFollowUpThreadRefs);
+  }, [manualFollowUpPriorityOwner, retainedFollowUpThreadRefs]);
+  useLayoutEffect(
+    () => () => {
+      manualFollowUpPriorityStore.release(manualFollowUpPriorityOwner);
+    },
+    [manualFollowUpPriorityOwner],
   );
+  const totalFollowUpQueueLength = useMemo(() => {
+    const projectedKeys = new Set(
+      allThreads.flatMap((thread) =>
+        thread.manualFollowUps.map((item) =>
+          manualFollowUpMapKey(thread.environmentId, thread.id, item.id),
+        ),
+      ),
+    );
+    const localOnlyCount = Object.values(followUpQueueByThreadId).reduce(
+      (total, items) =>
+        total +
+        items.filter(
+          (item) =>
+            !projectedKeys.has(manualFollowUpMapKey(item.environmentId, item.threadId, item.id)),
+        ).length,
+      0,
+    );
+    return (
+      localOnlyCount +
+      allThreadShells.reduce((total, shell) => total + shell.manualFollowUpCount, 0)
+    );
+  }, [allThreadShells, allThreads, followUpQueueByThreadId]);
+  useEffect(() => {
+    const queuedItemIds = new Set<string>(
+      Object.values(followUpQueueByThreadId).flatMap((items) => items.map((item) => item.id)),
+    );
+    for (const claimedItemId of claimedQueuedSteerItemIdsRef.current) {
+      if (!queuedItemIds.has(claimedItemId)) {
+        claimedQueuedSteerItemIdsRef.current.delete(claimedItemId);
+      }
+    }
+  }, [followUpQueueByThreadId]);
   useEffect(() => {
     if (retainedFollowUpThreadRefs.length === 0) {
       return;
@@ -3344,7 +3771,11 @@ export default function ChatView(props: ChatViewProps) {
   const followUpQueueUiIdle = followUpQueuePhase !== "running";
   const followUpQueueVisibleWorking =
     followUpQueuePhase === "running" || isComposerConnecting || isRevertingCheckpoint;
-  const firstActiveFollowUpQueueItem = activeFollowUpQueue[0] ?? null;
+  const firstActiveProjectedManualFollowUp = activeProjectedManualFollowUps[0] ?? null;
+  const firstActiveFollowUpQueueItem =
+    firstActiveProjectedManualFollowUp === null ? (activeFollowUpQueue[0] ?? null) : null;
+  const activeVisibleFollowUpQueueLength =
+    activeProjectedManualFollowUps.length + activeFollowUpQueue.length;
   const firstActiveAutomaticSteerRetryBlocker =
     activeThread !== undefined && firstActiveFollowUpQueueItem !== null
       ? resolveAutomaticSteerRetryBlocker({
@@ -3355,19 +3786,64 @@ export default function ChatView(props: ChatViewProps) {
       : null;
   const followUpQueueDispatchInFlight = queueDispatchInFlightRef.current;
   const activeQueuedFollowUpPendingDispatch =
-    activeThreadId !== null &&
-    queuedFollowUpPendingDispatchByThreadId[activeThreadId] !== undefined;
+    activeFollowUpThreadKey !== null &&
+    queuedFollowUpPendingDispatchByThreadId[activeFollowUpThreadKey] !== undefined;
   const followUpQueueCanStartTurn = canStartQueuedFollowUpTurn({
-    queueLength: activeFollowUpQueue.length,
-    firstItemBlocked: firstActiveFollowUpQueueItem?.blockedReason != null,
+    queueLength: activeVisibleFollowUpQueueLength,
+    firstItemBlocked:
+      firstActiveProjectedManualFollowUp === null ||
+      firstActiveProjectedManualFollowUp.status !== "queued" ||
+      pendingManualFollowUpCancellationKeysRef.current.has(
+        firstActiveProjectedManualFollowUp
+          ? manualFollowUpMapKey(
+              activeThread?.environmentId ?? environmentId,
+              activeThread?.id ?? threadId,
+              firstActiveProjectedManualFollowUp.id,
+            )
+          : "",
+      ),
     isWorking: followUpQueueVisibleWorking,
     isConnecting: isComposerConnecting,
     isEnvironmentUnavailable: activeEnvironmentUnavailable,
     isDispatchInFlight: followUpQueueDispatchInFlight || activeQueuedFollowUpPendingDispatch,
   });
   const followUpQueueViewItems = useMemo<readonly FollowUpQueueViewItem[]>(
-    () =>
-      activeFollowUpQueue.map((item) => ({
+    () => [
+      ...activeProjectedManualFollowUps.map((item) => {
+        const itemKey =
+          activeThread === undefined
+            ? ""
+            : manualFollowUpMapKey(activeThread.environmentId, activeThread.id, item.id);
+        const localItem = activeLocalFollowUps.find((entry) => entry.id === item.id);
+        const promptText =
+          item.status === "reserving" ? (localItem?.promptText ?? "") : item.message.text;
+        const images =
+          item.status === "reserving" ? (localItem?.images ?? []) : item.message.attachments;
+        const blockedReason = pendingManualFollowUpCancellationKeysRef.current.has(itemKey)
+          ? "Cancelling this queued follow-up…"
+          : item.status === "reserving"
+            ? (localItem?.blockedReason ?? "Receiving this operator follow-up\u2026")
+            : item.status === "handoff"
+              ? "Waiting for the provider to accept this follow-up."
+              : manualFollowUpActivationInFlightKeysRef.current.has(itemKey)
+                ? "Handing this follow-up to the provider…"
+                : null;
+        return {
+          id: item.id,
+          preview:
+            promptText.length > 0
+              ? previewQueuedFollowUpText(promptText)
+              : "Receiving operator follow-up\u2026",
+          promptText,
+          images,
+          queuedAt: item.enqueuedAt,
+          expanded: expandedDurableManualFollowUpIds.has(item.id),
+          canExpand: canExpandQueuedFollowUpText(promptText) || images.length > 0,
+          blockedReason,
+          automaticSteerRetry: null,
+        };
+      }),
+      ...activeFollowUpQueue.map((item) => ({
         id: item.id,
         preview: previewQueuedFollowUpText(item.promptText),
         promptText: item.promptText,
@@ -3375,16 +3851,34 @@ export default function ChatView(props: ChatViewProps) {
         queuedAt: item.queuedAt,
         expanded: item.expanded,
         canExpand: canExpandQueuedFollowUpText(item.promptText) || item.images.length > 0,
-        blockedReason: item.blockedReason,
+        blockedReason:
+          item.enqueueStatus === "rejected"
+            ? item.blockedReason
+            : item.enqueueStatus === "acknowledged"
+              ? "Saved; waiting for the server projection…"
+              : "Saving this follow-up…",
         automaticSteerRetry:
           item.automaticSteerRetry === undefined ? null : item.automaticSteerRetry,
       })),
-    [activeFollowUpQueue],
+    ],
+    [
+      activeFollowUpQueue,
+      activeLocalFollowUps,
+      activeProjectedManualFollowUps,
+      activeThread,
+      expandedDurableManualFollowUpIds,
+      manualFollowUpUiRevision,
+    ],
   );
   const steeringFollowUpViewItems = useMemo<readonly SteeringFollowUpViewItem[]>(
     () =>
       Object.values(pendingSteerDispatchByMessageId)
-        .filter((pending) => activeThreadId !== null && pending.threadId === activeThreadId)
+        .filter(
+          (pending) =>
+            activeThread !== undefined &&
+            pending.environmentId === activeThread.environmentId &&
+            pending.threadId === activeThread.id,
+        )
         .toSorted((left, right) => left.dispatchedAt.localeCompare(right.dispatchedAt))
         .map((pending) => ({
           id: pending.messageId,
@@ -3392,10 +3886,18 @@ export default function ChatView(props: ChatViewProps) {
           promptText: pending.snapshot.promptText,
           dispatchedAt: pending.dispatchedAt,
         })),
-    [activeThreadId, pendingSteerDispatchByMessageId],
+    [activeThread, pendingSteerDispatchByMessageId],
   );
   const activeSteeringFollowUpInFlight = steeringFollowUpViewItems.length > 0;
+  const hasEarlierManualFollowUpForActiveThread =
+    activeVisibleFollowUpQueueLength > 0 ||
+    activeQueuedFollowUpPendingDispatch ||
+    activeSteeringFollowUpInFlight ||
+    Boolean(
+      activeFollowUpThreadKey && pendingSteerInterruptRecoveryByThreadId[activeFollowUpThreadKey],
+    );
   const canSteerFollowUpQueue =
+    !isServerThread &&
     followUpQueuePhase === "running" &&
     activeProviderLiveSteerAvailable &&
     firstActiveAutomaticSteerRetryBlocker === null &&
@@ -3413,23 +3915,26 @@ export default function ChatView(props: ChatViewProps) {
     !activeEnvironmentUnavailable &&
     !followUpQueueDispatchInFlight &&
     !activeQueuedFollowUpPendingDispatch &&
-    !activeSteeringFollowUpInFlight;
+    !activeSteeringFollowUpInFlight &&
+    firstActiveProjectedManualFollowUp?.status === "queued";
   const followUpQueueAction = decideQueuedFollowUpAction({
     phase: followUpQueuePhase,
     liveSteerAvailable: activeProviderLiveSteerAvailable,
     canDispatchNow:
-      followUpQueuePhase === "running"
-        ? canActivateRunningFollowUpQueueAction
-        : followUpQueueCanStartTurn,
+      firstActiveProjectedManualFollowUp === null
+        ? false
+        : followUpQueuePhase === "running"
+          ? canActivateRunningFollowUpQueueAction
+          : followUpQueueCanStartTurn,
   });
   const followUpQueueActionLabel = queuedFollowUpActionLabel(followUpQueueAction);
   const followUpQueueActionTitle = queuedFollowUpActionTitle(followUpQueueAction);
   const followUpQueueActionEnabled = followUpQueueAction !== "wait";
   useEffect(() => {
-    if (activeFollowUpQueue.length > 0 && followUpQueueUiIdle && sendInFlightRef.current) {
+    if (activeVisibleFollowUpQueueLength > 0 && followUpQueueUiIdle && sendInFlightRef.current) {
       setSendInFlight(false);
     }
-  }, [activeFollowUpQueue.length, followUpQueueUiIdle, setSendInFlight]);
+  }, [activeVisibleFollowUpQueueLength, followUpQueueUiIdle, setSendInFlight]);
   useEffect(() => {
     if (!desktopDebugEnabled) {
       return;
@@ -3470,8 +3975,12 @@ export default function ChatView(props: ChatViewProps) {
     const composerDebugState = readComposerHandle(composerRef)?.readDebugState() ?? null;
     const firstItem = firstActiveFollowUpQueueItem;
     const activePendingSteerInterruptRecovery =
-      activeThreadId !== null
-        ? (pendingSteerInterruptRecoveryByThreadIdRef.current[activeThreadId] ?? null)
+      activeFollowUpThreadKey !== null
+        ? (pendingSteerInterruptRecoveryByThreadIdRef.current[activeFollowUpThreadKey] ?? null)
+        : null;
+    const activeManualStopBarrier =
+      activeFollowUpThreadKey !== null
+        ? (manualStopBarrierByThreadKeyRef.current[activeFollowUpThreadKey] ?? null)
         : null;
     const queueBlockers: string[] = [];
     if (activeFollowUpQueue.length === 0) {
@@ -3488,6 +3997,9 @@ export default function ChatView(props: ChatViewProps) {
     }
     if (activePendingSteerInterruptRecovery !== null) {
       queueBlockers.push("pending-steer-interrupt-recovery");
+    }
+    if (activeManualStopBarrier !== null) {
+      queueBlockers.push("manual-stop-barrier");
     }
     if (followUpQueueVisibleWorking) {
       queueBlockers.push("thread-visible-working");
@@ -3517,8 +4029,8 @@ export default function ChatView(props: ChatViewProps) {
     const queueEntries = Object.entries(followUpQueueByThreadIdRef.current);
     const orphanQueueEntries = queueEntries.filter(
       ([queuedThreadId, items]) =>
-        queuedThreadId !== activeThreadId &&
-        !knownThreadIds.has(queuedThreadId) &&
+        queuedThreadId !== activeFollowUpThreadKey &&
+        !knownScopedThreadKeys.has(queuedThreadId) &&
         items.length > 0,
     );
     const staleCompletedActiveTurn =
@@ -3538,18 +4050,24 @@ export default function ChatView(props: ChatViewProps) {
         : [];
     const latestActivityAfterLatestTurnCompleted =
       activitiesAfterLatestTurnCompleted.at(-1) ?? null;
-    const queuedThreadIds = new Set(
+    const queuedThreadKeys = new Set(
       queueEntries
         .filter(([, items]) => items.length > 0)
         .map(([queuedThreadId]) => queuedThreadId),
     );
-    const lifecycleByThreadId = new Map(
+    const lifecycleByThreadKey = new Map(
       allThreads.map(
-        (thread) => [thread.id, summarizeDebugThreadLifecycle(thread, capturedAtMs)] as const,
+        (thread) =>
+          [
+            followUpThreadMapKey(thread.environmentId, thread.id),
+            summarizeDebugThreadLifecycle(thread, capturedAtMs),
+          ] as const,
       ),
     );
     const activeLifecycleSummary = activeThread
-      ? (lifecycleByThreadId.get(activeThread.id) ?? null)
+      ? (lifecycleByThreadKey.get(
+          followUpThreadMapKey(activeThread.environmentId, activeThread.id),
+        ) ?? null)
       : null;
     const activeThreadPerformance =
       activeThread == null ? null : summarizeDebugThreadPerformance(activeThread, capturedAtMs);
@@ -3563,7 +4081,7 @@ export default function ChatView(props: ChatViewProps) {
       activeTurnInProgress: isWorking || !latestTurnSettled,
     });
     const activeProviderContinuation = activeLifecycleSummary?.providerContinuation ?? null;
-    const lifecycleSummaries = Array.from(lifecycleByThreadId.values());
+    const lifecycleSummaries = Array.from(lifecycleByThreadKey.values());
     const lifecycleRedFlagCounts = countBy(
       lifecycleSummaries.flatMap((thread) => thread.redFlags),
       (redFlag) => redFlag,
@@ -3579,8 +4097,8 @@ export default function ChatView(props: ChatViewProps) {
     const interestingLifecycleThreads = lifecycleSummaries
       .filter(
         (thread) =>
-          thread.id === activeThreadId ||
-          queuedThreadIds.has(thread.id) ||
+          (thread.environmentId === activeThread?.environmentId && thread.id === activeThreadId) ||
+          queuedThreadKeys.has(followUpThreadMapKey(thread.environmentId, thread.id)) ||
           thread.redFlags.length > 0 ||
           thread.isSessionRunning ||
           thread.isLatestTurnRunning ||
@@ -3591,10 +4109,11 @@ export default function ChatView(props: ChatViewProps) {
       .slice(0, DEBUG_INTERESTING_THREAD_LIMIT);
     const notablePerformanceThreads = allThreads
       .filter((thread) => {
-        const lifecycle = lifecycleByThreadId.get(thread.id);
+        const threadKey = followUpThreadMapKey(thread.environmentId, thread.id);
+        const lifecycle = lifecycleByThreadKey.get(threadKey);
         return (
-          thread.id === activeThreadId ||
-          queuedThreadIds.has(thread.id) ||
+          (thread.environmentId === activeThread?.environmentId && thread.id === activeThreadId) ||
+          queuedThreadKeys.has(threadKey) ||
           thread.session?.status === "running" ||
           thread.session?.status === "error" ||
           thread.error !== null ||
@@ -3606,7 +4125,8 @@ export default function ChatView(props: ChatViewProps) {
       .map((thread) =>
         summarizeDebugNotableThread({
           thread,
-          lifecycle: lifecycleByThreadId.get(thread.id) ?? null,
+          lifecycle:
+            lifecycleByThreadKey.get(followUpThreadMapKey(thread.environmentId, thread.id)) ?? null,
           nowMs: capturedAtMs,
         }),
       );
@@ -3825,6 +4345,7 @@ export default function ChatView(props: ChatViewProps) {
                   pendingMessageCount: activePendingSteerInterruptRecovery.pendingMessageIds.length,
                   requestedAt: activePendingSteerInterruptRecovery.requestedAt,
                 },
+          activeManualStopBarrier,
           followUpQueuePhase,
           followUpQueueUiIdle,
           followUpQueueVisibleWorking,
@@ -3914,6 +4435,7 @@ export default function ChatView(props: ChatViewProps) {
                 threadId: item.threadId,
                 queuedAt: item.queuedAt,
                 blockedReason: item.blockedReason,
+                serverHandoffTarget: item.serverHandoffTarget,
                 promptLength: item.promptText.length,
                 promptPreview: previewQueuedFollowUpText(item.promptText).slice(0, 240),
                 imageCount: item.images.length,
@@ -3957,6 +4479,7 @@ export default function ChatView(props: ChatViewProps) {
               model: pending.snapshot.model,
             })),
         },
+        manualStopBarriers: manualStopBarrierByThreadKeyRef.current,
         dispatchDebug: followUpQueueDebugRef.current,
         items: activeFollowUpQueue.map((item, index) => ({
           index,
@@ -4024,6 +4547,7 @@ export default function ChatView(props: ChatViewProps) {
   }, [
     activeEnvironmentUnavailable,
     activeFollowUpQueue,
+    activeFollowUpThreadKey,
     activeLatestTurn,
     activePendingApproval?.requestId,
     activePendingUserInput?.requestId,
@@ -4064,7 +4588,7 @@ export default function ChatView(props: ChatViewProps) {
     isSendBusy,
     isServerThread,
     isWorking,
-    knownThreadIds,
+    knownScopedThreadKeys,
     latestTurnSettled,
     localDispatchStartedAt,
     phase,
@@ -4547,14 +5071,14 @@ export default function ChatView(props: ChatViewProps) {
   // composer stays collapsed until then). Desktop behavior is unchanged.
   useEffect(() => {
     if (!activeThread?.id) return;
-    if (isMobile || hasOnScreenKeyboard) return;
+    if (viewportMatchesMobile || hasOnScreenKeyboard) return;
     const frame = window.requestAnimationFrame(() => {
       focusComposer();
     });
     return () => {
       window.cancelAnimationFrame(frame);
     };
-  }, [activeThread?.id, focusComposer, hasOnScreenKeyboard, isMobile]);
+  }, [activeThread?.id, focusComposer, hasOnScreenKeyboard, viewportMatchesMobile]);
 
   useEffect(() => {
     if (!activeThread?.id) return;
@@ -4593,7 +5117,7 @@ export default function ChatView(props: ChatViewProps) {
     });
     resetLocalDispatch();
     setExpandedImage(null);
-  }, [draftId, resetLocalDispatch, threadId]);
+  }, [draftId, environmentId, resetLocalDispatch, threadId]);
 
   const closeExpandedImage = useCallback(() => {
     setExpandedImage(null);
@@ -4759,12 +5283,23 @@ export default function ChatView(props: ChatViewProps) {
       text: snapshot.promptText || IMAGE_ONLY_BOOTSTRAP_PROMPT,
     });
 
-  const clearActiveComposerContent = () => {
+  const clearActiveComposerContent = (options?: {
+    readonly refocus?: boolean;
+    readonly revokeImagePreviews?: boolean;
+  }) => {
+    const previewUrlsToRevoke = options?.revokeImagePreviews
+      ? composerImagesRef.current.map((image) => image.previewUrl)
+      : [];
     promptRef.current = "";
     clearComposerDraftContent(composerDraftTarget);
     composerRef.current?.resetCursorState();
     composerRef.current?.clearEphemeralBrowserContext();
-    scheduleComposerFocus();
+    for (const previewUrl of previewUrlsToRevoke) {
+      revokeBlobPreviewUrl(previewUrl);
+    }
+    if (options?.refocus !== false) {
+      scheduleComposerFocus();
+    }
   };
 
   const restoreComposerSnapshotForRetry = (snapshot: ComposerSendSnapshot) => {
@@ -4790,206 +5325,499 @@ export default function ChatView(props: ChatViewProps) {
     const queuedAt = new Date().toISOString();
     const item: FollowUpQueueItem = {
       ...snapshot,
-      id: newMessageId(),
+      // The composer draft remains intact until final enqueue receipt. Give
+      // the queue independent preview URLs so cancelling or accepting the
+      // queued copy cannot invalidate an attachment the operator is editing.
+      images: snapshot.images.map(cloneComposerImageForRetry),
+      id: newManualFollowUpId(),
+      messageId: newMessageId(),
+      reservationCommandId: newCommandId(),
+      enqueueCommandId: newCommandId(),
+      enqueueStatus: "pending",
+      enqueueRetryAfterMs: 0,
+      titleSeed: activeThread.title,
       environmentId: activeThread.environmentId,
       threadId: activeThread.id,
+      serverHandoffTarget: isServerThread
+        ? null
+        : (draftThread?.promotedTo ?? scopeThreadRef(activeThread.environmentId, activeThread.id)),
       queuedAt,
       expanded: false,
       blockedReason: null,
     };
+    const targetKey = followUpThreadMapKey(activeThread.environmentId, activeThread.id);
     setFollowUpQueueByThreadId((existing) => ({
       ...existing,
-      [activeThread.id]: [...(existing[activeThread.id] ?? EMPTY_FOLLOW_UP_QUEUE), item],
+      [targetKey]: appendOperatorFollowUp(existing[targetKey] ?? EMPTY_FOLLOW_UP_QUEUE, item),
     }));
     setThreadError(activeThread.id, null);
-    clearActiveComposerContent();
-    // On touch devices queueing comes from the send button while the agent
-    // runs; refocusing would reopen the on-screen keyboard the user just
-    // implicitly closed by sending.
-    if (!hasOnScreenKeyboard) {
-      scheduleComposerFocus();
+    // Start the prompt-free reservation immediately. The composer remains
+    // intact until the server acknowledges operator priority for this exact
+    // thread, so a failed first RPC never destroys unsent work.
+    if (isServerThread) {
+      void dispatchFollowUpTurnStartRef.current?.(item);
     }
   };
 
-  const removeFollowUpQueueItem = (targetThreadId: ThreadId, itemId: string, revoke: boolean) => {
-    const removed = followUpQueueByThreadIdRef.current[targetThreadId]?.find(
+  const removeFollowUpQueueItem = (
+    targetEnvironmentId: EnvironmentId,
+    targetThreadId: ThreadId,
+    itemId: string,
+    revoke: boolean,
+  ) => {
+    const targetKey = followUpThreadMapKey(targetEnvironmentId, targetThreadId);
+    const removed = followUpQueueByThreadIdRef.current[targetKey]?.find(
       (item) => item.id === itemId,
     );
     if (removed && revoke) {
       revokeQueuedFollowUpPreviewUrls(removed);
     }
     setFollowUpQueueByThreadId((existing) => {
-      const current = existing[targetThreadId] ?? EMPTY_FOLLOW_UP_QUEUE;
+      const current = existing[targetKey] ?? EMPTY_FOLLOW_UP_QUEUE;
       const nextItems = current.filter((item) => item.id !== itemId);
       if (nextItems.length === current.length) return existing;
       const next = { ...existing };
       if (nextItems.length === 0) {
-        delete next[targetThreadId];
+        delete next[targetKey];
       } else {
-        next[targetThreadId] = nextItems;
+        next[targetKey] = nextItems;
       }
       return next;
     });
   };
 
-  const blockFollowUpQueueItem = (targetThreadId: ThreadId, itemId: string, reason: string) => {
+  const setLocalManualFollowUpBlockedReason = (
+    targetEnvironmentId: EnvironmentId,
+    targetThreadId: ThreadId,
+    followUpId: ManualFollowUpId,
+    blockedReason: string | null,
+  ): void => {
+    const targetKey = followUpThreadMapKey(targetEnvironmentId, targetThreadId);
     setFollowUpQueueByThreadId((existing) => {
-      const current = existing[targetThreadId] ?? EMPTY_FOLLOW_UP_QUEUE;
+      const current = existing[targetKey] ?? EMPTY_FOLLOW_UP_QUEUE;
       let changed = false;
-      const nextItems: FollowUpQueueItem[] = [];
-      for (const item of current) {
-        if (item.id !== itemId || item.blockedReason === reason) {
-          nextItems.push(item);
-          continue;
+      const nextItems = current.map((entry) => {
+        if (entry.id !== followUpId || entry.blockedReason === blockedReason) {
+          return entry;
         }
         changed = true;
-        nextItems.push({ ...item, blockedReason: reason });
-      }
-      if (!changed) return existing;
-      return {
-        ...existing,
-        [targetThreadId]: nextItems,
-      };
+        return {
+          ...entry,
+          blockedReason,
+        };
+      });
+      return changed
+        ? {
+            ...existing,
+            [targetKey]: nextItems,
+          }
+        : existing;
     });
   };
+
+  const dispatchManualFollowUpCancellation = async (
+    targetEnvironmentId: EnvironmentId,
+    targetThreadId: ThreadId,
+    followUpId: ManualFollowUpId,
+  ): Promise<boolean> => {
+    const itemKey = manualFollowUpMapKey(targetEnvironmentId, targetThreadId, followUpId);
+    if (
+      manualFollowUpCancellationInFlightKeysRef.current.has(itemKey) ||
+      manualFollowUpActivationInFlightKeysRef.current.has(itemKey) ||
+      (manualFollowUpCancellationRetryAfterMsRef.current.get(itemKey) ?? 0) > Date.now()
+    ) {
+      return false;
+    }
+    const api = readEnvironmentApi(targetEnvironmentId);
+    if (!api) {
+      manualFollowUpCancellationRetryAfterMsRef.current.set(itemKey, Date.now() + 1_000);
+      return false;
+    }
+
+    const cancellationCommand =
+      manualFollowUpCancellationCommandsRef.current.get(itemKey) ??
+      (() => {
+        const created = {
+          commandId: newCommandId(),
+          createdAt: new Date().toISOString(),
+        };
+        manualFollowUpCancellationCommandsRef.current.set(itemKey, created);
+        return created;
+      })();
+    manualFollowUpCancellationInFlightKeysRef.current.add(itemKey);
+    pendingManualFollowUpCancellationKeysRef.current.add(itemKey);
+    setLocalManualFollowUpBlockedReason(
+      targetEnvironmentId,
+      targetThreadId,
+      followUpId,
+      "Cancelling this queued follow-up…",
+    );
+    setManualFollowUpUiRevision((revision) => revision + 1);
+
+    let accepted = false;
+    let retryIndeterminate = false;
+    try {
+      await api.orchestration.dispatchCommand({
+        type: "thread.manual-follow-up.cancel",
+        commandId: cancellationCommand.commandId,
+        threadId: targetThreadId,
+        followUpId,
+        createdAt: cancellationCommand.createdAt,
+      });
+      accepted = true;
+      manualFollowUpCancellationRequestedKeysRef.current.delete(itemKey);
+      manualFollowUpCancellationCommandsRef.current.delete(itemKey);
+      manualFollowUpCancellationRetryAfterMsRef.current.delete(itemKey);
+      manualFollowUpDurablyReservedKeysRef.current.delete(itemKey);
+      removeFollowUpQueueItem(targetEnvironmentId, targetThreadId, followUpId, true);
+      setExpandedDurableManualFollowUpIds((existing) => {
+        if (!existing.has(followUpId)) {
+          return existing;
+        }
+        const next = new Set(existing);
+        next.delete(followUpId);
+        return next;
+      });
+      if (
+        activeThread?.environmentId === targetEnvironmentId &&
+        activeThread.id === targetThreadId
+      ) {
+        setThreadError(targetThreadId, null);
+      }
+      return true;
+    } catch (error) {
+      retryIndeterminate = isIndeterminateTransportError(error);
+      manualFollowUpCancellationRetryAfterMsRef.current.set(
+        itemKey,
+        retryIndeterminate ? Date.now() + 1_000 : Number.POSITIVE_INFINITY,
+      );
+      if (!retryIndeterminate) {
+        // A definitive rejection is a durable receipt for this command id.
+        // A later operator retry must use a fresh id rather than replay it.
+        manualFollowUpCancellationCommandsRef.current.delete(itemKey);
+      }
+      const cancellationError = describeSendFailureMessage(
+        error,
+        "Failed to remove queued follow-up.",
+      );
+      setLocalManualFollowUpBlockedReason(
+        targetEnvironmentId,
+        targetThreadId,
+        followUpId,
+        retryIndeterminate ? "Cancelling this queued follow-up…" : cancellationError,
+      );
+      if (
+        activeThread?.environmentId === targetEnvironmentId &&
+        activeThread.id === targetThreadId
+      ) {
+        setThreadError(targetThreadId, cancellationError);
+      }
+      return false;
+    } finally {
+      manualFollowUpCancellationInFlightKeysRef.current.delete(itemKey);
+      if (accepted || !retryIndeterminate) {
+        pendingManualFollowUpCancellationKeysRef.current.delete(itemKey);
+      }
+      setManualFollowUpUiRevision((revision) => revision + 1);
+    }
+  };
+  dispatchManualFollowUpCancellationRef.current = dispatchManualFollowUpCancellation;
 
   const dispatchFollowUpTurnStart = async (item: FollowUpQueueItem) => {
     const queuedThread = resolveQueuedFollowUpThread(item);
     if (!queuedThread) {
-      blockFollowUpQueueItem(item.threadId, item.id, "Thread is not loaded yet.");
       return;
     }
     const api = readEnvironmentApi(queuedThread.environmentId);
     if (!api) {
-      blockFollowUpQueueItem(item.threadId, item.id, "Club Code is not connected.");
-      return;
-    }
-    if (isThreadEnvironmentUnavailable(queuedThread)) {
-      blockFollowUpQueueItem(item.threadId, item.id, "Club Code is not connected.");
-      return;
-    }
-    const queuedProject = resolveProjectForThread(queuedThread);
-    if (!queuedProject) {
-      blockFollowUpQueueItem(item.threadId, item.id, "Project metadata is not loaded yet.");
       return;
     }
     if (
-      queueDispatchInFlightRef.current ||
-      queuedFollowUpPendingDispatchByThreadIdRef.current[item.threadId] !== undefined
+      item.enqueueStatus === "reserving" ||
+      item.enqueueStatus === "submitting" ||
+      item.enqueueStatus === "acknowledged" ||
+      item.enqueueStatus === "rejected" ||
+      item.enqueueRetryAfterMs > Date.now() ||
+      manualFollowUpEnqueueInFlightIdsRef.current.has(item.id)
     ) {
+      return;
+    }
+    if (queueDispatchInFlightRef.current) {
       return;
     }
 
     const isVisibleThread =
       activeThread?.environmentId === queuedThread.environmentId &&
       activeThread.id === queuedThread.id;
+    const threadKey = followUpThreadMapKey(item.environmentId, item.threadId);
+    const itemKey = manualFollowUpMapKey(item.environmentId, item.threadId, item.id);
+    let reservationAcknowledged = manualFollowUpDurablyReservedKeysRef.current.has(itemKey);
+    manualFollowUpEnqueueInFlightIdsRef.current.add(item.id);
     setQueueDispatchInFlight(true);
-    if (isVisibleThread) {
-      setSendInFlight(true);
-      beginLocalDispatch({ preparingWorktree: false });
-    }
-
-    const messageIdForSend = newMessageId();
-    const messageCreatedAt = new Date().toISOString();
-    const outgoingMessageText = outgoingTextForSnapshot(item);
-    const optimisticAttachments = optimisticAttachmentsForSnapshot(item);
-    const turnAttachmentsPromise = buildAttachmentsForSnapshot(item);
-
-    setQueuedFollowUpPendingDispatch(
-      {
-        environmentId: queuedThread.environmentId,
-        threadId: queuedThread.id,
-        messageId: messageIdForSend,
-        dispatchedAt: messageCreatedAt,
-      },
-      item.threadId,
-    );
-    removeFollowUpQueueItem(item.threadId, item.id, false);
-    if (isVisibleThread) {
-      pinTimelineToEndForLocalMessage();
-      setOptimisticUserMessages((existing) => [
+    setFollowUpQueueByThreadId((existing) => {
+      const targetKey = followUpThreadMapKey(item.environmentId, item.threadId);
+      const current = existing[targetKey] ?? EMPTY_FOLLOW_UP_QUEUE;
+      return {
         ...existing,
-        {
-          id: messageIdForSend,
-          role: "user",
-          text: outgoingMessageText,
-          ...(optimisticAttachments.length > 0 ? { attachments: optimisticAttachments } : {}),
-          createdAt: messageCreatedAt,
-          streaming: false,
-        },
-      ]);
-    }
+        [targetKey]: current.map((entry) =>
+          entry.id === item.id
+            ? {
+                ...entry,
+                enqueueStatus: "reserving",
+                blockedReason: null,
+              }
+            : entry,
+        ),
+      };
+    });
 
-    let turnStartSucceeded = false;
     try {
-      await persistThreadSettingsForNextTurn({
-        thread: queuedThread,
-        threadId: item.threadId,
-        createdAt: messageCreatedAt,
-        modelSelection: item.modelSelection,
-        runtimeMode: item.runtimeMode,
-        interactionMode: item.interactionMode,
-      });
-      const turnAttachments = await turnAttachmentsPromise;
       await api.orchestration.dispatchCommand({
-        type: "thread.turn.start",
-        commandId: newCommandId(),
+        type: "thread.manual-follow-up.reserve",
+        commandId: item.reservationCommandId,
         threadId: item.threadId,
-        message: {
-          messageId: messageIdForSend,
-          role: "user",
-          text: outgoingMessageText,
-          attachments: turnAttachments,
+        followUpId: item.id,
+        messageId: item.messageId,
+        dispatch: {
+          modelSelection: item.modelSelection,
+          titleSeed: item.titleSeed,
+          runtimeMode: item.runtimeMode,
+          interactionMode: item.interactionMode,
         },
-        modelSelection: item.modelSelection,
-        titleSeed: queuedThread.title,
-        runtimeMode: item.runtimeMode,
-        interactionMode: item.interactionMode,
-        createdAt: messageCreatedAt,
+        createdAt: item.queuedAt,
       });
-      turnStartSucceeded = true;
-      setThreadError(item.threadId, null);
-    } catch (err) {
-      if (isVisibleThread) {
-        setOptimisticUserMessages((existing) => {
-          const removed = existing.filter((message) => message.id === messageIdForSend);
-          for (const message of removed) {
-            revokeUserMessagePreviewUrls(message);
-          }
-          return existing.filter((message) => message.id !== messageIdForSend);
+      reservationAcknowledged = true;
+      manualFollowUpDurablyReservedKeysRef.current.add(itemKey);
+      setFollowUpQueueByThreadId((existing) => {
+        const targetKey = followUpThreadMapKey(item.environmentId, item.threadId);
+        const current = existing[targetKey] ?? EMPTY_FOLLOW_UP_QUEUE;
+        return {
+          ...existing,
+          [targetKey]: current.map((entry) =>
+            entry.id === item.id
+              ? {
+                  ...entry,
+                  enqueueStatus: "reserved",
+                  blockedReason: null,
+                }
+              : entry,
+          ),
+        };
+      });
+      if (manualFollowUpCancellationRequestedKeysRef.current.has(itemKey)) {
+        await dispatchManualFollowUpCancellation(item.environmentId, item.threadId, item.id);
+        return;
+      }
+      const attachments = await buildAttachmentsForSnapshot(item);
+      if (manualFollowUpCancellationRequestedKeysRef.current.has(itemKey)) {
+        await dispatchManualFollowUpCancellation(item.environmentId, item.threadId, item.id);
+        return;
+      }
+      setFollowUpQueueByThreadId((existing) => {
+        const targetKey = followUpThreadMapKey(item.environmentId, item.threadId);
+        const current = existing[targetKey] ?? EMPTY_FOLLOW_UP_QUEUE;
+        return {
+          ...existing,
+          [targetKey]: current.map((entry) =>
+            entry.id === item.id
+              ? {
+                  ...entry,
+                  enqueueStatus: "submitting",
+                }
+              : entry,
+          ),
+        };
+      });
+      await api.orchestration.dispatchCommand({
+        type: "thread.manual-follow-up.enqueue",
+        commandId: item.enqueueCommandId,
+        threadId: item.threadId,
+        followUpId: item.id,
+        reservationCommandId: item.reservationCommandId,
+        message: {
+          messageId: item.messageId,
+          role: "user",
+          text: outgoingTextForSnapshot(item),
+          attachments,
+        },
+        dispatch: {
+          modelSelection: item.modelSelection,
+          titleSeed: item.titleSeed,
+          runtimeMode: item.runtimeMode,
+          interactionMode: item.interactionMode,
+        },
+        createdAt: item.queuedAt,
+      });
+      if (manualFollowUpCancellationRequestedKeysRef.current.has(itemKey)) {
+        await dispatchManualFollowUpCancellation(item.environmentId, item.threadId, item.id);
+        return;
+      }
+      if (
+        activeFollowUpThreadKeyRef.current === threadKey &&
+        promptRef.current === item.draftPromptText &&
+        composerImagesRef.current.length === item.images.length &&
+        composerImagesRef.current.every((image, index) => image.id === item.images[index]?.id)
+      ) {
+        clearActiveComposerContent({
+          // On touch devices queueing comes from the send button while the
+          // agent runs; do not reopen the keyboard the user just dismissed.
+          refocus: !hasOnScreenKeyboard,
+          revokeImagePreviews: true,
         });
+      }
+      // A resolved dispatch is a durable server receipt. Projection may arrive
+      // before or after the RPC response; either one is sufficient to hand
+      // ownership of the payload and attachment previews to the server.
+      removeFollowUpQueueItem(item.environmentId, item.threadId, item.id, true);
+      if (isVisibleThread) {
+        setThreadError(item.threadId, null);
+      }
+    } catch (err) {
+      const retryIndeterminate = isIndeterminateTransportError(err);
+      if (manualFollowUpCancellationRequestedKeysRef.current.has(itemKey)) {
+        if (reservationAcknowledged) {
+          await dispatchManualFollowUpCancellation(item.environmentId, item.threadId, item.id);
+        } else if (retryIndeterminate) {
+          setFollowUpQueueByThreadId((existing) => {
+            const current = existing[threadKey] ?? EMPTY_FOLLOW_UP_QUEUE;
+            return {
+              ...existing,
+              [threadKey]: current.map((entry) =>
+                entry.id === item.id
+                  ? {
+                      ...entry,
+                      enqueueStatus: "pending",
+                      enqueueRetryAfterMs: Date.now() + 1_000,
+                      blockedReason: "Cancelling this queued follow-up…",
+                    }
+                  : entry,
+              ),
+            };
+          });
+        } else {
+          // A definitive reserve rejection proves there is no durable item to
+          // cancel. Keep the composer draft and discard only the local copy.
+          manualFollowUpCancellationRequestedKeysRef.current.delete(itemKey);
+          manualFollowUpCancellationCommandsRef.current.delete(itemKey);
+          manualFollowUpCancellationRetryAfterMsRef.current.delete(itemKey);
+          removeFollowUpQueueItem(item.environmentId, item.threadId, item.id, true);
+        }
+        return;
       }
       const queuedFollowUpError = describeSendFailureMessage(
         err,
-        "Failed to send queued follow-up.",
+        "Failed to save queued follow-up.",
       );
-      setFollowUpQueueByThreadId((existing) => ({
-        ...existing,
-        [item.threadId]: [
-          {
-            ...item,
-            blockedReason: queuedFollowUpError,
-          },
-          ...(existing[item.threadId] ?? EMPTY_FOLLOW_UP_QUEUE),
-        ],
-      }));
-      setThreadError(item.threadId, queuedFollowUpError);
-    } finally {
-      setQueueDispatchInFlight(false);
+      setFollowUpQueueByThreadId((existing) => {
+        const current = existing[threadKey] ?? EMPTY_FOLLOW_UP_QUEUE;
+        return {
+          ...existing,
+          [threadKey]: current.map((entry) =>
+            entry.id === item.id
+              ? {
+                  ...entry,
+                  enqueueStatus: retryIndeterminate ? "pending" : "rejected",
+                  enqueueRetryAfterMs: retryIndeterminate ? Date.now() + 1_000 : 0,
+                  blockedReason: queuedFollowUpError,
+                }
+              : entry,
+          ),
+        };
+      });
       if (isVisibleThread) {
-        setSendInFlight(false);
+        setThreadError(item.threadId, queuedFollowUpError);
       }
-      if (!turnStartSucceeded) {
-        setQueuedFollowUpPendingDispatch(null, item.threadId);
-        if (isVisibleThread) {
-          resetLocalDispatch();
-        }
-      } else if (!isVisibleThread) {
-        revokeQueuedFollowUpPreviewUrls(item);
-      }
+    } finally {
+      manualFollowUpEnqueueInFlightIdsRef.current.delete(item.id);
+      setQueueDispatchInFlight(false);
     }
   };
   dispatchFollowUpTurnStartRef.current = dispatchFollowUpTurnStart;
+
+  const dispatchProjectedManualFollowUp = async (
+    targetThread: Thread,
+    item: ThreadManualFollowUp,
+    source: string,
+    activationMode: ManualFollowUpActivationMode,
+  ) => {
+    const itemKey = manualFollowUpMapKey(targetThread.environmentId, targetThread.id, item.id);
+    if (
+      item.status !== "queued" ||
+      manualFollowUpActivationInFlightKeysRef.current.has(itemKey) ||
+      pendingManualFollowUpCancellationKeysRef.current.has(itemKey)
+    ) {
+      return;
+    }
+    const api = readEnvironmentApi(targetThread.environmentId);
+    if (!api) {
+      return;
+    }
+
+    manualFollowUpActivationInFlightKeysRef.current.add(itemKey);
+    setManualFollowUpUiRevision((revision) => revision + 1);
+    recordFollowUpQueueDebugAttempt(source, "durable-dispatch-started", {
+      threadId: targetThread.id,
+      itemId: item.id,
+    });
+    let accepted = false;
+    try {
+      await api.orchestration.dispatchCommand({
+        type: "thread.manual-follow-up.activate",
+        commandId: newCommandId(),
+        threadId: targetThread.id,
+        followUpId: item.id,
+        activationMode,
+        createdAt: new Date().toISOString(),
+      });
+      accepted = true;
+      if (
+        activeThread?.environmentId === targetThread.environmentId &&
+        activeThread.id === targetThread.id
+      ) {
+        setThreadError(targetThread.id, null);
+      }
+    } catch (error) {
+      recordFollowUpQueueDebugAttempt(source, "durable-dispatch-failed", {
+        threadId: targetThread.id,
+        itemId: item.id,
+      });
+      if (
+        activeThread?.environmentId === targetThread.environmentId &&
+        activeThread.id === targetThread.id
+      ) {
+        setThreadError(
+          targetThread.id,
+          describeSendFailureMessage(error, "Failed to send queued follow-up."),
+        );
+      }
+    } finally {
+      if (!accepted) {
+        manualFollowUpActivationInFlightKeysRef.current.delete(itemKey);
+      }
+      setManualFollowUpUiRevision((revision) => revision + 1);
+    }
+  };
+  dispatchProjectedManualFollowUpRef.current = dispatchProjectedManualFollowUp;
+
+  const cancelProjectedManualFollowUp = async (
+    targetThread: Thread,
+    item: ThreadManualFollowUp,
+  ) => {
+    const itemKey = manualFollowUpMapKey(targetThread.environmentId, targetThread.id, item.id);
+    if (item.status === "handoff" || manualFollowUpActivationInFlightKeysRef.current.has(itemKey)) {
+      return;
+    }
+    manualFollowUpCancellationRequestedKeysRef.current.add(itemKey);
+    // An explicit click retries a prior definitive cancellation failure with a
+    // fresh command id; indeterminate retries keep their exact command object.
+    if (
+      manualFollowUpCancellationRetryAfterMsRef.current.get(itemKey) === Number.POSITIVE_INFINITY
+    ) {
+      manualFollowUpCancellationRetryAfterMsRef.current.delete(itemKey);
+    }
+    setManualFollowUpUiRevision((revision) => revision + 1);
+    await dispatchManualFollowUpCancellation(targetThread.environmentId, targetThread.id, item.id);
+  };
 
   const dispatchSteerSnapshot = async (
     snapshot: ComposerSendSnapshot,
@@ -5002,6 +5830,16 @@ export default function ChatView(props: ChatViewProps) {
       if (!options?.queuedItem) {
         enqueueFollowUpSnapshot(snapshot);
       }
+      return;
+    }
+    if (
+      options?.queuedItem &&
+      !tryClaimQueuedFollowUpDispatch(claimedQueuedSteerItemIdsRef.current, options.queuedItem.id)
+    ) {
+      recordFollowUpQueueDebugAttempt("queued-steer", "dispatch-already-claimed", {
+        threadId: options.queuedItem.threadId,
+        itemId: options.queuedItem.id,
+      });
       return;
     }
 
@@ -5037,7 +5875,12 @@ export default function ChatView(props: ChatViewProps) {
     });
 
     if (options?.queuedItem) {
-      removeFollowUpQueueItem(options.queuedItem.threadId, options.queuedItem.id, false);
+      removeFollowUpQueueItem(
+        options.queuedItem.environmentId,
+        options.queuedItem.threadId,
+        options.queuedItem.id,
+        false,
+      );
     }
 
     pinTimelineToEndForLocalMessage();
@@ -5087,11 +5930,19 @@ export default function ChatView(props: ChatViewProps) {
         return existing.filter((message) => message.id !== messageIdForSend);
       });
       if (queuedItemForRetry !== null) {
+        releaseQueuedFollowUpDispatchClaim(
+          claimedQueuedSteerItemIdsRef.current,
+          queuedItemForRetry.id,
+        );
+        const queuedItemKey = followUpThreadMapKey(
+          queuedItemForRetry.environmentId,
+          queuedItemForRetry.threadId,
+        );
         setFollowUpQueueByThreadId((existing) => ({
           ...existing,
-          [queuedItemForRetry.threadId]: [
+          [queuedItemKey]: [
             queuedItemForRetry,
-            ...(existing[queuedItemForRetry.threadId] ?? EMPTY_FOLLOW_UP_QUEUE),
+            ...(existing[queuedItemKey] ?? EMPTY_FOLLOW_UP_QUEUE),
           ],
         }));
       } else if (promptRef.current.length === 0 && composerImagesRef.current.length === 0) {
@@ -5109,7 +5960,10 @@ export default function ChatView(props: ChatViewProps) {
       return;
     }
 
-    const firstItem = followUpQueueByThreadIdRef.current[activeThread.id]?.[0] ?? null;
+    const firstItem =
+      followUpQueueByThreadIdRef.current[
+        followUpThreadMapKey(activeThread.environmentId, activeThread.id)
+      ]?.[0] ?? null;
     if (firstItem === null || !isAutomaticSteerRetryItem(firstItem)) {
       return;
     }
@@ -5151,8 +6005,8 @@ export default function ChatView(props: ChatViewProps) {
 
   const onSend = async (e?: { preventDefault: () => void }) => {
     e?.preventDefault();
-    // A real operator send (and the auto sender after its final re-check)
-    // invalidates any outstanding countdown before touching the provider.
+    // A real operator send invalidates any outstanding countdown before
+    // touching the provider.
     recordManualAutoNudgeActivity();
     const api = readEnvironmentApi(environmentId);
     if (
@@ -5183,12 +6037,90 @@ export default function ChatView(props: ChatViewProps) {
       prompt: promptForSend,
       imageCount: composerImages.length,
     });
+    const standaloneGoalCommand =
+      composerImages.length === 0 && goalControlsSupported
+        ? parseStandaloneComposerGoalCommand(trimmed)
+        : null;
+    if (standaloneGoalCommand !== null) {
+      if (standaloneGoalCommand.action === "set" || standaloneGoalCommand.action === "resume") {
+        updateManualStopBarrier(activeThread.environmentId, activeThread.id, null);
+      }
+      try {
+        const goal = activeThread.goal ?? null;
+        switch (standaloneGoalCommand.action) {
+          case "show":
+            openThreadGoalDialog();
+            break;
+          case "edit":
+            openThreadGoalDialog({ mode: "edit" });
+            break;
+          case "set":
+            if (goal === null) {
+              await setThreadGoal({
+                objective: standaloneGoalCommand.objective,
+                status: "active",
+                tokenBudget: null,
+              });
+            } else if (goal.status === "complete") {
+              await setThreadGoal({
+                objective: standaloneGoalCommand.objective,
+                replaceExisting: true,
+              });
+            } else {
+              openThreadGoalDialog({
+                mode: "replace",
+                seedObjective: standaloneGoalCommand.objective,
+                confirmReplacement: true,
+              });
+            }
+            break;
+          case "pause":
+            if (goal === null) {
+              openThreadGoalDialog({ mode: "edit" });
+            } else {
+              await setThreadGoal({ status: "paused" });
+            }
+            break;
+          case "resume":
+            if (goal === null) {
+              openThreadGoalDialog({ mode: "edit" });
+            } else {
+              await setThreadGoal({ status: "active" });
+            }
+            break;
+          case "clear":
+            if (goal !== null) {
+              await clearThreadGoal();
+            }
+            break;
+        }
+      } catch (cause) {
+        setThreadError(
+          activeThread.id,
+          cause instanceof Error ? cause.message : "The goal command could not be queued.",
+        );
+        return;
+      }
+      promptRef.current = "";
+      clearComposerDraftContent(composerDraftTarget);
+      composerRef.current?.resetCursorState();
+      scheduleComposerFocus();
+      return;
+    }
+    // Sending new user intent explicitly releases a prior Stop barrier. The
+    // queue watchdog itself never clears this state.
+    updateManualStopBarrier(activeThread.environmentId, activeThread.id, null);
     const delivery = decideFollowUpDelivery({
       phase: followUpQueuePhase,
       requestedSteer: false,
       liveSteerSupported: activeProviderLiveSteerAvailable,
     });
-    if (delivery === "queue") {
+    if (
+      shouldQueueOperatorFollowUp({
+        delivery,
+        hasEarlierManualFollowUp: hasEarlierManualFollowUpForActiveThread,
+      })
+    ) {
       if (!hasSendableContent) return;
       pinTimelineToEndForLocalMessage();
       enqueueFollowUpSnapshot(snapshot);
@@ -5423,17 +6355,31 @@ export default function ChatView(props: ChatViewProps) {
     }
   };
 
-  const autoNudgeTerminalTurnKey =
+  const autoNudgeCompletedTurnId =
     isServerThread &&
     activeThread &&
     activeLatestTurn?.state === "completed" &&
     activeLatestTurn.completedAt &&
     latestTurnSettled &&
     activeThread.session?.status === "ready"
-      ? `${activeThread.environmentId}:${activeThread.id}:${activeLatestTurn.turnId}`
+      ? activeLatestTurn.turnId
       : null;
-  const autoNudgeLatestUserMessageAt =
-    activeThread?.messages.findLast((message) => message.role === "user")?.createdAt ?? null;
+  const autoNudgeConfigAccountsForCompletedTurn =
+    autoNudgeCompletedTurnId !== null &&
+    (activeAutoNudgeConfig?.baselineSettledTurnId === autoNudgeCompletedTurnId ||
+      activeAutoNudgeConfig?.lastDispatchedSettledTurnId === autoNudgeCompletedTurnId);
+  const autoNudgeTerminalTurnKey =
+    autoNudgeContextKey !== null &&
+    autoNudgeCompletedTurnId !== null &&
+    activeAutoNudgeConfig !== null &&
+    activeAutoNudgeConfig.mode !== "off" &&
+    activeAutoNudgeConfig.prompt.trim().length > 0 &&
+    activeAutoNudgeConfig.roundsDispatched < activeAutoNudgeConfig.maxRounds &&
+    isAutoNudgeWithinTimeCap(activeAutoNudgeConfig, Date.now()) &&
+    !activeAutoNudgeConfig.backgroundContinuation &&
+    !autoNudgeConfigAccountsForCompletedTurn
+      ? `${autoNudgeContextKey}:${autoNudgeCompletedTurnId}:${activeAutoNudgeConfig.authorityRevision}`
+      : null;
   autoNudgeTerminalTurnKeyRef.current = autoNudgeTerminalTurnKey;
   const autoNudgeHasPendingWork =
     isWorking ||
@@ -5441,10 +6387,7 @@ export default function ChatView(props: ChatViewProps) {
     isSendBusy ||
     sendInFlightRef.current ||
     queueDispatchInFlightRef.current ||
-    activeFollowUpQueue.length > 0 ||
-    activeSteeringFollowUpInFlight ||
-    activeQueuedFollowUpPendingDispatch ||
-    Boolean(activeThreadId && pendingSteerInterruptRecoveryByThreadId[activeThreadId]) ||
+    hasEarlierManualFollowUpForActiveThread ||
     pendingApprovals.length > 0 ||
     pendingUserInputs.length > 0 ||
     respondingRequestIds.length > 0 ||
@@ -5452,35 +6395,21 @@ export default function ChatView(props: ChatViewProps) {
     Boolean(activeThread?.error) ||
     showPlanFollowUpPrompt;
   const autoNudgeProviderAvailable =
-    autoNudgeProviderCanAcceptTurn(activeProviderStatus) &&
-    !activeEnvironmentUnavailable &&
-    supportsAutoNudgeExecutionLock();
-  useEffect(() => {
-    if (
-      !autoNudgeThreadRef ||
-      !backgroundAutoNudgeOwnerForRoute ||
-      backgroundAutoNudgeState.status !== "active" ||
-      !autoNudgeHasPendingWork
-    ) {
-      return;
-    }
-    void runAutoNudgeMutation(() => {
-      const controller = getBackgroundAutoNudgeController();
-      controller.reloadFromStorage();
-      controller.pause(autoNudgeThreadRef, "Queued work or operator attention is pending.");
-    });
-  }, [
-    autoNudgeHasPendingWork,
-    autoNudgeThreadRef,
-    backgroundAutoNudgeOwnerForRoute,
-    backgroundAutoNudgeState.status,
-    runAutoNudgeMutation,
-  ]);
+    activeProviderStatus?.status === "ready" &&
+    activeProviderStatus.enabled &&
+    activeProviderStatus.installed &&
+    activeProviderStatus.availability !== "unavailable" &&
+    activeProviderStatus.auth.status === "authenticated" &&
+    providerAccountCanAcceptTurn(activeProviderStatus) &&
+    !activeEnvironmentUnavailable;
   const autoNudgeEligibilityInput = {
     terminalTurnKey: autoNudgeTerminalTurnKey,
-    // The root coordinator exclusively owns an opted-in background thread,
-    // including while visible, so a foreground timer cannot race it.
-    mode: backgroundAutoNudgeOwnerForRoute ? ("off" as const) : autoNudgePolicy.mode,
+    // Server-configured background continuation owns its own dispatch lane.
+    // The visible foreground must not race it for the same completed turn.
+    mode:
+      autoNudgeSuppressed || activeAutoNudgeConfig?.backgroundContinuation
+        ? ("off" as const)
+        : autoNudgeMode,
     hasManualActivity: promptRef.current.trim().length > 0 || composerImagesRef.current.length > 0,
     hasPendingWork: autoNudgeHasPendingWork,
     providerAvailable: autoNudgeProviderAvailable,
@@ -5488,21 +6417,27 @@ export default function ChatView(props: ChatViewProps) {
   const autoNudgeEligible = canScheduleAutoNudge(autoNudgeEligibilityInput);
   const autoNudgeEligibilityRef = useRef(autoNudgeEligibilityInput);
   autoNudgeEligibilityRef.current = autoNudgeEligibilityInput;
-  const autoNudgeDispatchRef = useRef<
-    ((mode: AutoNudgeThreadPolicy["mode"]) => Promise<void>) | null
-  >(null);
-  autoNudgeDispatchRef.current = async (mode) => {
-    const prompt = autoNudgePromptForMode(mode);
-    if (!prompt) return;
-    promptRef.current = prompt;
-    composerImagesRef.current = [];
-    setComposerDraftPrompt(composerDraftTarget, prompt);
-    await onSend();
-  };
+  const autoNudgeForegroundDispatchAuthority: AutoNudgeForegroundDispatchAuthority | null =
+    autoNudgeContextKey !== null &&
+    autoNudgeTerminalTurnKey !== null &&
+    autoNudgeCompletedTurnId !== null &&
+    activeThread &&
+    activeAutoNudgeConfig
+      ? {
+          contextKey: autoNudgeContextKey,
+          terminalTurnKey: autoNudgeTerminalTurnKey,
+          environmentId: activeThread.environmentId,
+          threadId: activeThread.id,
+          authorityRevision: activeAutoNudgeConfig.authorityRevision,
+          completedTurnId: autoNudgeCompletedTurnId,
+          armedAt: activeAutoNudgeConfig.armedAt,
+          maxMinutes: activeAutoNudgeConfig.maxMinutes,
+        }
+      : null;
+  const autoNudgeForegroundDispatchAuthorityRef =
+    useRef<AutoNudgeForegroundDispatchAuthority | null>(null);
+  autoNudgeForegroundDispatchAuthorityRef.current = autoNudgeForegroundDispatchAuthority;
 
-  const autoNudgeContextKey = activeThread
-    ? `${activeThread.environmentId}:${activeThread.id}:${activeThread.projectId}`
-    : null;
   const previousAutoNudgeContextKeyRef = useRef<string | null>(null);
   useEffect(() => {
     const previousContextKey = previousAutoNudgeContextKeyRef.current;
@@ -5510,21 +6445,21 @@ export default function ChatView(props: ChatViewProps) {
     if (previousContextKey === null || previousContextKey === autoNudgeContextKey) {
       return;
     }
-    // A policy may remain enabled, but a foreground timer belongs to exactly
-    // one visible thread. Cancel without consuming so returning can re-evaluate
-    // that thread's still-current completed turn from a fresh snapshot.
+    // A timer belongs to one exact environment/thread. Cancel without
+    // consuming so returning can re-evaluate that thread's server authority.
     cancelScheduledAutoNudge(false);
   }, [autoNudgeContextKey, cancelScheduledAutoNudge]);
 
   useEffect(() => {
     const terminalTurnKey = autoNudgeTerminalTurnKey;
-    autoNudgeLedgerRef.current.reloadFromStorage();
     const alreadySent = terminalTurnKey !== null && autoNudgeLedgerRef.current.has(terminalTurnKey);
-    if (!autoNudgeEligible || !autoNudgeThreadRef || terminalTurnKey === null || alreadySent) {
+    if (!autoNudgeEligible || terminalTurnKey === null || alreadySent) {
       cancelScheduledAutoNudge(false);
       return;
     }
-    if (autoNudgeTimerController.scheduledTurnKey === terminalTurnKey) return;
+    if (autoNudgeTimerController.scheduledTurnKey === terminalTurnKey) {
+      return;
+    }
 
     cancelScheduledAutoNudge(false);
     autoNudgeTimerController.schedule({
@@ -5533,47 +6468,65 @@ export default function ChatView(props: ChatViewProps) {
       onCountdown: setAutoNudgeCountdownSeconds,
       onDispatch: (scheduledTurnKey) => {
         setAutoNudgeCountdownSeconds(null);
-        void navigator.locks
-          .request(AUTO_NUDGE_EXECUTION_LOCK_NAME, { mode: "exclusive" }, async (lock) => {
-            if (!lock) return;
-            const policyStore = getAutoNudgeThreadPolicyStore();
-            policyStore.reloadFromStorage();
-            const currentPolicy = policyStore.getPolicy(autoNudgeThreadRef);
-            const ledger = autoNudgeLedgerRef.current;
-            ledger.reloadFromStorage();
-            const currentEligibility = {
-              ...autoNudgeEligibilityRef.current,
-              mode: currentPolicy.mode,
-            };
-            if (
-              currentPolicy.backgroundContinuation ||
-              !canDispatchAutoNudge({
-                scheduledTurnKey,
-                current: currentEligibility,
-                alreadyConsumed: ledger.has(scheduledTurnKey),
-              })
-            ) {
-              return;
-            }
-            // Persist the claim before transport. A failure may skip a nudge,
-            // but no reload or second window may duplicate one.
-            ledger.mark(scheduledTurnKey);
-            await autoNudgeDispatchRef.current?.(currentPolicy.mode);
+        // Re-read every safety condition after the visible delay. A stale
+        // closure must never submit against a changed thread/provider state.
+        if (
+          !canDispatchAutoNudge({
+            scheduledTurnKey,
+            current: autoNudgeEligibilityRef.current,
+            alreadyConsumed: autoNudgeLedgerRef.current.has(scheduledTurnKey),
           })
-          .catch(() => {
-            // Lock/dispatch failures fail closed. A claim made before a
-            // transport failure is intentionally not replayed.
-          });
+        ) {
+          return;
+        }
+        const authority = autoNudgeForegroundDispatchAuthorityRef.current;
+        if (
+          !authority ||
+          authority.contextKey !== autoNudgeContextKeyRef.current ||
+          authority.terminalTurnKey !== scheduledTurnKey ||
+          !isAutoNudgeWithinTimeCap(authority, Date.now())
+        ) {
+          return;
+        }
+        const api = readEnvironmentApi(authority.environmentId);
+        if (!api) return;
+        const command = {
+          type: "thread.auto-nudge.dispatch" as const,
+          commandId: newCommandId(),
+          threadId: authority.threadId,
+          expectedAuthorityRevision: authority.authorityRevision,
+          completedTurnId: authority.completedTurnId,
+          dispatchSource: "foreground" as const,
+          messageId: newMessageId(),
+          createdAt: new Date().toISOString(),
+        };
+        // Consume before transport. Any rejection fails closed; the server is
+        // the execution authority and independently validates revision/turn.
+        autoNudgeLedgerRef.current.mark(scheduledTurnKey);
+        // A storage event can trail Emergency Stop all. Re-read its durable
+        // barrier on the line immediately before the transport handoff.
+        if (!getConfirmedAutoNudgeArming().confirmExecutionAuthorized()) return;
+        void api.orchestration.dispatchCommand(command).catch(() => {
+          if (autoNudgeContextKeyRef.current !== authority.contextKey) return;
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Auto Nudge was not dispatched",
+              description:
+                "This thread's saved authority changed or the environment became unavailable.",
+            }),
+          );
+        });
       },
     });
 
-    return () => cancelScheduledAutoNudge(false);
+    return () => {
+      cancelScheduledAutoNudge(false);
+    };
   }, [
     autoNudgeActivityRevision,
     autoNudgeEligible,
-    autoNudgePolicy.mode,
     autoNudgeTerminalTurnKey,
-    autoNudgeThreadRef,
     autoNudgeTimerController,
     cancelScheduledAutoNudge,
   ]);
@@ -5584,6 +6537,348 @@ export default function ChatView(props: ChatViewProps) {
     },
     [cancelScheduledAutoNudge],
   );
+
+  const configureActiveThreadAutoNudge = async (
+    values: AutoNudgeConfigureValues,
+    kind: "mode" | "background" | "prompt" | "limits",
+  ): Promise<void> => {
+    const targetThread = isServerThread ? activeThread : null;
+    const targetConfig = activeAutoNudgeConfig;
+    const targetContextKey = autoNudgeContextKey;
+    const api = targetThread ? readEnvironmentApi(targetThread.environmentId) : undefined;
+    if (!targetThread || !targetConfig || !targetContextKey || !api) {
+      if (autoNudgeContextKeyRef.current === targetContextKey) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Failed to save Auto Nudge",
+            description: "This thread's environment is not connected.",
+          }),
+        );
+      }
+      throw new Error("The thread environment is not connected.");
+    }
+    if (values.mode !== "off" && values.prompt.trim().length === 0) {
+      throw new Error("An enabled Auto Nudge configuration requires a prompt.");
+    }
+    if (values.mode !== "off" && !getConfirmedAutoNudgeArming().confirmExecutionAuthorized()) {
+      if (autoNudgeContextKeyRef.current === targetContextKey) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Emergency Stop all is active",
+            description:
+              "This thread was not enabled because the durable Emergency Stop barrier is active.",
+          }),
+        );
+      }
+      throw new Error("The durable Auto Nudge suppression barrier is active.");
+    }
+    if (autoNudgeWriteInFlightByScopeRef.current.has(targetContextKey)) {
+      throw new Error("An Auto Nudge configuration write is already pending for this thread.");
+    }
+
+    const generation = autoNudgeWriteGenerationRef.current + 1;
+    autoNudgeWriteGenerationRef.current = generation;
+    const pendingWrite = { kind, generation } as const;
+    autoNudgeWriteInFlightByScopeRef.current.set(targetContextKey, pendingWrite);
+    setAutoNudgePendingWrites((pending) => ({
+      ...pending,
+      [targetContextKey]: pendingWrite,
+    }));
+    const commonCommand = {
+      type: "thread.auto-nudge.configure" as const,
+      commandId: newCommandId(),
+      threadId: targetThread.id,
+      expectedAuthorityRevision: targetConfig.authorityRevision,
+      prompt: values.prompt,
+      maxRounds: values.maxRounds,
+      maxMinutes: values.maxMinutes,
+      createdAt: new Date().toISOString(),
+    };
+    const command =
+      values.mode === "off"
+        ? {
+            ...commonCommand,
+            mode: "off" as const,
+            backgroundContinuation: false as const,
+          }
+        : {
+            ...commonCommand,
+            mode: values.mode,
+            backgroundContinuation: values.backgroundContinuation,
+          };
+    try {
+      await api.orchestration.dispatchCommand(command);
+    } catch (error) {
+      if (
+        autoNudgeContextKeyRef.current === targetContextKey &&
+        autoNudgeWriteGenerationRef.current === generation
+      ) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Failed to save Auto Nudge",
+            description:
+              "This thread changed or became unavailable. Its previous Auto Nudge settings remain in effect.",
+          }),
+        );
+      }
+      throw error;
+    } finally {
+      if (
+        autoNudgeWriteInFlightByScopeRef.current.get(targetContextKey)?.generation === generation
+      ) {
+        autoNudgeWriteInFlightByScopeRef.current.delete(targetContextKey);
+      }
+      setAutoNudgePendingWrites((pending) => {
+        if (pending[targetContextKey]?.generation !== generation) return pending;
+        const { [targetContextKey]: _completed, ...remaining } = pending;
+        return remaining;
+      });
+    }
+  };
+
+  const onAutoNudgeModeChange = (mode: AutoNudgeMode): void => {
+    const config = activeAutoNudgeConfig;
+    if (!config) return;
+    if (mode === "off") {
+      // Turning execution off is cost-sensitive. Use the unconditional
+      // exact-thread Stop so a stale expected revision cannot leave it armed.
+      onStopAutoNudgeThread();
+      return;
+    }
+    cancelScheduledAutoNudge(false);
+    if (autoNudgeSuppressed) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Emergency Stop all is active",
+          description:
+            "Allow Auto Nudge again only after every known thread has been confirmed Off.",
+        }),
+      );
+      return;
+    }
+    const prompt =
+      config.prompt.trim().length === 0 ? (autoNudgePromptForMode(mode) ?? "") : config.prompt;
+    void configureActiveThreadAutoNudge(
+      {
+        mode,
+        prompt,
+        backgroundContinuation: config.backgroundContinuation,
+        maxRounds: config.maxRounds,
+        maxMinutes: config.maxMinutes,
+      },
+      "mode",
+    ).catch(() => undefined);
+  };
+
+  const onAutoNudgeBackgroundChange = (enabled: boolean): void => {
+    const config = activeAutoNudgeConfig;
+    if (!config || config.mode === "off") return;
+    if (!enabled) {
+      // There is no unconditional background-only revocation command. Stop
+      // the exact thread rather than risk a stale configure leaving paid
+      // background work active; foreground can be re-enabled explicitly.
+      onStopAutoNudgeThread();
+      return;
+    }
+    cancelScheduledAutoNudge(false);
+    if (autoNudgeSuppressed) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Emergency Stop all is active",
+          description:
+            "Background continuation cannot be enabled until every known thread is confirmed Off.",
+        }),
+      );
+      return;
+    }
+    void configureActiveThreadAutoNudge(
+      {
+        mode: config.mode,
+        prompt: config.prompt,
+        backgroundContinuation: true,
+        maxRounds: config.maxRounds,
+        maxMinutes: config.maxMinutes,
+      },
+      "background",
+    ).catch(() => undefined);
+  };
+
+  const onSaveAutoNudgePrompt = (prompt: string): Promise<void> => {
+    const config = activeAutoNudgeConfig;
+    if (!config) return Promise.reject(new Error("No persisted thread is active."));
+    // Emergency Stop all is an execution barrier. Prompt edits remain useful,
+    // but saving one while suppressed must never recreate execution authority.
+    const mode = autoNudgeSuppressed ? ("off" as const) : config.mode;
+    return configureActiveThreadAutoNudge(
+      {
+        mode,
+        prompt,
+        backgroundContinuation: mode === "off" ? false : config.backgroundContinuation,
+        maxRounds: config.maxRounds,
+        maxMinutes: config.maxMinutes,
+      },
+      "prompt",
+    );
+  };
+
+  const onSaveAutoNudgeLimits = (maxRounds: number, maxMinutes: number): Promise<void> => {
+    const config = activeAutoNudgeConfig;
+    if (!config) return Promise.reject(new Error("No persisted thread is active."));
+    // Limit edits are harmless while Emergency Stop all is latched, but they
+    // must not recreate execution authority. Persist them with this exact
+    // thread Off until the operator explicitly enables it again.
+    const mode = autoNudgeSuppressed ? ("off" as const) : config.mode;
+    return configureActiveThreadAutoNudge(
+      {
+        mode,
+        prompt: config.prompt,
+        backgroundContinuation: mode === "off" ? false : config.backgroundContinuation,
+        maxRounds,
+        maxMinutes,
+      },
+      "limits",
+    );
+  };
+
+  function onStopAutoNudgeThread(): void {
+    const targetThread = isServerThread ? activeThread : null;
+    const targetContextKey = autoNudgeContextKey;
+    const api = targetThread ? readEnvironmentApi(targetThread.environmentId) : undefined;
+    cancelScheduledAutoNudge(true);
+    autoNudgeWriteGenerationRef.current += 1;
+    setAutoNudgePendingWrites((pending) => {
+      if (!targetContextKey || pending[targetContextKey] === undefined) return pending;
+      const { [targetContextKey]: _stopped, ...remaining } = pending;
+      return remaining;
+    });
+    if (!targetThread || !targetContextKey || !api) {
+      if (autoNudgeContextKeyRef.current === targetContextKey) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Could not stop this thread",
+            description:
+              "Its environment is disconnected. Emergency Stop all remains available as a device-wide fail-closed barrier.",
+          }),
+        );
+      }
+      return;
+    }
+    const command = {
+      type: "thread.auto-nudge.stop" as const,
+      commandId: newCommandId(),
+      threadId: targetThread.id,
+      createdAt: new Date().toISOString(),
+    };
+    void api.orchestration.dispatchCommand(command).catch(() => {
+      if (autoNudgeContextKeyRef.current !== targetContextKey) return;
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Could not stop this thread",
+          description:
+            "The exact-thread Stop was not acknowledged. Retry when this environment is connected, or use Emergency Stop all.",
+        }),
+      );
+    });
+  }
+
+  const onEmergencyStopAllAutoNudge = (): void => {
+    cancelScheduledAutoNudge(true);
+    autoNudgeWriteGenerationRef.current += 1;
+    setAutoNudgePendingWrites({});
+    // The coordinator observes this durable, cross-renderer barrier and
+    // revokes every enabled server configuration. No project setting is used.
+    getConfirmedAutoNudgeArming().suppress();
+  };
+
+  const onAllowAutoNudgeAgain = (): void => {
+    const readClearBlocker = (): AutoNudgeClearBlocker | null => {
+      if (!hasSavedEnvironmentRegistryHydrated()) return "environment-unavailable";
+      // A configure RPC issued before Emergency Stop may not have reached the
+      // server yet. Even if every current shell says Off, clearing the latch
+      // before that RPC settles could expose authority that arrives later.
+      if (autoNudgeWriteInFlightByScopeRef.current.size > 0) return "configuration-pending";
+      const state = useStore.getState();
+      const shells = selectThreadShellsAcrossEnvironments(state);
+      const knownEnvironmentIds = new Set<EnvironmentId>();
+      const primaryEnvironment = readPrimaryEnvironmentDescriptor();
+      if (primaryEnvironment) knownEnvironmentIds.add(primaryEnvironment.environmentId);
+      for (const environment of listSavedEnvironmentRecords()) {
+        knownEnvironmentIds.add(environment.environmentId);
+      }
+      for (const shell of shells) {
+        knownEnvironmentIds.add(shell.environmentId);
+      }
+      for (const environmentId of knownEnvironmentIds) {
+        if (
+          !readEnvironmentApi(environmentId) ||
+          !selectEnvironmentState(state, environmentId).bootstrapComplete
+        ) {
+          return "environment-unavailable";
+        }
+      }
+      return shells.some((shell) => shell.autoNudge.mode !== "off") ? "thread-enabled" : null;
+    };
+    const blockerAtClick = readClearBlocker();
+    if (blockerAtClick) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Still stopping Auto Nudge threads",
+          description: autoNudgeClearBlockerDescription(blockerAtClick),
+        }),
+      );
+      return;
+    }
+
+    const stillStoppingError = new Error("Known Auto Nudge threads are not confirmed Off.");
+    let blockerBeforeClear: AutoNudgeClearBlocker | null = null;
+    void getConfirmedAutoNudgeArming()
+      .arm({
+        persistEnabled: async () => {
+          // Re-read connectivity, hydration, and every shell immediately
+          // before the arming helper clears its durable latch. An offline
+          // environment may still hold enabled authority that this renderer
+          // cannot see, and revocations can arrive after the click.
+          blockerBeforeClear = readClearBlocker();
+          if (blockerBeforeClear) throw stillStoppingError;
+        },
+        start: () => undefined,
+        clearSuppression: true,
+      })
+      .then((cleared) => {
+        if (cleared) return;
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Auto Nudge remains stopped",
+            description:
+              "The durable Emergency Stop barrier could not be cleared safely. Retry after checking this device's storage and thread connections.",
+          }),
+        );
+      })
+      .catch((error) => {
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title:
+              error === stillStoppingError
+                ? "Still stopping Auto Nudge threads"
+                : "Auto Nudge remains stopped",
+            description:
+              error === stillStoppingError && blockerBeforeClear
+                ? autoNudgeClearBlockerDescription(blockerBeforeClear)
+                : "The durable Emergency Stop barrier could not be cleared safely.",
+          }),
+        );
+      });
+  };
 
   const onSteer = async (e?: { preventDefault: () => void }) => {
     e?.preventDefault();
@@ -5608,27 +6903,64 @@ export default function ChatView(props: ChatViewProps) {
       imageCount: snapshot.images.length,
     });
     if (!hasSendableContent) return;
+    updateManualStopBarrier(activeThread.environmentId, activeThread.id, null);
     const delivery = decideFollowUpDelivery({
       phase: followUpQueuePhase,
       requestedSteer: true,
       liveSteerSupported: activeProviderLiveSteerAvailable,
     });
-    if (delivery === "send") {
-      await onSend(e);
-      return;
-    }
-    if (delivery === "queue") {
+    if (
+      shouldQueueOperatorFollowUp({
+        delivery,
+        hasEarlierManualFollowUp: hasEarlierManualFollowUpForActiveThread,
+      })
+    ) {
       pinTimelineToEndForLocalMessage();
       enqueueFollowUpSnapshot(snapshot);
+      return;
+    }
+    if (delivery === "send") {
+      await onSend(e);
       return;
     }
     await dispatchSteerSnapshot(snapshot);
   };
 
   const onToggleFollowUpQueueItem = (itemId: string) => {
-    if (!activeThreadId) return;
+    if (!activeFollowUpThreadKey) return;
+    const projectedItem = activeProjectedManualFollowUps.find((item) => item.id === itemId);
+    if (projectedItem) {
+      const localItem = activeLocalFollowUps.find((item) => item.id === itemId);
+      const projectedText =
+        projectedItem.status === "reserving"
+          ? (localItem?.promptText ?? "")
+          : projectedItem.message.text;
+      const projectedAttachmentCount =
+        projectedItem.status === "reserving"
+          ? (localItem?.images.length ?? 0)
+          : projectedItem.message.attachments.length;
+      const canExpand = canExpandQueuedFollowUpText(projectedText) || projectedAttachmentCount > 0;
+      setExpandedDurableManualFollowUpIds((existing) => {
+        if (!canExpand) {
+          if (!existing.has(projectedItem.id)) {
+            return existing;
+          }
+          const next = new Set(existing);
+          next.delete(projectedItem.id);
+          return next;
+        }
+        const next = new Set(existing);
+        if (next.has(projectedItem.id)) {
+          next.delete(projectedItem.id);
+        } else {
+          next.add(projectedItem.id);
+        }
+        return next;
+      });
+      return;
+    }
     setFollowUpQueueByThreadId((existing) => {
-      const current = existing[activeThreadId] ?? EMPTY_FOLLOW_UP_QUEUE;
+      const current = existing[activeFollowUpThreadKey] ?? EMPTY_FOLLOW_UP_QUEUE;
       if (current.length === 0) return existing;
       let changed = false;
       const nextItems: FollowUpQueueItem[] = [];
@@ -5637,7 +6969,7 @@ export default function ChatView(props: ChatViewProps) {
           nextItems.push(item);
           continue;
         }
-        if (!canExpandQueuedFollowUpText(item.promptText)) {
+        if (!canExpandQueuedFollowUpText(item.promptText) && item.images.length === 0) {
           changed = changed || item.expanded;
           nextItems.push({ ...item, expanded: false });
           continue;
@@ -5651,7 +6983,7 @@ export default function ChatView(props: ChatViewProps) {
       if (!changed) return existing;
       return {
         ...existing,
-        [activeThreadId]: nextItems,
+        [activeFollowUpThreadKey]: nextItems,
       };
     });
   };
@@ -5662,6 +6994,7 @@ export default function ChatView(props: ChatViewProps) {
     }
     const pendingSteers = pendingSteerDispatchesForThread(
       pendingSteerDispatchByMessageIdRef.current,
+      thread.environmentId,
       thread.id,
     );
     if (pendingSteers.length === 0) {
@@ -5678,7 +7011,7 @@ export default function ChatView(props: ChatViewProps) {
     };
     updatePendingSteerInterruptRecoveries((current) => ({
       ...current,
-      [thread.id]: recovery,
+      [followUpThreadMapKey(thread.environmentId, thread.id)]: recovery,
     }));
     recordFollowUpQueueDebugAttempt("pending-steer-interrupt", "armed", {
       threadId: thread.id,
@@ -5686,10 +7019,41 @@ export default function ChatView(props: ChatViewProps) {
   };
 
   const onActivateFollowUpQueueItem = (itemId: string) => {
-    if (!activeThreadId) return;
-    const item = followUpQueueByThreadIdRef.current[activeThreadId]?.find(
-      (entry) => entry.id === itemId,
-    );
+    if (!activeThread || !activeFollowUpThreadKey) return;
+    const projectedHead = activeProjectedManualFollowUps[0] ?? null;
+    if (projectedHead !== null) {
+      if (projectedHead.id !== itemId) {
+        recordFollowUpQueueDebugAttempt("manual-activate", "earlier-follow-up-has-priority", {
+          threadId: activeThreadId,
+          itemId,
+        });
+        return;
+      }
+      if (followUpQueueAction === "wait") {
+        recordFollowUpQueueDebugAttempt("manual-activate", "queued-follow-up-not-ready", {
+          threadId: activeThread.id,
+          itemId,
+        });
+        return;
+      }
+      void dispatchProjectedManualFollowUp(
+        activeThread,
+        projectedHead,
+        "manual-activate",
+        "operator",
+      );
+      return;
+    }
+    const activeQueue =
+      followUpQueueByThreadIdRef.current[activeFollowUpThreadKey] ?? EMPTY_FOLLOW_UP_QUEUE;
+    if (!isQueuedFollowUpHead(activeQueue, itemId)) {
+      recordFollowUpQueueDebugAttempt("manual-activate", "earlier-follow-up-has-priority", {
+        threadId: activeThreadId,
+        itemId,
+      });
+      return;
+    }
+    const item = activeQueue[0];
     if (!item) return;
     if (item.blockedReason !== null) {
       recordFollowUpQueueDebugAttempt("manual-activate", "queued-follow-up-blocked", {
@@ -5699,6 +7063,9 @@ export default function ChatView(props: ChatViewProps) {
       return;
     }
 
+    // Clicking a specific queued row is explicit delivery intent and is the
+    // renderer equivalent of upstream's interrupt-and-submit path.
+    updateManualStopBarrier(item.environmentId, item.threadId, null);
     const action = decideQueuedFollowUpAction({
       phase: followUpQueuePhase,
       liveSteerAvailable: activeProviderLiveSteerAvailable,
@@ -5739,23 +7106,78 @@ export default function ChatView(props: ChatViewProps) {
     });
   };
 
+  const requestLocalManualFollowUpCancellation = (item: FollowUpQueueItem): void => {
+    const itemKey = manualFollowUpMapKey(item.environmentId, item.threadId, item.id);
+    manualFollowUpCancellationRequestedKeysRef.current.add(itemKey);
+    if (
+      manualFollowUpCancellationRetryAfterMsRef.current.get(itemKey) === Number.POSITIVE_INFINITY
+    ) {
+      manualFollowUpCancellationRetryAfterMsRef.current.delete(itemKey);
+    }
+    setLocalManualFollowUpBlockedReason(
+      item.environmentId,
+      item.threadId,
+      item.id,
+      "Cancelling this queued follow-up…",
+    );
+    setManualFollowUpUiRevision((revision) => revision + 1);
+
+    if (manualFollowUpDurablyReservedKeysRef.current.has(itemKey)) {
+      void dispatchManualFollowUpCancellation(item.environmentId, item.threadId, item.id);
+      return;
+    }
+    const reserveMayHaveCommitted =
+      manualFollowUpEnqueueInFlightIdsRef.current.has(item.id) ||
+      item.enqueueRetryAfterMs > 0 ||
+      item.enqueueStatus === "reserving" ||
+      item.enqueueStatus === "reserved" ||
+      item.enqueueStatus === "submitting" ||
+      item.enqueueStatus === "acknowledged";
+    if (reserveMayHaveCommitted) {
+      // The stable reserve command must settle before cancellation is sent.
+      // Its dispatcher observes the cancellation request after every awaited
+      // stage and skips payload serialization whenever possible.
+      return;
+    }
+
+    // This item has never crossed the server boundary (or reserve was
+    // definitively rejected), so removing only the local queue copy is safe.
+    manualFollowUpCancellationRequestedKeysRef.current.delete(itemKey);
+    manualFollowUpCancellationCommandsRef.current.delete(itemKey);
+    manualFollowUpCancellationRetryAfterMsRef.current.delete(itemKey);
+    removeFollowUpQueueItem(item.environmentId, item.threadId, item.id, true);
+  };
+
   const onRemoveFollowUpQueueItem = (itemId: string) => {
-    if (!activeThreadId) return;
-    removeFollowUpQueueItem(activeThreadId, itemId, true);
+    if (!activeThread) return;
+    const projectedItem = activeProjectedManualFollowUps.find((item) => item.id === itemId);
+    if (projectedItem) {
+      void cancelProjectedManualFollowUp(activeThread, projectedItem);
+      return;
+    }
+    const localItem = activeLocalFollowUps.find((item) => item.id === itemId);
+    if (localItem) {
+      requestLocalManualFollowUpCancellation(localItem);
+    }
   };
 
   const onClearFollowUpQueue = () => {
-    if (!activeThreadId) return;
-    const current = followUpQueueByThreadIdRef.current[activeThreadId] ?? EMPTY_FOLLOW_UP_QUEUE;
+    if (!activeThread || !activeFollowUpThreadKey) return;
+    const current =
+      followUpQueueByThreadIdRef.current[activeFollowUpThreadKey] ?? EMPTY_FOLLOW_UP_QUEUE;
     for (const item of current) {
-      revokeQueuedFollowUpPreviewUrls(item);
+      requestLocalManualFollowUpCancellation(item);
     }
-    setFollowUpQueueByThreadId((existing) => {
-      if (!(activeThreadId in existing)) return existing;
-      const next = { ...existing };
-      delete next[activeThreadId];
-      return next;
-    });
+    const cancelableProjectedItems = activeProjectedManualFollowUps.filter(
+      (item) => item.status !== "handoff",
+    );
+    if (cancelableProjectedItems.length > 0) {
+      void (async () => {
+        for (const item of cancelableProjectedItems) {
+          await cancelProjectedManualFollowUp(activeThread, item);
+        }
+      })();
+    }
   };
 
   const tryDispatchNextQueuedFollowUp = useCallback(
@@ -5765,15 +7187,54 @@ export default function ChatView(props: ChatViewProps) {
         (total, items) => total + items.length,
         0,
       );
-      if (queuedCount === 0) {
-        recordFollowUpQueueDebugAttempt(source, "queue-empty");
-        return false;
+      const nowMs = Date.now();
+      for (const item of Object.values(queuesByThreadId).flat()) {
+        const itemKey = manualFollowUpMapKey(item.environmentId, item.threadId, item.id);
+        if (
+          manualFollowUpCancellationRequestedKeysRef.current.has(itemKey) &&
+          manualFollowUpDurablyReservedKeysRef.current.has(itemKey) &&
+          !manualFollowUpCancellationInFlightKeysRef.current.has(itemKey) &&
+          (manualFollowUpCancellationRetryAfterMsRef.current.get(itemKey) ?? 0) <= nowMs
+        ) {
+          void dispatchManualFollowUpCancellationRef.current?.(
+            item.environmentId,
+            item.threadId,
+            item.id,
+          );
+          return true;
+        }
+      }
+      for (const thread of allThreads) {
+        const item = thread.manualFollowUps.find((entry) => {
+          const itemKey = manualFollowUpMapKey(thread.environmentId, thread.id, entry.id);
+          return (
+            entry.status !== "handoff" &&
+            manualFollowUpCancellationRequestedKeysRef.current.has(itemKey) &&
+            !manualFollowUpCancellationInFlightKeysRef.current.has(itemKey) &&
+            (manualFollowUpCancellationRetryAfterMsRef.current.get(itemKey) ?? 0) <= nowMs
+          );
+        });
+        if (item) {
+          void dispatchManualFollowUpCancellationRef.current?.(
+            thread.environmentId,
+            thread.id,
+            item.id,
+          );
+          return true;
+        }
       }
 
-      const candidate = selectQueuedFollowUpDispatchCandidate<ThreadId, FollowUpQueueItem>({
+      const candidate = selectQueuedFollowUpDispatchCandidate<string, FollowUpQueueItem>({
         queuesByThreadId,
-        preferredThreadId: activeThreadId,
+        preferredThreadId: activeFollowUpThreadKey,
         canStart: ({ item, queueLength }) => {
+          if (
+            item.enqueueStatus !== "pending" ||
+            item.enqueueRetryAfterMs > Date.now() ||
+            manualFollowUpEnqueueInFlightIdsRef.current.has(item.id)
+          ) {
+            return false;
+          }
           const queuedThread = resolveQueuedFollowUpThread(item);
           if (!queuedThread) {
             return false;
@@ -5784,39 +7245,117 @@ export default function ChatView(props: ChatViewProps) {
             activeTurnId: queuedThread.session?.activeTurnId ?? null,
             sessionUpdatedAt: queuedThread.session?.updatedAt ?? null,
           });
-          return canStartQueuedFollowUpTurn({
+          return canAutoStartQueuedFollowUpTurn({
             queueLength,
-            firstItemBlocked: item.blockedReason != null,
-            isWorking: queuedPhase === "running",
+            firstItemBlocked: false,
+            // This command only persists the operator's intent. It must be
+            // durable while the provider is still working; activation below
+            // remains responsible for the safe start-or-steer boundary.
+            isWorking: false,
             isConnecting: queuedPhase === "connecting",
             isEnvironmentUnavailable: isThreadEnvironmentUnavailable(queuedThread),
             isDispatchInFlight:
               queueDispatchInFlightRef.current ||
-              queuedFollowUpPendingDispatchByThreadIdRef.current[item.threadId] !== undefined,
+              queuedFollowUpPendingDispatchByThreadIdRef.current[
+                followUpThreadMapKey(item.environmentId, item.threadId)
+              ] !== undefined,
+            manualStopBarrierActive:
+              manualStopBarrierByThreadKeyRef.current[
+                followUpThreadMapKey(item.environmentId, item.threadId)
+              ] !== undefined,
           });
         },
       });
-      if (!candidate) {
-        recordFollowUpQueueDebugAttempt(source, "no-dispatchable-queued-thread");
-        return false;
-      }
-      const dispatchFollowUpTurnStart = dispatchFollowUpTurnStartRef.current;
-      if (dispatchFollowUpTurnStart === null) {
-        recordFollowUpQueueDebugAttempt(source, "dispatch-ref-missing", {
-          threadId: candidate.threadId,
+      if (candidate) {
+        const dispatchFollowUpTurnStart = dispatchFollowUpTurnStartRef.current;
+        if (dispatchFollowUpTurnStart === null) {
+          recordFollowUpQueueDebugAttempt(source, "dispatch-ref-missing", {
+            threadId: candidate.item.threadId,
+            itemId: candidate.item.id,
+          });
+          return false;
+        }
+        recordFollowUpQueueDebugAttempt(source, "dispatch-started", {
+          threadId: candidate.item.threadId,
           itemId: candidate.item.id,
         });
-        return false;
+        void dispatchFollowUpTurnStart(candidate.item);
+        return true;
       }
-      recordFollowUpQueueDebugAttempt(source, "dispatch-started", {
-        threadId: candidate.threadId,
-        itemId: candidate.item.id,
-      });
-      void dispatchFollowUpTurnStart(candidate.item);
-      return true;
+
+      const orderedThreads = activeThread
+        ? [
+            activeThread,
+            ...allThreads.filter(
+              (thread) =>
+                thread.environmentId !== activeThread.environmentId ||
+                thread.id !== activeThread.id,
+            ),
+          ]
+        : allThreads;
+      for (const queuedThread of orderedThreads) {
+        const item = queuedThread.manualFollowUps[0];
+        if (!item || item.status !== "queued") {
+          continue;
+        }
+        const itemKey = manualFollowUpMapKey(queuedThread.environmentId, queuedThread.id, item.id);
+        if (
+          manualFollowUpActivationInFlightKeysRef.current.has(itemKey) ||
+          pendingManualFollowUpCancellationKeysRef.current.has(itemKey)
+        ) {
+          continue;
+        }
+        const queuedPhase = resolveFollowUpQueuePhase({
+          phase: derivePhase(queuedThread.session),
+          latestTurn: queuedThread.latestTurn,
+          activeTurnId: queuedThread.session?.activeTurnId ?? null,
+          sessionUpdatedAt: queuedThread.session?.updatedAt ?? null,
+        });
+        // Enter stages durable operator intent. While a turn is active only an
+        // explicit click on Steer may activate it; otherwise this state-change
+        // effect consumes the queue immediately and erases the operator's
+        // review/chaining window. Automatic FIFO draining resumes after the
+        // active turn settles, still ahead of Auto Nudge.
+        if (
+          !canAutomaticallyActivateQueuedFollowUp(queuedPhase, {
+            manualStopBarrierActive:
+              manualStopBarrierByThreadKeyRef.current[
+                followUpThreadMapKey(queuedThread.environmentId, queuedThread.id)
+              ] !== undefined,
+          })
+        ) {
+          continue;
+        }
+        if (queuedPhase === "connecting" || isThreadEnvironmentUnavailable(queuedThread)) {
+          continue;
+        }
+        const dispatchProjectedManualFollowUp = dispatchProjectedManualFollowUpRef.current;
+        if (dispatchProjectedManualFollowUp === null) {
+          recordFollowUpQueueDebugAttempt(source, "durable-dispatch-ref-missing", {
+            threadId: queuedThread.id,
+            itemId: item.id,
+          });
+          return false;
+        }
+        void dispatchProjectedManualFollowUp(
+          queuedThread,
+          item,
+          source,
+          "automatic-after-settlement",
+        );
+        return true;
+      }
+
+      recordFollowUpQueueDebugAttempt(
+        source,
+        queuedCount === 0 ? "queue-empty" : "no-dispatchable-queued-thread",
+      );
+      return false;
     },
     [
-      activeThreadId,
+      activeFollowUpThreadKey,
+      activeThread,
+      allThreads,
       isThreadEnvironmentUnavailable,
       recordFollowUpQueueDebugAttempt,
       resolveQueuedFollowUpThread,
@@ -5847,6 +7386,12 @@ export default function ChatView(props: ChatViewProps) {
     const api = readEnvironmentApi(environmentId);
     if (!api || !activeThread) return;
     const turnId = activeThread.session?.activeTurnId ?? undefined;
+    updateManualStopBarrier(activeThread.environmentId, activeThread.id, {
+      environmentId: activeThread.environmentId,
+      threadId: activeThread.id,
+      interruptedTurnId: turnId ?? activeThread.latestTurn?.turnId ?? null,
+      requestedAt: new Date().toISOString(),
+    });
     armPendingSteerInterruptRecovery(activeThread);
     try {
       await api.orchestration.dispatchCommand({
@@ -5857,12 +7402,13 @@ export default function ChatView(props: ChatViewProps) {
         createdAt: new Date().toISOString(),
       });
     } catch (error) {
+      const activeRecoveryKey = followUpThreadMapKey(activeThread.environmentId, activeThread.id);
       updatePendingSteerInterruptRecoveries((current) => {
-        if (!(activeThread.id in current)) {
+        if (!(activeRecoveryKey in current)) {
           return current;
         }
         const next = { ...current };
-        delete next[activeThread.id];
+        delete next[activeRecoveryKey];
         return next;
       });
       setThreadError(
@@ -6426,100 +7972,6 @@ export default function ChatView(props: ChatViewProps) {
     void onRevertToTurnCountRef.current(targetTurnCount);
   }, []);
 
-  const changeAutoNudgeMode = (mode: AutoNudgeThreadPolicy["mode"]) => {
-    if (!autoNudgeThreadRef) return;
-    cancelScheduledAutoNudge(mode === "off");
-    void runAutoNudgeMutation(() => {
-      const policyStore = getAutoNudgeThreadPolicyStore();
-      const controller = getBackgroundAutoNudgeController();
-      policyStore.reloadFromStorage();
-      controller.reloadFromStorage();
-      const policy = policyStore.setPolicy(autoNudgeThreadRef, { mode });
-      if (mode === "off") {
-        controller.stop(autoNudgeThreadRef, "Auto Nudge was turned off for this thread.");
-      } else {
-        controller.synchronizePolicy(autoNudgeThreadRef, policy);
-      }
-    });
-  };
-  const changeAutoNudgeLimits = (
-    patch: Pick<Partial<AutoNudgeThreadPolicy>, "maxRounds" | "maxMinutes">,
-  ) => {
-    if (!autoNudgeThreadRef) return;
-    void runAutoNudgeMutation(() => {
-      const policyStore = getAutoNudgeThreadPolicyStore();
-      const controller = getBackgroundAutoNudgeController();
-      policyStore.reloadFromStorage();
-      controller.reloadFromStorage();
-      const policy = policyStore.setPolicy(autoNudgeThreadRef, patch);
-      controller.synchronizePolicy(autoNudgeThreadRef, policy);
-    });
-  };
-  const changeAutoNudgeBackground = (enabled: boolean) => {
-    if (!autoNudgeThreadRef || !activeThread || !isServerThread) return;
-    cancelScheduledAutoNudge(false);
-    void runAutoNudgeMutation(() => {
-      const policyStore = getAutoNudgeThreadPolicyStore();
-      const controller = getBackgroundAutoNudgeController();
-      policyStore.reloadFromStorage();
-      controller.reloadFromStorage();
-      const previousOwner = controller.getSnapshot().owner;
-      if (enabled) {
-        if (
-          previousOwner &&
-          (previousOwner.environmentId !== autoNudgeThreadRef.environmentId ||
-            previousOwner.threadId !== autoNudgeThreadRef.threadId)
-        ) {
-          policyStore.setPolicy(previousOwner, { backgroundContinuation: false });
-        }
-        const policy = policyStore.setPolicy(autoNudgeThreadRef, {
-          backgroundContinuation: true,
-        });
-        if (!controller.start(autoNudgeThreadRef, autoNudgeLatestUserMessageAt, policy)) return;
-        if (autoNudgeHasPendingWork) {
-          controller.pause(autoNudgeThreadRef, "Queued work or operator attention is pending.");
-        }
-        return;
-      }
-      policyStore.setPolicy(autoNudgeThreadRef, { backgroundContinuation: false });
-      controller.stop(autoNudgeThreadRef, "Background continuation stopped by the operator.");
-    });
-  };
-  const pauseAutoNudgeBackground = () => {
-    if (!autoNudgeThreadRef) return;
-    void runAutoNudgeMutation(() => {
-      const controller = getBackgroundAutoNudgeController();
-      controller.reloadFromStorage();
-      controller.pause(autoNudgeThreadRef, "Paused by the operator.");
-    });
-  };
-  const resumeAutoNudgeBackground = () => {
-    if (!autoNudgeThreadRef) return;
-    void runAutoNudgeMutation(() => {
-      const policyStore = getAutoNudgeThreadPolicyStore();
-      const controller = getBackgroundAutoNudgeController();
-      policyStore.reloadFromStorage();
-      controller.reloadFromStorage();
-      controller.synchronizePolicy(autoNudgeThreadRef, policyStore.getPolicy(autoNudgeThreadRef));
-      controller.resume(autoNudgeThreadRef);
-    });
-  };
-  const stopAutoNudge = () => {
-    if (!autoNudgeThreadRef) return;
-    cancelScheduledAutoNudge(true);
-    void runAutoNudgeMutation(() => {
-      const policyStore = getAutoNudgeThreadPolicyStore();
-      const controller = getBackgroundAutoNudgeController();
-      policyStore.reloadFromStorage();
-      controller.reloadFromStorage();
-      policyStore.setPolicy(autoNudgeThreadRef, {
-        mode: "off",
-        backgroundContinuation: false,
-      });
-      controller.stop(autoNudgeThreadRef, "Auto Nudge stopped by the operator.");
-    });
-  };
-
   // Empty state: no active thread
   if (!activeThread) {
     return <NoActiveThreadState />;
@@ -6533,6 +7985,7 @@ export default function ChatView(props: ChatViewProps) {
         "group/chat-view flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden bg-background",
         localMediaBackgroundEffective && "bg-background/55 backdrop-blur-[1px]",
       )}
+      data-chat-presentation={isMobile ? "mobile" : "desktop"}
     >
       {/* Top bar — hidden while the mobile composer has the on-screen keyboard
           open (data attribute set by ChatComposer) to maximize vertical room. */}
@@ -6542,11 +7995,16 @@ export default function ChatView(props: ChatViewProps) {
           "border-b border-border group-has-[[data-chat-composer-keyboard-open=true]]/chat-view:hidden",
           isElectron
             ? cn(
-                "drag-region flex h-[52px] items-center px-3 sm:px-5 wco:h-[env(titlebar-area-height)]",
+                "drag-region flex h-[52px] items-center px-3 wco:h-[env(titlebar-area-height)]",
+                !isMobile && "sm:px-5",
                 reserveTitleBarControlInset &&
                   "wco:pr-[calc(100vw-env(titlebar-area-width)-env(titlebar-area-x)+1em)]",
               )
-            : "pb-2 pl-[calc(env(safe-area-inset-left)+0.75rem)] pr-[calc(env(safe-area-inset-right)+0.75rem)] pt-2 sm:pb-3 sm:pl-[calc(env(safe-area-inset-left)+1.25rem)] sm:pr-[calc(env(safe-area-inset-right)+1.25rem)] sm:pt-3",
+            : cn(
+                "pb-2 pl-[calc(env(safe-area-inset-left)+0.75rem)] pr-[calc(env(safe-area-inset-right)+0.75rem)] pt-2",
+                !isMobile &&
+                  "sm:pb-3 sm:pl-[calc(env(safe-area-inset-left)+1.25rem)] sm:pr-[calc(env(safe-area-inset-right)+1.25rem)] sm:pt-3",
+              ),
         )}
       >
         <ChatHeader
@@ -6585,6 +8043,13 @@ export default function ChatView(props: ChatViewProps) {
         <div className="@container/chat-column flex min-h-0 min-w-0 flex-1 flex-col">
           {/* Messages Wrapper */}
           <div ref={registerChatAnchor} className="relative flex min-h-0 flex-1 flex-col">
+            {activeProject ? (
+              <ProjectTelemetryGraph
+                environmentId={activeProject.environmentId}
+                projectId={activeProject.id}
+                projectName={activeProject.name}
+              />
+            ) : null}
             {/* Messages — LegendList handles virtualization and scrolling internally */}
             <MessagesTimeline
               key={activeThread.id}
@@ -6638,49 +8103,44 @@ export default function ChatView(props: ChatViewProps) {
           <div
             data-chat-input-bar="true"
             className={cn(
-              "pl-[calc(env(safe-area-inset-left)+0.75rem)] pr-[calc(env(safe-area-inset-right)+0.75rem)] pt-1.5 sm:pl-[calc(env(safe-area-inset-left)+1.25rem)] sm:pr-[calc(env(safe-area-inset-right)+1.25rem)] sm:pt-2",
+              "pl-[calc(env(safe-area-inset-left)+0.75rem)] pr-[calc(env(safe-area-inset-right)+0.75rem)] pt-1.5",
+              !isMobile &&
+                "sm:pl-[calc(env(safe-area-inset-left)+1.25rem)] sm:pr-[calc(env(safe-area-inset-right)+1.25rem)] sm:pt-2",
               // NOTE: intentionally NOT adding env(safe-area-inset-bottom) here.
               // Mobile browsers (e.g. Firefox Android) already exclude the system
               // nav bar from the viewport yet still report a non-zero
               // safe-area-inset-bottom, so adding it inserts ~48px of phantom empty
               // space below the composer. On desktop the inset is 0, so this is
               // identical to the previous behavior there.
-              isGitRepo ? "pb-1" : "pb-3 sm:pb-4",
+              isGitRepo ? "pb-1" : cn("pb-3", !isMobile && "sm:pb-4"),
             )}
           >
             <div className="relative isolate">
               <ComposerBannerStack className="relative z-0" items={composerBannerItems} />
               <div className="relative z-10">
                 <AutoNudgeControl
-                  mode={autoNudgePolicy.mode}
+                  mode={autoNudgeMode}
                   countdownSeconds={autoNudgeCountdownSeconds}
-                  disabled={!isServerThread}
-                  backgroundEnabled={
-                    backgroundAutoNudgeState.owner !== null && !backgroundAutoNudgeOwnerForRoute
-                  }
-                  backgroundDispatchSupported={supportsAutoNudgeExecutionLock()}
-                  backgroundOwnedByThisThread={backgroundAutoNudgeOwnerForRoute}
-                  backgroundStatus={backgroundAutoNudgeState.status}
-                  backgroundRounds={backgroundAutoNudgeState.sentRounds}
-                  backgroundMaxRounds={autoNudgePolicy.maxRounds}
-                  backgroundMaxMinutes={autoNudgePolicy.maxMinutes}
-                  backgroundReason={backgroundAutoNudgeState.reason}
-                  backgroundLedger={
-                    backgroundAutoNudgeLastOwnerForRoute
-                      ? backgroundAutoNudgeState.ledger.filter(
-                          (entry) =>
-                            entry.owner?.environmentId === autoNudgeThreadRef?.environmentId &&
-                            entry.owner?.threadId === autoNudgeThreadRef?.threadId,
-                        )
-                      : []
-                  }
-                  onModeChange={changeAutoNudgeMode}
-                  onMaxRoundsChange={(maxRounds) => changeAutoNudgeLimits({ maxRounds })}
-                  onMaxMinutesChange={(maxMinutes) => changeAutoNudgeLimits({ maxMinutes })}
-                  onBackgroundChange={changeAutoNudgeBackground}
-                  onPauseBackground={pauseAutoNudgeBackground}
-                  onResumeBackground={resumeAutoNudgeBackground}
-                  onStop={stopAutoNudge}
+                  disabled={!isServerThread || !activeAutoNudgeConfig}
+                  arming={autoNudgeArming}
+                  backgroundEnabled={activeAutoNudgeConfig?.backgroundContinuation ?? false}
+                  roundsDispatched={activeAutoNudgeConfig?.roundsDispatched ?? 0}
+                  maxRounds={activeAutoNudgeConfig?.maxRounds ?? 5}
+                  maxMinutes={activeAutoNudgeConfig?.maxMinutes ?? 30}
+                  globallySuppressed={autoNudgeSuppressed}
+                  promptScopeKey={autoNudgeContextKey ?? routeThreadKey}
+                  persistedPrompt={activeAutoNudgeConfig?.prompt ?? ""}
+                  promptMaxLength={THREAD_AUTO_NUDGE_PROMPT_MAX_CHARS}
+                  promptSaving={autoNudgePendingWrite?.kind === "prompt"}
+                  promptEditable={Boolean(isServerThread && activeAutoNudgeConfig)}
+                  onSavePrompt={onSaveAutoNudgePrompt}
+                  limitsSaving={autoNudgePendingWrite?.kind === "limits"}
+                  onSaveLimits={onSaveAutoNudgeLimits}
+                  onModeChange={onAutoNudgeModeChange}
+                  onBackgroundChange={onAutoNudgeBackgroundChange}
+                  onStop={onStopAutoNudgeThread}
+                  onEmergencyStopAll={onEmergencyStopAllAutoNudge}
+                  onAllowAutoNudgeAgain={onAllowAutoNudgeAgain}
                 />
                 <ChatComposer
                   composerRef={composerRef}
@@ -6714,6 +8174,7 @@ export default function ChatView(props: ChatViewProps) {
                   sidebarProposedPlan={sidebarProposedPlan as { turnId?: TurnId } | null}
                   planSidebarLabel="Plan / Workflow"
                   planSidebarOpen={shouldRenderPlanSidebar}
+                  goalControlsSupported={goalControlsSupported}
                   runtimeMode={runtimeMode}
                   interactionMode={interactionMode}
                   lockedProvider={lockedProvider}
@@ -6756,7 +8217,7 @@ export default function ChatView(props: ChatViewProps) {
                   handleRuntimeModeChange={handleRuntimeModeChange}
                   handleInteractionModeChange={handleInteractionModeChange}
                   togglePlanSidebar={togglePlanSidebar}
-                  focusComposer={focusComposer}
+                  onOpenGoalDialog={openThreadGoalDialog}
                   scheduleComposerFocus={scheduleComposerFocus}
                   onManualActivity={recordManualAutoNudgeActivity}
                   setThreadError={setThreadError}
@@ -6863,6 +8324,25 @@ export default function ChatView(props: ChatViewProps) {
         environmentId={environmentId}
         workspaceRoot={activeWorkspaceRoot}
       />
+      {activeThread && goalControlsSupported ? (
+        <ThreadGoalDialog
+          open={threadGoalDialog.open}
+          requestRevision={threadGoalDialog.revision}
+          mode={threadGoalDialog.mode}
+          seedObjective={threadGoalDialog.seedObjective}
+          confirmReplacement={threadGoalDialog.confirmReplacement}
+          goal={activeThread.goal ?? null}
+          activeTurnStartedAt={activeThread.latestTurn?.startedAt ?? null}
+          isTurnRunning={phase === "running"}
+          onOpenChange={(open) => {
+            if (!open) {
+              closeThreadGoalDialog();
+            }
+          }}
+          onSetGoal={setThreadGoal}
+          onClearGoal={clearThreadGoal}
+        />
+      ) : null}
     </div>
   );
 }

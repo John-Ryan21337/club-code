@@ -1,4 +1,8 @@
+# During playback, YouTube videos that are unavailable or disallow embedding are skipped automatically.
 https://www.youtube.com/watch?v=VGG0coMYaRQ
+https://www.youtube.com/watch?v=WiUdWyyvmpQ
+https://www.youtube.com/watch?v=WrlgWG29Sbg
+https://www.youtube.com/watch?v=vpmP8fWSJlE
 https://www.youtube.com/watch?v=2javfeqlYAU
 https://www.youtube.com/watch?v=3fRncVSb_YA
 https://www.youtube.com/watch?v=6Htm_Fjo7f0
@@ -18,3 +22,11 @@ https://www.youtube.com/watch?v=lC2wFbKcqn8
 https://www.youtube.com/watch?v=oWBzvf_VA6I
 https://www.youtube.com/watch?v=5Ow3J0pFMBY
 https://www.youtube.com/watch?v=tSXgGt9QZw4
+https://www.youtube.com/watch?v=VVykIWJp2ws
+https://www.youtube.com/watch?v=-WV4ehwSf-A
+https://www.youtube.com/watch?v=ugiugMgIiZw
+https://www.youtube.com/watch?v=4GuTKWZY-o8
+https://www.youtube.com/watch?v=URAYf4QnCM0
+https://www.youtube.com/watch?v=64IMBBZJnR4
+https://www.youtube.com/watch?v=w_x3DaZAGAg
+https://www.youtube.com/watch?v=e1SArILAHPw

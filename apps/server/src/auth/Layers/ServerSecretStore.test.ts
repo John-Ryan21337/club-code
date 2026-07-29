@@ -109,7 +109,7 @@ const ConcurrentReadMissFileSystemLayer = Layer.effect(
     return {
       ...fileSystem,
       readFile: (path) =>
-        String(path).endsWith("/session-signing-key.bin")
+        String(path).replaceAll("\\", "/").endsWith("/session-signing-key.bin")
           ? Ref.updateAndGet(readCountRef, (count) => count + 1).pipe(
               Effect.flatMap((count) => {
                 if (count > 2) {

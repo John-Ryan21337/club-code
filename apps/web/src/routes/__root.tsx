@@ -11,6 +11,7 @@ import {
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { QueryClient, useQueryClient } from "@tanstack/react-query";
 
+import { AmbianceLayer } from "../ambiance/AmbianceLayer";
 import { APP_DISPLAY_NAME } from "../branding";
 import { AppSidebarLayout } from "../components/AppSidebarLayout";
 import { AtmosphereConsole } from "../components/AtmosphereConsole";
@@ -22,6 +23,7 @@ import { EmbeddedBrowserWorkspace } from "../components/EmbeddedBrowserWorkspace
 import { BackgroundAutoNudgeCoordinator } from "../components/BackgroundAutoNudgeCoordinator";
 import { ProviderUpdateLaunchNotification } from "../components/ProviderUpdateLaunchNotification";
 import { WindowAtmosphere } from "../components/WindowAtmosphere";
+import { WorldClockWidget } from "../components/WorldClockWidget";
 import {
   WebSocketConnectionCoordinator,
   WebSocketConnectionSurface,
@@ -168,8 +170,10 @@ function RootRouteView() {
         {primaryEnvironmentAuthenticated ? <ServerStateBootstrap /> : null}
         <EnvironmentConnectionManagerBootstrap />
         <AppearanceSettingsSync />
+        <AmbianceLayer />
         <PowerSaveBlockerSync />
         <WindowAtmosphere selectedThreadRef={selectedThreadRef} />
+        {primaryEnvironmentAuthenticated ? <WorldClockWidget /> : null}
         <AtmosphereConsole />
         <EmbeddedBrowserWorkspace />
         {primaryEnvironmentAuthenticated ? <BackgroundAutoNudgeCoordinator /> : null}

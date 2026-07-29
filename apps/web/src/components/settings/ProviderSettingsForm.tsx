@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import type {
@@ -9,6 +9,7 @@ import type {
   ProviderSettingsFormOption,
   ProviderSettingsFormSchemaAnnotation,
 } from "@cafecode/contracts";
+import { validateLmStudioBaseUrl } from "@cafecode/contracts";
 
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
@@ -250,6 +251,21 @@ export function nextProviderConfigWithFieldValue(
   return Object.keys(base).length > 0 ? base : undefined;
 }
 
+export function validateProviderSettingsFieldValue(
+  field: ProviderSettingsFieldModel,
+  value: string | boolean,
+): string | null {
+  // Provider-instance config is intentionally Schema.Unknown at the settings
+  // persistence boundary for forward compatibility. The live registry
+  // decodes it later, so an invalid URL saved here would first tear down the
+  // healthy instance and then rebuild it as unavailable. Validate this
+  // security-sensitive endpoint at the last editable UI boundary as well as
+  // in the authoritative contracts schema.
+  if (field.key !== "ossBaseUrl" || typeof value !== "string") return null;
+  if (field.clearWhenEmpty === "omit" && value.trim().length === 0) return null;
+  return validateLmStudioBaseUrl(value);
+}
+
 function clearProviderConfigPassword(
   config: unknown,
   field: ProviderSettingsFieldModel,
@@ -295,6 +311,20 @@ function ProviderSettingsFieldRow({
   onChange,
 }: ProviderSettingsFieldRowProps) {
   const inputId = `${idPrefix}-${field.key}`;
+  const validationErrorId = `${inputId}-validation-error`;
+  const storedStringValue = readProviderConfigString(value, field.key);
+  const [validationError, setValidationError] = useState<string | null>(null);
+  useEffect(() => {
+    setValidationError(null);
+  }, [storedStringValue]);
+  const commitFieldValue = (nextValue: string | boolean) => {
+    if (variant === "card") {
+      const nextValidationError = validateProviderSettingsFieldValue(field, nextValue);
+      setValidationError(nextValidationError);
+      if (nextValidationError !== null) return;
+    }
+    onChange(nextProviderConfigWithFieldValue(value, field, nextValue));
+  };
   const descriptionClassName =
     variant === "card"
       ? "mt-1 block text-xs text-muted-foreground"
@@ -314,9 +344,7 @@ function ProviderSettingsFieldRow({
           </div>
           <Switch
             checked={readProviderConfigBoolean(value, field.key, field.defaultBooleanValue)}
-            onCheckedChange={(checked) =>
-              onChange(nextProviderConfigWithFieldValue(value, field, Boolean(checked)))
-            }
+            onCheckedChange={(checked) => commitFieldValue(Boolean(checked))}
             aria-label={field.label}
           />
         </div>
@@ -333,9 +361,7 @@ function ProviderSettingsFieldRow({
             id={inputId}
             className={cn(variant === "card" && "mt-1.5")}
             value={readProviderConfigString(value, field.key)}
-            onChange={(event) =>
-              onChange(nextProviderConfigWithFieldValue(value, field, event.target.value))
-            }
+            onChange={(event) => commitFieldValue(event.target.value)}
             placeholder={field.placeholder}
             spellCheck={false}
           />
@@ -363,7 +389,7 @@ function ProviderSettingsFieldRow({
                 step={field.step ?? 1}
                 min={field.minimum}
                 value={currentValue}
-                onCommit={(next) => onChange(nextProviderConfigWithFieldValue(value, field, next))}
+                onCommit={commitFieldValue}
                 placeholder={field.placeholder}
               />
             ) : (
@@ -374,9 +400,7 @@ function ProviderSettingsFieldRow({
                 step={field.step ?? 1}
                 min={field.minimum}
                 value={currentValue}
-                onChange={(event) =>
-                  onChange(nextProviderConfigWithFieldValue(value, field, event.target.value))
-                }
+                onChange={(event) => commitFieldValue(event.target.value)}
                 placeholder={field.placeholder}
               />
             )}
@@ -404,7 +428,7 @@ function ProviderSettingsFieldRow({
             value={currentValue}
             onValueChange={(next) => {
               if (next !== null) {
-                onChange(nextProviderConfigWithFieldValue(value, field, next));
+                commitFieldValue(next);
               }
             }}
             items={options}
@@ -453,10 +477,12 @@ function ProviderSettingsFieldRow({
               className="mt-1.5"
               type={type}
               autoComplete={field.control === "password" ? "off" : undefined}
-              value={readProviderConfigString(value, field.key)}
-              onCommit={(next) => onChange(nextProviderConfigWithFieldValue(value, field, next))}
+              value={storedStringValue}
+              onCommit={commitFieldValue}
               placeholder={placeholder}
               spellCheck={false}
+              aria-invalid={validationError !== null}
+              aria-describedby={validationError !== null ? validationErrorId : undefined}
             />
           ) : (
             <Input
@@ -464,10 +490,8 @@ function ProviderSettingsFieldRow({
               className="bg-background"
               type={type}
               autoComplete={field.control === "password" ? "off" : undefined}
-              value={readProviderConfigString(value, field.key)}
-              onChange={(event) =>
-                onChange(nextProviderConfigWithFieldValue(value, field, event.target.value))
-              }
+              value={storedStringValue}
+              onChange={(event) => commitFieldValue(event.target.value)}
               placeholder={placeholder}
               spellCheck={false}
             />
@@ -485,6 +509,11 @@ function ProviderSettingsFieldRow({
           </Button>
         ) : null}
         {description}
+        {validationError !== null ? (
+          <span id={validationErrorId} className="mt-1 block text-xs text-destructive">
+            {validationError}
+          </span>
+        ) : null}
       </div>
     </FieldFrame>
   );

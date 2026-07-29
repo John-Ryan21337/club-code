@@ -2,7 +2,7 @@ import {
   ClientOrchestrationCommand,
   OrchestrationDispatchCommandError,
   OrchestrationGetSnapshotError,
-  type OrchestrationReadModel,
+  type OrchestrationShellSnapshot,
 } from "@cafecode/contracts";
 import * as Effect from "effect/Effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
@@ -45,7 +45,10 @@ export const orchestrationSnapshotRouteLayer = HttpRouter.add(
   Effect.gen(function* () {
     yield* authenticateOwnerSession;
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
-    const snapshot = yield* projectionSnapshotQuery.getSnapshot().pipe(
+    // This is a global/project-management endpoint, so it must never fan out
+    // exact-thread prompt-bearing detail. Project CLI callers need only the
+    // prompt-free shell projection.
+    const snapshot = yield* projectionSnapshotQuery.getShellSnapshot().pipe(
       Effect.mapError(
         (cause) =>
           new OrchestrationGetSnapshotError({
@@ -54,7 +57,7 @@ export const orchestrationSnapshotRouteLayer = HttpRouter.add(
           }),
       ),
     );
-    return HttpServerResponse.jsonUnsafe(snapshot satisfies OrchestrationReadModel, {
+    return HttpServerResponse.jsonUnsafe(snapshot satisfies OrchestrationShellSnapshot, {
       status: 200,
     });
   }).pipe(

@@ -96,6 +96,17 @@ describe("AtmosphereConsole", () => {
     expect(mocks.updateSettings).toHaveBeenCalledWith({ fallingEffectDensity: 1.75 });
   });
 
+  it("writes Matrix enrichment through the active settings key", async () => {
+    await render(<AtmosphereConsole />);
+
+    await page.getByLabelText("Tell Club Code what to change").fill("turn 2ch on");
+    await page.getByRole("button", { name: "Apply" }).click();
+
+    expect(mocks.updateSettings).toHaveBeenCalledWith({
+      fallingEffect2chEnriched: true,
+    });
+  });
+
   it("supports anchored and keyboard-custom placement", async () => {
     await render(<AtmosphereConsole />);
     const position = page.getByLabelText("Console position");

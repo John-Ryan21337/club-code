@@ -765,6 +765,18 @@ const executeRpcRequest = (
       return providerService.getCapabilities(request.payload.instanceId);
     case "getInstanceInfo":
       return providerService.getInstanceInfo(request.payload.instanceId);
+    case "getGoal":
+      return providerService.getGoal
+        ? providerService.getGoal(request.payload)
+        : Effect.die("Provider service does not expose goal operations.");
+    case "setGoal":
+      return providerService.setGoal
+        ? providerService.setGoal(request.payload)
+        : Effect.die("Provider service does not expose goal operations.");
+    case "clearGoal":
+      return providerService.clearGoal
+        ? providerService.clearGoal(request.payload)
+        : Effect.die("Provider service does not expose goal operations.");
     case "rollbackConversation":
       return providerService.rollbackConversation(request.payload);
     default:

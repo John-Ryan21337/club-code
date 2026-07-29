@@ -76,6 +76,10 @@ import type {
   ServerUpsertKeybindingResult,
 } from "./server.ts";
 import type { ServerRemoveKeybindingInput, ServerUpsertKeybindingInput } from "./server.ts";
+import type {
+  ServerProjectSystemTelemetryInput,
+  ServerProjectSystemTelemetryResult,
+} from "./systemTelemetry.ts";
 import * as Schema from "effect/Schema";
 import type {
   ClientOrchestrationCommand,
@@ -715,6 +719,16 @@ export interface LocalApi {
  * `environmentId` rather than reaching through the local desktop bridge.
  */
 export interface EnvironmentApi {
+  systemTelemetry: {
+    /**
+     * Read aggregate host resource metrics and only the filesystem volume
+     * containing the server-authoritative workspace root for this project.
+     * Callers cannot supply a path, interface, address, or traffic filter.
+     */
+    readProject: (
+      input: ServerProjectSystemTelemetryInput,
+    ) => Promise<ServerProjectSystemTelemetryResult>;
+  };
   projects: {
     searchEntries: (input: ProjectSearchEntriesInput) => Promise<ProjectSearchEntriesResult>;
     writeFile: (input: ProjectWriteFileInput) => Promise<ProjectWriteFileResult>;

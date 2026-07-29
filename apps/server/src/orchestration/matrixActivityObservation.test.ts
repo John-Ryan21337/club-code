@@ -54,6 +54,46 @@ describe("classifyMatrixActivityObservation", () => {
   });
 
   it.each([
+    [
+      "Codex app-server (cloud or Codex OSS transport)",
+      {
+        itemType: "web_search",
+        data: { item: { type: "webSearch" } },
+      },
+    ],
+    [
+      "Claude WebSearch",
+      {
+        itemType: "web_search",
+        data: { toolName: "WebSearch", input: { query: "private query" } },
+      },
+    ],
+    [
+      "Claude WebFetch",
+      {
+        itemType: "dynamic_tool_call",
+        data: { toolName: "WebFetch", input: { url: "https://private.example.test" } },
+      },
+    ],
+    [
+      "OpenCode",
+      {
+        itemType: "dynamic_tool_call",
+        data: {
+          tool: "playwright_navigate",
+          state: {
+            status: "running",
+            input: { url: "https://private.example.test" },
+            time: { start: 1_000 },
+          },
+        },
+      },
+    ],
+  ] as const)("classifies the current %s network lifecycle shape", (_provider, input) => {
+    expect(classifyMatrixActivityObservation(input)).toEqual(observation("network"));
+  });
+
+  it.each([
     undefined,
     {},
     { query: "private query" },
@@ -195,6 +235,29 @@ describe("classifyMatrixActivityObservation", () => {
         data,
       }),
     ).toEqual(observation(activityType));
+  });
+
+  it.each([
+    [
+      "Codex app-server (cloud or Codex OSS transport)",
+      "mcp_tool_call",
+      { item: { server: "postgres", tool: "query" } },
+    ],
+    ["Claude MCP", "mcp_tool_call", { toolName: "mcp__postgres__query" }],
+    [
+      "OpenCode MCP",
+      "dynamic_tool_call",
+      {
+        tool: "postgres_query",
+        state: {
+          status: "running",
+          input: { query: "select private_column from private_table" },
+          time: { start: 1_000 },
+        },
+      },
+    ],
+  ] as const)("classifies the current %s database lifecycle shape", (_provider, itemType, data) => {
+    expect(classifyMatrixActivityObservation({ itemType, data })).toEqual(observation("database"));
   });
 
   it.each([

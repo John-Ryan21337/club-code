@@ -12,6 +12,7 @@ import { assert, it } from "@effect/vitest";
 
 import * as CodexError from "./errors.ts";
 import * as CodexProtocol from "./protocol.ts";
+import * as CodexSchema from "./schema.ts";
 import { makeInMemoryStdio } from "./_internal/stdio.ts";
 const encodeUnknownJsonString = Schema.encodeUnknownSync(Schema.UnknownFromJsonString);
 
@@ -20,6 +21,44 @@ const encoder = new TextEncoder();
 const encodeJsonl = (value: unknown) => encoder.encode(`${encodeUnknownJsonString(value)}\n`);
 
 const decodeJson = Schema.decodeEffect(Schema.UnknownFromJsonString);
+const isAccountRateLimitPlanType = Schema.is(
+  CodexSchema.V2AccountRateLimitsUpdatedNotification__PlanType,
+);
+const isThreadMetadataUpdateParams = Schema.is(CodexSchema.V2ThreadMetadataUpdateParams);
+const isItemStartedNotification = Schema.is(CodexSchema.V2ItemStartedNotification);
+
+it("tracks Codex 0.146 app-server compatibility additions", () => {
+  assert.equal(
+    CodexSchema.CLIENT_REQUEST_METHODS["externalAgentConfig/import/recordHistory"],
+    "externalAgentConfig/import/recordHistory",
+  );
+  assert.equal(isAccountRateLimitPlanType("ent26"), true);
+  assert.equal(
+    isThreadMetadataUpdateParams({
+      threadId: "thread-1",
+      isPinned: true,
+    }),
+    true,
+  );
+  assert.equal(
+    isItemStartedNotification({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      startedAtMs: 1_721_234_567_890,
+      item: {
+        type: "commandExecution",
+        id: "command-1",
+        command: "node scripts/check.mjs",
+        commandActions: [],
+        cwd: "/workspace",
+        status: "inProgress",
+        pluginId: "openai/example",
+        scriptPath: "scripts/check.mjs",
+      },
+    }),
+    true,
+  );
+});
 
 it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
   it.effect(

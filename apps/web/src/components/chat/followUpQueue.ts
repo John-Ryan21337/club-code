@@ -18,6 +18,31 @@ export function decideFollowUpDelivery(input: FollowUpDeliveryInput): FollowUpDe
   return input.liveSteerSupported ? "steer" : "queue";
 }
 
+export function shouldQueueOperatorFollowUp(input: {
+  readonly delivery: FollowUpDeliveryAction;
+  readonly hasEarlierManualFollowUp: boolean;
+}): boolean {
+  return input.delivery === "queue" || input.hasEarlierManualFollowUp;
+}
+
+/**
+ * Automatic queue draining may start the next turn only from a confirmed
+ * ready session. It must never steer an active turn or use a disconnected
+ * snapshot as settlement evidence. A running queue head stays visible until
+ * the operator explicitly chooses Steer; this preserves the review/chaining
+ * window after Enter.
+ */
+export function canAutomaticallyActivateQueuedFollowUp(
+  phase: SessionPhase,
+  options: { readonly manualStopBarrierActive?: boolean } = {},
+): boolean {
+  return phase === "ready" && options.manualStopBarrierActive !== true;
+}
+
+export function appendOperatorFollowUp<Item>(items: readonly Item[], item: Item): Item[] {
+  return [...items, item];
+}
+
 export interface LiveSteerAvailabilityInput {
   liveSteerSupported: boolean;
   provider: string | null | undefined;
@@ -66,6 +91,20 @@ export function canStartQueuedFollowUpTurn(input: QueuedFollowUpStartInput): boo
   );
 }
 
+export interface AutomaticQueuedFollowUpStartInput extends QueuedFollowUpStartInput {
+  manualStopBarrierActive: boolean;
+}
+
+/**
+ * A normal queued follow-up may auto-dispatch when a provider becomes idle,
+ * but the main Stop button is an explicit cancellation barrier. This mirrors
+ * upstream Codex TUI's distinction between ordinary interrupt (restore input)
+ * and its dedicated interrupt-and-submit pending-steer path.
+ */
+export function canAutoStartQueuedFollowUpTurn(input: AutomaticQueuedFollowUpStartInput): boolean {
+  return !input.manualStopBarrierActive && canStartQueuedFollowUpTurn(input);
+}
+
 export interface QueuedFollowUpDispatchCandidateInput<
   ThreadKey extends string,
   Item extends { readonly blockedReason: string | null },
@@ -110,6 +149,31 @@ export function selectQueuedFollowUpDispatchCandidate<
   }
 
   return null;
+}
+
+export function isQueuedFollowUpHead(
+  items: readonly { readonly id: string }[],
+  itemId: string,
+): boolean {
+  return items[0]?.id === itemId;
+}
+
+export function tryClaimQueuedFollowUpDispatch(
+  claimedItemIds: Set<string>,
+  itemId: string,
+): boolean {
+  if (claimedItemIds.has(itemId)) {
+    return false;
+  }
+  claimedItemIds.add(itemId);
+  return true;
+}
+
+export function releaseQueuedFollowUpDispatchClaim(
+  claimedItemIds: Set<string>,
+  itemId: string,
+): void {
+  claimedItemIds.delete(itemId);
 }
 
 export interface QueuedFollowUpDispatchObservationInput {
@@ -245,13 +309,20 @@ export interface FollowUpThreadTarget<
   readonly threadId: ThreadKey;
 }
 
+export function followUpQueueStateKey(target: FollowUpThreadTarget<string, string>): string {
+  return JSON.stringify([target.environmentId, target.threadId]);
+}
+
 export function collectRetainedFollowUpThreadTargets<
   EnvironmentKey extends string,
   ThreadKey extends string,
 >(input: {
   readonly queueGroups: readonly (readonly FollowUpThreadTarget<EnvironmentKey, ThreadKey>[])[];
   readonly pendingTurnStarts: readonly FollowUpThreadTarget<EnvironmentKey, ThreadKey>[];
+  readonly pendingDirectDispatches: readonly FollowUpThreadTarget<EnvironmentKey, ThreadKey>[];
   readonly pendingSteers: readonly FollowUpThreadTarget<EnvironmentKey, ThreadKey>[];
+  readonly pendingInterruptRecoveries: readonly FollowUpThreadTarget<EnvironmentKey, ThreadKey>[];
+  readonly projectedManualFollowUps?: readonly FollowUpThreadTarget<EnvironmentKey, ThreadKey>[];
 }): FollowUpThreadTarget<EnvironmentKey, ThreadKey>[] {
   const targets: FollowUpThreadTarget<EnvironmentKey, ThreadKey>[] = [];
   const seen = new Set<string>();
@@ -259,7 +330,7 @@ export function collectRetainedFollowUpThreadTargets<
     if (target === undefined) {
       return;
     }
-    const key = JSON.stringify([target.environmentId, target.threadId]);
+    const key = followUpQueueStateKey(target);
     if (seen.has(key)) {
       return;
     }
@@ -276,55 +347,107 @@ export function collectRetainedFollowUpThreadTargets<
   for (const pending of input.pendingTurnStarts) {
     push(pending);
   }
+  for (const pending of input.pendingDirectDispatches) {
+    push(pending);
+  }
   for (const pending of input.pendingSteers) {
     push(pending);
+  }
+  for (const pending of input.pendingInterruptRecoveries) {
+    push(pending);
+  }
+  for (const projected of input.projectedManualFollowUps ?? []) {
+    push(projected);
   }
 
   return targets;
 }
 
 export interface RekeyQueuedFollowUpsInput<
+  EnvironmentKey extends string,
   ThreadKey extends string,
-  Item extends { readonly threadId: ThreadKey; readonly blockedReason: string | null },
+  Item extends FollowUpThreadTarget<EnvironmentKey, ThreadKey> & {
+    readonly blockedReason: string | null;
+    readonly serverHandoffTarget: FollowUpThreadTarget<EnvironmentKey, ThreadKey> | null;
+  },
 > {
-  queuesByThreadId: Record<string, readonly Item[]>;
-  activeThreadId: ThreadKey | null;
-  previousActiveThreadId: ThreadKey | null;
-  knownThreadIds: ReadonlySet<string>;
+  queuesByThreadKey: Record<string, readonly Item[]>;
+  activeTarget: FollowUpThreadTarget<EnvironmentKey, ThreadKey>;
+  activeThreadIsServerBacked: boolean;
+  previousActiveTarget: FollowUpThreadTarget<EnvironmentKey, ThreadKey> | null;
+  knownThreadKeys: ReadonlySet<string>;
 }
 
 /**
  * A queued follow-up can be created while a first-turn draft is still using a
  * temporary local thread id. Once the server-backed thread id becomes active,
- * the queue must follow that handoff; otherwise the watchdog sees an empty
- * queue for the visible chat and never dispatches.
+ * a draft queue carrying that exact server handoff target must follow it;
+ * otherwise the watchdog sees an empty queue for the visible chat and never
+ * dispatches. A different server route, an ordinary server-thread queue, or a
+ * removed projection is never treated as an implicit handoff.
  */
 export function rekeyQueuedFollowUpsForActiveThread<
+  EnvironmentKey extends string,
   ThreadKey extends string,
-  Item extends { readonly threadId: ThreadKey; readonly blockedReason: string | null },
->(input: RekeyQueuedFollowUpsInput<ThreadKey, Item>): Record<string, Item[]> {
-  const { activeThreadId, knownThreadIds, previousActiveThreadId, queuesByThreadId } = input;
-  if (activeThreadId === null) {
-    return queuesByThreadId as Record<string, Item[]>;
+  Item extends FollowUpThreadTarget<EnvironmentKey, ThreadKey> & {
+    readonly blockedReason: string | null;
+    readonly serverHandoffTarget: FollowUpThreadTarget<EnvironmentKey, ThreadKey> | null;
+  },
+>(input: RekeyQueuedFollowUpsInput<EnvironmentKey, ThreadKey, Item>): Record<string, Item[]> {
+  const {
+    activeTarget,
+    activeThreadIsServerBacked,
+    knownThreadKeys,
+    previousActiveTarget,
+    queuesByThreadKey,
+  } = input;
+  if (!activeThreadIsServerBacked) {
+    return queuesByThreadKey as Record<string, Item[]>;
   }
-
-  const activeItems = queuesByThreadId[activeThreadId] ?? [];
+  const activeKey = followUpQueueStateKey(activeTarget);
+  const activeItems = queuesByThreadKey[activeKey] ?? [];
+  const targetsActiveServerThread = (item: Item): boolean => {
+    const handoff = item.serverHandoffTarget;
+    return (
+      item.environmentId === activeTarget.environmentId &&
+      handoff !== null &&
+      handoff.environmentId === activeTarget.environmentId &&
+      handoff.threadId === activeTarget.threadId
+    );
+  };
   if (activeItems.length > 0) {
-    return queuesByThreadId as Record<string, Item[]>;
+    if (!activeItems.some(targetsActiveServerThread)) {
+      return queuesByThreadKey as Record<string, Item[]>;
+    }
+    return {
+      ...(queuesByThreadKey as Record<string, Item[]>),
+      [activeKey]: activeItems.map((item) =>
+        targetsActiveServerThread(item)
+          ? (Object.assign({}, item, {
+              blockedReason: null,
+              serverHandoffTarget: null,
+            }) as Item)
+          : item,
+      ),
+    };
   }
 
-  const isOrphanQueue = (threadId: string): boolean =>
-    threadId !== activeThreadId && !knownThreadIds.has(threadId);
+  const isEligibleDraftQueue = (key: string, items: readonly Item[]): boolean =>
+    key !== activeKey &&
+    !knownThreadKeys.has(key) &&
+    items.length > 0 &&
+    items.every(targetsActiveServerThread);
 
-  const previousItems =
-    previousActiveThreadId && isOrphanQueue(previousActiveThreadId)
-      ? (queuesByThreadId[previousActiveThreadId] ?? [])
-      : [];
+  const previousKey =
+    previousActiveTarget?.environmentId === activeTarget.environmentId
+      ? followUpQueueStateKey(previousActiveTarget)
+      : null;
+  const previousItems = previousKey === null ? [] : (queuesByThreadKey[previousKey] ?? []);
   let orphanQueueCount = 0;
   let firstOrphanEntry: readonly [string, readonly Item[]] | undefined;
-  for (const entry of Object.entries(queuesByThreadId)) {
-    const [threadId, items] = entry;
-    if (!isOrphanQueue(threadId) || items.length === 0) {
+  for (const entry of Object.entries(queuesByThreadKey)) {
+    const [key, items] = entry;
+    if (!isEligibleDraftQueue(key, items)) {
       continue;
     }
     orphanQueueCount += 1;
@@ -332,26 +455,28 @@ export function rekeyQueuedFollowUpsForActiveThread<
   }
 
   const sourceEntry =
-    previousActiveThreadId && previousItems.length > 0
-      ? ([previousActiveThreadId, previousItems] as const)
+    previousKey !== null && isEligibleDraftQueue(previousKey, previousItems)
+      ? ([previousKey, previousItems] as const)
       : firstOrphanEntry;
 
   if (!sourceEntry) {
-    return queuesByThreadId as Record<string, Item[]>;
+    return queuesByThreadKey as Record<string, Item[]>;
   }
 
-  if (sourceEntry[0] !== previousActiveThreadId && orphanQueueCount !== 1) {
-    return queuesByThreadId as Record<string, Item[]>;
+  if (sourceEntry[0] !== previousKey && orphanQueueCount !== 1) {
+    return queuesByThreadKey as Record<string, Item[]>;
   }
 
-  const [sourceThreadId, sourceItems] = sourceEntry;
-  const next: Record<string, Item[]> = { ...(queuesByThreadId as Record<string, Item[]>) };
-  delete next[sourceThreadId];
-  next[activeThreadId] = sourceItems.map(
+  const [sourceKey, sourceItems] = sourceEntry;
+  const next: Record<string, Item[]> = { ...(queuesByThreadKey as Record<string, Item[]>) };
+  delete next[sourceKey];
+  next[activeKey] = sourceItems.map(
     (item) =>
       Object.assign({}, item, {
-        threadId: activeThreadId,
+        environmentId: activeTarget.environmentId,
+        threadId: activeTarget.threadId,
         blockedReason: null,
+        serverHandoffTarget: null,
       }) as Item,
   );
   return next;

@@ -11,6 +11,8 @@ import {
   OrchestrationCommand,
   OrchestrationEvent,
   OrchestrationLatestTurn,
+  OrchestrationThread,
+  OrchestrationThreadShell,
   ProjectCreatedPayload,
   ProjectMetaUpdatedPayload,
   OrchestrationProposedPlan,
@@ -51,6 +53,8 @@ const decodeThreadDuplicatedPayload = Schema.decodeUnknownEffect(ThreadDuplicate
 const decodeOrchestrationCommand = Schema.decodeUnknownEffect(OrchestrationCommand);
 const decodeClientOrchestrationCommand = Schema.decodeUnknownEffect(ClientOrchestrationCommand);
 const decodeOrchestrationEvent = Schema.decodeUnknownEffect(OrchestrationEvent);
+const decodeOrchestrationThread = Schema.decodeUnknownEffect(OrchestrationThread);
+const decodeOrchestrationThreadShell = Schema.decodeUnknownEffect(OrchestrationThreadShell);
 const decodeThreadMetaUpdatedPayload = Schema.decodeUnknownEffect(ThreadMetaUpdatedPayload);
 const decodeProviderJournalMessageRepairResult = Schema.decodeUnknownEffect(
   ProviderJournalMessageRepairResult,
@@ -59,6 +63,366 @@ const decodeProviderThreadAssistantMessagesRepairResult = Schema.decodeUnknownEf
   ProviderThreadAssistantMessagesRepairResult,
 );
 const decodeWorkflowProjectionSnapshot = Schema.decodeUnknownEffect(WorkflowProjectionSnapshot);
+
+const threadBase = {
+  id: "thread-auto-nudge",
+  projectId: "project-auto-nudge",
+  title: "Auto Nudge thread",
+  modelSelection: { instanceId: "codex", model: "gpt-5.6-sol" },
+  runtimeMode: "full-access",
+  interactionMode: "default",
+  branch: null,
+  worktreePath: null,
+  latestTurn: null,
+  createdAt: "2026-07-28T00:00:00.000Z",
+  updatedAt: "2026-07-28T00:00:00.000Z",
+  archivedAt: null,
+  deletedAt: null,
+} as const;
+
+it.effect("Auto Nudge configure distinguishes off prompt storage from execution authority", () =>
+  Effect.gen(function* () {
+    const off = yield* decodeClientOrchestrationCommand({
+      type: "thread.auto-nudge.configure",
+      commandId: "command-off-save",
+      threadId: threadBase.id,
+      expectedAuthorityRevision: 0,
+      mode: "off",
+      prompt: "",
+      backgroundContinuation: false,
+      maxRounds: 5,
+      maxMinutes: 30,
+      createdAt: "2026-07-28T00:00:01.000Z",
+    });
+    assert.strictEqual(off.type, "thread.auto-nudge.configure");
+    if (off.type === "thread.auto-nudge.configure") {
+      assert.strictEqual(off.mode, "off");
+      assert.strictEqual(off.prompt, "");
+    }
+
+    const enabled = yield* decodeClientOrchestrationCommand({
+      type: "thread.auto-nudge.configure",
+      commandId: "command-enable",
+      threadId: threadBase.id,
+      expectedAuthorityRevision: 1,
+      mode: "steady-progress",
+      prompt: "First line\nSecond line",
+      backgroundContinuation: true,
+      maxRounds: 5,
+      maxMinutes: 30,
+      createdAt: "2026-07-28T00:00:02.000Z",
+    });
+    assert.strictEqual(enabled.type, "thread.auto-nudge.configure");
+    if (enabled.type === "thread.auto-nudge.configure") {
+      assert.strictEqual(enabled.prompt, "First line\nSecond line");
+    }
+
+    const blankEnabled = yield* Effect.exit(
+      decodeClientOrchestrationCommand({
+        type: "thread.auto-nudge.configure",
+        commandId: "command-blank-enable",
+        threadId: threadBase.id,
+        expectedAuthorityRevision: 1,
+        mode: "steady-progress",
+        prompt: " \n ",
+        backgroundContinuation: false,
+        maxRounds: 5,
+        maxMinutes: 30,
+        createdAt: "2026-07-28T00:00:03.000Z",
+      }),
+    );
+    assert.strictEqual(blankEnabled._tag, "Failure");
+  }),
+);
+
+it.effect("Auto Nudge dispatch carries no client prompt", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeClientOrchestrationCommand({
+      type: "thread.auto-nudge.dispatch",
+      commandId: "command-dispatch",
+      threadId: threadBase.id,
+      expectedAuthorityRevision: 4,
+      completedTurnId: "turn-completed",
+      dispatchSource: "foreground",
+      messageId: "message-auto-nudge",
+      createdAt: "2026-07-28T00:05:00.000Z",
+      prompt: "renderer supplied text must be discarded",
+    });
+    assert.strictEqual(parsed.type, "thread.auto-nudge.dispatch");
+    assert.strictEqual("prompt" in parsed, false);
+  }),
+);
+
+it.effect("Auto Nudge shell summary events cannot carry prompt text", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeOrchestrationEvent({
+      sequence: 12,
+      eventId: "event-auto-nudge-shell-summary",
+      type: "thread.auto-nudge-summary-changed",
+      aggregateKind: "thread",
+      aggregateId: threadBase.id,
+      occurredAt: "2026-07-28T00:03:00.000Z",
+      commandId: "command-auto-nudge-shell-summary",
+      causationEventId: null,
+      correlationId: "command-auto-nudge-shell-summary",
+      metadata: {},
+      payload: {
+        threadId: threadBase.id,
+        summary: {
+          authorityRevision: 2,
+          mode: "steady-progress",
+          backgroundContinuation: true,
+          maxRounds: 5,
+          maxMinutes: 30,
+          armedAt: "2026-07-28T00:03:00.000Z",
+          baselineSettledTurnId: null,
+          lastDispatchedSettledTurnId: null,
+          roundsDispatched: 0,
+          lastDispatchedAt: null,
+          prompt: "must be discarded",
+        },
+        updatedAt: "2026-07-28T00:03:00.000Z",
+      },
+    });
+    assert.strictEqual(parsed.type, "thread.auto-nudge-summary-changed");
+    if (parsed.type === "thread.auto-nudge-summary-changed") {
+      assert.strictEqual("prompt" in parsed.payload.summary, false);
+    }
+  }),
+);
+
+it.effect("manual follow-up reservation stays prompt-free and preserves exact routing", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeClientOrchestrationCommand({
+      type: "thread.manual-follow-up.reserve",
+      commandId: "command-manual-follow-up-reserve",
+      threadId: threadBase.id,
+      followUpId: "manual-follow-up-1",
+      messageId: "manual-follow-up-message-1",
+      dispatch: {
+        modelSelection: {
+          instanceId: "claude-local",
+          model: "claude-opus-4-1",
+        },
+        titleSeed: "Queued title",
+        runtimeMode: "approval-required",
+        interactionMode: "plan",
+      },
+      prompt: "must not enter reservation state",
+      message: {
+        text: "must not enter reservation state",
+        attachments: [{ name: "secret.png" }],
+      },
+      attachments: [{ name: "secret.png" }],
+      createdAt: "2026-07-28T00:04:00.000Z",
+    });
+
+    assert.strictEqual(parsed.type, "thread.manual-follow-up.reserve");
+    if (parsed.type === "thread.manual-follow-up.reserve") {
+      assert.strictEqual("message" in parsed, false);
+      assert.strictEqual("attachments" in parsed, false);
+      assert.strictEqual("prompt" in parsed, false);
+      assert.strictEqual(parsed.messageId, "manual-follow-up-message-1");
+    }
+  }),
+);
+
+it.effect("manual follow-up enqueue preserves the bounded dispatch snapshot", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeClientOrchestrationCommand({
+      type: "thread.manual-follow-up.enqueue",
+      commandId: "command-manual-follow-up-enqueue",
+      threadId: threadBase.id,
+      followUpId: "manual-follow-up-1",
+      reservationCommandId: "command-manual-follow-up-reserve",
+      message: {
+        messageId: "manual-follow-up-message-1",
+        role: "user",
+        text: "Run this before any automatic continuation.",
+        attachments: [],
+      },
+      dispatch: {
+        modelSelection: {
+          instanceId: "claude-local",
+          model: "claude-opus-4-1",
+        },
+        titleSeed: "Queued title",
+        runtimeMode: "approval-required",
+        interactionMode: "plan",
+        sourceProposedPlan: {
+          threadId: threadBase.id,
+          planId: "plan-1",
+        },
+      },
+      createdAt: "2026-07-28T00:04:00.000Z",
+    });
+
+    assert.strictEqual(parsed.type, "thread.manual-follow-up.enqueue");
+    if (parsed.type === "thread.manual-follow-up.enqueue") {
+      assert.deepStrictEqual(parsed.dispatch, {
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("claude-local"),
+          model: "claude-opus-4-1",
+        },
+        titleSeed: "Queued title",
+        runtimeMode: "approval-required",
+        interactionMode: "plan",
+        sourceProposedPlan: {
+          threadId: threadBase.id,
+          planId: "plan-1",
+        },
+      });
+    }
+  }),
+);
+
+it.effect("legacy queued manual follow-up events remain replay-decodable", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeOrchestrationEvent({
+      sequence: 7,
+      eventId: "event-legacy-manual-follow-up",
+      type: "thread.manual-follow-up-enqueued",
+      aggregateKind: "thread",
+      aggregateId: threadBase.id,
+      occurredAt: "2026-07-27T00:04:00.000Z",
+      commandId: "command-legacy-manual-follow-up",
+      causationEventId: null,
+      correlationId: "command-legacy-manual-follow-up",
+      metadata: {},
+      payload: {
+        threadId: threadBase.id,
+        item: {
+          id: "manual-follow-up-legacy",
+          message: {
+            messageId: "manual-follow-up-message-legacy",
+            role: "user",
+            text: "Persisted before reservations existed.",
+            attachments: [],
+          },
+          dispatch: {
+            modelSelection: {
+              instanceId: "claude-local",
+              model: "claude-opus-4-1",
+            },
+            titleSeed: "Legacy title",
+            runtimeMode: "approval-required",
+            interactionMode: "plan",
+          },
+          status: "queued",
+          enqueuedAt: "2026-07-27T00:04:00.000Z",
+          activatedAt: null,
+          activationCommandId: null,
+        },
+      },
+    });
+
+    assert.strictEqual(parsed.type, "thread.manual-follow-up-enqueued");
+    if (parsed.type === "thread.manual-follow-up-enqueued") {
+      assert.strictEqual(parsed.payload.item.status, "queued");
+      assert.strictEqual("reservationCommandId" in parsed.payload.item, false);
+    }
+  }),
+);
+
+it.effect("manual follow-up activation requires an explicit server-enforced mode", () =>
+  Effect.gen(function* () {
+    for (const activationMode of ["automatic-after-settlement", "operator"] as const) {
+      const parsed = yield* decodeClientOrchestrationCommand({
+        type: "thread.manual-follow-up.activate",
+        commandId: `command-manual-follow-up-activate-${activationMode}`,
+        threadId: threadBase.id,
+        followUpId: "manual-follow-up-1",
+        activationMode,
+        createdAt: "2026-07-28T00:04:01.000Z",
+      });
+      assert.strictEqual(parsed.type, "thread.manual-follow-up.activate");
+      if (parsed.type === "thread.manual-follow-up.activate") {
+        assert.strictEqual(parsed.activationMode, activationMode);
+      }
+    }
+
+    const missingMode = yield* Effect.exit(
+      decodeClientOrchestrationCommand({
+        type: "thread.manual-follow-up.activate",
+        commandId: "command-manual-follow-up-activate-missing-mode",
+        threadId: threadBase.id,
+        followUpId: "manual-follow-up-1",
+        createdAt: "2026-07-28T00:04:01.000Z",
+      }),
+    );
+    assert.strictEqual(missingMode._tag, "Failure");
+  }),
+);
+
+it.effect("generic client turn commands cannot claim Auto Nudge provenance", () =>
+  Effect.gen(function* () {
+    const genericCommands = [
+      {
+        type: "thread.turn.start",
+        commandId: "command-forged-auto-nudge-start",
+        threadId: threadBase.id,
+        message: {
+          messageId: "message-forged-auto-nudge-start",
+          role: "user",
+          text: "Bypass exact-thread authority",
+          attachments: [],
+        },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        dispatchSource: "auto-nudge",
+        createdAt: "2026-07-28T00:05:00.000Z",
+      },
+      {
+        type: "thread.turn.steer",
+        commandId: "command-forged-auto-nudge-steer",
+        threadId: threadBase.id,
+        message: {
+          messageId: "message-forged-auto-nudge-steer",
+          role: "user",
+          text: "Bypass exact-thread authority",
+          attachments: [],
+        },
+        dispatchSource: "auto-nudge",
+        createdAt: "2026-07-28T00:05:00.000Z",
+      },
+    ];
+
+    for (const command of genericCommands) {
+      const result = yield* Effect.exit(decodeClientOrchestrationCommand(command));
+      assert.strictEqual(result._tag, "Failure");
+    }
+  }),
+);
+
+it.effect("thread detail and shell decode missing Auto Nudge state to disabled defaults", () =>
+  Effect.gen(function* () {
+    const detail = yield* decodeOrchestrationThread({
+      ...threadBase,
+      messages: [],
+      proposedPlans: [],
+      activities: [],
+      checkpoints: [],
+      session: null,
+    });
+    assert.strictEqual(detail.autoNudge.mode, "off");
+    assert.strictEqual(detail.autoNudge.authorityRevision, 0);
+    assert.strictEqual(detail.autoNudge.prompt, "");
+    assert.deepStrictEqual(detail.manualFollowUps, []);
+
+    const shell = yield* decodeOrchestrationThreadShell({
+      ...threadBase,
+      session: null,
+      latestUserMessageAt: null,
+      hasPendingApprovals: false,
+      hasPendingUserInput: false,
+      hasActionableProposedPlan: false,
+    });
+    assert.strictEqual(shell.autoNudge.mode, "off");
+    assert.strictEqual("prompt" in shell.autoNudge, false);
+    assert.strictEqual(shell.manualFollowUpCount, 0);
+    assert.strictEqual("manualFollowUps" in shell, false);
+  }),
+);
 
 it.effect("workflow projection accepts honest unavailable fields and canonical statuses", () =>
   Effect.gen(function* () {

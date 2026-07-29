@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   CODEX_DEFAULT_AUTO_COMPACT_TOKEN_LIMIT,
+  DEFAULT_LM_STUDIO_BASE_URL,
   DEFAULT_SERVER_SETTINGS,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -90,6 +91,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
             binaryPath: "/usr/local/bin/codex",
             homePath: "/Users/julius/.codex",
             ossMode: true,
+            ossBaseUrl: "http://192.168.42.20:1234/v1",
           },
           claudeAgent: {
             binaryPath: "/usr/local/bin/claude",
@@ -126,6 +128,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         binaryPath: "/opt/homebrew/bin/codex",
         runtimeSource: "system",
         ossMode: true,
+        ossBaseUrl: "http://192.168.42.20:1234/v1",
         homePath: "/Users/julius/.codex",
         shadowHomePath: "",
         customModels: [],
@@ -144,6 +147,10 @@ it.layer(NodeServices.layer)("server settings", (it) => {
       assert.match(
         yield* fileSystem.readFileString(serverConfig.settingsPath),
         /"ossMode":\s*true/,
+      );
+      assert.match(
+        yield* fileSystem.readFileString(serverConfig.settingsPath),
+        /"ossBaseUrl":\s*"http:\/\/192\.168\.42\.20:1234\/v1"/,
       );
       assert.deepEqual(
         next.textGenerationModelSelection,
@@ -372,6 +379,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         binaryPath: "/opt/homebrew/bin/codex",
         runtimeSource: "system",
         ossMode: false,
+        ossBaseUrl: DEFAULT_LM_STUDIO_BASE_URL,
         homePath: "",
         shadowHomePath: "",
         customModels: [],

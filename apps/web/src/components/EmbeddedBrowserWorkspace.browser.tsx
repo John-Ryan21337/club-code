@@ -97,6 +97,7 @@ const snapshot = {
 
 describe("EmbeddedBrowserWorkspace agent grant", () => {
   afterEach(() => {
+    Reflect.deleteProperty(window, "desktopBridge");
     vi.restoreAllMocks();
   });
 

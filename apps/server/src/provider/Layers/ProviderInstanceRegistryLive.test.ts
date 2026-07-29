@@ -26,6 +26,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   CODEX_DEFAULT_AUTO_COMPACT_TOKEN_LIMIT,
+  DEFAULT_LM_STUDIO_BASE_URL,
   type ClaudeSettings,
   type CodexSettings,
   ProviderDriverKind,
@@ -55,6 +56,7 @@ const makeCodexConfig = (overrides: Partial<CodexSettings>): CodexSettings => ({
   binaryPath: "codex",
   runtimeSource: "system",
   ossMode: false,
+  ossBaseUrl: DEFAULT_LM_STUDIO_BASE_URL,
   homePath: "",
   shadowHomePath: "",
   customModels: [],
@@ -313,6 +315,7 @@ describe("ProviderInstanceRegistryLive — all drivers slice", () => {
       );
       expect(codexSnapshot.runtimeCapabilities?.liveSteer).toBe("supported");
       expect(codexSnapshot.runtimeCapabilities?.accountUsage).toBe("unsupported");
+      expect(codexSnapshot.runtimeCapabilities?.threadGoals).toBe("supported");
 
       const claudeSnapshot = yield* claude!.snapshot.getSnapshot;
       expect(claudeSnapshot.instanceId).toBe(claudeId);
@@ -327,6 +330,7 @@ describe("ProviderInstanceRegistryLive — all drivers slice", () => {
       // initial disabled/pending snapshot before a CLI probe has completed.
       expect(claudeSnapshot.runtimeCapabilities?.liveSteer).toBe("supported");
       expect(claudeSnapshot.runtimeCapabilities?.accountUsage).toBe("unsupported");
+      expect(claudeSnapshot.runtimeCapabilities?.threadGoals).toBe("unsupported");
       expect(claude!.adapter.capabilities.liveSteer).toBe("supported");
     }).pipe(Effect.provide(testLayer)),
   );

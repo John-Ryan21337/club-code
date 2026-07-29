@@ -21,7 +21,12 @@
  *
  * @module provider/Drivers/CodexDriver
  */
-import { CodexSettings, ProviderDriverKind, type ServerProvider } from "@cafecode/contracts";
+import {
+  CodexSettings,
+  normalizeLmStudioBaseUrl,
+  ProviderDriverKind,
+  type ServerProvider,
+} from "@cafecode/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -39,8 +44,10 @@ import { makeCodexAdapter } from "../Layers/CodexAdapter.ts";
 import {
   checkCodexCliProviderStatus,
   checkCodexProviderStatus,
+  discoverLmStudioModels,
   makePendingCodexProvider,
   readCodexAccountRateLimits,
+  reconcileLmStudioModelDiscovery,
 } from "../Layers/CodexProvider.ts";
 import { ProviderEventLoggers } from "../Layers/ProviderEventLoggers.ts";
 import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
@@ -50,6 +57,7 @@ import { mergeProviderInstanceEnvironment } from "../ProviderInstanceEnvironment
 import { installBundledAuditAndRepairSkill } from "../BundledAuditAndRepairSkill.ts";
 import {
   enrichProviderSnapshotWithVersionAdvisory,
+  isCodexStandaloneCommandPath,
   makePackageManagedProviderMaintenanceResolver,
   resolveProviderMaintenanceCapabilitiesEffect,
 } from "../providerMaintenance.ts";
@@ -58,6 +66,7 @@ import {
   codexContinuationIdentity,
   materializeCodexShadowHome,
   resolveCodexHomeLayout,
+  type CodexShadowHomeAuthSource,
 } from "./CodexHomeLayout.ts";
 const decodeCodexSettings = Schema.decodeSync(CodexSettings);
 
@@ -72,7 +81,12 @@ const UPDATE_DEFINITION = {
   provider: DRIVER_KIND,
   npmPackageName: "@openai/codex",
   homebrewFormula: "codex",
-  nativeUpdate: null,
+  nativeUpdate: {
+    executable: "codex",
+    args: ["update"],
+    lockKey: "codex-native",
+    isCommandPath: isCodexStandaloneCommandPath,
+  },
 } as const;
 const UPDATE = makePackageManagedProviderMaintenanceResolver(UPDATE_DEFINITION);
 const DEFAULT_SHADOW_HOME_ROOT = "~/.cafe-code/codex-homes";
@@ -119,6 +133,7 @@ const withInstanceIdentity =
         snapshot.auth.type === "chatgpt" || snapshot.accountRateLimits
           ? "supported"
           : "unsupported",
+      threadGoals: "supported",
     },
   });
 
@@ -151,6 +166,29 @@ export function resolveCodexAuthActions(input: {
     : undefined;
 }
 
+export function resolveCodexShadowHomeAuthSource(
+  config: Pick<CodexSettings, "ossMode" | "homePath" | "shadowHomePath">,
+): CodexShadowHomeAuthSource {
+  if (config.ossMode) return "none";
+  return config.homePath.trim().length === 0 && config.shadowHomePath.trim().length > 0
+    ? "shadow"
+    : "shared";
+}
+
+export function resolveCodexRuntimeEnvironment(
+  config: Pick<CodexSettings, "ossMode" | "ossBaseUrl">,
+  environment: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv {
+  if (!config.ossMode) return environment;
+  return {
+    ...environment,
+    // Codex's built-in `lmstudio` provider reads this process-scoped
+    // override. Keeping it on the per-instance environment avoids mutating
+    // process.env and lets loopback and LAN instances coexist safely.
+    CODEX_OSS_BASE_URL: normalizeLmStudioBaseUrl(config.ossBaseUrl),
+  };
+}
+
 export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
   driverKind: DRIVER_KIND,
   metadata: {
@@ -169,14 +207,10 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
       const processEnv = mergeProviderInstanceEnvironment(environment);
       const layoutConfig = withDefaultCodexShadowHome({ instanceId, config });
       const homeLayout = yield* resolveCodexHomeLayout(layoutConfig);
-      // A default Cafe-created shadow overlays the user's normal ~/.codex auth
-      // so CLI re-login repairs Cafe automatically. An explicit shadow-only
-      // instance is different: users configure those paths to hold separate
-      // Codex accounts, so its own auth.json is the source of truth.
-      const authSource =
-        config.homePath.trim().length === 0 && config.shadowHomePath.trim().length > 0
-          ? "shadow"
-          : "shared";
+      // Cloud instances either refresh from the shared login or preserve an
+      // explicitly configured shadow login. OSS instances need neither and
+      // must not receive a copy of unrelated cloud credentials.
+      const authSource = resolveCodexShadowHomeAuthSource(config);
       const continuationIdentity = codexContinuationIdentity(homeLayout);
       const stampIdentity = withInstanceIdentity({
         instanceId,
@@ -243,7 +277,7 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
         binaryPath: runtime.binaryPath,
         homePath: homeLayout.effectiveHomePath ?? "",
       } satisfies CodexSettings;
-      const effectiveEnvironment = runtime.env;
+      const effectiveEnvironment = resolveCodexRuntimeEnvironment(effectiveConfig, runtime.env);
       const maintenanceCapabilities =
         effectiveConfig.runtimeSource === "bundled"
           ? runtime.maintenanceCapabilities
@@ -287,12 +321,26 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
       // Starting `codex app-server` just to draw the provider badge can run
       // model/skill metadata requests and block for long enough to show a
       // false "provider unavailable" warning before the user has sent a
-      // message. OSS mode is the exception: its app-server probe is the only
-      // authoritative way to verify LM Studio and discover local models, and
-      // it deliberately bypasses cloud login/account checks.
-      const checkCodexStatus = effectiveConfig.ossMode
-        ? checkCodexProviderStatus(effectiveConfig, undefined, effectiveEnvironment)
-        : checkCodexCliProviderStatus(effectiveConfig, effectiveEnvironment);
+      // message. OSS mode is the exception: its app-server probe verifies that
+      // Codex can host the local transport, while LM Studio's `/v1/models`
+      // response supplies the exact callable inventory. Both deliberately
+      // bypass cloud login/account checks and run concurrently on refresh.
+      const checkCodexStatus =
+        effectiveConfig.ossMode && effectiveConfig.enabled
+          ? Effect.all(
+              [
+                checkCodexProviderStatus(effectiveConfig, undefined, effectiveEnvironment),
+                discoverLmStudioModels(effectiveConfig.ossBaseUrl, httpClient),
+              ],
+              { concurrency: "unbounded" },
+            ).pipe(
+              Effect.map(([provider, discovery]) =>
+                reconcileLmStudioModelDiscovery(provider, discovery),
+              ),
+            )
+          : effectiveConfig.ossMode
+            ? checkCodexProviderStatus(effectiveConfig, undefined, effectiveEnvironment)
+            : checkCodexCliProviderStatus(effectiveConfig, effectiveEnvironment);
       const checkProvider = refreshCodexShadowHome.pipe(
         Effect.catch((cause) =>
           Effect.logWarning("codex.home.authRefreshBeforeStatusFailed", {

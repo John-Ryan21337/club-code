@@ -19,6 +19,7 @@ import {
   buildCodexThreadSnapshotBackfillEvents,
   buildTurnStartParams,
   buildTurnSteerParams,
+  CODEX_COMPLETED_AGENT_MESSAGE_LEDGER_LIMIT,
   CODEX_ULTRA_CACHING_COMPACT_PROMPT,
   claimCodexSnapshotBackfillWatcher,
   codexAggregateNotificationMethod,
@@ -36,9 +37,11 @@ import {
   readCodexNotificationEmittedAtIso,
   readCodexNotificationRouteFields,
   readCodexSteerExpectedTurnMismatchActualTurnId,
+  reconcileCodexCompletedAgentMessageNotifications,
   rememberCodexChildConversationTurns,
   resolveCodexThreadSettingsSessionModel,
   resolveCodexChildConversationNotification,
+  shouldForwardCodexRootGoalNotification,
   selectCodexActiveSnapshotTurn,
   summarizeCodexAppServerChildProcesses,
   updateCodexChildConversationLiveness,
@@ -82,6 +85,150 @@ describe("Codex notification emission timestamps", () => {
         receivedAtMs,
       ),
       undefined,
+    );
+  });
+});
+
+describe("Codex completed-turn agent message reconciliation", () => {
+  const itemCompleted = {
+    method: "item/completed",
+    params: {
+      completedAtMs: 1_779_000_002_000,
+      threadId: "provider-thread-1",
+      turnId: "turn-1",
+      item: {
+        id: "message-final",
+        type: "agentMessage",
+        text: "Final response",
+        phase: "final_answer",
+      },
+    } satisfies EffectCodexSchema.V2ItemCompletedNotification,
+    emittedAtMs: 1_779_000_002_000,
+  } as const;
+  const turnCompleted = {
+    method: "turn/completed",
+    params: {
+      threadId: "provider-thread-1",
+      turn: {
+        id: "turn-1",
+        status: "completed",
+        completedAt: 1_779_000_002,
+        items: [
+          {
+            id: "message-earlier",
+            type: "agentMessage",
+            text: "Earlier response",
+          },
+          {
+            id: "message-final",
+            type: "agentMessage",
+            text: "Final response",
+            phase: "final_answer",
+          },
+          {
+            id: "message-empty",
+            type: "agentMessage",
+            text: "   ",
+          },
+        ],
+      },
+    } satisfies EffectCodexSchema.V2TurnCompletedNotification,
+    emittedAtMs: 1_779_000_002_000,
+  } as const;
+
+  it("surfaces the final non-empty turn item before terminal completion when item/completed was missed", () => {
+    const result = reconcileCodexCompletedAgentMessageNotifications(
+      new Map(),
+      turnCompleted,
+      1_779_000_003_000,
+    );
+
+    assert.deepStrictEqual(result.notifications, [itemCompleted, turnCompleted]);
+    assert.equal(result.ledger.size, 1);
+  });
+
+  it("does not recreate an agent message whose item/completed notification already arrived", () => {
+    const itemResult = reconcileCodexCompletedAgentMessageNotifications(
+      new Map(),
+      itemCompleted,
+      1_779_000_002_000,
+    );
+    const turnResult = reconcileCodexCompletedAgentMessageNotifications(
+      itemResult.ledger,
+      turnCompleted,
+      1_779_000_003_000,
+    );
+
+    assert.deepStrictEqual(itemResult.notifications, [itemCompleted]);
+    assert.deepStrictEqual(turnResult.notifications, [turnCompleted]);
+    assert.equal(turnResult.ledger.size, 1);
+  });
+
+  it("suppresses a late item/completed notification after terminal fallback emitted it", () => {
+    const turnResult = reconcileCodexCompletedAgentMessageNotifications(
+      new Map(),
+      turnCompleted,
+      1_779_000_003_000,
+    );
+    const lateItemResult = reconcileCodexCompletedAgentMessageNotifications(
+      turnResult.ledger,
+      itemCompleted,
+      1_779_000_004_000,
+    );
+
+    assert.deepStrictEqual(lateItemResult.notifications, []);
+    assert.equal(lateItemResult.ledger, turnResult.ledger);
+  });
+
+  it("does not promote partial agent output from a failed or interrupted turn to a final message", () => {
+    for (const status of ["failed", "interrupted"] as const) {
+      const terminal = {
+        ...turnCompleted,
+        params: {
+          ...turnCompleted.params,
+          turn: {
+            ...turnCompleted.params.turn,
+            status,
+          },
+        },
+      };
+      const result = reconcileCodexCompletedAgentMessageNotifications(
+        new Map(),
+        terminal,
+        1_779_000_003_000,
+      );
+
+      assert.deepStrictEqual(result.notifications, [terminal]);
+      assert.equal(result.ledger.size, 0);
+    }
+  });
+
+  it("bounds opaque completion identities and does not share them with a fresh session ledger", () => {
+    let ledger = new Map<string, true>();
+    for (let index = 0; index <= CODEX_COMPLETED_AGENT_MESSAGE_LEDGER_LIMIT; index += 1) {
+      const result = reconcileCodexCompletedAgentMessageNotifications(
+        ledger,
+        {
+          ...itemCompleted,
+          params: {
+            ...itemCompleted.params,
+            turnId: `turn-${index}`,
+            item: {
+              ...itemCompleted.params.item,
+              id: `message-${index}`,
+            },
+          },
+        },
+        1_779_000_002_000 + index,
+      );
+      ledger = new Map(result.ledger);
+    }
+
+    assert.equal(ledger.size, CODEX_COMPLETED_AGENT_MESSAGE_LEDGER_LIMIT);
+    assert.deepStrictEqual(
+      reconcileCodexCompletedAgentMessageNotifications(new Map(), itemCompleted, 1_779_000_005_000)
+        .notifications,
+      [itemCompleted],
     );
   });
 });
@@ -303,6 +450,57 @@ describe("Codex child conversation routing", () => {
         parentTurnId,
         suppressLifecycle: true,
       },
+    );
+    assert.deepStrictEqual(
+      resolveCodexChildConversationNotification(
+        routes,
+        {
+          method: "thread/goal/updated",
+          params: {
+            threadId: "thread-child",
+            goal: {
+              threadId: "thread-child",
+              objective: "Child objective",
+              status: "active",
+              tokenBudget: null,
+              tokensUsed: 0,
+              timeUsedSeconds: 0,
+              createdAt: 1,
+              updatedAt: 1,
+            },
+          },
+        },
+        "thread-parent",
+      ),
+      {
+        parentTurnId,
+        suppressLifecycle: true,
+      },
+    );
+  });
+
+  it("forwards goal notifications only from the root provider thread", () => {
+    const rootGoal = {
+      method: "thread/goal/cleared",
+      params: { threadId: "thread-parent" },
+    } as const;
+    const childGoal = {
+      method: "thread/goal/cleared",
+      params: { threadId: "thread-child" },
+    } as const;
+
+    assert.equal(shouldForwardCodexRootGoalNotification(rootGoal, "thread-parent"), true);
+    assert.equal(shouldForwardCodexRootGoalNotification(childGoal, "thread-parent"), false);
+    assert.equal(shouldForwardCodexRootGoalNotification(rootGoal, undefined), false);
+    assert.equal(
+      shouldForwardCodexRootGoalNotification(
+        {
+          method: "item/completed",
+          params: { threadId: "thread-child" },
+        },
+        "thread-parent",
+      ),
+      true,
     );
   });
 

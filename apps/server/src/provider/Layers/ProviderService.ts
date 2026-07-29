@@ -19,6 +19,10 @@ import {
   ProviderRespondToUserInputInput,
   ProviderSendTurnInput,
   ProviderSessionStartInput,
+  ProviderThreadGoalClearInput,
+  ProviderThreadGoalGetInput,
+  ProviderThreadGoalSetInput,
+  PROVIDER_THREAD_GOAL_MAX_OBJECTIVE_CODE_POINTS,
   ServerProviderRuntimeRestartInput,
   ProviderSteerTurnInput,
   ProviderStopSessionInput,
@@ -1524,6 +1528,108 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   const getInstanceInfo: ProviderServiceShape["getInstanceInfo"] = (instanceId) =>
     registry.getInstanceInfo(instanceId);
 
+  const requireGoalAdapter = Effect.fn("requireGoalAdapter")(function* (input: {
+    readonly threadId: ThreadId;
+    readonly operation: string;
+  }) {
+    const routed = yield* resolveRoutableSession({
+      threadId: input.threadId,
+      operation: input.operation,
+      allowRecovery: true,
+    });
+    if (
+      routed.adapter.capabilities.threadGoals !== "supported" ||
+      routed.adapter.getGoal === undefined ||
+      routed.adapter.setGoal === undefined ||
+      routed.adapter.clearGoal === undefined
+    ) {
+      return yield* toValidationError(
+        input.operation,
+        `Provider '${routed.adapter.provider}' does not support durable thread goals`,
+      );
+    }
+    return {
+      ...routed,
+      getGoal: routed.adapter.getGoal,
+      setGoal: routed.adapter.setGoal,
+      clearGoal: routed.adapter.clearGoal,
+    };
+  });
+
+  const getGoal: NonNullable<ProviderServiceShape["getGoal"]> = Effect.fn("getGoal")(
+    function* (rawInput) {
+      const input = yield* decodeInputOrValidationError({
+        operation: "ProviderService.getGoal",
+        schema: ProviderThreadGoalGetInput,
+        payload: rawInput,
+      });
+      const routed = yield* requireGoalAdapter({
+        threadId: input.threadId,
+        operation: "ProviderService.getGoal",
+      });
+      yield* Effect.annotateCurrentSpan({
+        "provider.operation": "get-goal",
+        "provider.kind": routed.adapter.provider,
+        "provider.thread_id": input.threadId,
+      });
+      return yield* routed.getGoal(input.threadId);
+    },
+  );
+
+  const setGoal: NonNullable<ProviderServiceShape["setGoal"]> = Effect.fn("setGoal")(
+    function* (rawInput) {
+      const input = yield* decodeInputOrValidationError({
+        operation: "ProviderService.setGoal",
+        schema: ProviderThreadGoalSetInput,
+        payload: rawInput,
+      });
+      if (
+        input.objective !== undefined &&
+        input.objective !== null &&
+        Array.from(input.objective).length > PROVIDER_THREAD_GOAL_MAX_OBJECTIVE_CODE_POINTS
+      ) {
+        return yield* toValidationError(
+          "ProviderService.setGoal",
+          `Goal objective exceeds ${PROVIDER_THREAD_GOAL_MAX_OBJECTIVE_CODE_POINTS} Unicode code points`,
+        );
+      }
+      const routed = yield* requireGoalAdapter({
+        threadId: input.threadId,
+        operation: "ProviderService.setGoal",
+      });
+      yield* Effect.annotateCurrentSpan({
+        "provider.operation": "set-goal",
+        "provider.kind": routed.adapter.provider,
+        "provider.thread_id": input.threadId,
+        // Goal objectives are user content and must not enter traces.
+        "provider.goal.objective_present": input.objective !== undefined,
+        "provider.goal.status": input.status ?? "unchanged",
+        "provider.goal.token_budget": input.tokenBudget ?? "unchanged",
+      });
+      return yield* routed.setGoal(input);
+    },
+  );
+
+  const clearGoal: NonNullable<ProviderServiceShape["clearGoal"]> = Effect.fn("clearGoal")(
+    function* (rawInput) {
+      const input = yield* decodeInputOrValidationError({
+        operation: "ProviderService.clearGoal",
+        schema: ProviderThreadGoalClearInput,
+        payload: rawInput,
+      });
+      const routed = yield* requireGoalAdapter({
+        threadId: input.threadId,
+        operation: "ProviderService.clearGoal",
+      });
+      yield* Effect.annotateCurrentSpan({
+        "provider.operation": "clear-goal",
+        "provider.kind": routed.adapter.provider,
+        "provider.thread_id": input.threadId,
+      });
+      return yield* routed.clearGoal(input.threadId);
+    },
+  );
+
   const readThread: NonNullable<ProviderServiceShape["readThread"]> = Effect.fn("readThread")(
     function* (rawInput) {
       const input = yield* decodeInputOrValidationError({
@@ -1700,6 +1806,9 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     listSessions,
     getCapabilities,
     getInstanceInfo,
+    getGoal,
+    setGoal,
+    clearGoal,
     readThread,
     rollbackConversation,
     // Each access creates a fresh PubSub subscription so that multiple

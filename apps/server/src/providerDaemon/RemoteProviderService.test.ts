@@ -1,4 +1,4 @@
-import { ProviderInstanceId } from "@cafecode/contracts";
+import { ProviderInstanceId, ThreadId } from "@cafecode/contracts";
 import { assert, describe, it } from "@effect/vitest";
 
 import {
@@ -29,6 +29,21 @@ describe("RemoteProviderService", () => {
       throw new Error("restartProviderRuntime request did not receive commandId");
     }
     assert.isAtLeast(commandId.length, 16);
+  });
+
+  it("adds commandId to goal mutation daemon RPC requests", () => {
+    const request = attachCommandIdToMutatingProviderDaemonRequest({
+      method: "setGoal",
+      payload: {
+        threadId: ThreadId.make("thread-1"),
+        objective: "Finish the proof",
+        status: "active",
+        tokenBudget: null,
+      },
+    });
+
+    assert.equal(request.method, "setGoal");
+    assert.equal(typeof request.commandId, "string");
   });
 
   it("does not add commandId to read-only daemon RPC requests", () => {

@@ -3,11 +3,14 @@ import "../index.css";
 
 import {
   DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES,
+  DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+  type ClientOrchestrationCommand,
   EventId,
   type DesktopBridge,
   ORCHESTRATION_WS_METHODS,
   EnvironmentId,
   type DesktopSourceUpdateState,
+  ManualFollowUpId,
   type MessageId,
   type OrchestrationReadModel,
   type ProjectId,
@@ -15,7 +18,9 @@ import {
   ProviderInstanceId,
   type RuntimeMode,
   type ServerConfig,
+  type ServerProjectSystemTelemetryResult,
   type ServerLifecycleWelcomePayload,
+  type ThreadAutoNudgeConfig,
   type ThreadId,
   type TurnId,
   WS_METHODS,
@@ -26,6 +31,7 @@ import {
 import { scopedThreadKey, scopeThreadRef } from "@cafecode/client-runtime";
 import { createModelCapabilities, createModelSelection } from "@cafecode/shared/model";
 import { RouterProvider, createMemoryHistory } from "@tanstack/react-router";
+import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { HttpResponse, http, ws } from "msw";
@@ -37,15 +43,7 @@ import { render } from "vitest-browser-react";
 import { useCommandPaletteStore } from "../commandPaletteStore";
 import { useComposerDraftStore, DraftId } from "../composerDraftStore";
 import { __resetEnvironmentApiOverridesForTests } from "../environmentApi";
-import { __resetAutoNudgeTurnLedgerForTests } from "../autoNudger";
-import {
-  __resetBackgroundAutoNudgeControllerForTests,
-  getBackgroundAutoNudgeController,
-} from "../backgroundAutoNudger";
-import {
-  __resetAutoNudgeThreadPolicyStoreForTests,
-  getAutoNudgeThreadPolicyStore,
-} from "../autoNudgeThreadPolicy";
+import { readBrowserClientSettings, writeBrowserClientSettings } from "../clientPersistenceStorage";
 import { isMacPlatform } from "../lib/utils";
 import { resetSourceControlDiscoveryStateForTests } from "../lib/sourceControlDiscoveryState";
 import { __resetLocalApiForTests } from "../localApi";
@@ -59,6 +57,17 @@ import { createAuthenticatedSessionHandlers } from "../../test/authHttpHandlers"
 import { BrowserWsRpcHarness, type NormalizedWsRpcRequestBody } from "../../test/wsRpcHarness";
 
 import { DEFAULT_CLIENT_SETTINGS } from "@cafecode/contracts/settings";
+import { __resetAutoNudgeTurnLedgerForTests } from "../autoNudger";
+import {
+  AUTO_NUDGE_SUPPRESSION_STORAGE_KEY,
+  __resetConfirmedAutoNudgeArmingForTests,
+  getConfirmedAutoNudgeArming,
+} from "../confirmedAutoNudgeArming";
+import {
+  resetSavedEnvironmentRegistryStoreForTests,
+  useSavedEnvironmentRegistryStore,
+  waitForSavedEnvironmentRegistryHydration,
+} from "../environments/runtime";
 
 vi.mock("../lib/gitStatusState", () => ({
   useGitStatus: () => ({ data: null, error: null, cause: null, isPending: false }),
@@ -318,6 +327,8 @@ function createSnapshotForTargetUser(options: {
         updatedAt: NOW_ISO,
         archivedAt: null,
         deletedAt: null,
+        autoNudge: DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+        manualFollowUps: [],
         messages,
         activities: [],
         proposedPlans: [],
@@ -383,6 +394,8 @@ function addThreadToSnapshot(
         updatedAt: NOW_ISO,
         archivedAt: null,
         deletedAt: null,
+        autoNudge: DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+        manualFollowUps: [],
         messages: [],
         activities: [],
         proposedPlans: [],
@@ -401,6 +414,20 @@ function addThreadToSnapshot(
   };
 }
 
+function setThreadAutoNudgeConfig(
+  snapshot: OrchestrationReadModel,
+  threadId: ThreadId,
+  autoNudge: ThreadAutoNudgeConfig,
+): OrchestrationReadModel {
+  return {
+    ...snapshot,
+    snapshotSequence: snapshot.snapshotSequence + 1,
+    threads: snapshot.threads.map((thread) =>
+      thread.id === threadId ? { ...thread, autoNudge } : thread,
+    ),
+  };
+}
+
 function toShellThread(thread: OrchestrationReadModel["threads"][number]) {
   return {
     id: thread.id,
@@ -412,6 +439,18 @@ function toShellThread(thread: OrchestrationReadModel["threads"][number]) {
     branch: thread.branch,
     worktreePath: thread.worktreePath,
     latestTurn: thread.latestTurn,
+    autoNudge: {
+      authorityRevision: thread.autoNudge.authorityRevision,
+      mode: thread.autoNudge.mode,
+      backgroundContinuation: thread.autoNudge.backgroundContinuation,
+      maxRounds: thread.autoNudge.maxRounds,
+      maxMinutes: thread.autoNudge.maxMinutes,
+      armedAt: thread.autoNudge.armedAt,
+      baselineSettledTurnId: thread.autoNudge.baselineSettledTurnId,
+      lastDispatchedSettledTurnId: thread.autoNudge.lastDispatchedSettledTurnId,
+      roundsDispatched: thread.autoNudge.roundsDispatched,
+      lastDispatchedAt: thread.autoNudge.lastDispatchedAt,
+    },
     createdAt: thread.createdAt,
     updatedAt: thread.updatedAt,
     archivedAt: thread.archivedAt,
@@ -730,6 +769,8 @@ function createSnapshotWithSecondaryProject(options?: {
             lastError: null,
             updatedAt: isoAt(31),
           },
+          autoNudge: DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+          manualFollowUps: [],
           archivedAt: null,
         },
       ]
@@ -762,6 +803,8 @@ function createSnapshotWithSecondaryProject(options?: {
             lastError: null,
             updatedAt: isoAt(25),
           },
+          autoNudge: DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+          manualFollowUps: [],
           archivedAt: isoAt(26),
         },
       ]
@@ -916,6 +959,51 @@ function resolveWsRpc(body: NormalizedWsRpcRequestBody): unknown {
   const tag = body._tag;
   if (tag === WS_METHODS.serverGetConfig) {
     return encodeServerConfig(fixture.serverConfig);
+  }
+  if (tag === WS_METHODS.serverGetProjectSystemTelemetry) {
+    const projectId = body.projectId as ProjectId;
+    return {
+      projectId,
+      sampledAt: DateTime.makeUnsafe("2026-07-26T12:00:00.000Z"),
+      minimumSampleIntervalMs: 3_000,
+      platform: "linux",
+      architecture: "x64",
+      cpu: {
+        status: "available",
+        utilizationPercent: 25,
+        logicalProcessorCount: 8,
+        detail: null,
+      },
+      memory: {
+        status: "available",
+        totalBytes: 8 * 1024 ** 3,
+        usedBytes: 4 * 1024 ** 3,
+        availableBytes: 4 * 1024 ** 3,
+        utilizationPercent: 50,
+        detail: null,
+      },
+      network: {
+        status: "available",
+        receiveBytesPerSecond: 2 * 1024 ** 2,
+        transmitBytesPerSecond: 512 * 1024,
+        detail: null,
+      },
+      gpu: {
+        status: "unavailable",
+        adapters: [],
+        reason: "unsupported",
+        detail: "GPU telemetry is unavailable from this backend.",
+      },
+      projectVolume: {
+        status: "available",
+        totalBytes: 20 * 1024 ** 3,
+        usedBytes: 12 * 1024 ** 3,
+        availableBytes: 8 * 1024 ** 3,
+        utilizationPercent: 60,
+        projectVolumeOnly: true,
+        detail: null,
+      },
+    } satisfies ServerProjectSystemTelemetryResult;
   }
   if (tag === WS_METHODS.serverDiscoverSourceControl) {
     return {
@@ -1083,6 +1171,25 @@ async function waitForElement<T extends Element>(
     throw new Error(errorMessage);
   }
   return element;
+}
+
+async function expandAutoNudgeControls(): Promise<void> {
+  if (document.querySelector('button[aria-label="Collapse Auto Nudge controls"]')) {
+    return;
+  }
+  const expand = await waitForElement(
+    () =>
+      document.querySelector<HTMLButtonElement>('button[aria-label="Expand Auto Nudge controls"]'),
+    "Unable to find minimized Auto Nudge controls.",
+  );
+  expand.click();
+  await waitForElement(
+    () =>
+      document.querySelector<HTMLButtonElement>(
+        'button[aria-label="Collapse Auto Nudge controls"]',
+      ),
+    "Auto Nudge controls did not expand.",
+  );
 }
 
 async function waitForURL(
@@ -1678,6 +1785,14 @@ async function mountChatView(options: {
   await waitForAppBootstrap();
   await waitForLayout();
 
+  // The Atmosphere console has its own browser suite. Keep this full-app
+  // fixture focused on ChatView behavior by closing the global default-open
+  // panel before callers interact with controls beneath it.
+  document
+    .querySelector<HTMLButtonElement>('button[aria-label="Close atmosphere console"]')
+    ?.click();
+  await waitForLayout();
+
   const cleanup = async () => {
     customWsRpcResolver = null;
     await screen.unmount();
@@ -1788,9 +1903,8 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
     await setViewport(DEFAULT_VIEWPORT);
     localStorage.clear();
     sessionStorage.clear();
-    __resetAutoNudgeTurnLedgerForTests();
-    __resetBackgroundAutoNudgeControllerForTests();
-    __resetAutoNudgeThreadPolicyStoreForTests();
+    __resetAutoNudgeTurnLedgerForTests({ clearSessionStorage: true });
+    __resetConfirmedAutoNudgeArmingForTests({ clearStorage: true });
     document.body.innerHTML = "";
     wsRequests.length = 0;
     customWsRpcResolver = null;
@@ -2986,6 +3100,14 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
             ),
           "Unable to find composer attach-files button.",
         );
+        const cameraButton = await waitForElement(
+          () =>
+            document.querySelector<HTMLButtonElement>(
+              '[data-chat-composer-form="true"] button[aria-label="Open camera"]',
+            ),
+          "Unable to find composer camera button.",
+        );
+        expect(attachButton.nextElementSibling).toBe(cameraButton);
 
         const fileInput = document.querySelector<HTMLInputElement>(
           '[data-chat-composer-form="true"] input[type="file"]',
@@ -2995,6 +3117,37 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
         // files" instead of forcing users to switch away from Images for .txt.
         expect(fileInput!.accept).toBe("");
         expect(fileInput!.multiple).toBe(true);
+        const systemCameraInput = document.querySelector<HTMLInputElement>(
+          '[data-chat-composer-camera-input="true"]',
+        );
+        expect(systemCameraInput).toBeTruthy();
+        expect(systemCameraInput!.accept).toBe("image/*");
+        expect(systemCameraInput!.getAttribute("capture")).toBe("environment");
+        expect(systemCameraInput!.multiple).toBe(false);
+
+        // In insecure/unsupported web contexts the same click must synchronously
+        // open the dedicated native-camera input while user activation is live.
+        const mediaDevicesDescriptor = Object.getOwnPropertyDescriptor(navigator, "mediaDevices");
+        const originalSystemCameraClick = systemCameraInput!.click.bind(systemCameraInput!);
+        let systemCameraPickerOpened = false;
+        try {
+          Object.defineProperty(navigator, "mediaDevices", {
+            configurable: true,
+            value: undefined,
+          });
+          systemCameraInput!.click = () => {
+            systemCameraPickerOpened = true;
+          };
+          cameraButton.click();
+          expect(systemCameraPickerOpened).toBe(true);
+        } finally {
+          systemCameraInput!.click = originalSystemCameraClick;
+          if (mediaDevicesDescriptor) {
+            Object.defineProperty(navigator, "mediaDevices", mediaDevicesDescriptor);
+          } else {
+            Reflect.deleteProperty(navigator, "mediaDevices");
+          }
+        }
 
         // Tapping the button forwards to the hidden file input's native picker.
         let pickerOpened = false;
@@ -3025,7 +3178,125 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
             document.querySelector<HTMLButtonElement>('button[aria-label="Remove diagram.png"]'),
           "Unable to find attached image remove control.",
         );
+
+        // The declarative system-camera fallback is isolated from the
+        // paperclip's image+text picker but feeds the exact same validated
+        // attachment/preview path.
+        const capturedTransfer = new DataTransfer();
+        capturedTransfer.items.add(
+          new File([new Uint8Array([5, 6, 7, 8])], "camera-fallback.jpg", {
+            type: "image/jpeg",
+          }),
+        );
+        systemCameraInput!.files = capturedTransfer.files;
+        systemCameraInput!.dispatchEvent(new Event("change", { bubbles: true }));
+        await waitForElement(
+          () =>
+            document.querySelector<HTMLButtonElement>(
+              'button[aria-label="Preview camera-fallback.jpg"]',
+            ),
+          "Unable to find the system-camera fallback preview.",
+        );
       } finally {
+        await mounted.cleanup();
+      }
+    });
+
+    it("keeps a native camera result on the thread that opened the picker", async () => {
+      const secondThreadId = "thread-camera-target-second" as ThreadId;
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: addThreadToSnapshot(
+          createSnapshotForTargetUser({
+            targetMessageId: "msg-user-camera-target" as MessageId,
+            targetText: "camera target",
+          }),
+          secondThreadId,
+        ),
+      });
+
+      const mediaDevicesDescriptor = Object.getOwnPropertyDescriptor(navigator, "mediaDevices");
+      try {
+        await waitForComposerEditor();
+        const cameraButton = await waitForElement(
+          () =>
+            document.querySelector<HTMLButtonElement>(
+              '[data-chat-composer-form="true"] button[aria-label="Open camera"]',
+            ),
+          "Unable to find composer camera button.",
+        );
+        const systemCameraInput = await waitForElement(
+          () =>
+            document.querySelector<HTMLInputElement>('[data-chat-composer-camera-input="true"]'),
+          "Unable to find native camera input.",
+        );
+        Object.defineProperty(navigator, "mediaDevices", {
+          configurable: true,
+          value: undefined,
+        });
+        const originalClick = systemCameraInput.click.bind(systemCameraInput);
+        systemCameraInput.click = () => undefined;
+        cameraButton.click();
+        systemCameraInput.click = originalClick;
+
+        await mounted.router.navigate({
+          to: "/$environmentId/$threadId",
+          params: {
+            environmentId: LOCAL_ENVIRONMENT_ID,
+            threadId: secondThreadId,
+          },
+        });
+        await waitForURL(
+          mounted.router,
+          (path) => path === serverThreadPath(secondThreadId),
+          "Route should switch while the native camera is open.",
+        );
+
+        const transfer = new DataTransfer();
+        transfer.items.add(
+          new File([new Uint8Array([9, 8, 7, 6])], "pinned-camera.jpg", {
+            type: "image/jpeg",
+          }),
+        );
+        systemCameraInput.files = transfer.files;
+        systemCameraInput.dispatchEvent(new Event("change", { bubbles: true }));
+
+        await vi.waitFor(() => {
+          expect(
+            useComposerDraftStore
+              .getState()
+              .getComposerDraft(THREAD_REF)
+              ?.images.map((image) => image.name),
+          ).toContain("pinned-camera.jpg");
+          expect(
+            useComposerDraftStore
+              .getState()
+              .getComposerDraft(threadRefFor(secondThreadId))
+              ?.images.map((image) => image.name) ?? [],
+          ).not.toContain("pinned-camera.jpg");
+        });
+        expect(document.querySelector('button[aria-label="Preview pinned-camera.jpg"]')).toBeNull();
+
+        await mounted.router.navigate({
+          to: "/$environmentId/$threadId",
+          params: {
+            environmentId: LOCAL_ENVIRONMENT_ID,
+            threadId: THREAD_ID,
+          },
+        });
+        await waitForElement(
+          () =>
+            document.querySelector<HTMLButtonElement>(
+              'button[aria-label="Preview pinned-camera.jpg"]',
+            ),
+          "Unable to find camera attachment on its originating thread.",
+        );
+      } finally {
+        if (mediaDevicesDescriptor) {
+          Object.defineProperty(navigator, "mediaDevices", mediaDevicesDescriptor);
+        } else {
+          Reflect.deleteProperty(navigator, "mediaDevices");
+        }
         await mounted.cleanup();
       }
     });
@@ -3321,6 +3592,14 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
             ),
           "Unable to find mobile overlay attach-files button.",
         );
+        const overlayCameraButton = await waitForElement(
+          () =>
+            document.querySelector<HTMLButtonElement>(
+              '[data-chat-composer-mobile-pending-actions="true"] button[aria-label="Open camera"]',
+            ),
+          "Unable to find mobile overlay camera button.",
+        );
+        expect(overlayAttachButton.nextElementSibling).toBe(overlayCameraButton);
 
         const fileInput = document.querySelector<HTMLInputElement>(
           '[data-chat-composer-form="true"] input[type="file"]',
@@ -3387,6 +3666,527 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
       } finally {
         await mounted.cleanup();
         restoreTouchMediaQuery();
+      }
+    });
+
+    it("keeps Enter-staged follow-ups visible until the operator explicitly steers", async () => {
+      const originalReadAsDataUrl = FileReader.prototype.readAsDataURL;
+      let releaseFileRead: (() => void) | null = null;
+      const activeTurnId = "turn-enter-stages-follow-up" as TurnId;
+      const baseSnapshot = createSnapshotForTargetUser({
+        targetMessageId: "msg-user-enter-stages-follow-up" as MessageId,
+        targetText: "active turn before queued follow-ups",
+      });
+      const runningSnapshot: OrchestrationReadModel = {
+        ...baseSnapshot,
+        threads: baseSnapshot.threads.map((thread) => ({
+          ...thread,
+          latestTurn: {
+            turnId: activeTurnId,
+            state: "running" as const,
+            requestedAt: isoAt(1_000),
+            startedAt: isoAt(1_001),
+            completedAt: null,
+            assistantMessageId: null,
+          },
+          session: {
+            ...thread.session!,
+            status: "running" as const,
+            activeTurnId,
+            updatedAt: isoAt(1_001),
+          },
+          updatedAt: isoAt(1_001),
+        })),
+      };
+      let nextSequence = runningSnapshot.snapshotSequence;
+
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: runningSnapshot,
+        configureFixture: (nextFixture) => {
+          nextFixture.serverConfig = {
+            ...nextFixture.serverConfig,
+            providers: nextFixture.serverConfig.providers.map((provider) => ({
+              ...provider,
+              runtimeCapabilities: {
+                ...provider.runtimeCapabilities,
+                liveSteer: "supported",
+                threadGoals: provider.runtimeCapabilities?.threadGoals ?? "unsupported",
+              },
+            })),
+          };
+        },
+        resolveRpc: (body) => {
+          if (
+            body._tag !== ORCHESTRATION_WS_METHODS.dispatchCommand ||
+            body.type !== "thread.manual-follow-up.enqueue"
+          ) {
+            if (body._tag === ORCHESTRATION_WS_METHODS.dispatchCommand) {
+              nextSequence += 1;
+              return { sequence: nextSequence };
+            }
+            return undefined;
+          }
+
+          const enqueueRequest = body as NormalizedWsRpcRequestBody &
+            Extract<ClientOrchestrationCommand, { type: "thread.manual-follow-up.enqueue" }>;
+          nextSequence += 1;
+          const currentThread = fixture.snapshot.threads[0]!;
+          const projectedThread: OrchestrationReadModel["threads"][number] = {
+            ...currentThread,
+            manualFollowUps: [
+              ...currentThread.manualFollowUps,
+              {
+                id: enqueueRequest.followUpId,
+                message: {
+                  ...enqueueRequest.message,
+                  attachments: enqueueRequest.message.attachments.map((attachment, index) => ({
+                    type: attachment.type,
+                    id: `${enqueueRequest.followUpId}-attachment-${index}`,
+                    name: attachment.name,
+                    mimeType: attachment.mimeType,
+                    sizeBytes: attachment.sizeBytes,
+                  })),
+                },
+                dispatch: enqueueRequest.dispatch,
+                status: "queued",
+                enqueuedAt: enqueueRequest.createdAt,
+                activatedAt: null,
+                activationCommandId: null,
+              },
+            ],
+            updatedAt: enqueueRequest.createdAt,
+          };
+          fixture.snapshot = {
+            ...fixture.snapshot,
+            snapshotSequence: nextSequence,
+            threads: [projectedThread],
+            updatedAt: enqueueRequest.createdAt,
+          };
+          queueMicrotask(() => {
+            rpcHarness.emitStreamValue(ORCHESTRATION_WS_METHODS.subscribeThread, {
+              kind: "snapshot",
+              snapshot: {
+                snapshotSequence: nextSequence,
+                thread: projectedThread,
+              },
+            });
+          });
+          return { sequence: nextSequence };
+        },
+      });
+
+      try {
+        FileReader.prototype.readAsDataURL = function (_blob: Blob): void {
+          const reader = this;
+          releaseFileRead = () => {
+            Object.defineProperty(reader, "result", {
+              configurable: true,
+              value: "data:image/png;base64,AQID",
+            });
+            reader.dispatchEvent(new ProgressEvent("load"));
+          };
+        };
+        useComposerDraftStore
+          .getState()
+          .setPrompt(THREAD_REF, "First command should wait for explicit Steer");
+        const queuedImage = new File([new Uint8Array([1, 2, 3])], "queued.png", {
+          type: "image/png",
+        });
+        useComposerDraftStore.getState().addImage(THREAD_REF, {
+          type: "image",
+          id: "queued-follow-up-image",
+          name: queuedImage.name,
+          mimeType: queuedImage.type,
+          sizeBytes: queuedImage.size,
+          previewUrl: URL.createObjectURL(queuedImage),
+          file: queuedImage,
+        });
+        await waitForLayout();
+        await pressComposerKey("Enter");
+
+        await vi.waitFor(
+          () => {
+            const manualCommands = wsRequests.filter(
+              (request) =>
+                request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+                typeof request.type === "string" &&
+                request.type.startsWith("thread.manual-follow-up."),
+            );
+            expect(manualCommands.map((request) => request.type)).toEqual([
+              "thread.manual-follow-up.reserve",
+            ]);
+            const reservation = manualCommands[0];
+            expect("message" in reservation!).toBe(false);
+            expect("attachments" in reservation!).toBe(false);
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+        expect(releaseFileRead).not.toBeNull();
+        expect(useComposerDraftStore.getState().getComposerDraft(THREAD_REF)?.prompt).toBe(
+          "First command should wait for explicit Steer",
+        );
+        expect(useComposerDraftStore.getState().getComposerDraft(THREAD_REF)?.images).toHaveLength(
+          1,
+        );
+        const releaseQueuedFileRead = releaseFileRead as unknown as () => void;
+        releaseFileRead = null;
+        releaseQueuedFileRead();
+
+        await vi.waitFor(
+          () => {
+            expect(
+              wsRequests.filter(
+                (request) =>
+                  request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+                  request.type === "thread.manual-follow-up.enqueue",
+              ),
+            ).toHaveLength(1);
+            expect(document.querySelector('[data-cafe-followup-queue="true"]')).toBeTruthy();
+            expect(
+              document.querySelector<HTMLButtonElement>(
+                '.cafe-followup-steer-button[aria-label="Steer"]',
+              ),
+            ).toBeTruthy();
+            expect(
+              useComposerDraftStore.getState().getComposerDraft(THREAD_REF)?.prompt ?? "",
+            ).toBe("");
+            expect(
+              useComposerDraftStore.getState().getComposerDraft(THREAD_REF)?.images ?? [],
+            ).toHaveLength(0);
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+
+        // A state-change pass and the watchdog must not consume a queued item
+        // while a turn is running. Only the operator's Steer action may do so.
+        await new Promise((resolve) => window.setTimeout(resolve, 1_100));
+        expect(
+          wsRequests.some(
+            (request) =>
+              request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+              request.type === "thread.manual-follow-up.activate",
+          ),
+        ).toBe(false);
+
+        useComposerDraftStore
+          .getState()
+          .setPrompt(THREAD_REF, "Second command should remain behind the first");
+        await waitForLayout();
+        await pressComposerKey("Enter");
+
+        await vi.waitFor(
+          () => {
+            expect(
+              wsRequests.filter(
+                (request) =>
+                  request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+                  request.type === "thread.manual-follow-up.enqueue",
+              ),
+            ).toHaveLength(2);
+            expect(document.body.textContent ?? "").toContain("2 messages queued");
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+        expect(
+          wsRequests.some(
+            (request) =>
+              request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+              request.type === "thread.manual-follow-up.activate",
+          ),
+        ).toBe(false);
+
+        document
+          .querySelector<HTMLButtonElement>('.cafe-followup-steer-button[aria-label="Steer"]')!
+          .click();
+        await vi.waitFor(
+          () => {
+            const activation = wsRequests.find(
+              (request) =>
+                request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+                request.type === "thread.manual-follow-up.activate",
+            );
+            const firstEnqueue = wsRequests.find(
+              (request) =>
+                request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+                request.type === "thread.manual-follow-up.enqueue",
+            );
+            expect(activation?.followUpId).toBe(firstEnqueue?.followUpId);
+            expect(activation?.activationMode).toBe("operator");
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+      } finally {
+        FileReader.prototype.readAsDataURL = originalReadAsDataUrl;
+        await mounted.cleanup();
+      }
+    });
+
+    it("waits for an in-flight reservation before cancelling a removed local row", async () => {
+      const activeTurnId = "turn-cancel-reserving-follow-up" as TurnId;
+      const baseSnapshot = createSnapshotForTargetUser({
+        targetMessageId: "msg-user-cancel-reserving-follow-up" as MessageId,
+        targetText: "active turn before cancellation race",
+      });
+      const runningSnapshot: OrchestrationReadModel = {
+        ...baseSnapshot,
+        threads: baseSnapshot.threads.map((thread) => ({
+          ...thread,
+          latestTurn: {
+            turnId: activeTurnId,
+            state: "running" as const,
+            requestedAt: isoAt(1_000),
+            startedAt: isoAt(1_001),
+            completedAt: null,
+            assistantMessageId: null,
+          },
+          session: {
+            ...thread.session!,
+            status: "running" as const,
+            activeTurnId,
+            updatedAt: isoAt(1_001),
+          },
+          updatedAt: isoAt(1_001),
+        })),
+      };
+      let nextSequence = runningSnapshot.snapshotSequence;
+      let releaseReservation: (() => void) | null = null;
+      const fileReadSpy = vi.spyOn(FileReader.prototype, "readAsDataURL");
+      const revokeObjectUrlSpy = vi.spyOn(URL, "revokeObjectURL");
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: runningSnapshot,
+        resolveRpc: (body) => {
+          if (
+            body._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+            body.type === "thread.manual-follow-up.reserve"
+          ) {
+            return new Promise<{ sequence: number }>((resolve) => {
+              releaseReservation = () => {
+                nextSequence += 1;
+                resolve({ sequence: nextSequence });
+              };
+            });
+          }
+          if (body._tag === ORCHESTRATION_WS_METHODS.dispatchCommand) {
+            nextSequence += 1;
+            return { sequence: nextSequence };
+          }
+          return undefined;
+        },
+      });
+
+      try {
+        const queuedImage = new File([new Uint8Array([4, 5, 6])], "cancelled.png", {
+          type: "image/png",
+        });
+        const originalPreviewUrl = URL.createObjectURL(queuedImage);
+        useComposerDraftStore
+          .getState()
+          .setPrompt(THREAD_REF, "Keep this draft after cancelling the queued copy");
+        useComposerDraftStore.getState().addImage(THREAD_REF, {
+          type: "image",
+          id: "cancel-reserving-image",
+          name: queuedImage.name,
+          mimeType: queuedImage.type,
+          sizeBytes: queuedImage.size,
+          previewUrl: originalPreviewUrl,
+          file: queuedImage,
+        });
+        await waitForLayout();
+        // Draft attachment persistence may read the File before submission.
+        // This assertion is scoped to the queue pipeline after Enter.
+        fileReadSpy.mockClear();
+        await pressComposerKey("Enter");
+
+        await vi.waitFor(
+          () => {
+            expect(
+              wsRequests.filter(
+                (request) =>
+                  request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+                  request.type === "thread.manual-follow-up.reserve",
+              ),
+            ).toHaveLength(1);
+            expect(releaseReservation).not.toBeNull();
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+        document
+          .querySelector<HTMLButtonElement>('button[aria-label="Remove queued message"]')!
+          .click();
+        await waitForLayout();
+        expect(
+          wsRequests.some(
+            (request) =>
+              request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+              request.type === "thread.manual-follow-up.cancel",
+          ),
+        ).toBe(false);
+        expect(fileReadSpy).not.toHaveBeenCalled();
+
+        const release = releaseReservation as unknown as () => void;
+        releaseReservation = null;
+        release();
+
+        await vi.waitFor(
+          () => {
+            const reservation = wsRequests.find(
+              (request) =>
+                request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+                request.type === "thread.manual-follow-up.reserve",
+            );
+            const cancellation = wsRequests.find(
+              (request) =>
+                request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+                request.type === "thread.manual-follow-up.cancel",
+            );
+            expect(cancellation?.followUpId).toBe(reservation?.followUpId);
+            expect(
+              wsRequests.some(
+                (request) =>
+                  request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+                  request.type === "thread.manual-follow-up.enqueue",
+              ),
+            ).toBe(false);
+            expect(document.querySelector('[data-cafe-followup-queue="true"]')).toBeNull();
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+        const retainedDraft = useComposerDraftStore.getState().getComposerDraft(THREAD_REF);
+        expect(retainedDraft?.prompt).toBe("Keep this draft after cancelling the queued copy");
+        expect(retainedDraft?.images).toHaveLength(1);
+        expect(retainedDraft?.images[0]?.previewUrl).toBe(originalPreviewUrl);
+        expect(revokeObjectUrlSpy).not.toHaveBeenCalledWith(originalPreviewUrl);
+        expect(fileReadSpy).not.toHaveBeenCalled();
+
+        // Clear-all must use the same reserve-then-cancel barrier; deleting the
+        // local row before reserve settlement would strand an invisible item.
+        fileReadSpy.mockClear();
+        await pressComposerKey("Enter");
+        await vi.waitFor(
+          () => {
+            expect(
+              wsRequests.filter(
+                (request) =>
+                  request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+                  request.type === "thread.manual-follow-up.reserve",
+              ),
+            ).toHaveLength(2);
+            expect(releaseReservation).not.toBeNull();
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+        const clearButton = Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find(
+          (button) => button.textContent?.trim() === "Clear",
+        );
+        expect(clearButton).toBeTruthy();
+        clearButton!.click();
+        await waitForLayout();
+        expect(
+          wsRequests.filter(
+            (request) =>
+              request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+              request.type === "thread.manual-follow-up.cancel",
+          ),
+        ).toHaveLength(1);
+
+        const releaseClearReservation = releaseReservation as unknown as () => void;
+        releaseReservation = null;
+        releaseClearReservation();
+        await vi.waitFor(
+          () => {
+            expect(
+              wsRequests.filter(
+                (request) =>
+                  request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+                  request.type === "thread.manual-follow-up.cancel",
+              ),
+            ).toHaveLength(2);
+            expect(document.querySelector('[data-cafe-followup-queue="true"]')).toBeNull();
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+        expect(
+          wsRequests.some(
+            (request) =>
+              request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+              request.type === "thread.manual-follow-up.enqueue",
+          ),
+        ).toBe(false);
+        expect(useComposerDraftStore.getState().getComposerDraft(THREAD_REF)?.prompt).toBe(
+          "Keep this draft after cancelling the queued copy",
+        );
+        expect(revokeObjectUrlSpy).not.toHaveBeenCalledWith(originalPreviewUrl);
+      } finally {
+        fileReadSpy.mockRestore();
+        revokeObjectUrlSpy.mockRestore();
+        await mounted.cleanup();
+      }
+    });
+
+    it("marks ready-session FIFO draining as automatic-after-settlement", async () => {
+      const followUpId = ManualFollowUpId.make("manual-follow-up-ready-auto-drain");
+      const baseSnapshot = createSnapshotForTargetUser({
+        targetMessageId: "msg-user-ready-auto-drain" as MessageId,
+        targetText: "completed work before automatic drain",
+      });
+      const readySnapshot: OrchestrationReadModel = {
+        ...baseSnapshot,
+        threads: baseSnapshot.threads.map((thread) => ({
+          ...thread,
+          manualFollowUps: [
+            {
+              id: followUpId,
+              message: {
+                messageId: "msg-ready-auto-drain-follow-up" as MessageId,
+                role: "user" as const,
+                text: "Run me only after confirmed settlement.",
+                attachments: [],
+              },
+              dispatch: {
+                modelSelection: thread.modelSelection,
+                titleSeed: "Ready auto drain",
+                runtimeMode: thread.runtimeMode,
+                interactionMode: thread.interactionMode,
+              },
+              status: "queued" as const,
+              enqueuedAt: isoAt(1_020),
+              activatedAt: null,
+              activationCommandId: null,
+            },
+          ],
+          updatedAt: isoAt(1_020),
+        })),
+      };
+      let nextSequence = readySnapshot.snapshotSequence;
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: readySnapshot,
+        resolveRpc: (body) => {
+          if (body._tag === ORCHESTRATION_WS_METHODS.dispatchCommand) {
+            nextSequence += 1;
+            return { sequence: nextSequence };
+          }
+          return undefined;
+        },
+      });
+
+      try {
+        await vi.waitFor(
+          () => {
+            const activation = wsRequests.find(
+              (request) =>
+                request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+                request.type === "thread.manual-follow-up.activate",
+            );
+            expect(activation?.followUpId).toBe(followUpId);
+            expect(activation?.activationMode).toBe("automatic-after-settlement");
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+      } finally {
+        await mounted.cleanup();
       }
     });
 
@@ -3965,130 +4765,150 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
   }
 
   if (chatViewBrowserPart === "navigation") {
-    it("keeps Auto Nudge enabled only for its exact background thread across navigation", async () => {
-      const secondThreadId = "thread-auto-nudge-disabled" as ThreadId;
-      let snapshot = addThreadToSnapshot(
-        createSnapshotForTargetUser({
-          targetMessageId: "msg-user-auto-nudge-owner" as MessageId,
-          targetText: "auto nudge owner",
-        }),
-        secondThreadId,
-      );
-      snapshot = {
-        ...snapshot,
-        threads: snapshot.threads.map((thread) =>
-          thread.id === secondThreadId
-            ? {
-                ...thread,
-                messages: [
-                  createUserMessage({
-                    id: "msg-user-auto-nudge-disabled" as MessageId,
-                    text: "disabled thread must stay disabled",
-                    offsetSeconds: 100,
-                  }),
-                  createAssistantMessage({
-                    id: "msg-assistant-auto-nudge-disabled" as MessageId,
-                    text: "settled",
-                    offsetSeconds: 101,
-                  }),
-                ],
-                latestTurn: {
-                  turnId: "turn-auto-nudge-disabled" as TurnId,
-                  state: "completed" as const,
-                  requestedAt: isoAt(98),
-                  startedAt: isoAt(99),
-                  completedAt: isoAt(102),
-                  assistantMessageId: "msg-assistant-auto-nudge-disabled" as MessageId,
-                },
-                updatedAt: isoAt(102),
-                session: thread.session
-                  ? { ...thread.session, status: "ready" as const, updatedAt: isoAt(102) }
-                  : null,
-              }
-            : thread,
-        ),
-      };
+    it("keeps the exact ambient YouTube player alive through Settings navigation and resize", async () => {
       const mounted = await mountChatView({
         viewport: DEFAULT_VIEWPORT,
-        snapshot,
+        snapshot: createSnapshotForTargetUser({
+          targetMessageId: "msg-user-youtube-settings-continuity" as MessageId,
+          targetText: "youtube settings continuity",
+        }),
+        configureFixture: (nextFixture) => {
+          nextFixture.serverConfig = {
+            ...nextFixture.serverConfig,
+            clientSettings: {
+              ...nextFixture.serverConfig.clientSettings,
+              ambientVideoEnabled: true,
+              ambientVideoSource: { kind: "video", id: "dQw4w9WgXcQ" },
+              ambientVideoPresentationMode: "floating",
+            },
+            ambientExperienceCapabilities: {
+              ...nextFixture.serverConfig.ambientExperienceCapabilities,
+              youtubePlayer: true,
+            },
+          };
+        },
       });
 
       try {
-        const modeSelect = await waitForElement(
-          () => document.querySelector<HTMLButtonElement>('button[aria-label="Auto nudge mode"]'),
-          "Unable to find Auto Nudge mode select.",
-        );
-        expect(modeSelect.textContent).toContain("Off");
-        modeSelect.click();
-        (await waitForSelectItemContainingText("Steady progress")).click();
-
-        const ownerRef = {
-          environmentId: String(LOCAL_ENVIRONMENT_ID),
-          threadId: String(THREAD_ID),
-        };
-        await vi.waitFor(
-          () => {
-            expect(getAutoNudgeThreadPolicyStore().getPolicy(ownerRef).mode).toBe(
-              "steady-progress",
-            );
-          },
-          { timeout: 8_000, interval: 16 },
-        );
-        const backgroundSwitch = await waitForElement(
+        const initialFrame = await waitForElement(
           () =>
-            document.querySelector<HTMLElement>(
-              '[aria-label="Continue this thread in background"]',
+            document.querySelector<HTMLIFrameElement>(
+              'iframe[title="Ambient YouTube video player"]',
             ),
-          "Unable to find background continuation switch.",
+          "The configured ambient YouTube player should mount in chat.",
         );
-        backgroundSwitch.click();
-        await vi.waitFor(
-          () => {
-            expect(getAutoNudgeThreadPolicyStore().getPolicy(ownerRef)).toMatchObject({
-              mode: "steady-progress",
-              backgroundContinuation: true,
-            });
-            expect(getBackgroundAutoNudgeController().getSnapshot()).toMatchObject({
-              owner: ownerRef,
-              status: "active",
-            });
-          },
-          { timeout: 8_000, interval: 16 },
-        );
+        const initialParent = initialFrame.parentElement;
+        const initialSource = initialFrame.src;
 
-        await mounted.router.navigate({ to: "/settings/appearance" });
+        await mounted.router.navigate({ to: "/settings" });
         await waitForURL(
           mounted.router,
-          (path) => path === "/settings/appearance",
-          "Settings navigation should complete.",
+          (pathname) => pathname.startsWith("/settings"),
+          "Settings navigation should settle.",
         );
+        await waitForLayout();
+
+        const frameInSettings = document.querySelector<HTMLIFrameElement>(
+          'iframe[title="Ambient YouTube video player"]',
+        );
+        expect(frameInSettings).toBe(initialFrame);
+        expect(frameInSettings?.parentElement).toBe(initialParent);
+        expect(frameInSettings?.src).toBe(initialSource);
+        expect(document.querySelectorAll("iframe[src*='youtube-nocookie.com']")).toHaveLength(1);
+
         await mounted.router.navigate({
           to: "/$environmentId/$threadId",
           params: { environmentId: LOCAL_ENVIRONMENT_ID, threadId: THREAD_ID },
         });
         await waitForURL(
           mounted.router,
-          (path) => path === serverThreadPath(THREAD_ID),
-          "Owner thread should reopen after settings.",
+          (pathname) => pathname === serverThreadPath(THREAD_ID),
+          "Chat navigation should settle after leaving Settings.",
         );
+        await waitForLayout();
+
+        const returnedFrame = document.querySelector<HTMLIFrameElement>(
+          'iframe[title="Ambient YouTube video player"]',
+        );
+        expect(returnedFrame).toBe(initialFrame);
+        expect(returnedFrame?.parentElement).toBe(initialParent);
+        expect(returnedFrame?.src).toBe(initialSource);
+        expect(document.querySelectorAll("iframe[src*='youtube-nocookie.com']")).toHaveLength(1);
+
+        await mounted.router.navigate({ to: "/settings" });
+        await waitForURL(
+          mounted.router,
+          (pathname) => pathname.startsWith("/settings"),
+          "Settings navigation should settle before resizing.",
+        );
+        await mounted.setContainerSize({ width: 600, height: DEFAULT_VIEWPORT.height });
         await vi.waitFor(
           () => {
-            const restoredMode = document.querySelector<HTMLButtonElement>(
-              'button[aria-label="Auto nudge mode"]',
+            const resizedFrame = document.querySelector<HTMLIFrameElement>(
+              'iframe[title="Ambient YouTube video player"]',
             );
-            const restoredSwitch = document.querySelector<HTMLElement>(
-              '[aria-label="Continue this thread in background"]',
+            expect(resizedFrame).toBe(initialFrame);
+            expect(resizedFrame?.parentElement).toBe(initialParent);
+            expect(resizedFrame?.src).toBe(initialSource);
+            expect(document.querySelectorAll("iframe[src*='youtube-nocookie.com']")).toHaveLength(
+              1,
             );
-            const restoredRounds = document.querySelector<HTMLInputElement>(
-              '[aria-label="Auto Nudge maximum rounds for this thread"]',
-            );
-            const restoredMinutes = document.querySelector<HTMLInputElement>(
-              '[aria-label="Auto Nudge maximum minutes for this thread"]',
-            );
-            expect(restoredMode?.textContent).toContain("Steady progress");
-            expect(restoredSwitch?.getAttribute("aria-checked")).toBe("true");
-            expect(restoredRounds?.value).toBe("5");
-            expect(restoredMinutes?.value).toBe("30");
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
+    it("saves distinct Auto Nudge prompts to exact same-project threads without arming either", async () => {
+      const secondThreadId = "thread-auto-nudge-b" as ThreadId;
+      let snapshot = addThreadToSnapshot(
+        createSnapshotForTargetUser({
+          targetMessageId: "msg-user-auto-nudge-a" as MessageId,
+          targetText: "thread A",
+        }),
+        secondThreadId,
+      );
+      snapshot = setThreadAutoNudgeConfig(snapshot, THREAD_ID, {
+        ...DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+        authorityRevision: 3,
+        prompt: "Saved prompt A",
+      });
+      snapshot = setThreadAutoNudgeConfig(snapshot, secondThreadId, {
+        ...DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+        authorityRevision: 9,
+        prompt: "Saved prompt B",
+      });
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot,
+        resolveRpc: (body) =>
+          body._tag === ORCHESTRATION_WS_METHODS.dispatchCommand
+            ? { sequence: snapshot.snapshotSequence + 1 }
+            : undefined,
+      });
+
+      try {
+        await expandAutoNudgeControls();
+        const promptInput = page.getByRole("textbox", { name: "Prompt for this thread" });
+        await expect.element(promptInput).toHaveValue("Saved prompt A");
+        await promptInput.fill("Exact prompt for thread A");
+        await page.getByRole("button", { name: "Save prompt" }).click();
+        await vi.waitFor(
+          () => {
+            expect(
+              wsRequests.some(
+                (request) =>
+                  request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+                  request.type === "thread.auto-nudge.configure" &&
+                  request.threadId === THREAD_ID &&
+                  request.expectedAuthorityRevision === 3 &&
+                  request.mode === "off" &&
+                  request.backgroundContinuation === false &&
+                  request.prompt === "Exact prompt for thread A",
+              ),
+            ).toBe(true);
           },
           { timeout: 8_000, interval: 16 },
         );
@@ -4097,43 +4917,439 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
           to: "/$environmentId/$threadId",
           params: { environmentId: LOCAL_ENVIRONMENT_ID, threadId: secondThreadId },
         });
-        await waitForURL(
-          mounted.router,
-          (path) => path === serverThreadPath(secondThreadId),
-          "Disabled thread navigation should complete.",
-        );
+        await expandAutoNudgeControls();
+        await expect.element(promptInput).toHaveValue("Saved prompt B");
+        await promptInput.fill("Different prompt for thread B");
+        await page.getByRole("button", { name: "Save prompt" }).click();
         await vi.waitFor(
           () => {
-            const disabledMode = document.querySelector<HTMLButtonElement>(
-              'button[aria-label="Auto nudge mode"]',
-            );
-            const disabledSwitch = document.querySelector<HTMLElement>(
-              '[aria-label="Continue this thread in background"]',
-            );
-            expect(disabledMode?.textContent).toContain("Off");
-            expect(disabledSwitch?.getAttribute("aria-checked")).toBe("false");
-            expect(
-              getAutoNudgeThreadPolicyStore().getPolicy({
-                environmentId: String(LOCAL_ENVIRONMENT_ID),
-                threadId: String(secondThreadId),
-              }).mode,
-            ).toBe("off");
             expect(
               wsRequests.some(
                 (request) =>
                   request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
-                  request.type === "thread.turn.start" &&
-                  request.threadId === secondThreadId,
+                  request.type === "thread.auto-nudge.configure" &&
+                  request.threadId === secondThreadId &&
+                  request.expectedAuthorityRevision === 9 &&
+                  request.mode === "off" &&
+                  request.backgroundContinuation === false &&
+                  request.prompt === "Different prompt for thread B",
               ),
-            ).toBe(false);
+            ).toBe(true);
           },
           { timeout: 8_000, interval: 16 },
         );
+        expect(
+          wsRequests.some((request) => request._tag === WS_METHODS.serverUpdateClientSettings),
+        ).toBe(false);
+      } finally {
+        await mounted.cleanup();
+      }
+    });
 
-        expect(getBackgroundAutoNudgeController().getSnapshot().owner).toEqual(ownerRef);
-        expect(getAutoNudgeThreadPolicyStore().getPolicy(ownerRef).backgroundContinuation).toBe(
-          true,
+    it("saves Auto Nudge limits through one exact thread authority instead of client settings", async () => {
+      let snapshot = createSnapshotForTargetUser({
+        targetMessageId: "msg-user-auto-nudge-limits" as MessageId,
+        targetText: "exact thread limits",
+      });
+      snapshot = setThreadAutoNudgeConfig(snapshot, THREAD_ID, {
+        ...DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+        authorityRevision: 14,
+        prompt: "Keep this exact thread moving",
+      });
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot,
+        resolveRpc: (body) =>
+          body._tag === ORCHESTRATION_WS_METHODS.dispatchCommand
+            ? { sequence: snapshot.snapshotSequence + 1 }
+            : undefined,
+      });
+
+      try {
+        await expandAutoNudgeControls();
+        await page.getByLabelText("Maximum rounds").fill("8");
+        await page.getByLabelText("Maximum minutes").fill("90");
+        await page.getByRole("button", { name: "Save limits" }).click();
+
+        await vi.waitFor(
+          () => {
+            expect(
+              wsRequests.some(
+                (request) =>
+                  request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+                  request.type === "thread.auto-nudge.configure" &&
+                  request.threadId === THREAD_ID &&
+                  request.expectedAuthorityRevision === 14 &&
+                  request.mode === "off" &&
+                  request.prompt === "Keep this exact thread moving" &&
+                  request.backgroundContinuation === false &&
+                  request.maxRounds === 8 &&
+                  request.maxMinutes === 90,
+              ),
+            ).toBe(true);
+          },
+          { timeout: 8_000, interval: 16 },
         );
+        expect(
+          wsRequests.some((request) => request._tag === WS_METHODS.serverUpdateClientSettings),
+        ).toBe(false);
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
+    it("blocks a second same-thread configure while the exact revision write is pending", async () => {
+      let resolveConfigure!: (value: { sequence: number }) => void;
+      const configureResponse = new Promise<{ sequence: number }>((resolve) => {
+        resolveConfigure = resolve;
+      });
+      let snapshot = createSnapshotForTargetUser({
+        targetMessageId: "msg-user-auto-nudge-pending" as MessageId,
+        targetText: "pending exact revision",
+      });
+      snapshot = setThreadAutoNudgeConfig(snapshot, THREAD_ID, {
+        ...DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+        authorityRevision: 12,
+        prompt: "Original prompt",
+      });
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot,
+        resolveRpc: (body) =>
+          body._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+          body.type === "thread.auto-nudge.configure"
+            ? configureResponse
+            : undefined,
+      });
+
+      try {
+        await expandAutoNudgeControls();
+        await page.getByRole("textbox", { name: "Prompt for this thread" }).fill("Pending prompt");
+        await page.getByRole("button", { name: "Save prompt" }).click();
+        await vi.waitFor(
+          () => {
+            expect(
+              wsRequests.filter(
+                (request) =>
+                  request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+                  request.type === "thread.auto-nudge.configure",
+              ),
+            ).toHaveLength(1);
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+        const pendingSaveButton = await waitForElement(
+          () =>
+            Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find((button) =>
+              button.textContent?.includes("Saving prompt"),
+            ) ?? null,
+          "Prompt save did not enter its pending state.",
+        );
+        expect(pendingSaveButton.disabled).toBe(true);
+        pendingSaveButton.click();
+        expect(
+          wsRequests.filter(
+            (request) =>
+              request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+              request.type === "thread.auto-nudge.configure",
+          ),
+        ).toHaveLength(1);
+        await expect
+          .element(page.getByRole("combobox", { name: "Auto nudge mode" }))
+          .toBeDisabled();
+      } finally {
+        resolveConfigure({ sequence: snapshot.snapshotSequence + 1 });
+        await mounted.cleanup();
+      }
+    });
+
+    it("blocks enable when a different localhost port has durably stopped Auto Nudge", async () => {
+      let snapshot = createSnapshotForTargetUser({
+        targetMessageId: "msg-user-auto-nudge-cross-port-stop" as MessageId,
+        targetText: "cross-port durable Stop",
+      });
+      snapshot = setThreadAutoNudgeConfig(snapshot, THREAD_ID, {
+        ...DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+        authorityRevision: 13,
+        prompt: "Saved exact-thread prompt",
+      });
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot,
+        resolveRpc: (body) =>
+          body._tag === ORCHESTRATION_WS_METHODS.dispatchCommand
+            ? { sequence: snapshot.snapshotSequence + 1 }
+            : undefined,
+      });
+
+      try {
+        await expandAutoNudgeControls();
+        const arming = getConfirmedAutoNudgeArming();
+        expect(arming.getSuppressedSnapshot()).toBe(false);
+        const modeTrigger = page.getByRole("combobox", { name: "Auto nudge mode" });
+        const modeTriggerElement = modeTrigger.element() as HTMLButtonElement;
+        expect(modeTriggerElement.disabled).toBe(false);
+        // Cookies are host-scoped but localStorage events are origin/port
+        // scoped. Reproduce another renderer's Stop without notifying this
+        // renderer's stale React snapshot.
+        document.cookie = `${encodeURIComponent(AUTO_NUDGE_SUPPRESSION_STORAGE_KEY)}=${encodeURIComponent("v1:other-localhost-port")}; Path=/; Max-Age=3600; SameSite=Strict`;
+        expect(arming.getSuppressedSnapshot()).toBe(false);
+
+        // Exercise the late race synchronously when the stale control is still
+        // enabled. The coordinator may instead converge first and disable the
+        // trigger; both paths must preserve the durable Stop.
+        if (!modeTriggerElement.disabled) {
+          modeTriggerElement.click();
+          await vi.waitFor(
+            () => {
+              const optionAvailable = Array.from(
+                document.querySelectorAll<HTMLElement>('[role="option"]'),
+              ).some((option) => option.textContent?.trim() === "Steady progress");
+              expect(modeTriggerElement.disabled || optionAvailable).toBe(true);
+            },
+            { timeout: 8_000, interval: 16 },
+          );
+          const steadyProgressOption = Array.from(
+            document.querySelectorAll<HTMLElement>('[role="option"]'),
+          ).find((option) => option.textContent?.trim() === "Steady progress");
+          if (!modeTriggerElement.disabled) {
+            expect(steadyProgressOption).toBeTruthy();
+            steadyProgressOption?.click();
+          }
+        }
+
+        await expect
+          .element(page.getByText("Emergency Stop all is blocking Auto Nudge in every thread."))
+          .toBeInTheDocument();
+        await expect.element(modeTrigger).toBeDisabled();
+        expect(arming.getSuppressedSnapshot()).toBe(true);
+        expect(document.cookie).toContain(
+          `${encodeURIComponent(AUTO_NUDGE_SUPPRESSION_STORAGE_KEY)}=${encodeURIComponent("v1:other-localhost-port")}`,
+        );
+        expect(
+          wsRequests.some(
+            (request) =>
+              request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+              request.type === "thread.auto-nudge.configure",
+          ),
+        ).toBe(false);
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
+    it("uses unconditional exact-thread Stop when mode or paid background execution is turned off", async () => {
+      let snapshot = createSnapshotForTargetUser({
+        targetMessageId: "msg-user-auto-nudge-stop" as MessageId,
+        targetText: "cost-sensitive stop",
+      });
+      snapshot = setThreadAutoNudgeConfig(snapshot, THREAD_ID, {
+        ...DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+        authorityRevision: 17,
+        mode: "steady-progress",
+        prompt: "Keep this exact thread moving",
+        backgroundContinuation: true,
+        armedAt: isoAt(900),
+      });
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot,
+        resolveRpc: (body) =>
+          body._tag === ORCHESTRATION_WS_METHODS.dispatchCommand
+            ? { sequence: snapshot.snapshotSequence + 1 }
+            : undefined,
+      });
+
+      try {
+        await expandAutoNudgeControls();
+        await page.getByRole("switch", { name: "Continue this thread in background" }).click();
+        await vi.waitFor(
+          () => {
+            expect(
+              wsRequests.filter(
+                (request) =>
+                  request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+                  request.type === "thread.auto-nudge.stop" &&
+                  request.threadId === THREAD_ID,
+              ),
+            ).toHaveLength(1);
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+        await page.getByRole("combobox", { name: "Auto nudge mode" }).click();
+        await page.getByRole("option", { name: "Off" }).click();
+        await vi.waitFor(
+          () => {
+            expect(
+              wsRequests.filter(
+                (request) =>
+                  request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+                  request.type === "thread.auto-nudge.stop" &&
+                  request.threadId === THREAD_ID,
+              ),
+            ).toHaveLength(2);
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+        expect(
+          wsRequests.some(
+            (request) =>
+              request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+              request.type === "thread.auto-nudge.configure" &&
+              request.mode === "off",
+          ),
+        ).toBe(false);
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
+    it("keeps Emergency Stop latched while the saved-environment registry is not hydrated", async () => {
+      await waitForSavedEnvironmentRegistryHydration();
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: createSnapshotForTargetUser({
+          targetMessageId: "msg-user-auto-nudge-emergency" as MessageId,
+          targetText: "emergency stop",
+        }),
+      });
+
+      try {
+        await expandAutoNudgeControls();
+        resetSavedEnvironmentRegistryStoreForTests();
+        await page.getByRole("button", { name: "Emergency Stop all" }).click();
+        await expect
+          .element(page.getByRole("button", { name: "Allow Auto Nudge again" }))
+          .toBeInTheDocument();
+        await page.getByRole("button", { name: "Allow Auto Nudge again" }).click();
+        await expect
+          .element(page.getByText("Still stopping Auto Nudge threads"))
+          .toBeInTheDocument();
+        expect(getConfirmedAutoNudgeArming().getSuppressedSnapshot()).toBe(true);
+      } finally {
+        await mounted.cleanup();
+        await waitForSavedEnvironmentRegistryHydration();
+      }
+    });
+
+    it("keeps Emergency Stop latched while a saved environment is disconnected", async () => {
+      await waitForSavedEnvironmentRegistryHydration();
+      const savedEnvironmentId = EnvironmentId.make("environment-auto-nudge-offline");
+      useSavedEnvironmentRegistryStore.setState({
+        byId: {
+          [savedEnvironmentId]: {
+            environmentId: savedEnvironmentId,
+            label: "Offline Auto Nudge environment",
+            wsBaseUrl: "wss://offline.invalid/ws",
+            httpBaseUrl: "https://offline.invalid",
+            createdAt: NOW_ISO,
+            lastConnectedAt: null,
+          },
+        },
+      });
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: createSnapshotForTargetUser({
+          targetMessageId: "msg-user-auto-nudge-offline" as MessageId,
+          targetText: "offline environment stop",
+        }),
+      });
+
+      try {
+        await expandAutoNudgeControls();
+        await page.getByRole("button", { name: "Emergency Stop all" }).click();
+        await page.getByRole("button", { name: "Allow Auto Nudge again" }).click();
+        await expect
+          .element(page.getByText(/known environment is disconnected or still hydrating/i))
+          .toBeInTheDocument();
+        expect(getConfirmedAutoNudgeArming().getSuppressedSnapshot()).toBe(true);
+      } finally {
+        await mounted.cleanup();
+        resetSavedEnvironmentRegistryStoreForTests();
+        await waitForSavedEnvironmentRegistryHydration();
+      }
+    });
+
+    it("dispatches foreground Auto Nudge authority without a prompt or composer send", async () => {
+      const completedTurnId = "turn-auto-nudge-foreground" as TurnId;
+      const baseSnapshot = createSnapshotForTargetUser({
+        targetMessageId: "msg-user-auto-nudge-dispatch" as MessageId,
+        targetText: "foreground dispatch",
+      });
+      const baseThread = baseSnapshot.threads[0]!;
+      let snapshot: OrchestrationReadModel = {
+        ...baseSnapshot,
+        threads: [
+          {
+            ...baseThread,
+            latestTurn: {
+              turnId: completedTurnId,
+              state: "completed" as const,
+              requestedAt: isoAt(1_000),
+              startedAt: isoAt(1_001),
+              completedAt: isoAt(1_010),
+              assistantMessageId: null,
+            },
+            session: baseThread.session
+              ? {
+                  ...baseThread.session,
+                  status: "ready" as const,
+                  activeTurnId: null,
+                  updatedAt: isoAt(1_010),
+                }
+              : null,
+            updatedAt: isoAt(1_010),
+          },
+        ],
+      };
+      snapshot = setThreadAutoNudgeConfig(snapshot, THREAD_ID, {
+        ...DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+        authorityRevision: 22,
+        mode: "steady-progress",
+        prompt: "Server-sourced exact-thread prompt",
+        // Foreground authority is bounded against the browser's live clock.
+        // Keep this positive-path fixture freshly armed instead of coupling it
+        // to the suite's fixed projection timestamp.
+        armedAt: new Date(Date.now() - 1_000).toISOString(),
+      });
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot,
+        resolveRpc: (body) =>
+          body._tag === ORCHESTRATION_WS_METHODS.dispatchCommand
+            ? { sequence: snapshot.snapshotSequence + 1 }
+            : undefined,
+      });
+
+      try {
+        let dispatchRequest: NormalizedWsRpcRequestBody | undefined;
+        await vi.waitFor(
+          () => {
+            dispatchRequest = wsRequests.find(
+              (request) =>
+                request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+                request.type === "thread.auto-nudge.dispatch",
+            );
+            expect(dispatchRequest).toBeDefined();
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+        expect(dispatchRequest).toMatchObject({
+          type: "thread.auto-nudge.dispatch",
+          threadId: THREAD_ID,
+          expectedAuthorityRevision: 22,
+          completedTurnId,
+          dispatchSource: "foreground",
+        });
+        expect("prompt" in (dispatchRequest ?? {})).toBe(false);
+        expect("message" in (dispatchRequest ?? {})).toBe(false);
+        expect(
+          wsRequests.some(
+            (request) =>
+              request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+              request.type === "thread.turn.start",
+          ),
+        ).toBe(false);
       } finally {
         await mounted.cleanup();
       }
@@ -6093,6 +7309,391 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
   }
 
   if (chatViewBrowserPart === "layout") {
+    it("toggles a persisted Mobile optimized reflow without resetting Matrix configuration", async () => {
+      const initialMatrixSettings = {
+        fallingEffectsEnabled: false,
+        fallingEffectKind: "snow" as const,
+        fallingEffectMatrixBaseFontSize: 29,
+        fallingEffectMatrixColorMode: "rainbow" as const,
+        fallingEffectMatrixColorCycleSpeed: 6.25,
+        fallingEffectMatrixMotionMode: "walk-forward" as const,
+        fallingEffectMatrixWalkStartFontSize: 8,
+        fallingEffectMatrixWalkEndFontSize: 66,
+        fallingEffectSpeed: 3.5,
+        fallingEffectDensity: 2.25,
+      };
+      const mounted = await mountChatView({
+        viewport: WIDE_FOOTER_VIEWPORT,
+        snapshot: createSnapshotForTargetUser({
+          targetMessageId: "msg-user-mobile-presentation-toggle" as MessageId,
+          targetText: "mobile presentation toggle",
+        }),
+        configureFixture: (nextFixture) => {
+          nextFixture.serverConfig = {
+            ...nextFixture.serverConfig,
+            clientSettings: {
+              ...nextFixture.serverConfig.clientSettings,
+              ...initialMatrixSettings,
+              mobileOptimizedPresentation: false,
+            },
+          };
+        },
+        resolveRpc: (body) => {
+          if (body._tag !== WS_METHODS.serverUpdateClientSettings) return undefined;
+          const patch = body.patch as Partial<typeof fixture.serverConfig.clientSettings>;
+          const clientSettings = {
+            ...fixture.serverConfig.clientSettings,
+            ...patch,
+          };
+          fixture.serverConfig = {
+            ...fixture.serverConfig,
+            clientSettings,
+          };
+          return clientSettings;
+        },
+      });
+
+      try {
+        const toggle = await waitForElement(
+          () =>
+            document.querySelector<HTMLButtonElement>(
+              '[data-testid="composer-presentation-toggle"]',
+            ),
+          "Unable to find presentation toggle beside the composer.",
+        );
+        const targetBounds = toggle.getBoundingClientRect();
+        expect(targetBounds.width).toBeGreaterThanOrEqual(44);
+        expect(targetBounds.height).toBeGreaterThanOrEqual(44);
+        expect(toggle.getAttribute("aria-pressed")).toBe("false");
+        expect(toggle.dataset.effectiveMobileLayout).toBe("false");
+        expect(toggle.dataset.mobilePresentationSource).toBe("responsive");
+        expect(
+          document
+            .querySelector('[data-slot="sidebar-wrapper"]')
+            ?.getAttribute("data-mobile-layout"),
+        ).toBe("false");
+        expect(document.querySelector('[data-desktop-run-context="true"]')).toBeTruthy();
+        const inputBar = document.querySelector<HTMLElement>('[data-chat-input-bar="true"]');
+        expect(getComputedStyle(inputBar!).paddingLeft).toBe("20px");
+
+        toggle.click();
+
+        await vi.waitFor(
+          () => {
+            expect(toggle.getAttribute("aria-pressed")).toBe("true");
+            expect(
+              document
+                .querySelector('[data-slot="sidebar-wrapper"]')
+                ?.getAttribute("data-mobile-layout"),
+            ).toBe("true");
+            expect(
+              document
+                .querySelector('[data-slot="sidebar-wrapper"]')
+                ?.getAttribute("data-mobile-optimized-presentation"),
+            ).toBe("true");
+            expect(document.querySelector('[data-chat-presentation="mobile"]')).toBeTruthy();
+            expect(document.querySelector('[data-mobile-run-context="true"]')).toBeTruthy();
+            expect(document.querySelector('[data-desktop-run-context="true"]')).toBeNull();
+            expect(getComputedStyle(inputBar!).paddingLeft).toBe("12px");
+            expect(
+              document.querySelector<HTMLElement>('[data-slot="sidebar-trigger"]')?.getClientRects()
+                .length,
+            ).toBeGreaterThan(0);
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+
+        const enabledSettings = getServerConfig()?.clientSettings;
+        expect(enabledSettings).toMatchObject({
+          ...initialMatrixSettings,
+          mobileOptimizedPresentation: false,
+          fallingEffectsEnabled: true,
+          fallingEffectKind: "matrix",
+        });
+        await vi.waitFor(() => {
+          expect(readBrowserClientSettings()?.mobileOptimizedPresentation).toBe(true);
+        });
+        const clientSettingsRequests = wsRequests.filter(
+          (request) => request._tag === WS_METHODS.serverUpdateClientSettings,
+        );
+        expect(clientSettingsRequests).toHaveLength(1);
+        expect(clientSettingsRequests[0]?.patch).toEqual({
+          fallingEffectsEnabled: true,
+          fallingEffectKind: "matrix",
+        });
+        expect(clientSettingsRequests[0]?.patch).not.toHaveProperty("mobileOptimizedPresentation");
+
+        toggle.click();
+
+        await vi.waitFor(
+          () => {
+            expect(toggle.getAttribute("aria-pressed")).toBe("false");
+            expect(
+              document
+                .querySelector('[data-slot="sidebar-wrapper"]')
+                ?.getAttribute("data-mobile-layout"),
+            ).toBe("false");
+            expect(document.querySelector('[data-chat-presentation="desktop"]')).toBeTruthy();
+            expect(document.querySelector('[data-mobile-run-context="true"]')).toBeNull();
+            expect(document.querySelector('[data-desktop-run-context="true"]')).toBeTruthy();
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+
+        expect(getServerConfig()?.clientSettings).toMatchObject({
+          ...initialMatrixSettings,
+          mobileOptimizedPresentation: false,
+          fallingEffectsEnabled: true,
+          fallingEffectKind: "matrix",
+        });
+        await vi.waitFor(() => {
+          expect(readBrowserClientSettings()?.mobileOptimizedPresentation).toBe(false);
+        });
+        expect(
+          wsRequests.filter((request) => request._tag === WS_METHODS.serverUpdateClientSettings),
+        ).toHaveLength(1);
+        expect(
+          wsRequests.some((request) => request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand),
+        ).toBe(false);
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
+    it("keeps natural phone reflow independent from the explicit Matrix-enabling authority", async () => {
+      const mounted = await mountChatView({
+        viewport: COMPACT_FOOTER_VIEWPORT,
+        snapshot: createSnapshotForTargetUser({
+          targetMessageId: "msg-user-natural-mobile-presentation" as MessageId,
+          targetText: "natural mobile presentation",
+        }),
+        configureFixture: (nextFixture) => {
+          nextFixture.serverConfig = {
+            ...nextFixture.serverConfig,
+            clientSettings: {
+              ...nextFixture.serverConfig.clientSettings,
+              mobileOptimizedPresentation: false,
+              fallingEffectsEnabled: false,
+              fallingEffectKind: "snow",
+            },
+          };
+        },
+      });
+
+      try {
+        const toggle = await waitForElement(
+          () =>
+            document.querySelector<HTMLButtonElement>(
+              '[data-testid="composer-presentation-toggle"]',
+            ),
+          "Unable to find presentation toggle on a naturally narrow screen.",
+        );
+
+        expect(toggle.getAttribute("aria-pressed")).toBe("false");
+        expect(toggle.getAttribute("aria-label")).toBe(
+          "Mobile layout is active for this screen; turn on Mobile optimized presentation and Matrix",
+        );
+        expect(toggle.dataset.effectiveMobileLayout).toBe("true");
+        expect(toggle.dataset.mobilePresentationSource).toBe("viewport");
+        expect(
+          document
+            .querySelector('[data-slot="sidebar-wrapper"]')
+            ?.getAttribute("data-mobile-layout"),
+        ).toBe("true");
+        expect(getServerConfig()?.clientSettings).toMatchObject({
+          mobileOptimizedPresentation: false,
+          fallingEffectsEnabled: false,
+          fallingEffectKind: "snow",
+        });
+        expect(readBrowserClientSettings()).toBeNull();
+        expect(
+          wsRequests.some((request) => request._tag === WS_METHODS.serverUpdateClientSettings),
+        ).toBe(false);
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
+    it("uses the diff sheet on a wide viewport with a renderer-local mobile override", async () => {
+      writeBrowserClientSettings({
+        ...DEFAULT_CLIENT_SETTINGS,
+        mobileOptimizedPresentation: true,
+      });
+      const mounted = await mountChatView({
+        viewport: WIDE_FOOTER_VIEWPORT,
+        initialPath: `/${LOCAL_ENVIRONMENT_ID}/${THREAD_ID}?diff=1`,
+        snapshot: createSnapshotForTargetUser({
+          targetMessageId: "msg-user-wide-mobile-diff-sheet" as MessageId,
+          targetText: "wide mobile diff sheet",
+        }),
+      });
+
+      try {
+        await vi.waitFor(
+          () => {
+            expect(
+              document
+                .querySelector('[data-slot="sidebar-wrapper"]')
+                ?.getAttribute("data-mobile-layout"),
+            ).toBe("true");
+            const diffSheet = Array.from(
+              document.querySelectorAll<HTMLElement>('[data-slot="sheet-popup"]'),
+            ).find(
+              (popup) =>
+                popup.textContent?.includes("Current changes") ||
+                popup.querySelector('[aria-label="Loading diff viewer..."]') !== null,
+            );
+            expect(diffSheet?.getClientRects().length).toBeGreaterThan(0);
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+        expect(getServerConfig()?.clientSettings.mobileOptimizedPresentation).toBe(false);
+        expect(
+          wsRequests.some((request) => request._tag === WS_METHODS.serverUpdateClientSettings),
+        ).toBe(false);
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
+    it("keeps keyboard-desktop composer autofocus when wide mobile presentation is enabled", async () => {
+      const secondThreadId = "thread-wide-mobile-autofocus-second" as ThreadId;
+      writeBrowserClientSettings({
+        ...DEFAULT_CLIENT_SETTINGS,
+        mobileOptimizedPresentation: true,
+      });
+      const mounted = await mountChatView({
+        viewport: WIDE_FOOTER_VIEWPORT,
+        snapshot: addThreadToSnapshot(
+          createSnapshotForTargetUser({
+            targetMessageId: "msg-user-wide-mobile-autofocus" as MessageId,
+            targetText: "wide mobile autofocus",
+          }),
+          secondThreadId,
+        ),
+      });
+
+      try {
+        await vi.waitFor(
+          () => {
+            expect(
+              document
+                .querySelector('[data-slot="sidebar-wrapper"]')
+                ?.getAttribute("data-mobile-layout"),
+            ).toBe("true");
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+        const firstEditor = await waitForComposerEditor();
+        firstEditor.blur();
+        expect(document.activeElement).not.toBe(firstEditor);
+
+        await mounted.router.navigate({
+          to: "/$environmentId/$threadId",
+          params: {
+            environmentId: LOCAL_ENVIRONMENT_ID,
+            threadId: secondThreadId,
+          },
+        });
+        await waitForURL(
+          mounted.router,
+          (pathname) => pathname.endsWith(`/${secondThreadId}`),
+          "Wide mobile presentation did not navigate to the second thread.",
+        );
+
+        await vi.waitFor(
+          () => {
+            expect(document.activeElement).toBe(
+              document.querySelector<HTMLElement>('[data-testid="composer-editor"]'),
+            );
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
+    it("describes disabling an explicit override accurately on a naturally narrow screen", async () => {
+      writeBrowserClientSettings({
+        ...DEFAULT_CLIENT_SETTINGS,
+        mobileOptimizedPresentation: true,
+      });
+      const mounted = await mountChatView({
+        viewport: COMPACT_FOOTER_VIEWPORT,
+        snapshot: createSnapshotForTargetUser({
+          targetMessageId: "msg-user-narrow-mobile-disable-label" as MessageId,
+          targetText: "narrow mobile disable label",
+        }),
+      });
+
+      try {
+        const toggle = await waitForElement(
+          () =>
+            document.querySelector<HTMLButtonElement>(
+              '[data-testid="composer-presentation-toggle"]',
+            ),
+          "Unable to find the enabled presentation toggle on a naturally narrow screen.",
+        );
+        await vi.waitFor(() => {
+          expect(toggle.getAttribute("aria-pressed")).toBe("true");
+          expect(toggle.getAttribute("aria-label")).toBe(
+            "Turn off Mobile optimized presentation; mobile layout will remain active for this screen and Matrix will stay on",
+          );
+        });
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
+    it("overlays selected-project telemetry without reserving message-timeline height", async () => {
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: createSnapshotWithLongProposedPlan(),
+      });
+
+      try {
+        const expand = document.querySelector<HTMLButtonElement>(
+          'button[aria-label="Expand Resources"]',
+        );
+        expand?.click();
+        const panel = await waitForElement(
+          () =>
+            document.querySelector<HTMLElement>('[aria-label="Selected project system telemetry"]'),
+          "Unable to find selected-project telemetry panel.",
+        );
+        const slot = panel.closest<HTMLElement>('[data-project-telemetry-slot="true"]');
+        const timeline = slot?.nextElementSibling as HTMLElement | null;
+        const chatAnchor = slot?.parentElement;
+
+        expect(slot).toBeTruthy();
+        expect(timeline).toBeTruthy();
+        expect(chatAnchor).toBeTruthy();
+        expect(getComputedStyle(slot!).position).toBe("absolute");
+        expect(timeline?.getBoundingClientRect().top).toBe(chatAnchor?.getBoundingClientRect().top);
+        expect(timeline?.getBoundingClientRect().height).toBe(
+          chatAnchor?.getBoundingClientRect().height,
+        );
+        expect(panel.getBoundingClientRect().right).toBeLessThanOrEqual(
+          chatAnchor?.getBoundingClientRect().right ?? 0,
+        );
+        expect(panel.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+          chatAnchor?.getBoundingClientRect().bottom ?? 0,
+        );
+        await vi.waitFor(() => {
+          expect(
+            wsRequests.some(
+              (request) =>
+                request._tag === WS_METHODS.serverGetProjectSystemTelemetry &&
+                request.projectId === PROJECT_ID,
+            ),
+          ).toBe(true);
+        });
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
     it("keeps long proposed plans lightweight until the user expands them", async () => {
       const mounted = await mountChatView({
         viewport: DEFAULT_VIEWPORT,

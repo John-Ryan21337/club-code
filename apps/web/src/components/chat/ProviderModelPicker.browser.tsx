@@ -394,6 +394,100 @@ describe("ProviderModelPicker", () => {
     }
   });
 
+  it("shows discovered LM Studio Local chat models under their exact instance", async () => {
+    const lmStudioInstanceId = ProviderInstanceId.make("lmstudio");
+    const localModel = {
+      slug: "openai/gpt-oss-20b",
+      name: "OpenAI GPT OSS 20B",
+      isCustom: false,
+      capabilities: createModelCapabilities({ optionDescriptors: [] }),
+    };
+    const providers: ReadonlyArray<ServerProvider> = [
+      TEST_PROVIDERS[0]!,
+      {
+        driver: ProviderDriverKind.make("codex"),
+        instanceId: lmStudioInstanceId,
+        displayName: "LM Studio Local",
+        enabled: true,
+        installed: true,
+        version: "0.145.0",
+        status: "ready",
+        auth: { status: "unknown", type: "local", label: "LM Studio / Codex OSS" },
+        checkedAt: new Date().toISOString(),
+        models: [localModel],
+        slashCommands: [],
+        skills: [],
+      },
+      {
+        driver: ProviderDriverKind.make("opencode"),
+        instanceId: ProviderInstanceId.make("opencode"),
+        displayName: "OpenCode",
+        enabled: true,
+        installed: true,
+        version: "1.0.0",
+        status: "ready",
+        auth: { status: "authenticated" },
+        checkedAt: new Date().toISOString(),
+        models: [
+          {
+            slug: "opencode/cloud-model",
+            name: "OpenCode Cloud Model",
+            isCustom: false,
+            capabilities: createModelCapabilities({ optionDescriptors: [] }),
+          },
+        ],
+        slashCommands: [],
+        skills: [],
+      },
+    ];
+    const settings: UnifiedSettings = {
+      ...DEFAULT_UNIFIED_SETTINGS,
+      providerInstances: {
+        [lmStudioInstanceId]: {
+          driver: ProviderDriverKind.make("codex"),
+          enabled: true,
+          displayName: "LM Studio Local",
+          config: {
+            ossMode: true,
+            ossBaseUrl: "http://127.0.0.1:1234/v1",
+            customModels: ["gpt-5.6-sol", "opencode/cloud-model"],
+          },
+        },
+      },
+    };
+    const mounted = await mountPicker({
+      activeInstanceId: lmStudioInstanceId,
+      model: localModel.slug,
+      lockedProvider: null,
+      providers,
+      settings,
+    });
+
+    try {
+      const trigger = document.querySelector<HTMLElement>(
+        '[data-chat-provider-model-picker="true"]',
+      );
+      expect(trigger?.textContent).toContain("OpenAI GPT OSS 20B");
+      await page.getByRole("button").click();
+
+      await vi.waitFor(() => {
+        expect(getSidebarProviderOrder()).toEqual(["favorites", "codex", "lmstudio", "opencode"]);
+        expect(getVisibleModelNames()).toEqual(["OpenAI GPT OSS 20B"]);
+        expect(getModelPickerListText()).not.toContain("GPT-5 Codex");
+        expect(getModelPickerListText()).not.toContain("gpt-5.6-sol");
+        expect(getModelPickerListText()).not.toContain("OpenCode Cloud Model");
+      });
+
+      await page.getByRole("button", { name: "OpenCode", exact: true }).click();
+      await vi.waitFor(() => {
+        expect(getVisibleModelNames()).toEqual(["OpenCode Cloud Model"]);
+        expect(getModelPickerListText()).not.toContain("OpenAI GPT OSS 20B");
+      });
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("uses client model visibility and ordering preferences", async () => {
     const mounted = await mountPicker({
       activeInstanceId: CLAUDE_INSTANCE_ID,

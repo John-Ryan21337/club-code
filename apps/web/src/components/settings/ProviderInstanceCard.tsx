@@ -26,7 +26,10 @@ import {
 } from "@cafecode/contracts";
 
 import { cn } from "../../lib/utils";
-import { formatCodexRateLimitSummary } from "../../lib/codexRateLimits";
+import {
+  formatCodexRateLimitResetAvailability,
+  formatCodexRateLimitSummary,
+} from "../../lib/codexRateLimits";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { normalizeProviderAccentColor } from "../../providerInstances";
 import { Badge } from "../ui/badge";
@@ -51,6 +54,8 @@ import { ProviderSettingsForm } from "./ProviderSettingsForm";
 import { ProviderModelsSection } from "./ProviderModelsSection";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
 import { RedactedSensitiveText } from "./RedactedSensitiveText";
+import { isLmStudioProviderInstance } from "../../providerInstances";
+import { LM_STUDIO_LOCAL_DISPLAY_NAME } from "./providerInstanceCreation";
 import {
   getProviderVersionAdvisoryPresentation,
   PROVIDER_STATUS_STYLES,
@@ -757,13 +762,20 @@ export function ProviderInstanceCard({
         .filter((part): part is string => Boolean(part))
         .join(" · ")
     : null;
+  const codexRateLimitResetAvailabilityText =
+    liveProvider?.driver === "codex" && liveProvider.auth.status === "authenticated"
+      ? formatCodexRateLimitResetAvailability(liveProvider.accountRateLimits)
+      : null;
   const summary = rawSummary;
   const versionLabel = getProviderVersionLabel(liveProvider?.version);
   const versionAdvisory = getProviderVersionAdvisoryPresentation(liveProvider?.versionAdvisory);
   const updateCommand = versionAdvisory?.updateCommand ?? null;
   const FallbackIconComponent = driverOption?.icon;
+  const isLmStudioLocal = isLmStudioProviderInstance(instance);
   const displayName =
-    instance.displayName?.trim() || driverOption?.label || String(instance.driver);
+    instance.displayName?.trim() ||
+    (isLmStudioLocal ? LM_STUDIO_LOCAL_DISPLAY_NAME : driverOption?.label) ||
+    String(instance.driver);
   const accentColor = normalizeProviderAccentColor(instance.accentColor);
   const { copyToClipboard } = useCopyToClipboard<{ providerName: string }>({
     onCopy: ({ providerName }) => {
@@ -798,7 +810,7 @@ export function ProviderInstanceCard({
   // from the current instance config so add/remove reflects immediately.
   const modelsForDisplay = deriveProviderModelsForDisplay({
     liveModels: liveProvider?.models,
-    customModels,
+    customModels: isLmStudioLocal ? [] : customModels,
   });
 
   const updateDisplayName = (value: string) => {
@@ -869,7 +881,7 @@ export function ProviderInstanceCard({
       driverKind={driverKind}
       displayName={displayName}
       accentColor={accentColor}
-      showBadge={Boolean(accentColor)}
+      showBadge={Boolean(accentColor) || isLmStudioLocal}
       statusDotClassName={statusStyle.dot}
       className="size-5"
       iconClassName="size-4 text-foreground/80"
@@ -1067,9 +1079,12 @@ export function ProviderInstanceCard({
               {titleTailNode}
             </div>
             {authRowNode}
-            {codexRateLimitSummary ? (
+            {codexRateLimitSummary || codexRateLimitResetAvailabilityText ? (
               <div className="grid gap-0.5 text-xs leading-snug text-muted-foreground/80">
                 {codexRateLimitWindowText ? <p>Usage: {codexRateLimitWindowText}</p> : null}
+                {codexRateLimitResetAvailabilityText ? (
+                  <p>{codexRateLimitResetAvailabilityText}</p>
+                ) : null}
                 {codexRateLimitResetText ? <p>{codexRateLimitResetText}</p> : null}
               </div>
             ) : null}
@@ -1253,7 +1268,8 @@ export function ProviderInstanceCard({
                   instanceId={instanceId}
                   driverKind={driverKind}
                   models={modelsForDisplay}
-                  customModels={customModels}
+                  customModels={isLmStudioLocal ? [] : customModels}
+                  allowCustomModels={!isLmStudioLocal}
                   hiddenModels={hiddenModels}
                   favoriteModels={favoriteModels}
                   modelOrder={modelOrder}

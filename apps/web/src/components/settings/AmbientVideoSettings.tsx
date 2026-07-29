@@ -20,13 +20,11 @@ import { ensureLocalApi } from "../../localApi";
 import { useServerConfig } from "../../rpc/serverState";
 import { parseSpotifySource, spotifySourceInputValue } from "../../spotify";
 import {
-  getYouTubeUrlQueueExample,
-  readYouTubeUrlQueueFile,
-  YOUTUBE_URL_QUEUE_EXAMPLES,
+  importYouTubeUrlQueueFile,
   useYouTubeUrlQueue,
+  useYouTubeUrlQueueLibrary,
   youtubeUrlQueueStore,
   YouTubeUrlQueueFileError,
-  type YouTubeUrlQueueExampleId,
   type YouTubeUrlQueueParseReport,
 } from "../../youtubeUrlQueue";
 import {
@@ -92,14 +90,16 @@ export function AmbientVideoSettings() {
   const [youtubeAccountPending, setYoutubeAccountPending] = useState(false);
   const [queueReport, setQueueReport] = useState<YouTubeUrlQueueParseReport | null>(null);
   const [queueError, setQueueError] = useState<string | null>(null);
+  const [queueImportNotice, setQueueImportNotice] = useState<string | null>(null);
   const queueFileInputRef = useRef<HTMLInputElement | null>(null);
   const youtubeUrlQueue = useYouTubeUrlQueue();
-  const selectedQueueExample =
-    youtubeUrlQueue.exampleId === null
+  const youtubeUrlQueueLibrary = useYouTubeUrlQueueLibrary();
+  const selectedQueueOption =
+    youtubeUrlQueue.listId === null
       ? null
-      : getYouTubeUrlQueueExample(youtubeUrlQueue.exampleId);
+      : (youtubeUrlQueueLibrary.find((option) => option.id === youtubeUrlQueue.listId) ?? null);
   const displayedQueueReport =
-    queueReport ?? (selectedQueueExample === null ? null : youtubeUrlQueue.report);
+    queueReport ?? (selectedQueueOption === null ? null : youtubeUrlQueue.report);
   const searchAbortRef = useRef<AbortController | null>(null);
   const youtubeAccountRequestRef = useRef(0);
   const youtubeAccountOperationPendingRef = useRef(false);
@@ -305,20 +305,30 @@ export function AmbientVideoSettings() {
   const loadUrlQueue = useCallback(
     async (file: File) => {
       setQueueError(null);
+      setQueueImportNotice(null);
       try {
-        const result = await readYouTubeUrlQueueFile(file);
+        const imported = await importYouTubeUrlQueueFile(file);
+        const { result } = imported;
         setQueueReport(result.report);
+        setQueueImportNotice(
+          `${imported.option.label} ${imported.replaced ? "replaced" : "added"}.${
+            imported.persisted
+              ? ""
+              : " Browser storage is unavailable, so it will remain available only for this session."
+          }`,
+        );
         if (!youtubePlayerAvailable) {
           setQueueError("This server has not enabled YouTube playback.");
           return;
         }
-        if (!youtubeUrlQueueStore.load(result)) {
+        if (!youtubeUrlQueueStore.loadList(imported.option.id)) {
           setQueueError("No valid, unique single-video YouTube URLs were found.");
           return;
         }
         updateSettings({ ambientVideoEnabled: true });
       } catch (error) {
         setQueueReport(null);
+        setQueueImportNotice(null);
         setQueueError(
           error instanceof YouTubeUrlQueueFileError
             ? error.message
@@ -329,17 +339,18 @@ export function AmbientVideoSettings() {
     [updateSettings, youtubePlayerAvailable],
   );
 
-  const loadBundledQueue = useCallback(
-    (exampleId: YouTubeUrlQueueExampleId) => {
+  const loadNamedQueue = useCallback(
+    (listId: string) => {
       setQueueError(null);
+      setQueueImportNotice(null);
       if (!youtubePlayerAvailable) {
         setQueueReport(null);
         setQueueError("This server has not enabled YouTube playback.");
         return;
       }
-      if (!youtubeUrlQueueStore.loadExample(exampleId)) {
+      if (!youtubeUrlQueueStore.loadList(listId)) {
         setQueueReport(null);
-        setQueueError("That bundled URL queue does not contain a playable YouTube URL.");
+        setQueueError("That URL queue does not contain a playable YouTube URL.");
         return;
       }
       setQueueReport(youtubeUrlQueueStore.getSnapshot().report);
@@ -518,13 +529,14 @@ export function AmbientVideoSettings() {
 
       <SettingsRow
         title="Session URL queue"
-        description="Start with a bundled example or choose a local .txt file containing one strict YouTube video URL per line. Japanese music populates a new, otherwise unchosen session by default without turning playback on. Blank/comment lines are ignored. Queue contents are never uploaded, logged, prompted, or saved to settings."
+        description="Choose one of the included Japanese music, EDM, or K-pop lists, or add a named local .txt file containing one strict YouTube video URL per line. Re-uploading the same filename replaces that list; a new filename adds another one-click option. During playback, videos that YouTube reports as unavailable or not allowed to be embedded are skipped automatically. Japanese music populates a new, otherwise unchosen session by default without turning playback on. Blank/comment lines are ignored. Imported lists stay on this browser/device and are never uploaded, logged, prompted, or saved to server settings."
         status={
           queueError ? (
             <span className="text-destructive">{queueError}</span>
           ) : displayedQueueReport ? (
             <span className="text-muted-foreground">
-              {selectedQueueExample ? `${selectedQueueExample.label}: ` : null}
+              {queueImportNotice ? `${queueImportNotice} ` : null}
+              {selectedQueueOption ? `${selectedQueueOption.label}: ` : null}
               Accepted {displayedQueueReport.accepted}; skipped {displayedQueueReport.invalid}{" "}
               invalid, {displayedQueueReport.duplicates} duplicate, {displayedQueueReport.overflow}{" "}
               beyond the 200-item limit, {displayedQueueReport.comments} comment, and{" "}
@@ -534,17 +546,17 @@ export function AmbientVideoSettings() {
         }
         control={
           <div className="flex w-full max-w-md flex-wrap items-center gap-2">
-            {YOUTUBE_URL_QUEUE_EXAMPLES.map((example) => (
+            {youtubeUrlQueueLibrary.map((option) => (
               <Button
-                aria-pressed={youtubeUrlQueue.exampleId === example.id}
+                aria-pressed={youtubeUrlQueue.listId === option.id}
                 disabled={!youtubePlayerAvailable}
-                key={example.id}
+                key={option.id}
                 size="xs"
                 type="button"
-                variant={youtubeUrlQueue.exampleId === example.id ? "secondary" : "outline"}
-                onClick={() => loadBundledQueue(example.id)}
+                variant={youtubeUrlQueue.listId === option.id ? "secondary" : "outline"}
+                onClick={() => loadNamedQueue(option.id)}
               >
-                {example.label}
+                {option.label}
               </Button>
             ))}
             <input
@@ -582,6 +594,7 @@ export function AmbientVideoSettings() {
                     youtubeUrlQueueStore.clear();
                     setQueueReport(null);
                     setQueueError(null);
+                    setQueueImportNotice(null);
                   }}
                 >
                   Clear queue

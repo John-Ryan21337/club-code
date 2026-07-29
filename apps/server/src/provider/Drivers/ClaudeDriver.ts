@@ -128,18 +128,23 @@ const withInstanceIdentity =
     ...(input.accentColor ? { accentColor: input.accentColor } : {}),
     ...(input.authActions ? { authActions: input.authActions } : {}),
     continuation: { groupKey: input.continuationGroupKey },
-    // The renderer chooses between a non-interrupting `thread.turn.steer` and
-    // a per-thread follow-up that waits for a safe boundary from this public
-    // snapshot, not from the daemon-only adapter object. Keep the snapshot
-    // aligned with `makeClaudeAdapter().capabilities.liveSteer`: Claude's
-    // streaming-input protocol accepts UUID-stamped messages on the live
-    // AsyncIterable and does not require Query.interrupt(). Omitting this
-    // field safely queues the follow-up, but unnecessarily delays native
-    // Claude steering until the active turn settles.
+    // The renderer chooses between a non-interrupting `thread.turn.steer`
+    // and a per-thread follow-up that waits for a safe boundary from this
+    // public snapshot,
+    // not from the daemon-only adapter object. Keep the snapshot aligned with
+    // `makeClaudeAdapter().capabilities.liveSteer`: Claude's streaming-input
+    // protocol accepts UUID-stamped messages on the live AsyncIterable and
+    // does not require Query.interrupt(). Omitting this field safely queues the
+    // follow-up, but unnecessarily delays native Claude steering until the
+    // active turn settles.
     runtimeCapabilities: {
       ...snapshot.runtimeCapabilities,
       liveSteer: "supported",
       accountUsage: supportsClaudeAccountUsage(snapshot) ? "experimental" : "unsupported",
+      // Claude `active_goal` is progress telemetry, not a durable public
+      // create/get/update/clear control plane. Keep it in the work log and do
+      // not expose Codex goal controls for Claude instances.
+      threadGoals: "unsupported",
     },
   });
 

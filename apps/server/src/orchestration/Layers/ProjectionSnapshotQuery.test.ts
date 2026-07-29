@@ -1,6 +1,7 @@
 import {
   CheckpointRef,
   EventId,
+  ManualFollowUpId,
   MessageId,
   ProjectId,
   ThreadId,
@@ -28,6 +29,8 @@ const asTurnId = (value: string): TurnId => TurnId.make(value);
 const asMessageId = (value: string): MessageId => MessageId.make(value);
 const asEventId = (value: string): EventId => EventId.make(value);
 const asCheckpointRef = (value: string): CheckpointRef => CheckpointRef.make(value);
+const secretAutoNudgePrompt = "DO-NOT-FAN-OUT-SECRET-PROMPT";
+const secretManualFollowUpPrompt = "DO-NOT-FAN-OUT-MANUAL-FOLLOW-UP";
 
 const projectionSnapshotLayer = it.layer(
   OrchestrationProjectionSnapshotQueryLive.pipe(
@@ -52,6 +55,30 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       yield* sql`DELETE FROM projection_threads`;
       yield* sql`DELETE FROM projection_projects`;
       yield* sql`DELETE FROM projection_state`;
+      const manualFollowUpsJson = JSON.stringify([
+        {
+          id: "manual-follow-up-secret",
+          message: {
+            messageId: "manual-message-secret",
+            role: "user",
+            text: secretManualFollowUpPrompt,
+            attachments: [],
+          },
+          dispatch: {
+            modelSelection: {
+              instanceId: "codex",
+              model: "gpt-5-codex",
+            },
+            titleSeed: "Thread 1",
+            runtimeMode: "full-access",
+            interactionMode: "default",
+          },
+          status: "queued",
+          enqueuedAt: "2026-02-24T00:00:02.250Z",
+          activatedAt: null,
+          activationCommandId: null,
+        },
+      ]);
 
       yield* sql`
         INSERT INTO projection_projects (
@@ -86,6 +113,8 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           interaction_mode,
           branch,
           worktree_path,
+          auto_nudge_json,
+          manual_follow_ups_json,
           latest_turn_id,
           latest_user_message_at,
           pending_approval_count,
@@ -104,6 +133,8 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           'default',
           NULL,
           NULL,
+          '{"authorityRevision":7,"mode":"steady-progress","prompt":"DO-NOT-FAN-OUT-SECRET-PROMPT","backgroundContinuation":true,"maxRounds":5,"maxMinutes":30,"armedAt":"2026-02-24T00:00:02.500Z","baselineSettledTurnId":null,"lastDispatchedSettledTurnId":null,"roundsDispatched":0,"lastDispatchedAt":null}',
+          ${manualFollowUpsJson},
           'turn-1',
           '2026-02-24T00:00:04.000Z',
           1,
@@ -303,6 +334,43 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           runtimeMode: "full-access",
           branch: null,
           worktreePath: null,
+          autoNudge: {
+            authorityRevision: 7,
+            mode: "steady-progress",
+            prompt: secretAutoNudgePrompt,
+            backgroundContinuation: true,
+            maxRounds: 5,
+            maxMinutes: 30,
+            armedAt: "2026-02-24T00:00:02.500Z",
+            baselineSettledTurnId: null,
+            lastDispatchedSettledTurnId: null,
+            roundsDispatched: 0,
+            lastDispatchedAt: null,
+          },
+          manualFollowUps: [
+            {
+              id: ManualFollowUpId.make("manual-follow-up-secret"),
+              message: {
+                messageId: asMessageId("manual-message-secret"),
+                role: "user",
+                text: secretManualFollowUpPrompt,
+                attachments: [],
+              },
+              dispatch: {
+                modelSelection: {
+                  instanceId: ProviderInstanceId.make("codex"),
+                  model: "gpt-5-codex",
+                },
+                titleSeed: "Thread 1",
+                runtimeMode: "full-access",
+                interactionMode: "default",
+              },
+              status: "queued",
+              enqueuedAt: "2026-02-24T00:00:02.250Z",
+              activatedAt: null,
+              activationCommandId: null,
+            },
+          ],
           latestTurn: {
             turnId: asTurnId("turn-1"),
             state: "completed",
@@ -372,10 +440,13 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             lastError: null,
             updatedAt: "2026-02-24T00:00:08.000Z",
           },
+          goal: null,
         },
       ]);
 
       const shellSnapshot = yield* snapshotQuery.getShellSnapshot();
+      assert.isFalse(JSON.stringify(shellSnapshot).includes(secretAutoNudgePrompt));
+      assert.isFalse(JSON.stringify(shellSnapshot).includes(secretManualFollowUpPrompt));
       assert.equal(shellSnapshot.snapshotSequence, 5);
       assert.deepEqual(shellSnapshot.projects, [
         {
@@ -414,6 +485,19 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           runtimeMode: "full-access",
           branch: null,
           worktreePath: null,
+          autoNudge: {
+            authorityRevision: 7,
+            mode: "steady-progress",
+            backgroundContinuation: true,
+            maxRounds: 5,
+            maxMinutes: 30,
+            armedAt: "2026-02-24T00:00:02.500Z",
+            baselineSettledTurnId: null,
+            lastDispatchedSettledTurnId: null,
+            roundsDispatched: 0,
+            lastDispatchedAt: null,
+          },
+          manualFollowUpCount: 1,
           latestTurn: {
             turnId: asTurnId("turn-1"),
             state: "completed",
@@ -2370,6 +2454,78 @@ it.effect(
       assert.deepStrictEqual(resolveCalls.toSorted(), ["/tmp/deleted-root", "/tmp/shared-root"]);
       assert.equal(fullSnapshot.projects.length, 3);
       assert.equal(fullSnapshot.projects[2]?.repositoryIdentity?.rootPath, "/tmp/deleted-root");
+    }).pipe(Effect.provide(layer));
+  },
+);
+
+it.effect(
+  "ProjectionSnapshotQuery reads an active workspace root without repository identity resolution",
+  () => {
+    const resolveCalls: string[] = [];
+    const layer = OrchestrationProjectionSnapshotQueryLive.pipe(
+      Layer.provideMerge(
+        Layer.succeed(RepositoryIdentityResolver, {
+          resolve: (cwd: string) =>
+            Effect.sync(() => {
+              resolveCalls.push(cwd);
+              return null;
+            }),
+        }),
+      ),
+      Layer.provideMerge(SqlitePersistenceMemory),
+    );
+
+    return Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+
+      yield* sql`
+        INSERT INTO projection_projects (
+          project_id,
+          title,
+          workspace_root,
+          default_model_selection_json,
+          scripts_json,
+          created_at,
+          updated_at,
+          deleted_at
+        )
+        VALUES
+          (
+            'project-root-read-active',
+            'Active project',
+            '/tmp/active-root',
+            NULL,
+            '[]',
+            '2026-04-06T00:00:00.000Z',
+            '2026-04-06T00:00:01.000Z',
+            NULL
+          ),
+          (
+            'project-root-read-deleted',
+            'Deleted project',
+            '/tmp/deleted-root',
+            NULL,
+            '[]',
+            '2026-04-06T00:00:02.000Z',
+            '2026-04-06T00:00:03.000Z',
+            '2026-04-06T00:00:04.000Z'
+          )
+      `;
+
+      const active = yield* snapshotQuery.getProjectWorkspaceRootById(
+        asProjectId("project-root-read-active"),
+      );
+      const deleted = yield* snapshotQuery.getProjectWorkspaceRootById(
+        asProjectId("project-root-read-deleted"),
+      );
+
+      assert.equal(active._tag, "Some");
+      if (active._tag === "Some") {
+        assert.equal(active.value, "/tmp/active-root");
+      }
+      assert.equal(deleted._tag, "None");
+      assert.deepStrictEqual(resolveCalls, []);
     }).pipe(Effect.provide(layer));
   },
 );

@@ -42,6 +42,7 @@ function makeFakeCodexBinary(
     forbidReasoningEffort?: boolean;
     ossMode?: boolean;
     requireOssMode?: boolean;
+    expectedOssBaseUrl?: string;
     stdinMustContain?: string;
     stdinMustNotContain?: string;
   },
@@ -251,6 +252,7 @@ type CapturedCodexCommand = {
   readonly command: string;
   readonly args: ReadonlyArray<string>;
   readonly options: {
+    readonly env?: NodeJS.ProcessEnv;
     readonly stdin?: { readonly stream: Stream.Stream<Uint8Array> };
   };
 };
@@ -283,6 +285,7 @@ function withFakeCodexSpawner<A, E, R>(
     forbidReasoningEffort?: boolean;
     ossMode?: boolean;
     requireOssMode?: boolean;
+    expectedOssBaseUrl?: string;
     stdinMustContain?: string;
     stdinMustNotContain?: string;
   },
@@ -320,6 +323,9 @@ function withFakeCodexSpawner<A, E, R>(
             "exec",
           ]);
         }
+        if (input.expectedOssBaseUrl !== undefined) {
+          expect(command.options.env?.CODEX_OSS_BASE_URL).toBe(input.expectedOssBaseUrl);
+        }
         expect(outputPath).toBeTypeOf("string");
         if (outputPath !== undefined) {
           writeFileSync(outputPath, input.output);
@@ -349,9 +355,12 @@ function withFakeCodexSpawner<A, E, R>(
         );
       }),
     );
-    const textGeneration = yield* makeCodexTextGeneration(config).pipe(
-      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-    );
+    const textGeneration = yield* makeCodexTextGeneration(
+      config,
+      input.expectedOssBaseUrl === undefined
+        ? undefined
+        : { CODEX_OSS_BASE_URL: input.expectedOssBaseUrl },
+    ).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
     return yield* effectFn(textGeneration);
   }).pipe(Effect.scoped);
 }
@@ -421,6 +430,7 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGeneration", (it) => {
         }),
         ossMode: true,
         requireOssMode: true,
+        expectedOssBaseUrl: "http://192.168.20.15:1234/v1",
       },
       (textGeneration) =>
         textGeneration.generateCommitMessage({

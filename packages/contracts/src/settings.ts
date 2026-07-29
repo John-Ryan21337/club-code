@@ -7,6 +7,29 @@ import { DEFAULT_GIT_TEXT_GENERATION_MODEL, ProviderOptionSelections } from "./m
 import { ModelSelection } from "./orchestration.ts";
 import { ProviderInstanceConfig, ProviderInstanceId } from "./providerInstance.ts";
 import { EditorId } from "./editor.ts";
+import {
+  AutoNudgeMaxMinutes,
+  AutoNudgeMaxRounds,
+  AutoNudgeMode,
+  DEFAULT_AUTO_NUDGE_BACKGROUND_CONTINUATION,
+  DEFAULT_AUTO_NUDGE_MAX_MINUTES,
+  DEFAULT_AUTO_NUDGE_MAX_ROUNDS,
+  DEFAULT_AUTO_NUDGE_MODE,
+} from "./autoNudge.ts";
+
+export {
+  AutoNudgeMaxMinutes,
+  AutoNudgeMaxRounds,
+  AutoNudgeMode,
+  DEFAULT_AUTO_NUDGE_BACKGROUND_CONTINUATION,
+  DEFAULT_AUTO_NUDGE_MAX_MINUTES,
+  DEFAULT_AUTO_NUDGE_MAX_ROUNDS,
+  DEFAULT_AUTO_NUDGE_MODE,
+  MAX_AUTO_NUDGE_MAX_MINUTES,
+  MAX_AUTO_NUDGE_MAX_ROUNDS,
+  MIN_AUTO_NUDGE_MAX_MINUTES,
+  MIN_AUTO_NUDGE_MAX_ROUNDS,
+} from "./autoNudge.ts";
 
 // ── Client Settings (local-only) ───────────────────────────────
 
@@ -27,6 +50,50 @@ export type PowerSaveBlockerMode = typeof PowerSaveBlockerMode.Type;
 export const DEFAULT_POWER_SAVE_BLOCKER_MODE: PowerSaveBlockerMode = "off";
 
 export const DEFAULT_CONTINUE_BACKGROUND_ANIMATIONS = false;
+/**
+ * Per-device presentation override. `false` preserves the normal responsive
+ * viewport behavior; `true` asks wide clients to use the existing mobile
+ * layout branches too. Although this field shares the ClientSettings schema so
+ * local persistence and settings profiles can decode it, renderer writes must
+ * not forward it through the environment-wide client-settings RPC.
+ */
+export const DEFAULT_MOBILE_OPTIMIZED_PRESENTATION = false;
+export const WorldClockStyle = Schema.Literals(["rainbow", "nixie", "analog", "led"]);
+export type WorldClockStyle = typeof WorldClockStyle.Type;
+export const WorldClockLocationId = Schema.Literals([
+  "tokyo",
+  "los-angeles",
+  "new-york",
+  "london",
+  "paris",
+  "berlin",
+  "seoul",
+  "singapore",
+  "sydney",
+  "honolulu",
+  "dubai",
+  "sao-paulo",
+]);
+export type WorldClockLocationId = typeof WorldClockLocationId.Type;
+export const MAX_WORLD_CLOCK_LOCATIONS = 6;
+export const WorldClockLocationIds = Schema.Array(WorldClockLocationId).check(
+  Schema.isMinLength(1),
+  Schema.isMaxLength(MAX_WORLD_CLOCK_LOCATIONS),
+  Schema.makeFilter((locationIds) =>
+    new Set(locationIds).size === locationIds.length
+      ? undefined
+      : "must not contain duplicate clock locations",
+  ),
+);
+export type WorldClockLocationIds = typeof WorldClockLocationIds.Type;
+export const DEFAULT_WORLD_CLOCK_ENABLED = false;
+export const DEFAULT_WORLD_CLOCK_STYLE: WorldClockStyle = "rainbow";
+export const DEFAULT_WORLD_CLOCK_LOCATION_IDS: WorldClockLocationIds = [
+  "tokyo",
+  "los-angeles",
+  "london",
+];
+export const DEFAULT_WORLD_CLOCK_WEATHER_ENABLED = false;
 export const DEFAULT_SHOW_SIDEBAR_SEARCH = true;
 export const DEFAULT_SHOW_SIDEBAR_MASCOT = true;
 export const DEFAULT_SHOW_SIDEBAR_ATTRIBUTION = true;
@@ -50,30 +117,6 @@ export const DEFAULT_MODEL_PACING_ENABLED = false;
 export const MIN_MODEL_PACING_RESERVE_PERCENT = 0;
 export const MAX_MODEL_PACING_RESERVE_PERCENT = 50;
 export const DEFAULT_MODEL_PACING_RESERVE_PERCENT = 10;
-export const AutoNudgeMode = Schema.Literals(["off", "hardcore-fanout", "steady-progress"]);
-export type AutoNudgeMode = typeof AutoNudgeMode.Type;
-export const DEFAULT_AUTO_NUDGE_MODE: AutoNudgeMode = "off";
-export const DEFAULT_AUTO_NUDGE_BACKGROUND_CONTINUATION = false;
-export const MIN_AUTO_NUDGE_MAX_ROUNDS = 1;
-export const MAX_AUTO_NUDGE_MAX_ROUNDS = 20;
-export const DEFAULT_AUTO_NUDGE_MAX_ROUNDS = 5;
-export const MIN_AUTO_NUDGE_MAX_MINUTES = 5;
-export const MAX_AUTO_NUDGE_MAX_MINUTES = 120;
-export const DEFAULT_AUTO_NUDGE_MAX_MINUTES = 30;
-export const AutoNudgeMaxRounds = Schema.Int.check(
-  Schema.isBetween({
-    minimum: MIN_AUTO_NUDGE_MAX_ROUNDS,
-    maximum: MAX_AUTO_NUDGE_MAX_ROUNDS,
-  }),
-);
-export type AutoNudgeMaxRounds = typeof AutoNudgeMaxRounds.Type;
-export const AutoNudgeMaxMinutes = Schema.Int.check(
-  Schema.isBetween({
-    minimum: MIN_AUTO_NUDGE_MAX_MINUTES,
-    maximum: MAX_AUTO_NUDGE_MAX_MINUTES,
-  }),
-);
-export type AutoNudgeMaxMinutes = typeof AutoNudgeMaxMinutes.Type;
 export const MAX_BRAND_WORDMARK_PREFIX_LENGTH = 64;
 export const MAX_SIDEBAR_BRAND_IMAGE_FILE_BYTES = 1_000_000;
 export const MAX_SIDEBAR_BRAND_IMAGE_DATA_URL_LENGTH =
@@ -149,6 +192,20 @@ export const DEFAULT_AMBIENT_OPACITY = 0.35;
 export const MIN_FALLING_EFFECT_SPEED = 0.25;
 export const MAX_FALLING_EFFECT_SPEED = 4;
 export const DEFAULT_FALLING_EFFECT_SPEED = 1;
+/**
+ * Non-Walk Matrix modes scale their existing glyph-size variation around this
+ * baseline. Rain and snow retain their independent drop/flake geometry.
+ */
+export const MIN_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE = 1;
+export const MAX_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE = 72;
+export const DEFAULT_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE = 14;
+export const FallingEffectMatrixBaseFontSize = Schema.Int.check(
+  Schema.isBetween({
+    minimum: MIN_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE,
+    maximum: MAX_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE,
+  }),
+);
+export type FallingEffectMatrixBaseFontSize = typeof FallingEffectMatrixBaseFontSize.Type;
 /**
  * Independent hue-cycle multiplier. The upper bound is intentionally high
  * enough for a visible shimmer, but changes no particle or canvas draw budget.
@@ -233,6 +290,11 @@ export type AmbientOpacity = typeof AmbientOpacity.Type;
 export const FallingEffectKind = Schema.Literals(["snow", "rain", "matrix"]);
 export type FallingEffectKind = typeof FallingEffectKind.Type;
 export const DEFAULT_FALLING_EFFECTS_ENABLED = false;
+/**
+ * Cinema media stays visually unobstructed unless the user explicitly opts
+ * into a clipped, pointer-transparent copy of the selected falling effect.
+ */
+export const DEFAULT_FALLING_EFFECTS_OVER_CINEMA_ENABLED = false;
 export const DEFAULT_FALLING_EFFECT_KIND: FallingEffectKind = "snow";
 
 /**
@@ -258,6 +320,48 @@ export const FallingEffectMatrixColorCycleSpeed = Schema.Number.check(
   }),
 );
 export type FallingEffectMatrixColorCycleSpeed = typeof FallingEffectMatrixColorCycleSpeed.Type;
+
+/**
+ * Historical Matrix naming is retained for stored-settings compatibility, but
+ * the projection applies to snow and rain as well as Matrix glyph streams.
+ */
+export const FallingEffectMatrixMotionMode = Schema.Literals([
+  "flat",
+  "forward",
+  "reverse",
+  "tunnel",
+  "walk-forward",
+  "walk-reverse",
+]);
+export type FallingEffectMatrixMotionMode = typeof FallingEffectMatrixMotionMode.Type;
+export const DEFAULT_FALLING_EFFECT_MATRIX_MOTION_MODE: FallingEffectMatrixMotionMode = "flat";
+
+/**
+ * Walk endpoint controls and rendered Matrix font strings use whole-pixel
+ * buckets. Projection still interpolates depth and position continuously
+ * between the selected endpoints.
+ */
+export const MIN_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE = 1;
+export const MAX_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE = 144;
+export const FALLING_EFFECT_MATRIX_WALK_FONT_SIZE_STEP = 1;
+/**
+ * Older builds accepted two-decimal endpoint settings as low as 0.01px.
+ * Continue decoding those persisted values so an upgrade never discards the
+ * rest of client-settings.json; the UI and glyph cache normalize new work onto
+ * the cheaper whole-pixel grid.
+ */
+const LEGACY_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE_MINIMUM = 0.01;
+const LEGACY_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE_PRECISION = 0.01;
+export const DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE = 1;
+export const DEFAULT_FALLING_EFFECT_MATRIX_WALK_END_FONT_SIZE = 72;
+export const FallingEffectMatrixWalkFontSize = Schema.Number.check(
+  Schema.isMultipleOf(LEGACY_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE_PRECISION),
+  Schema.isBetween({
+    minimum: LEGACY_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE_MINIMUM,
+    maximum: MAX_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE,
+  }),
+);
+export type FallingEffectMatrixWalkFontSize = typeof FallingEffectMatrixWalkFontSize.Type;
 
 export const FallingEffectSpeed = Schema.Number.check(
   Schema.isBetween({
@@ -450,6 +554,39 @@ export const DEFAULT_AMBIENT_IMAGE_PRESET_PLACEMENT: AmbientMediaPresetPlacement
 export const DEFAULT_AMBIENT_IMAGE_PRESET_SIZE: AmbientMediaPresetSize = "medium";
 export const DEFAULT_AMBIENT_IMAGE_GLOW_ENABLED = false;
 
+// ── Ambiance (decorative weather layer) ────────────────────────────
+//
+// Purely cosmetic renderer state: an animated weather canvas drawn over the
+// app chrome. Off by default so fresh installs keep the plain sidebar stars.
+// All values are client settings so every connected renderer (Electron and
+// browser) shares the same ambiance once the backend syncs client settings.
+export const AmbianceEffect = Schema.Literals(["stars", "rain", "snow", "matrix", "fire"]);
+export type AmbianceEffect = typeof AmbianceEffect.Type;
+export const DEFAULT_AMBIANCE_ENABLED = false;
+export const DEFAULT_AMBIANCE_EFFECT: AmbianceEffect = "rain";
+export const MIN_AMBIANCE_INTENSITY = 0;
+export const MAX_AMBIANCE_INTENSITY = 1;
+export const DEFAULT_AMBIANCE_INTENSITY = 0.55;
+export const AmbianceIntensity = Schema.Number.check(
+  Schema.isBetween({
+    minimum: MIN_AMBIANCE_INTENSITY,
+    maximum: MAX_AMBIANCE_INTENSITY,
+  }),
+);
+export type AmbianceIntensity = typeof AmbianceIntensity.Type;
+// How much of the thread run the weather is allowed to react to:
+// "off" ignores thread state entirely, "session" follows session lifecycle
+// (starting/running/error/...), and "live" adds activity signals such as tool
+// bursts, approval holds, and completion clears.
+export const AmbianceReactMode = Schema.Literals(["off", "session", "live"]);
+export type AmbianceReactMode = typeof AmbianceReactMode.Type;
+export const DEFAULT_AMBIANCE_REACT_MODE: AmbianceReactMode = "live";
+export const DEFAULT_AMBIANCE_SURFACE_SIDEBAR = true;
+export const DEFAULT_AMBIANCE_SURFACE_THREAD = true;
+export const DEFAULT_AMBIANCE_SURFACE_COMPOSER = true;
+// Empty string means "follow the accent color configured in Appearance".
+export const DEFAULT_AMBIANCE_COLOR = "";
+
 export const SidebarProjectSortOrder = Schema.Literals(["updated_at", "created_at", "manual"]);
 export type SidebarProjectSortOrder = typeof SidebarProjectSortOrder.Type;
 export const DEFAULT_SIDEBAR_PROJECT_SORT_ORDER: SidebarProjectSortOrder = "updated_at";
@@ -522,11 +659,34 @@ export const ClientSettingsSchema = Schema.Struct({
   continueBackgroundAnimations: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_CONTINUE_BACKGROUND_ANIMATIONS)),
   ),
+  mobileOptimizedPresentation: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_MOBILE_OPTIMIZED_PRESENTATION)),
+  ),
+  worldClockEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_WORLD_CLOCK_ENABLED)),
+  ),
+  worldClockStyle: WorldClockStyle.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_WORLD_CLOCK_STYLE)),
+  ),
+  worldClockLocationIds: WorldClockLocationIds.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_WORLD_CLOCK_LOCATION_IDS)),
+  ),
+  // Network consent is persisted through this schema for compatibility, but
+  // the web renderer must keep it local and must not sync it between clients.
+  worldClockWeatherEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_WORLD_CLOCK_WEATHER_ENABLED)),
+  ),
   fallingEffectsEnabled: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECTS_ENABLED)),
   ),
+  fallingEffectsOverCinemaEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECTS_OVER_CINEMA_ENABLED)),
+  ),
   fallingEffectKind: FallingEffectKind.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_KIND)),
+  ),
+  fallingEffectMatrixBaseFontSize: FallingEffectMatrixBaseFontSize.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE)),
   ),
   fallingEffectColor: AmbientColor.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_COLOR)),
@@ -536,6 +696,15 @@ export const ClientSettingsSchema = Schema.Struct({
   ),
   fallingEffectMatrixColorCycleSpeed: FallingEffectMatrixColorCycleSpeed.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED)),
+  ),
+  fallingEffectMatrixMotionMode: FallingEffectMatrixMotionMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_MATRIX_MOTION_MODE)),
+  ),
+  fallingEffectMatrixWalkStartFontSize: FallingEffectMatrixWalkFontSize.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE)),
+  ),
+  fallingEffectMatrixWalkEndFontSize: FallingEffectMatrixWalkFontSize.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_MATRIX_WALK_END_FONT_SIZE)),
   ),
   fallingEffectOpacity: AmbientOpacity.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_OPACITY)),
@@ -691,9 +860,11 @@ export const ClientSettingsSchema = Schema.Struct({
   modelPacingReservePercent: ModelPacingReservePercent.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_MODEL_PACING_RESERVE_PERCENT)),
   ),
-  // Legacy device-wide defaults retained for decode compatibility and the
-  // one-time migration into the renderer's exact-thread policy registry.
-  // New Auto Nudge writes are thread-scoped; these fields are not authoritative.
+  // Compatibility-only decode fields for profiles written before exact-thread
+  // Auto Nudge authority moved into orchestration state. These values own no
+  // thread and grant no execution authority; new clients must neither read nor
+  // write them. Only a revision-checked `thread.auto-nudge.configure` command
+  // may configure or arm one exact thread.
   autoNudgeMode: AutoNudgeMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_AUTO_NUDGE_MODE)),
   ),
@@ -705,6 +876,30 @@ export const ClientSettingsSchema = Schema.Struct({
   ),
   autoNudgeMaxMinutes: AutoNudgeMaxMinutes.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_AUTO_NUDGE_MAX_MINUTES)),
+  ),
+  ambianceEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIANCE_ENABLED)),
+  ),
+  ambianceEffect: AmbianceEffect.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIANCE_EFFECT)),
+  ),
+  ambianceIntensity: AmbianceIntensity.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIANCE_INTENSITY)),
+  ),
+  ambianceReactMode: AmbianceReactMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIANCE_REACT_MODE)),
+  ),
+  ambianceSurfaceSidebar: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIANCE_SURFACE_SIDEBAR)),
+  ),
+  ambianceSurfaceThread: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIANCE_SURFACE_THREAD)),
+  ),
+  ambianceSurfaceComposer: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIANCE_SURFACE_COMPOSER)),
+  ),
+  ambianceColor: TrimmedString.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIANCE_COLOR)),
   ),
   themeAccentColor: TrimmedString.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_THEME_ACCENT_COLOR)),
@@ -770,10 +965,15 @@ export type ClientSettings = typeof ClientSettingsSchema.Type;
 
 export const AMBIENT_CLIENT_SETTINGS_KEYS = [
   "fallingEffectsEnabled",
+  "fallingEffectsOverCinemaEnabled",
   "fallingEffectKind",
+  "fallingEffectMatrixBaseFontSize",
   "fallingEffectColor",
   "fallingEffectMatrixColorMode",
   "fallingEffectMatrixColorCycleSpeed",
+  "fallingEffectMatrixMotionMode",
+  "fallingEffectMatrixWalkStartFontSize",
+  "fallingEffectMatrixWalkEndFontSize",
   "fallingEffectOpacity",
   "fallingEffectSpeed",
   "fallingEffectDensity",
@@ -817,10 +1017,15 @@ export type AmbientClientSettings = Pick<
 
 export const DEFAULT_AMBIENT_CLIENT_SETTINGS: AmbientClientSettings = {
   fallingEffectsEnabled: DEFAULT_FALLING_EFFECTS_ENABLED,
+  fallingEffectsOverCinemaEnabled: DEFAULT_FALLING_EFFECTS_OVER_CINEMA_ENABLED,
   fallingEffectKind: DEFAULT_FALLING_EFFECT_KIND,
+  fallingEffectMatrixBaseFontSize: DEFAULT_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE,
   fallingEffectColor: DEFAULT_AMBIENT_COLOR,
   fallingEffectMatrixColorMode: DEFAULT_FALLING_EFFECT_MATRIX_COLOR_MODE,
   fallingEffectMatrixColorCycleSpeed: DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
+  fallingEffectMatrixMotionMode: DEFAULT_FALLING_EFFECT_MATRIX_MOTION_MODE,
+  fallingEffectMatrixWalkStartFontSize: DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE,
+  fallingEffectMatrixWalkEndFontSize: DEFAULT_FALLING_EFFECT_MATRIX_WALK_END_FONT_SIZE,
   fallingEffectOpacity: DEFAULT_AMBIENT_OPACITY,
   fallingEffectSpeed: DEFAULT_FALLING_EFFECT_SPEED,
   fallingEffectDensity: DEFAULT_FALLING_EFFECT_DENSITY,
@@ -1087,6 +1292,128 @@ export const CODEX_DEFAULT_AUTO_COMPACT_TOKEN_LIMIT = 200_000;
 // request. The user's explicit limit can still be lower; this is only a
 // ceiling when the opt-in mode is enabled.
 export const CODEX_ULTRA_CACHING_AUTO_COMPACT_TOKEN_LIMIT = 120_000;
+export const DEFAULT_LM_STUDIO_BASE_URL = "http://127.0.0.1:1234/v1";
+export const MAX_LM_STUDIO_BASE_URL_LENGTH = 512;
+
+function isPrivateOrLoopbackIpv4(hostname: string): boolean {
+  const octets = hostname.split(".").map((part) => Number(part));
+  if (
+    octets.length !== 4 ||
+    octets.some(
+      (octet, index) =>
+        !Number.isInteger(octet) ||
+        octet < 0 ||
+        octet > 255 ||
+        String(octet) !== hostname.split(".")[index],
+    )
+  ) {
+    return false;
+  }
+
+  return (
+    octets[0] === 10 ||
+    octets[0] === 127 ||
+    (octets[0] === 172 && octets[1]! >= 16 && octets[1]! <= 31) ||
+    (octets[0] === 192 && octets[1] === 168)
+  );
+}
+
+function isPrivateOrLoopbackIpv6(hostname: string): boolean {
+  const normalized = hostname.replace(/^\[|\]$/gu, "").toLowerCase();
+  if (normalized === "::1") return true;
+  const firstSegment = normalized.split(":")[0] ?? "";
+  const firstValue = Number.parseInt(firstSegment, 16);
+  return Number.isFinite(firstValue) && firstValue >= 0xfc00 && firstValue <= 0xfdff;
+}
+
+function isKnownCloudMetadataHost(hostname: string): boolean {
+  const normalized = hostname
+    .replace(/^\[|\]$/gu, "")
+    .replace(/\.$/u, "")
+    .toLowerCase();
+  return (
+    normalized === "169.254.169.254" ||
+    normalized === "100.100.100.200" ||
+    normalized === "fd00:ec2::254" ||
+    normalized === "metadata.google.internal"
+  );
+}
+
+function isPrivateOrLoopbackLmStudioHost(hostname: string): boolean {
+  const normalized = hostname.toLowerCase();
+  return (
+    normalized === "localhost" ||
+    isPrivateOrLoopbackIpv4(normalized) ||
+    isPrivateOrLoopbackIpv6(normalized)
+  );
+}
+
+/**
+ * Validate an LM Studio OpenAI-compatible API root without performing DNS or
+ * network I/O. Plain HTTP is intentionally limited to localhost or literal
+ * loopback/RFC1918/ULA addresses because prompts and workspace context cross
+ * this endpoint. Hostnames (including single-label and mDNS-style names) are
+ * rejected over HTTP: a syntax-only check cannot prove their resolution stays
+ * private, so accepting them would make the "private network" boundary
+ * vulnerable to DNS rebinding. Hostnames remain available over HTTPS, where
+ * normal certificate verification authenticates the selected endpoint. Known
+ * cloud metadata endpoints are rejected for either protocol so HTTPS cannot
+ * turn model discovery or status probes into a local SSRF primitive.
+ */
+export function validateLmStudioBaseUrl(value: string): string | null {
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return "LM Studio server URL is required.";
+  if (trimmed.length > MAX_LM_STUDIO_BASE_URL_LENGTH) {
+    return `LM Studio server URL must be ${MAX_LM_STUDIO_BASE_URL_LENGTH} characters or fewer.`;
+  }
+
+  let url: URL;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    return "Enter a complete http:// or https:// LM Studio server URL.";
+  }
+
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    return "LM Studio server URL must use http:// or https://.";
+  }
+  if (url.username.length > 0 || url.password.length > 0) {
+    return "LM Studio server URL must not contain a username or password.";
+  }
+  if (url.search.length > 0 || url.hash.length > 0) {
+    return "LM Studio server URL must not contain a query string or fragment.";
+  }
+  if (isKnownCloudMetadataHost(url.hostname)) {
+    return "LM Studio server URL must not target a cloud metadata service.";
+  }
+  if (url.protocol === "http:" && !isPrivateOrLoopbackLmStudioHost(url.hostname)) {
+    return "Plain HTTP is allowed only for localhost or a literal private/loopback IP address. Use an IP address or HTTPS so DNS cannot redirect the endpoint.";
+  }
+
+  const pathname = url.pathname.replace(/\/+$/gu, "");
+  if (pathname.length > 0 && !pathname.endsWith("/v1")) {
+    return "LM Studio server URL must be its OpenAI-compatible API root ending in /v1.";
+  }
+  return null;
+}
+
+export function normalizeLmStudioBaseUrl(value: string): string {
+  const validationError = validateLmStudioBaseUrl(value);
+  if (validationError !== null) {
+    throw new TypeError(validationError);
+  }
+
+  const url = new URL(value.trim());
+  const pathname = url.pathname.replace(/\/+$/gu, "");
+  url.pathname = pathname.length > 0 ? pathname : "/v1";
+  return url.toString();
+}
+
+export const LmStudioBaseUrl = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(MAX_LM_STUDIO_BASE_URL_LENGTH),
+  Schema.makeFilter((value) => validateLmStudioBaseUrl(value) ?? undefined),
+);
+export type LmStudioBaseUrl = typeof LmStudioBaseUrl.Type;
 
 export const CodexAutoCompactTokenLimit = Schema.Int.check(Schema.isGreaterThan(0));
 export type CodexAutoCompactTokenLimit = typeof CodexAutoCompactTokenLimit.Type;
@@ -1120,8 +1447,20 @@ export const CodexSettings = makeProviderSettingsSchema(
       Schema.annotateKey({
         title: "LM Studio mode",
         description:
-          "Launch Codex with its LM Studio local provider. Start LM Studio's API server on localhost:1234 first.",
+          "Launch Codex with its LM Studio provider instead of the OpenAI cloud provider.",
         providerSettingsForm: { control: "switch" },
+      }),
+    ),
+    ossBaseUrl: LmStudioBaseUrl.pipe(
+      Schema.withDecodingDefault(Effect.succeed(DEFAULT_LM_STUDIO_BASE_URL)),
+      Schema.annotateKey({
+        title: "LM Studio server URL",
+        description:
+          "OpenAI-compatible API root for LM Studio. Plain HTTP accepts localhost or literal private/LAN IP addresses; hostnames require HTTPS to prevent DNS redirection. Codex's built-in LM Studio provider cannot send LM Studio API tokens, so protect network access with a trusted private network, VPN, or firewall.",
+        providerSettingsForm: {
+          placeholder: DEFAULT_LM_STUDIO_BASE_URL,
+          clearWhenEmpty: "omit",
+        },
       }),
     ),
     homePath: TrimmedString.pipe(
@@ -1181,6 +1520,7 @@ export const CodexSettings = makeProviderSettingsSchema(
       "runtimeSource",
       "binaryPath",
       "ossMode",
+      "ossBaseUrl",
       "homePath",
       "shadowHomePath",
       "autoCompactTokenLimit",
@@ -1400,6 +1740,7 @@ const CodexSettingsPatch = Schema.Struct({
   binaryPath: Schema.optionalKey(TrimmedString),
   runtimeSource: Schema.optionalKey(ProviderCliRuntimeSource),
   ossMode: Schema.optionalKey(Schema.Boolean),
+  ossBaseUrl: Schema.optionalKey(LmStudioBaseUrl),
   homePath: Schema.optionalKey(TrimmedString),
   shadowHomePath: Schema.optionalKey(TrimmedString),
   customModels: Schema.optionalKey(Schema.Array(Schema.String)),
@@ -1474,11 +1815,22 @@ export const ClientSettingsPatch = Schema.Struct({
   diffIgnoreWhitespace: Schema.optionalKey(Schema.Boolean),
   diffWordWrap: Schema.optionalKey(Schema.Boolean),
   continueBackgroundAnimations: Schema.optionalKey(Schema.Boolean),
+  mobileOptimizedPresentation: Schema.optionalKey(Schema.Boolean),
+  worldClockEnabled: Schema.optionalKey(Schema.Boolean),
+  worldClockStyle: Schema.optionalKey(WorldClockStyle),
+  worldClockLocationIds: Schema.optionalKey(WorldClockLocationIds),
+  // See the ClientSettings field above: transport routing keeps this local.
+  worldClockWeatherEnabled: Schema.optionalKey(Schema.Boolean),
   fallingEffectsEnabled: Schema.optionalKey(Schema.Boolean),
+  fallingEffectsOverCinemaEnabled: Schema.optionalKey(Schema.Boolean),
   fallingEffectKind: Schema.optionalKey(FallingEffectKind),
+  fallingEffectMatrixBaseFontSize: Schema.optionalKey(FallingEffectMatrixBaseFontSize),
   fallingEffectColor: Schema.optionalKey(AmbientColor),
   fallingEffectMatrixColorMode: Schema.optionalKey(FallingEffectMatrixColorMode),
   fallingEffectMatrixColorCycleSpeed: Schema.optionalKey(FallingEffectMatrixColorCycleSpeed),
+  fallingEffectMatrixMotionMode: Schema.optionalKey(FallingEffectMatrixMotionMode),
+  fallingEffectMatrixWalkStartFontSize: Schema.optionalKey(FallingEffectMatrixWalkFontSize),
+  fallingEffectMatrixWalkEndFontSize: Schema.optionalKey(FallingEffectMatrixWalkFontSize),
   fallingEffectOpacity: Schema.optionalKey(AmbientOpacity),
   fallingEffectSpeed: Schema.optionalKey(FallingEffectSpeed),
   fallingEffectDensity: Schema.optionalKey(FallingEffectDensity),
@@ -1537,6 +1889,14 @@ export const ClientSettingsPatch = Schema.Struct({
   autoNudgeBackgroundContinuation: Schema.optionalKey(Schema.Boolean),
   autoNudgeMaxRounds: Schema.optionalKey(AutoNudgeMaxRounds),
   autoNudgeMaxMinutes: Schema.optionalKey(AutoNudgeMaxMinutes),
+  ambianceEnabled: Schema.optionalKey(Schema.Boolean),
+  ambianceEffect: Schema.optionalKey(AmbianceEffect),
+  ambianceIntensity: Schema.optionalKey(AmbianceIntensity),
+  ambianceReactMode: Schema.optionalKey(AmbianceReactMode),
+  ambianceSurfaceSidebar: Schema.optionalKey(Schema.Boolean),
+  ambianceSurfaceThread: Schema.optionalKey(Schema.Boolean),
+  ambianceSurfaceComposer: Schema.optionalKey(Schema.Boolean),
+  ambianceColor: Schema.optionalKey(TrimmedString),
   themeAccentColor: Schema.optionalKey(TrimmedString),
   appAccentColor: Schema.optionalKey(TrimmedString),
   defaultEditor: Schema.optionalKey(DefaultEditorSelection),

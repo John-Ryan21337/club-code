@@ -117,6 +117,23 @@ export function selectCodexRateLimitSnapshot(
   return rateLimits.rateLimitsByLimitId?.codex ?? rateLimits.rateLimits ?? null;
 }
 
+export function formatCodexRateLimitResetAvailability(
+  rateLimits: ServerProviderAccountRateLimits | null | undefined,
+): string | null {
+  const availableCount = rateLimits?.rateLimitResetCredits?.availableCount;
+  if (
+    typeof availableCount !== "number" ||
+    !Number.isSafeInteger(availableCount) ||
+    availableCount < 0
+  ) {
+    return null;
+  }
+
+  // Upstream reports an authoritative aggregate because the optional credit list can be
+  // absent or redacted. Never infer availability by counting those detail rows.
+  return `Usage limit resets available: ${availableCount}`;
+}
+
 export function formatCodexRateLimitSummary(
   rateLimits: ServerProviderAccountRateLimits | null | undefined,
   options: FormatOptions = {},

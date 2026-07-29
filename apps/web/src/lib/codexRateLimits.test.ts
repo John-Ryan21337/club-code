@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  formatCodexRateLimitResetAvailability,
   formatCodexRateLimitInlineText,
   formatCodexRateLimitSummary,
   selectCodexRateLimitSnapshot,
@@ -130,6 +131,33 @@ describe("codexRateLimits", () => {
       rateLimits: { limitId: "claude" },
     });
     expect(summary).toBeNull();
+  });
+
+  it("formats the authoritative available reset count, including zero", () => {
+    expect(
+      formatCodexRateLimitResetAvailability({
+        checkedAt: "2026-07-27T00:00:00.000Z",
+        rateLimits: { limitId: "codex" },
+        rateLimitResetCredits: { availableCount: 3, credits: null },
+      }),
+    ).toBe("Usage limit resets available: 3");
+
+    expect(
+      formatCodexRateLimitResetAvailability({
+        checkedAt: "2026-07-27T00:00:00.000Z",
+        rateLimits: { limitId: "codex" },
+        rateLimitResetCredits: { availableCount: 0 },
+      }),
+    ).toBe("Usage limit resets available: 0");
+  });
+
+  it("omits reset availability when the provider did not report it", () => {
+    expect(
+      formatCodexRateLimitResetAvailability({
+        checkedAt: "2026-07-27T00:00:00.000Z",
+        rateLimits: { limitId: "codex" },
+      }),
+    ).toBeNull();
   });
 
   it("produces a compact inline string for settings rows", () => {

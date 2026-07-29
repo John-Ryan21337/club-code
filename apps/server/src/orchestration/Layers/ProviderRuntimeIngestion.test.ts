@@ -389,6 +389,219 @@ describe("ProviderRuntimeIngestion", () => {
     expect(thread.session?.lastError).toBe("turn failed");
   });
 
+  it("keeps an active Codex goal non-idle across provider-owned continuation turns", async () => {
+    const harness = await createHarness();
+    const startedAt = "2026-01-01T00:00:01.000Z";
+    const completedAt = "2026-01-01T00:00:02.000Z";
+    const goalCompletedAt = "2026-01-01T00:00:03.000Z";
+
+    harness.emit({
+      type: "thread.goal.updated",
+      eventId: asEventId("evt-goal-active"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: startedAt,
+      payload: {
+        goal: {
+          threadId: asThreadId("thread-1"),
+          objective: "Finish the proof",
+          status: "active",
+          tokenBudget: null,
+          tokensUsed: 0,
+          timeUsedSeconds: 0,
+          createdAt: startedAt,
+          updatedAt: startedAt,
+        },
+      },
+    });
+
+    await waitForThread(
+      harness.readModel,
+      (thread) => thread.goal?.status === "active" && thread.session?.status === "starting",
+    );
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-goal-turn-started"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: startedAt,
+      turnId: asTurnId("goal-turn-1"),
+    });
+
+    await waitForThread(
+      harness.readModel,
+      (thread) =>
+        thread.session?.status === "running" && thread.session.activeTurnId === "goal-turn-1",
+    );
+
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-goal-turn-completed"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: completedAt,
+      turnId: asTurnId("goal-turn-1"),
+      payload: { state: "completed" },
+    });
+
+    await waitForThread(
+      harness.readModel,
+      (thread) =>
+        thread.goal?.status === "active" &&
+        thread.session?.status === "starting" &&
+        thread.session.activeTurnId === null,
+    );
+
+    harness.emit({
+      type: "thread.goal.updated",
+      eventId: asEventId("evt-goal-complete"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: goalCompletedAt,
+      payload: {
+        goal: {
+          threadId: asThreadId("thread-1"),
+          objective: "Finish the proof",
+          status: "complete",
+          tokenBudget: null,
+          tokensUsed: 512,
+          timeUsedSeconds: 2,
+          createdAt: startedAt,
+          updatedAt: goalCompletedAt,
+        },
+      },
+    });
+
+    const thread = await waitForThread(
+      harness.readModel,
+      (entry) => entry.goal?.status === "complete" && entry.session?.status === "ready",
+    );
+    expect(thread.goal).toMatchObject({
+      objective: "Finish the proof",
+      status: "complete",
+      tokensUsed: 512,
+      timeUsedSeconds: 2,
+    });
+  });
+
+  it("keeps an interrupted Codex goal terminal despite delayed active-goal accounting", async () => {
+    const harness = await createHarness();
+    const goalCreatedAt = "2026-01-01T00:00:01.000Z";
+    const interruptedAt = "2026-01-01T00:00:03.000Z";
+    const threadId = asThreadId("thread-1");
+    const turnId = asTurnId("goal-turn-interrupted");
+
+    harness.emit({
+      type: "thread.goal.updated",
+      eventId: asEventId("evt-interrupted-goal-active"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId,
+      createdAt: goalCreatedAt,
+      payload: {
+        goal: {
+          threadId,
+          objective: "Continue until stopped",
+          status: "active",
+          tokenBudget: null,
+          tokensUsed: 0,
+          timeUsedSeconds: 0,
+          createdAt: goalCreatedAt,
+          updatedAt: goalCreatedAt,
+        },
+      },
+    });
+    await waitForThread(
+      harness.readModel,
+      (thread) => thread.goal?.status === "active" && thread.session?.status === "starting",
+    );
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-interrupted-goal-turn-started"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId,
+      createdAt: "2026-01-01T00:00:02.000Z",
+      turnId,
+    });
+    await waitForThread(
+      harness.readModel,
+      (thread) => thread.session?.status === "running" && thread.session.activeTurnId === turnId,
+    );
+
+    harness.emit({
+      type: "thread.state.changed",
+      eventId: asEventId("evt-interrupted-goal-thread-idle"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId,
+      createdAt: interruptedAt,
+      payload: { state: "idle" },
+    });
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-interrupted-goal-turn-completed"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId,
+      createdAt: interruptedAt,
+      turnId,
+      payload: { state: "interrupted" },
+    });
+
+    await waitForThread(
+      harness.readModel,
+      (thread) => thread.session?.status === "interrupted" && thread.session.activeTurnId === null,
+    );
+
+    // Codex can emit one final active goal snapshot carrying usage accounting
+    // after turn/completed. It must not reopen the explicitly stopped turn.
+    harness.emit({
+      type: "thread.goal.updated",
+      eventId: asEventId("evt-interrupted-goal-late-accounting"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId,
+      createdAt: "2026-01-01T00:00:03.001Z",
+      payload: {
+        goal: {
+          threadId,
+          objective: "Continue until stopped",
+          status: "active",
+          tokenBudget: null,
+          tokensUsed: 1_024,
+          timeUsedSeconds: 2,
+          createdAt: goalCreatedAt,
+          updatedAt: interruptedAt,
+        },
+      },
+    });
+
+    const thread = await waitForThread(
+      harness.readModel,
+      (entry) =>
+        entry.goal?.tokensUsed === 1_024 &&
+        entry.session?.status === "interrupted" &&
+        entry.session.activeTurnId === null,
+    );
+    expect(thread.goal?.status).toBe("active");
+    expect(thread.session?.status).toBe("interrupted");
+
+    harness.emit({
+      type: "thread.state.changed",
+      eventId: asEventId("evt-interrupted-goal-late-idle"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId,
+      createdAt: "2026-01-01T00:00:03.002Z",
+      payload: { state: "idle" },
+    });
+    const afterLateIdle = await waitForThread(
+      harness.readModel,
+      (entry) =>
+        entry.session?.status === "interrupted" &&
+        entry.session.activeTurnId === null &&
+        entry.session.updatedAt === "2026-01-01T00:00:03.002Z",
+    );
+    expect(afterLateIdle.session?.status).toBe("interrupted");
+  });
+
   it("publishes provider turn ingestion quiescence after processing turn completion", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
@@ -1733,9 +1946,14 @@ describe("ProviderRuntimeIngestion", () => {
       type: "item.started" | "item.updated" | "item.completed",
       eventId: string,
       itemId: ReturnType<typeof asItemId>,
-      itemType: "command_execution" | "dynamic_tool_call" | "collab_agent_tool_call" | "web_search",
+      itemType:
+        | "command_execution"
+        | "dynamic_tool_call"
+        | "collab_agent_tool_call"
+        | "mcp_tool_call"
+        | "web_search",
       data: unknown,
-      provider = type === "item.updated" ? "claude" : "codex",
+      provider = "codex",
     ) => {
       harness.emit({
         type,
@@ -1798,27 +2016,70 @@ describe("ProviderRuntimeIngestion", () => {
       "command_execution",
       { command: classifiedHeadlessBuildCommand },
     );
-    emitItem(
-      "item.completed",
-      "evt-matrix-database-completed",
-      asItemId("item-database"),
-      "command_execution",
-      {
-        toolName: "Bash",
-        input: { command: "sqlite3 private-workspace.db" },
-      },
-    );
-    emitItem(
-      "item.completed",
-      "evt-matrix-network-completed",
-      asItemId("item-network"),
-      "web_search",
-      {
-        item: { type: "webSearch" },
-        query: "private prompt",
-        url: "https://credential.example.test",
-      },
-    );
+    const databaseItemId = asItemId("item-database");
+    for (const type of ["item.started", "item.completed"] as const) {
+      emitItem(
+        type,
+        `evt-matrix-database-${type === "item.started" ? "started" : "completed"}`,
+        databaseItemId,
+        "command_execution",
+        {
+          toolName: "Bash",
+          input: { command: "sqlite3 private-workspace.db" },
+        },
+        "claude",
+      );
+    }
+    const networkItemId = asItemId("item-network");
+    for (const type of ["item.started", "item.completed"] as const) {
+      emitItem(
+        type,
+        `evt-matrix-network-${type === "item.started" ? "started" : "completed"}`,
+        networkItemId,
+        "web_search",
+        {
+          item: { type: "webSearch" },
+          query: "private prompt",
+          url: "https://credential.example.test",
+        },
+        "codex",
+      );
+    }
+    const codexDatabaseItemId = asItemId("item-codex-database");
+    for (const type of ["item.started", "item.completed"] as const) {
+      emitItem(
+        type,
+        `evt-matrix-codex-database-${type === "item.started" ? "started" : "completed"}`,
+        codexDatabaseItemId,
+        "mcp_tool_call",
+        {
+          item: {
+            id: codexDatabaseItemId,
+            type: "mcpToolCall",
+            server: "postgres",
+            tool: "query",
+            arguments: { query: "select private_column from private_table" },
+            status: type === "item.started" ? "inProgress" : "completed",
+          },
+        },
+        "codex",
+      );
+    }
+    const claudeNetworkItemId = asItemId("item-claude-network");
+    for (const type of ["item.started", "item.completed"] as const) {
+      emitItem(
+        type,
+        `evt-matrix-claude-network-${type === "item.started" ? "started" : "completed"}`,
+        claudeNetworkItemId,
+        "web_search",
+        {
+          toolName: "WebSearch",
+          input: { query: "private query" },
+          ...(type === "item.completed" ? { result: "private provider result" } : {}),
+        },
+        "claude",
+      );
+    }
     const agentItemId = asItemId("item-agent-dispatch");
     emitItem(
       "item.started",
@@ -2009,14 +2270,32 @@ describe("ProviderRuntimeIngestion", () => {
       });
       expect(payloadFor(eventId).itemId).toBe(classifiedHeadlessBuildItemId);
     }
-    expect(payloadFor("evt-matrix-database-completed").observed).toEqual({
-      providerObserved: true,
-      activityType: "database",
-    });
-    expect(payloadFor("evt-matrix-network-completed").observed).toEqual({
-      providerObserved: true,
-      activityType: "network",
-    });
+    for (const status of ["started", "completed"]) {
+      const databasePayload = payloadFor(`evt-matrix-database-${status}`);
+      expect(databasePayload.itemId).toBe(databaseItemId);
+      expect(databasePayload.observed).toEqual({
+        providerObserved: true,
+        activityType: "database",
+      });
+      const networkPayload = payloadFor(`evt-matrix-network-${status}`);
+      expect(networkPayload.itemId).toBe(networkItemId);
+      expect(networkPayload.observed).toEqual({
+        providerObserved: true,
+        activityType: "network",
+      });
+      const codexDatabasePayload = payloadFor(`evt-matrix-codex-database-${status}`);
+      expect(codexDatabasePayload.itemId).toBe(codexDatabaseItemId);
+      expect(codexDatabasePayload.observed).toEqual({
+        providerObserved: true,
+        activityType: "database",
+      });
+      const claudeNetworkPayload = payloadFor(`evt-matrix-claude-network-${status}`);
+      expect(claudeNetworkPayload.itemId).toBe(claudeNetworkItemId);
+      expect(claudeNetworkPayload.observed).toEqual({
+        providerObserved: true,
+        activityType: "network",
+      });
+    }
     for (const eventId of ["evt-matrix-agent-started", "evt-matrix-agent-completed"]) {
       const payload = payloadFor(eventId);
       expect(payload.itemId).toBe(agentItemId);

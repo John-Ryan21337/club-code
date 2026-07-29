@@ -24,6 +24,7 @@ import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as IpcChannels from "../ipc/channels.ts";
 import * as DesktopIpc from "../ipc/DesktopIpc.ts";
 import * as DesktopServerExposure from "../backend/DesktopServerExposure.ts";
+import { installTrustedMainFrameCameraPermission } from "./DesktopCameraPermission.ts";
 import { installTrustedFrameAudioCapture } from "./DesktopDisplayMediaCapture.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 
@@ -56,6 +57,48 @@ export function resolveDesktopWindowOpacityCapability(
     return { supported: false, reason: "release-not-validated" };
   }
   return { supported: true };
+}
+
+/**
+ * Install every privileged media boundary as one lifecycle unit.
+ *
+ * The display-audio handler is installed first, but a later camera-handler
+ * failure must not leave that earlier privilege registered on the session.
+ * Teardown is idempotent and attempts both removals independently because
+ * Electron session cleanup is best effort during native window shutdown.
+ */
+export function installDesktopMediaPermissionBoundaries(
+  installDisplayMediaCapture: () => () => void,
+  installCameraPermission: () => () => void,
+): () => void {
+  const removeDisplayMediaCapture = installDisplayMediaCapture();
+  let removeCameraPermission: () => void;
+  try {
+    removeCameraPermission = installCameraPermission();
+  } catch (cause) {
+    try {
+      removeDisplayMediaCapture();
+    } catch {
+      // Preserve the installation failure; rollback remains best effort.
+    }
+    throw cause;
+  }
+
+  let removed = false;
+  return () => {
+    if (removed) return;
+    removed = true;
+    try {
+      removeCameraPermission();
+    } catch {
+      // Continue so one native handler cannot strand the other.
+    }
+    try {
+      removeDisplayMediaCapture();
+    } catch {
+      // Native session teardown is best effort after the window has closed.
+    }
+  };
 }
 
 type WindowTitleBarOptions = Pick<
@@ -351,9 +394,9 @@ const make = Effect.gen(function* () {
     window.maximize();
     yield* opacityMutex.withPermits(1)(prepareWindowOpacity(window));
     yield* desktopIpc.trustWebContents(window.webContents, rendererUrl);
-    const removeDisplayMediaCapture = installTrustedFrameAudioCapture(
-      window.webContents,
-      rendererOrigin,
+    const removeMediaPermissions = installDesktopMediaPermissionBoundaries(
+      () => installTrustedFrameAudioCapture(window.webContents, rendererOrigin),
+      () => installTrustedMainFrameCameraPermission(window.webContents, rendererOrigin),
     );
 
     window.webContents.on("context-menu", (event, params) => {
@@ -470,7 +513,7 @@ const make = Effect.gen(function* () {
     }
 
     window.on("closed", () => {
-      removeDisplayMediaCapture();
+      removeMediaPermissions();
       void runPromise(electronWindow.clearMain(Option.some(window)));
     });
 

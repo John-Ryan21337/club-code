@@ -32,6 +32,14 @@ import {
   DEFAULT_AMBIENT_VIDEO_PRESET_PLACEMENT,
   DEFAULT_AMBIENT_VIDEO_PRESET_SIZE,
   DEFAULT_AMBIENT_VIDEO_SOURCE,
+  DEFAULT_AMBIANCE_COLOR,
+  DEFAULT_AMBIANCE_EFFECT,
+  DEFAULT_AMBIANCE_ENABLED,
+  DEFAULT_AMBIANCE_INTENSITY,
+  DEFAULT_AMBIANCE_REACT_MODE,
+  DEFAULT_AMBIANCE_SURFACE_COMPOSER,
+  DEFAULT_AMBIANCE_SURFACE_SIDEBAR,
+  DEFAULT_AMBIANCE_SURFACE_THREAD,
   DEFAULT_APP_ACCENT_COLOR,
   DEFAULT_AUTO_NUDGE_MODE,
   DEFAULT_BRAND_WORDMARK_PREFIX,
@@ -50,10 +58,18 @@ import {
   DEFAULT_FALLING_EFFECT_JAPANESE_RATIO,
   DEFAULT_FALLING_EFFECT_KIND,
   DEFAULT_FALLING_EFFECT_LIVE_WORK_VOCABULARY,
+  DEFAULT_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE,
   DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
   DEFAULT_FALLING_EFFECT_MATRIX_COLOR_MODE,
+  DEFAULT_FALLING_EFFECT_MATRIX_MOTION_MODE,
+  DEFAULT_FALLING_EFFECT_MATRIX_WALK_END_FONT_SIZE,
+  DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE,
   DEFAULT_FALLING_EFFECT_SPEED,
   DEFAULT_FALLING_EFFECTS_ENABLED,
+  DEFAULT_FALLING_EFFECTS_OVER_CINEMA_ENABLED,
+  FALLING_EFFECT_MATRIX_WALK_FONT_SIZE_STEP,
+  DEFAULT_LM_STUDIO_BASE_URL,
+  DEFAULT_MOBILE_OPTIMIZED_PRESENTATION,
   DEFAULT_MODEL_PACING_ENABLED,
   DEFAULT_MODEL_PACING_RESERVE_PERCENT,
   DEFAULT_POWER_SAVE_BLOCKER_MODE,
@@ -74,7 +90,9 @@ import {
   MAX_BRAND_WORDMARK_PREFIX_LENGTH,
   MAX_FALLING_EFFECT_DENSITY,
   MAX_FALLING_EFFECT_JAPANESE_RATIO,
+  MAX_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE,
   MAX_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
+  MAX_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE,
   MAX_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
   MAX_FALLING_EFFECT_SPEED,
   MAX_MODEL_PACING_RESERVE_PERCENT,
@@ -82,19 +100,25 @@ import {
   MAX_SIDEBAR_BRAND_IMAGE_DATA_URL_LENGTH,
   MAX_SIDEBAR_BRAND_IMAGE_FILE_BYTES,
   MAX_SIDEBAR_BRAND_IMAGE_ID_LENGTH,
+  MAX_AMBIANCE_INTENSITY,
   MAX_SIDEBAR_STAR_SPEED,
   MIN_AMBIENT_OPACITY,
   MIN_FALLING_EFFECT_DENSITY,
   MIN_FALLING_EFFECT_JAPANESE_RATIO,
+  MIN_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE,
   MIN_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
+  MIN_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE,
   MIN_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
   MIN_FALLING_EFFECT_SPEED,
   MIN_MODEL_PACING_RESERVE_PERCENT,
   MIN_PROVIDER_USAGE_POLL_MINUTES,
+  MIN_AMBIANCE_INTENSITY,
   MIN_SIDEBAR_STAR_SPEED,
   MAX_WORKFLOW_STALL_WARNING_SECONDS,
   MIN_WORKFLOW_STALL_WARNING_SECONDS,
+  normalizeLmStudioBaseUrl,
   ServerSettingsPatch,
+  validateLmStudioBaseUrl,
   type AmbientClientSettings,
   type ClientSettings,
 } from "./settings.ts";
@@ -170,6 +194,9 @@ describe("client settings", () => {
     expect(DEFAULT_CLIENT_SETTINGS.continueBackgroundAnimations).toBe(
       DEFAULT_CONTINUE_BACKGROUND_ANIMATIONS,
     );
+    expect(DEFAULT_CLIENT_SETTINGS.mobileOptimizedPresentation).toBe(
+      DEFAULT_MOBILE_OPTIMIZED_PRESENTATION,
+    );
     expect(DEFAULT_CLIENT_SETTINGS.showSidebarSearch).toBe(DEFAULT_SHOW_SIDEBAR_SEARCH);
     expect(DEFAULT_CLIENT_SETTINGS.showSidebarMascot).toBe(DEFAULT_SHOW_SIDEBAR_MASCOT);
     expect(DEFAULT_CLIENT_SETTINGS.showSidebarAttribution).toBe(DEFAULT_SHOW_SIDEBAR_ATTRIBUTION);
@@ -188,6 +215,7 @@ describe("client settings", () => {
       DEFAULT_WORKFLOW_STALL_WARNING_SECONDS,
     );
     expect(decodeClientSettings({}).continueBackgroundAnimations).toBe(false);
+    expect(decodeClientSettings({}).mobileOptimizedPresentation).toBe(false);
     expect(decodeClientSettings({}).showSidebarSearch).toBe(true);
     expect(decodeClientSettings({}).showSidebarMascot).toBe(true);
     expect(decodeClientSettings({}).showSidebarAttribution).toBe(true);
@@ -201,8 +229,22 @@ describe("client settings", () => {
     expect(decodeClientSettings({}).workflowStallWarningSeconds).toBe(180);
   });
 
+  it("round-trips the per-device mobile presentation override", () => {
+    expect(decodeClientSettingsPatch({ mobileOptimizedPresentation: true })).toEqual({
+      mobileOptimizedPresentation: true,
+    });
+    expect(
+      decodeClientSettings({
+        ...DEFAULT_CLIENT_SETTINGS,
+        mobileOptimizedPresentation: true,
+      }).mobileOptimizedPresentation,
+    ).toBe(true);
+    expect(() => decodeClientSettingsPatch({ mobileOptimizedPresentation: "mobile" })).toThrow();
+  });
+
   it("keeps conservative defaults separate from the Club Code first-run profile", () => {
     expect(DEFAULT_CLIENT_SETTINGS.fallingEffectsEnabled).toBe(false);
+    expect(DEFAULT_CLIENT_SETTINGS.fallingEffectsOverCinemaEnabled).toBe(false);
     expect(DEFAULT_CLIENT_SETTINGS.fallingEffectMatrixColorMode).toBe("fixed");
     expect(DEFAULT_CLIENT_SETTINGS.fallingEffectMatrixColorCycleSpeed).toBe(
       DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
@@ -355,10 +397,15 @@ describe("client settings", () => {
   it("defaults every ambient preference to the canonical reset vector", () => {
     expect(DEFAULT_AMBIENT_CLIENT_SETTINGS).toEqual({
       fallingEffectsEnabled: DEFAULT_FALLING_EFFECTS_ENABLED,
+      fallingEffectsOverCinemaEnabled: DEFAULT_FALLING_EFFECTS_OVER_CINEMA_ENABLED,
       fallingEffectKind: DEFAULT_FALLING_EFFECT_KIND,
+      fallingEffectMatrixBaseFontSize: DEFAULT_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE,
       fallingEffectColor: DEFAULT_AMBIENT_COLOR,
       fallingEffectMatrixColorMode: DEFAULT_FALLING_EFFECT_MATRIX_COLOR_MODE,
       fallingEffectMatrixColorCycleSpeed: DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
+      fallingEffectMatrixMotionMode: DEFAULT_FALLING_EFFECT_MATRIX_MOTION_MODE,
+      fallingEffectMatrixWalkStartFontSize: DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE,
+      fallingEffectMatrixWalkEndFontSize: DEFAULT_FALLING_EFFECT_MATRIX_WALK_END_FONT_SIZE,
       fallingEffectOpacity: DEFAULT_AMBIENT_OPACITY,
       fallingEffectSpeed: DEFAULT_FALLING_EFFECT_SPEED,
       fallingEffectDensity: DEFAULT_FALLING_EFFECT_DENSITY,
@@ -410,8 +457,21 @@ describe("client settings", () => {
     expect(decoded.timestampFormat).toBe("24-hour");
     expect(decoded.showSidebarMascot).toBe(false);
     expect(decoded.fallingEffectMatrixColorMode).toBe("fixed");
+    expect(decoded.fallingEffectsOverCinemaEnabled).toBe(
+      DEFAULT_FALLING_EFFECTS_OVER_CINEMA_ENABLED,
+    );
     expect(decoded.fallingEffectMatrixColorCycleSpeed).toBe(
       DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
+    );
+    expect(decoded.fallingEffectMatrixBaseFontSize).toBe(
+      DEFAULT_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE,
+    );
+    expect(decoded.fallingEffectMatrixMotionMode).toBe(DEFAULT_FALLING_EFFECT_MATRIX_MOTION_MODE);
+    expect(decoded.fallingEffectMatrixWalkStartFontSize).toBe(
+      DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE,
+    );
+    expect(decoded.fallingEffectMatrixWalkEndFontSize).toBe(
+      DEFAULT_FALLING_EFFECT_MATRIX_WALK_END_FONT_SIZE,
     );
     expect(pickAmbientSettings(decoded)).toEqual(DEFAULT_AMBIENT_CLIENT_SETTINGS);
   });
@@ -428,10 +488,15 @@ describe("client settings", () => {
   it("round-trips the full ambient settings patch and reset vector", () => {
     const configured = decodeClientSettingsPatch({
       fallingEffectsEnabled: true,
+      fallingEffectsOverCinemaEnabled: true,
       fallingEffectKind: "matrix",
+      fallingEffectMatrixBaseFontSize: MAX_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE,
       fallingEffectColor: "  #12AbEf  ",
       fallingEffectMatrixColorMode: "music-reactive",
       fallingEffectMatrixColorCycleSpeed: MAX_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
+      fallingEffectMatrixMotionMode: "tunnel",
+      fallingEffectMatrixWalkStartFontSize: 12.34,
+      fallingEffectMatrixWalkEndFontSize: 98.76,
       fallingEffectOpacity: MAX_AMBIENT_OPACITY,
       fallingEffectSpeed: MAX_FALLING_EFFECT_SPEED,
       fallingEffectDensity: MAX_FALLING_EFFECT_DENSITY,
@@ -467,10 +532,15 @@ describe("client settings", () => {
 
     expect(configured).toEqual({
       fallingEffectsEnabled: true,
+      fallingEffectsOverCinemaEnabled: true,
       fallingEffectKind: "matrix",
+      fallingEffectMatrixBaseFontSize: MAX_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE,
       fallingEffectColor: "#12abef",
       fallingEffectMatrixColorMode: "music-reactive",
       fallingEffectMatrixColorCycleSpeed: MAX_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
+      fallingEffectMatrixMotionMode: "tunnel",
+      fallingEffectMatrixWalkStartFontSize: 12.34,
+      fallingEffectMatrixWalkEndFontSize: 98.76,
       fallingEffectOpacity: MAX_AMBIENT_OPACITY,
       fallingEffectSpeed: MAX_FALLING_EFFECT_SPEED,
       fallingEffectDensity: MAX_FALLING_EFFECT_DENSITY,
@@ -513,7 +583,7 @@ describe("client settings", () => {
     expect(pickAmbientSettings(reset)).toEqual(DEFAULT_AMBIENT_CLIENT_SETTINGS);
   });
 
-  it("accepts exactly the three falling effects and five Matrix color modes", () => {
+  it("accepts the bounded effect, color, motion, and activity modes", () => {
     for (const fallingEffectKind of ["snow", "rain", "matrix"] as const) {
       expect(decodeClientSettingsPatch({ fallingEffectKind })).toEqual({ fallingEffectKind });
     }
@@ -533,6 +603,29 @@ describe("client settings", () => {
         fallingEffectActivityLinkColorMode,
       });
     }
+    for (const fallingEffectMatrixMotionMode of [
+      "flat",
+      "forward",
+      "reverse",
+      "tunnel",
+      "walk-forward",
+      "walk-reverse",
+    ] as const) {
+      expect(decodeClientSettingsPatch({ fallingEffectMatrixMotionMode })).toEqual({
+        fallingEffectMatrixMotionMode,
+      });
+    }
+  });
+
+  it("uses 1px Walk controls and glyph-cache buckets while decoding legacy endpoints", () => {
+    expect(FALLING_EFFECT_MATRIX_WALK_FONT_SIZE_STEP).toBe(1);
+    const legacyWalkEndpoints = {
+      fallingEffectMatrixWalkStartFontSize: 12.34,
+      fallingEffectMatrixWalkEndFontSize: 98.76,
+    };
+
+    expect(decodeClientSettingsPatch(legacyWalkEndpoints)).toEqual(legacyWalkEndpoints);
+    expect(decodeClientSettings(legacyWalkEndpoints)).toMatchObject(legacyWalkEndpoints);
   });
 
   it("canonicalizes every explicit ambient color while preserving auto", () => {
@@ -674,7 +767,11 @@ describe("client settings", () => {
       decodeClientSettingsPatch({
         fallingEffectColor: "auto",
         fallingEffectMatrixColorMode: "rainbow-extra",
+        fallingEffectMatrixBaseFontSize: MIN_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE,
         fallingEffectMatrixColorCycleSpeed: MIN_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
+        fallingEffectMatrixMotionMode: "reverse",
+        fallingEffectMatrixWalkStartFontSize: MIN_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE,
+        fallingEffectMatrixWalkEndFontSize: MAX_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE,
         fallingEffectOpacity: MIN_AMBIENT_OPACITY,
         fallingEffectSpeed: MIN_FALLING_EFFECT_SPEED,
         fallingEffectDensity: MIN_FALLING_EFFECT_DENSITY,
@@ -695,7 +792,11 @@ describe("client settings", () => {
     ).toEqual({
       fallingEffectColor: "auto",
       fallingEffectMatrixColorMode: "rainbow-extra",
+      fallingEffectMatrixBaseFontSize: MIN_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE,
       fallingEffectMatrixColorCycleSpeed: MIN_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
+      fallingEffectMatrixMotionMode: "reverse",
+      fallingEffectMatrixWalkStartFontSize: MIN_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE,
+      fallingEffectMatrixWalkEndFontSize: MAX_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE,
       fallingEffectOpacity: MIN_AMBIENT_OPACITY,
       fallingEffectSpeed: MIN_FALLING_EFFECT_SPEED,
       fallingEffectDensity: MIN_FALLING_EFFECT_DENSITY,
@@ -723,7 +824,16 @@ describe("client settings", () => {
       { fallingEffectColor: "red" },
       { fallingEffectsEnabled: "yes" },
       { fallingEffectKind: "hail" },
+      {
+        fallingEffectMatrixBaseFontSize: MIN_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE - 1,
+      },
+      {
+        fallingEffectMatrixBaseFontSize: MAX_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE + 1,
+      },
+      { fallingEffectMatrixBaseFontSize: 12.5 },
+      { fallingEffectMatrixBaseFontSize: Number.NaN },
       { fallingEffectMatrixColorMode: "beat-sync" },
+      { fallingEffectMatrixMotionMode: "hyperspace" },
       {
         fallingEffectMatrixColorCycleSpeed: MIN_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED - 0.01,
       },
@@ -731,6 +841,14 @@ describe("client settings", () => {
         fallingEffectMatrixColorCycleSpeed: MAX_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED + 0.01,
       },
       { fallingEffectMatrixColorCycleSpeed: Number.NaN },
+      {
+        fallingEffectMatrixWalkStartFontSize: 0,
+      },
+      {
+        fallingEffectMatrixWalkEndFontSize: MAX_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE + 0.01,
+      },
+      { fallingEffectMatrixWalkStartFontSize: 1.001 },
+      { fallingEffectMatrixWalkEndFontSize: Number.NaN },
       { fallingEffectOpacity: MIN_AMBIENT_OPACITY - 0.01 },
       { fallingEffectOpacity: MAX_AMBIENT_OPACITY + 0.01 },
       { fallingEffectOpacity: Number.NaN },
@@ -856,6 +974,57 @@ describe("client settings", () => {
     expect(() => decodeClientSettingsPatch({ ambientImageCycleSeconds: 2 })).toThrow();
     expect(() => decodeClientSettingsPatch({ ambientImageCycleSeconds: 3_601 })).toThrow();
     expect(() => decodeClientSettingsPatch({ ambientImagePresentationMode: "cinema" })).toThrow();
+  });
+
+  it("defaults ambiance to off with rain, live reaction, and accent-following color", () => {
+    expect(DEFAULT_CLIENT_SETTINGS.ambianceEnabled).toBe(DEFAULT_AMBIANCE_ENABLED);
+    expect(DEFAULT_CLIENT_SETTINGS.ambianceEffect).toBe(DEFAULT_AMBIANCE_EFFECT);
+    expect(DEFAULT_CLIENT_SETTINGS.ambianceIntensity).toBe(DEFAULT_AMBIANCE_INTENSITY);
+    expect(DEFAULT_CLIENT_SETTINGS.ambianceReactMode).toBe(DEFAULT_AMBIANCE_REACT_MODE);
+    expect(DEFAULT_CLIENT_SETTINGS.ambianceSurfaceSidebar).toBe(DEFAULT_AMBIANCE_SURFACE_SIDEBAR);
+    expect(DEFAULT_CLIENT_SETTINGS.ambianceSurfaceThread).toBe(DEFAULT_AMBIANCE_SURFACE_THREAD);
+    expect(DEFAULT_CLIENT_SETTINGS.ambianceSurfaceComposer).toBe(DEFAULT_AMBIANCE_SURFACE_COMPOSER);
+    expect(DEFAULT_CLIENT_SETTINGS.ambianceColor).toBe(DEFAULT_AMBIANCE_COLOR);
+    expect(decodeClientSettings({}).ambianceEnabled).toBe(false);
+    expect(decodeClientSettings({}).ambianceEffect).toBe("rain");
+    expect(decodeClientSettings({}).ambianceIntensity).toBe(0.55);
+    expect(decodeClientSettings({}).ambianceReactMode).toBe("live");
+    expect(decodeClientSettings({}).ambianceColor).toBe("");
+  });
+
+  it("bounds ambiance patches to supported effects, modes, and intensity range", () => {
+    expect(
+      decodeClientSettingsPatch({
+        ambianceEnabled: true,
+        ambianceEffect: "snow",
+        ambianceIntensity: MAX_AMBIANCE_INTENSITY,
+        ambianceReactMode: "session",
+        ambianceSurfaceSidebar: false,
+        ambianceSurfaceThread: false,
+        ambianceSurfaceComposer: false,
+        ambianceColor: "  #48cfff  ",
+      }),
+    ).toEqual({
+      ambianceEnabled: true,
+      ambianceEffect: "snow",
+      ambianceIntensity: MAX_AMBIANCE_INTENSITY,
+      ambianceReactMode: "session",
+      ambianceSurfaceSidebar: false,
+      ambianceSurfaceThread: false,
+      ambianceSurfaceComposer: false,
+      ambianceColor: "#48cfff",
+    });
+    expect(decodeClientSettingsPatch({ ambianceIntensity: MIN_AMBIANCE_INTENSITY })).toEqual({
+      ambianceIntensity: MIN_AMBIANCE_INTENSITY,
+    });
+    expect(() => decodeClientSettingsPatch({ ambianceEffect: "hail" })).toThrow();
+    expect(() => decodeClientSettingsPatch({ ambianceReactMode: "sometimes" })).toThrow();
+    expect(() =>
+      decodeClientSettingsPatch({ ambianceIntensity: MAX_AMBIANCE_INTENSITY + 0.5 }),
+    ).toThrow();
+    expect(() =>
+      decodeClientSettingsPatch({ ambianceIntensity: MIN_AMBIANCE_INTENSITY - 0.5 }),
+    ).toThrow();
   });
 
   it("accepts only supported power-save blocker modes in patches", () => {
@@ -1027,19 +1196,76 @@ describe("provider settings", () => {
     expect(decodeClaudeSettings({}).runtimeSource).toBe("system");
   });
 
-  it("defaults local model mode off and persists it through provider patches", () => {
+  it("defaults local model mode off with a loopback endpoint and persists network endpoints", () => {
     expect(decodeCodexSettings({}).ossMode).toBe(false);
+    expect(decodeCodexSettings({}).ossBaseUrl).toBe(DEFAULT_LM_STUDIO_BASE_URL);
     expect(
       decodeServerSettingsPatch({
         providers: {
-          codex: { ossMode: true },
+          codex: {
+            ossMode: true,
+            ossBaseUrl: "http://192.168.50.8:1234/v1",
+          },
         },
       }),
     ).toEqual({
       providers: {
-        codex: { ossMode: true },
+        codex: {
+          ossMode: true,
+          ossBaseUrl: "http://192.168.50.8:1234/v1",
+        },
       },
     });
+  });
+
+  it("accepts literal loopback, private LAN, and HTTPS LM Studio API roots", () => {
+    for (const value of [
+      "http://localhost:1234/v1",
+      "http://127.0.0.1:1234",
+      "http://10.20.30.40:1234/v1",
+      "http://172.16.0.1:1234/v1",
+      "http://172.31.255.254:1234/v1",
+      "http://192.168.1.25:1234/v1",
+      "http://[::1]:1234/v1",
+      "http://[fd00::25]:1234/v1",
+      "https://models.example.com/team/v1",
+    ]) {
+      expect(validateLmStudioBaseUrl(value), value).toBeNull();
+    }
+    expect(normalizeLmStudioBaseUrl(" http://192.168.1.25:1234/ ")).toBe(
+      "http://192.168.1.25:1234/v1",
+    );
+    expect(normalizeLmStudioBaseUrl("https://models.example.com/team/v1/")).toBe(
+      "https://models.example.com/team/v1",
+    );
+  });
+
+  it("rejects unsafe or ambiguous LM Studio endpoints", () => {
+    for (const value of [
+      "file:///tmp/lmstudio",
+      "http://user:secret@127.0.0.1:1234/v1",
+      "http://127.0.0.1:1234/v1?token=secret",
+      "http://public.example.com:1234/v1",
+      "http://lm-workstation:1234/v1",
+      "http://lm-workstation.local:1234/v1",
+      "http://host.docker.internal:1234/v1",
+      "http://100.100.100.200:1234/v1",
+      "http://169.254.169.254:1234/v1",
+      "https://100.100.100.200/v1",
+      "https://169.254.169.254/v1",
+      "http://[fe80::25]:1234/v1",
+      "http://[fd00:ec2::254]:1234/v1",
+      "https://[fd00:ec2::254]/v1",
+      "https://metadata.google.internal/v1",
+      "https://metadata.google.internal./v1",
+      "http://192.168.1.25:1234/not-the-api-root",
+    ]) {
+      expect(() => decodeCodexSettings({ ossBaseUrl: value }), value).toThrow();
+    }
+    expect(validateLmStudioBaseUrl("http://lm-workstation:1234/v1")).toMatch(/DNS/);
+    expect(decodeCodexSettings({ ossBaseUrl: "https://public.example.com/v1" }).ossBaseUrl).toBe(
+      "https://public.example.com/v1",
+    );
   });
 
   it("accepts bundled provider runtime source in server settings patches", () => {

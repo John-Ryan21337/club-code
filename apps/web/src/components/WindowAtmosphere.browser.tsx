@@ -6,6 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { page } from "vitest/browser";
 import { render } from "vitest-browser-react";
 
+import { matrixColorFrameStore } from "../matrixColorFrameStore";
+
 const TEST_SELECTED_THREAD_REF = {
   environmentId: EnvironmentId.make("environment-matrix-test"),
   threadId: ThreadId.make("thread-matrix-test"),
@@ -23,11 +25,22 @@ const mocks = vi.hoisted(() => ({
   matrixColorTimestamps: [] as number[],
   drawnMatrixColors: [] as string[],
   settings: {
-    fallingEffectsEnabled: true,
-    fallingEffectKind: "matrix" as const,
+    fallingEffectsEnabled: true as boolean,
+    fallingEffectsOverCinemaEnabled: false as boolean,
+    fallingEffectKind: "matrix" as "snow" | "rain" | "matrix",
     fallingEffectColor: "auto" as const,
     fallingEffectMatrixColorMode: "rainbow-extra" as const,
     fallingEffectMatrixColorCycleSpeed: 32,
+    fallingEffectMatrixBaseFontSize: 14,
+    fallingEffectMatrixMotionMode: "flat" as
+      | "flat"
+      | "forward"
+      | "reverse"
+      | "tunnel"
+      | "walk-forward"
+      | "walk-reverse",
+    fallingEffectMatrixWalkStartFontSize: 1,
+    fallingEffectMatrixWalkEndFontSize: 72,
     fallingEffectOpacity: 0.35,
     fallingEffectSpeed: 1,
     fallingEffectDensity: 1,
@@ -43,8 +56,8 @@ const mocks = vi.hoisted(() => ({
     fallingEffectActivityLinkRetentionSeconds: 30,
     continueBackgroundAnimations: false,
   } satisfies Partial<UnifiedSettings>,
-  createAtmosphereScene: vi.fn(() => ({
-    kind: "matrix" as const,
+  createAtmosphereScene: vi.fn((kind: "snow" | "rain" | "matrix" = "matrix") => ({
+    kind,
     width: 1_024,
     height: 768,
     particles: Array.from({ length: 12 }, () => ({})),
@@ -147,8 +160,27 @@ vi.mock("../windowAtmosphere", () => ({
     };
   },
   resolveAtmosphereColor: () => "#4ade80",
+  resolveAtmosphereRenderOpacity: (opacity: number, staticFrame: boolean) =>
+    staticFrame ? opacity * 0.55 : opacity,
   drawAtmosphereScene: mocks.drawAtmosphereScene,
-  shouldAnimateAtmosphere: (state: { reducedMotion: boolean }) => !state.reducedMotion,
+  shouldShowAtmosphere: (state: {
+    enabled: boolean;
+    documentVisible: boolean;
+    windowFocused: boolean;
+    continueBackgroundAnimations: boolean;
+  }) =>
+    state.enabled &&
+    (state.continueBackgroundAnimations || (state.documentVisible && state.windowFocused)),
+  shouldAnimateAtmosphere: (state: {
+    enabled: boolean;
+    reducedMotion: boolean;
+    documentVisible: boolean;
+    windowFocused: boolean;
+    continueBackgroundAnimations: boolean;
+  }) =>
+    !state.reducedMotion &&
+    state.enabled &&
+    (state.continueBackgroundAnimations || (state.documentVisible && state.windowFocused)),
 }));
 
 import { WindowAtmosphere } from "./WindowAtmosphere";
@@ -166,12 +198,28 @@ function runNextFrame(timestamp: number): void {
   next[1](timestamp);
 }
 
+function setReducedMotionPreference(matches: boolean): void {
+  (reducedMotionQuery as unknown as { matches: boolean }).matches = matches;
+  const listener = vi
+    .mocked(reducedMotionQuery.addEventListener)
+    .mock.calls.find(([eventName]) => eventName === "change")?.[1] as (() => void) | undefined;
+  expect(listener).toBeTypeOf("function");
+  listener?.();
+}
+
 beforeEach(() => {
   document.body.innerHTML = "";
   mocks.activityEventsKey = "activity-1";
   mocks.activityObservedAtMs = Date.now();
   mocks.workVocabularyKey = "";
+  mocks.settings.fallingEffectsEnabled = true;
+  mocks.settings.fallingEffectsOverCinemaEnabled = false;
+  mocks.settings.fallingEffectKind = "matrix";
   mocks.settings.fallingEffectMatrixColorCycleSpeed = 32;
+  mocks.settings.fallingEffectMatrixBaseFontSize = 14;
+  mocks.settings.fallingEffectMatrixMotionMode = "flat";
+  mocks.settings.fallingEffectMatrixWalkStartFontSize = 1;
+  mocks.settings.fallingEffectMatrixWalkEndFontSize = 72;
   mocks.settings.fallingEffectActivityLinks = true;
   mocks.settings.fallingEffectActivityLinkNetworkEnabled = true;
   mocks.settings.fallingEffectActivityLinkDatabaseEnabled = true;
@@ -185,7 +233,13 @@ beforeEach(() => {
   mocks.matrixColorCycleSpeeds = [];
   mocks.matrixColorTimestamps = [];
   mocks.drawnMatrixColors = [];
-  mocks.createAtmosphereScene.mockClear();
+  mocks.createAtmosphereScene.mockReset();
+  mocks.createAtmosphereScene.mockImplementation((kind = "matrix") => ({
+    kind,
+    width: 1_024,
+    height: 768,
+    particles: Array.from({ length: 12 }, () => ({})),
+  }));
   mocks.updateMatrixActivityAnimationInPlace.mockReset();
   mocks.updateMatrixActivityAnimationInPlace.mockImplementation(
     (
@@ -263,6 +317,117 @@ describe("WindowAtmosphere", () => {
     expect(bounds.top).toBe(0);
     expect(bounds.width).toBe(window.innerWidth);
     expect(bounds.height).toBe(window.innerHeight);
+    expect(document.querySelector('[data-testid="cinema-falling-atmosphere"]')).toBeNull();
+  });
+
+  it("clips only falling particles over streaming cinema media without intercepting controls", async () => {
+    (reducedMotionQuery as unknown as { matches: boolean }).matches = true;
+    mocks.settings.fallingEffectsOverCinemaEnabled = true;
+    const player = document.createElement("section");
+    player.dataset.ambientProtectedPlayer = "true";
+    const iframe = document.createElement("iframe");
+    vi.spyOn(iframe, "getBoundingClientRect").mockReturnValue({
+      x: 120,
+      y: 80,
+      width: 640,
+      height: 360,
+      top: 80,
+      right: 760,
+      bottom: 440,
+      left: 120,
+      toJSON: () => ({}),
+    });
+    player.append(iframe);
+    document.body.append(player);
+
+    mounted = await render(<WindowAtmosphere selectedThreadRef={TEST_SELECTED_THREAD_REF} />);
+
+    const overlay = page.getByTestId("cinema-falling-atmosphere");
+    await expect.element(overlay).toHaveAttribute("data-cinema-atmosphere-visible", "true");
+    const overlayElement = overlay.element();
+    expect(getComputedStyle(overlayElement).pointerEvents).toBe("none");
+    expect(overlayElement.style.clipPath).toBe(
+      `inset(80px ${String(Math.max(0, window.innerWidth - 760))}px ${String(
+        window.innerHeight - 440,
+      )}px 120px)`,
+    );
+    await expect.poll(() => mocks.drawAtmosphereScene.mock.calls.length).toBe(2);
+    expect(mocks.drawAtmosphereScene.mock.calls[0]?.[0]).not.toBe(
+      mocks.drawAtmosphereScene.mock.calls[1]?.[0],
+    );
+    expect(mocks.drawMatrixActivityAnimation).toHaveBeenCalledTimes(1);
+    expect(mocks.drawMatrixActivityAnimation.mock.calls[0]?.[0]).toBe(
+      mocks.drawAtmosphereScene.mock.calls[0]?.[0],
+    );
+    expect(mocks.drawMatrixActivityAnimation.mock.calls[0]?.[0]).not.toBe(
+      mocks.drawAtmosphereScene.mock.calls[1]?.[0],
+    );
+  });
+
+  it("does not repaint the hidden cinema copy until a video surface appears", async () => {
+    (reducedMotionQuery as unknown as { matches: boolean }).matches = true;
+    mocks.settings.fallingEffectsOverCinemaEnabled = true;
+
+    mounted = await render(<WindowAtmosphere selectedThreadRef={TEST_SELECTED_THREAD_REF} />);
+
+    const overlay = page.getByTestId("cinema-falling-atmosphere");
+    await expect.element(overlay).toHaveAttribute("data-cinema-atmosphere-visible", "false");
+    await expect.poll(() => mocks.drawAtmosphereScene.mock.calls.length).toBe(1);
+
+    const player = document.createElement("section");
+    player.dataset.ambientProtectedPlayer = "true";
+    const iframe = document.createElement("iframe");
+    vi.spyOn(iframe, "getBoundingClientRect").mockReturnValue({
+      x: 120,
+      y: 80,
+      width: 640,
+      height: 360,
+      top: 80,
+      right: 760,
+      bottom: 440,
+      left: 120,
+      toJSON: () => ({}),
+    });
+    player.append(iframe);
+    document.body.append(player);
+
+    await expect.element(overlay).toHaveAttribute("data-cinema-atmosphere-visible", "true");
+    await expect.poll(() => mocks.drawAtmosphereScene.mock.calls.length).toBe(3);
+    expect(mocks.drawAtmosphereScene.mock.calls[1]?.[0]).not.toBe(
+      mocks.drawAtmosphereScene.mock.calls[2]?.[0],
+    );
+  });
+
+  it("tracks a local cinema video surface but remains hidden for cinema audio", async () => {
+    (reducedMotionQuery as unknown as { matches: boolean }).matches = true;
+    mocks.settings.fallingEffectsOverCinemaEnabled = true;
+    const player = document.createElement("section");
+    player.setAttribute("aria-label", "Local media player");
+    player.dataset.localMediaPresentation = "cinema";
+    const video = document.createElement("video");
+    vi.spyOn(video, "getBoundingClientRect").mockReturnValue({
+      x: 40,
+      y: 64,
+      width: 800,
+      height: 450,
+      top: 64,
+      right: 840,
+      bottom: 514,
+      left: 40,
+      toJSON: () => ({}),
+    });
+    player.append(video);
+    document.body.append(player);
+
+    mounted = await render(<WindowAtmosphere selectedThreadRef={TEST_SELECTED_THREAD_REF} />);
+
+    const overlay = page.getByTestId("cinema-falling-atmosphere");
+    await expect.element(overlay).toHaveAttribute("data-cinema-atmosphere-visible", "true");
+
+    video.remove();
+    player.append(document.createElement("audio"));
+    await expect.element(overlay).toHaveAttribute("data-cinema-atmosphere-visible", "false");
+    expect(overlay.element().style.visibility).toBe("hidden");
   });
 
   it("scopes both Matrix signals to the selected routed thread without reseeding", async () => {
@@ -448,6 +613,10 @@ describe("WindowAtmosphere", () => {
     await expect.poll(() => mocks.createAtmosphereScene.mock.calls.length).toBe(1);
 
     runNextFrame(1_000);
+    expect(matrixColorFrameStore.getSnapshot()).toMatchObject({
+      frame: { color: "hsl(1000)" },
+      motion: "animated",
+    });
     expect(mocks.updateMatrixActivityAnimationInPlace).toHaveBeenLastCalledWith(
       expect.anything(),
       expect.arrayContaining([expect.objectContaining({ observedAtMs: 9_000 })]),
@@ -464,6 +633,10 @@ describe("WindowAtmosphere", () => {
     expect(mocks.createAtmosphereScene).toHaveBeenCalledTimes(1);
 
     runNextFrame(1_016);
+    expect(matrixColorFrameStore.getSnapshot()).toMatchObject({
+      frame: { color: "hsl(1016)" },
+      motion: "animated",
+    });
     expect(mocks.updateMatrixActivityAnimationInPlace).toHaveBeenLastCalledWith(
       expect.anything(),
       expect.arrayContaining([expect.objectContaining({ observedAtMs: 19_000 })]),
@@ -494,6 +667,9 @@ describe("WindowAtmosphere", () => {
     await expect.poll(() => mocks.drawAtmosphereScene.mock.calls.length).toBe(1);
     expect(frameCallbacks.size).toBe(0);
     expect(mocks.createAtmosphereScene).toHaveBeenCalledTimes(1);
+    // Initial vocabulary is injected while creating the scene. The in-place
+    // updater is reserved for later exact-thread vocabulary changes.
+    expect(mocks.applyMatrixWorkVocabularyInPlace).toHaveBeenCalledTimes(0);
 
     mocks.drawAtmosphereScene.mockClear();
     mocks.activityEventsKey = "activity-2";
@@ -512,6 +688,7 @@ describe("WindowAtmosphere", () => {
     expect(mocks.createAtmosphereScene).toHaveBeenCalledTimes(1);
 
     mocks.drawAtmosphereScene.mockClear();
+    mocks.applyMatrixWorkVocabularyInPlace.mockClear();
     mocks.workVocabularyKey = "work-2";
     await mounted.rerender(<WindowAtmosphere selectedThreadRef={TEST_SELECTED_THREAD_REF} />);
     expect(mocks.applyMatrixWorkVocabularyInPlace).toHaveBeenCalledTimes(1);
@@ -525,6 +702,10 @@ describe("WindowAtmosphere", () => {
     mounted = await render(<WindowAtmosphere selectedThreadRef={TEST_SELECTED_THREAD_REF} />);
     await expect.poll(() => mocks.drawnMatrixColors.length).toBeGreaterThan(0);
     const initialColor = mocks.drawnMatrixColors.at(-1);
+    expect(matrixColorFrameStore.getSnapshot()).toMatchObject({
+      frame: { color: initialColor },
+      motion: "frozen",
+    });
 
     performanceNow.mockReturnValue(2_000);
     mocks.activityEventsKey = "activity-2";
@@ -532,7 +713,169 @@ describe("WindowAtmosphere", () => {
 
     expect(mocks.matrixColorTimestamps).toEqual([1_000]);
     expect(mocks.drawnMatrixColors.at(-1)).toBe(initialColor);
+    expect(matrixColorFrameStore.getSnapshot()).toMatchObject({
+      frame: { color: initialColor },
+      motion: "frozen",
+    });
     expect(mocks.createAtmosphereScene).toHaveBeenCalledTimes(1);
+  });
+
+  it("freezes the exact animated Matrix frame when reduced motion turns on", async () => {
+    vi.spyOn(performance, "now").mockReturnValue(9_000);
+    mounted = await render(<WindowAtmosphere selectedThreadRef={TEST_SELECTED_THREAD_REF} />);
+    runNextFrame(1_000);
+    expect(matrixColorFrameStore.getSnapshot()).toMatchObject({
+      frame: { color: "hsl(1000)" },
+      motion: "animated",
+    });
+
+    setReducedMotionPreference(true);
+
+    expect(mocks.matrixColorTimestamps).toEqual([1_000]);
+    expect(mocks.drawnMatrixColors.at(-1)).toBe("hsl(1000)");
+    expect(matrixColorFrameStore.getSnapshot()).toMatchObject({
+      frame: { color: "hsl(1000)" },
+      motion: "frozen",
+    });
+    expect(frameCallbacks.size).toBe(0);
+  });
+
+  it("freezes the exact animated Matrix frame when falling effects turn off", async () => {
+    vi.spyOn(performance, "now").mockReturnValue(9_000);
+    mounted = await render(<WindowAtmosphere selectedThreadRef={TEST_SELECTED_THREAD_REF} />);
+    runNextFrame(1_000);
+
+    mocks.settings.fallingEffectsEnabled = false;
+    await mounted.rerender(<WindowAtmosphere selectedThreadRef={TEST_SELECTED_THREAD_REF} />);
+
+    expect(mocks.matrixColorTimestamps).toEqual([1_000]);
+    expect(matrixColorFrameStore.getSnapshot()).toMatchObject({
+      frame: { color: "hsl(1000)" },
+      motion: "frozen",
+    });
+    expect(document.querySelector('[data-testid="window-atmosphere"]')).toBeNull();
+    expect(frameCallbacks.size).toBe(0);
+  });
+
+  it("publishes one frozen Matrix palette while falling effects are disabled", async () => {
+    mocks.settings.fallingEffectsEnabled = false;
+    const performanceNow = vi.spyOn(performance, "now").mockReturnValue(5_000);
+
+    mounted = await render(<WindowAtmosphere selectedThreadRef={TEST_SELECTED_THREAD_REF} />);
+
+    await expect.poll(() => matrixColorFrameStore.getSnapshot()?.frame.color).toBe("hsl(5000)");
+    expect(matrixColorFrameStore.getSnapshot()?.motion).toBe("frozen");
+    expect(document.querySelector('[data-testid="window-atmosphere"]')).toBeNull();
+    expect(frameCallbacks.size).toBe(0);
+
+    performanceNow.mockReturnValue(9_000);
+    mocks.settings.fallingEffectMatrixColorCycleSpeed = 64;
+    await mounted.rerender(<WindowAtmosphere selectedThreadRef={TEST_SELECTED_THREAD_REF} />);
+
+    expect(matrixColorFrameStore.getSnapshot()).toMatchObject({
+      frame: { color: "hsl(9000)" },
+      motion: "frozen",
+    });
+    expect(mocks.matrixColorCycleSpeeds).toEqual([32, 64]);
+    expect(mocks.matrixColorTimestamps).toEqual([5_000, 9_000]);
+
+    performanceNow.mockReturnValue(12_000);
+    await mounted.rerender(<WindowAtmosphere selectedThreadRef={TEST_SELECTED_THREAD_REF} />);
+
+    expect(matrixColorFrameStore.getSnapshot()?.frame.color).toBe("hsl(9000)");
+    expect(mocks.matrixColorTimestamps).toEqual([5_000, 9_000]);
+    expect(frameCallbacks.size).toBe(0);
+  });
+
+  it("seeds and refreshes one frozen Matrix frame while visible but unfocused", async () => {
+    vi.mocked(document.hasFocus).mockReturnValue(false);
+    const performanceNow = vi.spyOn(performance, "now").mockReturnValue(5_000);
+    mounted = await render(<WindowAtmosphere selectedThreadRef={TEST_SELECTED_THREAD_REF} />);
+
+    await expect.poll(() => matrixColorFrameStore.getSnapshot()?.frame.color).toBe("hsl(5000)");
+    expect(matrixColorFrameStore.getSnapshot()?.motion).toBe("frozen");
+    expect(frameCallbacks.size).toBe(0);
+
+    performanceNow.mockReturnValue(9_000);
+    mocks.settings.fallingEffectMatrixColorCycleSpeed = 64;
+    await mounted.rerender(<WindowAtmosphere selectedThreadRef={TEST_SELECTED_THREAD_REF} />);
+
+    expect(matrixColorFrameStore.getSnapshot()).toMatchObject({
+      frame: { color: "hsl(9000)" },
+      motion: "frozen",
+    });
+    expect(mocks.matrixColorCycleSpeeds).toEqual([32, 64]);
+    expect(mocks.matrixColorTimestamps).toEqual([5_000, 9_000]);
+    expect(frameCallbacks.size).toBe(0);
+  });
+
+  it("passes Flat, Forward, Reverse, and Warp through for snow, rain, and Matrix", async () => {
+    (reducedMotionQuery as unknown as { matches: boolean }).matches = true;
+    mounted = await render(<WindowAtmosphere selectedThreadRef={TEST_SELECTED_THREAD_REF} />);
+
+    for (const kind of ["snow", "rain", "matrix"] as const) {
+      for (const motionMode of [
+        "flat",
+        "forward",
+        "reverse",
+        "tunnel",
+        "walk-forward",
+        "walk-reverse",
+      ] as const) {
+        mocks.settings.fallingEffectKind = kind;
+        mocks.settings.fallingEffectMatrixMotionMode = motionMode;
+        await mounted.rerender(<WindowAtmosphere selectedThreadRef={TEST_SELECTED_THREAD_REF} />);
+
+        expect(mocks.createAtmosphereScene).toHaveBeenLastCalledWith(
+          kind,
+          expect.any(Number),
+          expect.any(Number),
+          expect.any(Function),
+          expect.any(Number),
+          expect.any(Number),
+          expect.any(Boolean),
+          expect.any(Object),
+        );
+        expect(mocks.drawAtmosphereScene.mock.calls.at(-1)?.[5]).toBe(motionMode);
+        expect(frameCallbacks.size).toBe(0);
+      }
+    }
+  });
+
+  it("forwards Walk endpoints to glyphs/connectors and the Matrix baseline only to glyphs", async () => {
+    (reducedMotionQuery as unknown as { matches: boolean }).matches = true;
+    mocks.settings.fallingEffectMatrixMotionMode = "walk-forward";
+    mocks.settings.fallingEffectMatrixWalkStartFontSize = 12.3;
+    mocks.settings.fallingEffectMatrixWalkEndFontSize = 24.6;
+    mocks.settings.fallingEffectMatrixBaseFontSize = 28;
+    mounted = await render(<WindowAtmosphere selectedThreadRef={TEST_SELECTED_THREAD_REF} />);
+
+    await expect
+      .poll(() => mocks.drawAtmosphereScene.mock.calls.at(-1)?.slice(5, 9))
+      .toEqual(["walk-forward", 12.3, 24.6, 28]);
+    expect(mocks.drawMatrixActivityAnimation.mock.calls.at(-1)?.slice(6, 9)).toEqual([
+      "walk-forward",
+      12.3,
+      24.6,
+    ]);
+
+    mocks.settings.fallingEffectMatrixMotionMode = "walk-reverse";
+    mocks.settings.fallingEffectMatrixWalkStartFontSize = 8.1;
+    mocks.settings.fallingEffectMatrixWalkEndFontSize = 48.2;
+    mocks.settings.fallingEffectMatrixBaseFontSize = 36;
+    await mounted.rerender(<WindowAtmosphere selectedThreadRef={TEST_SELECTED_THREAD_REF} />);
+
+    expect(mocks.drawAtmosphereScene.mock.calls.at(-1)?.slice(5, 9)).toEqual([
+      "walk-reverse",
+      8.1,
+      48.2,
+      36,
+    ]);
+    expect(mocks.drawMatrixActivityAnimation.mock.calls.at(-1)?.slice(6, 9)).toEqual([
+      "walk-reverse",
+      8.1,
+      48.2,
+    ]);
   });
 
   it("expires a reduced-motion static activity link with one bounded timer", async () => {

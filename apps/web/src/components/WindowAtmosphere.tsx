@@ -3,10 +3,11 @@ import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
 
 import { useSettings } from "../hooks/useSettings";
 import { useTheme } from "../hooks/useTheme";
-import { localMediaAudioSignalStore } from "../localMediaAudioSignal";
-import { useServerConfig } from "../rpc/serverState";
-import { useStore } from "../store";
-import { decodeMatrixWorkVocabulary, selectMatrixWorkVocabularyKey } from "../matrixWorkVocabulary";
+import {
+  EMPTY_LOCAL_MEDIA_AUDIO_SIGNAL,
+  localMediaAudioSignalStore,
+} from "../localMediaAudioSignal";
+import { matrixColorFrameStore } from "../matrixColorFrameStore";
 import {
   createMatrixActivityAnimationState,
   decodeMatrixActivityEvents,
@@ -15,6 +16,9 @@ import {
   selectMatrixActivityEventsKey,
   updateMatrixActivityAnimationInPlace,
 } from "../matrixActivityOverlay";
+import { decodeMatrixWorkVocabulary, selectMatrixWorkVocabularyKey } from "../matrixWorkVocabulary";
+import { useServerConfig } from "../rpc/serverState";
+import { useStore } from "../store";
 import {
   advanceAtmosphereSceneInPlace,
   applyMatrixWorkVocabularyInPlace,
@@ -24,13 +28,20 @@ import {
   drawAtmosphereScene,
   fitAtmosphereDpr,
   resolveAtmosphereColor,
+  resolveAtmosphereRenderOpacity,
   resolveMatrixAtmosphereColorFrame,
   shouldAnimateAtmosphere,
+  shouldShowAtmosphere,
   type AtmosphereScene,
   type MatrixColorFrame,
 } from "../windowAtmosphere";
 
 const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
+const CINEMA_MEDIA_SELECTOR = [
+  '[data-ambient-protected-player="true"] iframe',
+  'section[aria-label="Local media player"][data-local-media-presentation="cinema"] video',
+].join(", ");
+const HIDDEN_CINEMA_CLIP_PATH = "inset(0 0 100% 0)";
 
 export interface WindowAtmosphereProps {
   readonly selectedThreadRef?: ScopedThreadRef | null;
@@ -49,15 +60,56 @@ function textSeed(value: string): number {
   return seed >>> 0;
 }
 
+function findCinemaVideoSurface(): HTMLElement | null {
+  return document.querySelector<HTMLElement>(CINEMA_MEDIA_SELECTOR);
+}
+
+function syncCinemaOverlayClip(canvas: HTMLCanvasElement, surface: HTMLElement | null): boolean {
+  if (surface === null || !surface.isConnected) {
+    canvas.style.clipPath = HIDDEN_CINEMA_CLIP_PATH;
+    canvas.style.visibility = "hidden";
+    canvas.dataset.cinemaAtmosphereVisible = "false";
+    return false;
+  }
+
+  const bounds = surface.getBoundingClientRect();
+  const viewportWidth = Math.max(0, window.innerWidth);
+  const viewportHeight = Math.max(0, window.innerHeight);
+  const left = Math.min(viewportWidth, Math.max(0, bounds.left));
+  const top = Math.min(viewportHeight, Math.max(0, bounds.top));
+  const right = Math.min(viewportWidth, Math.max(left, bounds.right));
+  const bottom = Math.min(viewportHeight, Math.max(top, bounds.bottom));
+  if (right <= left || bottom <= top) {
+    canvas.style.clipPath = HIDDEN_CINEMA_CLIP_PATH;
+    canvas.style.visibility = "hidden";
+    canvas.dataset.cinemaAtmosphereVisible = "false";
+    return false;
+  }
+
+  canvas.style.clipPath = `inset(${String(top)}px ${String(viewportWidth - right)}px ${String(
+    viewportHeight - bottom,
+  )}px ${String(left)}px)`;
+  canvas.style.visibility = "visible";
+  canvas.dataset.cinemaAtmosphereVisible = "true";
+  return true;
+}
+
 export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereProps = {}) {
   const enabled = useSettings((settings) => settings.fallingEffectsEnabled);
+  const cinemaOverlayEnabled = useSettings((settings) => settings.fallingEffectsOverCinemaEnabled);
   const kind = useSettings((settings) => settings.fallingEffectKind);
+  const matrixBaseFontSize = useSettings((settings) => settings.fallingEffectMatrixBaseFontSize);
   const configuredColor = useSettings((settings) => settings.fallingEffectColor);
   const matrixColorMode = useSettings((settings) => settings.fallingEffectMatrixColorMode);
   const matrixColorCycleSpeed = useSettings(
     (settings) => settings.fallingEffectMatrixColorCycleSpeed,
   );
   const matrixColorCycleSpeedRef = useRef(matrixColorCycleSpeed);
+  const motionMode = useSettings((settings) => settings.fallingEffectMatrixMotionMode);
+  const walkStartFontSize = useSettings(
+    (settings) => settings.fallingEffectMatrixWalkStartFontSize,
+  );
+  const walkEndFontSize = useSettings((settings) => settings.fallingEffectMatrixWalkEndFontSize);
   const opacity = useSettings((settings) => settings.fallingEffectOpacity);
   const speed = useSettings((settings) => settings.fallingEffectSpeed);
   const density = useSettings((settings) => settings.fallingEffectDensity);
@@ -93,7 +145,11 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
   const serverConfig = useServerConfig();
   const atmosphereAvailable = serverConfig?.ambientExperienceCapabilities.atmosphere === true;
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const cinemaOverlayCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const sceneRef = useRef<AtmosphereScene | null>(null);
+  const matrixPaletteOwnerRef = useRef<object>({});
+  const lastMatrixColorFrameRef = useRef<MatrixColorFrame | null>(null);
+  const lastMatrixPaletteDefinitionRef = useRef<string | null>(null);
   const invalidateCommittedFrameRef = useRef<(() => void) | null>(null);
   const invalidateStaticMatrixColorFrameRef = useRef<(() => void) | null>(null);
   const matrixWorkVocabularyKey = useStore((state) =>
@@ -166,32 +222,163 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
     invalidateCommittedFrameRef.current?.();
   }, [matrixActivityEvents]);
 
+  useLayoutEffect(() => {
+    const canvas = cinemaOverlayCanvasRef.current;
+    if (!atmosphereAvailable || !enabled || !cinemaOverlayEnabled || canvas === null) {
+      return;
+    }
+
+    let observedSurface: HTMLElement | null = null;
+    let observedWorkspace: HTMLElement | null = null;
+    const syncObservedClip = () => {
+      const wasVisible = canvas.dataset.cinemaAtmosphereVisible === "true";
+      const isVisible = syncCinemaOverlayClip(canvas, observedSurface);
+      if (!wasVisible && isVisible) {
+        // A reduced-motion or background-paused atmosphere has no running
+        // animation frame to populate an overlay that appears later. Reuse
+        // the existing invalidation boundary so the newly exposed canvas is
+        // painted once without introducing a second animation loop.
+        invalidateCommittedFrameRef.current?.();
+      }
+    };
+    const resizeObserver =
+      typeof ResizeObserver === "function" ? new ResizeObserver(syncObservedClip) : null;
+    const syncTarget = () => {
+      const surface = findCinemaVideoSurface();
+      const workspace = surface?.closest<HTMLElement>("[data-ambient-video-presentation]") ?? null;
+      if (surface !== observedSurface || workspace !== observedWorkspace) {
+        resizeObserver?.disconnect();
+        observedSurface = surface;
+        observedWorkspace = workspace;
+        if (observedSurface !== null) {
+          resizeObserver?.observe(observedSurface);
+        }
+        if (observedWorkspace !== null && observedWorkspace !== observedSurface) {
+          resizeObserver?.observe(observedWorkspace);
+        }
+      }
+      syncObservedClip();
+    };
+
+    const mutationObserver = new MutationObserver(syncTarget);
+    mutationObserver.observe(document.body, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ["data-ambient-protected-player", "data-local-media-presentation"],
+    });
+    window.addEventListener("resize", syncTarget);
+    window.addEventListener("scroll", syncTarget, true);
+    syncTarget();
+
+    return () => {
+      mutationObserver.disconnect();
+      resizeObserver?.disconnect();
+      window.removeEventListener("resize", syncTarget);
+      window.removeEventListener("scroll", syncTarget, true);
+    };
+  }, [atmosphereAvailable, cinemaOverlayEnabled, enabled]);
+
   useEffect(() => {
+    const matrixPaletteOwner = matrixPaletteOwnerRef.current;
+    const matrixColorState = createMatrixColorAnimationState();
+    matrixColorFrameStore.claim(matrixPaletteOwner);
+    let definedColorCycleSpeed = matrixColorCycleSpeedRef.current;
+    let definedMatrixPalette = JSON.stringify([
+      matrixColorMode,
+      configuredColor,
+      resolvedTheme === "dark",
+      definedColorCycleSpeed,
+    ]);
+    const matrixPaletteDefinition = () => {
+      const currentColorCycleSpeed = matrixColorCycleSpeedRef.current;
+      if (!Object.is(definedColorCycleSpeed, currentColorCycleSpeed)) {
+        definedColorCycleSpeed = currentColorCycleSpeed;
+        definedMatrixPalette = JSON.stringify([
+          matrixColorMode,
+          configuredColor,
+          resolvedTheme === "dark",
+          currentColorCycleSpeed,
+        ]);
+      }
+      return definedMatrixPalette;
+    };
+    const resolveSharedMatrixPalette = (
+      timestamp: number,
+      signal: typeof EMPTY_LOCAL_MEDIA_AUDIO_SIGNAL,
+    ) =>
+      resolveMatrixAtmosphereColorFrame(
+        matrixColorMode,
+        configuredColor,
+        resolvedTheme === "dark",
+        timestamp,
+        signal,
+        matrixColorState,
+        matrixColorCycleSpeedRef.current,
+      );
+    const publishMatrixPalette = (frame: MatrixColorFrame, motion: "animated" | "frozen") => {
+      lastMatrixColorFrameRef.current = frame;
+      lastMatrixPaletteDefinitionRef.current = matrixPaletteDefinition();
+      matrixColorFrameStore.publish(matrixPaletteOwner, frame, motion);
+    };
+    const publishFrozenMatrixPalette = () => {
+      const definition = matrixPaletteDefinition();
+      const lastFrame =
+        lastMatrixPaletteDefinitionRef.current === definition
+          ? lastMatrixColorFrameRef.current
+          : null;
+      publishMatrixPalette(
+        lastFrame ?? resolveSharedMatrixPalette(performance.now(), EMPTY_LOCAL_MEDIA_AUDIO_SIGNAL),
+        "frozen",
+      );
+    };
+    const installFrozenMatrixPalette = () => {
+      invalidateStaticMatrixColorFrameRef.current = publishFrozenMatrixPalette;
+      publishFrozenMatrixPalette();
+      return () => {
+        if (invalidateStaticMatrixColorFrameRef.current === publishFrozenMatrixPalette) {
+          invalidateStaticMatrixColorFrameRef.current = null;
+        }
+        matrixColorFrameStore.release(matrixPaletteOwner);
+      };
+    };
     const canvas = canvasRef.current;
     if (!atmosphereAvailable || !enabled || !canvas) {
-      return;
+      return installFrozenMatrixPalette();
     }
 
     const context = canvas.getContext("2d");
     if (!context) {
-      return;
+      return installFrozenMatrixPalette();
     }
+    const cinemaOverlayCanvas = cinemaOverlayCanvasRef.current;
+    const cinemaOverlayContext = cinemaOverlayCanvas?.getContext("2d") ?? null;
 
     const reducedMotion = window.matchMedia(REDUCED_MOTION_QUERY);
     let scene: AtmosphereScene | null = null;
-    const matrixColorState = createMatrixColorAnimationState();
     const matrixActivityState = createMatrixActivityAnimationState();
     let animationFrame: number | null = null;
     let resizeFrame: number | null = null;
     let staticActivityExpiryTimer: number | null = null;
     let lastFrameTime: number | null = null;
     let staticReducedMotionMatrixColorFrame: MatrixColorFrame | null = null;
+    let staticColorTimestamp: number | null = null;
+
+    const clearBitmap = (
+      targetCanvas: HTMLCanvasElement,
+      targetContext: CanvasRenderingContext2D,
+    ) => {
+      targetContext.save();
+      targetContext.setTransform(1, 0, 0, 1, 0, 0);
+      targetContext.clearRect(0, 0, targetCanvas.width, targetCanvas.height);
+      targetContext.restore();
+    };
 
     const clearCanvasBitmap = () => {
-      context.save();
-      context.setTransform(1, 0, 0, 1, 0, 0);
-      context.clearRect(0, 0, canvas.width, canvas.height);
-      context.restore();
+      clearBitmap(canvas, context);
+      if (cinemaOverlayCanvas !== null && cinemaOverlayContext !== null) {
+        clearBitmap(cinemaOverlayCanvas, cinemaOverlayContext);
+      }
     };
 
     const cancelAnimation = () => {
@@ -248,7 +435,8 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
       staticActivityExpiryTimer = window.setTimeout(() => {
         staticActivityExpiryTimer = null;
         if (scene && reducedMotion.matches && kind === "matrix" && activityLinksEnabled) {
-          renderScene(performance.now(), true);
+          staticColorTimestamp ??= performance.now();
+          renderScene(staticColorTimestamp, true);
         }
       }, delayMs);
     };
@@ -265,6 +453,11 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
       canvas.width = bitmapWidth;
       canvas.height = bitmapHeight;
       context.setTransform(dpr, 0, 0, dpr, 0, 0);
+      if (cinemaOverlayCanvas !== null && cinemaOverlayContext !== null) {
+        cinemaOverlayCanvas.width = bitmapWidth;
+        cinemaOverlayCanvas.height = bitmapHeight;
+        cinemaOverlayContext.setTransform(dpr, 0, 0, dpr, 0, 0);
+      }
       scene = createAtmosphereScene(
         kind,
         width,
@@ -284,32 +477,62 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
       }
       const elapsedSeconds =
         reducedMotionActive || lastFrameTime === null ? 0 : (timestamp - lastFrameTime) / 1_000;
-      lastFrameTime = timestamp;
+      if (!reducedMotionActive) {
+        lastFrameTime = timestamp;
+      }
       advanceAtmosphereSceneInPlace(scene, elapsedSeconds, speed);
       if (!reducedMotionActive) {
         staticReducedMotionMatrixColorFrame = null;
       }
-      const matrixColorFrame =
-        kind === "matrix"
-          ? reducedMotionActive && staticReducedMotionMatrixColorFrame !== null
-            ? staticReducedMotionMatrixColorFrame
-            : resolveMatrixAtmosphereColorFrame(
-                matrixColorMode,
-                configuredColor,
-                resolvedTheme === "dark",
-                timestamp,
-                localMediaAudioSignalStore.getSnapshot(),
-                matrixColorState,
-                matrixColorCycleSpeedRef.current,
-              )
-          : undefined;
-      if (reducedMotionActive && matrixColorFrame !== undefined) {
-        staticReducedMotionMatrixColorFrame = matrixColorFrame;
+      const renderOpacity = resolveAtmosphereRenderOpacity(opacity, reducedMotionActive);
+      const sharedMatrixColorFrame =
+        reducedMotionActive && staticReducedMotionMatrixColorFrame !== null
+          ? staticReducedMotionMatrixColorFrame
+          : resolveSharedMatrixPalette(
+              timestamp,
+              reducedMotionActive
+                ? EMPTY_LOCAL_MEDIA_AUDIO_SIGNAL
+                : localMediaAudioSignalStore.getSnapshot(),
+            );
+      if (reducedMotionActive) {
+        staticReducedMotionMatrixColorFrame = sharedMatrixColorFrame;
       }
+      publishMatrixPalette(sharedMatrixColorFrame, reducedMotionActive ? "frozen" : "animated");
+      const matrixColorFrame = kind === "matrix" ? sharedMatrixColorFrame : undefined;
       const color =
         matrixColorFrame?.color ??
         resolveAtmosphereColor(kind, configuredColor, resolvedTheme === "dark");
-      drawAtmosphereScene(context, scene, color, opacity, matrixColorFrame);
+      drawAtmosphereScene(
+        context,
+        scene,
+        color,
+        renderOpacity,
+        matrixColorFrame,
+        motionMode,
+        walkStartFontSize,
+        walkEndFontSize,
+        matrixBaseFontSize,
+      );
+      if (
+        cinemaOverlayCanvas?.dataset.cinemaAtmosphereVisible === "true" &&
+        cinemaOverlayContext !== null
+      ) {
+        // The elevated canvas receives only the falling scene. Provider
+        // activity packets/connectors remain on the ordinary window canvas,
+        // behind cinema media, so the opt-in does not imply provider activity
+        // over the video.
+        drawAtmosphereScene(
+          cinemaOverlayContext,
+          scene,
+          color,
+          renderOpacity,
+          matrixColorFrame,
+          motionMode,
+          walkStartFontSize,
+          walkEndFontSize,
+          matrixBaseFontSize,
+        );
+      }
       if (matrixColorFrame && activityLinksEnabled) {
         const activityNow = Date.now();
         updateMatrixActivityAnimationInPlace(
@@ -324,9 +547,12 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
           context,
           scene,
           matrixActivityState,
-          opacity,
+          renderOpacity,
           activityLinkColorMode,
           matrixColorFrame,
+          motionMode,
+          walkStartFontSize,
+          walkEndFontSize,
         );
         if (reducedMotionActive) {
           scheduleStaticActivityExpiry(activityNow);
@@ -340,40 +566,58 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
       animationFrame = window.requestAnimationFrame(drawFrame);
     };
 
-    const syncAnimation = () => {
-      const canAnimate = shouldAnimateAtmosphere({
-        enabled,
-        reducedMotion: reducedMotion.matches,
-        documentVisible: document.visibilityState === "visible",
-        windowFocused: document.hasFocus(),
-        continueBackgroundAnimations,
-      });
+    const readAnimationState = () => ({
+      enabled,
+      reducedMotion: reducedMotion.matches,
+      documentVisible: document.visibilityState === "visible",
+      windowFocused: document.hasFocus(),
+      continueBackgroundAnimations,
+    });
 
-      if (!canAnimate) {
+    const syncAnimation = () => {
+      const animationState = readAnimationState();
+
+      if (!shouldShowAtmosphere(animationState)) {
         cancelAnimation();
-        if (scene && reducedMotion.matches && kind === "matrix") {
-          renderScene(performance.now(), true);
-        } else if (scene) {
-          cancelStaticActivityExpiry();
-          context.clearRect(0, 0, scene.width, scene.height);
+        cancelStaticActivityExpiry();
+        staticColorTimestamp = null;
+        publishFrozenMatrixPalette();
+        clearCanvasBitmap();
+        return;
+      }
+
+      if (!shouldAnimateAtmosphere(animationState)) {
+        cancelAnimation();
+        if (
+          staticReducedMotionMatrixColorFrame === null &&
+          lastMatrixPaletteDefinitionRef.current === matrixPaletteDefinition()
+        ) {
+          staticReducedMotionMatrixColorFrame = lastMatrixColorFrameRef.current;
         }
+        staticColorTimestamp ??= performance.now();
+        renderScene(staticColorTimestamp, true);
         return;
       }
 
       cancelStaticActivityExpiry();
+      staticColorTimestamp = null;
       if (animationFrame === null) {
         animationFrame = window.requestAnimationFrame(drawFrame);
       }
     };
 
     const invalidateCommittedFrame = () => {
-      if (scene && reducedMotion.matches && kind === "matrix") {
-        renderScene(performance.now(), true);
+      if (scene && reducedMotion.matches) {
+        staticColorTimestamp ??= performance.now();
+        renderScene(staticColorTimestamp, true);
       } else if (scene) {
         // The bitmap may still contain a prior route's filenames or activity
         // labels. Clear it synchronously at commit; the next permitted
         // animation frame paints only the newly published thread.
         clearCanvasBitmap();
+        if (!shouldShowAtmosphere(readAnimationState())) {
+          publishFrozenMatrixPalette();
+        }
       }
     };
     invalidateCommittedFrameRef.current = invalidateCommittedFrame;
@@ -411,6 +655,7 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
         invalidateStaticMatrixColorFrameRef.current = null;
       }
       sceneRef.current = null;
+      matrixColorFrameStore.release(matrixPaletteOwner);
       clearCanvasBitmap();
       document.removeEventListener("visibilitychange", syncAnimation);
       window.removeEventListener("focus", syncAnimation);
@@ -424,15 +669,20 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
     activityLinksEnabled,
     configuredColor,
     continueBackgroundAnimations,
+    cinemaOverlayEnabled,
     density,
     enabled,
     enriched2ch,
     japaneseRatio,
     kind,
     matrixColorMode,
+    matrixBaseFontSize,
+    motionMode,
     opacity,
     resolvedTheme,
     speed,
+    walkEndFontSize,
+    walkStartFontSize,
   ]);
 
   if (!enabled || !atmosphereAvailable) {
@@ -440,11 +690,26 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
   }
 
   return (
-    <canvas
-      ref={canvasRef}
-      aria-hidden="true"
-      className="pointer-events-none fixed inset-0 z-40 h-full w-full overflow-hidden"
-      data-testid="window-atmosphere"
-    />
+    <>
+      <canvas
+        ref={canvasRef}
+        aria-hidden="true"
+        className="pointer-events-none fixed inset-0 z-40 h-full w-full overflow-hidden"
+        data-testid="window-atmosphere"
+      />
+      {cinemaOverlayEnabled ? (
+        <canvas
+          ref={cinemaOverlayCanvasRef}
+          aria-hidden="true"
+          className="pointer-events-none fixed inset-0 z-50 h-full w-full overflow-hidden"
+          data-cinema-atmosphere-visible="false"
+          data-testid="cinema-falling-atmosphere"
+          style={{
+            clipPath: HIDDEN_CINEMA_CLIP_PATH,
+            visibility: "hidden",
+          }}
+        />
+      ) : null}
+    </>
   );
 }

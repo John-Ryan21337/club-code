@@ -10,6 +10,7 @@ import * as Random from "effect/Random";
 import {
   clearLatestProviderVersionCacheForTests,
   createProviderVersionAdvisory,
+  isCodexStandaloneCommandPath,
   makePackageManagedProviderMaintenanceResolver,
   makeProviderMaintenanceCapabilities,
   makeStaticProviderMaintenanceResolver,
@@ -69,6 +70,17 @@ const scopedPackageToolUpdate = makePackageManagedProviderMaintenanceResolver({
     args: ["upgrade"],
     lockKey: "scoped-package-tool-native",
     isCommandPath: isNativeTestCommandPath("/.scoped-package-tool/bin/scoped-package-tool"),
+  },
+});
+const codexStandaloneUpdate = makePackageManagedProviderMaintenanceResolver({
+  provider: driver("codex"),
+  npmPackageName: "@openai/codex",
+  homebrewFormula: "codex",
+  nativeUpdate: {
+    executable: "codex",
+    args: ["update"],
+    lockKey: "codex-native",
+    isCommandPath: isCodexStandaloneCommandPath,
   },
 });
 const staticToolUpdate = makeStaticProviderMaintenanceResolver(
@@ -367,6 +379,42 @@ describe("providerMaintenance", () => {
         });
       }),
   );
+
+  it("recognizes both sides of the Windows Codex standalone junction for native updates", () => {
+    const expected = {
+      provider: driver("codex"),
+      packageName: "@openai/codex",
+      update: {
+        command: "codex update",
+        executable: "codex",
+        args: ["update"],
+        lockKey: "codex-native",
+      },
+    };
+
+    expect(
+      codexStandaloneUpdate.resolve({
+        binaryPath: String.raw`C:\Users\operator\AppData\Local\Programs\OpenAI\Codex\bin\codex.exe`,
+        platform: "win32",
+        env: { PATH: "" },
+      }),
+    ).toEqual(expected);
+    expect(
+      codexStandaloneUpdate.resolve({
+        binaryPath: String.raw`C:\Users\operator\.codex\packages\standalone\releases\0.146.0-x86_64-pc-windows-msvc\bin\codex.exe`,
+        platform: "win32",
+        env: { PATH: "" },
+      }),
+    ).toEqual(expected);
+  });
+
+  it("does not misclassify npm-managed Codex as a standalone install", () => {
+    expect(
+      isCodexStandaloneCommandPath(
+        String.raw`C:\Users\operator\AppData\Roaming\npm\node_modules\@openai\codex\bin\codex.exe`,
+      ),
+    ).toBe(false);
+  });
 
   it("switches native-package-tool to Homebrew updates when the binary resolves through Homebrew", () => {
     expect(

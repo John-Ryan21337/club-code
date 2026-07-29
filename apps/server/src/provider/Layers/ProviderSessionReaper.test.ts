@@ -1,5 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
+  DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+  DEFAULT_THREAD_AUTO_NUDGE_SUMMARY,
   ProjectId,
   ThreadId,
   TurnId,
@@ -77,6 +79,8 @@ function makeReadModel(
       runtimeMode: "full-access" as const,
       branch: null,
       worktreePath: null,
+      autoNudge: DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+      manualFollowUps: [],
       createdAt: now,
       updatedAt: now,
       archivedAt: null,
@@ -196,12 +200,21 @@ describe("ProviderSessionReaper", () => {
           getCounts: () => Effect.die("unused"),
           getActiveProjectByWorkspaceRoot: () => Effect.die("unused"),
           getProjectShellById: () => Effect.die("unused"),
+          getProjectWorkspaceRootById: () => Effect.die("unused"),
           getFirstActiveThreadIdByProjectId: () => Effect.die("unused"),
           getThreadCheckpointContext: () => Effect.die("unused"),
           getThreadShellById: (threadId) =>
             Effect.succeed(
               input.readModel.threads.find((thread) => thread.id === threadId)
-                ? Option.some(input.readModel.threads.find((thread) => thread.id === threadId)!)
+                ? Option.some({
+                    ...input.readModel.threads.find((thread) => thread.id === threadId)!,
+                    autoNudge: DEFAULT_THREAD_AUTO_NUDGE_SUMMARY,
+                    manualFollowUpCount: 0,
+                    latestUserMessageAt: null,
+                    hasPendingApprovals: false,
+                    hasPendingUserInput: false,
+                    hasActionableProposedPlan: false,
+                  })
                 : Option.none(),
             ),
           getPostTerminalStaleSteerCandidateThreadIds: () => Effect.die("unused"),

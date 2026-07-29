@@ -5,6 +5,7 @@ import {
   AuthSessionId,
   DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES,
   DEFAULT_CLIENT_SETTINGS,
+  DEFAULT_LM_STUDIO_BASE_URL,
   DEFAULT_SERVER_SETTINGS,
   EnvironmentId,
   type DesktopBridge,
@@ -49,7 +50,11 @@ import {
   setServerConfigSnapshot,
 } from "../../rpc/serverState";
 import { useUiStateStore } from "../../uiStateStore";
-import { youtubeUrlQueueStore } from "../../youtubeUrlQueue";
+import {
+  SETTINGS_PROFILE_LIBRARY_STORAGE_KEY,
+  settingsProfileLibraryStore,
+} from "../../settingsProfiles";
+import { youtubeUrlQueueLibraryStore, youtubeUrlQueueStore } from "../../youtubeUrlQueue";
 import { toastManager } from "../ui/toast";
 import { ConnectionsSettings } from "./ConnectionsSettings";
 import { DiagnosticsSettingsPanel } from "./DiagnosticsSettings";
@@ -324,6 +329,16 @@ function createRuntimeLayerDiagnosticsResult(): ServerRuntimeLayerDiagnosticsRes
         lastEventAt: "2036-04-07T00:00:00.000Z",
         notes: ["Provider daemon health summary."],
       },
+      {
+        role: "provider-supervisor",
+        status: "not-configured",
+        pid: null,
+        rssBytes: 0,
+        cpuPercent: 0,
+        uptimeLabel: null,
+        lastEventAt: null,
+        notes: ["Optional provider supervisor is not configured; providers run in the daemon."],
+      },
     ],
     orchestrator: {
       latestEventSequence: 10,
@@ -415,7 +430,7 @@ function createRuntimeLayerDiagnosticsResult(): ServerRuntimeLayerDiagnosticsRes
     providerSupervisor: {
       configured: false,
       reachable: false,
-      status: "offline",
+      status: "not-configured",
       pid: null,
       ppid: null,
       transport: null,
@@ -726,6 +741,8 @@ describe("settings panels", () => {
     await __resetLocalApiForTests();
     localMediaStore.clear();
     localStorage.clear();
+    settingsProfileLibraryStore.resetForTests();
+    youtubeUrlQueueLibraryStore.resetForTests();
     useUiStateStore.setState({ defaultAdvertisedEndpointKey: null });
     authAccessHarness.reset();
   });
@@ -740,6 +757,8 @@ describe("settings panels", () => {
     Reflect.deleteProperty(window, "desktopBridge");
     Reflect.deleteProperty(window, "nativeApi");
     document.body.innerHTML = "";
+    settingsProfileLibraryStore.resetForTests();
+    youtubeUrlQueueLibraryStore.resetForTests();
     resetServerStateForTests();
     await __resetLocalApiForTests();
     localMediaStore.clear();
@@ -957,6 +976,20 @@ describe("settings panels", () => {
 
     await expect.element(page.getByText("About")).toBeInTheDocument();
     await expect
+      .element(page.getByRole("heading", { name: "Alpha software / アルファ版", exact: true }))
+      .toBeInTheDocument();
+    await expect
+      .element(page.getByText(/Club Code is alpha\/testing software/))
+      .toBeInTheDocument();
+    await expect
+      .element(page.getByText(/現在テスト中のアルファ版ソフトウェアです/))
+      .toBeInTheDocument();
+    const disclaimer = document.querySelector('[data-alpha-software-disclaimer="true"]');
+    expect(disclaimer).not.toBeNull();
+    expect(disclaimer?.querySelectorAll("p")).toHaveLength(0);
+    expect(disclaimer?.querySelector('[lang="en"]')).not.toBeNull();
+    expect(disclaimer?.querySelector('[lang="ja"]')).not.toBeNull();
+    await expect
       .element(page.getByRole("heading", { name: "Diagnostics", exact: true }))
       .toBeInTheDocument();
     await expect.element(page.getByRole("link", { name: "View diagnostics" })).toBeInTheDocument();
@@ -1091,7 +1124,7 @@ describe("settings panels", () => {
     });
   });
 
-  it("keeps background Auto Nudge opt-in with visible conservative caps", async () => {
+  it("saves and switches persistent local settings profiles in one action", async () => {
     const desktopBridge = createDesktopBridgeStub();
     window.desktopBridge = desktopBridge;
     const { updateClientSettings } = installClientSettingsNativeApi(desktopBridge);
@@ -1103,15 +1136,143 @@ describe("settings panels", () => {
       </AppAtomRegistryProvider>,
     );
 
-    await expect.element(page.getByText("Auto Nudge background continuation")).toBeInTheDocument();
-    await expect.element(page.getByLabelText("Auto Nudge maximum rounds")).toHaveValue("5");
-    await expect.element(page.getByLabelText("Auto Nudge maximum minutes")).toHaveValue("30");
-    await page.getByLabelText("Allow Auto Nudge background continuation").click();
+    const nameInput = page.getByLabelText("Settings profile name");
+    await nameInput.fill("Mobile");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await expect.element(page.getByText("Saved “Mobile”.", { exact: true })).toBeInTheDocument();
+
+    await page.getByLabelText("Keep animations running in background").click();
     await vi.waitFor(() => {
       expect(updateClientSettings).toHaveBeenCalledWith({
-        autoNudgeBackgroundContinuation: true,
+        continueBackgroundAnimations: true,
       });
     });
+    await page.getByLabelText("Theme preference").click();
+    await page.getByText("Light", { exact: true }).click();
+
+    await nameInput.fill("Desktop");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await expect.element(page.getByText("Saved “Desktop”.", { exact: true })).toBeInTheDocument();
+
+    await page.getByRole("combobox", { name: "Active settings profile" }).click();
+    await page.getByRole("option", { name: "Mobile" }).click();
+
+    await vi.waitFor(() => {
+      const profilePatch = updateClientSettings.mock.calls.at(-1)?.[0];
+      expect(profilePatch).toMatchObject({
+        continueBackgroundAnimations: false,
+      });
+      expect(profilePatch).not.toHaveProperty("autoNudgeMode");
+      expect(profilePatch).not.toHaveProperty("providerModelPreferences");
+      expect(profilePatch).not.toHaveProperty("modelPacingEnabled");
+    });
+    await expect.element(page.getByText("Loaded “Mobile”.", { exact: true })).toBeInTheDocument();
+    await expect.element(page.getByLabelText("Theme preference")).toHaveTextContent("Dark");
+
+    // The active select cannot emit its current value. A dedicated Reload action
+    // lets the user discard later edits without switching through another profile.
+    await page.getByLabelText("Keep animations running in background").click();
+    await vi.waitFor(() => {
+      expect(updateClientSettings.mock.calls.at(-1)?.[0]).toEqual({
+        continueBackgroundAnimations: true,
+      });
+    });
+    await page.getByRole("button", { name: "Reload active settings profile" }).click();
+    await vi.waitFor(() => {
+      expect(updateClientSettings.mock.calls.at(-1)?.[0]).toMatchObject({
+        continueBackgroundAnimations: false,
+      });
+    });
+
+    await page.getByLabelText("Keep animations running in background").click();
+    await page.getByRole("button", { name: "Update active" }).click();
+    await expect.element(page.getByText("Updated “Mobile”.", { exact: true })).toBeInTheDocument();
+    await page.getByLabelText("Keep animations running in background").click();
+    await page.getByRole("button", { name: "Reload active settings profile" }).click();
+    await vi.waitFor(() => {
+      expect(updateClientSettings.mock.calls.at(-1)?.[0]).toMatchObject({
+        continueBackgroundAnimations: true,
+      });
+    });
+
+    const persistedProfiles = JSON.parse(
+      localStorage.getItem(SETTINGS_PROFILE_LIBRARY_STORAGE_KEY) ?? "{}",
+    );
+    expect(persistedProfiles.activeProfileId).toBe("profile:mobile");
+    expect(persistedProfiles.profiles.map((profile: { name: string }) => profile.name)).toEqual([
+      "Mobile",
+      "Desktop",
+    ]);
+  });
+
+  it("rolls the theme back and keeps the prior active profile when loading settings fails", async () => {
+    const desktopBridge = createDesktopBridgeStub();
+    window.desktopBridge = desktopBridge;
+    const { updateClientSettings } = installClientSettingsNativeApi(desktopBridge);
+    setServerConfigSnapshot(createBaseServerConfig());
+
+    mounted = await renderWithTestRouter(
+      <AppAtomRegistryProvider>
+        <AppearanceSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    const nameInput = page.getByLabelText("Settings profile name");
+    await nameInput.fill("Mobile");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await page.getByLabelText("Keep animations running in background").click();
+    await page.getByLabelText("Theme preference").click();
+    await page.getByText("Light", { exact: true }).click();
+    await nameInput.fill("Desktop");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+
+    updateClientSettings.mockRejectedValueOnce(new Error("profile write failed"));
+    await page.getByRole("combobox", { name: "Active settings profile" }).click();
+    await page.getByRole("option", { name: "Mobile" }).click();
+
+    await expect
+      .element(page.getByText("profile write failed", { exact: true }))
+      .toBeInTheDocument();
+    await expect.element(page.getByLabelText("Theme preference")).toHaveTextContent("Light");
+    await expect
+      .element(page.getByLabelText("Keep animations running in background"))
+      .toBeChecked();
+    expect(settingsProfileLibraryStore.getSnapshot().activeProfileId).toBe("profile:desktop");
+  });
+
+  it("refreshes the visible profile library after another window changes local storage", async () => {
+    setServerConfigSnapshot(createBaseServerConfig());
+    mounted = await renderWithTestRouter(
+      <AppAtomRegistryProvider>
+        <AppearanceSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    localStorage.setItem(
+      SETTINGS_PROFILE_LIBRARY_STORAGE_KEY,
+      JSON.stringify({
+        version: 1,
+        activeProfileId: "profile:mobile",
+        profiles: [
+          {
+            name: "Mobile",
+            theme: "dark",
+            clientSettings: { sidebarThreadPreviewCount: 2 },
+            createdAt: "2026-07-29T08:00:00.000Z",
+            updatedAt: "2026-07-29T08:00:00.000Z",
+          },
+        ],
+      }),
+    );
+    window.dispatchEvent(
+      new StorageEvent("storage", {
+        key: SETTINGS_PROFILE_LIBRARY_STORAGE_KEY,
+      }),
+    );
+
+    await expect
+      .element(page.getByRole("combobox", { name: "Active settings profile" }))
+      .toHaveTextContent("Mobile");
   });
 
   it("persists appearance preferences from Appearance settings", async () => {
@@ -1505,8 +1666,14 @@ describe("settings panels", () => {
       ...config,
       clientSettings: {
         ...config.clientSettings,
+        fallingEffectsOverCinemaEnabled: true,
+        fallingEffectMatrixBaseFontSize: 28,
         fallingEffectMatrixColorMode: "rainbow-extra",
         fallingEffectMatrixColorCycleSpeed: 32,
+        fallingEffectMatrixMotionMode: "tunnel",
+        fallingEffectMatrixWalkStartFontSize: 12,
+        fallingEffectMatrixWalkEndFontSize: 24,
+        fallingEffect2chEnriched: true,
         fallingEffectLiveWorkVocabulary: true,
         fallingEffectActivityLinks: true,
         fallingEffectActivityLinkNetworkEnabled: false,
@@ -1528,20 +1695,26 @@ describe("settings panels", () => {
     await expect
       .element(page.getByLabelText("Changed settings"))
       .toHaveTextContent(
-        "Matrix color mode | Matrix color-cycle speed | Matrix live work vocabulary | Matrix activity links | Matrix activity link inputs | Matrix activity link colors | Matrix verified route visibility",
+        "Falling effects over cinema video | Matrix base font size | Matrix color mode | Matrix color-cycle speed | Atmosphere motion | Walk perspective sizes | 2ch-inspired Matrix enrichment | Matrix live work vocabulary | Matrix activity links | Matrix activity link inputs | Matrix activity link colors | Matrix verified route visibility",
       );
     await page.getByRole("button", { name: "Apply settings reset" }).click();
 
     await vi.waitFor(() => {
       expect(confirm).toHaveBeenCalledWith(
         expect.stringContaining(
-          "Matrix color mode, Matrix color-cycle speed, Matrix live work vocabulary, Matrix activity links, Matrix activity link inputs, Matrix activity link colors, Matrix verified route visibility",
+          "Falling effects over cinema video, Matrix base font size, Matrix color mode, Matrix color-cycle speed, Atmosphere motion, Walk perspective sizes, 2ch-inspired Matrix enrichment, Matrix live work vocabulary, Matrix activity links, Matrix activity link inputs, Matrix activity link colors, Matrix verified route visibility",
         ),
       );
       expect(updateClientSettings).toHaveBeenCalledWith(
         expect.objectContaining({
+          fallingEffectsOverCinemaEnabled: false,
+          fallingEffectMatrixBaseFontSize: 14,
           fallingEffectMatrixColorMode: "fixed",
           fallingEffectMatrixColorCycleSpeed: 1,
+          fallingEffectMatrixMotionMode: "flat",
+          fallingEffectMatrixWalkStartFontSize: 1,
+          fallingEffectMatrixWalkEndFontSize: 72,
+          fallingEffect2chEnriched: false,
           fallingEffectLiveWorkVocabulary: false,
           fallingEffectActivityLinks: false,
           fallingEffectActivityLinkNetworkEnabled: true,
@@ -1553,8 +1726,14 @@ describe("settings panels", () => {
         }),
       );
       expect(getServerConfig()?.clientSettings).toMatchObject({
+        fallingEffectsOverCinemaEnabled: false,
+        fallingEffectMatrixBaseFontSize: 14,
         fallingEffectMatrixColorMode: "fixed",
         fallingEffectMatrixColorCycleSpeed: 1,
+        fallingEffectMatrixMotionMode: "flat",
+        fallingEffectMatrixWalkStartFontSize: 1,
+        fallingEffectMatrixWalkEndFontSize: 72,
+        fallingEffect2chEnriched: false,
         fallingEffectLiveWorkVocabulary: false,
         fallingEffectActivityLinks: false,
         fallingEffectActivityLinkNetworkEnabled: true,
@@ -1600,17 +1779,73 @@ describe("settings panels", () => {
     );
 
     await expect.element(page.getByText("Ambient streaming")).toBeInTheDocument();
+    await expect
+      .element(
+        page.getByText(
+          /videos that YouTube reports as unavailable or not allowed to be embedded are skipped automatically/i,
+        ),
+      )
+      .toBeInTheDocument();
+    await expect
+      .element(page.getByRole("button", { name: "K-pop", exact: true }))
+      .toBeInTheDocument();
     await page.getByRole("button", { name: "EDM", exact: true }).click();
-    await expect.element(page.getByText("URL 1 of 19")).toBeInTheDocument();
-    await expect.element(page.getByText(/Accepted 19; skipped 1 invalid/)).toBeInTheDocument();
+    await expect.element(page.getByText("URL 1 of 30")).toBeInTheDocument();
+    await expect.element(page.getByText(/Accepted 30; skipped 1 invalid/)).toBeInTheDocument();
     await expect
       .element(page.getByRole("button", { name: "EDM", exact: true }))
       .toHaveAttribute("aria-pressed", "true");
     await page.getByRole("button", { name: "Japanese music", exact: true }).click();
-    await expect.element(page.getByText("URL 1 of 36")).toBeInTheDocument();
-    await expect.element(page.getByText(/Accepted 36; skipped 3 invalid/)).toBeInTheDocument();
+    await expect.element(page.getByText("URL 1 of 71")).toBeInTheDocument();
+    await expect.element(page.getByText(/Accepted 71; skipped 3 invalid/)).toBeInTheDocument();
     await expect
       .element(page.getByRole("button", { name: "Japanese music", exact: true }))
+      .toHaveAttribute("aria-pressed", "true");
+    await page.getByRole("button", { name: "K-pop", exact: true }).click();
+    await expect.element(page.getByText("URL 1 of 8")).toBeInTheDocument();
+    await expect
+      .element(page.getByRole("button", { name: "K-pop", exact: true }))
+      .toHaveAttribute("aria-pressed", "true");
+
+    const queueInput = document.querySelector(
+      'input[aria-label="Choose YouTube URL queue text file"]',
+    ) as HTMLInputElement | null;
+    expect(queueInput).not.toBeNull();
+    Object.defineProperty(queueInput, "files", {
+      configurable: true,
+      value: [
+        new File(["https://youtu.be/dQw4w9WgXcQ"], "EDMYoutubeList.txt", {
+          type: "text/plain",
+        }),
+      ],
+    });
+    queueInput!.dispatchEvent(new Event("change", { bubbles: true }));
+    await expect.element(page.getByText(/EDM replaced\./)).toBeInTheDocument();
+    await expect.element(page.getByText("URL 1 of 1")).toBeInTheDocument();
+    expect(
+      Array.from(document.querySelectorAll("button")).filter(
+        (button) => button.textContent?.trim() === "EDM",
+      ),
+    ).toHaveLength(1);
+
+    Object.defineProperty(queueInput, "files", {
+      configurable: true,
+      value: [
+        new File(
+          [["https://youtu.be/9bZkp7q19f0", "https://youtu.be/kJQP7kiw5Fk"].join("\n")],
+          "Night Drive.txt",
+          { type: "text/plain" },
+        ),
+      ],
+    });
+    queueInput!.dispatchEvent(new Event("change", { bubbles: true }));
+    await expect.element(page.getByText(/Night Drive added\./)).toBeInTheDocument();
+    await expect.element(page.getByText("URL 1 of 2")).toBeInTheDocument();
+    await page.getByRole("button", { name: "Japanese music", exact: true }).click();
+    await page.getByRole("button", { name: "Night Drive", exact: true }).click();
+    await expect.element(page.getByText("URL 1 of 2")).toBeInTheDocument();
+    await expect
+      .element(page.getByRole("button", { name: "Night Drive", exact: true }))
       .toHaveAttribute("aria-pressed", "true");
     await vi.waitFor(() => {
       expect(updateClientSettings).toHaveBeenCalledWith({ ambientVideoEnabled: true });
@@ -2643,6 +2878,15 @@ describe("settings panels", () => {
     await expect
       .element(page.getByRole("heading", { name: "Provider Supervisor", exact: true }))
       .toBeInTheDocument();
+    await expect.element(page.getByText("not-configured", { exact: true })).toBeInTheDocument();
+    await expect
+      .element(
+        page.getByText(
+          "Optional provider supervisor is not configured; providers run in the daemon.",
+          { exact: true },
+        ),
+      )
+      .toBeInTheDocument();
     await openLogsButton.click();
 
     expect(openInEditor).toHaveBeenCalledWith("/repo/project/.t3/logs", "cursor");
@@ -2723,15 +2967,18 @@ describe("settings panels", () => {
     });
   });
 
-  it("adds LM Studio as a selectable local provider instance", async () => {
+  it("shows first-class LM Studio Local setup and adds its separate provider instance", async () => {
     const updateSettings = vi.fn<LocalApi["server"]["updateSettings"]>().mockResolvedValue({
       ...DEFAULT_SERVER_SETTINGS,
       providerInstances: {
         [ProviderInstanceId.make("lmstudio")]: {
           driver: ProviderDriverKind.make("codex"),
           enabled: true,
-          displayName: "LM Studio",
-          config: { ossMode: true },
+          displayName: "LM Studio Local",
+          config: {
+            ossMode: true,
+            ossBaseUrl: "http://192.168.50.25:1234/v1",
+          },
         },
       },
     });
@@ -2752,12 +2999,24 @@ describe("settings panels", () => {
       </AppAtomRegistryProvider>,
     );
 
-    await page.getByRole("button", { name: "Add provider instance" }).click();
-    await page.getByText("LM Studio", { exact: true }).click();
-    await page.getByRole("button", { name: "Next" }).click();
-    await expect.element(page.getByLabelText("Instance ID")).toHaveValue("lmstudio");
-    await page.getByRole("button", { name: "Next" }).click();
-    await expect.element(page.getByText("Local LM Studio through Codex OSS")).toBeInTheDocument();
+    await expect
+      .element(page.getByRole("heading", { name: "LM Studio Local", exact: true }))
+      .toBeInTheDocument();
+    await expect.element(page.getByText(/OpenCode is a separate provider\./)).toBeInTheDocument();
+    const addProviderButton = page.getByRole("button", { name: "Add provider instance" });
+    await expect.element(addProviderButton).toHaveTextContent("Add provider");
+    await page.getByRole("button", { name: "Set up LM Studio Local" }).click();
+    await expect.element(page.getByText("LM Studio Local through Codex OSS")).toBeInTheDocument();
+    await expect
+      .element(page.getByLabelText("LM Studio server URL"))
+      .toHaveValue(DEFAULT_LM_STUDIO_BASE_URL);
+    await page.getByLabelText("LM Studio server URL").fill("http://models.example.com/v1");
+    await page.getByRole("button", { name: "Add instance" }).click();
+    await expect
+      .element(page.getByText(/Plain HTTP is allowed only for localhost or a literal private/))
+      .toBeInTheDocument();
+    expect(updateSettings).not.toHaveBeenCalled();
+    await page.getByLabelText("LM Studio server URL").fill("http://192.168.50.25:1234/v1");
     await page.getByRole("button", { name: "Add instance" }).click();
 
     await vi.waitFor(() => {
@@ -2766,11 +3025,155 @@ describe("settings panels", () => {
           lmstudio: {
             driver: ProviderDriverKind.make("codex"),
             enabled: true,
-            displayName: "LM Studio",
-            config: { ossMode: true },
+            displayName: "LM Studio Local",
+            config: {
+              ossMode: true,
+              ossBaseUrl: "http://192.168.50.25:1234/v1",
+            },
           },
         },
       });
+    });
+  });
+
+  it("keeps LM Studio setup open and reports a rejected settings write", async () => {
+    const updateSettings = vi
+      .fn<LocalApi["server"]["updateSettings"]>()
+      .mockRejectedValue(new Error("settings RPC unavailable"));
+    const toastSpy = vi.spyOn(toastManager, "add");
+    window.nativeApi = {
+      persistence: {
+        getClientSettings: vi.fn().mockResolvedValue(null),
+        setClientSettings: vi.fn().mockResolvedValue(undefined),
+      },
+      server: {
+        updateSettings,
+      },
+    } as unknown as LocalApi;
+    setServerConfigSnapshot(createBaseServerConfig());
+
+    mounted = await render(
+      <AppAtomRegistryProvider>
+        <ProviderSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    await page.getByRole("button", { name: "Set up LM Studio Local" }).click();
+    await page.getByRole("button", { name: "Add instance" }).click();
+
+    await vi.waitFor(() => {
+      expect(updateSettings).toHaveBeenCalledTimes(1);
+      expect(toastSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "error",
+          title: "Could not add provider instance",
+          description: "settings RPC unavailable",
+        }),
+      );
+    });
+    await expect.element(page.getByText("LM Studio Local through Codex OSS")).toBeInTheDocument();
+    await expect.element(page.getByRole("button", { name: "Add instance" })).toBeEnabled();
+  });
+
+  it("keeps an existing LM Studio instance intact when its edited URL is unsafe", async () => {
+    const updateSettings = vi.fn<LocalApi["server"]["updateSettings"]>().mockResolvedValue({
+      ...DEFAULT_SERVER_SETTINGS,
+    });
+    window.nativeApi = {
+      persistence: {
+        getClientSettings: vi.fn().mockResolvedValue(null),
+        setClientSettings: vi.fn().mockResolvedValue(undefined),
+      },
+      server: {
+        updateSettings,
+      },
+    } as unknown as LocalApi;
+    setServerConfigSnapshot({
+      ...createBaseServerConfig(),
+      settings: {
+        ...DEFAULT_SERVER_SETTINGS,
+        providerInstances: {
+          [ProviderInstanceId.make("lmstudio")]: {
+            driver: ProviderDriverKind.make("codex"),
+            enabled: true,
+            displayName: "LM Studio Local",
+            config: {
+              ossMode: true,
+              ossBaseUrl: "http://192.168.50.25:1234/v1",
+            },
+          },
+        },
+      },
+    });
+
+    mounted = await render(
+      <AppAtomRegistryProvider>
+        <ProviderSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    await page.getByRole("button", { name: "Open LM Studio Local settings" }).click();
+    await expect
+      .element(page.getByText(/LM Studio models are discovered from the configured server/))
+      .toBeInTheDocument();
+    await page.getByLabelText("LM Studio server URL").fill("http://models.example.com/v1");
+    await page.getByText("New chat defaults and configuration for this provider instance.").click();
+
+    await expect
+      .element(page.getByText(/Plain HTTP is allowed only for localhost or a literal private/))
+      .toBeInTheDocument();
+    expect(updateSettings).not.toHaveBeenCalled();
+  });
+
+  it("shows Codex reset availability above the reset schedule", async () => {
+    const codexProvider: ServerProvider = {
+      ...createOutdatedProvider("codex"),
+      accountRateLimits: {
+        checkedAt: "2026-07-27T00:00:00.000Z",
+        rateLimits: {
+          limitId: "codex",
+          primary: {
+            usedPercent: 25,
+            windowDurationMins: 300,
+            resetsAt: 1_784_944_800,
+          },
+          secondary: {
+            usedPercent: 50,
+            windowDurationMins: 10_080,
+            resetsAt: 1_785_549_600,
+          },
+        },
+        rateLimitResetCredits: {
+          availableCount: 2,
+          credits: null,
+        },
+      },
+    };
+    setServerConfigSnapshot({
+      ...createBaseServerConfig(),
+      providers: [codexProvider],
+    });
+
+    mounted = await render(
+      <AppAtomRegistryProvider>
+        <ProviderSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    await expect
+      .element(page.getByText("Usage limit resets available: 2", { exact: true }))
+      .toBeInTheDocument();
+    await vi.waitFor(() => {
+      const lines = Array.from(document.querySelectorAll<HTMLParagraphElement>("p"));
+      const availabilityIndex = lines.findIndex(
+        (line) => line.textContent === "Usage limit resets available: 2",
+      );
+      const resetScheduleIndex = lines.findIndex((line) =>
+        line.textContent?.includes("Weekly reset:"),
+      );
+
+      expect(availabilityIndex).toBeGreaterThanOrEqual(0);
+      expect(resetScheduleIndex).toBeGreaterThan(availabilityIndex);
     });
   });
 

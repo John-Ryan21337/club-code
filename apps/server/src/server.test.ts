@@ -10,11 +10,14 @@ import { brotliCompressSync, constants as zlibConstants, gzipSync } from "node:z
 import {
   CommandId,
   DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES,
+  DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+  DEFAULT_THREAD_AUTO_NUDGE_SUMMARY,
   DEFAULT_SERVER_SETTINGS,
   EnvironmentId,
   EventId,
   GitCommandError,
   KeybindingRule,
+  ManualFollowUpId,
   MessageId,
   MAX_AMBIENT_IMAGE_FILE_BYTES,
   ExternalLauncherError,
@@ -42,6 +45,7 @@ import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Option from "effect/Option";
@@ -151,6 +155,7 @@ import { AdminPasswordServiceLive } from "./auth/Layers/AdminPasswordService.ts"
 import { AdminPasswordService } from "./auth/Services/AdminPasswordService.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
+import * as ProjectSystemTelemetry from "./diagnostics/ProjectSystemTelemetry.ts";
 import * as RuntimeLayerDiagnostics from "./diagnostics/RuntimeLayerDiagnostics.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import * as Data from "effect/Data";
@@ -236,6 +241,8 @@ const makeDefaultOrchestrationReadModel = () => {
         runtimeMode: "full-access" as const,
         branch: null,
         worktreePath: null,
+        autoNudge: DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+        manualFollowUps: [],
         createdAt: now,
         updatedAt: now,
         archivedAt: null,
@@ -264,6 +271,8 @@ const makeDefaultOrchestrationThreadShell = (
     interactionMode: "default",
     branch: null,
     worktreePath: null,
+    autoNudge: DEFAULT_THREAD_AUTO_NUDGE_SUMMARY,
+    manualFollowUpCount: 0,
     latestTurn: null,
     createdAt: now,
     updatedAt: now,
@@ -503,6 +512,7 @@ const buildAppUnderTest = (options?: {
     serverEnvironment?: Partial<ServerEnvironmentShape>;
     repositoryIdentityResolver?: Partial<RepositoryIdentityResolverShape>;
     usageStats?: Partial<UsageStatsServiceShape>;
+    projectSystemTelemetry?: Partial<ProjectSystemTelemetry.ProjectSystemTelemetryShape>;
     youtubeAccountConnection?: Partial<YouTubeAccountConnectionShape>;
   };
 }) =>
@@ -803,20 +813,68 @@ const buildAppUnderTest = (options?: {
         }),
       ),
       Layer.provide(
-        Layer.mock(ProcessResourceMonitor.ProcessResourceMonitor)({
-          readHistory: (input) =>
-            Effect.succeed({
-              readAt: TEST_EPOCH,
-              windowMs: input.windowMs,
-              bucketMs: input.bucketMs,
-              sampleIntervalMs: 5_000,
-              retainedSampleCount: 0,
-              totalCpuSecondsApprox: 0,
-              buckets: [],
-              topProcesses: [],
-              error: Option.none(),
-            }),
-        }),
+        Layer.mergeAll(
+          Layer.mock(ProcessResourceMonitor.ProcessResourceMonitor)({
+            readHistory: (input) =>
+              Effect.succeed({
+                readAt: TEST_EPOCH,
+                windowMs: input.windowMs,
+                bucketMs: input.bucketMs,
+                sampleIntervalMs: 5_000,
+                retainedSampleCount: 0,
+                totalCpuSecondsApprox: 0,
+                buckets: [],
+                topProcesses: [],
+                error: Option.none(),
+              }),
+          }),
+          Layer.mock(ProjectSystemTelemetry.ProjectSystemTelemetry)({
+            read: (input) =>
+              Effect.succeed({
+                projectId: input.projectId,
+                sampledAt: TEST_EPOCH,
+                minimumSampleIntervalMs: 1_000,
+                platform: "test",
+                architecture: "test",
+                cpu: {
+                  status: "unavailable",
+                  utilizationPercent: null,
+                  logicalProcessorCount: 0,
+                  detail: "CPU telemetry is unavailable.",
+                },
+                memory: {
+                  status: "unavailable",
+                  totalBytes: null,
+                  usedBytes: null,
+                  availableBytes: null,
+                  utilizationPercent: null,
+                  detail: "Memory telemetry is unavailable.",
+                },
+                network: {
+                  status: "unavailable",
+                  receiveBytesPerSecond: null,
+                  transmitBytesPerSecond: null,
+                  detail: "Network throughput telemetry is unavailable.",
+                },
+                gpu: {
+                  status: "unavailable",
+                  adapters: [],
+                  reason: "unsupported",
+                  detail: "No supported GPU telemetry source is available on this system.",
+                },
+                projectVolume: {
+                  status: "unavailable",
+                  totalBytes: null,
+                  usedBytes: null,
+                  availableBytes: null,
+                  utilizationPercent: null,
+                  projectVolumeOnly: true,
+                  detail: "Project-volume telemetry is unavailable.",
+                },
+              }),
+            ...options?.layers?.projectSystemTelemetry,
+          }),
+        ),
       ),
       Layer.provide(
         Layer.mock(RuntimeLayerDiagnostics.RuntimeLayerDiagnostics)({
@@ -932,6 +990,7 @@ const buildAppUnderTest = (options?: {
             }),
           getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 0 }),
           getProjectShellById: () => Effect.succeed(Option.none()),
+          getProjectWorkspaceRootById: () => Effect.succeed(Option.none()),
           getThreadShellById: () => Effect.succeed(Option.none()),
           getPostTerminalStaleSteerCandidateThreadIds: () => Effect.succeed([]),
           getThreadTurnActivityPage: () => Effect.die("unused"),
@@ -1463,7 +1522,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.equal(getHeader(response.headers, "x-frame-options"), "DENY");
       assert.equal(
         getHeader(response.headers, "permissions-policy"),
-        'camera=(), fullscreen=(self "https://www.youtube-nocookie.com" "https://open.spotify.com"), geolocation=(), microphone=(), payment=(), usb=()',
+        'camera=(self), fullscreen=(self "https://www.youtube-nocookie.com" "https://open.spotify.com"), geolocation=(), microphone=(), payment=(), usb=()',
       );
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
@@ -3518,6 +3577,159 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect(
+    "resolves project telemetry paths on the server instead of accepting renderer paths",
+    () =>
+      Effect.gen(function* () {
+        const authoritativeWorkspaceRoot = "M:\\server-owned\\selected-project";
+        let sampledWorkspaceRoot: string | null = null;
+
+        yield* buildAppUnderTest({
+          layers: {
+            projectionSnapshotQuery: {
+              getProjectWorkspaceRootById: (requestedProjectId) =>
+                Effect.succeed(
+                  requestedProjectId === defaultProjectId
+                    ? Option.some(authoritativeWorkspaceRoot)
+                    : Option.none(),
+                ),
+              getProjectShellById: () => Effect.die("Telemetry must not resolve a project shell."),
+            },
+            projectSystemTelemetry: {
+              read: (input) =>
+                Effect.sync(() => {
+                  sampledWorkspaceRoot = input.workspaceRoot;
+                  return {
+                    projectId: input.projectId,
+                    sampledAt: TEST_EPOCH,
+                    minimumSampleIntervalMs: 1_000,
+                    platform: "win32",
+                    architecture: "x64",
+                    cpu: {
+                      status: "available" as const,
+                      utilizationPercent: 25,
+                      logicalProcessorCount: 8,
+                      detail: null,
+                    },
+                    memory: {
+                      status: "available" as const,
+                      totalBytes: 1_000,
+                      usedBytes: 500,
+                      availableBytes: 500,
+                      utilizationPercent: 50,
+                      detail: null,
+                    },
+                    network: {
+                      status: "available" as const,
+                      receiveBytesPerSecond: 1_500,
+                      transmitBytesPerSecond: 750,
+                      detail: null,
+                    },
+                    gpu: {
+                      status: "unavailable" as const,
+                      adapters: [],
+                      reason: "unsupported" as const,
+                      detail: "GPU telemetry is unavailable from this backend.",
+                    },
+                    projectVolume: {
+                      status: "available" as const,
+                      totalBytes: 2_000,
+                      usedBytes: 1_500,
+                      availableBytes: 500,
+                      utilizationPercent: 75,
+                      projectVolumeOnly: true as const,
+                      detail: null,
+                    },
+                  };
+                }),
+            },
+          },
+        });
+
+        const wsUrl = yield* getWsServerUrl("/ws");
+        const response = yield* Effect.scoped(
+          withWsRpcClient(wsUrl, (client) =>
+            client[WS_METHODS.serverGetProjectSystemTelemetry]({
+              projectId: defaultProjectId,
+            }),
+          ),
+        );
+
+        assert.equal(sampledWorkspaceRoot, authoritativeWorkspaceRoot);
+        assert.equal(response.projectId, defaultProjectId);
+        assert.equal(response.projectVolume.projectVolumeOnly, true);
+        assert.equal(response.network.receiveBytesPerSecond, 1_500);
+      }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("fails closed when the selected telemetry project no longer exists", () =>
+    Effect.gen(function* () {
+      let sampled = false;
+      yield* buildAppUnderTest({
+        layers: {
+          projectionSnapshotQuery: {
+            getProjectWorkspaceRootById: () => Effect.succeed(Option.none()),
+          },
+          projectSystemTelemetry: {
+            read: () =>
+              Effect.sync(() => {
+                sampled = true;
+                throw new Error("Telemetry must not sample an unknown project.");
+              }),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const result = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.serverGetProjectSystemTelemetry]({
+            projectId: ProjectId.make("project-no-longer-present"),
+          }),
+        ).pipe(Effect.result),
+      );
+
+      assert.equal(result._tag, "Failure");
+      assert.equal(sampled, false);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("sanitizes project lookup failures before they cross telemetry RPC", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest({
+        layers: {
+          projectionSnapshotQuery: {
+            getProjectWorkspaceRootById: () =>
+              Effect.fail(
+                new PersistenceSqlError({
+                  operation: "private-project-table",
+                  detail: "M:\\private\\database",
+                }),
+              ),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const error = yield* Effect.flip(
+        Effect.scoped(
+          withWsRpcClient(wsUrl, (client) =>
+            client[WS_METHODS.serverGetProjectSystemTelemetry]({
+              projectId: defaultProjectId,
+            }),
+          ),
+        ),
+      );
+
+      assert.equal(error._tag, "ServerProjectSystemTelemetryError");
+      if (error._tag === "ServerProjectSystemTelemetryError") {
+        assert.equal(error.kind, "project-lookup-failed");
+        assert.equal(error.message, "Failed to resolve the selected project.");
+      }
+      assert.notInclude(JSON.stringify(error), "private");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("rejects websocket rpc handshake when session authentication is missing", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -4398,6 +4610,8 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             runtimeMode: "full-access" as const,
             branch: null,
             worktreePath: null,
+            autoNudge: DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+            manualFollowUps: [],
             createdAt: now,
             updatedAt: now,
             archivedAt: null,
@@ -4515,6 +4729,68 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("refreshes Codex usage after a server-authored Auto Nudge prompt", () =>
+    Effect.gen(function* () {
+      const usageRefresh = yield* Deferred.make<ProviderInstanceId>();
+      const provider = {
+        instanceId: defaultModelSelection.instanceId,
+        driver: ProviderDriverKind.make("codex"),
+        enabled: true,
+        installed: true,
+        version: "0.145.0",
+        status: "ready" as const,
+        auth: { status: "authenticated" as const, type: "chatgpt" as const },
+        checkedAt: "2026-01-01T00:00:00.000Z",
+        models: [],
+        slashCommands: [],
+        skills: [],
+      };
+
+      yield* buildAppUnderTest({
+        layers: {
+          providerRegistry: {
+            getProviders: Effect.succeed([provider]),
+            refreshInstanceAccountUsage: (instanceId) =>
+              Deferred.succeed(usageRefresh, instanceId).pipe(Effect.ignore, Effect.as([provider])),
+          },
+          orchestrationEngine: {
+            dispatch: () => Effect.succeed({ sequence: 9 }),
+          },
+          projectionSnapshotQuery: {
+            getThreadShellById: (threadId) =>
+              Effect.succeed(
+                Option.some(
+                  makeDefaultOrchestrationThreadShell({
+                    id: threadId,
+                    modelSelection: defaultModelSelection,
+                  }),
+                ),
+              ),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const result = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
+            type: "thread.auto-nudge.dispatch",
+            commandId: CommandId.make("cmd-auto-nudge-usage-refresh"),
+            threadId: defaultThreadId,
+            expectedAuthorityRevision: 1,
+            completedTurnId: TurnId.make("turn-auto-nudge-usage-refresh"),
+            dispatchSource: "foreground",
+            messageId: MessageId.make("msg-auto-nudge-usage-refresh"),
+            createdAt: "2026-01-01T00:00:00.000Z",
+          }),
+        ),
+      );
+
+      assert.equal(result.sequence, 9);
+      assert.equal(yield* Deferred.await(usageRefresh), defaultModelSelection.instanceId);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("supports lightweight provider usage refreshes over RPC", () =>
     Effect.gen(function* () {
       const instanceId = ProviderInstanceId.make("codex_personal");
@@ -4598,6 +4874,8 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         runtimeMode: "full-access" as const,
         branch: null,
         worktreePath: null,
+        autoNudge: DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+        manualFollowUps: [],
         createdAt: now,
         updatedAt: now,
         archivedAt: null,
@@ -4726,8 +5004,148 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect("enriches replayed project events with repository identity metadata", () =>
+  it.effect("keeps live Auto Nudge prompts in thread detail while shell stays prompt-free", () =>
     Effect.gen(function* () {
+      const sentinelPrompt = "SHELL-MUST-NEVER-SEE-THIS-AUTO-NUDGE-PROMPT";
+      const threadId = ThreadId.make("thread-auto-nudge-shell");
+      const configuredAt = "2026-07-28T12:00:00.000Z";
+      const shell = makeDefaultOrchestrationThreadShell({
+        id: threadId,
+        autoNudge: {
+          authorityRevision: 1,
+          mode: "steady-progress",
+          backgroundContinuation: true,
+          maxRounds: 5,
+          maxMinutes: 30,
+          armedAt: configuredAt,
+          baselineSettledTurnId: null,
+          lastDispatchedSettledTurnId: null,
+          roundsDispatched: 0,
+          lastDispatchedAt: null,
+        },
+      });
+      const detailTemplate = makeDefaultOrchestrationReadModel().threads[0]!;
+      const threadDetail = {
+        ...detailTemplate,
+        id: threadId,
+        title: "Auto Nudge detail",
+      };
+      const releaseConfiguredEvent = yield* Deferred.make<void>();
+      const configuredEvent = {
+        sequence: 11,
+        eventId: EventId.make("event-auto-nudge-shell"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: configuredAt,
+        commandId: CommandId.make("command-auto-nudge-shell"),
+        causationEventId: null,
+        correlationId: CommandId.make("command-auto-nudge-shell"),
+        metadata: {},
+        type: "thread.auto-nudge-configured",
+        payload: {
+          threadId,
+          config: {
+            authorityRevision: 1,
+            mode: "steady-progress",
+            prompt: sentinelPrompt,
+            backgroundContinuation: true,
+            maxRounds: 5,
+            maxMinutes: 30,
+            armedAt: configuredAt,
+            baselineSettledTurnId: null,
+            lastDispatchedSettledTurnId: null,
+            roundsDispatched: 0,
+            lastDispatchedAt: null,
+          },
+        },
+      } satisfies Extract<OrchestrationEvent, { type: "thread.auto-nudge-configured" }>;
+
+      yield* buildAppUnderTest({
+        layers: {
+          projectionSnapshotQuery: {
+            getShellSnapshot: () =>
+              Effect.succeed({
+                snapshotSequence: 10,
+                projects: [],
+                threads: [],
+                updatedAt: configuredAt,
+              }).pipe(Effect.tap(() => Deferred.succeed(releaseConfiguredEvent, undefined))),
+            getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 10 }),
+            getThreadShellById: (inputThreadId) =>
+              Effect.succeed(inputThreadId === threadId ? Option.some(shell) : Option.none()),
+            getThreadDetailSnapshotById: (inputThreadId) =>
+              Effect.succeed(
+                inputThreadId === threadId
+                  ? Option.some({ snapshotSequence: 10, thread: threadDetail })
+                  : Option.none(),
+              ),
+          },
+          orchestrationEngine: {
+            streamDomainEvents: Stream.fromEffect(Deferred.await(releaseConfiguredEvent)).pipe(
+              Stream.map(() => configuredEvent),
+            ),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const shellSubscription = yield* Effect.forkScoped(
+        Effect.scoped(
+          withWsRpcClient(wsUrl, (client) =>
+            client[ORCHESTRATION_WS_METHODS.subscribeShell]({}).pipe(
+              Stream.take(2),
+              Stream.runCollect,
+              Effect.map((chunk) => Array.from(chunk)),
+            ),
+          ),
+        ),
+      );
+      const threadSubscription = yield* Effect.forkScoped(
+        Effect.scoped(
+          withWsRpcClient(wsUrl, (client) =>
+            client[ORCHESTRATION_WS_METHODS.subscribeThread]({ threadId }).pipe(
+              Stream.take(2),
+              Stream.runCollect,
+              Effect.map((chunk) => Array.from(chunk)),
+            ),
+          ),
+        ),
+      );
+
+      const items = yield* Fiber.join(shellSubscription);
+
+      assert.equal(items.length, 2);
+      assert.equal(items[1]?.kind, "thread-upserted");
+      assert.isFalse(JSON.stringify(items).includes(sentinelPrompt));
+      if (items[1]?.kind === "thread-upserted") {
+        assert.equal(items[1].thread.autoNudge.authorityRevision, 1);
+        assert.equal("prompt" in items[1].thread.autoNudge, false);
+      }
+
+      const detailItems = yield* Fiber.join(threadSubscription);
+      assert.equal(detailItems.length, 2);
+      assert.equal(detailItems[1]?.kind, "event");
+      if (detailItems[1]?.kind === "event") {
+        assert.equal(detailItems[1].event.type, "thread.auto-nudge-configured");
+        assert.equal(detailItems[1].event.aggregateId, threadId);
+        assert.isTrue(JSON.stringify(detailItems[1].event).includes(sentinelPrompt));
+      }
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("omits exact-thread prompts while enriching global replay events", () =>
+    Effect.gen(function* () {
+      const sentinelPrompt = "GLOBAL-REPLAY-MUST-NOT-SEE-THIS-AUTO-NUDGE-PROMPT";
+      const manualSentinelPrompt = "GLOBAL-REPLAY-MUST-NOT-SEE-THIS-MANUAL-FOLLOW-UP-PROMPT";
+      const reservationCommandId = CommandId.make("command-manual-follow-up-global-replay");
+      const followUpId = ManualFollowUpId.make("manual-follow-up-global-replay");
+      const messageId = MessageId.make("message-manual-follow-up-global-replay");
+      const manualDispatch = {
+        modelSelection: defaultModelSelection,
+        titleSeed: "Manual follow-up global replay",
+        runtimeMode: "full-access" as const,
+        interactionMode: "default" as const,
+      };
       const repositoryIdentity = {
         canonicalKey: "github.com/t3tools/t3code",
         locator: {
@@ -4745,27 +5163,136 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         layers: {
           orchestrationEngine: {
             readEvents: (_fromSequenceExclusive) =>
-              Stream.make({
-                sequence: 1,
-                eventId: EventId.make("event-1"),
-                aggregateKind: "project",
-                aggregateId: defaultProjectId,
-                occurredAt: "2026-04-05T00:00:00.000Z",
-                commandId: null,
-                causationEventId: null,
-                correlationId: null,
-                metadata: {},
-                type: "project.created",
-                payload: {
-                  projectId: defaultProjectId,
-                  title: "Default Project",
-                  workspaceRoot: "/tmp/default-project",
-                  defaultModelSelection,
-                  scripts: [],
-                  createdAt: "2026-04-05T00:00:00.000Z",
-                  updatedAt: "2026-04-05T00:00:00.000Z",
-                },
-              } satisfies Extract<OrchestrationEvent, { type: "project.created" }>),
+              Stream.make(
+                {
+                  sequence: 1,
+                  eventId: EventId.make("event-auto-nudge-global-replay"),
+                  aggregateKind: "thread",
+                  aggregateId: defaultThreadId,
+                  occurredAt: "2026-04-05T00:00:00.000Z",
+                  commandId: null,
+                  causationEventId: null,
+                  correlationId: null,
+                  metadata: {},
+                  type: "thread.auto-nudge-configured",
+                  payload: {
+                    threadId: defaultThreadId,
+                    config: {
+                      authorityRevision: 1,
+                      mode: "steady-progress",
+                      prompt: sentinelPrompt,
+                      backgroundContinuation: false,
+                      maxRounds: 5,
+                      maxMinutes: 30,
+                      armedAt: "2026-04-05T00:00:00.000Z",
+                      baselineSettledTurnId: null,
+                      lastDispatchedSettledTurnId: null,
+                      roundsDispatched: 0,
+                      lastDispatchedAt: null,
+                    },
+                  },
+                } satisfies Extract<OrchestrationEvent, { type: "thread.auto-nudge-configured" }>,
+                {
+                  sequence: 2,
+                  eventId: EventId.make("event-manual-follow-up-reserved-global-replay"),
+                  aggregateKind: "thread",
+                  aggregateId: defaultThreadId,
+                  occurredAt: "2026-04-05T00:00:00.000Z",
+                  commandId: reservationCommandId,
+                  causationEventId: null,
+                  correlationId: reservationCommandId,
+                  metadata: {},
+                  type: "thread.manual-follow-up-reserved",
+                  payload: {
+                    threadId: defaultThreadId,
+                    item: {
+                      id: followUpId,
+                      messageId,
+                      dispatch: manualDispatch,
+                      status: "reserving",
+                      reservationCommandId,
+                      enqueuedAt: "2026-04-05T00:00:00.000Z",
+                    },
+                  },
+                } satisfies Extract<
+                  OrchestrationEvent,
+                  { type: "thread.manual-follow-up-reserved" }
+                >,
+                {
+                  sequence: 3,
+                  eventId: EventId.make("event-manual-follow-up-enqueued-global-replay"),
+                  aggregateKind: "thread",
+                  aggregateId: defaultThreadId,
+                  occurredAt: "2026-04-05T00:00:01.000Z",
+                  commandId: CommandId.make("command-manual-follow-up-enqueue-global-replay"),
+                  causationEventId: null,
+                  correlationId: CommandId.make("command-manual-follow-up-enqueue-global-replay"),
+                  metadata: {},
+                  type: "thread.manual-follow-up-enqueued",
+                  payload: {
+                    threadId: defaultThreadId,
+                    item: {
+                      id: followUpId,
+                      reservationCommandId,
+                      message: {
+                        messageId,
+                        role: "user",
+                        text: manualSentinelPrompt,
+                        attachments: [],
+                      },
+                      dispatch: manualDispatch,
+                      status: "queued",
+                      enqueuedAt: "2026-04-05T00:00:00.000Z",
+                      activatedAt: null,
+                      activationCommandId: null,
+                    },
+                  },
+                } satisfies Extract<
+                  OrchestrationEvent,
+                  { type: "thread.manual-follow-up-enqueued" }
+                >,
+                {
+                  sequence: 4,
+                  eventId: EventId.make("event-manual-follow-up-count-global-replay"),
+                  aggregateKind: "thread",
+                  aggregateId: defaultThreadId,
+                  occurredAt: "2026-04-05T00:00:00.000Z",
+                  commandId: reservationCommandId,
+                  causationEventId: null,
+                  correlationId: reservationCommandId,
+                  metadata: {},
+                  type: "thread.manual-follow-up-count-changed",
+                  payload: {
+                    threadId: defaultThreadId,
+                    count: 1,
+                    updatedAt: "2026-04-05T00:00:00.000Z",
+                  },
+                } satisfies Extract<
+                  OrchestrationEvent,
+                  { type: "thread.manual-follow-up-count-changed" }
+                >,
+                {
+                  sequence: 5,
+                  eventId: EventId.make("event-2"),
+                  aggregateKind: "project",
+                  aggregateId: defaultProjectId,
+                  occurredAt: "2026-04-05T00:00:00.000Z",
+                  commandId: null,
+                  causationEventId: null,
+                  correlationId: null,
+                  metadata: {},
+                  type: "project.created",
+                  payload: {
+                    projectId: defaultProjectId,
+                    title: "Default Project",
+                    workspaceRoot: "/tmp/default-project",
+                    defaultModelSelection,
+                    scripts: [],
+                    createdAt: "2026-04-05T00:00:00.000Z",
+                    updatedAt: "2026-04-05T00:00:00.000Z",
+                  },
+                } satisfies Extract<OrchestrationEvent, { type: "project.created" }>,
+              ),
           },
           repositoryIdentityResolver: {
             resolve: () => Effect.succeed(repositoryIdentity),
@@ -4782,7 +5309,14 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         ),
       );
 
-      const replayedEvent = replayResult[0];
+      assert.equal(replayResult.length, 2);
+      assert.isFalse(JSON.stringify(replayResult).includes(sentinelPrompt));
+      assert.isFalse(JSON.stringify(replayResult).includes(manualSentinelPrompt));
+      assert.deepEqual(
+        replayResult.map((event) => event.type),
+        ["thread.manual-follow-up-count-changed", "project.created"],
+      );
+      const replayedEvent = replayResult[1];
       assert.equal(replayedEvent?.type, "project.created");
       assert.deepEqual(
         replayedEvent && replayedEvent.type === "project.created"
@@ -4896,13 +5430,11 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect("checks session status before archiving removes the thread from active lookups", () =>
+  it.effect("does not precheck session state before the unconditional archive stop", () =>
     Effect.gen(function* () {
       const threadId = ThreadId.make("thread-archive-precheck");
       const effects: string[] = [];
       const dispatchedCommands: Array<OrchestrationCommand> = [];
-      const now = "2026-01-01T00:00:00.000Z";
-      let archived = false;
 
       yield* buildAppUnderTest({
         layers: {
@@ -4911,34 +5443,12 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               Effect.sync(() => {
                 dispatchedCommands.push(command);
                 effects.push(`dispatch:${command.type}`);
-                if (command.type === "thread.archive") {
-                  archived = true;
-                }
                 return { sequence: dispatchedCommands.length };
               }),
           },
           projectionSnapshotQuery: {
             getThreadShellById: () =>
-              Effect.sync(() => {
-                effects.push(`query:thread-shell:${archived ? "archived" : "active"}`);
-                return archived
-                  ? Option.none()
-                  : Option.some(
-                      makeDefaultOrchestrationThreadShell({
-                        id: threadId,
-                        updatedAt: now,
-                        session: {
-                          threadId,
-                          status: "ready",
-                          providerName: "claudeAgent",
-                          runtimeMode: "full-access",
-                          activeTurnId: null,
-                          lastError: null,
-                          updatedAt: now,
-                        },
-                      }),
-                    );
-              }),
+              Effect.die("archive must not precheck a projection that may race the command"),
           },
         },
       });
@@ -4955,11 +5465,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       );
 
       assert.equal(dispatchResult.sequence, 1);
-      assert.deepEqual(effects, [
-        "query:thread-shell:active",
-        "dispatch:thread.archive",
-        "dispatch:thread.session.stop",
-      ]);
+      assert.deepEqual(effects, ["dispatch:thread.archive", "dispatch:thread.session.stop"]);
       assert.deepEqual(
         dispatchedCommands.map((command) => command.type),
         ["thread.archive", "thread.session.stop"],
@@ -4967,7 +5473,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect("archives without dispatching session stop when the thread has no session", () =>
+  it.effect("still dispatches the idempotent session stop when the thread has no session", () =>
     Effect.gen(function* () {
       const threadId = ThreadId.make("thread-archive-no-session");
       const effects: string[] = [];
@@ -5004,16 +5510,16 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       );
 
       assert.equal(dispatchResult.sequence, 1);
-      assert.deepEqual(effects, ["dispatch:thread.archive"]);
+      assert.deepEqual(effects, ["dispatch:thread.archive", "dispatch:thread.session.stop"]);
       assert.deepEqual(
         dispatchedCommands.map((command) => command.type),
-        ["thread.archive"],
+        ["thread.archive", "thread.session.stop"],
       );
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
   it.effect(
-    "archives without dispatching session stop when the thread session is already stopped",
+    "still dispatches the idempotent session stop when the thread session is already stopped",
     () =>
       Effect.gen(function* () {
         const threadId = ThreadId.make("thread-archive-stopped-session");
@@ -5066,10 +5572,10 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         );
 
         assert.equal(dispatchResult.sequence, 1);
-        assert.deepEqual(effects, ["dispatch:thread.archive"]);
+        assert.deepEqual(effects, ["dispatch:thread.archive", "dispatch:thread.session.stop"]);
         assert.deepEqual(
           dispatchedCommands.map((command) => command.type),
-          ["thread.archive"],
+          ["thread.archive", "thread.session.stop"],
         );
       }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );

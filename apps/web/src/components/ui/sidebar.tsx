@@ -18,6 +18,7 @@ import {
 import { Skeleton } from "~/components/ui/skeleton";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { useIsMobile } from "~/hooks/useMediaQuery";
+import { useSettings } from "~/hooks/useSettings";
 import { getLocalStorageItem, setLocalStorageItem } from "~/hooks/useLocalStorage";
 import * as Schema from "effect/Schema";
 
@@ -99,6 +100,9 @@ function SidebarProvider({
   onOpenChange?: (open: boolean) => void;
 }) {
   const isMobile = useIsMobile();
+  const mobileOptimizedPresentation = useSettings(
+    (settings) => settings.mobileOptimizedPresentation,
+  );
   const [openMobile, setOpenMobile] = React.useState(false);
 
   // This is the internal state of the sidebar.
@@ -154,6 +158,8 @@ function SidebarProvider({
           "group/sidebar-wrapper flex min-h-dvh w-full has-data-[variant=inset]:bg-sidebar",
           className,
         )}
+        data-mobile-layout={isMobile ? "true" : "false"}
+        data-mobile-optimized-presentation={mobileOptimizedPresentation ? "true" : "false"}
         data-slot="sidebar-wrapper"
         style={
           {
@@ -227,8 +233,8 @@ function Sidebar({
         <Sheet onOpenChange={setOpenMobile} open={openMobile} {...props}>
           <SheetPopup
             className={cn(
-              // This Sheet branch only renders below `md` (isMobile === max-md),
-              // so the desktop (>=768px) persistent sidebar is never affected.
+              // This Sheet branch renders below `md` or when the operator has
+              // explicitly forced Mobile optimized presentation.
               // Phones (max-sm) get a near-full-bleed Sheet; the 640-767px band
               // (folding-phone covers, split-screen, small tablets) gets a fixed
               // slide-over drawer over still-visible content instead of a
