@@ -14,12 +14,13 @@ import {
   ProjectionThreadRepository,
   type ProjectionThreadRepositoryShape,
 } from "../Services/ProjectionThreads.ts";
-import { ModelSelection, ThreadAutoNudgeConfig } from "@cafecode/contracts";
+import { ManualFollowUpQueue, ModelSelection, ThreadAutoNudgeConfig } from "@cafecode/contracts";
 
 const ProjectionThreadDbRow = ProjectionThread.mapFields(
   Struct.assign({
     modelSelection: Schema.fromJsonString(ModelSelection),
     autoNudge: Schema.fromJsonString(ThreadAutoNudgeConfig),
+    manualFollowUps: Schema.fromJsonString(ManualFollowUpQueue),
   }),
 );
 type ProjectionThreadDbRow = typeof ProjectionThreadDbRow.Type;
@@ -41,6 +42,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           branch,
           worktree_path,
           auto_nudge_json,
+          manual_follow_ups_json,
           latest_turn_id,
           created_at,
           updated_at,
@@ -61,6 +63,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           ${row.branch},
           ${row.worktreePath},
           ${JSON.stringify(row.autoNudge)},
+          ${JSON.stringify(row.manualFollowUps)},
           ${row.latestTurnId},
           ${row.createdAt},
           ${row.updatedAt},
@@ -81,6 +84,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           branch = excluded.branch,
           worktree_path = excluded.worktree_path,
           auto_nudge_json = excluded.auto_nudge_json,
+          manual_follow_ups_json = excluded.manual_follow_ups_json,
           latest_turn_id = excluded.latest_turn_id,
           created_at = excluded.created_at,
           updated_at = excluded.updated_at,
@@ -108,6 +112,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           branch,
           worktree_path AS "worktreePath",
           auto_nudge_json AS "autoNudge",
+          manual_follow_ups_json AS "manualFollowUps",
           latest_turn_id AS "latestTurnId",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
@@ -137,6 +142,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           branch,
           worktree_path AS "worktreePath",
           auto_nudge_json AS "autoNudge",
+          manual_follow_ups_json AS "manualFollowUps",
           latest_turn_id AS "latestTurnId",
           created_at AS "createdAt",
           updated_at AS "updatedAt",

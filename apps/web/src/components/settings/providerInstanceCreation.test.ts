@@ -5,8 +5,10 @@ import {
   buildProviderCreationConfig,
   deriveProviderCreationInstanceId,
   isProviderCreationInstanceIdAvailable,
+  LM_STUDIO_LOCAL_DISPLAY_NAME,
   LM_STUDIO_PROVIDER_TEMPLATE_ID,
 } from "./providerInstanceCreation";
+import { isLmStudioProviderInstance } from "../../providerInstances";
 
 describe("provider instance creation", () => {
   const codex = ProviderDriverKind.make("codex");
@@ -23,7 +25,7 @@ describe("provider instance creation", () => {
     ).toEqual({
       driver: codex,
       enabled: true,
-      displayName: "LM Studio",
+      displayName: LM_STUDIO_LOCAL_DISPLAY_NAME,
       accentColor: "#16a34a",
       config: {
         ossMode: true,
@@ -31,6 +33,33 @@ describe("provider instance creation", () => {
         runtimeSource: "system",
       },
     });
+  });
+
+  it("recognizes only Codex OSS envelopes as LM Studio instances", () => {
+    expect(
+      isLmStudioProviderInstance({
+        driver: codex,
+        config: { ossMode: true, ossBaseUrl: DEFAULT_LM_STUDIO_BASE_URL },
+      }),
+    ).toBe(true);
+    expect(
+      isLmStudioProviderInstance({
+        driver: codex,
+        config: { ossMode: false },
+      }),
+    ).toBe(false);
+    expect(
+      isLmStudioProviderInstance({
+        driver: ProviderDriverKind.make("opencode"),
+        config: { ossMode: true },
+      }),
+    ).toBe(false);
+    expect(
+      isLmStudioProviderInstance({
+        driver: codex,
+        config: [],
+      }),
+    ).toBe(false);
   });
 
   it("preserves a user-selected LAN endpoint on the LM Studio instance", () => {

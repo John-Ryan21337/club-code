@@ -127,6 +127,16 @@ export interface ProjectionSnapshotQueryShape {
   ) => Effect.Effect<Option.Option<OrchestrationProjectShell>, ProjectionRepositoryError>;
 
   /**
+   * Read only an active project's server-authoritative workspace root.
+   *
+   * Filesystem-facing callers use this narrow query so the renderer can never
+   * turn telemetry into an arbitrary-path probe.
+   */
+  readonly getProjectWorkspaceRootById: (
+    projectId: ProjectId,
+  ) => Effect.Effect<Option.Option<string>, ProjectionRepositoryError>;
+
+  /**
    * Read the earliest active thread for a project.
    */
   readonly getFirstActiveThreadIdByProjectId: (

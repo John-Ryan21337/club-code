@@ -192,6 +192,23 @@ export function normalizeCommandPath(commandPath: string): string {
   return commandPath.replaceAll("\\", "/").toLowerCase();
 }
 
+/**
+ * OpenAI's standalone Codex installer exposes a stable launcher under
+ * LocalAppData on Windows and resolves it through a versioned
+ * `$CODEX_HOME/packages/standalone` target. Accept either side of that
+ * junction so one-click maintenance keeps working before and after real-path
+ * resolution, while avoiding npm/Homebrew installations.
+ */
+export function isCodexStandaloneCommandPath(commandPath: string): boolean {
+  const normalized = normalizeCommandPath(commandPath);
+  const isCodexExecutable = normalized.endsWith("/codex") || normalized.endsWith("/codex.exe");
+  return (
+    isCodexExecutable &&
+    (normalized.includes("/packages/standalone/") ||
+      normalized.includes("/programs/openai/codex/bin/"))
+  );
+}
+
 function isVitePlusGlobalCommandPath(commandPath: string): boolean {
   return normalizeCommandPath(commandPath).includes("/.vite-plus/bin/");
 }

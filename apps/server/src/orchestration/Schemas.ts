@@ -11,6 +11,11 @@ import {
   ThreadAutoNudgeConfiguredPayload as ContractsThreadAutoNudgeConfiguredPayloadSchema,
   ThreadAutoNudgeStoppedPayload as ContractsThreadAutoNudgeStoppedPayloadSchema,
   ThreadAutoNudgeDispatchedPayload as ContractsThreadAutoNudgeDispatchedPayloadSchema,
+  ThreadManualFollowUpAcceptedPayload as ContractsThreadManualFollowUpAcceptedPayloadSchema,
+  ThreadManualFollowUpActivatedPayload as ContractsThreadManualFollowUpActivatedPayloadSchema,
+  ThreadManualFollowUpCancelledPayload as ContractsThreadManualFollowUpCancelledPayloadSchema,
+  ThreadManualFollowUpEnqueuedPayload as ContractsThreadManualFollowUpEnqueuedPayloadSchema,
+  ThreadManualFollowUpReleasedPayload as ContractsThreadManualFollowUpReleasedPayloadSchema,
   ThreadDeletedPayload as ContractsThreadDeletedPayloadSchema,
   ThreadRestoredPayload as ContractsThreadRestoredPayloadSchema,
   ThreadUnarchivedPayload as ContractsThreadUnarchivedPayloadSchema,
@@ -41,6 +46,16 @@ export const ThreadInteractionModeSetPayload = ContractsThreadInteractionModeSet
 export const ThreadAutoNudgeConfiguredPayload = ContractsThreadAutoNudgeConfiguredPayloadSchema;
 export const ThreadAutoNudgeStoppedPayload = ContractsThreadAutoNudgeStoppedPayloadSchema;
 export const ThreadAutoNudgeDispatchedPayload = ContractsThreadAutoNudgeDispatchedPayloadSchema;
+export const ThreadManualFollowUpEnqueuedPayload =
+  ContractsThreadManualFollowUpEnqueuedPayloadSchema;
+export const ThreadManualFollowUpCancelledPayload =
+  ContractsThreadManualFollowUpCancelledPayloadSchema;
+export const ThreadManualFollowUpActivatedPayload =
+  ContractsThreadManualFollowUpActivatedPayloadSchema;
+export const ThreadManualFollowUpAcceptedPayload =
+  ContractsThreadManualFollowUpAcceptedPayloadSchema;
+export const ThreadManualFollowUpReleasedPayload =
+  ContractsThreadManualFollowUpReleasedPayloadSchema;
 export const ThreadDeletedPayload = ContractsThreadDeletedPayloadSchema;
 export const ThreadRestoredPayload = ContractsThreadRestoredPayloadSchema;
 export const ThreadUnarchivedPayload = ContractsThreadUnarchivedPayloadSchema;

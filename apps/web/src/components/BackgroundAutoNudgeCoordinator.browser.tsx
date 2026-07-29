@@ -146,6 +146,7 @@ vi.mock("../store", () => ({
 }));
 
 import { __resetAutoNudgeTurnLedgerForTests } from "../autoNudger";
+import { manualFollowUpPriorityStore } from "../manualFollowUpPriorityStore";
 import { BackgroundAutoNudgeCoordinator } from "./BackgroundAutoNudgeCoordinator";
 
 const READY_SERVER_CONFIG: TestServerConfig = {
@@ -289,6 +290,66 @@ afterEach(async () => {
 });
 
 describe("BackgroundAutoNudgeCoordinator exact-thread authority", () => {
+  it("always yields exact-thread authority to queued operator follow-ups", async () => {
+    const owner = {};
+    const dispatchA = installEnvironmentApi("environment-a");
+    const dispatchB = installEnvironmentApi("environment-b");
+    mocks.savedRuntimeById = {
+      "environment-b": { serverConfig: READY_SERVER_CONFIG },
+    };
+    const queuedThread = threadFixture({
+      environmentId: "environment-a",
+      threadId: "thread-shared",
+      completedTurnId: "turn-a",
+    });
+    const sameIdOtherEnvironment = threadFixture({
+      environmentId: "environment-b",
+      threadId: "thread-shared",
+      completedTurnId: "turn-b",
+    });
+    mocks.environmentStateById = {
+      "environment-a": environmentFixture("environment-a", [queuedThread]),
+      "environment-b": environmentFixture("environment-b", [sameIdOtherEnvironment]),
+    };
+
+    try {
+      const mounted = await render(<BackgroundAutoNudgeCoordinator />);
+      // Let both exact-thread authorities begin their delay, then publish an
+      // operator follow-up before the coordinator's next pass. This proves the
+      // existing delay is discarded rather than merely paused.
+      await new Promise((resolve) => window.setTimeout(resolve, 30));
+      manualFollowUpPriorityStore.replace(owner, [
+        { environmentId: "environment-a", threadId: "thread-shared" },
+      ]);
+      await mounted.rerender(<BackgroundAutoNudgeCoordinator />);
+      await waitForCalls(dispatchB, 1);
+      await new Promise((resolve) => window.setTimeout(resolve, 100));
+
+      expect(dispatchA).not.toHaveBeenCalled();
+      expect(commands(dispatchB)[0]).toEqual(
+        expect.objectContaining({
+          type: "thread.auto-nudge.dispatch",
+          threadId: "thread-shared",
+          completedTurnId: "turn-b",
+        }),
+      );
+
+      manualFollowUpPriorityStore.replace(owner, []);
+      await mounted.rerender(<BackgroundAutoNudgeCoordinator />);
+      expect(dispatchA).not.toHaveBeenCalled();
+      await waitForCalls(dispatchA, 1);
+      expect(commands(dispatchA)[0]).toEqual(
+        expect.objectContaining({
+          type: "thread.auto-nudge.dispatch",
+          threadId: "thread-shared",
+          completedTurnId: "turn-a",
+        }),
+      );
+    } finally {
+      manualFollowUpPriorityStore.release(owner);
+    }
+  });
+
   it("dispatches two same-project threads independently and never sends the prompt", async () => {
     const dispatch = installEnvironmentApi("environment-a");
     const threadA = threadFixture({

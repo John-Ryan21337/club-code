@@ -159,6 +159,7 @@ function makeThreadShellSnapshot(params: {
         hasPendingUserInput: params.hasPendingUserInput ?? false,
         hasActionableProposedPlan: params.hasActionableProposedPlan ?? false,
         autoNudge: DEFAULT_THREAD_AUTO_NUDGE_SUMMARY,
+        manualFollowUpCount: 0,
       },
     ],
   };
@@ -220,6 +221,7 @@ function makeThreadDetail(params: {
     proposedPlans: [],
     checkpoints: [],
     autoNudge: DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+    manualFollowUps: [],
   };
 }
 

@@ -1,4 +1,5 @@
 import {
+  DEFAULT_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE,
   DEFAULT_FALLING_EFFECT_MATRIX_WALK_END_FONT_SIZE,
   DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE,
   type FallingEffectMatrixMotionMode,
@@ -6,6 +7,8 @@ import {
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  createAtmosphereScene,
+  createSeededRandom,
   drawAtmosphereScene,
   resolveAtmosphereProjectedPointInPlace,
   resolveAtmosphereRenderOpacity,
@@ -132,7 +135,72 @@ describe("atmosphere motion projection", () => {
     }
   });
 
-  it("mirrors fluid 1.00px-to-72.00px Walk depth for every effect kind", () => {
+  it("keeps the outer Matrix columns on every viewport edge in directional modes", () => {
+    for (const [width, height] of [
+      [320, 800],
+      [1_440, 720],
+    ] as const) {
+      const scene = createAtmosphereScene(
+        "matrix",
+        width,
+        height,
+        createSeededRandom(width ^ height),
+        1,
+        0,
+      );
+      const leftColumn = scene.particles[0];
+      const rightColumn = scene.particles.at(-1);
+      expect(leftColumn).toBeDefined();
+      expect(rightColumn).toBeDefined();
+      if (!leftColumn || !rightColumn) continue;
+
+      for (const mode of ["forward", "reverse", "walk-forward", "walk-reverse"] as const) {
+        for (const y of [0, height]) {
+          const projectedColumns = scene.particles.map((particle) =>
+            project(scene, particle, particle.x, y, mode, 12, 24),
+          );
+          const left = projectedColumns[0];
+          const right = projectedColumns.at(-1);
+          expect(left).toBeDefined();
+          expect(right).toBeDefined();
+          if (!left || !right) continue;
+
+          expect(left.x, `${mode} ${width}x${height} left @ ${y}`).toBeCloseTo(0, 10);
+          expect(right.x, `${mode} ${width}x${height} right @ ${y}`).toBeCloseTo(width, 10);
+          expect(left.y).toBe(y);
+          expect(right.y).toBe(y);
+
+          const projectedGaps = projectedColumns.slice(1).map((column, index) => {
+            const previous = projectedColumns[index];
+            expect(previous).toBeDefined();
+            if (!previous) return 0;
+            expect(column.x, `${mode} ${width}x${height} order @ ${y}`).toBeGreaterThan(previous.x);
+            return column.x - previous.x;
+          });
+          expect(
+            Math.max(...projectedGaps),
+            `${mode} ${width}x${height} density @ ${y}`,
+          ).toBeLessThanOrEqual((width / (projectedColumns.length - 1)) * 1.5);
+        }
+      }
+    }
+  });
+
+  it("does not add Matrix particles or glyph draw calls for directional perspective", () => {
+    const scene = createAtmosphereScene("matrix", 1_280, 720, createSeededRandom(42), 1, 0);
+    const particleCount = scene.particles.length;
+    const flat = createContextRecorder();
+    drawAtmosphereScene(flat.context, scene, "#00ff00", 1, undefined, "flat", 12, 24);
+
+    for (const mode of ["forward", "reverse", "walk-forward", "walk-reverse"] as const) {
+      const directional = createContextRecorder();
+      drawAtmosphereScene(directional.context, scene, "#00ff00", 1, undefined, mode, 12, 24);
+      expect(scene.particles).toHaveLength(particleCount);
+      expect(directional.texts).toHaveLength(flat.texts.length);
+    }
+  });
+
+  it("mirrors continuously interpolated 1px-to-72px Walk depth for every effect kind", () => {
     for (const kind of ["snow", "rain", "matrix"] as const) {
       const particle = createParticle();
       const scene = createScene(kind, particle);
@@ -174,7 +242,13 @@ describe("atmosphere motion projection", () => {
 
       const intermediate = project(scene, particle, 80, scene.height * 0.432_187, "walk-forward");
       const intermediateSize = intermediate.scale * particle.size;
-      expect(intermediateSize * 100).toBeCloseTo(Math.round(intermediateSize * 100), 10);
+      expect(intermediateSize).toBeCloseTo(
+        DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE +
+          0.432_187 *
+            (DEFAULT_FALLING_EFFECT_MATRIX_WALK_END_FONT_SIZE -
+              DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE),
+        10,
+      );
     }
   });
 
@@ -276,7 +350,7 @@ describe("atmosphere motion projection", () => {
     }
   });
 
-  it("renders Walk Matrix glyphs with two-decimal endpoint font sizes", () => {
+  it("caches Walk Matrix glyph strings on a bounded 1px grid without stepping depth", () => {
     const particle = createParticle({ y: 0 });
     const scene = createScene("matrix", particle);
     const forwardTop = createContextRecorder();
@@ -290,7 +364,7 @@ describe("atmosphere motion projection", () => {
       12.34,
       24.56,
     );
-    expect(forwardTop.fonts.at(-1)).toMatch(/^12\.34px /u);
+    expect(forwardTop.fonts.at(-1)).toMatch(/^12px /u);
 
     particle.y = scene.height;
     const forwardBottom = createContextRecorder();
@@ -304,7 +378,7 @@ describe("atmosphere motion projection", () => {
       12.34,
       24.56,
     );
-    expect(forwardBottom.fonts.at(-1)).toMatch(/^24\.56px /u);
+    expect(forwardBottom.fonts.at(-1)).toMatch(/^25px /u);
 
     const reverseBottom = createContextRecorder();
     drawAtmosphereScene(
@@ -317,7 +391,127 @@ describe("atmosphere motion projection", () => {
       12.34,
       24.56,
     );
-    expect(reverseBottom.fonts.at(-1)).toMatch(/^12\.34px /u);
+    expect(reverseBottom.fonts.at(-1)).toMatch(/^12px /u);
+
+    particle.y = 80;
+    const firstProjection = project(scene, particle, 80, 80, "walk-forward", 12.34, 24.56);
+    const firstBucket = createContextRecorder();
+    drawAtmosphereScene(
+      firstBucket.context,
+      scene,
+      "#00ff00",
+      0.6,
+      undefined,
+      "walk-forward",
+      12.34,
+      24.56,
+    );
+    particle.y = 81;
+    const secondProjection = project(scene, particle, 80, 81, "walk-forward", 12.34, 24.56);
+    const secondBucket = createContextRecorder();
+    drawAtmosphereScene(
+      secondBucket.context,
+      scene,
+      "#00ff00",
+      0.6,
+      undefined,
+      "walk-forward",
+      12.34,
+      24.56,
+    );
+    expect(secondProjection.scale).toBeGreaterThan(firstProjection.scale);
+    expect(secondProjection.depthScale).toBeGreaterThan(firstProjection.depthScale);
+    expect(firstBucket.fonts.at(-1)).toBe(secondBucket.fonts.at(-1));
+  });
+
+  it("applies the baseline only to non-Walk Matrix glyph fonts", () => {
+    const matrixParticle = createParticle({ y: 120, size: 14 });
+    const matrixScene = createScene("matrix", matrixParticle);
+    const defaultMatrix = createContextRecorder();
+    const doubledMatrix = createContextRecorder();
+    drawAtmosphereScene(
+      defaultMatrix.context,
+      matrixScene,
+      "#00ff00",
+      1,
+      undefined,
+      "flat",
+      1,
+      72,
+      DEFAULT_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE,
+    );
+    drawAtmosphereScene(
+      doubledMatrix.context,
+      matrixScene,
+      "#00ff00",
+      1,
+      undefined,
+      "flat",
+      1,
+      72,
+      DEFAULT_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE * 2,
+    );
+    expect(defaultMatrix.fonts.at(-1)).toMatch(/^14px /u);
+    expect(doubledMatrix.fonts.at(-1)).toMatch(/^28px /u);
+
+    for (const kind of ["snow", "rain"] as const) {
+      const particle = createParticle();
+      const scene = createScene(kind, particle);
+      const defaultGeometry = createContextRecorder();
+      const maximumBaselineGeometry = createContextRecorder();
+      drawAtmosphereScene(
+        defaultGeometry.context,
+        scene,
+        "#00ff00",
+        1,
+        undefined,
+        "forward",
+        1,
+        72,
+        DEFAULT_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE,
+      );
+      drawAtmosphereScene(
+        maximumBaselineGeometry.context,
+        scene,
+        "#00ff00",
+        1,
+        undefined,
+        "forward",
+        1,
+        72,
+        72,
+      );
+      expect(maximumBaselineGeometry.arcs).toEqual(defaultGeometry.arcs);
+      expect(maximumBaselineGeometry.moves).toEqual(defaultGeometry.moves);
+      expect(maximumBaselineGeometry.lines).toEqual(defaultGeometry.lines);
+      expect(maximumBaselineGeometry.context.lineWidth).toBe(defaultGeometry.context.lineWidth);
+    }
+
+    const defaultWalk = createContextRecorder();
+    const changedBaselineWalk = createContextRecorder();
+    drawAtmosphereScene(
+      defaultWalk.context,
+      matrixScene,
+      "#00ff00",
+      1,
+      undefined,
+      "walk-forward",
+      12,
+      24,
+      DEFAULT_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE,
+    );
+    drawAtmosphereScene(
+      changedBaselineWalk.context,
+      matrixScene,
+      "#00ff00",
+      1,
+      undefined,
+      "walk-forward",
+      12,
+      24,
+      72,
+    );
+    expect(changedBaselineWalk.fonts).toEqual(defaultWalk.fonts);
   });
 
   it("routes Warp from the exact center to a bounded radial far plane", () => {

@@ -1,4 +1,9 @@
-import type { OrchestrationEvent, OrchestrationReadModel, ThreadId } from "@cafecode/contracts";
+import type {
+  CommandId,
+  OrchestrationEvent,
+  OrchestrationReadModel,
+  ThreadId,
+} from "@cafecode/contracts";
 import {
   DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
   EventId,
@@ -29,6 +34,11 @@ import {
   ThreadAutoNudgeConfiguredPayload,
   ThreadAutoNudgeDispatchedPayload,
   ThreadAutoNudgeStoppedPayload,
+  ThreadManualFollowUpAcceptedPayload,
+  ThreadManualFollowUpActivatedPayload,
+  ThreadManualFollowUpCancelledPayload,
+  ThreadManualFollowUpEnqueuedPayload,
+  ThreadManualFollowUpReleasedPayload,
   ThreadMetaUpdatedPayload,
   ThreadProposedPlanUpsertedPayload,
   ThreadRuntimeModeSetPayload,
@@ -41,8 +51,31 @@ import {
 } from "./Schemas.ts";
 
 type ThreadPatch = Partial<Omit<OrchestrationThread, "id">>;
+type ManualFollowUpItem = OrchestrationThread["manualFollowUps"][number];
 const MAX_THREAD_MESSAGES = 2_000;
 const MAX_THREAD_CHECKPOINTS = 500;
+
+function activateManualFollowUpItem(
+  item: ManualFollowUpItem,
+  activatedAt: string,
+  activationCommandId: CommandId,
+): ManualFollowUpItem {
+  return {
+    ...item,
+    status: "handoff",
+    activatedAt,
+    activationCommandId,
+  };
+}
+
+function releaseManualFollowUpItem(item: ManualFollowUpItem): ManualFollowUpItem {
+  return {
+    ...item,
+    status: "queued",
+    activatedAt: null,
+    activationCommandId: null,
+  };
+}
 
 function copiedThreadScopedId(targetThreadId: ThreadId, id: string): string {
   return `copy:${targetThreadId}:${id}`;
@@ -155,6 +188,7 @@ function cloneThreadContextForDuplicate(input: {
     // prompt must create a fresh provider boundary instead of resuming Claude
     // or Codex state owned by the source thread.
     session: null,
+    manualFollowUps: [],
     updatedAt: duplicatedAt,
   };
 }
@@ -404,6 +438,7 @@ export function projectEvent(
             archivedAt: null,
             deletedAt: null,
             autoNudge: DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+            manualFollowUps: [],
             messages: [],
             activities: [],
             checkpoints: [],
@@ -612,6 +647,135 @@ export function projectEvent(
                 lastDispatchedAt: payload.dispatchedAt,
               },
               updatedAt: payload.dispatchedAt,
+            }),
+          };
+        }),
+      );
+
+    case "thread.manual-follow-up-enqueued":
+      return decodeForEvent(
+        ThreadManualFollowUpEnqueuedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread) {
+            return nextBase;
+          }
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              manualFollowUps: [...thread.manualFollowUps, payload.item],
+              updatedAt: payload.item.enqueuedAt,
+            }),
+          };
+        }),
+      );
+
+    case "thread.manual-follow-up-cancelled":
+      return decodeForEvent(
+        ThreadManualFollowUpCancelledPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread) {
+            return nextBase;
+          }
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              manualFollowUps: thread.manualFollowUps.filter(
+                (item) => item.id !== payload.followUpId,
+              ),
+              updatedAt: payload.cancelledAt,
+            }),
+          };
+        }),
+      );
+
+    case "thread.manual-follow-up-activated":
+      return decodeForEvent(
+        ThreadManualFollowUpActivatedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread) {
+            return nextBase;
+          }
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              manualFollowUps: thread.manualFollowUps.map((item) =>
+                item.id === payload.followUpId
+                  ? activateManualFollowUpItem(
+                      item,
+                      payload.activatedAt,
+                      payload.activationCommandId,
+                    )
+                  : item,
+              ),
+              updatedAt: payload.activatedAt,
+            }),
+          };
+        }),
+      );
+
+    case "thread.manual-follow-up-accepted":
+      return decodeForEvent(
+        ThreadManualFollowUpAcceptedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread) {
+            return nextBase;
+          }
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              manualFollowUps: thread.manualFollowUps.filter(
+                (item) =>
+                  item.id !== payload.followUpId ||
+                  item.activationCommandId !== payload.activationCommandId,
+              ),
+              updatedAt: payload.acceptedAt,
+            }),
+          };
+        }),
+      );
+
+    case "thread.manual-follow-up-released":
+      return decodeForEvent(
+        ThreadManualFollowUpReleasedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread) {
+            return nextBase;
+          }
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              manualFollowUps: thread.manualFollowUps.map((item) =>
+                item.id === payload.followUpId &&
+                item.activationCommandId === payload.activationCommandId
+                  ? releaseManualFollowUpItem(item)
+                  : item,
+              ),
+              updatedAt: payload.releasedAt,
             }),
           };
         }),

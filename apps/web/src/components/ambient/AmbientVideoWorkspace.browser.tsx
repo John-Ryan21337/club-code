@@ -71,6 +71,47 @@ function TestChatAnchor() {
   );
 }
 
+function TestMobileChatAnchor() {
+  const { registerChatAnchor } = useAmbientVideoWorkspace();
+  return (
+    <main ref={registerChatAnchor} style={{ width: "100%", height: "100%" }}>
+      Mobile chat workspace
+    </main>
+  );
+}
+
+async function waitForTwoAnimationFrames(): Promise<void> {
+  await new Promise<void>((resolve) => {
+    window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve()));
+  });
+}
+
+async function expectPlayerGeometry(input: {
+  readonly frame: HTMLIFrameElement;
+  readonly layout: "floating" | "mobile-docked";
+  readonly viewportWidth: number;
+  readonly viewportHeight: number;
+}): Promise<HTMLElement> {
+  await expect
+    .poll(() => {
+      const player = input.frame.closest<HTMLElement>("[data-ambient-video-layout]");
+      const frameRect = input.frame.getBoundingClientRect();
+      const playerRect = player?.getBoundingClientRect();
+      return (
+        player?.dataset.ambientVideoLayout === input.layout &&
+        frameRect.width >= 200 &&
+        frameRect.height >= 200 &&
+        playerRect !== undefined &&
+        playerRect.left >= 0 &&
+        playerRect.right <= input.viewportWidth &&
+        playerRect.top >= 0 &&
+        playerRect.bottom <= input.viewportHeight
+      );
+    })
+    .toBe(true);
+  return input.frame.closest<HTMLElement>("[data-ambient-video-layout]")!;
+}
+
 beforeEach(() => {
   resetServerStateForTests();
   __resetYouTubeUrlQueueForTests();
@@ -83,6 +124,7 @@ afterEach(async () => {
   resetServerStateForTests();
   __resetYouTubeUrlQueueForTests();
   document.body.innerHTML = "";
+  await page.viewport(1_280, 720);
 });
 
 it("seeds the Japanese URL queue from the normal workspace without opening Settings", async () => {
@@ -211,4 +253,193 @@ it("retains the exact player through Settings and remounts it across environment
   expect(secondFrame).not.toBeNull();
   expect(secondFrame).not.toBe(firstFrame);
   expect(secondFrame?.src).toBe(firstFrame?.src);
+});
+
+it("keeps one compliant player through portrait, landscape, minimum bounds, and Settings", async () => {
+  await page.viewport(390, 844);
+  const config = makeConfig({ kind: "video", id: "dQw4w9WgXcQ" });
+  setServerConfigSnapshot({
+    ...config,
+    clientSettings: {
+      ...config.clientSettings,
+      ambientVideoEnabled: true,
+      ambientVideoPresentationMode: "floating",
+    },
+  });
+  mounted = await render(
+    <div style={{ display: "flex", width: "390px", height: "844px" }}>
+      <AppAtomRegistryProvider>
+        <AmbientVideoWorkspace environmentScopeKey="mobile-environment">
+          <TestMobileChatAnchor />
+        </AmbientVideoWorkspace>
+      </AppAtomRegistryProvider>
+    </div>,
+  );
+
+  await expect
+    .poll(() =>
+      document.querySelector<HTMLIFrameElement>('iframe[title="Ambient YouTube video player"]'),
+    )
+    .not.toBeNull();
+  const firstFrame = document.querySelector<HTMLIFrameElement>(
+    'iframe[title="Ambient YouTube video player"]',
+  );
+  expect(firstFrame).not.toBeNull();
+  await expectPlayerGeometry({
+    frame: firstFrame!,
+    layout: "mobile-docked",
+    viewportWidth: 390,
+    viewportHeight: 844,
+  });
+  expect(firstFrame!.referrerPolicy).toBe("strict-origin-when-cross-origin");
+  expect(firstFrame!.allow).toContain("fullscreen");
+  expect(firstFrame!.sandbox.contains("allow-scripts")).toBe(true);
+  expect(firstFrame!.sandbox.contains("allow-same-origin")).toBe(true);
+  expect(firstFrame!.sandbox.contains("allow-presentation")).toBe(true);
+  const embedUrl = new URL(firstFrame!.src);
+  expect(embedUrl.searchParams.get("playsinline")).toBe("1");
+  expect(embedUrl.searchParams.get("origin")).toBe(window.location.origin);
+
+  await page.viewport(844, 390);
+  await mounted.rerender(
+    <div style={{ display: "flex", width: "844px", height: "390px" }}>
+      <AppAtomRegistryProvider>
+        <AmbientVideoWorkspace environmentScopeKey="mobile-environment">
+          <TestMobileChatAnchor />
+        </AmbientVideoWorkspace>
+      </AppAtomRegistryProvider>
+    </div>,
+  );
+  expect(
+    document.querySelector<HTMLIFrameElement>('iframe[title="Ambient YouTube video player"]'),
+  ).toBe(firstFrame);
+  await expectPlayerGeometry({
+    frame: firstFrame!,
+    layout: "floating",
+    viewportWidth: 844,
+    viewportHeight: 390,
+  });
+
+  // At the narrowest legal panel, the two section borders are outside the
+  // iframe's own 200x200 viewport. Controls remain inside the same bounded
+  // panel and the source key keeps the exact iframe alive through the resize.
+  await page.viewport(202, 238);
+  await mounted.rerender(
+    <div style={{ display: "flex", width: "202px", height: "238px" }}>
+      <AppAtomRegistryProvider>
+        <AmbientVideoWorkspace environmentScopeKey="mobile-environment">
+          <TestMobileChatAnchor />
+        </AmbientVideoWorkspace>
+      </AppAtomRegistryProvider>
+    </div>,
+  );
+  expect(
+    document.querySelector<HTMLIFrameElement>('iframe[title="Ambient YouTube video player"]'),
+  ).toBe(firstFrame);
+  const minimumPlayer = await expectPlayerGeometry({
+    frame: firstFrame!,
+    layout: "mobile-docked",
+    viewportWidth: 202,
+    viewportHeight: 238,
+  });
+  const disableButton = minimumPlayer.querySelector<HTMLButtonElement>(
+    'button[aria-label="Disable ambient video"]',
+  );
+  expect(disableButton).not.toBeNull();
+  const disableRect = disableButton!.getBoundingClientRect();
+  expect(disableRect.left).toBeGreaterThanOrEqual(0);
+  expect(disableRect.right).toBeLessThanOrEqual(202);
+
+  await page.viewport(390, 844);
+  await mounted.rerender(
+    <div style={{ display: "flex", width: "390px", height: "844px" }}>
+      <AppAtomRegistryProvider>
+        <AmbientVideoWorkspace environmentScopeKey="mobile-environment" retainPlayerWithoutAnchor>
+          <main>Settings</main>
+        </AmbientVideoWorkspace>
+      </AppAtomRegistryProvider>
+    </div>,
+  );
+  await waitForTwoAnimationFrames();
+  expect(firstFrame?.isConnected).toBe(true);
+  expect(
+    document.querySelector<HTMLIFrameElement>('iframe[title="Ambient YouTube video player"]'),
+  ).toBe(firstFrame);
+});
+
+it("keeps narrow-pane rendering YouTube-only and capability-gated", async () => {
+  await page.viewport(390, 844);
+  const spotifyConfig = makeConfig({
+    kind: "spotify",
+    entityType: "track",
+    id: "4uLU6hMCjMI75M1A2tKUQC",
+  });
+  setServerConfigSnapshot({
+    ...spotifyConfig,
+    clientSettings: {
+      ...spotifyConfig.clientSettings,
+      ambientVideoEnabled: true,
+      ambientVideoPresentationMode: "floating",
+    },
+    ambientExperienceCapabilities: {
+      ...spotifyConfig.ambientExperienceCapabilities,
+      spotifyEmbed: true,
+    },
+  });
+  mounted = await render(
+    <div style={{ display: "flex", width: "390px", height: "844px" }}>
+      <AppAtomRegistryProvider>
+        <AmbientVideoWorkspace environmentScopeKey="mobile-provider-conditions">
+          <TestMobileChatAnchor />
+        </AmbientVideoWorkspace>
+      </AppAtomRegistryProvider>
+    </div>,
+  );
+  await waitForTwoAnimationFrames();
+  expect(
+    document.querySelector<HTMLIFrameElement>('iframe[title="Ambient Spotify track player"]'),
+  ).toBeNull();
+
+  // The existing wide-pane Spotify behavior is unchanged.
+  await page.viewport(900, 600);
+  await mounted.rerender(
+    <div style={{ display: "flex", width: "900px", height: "600px" }}>
+      <AppAtomRegistryProvider>
+        <AmbientVideoWorkspace environmentScopeKey="mobile-provider-conditions">
+          <TestMobileChatAnchor />
+        </AmbientVideoWorkspace>
+      </AppAtomRegistryProvider>
+    </div>,
+  );
+  await expect
+    .poll(() =>
+      document.querySelector<HTMLIFrameElement>('iframe[title="Ambient Spotify track player"]'),
+    )
+    .not.toBeNull();
+
+  const youtubeConfig = makeConfig({ kind: "video", id: "dQw4w9WgXcQ" });
+  setServerConfigSnapshot({
+    ...youtubeConfig,
+    clientSettings: {
+      ...youtubeConfig.clientSettings,
+      ambientVideoEnabled: true,
+      ambientVideoPresentationMode: "floating",
+    },
+    ambientExperienceCapabilities: {
+      ...youtubeConfig.ambientExperienceCapabilities,
+      youtubePlayer: false,
+    },
+  });
+  await page.viewport(390, 844);
+  await mounted.rerender(
+    <div style={{ display: "flex", width: "390px", height: "844px" }}>
+      <AppAtomRegistryProvider>
+        <AmbientVideoWorkspace environmentScopeKey="mobile-provider-conditions">
+          <TestMobileChatAnchor />
+        </AmbientVideoWorkspace>
+      </AppAtomRegistryProvider>
+    </div>,
+  );
+  await waitForTwoAnimationFrames();
+  expect(document.querySelector("iframe")).toBeNull();
 });

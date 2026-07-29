@@ -82,6 +82,32 @@ describe("instance-scoped model selection", () => {
     ).toContain("openai/gpt-5.5");
   });
 
+  it("uses only the callable server inventory for LM Studio instances", () => {
+    const lmStudio = deriveProviderInstanceEntries([
+      provider({
+        instanceId: "lmstudio",
+        models: ["local/gpt-oss-20b"],
+      }),
+    ])[0]!;
+    const settings: UnifiedSettings = {
+      ...DEFAULT_UNIFIED_SETTINGS,
+      providerInstances: {
+        [ProviderInstanceId.make("lmstudio")]: {
+          driver: ProviderDriverKind.make("codex"),
+          config: {
+            ossMode: true,
+            ossBaseUrl: "http://127.0.0.1:1234/v1",
+            customModels: ["gpt-5.6-sol", "opencode/cloud-model"],
+          },
+        },
+      },
+    };
+
+    expect(getAppModelOptionsForInstance(settings, lmStudio).map((option) => option.slug)).toEqual([
+      "local/gpt-oss-20b",
+    ]);
+  });
+
   it("resolves a custom slug against the selected custom instance", () => {
     const providers = [
       provider({ provider: ProviderDriverKind.make("claudeAgent"), instanceId: "claudeAgent" }),

@@ -18,6 +18,7 @@ import {
 } from "../environments/runtime";
 import { readPrimaryEnvironmentDescriptor } from "../environments/primary";
 import { newCommandId, newMessageId } from "../lib/utils";
+import { manualFollowUpPriorityStore } from "../manualFollowUpPriorityStore";
 import { useServerConfig } from "../rpc/serverState";
 import { useStore } from "../store";
 import type { ThreadShell } from "../types";
@@ -154,6 +155,19 @@ export function BackgroundAutoNudgeCoordinator() {
 
         const key = authorityKey(shell, config, latestTurn.turnId);
         liveAuthorityKeys.add(key);
+        // ChatView's operator dispatch metadata is renderer-document state.
+        // Yield before observing eligibility so direct sends, queued work, and
+        // their in-flight handoffs reset this renderer's delay. The server
+        // still arbitrates separate renderer windows independently until the
+        // manual queue becomes server-owned.
+        if (
+          manualFollowUpPriorityStore.has({
+            environmentId: shell.environmentId,
+            threadId: shell.id,
+          })
+        ) {
+          continue;
+        }
         const draft = useComposerDraftStore.getState().getComposerDraft({
           environmentId: shell.environmentId,
           threadId: shell.id,

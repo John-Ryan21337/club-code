@@ -153,6 +153,122 @@ it.effect("Auto Nudge dispatch carries no client prompt", () =>
   }),
 );
 
+it.effect("Auto Nudge shell summary events cannot carry prompt text", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeOrchestrationEvent({
+      sequence: 12,
+      eventId: "event-auto-nudge-shell-summary",
+      type: "thread.auto-nudge-summary-changed",
+      aggregateKind: "thread",
+      aggregateId: threadBase.id,
+      occurredAt: "2026-07-28T00:03:00.000Z",
+      commandId: "command-auto-nudge-shell-summary",
+      causationEventId: null,
+      correlationId: "command-auto-nudge-shell-summary",
+      metadata: {},
+      payload: {
+        threadId: threadBase.id,
+        summary: {
+          authorityRevision: 2,
+          mode: "steady-progress",
+          backgroundContinuation: true,
+          maxRounds: 5,
+          maxMinutes: 30,
+          armedAt: "2026-07-28T00:03:00.000Z",
+          baselineSettledTurnId: null,
+          lastDispatchedSettledTurnId: null,
+          roundsDispatched: 0,
+          lastDispatchedAt: null,
+          prompt: "must be discarded",
+        },
+        updatedAt: "2026-07-28T00:03:00.000Z",
+      },
+    });
+    assert.strictEqual(parsed.type, "thread.auto-nudge-summary-changed");
+    if (parsed.type === "thread.auto-nudge-summary-changed") {
+      assert.strictEqual("prompt" in parsed.payload.summary, false);
+    }
+  }),
+);
+
+it.effect("manual follow-up enqueue preserves the bounded dispatch snapshot", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeClientOrchestrationCommand({
+      type: "thread.manual-follow-up.enqueue",
+      commandId: "command-manual-follow-up-enqueue",
+      threadId: threadBase.id,
+      followUpId: "manual-follow-up-1",
+      message: {
+        messageId: "manual-follow-up-message-1",
+        role: "user",
+        text: "Run this before any automatic continuation.",
+        attachments: [],
+      },
+      dispatch: {
+        modelSelection: {
+          instanceId: "claude-local",
+          model: "claude-opus-4-1",
+        },
+        titleSeed: "Queued title",
+        runtimeMode: "approval-required",
+        interactionMode: "plan",
+        sourceProposedPlan: {
+          threadId: threadBase.id,
+          planId: "plan-1",
+        },
+      },
+      createdAt: "2026-07-28T00:04:00.000Z",
+    });
+
+    assert.strictEqual(parsed.type, "thread.manual-follow-up.enqueue");
+    if (parsed.type === "thread.manual-follow-up.enqueue") {
+      assert.deepStrictEqual(parsed.dispatch, {
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("claude-local"),
+          model: "claude-opus-4-1",
+        },
+        titleSeed: "Queued title",
+        runtimeMode: "approval-required",
+        interactionMode: "plan",
+        sourceProposedPlan: {
+          threadId: threadBase.id,
+          planId: "plan-1",
+        },
+      });
+    }
+  }),
+);
+
+it.effect("manual follow-up activation requires an explicit server-enforced mode", () =>
+  Effect.gen(function* () {
+    for (const activationMode of ["automatic-after-settlement", "operator"] as const) {
+      const parsed = yield* decodeClientOrchestrationCommand({
+        type: "thread.manual-follow-up.activate",
+        commandId: `command-manual-follow-up-activate-${activationMode}`,
+        threadId: threadBase.id,
+        followUpId: "manual-follow-up-1",
+        activationMode,
+        createdAt: "2026-07-28T00:04:01.000Z",
+      });
+      assert.strictEqual(parsed.type, "thread.manual-follow-up.activate");
+      if (parsed.type === "thread.manual-follow-up.activate") {
+        assert.strictEqual(parsed.activationMode, activationMode);
+      }
+    }
+
+    const missingMode = yield* Effect.exit(
+      decodeClientOrchestrationCommand({
+        type: "thread.manual-follow-up.activate",
+        commandId: "command-manual-follow-up-activate-missing-mode",
+        threadId: threadBase.id,
+        followUpId: "manual-follow-up-1",
+        createdAt: "2026-07-28T00:04:01.000Z",
+      }),
+    );
+    assert.strictEqual(missingMode._tag, "Failure");
+  }),
+);
+
 it.effect("generic client turn commands cannot claim Auto Nudge provenance", () =>
   Effect.gen(function* () {
     const genericCommands = [
@@ -206,6 +322,7 @@ it.effect("thread detail and shell decode missing Auto Nudge state to disabled d
     assert.strictEqual(detail.autoNudge.mode, "off");
     assert.strictEqual(detail.autoNudge.authorityRevision, 0);
     assert.strictEqual(detail.autoNudge.prompt, "");
+    assert.deepStrictEqual(detail.manualFollowUps, []);
 
     const shell = yield* decodeOrchestrationThreadShell({
       ...threadBase,
@@ -217,6 +334,8 @@ it.effect("thread detail and shell decode missing Auto Nudge state to disabled d
     });
     assert.strictEqual(shell.autoNudge.mode, "off");
     assert.strictEqual("prompt" in shell.autoNudge, false);
+    assert.strictEqual(shell.manualFollowUpCount, 0);
+    assert.strictEqual("manualFollowUps" in shell, false);
   }),
 );
 

@@ -2,6 +2,7 @@ import {
   ChatAttachment,
   AdditionalWorkspaceRoots,
   IsoDateTime,
+  ManualFollowUpQueue,
   MessageId,
   NonNegativeInt,
   OrchestrationCheckpointFile,
@@ -82,6 +83,7 @@ const ProjectionThreadDbRowSchema = ProjectionThread.mapFields(
   Struct.assign({
     modelSelection: Schema.fromJsonString(ModelSelection),
     autoNudge: Schema.fromJsonString(ThreadAutoNudgeConfig),
+    manualFollowUps: Schema.fromJsonString(ManualFollowUpQueue),
   }),
 );
 const ProjectionThreadActivityDbRowSchema = ProjectionThreadActivity.mapFields(
@@ -133,6 +135,9 @@ const WorkLogPresenceRowSchema = Schema.Struct({
   hasWorkLog: NonNegativeInt,
 });
 const ProjectionProjectLookupRowSchema = ProjectionProjectDbRowSchema;
+const ProjectionProjectWorkspaceRootRowSchema = Schema.Struct({
+  workspaceRoot: Schema.String,
+});
 const ProjectionThreadIdLookupRowSchema = Schema.Struct({
   threadId: ThreadId,
 });
@@ -494,6 +499,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           branch,
           worktree_path AS "worktreePath",
           auto_nudge_json AS "autoNudge",
+          manual_follow_ups_json AS "manualFollowUps",
           latest_turn_id AS "latestTurnId",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
@@ -523,6 +529,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           branch,
           worktree_path AS "worktreePath",
           auto_nudge_json AS "autoNudge",
+          manual_follow_ups_json AS "manualFollowUps",
           latest_turn_id AS "latestTurnId",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
@@ -554,6 +561,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           branch,
           worktree_path AS "worktreePath",
           auto_nudge_json AS "autoNudge",
+          manual_follow_ups_json AS "manualFollowUps",
           latest_turn_id AS "latestTurnId",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
@@ -585,6 +593,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           branch,
           worktree_path AS "worktreePath",
           auto_nudge_json AS "autoNudge",
+          manual_follow_ups_json AS "manualFollowUps",
           latest_turn_id AS "latestTurnId",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
@@ -952,6 +961,19 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       `,
   });
 
+  const getActiveProjectWorkspaceRootById = SqlSchema.findOneOption({
+    Request: ProjectIdLookupInput,
+    Result: ProjectionProjectWorkspaceRootRowSchema,
+    execute: ({ projectId }) =>
+      sql`
+        SELECT workspace_root AS "workspaceRoot"
+        FROM projection_projects
+        WHERE project_id = ${projectId}
+          AND deleted_at IS NULL
+        LIMIT 1
+      `,
+  });
+
   const getFirstActiveThreadIdByProject = SqlSchema.findOneOption({
     Request: ProjectIdLookupInput,
     Result: ProjectionThreadIdLookupRowSchema,
@@ -1002,6 +1024,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           branch,
           worktree_path AS "worktreePath",
           auto_nudge_json AS "autoNudge",
+          manual_follow_ups_json AS "manualFollowUps",
           latest_turn_id AS "latestTurnId",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
@@ -1555,6 +1578,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 branch: row.branch,
                 worktreePath: row.worktreePath,
                 autoNudge: row.autoNudge,
+                manualFollowUps: row.manualFollowUps,
                 latestTurn: latestTurnByThread.get(row.threadId) ?? null,
                 createdAt: row.createdAt,
                 updatedAt: row.updatedAt,
@@ -1758,6 +1782,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   branch: row.branch,
                   worktreePath: row.worktreePath,
                   autoNudge: row.autoNudge,
+                  manualFollowUps: row.manualFollowUps,
                   latestTurn: latestTurnByThread.get(row.threadId) ?? null,
                   createdAt: row.createdAt,
                   updatedAt: row.updatedAt,
@@ -1893,6 +1918,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                     branch: row.branch,
                     worktreePath: row.worktreePath,
                     autoNudge: toThreadAutoNudgeSummary(row.autoNudge),
+                    manualFollowUpCount: row.manualFollowUps.length,
                     latestTurn: latestTurnByThread.get(row.threadId) ?? null,
                     createdAt: row.createdAt,
                     updatedAt: row.updatedAt,
@@ -2032,6 +2058,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   branch: row.branch,
                   worktreePath: row.worktreePath,
                   autoNudge: toThreadAutoNudgeSummary(row.autoNudge),
+                  manualFollowUpCount: row.manualFollowUps.length,
                   latestTurn: latestTurnByThread.get(row.threadId) ?? null,
                   createdAt: row.createdAt,
                   updatedAt: row.updatedAt,
@@ -2177,6 +2204,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   branch: row.branch,
                   worktreePath: row.worktreePath,
                   autoNudge: toThreadAutoNudgeSummary(row.autoNudge),
+                  manualFollowUpCount: row.manualFollowUps.length,
                   latestTurn: latestTurnByThread.get(row.threadId) ?? null,
                   createdAt: row.createdAt,
                   updatedAt: row.updatedAt,
@@ -2291,6 +2319,19 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       ),
     );
 
+  const getProjectWorkspaceRootById: ProjectionSnapshotQueryShape["getProjectWorkspaceRootById"] = (
+    projectId,
+  ) =>
+    getActiveProjectWorkspaceRootById({ projectId }).pipe(
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "ProjectionSnapshotQuery.getProjectWorkspaceRootById:query",
+          "ProjectionSnapshotQuery.getProjectWorkspaceRootById:decodeRow",
+        ),
+      ),
+      Effect.map(Option.map((project) => project.workspaceRoot)),
+    );
+
   const getFirstActiveThreadIdByProjectId: ProjectionSnapshotQueryShape["getFirstActiveThreadIdByProjectId"] =
     (projectId) =>
       getFirstActiveThreadIdByProject({ projectId }).pipe(
@@ -2390,6 +2431,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         branch: threadRow.value.branch,
         worktreePath: threadRow.value.worktreePath,
         autoNudge: toThreadAutoNudgeSummary(threadRow.value.autoNudge),
+        manualFollowUpCount: threadRow.value.manualFollowUps.length,
         latestTurn: Option.isSome(latestTurnRow) ? mapLatestTurn(latestTurnRow.value) : null,
         createdAt: threadRow.value.createdAt,
         updatedAt: threadRow.value.updatedAt,
@@ -2570,6 +2612,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         branch: threadRow.value.branch,
         worktreePath: threadRow.value.worktreePath,
         autoNudge: threadRow.value.autoNudge,
+        manualFollowUps: threadRow.value.manualFollowUps,
         latestTurn: Option.isSome(latestTurnRow) ? mapLatestTurn(latestTurnRow.value) : null,
         createdAt: threadRow.value.createdAt,
         updatedAt: threadRow.value.updatedAt,
@@ -2675,6 +2718,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     getCounts,
     getActiveProjectByWorkspaceRoot,
     getProjectShellById,
+    getProjectWorkspaceRootById,
     getFirstActiveThreadIdByProjectId,
     getThreadCheckpointContext,
     getThreadShellById,

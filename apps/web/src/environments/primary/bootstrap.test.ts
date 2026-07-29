@@ -153,6 +153,25 @@ describe("environmentBootstrap", () => {
     );
   });
 
+  it("uses the browser origin when an older desktop bridge has no environment bootstrap method", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(BASE_ENVIRONMENT));
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("window", {
+      location: new URL("http://192.168.1.107:3773/"),
+      history: {
+        replaceState: vi.fn(),
+      },
+      desktopBridge: {
+        setTheme: vi.fn(),
+      },
+    });
+
+    await expect(resolveInitialPrimaryEnvironmentDescriptor()).resolves.toEqual(BASE_ENVIRONMENT);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://192.168.1.107:3773/.well-known/cafe-code/environment",
+    );
+  });
+
   it("uses the vite proxy for desktop-managed loopback descriptor requests during local dev", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(BASE_ENVIRONMENT));
     vi.stubGlobal("fetch", fetchMock);

@@ -196,6 +196,7 @@ function createMinimalSnapshot(): OrchestrationReadModel {
         proposedPlans: [],
         checkpoints: [],
         autoNudge: DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+        manualFollowUps: [],
         session: {
           threadId: THREAD_ID,
           status: "ready",
@@ -244,6 +245,7 @@ function toShellSnapshot(snapshot: OrchestrationReadModel) {
       hasPendingUserInput: false,
       hasActionableProposedPlan: false,
       autoNudge: DEFAULT_THREAD_AUTO_NUDGE_SUMMARY,
+      manualFollowUpCount: 0,
     })),
     updatedAt: snapshot.updatedAt,
   };

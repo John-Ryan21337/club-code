@@ -64,6 +64,7 @@ import {
 } from "../../modelSelection";
 import {
   deriveProviderInstanceEntries,
+  isLmStudioProviderInstance,
   sortProviderInstanceEntries,
 } from "../../providerInstances";
 import { ensureLocalApi, readLocalApi } from "../../localApi";
@@ -95,7 +96,13 @@ import {
   type ProviderUpdateCandidate,
 } from "../ProviderUpdateLaunchNotification.logic";
 import { ProviderInstanceCard } from "./ProviderInstanceCard";
+import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
 import { DRIVER_OPTIONS, getDriverOption } from "./providerDriverMeta";
+import {
+  LM_STUDIO_LOCAL_DISPLAY_NAME,
+  LM_STUDIO_PROVIDER_TEMPLATE_ID,
+  type ProviderCreationTemplateId,
+} from "./providerInstanceCreation";
 import {
   buildEmptyRecycleBinConfirmationMessage,
   buildProviderInstanceUpdatePatch,
@@ -430,6 +437,10 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.fallingEffectsEnabled !== DEFAULT_UNIFIED_SETTINGS.fallingEffectsEnabled
         ? ["Falling effects"]
         : []),
+      ...(settings.fallingEffectsOverCinemaEnabled !==
+      DEFAULT_UNIFIED_SETTINGS.fallingEffectsOverCinemaEnabled
+        ? ["Falling effects over cinema video"]
+        : []),
       ...(settings.fallingEffectKind !== DEFAULT_UNIFIED_SETTINGS.fallingEffectKind
         ? ["Falling effect"]
         : []),
@@ -437,6 +448,7 @@ export function useSettingsRestore(onRestored?: () => void) {
         ? ["Falling effect color"]
         : []),
       ...listChangedMatrixAtmosphereSettingLabels({
+        fallingEffectMatrixBaseFontSize: settings.fallingEffectMatrixBaseFontSize,
         fallingEffectMatrixColorMode: settings.fallingEffectMatrixColorMode,
         fallingEffectMatrixColorCycleSpeed: settings.fallingEffectMatrixColorCycleSpeed,
         fallingEffectMatrixMotionMode: settings.fallingEffectMatrixMotionMode,
@@ -532,8 +544,10 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.workflowObservatoryEnabled,
       settings.workflowStallWarningSeconds,
       settings.fallingEffectsEnabled,
+      settings.fallingEffectsOverCinemaEnabled,
       settings.fallingEffectKind,
       settings.fallingEffectColor,
+      settings.fallingEffectMatrixBaseFontSize,
       settings.fallingEffectMatrixColorMode,
       settings.fallingEffectMatrixColorCycleSpeed,
       settings.fallingEffectMatrixMotionMode,
@@ -586,6 +600,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       workflowObservatoryEnabled: DEFAULT_UNIFIED_SETTINGS.workflowObservatoryEnabled,
       workflowStallWarningSeconds: DEFAULT_UNIFIED_SETTINGS.workflowStallWarningSeconds,
       fallingEffectsEnabled: DEFAULT_UNIFIED_SETTINGS.fallingEffectsEnabled,
+      fallingEffectsOverCinemaEnabled: DEFAULT_UNIFIED_SETTINGS.fallingEffectsOverCinemaEnabled,
       fallingEffectKind: DEFAULT_UNIFIED_SETTINGS.fallingEffectKind,
       fallingEffectColor: DEFAULT_UNIFIED_SETTINGS.fallingEffectColor,
       ...createMatrixAtmosphereRestorePatch(),
@@ -1726,6 +1741,9 @@ export function ProviderSettingsPanel() {
   const serverProviders = useServerProviders();
   const [isRefreshingProviders, setIsRefreshingProviders] = useState(false);
   const [isAddInstanceDialogOpen, setIsAddInstanceDialogOpen] = useState(false);
+  const [initialProviderTemplateId, setInitialProviderTemplateId] = useState<
+    ProviderCreationTemplateId | undefined
+  >(undefined);
   const [updatingProviderDrivers, setUpdatingProviderDrivers] = useState<
     ReadonlySet<ProviderDriverKind>
   >(() => new Set());
@@ -2000,6 +2018,7 @@ export function ProviderSettingsPanel() {
       });
     }
   }
+  const hasLmStudioInstance = rows.some((row) => isLmStudioProviderInstance(row.instance));
 
   const updateProviderInstance = (
     row: InstanceRow,
@@ -2107,7 +2126,10 @@ export function ProviderSettingsPanel() {
                     size="xs"
                     variant="outline"
                     className="h-7 gap-1.5 px-2 text-xs"
-                    onClick={() => setIsAddInstanceDialogOpen(true)}
+                    onClick={() => {
+                      setInitialProviderTemplateId(undefined);
+                      setIsAddInstanceDialogOpen(true);
+                    }}
                     aria-label="Add provider instance"
                   >
                     <PlusIcon className="size-3" />
@@ -2141,6 +2163,55 @@ export function ProviderSettingsPanel() {
           </div>
         }
       >
+        {!hasLmStudioInstance ? (
+          <div
+            className="border-t border-border/60 first:border-t-0"
+            data-provider-setup="lmstudio"
+          >
+            <div className="px-4 py-3.5 sm:px-5">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="min-w-0 flex-1 space-y-1">
+                  <div className="flex min-w-0 flex-wrap items-center gap-2">
+                    <ProviderInstanceIcon
+                      driverKind={ProviderDriverKind.make("codex")}
+                      displayName={LM_STUDIO_LOCAL_DISPLAY_NAME}
+                      showBadge
+                      statusDotClassName="bg-muted-foreground/50"
+                      className="size-5"
+                      iconClassName="size-4 text-foreground/80"
+                      badgeClassName="right-[-0.125rem] bottom-[-0.125rem] h-3 min-w-3 text-[7px]"
+                    />
+                    <h3 className="truncate text-[13px] font-semibold tracking-[-0.01em] text-foreground">
+                      {LM_STUDIO_LOCAL_DISPLAY_NAME}
+                    </h3>
+                    <span className="rounded bg-muted/60 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                      Not configured
+                    </span>
+                  </div>
+                  <p className="text-xs text-muted-foreground/80">
+                    Connect this computer or a private-LAN LM Studio server. Available chat models
+                    appear in the main model picker after the server is running and provider status
+                    is refreshed. OpenCode is a separate provider.
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="outline"
+                  className="h-7 shrink-0 gap-1.5 px-2 text-xs"
+                  onClick={() => {
+                    setInitialProviderTemplateId(LM_STUDIO_PROVIDER_TEMPLATE_ID);
+                    setIsAddInstanceDialogOpen(true);
+                  }}
+                  aria-label="Set up LM Studio Local"
+                >
+                  <PlusIcon className="size-3.5" />
+                  Set up
+                </Button>
+              </div>
+            </div>
+          </div>
+        ) : null}
         {rows.map((row) => {
           const driverOption = getDriverOption(row.driver);
           const liveProvider = serverProviders.find(
@@ -2274,7 +2345,13 @@ export function ProviderSettingsPanel() {
 
       <AddProviderInstanceDialog
         open={isAddInstanceDialogOpen}
-        onOpenChange={setIsAddInstanceDialogOpen}
+        initialTemplateId={initialProviderTemplateId}
+        onOpenChange={(open) => {
+          setIsAddInstanceDialogOpen(open);
+          if (!open) {
+            setInitialProviderTemplateId(undefined);
+          }
+        }}
       />
     </SettingsPageContainer>
   );

@@ -8,6 +8,13 @@
 - Rust takes a while to compile. Do not prematurely kill Rust/cargo builds.
 - Integration tests that require live provider binaries, real provider credentials, process reaping, or detached daemon handoff should be explicit `*.e2e.test.ts` or documented opt-in commands. Do not silently put flaky external-provider assumptions on the default test path.
 
+## Project Tracking And Release Notes
+
+- Use the Linear project [Club Code Local Release & Cafe Code Restack](https://linear.app/john-ryan-21337/project/club-code-local-release-and-cafe-code-restack-1ae3f90a068e) for actionable work, priorities, blockers, and PR status. Keep issue state evidence-based; do not mark work complete before its required gates and live checks pass.
+- Use the Notion [Club Code Engineering & Release Hub](https://app.notion.com/p/3ac89738280e818aaaf5f69027244cdf) for durable decisions, human/agent handoffs, release notes, and the reasoning behind user-visible changes. Link the relevant Linear issue and GitHub PR when recording a material decision or release result.
+- Git, GitHub, and the recorded test/build outputs remain the technical source of truth. A Linear or Notion update does not prove that code was committed, pushed, built, launched, or included in a PR; record the exact commit, artifact, gate, and live-verification evidence when those facts become true.
+- Update tracking at meaningful boundaries rather than on every edit: accepted scope or design decisions, newly discovered blockers, verified implementation gates, release builds, live verification, and PR publication or reconciliation. Never copy prompts, credentials, provider tokens, private account identifiers, or raw model output into project-management records.
+
 ## Search Discipline
 
 - Prefer `rg` and `rg --files` for source discovery. Do not run broad `find` searches from `/`, `/usr`, `/opt`, `/Users`, or other high-level roots unless the task absolutely requires it and the reason is stated first.
@@ -40,6 +47,7 @@
 - Windows cannot directly spawn Yarn's `.cmd` command shims through the shell-free Effect child-process API. Custom Oxlint fixture tests must invoke `node_modules/oxlint/bin/oxlint` through `process.execPath`; keep `shell: false` so temporary fixture paths are passed as structured arguments, and preserve the same JavaScript entrypoint path on macOS/Linux.
 - Windows subprocess and heavy dynamic-import tests can need longer per-test timeouts under full parallel `turbo` load. Apply longer timeouts only under `process.platform === "win32"` and preserve existing macOS/Linux timeouts.
 - Windows process-table diagnostics must spawn `powershell.exe` directly with `shell: false`; do not route the CIM pipeline through `cmd.exe` or any shell wrapper because `cmd.exe` can misparse PowerShell pipeline syntax before PowerShell receives it. Keep macOS/Linux on the existing `ps -axo pid=,ppid=,pgid=,stat=,pcpu=,rss=,etime=,command=` path. Windows CPU/perf lookup should remain batched once per diagnostics read instead of querying performance counters once per process row. The longer diagnostics timeout exists for Windows CIM latency; if future work needs a tighter POSIX timeout, split the timeout by platform rather than regressing Windows reliability.
+- Windows host-network telemetry must resolve the fixed System32 Windows PowerShell path from a strictly validated `SystemRoot`, disable PowerShell module autoload, import the protected System32 `NetAdapter.psd1` by its exact validated path, call module-qualified `NetAdapter\Get-NetAdapterStatistics`, and use `shell: false`, closed stdin, a minimal environment, a protected System32 working directory, and bounded output/deadlines/unreaped helpers. Never expose adapter names, addresses, endpoints, packet contents, or raw byte counters. Linux keeps its bounded `/proc/net/dev` reader; macOS must report network telemetry explicitly unavailable until a comparably trusted aggregate sampler exists. GPU probing must likewise keep fixed trusted `nvidia-smi` candidates, a protected System32 working directory on Windows, shell-free structured arguments, bounded output/deadlines, and bounded recovery from helpers that fail to close.
 - Windows desktop shell-environment hydration must invoke the fixed `pwsh.exe`/`powershell.exe` candidates directly with structured `-Command` arguments and `shell: false`. Do not add a `cmd.exe` wrapper or `shell: true`: it emits Node DEP0190 warnings, can concatenate arguments unsafely, and is unnecessary for the fixed executable candidates. macOS/Linux retain their existing direct login-shell and `launchctl` probes.
 - Windows `cafe-code killall` process discovery must also spawn `powershell.exe` directly with `shell: false` and consume `Get-CimInstance Win32_Process` JSON. Keep macOS/Linux on targeted `ps -axo pid=,ppid=,command=` discovery, and keep the command's current process plus ancestors protected so `cafe-code killall` does not terminate its own launcher before it finishes reporting results.
 - Windows source checkouts may start Cafe through `Start-CafeCode.ps1`, which checks whether `openssl.exe`/`openssl` is available as an application on `PATH` before launch. On Windows CI and developer machines, `Get-Command` can return multiple Node application matches (for example an `actions/setup-node` toolcache path plus a preinstalled Node path), so the launcher must select one executable path deterministically before probing `--version` or calling `Start-Process`; do not concatenate multiple matches into one command string. The launcher should preserve default local HTTPS when OpenSSL is present, set `CAFE_CODE_HTTPS_ENABLED=false` only when OpenSSL is missing, and remove a nonempty inherited `OPENSSL_CONF` only from the launcher process when it names no existing file so a stale machine override cannot put the backend into a restart loop. Desktop backend configuration must also propagate `CAFE_CODE_HTTPS_ENABLED=false` whenever `DesktopServerExposure` resolves no HTTPS port, while keeping macOS/Linux behavior unchanged by deriving the child environment from the shared exposure config rather than from a platform branch.
@@ -237,6 +245,15 @@ network. The pinned built-in provider has no `env_key` or bearer-token hook, so 
 it supports LM Studio's Require Authentication mode, and do not describe HTTPS as client
 authorization. Use loopback or a separately protected private network, VPN, or firewall.
 
+LM Studio model refreshes must use its OpenAI-compatible `GET /v1/models` response as the
+callable inventory instead of borrowing Codex's cloud catalog. On current LM Studio versions,
+optionally enrich that list from `GET /api/v1/models` so embedding-only entries can be excluded
+and chat models receive friendly names; the OpenAI-compatible list still decides which ids are
+selectable. A stopped server, empty chat inventory, malformed response, or authentication
+requirement must leave the instance visible but non-ready with actionable status text. Cafe does
+not implicitly start LM Studio, load a model, or claim that a downloaded-but-unserved model is
+available.
+
 Codex threads receive the process-local embedded-browser MCP server through per-thread
 `mcp_servers.club_browser` config. Keep the bearer credential in the child-only
 `CAFE_CODE_AGENT_BROWSER_MCP_AUTHORIZATION` environment variable referenced by
@@ -431,6 +448,7 @@ If Claude behavior is unclear, check the official Claude Agent SDK docs, the ins
 
 ## Frontend Lifecycle Rules
 
+- Resource-telemetry graph strokes must consume the exact shared Matrix color frame already resolved for the falling atmosphere, never duplicate palette settings or run a second color clock. Keep the panel, cards, and collapsed control backgrounds fully transparent; subscribe to animated color frames only while expanded and document-visible, and retain the last frozen frame while collapsed, hidden, disabled, or under reduced motion.
 - The renderer should display backend/provider truth and should not synthesize terminal, running, or active-turn state that can conflict with orchestration projections.
 - Scroll-follow behavior should be tolerant of small gaps from the bottom and must not jump to the top when steer messages, late messages, or terminal markers arrive.
 - Timeline scrolling has two explicit modes. While following the tail, live row measurements must keep the final working/message row pinned even when a bounded tool/work-log preview rotates or changes height; coalesce any post-layout correction to one animation frame. Upward wheel/touch/keyboard/scrollbar review intent must synchronously cancel pending tail corrections. While detached for review, disable tail following and enable both data-change and size-change visible-content anchoring so provider updates do not move the text being read. Data-change anchoring must remain disabled in follow mode because it can fight submit-time bottom pinning.

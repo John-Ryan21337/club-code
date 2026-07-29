@@ -50,6 +50,7 @@ import {
   DEFAULT_FALLING_EFFECT_JAPANESE_RATIO,
   DEFAULT_FALLING_EFFECT_KIND,
   DEFAULT_FALLING_EFFECT_LIVE_WORK_VOCABULARY,
+  DEFAULT_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE,
   DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
   DEFAULT_FALLING_EFFECT_MATRIX_COLOR_MODE,
   DEFAULT_FALLING_EFFECT_MATRIX_MOTION_MODE,
@@ -57,6 +58,8 @@ import {
   DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE,
   DEFAULT_FALLING_EFFECT_SPEED,
   DEFAULT_FALLING_EFFECTS_ENABLED,
+  DEFAULT_FALLING_EFFECTS_OVER_CINEMA_ENABLED,
+  FALLING_EFFECT_MATRIX_WALK_FONT_SIZE_STEP,
   DEFAULT_LM_STUDIO_BASE_URL,
   DEFAULT_MODEL_PACING_ENABLED,
   DEFAULT_MODEL_PACING_RESERVE_PERCENT,
@@ -78,6 +81,7 @@ import {
   MAX_BRAND_WORDMARK_PREFIX_LENGTH,
   MAX_FALLING_EFFECT_DENSITY,
   MAX_FALLING_EFFECT_JAPANESE_RATIO,
+  MAX_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE,
   MAX_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
   MAX_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE,
   MAX_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
@@ -91,6 +95,7 @@ import {
   MIN_AMBIENT_OPACITY,
   MIN_FALLING_EFFECT_DENSITY,
   MIN_FALLING_EFFECT_JAPANESE_RATIO,
+  MIN_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE,
   MIN_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
   MIN_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE,
   MIN_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
@@ -211,6 +216,7 @@ describe("client settings", () => {
 
   it("keeps conservative defaults separate from the Club Code first-run profile", () => {
     expect(DEFAULT_CLIENT_SETTINGS.fallingEffectsEnabled).toBe(false);
+    expect(DEFAULT_CLIENT_SETTINGS.fallingEffectsOverCinemaEnabled).toBe(false);
     expect(DEFAULT_CLIENT_SETTINGS.fallingEffectMatrixColorMode).toBe("fixed");
     expect(DEFAULT_CLIENT_SETTINGS.fallingEffectMatrixColorCycleSpeed).toBe(
       DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
@@ -363,7 +369,9 @@ describe("client settings", () => {
   it("defaults every ambient preference to the canonical reset vector", () => {
     expect(DEFAULT_AMBIENT_CLIENT_SETTINGS).toEqual({
       fallingEffectsEnabled: DEFAULT_FALLING_EFFECTS_ENABLED,
+      fallingEffectsOverCinemaEnabled: DEFAULT_FALLING_EFFECTS_OVER_CINEMA_ENABLED,
       fallingEffectKind: DEFAULT_FALLING_EFFECT_KIND,
+      fallingEffectMatrixBaseFontSize: DEFAULT_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE,
       fallingEffectColor: DEFAULT_AMBIENT_COLOR,
       fallingEffectMatrixColorMode: DEFAULT_FALLING_EFFECT_MATRIX_COLOR_MODE,
       fallingEffectMatrixColorCycleSpeed: DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
@@ -421,8 +429,14 @@ describe("client settings", () => {
     expect(decoded.timestampFormat).toBe("24-hour");
     expect(decoded.showSidebarMascot).toBe(false);
     expect(decoded.fallingEffectMatrixColorMode).toBe("fixed");
+    expect(decoded.fallingEffectsOverCinemaEnabled).toBe(
+      DEFAULT_FALLING_EFFECTS_OVER_CINEMA_ENABLED,
+    );
     expect(decoded.fallingEffectMatrixColorCycleSpeed).toBe(
       DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
+    );
+    expect(decoded.fallingEffectMatrixBaseFontSize).toBe(
+      DEFAULT_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE,
     );
     expect(decoded.fallingEffectMatrixMotionMode).toBe(DEFAULT_FALLING_EFFECT_MATRIX_MOTION_MODE);
     expect(decoded.fallingEffectMatrixWalkStartFontSize).toBe(
@@ -446,7 +460,9 @@ describe("client settings", () => {
   it("round-trips the full ambient settings patch and reset vector", () => {
     const configured = decodeClientSettingsPatch({
       fallingEffectsEnabled: true,
+      fallingEffectsOverCinemaEnabled: true,
       fallingEffectKind: "matrix",
+      fallingEffectMatrixBaseFontSize: MAX_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE,
       fallingEffectColor: "  #12AbEf  ",
       fallingEffectMatrixColorMode: "music-reactive",
       fallingEffectMatrixColorCycleSpeed: MAX_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
@@ -488,7 +504,9 @@ describe("client settings", () => {
 
     expect(configured).toEqual({
       fallingEffectsEnabled: true,
+      fallingEffectsOverCinemaEnabled: true,
       fallingEffectKind: "matrix",
+      fallingEffectMatrixBaseFontSize: MAX_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE,
       fallingEffectColor: "#12abef",
       fallingEffectMatrixColorMode: "music-reactive",
       fallingEffectMatrixColorCycleSpeed: MAX_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
@@ -569,6 +587,17 @@ describe("client settings", () => {
         fallingEffectMatrixMotionMode,
       });
     }
+  });
+
+  it("uses 1px Walk controls and glyph-cache buckets while decoding legacy endpoints", () => {
+    expect(FALLING_EFFECT_MATRIX_WALK_FONT_SIZE_STEP).toBe(1);
+    const legacyWalkEndpoints = {
+      fallingEffectMatrixWalkStartFontSize: 12.34,
+      fallingEffectMatrixWalkEndFontSize: 98.76,
+    };
+
+    expect(decodeClientSettingsPatch(legacyWalkEndpoints)).toEqual(legacyWalkEndpoints);
+    expect(decodeClientSettings(legacyWalkEndpoints)).toMatchObject(legacyWalkEndpoints);
   });
 
   it("canonicalizes every explicit ambient color while preserving auto", () => {
@@ -710,6 +739,7 @@ describe("client settings", () => {
       decodeClientSettingsPatch({
         fallingEffectColor: "auto",
         fallingEffectMatrixColorMode: "rainbow-extra",
+        fallingEffectMatrixBaseFontSize: MIN_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE,
         fallingEffectMatrixColorCycleSpeed: MIN_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
         fallingEffectMatrixMotionMode: "reverse",
         fallingEffectMatrixWalkStartFontSize: MIN_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE,
@@ -734,6 +764,7 @@ describe("client settings", () => {
     ).toEqual({
       fallingEffectColor: "auto",
       fallingEffectMatrixColorMode: "rainbow-extra",
+      fallingEffectMatrixBaseFontSize: MIN_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE,
       fallingEffectMatrixColorCycleSpeed: MIN_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
       fallingEffectMatrixMotionMode: "reverse",
       fallingEffectMatrixWalkStartFontSize: MIN_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE,
@@ -765,6 +796,14 @@ describe("client settings", () => {
       { fallingEffectColor: "red" },
       { fallingEffectsEnabled: "yes" },
       { fallingEffectKind: "hail" },
+      {
+        fallingEffectMatrixBaseFontSize: MIN_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE - 1,
+      },
+      {
+        fallingEffectMatrixBaseFontSize: MAX_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE + 1,
+      },
+      { fallingEffectMatrixBaseFontSize: 12.5 },
+      { fallingEffectMatrixBaseFontSize: Number.NaN },
       { fallingEffectMatrixColorMode: "beat-sync" },
       { fallingEffectMatrixMotionMode: "hyperspace" },
       {
@@ -775,7 +814,7 @@ describe("client settings", () => {
       },
       { fallingEffectMatrixColorCycleSpeed: Number.NaN },
       {
-        fallingEffectMatrixWalkStartFontSize: MIN_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE - 0.01,
+        fallingEffectMatrixWalkStartFontSize: 0,
       },
       {
         fallingEffectMatrixWalkEndFontSize: MAX_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE + 0.01,

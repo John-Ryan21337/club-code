@@ -1,8 +1,10 @@
 import {
   CommandId,
   EventId,
+  ManualFollowUpId,
   MessageId,
   ProjectId,
+  ProviderInstanceId,
   ThreadId,
   type OrchestrationEvent,
 } from "@cafecode/contracts";
@@ -222,6 +224,61 @@ describe("OrchestrationSubscriptionHub", () => {
           );
           expect(Option.getOrThrow(target)).toEqual(event);
 
+          const shell = Option.getOrThrow(
+            yield* Stream.runHead(
+              hub.eventsFrom({
+                fromSequenceExclusive: 0,
+                route: { kind: "shell" },
+              }),
+            ),
+          );
+          expect(shell.type).toBe("thread.auto-nudge-summary-changed");
+          if (shell.type === "thread.auto-nudge-summary-changed") {
+            expect(shell.payload).toEqual({
+              threadId: targetThreadId,
+              summary: {
+                authorityRevision: 1,
+                mode: "steady-progress",
+                backgroundContinuation: false,
+                maxRounds: 5,
+                maxMinutes: 30,
+                armedAt: "2026-07-28T00:00:00.000Z",
+                baselineSettledTurnId: null,
+                lastDispatchedSettledTurnId: null,
+                roundsDispatched: 0,
+                lastDispatchedAt: null,
+              },
+              updatedAt: "2026-07-28T00:00:00.000Z",
+            });
+          }
+          expect(JSON.stringify(shell)).not.toContain("exact thread prompt");
+
+          const liveShell = yield* Stream.runHead(
+            hub.eventsFrom({
+              fromSequenceExclusive: 1,
+              route: { kind: "shell" },
+            }),
+          ).pipe(Effect.forkScoped);
+          yield* yieldHub;
+          yield* PubSub.publish(live, {
+            ...event,
+            sequence: 2,
+            eventId: EventId.make("event-auto-nudge-target-live"),
+            occurredAt: "2026-07-28T00:01:00.000Z",
+            commandId: CommandId.make("command-auto-nudge-target-live"),
+            correlationId: CommandId.make("command-auto-nudge-target-live"),
+            payload: {
+              ...event.payload,
+              config: {
+                ...event.payload.config,
+                prompt: "second exact thread prompt",
+              },
+            },
+          });
+          const liveShellEvent = Option.getOrThrow(yield* Fiber.join(liveShell));
+          expect(liveShellEvent.type).toBe("thread.auto-nudge-summary-changed");
+          expect(JSON.stringify(liveShellEvent)).not.toContain("second exact thread prompt");
+
           const unrelated = yield* Stream.runHead(
             hub.eventsFrom({
               fromSequenceExclusive: 0,
@@ -231,6 +288,111 @@ describe("OrchestrationSubscriptionHub", () => {
           yield* yieldHub;
           expect(unrelated.pollUnsafe()).toBeUndefined();
           yield* Fiber.interrupt(unrelated);
+        }),
+      ),
+    );
+  });
+
+  it("keeps manual follow-up prompts exact-thread-only while shell receives the count", async () => {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const live = yield* PubSub.unbounded<OrchestrationEvent>();
+          const engine: OrchestrationEngineShape = {
+            readEvents: () => Stream.empty,
+            dispatch: () => Effect.die("unused"),
+            diagnosticsSnapshot: Effect.die("unused"),
+            streamDomainEvents: Stream.fromPubSub(live),
+          };
+          const hub = yield* makeOrchestrationSubscriptionHub({
+            orchestrationEngine: engine,
+            initialCursor: 0,
+            pollInterval: Duration.hours(1),
+          });
+          const threadId = ThreadId.make("thread-manual-follow-up-target");
+          const enqueued = {
+            sequence: 1,
+            eventId: EventId.make("event-manual-follow-up-enqueued"),
+            type: "thread.manual-follow-up-enqueued",
+            aggregateKind: "thread",
+            aggregateId: threadId,
+            occurredAt: "2026-07-28T00:00:00.000Z",
+            commandId: CommandId.make("command-manual-follow-up-enqueued"),
+            causationEventId: null,
+            correlationId: CommandId.make("command-manual-follow-up-enqueued"),
+            metadata: {},
+            payload: {
+              threadId,
+              item: {
+                id: ManualFollowUpId.make("manual-follow-up-secret"),
+                message: {
+                  messageId: MessageId.make("manual-follow-up-message-secret"),
+                  role: "user",
+                  text: "EXACT-THREAD-MANUAL-PROMPT",
+                  attachments: [],
+                },
+                dispatch: {
+                  modelSelection: {
+                    instanceId: ProviderInstanceId.make("codex"),
+                    model: "gpt-5.6-sol",
+                  },
+                  titleSeed: "Target thread",
+                  runtimeMode: "full-access",
+                  interactionMode: "default",
+                },
+                status: "queued",
+                enqueuedAt: "2026-07-28T00:00:00.000Z",
+                activatedAt: null,
+                activationCommandId: null,
+              },
+            },
+          } satisfies Extract<OrchestrationEvent, { type: "thread.manual-follow-up-enqueued" }>;
+          const countChanged = {
+            sequence: 2,
+            eventId: EventId.make("event-manual-follow-up-count"),
+            type: "thread.manual-follow-up-count-changed",
+            aggregateKind: "thread",
+            aggregateId: threadId,
+            occurredAt: "2026-07-28T00:00:00.000Z",
+            commandId: CommandId.make("command-manual-follow-up-enqueued"),
+            causationEventId: enqueued.eventId,
+            correlationId: CommandId.make("command-manual-follow-up-enqueued"),
+            metadata: {},
+            payload: {
+              threadId,
+              count: 1,
+              updatedAt: "2026-07-28T00:00:00.000Z",
+            },
+          } satisfies Extract<
+            OrchestrationEvent,
+            { type: "thread.manual-follow-up-count-changed" }
+          >;
+
+          yield* yieldHub;
+          yield* PubSub.publish(live, enqueued);
+          yield* PubSub.publish(live, countChanged);
+          yield* yieldHub;
+
+          const detail = Option.getOrThrow(
+            yield* Stream.runHead(
+              hub.eventsFrom({
+                fromSequenceExclusive: 0,
+                route: { kind: "thread", threadId },
+              }),
+            ),
+          );
+          expect(detail).toEqual(enqueued);
+
+          const shell = Option.getOrThrow(
+            yield* Stream.runHead(
+              hub.eventsFrom({
+                fromSequenceExclusive: 0,
+                route: { kind: "shell" },
+              }),
+            ),
+          );
+          expect(shell).toEqual(countChanged);
+          expect(JSON.stringify(shell)).not.toContain("EXACT-THREAD-MANUAL-PROMPT");
         }),
       ),
     );

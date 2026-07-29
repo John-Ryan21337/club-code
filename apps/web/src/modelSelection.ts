@@ -20,7 +20,11 @@ import {
   resolveSelectableProvider,
 } from "./providerModels";
 import { ModelEsque } from "./components/chat/providerIconUtils";
-import { type ProviderInstanceEntry, deriveProviderInstanceEntries } from "./providerInstances";
+import {
+  type ProviderInstanceEntry,
+  deriveProviderInstanceEntries,
+  isLmStudioProviderInstance,
+} from "./providerInstances";
 import { sortModelsForProviderInstance } from "./modelOrdering";
 
 const MAX_CUSTOM_MODEL_COUNT = 32;
@@ -189,7 +193,9 @@ export function getAppModelOptions(
  * when present, falling back to the legacy per-kind
  * `settings.providers[driverKind].customModels` bucket for default
  * instances only. This keeps two instances of the same kind from leaking
- * custom slugs into each other.
+ * custom slugs into each other. LM Studio is intentionally stricter: its
+ * callable server inventory is authoritative, so stale or cloud-authored
+ * custom slugs are never offered under the local instance.
  */
 export function getAppModelOptionsForInstance(
   settings: UnifiedSettings,
@@ -201,7 +207,11 @@ export function getAppModelOptionsForInstance(
     entry.models.filter((model) => !model.isCustom).map((model) => model.slug),
   );
 
-  const customModels = readInstanceCustomModels(settings, entry.instanceId, entry.driverKind);
+  const instanceConfig = settings.providerInstances?.[entry.instanceId];
+  const customModels =
+    instanceConfig && isLmStudioProviderInstance(instanceConfig)
+      ? []
+      : readInstanceCustomModels(settings, entry.instanceId, entry.driverKind);
   const normalizer = entry.driverKind;
   for (const slug of normalizeCustomModelSlugs(customModels, builtInModelSlugs, normalizer)) {
     if (seen.has(slug)) {

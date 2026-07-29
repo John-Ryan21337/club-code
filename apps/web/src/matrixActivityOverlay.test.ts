@@ -1775,6 +1775,65 @@ describe("Matrix provider activity overlay", () => {
     ).toBe(true);
   });
 
+  it("keeps a verified connector visible in every perspective mode", () => {
+    const scene = createAtmosphereScene("matrix", 400, 240, createSeededRandom(713), 1, 0);
+    const from = scene.particles[0]!;
+    const to = scene.particles[1]!;
+    from.x = 60;
+    from.y = 0;
+    to.x = 340;
+    to.y = scene.height;
+    const state = createMatrixActivityAnimationState();
+    state.links.push({
+      fromAnchorIndex: 0,
+      toAnchorIndex: 1,
+      operationAnchorIndex: 1,
+      category: "network",
+      intensity: 1,
+      linePulse: 1,
+      colorHue: 184,
+      packetProgress: 0,
+    });
+    state.linkCount = 1;
+    state.reducedMotion = true;
+
+    for (const motionMode of [
+      "flat",
+      "forward",
+      "reverse",
+      "tunnel",
+      "walk-forward",
+      "walk-reverse",
+    ] as const) {
+      const recording = createRecordingContext();
+      drawMatrixActivityAnimation(
+        recording.context,
+        scene,
+        state,
+        0.8,
+        "random",
+        UNIFORM_MATRIX_FRAME,
+        motionMode,
+        12,
+        32,
+      );
+
+      const connectorStrokes = recording.draws.filter((draw) => draw.kind === "stroke");
+      expect(connectorStrokes, motionMode).toHaveLength(
+        motionMode === "flat" ? 1 : MATRIX_ACTIVITY_DEPTH_ROUTE_SEGMENTS,
+      );
+      expect(
+        connectorStrokes.every(
+          (draw) =>
+            Number.isFinite(draw.lineWidth) &&
+            draw.lineWidth > 0 &&
+            draw.lineWidth <= MAX_MATRIX_ACTIVITY_DEPTH_LINE_WIDTH,
+        ),
+        motionMode,
+      ).toBe(true);
+    }
+  });
+
   it("renders a Warp route narrowest around its center plane", () => {
     const scene = createAtmosphereScene("matrix", 400, 240, createSeededRandom(991), 1, 0);
     const from = scene.particles[0]!;
@@ -2117,68 +2176,75 @@ describe("Matrix provider activity overlay", () => {
     expect(recording.draws.every((draw) => draw.style !== "#ffffff")).toBe(true);
   });
 
-  it("renders a real selected-thread agent lifecycle through the complete canvas path", () => {
-    const environmentId = EnvironmentId.make("environment-render-integration");
-    const threadId = ThreadId.make("thread-render-integration");
-    const now = Date.parse("2026-07-23T12:00:01.000Z");
-    const lifecycle = [
-      activity(
-        "integration-start",
-        "2026-07-23T12:00:00.800Z",
-        {
-          itemType: "collab_agent_tool_call",
-          itemId: "integration-agent",
-          observed: { providerObserved: true, activityType: "agent" },
-        },
-        "tool.started",
-      ),
-      activity(
-        "integration-complete",
-        "2026-07-23T12:00:01.000Z",
-        {
-          itemType: "collab_agent_tool_call",
-          itemId: "integration-agent",
-          observed: { providerObserved: true, activityType: "agent" },
-        },
-        "tool.completed",
-      ),
-    ];
-    const appState = {
-      environmentStateById: {
-        [environmentId]: {
-          activityIdsByThreadId: { [threadId]: lifecycle.map((entry) => entry.id) },
-          activityByThreadId: {
-            [threadId]: Object.fromEntries(lifecycle.map((entry) => [entry.id, entry])),
+  it.each([
+    ["network", "web_search"],
+    ["database", "dynamic_tool_call"],
+    ["agent", "collab_agent_tool_call"],
+  ] as const)(
+    "renders a real selected-thread %s lifecycle through the complete canvas path",
+    (category, itemType) => {
+      const environmentId = EnvironmentId.make("environment-render-integration");
+      const threadId = ThreadId.make("thread-render-integration");
+      const now = Date.parse("2026-07-23T12:00:01.000Z");
+      const lifecycle = [
+        activity(
+          "integration-start",
+          "2026-07-23T12:00:00.800Z",
+          {
+            itemType,
+            itemId: `integration-${category}`,
+            observed: { providerObserved: true, activityType: category },
+          },
+          "tool.started",
+        ),
+        activity(
+          "integration-complete",
+          "2026-07-23T12:00:01.000Z",
+          {
+            itemType,
+            itemId: `integration-${category}`,
+            observed: { providerObserved: true, activityType: category },
+          },
+          "tool.completed",
+        ),
+      ];
+      const appState = {
+        environmentStateById: {
+          [environmentId]: {
+            activityIdsByThreadId: { [threadId]: lifecycle.map((entry) => entry.id) },
+            activityByThreadId: {
+              [threadId]: Object.fromEntries(lifecycle.map((entry) => [entry.id, entry])),
+            },
           },
         },
-      },
-    } as unknown as AppState;
-    const events = decodeMatrixActivityEvents(
-      selectMatrixActivityEventsKey(appState, { environmentId, threadId }),
-    );
-    const scene = createAtmosphereScene("matrix", 640, 480, createSeededRandom(17), undefined, 0);
-    const animation = createMatrixActivityAnimationState();
-    updateMatrixActivityAnimationInPlace(animation, events, now, scene.particles.length, false);
-    const recording = createRecordingContext();
-    drawMatrixActivityAnimation(
-      recording.context,
-      scene,
-      animation,
-      0.5,
-      "matrix",
-      UNIFORM_MATRIX_FRAME,
-    );
+      } as unknown as AppState;
+      const events = decodeMatrixActivityEvents(
+        selectMatrixActivityEventsKey(appState, { environmentId, threadId }),
+      );
+      const scene = createAtmosphereScene("matrix", 640, 480, createSeededRandom(17), undefined, 0);
+      const animation = createMatrixActivityAnimationState();
+      updateMatrixActivityAnimationInPlace(animation, events, now, scene.particles.length, false);
+      const recording = createRecordingContext();
+      drawMatrixActivityAnimation(
+        recording.context,
+        scene,
+        animation,
+        0.5,
+        "matrix",
+        UNIFORM_MATRIX_FRAME,
+      );
 
-    expect(events).toHaveLength(2);
-    expect(events.every((event) => event.category === "agent")).toBe(true);
-    expect(animation.linkCount).toBe(1);
-    expect(recording.draws.filter((draw) => draw.kind === "stroke")).toHaveLength(
-      1 + MATRIX_ACTIVITY_PACKET_COUNT + 2,
-    );
-    expect(recording.draws.filter((draw) => draw.kind === "fill")).toHaveLength(
-      MATRIX_ACTIVITY_PACKET_COUNT,
-    );
-    expect(recording.draws.every((draw) => draw.alpha === 0.5)).toBe(true);
-    expect(recording.draws.every((draw) => draw.style === UNIFORM_MATRIX_FRAME.color)).toBe(true);
-  });
+      expect(events).toHaveLength(2);
+      expect(events.every((event) => event.category === category)).toBe(true);
+      expect(animation.linkCount).toBe(1);
+      expect(recording.draws.filter((draw) => draw.kind === "stroke")).toHaveLength(
+        1 + MATRIX_ACTIVITY_PACKET_COUNT + 2,
+      );
+      expect(recording.draws.filter((draw) => draw.kind === "fill")).toHaveLength(
+        MATRIX_ACTIVITY_PACKET_COUNT,
+      );
+      expect(recording.draws.every((draw) => draw.alpha === 0.5)).toBe(true);
+      expect(recording.draws.every((draw) => draw.style === UNIFORM_MATRIX_FRAME.color)).toBe(true);
+    },
+  );
 });

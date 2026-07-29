@@ -1,5 +1,8 @@
 import type {
   EnvironmentId,
+  ManualFollowUpDispatchOptions,
+  ManualFollowUpId,
+  ManualFollowUpStatus,
   ModelSelection,
   OrchestrationLatestTurn,
   OrchestrationProposedPlanId,
@@ -36,6 +39,21 @@ export interface ChatImageAttachment {
 }
 
 export type ChatAttachment = ChatImageAttachment;
+
+export interface ThreadManualFollowUp {
+  id: ManualFollowUpId;
+  message: {
+    messageId: MessageId;
+    role: "user";
+    text: string;
+    attachments: ChatAttachment[];
+  };
+  dispatch: ManualFollowUpDispatchOptions;
+  status: ManualFollowUpStatus;
+  enqueuedAt: string;
+  activatedAt: string | null;
+  activationCommandId: string | null;
+}
 
 export interface ChatMessage {
   id: MessageId;
@@ -111,6 +129,7 @@ export interface Thread {
   turnDiffSummaries: TurnDiffSummary[];
   activities: OrchestrationThreadActivity[];
   autoNudge: ThreadAutoNudgeConfig;
+  manualFollowUps: ThreadManualFollowUp[];
 }
 
 export interface ThreadShell {
@@ -129,6 +148,7 @@ export interface ThreadShell {
   branch: string | null;
   worktreePath: string | null;
   autoNudge: ThreadAutoNudgeSummary;
+  manualFollowUpCount: number;
 }
 
 export interface ThreadTurnState {

@@ -149,6 +149,20 @@ export const MIN_FALLING_EFFECT_SPEED = 0.25;
 export const MAX_FALLING_EFFECT_SPEED = 4;
 export const DEFAULT_FALLING_EFFECT_SPEED = 1;
 /**
+ * Non-Walk Matrix modes scale their existing glyph-size variation around this
+ * baseline. Rain and snow retain their independent drop/flake geometry.
+ */
+export const MIN_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE = 1;
+export const MAX_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE = 72;
+export const DEFAULT_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE = 14;
+export const FallingEffectMatrixBaseFontSize = Schema.Int.check(
+  Schema.isBetween({
+    minimum: MIN_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE,
+    maximum: MAX_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE,
+  }),
+);
+export type FallingEffectMatrixBaseFontSize = typeof FallingEffectMatrixBaseFontSize.Type;
+/**
  * Independent hue-cycle multiplier. The upper bound is intentionally high
  * enough for a visible shimmer, but changes no particle or canvas draw budget.
  */
@@ -232,6 +246,11 @@ export type AmbientOpacity = typeof AmbientOpacity.Type;
 export const FallingEffectKind = Schema.Literals(["snow", "rain", "matrix"]);
 export type FallingEffectKind = typeof FallingEffectKind.Type;
 export const DEFAULT_FALLING_EFFECTS_ENABLED = false;
+/**
+ * Cinema media stays visually unobstructed unless the user explicitly opts
+ * into a clipped, pointer-transparent copy of the selected falling effect.
+ */
+export const DEFAULT_FALLING_EFFECTS_OVER_CINEMA_ENABLED = false;
 export const DEFAULT_FALLING_EFFECT_KIND: FallingEffectKind = "snow";
 
 /**
@@ -273,15 +292,28 @@ export const FallingEffectMatrixMotionMode = Schema.Literals([
 export type FallingEffectMatrixMotionMode = typeof FallingEffectMatrixMotionMode.Type;
 export const DEFAULT_FALLING_EFFECT_MATRIX_MOTION_MODE: FallingEffectMatrixMotionMode = "flat";
 
-export const MIN_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE = 0.01;
+/**
+ * Walk endpoint controls and rendered Matrix font strings use whole-pixel
+ * buckets. Projection still interpolates depth and position continuously
+ * between the selected endpoints.
+ */
+export const MIN_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE = 1;
 export const MAX_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE = 144;
-export const FALLING_EFFECT_MATRIX_WALK_FONT_SIZE_STEP = 0.01;
+export const FALLING_EFFECT_MATRIX_WALK_FONT_SIZE_STEP = 1;
+/**
+ * Older builds accepted two-decimal endpoint settings as low as 0.01px.
+ * Continue decoding those persisted values so an upgrade never discards the
+ * rest of client-settings.json; the UI and glyph cache normalize new work onto
+ * the cheaper whole-pixel grid.
+ */
+const LEGACY_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE_MINIMUM = 0.01;
+const LEGACY_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE_PRECISION = 0.01;
 export const DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE = 1;
 export const DEFAULT_FALLING_EFFECT_MATRIX_WALK_END_FONT_SIZE = 72;
 export const FallingEffectMatrixWalkFontSize = Schema.Number.check(
-  Schema.isMultipleOf(FALLING_EFFECT_MATRIX_WALK_FONT_SIZE_STEP),
+  Schema.isMultipleOf(LEGACY_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE_PRECISION),
   Schema.isBetween({
-    minimum: MIN_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE,
+    minimum: LEGACY_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE_MINIMUM,
     maximum: MAX_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE,
   }),
 );
@@ -553,8 +585,14 @@ export const ClientSettingsSchema = Schema.Struct({
   fallingEffectsEnabled: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECTS_ENABLED)),
   ),
+  fallingEffectsOverCinemaEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECTS_OVER_CINEMA_ENABLED)),
+  ),
   fallingEffectKind: FallingEffectKind.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_KIND)),
+  ),
+  fallingEffectMatrixBaseFontSize: FallingEffectMatrixBaseFontSize.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE)),
   ),
   fallingEffectColor: AmbientColor.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_COLOR)),
@@ -809,7 +847,9 @@ export type ClientSettings = typeof ClientSettingsSchema.Type;
 
 export const AMBIENT_CLIENT_SETTINGS_KEYS = [
   "fallingEffectsEnabled",
+  "fallingEffectsOverCinemaEnabled",
   "fallingEffectKind",
+  "fallingEffectMatrixBaseFontSize",
   "fallingEffectColor",
   "fallingEffectMatrixColorMode",
   "fallingEffectMatrixColorCycleSpeed",
@@ -859,7 +899,9 @@ export type AmbientClientSettings = Pick<
 
 export const DEFAULT_AMBIENT_CLIENT_SETTINGS: AmbientClientSettings = {
   fallingEffectsEnabled: DEFAULT_FALLING_EFFECTS_ENABLED,
+  fallingEffectsOverCinemaEnabled: DEFAULT_FALLING_EFFECTS_OVER_CINEMA_ENABLED,
   fallingEffectKind: DEFAULT_FALLING_EFFECT_KIND,
+  fallingEffectMatrixBaseFontSize: DEFAULT_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE,
   fallingEffectColor: DEFAULT_AMBIENT_COLOR,
   fallingEffectMatrixColorMode: DEFAULT_FALLING_EFFECT_MATRIX_COLOR_MODE,
   fallingEffectMatrixColorCycleSpeed: DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
@@ -1656,7 +1698,9 @@ export const ClientSettingsPatch = Schema.Struct({
   diffWordWrap: Schema.optionalKey(Schema.Boolean),
   continueBackgroundAnimations: Schema.optionalKey(Schema.Boolean),
   fallingEffectsEnabled: Schema.optionalKey(Schema.Boolean),
+  fallingEffectsOverCinemaEnabled: Schema.optionalKey(Schema.Boolean),
   fallingEffectKind: Schema.optionalKey(FallingEffectKind),
+  fallingEffectMatrixBaseFontSize: Schema.optionalKey(FallingEffectMatrixBaseFontSize),
   fallingEffectColor: Schema.optionalKey(AmbientColor),
   fallingEffectMatrixColorMode: Schema.optionalKey(FallingEffectMatrixColorMode),
   fallingEffectMatrixColorCycleSpeed: Schema.optionalKey(FallingEffectMatrixColorCycleSpeed),

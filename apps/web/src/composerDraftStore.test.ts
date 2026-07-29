@@ -14,6 +14,7 @@ import {
   ThreadId,
   type ModelSelection,
   type ProviderOptionSelection,
+  type ServerProvider,
 } from "@cafecode/contracts";
 import { createModelSelection } from "@cafecode/shared/model";
 
@@ -1368,6 +1369,164 @@ describe("composerDraftStore provider-scoped option updates", () => {
     expect(resolved.modelOptions?.[CODEX_INSTANCE]).toEqual(
       toSelections({ reasoningEffort: "low" }),
     );
+  });
+
+  it("preserves an ordinary provider project model while its snapshot inventory is empty", () => {
+    const resolved = deriveEffectiveComposerModelState({
+      draft: {
+        activeProvider: CODEX_INSTANCE,
+        modelSelectionByProvider: {},
+      },
+      providers: [
+        {
+          instanceId: CODEX_INSTANCE,
+          driver: CODEX_DRIVER,
+          displayName: "Codex",
+          enabled: true,
+          installed: true,
+          version: "1.0.0",
+          status: "ready",
+          auth: { status: "authenticated" },
+          checkedAt: "2026-01-01T00:00:00.000Z",
+          models: [],
+          slashCommands: [],
+          skills: [],
+        },
+      ],
+      selectedProvider: CODEX_DRIVER,
+      selectedInstanceId: CODEX_INSTANCE,
+      threadModelSelection: null,
+      projectModelSelection: createModelSelection(CODEX_INSTANCE, "gpt-5", []),
+      settings: DEFAULT_UNIFIED_SETTINGS,
+    });
+
+    expect(resolved.selectedModel).toBe("gpt-5");
+  });
+
+  it("does not route an empty LM Studio instance to a cloud Codex model", () => {
+    const lmStudioInstance = ProviderInstanceId.make("lmstudio");
+    const providers: ReadonlyArray<ServerProvider> = [
+      {
+        instanceId: CODEX_INSTANCE,
+        driver: CODEX_DRIVER,
+        displayName: "Codex",
+        enabled: true,
+        installed: true,
+        version: "1.0.0",
+        status: "ready",
+        auth: { status: "authenticated" },
+        checkedAt: "2026-01-01T00:00:00.000Z",
+        models: [
+          {
+            slug: "gpt-5.6-sol",
+            name: "GPT-5.6 Sol",
+            isCustom: false,
+            capabilities: null,
+          },
+        ],
+        slashCommands: [],
+        skills: [],
+      },
+      {
+        instanceId: lmStudioInstance,
+        driver: CODEX_DRIVER,
+        displayName: "LM Studio Local",
+        enabled: true,
+        installed: true,
+        version: "1.0.0",
+        status: "error",
+        auth: { status: "unknown", type: "local" },
+        checkedAt: "2026-01-01T00:00:00.000Z",
+        models: [],
+        slashCommands: [],
+        skills: [],
+      },
+    ];
+    const settings = {
+      ...DEFAULT_UNIFIED_SETTINGS,
+      providerInstances: {
+        [lmStudioInstance]: {
+          driver: CODEX_DRIVER,
+          enabled: true,
+          config: {
+            ossMode: true,
+            ossBaseUrl: "http://127.0.0.1:1234/v1",
+            customModels: ["gpt-5.6-sol"],
+          },
+        },
+      },
+    };
+
+    const resolved = deriveEffectiveComposerModelState({
+      draft: {
+        activeProvider: lmStudioInstance,
+        modelSelectionByProvider: {
+          [lmStudioInstance]: createModelSelection(lmStudioInstance, "gpt-5.6-sol", []),
+        },
+      },
+      providers,
+      selectedProvider: CODEX_DRIVER,
+      selectedInstanceId: lmStudioInstance,
+      threadModelSelection: null,
+      projectModelSelection: null,
+      settings,
+    });
+
+    expect(resolved.selectedModel).toBe("");
+  });
+
+  it("does not use cloud Codex fallback before a configured LM Studio snapshot arrives", () => {
+    const lmStudioInstance = ProviderInstanceId.make("lmstudio");
+    const cloudCodexProvider = {
+      instanceId: CODEX_INSTANCE,
+      driver: CODEX_DRIVER,
+      displayName: "Codex",
+      enabled: true,
+      installed: true,
+      version: "1.0.0",
+      status: "ready",
+      auth: { status: "authenticated" },
+      checkedAt: "2026-01-01T00:00:00.000Z",
+      models: [
+        {
+          slug: "gpt-5.6-sol",
+          name: "GPT-5.6 Sol",
+          isCustom: false,
+          capabilities: null,
+        },
+      ],
+      slashCommands: [],
+      skills: [],
+    } as const satisfies ServerProvider;
+
+    const resolved = deriveEffectiveComposerModelState({
+      draft: {
+        activeProvider: lmStudioInstance,
+        modelSelectionByProvider: {
+          [lmStudioInstance]: createModelSelection(lmStudioInstance, "gpt-5.6-sol", []),
+        },
+      },
+      providers: [cloudCodexProvider],
+      selectedProvider: CODEX_DRIVER,
+      selectedInstanceId: lmStudioInstance,
+      threadModelSelection: null,
+      projectModelSelection: null,
+      settings: {
+        ...DEFAULT_UNIFIED_SETTINGS,
+        providerInstances: {
+          [lmStudioInstance]: {
+            driver: CODEX_DRIVER,
+            enabled: true,
+            config: {
+              ossMode: true,
+              ossBaseUrl: "http://127.0.0.1:1234/v1",
+            },
+          },
+        },
+      },
+    });
+
+    expect(resolved.selectedModel).toBe("");
   });
 
   it("writes trait changes to the exact configured provider instance", () => {

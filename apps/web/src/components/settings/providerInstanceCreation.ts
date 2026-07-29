@@ -8,6 +8,7 @@ import { DEFAULT_LM_STUDIO_BASE_URL } from "@cafecode/contracts";
 import { normalizeProviderAccentColor } from "../../providerInstances";
 
 export const LM_STUDIO_PROVIDER_TEMPLATE_ID = "lmstudio" as const;
+export const LM_STUDIO_LOCAL_DISPLAY_NAME = "LM Studio Local" as const;
 export type ProviderCreationTemplateId = ProviderDriverKind | typeof LM_STUDIO_PROVIDER_TEMPLATE_ID;
 
 function slugifyLabel(value: string): string {
@@ -57,7 +58,7 @@ export function buildProviderCreationConfig(input: {
     ...(requestedLabel.length > 0
       ? { displayName: requestedLabel }
       : lmStudio
-        ? { displayName: "LM Studio" }
+        ? { displayName: LM_STUDIO_LOCAL_DISPLAY_NAME }
         : {}),
     ...(normalizedAccentColor ? { accentColor: normalizedAccentColor } : {}),
     ...(Object.keys(config).length > 0 ? { config } : {}),

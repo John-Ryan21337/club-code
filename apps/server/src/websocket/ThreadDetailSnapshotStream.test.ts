@@ -43,6 +43,7 @@ function makeSnapshot(text: string): OrchestrationThreadDetailSnapshotType {
       branch: null,
       worktreePath: null,
       autoNudge: DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+      manualFollowUps: [],
       latestTurn: {
         turnId,
         state: "running",

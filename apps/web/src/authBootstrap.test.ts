@@ -1,6 +1,12 @@
 import type { DesktopBridge } from "@cafecode/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+// The first test imports the primary environment graph cold. Under the full
+// parallel Turbo graph, Windows can spend more than Vitest's default five
+// seconds transforming that dependency tree even though the auth work itself
+// is immediate. Preserve the tighter timeout on macOS/Linux.
+const COLD_IMPORT_TEST_TIMEOUT_MS = process.platform === "win32" ? 20_000 : 5_000;
+
 function jsonResponse(body: unknown, init?: ResponseInit) {
   return new Response(JSON.stringify(body), {
     headers: {
@@ -54,20 +60,83 @@ describe("resolveInitialServerAuthGateState", () => {
     vi.restoreAllMocks();
   });
 
-  it("reuses an in-flight silent bootstrap attempt", async () => {
+  it(
+    "reuses an in-flight silent bootstrap attempt",
+    async () => {
+      const fetchMock = vi
+        .fn<typeof fetch>()
+        .mockResolvedValueOnce(
+          sessionResponse({
+            authenticated: false,
+            auth: {
+              policy: "desktop-managed-local",
+              bootstrapMethods: ["desktop-bootstrap"],
+              sessionMethods: ["browser-session-cookie"],
+              sessionCookieName: "t3_session",
+            },
+          }),
+        )
+        .mockResolvedValueOnce(
+          jsonResponse({
+            authenticated: true,
+            sessionMethod: "browser-session-cookie",
+            expiresAt: "2026-04-05T00:00:00.000Z",
+          }),
+        )
+        .mockResolvedValueOnce(
+          sessionResponse({
+            authenticated: true,
+            auth: {
+              policy: "loopback-browser",
+              bootstrapMethods: ["one-time-token"],
+              sessionMethods: ["browser-session-cookie"],
+              sessionCookieName: "t3_session",
+            },
+            sessionMethod: "browser-session-cookie",
+            expiresAt: "2026-04-05T00:00:00.000Z",
+          }),
+        );
+      vi.stubGlobal("fetch", fetchMock);
+
+      const testWindow = installTestBrowser("http://localhost/");
+      testWindow.desktopBridge = {
+        getLocalEnvironmentBootstrap: () => ({
+          label: "Local environment",
+          httpBaseUrl: "http://localhost:3773",
+          wsBaseUrl: "ws://localhost:3773",
+          bootstrapToken: "desktop-bootstrap-token",
+        }),
+      } as DesktopBridge;
+
+      const { resolveInitialServerAuthGateState } = await import("./environments/primary");
+
+      await Promise.all([resolveInitialServerAuthGateState(), resolveInitialServerAuthGateState()]);
+
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+      expect(fetchMock.mock.calls[0]?.[0]).toBe("http://localhost:3773/api/auth/session");
+      expect(fetchMock.mock.calls[1]?.[0]).toBe("http://localhost:3773/api/auth/bootstrap");
+      expect(fetchMock.mock.calls[2]?.[0]).toBe("http://localhost:3773/api/auth/session");
+    },
+    COLD_IMPORT_TEST_TIMEOUT_MS,
+  );
+
+  it("does not let a pre-reset bootstrap completion restore authenticated state", async () => {
+    let completeStaleSessionRead: ((response: Response) => void) | undefined;
+    const staleSessionRead = new Promise<Response>((resolve) => {
+      completeStaleSessionRead = resolve;
+    });
+    const unauthenticatedSession = {
+      authenticated: false,
+      auth: {
+        policy: "desktop-managed-local" as const,
+        bootstrapMethods: ["desktop-bootstrap" as const],
+        sessionMethods: ["browser-session-cookie" as const],
+        sessionCookieName: "t3_session",
+      },
+    };
     const fetchMock = vi
       .fn<typeof fetch>()
-      .mockResolvedValueOnce(
-        sessionResponse({
-          authenticated: false,
-          auth: {
-            policy: "desktop-managed-local",
-            bootstrapMethods: ["desktop-bootstrap"],
-            sessionMethods: ["browser-session-cookie"],
-            sessionCookieName: "t3_session",
-          },
-        }),
-      )
+      .mockResolvedValueOnce(sessionResponse(unauthenticatedSession))
       .mockResolvedValueOnce(
         jsonResponse({
           authenticated: true,
@@ -75,19 +144,8 @@ describe("resolveInitialServerAuthGateState", () => {
           expiresAt: "2026-04-05T00:00:00.000Z",
         }),
       )
-      .mockResolvedValueOnce(
-        sessionResponse({
-          authenticated: true,
-          auth: {
-            policy: "loopback-browser",
-            bootstrapMethods: ["one-time-token"],
-            sessionMethods: ["browser-session-cookie"],
-            sessionCookieName: "t3_session",
-          },
-          sessionMethod: "browser-session-cookie",
-          expiresAt: "2026-04-05T00:00:00.000Z",
-        }),
-      );
+      .mockReturnValueOnce(staleSessionRead)
+      .mockResolvedValueOnce(sessionResponse(unauthenticatedSession));
     vi.stubGlobal("fetch", fetchMock);
 
     const testWindow = installTestBrowser("http://localhost/");
@@ -100,14 +158,27 @@ describe("resolveInitialServerAuthGateState", () => {
       }),
     } as DesktopBridge;
 
-    const { resolveInitialServerAuthGateState } = await import("./environments/primary");
+    const { __resetServerAuthBootstrapForTests, resolveInitialServerAuthGateState } =
+      await import("./environments/primary");
+    const staleBootstrap = resolveInitialServerAuthGateState();
+    await vi.waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+    });
 
-    await Promise.all([resolveInitialServerAuthGateState(), resolveInitialServerAuthGateState()]);
+    __resetServerAuthBootstrapForTests();
+    delete testWindow.desktopBridge;
+    completeStaleSessionRead?.(
+      sessionResponse({
+        ...unauthenticatedSession,
+        authenticated: true,
+      }),
+    );
+    await expect(staleBootstrap).resolves.toEqual({ status: "authenticated" });
 
-    expect(fetchMock).toHaveBeenCalledTimes(3);
-    expect(fetchMock.mock.calls[0]?.[0]).toBe("http://localhost:3773/api/auth/session");
-    expect(fetchMock.mock.calls[1]?.[0]).toBe("http://localhost:3773/api/auth/bootstrap");
-    expect(fetchMock.mock.calls[2]?.[0]).toBe("http://localhost:3773/api/auth/session");
+    await expect(resolveInitialServerAuthGateState()).resolves.toMatchObject({
+      status: "requires-auth",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 
   it("uses https fetch urls when the primary environment uses wss", async () => {

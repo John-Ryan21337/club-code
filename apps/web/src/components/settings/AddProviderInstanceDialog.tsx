@@ -2,7 +2,7 @@
 
 import { CheckIcon } from "lucide-react";
 import { Radio as RadioPrimitive } from "@base-ui/react/radio";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   DEFAULT_LM_STUDIO_BASE_URL,
   ProviderInstanceId,
@@ -33,6 +33,7 @@ import {
   buildProviderCreationConfig,
   deriveProviderCreationInstanceId,
   isProviderCreationInstanceIdAvailable,
+  LM_STUDIO_LOCAL_DISPLAY_NAME,
   LM_STUDIO_PROVIDER_TEMPLATE_ID,
   type ProviderCreationTemplateId,
 } from "./providerInstanceCreation";
@@ -52,7 +53,7 @@ const EMPTY_CONFIG_DRAFT: Record<string, unknown> = {};
 const LM_STUDIO_DRIVER_OPTION = {
   ...DEFAULT_DRIVER_OPTION,
   templateId: LM_STUDIO_PROVIDER_TEMPLATE_ID,
-  label: "LM Studio",
+  label: LM_STUDIO_LOCAL_DISPLAY_NAME,
   badgeLabel: "Local",
 } as const;
 const PROVIDER_CREATION_OPTIONS = [
@@ -64,11 +65,16 @@ const PROVIDER_CREATION_OPTIONS = [
 interface AddProviderInstanceDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  initialTemplateId?: ProviderCreationTemplateId | undefined;
 }
 
-export function AddProviderInstanceDialog({ open, onOpenChange }: AddProviderInstanceDialogProps) {
+export function AddProviderInstanceDialog({
+  open,
+  onOpenChange,
+  initialTemplateId,
+}: AddProviderInstanceDialogProps) {
   const settings = useSettings();
-  const { updateSettings } = useUpdateSettings();
+  const { updateSettingsAsync } = useUpdateSettings();
 
   const [wizardStep, setWizardStep] = useState(0);
   const [templateId, setTemplateId] = useState<ProviderCreationTemplateId>(DEFAULT_DRIVER_KIND);
@@ -84,6 +90,8 @@ export function AddProviderInstanceDialog({ open, onOpenChange }: AddProviderIns
   // Errors are suppressed until the user has tried to submit once. After that
   // they update live so fixing the problem clears the message in place.
   const [hasAttemptedSubmit, setHasAttemptedSubmit] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const wasOpenRef = useRef(false);
 
   const existingIds = useMemo(
     () => new Set(Object.keys(settings.providerInstances ?? {})),
@@ -91,18 +99,30 @@ export function AddProviderInstanceDialog({ open, onOpenChange }: AddProviderIns
   );
 
   // Reset the form every time the dialog opens so each creation starts
-  // from a clean slate.
+  // from a clean slate. A dedicated LM Studio setup action opens directly
+  // on its endpoint step; Back still exposes identity/accent customization.
   useEffect(() => {
-    if (!open) return;
-    setTemplateId(DEFAULT_DRIVER_KIND);
+    if (!open) {
+      wasOpenRef.current = false;
+      return;
+    }
+    // Settings writes are optimistic. Do not reset an open form when its own
+    // pending provider instance appears in the settings snapshot.
+    if (wasOpenRef.current) return;
+    wasOpenRef.current = true;
+    const nextTemplateId = initialTemplateId ?? DEFAULT_DRIVER_KIND;
+    setTemplateId(nextTemplateId);
     setLabel("");
     setAccentColor("");
     setInstanceId("");
-    setWizardStep(0);
+    setWizardStep(
+      nextTemplateId === LM_STUDIO_PROVIDER_TEMPLATE_ID && !existingIds.has("lmstudio") ? 2 : 0,
+    );
     setInstanceIdDirty(false);
     setConfigByTemplate({});
     setHasAttemptedSubmit(false);
-  }, [open]);
+    setIsSaving(false);
+  }, [existingIds, initialTemplateId, open]);
 
   // Auto-derive the instance id from driver + label until the user types
   // in the Instance ID field directly (after which they own its value).
@@ -128,7 +148,7 @@ export function AddProviderInstanceDialog({ open, onOpenChange }: AddProviderIns
   const previewLabel =
     label.trim() ||
     (templateId === LM_STUDIO_PROVIDER_TEMPLATE_ID
-      ? "LM Studio"
+      ? LM_STUDIO_LOCAL_DISPLAY_NAME
       : `${driverOption.label} Workspace`);
   const wizardSteps = ["Driver", "Identity", "Config"] as const;
   const wizardStepSummaries = [creationOption.label, previewLabel, null] as const;
@@ -156,9 +176,9 @@ export function AddProviderInstanceDialog({ open, onOpenChange }: AddProviderIns
     [templateId],
   );
 
-  const handleSave = useCallback(() => {
+  const handleSave = useCallback(async () => {
     setHasAttemptedSubmit(true);
-    if (instanceIdError !== null || lmStudioBaseUrlError !== null) return;
+    if (instanceIdError !== null || lmStudioBaseUrlError !== null || isSaving) return;
 
     const nextInstance = buildProviderCreationConfig({
       templateId,
@@ -176,8 +196,9 @@ export function AddProviderInstanceDialog({ open, onOpenChange }: AddProviderIns
       ...settings.providerInstances,
       [brandedId]: nextInstance,
     };
+    setIsSaving(true);
     try {
-      updateSettings({ providerInstances: nextMap });
+      await updateSettingsAsync({ providerInstances: nextMap });
       toastManager.add({
         type: "success",
         title: "Provider instance added",
@@ -190,21 +211,23 @@ export function AddProviderInstanceDialog({ open, onOpenChange }: AddProviderIns
         title: "Could not add provider instance",
         description: error instanceof Error ? error.message : "Update failed.",
       });
+    } finally {
+      setIsSaving(false);
     }
   }, [
     driver,
     templateId,
-    driverOption,
     creationOption,
     configByTemplate,
     instanceId,
     instanceIdError,
+    isSaving,
     lmStudioBaseUrlError,
     label,
     accentColor,
     onOpenChange,
     settings.providerInstances,
-    updateSettings,
+    updateSettingsAsync,
   ]);
 
   return (
@@ -400,7 +423,7 @@ export function AddProviderInstanceDialog({ open, onOpenChange }: AddProviderIns
                 <div className="grid gap-4">
                   <div className="grid gap-2 rounded-lg border border-primary/25 bg-primary/5 p-3">
                     <p className="text-sm font-medium text-foreground">
-                      LM Studio through Codex OSS
+                      LM Studio Local through Codex OSS
                     </p>
                     <p className="text-xs text-muted-foreground">
                       This creates an independently selectable provider instance with cloud login
@@ -468,6 +491,7 @@ export function AddProviderInstanceDialog({ open, onOpenChange }: AddProviderIns
             <Button
               variant="outline"
               size="sm"
+              disabled={isSaving}
               onClick={() => {
                 if (wizardStep === 0) {
                   onOpenChange(false);
@@ -479,12 +503,16 @@ export function AddProviderInstanceDialog({ open, onOpenChange }: AddProviderIns
               {wizardStep === 0 ? "Cancel" : "Back"}
             </Button>
             {wizardStep < wizardSteps.length - 1 ? (
-              <Button size="sm" onClick={() => setWizardStep((step) => Math.min(2, step + 1))}>
+              <Button
+                size="sm"
+                disabled={isSaving}
+                onClick={() => setWizardStep((step) => Math.min(2, step + 1))}
+              >
                 Next
               </Button>
             ) : (
-              <Button size="sm" onClick={handleSave}>
-                Add instance
+              <Button size="sm" disabled={isSaving} onClick={() => void handleSave()}>
+                {isSaving ? "Adding instance..." : "Add instance"}
               </Button>
             )}
           </DialogFooter>

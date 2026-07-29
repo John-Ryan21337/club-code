@@ -8,8 +8,15 @@ import * as Path from "effect/Path";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
 import * as Types from "effect/Types";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import {
+  FetchHttpClient,
+  HttpClient,
+  HttpClientRequest,
+  HttpClientResponse,
+} from "effect/unstable/http";
 import * as CodexClient from "effect-codex-app-server/client";
 import * as CodexSchema from "effect-codex-app-server/schema";
 import * as CodexErrors from "effect-codex-app-server/errors";
@@ -27,7 +34,7 @@ import type {
   ServerProviderAccountRateLimitResetCredit,
   ServerProviderPaidUsage,
 } from "@cafecode/contracts";
-import { ServerSettingsError } from "@cafecode/contracts";
+import { normalizeLmStudioBaseUrl, ServerSettingsError } from "@cafecode/contracts";
 
 import { createModelCapabilities } from "@cafecode/shared/model";
 import {
@@ -53,6 +60,53 @@ const MAX_PROVIDER_EMAIL_LENGTH = 320;
 const CODEX_ACCOUNT_RATE_LIMIT_TIMEOUT_MS = 3_000;
 const CODEX_CHATGPT_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
 const CODEX_ORIGINATOR = "cafecode_desktop";
+const LM_STUDIO_DISCOVERY_TIMEOUT_MS = 3_000;
+const MAX_LM_STUDIO_MODEL_RESPONSE_BYTES = 2 * 1024 * 1024;
+const MAX_LM_STUDIO_DISCOVERED_MODELS = 256;
+const MAX_LM_STUDIO_MODEL_ID_LENGTH = 256;
+
+const LmStudioOpenAiModelList = Schema.Struct({
+  data: Schema.Array(
+    Schema.Struct({
+      id: Schema.String,
+    }),
+  ),
+});
+
+const LmStudioNativeModelList = Schema.Struct({
+  models: Schema.Array(
+    Schema.Struct({
+      type: Schema.Literals(["llm", "embedding"]),
+      key: Schema.String,
+      display_name: Schema.String,
+      loaded_instances: Schema.Array(
+        Schema.Struct({
+          id: Schema.String,
+        }),
+      ),
+    }),
+  ),
+});
+const decodeLmStudioOpenAiModelList = Schema.decodeUnknownSync(LmStudioOpenAiModelList);
+const decodeLmStudioNativeModelList = Schema.decodeUnknownSync(LmStudioNativeModelList);
+
+export type LmStudioModelDiscovery =
+  | {
+      readonly status: "ready";
+      readonly models: ReadonlyArray<ServerProviderModel>;
+      readonly message: string;
+    }
+  | {
+      readonly status: "empty" | "offline" | "authentication-required" | "invalid-response";
+      readonly models: readonly [];
+      readonly message: string;
+    };
+
+type LmStudioHttpJsonResult =
+  | { readonly status: "ok"; readonly payload: unknown }
+  | { readonly status: "http-error"; readonly statusCode: number }
+  | { readonly status: "invalid-response" }
+  | { readonly status: "offline" };
 
 export interface CodexAppServerProviderSnapshot {
   readonly account: CodexSchema.V2GetAccountResponse;
@@ -102,6 +156,7 @@ function codexAccountAuthLabel(account: CodexSchema.V2GetAccountResponse["accoun
     case "self_serve_business_usage_based":
     case "business":
       return "ChatGPT Business Subscription";
+    case "ent26":
     case "enterprise_cbp_usage_based":
     case "enterprise":
       return "ChatGPT Enterprise Subscription";
@@ -1135,7 +1190,7 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
   } satisfies CodexAppServerProviderSnapshot;
 });
 
-const emptyCodexModelsFromSettings = (codexSettings: CodexSettings): ServerProvider["models"] =>
+const customCodexModelsFromSettings = (codexSettings: CodexSettings): ServerProvider["models"] =>
   codexSettings.customModels
     .map((model) => model.trim())
     .filter((model, index, models) => model.length > 0 && models.indexOf(model) === index)
@@ -1150,9 +1205,259 @@ const fallbackCodexModelsFromSettings = (codexSettings: CodexSettings): ServerPr
   appendCustomCodexModels(STATIC_CODEX_MODELS, codexSettings.customModels);
 
 const configuredCodexModels = (codexSettings: CodexSettings): ServerProvider["models"] =>
-  codexSettings.ossMode
-    ? emptyCodexModelsFromSettings(codexSettings)
-    : fallbackCodexModelsFromSettings(codexSettings);
+  codexSettings.ossMode ? [] : fallbackCodexModelsFromSettings(codexSettings);
+
+export function parseLmStudioModelInventory(
+  openAiPayload: unknown,
+  nativePayload?: unknown,
+): ReadonlyArray<ServerProviderModel> | null {
+  let openAiModels: typeof LmStudioOpenAiModelList.Type;
+  try {
+    openAiModels = decodeLmStudioOpenAiModelList(openAiPayload);
+  } catch {
+    return null;
+  }
+
+  let nativeModels: (typeof LmStudioNativeModelList.Type)["models"] | undefined;
+  if (nativePayload !== undefined) {
+    try {
+      nativeModels = decodeLmStudioNativeModelList(nativePayload).models;
+    } catch {
+      // The OpenAI-compatible endpoint is the callable inventory boundary.
+      // Native metadata is optional enrichment used to exclude embedding
+      // models and render friendly names on modern LM Studio versions.
+    }
+  }
+
+  const nativeById = new Map<
+    string,
+    { readonly type: "llm" | "embedding"; readonly name: string }
+  >();
+  for (const model of nativeModels ?? []) {
+    const metadata = { type: model.type, name: model.display_name.trim() || model.key };
+    nativeById.set(model.key, metadata);
+    for (const loaded of model.loaded_instances) {
+      nativeById.set(loaded.id, metadata);
+    }
+  }
+
+  const seen = new Set<string>();
+  const models: ServerProviderModel[] = [];
+  for (const candidate of openAiModels.data) {
+    const id = candidate.id.trim();
+    if (
+      id.length === 0 ||
+      id.length > MAX_LM_STUDIO_MODEL_ID_LENGTH ||
+      seen.has(id) ||
+      models.length >= MAX_LM_STUDIO_DISCOVERED_MODELS
+    ) {
+      continue;
+    }
+    const metadata = nativeById.get(id);
+    if (metadata?.type === "embedding") {
+      continue;
+    }
+    seen.add(id);
+    models.push({
+      slug: id,
+      name: metadata?.name ?? id,
+      isCustom: false,
+      capabilities: null,
+    });
+  }
+  return models;
+}
+
+const readBoundedLmStudioJson = Effect.fn("readBoundedLmStudioJson")(function* (
+  response: HttpClientResponse.HttpClientResponse,
+) {
+  const collected = yield* response.stream.pipe(
+    Stream.runFoldEffect<
+      {
+        readonly chunks: Uint8Array<ArrayBufferLike>[];
+        readonly bytes: number;
+      },
+      Uint8Array<ArrayBufferLike>,
+      Error,
+      never
+    >(
+      () => ({ chunks: [], bytes: 0 }),
+      (state, chunk) => {
+        const nextBytes = state.bytes + chunk.byteLength;
+        if (nextBytes > MAX_LM_STUDIO_MODEL_RESPONSE_BYTES) {
+          return Effect.fail(
+            new Error(
+              `LM Studio model inventory exceeded ${MAX_LM_STUDIO_MODEL_RESPONSE_BYTES} bytes.`,
+            ),
+          );
+        }
+        state.chunks.push(chunk);
+        return Effect.succeed({
+          chunks: state.chunks,
+          bytes: nextBytes,
+        });
+      },
+    ),
+  );
+  return yield* Effect.try({
+    try: (): unknown =>
+      JSON.parse(Buffer.concat(collected.chunks, collected.bytes).toString("utf8")),
+    catch: (cause) => cause,
+  });
+});
+
+/**
+ * Fetch one LM Studio JSON resource within a single, full-response timeout.
+ *
+ * Redirects are deliberately disabled. Re-validating only the configured URL
+ * is not enough if an otherwise valid loopback/private endpoint can redirect
+ * discovery to a cloud metadata host or another untrusted destination.
+ */
+const requestLmStudioJson = (
+  url: string,
+  client: HttpClient.HttpClient,
+): Effect.Effect<LmStudioHttpJsonResult> =>
+  Effect.gen(function* () {
+    const responseResult = yield* client
+      .execute(
+        HttpClientRequest.get(url).pipe(HttpClientRequest.setHeader("accept", "application/json")),
+      )
+      .pipe(
+        Effect.provideService(FetchHttpClient.RequestInit, { redirect: "manual" }),
+        Effect.result,
+      );
+    if (Result.isFailure(responseResult)) {
+      return { status: "offline" } as const;
+    }
+
+    const response = responseResult.success;
+    if (response.status < 200 || response.status >= 300) {
+      return { status: "http-error", statusCode: response.status } as const;
+    }
+
+    const payloadResult = yield* readBoundedLmStudioJson(response).pipe(Effect.result);
+    if (Result.isFailure(payloadResult)) {
+      return { status: "invalid-response" } as const;
+    }
+    return { status: "ok", payload: payloadResult.success } as const;
+  }).pipe(
+    Effect.timeoutOption(Duration.millis(LM_STUDIO_DISCOVERY_TIMEOUT_MS)),
+    Effect.map(Option.getOrElse((): LmStudioHttpJsonResult => ({ status: "offline" }))),
+  );
+
+/**
+ * Discover the exact models currently exposed by an LM Studio inference
+ * server. `/v1/models` is the callable inventory (and includes downloaded
+ * models only when LM Studio JIT loading is enabled). The optional native
+ * metadata request distinguishes chat LLMs from embedding-only models.
+ *
+ * This does not start LM Studio or load a model. Provider status remains
+ * honest when the external server is stopped, empty, or requires an API
+ * token that Codex's built-in `lmstudio` transport cannot send.
+ */
+export const discoverLmStudioModels = Effect.fn("discoverLmStudioModels")(function* (
+  baseUrl: string,
+  client: HttpClient.HttpClient,
+): Effect.fn.Return<LmStudioModelDiscovery> {
+  const normalizedBaseUrl = normalizeLmStudioBaseUrl(baseUrl);
+  const modelsUrl = `${normalizedBaseUrl}/models`;
+  const openAiResult = yield* requestLmStudioJson(modelsUrl, client);
+  if (openAiResult.status === "offline") {
+    return {
+      status: "offline",
+      models: [],
+      message: `LM Studio did not answer at ${normalizedBaseUrl}. Start its local server, then refresh provider status.`,
+    };
+  }
+  if (
+    openAiResult.status === "http-error" &&
+    (openAiResult.statusCode === 401 || openAiResult.statusCode === 403)
+  ) {
+    return {
+      status: "authentication-required",
+      models: [],
+      message:
+        "LM Studio requires authentication, but Codex's built-in LM Studio provider cannot send LM Studio API tokens. Disable Require Authentication or use an independently protected loopback/private-network endpoint.",
+    };
+  }
+  if (openAiResult.status === "http-error") {
+    return {
+      status: "offline",
+      models: [],
+      message: `LM Studio returned HTTP ${openAiResult.statusCode} at ${normalizedBaseUrl}. Redirects are not followed; check the server URL, then refresh provider status.`,
+    };
+  }
+  if (openAiResult.status === "invalid-response") {
+    return {
+      status: "invalid-response",
+      models: [],
+      message:
+        "LM Studio returned invalid or oversized model-list JSON. Update LM Studio and refresh provider status.",
+    };
+  }
+
+  const nativeUrl = new URL(normalizedBaseUrl);
+  // Preserve any reverse-proxy path in a validated API root. For example,
+  // `https://models.example.test/team/v1` maps to
+  // `/team/api/v1/models`, not the origin-root `/api/v1/models`.
+  nativeUrl.pathname = `${nativeUrl.pathname.slice(0, -"/v1".length)}/api/v1/models`;
+  nativeUrl.search = "";
+  nativeUrl.hash = "";
+  const nativeResult = yield* requestLmStudioJson(nativeUrl.toString(), client);
+  const nativePayload = nativeResult.status === "ok" ? nativeResult.payload : undefined;
+
+  const models = parseLmStudioModelInventory(openAiResult.payload, nativePayload);
+  if (models === null) {
+    return {
+      status: "invalid-response",
+      models: [],
+      message:
+        "LM Studio returned an unsupported model-list shape. Update LM Studio and refresh provider status.",
+    };
+  }
+  if (models.length === 0) {
+    return {
+      status: "empty",
+      models: [],
+      message:
+        "LM Studio is online but exposes no chat models. Load a chat model or enable Just-In-Time model loading, then refresh provider status.",
+    };
+  }
+  return {
+    status: "ready",
+    models,
+    message: `LM Studio is online with ${models.length} available chat model${models.length === 1 ? "" : "s"}.`,
+  };
+});
+
+export function reconcileLmStudioModelDiscovery(
+  provider: ServerProviderDraft,
+  discovery: LmStudioModelDiscovery,
+): ServerProviderDraft {
+  if (!provider.enabled || provider.status === "disabled") {
+    return provider;
+  }
+  if (provider.status === "error") {
+    // Model discovery can refine a healthy Codex app-server snapshot, but it
+    // cannot erase an app-server failure. A reachable, empty LM Studio server
+    // does not make a failed Codex runtime usable.
+    return { ...provider, models: [] };
+  }
+  if (discovery.status === "ready") {
+    return {
+      ...provider,
+      status: "ready",
+      models: discovery.models,
+      message: discovery.message,
+    };
+  }
+  return {
+    ...provider,
+    status: discovery.status === "empty" ? "warning" : "error",
+    models: [],
+    message: discovery.message,
+  };
+}
 
 const runCodexCommand = Effect.fn("runCodexCommand")(function* (
   codexSettings: CodexSettings,
@@ -1339,7 +1644,10 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
   ChildProcessSpawner.ChildProcessSpawner
 > {
   const checkedAt = DateTime.formatIso(yield* DateTime.now);
-  const emptyModels = emptyCodexModelsFromSettings(codexSettings);
+  // An OSS instance's callable inventory comes only from LM Studio. Never
+  // surface Codex custom models while its runtime is pending, failed, or
+  // disabled; those slugs may be cloud-only and are not provider evidence.
+  const emptyModels = codexSettings.ossMode ? [] : customCodexModelsFromSettings(codexSettings);
 
   if (!codexSettings.enabled) {
     return buildServerProvider({

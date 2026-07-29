@@ -118,7 +118,7 @@ import {
 } from "../../providerInstances";
 import { type AppModelOption, getAppModelOptionsForInstance } from "../../modelSelection";
 import type { UnifiedSettings } from "@cafecode/contracts/settings";
-import type { SessionPhase, Thread } from "../../types";
+import type { ChatImageAttachment, SessionPhase, Thread } from "../../types";
 import type { PendingUserInputDraftAnswer } from "../../pendingUserInput";
 import type { PendingApproval, PendingUserInput } from "../../session-logic";
 import { deriveLatestContextWindowSnapshot } from "../../lib/contextWindow";
@@ -473,7 +473,7 @@ export interface FollowUpQueueViewItem {
   id: string;
   preview: string;
   promptText: string;
-  images: readonly ComposerImageAttachment[];
+  images: readonly ChatImageAttachment[];
   queuedAt: string;
   expanded: boolean;
   canExpand: boolean;
@@ -615,10 +615,16 @@ export function FollowUpQueueShelf(props: {
             </div>
           </div>
         ))}
-        {props.items.map((item) => {
+        {props.items.map((item, index) => {
           const retryStatus = automaticSteerRetryStatus(item);
-          const itemActionEnabled = props.actionEnabled && item.blockedReason === null;
-          const itemActionTitle = item.blockedReason ?? props.actionTitle;
+          const isQueueHead = index === 0;
+          const itemActionEnabled =
+            props.actionEnabled && item.blockedReason === null && isQueueHead;
+          const itemActionTitle =
+            item.blockedReason ??
+            (isQueueHead
+              ? props.actionTitle
+              : "This follow-up will wait for earlier queued messages to dispatch first.");
           return (
             <div key={item.id} className="rounded-xl border border-border/45 bg-background/42 p-2">
               <div className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)_auto_auto] items-center gap-2">

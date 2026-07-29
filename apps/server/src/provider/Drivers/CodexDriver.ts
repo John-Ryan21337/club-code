@@ -44,8 +44,10 @@ import { makeCodexAdapter } from "../Layers/CodexAdapter.ts";
 import {
   checkCodexCliProviderStatus,
   checkCodexProviderStatus,
+  discoverLmStudioModels,
   makePendingCodexProvider,
   readCodexAccountRateLimits,
+  reconcileLmStudioModelDiscovery,
 } from "../Layers/CodexProvider.ts";
 import { ProviderEventLoggers } from "../Layers/ProviderEventLoggers.ts";
 import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
@@ -55,6 +57,7 @@ import { mergeProviderInstanceEnvironment } from "../ProviderInstanceEnvironment
 import { installBundledAuditAndRepairSkill } from "../BundledAuditAndRepairSkill.ts";
 import {
   enrichProviderSnapshotWithVersionAdvisory,
+  isCodexStandaloneCommandPath,
   makePackageManagedProviderMaintenanceResolver,
   resolveProviderMaintenanceCapabilitiesEffect,
 } from "../providerMaintenance.ts";
@@ -78,7 +81,12 @@ const UPDATE_DEFINITION = {
   provider: DRIVER_KIND,
   npmPackageName: "@openai/codex",
   homebrewFormula: "codex",
-  nativeUpdate: null,
+  nativeUpdate: {
+    executable: "codex",
+    args: ["update"],
+    lockKey: "codex-native",
+    isCommandPath: isCodexStandaloneCommandPath,
+  },
 } as const;
 const UPDATE = makePackageManagedProviderMaintenanceResolver(UPDATE_DEFINITION);
 const DEFAULT_SHADOW_HOME_ROOT = "~/.cafe-code/codex-homes";
@@ -312,12 +320,26 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
       // Starting `codex app-server` just to draw the provider badge can run
       // model/skill metadata requests and block for long enough to show a
       // false "provider unavailable" warning before the user has sent a
-      // message. OSS mode is the exception: its app-server probe is the only
-      // authoritative way to verify LM Studio and discover local models, and
-      // it deliberately bypasses cloud login/account checks.
-      const checkCodexStatus = effectiveConfig.ossMode
-        ? checkCodexProviderStatus(effectiveConfig, undefined, effectiveEnvironment)
-        : checkCodexCliProviderStatus(effectiveConfig, effectiveEnvironment);
+      // message. OSS mode is the exception: its app-server probe verifies that
+      // Codex can host the local transport, while LM Studio's `/v1/models`
+      // response supplies the exact callable inventory. Both deliberately
+      // bypass cloud login/account checks and run concurrently on refresh.
+      const checkCodexStatus =
+        effectiveConfig.ossMode && effectiveConfig.enabled
+          ? Effect.all(
+              [
+                checkCodexProviderStatus(effectiveConfig, undefined, effectiveEnvironment),
+                discoverLmStudioModels(effectiveConfig.ossBaseUrl, httpClient),
+              ],
+              { concurrency: "unbounded" },
+            ).pipe(
+              Effect.map(([provider, discovery]) =>
+                reconcileLmStudioModelDiscovery(provider, discovery),
+              ),
+            )
+          : effectiveConfig.ossMode
+            ? checkCodexProviderStatus(effectiveConfig, undefined, effectiveEnvironment)
+            : checkCodexCliProviderStatus(effectiveConfig, effectiveEnvironment);
       const checkProvider = refreshCodexShadowHome.pipe(
         Effect.catch((cause) =>
           Effect.logWarning("codex.home.authRefreshBeforeStatusFailed", {

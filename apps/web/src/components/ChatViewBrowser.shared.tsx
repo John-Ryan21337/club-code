@@ -4,11 +4,13 @@ import "../index.css";
 import {
   DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES,
   DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+  type ClientOrchestrationCommand,
   EventId,
   type DesktopBridge,
   ORCHESTRATION_WS_METHODS,
   EnvironmentId,
   type DesktopSourceUpdateState,
+  ManualFollowUpId,
   type MessageId,
   type OrchestrationReadModel,
   type ProjectId,
@@ -16,6 +18,7 @@ import {
   ProviderInstanceId,
   type RuntimeMode,
   type ServerConfig,
+  type ServerProjectSystemTelemetryResult,
   type ServerLifecycleWelcomePayload,
   type ThreadAutoNudgeConfig,
   type ThreadId,
@@ -28,6 +31,7 @@ import {
 import { scopedThreadKey, scopeThreadRef } from "@cafecode/client-runtime";
 import { createModelCapabilities, createModelSelection } from "@cafecode/shared/model";
 import { RouterProvider, createMemoryHistory } from "@tanstack/react-router";
+import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { HttpResponse, http, ws } from "msw";
@@ -323,6 +327,7 @@ function createSnapshotForTargetUser(options: {
         archivedAt: null,
         deletedAt: null,
         autoNudge: DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+        manualFollowUps: [],
         messages,
         activities: [],
         proposedPlans: [],
@@ -389,6 +394,7 @@ function addThreadToSnapshot(
         archivedAt: null,
         deletedAt: null,
         autoNudge: DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+        manualFollowUps: [],
         messages: [],
         activities: [],
         proposedPlans: [],
@@ -763,6 +769,7 @@ function createSnapshotWithSecondaryProject(options?: {
             updatedAt: isoAt(31),
           },
           autoNudge: DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+          manualFollowUps: [],
           archivedAt: null,
         },
       ]
@@ -796,6 +803,7 @@ function createSnapshotWithSecondaryProject(options?: {
             updatedAt: isoAt(25),
           },
           autoNudge: DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+          manualFollowUps: [],
           archivedAt: isoAt(26),
         },
       ]
@@ -950,6 +958,51 @@ function resolveWsRpc(body: NormalizedWsRpcRequestBody): unknown {
   const tag = body._tag;
   if (tag === WS_METHODS.serverGetConfig) {
     return encodeServerConfig(fixture.serverConfig);
+  }
+  if (tag === WS_METHODS.serverGetProjectSystemTelemetry) {
+    const projectId = body.projectId as ProjectId;
+    return {
+      projectId,
+      sampledAt: DateTime.makeUnsafe("2026-07-26T12:00:00.000Z"),
+      minimumSampleIntervalMs: 3_000,
+      platform: "linux",
+      architecture: "x64",
+      cpu: {
+        status: "available",
+        utilizationPercent: 25,
+        logicalProcessorCount: 8,
+        detail: null,
+      },
+      memory: {
+        status: "available",
+        totalBytes: 8 * 1024 ** 3,
+        usedBytes: 4 * 1024 ** 3,
+        availableBytes: 4 * 1024 ** 3,
+        utilizationPercent: 50,
+        detail: null,
+      },
+      network: {
+        status: "available",
+        receiveBytesPerSecond: 2 * 1024 ** 2,
+        transmitBytesPerSecond: 512 * 1024,
+        detail: null,
+      },
+      gpu: {
+        status: "unavailable",
+        adapters: [],
+        reason: "unsupported",
+        detail: "GPU telemetry is unavailable from this backend.",
+      },
+      projectVolume: {
+        status: "available",
+        totalBytes: 20 * 1024 ** 3,
+        usedBytes: 12 * 1024 ** 3,
+        availableBytes: 8 * 1024 ** 3,
+        utilizationPercent: 60,
+        projectVolumeOnly: true,
+        detail: null,
+      },
+    } satisfies ServerProjectSystemTelemetryResult;
   }
   if (tag === WS_METHODS.serverDiscoverSourceControl) {
     return {
@@ -1117,6 +1170,25 @@ async function waitForElement<T extends Element>(
     throw new Error(errorMessage);
   }
   return element;
+}
+
+async function expandAutoNudgeControls(): Promise<void> {
+  if (document.querySelector('button[aria-label="Collapse Auto Nudge controls"]')) {
+    return;
+  }
+  const expand = await waitForElement(
+    () =>
+      document.querySelector<HTMLButtonElement>('button[aria-label="Expand Auto Nudge controls"]'),
+    "Unable to find minimized Auto Nudge controls.",
+  );
+  expand.click();
+  await waitForElement(
+    () =>
+      document.querySelector<HTMLButtonElement>(
+        'button[aria-label="Collapse Auto Nudge controls"]',
+      ),
+    "Auto Nudge controls did not expand.",
+  );
 }
 
 async function waitForURL(
@@ -3431,6 +3503,263 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
       }
     });
 
+    it("keeps Enter-staged follow-ups visible until the operator explicitly steers", async () => {
+      const activeTurnId = "turn-enter-stages-follow-up" as TurnId;
+      const baseSnapshot = createSnapshotForTargetUser({
+        targetMessageId: "msg-user-enter-stages-follow-up" as MessageId,
+        targetText: "active turn before queued follow-ups",
+      });
+      const runningSnapshot: OrchestrationReadModel = {
+        ...baseSnapshot,
+        threads: baseSnapshot.threads.map((thread) => ({
+          ...thread,
+          latestTurn: {
+            turnId: activeTurnId,
+            state: "running" as const,
+            requestedAt: isoAt(1_000),
+            startedAt: isoAt(1_001),
+            completedAt: null,
+            assistantMessageId: null,
+          },
+          session: {
+            ...thread.session!,
+            status: "running" as const,
+            activeTurnId,
+            updatedAt: isoAt(1_001),
+          },
+          updatedAt: isoAt(1_001),
+        })),
+      };
+      let nextSequence = runningSnapshot.snapshotSequence;
+
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: runningSnapshot,
+        configureFixture: (nextFixture) => {
+          nextFixture.serverConfig = {
+            ...nextFixture.serverConfig,
+            providers: nextFixture.serverConfig.providers.map((provider) => ({
+              ...provider,
+              runtimeCapabilities: {
+                liveSteer: "supported",
+              },
+            })),
+          };
+        },
+        resolveRpc: (body) => {
+          if (
+            body._tag !== ORCHESTRATION_WS_METHODS.dispatchCommand ||
+            body.type !== "thread.manual-follow-up.enqueue"
+          ) {
+            if (body._tag === ORCHESTRATION_WS_METHODS.dispatchCommand) {
+              nextSequence += 1;
+              return { sequence: nextSequence };
+            }
+            return undefined;
+          }
+
+          const enqueueRequest = body as NormalizedWsRpcRequestBody &
+            Extract<ClientOrchestrationCommand, { type: "thread.manual-follow-up.enqueue" }>;
+          nextSequence += 1;
+          const currentThread = fixture.snapshot.threads[0]!;
+          const projectedThread: OrchestrationReadModel["threads"][number] = {
+            ...currentThread,
+            manualFollowUps: [
+              ...currentThread.manualFollowUps,
+              {
+                id: enqueueRequest.followUpId,
+                message: {
+                  ...enqueueRequest.message,
+                  attachments: enqueueRequest.message.attachments.map((attachment, index) => ({
+                    type: attachment.type,
+                    id: `${enqueueRequest.followUpId}-attachment-${index}`,
+                    name: attachment.name,
+                    mimeType: attachment.mimeType,
+                    sizeBytes: attachment.sizeBytes,
+                  })),
+                },
+                dispatch: enqueueRequest.dispatch,
+                status: "queued",
+                enqueuedAt: enqueueRequest.createdAt,
+                activatedAt: null,
+                activationCommandId: null,
+              },
+            ],
+            updatedAt: enqueueRequest.createdAt,
+          };
+          fixture.snapshot = {
+            ...fixture.snapshot,
+            snapshotSequence: nextSequence,
+            threads: [projectedThread],
+            updatedAt: enqueueRequest.createdAt,
+          };
+          queueMicrotask(() => {
+            rpcHarness.emitStreamValue(ORCHESTRATION_WS_METHODS.subscribeThread, {
+              kind: "snapshot",
+              snapshot: {
+                snapshotSequence: nextSequence,
+                thread: projectedThread,
+              },
+            });
+          });
+          return { sequence: nextSequence };
+        },
+      });
+
+      try {
+        useComposerDraftStore
+          .getState()
+          .setPrompt(THREAD_REF, "First command should wait for explicit Steer");
+        await waitForLayout();
+        await pressComposerKey("Enter");
+
+        await vi.waitFor(
+          () => {
+            expect(
+              wsRequests.filter(
+                (request) =>
+                  request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+                  request.type === "thread.manual-follow-up.enqueue",
+              ),
+            ).toHaveLength(1);
+            expect(document.querySelector('[data-cafe-followup-queue="true"]')).toBeTruthy();
+            expect(
+              document.querySelector<HTMLButtonElement>(
+                '.cafe-followup-steer-button[aria-label="Steer"]',
+              ),
+            ).toBeTruthy();
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+
+        // A state-change pass and the watchdog must not consume a queued item
+        // while a turn is running. Only the operator's Steer action may do so.
+        await new Promise((resolve) => window.setTimeout(resolve, 1_100));
+        expect(
+          wsRequests.some(
+            (request) =>
+              request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+              request.type === "thread.manual-follow-up.activate",
+          ),
+        ).toBe(false);
+
+        useComposerDraftStore
+          .getState()
+          .setPrompt(THREAD_REF, "Second command should remain behind the first");
+        await waitForLayout();
+        await pressComposerKey("Enter");
+
+        await vi.waitFor(
+          () => {
+            expect(
+              wsRequests.filter(
+                (request) =>
+                  request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+                  request.type === "thread.manual-follow-up.enqueue",
+              ),
+            ).toHaveLength(2);
+            expect(document.body.textContent ?? "").toContain("2 messages queued");
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+        expect(
+          wsRequests.some(
+            (request) =>
+              request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+              request.type === "thread.manual-follow-up.activate",
+          ),
+        ).toBe(false);
+
+        document
+          .querySelector<HTMLButtonElement>('.cafe-followup-steer-button[aria-label="Steer"]')!
+          .click();
+        await vi.waitFor(
+          () => {
+            const activation = wsRequests.find(
+              (request) =>
+                request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+                request.type === "thread.manual-follow-up.activate",
+            );
+            const firstEnqueue = wsRequests.find(
+              (request) =>
+                request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+                request.type === "thread.manual-follow-up.enqueue",
+            );
+            expect(activation?.followUpId).toBe(firstEnqueue?.followUpId);
+            expect(activation?.activationMode).toBe("operator");
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
+    it("marks ready-session FIFO draining as automatic-after-settlement", async () => {
+      const followUpId = ManualFollowUpId.make("manual-follow-up-ready-auto-drain");
+      const baseSnapshot = createSnapshotForTargetUser({
+        targetMessageId: "msg-user-ready-auto-drain" as MessageId,
+        targetText: "completed work before automatic drain",
+      });
+      const readySnapshot: OrchestrationReadModel = {
+        ...baseSnapshot,
+        threads: baseSnapshot.threads.map((thread) => ({
+          ...thread,
+          manualFollowUps: [
+            {
+              id: followUpId,
+              message: {
+                messageId: "msg-ready-auto-drain-follow-up" as MessageId,
+                role: "user" as const,
+                text: "Run me only after confirmed settlement.",
+                attachments: [],
+              },
+              dispatch: {
+                modelSelection: thread.modelSelection,
+                titleSeed: "Ready auto drain",
+                runtimeMode: thread.runtimeMode,
+                interactionMode: thread.interactionMode,
+              },
+              status: "queued" as const,
+              enqueuedAt: isoAt(1_020),
+              activatedAt: null,
+              activationCommandId: null,
+            },
+          ],
+          updatedAt: isoAt(1_020),
+        })),
+      };
+      let nextSequence = readySnapshot.snapshotSequence;
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: readySnapshot,
+        resolveRpc: (body) => {
+          if (body._tag === ORCHESTRATION_WS_METHODS.dispatchCommand) {
+            nextSequence += 1;
+            return { sequence: nextSequence };
+          }
+          return undefined;
+        },
+      });
+
+      try {
+        await vi.waitFor(
+          () => {
+            const activation = wsRequests.find(
+              (request) =>
+                request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+                request.type === "thread.manual-follow-up.activate",
+            );
+            expect(activation?.followUpId).toBe(followUpId);
+            expect(activation?.activationMode).toBe("automatic-after-settlement");
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
     it("locks the composer while the provider session is starting", async () => {
       const mounted = await mountChatView({
         viewport: DEFAULT_VIEWPORT,
@@ -4131,6 +4460,7 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
       });
 
       try {
+        await expandAutoNudgeControls();
         const promptInput = page.getByRole("textbox", { name: "Prompt for this thread" });
         await expect.element(promptInput).toHaveValue("Saved prompt A");
         await promptInput.fill("Exact prompt for thread A");
@@ -4157,6 +4487,7 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
           to: "/$environmentId/$threadId",
           params: { environmentId: LOCAL_ENVIRONMENT_ID, threadId: secondThreadId },
         });
+        await expandAutoNudgeControls();
         await expect.element(promptInput).toHaveValue("Saved prompt B");
         await promptInput.fill("Different prompt for thread B");
         await page.getByRole("button", { name: "Save prompt" }).click();
@@ -4172,6 +4503,58 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
                   request.mode === "off" &&
                   request.backgroundContinuation === false &&
                   request.prompt === "Different prompt for thread B",
+              ),
+            ).toBe(true);
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+        expect(
+          wsRequests.some((request) => request._tag === WS_METHODS.serverUpdateClientSettings),
+        ).toBe(false);
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
+    it("saves Auto Nudge limits through one exact thread authority instead of client settings", async () => {
+      let snapshot = createSnapshotForTargetUser({
+        targetMessageId: "msg-user-auto-nudge-limits" as MessageId,
+        targetText: "exact thread limits",
+      });
+      snapshot = setThreadAutoNudgeConfig(snapshot, THREAD_ID, {
+        ...DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+        authorityRevision: 14,
+        prompt: "Keep this exact thread moving",
+      });
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot,
+        resolveRpc: (body) =>
+          body._tag === ORCHESTRATION_WS_METHODS.dispatchCommand
+            ? { sequence: snapshot.snapshotSequence + 1 }
+            : undefined,
+      });
+
+      try {
+        await expandAutoNudgeControls();
+        await page.getByLabelText("Maximum rounds").fill("8");
+        await page.getByLabelText("Maximum minutes").fill("90");
+        await page.getByRole("button", { name: "Save limits" }).click();
+
+        await vi.waitFor(
+          () => {
+            expect(
+              wsRequests.some(
+                (request) =>
+                  request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+                  request.type === "thread.auto-nudge.configure" &&
+                  request.threadId === THREAD_ID &&
+                  request.expectedAuthorityRevision === 14 &&
+                  request.mode === "off" &&
+                  request.prompt === "Keep this exact thread moving" &&
+                  request.backgroundContinuation === false &&
+                  request.maxRounds === 8 &&
+                  request.maxMinutes === 90,
               ),
             ).toBe(true);
           },
@@ -4210,6 +4593,7 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
       });
 
       try {
+        await expandAutoNudgeControls();
         await page.getByRole("textbox", { name: "Prompt for this thread" }).fill("Pending prompt");
         await page.getByRole("button", { name: "Save prompt" }).click();
         await vi.waitFor(
@@ -4269,6 +4653,7 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
       });
 
       try {
+        await expandAutoNudgeControls();
         const arming = getConfirmedAutoNudgeArming();
         expect(arming.getSuppressedSnapshot()).toBe(false);
         const modeTrigger = page.getByRole("combobox", { name: "Auto nudge mode" });
@@ -4346,6 +4731,7 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
       });
 
       try {
+        await expandAutoNudgeControls();
         await page.getByRole("switch", { name: "Continue this thread in background" }).click();
         await vi.waitFor(
           () => {
@@ -4399,6 +4785,7 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
       });
 
       try {
+        await expandAutoNudgeControls();
         resetSavedEnvironmentRegistryStoreForTests();
         await page.getByRole("button", { name: "Emergency Stop all" }).click();
         await expect
@@ -4439,6 +4826,7 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
       });
 
       try {
+        await expandAutoNudgeControls();
         await page.getByRole("button", { name: "Emergency Stop all" }).click();
         await page.getByRole("button", { name: "Allow Auto Nudge again" }).click();
         await expect
@@ -6488,6 +6876,54 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
   }
 
   if (chatViewBrowserPart === "layout") {
+    it("overlays selected-project telemetry without reserving message-timeline height", async () => {
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: createSnapshotWithLongProposedPlan(),
+      });
+
+      try {
+        const expand = document.querySelector<HTMLButtonElement>(
+          'button[aria-label="Expand Resources"]',
+        );
+        expand?.click();
+        const panel = await waitForElement(
+          () =>
+            document.querySelector<HTMLElement>('[aria-label="Selected project system telemetry"]'),
+          "Unable to find selected-project telemetry panel.",
+        );
+        const slot = panel.closest<HTMLElement>('[data-project-telemetry-slot="true"]');
+        const timeline = slot?.nextElementSibling as HTMLElement | null;
+        const chatAnchor = slot?.parentElement;
+
+        expect(slot).toBeTruthy();
+        expect(timeline).toBeTruthy();
+        expect(chatAnchor).toBeTruthy();
+        expect(getComputedStyle(slot!).position).toBe("absolute");
+        expect(timeline?.getBoundingClientRect().top).toBe(chatAnchor?.getBoundingClientRect().top);
+        expect(timeline?.getBoundingClientRect().height).toBe(
+          chatAnchor?.getBoundingClientRect().height,
+        );
+        expect(panel.getBoundingClientRect().right).toBeLessThanOrEqual(
+          chatAnchor?.getBoundingClientRect().right ?? 0,
+        );
+        expect(panel.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+          chatAnchor?.getBoundingClientRect().bottom ?? 0,
+        );
+        await vi.waitFor(() => {
+          expect(
+            wsRequests.some(
+              (request) =>
+                request._tag === WS_METHODS.serverGetProjectSystemTelemetry &&
+                request.projectId === PROJECT_ID,
+            ),
+          ).toBe(true);
+        });
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
     it("keeps long proposed plans lightweight until the user expands them", async () => {
       const mounted = await mountChatView({
         viewport: DEFAULT_VIEWPORT,

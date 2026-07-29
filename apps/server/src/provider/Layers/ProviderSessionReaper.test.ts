@@ -80,6 +80,7 @@ function makeReadModel(
       branch: null,
       worktreePath: null,
       autoNudge: DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+      manualFollowUps: [],
       createdAt: now,
       updatedAt: now,
       archivedAt: null,
@@ -199,6 +200,7 @@ describe("ProviderSessionReaper", () => {
           getCounts: () => Effect.die("unused"),
           getActiveProjectByWorkspaceRoot: () => Effect.die("unused"),
           getProjectShellById: () => Effect.die("unused"),
+          getProjectWorkspaceRootById: () => Effect.die("unused"),
           getFirstActiveThreadIdByProjectId: () => Effect.die("unused"),
           getThreadCheckpointContext: () => Effect.die("unused"),
           getThreadShellById: (threadId) =>
@@ -207,6 +209,7 @@ describe("ProviderSessionReaper", () => {
                 ? Option.some({
                     ...input.readModel.threads.find((thread) => thread.id === threadId)!,
                     autoNudge: DEFAULT_THREAD_AUTO_NUDGE_SUMMARY,
+                    manualFollowUpCount: 0,
                     latestUserMessageAt: null,
                     hasPendingApprovals: false,
                     hasPendingUserInput: false,

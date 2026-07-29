@@ -77,17 +77,26 @@ export const makeServerSecretStore = Effect.gen(function* () {
 
   const create: ServerSecretStoreShape["set"] = (name, value) => {
     const secretPath = resolveSecretPath(name);
-    return Effect.scoped(
-      Effect.gen(function* () {
-        const file = yield* fileSystem.open(secretPath, {
-          flag: "wx",
-          mode: 0o600,
-        });
-        yield* file.writeAll(value);
-        yield* file.sync;
-        yield* fileSystem.chmod(secretPath, 0o600);
-      }),
-    ).pipe(
+    const tempPath = `${secretPath}.${Crypto.randomUUID()}.tmp`;
+    return Effect.gen(function* () {
+      // Publish only a fully written file. Opening the final path with `wx`
+      // makes the name visible before writeAll completes, so a concurrent
+      // creator can observe an empty or partial secret. A same-directory hard
+      // link is atomic and fails with AlreadyExists when another creator wins.
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const file = yield* fileSystem.open(tempPath, {
+            flag: "wx",
+            mode: 0o600,
+          });
+          yield* file.writeAll(value);
+          yield* file.sync;
+        }),
+      );
+      yield* fileSystem.chmod(tempPath, 0o600);
+      yield* fileSystem.link(tempPath, secretPath);
+    }).pipe(
+      Effect.ensuring(fileSystem.remove(tempPath).pipe(Effect.ignore)),
       Effect.mapError(
         (cause) =>
           new SecretStoreError({
@@ -107,7 +116,7 @@ export const makeServerSecretStore = Effect.gen(function* () {
 
         const generated = Crypto.randomBytes(bytes);
         return create(name, generated).pipe(
-          Effect.as(Uint8Array.from(generated)),
+          Effect.map(() => Uint8Array.from(generated)),
           Effect.catchTag("SecretStoreError", (error) =>
             isPlatformError(error.cause) && error.cause.reason._tag === "AlreadyExists"
               ? get(name).pipe(
@@ -122,6 +131,13 @@ export const makeServerSecretStore = Effect.gen(function* () {
                   ),
                 )
               : Effect.fail(error),
+          ),
+          // The random candidate is internal scratch memory. Callers receive a
+          // copy on success, while a losing candidate is never returned.
+          Effect.ensuring(
+            Effect.sync(() => {
+              generated.fill(0);
+            }),
           ),
         );
       }),

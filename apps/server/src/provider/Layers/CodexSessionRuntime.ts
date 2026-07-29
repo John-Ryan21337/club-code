@@ -61,6 +61,8 @@ import {
 const decodeV2TurnStartResponse = Schema.decodeUnknownEffect(EffectCodexSchema.V2TurnStartResponse);
 const decodeV2TurnSteerParams = Schema.decodeUnknownEffect(EffectCodexSchema.V2TurnSteerParams);
 const decodeV2TurnSteerResponse = Schema.decodeUnknownEffect(EffectCodexSchema.V2TurnSteerResponse);
+const isV2ItemCompletedNotification = Schema.is(EffectCodexSchema.V2ItemCompletedNotification);
+const isV2TurnCompletedNotification = Schema.is(EffectCodexSchema.V2TurnCompletedNotification);
 
 const PROVIDER = ProviderDriverKind.make("codex");
 
@@ -127,6 +129,7 @@ const CODEX_AGGREGATE_CHILD_LIVENESS_POLL_DELAYS = [
 ] as const;
 const CODEX_APP_SERVER_CHILD_PROCESS_WARNING_LIMIT = 8;
 const CODEX_APP_SERVER_CHILD_PROCESS_COMMAND_PREVIEW_LENGTH = 180;
+export const CODEX_COMPLETED_AGENT_MESSAGE_LEDGER_LIMIT = 512;
 const RECOVERABLE_THREAD_RESUME_ERROR_SNIPPETS = [
   "not found",
   "missing thread",
@@ -501,6 +504,13 @@ export type CodexServerNotification = {
   readonly emittedAtMs?: number;
 };
 
+export type CodexCompletedAgentMessageLedger = ReadonlyMap<string, true>;
+
+export interface CodexCompletedAgentMessageReconciliation {
+  readonly ledger: CodexCompletedAgentMessageLedger;
+  readonly notifications: ReadonlyArray<CodexServerNotification>;
+}
+
 interface CodexSnapshotReadResult {
   readonly threadStatusType: "notLoaded" | "idle" | "systemError" | "active" | undefined;
   readonly turn: CodexSnapshotTurn | null;
@@ -559,6 +569,147 @@ function makeCodexServerNotification(
     method,
     params,
     ...(emittedAtMs !== undefined ? { emittedAtMs } : {}),
+  };
+}
+
+function codexCompletedAgentMessageKey(input: {
+  readonly threadId: string;
+  readonly turnId: string;
+  readonly itemId: string;
+}): string {
+  // Provider identifiers are opaque. A tuple encoding avoids delimiter
+  // collisions without retaining assistant text in session bookkeeping.
+  return JSON.stringify([input.threadId, input.turnId, input.itemId]);
+}
+
+function rememberCodexCompletedAgentMessage(
+  current: CodexCompletedAgentMessageLedger,
+  key: string,
+): CodexCompletedAgentMessageLedger {
+  if (current.has(key)) {
+    return current;
+  }
+
+  const next = new Map(current);
+  next.set(key, true);
+  while (next.size > CODEX_COMPLETED_AGENT_MESSAGE_LEDGER_LIMIT) {
+    const oldest = next.keys().next().value;
+    if (oldest === undefined) {
+      break;
+    }
+    next.delete(oldest);
+  }
+  return next;
+}
+
+function codexTurnCompletedAtMs(
+  completedAtSeconds: number | null | undefined,
+  observedAtMs: number,
+): number {
+  if (
+    completedAtSeconds === null ||
+    completedAtSeconds === undefined ||
+    !Number.isSafeInteger(completedAtSeconds) ||
+    completedAtSeconds < 0 ||
+    completedAtSeconds > Math.floor(Number.MAX_SAFE_INTEGER / 1_000)
+  ) {
+    return observedAtMs;
+  }
+  return completedAtSeconds * 1_000;
+}
+
+/**
+ * Codex 0.146 makes the final non-empty agent message available in
+ * `turn/completed.turn.items` even when an `item/completed` notification was
+ * dropped. Recreate that one lifecycle notification before terminalizing the
+ * turn, while suppressing a duplicate whether the item notification arrives
+ * before or after the terminal notification.
+ *
+ * The caller owns this bounded ledger for one app-server session. It stores
+ * opaque provider identities only; assistant text is never retained.
+ */
+export function reconcileCodexCompletedAgentMessageNotifications(
+  current: CodexCompletedAgentMessageLedger,
+  notification: CodexServerNotification,
+  observedAtMs: number,
+): CodexCompletedAgentMessageReconciliation {
+  if (
+    notification.method === "item/completed" &&
+    readNotificationItemType(notification) === "agentMessage" &&
+    isV2ItemCompletedNotification(notification.params) &&
+    notification.params.item.type === "agentMessage" &&
+    notification.params.item.text.trim().length > 0
+  ) {
+    const payload = notification.params;
+    const key = codexCompletedAgentMessageKey({
+      threadId: payload.threadId,
+      turnId: payload.turnId,
+      itemId: payload.item.id,
+    });
+    if (current.has(key)) {
+      return {
+        ledger: current,
+        notifications: [],
+      };
+    }
+    return {
+      ledger: rememberCodexCompletedAgentMessage(current, key),
+      notifications: [notification],
+    };
+  }
+
+  if (
+    notification.method !== "turn/completed" ||
+    !isV2TurnCompletedNotification(notification.params)
+  ) {
+    return {
+      ledger: current,
+      notifications: [notification],
+    };
+  }
+
+  const payload = notification.params;
+  if (payload.turn.status !== "completed") {
+    return {
+      ledger: current,
+      notifications: [notification],
+    };
+  }
+  const finalAgentMessage = payload.turn.items.findLast(
+    (item) => item.type === "agentMessage" && item.text.trim().length > 0,
+  );
+  if (finalAgentMessage?.type !== "agentMessage") {
+    return {
+      ledger: current,
+      notifications: [notification],
+    };
+  }
+
+  const key = codexCompletedAgentMessageKey({
+    threadId: payload.threadId,
+    turnId: payload.turn.id,
+    itemId: finalAgentMessage.id,
+  });
+  if (current.has(key)) {
+    return {
+      ledger: current,
+      notifications: [notification],
+    };
+  }
+
+  const fallback = makeCodexServerNotification(
+    "item/completed",
+    {
+      completedAtMs: codexTurnCompletedAtMs(payload.turn.completedAt, observedAtMs),
+      threadId: payload.threadId,
+      turnId: payload.turn.id,
+      item: finalAgentMessage,
+    } satisfies EffectCodexSchema.V2ItemCompletedNotification,
+    notification.emittedAtMs,
+  );
+  return {
+    ledger: rememberCodexCompletedAgentMessage(current, key),
+    notifications: [fallback, notification],
   };
 }
 
@@ -2434,6 +2585,7 @@ export const makeCodexSessionRuntime = (
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const runtimeScope = yield* Scope.Scope;
     const events = yield* Queue.unbounded<ProviderEvent>();
+    const completedAgentMessagesRef = yield* Ref.make<CodexCompletedAgentMessageLedger>(new Map());
     const pendingApprovalsRef = yield* Ref.make(new Map<ApprovalRequestId, PendingApproval>());
     const approvalCorrelationsRef = yield* Ref.make(new Map<string, ApprovalCorrelation>());
     const pendingUserInputsRef = yield* Ref.make(new Map<ApprovalRequestId, PendingUserInput>());
@@ -3913,9 +4065,14 @@ export const makeCodexSessionRuntime = (
         );
       });
 
-    const handleRawNotification = (notification: CodexServerNotification) =>
+    const projectRawNotification = (
+      notification: CodexServerNotification,
+      observation: {
+        readonly observedAt: string;
+        readonly observedAtMs: number;
+      },
+    ) =>
       Effect.gen(function* () {
-        const observation = yield* observeNotification(notification);
         yield* updateActiveContextCompactionsFromNotification(
           notification,
           observation.observedAt,
@@ -4054,6 +4211,24 @@ export const makeCodexSessionRuntime = (
             ...(payload !== undefined ? { payload } : {}),
           },
           observedAt,
+        );
+      });
+
+    const handleRawNotification = (notification: CodexServerNotification) =>
+      Effect.gen(function* () {
+        const observation = yield* observeNotification(notification);
+        const preparedNotifications = yield* Ref.modify(completedAgentMessagesRef, (current) => {
+          const reconciliation = reconcileCodexCompletedAgentMessageNotifications(
+            current,
+            notification,
+            observation.observedAtMs,
+          );
+          return [reconciliation.notifications, reconciliation.ledger] as const;
+        });
+        yield* Effect.forEach(
+          preparedNotifications,
+          (prepared) => projectRawNotification(prepared, observation),
+          { discard: true },
         );
       });
 

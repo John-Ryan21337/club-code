@@ -76,6 +76,7 @@ function createShellSnapshot(): OrchestrationShellSnapshot {
         hasPendingUserInput: false,
         hasActionableProposedPlan: false,
         autoNudge: DEFAULT_THREAD_AUTO_NUDGE_SUMMARY,
+        manualFollowUpCount: 0,
       },
     ],
     updatedAt: NOW_ISO,

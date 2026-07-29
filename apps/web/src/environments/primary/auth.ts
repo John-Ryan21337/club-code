@@ -62,6 +62,7 @@ type ServerAuthGateState =
 
 let bootstrapPromise: Promise<ServerAuthGateState> | null = null;
 let resolvedAuthenticatedGateState: ServerAuthGateState | null = null;
+let authBootstrapStateGeneration = 0;
 const AUTH_SESSION_ESTABLISH_TIMEOUT_MS = 2_000;
 const AUTH_SESSION_ESTABLISH_STEP_MS = 100;
 
@@ -88,7 +89,7 @@ export function takePairingTokenFromUrl(): string | null {
 }
 
 function getDesktopBootstrapCredential(): string | null {
-  const bootstrap = window.desktopBridge?.getLocalEnvironmentBootstrap();
+  const bootstrap = window.desktopBridge?.getLocalEnvironmentBootstrap?.();
   return typeof bootstrap?.bootstrapToken === "string" && bootstrap.bootstrapToken.length > 0
     ? bootstrap.bootstrapToken
     : null;
@@ -510,10 +511,11 @@ export async function resolveInitialServerAuthGateState(): Promise<ServerAuthGat
   }
 
   const nextPromise = bootstrapServerAuth();
+  const stateGeneration = authBootstrapStateGeneration;
   bootstrapPromise = nextPromise;
   return nextPromise
     .then((result) => {
-      if (result.status === "authenticated") {
+      if (result.status === "authenticated" && authBootstrapStateGeneration === stateGeneration) {
         resolvedAuthenticatedGateState = result;
       }
       return result;
@@ -526,6 +528,7 @@ export async function resolveInitialServerAuthGateState(): Promise<ServerAuthGat
 }
 
 export function __resetServerAuthBootstrapForTests() {
+  authBootstrapStateGeneration += 1;
   bootstrapPromise = null;
   resolvedAuthenticatedGateState = null;
 }

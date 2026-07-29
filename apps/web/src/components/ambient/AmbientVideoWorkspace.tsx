@@ -57,7 +57,7 @@ import { AmbientAudioCaptureControl } from "./AmbientAudioCaptureControl";
 import { YouTubePlaylistControls } from "./YouTubePlaylistControls";
 import { YouTubeUrlQueueControls } from "./YouTubeUrlQueueControls";
 
-const FLOATING_HIDE_PANE_WIDTH = 640;
+const FLOATING_WIDE_PANE_WIDTH = 640;
 const FLOATING_MARGIN = 16;
 const CUSTOM_MIN_WIDTH = 356;
 const CUSTOM_MAX_WIDTH_FRACTION = 0.9;
@@ -66,6 +66,12 @@ const KEYBOARD_MOVE_STEP = 0.02;
 const KEYBOARD_RESIZE_STEP = 0.025;
 const FLOATING_PLAYLIST_CONTROLS_HEIGHT = 36;
 const YOUTUBE_MINIMUM_VIEWPORT_HEIGHT = 200;
+const MOBILE_PLAYER_CONTROLS_HEIGHT = 36;
+const MOBILE_DOCKED_MAX_WIDTH = 480;
+// The section uses Tailwind's 1px border on each edge. YouTube's documented
+// 200x200 minimum applies to the iframe viewport inside that border, not the
+// outer panel box.
+const PLAYER_FRAME_BORDER_SIZE = 2;
 const ADAPTIVE_GLOW_LOAD_TIMEOUT_MS = 5_000;
 
 interface AmbientVideoWorkspaceContextValue {
@@ -316,6 +322,45 @@ function geometryStyle(
     left: Math.max(anchor.left, Math.min(requestedLeft, anchor.left + anchor.width - width)),
     top: Math.max(anchor.top, Math.min(requestedTop, anchor.top + anchor.height - height)),
     width,
+    height,
+  };
+}
+
+function mobileDockedPlayerSize(anchor: MeasuredRect): {
+  readonly frameWidth: number;
+  readonly playerHeight: number;
+} {
+  const minimumFrameWidth = YOUTUBE_MINIMUM_VIEWPORT_HEIGHT + PLAYER_FRAME_BORDER_SIZE;
+  const horizontallyInsetWidth = Math.min(
+    anchor.width,
+    Math.max(minimumFrameWidth, anchor.width - FLOATING_MARGIN * 2),
+  );
+  const availablePlayerHeight = Math.max(
+    YOUTUBE_MINIMUM_VIEWPORT_HEIGHT,
+    anchor.height - MOBILE_PLAYER_CONTROLS_HEIGHT - PLAYER_FRAME_BORDER_SIZE,
+  );
+  const frameWidth = Math.min(
+    MOBILE_DOCKED_MAX_WIDTH,
+    horizontallyInsetWidth,
+    availablePlayerHeight * VIDEO_ASPECT_RATIO + PLAYER_FRAME_BORDER_SIZE,
+  );
+  const playerWidth = Math.max(0, frameWidth - PLAYER_FRAME_BORDER_SIZE);
+  return {
+    frameWidth,
+    // YouTube requires an embedded-player viewport of at least 200x200.
+    // Common phone widths remain 16:9; narrower panes receive letterboxing
+    // instead of silently unmounting the player or violating that minimum.
+    playerHeight: Math.max(YOUTUBE_MINIMUM_VIEWPORT_HEIGHT, playerWidth / VIDEO_ASPECT_RATIO),
+  };
+}
+
+function mobileDockedGeometryStyle(anchor: MeasuredRect): CSSProperties {
+  const player = mobileDockedPlayerSize(anchor);
+  const height = player.playerHeight + MOBILE_PLAYER_CONTROLS_HEIGHT + PLAYER_FRAME_BORDER_SIZE;
+  return {
+    left: anchor.left + (anchor.width - player.frameWidth) / 2,
+    top: anchor.top + Math.min(FLOATING_MARGIN, Math.max(0, anchor.height - height)),
+    width: player.frameWidth,
     height,
   };
 }
@@ -796,16 +841,28 @@ export function AmbientVideoWorkspace({
     return clampGeometryForAnchor(customGeometry ?? preset, anchorRect);
   }, [anchorRect, customGeometry, preset, settings.ambientVideoLayoutMode]);
 
-  const floatingVisible =
+  const floatingWideVisible =
     locallyRenderable &&
     !cinemaEffective &&
     !localPresentationDominant &&
     anchorRect !== null &&
-    anchorRect.width >= FLOATING_HIDE_PANE_WIDTH &&
+    anchorRect.width >= FLOATING_WIDE_PANE_WIDTH &&
     anchorRect.height >=
       YOUTUBE_MINIMUM_VIEWPORT_HEIGHT +
-        (sourceHasNavigation ? FLOATING_PLAYLIST_CONTROLS_HEIGHT : 0) &&
+        (sourceHasNavigation ? FLOATING_PLAYLIST_CONTROLS_HEIGHT : 0) +
+        PLAYER_FRAME_BORDER_SIZE &&
     effectiveGeometry !== null;
+  const mobileDockedVisible =
+    locallyRenderable &&
+    spotifySource === null &&
+    !cinemaEffective &&
+    !localPresentationDominant &&
+    anchorRect !== null &&
+    anchorRect.width >= YOUTUBE_MINIMUM_VIEWPORT_HEIGHT + PLAYER_FRAME_BORDER_SIZE &&
+    anchorRect.width < FLOATING_WIDE_PANE_WIDTH &&
+    anchorRect.height >=
+      YOUTUBE_MINIMUM_VIEWPORT_HEIGHT + MOBILE_PLAYER_CONTROLS_HEIGHT + PLAYER_FRAME_BORDER_SIZE;
+  const floatingVisible = floatingWideVisible || mobileDockedVisible;
   const retainMountedPlayer =
     retainPlayerWithoutAnchor &&
     chatAnchor === null &&
@@ -1013,6 +1070,9 @@ export function AmbientVideoWorkspace({
     if (streamingCinemaEffective) {
       return {};
     }
+    if (mobileDockedVisible && anchorRect) {
+      return mobileDockedGeometryStyle(anchorRect);
+    }
     if (!floatingVisible || !anchorRect || !effectiveGeometry) {
       return { display: "none" };
     }
@@ -1025,9 +1085,12 @@ export function AmbientVideoWorkspace({
     anchorRect,
     effectiveGeometry,
     floatingVisible,
+    mobileDockedVisible,
     sourceHasNavigation,
     streamingCinemaEffective,
   ]);
+  const mobileDockedPlayerHeight =
+    mobileDockedVisible && anchorRect ? mobileDockedPlayerSize(anchorRect).playerHeight : null;
 
   const contextValue = useMemo(
     () => ({ registerChatAnchor, cinemaEffective, localMediaBackgroundEffective }),
@@ -1189,6 +1252,9 @@ export function AmbientVideoWorkspace({
               : "off"
           }
           data-ambient-protected-player={streamingCinemaEffective ? "true" : undefined}
+          data-ambient-video-layout={
+            streamingCinemaEffective ? "cinema" : mobileDockedVisible ? "mobile-docked" : "floating"
+          }
           style={
             {
               ...frameStyle,
@@ -1215,10 +1281,13 @@ export function AmbientVideoWorkspace({
               allow={
                 spotifySource
                   ? "autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
-                  : "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                  : "accelerometer; autoplay; clipboard-write; encrypted-media; fullscreen; gyroscope; picture-in-picture; web-share"
               }
               allowFullScreen
-              className="block aspect-video w-full shrink-0 border-0 bg-black"
+              className={cn(
+                "block w-full shrink-0 border-0 bg-black",
+                mobileDockedPlayerHeight === null && "aspect-video",
+              )}
               id={source.kind === "spotify" ? undefined : YOUTUBE_PLAYLIST_IFRAME_ID}
               ref={registerPlayerFrame}
               referrerPolicy="strict-origin-when-cross-origin"
@@ -1227,6 +1296,9 @@ export function AmbientVideoWorkspace({
                 source.kind === "spotify"
                   ? spotifyEmbedUrl(source)
                   : youtubeEmbedUrl(source, { autoplay: queueActive })
+              }
+              style={
+                mobileDockedPlayerHeight === null ? undefined : { height: mobileDockedPlayerHeight }
               }
               onLoad={(event) => {
                 if (sourceKey !== null) {
@@ -1318,7 +1390,10 @@ export function AmbientVideoWorkspace({
             </div>
           ) : null}
 
-          {!streamingCinemaEffective && floatingVisible && sourceHasNavigation ? (
+          {!streamingCinemaEffective &&
+          floatingVisible &&
+          !mobileDockedVisible &&
+          sourceHasNavigation ? (
             <div className="order-last flex h-9 shrink-0 items-center justify-center border-t border-border/80 bg-card px-2 text-foreground">
               {queueActive ? (
                 <YouTubeUrlQueueControls />
@@ -1331,7 +1406,34 @@ export function AmbientVideoWorkspace({
             </div>
           ) : null}
 
-          {!streamingCinemaEffective && floatingVisible ? (
+          {mobileDockedVisible ? (
+            <div className="order-last flex h-9 shrink-0 items-center justify-between gap-1 border-t border-border/80 bg-card px-2 text-foreground">
+              {queueActive ? (
+                <YouTubeUrlQueueControls className="min-w-0 flex-1 justify-center [&>button]:shrink-0 [&>span]:min-w-0 [&>span]:truncate" />
+              ) : sourceSupportsPlaylistNavigation ? (
+                <YouTubePlaylistControls
+                  className="min-w-0 flex-1 justify-center [&>button]:shrink-0 [&>span]:min-w-0 [&>span]:truncate"
+                  controller={youtubePlaylistController}
+                  status={youtubePlaylistStatus}
+                />
+              ) : (
+                <span className="min-w-0 flex-1 truncate px-1 text-xs text-muted-foreground">
+                  YouTube
+                </span>
+              )}
+              <button
+                type="button"
+                aria-label="Disable ambient video"
+                title="Disable ambient video"
+                className="inline-flex size-7 shrink-0 items-center justify-center rounded-md hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                onClick={() => updateSettings({ ambientVideoEnabled: false })}
+              >
+                <XIcon className="size-3.5" />
+              </button>
+            </div>
+          ) : null}
+
+          {!streamingCinemaEffective && floatingVisible && !mobileDockedVisible ? (
             <>
               <button
                 type="button"

@@ -99,6 +99,7 @@ describe("orchestration projector", () => {
         checkpoints: [],
         session: null,
         autoNudge: DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+        manualFollowUps: [],
       },
     ]);
   });

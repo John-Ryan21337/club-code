@@ -18,6 +18,7 @@ import {
   deriveLockedProvider,
   hasServerAcknowledgedLocalDispatch,
   mergePendingSteerSnapshotsForInterruptedTurn,
+  prepareComposerImagesForRetry,
   resolveFollowUpQueuePhase,
   resolveSendEnvMode,
   shouldResolvePendingSteerDispatch,
@@ -112,6 +113,76 @@ describe("mergePendingSteerSnapshotsForInterruptedTurn", () => {
 
     expect(merged?.promptText).toBe("describe this");
     expect(merged?.images).toEqual([image]);
+  });
+
+  it("creates exactly one queue-owned blob preview per recovered steer attachment", () => {
+    const createObjectUrl = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:queue-owned");
+    const file = new File(["image"], "image.png", { type: "image/png" });
+    const image = {
+      type: "image" as const,
+      id: "image-1",
+      name: "image.png",
+      mimeType: "image/png",
+      sizeBytes: file.size,
+      file,
+      previewUrl: "blob:pending-steer",
+    };
+
+    const merged = mergePendingSteerSnapshotsForInterruptedTurn([
+      { promptText: "keep this attachment", images: [image] },
+    ]);
+
+    expect(createObjectUrl).toHaveBeenCalledExactlyOnceWith(file);
+    expect(merged?.images).toEqual([
+      {
+        ...image,
+        previewUrl: "blob:queue-owned",
+      },
+    ]);
+  });
+});
+
+describe("prepareComposerImagesForRetry", () => {
+  it("clones blob previews before their shared optimistic owner revokes them", () => {
+    const createObjectUrl = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:retry-owned");
+    const file = new File(["image"], "image.png", { type: "image/png" });
+    const image = {
+      type: "image" as const,
+      id: "image-1",
+      name: "image.png",
+      mimeType: "image/png",
+      sizeBytes: file.size,
+      file,
+      previewUrl: "blob:optimistic-owner",
+    };
+
+    const retryImages = prepareComposerImagesForRetry([image], {
+      sharedPreviewOwnerWillRevoke: true,
+    });
+
+    expect(createObjectUrl).toHaveBeenCalledExactlyOnceWith(file);
+    expect(retryImages[0]?.previewUrl).toBe("blob:retry-owned");
+  });
+
+  it("retains background preview ownership without creating an orphan clone", () => {
+    const createObjectUrl = vi.spyOn(URL, "createObjectURL");
+    const file = new File(["image"], "image.png", { type: "image/png" });
+    const image = {
+      type: "image" as const,
+      id: "image-1",
+      name: "image.png",
+      mimeType: "image/png",
+      sizeBytes: file.size,
+      file,
+      previewUrl: "blob:queue-owner",
+    };
+
+    const retryImages = prepareComposerImagesForRetry([image], {
+      sharedPreviewOwnerWillRevoke: false,
+    });
+
+    expect(createObjectUrl).not.toHaveBeenCalled();
+    expect(retryImages).toEqual([image]);
   });
 });
 
@@ -310,6 +381,7 @@ const makeThread = (input?: {
   turnDiffSummaries: [],
   activities: [],
   autoNudge: DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+  manualFollowUps: [],
 });
 
 function setStoreThreads(threads: ReadonlyArray<ReturnType<typeof makeThread>>) {
@@ -365,6 +437,7 @@ function setStoreThreads(threads: ReadonlyArray<ReturnType<typeof makeThread>>) 
             roundsDispatched: thread.autoNudge.roundsDispatched,
             lastDispatchedAt: thread.autoNudge.lastDispatchedAt,
           },
+          manualFollowUpCount: thread.manualFollowUps.length,
         },
       ]),
     ),
@@ -382,6 +455,9 @@ function setStoreThreads(threads: ReadonlyArray<ReturnType<typeof makeThread>>) 
     ),
     threadAutoNudgeConfigById: Object.fromEntries(
       threads.map((thread) => [thread.id, thread.autoNudge]),
+    ),
+    manualFollowUpsByThreadId: Object.fromEntries(
+      threads.map((thread) => [thread.id, thread.manualFollowUps]),
     ),
     messageIdsByThreadId: Object.fromEntries(
       threads.map((thread) => [thread.id, thread.messages.map((message) => message.id)]),
@@ -567,6 +643,7 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
       turnDiffSummaries: [],
       activities: [],
       autoNudge: DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+      manualFollowUps: [],
     });
 
     expect(
@@ -605,6 +682,7 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
       turnDiffSummaries: [],
       activities: [],
       autoNudge: DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+      manualFollowUps: [],
     });
 
     expect(
@@ -687,6 +765,7 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
       turnDiffSummaries: [],
       activities: [],
       autoNudge: DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+      manualFollowUps: [],
     });
 
     expect(
@@ -731,6 +810,7 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
       turnDiffSummaries: [],
       activities: [],
       autoNudge: DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+      manualFollowUps: [],
     });
 
     expect(
@@ -775,6 +855,7 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
       turnDiffSummaries: [],
       activities: [],
       autoNudge: DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+      manualFollowUps: [],
     });
 
     expect(
@@ -826,6 +907,7 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
       turnDiffSummaries: [],
       activities: [],
       autoNudge: DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+      manualFollowUps: [],
     });
 
     expect(

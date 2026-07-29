@@ -61,6 +61,7 @@ function makeSnapshot(): OrchestrationThreadDetailSnapshotType {
       activities: [],
       checkpoints: [],
       autoNudge: DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+      manualFollowUps: [],
       session: null,
     },
   };

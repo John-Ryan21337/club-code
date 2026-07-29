@@ -114,12 +114,17 @@ export const mergeProviderSnapshot = (
         // Codex cloud and Codex OSS are different model catalogs even when
         // they share an instance id. Never carry cloud slugs into LM Studio
         // (or stale local slugs back into cloud mode) across a settings-driven
-        // instance rebuild.
+        // instance rebuild. LM Studio's current `/v1/models` response is also
+        // authoritative on every refresh: preserving or appending models from
+        // an older local snapshot would keep unloaded models selectable after
+        // an empty, partial, failed, or authentication-required discovery.
         models:
-          previousProvider.driver === ProviderDriverKind.make("codex") &&
-          nextProvider.driver === ProviderDriverKind.make("codex") &&
-          previousProvider.auth.type !== nextProvider.auth.type &&
-          (previousProvider.auth.type === "local" || nextProvider.auth.type === "local")
+          (nextProvider.driver === ProviderDriverKind.make("codex") &&
+            nextProvider.auth.type === "local") ||
+          (previousProvider.driver === ProviderDriverKind.make("codex") &&
+            nextProvider.driver === ProviderDriverKind.make("codex") &&
+            previousProvider.auth.type !== nextProvider.auth.type &&
+            previousProvider.auth.type === "local")
             ? nextProvider.models
             : mergeProviderModels(previousProvider.models, nextProvider.models),
         // Carry forward a known-good event-sourced or polled account snapshot

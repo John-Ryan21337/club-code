@@ -1733,9 +1733,14 @@ describe("ProviderRuntimeIngestion", () => {
       type: "item.started" | "item.updated" | "item.completed",
       eventId: string,
       itemId: ReturnType<typeof asItemId>,
-      itemType: "command_execution" | "dynamic_tool_call" | "collab_agent_tool_call" | "web_search",
+      itemType:
+        | "command_execution"
+        | "dynamic_tool_call"
+        | "collab_agent_tool_call"
+        | "mcp_tool_call"
+        | "web_search",
       data: unknown,
-      provider = type === "item.updated" ? "claude" : "codex",
+      provider = "codex",
     ) => {
       harness.emit({
         type,
@@ -1798,27 +1803,70 @@ describe("ProviderRuntimeIngestion", () => {
       "command_execution",
       { command: classifiedHeadlessBuildCommand },
     );
-    emitItem(
-      "item.completed",
-      "evt-matrix-database-completed",
-      asItemId("item-database"),
-      "command_execution",
-      {
-        toolName: "Bash",
-        input: { command: "sqlite3 private-workspace.db" },
-      },
-    );
-    emitItem(
-      "item.completed",
-      "evt-matrix-network-completed",
-      asItemId("item-network"),
-      "web_search",
-      {
-        item: { type: "webSearch" },
-        query: "private prompt",
-        url: "https://credential.example.test",
-      },
-    );
+    const databaseItemId = asItemId("item-database");
+    for (const type of ["item.started", "item.completed"] as const) {
+      emitItem(
+        type,
+        `evt-matrix-database-${type === "item.started" ? "started" : "completed"}`,
+        databaseItemId,
+        "command_execution",
+        {
+          toolName: "Bash",
+          input: { command: "sqlite3 private-workspace.db" },
+        },
+        "claude",
+      );
+    }
+    const networkItemId = asItemId("item-network");
+    for (const type of ["item.started", "item.completed"] as const) {
+      emitItem(
+        type,
+        `evt-matrix-network-${type === "item.started" ? "started" : "completed"}`,
+        networkItemId,
+        "web_search",
+        {
+          item: { type: "webSearch" },
+          query: "private prompt",
+          url: "https://credential.example.test",
+        },
+        "codex",
+      );
+    }
+    const codexDatabaseItemId = asItemId("item-codex-database");
+    for (const type of ["item.started", "item.completed"] as const) {
+      emitItem(
+        type,
+        `evt-matrix-codex-database-${type === "item.started" ? "started" : "completed"}`,
+        codexDatabaseItemId,
+        "mcp_tool_call",
+        {
+          item: {
+            id: codexDatabaseItemId,
+            type: "mcpToolCall",
+            server: "postgres",
+            tool: "query",
+            arguments: { query: "select private_column from private_table" },
+            status: type === "item.started" ? "inProgress" : "completed",
+          },
+        },
+        "codex",
+      );
+    }
+    const claudeNetworkItemId = asItemId("item-claude-network");
+    for (const type of ["item.started", "item.completed"] as const) {
+      emitItem(
+        type,
+        `evt-matrix-claude-network-${type === "item.started" ? "started" : "completed"}`,
+        claudeNetworkItemId,
+        "web_search",
+        {
+          toolName: "WebSearch",
+          input: { query: "private query" },
+          ...(type === "item.completed" ? { result: "private provider result" } : {}),
+        },
+        "claude",
+      );
+    }
     const agentItemId = asItemId("item-agent-dispatch");
     emitItem(
       "item.started",
@@ -2009,14 +2057,32 @@ describe("ProviderRuntimeIngestion", () => {
       });
       expect(payloadFor(eventId).itemId).toBe(classifiedHeadlessBuildItemId);
     }
-    expect(payloadFor("evt-matrix-database-completed").observed).toEqual({
-      providerObserved: true,
-      activityType: "database",
-    });
-    expect(payloadFor("evt-matrix-network-completed").observed).toEqual({
-      providerObserved: true,
-      activityType: "network",
-    });
+    for (const status of ["started", "completed"]) {
+      const databasePayload = payloadFor(`evt-matrix-database-${status}`);
+      expect(databasePayload.itemId).toBe(databaseItemId);
+      expect(databasePayload.observed).toEqual({
+        providerObserved: true,
+        activityType: "database",
+      });
+      const networkPayload = payloadFor(`evt-matrix-network-${status}`);
+      expect(networkPayload.itemId).toBe(networkItemId);
+      expect(networkPayload.observed).toEqual({
+        providerObserved: true,
+        activityType: "network",
+      });
+      const codexDatabasePayload = payloadFor(`evt-matrix-codex-database-${status}`);
+      expect(codexDatabasePayload.itemId).toBe(codexDatabaseItemId);
+      expect(codexDatabasePayload.observed).toEqual({
+        providerObserved: true,
+        activityType: "database",
+      });
+      const claudeNetworkPayload = payloadFor(`evt-matrix-claude-network-${status}`);
+      expect(claudeNetworkPayload.itemId).toBe(claudeNetworkItemId);
+      expect(claudeNetworkPayload.observed).toEqual({
+        providerObserved: true,
+        activityType: "network",
+      });
+    }
     for (const eventId of ["evt-matrix-agent-started", "evt-matrix-agent-completed"]) {
       const payload = payloadFor(eventId);
       expect(payload.itemId).toBe(agentItemId);

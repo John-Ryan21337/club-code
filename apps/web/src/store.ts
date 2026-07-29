@@ -37,6 +37,7 @@ import {
   type ProposedPlan,
   type SidebarThreadSummary,
   type Thread,
+  type ThreadManualFollowUp,
   type ThreadSession,
   type ThreadShell,
   type ThreadTurnState,
@@ -74,6 +75,9 @@ export interface EnvironmentState {
   // Full prompt-bearing configuration is detail-stream-only. Shell state
   // deliberately carries the prompt-free ThreadAutoNudgeSummary instead.
   threadAutoNudgeConfigById: Record<ThreadId, ThreadAutoNudgeConfig>;
+  // Full prompt-bearing manual follow-ups are exact-thread detail state.
+  // Shell state carries only manualFollowUpCount.
+  manualFollowUpsByThreadId: Record<ThreadId, ThreadManualFollowUp[]>;
 
   // ---------------------------------------------------------------------------
   // Thread detail content — written ONLY by the detail stream
@@ -115,6 +119,7 @@ const initialEnvironmentState: EnvironmentState = {
   threadSessionById: {},
   threadTurnStateById: {},
   threadAutoNudgeConfigById: {},
+  manualFollowUpsByThreadId: {},
   messageIdsByThreadId: {},
   messageByThreadId: {},
   activityIdsByThreadId: {},
@@ -216,6 +221,25 @@ function mapMessage(environmentId: EnvironmentId, message: OrchestrationMessage)
   };
 }
 
+function mapManualFollowUp(
+  environmentId: EnvironmentId,
+  item: OrchestrationThread["manualFollowUps"][number],
+): ThreadManualFollowUp {
+  return {
+    ...item,
+    message: {
+      ...item.message,
+      attachments: item.message.attachments.map((attachment) => ({
+        ...attachment,
+        previewUrl: resolveEnvironmentHttpUrl({
+          environmentId,
+          pathname: attachmentPreviewRoutePath(attachment.id),
+        }),
+      })),
+    },
+  };
+}
+
 function mapProposedPlan(proposedPlan: OrchestrationProposedPlan): ProposedPlan {
   return {
     id: proposedPlan.id,
@@ -286,6 +310,7 @@ function mapThread(thread: OrchestrationThread, environmentId: EnvironmentId): T
     turnDiffSummaries: thread.checkpoints.map(mapTurnDiffSummary),
     activities: thread.activities.map((activity) => ({ ...activity })),
     autoNudge: thread.autoNudge,
+    manualFollowUps: thread.manualFollowUps.map((item) => mapManualFollowUp(environmentId, item)),
   };
 }
 
@@ -314,6 +339,7 @@ function mapThreadShell(
     branch: thread.branch,
     worktreePath: thread.worktreePath,
     autoNudge: thread.autoNudge,
+    manualFollowUpCount: thread.manualFollowUpCount,
   };
   const session = thread.session ? mapSession(thread.session) : null;
   const turnState: ThreadTurnState = {
@@ -378,6 +404,7 @@ function toThreadShell(thread: Thread): ThreadShell {
     branch: thread.branch,
     worktreePath: thread.worktreePath,
     autoNudge: toThreadAutoNudgeSummary(thread.autoNudge),
+    manualFollowUpCount: thread.manualFollowUps.length,
   };
 }
 
@@ -603,7 +630,8 @@ function threadShellsEqual(left: ThreadShell | undefined, right: ThreadShell): b
     left.updatedAt === right.updatedAt &&
     left.branch === right.branch &&
     left.worktreePath === right.worktreePath &&
-    threadAutoNudgeSummariesEqual(left.autoNudge, right.autoNudge)
+    threadAutoNudgeSummariesEqual(left.autoNudge, right.autoNudge) &&
+    left.manualFollowUpCount === right.manualFollowUpCount
   );
 }
 
@@ -837,6 +865,16 @@ function writeThreadState(
     };
   }
 
+  if (previousThread?.manualFollowUps !== nextThread.manualFollowUps) {
+    nextState = {
+      ...nextState,
+      manualFollowUpsByThreadId: {
+        ...nextState.manualFollowUpsByThreadId,
+        [nextThread.id]: nextThread.manualFollowUps,
+      },
+    };
+  }
+
   if (previousThread?.messages !== nextThread.messages) {
     const nextMessageSlice = buildMessageSlice(nextThread);
     nextState = {
@@ -1017,6 +1055,8 @@ function removeThreadState(state: EnvironmentState, threadId: ThreadId): Environ
   const { [threadId]: _removedTurnState, ...threadTurnStateById } = state.threadTurnStateById;
   const { [threadId]: _removedAutoNudge, ...threadAutoNudgeConfigById } =
     state.threadAutoNudgeConfigById;
+  const { [threadId]: _removedManualFollowUps, ...manualFollowUpsByThreadId } =
+    state.manualFollowUpsByThreadId;
   const { [threadId]: _removedMessageIds, ...messageIdsByThreadId } = state.messageIdsByThreadId;
   const { [threadId]: _removedMessages, ...messageByThreadId } = state.messageByThreadId;
   const { [threadId]: _removedActivityIds, ...activityIdsByThreadId } = state.activityIdsByThreadId;
@@ -1038,6 +1078,7 @@ function removeThreadState(state: EnvironmentState, threadId: ThreadId): Environ
     threadSessionById,
     threadTurnStateById,
     threadAutoNudgeConfigById,
+    manualFollowUpsByThreadId,
     messageIdsByThreadId,
     messageByThreadId,
     activityIdsByThreadId,
@@ -1634,6 +1675,10 @@ function syncEnvironmentShellSnapshot(
       state.threadAutoNudgeConfigById,
       nextThreadIds,
     ),
+    manualFollowUpsByThreadId: retainThreadScopedRecord(
+      state.manualFollowUpsByThreadId,
+      nextThreadIds,
+    ),
     sidebarThreadSummaryById: {},
     messageIdsByThreadId: retainThreadScopedRecord(state.messageIdsByThreadId, nextThreadIds),
     messageByThreadId: retainThreadScopedRecord(state.messageByThreadId, nextThreadIds),
@@ -1818,6 +1863,7 @@ function applyEnvironmentOrchestrationEvent(
           checkpoints: [],
           session: null,
           autoNudge: DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+          manualFollowUps: [],
         },
         environmentId,
       );
@@ -1974,6 +2020,79 @@ function applyEnvironmentOrchestrationEvent(
               updatedAt: event.payload.dispatchedAt,
             },
       );
+
+    case "thread.manual-follow-up-enqueued":
+      return updateThreadState(state, event.payload.threadId, (thread) => ({
+        ...thread,
+        manualFollowUps: thread.manualFollowUps.some((item) => item.id === event.payload.item.id)
+          ? thread.manualFollowUps
+          : [...thread.manualFollowUps, mapManualFollowUp(environmentId, event.payload.item)],
+        updatedAt: event.occurredAt,
+      }));
+
+    case "thread.manual-follow-up-cancelled":
+    case "thread.manual-follow-up-accepted":
+      return updateThreadState(state, event.payload.threadId, (thread) => ({
+        ...thread,
+        manualFollowUps: thread.manualFollowUps.filter(
+          (item) => item.id !== event.payload.followUpId,
+        ),
+        updatedAt: event.occurredAt,
+      }));
+
+    case "thread.manual-follow-up-activated":
+      return updateThreadState(state, event.payload.threadId, (thread) => ({
+        ...thread,
+        manualFollowUps: thread.manualFollowUps.map((item) =>
+          item.id === event.payload.followUpId
+            ? {
+                ...item,
+                status: "handoff",
+                activatedAt: event.payload.activatedAt,
+                activationCommandId: event.payload.activationCommandId,
+              }
+            : item,
+        ),
+        updatedAt: event.occurredAt,
+      }));
+
+    case "thread.manual-follow-up-released":
+      return updateThreadState(state, event.payload.threadId, (thread) => ({
+        ...thread,
+        manualFollowUps: thread.manualFollowUps.map((item) =>
+          item.id === event.payload.followUpId
+            ? {
+                ...item,
+                status: "queued",
+                activatedAt: null,
+                activationCommandId: null,
+              }
+            : item,
+        ),
+        updatedAt: event.occurredAt,
+      }));
+
+    case "thread.manual-follow-up-count-changed": {
+      const shell = state.threadShellById[event.payload.threadId];
+      if (
+        shell === undefined ||
+        (shell.manualFollowUpCount === event.payload.count &&
+          shell.updatedAt === event.payload.updatedAt)
+      ) {
+        return state;
+      }
+      return {
+        ...state,
+        threadShellById: {
+          ...state.threadShellById,
+          [event.payload.threadId]: {
+            ...shell,
+            manualFollowUpCount: event.payload.count,
+            updatedAt: event.payload.updatedAt,
+          },
+        },
+      };
+    }
 
     case "thread.turn-start-requested":
       return updateThreadState(state, event.payload.threadId, (thread) => {

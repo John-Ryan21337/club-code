@@ -62,6 +62,7 @@ function makeThread(input: {
     branch: null,
     worktreePath: null,
     autoNudge: input.autoNudge ?? DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+    manualFollowUps: [],
     latestTurn: input.latestTurnId === undefined ? null : makeCompletedTurn(input.latestTurnId),
     createdAt: "2026-07-28T00:00:00.000Z",
     updatedAt: "2026-07-28T00:00:00.000Z",

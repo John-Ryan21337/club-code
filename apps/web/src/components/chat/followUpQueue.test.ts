@@ -1,19 +1,26 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  appendOperatorFollowUp,
+  canAutomaticallyActivateQueuedFollowUp,
   canStartQueuedFollowUpTurn,
   canExpandQueuedFollowUpText,
   collectRetainedFollowUpThreadTargets,
   decideQueuedFollowUpAction,
   decideFollowUpDelivery,
+  followUpQueueStateKey,
   hasQueuedFollowUpDispatchBeenObserved,
+  isQueuedFollowUpHead,
   isLiveSteerAvailableForThread,
   previewQueuedFollowUpText,
   queuedFollowUpActionLabel,
   queuedFollowUpActionTitle,
   readRetryableSteerFailurePayload,
   rekeyQueuedFollowUpsForActiveThread,
+  releaseQueuedFollowUpDispatchClaim,
   selectQueuedFollowUpDispatchCandidate,
+  shouldQueueOperatorFollowUp,
+  tryClaimQueuedFollowUpDispatch,
 } from "./followUpQueue";
 
 describe("followUpQueue", () => {
@@ -22,6 +29,10 @@ describe("followUpQueue", () => {
     threadId: string;
     blockedReason: string | null;
     promptText?: string;
+  };
+  type TestRekeyableFollowUp = TestQueuedFollowUp & {
+    environmentId: string;
+    serverHandoffTarget: { environmentId: string; threadId: string } | null;
   };
 
   it("sends normally when idle even if steer was requested", () => {
@@ -42,6 +53,41 @@ describe("followUpQueue", () => {
         liveSteerSupported: true,
       }),
     ).toBe("queue");
+  });
+
+  it("keeps the queued item visible during a running turn until Steer is explicit", () => {
+    expect(canAutomaticallyActivateQueuedFollowUp("running")).toBe(false);
+    expect(canAutomaticallyActivateQueuedFollowUp("ready")).toBe(true);
+    expect(canAutomaticallyActivateQueuedFollowUp("disconnected")).toBe(false);
+    expect(canAutomaticallyActivateQueuedFollowUp("connecting")).toBe(false);
+  });
+
+  it("appends newly typed operator input behind every earlier queued command", () => {
+    const existing = [{ id: "first" }, { id: "second" }];
+
+    expect(appendOperatorFollowUp(existing, { id: "new" }).map((item) => item.id)).toEqual([
+      "first",
+      "second",
+      "new",
+    ]);
+    expect(
+      shouldQueueOperatorFollowUp({
+        delivery: "steer",
+        hasEarlierManualFollowUp: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldQueueOperatorFollowUp({
+        delivery: "send",
+        hasEarlierManualFollowUp: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldQueueOperatorFollowUp({
+        delivery: "steer",
+        hasEarlierManualFollowUp: false,
+      }),
+    ).toBe(false);
   });
 
   it("steers a running turn only when provider support is explicit", () => {
@@ -178,10 +224,22 @@ describe("followUpQueue", () => {
             threadId: "queued-thread",
           },
         ],
+        pendingDirectDispatches: [
+          {
+            environmentId: "local",
+            threadId: "direct-operator-turn",
+          },
+        ],
         pendingSteers: [
           {
             environmentId: "remote",
             threadId: "background-steer-thread",
+          },
+        ],
+        pendingInterruptRecoveries: [
+          {
+            environmentId: "remote",
+            threadId: "background-interrupt-recovery",
           },
         ],
       }),
@@ -191,10 +249,32 @@ describe("followUpQueue", () => {
         threadId: "queued-thread",
       },
       {
+        environmentId: "local",
+        threadId: "direct-operator-turn",
+      },
+      {
         environmentId: "remote",
         threadId: "background-steer-thread",
       },
+      {
+        environmentId: "remote",
+        threadId: "background-interrupt-recovery",
+      },
     ]);
+  });
+
+  it("isolates queue state for identical thread IDs in different environments", () => {
+    expect(
+      followUpQueueStateKey({
+        environmentId: "environment-a",
+        threadId: "thread-shared",
+      }),
+    ).not.toBe(
+      followUpQueueStateKey({
+        environmentId: "environment-b",
+        threadId: "thread-shared",
+      }),
+    );
   });
 
   it("chooses a concrete queued-item action instead of silently no-oping", () => {
@@ -352,6 +432,57 @@ describe("followUpQueue", () => {
     expect(candidate?.item.id).toBe("ready-active");
   });
 
+  it("automatically drains chained operator follow-ups in FIFO order", () => {
+    const queues: Record<string, TestQueuedFollowUp[]> = {
+      active: [
+        { id: "first", threadId: "active", blockedReason: null },
+        { id: "second", threadId: "active", blockedReason: null },
+        { id: "third", threadId: "active", blockedReason: null },
+      ],
+    };
+    const dispatched: string[] = [];
+
+    while ((queues.active?.length ?? 0) > 0) {
+      const candidate = selectQueuedFollowUpDispatchCandidate<string, TestQueuedFollowUp>({
+        queuesByThreadId: queues,
+        preferredThreadId: "active",
+        canStart: () => true,
+      });
+      expect(candidate).not.toBeNull();
+      if (candidate === null) {
+        break;
+      }
+      dispatched.push(candidate.item.id);
+      queues[candidate.threadId] = (queues[candidate.threadId] ?? []).slice(1);
+    }
+
+    expect(dispatched).toEqual(["first", "second", "third"]);
+  });
+
+  it("only lets the queue head use a manual Send or Steer action", () => {
+    const items = [{ id: "first" }, { id: "second" }, { id: "third" }];
+
+    expect(isQueuedFollowUpHead(items, "first")).toBe(true);
+    expect(isQueuedFollowUpHead(items, "second")).toBe(false);
+    expect(isQueuedFollowUpHead(items, "third")).toBe(false);
+  });
+
+  it("claims a queued steer synchronously so a repeated head action cannot duplicate it", () => {
+    const claimedItemIds = new Set<string>();
+
+    expect(tryClaimQueuedFollowUpDispatch(claimedItemIds, "first")).toBe(true);
+    expect(tryClaimQueuedFollowUpDispatch(claimedItemIds, "first")).toBe(false);
+    expect(tryClaimQueuedFollowUpDispatch(claimedItemIds, "second")).toBe(true);
+  });
+
+  it("releases a failed queued steer claim before the same item is requeued", () => {
+    const claimedItemIds = new Set<string>();
+
+    expect(tryClaimQueuedFollowUpDispatch(claimedItemIds, "first")).toBe(true);
+    releaseQueuedFollowUpDispatchClaim(claimedItemIds, "first");
+    expect(tryClaimQueuedFollowUpDispatch(claimedItemIds, "first")).toBe(true);
+  });
+
   it("detects when a queued turn start is reflected by thread state", () => {
     expect(
       hasQueuedFollowUpDispatchBeenObserved({
@@ -391,51 +522,245 @@ describe("followUpQueue", () => {
   });
 
   it("rekeys an orphaned draft queue onto the active server thread", () => {
-    const queues: Record<string, TestQueuedFollowUp[]> = {
-      "draft-thread": [
+    const draftTarget = {
+      environmentId: "environment-a",
+      threadId: "draft-thread",
+    };
+    const serverTarget = {
+      environmentId: "environment-a",
+      threadId: "server-thread",
+    };
+    const queues: Record<string, TestRekeyableFollowUp[]> = {
+      [followUpQueueStateKey(draftTarget)]: [
         {
           id: "queued-1",
+          environmentId: "environment-a",
           threadId: "draft-thread",
           blockedReason: "stale error",
           promptText: "next",
+          serverHandoffTarget: serverTarget,
         },
       ],
     };
 
-    const next = rekeyQueuedFollowUpsForActiveThread<string, TestQueuedFollowUp>({
-      queuesByThreadId: queues,
-      activeThreadId: "server-thread",
-      previousActiveThreadId: "draft-thread",
-      knownThreadIds: new Set(["server-thread"]),
+    const next = rekeyQueuedFollowUpsForActiveThread<string, string, TestRekeyableFollowUp>({
+      queuesByThreadKey: queues,
+      activeTarget: serverTarget,
+      activeThreadIsServerBacked: true,
+      previousActiveTarget: draftTarget,
+      knownThreadKeys: new Set([followUpQueueStateKey(serverTarget)]),
     });
 
-    expect(next["draft-thread"]).toBeUndefined();
-    expect(next["server-thread"]).toEqual([
+    expect(next[followUpQueueStateKey(draftTarget)]).toBeUndefined();
+    expect(next[followUpQueueStateKey(serverTarget)]).toEqual([
       {
         id: "queued-1",
+        environmentId: "environment-a",
         threadId: "server-thread",
         blockedReason: null,
         promptText: "next",
+        serverHandoffTarget: null,
+      },
+    ]);
+  });
+
+  it("consumes an exact same-id draft handoff without moving its queue", () => {
+    const target = {
+      environmentId: "environment-a",
+      threadId: "thread-same",
+    };
+    const targetKey = followUpQueueStateKey(target);
+    const queues: Record<string, TestRekeyableFollowUp[]> = {
+      [targetKey]: [
+        {
+          id: "queued-1",
+          environmentId: "environment-a",
+          threadId: "thread-same",
+          blockedReason: "draft projection not ready",
+          serverHandoffTarget: target,
+        },
+      ],
+    };
+
+    const next = rekeyQueuedFollowUpsForActiveThread<string, string, TestRekeyableFollowUp>({
+      queuesByThreadKey: queues,
+      activeTarget: target,
+      activeThreadIsServerBacked: true,
+      previousActiveTarget: target,
+      knownThreadKeys: new Set([targetKey]),
+    });
+
+    expect(next[targetKey]).toEqual([
+      {
+        ...queues[targetKey]?.[0],
+        blockedReason: null,
+        serverHandoffTarget: null,
       },
     ]);
   });
 
   it("does not steal a queue from another known server thread", () => {
-    const queues: Record<string, TestQueuedFollowUp[]> = {
-      other: [
+    const otherTarget = {
+      environmentId: "environment-a",
+      threadId: "other",
+    };
+    const activeTarget = {
+      environmentId: "environment-a",
+      threadId: "active",
+    };
+    const queues: Record<string, TestRekeyableFollowUp[]> = {
+      [followUpQueueStateKey(otherTarget)]: [
         {
           id: "queued-1",
+          environmentId: "environment-a",
           threadId: "other",
           blockedReason: null,
+          serverHandoffTarget: null,
         },
       ],
     };
 
-    const next = rekeyQueuedFollowUpsForActiveThread<string, TestQueuedFollowUp>({
-      queuesByThreadId: queues,
-      activeThreadId: "active",
-      previousActiveThreadId: null,
-      knownThreadIds: new Set(["active", "other"]),
+    const next = rekeyQueuedFollowUpsForActiveThread<string, string, TestRekeyableFollowUp>({
+      queuesByThreadKey: queues,
+      activeTarget,
+      activeThreadIsServerBacked: true,
+      previousActiveTarget: otherTarget,
+      knownThreadKeys: new Set([
+        followUpQueueStateKey(activeTarget),
+        followUpQueueStateKey(otherTarget),
+      ]),
+    });
+
+    expect(next).toBe(queues);
+  });
+
+  it("does not reinterpret a removed server thread queue as a draft handoff", () => {
+    const removedServerTarget = {
+      environmentId: "environment-a",
+      threadId: "removed-server-thread",
+    };
+    const activeTarget = {
+      environmentId: "environment-a",
+      threadId: "active",
+    };
+    const queues: Record<string, TestRekeyableFollowUp[]> = {
+      [followUpQueueStateKey(removedServerTarget)]: [
+        {
+          id: "queued-1",
+          environmentId: "environment-a",
+          threadId: "removed-server-thread",
+          blockedReason: null,
+          serverHandoffTarget: null,
+        },
+      ],
+    };
+
+    const next = rekeyQueuedFollowUpsForActiveThread<string, string, TestRekeyableFollowUp>({
+      queuesByThreadKey: queues,
+      activeTarget,
+      activeThreadIsServerBacked: true,
+      previousActiveTarget: removedServerTarget,
+      knownThreadKeys: new Set([followUpQueueStateKey(activeTarget)]),
+    });
+
+    expect(next).toBe(queues);
+  });
+
+  it("does not move one local draft's queue when another draft becomes active", () => {
+    const firstDraftTarget = {
+      environmentId: "environment-a",
+      threadId: "draft-first",
+    };
+    const secondDraftTarget = {
+      environmentId: "environment-a",
+      threadId: "draft-second",
+    };
+    const queues: Record<string, TestRekeyableFollowUp[]> = {
+      [followUpQueueStateKey(firstDraftTarget)]: [
+        {
+          id: "queued-1",
+          environmentId: "environment-a",
+          threadId: "draft-first",
+          blockedReason: null,
+          serverHandoffTarget: firstDraftTarget,
+        },
+      ],
+    };
+
+    const next = rekeyQueuedFollowUpsForActiveThread<string, string, TestRekeyableFollowUp>({
+      queuesByThreadKey: queues,
+      activeTarget: secondDraftTarget,
+      activeThreadIsServerBacked: false,
+      previousActiveTarget: firstDraftTarget,
+      knownThreadKeys: new Set(),
+    });
+
+    expect(next).toBe(queues);
+  });
+
+  it("does not move a draft queue onto an unrelated server route", () => {
+    const draftTarget = {
+      environmentId: "environment-a",
+      threadId: "draft-thread",
+    };
+    const expectedServerTarget = {
+      environmentId: "environment-a",
+      threadId: "expected-server-thread",
+    };
+    const unrelatedServerTarget = {
+      environmentId: "environment-a",
+      threadId: "unrelated-server-thread",
+    };
+    const queues: Record<string, TestRekeyableFollowUp[]> = {
+      [followUpQueueStateKey(draftTarget)]: [
+        {
+          id: "queued-1",
+          environmentId: "environment-a",
+          threadId: "draft-thread",
+          blockedReason: null,
+          serverHandoffTarget: expectedServerTarget,
+        },
+      ],
+    };
+
+    const next = rekeyQueuedFollowUpsForActiveThread<string, string, TestRekeyableFollowUp>({
+      queuesByThreadKey: queues,
+      activeTarget: unrelatedServerTarget,
+      activeThreadIsServerBacked: true,
+      previousActiveTarget: draftTarget,
+      knownThreadKeys: new Set([followUpQueueStateKey(unrelatedServerTarget)]),
+    });
+
+    expect(next).toBe(queues);
+  });
+
+  it("never moves a draft queue across environments", () => {
+    const draftTarget = {
+      environmentId: "environment-a",
+      threadId: "draft-thread",
+    };
+    const activeTarget = {
+      environmentId: "environment-b",
+      threadId: "server-thread",
+    };
+    const queues: Record<string, TestRekeyableFollowUp[]> = {
+      [followUpQueueStateKey(draftTarget)]: [
+        {
+          id: "queued-1",
+          environmentId: "environment-a",
+          threadId: "draft-thread",
+          blockedReason: null,
+          serverHandoffTarget: draftTarget,
+        },
+      ],
+    };
+
+    const next = rekeyQueuedFollowUpsForActiveThread<string, string, TestRekeyableFollowUp>({
+      queuesByThreadKey: queues,
+      activeTarget,
+      activeThreadIsServerBacked: true,
+      previousActiveTarget: draftTarget,
+      knownThreadKeys: new Set([followUpQueueStateKey(activeTarget)]),
     });
 
     expect(next).toBe(queues);

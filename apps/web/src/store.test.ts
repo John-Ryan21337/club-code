@@ -89,6 +89,7 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     branch: null,
     worktreePath: null,
     autoNudge: DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+    manualFollowUps: [],
     ...overrides,
   };
 }
@@ -146,6 +147,7 @@ function makeState(thread: Thread): AppState {
           roundsDispatched: thread.autoNudge.roundsDispatched,
           lastDispatchedAt: thread.autoNudge.lastDispatchedAt,
         },
+        manualFollowUpCount: thread.manualFollowUps.length,
       },
     },
     threadSessionById: {
@@ -161,6 +163,9 @@ function makeState(thread: Thread): AppState {
     },
     threadAutoNudgeConfigById: {
       [thread.id]: thread.autoNudge,
+    },
+    manualFollowUpsByThreadId: {
+      [thread.id]: thread.manualFollowUps,
     },
     messageIdsByThreadId: {
       [thread.id]: thread.messages.map((message) => message.id),
@@ -212,6 +217,7 @@ function makeEmptyState(overrides: Partial<AppState & EnvironmentState> = {}): A
     threadSessionById: {},
     threadTurnStateById: {},
     threadAutoNudgeConfigById: {},
+    manualFollowUpsByThreadId: {},
     messageIdsByThreadId: {},
     messageByThreadId: {},
     activityIdsByThreadId: {},
@@ -400,6 +406,7 @@ describe("thread selection memoization", () => {
         hasPendingUserInput: false,
         hasActionableProposedPlan: false,
         autoNudge: DEFAULT_THREAD_AUTO_NUDGE_SUMMARY,
+        manualFollowUpCount: 0,
       },
     };
 

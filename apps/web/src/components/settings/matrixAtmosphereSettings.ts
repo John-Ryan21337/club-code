@@ -5,6 +5,7 @@ import {
 } from "@cafecode/contracts/settings";
 
 const MATRIX_ATMOSPHERE_SETTING_LABELS = [
+  ["fallingEffectMatrixBaseFontSize", "Matrix base font size"],
   ["fallingEffectMatrixColorMode", "Matrix color mode"],
   ["fallingEffectMatrixColorCycleSpeed", "Matrix color-cycle speed"],
   ["fallingEffectMatrixMotionMode", "Atmosphere motion"],
@@ -41,6 +42,7 @@ export function createMatrixAtmosphereRestorePatch(): Pick<
   MatrixAtmosphereSettingKey
 > {
   return {
+    fallingEffectMatrixBaseFontSize: DEFAULT_UNIFIED_SETTINGS.fallingEffectMatrixBaseFontSize,
     fallingEffectMatrixColorMode: DEFAULT_UNIFIED_SETTINGS.fallingEffectMatrixColorMode,
     fallingEffectMatrixColorCycleSpeed: DEFAULT_UNIFIED_SETTINGS.fallingEffectMatrixColorCycleSpeed,
     fallingEffectMatrixMotionMode: DEFAULT_UNIFIED_SETTINGS.fallingEffectMatrixMotionMode,
