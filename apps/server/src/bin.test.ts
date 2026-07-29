@@ -6,7 +6,14 @@ import { join } from "node:path";
 
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES } from "@cafecode/contracts";
+import {
+  CommandId,
+  DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES,
+  DEFAULT_PROVIDER_INTERACTION_MODE,
+  ProjectId,
+  ProviderInstanceId,
+  ThreadId,
+} from "@cafecode/contracts";
 import * as NetService from "@cafecode/shared/Net";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -35,6 +42,8 @@ import {
 import { WorkspacePathsLive } from "./workspace/Layers/WorkspacePaths.ts";
 import { ServerSecretStoreLive } from "./auth/Layers/ServerSecretStore.ts";
 import { ServerAuthLive } from "./auth/Layers/ServerAuth.ts";
+import { AuthControlPlane } from "./auth/Services/AuthControlPlane.ts";
+import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine.ts";
 
 const CliRuntimeLayer = Layer.mergeAll(NodeServices.layer, NetService.layer, FetchHttpClient.layer);
 
@@ -105,7 +114,10 @@ const readPersistedSnapshot = (baseDir: string) =>
     }).pipe(Effect.provide(makeProjectPersistenceLayer(config)));
   });
 
-const withLiveProjectCliServer = <A, E, R>(baseDir: string, run: () => Effect.Effect<A, E, R>) =>
+const withLiveProjectCliServer = <A, E, R>(
+  baseDir: string,
+  run: (origin: string) => Effect.Effect<A, E, R>,
+) =>
   Effect.gen(function* () {
     const config = yield* makeCliTestServerConfig(baseDir);
     const routesLayer = Layer.mergeAll(
@@ -147,7 +159,7 @@ const withLiveProjectCliServer = <A, E, R>(baseDir: string, run: () => Effect.Ef
             port: address.port,
           }),
         });
-        return yield* run();
+        return yield* run(`http://127.0.0.1:${address.port}`);
       }).pipe(Effect.provide(Layer.mergeAll(appLayer, NodeServices.layer))),
     );
   });
@@ -333,6 +345,91 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
           );
           assert.isTrue(addedProject !== undefined);
           assert.equal(addedProject?.title, "Live Project");
+        }),
+      );
+    }),
+  );
+
+  it.effect("keeps exact-thread Auto Nudge prompts out of the global CLI snapshot", () =>
+    Effect.gen(function* () {
+      const baseDir = mkdtempSync(join(tmpdir(), "cafecode-cli-snapshot-privacy-test-"));
+      const workspaceRoot = mkdtempSync(join(tmpdir(), "cafecode-cli-snapshot-privacy-workspace-"));
+      const secretPrompt = "DO-NOT-FAN-OUT-AUTO-NUDGE-PROMPT";
+
+      yield* withLiveProjectCliServer(baseDir, (origin) =>
+        Effect.gen(function* () {
+          const orchestrationEngine = yield* OrchestrationEngineService;
+          const projectId = ProjectId.make("project-auto-nudge-privacy");
+          const threadId = ThreadId.make("thread-auto-nudge-privacy");
+          const now = "2026-07-28T00:00:00.000Z";
+          yield* orchestrationEngine.dispatch({
+            type: "project.create",
+            commandId: CommandId.make("command-project-auto-nudge-privacy"),
+            projectId,
+            title: "Prompt privacy",
+            workspaceRoot,
+            createdAt: now,
+          });
+          yield* orchestrationEngine.dispatch({
+            type: "thread.create",
+            commandId: CommandId.make("command-thread-auto-nudge-privacy"),
+            threadId,
+            projectId,
+            title: "Private Auto Nudge",
+            modelSelection: {
+              instanceId: ProviderInstanceId.make("codex"),
+              model: "gpt-5.6-sol",
+            },
+            runtimeMode: "full-access",
+            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+            branch: null,
+            worktreePath: null,
+            createdAt: now,
+          });
+          yield* orchestrationEngine.dispatch({
+            type: "thread.auto-nudge.configure",
+            commandId: CommandId.make("command-configure-auto-nudge-privacy"),
+            threadId,
+            expectedAuthorityRevision: 0,
+            mode: "steady-progress",
+            prompt: secretPrompt,
+            backgroundContinuation: true,
+            maxRounds: 5,
+            maxMinutes: 30,
+            createdAt: now,
+          });
+
+          const authControlPlane = yield* AuthControlPlane;
+          yield* Effect.acquireUseRelease(
+            authControlPlane.issueSession({
+              role: "owner",
+              label: "snapshot privacy test",
+            }),
+            (issued) =>
+              Effect.gen(function* () {
+                const response = yield* Effect.promise(() =>
+                  fetch(`${origin}/api/orchestration/snapshot`, {
+                    headers: { authorization: `Bearer ${issued.token}` },
+                  }),
+                );
+                assert.equal(response.status, 200);
+                const body = yield* Effect.promise(() => response.text());
+                assert.isFalse(body.includes(secretPrompt));
+                // @effect-diagnostics-next-line preferSchemaOverJson:off
+                const snapshot = JSON.parse(body) as {
+                  readonly threads: ReadonlyArray<{
+                    readonly id: string;
+                    readonly autoNudge: Readonly<Record<string, unknown>>;
+                  }>;
+                };
+                const target = snapshot.threads.find((thread) => thread.id === threadId);
+                assert.isDefined(target);
+                assert.equal(target?.autoNudge.mode, "steady-progress");
+                assert.isFalse("prompt" in (target?.autoNudge ?? {}));
+              }),
+            (issued) =>
+              authControlPlane.revokeSession(issued.sessionId).pipe(Effect.ignore({ log: true })),
+          );
         }),
       );
     }),

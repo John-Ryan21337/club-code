@@ -1,5 +1,6 @@
 import {
   CommandId,
+  DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
   EventId,
   ProjectId,
   ProviderDriverKind,
@@ -98,6 +99,8 @@ describe("orchestration projector", () => {
         checkpoints: [],
         session: null,
         goal: null,
+        autoNudge: DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+        manualFollowUps: [],
       },
     ]);
   });

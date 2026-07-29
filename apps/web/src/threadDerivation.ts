@@ -1,9 +1,16 @@
-import type { MessageId, ThreadId, TurnId } from "@cafecode/contracts";
+import {
+  DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+  type MessageId,
+  type ThreadAutoNudgeConfig,
+  type ThreadId,
+  type TurnId,
+} from "@cafecode/contracts";
 import type { EnvironmentState } from "./store";
 import type {
   ChatMessage,
   ProposedPlan,
   Thread,
+  ThreadManualFollowUp,
   ThreadSession,
   ThreadShell,
   ThreadTurnState,
@@ -14,6 +21,7 @@ const EMPTY_MESSAGES: ChatMessage[] = [];
 const EMPTY_ACTIVITIES: Thread["activities"] = [];
 const EMPTY_PROPOSED_PLANS: ProposedPlan[] = [];
 const EMPTY_TURN_DIFF_SUMMARIES: TurnDiffSummary[] = [];
+const EMPTY_MANUAL_FOLLOW_UPS: ThreadManualFollowUp[] = [];
 const EMPTY_MESSAGE_MAP: Record<MessageId, ChatMessage> = {};
 const EMPTY_ACTIVITY_MAP: Record<string, Thread["activities"][number]> = {};
 const EMPTY_PROPOSED_PLAN_MAP: Record<string, ProposedPlan> = {};
@@ -29,6 +37,8 @@ const threadCache = new WeakMap<
     activities: Thread["activities"];
     proposedPlans: Thread["proposedPlans"];
     turnDiffSummaries: Thread["turnDiffSummaries"];
+    autoNudge: ThreadAutoNudgeConfig;
+    manualFollowUps: ThreadManualFollowUp[];
     thread: Thread;
   }
 >();
@@ -113,6 +123,8 @@ export function getThreadFromEnvironmentState(
   const activities = selectThreadActivities(state, threadId);
   const proposedPlans = selectThreadProposedPlans(state, threadId);
   const turnDiffSummaries = selectThreadTurnDiffSummaries(state, threadId);
+  const autoNudge = state.threadAutoNudgeConfigById[threadId] ?? DEFAULT_THREAD_AUTO_NUDGE_CONFIG;
+  const manualFollowUps = state.manualFollowUpsByThreadId[threadId] ?? EMPTY_MANUAL_FOLLOW_UPS;
   const cached = threadCache.get(shell);
 
   if (
@@ -122,7 +134,9 @@ export function getThreadFromEnvironmentState(
     cached.messages === messages &&
     cached.activities === activities &&
     cached.proposedPlans === proposedPlans &&
-    cached.turnDiffSummaries === turnDiffSummaries
+    cached.turnDiffSummaries === turnDiffSummaries &&
+    cached.autoNudge === autoNudge &&
+    cached.manualFollowUps === manualFollowUps
   ) {
     return cached.thread;
   }
@@ -136,6 +150,8 @@ export function getThreadFromEnvironmentState(
     activities,
     proposedPlans,
     turnDiffSummaries,
+    autoNudge,
+    manualFollowUps,
   };
 
   threadCache.set(shell, {
@@ -145,6 +161,8 @@ export function getThreadFromEnvironmentState(
     activities,
     proposedPlans,
     turnDiffSummaries,
+    autoNudge,
+    manualFollowUps,
     thread,
   });
 

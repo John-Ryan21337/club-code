@@ -145,6 +145,9 @@ describe("065_ForkLineageCompatibility", () => {
           [62, "UsageStatsTokenSavings"],
           [64, "ProviderPacingPendingLaunchCompatibility"],
           [65, "ForkLineageCompatibility"],
+          [66, "ProjectionThreadAutoNudge"],
+          [67, "ProjectionThreadManualFollowUps"],
+          [68, "ProjectionThreadGoals"],
         ],
       );
 

@@ -1,5 +1,11 @@
-import type { OrchestrationEvent, OrchestrationReadModel, ThreadId } from "@cafecode/contracts";
+import type {
+  CommandId,
+  OrchestrationEvent,
+  OrchestrationReadModel,
+  ThreadId,
+} from "@cafecode/contracts";
 import {
+  DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
   EventId,
   MessageId,
   OrchestrationCheckpointSummary,
@@ -25,6 +31,14 @@ import {
   ThreadDeletedPayload,
   ThreadRestoredPayload,
   ThreadInteractionModeSetPayload,
+  ThreadAutoNudgeConfiguredPayload,
+  ThreadAutoNudgeDispatchedPayload,
+  ThreadAutoNudgeStoppedPayload,
+  ThreadManualFollowUpAcceptedPayload,
+  ThreadManualFollowUpActivatedPayload,
+  ThreadManualFollowUpCancelledPayload,
+  ThreadManualFollowUpEnqueuedPayload,
+  ThreadManualFollowUpReleasedPayload,
   ThreadMetaUpdatedPayload,
   ThreadProposedPlanUpsertedPayload,
   ThreadRuntimeModeSetPayload,
@@ -38,8 +52,31 @@ import {
 } from "./Schemas.ts";
 
 type ThreadPatch = Partial<Omit<OrchestrationThread, "id">>;
+type ManualFollowUpItem = OrchestrationThread["manualFollowUps"][number];
 const MAX_THREAD_MESSAGES = 2_000;
 const MAX_THREAD_CHECKPOINTS = 500;
+
+function activateManualFollowUpItem(
+  item: ManualFollowUpItem,
+  activatedAt: string,
+  activationCommandId: CommandId,
+): ManualFollowUpItem {
+  return {
+    ...item,
+    status: "handoff",
+    activatedAt,
+    activationCommandId,
+  };
+}
+
+function releaseManualFollowUpItem(item: ManualFollowUpItem): ManualFollowUpItem {
+  return {
+    ...item,
+    status: "queued",
+    activatedAt: null,
+    activationCommandId: null,
+  };
+}
 
 function copiedThreadScopedId(targetThreadId: ThreadId, id: string): string {
   return `copy:${targetThreadId}:${id}`;
@@ -155,6 +192,7 @@ function cloneThreadContextForDuplicate(input: {
     // not to copied transcript context.
     session: null,
     goal: null,
+    manualFollowUps: [],
     updatedAt: duplicatedAt,
   };
 }
@@ -403,6 +441,8 @@ export function projectEvent(
             updatedAt: payload.updatedAt,
             archivedAt: null,
             deletedAt: null,
+            autoNudge: DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+            manualFollowUps: [],
             messages: [],
             activities: [],
             checkpoints: [],
@@ -533,6 +573,217 @@ export function projectEvent(
             updatedAt: payload.updatedAt,
           }),
         })),
+      );
+
+    case "thread.auto-nudge-configured":
+      return decodeForEvent(
+        ThreadAutoNudgeConfiguredPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          threads: updateThread(nextBase.threads, payload.threadId, {
+            autoNudge: payload.config,
+            updatedAt: event.occurredAt,
+          }),
+        })),
+      );
+
+    case "thread.auto-nudge-stopped":
+      return decodeForEvent(
+        ThreadAutoNudgeStoppedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread) {
+            return nextBase;
+          }
+          const current = thread.autoNudge ?? DEFAULT_THREAD_AUTO_NUDGE_CONFIG;
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              autoNudge: {
+                authorityRevision: payload.authorityRevision,
+                mode: "off",
+                prompt: current.prompt,
+                backgroundContinuation: false,
+                maxRounds: current.maxRounds,
+                maxMinutes: current.maxMinutes,
+                armedAt: null,
+                baselineSettledTurnId: null,
+                lastDispatchedSettledTurnId: null,
+                roundsDispatched: 0,
+                lastDispatchedAt: null,
+              },
+              updatedAt: payload.stoppedAt,
+            }),
+          };
+        }),
+      );
+
+    case "thread.auto-nudge-dispatched":
+      return decodeForEvent(
+        ThreadAutoNudgeDispatchedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread) {
+            return nextBase;
+          }
+          const current = thread.autoNudge ?? DEFAULT_THREAD_AUTO_NUDGE_CONFIG;
+          if (current.mode === "off" || current.authorityRevision !== payload.authorityRevision) {
+            return nextBase;
+          }
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              autoNudge: {
+                ...current,
+                lastDispatchedSettledTurnId: payload.completedTurnId,
+                roundsDispatched: payload.roundsDispatched,
+                lastDispatchedAt: payload.dispatchedAt,
+              },
+              updatedAt: payload.dispatchedAt,
+            }),
+          };
+        }),
+      );
+
+    case "thread.manual-follow-up-enqueued":
+      return decodeForEvent(
+        ThreadManualFollowUpEnqueuedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread) {
+            return nextBase;
+          }
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              manualFollowUps: [...thread.manualFollowUps, payload.item],
+              updatedAt: payload.item.enqueuedAt,
+            }),
+          };
+        }),
+      );
+
+    case "thread.manual-follow-up-cancelled":
+      return decodeForEvent(
+        ThreadManualFollowUpCancelledPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread) {
+            return nextBase;
+          }
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              manualFollowUps: thread.manualFollowUps.filter(
+                (item) => item.id !== payload.followUpId,
+              ),
+              updatedAt: payload.cancelledAt,
+            }),
+          };
+        }),
+      );
+
+    case "thread.manual-follow-up-activated":
+      return decodeForEvent(
+        ThreadManualFollowUpActivatedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread) {
+            return nextBase;
+          }
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              manualFollowUps: thread.manualFollowUps.map((item) =>
+                item.id === payload.followUpId
+                  ? activateManualFollowUpItem(
+                      item,
+                      payload.activatedAt,
+                      payload.activationCommandId,
+                    )
+                  : item,
+              ),
+              updatedAt: payload.activatedAt,
+            }),
+          };
+        }),
+      );
+
+    case "thread.manual-follow-up-accepted":
+      return decodeForEvent(
+        ThreadManualFollowUpAcceptedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread) {
+            return nextBase;
+          }
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              manualFollowUps: thread.manualFollowUps.filter(
+                (item) =>
+                  item.id !== payload.followUpId ||
+                  item.activationCommandId !== payload.activationCommandId,
+              ),
+              updatedAt: payload.acceptedAt,
+            }),
+          };
+        }),
+      );
+
+    case "thread.manual-follow-up-released":
+      return decodeForEvent(
+        ThreadManualFollowUpReleasedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread) {
+            return nextBase;
+          }
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              manualFollowUps: thread.manualFollowUps.map((item) =>
+                item.id === payload.followUpId &&
+                item.activationCommandId === payload.activationCommandId
+                  ? releaseManualFollowUpItem(item)
+                  : item,
+              ),
+              updatedAt: payload.releasedAt,
+            }),
+          };
+        }),
       );
 
     case "thread.turn-start-requested":
@@ -925,30 +1176,35 @@ export function projectEvent(
           .slice(-MAX_THREAD_CHECKPOINTS);
 
         const preservesTurnLifecycle = payload.status === "missing";
+        const promotesLatestTurn =
+          thread.latestTurn === null || thread.latestTurn.turnId === payload.turnId;
 
         return {
           ...nextBase,
           threads: updateThread(nextBase.threads, payload.threadId, {
             checkpoints,
-            // `turn.diff.updated` is a change signal, not a provider lifecycle
-            // event. Its synthetic `missing` checkpoint records diagnostic
-            // metadata only and must never close or manufacture a turn.
-            latestTurn: preservesTurnLifecycle
-              ? thread.latestTurn
-              : {
-                  turnId: payload.turnId,
-                  state: checkpointStatusToLatestTurnState(payload.status),
-                  requestedAt:
-                    thread.latestTurn?.turnId === payload.turnId
-                      ? thread.latestTurn.requestedAt
-                      : payload.completedAt,
-                  startedAt:
-                    thread.latestTurn?.turnId === payload.turnId
-                      ? (thread.latestTurn.startedAt ?? payload.completedAt)
-                      : payload.completedAt,
-                  completedAt: payload.completedAt,
-                  assistantMessageId: payload.assistantMessageId,
-                },
+            // A diff is asynchronous checkpoint evidence, not ordering
+            // authority for provider turns. It may complete its own current
+            // turn, but must never replace a different non-null latest turn:
+            // an older turn's checkpoint can finish after a newer turn starts.
+            // Synthetic `missing` checkpoints additionally preserve lifecycle.
+            latestTurn:
+              preservesTurnLifecycle || !promotesLatestTurn
+                ? thread.latestTurn
+                : {
+                    turnId: payload.turnId,
+                    state: checkpointStatusToLatestTurnState(payload.status),
+                    requestedAt:
+                      thread.latestTurn?.turnId === payload.turnId
+                        ? thread.latestTurn.requestedAt
+                        : payload.completedAt,
+                    startedAt:
+                      thread.latestTurn?.turnId === payload.turnId
+                        ? (thread.latestTurn.startedAt ?? payload.completedAt)
+                        : payload.completedAt,
+                    completedAt: payload.completedAt,
+                    assistantMessageId: payload.assistantMessageId,
+                  },
             updatedAt: event.occurredAt,
           }),
         };

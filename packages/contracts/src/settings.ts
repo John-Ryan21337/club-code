@@ -7,6 +7,29 @@ import { DEFAULT_GIT_TEXT_GENERATION_MODEL, ProviderOptionSelections } from "./m
 import { ModelSelection } from "./orchestration.ts";
 import { ProviderInstanceConfig, ProviderInstanceId } from "./providerInstance.ts";
 import { EditorId } from "./editor.ts";
+import {
+  AutoNudgeMaxMinutes,
+  AutoNudgeMaxRounds,
+  AutoNudgeMode,
+  DEFAULT_AUTO_NUDGE_BACKGROUND_CONTINUATION,
+  DEFAULT_AUTO_NUDGE_MAX_MINUTES,
+  DEFAULT_AUTO_NUDGE_MAX_ROUNDS,
+  DEFAULT_AUTO_NUDGE_MODE,
+} from "./autoNudge.ts";
+
+export {
+  AutoNudgeMaxMinutes,
+  AutoNudgeMaxRounds,
+  AutoNudgeMode,
+  DEFAULT_AUTO_NUDGE_BACKGROUND_CONTINUATION,
+  DEFAULT_AUTO_NUDGE_MAX_MINUTES,
+  DEFAULT_AUTO_NUDGE_MAX_ROUNDS,
+  DEFAULT_AUTO_NUDGE_MODE,
+  MAX_AUTO_NUDGE_MAX_MINUTES,
+  MAX_AUTO_NUDGE_MAX_ROUNDS,
+  MIN_AUTO_NUDGE_MAX_MINUTES,
+  MIN_AUTO_NUDGE_MAX_ROUNDS,
+} from "./autoNudge.ts";
 
 // ── Client Settings (local-only) ───────────────────────────────
 
@@ -50,20 +73,6 @@ export const DEFAULT_MODEL_PACING_ENABLED = false;
 export const MIN_MODEL_PACING_RESERVE_PERCENT = 0;
 export const MAX_MODEL_PACING_RESERVE_PERCENT = 50;
 export const DEFAULT_MODEL_PACING_RESERVE_PERCENT = 10;
-export const AutoNudgeMode = Schema.Literals(["off", "hardcore-fanout", "steady-progress"]);
-export type AutoNudgeMode = typeof AutoNudgeMode.Type;
-export const DEFAULT_AUTO_NUDGE_MODE: AutoNudgeMode = "off";
-export const DEFAULT_AUTO_NUDGE_BACKGROUND_CONTINUATION = false;
-export const MIN_AUTO_NUDGE_MAX_ROUNDS = 1;
-export const MAX_AUTO_NUDGE_MAX_ROUNDS = 20;
-export const DEFAULT_AUTO_NUDGE_MAX_ROUNDS = 5;
-export const AutoNudgeMaxRounds = Schema.Int.check(
-  Schema.isBetween({
-    minimum: MIN_AUTO_NUDGE_MAX_ROUNDS,
-    maximum: MAX_AUTO_NUDGE_MAX_ROUNDS,
-  }),
-);
-export type AutoNudgeMaxRounds = typeof AutoNudgeMaxRounds.Type;
 export const MAX_BRAND_WORDMARK_PREFIX_LENGTH = 64;
 export const MAX_SIDEBAR_BRAND_IMAGE_FILE_BYTES = 1_000_000;
 export const MAX_SIDEBAR_BRAND_IMAGE_DATA_URL_LENGTH =
@@ -738,9 +747,11 @@ export const ClientSettingsSchema = Schema.Struct({
   modelPacingReservePercent: ModelPacingReservePercent.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_MODEL_PACING_RESERVE_PERCENT)),
   ),
-  // Legacy device-wide defaults retained for decode compatibility and the
-  // one-time migration into the renderer's exact-thread policy registry.
-  // New Auto Nudge writes are thread-scoped; these fields are not authoritative.
+  // Compatibility-only decode fields for profiles written before exact-thread
+  // Auto Nudge authority moved into orchestration state. These values own no
+  // thread and grant no execution authority; new clients must neither read nor
+  // write them. Only a revision-checked `thread.auto-nudge.configure` command
+  // may configure or arm one exact thread.
   autoNudgeMode: AutoNudgeMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_AUTO_NUDGE_MODE)),
   ),
@@ -749,6 +760,9 @@ export const ClientSettingsSchema = Schema.Struct({
   ),
   autoNudgeMaxRounds: AutoNudgeMaxRounds.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_AUTO_NUDGE_MAX_ROUNDS)),
+  ),
+  autoNudgeMaxMinutes: AutoNudgeMaxMinutes.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AUTO_NUDGE_MAX_MINUTES)),
   ),
   themeAccentColor: TrimmedString.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_THEME_ACCENT_COLOR)),
@@ -1577,6 +1591,7 @@ export const ClientSettingsPatch = Schema.Struct({
   autoNudgeMode: Schema.optionalKey(AutoNudgeMode),
   autoNudgeBackgroundContinuation: Schema.optionalKey(Schema.Boolean),
   autoNudgeMaxRounds: Schema.optionalKey(AutoNudgeMaxRounds),
+  autoNudgeMaxMinutes: Schema.optionalKey(AutoNudgeMaxMinutes),
   themeAccentColor: Schema.optionalKey(TrimmedString),
   appAccentColor: Schema.optionalKey(TrimmedString),
   defaultEditor: Schema.optionalKey(DefaultEditorSelection),

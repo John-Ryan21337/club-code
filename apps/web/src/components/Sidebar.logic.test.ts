@@ -23,6 +23,7 @@ import {
   THREAD_JUMP_HINT_SHOW_DELAY_MS,
 } from "./Sidebar.logic";
 import {
+  DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
   EnvironmentId,
   OrchestrationLatestTurn,
   ProjectId,
@@ -769,6 +770,8 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     worktreePath: null,
     turnDiffSummaries: [],
     activities: [],
+    autoNudge: DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+    manualFollowUps: [],
     ...overrides,
   };
 }

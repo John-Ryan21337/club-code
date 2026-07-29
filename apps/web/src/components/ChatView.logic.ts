@@ -1,4 +1,5 @@
 import {
+  DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
   type EnvironmentId,
   ProjectId,
   type ModelSelection,
@@ -45,6 +46,8 @@ export function buildLocalDraftThread(
     turnDiffSummaries: [],
     activities: [],
     proposedPlans: [],
+    autoNudge: DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+    manualFollowUps: [],
   };
 }
 
@@ -146,6 +149,13 @@ export function cloneComposerImageForRetry(
   } catch {
     return image;
   }
+}
+
+export function prepareComposerImagesForRetry(
+  images: readonly ComposerImageAttachment[],
+  input: { readonly sharedPreviewOwnerWillRevoke: boolean },
+): ComposerImageAttachment[] {
+  return input.sharedPreviewOwnerWillRevoke ? images.map(cloneComposerImageForRetry) : [...images];
 }
 
 export function mergePendingSteerSnapshotsForInterruptedTurn(
