@@ -24,6 +24,7 @@ import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as IpcChannels from "../ipc/channels.ts";
 import * as DesktopIpc from "../ipc/DesktopIpc.ts";
 import * as DesktopServerExposure from "../backend/DesktopServerExposure.ts";
+import { installTrustedMainFrameCameraPermission } from "./DesktopCameraPermission.ts";
 import { installTrustedFrameAudioCapture } from "./DesktopDisplayMediaCapture.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 
@@ -355,6 +356,10 @@ const make = Effect.gen(function* () {
       window.webContents,
       rendererOrigin,
     );
+    const removeCameraPermission = installTrustedMainFrameCameraPermission(
+      window.webContents,
+      rendererOrigin,
+    );
 
     window.webContents.on("context-menu", (event, params) => {
       event.preventDefault();
@@ -470,6 +475,7 @@ const make = Effect.gen(function* () {
     }
 
     window.on("closed", () => {
+      removeCameraPermission();
       removeDisplayMediaCapture();
       void runPromise(electronWindow.clearMain(Option.some(window)));
     });

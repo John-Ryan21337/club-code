@@ -1521,7 +1521,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.equal(getHeader(response.headers, "x-frame-options"), "DENY");
       assert.equal(
         getHeader(response.headers, "permissions-policy"),
-        'camera=(), fullscreen=(self "https://www.youtube-nocookie.com" "https://open.spotify.com"), geolocation=(), microphone=(), payment=(), usb=()',
+        'camera=(self), fullscreen=(self "https://www.youtube-nocookie.com" "https://open.spotify.com"), geolocation=(), microphone=(), payment=(), usb=()',
       );
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
