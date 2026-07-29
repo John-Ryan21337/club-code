@@ -1392,6 +1392,24 @@ describe("OrchestrationEngine", () => {
       Stream.runCollect(engine.readEvents(0)).pipe(Effect.map((chunk) => Array.from(chunk))),
     );
     expect(eventsAfterRetry).toHaveLength(eventsBeforeRetry.length);
+    await system.run(
+      engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("server:manual-follow-up-provider-ready-atomic"),
+        threadId,
+        session: {
+          threadId,
+          status: "ready",
+          providerName: "codex",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: createdAt,
+        },
+        createdAt,
+      }),
+    );
 
     const activationCandidates = [
       {
@@ -1416,8 +1434,15 @@ describe("OrchestrationEngine", () => {
     const results = await Promise.allSettled(
       activationCandidates.map((command) => system.run(engine.dispatch(command))),
     );
-    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
-    expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
+    const fulfilled = results.filter((result) => result.status === "fulfilled");
+    const rejected = results.filter((result) => result.status === "rejected");
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0]?.reason).toMatchObject({
+      _tag: "OrchestrationCommandInvariantError",
+      commandType: "thread.manual-follow-up.activate",
+      detail: expect.stringMatching(/already has an unresolved provider handoff/i),
+    });
     const winnerIndex = results.findIndex((result) => result.status === "fulfilled");
     const winner = activationCandidates[winnerIndex];
     if (winner === undefined) {
