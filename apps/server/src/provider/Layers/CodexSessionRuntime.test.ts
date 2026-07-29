@@ -41,6 +41,7 @@ import {
   rememberCodexChildConversationTurns,
   resolveCodexThreadSettingsSessionModel,
   resolveCodexChildConversationNotification,
+  shouldForwardCodexRootGoalNotification,
   selectCodexActiveSnapshotTurn,
   summarizeCodexAppServerChildProcesses,
   updateCodexChildConversationLiveness,
@@ -449,6 +450,57 @@ describe("Codex child conversation routing", () => {
         parentTurnId,
         suppressLifecycle: true,
       },
+    );
+    assert.deepStrictEqual(
+      resolveCodexChildConversationNotification(
+        routes,
+        {
+          method: "thread/goal/updated",
+          params: {
+            threadId: "thread-child",
+            goal: {
+              threadId: "thread-child",
+              objective: "Child objective",
+              status: "active",
+              tokenBudget: null,
+              tokensUsed: 0,
+              timeUsedSeconds: 0,
+              createdAt: 1,
+              updatedAt: 1,
+            },
+          },
+        },
+        "thread-parent",
+      ),
+      {
+        parentTurnId,
+        suppressLifecycle: true,
+      },
+    );
+  });
+
+  it("forwards goal notifications only from the root provider thread", () => {
+    const rootGoal = {
+      method: "thread/goal/cleared",
+      params: { threadId: "thread-parent" },
+    } as const;
+    const childGoal = {
+      method: "thread/goal/cleared",
+      params: { threadId: "thread-child" },
+    } as const;
+
+    assert.equal(shouldForwardCodexRootGoalNotification(rootGoal, "thread-parent"), true);
+    assert.equal(shouldForwardCodexRootGoalNotification(childGoal, "thread-parent"), false);
+    assert.equal(shouldForwardCodexRootGoalNotification(rootGoal, undefined), false);
+    assert.equal(
+      shouldForwardCodexRootGoalNotification(
+        {
+          method: "item/completed",
+          params: { threadId: "thread-child" },
+        },
+        "thread-parent",
+      ),
+      true,
     );
   });
 

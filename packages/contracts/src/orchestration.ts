@@ -34,6 +34,11 @@ import {
   ThreadAutoNudgeSummary,
   ThreadAutoNudgeSummaryWithDefault,
 } from "./autoNudge.ts";
+import {
+  ProviderThreadGoal,
+  ProviderThreadGoalClearInput,
+  ProviderThreadGoalSetInput,
+} from "./providerGoal.ts";
 
 export const ORCHESTRATION_WS_METHODS = {
   dispatchCommand: "orchestration.dispatchCommand",
@@ -525,6 +530,10 @@ export const OrchestrationThread = Schema.Struct({
   activities: Schema.Array(OrchestrationThreadActivity),
   checkpoints: Schema.Array(OrchestrationCheckpointSummary),
   session: Schema.NullOr(OrchestrationSession),
+  // Older snapshots predate durable provider goals. Keep the field optional at
+  // the transport boundary; current projectors emit either a canonical goal or
+  // null, while legacy snapshots decode without a migration-time rewrite.
+  goal: Schema.optional(Schema.NullOr(ProviderThreadGoal)),
 });
 export type OrchestrationThread = typeof OrchestrationThread.Type;
 
@@ -1067,6 +1076,33 @@ const ThreadSessionStopCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const ThreadGoalSetCommand = Schema.Struct({
+  type: Schema.Literal("thread.goal.set"),
+  commandId: CommandId,
+  ...ProviderThreadGoalSetInput.fields,
+  /**
+   * Codex TUI replacement semantics are clear-then-create, not an objective
+   * edit. The provider reactor executes both RPCs serially when this is true
+   * so accounting resets cannot interleave with another goal command.
+   */
+  replaceExisting: Schema.optional(Schema.Boolean),
+  /**
+   * Optional optimistic-concurrency guard from the detail snapshot that opened
+   * the goal dialog. It protects a slow renderer from overwriting a newer
+   * provider-side goal update after reconnect.
+   */
+  expectedUpdatedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
+  createdAt: IsoDateTime,
+});
+
+const ThreadGoalClearCommand = Schema.Struct({
+  type: Schema.Literal("thread.goal.clear"),
+  commandId: CommandId,
+  ...ProviderThreadGoalClearInput.fields,
+  expectedUpdatedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
+  createdAt: IsoDateTime,
+});
+
 const DispatchableClientOrchestrationCommand = Schema.Union([
   ProjectCreateCommand,
   ProjectMetaUpdateCommand,
@@ -1093,6 +1129,8 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadUserInputRespondCommand,
   ThreadCheckpointRevertCommand,
   ThreadSessionStopCommand,
+  ThreadGoalSetCommand,
+  ThreadGoalClearCommand,
 ]);
 export type DispatchableClientOrchestrationCommand =
   typeof DispatchableClientOrchestrationCommand.Type;
@@ -1123,6 +1161,8 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadUserInputRespondCommand,
   ThreadCheckpointRevertCommand,
   ThreadSessionStopCommand,
+  ThreadGoalSetCommand,
+  ThreadGoalClearCommand,
 ]);
 export type ClientOrchestrationCommand = typeof ClientOrchestrationCommand.Type;
 
@@ -1232,6 +1272,14 @@ const ThreadRevertCompleteCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const ThreadGoalSyncCommand = Schema.Struct({
+  type: Schema.Literal("thread.goal.sync"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  goal: Schema.NullOr(ProviderThreadGoal),
+  createdAt: IsoDateTime,
+});
+
 const InternalOrchestrationCommand = Schema.Union([
   ThreadSessionSetCommand,
   ThreadManualFollowUpAcceptCommand,
@@ -1243,6 +1291,7 @@ const InternalOrchestrationCommand = Schema.Union([
   ThreadTurnDiffCompleteCommand,
   ThreadActivityAppendCommand,
   ThreadRevertCompleteCommand,
+  ThreadGoalSyncCommand,
 ]);
 export type InternalOrchestrationCommand = typeof InternalOrchestrationCommand.Type;
 
@@ -1286,6 +1335,9 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.reverted",
   "thread.session-stop-requested",
   "thread.session-set",
+  "thread.goal-set-requested",
+  "thread.goal-clear-requested",
+  "thread.goal-synced",
   "thread.proposed-plan-upserted",
   "thread.turn-diff-completed",
   "thread.activity-appended",
@@ -1556,6 +1608,24 @@ export const ThreadSessionSetPayload = Schema.Struct({
   terminalTurnRecovery: Schema.optional(TerminalTurnRecoveryReason),
 });
 
+export const ThreadGoalSetRequestedPayload = Schema.Struct({
+  ...ProviderThreadGoalSetInput.fields,
+  replaceExisting: Schema.optional(Schema.Boolean),
+  expectedUpdatedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
+  createdAt: IsoDateTime,
+});
+
+export const ThreadGoalClearRequestedPayload = Schema.Struct({
+  ...ProviderThreadGoalClearInput.fields,
+  expectedUpdatedAt: Schema.optional(Schema.NullOr(IsoDateTime)),
+  createdAt: IsoDateTime,
+});
+
+export const ThreadGoalSyncedPayload = Schema.Struct({
+  threadId: ThreadId,
+  goal: Schema.NullOr(ProviderThreadGoal),
+});
+
 export const ThreadProposedPlanUpsertedPayload = Schema.Struct({
   threadId: ThreadId,
   proposedPlan: OrchestrationProposedPlan,
@@ -1763,6 +1833,21 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.session-set"),
     payload: ThreadSessionSetPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.goal-set-requested"),
+    payload: ThreadGoalSetRequestedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.goal-clear-requested"),
+    payload: ThreadGoalClearRequestedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.goal-synced"),
+    payload: ThreadGoalSyncedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

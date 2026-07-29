@@ -133,6 +133,7 @@ const withInstanceIdentity =
         snapshot.auth.type === "chatgpt" || snapshot.accountRateLimits
           ? "supported"
           : "unsupported",
+      threadGoals: "supported",
     },
   });
 

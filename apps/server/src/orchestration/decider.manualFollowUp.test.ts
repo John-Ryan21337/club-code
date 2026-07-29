@@ -112,7 +112,16 @@ function makeThread(input?: {
             lastError: null,
             updatedAt: NOW,
           }
-        : null,
+        : {
+            threadId: THREAD_ID,
+            status: "ready",
+            providerName: "codex",
+            providerInstanceId: ProviderInstanceId.make("codex"),
+            runtimeMode: "approval-required",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: NOW,
+          },
   };
 }
 
@@ -377,6 +386,45 @@ it.effect(
         ),
       );
 
+      const blockedRetry = yield* Effect.flip(
+        decideOrchestrationCommand({
+          readModel,
+          command: {
+            type: "thread.manual-follow-up.activate",
+            commandId: CommandId.make("command-activate-first-while-error"),
+            threadId: THREAD_ID,
+            followUpId: ManualFollowUpId.make("follow-up-1"),
+            activationMode: "automatic-after-settlement",
+            createdAt: NOW,
+          },
+        }),
+      );
+      assert.match(blockedRetry.detail, /not authoritatively ready/i);
+      readModel = yield* projectEvents(
+        readModel,
+        asEvents(
+          yield* decideOrchestrationCommand({
+            readModel,
+            command: {
+              type: "thread.session.set",
+              commandId: CommandId.make("server:manual-follow-up-provider-ready"),
+              threadId: THREAD_ID,
+              session: {
+                threadId: THREAD_ID,
+                status: "ready",
+                providerName: "claude",
+                providerInstanceId: ProviderInstanceId.make("claude-account-at-enqueue"),
+                runtimeMode: "full-access",
+                activeTurnId: null,
+                lastError: null,
+                updatedAt: NOW,
+              },
+              createdAt: NOW,
+            },
+          }),
+        ),
+      );
+
       const retryActivationCommandId = CommandId.make("command-activate-first-retry");
       const retried = asEvents(
         yield* decideOrchestrationCommand({
@@ -434,6 +482,64 @@ it.effect(
         1,
       );
     }),
+);
+
+it.effect("keeps automatic follow-ups queued across Stop until an operator explicitly sends", () =>
+  Effect.gen(function* () {
+    const stoppedThread = makeThread();
+    let readModel = makeReadModel({
+      ...stoppedThread,
+      session: stoppedThread.session
+        ? {
+            ...stoppedThread.session,
+            status: "stopped",
+          }
+        : null,
+    });
+    readModel = yield* projectEvents(
+      readModel,
+      asEvents(
+        yield* decideOrchestrationCommand({
+          readModel,
+          command: enqueueCommand(1),
+        }),
+      ),
+    );
+
+    const automatic = yield* Effect.flip(
+      decideOrchestrationCommand({
+        readModel,
+        command: {
+          type: "thread.manual-follow-up.activate",
+          commandId: CommandId.make("command-activate-stopped-automatic"),
+          threadId: THREAD_ID,
+          followUpId: ManualFollowUpId.make("follow-up-1"),
+          activationMode: "automatic-after-settlement",
+          createdAt: NOW,
+        },
+      }),
+    );
+    assert.match(automatic.detail, /not authoritatively ready/i);
+    assert.equal(readModel.threads[0]?.manualFollowUps[0]?.status, "queued");
+
+    const operator = asEvents(
+      yield* decideOrchestrationCommand({
+        readModel,
+        command: {
+          type: "thread.manual-follow-up.activate",
+          commandId: CommandId.make("command-activate-stopped-operator"),
+          threadId: THREAD_ID,
+          followUpId: ManualFollowUpId.make("follow-up-1"),
+          activationMode: "operator",
+          createdAt: NOW,
+        },
+      }),
+    );
+    assert.deepStrictEqual(
+      operator.map((event) => event.type),
+      ["thread.manual-follow-up-activated", "thread.message-sent", "thread.turn-start-requested"],
+    );
+  }),
 );
 
 it.effect("server-blocks raced automatic activation but permits an explicit FIFO steer", () =>

@@ -3541,7 +3541,9 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
             providers: nextFixture.serverConfig.providers.map((provider) => ({
               ...provider,
               runtimeCapabilities: {
+                ...provider.runtimeCapabilities,
                 liveSteer: "supported",
+                threadGoals: provider.runtimeCapabilities?.threadGoals ?? "unsupported",
               },
             })),
           };

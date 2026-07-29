@@ -118,6 +118,7 @@ export const Route = createFileRoute("/settings")({
 
 const SETTINGS_RESTORE_DEFAULTS_PATHS = new Set([
   "/settings/appearance",
+  "/settings/ambiance",
   "/settings/chat-threads",
   "/settings/files-diffs",
   "/settings/source-control",

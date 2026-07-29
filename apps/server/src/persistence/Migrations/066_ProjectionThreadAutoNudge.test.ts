@@ -6,7 +6,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { runMigrations } from "../Migrations.ts";
 import * as TestSqliteClient from "../TestSqliteClient.ts";
-import ProjectionThreadGoals from "./062_ProjectionThreadGoals.ts";
+import ProjectionThreadGoals from "./068_ProjectionThreadGoals.ts";
 import { DEFAULT_THREAD_AUTO_NUDGE_JSON } from "./066_ProjectionThreadAutoNudge.ts";
 
 const decodeThreadAutoNudgeConfig = Schema.decodeUnknownEffect(ThreadAutoNudgeConfig);

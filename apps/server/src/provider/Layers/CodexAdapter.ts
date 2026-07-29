@@ -21,6 +21,8 @@ import {
   ProviderInstanceId,
   type ProviderRuntimeEvent,
   type ProviderRequestKind,
+  ProviderThreadGoal,
+  type ProviderThreadGoalSetInput,
   type ThreadTokenUsageSnapshot,
   type ProviderUserInputAnswers,
   RuntimeItemId,
@@ -89,6 +91,7 @@ const CODEX_TRANSPORT_POLICY_PERSISTENCE_ENV = "CAFE_CODE_PERSIST_CODEX_HTTP_FAL
 const CODEX_WEBSOCKET_FALLBACK_REASON = "responses_websocket_stream_disconnected";
 const CODEX_TURN_DIFF_PREVIEW_CHARS = 4_096;
 const CODEX_HOOK_OUTPUT_PREVIEW_CHARS = 4_096;
+const CODEX_PLUGIN_ATTRIBUTION_MAX_CHARS = 512;
 
 class CodexTransportPolicyFileError extends Data.TaggedError("CodexTransportPolicyFileError")<{
   readonly cause: unknown;
@@ -313,6 +316,8 @@ function shouldAuditCodexBridgeEvent(event: ProviderEvent): boolean {
   return (
     isCodexTurnTerminalEvent(event) ||
     event.method === "thread/status/changed" ||
+    event.method === "thread/goal/updated" ||
+    event.method === "thread/goal/cleared" ||
     event.method === "account/rateLimits/updated" ||
     event.method === "item/completed"
   );
@@ -587,7 +592,52 @@ function toCanonicalItemType(raw: string | undefined | null): CanonicalItemType 
   return "unknown";
 }
 
-function itemTitle(itemType: CanonicalItemType): string | undefined {
+function boundedSingleLine(value: string | undefined | null, maxChars: number): string | undefined {
+  const normalized = value
+    ?.replace(/[\p{Cc}\p{Bidi_Control}]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalized) {
+    return undefined;
+  }
+  return normalized.length > maxChars ? `${normalized.slice(0, maxChars - 3)}...` : normalized;
+}
+
+function safePluginScriptPath(value: string | undefined | null): string | undefined {
+  const candidate = boundedSingleLine(value, CODEX_PLUGIN_ATTRIBUTION_MAX_CHARS);
+  if (!candidate) {
+    return undefined;
+  }
+
+  // Codex 0.146 documents `scriptPath` as a trusted, plugin-relative path.
+  // Validate that invariant again at Cafe's display boundary so a malformed or
+  // future provider cannot make an absolute or parent-traversing path look like
+  // first-party plugin attribution in the work log.
+  const normalized = candidate.replaceAll("\\", "/");
+  if (
+    normalized.startsWith("/") ||
+    /^[A-Za-z]:\//.test(normalized) ||
+    normalized.split("/").some((segment) => segment === "..")
+  ) {
+    return undefined;
+  }
+  return normalized;
+}
+
+function pluginCommandAttribution(item: CodexLifecycleItem): string | undefined {
+  if (item.type !== "commandExecution") {
+    return undefined;
+  }
+
+  const pluginId = boundedSingleLine(item.pluginId, CODEX_PLUGIN_ATTRIBUTION_MAX_CHARS);
+  if (!pluginId) {
+    return undefined;
+  }
+  const scriptPath = safePluginScriptPath(item.scriptPath);
+  return scriptPath ? `${pluginId} (${scriptPath})` : pluginId;
+}
+
+function itemTitle(itemType: CanonicalItemType, item: CodexLifecycleItem): string | undefined {
   switch (itemType) {
     case "assistant_message":
       return "Assistant message";
@@ -598,7 +648,7 @@ function itemTitle(itemType: CanonicalItemType): string | undefined {
     case "plan":
       return "Plan";
     case "command_execution":
-      return "Ran command";
+      return pluginCommandAttribution(item) ? "Ran plugin command" : "Ran command";
     case "file_change":
       return "File change";
     case "mcp_tool_call":
@@ -647,9 +697,11 @@ function itemDetail(item: CodexLifecycleItem): string | undefined {
   for (const candidate of candidates) {
     const trimmed = typeof candidate === "string" ? trimText(candidate) : undefined;
     if (!trimmed) continue;
-    return trimmed;
+    const attribution = pluginCommandAttribution(item);
+    return attribution ? `${trimmed}\nPlugin: ${attribution}` : trimmed;
   }
-  return undefined;
+  const attribution = pluginCommandAttribution(item);
+  return attribution ? `Plugin: ${attribution}` : undefined;
 }
 
 type CodexHookRun =
@@ -940,6 +992,23 @@ function replaceSensitiveNativeEventPayload(
 }
 
 function sanitizeNativeProviderEventForLog(event: ProviderEvent): ProviderEvent {
+  if (event.method === "thread/goal/updated") {
+    const goal = readCodexCanonicalGoal(event.payload, event.threadId);
+    return replaceSensitiveNativeEventPayload(event, {
+      redacted: true,
+      reason: "goal-objective-is-user-content",
+      ...(goal
+        ? {
+            status: goal.status,
+            tokenBudgetConfigured: goal.tokenBudget !== null,
+            tokensUsed: goal.tokensUsed,
+            timeUsedSeconds: goal.timeUsedSeconds,
+            updatedAt: goal.updatedAt,
+          }
+        : {}),
+    });
+  }
+
   if (event.method === "thread/settings/updated") {
     const payload = readPayload(
       EffectCodexSchema.V2ThreadSettingsUpdatedNotification,
@@ -970,6 +1039,63 @@ function sanitizeNativeProviderEventForLog(event: ProviderEvent): ProviderEvent 
   return {
     ...event,
     payload: summarizeCodexTurnDiffPayload(payload),
+  };
+}
+
+function codexGoalTimestampToIso(value: number): string | undefined {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    return undefined;
+  }
+  const timestamp = value * 1_000;
+  const date = new Date(timestamp);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : undefined;
+}
+
+const isProviderThreadGoal = Schema.is(ProviderThreadGoal);
+
+function readCodexCanonicalGoal(
+  payload: ProviderEvent["payload"],
+  canonicalThreadId: ThreadId,
+): ProviderThreadGoal | undefined {
+  const payloadRecord = readRecordValue(payload);
+  const canonicalGoal = payloadRecord?.goal;
+  if (isProviderThreadGoal(canonicalGoal)) {
+    return canonicalGoal.threadId === canonicalThreadId ? canonicalGoal : undefined;
+  }
+
+  const notification = readPayload(EffectCodexSchema.V2ThreadGoalUpdatedNotification, payload);
+  const goal = notification?.goal;
+  if (!goal) {
+    return undefined;
+  }
+  const createdAt = codexGoalTimestampToIso(goal.createdAt);
+  const updatedAt = codexGoalTimestampToIso(goal.updatedAt);
+  if (!createdAt || !updatedAt) {
+    return undefined;
+  }
+  const normalized = {
+    threadId: canonicalThreadId,
+    objective: goal.objective,
+    status: goal.status,
+    tokenBudget: goal.tokenBudget ?? null,
+    tokensUsed: goal.tokensUsed,
+    timeUsedSeconds: goal.timeUsedSeconds,
+    createdAt,
+    updatedAt,
+  };
+  return isProviderThreadGoal(normalized) ? normalized : undefined;
+}
+
+function summarizeCodexGoalForRawPayload(goal: ProviderThreadGoal): Record<string, unknown> {
+  return {
+    redacted: true,
+    reason: "goal-objective-is-user-content",
+    status: goal.status,
+    tokenBudgetConfigured: goal.tokenBudget !== null,
+    tokensUsed: goal.tokensUsed,
+    timeUsedSeconds: goal.timeUsedSeconds,
+    createdAt: goal.createdAt,
+    updatedAt: goal.updatedAt,
   };
 }
 
@@ -1025,6 +1151,7 @@ function mapItemLifecycle(
   }
 
   const detail = itemDetail(item);
+  const title = itemTitle(itemType, item);
   const status =
     lifecycle === "item.started"
       ? "inProgress"
@@ -1038,7 +1165,7 @@ function mapItemLifecycle(
     payload: {
       itemType,
       ...(status ? { status } : {}),
-      ...(itemTitle(itemType) ? { title: itemTitle(itemType) } : {}),
+      ...(title ? { title } : {}),
       ...(detail ? { detail } : {}),
       ...(event.payload !== undefined ? { data: event.payload } : {}),
     },
@@ -1329,6 +1456,38 @@ function mapToRuntimeEvents(
         payload: {
           usage: normalizedUsage,
         },
+      },
+    ];
+  }
+
+  if (event.method === "thread/goal/updated") {
+    const goal = readCodexCanonicalGoal(event.payload, canonicalThreadId);
+    if (!goal) {
+      return [];
+    }
+    return [
+      {
+        type: "thread.goal.updated",
+        ...runtimeEventBase(event, canonicalThreadId, {
+          rawPayload: summarizeCodexGoalForRawPayload(goal),
+        }),
+        payload: {
+          goal,
+        },
+      },
+    ];
+  }
+
+  if (event.method === "thread/goal/cleared") {
+    return [
+      {
+        type: "thread.goal.cleared",
+        ...runtimeEventBase(event, canonicalThreadId, {
+          rawPayload: {
+            objectivePresent: false,
+          },
+        }),
+        payload: {},
       },
     ];
   }
@@ -2835,6 +2994,42 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
       ),
     );
 
+  const getGoal: NonNullable<CodexAdapterShape["getGoal"]> = (threadId) =>
+    requireSession(threadId).pipe(
+      Effect.flatMap((session) => session.runtime.getGoal),
+      Effect.mapError((cause) =>
+        cause._tag === "ProviderAdapterSessionNotFoundError"
+          ? cause
+          : mapCodexRuntimeError(threadId, "thread/goal/get", cause),
+      ),
+    );
+
+  const setGoal: NonNullable<CodexAdapterShape["setGoal"]> = (input: ProviderThreadGoalSetInput) =>
+    requireSession(input.threadId).pipe(
+      Effect.flatMap((session) =>
+        session.runtime.setGoal({
+          ...(input.objective !== undefined ? { objective: input.objective } : {}),
+          ...(input.status !== undefined ? { status: input.status } : {}),
+          ...(input.tokenBudget !== undefined ? { tokenBudget: input.tokenBudget } : {}),
+        }),
+      ),
+      Effect.mapError((cause) =>
+        cause._tag === "ProviderAdapterSessionNotFoundError"
+          ? cause
+          : mapCodexRuntimeError(input.threadId, "thread/goal/set", cause),
+      ),
+    );
+
+  const clearGoal: NonNullable<CodexAdapterShape["clearGoal"]> = (threadId) =>
+    requireSession(threadId).pipe(
+      Effect.flatMap((session) => session.runtime.clearGoal),
+      Effect.mapError((cause) =>
+        cause._tag === "ProviderAdapterSessionNotFoundError"
+          ? cause
+          : mapCodexRuntimeError(threadId, "thread/goal/clear", cause),
+      ),
+    );
+
   const readThread: CodexAdapterShape["readThread"] = (threadId) =>
     requireSession(threadId).pipe(
       Effect.flatMap((session) => session.runtime.readThread),
@@ -2956,11 +3151,15 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     capabilities: {
       sessionModelSwitch: "in-session",
       liveSteer: "supported",
+      threadGoals: "supported",
     },
     startSession,
     sendTurn,
     steerTurn,
     interruptTurn,
+    getGoal,
+    setGoal,
+    clearGoal,
     readThread,
     rollbackThread,
     respondToRequest,

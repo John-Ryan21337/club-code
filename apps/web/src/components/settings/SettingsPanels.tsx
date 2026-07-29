@@ -478,6 +478,16 @@ export function useSettingsRestore(onRestored?: () => void) {
       DEFAULT_UNIFIED_SETTINGS.fallingEffectJapaneseRatio
         ? ["Matrix Roman/Japanese mix"]
         : []),
+      ...(settings.ambianceEnabled !== DEFAULT_UNIFIED_SETTINGS.ambianceEnabled ||
+      settings.ambianceEffect !== DEFAULT_UNIFIED_SETTINGS.ambianceEffect ||
+      settings.ambianceIntensity !== DEFAULT_UNIFIED_SETTINGS.ambianceIntensity ||
+      settings.ambianceReactMode !== DEFAULT_UNIFIED_SETTINGS.ambianceReactMode ||
+      settings.ambianceSurfaceSidebar !== DEFAULT_UNIFIED_SETTINGS.ambianceSurfaceSidebar ||
+      settings.ambianceSurfaceThread !== DEFAULT_UNIFIED_SETTINGS.ambianceSurfaceThread ||
+      settings.ambianceSurfaceComposer !== DEFAULT_UNIFIED_SETTINGS.ambianceSurfaceComposer ||
+      settings.ambianceColor !== DEFAULT_UNIFIED_SETTINGS.ambianceColor
+        ? ["Ambiance"]
+        : []),
       ...(settings.appAccentColor !== DEFAULT_UNIFIED_SETTINGS.appAccentColor
         ? ["Accent color"]
         : []),
@@ -525,6 +535,14 @@ export function useSettingsRestore(onRestored?: () => void) {
     ],
     [
       isGitWritingModelDirty,
+      settings.ambianceColor,
+      settings.ambianceEffect,
+      settings.ambianceEnabled,
+      settings.ambianceIntensity,
+      settings.ambianceReactMode,
+      settings.ambianceSurfaceComposer,
+      settings.ambianceSurfaceSidebar,
+      settings.ambianceSurfaceThread,
       settings.autoOpenPlanSidebar,
       settings.confirmThreadArchive,
       settings.confirmThreadDelete,
@@ -608,6 +626,14 @@ export function useSettingsRestore(onRestored?: () => void) {
       fallingEffectSpeed: DEFAULT_UNIFIED_SETTINGS.fallingEffectSpeed,
       fallingEffectDensity: DEFAULT_UNIFIED_SETTINGS.fallingEffectDensity,
       fallingEffectJapaneseRatio: DEFAULT_UNIFIED_SETTINGS.fallingEffectJapaneseRatio,
+      ambianceEnabled: DEFAULT_UNIFIED_SETTINGS.ambianceEnabled,
+      ambianceEffect: DEFAULT_UNIFIED_SETTINGS.ambianceEffect,
+      ambianceIntensity: DEFAULT_UNIFIED_SETTINGS.ambianceIntensity,
+      ambianceReactMode: DEFAULT_UNIFIED_SETTINGS.ambianceReactMode,
+      ambianceSurfaceSidebar: DEFAULT_UNIFIED_SETTINGS.ambianceSurfaceSidebar,
+      ambianceSurfaceThread: DEFAULT_UNIFIED_SETTINGS.ambianceSurfaceThread,
+      ambianceSurfaceComposer: DEFAULT_UNIFIED_SETTINGS.ambianceSurfaceComposer,
+      ambianceColor: DEFAULT_UNIFIED_SETTINGS.ambianceColor,
       themeAccentColor: DEFAULT_UNIFIED_SETTINGS.themeAccentColor,
       defaultEditor: DEFAULT_UNIFIED_SETTINGS.defaultEditor,
       diffWordWrap: DEFAULT_UNIFIED_SETTINGS.diffWordWrap,

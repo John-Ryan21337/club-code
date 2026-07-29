@@ -315,6 +315,7 @@ describe("ProviderInstanceRegistryLive — all drivers slice", () => {
       );
       expect(codexSnapshot.runtimeCapabilities?.liveSteer).toBe("supported");
       expect(codexSnapshot.runtimeCapabilities?.accountUsage).toBe("unsupported");
+      expect(codexSnapshot.runtimeCapabilities?.threadGoals).toBe("supported");
 
       const claudeSnapshot = yield* claude!.snapshot.getSnapshot;
       expect(claudeSnapshot.instanceId).toBe(claudeId);
@@ -329,6 +330,7 @@ describe("ProviderInstanceRegistryLive — all drivers slice", () => {
       // initial disabled/pending snapshot before a CLI probe has completed.
       expect(claudeSnapshot.runtimeCapabilities?.liveSteer).toBe("supported");
       expect(claudeSnapshot.runtimeCapabilities?.accountUsage).toBe("unsupported");
+      expect(claudeSnapshot.runtimeCapabilities?.threadGoals).toBe("unsupported");
       expect(claude!.adapter.capabilities.liveSteer).toBe("supported");
     }).pipe(Effect.provide(testLayer)),
   );

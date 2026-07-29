@@ -223,6 +223,7 @@ describe("ServerProvider", () => {
     });
     expect(parsed.runtimeCapabilities).toEqual({
       liveSteer: "supported",
+      threadGoals: "unsupported",
     });
     if (!parsed.accountRateLimits) {
       throw new Error("Expected decoded account rate limits.");

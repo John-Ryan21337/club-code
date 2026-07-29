@@ -345,4 +345,36 @@ describe("CompactComposerControlsMenu", () => {
     await screen.unmount();
     host.remove();
   });
+
+  it("shows a human-readable Codex goal status and opens the goal control", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const onOpenGoal = vi.fn();
+    const screen = await render(
+      <CompactComposerControlsMenu
+        activePlan={false}
+        provider={ProviderDriverKind.make("codex")}
+        interactionMode="default"
+        planSidebarLabel="Plan"
+        planSidebarOpen={false}
+        runtimeMode="approval-required"
+        showInteractionModeToggle={false}
+        showGoalControl
+        goalStatus="usageLimited"
+        onToggleInteractionMode={vi.fn()}
+        onClaudePermissionModeChange={vi.fn()}
+        onTogglePlanSidebar={vi.fn()}
+        onRuntimeModeChange={vi.fn()}
+        onOpenGoal={onOpenGoal}
+      />,
+      { container: host },
+    );
+
+    await page.getByLabelText("More composer controls").click();
+    await page.getByText("Goal: Usage limited").click();
+
+    expect(onOpenGoal).toHaveBeenCalledOnce();
+    await screen.unmount();
+    host.remove();
+  });
 });

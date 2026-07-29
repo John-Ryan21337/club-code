@@ -238,6 +238,8 @@ export const ServerProviderAccountUsageSupport = Schema.Literals([
   "unsupported",
 ]);
 export type ServerProviderAccountUsageSupport = typeof ServerProviderAccountUsageSupport.Type;
+export const ServerProviderThreadGoalSupport = Schema.Literals(["supported", "unsupported"]);
+export type ServerProviderThreadGoalSupport = typeof ServerProviderThreadGoalSupport.Type;
 
 export const ServerProviderRuntimeCapabilities = Schema.Struct({
   liveSteer: ServerProviderLiveSteerSupport.pipe(
@@ -247,6 +249,9 @@ export const ServerProviderRuntimeCapabilities = Schema.Struct({
   // always stamp this field; retaining absence lets renderers distinguish a
   // legacy snapshot containing real usage from an explicit unsupported claim.
   accountUsage: Schema.optionalKey(ServerProviderAccountUsageSupport),
+  threadGoals: ServerProviderThreadGoalSupport.pipe(
+    Schema.withDecodingDefault(Effect.succeed("unsupported" as const)),
+  ),
 });
 export type ServerProviderRuntimeCapabilities = typeof ServerProviderRuntimeCapabilities.Type;
 
@@ -533,6 +538,7 @@ export const ServerRuntimeLayerStatus = Schema.Literals([
   "offline",
   "degraded",
   "unknown",
+  "not-configured",
 ]);
 export type ServerRuntimeLayerStatus = typeof ServerRuntimeLayerStatus.Type;
 

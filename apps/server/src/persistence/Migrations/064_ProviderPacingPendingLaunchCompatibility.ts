@@ -1,7 +1,7 @@
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
-import ProjectionThreadGoals from "./062_ProjectionThreadGoals.ts";
+import ProjectionThreadGoals from "./068_ProjectionThreadGoals.ts";
 
 type TableColumn = {
   readonly name: string;
@@ -19,9 +19,10 @@ export default Effect.gen(function* () {
    * - an early pacing stack: the pending-launch table.
    *
    * Effect's migrator advances by numeric id, so a database that ran either
-   * fork migration will skip upstream's migration 62 forever. Re-running the
-   * upstream effect here is safe because its table creation is idempotent and
-   * repairs only the missing goals table.
+   * fork migration will skip the alternate goals-at-62 migration forever.
+   * Re-running the idempotent goal-table effect preserves the already-published
+   * migration-64 compatibility boundary. Migration 68 records that table on
+   * the active lineage without reusing migration 62.
    */
   yield* ProjectionThreadGoals;
 

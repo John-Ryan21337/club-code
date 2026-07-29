@@ -11,6 +11,7 @@ import {
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { QueryClient, useQueryClient } from "@tanstack/react-query";
 
+import { AmbianceLayer } from "../ambiance/AmbianceLayer";
 import { APP_DISPLAY_NAME } from "../branding";
 import { AppSidebarLayout } from "../components/AppSidebarLayout";
 import { AtmosphereConsole } from "../components/AtmosphereConsole";
@@ -168,6 +169,7 @@ function RootRouteView() {
         {primaryEnvironmentAuthenticated ? <ServerStateBootstrap /> : null}
         <EnvironmentConnectionManagerBootstrap />
         <AppearanceSettingsSync />
+        <AmbianceLayer />
         <PowerSaveBlockerSync />
         <WindowAtmosphere selectedThreadRef={selectedThreadRef} />
         <AtmosphereConsole />

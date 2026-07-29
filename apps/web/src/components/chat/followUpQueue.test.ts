@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   appendOperatorFollowUp,
   canAutomaticallyActivateQueuedFollowUp,
+  canAutoStartQueuedFollowUpTurn,
   canStartQueuedFollowUpTurn,
   canExpandQueuedFollowUpText,
   collectRetainedFollowUpThreadTargets,
@@ -58,6 +59,11 @@ describe("followUpQueue", () => {
   it("keeps the queued item visible during a running turn until Steer is explicit", () => {
     expect(canAutomaticallyActivateQueuedFollowUp("running")).toBe(false);
     expect(canAutomaticallyActivateQueuedFollowUp("ready")).toBe(true);
+    expect(
+      canAutomaticallyActivateQueuedFollowUp("ready", {
+        manualStopBarrierActive: true,
+      }),
+    ).toBe(false);
     expect(canAutomaticallyActivateQueuedFollowUp("disconnected")).toBe(false);
     expect(canAutomaticallyActivateQueuedFollowUp("connecting")).toBe(false);
   });
@@ -371,6 +377,30 @@ describe("followUpQueue", () => {
         isDispatchInFlight: true,
       }),
     ).toBe(false);
+  });
+
+  it("does not auto-start queued work across an explicit Stop barrier", () => {
+    const idleQueue = {
+      queueLength: 1,
+      firstItemBlocked: false,
+      isWorking: false,
+      isConnecting: false,
+      isEnvironmentUnavailable: false,
+      isDispatchInFlight: false,
+    };
+
+    expect(
+      canAutoStartQueuedFollowUpTurn({
+        ...idleQueue,
+        manualStopBarrierActive: true,
+      }),
+    ).toBe(false);
+    expect(
+      canAutoStartQueuedFollowUpTurn({
+        ...idleQueue,
+        manualStopBarrierActive: false,
+      }),
+    ).toBe(true);
   });
 
   it("selects a dispatchable queued follow-up from a background thread", () => {

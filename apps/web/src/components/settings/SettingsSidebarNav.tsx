@@ -6,6 +6,7 @@ import {
   BarChart3Icon,
   BellIcon,
   BotIcon,
+  CloudDrizzleIcon,
   FileTextIcon,
   GitBranchIcon,
   KeyboardIcon,
@@ -31,6 +32,7 @@ import {
 
 export type SettingsSectionPath =
   | "/settings/appearance"
+  | "/settings/ambiance"
   | "/settings/chat-threads"
   | "/settings/files-diffs"
   | "/settings/general"
@@ -67,6 +69,7 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
         icon: PaletteIcon,
         activePaths: ["/settings/general"],
       },
+      { label: "Ambiance", to: "/settings/ambiance", icon: CloudDrizzleIcon },
       { label: "Chat & Threads", to: "/settings/chat-threads", icon: MessageSquareIcon },
       { label: "Notifications", to: "/settings/notifications", icon: BellIcon },
       { label: "Files & Diffs", to: "/settings/files-diffs", icon: FileTextIcon },

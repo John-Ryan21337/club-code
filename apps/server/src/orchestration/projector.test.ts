@@ -100,6 +100,7 @@ describe("orchestration projector", () => {
         session: null,
         autoNudge: DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
         manualFollowUps: [],
+        goal: null,
       },
     ]);
   });

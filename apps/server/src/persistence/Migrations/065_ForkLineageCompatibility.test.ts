@@ -4,7 +4,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { migrationEntries, runMigrations } from "../Migrations.ts";
 import * as TestSqliteClient from "../TestSqliteClient.ts";
-import ProjectionThreadGoals from "./062_ProjectionThreadGoals.ts";
+import ProjectionThreadGoals from "./068_ProjectionThreadGoals.ts";
 import Migration0064 from "./064_ProviderPacingPendingLaunchCompatibility.ts";
 import Migration0065 from "./065_ForkLineageCompatibility.ts";
 
@@ -147,6 +147,7 @@ describe("065_ForkLineageCompatibility", () => {
           [65, "ForkLineageCompatibility"],
           [66, "ProjectionThreadAutoNudge"],
           [67, "ProjectionThreadManualFollowUps"],
+          [68, "ProjectionThreadGoals"],
         ],
       );
 

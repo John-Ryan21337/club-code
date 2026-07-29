@@ -8,6 +8,7 @@ import { setImmediate as waitForEventLoopTurn } from "node:timers/promises";
 import {
   type ChatAttachment,
   ModelSelection,
+  type ProviderThreadGoal,
   ProviderRuntimeEvent,
   ProviderSession,
   ProviderDriverKind,
@@ -102,7 +103,10 @@ function manualFollowUpCommands(suffix: string, createdAt: string) {
       commandId: activationCommandId,
       threadId: ThreadId.make("thread-1"),
       followUpId,
-      activationMode: "automatic-after-settlement" as const,
+      // These reactor tests intentionally exercise an explicit operator
+      // handoff from a thread with no materialized provider session. Automatic
+      // draining is separately restricted to authoritative ready state.
+      activationMode: "operator" as const,
       createdAt,
     },
   };
@@ -209,6 +213,7 @@ describe("ProviderCommandReactor", () => {
     readonly sessionModelSwitch?: "unsupported" | "in-session";
     readonly liveSteer?: "supported" | "unsupported";
     readonly sendTurnFailureDetail?: string;
+    readonly threadGoals?: "supported" | "unsupported";
     readonly startReactor?: boolean;
   }) {
     const now = "2026-01-01T00:00:00.000Z";
@@ -218,7 +223,10 @@ describe("ProviderCommandReactor", () => {
     createdStateDirs.add(stateDir);
     const runtimeEventPubSub = Effect.runSync(PubSub.unbounded<ProviderRuntimeEvent>());
     let nextSessionIndex = 1;
+    let nextGoalRevision = 1;
     const runtimeSessions: Array<ProviderSession> = [];
+    let providerGoal: ProviderThreadGoal | null = null;
+    const goalOperations: string[] = [];
     const modelSelection = input?.threadModelSelection ?? {
       instanceId: ProviderInstanceId.make("codex"),
       model: "gpt-5-codex",
@@ -308,6 +316,34 @@ describe("ProviderCommandReactor", () => {
       }),
     );
     const interruptTurn = vi.fn((_: unknown) => Effect.void);
+    const getGoal = vi.fn<NonNullable<ProviderServiceShape["getGoal"]>>(() =>
+      Effect.succeed(providerGoal),
+    );
+    const setGoal = vi.fn<NonNullable<ProviderServiceShape["setGoal"]>>((goalInput) => {
+      const objective = goalInput.objective ?? providerGoal?.objective ?? "Test goal";
+      const updatedAt = new Date(Date.parse(now) + nextGoalRevision++ * 1_000).toISOString();
+      const nextGoal: ProviderThreadGoal = {
+        threadId: goalInput.threadId,
+        objective,
+        status: goalInput.status ?? providerGoal?.status ?? "active",
+        tokenBudget:
+          goalInput.tokenBudget === undefined
+            ? (providerGoal?.tokenBudget ?? null)
+            : goalInput.tokenBudget,
+        tokensUsed: providerGoal?.tokensUsed ?? 0,
+        timeUsedSeconds: providerGoal?.timeUsedSeconds ?? 0,
+        createdAt: providerGoal?.createdAt ?? updatedAt,
+        updatedAt,
+      };
+      providerGoal = nextGoal;
+      goalOperations.push("set");
+      return Effect.succeed(nextGoal);
+    });
+    const clearGoal = vi.fn<NonNullable<ProviderServiceShape["clearGoal"]>>(() => {
+      providerGoal = null;
+      goalOperations.push("clear");
+      return Effect.succeed({ cleared: true });
+    });
     const respondToRequest = vi.fn<ProviderServiceShape["respondToRequest"]>(() => Effect.void);
     const respondToUserInput = vi.fn<ProviderServiceShape["respondToUserInput"]>(() => Effect.void);
     const stopSession = vi.fn((input: unknown) =>
@@ -386,6 +422,7 @@ describe("ProviderCommandReactor", () => {
         Effect.succeed({
           sessionModelSwitch: input?.sessionModelSwitch ?? "in-session",
           liveSteer: input?.liveSteer ?? "unsupported",
+          threadGoals: input?.threadGoals ?? "unsupported",
         }),
       getInstanceInfo: (instanceId) => {
         const raw = String(instanceId);
@@ -416,6 +453,9 @@ describe("ProviderCommandReactor", () => {
         });
       },
       rollbackConversation: () => unsupported(),
+      getGoal,
+      setGoal,
+      clearGoal,
       get streamEvents() {
         return Stream.fromPubSub(runtimeEventPubSub);
       },
@@ -533,6 +573,10 @@ describe("ProviderCommandReactor", () => {
       sendTurn,
       steerTurn,
       interruptTurn,
+      getGoal,
+      setGoal,
+      clearGoal,
+      goalOperations,
       respondToRequest,
       respondToUserInput,
       stopSession,
@@ -674,6 +718,162 @@ describe("ProviderCommandReactor", () => {
         (message) => message.id === asMessageId("manual-follow-up-message-restart-accept"),
       ),
     ).toHaveLength(1);
+  });
+
+  it("replaces a Codex goal with an ordered clear then active unbudgeted set", async () => {
+    const harness = await createHarness({ threadGoals: "supported" });
+    const threadId = ThreadId.make("thread-1");
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.goal.set",
+        commandId: CommandId.make("cmd-goal-create"),
+        threadId,
+        objective: "First objective",
+        status: "active",
+        tokenBudget: 10_000,
+        expectedUpdatedAt: null,
+        createdAt: "2026-01-01T00:00:01.000Z",
+      }),
+    );
+
+    await waitFor(async () => {
+      const readModel = await harness.readModel();
+      return readModel.threads.some(
+        (thread) => thread.id === threadId && thread.goal?.objective === "First objective",
+      );
+    });
+    const firstReadModel = await harness.readModel();
+    const firstGoal = firstReadModel.threads.find((thread) => thread.id === threadId)?.goal;
+    expect(firstGoal).toBeDefined();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.goal.set",
+        commandId: CommandId.make("cmd-goal-replace"),
+        threadId,
+        objective: "Replacement objective",
+        replaceExisting: true,
+        expectedUpdatedAt: firstGoal?.updatedAt ?? null,
+        createdAt: "2026-01-01T00:00:02.000Z",
+      }),
+    );
+
+    await waitFor(async () => {
+      const readModel = await harness.readModel();
+      return readModel.threads.some(
+        (thread) => thread.id === threadId && thread.goal?.objective === "Replacement objective",
+      );
+    });
+
+    expect(harness.goalOperations).toEqual(["set", "clear", "set"]);
+    expect(harness.setGoal.mock.calls[1]?.[0]).toEqual({
+      threadId,
+      objective: "Replacement objective",
+      status: "active",
+      tokenBudget: null,
+    });
+    const readModel = await harness.readModel();
+    expect(readModel.threads.find((thread) => thread.id === threadId)?.goal).toMatchObject({
+      objective: "Replacement objective",
+      status: "active",
+      tokenBudget: null,
+      tokensUsed: 0,
+      timeUsedSeconds: 0,
+    });
+  });
+
+  it.each(["interrupted", "stopped"] as const)(
+    "does not silently resume an active Codex goal from an operator %s barrier on startup",
+    async (status) => {
+      const harness = await createHarness({
+        threadGoals: "supported",
+        startReactor: false,
+      });
+      const threadId = ThreadId.make("thread-1");
+      const createdAt = "2026-01-01T00:00:01.000Z";
+
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.goal.sync",
+          commandId: CommandId.make(`cmd-goal-sync-before-${status}-restart`),
+          threadId,
+          goal: {
+            threadId,
+            objective: "Do not restart this goal",
+            status: "active",
+            tokenBudget: null,
+            tokensUsed: 0,
+            timeUsedSeconds: 0,
+            createdAt,
+            updatedAt: createdAt,
+          },
+          createdAt,
+        }),
+      );
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.make(`cmd-session-${status}-before-restart`),
+          threadId,
+          session: {
+            threadId,
+            status,
+            providerName: ProviderDriverKind.make("codex"),
+            providerInstanceId: ProviderInstanceId.make("codex"),
+            runtimeMode: "approval-required",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: "2026-01-01T00:00:02.000Z",
+          },
+          createdAt: "2026-01-01T00:00:02.000Z",
+        }),
+      );
+
+      await harness.startReactor();
+
+      expect(harness.startSession).not.toHaveBeenCalled();
+      const readModel = await harness.readModel();
+      expect(readModel.threads.find((thread) => thread.id === threadId)?.session?.status).toBe(
+        status,
+      );
+      expect(readModel.threads.find((thread) => thread.id === threadId)?.goal?.status).toBe(
+        "active",
+      );
+    },
+  );
+
+  it("materializes a non-cancelled active Codex goal on startup without sending a hidden prompt", async () => {
+    const harness = await createHarness({
+      threadGoals: "supported",
+      startReactor: false,
+    });
+    const threadId = ThreadId.make("thread-1");
+    const createdAt = "2026-01-01T00:00:01.000Z";
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.goal.sync",
+        commandId: CommandId.make("cmd-active-goal-sync-before-restart"),
+        threadId,
+        goal: {
+          threadId,
+          objective: "Continue through provider-owned goal state",
+          status: "active",
+          tokenBudget: null,
+          tokensUsed: 0,
+          timeUsedSeconds: 0,
+          createdAt,
+          updatedAt: createdAt,
+        },
+        createdAt,
+      }),
+    );
+
+    await harness.startReactor();
+
+    expect(harness.startSession).toHaveBeenCalledTimes(1);
+    expect(harness.sendTurn).not.toHaveBeenCalled();
   });
 
   it("clears interrupted turn starts on startup without resending provider work", async () => {
@@ -2235,6 +2435,73 @@ describe("ProviderCommandReactor", () => {
         ) ?? false
       );
     });
+  });
+
+  it("pauses and durably synchronizes an active Codex goal after interrupt", async () => {
+    const harness = await createHarness({ threadGoals: "supported" });
+    const threadId = ThreadId.make("thread-1");
+    const turnId = asTurnId("turn-with-active-goal");
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.goal.set",
+        commandId: CommandId.make("cmd-goal-before-interrupt"),
+        threadId,
+        objective: "Continue autonomously",
+        status: "active",
+        tokenBudget: null,
+        expectedUpdatedAt: null,
+        createdAt: "2026-01-01T00:00:01.000Z",
+      }),
+    );
+    await waitFor(() => harness.setGoal.mock.calls.length === 1);
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-running-session-before-goal-interrupt"),
+        threadId,
+        session: {
+          threadId,
+          status: "running",
+          providerName: "codex",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          runtimeMode: "approval-required",
+          activeTurnId: turnId,
+          lastError: null,
+          updatedAt: "2026-01-01T00:00:02.000Z",
+        },
+        createdAt: "2026-01-01T00:00:02.000Z",
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.interrupt",
+        commandId: CommandId.make("cmd-interrupt-active-goal"),
+        threadId,
+        turnId,
+        createdAt: "2026-01-01T00:00:03.000Z",
+      }),
+    );
+
+    await waitFor(() => harness.interruptTurn.mock.calls.length === 1);
+    await waitFor(() => harness.setGoal.mock.calls.length === 2);
+    expect(harness.setGoal.mock.calls[1]?.[0]).toEqual({
+      threadId,
+      status: "paused",
+    });
+
+    await waitFor(async () => {
+      const readModel = await harness.readModel();
+      return readModel.threads.find((entry) => entry.id === threadId)?.goal?.status === "paused";
+    });
+    const readModel = await harness.readModel();
+    const thread = readModel.threads.find((entry) => entry.id === threadId);
+    expect(thread?.goal?.status).toBe("paused");
+    expect(
+      thread?.activities.some((activity) => activity.kind === "provider.turn.interrupt.completed"),
+    ).toBe(true);
   });
 
   it("retargets provider interrupts to the runtime active turn when projection is stale", async () => {

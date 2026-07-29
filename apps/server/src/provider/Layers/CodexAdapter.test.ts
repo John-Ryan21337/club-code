@@ -14,6 +14,8 @@ import {
   type ProviderApprovalDecision,
   type ProviderEvent,
   type ProviderSession,
+  type ProviderThreadGoal,
+  type ProviderThreadGoalSetInput,
   type ProviderTurnStartResult,
   type ProviderUserInputAnswers,
   ThreadId,
@@ -149,6 +151,23 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
   interruptTurn(turnId?: TurnId) {
     return Effect.promise(() => this.interruptTurnImpl(turnId));
   }
+
+  getGoal = Effect.succeed<ProviderThreadGoal | null>(null);
+
+  setGoal(input: Omit<ProviderThreadGoalSetInput, "threadId">) {
+    return Effect.succeed({
+      threadId: this.options.threadId,
+      objective: input.objective ?? "Test goal",
+      status: input.status ?? "active",
+      tokenBudget: input.tokenBudget ?? null,
+      tokensUsed: 0,
+      timeUsedSeconds: 0,
+      createdAt: this.now,
+      updatedAt: this.now,
+    } satisfies ProviderThreadGoal);
+  }
+
+  clearGoal = Effect.succeed({ cleared: true });
 
   readThread = Effect.promise(() => this.readThreadImpl());
 
@@ -658,6 +677,95 @@ function startLifecycleRuntime() {
 }
 
 lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
+  it.effect("attributes trusted Codex plugin commands in the work log", () =>
+    Effect.gen(function* () {
+      const { adapter, runtime } = yield* startLifecycleRuntime();
+      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+
+      yield* runtime.emit({
+        id: asEventId("evt-plugin-command"),
+        kind: "notification",
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        method: "item/started",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-1"),
+        itemId: asItemId("command-1"),
+        payload: {
+          threadId: "provider-thread-1",
+          turnId: "turn-1",
+          startedAtMs: 1_767_225_600_000,
+          item: {
+            type: "commandExecution",
+            id: "command-1",
+            command: "node scripts/audit.mjs",
+            commandActions: [],
+            cwd: "/workspace",
+            status: "inProgress",
+            pluginId: "openai/security-audit",
+            scriptPath: "scripts/audit.mjs",
+          },
+        },
+      } satisfies ProviderEvent);
+
+      const firstEvent = yield* Fiber.join(firstEventFiber);
+      assert.equal(firstEvent._tag, "Some");
+      if (firstEvent._tag !== "Some" || firstEvent.value.type !== "item.started") {
+        return;
+      }
+      assert.equal(firstEvent.value.payload.itemType, "command_execution");
+      assert.equal(firstEvent.value.payload.title, "Ran plugin command");
+      assert.equal(
+        firstEvent.value.payload.detail,
+        "node scripts/audit.mjs\nPlugin: openai/security-audit (scripts/audit.mjs)",
+      );
+    }),
+  );
+
+  it.effect("does not promote unsafe plugin script paths into work-log attribution", () =>
+    Effect.gen(function* () {
+      const { adapter, runtime } = yield* startLifecycleRuntime();
+      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+
+      yield* runtime.emit({
+        id: asEventId("evt-plugin-command-unsafe-path"),
+        kind: "notification",
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        method: "item/started",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-1"),
+        itemId: asItemId("command-2"),
+        payload: {
+          threadId: "provider-thread-1",
+          turnId: "turn-1",
+          startedAtMs: 1_767_225_600_000,
+          item: {
+            type: "commandExecution",
+            id: "command-2",
+            command: "node ../private/audit.mjs",
+            commandActions: [],
+            cwd: "/workspace",
+            status: "inProgress",
+            pluginId: "openai/security-audit",
+            scriptPath: "../private/audit.mjs",
+          },
+        },
+      } satisfies ProviderEvent);
+
+      const firstEvent = yield* Fiber.join(firstEventFiber);
+      assert.equal(firstEvent._tag, "Some");
+      if (firstEvent._tag !== "Some" || firstEvent.value.type !== "item.started") {
+        return;
+      }
+      assert.equal(firstEvent.value.payload.title, "Ran plugin command");
+      assert.equal(
+        firstEvent.value.payload.detail,
+        "node ../private/audit.mjs\nPlugin: openai/security-audit",
+      );
+    }),
+  );
+
   it.effect("maps effective Codex thread settings without persisting sensitive fields", () =>
     Effect.gen(function* () {
       const { adapter, runtime } = yield* startLifecycleRuntime();

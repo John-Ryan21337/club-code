@@ -45,6 +45,7 @@ import {
   ThreadUnarchivedPayload,
   ThreadRevertedPayload,
   ThreadSessionSetPayload,
+  ThreadGoalSyncedPayload,
   ThreadTurnDiffCompletedPayload,
   ThreadTurnInterruptRequestedPayload,
   ThreadTurnStartRequestedPayload,
@@ -186,9 +187,12 @@ function cloneThreadContextForDuplicate(input: {
     // Provider runtime/session identity is intentionally not copied. A
     // duplicate carries Cafe-visible conversation context only; the next user
     // prompt must create a fresh provider boundary instead of resuming Claude
-    // or Codex state owned by the source thread.
+    // or Codex state owned by the source thread. The target thread's null goal
+    // is likewise retained: Codex goals belong to the source provider thread,
+    // not to copied transcript context.
     session: null,
     manualFollowUps: [],
+    goal: null,
     updatedAt: duplicatedAt,
   };
 }
@@ -443,6 +447,7 @@ export function projectEvent(
             activities: [],
             checkpoints: [],
             session: null,
+            goal: null,
           },
           event.type,
           "thread",
@@ -1015,6 +1020,17 @@ export function projectEvent(
           }),
         };
       });
+
+    case "thread.goal-synced":
+      return decodeForEvent(ThreadGoalSyncedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => ({
+          ...nextBase,
+          threads: updateThread(nextBase.threads, payload.threadId, {
+            goal: payload.goal,
+            updatedAt: event.occurredAt,
+          }),
+        })),
+      );
 
     case "thread.turn-interrupt-requested":
       return Effect.gen(function* () {

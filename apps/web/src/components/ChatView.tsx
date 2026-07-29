@@ -58,6 +58,7 @@ import { buildEphemeralBrowserDispatchPrompt } from "../embeddedBrowserChatHando
 import { parseDiffRouteSearch, stripDiffSearchParams } from "../diffRouteSearch";
 import {
   collapseExpandedComposerCursor,
+  parseStandaloneComposerGoalCommand,
   parseStandaloneComposerSlashCommand,
 } from "../composer-logic";
 import {
@@ -152,6 +153,7 @@ import {
 import {
   appendOperatorFollowUp,
   canAutomaticallyActivateQueuedFollowUp,
+  canAutoStartQueuedFollowUpTurn,
   canExpandQueuedFollowUpText,
   canStartQueuedFollowUpTurn,
   collectRetainedFollowUpThreadTargets,
@@ -183,6 +185,11 @@ import {
 import { ChatHeader } from "./chat/ChatHeader";
 import { AutoNudgeControl } from "./chat/AutoNudgeControl";
 import { type ExpandedImagePreview } from "./chat/ExpandedImagePreview";
+import {
+  ThreadGoalDialog,
+  type ThreadGoalDialogMode,
+  type ThreadGoalSetPatch,
+} from "./chat/ThreadGoalControl";
 import { NoActiveThreadState } from "./NoActiveThreadState";
 import { ChatMediaOverlay } from "./chat/ChatMediaOverlay";
 import { useAmbientVideoWorkspace } from "./ambient/AmbientVideoWorkspace";
@@ -330,6 +337,22 @@ const DEBUG_SECRET_REDACTIONS: ReadonlyArray<readonly [RegExp, string]> = [
   [/\bxox[baprs]-[A-Za-z0-9-]{16,}\b/g, "xox[redacted]"],
   [/\bBearer\s+[A-Za-z0-9._~+/=-]{16,}\b/g, "Bearer [redacted]"],
 ];
+
+interface ThreadGoalDialogRequest {
+  readonly open: boolean;
+  readonly revision: number;
+  readonly mode: ThreadGoalDialogMode;
+  readonly seedObjective: string | null;
+  readonly confirmReplacement: boolean;
+}
+
+const CLOSED_THREAD_GOAL_DIALOG: ThreadGoalDialogRequest = {
+  open: false,
+  revision: 0,
+  mode: "summary",
+  seedObjective: null,
+  confirmReplacement: false,
+};
 
 function redactDebugSecrets(value: string): string {
   let redacted = value;
@@ -1098,6 +1121,23 @@ function summarizeDebugSession(session: Thread["session"]) {
   };
 }
 
+function summarizeDebugGoal(goal: Thread["goal"]) {
+  if (!goal) {
+    return null;
+  }
+  // Goal objectives are user-authored prompt content. The debug endpoint only
+  // needs lifecycle/accounting fields to diagnose continuation behavior.
+  return {
+    status: goal.status,
+    tokenBudgetConfigured: goal.tokenBudget !== null,
+    tokenBudget: goal.tokenBudget,
+    tokensUsed: goal.tokensUsed,
+    timeUsedSeconds: goal.timeUsedSeconds,
+    createdAt: goal.createdAt,
+    updatedAt: goal.updatedAt,
+  };
+}
+
 function activityIsLifecycleRelevant(activity: OrchestrationThreadActivity): boolean {
   return (
     activity.kind === "runtime.warning" ||
@@ -1188,6 +1228,7 @@ function summarizeDebugThreadLifecycle(thread: Thread, nowMs: number) {
     projectId: thread.projectId,
     phase,
     session: summarizeDebugSession(session),
+    goal: summarizeDebugGoal(thread.goal),
     latestTurn: summarizeDebugLatestTurn(latestTurn),
     latestTurnSettled,
     activeTurnId,
@@ -1632,6 +1673,13 @@ function manualFollowUpMapKey(
   return JSON.stringify([environmentId, threadId, followUpId]);
 }
 
+interface ManualStopBarrier {
+  readonly environmentId: EnvironmentId;
+  readonly threadId: ThreadId;
+  readonly interruptedTurnId: TurnId | null;
+  readonly requestedAt: string;
+}
+
 function pendingSteerDispatchesForThread(
   current: Record<string, PendingSteerDispatch>,
   environmentId: EnvironmentId,
@@ -2006,6 +2054,8 @@ export default function ChatView(props: ChatViewProps) {
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [timelineAutoFollowTail, setTimelineAutoFollowTail] = useState(true);
   const [expandedImage, setExpandedImage] = useState<ExpandedImagePreview | null>(null);
+  const [threadGoalDialog, setThreadGoalDialog] =
+    useState<ThreadGoalDialogRequest>(CLOSED_THREAD_GOAL_DIALOG);
   const [optimisticUserMessages, setOptimisticUserMessages] = useState<ChatMessage[]>([]);
   const [stickTimelineToEndRevision, setStickTimelineToEndRevision] = useState(0);
   const optimisticUserMessagesRef = useRef(optimisticUserMessages);
@@ -2139,6 +2189,10 @@ export default function ChatView(props: ChatViewProps) {
   >({});
   const [pendingSteerInterruptRecoveryByThreadId, setPendingSteerInterruptRecoveryByThreadId] =
     useState<Record<string, PendingSteerInterruptRecovery>>({});
+  // The main Stop control is not the queue row's interrupt-and-submit action.
+  // Keep recovered and ordinary queued input available, but prevent the queue
+  // watchdog from converting a user cancellation into a fresh provider turn.
+  const manualStopBarrierByThreadKeyRef = useRef<Record<string, ManualStopBarrier>>({});
   const desktopDebugEnabled = useDesktopDebugEnabled();
   const [desktopDebugRevision, setDesktopDebugRevision] = useState(0);
   const lastDesktopDebugSnapshotPublishedAtMsRef = useRef(0);
@@ -2211,6 +2265,29 @@ export default function ChatView(props: ChatViewProps) {
       }
       pendingSteerInterruptRecoveryByThreadIdRef.current = next;
       setPendingSteerInterruptRecoveryByThreadId(next);
+      if (desktopDebugEnabled) {
+        setDesktopDebugRevision((revision) => revision + 1);
+      }
+    },
+    [desktopDebugEnabled],
+  );
+  const updateManualStopBarrier = useCallback(
+    (targetEnvironmentId: EnvironmentId, threadId: ThreadId, barrier: ManualStopBarrier | null) => {
+      const threadKey = followUpThreadMapKey(targetEnvironmentId, threadId);
+      const current = manualStopBarrierByThreadKeyRef.current;
+      if (barrier === null) {
+        if (!(threadKey in current)) {
+          return;
+        }
+        const next = { ...current };
+        delete next[threadKey];
+        manualStopBarrierByThreadKeyRef.current = next;
+      } else {
+        manualStopBarrierByThreadKeyRef.current = {
+          ...current,
+          [threadKey]: barrier,
+        };
+      }
       if (desktopDebugEnabled) {
         setDesktopDebugRevision((revision) => revision + 1);
       }
@@ -3410,6 +3487,82 @@ export default function ChatView(props: ChatViewProps) {
   }, [activeProviderInstanceId, providerStatuses, selectedProvider]);
   const activeProviderLiveSteerSupported =
     activeProviderStatus?.runtimeCapabilities?.liveSteer === "supported";
+  const goalControlsSupported =
+    isServerThread &&
+    activeProviderStatus?.driver === "codex" &&
+    activeProviderStatus.runtimeCapabilities?.threadGoals === "supported";
+  const openThreadGoalDialog = useCallback(
+    (input?: {
+      readonly mode?: ThreadGoalDialogMode;
+      readonly seedObjective?: string | null;
+      readonly confirmReplacement?: boolean;
+    }) => {
+      if (!goalControlsSupported) return;
+      setThreadGoalDialog((current) => ({
+        open: true,
+        revision: current.revision + 1,
+        mode: input?.mode ?? ((activeThread?.goal ?? null) === null ? "edit" : "summary"),
+        seedObjective: input?.seedObjective ?? null,
+        confirmReplacement: input?.confirmReplacement ?? false,
+      }));
+    },
+    [activeThread?.goal, goalControlsSupported],
+  );
+  const closeThreadGoalDialog = useCallback(() => {
+    setThreadGoalDialog((current) =>
+      current.open
+        ? {
+            ...current,
+            open: false,
+          }
+        : current,
+    );
+  }, []);
+
+  useEffect(() => {
+    closeThreadGoalDialog();
+  }, [closeThreadGoalDialog, routeThreadKey]);
+
+  const setThreadGoal = useCallback(
+    async (patch: ThreadGoalSetPatch) => {
+      if (!activeThread || !goalControlsSupported) {
+        throw new Error("The current provider does not support thread goals.");
+      }
+      const api = readEnvironmentApi(activeThread.environmentId);
+      if (!api) {
+        throw new Error("Cafe Code is not connected.");
+      }
+      await api.orchestration.dispatchCommand({
+        type: "thread.goal.set",
+        commandId: newCommandId(),
+        threadId: activeThread.id,
+        ...(patch.objective !== undefined ? { objective: patch.objective } : {}),
+        ...(patch.status !== undefined ? { status: patch.status } : {}),
+        ...(patch.tokenBudget !== undefined ? { tokenBudget: patch.tokenBudget } : {}),
+        ...(patch.replaceExisting !== undefined ? { replaceExisting: patch.replaceExisting } : {}),
+        expectedUpdatedAt: activeThread.goal?.updatedAt ?? null,
+        createdAt: new Date().toISOString(),
+      });
+    },
+    [activeThread, goalControlsSupported],
+  );
+
+  const clearThreadGoal = useCallback(async () => {
+    if (!activeThread || !goalControlsSupported) {
+      throw new Error("The current provider does not support thread goals.");
+    }
+    const api = readEnvironmentApi(activeThread.environmentId);
+    if (!api) {
+      throw new Error("Cafe Code is not connected.");
+    }
+    await api.orchestration.dispatchCommand({
+      type: "thread.goal.clear",
+      commandId: newCommandId(),
+      threadId: activeThread.id,
+      expectedUpdatedAt: activeThread.goal?.updatedAt ?? null,
+      createdAt: new Date().toISOString(),
+    });
+  }, [activeThread, goalControlsSupported]);
   const activeProviderLiveSteerAvailable = isLiveSteerAvailableForThread({
     liveSteerSupported: activeProviderLiveSteerSupported,
     provider: activeThread?.session?.provider ?? null,
@@ -3743,6 +3896,10 @@ export default function ChatView(props: ChatViewProps) {
       activeFollowUpThreadKey !== null
         ? (pendingSteerInterruptRecoveryByThreadIdRef.current[activeFollowUpThreadKey] ?? null)
         : null;
+    const activeManualStopBarrier =
+      activeFollowUpThreadKey !== null
+        ? (manualStopBarrierByThreadKeyRef.current[activeFollowUpThreadKey] ?? null)
+        : null;
     const queueBlockers: string[] = [];
     if (activeFollowUpQueue.length === 0) {
       queueBlockers.push("queue-empty");
@@ -3758,6 +3915,9 @@ export default function ChatView(props: ChatViewProps) {
     }
     if (activePendingSteerInterruptRecovery !== null) {
       queueBlockers.push("pending-steer-interrupt-recovery");
+    }
+    if (activeManualStopBarrier !== null) {
+      queueBlockers.push("manual-stop-barrier");
     }
     if (followUpQueueVisibleWorking) {
       queueBlockers.push("thread-visible-working");
@@ -4103,6 +4263,7 @@ export default function ChatView(props: ChatViewProps) {
                   pendingMessageCount: activePendingSteerInterruptRecovery.pendingMessageIds.length,
                   requestedAt: activePendingSteerInterruptRecovery.requestedAt,
                 },
+          activeManualStopBarrier,
           followUpQueuePhase,
           followUpQueueUiIdle,
           followUpQueueVisibleWorking,
@@ -4236,6 +4397,7 @@ export default function ChatView(props: ChatViewProps) {
               model: pending.snapshot.model,
             })),
         },
+        manualStopBarriers: manualStopBarrierByThreadKeyRef.current,
         dispatchDebug: followUpQueueDebugRef.current,
         items: activeFollowUpQueue.map((item, index) => ({
           index,
@@ -5579,6 +5741,79 @@ export default function ChatView(props: ChatViewProps) {
       prompt: promptForSend,
       imageCount: composerImages.length,
     });
+    const standaloneGoalCommand =
+      composerImages.length === 0 && goalControlsSupported
+        ? parseStandaloneComposerGoalCommand(trimmed)
+        : null;
+    if (standaloneGoalCommand !== null) {
+      if (standaloneGoalCommand.action === "set" || standaloneGoalCommand.action === "resume") {
+        updateManualStopBarrier(activeThread.environmentId, activeThread.id, null);
+      }
+      try {
+        const goal = activeThread.goal ?? null;
+        switch (standaloneGoalCommand.action) {
+          case "show":
+            openThreadGoalDialog();
+            break;
+          case "edit":
+            openThreadGoalDialog({ mode: "edit" });
+            break;
+          case "set":
+            if (goal === null) {
+              await setThreadGoal({
+                objective: standaloneGoalCommand.objective,
+                status: "active",
+                tokenBudget: null,
+              });
+            } else if (goal.status === "complete") {
+              await setThreadGoal({
+                objective: standaloneGoalCommand.objective,
+                replaceExisting: true,
+              });
+            } else {
+              openThreadGoalDialog({
+                mode: "replace",
+                seedObjective: standaloneGoalCommand.objective,
+                confirmReplacement: true,
+              });
+            }
+            break;
+          case "pause":
+            if (goal === null) {
+              openThreadGoalDialog({ mode: "edit" });
+            } else {
+              await setThreadGoal({ status: "paused" });
+            }
+            break;
+          case "resume":
+            if (goal === null) {
+              openThreadGoalDialog({ mode: "edit" });
+            } else {
+              await setThreadGoal({ status: "active" });
+            }
+            break;
+          case "clear":
+            if (goal !== null) {
+              await clearThreadGoal();
+            }
+            break;
+        }
+      } catch (cause) {
+        setThreadError(
+          activeThread.id,
+          cause instanceof Error ? cause.message : "The goal command could not be queued.",
+        );
+        return;
+      }
+      promptRef.current = "";
+      clearComposerDraftContent(composerDraftTarget);
+      composerRef.current?.resetCursorState();
+      scheduleComposerFocus();
+      return;
+    }
+    // Sending new user intent explicitly releases a prior Stop barrier. The
+    // queue watchdog itself never clears this state.
+    updateManualStopBarrier(activeThread.environmentId, activeThread.id, null);
     const delivery = decideFollowUpDelivery({
       phase: followUpQueuePhase,
       requestedSteer: false,
@@ -6368,6 +6603,7 @@ export default function ChatView(props: ChatViewProps) {
       imageCount: snapshot.images.length,
     });
     if (!hasSendableContent) return;
+    updateManualStopBarrier(activeThread.environmentId, activeThread.id, null);
     const delivery = decideFollowUpDelivery({
       phase: followUpQueuePhase,
       requestedSteer: true,
@@ -6520,6 +6756,9 @@ export default function ChatView(props: ChatViewProps) {
       return;
     }
 
+    // Clicking a specific queued row is explicit delivery intent and is the
+    // renderer equivalent of upstream's interrupt-and-submit path.
+    updateManualStopBarrier(item.environmentId, item.threadId, null);
     const action = decideQueuedFollowUpAction({
       phase: followUpQueuePhase,
       liveSteerAvailable: activeProviderLiveSteerAvailable,
@@ -6624,7 +6863,7 @@ export default function ChatView(props: ChatViewProps) {
             activeTurnId: queuedThread.session?.activeTurnId ?? null,
             sessionUpdatedAt: queuedThread.session?.updatedAt ?? null,
           });
-          return canStartQueuedFollowUpTurn({
+          return canAutoStartQueuedFollowUpTurn({
             queueLength,
             firstItemBlocked: false,
             // This command only persists the operator's intent. It must be
@@ -6636,6 +6875,10 @@ export default function ChatView(props: ChatViewProps) {
             isDispatchInFlight:
               queueDispatchInFlightRef.current ||
               queuedFollowUpPendingDispatchByThreadIdRef.current[
+                followUpThreadMapKey(item.environmentId, item.threadId)
+              ] !== undefined,
+            manualStopBarrierActive:
+              manualStopBarrierByThreadKeyRef.current[
                 followUpThreadMapKey(item.environmentId, item.threadId)
               ] !== undefined,
           });
@@ -6691,7 +6934,14 @@ export default function ChatView(props: ChatViewProps) {
         // effect consumes the queue immediately and erases the operator's
         // review/chaining window. Automatic FIFO draining resumes after the
         // active turn settles, still ahead of Auto Nudge.
-        if (!canAutomaticallyActivateQueuedFollowUp(queuedPhase)) {
+        if (
+          !canAutomaticallyActivateQueuedFollowUp(queuedPhase, {
+            manualStopBarrierActive:
+              manualStopBarrierByThreadKeyRef.current[
+                followUpThreadMapKey(queuedThread.environmentId, queuedThread.id)
+              ] !== undefined,
+          })
+        ) {
           continue;
         }
         if (queuedPhase === "connecting" || isThreadEnvironmentUnavailable(queuedThread)) {
@@ -6754,6 +7004,12 @@ export default function ChatView(props: ChatViewProps) {
     const api = readEnvironmentApi(environmentId);
     if (!api || !activeThread) return;
     const turnId = activeThread.session?.activeTurnId ?? undefined;
+    updateManualStopBarrier(activeThread.environmentId, activeThread.id, {
+      environmentId: activeThread.environmentId,
+      threadId: activeThread.id,
+      interruptedTurnId: turnId ?? activeThread.latestTurn?.turnId ?? null,
+      requestedAt: new Date().toISOString(),
+    });
     armPendingSteerInterruptRecovery(activeThread);
     try {
       await api.orchestration.dispatchCommand({
@@ -7528,6 +7784,7 @@ export default function ChatView(props: ChatViewProps) {
                   sidebarProposedPlan={sidebarProposedPlan as { turnId?: TurnId } | null}
                   planSidebarLabel="Plan / Workflow"
                   planSidebarOpen={shouldRenderPlanSidebar}
+                  goalControlsSupported={goalControlsSupported}
                   runtimeMode={runtimeMode}
                   interactionMode={interactionMode}
                   lockedProvider={lockedProvider}
@@ -7570,6 +7827,7 @@ export default function ChatView(props: ChatViewProps) {
                   handleRuntimeModeChange={handleRuntimeModeChange}
                   handleInteractionModeChange={handleInteractionModeChange}
                   togglePlanSidebar={togglePlanSidebar}
+                  onOpenGoalDialog={openThreadGoalDialog}
                   focusComposer={focusComposer}
                   scheduleComposerFocus={scheduleComposerFocus}
                   onManualActivity={recordManualAutoNudgeActivity}
@@ -7677,6 +7935,25 @@ export default function ChatView(props: ChatViewProps) {
         environmentId={environmentId}
         workspaceRoot={activeWorkspaceRoot}
       />
+      {activeThread && goalControlsSupported ? (
+        <ThreadGoalDialog
+          open={threadGoalDialog.open}
+          requestRevision={threadGoalDialog.revision}
+          mode={threadGoalDialog.mode}
+          seedObjective={threadGoalDialog.seedObjective}
+          confirmReplacement={threadGoalDialog.confirmReplacement}
+          goal={activeThread.goal ?? null}
+          activeTurnStartedAt={activeThread.latestTurn?.startedAt ?? null}
+          isTurnRunning={phase === "running"}
+          onOpenChange={(open) => {
+            if (!open) {
+              closeThreadGoalDialog();
+            }
+          }}
+          onSetGoal={setThreadGoal}
+          onClearGoal={clearThreadGoal}
+        />
+      ) : null}
     </div>
   );
 }

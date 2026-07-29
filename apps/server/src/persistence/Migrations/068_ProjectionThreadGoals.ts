@@ -10,6 +10,9 @@ export default Effect.gen(function* () {
    * shell snapshots while still making detail reloads and reconnect recovery
    * deterministic. The objective is bounded again at the database boundary so
    * malformed replay data cannot grow this hot lookup without limit.
+   *
+   * `IF NOT EXISTS` is required for compatibility with databases created by
+   * the alternate upstream lineage that recorded this table as migration 62.
    */
   yield* sql`
     CREATE TABLE IF NOT EXISTS projection_thread_goals (

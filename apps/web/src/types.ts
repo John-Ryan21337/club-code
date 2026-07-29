@@ -16,6 +16,7 @@ import type {
   MessageId,
   ProviderDriverKind,
   ProviderInstanceId,
+  ProviderThreadGoal,
   CheckpointRef,
   ProviderInteractionMode,
   RuntimeMode,
@@ -130,6 +131,7 @@ export interface Thread {
   activities: OrchestrationThreadActivity[];
   autoNudge: ThreadAutoNudgeConfig;
   manualFollowUps: ThreadManualFollowUp[];
+  goal?: ProviderThreadGoal | null;
 }
 
 export interface ThreadShell {

@@ -32,8 +32,11 @@ export function shouldQueueOperatorFollowUp(input: {
  * the operator explicitly chooses Steer; this preserves the review/chaining
  * window after Enter.
  */
-export function canAutomaticallyActivateQueuedFollowUp(phase: SessionPhase): boolean {
-  return phase === "ready";
+export function canAutomaticallyActivateQueuedFollowUp(
+  phase: SessionPhase,
+  options: { readonly manualStopBarrierActive?: boolean } = {},
+): boolean {
+  return phase === "ready" && options.manualStopBarrierActive !== true;
 }
 
 export function appendOperatorFollowUp<Item>(items: readonly Item[], item: Item): Item[] {
@@ -86,6 +89,20 @@ export function canStartQueuedFollowUpTurn(input: QueuedFollowUpStartInput): boo
     !input.isEnvironmentUnavailable &&
     !input.isDispatchInFlight
   );
+}
+
+export interface AutomaticQueuedFollowUpStartInput extends QueuedFollowUpStartInput {
+  manualStopBarrierActive: boolean;
+}
+
+/**
+ * A normal queued follow-up may auto-dispatch when a provider becomes idle,
+ * but the main Stop button is an explicit cancellation barrier. This mirrors
+ * upstream Codex TUI's distinction between ordinary interrupt (restore input)
+ * and its dedicated interrupt-and-submit pending-steer path.
+ */
+export function canAutoStartQueuedFollowUpTurn(input: AutomaticQueuedFollowUpStartInput): boolean {
+  return !input.manualStopBarrierActive && canStartQueuedFollowUpTurn(input);
 }
 
 export interface QueuedFollowUpDispatchCandidateInput<

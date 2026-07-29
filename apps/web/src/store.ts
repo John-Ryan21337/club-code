@@ -311,6 +311,7 @@ function mapThread(thread: OrchestrationThread, environmentId: EnvironmentId): T
     activities: thread.activities.map((activity) => ({ ...activity })),
     autoNudge: thread.autoNudge,
     manualFollowUps: thread.manualFollowUps.map((item) => mapManualFollowUp(environmentId, item)),
+    goal: thread.goal ?? null,
   };
 }
 
@@ -473,6 +474,10 @@ function cloneThreadContextForDuplicate(input: {
     pendingSourceProposedPlan: latestTurn?.sourceProposedPlan,
     session: null,
     error: null,
+    // A duplicate carries visible conversation context into a fresh provider
+    // session. Provider-owned goal continuation state must never cross that
+    // new session boundary.
+    goal: null,
     messages: sourceThread.messages.map((message) => ({
       ...message,
       id: copiedThreadScopedId(targetThread.id, message.id) as MessageId,
@@ -1864,6 +1869,7 @@ function applyEnvironmentOrchestrationEvent(
           session: null,
           autoNudge: DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
           manualFollowUps: [],
+          goal: null,
         },
         environmentId,
       );
@@ -2093,6 +2099,13 @@ function applyEnvironmentOrchestrationEvent(
         },
       };
     }
+
+    case "thread.goal-synced":
+      return updateThreadState(state, event.payload.threadId, (thread) => ({
+        ...thread,
+        goal: event.payload.goal,
+        updatedAt: event.occurredAt,
+      }));
 
     case "thread.turn-start-requested":
       return updateThreadState(state, event.payload.threadId, (thread) => {

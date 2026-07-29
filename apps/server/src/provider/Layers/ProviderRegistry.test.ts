@@ -711,6 +711,28 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
         }),
       );
 
+      it.effect("labels the Codex ent26 plan as an Enterprise subscription", () =>
+        Effect.gen(function* () {
+          const status = yield* checkCodexProviderStatus(defaultCodexSettings, () =>
+            Effect.succeed(
+              makeCodexProbeSnapshot({
+                account: {
+                  account: {
+                    type: "chatgpt",
+                    email: "enterprise@example.com",
+                    planType: "ent26",
+                  },
+                  requiresOpenaiAuth: false,
+                },
+              }),
+            ),
+          );
+
+          assert.strictEqual(status.auth.status, "authenticated");
+          assert.strictEqual(status.auth.label, "ChatGPT Enterprise Subscription");
+        }),
+      );
+
       it.effect("returns unauthenticated when app-server requires OpenAI auth", () =>
         Effect.gen(function* () {
           const status = yield* checkCodexProviderStatus(defaultCodexSettings, () =>
@@ -2425,7 +2447,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
             version: "2.1.110",
             slugs: [] as Array<string>,
             upgrade:
-              "Claude Code v2.1.110 is too old for Claude Fable 5. Upgrade to v2.1.170 or newer to access it.",
+              "Claude Code v2.1.110 is too old for Claude Opus 5. Upgrade to v2.1.219 or newer to access it.",
           },
           { version: "2.1.111", slugs: ["claude-opus-4-7"] },
           { version: "2.1.154", slugs: ["claude-opus-4-7", "claude-opus-4-8"] },
@@ -2443,20 +2465,20 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
           {
             version: "2.1.219",
             slugs: [
+              "claude-opus-5",
               "claude-opus-4-7",
               "claude-opus-4-8",
               "claude-fable-5",
               "claude-sonnet-5",
-              "claude-opus-5",
             ],
           },
         ];
         const gatedSlugs = [
+          "claude-opus-5",
           "claude-opus-4-7",
           "claude-opus-4-8",
           "claude-fable-5",
           "claude-sonnet-5",
-          "claude-opus-5",
         ];
 
         for (const testCase of cases) {
@@ -2535,10 +2557,38 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
           (descriptor) => descriptor.type === "select" && descriptor.id === "contextWindow",
         );
         assert.deepStrictEqual(
+          opus5Effort?.type === "select"
+            ? opus5Effort.options.find((option) => option.isDefault)
+            : undefined,
+          { id: "high", label: "High", isDefault: true },
+        );
+        assert.deepStrictEqual(
           opus5Context?.type === "select"
             ? opus5Context.options.map((option) => option.id)
             : undefined,
-          ["200k", "1m"],
+          ["1m"],
+        );
+        assert.equal(
+          opus5Descriptors.some(
+            (descriptor) => descriptor.type === "boolean" && descriptor.id === "fastMode",
+          ),
+          true,
+        );
+
+        const fastModeSlugs = getBuiltInClaudeModelsForVersion("2.1.219")
+          .filter((model) =>
+            model.capabilities?.optionDescriptors?.some(
+              (descriptor) => descriptor.type === "boolean" && descriptor.id === "fastMode",
+            ),
+          )
+          .map((model) => model.slug);
+        assert.deepStrictEqual(fastModeSlugs, ["claude-opus-5", "claude-opus-4-8"]);
+
+        const latestSlugs = getBuiltInClaudeModelsForVersion("2.1.219").map((model) => model.slug);
+        assert.strictEqual(
+          new Set(latestSlugs).size,
+          latestSlugs.length,
+          "Claude catalog must not expose duplicate model entries",
         );
       });
 

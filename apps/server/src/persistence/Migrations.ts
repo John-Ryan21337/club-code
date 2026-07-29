@@ -78,6 +78,7 @@ import Migration0064 from "./Migrations/064_ProviderPacingPendingLaunchCompatibi
 import Migration0065 from "./Migrations/065_ForkLineageCompatibility.ts";
 import Migration0066 from "./Migrations/066_ProjectionThreadAutoNudge.ts";
 import Migration0067 from "./Migrations/067_ProjectionThreadManualFollowUps.ts";
+import Migration0068 from "./Migrations/068_ProjectionThreadGoals.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -164,6 +165,10 @@ export const migrationEntries = [
   [65, "ForkLineageCompatibility", Migration0065],
   [66, "ProjectionThreadAutoNudge", Migration0066],
   [67, "ProjectionThreadManualFollowUps", Migration0067],
+  // Upstream independently used migration 62 for provider goals. This active
+  // lineage already shipped 62 as UsageStatsTokenSavings, so provider goals
+  // must use the next free migration id rather than silently replacing 62.
+  [68, "ProjectionThreadGoals", Migration0068],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>
