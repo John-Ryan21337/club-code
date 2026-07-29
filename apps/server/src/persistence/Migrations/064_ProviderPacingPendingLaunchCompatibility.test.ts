@@ -26,6 +26,25 @@ layer("064_ProviderPacingPendingLaunchCompatibility", (it) => {
           CHECK (dispatch_source = 'user')
         ) WITHOUT ROWID
       `;
+      yield* sql`
+        INSERT INTO provider_pacing_pending_launches (
+          thread_id,
+          source_event_id,
+          source_sequence,
+          provider_instance_id,
+          dispatch_source,
+          requested_at,
+          environment_id
+        ) VALUES (
+          'legacy-thread',
+          'legacy-event',
+          62,
+          'claude-primary',
+          'user',
+          '2026-07-28T00:00:00.000Z',
+          'environment-a'
+        )
+      `;
 
       yield* Migration0064;
       yield* Migration0064;
@@ -42,13 +61,41 @@ layer("064_ProviderPacingPendingLaunchCompatibility", (it) => {
         { name: "provider_pacing_pending_launches" },
       ]);
 
-      const columns = yield* sql<{ readonly name: string }>`
-        PRAGMA table_info(provider_pacing_pending_launches)
-      `;
+      const columns = yield* sql<{
+        readonly name: string;
+        readonly dflt_value: string | null;
+      }>`PRAGMA table_info(provider_pacing_pending_launches)`;
       assert.deepStrictEqual(
-        columns.slice(-3).map(({ name }) => name),
-        ["environment_id", "provider_account_id", "launch_state"],
+        columns.slice(-3).map(({ name, dflt_value: defaultValue }) => ({
+          name,
+          defaultValue,
+        })),
+        [
+          { name: "environment_id", defaultValue: "'legacy-unverified'" },
+          { name: "provider_account_id", defaultValue: "'legacy-unverified'" },
+          { name: "launch_state", defaultValue: "'waiting'" },
+        ],
       );
+
+      const rows = yield* sql<{
+        readonly environmentId: string;
+        readonly providerAccountId: string;
+        readonly launchState: string;
+      }>`
+        SELECT
+          environment_id AS "environmentId",
+          provider_account_id AS "providerAccountId",
+          launch_state AS "launchState"
+        FROM provider_pacing_pending_launches
+        WHERE thread_id = 'legacy-thread'
+      `;
+      assert.deepStrictEqual(rows, [
+        {
+          environmentId: "environment-a",
+          providerAccountId: "legacy-unverified",
+          launchState: "waiting",
+        },
+      ]);
 
       const indexes = yield* sql<{ readonly name: string }>`
         SELECT name
