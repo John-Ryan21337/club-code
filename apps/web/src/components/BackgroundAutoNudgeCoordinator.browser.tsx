@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render } from "vitest-browser-react";
+import { StrictMode } from "react";
 
 interface TestAutoNudgeSummary {
   authorityRevision: number;
@@ -31,6 +32,7 @@ interface TestEnvironmentState {
       projectId: string;
       archivedAt: string | null;
       error: string | null;
+      manualFollowUpCount: number;
       modelSelection: { instanceId: string; model: string };
       autoNudge: TestAutoNudgeSummary;
     }
@@ -39,14 +41,14 @@ interface TestEnvironmentState {
     string,
     {
       session: TestSession;
-      latestTurn: TestLatestTurn;
+      latestTurn: TestLatestTurn | null;
       hasPendingApprovals: boolean;
       hasPendingUserInput: boolean;
       hasActionableProposedPlan: boolean;
     }
   >;
   threadSessionById: Record<string, TestSession>;
-  threadTurnStateById: Record<string, { latestTurn: TestLatestTurn }>;
+  threadTurnStateById: Record<string, { latestTurn: TestLatestTurn | null }>;
 }
 
 interface TestSession {
@@ -64,6 +66,13 @@ interface TestServerConfig {
     availability: "available";
     auth: { status: "authenticated" };
   }>;
+}
+
+interface TestThreadFixture {
+  readonly shell: TestEnvironmentState["threadShellById"][string];
+  readonly summary: TestEnvironmentState["sidebarThreadSummaryById"][string];
+  readonly session: TestSession;
+  readonly turnState: TestEnvironmentState["threadTurnStateById"][string];
 }
 
 interface TestEnvironmentApi {
@@ -136,14 +145,19 @@ vi.mock("../lib/utils", () => ({
 }));
 
 vi.mock("../rpc/serverState", () => ({
+  getServerConfig: () => mocks.serverConfig,
   useServerConfig: () => mocks.serverConfig,
 }));
 
-vi.mock("../store", () => ({
-  useStore: <T,>(
-    selector: (state: { environmentStateById: Record<string, TestEnvironmentState> }) => T,
-  ) => selector({ environmentStateById: mocks.environmentStateById }),
-}));
+vi.mock("../store", () => {
+  const getState = () => ({ environmentStateById: mocks.environmentStateById });
+  const useStore = Object.assign(
+    <T,>(selector: (state: { environmentStateById: Record<string, TestEnvironmentState> }) => T) =>
+      selector(getState()),
+    { getState },
+  );
+  return { useStore };
+});
 
 import { __resetAutoNudgeTurnLedgerForTests } from "../autoNudger";
 import { manualFollowUpPriorityStore } from "../manualFollowUpPriorityStore";
@@ -183,8 +197,9 @@ function threadFixture(input: {
   threadId: string;
   projectId?: string;
   completedTurnId: string;
+  manualFollowUpCount?: number;
   autoNudge?: Partial<TestAutoNudgeSummary>;
-}) {
+}): TestThreadFixture {
   const session: TestSession = {
     status: "ready",
     provider: "claude",
@@ -202,6 +217,7 @@ function threadFixture(input: {
       projectId: input.projectId ?? "project-shared",
       archivedAt: null,
       error: null,
+      manualFollowUpCount: input.manualFollowUpCount ?? 0,
       modelSelection: { instanceId: "claude", model: "claude-sonnet" },
       autoNudge: autoNudgeSummary(input.autoNudge),
     },
@@ -219,7 +235,7 @@ function threadFixture(input: {
 
 function environmentFixture(
   environmentId: string,
-  threads: ReadonlyArray<ReturnType<typeof threadFixture>>,
+  threads: ReadonlyArray<TestThreadFixture>,
 ): TestEnvironmentState {
   return {
     bootstrapComplete: true,
@@ -277,10 +293,14 @@ beforeEach(() => {
   mocks.savedRuntimeById = {};
   mocks.serverConfig = READY_SERVER_CONFIG;
   mocks.confirmExecutionAuthorized.mockReset();
-  mocks.confirmExecutionAuthorized.mockImplementation(() => !mocks.executionBlocked);
+  mocks.confirmExecutionAuthorized.mockImplementation(
+    () => !mocks.executionBlocked && !mocks.globallySuppressed,
+  );
   mocks.synchronizeSuppressionFromStorage.mockReset();
   mocks.getSuppressedSnapshot.mockReset();
-  mocks.getSuppressedSnapshot.mockImplementation(() => mocks.executionBlocked);
+  mocks.getSuppressedSnapshot.mockImplementation(
+    () => mocks.executionBlocked || mocks.globallySuppressed,
+  );
   __resetAutoNudgeTurnLedgerForTests({ clearSessionStorage: true });
 });
 
@@ -290,6 +310,98 @@ afterEach(async () => {
 });
 
 describe("BackgroundAutoNudgeCoordinator exact-thread authority", () => {
+  it("survives the app's StrictMode setup-cleanup replay without duplicating authority", async () => {
+    const dispatch = installEnvironmentApi("environment-a");
+    const completedTurn = threadFixture({
+      environmentId: "environment-a",
+      threadId: "thread-a",
+      completedTurnId: "turn-strict",
+    });
+    mocks.environmentStateById = {
+      "environment-a": environmentFixture("environment-a", [completedTurn]),
+    };
+
+    await render(
+      <StrictMode>
+        <BackgroundAutoNudgeCoordinator />
+      </StrictMode>,
+    );
+    await waitForCalls(dispatch, 1);
+    await new Promise((resolve) => window.setTimeout(resolve, 100));
+    expect(dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("never turns elapsed idle time into authority and dispatches once per new completed turn", async () => {
+    const dispatch = installEnvironmentApi("environment-a");
+    const withoutTerminal = threadFixture({
+      environmentId: "environment-a",
+      threadId: "thread-a",
+      completedTurnId: "turn-placeholder",
+    });
+    const noCompletedTurn = {
+      ...withoutTerminal,
+      summary: { ...withoutTerminal.summary, latestTurn: null },
+      turnState: { latestTurn: null },
+    };
+    mocks.environmentStateById = {
+      "environment-a": environmentFixture("environment-a", [noCompletedTurn]),
+    };
+
+    const mounted = await render(<BackgroundAutoNudgeCoordinator />);
+    // Cross many former polling windows and safety-debounce windows. Wall-clock
+    // passage without provider-confirmed terminal evidence must remain inert.
+    await new Promise((resolve) => window.setTimeout(resolve, 150));
+    expect(dispatch).not.toHaveBeenCalled();
+
+    const firstCompletedTurn = threadFixture({
+      environmentId: "environment-a",
+      threadId: "thread-a",
+      completedTurnId: "turn-a",
+    });
+    mocks.environmentStateById = {
+      "environment-a": environmentFixture("environment-a", [firstCompletedTurn]),
+    };
+    await mounted.rerender(<BackgroundAutoNudgeCoordinator />);
+    // A replay of the same projection event cannot arm a second debounce.
+    mocks.environmentStateById = {
+      "environment-a": environmentFixture("environment-a", [firstCompletedTurn]),
+    };
+    await mounted.rerender(<BackgroundAutoNudgeCoordinator />);
+    await waitForCalls(dispatch, 1);
+
+    // Time and another replay do not create another send for the same terminal.
+    await new Promise((resolve) => window.setTimeout(resolve, 150));
+    mocks.environmentStateById = {
+      "environment-a": environmentFixture("environment-a", [firstCompletedTurn]),
+    };
+    await mounted.rerender(<BackgroundAutoNudgeCoordinator />);
+    await new Promise((resolve) => window.setTimeout(resolve, 50));
+    expect(dispatch).toHaveBeenCalledTimes(1);
+
+    const nextCompletedTurn = threadFixture({
+      environmentId: "environment-a",
+      threadId: "thread-a",
+      completedTurnId: "turn-b",
+    });
+    mocks.environmentStateById = {
+      "environment-a": environmentFixture("environment-a", [nextCompletedTurn]),
+    };
+    await mounted.rerender(<BackgroundAutoNudgeCoordinator />);
+    await waitForCalls(dispatch, 2);
+
+    // Even a regressed/replayed projection cannot re-arm an older authority.
+    mocks.environmentStateById = {
+      "environment-a": environmentFixture("environment-a", [firstCompletedTurn]),
+    };
+    await mounted.rerender(<BackgroundAutoNudgeCoordinator />);
+    await new Promise((resolve) => window.setTimeout(resolve, 50));
+    expect(dispatch).toHaveBeenCalledTimes(2);
+    expect(commands(dispatch).map((command) => command.completedTurnId)).toEqual([
+      "turn-a",
+      "turn-b",
+    ]);
+  });
+
   it("always yields exact-thread authority to queued operator follow-ups", async () => {
     const owner = {};
     const dispatchA = installEnvironmentApi("environment-a");
@@ -314,10 +426,10 @@ describe("BackgroundAutoNudgeCoordinator exact-thread authority", () => {
 
     try {
       const mounted = await render(<BackgroundAutoNudgeCoordinator />);
-      // Let both exact-thread authorities begin their delay, then publish an
-      // operator follow-up before the coordinator's next pass. This proves the
-      // existing delay is discarded rather than merely paused.
-      await new Promise((resolve) => window.setTimeout(resolve, 30));
+      // Let both exact-thread authorities begin their one-shot delay, then
+      // publish an operator follow-up before its callback. The terminal event
+      // is consumed rather than merely paused.
+      await new Promise((resolve) => window.setTimeout(resolve, 5));
       manualFollowUpPriorityStore.replace(owner, [
         { environmentId: "environment-a", threadId: "thread-shared" },
       ]);
@@ -336,18 +448,77 @@ describe("BackgroundAutoNudgeCoordinator exact-thread authority", () => {
 
       manualFollowUpPriorityStore.replace(owner, []);
       await mounted.rerender(<BackgroundAutoNudgeCoordinator />);
+      await new Promise((resolve) => window.setTimeout(resolve, 100));
       expect(dispatchA).not.toHaveBeenCalled();
+
+      const nextQueuedThreadTerminal = threadFixture({
+        environmentId: "environment-a",
+        threadId: "thread-shared",
+        completedTurnId: "turn-a-next",
+      });
+      mocks.environmentStateById = {
+        "environment-a": environmentFixture("environment-a", [nextQueuedThreadTerminal]),
+        "environment-b": environmentFixture("environment-b", [sameIdOtherEnvironment]),
+      };
+      await mounted.rerender(<BackgroundAutoNudgeCoordinator />);
       await waitForCalls(dispatchA, 1);
       expect(commands(dispatchA)[0]).toEqual(
         expect.objectContaining({
           type: "thread.auto-nudge.dispatch",
           threadId: "thread-shared",
-          completedTurnId: "turn-a",
+          completedTurnId: "turn-a-next",
         }),
       );
     } finally {
       manualFollowUpPriorityStore.release(owner);
     }
+  });
+
+  it("consumes a newly projected durable manual queue instead of reviving its terminal", async () => {
+    const dispatch = installEnvironmentApi("environment-a");
+    const terminal = threadFixture({
+      environmentId: "environment-a",
+      threadId: "thread-a",
+      completedTurnId: "turn-a",
+    });
+    mocks.environmentStateById = {
+      "environment-a": environmentFixture("environment-a", [terminal]),
+    };
+
+    const mounted = await render(<BackgroundAutoNudgeCoordinator />);
+    await new Promise((resolve) => window.setTimeout(resolve, 5));
+    const queued = threadFixture({
+      environmentId: "environment-a",
+      threadId: "thread-a",
+      completedTurnId: "turn-a",
+      manualFollowUpCount: 1,
+    });
+    mocks.environmentStateById = {
+      "environment-a": environmentFixture("environment-a", [queued]),
+    };
+    await mounted.rerender(<BackgroundAutoNudgeCoordinator />);
+    await new Promise((resolve) => window.setTimeout(resolve, 100));
+    expect(dispatch).not.toHaveBeenCalled();
+
+    // Clearing the queue cannot turn its old terminal back into authority.
+    mocks.environmentStateById = {
+      "environment-a": environmentFixture("environment-a", [terminal]),
+    };
+    await mounted.rerender(<BackgroundAutoNudgeCoordinator />);
+    await new Promise((resolve) => window.setTimeout(resolve, 50));
+    expect(dispatch).not.toHaveBeenCalled();
+
+    const nextTerminal = threadFixture({
+      environmentId: "environment-a",
+      threadId: "thread-a",
+      completedTurnId: "turn-b",
+    });
+    mocks.environmentStateById = {
+      "environment-a": environmentFixture("environment-a", [nextTerminal]),
+    };
+    await mounted.rerender(<BackgroundAutoNudgeCoordinator />);
+    await waitForCalls(dispatch, 1);
+    expect(commands(dispatch)[0]?.completedTurnId).toBe("turn-b");
   });
 
   it("dispatches two same-project threads independently and never sends the prompt", async () => {
@@ -485,6 +656,30 @@ describe("BackgroundAutoNudgeCoordinator exact-thread authority", () => {
     expect(commands(dispatchB).some((command) => command.threadId === "thread-off")).toBe(false);
   });
 
+  it("does not issue a stale Stop after storage reconciliation observes a cleared barrier", async () => {
+    // Model the render/effect boundary where the hook value still reflects the
+    // previous suppression snapshot but the synchronous storage reconciliation
+    // has already observed an explicit clear from another renderer.
+    mocks.globallySuppressed = true;
+    mocks.getSuppressedSnapshot.mockReturnValue(false);
+    const dispatch = installEnvironmentApi("environment-a");
+    const enabledForegroundThread = threadFixture({
+      environmentId: "environment-a",
+      threadId: "thread-enabled-after-clear",
+      completedTurnId: "turn-after-clear",
+      autoNudge: { backgroundContinuation: false },
+    });
+    mocks.environmentStateById = {
+      "environment-a": environmentFixture("environment-a", [enabledForegroundThread]),
+    };
+
+    await render(<BackgroundAutoNudgeCoordinator />);
+    await new Promise((resolve) => window.setTimeout(resolve, 300));
+
+    expect(mocks.synchronizeSuppressionFromStorage).toHaveBeenCalled();
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
   it("reconciles a cross-port durable Stop before evaluating foreground-only authority", async () => {
     mocks.executionBlocked = true;
     const dispatch = installEnvironmentApi("environment-a");
@@ -557,7 +752,7 @@ describe("BackgroundAutoNudgeCoordinator exact-thread authority", () => {
     );
   });
 
-  it("keeps an uncertain dispatch consumed across remounts until authority changes", async () => {
+  it("keeps an uncertain dispatch consumed across remounts and authority revisions", async () => {
     const dispatch = installEnvironmentApi("environment-a", () =>
       Promise.reject(new Error("acknowledgement lost")),
     );
@@ -592,7 +787,8 @@ describe("BackgroundAutoNudgeCoordinator exact-thread authority", () => {
       "environment-a": environmentFixture("environment-a", [revised]),
     };
     await remounted.rerender(<BackgroundAutoNudgeCoordinator />);
-    await waitForCalls(dispatch, 2);
+    await new Promise((resolve) => window.setTimeout(resolve, 100));
+    expect(dispatch).toHaveBeenCalledTimes(1);
 
     const nextTerminal = threadFixture({
       environmentId: "environment-a",
@@ -604,15 +800,14 @@ describe("BackgroundAutoNudgeCoordinator exact-thread authority", () => {
       "environment-a": environmentFixture("environment-a", [nextTerminal]),
     };
     await remounted.rerender(<BackgroundAutoNudgeCoordinator />);
-    await waitForCalls(dispatch, 3);
+    await waitForCalls(dispatch, 2);
 
     expect(commands(dispatch).map((command) => command.completedTurnId)).toEqual([
-      "turn-a",
       "turn-a",
       "turn-b",
     ]);
     expect(commands(dispatch).map((command) => command.expectedAuthorityRevision)).toEqual([
-      40, 41, 41,
+      40, 41,
     ]);
   });
 });

@@ -43,6 +43,7 @@ import { render } from "vitest-browser-react";
 import { useCommandPaletteStore } from "../commandPaletteStore";
 import { useComposerDraftStore, DraftId } from "../composerDraftStore";
 import { __resetEnvironmentApiOverridesForTests } from "../environmentApi";
+import { readBrowserClientSettings, writeBrowserClientSettings } from "../clientPersistenceStorage";
 import { isMacPlatform } from "../lib/utils";
 import { resetSourceControlDiscoveryStateForTests } from "../lib/sourceControlDiscoveryState";
 import { __resetLocalApiForTests } from "../localApi";
@@ -5044,7 +5045,10 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
         authorityRevision: 22,
         mode: "steady-progress",
         prompt: "Server-sourced exact-thread prompt",
-        armedAt: isoAt(900),
+        // Foreground authority is bounded against the browser's live clock.
+        // Keep this positive-path fixture freshly armed instead of coupling it
+        // to the suite's fixed projection timestamp.
+        armedAt: new Date(Date.now() - 1_000).toISOString(),
       });
       const mounted = await mountChatView({
         viewport: DEFAULT_VIEWPORT,
@@ -7043,6 +7047,343 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
   }
 
   if (chatViewBrowserPart === "layout") {
+    it("toggles a persisted Mobile optimized reflow without resetting Matrix configuration", async () => {
+      const initialMatrixSettings = {
+        fallingEffectsEnabled: false,
+        fallingEffectKind: "snow" as const,
+        fallingEffectMatrixBaseFontSize: 29,
+        fallingEffectMatrixColorMode: "rainbow" as const,
+        fallingEffectMatrixColorCycleSpeed: 6.25,
+        fallingEffectMatrixMotionMode: "walk-forward" as const,
+        fallingEffectMatrixWalkStartFontSize: 8,
+        fallingEffectMatrixWalkEndFontSize: 66,
+        fallingEffectSpeed: 3.5,
+        fallingEffectDensity: 2.25,
+      };
+      const mounted = await mountChatView({
+        viewport: WIDE_FOOTER_VIEWPORT,
+        snapshot: createSnapshotForTargetUser({
+          targetMessageId: "msg-user-mobile-presentation-toggle" as MessageId,
+          targetText: "mobile presentation toggle",
+        }),
+        configureFixture: (nextFixture) => {
+          nextFixture.serverConfig = {
+            ...nextFixture.serverConfig,
+            clientSettings: {
+              ...nextFixture.serverConfig.clientSettings,
+              ...initialMatrixSettings,
+              mobileOptimizedPresentation: false,
+            },
+          };
+        },
+        resolveRpc: (body) => {
+          if (body._tag !== WS_METHODS.serverUpdateClientSettings) return undefined;
+          const patch = body.patch as Partial<typeof fixture.serverConfig.clientSettings>;
+          const clientSettings = {
+            ...fixture.serverConfig.clientSettings,
+            ...patch,
+          };
+          fixture.serverConfig = {
+            ...fixture.serverConfig,
+            clientSettings,
+          };
+          return clientSettings;
+        },
+      });
+
+      try {
+        const toggle = await waitForElement(
+          () =>
+            document.querySelector<HTMLButtonElement>(
+              '[data-testid="composer-presentation-toggle"]',
+            ),
+          "Unable to find presentation toggle beside the composer.",
+        );
+        const targetBounds = toggle.getBoundingClientRect();
+        expect(targetBounds.width).toBeGreaterThanOrEqual(44);
+        expect(targetBounds.height).toBeGreaterThanOrEqual(44);
+        expect(toggle.getAttribute("aria-pressed")).toBe("false");
+        expect(toggle.dataset.effectiveMobileLayout).toBe("false");
+        expect(toggle.dataset.mobilePresentationSource).toBe("responsive");
+        expect(
+          document
+            .querySelector('[data-slot="sidebar-wrapper"]')
+            ?.getAttribute("data-mobile-layout"),
+        ).toBe("false");
+        expect(document.querySelector('[data-desktop-run-context="true"]')).toBeTruthy();
+        const inputBar = document.querySelector<HTMLElement>('[data-chat-input-bar="true"]');
+        expect(getComputedStyle(inputBar!).paddingLeft).toBe("20px");
+
+        toggle.click();
+
+        await vi.waitFor(
+          () => {
+            expect(toggle.getAttribute("aria-pressed")).toBe("true");
+            expect(
+              document
+                .querySelector('[data-slot="sidebar-wrapper"]')
+                ?.getAttribute("data-mobile-layout"),
+            ).toBe("true");
+            expect(
+              document
+                .querySelector('[data-slot="sidebar-wrapper"]')
+                ?.getAttribute("data-mobile-optimized-presentation"),
+            ).toBe("true");
+            expect(document.querySelector('[data-chat-presentation="mobile"]')).toBeTruthy();
+            expect(document.querySelector('[data-mobile-run-context="true"]')).toBeTruthy();
+            expect(document.querySelector('[data-desktop-run-context="true"]')).toBeNull();
+            expect(getComputedStyle(inputBar!).paddingLeft).toBe("12px");
+            expect(
+              document.querySelector<HTMLElement>('[data-slot="sidebar-trigger"]')?.getClientRects()
+                .length,
+            ).toBeGreaterThan(0);
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+
+        const enabledSettings = getServerConfig()?.clientSettings;
+        expect(enabledSettings).toMatchObject({
+          ...initialMatrixSettings,
+          mobileOptimizedPresentation: false,
+          fallingEffectsEnabled: true,
+          fallingEffectKind: "matrix",
+        });
+        await vi.waitFor(() => {
+          expect(readBrowserClientSettings()?.mobileOptimizedPresentation).toBe(true);
+        });
+        const clientSettingsRequests = wsRequests.filter(
+          (request) => request._tag === WS_METHODS.serverUpdateClientSettings,
+        );
+        expect(clientSettingsRequests).toHaveLength(1);
+        expect(clientSettingsRequests[0]?.patch).toEqual({
+          fallingEffectsEnabled: true,
+          fallingEffectKind: "matrix",
+        });
+        expect(clientSettingsRequests[0]?.patch).not.toHaveProperty("mobileOptimizedPresentation");
+
+        toggle.click();
+
+        await vi.waitFor(
+          () => {
+            expect(toggle.getAttribute("aria-pressed")).toBe("false");
+            expect(
+              document
+                .querySelector('[data-slot="sidebar-wrapper"]')
+                ?.getAttribute("data-mobile-layout"),
+            ).toBe("false");
+            expect(document.querySelector('[data-chat-presentation="desktop"]')).toBeTruthy();
+            expect(document.querySelector('[data-mobile-run-context="true"]')).toBeNull();
+            expect(document.querySelector('[data-desktop-run-context="true"]')).toBeTruthy();
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+
+        expect(getServerConfig()?.clientSettings).toMatchObject({
+          ...initialMatrixSettings,
+          mobileOptimizedPresentation: false,
+          fallingEffectsEnabled: true,
+          fallingEffectKind: "matrix",
+        });
+        await vi.waitFor(() => {
+          expect(readBrowserClientSettings()?.mobileOptimizedPresentation).toBe(false);
+        });
+        expect(
+          wsRequests.filter((request) => request._tag === WS_METHODS.serverUpdateClientSettings),
+        ).toHaveLength(1);
+        expect(
+          wsRequests.some((request) => request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand),
+        ).toBe(false);
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
+    it("keeps natural phone reflow independent from the explicit Matrix-enabling authority", async () => {
+      const mounted = await mountChatView({
+        viewport: COMPACT_FOOTER_VIEWPORT,
+        snapshot: createSnapshotForTargetUser({
+          targetMessageId: "msg-user-natural-mobile-presentation" as MessageId,
+          targetText: "natural mobile presentation",
+        }),
+        configureFixture: (nextFixture) => {
+          nextFixture.serverConfig = {
+            ...nextFixture.serverConfig,
+            clientSettings: {
+              ...nextFixture.serverConfig.clientSettings,
+              mobileOptimizedPresentation: false,
+              fallingEffectsEnabled: false,
+              fallingEffectKind: "snow",
+            },
+          };
+        },
+      });
+
+      try {
+        const toggle = await waitForElement(
+          () =>
+            document.querySelector<HTMLButtonElement>(
+              '[data-testid="composer-presentation-toggle"]',
+            ),
+          "Unable to find presentation toggle on a naturally narrow screen.",
+        );
+
+        expect(toggle.getAttribute("aria-pressed")).toBe("false");
+        expect(toggle.getAttribute("aria-label")).toBe(
+          "Mobile layout is active for this screen; turn on Mobile optimized presentation and Matrix",
+        );
+        expect(toggle.dataset.effectiveMobileLayout).toBe("true");
+        expect(toggle.dataset.mobilePresentationSource).toBe("viewport");
+        expect(
+          document
+            .querySelector('[data-slot="sidebar-wrapper"]')
+            ?.getAttribute("data-mobile-layout"),
+        ).toBe("true");
+        expect(getServerConfig()?.clientSettings).toMatchObject({
+          mobileOptimizedPresentation: false,
+          fallingEffectsEnabled: false,
+          fallingEffectKind: "snow",
+        });
+        expect(readBrowserClientSettings()).toBeNull();
+        expect(
+          wsRequests.some((request) => request._tag === WS_METHODS.serverUpdateClientSettings),
+        ).toBe(false);
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
+    it("uses the diff sheet on a wide viewport with a renderer-local mobile override", async () => {
+      writeBrowserClientSettings({
+        ...DEFAULT_CLIENT_SETTINGS,
+        mobileOptimizedPresentation: true,
+      });
+      const mounted = await mountChatView({
+        viewport: WIDE_FOOTER_VIEWPORT,
+        initialPath: `/${LOCAL_ENVIRONMENT_ID}/${THREAD_ID}?diff=1`,
+        snapshot: createSnapshotForTargetUser({
+          targetMessageId: "msg-user-wide-mobile-diff-sheet" as MessageId,
+          targetText: "wide mobile diff sheet",
+        }),
+      });
+
+      try {
+        await vi.waitFor(
+          () => {
+            expect(
+              document
+                .querySelector('[data-slot="sidebar-wrapper"]')
+                ?.getAttribute("data-mobile-layout"),
+            ).toBe("true");
+            const diffSheet = Array.from(
+              document.querySelectorAll<HTMLElement>('[data-slot="sheet-popup"]'),
+            ).find(
+              (popup) =>
+                popup.textContent?.includes("Current changes") ||
+                popup.querySelector('[aria-label="Loading diff viewer..."]') !== null,
+            );
+            expect(diffSheet?.getClientRects().length).toBeGreaterThan(0);
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+        expect(getServerConfig()?.clientSettings.mobileOptimizedPresentation).toBe(false);
+        expect(
+          wsRequests.some((request) => request._tag === WS_METHODS.serverUpdateClientSettings),
+        ).toBe(false);
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
+    it("keeps keyboard-desktop composer autofocus when wide mobile presentation is enabled", async () => {
+      const secondThreadId = "thread-wide-mobile-autofocus-second" as ThreadId;
+      writeBrowserClientSettings({
+        ...DEFAULT_CLIENT_SETTINGS,
+        mobileOptimizedPresentation: true,
+      });
+      const mounted = await mountChatView({
+        viewport: WIDE_FOOTER_VIEWPORT,
+        snapshot: addThreadToSnapshot(
+          createSnapshotForTargetUser({
+            targetMessageId: "msg-user-wide-mobile-autofocus" as MessageId,
+            targetText: "wide mobile autofocus",
+          }),
+          secondThreadId,
+        ),
+      });
+
+      try {
+        await vi.waitFor(
+          () => {
+            expect(
+              document
+                .querySelector('[data-slot="sidebar-wrapper"]')
+                ?.getAttribute("data-mobile-layout"),
+            ).toBe("true");
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+        const firstEditor = await waitForComposerEditor();
+        firstEditor.blur();
+        expect(document.activeElement).not.toBe(firstEditor);
+
+        await mounted.router.navigate({
+          to: "/$environmentId/$threadId",
+          params: {
+            environmentId: LOCAL_ENVIRONMENT_ID,
+            threadId: secondThreadId,
+          },
+        });
+        await waitForURL(
+          mounted.router,
+          (pathname) => pathname.endsWith(`/${secondThreadId}`),
+          "Wide mobile presentation did not navigate to the second thread.",
+        );
+
+        await vi.waitFor(
+          () => {
+            expect(document.activeElement).toBe(
+              document.querySelector<HTMLElement>('[data-testid="composer-editor"]'),
+            );
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
+    it("describes disabling an explicit override accurately on a naturally narrow screen", async () => {
+      writeBrowserClientSettings({
+        ...DEFAULT_CLIENT_SETTINGS,
+        mobileOptimizedPresentation: true,
+      });
+      const mounted = await mountChatView({
+        viewport: COMPACT_FOOTER_VIEWPORT,
+        snapshot: createSnapshotForTargetUser({
+          targetMessageId: "msg-user-narrow-mobile-disable-label" as MessageId,
+          targetText: "narrow mobile disable label",
+        }),
+      });
+
+      try {
+        const toggle = await waitForElement(
+          () =>
+            document.querySelector<HTMLButtonElement>(
+              '[data-testid="composer-presentation-toggle"]',
+            ),
+          "Unable to find the enabled presentation toggle on a naturally narrow screen.",
+        );
+        await vi.waitFor(() => {
+          expect(toggle.getAttribute("aria-pressed")).toBe("true");
+          expect(toggle.getAttribute("aria-label")).toBe(
+            "Turn off Mobile optimized presentation; mobile layout will remain active for this screen and Matrix will stay on",
+          );
+        });
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
     it("overlays selected-project telemetry without reserving message-timeline height", async () => {
       const mounted = await mountChatView({
         viewport: DEFAULT_VIEWPORT,

@@ -198,6 +198,22 @@ describe("AutoNudgeControl", () => {
     await renderControl({ mode: "steady-progress" });
 
     await expect.element(page.getByText("Armed for the next safely settled turn")).toBeVisible();
+    await expect
+      .element(
+        page.getByText("Auto Nudge can rapidly consume provider tokens", {
+          exact: false,
+        }),
+      )
+      .toBeVisible();
+    expect(document.querySelector('[data-auto-nudge-cost-warning="true"]')).not.toBeNull();
+    await expect
+      .element(
+        page.getByText("does not send on an idle-time or repeating schedule", { exact: false }),
+      )
+      .toBeVisible();
+    await expect
+      .element(page.getByText("the five-second countdown is a safety debounce", { exact: false }))
+      .toBeVisible();
     await expect.element(page.getByRole("button", { name: "Stop this thread" })).toBeVisible();
     await expect.element(page.getByRole("button", { name: "Emergency Stop all" })).toBeVisible();
   });

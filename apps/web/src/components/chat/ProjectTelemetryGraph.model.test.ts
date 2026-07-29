@@ -85,6 +85,7 @@ function historyPoint(sampledAtMs: number): ProjectTelemetryHistoryPoint {
     projectVolumePercent: sampledAtMs,
     networkReceiveBytesPerSecond: sampledAtMs,
     networkTransmitBytesPerSecond: sampledAtMs,
+    gpuAdapters: [],
     gpuPercent: null,
     vramPercent: null,
     temperatureCpuCelsius: null,
@@ -320,11 +321,104 @@ describe("ProjectTelemetryGraph model", () => {
     } as ServerProjectSystemTelemetryResult;
 
     expect(projectTelemetryGpuAdapter(telemetry)).toMatchObject({
+      adapters: [
+        {
+          key: "gpu-0",
+          label: "GPU 1",
+          index: 0,
+          name: "GPU 0",
+          utilizationPercent: 55,
+          memoryUsedBytes: 2_000,
+          memoryTotalBytes: 8_000,
+          memoryAvailableBytes: 6_000,
+          temperatureCelsius: null,
+        },
+        {
+          key: "gpu-1",
+          label: "GPU 2",
+          index: 1,
+          name: "GPU 1",
+          utilizationPercent: 35,
+          memoryUsedBytes: 1_000,
+          memoryTotalBytes: 4_000,
+          memoryAvailableBytes: 3_000,
+          temperatureCelsius: null,
+        },
+      ],
       gpuPercent: 55,
       vramPercent: 25,
       vramUsedBytes: 3_000,
       vramAvailableBytes: 9_000,
     });
+  });
+
+  it("sorts, labels, and histories every GPU adapter by its stable source index", () => {
+    const telemetry = telemetryWithGpu({
+      status: "available",
+      detail: null,
+      adapters: [
+        gpuAdapter({
+          index: 1,
+          name: "NVIDIA GeForce RTX 3090 B",
+          utilizationPercent: 7,
+          memoryTotalBytes: 24_000,
+          memoryUsedBytes: 4_000,
+          memoryUtilizationPercent: 100 / 6,
+          temperatureCelsius: 34,
+        }),
+        gpuAdapter({
+          index: 0,
+          name: "NVIDIA GeForce RTX 3090 A",
+          utilizationPercent: 24,
+          memoryTotalBytes: 24_000,
+          memoryUsedBytes: 6_000,
+          memoryUtilizationPercent: 25,
+          temperatureCelsius: 49,
+        }),
+      ],
+    });
+
+    const projection = projectTelemetryGpuAdapter(telemetry);
+    expect(projection.adapters).toEqual([
+      {
+        key: "gpu-0",
+        index: 0,
+        label: "GPU 1",
+        name: "NVIDIA GeForce RTX 3090 A",
+        utilizationPercent: 24,
+        memoryUtilizationPercent: 25,
+        memoryTotalBytes: 24_000,
+        memoryUsedBytes: 6_000,
+        memoryAvailableBytes: 18_000,
+        temperatureCelsius: 49,
+      },
+      {
+        key: "gpu-1",
+        index: 1,
+        label: "GPU 2",
+        name: "NVIDIA GeForce RTX 3090 B",
+        utilizationPercent: 7,
+        memoryUtilizationPercent: 100 / 6,
+        memoryTotalBytes: 24_000,
+        memoryUsedBytes: 4_000,
+        memoryAvailableBytes: 20_000,
+        temperatureCelsius: 34,
+      },
+    ]);
+    expect(toProjectTelemetryHistoryPoint(telemetry, projection).gpuAdapters).toEqual([
+      {
+        key: "gpu-0",
+        utilizationPercent: 24,
+        memoryUtilizationPercent: 25,
+        temperatureCelsius: 49,
+      },
+      {
+        key: "gpu-1",
+        utilizationPercent: 7,
+        memoryUtilizationPercent: 100 / 6,
+        temperatureCelsius: 34,
+      },
+    ]);
   });
 
   it.each([
@@ -338,6 +432,22 @@ describe("ProjectTelemetryGraph model", () => {
       },
     ],
     ["non-object adapter", { status: "available", detail: null, adapters: [null] }],
+    [
+      "unsafe adapter display name",
+      {
+        status: "available",
+        detail: null,
+        adapters: [gpuAdapter({ name: "RTX 3090\u202eexe" })],
+      },
+    ],
+    [
+      "duplicate adapter index",
+      {
+        status: "available",
+        detail: null,
+        adapters: [gpuAdapter(), gpuAdapter({ name: "Duplicate GPU" })],
+      },
+    ],
     [
       "invalid utilization",
       { status: "available", detail: null, adapters: [gpuAdapter({ utilizationPercent: 101 })] },
@@ -367,7 +477,12 @@ describe("ProjectTelemetryGraph model", () => {
       "aggregate overflow",
       [
         gpuAdapter({ memoryTotalBytes: Number.MAX_SAFE_INTEGER, memoryUsedBytes: 0 }),
-        gpuAdapter({ memoryTotalBytes: Number.MAX_SAFE_INTEGER, memoryUsedBytes: 0 }),
+        gpuAdapter({
+          index: 1,
+          name: "GPU 1",
+          memoryTotalBytes: Number.MAX_SAFE_INTEGER,
+          memoryUsedBytes: 0,
+        }),
       ],
     ],
   ])("keeps GPU utilization but rejects invalid VRAM data: %s", (_label, adapters) => {

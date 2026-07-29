@@ -7,6 +7,7 @@ import { useUiStateStore } from "../../uiStateStore";
 import { hasUnseenCompletion } from "../Sidebar.logic";
 import { SidebarTrigger } from "../ui/sidebar";
 import { cn } from "~/lib/utils";
+import { useIsMobile } from "../../hooks/useMediaQuery";
 
 /** True when any thread has a completed turn the user hasn't viewed yet. */
 export function useHasUnseenThreadCompletions(): boolean {
@@ -46,8 +47,18 @@ export function UnseenCompletionsDot({ className }: { className?: string }) {
  */
 export function SidebarTriggerWithUnreadDot({ className }: { className?: string }) {
   const hasUnseenCompletions = useHasUnseenThreadCompletions();
+  const isMobile = useIsMobile();
   return (
-    <span className={cn("relative inline-flex shrink-0", className)}>
+    <span
+      className={cn(
+        "relative inline-flex shrink-0",
+        className,
+        // Call sites use md:hidden for normal viewport responsiveness. The
+        // operator-forced mobile branch also needs its drawer trigger on a
+        // wide screen, where that breakpoint class would otherwise hide it.
+        isMobile && "md:inline-flex!",
+      )}
+    >
       <SidebarTrigger className="size-7" />
       {/* Kept inside the trigger bounds: header rows use overflow-hidden, so a
           dot overlapping the button edge gets clipped. */}

@@ -250,6 +250,79 @@ describe("ProjectTelemetryGraph", () => {
     }
   });
 
+  it("renders every GPU adapter in stable index order with its own VRAM and temperature", async () => {
+    await page.viewport(1_200, 800);
+    const gibibyte = 1024 ** 3;
+    const telemetry = telemetryFixture({ projectId: projectA });
+    const mounted = await render(
+      <ProjectTelemetryGraph
+        environmentId={environmentA}
+        pollIntervalMs={Number.MAX_SAFE_INTEGER}
+        projectId={projectA}
+        readTelemetry={vi.fn(async () => ({
+          ...telemetry,
+          gpu: {
+            status: "available" as const,
+            adapters: [
+              {
+                index: 1,
+                name: "NVIDIA GeForce RTX 3090 B",
+                utilizationPercent: 7,
+                memoryTotalBytes: 24 * gibibyte,
+                memoryUsedBytes: 4 * gibibyte,
+                memoryUtilizationPercent: 100 / 6,
+              },
+              {
+                index: 0,
+                name: "NVIDIA GeForce RTX 3090 A",
+                utilizationPercent: 24,
+                memoryTotalBytes: 24 * gibibyte,
+                memoryUsedBytes: 6 * gibibyte,
+                memoryUtilizationPercent: 25,
+                temperatureCelsius: 49,
+              },
+            ],
+            reason: null,
+            detail: null,
+          },
+        }))}
+      />,
+    );
+
+    try {
+      await expect.element(page.getByLabelText(/Host CPU: 42%/i)).toBeVisible();
+      await expect.element(page.getByLabelText(/Host RAM: 75%/i)).toBeVisible();
+      await expect.element(page.getByLabelText(/Project disk: 70%/i)).toBeVisible();
+      await expect.element(page.getByLabelText(/Host network:/i)).toBeVisible();
+      await expect
+        .element(
+          page.getByLabelText(
+            /GPU 1: 24%\. NVIDIA GeForce RTX 3090 A.*49°C.*selected environment/i,
+          ),
+        )
+        .toBeVisible();
+      await expect
+        .element(page.getByLabelText(/GPU 1 VRAM: 6 GiB \/ 24 GiB\. 18 GiB free.*25% used/i))
+        .toBeVisible();
+      await expect
+        .element(
+          page.getByLabelText(/GPU 2: 7%\. NVIDIA GeForce RTX 3090 B.*temperature unavailable/i),
+        )
+        .toBeVisible();
+      await expect
+        .element(page.getByLabelText(/GPU 2 VRAM: 4 GiB \/ 24 GiB\. 20 GiB free.*17% used/i))
+        .toBeVisible();
+
+      const cardLabels = [
+        ...document.querySelectorAll<HTMLElement>("[data-project-telemetry-card]"),
+      ].map((card) => card.dataset.projectTelemetryCard);
+      expect(cardLabels.slice(4, 8)).toEqual(["GPU 1", "GPU 1 VRAM", "GPU 2", "GPU 2 VRAM"]);
+    } finally {
+      await mounted.unmount();
+      await page.viewport(800, 600);
+    }
+  });
+
   it("stays collapsed on a narrow/mobile anchor until explicitly expanded", async () => {
     const first = deferred<ServerProjectSystemTelemetryResult>();
     const readTelemetry = vi.fn(() => first.promise);

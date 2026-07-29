@@ -320,11 +320,25 @@ function ThreadScopedAutoNudgeControl(props: AutoNudgeControlProps) {
             className="mt-1 max-h-[min(60dvh,32rem)] overflow-y-auto overscroll-contain rounded-xl border border-border/60 bg-card/90 px-3 py-2 shadow-sm sm:max-h-[min(70dvh,36rem)]"
             data-auto-nudge-details="true"
           >
+            <div
+              className="mb-2 rounded-lg border border-amber-500/60 bg-amber-500/10 px-2.5 py-2 text-amber-950 dark:text-amber-100"
+              data-auto-nudge-cost-warning="true"
+              role="note"
+            >
+              <span className="font-semibold">Paid-usage warning:</span> Auto Nudge can rapidly
+              consume provider tokens, credits, and paid usage. You are responsible for provider
+              charges; Club Code cannot reimburse them. Use conservative round/time caps, monitor
+              active runs (including through the phone web UI), and use a carefully scoped prompt or
+              skill for this exact thread. Leave it unattended only if you accept the cost risk.
+            </div>
             <p className="text-muted-foreground">
-              Mode, prompt, and limits are saved only for this thread. Background continuation is
-              opt-in and stops at {props.maxRounds} rounds or {props.maxMinutes} minutes. Stop this
-              thread blocks only its future handoffs; Emergency Stop all blocks every thread.
-              Neither action can retract a prompt already handed to a provider.
+              Auto Nudge does not send on an idle-time or repeating schedule. It can hand off once
+              only after this exact thread reaches a new completed turn and its accepted operator
+              queue is empty; the five-second countdown is a safety debounce, not authority. Mode,
+              prompt, and limits are saved only for this thread. Background continuation is opt-in
+              and stops at {props.maxRounds} rounds or {props.maxMinutes} minutes. Stop this thread
+              blocks only its future handoffs; Emergency Stop all blocks every thread. Neither
+              action can retract a prompt already handed to a provider.
             </p>
             {props.backgroundEnabled ? (
               <div className="mt-1 text-muted-foreground">

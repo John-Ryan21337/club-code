@@ -976,6 +976,20 @@ describe("settings panels", () => {
 
     await expect.element(page.getByText("About")).toBeInTheDocument();
     await expect
+      .element(page.getByRole("heading", { name: "Alpha software / アルファ版", exact: true }))
+      .toBeInTheDocument();
+    await expect
+      .element(page.getByText(/Club Code is alpha\/testing software/))
+      .toBeInTheDocument();
+    await expect
+      .element(page.getByText(/現在テスト中のアルファ版ソフトウェアです/))
+      .toBeInTheDocument();
+    const disclaimer = document.querySelector('[data-alpha-software-disclaimer="true"]');
+    expect(disclaimer).not.toBeNull();
+    expect(disclaimer?.querySelectorAll("p")).toHaveLength(0);
+    expect(disclaimer?.querySelector('[lang="en"]')).not.toBeNull();
+    expect(disclaimer?.querySelector('[lang="ja"]')).not.toBeNull();
+    await expect
       .element(page.getByRole("heading", { name: "Diagnostics", exact: true }))
       .toBeInTheDocument();
     await expect.element(page.getByRole("link", { name: "View diagnostics" })).toBeInTheDocument();

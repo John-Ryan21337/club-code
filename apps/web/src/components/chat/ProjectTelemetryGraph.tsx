@@ -20,6 +20,7 @@ import {
 import {
   type CSSProperties,
   type ComponentType,
+  Fragment,
   type PointerEvent as ReactPointerEvent,
   useCallback,
   useEffect,
@@ -236,6 +237,7 @@ function telemetryGapPoint(): ProjectTelemetryHistoryPoint {
     projectVolumePercent: null,
     networkReceiveBytesPerSecond: null,
     networkTransmitBytesPerSecond: null,
+    gpuAdapters: [],
     gpuPercent: null,
     vramPercent: null,
     temperatureCpuCelsius: null,
@@ -260,6 +262,17 @@ function formatTemperature(value: number | null): string {
 
 function exactBytesTitle(label: string, bytes: number | null): string | undefined {
   return bytes === null ? undefined : `${label}: ${bytes.toLocaleString()} bytes`;
+}
+
+function gpuAdapterHistory(
+  history: readonly ProjectTelemetryHistoryPoint[],
+  key: string,
+  measurement: "utilizationPercent" | "memoryUtilizationPercent" | "temperatureCelsius",
+): readonly (number | null)[] {
+  return history.map((point) => {
+    const adapter = point.gpuAdapters.find((candidate) => candidate.key === key);
+    return adapter?.[measurement] ?? null;
+  });
 }
 
 function TelemetrySparkline(props: {
@@ -772,6 +785,7 @@ export function ProjectTelemetryGraph({
       : visibleView.gpu.vramAvailableBytes === null
         ? `${visibleView.gpu.vramDetail} · selected environment`
         : `${formatTelemetryBytes(visibleView.gpu.vramAvailableBytes)} available · selected environment`;
+  const displayedGpuAdapters = gpuLoading || telemetryUnavailable ? [] : visibleView.gpu.adapters;
   const temperatureCards = [
     {
       key: "cpu",
@@ -954,34 +968,103 @@ export function ProjectTelemetryGraph({
                       : `↓ ${formatTelemetryBytes(networkReceiveBytesPerSecond)}/s · ↑ ${formatTelemetryBytes(networkTransmitBytesPerSecond)}/s`
                 }
               />
-              <TelemetryCard
-                color={colors.gpu}
-                detail={gpuDetail}
-                history={visibleView.history.map((point) => point.gpuPercent)}
-                icon={GaugeIcon}
-                label="Host GPU"
-                value={
-                  gpuLoading
-                    ? "Waiting"
-                    : formatPercent(telemetryUnavailable ? null : visibleView.gpu.gpuPercent)
-                }
-              />
-              <TelemetryCard
-                color={colors.vram}
-                detail={vramDetail}
-                history={visibleView.history.map((point) => point.vramPercent)}
-                icon={MemoryStickIcon}
-                label="Host VRAM"
-                title={exactBytesTitle(
-                  "Available GPU memory on selected environment",
-                  telemetryUnavailable ? null : visibleView.gpu.vramAvailableBytes,
-                )}
-                value={
-                  gpuLoading
-                    ? "Waiting"
-                    : formatPercent(telemetryUnavailable ? null : visibleView.gpu.vramPercent)
-                }
-              />
+              {displayedGpuAdapters.length === 0 ? (
+                <>
+                  <TelemetryCard
+                    color={colors.gpu}
+                    detail={gpuDetail}
+                    history={visibleView.history.map((point) => point.gpuPercent)}
+                    icon={GaugeIcon}
+                    label="Host GPU"
+                    value={
+                      gpuLoading
+                        ? "Waiting"
+                        : formatPercent(telemetryUnavailable ? null : visibleView.gpu.gpuPercent)
+                    }
+                  />
+                  <TelemetryCard
+                    color={colors.vram}
+                    detail={vramDetail}
+                    history={visibleView.history.map((point) => point.vramPercent)}
+                    icon={MemoryStickIcon}
+                    label="Host VRAM"
+                    title={exactBytesTitle(
+                      "Available GPU memory on selected environment",
+                      telemetryUnavailable ? null : visibleView.gpu.vramAvailableBytes,
+                    )}
+                    value={
+                      gpuLoading
+                        ? "Waiting"
+                        : formatPercent(telemetryUnavailable ? null : visibleView.gpu.vramPercent)
+                    }
+                  />
+                </>
+              ) : (
+                displayedGpuAdapters.map((adapter) => {
+                  const memory =
+                    adapter.memoryUsedBytes !== null &&
+                    adapter.memoryTotalBytes !== null &&
+                    adapter.memoryAvailableBytes !== null &&
+                    adapter.memoryUtilizationPercent !== null
+                      ? {
+                          usedBytes: adapter.memoryUsedBytes,
+                          totalBytes: adapter.memoryTotalBytes,
+                          availableBytes: adapter.memoryAvailableBytes,
+                          utilizationPercent: adapter.memoryUtilizationPercent,
+                        }
+                      : null;
+                  const temperatureDetail =
+                    adapter.temperatureCelsius === null
+                      ? "temperature unavailable"
+                      : formatTemperature(adapter.temperatureCelsius);
+                  return (
+                    <Fragment key={adapter.key}>
+                      <TelemetryCard
+                        color={colors.gpu}
+                        detail={`${adapter.name} · ${temperatureDetail} · selected environment`}
+                        history={gpuAdapterHistory(
+                          visibleView.history,
+                          adapter.key,
+                          "utilizationPercent",
+                        )}
+                        icon={GaugeIcon}
+                        label={adapter.label}
+                        title={`${adapter.name} · ${
+                          adapter.temperatureCelsius === null
+                            ? "adapter temperature unavailable"
+                            : `measured adapter temperature ${formatTemperature(adapter.temperatureCelsius)}`
+                        }`}
+                        value={formatPercent(adapter.utilizationPercent)}
+                      />
+                      <TelemetryCard
+                        color={colors.vram}
+                        detail={
+                          memory === null
+                            ? "GPU memory telemetry unavailable · selected environment"
+                            : `${formatTelemetryBytes(memory.availableBytes)} free · ${formatPercent(memory.utilizationPercent)} used · selected environment`
+                        }
+                        history={gpuAdapterHistory(
+                          visibleView.history,
+                          adapter.key,
+                          "memoryUtilizationPercent",
+                        )}
+                        icon={MemoryStickIcon}
+                        label={`${adapter.label} VRAM`}
+                        title={
+                          memory === null
+                            ? "GPU memory telemetry unavailable"
+                            : `${adapter.label} GPU memory: ${memory.usedBytes.toLocaleString()} bytes used, ${memory.totalBytes.toLocaleString()} bytes total, ${memory.availableBytes.toLocaleString()} bytes free`
+                        }
+                        value={
+                          memory === null
+                            ? "Unavailable"
+                            : `${formatTelemetryBytes(memory.usedBytes)} / ${formatTelemetryBytes(memory.totalBytes)}`
+                        }
+                      />
+                    </Fragment>
+                  );
+                })
+              )}
               <div className="col-span-2 mt-1 flex items-center gap-1 text-xs font-semibold uppercase tracking-[0.1em] text-muted-foreground">
                 <ThermometerIcon className="size-3" />
                 Hardware temperatures

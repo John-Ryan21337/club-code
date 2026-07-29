@@ -540,6 +540,22 @@ it.effect("rejects stale, baseline, non-current, unsettled, and inactive dispatc
     );
     assert.match(nonCurrent.detail, /exact current completed turn/);
 
+    const noCompletedTurn = yield* Effect.flip(
+      decideOrchestrationCommand({
+        readModel: makeReadModel([
+          makeThread({
+            id: THREAD_A,
+            autoNudge: enabledConfig(),
+          }),
+        ]),
+        command: {
+          ...baseCommand,
+          commandId: CommandId.make("command-without-terminal-authority"),
+        },
+      }),
+    );
+    assert.match(noCompletedTurn.detail, /exact current completed turn/);
+
     const unsettledThread = makeThread({
       id: THREAD_A,
       latestTurnId: TURN_COMPLETED,

@@ -137,6 +137,7 @@ import {
   listChangedMatrixAtmosphereSettingLabels,
 } from "./matrixAtmosphereSettings";
 import { WindowAtmosphereSettings } from "./WindowAtmosphereSettings";
+import { ClockWeatherSettings } from "./ClockWeatherSettings";
 import { AmbientVideoSettings } from "./AmbientVideoSettings";
 import { LocalMediaSettings } from "./LocalMediaSettings";
 import { WindowOpacitySettings } from "./WindowOpacitySettings";
@@ -409,6 +410,16 @@ export function useSettingsRestore(onRestored?: () => void) {
       DEFAULT_UNIFIED_SETTINGS.continueBackgroundAnimations
         ? ["Background animations"]
         : []),
+      ...(settings.worldClockEnabled !== DEFAULT_UNIFIED_SETTINGS.worldClockEnabled ||
+      settings.worldClockStyle !== DEFAULT_UNIFIED_SETTINGS.worldClockStyle ||
+      settings.worldClockWeatherEnabled !== DEFAULT_UNIFIED_SETTINGS.worldClockWeatherEnabled ||
+      settings.worldClockLocationIds.length !==
+        DEFAULT_UNIFIED_SETTINGS.worldClockLocationIds.length ||
+      settings.worldClockLocationIds.some(
+        (locationId, index) => locationId !== DEFAULT_UNIFIED_SETTINGS.worldClockLocationIds[index],
+      )
+        ? ["World clock and weather"]
+        : []),
       ...(settings.showSidebarMascot !== DEFAULT_UNIFIED_SETTINGS.showSidebarMascot
         ? ["Sidebar mascot"]
         : []),
@@ -548,6 +559,10 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.confirmThreadArchive,
       settings.confirmThreadDelete,
       settings.continueBackgroundAnimations,
+      settings.worldClockEnabled,
+      settings.worldClockLocationIds,
+      settings.worldClockStyle,
+      settings.worldClockWeatherEnabled,
       settings.addProjectBaseDirectory,
       settings.defaultThreadEnvMode,
       settings.diffIgnoreWhitespace,
@@ -608,6 +623,10 @@ export function useSettingsRestore(onRestored?: () => void) {
     updateSettings({
       timestampFormat: DEFAULT_UNIFIED_SETTINGS.timestampFormat,
       continueBackgroundAnimations: DEFAULT_UNIFIED_SETTINGS.continueBackgroundAnimations,
+      worldClockEnabled: DEFAULT_UNIFIED_SETTINGS.worldClockEnabled,
+      worldClockStyle: DEFAULT_UNIFIED_SETTINGS.worldClockStyle,
+      worldClockLocationIds: DEFAULT_UNIFIED_SETTINGS.worldClockLocationIds,
+      worldClockWeatherEnabled: DEFAULT_UNIFIED_SETTINGS.worldClockWeatherEnabled,
       appAccentColor: DEFAULT_UNIFIED_SETTINGS.appAccentColor,
       showSidebarSearch: DEFAULT_UNIFIED_SETTINGS.showSidebarSearch,
       showSidebarMascot: DEFAULT_UNIFIED_SETTINGS.showSidebarMascot,
@@ -1266,6 +1285,7 @@ export function AppearanceSettingsPanel() {
           }
         />
       </SettingsSection>
+      <ClockWeatherSettings />
       <WindowAtmosphereSettings />
       <AmbientVideoSettings />
       <AmbientImageSettings />
@@ -1750,6 +1770,22 @@ export function SystemSettingsPanel() {
 
       <SettingsSection title="About">
         <AboutVersionSection />
+        <SettingsRow
+          title="Alpha software / アルファ版"
+          description={
+            <span className="block space-y-2" data-alpha-software-disclaimer="true">
+              <span className="block" lang="en">
+                Club Code is alpha/testing software. It is provided without warranties or claims of
+                reliability, fitness for a particular purpose, or uninterrupted operation. Use it at
+                your own risk, keep backups of important work, and verify important results.
+              </span>
+              <span className="block" lang="ja">
+                Club Code
+                は現在テスト中のアルファ版ソフトウェアです。信頼性、特定目的への適合性、無停止動作などについて、いかなる保証または表明も行いません。利用者ご自身の責任で使用し、重要なデータはバックアップし、重要な結果は確認してください。
+              </span>
+            </span>
+          }
+        />
         <SettingsRow
           title="Diagnostics"
           description={diagnosticsDescription}

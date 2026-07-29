@@ -50,6 +50,50 @@ export type PowerSaveBlockerMode = typeof PowerSaveBlockerMode.Type;
 export const DEFAULT_POWER_SAVE_BLOCKER_MODE: PowerSaveBlockerMode = "off";
 
 export const DEFAULT_CONTINUE_BACKGROUND_ANIMATIONS = false;
+/**
+ * Per-device presentation override. `false` preserves the normal responsive
+ * viewport behavior; `true` asks wide clients to use the existing mobile
+ * layout branches too. Although this field shares the ClientSettings schema so
+ * local persistence and settings profiles can decode it, renderer writes must
+ * not forward it through the environment-wide client-settings RPC.
+ */
+export const DEFAULT_MOBILE_OPTIMIZED_PRESENTATION = false;
+export const WorldClockStyle = Schema.Literals(["rainbow", "nixie", "analog", "led"]);
+export type WorldClockStyle = typeof WorldClockStyle.Type;
+export const WorldClockLocationId = Schema.Literals([
+  "tokyo",
+  "los-angeles",
+  "new-york",
+  "london",
+  "paris",
+  "berlin",
+  "seoul",
+  "singapore",
+  "sydney",
+  "honolulu",
+  "dubai",
+  "sao-paulo",
+]);
+export type WorldClockLocationId = typeof WorldClockLocationId.Type;
+export const MAX_WORLD_CLOCK_LOCATIONS = 6;
+export const WorldClockLocationIds = Schema.Array(WorldClockLocationId).check(
+  Schema.isMinLength(1),
+  Schema.isMaxLength(MAX_WORLD_CLOCK_LOCATIONS),
+  Schema.makeFilter((locationIds) =>
+    new Set(locationIds).size === locationIds.length
+      ? undefined
+      : "must not contain duplicate clock locations",
+  ),
+);
+export type WorldClockLocationIds = typeof WorldClockLocationIds.Type;
+export const DEFAULT_WORLD_CLOCK_ENABLED = false;
+export const DEFAULT_WORLD_CLOCK_STYLE: WorldClockStyle = "rainbow";
+export const DEFAULT_WORLD_CLOCK_LOCATION_IDS: WorldClockLocationIds = [
+  "tokyo",
+  "los-angeles",
+  "london",
+];
+export const DEFAULT_WORLD_CLOCK_WEATHER_ENABLED = false;
 export const DEFAULT_SHOW_SIDEBAR_SEARCH = true;
 export const DEFAULT_SHOW_SIDEBAR_MASCOT = true;
 export const DEFAULT_SHOW_SIDEBAR_ATTRIBUTION = true;
@@ -614,6 +658,23 @@ export const ClientSettingsSchema = Schema.Struct({
   diffWordWrap: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   continueBackgroundAnimations: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_CONTINUE_BACKGROUND_ANIMATIONS)),
+  ),
+  mobileOptimizedPresentation: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_MOBILE_OPTIMIZED_PRESENTATION)),
+  ),
+  worldClockEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_WORLD_CLOCK_ENABLED)),
+  ),
+  worldClockStyle: WorldClockStyle.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_WORLD_CLOCK_STYLE)),
+  ),
+  worldClockLocationIds: WorldClockLocationIds.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_WORLD_CLOCK_LOCATION_IDS)),
+  ),
+  // Network consent is persisted through this schema for compatibility, but
+  // the web renderer must keep it local and must not sync it between clients.
+  worldClockWeatherEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_WORLD_CLOCK_WEATHER_ENABLED)),
   ),
   fallingEffectsEnabled: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECTS_ENABLED)),
@@ -1754,6 +1815,12 @@ export const ClientSettingsPatch = Schema.Struct({
   diffIgnoreWhitespace: Schema.optionalKey(Schema.Boolean),
   diffWordWrap: Schema.optionalKey(Schema.Boolean),
   continueBackgroundAnimations: Schema.optionalKey(Schema.Boolean),
+  mobileOptimizedPresentation: Schema.optionalKey(Schema.Boolean),
+  worldClockEnabled: Schema.optionalKey(Schema.Boolean),
+  worldClockStyle: Schema.optionalKey(WorldClockStyle),
+  worldClockLocationIds: Schema.optionalKey(WorldClockLocationIds),
+  // See the ClientSettings field above: transport routing keeps this local.
+  worldClockWeatherEnabled: Schema.optionalKey(Schema.Boolean),
   fallingEffectsEnabled: Schema.optionalKey(Schema.Boolean),
   fallingEffectsOverCinemaEnabled: Schema.optionalKey(Schema.Boolean),
   fallingEffectKind: Schema.optionalKey(FallingEffectKind),

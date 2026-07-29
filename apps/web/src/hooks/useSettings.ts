@@ -1,9 +1,10 @@
 /**
  * Unified settings hook.
  *
- * Abstracts the split between server-authoritative settings (persisted in
- * `settings.json` on the server, fetched via `server.getConfig`) and
- * client-only settings (persisted in localStorage).
+ * Abstracts the split between server settings, environment-shared client
+ * settings, and renderer-local client persistence. Mobile presentation and
+ * third-party weather consent are intentionally renderer-local so one client
+ * cannot change another client's layout or initiate requests from its IP.
  *
  * Consumers use `useSettings(selector)` to read, and `useUpdateSettings()` to
  * write. The hook transparently routes reads/writes to the correct backing
@@ -46,6 +47,11 @@ import {
   __resetConfirmedSettingsWriteQueueForTests,
   enqueueConfirmedSettingsWrite,
 } from "../confirmedSettingsWriteQueue";
+import {
+  partitionRendererLocalClientSettingsPatch,
+  withoutRendererLocalClientSettings,
+  withRendererLocalClientSettings,
+} from "../rendererLocalClientSettings";
 
 const CLIENT_SETTINGS_PERSISTENCE_ERROR_SCOPE = "[CLIENT_SETTINGS]";
 let clientSettingsImportAttempted = false;
@@ -107,12 +113,19 @@ async function maybeImportLocalClientSettingsToServer(): Promise<void> {
 
   await hydrateClientSettings();
   const localSettings = getClientSettingsSnapshot();
+  const sharedServerSettings = withoutRendererLocalClientSettings(
+    currentServerConfig.clientSettings,
+  );
+  const sharedLocalSettings = withoutRendererLocalClientSettings(localSettings);
+  const sharedDefaultSettings = withoutRendererLocalClientSettings(DEFAULT_CLIENT_SETTINGS);
   if (
-    Equal.equals(currentServerConfig.clientSettings, DEFAULT_CLIENT_SETTINGS) &&
-    !Equal.equals(localSettings, DEFAULT_CLIENT_SETTINGS)
+    Equal.equals(sharedServerSettings, sharedDefaultSettings) &&
+    !Equal.equals(sharedLocalSettings, sharedDefaultSettings)
   ) {
-    applyClientSettingsUpdated(localSettings);
-    await ensureLocalApi().server.updateClientSettings(localSettings);
+    applyClientSettingsUpdated(
+      applyClientSettingsPatch(currentServerConfig.clientSettings, sharedLocalSettings),
+    );
+    await ensureLocalApi().server.updateClientSettings(sharedLocalSettings);
   }
 }
 
@@ -177,11 +190,20 @@ function rollbackOptimisticPatch<T extends object>(
 
 async function applyUnifiedSettingsPatch(patch: Partial<UnifiedSettings>): Promise<void> {
   const { serverPatch, clientPatch } = splitPatch(patch);
+  const { localPatch, sharedPatch } = partitionRendererLocalClientSettingsPatch(clientPatch);
+  if (Object.keys(localPatch).length > 0) {
+    // Never calculate a renderer-local write from the default snapshot while
+    // its persisted document is still being read.
+    await hydrateClientSettings();
+  }
+
   const writes: Promise<unknown>[] = [];
   const revision = ++settingsMutationRevision;
+  const currentServerConfig = getServerConfig();
+  const sharedClientPatch = currentServerConfig ? sharedPatch : {};
+  const localClientPatch = currentServerConfig ? localPatch : clientPatch;
 
   if (Object.keys(serverPatch).length > 0) {
-    const currentServerConfig = getServerConfig();
     if (currentServerConfig) {
       const previousSettings = currentServerConfig.settings;
       const optimisticSettings = applyServerSettingsPatch(previousSettings, serverPatch);
@@ -212,62 +234,61 @@ async function applyUnifiedSettingsPatch(patch: Partial<UnifiedSettings>): Promi
     }
   }
 
-  if (Object.keys(clientPatch).length > 0) {
-    const currentServerConfig = getServerConfig();
-    if (currentServerConfig) {
-      const previousClientSettings = currentServerConfig.clientSettings;
-      const optimisticClientSettings = applyClientSettingsPatch(
-        previousClientSettings,
-        clientPatch,
-      );
-      markPatchRevision(clientPatch, clientFieldRevisions, revision);
-      applyClientSettingsUpdated(optimisticClientSettings);
-      writes.push(
-        ensureLocalApi()
-          .server.updateClientSettings(clientPatch)
-          .catch((error) => {
-            const latestClientSettings = getServerConfig()?.clientSettings;
-            if (latestClientSettings) {
-              applyClientSettingsUpdated(
-                rollbackOptimisticPatch(
-                  latestClientSettings,
-                  previousClientSettings,
-                  optimisticClientSettings,
-                  clientPatch,
-                  clientFieldRevisions,
-                  revision,
-                ),
-              );
-            }
-            throw error;
-          }),
-      );
-    } else {
-      const previousClientSettings = getClientSettingsSnapshot();
-      const optimisticClientSettings = applyClientSettingsPatch(
-        previousClientSettings,
-        clientPatch,
-      );
-      markPatchRevision(clientPatch, clientFieldRevisions, revision);
-      replaceClientSettingsSnapshot(optimisticClientSettings);
-      writes.push(
-        ensureLocalApi()
-          .persistence.setClientSettings(optimisticClientSettings)
-          .catch((error) => {
-            replaceClientSettingsSnapshot(
+  if (Object.keys(sharedClientPatch).length > 0 && currentServerConfig) {
+    const previousClientSettings = currentServerConfig.clientSettings;
+    const optimisticClientSettings = applyClientSettingsPatch(
+      previousClientSettings,
+      sharedClientPatch,
+    );
+    markPatchRevision(sharedClientPatch, clientFieldRevisions, revision);
+    applyClientSettingsUpdated(optimisticClientSettings);
+    writes.push(
+      ensureLocalApi()
+        .server.updateClientSettings(sharedClientPatch)
+        .catch((error) => {
+          const latestClientSettings = getServerConfig()?.clientSettings;
+          if (latestClientSettings) {
+            applyClientSettingsUpdated(
               rollbackOptimisticPatch(
-                getClientSettingsSnapshot(),
+                latestClientSettings,
                 previousClientSettings,
                 optimisticClientSettings,
-                clientPatch,
+                sharedClientPatch,
                 clientFieldRevisions,
                 revision,
               ),
             );
-            throw error;
-          }),
-      );
-    }
+          }
+          throw error;
+        }),
+    );
+  }
+
+  if (Object.keys(localClientPatch).length > 0) {
+    const previousClientSettings = getClientSettingsSnapshot();
+    const optimisticClientSettings = applyClientSettingsPatch(
+      previousClientSettings,
+      localClientPatch,
+    );
+    markPatchRevision(localClientPatch, clientFieldRevisions, revision);
+    replaceClientSettingsSnapshot(optimisticClientSettings);
+    writes.push(
+      ensureLocalApi()
+        .persistence.setClientSettings(optimisticClientSettings)
+        .catch((error) => {
+          replaceClientSettingsSnapshot(
+            rollbackOptimisticPatch(
+              getClientSettingsSnapshot(),
+              previousClientSettings,
+              optimisticClientSettings,
+              localClientPatch,
+              clientFieldRevisions,
+              revision,
+            ),
+          );
+          throw error;
+        }),
+    );
   }
 
   await Promise.all(writes);
@@ -286,17 +307,19 @@ async function applyUnifiedSettingsPatch(patch: Partial<UnifiedSettings>): Promi
  * settings without subscribing.
  */
 export function getClientSettings(): ClientSettings {
-  return getServerConfig()?.clientSettings ?? getClientSettingsSnapshot();
+  const localSettings = getClientSettingsSnapshot();
+  return withRendererLocalClientSettings(
+    getServerConfig()?.clientSettings ?? localSettings,
+    localSettings,
+  );
 }
 
 export function useClientSettingsHydrated(): boolean {
-  const serverConfig = useServerConfig();
-  const localHydrated = useSyncExternalStore(
+  return useSyncExternalStore(
     subscribeClientSettingsHydration,
     getClientSettingsHydratedSnapshot,
     () => false,
   );
-  return serverConfig !== null || localHydrated;
 }
 
 function useLocalClientSettings(): ClientSettings {
@@ -324,7 +347,10 @@ export function useSettings<T = UnifiedSettings>(selector?: (s: UnifiedSettings)
   const merged = useMemo<UnifiedSettings>(
     () => ({
       ...serverSettings,
-      ...(serverConfig?.clientSettings ?? localClientSettings),
+      ...withRendererLocalClientSettings(
+        serverConfig?.clientSettings ?? localClientSettings,
+        localClientSettings,
+      ),
     }),
     [localClientSettings, serverConfig?.clientSettings, serverSettings],
   );
@@ -336,7 +362,9 @@ export function useSettings<T = UnifiedSettings>(selector?: (s: UnifiedSettings)
  * Returns an updater that routes each key to the correct backing store.
  *
  * Server keys are optimistically patched in atom-backed server state, then
- * persisted via RPC. Client keys go through client persistence.
+ * persisted via RPC. Shared client keys use the connected environment server;
+ * renderer-local presentation and third-party consent fields always use this
+ * renderer's local persistence.
  */
 export function useUpdateSettings() {
   const updateSettings = useCallback((patch: Partial<UnifiedSettings>) => {
@@ -363,12 +391,25 @@ export function useUpdateSettings() {
     // is still in flight. Preserve invocation order and calculate each write
     // from the latest committed snapshot so the operator's last action wins.
     return enqueueConfirmedSettingsWrite(async () => {
+      const { localPatch, sharedPatch } = partitionRendererLocalClientSettingsPatch(patch);
+      if (Object.keys(localPatch).length > 0) {
+        await hydrateClientSettings();
+      }
       const currentServerConfig = getServerConfig();
       try {
         if (currentServerConfig) {
-          await ensureLocalApi().server.updateClientSettings(patch);
-          const latest = getServerConfig()?.clientSettings ?? currentServerConfig.clientSettings;
-          applyClientSettingsUpdated(applyClientSettingsPatch(latest, patch));
+          if (Object.keys(sharedPatch).length > 0) {
+            await ensureLocalApi().server.updateClientSettings(sharedPatch);
+          }
+          if (Object.keys(localPatch).length > 0) {
+            const nextLocal = applyClientSettingsPatch(getClientSettingsSnapshot(), localPatch);
+            await ensureLocalApi().persistence.setClientSettings(nextLocal);
+            replaceClientSettingsSnapshot(nextLocal);
+          }
+          if (Object.keys(sharedPatch).length > 0) {
+            const latest = getServerConfig()?.clientSettings ?? currentServerConfig.clientSettings;
+            applyClientSettingsUpdated(applyClientSettingsPatch(latest, sharedPatch));
+          }
           return;
         }
 

@@ -23,6 +23,7 @@ import { EmbeddedBrowserWorkspace } from "../components/EmbeddedBrowserWorkspace
 import { BackgroundAutoNudgeCoordinator } from "../components/BackgroundAutoNudgeCoordinator";
 import { ProviderUpdateLaunchNotification } from "../components/ProviderUpdateLaunchNotification";
 import { WindowAtmosphere } from "../components/WindowAtmosphere";
+import { WorldClockWidget } from "../components/WorldClockWidget";
 import {
   WebSocketConnectionCoordinator,
   WebSocketConnectionSurface,
@@ -172,6 +173,7 @@ function RootRouteView() {
         <AmbianceLayer />
         <PowerSaveBlockerSync />
         <WindowAtmosphere selectedThreadRef={selectedThreadRef} />
+        {primaryEnvironmentAuthenticated ? <WorldClockWidget /> : null}
         <AtmosphereConsole />
         <EmbeddedBrowserWorkspace />
         {primaryEnvironmentAuthenticated ? <BackgroundAutoNudgeCoordinator /> : null}

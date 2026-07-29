@@ -69,6 +69,7 @@ import {
   DEFAULT_FALLING_EFFECTS_OVER_CINEMA_ENABLED,
   FALLING_EFFECT_MATRIX_WALK_FONT_SIZE_STEP,
   DEFAULT_LM_STUDIO_BASE_URL,
+  DEFAULT_MOBILE_OPTIMIZED_PRESENTATION,
   DEFAULT_MODEL_PACING_ENABLED,
   DEFAULT_MODEL_PACING_RESERVE_PERCENT,
   DEFAULT_POWER_SAVE_BLOCKER_MODE,
@@ -193,6 +194,9 @@ describe("client settings", () => {
     expect(DEFAULT_CLIENT_SETTINGS.continueBackgroundAnimations).toBe(
       DEFAULT_CONTINUE_BACKGROUND_ANIMATIONS,
     );
+    expect(DEFAULT_CLIENT_SETTINGS.mobileOptimizedPresentation).toBe(
+      DEFAULT_MOBILE_OPTIMIZED_PRESENTATION,
+    );
     expect(DEFAULT_CLIENT_SETTINGS.showSidebarSearch).toBe(DEFAULT_SHOW_SIDEBAR_SEARCH);
     expect(DEFAULT_CLIENT_SETTINGS.showSidebarMascot).toBe(DEFAULT_SHOW_SIDEBAR_MASCOT);
     expect(DEFAULT_CLIENT_SETTINGS.showSidebarAttribution).toBe(DEFAULT_SHOW_SIDEBAR_ATTRIBUTION);
@@ -211,6 +215,7 @@ describe("client settings", () => {
       DEFAULT_WORKFLOW_STALL_WARNING_SECONDS,
     );
     expect(decodeClientSettings({}).continueBackgroundAnimations).toBe(false);
+    expect(decodeClientSettings({}).mobileOptimizedPresentation).toBe(false);
     expect(decodeClientSettings({}).showSidebarSearch).toBe(true);
     expect(decodeClientSettings({}).showSidebarMascot).toBe(true);
     expect(decodeClientSettings({}).showSidebarAttribution).toBe(true);
@@ -222,6 +227,19 @@ describe("client settings", () => {
     expect(decodeClientSettings({}).appAccentColor).toBe("");
     expect(decodeClientSettings({}).workflowObservatoryEnabled).toBe(true);
     expect(decodeClientSettings({}).workflowStallWarningSeconds).toBe(180);
+  });
+
+  it("round-trips the per-device mobile presentation override", () => {
+    expect(decodeClientSettingsPatch({ mobileOptimizedPresentation: true })).toEqual({
+      mobileOptimizedPresentation: true,
+    });
+    expect(
+      decodeClientSettings({
+        ...DEFAULT_CLIENT_SETTINGS,
+        mobileOptimizedPresentation: true,
+      }).mobileOptimizedPresentation,
+    ).toBe(true);
+    expect(() => decodeClientSettingsPatch({ mobileOptimizedPresentation: "mobile" })).toThrow();
   });
 
   it("keeps conservative defaults separate from the Club Code first-run profile", () => {

@@ -1,59 +1,103 @@
 # Auto Nudge behavior canon
 
-Auto Nudge is an explicit, per-thread automation policy. It is not a global
-provider pacer and it must never stop, interrupt, or replace work that is
-already running.
+Auto Nudge is default-off, paid automation for one exact environment/thread.
+It is not a global project setting, an idle timer, a provider pacer, or a way to
+interrupt work already running.
 
-## Thread policy
+## Exact-thread policy
 
-- A policy is keyed by the exact environment id and server thread id.
-- A thread without a stored policy is Off. It does not inherit the mode,
-  background choice, or limits of the focused thread or any other thread.
-- Mode, background continuation, maximum rounds, and maximum minutes survive
-  route changes, settings navigation, renderer reloads, and app restarts.
-- Draft threads cannot run Auto Nudge.
-- Turning a thread Off disables its background-continuation choice. It does not
-  change another thread's policy or stop another thread's run.
-- The control always renders the selected thread's policy. Its background
-  switch is checked only when that exact thread owns the active background run.
+- The server stores mode, editable standing-order text, background choice,
+  round cap, time cap, authority revision, and dispatch accounting on the exact
+  thread projection.
+- No thread inherits another thread's prompt, mode, caps, or background choice.
+  A thread without an enabled policy is Off, and draft threads cannot run.
+- Saving an enabled policy treats the current completed turn as a baseline; it
+  cannot immediately authorize a send. Turning the policy Off also clears its
+  background choice.
+- The control loads the selected thread's policy, starts minimized, and remains
+  limited to the chat-manuscript width while collapsed. Red means Off, green
+  means On, and the animated cyan/green state means On with background
+  continuation selected. Minimizing or opening Settings does not disable an
+  enabled policy.
+- Defaults are five automated rounds and 30 minutes. The hard configurable
+  bounds are 1–20 rounds and 5–120 minutes.
 
-## Scheduling and dispatch
+## Built-in prompt policy
 
-- Foreground and background dispatch require the same exclusive Web Lock.
-  Automatic dispatch is unavailable when the runtime cannot provide that lock.
-- The dispatcher reloads the target thread's durable policy and consumed-turn
-  ledger while holding the lock. It must not rely on a React closure, the
-  currently visible thread, or device-wide client settings.
-- A nudge is eligible only for a provider-confirmed completed turn when the
-  session and provider are ready and there is no draft text, attachment,
-  queued follow-up, approval, user-input request, plan prompt, transport error,
-  or other pending work.
-- A running, starting, connecting, or otherwise unsettled provider agent is
-  never interrupted. The scheduler waits for a later settled observation.
-- The terminal turn is claimed durably before transport handoff. A failed
-  handoff may skip one automated nudge, but a reload or second window must not
-  submit the same terminal turn twice.
-- A visible-thread countdown is canceled on navigation. Returning to the
-  thread re-evaluates its unchanged policy and latest terminal turn.
-- Background continuation has one owner. Transferring ownership clears the
-  former owner's background-continuation choice but preserves its mode and
-  limits.
-- Background execution uses the policy captured for its owner. Policy updates
-  are synchronized only when their thread identity matches that owner.
-- Manual activity, queued work, provider unavailability, a missing/archived
-  owner, an invalid clock transition, or a missing projection acknowledgement
-  pauses or stops the bounded run without interrupting provider work.
+- The built-in prompts continue from the current thread context. They reconcile
+  unresolved operator requests with the applicable handoff, plan, canon, and
+  PR/backlog state instead of restarting discovery.
+- Both modes keep coordination bounded. Linear owns actionable status,
+  ownership, dependencies, and blockers; Notion owns durable decisions and
+  research. Records are linked rather than duplicated and external state is
+  refreshed only after a relevant change or when stale.
+- Steady Progress permits at most two coherent lanes and targets the next
+  verifiable slice. Hardcore Fanout permits bounded, non-overlapping lanes with
+  one owner per lane and explicit convergence through repository gates and
+  required independent audits.
+- Both modes stop when work is complete or blocked, new authority is required,
+  lanes contend, or additional context would cost more than it helps.
+- These are editable starting prompts. Saving an edit changes only that exact
+  thread; it never becomes project-wide policy.
 
-## Bounds and persistence
+## Event-driven authority
 
-- Per-thread policies are limited to 256 most-recently-updated entries.
-- Foreground terminal-turn consumption is limited to 256 entries.
-- The visible background audit ledger is limited to 40 entries while retaining
-  sent-turn identities needed for deduplication. Each new record carries its
-  exact owner, and the UI shows only records attributable to the selected
-  thread.
-- Corrupt, oversized, out-of-range, or unknown persisted values fail closed.
-- Current Chromium-based Electron builds provide Web Locks on Windows 10/11,
-  macOS, and supported Linux distributions, including arm64 builds. Browser or
-  embedded runtimes without Web Locks may edit policy but cannot automatically
-  dispatch.
+- Only a new, exact, provider-confirmed completed turn can authorize one
+  automated follow-up. Elapsed idle time, route changes, settings changes,
+  provider refreshes, and repeating timer ticks cannot create or renew that
+  authority.
+- The five-second timeout is a one-shot safety debounce after eligible terminal
+  evidence appears. Its short countdown interval only updates display state.
+  The background coordinator's repeating interval only reconciles the
+  host/browser emergency-suppression signal. Neither interval has a dispatch
+  path.
+- The maximum-minutes value is a run ceiling, not a nudge schedule.
+- Each independently opted-in thread can continue in the background. There is
+  no single background owner and no project-wide prompt.
+- At timeout handoff, the dispatcher re-reads the exact authority revision,
+  completed turn, thread policy, queue, provider readiness, caps, pending
+  approvals or user input, plan state, errors, local exact-thread composer
+  draft, and Stop state. Stale or missing evidence fails closed.
+
+## Operator work and dispatch
+
+- Once the server accepts an operator follow-up, its exact-thread FIFO queue and
+  resulting provider work outrank Auto Nudge. A running, starting, connecting,
+  or otherwise unsettled provider turn is never interrupted.
+- An unsent draft is local to its renderer. The dispatching renderer checks its
+  own exact-thread draft, but the server cannot reserve intent that another
+  device has not submitted or acknowledge a remote draft it cannot see.
+- Dispatch is rejected for archived/deleted threads, Off or stale authority,
+  background sends without exact-thread opt-in, the configuration baseline,
+  an already-consumed terminal turn, pending provider work, accepted manual
+  FIFO work, or an exhausted/invalid cap.
+- An accepted dispatch atomically records the exact completed turn, adds the
+  editable standing-order text as an ordinary visible user message, and starts
+  the next provider turn through the normal orchestration path.
+- The client marks an exact terminal identity before an uncertain transport
+  handoff and does not retry it. The server also serializes commands and checks
+  the current revision, current completed turn, message id, and last-dispatched
+  turn. A transport failure may skip one nudge; it must not cause duplicate
+  paid sends.
+
+## Stop, persistence, and scope
+
+- Per-thread Stop revokes that thread's authority. Off, provider/config changes,
+  archive/delete, manual work, and the hard caps also prevent dispatch without
+  sending a provider interrupt.
+- Emergency Stop sets a durable browser/host suppression barrier and requests
+  Stop for known connected threads. The background coordinator periodically
+  re-reads that barrier so renderers on different local ports converge.
+- The emergency barrier is not a server-global signal across unrelated
+  machines. A device that has not received the barrier cannot know about it;
+  operators must secure and monitor every client they authorize.
+- Exact-thread policy and last-dispatched accounting are durable server
+  projection state. A bounded 256-entry session-storage ledger provides
+  additional renderer-local deduplication but is never dispatch authority.
+- Corrupt, oversized, out-of-range, unknown, or unavailable state fails closed.
+
+Every automated follow-up is a real provider request and may consume tokens,
+credits, quota, or money quickly. Operators are responsible for provider
+charges, and Club Code cannot reimburse consumed usage. Use conservative caps,
+carefully scoped exact-thread prompts or skills, and active monitoring,
+including the phone Web UI when away.

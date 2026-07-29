@@ -366,6 +366,22 @@ async function waitForToast(title: string, count = 1): Promise<void> {
   );
 }
 
+async function dismissToast(title: string): Promise<void> {
+  await waitForElement(
+    () =>
+      Array.from(document.querySelectorAll<HTMLElement>('[data-slot="toast-title"]')).find(
+        (element) => element.textContent === title,
+      ) ?? null,
+    `Expected "${title}" toast before dismissing it`,
+  );
+  const closeButton = await waitForElement(
+    () => document.querySelector<HTMLButtonElement>('[data-slot="toast-close"]'),
+    `Expected dismiss control for "${title}" toast`,
+  );
+  closeButton.click();
+  await waitForNoToast(title);
+}
+
 async function waitForNoToast(title: string): Promise<void> {
   await vi.waitFor(
     () => {
@@ -586,7 +602,10 @@ describe("Keybindings update toast", () => {
     try {
       sendServerConfigUpdatedPush([]);
       await waitForToast("Keybindings updated");
-      await waitForNoToast("Keybindings updated");
+      // Base UI pauses automatic toast dismissal while the browser page is out
+      // of focus. Browser files run in parallel, so explicitly dismiss the setup
+      // toast instead of coupling the replay assertion to a focus-sensitive timer.
+      await dismissToast("Keybindings updated");
 
       // Remount the app — onServerConfigUpdated replays the cached value
       // synchronously on subscribe. This should NOT produce a toast.

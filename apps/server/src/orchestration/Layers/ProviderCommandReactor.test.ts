@@ -115,9 +115,14 @@ function manualFollowUpCommands(suffix: string, createdAt: string) {
 const deriveServerPathsSync = (baseDir: string, devUrl: URL | undefined) =>
   Effect.runSync(deriveServerPaths(baseDir, devUrl).pipe(Effect.provide(NodeServices.layer)));
 
+// A full Turbo run can saturate Windows while each reactor harness initializes SQLite and
+// applies migrations. Keep the tighter POSIX deadline, but allow Windows scheduling contention
+// to delay the otherwise sub-second reactor work without turning it into a false failure.
+const REACTOR_EXPECTATION_TIMEOUT_MS = process.platform === "win32" ? 10_000 : 2_000;
+
 async function waitFor(
   predicate: () => boolean | Promise<boolean>,
-  timeoutMs = 2000,
+  timeoutMs = REACTOR_EXPECTATION_TIMEOUT_MS,
 ): Promise<void> {
   const deadline = performance.now() + timeoutMs;
   while (true) {

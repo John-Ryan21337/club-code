@@ -73,6 +73,7 @@ import { ComposerPendingApprovalActions } from "./ComposerPendingApprovalActions
 import { CompactComposerControlsMenu } from "./CompactComposerControlsMenu";
 import { ComposerAttachImageButton } from "./ComposerAttachImageButton";
 import { ComposerCameraButton } from "./ComposerCameraButton";
+import { ComposerPresentationToggle } from "./ComposerPresentationToggle";
 import { supportsLiveCameraCapture } from "./cameraCapture";
 import { ComposerPrimaryActions } from "./ComposerPrimaryActions";
 import { ComposerPendingApprovalPanel } from "./ComposerPendingApprovalPanel";
@@ -128,8 +129,9 @@ import type { PendingApproval, PendingUserInput } from "../../session-logic";
 import { deriveLatestContextWindowSnapshot } from "../../lib/contextWindow";
 import { formatProviderSkillDisplayName } from "../../providerSkillPresentation";
 import { searchProviderSkills } from "../../providerSkillSearch";
-import { useHasOnScreenKeyboard } from "../../hooks/useMediaQuery";
-import { useSettings } from "../../hooks/useSettings";
+import { useHasOnScreenKeyboard, useMediaQuery } from "../../hooks/useMediaQuery";
+import { useSettings, useUpdateSettings } from "../../hooks/useSettings";
+import { createMobileOptimizedPresentationPatch } from "../../mobilePresentation";
 import { domSnapshot, mobileDebugLog } from "../../lib/mobileDebugLog";
 import {
   applyClaudePermissionMode,
@@ -1151,6 +1153,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const ambianceComposerRing = useSettings(
     (appSettings) => appSettings.ambianceEnabled && appSettings.ambianceSurfaceComposer,
   );
+  const viewportMatchesMobile = useMediaQuery("max-md");
+  const { updateSettings } = useUpdateSettings();
+  const toggleMobileOptimizedPresentation = useCallback(() => {
+    updateSettings(createMobileOptimizedPresentationPatch(!settings.mobileOptimizedPresentation));
+  }, [settings.mobileOptimizedPresentation, updateSettings]);
   const composerProviderControls = useMemo(
     () => ({
       showInteractionModeToggle: getProviderInteractionModeToggle(
@@ -3299,6 +3306,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 <ComposerCameraButton
                   disabled={pendingUserInputs.length > 0 || activeThreadId === null}
                   onClick={openComposerCamera}
+                />
+                <ComposerPresentationToggle
+                  mobileOptimized={settings.mobileOptimizedPresentation}
+                  viewportMobile={viewportMatchesMobile}
+                  onToggle={toggleMobileOptimizedPresentation}
                 />
                 <ProviderModelPicker
                   compact={isComposerFooterCompact}

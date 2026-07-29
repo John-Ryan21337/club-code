@@ -11,6 +11,7 @@ import {
   readBrowserClientSettings,
   readBrowserSavedEnvironmentRegistry,
   readBrowserSavedEnvironmentSecret,
+  writeBrowserClientSettings,
   writeBrowserSavedEnvironmentRegistry,
   writeBrowserSavedEnvironmentSecret,
 } from "./clientPersistenceStorage";
@@ -86,6 +87,18 @@ describe("clientPersistenceStorage", () => {
     expect(readBrowserClientSettings()).toEqual(DEFAULT_CLIENT_SETTINGS);
     expect(testWindow.localStorage.getItem(CLIENT_SETTINGS_STORAGE_KEY)).not.toBeNull();
     expect(testWindow.localStorage.getItem(LEGACY_CLIENT_SETTINGS_STORAGE_KEY)).toBeNull();
+  });
+
+  it("persists the mobile presentation preference in the per-device client document", () => {
+    getTestWindow();
+    const settings = {
+      ...DEFAULT_CLIENT_SETTINGS,
+      mobileOptimizedPresentation: true,
+    };
+
+    writeBrowserClientSettings(settings);
+
+    expect(readBrowserClientSettings()).toEqual(settings);
   });
 
   it("migrates legacy saved environments into the Cafe Code key", () => {

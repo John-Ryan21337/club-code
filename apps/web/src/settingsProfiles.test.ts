@@ -35,6 +35,7 @@ describe("settings profile library", () => {
     const settings = {
       ...DEFAULT_UNIFIED_SETTINGS,
       fallingEffectsEnabled: true,
+      mobileOptimizedPresentation: true,
       timestampFormat: "24-hour",
       autoNudgeMode: "prompt",
       autoNudgeMaxRounds: 99,
@@ -62,6 +63,7 @@ describe("settings profile library", () => {
 
     expect(payload.theme).toBe("dark");
     expect(payload.clientSettings.fallingEffectsEnabled).toBe(true);
+    expect(payload.clientSettings.mobileOptimizedPresentation).toBe(true);
     expect(payload.clientSettings.timestampFormat).toBe("24-hour");
     expect(Object.keys(payload.clientSettings)).toEqual([...SETTINGS_PROFILE_CLIENT_KEYS]);
     expect(payload.clientSettings).not.toHaveProperty("autoNudgeMode");
@@ -84,6 +86,7 @@ describe("settings profile library", () => {
       {
         ...DEFAULT_UNIFIED_SETTINGS,
         fallingEffectDensity: 1,
+        mobileOptimizedPresentation: true,
         sidebarThreadPreviewCount: 3,
       },
       "dark",
@@ -102,6 +105,7 @@ describe("settings profile library", () => {
     expect(document.profiles).toHaveLength(1);
     expect(document.profiles[0]).not.toHaveProperty("id");
     expect(document.profiles[0].clientSettings.fallingEffectDensity).toBe(1);
+    expect(document.profiles[0].clientSettings.mobileOptimizedPresentation).toBe(true);
 
     const restored = createSettingsProfileLibraryStore(storage);
     expect(restored.getSnapshot()).toEqual(store.getSnapshot());

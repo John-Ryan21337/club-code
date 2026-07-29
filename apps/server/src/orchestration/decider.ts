@@ -743,6 +743,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           `Background Auto Nudge is not enabled for thread '${command.threadId}'.`,
         );
       }
+      // Wall-clock idleness is never authority. Only the exact current
+      // provider-confirmed completed turn can authorize one automated send.
       if (
         targetThread.latestTurn === null ||
         targetThread.latestTurn.state !== "completed" ||

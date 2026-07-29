@@ -1,4 +1,10 @@
-import type { ServerProjectSystemTelemetryResult } from "@cafecode/contracts";
+import {
+  MAX_GPU_ADAPTER_INDEX,
+  MAX_GPU_ADAPTER_NAME_LENGTH,
+  MAX_HARDWARE_TEMPERATURE_CELSIUS,
+  MIN_HARDWARE_TEMPERATURE_CELSIUS,
+  type ServerProjectSystemTelemetryResult,
+} from "@cafecode/contracts";
 import * as DateTime from "effect/DateTime";
 
 import type { MatrixColorFrame } from "../../windowAtmosphere";
@@ -30,6 +36,7 @@ export interface ProjectTelemetryHistoryPoint {
   readonly projectVolumePercent: number | null;
   readonly networkReceiveBytesPerSecond: number | null;
   readonly networkTransmitBytesPerSecond: number | null;
+  readonly gpuAdapters: readonly ProjectTelemetryGpuAdapterHistoryPoint[];
   readonly gpuPercent: number | null;
   readonly vramPercent: number | null;
   readonly temperatureCpuCelsius: number | null;
@@ -41,7 +48,33 @@ export interface ProjectTelemetryHistoryPoint {
   readonly temperatureOtherCelsius: number | null;
 }
 
+export interface ProjectTelemetryGpuAdapterHistoryPoint {
+  readonly key: string;
+  readonly utilizationPercent: number;
+  readonly memoryUtilizationPercent: number | null;
+  readonly temperatureCelsius: number | null;
+}
+
+export interface ProjectTelemetryGpuAdapterProjection {
+  /**
+   * Source adapter indexes are stable within the provider sample stream. Keep
+   * the source index in the key so a missing adapter never renumbers another
+   * adapter's history.
+   */
+  readonly key: string;
+  readonly index: number;
+  readonly label: string;
+  readonly name: string;
+  readonly utilizationPercent: number;
+  readonly memoryUtilizationPercent: number | null;
+  readonly memoryTotalBytes: number | null;
+  readonly memoryUsedBytes: number | null;
+  readonly memoryAvailableBytes: number | null;
+  readonly temperatureCelsius: number | null;
+}
+
 export interface ProjectTelemetryGpuProjection {
+  readonly adapters: readonly ProjectTelemetryGpuAdapterProjection[];
   readonly gpuPercent: number | null;
   readonly gpuDetail: string;
   readonly vramPercent: number | null;
@@ -183,6 +216,7 @@ export function deriveProjectTelemetryStrokePalette(
 }
 
 const unavailableGpuProjection = (): ProjectTelemetryGpuProjection => ({
+  adapters: [],
   gpuPercent: null,
   gpuDetail: "GPU utilization is unavailable from this backend.",
   vramPercent: null,
@@ -201,6 +235,39 @@ function finiteNonNegativeInteger(value: unknown): number | null {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
 }
 
+function finiteGpuAdapterIndex(value: unknown): number | null {
+  return typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= 0 &&
+    value <= MAX_GPU_ADAPTER_INDEX
+    ? value
+    : null;
+}
+
+function finiteTemperature(value: unknown): number | null {
+  return typeof value === "number" &&
+    Number.isFinite(value) &&
+    value >= MIN_HARDWARE_TEMPERATURE_CELSIUS &&
+    value <= MAX_HARDWARE_TEMPERATURE_CELSIUS
+    ? value
+    : null;
+}
+
+// Adapter names are third-party probe text. Mirror the shared contract's
+// display-safety boundary here because this projection renders the name and
+// can also be exercised by injected/stale transports before schema decoding.
+const GPU_ADAPTER_DISPLAY_NAME_PATTERN = /^[^\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Zl}\p{Zp}]+$/u;
+
+function gpuAdapterName(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const name = value.trim();
+  return name.length > 0 &&
+    name.length <= MAX_GPU_ADAPTER_NAME_LENGTH &&
+    GPU_ADAPTER_DISPLAY_NAME_PATTERN.test(name)
+    ? name
+    : null;
+}
+
 function readDetail(record: Record<string, unknown>, fallback: string): string {
   return typeof record.detail === "string" && record.detail.trim().length > 0
     ? record.detail
@@ -208,9 +275,13 @@ function readDetail(record: Record<string, unknown>, fallback: string): string {
 }
 
 /**
- * Reduce the bounded GPU contract into the panel's host-wide peak utilization
- * and combined VRAM view. The defensive object checks keep this boundary
- * fail-closed for stale remote clients or malformed injected test transports.
+ * Preserve every bounded GPU adapter while retaining the compatibility
+ * host-wide peak-utilization and combined-VRAM fields. Adapter presentation is
+ * sorted by the source index and keyed by that same index so GPU 1/GPU 2 labels
+ * and their history do not change when the source array order changes.
+ *
+ * The defensive object checks keep this boundary fail-closed for stale remote
+ * clients or malformed injected test transports.
  */
 export const projectTelemetryGpuAdapter: ProjectTelemetryGpuAdapter = (telemetry) => {
   const gpu = (telemetry as unknown as { readonly gpu?: unknown }).gpu;
@@ -235,30 +306,60 @@ export const projectTelemetryGpuAdapter: ProjectTelemetryGpuAdapter = (telemetry
   let vramUsedBytes = 0;
   let vramTotalBytes = 0;
   let vramAvailable = true;
+  const adapterProjections: ProjectTelemetryGpuAdapterProjection[] = [];
+  const seenIndexes = new Set<number>();
   for (const adapter of adapters) {
     if (!adapter || typeof adapter !== "object") return unavailable;
     const record = adapter as Record<string, unknown>;
+    const index = finiteGpuAdapterIndex(record.index);
+    const name = gpuAdapterName(record.name);
     const utilization = finitePercent(record.utilizationPercent);
-    if (utilization === null) return unavailable;
+    if (index === null || name === null || utilization === null || seenIndexes.has(index)) {
+      return unavailable;
+    }
+    seenIndexes.add(index);
     gpuPercent = Math.max(gpuPercent, utilization);
     const memoryPercent = finitePercent(record.memoryUtilizationPercent);
     const memoryTotal = finiteNonNegativeInteger(record.memoryTotalBytes);
     const memoryUsed = finiteNonNegativeInteger(record.memoryUsedBytes);
-    if (
-      memoryPercent === null ||
-      memoryTotal === null ||
-      memoryTotal === 0 ||
-      memoryUsed === null ||
-      memoryUsed > memoryTotal
-    ) {
+    const memory =
+      memoryPercent !== null &&
+      memoryTotal !== null &&
+      memoryTotal > 0 &&
+      memoryUsed !== null &&
+      memoryUsed <= memoryTotal
+        ? { percent: memoryPercent, total: memoryTotal, used: memoryUsed }
+        : null;
+    if (memory === null) {
       vramAvailable = false;
-      continue;
+    } else {
+      vramUsedBytes += memory.used;
+      vramTotalBytes += memory.total;
     }
-    vramUsedBytes += memoryUsed;
-    vramTotalBytes += memoryTotal;
+    adapterProjections.push({
+      key: `gpu-${index}`,
+      index,
+      label: `GPU ${index + 1}`,
+      name,
+      utilizationPercent: utilization,
+      memoryUtilizationPercent: memory?.percent ?? null,
+      memoryTotalBytes: memory?.total ?? null,
+      memoryUsedBytes: memory?.used ?? null,
+      memoryAvailableBytes: memory === null ? null : memory.total - memory.used,
+      temperatureCelsius:
+        record.temperatureCelsius === undefined
+          ? null
+          : finiteTemperature(record.temperatureCelsius),
+    });
   }
+  adapterProjections.sort((left, right) => left.index - right.index);
   const adapterLabel = `${adapters.length} GPU adapter${adapters.length === 1 ? "" : "s"}`;
-  const gpuProjection = { ...unavailable, gpuPercent, gpuDetail: `Peak across ${adapterLabel}` };
+  const gpuProjection = {
+    ...unavailable,
+    adapters: adapterProjections,
+    gpuPercent,
+    gpuDetail: `Peak across ${adapterLabel}`,
+  };
   if (
     !vramAvailable ||
     !Number.isSafeInteger(vramUsedBytes) ||
@@ -362,6 +463,12 @@ export function toProjectTelemetryHistoryPoint(
       telemetry.network.status === "available" ? telemetry.network.receiveBytesPerSecond : null,
     networkTransmitBytesPerSecond:
       telemetry.network.status === "available" ? telemetry.network.transmitBytesPerSecond : null,
+    gpuAdapters: gpu.adapters.map((adapter) => ({
+      key: adapter.key,
+      utilizationPercent: adapter.utilizationPercent,
+      memoryUtilizationPercent: adapter.memoryUtilizationPercent,
+      temperatureCelsius: adapter.temperatureCelsius,
+    })),
     gpuPercent: gpu.gpuPercent,
     vramPercent: gpu.vramPercent,
     temperatureCpuCelsius: temperatures.cpu.celsius,
