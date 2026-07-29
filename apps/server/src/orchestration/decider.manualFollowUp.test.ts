@@ -151,6 +151,7 @@ function enqueueCommand(index: number) {
     commandId: CommandId.make(`command-enqueue-${index}`),
     threadId: THREAD_ID,
     followUpId: ManualFollowUpId.make(`follow-up-${index}`),
+    reservationCommandId: CommandId.make(`command-reserve-${index}`),
     message: {
       messageId: MessageId.make(`message-follow-up-${index}`),
       role: "user" as const,
@@ -170,42 +171,65 @@ function enqueueCommand(index: number) {
   };
 }
 
+function reserveCommand(index: number, commandId = CommandId.make(`command-reserve-${index}`)) {
+  const enqueue = enqueueCommand(index);
+  return {
+    type: "thread.manual-follow-up.reserve" as const,
+    commandId,
+    threadId: enqueue.threadId,
+    followUpId: enqueue.followUpId,
+    messageId: enqueue.message.messageId,
+    dispatch: enqueue.dispatch,
+    createdAt: enqueue.createdAt,
+  };
+}
+
+function reserveAndEnqueue(readModel: OrchestrationReadModel, index: number) {
+  return Effect.gen(function* () {
+    const reserved = asEvents(
+      yield* decideOrchestrationCommand({
+        readModel,
+        command: reserveCommand(index),
+      }),
+    );
+    const reservedReadModel = yield* projectEvents(readModel, reserved);
+    const enqueued = asEvents(
+      yield* decideOrchestrationCommand({
+        readModel: reservedReadModel,
+        command: enqueueCommand(index),
+      }),
+    );
+    return [...reserved, ...enqueued];
+  });
+}
+
 it.effect("persists bounded FIFO intent and rejects duplicate ids or out-of-order activation", () =>
   Effect.gen(function* () {
     let readModel = makeReadModel();
-    const first = asEvents(
-      yield* decideOrchestrationCommand({
-        readModel,
-        command: enqueueCommand(1),
-      }),
-    );
+    const first = yield* reserveAndEnqueue(readModel, 1);
     assert.deepEqual(
       first.map((event) => event.type),
-      ["thread.manual-follow-up-enqueued", "thread.manual-follow-up-count-changed"],
+      [
+        "thread.manual-follow-up-reserved",
+        "thread.manual-follow-up-count-changed",
+        "thread.manual-follow-up-enqueued",
+      ],
     );
-    assert.equal(first[0]?.type, "thread.manual-follow-up-enqueued");
-    if (first[0]?.type === "thread.manual-follow-up-enqueued") {
-      assert.deepEqual(first[0].payload.item.dispatch, enqueueCommand(1).dispatch);
+    assert.equal(first[2]?.type, "thread.manual-follow-up-enqueued");
+    if (first[2]?.type === "thread.manual-follow-up-enqueued") {
+      assert.deepEqual(first[2].payload.item.dispatch, enqueueCommand(1).dispatch);
     }
     readModel = yield* projectEvents(readModel, first);
 
     const duplicate = yield* Effect.flip(
       decideOrchestrationCommand({
         readModel,
-        command: {
-          ...enqueueCommand(1),
-          commandId: CommandId.make("command-enqueue-duplicate"),
-        },
+        command: reserveCommand(1, CommandId.make("command-reserve-duplicate")),
       }),
     );
     assert.match(duplicate.detail, /already exists/i);
 
-    const second = asEvents(
-      yield* decideOrchestrationCommand({
-        readModel,
-        command: enqueueCommand(2),
-      }),
-    );
+    const second = yield* reserveAndEnqueue(readModel, 2);
     readModel = yield* projectEvents(readModel, second);
     assert.deepEqual(
       readModel.threads[0]?.manualFollowUps.map((item) => item.id),
@@ -228,21 +252,13 @@ it.effect("persists bounded FIFO intent and rejects duplicate ids or out-of-orde
     assert.match(outOfOrder.detail, /FIFO head/i);
 
     for (let index = 3; index <= 32; index += 1) {
-      readModel = yield* projectEvents(
-        readModel,
-        asEvents(
-          yield* decideOrchestrationCommand({
-            readModel,
-            command: enqueueCommand(index),
-          }),
-        ),
-      );
+      readModel = yield* projectEvents(readModel, yield* reserveAndEnqueue(readModel, index));
     }
     assert.equal(readModel.threads[0]?.manualFollowUps.length, 32);
     const overflow = yield* Effect.flip(
       decideOrchestrationCommand({
         readModel,
-        command: enqueueCommand(33),
+        command: reserveCommand(33),
       }),
     );
     assert.match(overflow.detail, /maximum 32 manual follow-ups/i);
@@ -268,21 +284,209 @@ it.effect("persists bounded FIFO intent and rejects duplicate ids or out-of-orde
   }),
 );
 
+it.effect("finalizes reservations in place without changing FIFO time or immutable routing", () =>
+  Effect.gen(function* () {
+    let readModel = makeReadModel();
+    const firstReservedAt = "2026-07-28T12:00:01.000Z";
+    const secondReservedAt = "2026-07-28T12:00:02.000Z";
+    const firstReservation = {
+      ...reserveCommand(1),
+      createdAt: firstReservedAt,
+    };
+    const secondReservation = {
+      ...reserveCommand(2),
+      createdAt: secondReservedAt,
+    };
+    const firstReservedEvents = asEvents(
+      yield* decideOrchestrationCommand({
+        readModel,
+        command: firstReservation,
+      }),
+    );
+    readModel = yield* projectEvents(readModel, firstReservedEvents);
+    readModel = yield* projectEvents(
+      readModel,
+      asEvents(
+        yield* decideOrchestrationCommand({
+          readModel,
+          command: secondReservation,
+        }),
+      ),
+    );
+
+    const secondFinalization = asEvents(
+      yield* decideOrchestrationCommand({
+        readModel,
+        command: {
+          ...enqueueCommand(2),
+          createdAt: "2026-07-28T12:00:10.000Z",
+          // JSON member order is not routing state. A client may re-encode
+          // the same immutable snapshot in another property order.
+          dispatch: {
+            interactionMode: secondReservation.dispatch.interactionMode,
+            runtimeMode: secondReservation.dispatch.runtimeMode,
+            titleSeed: secondReservation.dispatch.titleSeed,
+            modelSelection: {
+              model: secondReservation.dispatch.modelSelection.model,
+              instanceId: secondReservation.dispatch.modelSelection.instanceId,
+            },
+          },
+        },
+      }),
+    );
+    const secondEnqueued = secondFinalization[0];
+    assert.equal(secondEnqueued?.type, "thread.manual-follow-up-enqueued");
+    if (secondEnqueued?.type === "thread.manual-follow-up-enqueued") {
+      assert.equal(secondEnqueued.payload.item.enqueuedAt, secondReservedAt);
+      assert.deepEqual(secondEnqueued.payload.item.dispatch, secondReservation.dispatch);
+    }
+    readModel = yield* projectEvents(readModel, secondFinalization);
+    assert.deepEqual(
+      readModel.threads[0]?.manualFollowUps.map((item) => [item.id, item.status]),
+      [
+        [ManualFollowUpId.make("follow-up-1"), "reserving"],
+        [ManualFollowUpId.make("follow-up-2"), "queued"],
+      ],
+    );
+
+    const routingDrift = yield* Effect.flip(
+      decideOrchestrationCommand({
+        readModel,
+        command: {
+          ...enqueueCommand(1),
+          dispatch: {
+            ...firstReservation.dispatch,
+            modelSelection: {
+              ...firstReservation.dispatch.modelSelection,
+              model: "claude-sonnet-4",
+            },
+          },
+        },
+      }),
+    );
+    assert.match(routingDrift.detail, /immutable reservation receipt/i);
+
+    const firstFinalization = asEvents(
+      yield* decideOrchestrationCommand({
+        readModel,
+        command: {
+          ...enqueueCommand(1),
+          createdAt: "2026-07-28T12:00:11.000Z",
+        },
+      }),
+    );
+    readModel = yield* projectEvents(readModel, firstFinalization);
+    assert.deepEqual(
+      readModel.threads[0]?.manualFollowUps.map((item) => [item.id, item.status, item.enqueuedAt]),
+      [
+        [ManualFollowUpId.make("follow-up-1"), "queued", firstReservedAt],
+        [ManualFollowUpId.make("follow-up-2"), "queued", secondReservedAt],
+      ],
+    );
+
+    const replayedReservationEvent = firstReservedEvents[0];
+    assert.equal(replayedReservationEvent?.type, "thread.manual-follow-up-reserved");
+    if (replayedReservationEvent?.type === "thread.manual-follow-up-reserved") {
+      const beforeReplayUpdatedAt = readModel.threads[0]?.updatedAt;
+      readModel = yield* projectEvents(readModel, [replayedReservationEvent]);
+      assert.equal(readModel.threads[0]?.manualFollowUps.length, 2);
+      assert.equal(readModel.threads[0]?.manualFollowUps[0]?.status, "queued");
+      assert.equal(readModel.threads[0]?.updatedAt, beforeReplayUpdatedAt);
+    }
+  }),
+);
+
+it.effect(
+  "grants prompt-free operator priority before payload work and permits safe cancellation",
+  () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(Date.parse(NOW) + 1_000);
+      let readModel = makeReadModel(makeThread({ autoNudgeEnabled: true }));
+      const reserved = asEvents(
+        yield* decideOrchestrationCommand({
+          readModel,
+          command: reserveCommand(1),
+        }),
+      );
+      assert.deepEqual(
+        reserved.map((event) => event.type),
+        ["thread.manual-follow-up-reserved", "thread.manual-follow-up-count-changed"],
+      );
+      const reservedEvent = reserved[0];
+      assert.equal(reservedEvent?.type, "thread.manual-follow-up-reserved");
+      if (reservedEvent?.type === "thread.manual-follow-up-reserved") {
+        assert.equal("message" in reservedEvent.payload.item, false);
+        assert.equal("attachments" in reservedEvent.payload.item, false);
+      }
+      readModel = yield* projectEvents(readModel, reserved);
+
+      const blockedAutoNudge = yield* Effect.flip(
+        decideOrchestrationCommand({
+          readModel,
+          command: {
+            type: "thread.auto-nudge.dispatch",
+            commandId: CommandId.make("command-auto-nudge-blocked-by-reservation"),
+            threadId: THREAD_ID,
+            expectedAuthorityRevision: 1,
+            completedTurnId: TurnId.make("turn-manual-follow-up-completed"),
+            dispatchSource: "foreground",
+            messageId: MessageId.make("message-auto-nudge-blocked-by-reservation"),
+            createdAt: NOW,
+          },
+        }),
+      );
+      assert.match(blockedAutoNudge.detail, /manual.*priority/i);
+
+      const prematureActivation = yield* Effect.flip(
+        decideOrchestrationCommand({
+          readModel,
+          command: {
+            type: "thread.manual-follow-up.activate",
+            commandId: CommandId.make("command-activate-reservation"),
+            threadId: THREAD_ID,
+            followUpId: ManualFollowUpId.make("follow-up-1"),
+            activationMode: "operator",
+            createdAt: NOW,
+          },
+        }),
+      );
+      assert.match(prematureActivation.detail, /has not received.*payload/i);
+
+      const mismatchedEnqueue = yield* Effect.flip(
+        decideOrchestrationCommand({
+          readModel,
+          command: {
+            ...enqueueCommand(1),
+            reservationCommandId: CommandId.make("wrong-reservation-receipt"),
+          },
+        }),
+      );
+      assert.match(mismatchedEnqueue.detail, /immutable reservation receipt/i);
+
+      const cancelled = asEvents(
+        yield* decideOrchestrationCommand({
+          readModel,
+          command: {
+            type: "thread.manual-follow-up.cancel",
+            commandId: CommandId.make("command-cancel-reservation"),
+            threadId: THREAD_ID,
+            followUpId: ManualFollowUpId.make("follow-up-1"),
+            createdAt: NOW,
+          },
+        }),
+      );
+      readModel = yield* projectEvents(readModel, cancelled);
+      assert.equal(readModel.threads[0]?.manualFollowUps.length, 0);
+    }),
+);
+
 it.effect(
   "atomically activates with queued dispatch settings, blocks Auto Nudge, and safely retries a released handoff",
   () =>
     Effect.gen(function* () {
       yield* TestClock.setTime(Date.parse(NOW) + 1_000);
       let readModel = makeReadModel(makeThread({ autoNudgeEnabled: true }));
-      readModel = yield* projectEvents(
-        readModel,
-        asEvents(
-          yield* decideOrchestrationCommand({
-            readModel,
-            command: enqueueCommand(1),
-          }),
-        ),
-      );
+      readModel = yield* projectEvents(readModel, yield* reserveAndEnqueue(readModel, 1));
 
       const blockedAutoNudge = yield* Effect.flip(
         decideOrchestrationCommand({
@@ -496,15 +700,7 @@ it.effect("keeps automatic follow-ups queued across Stop until an operator expli
           }
         : null,
     });
-    readModel = yield* projectEvents(
-      readModel,
-      asEvents(
-        yield* decideOrchestrationCommand({
-          readModel,
-          command: enqueueCommand(1),
-        }),
-      ),
-    );
+    readModel = yield* projectEvents(readModel, yield* reserveAndEnqueue(readModel, 1));
 
     const automatic = yield* Effect.flip(
       decideOrchestrationCommand({
@@ -545,15 +741,7 @@ it.effect("keeps automatic follow-ups queued across Stop until an operator expli
 it.effect("server-blocks raced automatic activation but permits an explicit FIFO steer", () =>
   Effect.gen(function* () {
     let readModel = makeReadModel(makeThread({ running: true }));
-    readModel = yield* projectEvents(
-      readModel,
-      asEvents(
-        yield* decideOrchestrationCommand({
-          readModel,
-          command: enqueueCommand(1),
-        }),
-      ),
-    );
+    readModel = yield* projectEvents(readModel, yield* reserveAndEnqueue(readModel, 1));
     const racedAutomaticActivation = yield* Effect.flip(
       decideOrchestrationCommand({
         readModel,

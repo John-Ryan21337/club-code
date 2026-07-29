@@ -73,29 +73,42 @@ const asManualFollowUpId = (value: string): ManualFollowUpId => ManualFollowUpId
 function manualFollowUpCommands(suffix: string, createdAt: string) {
   const followUpId = asManualFollowUpId(`manual-follow-up-${suffix}`);
   const activationCommandId = CommandId.make(`cmd-manual-follow-up-activate-${suffix}`);
+  const reservationCommandId = CommandId.make(`cmd-manual-follow-up-reserve-${suffix}`);
+  const messageId = asMessageId(`manual-follow-up-message-${suffix}`);
+  const dispatch = {
+    modelSelection: {
+      instanceId: ProviderInstanceId.make("codex"),
+      model: "gpt-5-codex",
+    },
+    titleSeed: "Thread",
+    runtimeMode: "approval-required" as const,
+    interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+  };
   return {
     followUpId,
     activationCommandId,
+    reserve: {
+      type: "thread.manual-follow-up.reserve" as const,
+      commandId: reservationCommandId,
+      threadId: ThreadId.make("thread-1"),
+      followUpId,
+      messageId,
+      dispatch,
+      createdAt,
+    },
     enqueue: {
       type: "thread.manual-follow-up.enqueue" as const,
       commandId: CommandId.make(`cmd-manual-follow-up-enqueue-${suffix}`),
       threadId: ThreadId.make("thread-1"),
       followUpId,
+      reservationCommandId,
       message: {
-        messageId: asMessageId(`manual-follow-up-message-${suffix}`),
+        messageId,
         role: "user" as const,
         text: `manual follow-up ${suffix}`,
         attachments: [],
       },
-      dispatch: {
-        modelSelection: {
-          instanceId: ProviderInstanceId.make("codex"),
-          model: "gpt-5-codex",
-        },
-        titleSeed: "Thread",
-        runtimeMode: "approval-required" as const,
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-      },
+      dispatch,
       createdAt,
     },
     activate: {
@@ -602,6 +615,7 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness();
     const commands = manualFollowUpCommands("accepted", "2026-01-01T00:00:01.000Z");
 
+    await Effect.runPromise(harness.engine.dispatch(commands.reserve));
     await Effect.runPromise(harness.engine.dispatch(commands.enqueue));
     await Effect.runPromise(harness.engine.dispatch(commands.activate));
 
@@ -627,6 +641,7 @@ describe("ProviderCommandReactor", () => {
     });
     const commands = manualFollowUpCommands("rejected", "2026-01-01T00:00:01.000Z");
 
+    await Effect.runPromise(harness.engine.dispatch(commands.reserve));
     await Effect.runPromise(harness.engine.dispatch(commands.enqueue));
     await Effect.runPromise(harness.engine.dispatch(commands.activate));
 
@@ -665,6 +680,7 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness({ startReactor: false });
     const commands = manualFollowUpCommands("restart-release", "2026-01-01T00:00:01.000Z");
 
+    await Effect.runPromise(harness.engine.dispatch(commands.reserve));
     await Effect.runPromise(harness.engine.dispatch(commands.enqueue));
     await Effect.runPromise(harness.engine.dispatch(commands.activate));
     const beforeRestart = await harness.readModel();
@@ -695,6 +711,7 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness({ startReactor: false });
     const commands = manualFollowUpCommands("restart-accept", "2026-01-01T00:00:01.000Z");
 
+    await Effect.runPromise(harness.engine.dispatch(commands.reserve));
     await Effect.runPromise(harness.engine.dispatch(commands.enqueue));
     await Effect.runPromise(harness.engine.dispatch(commands.activate));
     harness.runtimeSessions.push({

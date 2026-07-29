@@ -3670,6 +3670,8 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
     });
 
     it("keeps Enter-staged follow-ups visible until the operator explicitly steers", async () => {
+      const originalReadAsDataUrl = FileReader.prototype.readAsDataURL;
+      let releaseFileRead: (() => void) | null = null;
       const activeTurnId = "turn-enter-stages-follow-up" as TurnId;
       const baseSnapshot = createSnapshotForTargetUser({
         targetMessageId: "msg-user-enter-stages-follow-up" as MessageId,
@@ -3775,11 +3777,61 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
       });
 
       try {
+        FileReader.prototype.readAsDataURL = function (_blob: Blob): void {
+          const reader = this;
+          releaseFileRead = () => {
+            Object.defineProperty(reader, "result", {
+              configurable: true,
+              value: "data:image/png;base64,AQID",
+            });
+            reader.dispatchEvent(new ProgressEvent("load"));
+          };
+        };
         useComposerDraftStore
           .getState()
           .setPrompt(THREAD_REF, "First command should wait for explicit Steer");
+        const queuedImage = new File([new Uint8Array([1, 2, 3])], "queued.png", {
+          type: "image/png",
+        });
+        useComposerDraftStore.getState().addImage(THREAD_REF, {
+          type: "image",
+          id: "queued-follow-up-image",
+          name: queuedImage.name,
+          mimeType: queuedImage.type,
+          sizeBytes: queuedImage.size,
+          previewUrl: URL.createObjectURL(queuedImage),
+          file: queuedImage,
+        });
         await waitForLayout();
         await pressComposerKey("Enter");
+
+        await vi.waitFor(
+          () => {
+            const manualCommands = wsRequests.filter(
+              (request) =>
+                request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+                typeof request.type === "string" &&
+                request.type.startsWith("thread.manual-follow-up."),
+            );
+            expect(manualCommands.map((request) => request.type)).toEqual([
+              "thread.manual-follow-up.reserve",
+            ]);
+            const reservation = manualCommands[0];
+            expect("message" in reservation!).toBe(false);
+            expect("attachments" in reservation!).toBe(false);
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+        expect(releaseFileRead).not.toBeNull();
+        expect(useComposerDraftStore.getState().getComposerDraft(THREAD_REF)?.prompt).toBe(
+          "First command should wait for explicit Steer",
+        );
+        expect(useComposerDraftStore.getState().getComposerDraft(THREAD_REF)?.images).toHaveLength(
+          1,
+        );
+        const releaseQueuedFileRead = releaseFileRead as unknown as () => void;
+        releaseFileRead = null;
+        releaseQueuedFileRead();
 
         await vi.waitFor(
           () => {
@@ -3796,6 +3848,12 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
                 '.cafe-followup-steer-button[aria-label="Steer"]',
               ),
             ).toBeTruthy();
+            expect(
+              useComposerDraftStore.getState().getComposerDraft(THREAD_REF)?.prompt ?? "",
+            ).toBe("");
+            expect(
+              useComposerDraftStore.getState().getComposerDraft(THREAD_REF)?.images ?? [],
+            ).toHaveLength(0);
           },
           { timeout: 8_000, interval: 16 },
         );
@@ -3859,6 +3917,210 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
           { timeout: 8_000, interval: 16 },
         );
       } finally {
+        FileReader.prototype.readAsDataURL = originalReadAsDataUrl;
+        await mounted.cleanup();
+      }
+    });
+
+    it("waits for an in-flight reservation before cancelling a removed local row", async () => {
+      const activeTurnId = "turn-cancel-reserving-follow-up" as TurnId;
+      const baseSnapshot = createSnapshotForTargetUser({
+        targetMessageId: "msg-user-cancel-reserving-follow-up" as MessageId,
+        targetText: "active turn before cancellation race",
+      });
+      const runningSnapshot: OrchestrationReadModel = {
+        ...baseSnapshot,
+        threads: baseSnapshot.threads.map((thread) => ({
+          ...thread,
+          latestTurn: {
+            turnId: activeTurnId,
+            state: "running" as const,
+            requestedAt: isoAt(1_000),
+            startedAt: isoAt(1_001),
+            completedAt: null,
+            assistantMessageId: null,
+          },
+          session: {
+            ...thread.session!,
+            status: "running" as const,
+            activeTurnId,
+            updatedAt: isoAt(1_001),
+          },
+          updatedAt: isoAt(1_001),
+        })),
+      };
+      let nextSequence = runningSnapshot.snapshotSequence;
+      let releaseReservation: (() => void) | null = null;
+      const fileReadSpy = vi.spyOn(FileReader.prototype, "readAsDataURL");
+      const revokeObjectUrlSpy = vi.spyOn(URL, "revokeObjectURL");
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: runningSnapshot,
+        resolveRpc: (body) => {
+          if (
+            body._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+            body.type === "thread.manual-follow-up.reserve"
+          ) {
+            return new Promise<{ sequence: number }>((resolve) => {
+              releaseReservation = () => {
+                nextSequence += 1;
+                resolve({ sequence: nextSequence });
+              };
+            });
+          }
+          if (body._tag === ORCHESTRATION_WS_METHODS.dispatchCommand) {
+            nextSequence += 1;
+            return { sequence: nextSequence };
+          }
+          return undefined;
+        },
+      });
+
+      try {
+        const queuedImage = new File([new Uint8Array([4, 5, 6])], "cancelled.png", {
+          type: "image/png",
+        });
+        const originalPreviewUrl = URL.createObjectURL(queuedImage);
+        useComposerDraftStore
+          .getState()
+          .setPrompt(THREAD_REF, "Keep this draft after cancelling the queued copy");
+        useComposerDraftStore.getState().addImage(THREAD_REF, {
+          type: "image",
+          id: "cancel-reserving-image",
+          name: queuedImage.name,
+          mimeType: queuedImage.type,
+          sizeBytes: queuedImage.size,
+          previewUrl: originalPreviewUrl,
+          file: queuedImage,
+        });
+        await waitForLayout();
+        // Draft attachment persistence may read the File before submission.
+        // This assertion is scoped to the queue pipeline after Enter.
+        fileReadSpy.mockClear();
+        await pressComposerKey("Enter");
+
+        await vi.waitFor(
+          () => {
+            expect(
+              wsRequests.filter(
+                (request) =>
+                  request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+                  request.type === "thread.manual-follow-up.reserve",
+              ),
+            ).toHaveLength(1);
+            expect(releaseReservation).not.toBeNull();
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+        document
+          .querySelector<HTMLButtonElement>('button[aria-label="Remove queued message"]')!
+          .click();
+        await waitForLayout();
+        expect(
+          wsRequests.some(
+            (request) =>
+              request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+              request.type === "thread.manual-follow-up.cancel",
+          ),
+        ).toBe(false);
+        expect(fileReadSpy).not.toHaveBeenCalled();
+
+        const release = releaseReservation as unknown as () => void;
+        releaseReservation = null;
+        release();
+
+        await vi.waitFor(
+          () => {
+            const reservation = wsRequests.find(
+              (request) =>
+                request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+                request.type === "thread.manual-follow-up.reserve",
+            );
+            const cancellation = wsRequests.find(
+              (request) =>
+                request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+                request.type === "thread.manual-follow-up.cancel",
+            );
+            expect(cancellation?.followUpId).toBe(reservation?.followUpId);
+            expect(
+              wsRequests.some(
+                (request) =>
+                  request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+                  request.type === "thread.manual-follow-up.enqueue",
+              ),
+            ).toBe(false);
+            expect(document.querySelector('[data-cafe-followup-queue="true"]')).toBeNull();
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+        const retainedDraft = useComposerDraftStore.getState().getComposerDraft(THREAD_REF);
+        expect(retainedDraft?.prompt).toBe("Keep this draft after cancelling the queued copy");
+        expect(retainedDraft?.images).toHaveLength(1);
+        expect(retainedDraft?.images[0]?.previewUrl).toBe(originalPreviewUrl);
+        expect(revokeObjectUrlSpy).not.toHaveBeenCalledWith(originalPreviewUrl);
+        expect(fileReadSpy).not.toHaveBeenCalled();
+
+        // Clear-all must use the same reserve-then-cancel barrier; deleting the
+        // local row before reserve settlement would strand an invisible item.
+        fileReadSpy.mockClear();
+        await pressComposerKey("Enter");
+        await vi.waitFor(
+          () => {
+            expect(
+              wsRequests.filter(
+                (request) =>
+                  request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+                  request.type === "thread.manual-follow-up.reserve",
+              ),
+            ).toHaveLength(2);
+            expect(releaseReservation).not.toBeNull();
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+        const clearButton = Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find(
+          (button) => button.textContent?.trim() === "Clear",
+        );
+        expect(clearButton).toBeTruthy();
+        clearButton!.click();
+        await waitForLayout();
+        expect(
+          wsRequests.filter(
+            (request) =>
+              request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+              request.type === "thread.manual-follow-up.cancel",
+          ),
+        ).toHaveLength(1);
+
+        const releaseClearReservation = releaseReservation as unknown as () => void;
+        releaseReservation = null;
+        releaseClearReservation();
+        await vi.waitFor(
+          () => {
+            expect(
+              wsRequests.filter(
+                (request) =>
+                  request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+                  request.type === "thread.manual-follow-up.cancel",
+              ),
+            ).toHaveLength(2);
+            expect(document.querySelector('[data-cafe-followup-queue="true"]')).toBeNull();
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+        expect(
+          wsRequests.some(
+            (request) =>
+              request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+              request.type === "thread.manual-follow-up.enqueue",
+          ),
+        ).toBe(false);
+        expect(useComposerDraftStore.getState().getComposerDraft(THREAD_REF)?.prompt).toBe(
+          "Keep this draft after cancelling the queued copy",
+        );
+        expect(revokeObjectUrlSpy).not.toHaveBeenCalledWith(originalPreviewUrl);
+      } finally {
+        fileReadSpy.mockRestore();
+        revokeObjectUrlSpy.mockRestore();
         await mounted.cleanup();
       }
     });

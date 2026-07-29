@@ -38,6 +38,7 @@ import {
   ThreadManualFollowUpActivatedPayload,
   ThreadManualFollowUpCancelledPayload,
   ThreadManualFollowUpEnqueuedPayload,
+  ThreadManualFollowUpReservedPayload,
   ThreadManualFollowUpReleasedPayload,
   ThreadMetaUpdatedPayload,
   ThreadProposedPlanUpsertedPayload,
@@ -61,6 +62,9 @@ function activateManualFollowUpItem(
   activatedAt: string,
   activationCommandId: CommandId,
 ): ManualFollowUpItem {
+  if (item.status === "reserving") {
+    return item;
+  }
   return {
     ...item,
     status: "handoff",
@@ -70,6 +74,9 @@ function activateManualFollowUpItem(
 }
 
 function releaseManualFollowUpItem(item: ManualFollowUpItem): ManualFollowUpItem {
+  if (item.status === "reserving") {
+    return item;
+  }
   return {
     ...item,
     status: "queued",
@@ -657,6 +664,33 @@ export function projectEvent(
         }),
       );
 
+    case "thread.manual-follow-up-reserved":
+      return decodeForEvent(
+        ThreadManualFollowUpReservedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread) {
+            return nextBase;
+          }
+          const alreadyProjected = thread.manualFollowUps.some(
+            (item) => item.id === payload.item.id,
+          );
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              manualFollowUps: alreadyProjected
+                ? thread.manualFollowUps
+                : [...thread.manualFollowUps, payload.item],
+              updatedAt: alreadyProjected ? thread.updatedAt : payload.item.enqueuedAt,
+            }),
+          };
+        }),
+      );
+
     case "thread.manual-follow-up-enqueued":
       return decodeForEvent(
         ThreadManualFollowUpEnqueuedPayload,
@@ -672,7 +706,11 @@ export function projectEvent(
           return {
             ...nextBase,
             threads: updateThread(nextBase.threads, payload.threadId, {
-              manualFollowUps: [...thread.manualFollowUps, payload.item],
+              manualFollowUps: thread.manualFollowUps.some((item) => item.id === payload.item.id)
+                ? thread.manualFollowUps.map((item) =>
+                    item.id === payload.item.id ? payload.item : item,
+                  )
+                : [...thread.manualFollowUps, payload.item],
               updatedAt: payload.item.enqueuedAt,
             }),
           };
@@ -751,6 +789,7 @@ export function projectEvent(
               manualFollowUps: thread.manualFollowUps.filter(
                 (item) =>
                   item.id !== payload.followUpId ||
+                  item.status === "reserving" ||
                   item.activationCommandId !== payload.activationCommandId,
               ),
               updatedAt: payload.acceptedAt,
@@ -776,6 +815,7 @@ export function projectEvent(
             threads: updateThread(nextBase.threads, payload.threadId, {
               manualFollowUps: thread.manualFollowUps.map((item) =>
                 item.id === payload.followUpId &&
+                item.status !== "reserving" &&
                 item.activationCommandId === payload.activationCommandId
                   ? releaseManualFollowUpItem(item)
                   : item,

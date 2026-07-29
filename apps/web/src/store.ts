@@ -225,6 +225,9 @@ function mapManualFollowUp(
   environmentId: EnvironmentId,
   item: OrchestrationThread["manualFollowUps"][number],
 ): ThreadManualFollowUp {
+  if (item.status === "reserving") {
+    return item;
+  }
   return {
     ...item,
     message: {
@@ -2027,11 +2030,24 @@ function applyEnvironmentOrchestrationEvent(
             },
       );
 
-    case "thread.manual-follow-up-enqueued":
+    case "thread.manual-follow-up-reserved":
       return updateThreadState(state, event.payload.threadId, (thread) => ({
         ...thread,
         manualFollowUps: thread.manualFollowUps.some((item) => item.id === event.payload.item.id)
           ? thread.manualFollowUps
+          : [...thread.manualFollowUps, mapManualFollowUp(environmentId, event.payload.item)],
+        updatedAt: event.occurredAt,
+      }));
+
+    case "thread.manual-follow-up-enqueued":
+      return updateThreadState(state, event.payload.threadId, (thread) => ({
+        ...thread,
+        manualFollowUps: thread.manualFollowUps.some((item) => item.id === event.payload.item.id)
+          ? thread.manualFollowUps.map((item) =>
+              item.id === event.payload.item.id
+                ? mapManualFollowUp(environmentId, event.payload.item)
+                : item,
+            )
           : [...thread.manualFollowUps, mapManualFollowUp(environmentId, event.payload.item)],
         updatedAt: event.occurredAt,
       }));
@@ -2050,7 +2066,7 @@ function applyEnvironmentOrchestrationEvent(
       return updateThreadState(state, event.payload.threadId, (thread) => ({
         ...thread,
         manualFollowUps: thread.manualFollowUps.map((item) =>
-          item.id === event.payload.followUpId
+          item.id === event.payload.followUpId && item.status !== "reserving"
             ? {
                 ...item,
                 status: "handoff",
@@ -2066,7 +2082,7 @@ function applyEnvironmentOrchestrationEvent(
       return updateThreadState(state, event.payload.threadId, (thread) => ({
         ...thread,
         manualFollowUps: thread.manualFollowUps.map((item) =>
-          item.id === event.payload.followUpId
+          item.id === event.payload.followUpId && item.status !== "reserving"
             ? {
                 ...item,
                 status: "queued",

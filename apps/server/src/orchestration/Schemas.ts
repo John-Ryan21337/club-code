@@ -15,6 +15,7 @@ import {
   ThreadManualFollowUpActivatedPayload as ContractsThreadManualFollowUpActivatedPayloadSchema,
   ThreadManualFollowUpCancelledPayload as ContractsThreadManualFollowUpCancelledPayloadSchema,
   ThreadManualFollowUpEnqueuedPayload as ContractsThreadManualFollowUpEnqueuedPayloadSchema,
+  ThreadManualFollowUpReservedPayload as ContractsThreadManualFollowUpReservedPayloadSchema,
   ThreadManualFollowUpReleasedPayload as ContractsThreadManualFollowUpReleasedPayloadSchema,
   ThreadDeletedPayload as ContractsThreadDeletedPayloadSchema,
   ThreadRestoredPayload as ContractsThreadRestoredPayloadSchema,
@@ -49,6 +50,8 @@ export const ThreadAutoNudgeStoppedPayload = ContractsThreadAutoNudgeStoppedPayl
 export const ThreadAutoNudgeDispatchedPayload = ContractsThreadAutoNudgeDispatchedPayloadSchema;
 export const ThreadManualFollowUpEnqueuedPayload =
   ContractsThreadManualFollowUpEnqueuedPayloadSchema;
+export const ThreadManualFollowUpReservedPayload =
+  ContractsThreadManualFollowUpReservedPayloadSchema;
 export const ThreadManualFollowUpCancelledPayload =
   ContractsThreadManualFollowUpCancelledPayloadSchema;
 export const ThreadManualFollowUpActivatedPayload =

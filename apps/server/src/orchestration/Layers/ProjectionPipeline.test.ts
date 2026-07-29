@@ -3,11 +3,13 @@ import {
   CommandId,
   CorrelationId,
   EventId,
+  ManualFollowUpId,
   MessageId,
   ProjectId,
   ThreadId,
   TurnId,
   ProviderInstanceId,
+  type OrchestrationEvent,
 } from "@cafecode/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
@@ -171,6 +173,176 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
       for (const row of stateRows) {
         assert.equal(row.lastAppliedSequence, 3);
       }
+    }),
+  );
+
+  it.effect("projects a retried prompt-free reservation once and finalizes it in place", () =>
+    Effect.gen(function* () {
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const sql = yield* SqlClient.SqlClient;
+      const threadId = ThreadId.make("thread-manual-reservation-replay");
+      const projectId = ProjectId.make("project-manual-reservation-replay");
+      const followUpId = ManualFollowUpId.make("manual-follow-up-reservation-replay");
+      const messageId = MessageId.make("message-manual-follow-up-reservation-replay");
+      const reservationCommandId = CommandId.make("command-manual-reservation-replay");
+      const reservedAt = "2026-07-28T00:00:00.000Z";
+      const dispatch = {
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5.6-sol",
+        },
+        titleSeed: "Reservation replay",
+        runtimeMode: "full-access" as const,
+        interactionMode: "default" as const,
+      };
+
+      yield* projectionPipeline.projectEvent({
+        sequence: 1,
+        eventId: EventId.make("event-project-manual-reservation-replay"),
+        aggregateKind: "project",
+        aggregateId: projectId,
+        occurredAt: reservedAt,
+        commandId: CommandId.make("command-project-manual-reservation-replay"),
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        type: "project.created",
+        payload: {
+          projectId,
+          title: "Reservation replay",
+          workspaceRoot: "/tmp/manual-reservation-replay",
+          defaultModelSelection: dispatch.modelSelection,
+          scripts: [],
+          createdAt: reservedAt,
+          updatedAt: reservedAt,
+        },
+      });
+      yield* projectionPipeline.projectEvent({
+        sequence: 2,
+        eventId: EventId.make("event-thread-manual-reservation-replay"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: reservedAt,
+        commandId: CommandId.make("command-thread-manual-reservation-replay"),
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        type: "thread.created",
+        payload: {
+          threadId,
+          projectId,
+          title: "Reservation replay",
+          modelSelection: dispatch.modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          createdAt: reservedAt,
+          updatedAt: reservedAt,
+        },
+      });
+
+      const reservedEvent = {
+        sequence: 3,
+        eventId: EventId.make("event-manual-reservation-replay"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: reservedAt,
+        commandId: reservationCommandId,
+        causationEventId: null,
+        correlationId: reservationCommandId,
+        metadata: {},
+        type: "thread.manual-follow-up-reserved",
+        payload: {
+          threadId,
+          item: {
+            id: followUpId,
+            messageId,
+            dispatch,
+            status: "reserving",
+            reservationCommandId,
+            enqueuedAt: reservedAt,
+          },
+        },
+      } as const satisfies Extract<
+        OrchestrationEvent,
+        { type: "thread.manual-follow-up-reserved" }
+      >;
+      yield* projectionPipeline.projectEvent(reservedEvent);
+      yield* projectionPipeline.projectEvent(reservedEvent);
+
+      const afterReservation = yield* sql<{ readonly manualFollowUpsJson: string }>`
+        SELECT manual_follow_ups_json AS "manualFollowUpsJson"
+        FROM projection_threads
+        WHERE thread_id = ${threadId}
+      `;
+      const reservedItems = JSON.parse(afterReservation[0]?.manualFollowUpsJson ?? "[]") as Array<{
+        readonly id: string;
+        readonly status: string;
+      }>;
+      assert.equal(reservedItems.length, 1);
+      assert.equal(reservedItems[0]?.id, followUpId);
+      assert.equal(reservedItems[0]?.status, "reserving");
+
+      const enqueuedEvent = {
+        sequence: 4,
+        eventId: EventId.make("event-manual-enqueue-replay"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: "2026-07-28T00:00:10.000Z",
+        commandId: CommandId.make("command-manual-enqueue-replay"),
+        causationEventId: null,
+        correlationId: CommandId.make("command-manual-enqueue-replay"),
+        metadata: {},
+        type: "thread.manual-follow-up-enqueued",
+        payload: {
+          threadId,
+          item: {
+            id: followUpId,
+            reservationCommandId,
+            message: {
+              messageId,
+              role: "user",
+              text: "Finalize exactly once.",
+              attachments: [],
+            },
+            dispatch,
+            status: "queued",
+            enqueuedAt: reservedAt,
+            activatedAt: null,
+            activationCommandId: null,
+          },
+        },
+      } as const satisfies Extract<
+        OrchestrationEvent,
+        { type: "thread.manual-follow-up-enqueued" }
+      >;
+      yield* projectionPipeline.projectEvent(enqueuedEvent);
+      yield* projectionPipeline.projectEvent(enqueuedEvent);
+
+      const afterFinalization = yield* sql<{ readonly manualFollowUpsJson: string }>`
+        SELECT manual_follow_ups_json AS "manualFollowUpsJson"
+        FROM projection_threads
+        WHERE thread_id = ${threadId}
+      `;
+      const finalizedItems: unknown = JSON.parse(afterFinalization[0]?.manualFollowUpsJson ?? "[]");
+      assert.deepEqual(finalizedItems, [
+        {
+          id: followUpId,
+          reservationCommandId,
+          message: {
+            messageId,
+            role: "user",
+            text: "Finalize exactly once.",
+            attachments: [],
+          },
+          dispatch,
+          status: "queued",
+          enqueuedAt: reservedAt,
+          activatedAt: null,
+          activationCommandId: null,
+        },
+      ]);
     }),
   );
 

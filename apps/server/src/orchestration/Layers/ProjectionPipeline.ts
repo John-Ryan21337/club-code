@@ -1006,6 +1006,25 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           return;
         }
 
+        case "thread.manual-follow-up-reserved": {
+          const existingRow = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isNone(existingRow)) {
+            return;
+          }
+          yield* projectionThreadRepository.upsert({
+            ...existingRow.value,
+            manualFollowUps: existingRow.value.manualFollowUps.some(
+              (item) => item.id === event.payload.item.id,
+            )
+              ? existingRow.value.manualFollowUps
+              : [...existingRow.value.manualFollowUps, event.payload.item],
+            updatedAt: maxIso(existingRow.value.updatedAt, event.payload.item.enqueuedAt),
+          });
+          return;
+        }
+
         case "thread.manual-follow-up-enqueued": {
           const existingRow = yield* projectionThreadRepository.getById({
             threadId: event.payload.threadId,
@@ -1015,7 +1034,13 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           }
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
-            manualFollowUps: [...existingRow.value.manualFollowUps, event.payload.item],
+            manualFollowUps: existingRow.value.manualFollowUps.some(
+              (item) => item.id === event.payload.item.id,
+            )
+              ? existingRow.value.manualFollowUps.map((item) =>
+                  item.id === event.payload.item.id ? event.payload.item : item,
+                )
+              : [...existingRow.value.manualFollowUps, event.payload.item],
             updatedAt: maxIso(existingRow.value.updatedAt, event.payload.item.enqueuedAt),
           });
           return;
@@ -1048,7 +1073,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
             manualFollowUps: existingRow.value.manualFollowUps.map((item) =>
-              item.id === event.payload.followUpId
+              item.id === event.payload.followUpId && item.status !== "reserving"
                 ? {
                     ...item,
                     status: "handoff" as const,
@@ -1074,6 +1099,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             manualFollowUps: existingRow.value.manualFollowUps.filter(
               (item) =>
                 item.id !== event.payload.followUpId ||
+                item.status === "reserving" ||
                 item.activationCommandId !== event.payload.activationCommandId,
             ),
             updatedAt: maxIso(existingRow.value.updatedAt, event.payload.acceptedAt),
@@ -1092,6 +1118,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             ...existingRow.value,
             manualFollowUps: existingRow.value.manualFollowUps.map((item) =>
               item.id === event.payload.followUpId &&
+              item.status !== "reserving" &&
               item.activationCommandId === event.payload.activationCommandId
                 ? {
                     ...item,

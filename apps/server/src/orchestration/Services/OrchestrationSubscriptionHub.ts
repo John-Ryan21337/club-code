@@ -72,6 +72,7 @@ function isThreadDetailEvent(event: OrchestrationEvent): boolean {
     event.type === "thread.auto-nudge-configured" ||
     event.type === "thread.auto-nudge-stopped" ||
     event.type === "thread.auto-nudge-dispatched" ||
+    event.type === "thread.manual-follow-up-reserved" ||
     event.type === "thread.manual-follow-up-enqueued" ||
     event.type === "thread.manual-follow-up-cancelled" ||
     event.type === "thread.manual-follow-up-activated" ||
@@ -96,6 +97,22 @@ function doesActivityAffectShell(event: OrchestrationEvent): boolean {
   }
 }
 
+/**
+ * Manual follow-up lifecycle events contain exact-thread queue identity and,
+ * after finalization, the operator prompt and attachment metadata. They must
+ * never be exposed through shell-scoped subscriptions or global replay.
+ */
+export function isManualFollowUpDetailEvent(event: OrchestrationEvent): boolean {
+  return (
+    event.type === "thread.manual-follow-up-reserved" ||
+    event.type === "thread.manual-follow-up-enqueued" ||
+    event.type === "thread.manual-follow-up-cancelled" ||
+    event.type === "thread.manual-follow-up-activated" ||
+    event.type === "thread.manual-follow-up-accepted" ||
+    event.type === "thread.manual-follow-up-released"
+  );
+}
+
 function eventMatchesRoute(
   event: OrchestrationEvent,
   route: OrchestrationSubscriptionRoute,
@@ -114,15 +131,8 @@ function eventMatchesRoute(
   ) {
     return false;
   }
-  // Prompt-bearing durable follow-up items and their exact ids/status are
-  // detail-only. Shell clients coordinate from the separate prompt-free count.
-  if (
-    event.type === "thread.manual-follow-up-enqueued" ||
-    event.type === "thread.manual-follow-up-cancelled" ||
-    event.type === "thread.manual-follow-up-activated" ||
-    event.type === "thread.manual-follow-up-accepted" ||
-    event.type === "thread.manual-follow-up-released"
-  ) {
+  // Shell clients coordinate from the separate prompt-free count.
+  if (isManualFollowUpDetailEvent(event)) {
     return false;
   }
   return doesActivityAffectShell(event);

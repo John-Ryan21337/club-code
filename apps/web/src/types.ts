@@ -2,7 +2,6 @@ import type {
   EnvironmentId,
   ManualFollowUpDispatchOptions,
   ManualFollowUpId,
-  ManualFollowUpStatus,
   ModelSelection,
   OrchestrationLatestTurn,
   OrchestrationProposedPlanId,
@@ -41,20 +40,32 @@ export interface ChatImageAttachment {
 
 export type ChatAttachment = ChatImageAttachment;
 
-export interface ThreadManualFollowUp {
+interface ThreadManualFollowUpBase {
   id: ManualFollowUpId;
+  dispatch: ManualFollowUpDispatchOptions;
+  enqueuedAt: string;
+}
+
+export interface ThreadManualFollowUpReservation extends ThreadManualFollowUpBase {
+  messageId: MessageId;
+  status: "reserving";
+  reservationCommandId: string;
+}
+
+export interface ThreadManualFollowUpPayload extends ThreadManualFollowUpBase {
   message: {
     messageId: MessageId;
     role: "user";
     text: string;
     attachments: ChatAttachment[];
   };
-  dispatch: ManualFollowUpDispatchOptions;
-  status: ManualFollowUpStatus;
-  enqueuedAt: string;
+  status: "queued" | "handoff";
+  reservationCommandId?: string;
   activatedAt: string | null;
   activationCommandId: string | null;
 }
+
+export type ThreadManualFollowUp = ThreadManualFollowUpReservation | ThreadManualFollowUpPayload;
 
 export interface ChatMessage {
   id: MessageId;

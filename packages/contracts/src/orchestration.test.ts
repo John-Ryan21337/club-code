@@ -191,6 +191,42 @@ it.effect("Auto Nudge shell summary events cannot carry prompt text", () =>
   }),
 );
 
+it.effect("manual follow-up reservation stays prompt-free and preserves exact routing", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeClientOrchestrationCommand({
+      type: "thread.manual-follow-up.reserve",
+      commandId: "command-manual-follow-up-reserve",
+      threadId: threadBase.id,
+      followUpId: "manual-follow-up-1",
+      messageId: "manual-follow-up-message-1",
+      dispatch: {
+        modelSelection: {
+          instanceId: "claude-local",
+          model: "claude-opus-4-1",
+        },
+        titleSeed: "Queued title",
+        runtimeMode: "approval-required",
+        interactionMode: "plan",
+      },
+      prompt: "must not enter reservation state",
+      message: {
+        text: "must not enter reservation state",
+        attachments: [{ name: "secret.png" }],
+      },
+      attachments: [{ name: "secret.png" }],
+      createdAt: "2026-07-28T00:04:00.000Z",
+    });
+
+    assert.strictEqual(parsed.type, "thread.manual-follow-up.reserve");
+    if (parsed.type === "thread.manual-follow-up.reserve") {
+      assert.strictEqual("message" in parsed, false);
+      assert.strictEqual("attachments" in parsed, false);
+      assert.strictEqual("prompt" in parsed, false);
+      assert.strictEqual(parsed.messageId, "manual-follow-up-message-1");
+    }
+  }),
+);
+
 it.effect("manual follow-up enqueue preserves the bounded dispatch snapshot", () =>
   Effect.gen(function* () {
     const parsed = yield* decodeClientOrchestrationCommand({
@@ -198,6 +234,7 @@ it.effect("manual follow-up enqueue preserves the bounded dispatch snapshot", ()
       commandId: "command-manual-follow-up-enqueue",
       threadId: threadBase.id,
       followUpId: "manual-follow-up-1",
+      reservationCommandId: "command-manual-follow-up-reserve",
       message: {
         messageId: "manual-follow-up-message-1",
         role: "user",
@@ -235,6 +272,54 @@ it.effect("manual follow-up enqueue preserves the bounded dispatch snapshot", ()
           planId: "plan-1",
         },
       });
+    }
+  }),
+);
+
+it.effect("legacy queued manual follow-up events remain replay-decodable", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeOrchestrationEvent({
+      sequence: 7,
+      eventId: "event-legacy-manual-follow-up",
+      type: "thread.manual-follow-up-enqueued",
+      aggregateKind: "thread",
+      aggregateId: threadBase.id,
+      occurredAt: "2026-07-27T00:04:00.000Z",
+      commandId: "command-legacy-manual-follow-up",
+      causationEventId: null,
+      correlationId: "command-legacy-manual-follow-up",
+      metadata: {},
+      payload: {
+        threadId: threadBase.id,
+        item: {
+          id: "manual-follow-up-legacy",
+          message: {
+            messageId: "manual-follow-up-message-legacy",
+            role: "user",
+            text: "Persisted before reservations existed.",
+            attachments: [],
+          },
+          dispatch: {
+            modelSelection: {
+              instanceId: "claude-local",
+              model: "claude-opus-4-1",
+            },
+            titleSeed: "Legacy title",
+            runtimeMode: "approval-required",
+            interactionMode: "plan",
+          },
+          status: "queued",
+          enqueuedAt: "2026-07-27T00:04:00.000Z",
+          activatedAt: null,
+          activationCommandId: null,
+        },
+      },
+    });
+
+    assert.strictEqual(parsed.type, "thread.manual-follow-up-enqueued");
+    if (parsed.type === "thread.manual-follow-up-enqueued") {
+      assert.strictEqual(parsed.payload.item.status, "queued");
+      assert.strictEqual("reservationCommandId" in parsed.payload.item, false);
     }
   }),
 );

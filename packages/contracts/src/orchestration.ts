@@ -234,7 +234,7 @@ const SourceProposedPlanReference = Schema.Struct({
  * authenticated exact-thread detail surface; shell summaries receive a count.
  */
 export const MANUAL_FOLLOW_UP_MAX_ITEMS = 32;
-export const ManualFollowUpStatus = Schema.Literals(["queued", "handoff"]);
+export const ManualFollowUpStatus = Schema.Literals(["reserving", "queued", "handoff"]);
 export type ManualFollowUpStatus = typeof ManualFollowUpStatus.Type;
 
 /**
@@ -251,7 +251,16 @@ export const ManualFollowUpDispatchOptions = Schema.Struct({
 });
 export type ManualFollowUpDispatchOptions = typeof ManualFollowUpDispatchOptions.Type;
 
-export const ManualFollowUpItem = Schema.Struct({
+const ManualFollowUpReservedItem = Schema.Struct({
+  id: ManualFollowUpId,
+  messageId: MessageId,
+  dispatch: ManualFollowUpDispatchOptions,
+  status: Schema.Literal("reserving"),
+  reservationCommandId: CommandId,
+  enqueuedAt: IsoDateTime,
+});
+
+const ManualFollowUpPayloadItem = Schema.Struct({
   id: ManualFollowUpId,
   message: Schema.Struct({
     messageId: MessageId,
@@ -260,11 +269,21 @@ export const ManualFollowUpItem = Schema.Struct({
     attachments: Schema.Array(ChatAttachment),
   }),
   dispatch: ManualFollowUpDispatchOptions,
-  status: ManualFollowUpStatus,
+  status: Schema.Literals(["queued", "handoff"]),
+  /**
+   * Present while the prompt-free reservation is being committed and retained
+   * afterwards as the immutable receipt that authorized the payload handoff.
+   */
+  reservationCommandId: Schema.optionalKey(CommandId),
   enqueuedAt: IsoDateTime,
   activatedAt: Schema.NullOr(IsoDateTime),
   activationCommandId: Schema.NullOr(CommandId),
 });
+
+export const ManualFollowUpItem = Schema.Union([
+  ManualFollowUpReservedItem,
+  ManualFollowUpPayloadItem,
+]);
 export type ManualFollowUpItem = typeof ManualFollowUpItem.Type;
 
 export const ManualFollowUpQueue = Schema.Array(ManualFollowUpItem).check(
@@ -871,11 +890,27 @@ const ThreadAutoNudgeDispatchCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+/**
+ * Reserve exact-thread manual authority before prompt or attachment payloads
+ * are serialized. This command is intentionally prompt-free so it remains a
+ * small, fast arbitration boundary across desktop windows and LAN clients.
+ */
+export const ThreadManualFollowUpReserveCommand = Schema.Struct({
+  type: Schema.Literal("thread.manual-follow-up.reserve"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  followUpId: ManualFollowUpId,
+  messageId: MessageId,
+  dispatch: ManualFollowUpDispatchOptions,
+  createdAt: IsoDateTime,
+});
+
 export const ThreadManualFollowUpEnqueueCommand = Schema.Struct({
   type: Schema.Literal("thread.manual-follow-up.enqueue"),
   commandId: CommandId,
   threadId: ThreadId,
   followUpId: ManualFollowUpId,
+  reservationCommandId: CommandId,
   message: Schema.Struct({
     messageId: MessageId,
     role: Schema.Literal("user"),
@@ -891,6 +926,7 @@ const ClientThreadManualFollowUpEnqueueCommand = Schema.Struct({
   commandId: CommandId,
   threadId: ThreadId,
   followUpId: ManualFollowUpId,
+  reservationCommandId: CommandId,
   message: Schema.Struct({
     messageId: MessageId,
     role: Schema.Literal("user"),
@@ -1119,6 +1155,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadAutoNudgeConfigureCommand,
   ThreadAutoNudgeStopCommand,
   ThreadAutoNudgeDispatchCommand,
+  ThreadManualFollowUpReserveCommand,
   ThreadManualFollowUpEnqueueCommand,
   ThreadManualFollowUpCancelCommand,
   ThreadManualFollowUpActivateCommand,
@@ -1151,6 +1188,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadAutoNudgeConfigureCommand,
   ThreadAutoNudgeStopCommand,
   ThreadAutoNudgeDispatchCommand,
+  ThreadManualFollowUpReserveCommand,
   ClientThreadManualFollowUpEnqueueCommand,
   ThreadManualFollowUpCancelCommand,
   ThreadManualFollowUpActivateCommand,
@@ -1318,6 +1356,7 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.auto-nudge-summary-changed",
   "thread.auto-nudge-stopped",
   "thread.auto-nudge-dispatched",
+  "thread.manual-follow-up-reserved",
   "thread.manual-follow-up-enqueued",
   "thread.manual-follow-up-cancelled",
   "thread.manual-follow-up-activated",
@@ -1476,7 +1515,12 @@ export const ThreadAutoNudgeDispatchedPayload = Schema.Struct({
 
 export const ThreadManualFollowUpEnqueuedPayload = Schema.Struct({
   threadId: ThreadId,
-  item: ManualFollowUpItem,
+  item: ManualFollowUpPayloadItem,
+});
+
+export const ThreadManualFollowUpReservedPayload = Schema.Struct({
+  threadId: ThreadId,
+  item: ManualFollowUpReservedItem,
 });
 
 export const ThreadManualFollowUpCancelledPayload = Schema.Struct({
@@ -1748,6 +1792,11 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.auto-nudge-dispatched"),
     payload: ThreadAutoNudgeDispatchedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.manual-follow-up-reserved"),
+    payload: ThreadManualFollowUpReservedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

@@ -55,6 +55,37 @@ type DecideOrchestrationCommandResult =
   | PlannedOrchestrationEvent
   | ReadonlyArray<PlannedOrchestrationEvent>;
 
+type ManualFollowUpDispatch = OrchestrationThread["manualFollowUps"][number]["dispatch"];
+
+function manualFollowUpDispatchesMatch(
+  reserved: ManualFollowUpDispatch,
+  candidate: ManualFollowUpDispatch,
+): boolean {
+  const reservedOptions = reserved.modelSelection.options ?? [];
+  const candidateOptions = candidate.modelSelection.options ?? [];
+  const reservedSource = reserved.sourceProposedPlan;
+  const candidateSource = candidate.sourceProposedPlan;
+
+  return (
+    reserved.modelSelection.instanceId === candidate.modelSelection.instanceId &&
+    reserved.modelSelection.model === candidate.modelSelection.model &&
+    reservedOptions.length === candidateOptions.length &&
+    reservedOptions.every(
+      (option, index) =>
+        option.id === candidateOptions[index]?.id &&
+        option.value === candidateOptions[index]?.value,
+    ) &&
+    reserved.titleSeed === candidate.titleSeed &&
+    reserved.runtimeMode === candidate.runtimeMode &&
+    reserved.interactionMode === candidate.interactionMode &&
+    (reservedSource === undefined
+      ? candidateSource === undefined
+      : candidateSource !== undefined &&
+        reservedSource.threadId === candidateSource.threadId &&
+        reservedSource.planId === candidateSource.planId)
+  );
+}
+
 function threadHasUnsettledTurnStart(thread: OrchestrationReadModel["threads"][number]): boolean {
   if (thread.session?.status === "starting" || thread.session?.status === "running") {
     return true;
@@ -860,6 +891,82 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       return [dispatchEvent, userMessageEvent, turnStartRequestedEvent];
     }
 
+    case "thread.manual-follow-up.reserve": {
+      const targetThread = yield* requireThreadNotArchived({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      if (targetThread.deletedAt !== null) {
+        return yield* rejectManualFollowUpCommand(
+          command,
+          `Thread '${command.threadId}' is in the Recycle Bin and cannot reserve a manual follow-up.`,
+        );
+      }
+      if (targetThread.manualFollowUps.length >= MANUAL_FOLLOW_UP_MAX_ITEMS) {
+        return yield* rejectManualFollowUpCommand(
+          command,
+          `Thread '${command.threadId}' already has the maximum ${MANUAL_FOLLOW_UP_MAX_ITEMS} manual follow-ups.`,
+        );
+      }
+      if (targetThread.manualFollowUps.some((item) => item.id === command.followUpId)) {
+        return yield* rejectManualFollowUpCommand(
+          command,
+          `Manual follow-up '${command.followUpId}' already exists on thread '${command.threadId}'.`,
+        );
+      }
+      if (
+        targetThread.messages.some((message) => message.id === command.messageId) ||
+        targetThread.manualFollowUps.some((item) =>
+          item.status === "reserving"
+            ? item.messageId === command.messageId
+            : item.message.messageId === command.messageId,
+        )
+      ) {
+        return yield* rejectManualFollowUpCommand(
+          command,
+          `Manual follow-up message '${command.messageId}' already exists on thread '${command.threadId}'.`,
+        );
+      }
+
+      const reservedEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.manual-follow-up-reserved",
+        payload: {
+          threadId: command.threadId,
+          item: {
+            id: command.followUpId,
+            messageId: command.messageId,
+            dispatch: command.dispatch,
+            status: "reserving",
+            reservationCommandId: command.commandId,
+            enqueuedAt: command.createdAt,
+          },
+        },
+      };
+      const countChangedEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        causationEventId: reservedEvent.eventId,
+        type: "thread.manual-follow-up-count-changed",
+        payload: {
+          threadId: command.threadId,
+          count: targetThread.manualFollowUps.length + 1,
+          updatedAt: command.createdAt,
+        },
+      };
+      return [reservedEvent, countChangedEvent];
+    }
+
     case "thread.manual-follow-up.enqueue": {
       const targetThread = yield* requireThreadNotArchived({
         readModel,
@@ -870,12 +977,6 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         return yield* rejectManualFollowUpCommand(
           command,
           `Thread '${command.threadId}' is in the Recycle Bin and cannot accept a manual follow-up.`,
-        );
-      }
-      if (targetThread.manualFollowUps.length >= MANUAL_FOLLOW_UP_MAX_ITEMS) {
-        return yield* rejectManualFollowUpCommand(
-          command,
-          `Thread '${command.threadId}' already has the maximum ${MANUAL_FOLLOW_UP_MAX_ITEMS} manual follow-ups.`,
         );
       }
       if (command.message.text.length > PROVIDER_SEND_TURN_MAX_INPUT_CHARS) {
@@ -896,18 +997,26 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           "A manual follow-up requires input text or at least one attachment.",
         );
       }
-      if (targetThread.manualFollowUps.some((item) => item.id === command.followUpId)) {
+      const reservation = targetThread.manualFollowUps.find(
+        (item) => item.id === command.followUpId,
+      );
+      if (reservation === undefined || reservation.status !== "reserving") {
         return yield* rejectManualFollowUpCommand(
           command,
-          `Manual follow-up '${command.followUpId}' already exists on thread '${command.threadId}'.`,
+          `Manual follow-up '${command.followUpId}' does not have an active prompt-free reservation on thread '${command.threadId}'.`,
         );
       }
       if (
-        targetThread.messages.some((message) => message.id === command.message.messageId) ||
-        targetThread.manualFollowUps.some(
-          (item) => item.message.messageId === command.message.messageId,
-        )
+        reservation.reservationCommandId !== command.reservationCommandId ||
+        reservation.messageId !== command.message.messageId ||
+        !manualFollowUpDispatchesMatch(reservation.dispatch, command.dispatch)
       ) {
+        return yield* rejectManualFollowUpCommand(
+          command,
+          `Manual follow-up '${command.followUpId}' does not match its immutable reservation receipt.`,
+        );
+      }
+      if (targetThread.messages.some((message) => message.id === command.message.messageId)) {
         return yield* rejectManualFollowUpCommand(
           command,
           `Manual follow-up message '${command.message.messageId}' already exists on thread '${command.threadId}'.`,
@@ -927,30 +1036,16 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           item: {
             id: command.followUpId,
             message: command.message,
-            dispatch: command.dispatch,
+            dispatch: reservation.dispatch,
             status: "queued",
-            enqueuedAt: command.createdAt,
+            reservationCommandId: command.reservationCommandId,
+            enqueuedAt: reservation.enqueuedAt,
             activatedAt: null,
             activationCommandId: null,
           },
         },
       };
-      const countChangedEvent: Omit<OrchestrationEvent, "sequence"> = {
-        ...withEventBase({
-          aggregateKind: "thread",
-          aggregateId: command.threadId,
-          occurredAt: command.createdAt,
-          commandId: command.commandId,
-        }),
-        causationEventId: enqueuedEvent.eventId,
-        type: "thread.manual-follow-up-count-changed",
-        payload: {
-          threadId: command.threadId,
-          count: targetThread.manualFollowUps.length + 1,
-          updatedAt: command.createdAt,
-        },
-      };
-      return [enqueuedEvent, countChangedEvent];
+      return enqueuedEvent;
     }
 
     case "thread.manual-follow-up.cancel": {
@@ -966,7 +1061,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           `Manual follow-up '${command.followUpId}' does not exist on thread '${command.threadId}'.`,
         );
       }
-      if (item.status !== "queued") {
+      if (item.status === "handoff") {
         return yield* rejectManualFollowUpCommand(
           command,
           `Manual follow-up '${command.followUpId}' already has an unresolved provider handoff and cannot be cancelled.`,
@@ -1027,6 +1122,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         return yield* rejectManualFollowUpCommand(
           command,
           `Manual follow-up '${command.followUpId}' is not the FIFO head for thread '${command.threadId}'.`,
+        );
+      }
+      if (head.status === "reserving") {
+        return yield* rejectManualFollowUpCommand(
+          command,
+          `Manual follow-up '${command.followUpId}' has not received its prompt payload and cannot be activated.`,
         );
       }
       if (head.status !== "queued") {

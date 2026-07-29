@@ -1617,8 +1617,9 @@ const buildAttachmentsForSnapshot = async (
 interface FollowUpQueueItem extends ComposerSendSnapshot {
   id: ManualFollowUpId;
   messageId: MessageId;
+  reservationCommandId: CommandId;
   enqueueCommandId: CommandId;
-  enqueueStatus: "pending" | "submitting" | "acknowledged" | "rejected";
+  enqueueStatus: "pending" | "reserving" | "reserved" | "submitting" | "acknowledged" | "rejected";
   enqueueRetryAfterMs: number;
   titleSeed: string;
   environmentId: EnvironmentId;
@@ -2179,6 +2180,12 @@ export default function ChatView(props: ChatViewProps) {
   const manualFollowUpEnqueueInFlightIdsRef = useRef(new Set<ManualFollowUpId>());
   const manualFollowUpActivationInFlightKeysRef = useRef(new Set<string>());
   const manualFollowUpCancellationInFlightKeysRef = useRef(new Set<string>());
+  const manualFollowUpCancellationRequestedKeysRef = useRef(new Set<string>());
+  const manualFollowUpCancellationCommandsRef = useRef(
+    new Map<string, { readonly commandId: CommandId; readonly createdAt: string }>(),
+  );
+  const manualFollowUpCancellationRetryAfterMsRef = useRef(new Map<string, number>());
+  const manualFollowUpDurablyReservedKeysRef = useRef(new Set<string>());
   const pendingManualFollowUpCancellationKeysRef = useRef(new Set<string>());
   const [manualFollowUpUiRevision, setManualFollowUpUiRevision] = useState(0);
   const [expandedDurableManualFollowUpIds, setExpandedDurableManualFollowUpIds] = useState<
@@ -2333,6 +2340,14 @@ export default function ChatView(props: ChatViewProps) {
       ) => Promise<void>)
     | null
   >(null);
+  const dispatchManualFollowUpCancellationRef = useRef<
+    | ((
+        targetEnvironmentId: EnvironmentId,
+        targetThreadId: ThreadId,
+        followUpId: ManualFollowUpId,
+      ) => Promise<boolean>)
+    | null
+  >(null);
   const dispatchQueuedSteerRetryRef = useRef<((item: FollowUpQueueItem) => Promise<void>) | null>(
     null,
   );
@@ -2458,18 +2473,20 @@ export default function ChatView(props: ChatViewProps) {
     const expandedIds = new Set<ManualFollowUpId>();
 
     for (const [threadKey, items] of Object.entries(current)) {
-      const projectedIds = new Set(
-        (threadsByKey.get(threadKey)?.manualFollowUps ?? EMPTY_MANUAL_FOLLOW_UPS).map(
-          (item) => item.id,
-        ),
+      const projectedItemsById = new Map(
+        (threadsByKey.get(threadKey)?.manualFollowUps ?? EMPTY_MANUAL_FOLLOW_UPS).map((item) => [
+          item.id,
+          item,
+        ]),
       );
-      if (projectedIds.size === 0) {
+      if (projectedItemsById.size === 0) {
         continue;
       }
       const retained: FollowUpQueueItem[] = [];
       let removedAny = false;
       for (const item of items) {
-        if (!projectedIds.has(item.id)) {
+        const projectedItem = projectedItemsById.get(item.id);
+        if (projectedItem === undefined || projectedItem.status === "reserving") {
           retained.push(item);
           continue;
         }
@@ -2507,10 +2524,30 @@ export default function ChatView(props: ChatViewProps) {
   }, [allThreads]);
   useEffect(() => {
     const queuedKeys = new Set<string>();
+    const cancelableKeys = new Set<string>();
+    const projectedKeys = new Set<string>();
+    const localKeys = new Set(
+      Object.values(followUpQueueByThreadIdRef.current).flatMap((items) =>
+        items.map((item) => manualFollowUpMapKey(item.environmentId, item.threadId, item.id)),
+      ),
+    );
     for (const thread of allThreads) {
       for (const item of thread.manualFollowUps) {
+        const itemKey = manualFollowUpMapKey(thread.environmentId, thread.id, item.id);
+        projectedKeys.add(itemKey);
+        manualFollowUpDurablyReservedKeysRef.current.add(itemKey);
         if (item.status === "queued") {
-          queuedKeys.add(manualFollowUpMapKey(thread.environmentId, thread.id, item.id));
+          queuedKeys.add(itemKey);
+        }
+        if (item.status !== "handoff") {
+          cancelableKeys.add(itemKey);
+          if (manualFollowUpCancellationRequestedKeysRef.current.has(itemKey)) {
+            void dispatchManualFollowUpCancellationRef.current?.(
+              thread.environmentId,
+              thread.id,
+              item.id,
+            );
+          }
         }
       }
     }
@@ -2522,9 +2559,18 @@ export default function ChatView(props: ChatViewProps) {
       }
     }
     for (const key of pendingManualFollowUpCancellationKeysRef.current) {
-      if (!queuedKeys.has(key)) {
+      if (!cancelableKeys.has(key)) {
         pendingManualFollowUpCancellationKeysRef.current.delete(key);
         changed = true;
+      }
+    }
+    for (const key of manualFollowUpDurablyReservedKeysRef.current) {
+      if (
+        !projectedKeys.has(key) &&
+        !localKeys.has(key) &&
+        !manualFollowUpCancellationRequestedKeysRef.current.has(key)
+      ) {
+        manualFollowUpDurablyReservedKeysRef.current.delete(key);
       }
     }
     if (changed) {
@@ -2583,6 +2629,7 @@ export default function ChatView(props: ChatViewProps) {
           images: pending.snapshot.images.map(cloneComposerImageForRetry),
           id: newManualFollowUpId(),
           messageId: newMessageId(),
+          reservationCommandId: newCommandId(),
           enqueueCommandId: newCommandId(),
           enqueueStatus: "pending",
           enqueueRetryAfterMs: 0,
@@ -2694,6 +2741,7 @@ export default function ChatView(props: ChatViewProps) {
         images: merged.images,
         id: newManualFollowUpId(),
         messageId: newMessageId(),
+        reservationCommandId: newCommandId(),
         enqueueCommandId: newCommandId(),
         enqueueStatus: "pending",
         enqueueRetryAfterMs: 0,
@@ -3585,18 +3633,21 @@ export default function ChatView(props: ChatViewProps) {
     activeThread === undefined
       ? null
       : followUpThreadMapKey(activeThread.environmentId, activeThread.id);
+  const activeFollowUpThreadKeyRef = useRef(activeFollowUpThreadKey);
+  activeFollowUpThreadKeyRef.current = activeFollowUpThreadKey;
   const activeProjectedManualFollowUps =
     isServerThread && activeThread ? activeThread.manualFollowUps : EMPTY_MANUAL_FOLLOW_UPS;
   const activeProjectedManualFollowUpIds = useMemo(
     () => new Set(activeProjectedManualFollowUps.map((item) => item.id)),
     [activeProjectedManualFollowUps],
   );
-  const activeFollowUpQueue =
+  const activeLocalFollowUps =
     activeFollowUpThreadKey !== null
-      ? (followUpQueueByThreadId[activeFollowUpThreadKey] ?? EMPTY_FOLLOW_UP_QUEUE).filter(
-          (item) => !activeProjectedManualFollowUpIds.has(item.id),
-        )
+      ? (followUpQueueByThreadId[activeFollowUpThreadKey] ?? EMPTY_FOLLOW_UP_QUEUE)
       : EMPTY_FOLLOW_UP_QUEUE;
+  const activeFollowUpQueue = activeLocalFollowUps.filter(
+    (item) => !activeProjectedManualFollowUpIds.has(item.id),
+  );
   const activeOperatorDispatchInFlight = isSendBusy || sendInFlightRef.current;
   const retainedFollowUpThreadRefs = useMemo(() => {
     const targets = collectRetainedFollowUpThreadTargets({
@@ -3631,12 +3682,28 @@ export default function ChatView(props: ChatViewProps) {
     },
     [manualFollowUpPriorityOwner],
   );
-  const totalFollowUpQueueLength = useMemo(
-    () =>
-      Object.values(followUpQueueByThreadId).reduce((total, items) => total + items.length, 0) +
-      allThreadShells.reduce((total, shell) => total + shell.manualFollowUpCount, 0),
-    [allThreadShells, followUpQueueByThreadId],
-  );
+  const totalFollowUpQueueLength = useMemo(() => {
+    const projectedKeys = new Set(
+      allThreads.flatMap((thread) =>
+        thread.manualFollowUps.map((item) =>
+          manualFollowUpMapKey(thread.environmentId, thread.id, item.id),
+        ),
+      ),
+    );
+    const localOnlyCount = Object.values(followUpQueueByThreadId).reduce(
+      (total, items) =>
+        total +
+        items.filter(
+          (item) =>
+            !projectedKeys.has(manualFollowUpMapKey(item.environmentId, item.threadId, item.id)),
+        ).length,
+      0,
+    );
+    return (
+      localOnlyCount +
+      allThreadShells.reduce((total, shell) => total + shell.manualFollowUpCount, 0)
+    );
+  }, [allThreadShells, allThreads, followUpQueueByThreadId]);
   useEffect(() => {
     const queuedItemIds = new Set<string>(
       Object.values(followUpQueueByThreadId).flatMap((items) => items.map((item) => item.id)),
@@ -3747,22 +3814,31 @@ export default function ChatView(props: ChatViewProps) {
           activeThread === undefined
             ? ""
             : manualFollowUpMapKey(activeThread.environmentId, activeThread.id, item.id);
+        const localItem = activeLocalFollowUps.find((entry) => entry.id === item.id);
+        const promptText =
+          item.status === "reserving" ? (localItem?.promptText ?? "") : item.message.text;
+        const images =
+          item.status === "reserving" ? (localItem?.images ?? []) : item.message.attachments;
         const blockedReason = pendingManualFollowUpCancellationKeysRef.current.has(itemKey)
           ? "Cancelling this queued follow-up…"
-          : item.status === "handoff"
-            ? "Waiting for the provider to accept this follow-up."
-            : manualFollowUpActivationInFlightKeysRef.current.has(itemKey)
-              ? "Handing this follow-up to the provider…"
-              : null;
+          : item.status === "reserving"
+            ? (localItem?.blockedReason ?? "Receiving this operator follow-up\u2026")
+            : item.status === "handoff"
+              ? "Waiting for the provider to accept this follow-up."
+              : manualFollowUpActivationInFlightKeysRef.current.has(itemKey)
+                ? "Handing this follow-up to the provider…"
+                : null;
         return {
           id: item.id,
-          preview: previewQueuedFollowUpText(item.message.text),
-          promptText: item.message.text,
-          images: item.message.attachments,
+          preview:
+            promptText.length > 0
+              ? previewQueuedFollowUpText(promptText)
+              : "Receiving operator follow-up\u2026",
+          promptText,
+          images,
           queuedAt: item.enqueuedAt,
           expanded: expandedDurableManualFollowUpIds.has(item.id),
-          canExpand:
-            canExpandQueuedFollowUpText(item.message.text) || item.message.attachments.length > 0,
+          canExpand: canExpandQueuedFollowUpText(promptText) || images.length > 0,
           blockedReason,
           automaticSteerRetry: null,
         };
@@ -3787,6 +3863,7 @@ export default function ChatView(props: ChatViewProps) {
     ],
     [
       activeFollowUpQueue,
+      activeLocalFollowUps,
       activeProjectedManualFollowUps,
       activeThread,
       expandedDurableManualFollowUpIds,
@@ -5206,12 +5283,23 @@ export default function ChatView(props: ChatViewProps) {
       text: snapshot.promptText || IMAGE_ONLY_BOOTSTRAP_PROMPT,
     });
 
-  const clearActiveComposerContent = () => {
+  const clearActiveComposerContent = (options?: {
+    readonly refocus?: boolean;
+    readonly revokeImagePreviews?: boolean;
+  }) => {
+    const previewUrlsToRevoke = options?.revokeImagePreviews
+      ? composerImagesRef.current.map((image) => image.previewUrl)
+      : [];
     promptRef.current = "";
     clearComposerDraftContent(composerDraftTarget);
     composerRef.current?.resetCursorState();
     composerRef.current?.clearEphemeralBrowserContext();
-    scheduleComposerFocus();
+    for (const previewUrl of previewUrlsToRevoke) {
+      revokeBlobPreviewUrl(previewUrl);
+    }
+    if (options?.refocus !== false) {
+      scheduleComposerFocus();
+    }
   };
 
   const restoreComposerSnapshotForRetry = (snapshot: ComposerSendSnapshot) => {
@@ -5237,8 +5325,13 @@ export default function ChatView(props: ChatViewProps) {
     const queuedAt = new Date().toISOString();
     const item: FollowUpQueueItem = {
       ...snapshot,
+      // The composer draft remains intact until final enqueue receipt. Give
+      // the queue independent preview URLs so cancelling or accepting the
+      // queued copy cannot invalidate an attachment the operator is editing.
+      images: snapshot.images.map(cloneComposerImageForRetry),
       id: newManualFollowUpId(),
       messageId: newMessageId(),
+      reservationCommandId: newCommandId(),
       enqueueCommandId: newCommandId(),
       enqueueStatus: "pending",
       enqueueRetryAfterMs: 0,
@@ -5258,12 +5351,11 @@ export default function ChatView(props: ChatViewProps) {
       [targetKey]: appendOperatorFollowUp(existing[targetKey] ?? EMPTY_FOLLOW_UP_QUEUE, item),
     }));
     setThreadError(activeThread.id, null);
-    clearActiveComposerContent();
-    // On touch devices queueing comes from the send button while the agent
-    // runs; refocusing would reopen the on-screen keyboard the user just
-    // implicitly closed by sending.
-    if (!hasOnScreenKeyboard) {
-      scheduleComposerFocus();
+    // Start the prompt-free reservation immediately. The composer remains
+    // intact until the server acknowledges operator priority for this exact
+    // thread, so a failed first RPC never destroys unsent work.
+    if (isServerThread) {
+      void dispatchFollowUpTurnStartRef.current?.(item);
     }
   };
 
@@ -5294,6 +5386,143 @@ export default function ChatView(props: ChatViewProps) {
     });
   };
 
+  const setLocalManualFollowUpBlockedReason = (
+    targetEnvironmentId: EnvironmentId,
+    targetThreadId: ThreadId,
+    followUpId: ManualFollowUpId,
+    blockedReason: string | null,
+  ): void => {
+    const targetKey = followUpThreadMapKey(targetEnvironmentId, targetThreadId);
+    setFollowUpQueueByThreadId((existing) => {
+      const current = existing[targetKey] ?? EMPTY_FOLLOW_UP_QUEUE;
+      let changed = false;
+      const nextItems = current.map((entry) => {
+        if (entry.id !== followUpId || entry.blockedReason === blockedReason) {
+          return entry;
+        }
+        changed = true;
+        return {
+          ...entry,
+          blockedReason,
+        };
+      });
+      return changed
+        ? {
+            ...existing,
+            [targetKey]: nextItems,
+          }
+        : existing;
+    });
+  };
+
+  const dispatchManualFollowUpCancellation = async (
+    targetEnvironmentId: EnvironmentId,
+    targetThreadId: ThreadId,
+    followUpId: ManualFollowUpId,
+  ): Promise<boolean> => {
+    const itemKey = manualFollowUpMapKey(targetEnvironmentId, targetThreadId, followUpId);
+    if (
+      manualFollowUpCancellationInFlightKeysRef.current.has(itemKey) ||
+      manualFollowUpActivationInFlightKeysRef.current.has(itemKey) ||
+      (manualFollowUpCancellationRetryAfterMsRef.current.get(itemKey) ?? 0) > Date.now()
+    ) {
+      return false;
+    }
+    const api = readEnvironmentApi(targetEnvironmentId);
+    if (!api) {
+      manualFollowUpCancellationRetryAfterMsRef.current.set(itemKey, Date.now() + 1_000);
+      return false;
+    }
+
+    const cancellationCommand =
+      manualFollowUpCancellationCommandsRef.current.get(itemKey) ??
+      (() => {
+        const created = {
+          commandId: newCommandId(),
+          createdAt: new Date().toISOString(),
+        };
+        manualFollowUpCancellationCommandsRef.current.set(itemKey, created);
+        return created;
+      })();
+    manualFollowUpCancellationInFlightKeysRef.current.add(itemKey);
+    pendingManualFollowUpCancellationKeysRef.current.add(itemKey);
+    setLocalManualFollowUpBlockedReason(
+      targetEnvironmentId,
+      targetThreadId,
+      followUpId,
+      "Cancelling this queued follow-up…",
+    );
+    setManualFollowUpUiRevision((revision) => revision + 1);
+
+    let accepted = false;
+    let retryIndeterminate = false;
+    try {
+      await api.orchestration.dispatchCommand({
+        type: "thread.manual-follow-up.cancel",
+        commandId: cancellationCommand.commandId,
+        threadId: targetThreadId,
+        followUpId,
+        createdAt: cancellationCommand.createdAt,
+      });
+      accepted = true;
+      manualFollowUpCancellationRequestedKeysRef.current.delete(itemKey);
+      manualFollowUpCancellationCommandsRef.current.delete(itemKey);
+      manualFollowUpCancellationRetryAfterMsRef.current.delete(itemKey);
+      manualFollowUpDurablyReservedKeysRef.current.delete(itemKey);
+      removeFollowUpQueueItem(targetEnvironmentId, targetThreadId, followUpId, true);
+      setExpandedDurableManualFollowUpIds((existing) => {
+        if (!existing.has(followUpId)) {
+          return existing;
+        }
+        const next = new Set(existing);
+        next.delete(followUpId);
+        return next;
+      });
+      if (
+        activeThread?.environmentId === targetEnvironmentId &&
+        activeThread.id === targetThreadId
+      ) {
+        setThreadError(targetThreadId, null);
+      }
+      return true;
+    } catch (error) {
+      retryIndeterminate = isIndeterminateTransportError(error);
+      manualFollowUpCancellationRetryAfterMsRef.current.set(
+        itemKey,
+        retryIndeterminate ? Date.now() + 1_000 : Number.POSITIVE_INFINITY,
+      );
+      if (!retryIndeterminate) {
+        // A definitive rejection is a durable receipt for this command id.
+        // A later operator retry must use a fresh id rather than replay it.
+        manualFollowUpCancellationCommandsRef.current.delete(itemKey);
+      }
+      const cancellationError = describeSendFailureMessage(
+        error,
+        "Failed to remove queued follow-up.",
+      );
+      setLocalManualFollowUpBlockedReason(
+        targetEnvironmentId,
+        targetThreadId,
+        followUpId,
+        retryIndeterminate ? "Cancelling this queued follow-up…" : cancellationError,
+      );
+      if (
+        activeThread?.environmentId === targetEnvironmentId &&
+        activeThread.id === targetThreadId
+      ) {
+        setThreadError(targetThreadId, cancellationError);
+      }
+      return false;
+    } finally {
+      manualFollowUpCancellationInFlightKeysRef.current.delete(itemKey);
+      if (accepted || !retryIndeterminate) {
+        pendingManualFollowUpCancellationKeysRef.current.delete(itemKey);
+      }
+      setManualFollowUpUiRevision((revision) => revision + 1);
+    }
+  };
+  dispatchManualFollowUpCancellationRef.current = dispatchManualFollowUpCancellation;
+
   const dispatchFollowUpTurnStart = async (item: FollowUpQueueItem) => {
     const queuedThread = resolveQueuedFollowUpThread(item);
     if (!queuedThread) {
@@ -5304,6 +5533,7 @@ export default function ChatView(props: ChatViewProps) {
       return;
     }
     if (
+      item.enqueueStatus === "reserving" ||
       item.enqueueStatus === "submitting" ||
       item.enqueueStatus === "acknowledged" ||
       item.enqueueStatus === "rejected" ||
@@ -5319,6 +5549,9 @@ export default function ChatView(props: ChatViewProps) {
     const isVisibleThread =
       activeThread?.environmentId === queuedThread.environmentId &&
       activeThread.id === queuedThread.id;
+    const threadKey = followUpThreadMapKey(item.environmentId, item.threadId);
+    const itemKey = manualFollowUpMapKey(item.environmentId, item.threadId, item.id);
+    let reservationAcknowledged = manualFollowUpDurablyReservedKeysRef.current.has(itemKey);
     manualFollowUpEnqueueInFlightIdsRef.current.add(item.id);
     setQueueDispatchInFlight(true);
     setFollowUpQueueByThreadId((existing) => {
@@ -5330,7 +5563,7 @@ export default function ChatView(props: ChatViewProps) {
           entry.id === item.id
             ? {
                 ...entry,
-                enqueueStatus: "submitting",
+                enqueueStatus: "reserving",
                 blockedReason: null,
               }
             : entry,
@@ -5339,12 +5572,68 @@ export default function ChatView(props: ChatViewProps) {
     });
 
     try {
+      await api.orchestration.dispatchCommand({
+        type: "thread.manual-follow-up.reserve",
+        commandId: item.reservationCommandId,
+        threadId: item.threadId,
+        followUpId: item.id,
+        messageId: item.messageId,
+        dispatch: {
+          modelSelection: item.modelSelection,
+          titleSeed: item.titleSeed,
+          runtimeMode: item.runtimeMode,
+          interactionMode: item.interactionMode,
+        },
+        createdAt: item.queuedAt,
+      });
+      reservationAcknowledged = true;
+      manualFollowUpDurablyReservedKeysRef.current.add(itemKey);
+      setFollowUpQueueByThreadId((existing) => {
+        const targetKey = followUpThreadMapKey(item.environmentId, item.threadId);
+        const current = existing[targetKey] ?? EMPTY_FOLLOW_UP_QUEUE;
+        return {
+          ...existing,
+          [targetKey]: current.map((entry) =>
+            entry.id === item.id
+              ? {
+                  ...entry,
+                  enqueueStatus: "reserved",
+                  blockedReason: null,
+                }
+              : entry,
+          ),
+        };
+      });
+      if (manualFollowUpCancellationRequestedKeysRef.current.has(itemKey)) {
+        await dispatchManualFollowUpCancellation(item.environmentId, item.threadId, item.id);
+        return;
+      }
       const attachments = await buildAttachmentsForSnapshot(item);
+      if (manualFollowUpCancellationRequestedKeysRef.current.has(itemKey)) {
+        await dispatchManualFollowUpCancellation(item.environmentId, item.threadId, item.id);
+        return;
+      }
+      setFollowUpQueueByThreadId((existing) => {
+        const targetKey = followUpThreadMapKey(item.environmentId, item.threadId);
+        const current = existing[targetKey] ?? EMPTY_FOLLOW_UP_QUEUE;
+        return {
+          ...existing,
+          [targetKey]: current.map((entry) =>
+            entry.id === item.id
+              ? {
+                  ...entry,
+                  enqueueStatus: "submitting",
+                }
+              : entry,
+          ),
+        };
+      });
       await api.orchestration.dispatchCommand({
         type: "thread.manual-follow-up.enqueue",
         commandId: item.enqueueCommandId,
         threadId: item.threadId,
         followUpId: item.id,
+        reservationCommandId: item.reservationCommandId,
         message: {
           messageId: item.messageId,
           role: "user",
@@ -5359,6 +5648,23 @@ export default function ChatView(props: ChatViewProps) {
         },
         createdAt: item.queuedAt,
       });
+      if (manualFollowUpCancellationRequestedKeysRef.current.has(itemKey)) {
+        await dispatchManualFollowUpCancellation(item.environmentId, item.threadId, item.id);
+        return;
+      }
+      if (
+        activeFollowUpThreadKeyRef.current === threadKey &&
+        promptRef.current === item.draftPromptText &&
+        composerImagesRef.current.length === item.images.length &&
+        composerImagesRef.current.every((image, index) => image.id === item.images[index]?.id)
+      ) {
+        clearActiveComposerContent({
+          // On touch devices queueing comes from the send button while the
+          // agent runs; do not reopen the keyboard the user just dismissed.
+          refocus: !hasOnScreenKeyboard,
+          revokeImagePreviews: true,
+        });
+      }
       // A resolved dispatch is a durable server receipt. Projection may arrive
       // before or after the RPC response; either one is sufficient to hand
       // ownership of the payload and attachment previews to the server.
@@ -5367,17 +5673,46 @@ export default function ChatView(props: ChatViewProps) {
         setThreadError(item.threadId, null);
       }
     } catch (err) {
+      const retryIndeterminate = isIndeterminateTransportError(err);
+      if (manualFollowUpCancellationRequestedKeysRef.current.has(itemKey)) {
+        if (reservationAcknowledged) {
+          await dispatchManualFollowUpCancellation(item.environmentId, item.threadId, item.id);
+        } else if (retryIndeterminate) {
+          setFollowUpQueueByThreadId((existing) => {
+            const current = existing[threadKey] ?? EMPTY_FOLLOW_UP_QUEUE;
+            return {
+              ...existing,
+              [threadKey]: current.map((entry) =>
+                entry.id === item.id
+                  ? {
+                      ...entry,
+                      enqueueStatus: "pending",
+                      enqueueRetryAfterMs: Date.now() + 1_000,
+                      blockedReason: "Cancelling this queued follow-up…",
+                    }
+                  : entry,
+              ),
+            };
+          });
+        } else {
+          // A definitive reserve rejection proves there is no durable item to
+          // cancel. Keep the composer draft and discard only the local copy.
+          manualFollowUpCancellationRequestedKeysRef.current.delete(itemKey);
+          manualFollowUpCancellationCommandsRef.current.delete(itemKey);
+          manualFollowUpCancellationRetryAfterMsRef.current.delete(itemKey);
+          removeFollowUpQueueItem(item.environmentId, item.threadId, item.id, true);
+        }
+        return;
+      }
       const queuedFollowUpError = describeSendFailureMessage(
         err,
         "Failed to save queued follow-up.",
       );
-      const itemKey = followUpThreadMapKey(item.environmentId, item.threadId);
-      const retryIndeterminate = isIndeterminateTransportError(err);
       setFollowUpQueueByThreadId((existing) => {
-        const current = existing[itemKey] ?? EMPTY_FOLLOW_UP_QUEUE;
+        const current = existing[threadKey] ?? EMPTY_FOLLOW_UP_QUEUE;
         return {
           ...existing,
-          [itemKey]: current.map((entry) =>
+          [threadKey]: current.map((entry) =>
             entry.id === item.id
               ? {
                   ...entry,
@@ -5469,63 +5804,19 @@ export default function ChatView(props: ChatViewProps) {
     item: ThreadManualFollowUp,
   ) => {
     const itemKey = manualFollowUpMapKey(targetThread.environmentId, targetThread.id, item.id);
+    if (item.status === "handoff" || manualFollowUpActivationInFlightKeysRef.current.has(itemKey)) {
+      return;
+    }
+    manualFollowUpCancellationRequestedKeysRef.current.add(itemKey);
+    // An explicit click retries a prior definitive cancellation failure with a
+    // fresh command id; indeterminate retries keep their exact command object.
     if (
-      item.status !== "queued" ||
-      manualFollowUpCancellationInFlightKeysRef.current.has(itemKey) ||
-      pendingManualFollowUpCancellationKeysRef.current.has(itemKey) ||
-      manualFollowUpActivationInFlightKeysRef.current.has(itemKey)
+      manualFollowUpCancellationRetryAfterMsRef.current.get(itemKey) === Number.POSITIVE_INFINITY
     ) {
-      return;
+      manualFollowUpCancellationRetryAfterMsRef.current.delete(itemKey);
     }
-    const api = readEnvironmentApi(targetThread.environmentId);
-    if (!api) {
-      return;
-    }
-
-    manualFollowUpCancellationInFlightKeysRef.current.add(itemKey);
-    pendingManualFollowUpCancellationKeysRef.current.add(itemKey);
     setManualFollowUpUiRevision((revision) => revision + 1);
-    let accepted = false;
-    try {
-      await api.orchestration.dispatchCommand({
-        type: "thread.manual-follow-up.cancel",
-        commandId: newCommandId(),
-        threadId: targetThread.id,
-        followUpId: item.id,
-        createdAt: new Date().toISOString(),
-      });
-      accepted = true;
-      setExpandedDurableManualFollowUpIds((existing) => {
-        if (!existing.has(item.id)) {
-          return existing;
-        }
-        const next = new Set(existing);
-        next.delete(item.id);
-        return next;
-      });
-      if (
-        activeThread?.environmentId === targetThread.environmentId &&
-        activeThread.id === targetThread.id
-      ) {
-        setThreadError(targetThread.id, null);
-      }
-    } catch (error) {
-      if (
-        activeThread?.environmentId === targetThread.environmentId &&
-        activeThread.id === targetThread.id
-      ) {
-        setThreadError(
-          targetThread.id,
-          describeSendFailureMessage(error, "Failed to remove queued follow-up."),
-        );
-      }
-    } finally {
-      manualFollowUpCancellationInFlightKeysRef.current.delete(itemKey);
-      if (!accepted) {
-        pendingManualFollowUpCancellationKeysRef.current.delete(itemKey);
-      }
-      setManualFollowUpUiRevision((revision) => revision + 1);
-    }
+    await dispatchManualFollowUpCancellation(targetThread.environmentId, targetThread.id, item.id);
   };
 
   const dispatchSteerSnapshot = async (
@@ -6639,9 +6930,16 @@ export default function ChatView(props: ChatViewProps) {
     if (!activeFollowUpThreadKey) return;
     const projectedItem = activeProjectedManualFollowUps.find((item) => item.id === itemId);
     if (projectedItem) {
-      const canExpand =
-        canExpandQueuedFollowUpText(projectedItem.message.text) ||
-        projectedItem.message.attachments.length > 0;
+      const localItem = activeLocalFollowUps.find((item) => item.id === itemId);
+      const projectedText =
+        projectedItem.status === "reserving"
+          ? (localItem?.promptText ?? "")
+          : projectedItem.message.text;
+      const projectedAttachmentCount =
+        projectedItem.status === "reserving"
+          ? (localItem?.images.length ?? 0)
+          : projectedItem.message.attachments.length;
+      const canExpand = canExpandQueuedFollowUpText(projectedText) || projectedAttachmentCount > 0;
       setExpandedDurableManualFollowUpIds((existing) => {
         if (!canExpand) {
           if (!existing.has(projectedItem.id)) {
@@ -6808,6 +7106,48 @@ export default function ChatView(props: ChatViewProps) {
     });
   };
 
+  const requestLocalManualFollowUpCancellation = (item: FollowUpQueueItem): void => {
+    const itemKey = manualFollowUpMapKey(item.environmentId, item.threadId, item.id);
+    manualFollowUpCancellationRequestedKeysRef.current.add(itemKey);
+    if (
+      manualFollowUpCancellationRetryAfterMsRef.current.get(itemKey) === Number.POSITIVE_INFINITY
+    ) {
+      manualFollowUpCancellationRetryAfterMsRef.current.delete(itemKey);
+    }
+    setLocalManualFollowUpBlockedReason(
+      item.environmentId,
+      item.threadId,
+      item.id,
+      "Cancelling this queued follow-up…",
+    );
+    setManualFollowUpUiRevision((revision) => revision + 1);
+
+    if (manualFollowUpDurablyReservedKeysRef.current.has(itemKey)) {
+      void dispatchManualFollowUpCancellation(item.environmentId, item.threadId, item.id);
+      return;
+    }
+    const reserveMayHaveCommitted =
+      manualFollowUpEnqueueInFlightIdsRef.current.has(item.id) ||
+      item.enqueueRetryAfterMs > 0 ||
+      item.enqueueStatus === "reserving" ||
+      item.enqueueStatus === "reserved" ||
+      item.enqueueStatus === "submitting" ||
+      item.enqueueStatus === "acknowledged";
+    if (reserveMayHaveCommitted) {
+      // The stable reserve command must settle before cancellation is sent.
+      // Its dispatcher observes the cancellation request after every awaited
+      // stage and skips payload serialization whenever possible.
+      return;
+    }
+
+    // This item has never crossed the server boundary (or reserve was
+    // definitively rejected), so removing only the local queue copy is safe.
+    manualFollowUpCancellationRequestedKeysRef.current.delete(itemKey);
+    manualFollowUpCancellationCommandsRef.current.delete(itemKey);
+    manualFollowUpCancellationRetryAfterMsRef.current.delete(itemKey);
+    removeFollowUpQueueItem(item.environmentId, item.threadId, item.id, true);
+  };
+
   const onRemoveFollowUpQueueItem = (itemId: string) => {
     if (!activeThread) return;
     const projectedItem = activeProjectedManualFollowUps.find((item) => item.id === itemId);
@@ -6815,7 +7155,10 @@ export default function ChatView(props: ChatViewProps) {
       void cancelProjectedManualFollowUp(activeThread, projectedItem);
       return;
     }
-    removeFollowUpQueueItem(activeThread.environmentId, activeThread.id, itemId, true);
+    const localItem = activeLocalFollowUps.find((item) => item.id === itemId);
+    if (localItem) {
+      requestLocalManualFollowUpCancellation(localItem);
+    }
   };
 
   const onClearFollowUpQueue = () => {
@@ -6823,16 +7166,10 @@ export default function ChatView(props: ChatViewProps) {
     const current =
       followUpQueueByThreadIdRef.current[activeFollowUpThreadKey] ?? EMPTY_FOLLOW_UP_QUEUE;
     for (const item of current) {
-      revokeQueuedFollowUpPreviewUrls(item);
+      requestLocalManualFollowUpCancellation(item);
     }
-    setFollowUpQueueByThreadId((existing) => {
-      if (!(activeFollowUpThreadKey in existing)) return existing;
-      const next = { ...existing };
-      delete next[activeFollowUpThreadKey];
-      return next;
-    });
     const cancelableProjectedItems = activeProjectedManualFollowUps.filter(
-      (item) => item.status === "queued",
+      (item) => item.status !== "handoff",
     );
     if (cancelableProjectedItems.length > 0) {
       void (async () => {
@@ -6850,6 +7187,42 @@ export default function ChatView(props: ChatViewProps) {
         (total, items) => total + items.length,
         0,
       );
+      const nowMs = Date.now();
+      for (const item of Object.values(queuesByThreadId).flat()) {
+        const itemKey = manualFollowUpMapKey(item.environmentId, item.threadId, item.id);
+        if (
+          manualFollowUpCancellationRequestedKeysRef.current.has(itemKey) &&
+          manualFollowUpDurablyReservedKeysRef.current.has(itemKey) &&
+          !manualFollowUpCancellationInFlightKeysRef.current.has(itemKey) &&
+          (manualFollowUpCancellationRetryAfterMsRef.current.get(itemKey) ?? 0) <= nowMs
+        ) {
+          void dispatchManualFollowUpCancellationRef.current?.(
+            item.environmentId,
+            item.threadId,
+            item.id,
+          );
+          return true;
+        }
+      }
+      for (const thread of allThreads) {
+        const item = thread.manualFollowUps.find((entry) => {
+          const itemKey = manualFollowUpMapKey(thread.environmentId, thread.id, entry.id);
+          return (
+            entry.status !== "handoff" &&
+            manualFollowUpCancellationRequestedKeysRef.current.has(itemKey) &&
+            !manualFollowUpCancellationInFlightKeysRef.current.has(itemKey) &&
+            (manualFollowUpCancellationRetryAfterMsRef.current.get(itemKey) ?? 0) <= nowMs
+          );
+        });
+        if (item) {
+          void dispatchManualFollowUpCancellationRef.current?.(
+            thread.environmentId,
+            thread.id,
+            item.id,
+          );
+          return true;
+        }
+      }
 
       const candidate = selectQueuedFollowUpDispatchCandidate<string, FollowUpQueueItem>({
         queuesByThreadId,

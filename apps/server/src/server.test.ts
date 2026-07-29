@@ -17,6 +17,7 @@ import {
   EventId,
   GitCommandError,
   KeybindingRule,
+  ManualFollowUpId,
   MessageId,
   MAX_AMBIENT_IMAGE_FILE_BYTES,
   ExternalLauncherError,
@@ -5132,9 +5133,19 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect("omits saved Auto Nudge prompts while enriching global replay events", () =>
+  it.effect("omits exact-thread prompts while enriching global replay events", () =>
     Effect.gen(function* () {
       const sentinelPrompt = "GLOBAL-REPLAY-MUST-NOT-SEE-THIS-AUTO-NUDGE-PROMPT";
+      const manualSentinelPrompt = "GLOBAL-REPLAY-MUST-NOT-SEE-THIS-MANUAL-FOLLOW-UP-PROMPT";
+      const reservationCommandId = CommandId.make("command-manual-follow-up-global-replay");
+      const followUpId = ManualFollowUpId.make("manual-follow-up-global-replay");
+      const messageId = MessageId.make("message-manual-follow-up-global-replay");
+      const manualDispatch = {
+        modelSelection: defaultModelSelection,
+        titleSeed: "Manual follow-up global replay",
+        runtimeMode: "full-access" as const,
+        interactionMode: "default" as const,
+      };
       const repositoryIdentity = {
         canonicalKey: "github.com/t3tools/t3code",
         locator: {
@@ -5183,6 +5194,85 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 } satisfies Extract<OrchestrationEvent, { type: "thread.auto-nudge-configured" }>,
                 {
                   sequence: 2,
+                  eventId: EventId.make("event-manual-follow-up-reserved-global-replay"),
+                  aggregateKind: "thread",
+                  aggregateId: defaultThreadId,
+                  occurredAt: "2026-04-05T00:00:00.000Z",
+                  commandId: reservationCommandId,
+                  causationEventId: null,
+                  correlationId: reservationCommandId,
+                  metadata: {},
+                  type: "thread.manual-follow-up-reserved",
+                  payload: {
+                    threadId: defaultThreadId,
+                    item: {
+                      id: followUpId,
+                      messageId,
+                      dispatch: manualDispatch,
+                      status: "reserving",
+                      reservationCommandId,
+                      enqueuedAt: "2026-04-05T00:00:00.000Z",
+                    },
+                  },
+                } satisfies Extract<
+                  OrchestrationEvent,
+                  { type: "thread.manual-follow-up-reserved" }
+                >,
+                {
+                  sequence: 3,
+                  eventId: EventId.make("event-manual-follow-up-enqueued-global-replay"),
+                  aggregateKind: "thread",
+                  aggregateId: defaultThreadId,
+                  occurredAt: "2026-04-05T00:00:01.000Z",
+                  commandId: CommandId.make("command-manual-follow-up-enqueue-global-replay"),
+                  causationEventId: null,
+                  correlationId: CommandId.make("command-manual-follow-up-enqueue-global-replay"),
+                  metadata: {},
+                  type: "thread.manual-follow-up-enqueued",
+                  payload: {
+                    threadId: defaultThreadId,
+                    item: {
+                      id: followUpId,
+                      reservationCommandId,
+                      message: {
+                        messageId,
+                        role: "user",
+                        text: manualSentinelPrompt,
+                        attachments: [],
+                      },
+                      dispatch: manualDispatch,
+                      status: "queued",
+                      enqueuedAt: "2026-04-05T00:00:00.000Z",
+                      activatedAt: null,
+                      activationCommandId: null,
+                    },
+                  },
+                } satisfies Extract<
+                  OrchestrationEvent,
+                  { type: "thread.manual-follow-up-enqueued" }
+                >,
+                {
+                  sequence: 4,
+                  eventId: EventId.make("event-manual-follow-up-count-global-replay"),
+                  aggregateKind: "thread",
+                  aggregateId: defaultThreadId,
+                  occurredAt: "2026-04-05T00:00:00.000Z",
+                  commandId: reservationCommandId,
+                  causationEventId: null,
+                  correlationId: reservationCommandId,
+                  metadata: {},
+                  type: "thread.manual-follow-up-count-changed",
+                  payload: {
+                    threadId: defaultThreadId,
+                    count: 1,
+                    updatedAt: "2026-04-05T00:00:00.000Z",
+                  },
+                } satisfies Extract<
+                  OrchestrationEvent,
+                  { type: "thread.manual-follow-up-count-changed" }
+                >,
+                {
+                  sequence: 5,
                   eventId: EventId.make("event-2"),
                   aggregateKind: "project",
                   aggregateId: defaultProjectId,
@@ -5219,9 +5309,14 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         ),
       );
 
-      assert.equal(replayResult.length, 1);
+      assert.equal(replayResult.length, 2);
       assert.isFalse(JSON.stringify(replayResult).includes(sentinelPrompt));
-      const replayedEvent = replayResult[0];
+      assert.isFalse(JSON.stringify(replayResult).includes(manualSentinelPrompt));
+      assert.deepEqual(
+        replayResult.map((event) => event.type),
+        ["thread.manual-follow-up-count-changed", "project.created"],
+      );
+      const replayedEvent = replayResult[1];
       assert.equal(replayedEvent?.type, "project.created");
       assert.deepEqual(
         replayedEvent && replayedEvent.type === "project.created"

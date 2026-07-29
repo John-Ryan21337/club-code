@@ -310,8 +310,61 @@ describe("OrchestrationSubscriptionHub", () => {
             pollInterval: Duration.hours(1),
           });
           const threadId = ThreadId.make("thread-manual-follow-up-target");
-          const enqueued = {
+          const reservationCommandId = CommandId.make("command-manual-follow-up-reserved");
+          const dispatch = {
+            modelSelection: {
+              instanceId: ProviderInstanceId.make("codex"),
+              model: "gpt-5.6-sol",
+            },
+            titleSeed: "Target thread",
+            runtimeMode: "full-access" as const,
+            interactionMode: "default" as const,
+          };
+          const reserved = {
             sequence: 1,
+            eventId: EventId.make("event-manual-follow-up-reserved"),
+            type: "thread.manual-follow-up-reserved",
+            aggregateKind: "thread",
+            aggregateId: threadId,
+            occurredAt: "2026-07-28T00:00:00.000Z",
+            commandId: reservationCommandId,
+            causationEventId: null,
+            correlationId: reservationCommandId,
+            metadata: {},
+            payload: {
+              threadId,
+              item: {
+                id: ManualFollowUpId.make("manual-follow-up-secret"),
+                messageId: MessageId.make("manual-follow-up-message-secret"),
+                dispatch,
+                status: "reserving",
+                reservationCommandId,
+                enqueuedAt: "2026-07-28T00:00:00.000Z",
+              },
+            },
+          } satisfies Extract<OrchestrationEvent, { type: "thread.manual-follow-up-reserved" }>;
+          const countChanged = {
+            sequence: 2,
+            eventId: EventId.make("event-manual-follow-up-count"),
+            type: "thread.manual-follow-up-count-changed",
+            aggregateKind: "thread",
+            aggregateId: threadId,
+            occurredAt: "2026-07-28T00:00:00.000Z",
+            commandId: reservationCommandId,
+            causationEventId: reserved.eventId,
+            correlationId: reservationCommandId,
+            metadata: {},
+            payload: {
+              threadId,
+              count: 1,
+              updatedAt: "2026-07-28T00:00:00.000Z",
+            },
+          } satisfies Extract<
+            OrchestrationEvent,
+            { type: "thread.manual-follow-up-count-changed" }
+          >;
+          const enqueued = {
+            sequence: 3,
             eventId: EventId.make("event-manual-follow-up-enqueued"),
             type: "thread.manual-follow-up-enqueued",
             aggregateKind: "thread",
@@ -325,21 +378,14 @@ describe("OrchestrationSubscriptionHub", () => {
               threadId,
               item: {
                 id: ManualFollowUpId.make("manual-follow-up-secret"),
+                reservationCommandId,
                 message: {
                   messageId: MessageId.make("manual-follow-up-message-secret"),
                   role: "user",
                   text: "EXACT-THREAD-MANUAL-PROMPT",
                   attachments: [],
                 },
-                dispatch: {
-                  modelSelection: {
-                    instanceId: ProviderInstanceId.make("codex"),
-                    model: "gpt-5.6-sol",
-                  },
-                  titleSeed: "Target thread",
-                  runtimeMode: "full-access",
-                  interactionMode: "default",
-                },
+                dispatch,
                 status: "queued",
                 enqueuedAt: "2026-07-28T00:00:00.000Z",
                 activatedAt: null,
@@ -347,41 +393,21 @@ describe("OrchestrationSubscriptionHub", () => {
               },
             },
           } satisfies Extract<OrchestrationEvent, { type: "thread.manual-follow-up-enqueued" }>;
-          const countChanged = {
-            sequence: 2,
-            eventId: EventId.make("event-manual-follow-up-count"),
-            type: "thread.manual-follow-up-count-changed",
-            aggregateKind: "thread",
-            aggregateId: threadId,
-            occurredAt: "2026-07-28T00:00:00.000Z",
-            commandId: CommandId.make("command-manual-follow-up-enqueued"),
-            causationEventId: enqueued.eventId,
-            correlationId: CommandId.make("command-manual-follow-up-enqueued"),
-            metadata: {},
-            payload: {
-              threadId,
-              count: 1,
-              updatedAt: "2026-07-28T00:00:00.000Z",
-            },
-          } satisfies Extract<
-            OrchestrationEvent,
-            { type: "thread.manual-follow-up-count-changed" }
-          >;
-
           yield* yieldHub;
-          yield* PubSub.publish(live, enqueued);
+          yield* PubSub.publish(live, reserved);
           yield* PubSub.publish(live, countChanged);
+          yield* PubSub.publish(live, enqueued);
           yield* yieldHub;
 
-          const detail = Option.getOrThrow(
-            yield* Stream.runHead(
-              hub.eventsFrom({
+          const detail = Array.from(
+            yield* hub
+              .eventsFrom({
                 fromSequenceExclusive: 0,
                 route: { kind: "thread", threadId },
-              }),
-            ),
+              })
+              .pipe(Stream.take(3), Stream.runCollect),
           );
-          expect(detail).toEqual(enqueued);
+          expect(detail).toEqual([reserved, countChanged, enqueued]);
 
           const shell = Option.getOrThrow(
             yield* Stream.runHead(

@@ -46,6 +46,7 @@ import { ProviderJournalMessageRepairLive } from "./orchestration/Layers/Provide
 import { ProviderJournalMessageRepair } from "./orchestration/Services/ProviderJournalMessageRepair.ts";
 import { ThreadDetailSubscriptionRegistry } from "./orchestration/Services/ThreadDetailSubscriptionRegistry.ts";
 import {
+  isManualFollowUpDetailEvent,
   makeOrchestrationSubscriptionHub,
   type OrchestrationSubscriptionHubShape,
 } from "./orchestration/Services/OrchestrationSubscriptionHub.ts";
@@ -814,11 +815,13 @@ const makeWsRpcLayer = (
             ).pipe(
               Effect.map((events) =>
                 Array.from(events).filter(
-                  // Saved Auto Nudge text belongs to exact-thread detail
-                  // state. Global replay has no thread scope, so reconnecting
-                  // shell clients must recover this config from the detail
-                  // snapshot/subscription instead of receiving every prompt.
-                  (event) => event.type !== "thread.auto-nudge-configured",
+                  // Saved Auto Nudge and manual follow-up state belongs to
+                  // exact-thread detail. Global replay has no thread scope, so
+                  // reconnecting shell clients recover it from detail streams
+                  // and receive only the prompt-free manual queue count here.
+                  (event) =>
+                    event.type !== "thread.auto-nudge-configured" &&
+                    !isManualFollowUpDetailEvent(event),
                 ),
               ),
               Effect.flatMap(enrichOrchestrationEvents),
