@@ -255,6 +255,8 @@ describe("client settings", () => {
       ambientImagePresetPlacement: "bottom-left",
       ambientImagePresetSize: "large",
       ambientImageGlowEnabled: true,
+      providerUsageWidgetEnabled: true,
+      modelPacingEnabled: true,
       ambientImageGlowColor: "auto",
       ambientImageGlowOpacity: 0.35,
       workflowObservatoryEnabled: true,

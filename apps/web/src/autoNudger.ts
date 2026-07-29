@@ -5,8 +5,23 @@ export const AUTO_NUDGE_DELAY_MS = 5_000;
 export type { AutoNudgeMode } from "@cafecode/contracts";
 
 export const AUTO_NUDGE_PROMPTS: Readonly<Record<Exclude<AutoNudgeMode, "off">, string>> = {
-  "hardcore-fanout": "Fan out and keep going",
-  "steady-progress": "Keep a few lanes going, make steady progress",
+  "hardcore-fanout": [
+    "Continue from the current thread context; do not restart discovery.",
+    "Re-anchor to unresolved operator requests and the project's applicable handoff, plan, canon, and current PR/backlog state.",
+    "Reconcile external state once per bounded run, then refresh only after a relevant change or when stale.",
+    "Drive the highest-priority unblocked asks through bounded, non-overlapping parallel lanes with one owner per lane; never fan out duplicate investigation or implementation.",
+    "Give each lane a compact context packet, converge through repository gates and required independent audits, and update canon only when evidence or operator intent requires it.",
+    "Linear owns actionable status and dependencies; Notion owns durable decisions and research; link rather than duplicate.",
+    "Stop fan-out when lanes contend, context cost exceeds its value, work is complete or blocked, or new authority is required.",
+  ].join(" "),
+  "steady-progress": [
+    "Continue from the current thread context; do not restart discovery or reread settled material.",
+    "Re-anchor to unresolved operator requests and the project's applicable handoff, plan, canon, and current PR/backlog state.",
+    "Reuse a compact progress packet when present; refresh external state only after a relevant change or when stale.",
+    "Select the highest-priority unblocked operator ask, keep at most two coherent lanes, implement the next verifiable slice, and update canon only when evidence or operator intent requires it.",
+    "Linear owns actionable status and dependencies; Notion owns durable decisions and research; link rather than duplicate.",
+    "Stop and report when the plan is complete, progress is blocked, or new authority is required.",
+  ].join(" "),
 };
 
 export function autoNudgePromptForMode(mode: AutoNudgeMode): string | null {
@@ -24,6 +39,50 @@ export interface AutoNudgeEligibility {
   hasManualActivity: boolean;
   hasPendingWork: boolean;
   providerAvailable: boolean;
+}
+
+export interface AutoNudgeTerminalObservation {
+  readonly contextKey: string;
+  readonly terminalTurnKey: string | null;
+}
+
+/**
+ * Only a changed provider-confirmed terminal identity in the same mounted
+ * thread context grants one-shot scheduling authority. Initial hydration,
+ * remount, navigation, and policy changes merely establish a baseline.
+ */
+export function isNewAutoNudgeTerminalEdge(
+  previous: AutoNudgeTerminalObservation | null,
+  current: AutoNudgeTerminalObservation,
+): boolean {
+  return (
+    previous !== null &&
+    previous.contextKey === current.contextKey &&
+    current.terminalTurnKey !== null &&
+    current.terminalTurnKey !== previous.terminalTurnKey
+  );
+}
+
+export function resolveArmedAutoNudgeTerminal(input: {
+  readonly previousObservation: AutoNudgeTerminalObservation;
+  readonly currentObservation: AutoNudgeTerminalObservation;
+  readonly currentlyArmedTerminalTurnKey: string | null;
+  readonly invalidatedByOperatorState: boolean;
+  readonly alreadyConsumed: boolean;
+}): string | null {
+  if (
+    input.invalidatedByOperatorState ||
+    input.alreadyConsumed ||
+    input.currentObservation.terminalTurnKey === null
+  ) {
+    return null;
+  }
+  if (isNewAutoNudgeTerminalEdge(input.previousObservation, input.currentObservation)) {
+    return input.currentObservation.terminalTurnKey;
+  }
+  return input.currentlyArmedTerminalTurnKey === input.currentObservation.terminalTurnKey
+    ? input.currentlyArmedTerminalTurnKey
+    : null;
 }
 
 export function canScheduleAutoNudge(input: AutoNudgeEligibility): boolean {

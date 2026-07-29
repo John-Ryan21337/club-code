@@ -8,6 +8,7 @@ import {
 import { useEffect, useState } from "react";
 
 import {
+  decideBackgroundAutoNudgeRootAction,
   getBackgroundAutoNudgeController,
   supportsBackgroundAutoNudgeDispatchLock,
   useBackgroundAutoNudgeState,
@@ -68,6 +69,17 @@ export function BackgroundAutoNudgeCoordinator() {
   useEffect(() => {
     const controller = getBackgroundAutoNudgeController();
     if (!backgroundState.owner || backgroundState.status !== "active") return;
+    // PR7's root shell projection cannot observe the exact thread's local
+    // manual follow-up FIFO after navigation. Do not let an automated prompt
+    // overtake operator input. PR8 may enable this only after it supplies
+    // durable exact-thread queue truth to this coordinator.
+    if (decideBackgroundAutoNudgeRootAction(false) === "pause-missing-manual-queue-truth") {
+      controller.pause(
+        backgroundState.owner,
+        "Background continuation is waiting for exact-thread manual queue state.",
+      );
+      return;
+    }
     // localStorage alone has no compare-and-swap. Chromium/Electron's lock
     // serializes reload -> consume -> transport handoff across renderer tabs;
     // an older browser pauses instead of permitting an ambiguous duplicate.

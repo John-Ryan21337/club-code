@@ -28,6 +28,7 @@ describe("buildProviderUsageRows", () => {
           displayName: "Codex Personal",
           runtimeCapabilities: {
             liveSteer: "supported",
+            threadGoals: "supported",
             accountUsage: "unsupported",
           },
           accountRateLimits: {
@@ -139,6 +140,7 @@ describe("buildProviderUsageRows", () => {
           instanceId: "no-data" as ServerProvider["instanceId"],
           runtimeCapabilities: {
             liveSteer: "supported",
+            threadGoals: "supported",
             accountUsage: "experimental",
           },
         }),
@@ -240,6 +242,7 @@ describe("buildProviderUsageRows", () => {
         provider({
           runtimeCapabilities: {
             liveSteer: "supported",
+            threadGoals: "supported",
             accountUsage: "supported",
           },
         }),
@@ -251,6 +254,7 @@ describe("buildProviderUsageRows", () => {
           driver: "opencode" as ServerProvider["driver"],
           runtimeCapabilities: {
             liveSteer: "unsupported",
+            threadGoals: "unsupported",
             accountUsage: "unsupported",
           },
         }),
@@ -261,6 +265,7 @@ describe("buildProviderUsageRows", () => {
         provider({
           runtimeCapabilities: {
             liveSteer: "supported",
+            threadGoals: "supported",
             accountUsage: "experimental",
           },
           auth: { status: "unauthenticated" },

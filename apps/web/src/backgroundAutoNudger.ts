@@ -39,6 +39,7 @@ export interface BackgroundAutoNudgeState {
   readonly startedAt: string | null;
   readonly sentRounds: number;
   readonly baselineUserMessageAt: string | null;
+  readonly baselineTerminalTurnKey: string | null;
   readonly expectedAutomatedUserMessageAt: string | null;
   readonly expectedAutomatedUserMessageDeadlineAt: string | null;
   readonly scheduled: {
@@ -76,6 +77,23 @@ export interface BackgroundAutoNudgeDispatch {
   readonly round: number;
 }
 
+/**
+ * Background dispatch must fail closed until the root coordinator can observe
+ * the exact thread's manual follow-up FIFO. A visible ChatView has that truth,
+ * but shell projections alone do not.
+ */
+export type BackgroundAutoNudgeRootDecision =
+  | "observe-exact-thread"
+  | "pause-missing-manual-queue-truth";
+
+export function decideBackgroundAutoNudgeRootAction(
+  hasExactThreadManualQueueTruth: boolean,
+): BackgroundAutoNudgeRootDecision {
+  return hasExactThreadManualQueueTruth
+    ? "observe-exact-thread"
+    : "pause-missing-manual-queue-truth";
+}
+
 export interface BackgroundAutoNudgeStorage {
   getItem(key: string): string | null;
   setItem(key: string, value: string): void;
@@ -90,6 +108,7 @@ const EMPTY_STATE: BackgroundAutoNudgeState = {
   startedAt: null,
   sentRounds: 0,
   baselineUserMessageAt: null,
+  baselineTerminalTurnKey: null,
   expectedAutomatedUserMessageAt: null,
   expectedAutomatedUserMessageDeadlineAt: null,
   scheduled: null,
@@ -215,6 +234,9 @@ function readState(storage: BackgroundAutoNudgeStorage | null): BackgroundAutoNu
       baselineUserMessageAt: safeIso(parsed.baselineUserMessageAt)
         ? parsed.baselineUserMessageAt
         : null,
+      baselineTerminalTurnKey: safeId(parsed.baselineTerminalTurnKey)
+        ? parsed.baselineTerminalTurnKey
+        : null,
       expectedAutomatedUserMessageAt: expectedProjectionIsValid
         ? expectedAutomatedUserMessageAt
         : null,
@@ -323,6 +345,7 @@ export class BackgroundAutoNudgeController {
   start(
     owner: BackgroundAutoNudgeThreadRef,
     latestUserMessageAt: string | null,
+    baselineTerminalTurnKey: string | null,
     runPolicy: AutoNudgeThreadPolicy,
     nowMs = Date.now(),
   ): boolean {
@@ -341,6 +364,7 @@ export class BackgroundAutoNudgeController {
       startedAt: new Date(nowMs).toISOString(),
       sentRounds: 0,
       baselineUserMessageAt: latestUserMessageAt,
+      baselineTerminalTurnKey,
       expectedAutomatedUserMessageAt: null,
       expectedAutomatedUserMessageDeadlineAt: null,
       scheduled: null,
@@ -544,6 +568,10 @@ export class BackgroundAutoNudgeController {
       if (this.state.scheduled) this.write({ ...this.state, scheduled: null });
       return null;
     }
+    if (turnKey === this.state.baselineTerminalTurnKey) {
+      if (this.state.scheduled) this.write({ ...this.state, scheduled: null });
+      return null;
+    }
     const consumed =
       input.alreadyConsumed(turnKey) ||
       this.state.ledger.some((entry) => entry.kind === "sent" && entry.terminalTurnKey === turnKey);
@@ -562,6 +590,7 @@ export class BackgroundAutoNudgeController {
         this.write({
           ...this.state,
           baselineUserMessageAt: latestUserMessageAt,
+          baselineTerminalTurnKey: turnKey,
           expectedAutomatedUserMessageAt: null,
           scheduled: null,
         });
@@ -603,6 +632,7 @@ export class BackgroundAutoNudgeController {
           ...this.state,
           sentRounds: round,
           baselineUserMessageAt: latestUserMessageAt,
+          baselineTerminalTurnKey: turnKey,
           expectedAutomatedUserMessageAt: createdAt,
           expectedAutomatedUserMessageDeadlineAt: new Date(
             input.nowMs + AUTO_NUDGE_PROJECTION_ACK_TIMEOUT_MS,

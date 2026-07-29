@@ -12,7 +12,10 @@ local per-thread registry.
 | Single background owner, captured run policy, bounds, and audit ledger | `localStorage` | `cafe-code.auto-nudge.background.v1`      |
 
 The background key remains at v1 because its existing envelope is extended
-compatibly with `runPolicy`; records without that field are treated as legacy.
+compatibly with `runPolicy` and `baselineTerminalTurnKey`; records without a
+captured run policy are treated as legacy. At the PR7 head, ownership/state may
+be migrated but root dispatch still pauses before observation because durable
+exact-thread manual FIFO truth is not yet available.
 
 ## Upgrade behavior
 
@@ -41,10 +44,12 @@ restore the old global behavior; it does not delete v2 data. Before release,
 validate:
 
 - enabled Thread A remains enabled through settings and thread navigation;
-- Thread B displays Off and cannot dispatch while A owns background execution;
+- Thread B displays Off while A owns background state;
 - disabling B does not stop A;
 - disabling A stops only A and cancels its pending countdown;
-- two renderer windows cannot claim the same terminal turn;
-- reload during the five-second delay does not duplicate a nudge;
+- enabling/remounting on an existing completed turn only baselines it;
+- a later changed exact terminal identity creates at most one foreground claim;
+- the root coordinator pauses before observation/transport while exact-thread
+  manual FIFO truth is unavailable;
 - a running provider turn is never interrupted or replaced; and
 - corrupt or oversized persisted values produce an Off/stopped state.

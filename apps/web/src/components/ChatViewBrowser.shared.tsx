@@ -4050,7 +4050,8 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
             });
             expect(getBackgroundAutoNudgeController().getSnapshot()).toMatchObject({
               owner: ownerRef,
-              status: "active",
+              status: "paused",
+              reason: "Background continuation is waiting for exact-thread manual queue state.",
             });
           },
           { timeout: 8_000, interval: 16 },

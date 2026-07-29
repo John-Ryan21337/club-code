@@ -9,6 +9,8 @@ import {
   canScheduleAutoNudge,
   consumeAutoNudgeTerminalForManualActivity,
   createAutoNudgeTurnLedger,
+  isNewAutoNudgeTerminalEdge,
+  resolveArmedAutoNudgeTerminal,
 } from "./autoNudger";
 
 const eligible = {
@@ -20,11 +22,83 @@ const eligible = {
 };
 
 describe("auto nudger safety gates", () => {
-  it("uses the exact, intentionally short prompts", () => {
-    expect(AUTO_NUDGE_PROMPTS["hardcore-fanout"]).toBe("Fan out and keep going");
-    expect(AUTO_NUDGE_PROMPTS["steady-progress"]).toBe(
-      "Keep a few lanes going, make steady progress",
+  it("authorizes only a later exact terminal edge in the same mounted thread", () => {
+    const completed = {
+      contextKey: "local:thread-a:project-a",
+      terminalTurnKey: "local:thread-a:turn-1",
+    };
+    expect(isNewAutoNudgeTerminalEdge(null, completed)).toBe(false);
+    expect(isNewAutoNudgeTerminalEdge(completed, completed)).toBe(false);
+    expect(
+      isNewAutoNudgeTerminalEdge(completed, {
+        contextKey: "local:thread-b:project-a",
+        terminalTurnKey: "local:thread-b:turn-1",
+      }),
+    ).toBe(false);
+    expect(isNewAutoNudgeTerminalEdge({ ...completed, terminalTurnKey: null }, completed)).toBe(
+      true,
     );
+    expect(
+      isNewAutoNudgeTerminalEdge(completed, {
+        ...completed,
+        terminalTurnKey: "local:thread-a:turn-2",
+      }),
+    ).toBe(true);
+  });
+
+  it("retains a new terminal authorization through temporary provider unavailability", () => {
+    const previousObservation = {
+      contextKey: "local:thread-a:project-a",
+      terminalTurnKey: null,
+    };
+    const currentObservation = {
+      contextKey: "local:thread-a:project-a",
+      terminalTurnKey: "local:thread-a:turn-1",
+    };
+    const armedWhileUnavailable = resolveArmedAutoNudgeTerminal({
+      previousObservation,
+      currentObservation,
+      currentlyArmedTerminalTurnKey: null,
+      invalidatedByOperatorState: false,
+      alreadyConsumed: false,
+    });
+    expect(armedWhileUnavailable).toBe(currentObservation.terminalTurnKey);
+    expect(
+      resolveArmedAutoNudgeTerminal({
+        previousObservation: currentObservation,
+        currentObservation,
+        currentlyArmedTerminalTurnKey: armedWhileUnavailable,
+        invalidatedByOperatorState: false,
+        alreadyConsumed: false,
+      }),
+    ).toBe(currentObservation.terminalTurnKey);
+    expect(
+      resolveArmedAutoNudgeTerminal({
+        previousObservation: currentObservation,
+        currentObservation,
+        currentlyArmedTerminalTurnKey: armedWhileUnavailable,
+        invalidatedByOperatorState: true,
+        alreadyConsumed: false,
+      }),
+    ).toBeNull();
+  });
+
+  it("uses plan-driven prompts with bounded context and coordination rules", () => {
+    expect(AUTO_NUDGE_PROMPTS["hardcore-fanout"]).toContain(
+      "bounded, non-overlapping parallel lanes",
+    );
+    expect(AUTO_NUDGE_PROMPTS["hardcore-fanout"]).toContain(
+      "never fan out duplicate investigation or implementation",
+    );
+    expect(AUTO_NUDGE_PROMPTS["steady-progress"]).toContain("keep at most two coherent lanes");
+    for (const prompt of Object.values(AUTO_NUDGE_PROMPTS)) {
+      expect(prompt).toContain("unresolved operator requests");
+      expect(prompt).toContain("handoff, plan, canon");
+      expect(prompt).toContain("current PR/backlog state");
+      expect(prompt).toContain("Linear owns actionable status and dependencies");
+      expect(prompt).toContain("Notion owns durable decisions and research");
+      expect(prompt.length).toBeLessThan(1_200);
+    }
     expect(autoNudgePromptForMode("off")).toBeNull();
   });
 

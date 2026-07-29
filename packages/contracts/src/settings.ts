@@ -972,6 +972,8 @@ export const CLUB_CODE_FIRST_RUN_CLIENT_SETTINGS: ClientSettings = Schema.decode
   ambientImagePresetPlacement: "bottom-left",
   ambientImagePresetSize: "large",
   ambientImageGlowEnabled: true,
+  providerUsageWidgetEnabled: true,
+  modelPacingEnabled: true,
   ambientImageGlowColor: "auto",
   ambientImageGlowOpacity: 0.35,
   workflowObservatoryEnabled: true,

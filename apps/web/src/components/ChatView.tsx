@@ -193,6 +193,7 @@ import {
   canScheduleAutoNudge,
   consumeAutoNudgeTerminalForManualActivity,
   getAutoNudgeTurnLedger,
+  resolveArmedAutoNudgeTerminal,
 } from "../autoNudger";
 import {
   getBackgroundAutoNudgeController,
@@ -2216,6 +2217,7 @@ export default function ChatView(props: ChatViewProps) {
   const [autoNudgeActivityRevision, setAutoNudgeActivityRevision] = useState(0);
   const autoNudgeLedgerRef = useRef(getAutoNudgeTurnLedger());
   const autoNudgeTerminalTurnKeyRef = useRef<string | null>(null);
+  const armedAutoNudgeTerminalTurnKeyRef = useRef<string | null>(null);
   const [autoNudgeTimerController] = useState(
     () =>
       new AutoNudgeTimerController({
@@ -2264,6 +2266,7 @@ export default function ChatView(props: ChatViewProps) {
   );
   const recordManualAutoNudgeActivity = useCallback(() => {
     const terminalTurnKey = autoNudgeTerminalTurnKeyRef.current;
+    armedAutoNudgeTerminalTurnKeyRef.current = null;
     autoNudgeLedgerRef.current.reloadFromStorage();
     consumeAutoNudgeTerminalForManualActivity(autoNudgeLedgerRef.current, terminalTurnKey);
     cancelScheduledAutoNudge(true);
@@ -5685,6 +5688,8 @@ export default function ChatView(props: ChatViewProps) {
     autoNudgeProviderCanAcceptTurn(activeProviderStatus) &&
     !activeEnvironmentUnavailable &&
     supportsAutoNudgeExecutionLock();
+  const autoNudgeHasManualActivity =
+    promptRef.current.trim().length > 0 || composerImagesRef.current.length > 0;
   useEffect(() => {
     if (
       !autoNudgeThreadRef ||
@@ -5711,7 +5716,7 @@ export default function ChatView(props: ChatViewProps) {
     // The root coordinator exclusively owns an opted-in background thread,
     // including while visible, so a foreground timer cannot race it.
     mode: backgroundAutoNudgeOwnerForRoute ? ("off" as const) : autoNudgePolicy.mode,
-    hasManualActivity: promptRef.current.trim().length > 0 || composerImagesRef.current.length > 0,
+    hasManualActivity: autoNudgeHasManualActivity,
     hasPendingWork: autoNudgeHasPendingWork,
     providerAvailable: autoNudgeProviderAvailable,
   };
@@ -5733,24 +5738,49 @@ export default function ChatView(props: ChatViewProps) {
   const autoNudgeContextKey = activeThread
     ? `${activeThread.environmentId}:${activeThread.id}:${activeThread.projectId}`
     : null;
-  const previousAutoNudgeContextKeyRef = useRef<string | null>(null);
-  useEffect(() => {
-    const previousContextKey = previousAutoNudgeContextKeyRef.current;
-    previousAutoNudgeContextKeyRef.current = autoNudgeContextKey;
-    if (previousContextKey === null || previousContextKey === autoNudgeContextKey) {
-      return;
-    }
-    // A policy may remain enabled, but a foreground timer belongs to exactly
-    // one visible thread. Cancel without consuming so returning can re-evaluate
-    // that thread's still-current completed turn from a fresh snapshot.
-    cancelScheduledAutoNudge(false);
-  }, [autoNudgeContextKey, cancelScheduledAutoNudge]);
+  const observedAutoNudgeTerminalRef = useRef<{
+    readonly contextKey: string;
+    readonly terminalTurnKey: string | null;
+  } | null>(null);
 
   useEffect(() => {
     const terminalTurnKey = autoNudgeTerminalTurnKey;
+    const previousObservation = observedAutoNudgeTerminalRef.current;
+    if (autoNudgeContextKey === null) {
+      observedAutoNudgeTerminalRef.current = null;
+      armedAutoNudgeTerminalTurnKeyRef.current = null;
+      cancelScheduledAutoNudge(false);
+      return;
+    }
+    observedAutoNudgeTerminalRef.current = { contextKey: autoNudgeContextKey, terminalTurnKey };
+    if (previousObservation === null || previousObservation.contextKey !== autoNudgeContextKey) {
+      // Enabling, remounting, or navigating to an already-completed thread
+      // establishes a baseline. Only a later exact terminal-key change may
+      // authorize an automated continuation.
+      armedAutoNudgeTerminalTurnKeyRef.current = null;
+      cancelScheduledAutoNudge(false);
+      return;
+    }
     autoNudgeLedgerRef.current.reloadFromStorage();
     const alreadySent = terminalTurnKey !== null && autoNudgeLedgerRef.current.has(terminalTurnKey);
-    if (!autoNudgeEligible || !autoNudgeThreadRef || terminalTurnKey === null || alreadySent) {
+    armedAutoNudgeTerminalTurnKeyRef.current = resolveArmedAutoNudgeTerminal({
+      previousObservation,
+      currentObservation: { contextKey: autoNudgeContextKey, terminalTurnKey },
+      currentlyArmedTerminalTurnKey: armedAutoNudgeTerminalTurnKeyRef.current,
+      invalidatedByOperatorState:
+        (backgroundAutoNudgeOwnerForRoute ? "off" : autoNudgePolicy.mode) === "off" ||
+        autoNudgeHasManualActivity ||
+        autoNudgeHasPendingWork,
+      alreadyConsumed: alreadySent,
+    });
+    const armedTerminalTurnKey = armedAutoNudgeTerminalTurnKeyRef.current;
+    if (
+      !autoNudgeEligible ||
+      !autoNudgeThreadRef ||
+      terminalTurnKey === null ||
+      alreadySent ||
+      armedTerminalTurnKey !== terminalTurnKey
+    ) {
       cancelScheduledAutoNudge(false);
       return;
     }
@@ -5787,6 +5817,7 @@ export default function ChatView(props: ChatViewProps) {
             }
             // Persist the claim before transport. A failure may skip a nudge,
             // but no reload or second window may duplicate one.
+            armedAutoNudgeTerminalTurnKeyRef.current = null;
             ledger.mark(scheduledTurnKey);
             await autoNudgeDispatchRef.current?.(currentPolicy.mode);
           })
@@ -5800,11 +5831,15 @@ export default function ChatView(props: ChatViewProps) {
     return () => cancelScheduledAutoNudge(false);
   }, [
     autoNudgeActivityRevision,
+    autoNudgeContextKey,
     autoNudgeEligible,
+    autoNudgeHasManualActivity,
+    autoNudgeHasPendingWork,
     autoNudgePolicy.mode,
     autoNudgeTerminalTurnKey,
     autoNudgeThreadRef,
     autoNudgeTimerController,
+    backgroundAutoNudgeOwnerForRoute,
     cancelScheduledAutoNudge,
   ]);
 
@@ -6716,7 +6751,15 @@ export default function ChatView(props: ChatViewProps) {
         const policy = policyStore.setPolicy(autoNudgeThreadRef, {
           backgroundContinuation: true,
         });
-        if (!controller.start(autoNudgeThreadRef, autoNudgeLatestUserMessageAt, policy)) return;
+        if (
+          !controller.start(
+            autoNudgeThreadRef,
+            autoNudgeLatestUserMessageAt,
+            autoNudgeTerminalTurnKey,
+            policy,
+          )
+        )
+          return;
         if (autoNudgeHasPendingWork) {
           controller.pause(autoNudgeThreadRef, "Queued work or operator attention is pending.");
         }

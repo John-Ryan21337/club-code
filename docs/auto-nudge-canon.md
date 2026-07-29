@@ -21,6 +21,12 @@ already running.
 
 - Foreground and background dispatch require the same exclusive Web Lock.
   Automatic dispatch is unavailable when the runtime cannot provide that lock.
+- This PR7 lineage intentionally fails closed for background dispatch because
+  its root coordinator cannot yet observe the exact thread's local manual
+  follow-up FIFO after navigation. Foreground per-thread Auto Nudge remains
+  available and includes that FIFO in its pending-work gate. A later queue
+  integration may enable background dispatch only after it supplies durable
+  exact-thread queue truth; automated input must never overtake operator input.
 - The dispatcher reloads the target thread's durable policy and consumed-turn
   ledger while holding the lock. It must not rely on a React closure, the
   currently visible thread, or device-wide client settings.
@@ -28,13 +34,23 @@ already running.
   session and provider are ready and there is no draft text, attachment,
   queued follow-up, approval, user-input request, plan prompt, transport error,
   or other pending work.
+- Enabling Auto Nudge, mounting the renderer, navigating to a thread, or
+  reloading a persisted background run baselines the current exact terminal
+  turn identity. None of those local actions authorizes a prompt for an
+  already-completed projection. Only a later changed provider-confirmed
+  terminal identity can authorize one bounded dispatch.
+- The five-second countdown is only a cancellation/recheck debounce after that
+  exact terminal edge. Elapsed wall-clock time never creates, renews, or
+  repeats dispatch authority. Temporary provider unavailability may retain the
+  already-proven one-shot edge; operator activity, queued work, Off, navigation,
+  or a different thread context invalidates it.
 - A running, starting, connecting, or otherwise unsettled provider agent is
   never interrupted. The scheduler waits for a later settled observation.
 - The terminal turn is claimed durably before transport handoff. A failed
   handoff may skip one automated nudge, but a reload or second window must not
   submit the same terminal turn twice.
-- A visible-thread countdown is canceled on navigation. Returning to the
-  thread re-evaluates its unchanged policy and latest terminal turn.
+- A visible-thread countdown is canceled on navigation. Returning baselines
+  the latest terminal turn and waits for a newer exact terminal identity.
 - Background continuation has one owner. Transferring ownership clears the
   former owner's background-continuation choice but preserves its mode and
   limits.
