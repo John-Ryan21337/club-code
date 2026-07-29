@@ -877,7 +877,6 @@ export interface ChatComposerProps {
   togglePlanSidebar: () => void;
   onOpenGoalDialog: () => void;
 
-  focusComposer: () => void;
   scheduleComposerFocus: () => void;
   /** Cancels an armed, current-turn auto nudge as soon as the operator edits. */
   onManualActivity?: () => void;
@@ -960,7 +959,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     handleInteractionModeChange,
     togglePlanSidebar,
     onOpenGoalDialog,
-    focusComposer,
     scheduleComposerFocus,
     onManualActivity,
     setThreadError,

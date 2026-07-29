@@ -6,7 +6,7 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 
 import type * as Electron from "electron";
-import { vi } from "vitest";
+import { expect, vi } from "vitest";
 
 import * as DesktopAssets from "../app/DesktopAssets.ts";
 import * as DesktopConfig from "../app/DesktopConfig.ts";
@@ -194,6 +194,37 @@ function makeTestLayer(input: {
 }
 
 describe("DesktopWindow", () => {
+  it("rolls back earlier media handlers when a later installation fails", () => {
+    const removeDisplayMediaCapture = vi.fn();
+    const cameraFailure = new Error("camera handler installation failed");
+
+    expect(() =>
+      DesktopWindow.installDesktopMediaPermissionBoundaries(
+        () => removeDisplayMediaCapture,
+        () => {
+          throw cameraFailure;
+        },
+      ),
+    ).toThrow(cameraFailure);
+    expect(removeDisplayMediaCapture).toHaveBeenCalledOnce();
+  });
+
+  it("attempts both media-handler removals once even when one throws", () => {
+    const removeDisplayMediaCapture = vi.fn();
+    const removeCameraPermission = vi.fn(() => {
+      throw new Error("camera handler removal failed");
+    });
+    const remove = DesktopWindow.installDesktopMediaPermissionBoundaries(
+      () => removeDisplayMediaCapture,
+      () => removeCameraPermission,
+    );
+
+    expect(remove).not.toThrow();
+    expect(remove).not.toThrow();
+    expect(removeCameraPermission).toHaveBeenCalledOnce();
+    expect(removeDisplayMediaCapture).toHaveBeenCalledOnce();
+  });
+
   it("enables only platforms with native opacity smoke evidence in packaged builds", () => {
     assert.deepEqual(DesktopWindow.resolveDesktopWindowOpacityCapability("linux", false), {
       supported: false,

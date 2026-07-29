@@ -19,6 +19,8 @@ import {
 
 const MAX_PROBE_OUTPUT_BYTES = 16_384;
 const TEMPERATURE_PROBE_TIMEOUT_MS = 2_000;
+/** Extra time after Node's kill request before the caller is settled regardless. */
+const TEMPERATURE_PROBE_FORCE_SETTLE_GRACE_MS = 500;
 const WINDOWS_POWERSHELL_SUBPATH = [
   "System32",
   "WindowsPowerShell",
@@ -58,6 +60,8 @@ interface HostTemperatureProbeOptions {
   readonly isExecutable?: (path: string) => boolean;
   readonly exec?: typeof execFile;
   readonly readLinux?: () => Promise<ServerSystemTemperatureTelemetry>;
+  readonly probeTimeoutMs?: number;
+  readonly forceSettleGraceMs?: number;
 }
 
 function executableFile(path: string): boolean {
@@ -68,6 +72,46 @@ function executableFile(path: string): boolean {
   } catch {
     return false;
   }
+}
+
+function boundedPositiveInteger(value: number | undefined, fallback: number, maximum: number) {
+  return value !== undefined && Number.isSafeInteger(value) && value > 0 && value <= maximum
+    ? value
+    : fallback;
+}
+
+function requestProbeStop(child: ChildProcess): void {
+  try {
+    child.kill("SIGKILL");
+  } catch {
+    // Best effort; the independent settlement deadline remains authoritative.
+  }
+  try {
+    child.stdin?.destroy();
+  } catch {
+    // Best effort.
+  }
+  try {
+    child.stdout?.destroy();
+  } catch {
+    // Best effort.
+  }
+  try {
+    child.stderr?.destroy();
+  } catch {
+    // Best effort.
+  }
+  try {
+    child.unref();
+  } catch {
+    // Best effort.
+  }
+}
+
+function scheduleDeadline(callback: () => void, delayMs: number): ReturnType<typeof setTimeout> {
+  const deadline = setTimeout(callback, delayMs);
+  deadline.unref();
+  return deadline;
 }
 
 export function resolveTrustedTemperaturePowerShell(
@@ -147,7 +191,21 @@ function makeHostTemperatureProbeProcessWithOptions(
   const platform = options.platform ?? process.platform;
   const env = options.env ?? process.env;
   const execute = options.exec ?? execFile;
-  const activeChildren = new Set<ChildProcess>();
+  const probeTimeoutMs = boundedPositiveInteger(
+    options.probeTimeoutMs,
+    TEMPERATURE_PROBE_TIMEOUT_MS,
+    10_000,
+  );
+  const forceSettleGraceMs = boundedPositiveInteger(
+    options.forceSettleGraceMs,
+    TEMPERATURE_PROBE_FORCE_SETTLE_GRACE_MS,
+    10_000,
+  );
+  let activeWindowsProbe: {
+    readonly result: Promise<ServerSystemTemperatureTelemetry>;
+    child: ChildProcess | null;
+    finish: (result: ServerSystemTemperatureTelemetry) => void;
+  } | null = null;
   let closed = false;
 
   const readWindows = (): Promise<ServerSystemTemperatureTelemetry> => {
@@ -159,47 +217,75 @@ function makeHostTemperatureProbeProcessWithOptions(
     if (systemRoot === null) {
       return Promise.resolve(unavailableTemperatureTelemetry("unsupported"));
     }
-    return new Promise((resolve) => {
-      if (closed) {
-        resolve(unavailableTemperatureTelemetry("probe-failed"));
-        return;
-      }
-      let settled = false;
-      const finish = (result: ServerSystemTemperatureTelemetry) => {
+    if (closed) {
+      return Promise.resolve(unavailableTemperatureTelemetry("probe-failed"));
+    }
+    // Share one logical read and retain its admission slot after a forced
+    // settlement until Node actually reports the helper reaped. This bounds a
+    // hostile WMI/stdio failure to one OS process instead of spawning another
+    // PowerShell helper on every telemetry poll.
+    if (activeWindowsProbe !== null) return activeWindowsProbe.result;
+
+    let resolveResult!: (result: ServerSystemTemperatureTelemetry) => void;
+    const result = new Promise<ServerSystemTemperatureTelemetry>((resolve) => {
+      resolveResult = resolve;
+    });
+    let settled = false;
+    let deadline: ReturnType<typeof setTimeout> | null = null;
+    const record = {
+      result,
+      child: null as ChildProcess | null,
+      finish: (next: ServerSystemTemperatureTelemetry) => {
         if (settled) return;
         settled = true;
-        resolve(result);
-      };
-      let child: ChildProcess;
-      try {
-        child = execute(
-          executable,
-          WINDOWS_POWERSHELL_ARGS,
-          {
-            cwd: pathWin32.join(systemRoot, "System32"),
-            env: buildGpuProbeEnvironment(env, "win32"),
-            windowsHide: true,
-            encoding: "utf8",
-            timeout: TEMPERATURE_PROBE_TIMEOUT_MS,
-            killSignal: "SIGKILL",
-            maxBuffer: MAX_PROBE_OUTPUT_BYTES,
-            shell: false,
-          },
-          (error, stdout) => {
-            activeChildren.delete(child);
-            if (error) {
-              finish(unavailableTemperatureTelemetry("probe-failed"));
-              return;
-            }
-            finish(parseTemperatureProbeOutput(stdout));
-          },
-        );
-      } catch {
-        finish(unavailableTemperatureTelemetry("probe-failed"));
-        return;
+        if (deadline !== null) {
+          clearTimeout(deadline);
+          deadline = null;
+        }
+        resolveResult(next);
+      },
+    };
+    activeWindowsProbe = record;
+
+    try {
+      const child = execute(
+        executable,
+        WINDOWS_POWERSHELL_ARGS,
+        {
+          cwd: pathWin32.join(systemRoot, "System32"),
+          env: buildGpuProbeEnvironment(env, "win32"),
+          windowsHide: true,
+          encoding: "utf8",
+          timeout: probeTimeoutMs,
+          killSignal: "SIGKILL",
+          maxBuffer: MAX_PROBE_OUTPUT_BYTES,
+          shell: false,
+        },
+        (error, stdout) => {
+          if (activeWindowsProbe === record) activeWindowsProbe = null;
+          if (error) {
+            record.finish(unavailableTemperatureTelemetry("probe-failed"));
+            return;
+          }
+          record.finish(parseTemperatureProbeOutput(stdout));
+        },
+      );
+      record.child = child;
+      // An injected exec implementation can invoke its callback synchronously.
+      // In that case the result is already settled and no deadline is needed.
+      if (!settled) {
+        deadline = scheduleDeadline(() => {
+          if (record.child !== null) requestProbeStop(record.child);
+          // Do not clear activeWindowsProbe here. The caller must finish, but a
+          // helper that Node has not reaped continues to consume the one slot.
+          record.finish(unavailableTemperatureTelemetry("probe-failed"));
+        }, probeTimeoutMs + forceSettleGraceMs);
       }
-      activeChildren.add(child);
-    });
+    } catch {
+      if (activeWindowsProbe === record) activeWindowsProbe = null;
+      record.finish(unavailableTemperatureTelemetry("probe-failed"));
+    }
+    return result;
   };
 
   const read = () => {
@@ -211,14 +297,12 @@ function makeHostTemperatureProbeProcessWithOptions(
 
   const close = async () => {
     closed = true;
-    for (const child of activeChildren) {
-      try {
-        child.kill("SIGKILL");
-      } catch {
-        // Best effort; execFile's own bounded timeout remains active.
-      }
+    const record = activeWindowsProbe;
+    activeWindowsProbe = null;
+    if (record !== null) {
+      if (record.child !== null) requestProbeStop(record.child);
+      record.finish(unavailableTemperatureTelemetry("probe-failed"));
     }
-    activeChildren.clear();
   };
 
   return { read, close };

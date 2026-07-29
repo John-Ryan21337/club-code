@@ -7828,7 +7828,6 @@ export default function ChatView(props: ChatViewProps) {
                   handleInteractionModeChange={handleInteractionModeChange}
                   togglePlanSidebar={togglePlanSidebar}
                   onOpenGoalDialog={openThreadGoalDialog}
-                  focusComposer={focusComposer}
                   scheduleComposerFocus={scheduleComposerFocus}
                   onManualActivity={recordManualAutoNudgeActivity}
                   setThreadError={setThreadError}
