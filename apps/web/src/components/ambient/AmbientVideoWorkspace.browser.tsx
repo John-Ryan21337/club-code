@@ -140,9 +140,9 @@ it("seeds the Japanese URL queue from the normal workspace without opening Setti
   await expect.poll(() => youtubeUrlQueueStore.getSnapshot().exampleId).toBe("japanese");
   expect(youtubeUrlQueueStore.getSnapshot()).toMatchObject({
     active: true,
-    count: 36,
+    count: 71,
     index: 0,
-    currentSource: { kind: "video", id: "blgxfEUgvVU" },
+    currentSource: { kind: "video", id: "71du1AUrMe4" },
   });
   // Seeding supplies a session queue only. It does not request playback.
   await expect.element(page.getByTitle("Ambient YouTube URL queue player")).not.toBeInTheDocument();
