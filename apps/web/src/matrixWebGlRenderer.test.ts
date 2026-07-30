@@ -80,6 +80,7 @@ function createWebGl2Context() {
     LINK_STATUS: 0x8b82,
     MAX_TEXTURE_SIZE: 0x0d33,
     MAX_VERTEX_ATTRIBS: 0x8869,
+    ONE: 1,
     ONE_MINUS_SRC_ALPHA: 0x0303,
     RGBA: 0x1908,
     SRC_ALPHA: 0x0302,
@@ -103,7 +104,7 @@ function createWebGl2Context() {
     bindBuffer: vi.fn(),
     bindTexture: vi.fn(),
     bindVertexArray: vi.fn(),
-    blendFunc: vi.fn(),
+    blendFuncSeparate: vi.fn(),
     bufferData: vi.fn(),
     bufferSubData: vi.fn(),
     clear: vi.fn(),
@@ -146,7 +147,9 @@ function createWebGl2Context() {
   };
   return gl as unknown as WebGL2RenderingContext & {
     bufferSubData: ReturnType<typeof vi.fn>;
+    blendFuncSeparate: ReturnType<typeof vi.fn>;
     drawArraysInstanced: ReturnType<typeof vi.fn>;
+    pixelStorei: ReturnType<typeof vi.fn>;
     texImage2D: ReturnType<typeof vi.fn>;
   };
 }
@@ -256,7 +259,11 @@ describe("Matrix WebGL2 renderer", () => {
     );
     expect(canvas.getContext).toHaveBeenCalledWith(
       "webgl2",
-      expect.objectContaining({ desynchronized: false, preserveDrawingBuffer: false }),
+      expect.objectContaining({
+        desynchronized: false,
+        premultipliedAlpha: true,
+        preserveDrawingBuffer: false,
+      }),
     );
     expect(selection.kind).toBe("webgl2");
     if (selection.kind !== "webgl2") return;
@@ -276,8 +283,56 @@ describe("Matrix WebGL2 renderer", () => {
       ]),
     );
     const uploadedInstances = gl.bufferSubData.mock.calls[0]?.[2] as Float32Array;
-    expect(uploadedInstances[0]).toBe(85);
-    expect(uploadedInstances[2]).toBe(30);
+    // Fake metrics measure this token at 240px in a 48px reference em. The
+    // 30px Canvas maxWidth therefore applies a 0.125 horizontal fit to the
+    // padded 248px atlas cell, while vertical padding does not shrink the em.
+    expect(uploadedInstances[0]).toBeCloseTo(84.5);
+    expect(uploadedInstances[1]).toBe(72);
+    expect(uploadedInstances[2]).toBeCloseTo(31);
+    expect(uploadedInstances[3]).toBe(56);
+    expect(gl.pixelStorei).toHaveBeenCalledWith(gl.UNPACK_FLIP_Y_WEBGL, false);
+    expect(gl.blendFuncSeparate).toHaveBeenCalledWith(
+      gl.SRC_ALPHA,
+      gl.ONE_MINUS_SRC_ALPHA,
+      gl.ONE,
+      gl.ONE_MINUS_SRC_ALPHA,
+    );
+  });
+
+  it("keeps bounded 32-codepoint live-work tokens addressable in the atlas", () => {
+    const canvas = createCanvas();
+    const gl = createWebGl2Context();
+    const longToken = "1234567890abcdefghijklmnopqrstuv";
+    const selection = createMatrixWebGl2Renderer(
+      canvas as unknown as HTMLCanvasElement,
+      [longToken],
+      {
+        acquireContext: () => gl,
+        createCanvas: createAtlasCanvas,
+      },
+    );
+    expect(selection.kind).toBe("webgl2");
+    if (selection.kind !== "webgl2") return;
+
+    expect(selection.renderer.atlas.entryByGlyph.has(longToken)).toBe(true);
+    selection.renderer.render(
+      frame([
+        {
+          glyph: longToken,
+          x: 100,
+          y: 100,
+          fontSizePx: 18,
+          scale: 1,
+          maxWidthPx: 144,
+          opacity: 1,
+          color: green,
+        },
+      ]),
+    );
+    const uploadedInstances = gl.bufferSubData.mock.calls[0]?.[2] as Float32Array;
+    expect(uploadedInstances[2]).toBeGreaterThan(144);
+    // The visible glyph body, excluding the padded atlas cell, is 144px.
+    expect(uploadedInstances[2]).toBeLessThan(148);
   });
 
   it("prevents default context loss and rebuilds GPU resources after restoration", () => {

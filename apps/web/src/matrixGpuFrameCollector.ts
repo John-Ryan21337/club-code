@@ -234,6 +234,12 @@ export class MatrixGpuFrameCollector {
     this.#width = Math.max(1, options.scene.width);
     this.#height = Math.max(1, options.scene.height);
     this.#devicePixelRatio = Math.max(1, options.devicePixelRatio);
+    // Per-stream rainbow modes generate a new bounded set of HSL strings every
+    // frame. Retaining those keys for the lifetime of the atmosphere would
+    // turn the frame-local parsing optimization into an unbounded multi-hour
+    // memory leak. Trails still share their parsed stream color within a frame.
+    this.#colorCache.clear();
+    this.#stateStack.length = 0;
     drawAtmosphereScene(
       this.#context,
       options.scene,

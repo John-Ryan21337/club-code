@@ -89,6 +89,46 @@ describe("MatrixGpuFrameCollector", () => {
       alpha: 1,
     });
   });
+
+  it("bounds animated color parsing cache entries to the current frame", () => {
+    const scene = createAtmosphereScene(
+      "matrix",
+      800,
+      600,
+      createSeededRandom(9),
+      2.5,
+      0,
+      false,
+      { english: [], japanese: [] },
+      "flat",
+      30,
+      0,
+    );
+    const collector = new MatrixGpuFrameCollector();
+    const collect = (baseHue: number) =>
+      collector.collect({
+        scene,
+        color: "#00ff00",
+        opacity: 1,
+        matrixColorFrame: {
+          color: `hsl(${String(baseHue)} 80% 50%)`,
+          perStream: true,
+          baseHue,
+          saturation: 80,
+          lightness: 50,
+        },
+        motionMode: "flat",
+        walkStartFontSize: 12,
+        walkEndFontSize: 72,
+        matrixBaseFontSize: 18,
+        devicePixelRatio: 1,
+      });
+
+    const first = collect(10);
+    const firstColor = first.glyphs[0]?.color;
+    const second = collect(10);
+    expect(second.glyphs[0]?.color).not.toBe(firstColor);
+  });
 });
 
 describe("parseMatrixGpuColor", () => {

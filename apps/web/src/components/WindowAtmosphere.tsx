@@ -477,6 +477,9 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
           diagnosticsCanvas.dataset.atmosphereRendererAcceleration = available
             ? "gpu"
             : "browser-managed";
+          diagnosticsCanvas.dataset.atmosphereTextRasterization = available
+            ? "gpu-glyph-atlas"
+            : "main-thread";
         }
         invalidateCommittedFrameRef.current?.();
       },
@@ -826,8 +829,12 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
         const right = Number(consoleOverlayCanvas.dataset.atmosphereConsoleOverlayRight);
         const bottom = Number(consoleOverlayCanvas.dataset.atmosphereConsoleOverlayBottom);
         if ([left, top, right, bottom].every(Number.isFinite) && right > left && bottom > top) {
-          const scaleX = canvas.width / scene.width;
-          const scaleY = canvas.height / scene.height;
+          // WebGL and Canvas2D independently fit their backing DPR to a pixel
+          // budget. Crop in the source surface's own pixel coordinates so a
+          // capped GPU backing store does not shift or truncate the console
+          // overlay on high-DPR/large displays.
+          const scaleX = committedSceneCanvas.width / scene.width;
+          const scaleY = committedSceneCanvas.height / scene.height;
           const sourceLeft = left * scaleX;
           const sourceTop = top * scaleY;
           const sourceWidth = (right - left) * scaleX;

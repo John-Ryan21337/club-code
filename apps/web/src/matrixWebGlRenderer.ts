@@ -2,7 +2,10 @@ const DEFAULT_MAX_GLYPH_INSTANCES = 8_192;
 const MAX_GLYPH_INSTANCES = 16_384;
 const DEFAULT_MAX_ATLAS_GLYPHS = 1_024;
 const MAX_ATLAS_GLYPHS = 2_048;
-const MAX_ATLAS_TOKEN_CODEPOINTS = 16;
+// Matrix live-work filenames are already privacy-filtered and bounded to 32
+// characters. Keep the atlas bound aligned so a valid long token is not
+// truncated during atlas construction and then missed by its full lookup key.
+const MAX_ATLAS_TOKEN_CODEPOINTS = 32;
 const DEFAULT_ATLAS_FONT_SIZE_PX = 48;
 const DEFAULT_ATLAS_PADDING_PX = 4;
 const DEFAULT_MAX_DEVICE_PIXEL_RATIO = 2;
@@ -60,7 +63,12 @@ export interface MatrixGlyphAtlasEntry {
   readonly v0: number;
   readonly u1: number;
   readonly v1: number;
-  readonly aspectRatio: number;
+  /** Full padded atlas cell width per reference-font em. */
+  readonly quadWidthPerEm: number;
+  /** Full padded atlas cell height per reference-font em. */
+  readonly quadHeightPerEm: number;
+  /** Measured text width per reference-font em, excluding atlas padding. */
+  readonly contentWidthPerEm: number;
 }
 
 export interface MatrixGlyphAtlas {
@@ -241,11 +249,12 @@ export function createMatrixGlyphAtlas(
 
   const candidates = boundedGlyphs(glyphs, maxGlyphs);
   const cellHeight = Math.min(maxTextureSize, fontSize + padding * 2);
-  const glyphWidths = candidates.map((glyph) =>
-    Math.min(
-      maxTextureSize,
-      Math.max(1, Math.ceil(scratchContext.measureText(glyph).width + padding * 2)),
-    ),
+  const maximumContentWidth = Math.max(1, maxTextureSize - padding * 2);
+  const measuredGlyphWidths = candidates.map((glyph) =>
+    Math.min(maximumContentWidth, Math.max(1, scratchContext.measureText(glyph).width)),
+  );
+  const glyphWidths = measuredGlyphWidths.map((width) =>
+    Math.min(maxTextureSize, Math.max(1, Math.ceil(width + padding * 2))),
   );
   const maximumGlyphWidth = Math.max(...glyphWidths);
   const totalArea = glyphWidths.reduce((area, width) => area + width * cellHeight, 0);
@@ -295,7 +304,9 @@ export function createMatrixGlyphAtlas(
       v0: placement.y / canvas.height,
       u1: (placement.x + placement.width) / canvas.width,
       v1: (placement.y + cellHeight) / canvas.height,
-      aspectRatio: placement.width / cellHeight,
+      quadWidthPerEm: placement.width / fontSize,
+      quadHeightPerEm: cellHeight / fontSize,
+      contentWidthPerEm: measuredGlyphWidths[index]! / fontSize,
     };
     entries.push(entry);
     entryByGlyph.set(placement.glyph, entry);
@@ -323,7 +334,10 @@ function acquireDefaultContext(canvas: HTMLCanvasElement): WebGL2RenderingContex
     desynchronized: false,
     failIfMajorPerformanceCaveat: true,
     powerPreference: "high-performance",
-    premultipliedAlpha: false,
+    // SRC_ALPHA blending produces premultiplied RGB in the transparent
+    // framebuffer. Tell the compositor that truth so it does not multiply the
+    // glyph color by alpha a second time.
+    premultipliedAlpha: true,
     preserveDrawingBuffer: false,
     stencil: false,
   });
@@ -474,7 +488,10 @@ function initializeResources(
 
   gl.activeTexture(gl.TEXTURE0);
   gl.bindTexture(gl.TEXTURE_2D, texture);
-  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+  // Atlas UVs use the Canvas2D source's top-origin coordinates and the vertex
+  // shader assigns v0 to the top of each quad. Flipping the upload as well
+  // mirrors glyphs and selects rows from the opposite side of the atlas.
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
   gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
@@ -485,7 +502,10 @@ function initializeResources(
   gl.useProgram(program);
   gl.uniform1i(atlasLocation, 0);
   gl.enable(gl.BLEND);
-  gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+  // Keep RGB premultiplied for the transparent canvas compositor while
+  // accumulating alpha with the Porter-Duff source-over equation. blendFunc
+  // alone would apply SRC_ALPHA to alpha too, squaring translucent coverage.
+  gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
   gl.disable(gl.DEPTH_TEST);
   gl.disable(gl.CULL_FACE);
   gl.bindVertexArray(null);
@@ -634,16 +654,24 @@ export class MatrixWebGl2Renderer {
       }
       const entry = resolveAtlasEntry(this.#atlas, glyph.glyph);
       const fontSize = glyph.fontSizePx * glyph.scale;
-      const naturalGlyphWidth = fontSize * entry.aspectRatio;
-      const glyphWidth =
-        Number.isFinite(glyph.maxWidthPx) && (glyph.maxWidthPx ?? 0) > 0
-          ? Math.min(naturalGlyphWidth, glyph.maxWidthPx!)
-          : naturalGlyphWidth;
+      const naturalContentWidth = fontSize * entry.contentWidthPerEm;
+      const horizontalFit =
+        Number.isFinite(glyph.maxWidthPx) &&
+        (glyph.maxWidthPx ?? 0) > 0 &&
+        naturalContentWidth > glyph.maxWidthPx!
+          ? glyph.maxWidthPx! / naturalContentWidth
+          : 1;
+      // The atlas cell includes transparent padding to prevent adjacent glyph
+      // bleeding. Scale the full padded quad from the reference em rather than
+      // squeezing the cell itself into the requested font size; the visible
+      // glyph then retains Canvas2D-compatible font sizing.
+      const glyphWidth = fontSize * entry.quadWidthPerEm * horizontalFit;
+      const glyphHeight = fontSize * entry.quadHeightPerEm;
       const offset = renderedGlyphs * INSTANCE_FLOATS;
       this.#instanceData[offset] = glyph.x - glyphWidth / 2;
-      this.#instanceData[offset + 1] = glyph.y - fontSize / 2;
+      this.#instanceData[offset + 1] = glyph.y - glyphHeight / 2;
       this.#instanceData[offset + 2] = glyphWidth;
-      this.#instanceData[offset + 3] = fontSize;
+      this.#instanceData[offset + 3] = glyphHeight;
       this.#instanceData[offset + 4] = entry.u0;
       this.#instanceData[offset + 5] = entry.v0;
       this.#instanceData[offset + 6] = entry.u1;
