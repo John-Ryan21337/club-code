@@ -384,6 +384,31 @@ const unavailableTemperatureProjection = (
     PROJECT_TELEMETRY_TEMPERATURE_KINDS.map((kind) => [kind, { celsius: null, detail }]),
   ) as unknown as ProjectTelemetryTemperatureProjection;
 
+const HOST_SENSOR_PROBE_REASONS = new Set([
+  "provider-missing",
+  "no-temperature-sensors",
+  "unsupported",
+  "probe-failed",
+  "malformed",
+  "stale",
+]);
+
+function unavailableHostSensorProbeDetail(record: Record<string, unknown>): string | null {
+  const probe = record.hostSensorProbe;
+  if (!probe || typeof probe !== "object" || Array.isArray(probe)) return null;
+  const probeRecord = probe as Record<string, unknown>;
+  if (
+    probeRecord.status !== "unavailable" ||
+    typeof probeRecord.reason !== "string" ||
+    !HOST_SENSOR_PROBE_REASONS.has(probeRecord.reason) ||
+    typeof probeRecord.detail !== "string"
+  ) {
+    return null;
+  }
+  const detail = probeRecord.detail.trim();
+  return detail.length > 0 && detail.length <= 180 ? detail : null;
+}
+
 /**
  * Publish the hottest measured sensor in each class while retaining a count in
  * the detail. Missing classes stay null; utilization is never used to infer a
@@ -406,6 +431,7 @@ export function projectTelemetryTemperatureAdapter(
     return unavailableTemperatureProjection(detail);
   }
 
+  const missingHostSensorDetail = unavailableHostSensorProbeDetail(record);
   const grouped = new Map<ProjectTelemetryTemperatureKind, number[]>();
   for (const sensor of record.sensors) {
     if (!sensor || typeof sensor !== "object") return unavailableTemperatureProjection(detail);
@@ -434,7 +460,8 @@ export function projectTelemetryTemperatureAdapter(
         values.length === 0
           ? {
               celsius: null,
-              detail: `No supported ${kind} temperature sensor reported.`,
+              detail:
+                missingHostSensorDetail ?? `No supported ${kind} temperature sensor reported.`,
             }
           : {
               celsius: Math.max(...values),

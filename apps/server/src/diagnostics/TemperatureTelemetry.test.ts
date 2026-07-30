@@ -6,6 +6,7 @@ import {
   sanitizeTemperatureSensorLabel,
   temperatureTelemetryFromRawSamples,
   unavailableTemperatureTelemetry,
+  unavailableWindowsTemperatureTelemetry,
 } from "./TemperatureTelemetry.ts";
 
 describe("TemperatureTelemetry", () => {
@@ -67,6 +68,12 @@ describe("TemperatureTelemetry", () => {
       version: 1,
       status: "unavailable",
       sensors: [],
+      hostSensorProbe: {
+        status: "unavailable",
+        reason: "provider-missing",
+        detail:
+          "Libre Hardware Monitor or Open Hardware Monitor WMI is not available. Install and run a supported sensor provider to expose measured host temperatures.",
+      },
       reason: "unsupported",
       detail:
         "Libre Hardware Monitor or Open Hardware Monitor WMI is not available. Install and run a supported sensor provider to expose measured host temperatures.",
@@ -79,6 +86,12 @@ describe("TemperatureTelemetry", () => {
       version: 1,
       status: "unavailable",
       sensors: [],
+      hostSensorProbe: {
+        status: "unavailable",
+        reason: "no-temperature-sensors",
+        detail:
+          "A supported hardware monitor is available, but it did not expose any measured temperature sensors.",
+      },
       reason: "unsupported",
       detail:
         "A supported hardware monitor is available, but it did not expose any measured temperature sensors.",
@@ -120,7 +133,8 @@ describe("TemperatureTelemetry", () => {
   });
 
   it("uses measured nvidia-smi GPU temperatures without fabricating memory temperature", () => {
-    const result = mergeGpuTemperatureSensors(unavailableTemperatureTelemetry("unsupported"), {
+    const host = unavailableWindowsTemperatureTelemetry("provider-missing");
+    const result = mergeGpuTemperatureSensors(host, {
       status: "available",
       reason: null,
       detail: null,
@@ -155,6 +169,9 @@ describe("TemperatureTelemetry", () => {
         ? result.sensors.some((sensor) => sensor.kind === "vram")
         : true,
     ).toBe(false);
+    expect(result.status === "available" ? result.hostSensorProbe : null).toEqual(
+      host.hostSensorProbe,
+    );
   });
 
   it("creates stable bounded labels without controls or lone surrogates", () => {

@@ -204,6 +204,12 @@ describe("ProjectTelemetryGraph model", () => {
             source: "linux-hwmon",
           },
         ],
+        hostSensorProbe: {
+          status: "unavailable",
+          reason: "provider-missing",
+          detail:
+            "Libre Hardware Monitor or Open Hardware Monitor WMI is not available. Install and run a supported sensor provider to expose measured host temperatures.",
+        },
         reason: null,
         detail: null,
       },
@@ -218,6 +224,7 @@ describe("ProjectTelemetryGraph model", () => {
     expect(temperatures.gpu).toMatchObject({ celsius: 48 });
     expect(temperatures.storage).toMatchObject({ celsius: 42 });
     expect(temperatures.memory.celsius).toBeNull();
+    expect(temperatures.memory.detail).toContain("Libre Hardware Monitor");
     expect(temperatures.vram.celsius).toBeNull();
     expect(temperatures.ambient.celsius).toBeNull();
     expect(point).toMatchObject({
@@ -225,6 +232,21 @@ describe("ProjectTelemetryGraph model", () => {
       temperatureStorageCelsius: 42,
       temperatureMemoryCelsius: null,
     });
+    const providerWithoutSensors = projectTelemetryTemperatureAdapter({
+      ...telemetry,
+      temperatures: {
+        ...telemetry.temperatures,
+        hostSensorProbe: {
+          status: "unavailable",
+          reason: "no-temperature-sensors",
+          detail:
+            "A supported hardware monitor is available, but it did not expose any measured temperature sensors.",
+        },
+      },
+    } as ServerProjectSystemTelemetryResult);
+    expect(providerWithoutSensors.memory.detail).toContain(
+      "did not expose any measured temperature sensors",
+    );
     expect(normalizeTemperatureHistory([null, -20, 50, 120, 250])).toEqual([null, 0, 50, 100, 100]);
   });
 

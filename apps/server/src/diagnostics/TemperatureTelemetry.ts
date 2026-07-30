@@ -18,6 +18,14 @@ const TEMPERATURE_DETAIL: Readonly<Record<ServerSystemTemperatureUnavailableReas
   stale: "The previous hardware temperature sample is no longer current.",
 };
 
+const HOST_SENSOR_PROBE_DETAIL: Readonly<Record<ServerSystemTemperatureUnavailableReason, string>> =
+  {
+    unsupported: "No supported host-sensor provider is available on this system.",
+    "probe-failed": "The host-sensor probe did not complete.",
+    malformed: "The host-sensor provider reported unusable values.",
+    stale: "The previous host-sensor sample is no longer current.",
+  };
+
 const WINDOWS_TEMPERATURE_DETAIL = {
   "provider-missing":
     "Libre Hardware Monitor or Open Hardware Monitor WMI is not available. Install and run a supported sensor provider to expose measured host temperatures.",
@@ -39,24 +47,37 @@ export interface RawTemperatureSample {
 export function unavailableTemperatureTelemetry(
   reason: ServerSystemTemperatureUnavailableReason,
 ): ServerSystemTemperatureTelemetry {
+  const detail = TEMPERATURE_DETAIL[reason];
+  const hostSensorDetail = HOST_SENSOR_PROBE_DETAIL[reason];
   return {
     version: 1,
     status: "unavailable",
     sensors: [],
+    hostSensorProbe: {
+      status: "unavailable",
+      reason,
+      detail: hostSensorDetail,
+    },
     reason,
-    detail: TEMPERATURE_DETAIL[reason],
+    detail,
   };
 }
 
 export function unavailableWindowsTemperatureTelemetry(
   status: WindowsTemperatureUnavailableStatus,
 ): ServerSystemTemperatureTelemetry {
+  const detail = WINDOWS_TEMPERATURE_DETAIL[status];
   return {
     version: 1,
     status: "unavailable",
     sensors: [],
+    hostSensorProbe: {
+      status: "unavailable",
+      reason: status,
+      detail,
+    },
     reason: "unsupported",
-    detail: WINDOWS_TEMPERATURE_DETAIL[status],
+    detail,
   };
 }
 
@@ -158,7 +179,14 @@ export function temperatureTelemetryFromRawSamples(
   if (bounded.length === 0) {
     return unavailableTemperatureTelemetry(sawSourceRecord ? "malformed" : "unsupported");
   }
-  return { version: 1, status: "available", sensors: bounded, reason: null, detail: null };
+  return {
+    version: 1,
+    status: "available",
+    sensors: bounded,
+    hostSensorProbe: { status: "available", reason: null, detail: null },
+    reason: null,
+    detail: null,
+  };
 }
 
 export function parseTemperatureProbeOutput(output: string): ServerSystemTemperatureTelemetry {
@@ -225,6 +253,13 @@ export function mergeGpuTemperatureSensors(
   }
   const bounded = deduplicateSensors(sensors);
   return bounded.length > 0
-    ? { version: 1, status: "available", sensors: bounded, reason: null, detail: null }
+    ? {
+        version: 1,
+        status: "available",
+        sensors: bounded,
+        hostSensorProbe: host.hostSensorProbe,
+        reason: null,
+        detail: null,
+      }
     : host;
 }

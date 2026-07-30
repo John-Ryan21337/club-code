@@ -227,6 +227,37 @@ export type ServerSystemTemperatureUnavailableReason =
   typeof ServerSystemTemperatureUnavailableReason.Type;
 
 /**
+ * Diagnostic state for the platform host-sensor probe, kept separate from the
+ * aggregate temperature status because a vendor GPU source can succeed while
+ * the provider needed for CPU/RAM/storage/case sensors is unavailable.
+ */
+export const ServerSystemTemperatureHostSensorProbeReason = Schema.Literals([
+  "provider-missing",
+  "no-temperature-sensors",
+  "unsupported",
+  "probe-failed",
+  "malformed",
+  "stale",
+]);
+export type ServerSystemTemperatureHostSensorProbeReason =
+  typeof ServerSystemTemperatureHostSensorProbeReason.Type;
+
+export const ServerSystemTemperatureHostSensorProbe = Schema.Union([
+  Schema.Struct({
+    status: Schema.Literal("available"),
+    reason: Schema.Null,
+    detail: Schema.Null,
+  }),
+  Schema.Struct({
+    status: Schema.Literal("unavailable"),
+    reason: ServerSystemTemperatureHostSensorProbeReason,
+    detail: TrimmedNonEmptyString.check(Schema.isMaxLength(MAX_TEMPERATURE_DETAIL_LENGTH)),
+  }),
+]);
+export type ServerSystemTemperatureHostSensorProbe =
+  typeof ServerSystemTemperatureHostSensorProbe.Type;
+
+/**
  * Versioned, bounded hardware-sensor projection. Only measured Celsius values
  * cross the RPC boundary; missing sensor classes remain absent rather than
  * being inferred from utilization or neighbouring components.
@@ -239,6 +270,8 @@ export const ServerSystemTemperatureTelemetry = Schema.Union([
       Schema.isMinLength(1),
       Schema.isMaxLength(MAX_TEMPERATURE_SENSORS),
     ),
+    // Optional for compatibility with older already-running backends.
+    hostSensorProbe: Schema.optional(ServerSystemTemperatureHostSensorProbe),
     reason: Schema.Null,
     detail: Schema.Null,
   }),
@@ -246,6 +279,8 @@ export const ServerSystemTemperatureTelemetry = Schema.Union([
     version: Schema.Literal(1),
     status: Schema.Literal("unavailable"),
     sensors: Schema.Array(ServerSystemTemperatureSensor).check(Schema.isMaxLength(0)),
+    // Optional for compatibility with older already-running backends.
+    hostSensorProbe: Schema.optional(ServerSystemTemperatureHostSensorProbe),
     reason: ServerSystemTemperatureUnavailableReason,
     detail: TrimmedNonEmptyString.check(Schema.isMaxLength(MAX_TEMPERATURE_DETAIL_LENGTH)),
   }),

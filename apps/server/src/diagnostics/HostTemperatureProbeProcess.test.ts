@@ -62,6 +62,12 @@ describe("HostTemperatureProbeProcess", () => {
       version: 1,
       status: "unavailable",
       sensors: [],
+      hostSensorProbe: {
+        status: "unavailable",
+        reason: "provider-missing",
+        detail:
+          "Libre Hardware Monitor or Open Hardware Monitor WMI is not available. Install and run a supported sensor provider to expose measured host temperatures.",
+      },
       reason: "unsupported",
       detail:
         "Libre Hardware Monitor or Open Hardware Monitor WMI is not available. Install and run a supported sensor provider to expose measured host temperatures.",

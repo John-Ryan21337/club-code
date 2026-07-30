@@ -795,6 +795,12 @@ describe("ProjectTelemetryGraph", () => {
                 source: "nvidia-smi" as const,
               },
             ],
+            hostSensorProbe: {
+              status: "unavailable" as const,
+              reason: "provider-missing" as const,
+              detail:
+                "Libre Hardware Monitor or Open Hardware Monitor WMI is not available. Install and run a supported sensor provider to expose measured host temperatures.",
+            },
             reason: null,
             detail: null,
           },
@@ -804,7 +810,9 @@ describe("ProjectTelemetryGraph", () => {
     try {
       await page.getByLabelText("Expand Resources").click();
       await expect.element(page.getByLabelText(/^GPU temp: 48°C/i)).toBeVisible();
-      await expect.element(page.getByLabelText(/^RAM temp: Unavailable/i)).toBeVisible();
+      await expect
+        .element(page.getByLabelText(/^RAM temp: Unavailable.*Libre Hardware Monitor/i))
+        .toBeVisible();
       await expect.element(page.getByLabelText(/^VRAM temp: Unavailable/i)).toBeVisible();
       await expect.element(page.getByLabelText(/^Disk temp: Unavailable/i)).toBeVisible();
       await expect.element(page.getByLabelText(/^Case \/ ambient: Unavailable/i)).toBeVisible();

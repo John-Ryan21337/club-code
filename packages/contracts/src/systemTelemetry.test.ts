@@ -334,6 +334,12 @@ describe("ServerProjectSystemTelemetryResult", () => {
           source: "nvidia-smi" as const,
         },
       ],
+      hostSensorProbe: {
+        status: "unavailable" as const,
+        reason: "provider-missing" as const,
+        detail:
+          "Libre Hardware Monitor or Open Hardware Monitor WMI is not available. Install and run a supported sensor provider to expose measured host temperatures.",
+      },
       reason: null,
       detail: null,
     };
@@ -389,6 +395,19 @@ describe("ServerProjectSystemTelemetryResult", () => {
         temperatures: {
           ...temperatures,
           sensors: [{ ...temperatures.sensors[0], label: "GPU\u202e0" }],
+        },
+      }),
+    ).toThrow();
+    expect(() =>
+      decodeProjectSystemTelemetry({
+        ...input,
+        temperatures: {
+          ...temperatures,
+          hostSensorProbe: {
+            status: "unavailable",
+            reason: "estimated",
+            detail: "Estimated from CPU utilization.",
+          },
         },
       }),
     ).toThrow();
