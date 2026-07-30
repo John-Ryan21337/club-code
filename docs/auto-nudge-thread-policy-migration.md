@@ -46,7 +46,7 @@ validate:
 - enabled Thread A remains enabled through settings and thread navigation;
 - Thread B displays Off while A owns background state;
 - disabling B does not stop A;
-- disabling A stops only A and cancels its pending countdown;
+- disabling A stops only A;
 - enabling/remounting on an existing completed turn only baselines it;
 - a later changed exact terminal identity creates at most one foreground claim;
 - the root coordinator pauses before observation/transport while exact-thread

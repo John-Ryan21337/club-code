@@ -9,8 +9,8 @@ already running.
 - A policy is keyed by the exact environment id and server thread id.
 - A thread without a stored policy is Off. It does not inherit the mode,
   background choice, or limits of the focused thread or any other thread.
-- Mode, background continuation, maximum rounds, and maximum minutes survive
-  route changes, settings navigation, renderer reloads, and app restarts.
+- Mode, background continuation, and maximum rounds survive route changes,
+  settings navigation, renderer reloads, and app restarts.
 - Draft threads cannot run Auto Nudge.
 - Turning a thread Off disables its background-continuation choice. It does not
   change another thread's policy or stop another thread's run.
@@ -39,25 +39,25 @@ already running.
   turn identity. None of those local actions authorizes a prompt for an
   already-completed projection. Only a later changed provider-confirmed
   terminal identity can authorize one bounded dispatch.
-- The five-second countdown is only a cancellation/recheck debounce after that
-  exact terminal edge. Elapsed wall-clock time never creates, renews, or
-  repeats dispatch authority. Temporary provider unavailability may retain the
-  already-proven one-shot edge; operator activity, queued work, Off, navigation,
-  or a different thread context invalidates it.
+- The exact terminal edge is handed directly to the dispatcher, which rechecks
+  all gates before transport. There is no nudge delay, countdown, elapsed run
+  ceiling, or periodic dispatch cadence. Temporary provider unavailability may
+  retain the already-proven one-shot edge; operator activity, queued work, Off,
+  navigation, or a different thread context invalidates it.
 - A running, starting, connecting, or otherwise unsettled provider agent is
   never interrupted. The scheduler waits for a later settled observation.
 - The terminal turn is claimed durably before transport handoff. A failed
   handoff may skip one automated nudge, but a reload or second window must not
   submit the same terminal turn twice.
-- A visible-thread countdown is canceled on navigation. Returning baselines
-  the latest terminal turn and waits for a newer exact terminal identity.
+- Navigation invalidates any unconsumed visible-thread terminal edge. Returning
+  baselines the latest terminal turn and waits for a newer exact terminal identity.
 - Background continuation has one owner. Transferring ownership clears the
   former owner's background-continuation choice but preserves its mode and
-  limits.
+  round cap.
 - Background execution uses the policy captured for its owner. Policy updates
   are synchronized only when their thread identity matches that owner.
 - Manual activity, queued work, provider unavailability, a missing/archived
-  owner, an invalid clock transition, or a missing projection acknowledgement
+  owner, or a missing projection acknowledgement
   pauses or stops the bounded run without interrupting provider work.
 
 ## Bounds and persistence
