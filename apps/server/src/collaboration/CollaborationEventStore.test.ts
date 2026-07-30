@@ -176,9 +176,16 @@ function replayRequest(projectName: string, afterSequence: number, limit?: numbe
 const membershipLayer = Layer.succeed(CollaborationMembershipAuthority, {
   getCurrent: (sharedProjectId) => Effect.succeed(projectMembership(sharedProjectId)),
 });
+const deviceKeyLayer = Layer.succeed(CollaborationDeviceKeyAuthority, {
+  getActiveEd25519PublicKey: (lookup) =>
+    Effect.succeed({
+      ...lookup,
+      publicKeySpkiDer: PUBLIC_KEY_DER,
+    } satisfies CollaborationActiveDevicePublicKey),
+});
 const memoryLayer = Layer.merge(
   CollaborationEventStoreLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
-  membershipLayer,
+  Layer.merge(membershipLayer, deviceKeyLayer),
 );
 
 describe("CollaborationEventStore", () => {
@@ -388,6 +395,47 @@ describe("CollaborationEventStore", () => {
     }).pipe(Effect.provide(memoryLayer)),
   );
 
+  it.effect("rejects an admitted append when membership or its device key is revoked", () =>
+    Effect.gen(function* () {
+      const store = yield* CollaborationEventStore;
+      const admitted = yield* admittedEvent("project-append-revocation", 1);
+      const sharedProjectId = decodeProjectId("project-append-revocation");
+      const revokedMembership = decodeMembership({
+        ...projectMembership(sharedProjectId),
+        epoch: 2,
+        updatedAt: "2026-07-30T12:00:20.000Z",
+      });
+      const membershipRevoked = yield* Effect.result(
+        store.append(admitted).pipe(
+          Effect.provideService(CollaborationMembershipAuthority, {
+            getCurrent: () => Effect.succeed(revokedMembership),
+          }),
+        ),
+      );
+      assert.equal(membershipRevoked._tag, "Failure");
+      if (membershipRevoked._tag === "Failure") {
+        assert.ok(isStoreError(membershipRevoked.failure));
+        assert.equal(membershipRevoked.failure.reason, "invalid-admitted-event");
+      }
+
+      const keyRevoked = yield* Effect.result(
+        store.append(admitted).pipe(
+          Effect.provideService(CollaborationDeviceKeyAuthority, {
+            getActiveEd25519PublicKey: () => Effect.succeed(null),
+          }),
+        ),
+      );
+      assert.equal(keyRevoked._tag, "Failure");
+      if (keyRevoked._tag === "Failure") {
+        assert.ok(isStoreError(keyRevoked.failure));
+        assert.equal(keyRevoked.failure.reason, "invalid-admitted-event");
+      }
+
+      const replay = yield* store.replay(yield* replayRequest("project-append-revocation", 0));
+      assert.equal(replay.events.length, 0);
+    }).pipe(Effect.provide(memoryLayer)),
+  );
+
   it.effect("fails closed when payload bytes or the chain link are corrupted", () =>
     Effect.gen(function* () {
       const store = yield* CollaborationEventStore;
@@ -492,7 +540,7 @@ describe("CollaborationEventStore", () => {
           CollaborationEventStoreLive.pipe(
             Layer.provideMerge(NodeSqliteClient.layer({ filename: dbPath })),
           ),
-          membershipLayer,
+          Layer.merge(membershipLayer, deviceKeyLayer),
         );
         return Effect.gen(function* () {
           const original = yield* admittedEvent("project-restart", 1);

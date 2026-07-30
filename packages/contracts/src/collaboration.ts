@@ -423,6 +423,28 @@ export const CollaborationEventReplayPage = Schema.Struct({
   hasMore: Schema.Boolean,
 }).check(
   Schema.makeFilter((page) => {
+    if (page.events.length === 0) {
+      return page.hasMore
+        ? "a collaboration replay page with more events must contain at least one event"
+        : undefined;
+    }
+    const first = page.events[0]!;
+    if (first.sharedProjectId !== page.sharedProjectId) {
+      return "collaboration replay events must belong to the requested project";
+    }
+    for (let index = 1; index < page.events.length; index += 1) {
+      const previous = page.events[index - 1]!;
+      const event = page.events[index]!;
+      if (
+        event.sharedProjectId !== page.sharedProjectId ||
+        event.sequence !== previous.sequence + 1
+      ) {
+        return "collaboration replay events must be project-scoped and sequence-contiguous";
+      }
+    }
+    if (page.nextCursor !== page.events.at(-1)!.sequence) {
+      return "collaboration replay cursor must equal the final event sequence";
+    }
     try {
       return new TextEncoder().encode(JSON.stringify(page)).byteLength <=
         COLLABORATION_EVENT_REPLAY_MAX_PAGE_UTF8_BYTES
