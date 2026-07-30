@@ -105,6 +105,10 @@ const MATRIX_2CH_TOKEN_PROBABILITY = 0.08;
 const MATRIX_WORK_TOKEN_PROBABILITY = 0.34;
 const MATRIX_WALK_FADE_START_PROGRESS = 0.72;
 const MATRIX_CENTER_WIND_MAX_SPEED_PX_PER_SECOND = 60;
+const MATRIX_WALK_MIN_PROJECTED_HORIZONTAL_SCALE = 0.58;
+const MATRIX_WALK_MAX_TEXT_WIDTH_RATIO = 0.9;
+const MATRIX_WALK_GLYPH_GAP_PX = 2;
+const MATRIX_WALK_TRAIL_LINE_HEIGHT = 1.08;
 const MATRIX_PERSPECTIVE_FONT_MIN_PX = 1;
 const MATRIX_PERSPECTIVE_FONT_MAX_PX = MAX_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE;
 const MATRIX_PERSPECTIVE_FONT_STEP_PX = 0.5;
@@ -302,13 +306,15 @@ export function createAtmosphereScene(
         matrixWalkLifecyclePercent,
       );
       const lifecycleProgress = walk ? random() : 0;
-      const lifecycleStartY = walk ? random() * Math.max(0, height - lifecycleTravel) : 0;
+      const lifecycleStartY = walk ? random() * Math.max(0, height) : 0;
       const walkX =
         count > 0 ? ((index + 0.15 + random() * 0.7) / count) * width : random() * width;
       const x = walk ? walkX : matrixX;
       return {
         x,
-        y: walk ? lifecycleStartY + lifecycleProgress * lifecycleTravel : random() * height,
+        y: walk
+          ? resolveMatrixWalkViewportY(lifecycleStartY, lifecycleProgress, lifecycleTravel, height)
+          : random() * height,
         velocityX: walk ? resolveMatrixCenterWindVelocity(x, width, matrixCenterWindIntensity) : 0,
         velocityY: 55 + random() * 85,
         size: 12 + Math.round(random() * 5),
@@ -437,6 +443,23 @@ function resolveMatrixWalkLifecycleDistance(height: number, requestedPercent: nu
   );
 }
 
+/**
+ * Walk lifecycle distance is independent from the spawn point. Wrapping only
+ * the display coordinate lets a stream spawn anywhere in the viewport and
+ * still travel the exact configured percentage before it fades and reconnects.
+ */
+function resolveMatrixWalkViewportY(
+  lifecycleStartY: number,
+  lifecycleProgress: number,
+  lifecycleDistance: number,
+  height: number,
+): number {
+  const safeHeight = Math.max(0, height);
+  if (safeHeight === 0) return 0;
+  const unwrappedY = lifecycleStartY + lifecycleProgress * lifecycleDistance;
+  return ((unwrappedY % safeHeight) + safeHeight) % safeHeight;
+}
+
 function resolveMatrixCenterWindVelocity(
   x: number,
   width: number,
@@ -486,19 +509,16 @@ function respawnMatrixWalkParticle(
   scene: AtmosphereScene,
   particle: AtmosphereParticle,
   particleIndex: number,
-  lifecyclePercent: number,
   windIntensity: number,
 ): void {
   particle.matrixLifecycleGeneration += 1;
   particle.matrixLifecycleProgress = 0;
   particle.matrixLifecycleOpacity = 1;
-  const travel = resolveMatrixWalkLifecycleDistance(scene.height, lifecyclePercent);
   const horizontalBandCount = Math.max(1, scene.particles.length);
   particle.x =
     ((particleIndex + 0.15 + matrixLifecycleRandom(particle, 1) * 0.7) / horizontalBandCount) *
     scene.width;
-  particle.matrixLifecycleStartY =
-    matrixLifecycleRandom(particle, 2) * Math.max(0, scene.height - travel);
+  particle.matrixLifecycleStartY = matrixLifecycleRandom(particle, 2) * Math.max(0, scene.height);
   particle.y = particle.matrixLifecycleStartY;
   particle.velocityX = resolveMatrixCenterWindVelocity(particle.x, scene.width, windIntensity);
   particle.glyphOffset =
@@ -528,17 +548,15 @@ export function advanceAtmosphereSceneInPlace(
       const verticalDistance = particle.velocityY * deltaSeconds * speed;
       particle.matrixLifecycleProgress += verticalDistance / lifecycleDistance;
       if (particle.matrixLifecycleProgress >= 1) {
-        respawnMatrixWalkParticle(
-          scene,
-          particle,
-          particleIndex,
-          matrixWalkLifecyclePercent,
-          matrixCenterWindIntensity,
-        );
+        respawnMatrixWalkParticle(scene, particle, particleIndex, matrixCenterWindIntensity);
         continue;
       }
-      particle.y =
-        particle.matrixLifecycleStartY + particle.matrixLifecycleProgress * lifecycleDistance;
+      particle.y = resolveMatrixWalkViewportY(
+        particle.matrixLifecycleStartY,
+        particle.matrixLifecycleProgress,
+        lifecycleDistance,
+        scene.height,
+      );
       particle.velocityX = resolveMatrixCenterWindVelocity(
         particle.x,
         scene.width,
@@ -821,6 +839,72 @@ function quantizeMatrixWalkFontSize(requestedSize: number, fallbackSize: number)
   );
 }
 
+function resolveMatrixWalkTargetFontSize(
+  particle: AtmosphereParticle,
+  motionMode: FallingEffectMatrixMotionMode,
+  requestedWalkStartFontSize: number,
+  requestedWalkEndFontSize: number,
+): number {
+  const lifecycleProgress = Math.min(1, Math.max(0, particle.matrixLifecycleProgress));
+  const projectedDepth = motionMode === "walk-reverse" ? 1 - lifecycleProgress : lifecycleProgress;
+  const walkStartFontSize = clampMatrixWalkFontSize(
+    requestedWalkStartFontSize,
+    DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE,
+  );
+  const walkEndFontSize = clampMatrixWalkFontSize(
+    requestedWalkEndFontSize,
+    DEFAULT_FALLING_EFFECT_MATRIX_WALK_END_FONT_SIZE,
+  );
+  return walkStartFontSize + projectedDepth * (walkEndFontSize - walkStartFontSize);
+}
+
+/**
+ * Large Walk glyphs cannot share the original ~24 px Matrix column cadence.
+ * Select an evenly distributed subset of the fixed particle pool whose
+ * center-to-center separation remains wider than the largest configured glyph
+ * even at the strongest reviewed perspective compression. The pool itself
+ * stays fixed and every lifecycle keeps advancing, so density can recover
+ * without rebuilding the scene when font settings shrink.
+ */
+function resolveMatrixWalkVisibleStreamCount(
+  scene: AtmosphereScene,
+  requestedWalkStartFontSize: number,
+  requestedWalkEndFontSize: number,
+): number {
+  const particleCount = scene.particles.length;
+  if (particleCount <= 1 || scene.width <= 0) return particleCount;
+  const maximumFontSize = Math.max(
+    clampMatrixWalkFontSize(
+      requestedWalkStartFontSize,
+      DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE,
+    ),
+    clampMatrixWalkFontSize(
+      requestedWalkEndFontSize,
+      DEFAULT_FALLING_EFFECT_MATRIX_WALK_END_FONT_SIZE,
+    ),
+  );
+  const glyphWidth = maximumFontSize * MATRIX_WALK_MAX_TEXT_WIDTH_RATIO + MATRIX_WALK_GLYPH_GAP_PX;
+  const sourceBandWidth = scene.width / particleCount;
+  const requiredSourceGap =
+    glyphWidth / MATRIX_WALK_MIN_PROJECTED_HORIZONTAL_SCALE + sourceBandWidth * 0.7;
+  return Math.min(particleCount, Math.max(1, Math.floor(scene.width / requiredSourceGap) + 1));
+}
+
+function isEvenlySelectedMatrixWalkStream(
+  particleIndex: number,
+  particleCount: number,
+  visibleStreamCount: number,
+): boolean {
+  if (visibleStreamCount >= particleCount) return true;
+  if (visibleStreamCount <= 1 || particleCount <= 1) {
+    return particleIndex === Math.floor((particleCount - 1) * 0.5);
+  }
+  const nearestSlot = Math.round((particleIndex * (visibleStreamCount - 1)) / (particleCount - 1));
+  return (
+    particleIndex === Math.round((nearestSlot * (particleCount - 1)) / (visibleStreamCount - 1))
+  );
+}
+
 function resolveMatrixWalkFont(size: number, scale: number): string {
   const fontSize = quantizeMatrixWalkFontSize(
     size * scale,
@@ -1040,7 +1124,21 @@ export function drawAtmosphereScene(
   } else {
     context.textAlign = "center";
     context.textBaseline = "middle";
-    for (const particle of scene.particles) {
+    const walk = isMatrixWalkMotionMode(motionMode);
+    const walkVisibleStreamCount = walk
+      ? resolveMatrixWalkVisibleStreamCount(scene, walkStartFontSize, walkEndFontSize)
+      : scene.particles.length;
+    for (const [particleIndex, particle] of scene.particles.entries()) {
+      if (
+        walk &&
+        !isEvenlySelectedMatrixWalkStream(
+          particleIndex,
+          scene.particles.length,
+          walkVisibleStreamCount,
+        )
+      ) {
+        continue;
+      }
       const lifecycleOpacity = resolveMatrixWalkLifecycleOpacity(particle, motionMode);
       if (lifecycleOpacity <= 0) continue;
       context.fillStyle =
@@ -1050,8 +1148,22 @@ export function drawAtmosphereScene(
       if (motionMode === "flat") {
         context.font = resolveMatrixPerspectiveFont(particle.size, matrixBaseFontScale);
       }
+      const walkFontSize = walk
+        ? quantizeMatrixWalkFontSize(
+            resolveMatrixWalkTargetFontSize(
+              particle,
+              motionMode,
+              walkStartFontSize,
+              walkEndFontSize,
+            ),
+            DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE,
+          )
+        : particle.size;
+      const trailSpacing = walk
+        ? Math.max(particle.size, walkFontSize * MATRIX_WALK_TRAIL_LINE_HEIGHT)
+        : particle.size;
       for (let trailIndex = 7; trailIndex >= 0; trailIndex -= 1) {
-        const sourceY = particle.y - trailIndex * particle.size;
+        const sourceY = particle.y - trailIndex * trailSpacing;
         resolveAtmosphereProjectedPointInPlace(
           projectedFrom,
           scene,
@@ -1087,7 +1199,12 @@ export function drawAtmosphereScene(
             "0",
           projectedFrom.x,
           projectedFrom.y,
-          MAX_MATRIX_TOKEN_WIDTH_PX * projectedFrom.scale,
+          walk
+            ? Math.max(
+                MIN_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE,
+                walkFontSize * MATRIX_WALK_MAX_TEXT_WIDTH_RATIO,
+              )
+            : MAX_MATRIX_TOKEN_WIDTH_PX * projectedFrom.scale,
         );
       }
     }

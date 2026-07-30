@@ -83,7 +83,7 @@ documentation use Club Code.
 | Inbox email-code retrieval                                | Not implemented             | The operator-only transient secret field is not an inbox connector or 2FA automation                                                                        |
 | Persistent Auto Nudge                                     | Landed - validation pending | Exact-thread editable prompts, completion-event-only dispatch, hard round caps, durable dedupe, and Stop controls                                           |
 | Idle Thread Guard                                         | Landed - validation pending | Separate opt-in running-turn silence guard; hard 1-hour floor, activity reset, one-shot fail-closed dispatch, and explicit paid-usage warning               |
-| Matrix depth/perspective motion                           | Implemented                 | Flat forward/reverse, walk forward/reverse, and tunnel/warp use bounded user-selected font endpoints and full-canvas coverage                               |
+| Matrix depth/perspective motion                           | Implemented                 | Full-viewport Walk spawns, bounded travel/fade, center wind, and non-overlapping font-aware spacing                                                         |
 | Renderer-local Mobile optimized presentation              | Landed - validation pending | One composer toggle reuses responsive mobile branches; enabling it selects Matrix without resetting appearance, while returning to Desktop leaves Matrix on |
 | Camera prompt attachments                                 | Implemented                 | Explicit camera button, front/rear switching where supported, preview-before-attach, system-camera fallback, exact-thread pinning                           |
 | Local settings profiles                                   | Implemented                 | Desktop/mobile/custom profiles persist locally without copying exact-thread Auto Nudge authority or other live identities                                   |
@@ -497,6 +497,32 @@ Matrix color has five modes:
 Music modes use direct/VLC media or reuse the visualizer's one explicitly
 approved YouTube/Spotify display-audio stream. A stale, stopped, replaced, or
 absent signal safely falls back to the fixed color.
+
+Matrix Walk Forward and Walk Reverse each start a lifecycle at a randomized
+point anywhere in the visible viewport. The display coordinate wraps at the
+viewport boundary while lifecycle progress remains independent, so every
+stream still falls exactly the operator-selected percentage of page height
+before fading and reconnecting. Walk Forward grows from the selected start
+font to the end font; Walk Reverse traverses those endpoints in reverse.
+Outward center wind remains proportional to distance from the screen center.
+Trail line height follows the resolved glyph size, and large endpoint settings
+select an evenly distributed subset of the fixed stream pool with enough
+projected column width to prevent glyph overlap. Verified Walk connectors attach
+at each glyph's current scaled edge instead of crossing its center, and their
+bounded stroke and packet depth interpolate between differently sized
+endpoints. Non-Walk connector geometry does not inherit this trimming.
+
+The falling-effects renderer is currently Canvas2D. It requests a
+desynchronized context and isolates each full-window canvas as a compositing
+layer, while runtime diagnostics report `canvas2d`, browser-managed
+acceleration, main-thread text rasterization, and whether worker
+`OffscreenCanvas` is available but inactive. Those hints can reduce presentation
+queueing and compositing cost, but they are deliberately not described as
+guaranteed GPU rendering. Matrix glyph shaping/rasterization and per-stream
+layout remain CPU/main-thread work; moving that work to an OffscreenCanvas
+worker or a WebGL glyph-atlas renderer is a future architectural lane because
+the existing cinema/console copies and focus/reduced-motion lifecycle must keep
+one animation owner and a Canvas2D fallback.
 
 Live-work vocabulary is also off in conservative compatibility/recovery
 defaults and enabled by the explicit fresh-install profile. It accepts only a

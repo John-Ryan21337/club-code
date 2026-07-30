@@ -321,6 +321,16 @@ describe("WindowAtmosphere", () => {
     expect(bounds.top).toBe(0);
     expect(bounds.width).toBe(window.innerWidth);
     expect(bounds.height).toBe(window.innerHeight);
+    await expect.element(canvasLocator).toHaveAttribute("data-atmosphere-renderer", "canvas2d");
+    await expect
+      .element(canvasLocator)
+      .toHaveAttribute("data-atmosphere-renderer-acceleration", "browser-managed");
+    await expect
+      .element(canvasLocator)
+      .toHaveAttribute("data-atmosphere-text-rasterization", "main-thread");
+    expect(["available-not-active", "unavailable"]).toContain(
+      canvas.getAttribute("data-atmosphere-offscreen-canvas"),
+    );
     expect(document.querySelector('[data-testid="cinema-falling-atmosphere"]')).toBeNull();
   });
 

@@ -30,6 +30,7 @@ import {
   MAX_MATRIX_ACTIVITY_PACKET_DRAWS,
   MAX_MATRIX_ACTIVITY_TELEMETRY_GLYPHS,
   MAX_MATRIX_ACTIVITY_TELEMETRY_RINGS,
+  createMatrixActivityWalkAttachmentRoute,
   createMatrixActivityAnimationState,
   createMatrixHexRoute,
   createMatrixTunnelRoute,
@@ -1704,6 +1705,20 @@ describe("Matrix provider activity overlay", () => {
     expect(resolveMatrixActivityRouteDepthScale("walk-reverse", 0, 9, 0.1)).toBe(4);
     expect(resolveMatrixActivityRouteDepthScale("walk-reverse", 1, 9, 0.1)).toBe(0.4);
     expect(resolveMatrixActivityRouteDepthScale("tunnel", 0.37, 1.2, 1.3, 0.37)).toBe(0.4);
+  });
+
+  it("attaches Walk routes to each differently scaled glyph edge", () => {
+    const centerRoute = createMatrixHexRoute({ x: 0, y: 40 }, { x: 200, y: 40 });
+    const attached = createMatrixActivityWalkAttachmentRoute(centerRoute, 20, 80);
+
+    expect(attached.points[0]).toEqual({ x: 9, y: 40 });
+    expect(attached.points.at(-1)).toEqual({ x: 164, y: 40 });
+    expect(attached.totalLength).toBe(155);
+
+    const bounded = createMatrixActivityWalkAttachmentRoute(centerRoute, 1_000, 1_000);
+    expect(bounded.points[0]).toEqual({ x: 70, y: 40 });
+    expect(bounded.points.at(-1)).toEqual({ x: 130, y: 40 });
+    expect(bounded.totalLength).toBe(60);
   });
 
   it("flares depth routes and packets while preserving Flat's exact single stroke", () => {

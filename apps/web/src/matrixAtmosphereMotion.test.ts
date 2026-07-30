@@ -194,17 +194,25 @@ describe("atmosphere motion projection", () => {
     }
   });
 
-  it("does not add Matrix particles or glyph draw calls for directional perspective", () => {
+  it("does not add Matrix particles and only reduces Walk draw calls to prevent overlap", () => {
     const scene = createAtmosphereScene("matrix", 1_280, 720, createSeededRandom(42), 1, 0);
     const particleCount = scene.particles.length;
     const flat = createContextRecorder();
     drawAtmosphereScene(flat.context, scene, "#00ff00", 1, undefined, "flat", 12, 24);
 
-    for (const mode of ["forward", "reverse", "walk-forward", "walk-reverse"] as const) {
+    for (const mode of ["forward", "reverse"] as const) {
       const directional = createContextRecorder();
       drawAtmosphereScene(directional.context, scene, "#00ff00", 1, undefined, mode, 12, 24);
       expect(scene.particles).toHaveLength(particleCount);
       expect(directional.texts).toHaveLength(flat.texts.length);
+    }
+
+    for (const mode of ["walk-forward", "walk-reverse"] as const) {
+      const walk = createContextRecorder();
+      drawAtmosphereScene(walk.context, scene, "#00ff00", 1, undefined, mode, 12, 144);
+      expect(scene.particles).toHaveLength(particleCount);
+      expect(walk.texts.length).toBeGreaterThan(0);
+      expect(walk.texts.length).toBeLessThan(flat.texts.length);
     }
   });
 
@@ -309,7 +317,7 @@ describe("atmosphere motion projection", () => {
     expect(movedOnScreen.scale).toBe(forward.scale);
   });
 
-  it("spawns Walk streams throughout the background, fades them, and respawns in place", () => {
+  it("spawns Walk streams across the full viewport, fades them, and respawns in place", () => {
     const scene = createAtmosphereScene(
       "matrix",
       400,
@@ -329,12 +337,17 @@ describe("atmosphere motion projection", () => {
       scene.particles.every(
         (particle) =>
           particle.matrixLifecycleStartY >= 0 &&
-          particle.matrixLifecycleStartY <= scene.height - lifecycleDistance &&
-          particle.y >= particle.matrixLifecycleStartY &&
-          particle.y <= particle.matrixLifecycleStartY + lifecycleDistance,
+          particle.matrixLifecycleStartY < scene.height &&
+          particle.y >= 0 &&
+          particle.y < scene.height,
       ),
     ).toBe(true);
-    expect(scene.particles.some((particle) => particle.matrixLifecycleStartY > 20)).toBe(true);
+    expect(
+      Math.min(...scene.particles.map((particle) => particle.matrixLifecycleStartY)),
+    ).toBeLessThan(scene.height * 0.1);
+    expect(
+      Math.max(...scene.particles.map((particle) => particle.matrixLifecycleStartY)),
+    ).toBeGreaterThan(scene.height * 0.9);
 
     const left = scene.particles.reduce((candidate, particle) =>
       particle.x < candidate.x ? particle : candidate,
@@ -372,7 +385,51 @@ describe("atmosphere motion projection", () => {
     expect(ending.matrixLifecycleOpacity).toBe(1);
     expect(ending.y).toBe(ending.matrixLifecycleStartY);
     expect(ending.y).toBeGreaterThanOrEqual(0);
-    expect(ending.y).toBeLessThanOrEqual(scene.height - lifecycleDistance);
+    expect(ending.y).toBeLessThan(scene.height);
+  });
+
+  it("keeps large Walk glyphs separated vertically and horizontally", () => {
+    const scene = createAtmosphereScene(
+      "matrix",
+      1_280,
+      720,
+      createSeededRandom(123),
+      2.5,
+      0,
+      false,
+      { english: [], japanese: [] },
+      "walk-forward",
+      30,
+      10,
+    );
+    for (const particle of scene.particles) {
+      particle.matrixLifecycleProgress = 1;
+      particle.matrixLifecycleOpacity = 1;
+    }
+    const recorder = createContextRecorder();
+    drawAtmosphereScene(recorder.context, scene, "#00ff00", 1, undefined, "walk-forward", 1, 144);
+
+    expect(recorder.texts.length).toBeGreaterThan(0);
+    expect(recorder.texts.length % 8).toBe(0);
+    const streamGroups = Array.from({ length: recorder.texts.length / 8 }, (_, index) =>
+      recorder.texts.slice(index * 8, index * 8 + 8),
+    );
+    for (const group of streamGroups) {
+      const yPositions = group.map(([, , y]) => y).toSorted((left, right) => left - right);
+      for (let index = 1; index < yPositions.length; index += 1) {
+        expect(yPositions[index]! - yPositions[index - 1]!).toBeGreaterThanOrEqual(144);
+      }
+      expect(group.every(([, , , maxWidth]) => maxWidth !== undefined && maxWidth <= 144)).toBe(
+        true,
+      );
+    }
+
+    const headXs = streamGroups
+      .map((group) => group.at(-1)![1])
+      .toSorted((left, right) => left - right);
+    for (let index = 1; index < headXs.length; index += 1) {
+      expect(headXs[index]! - headXs[index - 1]!).toBeGreaterThanOrEqual(100);
+    }
   });
 
   it("disables center wind at intensity zero", () => {

@@ -44,6 +44,12 @@ const CINEMA_MEDIA_SELECTOR = [
 const HIDDEN_CINEMA_CLIP_PATH = "inset(0 0 100% 0)";
 const ATMOSPHERE_CONSOLE_SELECTOR = '[data-atmosphere-console-surface="true"]';
 const HIDDEN_CONSOLE_CLIP_PATH = "inset(0 0 100% 0)";
+const ATMOSPHERE_CONTEXT_OPTIONS = {
+  alpha: true,
+  // This is a latency/queueing hint only. The renderer remains Canvas2D and
+  // the browser decides whether its compositor is GPU-backed.
+  desynchronized: true,
+} as const satisfies CanvasRenderingContext2DSettings;
 
 export interface WindowAtmosphereProps {
   readonly selectedThreadRef?: ScopedThreadRef | null;
@@ -132,6 +138,31 @@ function syncConsoleOverlayClip(canvas: HTMLCanvasElement, surface: HTMLElement 
   canvas.dataset.atmosphereConsoleOverlayRight = String(right);
   canvas.dataset.atmosphereConsoleOverlayBottom = String(bottom);
   return true;
+}
+
+function supportsWorkerOffscreenCanvas(canvas: HTMLCanvasElement): boolean {
+  return (
+    typeof OffscreenCanvas === "function" &&
+    typeof Worker === "function" &&
+    typeof canvas.transferControlToOffscreen === "function"
+  );
+}
+
+function getAtmosphereCanvasContext(canvas: HTMLCanvasElement): CanvasRenderingContext2D | null {
+  return canvas.getContext("2d", ATMOSPHERE_CONTEXT_OPTIONS) as CanvasRenderingContext2D | null;
+}
+
+function publishAtmosphereRendererDiagnostics(
+  canvas: HTMLCanvasElement,
+  context: CanvasRenderingContext2D | null,
+): void {
+  canvas.dataset.atmosphereRenderer = context === null ? "unavailable" : "canvas2d";
+  canvas.dataset.atmosphereRendererAcceleration = "browser-managed";
+  canvas.dataset.atmosphereOffscreenCanvas =
+    context !== null && supportsWorkerOffscreenCanvas(canvas)
+      ? "available-not-active"
+      : "unavailable";
+  canvas.dataset.atmosphereTextRasterization = "main-thread";
 }
 
 export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereProps = {}) {
@@ -437,14 +468,17 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
       return installFrozenMatrixPalette();
     }
 
-    const context = canvas.getContext("2d");
+    const context = getAtmosphereCanvasContext(canvas);
+    publishAtmosphereRendererDiagnostics(canvas, context);
     if (!context) {
       return installFrozenMatrixPalette();
     }
     const cinemaOverlayCanvas = cinemaOverlayCanvasRef.current;
-    const cinemaOverlayContext = cinemaOverlayCanvas?.getContext("2d") ?? null;
+    const cinemaOverlayContext =
+      cinemaOverlayCanvas === null ? null : getAtmosphereCanvasContext(cinemaOverlayCanvas);
     const consoleOverlayCanvas = consoleOverlayCanvasRef.current;
-    const consoleOverlayContext = consoleOverlayCanvas?.getContext("2d") ?? null;
+    const consoleOverlayContext =
+      consoleOverlayCanvas === null ? null : getAtmosphereCanvasContext(consoleOverlayCanvas);
 
     const reducedMotion = window.matchMedia(REDUCED_MOTION_QUERY);
     let scene: AtmosphereScene | null = null;
@@ -841,14 +875,18 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
       <canvas
         ref={canvasRef}
         aria-hidden="true"
-        className="pointer-events-none fixed inset-0 z-40 h-full w-full overflow-hidden"
+        className="pointer-events-none fixed inset-0 z-40 h-full w-full transform-gpu overflow-hidden [contain:strict] [will-change:transform]"
+        data-atmosphere-offscreen-canvas="pending"
+        data-atmosphere-renderer="pending"
+        data-atmosphere-renderer-acceleration="browser-managed"
+        data-atmosphere-text-rasterization="main-thread"
         data-testid="window-atmosphere"
       />
       {cinemaOverlayEnabled ? (
         <canvas
           ref={cinemaOverlayCanvasRef}
           aria-hidden="true"
-          className="pointer-events-none fixed inset-0 z-50 h-full w-full overflow-hidden"
+          className="pointer-events-none fixed inset-0 z-50 h-full w-full transform-gpu overflow-hidden [contain:strict] [will-change:transform]"
           data-cinema-atmosphere-visible="false"
           data-testid="cinema-falling-atmosphere"
           style={{
@@ -861,7 +899,7 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
         <canvas
           ref={consoleOverlayCanvasRef}
           aria-hidden="true"
-          className="pointer-events-none fixed inset-0 z-[86] h-full w-full overflow-hidden opacity-40"
+          className="pointer-events-none fixed inset-0 z-[86] h-full w-full transform-gpu overflow-hidden opacity-40 [contain:strict] [will-change:transform]"
           data-atmosphere-console-overlay-visible="false"
           data-testid="atmosphere-console-matrix-overlay"
           style={{
