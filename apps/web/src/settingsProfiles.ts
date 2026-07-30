@@ -7,8 +7,8 @@ import * as Schema from "effect/Schema";
 import { useEffect, useSyncExternalStore } from "react";
 
 export const SETTINGS_PROFILE_LIBRARY_STORAGE_KEY = "cafe-code:settings-profile-library:v1";
-export const SETTINGS_PROFILE_LIBRARY_VERSION = 2;
-const LEGACY_SETTINGS_PROFILE_LIBRARY_VERSIONS = new Set([1]);
+export const SETTINGS_PROFILE_LIBRARY_VERSION = 3;
+const LEGACY_SETTINGS_PROFILE_LIBRARY_VERSIONS = new Set([1, 2]);
 export const SETTINGS_PROFILE_MAX_COUNT = 32;
 export const SETTINGS_PROFILE_MAX_NAME_LENGTH = 64;
 export const SETTINGS_PROFILE_MAX_STORAGE_BYTES = 512 * 1024;
@@ -36,12 +36,14 @@ export type SettingsProfileClientFieldPolicy =
   | "external-media-activation"
   | "event-output-activation"
   | "ambient-activation"
+  | "live-operational-input"
   | "local-asset-reference"
   | "provider-operation"
   | "execution-policy"
   | "exact-thread-authority"
   | "provider-model-state"
   | "native-machine-control"
+  | "destructive-action-safety"
   | "project-specific";
 
 export const SETTINGS_PROFILE_CLIENT_FIELD_POLICY = {
@@ -56,8 +58,9 @@ export const SETTINGS_PROFILE_CLIENT_FIELD_POLICY = {
   completionAlertEnglishVoiceGender: "include",
   completionAlertJapaneseVoiceGender: "include",
   completionAlertDualStereoOrder: "include",
-  confirmThreadArchive: "include",
-  confirmThreadDelete: "include",
+  // A profile must not weaken or silently change destructive-action confirmations.
+  confirmThreadArchive: "destructive-action-safety",
+  confirmThreadDelete: "destructive-action-safety",
   dismissedProviderUpdateNotificationKeys: "client-bookkeeping",
   diffIgnoreWhitespace: "include",
   diffWordWrap: "include",
@@ -86,12 +89,14 @@ export const SETTINGS_PROFILE_CLIENT_FIELD_POLICY = {
   fallingEffectDensity: "include",
   fallingEffectJapaneseRatio: "include",
   fallingEffect2chEnriched: "include",
-  fallingEffectLiveWorkVocabulary: "include",
-  fallingEffectActivityLinks: "include",
-  fallingEffectActivityLinkNetworkEnabled: "include",
-  fallingEffectActivityLinkDatabaseEnabled: "include",
-  fallingEffectActivityLinkBuildEnabled: "include",
-  fallingEffectActivityLinkAgentEnabled: "include",
+  // These switches admit live provider/thread activity into an ambient renderer.
+  // Keep that choice local and explicit instead of carrying it in a layout profile.
+  fallingEffectLiveWorkVocabulary: "live-operational-input",
+  fallingEffectActivityLinks: "live-operational-input",
+  fallingEffectActivityLinkNetworkEnabled: "live-operational-input",
+  fallingEffectActivityLinkDatabaseEnabled: "live-operational-input",
+  fallingEffectActivityLinkBuildEnabled: "live-operational-input",
+  fallingEffectActivityLinkAgentEnabled: "live-operational-input",
   fallingEffectActivityLinkColorMode: "include",
   fallingEffectActivityLinkRetentionSeconds: "include",
   ambientVideoEnabled: "external-media-activation",
@@ -137,7 +142,8 @@ export const SETTINGS_PROFILE_CLIENT_FIELD_POLICY = {
   ambianceEnabled: "ambient-activation",
   ambianceEffect: "include",
   ambianceIntensity: "include",
-  ambianceReactMode: "include",
+  // This controls whether ambiance observes the current thread's live signals.
+  ambianceReactMode: "live-operational-input",
   ambianceSurfaceSidebar: "include",
   ambianceSurfaceThread: "include",
   ambianceSurfaceComposer: "include",
@@ -301,6 +307,19 @@ function decodeClientSetting<Key extends SettingsProfileClientKey>(
   }
 }
 
+function cloneAndFreezeProfileValue<Value>(value: Value): Value {
+  if (Array.isArray(value)) {
+    return Object.freeze(value.map((entry) => cloneAndFreezeProfileValue(entry))) as Value;
+  }
+  if (typeof value === "object" && value !== null) {
+    const clone = Object.fromEntries(
+      Object.entries(value).map(([key, entry]) => [key, cloneAndFreezeProfileValue(entry)]),
+    );
+    return Object.freeze(clone) as Value;
+  }
+  return value;
+}
+
 /**
  * Copy only allowlisted, schema-valid fields out of an untrusted persisted object.
  * Unknown and malformed fields are dropped independently so one forward field does
@@ -318,7 +337,7 @@ export function sanitizeSettingsProfileClientSettings(
     if (!Object.prototype.hasOwnProperty.call(record, key)) continue;
     const value = decodeClientSetting(key, record[key]);
     if (value !== undefined) {
-      result[key] = value;
+      result[key] = cloneAndFreezeProfileValue(value);
     }
   }
   return Object.freeze(result) as SettingsProfileClientSettings;
@@ -361,10 +380,10 @@ interface ParsedSettingsProfileLibrary {
   readonly requiresRewrite: boolean;
 }
 
-function emptyParsedSettingsProfileLibrary(): ParsedSettingsProfileLibrary {
+function emptyParsedSettingsProfileLibrary(requiresRewrite = false): ParsedSettingsProfileLibrary {
   return {
     snapshot: { activeProfileId: null, profiles: [] },
-    requiresRewrite: false,
+    requiresRewrite,
   };
 }
 
@@ -381,13 +400,13 @@ function parsePersistedProfiles(raw: string | null): ParsedSettingsProfileLibrar
       readonly activeProfileId?: unknown;
       readonly profiles?: unknown;
     };
-    if (
-      (decoded.version !== SETTINGS_PROFILE_LIBRARY_VERSION &&
-        !LEGACY_SETTINGS_PROFILE_LIBRARY_VERSIONS.has(decoded.version as number)) ||
-      !Array.isArray(decoded.profiles)
-    ) {
+    const supportedVersion =
+      decoded.version === SETTINGS_PROFILE_LIBRARY_VERSION ||
+      LEGACY_SETTINGS_PROFILE_LIBRARY_VERSIONS.has(decoded.version as number);
+    if (!supportedVersion) {
       return emptyParsedSettingsProfileLibrary();
     }
+    if (!Array.isArray(decoded.profiles)) return emptyParsedSettingsProfileLibrary(true);
 
     const profiles: SettingsProfile[] = [];
     const seenIds = new Set<string>();
@@ -563,7 +582,11 @@ export function createSettingsProfileLibraryStore(
         ? snapshot.profiles.map((candidate) => (candidate.id === id ? profile : candidate))
         : [...snapshot.profiles, profile];
       const persisted = replace({ activeProfileId: id, profiles });
-      return { profile, persisted, replaced: existing !== undefined };
+      const storedProfile = snapshot.profiles.find((candidate) => candidate.id === id);
+      if (!storedProfile) {
+        throw new SettingsProfileError("The settings profile could not be stored in memory.");
+      }
+      return { profile: storedProfile, persisted, replaced: existing !== undefined };
     },
     updateActive: (payload) => {
       if (!isTheme(payload.theme)) {
@@ -585,7 +608,11 @@ export function createSettingsProfileLibraryStore(
         candidate.id === active.id ? profile : candidate,
       );
       const persisted = replace({ activeProfileId: active.id, profiles });
-      return { profile, persisted, replaced: true };
+      const storedProfile = snapshot.profiles.find((candidate) => candidate.id === active.id);
+      if (!storedProfile) {
+        throw new SettingsProfileError("The settings profile could not be stored in memory.");
+      }
+      return { profile: storedProfile, persisted, replaced: true };
     },
     rename: (profileId, nameInput) => {
       const active = snapshot.profiles.find((profile) => profile.id === profileId);
@@ -610,7 +637,11 @@ export function createSettingsProfileLibraryStore(
       const activeProfileId =
         snapshot.activeProfileId === profileId ? id : snapshot.activeProfileId;
       const persisted = replace({ activeProfileId, profiles });
-      return { profile, persisted, replaced: true };
+      const storedProfile = snapshot.profiles.find((candidate) => candidate.id === id);
+      if (!storedProfile) {
+        throw new SettingsProfileError("The settings profile could not be stored in memory.");
+      }
+      return { profile: storedProfile, persisted, replaced: true };
     },
     activate: (profileId) => {
       if (profileId !== null && !snapshot.profiles.some((profile) => profile.id === profileId)) {

@@ -39,6 +39,13 @@ describe("settings profile library", () => {
       atmosphereConsoleEnabled: true,
       fallingEffectsOverCinemaEnabled: true,
       ambianceEnabled: true,
+      ambianceReactMode: "live",
+      fallingEffectLiveWorkVocabulary: true,
+      fallingEffectActivityLinks: true,
+      fallingEffectActivityLinkNetworkEnabled: true,
+      fallingEffectActivityLinkDatabaseEnabled: true,
+      fallingEffectActivityLinkBuildEnabled: true,
+      fallingEffectActivityLinkAgentEnabled: true,
       ambientVideoLayoutMode: "custom",
       ambientImageGlowOpacity: 0.42,
       mobileOptimizedPresentation: true,
@@ -46,6 +53,8 @@ describe("settings profile library", () => {
       notificationsEnabled: true,
       completionAlertSoundEnabled: true,
       completionAlertSpeechEnabled: true,
+      confirmThreadArchive: false,
+      confirmThreadDelete: false,
       worldClockWeatherEnabled: true,
       ambientVideoEnabled: true,
       ambientVideoSource: { kind: "video", id: "private-video" },
@@ -98,9 +107,18 @@ describe("settings profile library", () => {
     expect(payload.clientSettings).not.toHaveProperty("atmosphereConsoleEnabled");
     expect(payload.clientSettings).not.toHaveProperty("fallingEffectsOverCinemaEnabled");
     expect(payload.clientSettings).not.toHaveProperty("ambianceEnabled");
+    expect(payload.clientSettings).not.toHaveProperty("ambianceReactMode");
+    expect(payload.clientSettings).not.toHaveProperty("fallingEffectLiveWorkVocabulary");
+    expect(payload.clientSettings).not.toHaveProperty("fallingEffectActivityLinks");
+    expect(payload.clientSettings).not.toHaveProperty("fallingEffectActivityLinkNetworkEnabled");
+    expect(payload.clientSettings).not.toHaveProperty("fallingEffectActivityLinkDatabaseEnabled");
+    expect(payload.clientSettings).not.toHaveProperty("fallingEffectActivityLinkBuildEnabled");
+    expect(payload.clientSettings).not.toHaveProperty("fallingEffectActivityLinkAgentEnabled");
     expect(payload.clientSettings).not.toHaveProperty("notificationsEnabled");
     expect(payload.clientSettings).not.toHaveProperty("completionAlertSoundEnabled");
     expect(payload.clientSettings).not.toHaveProperty("completionAlertSpeechEnabled");
+    expect(payload.clientSettings).not.toHaveProperty("confirmThreadArchive");
+    expect(payload.clientSettings).not.toHaveProperty("confirmThreadDelete");
     expect(payload.clientSettings).not.toHaveProperty("worldClockWeatherEnabled");
     expect(payload.clientSettings).not.toHaveProperty("ambientVideoEnabled");
     expect(payload.clientSettings).not.toHaveProperty("ambientVideoSource");
@@ -140,11 +158,20 @@ describe("settings profile library", () => {
       notificationsEnabled: "consent",
       completionAlertSoundEnabled: "event-output-activation",
       completionAlertSpeechEnabled: "event-output-activation",
+      confirmThreadArchive: "destructive-action-safety",
+      confirmThreadDelete: "destructive-action-safety",
       worldClockWeatherEnabled: "consent",
       fallingEffectsEnabled: "ambient-activation",
       atmosphereConsoleEnabled: "ambient-activation",
       fallingEffectsOverCinemaEnabled: "ambient-activation",
+      fallingEffectLiveWorkVocabulary: "live-operational-input",
+      fallingEffectActivityLinks: "live-operational-input",
+      fallingEffectActivityLinkNetworkEnabled: "live-operational-input",
+      fallingEffectActivityLinkDatabaseEnabled: "live-operational-input",
+      fallingEffectActivityLinkBuildEnabled: "live-operational-input",
+      fallingEffectActivityLinkAgentEnabled: "live-operational-input",
       ambianceEnabled: "ambient-activation",
+      ambianceReactMode: "live-operational-input",
       ambientVideoEnabled: "external-media-activation",
       ambientVideoSource: "external-media-activation",
       ambientImageEnabled: "external-media-activation",
@@ -243,9 +270,13 @@ describe("settings profile library", () => {
       ),
     );
     expect(updated.profile.clientSettings.sidebarThreadPreviewCount).toBe(10);
+    expect(Object.isFrozen(updated.profile)).toBe(true);
+    expect(store.resolve(updated.profile.id)).toBe(updated.profile);
 
     const renamed = store.rename(updated.profile.id, "Large Screen");
     expect(renamed.profile.id).toBe("profile:large%20screen");
+    expect(Object.isFrozen(renamed.profile)).toBe(true);
+    expect(store.resolve(renamed.profile.id)).toBe(renamed.profile);
     expect(store.getSnapshot().activeProfileId).toBe(renamed.profile.id);
 
     const restored = createSettingsProfileLibraryStore(storage);
@@ -337,6 +368,33 @@ describe("settings profile library", () => {
     expect(futureStorage.read(SETTINGS_PROFILE_LIBRARY_STORAGE_KEY)).toContain(
       `"version":${SETTINGS_PROFILE_LIBRARY_VERSION + 1}`,
     );
+  });
+
+  it("rewrites a malformed supported-version document without overwriting a future version", () => {
+    const supportedStorage = createStorage({
+      [SETTINGS_PROFILE_LIBRARY_STORAGE_KEY]: JSON.stringify({
+        version: SETTINGS_PROFILE_LIBRARY_VERSION,
+        profiles: { serverPassword: "do-not-retain" },
+      }),
+    });
+    const futureDocument = JSON.stringify({
+      version: SETTINGS_PROFILE_LIBRARY_VERSION + 1,
+      profiles: { futureShape: true },
+    });
+    const futureStorage = createStorage({
+      [SETTINGS_PROFILE_LIBRARY_STORAGE_KEY]: futureDocument,
+    });
+
+    expect(createSettingsProfileLibraryStore(supportedStorage).getSnapshot().profiles).toEqual([]);
+    expect(JSON.parse(supportedStorage.read(SETTINGS_PROFILE_LIBRARY_STORAGE_KEY) ?? "{}")).toEqual(
+      {
+        version: SETTINGS_PROFILE_LIBRARY_VERSION,
+        activeProfileId: null,
+        profiles: [],
+      },
+    );
+    expect(createSettingsProfileLibraryStore(futureStorage).getSnapshot().profiles).toEqual([]);
+    expect(futureStorage.read(SETTINGS_PROFILE_LIBRARY_STORAGE_KEY)).toBe(futureDocument);
   });
 
   it("drops unknown, secret, execution, and malformed fields independently on restore", () => {
@@ -436,6 +494,11 @@ describe("settings profile library", () => {
               timestampFormat: "24-hour",
               completionAlertSpeechEnabled: true,
               fallingEffectsEnabled: true,
+              fallingEffectLiveWorkVocabulary: true,
+              fallingEffectActivityLinks: true,
+              fallingEffectActivityLinkNetworkEnabled: true,
+              ambianceReactMode: "live",
+              confirmThreadDelete: false,
               ambientVideoSource: { kind: "video", id: "private-video" },
               autoNudgeMode: "hardcore-fanout",
               idleThreadGuardEnabled: true,
@@ -458,6 +521,41 @@ describe("settings profile library", () => {
     });
     expect(persisted.version).toBe(SETTINGS_PROFILE_LIBRARY_VERSION);
     expect(persisted.profiles[0].clientSettings).toEqual({ timestampFormat: "24-hour" });
+  });
+
+  it("migrates the immediately previous document version through the current scrub boundary", () => {
+    const storage = createStorage({
+      [SETTINGS_PROFILE_LIBRARY_STORAGE_KEY]: JSON.stringify({
+        version: SETTINGS_PROFILE_LIBRARY_VERSION - 1,
+        activeProfileId: "profile:desktop",
+        profiles: [
+          {
+            name: "Desktop",
+            theme: "system",
+            clientSettings: {
+              chatCopyFormat: "markdown",
+              confirmThreadDelete: false,
+              fallingEffectLiveWorkVocabulary: true,
+              fallingEffectActivityLinks: true,
+              ambianceReactMode: "live",
+            },
+            createdAt: "2026-07-29T08:00:00.000Z",
+            updatedAt: "2026-07-29T08:00:00.000Z",
+          },
+        ],
+      }),
+    });
+
+    const restored = createSettingsProfileLibraryStore(storage);
+    const persisted = JSON.parse(storage.read(SETTINGS_PROFILE_LIBRARY_STORAGE_KEY) ?? "{}");
+
+    expect(restored.resolve("profile:desktop")?.clientSettings).toEqual({
+      chatCopyFormat: "markdown",
+    });
+    expect(persisted).toMatchObject({
+      version: SETTINGS_PROFILE_LIBRARY_VERSION,
+      profiles: [{ clientSettings: { chatCopyFormat: "markdown" } }],
+    });
   });
 
   it("re-scrubs unsafe fields injected into a current-version storage document", () => {
@@ -504,10 +602,31 @@ describe("settings profile library", () => {
     expect(Object.isFrozen(store.getSnapshot().profiles)).toBe(true);
     expect(Object.isFrozen(resolved)).toBe(true);
     expect(Object.isFrozen(resolved.clientSettings)).toBe(true);
+    expect(Object.isFrozen(saved.profile)).toBe(true);
+    expect(saved.profile).toBe(resolved);
+    expect(Object.isFrozen(resolved.clientSettings.worldClockLocationIds)).toBe(true);
     expect(() => {
       (resolved.clientSettings as Record<string, unknown>).autoNudgeMode = "hardcore-fanout";
     }).toThrow();
+    expect(() => {
+      (resolved.clientSettings.worldClockLocationIds as string[]).push("seoul");
+    }).toThrow();
     expect(store.resolve(saved.profile.id)?.clientSettings).not.toHaveProperty("autoNudgeMode");
+  });
+
+  it("copies nested safe values so capture input cannot mutate a saved profile", () => {
+    const locations: Array<UnifiedSettings["worldClockLocationIds"][number]> = ["tokyo", "london"];
+    const payload = captureSettingsProfilePayload(
+      {
+        ...DEFAULT_UNIFIED_SETTINGS,
+        worldClockLocationIds: locations,
+      },
+      "dark",
+    );
+    locations[0] = "seoul";
+
+    expect(payload.clientSettings.worldClockLocationIds).toEqual(["tokyo", "london"]);
+    expect(Object.isFrozen(payload.clientSettings.worldClockLocationIds)).toBe(true);
   });
 
   it("loads older sparse profiles as patches without resetting newly supported preferences", () => {
