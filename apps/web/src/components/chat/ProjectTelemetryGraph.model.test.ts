@@ -207,8 +207,7 @@ describe("ProjectTelemetryGraph model", () => {
         hostSensorProbe: {
           status: "unavailable",
           reason: "provider-missing",
-          detail:
-            "Libre Hardware Monitor or Open Hardware Monitor WMI is not available. Install and run a supported sensor provider to expose measured host temperatures.",
+          detail: "transported detail must not be rendered",
         },
         reason: null,
         detail: null,
@@ -225,6 +224,7 @@ describe("ProjectTelemetryGraph model", () => {
     expect(temperatures.storage).toMatchObject({ celsius: 42 });
     expect(temperatures.memory.celsius).toBeNull();
     expect(temperatures.memory.detail).toContain("Libre Hardware Monitor");
+    expect(temperatures.memory.detail).not.toContain("transported detail");
     expect(temperatures.vram.celsius).toBeNull();
     expect(temperatures.ambient.celsius).toBeNull();
     expect(point).toMatchObject({

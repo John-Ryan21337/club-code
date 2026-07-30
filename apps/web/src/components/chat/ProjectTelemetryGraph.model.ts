@@ -384,14 +384,16 @@ const unavailableTemperatureProjection = (
     PROJECT_TELEMETRY_TEMPERATURE_KINDS.map((kind) => [kind, { celsius: null, detail }]),
   ) as unknown as ProjectTelemetryTemperatureProjection;
 
-const HOST_SENSOR_PROBE_REASONS = new Set([
-  "provider-missing",
-  "no-temperature-sensors",
-  "unsupported",
-  "probe-failed",
-  "malformed",
-  "stale",
-]);
+const HOST_SENSOR_PROBE_DETAILS = {
+  "provider-missing":
+    "Libre Hardware Monitor or Open Hardware Monitor is not running or available. Install and run a supported sensor provider to expose measured host temperatures.",
+  "no-temperature-sensors":
+    "A supported hardware monitor is available, but it did not expose any measured temperature sensors.",
+  unsupported: "No supported host-sensor provider is available on this system.",
+  "probe-failed": "The host-sensor probe did not complete.",
+  malformed: "The host-sensor provider reported unusable values.",
+  stale: "The previous host-sensor sample is no longer current.",
+} as const;
 
 function unavailableHostSensorProbeDetail(record: Record<string, unknown>): string | null {
   const probe = record.hostSensorProbe;
@@ -400,13 +402,14 @@ function unavailableHostSensorProbeDetail(record: Record<string, unknown>): stri
   if (
     probeRecord.status !== "unavailable" ||
     typeof probeRecord.reason !== "string" ||
-    !HOST_SENSOR_PROBE_REASONS.has(probeRecord.reason) ||
-    typeof probeRecord.detail !== "string"
+    !Object.hasOwn(HOST_SENSOR_PROBE_DETAILS, probeRecord.reason)
   ) {
     return null;
   }
-  const detail = probeRecord.detail.trim();
-  return detail.length > 0 && detail.length <= 180 ? detail : null;
+  // The reason enum is the diagnostic authority. Never render transported
+  // detail text here: current servers publish fixed copy, but stale or injected
+  // transports must not turn a bounded diagnostic into arbitrary UI/ARIA text.
+  return HOST_SENSOR_PROBE_DETAILS[probeRecord.reason as keyof typeof HOST_SENSOR_PROBE_DETAILS];
 }
 
 /**

@@ -1,3 +1,4 @@
+import { MAX_TEMPERATURE_SENSORS } from "@cafecode/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -172,6 +173,45 @@ describe("TemperatureTelemetry", () => {
     expect(result.status === "available" ? result.hostSensorProbe : null).toEqual(
       host.hostSensorProbe,
     );
+  });
+
+  it("retains measured nvidia-smi temperatures at the aggregate sensor ceiling", () => {
+    const host = temperatureTelemetryFromRawSamples(
+      Array.from({ length: MAX_TEMPERATURE_SENSORS }, (_, index) => ({
+        source: "libre-hardware-monitor",
+        name: `CPU Core ${index}`,
+        identifier: `/cpu/0/temperature/${index}`,
+        value: 40 + (index % 10),
+      })),
+    );
+    const result = mergeGpuTemperatureSensors(host, {
+      status: "available",
+      reason: null,
+      detail: null,
+      adapters: [
+        {
+          index: 0,
+          name: "NVIDIA GeForce RTX 3090",
+          utilizationPercent: 10,
+          memoryTotalBytes: 1_000,
+          memoryUsedBytes: 100,
+          memoryUtilizationPercent: 10,
+          temperatureCelsius: 48,
+        },
+      ],
+    });
+
+    expect(result.status).toBe("available");
+    expect(result.status === "available" ? result.sensors : []).toHaveLength(
+      MAX_TEMPERATURE_SENSORS,
+    );
+    expect(
+      result.status === "available"
+        ? result.sensors.some(
+            (sensor) => sensor.source === "nvidia-smi" && sensor.temperatureCelsius === 48,
+          )
+        : false,
+    ).toBe(true);
   });
 
   it("creates stable bounded labels without controls or lone surrogates", () => {

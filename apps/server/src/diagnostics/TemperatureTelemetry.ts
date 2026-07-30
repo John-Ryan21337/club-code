@@ -235,12 +235,13 @@ export function mergeGpuTemperatureSensors(
   host: ServerSystemTemperatureTelemetry,
   gpu: ServerSystemGpuTelemetry,
 ): ServerSystemTemperatureTelemetry {
-  const sensors =
+  const hostSensors =
     host.status === "available" ? [...host.sensors] : ([] as ServerSystemTemperatureSensor[]);
+  const gpuSensors: ServerSystemTemperatureSensor[] = [];
   if (gpu.status === "available") {
     for (const adapter of gpu.adapters) {
       if (adapter.temperatureCelsius === undefined) continue;
-      sensors.push({
+      gpuSensors.push({
         kind: "gpu",
         label: sanitizeTemperatureSensorLabel(
           `${adapter.name} GPU ${adapter.index}`,
@@ -251,7 +252,14 @@ export function mergeGpuTemperatureSensors(
       });
     }
   }
-  const bounded = deduplicateSensors(sensors);
+  // Keep measured adapter temperatures when a host provider reaches the
+  // contract cardinality ceiling. Host sensors retain their stable order, but
+  // reserve enough tail capacity for every bounded NVIDIA adapter sample.
+  const retainedHostSensors = hostSensors.slice(
+    0,
+    Math.max(0, MAX_TEMPERATURE_SENSORS - gpuSensors.length),
+  );
+  const bounded = deduplicateSensors([...retainedHostSensors, ...gpuSensors]);
   return bounded.length > 0
     ? {
         version: 1,
