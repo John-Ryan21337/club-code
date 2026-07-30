@@ -820,4 +820,34 @@ describe("ProjectTelemetryGraph", () => {
       await mounted.unmount();
     }
   });
+
+  it("hides unavailable graphs while retaining diagnostic cards", async () => {
+    await page.viewport(1_200, 800);
+    const onChange = vi.fn();
+    const mounted = await render(
+      <ProjectTelemetryGraph
+        environmentId={environmentA}
+        hideUnavailableGraphs
+        onHideUnavailableGraphsChange={onChange}
+        pollIntervalMs={Number.MAX_SAFE_INTEGER}
+        projectId={projectA}
+        readTelemetry={vi.fn(async () => telemetryFixture({ projectId: projectA }))}
+      />,
+    );
+    try {
+      await expect.element(page.getByLabelText(/Host CPU: 42%/i)).toBeVisible();
+      await expect.element(page.getByLabelText(/Host GPU: Unavailable/i)).toBeVisible();
+      const cpuCard = document.querySelector('[data-project-telemetry-card="Host CPU"]');
+      const gpuCard = document.querySelector('[data-project-telemetry-card="Host GPU"]');
+      expect(cpuCard?.querySelector("[data-project-telemetry-series]")).not.toBeNull();
+      expect(gpuCard?.querySelector("[data-project-telemetry-series]")).toBeNull();
+      expect(gpuCard?.querySelector("[data-project-telemetry-graph-hidden]")).not.toBeNull();
+      const toggle = page.getByRole("switch", { name: "Hide unavailable resource graphs" });
+      await expect.element(toggle).toBeChecked();
+      await toggle.click();
+      expect(onChange).toHaveBeenCalledWith(false);
+    } finally {
+      await mounted.unmount();
+    }
+  });
 });

@@ -160,6 +160,7 @@ describe("settings profile library", () => {
       completionAlertSpeechEnabled: "event-output-activation",
       confirmThreadArchive: "destructive-action-safety",
       confirmThreadDelete: "destructive-action-safety",
+      projectTelemetryHideUnavailableGraphs: "include",
       worldClockWeatherEnabled: "consent",
       fallingEffectsEnabled: "ambient-activation",
       atmosphereConsoleEnabled: "ambient-activation",

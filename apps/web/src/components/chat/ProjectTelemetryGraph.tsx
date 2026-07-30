@@ -39,6 +39,7 @@ import {
 import { useLocalStorage } from "../../hooks/useLocalStorage";
 import { matrixColorFrameStore } from "../../matrixColorFrameStore";
 import { cn } from "~/lib/utils";
+import { Switch } from "../ui/switch";
 import {
   clampProjectTelemetryPanelGeometry,
   PROJECT_TELEMETRY_PANEL_DEFAULT_GEOMETRY,
@@ -325,6 +326,7 @@ function TelemetryCard(props: {
   readonly color: string;
   readonly history: readonly (number | null)[];
   readonly historyMeasurement?: "utilization" | "temperature";
+  readonly hideGraph?: boolean;
 }) {
   const Icon = props.icon;
   return (
@@ -344,14 +346,18 @@ function TelemetryCard(props: {
           {props.value}
         </span>
       </div>
-      <TelemetrySparkline
-        color={props.color}
-        label={props.label}
-        {...(props.historyMeasurement === undefined
-          ? {}
-          : { measurement: props.historyMeasurement })}
-        values={props.history}
-      />
+      {props.hideGraph ? (
+        <div aria-hidden="true" className="h-7" data-project-telemetry-graph-hidden="true" />
+      ) : (
+        <TelemetrySparkline
+          color={props.color}
+          label={props.label}
+          {...(props.historyMeasurement === undefined
+            ? {}
+            : { measurement: props.historyMeasurement })}
+          values={props.history}
+        />
+      )}
       <div className="truncate text-xs text-muted-foreground">{props.detail}</div>
     </div>
   );
@@ -366,6 +372,8 @@ export interface ProjectTelemetryGraphProps {
   readonly readTelemetry?: ReadProjectTelemetry;
   readonly pollIntervalMs?: number;
   readonly historyLimit?: number;
+  readonly hideUnavailableGraphs?: boolean;
+  readonly onHideUnavailableGraphsChange?: (checked: boolean) => void;
 }
 
 export function ProjectTelemetryGraph({
@@ -377,6 +385,8 @@ export function ProjectTelemetryGraph({
   readTelemetry = readSelectedProjectTelemetry,
   pollIntervalMs = DEFAULT_POLL_INTERVAL_MS,
   historyLimit = PROJECT_TELEMETRY_HISTORY_LIMIT,
+  hideUnavailableGraphs = false,
+  onHideUnavailableGraphsChange,
 }: ProjectTelemetryGraphProps) {
   const [containerRef, panelBounds, isNarrow] = useTelemetryOverlayContainer();
   const [storedGeometry, setStoredGeometry] = useLocalStorage(
@@ -916,11 +926,24 @@ export function ProjectTelemetryGraph({
           <div className="mb-1.5 truncate px-0.5 text-xs text-muted-foreground">
             Host metrics: selected environment · disk: selected project volume
           </div>
+          <label
+            className="mb-1.5 flex items-center gap-2 px-0.5 text-xs text-muted-foreground"
+            title="Keep unavailable readings and diagnostics visible without drawing an empty history graph."
+          >
+            <Switch
+              aria-label="Hide unavailable resource graphs"
+              checked={hideUnavailableGraphs}
+              disabled={onHideUnavailableGraphsChange === undefined}
+              onCheckedChange={(checked) => onHideUnavailableGraphsChange?.(Boolean(checked))}
+            />
+            Hide unavailable graphs
+          </label>
           <div className="min-h-0 flex-1 overflow-auto pb-2" id={panelId}>
             <div className="grid grid-cols-2 gap-1.5">
               <TelemetryCard
                 color={colors.cpu}
                 detail={cpuDetail}
+                hideGraph={hideUnavailableGraphs && cpuPercent === null}
                 history={visibleView.history.map((point) => point.cpuPercent)}
                 icon={CpuIcon}
                 label="Host CPU"
@@ -929,6 +952,7 @@ export function ProjectTelemetryGraph({
               <TelemetryCard
                 color={colors.memory}
                 detail={memoryDetail}
+                hideGraph={hideUnavailableGraphs && memoryPercent === null}
                 history={visibleView.history.map((point) => point.memoryPercent)}
                 icon={MemoryStickIcon}
                 label="Host RAM"
@@ -941,6 +965,7 @@ export function ProjectTelemetryGraph({
               <TelemetryCard
                 color={colors.disk}
                 detail={diskDetail}
+                hideGraph={hideUnavailableGraphs && diskPercent === null}
                 history={visibleView.history.map((point) => point.projectVolumePercent)}
                 icon={HardDriveIcon}
                 label="Project disk"
@@ -955,6 +980,10 @@ export function ProjectTelemetryGraph({
               <TelemetryCard
                 color={colors.network}
                 detail={networkDetail}
+                hideGraph={
+                  hideUnavailableGraphs &&
+                  (networkReceiveBytesPerSecond === null || networkTransmitBytesPerSecond === null)
+                }
                 history={normalizeTelemetryRateHistory(networkRateHistory)}
                 icon={NetworkIcon}
                 label="Host network"
@@ -973,6 +1002,7 @@ export function ProjectTelemetryGraph({
                   <TelemetryCard
                     color={colors.gpu}
                     detail={gpuDetail}
+                    hideGraph={hideUnavailableGraphs && visibleView.gpu.gpuPercent === null}
                     history={visibleView.history.map((point) => point.gpuPercent)}
                     icon={GaugeIcon}
                     label="Host GPU"
@@ -985,6 +1015,7 @@ export function ProjectTelemetryGraph({
                   <TelemetryCard
                     color={colors.vram}
                     detail={vramDetail}
+                    hideGraph={hideUnavailableGraphs && visibleView.gpu.vramPercent === null}
                     history={visibleView.history.map((point) => point.vramPercent)}
                     icon={MemoryStickIcon}
                     label="Host VRAM"
@@ -1043,6 +1074,7 @@ export function ProjectTelemetryGraph({
                             ? "GPU memory telemetry unavailable · selected environment"
                             : `${formatTelemetryBytes(memory.availableBytes)} free · ${formatPercent(memory.utilizationPercent)} used · selected environment`
                         }
+                        hideGraph={hideUnavailableGraphs && memory === null}
                         history={gpuAdapterHistory(
                           visibleView.history,
                           adapter.key,
@@ -1079,6 +1111,7 @@ export function ProjectTelemetryGraph({
                         ? "Telemetry unavailable"
                         : `${card.metric.detail} · selected environment`
                   }
+                  hideGraph={hideUnavailableGraphs && card.metric.celsius === null}
                   history={normalizeTemperatureHistory(card.history)}
                   historyMeasurement="temperature"
                   icon={ThermometerIcon}

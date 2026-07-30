@@ -131,7 +131,7 @@ import {
   newThreadId,
 } from "~/lib/utils";
 import { getProviderModelCapabilities, resolveSelectableProvider } from "../providerModels";
-import { useSettings } from "../hooks/useSettings";
+import { useSettings, useUpdateSettings } from "../hooks/useSettings";
 import { resolveAppModelSelectionForInstance } from "../modelSelection";
 import {
   deriveLogicalProjectKeyFromSettings,
@@ -2001,6 +2001,7 @@ export default function ChatView(props: ChatViewProps) {
     (store) => store.setThreadWorkflowNodeExpanded,
   );
   const settings = useSettings();
+  const { updateSettings } = useUpdateSettings();
   const autoNudgeSuppressed = useAutoNudgeSuppressedState();
   const setStickyComposerModelSelection = useComposerDraftStore(
     (store) => store.setStickyModelSelection,
@@ -7985,6 +7986,10 @@ export default function ChatView(props: ChatViewProps) {
             {activeProject ? (
               <ProjectTelemetryGraph
                 environmentId={activeProject.environmentId}
+                hideUnavailableGraphs={settings.projectTelemetryHideUnavailableGraphs}
+                onHideUnavailableGraphsChange={(checked) =>
+                  updateSettings({ projectTelemetryHideUnavailableGraphs: checked })
+                }
                 projectId={activeProject.id}
                 projectName={activeProject.name}
               />

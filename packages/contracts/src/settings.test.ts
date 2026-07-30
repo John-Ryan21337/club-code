@@ -47,6 +47,7 @@ import {
   DEFAULT_CHAT_COPY_FORMAT,
   DEFAULT_CLIENT_SETTINGS,
   DEFAULT_CONTINUE_BACKGROUND_ANIMATIONS,
+  DEFAULT_PROJECT_TELEMETRY_HIDE_UNAVAILABLE_GRAPHS,
   DEFAULT_FALLING_EFFECT_2CH_ENRICHED,
   DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_AGENT_ENABLED,
   DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_BUILD_ENABLED,
@@ -201,6 +202,9 @@ describe("client settings", () => {
     expect(DEFAULT_CLIENT_SETTINGS.continueBackgroundAnimations).toBe(
       DEFAULT_CONTINUE_BACKGROUND_ANIMATIONS,
     );
+    expect(DEFAULT_CLIENT_SETTINGS.projectTelemetryHideUnavailableGraphs).toBe(
+      DEFAULT_PROJECT_TELEMETRY_HIDE_UNAVAILABLE_GRAPHS,
+    );
     expect(DEFAULT_CLIENT_SETTINGS.mobileOptimizedPresentation).toBe(
       DEFAULT_MOBILE_OPTIMIZED_PRESENTATION,
     );
@@ -222,6 +226,7 @@ describe("client settings", () => {
       DEFAULT_WORKFLOW_STALL_WARNING_SECONDS,
     );
     expect(decodeClientSettings({}).continueBackgroundAnimations).toBe(false);
+    expect(decodeClientSettings({}).projectTelemetryHideUnavailableGraphs).toBe(false);
     expect(decodeClientSettings({}).mobileOptimizedPresentation).toBe(false);
     expect(decodeClientSettings({}).showSidebarSearch).toBe(true);
     expect(decodeClientSettings({}).showSidebarMascot).toBe(true);

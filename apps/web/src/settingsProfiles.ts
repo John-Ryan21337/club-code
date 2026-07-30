@@ -65,6 +65,7 @@ export const SETTINGS_PROFILE_CLIENT_FIELD_POLICY = {
   diffIgnoreWhitespace: "include",
   diffWordWrap: "include",
   continueBackgroundAnimations: "include",
+  projectTelemetryHideUnavailableGraphs: "include",
   mobileOptimizedPresentation: "include",
   worldClockEnabled: "include",
   worldClockStyle: "include",

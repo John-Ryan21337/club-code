@@ -44,6 +44,7 @@ export type PowerSaveBlockerMode = typeof PowerSaveBlockerMode.Type;
 export const DEFAULT_POWER_SAVE_BLOCKER_MODE: PowerSaveBlockerMode = "off";
 
 export const DEFAULT_CONTINUE_BACKGROUND_ANIMATIONS = false;
+export const DEFAULT_PROJECT_TELEMETRY_HIDE_UNAVAILABLE_GRAPHS = false;
 /**
  * Per-device presentation override. `false` preserves the normal responsive
  * viewport behavior; `true` asks wide clients to use the existing mobile
@@ -696,6 +697,9 @@ export const ClientSettingsSchema = Schema.Struct({
   diffWordWrap: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   continueBackgroundAnimations: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_CONTINUE_BACKGROUND_ANIMATIONS)),
+  ),
+  projectTelemetryHideUnavailableGraphs: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROJECT_TELEMETRY_HIDE_UNAVAILABLE_GRAPHS)),
   ),
   mobileOptimizedPresentation: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_MOBILE_OPTIMIZED_PRESENTATION)),
@@ -1867,6 +1871,7 @@ export const ClientSettingsPatch = Schema.Struct({
   diffIgnoreWhitespace: Schema.optionalKey(Schema.Boolean),
   diffWordWrap: Schema.optionalKey(Schema.Boolean),
   continueBackgroundAnimations: Schema.optionalKey(Schema.Boolean),
+  projectTelemetryHideUnavailableGraphs: Schema.optionalKey(Schema.Boolean),
   mobileOptimizedPresentation: Schema.optionalKey(Schema.Boolean),
   worldClockEnabled: Schema.optionalKey(Schema.Boolean),
   worldClockStyle: Schema.optionalKey(WorldClockStyle),
