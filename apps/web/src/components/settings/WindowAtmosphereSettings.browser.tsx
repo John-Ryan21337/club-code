@@ -46,6 +46,21 @@ beforeEach(() => {
 });
 
 describe("WindowAtmosphereSettings motion", () => {
+  it("persists the renderer-local Atmosphere console kill switch", async () => {
+    const mounted = await render(<WindowAtmosphereSettings />);
+    const toggle = page.getByRole("switch", { name: "Show Atmosphere console" });
+
+    await expect.element(toggle).toBeChecked();
+    await toggle.click();
+    expect(mocks.updateSettings).toHaveBeenLastCalledWith({
+      atmosphereConsoleEnabled: false,
+    });
+
+    mocks.settings = { ...mocks.settings, atmosphereConsoleEnabled: false };
+    await mounted.rerender(<WindowAtmosphereSettings />);
+    await expect.element(toggle).not.toBeChecked();
+  });
+
   it("keeps the cinema falling overlay opt-in and persists both toggle states", async () => {
     const mounted = await render(<WindowAtmosphereSettings />);
     const toggle = page.getByRole("switch", {

@@ -449,6 +449,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.fallingEffectsEnabled !== DEFAULT_UNIFIED_SETTINGS.fallingEffectsEnabled
         ? ["Falling effects"]
         : []),
+      ...(settings.atmosphereConsoleEnabled !== DEFAULT_UNIFIED_SETTINGS.atmosphereConsoleEnabled
+        ? ["Atmosphere console"]
+        : []),
       ...(settings.fallingEffectsOverCinemaEnabled !==
       DEFAULT_UNIFIED_SETTINGS.fallingEffectsOverCinemaEnabled
         ? ["Falling effects over cinema video"]
@@ -579,6 +582,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.sidebarStarSpeed,
       settings.workflowObservatoryEnabled,
       settings.workflowStallWarningSeconds,
+      settings.atmosphereConsoleEnabled,
       settings.fallingEffectsEnabled,
       settings.fallingEffectsOverCinemaEnabled,
       settings.fallingEffectKind,
@@ -642,6 +646,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       workflowObservatoryEnabled: DEFAULT_UNIFIED_SETTINGS.workflowObservatoryEnabled,
       workflowStallWarningSeconds: DEFAULT_UNIFIED_SETTINGS.workflowStallWarningSeconds,
       fallingEffectsEnabled: DEFAULT_UNIFIED_SETTINGS.fallingEffectsEnabled,
+      atmosphereConsoleEnabled: DEFAULT_UNIFIED_SETTINGS.atmosphereConsoleEnabled,
       fallingEffectsOverCinemaEnabled: DEFAULT_UNIFIED_SETTINGS.fallingEffectsOverCinemaEnabled,
       fallingEffectKind: DEFAULT_UNIFIED_SETTINGS.fallingEffectKind,
       fallingEffectColor: DEFAULT_UNIFIED_SETTINGS.fallingEffectColor,

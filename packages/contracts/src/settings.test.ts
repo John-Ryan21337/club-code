@@ -12,6 +12,7 @@ import {
   CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET,
   CLUB_CODE_FIRST_RUN_CLIENT_SETTINGS,
   DEFAULT_AMBIENT_CLIENT_SETTINGS,
+  DEFAULT_ATMOSPHERE_CONSOLE_ENABLED,
   DEFAULT_AMBIENT_COLOR,
   DEFAULT_AMBIENT_IMAGE_ASSET,
   DEFAULT_AMBIENT_IMAGE_CYCLE_ASSETS,
@@ -397,6 +398,7 @@ describe("client settings", () => {
 
   it("defaults every ambient preference to the canonical reset vector", () => {
     expect(DEFAULT_AMBIENT_CLIENT_SETTINGS).toEqual({
+      atmosphereConsoleEnabled: DEFAULT_ATMOSPHERE_CONSOLE_ENABLED,
       fallingEffectsEnabled: DEFAULT_FALLING_EFFECTS_ENABLED,
       fallingEffectsOverCinemaEnabled: DEFAULT_FALLING_EFFECTS_OVER_CINEMA_ENABLED,
       fallingEffectKind: DEFAULT_FALLING_EFFECT_KIND,
@@ -830,6 +832,7 @@ describe("client settings", () => {
       { fallingEffectColor: "#12345" },
       { fallingEffectColor: "red" },
       { fallingEffectsEnabled: "yes" },
+      { atmosphereConsoleEnabled: "yes" },
       { fallingEffectKind: "hail" },
       {
         fallingEffectMatrixBaseFontSize: MIN_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE - 1,

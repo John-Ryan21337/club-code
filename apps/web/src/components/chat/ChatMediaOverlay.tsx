@@ -62,7 +62,10 @@ export function ChatMediaOverlay() {
       : null;
   const stackedVideoSize = largestPresetSize(streamingStackedSize, localStackedSize);
   return (
-    <>
+    <div
+      className="pointer-events-none absolute inset-0 z-20 overflow-visible"
+      data-chat-media-overlay="true"
+    >
       {showAmbientImage && firstAmbientImage ? (
         <AmbientImagePanel
           asset={firstAmbientImage}
@@ -81,7 +84,7 @@ export function ChatMediaOverlay() {
           onDisable={() => updateSettings({ ambientImageEnabled: false })}
         />
       ) : null}
-    </>
+    </div>
   );
 }
 

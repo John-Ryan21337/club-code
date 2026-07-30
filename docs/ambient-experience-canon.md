@@ -516,6 +516,18 @@ supports corner anchors plus custom geometry. Its deterministic parser handles
 a fixed atmosphere, Matrix, media transport, and visualizer grammar locally.
 Normal commands use no model tokens.
 
+The console uses a transparent themed surface and has a persisted,
+renderer-local visibility switch. The compatibility default remains on for
+settings documents created before the switch existed. Turning it off unmounts
+the console rather than hiding it, so its pointer/resize listeners are removed
+without writing the choice to a connected environment server. When Matrix is
+selected, a pointer-transparent canvas copies only the console rectangle from
+the already rendered glyph bitmap, before activity links are drawn. It
+therefore places Matrix glyphs over the console without intercepting controls,
+obscuring other surfaces, or rendering the particle scene a second time. The
+lifted copy has an additional 40% surface-opacity cap so maximum atmosphere
+opacity cannot overpower console text and controls.
+
 The optional language fallback sends one bounded control sentence to an LM
 Studio-compatible endpoint at `127.0.0.1:1234`, with short timeout, bounded
 response, and strict allowlisted JSON. It receives no chat, project, file,
@@ -532,8 +544,11 @@ are distinct features.
 
 PNG, JPEG, WebP, and GIF assets are validated and limited to 10 MiB. They
 support lower-corner presets, small/medium/large sizing, custom drag and
-keyboard resize, optional glow, collision-aware layout, reduced motion, and
-background policy.
+keyboard move/resize, touch-safe labeled handles, optional glow,
+collision-aware viewport clamps, reduced motion, and background policy. Custom
+geometry remains normalized and renderer-local. The image overlay is absolute
+and contributes no chat-manuscript height; disabling it unmounts the panel and
+stops its cycling timer and window listeners.
 
 An accepted ambient image is stored in the server's ambient asset store and
 referenced by Client Settings. It is therefore persistent, unlike local media
@@ -828,7 +843,8 @@ an explanation.
 Atmosphere, streaming media, ambient image/GIF, direct/VLC local media,
 whole-window opacity, observatories, browser tools, completion alerts, and the
 Atmosphere Console are independent systems. Turning on one must not silently
-enable another.
+enable another. The Atmosphere Console visibility switch is renderer-local so
+a phone can hide it without changing another connected client.
 
 The one-action **Disable all ambient features** coordinator turns off the
 backend-authoritative atmosphere, streaming panel, ambient image panel, and

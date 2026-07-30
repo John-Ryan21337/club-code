@@ -164,6 +164,11 @@ function describeCommand(command: AtmosphereCommand): string {
 }
 
 export function AtmosphereConsole() {
+  const enabled = useSettings((settings) => settings.atmosphereConsoleEnabled);
+  return enabled ? <AtmosphereConsoleContent /> : null;
+}
+
+function AtmosphereConsoleContent() {
   const settings = useSettings();
   const { updateSettings } = useUpdateSettings();
   const [preferences, setPreferences] = useLocalStorage(
@@ -463,7 +468,7 @@ export function AtmosphereConsole() {
       <button
         type="button"
         aria-label="Open atmosphere console"
-        className="fixed z-[85] grid size-10 place-items-center rounded-full border border-border/80 bg-card/95 text-primary shadow-xl backdrop-blur-md [-webkit-app-region:no-drag] hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className="cafe-atmosphere-console fixed z-[85] grid size-10 place-items-center rounded-full border border-border/70 bg-transparent text-primary [-webkit-app-region:no-drag] hover:bg-accent/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         style={launcherStyle}
         onClick={() => setPreferences((current) => ({ ...current, open: true }))}
       >
@@ -487,8 +492,9 @@ export function AtmosphereConsole() {
     <section
       ref={panelRef}
       aria-label="Atmosphere console"
-      className="fixed z-[85] flex min-h-0 flex-col overflow-hidden rounded-xl border border-border/80 bg-card/95 text-card-foreground shadow-2xl backdrop-blur-xl [-webkit-app-region:no-drag]"
+      className="cafe-atmosphere-console fixed z-[85] flex min-h-0 flex-col overflow-hidden rounded-xl border border-border/70 bg-transparent text-foreground [-webkit-app-region:no-drag]"
       data-atmosphere-console-anchor={preferences.anchor}
+      data-atmosphere-console-surface="true"
       style={style}
     >
       <header className="flex h-9 shrink-0 items-center gap-1 border-b border-border/70 px-2">
@@ -513,7 +519,7 @@ export function AtmosphereConsole() {
         <button
           type="button"
           aria-label="Move atmosphere console"
-          className="cursor-move rounded p-1 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          className="touch-none cursor-move rounded p-1 hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           onPointerDown={(event) => beginInteraction("move", event)}
           onKeyDown={(event) => {
             if (!event.key.startsWith("Arrow")) return;
@@ -582,7 +588,7 @@ export function AtmosphereConsole() {
         <p
           aria-live="polite"
           className={cn(
-            "min-h-8 overflow-auto rounded-md bg-muted/55 px-2 py-1.5 text-[10px] leading-4 text-muted-foreground",
+            "min-h-8 overflow-auto rounded-md bg-background/40 px-2 py-1.5 text-[10px] leading-4 text-muted-foreground",
             busy && "animate-pulse",
           )}
           role="status"
@@ -598,7 +604,7 @@ export function AtmosphereConsole() {
       <button
         type="button"
         aria-label="Resize atmosphere console"
-        className="absolute right-0 bottom-0 cursor-nwse-resize rounded-tl p-1 text-muted-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className="absolute right-0 bottom-0 touch-none cursor-nwse-resize rounded-tl p-1 text-muted-foreground hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         onPointerDown={(event) => beginInteraction("resize", event)}
         onKeyDown={(event) => {
           if (!event.key.startsWith("Arrow")) return;

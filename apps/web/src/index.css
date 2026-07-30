@@ -1603,6 +1603,30 @@ html[data-cafe-background-animations="paused"][data-cafe-window-focus="blurred"]
   pointer-events: none;
 }
 
+.cafe-atmosphere-console {
+  isolation: isolate;
+  box-shadow:
+    0 0 18px color-mix(in srgb, var(--primary) 20%, transparent),
+    inset 0 0 16px color-mix(in srgb, var(--background) 28%, transparent);
+  text-shadow: 0 0 8px color-mix(in srgb, currentColor 24%, transparent);
+  backdrop-filter: blur(1.5px);
+  -webkit-backdrop-filter: blur(1.5px);
+}
+
+.cafe-atmosphere-console::before {
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(
+    145deg,
+    color-mix(in srgb, var(--background) 42%, transparent),
+    color-mix(in srgb, var(--background) 14%, transparent)
+  );
+  content: "";
+  pointer-events: none;
+}
+
 .cafe-world-clock-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 170px), 1fr));

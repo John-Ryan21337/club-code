@@ -1,6 +1,7 @@
 import {
   DEFAULT_AMBIENT_COLOR,
   DEFAULT_AMBIENT_OPACITY,
+  DEFAULT_ATMOSPHERE_CONSOLE_ENABLED,
   DEFAULT_FALLING_EFFECT_2CH_ENRICHED,
   DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_AGENT_ENABLED,
   DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_BUILD_ENABLED,
@@ -210,6 +211,7 @@ export function WindowAtmosphereSettings() {
   const atmosphereAvailable = serverConfig?.ambientExperienceCapabilities.atmosphere === true;
   const controlsEnabled = atmosphereAvailable && settings.fallingEffectsEnabled;
   const hasNonDefaultValue =
+    settings.atmosphereConsoleEnabled !== DEFAULT_ATMOSPHERE_CONSOLE_ENABLED ||
     settings.fallingEffectsEnabled !== DEFAULT_FALLING_EFFECTS_ENABLED ||
     settings.fallingEffectsOverCinemaEnabled !== DEFAULT_FALLING_EFFECTS_OVER_CINEMA_ENABLED ||
     settings.fallingEffectKind !== DEFAULT_FALLING_EFFECT_KIND ||
@@ -265,6 +267,7 @@ export function WindowAtmosphereSettings() {
               label="window atmosphere"
               onClick={() =>
                 updateSettings({
+                  atmosphereConsoleEnabled: DEFAULT_ATMOSPHERE_CONSOLE_ENABLED,
                   fallingEffectsEnabled: DEFAULT_FALLING_EFFECTS_ENABLED,
                   fallingEffectsOverCinemaEnabled: DEFAULT_FALLING_EFFECTS_OVER_CINEMA_ENABLED,
                   fallingEffectKind: DEFAULT_FALLING_EFFECT_KIND,
@@ -314,6 +317,20 @@ export function WindowAtmosphereSettings() {
               updateSettings({ fallingEffectsEnabled: Boolean(checked) })
             }
             aria-label="Show falling effects"
+          />
+        }
+      />
+
+      <SettingsRow
+        title="Atmosphere console"
+        description="Show the movable, resizable local atmosphere command panel. Turning this off fully unmounts the console and stops its listeners and local requests."
+        control={
+          <Switch
+            checked={settings.atmosphereConsoleEnabled}
+            onCheckedChange={(checked) =>
+              updateSettings({ atmosphereConsoleEnabled: Boolean(checked) })
+            }
+            aria-label="Show Atmosphere console"
           />
         }
       />

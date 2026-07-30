@@ -2,7 +2,7 @@ import type { ClientSettings, ClientSettingsPatch } from "@cafecode/contracts/se
 
 export type RendererLocalClientSettingsPatch = Pick<
   ClientSettingsPatch,
-  "mobileOptimizedPresentation" | "worldClockWeatherEnabled"
+  "atmosphereConsoleEnabled" | "mobileOptimizedPresentation" | "worldClockWeatherEnabled"
 >;
 
 /**
@@ -14,10 +14,16 @@ export function partitionRendererLocalClientSettingsPatch(patch: ClientSettingsP
   readonly sharedPatch: ClientSettingsPatch;
   readonly localPatch: RendererLocalClientSettingsPatch;
 } {
-  const { mobileOptimizedPresentation, worldClockWeatherEnabled, ...sharedPatch } = patch;
+  const {
+    atmosphereConsoleEnabled,
+    mobileOptimizedPresentation,
+    worldClockWeatherEnabled,
+    ...sharedPatch
+  } = patch;
   return {
     sharedPatch,
     localPatch: {
+      ...(atmosphereConsoleEnabled === undefined ? {} : { atmosphereConsoleEnabled }),
       ...(mobileOptimizedPresentation === undefined ? {} : { mobileOptimizedPresentation }),
       ...(worldClockWeatherEnabled === undefined ? {} : { worldClockWeatherEnabled }),
     },
@@ -26,6 +32,7 @@ export function partitionRendererLocalClientSettingsPatch(patch: ClientSettingsP
 
 export function withoutRendererLocalClientSettings(settings: ClientSettings): ClientSettingsPatch {
   const {
+    atmosphereConsoleEnabled: _atmosphereConsole,
     mobileOptimizedPresentation: _mobilePresentation,
     worldClockWeatherEnabled: _weatherConsent,
     ...sharedSettings
@@ -35,10 +42,14 @@ export function withoutRendererLocalClientSettings(settings: ClientSettings): Cl
 
 export function withRendererLocalClientSettings(
   sharedSettings: ClientSettings,
-  localSettings: Pick<ClientSettings, "mobileOptimizedPresentation" | "worldClockWeatherEnabled">,
+  localSettings: Pick<
+    ClientSettings,
+    "atmosphereConsoleEnabled" | "mobileOptimizedPresentation" | "worldClockWeatherEnabled"
+  >,
 ): ClientSettings {
   return {
     ...sharedSettings,
+    atmosphereConsoleEnabled: localSettings.atmosphereConsoleEnabled,
     mobileOptimizedPresentation: localSettings.mobileOptimizedPresentation,
     worldClockWeatherEnabled: localSettings.worldClockWeatherEnabled,
   };

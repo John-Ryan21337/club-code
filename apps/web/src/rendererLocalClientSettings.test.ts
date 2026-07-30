@@ -10,12 +10,14 @@ import {
 describe("renderer-local client settings", () => {
   it("keeps presentation and third-party consent out of shared patches", () => {
     const { localPatch, sharedPatch } = partitionRendererLocalClientSettingsPatch({
+      atmosphereConsoleEnabled: false,
       mobileOptimizedPresentation: true,
       worldClockWeatherEnabled: true,
       worldClockEnabled: true,
     });
 
     expect(localPatch).toEqual({
+      atmosphereConsoleEnabled: false,
       mobileOptimizedPresentation: true,
       worldClockWeatherEnabled: true,
     });
@@ -25,10 +27,14 @@ describe("renderer-local client settings", () => {
   it("strips renderer-local fields from legacy import candidates", () => {
     const settings: ClientSettings = {
       ...DEFAULT_CLIENT_SETTINGS,
+      atmosphereConsoleEnabled: false,
       mobileOptimizedPresentation: true,
       worldClockWeatherEnabled: true,
     };
 
+    expect(withoutRendererLocalClientSettings(settings)).not.toHaveProperty(
+      "atmosphereConsoleEnabled",
+    );
     expect(withoutRendererLocalClientSettings(settings)).not.toHaveProperty(
       "mobileOptimizedPresentation",
     );
@@ -42,15 +48,18 @@ describe("renderer-local client settings", () => {
       withRendererLocalClientSettings(
         {
           ...DEFAULT_CLIENT_SETTINGS,
+          atmosphereConsoleEnabled: false,
           mobileOptimizedPresentation: true,
           worldClockWeatherEnabled: true,
         },
         {
+          atmosphereConsoleEnabled: true,
           mobileOptimizedPresentation: false,
           worldClockWeatherEnabled: false,
         },
       ),
     ).toMatchObject({
+      atmosphereConsoleEnabled: true,
       mobileOptimizedPresentation: false,
       worldClockWeatherEnabled: false,
     });

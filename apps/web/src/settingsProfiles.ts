@@ -47,6 +47,7 @@ export const SETTINGS_PROFILE_CLIENT_KEYS = [
   "worldClockStyle",
   "worldClockLocationIds",
   "fallingEffectsEnabled",
+  "atmosphereConsoleEnabled",
   "fallingEffectsOverCinemaEnabled",
   "fallingEffectKind",
   "fallingEffectMatrixBaseFontSize",

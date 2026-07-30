@@ -368,6 +368,47 @@ describe("WindowAtmosphere", () => {
     );
   });
 
+  it("clips a pointer-transparent Matrix copy above only the Atmosphere console", async () => {
+    (reducedMotionQuery as unknown as { matches: boolean }).matches = true;
+    const drawImage = vi.spyOn(CanvasRenderingContext2D.prototype, "drawImage");
+    const consoleSurface = document.createElement("section");
+    consoleSurface.dataset.atmosphereConsoleSurface = "true";
+    vi.spyOn(consoleSurface, "getBoundingClientRect").mockReturnValue({
+      x: 120,
+      y: 90,
+      width: 360,
+      height: 240,
+      top: 90,
+      left: 120,
+      right: 480,
+      bottom: 330,
+      toJSON: () => ({}),
+    });
+    document.body.append(consoleSurface);
+
+    mounted = await render(<WindowAtmosphere selectedThreadRef={TEST_SELECTED_THREAD_REF} />);
+
+    const overlay = page.getByTestId("atmosphere-console-matrix-overlay");
+    await expect
+      .element(overlay)
+      .toHaveAttribute("data-atmosphere-console-overlay-visible", "true");
+    const overlayElement = overlay.element();
+    expect(getComputedStyle(overlayElement).pointerEvents).toBe("none");
+    expect(getComputedStyle(overlayElement).zIndex).toBe("86");
+    expect(getComputedStyle(overlayElement).opacity).toBe("0.4");
+    expect(overlayElement.style.clipPath).toBe(
+      `inset(90px ${String(Math.max(0, window.innerWidth - 480))}px ${String(
+        window.innerHeight - 330,
+      )}px 120px)`,
+    );
+    await expect.poll(() => drawImage.mock.calls.length).toBeGreaterThanOrEqual(1);
+    expect(mocks.drawAtmosphereScene).toHaveBeenCalledTimes(1);
+
+    mocks.settings.fallingEffectKind = "rain";
+    await mounted.rerender(<WindowAtmosphere selectedThreadRef={TEST_SELECTED_THREAD_REF} />);
+    expect(document.querySelector('[data-testid="atmosphere-console-matrix-overlay"]')).toBeNull();
+  });
+
   it("does not repaint the hidden cinema copy until a video surface appears", async () => {
     (reducedMotionQuery as unknown as { matches: boolean }).matches = true;
     mocks.settings.fallingEffectsOverCinemaEnabled = true;

@@ -424,8 +424,9 @@ export function AmbientImagePanel({
       {custom ? (
         <button
           type="button"
-          className="absolute top-1 left-1 z-10 rounded bg-black/65 p-1 text-white hover:bg-black focus-visible:ring-2 focus-visible:ring-white"
+          className="absolute top-1 left-1 z-10 touch-none cursor-move rounded bg-black/65 p-1 text-white hover:bg-black focus-visible:ring-2 focus-visible:ring-white"
           aria-label="Move ambient image; use arrow keys for precise movement"
+          title="Drag to move · Arrow keys move precisely"
           onPointerDown={(event) => beginInteraction("move", event)}
           onKeyDown={(event) => {
             if (event.key.startsWith("Arrow")) {
@@ -497,8 +498,9 @@ export function AmbientImagePanel({
       {custom ? (
         <button
           type="button"
-          className="absolute right-1 bottom-1 z-10 cursor-nwse-resize rounded bg-black/65 p-1 text-white hover:bg-black focus-visible:ring-2 focus-visible:ring-white"
+          className="absolute right-1 bottom-1 z-10 touch-none cursor-nwse-resize rounded bg-black/65 p-1 text-white hover:bg-black focus-visible:ring-2 focus-visible:ring-white"
           aria-label="Resize ambient image; use arrow keys for precise resizing"
+          title="Drag to resize · Arrow keys resize precisely"
           onPointerDown={(event) => beginInteraction("resize", event)}
           onKeyDown={(event) => {
             if (event.key.startsWith("Arrow")) {

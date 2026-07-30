@@ -42,6 +42,8 @@ const CINEMA_MEDIA_SELECTOR = [
   'section[aria-label="Local media player"][data-local-media-presentation="cinema"] video',
 ].join(", ");
 const HIDDEN_CINEMA_CLIP_PATH = "inset(0 0 100% 0)";
+const ATMOSPHERE_CONSOLE_SELECTOR = '[data-atmosphere-console-surface="true"]';
+const HIDDEN_CONSOLE_CLIP_PATH = "inset(0 0 100% 0)";
 
 export interface WindowAtmosphereProps {
   readonly selectedThreadRef?: ScopedThreadRef | null;
@@ -91,6 +93,44 @@ function syncCinemaOverlayClip(canvas: HTMLCanvasElement, surface: HTMLElement |
   )}px ${String(left)}px)`;
   canvas.style.visibility = "visible";
   canvas.dataset.cinemaAtmosphereVisible = "true";
+  return true;
+}
+
+function syncConsoleOverlayClip(canvas: HTMLCanvasElement, surface: HTMLElement | null): boolean {
+  if (surface === null || !surface.isConnected) {
+    canvas.style.clipPath = HIDDEN_CONSOLE_CLIP_PATH;
+    canvas.style.visibility = "hidden";
+    canvas.dataset.atmosphereConsoleOverlayVisible = "false";
+    delete canvas.dataset.atmosphereConsoleOverlayLeft;
+    delete canvas.dataset.atmosphereConsoleOverlayTop;
+    delete canvas.dataset.atmosphereConsoleOverlayRight;
+    delete canvas.dataset.atmosphereConsoleOverlayBottom;
+    return false;
+  }
+
+  const bounds = surface.getBoundingClientRect();
+  const viewportWidth = Math.max(0, window.innerWidth);
+  const viewportHeight = Math.max(0, window.innerHeight);
+  const left = Math.min(viewportWidth, Math.max(0, bounds.left));
+  const top = Math.min(viewportHeight, Math.max(0, bounds.top));
+  const right = Math.min(viewportWidth, Math.max(left, bounds.right));
+  const bottom = Math.min(viewportHeight, Math.max(top, bounds.bottom));
+  if (right <= left || bottom <= top) {
+    canvas.style.clipPath = HIDDEN_CONSOLE_CLIP_PATH;
+    canvas.style.visibility = "hidden";
+    canvas.dataset.atmosphereConsoleOverlayVisible = "false";
+    return false;
+  }
+
+  canvas.style.clipPath = `inset(${String(top)}px ${String(viewportWidth - right)}px ${String(
+    viewportHeight - bottom,
+  )}px ${String(left)}px)`;
+  canvas.style.visibility = "visible";
+  canvas.dataset.atmosphereConsoleOverlayVisible = "true";
+  canvas.dataset.atmosphereConsoleOverlayLeft = String(left);
+  canvas.dataset.atmosphereConsoleOverlayTop = String(top);
+  canvas.dataset.atmosphereConsoleOverlayRight = String(right);
+  canvas.dataset.atmosphereConsoleOverlayBottom = String(bottom);
   return true;
 }
 
@@ -152,6 +192,7 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
   const atmosphereAvailable = serverConfig?.ambientExperienceCapabilities.atmosphere === true;
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const cinemaOverlayCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const consoleOverlayCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const sceneRef = useRef<AtmosphereScene | null>(null);
   const matrixPaletteOwnerRef = useRef<object>({});
   const lastMatrixColorFrameRef = useRef<MatrixColorFrame | null>(null);
@@ -285,6 +326,49 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
     };
   }, [atmosphereAvailable, cinemaOverlayEnabled, enabled]);
 
+  useLayoutEffect(() => {
+    const canvas = consoleOverlayCanvasRef.current;
+    if (!atmosphereAvailable || !enabled || kind !== "matrix" || canvas === null) {
+      return;
+    }
+
+    let observedSurface: HTMLElement | null = null;
+    const syncTarget = () => {
+      const surface = document.querySelector<HTMLElement>(ATMOSPHERE_CONSOLE_SELECTOR);
+      if (surface !== observedSurface) {
+        resizeObserver?.disconnect();
+        observedSurface = surface;
+        if (observedSurface !== null) {
+          resizeObserver?.observe(observedSurface);
+        }
+      }
+      const wasVisible = canvas.dataset.atmosphereConsoleOverlayVisible === "true";
+      const isVisible = syncConsoleOverlayClip(canvas, observedSurface);
+      if (!wasVisible && isVisible) {
+        invalidateCommittedFrameRef.current?.();
+      }
+    };
+    const resizeObserver =
+      typeof ResizeObserver === "function" ? new ResizeObserver(syncTarget) : null;
+    const mutationObserver = new MutationObserver(syncTarget);
+    mutationObserver.observe(document.body, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ["data-atmosphere-console-surface", "style"],
+    });
+    window.addEventListener("resize", syncTarget);
+    window.addEventListener("scroll", syncTarget, true);
+    syncTarget();
+
+    return () => {
+      mutationObserver.disconnect();
+      resizeObserver?.disconnect();
+      window.removeEventListener("resize", syncTarget);
+      window.removeEventListener("scroll", syncTarget, true);
+    };
+  }, [atmosphereAvailable, enabled, kind]);
+
   useEffect(() => {
     const matrixPaletteOwner = matrixPaletteOwnerRef.current;
     const matrixColorState = createMatrixColorAnimationState();
@@ -359,6 +443,8 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
     }
     const cinemaOverlayCanvas = cinemaOverlayCanvasRef.current;
     const cinemaOverlayContext = cinemaOverlayCanvas?.getContext("2d") ?? null;
+    const consoleOverlayCanvas = consoleOverlayCanvasRef.current;
+    const consoleOverlayContext = consoleOverlayCanvas?.getContext("2d") ?? null;
 
     const reducedMotion = window.matchMedia(REDUCED_MOTION_QUERY);
     let scene: AtmosphereScene | null = null;
@@ -384,6 +470,9 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
       clearBitmap(canvas, context);
       if (cinemaOverlayCanvas !== null && cinemaOverlayContext !== null) {
         clearBitmap(cinemaOverlayCanvas, cinemaOverlayContext);
+      }
+      if (consoleOverlayCanvas !== null && consoleOverlayContext !== null) {
+        clearBitmap(consoleOverlayCanvas, consoleOverlayContext);
       }
     };
 
@@ -464,6 +553,11 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
         cinemaOverlayCanvas.height = bitmapHeight;
         cinemaOverlayContext.setTransform(dpr, 0, 0, dpr, 0, 0);
       }
+      if (consoleOverlayCanvas !== null && consoleOverlayContext !== null) {
+        consoleOverlayCanvas.width = bitmapWidth;
+        consoleOverlayCanvas.height = bitmapHeight;
+        consoleOverlayContext.setTransform(dpr, 0, 0, dpr, 0, 0);
+      }
       scene = createAtmosphereScene(
         kind,
         width,
@@ -529,6 +623,41 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
         walkEndFontSize,
         matrixBaseFontSize,
       );
+      if (
+        consoleOverlayCanvas?.dataset.atmosphereConsoleOverlayVisible === "true" &&
+        consoleOverlayContext !== null
+      ) {
+        const left = Number(consoleOverlayCanvas.dataset.atmosphereConsoleOverlayLeft);
+        const top = Number(consoleOverlayCanvas.dataset.atmosphereConsoleOverlayTop);
+        const right = Number(consoleOverlayCanvas.dataset.atmosphereConsoleOverlayRight);
+        const bottom = Number(consoleOverlayCanvas.dataset.atmosphereConsoleOverlayBottom);
+        if ([left, top, right, bottom].every(Number.isFinite) && right > left && bottom > top) {
+          const scaleX = canvas.width / scene.width;
+          const scaleY = canvas.height / scene.height;
+          const sourceLeft = left * scaleX;
+          const sourceTop = top * scaleY;
+          const sourceWidth = (right - left) * scaleX;
+          const sourceHeight = (bottom - top) * scaleY;
+          consoleOverlayContext.save();
+          consoleOverlayContext.setTransform(1, 0, 0, 1, 0, 0);
+          consoleOverlayContext.clearRect(sourceLeft, sourceTop, sourceWidth, sourceHeight);
+          // Copy only the console rectangle from the base bitmap before
+          // provider activity lines are painted. This keeps the lift
+          // glyph-only without iterating the Matrix scene a second time.
+          consoleOverlayContext.drawImage(
+            canvas,
+            sourceLeft,
+            sourceTop,
+            sourceWidth,
+            sourceHeight,
+            sourceLeft,
+            sourceTop,
+            sourceWidth,
+            sourceHeight,
+          );
+          consoleOverlayContext.restore();
+        }
+      }
       if (
         cinemaOverlayCanvas?.dataset.cinemaAtmosphereVisible === "true" &&
         cinemaOverlayContext !== null
@@ -724,6 +853,19 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
           data-testid="cinema-falling-atmosphere"
           style={{
             clipPath: HIDDEN_CINEMA_CLIP_PATH,
+            visibility: "hidden",
+          }}
+        />
+      ) : null}
+      {kind === "matrix" ? (
+        <canvas
+          ref={consoleOverlayCanvasRef}
+          aria-hidden="true"
+          className="pointer-events-none fixed inset-0 z-[86] h-full w-full overflow-hidden opacity-40"
+          data-atmosphere-console-overlay-visible="false"
+          data-testid="atmosphere-console-matrix-overlay"
+          style={{
+            clipPath: HIDDEN_CONSOLE_CLIP_PATH,
             visibility: "hidden",
           }}
         />

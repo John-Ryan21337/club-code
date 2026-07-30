@@ -285,6 +285,11 @@ export const FallingEffectKind = Schema.Literals(["snow", "rain", "matrix"]);
 export type FallingEffectKind = typeof FallingEffectKind.Type;
 export const DEFAULT_FALLING_EFFECTS_ENABLED = false;
 /**
+ * Compatibility default: the console existed before this persisted kill
+ * switch, so older settings documents retain the current visible behavior.
+ */
+export const DEFAULT_ATMOSPHERE_CONSOLE_ENABLED = true;
+/**
  * Cinema media stays visually unobstructed unless the user explicitly opts
  * into a clipped, pointer-transparent copy of the selected falling effect.
  */
@@ -707,6 +712,9 @@ export const ClientSettingsSchema = Schema.Struct({
   fallingEffectsEnabled: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECTS_ENABLED)),
   ),
+  atmosphereConsoleEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_ATMOSPHERE_CONSOLE_ENABLED)),
+  ),
   fallingEffectsOverCinemaEnabled: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECTS_OVER_CINEMA_ENABLED)),
   ),
@@ -998,6 +1006,7 @@ export type ClientSettings = typeof ClientSettingsSchema.Type;
 
 export const AMBIENT_CLIENT_SETTINGS_KEYS = [
   "fallingEffectsEnabled",
+  "atmosphereConsoleEnabled",
   "fallingEffectsOverCinemaEnabled",
   "fallingEffectKind",
   "fallingEffectMatrixBaseFontSize",
@@ -1052,6 +1061,7 @@ export type AmbientClientSettings = Pick<
 
 export const DEFAULT_AMBIENT_CLIENT_SETTINGS: AmbientClientSettings = {
   fallingEffectsEnabled: DEFAULT_FALLING_EFFECTS_ENABLED,
+  atmosphereConsoleEnabled: DEFAULT_ATMOSPHERE_CONSOLE_ENABLED,
   fallingEffectsOverCinemaEnabled: DEFAULT_FALLING_EFFECTS_OVER_CINEMA_ENABLED,
   fallingEffectKind: DEFAULT_FALLING_EFFECT_KIND,
   fallingEffectMatrixBaseFontSize: DEFAULT_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE,
@@ -1859,6 +1869,7 @@ export const ClientSettingsPatch = Schema.Struct({
   // See the ClientSettings field above: transport routing keeps this local.
   worldClockWeatherEnabled: Schema.optionalKey(Schema.Boolean),
   fallingEffectsEnabled: Schema.optionalKey(Schema.Boolean),
+  atmosphereConsoleEnabled: Schema.optionalKey(Schema.Boolean),
   fallingEffectsOverCinemaEnabled: Schema.optionalKey(Schema.Boolean),
   fallingEffectKind: Schema.optionalKey(FallingEffectKind),
   fallingEffectMatrixBaseFontSize: Schema.optionalKey(FallingEffectMatrixBaseFontSize),

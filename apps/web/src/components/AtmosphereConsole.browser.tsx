@@ -12,6 +12,7 @@ import {
 const mocks = vi.hoisted(() => ({
   updateSettings: vi.fn(),
   settings: {
+    atmosphereConsoleEnabled: true,
     fallingEffectDensity: 1,
     fallingEffectSpeed: 1,
     fallingEffectOpacity: 0.35,
@@ -19,7 +20,8 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../hooks/useSettings", () => ({
-  useSettings: () => mocks.settings,
+  useSettings: <T,>(selector?: (settings: typeof mocks.settings) => T) =>
+    selector ? selector(mocks.settings) : mocks.settings,
   useUpdateSettings: () => ({ updateSettings: mocks.updateSettings }),
 }));
 
@@ -28,10 +30,30 @@ import { AtmosphereConsole } from "./AtmosphereConsole";
 beforeEach(() => {
   localStorage.clear();
   mocks.updateSettings.mockReset();
+  mocks.settings.atmosphereConsoleEnabled = true;
   __resetAtmosphereControlHandlersForTests();
 });
 
 describe("AtmosphereConsole", () => {
+  it("uses a transparent themed surface and fully unmounts when locally disabled", async () => {
+    const removeListener = vi.spyOn(window, "removeEventListener");
+    const mounted = await render(<AtmosphereConsole />);
+
+    const panel = page.getByRole("region", { name: "Atmosphere console" });
+    await expect.element(panel).toHaveAttribute("data-atmosphere-console-surface", "true");
+    expect(panel.element().className).toContain("bg-transparent");
+    expect(panel.element().className).toContain("text-foreground");
+
+    mocks.settings.atmosphereConsoleEnabled = false;
+    await mounted.rerender(<AtmosphereConsole />);
+
+    expect(document.querySelector('[aria-label="Atmosphere console"]')).toBeNull();
+    expect(document.querySelector('[aria-label="Open atmosphere console"]')).toBeNull();
+    expect(removeListener.mock.calls.some(([type]) => type === "pointermove")).toBe(true);
+    expect(removeListener.mock.calls.some(([type]) => type === "resize")).toBe(true);
+    removeListener.mockRestore();
+  });
+
   it("applies deterministic zero-token effects and remains reopenable", async () => {
     await render(<AtmosphereConsole />);
 

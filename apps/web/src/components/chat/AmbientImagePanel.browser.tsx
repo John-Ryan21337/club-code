@@ -120,3 +120,74 @@ it("offers stable manual cycling and a theater presentation without changing cus
   await userEvent.click(page.getByRole("button", { name: "Previous ambient image" }));
   await expect.element(page.getByText("1 / 2")).toBeVisible();
 });
+
+it("keeps custom controls reachable on a narrow pane and tears down cycling without layout height", async () => {
+  const secondAsset = {
+    ...asset,
+    id: `sha256-${"c".repeat(64)}.gif`,
+    url: `/api/ambient-media/image/sha256-${"c".repeat(64)}.gif`,
+    mimeType: "image/gif" as const,
+  };
+  localStorage.setItem(
+    AMBIENT_MEDIA_GEOMETRY_STORAGE_KEY,
+    JSON.stringify({
+      version: 1,
+      slots: { image: { x: 0.9, y: 0.9, width: 1 } },
+    }),
+  );
+  const clearInterval = vi.spyOn(window, "clearInterval");
+  const removeListener = vi.spyOn(window, "removeEventListener");
+  const mounted = await render(
+    <div className="relative h-[320px] w-[220px]" data-testid="narrow-chat-pane">
+      <AmbientImagePanel
+        asset={asset}
+        cycleAssets={[asset, secondAsset]}
+        cycleEnabled
+        cycleSeconds={3}
+        presentationMode="floating"
+        layoutMode="custom"
+        placement="bottom-left"
+        size="large"
+        stackedVideoSize={null}
+        glow={false}
+        glowColor="auto"
+        glowOpacity={0.35}
+        continueBackgroundAnimations
+        onDisable={vi.fn()}
+      />
+    </div>,
+  );
+
+  const pane = page.getByTestId("narrow-chat-pane").element();
+  const panel = page.getByRole("region", { name: "Ambient image" }).element();
+  await expect.poll(() => panel.getBoundingClientRect().width).toBeGreaterThan(0);
+  expect(panel.getBoundingClientRect().width).toBeLessThanOrEqual(220 * 0.9 + 1);
+  expect(panel.getBoundingClientRect().left).toBeGreaterThanOrEqual(
+    pane.getBoundingClientRect().left,
+  );
+  expect(panel.getBoundingClientRect().right).toBeLessThanOrEqual(
+    pane.getBoundingClientRect().right + 1,
+  );
+  expect(pane.getBoundingClientRect().height).toBe(320);
+  expect(pane.scrollHeight).toBe(320);
+  expect(
+    page
+      .getByRole("button", { name: /Move ambient image/ })
+      .element()
+      .getAttribute("title"),
+  ).toContain("Drag");
+  expect(
+    page
+      .getByRole("button", { name: /Resize ambient image/ })
+      .element()
+      .getAttribute("title"),
+  ).toContain("Drag");
+
+  await mounted.unmount();
+
+  expect(clearInterval).toHaveBeenCalled();
+  expect(removeListener.mock.calls.some(([type]) => type === "pointermove")).toBe(true);
+  expect(removeListener.mock.calls.some(([type]) => type === "resize")).toBe(true);
+  clearInterval.mockRestore();
+  removeListener.mockRestore();
+});
