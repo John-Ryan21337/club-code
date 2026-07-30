@@ -33,6 +33,7 @@ import {
   CollaborationAuthorizationError,
   type CollaborationAuthorizationGrant,
   CollaborationMembershipAuthority,
+  isCollaborationAuthorizationGrant,
   validateCollaborationPrincipal,
 } from "./CollaborationAuthorization.ts";
 
@@ -129,6 +130,43 @@ export interface CollaborationAdmittedEventProposal {
   readonly permission: CollaborationPermission;
   readonly payload: unknown;
   readonly payloadBytes: Uint8Array;
+}
+
+const admittedProposalProofs = new WeakMap<object, string>();
+
+function admittedProposalProof(admitted: CollaborationAdmittedEventProposal): string {
+  return JSON.stringify([
+    admitted.authorization,
+    admitted.proposal,
+    admitted.permission,
+    admitted.payload,
+    Buffer.from(admitted.payloadBytes).toString("base64"),
+  ]);
+}
+
+/**
+ * Confirms that an append capability came from admission and that no signed,
+ * authorized, parsed, or byte-level field changed afterward.
+ */
+export function isCollaborationAdmittedEventProposal(
+  value: unknown,
+): value is CollaborationAdmittedEventProposal {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const proof = admittedProposalProofs.get(value);
+  if (proof === undefined) {
+    return false;
+  }
+  try {
+    const admitted = value as CollaborationAdmittedEventProposal;
+    return (
+      isCollaborationAuthorizationGrant(admitted.authorization) &&
+      proof === admittedProposalProof(admitted)
+    );
+  } catch {
+    return false;
+  }
 }
 
 function deny(
@@ -369,12 +407,14 @@ export function admitCollaborationEventProposal(
       return yield* deny("signature-invalid");
     }
 
-    return {
+    const admitted = {
       authorization,
       proposal,
       permission,
       payload,
-      payloadBytes,
+      payloadBytes: Buffer.from(payloadBytes),
     };
+    admittedProposalProofs.set(admitted, admittedProposalProof(admitted));
+    return admitted;
   });
 }
