@@ -12,8 +12,10 @@ import { useClientSettingsHydrated, useSettings, useUpdateSettings } from "../..
 import { useTheme } from "../../hooks/useTheme";
 import {
   captureSettingsProfilePayload,
+  mutateSettingsProfileLibrary,
   settingsProfileLibraryStore,
   settingsProfileMatches,
+  type SettingsProfile,
   SettingsProfileError,
   useSettingsProfileLibrary,
 } from "../../settingsProfiles";
@@ -52,6 +54,19 @@ function mutationNotice(action: string, profileName: string, persisted: boolean)
   };
 }
 
+function isSameSavedProfile(left: SettingsProfile, right: SettingsProfile): boolean {
+  return (
+    left.id === right.id &&
+    left.name === right.name &&
+    left.createdAt === right.createdAt &&
+    left.updatedAt === right.updatedAt &&
+    settingsProfileMatches(left, {
+      theme: right.theme,
+      clientSettings: right.clientSettings,
+    })
+  );
+}
+
 export function SettingsProfiles() {
   const library = useSettingsProfileLibrary();
   const settings = useSettings();
@@ -87,10 +102,13 @@ export function SettingsProfiles() {
     });
   }, []);
 
-  const handleSave = useCallback(() => {
-    if (!settingsHydrated) return;
+  const handleSave = useCallback(async () => {
+    if (!settingsHydrated || busy) return;
+    setBusy(true);
     try {
-      const result = settingsProfileLibraryStore.upsert(nameDraft, currentPayload);
+      const result = await mutateSettingsProfileLibrary(settingsProfileLibraryStore, () =>
+        settingsProfileLibraryStore.upsert(nameDraft, currentPayload),
+      );
       setNameDraft(result.profile.name);
       setNotice(
         mutationNotice(
@@ -101,29 +119,61 @@ export function SettingsProfiles() {
       );
     } catch (error) {
       reportError(error);
+    } finally {
+      setBusy(false);
     }
-  }, [currentPayload, nameDraft, reportError, settingsHydrated]);
+  }, [busy, currentPayload, nameDraft, reportError, settingsHydrated]);
 
-  const handleUpdateActive = useCallback(() => {
-    if (!settingsHydrated) return;
+  const handleUpdateActive = useCallback(async () => {
+    if (!settingsHydrated || busy || activeProfile === null) return;
+    setBusy(true);
     try {
-      const result = settingsProfileLibraryStore.updateActive(currentPayload);
+      const result = await mutateSettingsProfileLibrary(settingsProfileLibraryStore, () => {
+        const latest = settingsProfileLibraryStore.resolve(activeProfile.id);
+        if (
+          latest === null ||
+          settingsProfileLibraryStore.getSnapshot().activeProfileId !== activeProfile.id ||
+          !isSameSavedProfile(activeProfile, latest)
+        ) {
+          throw new SettingsProfileError(
+            latest === null
+              ? "That settings profile no longer exists."
+              : `“${activeProfile.name}” changed in another window. Review it before updating.`,
+          );
+        }
+        return settingsProfileLibraryStore.updateActive(currentPayload);
+      });
       setNotice(mutationNotice("Updated", result.profile.name, result.persisted));
     } catch (error) {
       reportError(error);
+    } finally {
+      setBusy(false);
     }
-  }, [currentPayload, reportError, settingsHydrated]);
+  }, [activeProfile, busy, currentPayload, reportError, settingsHydrated]);
 
-  const handleRename = useCallback(() => {
-    if (!activeProfile) return;
+  const handleRename = useCallback(async () => {
+    if (!activeProfile || busy) return;
+    setBusy(true);
     try {
-      const result = settingsProfileLibraryStore.rename(activeProfile.id, nameDraft);
+      const result = await mutateSettingsProfileLibrary(settingsProfileLibraryStore, () => {
+        const latest = settingsProfileLibraryStore.resolve(activeProfile.id);
+        if (latest === null || !isSameSavedProfile(activeProfile, latest)) {
+          throw new SettingsProfileError(
+            latest === null
+              ? "That settings profile no longer exists."
+              : `“${activeProfile.name}” changed in another window. Review it before renaming.`,
+          );
+        }
+        return settingsProfileLibraryStore.rename(activeProfile.id, nameDraft);
+      });
       setNameDraft(result.profile.name);
       setNotice(mutationNotice("Renamed profile to", result.profile.name, result.persisted));
     } catch (error) {
       reportError(error);
+    } finally {
+      setBusy(false);
     }
-  }, [activeProfile, nameDraft, reportError]);
+  }, [activeProfile, busy, nameDraft, reportError]);
 
   const handleDelete = useCallback(async () => {
     if (!activeProfile || busy) return;
@@ -133,21 +183,34 @@ export function SettingsProfiles() {
         `Delete the local settings profile “${activeProfile.name}”?`,
       );
       if (!confirmed) return;
-      if (settingsProfileLibraryStore.resolve(activeProfile.id) === null) {
+      const removal = await mutateSettingsProfileLibrary(settingsProfileLibraryStore, () => {
+        const latest = settingsProfileLibraryStore.resolve(activeProfile.id);
+        if (latest === null) return { kind: "missing" as const };
+        if (!isSameSavedProfile(activeProfile, latest)) {
+          return { kind: "changed" as const };
+        }
+        return {
+          kind: "removed" as const,
+          persisted: settingsProfileLibraryStore.remove(activeProfile.id),
+        };
+      });
+      if (removal.kind !== "removed") {
         setNotice({
           tone: "warning",
-          message: `“${activeProfile.name}” was already removed or renamed in another window.`,
+          message:
+            removal.kind === "missing"
+              ? `“${activeProfile.name}” was already removed or renamed in another window.`
+              : `“${activeProfile.name}” changed in another window and was not deleted. Review it and try again.`,
         });
         return;
       }
-      const persisted = settingsProfileLibraryStore.remove(activeProfile.id);
       const nextSnapshot = settingsProfileLibraryStore.getSnapshot();
       const nextActive =
         nextSnapshot.activeProfileId === null
           ? null
           : (settingsProfileLibraryStore.resolve(nextSnapshot.activeProfileId) ?? null);
       setNameDraft(nextActive?.name ?? "");
-      setNotice(mutationNotice("Deleted", activeProfile.name, persisted));
+      setNotice(mutationNotice("Deleted", activeProfile.name, removal.persisted));
     } catch (error) {
       reportError(error);
     } finally {
@@ -160,13 +223,23 @@ export function SettingsProfiles() {
       if (busy || !settingsHydrated || (!reloadActive && profileId === library.activeProfileId)) {
         return;
       }
-      const profile = settingsProfileLibraryStore.resolve(profileId);
-      if (!profile) {
-        reportError(new SettingsProfileError("That settings profile no longer exists."));
-        return;
-      }
       setBusy(true);
       setNotice(null);
+      let profile: SettingsProfile | null;
+      try {
+        profile = await mutateSettingsProfileLibrary(settingsProfileLibraryStore, () =>
+          settingsProfileLibraryStore.resolve(profileId),
+        );
+      } catch (error) {
+        reportError(error);
+        setBusy(false);
+        return;
+      }
+      if (!profile) {
+        reportError(new SettingsProfileError("That settings profile no longer exists."));
+        setBusy(false);
+        return;
+      }
       const previousTheme = theme;
       let themeWriteAttempted = false;
       try {
@@ -179,20 +252,35 @@ export function SettingsProfiles() {
         }
         await updateSettingsAsync(profile.clientSettings);
 
-        const latestProfile = settingsProfileLibraryStore.resolve(profile.id);
-        if (
-          latestProfile === null ||
-          latestProfile.name !== profile.name ||
-          latestProfile.updatedAt !== profile.updatedAt ||
-          !settingsProfileMatches(latestProfile, {
-            theme: profile.theme,
-            clientSettings: profile.clientSettings,
-          })
-        ) {
+        let activation:
+          | { readonly kind: "activated"; readonly persisted: boolean }
+          | { readonly kind: "missing" | "changed" };
+        try {
+          activation = await mutateSettingsProfileLibrary(settingsProfileLibraryStore, () => {
+            const latest = settingsProfileLibraryStore.resolve(profile.id);
+            if (latest === null) return { kind: "missing" as const };
+            if (!isSameSavedProfile(profile, latest)) return { kind: "changed" as const };
+            return {
+              kind: "activated" as const,
+              persisted: settingsProfileLibraryStore.activate(profile.id),
+            };
+          });
+        } catch (error) {
+          const detail =
+            error instanceof Error && error.message.trim().length > 0 ? ` ${error.message}` : "";
+          setNameDraft(profile.name);
+          setNotice({
+            tone: "warning",
+            message: `Loaded “${profile.name}”, but its active marker could not be coordinated across open windows.${detail}`,
+          });
+          return;
+        }
+
+        if (activation.kind !== "activated") {
           setNotice({
             tone: "warning",
             message:
-              latestProfile === null
+              activation.kind === "missing"
                 ? `Loaded the saved values from “${profile.name}”, but that profile was removed or renamed in another window while it was loading.`
                 : `Loaded an earlier version of “${profile.name}”. It changed in another window while loading; reload it to apply the latest values.`,
           });
@@ -201,10 +289,9 @@ export function SettingsProfiles() {
 
         // A failed settings write must never make a profile look successfully
         // loaded. The marker therefore changes only after both writes succeed.
-        const activeMarkerPersisted = settingsProfileLibraryStore.activate(profile.id);
         setNameDraft(profile.name);
         setNotice(
-          activeMarkerPersisted
+          activation.persisted
             ? { tone: "success", message: `Loaded “${profile.name}”.` }
             : {
                 tone: "warning",
@@ -251,7 +338,7 @@ export function SettingsProfiles() {
   );
 
   const activeStatus = !settingsHydrated
-    ? "Loading this client’s preferences before profiles can be saved or loaded."
+    ? "Loading this environment’s preferences before profiles can be saved or loaded."
     : activeProfile === null
       ? "No active profile. Save the current preferences under a name such as Mobile or Desktop."
       : activeProfileIsCurrent
@@ -266,7 +353,7 @@ export function SettingsProfiles() {
     >
       <SettingsRow
         title="Switch profile"
-        description="Select a saved profile to load it immediately. The selected profile stays active after a restart."
+        description="Select a saved profile to load it immediately. Its active marker survives a restart when local storage is available."
         status={activeStatus}
         control={
           <>
@@ -312,11 +399,37 @@ export function SettingsProfiles() {
             </Button>
           </>
         }
-      />
+      >
+        {library.profiles.length > 0 ? (
+          <div
+            className="flex max-w-full gap-1.5 overflow-x-auto pb-3.5 pt-1"
+            role="group"
+            aria-label="Quick settings profile switch"
+          >
+            {library.profiles.map((profile) => {
+              const isActive = profile.id === library.activeProfileId;
+              return (
+                <Button
+                  key={profile.id}
+                  size="sm"
+                  variant={isActive ? "secondary" : "outline"}
+                  className="max-w-48 shrink-0"
+                  aria-pressed={isActive}
+                  title={`Load ${profile.name}`}
+                  disabled={busy || !settingsHydrated}
+                  onClick={() => void handleSwitch(profile.id, isActive)}
+                >
+                  <span className="truncate">{profile.name}</span>
+                </Button>
+              );
+            })}
+          </div>
+        ) : null}
+      </SettingsRow>
 
       <SettingsRow
         title="Save current preferences"
-        description="Profiles are stored only in this browser or desktop client. Saving the same name replaces that local profile."
+        description="Profile definitions stay in this browser or desktop client. Loading one applies its safe preferences to the current Cafe environment."
         status={
           notice ? (
             <span
@@ -326,7 +439,7 @@ export function SettingsProfiles() {
               {notice.message}
             </span>
           ) : (
-            "Profiles capture the theme plus safe UI appearance, layout, notification, ambiance, and usability preferences. They do not include keybindings, external media playback or playlist libraries, local or uploaded assets, provider-usage polling, native power management, window transparency or panel geometry, provider/auth or server/network settings, model favorites or pacing, project-specific state, or exact-thread Auto Nudge."
+            "Profiles capture the theme plus safe UI appearance, layout, completion-alert, ambiance, and usability preferences. They do not include keybindings, OS/Web notification activation, external media playback or playlist libraries, local or uploaded assets, provider-usage polling, native editor or power controls, window transparency or panel geometry, provider/auth or server/network settings, model favorites or pacing, project-specific state, or exact-thread Auto Nudge."
           )
         }
       >
@@ -345,7 +458,7 @@ export function SettingsProfiles() {
             onKeyDown={(event) => {
               if (event.key === "Enter" && nameDraft.trim()) {
                 event.preventDefault();
-                handleSave();
+                void handleSave();
               }
             }}
           />
@@ -354,7 +467,7 @@ export function SettingsProfiles() {
               size="sm"
               variant="outline"
               disabled={busy || !settingsHydrated || nameDraft.trim().length === 0}
-              onClick={handleSave}
+              onClick={() => void handleSave()}
             >
               <SaveIcon aria-hidden="true" />
               Save
@@ -365,7 +478,7 @@ export function SettingsProfiles() {
               disabled={
                 busy || !settingsHydrated || activeProfile === null || activeProfileIsCurrent
               }
-              onClick={handleUpdateActive}
+              onClick={() => void handleUpdateActive()}
             >
               <CheckIcon aria-hidden="true" />
               Update active
@@ -379,7 +492,7 @@ export function SettingsProfiles() {
                 nameDraft.trim().length === 0 ||
                 nameDraft.trim() === activeProfile.name
               }
-              onClick={handleRename}
+              onClick={() => void handleRename()}
             >
               <PencilIcon aria-hidden="true" />
               Rename

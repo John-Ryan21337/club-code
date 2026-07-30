@@ -1137,8 +1137,9 @@ describe("settings panels", () => {
     await page.getByRole("button", { name: "Save", exact: true }).click();
     await expect.element(page.getByText("Saved “Desktop”.", { exact: true })).toBeInTheDocument();
 
-    await page.getByRole("combobox", { name: "Active settings profile" }).click();
-    await page.getByRole("option", { name: "Mobile" }).click();
+    // Saved profiles are also exposed as one-tap buttons for narrow/mobile
+    // settings surfaces; selecting one applies it without a separate Apply step.
+    await page.getByRole("button", { name: "Mobile", exact: true }).click();
 
     await vi.waitFor(() => {
       const profilePatch = updateClientSettings.mock.calls.at(-1)?.[0];
@@ -1156,6 +1157,12 @@ describe("settings panels", () => {
       expect(profilePatch).not.toHaveProperty("providerUsageWidgetEnabled");
       expect(profilePatch).not.toHaveProperty("providerUsagePollMinutes");
       expect(profilePatch).not.toHaveProperty("powerSaveBlockerMode");
+      expect(profilePatch).not.toHaveProperty("notificationsEnabled");
+      expect(profilePatch).not.toHaveProperty("defaultEditor");
+      expect(profilePatch).toHaveProperty(
+        "ambientImageCycleSeconds",
+        DEFAULT_CLIENT_SETTINGS.ambientImageCycleSeconds,
+      );
     });
     await expect.element(page.getByText("Loaded “Mobile”.", { exact: true })).toBeInTheDocument();
     await expect.element(page.getByLabelText("Theme preference")).toHaveTextContent("Dark");

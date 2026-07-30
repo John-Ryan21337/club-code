@@ -11,6 +11,8 @@ export const SETTINGS_PROFILE_LIBRARY_VERSION = 1;
 export const SETTINGS_PROFILE_MAX_COUNT = 32;
 export const SETTINGS_PROFILE_MAX_NAME_LENGTH = 64;
 export const SETTINGS_PROFILE_MAX_STORAGE_BYTES = 512 * 1024;
+export const SETTINGS_PROFILE_LIBRARY_MUTATION_LOCK_NAME =
+  "cafe-code:settings-profile-library:v1:mutation";
 const SETTINGS_PROFILE_MAX_CANDIDATES = SETTINGS_PROFILE_MAX_COUNT * 8;
 const SETTINGS_PROFILE_MAX_SCALAR_STRING_LENGTH = 4_096;
 
@@ -19,96 +21,158 @@ export type SettingsProfileTheme = "light" | "dark" | "system";
 /**
  * Settings profiles are local presentation presets, not server snapshots.
  *
- * This explicit allowlist is a security boundary. In particular, do not add:
- * - provider instances, endpoints, auth, account identity, or model-instance preferences;
- * - server exposure, observability endpoints, repository paths, or project-specific overrides;
- * - model pacing or any other cross-thread execution policy;
- * - external media sources/assets, provider polling, or native power controls that activate effects;
- * - the compatibility-only Auto Nudge fields (authority is exact-thread orchestration state);
- * - onboarding/dismissal bookkeeping.
+ * This exhaustive policy is a security boundary. Every ClientSettings field must be classified,
+ * so adding a field to the shared schema fails typecheck until profiles deliberately include or
+ * exclude it. Include renderer-only appearance, layout, theme-adjacent, and usability preferences.
+ * Exclude fields that carry identity/path/asset data or whose application activates external
+ * media, provider, native-machine, server, or exact-thread execution behavior.
  *
  * Add compatible client preferences deliberately in a later document version or as an
  * optional field in this version. Older profiles patch only the keys they actually contain,
  * so a newly allowlisted preference is never reset just because an older profile is loaded.
+ *
+ * The current release lineage also contains Mobile presentation, world-clock, weather, and
+ * cinema-overlay settings that are not yet present in this parent schema. When those fields are
+ * integrated, this Record intentionally fails closed: Mobile/clock style and locations plus the
+ * renderer-only cinema overlay can be included after bounded decoding is tested; weather fetch
+ * activation must remain excluded.
  */
-export const SETTINGS_PROFILE_CLIENT_KEYS = [
-  "autoOpenPlanSidebar",
-  "notificationsEnabled",
-  "completionAlertSoundEnabled",
-  "completionAlertSpeechEnabled",
-  "completionAlertLanguage",
-  "completionAlertEnglishVoiceGender",
-  "completionAlertJapaneseVoiceGender",
-  "completionAlertDualStereoOrder",
-  "confirmThreadArchive",
-  "confirmThreadDelete",
-  "diffIgnoreWhitespace",
-  "diffWordWrap",
-  "continueBackgroundAnimations",
-  "fallingEffectsEnabled",
-  "fallingEffectKind",
-  "fallingEffectMatrixBaseFontSize",
-  "fallingEffectColor",
-  "fallingEffectMatrixColorMode",
-  "fallingEffectMatrixColorCycleSpeed",
-  "fallingEffectMatrixMotionMode",
-  "fallingEffectMatrixWalkStartFontSize",
-  "fallingEffectMatrixWalkEndFontSize",
-  "fallingEffectOpacity",
-  "fallingEffectSpeed",
-  "fallingEffectDensity",
-  "fallingEffectJapaneseRatio",
-  "fallingEffect2chEnriched",
-  "fallingEffectLiveWorkVocabulary",
-  "fallingEffectActivityLinks",
-  "fallingEffectActivityLinkNetworkEnabled",
-  "fallingEffectActivityLinkDatabaseEnabled",
-  "fallingEffectActivityLinkBuildEnabled",
-  "fallingEffectActivityLinkAgentEnabled",
-  "fallingEffectActivityLinkColorMode",
-  "fallingEffectActivityLinkRetentionSeconds",
-  "ambientVideoLayoutMode",
-  "ambientVideoPresetPlacement",
-  "ambientVideoPresetSize",
-  "ambientVideoPresentationMode",
-  "ambientVideoGlowEnabled",
-  "ambientVideoGlowMode",
-  "ambientVideoGlowColor",
-  "ambientVideoGlowOpacity",
-  "ambientImagePresentationMode",
-  "ambientImageLayoutMode",
-  "ambientImagePresetPlacement",
-  "ambientImagePresetSize",
-  "ambientImageGlowEnabled",
-  "ambientImageGlowColor",
-  "ambientImageGlowOpacity",
-  "showSidebarSearch",
-  "showSidebarMascot",
-  "showSidebarAttribution",
-  "brandWordmarkPrefix",
-  "sidebarStarSpeed",
-  "workflowObservatoryEnabled",
-  "workflowStallWarningSeconds",
-  "ambianceEnabled",
-  "ambianceEffect",
-  "ambianceIntensity",
-  "ambianceReactMode",
-  "ambianceSurfaceSidebar",
-  "ambianceSurfaceThread",
-  "ambianceSurfaceComposer",
-  "ambianceColor",
-  "themeAccentColor",
-  "appAccentColor",
-  "defaultEditor",
-  "sidebarProjectGroupingMode",
-  "sidebarProjectSortOrder",
-  "sidebarThreadSortOrder",
-  "sidebarThreadPreviewCount",
-  "timestampFormat",
-  "chatCopyFormat",
-] as const satisfies ReadonlyArray<keyof ClientSettings>;
+export type SettingsProfileClientFieldPolicy =
+  | "include"
+  | "client-bookkeeping"
+  | "external-operation"
+  | "external-media-activation"
+  | "local-asset-reference"
+  | "provider-operation"
+  | "execution-policy"
+  | "exact-thread-authority"
+  | "provider-model-state"
+  | "native-machine-control"
+  | "project-specific";
 
-export type SettingsProfileClientKey = (typeof SETTINGS_PROFILE_CLIENT_KEYS)[number];
+export const SETTINGS_PROFILE_CLIENT_FIELD_POLICY = {
+  autoOpenPlanSidebar: "include",
+  onboardingCompleted: "client-bookkeeping",
+  dismissedFirstRunHints: "client-bookkeeping",
+  // Web notification activation owns permission/subscription side effects in its settings
+  // controller. A raw profile patch would make the boolean disagree with browser push state.
+  notificationsEnabled: "external-operation",
+  completionAlertSoundEnabled: "include",
+  completionAlertSpeechEnabled: "include",
+  completionAlertLanguage: "include",
+  completionAlertEnglishVoiceGender: "include",
+  completionAlertJapaneseVoiceGender: "include",
+  completionAlertDualStereoOrder: "include",
+  confirmThreadArchive: "include",
+  confirmThreadDelete: "include",
+  dismissedProviderUpdateNotificationKeys: "client-bookkeeping",
+  diffIgnoreWhitespace: "include",
+  diffWordWrap: "include",
+  continueBackgroundAnimations: "include",
+  fallingEffectsEnabled: "include",
+  fallingEffectKind: "include",
+  fallingEffectMatrixBaseFontSize: "include",
+  fallingEffectColor: "include",
+  fallingEffectMatrixColorMode: "include",
+  fallingEffectMatrixColorCycleSpeed: "include",
+  fallingEffectMatrixMotionMode: "include",
+  fallingEffectMatrixWalkStartFontSize: "include",
+  fallingEffectMatrixWalkEndFontSize: "include",
+  fallingEffectOpacity: "include",
+  fallingEffectSpeed: "include",
+  fallingEffectDensity: "include",
+  fallingEffectJapaneseRatio: "include",
+  fallingEffect2chEnriched: "include",
+  fallingEffectLiveWorkVocabulary: "include",
+  fallingEffectActivityLinks: "include",
+  fallingEffectActivityLinkNetworkEnabled: "include",
+  fallingEffectActivityLinkDatabaseEnabled: "include",
+  fallingEffectActivityLinkBuildEnabled: "include",
+  fallingEffectActivityLinkAgentEnabled: "include",
+  fallingEffectActivityLinkColorMode: "include",
+  fallingEffectActivityLinkRetentionSeconds: "include",
+  ambientVideoEnabled: "external-media-activation",
+  ambientVideoSource: "external-media-activation",
+  ambientVideoLayoutMode: "include",
+  ambientVideoPresetPlacement: "include",
+  ambientVideoPresetSize: "include",
+  ambientVideoPresentationMode: "include",
+  ambientVideoGlowEnabled: "include",
+  ambientVideoGlowMode: "include",
+  ambientVideoGlowColor: "include",
+  ambientVideoGlowOpacity: "include",
+  ambientImageEnabled: "external-media-activation",
+  ambientImageAsset: "local-asset-reference",
+  ambientImageCycleAssets: "local-asset-reference",
+  ambientImageCycleEnabled: "external-media-activation",
+  ambientImageCycleSeconds: "include",
+  ambientImagePresentationMode: "include",
+  ambientImageLayoutMode: "include",
+  ambientImagePresetPlacement: "include",
+  ambientImagePresetSize: "include",
+  ambientImageGlowEnabled: "include",
+  ambientImageGlowColor: "include",
+  ambientImageGlowOpacity: "include",
+  showSidebarSearch: "include",
+  showSidebarMascot: "include",
+  showSidebarAttribution: "include",
+  brandWordmarkPrefix: "include",
+  sidebarBrandImage: "local-asset-reference",
+  sidebarBrandImageDataUrl: "local-asset-reference",
+  sidebarStarSpeed: "include",
+  ambianceEnabled: "include",
+  ambianceEffect: "include",
+  ambianceIntensity: "include",
+  ambianceReactMode: "include",
+  ambianceSurfaceSidebar: "include",
+  ambianceSurfaceThread: "include",
+  ambianceSurfaceComposer: "include",
+  ambianceColor: "include",
+  workflowObservatoryEnabled: "include",
+  workflowStallWarningSeconds: "include",
+  providerUsageWidgetEnabled: "provider-operation",
+  providerUsagePollMinutes: "provider-operation",
+  modelPacingEnabled: "execution-policy",
+  modelPacingReservePercent: "execution-policy",
+  autoNudgeMode: "exact-thread-authority",
+  autoNudgeBackgroundContinuation: "exact-thread-authority",
+  autoNudgeMaxRounds: "exact-thread-authority",
+  autoNudgeMaxMinutes: "exact-thread-authority",
+  themeAccentColor: "include",
+  appAccentColor: "include",
+  // Installed editors and their launch capability differ by host.
+  defaultEditor: "native-machine-control",
+  favorites: "provider-model-state",
+  providerModelPreferences: "provider-model-state",
+  powerSaveBlockerMode: "native-machine-control",
+  sidebarProjectGroupingMode: "include",
+  sidebarProjectGroupingOverrides: "project-specific",
+  sidebarProjectSortOrder: "include",
+  sidebarThreadSortOrder: "include",
+  sidebarThreadPreviewCount: "include",
+  timestampFormat: "include",
+  chatCopyFormat: "include",
+} as const satisfies Record<keyof ClientSettings, SettingsProfileClientFieldPolicy>;
+
+export type SettingsProfileClientKey = {
+  [Key in keyof typeof SETTINGS_PROFILE_CLIENT_FIELD_POLICY]: (typeof SETTINGS_PROFILE_CLIENT_FIELD_POLICY)[Key] extends "include"
+    ? Key
+    : never;
+}[keyof typeof SETTINGS_PROFILE_CLIENT_FIELD_POLICY];
+
+function includedSettingsProfileClientKeys(): readonly SettingsProfileClientKey[] {
+  const included: SettingsProfileClientKey[] = [];
+  for (const key of Object.keys(SETTINGS_PROFILE_CLIENT_FIELD_POLICY) as Array<
+    keyof ClientSettings
+  >) {
+    if (SETTINGS_PROFILE_CLIENT_FIELD_POLICY[key] === "include") {
+      included.push(key as SettingsProfileClientKey);
+    }
+  }
+  return Object.freeze(included);
+}
+
+export const SETTINGS_PROFILE_CLIENT_KEYS = includedSettingsProfileClientKeys();
 export type SettingsProfileClientSettings = Partial<Pick<ClientSettings, SettingsProfileClientKey>>;
 
 export interface SettingsProfilePayload {
@@ -155,6 +219,10 @@ export interface SettingsProfileLibraryStore {
   readonly refreshFromStorage: () => void;
   /** @internal Test-only reset for isolated browser lifecycle coverage. */
   readonly resetForTests: (clearStorage?: boolean) => void;
+}
+
+export interface SettingsProfileMutationLock {
+  readonly request: <Value>(name: string, callback: () => Value) => Promise<Value>;
 }
 
 export class SettingsProfileError extends Error {
@@ -621,6 +689,42 @@ export function createSettingsProfileLibraryStore(
 }
 
 export const settingsProfileLibraryStore = createSettingsProfileLibraryStore();
+
+function resolveSettingsProfileMutationLock(): SettingsProfileMutationLock | null {
+  if (typeof navigator === "undefined") return null;
+  try {
+    const locks = navigator.locks;
+    if (!locks || typeof locks.request !== "function") return null;
+    return {
+      request: <Value>(name: string, callback: () => Value): Promise<Value> =>
+        locks.request<Value>(name, () => callback()),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Serialize profile-library mutations across same-origin desktop/browser windows.
+ *
+ * A storage event is asynchronous, so relying on it alone lets two windows mutate stale
+ * snapshots and makes the later write erase the earlier one. Modern Electron/Chromium and
+ * secure browser contexts expose Web Locks; inside that lock, always re-read storage before
+ * calculating the mutation. Older browsers still get the refresh-before-write repair, while
+ * localStorage's atomic setItem keeps each individual document intact.
+ */
+export async function mutateSettingsProfileLibrary<Value>(
+  store: SettingsProfileLibraryStore,
+  mutation: () => Value,
+  lock: SettingsProfileMutationLock | null = resolveSettingsProfileMutationLock(),
+): Promise<Value> {
+  const applyLatest = () => {
+    store.refreshFromStorage();
+    return mutation();
+  };
+  if (lock === null) return applyLatest();
+  return lock.request(SETTINGS_PROFILE_LIBRARY_MUTATION_LOCK_NAME, applyLatest);
+}
 
 export function useSettingsProfileLibrary(): SettingsProfileLibrarySnapshot {
   const snapshot = useSyncExternalStore(

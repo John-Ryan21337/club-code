@@ -1,14 +1,22 @@
-import { DEFAULT_UNIFIED_SETTINGS, type UnifiedSettings } from "@cafecode/contracts/settings";
+import {
+  ClientSettingsSchema,
+  DEFAULT_UNIFIED_SETTINGS,
+  type UnifiedSettings,
+} from "@cafecode/contracts/settings";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   captureSettingsProfilePayload,
   createSettingsProfileLibraryStore,
+  mutateSettingsProfileLibrary,
+  SETTINGS_PROFILE_CLIENT_FIELD_POLICY,
   SETTINGS_PROFILE_CLIENT_KEYS,
+  SETTINGS_PROFILE_LIBRARY_MUTATION_LOCK_NAME,
   SETTINGS_PROFILE_LIBRARY_STORAGE_KEY,
   SETTINGS_PROFILE_LIBRARY_VERSION,
   SETTINGS_PROFILE_MAX_COUNT,
   SETTINGS_PROFILE_MAX_STORAGE_BYTES,
+  type SettingsProfileMutationLock,
   SettingsProfileError,
 } from "./settingsProfiles";
 
@@ -26,16 +34,56 @@ function createStorage(initial: Record<string, string> = {}) {
   };
 }
 
+function createSerialMutationLock(): SettingsProfileMutationLock & {
+  readonly requests: readonly string[];
+} {
+  let tail = Promise.resolve();
+  const requests: string[] = [];
+  return {
+    requests,
+    request: async <Value>(name: string, callback: () => Value): Promise<Value> => {
+      requests.push(name);
+      const previous = tail;
+      let release: (() => void) | undefined;
+      tail = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      await previous;
+      try {
+        return await callback();
+      } finally {
+        release?.();
+      }
+    },
+  };
+}
+
 afterEach(() => {
   vi.useRealTimers();
 });
 
 describe("settings profile library", () => {
+  it("classifies every ClientSettings field before it can enter or bypass profiles", () => {
+    expect(Object.keys(SETTINGS_PROFILE_CLIENT_FIELD_POLICY)).toEqual(
+      Object.keys(ClientSettingsSchema.fields),
+    );
+    expect(SETTINGS_PROFILE_CLIENT_KEYS).toEqual(
+      Object.entries(SETTINGS_PROFILE_CLIENT_FIELD_POLICY)
+        .filter(([, policy]) => policy === "include")
+        .map(([key]) => key),
+    );
+    expect(SETTINGS_PROFILE_CLIENT_FIELD_POLICY.notificationsEnabled).toBe("external-operation");
+    expect(SETTINGS_PROFILE_CLIENT_FIELD_POLICY.defaultEditor).toBe("native-machine-control");
+    expect(SETTINGS_PROFILE_CLIENT_FIELD_POLICY.ambientImageCycleSeconds).toBe("include");
+  });
+
   it("captures only the explicit local preference allowlist", () => {
     const settings = {
       ...DEFAULT_UNIFIED_SETTINGS,
       fallingEffectsEnabled: true,
       timestampFormat: "24-hour",
+      ambientImageCycleSeconds: 45,
+      notificationsEnabled: true,
       ambientVideoEnabled: true,
       ambientVideoSource: { kind: "video", id: "private-video" },
       ambientImageEnabled: true,
@@ -56,6 +104,7 @@ describe("settings profile library", () => {
       providerUsageWidgetEnabled: true,
       providerUsagePollMinutes: 1,
       powerSaveBlockerMode: "always",
+      defaultEditor: "vscode",
       autoNudgeMode: "prompt",
       autoNudgeMaxRounds: 99,
       modelPacingEnabled: true,
@@ -83,6 +132,7 @@ describe("settings profile library", () => {
     expect(payload.theme).toBe("dark");
     expect(payload.clientSettings.fallingEffectsEnabled).toBe(true);
     expect(payload.clientSettings.timestampFormat).toBe("24-hour");
+    expect(payload.clientSettings.ambientImageCycleSeconds).toBe(45);
     expect(Object.keys(payload.clientSettings)).toEqual([...SETTINGS_PROFILE_CLIENT_KEYS]);
     expect(
       Object.values(payload.clientSettings).every((value) =>
@@ -108,6 +158,8 @@ describe("settings profile library", () => {
     expect(payload.clientSettings).not.toHaveProperty("providerUsageWidgetEnabled");
     expect(payload.clientSettings).not.toHaveProperty("providerUsagePollMinutes");
     expect(payload.clientSettings).not.toHaveProperty("powerSaveBlockerMode");
+    expect(payload.clientSettings).not.toHaveProperty("notificationsEnabled");
+    expect(payload.clientSettings).not.toHaveProperty("defaultEditor");
   });
 
   it("persists named profiles and the active selection in a versioned local document", () => {
@@ -516,6 +568,53 @@ describe("settings profile library", () => {
     expect(store.getSnapshot().activeProfileId).toBe("profile:desktop");
     expect(store.resolve("profile:desktop")?.theme).toBe("light");
     expect(store.resolve(saved.profile.id)).toBeNull();
+  });
+
+  it("refreshes before an unlocked mutation so a delayed storage event cannot erase a profile", async () => {
+    const storage = createStorage();
+    const firstWindow = createSettingsProfileLibraryStore(storage);
+    const secondWindow = createSettingsProfileLibraryStore(storage);
+    const payload = captureSettingsProfilePayload(DEFAULT_UNIFIED_SETTINGS, "dark");
+
+    firstWindow.upsert("Mobile", payload);
+    await mutateSettingsProfileLibrary(
+      secondWindow,
+      () => secondWindow.upsert("Desktop", payload),
+      null,
+    );
+
+    expect(
+      createSettingsProfileLibraryStore(storage)
+        .getSnapshot()
+        .profiles.map((profile) => profile.name),
+    ).toEqual(["Mobile", "Desktop"]);
+  });
+
+  it("serializes same-origin window mutations under one profile-library lock", async () => {
+    const storage = createStorage();
+    const firstWindow = createSettingsProfileLibraryStore(storage);
+    const secondWindow = createSettingsProfileLibraryStore(storage);
+    const payload = captureSettingsProfilePayload(DEFAULT_UNIFIED_SETTINGS, "dark");
+    const lock = createSerialMutationLock();
+
+    await Promise.all([
+      mutateSettingsProfileLibrary(firstWindow, () => firstWindow.upsert("Mobile", payload), lock),
+      mutateSettingsProfileLibrary(
+        secondWindow,
+        () => secondWindow.upsert("Desktop", payload),
+        lock,
+      ),
+    ]);
+
+    expect(lock.requests).toEqual([
+      SETTINGS_PROFILE_LIBRARY_MUTATION_LOCK_NAME,
+      SETTINGS_PROFILE_LIBRARY_MUTATION_LOCK_NAME,
+    ]);
+    expect(
+      createSettingsProfileLibraryStore(storage)
+        .getSnapshot()
+        .profiles.map((profile) => profile.name),
+    ).toEqual(["Mobile", "Desktop"]);
   });
 
   it("rejects invalid runtime theme payloads instead of persisting unusable profiles", () => {
