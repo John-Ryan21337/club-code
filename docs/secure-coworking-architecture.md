@@ -251,10 +251,13 @@ raised only after load, partition, revocation, abuse, and backpressure testing.
   role/permission matrix, membership epochs, authenticated project principal,
   and append-only attributed event envelope.
 - `apps/server/src/collaboration/CollaborationAuthorization.ts` is the first
-  centralized server authorization boundary. It resolves authority only from
-  the current server-owned membership, rejects cross-project access, stale
-  epochs, invalid session lifetimes, removed members, and permissions absent
-  from either the member grant or role ceiling.
+  centralized server authorization boundary. Membership snapshots are not
+  accepted as command input: the boundary requires a server-provided current
+  membership authority and uses the server clock. It rejects cross-project
+  access before membership lookup, stale epochs, sessions outside their
+  validity window, non-positive or greater-than-one-hour access-session
+  lifetimes, removed members, and permissions absent from either the member
+  grant or role ceiling.
 - Focused contract and server tests cover principal serialization, the
   cross-project IDOR matrix, epoch revocation, membership removal, session
   validity, and permission narrowing.

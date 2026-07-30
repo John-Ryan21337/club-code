@@ -3,8 +3,13 @@ import type {
   CollaborationPrincipal,
   CollaborationProjectMember,
   CollaborationProjectMembershipSnapshot,
+  SharedProjectId,
 } from "@cafecode/contracts";
-import { collaborationRoleAllowsPermission } from "@cafecode/contracts";
+import {
+  COLLABORATION_ACCESS_SESSION_MAX_LIFETIME_MILLIS,
+  collaborationRoleAllowsPermission,
+} from "@cafecode/contracts";
+import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -13,6 +18,8 @@ export type CollaborationAuthorizationFailureReason =
   | "project-mismatch"
   | "session-not-yet-valid"
   | "session-expired"
+  | "session-lifetime-invalid"
+  | "membership-unavailable"
   | "membership-epoch-mismatch"
   | "member-not-found"
   | "permission-denied";
@@ -41,11 +48,28 @@ export interface CollaborationAuthorizationInput {
    * never be decoded directly into this trusted input.
    */
   readonly principal: CollaborationPrincipal;
-  readonly membership: CollaborationProjectMembershipSnapshot;
-  readonly targetProjectId: CollaborationProjectMembershipSnapshot["sharedProjectId"];
+  readonly targetProjectId: SharedProjectId;
   readonly permission: CollaborationPermission;
-  readonly now: DateTime.Utc;
 }
+
+/**
+ * Server-side source of current membership truth.
+ *
+ * Collaboration transports must provide this service from authenticated
+ * server persistence. Keeping the snapshot out of authorization input makes
+ * it structurally difficult for a handler to authorize against client-sent or
+ * previously cached membership data.
+ */
+export interface CollaborationMembershipAuthorityShape {
+  readonly getCurrent: (
+    sharedProjectId: SharedProjectId,
+  ) => Effect.Effect<CollaborationProjectMembershipSnapshot, unknown>;
+}
+
+export class CollaborationMembershipAuthority extends Context.Service<
+  CollaborationMembershipAuthority,
+  CollaborationMembershipAuthorityShape
+>()("cafecode/collaboration/CollaborationMembershipAuthority") {}
 
 function deny(
   reason: CollaborationAuthorizationFailureReason,
@@ -62,44 +86,72 @@ function deny(
  */
 export function authorizeCollaborationPermission(
   input: CollaborationAuthorizationInput,
-): Effect.Effect<CollaborationAuthorizationGrant, CollaborationAuthorizationError> {
-  const { membership, now, permission, principal, targetProjectId } = input;
+): Effect.Effect<
+  CollaborationAuthorizationGrant,
+  CollaborationAuthorizationError,
+  CollaborationMembershipAuthority
+> {
+  return Effect.gen(function* () {
+    const { permission, principal, targetProjectId } = input;
 
-  if (
-    principal.sharedProjectId !== targetProjectId ||
-    membership.sharedProjectId !== targetProjectId
-  ) {
-    return deny("project-mismatch");
-  }
+    // Reject a cross-project principal before consulting project persistence.
+    // Besides preventing IDOR, this avoids turning membership lookup timing
+    // into a project-existence oracle.
+    if (principal.sharedProjectId !== targetProjectId) {
+      return yield* deny("project-mismatch");
+    }
 
-  if (principal.membershipEpoch !== membership.epoch) {
-    return deny("membership-epoch-mismatch");
-  }
+    const issuedAtEpochMillis = DateTime.toEpochMillis(principal.issuedAt);
+    const expiresAtEpochMillis = DateTime.toEpochMillis(principal.expiresAt);
+    const lifetimeMillis = expiresAtEpochMillis - issuedAtEpochMillis;
+    if (lifetimeMillis <= 0 || lifetimeMillis > COLLABORATION_ACCESS_SESSION_MAX_LIFETIME_MILLIS) {
+      return yield* deny("session-lifetime-invalid");
+    }
 
-  const nowEpochMillis = DateTime.toEpochMillis(now);
-  if (nowEpochMillis < DateTime.toEpochMillis(principal.issuedAt)) {
-    return deny("session-not-yet-valid");
-  }
+    // Server time is intentionally obtained here. A collaboration request may
+    // contain timestamps for auditing, but it never chooses the clock used to
+    // authorize itself.
+    const nowEpochMillis = DateTime.toEpochMillis(yield* DateTime.now);
+    if (nowEpochMillis < issuedAtEpochMillis) {
+      return yield* deny("session-not-yet-valid");
+    }
 
-  if (nowEpochMillis >= DateTime.toEpochMillis(principal.expiresAt)) {
-    return deny("session-expired");
-  }
+    if (nowEpochMillis >= expiresAtEpochMillis) {
+      return yield* deny("session-expired");
+    }
 
-  const member = membership.members.find((candidate) => candidate.userId === principal.userId);
-  if (!member) {
-    return deny("member-not-found");
-  }
+    const membershipAuthority = yield* CollaborationMembershipAuthority;
+    const membership = yield* membershipAuthority
+      .getCurrent(targetProjectId)
+      .pipe(Effect.catch(() => deny("membership-unavailable")));
 
-  if (
-    !member.permissions.includes(permission) ||
-    !collaborationRoleAllowsPermission(member.role, permission)
-  ) {
-    return deny("permission-denied");
-  }
+    // A resolver returning another project's snapshot is a server-side
+    // integrity failure. Treat it exactly like any other project mismatch and
+    // never continue with the returned members.
+    if (membership.sharedProjectId !== targetProjectId) {
+      return yield* deny("project-mismatch");
+    }
 
-  return Effect.succeed({
-    principal,
-    member,
-    permission,
+    if (principal.membershipEpoch !== membership.epoch) {
+      return yield* deny("membership-epoch-mismatch");
+    }
+
+    const member = membership.members.find((candidate) => candidate.userId === principal.userId);
+    if (!member) {
+      return yield* deny("member-not-found");
+    }
+
+    if (
+      !member.permissions.includes(permission) ||
+      !collaborationRoleAllowsPermission(member.role, permission)
+    ) {
+      return yield* deny("permission-denied");
+    }
+
+    return {
+      principal,
+      member,
+      permission,
+    };
   });
 }
