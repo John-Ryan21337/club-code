@@ -1,3 +1,4 @@
+import * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
 
 import {
@@ -15,6 +16,8 @@ export const COLLABORATION_MEMBERSHIP_EPOCH_MAX = 2_147_483_647;
 export const COLLABORATION_EVENT_SEQUENCE_MAX = Number.MAX_SAFE_INTEGER;
 export const COLLABORATION_EVENT_TYPE_MAX_CHARS = 128;
 export const COLLABORATION_EVENT_SIGNATURE_MAX_CHARS = 4_096;
+export const COLLABORATION_SESSION_ID_MAX_CHARS = 128;
+export const COLLABORATION_ACCESS_SESSION_MAX_LIFETIME_MILLIS = 60 * 60 * 1_000;
 
 export const SharedProjectId = TrimmedNonEmptyString.pipe(Schema.brand("SharedProjectId"));
 export type SharedProjectId = typeof SharedProjectId.Type;
@@ -137,9 +140,9 @@ export const CollaborationMembershipEpoch = NonNegativeInt.check(
 );
 export type CollaborationMembershipEpoch = typeof CollaborationMembershipEpoch.Type;
 
-export const CollaborationSessionId = TrimmedNonEmptyString.pipe(
-  Schema.brand("CollaborationSessionId"),
-);
+export const CollaborationSessionId = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(COLLABORATION_SESSION_ID_MAX_CHARS),
+).pipe(Schema.brand("CollaborationSessionId"));
 export type CollaborationSessionId = typeof CollaborationSessionId.Type;
 
 /**
@@ -157,7 +160,25 @@ export const CollaborationPrincipal = Schema.Struct({
   membershipEpoch: CollaborationMembershipEpoch,
   issuedAt: Schema.DateTimeUtcFromString,
   expiresAt: Schema.DateTimeUtcFromString,
-});
+}).check(
+  Schema.makeFilter((principal) => {
+    // Schema checks also run on the encoded representation during encode, so
+    // accept the already-validated ISO string shape as well as decoded
+    // DateTime values.
+    const issuedAtEpochMillis =
+      typeof principal.issuedAt === "string"
+        ? Date.parse(principal.issuedAt)
+        : DateTime.toEpochMillis(principal.issuedAt);
+    const expiresAtEpochMillis =
+      typeof principal.expiresAt === "string"
+        ? Date.parse(principal.expiresAt)
+        : DateTime.toEpochMillis(principal.expiresAt);
+    const lifetimeMillis = expiresAtEpochMillis - issuedAtEpochMillis;
+    return lifetimeMillis > 0 && lifetimeMillis <= COLLABORATION_ACCESS_SESSION_MAX_LIFETIME_MILLIS
+      ? undefined
+      : `collaboration access session lifetime must be greater than zero and at most ${COLLABORATION_ACCESS_SESSION_MAX_LIFETIME_MILLIS} milliseconds`;
+  }),
+);
 export type CollaborationPrincipal = typeof CollaborationPrincipal.Type;
 
 export const CollaborationProjectMember = Schema.Struct({

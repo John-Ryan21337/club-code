@@ -2,8 +2,10 @@ import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vitest";
 
 import {
+  COLLABORATION_ACCESS_SESSION_MAX_LIFETIME_MILLIS,
   COLLABORATION_PROJECT_MEMBER_LIMIT,
   COLLABORATION_ROLE_PERMISSIONS,
+  COLLABORATION_SESSION_ID_MAX_CHARS,
   CollaborationEventEnvelope,
   CollaborationPrincipal,
   CollaborationProjectMembershipSnapshot,
@@ -39,8 +41,50 @@ describe("collaboration contracts", () => {
     };
 
     expect(encodePrincipal(decodePrincipal(encoded))).toEqual(encoded);
+    expect(
+      encodePrincipal(
+        decodePrincipal({
+          ...encoded,
+          role: "owner",
+          permissions: [...COLLABORATION_ROLE_PERMISSIONS.owner],
+        }),
+      ),
+    ).toEqual(encoded);
     expect(Object.hasOwn(encoded, "role")).toBe(false);
     expect(Object.hasOwn(encoded, "permissions")).toBe(false);
+  });
+
+  it("rejects unbounded or invalid authenticated collaboration sessions", () => {
+    const valid = {
+      sessionId: "collaboration-session-1",
+      sharedProjectId: "shared-project-1",
+      userId: "user-1",
+      deviceId: "device-1",
+      membershipEpoch: 4,
+      issuedAt: "2026-07-30T00:00:00.000Z",
+      expiresAt: "2026-07-30T01:00:00.000Z",
+    };
+
+    expect(() =>
+      decodePrincipal({
+        ...valid,
+        sessionId: "s".repeat(COLLABORATION_SESSION_ID_MAX_CHARS + 1),
+      }),
+    ).toThrow();
+    expect(() =>
+      decodePrincipal({
+        ...valid,
+        expiresAt: valid.issuedAt,
+      }),
+    ).toThrow();
+    expect(() =>
+      decodePrincipal({
+        ...valid,
+        expiresAt: new Date(
+          Date.parse(valid.issuedAt) + COLLABORATION_ACCESS_SESSION_MAX_LIFETIME_MILLIS + 1,
+        ).toISOString(),
+      }),
+    ).toThrow();
   });
 
   it("round-trips a project membership snapshot", () => {
