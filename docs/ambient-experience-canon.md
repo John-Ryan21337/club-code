@@ -535,23 +535,33 @@ before fading and reconnecting. Walk Forward grows from the selected start
 font to the end font; Walk Reverse traverses those endpoints in reverse.
 Outward center wind remains proportional to distance from the screen center.
 Trail line height follows the resolved glyph size, and large endpoint settings
-select an evenly distributed subset of the fixed stream pool with enough
-projected column width to prevent glyph overlap. Verified Walk connectors attach
-at each glyph's current scaled edge instead of crossing its center, and their
-bounded stroke and packet depth interpolate between differently sized
-endpoints. Non-Walk connector geometry does not inherit this trimming.
+use dynamic projected occupancy to prevent glyph overlap while retaining more
+small and distant streams. The density control is bounded through `10`, backed
+by a fixed 640-stream source pool (four times the former capacity), a
+640-visible-glyph draw cap, and a 5,120-trail-glyph draw cap. Verified Walk
+connectors attach at each glyph's current scaled edge instead of crossing its
+center, and their bounded stroke and packet depth interpolate between
+differently sized endpoints. Non-Walk connector geometry does not inherit this
+trimming.
 
-The falling-effects renderer is currently Canvas2D. It requests a
-desynchronized context and isolates each full-window canvas as a compositing
-layer, while runtime diagnostics report `canvas2d`, browser-managed
-acceleration, main-thread text rasterization, and whether worker
+The falling-effects renderer is currently Canvas2D. Every Flat and perspective
+Matrix frame is completed in a detached bitmap before the visible canvas is
+atomically replaced with `globalCompositeOperation = "copy"`. Activity
+invalidation paints immediately, unchanged canvas dimensions are not reassigned,
+and Cinema/console consumers reuse the committed bitmap. This prevents a direct
+visible clear or bitmap reset from exposing a blank white/black compositor frame
+between animation frames.
+
+The renderer requests a desynchronized context and isolates each full-window
+canvas as a compositing layer, while runtime diagnostics report `canvas2d`,
+browser-managed acceleration, main-thread text rasterization, and whether worker
 `OffscreenCanvas` is available but inactive. Those hints can reduce presentation
 queueing and compositing cost, but they are deliberately not described as
 guaranteed GPU rendering. Matrix glyph shaping/rasterization and per-stream
 layout remain CPU/main-thread work; moving that work to an OffscreenCanvas
-worker or a WebGL glyph-atlas renderer is a future architectural lane because
-the existing cinema/console copies and focus/reduced-motion lifecycle must keep
-one animation owner and a Canvas2D fallback.
+worker or a WebGL/WebGPU glyph-atlas renderer is a future architectural lane
+because the existing cinema/console copies and focus/reduced-motion lifecycle
+must keep one animation owner and a Canvas2D fallback.
 
 Live-work vocabulary is also off in conservative compatibility/recovery
 defaults and enabled by the explicit fresh-install profile. It accepts only a
