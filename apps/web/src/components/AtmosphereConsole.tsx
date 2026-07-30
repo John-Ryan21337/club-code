@@ -220,7 +220,7 @@ function AtmosphereConsoleContent() {
       (provider) => provider.driver === providerMode && provider.enabled && provider.installed,
     ) ??
     null;
-  const selectedProviderModels = [...(selectedProvider?.models ?? [])].sort(
+  const selectedProviderModels = (selectedProvider?.models ?? []).toSorted(
     (left, right) =>
       lightweightModelScore(left.slug) - lightweightModelScore(right.slug) ||
       left.name.localeCompare(right.name),
