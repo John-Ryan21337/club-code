@@ -86,6 +86,7 @@ describe("normalizeModelSlug", () => {
     expect(normalizeModelSlug("opus-5", claude)).toBe("claude-opus-5");
     expect(normalizeModelSlug("opus[1m]", claude)).toBe("claude-opus-5");
     expect(normalizeModelSlug("opus-4.7", claude)).toBe("claude-opus-4-7");
+    expect(normalizeModelSlug("opus-4.8", claude)).toBe("claude-opus-4-8");
     expect(normalizeModelSlug("sonnet", claude)).toBe("claude-sonnet-5");
     expect(normalizeModelSlug("sonnet[1m]", claude)).toBe("claude-sonnet-5");
   });
