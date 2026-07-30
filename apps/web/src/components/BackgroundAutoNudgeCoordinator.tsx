@@ -5,7 +5,7 @@ import {
   type ServerProvider,
   ThreadId,
 } from "@cafecode/contracts";
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 
 import {
   getBackgroundAutoNudgeController,
@@ -19,8 +19,6 @@ import { useSettings } from "../hooks/useSettings";
 import { newCommandId, newMessageId } from "../lib/utils";
 import { useServerConfig } from "../rpc/serverState";
 import { useStore } from "../store";
-
-const COORDINATOR_TICK_MS = 250;
 
 function providerCanAcceptTurn(provider: ServerProvider | null): boolean {
   if (
@@ -57,14 +55,6 @@ export function BackgroundAutoNudgeCoordinator() {
       threadId: ThreadId.make(owner.threadId),
     });
   });
-  const [tick, setTick] = useState(0);
-
-  useEffect(() => {
-    if (backgroundState.status !== "active") return;
-    const timer = window.setInterval(() => setTick((value) => value + 1), COORDINATOR_TICK_MS);
-    return () => window.clearInterval(timer);
-  }, [backgroundState.status]);
-
   useEffect(() => {
     const controller = getBackgroundAutoNudgeController();
     if (!backgroundState.owner || backgroundState.status !== "active") return;
@@ -122,7 +112,6 @@ export function BackgroundAutoNudgeCoordinator() {
               mode: settings.autoNudgeMode,
               enabled: settings.autoNudgeBackgroundContinuation,
               maxRounds: settings.autoNudgeMaxRounds,
-              maxMinutes: settings.autoNudgeMaxMinutes,
             },
             thread:
               shell && summary
@@ -197,10 +186,8 @@ export function BackgroundAutoNudgeCoordinator() {
     ownerComposerDraft,
     serverConfig,
     settings.autoNudgeBackgroundContinuation,
-    settings.autoNudgeMaxMinutes,
     settings.autoNudgeMaxRounds,
     settings.autoNudgeMode,
-    tick,
   ]);
 
   return null;

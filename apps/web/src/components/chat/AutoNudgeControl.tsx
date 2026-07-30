@@ -15,7 +15,6 @@ const AUTO_NUDGE_MODE_LABELS: Readonly<Record<AutoNudgeMode, string>> = {
 
 export function AutoNudgeControl(props: {
   mode: AutoNudgeMode;
-  countdownSeconds: number | null;
   disabled: boolean;
   backgroundEnabled: boolean;
   backgroundDispatchSupported: boolean;
@@ -23,7 +22,6 @@ export function AutoNudgeControl(props: {
   backgroundStatus: BackgroundAutoNudgeStatus;
   backgroundRounds: number;
   backgroundMaxRounds: number;
-  backgroundMaxMinutes: number;
   backgroundReason: string | null;
   backgroundLedger: readonly BackgroundAutoNudgeLedgerEntry[];
   onModeChange: (mode: AutoNudgeMode) => void;
@@ -33,12 +31,7 @@ export function AutoNudgeControl(props: {
   onStop: () => void;
 }) {
   const isActive = props.mode !== "off";
-  const status =
-    props.countdownSeconds === null
-      ? isActive
-        ? "Armed for the next safely settled turn"
-        : "Off"
-      : `Next nudge in ${props.countdownSeconds}s`;
+  const status = isActive ? "Armed for the next safely settled turn" : "Off";
 
   return (
     <div
@@ -48,8 +41,9 @@ export function AutoNudgeControl(props: {
       <div className="min-w-0">
         <div className="font-medium text-foreground">Auto nudge - {status}</div>
         <p className="mt-0.5 text-muted-foreground">
-          Mode is saved device-wide. Background continuation is opt-in, owns one thread, and stops
-          at {props.backgroundMaxRounds} rounds or {props.backgroundMaxMinutes} minutes.
+          Mode is saved device-wide. A nudge is authorized only by a newly completed response.
+          Background continuation is opt-in, owns one thread, and stops at{" "}
+          {props.backgroundMaxRounds} rounds.
         </p>
         {props.backgroundOwnedByThisThread ? (
           <div className="mt-1 text-muted-foreground" aria-live="polite">

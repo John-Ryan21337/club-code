@@ -293,7 +293,6 @@ describe("client settings", () => {
     expect(decodeClientSettings({}).autoNudgeMode).toBe("off");
     expect(decodeClientSettings({}).autoNudgeBackgroundContinuation).toBe(false);
     expect(decodeClientSettings({}).autoNudgeMaxRounds).toBe(5);
-    expect(decodeClientSettings({}).autoNudgeMaxMinutes).toBe(30);
     expect(decodeClientSettingsPatch({ autoNudgeMode: "hardcore-fanout" })).toEqual({
       autoNudgeMode: "hardcore-fanout",
     });
@@ -305,17 +304,13 @@ describe("client settings", () => {
       decodeClientSettingsPatch({
         autoNudgeBackgroundContinuation: true,
         autoNudgeMaxRounds: 20,
-        autoNudgeMaxMinutes: 120,
       }),
     ).toEqual({
       autoNudgeBackgroundContinuation: true,
       autoNudgeMaxRounds: 20,
-      autoNudgeMaxMinutes: 120,
     });
     expect(() => decodeClientSettingsPatch({ autoNudgeMaxRounds: 0 })).toThrow();
     expect(() => decodeClientSettingsPatch({ autoNudgeMaxRounds: 21 })).toThrow();
-    expect(() => decodeClientSettingsPatch({ autoNudgeMaxMinutes: 4 })).toThrow();
-    expect(() => decodeClientSettingsPatch({ autoNudgeMaxMinutes: 121 })).toThrow();
   });
 
   it("keeps provider-usage polling opt-in and within one to five minutes", () => {

@@ -53,37 +53,37 @@ documentation use Club Code.
 
 ## Request coverage at a glance
 
-| Requested area                                            | Current status              | Canonical boundary                                                                                                                 |
-| --------------------------------------------------------- | --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| Snow, rain, and Matrix over the whole window              | Implemented                 | Off switch, density, speed, opacity, color, motion and performance bounds                                                          |
-| Roman/Japanese Matrix mix, coding terms, 2ch and cat AA   | Implemented                 | Reviewed glyph pool; matching English/Japanese live terms; bounded safe activity labels and basenames only                         |
-| Rainbow and music-reactive Matrix color                   | Landed - validation pending | Uniform and per-string rainbow/music modes reuse direct, VLC, or one explicitly approved display-audio signal                      |
-| Matrix project-activity pulses and links                  | Landed - validation pending | Network/database/build pulses; links require explicit provider correlation and carry bounded hex-routed packets                    |
-| Movable local environment-control LLM                     | Implemented                 | Deterministic zero-token grammar first; fixed loopback LM Studio fallback only                                                     |
-| Query LM Studio models as a chat provider                 | Landed - validation pending | Explicit LM Studio instance template creates a normal Codex OSS provider instance; LM Studio remains external                      |
-| Persistent image/GIF ambience and 10 MiB limit            | Landed - validation pending | Single image plus bounded directory queue, timed/manual cycling, custom geometry and theater presentation                          |
-| YouTube video/search/playlists/text queues/skip controls  | Partial                     | Strict session queues include two public examples; the fresh profile activates the Japanese queue and requests embeddable playback |
-| Spotify connector and visualizer                          | Partial                     | Official Embed plus explicit display-audio visualization; no Spotify library/search/account browser                                |
-| Cinema layout and video behind/alongside chat             | Partial                     | Club Code Cinema retains project/chat rails; native iframe fullscreen remains player-owned                                         |
-| Adaptive TV-style media glow                              | Landed - validation pending | YouTube uses bounded artwork; approved direct/VLC video uses bounded live frames; live iframe pixels remain unavailable            |
-| Broad local formats through installed VLC                 | Landed - validation pending | Bounded picker-owned queues, previous/next, one-child playback, failure skip, and cleanup; no network stream or raw VLC args       |
-| Hundreds of Winamp-like visualizations                    | Implemented                 | Spectrum plus 395 local Butterchurn/MilkDrop presets                                                                               |
-| Current local title with filename fallback                | Implemented                 | Current item uses a bounded sanitized filename without extension; rich embedded metadata extraction is not claimed                 |
-| Workflow graph, elapsed/activity, and stall hints         | Landed - validation pending | Existing semantic cards remain; graph edges and “possibly stalled” hints use only provider evidence                                |
-| Complete sub-agent/provider activity coverage             | Partial                     | Supported projections show reported hierarchy/activity, but providers do not expose every event                                    |
-| Live read-only file/SQLite panes and bounded diffs        | Landed - validation pending | Visibility-aware polling, capped line changes, and primary-key-proven row changes                                                  |
-| Per-agent file/DB focus and writer attribution            | Partial                     | Explicit provider-observed file focus exists; coverage is incomplete and DB writer remains unknown                                 |
-| Agent-operable embedded browser                           | Landed - validation pending | Codex/Claude get a bounded supervised DOM tool grant; provider secret/OTP entry remains unavailable                                |
-| Pixel OCR/image recognition                               | Not implemented             | DOM/accessibility text exists, but there is no screenshot or pixel-recognition worker                                              |
-| Inbox email-code retrieval                                | Not implemented             | The operator-only transient secret field is not an inbox connector or 2FA automation                                               |
-| Persistent Auto Nudge                                     | Landed - validation pending | Optional one-thread background ownership has hard round/time caps, durable dedupe, visible history, and stop/pause controls        |
-| Usage windows and Model Pacing                            | Partial                     | Reported windows and advisory pacing exist; no autonomous routing or spend scheduling                                              |
-| Ultra Caching and hierarchical summaries                  | Partial                     | Stable handoffs and earlier compaction exist; no persistent multi-level summary index                                              |
-| Auditor-as-fixer workflow                                 | Partial                     | Installable cross-project skill exists; Club Code does not automatically enforce or orchestrate it                                 |
-| Tokens-saved meter per model                              | Partial                     | Honest provider cache/compaction counters exist; exact counterfactual savings cannot be measured                                   |
-| Completion ping, English/Japanese speech and stereo order | Partial                     | Windows exact installed voices support the complete path; no bundled voice pack or full cross-platform parity                      |
-| Whole-window KDE-like transparency                        | Partial                     | Capability-gated whole-window opacity is validated on Windows; Linux/KDE parity is absent                                          |
-| Chat file picker defaults to all files and accepts `.txt` | Implemented                 | Text is visibly imported into the prompt; unsupported arbitrary files remain rejected                                              |
+| Requested area                                            | Current status              | Canonical boundary                                                                                                                                |
+| --------------------------------------------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Snow, rain, and Matrix over the whole window              | Implemented                 | Off switch, density, speed, opacity, color, motion and performance bounds                                                                         |
+| Roman/Japanese Matrix mix, coding terms, 2ch and cat AA   | Implemented                 | Reviewed glyph pool; matching English/Japanese live terms; bounded safe activity labels and basenames only                                        |
+| Rainbow and music-reactive Matrix color                   | Landed - validation pending | Uniform and per-string rainbow/music modes reuse direct, VLC, or one explicitly approved display-audio signal                                     |
+| Matrix project-activity pulses and links                  | Landed - validation pending | Network/database/build pulses; links require explicit provider correlation and carry bounded hex-routed packets                                   |
+| Movable local environment-control LLM                     | Implemented                 | Deterministic zero-token grammar first; fixed loopback LM Studio fallback only                                                                    |
+| Query LM Studio models as a chat provider                 | Landed - validation pending | Explicit LM Studio instance template creates a normal Codex OSS provider instance; LM Studio remains external                                     |
+| Persistent image/GIF ambience and 10 MiB limit            | Landed - validation pending | Single image plus bounded directory queue, timed/manual cycling, custom geometry and theater presentation                                         |
+| YouTube video/search/playlists/text queues/skip controls  | Partial                     | Strict session queues include two public examples; the fresh profile activates the Japanese queue and requests embeddable playback                |
+| Spotify connector and visualizer                          | Partial                     | Official Embed plus explicit display-audio visualization; no Spotify library/search/account browser                                               |
+| Cinema layout and video behind/alongside chat             | Partial                     | Club Code Cinema retains project/chat rails; native iframe fullscreen remains player-owned                                                        |
+| Adaptive TV-style media glow                              | Landed - validation pending | YouTube uses bounded artwork; approved direct/VLC video uses bounded live frames; live iframe pixels remain unavailable                           |
+| Broad local formats through installed VLC                 | Landed - validation pending | Bounded picker-owned queues, previous/next, one-child playback, failure skip, and cleanup; no network stream or raw VLC args                      |
+| Hundreds of Winamp-like visualizations                    | Implemented                 | Spectrum plus 395 local Butterchurn/MilkDrop presets                                                                                              |
+| Current local title with filename fallback                | Implemented                 | Current item uses a bounded sanitized filename without extension; rich embedded metadata extraction is not claimed                                |
+| Workflow graph, elapsed/activity, and stall hints         | Landed - validation pending | Existing semantic cards remain; graph edges and “possibly stalled” hints use only provider evidence                                               |
+| Complete sub-agent/provider activity coverage             | Partial                     | Supported projections show reported hierarchy/activity, but providers do not expose every event                                                   |
+| Live read-only file/SQLite panes and bounded diffs        | Landed - validation pending | Visibility-aware polling, capped line changes, and primary-key-proven row changes                                                                 |
+| Per-agent file/DB focus and writer attribution            | Partial                     | Explicit provider-observed file focus exists; coverage is incomplete and DB writer remains unknown                                                |
+| Agent-operable embedded browser                           | Landed - validation pending | Codex/Claude get a bounded supervised DOM tool grant; provider secret/OTP entry remains unavailable                                               |
+| Pixel OCR/image recognition                               | Not implemented             | DOM/accessibility text exists, but there is no screenshot or pixel-recognition worker                                                             |
+| Inbox email-code retrieval                                | Not implemented             | The operator-only transient secret field is not an inbox connector or 2FA automation                                                              |
+| Persistent Auto Nudge                                     | Landed - validation pending | Optional one-thread background ownership is completion-event-only with a hard round cap, durable dedupe, visible history, and stop/pause controls |
+| Usage windows and Model Pacing                            | Partial                     | Reported windows and advisory pacing exist; no autonomous routing or spend scheduling                                                             |
+| Ultra Caching and hierarchical summaries                  | Partial                     | Stable handoffs and earlier compaction exist; no persistent multi-level summary index                                                             |
+| Auditor-as-fixer workflow                                 | Partial                     | Installable cross-project skill exists; Club Code does not automatically enforce or orchestrate it                                                |
+| Tokens-saved meter per model                              | Partial                     | Honest provider cache/compaction counters exist; exact counterfactual savings cannot be measured                                                  |
+| Completion ping, English/Japanese speech and stereo order | Partial                     | Windows exact installed voices support the complete path; no bundled voice pack or full cross-platform parity                                     |
+| Whole-window KDE-like transparency                        | Partial                     | Capability-gated whole-window opacity is validated on Windows; Linux/KDE parity is absent                                                         |
+| Chat file picker defaults to all files and accepts `.txt` | Implemented                 | Text is visibly imported into the prompt; unsupported arbitrary files remain rejected                                                             |
 
 ## Active delivery additions - final composite validation pending
 
@@ -258,13 +258,12 @@ per-session injection path.
 Ordinary Auto Nudge remains a foreground once-per-terminal-turn feature. A
 separate default-off option may give exactly one explicitly chosen thread an
 app-level background continuation owner, so leaving chat for Settings does not
-unmount its controller. The exact prompts and five-second delay remain
-unchanged.
+unmount its controller. The exact operator-approved prompt is dispatched
+immediately only when a new provider-confirmed response completes.
 
-One background run defaults to five automated rounds or 30 minutes and is
-configurable only within hard limits of 1–20 rounds and 5–120 minutes. The
-control exposes pause, resume, stop, ownership transfer, restart, and a bounded
-40-entry ledger. Every dispatch is an ordinary visible
+One background run defaults to five automated rounds and is configurable only
+within a hard limit of 1–20 rounds. The control exposes pause, resume, stop,
+ownership transfer, restart, and a bounded 40-entry ledger. Every dispatch is an ordinary visible
 `thread.turn.start` user message; sent entries retain only its normal message
 ID and terminal-turn key.
 
@@ -546,18 +545,17 @@ still denied.
 
 ### Auto Nudge, usage, pacing, and efficiency
 
-Auto Nudge is a durable per-device preference. Once per provider-confirmed
-terminal turn, it may send exactly `Fan out and keep going` or
-`Keep a few lanes going, make steady progress` after five seconds. Dispatch is
-foreground-only for the visible chat unless the operator separately enables
-bounded background continuation and explicitly assigns its single owner.
-Without an owner, navigation cancels the foreground timer and returning safely
-re-evaluates the visible thread.
+Auto Nudge is a durable per-device preference. Exactly once per newly completed
+provider-confirmed terminal turn, it may immediately send the selected
+operator-approved Steady Progress or Hardcore Fanout prompt. No timer,
+countdown, elapsed-time cap, or wall-clock transition can authorize a prompt.
+Dispatch is foreground-only for the visible chat unless the operator separately
+enables bounded background continuation and explicitly assigns its single owner.
 
 With background continuation, the app-level controller survives chat/settings
-navigation and reload, defaults to five rounds/30 minutes, and cannot exceed 20
-rounds/120 minutes. Its normal-history messages, dedupe, 60-second projection
-timeout, exclusive cross-tab Web Lock, pause/resume/stop/transfer controls,
+navigation and reload, defaults to five rounds, and cannot exceed 20 rounds.
+Its normal-history messages, dedupe, fail-closed projection acknowledgement,
+exclusive cross-tab Web Lock, pause/resume/stop/transfer controls,
 durable 40-entry ledger, and stop conditions are defined above. Unsupported or
 denied locking makes background continuation unavailable. Auto Nudge is not an
 immortal background agent, an all-chat scheduler, or unbounded fan-out.
