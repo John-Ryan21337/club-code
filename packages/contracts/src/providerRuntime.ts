@@ -329,6 +329,9 @@ export const ThreadTokenUsageSnapshot = Schema.Struct({
   // running total (Codex `usage.total`) populate this. Per-message counters
   // stay in `outputTokens`.
   totalOutputTokens: Schema.optional(NonNegativeInt),
+  // Session/query-cumulative cache-read input tokens. This is distinct from
+  // `cachedInputTokens`, which may describe only the latest provider message.
+  totalCachedInputTokens: Schema.optional(NonNegativeInt),
   maxTokens: Schema.optional(PositiveInt),
   inputTokens: Schema.optional(NonNegativeInt),
   cachedInputTokens: Schema.optional(NonNegativeInt),

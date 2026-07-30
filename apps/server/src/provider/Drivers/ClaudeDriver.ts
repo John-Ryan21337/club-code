@@ -33,6 +33,7 @@ import {
   makePendingClaudeProvider,
   probeClaudeCapabilities,
 } from "../Layers/ClaudeProvider.ts";
+import { installBundledAuditAndRepairSkill } from "../BundledAuditAndRepairSkill.ts";
 import { ProviderEventLoggers } from "../Layers/ProviderEventLoggers.ts";
 import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
 import {
@@ -49,7 +50,11 @@ import {
   resolveProviderMaintenanceCapabilitiesEffect,
 } from "../providerMaintenance.ts";
 import { resolveProviderRuntimeEnvironment } from "../managedProviderRuntime.ts";
-import { makeClaudeCapabilitiesCacheKey, makeClaudeContinuationGroupKey } from "./ClaudeHome.ts";
+import {
+  makeClaudeCapabilitiesCacheKey,
+  makeClaudeContinuationGroupKey,
+  makeClaudeEnvironment,
+} from "./ClaudeHome.ts";
 const decodeClaudeSettings = Schema.decodeSync(ClaudeSettings);
 
 const DRIVER_KIND = ProviderDriverKind.make("claudeAgent");
@@ -152,6 +157,32 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
         binaryPath: runtime.binaryPath,
       } satisfies ClaudeSettings;
       const effectiveEnvironment = runtime.env;
+      if (enabled) {
+        const claudeEnvironment = yield* makeClaudeEnvironment(
+          effectiveConfig,
+          effectiveEnvironment,
+        );
+        const claudeConfigDirectory = claudeEnvironment.CLAUDE_CONFIG_DIR;
+        if (claudeConfigDirectory) {
+          yield* Effect.tryPromise({
+            try: () => installBundledAuditAndRepairSkill(claudeConfigDirectory),
+            catch: (cause) => cause,
+          }).pipe(
+            Effect.tap((result) =>
+              Effect.logInfo("claude.skill.audit-and-repair", {
+                instanceId,
+                result,
+              }),
+            ),
+            Effect.catch((cause) =>
+              Effect.logWarning("claude.skill.audit-and-repair.installFailed", {
+                instanceId,
+                cause: cause instanceof Error ? cause.message : String(cause),
+              }),
+            ),
+          );
+        }
+      }
       const maintenanceCapabilities =
         effectiveConfig.runtimeSource === "bundled"
           ? runtime.maintenanceCapabilities

@@ -18,6 +18,7 @@ import * as ElectronTheme from "../electron/ElectronTheme.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as DesktopServerExposure from "../backend/DesktopServerExposure.ts";
 import * as DesktopIpc from "../ipc/DesktopIpc.ts";
+import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopWindow from "./DesktopWindow.ts";
 
 const environmentInput = {
@@ -33,6 +34,13 @@ const environmentInput = {
 } satisfies DesktopEnvironment.MakeDesktopEnvironmentInput;
 
 function makeFakeBrowserWindow() {
+  const mainFrame = {
+    origin: "http://127.0.0.1:5733",
+    isDestroyed: vi.fn(() => false),
+  };
+  const session = {
+    setDisplayMediaRequestHandler: vi.fn(),
+  };
   const webContents = {
     copyImageAt: vi.fn(),
     isLoadingMainFrame: vi.fn(() => false),
@@ -42,6 +50,8 @@ function makeFakeBrowserWindow() {
     replaceMisspelling: vi.fn(),
     send: vi.fn(),
     setWindowOpenHandler: vi.fn(),
+    mainFrame,
+    session,
   };
 
   const window = {
@@ -50,10 +60,12 @@ function makeFakeBrowserWindow() {
     isMinimized: vi.fn(() => false),
     isVisible: vi.fn(() => true),
     loadURL: vi.fn(() => Promise.resolve()),
+    maximize: vi.fn(),
     on: vi.fn(),
     once: vi.fn(),
     restore: vi.fn(),
     setBackgroundColor: vi.fn(),
+    setOpacity: vi.fn(),
     setTitle: vi.fn(),
     setTitleBarOverlay: vi.fn(),
     show: vi.fn(),
@@ -63,7 +75,9 @@ function makeFakeBrowserWindow() {
   return {
     window: window as unknown as Electron.BrowserWindow,
     loadURL: window.loadURL,
+    maximize: window.maximize,
     openDevTools: webContents.openDevTools,
+    setOpacity: window.setOpacity,
   };
 }
 
@@ -113,6 +127,7 @@ const electronThemeLayer = Layer.succeed(ElectronTheme.ElectronTheme, {
 const desktopIpcLayer = Layer.succeed(DesktopIpc.DesktopIpc, {
   trustWebContents: () => Effect.void,
   handle: () => Effect.void,
+  handleFromSender: () => Effect.void,
   handleSync: () => Effect.void,
 } satisfies DesktopIpc.DesktopIpcShape);
 
@@ -133,9 +148,15 @@ function makeTestLayer(input: {
   readonly window: Electron.BrowserWindow;
   readonly createCount: Ref.Ref<number>;
   readonly mainWindow: Ref.Ref<Option.Option<Electron.BrowserWindow>>;
+  readonly createOptions?: Array<Electron.BrowserWindowConstructorOptions>;
 }) {
   const electronWindowLayer = Layer.succeed(ElectronWindow.ElectronWindow, {
-    create: () => Ref.update(input.createCount, (count) => count + 1).pipe(Effect.as(input.window)),
+    create: (options) =>
+      Effect.gen(function* () {
+        input.createOptions?.push(options);
+        yield* Ref.update(input.createCount, (count) => count + 1);
+        return input.window;
+      }),
     main: Ref.get(input.mainWindow),
     currentMainOrFirst: Ref.get(input.mainWindow),
     focusedMainOrFirst: Ref.get(input.mainWindow),
@@ -159,13 +180,65 @@ function makeTestLayer(input: {
         electronThemeLayer,
         electronWindowLayer,
         desktopIpcLayer,
+        DesktopAppSettings.layerTest(),
       ),
     ),
   );
 }
 
 describe("DesktopWindow", () => {
+  it("enables only platforms with native opacity smoke evidence in packaged builds", () => {
+    assert.deepEqual(DesktopWindow.resolveDesktopWindowOpacityCapability("linux", false), {
+      supported: false,
+      reason: "unsupported-platform",
+    });
+    assert.deepEqual(DesktopWindow.resolveDesktopWindowOpacityCapability("win32", true), {
+      supported: true,
+    });
+    assert.deepEqual(DesktopWindow.resolveDesktopWindowOpacityCapability("darwin", true), {
+      supported: false,
+      reason: "release-not-validated",
+    });
+    assert.deepEqual(DesktopWindow.resolveDesktopWindowOpacityCapability("darwin", false), {
+      supported: true,
+    });
+  });
+
   it.effect("does not open a development window until the backend is ready", () =>
+    Effect.gen(function* () {
+      const fakeWindow = makeFakeBrowserWindow();
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const createOptions: Array<Electron.BrowserWindowConstructorOptions> = [];
+      const layer = makeTestLayer({
+        window: fakeWindow.window,
+        createCount,
+        mainWindow,
+        createOptions,
+      });
+
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        yield* desktopWindow.activate;
+        assert.equal(yield* Ref.get(createCount), 0);
+
+        yield* desktopWindow.handleBackendReady;
+        assert.equal(yield* Ref.get(createCount), 1);
+        assert.equal(createOptions[0]?.show, false);
+        assert.equal(createOptions[0]?.minWidth, 840);
+        assert.equal(createOptions[0]?.minHeight, 620);
+        assert.equal(fakeWindow.maximize.mock.calls.length, 1);
+        assert.isTrue(
+          fakeWindow.maximize.mock.invocationCallOrder[0]! <
+            fakeWindow.loadURL.mock.invocationCallOrder[0]!,
+        );
+        assert.deepEqual(fakeWindow.loadURL.mock.calls[0], ["http://127.0.0.1:5733/"]);
+        assert.equal(fakeWindow.openDevTools.mock.calls.length, 1);
+      }).pipe(Effect.provide(layer));
+    }),
+  );
+
+  it.effect("applies and remembers supported development window opacity", () =>
     Effect.gen(function* () {
       const fakeWindow = makeFakeBrowserWindow();
       const createCount = yield* Ref.make(0);
@@ -178,13 +251,54 @@ describe("DesktopWindow", () => {
 
       yield* Effect.gen(function* () {
         const desktopWindow = yield* DesktopWindow.DesktopWindow;
-        yield* desktopWindow.activate;
-        assert.equal(yield* Ref.get(createCount), 0);
+        const next = yield* desktopWindow.setWindowOpacityPreference({
+          enabled: true,
+          opacity: 0.75,
+        });
 
-        yield* desktopWindow.handleBackendReady;
-        assert.equal(yield* Ref.get(createCount), 1);
-        assert.deepEqual(fakeWindow.loadURL.mock.calls[0], ["http://127.0.0.1:5733/"]);
-        assert.equal(fakeWindow.openDevTools.mock.calls.length, 1);
+        assert.deepEqual(next, {
+          supported: true,
+          enabled: true,
+          opacity: 0.75,
+          effectiveOpacity: 0.75,
+          reason: null,
+        });
+        assert.deepEqual(fakeWindow.setOpacity.mock.calls, [[0.75]]);
+      }).pipe(Effect.provide(layer));
+    }),
+  );
+
+  it.effect("restores opaque settings when native opacity application fails", () =>
+    Effect.gen(function* () {
+      const fakeWindow = makeFakeBrowserWindow();
+      fakeWindow.setOpacity
+        .mockImplementationOnce(() => {
+          throw new Error("native setOpacity failed");
+        })
+        .mockImplementation(() => undefined);
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const layer = makeTestLayer({
+        window: fakeWindow.window,
+        createCount,
+        mainWindow,
+      });
+
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        const next = yield* desktopWindow.setWindowOpacityPreference({
+          enabled: true,
+          opacity: 0.75,
+        });
+
+        assert.deepEqual(next, {
+          supported: true,
+          enabled: false,
+          opacity: 1,
+          effectiveOpacity: 1,
+          reason: "apply-failed",
+        });
+        assert.deepEqual(fakeWindow.setOpacity.mock.calls, [[0.75], [1]]);
       }).pipe(Effect.provide(layer));
     }),
   );

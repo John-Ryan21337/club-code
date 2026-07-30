@@ -311,15 +311,28 @@ validationLayer("CodexAdapterLive validation", (it) => {
         runtimeMode: "full-access",
       });
 
-      assert.deepStrictEqual(validationRuntimeFactory.factory.mock.calls[0]?.[0], {
+      const runtimeInput = validationRuntimeFactory.factory.mock.calls[0]?.[0];
+      assert.ok(runtimeInput?.agentBrowserMcp);
+      assert.match(runtimeInput.agentBrowserMcp.url, /^http:\/\/127\.0\.0\.1:\d+\/mcp$/);
+      assert.match(runtimeInput.agentBrowserMcp.authorization, /^Bearer [A-Za-z0-9_-]{40,}$/);
+      assert.equal(runtimeInput.agentBrowserMcp.threadId, asThreadId("thread-1"));
+      assert.equal(
+        runtimeInput.agentBrowserMcp.providerInstanceId,
+        ProviderInstanceId.make("codex"),
+      );
+      const { agentBrowserMcp: _agentBrowserMcp, ...runtimeInputWithoutAgentBrowser } =
+        runtimeInput;
+      assert.deepStrictEqual(runtimeInputWithoutAgentBrowser, {
         appServerCwd: path.join(process.cwd(), "userdata"),
         binaryPath: "codex",
         cwd: process.cwd(),
         model: "gpt-5.3-codex",
+        ossMode: false,
         providerInstanceId: ProviderInstanceId.make("codex"),
         serviceTier: "fast",
         threadId: asThreadId("thread-1"),
         runtimeMode: "full-access",
+        ultraCaching: false,
       });
     }),
   );
@@ -556,6 +569,70 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
       }).pipe(Effect.provide(customLayer));
     },
   );
+
+  it.effect("applies the ultra-caching compaction ceiling to Codex runtime options", () => {
+    const localRuntimeFactory = makeRuntimeFactory();
+    const localLayer = Layer.effect(
+      CodexAdapter,
+      Effect.gen(function* () {
+        const codexConfig = decodeCodexSettings({
+          autoCompactTokenLimit: 200_000,
+          ultraCaching: true,
+        });
+        return yield* makeCodexAdapter(codexConfig, {
+          makeRuntime: localRuntimeFactory.factory,
+        });
+      }),
+    ).pipe(
+      Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
+      Layer.provideMerge(ServerSettingsService.layerTest()),
+      Layer.provideMerge(providerSessionDirectoryTestLayer),
+      Layer.provideMerge(NodeServices.layer),
+    );
+
+    return Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("codex"),
+        threadId: asThreadId("sess-ultra-caching"),
+        runtimeMode: "full-access",
+      });
+
+      const runtime = localRuntimeFactory.lastRuntime;
+      assert.ok(runtime);
+      assert.equal(runtime.options.autoCompactTokenLimit, 120_000);
+      assert.equal(runtime.options.ultraCaching, true);
+    }).pipe(Effect.provide(localLayer));
+  });
+
+  it.effect("propagates Codex OSS mode into runtime launch options", () => {
+    const localRuntimeFactory = makeRuntimeFactory();
+    const localLayer = Layer.effect(
+      CodexAdapter,
+      Effect.gen(function* () {
+        const codexConfig = decodeCodexSettings({ ossMode: true });
+        return yield* makeCodexAdapter(codexConfig, {
+          makeRuntime: localRuntimeFactory.factory,
+        });
+      }),
+    ).pipe(
+      Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
+      Layer.provideMerge(ServerSettingsService.layerTest()),
+      Layer.provideMerge(providerSessionDirectoryTestLayer),
+      Layer.provideMerge(NodeServices.layer),
+    );
+
+    return Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("codex"),
+        threadId: asThreadId("sess-local-model"),
+        runtimeMode: "full-access",
+      });
+
+      assert.equal(localRuntimeFactory.factory.mock.calls[0]?.[0].ossMode, true);
+    }).pipe(Effect.provide(localLayer));
+  });
 });
 
 const lifecycleRuntimeFactory = makeRuntimeFactory();
@@ -1832,7 +1909,7 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
         method: "codex.turnSteer/retryAfterActiveTurnMismatch",
         turnId: asTurnId("turn-new"),
         message:
-          "Codex app-server reported a newer active turn; Cafe Code retried turn/steer with that turn id.",
+          "Codex app-server reported a newer active turn; Club Code retried turn/steer with that turn id.",
         payload: {
           providerThreadId: "provider-thread-1",
           requestedExpectedTurnId: "turn-old",
@@ -1853,7 +1930,7 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       assert.equal(firstEvent.value.payload.taskId, "codex-turn-steer-retry:turn-new");
       assert.equal(
         firstEvent.value.payload.description,
-        "Codex app-server reported a newer active turn; Cafe Code retried turn/steer with that turn id.",
+        "Codex app-server reported a newer active turn; Club Code retried turn/steer with that turn id.",
       );
       assert.deepEqual(firstEvent.value.payload.usage, {
         providerThreadId: "provider-thread-1",
@@ -2213,6 +2290,7 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
         usedTokens: 126,
         totalProcessedTokens: 11_839,
         totalOutputTokens: 6,
+        totalCachedInputTokens: 3_456,
         maxTokens: 258_400,
         inputTokens: 120,
         cachedInputTokens: 0,

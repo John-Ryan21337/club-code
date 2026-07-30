@@ -10,7 +10,7 @@ const SELF_TEST_SWITCH = "--cafe-runtime-self-test";
 const SELF_TEST_RESULT_ENV = "CAFE_CODE_RUNTIME_SELF_TEST_RESULT";
 const DISABLE_CHROMIUM_SANDBOX_ENV = "CAFE_CODE_NATIVE_SMOKE_DISABLE_CHROMIUM_SANDBOX";
 const ENVIRONMENT_ENDPOINT_PATH = "/.well-known/cafe-code/environment";
-const DEBUG_URL_PATTERN = /\[Cafe Code debug\]\s+(http:\/\/127\.0\.0\.1:\d+\/debug)\b/;
+const DEBUG_URL_PATTERN = /\[Club Code debug\]\s+(http:\/\/127\.0\.0\.1:\d+\/debug)\b/;
 const MAX_CAPTURED_OUTPUT_CHARS = 1_000_000;
 const PROCESS_TIMEOUT_MS = 60_000;
 const STARTUP_TIMEOUT_MS = 90_000;
@@ -228,15 +228,31 @@ async function makeIsolatedEnvironment(root: string): Promise<NodeJS.ProcessEnv>
   };
 }
 
-function assertRuntimeSelfTestResult(value: unknown): RuntimeSelfTestResult {
+export function assertRuntimeSelfTestResult(
+  value: unknown,
+  expectedPlatform: NodeJS.Platform = process.platform,
+  expectedArch: string = process.arch,
+): RuntimeSelfTestResult {
   const record = readRecord(value);
+  const checks = readRecord(record?.checks);
+  const expectedManagedRuntime = expectedPlatform === "win32" ? true : null;
+  const expectedWindowOpacity =
+    expectedPlatform === "win32" || expectedPlatform === "darwin" ? true : null;
   if (
     record?.ok !== true ||
     record.isPackaged !== true ||
-    record.platform !== process.platform ||
-    record.arch !== process.arch ||
+    record.platform !== expectedPlatform ||
+    record.arch !== expectedArch ||
     !Array.isArray(record.failedChecks) ||
-    record.failedChecks.length !== 0
+    record.failedChecks.length !== 0 ||
+    checks?.safeStorage !== true ||
+    checks?.sqlite !== true ||
+    checks?.pty !== true ||
+    checks?.packagedResources !== true ||
+    checks?.packagedArtifactAudit !== true ||
+    checks?.updateMetadata !== true ||
+    checks?.managedRuntime !== expectedManagedRuntime ||
+    checks?.windowOpacity !== expectedWindowOpacity
   ) {
     throw new Error("Packaged desktop runtime self-test failed.");
   }

@@ -39,6 +39,6 @@ describe("branding", () => {
     const branding = await import("./branding");
 
     expect(["Dev", "Alpha"]).toContain(branding.APP_STAGE_LABEL);
-    expect(branding.APP_DISPLAY_NAME).toBe(`Cafe Code (${branding.APP_STAGE_LABEL})`);
+    expect(branding.APP_DISPLAY_NAME).toBe(`Club Code (${branding.APP_STAGE_LABEL})`);
   });
 });

@@ -19,6 +19,8 @@ const DesktopSettingsPatch = Schema.Struct({
   serverHttpsEnabled: Schema.optionalKey(Schema.Boolean),
   updateChannel: Schema.optionalKey(Schema.Literals(["latest", "nightly"])),
   updateChannelConfiguredByUser: Schema.optionalKey(Schema.Boolean),
+  windowOpacityEnabled: Schema.optionalKey(Schema.Unknown),
+  windowOpacity: Schema.optionalKey(Schema.Unknown),
 });
 
 const decodeDesktopSettingsPatch = Schema.decodeEffect(Schema.fromJsonString(DesktopSettingsPatch));
@@ -92,6 +94,8 @@ describe("DesktopSettings", () => {
       serverHttpsEnabled: true,
       updateChannel: "nightly",
       updateChannelConfiguredByUser: false,
+      windowOpacityEnabled: false,
+      windowOpacity: 0.84,
     } satisfies DesktopSettingsValue);
   });
 
@@ -104,6 +108,8 @@ describe("DesktopSettings", () => {
           serverHttpsEnabled: false,
           updateChannel: "latest",
           updateChannelConfiguredByUser: true,
+          windowOpacityEnabled: false,
+          windowOpacity: 1,
         });
 
         assert.deepEqual(yield* settings.load, {
@@ -111,6 +117,8 @@ describe("DesktopSettings", () => {
           serverHttpsEnabled: false,
           updateChannel: "latest",
           updateChannelConfiguredByUser: true,
+          windowOpacityEnabled: false,
+          windowOpacity: 1,
         } satisfies DesktopSettingsValue);
 
         const exposure = yield* settings.setServerExposureMode("local-only");
@@ -181,6 +189,8 @@ describe("DesktopSettings", () => {
           serverHttpsEnabled: true,
           updateChannel: "latest",
           updateChannelConfiguredByUser: false,
+          windowOpacityEnabled: false,
+          windowOpacity: 0.84,
         } satisfies DesktopSettingsValue);
       }),
     ),
@@ -224,6 +234,53 @@ describe("DesktopSettings", () => {
     ),
   );
 
+  it.effect("persists bounded desktop opacity independently of server settings", () =>
+    withSettings(
+      Effect.gen(function* () {
+        const environment = yield* DesktopEnvironment.DesktopEnvironment;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const settings = yield* DesktopAppSettings.DesktopAppSettings;
+
+        const changed = yield* settings.setWindowOpacityPreference({
+          enabled: true,
+          opacity: 0.75,
+        });
+        assert.isTrue(changed.changed);
+
+        const persisted = yield* decodeDesktopSettingsPatch(
+          yield* fileSystem.readFileString(environment.desktopSettingsPath),
+        );
+        assert.deepEqual(persisted, {
+          windowOpacityEnabled: true,
+          windowOpacity: 0.75,
+        } satisfies typeof DesktopSettingsPatch.Type);
+      }),
+    ),
+  );
+
+  it.effect("recovers corrupt opacity fields without discarding unrelated settings", () =>
+    withSettings(
+      Effect.gen(function* () {
+        const settings = yield* DesktopAppSettings.DesktopAppSettings;
+        yield* writeSettingsPatch({
+          serverExposureMode: "network-accessible",
+          serverHttpsEnabled: false,
+          windowOpacityEnabled: true,
+          windowOpacity: "NaN",
+        });
+
+        assert.deepEqual(yield* settings.load, {
+          serverExposureMode: "network-accessible",
+          serverHttpsEnabled: false,
+          updateChannel: "latest",
+          updateChannelConfiguredByUser: false,
+          windowOpacityEnabled: false,
+          windowOpacity: 0.84,
+        } satisfies DesktopSettingsValue);
+      }),
+    ),
+  );
+
   it.effect("migrates legacy implicit update channels to the runtime default", () =>
     withSettings(
       Effect.gen(function* () {
@@ -238,6 +295,8 @@ describe("DesktopSettings", () => {
           serverHttpsEnabled: true,
           updateChannel: "nightly",
           updateChannelConfiguredByUser: false,
+          windowOpacityEnabled: false,
+          windowOpacity: 0.84,
         } satisfies DesktopSettingsValue);
       }),
       { appVersion: "0.0.17-nightly.20260415.1" },
@@ -252,6 +311,8 @@ describe("DesktopSettings", () => {
           serverExposureMode: "local-only",
           updateChannel: "latest",
           updateChannelConfiguredByUser: true,
+          windowOpacityEnabled: false,
+          windowOpacity: 1,
         });
 
         assert.deepEqual(yield* settings.load, {
@@ -259,6 +320,8 @@ describe("DesktopSettings", () => {
           serverHttpsEnabled: true,
           updateChannel: "latest",
           updateChannelConfiguredByUser: true,
+          windowOpacityEnabled: false,
+          windowOpacity: 1,
         } satisfies DesktopSettingsValue);
       }),
       { appVersion: "0.0.17-nightly.20260415.1" },

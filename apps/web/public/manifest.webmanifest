@@ -1,7 +1,7 @@
 {
-  "name": "Cafe Code",
-  "short_name": "Cafe Code",
-  "description": "Cafe Code — run and steer coding agents from your browser.",
+  "name": "Club Code",
+  "short_name": "Club Code",
+  "description": "Club Code — run and steer coding agents from your browser.",
   "id": "/",
   "start_url": "/",
   "scope": "/",

@@ -3,14 +3,20 @@ import {
   CAFE_CODE_ENVIRONMENT_ENDPOINT_PATH,
   CAFE_CODE_HTTPS_CERTIFICATE_PATH,
 } from "@cafecode/shared/environmentEndpoint";
-import { MAX_SIDEBAR_BRAND_IMAGE_FILE_BYTES } from "@cafecode/contracts/settings";
+import {
+  MAX_AMBIENT_IMAGE_FILE_BYTES,
+  MAX_SIDEBAR_BRAND_IMAGE_FILE_BYTES,
+} from "@cafecode/contracts/settings";
 import { decodeOtlpTraceRecords } from "@cafecode/shared/observability";
 import * as Data from "effect/Data";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 import { cast } from "effect/Function";
 import {
   HttpBody,
@@ -37,9 +43,24 @@ import {
   WebPushSubscriptionInput,
 } from "./notifications/WebPushNotifications.ts";
 import { ProjectFaviconResolver } from "./project/Services/ProjectFaviconResolver.ts";
-import { ServerAuth } from "./auth/Services/ServerAuth.ts";
+import { AuthError, ServerAuth } from "./auth/Services/ServerAuth.ts";
 import { respondToAuthError } from "./auth/http.ts";
 import { BrandingImageError, BrandingImageStore } from "./branding/BrandingImageStore.ts";
+import {
+  AMBIENT_IMAGE_ROUTE_PREFIX,
+  AmbientImageError,
+  AmbientImageStore,
+} from "./ambientMedia/AmbientImageStore.ts";
+import {
+  parseYouTubeDiscoveryInput,
+  YouTubePublicDiscovery,
+  YouTubePublicDiscoveryError,
+} from "./ambientMedia/YouTubePublicDiscovery.ts";
+import {
+  YouTubeAccountConnection,
+  YouTubeAccountConnectionError,
+} from "./ambientMedia/YouTubeAccountConnection.ts";
+import { ServerClientSettingsService } from "./serverClientSettings.ts";
 import { ServerEnvironment } from "./environment/Services/ServerEnvironment.ts";
 import {
   browserApiCorsAllowedHeaders,
@@ -57,6 +78,43 @@ const HTML_CACHE_CONTROL = "no-store";
 const PWA_CONTROL_FILE_CACHE_CONTROL = "no-cache";
 const STATIC_FILE_CACHE_CONTROL = "public, max-age=3600";
 const BRANDING_IMAGE_ROUTE_PREFIX = "/api/branding/sidebar-image/";
+const YOUTUBE_DISCOVERY_REQUEST_MAX_BYTES = 1_024;
+const AMBIENT_IMAGE_UPLOAD_BODY_TIMEOUT = "30 seconds";
+// Bound aggregate retained request memory while allowing a healthy upload to
+// proceed if another client stalls. Each permit can retain at most one capped
+// 10 MiB request body, and the timeout releases permits held by slow clients.
+const ambientImageUploadSemaphore = Semaphore.makeUnsafe(2);
+const STATIC_CONTENT_SECURITY_POLICY = [
+  "default-src 'self'",
+  "base-uri 'self'",
+  "object-src 'none'",
+  "frame-ancestors 'none'",
+  "form-action 'self'",
+  // The packaged diff/syntax worker instantiates its bundled Oniguruma WASM.
+  // `wasm-unsafe-eval` permits that compilation without enabling JavaScript eval.
+  "script-src 'self' 'wasm-unsafe-eval'",
+  "style-src 'self' https://fonts.googleapis.com",
+  "style-src-elem 'self' https://fonts.googleapis.com",
+  "style-src-attr 'unsafe-inline'",
+  "font-src 'self' https://fonts.gstatic.com data:",
+  "img-src 'self' data: blob:",
+  "media-src 'self' blob: cafecode-media:",
+  "worker-src 'self' blob:",
+  // Saved Club Code environments are user-selected HTTP(S)/WS(S) origins.
+  // Keep this broad transport allowance isolated to connect-src; executable,
+  // image, media, and frame sources remain explicitly constrained.
+  "connect-src 'self' http: https: ws: wss:",
+  "frame-src https://www.youtube-nocookie.com https://open.spotify.com",
+  "manifest-src 'self'",
+].join("; ");
+const STATIC_SECURITY_HEADERS = {
+  "Content-Security-Policy": STATIC_CONTENT_SECURITY_POLICY,
+  "Permissions-Policy":
+    'camera=(), fullscreen=(self "https://www.youtube-nocookie.com" "https://open.spotify.com"), geolocation=(), microphone=(), payment=(), usb=()',
+  "Referrer-Policy": "no-referrer",
+  "X-Content-Type-Options": "nosniff",
+  "X-Frame-Options": "DENY",
+} as const;
 
 export const browserApiCorsLayer = HttpRouter.cors({
   allowedMethods: [...browserApiCorsAllowedMethods],
@@ -147,6 +205,7 @@ function staticResponseHeaders(input: {
   return {
     "Cache-Control": input.cacheControl,
     Vary: "Accept-Encoding",
+    ...STATIC_SECURITY_HEADERS,
     ...(input.contentEncoding ? { "Content-Encoding": input.contentEncoding } : {}),
   };
 }
@@ -250,7 +309,7 @@ function renderHttpsBootstrapPage(input: {
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <meta name="robots" content="noindex" />
-<title>Cafe Code — secure connection required</title>
+<title>Club Code — secure connection required</title>
 <style>
   :root { color-scheme: light dark; }
   body { margin: 0; min-height: 100vh; display: grid; place-items: center;
@@ -272,7 +331,7 @@ function renderHttpsBootstrapPage(input: {
 <body>
   <div class="card">
     <h1>This server uses HTTPS</h1>
-    <p>For a secure connection, install Cafe Code's certificate on this device, then open the secure site.</p>
+    <p>For a secure connection, install Club Code's certificate on this device, then open the secure site.</p>
     <a class="btn primary" href="${certPathAttr}" download="cafe-code.crt">Download certificate</a>
     <a class="btn secondary" href="${secureOriginAttr}">Continue to secure site →</a>
     <ol>
@@ -320,7 +379,18 @@ export const httpsCertificateRouteLayer = HttpRouter.add(
 const requireAuthenticatedRequest = Effect.gen(function* () {
   const request = yield* HttpServerRequest.HttpServerRequest;
   const serverAuth = yield* ServerAuth;
-  yield* serverAuth.authenticateHttpRequest(request);
+  return yield* serverAuth.authenticateHttpRequest(request);
+});
+
+const requireOwnerRequest = Effect.gen(function* () {
+  const session = yield* requireAuthenticatedRequest;
+  if (session.role !== "owner") {
+    return yield* new AuthError({
+      message: "Owner access required.",
+      status: 403,
+    });
+  }
+  return session;
 });
 
 const serverEnvironmentRouteHandler = Effect.gen(function* () {
@@ -361,6 +431,20 @@ const respondToBrandingImageError = (error: BrandingImageError) =>
   Effect.gen(function* () {
     if (error.status >= 500) {
       yield* Effect.logError("branding image route failed", {
+        code: error.code,
+        cause: error.cause,
+      });
+    }
+    return HttpServerResponse.text(error.message, {
+      status: error.status,
+      headers: browserApiCorsHeaders,
+    });
+  });
+
+const respondToAmbientImageError = (error: AmbientImageError) =>
+  Effect.gen(function* () {
+    if (error.status >= 500) {
+      yield* Effect.logError("ambient image route failed", {
         code: error.code,
         cause: error.cause,
       });
@@ -556,6 +640,511 @@ export const brandingSidebarImageServeRouteLayer = HttpRouter.add(
   ),
 );
 
+export const ambientImageUploadRouteLayer = HttpRouter.add(
+  "POST",
+  "/api/ambient-media/image",
+  Effect.gen(function* () {
+    yield* requireAuthenticatedRequest;
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const contentLength = Number.parseInt(request.headers["content-length"] ?? "", 10);
+    if (Number.isFinite(contentLength) && contentLength > MAX_AMBIENT_IMAGE_FILE_BYTES) {
+      return HttpServerResponse.text("Ambient image is too large.", {
+        status: 413,
+        headers: browserApiCorsHeaders,
+      });
+    }
+    // Content-Length is only a fast reject. The request reader has its own
+    // hard limit, so chunked, absent, invalid, or underreported lengths cannot
+    // make the server retain an arbitrarily large body.
+    const ambientImage = yield* ambientImageUploadSemaphore.withPermits(1)(
+      Effect.gen(function* () {
+        const bodyOption = yield* request.arrayBuffer.pipe(
+          Effect.provideService(
+            HttpServerRequest.MaxBodySize,
+            FileSystem.Size(MAX_AMBIENT_IMAGE_FILE_BYTES + 1),
+          ),
+          Effect.mapError(
+            (cause) =>
+              new AmbientImageError({
+                code: "too-large",
+                status: 413,
+                message: "Ambient image is too large.",
+                cause,
+              }),
+          ),
+          Effect.timeoutOption(AMBIENT_IMAGE_UPLOAD_BODY_TIMEOUT),
+        );
+        if (Option.isNone(bodyOption)) {
+          return yield* new AmbientImageError({
+            code: "storage-failed",
+            status: 408,
+            message: "Ambient image upload timed out.",
+          });
+        }
+        const body = bodyOption.value;
+        if (body.byteLength > MAX_AMBIENT_IMAGE_FILE_BYTES) {
+          return yield* new AmbientImageError({
+            code: "too-large",
+            status: 413,
+            message: "Ambient image is too large.",
+          });
+        }
+        return yield* (yield* AmbientImageStore).storeUploadedImage({
+          bytes: new Uint8Array(body),
+          ...(request.headers["content-type"]
+            ? { declaredMimeType: request.headers["content-type"] }
+            : {}),
+        });
+      }),
+    );
+    return HttpServerResponse.jsonUnsafe(
+      { ambientImage },
+      { status: 200, headers: browserApiCorsHeaders },
+    );
+  }).pipe(
+    Effect.catchTag("AuthError", respondToAuthError),
+    Effect.catchTag("AmbientImageError", respondToAmbientImageError),
+  ),
+);
+
+export const ambientImageServeRouteLayer = HttpRouter.add(
+  "GET",
+  `${AMBIENT_IMAGE_ROUTE_PREFIX}*`,
+  Effect.gen(function* () {
+    yield* requireAuthenticatedRequest;
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const url = HttpServerRequest.toURL(request);
+    if (Option.isNone(url)) return HttpServerResponse.text("Bad Request", { status: 400 });
+    let id: string;
+    try {
+      id = decodeURIComponent(url.value.pathname.slice(AMBIENT_IMAGE_ROUTE_PREFIX.length));
+    } catch {
+      return HttpServerResponse.text("Ambient image was not found.", {
+        status: 404,
+        headers: browserApiCorsHeaders,
+      });
+    }
+    const stored = yield* (yield* AmbientImageStore).resolveStoredImage(id);
+    return yield* HttpServerResponse.file(stored.filePath, {
+      status: 200,
+      contentType: stored.mimeType,
+      headers: { "Cache-Control": PRIVATE_HASHED_ASSET_CACHE_CONTROL, ...browserApiCorsHeaders },
+    }).pipe(
+      Effect.catch((cause) =>
+        Effect.fail(
+          new AmbientImageError({
+            code: "storage-failed",
+            status: 500,
+            message: "Ambient image could not be loaded.",
+            cause,
+          }),
+        ),
+      ),
+    );
+  }).pipe(
+    Effect.catchTag("AuthError", respondToAuthError),
+    Effect.catchTag("AmbientImageError", respondToAmbientImageError),
+  ),
+);
+
+export const ambientImageRemoveRouteLayer = HttpRouter.add(
+  "DELETE",
+  `${AMBIENT_IMAGE_ROUTE_PREFIX}*`,
+  Effect.gen(function* () {
+    yield* requireAuthenticatedRequest;
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const url = HttpServerRequest.toURL(request);
+    if (Option.isNone(url)) return HttpServerResponse.text("Bad Request", { status: 400 });
+    let id: string;
+    try {
+      id = decodeURIComponent(url.value.pathname.slice(AMBIENT_IMAGE_ROUTE_PREFIX.length));
+    } catch {
+      return HttpServerResponse.text("Ambient image was not found.", { status: 404 });
+    }
+    const settings = yield* (yield* ServerClientSettingsService).getSettings;
+    if (
+      settings.ambientImageAsset?.id === id ||
+      settings.ambientImageCycleAssets.some((asset) => asset.id === id)
+    ) {
+      return HttpServerResponse.text("Ambient image is still selected in shared settings.", {
+        status: 409,
+        headers: browserApiCorsHeaders,
+      });
+    }
+    yield* (yield* AmbientImageStore).removeStoredImage(id);
+    return HttpServerResponse.empty({ status: 204, headers: browserApiCorsHeaders });
+  }).pipe(
+    Effect.catchTag("AuthError", respondToAuthError),
+    Effect.catchTag("AmbientImageError", respondToAmbientImageError),
+  ),
+);
+
+function respondToYouTubePublicDiscoveryError(error: YouTubePublicDiscoveryError) {
+  return Effect.succeed(
+    HttpServerResponse.jsonUnsafe(
+      { error: error.code },
+      { status: error.status, headers: browserApiCorsHeaders },
+    ),
+  );
+}
+
+export const youTubePublicDiscoveryRouteLayer = HttpRouter.add(
+  "POST",
+  "/api/ambient-media/youtube/search",
+  Effect.gen(function* () {
+    yield* requireAuthenticatedRequest;
+    const config = yield* ServerConfig;
+    if (!config.ambientExperienceCapabilities.youtubePublicDiscovery) {
+      return yield* new YouTubePublicDiscoveryError({ code: "unavailable", status: 503 });
+    }
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const contentLength = Number.parseInt(request.headers["content-length"] ?? "", 10);
+    if (Number.isFinite(contentLength) && contentLength > YOUTUBE_DISCOVERY_REQUEST_MAX_BYTES) {
+      return yield* new YouTubePublicDiscoveryError({
+        code: "payload-too-large",
+        status: 413,
+      });
+    }
+    const bodyBytes = yield* request.arrayBuffer.pipe(
+      // Read one byte beyond the accepted size so chunked and underreported
+      // requests get the same explicit 413 as Content-Length fast rejects.
+      Effect.provideService(
+        HttpServerRequest.MaxBodySize,
+        FileSystem.Size(YOUTUBE_DISCOVERY_REQUEST_MAX_BYTES + 1),
+      ),
+      Effect.mapError(
+        () =>
+          new YouTubePublicDiscoveryError({
+            code: "payload-too-large",
+            status: 413,
+          }),
+      ),
+    );
+    if (bodyBytes.byteLength > YOUTUBE_DISCOVERY_REQUEST_MAX_BYTES) {
+      return yield* new YouTubePublicDiscoveryError({
+        code: "payload-too-large",
+        status: 413,
+      });
+    }
+    const body = yield* Effect.try({
+      try: () => JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bodyBytes)) as unknown,
+      catch: () => new YouTubePublicDiscoveryError({ code: "invalid-query", status: 400 }),
+    });
+    if (typeof body !== "object" || body === null || Array.isArray(body)) {
+      return yield* new YouTubePublicDiscoveryError({ code: "invalid-query", status: 400 });
+    }
+    const record = body as Record<string, unknown>;
+    const maxResults =
+      record.maxResults === undefined
+        ? null
+        : typeof record.maxResults === "number" && Number.isInteger(record.maxResults)
+          ? String(record.maxResults)
+          : "";
+    const input = parseYouTubeDiscoveryInput({
+      query: typeof record.query === "string" ? record.query : null,
+      maxResults,
+    });
+    if (!input)
+      return yield* new YouTubePublicDiscoveryError({ code: "invalid-query", status: 400 });
+    const results = yield* (yield* YouTubePublicDiscovery).search({
+      query: input.query,
+      maxResults: input.maxResults,
+      // Do not use forwarding headers: they are client-controlled unless a
+      // trusted reverse-proxy boundary explicitly establishes them.
+      clientId: Option.getOrUndefined(request.remoteAddress) ?? "unknown",
+    });
+    return HttpServerResponse.jsonUnsafe(
+      { results },
+      { status: 200, headers: browserApiCorsHeaders },
+    );
+  }).pipe(
+    Effect.catchTag("AuthError", respondToAuthError),
+    Effect.catchTag("YouTubePublicDiscoveryError", respondToYouTubePublicDiscoveryError),
+  ),
+);
+
+function respondToYouTubeAccountConnectionError(error: YouTubeAccountConnectionError) {
+  return Effect.succeed(
+    HttpServerResponse.jsonUnsafe(
+      { error: error.code },
+      {
+        status: error.status,
+        headers: {
+          ...browserApiCorsHeaders,
+          "Cache-Control": "no-store",
+        },
+      },
+    ),
+  );
+}
+
+export const youTubeAccountStartRouteLayer = HttpRouter.add(
+  "POST",
+  "/api/ambient-media/youtube/account/start",
+  Effect.gen(function* () {
+    const session = yield* requireOwnerRequest;
+    const result = yield* (yield* YouTubeAccountConnection).start(
+      session.sessionId,
+      session.expiresAt ? DateTime.toEpochMillis(session.expiresAt) : undefined,
+    );
+    return HttpServerResponse.jsonUnsafe(result, {
+      status: 202,
+      headers: {
+        ...browserApiCorsHeaders,
+        "Cache-Control": "no-store",
+      },
+    });
+  }).pipe(
+    Effect.catchTag("AuthError", respondToAuthError),
+    Effect.catchTag("YouTubeAccountConnectionError", respondToYouTubeAccountConnectionError),
+  ),
+);
+
+export const youTubeAccountStatusRouteLayer = HttpRouter.add(
+  "GET",
+  "/api/ambient-media/youtube/account/status",
+  Effect.gen(function* () {
+    const session = yield* requireOwnerRequest;
+    const result = yield* (yield* YouTubeAccountConnection).status(session.sessionId);
+    return HttpServerResponse.jsonUnsafe(result, {
+      status: 200,
+      headers: {
+        ...browserApiCorsHeaders,
+        "Cache-Control": "no-store",
+      },
+    });
+  }).pipe(Effect.catchTag("AuthError", respondToAuthError)),
+);
+
+export const youTubeAccountPlaylistsRouteLayer = HttpRouter.add(
+  "GET",
+  "/api/ambient-media/youtube/account/playlists",
+  Effect.gen(function* () {
+    const session = yield* requireOwnerRequest;
+    const playlists = yield* (yield* YouTubeAccountConnection).listOwnedPlaylists(
+      session.sessionId,
+    );
+    return HttpServerResponse.jsonUnsafe(
+      { playlists },
+      {
+        status: 200,
+        headers: {
+          ...browserApiCorsHeaders,
+          "Cache-Control": "no-store",
+        },
+      },
+    );
+  }).pipe(
+    Effect.catchTag("AuthError", respondToAuthError),
+    Effect.catchTag("YouTubeAccountConnectionError", respondToYouTubeAccountConnectionError),
+  ),
+);
+
+export const youTubeAccountDisconnectRouteLayer = HttpRouter.add(
+  "DELETE",
+  "/api/ambient-media/youtube/account",
+  Effect.gen(function* () {
+    const session = yield* requireOwnerRequest;
+    yield* (yield* YouTubeAccountConnection).disconnect(session.sessionId);
+    return HttpServerResponse.empty({
+      status: 204,
+      headers: {
+        ...browserApiCorsHeaders,
+        "Cache-Control": "no-store",
+      },
+    });
+  }).pipe(Effect.catchTag("AuthError", respondToAuthError)),
+);
+
+const youTubeAccountCallbackHandler = Effect.gen(function* () {
+  const request = yield* HttpServerRequest.HttpServerRequest;
+  const requestUrl = new URL(request.url, "http://127.0.0.1");
+  const remoteAddress = Option.getOrUndefined(request.remoteAddress);
+  const state = requestUrl.searchParams.get("state");
+  const code = requestUrl.searchParams.get("code");
+  if (
+    !remoteAddress ||
+    !isLoopbackRemoteAddress(remoteAddress) ||
+    isViaHttpsProxy(request.headers) ||
+    !state ||
+    !code ||
+    requestUrl.searchParams.has("error")
+  ) {
+    return yield* new YouTubeAccountConnectionError({
+      code: "invalid-callback",
+      status: 400,
+    });
+  }
+  yield* (yield* YouTubeAccountConnection).complete({ state, code });
+  return HttpServerResponse.text("YouTube connected. You may close this browser tab.", {
+    status: 200,
+    contentType: "text/plain; charset=utf-8",
+    headers: {
+      "Cache-Control": "no-store",
+      "Referrer-Policy": "no-referrer",
+      "X-Content-Type-Options": "nosniff",
+    },
+  });
+}).pipe(
+  Effect.catchTag("YouTubeAccountConnectionError", (error) =>
+    Effect.succeed(
+      HttpServerResponse.text(
+        error.code === "invalid-callback"
+          ? "This YouTube connection request is invalid or has expired."
+          : "YouTube could not be connected. Return to Club Code and try again.",
+        {
+          status: error.status,
+          contentType: "text/plain; charset=utf-8",
+          headers: {
+            "Cache-Control": "no-store",
+            "Referrer-Policy": "no-referrer",
+            "X-Content-Type-Options": "nosniff",
+          },
+        },
+      ),
+    ),
+  ),
+);
+
+export const youTubeAccountCallbackRouteLayer = HttpRouter.add(
+  "GET",
+  "/api/ambient-media/youtube/account/callback",
+  youTubeAccountCallbackHandler,
+).pipe(
+  // OAuth codes and state arrive in the callback query. Keep the request URL
+  // out of the optional HTTP request logger.
+  Layer.provide(HttpRouter.disableLogger),
+);
+
+const staticAndDevHandler = Effect.gen(function* () {
+  const request = yield* HttpServerRequest.HttpServerRequest;
+  const url = HttpServerRequest.toURL(request);
+
+  if (Option.isNone(url)) {
+    return HttpServerResponse.text("Bad Request", { status: 400 });
+  }
+
+  const config = yield* ServerConfig;
+  if (config.devUrl && isLoopbackHostname(url.value.hostname)) {
+    return HttpServerResponse.redirect(resolveDevRedirectUrl(config.devUrl, url.value), {
+      status: 302,
+    });
+  }
+
+  // HTTPS bootstrap: when HTTPS is enabled, do not serve the app over plain
+  // cleartext HTTP to other devices. External clients that did not arrive
+  // through the HTTPS proxy get a page explaining how to trust the self-signed
+  // certificate and a link to the secure site. We only intercept when we can
+  // positively confirm the peer is non-loopback, so the desktop app and the
+  // same-machine browser (loopback HTTP) are never affected. The certificate
+  // download route is a more specific route and is matched before this one, so
+  // it stays reachable over HTTP for bootstrapping.
+  if (config.httpsEnabled && config.httpsPort !== undefined) {
+    const remoteAddress = Option.getOrUndefined(request.remoteAddress);
+    const isExternalPeer = remoteAddress !== undefined && !isLoopbackRemoteAddress(remoteAddress);
+    if (isExternalPeer && !isViaHttpsProxy(request.headers)) {
+      return HttpServerResponse.text(
+        renderHttpsBootstrapPage({
+          hostname: url.value.hostname,
+          httpsPort: config.httpsPort,
+        }),
+        {
+          status: 200,
+          contentType: "text/html; charset=utf-8",
+          headers: { "Cache-Control": "no-store" },
+        },
+      );
+    }
+  }
+
+  const staticDir = config.staticDir ?? (config.devUrl ? yield* resolveStaticDir() : undefined);
+  if (!staticDir) {
+    return HttpServerResponse.text("No static directory configured and no dev URL set.", {
+      status: 503,
+    });
+  }
+
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const staticRoot = path.resolve(staticDir);
+  const staticRequestPath = url.value.pathname === "/" ? "/index.html" : url.value.pathname;
+  const rawStaticRelativePath = staticRequestPath.replace(/^[/\\]+/, "");
+  const hasRawLeadingParentSegment = rawStaticRelativePath.startsWith("..");
+  const staticRelativePath = path.normalize(rawStaticRelativePath).replace(/^[/\\]+/, "");
+  const hasPathTraversalSegment = staticRelativePath.startsWith("..");
+  if (
+    staticRelativePath.length === 0 ||
+    hasRawLeadingParentSegment ||
+    hasPathTraversalSegment ||
+    staticRelativePath.includes("\0")
+  ) {
+    return HttpServerResponse.text("Invalid static file path", { status: 400 });
+  }
+
+  const isWithinStaticRoot = (candidate: string) =>
+    candidate === staticRoot ||
+    candidate.startsWith(staticRoot.endsWith(path.sep) ? staticRoot : `${staticRoot}${path.sep}`);
+
+  let filePath = path.resolve(staticRoot, staticRelativePath);
+  if (!isWithinStaticRoot(filePath)) {
+    return HttpServerResponse.text("Invalid static file path", { status: 400 });
+  }
+
+  const ext = path.extname(filePath);
+  if (!ext) {
+    filePath = path.resolve(filePath, "index.html");
+    if (!isWithinStaticRoot(filePath)) {
+      return HttpServerResponse.text("Invalid static file path", { status: 400 });
+    }
+  }
+
+  const fileInfo = yield* fileSystem.stat(filePath).pipe(Effect.catch(() => Effect.succeed(null)));
+  if (!fileInfo || fileInfo.type !== "File") {
+    const indexPath = path.resolve(staticRoot, "index.html");
+    const indexInfo = yield* fileSystem
+      .stat(indexPath)
+      .pipe(Effect.catch(() => Effect.succeed(null)));
+    if (!indexInfo || indexInfo.type !== "File") {
+      return HttpServerResponse.text("Not Found", { status: 404 });
+    }
+    return yield* serveStaticFile({
+      filePath: indexPath,
+      requestPath: url.value.pathname,
+      isHtmlFallback: true,
+      acceptEncoding: request.headers["accept-encoding"],
+    });
+  }
+
+  return yield* serveStaticFile({
+    filePath,
+    requestPath: url.value.pathname,
+    isHtmlFallback: false,
+    acceptEncoding: request.headers["accept-encoding"],
+  });
+});
+
+export const youTubeAccountLoopbackCallbackRouteLayer = HttpRouter.add(
+  "GET",
+  "/",
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const requestUrl = HttpServerRequest.toURL(request);
+    if (
+      Option.isSome(requestUrl) &&
+      requestUrl.value.searchParams.has("state") &&
+      (requestUrl.value.searchParams.has("code") || requestUrl.value.searchParams.has("error"))
+    ) {
+      return yield* youTubeAccountCallbackHandler;
+    }
+    return yield* staticAndDevHandler;
+  }),
+).pipe(
+  // OAuth codes and state arrive in the callback query. Keep the request URL
+  // out of the optional HTTP request logger. Ordinary GET / requests also pass
+  // through here so the desktop callback can use Google's bare loopback origin.
+  Layer.provide(HttpRouter.disableLogger),
+);
+
 class DecodeOtlpTraceRecordsError extends Data.TaggedError("DecodeOtlpTraceRecordsError")<{
   readonly cause: unknown;
   readonly bodyJson: OtlpTracer.TraceData;
@@ -707,115 +1296,4 @@ export const projectFaviconRouteLayer = HttpRouter.add(
   }).pipe(Effect.catchTag("AuthError", respondToAuthError)),
 );
 
-export const staticAndDevRouteLayer = HttpRouter.add(
-  "GET",
-  "*",
-  Effect.gen(function* () {
-    const request = yield* HttpServerRequest.HttpServerRequest;
-    const url = HttpServerRequest.toURL(request);
-
-    if (Option.isNone(url)) {
-      return HttpServerResponse.text("Bad Request", { status: 400 });
-    }
-
-    const config = yield* ServerConfig;
-    if (config.devUrl && isLoopbackHostname(url.value.hostname)) {
-      return HttpServerResponse.redirect(resolveDevRedirectUrl(config.devUrl, url.value), {
-        status: 302,
-      });
-    }
-
-    // HTTPS bootstrap: when HTTPS is enabled, do not serve the app over plain
-    // cleartext HTTP to other devices. External clients that did not arrive
-    // through the HTTPS proxy get a page explaining how to trust the self-signed
-    // certificate and a link to the secure site. We only intercept when we can
-    // positively confirm the peer is non-loopback, so the desktop app and the
-    // same-machine browser (loopback HTTP) are never affected. The certificate
-    // download route is a more specific route and is matched before this one, so
-    // it stays reachable over HTTP for bootstrapping.
-    if (config.httpsEnabled && config.httpsPort !== undefined) {
-      const remoteAddress = Option.getOrUndefined(request.remoteAddress);
-      const isExternalPeer = remoteAddress !== undefined && !isLoopbackRemoteAddress(remoteAddress);
-      if (isExternalPeer && !isViaHttpsProxy(request.headers)) {
-        return HttpServerResponse.text(
-          renderHttpsBootstrapPage({
-            hostname: url.value.hostname,
-            httpsPort: config.httpsPort,
-          }),
-          {
-            status: 200,
-            contentType: "text/html; charset=utf-8",
-            headers: { "Cache-Control": "no-store" },
-          },
-        );
-      }
-    }
-
-    const staticDir = config.staticDir ?? (config.devUrl ? yield* resolveStaticDir() : undefined);
-    if (!staticDir) {
-      return HttpServerResponse.text("No static directory configured and no dev URL set.", {
-        status: 503,
-      });
-    }
-
-    const fileSystem = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
-    const staticRoot = path.resolve(staticDir);
-    const staticRequestPath = url.value.pathname === "/" ? "/index.html" : url.value.pathname;
-    const rawStaticRelativePath = staticRequestPath.replace(/^[/\\]+/, "");
-    const hasRawLeadingParentSegment = rawStaticRelativePath.startsWith("..");
-    const staticRelativePath = path.normalize(rawStaticRelativePath).replace(/^[/\\]+/, "");
-    const hasPathTraversalSegment = staticRelativePath.startsWith("..");
-    if (
-      staticRelativePath.length === 0 ||
-      hasRawLeadingParentSegment ||
-      hasPathTraversalSegment ||
-      staticRelativePath.includes("\0")
-    ) {
-      return HttpServerResponse.text("Invalid static file path", { status: 400 });
-    }
-
-    const isWithinStaticRoot = (candidate: string) =>
-      candidate === staticRoot ||
-      candidate.startsWith(staticRoot.endsWith(path.sep) ? staticRoot : `${staticRoot}${path.sep}`);
-
-    let filePath = path.resolve(staticRoot, staticRelativePath);
-    if (!isWithinStaticRoot(filePath)) {
-      return HttpServerResponse.text("Invalid static file path", { status: 400 });
-    }
-
-    const ext = path.extname(filePath);
-    if (!ext) {
-      filePath = path.resolve(filePath, "index.html");
-      if (!isWithinStaticRoot(filePath)) {
-        return HttpServerResponse.text("Invalid static file path", { status: 400 });
-      }
-    }
-
-    const fileInfo = yield* fileSystem
-      .stat(filePath)
-      .pipe(Effect.catch(() => Effect.succeed(null)));
-    if (!fileInfo || fileInfo.type !== "File") {
-      const indexPath = path.resolve(staticRoot, "index.html");
-      const indexInfo = yield* fileSystem
-        .stat(indexPath)
-        .pipe(Effect.catch(() => Effect.succeed(null)));
-      if (!indexInfo || indexInfo.type !== "File") {
-        return HttpServerResponse.text("Not Found", { status: 404 });
-      }
-      return yield* serveStaticFile({
-        filePath: indexPath,
-        requestPath: url.value.pathname,
-        isHtmlFallback: true,
-        acceptEncoding: request.headers["accept-encoding"],
-      });
-    }
-
-    return yield* serveStaticFile({
-      filePath,
-      requestPath: url.value.pathname,
-      isHtmlFallback: false,
-      acceptEncoding: request.headers["accept-encoding"],
-    });
-  }),
-);
+export const staticAndDevRouteLayer = HttpRouter.add("GET", "*", staticAndDevHandler);

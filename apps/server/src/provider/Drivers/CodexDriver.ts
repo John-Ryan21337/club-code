@@ -38,6 +38,7 @@ import { ProviderDriverError } from "../Errors.ts";
 import { makeCodexAdapter } from "../Layers/CodexAdapter.ts";
 import {
   checkCodexCliProviderStatus,
+  checkCodexProviderStatus,
   makePendingCodexProvider,
   readCodexAccountRateLimits,
 } from "../Layers/CodexProvider.ts";
@@ -46,6 +47,7 @@ import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
 import type { ProviderDriver, ProviderInstance } from "../ProviderDriver.ts";
 import type { ServerProviderDraft } from "../providerSnapshot.ts";
 import { mergeProviderInstanceEnvironment } from "../ProviderInstanceEnvironment.ts";
+import { installBundledAuditAndRepairSkill } from "../BundledAuditAndRepairSkill.ts";
 import {
   enrichProviderSnapshotWithVersionAdvisory,
   makePackageManagedProviderMaintenanceResolver,
@@ -136,6 +138,16 @@ export function withDefaultCodexShadowHome(input: {
   };
 }
 
+export function resolveCodexAuthActions(input: {
+  readonly ossMode: boolean;
+  readonly runtimeSource: CodexSettings["runtimeSource"];
+  readonly platform: NodeJS.Platform;
+}): ServerProvider["authActions"] | undefined {
+  return !input.ossMode && input.runtimeSource === "bundled" && input.platform === "win32"
+    ? { login: true }
+    : undefined;
+}
+
 export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
   driverKind: DRIVER_KIND,
   metadata: {
@@ -168,12 +180,32 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
         displayName,
         accentColor,
         continuationGroupKey: continuationIdentity.continuationKey,
-        authActions:
-          layoutConfig.runtimeSource === "bundled" && process.platform === "win32"
-            ? { login: true }
-            : undefined,
+        authActions: resolveCodexAuthActions({
+          ossMode: layoutConfig.ossMode,
+          runtimeSource: layoutConfig.runtimeSource,
+          platform: process.platform,
+        }),
       });
       if (enabled) {
+        yield* Effect.tryPromise({
+          try: () => installBundledAuditAndRepairSkill(homeLayout.sharedHomePath),
+          catch: (cause) => cause,
+        }).pipe(
+          Effect.tap((result) =>
+            Effect.logInfo("codex.skill.audit-and-repair", {
+              instanceId,
+              result,
+              sharedHomePath: homeLayout.sharedHomePath,
+            }),
+          ),
+          Effect.catch((cause) =>
+            Effect.logWarning("codex.skill.audit-and-repair.installFailed", {
+              instanceId,
+              sharedHomePath: homeLayout.sharedHomePath,
+              cause: cause instanceof Error ? cause.message : String(cause),
+            }),
+          ),
+        );
         yield* materializeCodexShadowHome(homeLayout, { authSource }).pipe(
           Effect.mapError(
             (cause) =>
@@ -216,7 +248,18 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
               binaryPath: effectiveConfig.binaryPath,
               env: effectiveEnvironment,
             });
-      const refreshCodexShadowHome = materializeCodexShadowHome(homeLayout, { authSource }).pipe(
+      const refreshCodexShadowHome = Effect.tryPromise({
+        try: () => installBundledAuditAndRepairSkill(homeLayout.sharedHomePath),
+        catch: (cause) => cause,
+      }).pipe(
+        Effect.catch((cause) =>
+          Effect.logWarning("codex.skill.audit-and-repair.refreshFailed", {
+            instanceId,
+            sharedHomePath: homeLayout.sharedHomePath,
+            cause: cause instanceof Error ? cause.message : String(cause),
+          }),
+        ),
+        Effect.andThen(materializeCodexShadowHome(homeLayout, { authSource })),
         Effect.provideService(FileSystem.FileSystem, fileSystem),
         Effect.provideService(Path.Path, path),
       );
@@ -241,7 +284,12 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
       // Starting `codex app-server` just to draw the provider badge can run
       // model/skill metadata requests and block for long enough to show a
       // false "provider unavailable" warning before the user has sent a
-      // message. Real sessions still use the app-server lifecycle below.
+      // message. OSS mode is the exception: its app-server probe is the only
+      // authoritative way to verify LM Studio and discover local models, and
+      // it deliberately bypasses cloud login/account checks.
+      const checkCodexStatus = effectiveConfig.ossMode
+        ? checkCodexProviderStatus(effectiveConfig, undefined, effectiveEnvironment)
+        : checkCodexCliProviderStatus(effectiveConfig, effectiveEnvironment);
       const checkProvider = refreshCodexShadowHome.pipe(
         Effect.catch((cause) =>
           Effect.logWarning("codex.home.authRefreshBeforeStatusFailed", {
@@ -249,7 +297,7 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
             detail: cause.message,
           }),
         ),
-        Effect.andThen(checkCodexCliProviderStatus(effectiveConfig, effectiveEnvironment)),
+        Effect.andThen(checkCodexStatus),
         Effect.map(stampIdentity),
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
         Effect.provideService(FileSystem.FileSystem, fileSystem),

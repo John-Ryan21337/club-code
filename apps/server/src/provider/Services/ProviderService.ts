@@ -12,6 +12,13 @@
  * @module ProviderService
  */
 import type {
+  AgentBrowserCompleteInput,
+  AgentBrowserCompleteResult,
+  AgentBrowserGrantInput,
+  AgentBrowserGrantState,
+  AgentBrowserPollResult,
+  AgentBrowserRevokeInput,
+  AgentBrowserSessionContext,
   ProviderDriverKind,
   ProviderInterruptTurnInput,
   ProviderInstanceId,
@@ -51,6 +58,20 @@ export interface ProviderThreadReadResult {
  * ProviderServiceShape - Service API for provider session and turn orchestration.
  */
 export interface ProviderServiceShape {
+  /** Process-local agent browser grant and request broker controls. */
+  readonly grantAgentBrowser?: (
+    input: AgentBrowserGrantInput,
+  ) => Effect.Effect<AgentBrowserGrantState, ProviderServiceError>;
+  readonly revokeAgentBrowser?: (
+    input: AgentBrowserRevokeInput,
+  ) => Effect.Effect<AgentBrowserGrantState, ProviderServiceError>;
+  readonly pollAgentBrowser?: (
+    input: AgentBrowserSessionContext,
+  ) => Effect.Effect<AgentBrowserPollResult, ProviderServiceError>;
+  readonly completeAgentBrowser?: (
+    input: AgentBrowserCompleteInput,
+  ) => Effect.Effect<AgentBrowserCompleteResult, ProviderServiceError>;
+
   /**
    * Start a provider session.
    */

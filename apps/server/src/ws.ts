@@ -11,6 +11,7 @@ import * as Stream from "effect/Stream";
 import { type AuthAccessStreamEvent, AuthSessionId } from "@cafecode/contracts/auth";
 import {
   DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL,
+  AgentBrowserRpcError,
   CommandId,
   EventId,
   type OrchestrationCommand,
@@ -24,6 +25,7 @@ import {
   ProjectWriteFileError,
   OrchestrationReplayEventsError,
   FilesystemBrowseError,
+  WorkspaceObservatoryError,
   ThreadId,
   ServerProviderRuntimeRestartError,
   WS_METHODS,
@@ -63,6 +65,10 @@ import { ServerClientSettingsService } from "./serverClientSettings.ts";
 import { WorkspaceEntries } from "./workspace/Services/WorkspaceEntries.ts";
 import { WorkspaceFileSystem } from "./workspace/Services/WorkspaceFileSystem.ts";
 import { WorkspacePathOutsideRootError } from "./workspace/Services/WorkspacePaths.ts";
+import {
+  WorkspaceObservatory,
+  WorkspaceObservatoryFailure,
+} from "./workspace/WorkspaceObservatory.ts";
 import { VcsStatusBroadcaster } from "./vcs/VcsStatusBroadcaster.ts";
 import { VcsProvisioningService } from "./vcs/VcsProvisioningService.ts";
 import { GitWorkflowService } from "./git/GitWorkflowService.ts";
@@ -189,6 +195,7 @@ const makeWsRpcLayer = (
       const providerService = yield* ProviderService;
       const providerMaintenanceRunner = yield* ProviderMaintenanceRunner.ProviderMaintenanceRunner;
       const config = yield* ServerConfig;
+      const workspaceObservatory = new WorkspaceObservatory(config.dbPath, config.cwd);
       const lifecycleEvents = yield* ServerLifecycleEvents;
       const serverSettings = yield* ServerSettingsService;
       const clientSettings = yield* ServerClientSettingsService;
@@ -653,6 +660,7 @@ const makeWsRpcLayer = (
           },
           settings,
           clientSettings: syncedClientSettings,
+          ambientExperienceCapabilities: config.ambientExperienceCapabilities,
         };
       });
 
@@ -662,6 +670,82 @@ const makeWsRpcLayer = (
           .pipe(Effect.ignoreCause({ log: true }), Effect.forkDetach, Effect.asVoid);
 
       return WsRpcGroup.of({
+        [WS_METHODS.agentBrowserGrant]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.agentBrowserGrant,
+            Effect.gen(function* () {
+              const sessions = yield* providerService.listSessions();
+              const exactSession = sessions.some(
+                (session) =>
+                  session.threadId === input.threadId &&
+                  session.providerInstanceId === input.providerInstanceId &&
+                  (session.provider === "codex" || session.provider === "claudeAgent") &&
+                  session.status !== "closed" &&
+                  session.status !== "error",
+              );
+              if (!exactSession) {
+                return yield* Effect.fail(
+                  new Error(
+                    "Browser control requires a live Codex or Claude session for this thread and provider instance.",
+                  ),
+                );
+              }
+              return yield* (
+                providerService.grantAgentBrowser?.(input) ??
+                  Effect.die(new Error("Agent browser bridge is unavailable."))
+              );
+            }),
+            { "rpc.aggregate": "agentBrowser" },
+          ).pipe(
+            Effect.mapError(
+              (error) =>
+                new AgentBrowserRpcError({
+                  reason: error instanceof Error ? error.message : String(error),
+                }),
+            ),
+          ),
+        [WS_METHODS.agentBrowserRevoke]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.agentBrowserRevoke,
+            providerService.revokeAgentBrowser?.(input) ??
+              Effect.die(new Error("Agent browser bridge is unavailable.")),
+            { "rpc.aggregate": "agentBrowser" },
+          ).pipe(
+            Effect.mapError(
+              (error) =>
+                new AgentBrowserRpcError({
+                  reason: error instanceof Error ? error.message : String(error),
+                }),
+            ),
+          ),
+        [WS_METHODS.agentBrowserPoll]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.agentBrowserPoll,
+            providerService.pollAgentBrowser?.(input) ??
+              Effect.die(new Error("Agent browser bridge is unavailable.")),
+            { "rpc.aggregate": "agentBrowser" },
+          ).pipe(
+            Effect.mapError(
+              (error) =>
+                new AgentBrowserRpcError({
+                  reason: error instanceof Error ? error.message : String(error),
+                }),
+            ),
+          ),
+        [WS_METHODS.agentBrowserComplete]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.agentBrowserComplete,
+            providerService.completeAgentBrowser?.(input) ??
+              Effect.die(new Error("Agent browser bridge is unavailable.")),
+            { "rpc.aggregate": "agentBrowser" },
+          ).pipe(
+            Effect.mapError(
+              (error) =>
+                new AgentBrowserRpcError({
+                  reason: error instanceof Error ? error.message : String(error),
+                }),
+            ),
+          ),
         [ORCHESTRATION_WS_METHODS.dispatchCommand]: (command) =>
           observeRpcEffect(
             ORCHESTRATION_WS_METHODS.dispatchCommand,
@@ -966,7 +1050,9 @@ const makeWsRpcLayer = (
           observeRpcEffect(
             WS_METHODS.serverRefreshProviders,
             (input.instanceId !== undefined
-              ? providerRegistry.refreshInstance(input.instanceId)
+              ? input.usageOnly === true
+                ? providerRegistry.refreshInstanceAccountUsage(input.instanceId)
+                : providerRegistry.refreshInstance(input.instanceId)
               : providerRegistry.refresh()
             ).pipe(Effect.map((providers) => ({ providers }))),
             { "rpc.aggregate": "server" },
@@ -1195,6 +1281,96 @@ const makeWsRpcLayer = (
                   }),
               ),
             ),
+            { "rpc.aggregate": "workspace" },
+          ),
+        [WS_METHODS.workspaceObservatoryTree]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.workspaceObservatoryTree,
+            Effect.tryPromise({
+              try: () => workspaceObservatory.tree(input),
+              catch: (cause) =>
+                new WorkspaceObservatoryError({
+                  message:
+                    cause instanceof WorkspaceObservatoryFailure
+                      ? cause.message
+                      : "Unable to inspect this workspace.",
+                }),
+            }),
+            { "rpc.aggregate": "workspace" },
+          ),
+        [WS_METHODS.workspaceObservatoryReadFile]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.workspaceObservatoryReadFile,
+            Effect.tryPromise({
+              try: () => workspaceObservatory.readFile(input),
+              catch: (cause) =>
+                new WorkspaceObservatoryError({
+                  message:
+                    cause instanceof WorkspaceObservatoryFailure
+                      ? cause.message
+                      : "Unable to read this file.",
+                }),
+            }),
+            { "rpc.aggregate": "workspace" },
+          ),
+        [WS_METHODS.workspaceObservatoryDatabases]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.workspaceObservatoryDatabases,
+            Effect.tryPromise({
+              try: () => workspaceObservatory.databases(input),
+              catch: (cause) =>
+                new WorkspaceObservatoryError({
+                  message:
+                    cause instanceof WorkspaceObservatoryFailure
+                      ? cause.message
+                      : "Unable to list databases.",
+                }),
+            }),
+            { "rpc.aggregate": "workspace" },
+          ),
+        [WS_METHODS.workspaceObservatoryTables]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.workspaceObservatoryTables,
+            Effect.tryPromise({
+              try: () => workspaceObservatory.tables(input),
+              catch: (cause) =>
+                new WorkspaceObservatoryError({
+                  message:
+                    cause instanceof WorkspaceObservatoryFailure
+                      ? cause.message
+                      : "Unable to list database tables.",
+                }),
+            }),
+            { "rpc.aggregate": "workspace" },
+          ),
+        [WS_METHODS.workspaceObservatoryRows]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.workspaceObservatoryRows,
+            Effect.tryPromise({
+              try: () => workspaceObservatory.rows(input),
+              catch: (cause) =>
+                new WorkspaceObservatoryError({
+                  message:
+                    cause instanceof WorkspaceObservatoryFailure
+                      ? cause.message
+                      : "Unable to read database rows.",
+                }),
+            }),
+            { "rpc.aggregate": "workspace" },
+          ),
+        [WS_METHODS.workspaceObservatoryActivity]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.workspaceObservatoryActivity,
+            Effect.tryPromise({
+              try: () => workspaceObservatory.activity(input),
+              catch: (cause) =>
+                new WorkspaceObservatoryError({
+                  message:
+                    cause instanceof WorkspaceObservatoryFailure
+                      ? cause.message
+                      : "Unable to read observed activity.",
+                }),
+            }),
             { "rpc.aggregate": "workspace" },
           ),
         [WS_METHODS.subscribeVcsStatus]: (input) =>

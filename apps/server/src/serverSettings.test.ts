@@ -80,12 +80,15 @@ it.layer(NodeServices.layer)("server settings", (it) => {
   it.effect("deep merges nested settings updates without dropping siblings", () =>
     Effect.gen(function* () {
       const serverSettings = yield* ServerSettingsService;
+      const serverConfig = yield* ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
 
       yield* serverSettings.updateSettings({
         providers: {
           codex: {
             binaryPath: "/usr/local/bin/codex",
             homePath: "/Users/julius/.codex",
+            ossMode: true,
           },
           claudeAgent: {
             binaryPath: "/usr/local/bin/claude",
@@ -121,9 +124,11 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         enabled: true,
         binaryPath: "/opt/homebrew/bin/codex",
         runtimeSource: "system",
+        ossMode: true,
         homePath: "/Users/julius/.codex",
         shadowHomePath: "",
         customModels: [],
+        ultraCaching: false,
       });
       assert.deepEqual(next.providers.claudeAgent, {
         enabled: true,
@@ -132,7 +137,12 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         homePath: "",
         customModels: ["claude-custom"],
         launchArgs: "",
+        ultraCaching: false,
       });
+      assert.match(
+        yield* fileSystem.readFileString(serverConfig.settingsPath),
+        /"ossMode":\s*true/,
+      );
       assert.deepEqual(
         next.textGenerationModelSelection,
         createModelSelection(
@@ -359,9 +369,11 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         enabled: true,
         binaryPath: "/opt/homebrew/bin/codex",
         runtimeSource: "system",
+        ossMode: false,
         homePath: "",
         shadowHomePath: "",
         customModels: [],
+        ultraCaching: false,
       });
       assert.deepEqual(next.providers.claudeAgent, {
         enabled: true,
@@ -370,6 +382,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         homePath: "",
         customModels: [],
         launchArgs: "",
+        ultraCaching: false,
       });
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );

@@ -11,6 +11,7 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
 import {
+  DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES,
   DesktopBackendBootstrap,
   type DesktopBackendBootstrap as DesktopBackendBootstrapValue,
 } from "@cafecode/contracts";
@@ -21,6 +22,33 @@ import { resolveBaseDir } from "../os-jank.ts";
 import { resolveServerConfig } from "./config.ts";
 
 const encodeDesktopBootstrap = Schema.encodeEffect(Schema.fromJsonString(DesktopBackendBootstrap));
+
+const ambientCapabilityEnvironmentCases = [
+  {
+    environmentName: "CAFE_CODE_AMBIENT_ATMOSPHERE_ENABLED",
+    capability: "atmosphere",
+  },
+  {
+    environmentName: "CAFE_CODE_AMBIENT_IMAGE_ENABLED",
+    capability: "ambientImage",
+  },
+  {
+    environmentName: "CAFE_CODE_YOUTUBE_PLAYER_ENABLED",
+    capability: "youtubePlayer",
+  },
+  {
+    environmentName: "CAFE_CODE_YOUTUBE_PUBLIC_DISCOVERY_ENABLED",
+    capability: "youtubePublicDiscovery",
+  },
+  {
+    environmentName: "CAFE_CODE_SPOTIFY_EMBED_ENABLED",
+    capability: "spotifyEmbed",
+  },
+  {
+    environmentName: "CAFE_CODE_WORKFLOW_OBSERVATORY_ENABLED",
+    capability: "workflowObservatory",
+  },
+] as const;
 
 const makeDesktopBootstrap = (
   overrides: Partial<DesktopBackendBootstrapValue> = {},
@@ -34,6 +62,33 @@ const makeDesktopBootstrap = (
   ...overrides,
 });
 
+const resolveAmbientCapabilityConfig = (
+  baseDir: string,
+  env: Readonly<Record<string, string>>,
+  mode: "web" | "desktop" = "web",
+) =>
+  resolveServerConfig(
+    {
+      mode: Option.some(mode),
+      port: Option.some(3773),
+      httpsPort: Option.none(),
+      host: Option.none(),
+      baseDir: Option.some(baseDir),
+      cwd: Option.none(),
+      devUrl: Option.none(),
+      noBrowser: Option.some(true),
+      noHttps: Option.some(true),
+      bootstrapFd: Option.none(),
+      autoBootstrapProjectFromCwd: Option.none(),
+      logWebSocketEvents: Option.none(),
+    },
+    Option.none(),
+  ).pipe(
+    Effect.provide(
+      Layer.mergeAll(ConfigProvider.layer(ConfigProvider.fromEnv({ env })), NetService.layer),
+    ),
+  );
+
 it.layer(NodeServices.layer)("cli config resolution", (it) => {
   const defaultObservabilityConfig = {
     traceMinLevel: "Info",
@@ -45,6 +100,7 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
     otlpMetricsUrl: undefined,
     otlpExportIntervalMs: 10_000,
     otlpServiceName: "cafe-code-server",
+    ambientExperienceCapabilities: DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES,
   } as const;
 
   const openBootstrapFd = Effect.fn(function* (payload: DesktopBackendBootstrapValue) {
@@ -177,6 +233,121 @@ it.layer(NodeServices.layer)("cli config resolution", (it) => {
 
       expect(resolved.devUrl).toBeUndefined();
       expect(resolved.stateDir).toBe(derivedPaths.stateDir);
+    }),
+  );
+
+  it.effect("maps each ambient capability environment gate independently", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-cli-config-ambient-gates-" });
+
+      for (const testCase of ambientCapabilityEnvironmentCases) {
+        const resolved = yield* resolveAmbientCapabilityConfig(baseDir, {
+          [testCase.environmentName]: "true",
+        });
+
+        expect(resolved.ambientExperienceCapabilities).toEqual({
+          ...DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES,
+          [testCase.capability]: true,
+        });
+      }
+    }),
+  );
+
+  it.effect("keeps the YouTube API key server-only and separate from its capability gate", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const baseDir = yield* fs.makeTempDirectoryScoped({
+        prefix: "t3-cli-config-youtube-key-",
+      });
+      const resolved = yield* resolveAmbientCapabilityConfig(baseDir, {
+        CAFE_CODE_YOUTUBE_API_KEY: "test-youtube-api-key",
+      });
+
+      expect(resolved.youtubePublicDiscoveryApiKey).toBe("test-youtube-api-key");
+      expect(resolved.ambientExperienceCapabilities.youtubePublicDiscovery).toBe(false);
+    }),
+  );
+
+  it.effect(
+    "enables YouTube account connection only for desktop mode with its flag and valid client ID",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const baseDir = yield* fs.makeTempDirectoryScoped({
+          prefix: "t3-cli-config-youtube-oauth-",
+        });
+        const validClientId = "1234567890-cafecodeclient.apps.googleusercontent.com";
+        const enabledEnvironment = {
+          CAFE_CODE_YOUTUBE_ACCOUNT_CONNECTION_ENABLED: "true",
+          CAFE_CODE_YOUTUBE_OAUTH_DESKTOP_CLIENT_ID: validClientId,
+        };
+
+        const enabled = yield* resolveAmbientCapabilityConfig(
+          baseDir,
+          enabledEnvironment,
+          "desktop",
+        );
+        expect(enabled.youtubeOAuthDesktopClientId).toBe(validClientId);
+        expect(enabled.ambientExperienceCapabilities.youtubeAccountConnection).toBe(true);
+
+        const webMode = yield* resolveAmbientCapabilityConfig(baseDir, enabledEnvironment, "web");
+        expect(webMode.ambientExperienceCapabilities.youtubeAccountConnection).toBe(false);
+
+        const missingClientId = yield* resolveAmbientCapabilityConfig(
+          baseDir,
+          { CAFE_CODE_YOUTUBE_ACCOUNT_CONNECTION_ENABLED: "true" },
+          "desktop",
+        );
+        expect(missingClientId.youtubeOAuthDesktopClientId).toBeUndefined();
+        expect(missingClientId.ambientExperienceCapabilities.youtubeAccountConnection).toBe(false);
+
+        const invalidClientId = yield* resolveAmbientCapabilityConfig(
+          baseDir,
+          {
+            CAFE_CODE_YOUTUBE_ACCOUNT_CONNECTION_ENABLED: "true",
+            CAFE_CODE_YOUTUBE_OAUTH_DESKTOP_CLIENT_ID: "not-a-google-desktop-client",
+          },
+          "desktop",
+        );
+        expect(invalidClientId.youtubeOAuthDesktopClientId).toBeUndefined();
+        expect(invalidClientId.ambientExperienceCapabilities.youtubeAccountConnection).toBe(false);
+      }),
+  );
+
+  it.effect("keeps omitted and malformed ambient capability gates disabled", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const baseDir = yield* fs.makeTempDirectoryScoped({
+        prefix: "t3-cli-config-ambient-invalid-gates-",
+      });
+
+      const omitted = yield* resolveAmbientCapabilityConfig(baseDir, {});
+      expect(omitted.ambientExperienceCapabilities).toEqual(
+        DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES,
+      );
+
+      for (const testCase of ambientCapabilityEnvironmentCases) {
+        const malformed = yield* resolveAmbientCapabilityConfig(baseDir, {
+          [testCase.environmentName]: "not-a-boolean",
+        });
+        expect(malformed.ambientExperienceCapabilities).toEqual(
+          DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES,
+        );
+      }
+
+      const malformedAccountGate = yield* resolveAmbientCapabilityConfig(
+        baseDir,
+        {
+          CAFE_CODE_YOUTUBE_ACCOUNT_CONNECTION_ENABLED: "not-a-boolean",
+          CAFE_CODE_YOUTUBE_OAUTH_DESKTOP_CLIENT_ID:
+            "1234567890-cafecodeclient.apps.googleusercontent.com",
+        },
+        "desktop",
+      );
+      expect(malformedAccountGate.ambientExperienceCapabilities.youtubeAccountConnection).toBe(
+        false,
+      );
     }),
   );
 

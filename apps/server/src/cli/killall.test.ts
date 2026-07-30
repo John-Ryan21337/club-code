@@ -78,6 +78,14 @@ describe("killall process matching", () => {
     assert.equal(
       classifyCafeKillallProcess(
         processSnapshot(
+          "/Electron /Applications/Club Code.app/Contents/Resources/app.asar/apps/server/dist/bin.mjs provider-daemon --bootstrap-fd 3",
+        ),
+      ),
+      "provider-runtime",
+    );
+    assert.equal(
+      classifyCafeKillallProcess(
+        processSnapshot(
           "/repo/cafe-code/apps/desktop/node_modules/electron/dist/electron dist-electron/main.cjs",
         ),
       ),

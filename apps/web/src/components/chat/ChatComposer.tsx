@@ -15,6 +15,7 @@ import type {
 import {
   ProviderDriverKind,
   ProviderInstanceId,
+  PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
 } from "@cafecode/contracts";
@@ -41,6 +42,16 @@ import {
   expandCollapsedComposerCursor,
   replaceTextRange,
 } from "../../composer-logic";
+import {
+  EMBEDDED_BROWSER_DRAFT_HANDOFF_EVENT,
+  readEmbeddedBrowserDraftHandoff,
+} from "../../embeddedBrowserChatHandoff";
+import {
+  appendComposerTextFile,
+  isComposerTextFile,
+  normalizeComposerTextFileName,
+  readComposerTextFile,
+} from "../../composerTextFile";
 import { deriveComposerSendState, readFileAsDataUrl } from "../ChatView.logic";
 import {
   type ComposerImageAttachment,
@@ -181,6 +192,16 @@ const extendReplacementRangeForTrailingSpace = (
 
 function isInsideComposerFloatingLayer(element: Element): boolean {
   return element.closest(COMPOSER_FLOATING_LAYER_SELECTOR) !== null;
+}
+
+function composerDraftTargetsEqual(
+  left: ScopedThreadRef | DraftId,
+  right: ScopedThreadRef | DraftId,
+): boolean {
+  if (typeof left === "string" || typeof right === "string") {
+    return left === right;
+  }
+  return left.environmentId === right.environmentId && left.threadId === right.threadId;
 }
 
 const ComposerFooterModeControls = memo(function ComposerFooterModeControls(props: {
@@ -437,6 +458,7 @@ export interface ChatComposerHandle {
   /** Get the current prompt/effort/model state for use in send. */
   getSendContext: () => {
     prompt: string;
+    ephemeralBrowserContext: string;
     images: ComposerImageAttachment[];
     selectedPromptEffort: string | null;
     selectedModelOptionsForDispatch: unknown;
@@ -445,6 +467,8 @@ export interface ChatComposerHandle {
     selectedModel: string;
     selectedProviderModels: ReadonlyArray<ServerProvider["models"][number]>;
   };
+  clearEphemeralBrowserContext: () => void;
+  restoreEphemeralBrowserContext: (text: string) => void;
 }
 
 export interface FollowUpQueueViewItem {
@@ -507,7 +531,7 @@ function automaticSteerRetryStatus(item: FollowUpQueueViewItem): {
       ariaLabel: "Queued steer waiting for Codex context compaction",
       label: "Waiting for compact",
       title:
-        "Codex is compacting the active turn; Cafe Code will retry this steer automatically when compaction finishes.",
+        "Codex is compacting the active turn; Club Code will retry this steer automatically when compaction finishes.",
     };
   }
 
@@ -515,7 +539,7 @@ function automaticSteerRetryStatus(item: FollowUpQueueViewItem): {
     ariaLabel: "Queued steer waiting for Codex review",
     label: "Waiting for review",
     title:
-      "Codex is reviewing the active turn; Cafe Code will send this follow-up automatically when the active turn is ready.",
+      "Codex is reviewing the active turn; Club Code will send this follow-up automatically when the active turn is ready.",
   };
 }
 
@@ -831,6 +855,8 @@ export interface ChatComposerProps {
 
   focusComposer: () => void;
   scheduleComposerFocus: () => void;
+  /** Cancels an armed, current-turn auto nudge as soon as the operator edits. */
+  onManualActivity?: () => void;
   setThreadError: (threadId: ThreadId | null, error: string | null) => void;
   onExpandImage: (preview: ExpandedImagePreview) => void;
 }
@@ -867,8 +893,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     respondingRequestIds,
     showPlanFollowUpPrompt,
     activeProposedPlan,
-    activePlan,
-    sidebarProposedPlan,
     planSidebarLabel,
     planSidebarOpen,
     goalControlsSupported,
@@ -911,8 +935,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     handleInteractionModeChange,
     togglePlanSidebar,
     onOpenGoalDialog,
-    focusComposer,
     scheduleComposerFocus,
+    onManualActivity,
     setThreadError,
     onExpandImage,
   } = props;
@@ -1195,6 +1219,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const [isComposerModelPickerOpen, setIsComposerModelPickerOpen] = useState(false);
   const [isComposerFocused, setIsComposerFocused] = useState(false);
   const [composerFocusRequestRevision, setComposerFocusRequestRevision] = useState(0);
+  const [ephemeralBrowserContext, setEphemeralBrowserContext] = useState("");
+
+  useEffect(() => {
+    setEphemeralBrowserContext("");
+  }, [activeThreadId, draftId, environmentId]);
   // Touch capability, not viewport width: foldables and tablets can be wider
   // than any phone breakpoint while still typing through an on-screen keyboard.
   const isOnScreenKeyboardDevice = useHasOnScreenKeyboard();
@@ -1227,6 +1256,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const mobileComposerExpandInFlightRef = useRef(false);
   const dragDepthRef = useRef(0);
   const composerFileInputRef = useRef<HTMLInputElement>(null);
+  const composerDraftTargetRef = useRef(composerDraftTarget);
+  composerDraftTargetRef.current = composerDraftTarget;
 
   // ------------------------------------------------------------------
   // Derived: composer send state
@@ -1400,7 +1431,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     isComposerCollapsedMobile && !isComposerApprovalState && pendingUserInputs.length === 0;
 
   const composerFooterHasWideActions = showPlanFollowUpPrompt || activePendingProgress !== null;
-  const showPlanSidebarToggle = Boolean(activePlan || sidebarProposedPlan);
+  const showPlanSidebarToggle = true;
   const composerFooterActionLayoutKey = useMemo(() => {
     if (activePendingProgress) {
       return `pending:${activePendingProgress.questionIndex}:${activePendingProgress.isLastQuestion}:${activePendingIsResponding}`;
@@ -1513,6 +1544,68 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     },
     [composerDraftTarget, setComposerDraftPrompt],
   );
+
+  useEffect(() => {
+    const composerForm = composerFormRef.current;
+    if (!composerForm) return;
+
+    const handleBrowserSnapshotHandoff = (event: Event) => {
+      const handoff = readEmbeddedBrowserDraftHandoff(event);
+      if (!handoff) return;
+      if (activePendingApproval || activePendingProgress || pendingUserInputs.length > 0) {
+        toastManager.add({
+          type: "warning",
+          title: "Browser snapshot not added",
+          description: "Finish the current approval or question before adding browser context.",
+        });
+        return;
+      }
+
+      onManualActivity?.();
+      const currentPrompt = promptRef.current.trimEnd();
+      const currentContext = ephemeralBrowserContext.trimEnd();
+      const separator = currentContext.length > 0 ? "\n\n" : "";
+      const availableChars =
+        PROVIDER_SEND_TURN_MAX_INPUT_CHARS -
+        currentPrompt.length -
+        currentContext.length -
+        separator.length;
+      if (availableChars <= 0) {
+        toastManager.add({
+          type: "warning",
+          title: "Browser snapshot not added",
+          description: "The current draft is already at the message size limit.",
+        });
+        return;
+      }
+      const boundedHandoff = handoff.text.slice(0, availableChars);
+      setEphemeralBrowserContext(`${currentContext}${separator}${boundedHandoff}`);
+      handoff.accepted = true;
+      toastManager.add({
+        type: "success",
+        title: "One-time browser context added",
+        description: "Review it before sending. It is not saved with the composer draft.",
+      });
+    };
+
+    composerForm.addEventListener(
+      EMBEDDED_BROWSER_DRAFT_HANDOFF_EVENT,
+      handleBrowserSnapshotHandoff,
+    );
+    return () => {
+      composerForm.removeEventListener(
+        EMBEDDED_BROWSER_DRAFT_HANDOFF_EVENT,
+        handleBrowserSnapshotHandoff,
+      );
+    };
+  }, [
+    activePendingApproval,
+    activePendingProgress,
+    ephemeralBrowserContext,
+    onManualActivity,
+    pendingUserInputs.length,
+    promptRef,
+  ]);
 
   const addComposerImage = useCallback(
     (image: ComposerImageAttachment) => {
@@ -1768,6 +1861,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       expandedCursor: number,
       cursorAdjacentToMention: boolean,
     ) => {
+      onManualActivity?.();
       if (activePendingProgress?.activeQuestion && pendingUserInputs.length > 0) {
         setComposerCursor(nextCursor);
         setComposerTrigger(
@@ -1793,6 +1887,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       activePendingProgress?.activeQuestion,
       pendingUserInputs.length,
       onChangeActivePendingUserInputCustomAnswer,
+      onManualActivity,
       promptRef,
       setPrompt,
     ],
@@ -1817,6 +1912,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       ) {
         return false;
       }
+      onManualActivity?.();
       const next = replaceTextRange(promptRef.current, rangeStart, rangeEnd, replacement);
       const nextCursor = collapseExpandedComposerCursor(next.text, next.cursor);
       const nextExpandedCursor = expandCollapsedComposerCursor(next.text, nextCursor);
@@ -1846,6 +1942,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       activePendingProgress?.activeQuestion,
       activePendingUserInput,
       onChangeActivePendingUserInputCustomAnswer,
+      onManualActivity,
       promptRef,
       setPrompt,
     ],
@@ -2199,15 +2296,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   // ------------------------------------------------------------------
   // Callbacks: images
   // ------------------------------------------------------------------
-  const addComposerImages = (files: File[]) => {
-    if (!activeThreadId || files.length === 0) return;
-    if (pendingUserInputs.length > 0) {
-      toastManager.add({
-        type: "error",
-        title: "Attach images after answering plan questions.",
-      });
-      return;
-    }
+  const addComposerImages = (files: File[]): string | null => {
+    if (!activeThreadId || files.length === 0) return null;
     const nextImages: ComposerImageAttachment[] = [];
     let nextImageCount = composerImagesRef.current.length;
     let error: string | null = null;
@@ -2241,6 +2331,97 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     } else if (nextImages.length > 1) {
       addComposerImagesToDraft(nextImages);
     }
+    return error;
+  };
+
+  const addComposerFiles = async (files: File[]) => {
+    const targetAtStart = composerDraftTarget;
+    onManualActivity?.();
+    if (!activeThreadId || files.length === 0) return;
+    if (pendingUserInputs.length > 0) {
+      toastManager.add({
+        type: "error",
+        title: "Attach files after answering plan questions.",
+      });
+      return;
+    }
+
+    const imageFiles = files.filter((file) => file.type.startsWith("image/"));
+    const textFiles = files.filter(
+      (file) => !file.type.startsWith("image/") && isComposerTextFile(file),
+    );
+    const unsupportedFile = files.find(
+      (file) => !file.type.startsWith("image/") && !isComposerTextFile(file),
+    );
+    let error = addComposerImages(imageFiles);
+    let addedTextFileCount = 0;
+
+    for (const file of textFiles.slice(0, PROVIDER_SEND_TURN_MAX_ATTACHMENTS)) {
+      const safeName = normalizeComposerTextFileName(file.name);
+      try {
+        const text = await readComposerTextFile(file);
+        const targetIsCurrent = composerDraftTargetsEqual(
+          composerDraftTargetRef.current,
+          targetAtStart,
+        );
+        const currentPrompt = targetIsCurrent
+          ? promptRef.current
+          : (getComposerDraft(targetAtStart)?.prompt ?? "");
+        const appended = appendComposerTextFile({
+          prompt: currentPrompt,
+          name: file.name,
+          text,
+        });
+        if (appended === null) {
+          error = `'${safeName}' does not fit within the message size limit.`;
+          continue;
+        }
+        if (targetIsCurrent) {
+          promptRef.current = appended;
+          // The file read resolves outside React's input event. Commit the new
+          // editor value before restoring focus so the contenteditable cannot
+          // report its stale pre-upload text and overwrite the attachment block.
+          flushSync(() => setComposerDraftPrompt(targetAtStart, appended));
+          const nextCursor = collapseExpandedComposerCursor(appended, appended.length);
+          setComposerCursor(nextCursor);
+          setComposerTrigger(detectComposerTrigger(appended, appended.length));
+        } else {
+          // Preserve the attachment on the draft where the read began without
+          // disturbing the newly selected thread's editor, cursor, or focus.
+          setComposerDraftPrompt(targetAtStart, appended);
+        }
+        addedTextFileCount += 1;
+      } catch (cause) {
+        error = cause instanceof Error ? cause.message : `Could not read '${safeName}'.`;
+      }
+    }
+
+    if (textFiles.length > PROVIDER_SEND_TURN_MAX_ATTACHMENTS) {
+      error = `You can add up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} text files at a time.`;
+    }
+    if (unsupportedFile) {
+      error = `Unsupported file type for '${normalizeComposerTextFileName(
+        unsupportedFile.name,
+      )}'. Attach images or plain-text .txt files.`;
+    }
+
+    if (addedTextFileCount > 0) {
+      toastManager.add({
+        type: "success",
+        title:
+          addedTextFileCount === 1
+            ? "Text file added to this message"
+            : `${addedTextFileCount} text files added to this message`,
+        description: "The file contents are visible in the composer and will be sent as text.",
+      });
+    }
+    if (error) {
+      toastManager.add({
+        type: "error",
+        title: "Some files were not added",
+        description: error,
+      });
+    }
     setThreadError(activeThreadId, error);
   };
 
@@ -2254,10 +2435,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const onComposerPaste = (event: React.ClipboardEvent<HTMLElement>) => {
     const files = Array.from(event.clipboardData.files);
     if (files.length === 0) return;
-    const imageFiles = files.filter((file) => file.type.startsWith("image/"));
-    if (imageFiles.length === 0) return;
     event.preventDefault();
-    addComposerImages(imageFiles);
+    void addComposerFiles(files);
   };
 
   const onComposerDragEnter = (event: React.DragEvent<HTMLDivElement>) => {
@@ -2291,13 +2470,17 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     dragDepthRef.current = 0;
     setIsDragOverComposer(false);
     const files = Array.from(event.dataTransfer.files);
-    addComposerImages(files);
-    focusComposer();
+    const targetAtDrop = composerDraftTarget;
+    void addComposerFiles(files).finally(() => {
+      if (composerDraftTargetsEqual(composerDraftTargetRef.current, targetAtDrop)) {
+        scheduleComposerFocus();
+      }
+    });
   };
 
-  // Touch devices can't paste or drag-drop images, so a file picker is the
-  // only practical way to attach on mobile; desktop gets the affordance too.
-  const openComposerImagePicker = () => {
+  // Touch devices can't paste or drag-drop files, so a file picker is the only
+  // practical way to attach on mobile; desktop gets the affordance too.
+  const openComposerFilePicker = () => {
     composerFileInputRef.current?.click();
   };
 
@@ -2306,8 +2489,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     // Reset so picking the same file again after removal still fires change.
     event.target.value = "";
     if (files.length === 0) return;
-    addComposerImages(files);
-    focusComposer();
+    const targetAtSelection = composerDraftTarget;
+    void addComposerFiles(files).finally(() => {
+      if (composerDraftTargetsEqual(composerDraftTargetRef.current, targetAtSelection)) {
+        scheduleComposerFocus();
+      }
+    });
   };
   const handleInterruptPrimaryAction = useCallback(() => {
     void onInterrupt();
@@ -2420,6 +2607,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       },
       getSendContext: () => ({
         prompt: promptRef.current,
+        ephemeralBrowserContext,
         images: composerImagesRef.current,
         selectedPromptEffort,
         selectedModelOptionsForDispatch,
@@ -2428,6 +2616,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         selectedModel,
         selectedProviderModels,
       }),
+      clearEphemeralBrowserContext: () => {
+        setEphemeralBrowserContext("");
+      },
+      restoreEphemeralBrowserContext: (text: string) => {
+        setEphemeralBrowserContext(text);
+      },
     }),
     [
       promptRef,
@@ -2435,6 +2629,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       activeThreadId,
       composerEditorDisabled,
       composerFocusRequestRevision,
+      ephemeralBrowserContext,
       isComposerModelPickerOpen,
       isComposerCollapsedMobile,
       isComposerFocused,
@@ -2462,6 +2657,42 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       className="mx-auto w-full min-w-0 max-w-208"
       data-chat-composer-form="true"
     >
+      {ephemeralBrowserContext ? (
+        <div
+          className="mb-2 rounded-xl border border-primary/30 bg-primary/5 p-2.5"
+          data-ephemeral-browser-context="true"
+        >
+          <div className="mb-1.5 flex items-center justify-between gap-2">
+            <label className="text-xs font-medium" htmlFor="ephemeral-browser-context">
+              One-time browser context · not saved
+            </label>
+            <button
+              className="text-xs text-muted-foreground underline-offset-2 hover:underline"
+              onClick={() => setEphemeralBrowserContext("")}
+              type="button"
+            >
+              Remove
+            </button>
+          </div>
+          <textarea
+            aria-describedby="ephemeral-browser-context-help"
+            autoComplete="off"
+            className="max-h-40 min-h-20 w-full resize-y rounded-lg border border-input bg-background p-2 font-mono text-xs"
+            id="ephemeral-browser-context"
+            maxLength={PROVIDER_SEND_TURN_MAX_INPUT_CHARS}
+            onChange={(event) => setEphemeralBrowserContext(event.currentTarget.value)}
+            spellCheck={false}
+            value={ephemeralBrowserContext}
+          />
+          <p
+            className="mt-1 text-[11px] leading-4 text-muted-foreground"
+            id="ephemeral-browser-context-help"
+          >
+            Review or edit this redacted page context. It stays in memory until removed or sent and
+            is never written to the saved composer draft.
+          </p>
+        </div>
+      ) : null}
       <FollowUpQueueShelf
         items={followUpQueueItems}
         steeringItems={steeringFollowUpItems}
@@ -2476,7 +2707,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       <input
         ref={composerFileInputRef}
         type="file"
-        accept="image/*"
         multiple
         className="hidden"
         tabIndex={-1}
@@ -2831,7 +3061,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                                 : "disconnected"
                             }`
                           : phase === "disconnected"
-                            ? "Ask for follow-up changes or attach images"
+                            ? "Ask for follow-up changes or attach files"
                             : "Ask anything, @tag files/folders, $use skills, or / for commands"
                 }
                 disabled={composerEditorDisabled}
@@ -2846,7 +3076,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                       preserveComposerFocusOnPointerDown
                       disabled={activeThreadId === null}
                       className="bg-background/80 hover:bg-background/90"
-                      onClick={openComposerImagePicker}
+                      onClick={openComposerFilePicker}
                     />
                   ) : null}
                   <ComposerPrimaryActions
@@ -2899,7 +3129,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               <div className="-m-1 flex min-w-0 flex-1 items-center gap-1 overflow-x-auto p-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                 <ComposerAttachImageButton
                   disabled={pendingUserInputs.length > 0 || activeThreadId === null}
-                  onClick={openComposerImagePicker}
+                  onClick={openComposerFilePicker}
                 />
                 <ProviderModelPicker
                   compact={isComposerFooterCompact}

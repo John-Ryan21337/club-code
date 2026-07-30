@@ -35,6 +35,9 @@ export const UsageStatsTokenBreakdownDayRow = Schema.Struct({
   provider: ProviderDriverKind,
   model: UsageStatsModel,
   outputTokens: NonNegativeInt,
+  cachedInputTokens: NonNegativeInt,
+  cacheWriteInputTokens: NonNegativeInt,
+  compactedInputTokens: NonNegativeInt,
 });
 export type UsageStatsTokenBreakdownDayRow = typeof UsageStatsTokenBreakdownDayRow.Type;
 

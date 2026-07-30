@@ -1,6 +1,7 @@
 import "../index.css";
 
 import {
+  DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES,
   DEFAULT_CLIENT_SETTINGS,
   DEFAULT_SERVER_SETTINGS,
   EnvironmentId,
@@ -115,9 +116,11 @@ function createBaseServerConfig(): ServerConfig {
           enabled: true,
           binaryPath: "",
           runtimeSource: "system",
+          ossMode: false,
           homePath: "",
           shadowHomePath: "",
           customModels: [],
+          ultraCaching: false,
         },
         claudeAgent: {
           enabled: true,
@@ -126,10 +129,12 @@ function createBaseServerConfig(): ServerConfig {
           homePath: "",
           customModels: [],
           launchArgs: "",
+          ultraCaching: false,
         },
       },
     },
     clientSettings: { ...DEFAULT_CLIENT_SETTINGS, onboardingCompleted: true },
+    ambientExperienceCapabilities: DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES,
   };
 }
 

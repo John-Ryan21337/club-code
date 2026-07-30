@@ -37,6 +37,7 @@ import { readPrimaryEnvironmentDescriptor, usePrimaryEnvironmentId } from "../en
 import { readEnvironmentApi } from "../environmentApi";
 import { isElectron } from "../env";
 import { readLocalApi } from "../localApi";
+import { buildEphemeralBrowserDispatchPrompt } from "../embeddedBrowserChatHandoff";
 import { parseDiffRouteSearch, stripDiffSearchParams } from "../diffRouteSearch";
 import {
   collapseExpandedComposerCursor,
@@ -76,7 +77,8 @@ import {
   useStore,
 } from "../store";
 import { createProjectSelectorByRef, createThreadSelectorByRef } from "../storeSelectors";
-import { useUiStateStore } from "../uiStateStore";
+import { type RightPanelTab, useUiStateStore } from "../uiStateStore";
+import { deriveWorkflowProjection } from "../workflowProjection";
 import {
   buildPlanImplementationThreadTitle,
   buildPlanImplementationPrompt,
@@ -104,7 +106,7 @@ import { cn } from "~/lib/utils";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { newCommandId, newDraftId, newMessageId, newThreadId } from "~/lib/utils";
 import { getProviderModelCapabilities, resolveSelectableProvider } from "../providerModels";
-import { useSettings } from "../hooks/useSettings";
+import { useSettings, useUpdateSettings } from "../hooks/useSettings";
 import { resolveAppModelSelectionForInstance } from "../modelSelection";
 import {
   deriveLogicalProjectKeyFromSettings,
@@ -139,12 +141,14 @@ import {
 } from "./chat/followUpQueue";
 import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
+import { WorkspaceObservatory } from "./WorkspaceObservatory";
 import { MessagesTimeline } from "./chat/MessagesTimeline";
 import {
   isTimelineScrolledToEnd,
   shouldPreserveTimelineScrollReviewIntent,
 } from "./chat/MessagesTimeline.helpers";
 import { ChatHeader } from "./chat/ChatHeader";
+import { AutoNudgeControl } from "./chat/AutoNudgeControl";
 import { type ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import {
   ThreadGoalDialog,
@@ -152,6 +156,8 @@ import {
   type ThreadGoalSetPatch,
 } from "./chat/ThreadGoalControl";
 import { NoActiveThreadState } from "./NoActiveThreadState";
+import { ChatMediaOverlay } from "./chat/ChatMediaOverlay";
+import { useAmbientVideoWorkspace } from "./ambient/AmbientVideoWorkspace";
 import { resolveEffectiveEnvMode, resolveEnvironmentOptionLabel } from "./BranchToolbar.logic";
 import { ProviderStatusBanner } from "./chat/ProviderStatusBanner";
 import { ThreadErrorBanner } from "./chat/ThreadErrorBanner";
@@ -177,6 +183,21 @@ import {
   shouldWriteThreadErrorToCurrentServerThread,
   waitForStartedServerThread,
 } from "./ChatView.logic";
+import {
+  type AutoNudgeMode,
+  autoNudgePromptForMode,
+  canDispatchAutoNudge,
+  canScheduleAutoNudge,
+  consumeAutoNudgeTerminalForManualActivity,
+  getAutoNudgeTurnLedger,
+} from "../autoNudger";
+import {
+  getBackgroundAutoNudgeController,
+  isBackgroundAutoNudgeOwner,
+  isLastBackgroundAutoNudgeOwner,
+  supportsBackgroundAutoNudgeDispatchLock,
+  useBackgroundAutoNudgeState,
+} from "../backgroundAutoNudger";
 import { useComposerHandleContext } from "../composerHandleContext";
 import {
   useServerAvailableEditors,
@@ -205,6 +226,20 @@ const IMAGE_ONLY_BOOTSTRAP_PROMPT =
   "[User attached one or more images without additional text. Respond using the conversation context and the attached image(s).]";
 const EMPTY_ACTIVITIES: OrchestrationThreadActivity[] = [];
 const EMPTY_PROPOSED_PLANS: Thread["proposedPlans"] = [];
+const EMPTY_BOOLEAN_RECORD: Readonly<Record<string, boolean>> = {};
+function providerAccountCanAcceptTurn(provider: ServerProvider | null): boolean {
+  const snapshot = provider?.accountRateLimits?.rateLimits;
+  if (!snapshot) return true;
+  if (snapshot.rateLimitReachedType || snapshot.spendControlReached) return false;
+  if (
+    (snapshot.primary?.usedPercent ?? 0) >= 100 ||
+    (snapshot.secondary?.usedPercent ?? 0) >= 100
+  ) {
+    return false;
+  }
+  const credits = snapshot.credits;
+  return credits === undefined || credits === null || credits.unlimited || credits.hasCredits;
+}
 const DEBUG_SNAPSHOT_VERSION = 11;
 const DEBUG_TEXT_PREVIEW_LIMIT = 120;
 const DEBUG_JSON_PREVIEW_LIMIT = 600;
@@ -305,6 +340,8 @@ function summarizeDebugContextWindowUsagePayload(payloadValue: unknown) {
   const usage = {
     usedTokens: readDebugNumber(payload.usedTokens),
     totalProcessedTokens: readDebugNumber(payload.totalProcessedTokens),
+    totalOutputTokens: readDebugNumber(payload.totalOutputTokens),
+    totalCachedInputTokens: readDebugNumber(payload.totalCachedInputTokens),
     maxTokens: readDebugNumber(payload.maxTokens),
     inputTokens: readDebugNumber(payload.inputTokens),
     cachedInputTokens: readDebugNumber(payload.cachedInputTokens),
@@ -343,6 +380,7 @@ function summarizeDebugContextWindowUsagePayload(payloadValue: unknown) {
     totals: {
       inputTokens: usage.inputTokens,
       cachedInputTokens: usage.cachedInputTokens,
+      totalCachedInputTokens: usage.totalCachedInputTokens,
       cacheWriteInputTokens: usage.cacheWriteInputTokens,
       totalCacheWriteInputTokens: usage.totalCacheWriteInputTokens,
       outputTokens: usage.outputTokens,
@@ -1476,6 +1514,8 @@ type ChatViewProps =
 
 interface ComposerSendSnapshot {
   promptText: string;
+  draftPromptText: string;
+  ephemeralBrowserContext: string;
   images: ComposerImageAttachment[];
   provider: ProviderDriverKind;
   model: string | null;
@@ -1485,6 +1525,19 @@ interface ComposerSendSnapshot {
   runtimeMode: RuntimeMode;
   interactionMode: ProviderInteractionMode;
 }
+
+const buildAttachmentsForSnapshot = async (
+  snapshot: ComposerSendSnapshot,
+): Promise<OrchestrationUploadChatAttachment[]> =>
+  Promise.all(
+    snapshot.images.map(async (image) => ({
+      type: "image" as const,
+      name: image.name,
+      mimeType: image.mimeType,
+      sizeBytes: image.sizeBytes,
+      dataUrl: await readFileAsDataUrl(image.file),
+    })),
+  );
 
 interface FollowUpQueueItem extends ComposerSendSnapshot {
   id: string;
@@ -1807,6 +1860,7 @@ function useLocalDispatchState(input: {
 }
 
 export default function ChatView(props: ChatViewProps) {
+  const { registerChatAnchor, localMediaBackgroundEffective } = useAmbientVideoWorkspace();
   const {
     environmentId,
     threadId,
@@ -1837,7 +1891,18 @@ export default function ChatView(props: ChatViewProps) {
     routeKind === "server" ? store.threadPlanSidebarOpenById[routeThreadKey] : undefined,
   );
   const setPersistedPlanSidebarOpen = useUiStateStore((store) => store.setThreadPlanSidebarOpen);
+  const persistedRightPanelTab = useUiStateStore(
+    (store) => store.threadRightPanelTabById[routeThreadKey],
+  );
+  const workflowNodeExpandedById = useUiStateStore(
+    (store) => store.threadWorkflowNodeExpandedById[routeThreadKey] ?? EMPTY_BOOLEAN_RECORD,
+  );
+  const setPersistedRightPanelTab = useUiStateStore((store) => store.setThreadRightPanelTab);
+  const setPersistedWorkflowNodeExpanded = useUiStateStore(
+    (store) => store.setThreadWorkflowNodeExpanded,
+  );
   const settings = useSettings();
+  const { updateSettings: updateClientSettings } = useUpdateSettings();
   const setStickyComposerModelSelection = useComposerDraftStore(
     (store) => store.setStickyModelSelection,
   );
@@ -1899,6 +1964,53 @@ export default function ChatView(props: ChatViewProps) {
     Record<string, string | null>
   >({});
   const [isConnecting, _setIsConnecting] = useState(false);
+  // The selected mode is a durable global client preference. Dispatch is
+  // authorized only by a newly completed response in the current thread.
+  const autoNudgeMode: AutoNudgeMode = settings.autoNudgeMode;
+  const backgroundAutoNudgeState = useBackgroundAutoNudgeState();
+  const backgroundAutoNudgeOwnerForRoute =
+    routeKind === "server" &&
+    isBackgroundAutoNudgeOwner(backgroundAutoNudgeState, {
+      environmentId,
+      threadId,
+    });
+  const backgroundAutoNudgeLastOwnerForRoute =
+    routeKind === "server" &&
+    isLastBackgroundAutoNudgeOwner(backgroundAutoNudgeState, {
+      environmentId,
+      threadId,
+    });
+  const [autoNudgeActivityRevision, setAutoNudgeActivityRevision] = useState(0);
+  const autoNudgeLedgerRef = useRef(getAutoNudgeTurnLedger());
+  // Keep the latest settled terminal identity available to synchronous
+  // composer handlers. A user action before the completion effect runs still
+  // consumes that exact turn.
+  const autoNudgeTerminalTurnKeyRef = useRef<string | null>(null);
+  const autoNudgeCompletionBaselineRef = useRef<{
+    threadKey: string | null;
+    initialized: boolean;
+  }>({ threadKey: null, initialized: false });
+  const recordManualAutoNudgeActivity = useCallback(() => {
+    consumeAutoNudgeTerminalForManualActivity(
+      autoNudgeLedgerRef.current,
+      autoNudgeTerminalTurnKeyRef.current,
+    );
+    if (backgroundAutoNudgeOwnerForRoute) {
+      getBackgroundAutoNudgeController().pause("Manual composer activity detected.");
+    }
+    setAutoNudgeActivityRevision((revision) => revision + 1);
+  }, [backgroundAutoNudgeOwnerForRoute]);
+  const stopAutoNudge = useCallback(() => {
+    consumeAutoNudgeTerminalForManualActivity(
+      autoNudgeLedgerRef.current,
+      autoNudgeTerminalTurnKeyRef.current,
+    );
+    getBackgroundAutoNudgeController().stop("Auto Nudge stopped by the operator.");
+    updateClientSettings({
+      autoNudgeMode: "off",
+      autoNudgeBackgroundContinuation: false,
+    });
+  }, [updateClientSettings]);
   const [isRevertingCheckpoint, setIsRevertingCheckpoint] = useState(false);
   const [respondingRequestIds, setRespondingRequestIds] = useState<ApprovalRequestId[]>([]);
   const [respondingUserInputRequestIds, setRespondingUserInputRequestIds] = useState<
@@ -1925,6 +2037,7 @@ export default function ChatView(props: ChatViewProps) {
   const planSidebarOpenOnNextThreadRef = useRef(false);
   const [pullRequestDialogState, setPullRequestDialogState] =
     useState<PullRequestDialogState | null>(null);
+  const [workspaceObservatoryOpen, setWorkspaceObservatoryOpen] = useState(false);
   const [attachmentPreviewHandoffByMessageId, setAttachmentPreviewHandoffByMessageId] = useState<
     Record<string, string[]>
   >({});
@@ -2784,8 +2897,39 @@ export default function ChatView(props: ChatViewProps) {
     () => deriveActivePlanState(threadActivities, activeLatestTurn?.turnId ?? undefined),
     [activeLatestTurn?.turnId, threadActivities],
   );
-  const hasPlanSidebarContent = Boolean(activePlan || sidebarProposedPlan);
+  const workflowSnapshot = useMemo(
+    () =>
+      deriveWorkflowProjection({
+        activities: threadActivities,
+        turnId: activeLatestTurn?.turnId ?? null,
+        providerName: activeThread?.session?.provider ?? selectedProvider,
+        modelName: activeThread?.modelSelection.model ?? null,
+      }),
+    [
+      activeLatestTurn?.turnId,
+      activeThread?.modelSelection.model,
+      activeThread?.session?.provider,
+      selectedProvider,
+      threadActivities,
+    ],
+  );
+  const hasPlanSidebarContent = Boolean(activeThread);
   const planSidebarLabel = sidebarProposedPlan || interactionMode === "plan" ? "Plan" : "Tasks";
+  const workflowObservatoryAvailable =
+    serverConfig?.ambientExperienceCapabilities.workflowObservatory === true &&
+    settings.workflowObservatoryEnabled;
+  const rightPanelTab: RightPanelTab = !workflowObservatoryAvailable
+    ? "plan"
+    : (persistedRightPanelTab ?? (activePlan || sidebarProposedPlan ? "plan" : "workflow"));
+  const handleRightPanelTabChange = useCallback(
+    (tab: RightPanelTab) => setPersistedRightPanelTab(routeThreadKey, tab),
+    [routeThreadKey, setPersistedRightPanelTab],
+  );
+  const handleWorkflowNodeExpandedChange = useCallback(
+    (nodeId: string, expanded: boolean) =>
+      setPersistedWorkflowNodeExpanded(routeThreadKey, nodeId, expanded),
+    [routeThreadKey, setPersistedWorkflowNodeExpanded],
+  );
   const showPlanFollowUpPrompt =
     pendingUserInputs.length === 0 &&
     interactionMode === "plan" &&
@@ -4689,8 +4833,14 @@ export default function ChatView(props: ChatViewProps) {
   const readComposerSnapshotForDispatch = (): ComposerSendSnapshot | null => {
     const sendCtx = composerRef.current?.getSendContext();
     if (!sendCtx) return null;
+    const browserDispatch = buildEphemeralBrowserDispatchPrompt(
+      promptRef.current,
+      sendCtx.ephemeralBrowserContext,
+    );
     return {
-      promptText: promptRef.current,
+      promptText: browserDispatch.dispatchPrompt,
+      draftPromptText: browserDispatch.persistedDraftPrompt,
+      ephemeralBrowserContext: browserDispatch.ephemeralBrowserContext,
       images: [...sendCtx.images],
       provider: sendCtx.selectedProvider,
       model: sendCtx.selectedModel,
@@ -4701,19 +4851,6 @@ export default function ChatView(props: ChatViewProps) {
       interactionMode,
     };
   };
-
-  const buildAttachmentsForSnapshot = async (
-    snapshot: ComposerSendSnapshot,
-  ): Promise<OrchestrationUploadChatAttachment[]> =>
-    Promise.all(
-      snapshot.images.map(async (image) => ({
-        type: "image" as const,
-        name: image.name,
-        mimeType: image.mimeType,
-        sizeBytes: image.sizeBytes,
-        dataUrl: await readFileAsDataUrl(image.file),
-      })),
-    );
 
   const outgoingTextForSnapshot = (snapshot: ComposerSendSnapshot): string =>
     formatOutgoingPrompt({
@@ -4728,20 +4865,25 @@ export default function ChatView(props: ChatViewProps) {
     promptRef.current = "";
     clearComposerDraftContent(composerDraftTarget);
     composerRef.current?.resetCursorState();
+    composerRef.current?.clearEphemeralBrowserContext();
     scheduleComposerFocus();
   };
 
   const restoreComposerSnapshotForRetry = (snapshot: ComposerSendSnapshot) => {
     const retryComposerImages = snapshot.images.map(cloneComposerImageForRetry);
-    promptRef.current = snapshot.promptText;
+    promptRef.current = snapshot.draftPromptText;
     composerImagesRef.current = retryComposerImages;
-    setComposerDraftPrompt(composerDraftTarget, snapshot.promptText);
+    setComposerDraftPrompt(composerDraftTarget, snapshot.draftPromptText);
     addComposerDraftImages(composerDraftTarget, retryComposerImages);
     composerRef.current?.resetCursorState({
-      cursor: collapseExpandedComposerCursor(snapshot.promptText, snapshot.promptText.length),
-      prompt: snapshot.promptText,
+      cursor: collapseExpandedComposerCursor(
+        snapshot.draftPromptText,
+        snapshot.draftPromptText.length,
+      ),
+      prompt: snapshot.draftPromptText,
       detectTrigger: true,
     });
+    composerRef.current?.restoreEphemeralBrowserContext(snapshot.ephemeralBrowserContext);
     scheduleComposerFocus();
   };
 
@@ -4821,11 +4963,11 @@ export default function ChatView(props: ChatViewProps) {
     }
     const api = readEnvironmentApi(queuedThread.environmentId);
     if (!api) {
-      blockFollowUpQueueItem(item.threadId, item.id, "Cafe Code is not connected.");
+      blockFollowUpQueueItem(item.threadId, item.id, "Club Code is not connected.");
       return;
     }
     if (isThreadEnvironmentUnavailable(queuedThread)) {
-      blockFollowUpQueueItem(item.threadId, item.id, "Cafe Code is not connected.");
+      blockFollowUpQueueItem(item.threadId, item.id, "Club Code is not connected.");
       return;
     }
     const queuedProject = resolveProjectForThread(queuedThread);
@@ -5105,6 +5247,9 @@ export default function ChatView(props: ChatViewProps) {
 
   const onSend = async (e?: { preventDefault: () => void }) => {
     e?.preventDefault();
+    // A real operator send (and the auto sender after its final re-check)
+    // consumes the exact completed turn before touching the provider.
+    recordManualAutoNudgeActivity();
     const api = readEnvironmentApi(environmentId);
     if (
       !api ||
@@ -5226,6 +5371,7 @@ export default function ChatView(props: ChatViewProps) {
       promptRef.current = "";
       clearComposerDraftContent(composerDraftTarget);
       composerRef.current?.resetCursorState();
+      composerRef.current?.clearEphemeralBrowserContext();
       scheduleComposerFocus();
       await onSubmitPlanFollowUp({
         text: followUp.text,
@@ -5240,6 +5386,7 @@ export default function ChatView(props: ChatViewProps) {
       promptRef.current = "";
       clearComposerDraftContent(composerDraftTarget);
       composerRef.current?.resetCursorState();
+      composerRef.current?.clearEphemeralBrowserContext();
       scheduleComposerFocus();
       return;
     }
@@ -5310,6 +5457,7 @@ export default function ChatView(props: ChatViewProps) {
     promptRef.current = "";
     clearComposerDraftContent(composerDraftTarget);
     composerRef.current?.resetCursorState();
+    composerRef.current?.clearEphemeralBrowserContext();
     scheduleComposerFocus();
 
     let turnStartSucceeded = false;
@@ -5420,16 +5568,20 @@ export default function ChatView(props: ChatViewProps) {
           const next = existing.filter((message) => message.id !== messageIdForSend);
           return next.length === existing.length ? existing : next;
         });
-        promptRef.current = promptForSend;
+        promptRef.current = snapshot.draftPromptText;
         const retryComposerImages = composerImagesSnapshot.map(cloneComposerImageForRetry);
         composerImagesRef.current = retryComposerImages;
-        setComposerDraftPrompt(composerDraftTarget, promptForSend);
+        setComposerDraftPrompt(composerDraftTarget, snapshot.draftPromptText);
         addComposerDraftImages(composerDraftTarget, retryComposerImages);
         composerRef.current?.resetCursorState({
-          cursor: collapseExpandedComposerCursor(promptForSend, promptForSend.length),
-          prompt: promptForSend,
+          cursor: collapseExpandedComposerCursor(
+            snapshot.draftPromptText,
+            snapshot.draftPromptText.length,
+          ),
+          prompt: snapshot.draftPromptText,
           detectTrigger: true,
         });
+        composerRef.current?.restoreEphemeralBrowserContext(snapshot.ephemeralBrowserContext);
         scheduleComposerFocus();
       }
       setThreadError(threadIdForSend, describeSendFailureMessage(err, "Failed to send message."));
@@ -5440,8 +5592,140 @@ export default function ChatView(props: ChatViewProps) {
     }
   };
 
+  const autoNudgeTerminalTurnKey =
+    isServerThread &&
+    activeThread &&
+    activeLatestTurn?.state === "completed" &&
+    activeLatestTurn.completedAt &&
+    latestTurnSettled &&
+    activeThread.session?.status === "ready"
+      ? `${activeThread.environmentId}:${activeThread.id}:${activeLatestTurn.turnId}`
+      : null;
+  const autoNudgeThreadKey = activeThread
+    ? `${activeThread.environmentId}:${activeThread.id}`
+    : null;
+  const autoNudgeLatestUserMessageAt =
+    activeThread?.messages.findLast((message) => message.role === "user")?.createdAt ?? null;
+  autoNudgeTerminalTurnKeyRef.current = autoNudgeTerminalTurnKey;
+  const autoNudgeHasPendingWork =
+    isWorking ||
+    isComposerConnecting ||
+    isSendBusy ||
+    sendInFlightRef.current ||
+    queueDispatchInFlightRef.current ||
+    activeFollowUpQueue.length > 0 ||
+    activeSteeringFollowUpInFlight ||
+    activeQueuedFollowUpPendingDispatch ||
+    Boolean(activeThreadId && pendingSteerInterruptRecoveryByThreadId[activeThreadId]) ||
+    pendingApprovals.length > 0 ||
+    pendingUserInputs.length > 0 ||
+    respondingRequestIds.length > 0 ||
+    respondingUserInputRequestIds.length > 0 ||
+    Boolean(activeThread?.error) ||
+    showPlanFollowUpPrompt;
+  const autoNudgeProviderAvailable =
+    activeProviderStatus?.status === "ready" &&
+    activeProviderStatus.enabled &&
+    activeProviderStatus.installed &&
+    activeProviderStatus.availability !== "unavailable" &&
+    activeProviderStatus.auth.status === "authenticated" &&
+    providerAccountCanAcceptTurn(activeProviderStatus) &&
+    !activeEnvironmentUnavailable;
+  useEffect(() => {
+    if (
+      !backgroundAutoNudgeOwnerForRoute ||
+      backgroundAutoNudgeState.status !== "active" ||
+      (!activeFollowUpQueue.length &&
+        !activeSteeringFollowUpInFlight &&
+        !activeQueuedFollowUpPendingDispatch &&
+        !pendingApprovals.length &&
+        !pendingUserInputs.length &&
+        !respondingRequestIds.length &&
+        !respondingUserInputRequestIds.length &&
+        !showPlanFollowUpPrompt)
+    ) {
+      return;
+    }
+    getBackgroundAutoNudgeController().pause("Queued work or operator attention is pending.");
+  }, [
+    activeFollowUpQueue.length,
+    activeQueuedFollowUpPendingDispatch,
+    activeSteeringFollowUpInFlight,
+    backgroundAutoNudgeOwnerForRoute,
+    backgroundAutoNudgeState.status,
+    pendingApprovals.length,
+    pendingUserInputs.length,
+    respondingRequestIds.length,
+    respondingUserInputRequestIds.length,
+    showPlanFollowUpPrompt,
+  ]);
+  const autoNudgeEligibilityInput = {
+    terminalTurnKey: autoNudgeTerminalTurnKey,
+    // The app-level coordinator exclusively owns an opted-in background
+    // thread, including while it is visible. This prevents duplicate local
+    // and background consumers from racing the same terminal turn.
+    mode: backgroundAutoNudgeOwnerForRoute ? ("off" as const) : autoNudgeMode,
+    hasManualActivity: promptRef.current.trim().length > 0 || composerImagesRef.current.length > 0,
+    hasPendingWork: autoNudgeHasPendingWork,
+    providerAvailable: autoNudgeProviderAvailable,
+  };
+  const autoNudgeEligible = canScheduleAutoNudge(autoNudgeEligibilityInput);
+  const autoNudgeEligibilityRef = useRef(autoNudgeEligibilityInput);
+  autoNudgeEligibilityRef.current = autoNudgeEligibilityInput;
+  const autoNudgeDispatchRef = useRef<(() => void) | null>(null);
+  autoNudgeDispatchRef.current = () => {
+    const prompt = autoNudgePromptForMode(autoNudgeMode);
+    if (!prompt) return;
+    // `onSend` reads this ref synchronously, so this does not rely on a
+    // React render race to deliver the exact selected nudge text.
+    promptRef.current = prompt;
+    composerImagesRef.current = [];
+    setComposerDraftPrompt(composerDraftTarget, prompt);
+    void onSend();
+  };
+
+  useEffect(() => {
+    const terminalTurnKey = autoNudgeTerminalTurnKey;
+    const baseline = autoNudgeCompletionBaselineRef.current;
+    if (baseline.threadKey !== autoNudgeThreadKey) {
+      baseline.threadKey = autoNudgeThreadKey;
+      baseline.initialized = false;
+    }
+    if (!baseline.initialized) {
+      baseline.initialized = true;
+      if (terminalTurnKey !== null) {
+        // A completed turn already present when the view loads is context,
+        // not a newly generated completion event.
+        autoNudgeLedgerRef.current.mark(terminalTurnKey);
+      }
+      return;
+    }
+    const alreadySent = terminalTurnKey !== null && autoNudgeLedgerRef.current.has(terminalTurnKey);
+    if (!autoNudgeEligible || terminalTurnKey === null || alreadySent) return;
+    if (
+      !canDispatchAutoNudge({
+        terminalTurnKey,
+        current: autoNudgeEligibilityRef.current,
+        alreadyConsumed: autoNudgeLedgerRef.current.has(terminalTurnKey),
+      })
+    ) {
+      return;
+    }
+    // Consume synchronously with the completion observation. Re-renders and
+    // duplicate completion events cannot authorize another prompt.
+    autoNudgeLedgerRef.current.mark(terminalTurnKey);
+    autoNudgeDispatchRef.current?.();
+  }, [
+    autoNudgeActivityRevision,
+    autoNudgeEligible,
+    autoNudgeMode,
+    autoNudgeTerminalTurnKey,
+    autoNudgeThreadKey,
+  ]);
+
   const onSteer = async (e?: { preventDefault: () => void }) => {
     e?.preventDefault();
+    recordManualAutoNudgeActivity();
     if (
       !activeThread ||
       isSendBusy ||
@@ -5550,7 +5834,7 @@ export default function ChatView(props: ChatViewProps) {
       toastManager.add({
         type: "error",
         title: "Could not interrupt turn",
-        description: "Cafe Code is not connected.",
+        description: "Club Code is not connected.",
       });
       return;
     }
@@ -6359,7 +6643,12 @@ export default function ChatView(props: ChatViewProps) {
   const shouldRenderPlanSidebar = planSidebarOpen && hasPlanSidebarContent;
 
   return (
-    <div className="group/chat-view flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden bg-background">
+    <div
+      className={cn(
+        "group/chat-view flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden bg-background",
+        localMediaBackgroundEffective && "bg-background/55 backdrop-blur-[1px]",
+      )}
+    >
       {/* Top bar — hidden while the mobile composer has the on-screen keyboard
           open (data attribute set by ChatComposer) to maximize vertical room. */}
       <header
@@ -6388,6 +6677,15 @@ export default function ChatView(props: ChatViewProps) {
           diffOpen={diffOpen}
           onToggleDiff={onToggleDiff}
         />
+        {activeWorkspaceRoot ? (
+          <button
+            type="button"
+            className="ml-auto rounded px-2 py-1 text-xs hover:bg-muted"
+            onClick={() => setWorkspaceObservatoryOpen(true)}
+          >
+            Observe workspace
+          </button>
+        ) : null}
       </header>
 
       {/* Error banner */}
@@ -6399,9 +6697,9 @@ export default function ChatView(props: ChatViewProps) {
       {/* Main content area with optional plan sidebar */}
       <div className="flex min-h-0 min-w-0 flex-1">
         {/* Chat column */}
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <div className="@container/chat-column flex min-h-0 min-w-0 flex-1 flex-col">
           {/* Messages Wrapper */}
-          <div className="relative flex min-h-0 flex-1 flex-col">
+          <div ref={registerChatAnchor} className="relative flex min-h-0 flex-1 flex-col">
             {/* Messages — LegendList handles virtualization and scrolling internally */}
             <MessagesTimeline
               key={activeThread.id}
@@ -6436,6 +6734,7 @@ export default function ChatView(props: ChatViewProps) {
             />
 
             {/* scroll to bottom pill — shown when user has scrolled away from the bottom */}
+            <ChatMediaOverlay />
             {showScrollToBottom && (
               <div className="pointer-events-none absolute bottom-1 left-1/2 z-30 flex -translate-x-1/2 justify-center py-1.5">
                 <button
@@ -6452,6 +6751,7 @@ export default function ChatView(props: ChatViewProps) {
 
           {/* Input bar */}
           <div
+            data-chat-input-bar="true"
             className={cn(
               "pl-[calc(env(safe-area-inset-left)+0.75rem)] pr-[calc(env(safe-area-inset-right)+0.75rem)] pt-1.5 sm:pl-[calc(env(safe-area-inset-left)+1.25rem)] sm:pr-[calc(env(safe-area-inset-right)+1.25rem)] sm:pt-2",
               // NOTE: intentionally NOT adding env(safe-area-inset-bottom) here.
@@ -6466,6 +6766,72 @@ export default function ChatView(props: ChatViewProps) {
             <div className="relative isolate">
               <ComposerBannerStack className="relative z-0" items={composerBannerItems} />
               <div className="relative z-10">
+                <AutoNudgeControl
+                  mode={autoNudgeMode}
+                  disabled={!isServerThread}
+                  backgroundEnabled={settings.autoNudgeBackgroundContinuation}
+                  backgroundDispatchSupported={supportsBackgroundAutoNudgeDispatchLock()}
+                  backgroundOwnedByThisThread={backgroundAutoNudgeOwnerForRoute}
+                  backgroundStatus={backgroundAutoNudgeState.status}
+                  backgroundRounds={backgroundAutoNudgeState.sentRounds}
+                  backgroundMaxRounds={settings.autoNudgeMaxRounds}
+                  backgroundReason={backgroundAutoNudgeState.reason}
+                  backgroundLedger={
+                    backgroundAutoNudgeLastOwnerForRoute ? backgroundAutoNudgeState.ledger : []
+                  }
+                  onModeChange={(mode) => {
+                    if (mode === "off") {
+                      consumeAutoNudgeTerminalForManualActivity(
+                        autoNudgeLedgerRef.current,
+                        autoNudgeTerminalTurnKeyRef.current,
+                      );
+                    }
+                    if (mode === "off") {
+                      getBackgroundAutoNudgeController().stop("Auto Nudge mode was turned off.");
+                    }
+                    updateClientSettings({
+                      autoNudgeMode: mode,
+                      ...(mode === "off" ? { autoNudgeBackgroundContinuation: false } : {}),
+                    });
+                  }}
+                  onBackgroundChange={(enabled) => {
+                    if (!activeThread || !isServerThread) return;
+                    if (enabled) {
+                      getBackgroundAutoNudgeController().start(
+                        {
+                          environmentId: activeThread.environmentId,
+                          threadId: activeThread.id,
+                        },
+                        autoNudgeLatestUserMessageAt,
+                        autoNudgeTerminalTurnKey,
+                      );
+                      if (
+                        activeFollowUpQueue.length > 0 ||
+                        activeSteeringFollowUpInFlight ||
+                        activeQueuedFollowUpPendingDispatch ||
+                        pendingApprovals.length > 0 ||
+                        pendingUserInputs.length > 0 ||
+                        respondingRequestIds.length > 0 ||
+                        respondingUserInputRequestIds.length > 0 ||
+                        showPlanFollowUpPrompt
+                      ) {
+                        getBackgroundAutoNudgeController().pause(
+                          "Queued work or operator attention is pending.",
+                        );
+                      }
+                    } else {
+                      getBackgroundAutoNudgeController().stop(
+                        "Background continuation stopped by the operator.",
+                      );
+                    }
+                    updateClientSettings({ autoNudgeBackgroundContinuation: enabled });
+                  }}
+                  onPauseBackground={() =>
+                    getBackgroundAutoNudgeController().pause("Paused by the operator.")
+                  }
+                  onResumeBackground={() => getBackgroundAutoNudgeController().resume()}
+                  onStop={stopAutoNudge}
+                />
                 <ChatComposer
                   composerRef={composerRef}
                   composerDraftTarget={composerDraftTarget}
@@ -6496,7 +6862,7 @@ export default function ChatView(props: ChatViewProps) {
                   activeProposedPlan={activeProposedPlan}
                   activePlan={activePlan as { turnId?: TurnId } | null}
                   sidebarProposedPlan={sidebarProposedPlan as { turnId?: TurnId } | null}
-                  planSidebarLabel={planSidebarLabel}
+                  planSidebarLabel="Plan / Workflow"
                   planSidebarOpen={shouldRenderPlanSidebar}
                   goalControlsSupported={goalControlsSupported}
                   runtimeMode={runtimeMode}
@@ -6543,6 +6909,7 @@ export default function ChatView(props: ChatViewProps) {
                   onOpenGoalDialog={openThreadGoalDialog}
                   focusComposer={focusComposer}
                   scheduleComposerFocus={scheduleComposerFocus}
+                  onManualActivity={recordManualAutoNudgeActivity}
                   setThreadError={setThreadError}
                   onExpandImage={onExpandTimelineImage}
                 />
@@ -6601,8 +6968,15 @@ export default function ChatView(props: ChatViewProps) {
             markdownCwd={gitCwd ?? undefined}
             workspaceRoot={activeWorkspaceRoot}
             timestampFormat={timestampFormat}
+            activeTab={rightPanelTab}
+            workflowSnapshot={workflowSnapshot}
+            workflowNodeExpandedById={workflowNodeExpandedById}
+            workflowObservatoryEnabled={workflowObservatoryAvailable}
+            workflowStallWarningSeconds={settings.workflowStallWarningSeconds}
             mode="sidebar"
             onClose={closePlanSidebar}
+            onActiveTabChange={handleRightPanelTabChange}
+            onWorkflowNodeExpandedChange={handleWorkflowNodeExpandedChange}
           />
         ) : null}
       </div>
@@ -6618,8 +6992,15 @@ export default function ChatView(props: ChatViewProps) {
             markdownCwd={gitCwd ?? undefined}
             workspaceRoot={activeWorkspaceRoot}
             timestampFormat={timestampFormat}
+            activeTab={rightPanelTab}
+            workflowSnapshot={workflowSnapshot}
+            workflowNodeExpandedById={workflowNodeExpandedById}
+            workflowObservatoryEnabled={workflowObservatoryAvailable}
+            workflowStallWarningSeconds={settings.workflowStallWarningSeconds}
             mode="sheet"
             onClose={closePlanSidebar}
+            onActiveTabChange={handleRightPanelTabChange}
+            onWorkflowNodeExpandedChange={handleWorkflowNodeExpandedChange}
           />
         </RightPanelSheet>
       ) : null}
@@ -6627,6 +7008,12 @@ export default function ChatView(props: ChatViewProps) {
       {expandedImage && (
         <ExpandedImageDialog preview={expandedImage} onClose={closeExpandedImage} />
       )}
+      <WorkspaceObservatory
+        open={workspaceObservatoryOpen}
+        onOpenChange={setWorkspaceObservatoryOpen}
+        environmentId={environmentId}
+        workspaceRoot={activeWorkspaceRoot}
+      />
       {activeThread && goalControlsSupported ? (
         <ThreadGoalDialog
           open={threadGoalDialog.open}

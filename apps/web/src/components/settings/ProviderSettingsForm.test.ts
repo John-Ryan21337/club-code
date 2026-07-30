@@ -18,9 +18,11 @@ describe("ProviderSettingsForm helpers", () => {
     expect(deriveProviderSettingsFields(codex!).map((field) => field.key)).toEqual([
       "runtimeSource",
       "binaryPath",
+      "ossMode",
       "homePath",
       "shadowHomePath",
       "autoCompactTokenLimit",
+      "ultraCaching",
     ]);
   });
 
@@ -46,7 +48,7 @@ describe("ProviderSettingsForm helpers", () => {
         {
           value: "bundled",
           label: "Bundled runtime",
-          description: "Use Cafe Code's managed Windows runtime and provider install.",
+          description: "Use Club Code's managed Windows runtime and provider install.",
         },
       ],
     });

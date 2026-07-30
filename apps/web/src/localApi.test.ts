@@ -1,5 +1,6 @@
 import {
   CommandId,
+  DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES,
   DEFAULT_CLIENT_SETTINGS,
   DEFAULT_SERVER_SETTINGS,
   type DesktopBridge,
@@ -200,7 +201,53 @@ function makeDesktopBridge(overrides: Partial<DesktopBridge> = {}): DesktopBridg
       advertisedHost: null,
     }),
     getAdvertisedEndpoints: async () => [],
+    getWindowOpacityState: async () => ({
+      supported: false,
+      enabled: false,
+      opacity: 0.9,
+      effectiveOpacity: 1,
+      reason: "unsupported-platform",
+    }),
+    setWindowOpacityPreference: async ({ opacity }) => ({
+      supported: false,
+      enabled: false,
+      opacity,
+      effectiveOpacity: 1,
+      reason: "unsupported-platform",
+    }),
     pickFolder: async () => null,
+    getLocalMediaCapability: async () => ({
+      available: false,
+      engine: { label: "VLC", version: null, reason: "Unavailable in browser tests." },
+    }),
+    pickLocalMedia: async () => null,
+    releaseLocalMedia: async () => false,
+    openEmbeddedBrowser: async () => {
+      throw new Error("openEmbeddedBrowser not implemented in test");
+    },
+    closeEmbeddedBrowser: async () => {
+      throw new Error("closeEmbeddedBrowser not implemented in test");
+    },
+    setEmbeddedBrowserBounds: async () => {
+      throw new Error("setEmbeddedBrowserBounds not implemented in test");
+    },
+    shareEmbeddedBrowser: async () => {
+      throw new Error("shareEmbeddedBrowser not implemented in test");
+    },
+    navigateEmbeddedBrowser: async () => {
+      throw new Error("navigateEmbeddedBrowser not implemented in test");
+    },
+    controlEmbeddedBrowserHistory: async () => {
+      throw new Error("controlEmbeddedBrowserHistory not implemented in test");
+    },
+    snapshotEmbeddedBrowser: async () => null,
+    clickEmbeddedBrowser: async () => {
+      throw new Error("clickEmbeddedBrowser not implemented in test");
+    },
+    typeInEmbeddedBrowser: async () => {
+      throw new Error("typeInEmbeddedBrowser not implemented in test");
+    },
+    onEmbeddedBrowserState: () => () => undefined,
     confirm: async () => true,
     setTheme: async () => undefined,
     showContextMenu: async () => null,
@@ -305,6 +352,7 @@ const baseServerConfig: ServerConfig = {
   },
   settings: DEFAULT_SERVER_SETTINGS,
   clientSettings: DEFAULT_CLIENT_SETTINGS,
+  ambientExperienceCapabilities: DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES,
 };
 
 const baseGitStatus: VcsStatusResult = {
@@ -401,6 +449,27 @@ describe("wsApi", () => {
     emitEvent(shellStreamListeners, shellEvent);
 
     expect(onShellEvent).toHaveBeenCalledWith(shellEvent);
+  });
+
+  it("keeps the observatory optional for older environment clients", () => {
+    const api = createEnvironmentApi(rpcClientMock as never);
+    expect(api.workspaceObservatory).toBeUndefined();
+  });
+
+  it("forwards read-only observatory calls without changing their payloads", async () => {
+    const workspaceObservatory = {
+      tree: vi.fn(async () => ({ relativePath: "", entries: [], truncated: false })),
+      readFile: vi.fn(),
+      databases: vi.fn(),
+      tables: vi.fn(),
+      rows: vi.fn(),
+      activity: vi.fn(),
+    };
+    const api = createEnvironmentApi({ ...rpcClientMock, workspaceObservatory } as never);
+
+    await api.workspaceObservatory!.tree({ cwd: "/workspace" });
+
+    expect(workspaceObservatory.tree).toHaveBeenCalledWith({ cwd: "/workspace" });
   });
 
   it("forwards terminal launch requests directly to the RPC client", async () => {

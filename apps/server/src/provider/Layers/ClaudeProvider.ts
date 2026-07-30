@@ -524,7 +524,7 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
         version: null,
         status: "warning",
         auth: { status: "unknown" },
-        message: "Claude is disabled in Cafe Code settings.",
+        message: "Claude is disabled in Club Code settings.",
       },
     });
   }
@@ -538,7 +538,7 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
     const error = versionProbe.failure;
     const missingMessage =
       claudeSettings.runtimeSource === "bundled"
-        ? "Cafe Code bundled Claude runtime is not installed or not configured."
+        ? "Club Code bundled Claude runtime is not installed or not configured."
         : "Claude Agent CLI (`claude`) is not installed or not on PATH.";
     return buildServerProvider({
       presentation: CLAUDE_PRESENTATION,
@@ -693,7 +693,7 @@ export const makePendingClaudeProvider = (
           version: null,
           status: "warning",
           auth: { status: "unknown" },
-          message: "Claude is disabled in Cafe Code settings.",
+          message: "Claude is disabled in Club Code settings.",
         },
       });
     }

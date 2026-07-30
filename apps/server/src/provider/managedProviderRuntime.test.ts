@@ -104,7 +104,7 @@ describe("managedProviderRuntime", () => {
     expect(runtime.layout).toBeNull();
     expect(runtime.binaryPath).toBe("/__cafecode_bundled_runtime_unavailable__/codex");
     expect(runtime.unavailableReason).toBe(
-      "Cafe Code bundled provider runtimes are currently supported only on Windows.",
+      "Club Code bundled provider runtimes are currently supported only on Windows.",
     );
     expect(runtime.maintenanceCapabilities.update).toBeNull();
   });

@@ -31,7 +31,7 @@ Function CafeCodeManagedRuntimePageCreate
     Abort
   ${EndIf}
 
-  ${NSD_CreateLabel} 0 0 100% 32u "Cafe Code can install a managed, user-local Node/npm runtime for Codex and Claude."
+  ${NSD_CreateLabel} 0 0 100% 32u "Club Code can install a managed, user-local Node/npm runtime for Codex and Claude."
   Pop $0
 
   ${NSD_CreateCheckbox} 0 40u 100% 14u "Enable Cafe-managed Codex and Claude runtime"

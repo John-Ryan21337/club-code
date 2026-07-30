@@ -20,10 +20,13 @@
     "@cafecode/contracts": "workspace:*",
     "@cafecode/shared": "workspace:*",
     "@effect/platform-node": "catalog:",
+    "@tesseract.js-data/eng": "1.0.0",
+    "@tesseract.js-data/jpn": "1.0.0",
     "effect": "catalog:",
     "electron": "42.2.0",
     "electron-updater": "^6.6.2",
-    "node-pty": "^1.1.0"
+    "node-pty": "^1.1.0",
+    "tesseract.js": "7.0.0"
   },
   "devDependencies": {
     "@effect/language-service": "catalog:",
@@ -33,5 +36,5 @@
     "typescript": "catalog:",
     "vitest": "catalog:"
   },
-  "productName": "Cafe Code (Alpha)"
+  "productName": "Club Code (Alpha)"
 }

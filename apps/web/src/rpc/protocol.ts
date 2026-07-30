@@ -190,7 +190,7 @@ export function createWsRpcProtocolLayer(
       socket.addEventListener(
         "error",
         () => {
-          lifecycle.onError("Unable to connect to the Cafe Code server WebSocket.");
+          lifecycle.onError("Unable to connect to the Club Code server WebSocket.");
         },
         { once: true },
       );

@@ -126,6 +126,10 @@ jobs:
       - name: Build native artifact
         run: corepack yarn ${{ matrix.command }}
 
+      - name: Smoke-test installed Windows artifact
+        if: matrix.name == 'windows-x64'
+        run: corepack yarn test:native-windows-artifact
+
       - name: Upload native artifact
         uses: actions/upload-artifact@v6
         with:

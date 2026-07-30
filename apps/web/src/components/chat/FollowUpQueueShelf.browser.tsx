@@ -30,7 +30,7 @@ describe("FollowUpQueueShelf", () => {
           },
         ]}
         actionLabel="Send"
-        actionTitle="Cafe Code will send this follow-up as soon as the active turn can accept it."
+        actionTitle="Club Code will send this follow-up as soon as the active turn can accept it."
         onToggleExpanded={onToggleExpanded}
         onAction={onAction}
         onRemove={onRemove}
@@ -81,7 +81,7 @@ describe("FollowUpQueueShelf", () => {
           },
         ]}
         actionLabel="Send"
-        actionTitle="Cafe Code will send this follow-up as soon as the active turn can accept it."
+        actionTitle="Club Code will send this follow-up as soon as the active turn can accept it."
         onToggleExpanded={onToggleExpanded}
         onAction={onAction}
         onRemove={vi.fn()}
@@ -105,7 +105,7 @@ describe("FollowUpQueueShelf", () => {
         .element(page.getByRole("button", { name: "Send" }))
         .toHaveAttribute(
           "title",
-          "Cafe Code will send this follow-up as soon as the active turn can accept it.",
+          "Club Code will send this follow-up as soon as the active turn can accept it.",
         );
     } finally {
       await screen.unmount();
@@ -131,7 +131,7 @@ describe("FollowUpQueueShelf", () => {
           },
         ]}
         actionLabel="Send"
-        actionTitle="Cafe Code will send this follow-up as soon as the active turn can accept it."
+        actionTitle="Club Code will send this follow-up as soon as the active turn can accept it."
         onToggleExpanded={vi.fn()}
         onAction={vi.fn()}
         onRemove={onRemove}
@@ -181,7 +181,7 @@ describe("FollowUpQueueShelf", () => {
           },
         ]}
         actionLabel="Send"
-        actionTitle="Cafe Code will send this follow-up as soon as the active turn can accept it."
+        actionTitle="Club Code will send this follow-up as soon as the active turn can accept it."
         onToggleExpanded={vi.fn()}
         onAction={onAction}
         onRemove={onRemove}
@@ -240,7 +240,7 @@ describe("FollowUpQueueShelf", () => {
           },
         ]}
         actionLabel="Send"
-        actionTitle="Cafe Code will send this follow-up as soon as the active turn can accept it."
+        actionTitle="Club Code will send this follow-up as soon as the active turn can accept it."
         onToggleExpanded={onToggleExpanded}
         onAction={vi.fn()}
         onRemove={vi.fn()}

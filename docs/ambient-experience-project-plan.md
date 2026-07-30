@@ -1,0 +1,273 @@
+# Club Code Experience Suite Project Plan
+
+Status: the broad baseline suite exists, but the complete operator request
+ledger is not finished. This plan separates validated foundations,
+implementable backlog, security research, and externally blocked requests.
+
+## Outcome
+
+Deliver Club Code's operator-switchable full-window atmosphere, media
+presentation, local VLC lane, audio visualization, supervised browser,
+workflow/workspace visibility, completion audio, efficient provider controls,
+and Club Code branding while preserving provider truth, secrets, platform
+boundaries, and operator control.
+
+## Working agreement
+
+- An auditor repairs every in-scope defect it finds and validates the repair in
+  the same context. A different model performs another audit round only when
+  validation or quality remains unsatisfactory.
+- Documentation follows production behavior. Settings, test fixtures,
+  prototypes, and design intentions do not count as completion.
+- New autonomy requires explicit budgets, stop controls, and visible evidence.
+- Privileged browser, filesystem, inbox, media-capture, and provider actions
+  remain least-privilege and user-approved.
+- User-facing branding is Club Code. Cafe Code names remain only for upstream
+  package, command, environment, data, or protocol compatibility.
+
+## Status definitions
+
+| State                       | Meaning                                                                             |
+| --------------------------- | ----------------------------------------------------------------------------------- |
+| Implemented                 | Production path exists within documented boundaries                                 |
+| Landed - validation pending | Code and focused tests exist, but final composite gates have not been recorded      |
+| In progress                 | An active implementation lane exists; it is not yet a production capability         |
+| Partial                     | A useful subset exists and the missing requested behavior is planned or constrained |
+| Planned                     | No production implementation yet; safe acceptance criteria are defined              |
+| Research                    | Feasibility, policy, performance, licensing, or platform proof is required first    |
+| Externally blocked          | A supported upstream entitlement/API/measurement source does not exist              |
+
+## Implemented foundations
+
+| Slice                            | State                       | Current boundary                                                                                                                        |
+| -------------------------------- | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| Settings/contracts/compatibility | Implemented                 | Bounded decoders, patches, reset coverage, legacy-safe defaults                                                                         |
+| First-run presentation profile   | Landed - validation pending | Missing-settings-only visual seed, maximized main-window launch, and no existing/personal-state overwrite                               |
+| Snow/rain/Matrix atmosphere      | Implemented                 | Full-window layer, color/opacity/speed/density, Roman/Japanese stream mix, 2ch/cat/live-work safety, motion/performance caps            |
+| Atmosphere Console               | Implemented                 | Movable/anchored geometry, zero-token parser, bounded loopback LM Studio fallback                                                       |
+| Full LM Studio provider          | Landed - validation pending | Explicit local instance template creates a normal Codex OSS/LM Studio provider distinct from the control console                        |
+| Ambient image/GIF                | Landed - validation pending | Single persistent asset plus bounded directory queue, manual/timed cycling, custom geometry, glow, and Theater mode                     |
+| YouTube core                     | Partial                     | Video/playlist URLs, public search gate, owner playlist discovery, strict controls, bounded URL queues, and two bundled public examples |
+| Spotify core                     | Partial                     | Official Embed and explicit display-audio visualization                                                                                 |
+| Cinema/floating media            | Partial                     | Project rail + video + chat layout, local video background, presets/custom geometry                                                     |
+| Direct local/VLC media           | Landed - validation pending | 64-item/64-GiB picker queues, previous/next, bounded failure skip, private VLC playback tokens, filename title, and adaptive glow       |
+| Visualizer                       | Implemented                 | Spectrum and 395 bundled Butterchurn/MilkDrop presets; no microphone or direct iframe extraction                                        |
+| Workflow Observatory             | Landed - validation pending | Existing cards/tree plus optional explicit-parent node-edge graph with pan/zoom and accessible alternative                              |
+| Workspace Observatory            | Landed - validation pending | Read-only files/SQLite, up to eight panes, visible-pane polling, capped diffs, and evidence-labeled agent focus                         |
+| Supervised embedded browser      | Landed - validation pending | Exact-thread/provider/tab/origin Codex/Claude tool grant over native per-action approval; no pixel OCR/inbox/provider secret entry      |
+| Auto Nudge                       | Landed - validation pending | Completion-event-only foreground path plus a default-off one-thread background controller with a hard round cap and durable dedupe      |
+| Usage and Model Pacing           | Partial                     | Provider-reported windows/reset and advisory reserve pacing                                                                             |
+| Ultra Caching/efficiency         | Partial                     | Stable handoffs, earlier compaction and honest cache/compaction counters                                                                |
+| Audit-and-repair                 | Partial                     | Cross-project installable skill; no automatic workflow enforcement                                                                      |
+| Completion alerts                | Partial                     | Windows exact-voice stereo path, ping, up to eight local 5-MiB/15-second clips, and honest web fallback                                 |
+| Whole-window opacity             | Partial                     | Validated Windows 65–100% capability path; no Linux/KDE blur or compositor parity                                                       |
+| Club Code branding               | Implemented                 | Club Code visible default with compatibility identifiers retained                                                                       |
+
+## Recently validated and active delivery slices
+
+| Item                               | Current implementation                                                                                                                                                                                                                                                                                                                                                                   | Validation evidence/status                                                                                                                                                                                                            |
+| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Matrix color modes                 | Fixed, uniform rainbow, per-string Rainbow Extra, uniform music-reactive, and per-string music-reactive modes. The bounded signal reuses direct/VLC media or one explicitly approved display-audio stream and falls back on quiet/stale/teardown.                                                                                                                                        | Earlier modes passed composite gates; expanded focused settings/atmosphere/audio-signal tests pass; fresh composite pending                                                                                                           |
+| Adaptive YouTube glow              | Bounded current-video thumbnail palette with strict host/video validation and fixed-color fallback                                                                                                                                                                                                                                                                                       | Focused glow, browser, CSP/network-failure, and composite gates passed                                                                                                                                                                |
+| Adaptive direct/VLC glow           | Explicit fixed/adaptive mode samples only the exact approved current video into a transient 32×18 canvas at 750 ms, derives four edge colors, and falls back after a bounded three misses                                                                                                                                                                                                | Author focused unit/Chromium evidence plus independent audit/repair passed; fresh composite gate pending                                                                                                                              |
+| Composer `.txt` import             | Native picker defaults to all files; UTF-8/BOM-marked UTF-16 text up to 256 KiB is inserted visibly into the prompt, subject to the universal 120,000-character final-prompt ceiling                                                                                                                                                                                                     | Composer picker/drop/paste, size/cap, invalid-file, and composite gates passed                                                                                                                                                        |
+| Bundled YouTube queue examples     | Japanese: 39 supplied/36 accepted/three malformed IDs. EDM: 20/19/one. The fresh profile activates the Japanese session queue and requests autoplay with a null persisted source; existing source/manual choices win, and runtime queues stay session-only.                                                                                                                              | Independent audit/repair passed; 42 focused unit and four focused browser tests plus the dated 2026-07-23 composite gates passed                                                                                                      |
+| Matrix Extra and project telemetry | Uniform/per-string rainbow, uniform/per-string audio-reactive modes, approved display-audio reuse, safe EN/JA NETWORK/FETCH, DATABASE/QUERY, and BUILD/COMPILE string pairs, same-category exact-item/tool horizontal/±60° hex links, endpoint pulses, bright white traveling packet with fading trail, independent-random/selected-rotating-Matrix palettes, reduced-motion static path | Implementation complete; focused validation pending after the independent correlation audit; fresh composite gate pending                                                                                                             |
+| Ambient directory cycle            | Single image retained; bounded transient directory scan creates a persistent content-addressed queue with manual/timed cycling, custom sizing and Theater presentation                                                                                                                                                                                                                   | Author focused contracts/server/web/browser evidence and independent quota/lifecycle audit passed; fresh composite pending                                                                                                            |
+| LM Studio instance template        | Settings > Providers exposes a distinct LM Studio choice that creates a real custom Codex instance with `ossMode: true` and safe routing ID                                                                                                                                                                                                                                              | Focused pure/Settings Chromium evidence and independent cross-feature audit passed; fresh composite pending                                                                                                                           |
+| Live Workspace Observatory         | Visible/open-pane polling, pause/resume, capped optional line changes, primary-key-proven row diffs, stable agent colors, evidence-labeled follow behavior                                                                                                                                                                                                                               | Focused contracts/server/unit/Chromium evidence and independent cross-feature audit passed; fresh composite pending                                                                                                                   |
+| Workflow graph                     | List view retained; bounded pan/zoom graph draws explicit provider parent edges and reports missing/cyclic dependencies as unknown                                                                                                                                                                                                                                                       | Focused layout/Chromium evidence and independent accessibility/security audit passed; fresh composite pending                                                                                                                         |
+| Provider-callable browser          | Ephemeral exact thread/provider/tab/origin grant exposes redacted DOM snapshot, fresh click, non-sensitive type, same-origin navigation, and history to Codex/Claude while retaining native per-action approval                                                                                                                                                                          | Independent audit repaired identity binding, drift, lifecycle revocation, expiry timers, and provider gates; 21 focused plus 7 broker tests and affected browser/type/lint gates pass; fresh composite pending                        |
+| Background Auto Nudge              | Separate default-off app-level owner for one selected thread; immediate completion-event dispatch, five rounds by default, hard 1–20-round cap, visible 40-entry ledger, normal-history sends, durable dedupe, exclusive cross-tab Web Lock, and fail-closed projection acknowledgement                                                                                                  | Timer-based scheduling and elapsed-time caps removed; completion identity is the only dispatch authority; focused contracts, controller, Settings, and integration validation required                                                |
+| Direct/VLC multi-file queue        | Session-only 64-item/64-GiB picker queue, safe filename title, previous/next, ended advance, bounded error skip, one browser URL or VLC child at a time, stable queue ID, and separate rotating playback token                                                                                                                                                                           | Independent audit repaired non-regular/duplicate/spoof rejection, title sanitization, malformed-result and picker-race handling; 63 focused plus 12 Chromium tests and affected type/build/lint gates passed; fresh composite pending |
+
+### Active first-run presentation profile
+
+Missing Client Settings receive Matrix regular Rainbow at `0.55` opacity, speed
+`4`, density `2.5`, Japanese ratio `0.45`, 2ch/live-work/Matrix-colored
+activity links; Rainbow Extra remains selectable. Null-source custom
+bottom-right/large/floating video uses adaptive glow `0.65`, activates the
+Japanese session queue, and requests autoplay. The bundled
+bottom-left/large/floating GIF uses glow `0.35`. Workflow, two-minute usage
+polling, and Model Pacing with a 5% reserve are on.
+
+The main window always launches maximized. Whole-window opacity stays disabled,
+with `0.84` as the missing/reset slider value. Existing explicit settings and
+onboarding, project, thread, path, provider/account, capture, and custom session
+state are not copied or overwritten. Implementation and documentation are
+present; focused and fresh composite validation remain pending.
+
+The pre-existing Matrix modes, adaptive YouTube glow, composer text import, and
+bundled queue-example slices have recorded passing composite evidence for
+earlier checkouts. Expanded/new active-delivery rows above rely on their stated
+focused and independent evidence until a fresh composite run finishes. None of
+these items completes live YouTube iframe sampling or arbitrary chat file
+attachments.
+
+## Prioritized request-gap backlog
+
+### Phase 1 - close high-value gaps using existing trusted inputs
+
+| ID    | Requested capability and current gap                                                                                     | Planned scope                                                                                                                                                                                                                                                                 | Acceptance                                                                                                                                                                                                    |
+| ----- | ------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| P1-01 | **Landed - validation pending.** Music-reactive Matrix for YouTube/Spotify plus uniform/per-string reactive variants.    | Reuse only bounded envelope/beat/coarse-band features from the already approved display-audio analyser; never request a second stream or microphone.                                                                                                                          | One capture prompt; Matrix reacts for approved display audio; stopping/share loss clears the signal; no PCM/bins/history/persistence; direct/VLC behavior remains sound.                                      |
+| P1-02 | **Landed - validation pending.** Adaptive glow for approved direct/VLC video.                                            | Downsample only the exact current approved renderer video at a low bounded cadence and derive four edge colors; audio, hidden/background, unready and tainted paths use fixed glow.                                                                                           | 32×18/750 ms cap; three-miss retry bound; reduced-motion/static and hidden/teardown cleanup; no frame/path/token persistence or model context; independent audit passed.                                      |
+| P1-03 | **Landed - validation pending.** Local/VLC queue, previous/next, failure skip, and current filename title.               | A picker-approved 64-item/64-GiB session queue uses one current browser URL or VLC child, stable queue ownership, distinct rotating playback tokens, and a sanitized filename title. Embedded metadata remains unclaimed; network URLs and raw VLC arguments remain excluded. | No renderer raw paths; previous/next/ended/error behavior is bounded; malformed/stale results fail closed; owner/navigation/replacement/shutdown cleanup and one-item/all-failed behavior test.               |
+| P1-04 | **Landed - validation pending.** Reliable agent-colored file focus remains limited by provider evidence coverage.        | Normalize only explicit safe operation, agent ID, and contained path identity; provide stable colors and follow-file behavior.                                                                                                                                                | No prompts/output/secret paths; explicit observed-vs-correlated label; fixtures are not production evidence; unsafe paths still fail through the read-only RPC.                                               |
+| P1-05 | **Landed - validation pending.** Live database/file panes with honest row identity and attribution.                      | Refresh open visible panes only; cap cadence/diffs; prove row identity from a complete safe primary key and keep writer attribution separate.                                                                                                                                 | No arbitrary SQL/write path; pause hidden/unmounted; stale response rejection; row/byte/rate caps; never infer a row writer without provider evidence.                                                        |
+| P1-06 | **Landed - validation pending.** Matrix should convey real network/database/build activity, not decorative fake traffic. | Project safe provider-observed categories into bounded pulses; connect only same-category endpoints with the exact same reported item/tool identity; route at hex angles with a traveling white packet.                                                                       | No agent/operation/dependency/temporal-only or cross-category edges; random or Matrix palette; 24-event/8-link/TTL/brightness caps; reduced-motion static path; no prompts/URLs/SQL/IDs/paths/hidden traffic. |
+| P1-07 | **Landed - validation pending.** Cycle a selected ambience directory while retaining the single-image path.              | Transient bounded directory scan; validated content-addressed queue; stable order; manual/timed cycling; floating/custom and Theater presentation; reference-aware cleanup.                                                                                                   | No stored paths or auto-enable; 10 MiB/file, 80 MiB cycle, and 160 MiB transactional profile quota; 128 scanned/24 accepted; 3–3600s interval; selection rollback and timer/visibility tests.                 |
+| P1-08 | **Landed - validation pending.** Make LM Studio an explicit selectable provider instance.                                | Add a local template that creates the existing supported Codex OSS configuration under a safe unique provider instance ID.                                                                                                                                                    | Ordinary Codex unchanged; no cloud-login claim; local endpoint/model prerequisites visible; generic thread/chat instance routing works.                                                                       |
+
+### Phase 2 - richer visibility and bounded continuity
+
+| ID    | Requested capability and current gap                                                                                                            | Planned scope                                                                                                                                                                                                                                                                                                      | Acceptance                                                                                                                                                                                                                                                                           |
+| ----- | ----------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| P2-01 | **Landed - validation pending.** n8n-like graphical workflow view while retaining semantic cards/tree.                                          | Optional node-edge canvas from the same provider-truth projection with pan/zoom/reset, status, selected-node details, and an accessible relationship list.                                                                                                                                                         | Only explicit parent edges; cycles/missing parents unknown; no hidden reasoning; bounded deterministic layout cost; list view and evidence-based stall language remain.                                                                                                              |
+| P2-02 | More visible sub-agent state and elapsed/stalled information. Existing cards depend on provider evidence and do not expose all provider events. | Extend adapter mappings and event freshness display; show observed last activity and transport health separately.                                                                                                                                                                                                  | No fabricated idle state; elapsed time has a defined start source; disconnected provider differs from stalled work; tests per supported provider.                                                                                                                                    |
+| P2-03 | **Landed - validation pending.** Auto Nudge may continue after leaving its explicitly owned chat.                                               | A separate default-off app-level controller owns one thread, uses the exact two operator-approved prompts, dispatches only from a newly completed response, and enforces a configurable hard round cap, pause/resume/stop/transfer, durable dedupe, an exclusive cross-tab Web Lock, and a visible bounded ledger. | Survives navigation/reload/restart without duplicate dispatch; no timer or elapsed wall-clock state can authorize a prompt; unavailable/denied locking fails closed; manual/offscreen-draft/queued/operator/provider trouble wins; every automated prompt is normal visible history. |
+| P2-04 | Hierarchical ultra-caching summaries. Current compaction is a stable flat handoff.                                                              | Prototype a versioned multi-level summary/index with source pointers, invalidation, deletion, and provider-specific retrieval.                                                                                                                                                                                     | Benchmark accuracy and total input tokens against baseline; no secret expansion; stale summaries are invalidated; operator can inspect/delete; disable if quality regresses.                                                                                                         |
+| P2-05 | Auditor-as-fixer should be a repeatable Club Code workflow, not only an installed skill.                                                        | Add an opt-in orchestration template: independent audit, same-context repair, validation, and another independent model only after a failed quality gate.                                                                                                                                                          | Preserves user authority and dirty work; exact changed files/tests are logged; no forced model if unavailable; bounded rounds and explicit stop.                                                                                                                                     |
+| P2-06 | Spotify "connector" parity. Current implementation is an Embed, not an account library/search browser.                                          | Feasibility and implementation through official Spotify APIs with minimal scopes for search and operator-owned playlists; keep playback in supported Embed/SDK rules.                                                                                                                                              | No password collection or entitlement bypass; token storage and revocation reviewed; scopes displayed; unsupported regions/accounts fail honestly.                                                                                                                                   |
+
+### Phase 3 - privileged automation and platform expansion
+
+| ID    | Requested capability and current gap                                                                                        | Planned scope                                                                                                                                                                                                   | Acceptance                                                                                                                                                                                                                   |
+| ----- | --------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| P3-01 | **Landed - validation pending.** Agent-operable browser over the existing supervised isolated browser.                      | An ephemeral exact-thread/provider/tab/origin Codex/Claude grant exposes redacted DOM snapshot, fresh click, non-sensitive type, same-origin navigation and history while retaining native per-action approval. | One-to-ten-minute/40-request/four-queue/90-second caps; lifecycle/identity drift revokes; process-only bearer never enters the durable ledger; sensitive/CAPTCHA/OTP/credential paths fail closed; independent audit passed. |
+| P3-02 | OCR/image recognition to reduce screen-context tokens. No pixel OCR exists.                                                 | Evaluate an offline bounded OCR worker invoked explicitly on a selected viewport/region; return compact text and confidence separate from DOM accessibility text.                                               | No background screen scraping; image never leaves device by default; language packs/CPU/memory bounded; confidence and source type visible; deletion on close.                                                               |
+| P3-03 | Email-code access for 2FA. No inbox connector exists.                                                                       | Research an explicit least-privilege mail connector for operator-selected messages/codes, with a one-time handoff that never enters model context.                                                              | No password storage, autonomous login, CAPTCHA/2FA bypass, bulk inbox access, or silent code use; provider scopes/revocation and secret isolation independently audited.                                                     |
+| P3-04 | Automatic Model Pacing. Current pacing is advisory.                                                                         | Evaluate explicit operator routing policies based only on trustworthy provider windows, reserves, model capabilities, task pinning, and hard spend/dispatch limits.                                             | Dry-run preview; no reroute when quota is missing/stale; visible reason per decision; manual pin wins; full kill switch and bounded automation.                                                                              |
+| P3-05 | Licensed "cute" Japanese voices and cross-platform stereo. Current complete path depends on exact installed Windows voices. | Review offline/licensed voice packages, previews, package size, privacy, macOS/Linux native playback, and reversible dual-channel mixing.                                                                       | License/distribution approved; no cloud speech by surprise; exact language/gender truth; bounded files; Windows regression coverage; clear unavailable states.                                                               |
+| P3-06 | KDE/Konsole-style transparency. Current Linux path is unavailable.                                                          | Prototype compositor-safe Linux opacity/blur separately from Electron transparent-window assumptions.                                                                                                           | Works on named tested compositor/session combinations; retains sandbox/input correctness; fail-closed elsewhere; no blanket Linux support claim.                                                                             |
+
+## Externally blocked or deliberately excluded
+
+| ID   | Request                                                                                       | Status and revisit condition                                                                                                                                                                                      |
+| ---- | --------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| X-01 | Embedded YouTube Premium login, private/ad-free entitlement, and guaranteed playlist playback | Externally blocked. The current OAuth/PKCE connection discovers permitted playlists only. Revisit only with an official embedded-player entitlement flow that does not collect passwords.                         |
+| X-02 | Club Code project/chat rails inside native YouTube fullscreen                                 | Externally blocked by player-owned cross-origin fullscreen. Cinema remains the supported Club Code layout. A separate capture-backed presentation would require explicit consent, policy, and performance review. |
+| X-03 | Live YouTube-frame Ambilight from iframe pixels                                               | Externally blocked by cross-origin isolation. Current adaptive mode uses validated current-video artwork. Revisit only with an explicit display-capture design; never imply thumbnail colors are live pixels.     |
+| X-04 | Exact tokens or dollars saved per model                                                       | Externally blocked without provider-issued counterfactual accounting. Keep provider cache/compaction observations clearly non-additive; never synthesize a savings number.                                        |
+| X-05 | Arbitrary VLC network streams, playlists, arguments, and a universal codec guarantee          | Deliberately excluded from the trusted picker-file contract. A future URL scheme would need a separate SSRF, protocol, credential, and process-argument threat model.                                             |
+| X-06 | Autonomous 2FA/CAPTCHA bypass or secret-bearing model context                                 | Deliberately excluded. Supervision, least privilege, and a non-model secret channel are permanent constraints.                                                                                                    |
+
+## Dependency order
+
+```text
+Fresh composite validation
+  |
+  +-- approved audio signal ---- Matrix display-audio parity [landed]
+  +-- provider event truth ----- Matrix category pulses -> explicit hex links [landed]
+  +-- directory picker --------- image queue + Theater [landed]
+  +-- approved video frames ---- local/VLC adaptive glow [landed]
+  +-- picker/VLC lifecycle ----- local queue + filename title [landed]
+  +-- provider event adapters -- file focus + richer agent state
+  |                                |
+  |                                +-- workflow graph [landed]
+  +-- read-only SQLite --------- bounded live pane refresh [landed]
+  +-- continuation ledger ------ background bounded Auto Nudge [landed]
+  +-- compaction evaluation ---- hierarchical summaries
+  +-- audit workflow ---------- bounded audit/repair orchestration
+  |
+  +-- security design --------- browser tool [landed] -> OCR -> optional mail connector
+  +-- platform/licensing ------ voices and Linux compositor research
+```
+
+## Cross-cutting security acceptance
+
+Every delivery slice must preserve these constraints:
+
+- No raw prompt, output, secret, path, browser-sensitive value, or private token
+  leaks into Matrix terms, media state, observatories, alerts, usage telemetry,
+  logs, or public errors.
+- First-run seeding occurs only when Client Settings are absent. It cannot
+  overwrite an existing document or copy onboarding, project, thread, local
+  path, provider/account, capture, or custom session state. Its default-on
+  live-work/activity surfaces remain independently switchable, bounded, and
+  sanitized.
+- Local LLM atmosphere control remains loopback-only, bounded, strict-JSON, and
+  optional. It receives no project/chat/files and never falls back to cloud.
+- Iframe/browser surfaces use exact source/origin rules. Embedded-stream audio
+  analysis uses explicit display-media consent, never microphone or direct
+  iframe extraction.
+- VLC accepts only operator-approved files under a bounded control contract.
+  Private paths and route tokens stay outside renderer state and logs.
+- Observatory access remains contained, capped, and read-only. Attribution is
+  shown only from explicit provider evidence.
+- Automation is opt-in, bounded by visible limits, interruptible, and recorded
+  in an operator-visible ledger.
+- Completion speech uses fixed text only. Imported composer text is visible and
+  editable before it enters provider context.
+
+## Validation plan
+
+### Historical composite evidence — 2026-07-23
+
+This evidence predates the newer active-delivery slices above and must not be
+treated as a current-checkout composite result. For that dated checkout, the
+playlist slice received an independent audit-and-repair pass that fixed the
+delayed-persisted-source startup race. That checkout then passed:
+
+- repository format and format-check;
+- lint with only existing repository warnings;
+- all nine workspace typecheck tasks;
+- all nine root test tasks, including 1,356 passing and one skipped server test;
+- all 26 Chromium browser files and 220 browser tests;
+- the production desktop build and desktop smoke;
+- native Windows whole-window opacity (`1 -> 0.8 -> 1`);
+- the classified-term repository audit.
+
+The focused playlist evidence was 42 unit tests and four production-workspace
+browser tests. The exact example source files remain unchanged; the strict
+parser reports rather than repairs the four supplied 10-character YouTube IDs.
+
+### Composite gate procedure
+
+Run after concurrent feature and documentation lanes settle:
+
+1. Format and format-check the repository.
+2. Run lint and all workspace typechecks.
+3. Run unit and browser suites, including the new atmosphere, audio-signal,
+   adaptive-glow, composer-text, provider-browser, background-continuation, and
+   local/VLC queue tests, plus first-run seeding/non-overwrite and bundled-asset
+   coverage.
+4. Build production desktop artifacts.
+5. Run relevant native desktop smoke tests, especially opacity, display-audio,
+   VLC lifecycle, browser sandbox, and completion speech.
+6. Launch from `M:\CafeCode\Start-CafeCode.ps1` and observe startup, health,
+   navigation, media teardown, and clean shutdown.
+7. Audit README and settings copy against the canon's Implemented/Partial/
+   Blocked labels.
+
+Historical pass counts are evidence for their earlier checkout only. Do not
+copy them into the final ledger after new code lands; record the fresh exact
+counts and warnings.
+
+### Per-backlog-item gate
+
+Each item requires:
+
+- focused tests for its success, denial, teardown, stale, and malformed-input
+  paths;
+- an independent audit-and-repair pass that did not author the implementation;
+- relevant full web/server/desktop gates;
+- a privacy and capability-boundary review;
+- updated canon, plan, user documentation, and exact platform support;
+- a manual smoke using only the authority the UI visibly requested.
+
+## Current handoff checklist
+
+- [ ] All concurrent changes have settled without overwriting user work.
+- [ ] Canon and project plan match the final source behavior.
+- [ ] Fresh-profile tests prove that only a missing settings document receives
+      the branded seed, existing settings remain untouched, personal state is
+      absent, and live-work/activity controls can still be disabled.
+- [ ] Fresh composite formatting/lint/type/unit/browser/build gates are recorded.
+- [ ] Native smoke tests and observed source launch pass.
+- [ ] The desktop shortcut targets `M:\CafeCode\Start-CafeCode.ps1`.
+- [ ] Public documentation describes display-audio Matrix reuse only after the
+      operator's existing visualizer consent and does not claim live YouTube
+      pixels, Premium playback, pixel OCR/email-code automation, secret-bearing
+      browser access, exact token savings, or Linux/KDE transparency.
+- [ ] Backlog items remain visible rather than being relabeled as complete.

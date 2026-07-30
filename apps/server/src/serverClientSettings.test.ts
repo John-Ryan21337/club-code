@@ -1,6 +1,8 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   ClientSettingsPatch,
+  CLUB_CODE_FIRST_RUN_CLIENT_SETTINGS,
+  DEFAULT_AMBIENT_CLIENT_SETTINGS,
   DEFAULT_CLIENT_SETTINGS,
   MAX_SIDEBAR_STAR_SPEED,
 } from "@cafecode/contracts";
@@ -9,6 +11,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
@@ -40,6 +43,24 @@ it.layer(NodeServices.layer)("server client settings", (it) => {
     }),
   );
 
+  it.effect("persists the Club Code first-run profile when the settings file is absent", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const config = yield* ServerConfig;
+      const service = yield* ServerClientSettingsService;
+
+      assert.isFalse(yield* fs.exists(config.clientSettingsPath));
+
+      const settings = yield* service.getSettings;
+      const raw = yield* fs.readFileString(config.clientSettingsPath);
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      const persisted = JSON.parse(raw) as typeof settings;
+
+      assert.deepEqual(settings, CLUB_CODE_FIRST_RUN_CLIENT_SETTINGS);
+      assert.deepEqual(persisted, CLUB_CODE_FIRST_RUN_CLIENT_SETTINGS);
+    }).pipe(Effect.provide(makeServerClientSettingsLayer())),
+  );
+
   it.effect("migrates legacy desktop client-settings.json branding images", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -53,6 +74,7 @@ it.layer(NodeServices.layer)("server client settings", (it) => {
           brandWordmarkPrefix: "Acme",
           sidebarBrandImageDataUrl: legacyPngDataUrl,
           chatCopyFormat: "plainText",
+          autoNudgeMode: "steady-progress",
         }),
       );
 
@@ -71,6 +93,7 @@ it.layer(NodeServices.layer)("server client settings", (it) => {
       assert.equal(persisted.sidebarBrandImageDataUrl, "");
       assert.isFalse(raw.includes("data:image"));
       assert.equal(settings.chatCopyFormat, "plainText");
+      assert.equal(settings.autoNudgeMode, "steady-progress");
       assert.equal(settings.showSidebarMascot, DEFAULT_CLIENT_SETTINGS.showSidebarMascot);
     }).pipe(Effect.provide(makeServerClientSettingsLayer())),
   );
@@ -97,6 +120,121 @@ it.layer(NodeServices.layer)("server client settings", (it) => {
     }).pipe(Effect.provide(makeServerClientSettingsLayer())),
   );
 
+  it.effect("resets only malformed ambient settings in a direct persisted document", () => {
+    const loggedMessages: unknown[] = [];
+    const logger = Logger.make(({ message }) => {
+      loggedMessages.push(message);
+    });
+
+    return Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const config = yield* ServerConfig;
+      const malformedPersistedValue = "MALFORMED_PERSISTED_AMBIENT_VALUE";
+      yield* fs.writeFileString(
+        config.clientSettingsPath,
+        // @effect-diagnostics-next-line preferSchemaOverJson:off
+        JSON.stringify({
+          timestampFormat: "24-hour",
+          showSidebarMascot: false,
+          fallingEffectsEnabled: true,
+          fallingEffectSpeed: malformedPersistedValue,
+        }),
+      );
+
+      const service = yield* ServerClientSettingsService;
+      const settings = yield* service.getSettings;
+      const raw = yield* fs.readFileString(config.clientSettingsPath);
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      const persisted = JSON.parse(raw) as typeof settings;
+
+      assert.equal(settings.timestampFormat, "24-hour");
+      assert.isFalse(settings.showSidebarMascot);
+      for (const [key, value] of Object.entries(DEFAULT_AMBIENT_CLIENT_SETTINGS)) {
+        assert.deepEqual(settings[key as keyof typeof DEFAULT_AMBIENT_CLIENT_SETTINGS], value);
+        assert.deepEqual(persisted[key as keyof typeof DEFAULT_AMBIENT_CLIENT_SETTINGS], value);
+      }
+
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      const serializedLogs = JSON.stringify(loggedMessages);
+      assert.include(serializedLogs, "recovered malformed ambient client settings");
+      assert.notInclude(serializedLogs, JSON.stringify(config.clientSettingsPath));
+      assert.notInclude(serializedLogs, malformedPersistedValue);
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          makeServerClientSettingsLayer(),
+          Logger.layer([logger], { mergeWithExisting: false }),
+        ),
+      ),
+    );
+  });
+
+  it.effect("recovers malformed ambient settings from legacy wrapped documents", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const config = yield* ServerConfig;
+      yield* fs.writeFileString(
+        config.clientSettingsPath,
+        // @effect-diagnostics-next-line preferSchemaOverJson:off
+        JSON.stringify({
+          settings: {
+            timestampFormat: "12-hour",
+            showSidebarSearch: false,
+            ambientVideoEnabled: true,
+            ambientVideoSource: { kind: "video" },
+          },
+        }),
+      );
+
+      const service = yield* ServerClientSettingsService;
+      const settings = yield* service.getSettings;
+      const raw = yield* fs.readFileString(config.clientSettingsPath);
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      const persisted = JSON.parse(raw) as Record<string, unknown>;
+
+      assert.equal(settings.timestampFormat, "12-hour");
+      assert.isFalse(settings.showSidebarSearch);
+      assert.notProperty(persisted, "settings");
+      assert.equal(persisted.timestampFormat, "12-hour");
+      assert.equal(persisted.showSidebarSearch, false);
+      assert.deepEqual(
+        Object.fromEntries(
+          Object.keys(DEFAULT_AMBIENT_CLIENT_SETTINGS).map((key) => [
+            key,
+            settings[key as keyof typeof settings],
+          ]),
+        ),
+        DEFAULT_AMBIENT_CLIENT_SETTINGS,
+      );
+      for (const [key, value] of Object.entries(DEFAULT_AMBIENT_CLIENT_SETTINGS)) {
+        assert.deepEqual(persisted[key], value);
+      }
+    }).pipe(Effect.provide(makeServerClientSettingsLayer())),
+  );
+
+  it.effect("keeps whole-document corruption on conservative schema defaults", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const config = yield* ServerConfig;
+      yield* fs.writeFileString(
+        config.clientSettingsPath,
+        // @effect-diagnostics-next-line preferSchemaOverJson:off
+        JSON.stringify({
+          timestampFormat: "24-hour",
+          showSidebarMascot: "not-a-boolean",
+          fallingEffectsEnabled: true,
+          fallingEffectKind: "matrix",
+        }),
+      );
+
+      const service = yield* ServerClientSettingsService;
+      const settings = yield* service.getSettings;
+
+      assert.deepEqual(settings, DEFAULT_CLIENT_SETTINGS);
+      assert.notDeepEqual(settings, CLUB_CODE_FIRST_RUN_CLIENT_SETTINGS);
+    }).pipe(Effect.provide(makeServerClientSettingsLayer())),
+  );
+
   it.effect("patches and persists the full client settings document atomically", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -108,6 +246,7 @@ it.layer(NodeServices.layer)("server client settings", (it) => {
         defaultEditor: "cursor",
         powerSaveBlockerMode: "during-chats",
         showSidebarAttribution: false,
+        autoNudgeMode: "hardcore-fanout",
       });
       const raw = yield* fs.readFileString(config.clientSettingsPath);
       // @effect-diagnostics-next-line preferSchemaOverJson:off
@@ -117,6 +256,7 @@ it.layer(NodeServices.layer)("server client settings", (it) => {
       assert.equal(persisted.brandWordmarkPrefix, "Lab");
       assert.equal(persisted.defaultEditor, "cursor");
       assert.equal(persisted.powerSaveBlockerMode, "during-chats");
+      assert.equal(persisted.autoNudgeMode, "hardcore-fanout");
       assert.equal(persisted.showSidebarMascot, DEFAULT_CLIENT_SETTINGS.showSidebarMascot);
       assert.equal(persisted.chatCopyFormat, DEFAULT_CLIENT_SETTINGS.chatCopyFormat);
     }).pipe(Effect.provide(makeServerClientSettingsLayer())),

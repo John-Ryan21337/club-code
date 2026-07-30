@@ -12,6 +12,7 @@ export const DESKTOP_RUNTIME_SELF_TEST_RESULT_ENV = "CAFE_CODE_RUNTIME_SELF_TEST
 export const DESKTOP_RUNTIME_SELF_TEST_OUTPUT_PREFIX = "CAFE_CODE_RUNTIME_SELF_TEST=";
 
 const PTY_TIMEOUT_MS = 10_000;
+const CHECK_TIMEOUT_MS = 15_000;
 
 export interface DesktopRuntimeSelfTestDependencies {
   readonly platform: NodeJS.Platform;
@@ -25,6 +26,7 @@ export interface DesktopRuntimeSelfTestDependencies {
   readonly packagedArtifactAudit: () => Promise<boolean>;
   readonly updateMetadataPresent: () => Promise<boolean>;
   readonly managedRuntimePresent: () => Promise<boolean | null>;
+  readonly windowOpacityRoundTrip: () => Promise<boolean | null>;
 }
 
 export interface DesktopRuntimeSelfTestResult {
@@ -40,6 +42,7 @@ export interface DesktopRuntimeSelfTestResult {
     readonly packagedArtifactAudit: boolean;
     readonly updateMetadata: boolean;
     readonly managedRuntime: boolean | null;
+    readonly windowOpacity: boolean | null;
   };
   readonly failedChecks: readonly string[];
 }
@@ -67,12 +70,17 @@ async function runPtyRoundTrip(): Promise<boolean> {
   return await new Promise<boolean>((resolve) => {
     let output = "";
     let settled = false;
+    let timeout: NodeJS.Timeout | undefined;
     const finish = (result: boolean) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timeout);
-      dataDisposable.dispose();
-      exitDisposable.dispose();
+      if (timeout) clearTimeout(timeout);
+      try {
+        dataDisposable.dispose();
+        exitDisposable.dispose();
+      } catch {
+        // Disposal is best-effort after the result has been decided.
+      }
       resolve(result);
     };
     const dataDisposable = terminal.onData((chunk) => {
@@ -81,8 +89,12 @@ async function runPtyRoundTrip(): Promise<boolean> {
     const exitDisposable = terminal.onExit(({ exitCode }) => {
       finish(exitCode === 0 && output.includes(marker));
     });
-    const timeout = setTimeout(() => {
-      terminal.kill();
+    timeout = setTimeout(() => {
+      try {
+        terminal.kill();
+      } catch {
+        // A failed kill is still a failed, bounded self-test result.
+      }
       finish(false);
     }, PTY_TIMEOUT_MS);
   });
@@ -108,6 +120,34 @@ async function runSafeStorageRoundTrip(): Promise<boolean> {
   const value = `cafecode-safe-storage-${randomUUID()}`;
   const encrypted = Electron.safeStorage.encryptString(value);
   return encrypted.length > 0 && Electron.safeStorage.decryptString(encrypted) === value;
+}
+
+async function runWindowOpacityRoundTrip(): Promise<boolean | null> {
+  if (process.platform !== "win32" && process.platform !== "darwin") return null;
+  const window = new Electron.BrowserWindow({
+    show: false,
+    width: 320,
+    height: 240,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+  try {
+    const initial = window.getOpacity();
+    window.setOpacity(0.8);
+    const changed = window.getOpacity();
+    window.setOpacity(1);
+    const restored = window.getOpacity();
+    return (
+      Math.abs(initial - 1) <= 0.02 &&
+      Math.abs(changed - 0.8) <= 0.02 &&
+      Math.abs(restored - 1) <= 0.02
+    );
+  } finally {
+    if (!window.isDestroyed()) window.destroy();
+  }
 }
 
 function makeRealDependencies(): DesktopRuntimeSelfTestDependencies {
@@ -140,6 +180,7 @@ function makeRealDependencies(): DesktopRuntimeSelfTestDependencies {
         join(managedRuntimeRoot, "node", managedRuntimeArch, "npm.cmd"),
       ].every(existsSync);
     },
+    windowOpacityRoundTrip: runWindowOpacityRoundTrip,
   };
 }
 
@@ -151,10 +192,40 @@ async function runBooleanCheck(action: () => Promise<boolean>): Promise<boolean>
   }
 }
 
+async function withTimeout<A>(promise: Promise<A>, timeoutMs: number): Promise<A> {
+  let timeout: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error("Desktop runtime self-test timed out.")),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
+async function runNullableCheck(
+  action: () => Promise<boolean | null>,
+  timeoutMs: number,
+): Promise<boolean | null> {
+  try {
+    return await withTimeout(action(), timeoutMs);
+  } catch {
+    return false;
+  }
+}
+
 export async function collectDesktopRuntimeSelfTestResult(
   dependencies: DesktopRuntimeSelfTestDependencies,
+  options: { readonly checkTimeoutMs?: number } = {},
 ): Promise<DesktopRuntimeSelfTestResult> {
-  await dependencies.whenReady();
+  const checkTimeoutMs = Math.max(1, options.checkTimeoutMs ?? CHECK_TIMEOUT_MS);
+  await withTimeout(dependencies.whenReady(), checkTimeoutMs);
   const [
     safeStorage,
     sqlite,
@@ -163,14 +234,16 @@ export async function collectDesktopRuntimeSelfTestResult(
     packagedArtifactAudit,
     updateMetadata,
     managedRuntime,
+    windowOpacity,
   ] = await Promise.all([
-    runBooleanCheck(dependencies.safeStorageRoundTrip),
-    runBooleanCheck(dependencies.sqliteRoundTrip),
-    runBooleanCheck(dependencies.ptyRoundTrip),
-    runBooleanCheck(dependencies.packagedResourcesPresent),
-    runBooleanCheck(dependencies.packagedArtifactAudit),
-    runBooleanCheck(dependencies.updateMetadataPresent),
-    dependencies.managedRuntimePresent().catch(() => false),
+    runBooleanCheck(() => withTimeout(dependencies.safeStorageRoundTrip(), checkTimeoutMs)),
+    runBooleanCheck(() => withTimeout(dependencies.sqliteRoundTrip(), checkTimeoutMs)),
+    runBooleanCheck(() => withTimeout(dependencies.ptyRoundTrip(), checkTimeoutMs)),
+    runBooleanCheck(() => withTimeout(dependencies.packagedResourcesPresent(), checkTimeoutMs)),
+    runBooleanCheck(() => withTimeout(dependencies.packagedArtifactAudit(), checkTimeoutMs)),
+    runBooleanCheck(() => withTimeout(dependencies.updateMetadataPresent(), checkTimeoutMs)),
+    runNullableCheck(dependencies.managedRuntimePresent, checkTimeoutMs),
+    runNullableCheck(dependencies.windowOpacityRoundTrip, checkTimeoutMs),
   ]);
   const failedChecks = [
     safeStorage ? null : "safeStorage",
@@ -180,6 +253,7 @@ export async function collectDesktopRuntimeSelfTestResult(
     packagedArtifactAudit ? null : "packagedArtifactAudit",
     updateMetadata ? null : "updateMetadata",
     managedRuntime === false ? "managedRuntime" : null,
+    windowOpacity === false ? "windowOpacity" : null,
   ].filter((value): value is string => value !== null);
 
   return {
@@ -195,6 +269,7 @@ export async function collectDesktopRuntimeSelfTestResult(
       packagedArtifactAudit,
       updateMetadata,
       managedRuntime,
+      windowOpacity,
     },
     failedChecks,
   };
@@ -218,6 +293,7 @@ export async function runDesktopRuntimeSelfTestAndExit(): Promise<void> {
         packagedArtifactAudit: false,
         updateMetadata: false,
         managedRuntime: process.platform === "win32" ? false : null,
+        windowOpacity: process.platform === "win32" || process.platform === "darwin" ? false : null,
       },
       failedChecks: ["bootstrap"],
     };

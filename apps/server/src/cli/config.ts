@@ -1,7 +1,11 @@
 import * as NetService from "@cafecode/shared/Net";
 import { cafeCodeConfigWithDefault, cafeCodeOptionalValueConfig } from "@cafecode/shared/compatEnv";
 import { parsePersistedServerObservabilitySettings } from "@cafecode/shared/serverSettings";
-import { DesktopBackendBootstrap, PortSchema } from "@cafecode/contracts";
+import {
+  AMBIENT_EXPERIENCE_CAPABILITIES_VERSION,
+  DesktopBackendBootstrap,
+  PortSchema,
+} from "@cafecode/contracts";
 import * as Config from "effect/Config";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -25,6 +29,16 @@ import {
   type StartupPresentation,
 } from "../config.ts";
 import { expandHomePath, resolveBaseDir } from "../os-jank.ts";
+
+const GOOGLE_DESKTOP_OAUTH_CLIENT_ID_PATTERN =
+  /^[0-9]+-[a-z0-9][a-z0-9._-]{5,220}\.apps\.googleusercontent\.com$/u;
+
+export function normalizeGoogleDesktopOAuthClientId(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  return normalized && GOOGLE_DESKTOP_OAUTH_CLIENT_ID_PATTERN.test(normalized)
+    ? normalized
+    : undefined;
+}
 
 export const modeFlag = Flag.choice("mode", RuntimeMode.literals).pipe(
   Flag.withDescription("Runtime mode. `desktop` keeps loopback defaults unless overridden."),
@@ -122,6 +136,49 @@ const EnvServerConfig = Config.all({
     Config.boolean,
   ),
   logWebSocketEvents: cafeCodeOptionalValueConfig("CAFE_CODE_LOG_WS_EVENTS", Config.boolean),
+  youtubePublicDiscoveryApiKey: cafeCodeOptionalValueConfig(
+    "CAFE_CODE_YOUTUBE_API_KEY",
+    Config.string,
+  ),
+  youtubeOAuthDesktopClientId: cafeCodeOptionalValueConfig(
+    "CAFE_CODE_YOUTUBE_OAUTH_DESKTOP_CLIENT_ID",
+    Config.string,
+  ),
+  ambientExperienceAtmosphereEnabled: cafeCodeConfigWithDefault(
+    "CAFE_CODE_AMBIENT_ATMOSPHERE_ENABLED",
+    Config.boolean,
+    true,
+  ),
+  ambientExperienceImageEnabled: cafeCodeConfigWithDefault(
+    "CAFE_CODE_AMBIENT_IMAGE_ENABLED",
+    Config.boolean,
+    true,
+  ),
+  ambientExperienceYoutubePlayerEnabled: cafeCodeConfigWithDefault(
+    "CAFE_CODE_YOUTUBE_PLAYER_ENABLED",
+    Config.boolean,
+    true,
+  ),
+  ambientExperienceYoutubePublicDiscoveryEnabled: cafeCodeConfigWithDefault(
+    "CAFE_CODE_YOUTUBE_PUBLIC_DISCOVERY_ENABLED",
+    Config.boolean,
+    false,
+  ),
+  ambientExperienceYoutubeAccountConnectionEnabled: cafeCodeConfigWithDefault(
+    "CAFE_CODE_YOUTUBE_ACCOUNT_CONNECTION_ENABLED",
+    Config.boolean,
+    false,
+  ),
+  ambientExperienceSpotifyEmbedEnabled: cafeCodeConfigWithDefault(
+    "CAFE_CODE_SPOTIFY_EMBED_ENABLED",
+    Config.boolean,
+    true,
+  ),
+  ambientExperienceWorkflowObservatoryEnabled: cafeCodeConfigWithDefault(
+    "CAFE_CODE_WORKFLOW_OBSERVATORY_ENABLED",
+    Config.boolean,
+    true,
+  ),
 });
 
 export interface CliServerFlags {
@@ -336,6 +393,22 @@ export const resolveServerConfig = (
       () => (mode === "desktop" ? "127.0.0.1" : undefined),
     );
     const logLevel = Option.getOrElse(cliLogLevel, () => env.logLevel);
+    const youtubeOAuthDesktopClientId = normalizeGoogleDesktopOAuthClientId(
+      env.youtubeOAuthDesktopClientId,
+    );
+    const ambientExperienceCapabilities = {
+      version: AMBIENT_EXPERIENCE_CAPABILITIES_VERSION,
+      atmosphere: env.ambientExperienceAtmosphereEnabled,
+      ambientImage: env.ambientExperienceImageEnabled,
+      youtubePlayer: env.ambientExperienceYoutubePlayerEnabled,
+      youtubePublicDiscovery: env.ambientExperienceYoutubePublicDiscoveryEnabled,
+      youtubeAccountConnection:
+        mode === "desktop" &&
+        env.ambientExperienceYoutubeAccountConnectionEnabled &&
+        youtubeOAuthDesktopClientId !== undefined,
+      spotifyEmbed: env.ambientExperienceSpotifyEmbedEnabled,
+      workflowObservatory: env.ambientExperienceWorkflowObservatoryEnabled,
+    } as const;
 
     const config: ServerConfigShape = {
       logLevel,
@@ -370,6 +443,11 @@ export const resolveServerConfig = (
       desktopBootstrapToken,
       autoBootstrapProjectFromCwd,
       logWebSocketEvents,
+      ...(env.youtubePublicDiscoveryApiKey
+        ? { youtubePublicDiscoveryApiKey: env.youtubePublicDiscoveryApiKey }
+        : {}),
+      ...(youtubeOAuthDesktopClientId ? { youtubeOAuthDesktopClientId } : {}),
+      ambientExperienceCapabilities,
       providerDaemon: bootstrap?.providerDaemon,
       providerSupervisor: undefined,
     };

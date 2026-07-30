@@ -2,6 +2,7 @@ import { ProviderDriverKind } from "@cafecode/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
+  buildUsageTokenEfficiencyView,
   buildUsageTokenBreakdownView,
   formatUsageModelLabel,
   formatUsagePercentage,
@@ -16,11 +17,46 @@ describe("usageStatsPresentation", () => {
     expect(
       buildUsageTokenBreakdownView(
         [
-          { provider: CODEX, model: "gpt-small", outputTokens: 20 },
-          { provider: CLAUDE, model: "claude-opus", outputTokens: 75 },
-          { provider: CODEX, model: "gpt-large", outputTokens: 40 },
-          { provider: CODEX, model: "gpt-small", outputTokens: 10 },
-          { provider: CLAUDE, model: "unused", outputTokens: 0 },
+          {
+            provider: CODEX,
+            model: "gpt-small",
+            outputTokens: 20,
+            cachedInputTokens: 0,
+            cacheWriteInputTokens: 0,
+            compactedInputTokens: 0,
+          },
+          {
+            provider: CLAUDE,
+            model: "claude-opus",
+            outputTokens: 75,
+            cachedInputTokens: 0,
+            cacheWriteInputTokens: 0,
+            compactedInputTokens: 0,
+          },
+          {
+            provider: CODEX,
+            model: "gpt-large",
+            outputTokens: 40,
+            cachedInputTokens: 0,
+            cacheWriteInputTokens: 0,
+            compactedInputTokens: 0,
+          },
+          {
+            provider: CODEX,
+            model: "gpt-small",
+            outputTokens: 10,
+            cachedInputTokens: 0,
+            cacheWriteInputTokens: 0,
+            compactedInputTokens: 0,
+          },
+          {
+            provider: CLAUDE,
+            model: "unused",
+            outputTokens: 0,
+            cachedInputTokens: 0,
+            cacheWriteInputTokens: 0,
+            compactedInputTokens: 0,
+          },
         ],
         200,
       ),
@@ -42,6 +78,73 @@ describe("usageStatsPresentation", () => {
       ],
       attributedOutputTokens: 145,
       unattributedOutputTokens: 55,
+    });
+  });
+
+  it("keeps cache reuse, cache writes, and observed compaction separate per model", () => {
+    expect(
+      buildUsageTokenEfficiencyView([
+        {
+          provider: CODEX,
+          model: "gpt-5.6",
+          outputTokens: 5,
+          cachedInputTokens: 1_000,
+          cacheWriteInputTokens: 100,
+          compactedInputTokens: 400,
+        },
+        {
+          provider: CODEX,
+          model: "gpt-5.6",
+          outputTokens: 7,
+          cachedInputTokens: 250,
+          cacheWriteInputTokens: 25,
+          compactedInputTokens: 75,
+        },
+        {
+          provider: CLAUDE,
+          model: "claude-opus",
+          outputTokens: 3,
+          cachedInputTokens: 600,
+          cacheWriteInputTokens: 80,
+          compactedInputTokens: 0,
+        },
+      ]),
+    ).toEqual({
+      providers: [
+        {
+          provider: CODEX,
+          cachedInputTokens: 1_250,
+          cacheWriteInputTokens: 125,
+          compactedInputTokens: 475,
+          models: [
+            {
+              model: "gpt-5.6",
+              cachedInputTokens: 1_250,
+              cacheWriteInputTokens: 125,
+              compactedInputTokens: 475,
+            },
+          ],
+        },
+        {
+          provider: CLAUDE,
+          cachedInputTokens: 600,
+          cacheWriteInputTokens: 80,
+          compactedInputTokens: 0,
+          models: [
+            {
+              model: "claude-opus",
+              cachedInputTokens: 600,
+              cacheWriteInputTokens: 80,
+              compactedInputTokens: 0,
+            },
+          ],
+        },
+      ],
+      cachedInputTokens: 1_850,
+      cacheWriteInputTokens: 205,
+      compactedInputTokens: 475,
+      maxModelCachedInputTokens: 1_250,
+      maxModelCompactedInputTokens: 475,
     });
   });
 

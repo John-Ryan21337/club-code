@@ -1,7 +1,6 @@
-import { memo, useState, useCallback } from "react";
-import type { EnvironmentId } from "@cafecode/contracts";
+import { memo, useState, useCallback, useMemo, type KeyboardEvent } from "react";
+import type { EnvironmentId, WorkflowProjectionSnapshot } from "@cafecode/contracts";
 import { type TimestampFormat } from "@cafecode/contracts/settings";
-import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { ScrollArea } from "./ui/scroll-area";
 import ChatMarkdown from "./ChatMarkdown";
@@ -28,6 +27,10 @@ import { Menu, MenuItem, MenuPopup, MenuTrigger } from "./ui/menu";
 import { readEnvironmentApi } from "~/environmentApi";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
+import { WorkflowObservatory } from "./WorkflowObservatory";
+import type { RightPanelTab } from "../uiStateStore";
+
+const RIGHT_PANEL_TABS: readonly RightPanelTab[] = ["plan", "workflow"];
 
 function stepStatusIcon(status: string): React.ReactNode {
   if (status === "completed") {
@@ -59,8 +62,15 @@ interface PlanSidebarProps {
   markdownCwd: string | undefined;
   workspaceRoot: string | undefined;
   timestampFormat: TimestampFormat;
+  activeTab: RightPanelTab;
+  workflowSnapshot: WorkflowProjectionSnapshot;
+  workflowNodeExpandedById: Readonly<Record<string, boolean>>;
+  workflowObservatoryEnabled: boolean;
+  workflowStallWarningSeconds: number;
   mode?: "sheet" | "sidebar";
   onClose: () => void;
+  onActiveTabChange: (tab: RightPanelTab) => void;
+  onWorkflowNodeExpandedChange: (nodeId: string, expanded: boolean) => void;
 }
 
 const PlanSidebar = memo(function PlanSidebar({
@@ -71,8 +81,15 @@ const PlanSidebar = memo(function PlanSidebar({
   markdownCwd,
   workspaceRoot,
   timestampFormat,
+  activeTab,
+  workflowSnapshot,
+  workflowNodeExpandedById,
+  workflowObservatoryEnabled,
+  workflowStallWarningSeconds,
   mode = "sidebar",
   onClose,
+  onActiveTabChange,
+  onWorkflowNodeExpandedChange,
 }: PlanSidebarProps) {
   const [proposedPlanExpanded, setProposedPlanExpanded] = useState(false);
   const [isSavingToWorkspace, setIsSavingToWorkspace] = useState(false);
@@ -81,6 +98,10 @@ const PlanSidebar = memo(function PlanSidebar({
   const planMarkdown = activeProposedPlan?.planMarkdown ?? null;
   const displayedPlanMarkdown = planMarkdown ? stripDisplayedPlanMarkdown(planMarkdown) : null;
   const planTitle = planMarkdown ? proposedPlanTitle(planMarkdown) : null;
+  const rightPanelTabs = useMemo<readonly RightPanelTab[]>(
+    () => (workflowObservatoryEnabled ? RIGHT_PANEL_TABS : ["plan"]),
+    [workflowObservatoryEnabled],
+  );
 
   const handleCopyPlan = useCallback(() => {
     if (!planMarkdown) return;
@@ -126,6 +147,33 @@ const PlanSidebar = memo(function PlanSidebar({
       );
   }, [environmentId, planMarkdown, workspaceRoot]);
 
+  const handleTabKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLButtonElement>, currentTab: RightPanelTab) => {
+      const currentIndex = rightPanelTabs.indexOf(currentTab);
+      const nextIndex =
+        event.key === "ArrowRight" || event.key === "ArrowDown"
+          ? (currentIndex + 1) % rightPanelTabs.length
+          : event.key === "ArrowLeft" || event.key === "ArrowUp"
+            ? (currentIndex - 1 + rightPanelTabs.length) % rightPanelTabs.length
+            : event.key === "Home"
+              ? 0
+              : event.key === "End"
+                ? rightPanelTabs.length - 1
+                : null;
+      if (nextIndex === null) return;
+
+      event.preventDefault();
+      const nextTab = rightPanelTabs[nextIndex];
+      if (!nextTab) return;
+      onActiveTabChange(nextTab);
+      event.currentTarget.parentElement
+        ?.querySelectorAll<HTMLButtonElement>('[role="tab"]')
+        .item(nextIndex)
+        ?.focus();
+    },
+    [onActiveTabChange, rightPanelTabs],
+  );
+
   return (
     <div
       className={cn(
@@ -138,20 +186,42 @@ const PlanSidebar = memo(function PlanSidebar({
       {/* Header */}
       <div className="flex h-12 shrink-0 items-center justify-between border-b border-border/60 px-3">
         <div className="flex items-center gap-2">
-          <Badge
-            variant="secondary"
-            className="rounded-md bg-blue-500/10 px-1.5 py-0 text-[10px] font-semibold tracking-wide text-blue-400 uppercase"
+          <div
+            role="tablist"
+            aria-label="Thread details"
+            aria-orientation="horizontal"
+            className="flex items-center gap-1"
           >
-            {label}
-          </Badge>
-          {activePlan ? (
+            {rightPanelTabs.map((tab) => (
+              <Button
+                key={tab}
+                id={`right-panel-tab-${tab}`}
+                type="button"
+                size="xs"
+                variant={activeTab === tab ? "secondary" : "ghost"}
+                role="tab"
+                aria-selected={activeTab === tab}
+                aria-controls={`right-panel-${tab}`}
+                tabIndex={activeTab === tab ? 0 : -1}
+                onClick={() => onActiveTabChange(tab)}
+                onKeyDown={(event) => handleTabKeyDown(event, tab)}
+                className={cn(
+                  "h-7 rounded-md px-2 text-[10px] font-semibold tracking-wide uppercase",
+                  activeTab === tab && "bg-blue-500/10 text-blue-400",
+                )}
+              >
+                {tab === "plan" ? label : "Workflow"}
+              </Button>
+            ))}
+          </div>
+          {activeTab === "plan" && activePlan ? (
             <span className="text-[11px] text-muted-foreground/60">
               {formatTimestamp(activePlan.createdAt, timestampFormat)}
             </span>
           ) : null}
         </div>
         <div className="flex items-center gap-1">
-          {planMarkdown ? (
+          {activeTab === "plan" && planMarkdown ? (
             <Menu>
               <MenuTrigger
                 render={
@@ -183,7 +253,7 @@ const PlanSidebar = memo(function PlanSidebar({
             size="icon-xs"
             variant="ghost"
             onClick={onClose}
-            aria-label={`Close ${label.toLowerCase()} sidebar`}
+            aria-label="Close Plan and Workflow panel"
             className="text-muted-foreground/50 hover:text-foreground/70"
           >
             <PanelRightCloseIcon className="size-3.5" />
@@ -193,86 +263,104 @@ const PlanSidebar = memo(function PlanSidebar({
 
       {/* Content */}
       <ScrollArea className="min-h-0 flex-1">
-        <div className="p-3 space-y-4">
-          {/* Explanation */}
-          {activePlan?.explanation ? (
-            <p className="text-[13px] leading-relaxed text-muted-foreground/80">
-              {activePlan.explanation}
-            </p>
-          ) : null}
-
-          {/* Plan Steps */}
-          {activePlan && activePlan.steps.length > 0 ? (
-            <div className="space-y-1">
-              <p className="mb-2 text-[10px] font-semibold tracking-widest text-muted-foreground/40 uppercase">
-                Steps
+        {activeTab === "plan" ? (
+          <div
+            id="right-panel-plan"
+            role="tabpanel"
+            aria-labelledby="right-panel-tab-plan"
+            className="space-y-4 p-3"
+          >
+            {/* Explanation */}
+            {activePlan?.explanation ? (
+              <p className="text-[13px] leading-relaxed text-muted-foreground/80">
+                {activePlan.explanation}
               </p>
-              {activePlan.steps.map((step) => (
-                <div
-                  key={`${step.status}:${step.step}`}
-                  className={cn(
-                    "flex items-start gap-2.5 rounded-lg px-2.5 py-2 transition-colors duration-200",
-                    step.status === "inProgress" && "bg-blue-500/5",
-                    step.status === "completed" && "bg-emerald-500/5",
-                  )}
-                >
-                  <div className="mt-0.5">{stepStatusIcon(step.status)}</div>
-                  <p
+            ) : null}
+
+            {/* Plan Steps */}
+            {activePlan && activePlan.steps.length > 0 ? (
+              <div className="space-y-1">
+                <p className="mb-2 text-[10px] font-semibold tracking-widest text-muted-foreground/40 uppercase">
+                  Steps
+                </p>
+                {activePlan.steps.map((step) => (
+                  <div
+                    key={`${step.status}:${step.step}`}
                     className={cn(
-                      "text-[13px] leading-snug",
-                      step.status === "completed"
-                        ? "text-muted-foreground/50 line-through decoration-muted-foreground/20"
-                        : step.status === "inProgress"
-                          ? "text-foreground/90"
-                          : "text-muted-foreground/70",
+                      "flex items-start gap-2.5 rounded-lg px-2.5 py-2 transition-colors duration-200",
+                      step.status === "inProgress" && "bg-blue-500/5",
+                      step.status === "completed" && "bg-emerald-500/5",
                     )}
                   >
-                    {step.step}
-                  </p>
-                </div>
-              ))}
-            </div>
-          ) : null}
+                    <div className="mt-0.5">{stepStatusIcon(step.status)}</div>
+                    <p
+                      className={cn(
+                        "text-[13px] leading-snug",
+                        step.status === "completed"
+                          ? "text-muted-foreground/50 line-through decoration-muted-foreground/20"
+                          : step.status === "inProgress"
+                            ? "text-foreground/90"
+                            : "text-muted-foreground/70",
+                      )}
+                    >
+                      {step.step}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            ) : null}
 
-          {/* Proposed Plan Markdown */}
-          {planMarkdown ? (
-            <div className="space-y-2">
-              <button
-                type="button"
-                className="group flex w-full items-center gap-1.5 text-left"
-                onClick={() => setProposedPlanExpanded((v) => !v)}
-              >
+            {/* Proposed Plan Markdown */}
+            {planMarkdown ? (
+              <div className="space-y-2">
+                <button
+                  type="button"
+                  className="group flex w-full items-center gap-1.5 text-left"
+                  onClick={() => setProposedPlanExpanded((v) => !v)}
+                >
+                  {proposedPlanExpanded ? (
+                    <ChevronDownIcon className="size-3 shrink-0 text-muted-foreground/40 transition-transform" />
+                  ) : (
+                    <ChevronRightIcon className="size-3 shrink-0 text-muted-foreground/40 transition-transform" />
+                  )}
+                  <span className="text-[10px] font-semibold tracking-widest text-muted-foreground/40 uppercase group-hover:text-muted-foreground/60">
+                    {planTitle ?? "Full Plan"}
+                  </span>
+                </button>
                 {proposedPlanExpanded ? (
-                  <ChevronDownIcon className="size-3 shrink-0 text-muted-foreground/40 transition-transform" />
-                ) : (
-                  <ChevronRightIcon className="size-3 shrink-0 text-muted-foreground/40 transition-transform" />
-                )}
-                <span className="text-[10px] font-semibold tracking-widest text-muted-foreground/40 uppercase group-hover:text-muted-foreground/60">
-                  {planTitle ?? "Full Plan"}
-                </span>
-              </button>
-              {proposedPlanExpanded ? (
-                <div className="rounded-lg border border-border/50 bg-background/50 p-3">
-                  <ChatMarkdown
-                    text={displayedPlanMarkdown ?? ""}
-                    cwd={markdownCwd}
-                    isStreaming={false}
-                  />
-                </div>
-              ) : null}
-            </div>
-          ) : null}
+                  <div className="rounded-lg border border-border/50 bg-background/50 p-3">
+                    <ChatMarkdown
+                      text={displayedPlanMarkdown ?? ""}
+                      cwd={markdownCwd}
+                      isStreaming={false}
+                    />
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
 
-          {/* Empty state */}
-          {!activePlan && !planMarkdown ? (
-            <div className="flex flex-col items-center justify-center py-12 text-center">
-              <p className="text-[13px] text-muted-foreground/40">No active plan yet.</p>
-              <p className="mt-1 text-[11px] text-muted-foreground/30">
-                Plans will appear here when generated.
-              </p>
-            </div>
-          ) : null}
-        </div>
+            {/* Empty state */}
+            {!activePlan && !planMarkdown ? (
+              <div className="flex flex-col items-center justify-center py-12 text-center">
+                <p className="text-[13px] text-muted-foreground/40">No active plan yet.</p>
+                <p className="mt-1 text-[11px] text-muted-foreground/30">
+                  Plans will appear here when generated.
+                </p>
+              </div>
+            ) : null}
+          </div>
+        ) : (
+          <div id="right-panel-workflow" role="tabpanel" aria-labelledby="right-panel-tab-workflow">
+            <WorkflowObservatory
+              snapshot={workflowSnapshot}
+              timestampFormat={timestampFormat}
+              activePlan={activePlan}
+              expandedNodeById={workflowNodeExpandedById}
+              onNodeExpandedChange={onWorkflowNodeExpandedChange}
+              stallWarningSeconds={workflowStallWarningSeconds}
+            />
+          </div>
+        )}
       </ScrollArea>
     </div>
   );

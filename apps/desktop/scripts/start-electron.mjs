@@ -92,7 +92,7 @@ function spawnLaunchPlan(plan, childEnv) {
     if (plan.serverEntrypoint === undefined && plan.args.length === 0) {
       console.error(
         [
-          "Cafe Code detected no Linux display server, but the headless server bundle is missing.",
+          "Club Code detected no Linux display server, but the headless server bundle is missing.",
           `Expected server entrypoint: ${resolve(desktopDir, "../server/dist/bin.mjs")}`,
           "Run yarn build:desktop first, or start the server directly with yarn start.",
         ].join("\n"),
@@ -100,10 +100,11 @@ function spawnLaunchPlan(plan, childEnv) {
       process.exit(1);
     }
 
-    console.error("No Linux display server detected; starting Cafe Code in headless server mode.");
+    console.error("No Linux display server detected; starting Club Code in headless server mode.");
   }
 
   return spawn(plan.command, plan.args, {
+    shell: false,
     stdio: "inherit",
     cwd: plan.cwd,
     env: childEnv,

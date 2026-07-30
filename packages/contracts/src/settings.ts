@@ -30,7 +30,7 @@ export const DEFAULT_CONTINUE_BACKGROUND_ANIMATIONS = false;
 export const DEFAULT_SHOW_SIDEBAR_SEARCH = true;
 export const DEFAULT_SHOW_SIDEBAR_MASCOT = true;
 export const DEFAULT_SHOW_SIDEBAR_ATTRIBUTION = true;
-export const DEFAULT_BRAND_WORDMARK_PREFIX = "Cafe";
+export const DEFAULT_BRAND_WORDMARK_PREFIX = "Club";
 export const DEFAULT_SIDEBAR_BRAND_IMAGE_DATA_URL = "";
 export const DEFAULT_SIDEBAR_BRAND_IMAGE = null;
 export const DEFAULT_APP_ACCENT_COLOR = "";
@@ -38,6 +38,32 @@ export const DEFAULT_THEME_ACCENT_COLOR = "";
 export const MIN_SIDEBAR_STAR_SPEED = 0.25;
 export const MAX_SIDEBAR_STAR_SPEED = 4;
 export const DEFAULT_SIDEBAR_STAR_SPEED = 1;
+export const DEFAULT_WORKFLOW_OBSERVATORY_ENABLED = true;
+export const MIN_WORKFLOW_STALL_WARNING_SECONDS = 30;
+export const MAX_WORKFLOW_STALL_WARNING_SECONDS = 3_600;
+export const DEFAULT_WORKFLOW_STALL_WARNING_SECONDS = 180;
+export const DEFAULT_PROVIDER_USAGE_WIDGET_ENABLED = false;
+export const MIN_PROVIDER_USAGE_POLL_MINUTES = 1;
+export const MAX_PROVIDER_USAGE_POLL_MINUTES = 5;
+export const DEFAULT_PROVIDER_USAGE_POLL_MINUTES = 2;
+export const DEFAULT_MODEL_PACING_ENABLED = false;
+export const MIN_MODEL_PACING_RESERVE_PERCENT = 0;
+export const MAX_MODEL_PACING_RESERVE_PERCENT = 50;
+export const DEFAULT_MODEL_PACING_RESERVE_PERCENT = 10;
+export const AutoNudgeMode = Schema.Literals(["off", "hardcore-fanout", "steady-progress"]);
+export type AutoNudgeMode = typeof AutoNudgeMode.Type;
+export const DEFAULT_AUTO_NUDGE_MODE: AutoNudgeMode = "off";
+export const DEFAULT_AUTO_NUDGE_BACKGROUND_CONTINUATION = false;
+export const MIN_AUTO_NUDGE_MAX_ROUNDS = 1;
+export const MAX_AUTO_NUDGE_MAX_ROUNDS = 20;
+export const DEFAULT_AUTO_NUDGE_MAX_ROUNDS = 5;
+export const AutoNudgeMaxRounds = Schema.Int.check(
+  Schema.isBetween({
+    minimum: MIN_AUTO_NUDGE_MAX_ROUNDS,
+    maximum: MAX_AUTO_NUDGE_MAX_ROUNDS,
+  }),
+);
+export type AutoNudgeMaxRounds = typeof AutoNudgeMaxRounds.Type;
 export const MAX_BRAND_WORDMARK_PREFIX_LENGTH = 64;
 export const MAX_SIDEBAR_BRAND_IMAGE_FILE_BYTES = 1_000_000;
 export const MAX_SIDEBAR_BRAND_IMAGE_DATA_URL_LENGTH =
@@ -85,6 +111,27 @@ export const SidebarStarSpeed = Schema.Number.check(
   }),
 );
 export type SidebarStarSpeed = typeof SidebarStarSpeed.Type;
+export const WorkflowStallWarningSeconds = Schema.Int.check(
+  Schema.isBetween({
+    minimum: MIN_WORKFLOW_STALL_WARNING_SECONDS,
+    maximum: MAX_WORKFLOW_STALL_WARNING_SECONDS,
+  }),
+);
+export type WorkflowStallWarningSeconds = typeof WorkflowStallWarningSeconds.Type;
+export const ProviderUsagePollMinutes = Schema.Int.check(
+  Schema.isBetween({
+    minimum: MIN_PROVIDER_USAGE_POLL_MINUTES,
+    maximum: MAX_PROVIDER_USAGE_POLL_MINUTES,
+  }),
+);
+export type ProviderUsagePollMinutes = typeof ProviderUsagePollMinutes.Type;
+export const ModelPacingReservePercent = Schema.Int.check(
+  Schema.isBetween({
+    minimum: MIN_MODEL_PACING_RESERVE_PERCENT,
+    maximum: MAX_MODEL_PACING_RESERVE_PERCENT,
+  }),
+);
+export type ModelPacingReservePercent = typeof ModelPacingReservePercent.Type;
 
 // ── Ambiance (decorative weather layer) ────────────────────────────
 //
@@ -118,6 +165,274 @@ export const DEFAULT_AMBIANCE_SURFACE_THREAD = true;
 export const DEFAULT_AMBIANCE_SURFACE_COMPOSER = true;
 // Empty string means "follow the accent color configured in Appearance".
 export const DEFAULT_AMBIANCE_COLOR = "";
+
+export const MIN_AMBIENT_OPACITY = 0.05;
+export const MAX_AMBIENT_OPACITY = 1;
+export const DEFAULT_AMBIENT_OPACITY = 0.35;
+export const MIN_FALLING_EFFECT_SPEED = 0.25;
+export const MAX_FALLING_EFFECT_SPEED = 4;
+export const DEFAULT_FALLING_EFFECT_SPEED = 1;
+export const MIN_FALLING_EFFECT_DENSITY = 0.5;
+export const MAX_FALLING_EFFECT_DENSITY = 2.5;
+export const DEFAULT_FALLING_EFFECT_DENSITY = 1;
+/**
+ * Probability that a Matrix stream uses the Japanese glyph pool and Japanese
+ * live-work terms. The remainder use Roman glyphs and English live-work terms.
+ */
+export const MIN_FALLING_EFFECT_JAPANESE_RATIO = 0;
+export const MAX_FALLING_EFFECT_JAPANESE_RATIO = 1;
+export const DEFAULT_FALLING_EFFECT_JAPANESE_RATIO = 0.45;
+export const DEFAULT_FALLING_EFFECT_2CH_ENRICHED = false;
+/**
+ * Live work vocabulary is deliberately opt-in because even bounded filenames
+ * and provider-reported task categories can reveal project context to someone
+ * looking at the screen.
+ */
+export const DEFAULT_FALLING_EFFECT_LIVE_WORK_VOCABULARY = false;
+/**
+ * Provider-observed Matrix activity pulses/links are opt-in because even
+ * category-only activity timing can reveal when project work is happening.
+ */
+export const DEFAULT_FALLING_EFFECT_ACTIVITY_LINKS = false;
+export const FallingEffectActivityLinkColorMode = Schema.Literals(["random", "matrix"]);
+export type FallingEffectActivityLinkColorMode = typeof FallingEffectActivityLinkColorMode.Type;
+export const DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_COLOR_MODE: FallingEffectActivityLinkColorMode =
+  "random";
+
+export const HexColor = TrimmedNonEmptyString.check(Schema.isPattern(/^#[0-9A-Fa-f]{6}$/)).pipe(
+  Schema.decodeTo(
+    Schema.String,
+    SchemaTransformation.transformOrFail({
+      decode: (value) => Effect.succeed(value.toLowerCase()),
+      encode: (value) => Effect.succeed(value.toLowerCase()),
+    }),
+  ),
+);
+export type HexColor = typeof HexColor.Type;
+
+export const AmbientColor = Schema.Union([Schema.Literal("auto"), HexColor]);
+export type AmbientColor = typeof AmbientColor.Type;
+export const DEFAULT_AMBIENT_COLOR: AmbientColor = "auto";
+
+export const AmbientOpacity = Schema.Number.check(
+  Schema.isBetween({
+    minimum: MIN_AMBIENT_OPACITY,
+    maximum: MAX_AMBIENT_OPACITY,
+  }),
+);
+export type AmbientOpacity = typeof AmbientOpacity.Type;
+
+export const FallingEffectKind = Schema.Literals(["snow", "rain", "matrix"]);
+export type FallingEffectKind = typeof FallingEffectKind.Type;
+export const DEFAULT_FALLING_EFFECTS_ENABLED = false;
+export const DEFAULT_FALLING_EFFECT_KIND: FallingEffectKind = "snow";
+
+/**
+ * Matrix-only palette behavior. "fixed" preserves the original configured,
+ * theme-aware color for settings documents written before this field existed.
+ * Existing "rainbow" and "music-reactive" values remain the uniform modes;
+ * their "-extra" counterparts use a deterministic hue phase per Matrix stream.
+ */
+export const FallingEffectMatrixColorMode = Schema.Literals([
+  "fixed",
+  "rainbow",
+  "rainbow-extra",
+  "music-reactive",
+  "music-reactive-extra",
+]);
+export type FallingEffectMatrixColorMode = typeof FallingEffectMatrixColorMode.Type;
+export const DEFAULT_FALLING_EFFECT_MATRIX_COLOR_MODE: FallingEffectMatrixColorMode = "fixed";
+
+export const FallingEffectSpeed = Schema.Number.check(
+  Schema.isBetween({
+    minimum: MIN_FALLING_EFFECT_SPEED,
+    maximum: MAX_FALLING_EFFECT_SPEED,
+  }),
+);
+export type FallingEffectSpeed = typeof FallingEffectSpeed.Type;
+
+export const FallingEffectDensity = Schema.Number.check(
+  Schema.isBetween({
+    minimum: MIN_FALLING_EFFECT_DENSITY,
+    maximum: MAX_FALLING_EFFECT_DENSITY,
+  }),
+);
+export type FallingEffectDensity = typeof FallingEffectDensity.Type;
+
+export const FallingEffectJapaneseRatio = Schema.Number.check(
+  Schema.isBetween({
+    minimum: MIN_FALLING_EFFECT_JAPANESE_RATIO,
+    maximum: MAX_FALLING_EFFECT_JAPANESE_RATIO,
+  }),
+);
+export type FallingEffectJapaneseRatio = typeof FallingEffectJapaneseRatio.Type;
+
+export const YouTubeVideoId = TrimmedNonEmptyString.check(Schema.isPattern(/^[A-Za-z0-9_-]{11}$/));
+export type YouTubeVideoId = typeof YouTubeVideoId.Type;
+export const YouTubePlaylistId = TrimmedNonEmptyString.check(
+  Schema.isPattern(/^[A-Za-z0-9_-]{10,80}$/),
+);
+export type YouTubePlaylistId = typeof YouTubePlaylistId.Type;
+const YouTubeVideoSource = Schema.Struct({
+  kind: Schema.Literal("video"),
+  id: YouTubeVideoId,
+});
+const YouTubePlaylistSource = Schema.Struct({
+  kind: Schema.Literal("playlist"),
+  id: YouTubePlaylistId,
+  videoId: Schema.optionalKey(YouTubeVideoId),
+});
+export const YouTubeSource = Schema.NullOr(
+  Schema.Union([YouTubeVideoSource, YouTubePlaylistSource]),
+);
+export type YouTubeSource = typeof YouTubeSource.Type;
+
+export const SpotifyEntityType = Schema.Literals([
+  "album",
+  "artist",
+  "episode",
+  "playlist",
+  "show",
+  "track",
+]);
+export type SpotifyEntityType = typeof SpotifyEntityType.Type;
+export const SpotifyEntityId = TrimmedNonEmptyString.check(Schema.isPattern(/^[A-Za-z0-9]{22}$/));
+export type SpotifyEntityId = typeof SpotifyEntityId.Type;
+export const SpotifySource = Schema.Struct({
+  kind: Schema.Literal("spotify"),
+  entityType: SpotifyEntityType,
+  id: SpotifyEntityId,
+});
+export type SpotifySource = typeof SpotifySource.Type;
+export const AmbientVideoSource = Schema.NullOr(
+  Schema.Union([YouTubeVideoSource, YouTubePlaylistSource, SpotifySource]),
+);
+export type AmbientVideoSource = typeof AmbientVideoSource.Type;
+
+export const AmbientMediaLayoutMode = Schema.Literals(["preset", "custom"]);
+export type AmbientMediaLayoutMode = typeof AmbientMediaLayoutMode.Type;
+export const AmbientMediaPresetPlacement = Schema.Literals(["bottom-left", "bottom-right"]);
+export type AmbientMediaPresetPlacement = typeof AmbientMediaPresetPlacement.Type;
+export const AmbientMediaPresetSize = Schema.Literals(["small", "medium", "large"]);
+export type AmbientMediaPresetSize = typeof AmbientMediaPresetSize.Type;
+/**
+ * Shared presentation preference for the ambient video panel. Browser/native
+ * fullscreen remains transient because it is controlled by the host player.
+ */
+export const AmbientVideoPresentationMode = Schema.Literals(["floating", "cinema"]);
+export type AmbientVideoPresentationMode = typeof AmbientVideoPresentationMode.Type;
+
+export const DEFAULT_AMBIENT_VIDEO_ENABLED = false;
+export const DEFAULT_AMBIENT_VIDEO_SOURCE: AmbientVideoSource = null;
+export const DEFAULT_AMBIENT_VIDEO_LAYOUT_MODE: AmbientMediaLayoutMode = "preset";
+export const DEFAULT_AMBIENT_VIDEO_PRESET_PLACEMENT: AmbientMediaPresetPlacement = "bottom-right";
+export const DEFAULT_AMBIENT_VIDEO_PRESET_SIZE: AmbientMediaPresetSize = "medium";
+export const DEFAULT_AMBIENT_VIDEO_PRESENTATION_MODE: AmbientVideoPresentationMode = "floating";
+export const DEFAULT_AMBIENT_VIDEO_GLOW_ENABLED = false;
+export const AmbientVideoGlowMode = Schema.Literals(["fixed", "adaptive"]);
+export type AmbientVideoGlowMode = typeof AmbientVideoGlowMode.Type;
+/** Existing profiles retain the original single-color glow unless the user
+ * explicitly opts into artwork-derived edge colors. */
+export const DEFAULT_AMBIENT_VIDEO_GLOW_MODE: AmbientVideoGlowMode = "fixed";
+
+// Ambient images intentionally use their own authenticated route and metadata
+// type instead of overloading sidebar branding. The upload pipeline accepts up
+// to 10 MiB of encoded image data and must additionally enforce total-pixel and
+// GIF work budgets from the ambient-media threat model before it creates one of
+// these records.
+export const MAX_AMBIENT_IMAGE_FILE_BYTES = 10 * 1024 * 1024;
+export const MAX_AMBIENT_IMAGE_DIMENSION = 4096;
+export const MAX_AMBIENT_IMAGE_PIXEL_COUNT = 16_777_216;
+export const MAX_AMBIENT_IMAGE_ID_LENGTH = 96;
+export const MAX_AMBIENT_IMAGE_URL_LENGTH = 256;
+export const AmbientImageAssetId = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(MAX_AMBIENT_IMAGE_ID_LENGTH),
+  Schema.isPattern(/^sha256-[a-f0-9]{64}\.(?:gif|jpe?g|png|webp)$/),
+);
+export type AmbientImageAssetId = typeof AmbientImageAssetId.Type;
+export const AmbientImageMimeType = Schema.Literals([
+  "image/gif",
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+]);
+export type AmbientImageMimeType = typeof AmbientImageMimeType.Type;
+const AmbientImageAssetFields = Schema.Struct({
+  id: AmbientImageAssetId,
+  url: TrimmedNonEmptyString.check(
+    Schema.isMaxLength(MAX_AMBIENT_IMAGE_URL_LENGTH),
+    Schema.isPattern(/^\/api\/ambient-media\/image\/sha256-[a-f0-9]{64}\.(?:gif|jpe?g|png|webp)$/),
+  ),
+  mimeType: AmbientImageMimeType,
+  width: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: MAX_AMBIENT_IMAGE_DIMENSION })),
+  height: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: MAX_AMBIENT_IMAGE_DIMENSION })),
+  sizeBytes: Schema.Int.check(
+    Schema.isBetween({ minimum: 1, maximum: MAX_AMBIENT_IMAGE_FILE_BYTES }),
+  ),
+});
+const ambientImageMimeTypeForId = (id: AmbientImageAssetId): AmbientImageMimeType => {
+  const extension = id.slice(id.lastIndexOf(".") + 1);
+  switch (extension) {
+    case "gif":
+      return "image/gif";
+    case "jpg":
+    case "jpeg":
+      return "image/jpeg";
+    case "png":
+      return "image/png";
+    case "webp":
+      return "image/webp";
+    default:
+      // `AmbientImageAssetId` already proves this cannot happen. Keep the
+      // mapping total so changing the ID schema requires updating this check.
+      throw new Error("unsupported ambient image extension");
+  }
+};
+export const AmbientImageAsset = AmbientImageAssetFields.check(
+  Schema.makeFilter((asset) =>
+    asset.url === `/api/ambient-media/image/${asset.id}` &&
+    asset.mimeType === ambientImageMimeTypeForId(asset.id) &&
+    asset.width * asset.height <= MAX_AMBIENT_IMAGE_PIXEL_COUNT
+      ? undefined
+      : "must use a matching authenticated asset URL and MIME type within the ambient image pixel budget",
+  ),
+);
+export type AmbientImageAsset = typeof AmbientImageAsset.Type;
+
+export const DEFAULT_AMBIENT_IMAGE_ENABLED = false;
+export const DEFAULT_AMBIENT_IMAGE_ASSET: AmbientImageAsset | null = null;
+/** A deliberately small persistent queue. The source directory and its file
+ * paths are never part of settings; each entry is an authenticated,
+ * content-addressed server asset. */
+export const MAX_AMBIENT_IMAGE_CYCLE_ASSETS = 24;
+export const AmbientImageCycleAssets = Schema.Array(AmbientImageAsset).check(
+  Schema.isMaxLength(MAX_AMBIENT_IMAGE_CYCLE_ASSETS),
+  Schema.makeFilter((assets) =>
+    new Set(assets.map((asset) => asset.id)).size === assets.length
+      ? undefined
+      : "must not contain duplicate image assets",
+  ),
+);
+export type AmbientImageCycleAssets = typeof AmbientImageCycleAssets.Type;
+export const MIN_AMBIENT_IMAGE_CYCLE_SECONDS = 3;
+export const MAX_AMBIENT_IMAGE_CYCLE_SECONDS = 3_600;
+export const AmbientImageCycleSeconds = Schema.Number.check(
+  Schema.isBetween({
+    minimum: MIN_AMBIENT_IMAGE_CYCLE_SECONDS,
+    maximum: MAX_AMBIENT_IMAGE_CYCLE_SECONDS,
+  }),
+);
+export type AmbientImageCycleSeconds = typeof AmbientImageCycleSeconds.Type;
+export const AmbientImagePresentationMode = Schema.Literals(["floating", "theater"]);
+export type AmbientImagePresentationMode = typeof AmbientImagePresentationMode.Type;
+export const DEFAULT_AMBIENT_IMAGE_CYCLE_ASSETS: AmbientImageCycleAssets = [];
+export const DEFAULT_AMBIENT_IMAGE_CYCLE_ENABLED = false;
+export const DEFAULT_AMBIENT_IMAGE_CYCLE_SECONDS = 20;
+export const DEFAULT_AMBIENT_IMAGE_PRESENTATION_MODE: AmbientImagePresentationMode = "floating";
+export const DEFAULT_AMBIENT_IMAGE_LAYOUT_MODE: AmbientMediaLayoutMode = "preset";
+export const DEFAULT_AMBIENT_IMAGE_PRESET_PLACEMENT: AmbientMediaPresetPlacement = "bottom-left";
+export const DEFAULT_AMBIENT_IMAGE_PRESET_SIZE: AmbientMediaPresetSize = "medium";
+export const DEFAULT_AMBIENT_IMAGE_GLOW_ENABLED = false;
 
 export const SidebarProjectSortOrder = Schema.Literals(["updated_at", "created_at", "manual"]);
 export type SidebarProjectSortOrder = typeof SidebarProjectSortOrder.Type;
@@ -161,6 +476,26 @@ export const ClientSettingsSchema = Schema.Struct({
   // (native notifications in the desktop app, Web Push in browsers). Off by
   // default; enabling may prompt for OS-level notification permission.
   notificationsEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  // Completion audio is deliberately per-device and opt-in. Speech is limited
+  // to the fixed phrases implemented by the local renderer/desktop bridge.
+  completionAlertSoundEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(false)),
+  ),
+  completionAlertSpeechEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(false)),
+  ),
+  completionAlertLanguage: Schema.Literals(["en", "ja", "dual"]).pipe(
+    Schema.withDecodingDefault(Effect.succeed("en" as const)),
+  ),
+  completionAlertEnglishVoiceGender: Schema.Literals(["female", "male"]).pipe(
+    Schema.withDecodingDefault(Effect.succeed("female" as const)),
+  ),
+  completionAlertJapaneseVoiceGender: Schema.Literals(["female", "male"]).pipe(
+    Schema.withDecodingDefault(Effect.succeed("female" as const)),
+  ),
+  completionAlertDualStereoOrder: Schema.Literals(["ja-left-en-right", "en-left-ja-right"]).pipe(
+    Schema.withDecodingDefault(Effect.succeed("ja-left-en-right" as const)),
+  ),
   confirmThreadArchive: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   confirmThreadDelete: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   dismissedProviderUpdateNotificationKeys: Schema.Array(TrimmedNonEmptyString).pipe(
@@ -170,6 +505,108 @@ export const ClientSettingsSchema = Schema.Struct({
   diffWordWrap: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   continueBackgroundAnimations: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_CONTINUE_BACKGROUND_ANIMATIONS)),
+  ),
+  fallingEffectsEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECTS_ENABLED)),
+  ),
+  fallingEffectKind: FallingEffectKind.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_KIND)),
+  ),
+  fallingEffectColor: AmbientColor.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_COLOR)),
+  ),
+  fallingEffectMatrixColorMode: FallingEffectMatrixColorMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_MATRIX_COLOR_MODE)),
+  ),
+  fallingEffectOpacity: AmbientOpacity.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_OPACITY)),
+  ),
+  fallingEffectSpeed: FallingEffectSpeed.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_SPEED)),
+  ),
+  fallingEffectDensity: FallingEffectDensity.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_DENSITY)),
+  ),
+  fallingEffectJapaneseRatio: FallingEffectJapaneseRatio.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_JAPANESE_RATIO)),
+  ),
+  fallingEffect2chEnriched: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_2CH_ENRICHED)),
+  ),
+  fallingEffectLiveWorkVocabulary: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_LIVE_WORK_VOCABULARY)),
+  ),
+  fallingEffectActivityLinks: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_ACTIVITY_LINKS)),
+  ),
+  fallingEffectActivityLinkColorMode: FallingEffectActivityLinkColorMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_COLOR_MODE)),
+  ),
+  ambientVideoEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_VIDEO_ENABLED)),
+  ),
+  ambientVideoSource: AmbientVideoSource.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_VIDEO_SOURCE)),
+  ),
+  ambientVideoLayoutMode: AmbientMediaLayoutMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_VIDEO_LAYOUT_MODE)),
+  ),
+  ambientVideoPresetPlacement: AmbientMediaPresetPlacement.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_VIDEO_PRESET_PLACEMENT)),
+  ),
+  ambientVideoPresetSize: AmbientMediaPresetSize.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_VIDEO_PRESET_SIZE)),
+  ),
+  ambientVideoPresentationMode: AmbientVideoPresentationMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_VIDEO_PRESENTATION_MODE)),
+  ),
+  ambientVideoGlowEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_VIDEO_GLOW_ENABLED)),
+  ),
+  ambientVideoGlowMode: AmbientVideoGlowMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_VIDEO_GLOW_MODE)),
+  ),
+  ambientVideoGlowColor: AmbientColor.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_COLOR)),
+  ),
+  ambientVideoGlowOpacity: AmbientOpacity.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_OPACITY)),
+  ),
+  ambientImageEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_IMAGE_ENABLED)),
+  ),
+  ambientImageAsset: Schema.NullOr(AmbientImageAsset).pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_IMAGE_ASSET)),
+  ),
+  ambientImageCycleAssets: AmbientImageCycleAssets.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_IMAGE_CYCLE_ASSETS)),
+  ),
+  ambientImageCycleEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_IMAGE_CYCLE_ENABLED)),
+  ),
+  ambientImageCycleSeconds: AmbientImageCycleSeconds.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_IMAGE_CYCLE_SECONDS)),
+  ),
+  ambientImagePresentationMode: AmbientImagePresentationMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_IMAGE_PRESENTATION_MODE)),
+  ),
+  ambientImageLayoutMode: AmbientMediaLayoutMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_IMAGE_LAYOUT_MODE)),
+  ),
+  ambientImagePresetPlacement: AmbientMediaPresetPlacement.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_IMAGE_PRESET_PLACEMENT)),
+  ),
+  ambientImagePresetSize: AmbientMediaPresetSize.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_IMAGE_PRESET_SIZE)),
+  ),
+  ambientImageGlowEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_IMAGE_GLOW_ENABLED)),
+  ),
+  ambientImageGlowColor: AmbientColor.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_COLOR)),
+  ),
+  ambientImageGlowOpacity: AmbientOpacity.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_OPACITY)),
   ),
   showSidebarSearch: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SHOW_SIDEBAR_SEARCH)),
@@ -217,6 +654,38 @@ export const ClientSettingsSchema = Schema.Struct({
   ),
   ambianceColor: TrimmedString.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIANCE_COLOR)),
+  ),
+  // A local presentation preference. It never changes provider execution or
+  // claims that an agent is stalled; the UI labels silence as a warning.
+  workflowObservatoryEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_WORKFLOW_OBSERVATORY_ENABLED)),
+  ),
+  workflowStallWarningSeconds: WorkflowStallWarningSeconds.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_WORKFLOW_STALL_WARNING_SECONDS)),
+  ),
+  providerUsageWidgetEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_USAGE_WIDGET_ENABLED)),
+  ),
+  providerUsagePollMinutes: ProviderUsagePollMinutes.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_USAGE_POLL_MINUTES)),
+  ),
+  modelPacingEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_MODEL_PACING_ENABLED)),
+  ),
+  modelPacingReservePercent: ModelPacingReservePercent.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_MODEL_PACING_RESERVE_PERCENT)),
+  ),
+  // Durable, device-wide policy. Background continuation is a separate,
+  // default-off permission and always has one explicit thread owner plus hard
+  // round cap in the renderer coordinator.
+  autoNudgeMode: AutoNudgeMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AUTO_NUDGE_MODE)),
+  ),
+  autoNudgeBackgroundContinuation: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AUTO_NUDGE_BACKGROUND_CONTINUATION)),
+  ),
+  autoNudgeMaxRounds: AutoNudgeMaxRounds.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AUTO_NUDGE_MAX_ROUNDS)),
   ),
   themeAccentColor: TrimmedString.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_THEME_ACCENT_COLOR)),
@@ -280,7 +749,145 @@ export const ClientSettingsSchema = Schema.Struct({
 });
 export type ClientSettings = typeof ClientSettingsSchema.Type;
 
+export const AMBIENT_CLIENT_SETTINGS_KEYS = [
+  "fallingEffectsEnabled",
+  "fallingEffectKind",
+  "fallingEffectColor",
+  "fallingEffectMatrixColorMode",
+  "fallingEffectOpacity",
+  "fallingEffectSpeed",
+  "fallingEffectDensity",
+  "fallingEffectJapaneseRatio",
+  "fallingEffect2chEnriched",
+  "fallingEffectLiveWorkVocabulary",
+  "fallingEffectActivityLinks",
+  "fallingEffectActivityLinkColorMode",
+  "ambientVideoEnabled",
+  "ambientVideoSource",
+  "ambientVideoLayoutMode",
+  "ambientVideoPresetPlacement",
+  "ambientVideoPresetSize",
+  "ambientVideoPresentationMode",
+  "ambientVideoGlowEnabled",
+  "ambientVideoGlowMode",
+  "ambientVideoGlowColor",
+  "ambientVideoGlowOpacity",
+  "ambientImageEnabled",
+  "ambientImageAsset",
+  "ambientImageCycleAssets",
+  "ambientImageCycleEnabled",
+  "ambientImageCycleSeconds",
+  "ambientImagePresentationMode",
+  "ambientImageLayoutMode",
+  "ambientImagePresetPlacement",
+  "ambientImagePresetSize",
+  "ambientImageGlowEnabled",
+  "ambientImageGlowColor",
+  "ambientImageGlowOpacity",
+] as const satisfies ReadonlyArray<keyof ClientSettings>;
+export type AmbientClientSettings = Pick<
+  ClientSettings,
+  (typeof AMBIENT_CLIENT_SETTINGS_KEYS)[number]
+>;
+
+export const DEFAULT_AMBIENT_CLIENT_SETTINGS: AmbientClientSettings = {
+  fallingEffectsEnabled: DEFAULT_FALLING_EFFECTS_ENABLED,
+  fallingEffectKind: DEFAULT_FALLING_EFFECT_KIND,
+  fallingEffectColor: DEFAULT_AMBIENT_COLOR,
+  fallingEffectMatrixColorMode: DEFAULT_FALLING_EFFECT_MATRIX_COLOR_MODE,
+  fallingEffectOpacity: DEFAULT_AMBIENT_OPACITY,
+  fallingEffectSpeed: DEFAULT_FALLING_EFFECT_SPEED,
+  fallingEffectDensity: DEFAULT_FALLING_EFFECT_DENSITY,
+  fallingEffectJapaneseRatio: DEFAULT_FALLING_EFFECT_JAPANESE_RATIO,
+  fallingEffect2chEnriched: DEFAULT_FALLING_EFFECT_2CH_ENRICHED,
+  fallingEffectLiveWorkVocabulary: DEFAULT_FALLING_EFFECT_LIVE_WORK_VOCABULARY,
+  fallingEffectActivityLinks: DEFAULT_FALLING_EFFECT_ACTIVITY_LINKS,
+  fallingEffectActivityLinkColorMode: DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_COLOR_MODE,
+  ambientVideoEnabled: DEFAULT_AMBIENT_VIDEO_ENABLED,
+  ambientVideoSource: DEFAULT_AMBIENT_VIDEO_SOURCE,
+  ambientVideoLayoutMode: DEFAULT_AMBIENT_VIDEO_LAYOUT_MODE,
+  ambientVideoPresetPlacement: DEFAULT_AMBIENT_VIDEO_PRESET_PLACEMENT,
+  ambientVideoPresetSize: DEFAULT_AMBIENT_VIDEO_PRESET_SIZE,
+  ambientVideoPresentationMode: DEFAULT_AMBIENT_VIDEO_PRESENTATION_MODE,
+  ambientVideoGlowEnabled: DEFAULT_AMBIENT_VIDEO_GLOW_ENABLED,
+  ambientVideoGlowMode: DEFAULT_AMBIENT_VIDEO_GLOW_MODE,
+  ambientVideoGlowColor: DEFAULT_AMBIENT_COLOR,
+  ambientVideoGlowOpacity: DEFAULT_AMBIENT_OPACITY,
+  ambientImageEnabled: DEFAULT_AMBIENT_IMAGE_ENABLED,
+  ambientImageAsset: DEFAULT_AMBIENT_IMAGE_ASSET,
+  ambientImageCycleAssets: DEFAULT_AMBIENT_IMAGE_CYCLE_ASSETS,
+  ambientImageCycleEnabled: DEFAULT_AMBIENT_IMAGE_CYCLE_ENABLED,
+  ambientImageCycleSeconds: DEFAULT_AMBIENT_IMAGE_CYCLE_SECONDS,
+  ambientImagePresentationMode: DEFAULT_AMBIENT_IMAGE_PRESENTATION_MODE,
+  ambientImageLayoutMode: DEFAULT_AMBIENT_IMAGE_LAYOUT_MODE,
+  ambientImagePresetPlacement: DEFAULT_AMBIENT_IMAGE_PRESET_PLACEMENT,
+  ambientImagePresetSize: DEFAULT_AMBIENT_IMAGE_PRESET_SIZE,
+  ambientImageGlowEnabled: DEFAULT_AMBIENT_IMAGE_GLOW_ENABLED,
+  ambientImageGlowColor: DEFAULT_AMBIENT_COLOR,
+  ambientImageGlowOpacity: DEFAULT_AMBIENT_OPACITY,
+};
+
 export const DEFAULT_CLIENT_SETTINGS: ClientSettings = Schema.decodeSync(ClientSettingsSchema)({});
+
+export const CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET: AmbientImageAsset = Schema.decodeSync(
+  AmbientImageAsset,
+)({
+  id: "sha256-8588e8b7fbd641dc21271be3c1f9d78a8b1449e44a0c9b951e3d3ad90f6d8f82.gif",
+  url: "/api/ambient-media/image/sha256-8588e8b7fbd641dc21271be3c1f9d78a8b1449e44a0c9b951e3d3ad90f6d8f82.gif",
+  mimeType: "image/gif",
+  width: 1080,
+  height: 1080,
+  sizeBytes: 2_042_330,
+});
+
+/**
+ * The branded first-run experience for a genuinely new Club Code profile.
+ *
+ * Keep this separate from `DEFAULT_CLIENT_SETTINGS`: schema decoding, malformed
+ * persisted documents, and ambient recovery intentionally retain the
+ * conservative defaults above. The server selects and persists this profile
+ * only when `client-settings.json` does not exist.
+ */
+export const CLUB_CODE_FIRST_RUN_CLIENT_SETTINGS: ClientSettings = Schema.decodeSync(
+  ClientSettingsSchema,
+)({
+  ...DEFAULT_CLIENT_SETTINGS,
+  fallingEffectsEnabled: true,
+  fallingEffectKind: "matrix",
+  fallingEffectMatrixColorMode: "rainbow",
+  fallingEffectOpacity: 0.55,
+  fallingEffectSpeed: 4,
+  fallingEffectDensity: 2.5,
+  fallingEffectJapaneseRatio: 0.45,
+  fallingEffect2chEnriched: true,
+  fallingEffectLiveWorkVocabulary: true,
+  fallingEffectActivityLinks: true,
+  fallingEffectActivityLinkColorMode: "matrix",
+  ambientVideoEnabled: true,
+  ambientVideoSource: null,
+  ambientVideoLayoutMode: "custom",
+  ambientVideoPresetPlacement: "bottom-right",
+  ambientVideoPresetSize: "large",
+  ambientVideoPresentationMode: "floating",
+  ambientVideoGlowEnabled: true,
+  ambientVideoGlowMode: "adaptive",
+  ambientVideoGlowColor: "auto",
+  ambientVideoGlowOpacity: 0.65,
+  ambientImageEnabled: true,
+  ambientImageAsset: CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET,
+  ambientImagePresentationMode: "floating",
+  ambientImageLayoutMode: "preset",
+  ambientImagePresetPlacement: "bottom-left",
+  ambientImagePresetSize: "large",
+  ambientImageGlowEnabled: true,
+  ambientImageGlowColor: "auto",
+  ambientImageGlowOpacity: 0.35,
+  workflowObservatoryEnabled: true,
+  providerUsageWidgetEnabled: true,
+  providerUsagePollMinutes: 2,
+  modelPacingEnabled: true,
+  modelPacingReservePercent: 5,
+});
 
 export type ClientSettingsKey = keyof ClientSettings;
 
@@ -359,7 +966,7 @@ const ProviderCliRuntimeSourceOptions = [
   {
     value: "bundled",
     label: "Bundled runtime",
-    description: "Use Cafe Code's managed Windows runtime and provider install.",
+    description: "Use Club Code's managed Windows runtime and provider install.",
   },
 ] as const;
 
@@ -431,6 +1038,11 @@ export function makeProviderSettingsSchema<const Fields extends Schema.Struct.Fi
   );
 }
 
+// Ultra caching keeps less historical context attached to each subsequent
+// request. It is an explicit opt-in threshold; when Ultra Caching is off and
+// no override is configured, Codex app-server retains model-specific policy.
+export const CODEX_ULTRA_CACHING_AUTO_COMPACT_TOKEN_LIMIT = 120_000;
+
 export const CodexAutoCompactTokenLimit = Schema.Int.check(Schema.isGreaterThan(0));
 export type CodexAutoCompactTokenLimit = typeof CodexAutoCompactTokenLimit.Type;
 
@@ -458,6 +1070,15 @@ export const CodexSettings = makeProviderSettingsSchema(
         },
       }),
     ),
+    ossMode: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(false)),
+      Schema.annotateKey({
+        title: "LM Studio mode",
+        description:
+          "Launch Codex with its LM Studio local provider. Start LM Studio's API server on localhost:1234 first.",
+        providerSettingsForm: { control: "switch" },
+      }),
+    ),
     homePath: TrimmedString.pipe(
       Schema.withDecodingDefault(Effect.succeed("")),
       Schema.annotateKey({
@@ -474,7 +1095,7 @@ export const CodexSettings = makeProviderSettingsSchema(
       Schema.annotateKey({
         title: "Shadow home path",
         description:
-          "Cafe Code Codex runtime home. Shares config/session files while keeping auth and runtime databases isolated.",
+          "Club Code Codex runtime home. Shares config/session files while keeping auth and runtime databases isolated.",
         providerSettingsForm: {
           placeholder: "~/.codex-cafecode/personal",
           clearWhenEmpty: "omit",
@@ -499,9 +1120,26 @@ export const CodexSettings = makeProviderSettingsSchema(
         },
       }),
     ),
+    ultraCaching: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(false)),
+      Schema.annotateKey({
+        title: "Ultra caching",
+        description:
+          "Reduce carried context with an earlier structured compaction ceiling and a stable cache-friendly compaction prompt. Cache savings depend on the provider and are reported from real usage data.",
+        providerSettingsForm: { control: "switch" },
+      }),
+    ),
   },
   {
-    order: ["runtimeSource", "binaryPath", "homePath", "shadowHomePath", "autoCompactTokenLimit"],
+    order: [
+      "runtimeSource",
+      "binaryPath",
+      "ossMode",
+      "homePath",
+      "shadowHomePath",
+      "autoCompactTokenLimit",
+      "ultraCaching",
+    ],
   },
 );
 export type CodexSettings = typeof CodexSettings.Type;
@@ -554,9 +1192,18 @@ export const ClaudeSettings = makeProviderSettingsSchema(
         },
       }),
     ),
+    ultraCaching: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(false)),
+      Schema.annotateKey({
+        title: "Ultra caching",
+        description:
+          "Keep Claude's reusable system prefix stable across sessions and request concise, structured handoffs. Cache savings depend on Claude and are reported from real usage data.",
+        providerSettingsForm: { control: "switch" },
+      }),
+    ),
   },
   {
-    order: ["runtimeSource", "binaryPath", "homePath", "launchArgs"],
+    order: ["runtimeSource", "binaryPath", "homePath", "launchArgs", "ultraCaching"],
   },
 );
 export type ClaudeSettings = typeof ClaudeSettings.Type;
@@ -578,7 +1225,7 @@ export const OpenCodeSettings = makeProviderSettingsSchema(
       Schema.withDecodingDefault(Effect.succeed("")),
       Schema.annotateKey({
         title: "Server URL",
-        description: "Leave blank to let Cafe Code start a loopback OpenCode server.",
+        description: "Leave blank to let Club Code start a loopback OpenCode server.",
         providerSettingsForm: {
           placeholder: "http://127.0.0.1:4096",
           clearWhenEmpty: "omit",
@@ -706,10 +1353,12 @@ const CodexSettingsPatch = Schema.Struct({
   enabled: Schema.optionalKey(Schema.Boolean),
   binaryPath: Schema.optionalKey(TrimmedString),
   runtimeSource: Schema.optionalKey(ProviderCliRuntimeSource),
+  ossMode: Schema.optionalKey(Schema.Boolean),
   homePath: Schema.optionalKey(TrimmedString),
   shadowHomePath: Schema.optionalKey(TrimmedString),
   customModels: Schema.optionalKey(Schema.Array(Schema.String)),
   autoCompactTokenLimit: Schema.optionalKey(CodexAutoCompactTokenLimit),
+  ultraCaching: Schema.optionalKey(Schema.Boolean),
 });
 
 const ClaudeSettingsPatch = Schema.Struct({
@@ -719,6 +1368,7 @@ const ClaudeSettingsPatch = Schema.Struct({
   homePath: Schema.optionalKey(TrimmedString),
   customModels: Schema.optionalKey(Schema.Array(Schema.String)),
   launchArgs: Schema.optionalKey(TrimmedString),
+  ultraCaching: Schema.optionalKey(Schema.Boolean),
 });
 
 const OpenCodeSettingsPatch = Schema.Struct({
@@ -765,11 +1415,53 @@ export const ClientSettingsPatch = Schema.Struct({
   onboardingCompleted: Schema.optionalKey(Schema.Boolean),
   dismissedFirstRunHints: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
   notificationsEnabled: Schema.optionalKey(Schema.Boolean),
+  completionAlertSoundEnabled: Schema.optionalKey(Schema.Boolean),
+  completionAlertSpeechEnabled: Schema.optionalKey(Schema.Boolean),
+  completionAlertLanguage: Schema.optionalKey(Schema.Literals(["en", "ja", "dual"])),
+  completionAlertEnglishVoiceGender: Schema.optionalKey(Schema.Literals(["female", "male"])),
+  completionAlertJapaneseVoiceGender: Schema.optionalKey(Schema.Literals(["female", "male"])),
+  completionAlertDualStereoOrder: Schema.optionalKey(
+    Schema.Literals(["ja-left-en-right", "en-left-ja-right"]),
+  ),
   confirmThreadArchive: Schema.optionalKey(Schema.Boolean),
   confirmThreadDelete: Schema.optionalKey(Schema.Boolean),
   diffIgnoreWhitespace: Schema.optionalKey(Schema.Boolean),
   diffWordWrap: Schema.optionalKey(Schema.Boolean),
   continueBackgroundAnimations: Schema.optionalKey(Schema.Boolean),
+  fallingEffectsEnabled: Schema.optionalKey(Schema.Boolean),
+  fallingEffectKind: Schema.optionalKey(FallingEffectKind),
+  fallingEffectColor: Schema.optionalKey(AmbientColor),
+  fallingEffectMatrixColorMode: Schema.optionalKey(FallingEffectMatrixColorMode),
+  fallingEffectOpacity: Schema.optionalKey(AmbientOpacity),
+  fallingEffectSpeed: Schema.optionalKey(FallingEffectSpeed),
+  fallingEffectDensity: Schema.optionalKey(FallingEffectDensity),
+  fallingEffectJapaneseRatio: Schema.optionalKey(FallingEffectJapaneseRatio),
+  fallingEffect2chEnriched: Schema.optionalKey(Schema.Boolean),
+  fallingEffectLiveWorkVocabulary: Schema.optionalKey(Schema.Boolean),
+  fallingEffectActivityLinks: Schema.optionalKey(Schema.Boolean),
+  fallingEffectActivityLinkColorMode: Schema.optionalKey(FallingEffectActivityLinkColorMode),
+  ambientVideoEnabled: Schema.optionalKey(Schema.Boolean),
+  ambientVideoSource: Schema.optionalKey(AmbientVideoSource),
+  ambientVideoLayoutMode: Schema.optionalKey(AmbientMediaLayoutMode),
+  ambientVideoPresetPlacement: Schema.optionalKey(AmbientMediaPresetPlacement),
+  ambientVideoPresetSize: Schema.optionalKey(AmbientMediaPresetSize),
+  ambientVideoPresentationMode: Schema.optionalKey(AmbientVideoPresentationMode),
+  ambientVideoGlowEnabled: Schema.optionalKey(Schema.Boolean),
+  ambientVideoGlowMode: Schema.optionalKey(AmbientVideoGlowMode),
+  ambientVideoGlowColor: Schema.optionalKey(AmbientColor),
+  ambientVideoGlowOpacity: Schema.optionalKey(AmbientOpacity),
+  ambientImageEnabled: Schema.optionalKey(Schema.Boolean),
+  ambientImageAsset: Schema.optionalKey(Schema.NullOr(AmbientImageAsset)),
+  ambientImageCycleAssets: Schema.optionalKey(AmbientImageCycleAssets),
+  ambientImageCycleEnabled: Schema.optionalKey(Schema.Boolean),
+  ambientImageCycleSeconds: Schema.optionalKey(AmbientImageCycleSeconds),
+  ambientImagePresentationMode: Schema.optionalKey(AmbientImagePresentationMode),
+  ambientImageLayoutMode: Schema.optionalKey(AmbientMediaLayoutMode),
+  ambientImagePresetPlacement: Schema.optionalKey(AmbientMediaPresetPlacement),
+  ambientImagePresetSize: Schema.optionalKey(AmbientMediaPresetSize),
+  ambientImageGlowEnabled: Schema.optionalKey(Schema.Boolean),
+  ambientImageGlowColor: Schema.optionalKey(AmbientColor),
+  ambientImageGlowOpacity: Schema.optionalKey(AmbientOpacity),
   showSidebarSearch: Schema.optionalKey(Schema.Boolean),
   showSidebarMascot: Schema.optionalKey(Schema.Boolean),
   showSidebarAttribution: Schema.optionalKey(Schema.Boolean),
@@ -789,6 +1481,15 @@ export const ClientSettingsPatch = Schema.Struct({
   ambianceSurfaceThread: Schema.optionalKey(Schema.Boolean),
   ambianceSurfaceComposer: Schema.optionalKey(Schema.Boolean),
   ambianceColor: Schema.optionalKey(TrimmedString),
+  workflowObservatoryEnabled: Schema.optionalKey(Schema.Boolean),
+  workflowStallWarningSeconds: Schema.optionalKey(WorkflowStallWarningSeconds),
+  providerUsageWidgetEnabled: Schema.optionalKey(Schema.Boolean),
+  providerUsagePollMinutes: Schema.optionalKey(ProviderUsagePollMinutes),
+  modelPacingEnabled: Schema.optionalKey(Schema.Boolean),
+  modelPacingReservePercent: Schema.optionalKey(ModelPacingReservePercent),
+  autoNudgeMode: Schema.optionalKey(AutoNudgeMode),
+  autoNudgeBackgroundContinuation: Schema.optionalKey(Schema.Boolean),
+  autoNudgeMaxRounds: Schema.optionalKey(AutoNudgeMaxRounds),
   themeAccentColor: Schema.optionalKey(TrimmedString),
   appAccentColor: Schema.optionalKey(TrimmedString),
   defaultEditor: Schema.optionalKey(DefaultEditorSelection),

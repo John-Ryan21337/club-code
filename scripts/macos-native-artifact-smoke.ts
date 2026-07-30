@@ -73,7 +73,7 @@ export async function runMacosNativeArtifactSmoke(releaseDir = resolve("release"
   const artifacts = selectMacArtifacts(await readdir(releaseDir), arch);
   const smokeRoot = await mkdtemp(join(tmpdir(), "cafecode-macos-artifact-smoke-"));
   const mountPoint = join(smokeRoot, "mount");
-  const installedApp = join(smokeRoot, "installed", "Cafe Code.app");
+  const installedApp = join(smokeRoot, "installed", "Club Code.app");
   const zipRoot = join(smokeRoot, "zip");
   await Promise.all([
     mkdir(mountPoint, { recursive: true }),

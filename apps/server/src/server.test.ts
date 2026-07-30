@@ -9,12 +9,14 @@ import { brotliCompressSync, constants as zlibConstants, gzipSync } from "node:z
 
 import {
   CommandId,
+  DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES,
   DEFAULT_SERVER_SETTINGS,
   EnvironmentId,
   EventId,
   GitCommandError,
   KeybindingRule,
   MessageId,
+  MAX_AMBIENT_IMAGE_FILE_BYTES,
   ExternalLauncherError,
   type OrchestrationThreadShell,
   type OrchestrationCommand,
@@ -63,7 +65,7 @@ const TEST_EPOCH = DateTime.makeUnsafe("1970-01-01T00:00:00.000Z");
 
 import type { ServerConfigShape } from "./config.ts";
 import { deriveServerPaths, ServerConfig } from "./config.ts";
-import { makeRoutesLayer } from "./server.ts";
+import { makeRoutesLayer, youTubeAccountRoutesLayer } from "./server.ts";
 import { WebPushNotificationsTest } from "./notifications/WebPushNotifications.ts";
 import * as NodeHttpServerCompression from "./nodeHttpServerCompression.ts";
 import { resolveAttachmentRelativePath } from "./attachmentPaths.ts";
@@ -108,6 +110,13 @@ import {
   type UsageStatsServiceShape,
 } from "./usageStats/Services/UsageStatsService.ts";
 import { BrandingImageStoreLive } from "./branding/BrandingImageStore.ts";
+import { AmbientImageStoreLive } from "./ambientMedia/AmbientImageStore.ts";
+import { YouTubePublicDiscoveryLive } from "./ambientMedia/YouTubePublicDiscovery.ts";
+import {
+  YouTubeAccountConnection,
+  YouTubeAccountConnectionError,
+  type YouTubeAccountConnectionShape,
+} from "./ambientMedia/YouTubeAccountConnection.ts";
 import {
   BrowserTraceCollector,
   type BrowserTraceCollectorShape,
@@ -167,10 +176,39 @@ const testEnvironmentDescriptor = {
 };
 const tinyPngBytes = Uint8Array.from(
   Buffer.from(
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=",
     "base64",
   ),
 );
+const tinyGifBytes = Uint8Array.from(
+  Buffer.from("R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==", "base64"),
+);
+const gifWithEncodedSize = (sizeBytes: number): Uint8Array => {
+  const prefix = tinyGifBytes.subarray(0, tinyGifBytes.byteLength - 1);
+  if (sizeBytes < tinyGifBytes.byteLength + 5) {
+    throw new Error("Padded GIF fixture must have room for a comment extension.");
+  }
+
+  const bytes = new Uint8Array(sizeBytes);
+  bytes.set(prefix);
+  let offset = prefix.byteLength;
+  bytes[offset++] = 0x21;
+  bytes[offset++] = 0xfe;
+  let subBlockBudget = sizeBytes - offset - 2;
+  while (subBlockBudget > 0) {
+    let blockBytes = Math.min(256, subBlockBudget);
+    if (subBlockBudget - blockBytes === 1) blockBytes -= 1;
+    if (blockBytes < 2) throw new Error("Invalid padded GIF fixture budget.");
+    bytes[offset++] = blockBytes - 1;
+    bytes.fill(0x61, offset, offset + blockBytes - 1);
+    offset += blockBytes - 1;
+    subBlockBudget -= blockBytes;
+  }
+  bytes[offset++] = 0;
+  bytes[offset++] = 0x3b;
+  if (offset !== sizeBytes) throw new Error("Padded GIF fixture has the wrong encoded size.");
+  return bytes;
+};
 const makeDefaultOrchestrationReadModel = () => {
   const now = "2026-01-01T00:00:00.000Z";
   return {
@@ -465,6 +503,7 @@ const buildAppUnderTest = (options?: {
     serverEnvironment?: Partial<ServerEnvironmentShape>;
     repositoryIdentityResolver?: Partial<RepositoryIdentityResolverShape>;
     usageStats?: Partial<UsageStatsServiceShape>;
+    youtubeAccountConnection?: Partial<YouTubeAccountConnectionShape>;
   };
 }) =>
   Effect.gen(function* () {
@@ -499,6 +538,7 @@ const buildAppUnderTest = (options?: {
       desktopBootstrapToken: defaultDesktopBootstrapToken,
       autoBootstrapProjectFromCwd: false,
       logWebSocketEvents: false,
+      ambientExperienceCapabilities: DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES,
       ...options?.config,
     };
     const layerConfig = Layer.succeed(ServerConfig, config);
@@ -630,10 +670,13 @@ const buildAppUnderTest = (options?: {
         })
       : VcsStatusBroadcaster.layer.pipe(Layer.provide(gitWorkflowLayer));
 
-    const servedRoutesLayer = HttpRouter.serve(makeRoutesLayer, {
-      disableListenLog: true,
-      disableLogger: true,
-    }).pipe(
+    const servedRoutesLayer = HttpRouter.serve(
+      Layer.mergeAll(makeRoutesLayer, youTubeAccountRoutesLayer),
+      {
+        disableListenLog: true,
+        disableLogger: true,
+      },
+    ).pipe(
       Layer.provide(
         Layer.mock(Keybindings)({
           loadConfigState: Effect.succeed({
@@ -958,6 +1001,37 @@ const buildAppUnderTest = (options?: {
       Layer.provide(workspaceAndProjectServicesLayer),
       Layer.provideMerge(FetchHttpClient.layer),
       Layer.provideMerge(BrandingImageStoreLive),
+      Layer.provideMerge(AmbientImageStoreLive),
+      Layer.provideMerge(YouTubePublicDiscoveryLive),
+      Layer.provide(
+        Layer.mock(YouTubeAccountConnection)({
+          start: () =>
+            Effect.fail(
+              new YouTubeAccountConnectionError({
+                code: "unavailable",
+                status: 503,
+              }),
+            ),
+          complete: () =>
+            Effect.fail(
+              new YouTubeAccountConnectionError({
+                code: "invalid-callback",
+                status: 400,
+              }),
+            ),
+          status: () => Effect.succeed({ status: "disconnected" as const }),
+          listOwnedPlaylists: () =>
+            Effect.fail(
+              new YouTubeAccountConnectionError({
+                code: "not-connected",
+                status: 409,
+              }),
+            ),
+          disconnect: () => Effect.void,
+          shutdown: () => Effect.void,
+          ...options?.layers?.youtubeAccountConnection,
+        }),
+      ),
       Layer.provide(layerConfig),
     );
 
@@ -1364,6 +1438,33 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       const response = yield* HttpClient.get("/");
       assert.equal(response.status, 200);
       assert.include(yield* response.text, "router-static-ok");
+      const contentSecurityPolicy = getHeader(response.headers, "content-security-policy") ?? "";
+      assert.include(contentSecurityPolicy, "default-src 'self'");
+      assert.equal(
+        contentSecurityPolicy.split("; ").find((directive) => directive.startsWith("script-src ")),
+        "script-src 'self' 'wasm-unsafe-eval'",
+      );
+      assert.include(contentSecurityPolicy, "style-src 'self' https://fonts.googleapis.com");
+      assert.include(contentSecurityPolicy, "style-src-attr 'unsafe-inline'");
+      assert.include(contentSecurityPolicy, "font-src 'self' https://fonts.gstatic.com data:");
+      assert.include(contentSecurityPolicy, "img-src 'self' data: blob:");
+      assert.include(contentSecurityPolicy, "media-src 'self' blob: cafecode-media:");
+      assert.include(contentSecurityPolicy, "worker-src 'self' blob:");
+      assert.include(contentSecurityPolicy, "connect-src 'self' http: https: ws: wss:");
+      assert.equal(
+        contentSecurityPolicy.split("; ").find((directive) => directive.startsWith("frame-src ")),
+        "frame-src https://www.youtube-nocookie.com https://open.spotify.com",
+      );
+      assert.include(contentSecurityPolicy, "object-src 'none'");
+      assert.include(contentSecurityPolicy, "frame-ancestors 'none'");
+      assert.notInclude(contentSecurityPolicy, "'unsafe-eval'");
+      assert.equal(getHeader(response.headers, "referrer-policy"), "no-referrer");
+      assert.equal(getHeader(response.headers, "x-content-type-options"), "nosniff");
+      assert.equal(getHeader(response.headers, "x-frame-options"), "DENY");
+      assert.equal(
+        getHeader(response.headers, "permissions-policy"),
+        'camera=(), fullscreen=(self "https://www.youtube-nocookie.com" "https://open.spotify.com"), geolocation=(), microphone=(), payment=(), usb=()',
+      );
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
@@ -2446,9 +2547,18 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect("accepts websocket rpc handshake with a bootstrapped browser session cookie", () =>
+  it.effect("exposes configured ambient capabilities through authenticated websocket rpc", () =>
     Effect.gen(function* () {
-      yield* buildAppUnderTest();
+      const ambientExperienceCapabilities = {
+        ...DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES,
+        atmosphere: true,
+        youtubePlayer: true,
+      };
+      yield* buildAppUnderTest({
+        config: {
+          ambientExperienceCapabilities,
+        },
+      });
 
       const { response: bootstrapResponse, cookie } = yield* bootstrapBrowserSession();
 
@@ -2465,6 +2575,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
       assert.equal(response.environment.environmentId, testEnvironmentDescriptor.environmentId);
       assert.equal(response.auth.policy, "desktop-managed-local");
+      assert.deepEqual(response.ambientExperienceCapabilities, ambientExperienceCapabilities);
     }).pipe(Effect.provide(makeProductionHttpServerTestLayer())),
   );
 
@@ -2780,6 +2891,204 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.isFalse((yield* unsupportedResponse.text).includes("data:image"));
       assert.isFalse((yield* invalidResponse.text).includes("data:image"));
       assert.isFalse((yield* missingResponse.text).includes("data:image"));
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("uploads ambient images and bounds chunked bodies without Content-Length", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+      const cookie = yield* getAuthenticatedSessionCookieHeader();
+
+      const uploadResponse = yield* HttpClient.post("/api/ambient-media/image", {
+        headers: { cookie, "content-type": "image/png" },
+        body: HttpBody.uint8Array(tinyPngBytes, "image/png"),
+      });
+      const uploadBody = (yield* uploadResponse.json) as {
+        readonly ambientImage: { readonly id: string; readonly url: string };
+      };
+      assert.equal(uploadResponse.status, 200);
+      assert.match(uploadBody.ambientImage.id, /^sha256-[a-f0-9]{64}\.png$/);
+
+      const imageResponse = yield* HttpClient.get(uploadBody.ambientImage.url, {
+        headers: { cookie },
+      });
+      assert.equal(imageResponse.status, 200);
+      assert.deepEqual(
+        Array.from(new Uint8Array(yield* imageResponse.arrayBuffer)),
+        Array.from(tinyPngBytes),
+      );
+
+      const exactLimitResponse = yield* HttpClient.post("/api/ambient-media/image", {
+        headers: { cookie, "content-type": "image/gif" },
+        body: HttpBody.uint8Array(gifWithEncodedSize(MAX_AMBIENT_IMAGE_FILE_BYTES), "image/gif"),
+      });
+      assert.equal(exactLimitResponse.status, 200);
+      const exactLimitBody = (yield* exactLimitResponse.json) as {
+        readonly ambientImage: { readonly sizeBytes: number };
+      };
+      assert.equal(exactLimitBody.ambientImage.sizeBytes, MAX_AMBIENT_IMAGE_FILE_BYTES);
+
+      const uploadUrl = yield* getHttpServerUrl("/api/ambient-media/image");
+      const oversizedStatus = yield* Effect.promise(
+        () =>
+          new Promise<number>((resolve, reject) => {
+            const request = NodeHttp.request(
+              uploadUrl,
+              {
+                method: "POST",
+                headers: {
+                  cookie,
+                  "content-type": "image/png",
+                  "transfer-encoding": "chunked",
+                },
+              },
+              (response) => {
+                response.resume();
+                response.on("end", () => resolve(response.statusCode ?? 0));
+              },
+            );
+            request.on("error", reject);
+            request.end(Buffer.alloc(MAX_AMBIENT_IMAGE_FILE_BYTES + 2));
+          }),
+      );
+      assert.equal(oversizedStatus, 413);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("guards public YouTube discovery with auth, capability, and a server-only key", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest({
+        config: {
+          ambientExperienceCapabilities: {
+            ...DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES,
+            youtubePublicDiscovery: true,
+          },
+        },
+      });
+      const unauthenticated = yield* HttpClient.post("/api/ambient-media/youtube/search", {
+        body: HttpBody.jsonUnsafe({ query: "ambient", maxResults: 8 }),
+      });
+      const cookie = yield* getAuthenticatedSessionCookieHeader();
+      const invalid = yield* HttpClient.post("/api/ambient-media/youtube/search", {
+        headers: { cookie },
+        body: HttpBody.jsonUnsafe({ query: "\n", maxResults: 8 }),
+      });
+      const malformed = yield* HttpClient.post("/api/ambient-media/youtube/search", {
+        headers: { cookie, "content-type": "application/json" },
+        body: HttpBody.text("{"),
+      });
+      const unavailable = yield* HttpClient.post("/api/ambient-media/youtube/search", {
+        headers: { cookie },
+        body: HttpBody.jsonUnsafe({ query: "ambient", maxResults: 8 }),
+      });
+      const discoveryUrl = yield* getHttpServerUrl("/api/ambient-media/youtube/search");
+      const oversized = yield* Effect.promise(
+        () =>
+          new Promise<{ readonly status: number; readonly body: string }>((resolve, reject) => {
+            const request = NodeHttp.request(
+              discoveryUrl,
+              {
+                method: "POST",
+                headers: {
+                  cookie,
+                  "content-type": "application/json",
+                  "transfer-encoding": "chunked",
+                },
+              },
+              (response) => {
+                const chunks: Buffer[] = [];
+                response.on("data", (chunk: Buffer) => chunks.push(chunk));
+                response.on("end", () =>
+                  resolve({
+                    status: response.statusCode ?? 0,
+                    body: Buffer.concat(chunks).toString("utf8"),
+                  }),
+                );
+              },
+            );
+            request.on("error", reject);
+            request.end(
+              JSON.stringify({
+                query: "x".repeat(1_100),
+                maxResults: 8,
+              }),
+            );
+          }),
+      );
+
+      assert.equal(unauthenticated.status, 401);
+      assert.equal(invalid.status, 400);
+      assert.deepEqual((yield* invalid.json) as unknown, { error: "invalid-query" });
+      assert.equal(malformed.status, 400);
+      assert.deepEqual((yield* malformed.json) as unknown, { error: "invalid-query" });
+      assert.equal(oversized.status, 413);
+      assert.deepEqual(JSON.parse(oversized.body), { error: "payload-too-large" });
+      assert.equal(unavailable.status, 503);
+      assert.deepEqual((yield* unavailable.json) as unknown, { error: "unavailable" });
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("keeps YouTube account routes owner-gated, no-store, and fail-closed", () =>
+    Effect.gen(function* () {
+      let callbackInput: { readonly state: string; readonly code: string } | undefined;
+      yield* buildAppUnderTest({
+        layers: {
+          youtubeAccountConnection: {
+            complete: (input) =>
+              Effect.sync(() => {
+                callbackInput = input;
+              }),
+          },
+        },
+      });
+      const unauthenticated = yield* HttpClient.get("/api/ambient-media/youtube/account/status");
+      const cookie = yield* getAuthenticatedSessionCookieHeader();
+      const status = yield* HttpClient.get("/api/ambient-media/youtube/account/status", {
+        headers: { cookie },
+      });
+      const start = yield* HttpClient.post("/api/ambient-media/youtube/account/start", {
+        headers: { cookie },
+      });
+      const invalidCallback = yield* HttpClient.get("/api/ambient-media/youtube/account/callback");
+      const proxiedCallback = yield* HttpClient.get("/?state=proxied-state&code=proxied-code", {
+        headers: { "x-cafe-code-https-proxy": "1" },
+      });
+      const loopbackCallback = yield* HttpClient.get("/?state=opaque-state&code=oauth-code");
+
+      assert.equal(unauthenticated.status, 401);
+      assert.equal(status.status, 200);
+      assert.deepEqual((yield* status.json) as unknown, { status: "disconnected" });
+      assert.equal(status.headers["cache-control"], "no-store");
+      assert.equal(start.status, 503);
+      assert.deepEqual((yield* start.json) as unknown, { error: "unavailable" });
+      assert.equal(start.headers["cache-control"], "no-store");
+      assert.equal(invalidCallback.status, 400);
+      assert.equal(invalidCallback.headers["cache-control"], "no-store");
+      assert.equal(invalidCallback.headers["referrer-policy"], "no-referrer");
+      assert.equal(proxiedCallback.status, 400);
+      assert.equal(proxiedCallback.headers["cache-control"], "no-store");
+      assert.equal(proxiedCallback.headers["referrer-policy"], "no-referrer");
+      assert.equal(loopbackCallback.status, 200);
+      assert.equal(loopbackCallback.headers["cache-control"], "no-store");
+      assert.equal(loopbackCallback.headers["referrer-policy"], "no-referrer");
+      assert.deepEqual(callbackInput, { state: "opaque-state", code: "oauth-code" });
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("rejects unauthenticated ambient image reads, uploads, and removals", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+      const id = `sha256-${"c".repeat(64)}.png`;
+      const uploadResponse = yield* HttpClient.post("/api/ambient-media/image", {
+        headers: { "content-type": "image/png" },
+        body: HttpBody.uint8Array(tinyPngBytes, "image/png"),
+      });
+      const imageResponse = yield* HttpClient.get(`/api/ambient-media/image/${id}`);
+      const removeResponse = yield* HttpClient.del(`/api/ambient-media/image/${id}`);
+
+      assert.equal(uploadResponse.status, 401);
+      assert.equal(imageResponse.status, 401);
+      assert.equal(removeResponse.status, 401);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
@@ -3161,6 +3470,51 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
       assert.deepEqual(response.issues, []);
       assert.deepEqual(response.keybindings, [resolved]);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("rejects malformed ambient client settings patches without mutating settings", () =>
+    Effect.gen(function* () {
+      const persistedSettings = {
+        ...DEFAULT_CLIENT_SETTINGS,
+        timestampFormat: "24-hour" as const,
+        fallingEffectSpeed: 2,
+      };
+      let updateAttempts = 0;
+
+      yield* buildAppUnderTest({
+        layers: {
+          clientSettings: {
+            getSettings: Effect.succeed(persistedSettings),
+            updateSettings: () => {
+              updateAttempts += 1;
+              return Effect.die("malformed client settings patch reached the mutation service");
+            },
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const before = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) => client[WS_METHODS.serverGetClientSettings]({})),
+      );
+      const malformedUpdate = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.serverUpdateClientSettings]({
+            patch: {
+              fallingEffectSpeed: 99,
+            },
+          } as never),
+        ).pipe(Effect.exit),
+      );
+      const after = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) => client[WS_METHODS.serverGetClientSettings]({})),
+      );
+
+      assertTrue(malformedUpdate._tag === "Failure");
+      assert.equal(updateAttempts, 0);
+      assert.deepEqual(before, persistedSettings);
+      assert.deepEqual(after, persistedSettings);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
@@ -4159,6 +4513,55 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         assert.equal(yield* Deferred.await(usageRefresh), defaultModelSelection.instanceId);
         assert.equal(yield* Ref.get(fullRefreshCalls), 0);
       }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("supports lightweight provider usage refreshes over RPC", () =>
+    Effect.gen(function* () {
+      const instanceId = ProviderInstanceId.make("codex_personal");
+      const usageRefreshCalls = yield* Ref.make<ReadonlyArray<ProviderInstanceId>>([]);
+      const fullRefreshCalls = yield* Ref.make(0);
+      const provider = {
+        instanceId,
+        driver: ProviderDriverKind.make("codex"),
+        enabled: true,
+        installed: true,
+        version: "0.145.0",
+        status: "ready" as const,
+        auth: { status: "authenticated" as const, type: "chatgpt" as const },
+        checkedAt: "2026-01-01T00:00:00.000Z",
+        models: [],
+        slashCommands: [],
+        skills: [],
+      };
+
+      yield* buildAppUnderTest({
+        layers: {
+          providerRegistry: {
+            getProviders: Effect.succeed([provider]),
+            refreshInstance: () =>
+              Ref.update(fullRefreshCalls, (count) => count + 1).pipe(Effect.as([provider])),
+            refreshInstanceAccountUsage: (refreshedInstanceId) =>
+              Ref.update(usageRefreshCalls, (calls) => [...calls, refreshedInstanceId]).pipe(
+                Effect.as([provider]),
+              ),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const result = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.serverRefreshProviders]({
+            instanceId,
+            usageOnly: true,
+          }),
+        ),
+      );
+
+      assert.deepEqual(result.providers, [provider]);
+      assert.deepEqual(yield* Ref.get(usageRefreshCalls), [instanceId]);
+      assert.equal(yield* Ref.get(fullRefreshCalls), 0);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
   it.effect("filters thread subscription events already covered by the snapshot", () =>

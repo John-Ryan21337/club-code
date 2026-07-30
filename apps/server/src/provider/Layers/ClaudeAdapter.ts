@@ -75,6 +75,7 @@ import * as Stream from "effect/Stream";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
+import { getAgentBrowserBridge } from "../AgentBrowserBridge.ts";
 import { makeClaudeEnvironment } from "../Drivers/ClaudeHome.ts";
 import {
   getClaudeModelCapabilities,
@@ -97,6 +98,12 @@ const encodeUnknownJsonStringExit = Schema.encodeUnknownExit(Schema.UnknownFromJ
 const decodeUnknownJsonStringExit = Schema.decodeUnknownExit(Schema.UnknownFromJsonString);
 
 const PROVIDER = ProviderDriverKind.make("claudeAgent");
+export const CLAUDE_ULTRA_CACHING_APPEND_PROMPT = [
+  "Keep context growth economical without sacrificing correctness.",
+  "Do not repeat completed reasoning, large logs, or source already available by file and symbol.",
+  "When producing a handoff or progress summary, use: Objective; Durable requirements and decisions; Completed and validated; Active work; Risks or blockers; Exact next steps.",
+  "Preserve unresolved user requirements, safety constraints, failures, and validation evidence.",
+].join("\n");
 
 function runtimeModeToClaudePermissionMode(runtimeMode: RuntimeMode): PermissionMode | undefined {
   switch (runtimeMode) {
@@ -739,24 +746,29 @@ function maxClaudeContextWindowFromModelUsage(
 function normalizeClaudeTokenUsage(
   value: unknown,
   contextWindow?: number,
+  totalsAreCumulative = false,
 ): ThreadTokenUsageSnapshot | undefined {
   if (!value || typeof value !== "object") {
     return undefined;
   }
 
   const usage = value as Record<string, unknown>;
+  const cacheWriteInputTokens =
+    typeof usage.cache_creation_input_tokens === "number" &&
+    Number.isFinite(usage.cache_creation_input_tokens)
+      ? usage.cache_creation_input_tokens
+      : 0;
+  const cachedInputTokens =
+    typeof usage.cache_read_input_tokens === "number" &&
+    Number.isFinite(usage.cache_read_input_tokens)
+      ? usage.cache_read_input_tokens
+      : 0;
   const inputTokens =
     (typeof usage.input_tokens === "number" && Number.isFinite(usage.input_tokens)
       ? usage.input_tokens
       : 0) +
-    (typeof usage.cache_creation_input_tokens === "number" &&
-    Number.isFinite(usage.cache_creation_input_tokens)
-      ? usage.cache_creation_input_tokens
-      : 0) +
-    (typeof usage.cache_read_input_tokens === "number" &&
-    Number.isFinite(usage.cache_read_input_tokens)
-      ? usage.cache_read_input_tokens
-      : 0);
+    cacheWriteInputTokens +
+    cachedInputTokens;
   const outputTokens =
     typeof usage.output_tokens === "number" && Number.isFinite(usage.output_tokens)
       ? usage.output_tokens
@@ -782,6 +794,20 @@ function normalizeClaudeTokenUsage(
     lastUsedTokens: usedTokens,
     ...(totalProcessedTokens > usedTokens ? { totalProcessedTokens } : {}),
     ...(inputTokens > 0 ? { inputTokens } : {}),
+    ...(cachedInputTokens > 0
+      ? {
+          cachedInputTokens,
+          lastCachedInputTokens: cachedInputTokens,
+          ...(totalsAreCumulative ? { totalCachedInputTokens: cachedInputTokens } : {}),
+        }
+      : {}),
+    ...(cacheWriteInputTokens > 0
+      ? {
+          cacheWriteInputTokens,
+          lastCacheWriteInputTokens: cacheWriteInputTokens,
+          ...(totalsAreCumulative ? { totalCacheWriteInputTokens: cacheWriteInputTokens } : {}),
+        }
+      : {}),
     ...(outputTokens > 0 ? { outputTokens } : {}),
     ...(maxTokens !== undefined ? { maxTokens } : {}),
     ...(typeof usage.tool_uses === "number" && Number.isFinite(usage.tool_uses)
@@ -856,14 +882,19 @@ function claudeAssistantUsagePayload(message: SDKMessage): unknown {
 const THREAD_TOKEN_USAGE_SNAPSHOT_KEYS = [
   "usedTokens",
   "totalProcessedTokens",
+  "totalOutputTokens",
+  "totalCachedInputTokens",
   "maxTokens",
   "inputTokens",
   "cachedInputTokens",
+  "cacheWriteInputTokens",
+  "totalCacheWriteInputTokens",
   "outputTokens",
   "reasoningOutputTokens",
   "lastUsedTokens",
   "lastInputTokens",
   "lastCachedInputTokens",
+  "lastCacheWriteInputTokens",
   "lastOutputTokens",
   "lastReasoningOutputTokens",
   "toolUses",
@@ -2620,7 +2651,11 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     // Prefer the last message-level usage snapshot from message_start/message_delta
     // as the current-window estimate, and attach the accumulated result total as
     // totalProcessedTokens for cost/throughput diagnostics.
-    const accumulatedSnapshot = normalizeClaudeTokenUsage(result?.usage, effectiveContextWindow);
+    const accumulatedSnapshot = normalizeClaudeTokenUsage(
+      result?.usage,
+      effectiveContextWindow,
+      true,
+    );
     const accumulatedTotalProcessedTokens =
       accumulatedSnapshot?.totalProcessedTokens ?? accumulatedSnapshot?.usedTokens;
     const lastGoodUsage = context.lastKnownTokenUsage;
@@ -2636,6 +2671,14 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           accumulatedTotalProcessedTokens > lastGoodUsage.usedTokens
             ? {
                 totalProcessedTokens: accumulatedTotalProcessedTokens,
+              }
+            : {}),
+          ...(accumulatedSnapshot?.totalCachedInputTokens !== undefined
+            ? { totalCachedInputTokens: accumulatedSnapshot.totalCachedInputTokens }
+            : {}),
+          ...(accumulatedSnapshot?.totalCacheWriteInputTokens !== undefined
+            ? {
+                totalCacheWriteInputTokens: accumulatedSnapshot.totalCacheWriteInputTokens,
               }
             : {}),
         }
@@ -4722,12 +4765,36 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       const existingResumeSessionId = durableResumeState?.resume;
       const resumeBaseTurnCount = durableResumeState?.turnCount ?? 0;
 
+      const agentBrowserMcp = yield* Effect.promise(() =>
+        getAgentBrowserBridge().mcpConfig({
+          threadId,
+          providerInstanceId: boundInstanceId,
+        }),
+      );
       const queryOptions: ClaudeQueryOptions = {
         ...(input.cwd ? { cwd: input.cwd } : {}),
         ...(apiModelId ? { model: apiModelId } : {}),
         pathToClaudeCodeExecutable: claudeBinaryPath,
-        systemPrompt: { type: "preset", preset: "claude_code" },
+        systemPrompt: claudeSettings.ultraCaching
+          ? {
+              type: "preset",
+              preset: "claude_code",
+              excludeDynamicSections: true,
+              append: CLAUDE_ULTRA_CACHING_APPEND_PROMPT,
+            }
+          : { type: "preset", preset: "claude_code" },
         settingSources: [...CLAUDE_SETTING_SOURCES],
+        mcpServers: {
+          club_browser: {
+            type: "http",
+            url: agentBrowserMcp.url,
+            headers: {
+              Authorization: agentBrowserMcp.authorization,
+              "X-Cafe-Browser-Thread": agentBrowserMcp.threadId,
+              "X-Cafe-Browser-Provider": agentBrowserMcp.providerInstanceId,
+            },
+          },
+        },
         // The SDK type can lag the CLI here: current Claude Code exposes
         // `xhigh`, but older published Agent SDK unions may not include it yet.
         ...(effectiveEffort

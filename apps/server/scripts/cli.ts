@@ -691,7 +691,7 @@ const assertPublishPreparedCmd = Command.make("assert-publish-prepared").pipe(
 // ---------------------------------------------------------------------------
 
 const cli = Command.make("cli").pipe(
-  Command.withDescription("Cafe Code server build & publish CLI."),
+  Command.withDescription("Club Code server build & publish CLI."),
   Command.withSubcommands([buildCmd, publishCmd, packCmd, assertPublishPreparedCmd]),
 );
 

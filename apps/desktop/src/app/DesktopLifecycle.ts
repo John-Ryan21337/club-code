@@ -147,7 +147,7 @@ const resolveProviderDaemonQuitAction = Effect.fn(
     message: "Provider sessions are still running",
     detail: `${activeSessionCount} provider session${
       activeSessionCount === 1 ? " is" : "s are"
-    } still active. Leave Codex, Claude, and other provider sessions running so Cafe Code can reconnect after restart, or stop them now?`,
+    } still active. Leave Codex, Claude, and other provider sessions running so Club Code can reconnect after restart, or stop them now?`,
     buttons: ["Leave Running", "Stop Sessions", "Cancel Quit"],
     defaultId: 0,
     cancelId: CANCEL_PROVIDER_DAEMON_QUIT_BUTTON_INDEX,

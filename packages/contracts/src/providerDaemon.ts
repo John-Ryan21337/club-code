@@ -24,6 +24,15 @@ import { ProviderRuntimeEvent } from "./providerRuntime.ts";
 import { ProviderPipelineDiagnostics } from "./providerPipelineDiagnostics.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 import { ProviderSupervisorHealthSummary } from "./providerSupervisor.ts";
+import {
+  AgentBrowserCompleteInputSchema,
+  AgentBrowserCompleteResultSchema,
+  AgentBrowserGrantInputSchema,
+  AgentBrowserGrantStateSchema,
+  AgentBrowserPollResultSchema,
+  AgentBrowserRevokeInputSchema,
+  AgentBrowserSessionContextSchema,
+} from "./embeddedBrowser.ts";
 
 export const PROVIDER_DAEMON_HEALTH_PATH = "/api/provider-daemon/health";
 export const PROVIDER_DAEMON_LIVENESS_PATH = "/api/provider-daemon/liveness";
@@ -450,6 +459,24 @@ const RollbackConversationPayload = Schema.Struct({
 });
 
 export const ProviderDaemonRpcRequest = Schema.Union([
+  // These process-local broker calls intentionally omit commandId so the
+  // daemon command ledger never persists grants, typed values, or results.
+  Schema.Struct({
+    method: Schema.Literal("agentBrowserGrant"),
+    payload: AgentBrowserGrantInputSchema,
+  }),
+  Schema.Struct({
+    method: Schema.Literal("agentBrowserRevoke"),
+    payload: AgentBrowserRevokeInputSchema,
+  }),
+  Schema.Struct({
+    method: Schema.Literal("agentBrowserPoll"),
+    payload: AgentBrowserSessionContextSchema,
+  }),
+  Schema.Struct({
+    method: Schema.Literal("agentBrowserComplete"),
+    payload: AgentBrowserCompleteInputSchema,
+  }),
   Schema.Struct({
     method: Schema.Literal("startSession"),
     commandId: Schema.optional(ProviderDaemonCommandId),
@@ -525,6 +552,10 @@ export const ProviderDaemonRpcRequest = Schema.Union([
 export type ProviderDaemonRpcRequest = typeof ProviderDaemonRpcRequest.Type;
 
 export const ProviderDaemonRpcResultByMethod = {
+  agentBrowserGrant: AgentBrowserGrantStateSchema,
+  agentBrowserRevoke: AgentBrowserGrantStateSchema,
+  agentBrowserPoll: AgentBrowserPollResultSchema,
+  agentBrowserComplete: AgentBrowserCompleteResultSchema,
   startSession: ProviderSession,
   sendTurn: ProviderTurnStartResult,
   steerTurn: ProviderTurnSteerResult,

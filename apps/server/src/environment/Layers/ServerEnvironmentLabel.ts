@@ -106,5 +106,5 @@ export const resolveServerEnvironmentLabel = Effect.fn("resolveServerEnvironment
     return hostname;
   }
 
-  return normalizeLabel(input.cwdBaseName) ?? "Cafe Code environment";
+  return normalizeLabel(input.cwdBaseName) ?? "Club Code environment";
 });

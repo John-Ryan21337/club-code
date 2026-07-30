@@ -3,6 +3,7 @@ import {
   type AuthAccessStreamEvent,
   type AuthAccessSnapshot,
   AuthSessionId,
+  DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES,
   DEFAULT_CLIENT_SETTINGS,
   DEFAULT_SERVER_SETTINGS,
   EnvironmentId,
@@ -19,7 +20,11 @@ import {
   type ServerRuntimeLayerDiagnosticsResult,
   type SourceControlDiscoveryResult,
 } from "@cafecode/contracts";
-import { MAX_SIDEBAR_BRAND_IMAGE_FILE_BYTES } from "@cafecode/contracts/settings";
+import {
+  type ClientSettings,
+  MAX_AMBIENT_IMAGE_FILE_BYTES,
+  MAX_SIDEBAR_BRAND_IMAGE_FILE_BYTES,
+} from "@cafecode/contracts/settings";
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 import { page } from "vitest/browser";
@@ -36,9 +41,16 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { __resetLocalApiForTests } from "../../localApi";
+import { localMediaStore } from "../../localMedia";
 import { AppAtomRegistryProvider, resetAppAtomRegistryForTests } from "../../rpc/atomRegistry";
-import { resetServerStateForTests, setServerConfigSnapshot } from "../../rpc/serverState";
+import {
+  getServerConfig,
+  resetServerStateForTests,
+  setServerConfigSnapshot,
+} from "../../rpc/serverState";
 import { useUiStateStore } from "../../uiStateStore";
+import { youtubeUrlQueueStore } from "../../youtubeUrlQueue";
+import { toastManager } from "../ui/toast";
 import { ConnectionsSettings } from "./ConnectionsSettings";
 import { DiagnosticsSettingsPanel } from "./DiagnosticsSettings";
 import {
@@ -47,6 +59,7 @@ import {
   FilesSettingsPanel,
   ProviderSettingsPanel,
   SystemSettingsPanel,
+  useSettingsRestore,
 } from "./SettingsPanels";
 import { SourceControlSettingsPanel } from "./SourceControlSettings";
 
@@ -232,6 +245,7 @@ function createBaseServerConfig(): ServerConfig {
     },
     settings: DEFAULT_SERVER_SETTINGS,
     clientSettings: { ...DEFAULT_CLIENT_SETTINGS, onboardingCompleted: true },
+    ambientExperienceCapabilities: DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES,
   };
 }
 
@@ -508,6 +522,8 @@ const createDesktopBridgeStub = (overrides?: {
   readonly setUpdateChannel?: DesktopBridge["setUpdateChannel"];
   readonly sourceUpdateState?: DesktopSourceUpdateState;
   readonly checkSourceUpdate?: DesktopBridge["checkSourceUpdate"];
+  readonly getWindowOpacityState?: DesktopBridge["getWindowOpacityState"];
+  readonly setWindowOpacityPreference?: DesktopBridge["setWindowOpacityPreference"];
 }): DesktopBridge => {
   const idleUpdateState: DesktopUpdateState = {
     enabled: false,
@@ -582,7 +598,47 @@ const createDesktopBridgeStub = (overrides?: {
         advertisedHost: null,
       })),
     getAdvertisedEndpoints: vi.fn().mockResolvedValue(overrides?.advertisedEndpoints ?? []),
+    getWindowOpacityState:
+      overrides?.getWindowOpacityState ??
+      vi.fn().mockResolvedValue({
+        supported: false,
+        enabled: false,
+        opacity: 1,
+        effectiveOpacity: 1,
+        reason: "unsupported-platform",
+      }),
+    setWindowOpacityPreference:
+      overrides?.setWindowOpacityPreference ??
+      vi.fn().mockImplementation(async ({ opacity }) => ({
+        supported: false,
+        enabled: false,
+        opacity,
+        effectiveOpacity: 1,
+        reason: "unsupported-platform",
+      })),
     pickFolder: vi.fn().mockResolvedValue(null),
+    getLocalMediaCapability: vi.fn().mockResolvedValue({
+      available: false,
+      engine: { label: "VLC", version: null, reason: "Unavailable in browser tests." },
+    }),
+    pickLocalMedia: vi.fn().mockResolvedValue(null),
+    releaseLocalMedia: vi.fn().mockResolvedValue(false),
+    openEmbeddedBrowser: vi.fn().mockRejectedValue(new Error("Not implemented in settings test")),
+    closeEmbeddedBrowser: vi.fn().mockRejectedValue(new Error("Not implemented in settings test")),
+    setEmbeddedBrowserBounds: vi
+      .fn()
+      .mockRejectedValue(new Error("Not implemented in settings test")),
+    shareEmbeddedBrowser: vi.fn().mockRejectedValue(new Error("Not implemented in settings test")),
+    navigateEmbeddedBrowser: vi
+      .fn()
+      .mockRejectedValue(new Error("Not implemented in settings test")),
+    controlEmbeddedBrowserHistory: vi
+      .fn()
+      .mockRejectedValue(new Error("Not implemented in settings test")),
+    snapshotEmbeddedBrowser: vi.fn().mockResolvedValue(null),
+    clickEmbeddedBrowser: vi.fn().mockRejectedValue(new Error("Not implemented in settings test")),
+    typeInEmbeddedBrowser: vi.fn().mockRejectedValue(new Error("Not implemented in settings test")),
+    onEmbeddedBrowserState: () => () => undefined,
     confirm: vi.fn().mockResolvedValue(false),
     setTheme: vi.fn().mockResolvedValue(undefined),
     showContextMenu: vi.fn().mockResolvedValue(null),
@@ -612,19 +668,59 @@ const createDesktopBridgeStub = (overrides?: {
 };
 
 function installClientSettingsNativeApi(desktopBridge: DesktopBridge) {
+  const updateSettings = vi
+    .fn<LocalApi["server"]["updateSettings"]>()
+    .mockResolvedValue(DEFAULT_SERVER_SETTINGS);
   const updateClientSettings = vi
     .fn<LocalApi["server"]["updateClientSettings"]>()
     .mockResolvedValue(DEFAULT_CLIENT_SETTINGS);
   window.nativeApi = {
+    dialogs: {
+      pickFolder: desktopBridge.pickFolder,
+      confirm: desktopBridge.confirm,
+    },
     persistence: {
       getClientSettings: desktopBridge.getClientSettings,
       setClientSettings: desktopBridge.setClientSettings,
     },
     server: {
+      updateSettings,
       updateClientSettings,
     },
+    shell: {
+      openExternal: async (url: string) => {
+        const opened = await desktopBridge.openExternal(url);
+        if (!opened) throw new Error("Unable to open link.");
+      },
+    },
   } as unknown as LocalApi;
-  return { updateClientSettings };
+  return { updateSettings, updateClientSettings };
+}
+
+function SettingsRestoreHarness({ onRestored }: { readonly onRestored: () => void }) {
+  const { changedSettingLabels, restoreDefaults } = useSettingsRestore(onRestored);
+  return (
+    <>
+      <output aria-label="Changed settings">{changedSettingLabels.join(" | ")}</output>
+      <button type="button" onClick={() => void restoreDefaults()}>
+        Apply settings reset
+      </button>
+    </>
+  );
+}
+
+function setColorInput(ariaLabel: string, value: string) {
+  const input = document.querySelector(
+    `input[aria-label="${ariaLabel}"]`,
+  ) as HTMLInputElement | null;
+  expect(input).not.toBeNull();
+  const inputValueSetter = Object.getOwnPropertyDescriptor(
+    HTMLInputElement.prototype,
+    "value",
+  )?.set;
+  inputValueSetter?.call(input, value);
+  input!.dispatchEvent(new Event("input", { bubbles: true }));
+  input!.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
 }
 
 describe("settings panels", () => {
@@ -638,6 +734,7 @@ describe("settings panels", () => {
   beforeEach(async () => {
     resetServerStateForTests();
     await __resetLocalApiForTests();
+    localMediaStore.clear();
     localStorage.clear();
     useUiStateStore.setState({ defaultAdvertisedEndpointKey: null });
     authAccessHarness.reset();
@@ -655,7 +752,26 @@ describe("settings panels", () => {
     document.body.innerHTML = "";
     resetServerStateForTests();
     await __resetLocalApiForTests();
+    localMediaStore.clear();
     authAccessHarness.reset();
+  });
+
+  it("keeps ambient image folder selection unavailable outside the desktop shell", async () => {
+    setServerConfigSnapshot(createBaseServerConfig());
+    mounted = await renderWithTestRouter(
+      <AppAtomRegistryProvider>
+        <AppearanceSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+    await expect.element(page.getByText("Image folder cycling")).toBeInTheDocument();
+    await expect
+      .element(
+        page.getByText(
+          "Image-folder cycling is available in the Club Code desktop app. Browser sessions keep single-image upload only.",
+        ),
+      )
+      .toBeInTheDocument();
+    expect(document.querySelector('input[aria-label="Ambient image folder"]')).toBeNull();
   });
 
   it("hides owner pairing tools in browser-served loopback builds without remote exposure", async () => {
@@ -985,7 +1101,7 @@ describe("settings panels", () => {
     });
   });
 
-  it("persists appearance preferences from Appearance settings", async () => {
+  it("keeps background Auto Nudge opt-in with a visible round cap", async () => {
     const desktopBridge = createDesktopBridgeStub();
     window.desktopBridge = desktopBridge;
     const { updateClientSettings } = installClientSettingsNativeApi(desktopBridge);
@@ -997,19 +1113,27 @@ describe("settings panels", () => {
       </AppAtomRegistryProvider>,
     );
 
-    const setColorInput = (ariaLabel: string, value: string) => {
-      const input = document.querySelector(
-        `input[aria-label="${ariaLabel}"]`,
-      ) as HTMLInputElement | null;
-      expect(input).not.toBeNull();
-      const inputValueSetter = Object.getOwnPropertyDescriptor(
-        HTMLInputElement.prototype,
-        "value",
-      )?.set;
-      inputValueSetter?.call(input, value);
-      input!.dispatchEvent(new Event("input", { bubbles: true }));
-      input!.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
-    };
+    await expect.element(page.getByText("Auto Nudge background continuation")).toBeInTheDocument();
+    await expect.element(page.getByLabelText("Auto Nudge maximum rounds")).toHaveValue("5");
+    await page.getByLabelText("Allow Auto Nudge background continuation").click();
+    await vi.waitFor(() => {
+      expect(updateClientSettings).toHaveBeenCalledWith({
+        autoNudgeBackgroundContinuation: true,
+      });
+    });
+  });
+
+  it("persists appearance preferences from Appearance settings", async () => {
+    const desktopBridge = createDesktopBridgeStub();
+    window.desktopBridge = desktopBridge;
+    const { updateClientSettings } = installClientSettingsNativeApi(desktopBridge);
+    setServerConfigSnapshot(createBaseServerConfig());
+
+    mounted = await renderWithTestRouter(
+      <AppAtomRegistryProvider>
+        <AppearanceSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
 
     await expect.element(page.getByText("Accent color")).toBeInTheDocument();
     setColorInput("Branding prefix", "Acme");
@@ -1038,6 +1162,24 @@ describe("settings panels", () => {
             status: 200,
             headers: { "content-type": "application/json" },
           },
+        );
+      }
+      if (url.endsWith("/api/ambient-media/image") && init?.method === "POST") {
+        const file = init.body as File;
+        const digest = file.name.startsWith("second") ? "b".repeat(64) : "a".repeat(64);
+        const extension = file.type === "image/gif" ? "gif" : "png";
+        return new Response(
+          JSON.stringify({
+            ambientImage: {
+              id: `sha256-${digest}.${extension}`,
+              url: `/api/ambient-media/image/sha256-${digest}.${extension}`,
+              mimeType: file.type,
+              width: 128,
+              height: 128,
+              sizeBytes: file.size,
+            },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
         );
       }
 
@@ -1099,6 +1241,49 @@ describe("settings panels", () => {
     await expect.element(page.getByText("Choose an image under 1 MB.")).toBeInTheDocument();
     expect(updateClientSettings).toHaveBeenCalledTimes(callsBeforeOversizedImage);
 
+    const ambientImageInput = document.querySelector(
+      'input[aria-label="Ambient image file"]',
+    ) as HTMLInputElement | null;
+    expect(ambientImageInput).not.toBeNull();
+    const oversizedAmbientImage = new File([], "ambient.gif", { type: "image/gif" });
+    Object.defineProperty(oversizedAmbientImage, "size", {
+      configurable: true,
+      value: MAX_AMBIENT_IMAGE_FILE_BYTES + 1,
+    });
+    const fetchCallsBeforeOversizedAmbientImage = uploadFetch.mock.calls.length;
+    Object.defineProperty(ambientImageInput, "files", {
+      configurable: true,
+      value: [oversizedAmbientImage],
+    });
+    ambientImageInput!.dispatchEvent(new Event("change", { bubbles: true }));
+
+    await expect.element(page.getByText("Choose an image up to 10 MiB.")).toBeInTheDocument();
+    expect(uploadFetch).toHaveBeenCalledTimes(fetchCallsBeforeOversizedAmbientImage);
+
+    const ambientDirectoryInput = document.querySelector(
+      'input[aria-label="Ambient image folder"]',
+    ) as HTMLInputElement | null;
+    expect(ambientDirectoryInput).not.toBeNull();
+    Object.defineProperty(ambientDirectoryInput, "files", {
+      configurable: true,
+      value: [
+        new File(["first"], "first.png", { type: "image/png" }),
+        new File(["second"], "second.gif", { type: "image/gif" }),
+      ],
+    });
+    ambientDirectoryInput!.dispatchEvent(new Event("change", { bubbles: true }));
+    await vi.waitFor(() => {
+      expect(updateClientSettings).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ambientImageCycleEnabled: true,
+          ambientImageCycleAssets: expect.arrayContaining([
+            expect.objectContaining({ mimeType: "image/png" }),
+            expect.objectContaining({ mimeType: "image/gif" }),
+          ]),
+        }),
+      );
+    });
+
     await expect.element(page.getByText("Accent color")).toBeInTheDocument();
     setColorInput("App accent color", "#dc2626");
 
@@ -1141,12 +1326,797 @@ describe("settings panels", () => {
       expect(updateClientSettings).toHaveBeenCalledWith({ continueBackgroundAnimations: true });
     });
 
+    await expect.element(page.getByText("Window atmosphere")).toBeInTheDocument();
+    await expect.element(page.getByText("Matrix", { exact: true })).not.toBeInTheDocument();
+    await page.getByLabelText("Show falling effects").click();
+
+    await vi.waitFor(() => {
+      expect(updateClientSettings).toHaveBeenCalledWith({ fallingEffectsEnabled: true });
+    });
+
+    await expect.element(page.getByText("Matrix color mode")).not.toBeInTheDocument();
+    const snowEffect = page.getByRole("radio", { name: "Snow", exact: true });
+    const rainEffect = page.getByRole("radio", { name: "Rain", exact: true });
+    const matrixEffect = page.getByRole("radio", { name: "Matrix", exact: true });
+    await expect.element(snowEffect).toHaveAttribute("aria-checked", "true");
+    await rainEffect.click();
+    await vi.waitFor(() => {
+      expect(updateClientSettings).toHaveBeenCalledWith({ fallingEffectKind: "rain" });
+    });
+    await expect.element(rainEffect).toHaveAttribute("aria-checked", "true");
+    await snowEffect.click();
+    await vi.waitFor(() => {
+      expect(updateClientSettings).toHaveBeenCalledWith({ fallingEffectKind: "snow" });
+    });
+    await matrixEffect.click();
+
+    await vi.waitFor(() => {
+      expect(updateClientSettings).toHaveBeenCalledWith({ fallingEffectKind: "matrix" });
+    });
+    await expect.element(matrixEffect).toHaveAttribute("aria-checked", "true");
+
+    await expect.element(page.getByText("Matrix color mode")).toBeInTheDocument();
+    await expect.element(page.getByText("Roman / Japanese mix")).toBeInTheDocument();
+    await page.getByRole("radio", { name: "Rainbow", exact: true }).click();
+    await page.getByRole("radio", { name: "Rainbow Extra", exact: true }).click();
+    await page.getByRole("radio", { name: "Music reactive · uniform", exact: true }).click();
+    await page.getByRole("radio", { name: "Music reactive · Rainbow Extra", exact: true }).click();
+    await page.getByRole("radio", { name: "Fixed", exact: true }).click();
+    await page.getByRole("radio", { name: "Music reactive · Rainbow Extra", exact: true }).click();
+
+    await vi.waitFor(() => {
+      expect(updateClientSettings).toHaveBeenCalledWith({
+        fallingEffectMatrixColorMode: "fixed",
+      });
+      expect(updateClientSettings).toHaveBeenCalledWith({
+        fallingEffectMatrixColorMode: "rainbow",
+      });
+      expect(updateClientSettings).toHaveBeenCalledWith({
+        fallingEffectMatrixColorMode: "rainbow-extra",
+      });
+      expect(updateClientSettings).toHaveBeenCalledWith({
+        fallingEffectMatrixColorMode: "music-reactive",
+      });
+      expect(updateClientSettings).toHaveBeenCalledWith({
+        fallingEffectMatrixColorMode: "music-reactive-extra",
+      });
+    });
+    await expect.element(page.getByText(/never read an iframe or microphone/)).toBeInTheDocument();
+    await expect
+      .element(page.getByRole("radio", { name: "Random independent", exact: true }))
+      .not.toBeInTheDocument();
+    await page.getByLabelText("Show provider activity links in Matrix rain").click();
+    await page.getByRole("radio", { name: "Follow Matrix colors", exact: true }).click();
+    await page.getByRole("radio", { name: "Random independent", exact: true }).click();
+    await page.getByRole("radio", { name: "Follow Matrix colors", exact: true }).click();
+    await vi.waitFor(() => {
+      expect(updateClientSettings).toHaveBeenCalledWith({ fallingEffectActivityLinks: true });
+      expect(updateClientSettings).toHaveBeenCalledWith({
+        fallingEffectActivityLinkColorMode: "random",
+      });
+      expect(updateClientSettings).toHaveBeenCalledWith({
+        fallingEffectActivityLinkColorMode: "matrix",
+      });
+    });
+    await expect
+      .element(page.getByText(/never invents data flow or renders prompts/))
+      .toBeInTheDocument();
+
+    setColorInput("Falling effect color", "#22c55e");
+
+    await vi.waitFor(() => {
+      expect(updateClientSettings).toHaveBeenCalledWith({ fallingEffectColor: "#22c55e" });
+    });
+
+    await page.getByLabelText("Increase falling effect opacity").click();
+    await page.getByLabelText("Increase falling effect speed").click();
+    await page.getByLabelText("Increase falling effect density").click();
+    await page.getByLabelText("Increase Japanese stream ratio").click();
+    await page.getByLabelText("Use 2ch-inspired Matrix enrichment").click();
+    await page.getByLabelText("Use live work vocabulary in Matrix rain").click();
+
+    await vi.waitFor(() => {
+      expect(updateClientSettings).toHaveBeenCalledWith({ fallingEffectOpacity: 0.4 });
+      expect(updateClientSettings).toHaveBeenCalledWith({ fallingEffectSpeed: 1.25 });
+      expect(updateClientSettings).toHaveBeenCalledWith({ fallingEffectDensity: 1.25 });
+      expect(updateClientSettings).toHaveBeenCalledWith({ fallingEffectJapaneseRatio: 0.5 });
+      expect(updateClientSettings).toHaveBeenCalledWith({ fallingEffect2chEnriched: true });
+      expect(updateClientSettings).toHaveBeenCalledWith({
+        fallingEffectLiveWorkVocabulary: true,
+      });
+    });
+
+    await page.getByLabelText("Show falling effects").click();
+    await vi.waitFor(() => {
+      expect(updateClientSettings).toHaveBeenCalledWith({ fallingEffectsEnabled: false });
+    });
+    await expect.element(page.getByText("Matrix", { exact: true })).not.toBeInTheDocument();
+    expect(getServerConfig()?.clientSettings).toMatchObject({
+      fallingEffectsEnabled: false,
+      fallingEffectKind: "matrix",
+      fallingEffectMatrixColorMode: "music-reactive-extra",
+      fallingEffect2chEnriched: true,
+      fallingEffectLiveWorkVocabulary: true,
+      fallingEffectActivityLinks: true,
+      fallingEffectActivityLinkColorMode: "matrix",
+    });
+
     await expect.element(page.getByText("Sidebar star speed")).toBeInTheDocument();
     await page.getByLabelText("Increase sidebar star speed").click();
 
     await vi.waitFor(() => {
       expect(updateClientSettings).toHaveBeenCalledWith({ sidebarStarSpeed: 1.25 });
     });
+  });
+
+  it("includes every Matrix preference in the global settings reset", async () => {
+    const confirm = vi.fn().mockResolvedValue(true);
+    const desktopBridge = {
+      ...createDesktopBridgeStub(),
+      confirm,
+    } satisfies DesktopBridge;
+    window.desktopBridge = desktopBridge;
+    const { updateClientSettings } = installClientSettingsNativeApi(desktopBridge);
+    const config = createBaseServerConfig();
+    setServerConfigSnapshot({
+      ...config,
+      clientSettings: {
+        ...config.clientSettings,
+        fallingEffectMatrixColorMode: "rainbow-extra",
+        fallingEffectLiveWorkVocabulary: true,
+        fallingEffectActivityLinks: true,
+        fallingEffectActivityLinkColorMode: "matrix",
+      },
+    });
+    const onRestored = vi.fn();
+
+    mounted = await renderWithTestRouter(
+      <AppAtomRegistryProvider>
+        <SettingsRestoreHarness onRestored={onRestored} />
+      </AppAtomRegistryProvider>,
+    );
+
+    await expect
+      .element(page.getByLabelText("Changed settings"))
+      .toHaveTextContent(
+        "Matrix color mode | Matrix live work vocabulary | Matrix activity links | Matrix activity link colors",
+      );
+    await page.getByRole("button", { name: "Apply settings reset" }).click();
+
+    await vi.waitFor(() => {
+      expect(confirm).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "Matrix color mode, Matrix live work vocabulary, Matrix activity links, Matrix activity link colors",
+        ),
+      );
+      expect(updateClientSettings).toHaveBeenCalledWith(
+        expect.objectContaining({
+          fallingEffectMatrixColorMode: "fixed",
+          fallingEffectLiveWorkVocabulary: false,
+          fallingEffectActivityLinks: false,
+          fallingEffectActivityLinkColorMode: "random",
+        }),
+      );
+      expect(getServerConfig()?.clientSettings).toMatchObject({
+        fallingEffectMatrixColorMode: "fixed",
+        fallingEffectLiveWorkVocabulary: false,
+        fallingEffectActivityLinks: false,
+        fallingEffectActivityLinkColorMode: "random",
+      });
+      expect(onRestored).toHaveBeenCalledOnce();
+    });
+  });
+
+  it("normalizes ambient streaming sources and commits native opacity on blur", async () => {
+    youtubeUrlQueueStore.clear();
+    const setWindowOpacityPreference = vi
+      .fn<DesktopBridge["setWindowOpacityPreference"]>()
+      .mockImplementation(async ({ enabled, opacity }) => ({
+        supported: true,
+        enabled,
+        opacity,
+        effectiveOpacity: enabled ? opacity : 1,
+        reason: null,
+      }));
+    const desktopBridge = createDesktopBridgeStub({
+      getWindowOpacityState: vi.fn().mockResolvedValue({
+        supported: true,
+        enabled: false,
+        opacity: 1,
+        effectiveOpacity: 1,
+        reason: null,
+      }),
+      setWindowOpacityPreference,
+    });
+    window.desktopBridge = desktopBridge;
+    const { updateClientSettings } = installClientSettingsNativeApi(desktopBridge);
+    setServerConfigSnapshot(createBaseServerConfig());
+
+    mounted = await renderWithTestRouter(
+      <AppAtomRegistryProvider>
+        <AppearanceSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    await expect.element(page.getByText("Ambient streaming")).toBeInTheDocument();
+    await page.getByRole("button", { name: "EDM", exact: true }).click();
+    await expect.element(page.getByText("URL 1 of 19")).toBeInTheDocument();
+    await expect.element(page.getByText(/Accepted 19; skipped 1 invalid/)).toBeInTheDocument();
+    await expect
+      .element(page.getByRole("button", { name: "EDM", exact: true }))
+      .toHaveAttribute("aria-pressed", "true");
+    await page.getByRole("button", { name: "Japanese music", exact: true }).click();
+    await expect.element(page.getByText("URL 1 of 36")).toBeInTheDocument();
+    await expect.element(page.getByText(/Accepted 36; skipped 3 invalid/)).toBeInTheDocument();
+    await expect
+      .element(page.getByRole("button", { name: "Japanese music", exact: true }))
+      .toHaveAttribute("aria-pressed", "true");
+    await vi.waitFor(() => {
+      expect(updateClientSettings).toHaveBeenCalledWith({ ambientVideoEnabled: true });
+    });
+    await page.getByLabelText("Ambient video glow").click();
+    await vi.waitFor(() => {
+      expect(updateClientSettings).toHaveBeenCalledWith({ ambientVideoGlowEnabled: true });
+    });
+    await page.getByLabelText("Ambient video glow mode").click();
+    await page.getByText("Match video", { exact: true }).click();
+    await vi.waitFor(() => {
+      expect(updateClientSettings).toHaveBeenCalledWith({ ambientVideoGlowMode: "adaptive" });
+    });
+    await expect
+      .element(page.getByText(/Uses the current YouTube video artwork/))
+      .toBeInTheDocument();
+
+    const sourceInput = document.querySelector(
+      'input[aria-label="YouTube or Spotify media source"]',
+    ) as HTMLInputElement | null;
+    expect(sourceInput).not.toBeNull();
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(
+      sourceInput,
+      "https://youtu.be/dQw4w9WgXcQ?t=7",
+    );
+    sourceInput!.dispatchEvent(new Event("input", { bubbles: true }));
+    await page.getByRole("button", { name: "Apply", exact: true }).click();
+
+    await vi.waitFor(() => {
+      expect(updateClientSettings).toHaveBeenCalledWith({
+        ambientVideoSource: { kind: "video", id: "dQw4w9WgXcQ" },
+        ambientVideoEnabled: true,
+      });
+    });
+
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(
+      sourceInput,
+      "https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M?si=discard-me",
+    );
+    sourceInput!.dispatchEvent(new Event("input", { bubbles: true }));
+    await page.getByRole("button", { name: "Apply", exact: true }).click();
+
+    await vi.waitFor(() => {
+      expect(updateClientSettings).toHaveBeenCalledWith({
+        ambientVideoSource: {
+          kind: "spotify",
+          entityType: "playlist",
+          id: "37i9dQZF1DXcBWIGoYBM5M",
+        },
+        ambientVideoEnabled: true,
+      });
+    });
+
+    const searchInput = document.querySelector(
+      'input[aria-label="Search YouTube"]',
+    ) as HTMLInputElement | null;
+    expect(searchInput?.disabled).toBe(false);
+
+    await expect.element(page.getByText("Window transparency and safety")).toBeInTheDocument();
+    const opacityInput = document.querySelector(
+      'input[aria-label="Desktop window opacity"]',
+    ) as HTMLInputElement | null;
+    expect(opacityInput).not.toBeNull();
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(
+      opacityInput,
+      "0.75",
+    );
+    opacityInput!.dispatchEvent(new Event("input", { bubbles: true }));
+    opacityInput!.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+
+    await vi.waitFor(() => {
+      expect(setWindowOpacityPreference).toHaveBeenCalledWith({
+        enabled: false,
+        opacity: 0.75,
+      });
+    });
+  });
+
+  it("disables ambient rendering without erasing saved choices or accepting a stale opacity read", async () => {
+    type OpacityState = Awaited<ReturnType<DesktopBridge["getWindowOpacityState"]>>;
+    let resolveInitialOpacity!: (state: OpacityState) => void;
+    const initialOpacity = new Promise<OpacityState>((resolve) => {
+      resolveInitialOpacity = resolve;
+    });
+    const getWindowOpacityState = vi
+      .fn<DesktopBridge["getWindowOpacityState"]>()
+      .mockImplementationOnce(() => initialOpacity)
+      .mockResolvedValueOnce({
+        supported: true,
+        enabled: true,
+        opacity: 0.68,
+        effectiveOpacity: 0.68,
+        reason: null,
+      });
+    const setWindowOpacityPreference = vi
+      .fn<DesktopBridge["setWindowOpacityPreference"]>()
+      .mockResolvedValue({
+        supported: true,
+        enabled: false,
+        opacity: 0.68,
+        effectiveOpacity: 1,
+        reason: null,
+      });
+    const desktopBridge = createDesktopBridgeStub({
+      getWindowOpacityState,
+      setWindowOpacityPreference,
+    });
+    window.desktopBridge = desktopBridge;
+    const { updateClientSettings } = installClientSettingsNativeApi(desktopBridge);
+    const savedVideoSource = { kind: "video" as const, id: "dQw4w9WgXcQ" };
+    const config = createBaseServerConfig();
+    setServerConfigSnapshot({
+      ...config,
+      clientSettings: {
+        ...config.clientSettings,
+        fallingEffectsEnabled: true,
+        fallingEffectKind: "matrix",
+        ambientVideoEnabled: true,
+        ambientVideoSource: savedVideoSource,
+        ambientVideoGlowEnabled: true,
+        ambientImageEnabled: true,
+        ambientImageGlowEnabled: true,
+      },
+    });
+
+    mounted = await renderWithTestRouter(
+      <AppAtomRegistryProvider>
+        <AppearanceSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    await vi.waitFor(() => {
+      expect(getWindowOpacityState).toHaveBeenCalledTimes(1);
+    });
+    await page.getByRole("button", { name: "Restore appearance" }).click();
+
+    await vi.waitFor(() => {
+      expect(updateClientSettings).toHaveBeenCalledWith({
+        fallingEffectsEnabled: false,
+        ambientVideoEnabled: false,
+        ambientImageEnabled: false,
+      });
+      expect(setWindowOpacityPreference).toHaveBeenCalledWith({
+        enabled: false,
+        opacity: 0.68,
+      });
+    });
+
+    const persistedPatch = updateClientSettings.mock.calls.at(-1)?.[0];
+    expect(persistedPatch).not.toHaveProperty("ambientVideoSource");
+    expect(persistedPatch).not.toHaveProperty("ambientVideoGlowEnabled");
+    expect(persistedPatch).not.toHaveProperty("ambientImageGlowEnabled");
+    expect(getServerConfig()?.clientSettings).toMatchObject({
+      fallingEffectsEnabled: false,
+      fallingEffectKind: "matrix",
+      ambientVideoEnabled: false,
+      ambientVideoSource: savedVideoSource,
+      ambientVideoGlowEnabled: true,
+      ambientImageEnabled: false,
+      ambientImageGlowEnabled: true,
+    });
+
+    resolveInitialOpacity({
+      supported: true,
+      enabled: true,
+      opacity: 0.42,
+      effectiveOpacity: 0.42,
+      reason: null,
+    });
+    await vi.waitFor(() => {
+      expect(
+        document
+          .querySelector('[aria-label="Transparent desktop window"]')
+          ?.getAttribute("aria-checked"),
+      ).toBe("false");
+    });
+    await expect
+      .element(page.getByText("All available ambient features are off. Saved choices were kept."))
+      .toBeInTheDocument();
+  });
+
+  it("clears the current Local Media selection without persisting it when restoring appearance", async () => {
+    const desktopBridge = createDesktopBridgeStub();
+    window.desktopBridge = desktopBridge;
+    const { updateClientSettings } = installClientSettingsNativeApi(desktopBridge);
+    expect(
+      localMediaStore.selectFile(
+        new File(["private session media"], "private-session-video.mp4", {
+          type: "video/mp4",
+        }),
+      ),
+    ).toBe(true);
+    setServerConfigSnapshot(createBaseServerConfig());
+
+    mounted = await renderWithTestRouter(
+      <AppAtomRegistryProvider>
+        <AppearanceSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    const restore = page.getByRole("button", { name: "Restore appearance" });
+    await expect.element(restore).toBeEnabled();
+    await restore.click();
+
+    await vi.waitFor(() => {
+      expect(localMediaStore.getSnapshot().source).toBeNull();
+      expect(updateClientSettings).toHaveBeenCalledWith({
+        fallingEffectsEnabled: false,
+        ambientVideoEnabled: false,
+        ambientImageEnabled: false,
+      });
+    });
+    expect(updateClientSettings.mock.calls.at(-1)?.[0]).not.toHaveProperty("localMediaSource");
+    await expect
+      .element(
+        page.getByText(
+          "All available ambient features are off. Saved choices were kept; the current local media selection was cleared.",
+        ),
+      )
+      .toBeInTheDocument();
+  });
+
+  it("keeps a newer Local Media selection made while appearance restore is pending", async () => {
+    const desktopBridge = createDesktopBridgeStub();
+    window.desktopBridge = desktopBridge;
+    const { updateClientSettings } = installClientSettingsNativeApi(desktopBridge);
+    let resolveSettingsWrite!: (settings: ClientSettings) => void;
+    updateClientSettings.mockImplementationOnce(
+      () =>
+        new Promise<ClientSettings>((resolve) => {
+          resolveSettingsWrite = resolve;
+        }),
+    );
+    expect(
+      localMediaStore.selectFile(
+        new File(["old media"], "old-session-video.mp4", { type: "video/mp4" }),
+      ),
+    ).toBe(true);
+    setServerConfigSnapshot(createBaseServerConfig());
+
+    mounted = await renderWithTestRouter(
+      <AppAtomRegistryProvider>
+        <AppearanceSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    await page.getByRole("button", { name: "Restore appearance" }).click();
+    await vi.waitFor(() => {
+      expect(localMediaStore.getSnapshot().source).toBeNull();
+      expect(updateClientSettings).toHaveBeenCalledOnce();
+    });
+
+    expect(
+      localMediaStore.selectFile(
+        new File(["new media"], "new-session-video.mp4", { type: "video/mp4" }),
+      ),
+    ).toBe(true);
+    const newerSource = localMediaStore.getSnapshot().source;
+    resolveSettingsWrite(DEFAULT_CLIENT_SETTINGS);
+
+    await expect
+      .element(
+        page.getByText(
+          "Appearance restore completed. A newer local media selection remains active.",
+        ),
+      )
+      .toBeInTheDocument();
+    expect(localMediaStore.getSnapshot().source).toEqual(newerSource);
+    expect(updateClientSettings.mock.calls.at(-1)?.[0]).not.toHaveProperty("localMediaSource");
+  });
+
+  it("rolls back failed Disable All settings and reports a retryable partial result", async () => {
+    const desktopBridge = createDesktopBridgeStub({
+      getWindowOpacityState: vi.fn().mockResolvedValue({
+        supported: true,
+        enabled: true,
+        opacity: 0.76,
+        effectiveOpacity: 0.76,
+        reason: null,
+      }),
+      setWindowOpacityPreference: vi.fn().mockResolvedValue({
+        supported: true,
+        enabled: false,
+        opacity: 0.76,
+        effectiveOpacity: 1,
+        reason: null,
+      }),
+    });
+    window.desktopBridge = desktopBridge;
+    const { updateClientSettings } = installClientSettingsNativeApi(desktopBridge);
+    updateClientSettings.mockRejectedValue(new Error("settings RPC unavailable"));
+    const toastSpy = vi.spyOn(toastManager, "add");
+    const config = createBaseServerConfig();
+    setServerConfigSnapshot({
+      ...config,
+      clientSettings: {
+        ...config.clientSettings,
+        fallingEffectsEnabled: true,
+        ambientVideoEnabled: true,
+        ambientVideoGlowEnabled: true,
+      },
+    });
+
+    mounted = await renderWithTestRouter(
+      <AppAtomRegistryProvider>
+        <AppearanceSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    await page.getByRole("button", { name: "Restore appearance" }).click();
+
+    await vi.waitFor(() => {
+      expect(getServerConfig()?.clientSettings).toMatchObject({
+        fallingEffectsEnabled: true,
+        ambientVideoEnabled: true,
+        ambientVideoGlowEnabled: true,
+      });
+      expect(toastSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: "Appearance only partly restored",
+          type: "error",
+        }),
+      );
+    });
+    await expect
+      .element(page.getByRole("alert"))
+      .toHaveTextContent("Appearance was only partly restored");
+    await expect.element(page.getByRole("button", { name: "Restore appearance" })).toBeEnabled();
+  });
+
+  it("does not let an older failed optimistic write roll back a newer setting choice", async () => {
+    let rejectFirstWrite!: (error: Error) => void;
+    const firstWrite = new Promise<never>((_resolve, reject) => {
+      rejectFirstWrite = reject;
+    });
+    const desktopBridge = createDesktopBridgeStub();
+    window.desktopBridge = desktopBridge;
+    const { updateClientSettings } = installClientSettingsNativeApi(desktopBridge);
+    updateClientSettings
+      .mockImplementationOnce(() => firstWrite)
+      .mockResolvedValue(DEFAULT_CLIENT_SETTINGS);
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    setServerConfigSnapshot(createBaseServerConfig());
+
+    mounted = await renderWithTestRouter(
+      <AppAtomRegistryProvider>
+        <AppearanceSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    const effectsSwitch = page.getByRole("switch", { name: "Show falling effects" });
+    await effectsSwitch.click();
+    await vi.waitFor(() => {
+      expect(updateClientSettings).toHaveBeenCalledWith({ fallingEffectsEnabled: true });
+    });
+    await effectsSwitch.click();
+    await vi.waitFor(() => {
+      expect(updateClientSettings).toHaveBeenCalledWith({ fallingEffectsEnabled: false });
+    });
+
+    rejectFirstWrite(new Error("older write failed"));
+    await vi.waitFor(() => {
+      expect(consoleErrorSpy).toHaveBeenCalled();
+      expect(getServerConfig()?.clientSettings.fallingEffectsEnabled).toBe(false);
+    });
+  });
+
+  it("searches public YouTube results in-app and selects a normalized source", async () => {
+    const desktopBridge = createDesktopBridgeStub();
+    window.desktopBridge = desktopBridge;
+    const { updateClientSettings } = installClientSettingsNativeApi(desktopBridge);
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          results: [
+            {
+              kind: "video",
+              id: "dQw4w9WgXcQ",
+              title: "Late-night coding mix",
+              thumbnail: null,
+            },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    setServerConfigSnapshot({
+      ...createBaseServerConfig(),
+      ambientExperienceCapabilities: {
+        ...DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES,
+        youtubePlayer: true,
+        youtubePublicDiscovery: true,
+      },
+    });
+
+    mounted = await renderWithTestRouter(
+      <AppAtomRegistryProvider>
+        <AppearanceSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    await page.getByLabelText("Search YouTube").fill("late night coding");
+    await page.getByRole("button", { name: "Search", exact: true }).click();
+    await expect.element(page.getByText("Late-night coding mix")).toBeInTheDocument();
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    const discoveryUrl = new URL(String(fetchMock.mock.calls[0]?.[0]));
+    expect(discoveryUrl.pathname).toBe("/api/ambient-media/youtube/search");
+    expect(discoveryUrl.search).toBe("");
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({
+      method: "POST",
+      credentials: "include",
+      body: JSON.stringify({ query: "late night coding", maxResults: 8 }),
+    });
+
+    await page.getByText("Late-night coding mix").click();
+    await vi.waitFor(() => {
+      expect(updateClientSettings).toHaveBeenCalledWith({
+        ambientVideoSource: { kind: "video", id: "dQw4w9WgXcQ" },
+        ambientVideoEnabled: true,
+      });
+    });
+  });
+
+  it("does not enable a discovered YouTube source without player capability", async () => {
+    const desktopBridge = createDesktopBridgeStub();
+    window.desktopBridge = desktopBridge;
+    const { updateClientSettings } = installClientSettingsNativeApi(desktopBridge);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            results: [
+              {
+                kind: "video",
+                id: "dQw4w9WgXcQ",
+                title: "Discovery without playback",
+                thumbnail: null,
+              },
+            ],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      ),
+    );
+    setServerConfigSnapshot({
+      ...createBaseServerConfig(),
+      ambientExperienceCapabilities: {
+        ...DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES,
+        youtubePlayer: false,
+        youtubePublicDiscovery: true,
+        spotifyEmbed: false,
+      },
+    });
+
+    mounted = await renderWithTestRouter(
+      <AppAtomRegistryProvider>
+        <AppearanceSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    await page.getByLabelText("Search YouTube").fill("discovery only");
+    await page.getByRole("button", { name: "Search", exact: true }).click();
+    const result = page.getByRole("button", { name: /Discovery without playback/ });
+    await expect.element(result).toBeDisabled();
+
+    expect(updateClientSettings).not.toHaveBeenCalledWith({
+      ambientVideoSource: { kind: "video", id: "dQw4w9WgXcQ" },
+      ambientVideoEnabled: true,
+    });
+  });
+
+  it("loads and selects an owned YouTube playlist for a connected owner", async () => {
+    const desktopBridge = createDesktopBridgeStub();
+    window.desktopBridge = desktopBridge;
+    const { updateClientSettings } = installClientSettingsNativeApi(desktopBridge);
+    const playlistId = "PL1234567890";
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/api/ambient-media/youtube/account/status")) {
+        return new Response(JSON.stringify({ status: "connected" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url.endsWith("/api/ambient-media/youtube/account/playlists")) {
+        return new Response(
+          JSON.stringify({
+            playlists: [{ id: playlistId, title: "My coding mix", itemCount: 12 }],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response(JSON.stringify({ error: "unexpected-test-request" }), {
+        status: 500,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    setServerConfigSnapshot({
+      ...createBaseServerConfig(),
+      ambientExperienceCapabilities: {
+        ...DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES,
+        youtubePlayer: true,
+        youtubeAccountConnection: true,
+      },
+    });
+
+    mounted = await renderWithTestRouter(
+      <AppAtomRegistryProvider>
+        <AppearanceSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    await expect.element(page.getByText("My coding mix (12)")).toBeInTheDocument();
+    const selector = document.querySelector(
+      'select[aria-label="Owned YouTube playlist"]',
+    ) as HTMLSelectElement | null;
+    expect(selector).not.toBeNull();
+    Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")?.set?.call(
+      selector,
+      playlistId,
+    );
+    selector!.dispatchEvent(new Event("change", { bubbles: true }));
+
+    await vi.waitFor(() => {
+      expect(updateClientSettings).toHaveBeenCalledWith({
+        ambientVideoSource: { kind: "playlist", id: playlistId },
+        ambientVideoEnabled: true,
+      });
+    });
+
+    const openPlaylist = page.getByRole("button", { name: "Open selected in YouTube" });
+    await expect.element(openPlaylist).toBeEnabled();
+    await openPlaylist.click();
+    await vi.waitFor(() => {
+      expect(desktopBridge.openExternal).toHaveBeenCalledWith(
+        `https://www.youtube.com/playlist?list=${playlistId}`,
+      );
+    });
+  });
+
+  it("does not request owner account state when desktop account connection is unavailable", async () => {
+    const desktopBridge = createDesktopBridgeStub();
+    window.desktopBridge = desktopBridge;
+    installClientSettingsNativeApi(desktopBridge);
+    const fetchMock = vi.fn<typeof fetch>();
+    vi.stubGlobal("fetch", fetchMock);
+    setServerConfigSnapshot({
+      ...createBaseServerConfig(),
+      ambientExperienceCapabilities: {
+        ...DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES,
+        youtubePlayer: true,
+        youtubeAccountConnection: false,
+      },
+    });
+
+    mounted = await renderWithTestRouter(
+      <AppAtomRegistryProvider>
+        <AppearanceSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    await expect.element(page.getByRole("button", { name: "Open playlists" })).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("shows detected editor icons in the Files & Diffs default editor selector", async () => {
@@ -1499,7 +2469,7 @@ describe("settings panels", () => {
     await expect.element(page.getByText("Enable network access?")).toBeInTheDocument();
     await expect
       .element(
-        page.getByText("Cafe Code will restart to expose this environment over the network."),
+        page.getByText("Club Code will restart to expose this environment over the network."),
       )
       .toBeInTheDocument();
     await page.getByRole("button", { name: "Restart and enable", exact: true }).click();
@@ -1532,7 +2502,7 @@ describe("settings panels", () => {
     await page.getByLabelText("Enable HTTPS").click();
     await expect.element(page.getByText("Disable HTTPS?")).toBeInTheDocument();
     await expect
-      .element(page.getByText("Cafe Code will restart to update the backend listener."))
+      .element(page.getByText("Club Code will restart to update the backend listener."))
       .toBeInTheDocument();
     await page.getByRole("button", { name: "Restart and disable", exact: true }).click();
     await vi.waitFor(() => {
@@ -1750,6 +2720,57 @@ describe("settings panels", () => {
 
       expect(availabilityIndex).toBeGreaterThanOrEqual(0);
       expect(resetScheduleIndex).toBeGreaterThan(availabilityIndex);
+    });
+  });
+
+  it("adds LM Studio as a selectable local provider instance", async () => {
+    const updateSettings = vi.fn<LocalApi["server"]["updateSettings"]>().mockResolvedValue({
+      ...DEFAULT_SERVER_SETTINGS,
+      providerInstances: {
+        [ProviderInstanceId.make("lmstudio")]: {
+          driver: ProviderDriverKind.make("codex"),
+          enabled: true,
+          displayName: "LM Studio",
+          config: { ossMode: true },
+        },
+      },
+    });
+    window.nativeApi = {
+      persistence: {
+        getClientSettings: vi.fn().mockResolvedValue(null),
+        setClientSettings: vi.fn().mockResolvedValue(undefined),
+      },
+      server: {
+        updateSettings,
+      },
+    } as unknown as LocalApi;
+    setServerConfigSnapshot(createBaseServerConfig());
+
+    mounted = await render(
+      <AppAtomRegistryProvider>
+        <ProviderSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    await page.getByRole("button", { name: "Add provider instance" }).click();
+    await page.getByText("LM Studio", { exact: true }).click();
+    await page.getByRole("button", { name: "Next" }).click();
+    await expect.element(page.getByLabelText("Instance ID")).toHaveValue("lmstudio");
+    await page.getByRole("button", { name: "Next" }).click();
+    await expect.element(page.getByText("Local LM Studio through Codex OSS")).toBeInTheDocument();
+    await page.getByRole("button", { name: "Add instance" }).click();
+
+    await vi.waitFor(() => {
+      expect(updateSettings).toHaveBeenCalledWith({
+        providerInstances: {
+          lmstudio: {
+            driver: ProviderDriverKind.make("codex"),
+            enabled: true,
+            displayName: "LM Studio",
+            config: { ossMode: true },
+          },
+        },
+      });
     });
   });
 

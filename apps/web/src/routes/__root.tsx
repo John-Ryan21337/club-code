@@ -13,11 +13,15 @@ import { QueryClient, useQueryClient } from "@tanstack/react-query";
 import { AmbianceLayer } from "../ambiance/AmbianceLayer";
 import { APP_DISPLAY_NAME } from "../branding";
 import { AppSidebarLayout } from "../components/AppSidebarLayout";
+import { AtmosphereConsole } from "../components/AtmosphereConsole";
 import { CommandPalette } from "../components/CommandPalette";
 import { InitialBackendBootstrapSurface } from "../components/InitialBackendBootstrapSurface";
 import { OnboardingSurface } from "../components/OnboardingSurface";
 import { DesktopNotificationWatcher } from "../components/DesktopNotificationWatcher";
+import { EmbeddedBrowserWorkspace } from "../components/EmbeddedBrowserWorkspace";
+import { BackgroundAutoNudgeCoordinator } from "../components/BackgroundAutoNudgeCoordinator";
 import { ProviderUpdateLaunchNotification } from "../components/ProviderUpdateLaunchNotification";
+import { WindowAtmosphere } from "../components/WindowAtmosphere";
 import {
   WebSocketConnectionCoordinator,
   WebSocketConnectionSurface,
@@ -161,9 +165,13 @@ function RootRouteView() {
         <AppearanceSettingsSync />
         <AmbianceLayer />
         <PowerSaveBlockerSync />
+        <WindowAtmosphere />
+        <AtmosphereConsole />
+        <EmbeddedBrowserWorkspace />
+        {primaryEnvironmentAuthenticated ? <BackgroundAutoNudgeCoordinator /> : null}
         {primaryEnvironmentAuthenticated ? <EventRouter /> : null}
         {primaryEnvironmentAuthenticated ? <ProviderUpdateLaunchNotification /> : null}
-        {primaryEnvironmentAuthenticated ? <DesktopNotificationWatcher /> : null}
+        <DesktopNotificationWatcher />
         {primaryEnvironmentAuthenticated ? <WebSocketConnectionCoordinator /> : null}
         {primaryEnvironmentAuthenticated ? (
           <WebSocketConnectionSurface>
@@ -202,7 +210,7 @@ function DesktopShutdownOverlay() {
             </span>
           </div>
           <div className="max-w-56 text-xs leading-5 text-muted-foreground">
-            Saving your progress before Cafe Code takes a nap.
+            Saving your progress before Club Code takes a nap.
           </div>
         </div>
       </div>

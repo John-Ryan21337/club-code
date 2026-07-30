@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
-Name=Cafe Code
+Name=Club Code
 Comment=Desktop GUI for coding agents
 Exec=cafe-code %U
 Icon=cafe-code

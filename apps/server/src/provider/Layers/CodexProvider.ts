@@ -990,11 +990,15 @@ const requestAllCodexModels = Effect.fn("requestAllCodexModels")(function* (
   return models;
 });
 
+export function buildCodexProviderAppServerArgs(ossMode = false): ReadonlyArray<string> {
+  return ossMode ? ["--oss", "--local-provider", "lmstudio", "app-server"] : ["app-server"];
+}
+
 export function buildCodexInitializeParams(): CodexSchema.V1InitializeParams {
   return {
     clientInfo: {
       name: "cafecode_desktop",
-      title: "Cafe Code Desktop",
+      title: "Club Code Desktop",
       version: packageJson.version,
     },
     capabilities: {
@@ -1005,6 +1009,7 @@ export function buildCodexInitializeParams(): CodexSchema.V1InitializeParams {
 
 const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(function* (input: {
   readonly binaryPath: string;
+  readonly ossMode?: boolean;
   readonly homePath?: string;
   readonly cwd: string;
   readonly customModels?: ReadonlyArray<string>;
@@ -1018,7 +1023,7 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
   const clientContext = yield* Layer.build(
     CodexClient.layerCommand({
       command: input.binaryPath,
-      args: ["app-server"],
+      args: buildCodexProviderAppServerArgs(input.ossMode),
       cwd: input.cwd,
       env: {
         ...(input.environment ?? process.env),
@@ -1033,7 +1038,7 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
   const initialize = yield* client.request("initialize", {
     clientInfo: {
       name: "cafecode_desktop",
-      title: "Cafe Code Desktop",
+      title: "Club Code Desktop",
       version: "0.1.0",
     },
     capabilities: {
@@ -1046,8 +1051,10 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
   const versionMatch = initialize.userAgent.match(/\/([^\s]+)/);
   const version = versionMatch ? versionMatch[1] : undefined;
 
-  const accountResponse = yield* client.request("account/read", {});
-  if (!accountResponse.account && accountResponse.requiresOpenaiAuth) {
+  const accountResponse: CodexSchema.V2GetAccountResponse = input.ossMode
+    ? { account: null, requiresOpenaiAuth: false }
+    : yield* client.request("account/read", {});
+  if (!input.ossMode && !accountResponse.account && accountResponse.requiresOpenaiAuth) {
     return {
       account: accountResponse,
       version,
@@ -1057,12 +1064,13 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
   }
 
   const rateLimitsCheckedAt = DateTime.formatIso(yield* DateTime.now);
-  const accountRateLimits = accountResponse.account
-    ? yield* client.request("account/rateLimits/read", undefined).pipe(
-        Effect.map((response) => codexAppServerRateLimitsToServer(response, rateLimitsCheckedAt)),
-        Effect.option,
-      )
-    : Option.none<ServerProviderAccountRateLimits>();
+  const accountRateLimits =
+    !input.ossMode && accountResponse.account
+      ? yield* client.request("account/rateLimits/read", undefined).pipe(
+          Effect.map((response) => codexAppServerRateLimitsToServer(response, rateLimitsCheckedAt)),
+          Effect.option,
+        )
+      : Option.none<ServerProviderAccountRateLimits>();
 
   const [skillsResponse, models] = yield* Effect.all(
     [
@@ -1096,6 +1104,11 @@ const emptyCodexModelsFromSettings = (codexSettings: CodexSettings): ServerProvi
 
 const fallbackCodexModelsFromSettings = (codexSettings: CodexSettings): ServerProvider["models"] =>
   appendCustomCodexModels(STATIC_CODEX_MODELS, codexSettings.customModels);
+
+const configuredCodexModels = (codexSettings: CodexSettings): ServerProvider["models"] =>
+  codexSettings.ossMode
+    ? emptyCodexModelsFromSettings(codexSettings)
+    : fallbackCodexModelsFromSettings(codexSettings);
 
 const runCodexCommand = Effect.fn("runCodexCommand")(function* (
   codexSettings: CodexSettings,
@@ -1197,7 +1210,7 @@ const makePendingCodexProvider = (
 ): Effect.Effect<ServerProviderDraft> =>
   Effect.gen(function* () {
     const checkedAt = yield* Effect.map(DateTime.now, DateTime.formatIso);
-    const models = fallbackCodexModelsFromSettings(codexSettings);
+    const models = configuredCodexModels(codexSettings);
 
     if (!codexSettings.enabled) {
       return buildServerProvider({
@@ -1211,7 +1224,7 @@ const makePendingCodexProvider = (
           version: null,
           status: "warning",
           auth: { status: "unknown" },
-          message: "Codex is disabled in Cafe Code settings.",
+          message: "Codex is disabled in Club Code settings.",
         },
       });
     }
@@ -1265,6 +1278,7 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
   codexSettings: CodexSettings,
   probe: (input: {
     readonly binaryPath: string;
+    readonly ossMode?: boolean;
     readonly homePath?: string;
     readonly cwd: string;
     readonly customModels: ReadonlyArray<string>;
@@ -1295,13 +1309,14 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
         version: null,
         status: "warning",
         auth: { status: "unknown" },
-        message: "Codex is disabled in Cafe Code settings.",
+        message: "Codex is disabled in Club Code settings.",
       },
     });
   }
 
   const probeResult = yield* probe({
     binaryPath: codexSettings.binaryPath,
+    ossMode: codexSettings.ossMode,
     homePath: codexSettings.homePath,
     cwd: process.cwd(),
     customModels: codexSettings.customModels,
@@ -1317,7 +1332,7 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
     const installed = !isCodexAppServerSpawnError(error);
     const missingMessage =
       codexSettings.runtimeSource === "bundled"
-        ? "Cafe Code bundled Codex runtime is not installed or not configured."
+        ? "Club Code bundled Codex runtime is not installed or not configured."
         : "Codex CLI (`codex`) is not installed or not on PATH.";
     return buildServerProvider({
       presentation: CODEX_PRESENTATION,
@@ -1355,6 +1370,29 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
   }
 
   const snapshot = probeResult.success.value;
+  if (codexSettings.ossMode) {
+    const hasModels = snapshot.models.length > 0;
+    return buildServerProvider({
+      presentation: CODEX_PRESENTATION,
+      enabled: codexSettings.enabled,
+      checkedAt,
+      models: snapshot.models,
+      skills: snapshot.skills,
+      probe: {
+        installed: true,
+        version: snapshot.version ?? null,
+        status: hasModels ? "ready" : "warning",
+        auth: {
+          status: "unknown",
+          type: "local",
+          label: "LM Studio / Codex OSS",
+        },
+        message: hasModels
+          ? "Local model mode is active through Codex OSS and LM Studio."
+          : "Codex OSS reported no local models. Load a model in LM Studio and refresh provider status.",
+      },
+    });
+  }
   const accountStatus = accountProbeStatus(snapshot.account);
 
   return buildServerProvider({
@@ -1383,7 +1421,7 @@ export const checkCodexCliProviderStatus = Effect.fn("checkCodexCliProviderStatu
   ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
 > {
   const checkedAt = DateTime.formatIso(yield* DateTime.now);
-  const models = fallbackCodexModelsFromSettings(codexSettings);
+  const models = configuredCodexModels(codexSettings);
 
   if (!codexSettings.enabled) {
     return buildServerProvider({
@@ -1397,7 +1435,7 @@ export const checkCodexCliProviderStatus = Effect.fn("checkCodexCliProviderStatu
         version: null,
         status: "warning",
         auth: { status: "unknown" },
-        message: "Codex is disabled in Cafe Code settings.",
+        message: "Codex is disabled in Club Code settings.",
       },
     });
   }
@@ -1462,6 +1500,28 @@ export const checkCodexCliProviderStatus = Effect.fn("checkCodexCliProviderStatu
         message: detail
           ? `Codex CLI is installed but failed to run. ${detail}`
           : "Codex CLI is installed but failed to run.",
+      },
+    });
+  }
+
+  if (codexSettings.ossMode) {
+    return buildServerProvider({
+      presentation: CODEX_PRESENTATION,
+      enabled: codexSettings.enabled,
+      checkedAt,
+      models,
+      skills: [],
+      probe: {
+        installed: true,
+        version: parsedVersion,
+        status: "warning",
+        auth: {
+          status: "unknown",
+          type: "local",
+          label: "LM Studio / Codex OSS",
+        },
+        message:
+          "Local model mode is configured. Club Code has not checked LM Studio availability or its model list yet.",
       },
     });
   }

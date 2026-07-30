@@ -1,4 +1,5 @@
 import {
+  CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET,
   CommandId,
   DEFAULT_MODEL,
   DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -21,8 +22,9 @@ import * as Scope from "effect/Scope";
 import * as Context from "effect/Context";
 import * as Console from "effect/Console";
 import * as DateTime from "effect/DateTime";
+import * as FileSystem from "effect/FileSystem";
 
-import { ServerConfig } from "./config.ts";
+import { resolveStaticDir, ServerConfig } from "./config.ts";
 import { Keybindings } from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine.ts";
@@ -30,16 +32,25 @@ import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnap
 import { OrchestrationReactor } from "./orchestration/Services/OrchestrationReactor.ts";
 import { ServerLifecycleEvents } from "./serverLifecycleEvents.ts";
 import { ServerSettingsService } from "./serverSettings.ts";
-import { ServerClientSettingsService } from "./serverClientSettings.ts";
+import {
+  ServerClientSettingsService,
+  type ServerClientSettingsShape,
+} from "./serverClientSettings.ts";
 import { ServerEnvironment } from "./environment/Services/ServerEnvironment.ts";
 import { ServerAuth } from "./auth/Services/ServerAuth.ts";
 import { ProviderSessionReaper } from "./provider/Services/ProviderSessionReaper.ts";
+import {
+  AmbientImageStore,
+  type AmbientImageStoreShape,
+} from "./ambientMedia/AmbientImageStore.ts";
 import {
   formatHeadlessServeOutput,
   formatHostForUrl,
   isWildcardHost,
   issueHeadlessServeAccessInfo,
 } from "./startupAccess.ts";
+
+const CLIENT_SETTINGS_READY_FOR_MAINTENANCE_TIMEOUT = "5 seconds";
 
 export class ServerRuntimeStartupError extends Data.TaggedError("ServerRuntimeStartupError")<{
   readonly message: string;
@@ -259,6 +270,72 @@ const runStartupPhase = <A, E, R>(phase: string, effect: Effect.Effect<A, E, R>)
     Effect.withSpan(`server.startup.${phase}`),
   );
 
+export const seedDefaultAmbientImage = Effect.fn(function* (
+  clientSettings: ServerClientSettingsShape,
+  ambientImages: AmbientImageStoreShape,
+  staticDir: string | undefined,
+) {
+  const settings = yield* clientSettings.getSettings;
+  if (
+    !settings.ambientImageEnabled ||
+    settings.ambientImageAsset?.id !== CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET.id
+  ) {
+    return;
+  }
+
+  const alreadyStored = yield* ambientImages
+    .resolveStoredImage(CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET.id)
+    .pipe(
+      Effect.as(true),
+      Effect.catch((error) =>
+        error.code === "not-found" ? Effect.succeed(false) : Effect.fail(error),
+      ),
+    );
+  if (alreadyStored) {
+    return;
+  }
+
+  if (staticDir === undefined) {
+    yield* Effect.logWarning("ambient default image seed skipped", {
+      reason: "static-dir-unavailable",
+      ambientImageId: CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET.id,
+    });
+    return;
+  }
+
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const sourcePath = path.join(staticDir, "ambient-default.gif");
+  if (!(yield* fs.exists(sourcePath).pipe(Effect.orElseSucceed(() => false)))) {
+    yield* Effect.logWarning("ambient default image seed skipped", {
+      reason: "source-missing",
+      ambientImageId: CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET.id,
+    });
+    return;
+  }
+
+  const bytes = yield* fs.readFile(sourcePath);
+  const seededImage = yield* ambientImages.storeUploadedImage({ bytes });
+  if (
+    seededImage.id !== CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET.id ||
+    seededImage.url !== CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET.url ||
+    seededImage.mimeType !== CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET.mimeType ||
+    seededImage.width !== CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET.width ||
+    seededImage.height !== CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET.height ||
+    seededImage.sizeBytes !== CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET.sizeBytes
+  ) {
+    yield* Effect.logWarning("ambient default image seed metadata mismatch", {
+      expectedId: CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET.id,
+      actualId: seededImage.id,
+    });
+    return;
+  }
+
+  yield* Effect.logInfo("ambient default image seeded", {
+    ambientImageId: seededImage.id,
+  });
+});
+
 export const makeServerRuntimeStartup = Effect.gen(function* () {
   const serverConfig = yield* ServerConfig;
   const keybindings = yield* Keybindings;
@@ -267,6 +344,7 @@ export const makeServerRuntimeStartup = Effect.gen(function* () {
   const lifecycleEvents = yield* ServerLifecycleEvents;
   const serverSettings = yield* ServerSettingsService;
   const clientSettings = yield* ServerClientSettingsService;
+  const ambientImages = yield* AmbientImageStore;
   const serverEnvironment = yield* ServerEnvironment;
 
   const commandGate = yield* makeCommandGate;
@@ -320,6 +398,71 @@ export const makeServerRuntimeStartup = Effect.gen(function* () {
         Effect.forkScoped,
       ),
     );
+
+    const clientSettingsReadyForAmbientMaintenance = yield* runStartupPhase(
+      "client-settings.ready-for-ambient-maintenance",
+      clientSettings.ready.pipe(
+        Effect.timeoutOption(CLIENT_SETTINGS_READY_FOR_MAINTENANCE_TIMEOUT),
+        Effect.flatMap(
+          Option.match({
+            onNone: () =>
+              Effect.logWarning("ambient image maintenance skipped", {
+                reason: "client-settings-ready-timeout",
+              }).pipe(Effect.as(false)),
+            onSome: () => Effect.succeed(true),
+          }),
+        ),
+        Effect.catch((cause) =>
+          Effect.logWarning("ambient image maintenance skipped", {
+            reason: "client-settings-start-failed",
+            cause,
+          }).pipe(Effect.as(false)),
+        ),
+      ),
+    );
+
+    if (clientSettingsReadyForAmbientMaintenance) {
+      yield* runStartupPhase(
+        "ambient-images.default-seed",
+        Effect.gen(function* () {
+          const staticDir =
+            serverConfig.staticDir === undefined
+              ? yield* resolveStaticDir()
+              : serverConfig.staticDir;
+          yield* seedDefaultAmbientImage(clientSettings, ambientImages, staticDir);
+        }).pipe(
+          Effect.catch((cause) =>
+            Effect.logWarning("ambient image default seed failed", { cause }),
+          ),
+        ),
+      );
+
+      yield* runStartupPhase(
+        "ambient-images.orphan-sweep",
+        Effect.gen(function* () {
+          const result = yield* ambientImages.sweepUnreferencedImages({
+            isReferenced: (id) =>
+              clientSettings.getSettings.pipe(
+                Effect.map(
+                  (settings) =>
+                    settings.ambientImageAsset?.id === id ||
+                    settings.ambientImageCycleAssets.some((asset) => asset.id === id),
+                ),
+                // Storage cleanup always fails closed when the current settings
+                // reference cannot be confirmed.
+                Effect.catch(() => Effect.succeed(true)),
+              ),
+          });
+          yield* Effect.logDebug("ambient image orphan sweep complete", result);
+        }).pipe(
+          Effect.catch((cause) =>
+            Effect.logWarning("ambient image orphan sweep failed", {
+              cause,
+            }),
+          ),
+        ),
+      );
+    }
 
     yield* Effect.logDebug("startup phase: starting orchestration reactors");
     yield* runStartupPhase(
@@ -437,7 +580,7 @@ export const makeServerRuntimeStartup = Effect.gen(function* () {
         const startupBrowserTarget = yield* resolveStartupBrowserTarget;
         if (serverConfig.mode !== "desktop") {
           yield* Effect.logInfo(
-            "Authentication required. Open Cafe Code using the pairing URL.",
+            "Authentication required. Open Club Code using the pairing URL.",
           ).pipe(Effect.annotateLogs({ pairingUrl: startupBrowserTarget }));
         }
         yield* runStartupPhase("browser.open", maybeOpenBrowser(startupBrowserTarget));

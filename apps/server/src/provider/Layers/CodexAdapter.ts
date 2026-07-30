@@ -53,6 +53,7 @@ import {
   getModelSelectionBooleanOptionValue,
   getModelSelectionStringOptionValue,
 } from "@cafecode/shared/model";
+import { resolveCodexAutoCompactTokenLimit } from "@cafecode/shared/codexCompaction";
 
 import {
   ProviderAdapterRequestError,
@@ -63,6 +64,7 @@ import {
   type ProviderAdapterError,
 } from "../Errors.ts";
 import { type CodexAdapterShape } from "../Services/CodexAdapter.ts";
+import { getAgentBrowserBridge } from "../AgentBrowserBridge.ts";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import {
@@ -506,6 +508,7 @@ function normalizeCodexTokenUsage(
   const maxTokens = usage.modelContextWindow ?? undefined;
   const inputTokens = usage.last.inputTokens;
   const cachedInputTokens = usage.last.cachedInputTokens;
+  const totalCachedInputTokens = usage.total.cachedInputTokens;
   const cacheWriteInputTokens = usage.last.cacheWriteInputTokens;
   const totalCacheWriteInputTokens = usage.total.cacheWriteInputTokens;
   const outputTokens = usage.last.outputTokens;
@@ -518,6 +521,7 @@ function normalizeCodexTokenUsage(
       ? { totalProcessedTokens }
       : {}),
     ...(totalOutputTokens !== undefined ? { totalOutputTokens } : {}),
+    ...(totalCachedInputTokens !== undefined ? { totalCachedInputTokens } : {}),
     ...(maxTokens !== undefined ? { maxTokens } : {}),
     ...(inputTokens !== undefined ? { inputTokens } : {}),
     ...(cachedInputTokens !== undefined ? { cachedInputTokens } : {}),
@@ -2445,6 +2449,10 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
   options?: CodexAdapterLiveOptions,
 ) {
   const boundInstanceId = options?.instanceId ?? ProviderInstanceId.make("codex");
+  const effectiveAutoCompactTokenLimit = resolveCodexAutoCompactTokenLimit({
+    configuredLimit: codexConfig.autoCompactTokenLimit,
+    ultraCaching: codexConfig.ultraCaching,
+  });
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -2650,6 +2658,12 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
         yield* prepareRuntimeHomeForSession(input.threadId, "startSession");
 
         const currentTransportPolicy = toRuntimeTransportPolicy(yield* Ref.get(transportPolicyRef));
+        const agentBrowserMcp = yield* Effect.promise(() =>
+          getAgentBrowserBridge().mcpConfig({
+            threadId: input.threadId,
+            providerInstanceId: boundInstanceId,
+          }),
+        );
         const runtimeInput: CodexSessionRuntimeOptions = {
           threadId: input.threadId,
           providerInstanceId: boundInstanceId,
@@ -2669,9 +2683,12 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
             ? { resumeCursor: input.resumeCursor }
             : {}),
           runtimeMode: input.runtimeMode,
-          ...(codexConfig.autoCompactTokenLimit !== undefined
-            ? { autoCompactTokenLimit: codexConfig.autoCompactTokenLimit }
+          ...(effectiveAutoCompactTokenLimit !== undefined
+            ? { autoCompactTokenLimit: effectiveAutoCompactTokenLimit }
             : {}),
+          ultraCaching: codexConfig.ultraCaching,
+          ossMode: codexConfig.ossMode,
+          agentBrowserMcp,
           ...(input.modelSelection?.instanceId === boundInstanceId
             ? { model: input.modelSelection.model }
             : {}),
@@ -2717,7 +2734,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
             );
 
             const runtimeEvents = yield* Effect.sync(() =>
-              mapToRuntimeEvents(event, event.threadId, codexConfig.autoCompactTokenLimit),
+              mapToRuntimeEvents(event, event.threadId, effectiveAutoCompactTokenLimit),
             ).pipe(
               Effect.catchCause((cause) =>
                 Effect.logWarning("codex.runtime.bridge.map-failed", {

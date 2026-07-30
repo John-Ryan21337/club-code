@@ -98,9 +98,38 @@ import {
   SourceControlRepositoryLookupInput,
 } from "./sourceControl.ts";
 import { UsageStatsGetResult, UsageStatsSnapshot } from "./usageStats.ts";
+import {
+  AgentBrowserCompleteInputSchema,
+  AgentBrowserCompleteResultSchema,
+  AgentBrowserRpcError,
+  AgentBrowserGrantInputSchema,
+  AgentBrowserGrantStateSchema,
+  AgentBrowserPollResultSchema,
+  AgentBrowserRevokeInputSchema,
+  AgentBrowserSessionContextSchema,
+} from "./embeddedBrowser.ts";
 import { VcsError } from "./vcs.ts";
+import {
+  WorkspaceObservatoryActivityInput,
+  WorkspaceObservatoryActivityResult,
+  WorkspaceObservatoryDatabaseInput,
+  WorkspaceObservatoryDatabaseResult,
+  WorkspaceObservatoryError,
+  WorkspaceObservatoryFileInput,
+  WorkspaceObservatoryFileResult,
+  WorkspaceObservatoryRowsResult,
+  WorkspaceObservatoryTableInput,
+  WorkspaceObservatoryTableResult,
+  WorkspaceObservatoryTreeInput,
+  WorkspaceObservatoryTreeResult,
+  WORKSPACE_OBSERVATORY_LIMITS,
+} from "./workspaceObservatory.ts";
 
 export const WS_METHODS = {
+  agentBrowserGrant: "agentBrowser.grant",
+  agentBrowserRevoke: "agentBrowser.revoke",
+  agentBrowserPoll: "agentBrowser.poll",
+  agentBrowserComplete: "agentBrowser.complete",
   // Project registry methods
   projectsList: "projects.list",
   projectsAdd: "projects.add",
@@ -114,6 +143,15 @@ export const WS_METHODS = {
 
   // Filesystem methods
   filesystemBrowse: "filesystem.browse",
+
+  // Read-only, environment-scoped workspace inspection. These intentionally
+  // do not share the general filesystem browser's path semantics.
+  workspaceObservatoryTree: "workspaceObservatory.tree",
+  workspaceObservatoryReadFile: "workspaceObservatory.readFile",
+  workspaceObservatoryDatabases: "workspaceObservatory.databases",
+  workspaceObservatoryTables: "workspaceObservatory.tables",
+  workspaceObservatoryRows: "workspaceObservatory.rows",
+  workspaceObservatoryActivity: "workspaceObservatory.activity",
 
   // VCS methods
   vcsPull: "vcs.pull",
@@ -192,6 +230,12 @@ export const WsServerRefreshProvidersRpc = Rpc.make(WS_METHODS.serverRefreshProv
      * refreshes.
      */
     instanceId: Schema.optional(ProviderInstanceId),
+    /**
+     * Refresh only account/rate-limit usage metadata. This avoids invoking a
+     * provider's heavier install/auth/model discovery path for a small widget.
+     * It is valid only with `instanceId`.
+     */
+    usageOnly: Schema.optional(Schema.Boolean),
   }),
   success: ServerProviderUpdatedPayload,
 });
@@ -321,6 +365,44 @@ export const WsFilesystemBrowseRpc = Rpc.make(WS_METHODS.filesystemBrowse, {
   payload: FilesystemBrowseInput,
   success: FilesystemBrowseResult,
   error: FilesystemBrowseError,
+});
+
+export const WsWorkspaceObservatoryTreeRpc = Rpc.make(WS_METHODS.workspaceObservatoryTree, {
+  payload: WorkspaceObservatoryTreeInput,
+  success: WorkspaceObservatoryTreeResult,
+  error: WorkspaceObservatoryError,
+});
+export const WsWorkspaceObservatoryReadFileRpc = Rpc.make(WS_METHODS.workspaceObservatoryReadFile, {
+  payload: WorkspaceObservatoryFileInput,
+  success: WorkspaceObservatoryFileResult,
+  error: WorkspaceObservatoryError,
+});
+export const WsWorkspaceObservatoryDatabasesRpc = Rpc.make(
+  WS_METHODS.workspaceObservatoryDatabases,
+  {
+    payload: WorkspaceObservatoryTreeInput,
+    success: Schema.Array(WorkspaceObservatoryDatabaseResult).check(
+      Schema.isMaxLength(WORKSPACE_OBSERVATORY_LIMITS.databases),
+    ),
+    error: WorkspaceObservatoryError,
+  },
+);
+export const WsWorkspaceObservatoryTablesRpc = Rpc.make(WS_METHODS.workspaceObservatoryTables, {
+  payload: WorkspaceObservatoryDatabaseInput,
+  success: Schema.Array(WorkspaceObservatoryTableResult).check(
+    Schema.isMaxLength(WORKSPACE_OBSERVATORY_LIMITS.databaseTables),
+  ),
+  error: WorkspaceObservatoryError,
+});
+export const WsWorkspaceObservatoryRowsRpc = Rpc.make(WS_METHODS.workspaceObservatoryRows, {
+  payload: WorkspaceObservatoryTableInput,
+  success: WorkspaceObservatoryRowsResult,
+  error: WorkspaceObservatoryError,
+});
+export const WsWorkspaceObservatoryActivityRpc = Rpc.make(WS_METHODS.workspaceObservatoryActivity, {
+  payload: WorkspaceObservatoryActivityInput,
+  success: WorkspaceObservatoryActivityResult,
+  error: WorkspaceObservatoryError,
 });
 
 export const WsSubscribeVcsStatusRpc = Rpc.make(WS_METHODS.subscribeVcsStatus, {
@@ -513,6 +595,30 @@ export const WsUsageStatsGetRpc = Rpc.make(WS_METHODS.usageStatsGet, {
   success: UsageStatsGetResult,
 });
 
+export const WsAgentBrowserGrantRpc = Rpc.make(WS_METHODS.agentBrowserGrant, {
+  payload: AgentBrowserGrantInputSchema,
+  success: AgentBrowserGrantStateSchema,
+  error: AgentBrowserRpcError,
+});
+
+export const WsAgentBrowserRevokeRpc = Rpc.make(WS_METHODS.agentBrowserRevoke, {
+  payload: AgentBrowserRevokeInputSchema,
+  success: AgentBrowserGrantStateSchema,
+  error: AgentBrowserRpcError,
+});
+
+export const WsAgentBrowserPollRpc = Rpc.make(WS_METHODS.agentBrowserPoll, {
+  payload: AgentBrowserSessionContextSchema,
+  success: AgentBrowserPollResultSchema,
+  error: AgentBrowserRpcError,
+});
+
+export const WsAgentBrowserCompleteRpc = Rpc.make(WS_METHODS.agentBrowserComplete, {
+  payload: AgentBrowserCompleteInputSchema,
+  success: AgentBrowserCompleteResultSchema,
+  error: AgentBrowserRpcError,
+});
+
 export const WsSubscribeUsageStatsRpc = Rpc.make(WS_METHODS.subscribeUsageStats, {
   payload: Schema.Struct({}),
   success: UsageStatsSnapshot,
@@ -520,6 +626,10 @@ export const WsSubscribeUsageStatsRpc = Rpc.make(WS_METHODS.subscribeUsageStats,
 });
 
 export const WsRpcGroup = RpcGroup.make(
+  WsAgentBrowserGrantRpc,
+  WsAgentBrowserRevokeRpc,
+  WsAgentBrowserPollRpc,
+  WsAgentBrowserCompleteRpc,
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,
   WsServerLoginProviderRpc,
@@ -545,6 +655,12 @@ export const WsRpcGroup = RpcGroup.make(
   WsShellOpenInEditorRpc,
   WsShellOpenTerminalRpc,
   WsFilesystemBrowseRpc,
+  WsWorkspaceObservatoryTreeRpc,
+  WsWorkspaceObservatoryReadFileRpc,
+  WsWorkspaceObservatoryDatabasesRpc,
+  WsWorkspaceObservatoryTablesRpc,
+  WsWorkspaceObservatoryRowsRpc,
+  WsWorkspaceObservatoryActivityRpc,
   WsSubscribeVcsStatusRpc,
   WsVcsPullRpc,
   WsVcsRefreshStatusRpc,

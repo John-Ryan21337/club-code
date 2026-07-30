@@ -69,7 +69,7 @@ function Invoke-StartCafeCode {
   $nodeVersionText = (& $nodePath --version).Trim().TrimStart("v")
   $nodeVersion = [Version]$nodeVersionText
   if ($nodeVersion.Major -ne 24 -or $nodeVersion -lt [Version]"24.13.1") {
-    throw "Cafe Code requires Node.js ^24.13.1; found $nodeVersionText at $nodePath."
+    throw "Club Code requires Node.js ^24.13.1; found $nodeVersionText at $nodePath."
   }
 
   # The current dev build defaults local HTTPS on. Source installs on Windows do
@@ -81,10 +81,10 @@ function Invoke-StartCafeCode {
 
   if ([string]::IsNullOrWhiteSpace($opensslPath)) {
     $env:CAFE_CODE_HTTPS_ENABLED = "false"
-    "OpenSSL was not found on PATH; starting Cafe Code with local backend HTTPS disabled." |
+    "OpenSSL was not found on PATH; starting Club Code with local backend HTTPS disabled." |
       Add-Content -LiteralPath $launcherLog
   } else {
-    "OpenSSL was found on PATH; preserving Cafe Code local backend HTTPS defaults." |
+    "OpenSSL was found on PATH; preserving Club Code local backend HTTPS defaults." |
       Add-Content -LiteralPath $launcherLog
   }
 

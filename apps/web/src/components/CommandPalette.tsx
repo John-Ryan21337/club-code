@@ -76,6 +76,8 @@ import {
   useStore,
 } from "../store";
 import { buildThreadRouteParams } from "../threadRoutes";
+import { filterProjectsForMeetingPrivacy, filterThreadsForMeetingPrivacy } from "../meetingPrivacy";
+import { useUiStateStore } from "../uiStateStore";
 import {
   ADDON_ICON_CLASS,
   buildBrowseGroups,
@@ -425,8 +427,28 @@ function OpenCommandPaletteDialog() {
   const settings = useSettings();
   const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread } =
     useHandleNewThread();
-  const projects = useStore(useShallow(selectProjectsAcrossEnvironments));
-  const threads = useStore(useShallow(selectSidebarThreadsAcrossEnvironments));
+  const allProjects = useStore(useShallow(selectProjectsAcrossEnvironments));
+  const allThreads = useStore(useShallow(selectSidebarThreadsAcrossEnvironments));
+  const meetingPrivacyEnabled = useUiStateStore((state) => state.meetingPrivacyEnabled);
+  const meetingPrivacyHiddenProjectKeys = useUiStateStore(
+    (state) => state.meetingPrivacyHiddenProjectKeys,
+  );
+  const projects = useMemo(
+    () =>
+      filterProjectsForMeetingPrivacy(allProjects, {
+        enabled: meetingPrivacyEnabled,
+        hiddenProjectKeys: meetingPrivacyHiddenProjectKeys,
+      }),
+    [allProjects, meetingPrivacyEnabled, meetingPrivacyHiddenProjectKeys],
+  );
+  const threads = useMemo(
+    () =>
+      filterThreadsForMeetingPrivacy(allThreads, allProjects, {
+        enabled: meetingPrivacyEnabled,
+        hiddenProjectKeys: meetingPrivacyHiddenProjectKeys,
+      }),
+    [allProjects, allThreads, meetingPrivacyEnabled, meetingPrivacyHiddenProjectKeys],
+  );
   const keybindings = useServerKeybindings();
   const [viewStack, setViewStack] = useState<CommandPaletteView[]>([]);
   const currentView = viewStack.at(-1) ?? null;
@@ -1042,10 +1064,23 @@ function OpenCommandPaletteDialog() {
       if (cwd.length === 0) return;
 
       const existing = findProjectByPath(
-        projects.filter((project) => project.environmentId === browseEnvironmentId),
+        allProjects.filter((project) => project.environmentId === browseEnvironmentId),
         cwd,
       );
       if (existing) {
+        const existingIsVisible = projects.some(
+          (project) =>
+            project.environmentId === existing.environmentId && project.id === existing.id,
+        );
+        if (!existingIsVisible) {
+          toastManager.add({
+            type: "warning",
+            title: "Project hidden for meeting privacy",
+            description: "Open the Meeting Privacy manager to reveal this existing folder.",
+          });
+          setOpen(false);
+          return;
+        }
         const latestThread = getLatestThreadForProject(
           threads.filter((thread) => thread.environmentId === existing.environmentId),
           existing.id,
@@ -1102,6 +1137,7 @@ function OpenCommandPaletteDialog() {
       currentProjectCwdForBrowse,
       handleNewThread,
       navigate,
+      allProjects,
       projects,
       setOpen,
       settings.defaultThreadEnvMode,

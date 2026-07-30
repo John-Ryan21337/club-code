@@ -1,7 +1,7 @@
 {
   "name": "@cafeai/cafe-code",
   "version": "0.1.1",
-  "description": "A minimal AI chat harness for coding agents.",
+  "description": "Club Code, an after-hours desktop chat harness for coding agents.",
   "keywords": [
     "agent",
     "ai",
