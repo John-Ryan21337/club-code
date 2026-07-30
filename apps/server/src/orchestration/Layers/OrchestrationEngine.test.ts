@@ -1463,6 +1463,157 @@ describe("OrchestrationEngine", () => {
     await system.dispose();
   });
 
+  it("serializes manual reservation and Auto Nudge in server arrival order", async () => {
+    const system = await createOrchestrationSystem();
+    const { engine } = system;
+    const createdAt = new Date().toISOString();
+    const projectId = asProjectId("project-manual-auto-nudge-order");
+    const threadId = ThreadId.make("thread-manual-auto-nudge-order");
+    const completedTurnId = asTurnId("turn-manual-auto-nudge-order");
+    const dispatch = {
+      modelSelection: {
+        instanceId: ProviderInstanceId.make("codex"),
+        model: "gpt-5-codex",
+      },
+      titleSeed: "Manual and Auto Nudge order",
+      runtimeMode: "approval-required",
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+    } as const;
+
+    await system.run(
+      engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.make("cmd-project-manual-auto-nudge-order"),
+        projectId,
+        title: "Manual and Auto Nudge order",
+        workspaceRoot: "/tmp/project-manual-auto-nudge-order",
+        defaultModelSelection: dispatch.modelSelection,
+        createdAt,
+      }),
+    );
+    await system.run(
+      engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-thread-manual-auto-nudge-order"),
+        threadId,
+        projectId,
+        title: "Manual and Auto Nudge order",
+        modelSelection: dispatch.modelSelection,
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      }),
+    );
+    await system.run(
+      engine.dispatch({
+        type: "thread.auto-nudge.configure",
+        commandId: CommandId.make("cmd-configure-manual-auto-nudge-order"),
+        threadId,
+        expectedAuthorityRevision: 0,
+        mode: "steady-progress",
+        prompt: "Automatic continuation must lose to an earlier reservation.",
+        backgroundContinuation: false,
+        maxRounds: 5,
+        createdAt,
+      }),
+    );
+    await system.run(
+      engine.dispatch({
+        type: "thread.turn.diff.complete",
+        commandId: CommandId.make("cmd-terminal-manual-auto-nudge-order"),
+        threadId,
+        turnId: completedTurnId,
+        completedAt: createdAt,
+        checkpointRef: asCheckpointRef("refs/t3/checkpoints/thread-manual-auto-nudge-order/turn/1"),
+        status: "ready",
+        files: [],
+        checkpointTurnCount: 1,
+        createdAt,
+      }),
+    );
+
+    const firstFollowUpId = ManualFollowUpId.make("manual-follow-up-before-auto-nudge");
+    const firstReservationCommandId = CommandId.make("cmd-reserve-before-auto-nudge");
+    await system.run(
+      engine.dispatch({
+        type: "thread.manual-follow-up.reserve",
+        commandId: firstReservationCommandId,
+        threadId,
+        followUpId: firstFollowUpId,
+        messageId: asMessageId("message-before-auto-nudge"),
+        dispatch,
+        createdAt,
+      }),
+    );
+    await expect(
+      system.run(
+        engine.dispatch({
+          type: "thread.auto-nudge.dispatch",
+          commandId: CommandId.make("cmd-auto-nudge-after-reservation"),
+          threadId,
+          expectedAuthorityRevision: 1,
+          completedTurnId,
+          dispatchSource: "foreground",
+          messageId: asMessageId("message-auto-nudge-after-reservation"),
+          createdAt,
+        }),
+      ),
+    ).rejects.toMatchObject({
+      _tag: "OrchestrationCommandInvariantError",
+      detail: expect.stringMatching(/manual.*priority/i),
+    });
+
+    await system.run(
+      engine.dispatch({
+        type: "thread.manual-follow-up.cancel",
+        commandId: CommandId.make("cmd-cancel-before-auto-nudge"),
+        threadId,
+        followUpId: firstFollowUpId,
+        createdAt,
+      }),
+    );
+    const autoNudgeMessageId = asMessageId("message-auto-nudge-wins-order");
+    await system.run(
+      engine.dispatch({
+        type: "thread.auto-nudge.dispatch",
+        commandId: CommandId.make("cmd-auto-nudge-wins-order"),
+        threadId,
+        expectedAuthorityRevision: 1,
+        completedTurnId,
+        dispatchSource: "foreground",
+        messageId: autoNudgeMessageId,
+        createdAt,
+      }),
+    );
+
+    const laterFollowUpId = ManualFollowUpId.make("manual-follow-up-after-auto-nudge");
+    await system.run(
+      engine.dispatch({
+        type: "thread.manual-follow-up.reserve",
+        commandId: CommandId.make("cmd-reserve-after-auto-nudge"),
+        threadId,
+        followUpId: laterFollowUpId,
+        messageId: asMessageId("message-after-auto-nudge"),
+        dispatch,
+        createdAt,
+      }),
+    );
+
+    const readModel = await system.readModel();
+    const thread = readModel.threads.find((entry) => entry.id === threadId);
+    expect(thread?.messages.some((message) => message.id === autoNudgeMessageId)).toBe(true);
+    expect(thread?.manualFollowUps).toEqual([
+      expect.objectContaining({
+        id: laterFollowUpId,
+        status: "reserving",
+      }),
+    ]);
+
+    await system.dispose();
+  });
+
   it("atomically admits one concurrent Auto Nudge dispatch and deduplicates its retry", async () => {
     const system = await createOrchestrationSystem();
     const { engine } = system;
@@ -1513,7 +1664,6 @@ describe("OrchestrationEngine", () => {
         prompt: "Persisted exact-thread atomic prompt",
         backgroundContinuation: false,
         maxRounds: 5,
-        maxMinutes: 60,
         createdAt,
       }),
     );

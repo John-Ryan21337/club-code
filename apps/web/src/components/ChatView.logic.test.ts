@@ -430,7 +430,6 @@ function setStoreThreads(threads: ReadonlyArray<ReturnType<typeof makeThread>>) 
             mode: thread.autoNudge.mode,
             backgroundContinuation: thread.autoNudge.backgroundContinuation,
             maxRounds: thread.autoNudge.maxRounds,
-            maxMinutes: thread.autoNudge.maxMinutes,
             armedAt: thread.autoNudge.armedAt,
             baselineSettledTurnId: thread.autoNudge.baselineSettledTurnId,
             lastDispatchedSettledTurnId: thread.autoNudge.lastDispatchedSettledTurnId,

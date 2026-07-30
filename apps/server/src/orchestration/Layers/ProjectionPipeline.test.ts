@@ -246,7 +246,6 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
             prompt: "Persist this exact thread prompt",
             backgroundContinuation: true,
             maxRounds: 6,
-            maxMinutes: 45,
             armedAt: now,
             baselineSettledTurnId: null,
             lastDispatchedSettledTurnId: null,

@@ -379,7 +379,6 @@ function toThreadAutoNudgeSummary(config: ThreadAutoNudgeConfig): ThreadAutoNudg
     mode: config.mode,
     backgroundContinuation: config.backgroundContinuation,
     maxRounds: config.maxRounds,
-    maxMinutes: config.maxMinutes,
     armedAt: config.armedAt,
     baselineSettledTurnId: config.baselineSettledTurnId,
     lastDispatchedSettledTurnId: config.lastDispatchedSettledTurnId,
@@ -649,7 +648,6 @@ function threadAutoNudgeSummariesEqual(
     left.mode === right.mode &&
     left.backgroundContinuation === right.backgroundContinuation &&
     left.maxRounds === right.maxRounds &&
-    left.maxMinutes === right.maxMinutes &&
     left.armedAt === right.armedAt &&
     left.baselineSettledTurnId === right.baselineSettledTurnId &&
     left.lastDispatchedSettledTurnId === right.lastDispatchedSettledTurnId &&
@@ -2007,7 +2005,6 @@ function applyEnvironmentOrchestrationEvent(
           prompt: thread.autoNudge.prompt,
           backgroundContinuation: false,
           maxRounds: thread.autoNudge.maxRounds,
-          maxMinutes: thread.autoNudge.maxMinutes,
           armedAt: null,
           baselineSettledTurnId: null,
           lastDispatchedSettledTurnId: null,

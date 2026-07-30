@@ -637,7 +637,6 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
               prompt: command.prompt,
               backgroundContinuation: false,
               maxRounds: command.maxRounds,
-              maxMinutes: command.maxMinutes,
               armedAt: null,
               baselineSettledTurnId: null,
               lastDispatchedSettledTurnId: null,
@@ -650,7 +649,6 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
               prompt: command.prompt,
               backgroundContinuation: command.backgroundContinuation,
               maxRounds: command.maxRounds,
-              maxMinutes: command.maxMinutes,
               armedAt: configuredAt,
               baselineSettledTurnId,
               lastDispatchedSettledTurnId: null,
@@ -780,21 +778,6 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       }
 
       const dispatchedAt = yield* nowIso;
-      const armedAtMs = Date.parse(config.armedAt);
-      const dispatchedAtMs = Date.parse(dispatchedAt);
-      const maxDurationMs = config.maxMinutes * 60_000;
-      if (
-        !Number.isFinite(armedAtMs) ||
-        !Number.isFinite(dispatchedAtMs) ||
-        dispatchedAtMs < armedAtMs ||
-        dispatchedAtMs - armedAtMs >= maxDurationMs
-      ) {
-        return yield* rejectAutoNudgeCommand(
-          command,
-          `Auto Nudge time cap is exhausted or invalid for thread '${command.threadId}'.`,
-        );
-      }
-
       const roundsDispatched = config.roundsDispatched + 1;
       const dispatchEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...withEventBase({

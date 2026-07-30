@@ -23,7 +23,6 @@ import {
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 import {
   AutoNudgeEnabledMode,
-  AutoNudgeMaxMinutes,
   AutoNudgeMaxRounds,
   StoredThreadAutoNudgePrompt,
   ThreadAutoNudgeAuthorityRevision,
@@ -822,7 +821,6 @@ const ThreadAutoNudgeConfigureCommandFields = {
   threadId: ThreadId,
   expectedAuthorityRevision: ThreadAutoNudgeAuthorityRevision,
   maxRounds: AutoNudgeMaxRounds,
-  maxMinutes: AutoNudgeMaxMinutes,
   createdAt: IsoDateTime,
 } as const;
 

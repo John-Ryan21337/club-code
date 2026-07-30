@@ -172,7 +172,6 @@ function toThreadAutoNudgeSummary(
     mode: config.mode,
     backgroundContinuation: config.backgroundContinuation,
     maxRounds: config.maxRounds,
-    maxMinutes: config.maxMinutes,
     armedAt: config.armedAt,
     baselineSettledTurnId: config.baselineSettledTurnId,
     lastDispatchedSettledTurnId: config.lastDispatchedSettledTurnId,

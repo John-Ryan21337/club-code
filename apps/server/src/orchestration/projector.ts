@@ -613,7 +613,6 @@ export function projectEvent(
                 prompt: current.prompt,
                 backgroundContinuation: false,
                 maxRounds: current.maxRounds,
-                maxMinutes: current.maxMinutes,
                 armedAt: null,
                 baselineSettledTurnId: null,
                 lastDispatchedSettledTurnId: null,

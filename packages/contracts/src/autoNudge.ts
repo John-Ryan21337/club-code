@@ -14,9 +14,6 @@ export const DEFAULT_AUTO_NUDGE_BACKGROUND_CONTINUATION = false;
 export const MIN_AUTO_NUDGE_MAX_ROUNDS = 1;
 export const MAX_AUTO_NUDGE_MAX_ROUNDS = 20;
 export const DEFAULT_AUTO_NUDGE_MAX_ROUNDS = 5;
-export const MIN_AUTO_NUDGE_MAX_MINUTES = 5;
-export const MAX_AUTO_NUDGE_MAX_MINUTES = 120;
-export const DEFAULT_AUTO_NUDGE_MAX_MINUTES = 30;
 export const THREAD_AUTO_NUDGE_PROMPT_MAX_CHARS = 4_000;
 export const THREAD_AUTO_NUDGE_MAX_AUTHORITY_REVISION = 2_147_483_647;
 
@@ -27,14 +24,6 @@ export const AutoNudgeMaxRounds = Schema.Int.check(
   }),
 );
 export type AutoNudgeMaxRounds = typeof AutoNudgeMaxRounds.Type;
-
-export const AutoNudgeMaxMinutes = Schema.Int.check(
-  Schema.isBetween({
-    minimum: MIN_AUTO_NUDGE_MAX_MINUTES,
-    maximum: MAX_AUTO_NUDGE_MAX_MINUTES,
-  }),
-);
-export type AutoNudgeMaxMinutes = typeof AutoNudgeMaxMinutes.Type;
 
 export const ThreadAutoNudgeAuthorityRevision = NonNegativeInt.check(
   Schema.isLessThanOrEqualTo(THREAD_AUTO_NUDGE_MAX_AUTHORITY_REVISION),
@@ -63,7 +52,6 @@ const ThreadAutoNudgeRunFields = {
   authorityRevision: ThreadAutoNudgeAuthorityRevision,
   backgroundContinuation: Schema.Boolean,
   maxRounds: AutoNudgeMaxRounds,
-  maxMinutes: AutoNudgeMaxMinutes,
   baselineSettledTurnId: Schema.NullOr(TurnId),
   lastDispatchedSettledTurnId: Schema.NullOr(TurnId),
   roundsDispatched: NonNegativeInt,
@@ -115,7 +103,6 @@ export const DEFAULT_THREAD_AUTO_NUDGE_CONFIG: ThreadAutoNudgeConfig = {
   prompt: "",
   backgroundContinuation: false,
   maxRounds: DEFAULT_AUTO_NUDGE_MAX_ROUNDS,
-  maxMinutes: DEFAULT_AUTO_NUDGE_MAX_MINUTES,
   armedAt: null,
   baselineSettledTurnId: null,
   lastDispatchedSettledTurnId: null,
@@ -132,7 +119,6 @@ export const DEFAULT_THREAD_AUTO_NUDGE_SUMMARY: ThreadAutoNudgeSummary = {
   mode: "off",
   backgroundContinuation: false,
   maxRounds: DEFAULT_AUTO_NUDGE_MAX_ROUNDS,
-  maxMinutes: DEFAULT_AUTO_NUDGE_MAX_MINUTES,
   armedAt: null,
   baselineSettledTurnId: null,
   lastDispatchedSettledTurnId: null,

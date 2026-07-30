@@ -8,26 +8,20 @@ import { ModelSelection } from "./orchestration.ts";
 import { ProviderInstanceConfig, ProviderInstanceId } from "./providerInstance.ts";
 import { EditorId } from "./editor.ts";
 import {
-  AutoNudgeMaxMinutes,
   AutoNudgeMaxRounds,
   AutoNudgeMode,
   DEFAULT_AUTO_NUDGE_BACKGROUND_CONTINUATION,
-  DEFAULT_AUTO_NUDGE_MAX_MINUTES,
   DEFAULT_AUTO_NUDGE_MAX_ROUNDS,
   DEFAULT_AUTO_NUDGE_MODE,
 } from "./autoNudge.ts";
 
 export {
-  AutoNudgeMaxMinutes,
   AutoNudgeMaxRounds,
   AutoNudgeMode,
   DEFAULT_AUTO_NUDGE_BACKGROUND_CONTINUATION,
-  DEFAULT_AUTO_NUDGE_MAX_MINUTES,
   DEFAULT_AUTO_NUDGE_MAX_ROUNDS,
   DEFAULT_AUTO_NUDGE_MODE,
-  MAX_AUTO_NUDGE_MAX_MINUTES,
   MAX_AUTO_NUDGE_MAX_ROUNDS,
-  MIN_AUTO_NUDGE_MAX_MINUTES,
   MIN_AUTO_NUDGE_MAX_ROUNDS,
 } from "./autoNudge.ts";
 
@@ -760,9 +754,6 @@ export const ClientSettingsSchema = Schema.Struct({
   ),
   autoNudgeMaxRounds: AutoNudgeMaxRounds.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_AUTO_NUDGE_MAX_ROUNDS)),
-  ),
-  autoNudgeMaxMinutes: AutoNudgeMaxMinutes.pipe(
-    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AUTO_NUDGE_MAX_MINUTES)),
   ),
   themeAccentColor: TrimmedString.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_THEME_ACCENT_COLOR)),
@@ -1591,7 +1582,6 @@ export const ClientSettingsPatch = Schema.Struct({
   autoNudgeMode: Schema.optionalKey(AutoNudgeMode),
   autoNudgeBackgroundContinuation: Schema.optionalKey(Schema.Boolean),
   autoNudgeMaxRounds: Schema.optionalKey(AutoNudgeMaxRounds),
-  autoNudgeMaxMinutes: Schema.optionalKey(AutoNudgeMaxMinutes),
   themeAccentColor: Schema.optionalKey(TrimmedString),
   appAccentColor: Schema.optionalKey(TrimmedString),
   defaultEditor: Schema.optionalKey(DefaultEditorSelection),

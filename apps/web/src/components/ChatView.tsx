@@ -214,15 +214,12 @@ import {
   waitForStartedServerThread,
 } from "./ChatView.logic";
 import {
-  AUTO_NUDGE_DELAY_MS,
-  AutoNudgeTimerController,
+  type AutoNudgeMode,
   autoNudgePromptForMode,
   canDispatchAutoNudge,
   canScheduleAutoNudge,
   consumeAutoNudgeTerminalForManualActivity,
   getAutoNudgeTurnLedger,
-  isAutoNudgeWithinTimeCap,
-  type AutoNudgeMode,
 } from "../autoNudger";
 import { manualFollowUpPriorityStore } from "../manualFollowUpPriorityStore";
 import {
@@ -275,8 +272,6 @@ interface AutoNudgeForegroundDispatchAuthority {
   readonly threadId: ThreadId;
   readonly authorityRevision: ThreadAutoNudgeConfig["authorityRevision"];
   readonly completedTurnId: TurnId;
-  readonly armedAt: ThreadAutoNudgeConfig["armedAt"];
-  readonly maxMinutes: ThreadAutoNudgeConfig["maxMinutes"];
 }
 
 interface AutoNudgeConfigureValues {
@@ -284,7 +279,6 @@ interface AutoNudgeConfigureValues {
   readonly prompt: string;
   readonly backgroundContinuation: boolean;
   readonly maxRounds: ThreadAutoNudgeConfig["maxRounds"];
-  readonly maxMinutes: ThreadAutoNudgeConfig["maxMinutes"];
 }
 
 type AutoNudgeClearBlocker = "configuration-pending" | "environment-unavailable" | "thread-enabled";
@@ -2088,36 +2082,18 @@ export default function ChatView(props: ChatViewProps) {
   } | null => (scopeKey ? (autoNudgePendingWrites[scopeKey] ?? null) : null);
   const autoNudgeWriteGenerationRef = useRef(0);
   const autoNudgeContextKeyRef = useRef<string | null>(null);
-  const [autoNudgeCountdownSeconds, setAutoNudgeCountdownSeconds] = useState<number | null>(null);
   const [autoNudgeActivityRevision, setAutoNudgeActivityRevision] = useState(0);
   const autoNudgeLedgerRef = useRef(getAutoNudgeTurnLedger());
   // Keep the latest settled terminal identity available to synchronous
-  // composer handlers. A user can type before the scheduling effect has had
-  // a chance to arm its timer; that interaction still consumes this turn.
+  // composer handlers. A user can type before the completion effect has had
+  // a chance to dispatch; that interaction still consumes this turn.
   const autoNudgeTerminalTurnKeyRef = useRef<string | null>(null);
-  const [autoNudgeTimerController] = useState(
-    () =>
-      new AutoNudgeTimerController({
-        now: () => Date.now(),
-        setTimeout: (callback, delayMs) => window.setTimeout(callback, delayMs),
-        clearTimeout: (timer) => window.clearTimeout(timer),
-        setInterval: (callback, intervalMs) => window.setInterval(callback, intervalMs),
-        clearInterval: (timer) => window.clearInterval(timer),
-      }),
-  );
-  const cancelScheduledAutoNudge = useCallback(
-    (consumeScheduledTurn: boolean) => {
-      const scheduledTurnKey = autoNudgeTimerController.scheduledTurnKey;
-      if (consumeScheduledTurn && scheduledTurnKey) {
-        // A manual action/stop must never turn into a delayed send when the
-        // operator clears the composer again.
-        autoNudgeLedgerRef.current.mark(scheduledTurnKey);
-      }
-      autoNudgeTimerController.cancel();
-      setAutoNudgeCountdownSeconds(null);
-    },
-    [autoNudgeTimerController],
-  );
+  const cancelScheduledAutoNudge = useCallback((consumeScheduledTurn: boolean) => {
+    const terminalTurnKey = autoNudgeTerminalTurnKeyRef.current;
+    if (consumeScheduledTurn && terminalTurnKey) {
+      autoNudgeLedgerRef.current.mark(terminalTurnKey);
+    }
+  }, []);
   const recordManualAutoNudgeActivity = useCallback(() => {
     consumeAutoNudgeTerminalForManualActivity(
       autoNudgeLedgerRef.current,
@@ -6132,113 +6108,82 @@ export default function ChatView(props: ChatViewProps) {
           threadId: activeThread.id,
           authorityRevision: activeAutoNudgeConfig.authorityRevision,
           completedTurnId: autoNudgeCompletedTurnId,
-          armedAt: activeAutoNudgeConfig.armedAt,
-          maxMinutes: activeAutoNudgeConfig.maxMinutes,
         }
       : null;
   const autoNudgeForegroundDispatchAuthorityRef =
     useRef<AutoNudgeForegroundDispatchAuthority | null>(null);
   autoNudgeForegroundDispatchAuthorityRef.current = autoNudgeForegroundDispatchAuthority;
 
-  const previousAutoNudgeContextKeyRef = useRef<string | null>(null);
-  useEffect(() => {
-    const previousContextKey = previousAutoNudgeContextKeyRef.current;
-    previousAutoNudgeContextKeyRef.current = autoNudgeContextKey;
-    if (previousContextKey === null || previousContextKey === autoNudgeContextKey) {
-      return;
-    }
-    // A timer belongs to one exact environment/thread. Cancel without
-    // consuming so returning can re-evaluate that thread's server authority.
-    cancelScheduledAutoNudge(false);
-  }, [autoNudgeContextKey, cancelScheduledAutoNudge]);
+  const previousAutoNudgeCompletionRef = useRef<{
+    readonly contextKey: string;
+    readonly terminalTurnKey: string | null;
+  } | null>(null);
 
   useEffect(() => {
     const terminalTurnKey = autoNudgeTerminalTurnKey;
+    if (autoNudgeContextKey === null) {
+      previousAutoNudgeCompletionRef.current = null;
+      return;
+    }
+    const previousCompletion = previousAutoNudgeCompletionRef.current;
+    previousAutoNudgeCompletionRef.current = {
+      contextKey: autoNudgeContextKey,
+      terminalTurnKey,
+    };
+    if (
+      previousCompletion === null ||
+      previousCompletion.contextKey !== autoNudgeContextKey ||
+      previousCompletion.terminalTurnKey === terminalTurnKey
+    ) {
+      return;
+    }
     const alreadySent = terminalTurnKey !== null && autoNudgeLedgerRef.current.has(terminalTurnKey);
     if (!autoNudgeEligible || terminalTurnKey === null || alreadySent) {
-      cancelScheduledAutoNudge(false);
       return;
     }
-    if (autoNudgeTimerController.scheduledTurnKey === terminalTurnKey) {
+    if (
+      !canDispatchAutoNudge({
+        terminalTurnKey,
+        current: autoNudgeEligibilityRef.current,
+        alreadyConsumed: autoNudgeLedgerRef.current.has(terminalTurnKey),
+      })
+    ) {
       return;
     }
-
-    cancelScheduledAutoNudge(false);
-    autoNudgeTimerController.schedule({
-      turnKey: terminalTurnKey,
-      delayMs: AUTO_NUDGE_DELAY_MS,
-      onCountdown: setAutoNudgeCountdownSeconds,
-      onDispatch: (scheduledTurnKey) => {
-        setAutoNudgeCountdownSeconds(null);
-        // Re-read every safety condition after the visible delay. A stale
-        // closure must never submit against a changed thread/provider state.
-        if (
-          !canDispatchAutoNudge({
-            scheduledTurnKey,
-            current: autoNudgeEligibilityRef.current,
-            alreadyConsumed: autoNudgeLedgerRef.current.has(scheduledTurnKey),
-          })
-        ) {
-          return;
-        }
-        const authority = autoNudgeForegroundDispatchAuthorityRef.current;
-        if (
-          !authority ||
-          authority.contextKey !== autoNudgeContextKeyRef.current ||
-          authority.terminalTurnKey !== scheduledTurnKey ||
-          !isAutoNudgeWithinTimeCap(authority, Date.now())
-        ) {
-          return;
-        }
-        const api = readEnvironmentApi(authority.environmentId);
-        if (!api) return;
-        const command = {
-          type: "thread.auto-nudge.dispatch" as const,
-          commandId: newCommandId(),
-          threadId: authority.threadId,
-          expectedAuthorityRevision: authority.authorityRevision,
-          completedTurnId: authority.completedTurnId,
-          dispatchSource: "foreground" as const,
-          messageId: newMessageId(),
-          createdAt: new Date().toISOString(),
-        };
-        // Consume before transport. Any rejection fails closed; the server is
-        // the execution authority and independently validates revision/turn.
-        autoNudgeLedgerRef.current.mark(scheduledTurnKey);
-        // A storage event can trail Emergency Stop all. Re-read its durable
-        // barrier on the line immediately before the transport handoff.
-        if (!getConfirmedAutoNudgeArming().confirmExecutionAuthorized()) return;
-        void api.orchestration.dispatchCommand(command).catch(() => {
-          if (autoNudgeContextKeyRef.current !== authority.contextKey) return;
-          toastManager.add(
-            stackedThreadToast({
-              type: "error",
-              title: "Auto Nudge was not dispatched",
-              description:
-                "This thread's saved authority changed or the environment became unavailable.",
-            }),
-          );
-        });
-      },
-    });
-
-    return () => {
-      cancelScheduledAutoNudge(false);
+    const authority = autoNudgeForegroundDispatchAuthorityRef.current;
+    if (
+      !authority ||
+      authority.contextKey !== autoNudgeContextKeyRef.current ||
+      authority.terminalTurnKey !== terminalTurnKey
+    ) {
+      return;
+    }
+    const api = readEnvironmentApi(authority.environmentId);
+    if (!api) return;
+    const command = {
+      type: "thread.auto-nudge.dispatch" as const,
+      commandId: newCommandId(),
+      threadId: authority.threadId,
+      expectedAuthorityRevision: authority.authorityRevision,
+      completedTurnId: authority.completedTurnId,
+      dispatchSource: "foreground" as const,
+      messageId: newMessageId(),
+      createdAt: new Date().toISOString(),
     };
-  }, [
-    autoNudgeActivityRevision,
-    autoNudgeEligible,
-    autoNudgeTerminalTurnKey,
-    autoNudgeTimerController,
-    cancelScheduledAutoNudge,
-  ]);
-
-  useEffect(
-    () => () => {
-      cancelScheduledAutoNudge(false);
-    },
-    [cancelScheduledAutoNudge],
-  );
+    autoNudgeLedgerRef.current.mark(terminalTurnKey);
+    if (!getConfirmedAutoNudgeArming().confirmExecutionAuthorized()) return;
+    void api.orchestration.dispatchCommand(command).catch(() => {
+      if (autoNudgeContextKeyRef.current !== authority.contextKey) return;
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Auto Nudge was not dispatched",
+          description:
+            "This thread's saved authority changed or the environment became unavailable.",
+        }),
+      );
+    });
+  }, [autoNudgeActivityRevision, autoNudgeContextKey, autoNudgeEligible, autoNudgeTerminalTurnKey]);
 
   const configureActiveThreadAutoNudge = async (
     values: AutoNudgeConfigureValues,
@@ -6295,7 +6240,6 @@ export default function ChatView(props: ChatViewProps) {
       expectedAuthorityRevision: targetConfig.authorityRevision,
       prompt: values.prompt,
       maxRounds: values.maxRounds,
-      maxMinutes: values.maxMinutes,
       createdAt: new Date().toISOString(),
     };
     const command =
@@ -6370,7 +6314,6 @@ export default function ChatView(props: ChatViewProps) {
         prompt,
         backgroundContinuation: config.backgroundContinuation,
         maxRounds: config.maxRounds,
-        maxMinutes: config.maxMinutes,
       },
       "mode",
     ).catch(() => undefined);
@@ -6404,7 +6347,6 @@ export default function ChatView(props: ChatViewProps) {
         prompt: config.prompt,
         backgroundContinuation: true,
         maxRounds: config.maxRounds,
-        maxMinutes: config.maxMinutes,
       },
       "background",
     ).catch(() => undefined);
@@ -6422,13 +6364,12 @@ export default function ChatView(props: ChatViewProps) {
         prompt,
         backgroundContinuation: mode === "off" ? false : config.backgroundContinuation,
         maxRounds: config.maxRounds,
-        maxMinutes: config.maxMinutes,
       },
       "prompt",
     );
   };
 
-  const onSaveAutoNudgeLimits = (maxRounds: number, maxMinutes: number): Promise<void> => {
+  const onSaveAutoNudgeLimits = (maxRounds: number): Promise<void> => {
     const config = activeAutoNudgeConfig;
     if (!config) return Promise.reject(new Error("No persisted thread is active."));
     // Limit edits are harmless while Emergency Stop all is latched, but they
@@ -6441,7 +6382,6 @@ export default function ChatView(props: ChatViewProps) {
         prompt: config.prompt,
         backgroundContinuation: mode === "off" ? false : config.backgroundContinuation,
         maxRounds,
-        maxMinutes,
       },
       "limits",
     );
@@ -7715,13 +7655,11 @@ export default function ChatView(props: ChatViewProps) {
               <div className="relative z-10">
                 <AutoNudgeControl
                   mode={autoNudgeMode}
-                  countdownSeconds={autoNudgeCountdownSeconds}
                   disabled={!isServerThread || !activeAutoNudgeConfig}
                   arming={autoNudgeArming}
                   backgroundEnabled={activeAutoNudgeConfig?.backgroundContinuation ?? false}
                   roundsDispatched={activeAutoNudgeConfig?.roundsDispatched ?? 0}
                   maxRounds={activeAutoNudgeConfig?.maxRounds ?? 5}
-                  maxMinutes={activeAutoNudgeConfig?.maxMinutes ?? 30}
                   globallySuppressed={autoNudgeSuppressed}
                   promptScopeKey={autoNudgeContextKey ?? routeThreadKey}
                   persistedPrompt={activeAutoNudgeConfig?.prompt ?? ""}

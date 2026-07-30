@@ -8,13 +8,11 @@ function control(overrides: Partial<React.ComponentProps<typeof AutoNudgeControl
   return (
     <AutoNudgeControl
       mode="off"
-      countdownSeconds={null}
       disabled={false}
       arming={false}
       backgroundEnabled={false}
       roundsDispatched={0}
       maxRounds={5}
-      maxMinutes={30}
       globallySuppressed={false}
       promptScopeKey="environment-a/thread-a"
       persistedPrompt="Keep this thread moving"
@@ -72,13 +70,14 @@ describe("AutoNudgeControl", () => {
     await page.viewport(390, 844);
     const mobile = await renderCollapsedControl({
       mode: "steady-progress",
-      countdownSeconds: 4,
     });
 
     try {
       const mobileToggle = page.getByRole("button", { name: "Expand Auto Nudge controls" });
       await expect.element(mobileToggle).toHaveAttribute("aria-expanded", "false");
-      await expect.element(page.getByText("Next nudge in 4s")).toBeVisible();
+      await expect
+        .element(page.getByText("Armed for the next newly completed response"))
+        .toBeVisible();
       expect(autoNudgeRoot()?.classList.contains("max-w-3xl")).toBe(true);
       expect(autoNudgeRoot()?.dataset.autoNudgeExpanded).toBe("false");
       expect(document.querySelector('[data-auto-nudge-details="true"]')).toBeNull();
@@ -197,7 +196,9 @@ describe("AutoNudgeControl", () => {
   it("renders the durable mode state", async () => {
     await renderControl({ mode: "steady-progress" });
 
-    await expect.element(page.getByText("Armed for the next safely settled turn")).toBeVisible();
+    await expect
+      .element(page.getByText("Armed for the next newly completed response"))
+      .toBeVisible();
     await expect
       .element(
         page.getByText("Auto Nudge can rapidly consume provider tokens", {
@@ -212,7 +213,11 @@ describe("AutoNudgeControl", () => {
       )
       .toBeVisible();
     await expect
-      .element(page.getByText("the five-second countdown is a safety debounce", { exact: false }))
+      .element(
+        page.getByText("only when this exact thread generates a new completed response", {
+          exact: false,
+        }),
+      )
       .toBeVisible();
     await expect.element(page.getByRole("button", { name: "Stop this thread" })).toBeVisible();
     await expect.element(page.getByRole("button", { name: "Emergency Stop all" })).toBeVisible();
@@ -255,7 +260,6 @@ describe("AutoNudgeControl", () => {
       backgroundEnabled: true,
       roundsDispatched: 2,
       maxRounds: 7,
-      maxMinutes: 45,
       onBackgroundChange,
     });
 
@@ -490,23 +494,19 @@ describe("AutoNudgeControl", () => {
     const onSaveLimits = vi.fn(async () => undefined);
     await renderControl({
       maxRounds: 5,
-      maxMinutes: 30,
       onSaveLimits,
     });
 
     const maxRounds = page.getByLabelText("Maximum rounds");
-    const maxMinutes = page.getByLabelText("Maximum minutes");
     await expect.element(maxRounds).toHaveValue(5);
-    await expect.element(maxMinutes).toHaveValue(30);
     await maxRounds.fill("9");
-    await maxMinutes.fill("75");
 
     await expect.element(page.getByText("Unsaved limit changes")).toBeVisible();
     await page.getByRole("button", { name: "Save limits" }).click();
 
     await vi.waitFor(() => {
       expect(onSaveLimits).toHaveBeenCalledTimes(1);
-      expect(onSaveLimits).toHaveBeenCalledWith(9, 75);
+      expect(onSaveLimits).toHaveBeenCalledWith(9);
     });
   });
 

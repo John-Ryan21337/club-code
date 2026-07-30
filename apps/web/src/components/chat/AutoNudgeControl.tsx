@@ -1,9 +1,4 @@
-import {
-  MAX_AUTO_NUDGE_MAX_MINUTES,
-  MAX_AUTO_NUDGE_MAX_ROUNDS,
-  MIN_AUTO_NUDGE_MAX_MINUTES,
-  MIN_AUTO_NUDGE_MAX_ROUNDS,
-} from "@cafecode/contracts";
+import { MAX_AUTO_NUDGE_MAX_ROUNDS, MIN_AUTO_NUDGE_MAX_ROUNDS } from "@cafecode/contracts";
 import { ChevronDownIcon } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 
@@ -30,13 +25,11 @@ function parseBoundedInteger(raw: string, minimum: number, maximum: number): num
 
 export interface AutoNudgeControlProps {
   readonly mode: AutoNudgeMode;
-  readonly countdownSeconds: number | null;
   readonly disabled: boolean;
   readonly arming: boolean;
   readonly backgroundEnabled: boolean;
   readonly roundsDispatched: number;
   readonly maxRounds: number;
-  readonly maxMinutes: number;
   readonly globallySuppressed: boolean;
   /**
    * Opaque identity for the exact environment/thread pair. This deliberately
@@ -49,7 +42,7 @@ export interface AutoNudgeControlProps {
   readonly promptEditable: boolean;
   readonly onSavePrompt: (prompt: string) => Promise<void> | void;
   readonly limitsSaving: boolean;
-  readonly onSaveLimits: (maxRounds: number, maxMinutes: number) => Promise<void> | void;
+  readonly onSaveLimits: (maxRounds: number) => Promise<void> | void;
   readonly onModeChange: (mode: AutoNudgeMode) => void;
   readonly onBackgroundChange: (enabled: boolean) => void;
   readonly onStop: () => void;
@@ -70,13 +63,11 @@ function ThreadScopedAutoNudgeControl(props: AutoNudgeControlProps) {
   const limitsHelpId = useId();
   const limitsStatusId = useId();
   const maxRoundsFieldId = useId();
-  const maxMinutesFieldId = useId();
   const summaryStateId = useId();
   const summaryStatusId = useId();
   const [expanded, setExpanded] = useState(false);
   const [draftPrompt, setDraftPrompt] = useState(props.persistedPrompt);
   const [draftMaxRounds, setDraftMaxRounds] = useState(String(props.maxRounds));
-  const [draftMaxMinutes, setDraftMaxMinutes] = useState(String(props.maxMinutes));
   const [localSavePending, setLocalSavePending] = useState(false);
   const [localLimitsSavePending, setLocalLimitsSavePending] = useState(false);
   const [saveFailed, setSaveFailed] = useState(false);
@@ -105,10 +96,9 @@ function ThreadScopedAutoNudgeControl(props: AutoNudgeControlProps) {
   useEffect(() => {
     limitsSaveAttemptRef.current += 1;
     setDraftMaxRounds(String(props.maxRounds));
-    setDraftMaxMinutes(String(props.maxMinutes));
     setLocalLimitsSavePending(false);
     setLimitsSaveFailed(false);
-  }, [props.maxMinutes, props.maxRounds, props.promptEditable, props.promptScopeKey]);
+  }, [props.maxRounds, props.promptEditable, props.promptScopeKey]);
   const isActive = props.mode !== "off";
   const promptSaving = props.promptSaving || localSavePending;
   const limitsSaving = props.limitsSaving || localLimitsSavePending;
@@ -136,16 +126,8 @@ function ThreadScopedAutoNudgeControl(props: AutoNudgeControlProps) {
     MIN_AUTO_NUDGE_MAX_ROUNDS,
     MAX_AUTO_NUDGE_MAX_ROUNDS,
   );
-  const parsedMaxMinutes = parseBoundedInteger(
-    draftMaxMinutes,
-    MIN_AUTO_NUDGE_MAX_MINUTES,
-    MAX_AUTO_NUDGE_MAX_MINUTES,
-  );
-  const limitsChanged =
-    parsedMaxRounds !== null &&
-    parsedMaxMinutes !== null &&
-    (parsedMaxRounds !== props.maxRounds || parsedMaxMinutes !== props.maxMinutes);
-  const limitsAreValid = parsedMaxRounds !== null && parsedMaxMinutes !== null;
+  const limitsChanged = parsedMaxRounds !== null && parsedMaxRounds !== props.maxRounds;
+  const limitsAreValid = parsedMaxRounds !== null;
   const limitsStatus = !props.promptEditable
     ? "Limits unavailable for this thread"
     : limitsSaveFailed
@@ -163,11 +145,9 @@ function ThreadScopedAutoNudgeControl(props: AutoNudgeControlProps) {
       ? "Saving this thread"
       : props.disabled
         ? "Unavailable for this thread"
-        : props.countdownSeconds === null
-          ? isActive
-            ? "Armed for the next safely settled turn"
-            : "Off"
-          : `Next nudge in ${props.countdownSeconds}s`;
+        : isActive
+          ? "Armed for the next newly completed response"
+          : "Off";
   const visualState =
     !isActive || props.globallySuppressed
       ? ("off" as const)
@@ -215,7 +195,6 @@ function ThreadScopedAutoNudgeControl(props: AutoNudgeControlProps) {
       !props.promptEditable ||
       !limitsChanged ||
       parsedMaxRounds === null ||
-      parsedMaxMinutes === null ||
       configurationSaving
     ) {
       return;
@@ -226,7 +205,7 @@ function ThreadScopedAutoNudgeControl(props: AutoNudgeControlProps) {
     setLocalLimitsSavePending(true);
     setLimitsSaveFailed(false);
     try {
-      await props.onSaveLimits(parsedMaxRounds, parsedMaxMinutes);
+      await props.onSaveLimits(parsedMaxRounds);
     } catch {
       if (
         mountedRef.current &&
@@ -327,18 +306,17 @@ function ThreadScopedAutoNudgeControl(props: AutoNudgeControlProps) {
             >
               <span className="font-semibold">Paid-usage warning:</span> Auto Nudge can rapidly
               consume provider tokens, credits, and paid usage. You are responsible for provider
-              charges; Club Code cannot reimburse them. Use conservative round/time caps, monitor
-              active runs (including through the phone web UI), and use a carefully scoped prompt or
-              skill for this exact thread. Leave it unattended only if you accept the cost risk.
+              charges; Club Code cannot reimburse them. Use a conservative round cap, monitor active
+              runs (including through the phone web UI), and use a carefully scoped prompt or skill
+              for this exact thread. Leave it unattended only if you accept the cost risk.
             </div>
             <p className="text-muted-foreground">
               Auto Nudge does not send on an idle-time or repeating schedule. It can hand off once
-              only after this exact thread reaches a new completed turn and its accepted operator
-              queue is empty; the five-second countdown is a safety debounce, not authority. Mode,
-              prompt, and limits are saved only for this thread. Background continuation is opt-in
-              and stops at {props.maxRounds} rounds or {props.maxMinutes} minutes. Stop this thread
-              blocks only its future handoffs; Emergency Stop all blocks every thread. Neither
-              action can retract a prompt already handed to a provider.
+              only when this exact thread generates a new completed response and its accepted
+              operator queue is empty. Mode, prompt, and limits are saved only for this thread.
+              Background continuation is opt-in and stops at {props.maxRounds} rounds. Stop this
+              thread blocks only its future handoffs; Emergency Stop all blocks every thread.
+              Neither action can retract a prompt already handed to a provider.
             </p>
             {props.backgroundEnabled ? (
               <div className="mt-1 text-muted-foreground">
@@ -489,7 +467,7 @@ function ThreadScopedAutoNudgeControl(props: AutoNudgeControlProps) {
                   {limitsStatus}
                 </span>
               </div>
-              <div className="grid gap-2 sm:grid-cols-2">
+              <div className="grid gap-2">
                 <label className="grid gap-1 text-muted-foreground" htmlFor={maxRoundsFieldId}>
                   Maximum rounds
                   <Input
@@ -513,35 +491,11 @@ function ThreadScopedAutoNudgeControl(props: AutoNudgeControlProps) {
                     }}
                   />
                 </label>
-                <label className="grid gap-1 text-muted-foreground" htmlFor={maxMinutesFieldId}>
-                  Maximum minutes
-                  <Input
-                    nativeInput
-                    id={maxMinutesFieldId}
-                    type="number"
-                    inputMode="numeric"
-                    min={MIN_AUTO_NUDGE_MAX_MINUTES}
-                    max={MAX_AUTO_NUDGE_MAX_MINUTES}
-                    step={1}
-                    size="sm"
-                    value={draftMaxMinutes}
-                    disabled={!props.promptEditable || configurationSaving}
-                    aria-describedby={`${limitsHelpId} ${limitsStatusId}`}
-                    aria-invalid={
-                      props.promptEditable && parsedMaxMinutes === null ? true : undefined
-                    }
-                    onChange={(event) => {
-                      setDraftMaxMinutes(event.currentTarget.value);
-                      setLimitsSaveFailed(false);
-                    }}
-                  />
-                </label>
               </div>
               <div className="mt-1 flex flex-wrap items-center justify-between gap-2">
                 <p id={limitsHelpId} className="text-muted-foreground">
-                  Whole numbers only: {MIN_AUTO_NUDGE_MAX_ROUNDS}-{MAX_AUTO_NUDGE_MAX_ROUNDS} rounds
-                  and {MIN_AUTO_NUDGE_MAX_MINUTES}-{MAX_AUTO_NUDGE_MAX_MINUTES} minutes. Saving
-                  replaces only this thread's revision-checked authority.
+                  Whole numbers only: {MIN_AUTO_NUDGE_MAX_ROUNDS}-{MAX_AUTO_NUDGE_MAX_ROUNDS}{" "}
+                  rounds. Saving replaces only this thread's revision-checked authority.
                 </p>
                 <Button
                   type="submit"
