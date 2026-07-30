@@ -45,6 +45,34 @@ export interface CollaborationAuthorizationGrant {
   readonly permission: CollaborationPermission;
 }
 
+const authorizationGrantProofs = new WeakMap<object, string>();
+
+function authorizationGrantProof(grant: CollaborationAuthorizationGrant): string {
+  return JSON.stringify([grant.principal, grant.member, grant.permission]);
+}
+
+/**
+ * Confirms that a grant was issued by this module and has not been mutated
+ * since authorization. Structural lookalikes are not authorization
+ * capabilities.
+ */
+export function isCollaborationAuthorizationGrant(
+  value: unknown,
+): value is CollaborationAuthorizationGrant {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const proof = authorizationGrantProofs.get(value);
+  if (proof === undefined) {
+    return false;
+  }
+  try {
+    return proof === authorizationGrantProof(value as CollaborationAuthorizationGrant);
+  } catch {
+    return false;
+  }
+}
+
 export interface CollaborationAuthorizationInput {
   /**
    * This principal must come from the server authentication boundary after its
@@ -183,10 +211,12 @@ export function authorizeCollaborationPermission(
       return yield* deny("permission-denied");
     }
 
-    return {
+    const grant = {
       principal,
       member,
       permission,
     };
+    authorizationGrantProofs.set(grant, authorizationGrantProof(grant));
+    return grant;
   });
 }

@@ -244,6 +244,7 @@ describe("collaboration contracts", () => {
         deviceId: "device-1",
         agentId: "agent-1",
       },
+      deviceKeyId: "device-key-1",
       type: "task.completed",
       payload: { taskId: "task-1", artifactSha256: "b".repeat(64) },
       payloadSha256: "a".repeat(64),

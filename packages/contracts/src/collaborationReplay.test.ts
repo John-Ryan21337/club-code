@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   COLLABORATION_EVENT_REPLAY_DEFAULT_LIMIT,
+  COLLABORATION_EVENT_REPLAY_MAX_PAGE_UTF8_BYTES,
   COLLABORATION_EVENT_REPLAY_MAX_LIMIT,
   CollaborationEventReplayPage,
   CollaborationEventReplayRequest,
@@ -53,6 +54,7 @@ describe("collaboration replay contracts", () => {
         userId: "user-1",
         deviceId: "device-1",
       },
+      deviceKeyId: "device-key-1",
       type: "operator-chat.message",
       payload: { body: "hello" },
       payloadSha256: "a".repeat(64),
@@ -77,6 +79,19 @@ describe("collaboration replay contracts", () => {
         events: Array.from({ length: COLLABORATION_EVENT_REPLAY_MAX_LIMIT + 1 }, () => event),
         nextCursor: 1,
         hasMore: true,
+      }),
+    ).toThrow();
+    expect(() =>
+      decodePage({
+        sharedProjectId: "shared-project-1",
+        events: [
+          {
+            ...event,
+            payload: { body: "x".repeat(COLLABORATION_EVENT_REPLAY_MAX_PAGE_UTF8_BYTES) },
+          },
+        ],
+        nextCursor: 1,
+        hasMore: false,
       }),
     ).toThrow();
   });

@@ -5,15 +5,24 @@ export default Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
   yield* sql`
+    CREATE TABLE IF NOT EXISTS collaboration_event_write_locks (
+      shared_project_id TEXT PRIMARY KEY
+    ) STRICT
+  `;
+
+  yield* sql`
     CREATE TABLE IF NOT EXISTS collaboration_events (
       shared_project_id TEXT NOT NULL,
-      sequence INTEGER NOT NULL CHECK(sequence > 0),
+      sequence INTEGER NOT NULL CHECK(sequence > 0 AND sequence <= 9007199254740991),
       event_id TEXT NOT NULL,
       command_id TEXT NOT NULL,
       proposal_sha256 TEXT NOT NULL CHECK(length(proposal_sha256) = 64),
       envelope_sha256 TEXT NOT NULL CHECK(length(envelope_sha256) = 64),
-      membership_epoch INTEGER NOT NULL CHECK(membership_epoch >= 0),
+      membership_epoch INTEGER NOT NULL CHECK(
+        membership_epoch >= 0 AND membership_epoch <= 2147483647
+      ),
       actor_json TEXT NOT NULL,
+      device_key_id TEXT NOT NULL,
       event_type TEXT NOT NULL,
       payload_json TEXT NOT NULL,
       payload_sha256 TEXT NOT NULL CHECK(length(payload_sha256) = 64),

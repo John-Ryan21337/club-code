@@ -7,6 +7,7 @@ import type {
 } from "@cafecode/contracts";
 import {
   COLLABORATION_EVENT_REPLAY_DEFAULT_LIMIT,
+  COLLABORATION_EVENT_REPLAY_MAX_PAGE_UTF8_BYTES,
   COLLABORATION_EVENT_REPLAY_MAX_LIMIT,
   CollaborationEventEnvelope as CollaborationEventEnvelopeSchema,
   CollaborationEventProposal as CollaborationEventProposalSchema,
@@ -26,12 +27,18 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import {
   collaborationEventProposalSignatureBytes,
   type CollaborationAdmittedEventProposal,
+  isCollaborationAdmittedEventProposal,
 } from "./CollaborationEventAdmission.ts";
+import {
+  authorizeCollaborationPermission,
+  CollaborationMembershipAuthority,
+} from "./CollaborationAuthorization.ts";
 
 const HASH_DOMAIN = "cafecode-collaboration-event-envelope-v1";
 const IDEMPOTENCY_DOMAIN = "cafecode-collaboration-event-idempotency-v1";
 const decodeEnvelope = Schema.decodeUnknownSync(CollaborationEventEnvelopeSchema);
 const decodeProposal = Schema.decodeUnknownEffect(CollaborationEventProposalSchema);
+const decodeStoredProposal = Schema.decodeUnknownSync(CollaborationEventProposalSchema);
 const decodeReplayRequest = Schema.decodeUnknownEffect(CollaborationEventReplayRequestSchema);
 
 export type CollaborationEventStoreFailureReason =
@@ -51,8 +58,17 @@ export interface CollaborationEventStoreShape {
     admitted: CollaborationAdmittedEventProposal,
   ) => Effect.Effect<CollaborationEventEnvelope, CollaborationEventStoreError>;
   readonly replay: (
-    request: CollaborationEventReplayRequest,
-  ) => Effect.Effect<CollaborationEventReplayPage, CollaborationEventStoreError>;
+    input: CollaborationEventReplayInput,
+  ) => Effect.Effect<
+    CollaborationEventReplayPage,
+    CollaborationEventStoreError,
+    CollaborationMembershipAuthority
+  >;
+}
+
+export interface CollaborationEventReplayInput {
+  readonly principal: unknown;
+  readonly request: CollaborationEventReplayRequest;
 }
 
 export class CollaborationEventStore extends Context.Service<
@@ -69,6 +85,7 @@ interface CollaborationEventRow {
   readonly envelopeSha256: string;
   readonly membershipEpoch: number;
   readonly actorJson: string;
+  readonly deviceKeyId: string;
   readonly eventType: string;
   readonly payloadJson: string;
   readonly payloadSha256: string;
@@ -84,6 +101,11 @@ interface VerifiedStoredEvent {
   readonly envelope: CollaborationEventEnvelope;
   readonly envelopeSha256: CollaborationSha256;
   readonly proposalSha256: CollaborationSha256;
+}
+
+interface CollaborationEventReplayCandidate {
+  readonly sequence: number;
+  readonly encodedBytes: number;
 }
 
 function fail(
@@ -136,6 +158,7 @@ function envelopeSha256(
       envelope.commandId,
       envelope.membershipEpoch,
       actorJson,
+      envelope.deviceKeyId,
       envelope.type,
       payloadJson,
       envelope.payloadSha256,
@@ -169,6 +192,7 @@ function verifyStoredRow(
           commandId: row.commandId,
           membershipEpoch: row.membershipEpoch,
           actor,
+          deviceKeyId: row.deviceKeyId,
           type: row.eventType,
           payload,
           payloadSha256: row.payloadSha256,
@@ -187,8 +211,27 @@ function verifyStoredRow(
       if (envelopeSha256(envelope, row.actorJson, row.payloadJson) !== row.envelopeSha256) {
         throw new Error("envelope hash mismatch");
       }
-      if (!/^[a-f0-9]{64}$/.test(row.proposalSha256)) {
-        throw new Error("proposal hash invalid");
+      const storedProposal = decodeStoredProposal(
+        {
+          version: envelope.version,
+          sharedProjectId: envelope.sharedProjectId,
+          eventId: envelope.eventId,
+          commandId: envelope.commandId,
+          membershipEpoch: envelope.membershipEpoch,
+          actor: envelope.actor,
+          deviceKeyId: envelope.deviceKeyId,
+          type: envelope.type,
+          payloadJson: row.payloadJson,
+          payloadSha256: envelope.payloadSha256,
+          authorSignature: envelope.authorSignature,
+          causationEventId: envelope.causationEventId,
+          correlationId: envelope.correlationId,
+          occurredAt: envelope.occurredAt,
+        },
+        { onExcessProperty: "error" },
+      );
+      if (proposalSha256(storedProposal) !== row.proposalSha256) {
+        throw new Error("proposal hash mismatch");
       }
       return {
         envelope,
@@ -209,6 +252,7 @@ const selectColumns = `
   envelope_sha256 AS "envelopeSha256",
   membership_epoch AS "membershipEpoch",
   actor_json AS "actorJson",
+  device_key_id AS "deviceKeyId",
   event_type AS "eventType",
   payload_json AS "payloadJson",
   payload_sha256 AS "payloadSha256",
@@ -226,6 +270,9 @@ const makeStore = Effect.gen(function* () {
   const append: CollaborationEventStoreShape["append"] = (admitted) => {
     const operation = "append" as const;
     return Effect.gen(function* () {
+      if (!isCollaborationAdmittedEventProposal(admitted)) {
+        return yield* Effect.fail(fail(operation, "invalid-admitted-event"));
+      }
       const authorization = admitted?.authorization;
       const proposal = yield* decodeProposal(admitted?.proposal, {
         onExcessProperty: "error",
@@ -246,13 +293,26 @@ const makeStore = Effect.gen(function* () {
       ) {
         return yield* Effect.fail(fail(operation, "invalid-admitted-event"));
       }
+      if (!isCollaborationAdmittedEventProposal(admitted)) {
+        return yield* Effect.fail(fail(operation, "invalid-admitted-event"));
+      }
 
       const retrySha256 = proposalSha256(proposal);
       const actorJson = JSON.stringify(proposal.actor);
       const payloadJson = proposal.payloadJson;
+      const payload = JSON.parse(payloadJson);
 
       return yield* sql.withTransaction(
         Effect.gen(function* () {
+          // Acquire SQLite's writer reservation before reading the project
+          // tail. This prevents two coordinator processes from allocating the
+          // same next sequence from concurrent deferred transactions.
+          yield* sql`
+            INSERT INTO collaboration_event_write_locks (shared_project_id)
+            VALUES (${proposal.sharedProjectId})
+            ON CONFLICT(shared_project_id) DO UPDATE
+            SET shared_project_id = excluded.shared_project_id
+          `;
           const existingRows = yield* sql<CollaborationEventRow>`
             SELECT ${sql.unsafe(selectColumns)}
             FROM collaboration_events
@@ -318,8 +378,9 @@ const makeStore = Effect.gen(function* () {
                   commandId: proposal.commandId,
                   membershipEpoch: proposal.membershipEpoch,
                   actor: proposal.actor,
+                  deviceKeyId: proposal.deviceKeyId,
                   type: proposal.type,
-                  payload: admitted.payload,
+                  payload,
                   payloadSha256: proposal.payloadSha256,
                   previousEventSha256: tail?.envelopeSha256 ?? null,
                   authorSignature: proposal.authorSignature,
@@ -338,14 +399,14 @@ const makeStore = Effect.gen(function* () {
             INSERT INTO collaboration_events (
               shared_project_id, sequence, event_id, command_id, proposal_sha256,
               envelope_sha256, membership_epoch, actor_json, event_type, payload_json,
-              payload_sha256, previous_event_sha256, author_signature,
+              device_key_id, payload_sha256, previous_event_sha256, author_signature,
               causation_event_id, correlation_id, occurred_at, received_at
             )
             VALUES (
               ${envelope.sharedProjectId}, ${envelope.sequence}, ${envelope.eventId},
               ${envelope.commandId}, ${retrySha256}, ${storedEnvelopeSha256},
               ${envelope.membershipEpoch}, ${actorJson}, ${envelope.type}, ${payloadJson},
-              ${envelope.payloadSha256}, ${envelope.previousEventSha256},
+              ${envelope.deviceKeyId}, ${envelope.payloadSha256}, ${envelope.previousEventSha256},
               ${envelope.authorSignature}, ${envelope.causationEventId},
               ${envelope.correlationId}, ${envelope.occurredAt}, ${envelope.receivedAt}
             )
@@ -360,29 +421,72 @@ const makeStore = Effect.gen(function* () {
     );
   };
 
-  const replay: CollaborationEventStoreShape["replay"] = (rawRequest) => {
+  const replay: CollaborationEventStoreShape["replay"] = (input) => {
     const operation = "replay" as const;
     return Effect.gen(function* () {
-      const request = yield* decodeReplayRequest(rawRequest, {
+      const request = yield* decodeReplayRequest(input?.request, {
         onExcessProperty: "error",
       }).pipe(Effect.mapError(() => fail(operation, "invalid-replay-request")));
-      const limit = Math.min(
-        request.limit ?? COLLABORATION_EVENT_REPLAY_DEFAULT_LIMIT,
-        COLLABORATION_EVENT_REPLAY_MAX_LIMIT,
-      );
+      yield* authorizeCollaborationPermission({
+        principal: input?.principal,
+        targetProjectId: request.sharedProjectId,
+        permission: "audit.read",
+      }).pipe(Effect.mapError(() => fail(operation, "invalid-replay-request")));
+      return yield* sql.withTransaction(
+        Effect.gen(function* () {
+          const limit = Math.min(
+            request.limit ?? COLLABORATION_EVENT_REPLAY_DEFAULT_LIMIT,
+            COLLABORATION_EVENT_REPLAY_MAX_LIMIT,
+          );
 
-      const pageRows = yield* sql<CollaborationEventRow>`
-        SELECT ${sql.unsafe(selectColumns)}
+          const candidateRows = yield* sql<CollaborationEventReplayCandidate>`
+        SELECT
+          sequence,
+          (
+            length(CAST(payload_json AS BLOB)) +
+            length(CAST(actor_json AS BLOB)) +
+            length(CAST(author_signature AS BLOB)) +
+            length(CAST(shared_project_id AS BLOB)) +
+            length(CAST(event_id AS BLOB)) +
+            length(CAST(command_id AS BLOB)) +
+            length(CAST(device_key_id AS BLOB)) +
+            length(CAST(event_type AS BLOB)) +
+            length(CAST(occurred_at AS BLOB)) +
+            length(CAST(received_at AS BLOB)) +
+            1024
+          ) AS "encodedBytes"
         FROM collaboration_events
         WHERE shared_project_id = ${request.sharedProjectId}
           AND sequence > ${request.afterSequence}
         ORDER BY sequence ASC
         LIMIT ${limit + 1}
       `;
-      const predecessorRows =
-        request.afterSequence === 0
-          ? []
-          : yield* sql<CollaborationEventRow>`
+          let selectedCount = 0;
+          let selectedBytes = 0;
+          for (const candidate of candidateRows) {
+            if (
+              selectedCount >= limit ||
+              (selectedCount > 0 &&
+                selectedBytes + candidate.encodedBytes >
+                  COLLABORATION_EVENT_REPLAY_MAX_PAGE_UTF8_BYTES)
+            ) {
+              break;
+            }
+            selectedCount += 1;
+            selectedBytes += candidate.encodedBytes;
+          }
+          const pageRows = yield* sql<CollaborationEventRow>`
+        SELECT ${sql.unsafe(selectColumns)}
+        FROM collaboration_events
+        WHERE shared_project_id = ${request.sharedProjectId}
+          AND sequence > ${request.afterSequence}
+        ORDER BY sequence ASC
+        LIMIT ${selectedCount + 1}
+      `;
+          const predecessorRows =
+            request.afterSequence === 0
+              ? []
+              : yield* sql<CollaborationEventRow>`
               SELECT ${sql.unsafe(selectColumns)}
               FROM collaboration_events
               WHERE shared_project_id = ${request.sharedProjectId}
@@ -390,81 +494,84 @@ const makeStore = Effect.gen(function* () {
               ORDER BY sequence DESC
               LIMIT 2
             `;
-      const tailRows = yield* sql<{ readonly sequence: number }>`
+          const tailRows = yield* sql<{ readonly sequence: number }>`
         SELECT sequence
         FROM collaboration_events
         WHERE shared_project_id = ${request.sharedProjectId}
         ORDER BY sequence DESC
         LIMIT 1
       `;
-      const tailSequence = tailRows[0]?.sequence ?? 0;
-      if (
-        request.afterSequence > tailSequence ||
-        (request.afterSequence > 0 && predecessorRows.length !== Math.min(2, request.afterSequence))
-      ) {
-        return yield* Effect.fail(fail(operation, "invalid-replay-request"));
-      }
-
-      let previousHash: CollaborationSha256 | null = null;
-      if (predecessorRows.length >= 1) {
-        const predecessor = yield* verifyStoredRow(predecessorRows[0]!, operation);
-        if (predecessor.envelope.sequence !== request.afterSequence) {
-          return yield* Effect.fail(fail(operation, "integrity-failure"));
-        }
-        if (predecessor.envelope.sequence === 1) {
-          if (predecessor.envelope.previousEventSha256 !== null) {
-            return yield* Effect.fail(fail(operation, "integrity-failure"));
-          }
-        } else {
-          if (predecessorRows.length !== 2) {
-            return yield* Effect.fail(fail(operation, "integrity-failure"));
-          }
-          const prior = yield* verifyStoredRow(predecessorRows[1]!, operation);
+          const tailSequence = tailRows[0]?.sequence ?? 0;
           if (
-            prior.envelope.sequence + 1 !== predecessor.envelope.sequence ||
-            predecessor.envelope.previousEventSha256 !== prior.envelopeSha256
+            request.afterSequence > tailSequence ||
+            (request.afterSequence > 0 &&
+              predecessorRows.length !== Math.min(2, request.afterSequence))
           ) {
+            return yield* Effect.fail(fail(operation, "invalid-replay-request"));
+          }
+
+          let previousHash: CollaborationSha256 | null = null;
+          if (predecessorRows.length >= 1) {
+            const predecessor = yield* verifyStoredRow(predecessorRows[0]!, operation);
+            if (predecessor.envelope.sequence !== request.afterSequence) {
+              return yield* Effect.fail(fail(operation, "integrity-failure"));
+            }
+            if (predecessor.envelope.sequence === 1) {
+              if (predecessor.envelope.previousEventSha256 !== null) {
+                return yield* Effect.fail(fail(operation, "integrity-failure"));
+              }
+            } else {
+              if (predecessorRows.length !== 2) {
+                return yield* Effect.fail(fail(operation, "integrity-failure"));
+              }
+              const prior = yield* verifyStoredRow(predecessorRows[1]!, operation);
+              if (
+                prior.envelope.sequence + 1 !== predecessor.envelope.sequence ||
+                predecessor.envelope.previousEventSha256 !== prior.envelopeSha256
+              ) {
+                return yield* Effect.fail(fail(operation, "integrity-failure"));
+              }
+            }
+            previousHash = predecessor.envelopeSha256;
+          }
+
+          const hasMore = candidateRows.length > selectedCount;
+          const selectedRows = pageRows.slice(0, selectedCount);
+          const events: CollaborationEventEnvelope[] = [];
+          let expectedSequence = request.afterSequence + 1;
+          for (const row of selectedRows) {
+            const stored = yield* verifyStoredRow(row, operation);
+            if (
+              stored.envelope.sequence !== expectedSequence ||
+              stored.envelope.previousEventSha256 !== previousHash
+            ) {
+              return yield* Effect.fail(fail(operation, "integrity-failure"));
+            }
+            events.push(stored.envelope);
+            previousHash = stored.envelopeSha256;
+            expectedSequence += 1;
+          }
+          if (hasMore) {
+            const lookahead = yield* verifyStoredRow(pageRows[selectedCount]!, operation);
+            if (
+              lookahead.envelope.sequence !== expectedSequence ||
+              lookahead.envelope.previousEventSha256 !== previousHash
+            ) {
+              return yield* Effect.fail(fail(operation, "integrity-failure"));
+            }
+          }
+
+          if (request.afterSequence < tailSequence && events.length === 0) {
             return yield* Effect.fail(fail(operation, "integrity-failure"));
           }
-        }
-        previousHash = predecessor.envelopeSha256;
-      }
-
-      const hasMore = pageRows.length > limit;
-      const selectedRows = pageRows.slice(0, limit);
-      const events: CollaborationEventEnvelope[] = [];
-      let expectedSequence = request.afterSequence + 1;
-      for (const row of selectedRows) {
-        const stored = yield* verifyStoredRow(row, operation);
-        if (
-          stored.envelope.sequence !== expectedSequence ||
-          stored.envelope.previousEventSha256 !== previousHash
-        ) {
-          return yield* Effect.fail(fail(operation, "integrity-failure"));
-        }
-        events.push(stored.envelope);
-        previousHash = stored.envelopeSha256;
-        expectedSequence += 1;
-      }
-      if (hasMore) {
-        const lookahead = yield* verifyStoredRow(pageRows[limit]!, operation);
-        if (
-          lookahead.envelope.sequence !== expectedSequence ||
-          lookahead.envelope.previousEventSha256 !== previousHash
-        ) {
-          return yield* Effect.fail(fail(operation, "integrity-failure"));
-        }
-      }
-
-      if (request.afterSequence < tailSequence && events.length === 0) {
-        return yield* Effect.fail(fail(operation, "integrity-failure"));
-      }
-      return {
-        sharedProjectId: request.sharedProjectId,
-        events,
-        nextCursor: events.at(-1)?.sequence ?? request.afterSequence,
-        hasMore,
-      } satisfies CollaborationEventReplayPage;
+          return {
+            sharedProjectId: request.sharedProjectId,
+            events,
+            nextCursor: events.at(-1)?.sequence ?? request.afterSequence,
+            hasMore,
+          } satisfies CollaborationEventReplayPage;
+        }),
+      );
     }).pipe(
       Effect.mapError((cause) =>
         isStoreError(cause) ? cause : fail(operation, "storage-unavailable"),

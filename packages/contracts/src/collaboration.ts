@@ -9,6 +9,7 @@ export const COLLABORATION_MEMBERSHIP_EPOCH_MAX = 2_147_483_647;
 export const COLLABORATION_EVENT_SEQUENCE_MAX = Number.MAX_SAFE_INTEGER;
 export const COLLABORATION_EVENT_REPLAY_DEFAULT_LIMIT = 100;
 export const COLLABORATION_EVENT_REPLAY_MAX_LIMIT = 500;
+export const COLLABORATION_EVENT_REPLAY_MAX_PAGE_UTF8_BYTES = 1_048_576;
 export const COLLABORATION_EVENT_TYPE_MAX_CHARS = 128;
 export const COLLABORATION_EVENT_SIGNATURE_MAX_CHARS = 4_096;
 export const COLLABORATION_EVENT_PAYLOAD_MAX_UTF8_BYTES = 65_536;
@@ -400,6 +401,7 @@ export const CollaborationEventEnvelope = Schema.Struct({
   commandId: CollaborationCommandId,
   membershipEpoch: CollaborationMembershipEpoch,
   actor: CollaborationEventActor,
+  deviceKeyId: CollaborationDeviceKeyId,
   type: CollaborationEventType,
   payload: Schema.Unknown,
   payloadSha256: CollaborationSha256,
@@ -419,5 +421,16 @@ export const CollaborationEventReplayPage = Schema.Struct({
   ),
   nextCursor: CollaborationEventCursor,
   hasMore: Schema.Boolean,
-});
+}).check(
+  Schema.makeFilter((page) => {
+    try {
+      return new TextEncoder().encode(JSON.stringify(page)).byteLength <=
+        COLLABORATION_EVENT_REPLAY_MAX_PAGE_UTF8_BYTES
+        ? undefined
+        : "collaboration replay page exceeds the encoded byte limit";
+    } catch {
+      return "collaboration replay page must be JSON encodable";
+    }
+  }),
+);
 export type CollaborationEventReplayPage = typeof CollaborationEventReplayPage.Type;
