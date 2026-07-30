@@ -112,9 +112,11 @@ const MATRIX_CENTER_WIND_MAX_SPEED_PX_PER_SECOND = 60;
 const MATRIX_WALK_MAX_TEXT_WIDTH_RATIO = 0.9;
 const MATRIX_WALK_GLYPH_GAP_PX = 2;
 const MATRIX_WALK_TRAIL_LINE_HEIGHT = 1.08;
-const MATRIX_WALK_OCCUPANCY_BIN_PX = 0.25;
+const MATRIX_WALK_MIN_OCCUPANCY_BIN_PX = 2;
+const MATRIX_WALK_MAX_OCCUPANCY_CELLS = 524_288;
 /** Eight trail glyphs per stream keeps the opt-in worst case at 5,120 text draws. */
 export const MAX_MATRIX_WALK_VISIBLE_STREAMS = 640;
+const MAX_MATRIX_WALK_VISIBLE_GLYPHS = MAX_MATRIX_WALK_VISIBLE_STREAMS * 8;
 const MATRIX_PERSPECTIVE_FONT_MIN_PX = 1;
 const MATRIX_PERSPECTIVE_FONT_MAX_PX = MAX_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE;
 const MATRIX_PERSPECTIVE_FONT_STEP_PX = 0.5;
@@ -139,8 +141,11 @@ const MATRIX_PERSPECTIVE_FONTS = Array.from(
 const MATRIX_WALK_FONTS: Array<string | undefined> = [];
 interface MatrixWalkOccupancy {
   bins: Uint32Array;
+  columns: number;
+  rows: number;
+  binSize: number;
   generation: number;
-  selectedStreams: number;
+  selectedGlyphs: number;
 }
 const matrixWalkOccupancyByScene = new WeakMap<AtmosphereScene, MatrixWalkOccupancy>();
 
@@ -871,13 +876,28 @@ function resolveMatrixWalkTargetFontSize(
 }
 
 function beginMatrixWalkOccupancy(scene: AtmosphereScene): MatrixWalkOccupancy {
-  const requiredBins = Math.max(1, Math.ceil(scene.width / MATRIX_WALK_OCCUPANCY_BIN_PX) + 2);
+  const sceneArea = Math.max(1, scene.width * scene.height);
+  const binSize = Math.max(
+    MATRIX_WALK_MIN_OCCUPANCY_BIN_PX,
+    Math.sqrt(sceneArea / MATRIX_WALK_MAX_OCCUPANCY_CELLS),
+  );
+  const columns = Math.max(1, Math.ceil(scene.width / binSize));
+  const rows = Math.max(1, Math.ceil(scene.height / binSize));
+  const requiredBins = columns * rows;
   let occupancy = matrixWalkOccupancyByScene.get(scene);
-  if (occupancy === undefined || occupancy.bins.length < requiredBins) {
+  if (
+    occupancy === undefined ||
+    occupancy.bins.length < requiredBins ||
+    occupancy.columns !== columns ||
+    occupancy.rows !== rows
+  ) {
     occupancy = {
       bins: new Uint32Array(requiredBins),
+      columns,
+      rows,
+      binSize,
       generation: 1,
-      selectedStreams: 0,
+      selectedGlyphs: 0,
     };
     matrixWalkOccupancyByScene.set(scene, occupancy);
     return occupancy;
@@ -888,58 +908,81 @@ function beginMatrixWalkOccupancy(scene: AtmosphereScene): MatrixWalkOccupancy {
     occupancy.bins.fill(0);
     occupancy.generation = 1;
   }
-  occupancy.selectedStreams = 0;
+  occupancy.binSize = binSize;
+  occupancy.selectedGlyphs = 0;
   return occupancy;
 }
 
 /**
- * Claims the current projected head bounds instead of reserving every stream
- * for the largest configured endpoint. Small/far glyphs can therefore use the
- * requested denser pool while large/near glyphs still cannot occupy the same
- * horizontal pixels. A fixed reusable occupancy grid avoids per-frame arrays,
- * and the explicit stream cap bounds Matrix text shaping/raster work.
+ * Claims one currently projected glyph rectangle. The former one-dimensional
+ * occupancy reserved an entire viewport-height stripe for every accepted head,
+ * rejecting streams whose X ranges intersected even when their glyphs were
+ * hundreds of pixels apart vertically. The reusable two-dimensional grid
+ * rejects only actual projected rectangle contention, so high-density Walk
+ * scenes can use the full viewport without allowing glyph overlap.
  */
 function claimMatrixWalkProjectedBounds(
   occupancy: MatrixWalkOccupancy,
   sceneWidth: number,
+  sceneHeight: number,
   projectedX: number,
+  projectedY: number,
   fontSize: number,
+  glyphWidthRatio: number,
 ): boolean {
   if (
-    occupancy.selectedStreams >= MAX_MATRIX_WALK_VISIBLE_STREAMS ||
+    occupancy.selectedGlyphs >= MAX_MATRIX_WALK_VISIBLE_GLYPHS ||
     !Number.isFinite(projectedX) ||
+    !Number.isFinite(projectedY) ||
     !Number.isFinite(fontSize) ||
-    sceneWidth <= 0
+    !Number.isFinite(glyphWidthRatio) ||
+    sceneWidth <= 0 ||
+    sceneHeight <= 0
   ) {
     return false;
   }
-  const glyphGap = Math.min(
-    MATRIX_WALK_GLYPH_GAP_PX,
-    Math.max(MATRIX_WALK_OCCUPANCY_BIN_PX, fontSize * 0.12),
-  );
+  const glyphGap = Math.min(MATRIX_WALK_GLYPH_GAP_PX * 0.5, Math.max(0.25, fontSize * 0.05));
   const halfWidth =
     (Math.max(MIN_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE, fontSize) *
-      MATRIX_WALK_MAX_TEXT_WIDTH_RATIO +
+      Math.min(MATRIX_WALK_MAX_TEXT_WIDTH_RATIO, Math.max(0.72, glyphWidthRatio)) +
       glyphGap) *
     0.5;
+  const halfHeight =
+    (Math.max(MIN_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE, fontSize) + glyphGap) * 0.5;
   const left = Math.max(0, projectedX - halfWidth);
   const right = Math.min(sceneWidth, projectedX + halfWidth);
-  if (right <= 0 || left >= sceneWidth || right <= left) return false;
+  const top = Math.max(0, projectedY - halfHeight);
+  const bottom = Math.min(sceneHeight, projectedY + halfHeight);
+  if (
+    right <= 0 ||
+    left >= sceneWidth ||
+    bottom <= 0 ||
+    top >= sceneHeight ||
+    right <= left ||
+    bottom <= top
+  ) {
+    return false;
+  }
 
-  const firstBin = Math.max(0, Math.floor(left / MATRIX_WALK_OCCUPANCY_BIN_PX));
-  const lastBin = Math.min(
-    occupancy.bins.length - 1,
-    Math.floor(right / MATRIX_WALK_OCCUPANCY_BIN_PX),
-  );
-  for (let bin = firstBin; bin <= lastBin; bin += 1) {
-    if (occupancy.bins[bin] === occupancy.generation) {
-      return false;
+  const firstColumn = Math.max(0, Math.floor(left / occupancy.binSize));
+  const lastColumn = Math.min(occupancy.columns - 1, Math.ceil(right / occupancy.binSize) - 1);
+  const firstRow = Math.max(0, Math.floor(top / occupancy.binSize));
+  const lastRow = Math.min(occupancy.rows - 1, Math.ceil(bottom / occupancy.binSize) - 1);
+  for (let row = firstRow; row <= lastRow; row += 1) {
+    const rowOffset = row * occupancy.columns;
+    for (let column = firstColumn; column <= lastColumn; column += 1) {
+      if (occupancy.bins[rowOffset + column] === occupancy.generation) {
+        return false;
+      }
     }
   }
-  for (let bin = firstBin; bin <= lastBin; bin += 1) {
-    occupancy.bins[bin] = occupancy.generation;
+  for (let row = firstRow; row <= lastRow; row += 1) {
+    const rowOffset = row * occupancy.columns;
+    for (let column = firstColumn; column <= lastColumn; column += 1) {
+      occupancy.bins[rowOffset + column] = occupancy.generation;
+    }
   }
-  occupancy.selectedStreams += 1;
+  occupancy.selectedGlyphs += 1;
   return true;
 }
 
@@ -1164,11 +1207,15 @@ export function drawAtmosphereScene(
     context.textBaseline = "middle";
     const walk = isMatrixWalkMotionMode(motionMode);
     const walkOccupancy = walk ? beginMatrixWalkOccupancy(scene) : null;
-    for (const particle of scene.particles) {
-      const lifecycleOpacity = resolveMatrixWalkLifecycleOpacity(particle, motionMode);
-      if (lifecycleOpacity <= 0) continue;
-      const walkFontSize = walk
-        ? quantizeMatrixWalkFontSize(
+    if (walk && walkOccupancy !== null) {
+      // Reserve heads across the entire source pool before tails. This keeps
+      // the high-density field populated with independent falling streams;
+      // older/fainter trail glyphs fill only the remaining 2D space.
+      for (let pass = 0; pass < 2; pass += 1) {
+        for (const particle of scene.particles) {
+          const lifecycleOpacity = resolveMatrixWalkLifecycleOpacity(particle, motionMode);
+          if (lifecycleOpacity <= 0) continue;
+          const walkFontSize = quantizeMatrixWalkFontSize(
             resolveMatrixWalkTargetFontSize(
               particle,
               motionMode,
@@ -1176,79 +1223,119 @@ export function drawAtmosphereScene(
               walkEndFontSize,
             ),
             DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE,
-          )
-        : particle.size;
-      if (walk && walkOccupancy !== null) {
-        resolveAtmosphereProjectedPointInPlace(
-          projectedFrom,
-          scene,
-          particle,
-          particle.x,
-          particle.y,
-          motionMode,
-          walkStartFontSize,
-          walkEndFontSize,
-        );
-        if (
-          !claimMatrixWalkProjectedBounds(walkOccupancy, scene.width, projectedFrom.x, walkFontSize)
-        ) {
-          continue;
-        }
-      }
-      context.fillStyle =
-        matrixColorFrame === undefined
-          ? color
-          : resolveMatrixStreamColor(matrixColorFrame, particle);
-      if (motionMode === "flat") {
-        context.font = resolveMatrixPerspectiveFont(particle.size, matrixBaseFontScale);
-      }
-      const trailSpacing = walk
-        ? Math.max(particle.size, walkFontSize * MATRIX_WALK_TRAIL_LINE_HEIGHT)
-        : particle.size;
-      for (let trailIndex = 7; trailIndex >= 0; trailIndex -= 1) {
-        const sourceY = particle.y - trailIndex * trailSpacing;
-        resolveAtmosphereProjectedPointInPlace(
-          projectedFrom,
-          scene,
-          particle,
-          particle.x,
-          sourceY,
-          motionMode,
-          walkStartFontSize,
-          walkEndFontSize,
-        );
-        if (motionMode === "walk-forward" || motionMode === "walk-reverse") {
-          context.font = resolveMatrixWalkFont(particle.size, projectedFrom.scale);
-        } else if (motionMode !== "flat") {
-          context.font = resolveMatrixPerspectiveFont(
-            particle.size,
-            projectedFrom.scale * matrixBaseFontScale,
           );
-        }
-        const glyphIndex =
-          (particle.glyphOffset +
-            trailIndex * 7 +
-            Math.floor(Math.max(0, particle.y) / particle.size)) %
-          particle.glyphs.length;
-        context.globalAlpha =
-          (trailIndex === 0 ? normalizedOpacity : normalizedOpacity * (1 - trailIndex / 8) * 0.7) *
-          lifecycleOpacity;
-        context.fillText(
-          // An AA token is one intact glyph at the head of a column, not the
-          // repeated glyph for every tail position. Repeating it made a single
-          // cat appear as a distracting vertical stack and obscured the trail.
-          (trailIndex === 0 ? (particle.matrixToken ?? particle.matrixWorkToken) : null) ??
-            particle.glyphs[glyphIndex] ??
-            "0",
-          projectedFrom.x,
-          projectedFrom.y,
-          walk
-            ? Math.max(
+          const trailSpacing = Math.max(
+            particle.size,
+            walkFontSize * MATRIX_WALK_TRAIL_LINE_HEIGHT,
+          );
+          context.fillStyle =
+            matrixColorFrame === undefined
+              ? color
+              : resolveMatrixStreamColor(matrixColorFrame, particle);
+          const firstTrailIndex = pass === 0 ? 0 : 7;
+          const lastTrailIndex = pass === 0 ? 0 : 1;
+          for (let trailIndex = firstTrailIndex; trailIndex >= lastTrailIndex; trailIndex -= 1) {
+            const sourceY = particle.y - trailIndex * trailSpacing;
+            resolveAtmosphereProjectedPointInPlace(
+              projectedFrom,
+              scene,
+              particle,
+              particle.x,
+              sourceY,
+              motionMode,
+              walkStartFontSize,
+              walkEndFontSize,
+            );
+            const glyphIndex =
+              (particle.glyphOffset +
+                trailIndex * 7 +
+                Math.floor(Math.max(0, particle.y) / particle.size)) %
+              particle.glyphs.length;
+            const glyph =
+              (trailIndex === 0 ? (particle.matrixToken ?? particle.matrixWorkToken) : null) ??
+              particle.glyphs[glyphIndex] ??
+              "0";
+            if (
+              !claimMatrixWalkProjectedBounds(
+                walkOccupancy,
+                scene.width,
+                scene.height,
+                projectedFrom.x,
+                projectedFrom.y,
+                walkFontSize,
+                glyph.length > 1 ? MATRIX_WALK_MAX_TEXT_WIDTH_RATIO : 0.72,
+              )
+            ) {
+              continue;
+            }
+            context.font = resolveMatrixWalkFont(particle.size, projectedFrom.scale);
+            context.globalAlpha =
+              (trailIndex === 0
+                ? normalizedOpacity
+                : normalizedOpacity * (1 - trailIndex / 8) * 0.7) * lifecycleOpacity;
+            context.fillText(
+              glyph,
+              projectedFrom.x,
+              projectedFrom.y,
+              Math.max(
                 MIN_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE,
                 walkFontSize * MATRIX_WALK_MAX_TEXT_WIDTH_RATIO,
-              )
-            : MAX_MATRIX_TOKEN_WIDTH_PX * projectedFrom.scale,
-        );
+              ),
+            );
+          }
+        }
+      }
+    } else {
+      for (const particle of scene.particles) {
+        const lifecycleOpacity = resolveMatrixWalkLifecycleOpacity(particle, motionMode);
+        if (lifecycleOpacity <= 0) continue;
+        context.fillStyle =
+          matrixColorFrame === undefined
+            ? color
+            : resolveMatrixStreamColor(matrixColorFrame, particle);
+        if (motionMode === "flat") {
+          context.font = resolveMatrixPerspectiveFont(particle.size, matrixBaseFontScale);
+        }
+        const trailSpacing = particle.size;
+        for (let trailIndex = 7; trailIndex >= 0; trailIndex -= 1) {
+          const sourceY = particle.y - trailIndex * trailSpacing;
+          resolveAtmosphereProjectedPointInPlace(
+            projectedFrom,
+            scene,
+            particle,
+            particle.x,
+            sourceY,
+            motionMode,
+            walkStartFontSize,
+            walkEndFontSize,
+          );
+          if (motionMode !== "flat") {
+            context.font = resolveMatrixPerspectiveFont(
+              particle.size,
+              projectedFrom.scale * matrixBaseFontScale,
+            );
+          }
+          const glyphIndex =
+            (particle.glyphOffset +
+              trailIndex * 7 +
+              Math.floor(Math.max(0, particle.y) / particle.size)) %
+            particle.glyphs.length;
+          context.globalAlpha =
+            (trailIndex === 0
+              ? normalizedOpacity
+              : normalizedOpacity * (1 - trailIndex / 8) * 0.7) * lifecycleOpacity;
+          context.fillText(
+            // An AA token is one intact glyph at the head of a column, not the
+            // repeated glyph for every tail position. Repeating it made a single
+            // cat appear as a distracting vertical stack and obscured the trail.
+            (trailIndex === 0 ? (particle.matrixToken ?? particle.matrixWorkToken) : null) ??
+              particle.glyphs[glyphIndex] ??
+              "0",
+            projectedFrom.x,
+            projectedFrom.y,
+            MAX_MATRIX_TOKEN_WIDTH_PX * projectedFrom.scale,
+          );
+        }
       }
     }
   }

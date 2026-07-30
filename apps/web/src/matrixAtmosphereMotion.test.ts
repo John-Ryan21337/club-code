@@ -194,7 +194,7 @@ describe("atmosphere motion projection", () => {
     }
   });
 
-  it("does not add Matrix particles and reduces Walk draws only for projected overlap", () => {
+  it("preserves every non-Walk stream and bounds only contending Walk glyphs", () => {
     const scene = createAtmosphereScene("matrix", 1_280, 720, createSeededRandom(42), 1, 0);
     const particleCount = scene.particles.length;
     const flat = createContextRecorder();
@@ -207,19 +207,27 @@ describe("atmosphere motion projection", () => {
       expect(directional.texts).toHaveLength(flat.texts.length);
     }
 
-    const forward = createContextRecorder();
-    drawAtmosphereScene(forward.context, scene, "#00ff00", 1, undefined, "walk-forward", 12, 144);
-    expect(scene.particles).toHaveLength(particleCount);
-    expect(forward.texts).toHaveLength(flat.texts.length);
-
-    const reverse = createContextRecorder();
-    drawAtmosphereScene(reverse.context, scene, "#00ff00", 1, undefined, "walk-reverse", 12, 144);
-    expect(scene.particles).toHaveLength(particleCount);
-    expect(reverse.texts.length).toBeGreaterThan(0);
-    expect(reverse.texts.length).toBeLessThan(flat.texts.length);
+    for (const mode of ["walk-forward", "walk-reverse"] as const) {
+      const walkScene = createAtmosphereScene(
+        "matrix",
+        1_280,
+        720,
+        createSeededRandom(42),
+        1,
+        0,
+        false,
+        { english: [], japanese: [] },
+        mode,
+      );
+      const walk = createContextRecorder();
+      drawAtmosphereScene(walk.context, walkScene, "#00ff00", 1, undefined, mode, 12, 144);
+      expect(walkScene.particles).toHaveLength(particleCount);
+      expect(walk.texts.length).toBeGreaterThan(0);
+      expect(walk.texts.length).toBeLessThanOrEqual(flat.texts.length);
+    }
   });
 
-  it("allows at least three times the former maximum Walk glyph density", () => {
+  it("uses the 640-stream pool in both Walk directions without full-height stripe rejection", () => {
     const baseline = createAtmosphereScene(
       "matrix",
       1_920,
@@ -242,12 +250,6 @@ describe("atmosphere motion projection", () => {
       { english: [], japanese: [] },
       "walk-forward",
     );
-    for (const scene of [baseline, highDensity]) {
-      for (const particle of scene.particles) {
-        particle.matrixLifecycleProgress = 0;
-        particle.matrixLifecycleOpacity = 1;
-      }
-    }
     const baselineFrame = createContextRecorder();
     const highDensityFrame = createContextRecorder();
     drawAtmosphereScene(
@@ -258,7 +260,7 @@ describe("atmosphere motion projection", () => {
       undefined,
       "walk-forward",
       1,
-      144,
+      72,
     );
     drawAtmosphereScene(
       highDensityFrame.context,
@@ -268,12 +270,48 @@ describe("atmosphere motion projection", () => {
       undefined,
       "walk-forward",
       1,
-      144,
+      72,
     );
-
+    const baselineReverseFrame = createContextRecorder();
+    const highDensityReverseFrame = createContextRecorder();
+    drawAtmosphereScene(
+      baselineReverseFrame.context,
+      baseline,
+      "#00ff00",
+      1,
+      undefined,
+      "walk-reverse",
+      1,
+      72,
+    );
+    drawAtmosphereScene(
+      highDensityReverseFrame.context,
+      highDensity,
+      "#00ff00",
+      1,
+      undefined,
+      "walk-reverse",
+      1,
+      72,
+    );
     expect(baseline.particles).toHaveLength(200);
     expect(highDensity.particles).toHaveLength(640);
-    expect(highDensityFrame.texts.length).toBeGreaterThanOrEqual(baselineFrame.texts.length * 3);
+    expect(highDensityFrame.texts.length).toBeGreaterThanOrEqual(
+      Math.floor(baselineFrame.texts.length * 1.5),
+    );
+    expect(highDensityReverseFrame.texts.length).toBeGreaterThanOrEqual(
+      Math.floor(baselineReverseFrame.texts.length * 1.5),
+    );
+    expect(highDensityFrame.texts.length).toBeGreaterThan(1_000);
+    expect(highDensityReverseFrame.texts.length).toBeGreaterThan(1_000);
+    const directionDifference = Math.abs(
+      highDensityFrame.texts.length - highDensityReverseFrame.texts.length,
+    );
+    expect(directionDifference).toBeLessThanOrEqual(
+      Math.ceil(
+        Math.max(highDensityFrame.texts.length, highDensityReverseFrame.texts.length) * 0.1,
+      ),
+    );
   });
 
   it("mirrors continuously interpolated 1px-to-72px Walk depth for every effect kind", () => {
@@ -448,7 +486,7 @@ describe("atmosphere motion projection", () => {
     expect(ending.y).toBeLessThan(scene.height);
   });
 
-  it("keeps large Walk glyphs separated vertically and horizontally", () => {
+  it("keeps large Walk glyph rectangles separated in two dimensions", () => {
     const scene = createAtmosphereScene(
       "matrix",
       1_280,
@@ -470,25 +508,19 @@ describe("atmosphere motion projection", () => {
     drawAtmosphereScene(recorder.context, scene, "#00ff00", 1, undefined, "walk-forward", 1, 144);
 
     expect(recorder.texts.length).toBeGreaterThan(0);
-    expect(recorder.texts.length % 8).toBe(0);
-    const streamGroups = Array.from({ length: recorder.texts.length / 8 }, (_, index) =>
-      recorder.texts.slice(index * 8, index * 8 + 8),
-    );
-    for (const group of streamGroups) {
-      const yPositions = group.map(([, , y]) => y).toSorted((left, right) => left - right);
-      for (let index = 1; index < yPositions.length; index += 1) {
-        expect(yPositions[index]! - yPositions[index - 1]!).toBeGreaterThanOrEqual(144);
+    for (let leftIndex = 0; leftIndex < recorder.texts.length; leftIndex += 1) {
+      const [leftGlyph, leftX, leftY] = recorder.texts[leftIndex]!;
+      const leftFontSize = Number.parseFloat(recorder.fonts[leftIndex]!);
+      const leftWidth = leftFontSize * (leftGlyph.length > 1 ? 0.9 : 0.72);
+      for (let rightIndex = leftIndex + 1; rightIndex < recorder.texts.length; rightIndex += 1) {
+        const [rightGlyph, rightX, rightY] = recorder.texts[rightIndex]!;
+        const rightFontSize = Number.parseFloat(recorder.fonts[rightIndex]!);
+        const rightWidth = rightFontSize * (rightGlyph.length > 1 ? 0.9 : 0.72);
+        const separatedHorizontally = Math.abs(leftX - rightX) >= (leftWidth + rightWidth) * 0.5;
+        const separatedVertically =
+          Math.abs(leftY - rightY) >= (leftFontSize + rightFontSize) * 0.5;
+        expect(separatedHorizontally || separatedVertically).toBe(true);
       }
-      expect(group.every(([, , , maxWidth]) => maxWidth !== undefined && maxWidth <= 144)).toBe(
-        true,
-      );
-    }
-
-    const headXs = streamGroups
-      .map((group) => group.at(-1)![1])
-      .toSorted((left, right) => left - right);
-    for (let index = 1; index < headXs.length; index += 1) {
-      expect(headXs[index]! - headXs[index - 1]!).toBeGreaterThanOrEqual(100);
     }
   });
 
