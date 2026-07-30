@@ -181,8 +181,6 @@ import {
   waitForStartedServerThread,
 } from "./ChatView.logic";
 import {
-  AUTO_NUDGE_DELAY_MS,
-  AutoNudgeTimerController,
   type AutoNudgeMode,
   autoNudgePromptForMode,
   canDispatchAutoNudge,
@@ -1920,8 +1918,8 @@ export default function ChatView(props: ChatViewProps) {
     Record<string, string | null>
   >({});
   const [isConnecting, _setIsConnecting] = useState(false);
-  // The selected mode is a durable global client preference. Scheduling stays
-  // foreground-only and is always scoped to the currently visible thread.
+  // The selected mode is a durable global client preference. Dispatch is
+  // authorized only by a newly completed response in the current thread.
   const autoNudgeMode: AutoNudgeMode = settings.autoNudgeMode;
   const backgroundAutoNudgeState = useBackgroundAutoNudgeState();
   const backgroundAutoNudgeOwnerForRoute =
@@ -1936,55 +1934,37 @@ export default function ChatView(props: ChatViewProps) {
       environmentId,
       threadId,
     });
-  const [autoNudgeCountdownSeconds, setAutoNudgeCountdownSeconds] = useState<number | null>(null);
   const [autoNudgeActivityRevision, setAutoNudgeActivityRevision] = useState(0);
   const autoNudgeLedgerRef = useRef(getAutoNudgeTurnLedger());
   // Keep the latest settled terminal identity available to synchronous
-  // composer handlers. A user can type before the scheduling effect has had
-  // a chance to arm its timer; that interaction still consumes this turn.
+  // composer handlers. A user action before the completion effect runs still
+  // consumes that exact turn.
   const autoNudgeTerminalTurnKeyRef = useRef<string | null>(null);
-  const [autoNudgeTimerController] = useState(
-    () =>
-      new AutoNudgeTimerController({
-        now: () => Date.now(),
-        setTimeout: (callback, delayMs) => window.setTimeout(callback, delayMs),
-        clearTimeout: (timer) => window.clearTimeout(timer),
-        setInterval: (callback, intervalMs) => window.setInterval(callback, intervalMs),
-        clearInterval: (timer) => window.clearInterval(timer),
-      }),
-  );
-  const cancelScheduledAutoNudge = useCallback(
-    (consumeScheduledTurn: boolean) => {
-      const scheduledTurnKey = autoNudgeTimerController.scheduledTurnKey;
-      if (consumeScheduledTurn && scheduledTurnKey) {
-        // A manual action/stop must never turn into a delayed send when the
-        // operator clears the composer again.
-        autoNudgeLedgerRef.current.mark(scheduledTurnKey);
-      }
-      autoNudgeTimerController.cancel();
-      setAutoNudgeCountdownSeconds(null);
-    },
-    [autoNudgeTimerController],
-  );
+  const autoNudgeCompletionBaselineRef = useRef<{
+    threadKey: string | null;
+    initialized: boolean;
+  }>({ threadKey: null, initialized: false });
   const recordManualAutoNudgeActivity = useCallback(() => {
     consumeAutoNudgeTerminalForManualActivity(
       autoNudgeLedgerRef.current,
       autoNudgeTerminalTurnKeyRef.current,
     );
-    cancelScheduledAutoNudge(true);
     if (backgroundAutoNudgeOwnerForRoute) {
       getBackgroundAutoNudgeController().pause("Manual composer activity detected.");
     }
     setAutoNudgeActivityRevision((revision) => revision + 1);
-  }, [backgroundAutoNudgeOwnerForRoute, cancelScheduledAutoNudge]);
+  }, [backgroundAutoNudgeOwnerForRoute]);
   const stopAutoNudge = useCallback(() => {
-    cancelScheduledAutoNudge(true);
+    consumeAutoNudgeTerminalForManualActivity(
+      autoNudgeLedgerRef.current,
+      autoNudgeTerminalTurnKeyRef.current,
+    );
     getBackgroundAutoNudgeController().stop("Auto Nudge stopped by the operator.");
     updateClientSettings({
       autoNudgeMode: "off",
       autoNudgeBackgroundContinuation: false,
     });
-  }, [cancelScheduledAutoNudge, updateClientSettings]);
+  }, [updateClientSettings]);
   const [isRevertingCheckpoint, setIsRevertingCheckpoint] = useState(false);
   const [respondingRequestIds, setRespondingRequestIds] = useState<ApprovalRequestId[]>([]);
   const [respondingUserInputRequestIds, setRespondingUserInputRequestIds] = useState<
@@ -5111,7 +5091,7 @@ export default function ChatView(props: ChatViewProps) {
   const onSend = async (e?: { preventDefault: () => void }) => {
     e?.preventDefault();
     // A real operator send (and the auto sender after its final re-check)
-    // invalidates any outstanding countdown before touching the provider.
+    // consumes the exact completed turn before touching the provider.
     recordManualAutoNudgeActivity();
     const api = readEnvironmentApi(environmentId);
     if (
@@ -5391,6 +5371,9 @@ export default function ChatView(props: ChatViewProps) {
     activeThread.session?.status === "ready"
       ? `${activeThread.environmentId}:${activeThread.id}:${activeLatestTurn.turnId}`
       : null;
+  const autoNudgeThreadKey = activeThread
+    ? `${activeThread.environmentId}:${activeThread.id}`
+    : null;
   const autoNudgeLatestUserMessageAt =
     activeThread?.messages.findLast((message) => message.role === "user")?.createdAt ?? null;
   autoNudgeTerminalTurnKeyRef.current = autoNudgeTerminalTurnKey;
@@ -5450,7 +5433,7 @@ export default function ChatView(props: ChatViewProps) {
     terminalTurnKey: autoNudgeTerminalTurnKey,
     // The app-level coordinator exclusively owns an opted-in background
     // thread, including while it is visible. This prevents duplicate local
-    // and background timers from racing the same terminal turn.
+    // and background consumers from racing the same terminal turn.
     mode: backgroundAutoNudgeOwnerForRoute ? ("off" as const) : autoNudgeMode,
     hasManualActivity: promptRef.current.trim().length > 0 || composerImagesRef.current.length > 0,
     hasPendingWork: autoNudgeHasPendingWork,
@@ -5471,76 +5454,44 @@ export default function ChatView(props: ChatViewProps) {
     void onSend();
   };
 
-  const autoNudgeContextKey = activeThread
-    ? `${activeThread.environmentId}:${activeThread.id}:${activeThread.projectId}`
-    : null;
-  const previousAutoNudgeContextKeyRef = useRef<string | null>(null);
-  useEffect(() => {
-    const previousContextKey = previousAutoNudgeContextKeyRef.current;
-    previousAutoNudgeContextKeyRef.current = autoNudgeContextKey;
-    if (previousContextKey === null || previousContextKey === autoNudgeContextKey) {
-      return;
-    }
-    // A global preference may remain enabled, but a timer belongs to exactly
-    // one visible thread. Cancel without consuming so returning can re-evaluate
-    // that thread's still-current completed turn from a fresh snapshot.
-    cancelScheduledAutoNudge(false);
-  }, [autoNudgeContextKey, cancelScheduledAutoNudge]);
-
   useEffect(() => {
     const terminalTurnKey = autoNudgeTerminalTurnKey;
+    const baseline = autoNudgeCompletionBaselineRef.current;
+    if (baseline.threadKey !== autoNudgeThreadKey) {
+      baseline.threadKey = autoNudgeThreadKey;
+      baseline.initialized = false;
+    }
+    if (!baseline.initialized) {
+      baseline.initialized = true;
+      if (terminalTurnKey !== null) {
+        // A completed turn already present when the view loads is context,
+        // not a newly generated completion event.
+        autoNudgeLedgerRef.current.mark(terminalTurnKey);
+      }
+      return;
+    }
     const alreadySent = terminalTurnKey !== null && autoNudgeLedgerRef.current.has(terminalTurnKey);
-    if (!autoNudgeEligible || terminalTurnKey === null || alreadySent) {
-      cancelScheduledAutoNudge(false);
+    if (!autoNudgeEligible || terminalTurnKey === null || alreadySent) return;
+    if (
+      !canDispatchAutoNudge({
+        terminalTurnKey,
+        current: autoNudgeEligibilityRef.current,
+        alreadyConsumed: autoNudgeLedgerRef.current.has(terminalTurnKey),
+      })
+    ) {
       return;
     }
-    if (autoNudgeTimerController.scheduledTurnKey === terminalTurnKey) {
-      return;
-    }
-
-    cancelScheduledAutoNudge(false);
-    autoNudgeTimerController.schedule({
-      turnKey: terminalTurnKey,
-      delayMs: AUTO_NUDGE_DELAY_MS,
-      onCountdown: setAutoNudgeCountdownSeconds,
-      onDispatch: (scheduledTurnKey) => {
-        setAutoNudgeCountdownSeconds(null);
-        // Re-read every safety condition after the visible delay. A stale
-        // closure must never submit against a changed thread/provider state.
-        if (
-          !canDispatchAutoNudge({
-            scheduledTurnKey,
-            current: autoNudgeEligibilityRef.current,
-            alreadyConsumed: autoNudgeLedgerRef.current.has(scheduledTurnKey),
-          })
-        ) {
-          return;
-        }
-        // Consume before dispatch. If the command rejects or the provider becomes
-        // unavailable in the tiny handoff window, we fail closed instead of retrying.
-        autoNudgeLedgerRef.current.mark(scheduledTurnKey);
-        autoNudgeDispatchRef.current?.();
-      },
-    });
-
-    return () => {
-      cancelScheduledAutoNudge(false);
-    };
+    // Consume synchronously with the completion observation. Re-renders and
+    // duplicate completion events cannot authorize another prompt.
+    autoNudgeLedgerRef.current.mark(terminalTurnKey);
+    autoNudgeDispatchRef.current?.();
   }, [
     autoNudgeActivityRevision,
     autoNudgeEligible,
     autoNudgeMode,
     autoNudgeTerminalTurnKey,
-    autoNudgeTimerController,
-    cancelScheduledAutoNudge,
+    autoNudgeThreadKey,
   ]);
-
-  useEffect(
-    () => () => {
-      cancelScheduledAutoNudge(false);
-    },
-    [cancelScheduledAutoNudge],
-  );
 
   const onSteer = async (e?: { preventDefault: () => void }) => {
     e?.preventDefault();
@@ -6575,7 +6526,6 @@ export default function ChatView(props: ChatViewProps) {
               <div className="relative z-10">
                 <AutoNudgeControl
                   mode={autoNudgeMode}
-                  countdownSeconds={autoNudgeCountdownSeconds}
                   disabled={!isServerThread}
                   backgroundEnabled={settings.autoNudgeBackgroundContinuation}
                   backgroundDispatchSupported={supportsBackgroundAutoNudgeDispatchLock()}
@@ -6583,16 +6533,17 @@ export default function ChatView(props: ChatViewProps) {
                   backgroundStatus={backgroundAutoNudgeState.status}
                   backgroundRounds={backgroundAutoNudgeState.sentRounds}
                   backgroundMaxRounds={settings.autoNudgeMaxRounds}
-                  backgroundMaxMinutes={settings.autoNudgeMaxMinutes}
                   backgroundReason={backgroundAutoNudgeState.reason}
                   backgroundLedger={
                     backgroundAutoNudgeLastOwnerForRoute ? backgroundAutoNudgeState.ledger : []
                   }
                   onModeChange={(mode) => {
-                    // Changing the operator policy is also a cancellation
-                    // boundary; a countdown from the old policy may not leak
-                    // through to the newly selected one.
-                    cancelScheduledAutoNudge(mode === "off");
+                    if (mode === "off") {
+                      consumeAutoNudgeTerminalForManualActivity(
+                        autoNudgeLedgerRef.current,
+                        autoNudgeTerminalTurnKeyRef.current,
+                      );
+                    }
                     if (mode === "off") {
                       getBackgroundAutoNudgeController().stop("Auto Nudge mode was turned off.");
                     }
@@ -6603,7 +6554,6 @@ export default function ChatView(props: ChatViewProps) {
                   }}
                   onBackgroundChange={(enabled) => {
                     if (!activeThread || !isServerThread) return;
-                    cancelScheduledAutoNudge(false);
                     if (enabled) {
                       getBackgroundAutoNudgeController().start(
                         {
@@ -6611,6 +6561,7 @@ export default function ChatView(props: ChatViewProps) {
                           threadId: activeThread.id,
                         },
                         autoNudgeLatestUserMessageAt,
+                        autoNudgeTerminalTurnKey,
                       );
                       if (
                         activeFollowUpQueue.length > 0 ||

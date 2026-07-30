@@ -26,7 +26,6 @@ import {
   DEFAULT_UNIFIED_SETTINGS,
   DEFAULT_APP_ACCENT_COLOR,
   DEFAULT_AUTO_NUDGE_BACKGROUND_CONTINUATION,
-  DEFAULT_AUTO_NUDGE_MAX_MINUTES,
   DEFAULT_AUTO_NUDGE_MAX_ROUNDS,
   DEFAULT_BRAND_WORDMARK_PREFIX,
   DEFAULT_CONTINUE_BACKGROUND_ANIMATIONS,
@@ -39,12 +38,10 @@ import {
   DEFAULT_SHOW_SIDEBAR_SEARCH,
   DEFAULT_THEME_ACCENT_COLOR,
   MAX_BRAND_WORDMARK_PREFIX_LENGTH,
-  MAX_AUTO_NUDGE_MAX_MINUTES,
   MAX_AUTO_NUDGE_MAX_ROUNDS,
   MAX_SIDEBAR_BRAND_IMAGE_FILE_BYTES,
   MAX_SIDEBAR_STAR_SPEED,
   MIN_SIDEBAR_STAR_SPEED,
-  MIN_AUTO_NUDGE_MAX_MINUTES,
   MIN_AUTO_NUDGE_MAX_ROUNDS,
   MIN_WORKFLOW_STALL_WARNING_SECONDS,
   MAX_WORKFLOW_STALL_WARNING_SECONDS,
@@ -186,13 +183,6 @@ function clampAutoNudgeMaxRounds(value: number | null): number {
   if (value === null || !Number.isFinite(value)) return DEFAULT_AUTO_NUDGE_MAX_ROUNDS;
   return Math.round(
     Math.min(MAX_AUTO_NUDGE_MAX_ROUNDS, Math.max(MIN_AUTO_NUDGE_MAX_ROUNDS, value)),
-  );
-}
-
-function clampAutoNudgeMaxMinutes(value: number | null): number {
-  if (value === null || !Number.isFinite(value)) return DEFAULT_AUTO_NUDGE_MAX_MINUTES;
-  return Math.round(
-    Math.min(MAX_AUTO_NUDGE_MAX_MINUTES, Math.max(MIN_AUTO_NUDGE_MAX_MINUTES, value)),
   );
 }
 
@@ -1076,7 +1066,7 @@ export function AppearanceSettingsPanel() {
 
         <SettingsRow
           title="Auto Nudge background continuation"
-          description="Allow one explicitly selected chat to continue after you navigate away. Default off; the owned chat still stops on manual activity, queued work, provider trouble, or its hard caps."
+          description="Allow one explicitly selected chat to continue after you navigate away. Default off; the owned chat still stops on manual activity, queued work, provider trouble, or its round cap."
           resetAction={
             settings.autoNudgeBackgroundContinuation !==
             DEFAULT_UNIFIED_SETTINGS.autoNudgeBackgroundContinuation ? (
@@ -1138,43 +1128,6 @@ export function AppearanceSettingsPanel() {
                 <NumberFieldIncrement aria-label="Increase Auto Nudge round cap" />
               </NumberFieldGroup>
             </NumberField>
-          }
-        />
-
-        <SettingsRow
-          title="Auto Nudge time cap"
-          description="Maximum elapsed time for one background run, including provider work."
-          resetAction={
-            settings.autoNudgeMaxMinutes !== DEFAULT_UNIFIED_SETTINGS.autoNudgeMaxMinutes ? (
-              <SettingResetButton
-                label="Auto Nudge time cap"
-                onClick={() =>
-                  updateSettings({ autoNudgeMaxMinutes: DEFAULT_AUTO_NUDGE_MAX_MINUTES })
-                }
-              />
-            ) : null
-          }
-          control={
-            <div className="flex items-center gap-2">
-              <NumberField
-                value={settings.autoNudgeMaxMinutes}
-                min={MIN_AUTO_NUDGE_MAX_MINUTES}
-                max={MAX_AUTO_NUDGE_MAX_MINUTES}
-                step={5}
-                size="sm"
-                className="w-28"
-                onValueChange={(value) =>
-                  updateSettings({ autoNudgeMaxMinutes: clampAutoNudgeMaxMinutes(value) })
-                }
-              >
-                <NumberFieldGroup>
-                  <NumberFieldDecrement aria-label="Decrease Auto Nudge time cap" />
-                  <NumberFieldInput aria-label="Auto Nudge maximum minutes" />
-                  <NumberFieldIncrement aria-label="Increase Auto Nudge time cap" />
-                </NumberFieldGroup>
-              </NumberField>
-              <span className="text-xs text-muted-foreground">minutes</span>
-            </div>
           }
         />
 

@@ -1091,7 +1091,7 @@ describe("settings panels", () => {
     });
   });
 
-  it("keeps background Auto Nudge opt-in with visible conservative caps", async () => {
+  it("keeps background Auto Nudge opt-in with a visible round cap", async () => {
     const desktopBridge = createDesktopBridgeStub();
     window.desktopBridge = desktopBridge;
     const { updateClientSettings } = installClientSettingsNativeApi(desktopBridge);
@@ -1105,7 +1105,6 @@ describe("settings panels", () => {
 
     await expect.element(page.getByText("Auto Nudge background continuation")).toBeInTheDocument();
     await expect.element(page.getByLabelText("Auto Nudge maximum rounds")).toHaveValue("5");
-    await expect.element(page.getByLabelText("Auto Nudge maximum minutes")).toHaveValue("30");
     await page.getByLabelText("Allow Auto Nudge background continuation").click();
     await vi.waitFor(() => {
       expect(updateClientSettings).toHaveBeenCalledWith({
