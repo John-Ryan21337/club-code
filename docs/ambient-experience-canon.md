@@ -43,8 +43,7 @@ documentation use Club Code.
   time cannot authorize a provider call. All exact-thread operator follow-ups
   accepted by the environment server run first; only a new exact
   provider-confirmed completed turn may authorize one automated follow-up.
-  Timers may debounce/recheck already-proven eligibility or enforce a cap, but
-  can never mint authority.
+  Timers, countdowns, and elapsed-time caps are absent from the dispatch path.
 - Decorative, media, browser, observatory, pacing, and alert features are
   operator-switchable or capability-gated. A fresh-install presentation
   profile may initialize explicit visual settings, but they do not silently add
@@ -82,7 +81,7 @@ documentation use Club Code.
 | Agent-operable embedded browser                           | Landed - validation pending | Codex/Claude get a bounded supervised DOM tool grant; provider secret/OTP entry remains unavailable                                                         |
 | Pixel OCR/image recognition                               | Not implemented             | DOM/accessibility text exists, but there is no screenshot or pixel-recognition worker                                                                       |
 | Inbox email-code retrieval                                | Not implemented             | The operator-only transient secret field is not an inbox connector or 2FA automation                                                                        |
-| Persistent Auto Nudge                                     | Landed - validation pending | Exact-thread editable prompts, terminal-event-only dispatch, hard round/time caps, durable dedupe, and Stop controls                                        |
+| Persistent Auto Nudge                                     | Landed - validation pending | Exact-thread editable prompts, completion-event-only dispatch, hard round caps, durable dedupe, and Stop controls                                           |
 | Matrix depth/perspective motion                           | Implemented                 | Flat forward/reverse, walk forward/reverse, and tunnel/warp use bounded user-selected font endpoints and full-canvas coverage                               |
 | Renderer-local Mobile optimized presentation              | Landed - validation pending | One composer toggle reuses responsive mobile branches; enabling it selects Matrix without resetting appearance, while returning to Desktop leaves Matrix on |
 | Camera prompt attachments                                 | Implemented                 | Explicit camera button, front/rear switching where supported, preview-before-attach, system-camera fallback, exact-thread pinning                           |
@@ -390,16 +389,15 @@ assign actionable status and dependencies to Linear, durable decisions and
 research to Notion, link instead of duplicating those records, refresh external
 state only when relevant or stale, and include explicit stop conditions.
 
-Dispatch is terminal-event-driven. It has no periodic send interval and elapsed
-idle time is never authority. After all exact-thread operator follow-ups
-accepted by the environment server have drained, a new provider-confirmed
-completed-turn identity may arm one five-second safety debounce. The complete
-queue, terminal, provider, authority, Stop, and cap gates are re-read at
-handoff. The delay cannot create eligibility, and maximum minutes is only an
-upper cap, not a send cadence.
+Dispatch is completion-event-driven. After all exact-thread operator follow-ups
+accepted by the environment server have drained, only a newly observed
+provider-confirmed completed-response identity may authorize one immediate
+handoff. The complete queue, terminal, provider, authority, Stop, and round-cap
+gates are re-read before transport. No timer, countdown, elapsed-time cap, or
+wall-clock transition can create eligibility.
 
-One thread policy defaults to five automated rounds or 30 minutes and is
-configurable only within hard limits of 1–20 rounds and 5–120 minutes. Every
+One thread policy defaults to five automated rounds and is configurable only
+within a hard limit of 1–20 rounds. Every
 dispatch is an ordinary visible user message. The terminal turn is consumed
 before transport, and durable exact-thread state plus a bounded client ledger
 prevent reload, route, and multi-window duplication. Manual composer activity,
@@ -702,13 +700,12 @@ still denied.
 Auto Nudge is durable exact-thread policy with operator-editable standing-order
 text. It may send at most once for each new provider-confirmed terminal turn,
 only after the exact thread's server-accepted FIFO operator work has drained
-and all idle/safety gates remain true at handoff. The five-second value is a
-rechecking debounce, not a periodic interval. No number of timer ticks or
-minutes of idle wall clock may generate a provider request without a new
-completed-turn identity.
+and all safety gates remain true at handoff. No timer tick or idle wall-clock
+passage may generate a provider request without a new completed-response
+identity.
 
 Background continuation survives chat/settings navigation and reload, defaults
-to five rounds/30 minutes, and cannot exceed 20 rounds/120 minutes. Its visible
+to five rounds, and cannot exceed 20 rounds. Its visible
 normal-history messages, exact-thread dedupe, server-side revision/turn
 serialization, Stop control, and fail-closed conditions are defined above.
 Auto Nudge is not an immortal background agent, an all-chat scheduler, or

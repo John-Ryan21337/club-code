@@ -91,7 +91,6 @@ it.effect("Auto Nudge configure distinguishes off prompt storage from execution 
       prompt: "",
       backgroundContinuation: false,
       maxRounds: 5,
-      maxMinutes: 30,
       createdAt: "2026-07-28T00:00:01.000Z",
     });
     assert.strictEqual(off.type, "thread.auto-nudge.configure");
@@ -109,7 +108,6 @@ it.effect("Auto Nudge configure distinguishes off prompt storage from execution 
       prompt: "First line\nSecond line",
       backgroundContinuation: true,
       maxRounds: 5,
-      maxMinutes: 30,
       createdAt: "2026-07-28T00:00:02.000Z",
     });
     assert.strictEqual(enabled.type, "thread.auto-nudge.configure");
@@ -127,7 +125,6 @@ it.effect("Auto Nudge configure distinguishes off prompt storage from execution 
         prompt: " \n ",
         backgroundContinuation: false,
         maxRounds: 5,
-        maxMinutes: 30,
         createdAt: "2026-07-28T00:00:03.000Z",
       }),
     );
@@ -173,7 +170,6 @@ it.effect("Auto Nudge shell summary events cannot carry prompt text", () =>
           mode: "steady-progress",
           backgroundContinuation: true,
           maxRounds: 5,
-          maxMinutes: 30,
           armedAt: "2026-07-28T00:03:00.000Z",
           baselineSettledTurnId: null,
           lastDispatchedSettledTurnId: null,

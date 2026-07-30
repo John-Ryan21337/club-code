@@ -444,7 +444,6 @@ function toShellThread(thread: OrchestrationReadModel["threads"][number]) {
       mode: thread.autoNudge.mode,
       backgroundContinuation: thread.autoNudge.backgroundContinuation,
       maxRounds: thread.autoNudge.maxRounds,
-      maxMinutes: thread.autoNudge.maxMinutes,
       armedAt: thread.autoNudge.armedAt,
       baselineSettledTurnId: thread.autoNudge.baselineSettledTurnId,
       lastDispatchedSettledTurnId: thread.autoNudge.lastDispatchedSettledTurnId,
@@ -4983,8 +4982,7 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
                   request.mode === "off" &&
                   request.prompt === "Keep this exact thread moving" &&
                   request.backgroundContinuation === false &&
-                  request.maxRounds === 8 &&
-                  request.maxMinutes === 90,
+                  request.maxRounds === 8,
               ),
             ).toBe(true);
           },

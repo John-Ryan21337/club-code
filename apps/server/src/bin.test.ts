@@ -395,7 +395,6 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
             prompt: secretPrompt,
             backgroundContinuation: true,
             maxRounds: 5,
-            maxMinutes: 30,
             createdAt: now,
           });
 

@@ -6,12 +6,7 @@ import {
 } from "@cafecode/contracts";
 import { useEffect, useRef } from "react";
 
-import {
-  AUTO_NUDGE_DELAY_MS,
-  AutoNudgeTurnLedger,
-  getAutoNudgeTurnLedger,
-  isAutoNudgeWithinTimeCap,
-} from "../autoNudger";
+import { getAutoNudgeTurnLedger } from "../autoNudger";
 import { useComposerDraftStore } from "../composerDraftStore";
 import {
   getConfirmedAutoNudgeArming,
@@ -41,11 +36,6 @@ interface BackgroundAutoNudgeAuthority {
   readonly threadId: ThreadShell["id"];
   readonly authorityRevision: ThreadAutoNudgeSummary["authorityRevision"];
   readonly completedTurnId: TurnId;
-}
-
-interface ScheduledAuthority {
-  readonly authority: BackgroundAutoNudgeAuthority;
-  readonly timerId: number;
 }
 
 function providerCanAcceptTurn(provider: ServerProvider | null): boolean {
@@ -79,6 +69,20 @@ function terminalKey(shell: ThreadShell, completedTurnId: string): string {
 
 function routeKey(shell: ThreadShell): string {
   return JSON.stringify([shell.environmentId, shell.id]);
+}
+
+function projectedCompletedTurnKey(
+  environment: EnvironmentState | undefined,
+  threadId: ThreadShell["id"],
+): string | null {
+  if (!environment?.bootstrapComplete) return null;
+  const shell = environment.threadShellById[threadId];
+  const summary = environment.sidebarThreadSummaryById[threadId];
+  const latestTurn =
+    environment.threadTurnStateById[threadId]?.latestTurn ?? summary?.latestTurn ?? null;
+  return shell && latestTurn?.state === "completed" && latestTurn.completedAt
+    ? terminalKey(shell, latestTurn.turnId)
+    : null;
 }
 
 function stopKey(shell: ThreadShell, config: ThreadAutoNudgeSummary): string {
@@ -139,7 +143,7 @@ function projectedAuthority(
  * Schedules every independently opted-in thread from prompt-free shell state.
  *
  * There is deliberately no periodic or elapsed-idle Auto Nudge. The renderer
- * may only debounce an authority already keyed to a provider-confirmed
+ * may dispatch only when projection state changes to a new provider-confirmed
  * completed turn. The exact environment server rechecks the thread, authority
  * revision, terminal turn, empty manual queue, caps, and background permission,
  * then reads that thread's persisted prompt. Concurrent renderers may race,
@@ -148,8 +152,7 @@ function projectedAuthority(
 export function BackgroundAutoNudgeCoordinator() {
   const globallySuppressed = useAutoNudgeSuppressedState();
   const environmentStateById = useStore((store) => store.environmentStateById);
-  const seenTerminalKeysRef = useRef(new AutoNudgeTurnLedger());
-  const scheduledAuthorityByRouteRef = useRef(new Map<string, ScheduledAuthority>());
+  const observedCompletedTurnByRouteRef = useRef(new Map<string, string | null>());
   const stopRequestsRef = useRef(new Set<string>());
 
   // Cross-port suppression polling is intentionally isolated from the
@@ -168,11 +171,6 @@ export function BackgroundAutoNudgeCoordinator() {
       const suppressionActive = arming.getSuppressedSnapshot();
 
       if (suppressionActive) {
-        for (const scheduled of scheduledAuthorityByRouteRef.current.values()) {
-          window.clearTimeout(scheduled.timerId);
-        }
-        scheduledAuthorityByRouteRef.current.clear();
-
         for (const environment of Object.values(useStore.getState().environmentStateById)) {
           if (!environment.bootstrapComplete) continue;
           for (const threadId of environment.threadIds) {
@@ -215,171 +213,113 @@ export function BackgroundAutoNudgeCoordinator() {
     return () => window.clearInterval(timer);
   }, [globallySuppressed]);
 
-  // A projection change may reveal one new or hydrated terminal identity.
-  // Each exact authority can arm at most one safety debounce; provider/config
-  // changes and elapsed wall time alone cannot create another attempt.
+  // Only a projection transition to a different completed-turn identity may
+  // dispatch. Initial hydration and config changes merely establish context.
   useEffect(() => {
     if (getConfirmedAutoNudgeArming().getSuppressedSnapshot()) {
-      for (const scheduled of scheduledAuthorityByRouteRef.current.values()) {
-        window.clearTimeout(scheduled.timerId);
-      }
-      scheduledAuthorityByRouteRef.current.clear();
       return;
     }
-    const liveAuthorityByRoute = new Map<string, BackgroundAutoNudgeAuthority>();
+    const liveRoutes = new Set<string>();
 
     for (const environment of Object.values(environmentStateById)) {
       if (!environment.bootstrapComplete) continue;
       for (const threadId of environment.threadIds) {
-        const authority = projectedAuthority(environment, threadId);
-        if (!authority) continue;
-        liveAuthorityByRoute.set(authority.routeKey, authority);
-
-        const scheduled = scheduledAuthorityByRouteRef.current.get(authority.routeKey);
-        if (scheduled && scheduled.authority.key !== authority.key) {
-          window.clearTimeout(scheduled.timerId);
-          scheduledAuthorityByRouteRef.current.delete(authority.routeKey);
+        const shell = environment.threadShellById[threadId];
+        if (!shell) continue;
+        const currentRouteKey = routeKey(shell);
+        liveRoutes.add(currentRouteKey);
+        const completedTurnKey = projectedCompletedTurnKey(environment, threadId);
+        const hadPrevious = observedCompletedTurnByRouteRef.current.has(currentRouteKey);
+        const previousCompletedTurnKey =
+          observedCompletedTurnByRouteRef.current.get(currentRouteKey) ?? null;
+        observedCompletedTurnByRouteRef.current.set(currentRouteKey, completedTurnKey);
+        if (
+          !hadPrevious ||
+          completedTurnKey === null ||
+          completedTurnKey === previousCompletedTurnKey
+        ) {
+          continue;
         }
 
-        if (seenTerminalKeysRef.current.has(authority.terminalKey)) continue;
-        seenTerminalKeysRef.current.mark(authority.terminalKey);
+        const authority = projectedAuthority(environment, threadId);
+        if (!authority) continue;
         const ledger = getAutoNudgeTurnLedger();
-        // Accept the previous revision-qualified key shape for sessions that
-        // were already open when this invariant was tightened.
         if (ledger.has(authority.terminalKey) || ledger.has(authority.key)) continue;
 
-        const timerId = window.setTimeout(() => {
-          const currentTimer = scheduledAuthorityByRouteRef.current.get(authority.routeKey);
-          if (
-            !currentTimer ||
-            currentTimer.timerId !== timerId ||
-            currentTimer.authority.key !== authority.key
-          ) {
-            return;
-          }
-          scheduledAuthorityByRouteRef.current.delete(authority.routeKey);
-
-          // Re-read projection, queue, draft, provider, route, and durable Stop
-          // state at the final handoff. Nothing captured at schedule time is
-          // trusted except the exact authority identity being compared.
-          const currentEnvironment =
-            useStore.getState().environmentStateById[authority.environmentId];
-          const currentAuthority = projectedAuthority(currentEnvironment, authority.threadId);
-          if (!currentAuthority || currentAuthority.key !== authority.key) return;
-
-          const shell = currentEnvironment?.threadShellById[authority.threadId];
-          const summary = currentEnvironment?.sidebarThreadSummaryById[authority.threadId];
-          const session =
-            currentEnvironment?.threadSessionById[authority.threadId] ?? summary?.session ?? null;
-          if (
-            !shell ||
-            !summary ||
-            !session ||
-            !isAutoNudgeWithinTimeCap(shell.autoNudge, Date.now())
-          ) {
-            return;
-          }
-
-          const ledger = getAutoNudgeTurnLedger();
-          if (ledger.has(authority.terminalKey) || ledger.has(authority.key)) return;
-          if (
-            shell.manualFollowUpCount > 0 ||
-            manualFollowUpPriorityStore.has({
-              environmentId: authority.environmentId,
-              threadId: authority.threadId,
-            })
-          ) {
-            // Manual work consumes this terminal event. Removing the queue
-            // later cannot revive an already-observed completion.
-            ledger.mark(authority.terminalKey);
-            return;
-          }
-
-          const draft = useComposerDraftStore.getState().getComposerDraft({
+        const currentAuthority = projectedAuthority(environment, threadId);
+        if (!currentAuthority || currentAuthority.key !== authority.key) continue;
+        const summary = environment.sidebarThreadSummaryById[threadId];
+        const session = environment.threadSessionById[threadId] ?? summary?.session ?? null;
+        if (!summary || !session) continue;
+        if (
+          shell.manualFollowUpCount > 0 ||
+          manualFollowUpPriorityStore.has({
             environmentId: authority.environmentId,
             threadId: authority.threadId,
-          });
-          if (Boolean(draft?.prompt.trim()) || (draft?.images.length ?? 0) > 0) {
-            ledger.mark(authority.terminalKey);
-            return;
-          }
-          if (
-            summary.hasPendingApprovals ||
-            summary.hasPendingUserInput ||
-            summary.hasActionableProposedPlan ||
-            Boolean(shell.error)
-          ) {
-            return;
-          }
-
-          const providerInstanceId =
-            session.providerInstanceId ??
-            (session.provider
-              ? defaultInstanceIdForDriver(session.provider)
-              : shell.modelSelection.instanceId);
-          const environmentServerConfig =
-            authority.environmentId === readPrimaryEnvironmentDescriptor()?.environmentId
-              ? getServerConfig()
-              : getSavedEnvironmentRuntimeState(authority.environmentId).serverConfig;
-          const provider =
-            environmentServerConfig?.providers.find(
-              (entry) => entry.instanceId === providerInstanceId,
-            ) ?? null;
-          if (!providerCanAcceptTurn(provider)) return;
-
-          const api = readEnvironmentApi(authority.environmentId);
-          if (!api) return;
-          const arming = getConfirmedAutoNudgeArming();
-          if (!arming.confirmExecutionAuthorized()) return;
-
-          // Consume locally before transport and never retry an uncertain
-          // result. The server independently rechecks revision and terminal.
+          })
+        ) {
           ledger.mark(authority.terminalKey);
-          if (!arming.confirmExecutionAuthorized()) return;
-          void api.orchestration
-            .dispatchCommand({
-              type: "thread.auto-nudge.dispatch",
-              commandId: newCommandId(),
-              threadId: authority.threadId,
-              expectedAuthorityRevision: authority.authorityRevision,
-              completedTurnId: authority.completedTurnId,
-              dispatchSource: "background",
-              messageId: newMessageId(),
-              createdAt: new Date().toISOString(),
-            })
-            .catch(() => {
-              // Fail closed. Only a different projection authority can arm.
-            });
-        }, AUTO_NUDGE_DELAY_MS);
-        scheduledAuthorityByRouteRef.current.set(authority.routeKey, {
-          authority,
-          timerId,
+          continue;
+        }
+        const draft = useComposerDraftStore.getState().getComposerDraft({
+          environmentId: authority.environmentId,
+          threadId: authority.threadId,
         });
+        if (Boolean(draft?.prompt.trim()) || (draft?.images.length ?? 0) > 0) {
+          ledger.mark(authority.terminalKey);
+          continue;
+        }
+        if (
+          summary.hasPendingApprovals ||
+          summary.hasPendingUserInput ||
+          summary.hasActionableProposedPlan ||
+          Boolean(shell.error)
+        ) {
+          continue;
+        }
+        const providerInstanceId =
+          session.providerInstanceId ??
+          (session.provider
+            ? defaultInstanceIdForDriver(session.provider)
+            : shell.modelSelection.instanceId);
+        const environmentServerConfig =
+          authority.environmentId === readPrimaryEnvironmentDescriptor()?.environmentId
+            ? getServerConfig()
+            : getSavedEnvironmentRuntimeState(authority.environmentId).serverConfig;
+        const provider =
+          environmentServerConfig?.providers.find(
+            (entry) => entry.instanceId === providerInstanceId,
+          ) ?? null;
+        if (!providerCanAcceptTurn(provider)) continue;
+        const api = readEnvironmentApi(authority.environmentId);
+        if (!api) continue;
+        const arming = getConfirmedAutoNudgeArming();
+        if (!arming.confirmExecutionAuthorized()) continue;
+        ledger.mark(authority.terminalKey);
+        if (!arming.confirmExecutionAuthorized()) continue;
+        void api.orchestration
+          .dispatchCommand({
+            type: "thread.auto-nudge.dispatch",
+            commandId: newCommandId(),
+            threadId: authority.threadId,
+            expectedAuthorityRevision: authority.authorityRevision,
+            completedTurnId: authority.completedTurnId,
+            dispatchSource: "background",
+            messageId: newMessageId(),
+            createdAt: new Date().toISOString(),
+          })
+          .catch(() => {
+            // Fail closed. Only a different completion event can dispatch.
+          });
       }
     }
 
-    for (const [scheduledRouteKey, scheduled] of scheduledAuthorityByRouteRef.current) {
-      if (liveAuthorityByRoute.get(scheduledRouteKey)?.key === scheduled.authority.key) {
-        continue;
+    for (const observedRouteKey of observedCompletedTurnByRouteRef.current.keys()) {
+      if (!liveRoutes.has(observedRouteKey)) {
+        observedCompletedTurnByRouteRef.current.delete(observedRouteKey);
       }
-      window.clearTimeout(scheduled.timerId);
-      scheduledAuthorityByRouteRef.current.delete(scheduledRouteKey);
     }
   }, [environmentStateById, globallySuppressed]);
-
-  useEffect(
-    () => () => {
-      for (const scheduled of scheduledAuthorityByRouteRef.current.values()) {
-        window.clearTimeout(scheduled.timerId);
-        // React StrictMode intentionally runs setup -> cleanup -> setup while
-        // preserving refs. A debounce canceled before it can attempt transport
-        // was not consumed, so the replayed setup must be allowed to re-arm it.
-        seenTerminalKeysRef.current.forget(scheduled.authority.terminalKey);
-      }
-      scheduledAuthorityByRouteRef.current.clear();
-    },
-    [],
-  );
 
   return null;
 }

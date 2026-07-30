@@ -970,7 +970,6 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
               prompt: existingRow.value.autoNudge.prompt,
               backgroundContinuation: false,
               maxRounds: existingRow.value.autoNudge.maxRounds,
-              maxMinutes: existingRow.value.autoNudge.maxMinutes,
               armedAt: null,
               baselineSettledTurnId: null,
               lastDispatchedSettledTurnId: null,

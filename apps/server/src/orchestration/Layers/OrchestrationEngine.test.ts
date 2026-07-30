@@ -1563,7 +1563,6 @@ describe("OrchestrationEngine", () => {
         prompt: "Automatic continuation must lose to an earlier reservation.",
         backgroundContinuation: false,
         maxRounds: 5,
-        maxMinutes: 60,
         createdAt,
       }),
     );
@@ -1712,7 +1711,6 @@ describe("OrchestrationEngine", () => {
         prompt: "Persisted exact-thread atomic prompt",
         backgroundContinuation: false,
         maxRounds: 5,
-        maxMinutes: 60,
         createdAt,
       }),
     );

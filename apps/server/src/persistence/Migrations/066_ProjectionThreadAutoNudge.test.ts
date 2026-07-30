@@ -119,10 +119,10 @@ describe("066_ProjectionThreadAutoNudge", () => {
       yield* sql`
         ALTER TABLE projection_threads
         ADD COLUMN auto_nudge_json TEXT NOT NULL
-        DEFAULT '{"authorityRevision":0,"mode":"off","prompt":"","backgroundContinuation":false,"maxRounds":5,"maxMinutes":30,"armedAt":null,"baselineSettledTurnId":null,"lastDispatchedSettledTurnId":null,"roundsDispatched":0,"lastDispatchedAt":null}'
+        DEFAULT '{"authorityRevision":0,"mode":"off","prompt":"","backgroundContinuation":false,"maxRounds":5,"armedAt":null,"baselineSettledTurnId":null,"lastDispatchedSettledTurnId":null,"roundsDispatched":0,"lastDispatchedAt":null}'
       `;
       const oldAuthority =
-        '{"authorityRevision":7,"mode":"steady-progress","prompt":"keep this exact thread moving","backgroundContinuation":false,"maxRounds":3,"maxMinutes":12,"armedAt":"2026-07-28T00:00:01.000Z","baselineSettledTurnId":"turn-7","lastDispatchedSettledTurnId":null,"roundsDispatched":0,"lastDispatchedAt":null}';
+        '{"authorityRevision":7,"mode":"steady-progress","prompt":"keep this exact thread moving","backgroundContinuation":false,"maxRounds":3,"armedAt":"2026-07-28T00:00:01.000Z","baselineSettledTurnId":"turn-7","lastDispatchedSettledTurnId":null,"roundsDispatched":0,"lastDispatchedAt":null}';
       yield* sql`
         UPDATE projection_threads
         SET auto_nudge_json = ${oldAuthority}

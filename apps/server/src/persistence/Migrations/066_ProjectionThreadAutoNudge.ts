@@ -4,7 +4,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import ForkLineageCompatibility from "./065_ForkLineageCompatibility.ts";
 
 export const DEFAULT_THREAD_AUTO_NUDGE_JSON =
-  '{"authorityRevision":0,"mode":"off","prompt":"","backgroundContinuation":false,"maxRounds":5,"maxMinutes":30,"armedAt":null,"baselineSettledTurnId":null,"lastDispatchedSettledTurnId":null,"roundsDispatched":0,"lastDispatchedAt":null}';
+  '{"authorityRevision":0,"mode":"off","prompt":"","backgroundContinuation":false,"maxRounds":5,"armedAt":null,"baselineSettledTurnId":null,"lastDispatchedSettledTurnId":null,"roundsDispatched":0,"lastDispatchedAt":null}';
 
 export default Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -26,7 +26,7 @@ export default Effect.gen(function* () {
     yield* sql`
       ALTER TABLE projection_threads
       ADD COLUMN auto_nudge_json TEXT NOT NULL
-      DEFAULT '{"authorityRevision":0,"mode":"off","prompt":"","backgroundContinuation":false,"maxRounds":5,"maxMinutes":30,"armedAt":null,"baselineSettledTurnId":null,"lastDispatchedSettledTurnId":null,"roundsDispatched":0,"lastDispatchedAt":null}'
+      DEFAULT '{"authorityRevision":0,"mode":"off","prompt":"","backgroundContinuation":false,"maxRounds":5,"armedAt":null,"baselineSettledTurnId":null,"lastDispatchedSettledTurnId":null,"roundsDispatched":0,"lastDispatchedAt":null}'
     `;
   }
 });

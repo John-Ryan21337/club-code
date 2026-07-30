@@ -134,7 +134,6 @@ function enabledConfig(
     prompt: "Prompt owned by thread A",
     backgroundContinuation: false,
     maxRounds: 5,
-    maxMinutes: 30,
     armedAt: "2026-07-28T11:59:00.000Z",
     baselineSettledTurnId: TURN_BASELINE,
     lastDispatchedSettledTurnId: null,
@@ -163,7 +162,6 @@ it.effect("saves Off text for one exact thread without granting dispatch authori
         prompt: "Saved while disabled",
         backgroundContinuation: false,
         maxRounds: 8,
-        maxMinutes: 45,
         createdAt: "2000-01-01T00:00:00.000Z",
       },
     });
@@ -181,7 +179,6 @@ it.effect("saves Off text for one exact thread without granting dispatch authori
       prompt: "Saved while disabled",
       backgroundContinuation: false,
       maxRounds: 8,
-      maxMinutes: 45,
       armedAt: null,
       baselineSettledTurnId: null,
       lastDispatchedSettledTurnId: null,
@@ -283,7 +280,6 @@ it.effect("uses revision-checked configuration and a server-authored arming time
         prompt: "Thread A only\nKeep moving",
         backgroundContinuation: true,
         maxRounds: 5,
-        maxMinutes: 30,
         createdAt: "2099-01-01T00:00:00.000Z",
       },
     });
@@ -308,7 +304,6 @@ it.effect("uses revision-checked configuration and a server-authored arming time
           prompt: "",
           backgroundContinuation: false,
           maxRounds: 5,
-          maxMinutes: 30,
           createdAt: SERVER_NOW,
         },
       }),
@@ -653,39 +648,6 @@ it.effect("permits background dispatch only when the exact thread grants it", ()
   }),
 );
 
-it.effect("cannot forge a client timestamp to extend an elapsed server time cap", () =>
-  Effect.gen(function* () {
-    yield* TestClock.setTime(Date.parse("2026-07-28T12:30:00.000Z"));
-    const readModel = makeReadModel([
-      makeThread({
-        id: THREAD_A,
-        latestTurnId: TURN_COMPLETED,
-        autoNudge: enabledConfig({
-          armedAt: "2026-07-28T12:00:00.000Z",
-          maxMinutes: 30,
-        }),
-      }),
-    ]);
-
-    const failure = yield* Effect.flip(
-      decideOrchestrationCommand({
-        readModel,
-        command: {
-          type: "thread.auto-nudge.dispatch",
-          commandId: CommandId.make("command-forged-time"),
-          threadId: THREAD_A,
-          expectedAuthorityRevision: 5,
-          completedTurnId: TURN_COMPLETED,
-          dispatchSource: "foreground",
-          messageId: MessageId.make("message-forged-time"),
-          createdAt: "2026-07-28T12:00:01.000Z",
-        },
-      }),
-    );
-    assert.match(failure.detail, /time cap is exhausted/);
-  }),
-);
-
 it.effect("advances every distinct Stop so an in-flight Off configure cannot re-arm later", () =>
   Effect.gen(function* () {
     yield* TestClock.setTime(Date.parse(SERVER_NOW));
@@ -741,7 +703,6 @@ it.effect("advances every distinct Stop so an in-flight Off configure cannot re-
           prompt: "must not re-arm",
           backgroundContinuation: false,
           maxRounds: 5,
-          maxMinutes: 30,
           createdAt: SERVER_NOW,
         },
       }),
@@ -785,7 +746,6 @@ it.effect("advances every distinct Stop so an in-flight Off configure cannot re-
           prompt: "must remain revoked",
           backgroundContinuation: true,
           maxRounds: 5,
-          maxMinutes: 30,
           createdAt: SERVER_NOW,
         },
       }),

@@ -1,13 +1,4 @@
-import type { AutoNudgeMode, ThreadAutoNudgeSummary } from "@cafecode/contracts";
-
-/**
- * Safety debounce after an exact provider-confirmed terminal turn.
- *
- * This is not a dispatch interval or an idle-time cadence. Elapsed time never
- * creates Auto Nudge authority; the full terminal/queue/provider gate must
- * already be true and is checked again when this debounce ends.
- */
-export const AUTO_NUDGE_DELAY_MS = 5_000;
+import type { AutoNudgeMode } from "@cafecode/contracts";
 
 export type { AutoNudgeMode } from "@cafecode/contracts";
 
@@ -58,94 +49,18 @@ export function canScheduleAutoNudge(input: AutoNudgeEligibility): boolean {
   );
 }
 
-/** The timer handoff repeats the complete gate; it must never trust its schedule-time view. */
+/** The completion-event handoff repeats the complete gate before transport. */
 export function canDispatchAutoNudge(input: {
-  readonly scheduledTurnKey: string | null;
+  readonly terminalTurnKey: string | null;
   readonly current: AutoNudgeEligibility;
   readonly alreadyConsumed: boolean;
 }): boolean {
   return (
-    input.scheduledTurnKey !== null &&
-    input.scheduledTurnKey === input.current.terminalTurnKey &&
+    input.terminalTurnKey !== null &&
+    input.terminalTurnKey === input.current.terminalTurnKey &&
     canScheduleAutoNudge(input.current) &&
     !input.alreadyConsumed
   );
-}
-
-export function isAutoNudgeWithinTimeCap(
-  config: Pick<ThreadAutoNudgeSummary, "armedAt" | "maxMinutes">,
-  nowMs: number,
-): boolean {
-  if (config.armedAt === null) return false;
-  const armedAtMs = Date.parse(config.armedAt);
-  return (
-    Number.isFinite(armedAtMs) &&
-    nowMs >= armedAtMs &&
-    nowMs - armedAtMs < config.maxMinutes * 60_000
-  );
-}
-
-export interface AutoNudgeTimerScheduler {
-  now(): number;
-  setTimeout(callback: () => void, delayMs: number): number;
-  clearTimeout(timer: number): void;
-  setInterval(callback: () => void, intervalMs: number): number;
-  clearInterval(timer: number): void;
-}
-
-/**
- * Owns one visible chat's countdown. Cancellation invalidates callbacks before
- * clearing native handles, so even an already-queued stale callback fails
- * closed during a route/unmount race.
- */
-export class AutoNudgeTimerController {
-  private dispatchTimer: number | null = null;
-  private countdownTimer: number | null = null;
-  private turnKey: string | null = null;
-  private revision = 0;
-
-  constructor(private readonly scheduler: AutoNudgeTimerScheduler) {}
-
-  get scheduledTurnKey(): string | null {
-    return this.turnKey;
-  }
-
-  cancel(): string | null {
-    const canceledTurnKey = this.turnKey;
-    this.revision += 1;
-    this.turnKey = null;
-    if (this.dispatchTimer !== null) {
-      this.scheduler.clearTimeout(this.dispatchTimer);
-      this.dispatchTimer = null;
-    }
-    if (this.countdownTimer !== null) {
-      this.scheduler.clearInterval(this.countdownTimer);
-      this.countdownTimer = null;
-    }
-    return canceledTurnKey;
-  }
-
-  schedule(input: {
-    turnKey: string;
-    delayMs: number;
-    onCountdown: (seconds: number) => void;
-    onDispatch: (turnKey: string) => void;
-  }): void {
-    this.cancel();
-    const revision = this.revision;
-    const dispatchAt = this.scheduler.now() + input.delayMs;
-    this.turnKey = input.turnKey;
-    input.onCountdown(Math.ceil(input.delayMs / 1_000));
-    this.countdownTimer = this.scheduler.setInterval(() => {
-      if (this.revision !== revision || this.turnKey !== input.turnKey) return;
-      input.onCountdown(Math.max(0, Math.ceil((dispatchAt - this.scheduler.now()) / 1_000)));
-    }, 250);
-    this.dispatchTimer = this.scheduler.setTimeout(() => {
-      if (this.revision !== revision || this.turnKey !== input.turnKey) return;
-      const scheduledTurnKey = this.cancel();
-      if (scheduledTurnKey) input.onDispatch(scheduledTurnKey);
-    }, input.delayMs);
-  }
 }
 
 const MAX_AUTO_NUDGE_LEDGER_ENTRIES = 256;
@@ -232,7 +147,7 @@ export class AutoNudgeTurnLedger {
 
 /**
  * A real operator action consumes the currently settled turn even if React
- * has not yet scheduled its countdown. This keeps a cleared draft from
+ * has not yet dispatched its continuation. This keeps a cleared draft from
  * reviving an old completion into an unsolicited provider request.
  */
 export function consumeAutoNudgeTerminalForManualActivity(

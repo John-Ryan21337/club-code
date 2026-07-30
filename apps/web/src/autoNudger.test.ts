@@ -1,15 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
-  AUTO_NUDGE_DELAY_MS,
   AUTO_NUDGE_PROMPTS,
-  AutoNudgeTimerController,
   AutoNudgeTurnLedger,
   autoNudgePromptForMode,
   canDispatchAutoNudge,
   canScheduleAutoNudge,
   consumeAutoNudgeTerminalForManualActivity,
   createAutoNudgeTurnLedger,
-  isAutoNudgeWithinTimeCap,
 } from "./autoNudger";
 
 const eligible = {
@@ -51,7 +48,7 @@ describe("auto nudger safety gates", () => {
     expect(ledger.has("environment:thread:new-turn:2026-07-23T00:01:00.000Z")).toBe(false);
   });
 
-  it("bounds observed terminal memory and can forget a canceled debounce", () => {
+  it("bounds observed terminal memory and can forget an observation", () => {
     const ledger = new AutoNudgeTurnLedger();
     for (let index = 0; index <= 256; index += 1) {
       ledger.mark(`environment:thread:turn-${index}`);
@@ -63,27 +60,14 @@ describe("auto nudger safety gates", () => {
     expect(ledger.has("environment:thread:turn-256")).toBe(false);
   });
 
-  it("enforces the armed server-time window at both schedule and dispatch boundaries", () => {
-    const armedAt = "2026-07-23T00:00:00.000Z";
-    const config = { armedAt, maxMinutes: 5 };
-    const armedAtMs = Date.parse(armedAt);
-
-    expect(isAutoNudgeWithinTimeCap(config, armedAtMs)).toBe(true);
-    expect(isAutoNudgeWithinTimeCap(config, armedAtMs + 5 * 60_000 - 1)).toBe(true);
-    expect(isAutoNudgeWithinTimeCap(config, armedAtMs + 5 * 60_000)).toBe(false);
-    expect(isAutoNudgeWithinTimeCap(config, armedAtMs - 1)).toBe(false);
-    expect(isAutoNudgeWithinTimeCap({ ...config, armedAt: "invalid" }, armedAtMs)).toBe(false);
-    expect(isAutoNudgeWithinTimeCap({ ...config, armedAt: null }, armedAtMs)).toBe(false);
-  });
-
-  it("consumes a manual action before a countdown has been scheduled", () => {
+  it("consumes a manual action before completion-event dispatch", () => {
     const ledger = new AutoNudgeTurnLedger();
 
     consumeAutoNudgeTerminalForManualActivity(ledger, eligible.terminalTurnKey);
 
     expect(
       canDispatchAutoNudge({
-        scheduledTurnKey: eligible.terminalTurnKey,
+        terminalTurnKey: eligible.terminalTurnKey,
         current: eligible,
         alreadyConsumed: ledger.has(eligible.terminalTurnKey),
       }),
@@ -115,85 +99,27 @@ describe("auto nudger safety gates", () => {
     expect(createAutoNudgeTurnLedger(storage).has(eligible.terminalTurnKey)).toBe(false);
   });
 
-  it("re-checks disable/manual-input races before a scheduled send", () => {
-    const scheduledTurnKey = eligible.terminalTurnKey;
+  it("re-checks disable/manual-input races before completion-event dispatch", () => {
+    const terminalTurnKey = eligible.terminalTurnKey;
     expect(
-      canDispatchAutoNudge({ scheduledTurnKey, current: eligible, alreadyConsumed: false }),
+      canDispatchAutoNudge({ terminalTurnKey, current: eligible, alreadyConsumed: false }),
     ).toBe(true);
     expect(
       canDispatchAutoNudge({
-        scheduledTurnKey,
+        terminalTurnKey,
         current: { ...eligible, mode: "off" },
         alreadyConsumed: false,
       }),
     ).toBe(false);
     expect(
       canDispatchAutoNudge({
-        scheduledTurnKey,
+        terminalTurnKey,
         current: { ...eligible, hasManualActivity: true },
         alreadyConsumed: false,
       }),
     ).toBe(false);
     expect(
-      canDispatchAutoNudge({ scheduledTurnKey, current: eligible, alreadyConsumed: true }),
+      canDispatchAutoNudge({ terminalTurnKey, current: eligible, alreadyConsumed: true }),
     ).toBe(false);
-  });
-
-  it("invalidates a hidden-chat timer and safely re-arms a new visible turn", () => {
-    let nextTimer = 1;
-    let now = 1_000;
-    const timeoutCallbacks = new Map<number, () => void>();
-    const intervalCallbacks = new Map<number, () => void>();
-    const clearedTimeouts: number[] = [];
-    const clearedIntervals: number[] = [];
-    const controller = new AutoNudgeTimerController({
-      now: () => now,
-      setTimeout: (callback) => {
-        const timer = nextTimer++;
-        timeoutCallbacks.set(timer, callback);
-        return timer;
-      },
-      clearTimeout: (timer) => {
-        clearedTimeouts.push(timer);
-      },
-      setInterval: (callback) => {
-        const timer = nextTimer++;
-        intervalCallbacks.set(timer, callback);
-        return timer;
-      },
-      clearInterval: (timer) => {
-        clearedIntervals.push(timer);
-      },
-    });
-    const dispatched: string[] = [];
-    const countdowns: number[] = [];
-
-    controller.schedule({
-      turnKey: "environment:thread-a:turn-a",
-      delayMs: AUTO_NUDGE_DELAY_MS,
-      onCountdown: (seconds) => countdowns.push(seconds),
-      onDispatch: (turnKey) => dispatched.push(turnKey),
-    });
-    const staleDispatch = timeoutCallbacks.get(2);
-    expect(controller.scheduledTurnKey).toBe("environment:thread-a:turn-a");
-    expect(countdowns).toEqual([5]);
-
-    expect(controller.cancel()).toBe("environment:thread-a:turn-a");
-    expect(clearedTimeouts).toEqual([2]);
-    expect(clearedIntervals).toEqual([1]);
-    staleDispatch?.();
-    expect(dispatched).toEqual([]);
-
-    controller.schedule({
-      turnKey: "environment:thread-b:turn-b",
-      delayMs: AUTO_NUDGE_DELAY_MS,
-      onCountdown: (seconds) => countdowns.push(seconds),
-      onDispatch: (turnKey) => dispatched.push(turnKey),
-    });
-    expect(controller.scheduledTurnKey).toBe("environment:thread-b:turn-b");
-    now += AUTO_NUDGE_DELAY_MS;
-    timeoutCallbacks.get(4)?.();
-    expect(dispatched).toEqual(["environment:thread-b:turn-b"]);
-    expect(controller.scheduledTurnKey).toBeNull();
   });
 });
