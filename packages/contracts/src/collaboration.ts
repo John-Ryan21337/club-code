@@ -16,6 +16,9 @@ export const COLLABORATION_MEMBERSHIP_EPOCH_MAX = 2_147_483_647;
 export const COLLABORATION_EVENT_SEQUENCE_MAX = Number.MAX_SAFE_INTEGER;
 export const COLLABORATION_EVENT_TYPE_MAX_CHARS = 128;
 export const COLLABORATION_EVENT_SIGNATURE_MAX_CHARS = 4_096;
+export const COLLABORATION_EVENT_PAYLOAD_MAX_UTF8_BYTES = 65_536;
+export const COLLABORATION_ED25519_SIGNATURE_BYTES = 64;
+export const COLLABORATION_ED25519_SIGNATURE_BASE64URL_CHARS = 86;
 export const COLLABORATION_SESSION_ID_MAX_CHARS = 128;
 export const COLLABORATION_ACCESS_SESSION_MAX_LIFETIME_MILLIS = 60 * 60 * 1_000;
 
@@ -255,6 +258,65 @@ export const CollaborationEventSignature = TrimmedNonEmptyString.check(
   Schema.isMaxLength(COLLABORATION_EVENT_SIGNATURE_MAX_CHARS),
 );
 export type CollaborationEventSignature = typeof CollaborationEventSignature.Type;
+
+/**
+ * Phase-one authored event types have a fixed server-owned permission mapping.
+ * Unknown event names must not be admitted by treating a client-selected
+ * permission as authoritative.
+ */
+export const CollaborationPhaseOneAuthoredEventType = Schema.Literals([
+  "operator-chat.message",
+  "shared-transcript.prompt",
+]);
+export type CollaborationPhaseOneAuthoredEventType =
+  typeof CollaborationPhaseOneAuthoredEventType.Type;
+
+export const COLLABORATION_PHASE_ONE_EVENT_PERMISSIONS = {
+  "operator-chat.message": "chat.append",
+  "shared-transcript.prompt": "transcript.append",
+} as const satisfies Readonly<
+  Record<CollaborationPhaseOneAuthoredEventType, CollaborationPermission>
+>;
+
+/**
+ * Ed25519 signatures are encoded as unpadded base64url. Keeping this distinct
+ * from the durable envelope's forward-compatible signature field lets event
+ * admission enforce one reviewed algorithm without guessing from key length.
+ */
+export const CollaborationEd25519Signature = Schema.String.check(
+  Schema.isMinLength(COLLABORATION_ED25519_SIGNATURE_BASE64URL_CHARS),
+  Schema.isMaxLength(COLLABORATION_ED25519_SIGNATURE_BASE64URL_CHARS),
+  Schema.isPattern(/^[A-Za-z0-9_-]+$/),
+);
+export type CollaborationEd25519Signature = typeof CollaborationEd25519Signature.Type;
+
+/**
+ * A device-signed proposal is the client-authored input to the coordinator.
+ * Sequence, receive time, and previous-event hash are deliberately absent:
+ * those values are assigned by the append-only store after admission.
+ *
+ * `payloadJson` preserves the exact bounded bytes whose SHA-256 is signed,
+ * avoiding ambiguous object canonicalization across clients.
+ */
+export const CollaborationEventProposal = Schema.Struct({
+  version: Schema.Literal(COLLABORATION_PROTOCOL_VERSION),
+  sharedProjectId: SharedProjectId,
+  eventId: EventId,
+  commandId: CommandId,
+  membershipEpoch: CollaborationMembershipEpoch,
+  actor: CollaborationEventActor,
+  type: CollaborationPhaseOneAuthoredEventType,
+  payloadJson: Schema.String.check(
+    Schema.isNonEmpty(),
+    Schema.isMaxLength(COLLABORATION_EVENT_PAYLOAD_MAX_UTF8_BYTES),
+  ),
+  payloadSha256: CollaborationSha256,
+  authorSignature: CollaborationEd25519Signature,
+  causationEventId: Schema.NullOr(EventId),
+  correlationId: Schema.NullOr(CommandId),
+  occurredAt: IsoDateTime,
+});
+export type CollaborationEventProposal = typeof CollaborationEventProposal.Type;
 
 /**
  * Durable, append-only project event envelope.
