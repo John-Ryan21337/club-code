@@ -137,6 +137,29 @@ export const CollaborationMembershipEpoch = NonNegativeInt.check(
 );
 export type CollaborationMembershipEpoch = typeof CollaborationMembershipEpoch.Type;
 
+export const CollaborationSessionId = TrimmedNonEmptyString.pipe(
+  Schema.brand("CollaborationSessionId"),
+);
+export type CollaborationSessionId = typeof CollaborationSessionId.Type;
+
+/**
+ * Server-authenticated project principal passed into collaboration handlers.
+ *
+ * Role and permission claims are intentionally absent. Handlers must resolve
+ * both from the current membership snapshot so a client cannot retain elevated
+ * authority by replaying an older token or asserting its own role.
+ */
+export const CollaborationPrincipal = Schema.Struct({
+  sessionId: CollaborationSessionId,
+  sharedProjectId: SharedProjectId,
+  userId: UserId,
+  deviceId: DeviceId,
+  membershipEpoch: CollaborationMembershipEpoch,
+  issuedAt: Schema.DateTimeUtcFromString,
+  expiresAt: Schema.DateTimeUtcFromString,
+});
+export type CollaborationPrincipal = typeof CollaborationPrincipal.Type;
+
 export const CollaborationProjectMember = Schema.Struct({
   userId: UserId,
   displayName: TrimmedNonEmptyString.check(Schema.isMaxLength(128)),
