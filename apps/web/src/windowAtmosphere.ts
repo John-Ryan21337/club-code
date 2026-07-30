@@ -922,14 +922,30 @@ export function resolveMatrixWalkTextLayout(
   const advanceEm = estimateMatrixWalkTextAdvanceEm(text);
   const safeSceneWidth = Number.isFinite(sceneWidth) ? Math.max(1, sceneWidth) : 1;
   const availableWidth = safeSceneWidth * MATRIX_WALK_LABEL_VIEWPORT_WIDTH_RATIO;
-  const fontSizePx = Math.max(
-    MIN_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE,
-    Math.min(requestedFontSize, availableWidth / advanceEm),
-  );
+  const fittedFontSize = Math.min(requestedFontSize, availableWidth / advanceEm);
+  // The cached Canvas/GPU collector font is quantized to the public 1px
+  // setting grid. Never round a fitted value back above the viewport budget.
+  const fontSizePx =
+    fittedFontSize < requestedFontSize
+      ? Math.max(
+          MIN_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE,
+          Math.floor(fittedFontSize / FALLING_EFFECT_MATRIX_WALK_FONT_SIZE_STEP) *
+            FALLING_EFFECT_MATRIX_WALK_FONT_SIZE_STEP,
+        )
+      : requestedFontSize;
   return {
     fontSizePx,
     widthPx: Math.min(safeSceneWidth, fontSizePx * advanceEm),
   };
+}
+
+function resolveMatrixWalkTextCenterX(
+  projectedX: number,
+  textWidthPx: number,
+  sceneWidth: number,
+): number {
+  const halfWidth = Math.min(sceneWidth, Math.max(0, textWidthPx)) * 0.5;
+  return Math.min(sceneWidth - halfWidth, Math.max(halfWidth, projectedX));
 }
 
 function resolveMatrixWalkTargetFontSize(
@@ -1339,12 +1355,17 @@ export function drawAtmosphereScene(
               particle.glyphs[glyphIndex] ??
               "0";
             const textLayout = resolveMatrixWalkTextLayout(glyph, walkFontSize, scene.width);
+            const textCenterX = resolveMatrixWalkTextCenterX(
+              projectedFrom.x,
+              textLayout.widthPx,
+              scene.width,
+            );
             if (
               !claimMatrixWalkProjectedBounds(
                 walkOccupancy,
                 scene.width,
                 scene.height,
-                projectedFrom.x,
+                textCenterX,
                 projectedFrom.y,
                 textLayout.fontSizePx,
                 textLayout.widthPx / textLayout.fontSizePx,
@@ -1357,7 +1378,7 @@ export function drawAtmosphereScene(
               (trailIndex === 0
                 ? normalizedOpacity
                 : normalizedOpacity * (1 - trailIndex / 8) * 0.7) * lifecycleOpacity;
-            context.fillText(glyph, projectedFrom.x, projectedFrom.y);
+            context.fillText(glyph, textCenterX, projectedFrom.y);
           }
         }
       }

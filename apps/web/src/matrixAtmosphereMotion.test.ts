@@ -122,6 +122,14 @@ describe("atmosphere motion projection", () => {
     expect(singleGlyph.widthPx / singleGlyph.fontSizePx).toBeCloseTo(0.72);
   });
 
+  it("floors a fitted Unicode label to the rendered font grid", () => {
+    const layout = resolveMatrixWalkTextLayout("構".repeat(32), 144, 520);
+
+    expect(layout.fontSizePx).toBe(14);
+    expect(layout.widthPx).toBe(448);
+    expect(layout.widthPx).toBeLessThanOrEqual(520 * 0.9);
+  });
+
   it.each(["walk-forward", "walk-reverse"] as const)(
     "draws an unconstrained proportional work label in %s",
     (motionMode) => {
@@ -149,6 +157,38 @@ describe("atmosphere motion projection", () => {
       expect(labelIndex).toBeGreaterThanOrEqual(0);
       expect(recorder.texts[labelIndex]?.[3]).toBeUndefined();
       expect(Number.parseFloat(recorder.fonts[labelIndex]!)).toBeLessThan(72);
+    },
+  );
+
+  it.each(["walk-forward", "walk-reverse"] as const)(
+    "keeps a proportional edge-column label inside the viewport in %s",
+    (motionMode) => {
+      const label = "very-long-file-name.ts";
+      const particle = createParticle({
+        x: 0,
+        y: 120,
+        matrixLifecycleProgress: 0.5,
+        matrixWorkToken: label,
+      });
+      const recorder = createContextRecorder();
+
+      drawAtmosphereScene(
+        recorder.context,
+        createScene("matrix", particle),
+        "#00ff00",
+        1,
+        undefined,
+        motionMode,
+        72,
+        72,
+      );
+
+      const labelIndex = recorder.texts.findIndex(([text]) => text === label);
+      expect(labelIndex).toBeGreaterThanOrEqual(0);
+      const [, x] = recorder.texts[labelIndex]!;
+      const layout = resolveMatrixWalkTextLayout(label, 72, 400);
+      expect(x - layout.widthPx / 2).toBeGreaterThanOrEqual(0);
+      expect(x + layout.widthPx / 2).toBeLessThanOrEqual(400);
     },
   );
 

@@ -84,6 +84,47 @@ describe("MatrixGpuFrameCollector", () => {
     },
   );
 
+  it("keeps a maximum-length wide label within its quantized GPU viewport budget", () => {
+    const label = "構".repeat(32);
+    const scene = createAtmosphereScene(
+      "matrix",
+      520,
+      240,
+      createSeededRandom(25),
+      1,
+      1,
+      false,
+      { english: [], japanese: [label] },
+      "walk-forward",
+      30,
+      0,
+    );
+    const particle = scene.particles[0]!;
+    particle.x = 0;
+    particle.matrixWorkToken = label;
+    particle.matrixToken = null;
+    particle.matrixLifecycleProgress = 0.5;
+    particle.matrixLifecycleOpacity = 1;
+    const frame = new MatrixGpuFrameCollector().collect({
+      scene,
+      color: "#00ff00",
+      opacity: 1,
+      matrixColorFrame: undefined,
+      motionMode: "walk-forward",
+      walkStartFontSize: 144,
+      walkEndFontSize: 144,
+      matrixBaseFontSize: 14,
+      devicePixelRatio: 1,
+    });
+    const glyph = frame.glyphs.find((candidate) => candidate.glyph === label);
+
+    expect(glyph).toBeDefined();
+    expect(glyph?.fontSizePx).toBe(14);
+    expect(glyph?.x).toBe(224);
+    expect(glyph!.x - (glyph!.fontSizePx * 32) / 2).toBeGreaterThanOrEqual(0);
+    expect(glyph!.x + (glyph!.fontSizePx * 32) / 2).toBeLessThanOrEqual(520);
+  });
+
   it("reuses frame storage and supports Flat Matrix glyphs", () => {
     const scene = createAtmosphereScene(
       "matrix",
