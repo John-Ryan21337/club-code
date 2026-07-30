@@ -38,8 +38,51 @@ describe("MatrixGpuFrameCollector", () => {
     expect(frame.glyphs.length).toBeLessThanOrEqual(5_120);
     expect(frame.glyphs.every((glyph) => String(glyph.glyph).length > 0)).toBe(true);
     expect(frame.glyphs.every((glyph) => glyph.opacity > 0 && glyph.opacity <= 0.7)).toBe(true);
-    expect(frame.glyphs.some((glyph) => glyph.maxWidthPx !== undefined)).toBe(true);
+    expect(frame.glyphs.every((glyph) => glyph.maxWidthPx === undefined)).toBe(true);
   });
+
+  it.each(["walk-forward", "walk-reverse"] as const)(
+    "keeps long work labels proportionate in the %s GPU frame",
+    (motionMode) => {
+      const label = "very-long-file-name.ts";
+      const scene = createAtmosphereScene(
+        "matrix",
+        400,
+        240,
+        createSeededRandom(24),
+        1,
+        0,
+        false,
+        { english: [label], japanese: [] },
+        motionMode,
+        30,
+        0,
+      );
+      const particle = scene.particles[0]!;
+      particle.matrixWorkToken = label;
+      particle.matrixToken = null;
+      particle.matrixLifecycleProgress = 0.5;
+      particle.matrixLifecycleOpacity = 1;
+      const collector = new MatrixGpuFrameCollector();
+
+      const frame = collector.collect({
+        scene,
+        color: "#00ff00",
+        opacity: 1,
+        matrixColorFrame: undefined,
+        motionMode,
+        walkStartFontSize: 72,
+        walkEndFontSize: 72,
+        matrixBaseFontSize: 14,
+        devicePixelRatio: 1,
+      });
+      const glyph = frame.glyphs.find((candidate) => candidate.glyph === label);
+
+      expect(glyph).toBeDefined();
+      expect(glyph?.fontSizePx).toBeLessThan(72);
+      expect(glyph?.maxWidthPx).toBeUndefined();
+    },
+  );
 
   it("reuses frame storage and supports Flat Matrix glyphs", () => {
     const scene = createAtmosphereScene(

@@ -58,7 +58,60 @@ function cornerContainsGlyph(
   return false;
 }
 
+function opaquePixelBounds(
+  context: CanvasRenderingContext2D,
+  canvas: HTMLCanvasElement,
+): { width: number; height: number } | null {
+  const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+  let left = canvas.width;
+  let right = -1;
+  let top = canvas.height;
+  let bottom = -1;
+  for (let y = 0; y < canvas.height; y += 1) {
+    for (let x = 0; x < canvas.width; x += 1) {
+      if (pixels[(y * canvas.width + x) * 4 + 3] === 0) continue;
+      left = Math.min(left, x);
+      right = Math.max(right, x);
+      top = Math.min(top, y);
+      bottom = Math.max(bottom, y);
+    }
+  }
+  return right < left || bottom < top
+    ? null
+    : { width: right - left + 1, height: bottom - top + 1 };
+}
+
 describe("Matrix directional viewport coverage", () => {
+  it.each(["walk-forward", "walk-reverse"] as const)(
+    "preserves a readable long-label aspect ratio in %s",
+    (motionMode) => {
+      const canvas = document.createElement("canvas");
+      canvas.width = 600;
+      canvas.height = 240;
+      const context = canvas.getContext("2d");
+      expect(context).not.toBeNull();
+      if (!context) return;
+      const particle = matrixParticle(300, 120);
+      particle.glyphs = " ";
+      particle.matrixWorkToken = "very-long-file-name.ts";
+
+      drawAtmosphereScene(
+        context,
+        { kind: "matrix", width: 600, height: 240, particles: [particle] },
+        "#00ff00",
+        1,
+        undefined,
+        motionMode,
+        72,
+        72,
+      );
+
+      const bounds = opaquePixelBounds(context, canvas);
+      expect(bounds).not.toBeNull();
+      expect(bounds!.width / bounds!.height).toBeGreaterThan(7);
+    },
+  );
+
   it("draws glyph pixels near all four corners across aspect ratios and DPRs", () => {
     for (const { width, height, dpr } of [
       { width: 360, height: 780, dpr: 1 },

@@ -109,7 +109,9 @@ const MATRIX_2CH_TOKEN_PROBABILITY = 0.08;
 const MATRIX_WORK_TOKEN_PROBABILITY = 0.34;
 const MATRIX_WALK_FADE_START_PROGRESS = 0.72;
 const MATRIX_CENTER_WIND_MAX_SPEED_PX_PER_SECOND = 60;
-const MATRIX_WALK_MAX_TEXT_WIDTH_RATIO = 0.9;
+const MATRIX_WALK_LABEL_VIEWPORT_WIDTH_RATIO = 0.9;
+const MATRIX_WALK_MONOSPACE_ADVANCE_EM = 0.64;
+const MATRIX_WALK_WIDE_ADVANCE_EM = 1;
 const MATRIX_WALK_GLYPH_GAP_PX = 2;
 const MATRIX_WALK_TRAIL_LINE_HEIGHT = 1.08;
 const MATRIX_WALK_MIN_OCCUPANCY_BIN_PX = 2;
@@ -856,6 +858,80 @@ function quantizeMatrixWalkFontSize(requestedSize: number, fallbackSize: number)
   );
 }
 
+function isMatrixWalkWideCodePoint(codePoint: number): boolean {
+  return (
+    codePoint >= 0x1100 &&
+    (codePoint <= 0x115f ||
+      codePoint === 0x2329 ||
+      codePoint === 0x232a ||
+      (codePoint >= 0x2e80 && codePoint <= 0xa4cf && codePoint !== 0x303f) ||
+      (codePoint >= 0xac00 && codePoint <= 0xd7a3) ||
+      (codePoint >= 0xf900 && codePoint <= 0xfaff) ||
+      (codePoint >= 0xfe10 && codePoint <= 0xfe19) ||
+      (codePoint >= 0xfe30 && codePoint <= 0xfe6f) ||
+      (codePoint >= 0xff00 && codePoint <= 0xff60) ||
+      (codePoint >= 0xffe0 && codePoint <= 0xffe6) ||
+      (codePoint >= 0x1f300 && codePoint <= 0x1faff) ||
+      (codePoint >= 0x20000 && codePoint <= 0x3fffd))
+  );
+}
+
+function estimateMatrixWalkTextAdvanceEm(text: string): number {
+  let advance = 0;
+  for (const character of Array.from(text)) {
+    advance += isMatrixWalkWideCodePoint(character.codePointAt(0) ?? 0)
+      ? MATRIX_WALK_WIDE_ADVANCE_EM
+      : MATRIX_WALK_MONOSPACE_ADVANCE_EM;
+  }
+  return Math.max(0.72, advance);
+}
+
+function hasMultipleMatrixCodePoints(text: string): boolean {
+  let foundFirst = false;
+  for (const _character of text) {
+    if (foundFirst) return true;
+    foundFirst = true;
+  }
+  return false;
+}
+
+export interface MatrixWalkTextLayout {
+  readonly fontSizePx: number;
+  readonly widthPx: number;
+}
+
+/**
+ * Keeps multi-character Walk heads readable without Canvas2D's horizontal
+ * `maxWidth` squeeze. Long, privacy-filtered work tokens are fitted uniformly
+ * in both dimensions to a bounded viewport fraction, so their natural
+ * monospace proportions survive at every projected depth. Single glyphs keep
+ * the existing Walk font size and occupancy width.
+ */
+export function resolveMatrixWalkTextLayout(
+  text: string,
+  requestedFontSizePx: number,
+  sceneWidth: number,
+): MatrixWalkTextLayout {
+  const requestedFontSize = clampMatrixWalkFontSize(
+    requestedFontSizePx,
+    DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE,
+  );
+  if (!hasMultipleMatrixCodePoints(text)) {
+    return { fontSizePx: requestedFontSize, widthPx: requestedFontSize * 0.72 };
+  }
+  const advanceEm = estimateMatrixWalkTextAdvanceEm(text);
+  const safeSceneWidth = Number.isFinite(sceneWidth) ? Math.max(1, sceneWidth) : 1;
+  const availableWidth = safeSceneWidth * MATRIX_WALK_LABEL_VIEWPORT_WIDTH_RATIO;
+  const fontSizePx = Math.max(
+    MIN_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE,
+    Math.min(requestedFontSize, availableWidth / advanceEm),
+  );
+  return {
+    fontSizePx,
+    widthPx: Math.min(safeSceneWidth, fontSizePx * advanceEm),
+  };
+}
+
 function resolveMatrixWalkTargetFontSize(
   particle: AtmosphereParticle,
   motionMode: FallingEffectMatrixMotionMode,
@@ -943,8 +1019,11 @@ function claimMatrixWalkProjectedBounds(
   }
   const glyphGap = Math.min(MATRIX_WALK_GLYPH_GAP_PX * 0.5, Math.max(0.25, fontSize * 0.05));
   const halfWidth =
-    (Math.max(MIN_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE, fontSize) *
-      Math.min(MATRIX_WALK_MAX_TEXT_WIDTH_RATIO, Math.max(0.72, glyphWidthRatio)) +
+    (Math.min(
+      sceneWidth,
+      Math.max(MIN_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE, fontSize) *
+        Math.max(0.72, glyphWidthRatio),
+    ) +
       glyphGap) *
     0.5;
   const halfHeight =
@@ -996,6 +1075,10 @@ function resolveMatrixWalkFont(size: number, scale: number): string {
       FALLING_EFFECT_MATRIX_WALK_FONT_SIZE_STEP,
   );
   return (MATRIX_WALK_FONTS[index] ??= `${fontSize.toFixed(0)}px ${MATRIX_FONT_FAMILY}`);
+}
+
+function resolveMatrixWalkFontFromSize(size: number): string {
+  return resolveMatrixWalkFont(size, 1);
 }
 
 /**
@@ -1255,6 +1338,7 @@ export function drawAtmosphereScene(
               (trailIndex === 0 ? (particle.matrixToken ?? particle.matrixWorkToken) : null) ??
               particle.glyphs[glyphIndex] ??
               "0";
+            const textLayout = resolveMatrixWalkTextLayout(glyph, walkFontSize, scene.width);
             if (
               !claimMatrixWalkProjectedBounds(
                 walkOccupancy,
@@ -1262,26 +1346,18 @@ export function drawAtmosphereScene(
                 scene.height,
                 projectedFrom.x,
                 projectedFrom.y,
-                walkFontSize,
-                glyph.length > 1 ? MATRIX_WALK_MAX_TEXT_WIDTH_RATIO : 0.72,
+                textLayout.fontSizePx,
+                textLayout.widthPx / textLayout.fontSizePx,
               )
             ) {
               continue;
             }
-            context.font = resolveMatrixWalkFont(particle.size, projectedFrom.scale);
+            context.font = resolveMatrixWalkFontFromSize(textLayout.fontSizePx);
             context.globalAlpha =
               (trailIndex === 0
                 ? normalizedOpacity
                 : normalizedOpacity * (1 - trailIndex / 8) * 0.7) * lifecycleOpacity;
-            context.fillText(
-              glyph,
-              projectedFrom.x,
-              projectedFrom.y,
-              Math.max(
-                MIN_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE,
-                walkFontSize * MATRIX_WALK_MAX_TEXT_WIDTH_RATIO,
-              ),
-            );
+            context.fillText(glyph, projectedFrom.x, projectedFrom.y);
           }
         }
       }

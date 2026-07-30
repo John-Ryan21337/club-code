@@ -335,6 +335,39 @@ describe("Matrix WebGL2 renderer", () => {
     expect(uploadedInstances[2]).toBeLessThan(148);
   });
 
+  it("renders an unconstrained Walk label at its natural atlas aspect ratio", () => {
+    const canvas = createCanvas();
+    const gl = createWebGl2Context();
+    const label = "very-long-file-name.ts";
+    const selection = createMatrixWebGl2Renderer(canvas as unknown as HTMLCanvasElement, [label], {
+      acquireContext: () => gl,
+      createCanvas: createAtlasCanvas,
+    });
+    expect(selection.kind).toBe("webgl2");
+    if (selection.kind !== "webgl2") return;
+
+    selection.renderer.render(
+      frame([
+        {
+          glyph: label,
+          x: 200,
+          y: 100,
+          fontSizePx: 18,
+          scale: 1,
+          opacity: 1,
+          color: green,
+        },
+      ]),
+    );
+
+    const uploadedInstances = gl.bufferSubData.mock.calls[0]?.[2] as Float32Array;
+    const renderedWidth = uploadedInstances[2]!;
+    const renderedHeight = uploadedInstances[3]!;
+    expect(renderedWidth).toBeGreaterThan(180);
+    expect(renderedHeight).toBe(21);
+    expect(renderedWidth / renderedHeight).toBeGreaterThan(8);
+  });
+
   it("prevents default context loss and rebuilds GPU resources after restoration", () => {
     const canvas = createCanvas();
     const firstContext = createWebGl2Context();

@@ -12,6 +12,7 @@ import {
   drawAtmosphereScene,
   resolveAtmosphereProjectedPointInPlace,
   resolveAtmosphereRenderOpacity,
+  resolveMatrixWalkTextLayout,
   advanceAtmosphereSceneInPlace,
   shouldAnimateAtmosphere,
   shouldShowAtmosphere,
@@ -110,6 +111,47 @@ function createContextRecorder() {
 }
 
 describe("atmosphere motion projection", () => {
+  it("fits long Walk labels uniformly instead of compressing their width", () => {
+    const longLabel = resolveMatrixWalkTextLayout("very-long-file-name.ts", 144, 400);
+    const singleGlyph = resolveMatrixWalkTextLayout("8", 144, 400);
+
+    expect(longLabel.fontSizePx).toBeLessThan(144);
+    expect(longLabel.widthPx).toBeLessThanOrEqual(360);
+    expect(longLabel.widthPx / longLabel.fontSizePx).toBeGreaterThan(10);
+    expect(singleGlyph.fontSizePx).toBe(144);
+    expect(singleGlyph.widthPx / singleGlyph.fontSizePx).toBeCloseTo(0.72);
+  });
+
+  it.each(["walk-forward", "walk-reverse"] as const)(
+    "draws an unconstrained proportional work label in %s",
+    (motionMode) => {
+      const label = "very-long-file-name.ts";
+      const particle = createParticle({
+        x: 200,
+        y: 120,
+        matrixLifecycleProgress: 0.5,
+        matrixWorkToken: label,
+      });
+      const recorder = createContextRecorder();
+
+      drawAtmosphereScene(
+        recorder.context,
+        createScene("matrix", particle),
+        "#00ff00",
+        1,
+        undefined,
+        motionMode,
+        72,
+        72,
+      );
+
+      const labelIndex = recorder.texts.findIndex(([text]) => text === label);
+      expect(labelIndex).toBeGreaterThanOrEqual(0);
+      expect(recorder.texts[labelIndex]?.[3]).toBeUndefined();
+      expect(Number.parseFloat(recorder.fonts[labelIndex]!)).toBeLessThan(72);
+    },
+  );
+
   it("keeps Flat byte-for-byte geometric semantics for every effect kind", () => {
     for (const kind of ["snow", "rain", "matrix"] as const) {
       const particle = createParticle();
