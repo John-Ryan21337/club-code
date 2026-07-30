@@ -6,7 +6,7 @@ import {
   Trash2Icon,
   UserRoundCogIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useClientSettingsHydrated, useSettings, useUpdateSettings } from "../../hooks/useSettings";
 import { useTheme } from "../../hooks/useTheme";
@@ -65,6 +65,7 @@ export function SettingsProfiles() {
   const [nameDraft, setNameDraft] = useState(activeProfile?.name ?? "");
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<ProfileNotice | null>(null);
+  const operationInFlightRef = useRef(false);
 
   const currentPayload = useMemo(
     () => captureSettingsProfilePayload(settings, theme),
@@ -126,7 +127,8 @@ export function SettingsProfiles() {
   }, [activeProfile, nameDraft, reportError]);
 
   const handleDelete = useCallback(async () => {
-    if (!activeProfile || busy) return;
+    if (!activeProfile || operationInFlightRef.current) return;
+    operationInFlightRef.current = true;
     setBusy(true);
     try {
       const confirmed = await ensureLocalApi().dialogs.confirm(
@@ -151,13 +153,18 @@ export function SettingsProfiles() {
     } catch (error) {
       reportError(error);
     } finally {
+      operationInFlightRef.current = false;
       setBusy(false);
     }
-  }, [activeProfile, busy, reportError]);
+  }, [activeProfile, reportError]);
 
   const handleSwitch = useCallback(
     async (profileId: string, reloadActive = false) => {
-      if (busy || !settingsHydrated || (!reloadActive && profileId === library.activeProfileId)) {
+      if (
+        operationInFlightRef.current ||
+        !settingsHydrated ||
+        (!reloadActive && profileId === library.activeProfileId)
+      ) {
         return;
       }
       const profile = settingsProfileLibraryStore.resolve(profileId);
@@ -165,21 +172,23 @@ export function SettingsProfiles() {
         reportError(new SettingsProfileError("That settings profile no longer exists."));
         return;
       }
+      operationInFlightRef.current = true;
       setBusy(true);
       setNotice(null);
       const previousTheme = theme;
       let themeWriteAttempted = false;
       try {
-        // Apply the synchronous local theme first, then the async client patch.
-        // The settings writer rolls back its own optimistic patch on rejection;
-        // if it rejects, restore the prior theme before reporting the failure.
+        // Apply the synchronous local theme first, then the confirmed client patch.
+        // The confirmed writer compensates a committed shared patch if the
+        // renderer-local persistence stage rejects. Restore the prior theme
+        // before reporting any rejected profile load.
         if (profile.theme !== previousTheme) {
           themeWriteAttempted = true;
           setTheme(profile.theme);
         }
         // Profile payloads contain client preferences only. Use the confirmed
-        // writer so a rejected shared write cannot race ahead with a
-        // renderer-local preference and leave a partially loaded profile.
+        // writer so either stage rejects visibly and a committed shared stage
+        // is compensated when renderer-local persistence fails.
         await updateClientSettingsConfirmed(profile.clientSettings);
 
         const latestProfile = settingsProfileLibraryStore.resolve(profile.id);
@@ -239,11 +248,11 @@ export function SettingsProfiles() {
           );
         }
       } finally {
+        operationInFlightRef.current = false;
         setBusy(false);
       }
     },
     [
-      busy,
       library.activeProfileId,
       reportError,
       setTheme,

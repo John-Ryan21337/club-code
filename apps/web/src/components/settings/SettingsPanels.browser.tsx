@@ -1246,6 +1246,96 @@ describe("settings panels", () => {
     expect(settingsProfileLibraryStore.getSnapshot().activeProfileId).toBe("profile:desktop");
   });
 
+  it("restores shared preferences when renderer-local profile persistence fails", async () => {
+    const desktopBridge = createDesktopBridgeStub();
+    window.desktopBridge = desktopBridge;
+    const { updateClientSettings } = installClientSettingsNativeApi(desktopBridge);
+    setServerConfigSnapshot(createBaseServerConfig());
+
+    mounted = await renderWithTestRouter(
+      <AppAtomRegistryProvider>
+        <AppearanceSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    const nameInput = page.getByLabelText("Settings profile name");
+    await nameInput.fill("Mobile");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await page.getByLabelText("Keep animations running in background").click();
+    await page.getByLabelText("Theme preference").click();
+    await page.getByText("Light", { exact: true }).click();
+    await nameInput.fill("Desktop");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+
+    updateClientSettings.mockClear();
+    const localSettingsWrite = vi.mocked(desktopBridge.setClientSettings);
+    localSettingsWrite.mockClear();
+    localSettingsWrite.mockRejectedValueOnce(new Error("local profile write failed"));
+
+    await page.getByRole("combobox", { name: "Active settings profile" }).click();
+    await page.getByRole("option", { name: "Mobile" }).click();
+
+    await expect
+      .element(page.getByText("local profile write failed", { exact: true }))
+      .toBeInTheDocument();
+    expect(updateClientSettings).toHaveBeenCalledTimes(2);
+    expect(updateClientSettings.mock.calls[0]?.[0]).toMatchObject({
+      continueBackgroundAnimations: false,
+    });
+    expect(updateClientSettings.mock.calls[1]?.[0]).toMatchObject({
+      continueBackgroundAnimations: true,
+    });
+    expect(localSettingsWrite).toHaveBeenCalledOnce();
+    await expect.element(page.getByLabelText("Theme preference")).toHaveTextContent("Light");
+    await expect
+      .element(page.getByLabelText("Keep animations running in background"))
+      .toBeChecked();
+    expect(getServerConfig()?.clientSettings.continueBackgroundAnimations).toBe(true);
+    expect(settingsProfileLibraryStore.getSnapshot().activeProfileId).toBe("profile:desktop");
+  });
+
+  it("reports when a renderer-local failure cannot restore the committed shared profile patch", async () => {
+    const desktopBridge = createDesktopBridgeStub();
+    window.desktopBridge = desktopBridge;
+    const { updateClientSettings } = installClientSettingsNativeApi(desktopBridge);
+    setServerConfigSnapshot(createBaseServerConfig());
+
+    mounted = await renderWithTestRouter(
+      <AppAtomRegistryProvider>
+        <AppearanceSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    const nameInput = page.getByLabelText("Settings profile name");
+    await nameInput.fill("Mobile");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await page.getByLabelText("Keep animations running in background").click();
+    await nameInput.fill("Desktop");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+
+    updateClientSettings.mockClear();
+    updateClientSettings
+      .mockResolvedValueOnce(DEFAULT_CLIENT_SETTINGS)
+      .mockRejectedValueOnce(new Error("profile rollback unavailable"));
+    vi.mocked(desktopBridge.setClientSettings).mockRejectedValueOnce(
+      new Error("local profile write failed"),
+    );
+
+    await page.getByRole("combobox", { name: "Active settings profile" }).click();
+    await page.getByRole("option", { name: "Mobile" }).click();
+
+    await expect
+      .element(
+        page.getByText(
+          "local profile write failed The prior shared settings could not be restored: profile rollback unavailable",
+          { exact: true },
+        ),
+      )
+      .toBeInTheDocument();
+    expect(updateClientSettings).toHaveBeenCalledTimes(2);
+    expect(settingsProfileLibraryStore.getSnapshot().activeProfileId).toBe("profile:desktop");
+  });
+
   it("refreshes the visible profile library after another window changes local storage", async () => {
     setServerConfigSnapshot(createBaseServerConfig());
     mounted = await renderWithTestRouter(

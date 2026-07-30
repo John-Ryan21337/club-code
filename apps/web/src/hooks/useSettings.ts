@@ -396,10 +396,16 @@ export function useUpdateSettings() {
         await hydrateClientSettings();
       }
       const currentServerConfig = getServerConfig();
+      const sharedPatchKeys = Object.keys(sharedPatch) as Array<keyof ClientSettings>;
+      const previousSharedPatch = Object.fromEntries(
+        sharedPatchKeys.map((key) => [key, currentServerConfig?.clientSettings[key]]),
+      ) as ClientSettingsPatch;
+      let sharedWriteCommitted = false;
       try {
         if (currentServerConfig) {
           if (Object.keys(sharedPatch).length > 0) {
             await ensureLocalApi().server.updateClientSettings(sharedPatch);
+            sharedWriteCommitted = true;
           }
           if (Object.keys(localPatch).length > 0) {
             const nextLocal = applyClientSettingsPatch(getClientSettingsSnapshot(), localPatch);
@@ -417,7 +423,30 @@ export function useUpdateSettings() {
         await ensureLocalApi().persistence.setClientSettings(next);
         replaceClientSettingsSnapshot(next);
       } catch (error) {
+        let rollbackError: unknown = null;
+        if (currentServerConfig && sharedWriteCommitted) {
+          try {
+            await ensureLocalApi().server.updateClientSettings(previousSharedPatch);
+            const latest = getServerConfig()?.clientSettings ?? currentServerConfig.clientSettings;
+            applyClientSettingsUpdated(applyClientSettingsPatch(latest, previousSharedPatch));
+          } catch (cause) {
+            rollbackError = cause;
+          }
+        }
         reportSettingsWriteFailure("client", error);
+        if (rollbackError !== null) {
+          reportSettingsWriteFailure("client", rollbackError);
+          const writeMessage =
+            error instanceof Error ? error.message : "The client settings write failed.";
+          const rollbackMessage =
+            rollbackError instanceof Error
+              ? rollbackError.message
+              : "The prior shared settings could not be restored.";
+          throw new Error(
+            `${writeMessage} The prior shared settings could not be restored: ${rollbackMessage}`,
+            { cause: error },
+          );
+        }
         throw error;
       }
     });
