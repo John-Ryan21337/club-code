@@ -7,6 +7,8 @@ export const COLLABORATION_PROTOCOL_VERSION = 1 as const;
 export const COLLABORATION_PROJECT_MEMBER_LIMIT = 128;
 export const COLLABORATION_MEMBERSHIP_EPOCH_MAX = 2_147_483_647;
 export const COLLABORATION_EVENT_SEQUENCE_MAX = Number.MAX_SAFE_INTEGER;
+export const COLLABORATION_EVENT_REPLAY_DEFAULT_LIMIT = 100;
+export const COLLABORATION_EVENT_REPLAY_MAX_LIMIT = 500;
 export const COLLABORATION_EVENT_TYPE_MAX_CHARS = 128;
 export const COLLABORATION_EVENT_SIGNATURE_MAX_CHARS = 4_096;
 export const COLLABORATION_EVENT_PAYLOAD_MAX_UTF8_BYTES = 65_536;
@@ -245,6 +247,23 @@ export const CollaborationEventSequence = PositiveInt.check(
 );
 export type CollaborationEventSequence = typeof CollaborationEventSequence.Type;
 
+export const CollaborationEventCursor = NonNegativeInt.check(
+  Schema.isLessThanOrEqualTo(COLLABORATION_EVENT_SEQUENCE_MAX),
+);
+export type CollaborationEventCursor = typeof CollaborationEventCursor.Type;
+
+export const CollaborationEventReplayLimit = PositiveInt.check(
+  Schema.isLessThanOrEqualTo(COLLABORATION_EVENT_REPLAY_MAX_LIMIT),
+);
+export type CollaborationEventReplayLimit = typeof CollaborationEventReplayLimit.Type;
+
+export const CollaborationEventReplayRequest = Schema.Struct({
+  sharedProjectId: SharedProjectId,
+  afterSequence: CollaborationEventCursor,
+  limit: Schema.optional(CollaborationEventReplayLimit),
+});
+export type CollaborationEventReplayRequest = typeof CollaborationEventReplayRequest.Type;
+
 const CollaborationCommandId = CollaborationIdentifier.pipe(Schema.brand("CommandId"));
 const CollaborationEventId = CollaborationIdentifier.pipe(Schema.brand("EventId"));
 const CollaborationEventServiceId = CollaborationIdentifier;
@@ -392,3 +411,13 @@ export const CollaborationEventEnvelope = Schema.Struct({
   receivedAt: CollaborationIsoDateTime,
 });
 export type CollaborationEventEnvelope = typeof CollaborationEventEnvelope.Type;
+
+export const CollaborationEventReplayPage = Schema.Struct({
+  sharedProjectId: SharedProjectId,
+  events: Schema.Array(CollaborationEventEnvelope).check(
+    Schema.isMaxLength(COLLABORATION_EVENT_REPLAY_MAX_LIMIT),
+  ),
+  nextCursor: CollaborationEventCursor,
+  hasMore: Schema.Boolean,
+});
+export type CollaborationEventReplayPage = typeof CollaborationEventReplayPage.Type;

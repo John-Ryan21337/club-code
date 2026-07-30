@@ -76,6 +76,7 @@ import Migration0061 from "./Migrations/061_UsageStatsTokenBreakdown.ts";
 import Migration0062 from "./Migrations/062_UsageStatsTokenSavings.ts";
 import Migration0064 from "./Migrations/064_ProviderPacingPendingLaunchCompatibility.ts";
 import Migration0065 from "./Migrations/065_ForkLineageCompatibility.ts";
+import Migration0070 from "./Migrations/070_CollaborationEvents.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -160,6 +161,7 @@ export const migrationEntries = [
   // Current-dev migration 64 did not restore the active branch's alternate
   // migration 62. Keep a later convergence boundary for every shipped lineage.
   [65, "ForkLineageCompatibility", Migration0065],
+  [70, "CollaborationEvents", Migration0070],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>
