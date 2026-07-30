@@ -1,6 +1,9 @@
 import type {
   CollaborationEventActor,
   CollaborationEventProposal,
+  CollaborationDeviceKeyId,
+  CollaborationMembershipEpoch,
+  CollaborationPhaseOneAuthoredEventType,
   CollaborationPermission,
   CollaborationPrincipal,
   DeviceId,
@@ -9,15 +12,23 @@ import type {
 } from "@cafecode/contracts";
 import {
   COLLABORATION_ED25519_SIGNATURE_BYTES,
+  COLLABORATION_EVENT_MAX_FUTURE_SKEW_MILLIS,
+  COLLABORATION_EVENT_MAX_OFFLINE_AGE_MILLIS,
   COLLABORATION_EVENT_PAYLOAD_MAX_UTF8_BYTES,
+  COLLABORATION_IDENTIFIER_MAX_CHARS,
   COLLABORATION_PHASE_ONE_EVENT_PERMISSIONS,
+  CollaborationEventProposal as CollaborationEventProposalSchema,
+  CollaborationOperatorChatMessagePayload,
+  CollaborationSharedTranscriptPromptPayload,
 } from "@cafecode/contracts";
 import { createHash, createPublicKey, verify } from "node:crypto";
 import { Buffer } from "node:buffer";
 
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 
 import {
   authorizeCollaborationPermission,
@@ -27,8 +38,28 @@ import {
 } from "./CollaborationAuthorization.ts";
 
 const COLLABORATION_EVENT_PROPOSAL_SIGNATURE_DOMAIN = "cafecode-collaboration-event-proposal-v1";
+const COLLABORATION_ED25519_SPKI_BYTES = 44;
+const decodeEventProposal = Schema.decodeUnknownEffect(CollaborationEventProposalSchema);
+const decodeOperatorChatMessagePayload = Schema.decodeUnknownEffect(
+  CollaborationOperatorChatMessagePayload,
+);
+const decodeSharedTranscriptPromptPayload = Schema.decodeUnknownEffect(
+  CollaborationSharedTranscriptPromptPayload,
+);
+const COLLABORATION_PHASE_ONE_EVENT_PAYLOAD_DECODERS: Readonly<
+  Record<
+    CollaborationPhaseOneAuthoredEventType,
+    (payload: unknown) => Effect.Effect<unknown, Schema.SchemaError>
+  >
+> = {
+  "operator-chat.message": (payload: unknown) =>
+    decodeOperatorChatMessagePayload(payload, { onExcessProperty: "error" }),
+  "shared-transcript.prompt": (payload: unknown) =>
+    decodeSharedTranscriptPromptPayload(payload, { onExcessProperty: "error" }),
+};
 
 export type CollaborationEventAdmissionFailureReason =
+  | "proposal-invalid"
   | "project-mismatch"
   | "actor-mismatch"
   | "unsupported-actor"
@@ -36,12 +67,22 @@ export type CollaborationEventAdmissionFailureReason =
   | "membership-epoch-mismatch"
   | "payload-too-large"
   | "payload-invalid-json"
+  | "payload-invalid-for-event-type"
+  | "payload-not-canonical"
   | "payload-hash-mismatch"
   | "occurred-at-invalid"
+  | "occurred-at-in-future"
+  | "occurred-at-too-old"
   | "device-key-unavailable"
   | "device-key-not-found"
+  | "device-key-mismatch"
   | "signature-invalid";
 
+/**
+ * Detailed reasons are server-internal audit metadata. A transport must map
+ * every admission denial to one generic response so project, membership, and
+ * device-key state cannot be enumerated through response bodies.
+ */
 export class CollaborationEventAdmissionError extends Data.TaggedError(
   "CollaborationEventAdmissionError",
 )<{
@@ -52,7 +93,12 @@ export interface CollaborationDevicePublicKeyLookup {
   readonly sharedProjectId: SharedProjectId;
   readonly userId: UserId;
   readonly deviceId: DeviceId;
-  readonly membershipEpoch: number;
+  readonly deviceKeyId: CollaborationDeviceKeyId;
+  readonly membershipEpoch: CollaborationMembershipEpoch;
+}
+
+export interface CollaborationActiveDevicePublicKey extends CollaborationDevicePublicKeyLookup {
+  readonly publicKeySpkiDer: Uint8Array;
 }
 
 /**
@@ -64,7 +110,7 @@ export interface CollaborationDevicePublicKeyLookup {
 export interface CollaborationDeviceKeyAuthorityShape {
   readonly getActiveEd25519PublicKey: (
     lookup: CollaborationDevicePublicKeyLookup,
-  ) => Effect.Effect<Uint8Array | null, unknown>;
+  ) => Effect.Effect<CollaborationActiveDevicePublicKey | null, unknown>;
 }
 
 export class CollaborationDeviceKeyAuthority extends Context.Service<
@@ -75,7 +121,7 @@ export class CollaborationDeviceKeyAuthority extends Context.Service<
 export interface CollaborationEventAdmissionInput {
   readonly principal: CollaborationPrincipal;
   readonly targetProjectId: SharedProjectId;
-  readonly proposal: CollaborationEventProposal;
+  readonly proposal: unknown;
 }
 
 export interface CollaborationAdmittedEventProposal {
@@ -122,6 +168,7 @@ export function collaborationEventProposalSignatureBytes(
       proposal.commandId,
       proposal.membershipEpoch,
       ...actorSignatureFields(proposal.actor),
+      proposal.deviceKeyId,
       proposal.type,
       proposal.payloadSha256,
       proposal.causationEventId,
@@ -137,18 +184,89 @@ function verifyEd25519Signature(
   signatureBytes: Uint8Array,
   signedBytes: Uint8Array,
 ): boolean {
+  if (
+    publicKeyDer.byteLength !== COLLABORATION_ED25519_SPKI_BYTES ||
+    signatureBytes.byteLength !== COLLABORATION_ED25519_SIGNATURE_BYTES
+  ) {
+    return false;
+  }
   try {
     const publicKey = createPublicKey({
       key: Buffer.from(publicKeyDer),
       format: "der",
       type: "spki",
     });
-    return publicKey.asymmetricKeyType === "ed25519"
-      ? verify(null, signedBytes, publicKey, signatureBytes)
-      : false;
+    if (publicKey.asymmetricKeyType !== "ed25519") {
+      return false;
+    }
+    const canonicalDer = publicKey.export({ format: "der", type: "spki" });
+    if (
+      canonicalDer.byteLength !== publicKeyDer.byteLength ||
+      !canonicalDer.equals(Buffer.from(publicKeyDer))
+    ) {
+      return false;
+    }
+    return verify(null, signedBytes, publicKey, signatureBytes);
   } catch {
     return false;
   }
+}
+
+function isCanonicalUntrustedIdentifier(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= COLLABORATION_IDENTIFIER_MAX_CHARS &&
+    value === value.trim()
+  );
+}
+
+function hasCanonicalProposalIdentifiers(value: unknown): boolean {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const proposal = value as Record<string, unknown>;
+  const actor = proposal.actor;
+  if (typeof actor !== "object" || actor === null || Array.isArray(actor)) {
+    return false;
+  }
+  const actorRecord = actor as Record<string, unknown>;
+  const actorIdentifiersAreCanonical =
+    actorRecord.kind === "operator"
+      ? isCanonicalUntrustedIdentifier(actorRecord.userId) &&
+        isCanonicalUntrustedIdentifier(actorRecord.deviceId)
+      : actorRecord.kind === "agent"
+        ? isCanonicalUntrustedIdentifier(actorRecord.userId) &&
+          isCanonicalUntrustedIdentifier(actorRecord.deviceId) &&
+          isCanonicalUntrustedIdentifier(actorRecord.agentId)
+        : actorRecord.kind === "system"
+          ? isCanonicalUntrustedIdentifier(actorRecord.serviceId)
+          : false;
+  return (
+    isCanonicalUntrustedIdentifier(proposal.sharedProjectId) &&
+    isCanonicalUntrustedIdentifier(proposal.eventId) &&
+    isCanonicalUntrustedIdentifier(proposal.commandId) &&
+    isCanonicalUntrustedIdentifier(proposal.deviceKeyId) &&
+    (proposal.causationEventId === null ||
+      isCanonicalUntrustedIdentifier(proposal.causationEventId)) &&
+    (proposal.correlationId === null || isCanonicalUntrustedIdentifier(proposal.correlationId)) &&
+    actorIdentifiersAreCanonical
+  );
+}
+
+function decodeEventPayload(
+  eventType: CollaborationEventProposal["type"],
+  payload: unknown,
+): Effect.Effect<unknown, CollaborationEventAdmissionError> {
+  const decode = COLLABORATION_PHASE_ONE_EVENT_PAYLOAD_DECODERS[eventType];
+  return decode(payload).pipe(
+    Effect.mapError(
+      () =>
+        new CollaborationEventAdmissionError({
+          reason: "payload-invalid-for-event-type",
+        }),
+    ),
+  );
 }
 
 /**
@@ -165,7 +283,15 @@ export function admitCollaborationEventProposal(
   CollaborationDeviceKeyAuthority | CollaborationMembershipAuthority
 > {
   return Effect.gen(function* () {
-    const { principal, proposal, targetProjectId } = input;
+    const { principal, targetProjectId } = input;
+    if (!hasCanonicalProposalIdentifiers(input.proposal)) {
+      return yield* deny("proposal-invalid");
+    }
+    const proposal = yield* decodeEventProposal(input.proposal, {
+      onExcessProperty: "error",
+    }).pipe(
+      Effect.mapError(() => new CollaborationEventAdmissionError({ reason: "proposal-invalid" })),
+    );
 
     if (
       proposal.sharedProjectId !== targetProjectId ||
@@ -208,16 +334,20 @@ export function admitCollaborationEventProposal(
       return yield* deny("payload-too-large");
     }
 
-    let payload: unknown;
-    try {
-      payload = JSON.parse(proposal.payloadJson);
-    } catch {
-      return yield* deny("payload-invalid-json");
-    }
-
     const payloadSha256 = createHash("sha256").update(payloadBytes).digest("hex");
     if (payloadSha256 !== proposal.payloadSha256) {
       return yield* deny("payload-hash-mismatch");
+    }
+
+    let parsedPayload: unknown;
+    try {
+      parsedPayload = JSON.parse(proposal.payloadJson);
+    } catch {
+      return yield* deny("payload-invalid-json");
+    }
+    const payload = yield* decodeEventPayload(proposal.type, parsedPayload);
+    if (JSON.stringify(payload) !== proposal.payloadJson) {
+      return yield* deny("payload-not-canonical");
     }
 
     const occurredAtEpochMillis = Date.parse(proposal.occurredAt);
@@ -227,18 +357,37 @@ export function admitCollaborationEventProposal(
     ) {
       return yield* deny("occurred-at-invalid");
     }
+    const nowEpochMillis = DateTime.toEpochMillis(yield* DateTime.now);
+    if (occurredAtEpochMillis > nowEpochMillis + COLLABORATION_EVENT_MAX_FUTURE_SKEW_MILLIS) {
+      return yield* deny("occurred-at-in-future");
+    }
+    if (occurredAtEpochMillis < nowEpochMillis - COLLABORATION_EVENT_MAX_OFFLINE_AGE_MILLIS) {
+      return yield* deny("occurred-at-too-old");
+    }
 
     const deviceKeyAuthority = yield* CollaborationDeviceKeyAuthority;
-    const publicKeyDer = yield* deviceKeyAuthority
+    const activeDeviceKey = yield* deviceKeyAuthority
       .getActiveEd25519PublicKey({
         sharedProjectId: targetProjectId,
         userId: principal.userId,
         deviceId: principal.deviceId,
+        deviceKeyId: proposal.deviceKeyId,
         membershipEpoch: principal.membershipEpoch,
       })
       .pipe(Effect.catch(() => deny("device-key-unavailable")));
-    if (publicKeyDer === null) {
+    if (activeDeviceKey === null) {
       return yield* deny("device-key-not-found");
+    }
+    if (
+      typeof activeDeviceKey !== "object" ||
+      activeDeviceKey.sharedProjectId !== targetProjectId ||
+      activeDeviceKey.userId !== principal.userId ||
+      activeDeviceKey.deviceId !== principal.deviceId ||
+      activeDeviceKey.deviceKeyId !== proposal.deviceKeyId ||
+      activeDeviceKey.membershipEpoch !== principal.membershipEpoch ||
+      !(activeDeviceKey.publicKeySpkiDer instanceof Uint8Array)
+    ) {
+      return yield* deny("device-key-mismatch");
     }
 
     let signatureBytes: Uint8Array;
@@ -251,7 +400,7 @@ export function admitCollaborationEventProposal(
       signatureBytes.byteLength !== COLLABORATION_ED25519_SIGNATURE_BYTES ||
       Buffer.from(signatureBytes).toString("base64url") !== proposal.authorSignature ||
       !verifyEd25519Signature(
-        publicKeyDer,
+        activeDeviceKey.publicKeySpkiDer,
         signatureBytes,
         collaborationEventProposalSignatureBytes(proposal),
       )

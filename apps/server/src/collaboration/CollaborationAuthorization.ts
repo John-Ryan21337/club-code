@@ -2,17 +2,19 @@ import type {
   CollaborationPermission,
   CollaborationPrincipal,
   CollaborationProjectMember,
-  CollaborationProjectMembershipSnapshot,
   SharedProjectId,
 } from "@cafecode/contracts";
 import {
   COLLABORATION_ACCESS_SESSION_MAX_LIFETIME_MILLIS,
+  CollaborationProjectMembershipSnapshot,
   collaborationRoleAllowsPermission,
+  type CollaborationProjectMembershipSnapshot as CollaborationProjectMembershipSnapshotType,
 } from "@cafecode/contracts";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 
 export type CollaborationAuthorizationFailureReason =
   | "project-mismatch"
@@ -63,13 +65,15 @@ export interface CollaborationAuthorizationInput {
 export interface CollaborationMembershipAuthorityShape {
   readonly getCurrent: (
     sharedProjectId: SharedProjectId,
-  ) => Effect.Effect<CollaborationProjectMembershipSnapshot, unknown>;
+  ) => Effect.Effect<CollaborationProjectMembershipSnapshotType, unknown>;
 }
 
 export class CollaborationMembershipAuthority extends Context.Service<
   CollaborationMembershipAuthority,
   CollaborationMembershipAuthorityShape
 >()("cafecode/collaboration/CollaborationMembershipAuthority") {}
+
+const decodeMembershipSnapshot = Schema.decodeUnknownEffect(CollaborationProjectMembershipSnapshot);
 
 function deny(
   reason: CollaborationAuthorizationFailureReason,
@@ -121,9 +125,12 @@ export function authorizeCollaborationPermission(
     }
 
     const membershipAuthority = yield* CollaborationMembershipAuthority;
-    const membership = yield* membershipAuthority
+    const rawMembership = yield* membershipAuthority
       .getCurrent(targetProjectId)
       .pipe(Effect.catch(() => deny("membership-unavailable")));
+    const membership = yield* decodeMembershipSnapshot(rawMembership, {
+      onExcessProperty: "error",
+    }).pipe(Effect.catch(() => deny("membership-unavailable")));
 
     // A resolver returning another project's snapshot is a server-side
     // integrity failure. Treat it exactly like any other project mismatch and

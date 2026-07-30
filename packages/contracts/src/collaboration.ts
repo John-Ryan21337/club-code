@@ -1,14 +1,7 @@
 import * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
 
-import {
-  CommandId,
-  EventId,
-  IsoDateTime,
-  NonNegativeInt,
-  PositiveInt,
-  TrimmedNonEmptyString,
-} from "./baseSchemas.ts";
+import { NonNegativeInt, PositiveInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
 
 export const COLLABORATION_PROTOCOL_VERSION = 1 as const;
 export const COLLABORATION_PROJECT_MEMBER_LIMIT = 128;
@@ -17,24 +10,47 @@ export const COLLABORATION_EVENT_SEQUENCE_MAX = Number.MAX_SAFE_INTEGER;
 export const COLLABORATION_EVENT_TYPE_MAX_CHARS = 128;
 export const COLLABORATION_EVENT_SIGNATURE_MAX_CHARS = 4_096;
 export const COLLABORATION_EVENT_PAYLOAD_MAX_UTF8_BYTES = 65_536;
+export const COLLABORATION_EVENT_TEXT_MAX_CHARS = 32_768;
+export const COLLABORATION_EVENT_MAX_FUTURE_SKEW_MILLIS = 5 * 60_000;
+export const COLLABORATION_EVENT_MAX_OFFLINE_AGE_MILLIS = 30 * 24 * 60 * 60_000;
 export const COLLABORATION_ED25519_SIGNATURE_BYTES = 64;
 export const COLLABORATION_ED25519_SIGNATURE_BASE64URL_CHARS = 86;
+export const COLLABORATION_IDENTIFIER_MAX_CHARS = 128;
 export const COLLABORATION_SESSION_ID_MAX_CHARS = 128;
 export const COLLABORATION_ACCESS_SESSION_MAX_LIFETIME_MILLIS = 60 * 60 * 1_000;
+export const COLLABORATION_ISO_DATE_TIME_CHARS = 24;
 
-export const SharedProjectId = TrimmedNonEmptyString.pipe(Schema.brand("SharedProjectId"));
+const CollaborationIdentifier = Schema.String.check(
+  Schema.isNonEmpty(),
+  Schema.isMaxLength(COLLABORATION_IDENTIFIER_MAX_CHARS),
+  Schema.makeFilter((value) =>
+    value === value.trim() ? undefined : "collaboration identifier must not have outer whitespace",
+  ),
+);
+const CollaborationIsoDateTime = Schema.String.check(
+  Schema.isMinLength(COLLABORATION_ISO_DATE_TIME_CHARS),
+  Schema.isMaxLength(COLLABORATION_ISO_DATE_TIME_CHARS),
+  Schema.isPattern(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/),
+);
+
+export const SharedProjectId = CollaborationIdentifier.pipe(Schema.brand("SharedProjectId"));
 export type SharedProjectId = typeof SharedProjectId.Type;
 
-export const UserId = TrimmedNonEmptyString.pipe(Schema.brand("UserId"));
+export const UserId = CollaborationIdentifier.pipe(Schema.brand("UserId"));
 export type UserId = typeof UserId.Type;
 
-export const DeviceId = TrimmedNonEmptyString.pipe(Schema.brand("DeviceId"));
+export const DeviceId = CollaborationIdentifier.pipe(Schema.brand("DeviceId"));
 export type DeviceId = typeof DeviceId.Type;
 
-export const CollaborationAgentId = TrimmedNonEmptyString.pipe(
+export const CollaborationAgentId = CollaborationIdentifier.pipe(
   Schema.brand("CollaborationAgentId"),
 );
 export type CollaborationAgentId = typeof CollaborationAgentId.Type;
+
+export const CollaborationDeviceKeyId = CollaborationIdentifier.pipe(
+  Schema.brand("CollaborationDeviceKeyId"),
+);
+export type CollaborationDeviceKeyId = typeof CollaborationDeviceKeyId.Type;
 
 /**
  * Project roles are deliberately separate from server-wide auth roles.
@@ -143,7 +159,7 @@ export const CollaborationMembershipEpoch = NonNegativeInt.check(
 );
 export type CollaborationMembershipEpoch = typeof CollaborationMembershipEpoch.Type;
 
-export const CollaborationSessionId = TrimmedNonEmptyString.check(
+export const CollaborationSessionId = CollaborationIdentifier.check(
   Schema.isMaxLength(COLLABORATION_SESSION_ID_MAX_CHARS),
 ).pipe(Schema.brand("CollaborationSessionId"));
 export type CollaborationSessionId = typeof CollaborationSessionId.Type;
@@ -189,7 +205,7 @@ export const CollaborationProjectMember = Schema.Struct({
   displayName: TrimmedNonEmptyString.check(Schema.isMaxLength(128)),
   role: CollaborationProjectRole,
   permissions: CollaborationPermissions,
-  joinedAt: IsoDateTime,
+  joinedAt: CollaborationIsoDateTime,
 }).check(
   Schema.makeFilter((member) =>
     member.permissions.every((permission) =>
@@ -215,7 +231,7 @@ export const CollaborationProjectMembershipSnapshot = Schema.Struct({
   sharedProjectId: SharedProjectId,
   epoch: CollaborationMembershipEpoch,
   members: CollaborationProjectMembers,
-  updatedAt: IsoDateTime,
+  updatedAt: CollaborationIsoDateTime,
 });
 export type CollaborationProjectMembershipSnapshot =
   typeof CollaborationProjectMembershipSnapshot.Type;
@@ -225,7 +241,9 @@ export const CollaborationEventSequence = PositiveInt.check(
 );
 export type CollaborationEventSequence = typeof CollaborationEventSequence.Type;
 
-const CollaborationEventServiceId = TrimmedNonEmptyString.check(Schema.isMaxLength(128));
+const CollaborationCommandId = CollaborationIdentifier.pipe(Schema.brand("CommandId"));
+const CollaborationEventId = CollaborationIdentifier.pipe(Schema.brand("EventId"));
+const CollaborationEventServiceId = CollaborationIdentifier;
 
 export const CollaborationEventActor = Schema.Union([
   Schema.Struct({
@@ -290,6 +308,31 @@ export const CollaborationEd25519Signature = Schema.String.check(
 );
 export type CollaborationEd25519Signature = typeof CollaborationEd25519Signature.Type;
 
+const CollaborationAuthoredText = Schema.String.check(
+  Schema.isNonEmpty(),
+  Schema.isMaxLength(COLLABORATION_EVENT_TEXT_MAX_CHARS),
+  Schema.makeFilter((value) =>
+    value.trim().length === 0 ? "collaboration event text must not be blank" : undefined,
+  ),
+  Schema.makeFilter((value) =>
+    /[\uD800-\uDFFF]/u.test(value)
+      ? "collaboration event text must contain only Unicode scalar values"
+      : undefined,
+  ),
+);
+
+export const CollaborationOperatorChatMessagePayload = Schema.Struct({
+  body: CollaborationAuthoredText,
+});
+export type CollaborationOperatorChatMessagePayload =
+  typeof CollaborationOperatorChatMessagePayload.Type;
+
+export const CollaborationSharedTranscriptPromptPayload = Schema.Struct({
+  prompt: CollaborationAuthoredText,
+});
+export type CollaborationSharedTranscriptPromptPayload =
+  typeof CollaborationSharedTranscriptPromptPayload.Type;
+
 /**
  * A device-signed proposal is the client-authored input to the coordinator.
  * Sequence, receive time, and previous-event hash are deliberately absent:
@@ -301,10 +344,11 @@ export type CollaborationEd25519Signature = typeof CollaborationEd25519Signature
 export const CollaborationEventProposal = Schema.Struct({
   version: Schema.Literal(COLLABORATION_PROTOCOL_VERSION),
   sharedProjectId: SharedProjectId,
-  eventId: EventId,
-  commandId: CommandId,
+  eventId: CollaborationEventId,
+  commandId: CollaborationCommandId,
   membershipEpoch: CollaborationMembershipEpoch,
   actor: CollaborationEventActor,
+  deviceKeyId: CollaborationDeviceKeyId,
   type: CollaborationPhaseOneAuthoredEventType,
   payloadJson: Schema.String.check(
     Schema.isNonEmpty(),
@@ -312,9 +356,9 @@ export const CollaborationEventProposal = Schema.Struct({
   ),
   payloadSha256: CollaborationSha256,
   authorSignature: CollaborationEd25519Signature,
-  causationEventId: Schema.NullOr(EventId),
-  correlationId: Schema.NullOr(CommandId),
-  occurredAt: IsoDateTime,
+  causationEventId: Schema.NullOr(CollaborationEventId),
+  correlationId: Schema.NullOr(CollaborationCommandId),
+  occurredAt: CollaborationIsoDateTime,
 });
 export type CollaborationEventProposal = typeof CollaborationEventProposal.Type;
 
@@ -329,8 +373,8 @@ export const CollaborationEventEnvelope = Schema.Struct({
   version: Schema.Literal(COLLABORATION_PROTOCOL_VERSION),
   sharedProjectId: SharedProjectId,
   sequence: CollaborationEventSequence,
-  eventId: EventId,
-  commandId: CommandId,
+  eventId: CollaborationEventId,
+  commandId: CollaborationCommandId,
   membershipEpoch: CollaborationMembershipEpoch,
   actor: CollaborationEventActor,
   type: CollaborationEventType,
@@ -338,9 +382,9 @@ export const CollaborationEventEnvelope = Schema.Struct({
   payloadSha256: CollaborationSha256,
   previousEventSha256: Schema.NullOr(CollaborationSha256),
   authorSignature: CollaborationEventSignature,
-  causationEventId: Schema.NullOr(EventId),
-  correlationId: Schema.NullOr(CommandId),
-  occurredAt: IsoDateTime,
-  receivedAt: IsoDateTime,
+  causationEventId: Schema.NullOr(CollaborationEventId),
+  correlationId: Schema.NullOr(CollaborationCommandId),
+  occurredAt: CollaborationIsoDateTime,
+  receivedAt: CollaborationIsoDateTime,
 });
 export type CollaborationEventEnvelope = typeof CollaborationEventEnvelope.Type;

@@ -1,13 +1,18 @@
 import {
   COLLABORATION_ED25519_SIGNATURE_BASE64URL_CHARS,
+  COLLABORATION_EVENT_MAX_FUTURE_SKEW_MILLIS,
+  COLLABORATION_EVENT_MAX_OFFLINE_AGE_MILLIS,
   COLLABORATION_ROLE_PERMISSIONS,
+  CollaborationDeviceKeyId,
   CollaborationEventProposal,
   CollaborationPrincipal,
   CollaborationProjectMembershipSnapshot,
+  DeviceId,
   SharedProjectId,
+  UserId,
 } from "@cafecode/contracts";
 import { it } from "@effect/vitest";
-import { createHash, generateKeyPairSync, sign } from "node:crypto";
+import { createHash, generateKeyPairSync, sign, verify } from "node:crypto";
 
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -16,6 +21,7 @@ import { describe, expect } from "vitest";
 
 import {
   admitCollaborationEventProposal,
+  type CollaborationActiveDevicePublicKey,
   CollaborationDeviceKeyAuthority,
   type CollaborationDeviceKeyAuthorityShape,
   CollaborationEventAdmissionError,
@@ -31,12 +37,18 @@ const decodeMembership = Schema.decodeUnknownSync(CollaborationProjectMembership
 const decodePrincipal = Schema.decodeUnknownSync(CollaborationPrincipal);
 const decodeProjectId = Schema.decodeUnknownSync(SharedProjectId);
 const decodeProposal = Schema.decodeUnknownSync(CollaborationEventProposal);
+const decodeDeviceId = Schema.decodeUnknownSync(DeviceId);
+const decodeDeviceKeyId = Schema.decodeUnknownSync(CollaborationDeviceKeyId);
+const decodeUserId = Schema.decodeUnknownSync(UserId);
 
 const PROJECT_ID = decodeProjectId("shared-project-1");
 const OTHER_PROJECT_ID = decodeProjectId("shared-project-2");
 const NOW_EPOCH_MILLIS = Date.parse("2026-07-30T12:00:00.000Z");
 const { privateKey, publicKey } = generateKeyPairSync("ed25519");
 const PUBLIC_KEY_DER = publicKey.export({ format: "der", type: "spki" });
+const USER_ID = decodeUserId("user-1");
+const DEVICE_ID = decodeDeviceId("device-1");
+const DEVICE_KEY_ID = decodeDeviceKeyId("device-key-1");
 
 function sha256(value: string): string {
   return createHash("sha256").update(Buffer.from(value, "utf8")).digest("hex");
@@ -81,8 +93,16 @@ function principal(overrides: Partial<Parameters<typeof decodePrincipal>[0]> = {
 }
 
 function signedProposal(overrides: Readonly<Record<string, unknown>> = {}) {
+  const eventType =
+    overrides.type === "shared-transcript.prompt"
+      ? "shared-transcript.prompt"
+      : "operator-chat.message";
   const payloadJson =
-    typeof overrides.payloadJson === "string" ? overrides.payloadJson : '{"body":"hello"}';
+    typeof overrides.payloadJson === "string"
+      ? overrides.payloadJson
+      : eventType === "shared-transcript.prompt"
+        ? '{"prompt":"hello"}'
+        : '{"body":"hello"}';
   const draft = decodeProposal({
     version: 1,
     sharedProjectId: PROJECT_ID,
@@ -94,7 +114,8 @@ function signedProposal(overrides: Readonly<Record<string, unknown>> = {}) {
       userId: "user-1",
       deviceId: "device-1",
     },
-    type: "operator-chat.message",
+    deviceKeyId: DEVICE_KEY_ID,
+    type: eventType,
     payloadJson,
     payloadSha256: sha256(payloadJson),
     authorSignature: "A".repeat(COLLABORATION_ED25519_SIGNATURE_BASE64URL_CHARS),
@@ -120,9 +141,23 @@ function membershipAuthority(
   return { getCurrent };
 }
 
+function activeDeviceKey(
+  overrides: Partial<CollaborationActiveDevicePublicKey> = {},
+): CollaborationActiveDevicePublicKey {
+  return {
+    sharedProjectId: PROJECT_ID,
+    userId: USER_ID,
+    deviceId: DEVICE_ID,
+    deviceKeyId: DEVICE_KEY_ID,
+    membershipEpoch: 4,
+    publicKeySpkiDer: PUBLIC_KEY_DER,
+    ...overrides,
+  };
+}
+
 function keyAuthority(
   getActiveEd25519PublicKey: CollaborationDeviceKeyAuthorityShape["getActiveEd25519PublicKey"] = () =>
-    Effect.succeed(PUBLIC_KEY_DER),
+    Effect.succeed(activeDeviceKey()),
 ): CollaborationDeviceKeyAuthorityShape {
   return { getActiveEd25519PublicKey };
 }
@@ -209,7 +244,14 @@ describe("CollaborationEventAdmission", () => {
             }),
             key: keyAuthority(() => {
               keyLookups += 1;
-              return Effect.succeed(PUBLIC_KEY_DER);
+              return Effect.succeed({
+                sharedProjectId: PROJECT_ID,
+                userId: USER_ID,
+                deviceId: DEVICE_ID,
+                deviceKeyId: DEVICE_KEY_ID,
+                membershipEpoch: 4,
+                publicKeySpkiDer: PUBLIC_KEY_DER,
+              });
             }),
           },
         ),
@@ -283,7 +325,14 @@ describe("CollaborationEventAdmission", () => {
           {
             key: keyAuthority(() => {
               keyLookups += 1;
-              return Effect.succeed(PUBLIC_KEY_DER);
+              return Effect.succeed({
+                sharedProjectId: PROJECT_ID,
+                userId: USER_ID,
+                deviceId: DEVICE_ID,
+                deviceKeyId: DEVICE_KEY_ID,
+                membershipEpoch: 4,
+                publicKeySpkiDer: PUBLIC_KEY_DER,
+              });
             }),
           },
         ),
@@ -296,7 +345,9 @@ describe("CollaborationEventAdmission", () => {
 
   it.effect("rejects payloads whose UTF-8 bytes exceed the protocol bound", () =>
     Effect.gen(function* () {
-      const oversizedUtf8 = JSON.stringify({ body: "😀".repeat(20_000) });
+      const oversizedUtf8 = JSON.stringify({
+        body: String.fromCodePoint(0x1f600).repeat(20_000),
+      });
       const reason = yield* denialReason(
         admit({ proposal: signedProposal({ payloadJson: oversizedUtf8 }) }),
       );
@@ -310,7 +361,11 @@ describe("CollaborationEventAdmission", () => {
         yield* denialReason(admit({ proposal: signedProposal({ payloadJson: "{nope" }) })),
       ).toBe("payload-invalid-json");
       expect(
-        yield* denialReason(admit({ proposal: signedProposal({ occurredAt: "not-a-timestamp" }) })),
+        yield* denialReason(
+          admit({
+            proposal: signedProposal({ occurredAt: "2026-02-30T00:00:00.000Z" }),
+          }),
+        ),
       ).toBe("occurred-at-invalid");
     }),
   );
@@ -331,19 +386,228 @@ describe("CollaborationEventAdmission", () => {
         type: "spki",
       });
       expect(
-        yield* denialReason(admit({}, { key: keyAuthority(() => Effect.succeed(otherKey)) })),
+        yield* denialReason(
+          admit(
+            {},
+            {
+              key: keyAuthority(() =>
+                Effect.succeed({
+                  sharedProjectId: PROJECT_ID,
+                  userId: USER_ID,
+                  deviceId: DEVICE_ID,
+                  deviceKeyId: DEVICE_KEY_ID,
+                  membershipEpoch: 4,
+                  publicKeySpkiDer: otherKey,
+                }),
+              ),
+            },
+          ),
+        ),
       ).toBe("signature-invalid");
     }),
   );
 
-  it.effect("rejects a signature replay after any signed field changes", () =>
+  it.effect("strictly rejects non-canonical, oversized, or augmented proposal fields", () =>
+    Effect.gen(function* () {
+      for (const proposal of [
+        { ...signedProposal(), eventId: " collaboration-event-1" },
+        { ...signedProposal(), commandId: "x".repeat(129) },
+        { ...signedProposal(), clientSelectedPermission: "project.manage-members" },
+        { ...signedProposal(), authorSignature: "A".repeat(100_000) },
+      ]) {
+        let membershipLookups = 0;
+        let keyLookups = 0;
+        const reason = yield* denialReason(
+          admit(
+            { proposal },
+            {
+              membership: membershipAuthority(() => {
+                membershipLookups += 1;
+                return Effect.succeed(membership());
+              }),
+              key: keyAuthority(() => {
+                keyLookups += 1;
+                return Effect.succeed(activeDeviceKey());
+              }),
+            },
+          ),
+        );
+
+        expect(reason).toBe("proposal-invalid");
+        expect(membershipLookups).toBe(0);
+        expect(keyLookups).toBe(0);
+      }
+    }),
+  );
+
+  it.effect("enforces event-specific, scalar-safe, canonical payload JSON", () =>
+    Effect.gen(function* () {
+      for (const { expected, proposal } of [
+        {
+          proposal: signedProposal({
+            type: "operator-chat.message",
+            payloadJson: '{"prompt":"wrong event"}',
+          }),
+          expected: "payload-invalid-for-event-type",
+        },
+        {
+          proposal: signedProposal({
+            type: "shared-transcript.prompt",
+            payloadJson: '{"body":"wrong event"}',
+          }),
+          expected: "payload-invalid-for-event-type",
+        },
+        {
+          proposal: signedProposal({ payloadJson: '{"body":"hello","admin":true}' }),
+          expected: "payload-invalid-for-event-type",
+        },
+        {
+          proposal: signedProposal({ payloadJson: '{ "body": "hello" }' }),
+          expected: "payload-not-canonical",
+        },
+        {
+          proposal: signedProposal({ payloadJson: '{"body":"first","body":"second"}' }),
+          expected: "payload-not-canonical",
+        },
+        {
+          proposal: signedProposal({ payloadJson: JSON.stringify({ body: "\uD800" }) }),
+          expected: "payload-invalid-for-event-type",
+        },
+      ] as const) {
+        expect(yield* denialReason(admit({ proposal }))).toBe(expected);
+      }
+    }),
+  );
+
+  it.effect("bounds occurred-at timestamps using the server clock", () =>
+    Effect.gen(function* () {
+      const atFutureBoundary = signedProposal({
+        occurredAt: new Date(
+          NOW_EPOCH_MILLIS + COLLABORATION_EVENT_MAX_FUTURE_SKEW_MILLIS,
+        ).toISOString(),
+      });
+      expect((yield* admit({ proposal: atFutureBoundary })).proposal.occurredAt).toBe(
+        atFutureBoundary.occurredAt,
+      );
+
+      expect(
+        yield* denialReason(
+          admit({
+            proposal: signedProposal({
+              occurredAt: new Date(
+                NOW_EPOCH_MILLIS + COLLABORATION_EVENT_MAX_FUTURE_SKEW_MILLIS + 1,
+              ).toISOString(),
+            }),
+          }),
+        ),
+      ).toBe("occurred-at-in-future");
+
+      const atOfflineBoundary = signedProposal({
+        occurredAt: new Date(
+          NOW_EPOCH_MILLIS - COLLABORATION_EVENT_MAX_OFFLINE_AGE_MILLIS,
+        ).toISOString(),
+      });
+      expect((yield* admit({ proposal: atOfflineBoundary })).proposal.occurredAt).toBe(
+        atOfflineBoundary.occurredAt,
+      );
+
+      expect(
+        yield* denialReason(
+          admit({
+            proposal: signedProposal({
+              occurredAt: new Date(
+                NOW_EPOCH_MILLIS - COLLABORATION_EVENT_MAX_OFFLINE_AGE_MILLIS - 1,
+              ).toISOString(),
+            }),
+          }),
+        ),
+      ).toBe("occurred-at-too-old");
+    }),
+  );
+
+  it.effect("rejects confused key records and non-canonical SPKI encodings", () =>
+    Effect.gen(function* () {
+      for (const activeKey of [
+        activeDeviceKey({ sharedProjectId: OTHER_PROJECT_ID }),
+        activeDeviceKey({ userId: decodeUserId("other-user") }),
+        activeDeviceKey({ deviceId: decodeDeviceId("other-device") }),
+        activeDeviceKey({ deviceKeyId: decodeDeviceKeyId("other-key") }),
+        activeDeviceKey({ membershipEpoch: 5 }),
+      ]) {
+        expect(
+          yield* denialReason(admit({}, { key: keyAuthority(() => Effect.succeed(activeKey)) })),
+        ).toBe("device-key-mismatch");
+      }
+
+      const nonCanonicalSpki = Buffer.concat([PUBLIC_KEY_DER, Buffer.from([0])]);
+      expect(
+        yield* denialReason(
+          admit(
+            {},
+            {
+              key: keyAuthority(() =>
+                Effect.succeed(activeDeviceKey({ publicKeySpkiDer: nonCanonicalSpki })),
+              ),
+            },
+          ),
+        ),
+      ).toBe("signature-invalid");
+    }),
+  );
+
+  it.effect("rejects a non-canonical base64url alias of valid signature bytes", () =>
+    Effect.gen(function* () {
+      const proposal = signedProposal();
+      const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+      const canonicalLastIndex = alphabet.indexOf(proposal.authorSignature.at(-1) ?? "");
+      const alias = `${proposal.authorSignature.slice(0, -1)}${alphabet[canonicalLastIndex + 1]}`;
+
+      expect(Buffer.from(alias, "base64url")).toEqual(
+        Buffer.from(proposal.authorSignature, "base64url"),
+      );
+      expect(
+        yield* denialReason(admit({ proposal: { ...proposal, authorSignature: alias } })),
+      ).toBe("signature-invalid");
+    }),
+  );
+
+  it.effect("binds every proposal authority and audit field into the signature", () =>
     Effect.gen(function* () {
       const original = signedProposal();
-      const replay = decodeProposal({
-        ...original,
-        eventId: "collaboration-event-2",
-      });
+      const signature = Buffer.from(original.authorSignature, "base64url");
+      for (const mutation of [
+        { sharedProjectId: OTHER_PROJECT_ID },
+        { eventId: "collaboration-event-2" },
+        { commandId: "collaboration-command-2" },
+        { membershipEpoch: 3 },
+        {
+          actor: {
+            kind: "operator",
+            userId: "other-user",
+            deviceId: "device-1",
+          },
+        },
+        {
+          actor: {
+            kind: "operator",
+            userId: "user-1",
+            deviceId: "other-device",
+          },
+        },
+        { deviceKeyId: "device-key-2" },
+        { type: "shared-transcript.prompt" },
+        { payloadSha256: "0".repeat(64) },
+        { causationEventId: "collaboration-event-0" },
+        { correlationId: "collaboration-command-0" },
+        { occurredAt: "2026-07-30T11:58:59.999Z" },
+      ]) {
+        const replay = decodeProposal({ ...original, ...mutation });
+        expect(
+          verify(null, collaborationEventProposalSignatureBytes(replay), publicKey, signature),
+        ).toBe(false);
+      }
 
+      const replay = decodeProposal({ ...original, eventId: "collaboration-event-2" });
       expect(yield* denialReason(admit({ proposal: replay }))).toBe("signature-invalid");
     }),
   );
