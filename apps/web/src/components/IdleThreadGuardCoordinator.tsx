@@ -2,10 +2,12 @@ import { useEffect, useRef, useState } from "react";
 
 import { readEnvironmentApi } from "../environmentApi";
 import {
+  idleThreadGuardAcknowledgedBarrier,
   IDLE_THREAD_GUARD_MIN_HOURS,
   isIdleThreadGuardDue,
   latestIdleActivityAt,
   patchIdleThreadGuardConfig,
+  readIdleThreadGuardConfig,
   useIdleThreadGuardState,
 } from "../idleThreadGuard";
 import { newCommandId, newMessageId } from "../lib/utils";
@@ -111,7 +113,24 @@ export function IdleThreadGuardCoordinator() {
           dispatchSource: "user",
           createdAt: dispatchedAt,
         })
+        .then(() => {
+          const current = readIdleThreadGuardConfig(config);
+          const acknowledgedBarrier = idleThreadGuardAcknowledgedBarrier({
+            currentAwaitingActivityAfterDispatchAt:
+              current?.awaitingActivityAfterDispatchAt ?? null,
+            dispatchAttemptAt: dispatchedAt,
+            acknowledgedAt: new Date().toISOString(),
+          });
+          if (acknowledgedBarrier === null) return;
+          patchIdleThreadGuardConfig(config, {
+            awaitingActivityAfterDispatchAt: acknowledgedBarrier,
+          });
+        })
         .catch(() => {
+          const current = readIdleThreadGuardConfig(config);
+          if (current?.awaitingActivityAfterDispatchAt !== dispatchedAt) {
+            return;
+          }
           patchIdleThreadGuardConfig(config, {
             lastError:
               "The status request was not acknowledged. The Guard is paused fail-closed until new activity or an explicit resave.",

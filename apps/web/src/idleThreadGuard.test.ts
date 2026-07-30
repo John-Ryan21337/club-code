@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { isIdleThreadGuardDue, latestIdleActivityAt } from "./idleThreadGuard";
+import {
+  idleThreadGuardAcknowledgedBarrier,
+  isIdleThreadGuardDue,
+  latestIdleActivityAt,
+} from "./idleThreadGuard";
 
 describe("Idle Thread Guard safety timing", () => {
   it("uses the newest transcript, tool, session, or arming activity", () => {
@@ -42,5 +46,32 @@ describe("Idle Thread Guard safety timing", () => {
         idleHours: 1,
       }),
     ).toBe(false);
+  });
+
+  it("moves the one-shot barrier past the acknowledged dispatch without reviving stale attempts", () => {
+    const dispatchedAt = "2026-07-30T05:00:00.000Z";
+    const acknowledgedAt = "2026-07-30T05:00:01.000Z";
+
+    expect(
+      idleThreadGuardAcknowledgedBarrier({
+        currentAwaitingActivityAfterDispatchAt: dispatchedAt,
+        dispatchAttemptAt: dispatchedAt,
+        acknowledgedAt,
+      }),
+    ).toBe(acknowledgedAt);
+    expect(
+      idleThreadGuardAcknowledgedBarrier({
+        currentAwaitingActivityAfterDispatchAt: "2026-07-30T05:00:00.500Z",
+        dispatchAttemptAt: dispatchedAt,
+        acknowledgedAt,
+      }),
+    ).toBeNull();
+    expect(
+      idleThreadGuardAcknowledgedBarrier({
+        currentAwaitingActivityAfterDispatchAt: dispatchedAt,
+        dispatchAttemptAt: dispatchedAt,
+        acknowledgedAt: "2026-07-30T04:59:59.000Z",
+      }),
+    ).toBe(dispatchedAt);
   });
 });

@@ -216,3 +216,27 @@ export function isIdleThreadGuardDue(input: {
   );
   return input.nowMs - Math.max(latestActivityMs, armedAtMs) >= safeHours * 60 * 60 * 1_000;
 }
+
+/**
+ * Advances the one-shot barrier only for the dispatch attempt that is still
+ * current. The acknowledgement timestamp is intentionally recorded after the
+ * command promise resolves: the Guard's own user-message/steer projection is
+ * part of that command and must not look like fresh provider activity that
+ * immediately re-arms another paid status request.
+ */
+export function idleThreadGuardAcknowledgedBarrier(input: {
+  readonly currentAwaitingActivityAfterDispatchAt: string | null;
+  readonly dispatchAttemptAt: string;
+  readonly acknowledgedAt: string;
+}): string | null {
+  if (
+    input.currentAwaitingActivityAfterDispatchAt !== input.dispatchAttemptAt ||
+    !isIsoDateTime(input.dispatchAttemptAt) ||
+    !isIsoDateTime(input.acknowledgedAt)
+  ) {
+    return null;
+  }
+  return Date.parse(input.acknowledgedAt) >= Date.parse(input.dispatchAttemptAt)
+    ? input.acknowledgedAt
+    : input.dispatchAttemptAt;
+}
