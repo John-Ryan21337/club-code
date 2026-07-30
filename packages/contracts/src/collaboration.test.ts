@@ -3,10 +3,13 @@ import { describe, expect, it } from "vitest";
 
 import {
   COLLABORATION_ACCESS_SESSION_MAX_LIFETIME_MILLIS,
+  COLLABORATION_ED25519_SIGNATURE_BASE64URL_CHARS,
+  COLLABORATION_EVENT_PAYLOAD_MAX_UTF8_BYTES,
   COLLABORATION_PROJECT_MEMBER_LIMIT,
   COLLABORATION_ROLE_PERMISSIONS,
   COLLABORATION_SESSION_ID_MAX_CHARS,
   CollaborationEventEnvelope,
+  CollaborationEventProposal,
   CollaborationPrincipal,
   CollaborationProjectMembershipSnapshot,
 } from "./collaboration.js";
@@ -17,6 +20,7 @@ const decodePrincipal = Schema.decodeUnknownSync(CollaborationPrincipal);
 const encodePrincipal = Schema.encodeUnknownSync(CollaborationPrincipal);
 const decodeEvent = Schema.decodeUnknownSync(CollaborationEventEnvelope);
 const encodeEvent = Schema.encodeUnknownSync(CollaborationEventEnvelope);
+const decodeEventProposal = Schema.decodeUnknownSync(CollaborationEventProposal);
 
 function member(index: number) {
   return {
@@ -222,5 +226,47 @@ describe("collaboration contracts", () => {
     };
 
     expect(encodeEvent(decodeEvent(encoded))).toEqual(encoded);
+  });
+
+  it("accepts only bounded phase-one event proposals with fixed-size signatures", () => {
+    const proposal = {
+      version: 1 as const,
+      sharedProjectId: "shared-project-1",
+      eventId: "collaboration-event-9",
+      commandId: "collaboration-command-7",
+      membershipEpoch: 4,
+      actor: {
+        kind: "operator" as const,
+        userId: "user-1",
+        deviceId: "device-1",
+      },
+      type: "operator-chat.message" as const,
+      payloadJson: '{"body":"hello"}',
+      payloadSha256: "a".repeat(64),
+      authorSignature: "A".repeat(COLLABORATION_ED25519_SIGNATURE_BASE64URL_CHARS),
+      causationEventId: null,
+      correlationId: null,
+      occurredAt: "2026-07-30T00:00:01.000Z",
+    };
+
+    expect(decodeEventProposal(proposal)).toEqual(proposal);
+    expect(() =>
+      decodeEventProposal({
+        ...proposal,
+        type: "client-selected.permission",
+      }),
+    ).toThrow();
+    expect(() =>
+      decodeEventProposal({
+        ...proposal,
+        payloadJson: "x".repeat(COLLABORATION_EVENT_PAYLOAD_MAX_UTF8_BYTES + 1),
+      }),
+    ).toThrow();
+    expect(() =>
+      decodeEventProposal({
+        ...proposal,
+        authorSignature: "A".repeat(COLLABORATION_ED25519_SIGNATURE_BASE64URL_CHARS - 1),
+      }),
+    ).toThrow();
   });
 });
