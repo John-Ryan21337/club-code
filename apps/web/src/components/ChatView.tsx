@@ -5295,7 +5295,7 @@ export default function ChatView(props: ChatViewProps) {
   const onSend = async (e?: { preventDefault: () => void }) => {
     e?.preventDefault();
     // A real operator send (and the auto sender after its final re-check)
-    // invalidates any outstanding countdown before touching the provider.
+    // invalidates any outstanding foreground authorization before touching the provider.
     recordManualAutoNudgeActivity();
     const api = readEnvironmentApi(environmentId);
     if (
