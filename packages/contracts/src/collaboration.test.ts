@@ -5,13 +5,16 @@ import {
   COLLABORATION_ACCESS_SESSION_MAX_LIFETIME_MILLIS,
   COLLABORATION_ED25519_SIGNATURE_BASE64URL_CHARS,
   COLLABORATION_EVENT_PAYLOAD_MAX_UTF8_BYTES,
+  COLLABORATION_IDENTIFIER_MAX_CHARS,
   COLLABORATION_PROJECT_MEMBER_LIMIT,
   COLLABORATION_ROLE_PERMISSIONS,
   COLLABORATION_SESSION_ID_MAX_CHARS,
   CollaborationEventEnvelope,
   CollaborationEventProposal,
+  CollaborationOperatorChatMessagePayload,
   CollaborationPrincipal,
   CollaborationProjectMembershipSnapshot,
+  CollaborationSharedTranscriptPromptPayload,
 } from "./collaboration.js";
 
 const decodeMembership = Schema.decodeUnknownSync(CollaborationProjectMembershipSnapshot);
@@ -21,6 +24,8 @@ const encodePrincipal = Schema.encodeUnknownSync(CollaborationPrincipal);
 const decodeEvent = Schema.decodeUnknownSync(CollaborationEventEnvelope);
 const encodeEvent = Schema.encodeUnknownSync(CollaborationEventEnvelope);
 const decodeEventProposal = Schema.decodeUnknownSync(CollaborationEventProposal);
+const decodeChatPayload = Schema.decodeUnknownSync(CollaborationOperatorChatMessagePayload);
+const decodePromptPayload = Schema.decodeUnknownSync(CollaborationSharedTranscriptPromptPayload);
 
 function member(index: number) {
   return {
@@ -240,6 +245,7 @@ describe("collaboration contracts", () => {
         userId: "user-1",
         deviceId: "device-1",
       },
+      deviceKeyId: "device-key-1",
       type: "operator-chat.message" as const,
       payloadJson: '{"body":"hello"}',
       payloadSha256: "a".repeat(64),
@@ -268,5 +274,41 @@ describe("collaboration contracts", () => {
         authorSignature: "A".repeat(COLLABORATION_ED25519_SIGNATURE_BASE64URL_CHARS - 1),
       }),
     ).toThrow();
+    expect(() =>
+      decodeEventProposal({
+        ...proposal,
+        eventId: "x".repeat(COLLABORATION_IDENTIFIER_MAX_CHARS + 1),
+      }),
+    ).toThrow();
+    expect(() =>
+      decodeEventProposal({
+        ...proposal,
+        deviceKeyId: "x".repeat(COLLABORATION_IDENTIFIER_MAX_CHARS + 1),
+      }),
+    ).toThrow();
+    expect(() =>
+      decodeEventProposal({
+        ...proposal,
+        sharedProjectId: " shared-project-1",
+      }),
+    ).toThrow();
+    expect(() =>
+      decodeEventProposal({
+        ...proposal,
+        occurredAt: "2026-07-30T00:00:01Z",
+      }),
+    ).toThrow();
+  });
+
+  it("defines distinct bounded payload contracts for chat and shared prompts", () => {
+    expect(decodeChatPayload({ body: "hello" })).toEqual({ body: "hello" });
+    expect(decodePromptPayload({ prompt: "continue" })).toEqual({ prompt: "continue" });
+    expect(() =>
+      decodeChatPayload({ prompt: "wrong event" }, { onExcessProperty: "error" }),
+    ).toThrow();
+    expect(() =>
+      decodePromptPayload({ body: "wrong event" }, { onExcessProperty: "error" }),
+    ).toThrow();
+    expect(() => decodeChatPayload({ body: "\uD800" })).toThrow();
   });
 });

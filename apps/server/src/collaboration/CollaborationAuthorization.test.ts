@@ -188,6 +188,28 @@ describe("CollaborationAuthorization", () => {
     }),
   );
 
+  it.effect("fails closed when server membership persistence returns malformed authority", () =>
+    Effect.gen(function* () {
+      const malformed = {
+        ...membership(),
+        members: [
+          {
+            ...membership().members[0],
+            role: "viewer",
+            permissions: ["project.manage-members"],
+          },
+        ],
+      } as unknown as CollaborationProjectMembershipSnapshot;
+
+      expect(
+        yield* denialReason(
+          {},
+          authority(() => Effect.succeed(malformed)),
+        ),
+      ).toBe("membership-unavailable");
+    }),
+  );
+
   it.effect("rejects an invalid runtime lifetime before membership lookup", () =>
     Effect.gen(function* () {
       let lookupCount = 0;
