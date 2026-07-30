@@ -100,6 +100,8 @@ export interface MatrixGpuGlyph {
   readonly y: number;
   readonly fontSizePx: number;
   readonly scale: number;
+  /** Canvas2D-compatible horizontal fit for bounded multi-character tokens. */
+  readonly maxWidthPx?: number;
   readonly opacity: number;
   readonly color: MatrixGpuColor;
 }
@@ -316,7 +318,9 @@ function acquireDefaultContext(canvas: HTMLCanvasElement): WebGL2RenderingContex
     alpha: true,
     antialias: false,
     depth: false,
-    desynchronized: true,
+    // Ordinary double-buffered presentation is intentional. Front-buffer
+    // desynchronization can expose incomplete clears during compositor churn.
+    desynchronized: false,
     failIfMajorPerformanceCaveat: true,
     powerPreference: "high-performance",
     premultipliedAlpha: false,
@@ -630,7 +634,11 @@ export class MatrixWebGl2Renderer {
       }
       const entry = resolveAtlasEntry(this.#atlas, glyph.glyph);
       const fontSize = glyph.fontSizePx * glyph.scale;
-      const glyphWidth = fontSize * entry.aspectRatio;
+      const naturalGlyphWidth = fontSize * entry.aspectRatio;
+      const glyphWidth =
+        Number.isFinite(glyph.maxWidthPx) && (glyph.maxWidthPx ?? 0) > 0
+          ? Math.min(naturalGlyphWidth, glyph.maxWidthPx!)
+          : naturalGlyphWidth;
       const offset = renderedGlyphs * INSTANCE_FLOATS;
       this.#instanceData[offset] = glyph.x - glyphWidth / 2;
       this.#instanceData[offset + 1] = glyph.y - fontSize / 2;

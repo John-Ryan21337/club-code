@@ -39,6 +39,7 @@ function createAtlasCanvas(): FakeAtlasCanvas {
 interface FakeCanvas {
   width: number;
   height: number;
+  getContext: ReturnType<typeof vi.fn>;
   addEventListener: ReturnType<typeof vi.fn>;
   removeEventListener: ReturnType<typeof vi.fn>;
   dispatch(type: "webglcontextlost" | "webglcontextrestored", event?: Event): void;
@@ -49,6 +50,7 @@ function createCanvas(): FakeCanvas {
   return {
     width: 0,
     height: 0,
+    getContext: vi.fn(() => null),
     addEventListener: vi.fn((type: string, listener: EventListener) => {
       listeners.set(type, listener);
     }),
@@ -239,6 +241,43 @@ describe("Matrix WebGL2 renderer", () => {
     );
     expect(canvas.width).toBe(1_600);
     expect(canvas.height).toBe(1_200);
+  });
+
+  it("uses double-buffered presentation and preserves the Canvas2D token-width bound", () => {
+    const canvas = createCanvas();
+    const gl = createWebGl2Context();
+    canvas.getContext.mockReturnValue(gl);
+    const selection = createMatrixWebGl2Renderer(
+      canvas as unknown as HTMLCanvasElement,
+      ["long-token"],
+      {
+        createCanvas: createAtlasCanvas,
+      },
+    );
+    expect(canvas.getContext).toHaveBeenCalledWith(
+      "webgl2",
+      expect.objectContaining({ desynchronized: false, preserveDrawingBuffer: false }),
+    );
+    expect(selection.kind).toBe("webgl2");
+    if (selection.kind !== "webgl2") return;
+
+    selection.renderer.render(
+      frame([
+        {
+          glyph: "long-token",
+          x: 100,
+          y: 100,
+          fontSizePx: 48,
+          scale: 1,
+          maxWidthPx: 30,
+          opacity: 1,
+          color: green,
+        },
+      ]),
+    );
+    const uploadedInstances = gl.bufferSubData.mock.calls[0]?.[2] as Float32Array;
+    expect(uploadedInstances[0]).toBe(85);
+    expect(uploadedInstances[2]).toBe(30);
   });
 
   it("prevents default context loss and rebuilds GPU resources after restoration", () => {
