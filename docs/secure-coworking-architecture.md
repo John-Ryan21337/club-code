@@ -245,6 +245,25 @@ raised only after load, partition, revocation, abuse, and backpressure testing.
 
 ## Delivery phases
 
+### Current implementation evidence
+
+- `packages/contracts/src/collaboration.ts` defines the protocol member ceiling,
+  role/permission matrix, membership epochs, authenticated project principal,
+  and append-only attributed event envelope.
+- `apps/server/src/collaboration/CollaborationAuthorization.ts` is the first
+  centralized server authorization boundary. It resolves authority only from
+  the current server-owned membership, rejects cross-project access, stale
+  epochs, invalid session lifetimes, removed members, and permissions absent
+  from either the member grant or role ceiling.
+- Focused contract and server tests cover principal serialization, the
+  cross-project IDOR matrix, epoch revocation, membership removal, session
+  validity, and permission narrowing.
+- Device key enrollment/signature verification, durable membership and event
+  stores, invites, coordinator transport, subscriptions, chat/transcript UI,
+  sandboxed agent runners, and file materialization remain unimplemented. No
+  current code from this phase exposes a network endpoint or mutates shared
+  files.
+
 ### Phase 0: security foundation
 
 - Project principals, role/permission matrix, and centralized authorizer

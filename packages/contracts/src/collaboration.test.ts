@@ -5,11 +5,14 @@ import {
   COLLABORATION_PROJECT_MEMBER_LIMIT,
   COLLABORATION_ROLE_PERMISSIONS,
   CollaborationEventEnvelope,
+  CollaborationPrincipal,
   CollaborationProjectMembershipSnapshot,
 } from "./collaboration.js";
 
 const decodeMembership = Schema.decodeUnknownSync(CollaborationProjectMembershipSnapshot);
 const encodeMembership = Schema.encodeUnknownSync(CollaborationProjectMembershipSnapshot);
+const decodePrincipal = Schema.decodeUnknownSync(CollaborationPrincipal);
+const encodePrincipal = Schema.encodeUnknownSync(CollaborationPrincipal);
 const decodeEvent = Schema.decodeUnknownSync(CollaborationEventEnvelope);
 const encodeEvent = Schema.encodeUnknownSync(CollaborationEventEnvelope);
 
@@ -24,6 +27,22 @@ function member(index: number) {
 }
 
 describe("collaboration contracts", () => {
+  it("round-trips an authenticated principal without client-asserted authority", () => {
+    const encoded = {
+      sessionId: "collaboration-session-1",
+      sharedProjectId: "shared-project-1",
+      userId: "user-1",
+      deviceId: "device-1",
+      membershipEpoch: 4,
+      issuedAt: "2026-07-30T00:00:00.000Z",
+      expiresAt: "2026-07-30T01:00:00.000Z",
+    };
+
+    expect(encodePrincipal(decodePrincipal(encoded))).toEqual(encoded);
+    expect(Object.hasOwn(encoded, "role")).toBe(false);
+    expect(Object.hasOwn(encoded, "permissions")).toBe(false);
+  });
+
   it("round-trips a project membership snapshot", () => {
     const decoded = decodeMembership({
       sharedProjectId: "shared-project-1",
