@@ -263,6 +263,31 @@ describe("CollaborationEventAdmission", () => {
     }),
   );
 
+  it.effect("rejects a forged principal without lookup or an Effect defect", () =>
+    Effect.gen(function* () {
+      let membershipLookups = 0;
+      let keyLookups = 0;
+      const failure = yield* admit(
+        { principal: { ...principal(), issuedAt: {} } },
+        {
+          membership: membershipAuthority(() => {
+            membershipLookups += 1;
+            return Effect.succeed(membership());
+          }),
+          key: keyAuthority(() => {
+            keyLookups += 1;
+            return Effect.succeed(activeDeviceKey());
+          }),
+        },
+      ).pipe(Effect.flip);
+
+      expect(failure).toBeInstanceOf(CollaborationAuthorizationError);
+      expect(failure.reason).toBe("principal-invalid");
+      expect(membershipLookups).toBe(0);
+      expect(keyLookups).toBe(0);
+    }),
+  );
+
   for (const { expected, label, proposal } of [
     {
       label: "operator impersonation",
@@ -363,10 +388,13 @@ describe("CollaborationEventAdmission", () => {
       expect(
         yield* denialReason(
           admit({
-            proposal: signedProposal({ occurredAt: "2026-02-30T00:00:00.000Z" }),
+            proposal: {
+              ...signedProposal(),
+              occurredAt: "2026-02-30T00:00:00.000Z",
+            },
           }),
         ),
-      ).toBe("occurred-at-invalid");
+      ).toBe("proposal-invalid");
     }),
   );
 
@@ -413,6 +441,10 @@ describe("CollaborationEventAdmission", () => {
         { ...signedProposal(), eventId: " collaboration-event-1" },
         { ...signedProposal(), commandId: "x".repeat(129) },
         { ...signedProposal(), clientSelectedPermission: "project.manage-members" },
+        {
+          ...signedProposal(),
+          actor: { ...signedProposal().actor, clientRole: "owner" },
+        },
         { ...signedProposal(), authorSignature: "A".repeat(100_000) },
       ]) {
         let membershipLookups = 0;
@@ -552,6 +584,33 @@ describe("CollaborationEventAdmission", () => {
           ),
         ),
       ).toBe("signature-invalid");
+    }),
+  );
+
+  it.effect("snapshots authority-owned public-key bytes exactly once", () =>
+    Effect.gen(function* () {
+      let publicKeyReads = 0;
+      const activeKey = {
+        sharedProjectId: PROJECT_ID,
+        userId: USER_ID,
+        deviceId: DEVICE_ID,
+        deviceKeyId: DEVICE_KEY_ID,
+        membershipEpoch: 4,
+        get publicKeySpkiDer() {
+          publicKeyReads += 1;
+          return publicKeyReads === 1 ? PUBLIC_KEY_DER : Buffer.alloc(PUBLIC_KEY_DER.byteLength);
+        },
+      };
+
+      expect(
+        (yield* admit(
+          {},
+          {
+            key: keyAuthority(() => Effect.succeed(activeKey)),
+          },
+        )).permission,
+      ).toBe("chat.append");
+      expect(publicKeyReads).toBe(1);
     }),
   );
 
