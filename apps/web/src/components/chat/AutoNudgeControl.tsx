@@ -227,7 +227,7 @@ function ThreadScopedAutoNudgeControl(props: AutoNudgeControlProps) {
 
   return (
     <div
-      className={cn("mb-2 text-xs", !expanded && "mx-auto w-full min-w-0 max-w-3xl")}
+      className={cn("mb-2 w-full min-w-0 text-xs", !expanded && "mx-auto max-w-3xl")}
       data-auto-nudge-control="true"
       data-auto-nudge-expanded={expanded ? "true" : "false"}
     >

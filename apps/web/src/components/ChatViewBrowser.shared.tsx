@@ -7306,6 +7306,83 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
   }
 
   if (chatViewBrowserPart === "layout") {
+    it("centers Auto Nudge and Idle Thread Guard over the composer in responsive order", async () => {
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: createSnapshotForTargetUser({
+          targetMessageId: "msg-user-composer-automation-layout" as MessageId,
+          targetText: "composer automation layout",
+        }),
+      });
+
+      try {
+        const controls = await waitForElement(
+          () =>
+            document.querySelector<HTMLElement>(
+              '[data-composer-thread-automation-controls="true"]',
+            ),
+          "Unable to find the composer automation controls.",
+        );
+        const composer = await waitForElement(
+          () => document.querySelector<HTMLElement>('[data-chat-composer-form="true"]'),
+          "Unable to find the chat composer.",
+        );
+        const autoNudge = controls.querySelector<HTMLElement>('[data-auto-nudge-control="true"]');
+        const idleGuard = controls.querySelector<HTMLElement>(
+          '[data-idle-thread-guard-control="true"]',
+        );
+
+        expect(autoNudge).toBeTruthy();
+        expect(idleGuard).toBeTruthy();
+        expect(controls.classList.contains("mx-auto")).toBe(true);
+        expect(controls.classList.contains("w-full")).toBe(true);
+        expect(controls.classList.contains("max-w-208")).toBe(true);
+        expect(controls.classList.contains("grid-cols-1")).toBe(true);
+        expect(controls.classList.contains("sm:grid-cols-2")).toBe(true);
+        expect(Array.from(controls.children)).toEqual([autoNudge, idleGuard]);
+
+        const controlsBounds = controls.getBoundingClientRect();
+        const composerBounds = composer.getBoundingClientRect();
+        const autoNudgeBounds = autoNudge!.getBoundingClientRect();
+        const idleGuardBounds = idleGuard!.getBoundingClientRect();
+
+        expect(Math.abs(controlsBounds.left - composerBounds.left)).toBeLessThanOrEqual(1);
+        expect(Math.abs(controlsBounds.width - composerBounds.width)).toBeLessThanOrEqual(1);
+        expect(autoNudgeBounds.left).toBeLessThan(idleGuardBounds.left);
+        expect(Math.abs(autoNudgeBounds.top - idleGuardBounds.top)).toBeLessThanOrEqual(1);
+        expect(Math.abs(autoNudgeBounds.width - idleGuardBounds.width)).toBeLessThanOrEqual(1);
+
+        controls
+          .querySelector<HTMLButtonElement>('button[aria-label="Expand Auto Nudge controls"]')!
+          .click();
+        controls
+          .querySelector<HTMLButtonElement>(
+            'button[aria-label="Expand Idle Thread Guard controls"]',
+          )!
+          .click();
+
+        await vi.waitFor(() => {
+          expect(autoNudge!.dataset.autoNudgeExpanded).toBe("true");
+          expect(idleGuard!.dataset.idleThreadGuardExpanded).toBe("true");
+          expect(
+            controls.querySelector('button[aria-label="Collapse Auto Nudge controls"]'),
+          ).toBeTruthy();
+          expect(
+            controls.querySelector('button[aria-label="Collapse Idle Thread Guard controls"]'),
+          ).toBeTruthy();
+        });
+
+        const expandedAutoNudgeBounds = autoNudge!.getBoundingClientRect();
+        const expandedIdleGuardBounds = idleGuard!.getBoundingClientRect();
+        expect(
+          Math.abs(expandedAutoNudgeBounds.width - expandedIdleGuardBounds.width),
+        ).toBeLessThanOrEqual(1);
+        expect(expandedIdleGuardBounds.right).toBeLessThanOrEqual(controlsBounds.right + 1);
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
     it("toggles a persisted Mobile optimized reflow without resetting Matrix configuration", async () => {
       const initialMatrixSettings = {
         fallingEffectsEnabled: false,

@@ -8057,7 +8057,10 @@ export default function ChatView(props: ChatViewProps) {
             <div className="relative isolate">
               <ComposerBannerStack className="relative z-0" items={composerBannerItems} />
               <div className="relative z-10">
-                <div className="grid min-w-0 grid-cols-1 items-start gap-2 sm:grid-cols-2">
+                <div
+                  className="mx-auto grid w-full min-w-0 max-w-208 grid-cols-1 items-start gap-2 sm:grid-cols-2"
+                  data-composer-thread-automation-controls="true"
+                >
                   <AutoNudgeControl
                     mode={autoNudgeMode}
                     disabled={!isServerThread || !activeAutoNudgeConfig}

@@ -104,7 +104,7 @@ function ThreadScopedIdleThreadGuardControl({
 
   return (
     <div
-      className="mb-2 min-w-0 text-xs"
+      className="mb-2 w-full min-w-0 text-xs"
       data-idle-thread-guard-control="true"
       data-idle-thread-guard-expanded={expanded ? "true" : "false"}
     >
