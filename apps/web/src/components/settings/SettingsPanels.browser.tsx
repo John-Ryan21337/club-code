@@ -1226,6 +1226,8 @@ describe("settings panels", () => {
     await nameInput.fill("Desktop");
     await page.getByRole("button", { name: "Save", exact: true }).click();
 
+    const localSettingsWrite = vi.mocked(desktopBridge.setClientSettings);
+    localSettingsWrite.mockClear();
     updateClientSettings.mockRejectedValueOnce(new Error("profile write failed"));
     await page.getByRole("combobox", { name: "Active settings profile" }).click();
     await page.getByRole("option", { name: "Mobile" }).click();
@@ -1237,6 +1239,10 @@ describe("settings panels", () => {
     await expect
       .element(page.getByLabelText("Keep animations running in background"))
       .toBeChecked();
+    // Mobile presentation is renderer-local and is part of every captured
+    // profile. A rejected shared write must stop before that local document is
+    // persisted, otherwise the switch would be partial across a restart.
+    expect(localSettingsWrite).not.toHaveBeenCalled();
     expect(settingsProfileLibraryStore.getSnapshot().activeProfileId).toBe("profile:desktop");
   });
 

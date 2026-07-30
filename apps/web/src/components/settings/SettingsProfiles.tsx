@@ -56,7 +56,7 @@ export function SettingsProfiles() {
   const library = useSettingsProfileLibrary();
   const settings = useSettings();
   const settingsHydrated = useClientSettingsHydrated();
-  const { updateSettingsAsync } = useUpdateSettings();
+  const { updateClientSettingsConfirmed } = useUpdateSettings();
   const { theme, setTheme } = useTheme();
   const activeProfile =
     library.activeProfileId === null
@@ -177,7 +177,10 @@ export function SettingsProfiles() {
           themeWriteAttempted = true;
           setTheme(profile.theme);
         }
-        await updateSettingsAsync(profile.clientSettings);
+        // Profile payloads contain client preferences only. Use the confirmed
+        // writer so a rejected shared write cannot race ahead with a
+        // renderer-local preference and leave a partially loaded profile.
+        await updateClientSettingsConfirmed(profile.clientSettings);
 
         const latestProfile = settingsProfileLibraryStore.resolve(profile.id);
         if (
@@ -246,7 +249,7 @@ export function SettingsProfiles() {
       setTheme,
       settingsHydrated,
       theme,
-      updateSettingsAsync,
+      updateClientSettingsConfirmed,
     ],
   );
 
