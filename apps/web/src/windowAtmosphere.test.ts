@@ -1,4 +1,4 @@
-import { DEFAULT_FALLING_EFFECT_DENSITY } from "@cafecode/contracts";
+import { DEFAULT_FALLING_EFFECT_DENSITY, MAX_FALLING_EFFECT_DENSITY } from "@cafecode/contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -74,8 +74,13 @@ describe("window atmosphere", () => {
     expect(calculateAtmosphereParticleCount("matrix", 20_000, 20_000, 2.5)).toBe(
       MAX_ATMOSPHERE_PARTICLES_BY_KIND.matrix,
     );
+    const priorMatrixCeiling = 160;
+    expect(calculateAtmosphereParticleCount("matrix", 1_920, 1_080, 2.5)).toBe(200);
+    expect(
+      calculateAtmosphereParticleCount("matrix", 1_920, 1_080, MAX_FALLING_EFFECT_DENSITY),
+    ).toBe(priorMatrixCeiling * 4);
     expect(clampFallingEffectDensity(Number.NaN)).toBe(DEFAULT_FALLING_EFFECT_DENSITY);
-    expect(clampFallingEffectDensity(99)).toBe(2.5);
+    expect(clampFallingEffectDensity(99)).toBe(MAX_FALLING_EFFECT_DENSITY);
   });
 
   it("deterministically applies the Japanese ratio, including authoritative endpoints", () => {

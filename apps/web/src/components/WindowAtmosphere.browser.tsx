@@ -185,7 +185,11 @@ vi.mock("../windowAtmosphere", () => ({
     (state.continueBackgroundAnimations || (state.documentVisible && state.windowFocused)),
 }));
 
-import { WindowAtmosphere } from "./WindowAtmosphere";
+import {
+  commitAtmosphereCanvasBitmap,
+  resizeAtmosphereCanvasBitmap,
+  WindowAtmosphere,
+} from "./WindowAtmosphere";
 
 let mounted: Awaited<ReturnType<typeof render>> | null = null;
 let nextFrameId = 1;
@@ -305,6 +309,41 @@ afterEach(async () => {
 });
 
 describe("WindowAtmosphere", () => {
+  it("publishes completed frame bitmaps without clearing the visible surface", () => {
+    const targetCanvas = document.createElement("canvas");
+    targetCanvas.width = 320;
+    targetCanvas.height = 180;
+    const sourceCanvas = document.createElement("canvas");
+    sourceCanvas.width = 320;
+    sourceCanvas.height = 180;
+    const visibleContext = targetCanvas.getContext("2d");
+    expect(visibleContext).not.toBeNull();
+    if (visibleContext === null) return;
+    const clearRect = vi.spyOn(visibleContext, "clearRect");
+    const drawImage = vi.spyOn(visibleContext, "drawImage");
+
+    commitAtmosphereCanvasBitmap(targetCanvas, visibleContext, sourceCanvas);
+
+    expect(clearRect).not.toHaveBeenCalled();
+    expect(drawImage).toHaveBeenCalledWith(sourceCanvas, 0, 0, 320, 180);
+  });
+
+  it("does not reset an unchanged canvas bitmap", () => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 320;
+    canvas.height = 180;
+    const context = canvas.getContext("2d");
+    expect(context).not.toBeNull();
+    if (context === null) return;
+    context.fillStyle = "#ff0000";
+    context.fillRect(0, 0, 1, 1);
+
+    expect(resizeAtmosphereCanvasBitmap(canvas, 320, 180)).toBe(false);
+    expect(context.getImageData(0, 0, 1, 1).data[3]).toBe(255);
+    expect(resizeAtmosphereCanvasBitmap(canvas, 321, 180)).toBe(true);
+    expect(context.getImageData(0, 0, 1, 1).data[3]).toBe(0);
+  });
+
   it("covers the viewport without intercepting or exposing decorative content", async () => {
     mounted = await render(<WindowAtmosphere />);
 
@@ -328,11 +367,35 @@ describe("WindowAtmosphere", () => {
     await expect
       .element(canvasLocator)
       .toHaveAttribute("data-atmosphere-text-rasterization", "main-thread");
+    await expect
+      .element(canvasLocator)
+      .toHaveAttribute("data-atmosphere-frame-commit", "atomic-copy");
     expect(["available-not-active", "unavailable"]).toContain(
       canvas.getAttribute("data-atmosphere-offscreen-canvas"),
     );
     expect(document.querySelector('[data-testid="cinema-falling-atmosphere"]')).toBeNull();
   });
+
+  it.each(["flat", "forward", "reverse", "walk-forward", "walk-reverse"] as const)(
+    "repaints %s activity immediately without clearing the full-window surface",
+    async (motionMode) => {
+      mocks.settings.fallingEffectMatrixMotionMode = motionMode;
+      mounted = await render(<WindowAtmosphere selectedThreadRef={TEST_SELECTED_THREAD_REF} />);
+      const canvas = page.getByTestId("window-atmosphere").element() as HTMLCanvasElement;
+      const visibleContext = canvas.getContext("2d");
+      expect(visibleContext).not.toBeNull();
+      if (visibleContext === null) return;
+      const clearRect = vi.spyOn(visibleContext, "clearRect");
+      mocks.drawAtmosphereScene.mockClear();
+
+      mocks.activityEventsKey = "activity-2";
+      await mounted.rerender(<WindowAtmosphere selectedThreadRef={TEST_SELECTED_THREAD_REF} />);
+
+      expect(mocks.drawAtmosphereScene).toHaveBeenCalledTimes(1);
+      expect(clearRect).not.toHaveBeenCalled();
+      expect(canvas.dataset.atmosphereFrameCommit).toBe("atomic-copy");
+    },
+  );
 
   it("clips only falling particles over streaming cinema media without intercepting controls", async () => {
     (reducedMotionQuery as unknown as { matches: boolean }).matches = true;
@@ -365,16 +428,10 @@ describe("WindowAtmosphere", () => {
         window.innerHeight - 440,
       )}px 120px)`,
     );
-    await expect.poll(() => mocks.drawAtmosphereScene.mock.calls.length).toBe(2);
-    expect(mocks.drawAtmosphereScene.mock.calls[0]?.[0]).not.toBe(
-      mocks.drawAtmosphereScene.mock.calls[1]?.[0],
-    );
+    await expect.poll(() => mocks.drawAtmosphereScene.mock.calls.length).toBe(1);
     expect(mocks.drawMatrixActivityAnimation).toHaveBeenCalledTimes(1);
-    expect(mocks.drawMatrixActivityAnimation.mock.calls[0]?.[0]).toBe(
-      mocks.drawAtmosphereScene.mock.calls[0]?.[0],
-    );
     expect(mocks.drawMatrixActivityAnimation.mock.calls[0]?.[0]).not.toBe(
-      mocks.drawAtmosphereScene.mock.calls[1]?.[0],
+      mocks.drawAtmosphereScene.mock.calls[0]?.[0],
     );
   });
 
@@ -447,10 +504,7 @@ describe("WindowAtmosphere", () => {
     document.body.append(player);
 
     await expect.element(overlay).toHaveAttribute("data-cinema-atmosphere-visible", "true");
-    await expect.poll(() => mocks.drawAtmosphereScene.mock.calls.length).toBe(3);
-    expect(mocks.drawAtmosphereScene.mock.calls[1]?.[0]).not.toBe(
-      mocks.drawAtmosphereScene.mock.calls[2]?.[0],
-    );
+    await expect.poll(() => mocks.drawAtmosphereScene.mock.calls.length).toBe(2);
   });
 
   it("tracks a local cinema video surface but remains hidden for cinema audio", async () => {
@@ -786,7 +840,7 @@ describe("WindowAtmosphere", () => {
 
     setReducedMotionPreference(true);
 
-    expect(mocks.matrixColorTimestamps).toEqual([1_000]);
+    expect(mocks.matrixColorTimestamps).toEqual([9_000, 1_000]);
     expect(mocks.drawnMatrixColors.at(-1)).toBe("hsl(1000)");
     expect(matrixColorFrameStore.getSnapshot()).toMatchObject({
       frame: { color: "hsl(1000)" },
@@ -803,7 +857,7 @@ describe("WindowAtmosphere", () => {
     mocks.settings.fallingEffectsEnabled = false;
     await mounted.rerender(<WindowAtmosphere selectedThreadRef={TEST_SELECTED_THREAD_REF} />);
 
-    expect(mocks.matrixColorTimestamps).toEqual([1_000]);
+    expect(mocks.matrixColorTimestamps).toEqual([9_000, 1_000]);
     expect(matrixColorFrameStore.getSnapshot()).toMatchObject({
       frame: { color: "hsl(1000)" },
       motion: "frozen",

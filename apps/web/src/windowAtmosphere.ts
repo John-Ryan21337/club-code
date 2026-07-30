@@ -47,11 +47,15 @@ const MATRIX_MAX_HUE_CHANGE_PER_SECOND = 110;
 const MATRIX_MAX_LIGHTNESS_CHANGE_PER_SECOND = 42;
 const MATRIX_AUDIO_BEAT_HUE_IMPULSE_DEGREES = 22;
 
-/** Hard per-scene limits: snow 320, rain 440, and Matrix 160 columns. */
+/**
+ * Hard per-scene limits. Matrix's 640-stream source pool is four times the
+ * previous ceiling; the Walk renderer separately caps visible streams and
+ * rejects glyph bounds that would overlap.
+ */
 export const MAX_ATMOSPHERE_PARTICLES_BY_KIND = {
   snow: 320,
   rain: 440,
-  matrix: 160,
+  matrix: 640,
 } as const satisfies Record<FallingEffectKind, number>;
 
 /** Reviewed decorative Roman glyph pool; it intentionally contains no words or phrases. */
@@ -105,10 +109,12 @@ const MATRIX_2CH_TOKEN_PROBABILITY = 0.08;
 const MATRIX_WORK_TOKEN_PROBABILITY = 0.34;
 const MATRIX_WALK_FADE_START_PROGRESS = 0.72;
 const MATRIX_CENTER_WIND_MAX_SPEED_PX_PER_SECOND = 60;
-const MATRIX_WALK_MIN_PROJECTED_HORIZONTAL_SCALE = 0.58;
 const MATRIX_WALK_MAX_TEXT_WIDTH_RATIO = 0.9;
 const MATRIX_WALK_GLYPH_GAP_PX = 2;
 const MATRIX_WALK_TRAIL_LINE_HEIGHT = 1.08;
+const MATRIX_WALK_OCCUPANCY_BIN_PX = 0.25;
+/** Eight trail glyphs per stream keeps the opt-in worst case at 5,120 text draws. */
+export const MAX_MATRIX_WALK_VISIBLE_STREAMS = 640;
 const MATRIX_PERSPECTIVE_FONT_MIN_PX = 1;
 const MATRIX_PERSPECTIVE_FONT_MAX_PX = MAX_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE;
 const MATRIX_PERSPECTIVE_FONT_STEP_PX = 0.5;
@@ -131,6 +137,12 @@ const MATRIX_PERSPECTIVE_FONTS = Array.from(
  * to keep font-cache and canvas pressure bounded.
  */
 const MATRIX_WALK_FONTS: Array<string | undefined> = [];
+interface MatrixWalkOccupancy {
+  bins: Uint32Array;
+  generation: number;
+  selectedStreams: number;
+}
+const matrixWalkOccupancyByScene = new WeakMap<AtmosphereScene, MatrixWalkOccupancy>();
 
 export interface AtmosphereParticle {
   x: number;
@@ -858,51 +870,77 @@ function resolveMatrixWalkTargetFontSize(
   return walkStartFontSize + projectedDepth * (walkEndFontSize - walkStartFontSize);
 }
 
-/**
- * Large Walk glyphs cannot share the original ~24 px Matrix column cadence.
- * Select an evenly distributed subset of the fixed particle pool whose
- * center-to-center separation remains wider than the largest configured glyph
- * even at the strongest reviewed perspective compression. The pool itself
- * stays fixed and every lifecycle keeps advancing, so density can recover
- * without rebuilding the scene when font settings shrink.
- */
-function resolveMatrixWalkVisibleStreamCount(
-  scene: AtmosphereScene,
-  requestedWalkStartFontSize: number,
-  requestedWalkEndFontSize: number,
-): number {
-  const particleCount = scene.particles.length;
-  if (particleCount <= 1 || scene.width <= 0) return particleCount;
-  const maximumFontSize = Math.max(
-    clampMatrixWalkFontSize(
-      requestedWalkStartFontSize,
-      DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE,
-    ),
-    clampMatrixWalkFontSize(
-      requestedWalkEndFontSize,
-      DEFAULT_FALLING_EFFECT_MATRIX_WALK_END_FONT_SIZE,
-    ),
-  );
-  const glyphWidth = maximumFontSize * MATRIX_WALK_MAX_TEXT_WIDTH_RATIO + MATRIX_WALK_GLYPH_GAP_PX;
-  const sourceBandWidth = scene.width / particleCount;
-  const requiredSourceGap =
-    glyphWidth / MATRIX_WALK_MIN_PROJECTED_HORIZONTAL_SCALE + sourceBandWidth * 0.7;
-  return Math.min(particleCount, Math.max(1, Math.floor(scene.width / requiredSourceGap) + 1));
+function beginMatrixWalkOccupancy(scene: AtmosphereScene): MatrixWalkOccupancy {
+  const requiredBins = Math.max(1, Math.ceil(scene.width / MATRIX_WALK_OCCUPANCY_BIN_PX) + 2);
+  let occupancy = matrixWalkOccupancyByScene.get(scene);
+  if (occupancy === undefined || occupancy.bins.length < requiredBins) {
+    occupancy = {
+      bins: new Uint32Array(requiredBins),
+      generation: 1,
+      selectedStreams: 0,
+    };
+    matrixWalkOccupancyByScene.set(scene, occupancy);
+    return occupancy;
+  }
+
+  occupancy.generation += 1;
+  if (occupancy.generation >= 0xffff_fffe) {
+    occupancy.bins.fill(0);
+    occupancy.generation = 1;
+  }
+  occupancy.selectedStreams = 0;
+  return occupancy;
 }
 
-function isEvenlySelectedMatrixWalkStream(
-  particleIndex: number,
-  particleCount: number,
-  visibleStreamCount: number,
+/**
+ * Claims the current projected head bounds instead of reserving every stream
+ * for the largest configured endpoint. Small/far glyphs can therefore use the
+ * requested denser pool while large/near glyphs still cannot occupy the same
+ * horizontal pixels. A fixed reusable occupancy grid avoids per-frame arrays,
+ * and the explicit stream cap bounds Matrix text shaping/raster work.
+ */
+function claimMatrixWalkProjectedBounds(
+  occupancy: MatrixWalkOccupancy,
+  sceneWidth: number,
+  projectedX: number,
+  fontSize: number,
 ): boolean {
-  if (visibleStreamCount >= particleCount) return true;
-  if (visibleStreamCount <= 1 || particleCount <= 1) {
-    return particleIndex === Math.floor((particleCount - 1) * 0.5);
+  if (
+    occupancy.selectedStreams >= MAX_MATRIX_WALK_VISIBLE_STREAMS ||
+    !Number.isFinite(projectedX) ||
+    !Number.isFinite(fontSize) ||
+    sceneWidth <= 0
+  ) {
+    return false;
   }
-  const nearestSlot = Math.round((particleIndex * (visibleStreamCount - 1)) / (particleCount - 1));
-  return (
-    particleIndex === Math.round((nearestSlot * (particleCount - 1)) / (visibleStreamCount - 1))
+  const glyphGap = Math.min(
+    MATRIX_WALK_GLYPH_GAP_PX,
+    Math.max(MATRIX_WALK_OCCUPANCY_BIN_PX, fontSize * 0.12),
   );
+  const halfWidth =
+    (Math.max(MIN_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE, fontSize) *
+      MATRIX_WALK_MAX_TEXT_WIDTH_RATIO +
+      glyphGap) *
+    0.5;
+  const left = Math.max(0, projectedX - halfWidth);
+  const right = Math.min(sceneWidth, projectedX + halfWidth);
+  if (right <= 0 || left >= sceneWidth || right <= left) return false;
+
+  const firstBin = Math.max(0, Math.floor(left / MATRIX_WALK_OCCUPANCY_BIN_PX));
+  const lastBin = Math.min(
+    occupancy.bins.length - 1,
+    Math.floor(right / MATRIX_WALK_OCCUPANCY_BIN_PX),
+  );
+  for (let bin = firstBin; bin <= lastBin; bin += 1) {
+    if (occupancy.bins[bin] === occupancy.generation) {
+      return false;
+    }
+  }
+  for (let bin = firstBin; bin <= lastBin; bin += 1) {
+    occupancy.bins[bin] = occupancy.generation;
+  }
+  occupancy.selectedStreams += 1;
+  return true;
 }
 
 function resolveMatrixWalkFont(size: number, scale: number): string {
@@ -1125,29 +1163,10 @@ export function drawAtmosphereScene(
     context.textAlign = "center";
     context.textBaseline = "middle";
     const walk = isMatrixWalkMotionMode(motionMode);
-    const walkVisibleStreamCount = walk
-      ? resolveMatrixWalkVisibleStreamCount(scene, walkStartFontSize, walkEndFontSize)
-      : scene.particles.length;
-    for (const [particleIndex, particle] of scene.particles.entries()) {
-      if (
-        walk &&
-        !isEvenlySelectedMatrixWalkStream(
-          particleIndex,
-          scene.particles.length,
-          walkVisibleStreamCount,
-        )
-      ) {
-        continue;
-      }
+    const walkOccupancy = walk ? beginMatrixWalkOccupancy(scene) : null;
+    for (const particle of scene.particles) {
       const lifecycleOpacity = resolveMatrixWalkLifecycleOpacity(particle, motionMode);
       if (lifecycleOpacity <= 0) continue;
-      context.fillStyle =
-        matrixColorFrame === undefined
-          ? color
-          : resolveMatrixStreamColor(matrixColorFrame, particle);
-      if (motionMode === "flat") {
-        context.font = resolveMatrixPerspectiveFont(particle.size, matrixBaseFontScale);
-      }
       const walkFontSize = walk
         ? quantizeMatrixWalkFontSize(
             resolveMatrixWalkTargetFontSize(
@@ -1159,6 +1178,30 @@ export function drawAtmosphereScene(
             DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE,
           )
         : particle.size;
+      if (walk && walkOccupancy !== null) {
+        resolveAtmosphereProjectedPointInPlace(
+          projectedFrom,
+          scene,
+          particle,
+          particle.x,
+          particle.y,
+          motionMode,
+          walkStartFontSize,
+          walkEndFontSize,
+        );
+        if (
+          !claimMatrixWalkProjectedBounds(walkOccupancy, scene.width, projectedFrom.x, walkFontSize)
+        ) {
+          continue;
+        }
+      }
+      context.fillStyle =
+        matrixColorFrame === undefined
+          ? color
+          : resolveMatrixStreamColor(matrixColorFrame, particle);
+      if (motionMode === "flat") {
+        context.font = resolveMatrixPerspectiveFont(particle.size, matrixBaseFontScale);
+      }
       const trailSpacing = walk
         ? Math.max(particle.size, walkFontSize * MATRIX_WALK_TRAIL_LINE_HEIGHT)
         : particle.size;

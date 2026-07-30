@@ -194,7 +194,7 @@ describe("atmosphere motion projection", () => {
     }
   });
 
-  it("does not add Matrix particles and only reduces Walk draw calls to prevent overlap", () => {
+  it("does not add Matrix particles and reduces Walk draws only for projected overlap", () => {
     const scene = createAtmosphereScene("matrix", 1_280, 720, createSeededRandom(42), 1, 0);
     const particleCount = scene.particles.length;
     const flat = createContextRecorder();
@@ -207,13 +207,73 @@ describe("atmosphere motion projection", () => {
       expect(directional.texts).toHaveLength(flat.texts.length);
     }
 
-    for (const mode of ["walk-forward", "walk-reverse"] as const) {
-      const walk = createContextRecorder();
-      drawAtmosphereScene(walk.context, scene, "#00ff00", 1, undefined, mode, 12, 144);
-      expect(scene.particles).toHaveLength(particleCount);
-      expect(walk.texts.length).toBeGreaterThan(0);
-      expect(walk.texts.length).toBeLessThan(flat.texts.length);
+    const forward = createContextRecorder();
+    drawAtmosphereScene(forward.context, scene, "#00ff00", 1, undefined, "walk-forward", 12, 144);
+    expect(scene.particles).toHaveLength(particleCount);
+    expect(forward.texts).toHaveLength(flat.texts.length);
+
+    const reverse = createContextRecorder();
+    drawAtmosphereScene(reverse.context, scene, "#00ff00", 1, undefined, "walk-reverse", 12, 144);
+    expect(scene.particles).toHaveLength(particleCount);
+    expect(reverse.texts.length).toBeGreaterThan(0);
+    expect(reverse.texts.length).toBeLessThan(flat.texts.length);
+  });
+
+  it("allows at least three times the former maximum Walk glyph density", () => {
+    const baseline = createAtmosphereScene(
+      "matrix",
+      1_920,
+      1_080,
+      createSeededRandom(44),
+      2.5,
+      0,
+      false,
+      { english: [], japanese: [] },
+      "walk-forward",
+    );
+    const highDensity = createAtmosphereScene(
+      "matrix",
+      1_920,
+      1_080,
+      createSeededRandom(44),
+      10,
+      0,
+      false,
+      { english: [], japanese: [] },
+      "walk-forward",
+    );
+    for (const scene of [baseline, highDensity]) {
+      for (const particle of scene.particles) {
+        particle.matrixLifecycleProgress = 0;
+        particle.matrixLifecycleOpacity = 1;
+      }
     }
+    const baselineFrame = createContextRecorder();
+    const highDensityFrame = createContextRecorder();
+    drawAtmosphereScene(
+      baselineFrame.context,
+      baseline,
+      "#00ff00",
+      1,
+      undefined,
+      "walk-forward",
+      1,
+      144,
+    );
+    drawAtmosphereScene(
+      highDensityFrame.context,
+      highDensity,
+      "#00ff00",
+      1,
+      undefined,
+      "walk-forward",
+      1,
+      144,
+    );
+
+    expect(baseline.particles).toHaveLength(200);
+    expect(highDensity.particles).toHaveLength(640);
+    expect(highDensityFrame.texts.length).toBeGreaterThanOrEqual(baselineFrame.texts.length * 3);
   });
 
   it("mirrors continuously interpolated 1px-to-72px Walk depth for every effect kind", () => {

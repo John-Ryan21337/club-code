@@ -152,9 +152,41 @@ function getAtmosphereCanvasContext(canvas: HTMLCanvasElement): CanvasRenderingC
   return canvas.getContext("2d", ATMOSPHERE_CONTEXT_OPTIONS) as CanvasRenderingContext2D | null;
 }
 
+export function resizeAtmosphereCanvasBitmap(
+  canvas: HTMLCanvasElement,
+  bitmapWidth: number,
+  bitmapHeight: number,
+): boolean {
+  if (canvas.width === bitmapWidth && canvas.height === bitmapHeight) {
+    return false;
+  }
+  canvas.width = bitmapWidth;
+  canvas.height = bitmapHeight;
+  return true;
+}
+
+/**
+ * Publish a fully drawn detached frame in one compositor-visible operation.
+ * `copy` replaces the previous transparent bitmap without exposing an
+ * intermediate clearRect frame on the full-window canvas.
+ */
+export function commitAtmosphereCanvasBitmap(
+  targetCanvas: HTMLCanvasElement,
+  targetContext: CanvasRenderingContext2D,
+  sourceCanvas: HTMLCanvasElement,
+): void {
+  targetContext.save();
+  targetContext.setTransform(1, 0, 0, 1, 0, 0);
+  targetContext.globalAlpha = 1;
+  targetContext.globalCompositeOperation = "copy";
+  targetContext.drawImage(sourceCanvas, 0, 0, targetCanvas.width, targetCanvas.height);
+  targetContext.restore();
+}
+
 function publishAtmosphereRendererDiagnostics(
   canvas: HTMLCanvasElement,
   context: CanvasRenderingContext2D | null,
+  atomicFrameCommit: boolean,
 ): void {
   canvas.dataset.atmosphereRenderer = context === null ? "unavailable" : "canvas2d";
   canvas.dataset.atmosphereRendererAcceleration = "browser-managed";
@@ -163,6 +195,7 @@ function publishAtmosphereRendererDiagnostics(
       ? "available-not-active"
       : "unavailable";
   canvas.dataset.atmosphereTextRasterization = "main-thread";
+  canvas.dataset.atmosphereFrameCommit = atomicFrameCommit ? "atomic-copy" : "direct-fallback";
 }
 
 export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereProps = {}) {
@@ -469,7 +502,9 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
     }
 
     const context = getAtmosphereCanvasContext(canvas);
-    publishAtmosphereRendererDiagnostics(canvas, context);
+    const frameCanvas = document.createElement("canvas");
+    const frameContext = getAtmosphereCanvasContext(frameCanvas);
+    publishAtmosphereRendererDiagnostics(canvas, context, frameContext !== null);
     if (!context) {
       return installFrozenMatrixPalette();
     }
@@ -489,6 +524,7 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
     let lastFrameTime: number | null = null;
     let staticReducedMotionMatrixColorFrame: MatrixColorFrame | null = null;
     let staticColorTimestamp: number | null = null;
+    let hasCommittedFrame = false;
 
     const clearBitmap = (
       targetCanvas: HTMLCanvasElement,
@@ -579,17 +615,18 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
       const bitmapWidth = Math.max(1, Math.floor(width * requestedDpr));
       const bitmapHeight = Math.max(1, Math.floor(height * requestedDpr));
       const dpr = Math.min(bitmapWidth / width, bitmapHeight / height);
-      canvas.width = bitmapWidth;
-      canvas.height = bitmapHeight;
+      resizeAtmosphereCanvasBitmap(canvas, bitmapWidth, bitmapHeight);
       context.setTransform(dpr, 0, 0, dpr, 0, 0);
+      if (frameContext !== null) {
+        resizeAtmosphereCanvasBitmap(frameCanvas, bitmapWidth, bitmapHeight);
+        frameContext.setTransform(dpr, 0, 0, dpr, 0, 0);
+      }
       if (cinemaOverlayCanvas !== null && cinemaOverlayContext !== null) {
-        cinemaOverlayCanvas.width = bitmapWidth;
-        cinemaOverlayCanvas.height = bitmapHeight;
+        resizeAtmosphereCanvasBitmap(cinemaOverlayCanvas, bitmapWidth, bitmapHeight);
         cinemaOverlayContext.setTransform(dpr, 0, 0, dpr, 0, 0);
       }
       if (consoleOverlayCanvas !== null && consoleOverlayContext !== null) {
-        consoleOverlayCanvas.width = bitmapWidth;
-        consoleOverlayCanvas.height = bitmapHeight;
+        resizeAtmosphereCanvasBitmap(consoleOverlayCanvas, bitmapWidth, bitmapHeight);
         consoleOverlayContext.setTransform(dpr, 0, 0, dpr, 0, 0);
       }
       scene = createAtmosphereScene(
@@ -606,6 +643,7 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
         matrixCenterWindIntensity,
       );
       sceneRef.current = scene;
+      hasCommittedFrame = false;
     };
 
     const renderScene = (timestamp: number, reducedMotionActive: boolean) => {
@@ -646,8 +684,9 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
       const color =
         matrixColorFrame?.color ??
         resolveAtmosphereColor(kind, configuredColor, resolvedTheme === "dark");
+      const sceneContext = frameContext ?? context;
       drawAtmosphereScene(
-        context,
+        sceneContext,
         scene,
         color,
         renderOpacity,
@@ -657,6 +696,10 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
         walkEndFontSize,
         matrixBaseFontSize,
       );
+      if (frameContext !== null) {
+        commitAtmosphereCanvasBitmap(canvas, context, frameCanvas);
+      }
+      hasCommittedFrame = true;
       if (
         consoleOverlayCanvas?.dataset.atmosphereConsoleOverlayVisible === "true" &&
         consoleOverlayContext !== null
@@ -700,17 +743,21 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
         // activity packets/connectors remain on the ordinary window canvas,
         // behind cinema media, so the opt-in does not imply provider activity
         // over the video.
-        drawAtmosphereScene(
-          cinemaOverlayContext,
-          scene,
-          color,
-          renderOpacity,
-          matrixColorFrame,
-          motionMode,
-          walkStartFontSize,
-          walkEndFontSize,
-          matrixBaseFontSize,
-        );
+        if (frameContext !== null) {
+          commitAtmosphereCanvasBitmap(cinemaOverlayCanvas, cinemaOverlayContext, frameCanvas);
+        } else {
+          drawAtmosphereScene(
+            cinemaOverlayContext,
+            scene,
+            color,
+            renderOpacity,
+            matrixColorFrame,
+            motionMode,
+            walkStartFontSize,
+            walkEndFontSize,
+            matrixBaseFontSize,
+          );
+        }
       }
       if (matrixColorFrame && activityLinksEnabled) {
         const activityNow = Date.now();
@@ -762,6 +809,7 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
         staticColorTimestamp = null;
         publishFrozenMatrixPalette();
         clearCanvasBitmap();
+        hasCommittedFrame = false;
         return;
       }
 
@@ -780,6 +828,9 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
 
       cancelStaticActivityExpiry();
       staticColorTimestamp = null;
+      if (!hasCommittedFrame) {
+        renderScene(performance.now(), false);
+      }
       if (animationFrame === null) {
         animationFrame = window.requestAnimationFrame(drawFrame);
       }
@@ -790,11 +841,15 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
         staticColorTimestamp ??= performance.now();
         renderScene(staticColorTimestamp, true);
       } else if (scene) {
-        // The bitmap may still contain a prior route's filenames or activity
-        // labels. Clear it synchronously at commit; the next permitted
-        // animation frame paints only the newly published thread.
-        clearCanvasBitmap();
-        if (!shouldShowAtmosphere(readAnimationState())) {
+        // Replace a prior route/activity frame synchronously. Clearing here
+        // exposed the full transparent window canvas until the next RAF,
+        // which appeared as periodic black/white flashes under active work.
+        const animationState = readAnimationState();
+        if (shouldShowAtmosphere(animationState)) {
+          renderScene(performance.now(), !shouldAnimateAtmosphere(animationState));
+        } else {
+          clearCanvasBitmap();
+          hasCommittedFrame = false;
           publishFrozenMatrixPalette();
         }
       }
@@ -835,7 +890,6 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
       }
       sceneRef.current = null;
       matrixColorFrameStore.release(matrixPaletteOwner);
-      clearCanvasBitmap();
       document.removeEventListener("visibilitychange", syncAnimation);
       window.removeEventListener("focus", syncAnimation);
       window.removeEventListener("blur", syncAnimation);
@@ -877,6 +931,7 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
         aria-hidden="true"
         className="pointer-events-none fixed inset-0 z-40 h-full w-full transform-gpu overflow-hidden [contain:strict] [will-change:transform]"
         data-atmosphere-offscreen-canvas="pending"
+        data-atmosphere-frame-commit="pending"
         data-atmosphere-renderer="pending"
         data-atmosphere-renderer-acceleration="browser-managed"
         data-atmosphere-text-rasterization="main-thread"

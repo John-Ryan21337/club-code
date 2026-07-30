@@ -911,7 +911,7 @@ export function WindowAtmosphereSettings() {
 
       <SettingsRow
         title="Effect density"
-        description="Adjust how many flakes, drops, or Matrix columns fill the window."
+        description="Adjust how many flakes, drops, or Matrix columns fill the window. Matrix supports up to 10x density with a bounded 640-stream source pool; Walk modes cap visible streams and skip projected glyphs that would overlap."
         control={
           <div className="flex items-center gap-2">
             <NumberField

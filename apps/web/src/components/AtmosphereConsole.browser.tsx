@@ -114,9 +114,9 @@ describe("AtmosphereConsole", () => {
       .fill("set density 50% and make density more");
     await page.getByRole("button", { name: "Apply" }).click();
 
-    // 50% maps to 1.5x in the 0.5x–2.5x range, then the local adjustment
+    // 50% maps to 5.25x in the 0.5x–10x range, then the local adjustment
     // adds 0.25x rather than overwriting that value with the stale setting.
-    expect(mocks.updateSettings).toHaveBeenCalledWith({ fallingEffectDensity: 1.75 });
+    expect(mocks.updateSettings).toHaveBeenCalledWith({ fallingEffectDensity: 5.5 });
   });
 
   it("writes Matrix enrichment through the active settings key", async () => {

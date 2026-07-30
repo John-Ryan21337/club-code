@@ -208,7 +208,12 @@ export const MIN_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED = 0.25;
 export const MAX_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED = 64;
 export const DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED = 1;
 export const MIN_FALLING_EFFECT_DENSITY = 0.5;
-export const MAX_FALLING_EFFECT_DENSITY = 2.5;
+/**
+ * Matrix Walk can opt into a denser bounded source pool. The prior 2.5x
+ * ceiling made the maximum pool one quarter of the requested high-density
+ * range. Snow/rain retain their independent renderer caps.
+ */
+export const MAX_FALLING_EFFECT_DENSITY = 10;
 export const DEFAULT_FALLING_EFFECT_DENSITY = 1;
 /**
  * Probability that a Matrix stream uses the Japanese glyph pool and Japanese
