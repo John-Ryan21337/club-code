@@ -46,9 +46,9 @@ const ATMOSPHERE_CONSOLE_SELECTOR = '[data-atmosphere-console-surface="true"]';
 const HIDDEN_CONSOLE_CLIP_PATH = "inset(0 0 100% 0)";
 const ATMOSPHERE_CONTEXT_OPTIONS = {
   alpha: true,
-  // This is a latency/queueing hint only. The renderer remains Canvas2D and
-  // the browser decides whether its compositor is GPU-backed.
-  desynchronized: true,
+  // Keep the browser's synchronized Canvas2D presentation path. A
+  // desynchronized full-window alpha canvas may expose an incomplete or
+  // newly reallocated bitmap before the detached frame commit is presented.
 } as const satisfies CanvasRenderingContext2DSettings;
 
 export interface WindowAtmosphereProps {
@@ -929,7 +929,7 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
       <canvas
         ref={canvasRef}
         aria-hidden="true"
-        className="pointer-events-none fixed inset-0 z-40 h-full w-full transform-gpu overflow-hidden [contain:strict] [will-change:transform]"
+        className="pointer-events-none fixed inset-0 z-40 h-full w-full overflow-hidden [contain:strict]"
         data-atmosphere-offscreen-canvas="pending"
         data-atmosphere-frame-commit="pending"
         data-atmosphere-renderer="pending"
@@ -941,7 +941,7 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
         <canvas
           ref={cinemaOverlayCanvasRef}
           aria-hidden="true"
-          className="pointer-events-none fixed inset-0 z-50 h-full w-full transform-gpu overflow-hidden [contain:strict] [will-change:transform]"
+          className="pointer-events-none fixed inset-0 z-50 h-full w-full overflow-hidden [contain:strict]"
           data-cinema-atmosphere-visible="false"
           data-testid="cinema-falling-atmosphere"
           style={{
@@ -954,7 +954,7 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
         <canvas
           ref={consoleOverlayCanvasRef}
           aria-hidden="true"
-          className="pointer-events-none fixed inset-0 z-[86] h-full w-full transform-gpu overflow-hidden opacity-40 [contain:strict] [will-change:transform]"
+          className="pointer-events-none fixed inset-0 z-[86] h-full w-full overflow-hidden opacity-40 [contain:strict]"
           data-atmosphere-console-overlay-visible="false"
           data-testid="atmosphere-console-matrix-overlay"
           style={{

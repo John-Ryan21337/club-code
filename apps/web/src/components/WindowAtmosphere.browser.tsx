@@ -356,6 +356,8 @@ describe("WindowAtmosphere", () => {
     expect(canvas.getAttribute("aria-hidden")).toBe("true");
     expect(style.pointerEvents).toBe("none");
     expect(style.position).toBe("fixed");
+    expect(style.transform).toBe("none");
+    expect(style.willChange).toBe("auto");
     expect(bounds.left).toBe(0);
     expect(bounds.top).toBe(0);
     expect(bounds.width).toBe(window.innerWidth);
@@ -373,6 +375,9 @@ describe("WindowAtmosphere", () => {
     expect(["available-not-active", "unavailable"]).toContain(
       canvas.getAttribute("data-atmosphere-offscreen-canvas"),
     );
+    const context = (canvas as HTMLCanvasElement).getContext("2d");
+    expect(context).not.toBeNull();
+    expect(context?.getContextAttributes().desynchronized).toBe(false);
     expect(document.querySelector('[data-testid="cinema-falling-atmosphere"]')).toBeNull();
   });
 
