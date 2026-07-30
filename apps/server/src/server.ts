@@ -336,6 +336,11 @@ const RuntimeServicesLive = ServerRuntimeStartupLive.pipe(
   Layer.provideMerge(RuntimeDependenciesLive),
 );
 
+const RuntimeServicesWithTextGenerationLive = Layer.merge(
+  RuntimeServicesLive,
+  TextGeneration.layer.pipe(Layer.provide(RuntimeServicesLive)),
+);
+
 const baseRoutesLayer = Layer.mergeAll(
   authAdminPasswordClearRouteLayer,
   authAdminPasswordSetRouteLayer,
@@ -434,7 +439,7 @@ export const makeServerLayer = Layer.unwrap(
     );
 
     return serverApplicationLayer.pipe(
-      Layer.provideMerge(RuntimeServicesLive),
+      Layer.provideMerge(RuntimeServicesWithTextGenerationLive),
       Layer.provideMerge(BrandingImageStoreLive),
       Layer.provide(AmbientImageStoreLive),
       Layer.provide(YouTubePublicDiscoveryLive),

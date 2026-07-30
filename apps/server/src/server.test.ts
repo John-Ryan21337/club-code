@@ -90,6 +90,7 @@ import {
   type ProjectionSnapshotQueryShape,
 } from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ThreadDetailSubscriptionRegistryLive } from "./orchestration/Layers/ThreadDetailSubscriptionRegistry.ts";
+import { TextGeneration } from "./textGeneration/TextGeneration.ts";
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite.ts";
 import { PersistenceSqlError } from "./persistence/Errors.ts";
 import {
@@ -688,14 +689,19 @@ const buildAppUnderTest = (options?: {
       },
     ).pipe(
       Layer.provide(
-        Layer.mock(Keybindings)({
-          loadConfigState: Effect.succeed({
-            keybindings: [],
-            issues: [],
+        Layer.mergeAll(
+          Layer.mock(TextGeneration, {
+            generateAtmosphereCommands: () => Effect.succeed({ proposal: { commands: [] } }),
           }),
-          streamChanges: Stream.empty,
-          ...options?.layers?.keybindings,
-        }),
+          Layer.mock(Keybindings)({
+            loadConfigState: Effect.succeed({
+              keybindings: [],
+              issues: [],
+            }),
+            streamChanges: Stream.empty,
+            ...options?.layers?.keybindings,
+          }),
+        ),
       ),
       Layer.provide(
         Layer.mock(ProviderRegistry)({

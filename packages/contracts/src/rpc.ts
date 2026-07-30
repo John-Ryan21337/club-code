@@ -23,6 +23,7 @@ import {
   GitManagerServiceError,
   GitPreparePullRequestThreadInput,
   GitPreparePullRequestThreadResult,
+  TextGenerationError,
   VcsPullInput,
   GitPullRequestRefInput,
   VcsPullResult,
@@ -37,6 +38,7 @@ import {
 import { KeybindingsConfigError } from "./keybindings.ts";
 import {
   ClientOrchestrationCommand,
+  ModelSelection,
   ORCHESTRATION_WS_METHODS,
   OrchestrationDispatchCommandError,
   OrchestrationGetSnapshotError,
@@ -193,6 +195,7 @@ export const WS_METHODS = {
   serverGetProcessResourceHistory: "server.getProcessResourceHistory",
   serverGetRuntimeLayerDiagnostics: "server.getRuntimeLayerDiagnostics",
   serverSignalProcess: "server.signalProcess",
+  serverInterpretAtmosphereCommand: "server.interpretAtmosphereCommand",
 
   // Usage stats
   usageStatsGet: "usageStats.get",
@@ -226,6 +229,18 @@ export const WsServerGetConfigRpc = Rpc.make(WS_METHODS.serverGetConfig, {
   success: ServerConfig,
   error: Schema.Union([ClientSettingsError, KeybindingsConfigError, ServerSettingsError]),
 });
+
+export const WsServerInterpretAtmosphereCommandRpc = Rpc.make(
+  WS_METHODS.serverInterpretAtmosphereCommand,
+  {
+    payload: Schema.Struct({
+      request: Schema.String.check(Schema.isMaxLength(500)),
+      modelSelection: ModelSelection,
+    }),
+    success: Schema.Struct({ proposal: Schema.Unknown }),
+    error: TextGenerationError,
+  },
+);
 
 export const WsServerRefreshProvidersRpc = Rpc.make(WS_METHODS.serverRefreshProviders, {
   payload: Schema.Struct({
@@ -646,6 +661,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsAgentBrowserPollRpc,
   WsAgentBrowserCompleteRpc,
   WsServerGetConfigRpc,
+  WsServerInterpretAtmosphereCommandRpc,
   WsServerRefreshProvidersRpc,
   WsServerLoginProviderRpc,
   WsServerUpdateProviderRpc,

@@ -216,3 +216,63 @@ export function buildThreadTitlePrompt(input: ThreadTitlePromptInput) {
 
   return { prompt, outputSchema };
 }
+
+// ---------------------------------------------------------------------------
+// Atmosphere controls
+// ---------------------------------------------------------------------------
+
+export function buildAtmosphereCommandPrompt(input: { request: string }) {
+  const command = Schema.Union([
+    Schema.Struct({
+      kind: Schema.Literal("set-effect"),
+      effect: Schema.Literals(["off", "snow", "rain", "matrix"]),
+    }),
+    Schema.Struct({
+      kind: Schema.Literal("adjust-effect"),
+      property: Schema.Literals(["density", "speed", "opacity"]),
+      direction: Schema.Literals(["increase", "decrease"]),
+    }),
+    Schema.Struct({
+      kind: Schema.Literal("set-effect-value"),
+      property: Schema.Literals(["density", "speed", "opacity", "japanese-ratio"]),
+      percent: Schema.Number,
+    }),
+    Schema.Struct({
+      kind: Schema.Literal("set-effect-color"),
+      color: Schema.String,
+    }),
+    Schema.Struct({
+      kind: Schema.Literal("set-2ch"),
+      enabled: Schema.Boolean,
+    }),
+    Schema.Struct({
+      kind: Schema.Literal("media-transport"),
+      action: Schema.Literals(["next", "previous", "play", "pause", "stop"]),
+    }),
+    Schema.Struct({
+      kind: Schema.Literal("play-url"),
+      url: Schema.String,
+    }),
+    Schema.Struct({
+      kind: Schema.Literal("visualizer"),
+      action: Schema.Literals(["next", "previous", "random", "toggle"]),
+    }),
+  ]);
+  return {
+    prompt: [
+      "Translate one atmosphere-console request into a narrow JSON command proposal.",
+      "Return a JSON object with key commands containing at most four commands.",
+      "Allowed commands are set-effect, adjust-effect, set-effect-value, set-effect-color, set-2ch, media-transport, play-url, and visualizer.",
+      "Percent values must be from 0 through 100. Colors must be six-digit hex.",
+      "Do not invent a URL. A play-url command may only repeat an https URL present verbatim in the request.",
+      "Return an empty commands array when the request is ambiguous or outside these controls.",
+      "You receive no chat, files, or project context.",
+      "",
+      "Operator control request:",
+      limitSection(input.request, 500),
+    ].join("\n"),
+    outputSchema: Schema.Struct({
+      commands: Schema.Array(command).pipe(Schema.check(Schema.isMaxLength(4))),
+    }),
+  };
+}

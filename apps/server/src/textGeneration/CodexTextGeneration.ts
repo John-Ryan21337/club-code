@@ -22,6 +22,7 @@ import {
 } from "./TextGeneration.ts";
 import {
   buildBranchNamePrompt,
+  buildAtmosphereCommandPrompt,
   buildCommitMessagePrompt,
   buildPrContentPrompt,
   buildThreadTitlePrompt,
@@ -105,7 +106,8 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
       | "generateCommitMessage"
       | "generatePrContent"
       | "generateBranchName"
-      | "generateThreadTitle",
+      | "generateThreadTitle"
+      | "generateAtmosphereCommands",
     value: unknown,
   ): Effect.Effect<string, TextGenerationError> =>
     encodeJsonString(value).pipe(
@@ -168,7 +170,8 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
       | "generateCommitMessage"
       | "generatePrContent"
       | "generateBranchName"
-      | "generateThreadTitle";
+      | "generateThreadTitle"
+      | "generateAtmosphereCommands";
     cwd: string;
     prompt: string;
     outputSchemaJson: S;
@@ -409,10 +412,25 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
     } satisfies ThreadTitleGenerationResult;
   });
 
+  const generateAtmosphereCommands: TextGenerationShape["generateAtmosphereCommands"] = Effect.fn(
+    "CodexTextGeneration.generateAtmosphereCommands",
+  )(function* (input) {
+    const { prompt, outputSchema } = buildAtmosphereCommandPrompt({ request: input.request });
+    const generated = yield* runCodexJson({
+      operation: "generateAtmosphereCommands",
+      cwd: input.cwd,
+      prompt,
+      outputSchemaJson: outputSchema,
+      modelSelection: input.modelSelection,
+    });
+    return { proposal: generated };
+  });
+
   return {
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
+    generateAtmosphereCommands,
   } satisfies TextGenerationShape;
 });

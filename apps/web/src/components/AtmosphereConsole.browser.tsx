@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../hooks/useSettings", () => ({
+  getClientSettings: () => mocks.settings,
   useSettings: <T,>(selector?: (settings: typeof mocks.settings) => T) =>
     selector ? selector(mocks.settings) : mocks.settings,
   useUpdateSettings: () => ({ updateSettings: mocks.updateSettings }),

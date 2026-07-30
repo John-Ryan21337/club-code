@@ -105,6 +105,7 @@ import {
 } from "./auth/Services/SessionCredentialService.ts";
 import { respondToAuthError } from "./auth/http.ts";
 import { ensureSystemPromptFile } from "./systemPromptFile.ts";
+import * as TextGeneration from "./textGeneration/TextGeneration.ts";
 import { makeWebSocketConnectionFlowControl } from "./websocket/ConnectionFlowControl.ts";
 import { encodeThreadDetailSnapshotStreamItems } from "./websocket/ThreadDetailSnapshotStream.ts";
 import { addProviderWebSocketDiagnostics } from "@cafecode/shared/providerPipelineDiagnostics";
@@ -228,6 +229,7 @@ const makeWsRpcLayer = (
       const processDiagnostics = yield* ProcessDiagnostics.ProcessDiagnostics;
       const processResourceMonitor = yield* ProcessResourceMonitor.ProcessResourceMonitor;
       const projectSystemTelemetry = yield* ProjectSystemTelemetry.ProjectSystemTelemetry;
+      const textGeneration = yield* TextGeneration.TextGeneration;
       const runtimeLayerDiagnostics = yield* RuntimeLayerDiagnostics.RuntimeLayerDiagnostics;
       addProviderWebSocketDiagnostics({ connectionOpenCount: 1 });
       const connectionFlowControl = makeWebSocketConnectionFlowControl();
@@ -680,6 +682,16 @@ const makeWsRpcLayer = (
           .pipe(Effect.ignoreCause({ log: true }), Effect.forkDetach, Effect.asVoid);
 
       return WsRpcGroup.of({
+        [WS_METHODS.serverInterpretAtmosphereCommand]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverInterpretAtmosphereCommand,
+            textGeneration.generateAtmosphereCommands({
+              cwd: config.cwd,
+              request: input.request,
+              modelSelection: input.modelSelection,
+            }),
+            { "rpc.aggregate": "atmosphere" },
+          ),
         [WS_METHODS.agentBrowserGrant]: (input) =>
           observeRpcEffect(
             WS_METHODS.agentBrowserGrant,

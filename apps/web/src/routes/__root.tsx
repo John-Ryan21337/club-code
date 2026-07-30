@@ -21,6 +21,7 @@ import { OnboardingSurface } from "../components/OnboardingSurface";
 import { DesktopNotificationWatcher } from "../components/DesktopNotificationWatcher";
 import { EmbeddedBrowserWorkspace } from "../components/EmbeddedBrowserWorkspace";
 import { BackgroundAutoNudgeCoordinator } from "../components/BackgroundAutoNudgeCoordinator";
+import { IdleThreadGuardCoordinator } from "../components/IdleThreadGuardCoordinator";
 import { ProviderUpdateLaunchNotification } from "../components/ProviderUpdateLaunchNotification";
 import { WindowAtmosphere } from "../components/WindowAtmosphere";
 import { WorldClockWidget } from "../components/WorldClockWidget";
@@ -177,6 +178,7 @@ function RootRouteView() {
         <AtmosphereConsole />
         <EmbeddedBrowserWorkspace />
         {primaryEnvironmentAuthenticated ? <BackgroundAutoNudgeCoordinator /> : null}
+        {primaryEnvironmentAuthenticated ? <IdleThreadGuardCoordinator /> : null}
         {primaryEnvironmentAuthenticated ? <EventRouter /> : null}
         {primaryEnvironmentAuthenticated ? <ProviderUpdateLaunchNotification /> : null}
         <DesktopNotificationWatcher />

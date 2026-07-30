@@ -41,6 +41,7 @@ it("seeds custom image geometry and supports keyboard move and resize handles", 
         glowColor="auto"
         glowOpacity={0.35}
         continueBackgroundAnimations={false}
+        onRequestCustomLayout={vi.fn()}
         onDisable={vi.fn()}
       />
     </div>,
@@ -85,6 +86,39 @@ it("seeds custom image geometry and supports keyboard move and resize handles", 
   expect(readAmbientMediaGeometry("image")!.x).toBeGreaterThan(xBeforePointerDrag);
 });
 
+it("shows move and resize affordances in preset layout and promotes the first adjustment", async () => {
+  const onRequestCustomLayout = vi.fn();
+  await render(
+    <div className="relative h-[800px] w-[1000px]">
+      <AmbientImagePanel
+        asset={asset}
+        cycleAssets={[]}
+        cycleEnabled={false}
+        cycleSeconds={20}
+        presentationMode="floating"
+        layoutMode="preset"
+        placement="bottom-left"
+        size="medium"
+        stackedVideoSize={null}
+        glow={false}
+        glowColor="auto"
+        glowOpacity={0.35}
+        continueBackgroundAnimations={false}
+        onRequestCustomLayout={onRequestCustomLayout}
+        onDisable={vi.fn()}
+      />
+    </div>,
+  );
+
+  const move = page.getByRole("button", { name: /Move ambient image/ });
+  await expect.element(move).toBeVisible();
+  await expect.element(page.getByRole("button", { name: /Resize ambient image/ })).toBeVisible();
+  move.element().focus();
+  await userEvent.keyboard("{ArrowRight}");
+  expect(onRequestCustomLayout).toHaveBeenCalledTimes(1);
+  expect(readAmbientMediaGeometry("image")).not.toBeNull();
+});
+
 it("offers stable manual cycling and a theater presentation without changing custom geometry", async () => {
   const secondAsset = {
     ...asset,
@@ -108,6 +142,7 @@ it("offers stable manual cycling and a theater presentation without changing cus
         glowColor="auto"
         glowOpacity={0.35}
         continueBackgroundAnimations={false}
+        onRequestCustomLayout={vi.fn()}
         onDisable={vi.fn()}
       />
     </div>,
@@ -153,6 +188,7 @@ it("keeps custom controls reachable on a narrow pane and tears down cycling with
         glowColor="auto"
         glowOpacity={0.35}
         continueBackgroundAnimations
+        onRequestCustomLayout={vi.fn()}
         onDisable={vi.fn()}
       />
     </div>,

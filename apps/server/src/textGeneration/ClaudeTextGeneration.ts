@@ -20,6 +20,7 @@ import { TextGenerationError } from "@cafecode/contracts";
 import { type TextGenerationShape } from "./TextGeneration.ts";
 import {
   buildBranchNamePrompt,
+  buildAtmosphereCommandPrompt,
   buildCommitMessagePrompt,
   buildPrContentPrompt,
   buildThreadTitlePrompt,
@@ -83,7 +84,8 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
       | "generateCommitMessage"
       | "generatePrContent"
       | "generateBranchName"
-      | "generateThreadTitle",
+      | "generateThreadTitle"
+      | "generateAtmosphereCommands",
     value: unknown,
     detail: string,
   ): Effect.Effect<string, TextGenerationError> =>
@@ -113,7 +115,8 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
       | "generateCommitMessage"
       | "generatePrContent"
       | "generateBranchName"
-      | "generateThreadTitle";
+      | "generateThreadTitle"
+      | "generateAtmosphereCommands";
     cwd: string;
     prompt: string;
     outputSchemaJson: S;
@@ -352,10 +355,25 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
     };
   });
 
+  const generateAtmosphereCommands: TextGenerationShape["generateAtmosphereCommands"] = Effect.fn(
+    "ClaudeTextGeneration.generateAtmosphereCommands",
+  )(function* (input) {
+    const { prompt, outputSchema } = buildAtmosphereCommandPrompt({ request: input.request });
+    const generated = yield* runClaudeJson({
+      operation: "generateAtmosphereCommands",
+      cwd: input.cwd,
+      prompt,
+      outputSchemaJson: outputSchema,
+      modelSelection: input.modelSelection,
+    });
+    return { proposal: generated };
+  });
+
   return {
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
+    generateAtmosphereCommands,
   } satisfies TextGenerationShape;
 });

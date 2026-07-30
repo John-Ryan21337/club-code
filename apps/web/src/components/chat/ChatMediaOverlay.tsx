@@ -81,6 +81,7 @@ export function ChatMediaOverlay() {
           glowColor={media.glowColor}
           glowOpacity={media.glowOpacity}
           continueBackgroundAnimations={media.continueBackgroundAnimations}
+          onRequestCustomLayout={() => updateSettings({ ambientImageLayoutMode: "custom" })}
           onDisable={() => updateSettings({ ambientImageEnabled: false })}
         />
       ) : null}

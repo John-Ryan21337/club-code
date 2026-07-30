@@ -14,6 +14,7 @@ import {
   ProviderThreadGoal,
   ProjectScript,
   ThreadAutoNudgeConfig,
+  migrateStoredAutoNudgeBuiltInPrompt,
   TurnId,
   type OrchestrationCheckpointSummary,
   type OrchestrationLatestTurn,
@@ -180,6 +181,15 @@ function toThreadAutoNudgeSummary(
     lastDispatchedSettledTurnId: config.lastDispatchedSettledTurnId,
     roundsDispatched: config.roundsDispatched,
     lastDispatchedAt: config.lastDispatchedAt,
+  };
+}
+
+function migrateThreadAutoNudgeConfig(
+  config: typeof ThreadAutoNudgeConfig.Type,
+): typeof ThreadAutoNudgeConfig.Type {
+  return {
+    ...config,
+    prompt: migrateStoredAutoNudgeBuiltInPrompt(config.mode, config.prompt),
   };
 }
 
@@ -1632,7 +1642,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 interactionMode: row.interactionMode,
                 branch: row.branch,
                 worktreePath: row.worktreePath,
-                autoNudge: row.autoNudge,
+                autoNudge: migrateThreadAutoNudgeConfig(row.autoNudge),
                 manualFollowUps: row.manualFollowUps,
                 latestTurn: latestTurnByThread.get(row.threadId) ?? null,
                 createdAt: row.createdAt,
@@ -1862,7 +1872,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   interactionMode: row.interactionMode,
                   branch: row.branch,
                   worktreePath: row.worktreePath,
-                  autoNudge: row.autoNudge,
+                  autoNudge: migrateThreadAutoNudgeConfig(row.autoNudge),
                   manualFollowUps: row.manualFollowUps,
                   latestTurn: latestTurnByThread.get(row.threadId) ?? null,
                   createdAt: row.createdAt,
@@ -2702,7 +2712,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         interactionMode: threadRow.value.interactionMode,
         branch: threadRow.value.branch,
         worktreePath: threadRow.value.worktreePath,
-        autoNudge: threadRow.value.autoNudge,
+        autoNudge: migrateThreadAutoNudgeConfig(threadRow.value.autoNudge),
         manualFollowUps: threadRow.value.manualFollowUps,
         latestTurn: Option.isSome(latestTurnRow) ? mapLatestTurn(latestTurnRow.value) : null,
         createdAt: threadRow.value.createdAt,

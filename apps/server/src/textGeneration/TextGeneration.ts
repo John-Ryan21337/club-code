@@ -70,6 +70,16 @@ export interface ThreadTitleGenerationResult {
   title: string;
 }
 
+export interface AtmosphereCommandGenerationInput {
+  cwd: string;
+  request: string;
+  modelSelection: ModelSelection;
+}
+
+export interface AtmosphereCommandGenerationResult {
+  proposal: unknown;
+}
+
 export interface TextGenerationService {
   generateCommitMessage(
     input: CommitMessageGenerationInput,
@@ -77,6 +87,9 @@ export interface TextGenerationService {
   generatePrContent(input: PrContentGenerationInput): Promise<PrContentGenerationResult>;
   generateBranchName(input: BranchNameGenerationInput): Promise<BranchNameGenerationResult>;
   generateThreadTitle(input: ThreadTitleGenerationInput): Promise<ThreadTitleGenerationResult>;
+  generateAtmosphereCommands(
+    input: AtmosphereCommandGenerationInput,
+  ): Promise<AtmosphereCommandGenerationResult>;
 }
 
 /**
@@ -110,6 +123,10 @@ export interface TextGenerationShape {
   readonly generateThreadTitle: (
     input: ThreadTitleGenerationInput,
   ) => Effect.Effect<ThreadTitleGenerationResult, TextGenerationError>;
+
+  readonly generateAtmosphereCommands: (
+    input: AtmosphereCommandGenerationInput,
+  ) => Effect.Effect<AtmosphereCommandGenerationResult, TextGenerationError>;
 }
 
 /**
@@ -123,7 +140,8 @@ type TextGenerationOp =
   | "generateCommitMessage"
   | "generatePrContent"
   | "generateBranchName"
-  | "generateThreadTitle";
+  | "generateThreadTitle"
+  | "generateAtmosphereCommands";
 
 const resolveInstance = (
   registry: ProviderInstanceRegistryShape,
@@ -161,6 +179,10 @@ export const makeTextGenerationFromRegistry = (
   generateThreadTitle: (input) =>
     resolveInstance(registry, "generateThreadTitle", input.modelSelection.instanceId).pipe(
       Effect.flatMap((textGeneration) => textGeneration.generateThreadTitle(input)),
+    ),
+  generateAtmosphereCommands: (input) =>
+    resolveInstance(registry, "generateAtmosphereCommands", input.modelSelection.instanceId).pipe(
+      Effect.flatMap((textGeneration) => textGeneration.generateAtmosphereCommands(input)),
     ),
 });
 

@@ -111,6 +111,9 @@ export interface WsRpcClient {
   };
   readonly server: {
     readonly getConfig: RpcUnaryNoArgMethod<typeof WS_METHODS.serverGetConfig>;
+    readonly interpretAtmosphereCommand: RpcUnaryMethod<
+      typeof WS_METHODS.serverInterpretAtmosphereCommand
+    >;
     /**
      * Refresh provider snapshots. Pass `{ instanceId }` to refresh a single
      * configured instance; add `usageOnly: true` for its account/rate-limit
@@ -293,6 +296,8 @@ export function createWsRpcClient(transport: WsTransport): WsRpcClient {
     },
     server: {
       getConfig: () => transport.request((client) => client[WS_METHODS.serverGetConfig]({})),
+      interpretAtmosphereCommand: (input) =>
+        transport.request((client) => client[WS_METHODS.serverInterpretAtmosphereCommand](input)),
       refreshProviders: (input) =>
         transport.request((client) => client[WS_METHODS.serverRefreshProviders](input ?? {})),
       loginProvider: (input) =>

@@ -1619,9 +1619,10 @@ html[data-cafe-background-animations="paused"][data-cafe-window-focus="blurred"]
   inset: 0;
   border-radius: inherit;
   background: linear-gradient(
-    145deg,
-    color-mix(in srgb, var(--background) 42%, transparent),
-    color-mix(in srgb, var(--background) 14%, transparent)
+    135deg,
+    color-mix(in srgb, var(--background) 20%, transparent),
+    transparent 48%,
+    color-mix(in srgb, var(--primary) 4%, transparent)
   );
   content: "";
   pointer-events: none;

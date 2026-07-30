@@ -184,6 +184,7 @@ import {
 } from "./chat/MessagesTimeline.helpers";
 import { ChatHeader } from "./chat/ChatHeader";
 import { AutoNudgeControl } from "./chat/AutoNudgeControl";
+import { IdleThreadGuardControl } from "./chat/IdleThreadGuardControl";
 import { type ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import {
   ThreadGoalDialog,
@@ -220,11 +221,11 @@ import {
 } from "./ChatView.logic";
 import {
   type AutoNudgeMode,
-  autoNudgePromptForMode,
   canDispatchAutoNudge,
   canScheduleAutoNudge,
   consumeAutoNudgeTerminalForManualActivity,
   getAutoNudgeTurnLedger,
+  normalizeAutoNudgeBuiltInPrompt,
 } from "../autoNudger";
 import { manualFollowUpPriorityStore } from "../manualFollowUpPriorityStore";
 import {
@@ -6603,8 +6604,7 @@ export default function ChatView(props: ChatViewProps) {
       );
       return;
     }
-    const prompt =
-      config.prompt.trim().length === 0 ? (autoNudgePromptForMode(mode) ?? "") : config.prompt;
+    const prompt = normalizeAutoNudgeBuiltInPrompt(mode, config.prompt);
     void configureActiveThreadAutoNudge(
       {
         mode,
@@ -8057,28 +8057,41 @@ export default function ChatView(props: ChatViewProps) {
             <div className="relative isolate">
               <ComposerBannerStack className="relative z-0" items={composerBannerItems} />
               <div className="relative z-10">
-                <AutoNudgeControl
-                  mode={autoNudgeMode}
-                  disabled={!isServerThread || !activeAutoNudgeConfig}
-                  arming={autoNudgeArming}
-                  backgroundEnabled={activeAutoNudgeConfig?.backgroundContinuation ?? false}
-                  roundsDispatched={activeAutoNudgeConfig?.roundsDispatched ?? 0}
-                  maxRounds={activeAutoNudgeConfig?.maxRounds ?? 5}
-                  globallySuppressed={autoNudgeSuppressed}
-                  promptScopeKey={autoNudgeContextKey ?? routeThreadKey}
-                  persistedPrompt={activeAutoNudgeConfig?.prompt ?? ""}
-                  promptMaxLength={THREAD_AUTO_NUDGE_PROMPT_MAX_CHARS}
-                  promptSaving={autoNudgePendingWrite?.kind === "prompt"}
-                  promptEditable={Boolean(isServerThread && activeAutoNudgeConfig)}
-                  onSavePrompt={onSaveAutoNudgePrompt}
-                  limitsSaving={autoNudgePendingWrite?.kind === "limits"}
-                  onSaveLimits={onSaveAutoNudgeLimits}
-                  onModeChange={onAutoNudgeModeChange}
-                  onBackgroundChange={onAutoNudgeBackgroundChange}
-                  onStop={onStopAutoNudgeThread}
-                  onEmergencyStopAll={onEmergencyStopAllAutoNudge}
-                  onAllowAutoNudgeAgain={onAllowAutoNudgeAgain}
-                />
+                <div className="grid min-w-0 grid-cols-1 items-start gap-2 sm:grid-cols-2">
+                  <AutoNudgeControl
+                    mode={autoNudgeMode}
+                    disabled={!isServerThread || !activeAutoNudgeConfig}
+                    arming={autoNudgeArming}
+                    backgroundEnabled={activeAutoNudgeConfig?.backgroundContinuation ?? false}
+                    roundsDispatched={activeAutoNudgeConfig?.roundsDispatched ?? 0}
+                    maxRounds={activeAutoNudgeConfig?.maxRounds ?? 5}
+                    globallySuppressed={autoNudgeSuppressed}
+                    promptScopeKey={autoNudgeContextKey ?? routeThreadKey}
+                    persistedPrompt={activeAutoNudgeConfig?.prompt ?? ""}
+                    promptMaxLength={THREAD_AUTO_NUDGE_PROMPT_MAX_CHARS}
+                    promptSaving={autoNudgePendingWrite?.kind === "prompt"}
+                    promptEditable={Boolean(isServerThread && activeAutoNudgeConfig)}
+                    onSavePrompt={onSaveAutoNudgePrompt}
+                    limitsSaving={autoNudgePendingWrite?.kind === "limits"}
+                    onSaveLimits={onSaveAutoNudgeLimits}
+                    onModeChange={onAutoNudgeModeChange}
+                    onBackgroundChange={onAutoNudgeBackgroundChange}
+                    onStop={onStopAutoNudgeThread}
+                    onEmergencyStopAll={onEmergencyStopAllAutoNudge}
+                    onAllowAutoNudgeAgain={onAllowAutoNudgeAgain}
+                  />
+                  <IdleThreadGuardControl
+                    scope={
+                      isServerThread && activeThread
+                        ? {
+                            environmentId: activeThread.environmentId,
+                            threadId: activeThread.id,
+                          }
+                        : null
+                    }
+                    disabled={!isServerThread || !activeThread}
+                  />
+                </div>
                 <ChatComposer
                   composerRef={composerRef}
                   composerDraftTarget={composerDraftTarget}

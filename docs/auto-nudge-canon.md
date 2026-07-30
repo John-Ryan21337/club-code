@@ -4,6 +4,10 @@ Auto Nudge is default-off, paid automation for one exact environment/thread.
 It is not a global project setting, an idle timer, a provider pacer, or a way to
 interrupt work already running.
 
+The separately configured [Idle Thread Guard](./idle-thread-guard-canon.md) may
+send one status request after a safe multi-hour silence window. Its wall clock
+is isolated from Auto Nudge and cannot create Auto Nudge dispatch authority.
+
 ## Exact-thread policy
 
 - The server stores mode, editable standing-order text, background choice,
@@ -37,6 +41,10 @@ interrupt work already running.
   required independent audits.
 - Both modes stop when work is complete or blocked, new authority is required,
   lanes contend, or additional context would cost more than it helps.
+- These reviewed texts are the application-wide built-in defaults for every
+  thread. A versioned projection migration upgrades recognized older Club Code
+  defaults across existing threads; genuinely operator-authored prompts remain
+  unchanged.
 - These are editable starting prompts. Saving an edit changes only that exact
   thread; it never becomes project-wide policy.
 

@@ -6,6 +6,7 @@ import type {
 } from "@cafecode/contracts";
 import {
   DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+  migrateStoredAutoNudgeBuiltInPrompt,
   EventId,
   MessageId,
   OrchestrationCheckpointSummary,
@@ -592,7 +593,13 @@ export function projectEvent(
         Effect.map((payload) => ({
           ...nextBase,
           threads: updateThread(nextBase.threads, payload.threadId, {
-            autoNudge: payload.config,
+            autoNudge: {
+              ...payload.config,
+              prompt: migrateStoredAutoNudgeBuiltInPrompt(
+                payload.config.mode,
+                payload.config.prompt,
+              ),
+            },
             updatedAt: event.occurredAt,
           }),
         })),

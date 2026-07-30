@@ -19,6 +19,7 @@ import { ServerConfig } from "../config.ts";
 import { resolveAttachmentPath } from "../attachmentStore.ts";
 import {
   buildBranchNamePrompt,
+  buildAtmosphereCommandPrompt,
   buildCommitMessagePrompt,
   buildPrContentPrompt,
   buildThreadTitlePrompt,
@@ -160,7 +161,8 @@ export const makeOpenCodeTextGeneration = Effect.fn("makeOpenCodeTextGeneration"
       | "generateCommitMessage"
       | "generatePrContent"
       | "generateBranchName"
-      | "generateThreadTitle";
+      | "generateThreadTitle"
+      | "generateAtmosphereCommands";
   }) =>
     sharedServerMutex.withPermit(
       Effect.gen(function* () {
@@ -270,7 +272,8 @@ export const makeOpenCodeTextGeneration = Effect.fn("makeOpenCodeTextGeneration"
       | "generateCommitMessage"
       | "generatePrContent"
       | "generateBranchName"
-      | "generateThreadTitle";
+      | "generateThreadTitle"
+      | "generateAtmosphereCommands";
     readonly cwd: string;
     readonly prompt: string;
     readonly outputSchemaJson: S;
@@ -458,10 +461,25 @@ export const makeOpenCodeTextGeneration = Effect.fn("makeOpenCodeTextGeneration"
     };
   });
 
+  const generateAtmosphereCommands: TextGenerationShape["generateAtmosphereCommands"] = Effect.fn(
+    "OpenCodeTextGeneration.generateAtmosphereCommands",
+  )(function* (input) {
+    const { prompt, outputSchema } = buildAtmosphereCommandPrompt({ request: input.request });
+    const generated = yield* runOpenCodeJson({
+      operation: "generateAtmosphereCommands",
+      cwd: input.cwd,
+      prompt,
+      outputSchemaJson: outputSchema,
+      modelSelection: input.modelSelection,
+    });
+    return { proposal: generated };
+  });
+
   return {
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
+    generateAtmosphereCommands,
   } satisfies TextGenerationShape;
 });

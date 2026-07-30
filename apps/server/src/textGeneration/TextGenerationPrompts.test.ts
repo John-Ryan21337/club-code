@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
+import * as Schema from "effect/Schema";
 
 import {
+  buildAtmosphereCommandPrompt,
   buildBranchNamePrompt,
   buildCommitMessagePrompt,
   buildPrContentPrompt,
@@ -143,6 +145,26 @@ describe("sanitizeThreadTitle", () => {
         '  "Reconnect failures after restart because the session state does not recover"  ',
       ),
     ).toBe("Reconnect failures after restart because the se...");
+  });
+});
+
+describe("buildAtmosphereCommandPrompt", () => {
+  it("accepts only the narrow bounded command proposal shape", () => {
+    const result = buildAtmosphereCommandPrompt({ request: "make matrix rain 65 percent" });
+    const decoded = Schema.decodeUnknownSync(result.outputSchema)({
+      commands: [
+        { kind: "set-effect", effect: "matrix" },
+        { kind: "set-effect-value", property: "density", percent: 65 },
+      ],
+    });
+
+    expect(decoded.commands).toHaveLength(2);
+    expect(result.prompt).toContain("no chat, files, or project context");
+    expect(() =>
+      Schema.decodeUnknownSync(result.outputSchema)({
+        commands: [{ kind: "run-shell", command: "whoami" }],
+      }),
+    ).toThrow();
   });
 });
 

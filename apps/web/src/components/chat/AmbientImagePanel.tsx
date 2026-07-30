@@ -176,6 +176,7 @@ export function AmbientImagePanel({
   glowColor,
   glowOpacity,
   continueBackgroundAnimations,
+  onRequestCustomLayout,
   onDisable,
 }: {
   readonly asset: AmbientImageAsset;
@@ -191,6 +192,7 @@ export function AmbientImagePanel({
   readonly glowColor: string;
   readonly glowOpacity: number;
   readonly continueBackgroundAnimations: boolean;
+  readonly onRequestCustomLayout: () => void;
   readonly onDisable: () => void;
 }) {
   const cycle = useMemo(() => {
@@ -326,23 +328,31 @@ export function AmbientImagePanel({
 
   const beginInteraction = useCallback(
     (kind: PointerInteraction["kind"], event: ReactPointerEvent<HTMLButtonElement>) => {
-      if (!effectiveGeometry) return;
+      const startGeometry = effectiveGeometry ?? presetGeometry;
+      if (!startGeometry) return;
       event.preventDefault();
       event.currentTarget.setPointerCapture(event.pointerId);
+      if (layoutMode !== "custom") {
+        geometryRef.current = startGeometry;
+        setCustomGeometry(startGeometry);
+        writeAmbientMediaGeometry("image", startGeometry);
+        onRequestCustomLayout();
+      }
       interactionRef.current = {
         kind,
         pointerId: event.pointerId,
         startClientX: event.clientX,
         startClientY: event.clientY,
-        startGeometry: effectiveGeometry,
+        startGeometry,
       };
     },
-    [effectiveGeometry],
+    [effectiveGeometry, layoutMode, onRequestCustomLayout, presetGeometry],
   );
 
   const nudge = useCallback(
     (kind: PointerInteraction["kind"], key: string) => {
-      if (!effectiveGeometry) return;
+      const startGeometry = effectiveGeometry ?? presetGeometry;
+      if (!startGeometry) return;
       const delta =
         key === "ArrowLeft"
           ? { x: -KEYBOARD_MOVE_STEP, y: 0 }
@@ -354,22 +364,28 @@ export function AmbientImagePanel({
                 ? { x: 0, y: KEYBOARD_MOVE_STEP }
                 : null;
       if (!delta) return;
+      if (layoutMode !== "custom") {
+        geometryRef.current = startGeometry;
+        setCustomGeometry(startGeometry);
+        writeAmbientMediaGeometry("image", startGeometry);
+        onRequestCustomLayout();
+      }
       commitGeometry(
         kind === "move"
           ? {
-              ...effectiveGeometry,
-              x: effectiveGeometry.x + delta.x,
-              y: effectiveGeometry.y + delta.y,
+              ...startGeometry,
+              x: startGeometry.x + delta.x,
+              y: startGeometry.y + delta.y,
             }
           : {
-              ...effectiveGeometry,
+              ...startGeometry,
               width:
-                effectiveGeometry.width +
+                startGeometry.width +
                 (delta.x + delta.y > 0 ? KEYBOARD_RESIZE_STEP : -KEYBOARD_RESIZE_STEP),
             },
       );
     },
-    [commitGeometry, effectiveGeometry],
+    [commitGeometry, effectiveGeometry, layoutMode, onRequestCustomLayout, presetGeometry],
   );
 
   useEffect(() => {
@@ -396,6 +412,7 @@ export function AmbientImagePanel({
   const color = glowColor === "auto" ? "#7dd3fc" : glowColor;
   const theater = presentationMode === "theater" && cycle.length > 1;
   const custom = !theater && layoutMode === "custom" && pane !== null && effectiveGeometry !== null;
+  const adjustable = !theater && pane !== null && presetGeometry !== null;
   return (
     <section
       ref={setPanelElement}
@@ -421,7 +438,7 @@ export function AmbientImagePanel({
           : undefined,
       }}
     >
-      {custom ? (
+      {adjustable ? (
         <button
           type="button"
           className="absolute top-1 left-1 z-10 touch-none cursor-move rounded bg-black/65 p-1 text-white hover:bg-black focus-visible:ring-2 focus-visible:ring-white"
@@ -495,7 +512,7 @@ export function AmbientImagePanel({
           </button>
         </div>
       ) : null}
-      {custom ? (
+      {adjustable ? (
         <button
           type="button"
           className="absolute right-1 bottom-1 z-10 touch-none cursor-nwse-resize rounded bg-black/65 p-1 text-white hover:bg-black focus-visible:ring-2 focus-visible:ring-white"

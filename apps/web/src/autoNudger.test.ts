@@ -7,6 +7,7 @@ import {
   canScheduleAutoNudge,
   consumeAutoNudgeTerminalForManualActivity,
   createAutoNudgeTurnLedger,
+  normalizeAutoNudgeBuiltInPrompt,
 } from "./autoNudger";
 
 const eligible = {
@@ -29,6 +30,21 @@ describe("auto nudger safety gates", () => {
       expect(prompt.length).toBeLessThan(1_200);
     }
     expect(autoNudgePromptForMode("off")).toBeNull();
+  });
+
+  it("upgrades recognized defaults across modes without touching custom prompts", () => {
+    expect(normalizeAutoNudgeBuiltInPrompt("hardcore-fanout", "")).toBe(
+      AUTO_NUDGE_PROMPTS["hardcore-fanout"],
+    );
+    expect(normalizeAutoNudgeBuiltInPrompt("steady-progress", "Fan out and keep going")).toBe(
+      AUTO_NUDGE_PROMPTS["steady-progress"],
+    );
+    expect(
+      normalizeAutoNudgeBuiltInPrompt("hardcore-fanout", AUTO_NUDGE_PROMPTS["steady-progress"]),
+    ).toBe(AUTO_NUDGE_PROMPTS["hardcore-fanout"]);
+    expect(normalizeAutoNudgeBuiltInPrompt("steady-progress", "My custom continuation")).toBe(
+      "My custom continuation",
+    );
   });
 
   it("fails closed for disable, manual input, pending work, and an unavailable provider", () => {

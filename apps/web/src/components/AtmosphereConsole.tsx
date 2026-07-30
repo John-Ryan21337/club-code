@@ -18,7 +18,11 @@ import {
   useState,
 } from "react";
 
-import { type AtmosphereCommand, parseAtmosphereCommands } from "../atmosphereCommandParser";
+import {
+  type AtmosphereCommand,
+  decodeAtmosphereCommandProposal,
+  parseAtmosphereCommands,
+} from "../atmosphereCommandParser";
 import { requestAtmosphereControl } from "../atmosphereControlBus";
 import {
   AtmosphereLmStudioError,
@@ -28,8 +32,9 @@ import { parseYouTubeSource } from "../ambientVideo";
 import { parseSpotifySource } from "../spotify";
 import { useLocalStorage } from "../hooks/useLocalStorage";
 import { useSettings, useUpdateSettings } from "../hooks/useSettings";
+import { getPrimaryEnvironmentConnection } from "../environments/runtime";
+import { useServerProviders } from "../rpc/serverState";
 import { cn } from "../lib/utils";
-import { Switch } from "./ui/switch";
 
 const STORAGE_KEY = "club-code:atmosphere-console:v1";
 const MIN_WIDTH = 292;
@@ -59,6 +64,9 @@ const PreferencesSchema = Schema.Struct({
   open: Schema.Boolean,
   anchor: AnchorSchema,
   lmStudioEnabled: Schema.Boolean,
+  providerMode: Schema.optional(Schema.Literals(["local", "lm-studio", "codex", "claudeAgent"])),
+  providerInstanceId: Schema.optional(Schema.String),
+  providerModel: Schema.optional(Schema.String),
   geometry: GeometrySchema,
 });
 type Preferences = typeof PreferencesSchema.Type;
@@ -67,6 +75,7 @@ const DEFAULT_PREFERENCES: Preferences = {
   open: true,
   anchor: "custom",
   lmStudioEnabled: false,
+  providerMode: "local",
   geometry: {
     x: 321,
     y: 280,
@@ -74,6 +83,16 @@ const DEFAULT_PREFERENCES: Preferences = {
     height: 477.5,
   },
 };
+
+type AtmosphereProviderMode = "local" | "lm-studio" | "codex" | "claudeAgent";
+
+function lightweightModelScore(slug: string): number {
+  const value = slug.toLowerCase();
+  if (value.includes("haiku") || value.includes("flash")) return 0;
+  if (value.includes("nano") || value.includes("mini") || value.includes("light")) return 1;
+  if (value.includes("fast")) return 2;
+  return 10;
+}
 
 interface PointerInteraction {
   readonly kind: "move" | "resize";
@@ -170,6 +189,7 @@ export function AtmosphereConsole() {
 
 function AtmosphereConsoleContent() {
   const settings = useSettings();
+  const serverProviders = useServerProviders();
   const { updateSettings } = useUpdateSettings();
   const [preferences, setPreferences] = useLocalStorage(
     STORAGE_KEY,
@@ -186,6 +206,29 @@ function AtmosphereConsoleContent() {
   const interactionRef = useRef<PointerInteraction | null>(null);
   const pendingGeometryRef = useRef<Geometry | null>(null);
   const animationFrameRef = useRef(0);
+  const providerMode: AtmosphereProviderMode =
+    preferences.providerMode ?? (preferences.lmStudioEnabled ? "lm-studio" : "local");
+  const selectedProvider =
+    serverProviders.find(
+      (provider) =>
+        provider.instanceId === preferences.providerInstanceId &&
+        provider.driver === providerMode &&
+        provider.enabled &&
+        provider.installed,
+    ) ??
+    serverProviders.find(
+      (provider) => provider.driver === providerMode && provider.enabled && provider.installed,
+    ) ??
+    null;
+  const selectedProviderModels = [...(selectedProvider?.models ?? [])].sort(
+    (left, right) =>
+      lightweightModelScore(left.slug) - lightweightModelScore(right.slug) ||
+      left.name.localeCompare(right.name),
+  );
+  const selectedProviderModel =
+    selectedProviderModels.find((model) => model.slug === preferences.providerModel) ??
+    selectedProviderModels[0] ??
+    null;
 
   const updateGeometry = useCallback(
     (geometry: Geometry) => {
@@ -409,21 +452,43 @@ function AtmosphereConsoleContent() {
     setBusy(true);
     try {
       let commands = parseAtmosphereCommands(request);
-      let usedLmStudio = false;
-      if (commands.length === 0 && preferences.lmStudioEnabled) {
+      let interpreterLabel = "Zero-token";
+      if (commands.length === 0 && providerMode === "lm-studio") {
         commands = await interpretAtmosphereCommandWithLmStudio(request);
-        usedLmStudio = true;
+        interpreterLabel = "Local LM Studio";
+      } else if (
+        commands.length === 0 &&
+        (providerMode === "codex" || providerMode === "claudeAgent")
+      ) {
+        if (!selectedProvider || !selectedProviderModel) {
+          setStatus(
+            `No ready ${providerMode === "codex" ? "Codex" : "Claude"} model is available.`,
+          );
+          return;
+        }
+        const generated =
+          await getPrimaryEnvironmentConnection().client.server.interpretAtmosphereCommand({
+            request,
+            modelSelection: {
+              instanceId: selectedProvider.instanceId,
+              model: selectedProviderModel.slug,
+            },
+          });
+        commands = [...decodeAtmosphereCommandProposal(generated.proposal, request)];
+        interpreterLabel = `${providerMode === "codex" ? "Codex" : "Claude"} · ${
+          selectedProviderModel.shortName ?? selectedProviderModel.name
+        }`;
       }
       if (commands.length === 0) {
         setStatus(
-          preferences.lmStudioEnabled
+          providerMode !== "local"
             ? "That request did not map to a safe atmosphere control."
-            : "I could not map that locally. Reword it or enable LM Studio fallback.",
+            : "I could not map that locally. Reword it or choose a model fallback.",
         );
         return;
       }
       const result = await applyCommands(commands);
-      setStatus(`${usedLmStudio ? "Local LM Studio: " : "Zero-token: "}${result}`);
+      setStatus(`${interpreterLabel}: ${result}`);
       setInput("");
     } catch (error) {
       setStatus(
@@ -506,7 +571,7 @@ function AtmosphereConsoleContent() {
         <select
           id="atmosphere-console-anchor"
           aria-label="Console position"
-          className="h-6 max-w-28 rounded border border-border bg-background px-1 text-[10px]"
+          className="h-6 max-w-28 rounded border border-border bg-transparent px-1 text-[10px]"
           value={preferences.anchor}
           onChange={(event) => selectAnchor(event.currentTarget.value as Anchor)}
         >
@@ -555,7 +620,7 @@ function AtmosphereConsoleContent() {
           <input
             id="atmosphere-command"
             autoComplete="off"
-            className="h-8 min-w-0 flex-1 rounded-md border border-input bg-background px-2 text-xs outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30"
+            className="h-8 min-w-0 flex-1 rounded-md border border-input bg-transparent px-2 text-xs outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30"
             maxLength={500}
             placeholder="Snow, 70% Japanese, next song…"
             value={input}
@@ -569,26 +634,63 @@ function AtmosphereConsoleContent() {
             {busy ? "Working…" : "Apply"}
           </button>
         </div>
-        <div className="flex items-center justify-between gap-2 rounded-md border border-border/60 bg-background/45 px-2 py-1.5">
+        <div className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-1.5 rounded-md border border-border/60 bg-transparent px-2 py-1.5">
           <span className="flex min-w-0 items-center gap-1.5 text-[10px]">
             <BotIcon aria-hidden="true" className="size-3.5 shrink-0" />
-            <span className="truncate">LM Studio fallback · 127.0.0.1 only</span>
+            <span className="truncate">Interpreter</span>
           </span>
-          <Switch
-            checked={preferences.lmStudioEnabled}
-            aria-label="Use local LM Studio for unrecognized atmosphere commands"
-            onCheckedChange={(checked) =>
+          <select
+            aria-label="Atmosphere command interpreter"
+            className="h-7 min-w-0 rounded border border-border bg-transparent px-1 text-[10px]"
+            value={providerMode}
+            onChange={(event) => {
+              const next = event.currentTarget.value as AtmosphereProviderMode;
               setPreferences((current) => ({
                 ...current,
-                lmStudioEnabled: Boolean(checked),
-              }))
-            }
-          />
+                providerMode: next,
+                lmStudioEnabled: next === "lm-studio",
+                providerInstanceId: undefined,
+                providerModel: undefined,
+              }));
+            }}
+          >
+            <option value="local">Local parser · zero tokens</option>
+            <option value="lm-studio">LM Studio · local</option>
+            <option value="codex">Codex · lightweight first</option>
+            <option value="claudeAgent">Claude · Haiku/fast first</option>
+          </select>
+          {providerMode === "codex" || providerMode === "claudeAgent" ? (
+            <>
+              <span className="text-[10px] text-muted-foreground">Model</span>
+              <select
+                aria-label="Atmosphere interpreter model"
+                className="h-7 min-w-0 rounded border border-border bg-transparent px-1 text-[10px]"
+                value={selectedProviderModel?.slug ?? ""}
+                onChange={(event) =>
+                  setPreferences((current) => ({
+                    ...current,
+                    providerInstanceId: selectedProvider?.instanceId,
+                    providerModel: event.currentTarget.value,
+                  }))
+                }
+              >
+                {selectedProviderModels.length === 0 ? (
+                  <option value="">No ready models</option>
+                ) : null}
+                {selectedProviderModels.map((model, index) => (
+                  <option key={model.slug} value={model.slug}>
+                    {index === 0 && lightweightModelScore(model.slug) < 10 ? "Recommended · " : ""}
+                    {model.shortName ?? model.name}
+                  </option>
+                ))}
+              </select>
+            </>
+          ) : null}
         </div>
         <p
           aria-live="polite"
           className={cn(
-            "min-h-8 overflow-auto rounded-md bg-background/40 px-2 py-1.5 text-[10px] leading-4 text-muted-foreground",
+            "min-h-8 overflow-auto rounded-md bg-transparent px-2 py-1.5 text-[10px] leading-4 text-muted-foreground",
             busy && "animate-pulse",
           )}
           role="status"
@@ -596,8 +698,8 @@ function AtmosphereConsoleContent() {
           {status}
         </p>
         <p className="mt-auto text-[9px] leading-3 text-muted-foreground/80">
-          LM Studio receives only this control sentence—no chat, files, project context, or paid
-          provider session.
+          The selected interpreter receives only this control sentence—no chat, files, or project
+          context. Codex and Claude may consume paid provider usage; LM Studio remains local.
         </p>
       </form>
 
