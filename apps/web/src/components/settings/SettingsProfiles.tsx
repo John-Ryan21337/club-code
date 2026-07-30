@@ -326,7 +326,7 @@ export function SettingsProfiles() {
               {notice.message}
             </span>
           ) : (
-            "Profiles capture the theme plus safe UI appearance, layout, notification, ambient media, and usability preferences. They do not include keybindings, playlist libraries or current playback, local file selections, uploaded sounds, native window transparency or panel geometry, provider/auth or server/network settings, model favorites or pacing, project-specific state, or exact-thread Auto Nudge."
+            "Profiles capture the theme plus safe UI appearance, layout, and inert usability preferences. They do not include permissions or consent, completion-alert activation, live media or ambient activation and assets, keybindings, playback state, local files, uploaded sounds, native host controls, provider/auth or server/network settings, model identity or pacing, project-specific state, or exact-thread Auto Nudge and Idle Thread Guard authority."
           )
         }
       >

@@ -7,7 +7,8 @@ import * as Schema from "effect/Schema";
 import { useEffect, useSyncExternalStore } from "react";
 
 export const SETTINGS_PROFILE_LIBRARY_STORAGE_KEY = "cafe-code:settings-profile-library:v1";
-export const SETTINGS_PROFILE_LIBRARY_VERSION = 1;
+export const SETTINGS_PROFILE_LIBRARY_VERSION = 2;
+const LEGACY_SETTINGS_PROFILE_LIBRARY_VERSIONS = new Set([1]);
 export const SETTINGS_PROFILE_MAX_COUNT = 32;
 export const SETTINGS_PROFILE_MAX_NAME_LENGTH = 64;
 export const SETTINGS_PROFILE_MAX_STORAGE_BYTES = 512 * 1024;
@@ -33,6 +34,8 @@ export type SettingsProfileClientFieldPolicy =
   | "consent"
   | "external-operation"
   | "external-media-activation"
+  | "event-output-activation"
+  | "ambient-activation"
   | "local-asset-reference"
   | "provider-operation"
   | "execution-policy"
@@ -47,8 +50,8 @@ export const SETTINGS_PROFILE_CLIENT_FIELD_POLICY = {
   dismissedFirstRunHints: "client-bookkeeping",
   // Notification permission/subscription state is owned by its settings controller.
   notificationsEnabled: "consent",
-  completionAlertSoundEnabled: "include",
-  completionAlertSpeechEnabled: "include",
+  completionAlertSoundEnabled: "event-output-activation",
+  completionAlertSpeechEnabled: "event-output-activation",
   completionAlertLanguage: "include",
   completionAlertEnglishVoiceGender: "include",
   completionAlertJapaneseVoiceGender: "include",
@@ -65,9 +68,9 @@ export const SETTINGS_PROFILE_CLIENT_FIELD_POLICY = {
   worldClockLocationIds: "include",
   // Weather is a separate network/approximate-location consent.
   worldClockWeatherEnabled: "consent",
-  fallingEffectsEnabled: "include",
-  atmosphereConsoleEnabled: "include",
-  fallingEffectsOverCinemaEnabled: "include",
+  fallingEffectsEnabled: "ambient-activation",
+  atmosphereConsoleEnabled: "ambient-activation",
+  fallingEffectsOverCinemaEnabled: "ambient-activation",
   fallingEffectKind: "include",
   fallingEffectMatrixBaseFontSize: "include",
   fallingEffectColor: "include",
@@ -131,7 +134,7 @@ export const SETTINGS_PROFILE_CLIENT_FIELD_POLICY = {
   autoNudgeMode: "exact-thread-authority",
   autoNudgeBackgroundContinuation: "exact-thread-authority",
   autoNudgeMaxRounds: "exact-thread-authority",
-  ambianceEnabled: "include",
+  ambianceEnabled: "ambient-activation",
   ambianceEffect: "include",
   ambianceIntensity: "include",
   ambianceReactMode: "include",
@@ -306,7 +309,9 @@ function decodeClientSetting<Key extends SettingsProfileClientKey>(
 export function sanitizeSettingsProfileClientSettings(
   input: unknown,
 ): SettingsProfileClientSettings {
-  if (typeof input !== "object" || input === null || Array.isArray(input)) return {};
+  if (typeof input !== "object" || input === null || Array.isArray(input)) {
+    return Object.freeze({});
+  }
   const record = input as Record<string, unknown>;
   const result: Partial<Record<SettingsProfileClientKey, unknown>> = {};
   for (const key of SETTINGS_PROFILE_CLIENT_KEYS) {
@@ -316,7 +321,7 @@ export function sanitizeSettingsProfileClientSettings(
       result[key] = value;
     }
   }
-  return result as SettingsProfileClientSettings;
+  return Object.freeze(result) as SettingsProfileClientSettings;
 }
 
 export function captureSettingsProfilePayload(
@@ -351,12 +356,24 @@ export function settingsProfileMatches(
   return true;
 }
 
-function parsePersistedProfiles(raw: string | null): SettingsProfileLibrarySnapshot {
+interface ParsedSettingsProfileLibrary {
+  readonly snapshot: SettingsProfileLibrarySnapshot;
+  readonly requiresRewrite: boolean;
+}
+
+function emptyParsedSettingsProfileLibrary(): ParsedSettingsProfileLibrary {
+  return {
+    snapshot: { activeProfileId: null, profiles: [] },
+    requiresRewrite: false,
+  };
+}
+
+function parsePersistedProfiles(raw: string | null): ParsedSettingsProfileLibrary {
   if (
     raw === null ||
     new TextEncoder().encode(raw).byteLength > SETTINGS_PROFILE_MAX_STORAGE_BYTES
   ) {
-    return { activeProfileId: null, profiles: [] };
+    return emptyParsedSettingsProfileLibrary();
   }
   try {
     const decoded = JSON.parse(raw) as {
@@ -364,8 +381,12 @@ function parsePersistedProfiles(raw: string | null): SettingsProfileLibrarySnaps
       readonly activeProfileId?: unknown;
       readonly profiles?: unknown;
     };
-    if (decoded.version !== SETTINGS_PROFILE_LIBRARY_VERSION || !Array.isArray(decoded.profiles)) {
-      return { activeProfileId: null, profiles: [] };
+    if (
+      (decoded.version !== SETTINGS_PROFILE_LIBRARY_VERSION &&
+        !LEGACY_SETTINGS_PROFILE_LIBRARY_VERSIONS.has(decoded.version as number)) ||
+      !Array.isArray(decoded.profiles)
+    ) {
+      return emptyParsedSettingsProfileLibrary();
     }
 
     const profiles: SettingsProfile[] = [];
@@ -406,9 +427,20 @@ function parsePersistedProfiles(raw: string | null): SettingsProfileLibrarySnaps
       typeof decoded.activeProfileId === "string" && seenIds.has(decoded.activeProfileId)
         ? decoded.activeProfileId
         : null;
-    return { activeProfileId, profiles };
+    const snapshot = { activeProfileId, profiles };
+    const canonicalDocument = {
+      version: SETTINGS_PROFILE_LIBRARY_VERSION,
+      activeProfileId,
+      profiles: profiles.map(toPersistedProfile),
+    };
+    return {
+      snapshot,
+      // This also scrubs unsafe/unknown fields from a current-version document
+      // instead of merely hiding them in the in-memory projection.
+      requiresRewrite: JSON.stringify(decoded) !== JSON.stringify(canonicalDocument),
+    };
   } catch {
-    return { activeProfileId: null, profiles: [] };
+    return emptyParsedSettingsProfileLibrary();
   }
 }
 
@@ -416,10 +448,28 @@ function toPersistedProfile(profile: SettingsProfile): PersistedSettingsProfile 
   return {
     name: profile.name,
     theme: profile.theme,
-    clientSettings: profile.clientSettings,
+    // Re-sanitize at the durable boundary even though normal mutation paths
+    // already sanitize. This prevents a stale or externally mutated object
+    // from smuggling authority, consent, identity, or asset fields to storage.
+    clientSettings: sanitizeSettingsProfileClientSettings(profile.clientSettings),
     createdAt: profile.createdAt,
     updatedAt: profile.updatedAt,
   };
+}
+
+function freezeSettingsProfileLibrarySnapshot(
+  input: SettingsProfileLibrarySnapshot,
+): SettingsProfileLibrarySnapshot {
+  const profiles = input.profiles.map((profile) =>
+    Object.freeze({
+      ...profile,
+      clientSettings: sanitizeSettingsProfileClientSettings(profile.clientSettings),
+    }),
+  );
+  return Object.freeze({
+    activeProfileId: input.activeProfileId,
+    profiles: Object.freeze(profiles),
+  });
 }
 
 export function createSettingsProfileLibraryStore(
@@ -440,13 +490,14 @@ export function createSettingsProfileLibraryStore(
     }
   };
   const initialDocument = readStorageDocument();
-  let lastObservedStorageDocument = initialDocument.ok ? initialDocument.raw : null;
-  let snapshot: SettingsProfileLibrarySnapshot = initialDocument.ok
+  const parsedInitialDocument = initialDocument.ok
     ? parsePersistedProfiles(initialDocument.raw)
-    : { activeProfileId: null, profiles: [] };
+    : emptyParsedSettingsProfileLibrary();
+  let lastObservedStorageDocument = initialDocument.ok ? initialDocument.raw : null;
+  let snapshot = freezeSettingsProfileLibrarySnapshot(parsedInitialDocument.snapshot);
   const listeners = new Set<() => void>();
   const emit = (next: SettingsProfileLibrarySnapshot) => {
-    snapshot = next;
+    snapshot = freezeSettingsProfileLibrarySnapshot(next);
     for (const listener of listeners) listener();
   };
   const persist = (next: SettingsProfileLibrarySnapshot): boolean => {
@@ -468,10 +519,17 @@ export function createSettingsProfileLibraryStore(
     }
   };
   const replace = (next: SettingsProfileLibrarySnapshot): boolean => {
-    const persisted = persist(next);
-    emit(next);
+    const safeNext = freezeSettingsProfileLibrarySnapshot(next);
+    const persisted = persist(safeNext);
+    emit(safeNext);
     return persisted;
   };
+
+  if (parsedInitialDocument.requiresRewrite) {
+    // Best-effort migration/scrub. The in-memory snapshot is safe even when
+    // storage is blocked; a later mutation or activation retries persistence.
+    persist(snapshot);
+  }
 
   return {
     getSnapshot: () => snapshot,
@@ -576,7 +634,12 @@ export function createSettingsProfileLibraryStore(
       const nextDocument = readStorageDocument();
       if (!nextDocument.ok || nextDocument.raw === lastObservedStorageDocument) return;
       lastObservedStorageDocument = nextDocument.raw;
-      emit(parsePersistedProfiles(nextDocument.raw));
+      const parsed = parsePersistedProfiles(nextDocument.raw);
+      if (parsed.requiresRewrite) {
+        replace(parsed.snapshot);
+      } else {
+        emit(parsed.snapshot);
+      }
     },
     resetForTests: (clearStorage = true) => {
       if (clearStorage && storage !== null) {

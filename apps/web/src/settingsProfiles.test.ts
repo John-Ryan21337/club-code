@@ -36,11 +36,16 @@ describe("settings profile library", () => {
     const settings = {
       ...DEFAULT_UNIFIED_SETTINGS,
       fallingEffectsEnabled: true,
+      atmosphereConsoleEnabled: true,
+      fallingEffectsOverCinemaEnabled: true,
+      ambianceEnabled: true,
       ambientVideoLayoutMode: "custom",
       ambientImageGlowOpacity: 0.42,
       mobileOptimizedPresentation: true,
       timestampFormat: "24-hour",
       notificationsEnabled: true,
+      completionAlertSoundEnabled: true,
+      completionAlertSpeechEnabled: true,
       worldClockWeatherEnabled: true,
       ambientVideoEnabled: true,
       ambientVideoSource: { kind: "video", id: "private-video" },
@@ -84,13 +89,18 @@ describe("settings profile library", () => {
     const payload = captureSettingsProfilePayload(settings, "dark");
 
     expect(payload.theme).toBe("dark");
-    expect(payload.clientSettings.fallingEffectsEnabled).toBe(true);
     expect(payload.clientSettings.ambientVideoLayoutMode).toBe("custom");
     expect(payload.clientSettings.ambientImageGlowOpacity).toBe(0.42);
     expect(payload.clientSettings.mobileOptimizedPresentation).toBe(true);
     expect(payload.clientSettings.timestampFormat).toBe("24-hour");
     expect(Object.keys(payload.clientSettings)).toEqual([...SETTINGS_PROFILE_CLIENT_KEYS]);
+    expect(payload.clientSettings).not.toHaveProperty("fallingEffectsEnabled");
+    expect(payload.clientSettings).not.toHaveProperty("atmosphereConsoleEnabled");
+    expect(payload.clientSettings).not.toHaveProperty("fallingEffectsOverCinemaEnabled");
+    expect(payload.clientSettings).not.toHaveProperty("ambianceEnabled");
     expect(payload.clientSettings).not.toHaveProperty("notificationsEnabled");
+    expect(payload.clientSettings).not.toHaveProperty("completionAlertSoundEnabled");
+    expect(payload.clientSettings).not.toHaveProperty("completionAlertSpeechEnabled");
     expect(payload.clientSettings).not.toHaveProperty("worldClockWeatherEnabled");
     expect(payload.clientSettings).not.toHaveProperty("ambientVideoEnabled");
     expect(payload.clientSettings).not.toHaveProperty("ambientVideoSource");
@@ -128,7 +138,13 @@ describe("settings profile library", () => {
     expect(SETTINGS_PROFILE_CLIENT_KEYS).toEqual(expectedKeys);
     expect(SETTINGS_PROFILE_CLIENT_FIELD_POLICY).toMatchObject({
       notificationsEnabled: "consent",
+      completionAlertSoundEnabled: "event-output-activation",
+      completionAlertSpeechEnabled: "event-output-activation",
       worldClockWeatherEnabled: "consent",
+      fallingEffectsEnabled: "ambient-activation",
+      atmosphereConsoleEnabled: "ambient-activation",
+      fallingEffectsOverCinemaEnabled: "ambient-activation",
+      ambianceEnabled: "ambient-activation",
       ambientVideoEnabled: "external-media-activation",
       ambientVideoSource: "external-media-activation",
       ambientImageEnabled: "external-media-activation",
@@ -148,6 +164,18 @@ describe("settings profile library", () => {
       powerSaveBlockerMode: "native-machine-control",
       sidebarProjectGroupingOverrides: "project-specific",
     });
+
+    const excludedDefaults = Object.fromEntries(
+      Object.entries(SETTINGS_PROFILE_CLIENT_FIELD_POLICY)
+        .filter(([, policy]) => policy !== "include")
+        .map(([key]) => [
+          key,
+          DEFAULT_UNIFIED_SETTINGS[key as keyof typeof DEFAULT_UNIFIED_SETTINGS],
+        ]),
+    );
+    expect(captureSettingsProfilePayload(excludedDefaults as never, "dark").clientSettings).toEqual(
+      {},
+    );
   });
 
   it("persists named profiles and the active selection in a versioned local document", () => {
@@ -306,6 +334,9 @@ describe("settings profile library", () => {
     expect(createSettingsProfileLibraryStore(oversizedStorage).getSnapshot().profiles).toEqual([]);
     expect(createSettingsProfileLibraryStore(malformedStorage).getSnapshot().profiles).toEqual([]);
     expect(createSettingsProfileLibraryStore(futureStorage).getSnapshot().profiles).toEqual([]);
+    expect(futureStorage.read(SETTINGS_PROFILE_LIBRARY_STORAGE_KEY)).toContain(
+      `"version":${SETTINGS_PROFILE_LIBRARY_VERSION + 1}`,
+    );
   });
 
   it("drops unknown, secret, execution, and malformed fields independently on restore", () => {
@@ -321,6 +352,12 @@ describe("settings profile library", () => {
             updatedAt: "2026-07-29T08:01:00.000Z",
             clientSettings: {
               fallingEffectsEnabled: true,
+              atmosphereConsoleEnabled: true,
+              fallingEffectsOverCinemaEnabled: true,
+              ambianceEnabled: true,
+              completionAlertSoundEnabled: true,
+              completionAlertSpeechEnabled: true,
+              fallingEffectOpacity: 0.42,
               fallingEffectDensity: 999,
               timestampFormat: "24-hour",
               notificationsEnabled: true,
@@ -355,9 +392,15 @@ describe("settings profile library", () => {
     const profile = createSettingsProfileLibraryStore(storage).getSnapshot().profiles[0];
 
     expect(profile?.clientSettings).toEqual({
-      fallingEffectsEnabled: true,
+      fallingEffectOpacity: 0.42,
       timestampFormat: "24-hour",
     });
+    expect(profile?.clientSettings).not.toHaveProperty("fallingEffectsEnabled");
+    expect(profile?.clientSettings).not.toHaveProperty("atmosphereConsoleEnabled");
+    expect(profile?.clientSettings).not.toHaveProperty("fallingEffectsOverCinemaEnabled");
+    expect(profile?.clientSettings).not.toHaveProperty("ambianceEnabled");
+    expect(profile?.clientSettings).not.toHaveProperty("completionAlertSoundEnabled");
+    expect(profile?.clientSettings).not.toHaveProperty("completionAlertSpeechEnabled");
     expect(profile?.clientSettings).not.toHaveProperty("notificationsEnabled");
     expect(profile?.clientSettings).not.toHaveProperty("worldClockWeatherEnabled");
     expect(profile?.clientSettings).not.toHaveProperty("ambientVideoEnabled");
@@ -378,6 +421,93 @@ describe("settings profile library", () => {
     expect(profile?.clientSettings).not.toHaveProperty("providerModelPreferences");
     expect(profile?.clientSettings).not.toHaveProperty("serverPassword");
     expect(profile?.clientSettings).not.toHaveProperty("futureCompatiblePreference");
+  });
+
+  it("migrates legacy documents and scrubs unsafe fields from durable storage", () => {
+    const storage = createStorage({
+      [SETTINGS_PROFILE_LIBRARY_STORAGE_KEY]: JSON.stringify({
+        version: 1,
+        activeProfileId: "profile:mobile",
+        profiles: [
+          {
+            name: "Mobile",
+            theme: "dark",
+            clientSettings: {
+              timestampFormat: "24-hour",
+              completionAlertSpeechEnabled: true,
+              fallingEffectsEnabled: true,
+              ambientVideoSource: { kind: "video", id: "private-video" },
+              autoNudgeMode: "hardcore-fanout",
+              idleThreadGuardEnabled: true,
+              providerModelPreferences: {
+                "private-account": { hiddenModels: ["secret-model"], modelOrder: [] },
+              },
+            },
+            createdAt: "2026-07-29T08:00:00.000Z",
+            updatedAt: "2026-07-29T08:00:00.000Z",
+          },
+        ],
+      }),
+    });
+
+    const restored = createSettingsProfileLibraryStore(storage);
+    const persisted = JSON.parse(storage.read(SETTINGS_PROFILE_LIBRARY_STORAGE_KEY) ?? "{}");
+
+    expect(restored.resolve("profile:mobile")?.clientSettings).toEqual({
+      timestampFormat: "24-hour",
+    });
+    expect(persisted.version).toBe(SETTINGS_PROFILE_LIBRARY_VERSION);
+    expect(persisted.profiles[0].clientSettings).toEqual({ timestampFormat: "24-hour" });
+  });
+
+  it("re-scrubs unsafe fields injected into a current-version storage document", () => {
+    const storage = createStorage({
+      [SETTINGS_PROFILE_LIBRARY_STORAGE_KEY]: JSON.stringify({
+        version: SETTINGS_PROFILE_LIBRARY_VERSION,
+        activeProfileId: "profile:desktop",
+        profiles: [
+          {
+            name: "Desktop",
+            theme: "system",
+            clientSettings: {
+              chatCopyFormat: "plainText",
+              ambientImageEnabled: true,
+              serverPassword: "do-not-retain",
+            },
+            createdAt: "2026-07-29T08:00:00.000Z",
+            updatedAt: "2026-07-29T08:00:00.000Z",
+          },
+        ],
+      }),
+    });
+
+    const restored = createSettingsProfileLibraryStore(storage);
+    const persisted = JSON.parse(storage.read(SETTINGS_PROFILE_LIBRARY_STORAGE_KEY) ?? "{}");
+
+    expect(restored.resolve("profile:desktop")?.clientSettings).toEqual({
+      chatCopyFormat: "plainText",
+    });
+    expect(persisted.profiles[0].clientSettings).toEqual({ chatCopyFormat: "plainText" });
+  });
+
+  it("exposes immutable profile boundaries so callers cannot inject authority fields", () => {
+    const storage = createStorage();
+    const store = createSettingsProfileLibraryStore(storage);
+    const saved = store.upsert(
+      "Desktop",
+      captureSettingsProfilePayload(DEFAULT_UNIFIED_SETTINGS, "dark"),
+    );
+    const resolved = store.resolve(saved.profile.id);
+    if (resolved === null) throw new Error("Expected the saved profile to resolve.");
+
+    expect(Object.isFrozen(store.getSnapshot())).toBe(true);
+    expect(Object.isFrozen(store.getSnapshot().profiles)).toBe(true);
+    expect(Object.isFrozen(resolved)).toBe(true);
+    expect(Object.isFrozen(resolved.clientSettings)).toBe(true);
+    expect(() => {
+      (resolved.clientSettings as Record<string, unknown>).autoNudgeMode = "hardcore-fanout";
+    }).toThrow();
+    expect(store.resolve(saved.profile.id)?.clientSettings).not.toHaveProperty("autoNudgeMode");
   });
 
   it("loads older sparse profiles as patches without resetting newly supported preferences", () => {
