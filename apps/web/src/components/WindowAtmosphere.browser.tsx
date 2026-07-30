@@ -24,6 +24,14 @@ const mocks = vi.hoisted(() => ({
   matrixColorCycleSpeeds: [] as number[],
   matrixColorTimestamps: [] as number[],
   drawnMatrixColors: [] as string[],
+  gpuRendererEnabled: false,
+  gpuRender: vi.fn(() => ({
+    status: "rendered" as const,
+    renderedGlyphs: 1,
+    droppedGlyphs: 0,
+    drawCalls: 1 as const,
+  })),
+  gpuDispose: vi.fn(),
   settings: {
     fallingEffectsEnabled: true as boolean,
     fallingEffectsOverCinemaEnabled: false as boolean,
@@ -144,6 +152,10 @@ vi.mock("../matrixActivityOverlay", () => ({
 }));
 
 vi.mock("../windowAtmosphere", () => ({
+  MATRIX_2CH_AA_TOKENS: ["(^^)"],
+  MATRIX_2CH_ENRICHED_GLYPHS: "仮",
+  MATRIX_JAPANESE_GLYPHS: "雨",
+  MATRIX_ROMAN_GLYPHS: "01",
   createSeededRandom: () => () => 0.5,
   createAtmosphereScene: mocks.createAtmosphereScene,
   createMatrixColorAnimationState: () => ({}),
@@ -183,6 +195,23 @@ vi.mock("../windowAtmosphere", () => ({
     !state.reducedMotion &&
     state.enabled &&
     (state.continueBackgroundAnimations || (state.documentVisible && state.windowFocused)),
+}));
+
+vi.mock("../matrixWebGlRenderer", () => ({
+  createMatrixWebGl2Renderer: () =>
+    mocks.gpuRendererEnabled
+      ? {
+          kind: "webgl2",
+          renderer: {
+            render: mocks.gpuRender,
+            dispose: mocks.gpuDispose,
+          },
+        }
+      : {
+          kind: "canvas2d-fallback",
+          reason: "webgl2-unavailable",
+          requiresFreshCanvas: true,
+        },
 }));
 
 import {
@@ -241,6 +270,9 @@ beforeEach(() => {
   mocks.matrixColorCycleSpeeds = [];
   mocks.matrixColorTimestamps = [];
   mocks.drawnMatrixColors = [];
+  mocks.gpuRendererEnabled = false;
+  mocks.gpuRender.mockClear();
+  mocks.gpuDispose.mockClear();
   mocks.createAtmosphereScene.mockReset();
   mocks.createAtmosphereScene.mockImplementation((kind = "matrix") => ({
     kind,
@@ -379,6 +411,30 @@ describe("WindowAtmosphere", () => {
     expect(context).not.toBeNull();
     expect(context?.getContextAttributes().desynchronized).toBe(false);
     expect(document.querySelector('[data-testid="cinema-falling-atmosphere"]')).toBeNull();
+  });
+
+  it("activates the WebGL2 glyph atlas while retaining the Canvas2D activity overlay", async () => {
+    mocks.gpuRendererEnabled = true;
+
+    mounted = await render(<WindowAtmosphere selectedThreadRef={TEST_SELECTED_THREAD_REF} />);
+
+    const canvasLocator = page.getByTestId("window-atmosphere");
+    const gpuCanvasLocator = page.getByTestId("window-atmosphere-gpu");
+    await expect
+      .element(canvasLocator)
+      .toHaveAttribute("data-atmosphere-renderer", "webgl2-glyph-atlas");
+    await expect
+      .element(canvasLocator)
+      .toHaveAttribute("data-atmosphere-renderer-acceleration", "gpu");
+    await expect
+      .element(canvasLocator)
+      .toHaveAttribute("data-atmosphere-text-rasterization", "gpu-glyph-atlas");
+    await expect
+      .element(gpuCanvasLocator)
+      .toHaveAttribute("data-matrix-gpu-availability", "available");
+    expect(getComputedStyle(gpuCanvasLocator.element()).visibility).toBe("visible");
+    expect(mocks.gpuRender).toHaveBeenCalledTimes(1);
+    expect(mocks.drawMatrixActivityAnimation).toHaveBeenCalledTimes(1);
   });
 
   it.each(["flat", "forward", "reverse", "walk-forward", "walk-reverse"] as const)(

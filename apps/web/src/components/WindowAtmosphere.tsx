@@ -7,7 +7,9 @@ import {
   EMPTY_LOCAL_MEDIA_AUDIO_SIGNAL,
   localMediaAudioSignalStore,
 } from "../localMediaAudioSignal";
+import { MatrixGpuFrameCollector } from "../matrixGpuFrameCollector";
 import { matrixColorFrameStore } from "../matrixColorFrameStore";
+import { createMatrixWebGl2Renderer, type MatrixWebGl2Renderer } from "../matrixWebGlRenderer";
 import {
   createMatrixActivityAnimationState,
   decodeMatrixActivityEvents,
@@ -27,6 +29,10 @@ import {
   createSeededRandom,
   drawAtmosphereScene,
   fitAtmosphereDpr,
+  MATRIX_2CH_AA_TOKENS,
+  MATRIX_2CH_ENRICHED_GLYPHS,
+  MATRIX_JAPANESE_GLYPHS,
+  MATRIX_ROMAN_GLYPHS,
   resolveAtmosphereColor,
   resolveAtmosphereRenderOpacity,
   resolveMatrixAtmosphereColorFrame,
@@ -255,8 +261,12 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
   const serverConfig = useServerConfig();
   const atmosphereAvailable = serverConfig?.ambientExperienceCapabilities.atmosphere === true;
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const matrixGpuCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const cinemaOverlayCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const consoleOverlayCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const matrixGpuRendererRef = useRef<MatrixWebGl2Renderer | null>(null);
+  const matrixGpuAvailableRef = useRef(false);
+  const matrixGpuFrameCollector = useMemo(() => new MatrixGpuFrameCollector(), []);
   const sceneRef = useRef<AtmosphereScene | null>(null);
   const matrixPaletteOwnerRef = useRef<object>({});
   const lastMatrixColorFrameRef = useRef<MatrixColorFrame | null>(null);
@@ -273,6 +283,17 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
     [matrixWorkVocabularyKey],
   );
   const matrixWorkVocabularyRef = useRef(matrixWorkVocabulary);
+  const matrixGpuGlyphPool = useMemo(
+    () => [
+      ...Array.from(MATRIX_ROMAN_GLYPHS),
+      ...Array.from(MATRIX_JAPANESE_GLYPHS),
+      ...(enriched2ch ? Array.from(MATRIX_2CH_ENRICHED_GLYPHS) : []),
+      ...MATRIX_2CH_AA_TOKENS,
+      ...matrixWorkVocabulary.english,
+      ...matrixWorkVocabulary.japanese,
+    ],
+    [enriched2ch, matrixWorkVocabulary],
+  );
   const matrixActivityEventsKey = useStore((state) =>
     activityLinksEnabled && kind === "matrix"
       ? selectMatrixActivityEventsKey(
@@ -433,6 +454,58 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
     };
   }, [atmosphereAvailable, enabled, kind]);
 
+  useLayoutEffect(() => {
+    const gpuCanvas = matrixGpuCanvasRef.current;
+    if (!atmosphereAvailable || !enabled || kind !== "matrix" || gpuCanvas === null) {
+      matrixGpuRendererRef.current = null;
+      matrixGpuAvailableRef.current = false;
+      return;
+    }
+
+    const selection = createMatrixWebGl2Renderer(gpuCanvas, matrixGpuGlyphPool, {
+      maxGlyphInstances: 8_192,
+      onAvailabilityChange: (availability) => {
+        const available = availability === "available";
+        matrixGpuAvailableRef.current = available;
+        gpuCanvas.style.visibility = available ? "visible" : "hidden";
+        gpuCanvas.dataset.matrixGpuAvailability = availability;
+        const diagnosticsCanvas = canvasRef.current;
+        if (diagnosticsCanvas !== null) {
+          diagnosticsCanvas.dataset.atmosphereRenderer = available
+            ? "webgl2-glyph-atlas"
+            : "canvas2d";
+          diagnosticsCanvas.dataset.atmosphereRendererAcceleration = available
+            ? "gpu"
+            : "browser-managed";
+        }
+        invalidateCommittedFrameRef.current?.();
+      },
+    });
+    if (selection.kind !== "webgl2") {
+      gpuCanvas.style.visibility = "hidden";
+      gpuCanvas.dataset.matrixGpuAvailability = "unavailable";
+      gpuCanvas.dataset.matrixGpuFallbackReason = selection.reason;
+      matrixGpuRendererRef.current = null;
+      matrixGpuAvailableRef.current = false;
+      return;
+    }
+
+    delete gpuCanvas.dataset.matrixGpuFallbackReason;
+    gpuCanvas.dataset.matrixGpuAvailability = "available";
+    gpuCanvas.style.visibility = "visible";
+    matrixGpuRendererRef.current = selection.renderer;
+    matrixGpuAvailableRef.current = true;
+    invalidateCommittedFrameRef.current?.();
+    return () => {
+      selection.renderer.dispose();
+      if (matrixGpuRendererRef.current === selection.renderer) {
+        matrixGpuRendererRef.current = null;
+        matrixGpuAvailableRef.current = false;
+      }
+      gpuCanvas.style.visibility = "hidden";
+    };
+  }, [atmosphereAvailable, enabled, kind, matrixGpuGlyphPool]);
+
   useEffect(() => {
     const matrixPaletteOwner = matrixPaletteOwnerRef.current;
     const matrixColorState = createMatrixColorAnimationState();
@@ -502,6 +575,7 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
     }
 
     const context = getAtmosphereCanvasContext(canvas);
+    const matrixGpuCanvas = matrixGpuCanvasRef.current;
     const frameCanvas = document.createElement("canvas");
     const frameContext = getAtmosphereCanvasContext(frameCanvas);
     publishAtmosphereRendererDiagnostics(canvas, context, frameContext !== null);
@@ -538,6 +612,9 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
 
     const clearCanvasBitmap = () => {
       clearBitmap(canvas, context);
+      if (matrixGpuCanvas !== null) {
+        matrixGpuCanvas.style.visibility = "hidden";
+      }
       if (cinemaOverlayCanvas !== null && cinemaOverlayContext !== null) {
         clearBitmap(cinemaOverlayCanvas, cinemaOverlayContext);
       }
@@ -685,21 +762,61 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
         matrixColorFrame?.color ??
         resolveAtmosphereColor(kind, configuredColor, resolvedTheme === "dark");
       const sceneContext = frameContext ?? context;
-      drawAtmosphereScene(
-        sceneContext,
-        scene,
-        color,
-        renderOpacity,
-        matrixColorFrame,
-        motionMode,
-        walkStartFontSize,
-        walkEndFontSize,
-        matrixBaseFontSize,
-      );
-      if (frameContext !== null) {
-        commitAtmosphereCanvasBitmap(canvas, context, frameCanvas);
+      const matrixGpuRenderer = matrixGpuRendererRef.current;
+      let matrixGpuRendered = false;
+      if (
+        kind === "matrix" &&
+        matrixGpuCanvas !== null &&
+        matrixGpuRenderer !== null &&
+        matrixGpuAvailableRef.current
+      ) {
+        const gpuFrame = matrixGpuFrameCollector.collect({
+          scene,
+          color,
+          opacity: renderOpacity,
+          matrixColorFrame,
+          motionMode,
+          walkStartFontSize,
+          walkEndFontSize,
+          matrixBaseFontSize,
+          devicePixelRatio: window.devicePixelRatio,
+        });
+        const result = matrixGpuRenderer.render(gpuFrame);
+        matrixGpuRendered = result.status === "rendered" || result.status === "empty";
+        matrixGpuCanvas.style.visibility = matrixGpuRendered ? "visible" : "hidden";
+      }
+      if (matrixGpuRendered) {
+        sceneContext.clearRect(0, 0, scene.width, scene.height);
+        if (frameContext !== null) {
+          commitAtmosphereCanvasBitmap(canvas, context, frameCanvas);
+        }
+        canvas.dataset.atmosphereRenderer = "webgl2-glyph-atlas";
+        canvas.dataset.atmosphereRendererAcceleration = "gpu";
+        canvas.dataset.atmosphereTextRasterization = "gpu-glyph-atlas";
+      } else {
+        drawAtmosphereScene(
+          sceneContext,
+          scene,
+          color,
+          renderOpacity,
+          matrixColorFrame,
+          motionMode,
+          walkStartFontSize,
+          walkEndFontSize,
+          matrixBaseFontSize,
+        );
+        if (frameContext !== null) {
+          commitAtmosphereCanvasBitmap(canvas, context, frameCanvas);
+        }
+        if (kind === "matrix") {
+          canvas.dataset.atmosphereRenderer = "canvas2d";
+          canvas.dataset.atmosphereRendererAcceleration = "browser-managed";
+          canvas.dataset.atmosphereTextRasterization = "main-thread";
+        }
       }
       hasCommittedFrame = true;
+      const committedSceneCanvas =
+        matrixGpuRendered && matrixGpuCanvas !== null ? matrixGpuCanvas : canvas;
       if (
         consoleOverlayCanvas?.dataset.atmosphereConsoleOverlayVisible === "true" &&
         consoleOverlayContext !== null
@@ -722,7 +839,7 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
           // provider activity lines are painted. This keeps the lift
           // glyph-only without iterating the Matrix scene a second time.
           consoleOverlayContext.drawImage(
-            canvas,
+            committedSceneCanvas,
             sourceLeft,
             sourceTop,
             sourceWidth,
@@ -744,7 +861,11 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
         // behind cinema media, so the opt-in does not imply provider activity
         // over the video.
         if (frameContext !== null) {
-          commitAtmosphereCanvasBitmap(cinemaOverlayCanvas, cinemaOverlayContext, frameCanvas);
+          commitAtmosphereCanvasBitmap(
+            cinemaOverlayCanvas,
+            cinemaOverlayContext,
+            matrixGpuRendered && matrixGpuCanvas !== null ? matrixGpuCanvas : frameCanvas,
+          );
         } else {
           drawAtmosphereScene(
             cinemaOverlayContext,
@@ -918,6 +1039,7 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
     speed,
     walkEndFontSize,
     walkStartFontSize,
+    matrixGpuFrameCollector,
   ]);
 
   if (!enabled || !atmosphereAvailable) {
@@ -926,6 +1048,16 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
 
   return (
     <>
+      {kind === "matrix" ? (
+        <canvas
+          ref={matrixGpuCanvasRef}
+          aria-hidden="true"
+          className="pointer-events-none fixed inset-0 z-40 h-full w-full overflow-hidden [contain:strict]"
+          data-matrix-gpu-availability="pending"
+          data-testid="window-atmosphere-gpu"
+          style={{ visibility: "hidden" }}
+        />
+      ) : null}
       <canvas
         ref={canvasRef}
         aria-hidden="true"
