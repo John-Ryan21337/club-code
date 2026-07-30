@@ -821,9 +821,14 @@ describe("ProjectTelemetryGraph", () => {
     }
   });
 
-  it("hides unavailable graphs while retaining diagnostic cards", async () => {
+  it("omits unavailable sensor cards when unavailable graphs are hidden", async () => {
     await page.viewport(1_200, 800);
     const onChange = vi.fn();
+    const telemetry = telemetryFixture({ projectId: projectA });
+    const cpuTemperature =
+      telemetry.temperatures?.status === "available"
+        ? telemetry.temperatures.sensors.find((sensor) => sensor.kind === "cpu")
+        : undefined;
     const mounted = await render(
       <ProjectTelemetryGraph
         environmentId={environmentA}
@@ -831,18 +836,27 @@ describe("ProjectTelemetryGraph", () => {
         onHideUnavailableGraphsChange={onChange}
         pollIntervalMs={Number.MAX_SAFE_INTEGER}
         projectId={projectA}
-        readTelemetry={vi.fn(async () => telemetryFixture({ projectId: projectA }))}
+        readTelemetry={vi.fn(async () => ({
+          ...telemetry,
+          temperatures: {
+            version: 1 as const,
+            status: "available" as const,
+            sensors: cpuTemperature === undefined ? [] : [cpuTemperature],
+            reason: null,
+            detail: null,
+          },
+        }))}
       />,
     );
     try {
       await expect.element(page.getByLabelText(/Host CPU: 42%/i)).toBeVisible();
-      await expect.element(page.getByLabelText(/Host GPU: Unavailable/i)).toBeVisible();
       const cpuCard = document.querySelector('[data-project-telemetry-card="Host CPU"]');
       const gpuCard = document.querySelector('[data-project-telemetry-card="Host GPU"]');
       expect(cpuCard?.querySelector("[data-project-telemetry-series]")).not.toBeNull();
-      expect(gpuCard?.querySelector("[data-project-telemetry-series]")).toBeNull();
-      expect(gpuCard?.querySelector('[role="img"]')).toBeNull();
-      expect(gpuCard?.children).toHaveLength(2);
+      expect(gpuCard).toBeNull();
+      expect(document.querySelector('[data-project-telemetry-card="Host VRAM"]')).toBeNull();
+      expect(document.querySelector('[data-project-telemetry-card="CPU temp"]')).not.toBeNull();
+      expect(document.querySelector('[data-project-telemetry-card="RAM temp"]')).toBeNull();
       const toggle = page.getByRole("switch", { name: "Hide unavailable resource graphs" });
       await expect.element(toggle).toBeChecked();
       await toggle.click();

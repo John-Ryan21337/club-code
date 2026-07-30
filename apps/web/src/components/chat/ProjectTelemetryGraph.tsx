@@ -326,7 +326,6 @@ function TelemetryCard(props: {
   readonly color: string;
   readonly history: readonly (number | null)[];
   readonly historyMeasurement?: "utilization" | "temperature";
-  readonly hideGraph?: boolean;
 }) {
   const Icon = props.icon;
   return (
@@ -346,16 +345,14 @@ function TelemetryCard(props: {
           {props.value}
         </span>
       </div>
-      {!props.hideGraph ? (
-        <TelemetrySparkline
-          color={props.color}
-          label={props.label}
-          {...(props.historyMeasurement === undefined
-            ? {}
-            : { measurement: props.historyMeasurement })}
-          values={props.history}
-        />
-      ) : null}
+      <TelemetrySparkline
+        color={props.color}
+        label={props.label}
+        {...(props.historyMeasurement === undefined
+          ? {}
+          : { measurement: props.historyMeasurement })}
+        values={props.history}
+      />
       <div className="truncate text-xs text-muted-foreground">{props.detail}</div>
     </div>
   );
@@ -845,6 +842,9 @@ export function ProjectTelemetryGraph({
       history: visibleView.history.map((point) => point.temperatureOtherCelsius),
     },
   ] as const;
+  const displayedTemperatureCards = hideUnavailableGraphs
+    ? temperatureCards.filter((card) => card.metric.celsius !== null)
+    : temperatureCards;
   const lastSample =
     visibleView.snapshot === null
       ? null
@@ -926,7 +926,7 @@ export function ProjectTelemetryGraph({
           </div>
           <label
             className="mb-1.5 flex items-center gap-2 px-0.5 text-xs text-muted-foreground"
-            title="Keep unavailable readings and diagnostics visible without drawing an empty history graph."
+            title="Remove sensor cards whose current reading is unavailable."
           >
             <Switch
               aria-label="Hide unavailable resource graphs"
@@ -938,95 +938,103 @@ export function ProjectTelemetryGraph({
           </label>
           <div className="min-h-0 flex-1 overflow-auto pb-2" id={panelId}>
             <div className="grid grid-cols-2 gap-1.5">
-              <TelemetryCard
-                color={colors.cpu}
-                detail={cpuDetail}
-                hideGraph={hideUnavailableGraphs && cpuPercent === null}
-                history={visibleView.history.map((point) => point.cpuPercent)}
-                icon={CpuIcon}
-                label="Host CPU"
-                value={telemetry?.cpu.status === "warming" ? "Warming" : formatPercent(cpuPercent)}
-              />
-              <TelemetryCard
-                color={colors.memory}
-                detail={memoryDetail}
-                hideGraph={hideUnavailableGraphs && memoryPercent === null}
-                history={visibleView.history.map((point) => point.memoryPercent)}
-                icon={MemoryStickIcon}
-                label="Host RAM"
-                title={exactBytesTitle(
-                  "Available memory on selected environment",
-                  telemetry?.memory.status === "available" ? telemetry.memory.availableBytes : null,
-                )}
-                value={formatPercent(memoryPercent)}
-              />
-              <TelemetryCard
-                color={colors.disk}
-                detail={diskDetail}
-                hideGraph={hideUnavailableGraphs && diskPercent === null}
-                history={visibleView.history.map((point) => point.projectVolumePercent)}
-                icon={HardDriveIcon}
-                label="Project disk"
-                title={exactBytesTitle(
-                  "Free space on selected project volume",
-                  telemetry?.projectVolume.status === "available"
-                    ? telemetry.projectVolume.availableBytes
-                    : null,
-                )}
-                value={formatPercent(diskPercent)}
-              />
-              <TelemetryCard
-                color={colors.network}
-                detail={networkDetail}
-                hideGraph={
-                  hideUnavailableGraphs &&
-                  (networkReceiveBytesPerSecond === null || networkTransmitBytesPerSecond === null)
-                }
-                history={normalizeTelemetryRateHistory(networkRateHistory)}
-                icon={NetworkIcon}
-                label="Host network"
-                title="Aggregate receive/transmit rates only; no interfaces, addresses, endpoints, or packet contents leave the backend."
-                value={
-                  telemetry?.network.status === "warming"
-                    ? "Warming"
-                    : networkReceiveBytesPerSecond === null ||
-                        networkTransmitBytesPerSecond === null
-                      ? "Unavailable"
-                      : `↓ ${formatTelemetryBytes(networkReceiveBytesPerSecond)}/s · ↑ ${formatTelemetryBytes(networkTransmitBytesPerSecond)}/s`
-                }
-              />
+              {!hideUnavailableGraphs || cpuPercent !== null ? (
+                <TelemetryCard
+                  color={colors.cpu}
+                  detail={cpuDetail}
+                  history={visibleView.history.map((point) => point.cpuPercent)}
+                  icon={CpuIcon}
+                  label="Host CPU"
+                  value={
+                    telemetry?.cpu.status === "warming" ? "Warming" : formatPercent(cpuPercent)
+                  }
+                />
+              ) : null}
+              {!hideUnavailableGraphs || memoryPercent !== null ? (
+                <TelemetryCard
+                  color={colors.memory}
+                  detail={memoryDetail}
+                  history={visibleView.history.map((point) => point.memoryPercent)}
+                  icon={MemoryStickIcon}
+                  label="Host RAM"
+                  title={exactBytesTitle(
+                    "Available memory on selected environment",
+                    telemetry?.memory.status === "available"
+                      ? telemetry.memory.availableBytes
+                      : null,
+                  )}
+                  value={formatPercent(memoryPercent)}
+                />
+              ) : null}
+              {!hideUnavailableGraphs || diskPercent !== null ? (
+                <TelemetryCard
+                  color={colors.disk}
+                  detail={diskDetail}
+                  history={visibleView.history.map((point) => point.projectVolumePercent)}
+                  icon={HardDriveIcon}
+                  label="Project disk"
+                  title={exactBytesTitle(
+                    "Free space on selected project volume",
+                    telemetry?.projectVolume.status === "available"
+                      ? telemetry.projectVolume.availableBytes
+                      : null,
+                  )}
+                  value={formatPercent(diskPercent)}
+                />
+              ) : null}
+              {!hideUnavailableGraphs ||
+              (networkReceiveBytesPerSecond !== null && networkTransmitBytesPerSecond !== null) ? (
+                <TelemetryCard
+                  color={colors.network}
+                  detail={networkDetail}
+                  history={normalizeTelemetryRateHistory(networkRateHistory)}
+                  icon={NetworkIcon}
+                  label="Host network"
+                  title="Aggregate receive/transmit rates only; no interfaces, addresses, endpoints, or packet contents leave the backend."
+                  value={
+                    telemetry?.network.status === "warming"
+                      ? "Warming"
+                      : networkReceiveBytesPerSecond === null ||
+                          networkTransmitBytesPerSecond === null
+                        ? "Unavailable"
+                        : `↓ ${formatTelemetryBytes(networkReceiveBytesPerSecond)}/s · ↑ ${formatTelemetryBytes(networkTransmitBytesPerSecond)}/s`
+                  }
+                />
+              ) : null}
               {displayedGpuAdapters.length === 0 ? (
                 <>
-                  <TelemetryCard
-                    color={colors.gpu}
-                    detail={gpuDetail}
-                    hideGraph={hideUnavailableGraphs && visibleView.gpu.gpuPercent === null}
-                    history={visibleView.history.map((point) => point.gpuPercent)}
-                    icon={GaugeIcon}
-                    label="Host GPU"
-                    value={
-                      gpuLoading
-                        ? "Waiting"
-                        : formatPercent(telemetryUnavailable ? null : visibleView.gpu.gpuPercent)
-                    }
-                  />
-                  <TelemetryCard
-                    color={colors.vram}
-                    detail={vramDetail}
-                    hideGraph={hideUnavailableGraphs && visibleView.gpu.vramPercent === null}
-                    history={visibleView.history.map((point) => point.vramPercent)}
-                    icon={MemoryStickIcon}
-                    label="Host VRAM"
-                    title={exactBytesTitle(
-                      "Available GPU memory on selected environment",
-                      telemetryUnavailable ? null : visibleView.gpu.vramAvailableBytes,
-                    )}
-                    value={
-                      gpuLoading
-                        ? "Waiting"
-                        : formatPercent(telemetryUnavailable ? null : visibleView.gpu.vramPercent)
-                    }
-                  />
+                  {!hideUnavailableGraphs || visibleView.gpu.gpuPercent !== null ? (
+                    <TelemetryCard
+                      color={colors.gpu}
+                      detail={gpuDetail}
+                      history={visibleView.history.map((point) => point.gpuPercent)}
+                      icon={GaugeIcon}
+                      label="Host GPU"
+                      value={
+                        gpuLoading
+                          ? "Waiting"
+                          : formatPercent(telemetryUnavailable ? null : visibleView.gpu.gpuPercent)
+                      }
+                    />
+                  ) : null}
+                  {!hideUnavailableGraphs || visibleView.gpu.vramPercent !== null ? (
+                    <TelemetryCard
+                      color={colors.vram}
+                      detail={vramDetail}
+                      history={visibleView.history.map((point) => point.vramPercent)}
+                      icon={MemoryStickIcon}
+                      label="Host VRAM"
+                      title={exactBytesTitle(
+                        "Available GPU memory on selected environment",
+                        telemetryUnavailable ? null : visibleView.gpu.vramAvailableBytes,
+                      )}
+                      value={
+                        gpuLoading
+                          ? "Waiting"
+                          : formatPercent(telemetryUnavailable ? null : visibleView.gpu.vramPercent)
+                      }
+                    />
+                  ) : null}
                 </>
               ) : (
                 displayedGpuAdapters.map((adapter) => {
@@ -1065,41 +1073,44 @@ export function ProjectTelemetryGraph({
                         }`}
                         value={formatPercent(adapter.utilizationPercent)}
                       />
-                      <TelemetryCard
-                        color={colors.vram}
-                        detail={
-                          memory === null
-                            ? "GPU memory telemetry unavailable · selected environment"
-                            : `${formatTelemetryBytes(memory.availableBytes)} free · ${formatPercent(memory.utilizationPercent)} used · selected environment`
-                        }
-                        hideGraph={hideUnavailableGraphs && memory === null}
-                        history={gpuAdapterHistory(
-                          visibleView.history,
-                          adapter.key,
-                          "memoryUtilizationPercent",
-                        )}
-                        icon={MemoryStickIcon}
-                        label={`${adapter.label} VRAM`}
-                        title={
-                          memory === null
-                            ? "GPU memory telemetry unavailable"
-                            : `${adapter.label} GPU memory: ${memory.usedBytes.toLocaleString()} bytes used, ${memory.totalBytes.toLocaleString()} bytes total, ${memory.availableBytes.toLocaleString()} bytes free`
-                        }
-                        value={
-                          memory === null
-                            ? "Unavailable"
-                            : `${formatTelemetryBytes(memory.usedBytes)} / ${formatTelemetryBytes(memory.totalBytes)}`
-                        }
-                      />
+                      {!hideUnavailableGraphs || memory !== null ? (
+                        <TelemetryCard
+                          color={colors.vram}
+                          detail={
+                            memory === null
+                              ? "GPU memory telemetry unavailable · selected environment"
+                              : `${formatTelemetryBytes(memory.availableBytes)} free · ${formatPercent(memory.utilizationPercent)} used · selected environment`
+                          }
+                          history={gpuAdapterHistory(
+                            visibleView.history,
+                            adapter.key,
+                            "memoryUtilizationPercent",
+                          )}
+                          icon={MemoryStickIcon}
+                          label={`${adapter.label} VRAM`}
+                          title={
+                            memory === null
+                              ? "GPU memory telemetry unavailable"
+                              : `${adapter.label} GPU memory: ${memory.usedBytes.toLocaleString()} bytes used, ${memory.totalBytes.toLocaleString()} bytes total, ${memory.availableBytes.toLocaleString()} bytes free`
+                          }
+                          value={
+                            memory === null
+                              ? "Unavailable"
+                              : `${formatTelemetryBytes(memory.usedBytes)} / ${formatTelemetryBytes(memory.totalBytes)}`
+                          }
+                        />
+                      ) : null}
                     </Fragment>
                   );
                 })
               )}
-              <div className="col-span-2 mt-1 flex items-center gap-1 text-xs font-semibold uppercase tracking-[0.1em] text-muted-foreground">
-                <ThermometerIcon className="size-3" />
-                Hardware temperatures
-              </div>
-              {temperatureCards.map((card) => (
+              {displayedTemperatureCards.length > 0 ? (
+                <div className="col-span-2 mt-1 flex items-center gap-1 text-xs font-semibold uppercase tracking-[0.1em] text-muted-foreground">
+                  <ThermometerIcon className="size-3" />
+                  Hardware temperatures
+                </div>
+              ) : null}
+              {displayedTemperatureCards.map((card) => (
                 <TelemetryCard
                   color={card.color}
                   detail={
@@ -1109,7 +1120,6 @@ export function ProjectTelemetryGraph({
                         ? "Telemetry unavailable"
                         : `${card.metric.detail} · selected environment`
                   }
-                  hideGraph={hideUnavailableGraphs && card.metric.celsius === null}
                   history={normalizeTemperatureHistory(card.history)}
                   historyMeasurement="temperature"
                   icon={ThermometerIcon}
