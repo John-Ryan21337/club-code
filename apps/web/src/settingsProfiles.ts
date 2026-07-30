@@ -17,114 +17,162 @@ export type SettingsProfileTheme = "light" | "dark" | "system";
 /**
  * Settings profiles are local presentation presets, not server snapshots.
  *
- * This explicit allowlist is a security boundary. In particular, do not add:
- * - provider instances, endpoints, auth, account identity, or model-instance preferences;
- * - server exposure, observability endpoints, repository paths, or project-specific overrides;
- * - model pacing or any other cross-thread execution policy;
- * - the compatibility-only Auto Nudge fields (authority is exact-thread orchestration state);
- * - onboarding/dismissal bookkeeping.
+ * This exhaustive policy is a security boundary. Every ClientSettings field must be classified,
+ * so adding a field to the shared schema fails typecheck until profiles deliberately include or
+ * exclude it. Include renderer-only appearance, layout, theme-adjacent, and usability preferences.
+ * Exclude fields that carry identity, path, asset, consent, or authority data, and fields whose
+ * application activates external media, provider, native-machine, or exact-thread behavior.
  *
  * Add compatible client preferences deliberately in a later document version or as an
  * optional field in this version. Older profiles patch only the keys they actually contain,
  * so a newly allowlisted preference is never reset just because an older profile is loaded.
  */
-export const SETTINGS_PROFILE_CLIENT_KEYS = [
-  "autoOpenPlanSidebar",
-  "notificationsEnabled",
-  "completionAlertSoundEnabled",
-  "completionAlertSpeechEnabled",
-  "completionAlertLanguage",
-  "completionAlertEnglishVoiceGender",
-  "completionAlertJapaneseVoiceGender",
-  "completionAlertDualStereoOrder",
-  "confirmThreadArchive",
-  "confirmThreadDelete",
-  "diffIgnoreWhitespace",
-  "diffWordWrap",
-  "continueBackgroundAnimations",
-  "mobileOptimizedPresentation",
-  "worldClockEnabled",
-  "worldClockStyle",
-  "worldClockLocationIds",
-  "fallingEffectsEnabled",
-  "atmosphereConsoleEnabled",
-  "fallingEffectsOverCinemaEnabled",
-  "fallingEffectKind",
-  "fallingEffectMatrixBaseFontSize",
-  "fallingEffectColor",
-  "fallingEffectMatrixColorMode",
-  "fallingEffectMatrixColorCycleSpeed",
-  "fallingEffectMatrixMotionMode",
-  "fallingEffectMatrixWalkStartFontSize",
-  "fallingEffectMatrixWalkEndFontSize",
-  "fallingEffectMatrixWalkLifecyclePercent",
-  "fallingEffectMatrixCenterWindIntensity",
-  "fallingEffectOpacity",
-  "fallingEffectSpeed",
-  "fallingEffectDensity",
-  "fallingEffectJapaneseRatio",
-  "fallingEffect2chEnriched",
-  "fallingEffectLiveWorkVocabulary",
-  "fallingEffectActivityLinks",
-  "fallingEffectActivityLinkNetworkEnabled",
-  "fallingEffectActivityLinkDatabaseEnabled",
-  "fallingEffectActivityLinkBuildEnabled",
-  "fallingEffectActivityLinkAgentEnabled",
-  "fallingEffectActivityLinkColorMode",
-  "fallingEffectActivityLinkRetentionSeconds",
-  "ambientVideoEnabled",
-  "ambientVideoSource",
-  "ambientVideoLayoutMode",
-  "ambientVideoPresetPlacement",
-  "ambientVideoPresetSize",
-  "ambientVideoPresentationMode",
-  "ambientVideoGlowEnabled",
-  "ambientVideoGlowMode",
-  "ambientVideoGlowColor",
-  "ambientVideoGlowOpacity",
-  "ambientImageEnabled",
-  "ambientImageAsset",
-  "ambientImageCycleAssets",
-  "ambientImageCycleEnabled",
-  "ambientImageCycleSeconds",
-  "ambientImagePresentationMode",
-  "ambientImageLayoutMode",
-  "ambientImagePresetPlacement",
-  "ambientImagePresetSize",
-  "ambientImageGlowEnabled",
-  "ambientImageGlowColor",
-  "ambientImageGlowOpacity",
-  "showSidebarSearch",
-  "showSidebarMascot",
-  "showSidebarAttribution",
-  "brandWordmarkPrefix",
-  "sidebarBrandImage",
-  "sidebarStarSpeed",
-  "workflowObservatoryEnabled",
-  "workflowStallWarningSeconds",
-  "providerUsageWidgetEnabled",
-  "providerUsagePollMinutes",
-  "ambianceEnabled",
-  "ambianceEffect",
-  "ambianceIntensity",
-  "ambianceReactMode",
-  "ambianceSurfaceSidebar",
-  "ambianceSurfaceThread",
-  "ambianceSurfaceComposer",
-  "ambianceColor",
-  "themeAccentColor",
-  "appAccentColor",
-  "defaultEditor",
-  "powerSaveBlockerMode",
-  "sidebarProjectGroupingMode",
-  "sidebarProjectSortOrder",
-  "sidebarThreadSortOrder",
-  "sidebarThreadPreviewCount",
-  "timestampFormat",
-  "chatCopyFormat",
-] as const satisfies ReadonlyArray<keyof ClientSettings>;
+export type SettingsProfileClientFieldPolicy =
+  | "include"
+  | "client-bookkeeping"
+  | "consent"
+  | "external-operation"
+  | "external-media-activation"
+  | "local-asset-reference"
+  | "provider-operation"
+  | "execution-policy"
+  | "exact-thread-authority"
+  | "provider-model-state"
+  | "native-machine-control"
+  | "project-specific";
 
-export type SettingsProfileClientKey = (typeof SETTINGS_PROFILE_CLIENT_KEYS)[number];
+export const SETTINGS_PROFILE_CLIENT_FIELD_POLICY = {
+  autoOpenPlanSidebar: "include",
+  onboardingCompleted: "client-bookkeeping",
+  dismissedFirstRunHints: "client-bookkeeping",
+  // Notification permission/subscription state is owned by its settings controller.
+  notificationsEnabled: "consent",
+  completionAlertSoundEnabled: "include",
+  completionAlertSpeechEnabled: "include",
+  completionAlertLanguage: "include",
+  completionAlertEnglishVoiceGender: "include",
+  completionAlertJapaneseVoiceGender: "include",
+  completionAlertDualStereoOrder: "include",
+  confirmThreadArchive: "include",
+  confirmThreadDelete: "include",
+  dismissedProviderUpdateNotificationKeys: "client-bookkeeping",
+  diffIgnoreWhitespace: "include",
+  diffWordWrap: "include",
+  continueBackgroundAnimations: "include",
+  mobileOptimizedPresentation: "include",
+  worldClockEnabled: "include",
+  worldClockStyle: "include",
+  worldClockLocationIds: "include",
+  // Weather is a separate network/approximate-location consent.
+  worldClockWeatherEnabled: "consent",
+  fallingEffectsEnabled: "include",
+  atmosphereConsoleEnabled: "include",
+  fallingEffectsOverCinemaEnabled: "include",
+  fallingEffectKind: "include",
+  fallingEffectMatrixBaseFontSize: "include",
+  fallingEffectColor: "include",
+  fallingEffectMatrixColorMode: "include",
+  fallingEffectMatrixColorCycleSpeed: "include",
+  fallingEffectMatrixMotionMode: "include",
+  fallingEffectMatrixWalkStartFontSize: "include",
+  fallingEffectMatrixWalkEndFontSize: "include",
+  fallingEffectMatrixWalkLifecyclePercent: "include",
+  fallingEffectMatrixCenterWindIntensity: "include",
+  fallingEffectOpacity: "include",
+  fallingEffectSpeed: "include",
+  fallingEffectDensity: "include",
+  fallingEffectJapaneseRatio: "include",
+  fallingEffect2chEnriched: "include",
+  fallingEffectLiveWorkVocabulary: "include",
+  fallingEffectActivityLinks: "include",
+  fallingEffectActivityLinkNetworkEnabled: "include",
+  fallingEffectActivityLinkDatabaseEnabled: "include",
+  fallingEffectActivityLinkBuildEnabled: "include",
+  fallingEffectActivityLinkAgentEnabled: "include",
+  fallingEffectActivityLinkColorMode: "include",
+  fallingEffectActivityLinkRetentionSeconds: "include",
+  ambientVideoEnabled: "external-media-activation",
+  ambientVideoSource: "external-media-activation",
+  ambientVideoLayoutMode: "include",
+  ambientVideoPresetPlacement: "include",
+  ambientVideoPresetSize: "include",
+  ambientVideoPresentationMode: "include",
+  ambientVideoGlowEnabled: "include",
+  ambientVideoGlowMode: "include",
+  ambientVideoGlowColor: "include",
+  ambientVideoGlowOpacity: "include",
+  ambientImageEnabled: "external-media-activation",
+  ambientImageAsset: "local-asset-reference",
+  ambientImageCycleAssets: "local-asset-reference",
+  ambientImageCycleEnabled: "external-media-activation",
+  ambientImageCycleSeconds: "include",
+  ambientImagePresentationMode: "include",
+  ambientImageLayoutMode: "include",
+  ambientImagePresetPlacement: "include",
+  ambientImagePresetSize: "include",
+  ambientImageGlowEnabled: "include",
+  ambientImageGlowColor: "include",
+  ambientImageGlowOpacity: "include",
+  showSidebarSearch: "include",
+  showSidebarMascot: "include",
+  showSidebarAttribution: "include",
+  brandWordmarkPrefix: "include",
+  sidebarBrandImage: "local-asset-reference",
+  sidebarBrandImageDataUrl: "local-asset-reference",
+  sidebarStarSpeed: "include",
+  workflowObservatoryEnabled: "include",
+  workflowStallWarningSeconds: "include",
+  // Enabling or polling provider usage can invoke provider/account-specific work.
+  providerUsageWidgetEnabled: "provider-operation",
+  providerUsagePollMinutes: "provider-operation",
+  modelPacingEnabled: "execution-policy",
+  modelPacingReservePercent: "execution-policy",
+  // These compatibility fields cannot authorize or reconfigure exact-thread Auto Nudge.
+  autoNudgeMode: "exact-thread-authority",
+  autoNudgeBackgroundContinuation: "exact-thread-authority",
+  autoNudgeMaxRounds: "exact-thread-authority",
+  ambianceEnabled: "include",
+  ambianceEffect: "include",
+  ambianceIntensity: "include",
+  ambianceReactMode: "include",
+  ambianceSurfaceSidebar: "include",
+  ambianceSurfaceThread: "include",
+  ambianceSurfaceComposer: "include",
+  ambianceColor: "include",
+  themeAccentColor: "include",
+  appAccentColor: "include",
+  defaultEditor: "native-machine-control",
+  favorites: "provider-model-state",
+  providerModelPreferences: "provider-model-state",
+  powerSaveBlockerMode: "native-machine-control",
+  sidebarProjectGroupingMode: "include",
+  sidebarProjectGroupingOverrides: "project-specific",
+  sidebarProjectSortOrder: "include",
+  sidebarThreadSortOrder: "include",
+  sidebarThreadPreviewCount: "include",
+  timestampFormat: "include",
+  chatCopyFormat: "include",
+} as const satisfies Record<keyof ClientSettings, SettingsProfileClientFieldPolicy>;
+
+export type SettingsProfileClientKey = {
+  [Key in keyof typeof SETTINGS_PROFILE_CLIENT_FIELD_POLICY]: (typeof SETTINGS_PROFILE_CLIENT_FIELD_POLICY)[Key] extends "include"
+    ? Key
+    : never;
+}[keyof typeof SETTINGS_PROFILE_CLIENT_FIELD_POLICY];
+
+function includedSettingsProfileClientKeys(): readonly SettingsProfileClientKey[] {
+  const included: SettingsProfileClientKey[] = [];
+  for (const key of Object.keys(SETTINGS_PROFILE_CLIENT_FIELD_POLICY) as Array<
+    keyof ClientSettings
+  >) {
+    if (SETTINGS_PROFILE_CLIENT_FIELD_POLICY[key] === "include") {
+      included.push(key as SettingsProfileClientKey);
+    }
+  }
+  return Object.freeze(included);
+}
+
+export const SETTINGS_PROFILE_CLIENT_KEYS = includedSettingsProfileClientKeys();
 export type SettingsProfileClientSettings = Partial<Pick<ClientSettings, SettingsProfileClientKey>>;
 
 export interface SettingsProfilePayload {

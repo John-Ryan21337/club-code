@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   captureSettingsProfilePayload,
   createSettingsProfileLibraryStore,
+  SETTINGS_PROFILE_CLIENT_FIELD_POLICY,
   SETTINGS_PROFILE_CLIENT_KEYS,
   SETTINGS_PROFILE_LIBRARY_STORAGE_KEY,
   SETTINGS_PROFILE_LIBRARY_VERSION,
@@ -35,10 +36,31 @@ describe("settings profile library", () => {
     const settings = {
       ...DEFAULT_UNIFIED_SETTINGS,
       fallingEffectsEnabled: true,
+      ambientVideoLayoutMode: "custom",
+      ambientImageGlowOpacity: 0.42,
       mobileOptimizedPresentation: true,
       timestampFormat: "24-hour",
+      notificationsEnabled: true,
+      worldClockWeatherEnabled: true,
+      ambientVideoEnabled: true,
+      ambientVideoSource: { kind: "video", id: "private-video" },
+      ambientImageEnabled: true,
+      ambientImageAsset: { url: "file:///private/image.gif" },
+      ambientImageCycleAssets: [{ url: "file:///private/second.gif" }],
+      ambientImageCycleEnabled: true,
+      providerUsageWidgetEnabled: true,
+      providerUsagePollMinutes: 1,
+      defaultEditor: "vscode",
+      powerSaveBlockerMode: "always",
+      sidebarBrandImage: { url: "file:///private/brand.png" },
+      sidebarBrandImageDataUrl: "data:image/png;base64,private",
+      dismissedProviderUpdateNotificationKeys: ["private-account:model"],
       autoNudgeMode: "prompt",
+      autoNudgeBackgroundContinuation: true,
       autoNudgeMaxRounds: 99,
+      idleThreadGuardEnabled: true,
+      idleThreadGuardHours: 1,
+      cameraCaptureGranted: true,
       modelPacingEnabled: true,
       providerModelPreferences: {
         "claude-private": { hiddenModels: ["secret-model"], modelOrder: [] },
@@ -63,11 +85,32 @@ describe("settings profile library", () => {
 
     expect(payload.theme).toBe("dark");
     expect(payload.clientSettings.fallingEffectsEnabled).toBe(true);
+    expect(payload.clientSettings.ambientVideoLayoutMode).toBe("custom");
+    expect(payload.clientSettings.ambientImageGlowOpacity).toBe(0.42);
     expect(payload.clientSettings.mobileOptimizedPresentation).toBe(true);
     expect(payload.clientSettings.timestampFormat).toBe("24-hour");
     expect(Object.keys(payload.clientSettings)).toEqual([...SETTINGS_PROFILE_CLIENT_KEYS]);
+    expect(payload.clientSettings).not.toHaveProperty("notificationsEnabled");
+    expect(payload.clientSettings).not.toHaveProperty("worldClockWeatherEnabled");
+    expect(payload.clientSettings).not.toHaveProperty("ambientVideoEnabled");
+    expect(payload.clientSettings).not.toHaveProperty("ambientVideoSource");
+    expect(payload.clientSettings).not.toHaveProperty("ambientImageEnabled");
+    expect(payload.clientSettings).not.toHaveProperty("ambientImageAsset");
+    expect(payload.clientSettings).not.toHaveProperty("ambientImageCycleAssets");
+    expect(payload.clientSettings).not.toHaveProperty("ambientImageCycleEnabled");
+    expect(payload.clientSettings).not.toHaveProperty("providerUsageWidgetEnabled");
+    expect(payload.clientSettings).not.toHaveProperty("providerUsagePollMinutes");
+    expect(payload.clientSettings).not.toHaveProperty("defaultEditor");
+    expect(payload.clientSettings).not.toHaveProperty("powerSaveBlockerMode");
+    expect(payload.clientSettings).not.toHaveProperty("sidebarBrandImage");
+    expect(payload.clientSettings).not.toHaveProperty("sidebarBrandImageDataUrl");
+    expect(payload.clientSettings).not.toHaveProperty("dismissedProviderUpdateNotificationKeys");
     expect(payload.clientSettings).not.toHaveProperty("autoNudgeMode");
+    expect(payload.clientSettings).not.toHaveProperty("autoNudgeBackgroundContinuation");
     expect(payload.clientSettings).not.toHaveProperty("autoNudgeMaxRounds");
+    expect(payload.clientSettings).not.toHaveProperty("idleThreadGuardEnabled");
+    expect(payload.clientSettings).not.toHaveProperty("idleThreadGuardHours");
+    expect(payload.clientSettings).not.toHaveProperty("cameraCaptureGranted");
     expect(payload.clientSettings).not.toHaveProperty("modelPacingEnabled");
     expect(payload.clientSettings).not.toHaveProperty("providerModelPreferences");
     expect(payload.clientSettings).not.toHaveProperty("sidebarProjectGroupingOverrides");
@@ -75,6 +118,36 @@ describe("settings profile library", () => {
     expect(payload.clientSettings).not.toHaveProperty("defaultProviderInstanceId");
     expect(payload.clientSettings).not.toHaveProperty("observability");
     expect(payload.clientSettings).not.toHaveProperty("addProjectBaseDirectory");
+  });
+
+  it("derives the capture allowlist only from fields classified as presentation-safe", () => {
+    const expectedKeys = Object.entries(SETTINGS_PROFILE_CLIENT_FIELD_POLICY)
+      .filter(([, policy]) => policy === "include")
+      .map(([key]) => key);
+
+    expect(SETTINGS_PROFILE_CLIENT_KEYS).toEqual(expectedKeys);
+    expect(SETTINGS_PROFILE_CLIENT_FIELD_POLICY).toMatchObject({
+      notificationsEnabled: "consent",
+      worldClockWeatherEnabled: "consent",
+      ambientVideoEnabled: "external-media-activation",
+      ambientVideoSource: "external-media-activation",
+      ambientImageEnabled: "external-media-activation",
+      ambientImageAsset: "local-asset-reference",
+      ambientImageCycleAssets: "local-asset-reference",
+      ambientImageCycleEnabled: "external-media-activation",
+      sidebarBrandImage: "local-asset-reference",
+      sidebarBrandImageDataUrl: "local-asset-reference",
+      providerUsageWidgetEnabled: "provider-operation",
+      providerUsagePollMinutes: "provider-operation",
+      autoNudgeMode: "exact-thread-authority",
+      autoNudgeBackgroundContinuation: "exact-thread-authority",
+      autoNudgeMaxRounds: "exact-thread-authority",
+      favorites: "provider-model-state",
+      providerModelPreferences: "provider-model-state",
+      defaultEditor: "native-machine-control",
+      powerSaveBlockerMode: "native-machine-control",
+      sidebarProjectGroupingOverrides: "project-specific",
+    });
   });
 
   it("persists named profiles and the active selection in a versioned local document", () => {
@@ -250,8 +323,23 @@ describe("settings profile library", () => {
               fallingEffectsEnabled: true,
               fallingEffectDensity: 999,
               timestampFormat: "24-hour",
+              notificationsEnabled: true,
+              worldClockWeatherEnabled: true,
+              ambientVideoEnabled: true,
+              ambientVideoSource: { kind: "video", id: "private-video" },
+              ambientImageEnabled: true,
+              ambientImageAsset: { url: "file:///private/image.gif" },
+              ambientImageCycleAssets: [{ url: "file:///private/second.gif" }],
+              ambientImageCycleEnabled: true,
+              providerUsageWidgetEnabled: true,
+              providerUsagePollMinutes: 1,
+              defaultEditor: "vscode",
+              powerSaveBlockerMode: "always",
               autoNudgeMode: "prompt",
+              autoNudgeBackgroundContinuation: true,
               autoNudgeMaxRounds: 999,
+              idleThreadGuardEnabled: true,
+              cameraCaptureGranted: true,
               modelPacingReservePercent: 99,
               providerModelPreferences: {
                 "private-account": { hiddenModels: [], modelOrder: [] },
@@ -270,7 +358,22 @@ describe("settings profile library", () => {
       fallingEffectsEnabled: true,
       timestampFormat: "24-hour",
     });
+    expect(profile?.clientSettings).not.toHaveProperty("notificationsEnabled");
+    expect(profile?.clientSettings).not.toHaveProperty("worldClockWeatherEnabled");
+    expect(profile?.clientSettings).not.toHaveProperty("ambientVideoEnabled");
+    expect(profile?.clientSettings).not.toHaveProperty("ambientVideoSource");
+    expect(profile?.clientSettings).not.toHaveProperty("ambientImageEnabled");
+    expect(profile?.clientSettings).not.toHaveProperty("ambientImageAsset");
+    expect(profile?.clientSettings).not.toHaveProperty("ambientImageCycleAssets");
+    expect(profile?.clientSettings).not.toHaveProperty("ambientImageCycleEnabled");
+    expect(profile?.clientSettings).not.toHaveProperty("providerUsageWidgetEnabled");
+    expect(profile?.clientSettings).not.toHaveProperty("providerUsagePollMinutes");
+    expect(profile?.clientSettings).not.toHaveProperty("defaultEditor");
+    expect(profile?.clientSettings).not.toHaveProperty("powerSaveBlockerMode");
     expect(profile?.clientSettings).not.toHaveProperty("autoNudgeMode");
+    expect(profile?.clientSettings).not.toHaveProperty("autoNudgeBackgroundContinuation");
+    expect(profile?.clientSettings).not.toHaveProperty("idleThreadGuardEnabled");
+    expect(profile?.clientSettings).not.toHaveProperty("cameraCaptureGranted");
     expect(profile?.clientSettings).not.toHaveProperty("modelPacingReservePercent");
     expect(profile?.clientSettings).not.toHaveProperty("providerModelPreferences");
     expect(profile?.clientSettings).not.toHaveProperty("serverPassword");
