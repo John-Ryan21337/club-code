@@ -129,16 +129,16 @@ function ThreadScopedAutoNudgeControl(props: AutoNudgeControlProps) {
   const limitsChanged = parsedMaxRounds !== null && parsedMaxRounds !== props.maxRounds;
   const limitsAreValid = parsedMaxRounds !== null;
   const limitsStatus = !props.promptEditable
-    ? "Limits unavailable for this thread"
+    ? "Round cap unavailable for this thread"
     : limitsSaveFailed
-      ? "Limits could not be saved. Try again."
+      ? "Round cap could not be saved. Try again."
       : limitsSaving
-        ? "Saving limits"
+        ? "Saving round cap"
         : !limitsAreValid
-          ? "Enter whole numbers within the allowed ranges"
+          ? "Enter a whole number within the allowed range"
           : limitsChanged
-            ? "Unsaved limit changes"
-            : "Limits saved";
+            ? "Unsaved round-cap change"
+            : "Round cap saved";
   const status = props.globallySuppressed
     ? "Emergency stop is active"
     : props.arming
@@ -457,7 +457,7 @@ function ThreadScopedAutoNudgeControl(props: AutoNudgeControlProps) {
               }}
             >
               <div className="mb-1 flex flex-wrap items-center justify-between gap-1">
-                <span className="font-medium text-foreground">Limits for this thread</span>
+                <span className="font-medium text-foreground">Round cap for this thread</span>
                 <span
                   id={limitsStatusId}
                   className={limitsSaveFailed ? "text-destructive" : "text-muted-foreground"}
@@ -503,7 +503,7 @@ function ThreadScopedAutoNudgeControl(props: AutoNudgeControlProps) {
                   variant="outline"
                   disabled={!props.promptEditable || !limitsChanged || configurationSaving}
                 >
-                  {limitsSaving ? "Saving limits..." : "Save limits"}
+                  {limitsSaving ? "Saving round cap..." : "Save round cap"}
                 </Button>
               </div>
             </form>

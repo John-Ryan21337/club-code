@@ -1338,6 +1338,72 @@ describe("Matrix provider activity overlay", () => {
     expect(recording.draws.every((draw) => draw.alpha === 0.61)).toBe(true);
   });
 
+  it("fades Walk connectors with their lifecycle anchors and drops completed anchors", () => {
+    const now = Date.parse("2026-07-23T12:00:01.000Z");
+    const events = [
+      {
+        anchorSeed: 0,
+        category: "network" as const,
+        observedAtMs: now,
+        relationHashes: [11],
+      },
+      {
+        anchorSeed: 1,
+        category: "network" as const,
+        observedAtMs: now,
+        relationHashes: [11],
+      },
+    ];
+    const scene = createAtmosphereScene(
+      "matrix",
+      640,
+      480,
+      createSeededRandom(831),
+      undefined,
+      0,
+      false,
+      { english: [], japanese: [] },
+      "walk-forward",
+      30,
+      4,
+    );
+    const state = createMatrixActivityAnimationState();
+    updateMatrixActivityAnimationInPlace(state, events, now, scene.particles.length, false);
+    expect(state.linkCount).toBe(1);
+    const link = state.links[0]!;
+    const from = scene.particles[link.fromAnchorIndex]!;
+    const to = scene.particles[link.toAnchorIndex]!;
+    from.matrixLifecycleOpacity = 0.25;
+    to.matrixLifecycleOpacity = 0.25;
+
+    const fading = createRecordingContext();
+    drawMatrixActivityAnimation(
+      fading.context,
+      scene,
+      state,
+      0.6,
+      "matrix",
+      UNIFORM_MATRIX_FRAME,
+      "walk-forward",
+    );
+    expect(fading.draws.length).toBeGreaterThan(0);
+    expect(fading.draws.every((draw) => draw.alpha === 0.15)).toBe(true);
+
+    from.matrixLifecycleOpacity = 0;
+    to.matrixLifecycleOpacity = 0;
+    const completed = createRecordingContext();
+    drawMatrixActivityAnimation(
+      completed.context,
+      scene,
+      state,
+      0.6,
+      "matrix",
+      UNIFORM_MATRIX_FRAME,
+      "walk-forward",
+    );
+    expect(completed.draws).toEqual([]);
+  });
+
   it("labels correlated falling strings with fixed safe English/Japanese category pairs", () => {
     expect(resolveMatrixActivityTerm("network", "category", "english")).toBe("NETWORK");
     expect(resolveMatrixActivityTerm("network", "operation", "japanese")).toBe("取得");
@@ -1647,9 +1713,11 @@ describe("Matrix provider activity overlay", () => {
     from.x = 60;
     from.y = 0;
     from.size = 3;
+    from.matrixLifecycleProgress = 0;
     to.x = 340;
     to.y = scene.height;
     to.size = 90;
+    to.matrixLifecycleProgress = 1;
     const state = createMatrixActivityAnimationState();
     state.links.push({
       fromAnchorIndex: 0,

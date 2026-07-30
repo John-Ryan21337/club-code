@@ -501,8 +501,8 @@ describe("AutoNudgeControl", () => {
     await expect.element(maxRounds).toHaveValue(5);
     await maxRounds.fill("9");
 
-    await expect.element(page.getByText("Unsaved limit changes")).toBeVisible();
-    await page.getByRole("button", { name: "Save limits" }).click();
+    await expect.element(page.getByText("Unsaved round-cap change")).toBeVisible();
+    await page.getByRole("button", { name: "Save round cap" }).click();
 
     await vi.waitFor(() => {
       expect(onSaveLimits).toHaveBeenCalledTimes(1);
@@ -518,13 +518,13 @@ describe("AutoNudgeControl", () => {
     await maxRounds.fill("1.5");
 
     await expect
-      .element(page.getByText("Enter whole numbers within the allowed ranges"))
+      .element(page.getByText("Enter a whole number within the allowed range"))
       .toBeVisible();
-    await expect.element(page.getByRole("button", { name: "Save limits" })).toBeDisabled();
+    await expect.element(page.getByRole("button", { name: "Save round cap" })).toBeDisabled();
     expect(onSaveLimits).not.toHaveBeenCalled();
 
     await maxRounds.fill("21");
     await expect.element(maxRounds).toHaveAttribute("aria-invalid", "true");
-    await expect.element(page.getByRole("button", { name: "Save limits" })).toBeDisabled();
+    await expect.element(page.getByRole("button", { name: "Save round cap" })).toBeDisabled();
   });
 });

@@ -2,7 +2,9 @@ import "../../index.css";
 
 import {
   DEFAULT_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE,
+  DEFAULT_FALLING_EFFECT_MATRIX_CENTER_WIND_INTENSITY,
   DEFAULT_FALLING_EFFECT_MATRIX_WALK_END_FONT_SIZE,
+  DEFAULT_FALLING_EFFECT_MATRIX_WALK_LIFECYCLE_PERCENT,
   DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE,
   DEFAULT_FALLING_EFFECT_MATRIX_MOTION_MODE,
   DEFAULT_UNIFIED_SETTINGS,
@@ -207,6 +209,45 @@ describe("WindowAtmosphereSettings motion", () => {
     await mounted.unmount();
   });
 
+  it("shows bounded Matrix Walk lifecycle and center-wind controls only in Walk modes", async () => {
+    mocks.settings = {
+      ...mocks.settings,
+      fallingEffectKind: "matrix",
+      fallingEffectMatrixMotionMode: "flat",
+    };
+    const mounted = await render(<WindowAtmosphereSettings />);
+    await expect
+      .element(page.getByLabelText("Walk symbol lifecycle distance", { exact: true }))
+      .not.toBeInTheDocument();
+    await expect
+      .element(page.getByLabelText("Motion from center wind intensity", { exact: true }))
+      .not.toBeInTheDocument();
+
+    mocks.settings = {
+      ...mocks.settings,
+      fallingEffectMatrixMotionMode: "walk-forward",
+    };
+    await mounted.rerender(<WindowAtmosphereSettings />);
+    const lifecycle = page.getByLabelText("Walk symbol lifecycle distance", { exact: true });
+    const wind = page.getByLabelText("Motion from center wind intensity", { exact: true });
+    await expect.element(lifecycle).toHaveValue("30");
+    await expect.element(wind).toHaveValue("4");
+
+    await lifecycle.fill("48");
+    await userEvent.keyboard("{Enter}");
+    expect(mocks.updateSettings).toHaveBeenLastCalledWith({
+      fallingEffectMatrixWalkLifecyclePercent: 48,
+    });
+
+    await wind.fill("9");
+    await userEvent.keyboard("{Enter}");
+    expect(mocks.updateSettings).toHaveBeenLastCalledWith({
+      fallingEffectMatrixCenterWindIntensity: 9,
+    });
+
+    await mounted.unmount();
+  });
+
   it("normalizes legacy two-decimal Walk endpoints for display without rewriting on mount", async () => {
     mocks.settings = {
       ...mocks.settings,
@@ -251,6 +292,9 @@ describe("WindowAtmosphereSettings motion", () => {
         fallingEffectMatrixBaseFontSize: DEFAULT_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE,
         fallingEffectMatrixWalkStartFontSize: DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE,
         fallingEffectMatrixWalkEndFontSize: DEFAULT_FALLING_EFFECT_MATRIX_WALK_END_FONT_SIZE,
+        fallingEffectMatrixWalkLifecyclePercent:
+          DEFAULT_FALLING_EFFECT_MATRIX_WALK_LIFECYCLE_PERCENT,
+        fallingEffectMatrixCenterWindIntensity: DEFAULT_FALLING_EFFECT_MATRIX_CENTER_WIND_INTENSITY,
         fallingEffect2chEnriched: false,
         fallingEffectsOverCinemaEnabled: false,
       }),

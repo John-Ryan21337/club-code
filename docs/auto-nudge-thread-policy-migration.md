@@ -43,8 +43,8 @@ validate:
 - enabled Thread A remains enabled through settings and thread navigation;
 - Thread B displays Off and cannot dispatch while A owns background execution;
 - disabling B does not stop A;
-- disabling A stops only A and cancels its pending countdown;
+- disabling A stops only A;
 - two renderer windows cannot claim the same terminal turn;
-- reload during the five-second delay does not duplicate a nudge;
+- reload after completion evidence does not duplicate a nudge;
 - a running provider turn is never interrupted or replaced; and
 - corrupt or oversized persisted values produce an Off/stopped state.

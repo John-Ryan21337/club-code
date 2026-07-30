@@ -357,6 +357,40 @@ export const FallingEffectMatrixWalkFontSize = Schema.Number.check(
 );
 export type FallingEffectMatrixWalkFontSize = typeof FallingEffectMatrixWalkFontSize.Type;
 
+/**
+ * Walk streams complete their depth/font lifecycle after falling this
+ * percentage of the viewport. Keeping this independent from absolute Y lets
+ * streams spawn throughout the background without forcing a top-to-bottom
+ * traversal.
+ */
+export const MIN_FALLING_EFFECT_MATRIX_WALK_LIFECYCLE_PERCENT = 5;
+export const MAX_FALLING_EFFECT_MATRIX_WALK_LIFECYCLE_PERCENT = 100;
+export const DEFAULT_FALLING_EFFECT_MATRIX_WALK_LIFECYCLE_PERCENT = 30;
+export const FallingEffectMatrixWalkLifecyclePercent = Schema.Int.check(
+  Schema.isBetween({
+    minimum: MIN_FALLING_EFFECT_MATRIX_WALK_LIFECYCLE_PERCENT,
+    maximum: MAX_FALLING_EFFECT_MATRIX_WALK_LIFECYCLE_PERCENT,
+  }),
+);
+export type FallingEffectMatrixWalkLifecyclePercent =
+  typeof FallingEffectMatrixWalkLifecyclePercent.Type;
+
+/**
+ * Signed horizontal velocity is derived from each stream's distance from the
+ * viewport center: centered streams barely drift and edge streams fan outward.
+ */
+export const MIN_FALLING_EFFECT_MATRIX_CENTER_WIND_INTENSITY = 0;
+export const MAX_FALLING_EFFECT_MATRIX_CENTER_WIND_INTENSITY = 10;
+export const DEFAULT_FALLING_EFFECT_MATRIX_CENTER_WIND_INTENSITY = 4;
+export const FallingEffectMatrixCenterWindIntensity = Schema.Int.check(
+  Schema.isBetween({
+    minimum: MIN_FALLING_EFFECT_MATRIX_CENTER_WIND_INTENSITY,
+    maximum: MAX_FALLING_EFFECT_MATRIX_CENTER_WIND_INTENSITY,
+  }),
+);
+export type FallingEffectMatrixCenterWindIntensity =
+  typeof FallingEffectMatrixCenterWindIntensity.Type;
+
 export const FallingEffectSpeed = Schema.Number.check(
   Schema.isBetween({
     minimum: MIN_FALLING_EFFECT_SPEED,
@@ -700,6 +734,14 @@ export const ClientSettingsSchema = Schema.Struct({
   fallingEffectMatrixWalkEndFontSize: FallingEffectMatrixWalkFontSize.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_MATRIX_WALK_END_FONT_SIZE)),
   ),
+  fallingEffectMatrixWalkLifecyclePercent: FallingEffectMatrixWalkLifecyclePercent.pipe(
+    Schema.withDecodingDefault(
+      Effect.succeed(DEFAULT_FALLING_EFFECT_MATRIX_WALK_LIFECYCLE_PERCENT),
+    ),
+  ),
+  fallingEffectMatrixCenterWindIntensity: FallingEffectMatrixCenterWindIntensity.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_MATRIX_CENTER_WIND_INTENSITY)),
+  ),
   fallingEffectOpacity: AmbientOpacity.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_OPACITY)),
   ),
@@ -965,6 +1007,8 @@ export const AMBIENT_CLIENT_SETTINGS_KEYS = [
   "fallingEffectMatrixMotionMode",
   "fallingEffectMatrixWalkStartFontSize",
   "fallingEffectMatrixWalkEndFontSize",
+  "fallingEffectMatrixWalkLifecyclePercent",
+  "fallingEffectMatrixCenterWindIntensity",
   "fallingEffectOpacity",
   "fallingEffectSpeed",
   "fallingEffectDensity",
@@ -1017,6 +1061,8 @@ export const DEFAULT_AMBIENT_CLIENT_SETTINGS: AmbientClientSettings = {
   fallingEffectMatrixMotionMode: DEFAULT_FALLING_EFFECT_MATRIX_MOTION_MODE,
   fallingEffectMatrixWalkStartFontSize: DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE,
   fallingEffectMatrixWalkEndFontSize: DEFAULT_FALLING_EFFECT_MATRIX_WALK_END_FONT_SIZE,
+  fallingEffectMatrixWalkLifecyclePercent: DEFAULT_FALLING_EFFECT_MATRIX_WALK_LIFECYCLE_PERCENT,
+  fallingEffectMatrixCenterWindIntensity: DEFAULT_FALLING_EFFECT_MATRIX_CENTER_WIND_INTENSITY,
   fallingEffectOpacity: DEFAULT_AMBIENT_OPACITY,
   fallingEffectSpeed: DEFAULT_FALLING_EFFECT_SPEED,
   fallingEffectDensity: DEFAULT_FALLING_EFFECT_DENSITY,
@@ -1822,6 +1868,12 @@ export const ClientSettingsPatch = Schema.Struct({
   fallingEffectMatrixMotionMode: Schema.optionalKey(FallingEffectMatrixMotionMode),
   fallingEffectMatrixWalkStartFontSize: Schema.optionalKey(FallingEffectMatrixWalkFontSize),
   fallingEffectMatrixWalkEndFontSize: Schema.optionalKey(FallingEffectMatrixWalkFontSize),
+  fallingEffectMatrixWalkLifecyclePercent: Schema.optionalKey(
+    FallingEffectMatrixWalkLifecyclePercent,
+  ),
+  fallingEffectMatrixCenterWindIntensity: Schema.optionalKey(
+    FallingEffectMatrixCenterWindIntensity,
+  ),
   fallingEffectOpacity: Schema.optionalKey(AmbientOpacity),
   fallingEffectSpeed: Schema.optionalKey(FallingEffectSpeed),
   fallingEffectDensity: Schema.optionalKey(FallingEffectDensity),

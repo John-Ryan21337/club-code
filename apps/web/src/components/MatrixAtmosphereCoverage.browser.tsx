@@ -19,6 +19,10 @@ function matrixParticle(x: number, y: number): AtmosphereParticle {
     matrixLanguage: "english",
     matrixToken: null,
     matrixWorkToken: null,
+    matrixLifecycleStartY: 0,
+    matrixLifecycleProgress: 0.5,
+    matrixLifecycleOpacity: 1,
+    matrixLifecycleGeneration: 0,
   };
 }
 

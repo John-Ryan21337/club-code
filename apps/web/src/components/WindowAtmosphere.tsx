@@ -110,6 +110,12 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
     (settings) => settings.fallingEffectMatrixWalkStartFontSize,
   );
   const walkEndFontSize = useSettings((settings) => settings.fallingEffectMatrixWalkEndFontSize);
+  const matrixWalkLifecyclePercent = useSettings(
+    (settings) => settings.fallingEffectMatrixWalkLifecyclePercent,
+  );
+  const matrixCenterWindIntensity = useSettings(
+    (settings) => settings.fallingEffectMatrixCenterWindIntensity,
+  );
   const opacity = useSettings((settings) => settings.fallingEffectOpacity);
   const speed = useSettings((settings) => settings.fallingEffectSpeed);
   const density = useSettings((settings) => settings.fallingEffectDensity);
@@ -467,6 +473,9 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
         japaneseRatio,
         enriched2ch,
         matrixWorkVocabularyRef.current,
+        motionMode,
+        matrixWalkLifecyclePercent,
+        matrixCenterWindIntensity,
       );
       sceneRef.current = scene;
     };
@@ -480,7 +489,14 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
       if (!reducedMotionActive) {
         lastFrameTime = timestamp;
       }
-      advanceAtmosphereSceneInPlace(scene, elapsedSeconds, speed);
+      advanceAtmosphereSceneInPlace(
+        scene,
+        elapsedSeconds,
+        speed,
+        motionMode,
+        matrixWalkLifecyclePercent,
+        matrixCenterWindIntensity,
+      );
       if (!reducedMotionActive) {
         staticReducedMotionMatrixColorFrame = null;
       }
@@ -677,6 +693,8 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
     kind,
     matrixColorMode,
     matrixBaseFontSize,
+    matrixCenterWindIntensity,
+    matrixWalkLifecyclePercent,
     motionMode,
     opacity,
     resolvedTheme,

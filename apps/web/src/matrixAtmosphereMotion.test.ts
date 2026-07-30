@@ -12,6 +12,7 @@ import {
   drawAtmosphereScene,
   resolveAtmosphereProjectedPointInPlace,
   resolveAtmosphereRenderOpacity,
+  advanceAtmosphereSceneInPlace,
   shouldAnimateAtmosphere,
   shouldShowAtmosphere,
   type AtmosphereParticle,
@@ -20,7 +21,7 @@ import {
 } from "./windowAtmosphere";
 
 function createParticle(overrides: Partial<AtmosphereParticle> = {}): AtmosphereParticle {
-  return {
+  const particle: AtmosphereParticle = {
     x: 80,
     y: 120,
     velocityX: -24,
@@ -32,8 +33,12 @@ function createParticle(overrides: Partial<AtmosphereParticle> = {}): Atmosphere
     matrixLanguage: "english",
     matrixToken: null,
     matrixWorkToken: null,
-    ...overrides,
+    matrixLifecycleStartY: 0,
+    matrixLifecycleProgress: 0.5,
+    matrixLifecycleOpacity: 1,
+    matrixLifecycleGeneration: 0,
   };
+  return Object.assign(particle, overrides);
 }
 
 function createScene(kind: AtmosphereScene["kind"], particle = createParticle()): AtmosphereScene {
@@ -49,6 +54,9 @@ function project(
   walkStartFontSize = DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE,
   walkEndFontSize = DEFAULT_FALLING_EFFECT_MATRIX_WALK_END_FONT_SIZE,
 ): AtmosphereProjectedPoint {
+  if (scene.kind === "matrix" && (mode === "walk-forward" || mode === "walk-reverse")) {
+    particle.matrixLifecycleProgress = Math.min(1, Math.max(0, y / Math.max(1, scene.height)));
+  }
   const output = { x: 0, y: 0, scale: 0, depthScale: 0 };
   resolveAtmosphereProjectedPointInPlace(
     output,
@@ -252,6 +260,140 @@ describe("atmosphere motion projection", () => {
     }
   });
 
+  it("drives Matrix Walk font expansion from the bounded lifecycle instead of viewport Y", () => {
+    const particle = createParticle({
+      y: 190,
+      matrixLifecycleStartY: 130,
+      matrixLifecycleProgress: 0.25,
+    });
+    const scene = createScene("matrix", particle);
+    const forward = { x: 0, y: 0, scale: 0, depthScale: 0 };
+    const reverse = { x: 0, y: 0, scale: 0, depthScale: 0 };
+
+    resolveAtmosphereProjectedPointInPlace(
+      forward,
+      scene,
+      particle,
+      particle.x,
+      particle.y,
+      "walk-forward",
+      10,
+      50,
+    );
+    resolveAtmosphereProjectedPointInPlace(
+      reverse,
+      scene,
+      particle,
+      particle.x,
+      particle.y,
+      "walk-reverse",
+      10,
+      50,
+    );
+
+    expect(forward.scale * particle.size).toBeCloseTo(20, 10);
+    expect(reverse.scale * particle.size).toBeCloseTo(40, 10);
+
+    particle.y = 12;
+    const movedOnScreen = { x: 0, y: 0, scale: 0, depthScale: 0 };
+    resolveAtmosphereProjectedPointInPlace(
+      movedOnScreen,
+      scene,
+      particle,
+      particle.x,
+      particle.y,
+      "walk-forward",
+      10,
+      50,
+    );
+    expect(movedOnScreen.scale).toBe(forward.scale);
+  });
+
+  it("spawns Walk streams throughout the background, fades them, and respawns in place", () => {
+    const scene = createAtmosphereScene(
+      "matrix",
+      400,
+      240,
+      createSeededRandom(91),
+      1,
+      0,
+      false,
+      { english: [], japanese: [] },
+      "walk-forward",
+      30,
+      10,
+    );
+    const lifecycleDistance = 72;
+
+    expect(
+      scene.particles.every(
+        (particle) =>
+          particle.matrixLifecycleStartY >= 0 &&
+          particle.matrixLifecycleStartY <= scene.height - lifecycleDistance &&
+          particle.y >= particle.matrixLifecycleStartY &&
+          particle.y <= particle.matrixLifecycleStartY + lifecycleDistance,
+      ),
+    ).toBe(true);
+    expect(scene.particles.some((particle) => particle.matrixLifecycleStartY > 20)).toBe(true);
+
+    const left = scene.particles.reduce((candidate, particle) =>
+      particle.x < candidate.x ? particle : candidate,
+    );
+    const right = scene.particles.reduce((candidate, particle) =>
+      particle.x > candidate.x ? particle : candidate,
+    );
+    const center = scene.particles.reduce((candidate, particle) =>
+      Math.abs(particle.x - scene.width / 2) < Math.abs(candidate.x - scene.width / 2)
+        ? particle
+        : candidate,
+    );
+    const before = new Map(scene.particles.map((particle) => [particle, particle.x]));
+    advanceAtmosphereSceneInPlace(scene, 0.05, 1, "walk-forward", 30, 10);
+    expect(left.x).toBeLessThan(before.get(left)!);
+    expect(right.x).toBeGreaterThan(before.get(right)!);
+    expect(Math.abs(center.x - before.get(center)!)).toBeLessThan(
+      Math.abs(right.x - before.get(right)!),
+    );
+
+    const ending = scene.particles[3]!;
+    ending.velocityY = 100;
+    ending.matrixLifecycleStartY = 50;
+    ending.matrixLifecycleProgress = 0.9;
+    ending.matrixLifecycleOpacity = 1;
+    ending.y = 50 + lifecycleDistance * 0.9;
+    const generation = ending.matrixLifecycleGeneration;
+    advanceAtmosphereSceneInPlace(scene, 0.05, 1, "walk-forward", 30, 10);
+    expect(ending.matrixLifecycleOpacity).toBeLessThan(0.2);
+    expect(ending.matrixLifecycleGeneration).toBe(generation);
+
+    advanceAtmosphereSceneInPlace(scene, 0.05, 1, "walk-forward", 30, 10);
+    expect(ending.matrixLifecycleGeneration).toBe(generation + 1);
+    expect(ending.matrixLifecycleProgress).toBe(0);
+    expect(ending.matrixLifecycleOpacity).toBe(1);
+    expect(ending.y).toBe(ending.matrixLifecycleStartY);
+    expect(ending.y).toBeGreaterThanOrEqual(0);
+    expect(ending.y).toBeLessThanOrEqual(scene.height - lifecycleDistance);
+  });
+
+  it("disables center wind at intensity zero", () => {
+    const scene = createAtmosphereScene(
+      "matrix",
+      400,
+      240,
+      createSeededRandom(92),
+      1,
+      0,
+      false,
+      { english: [], japanese: [] },
+      "walk-reverse",
+      30,
+      0,
+    );
+    const xPositions = scene.particles.map((particle) => particle.x);
+    advanceAtmosphereSceneInPlace(scene, 0.05, 1, "walk-reverse", 30, 0);
+    expect(scene.particles.map((particle) => particle.x)).toEqual(xPositions);
+  });
+
   it("uses configurable absolute Walk endpoints and particle-independent connector depth", () => {
     const startFontSize = 12;
     const endFontSize = 24;
@@ -351,7 +493,7 @@ describe("atmosphere motion projection", () => {
   });
 
   it("caches Walk Matrix glyph strings on a bounded 1px grid without stepping depth", () => {
-    const particle = createParticle({ y: 0 });
+    const particle = createParticle({ y: 0, matrixLifecycleProgress: 0 });
     const scene = createScene("matrix", particle);
     const forwardTop = createContextRecorder();
     drawAtmosphereScene(
@@ -367,6 +509,7 @@ describe("atmosphere motion projection", () => {
     expect(forwardTop.fonts.at(-1)).toMatch(/^12px /u);
 
     particle.y = scene.height;
+    particle.matrixLifecycleProgress = 1;
     const forwardBottom = createContextRecorder();
     drawAtmosphereScene(
       forwardBottom.context,
@@ -394,6 +537,7 @@ describe("atmosphere motion projection", () => {
     expect(reverseBottom.fonts.at(-1)).toMatch(/^12px /u);
 
     particle.y = 80;
+    particle.matrixLifecycleProgress = 80 / scene.height;
     const firstProjection = project(scene, particle, 80, 80, "walk-forward", 12.34, 24.56);
     const firstBucket = createContextRecorder();
     drawAtmosphereScene(
@@ -407,6 +551,7 @@ describe("atmosphere motion projection", () => {
       24.56,
     );
     particle.y = 81;
+    particle.matrixLifecycleProgress = 81 / scene.height;
     const secondProjection = project(scene, particle, 80, 81, "walk-forward", 12.34, 24.56);
     const secondBucket = createContextRecorder();
     drawAtmosphereScene(

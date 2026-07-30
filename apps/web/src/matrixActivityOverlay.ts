@@ -12,6 +12,7 @@ import {
 import type { AppState } from "./store";
 import {
   resolveAtmosphereProjectedPointInPlace,
+  resolveMatrixWalkLifecycleOpacity,
   resolveMatrixStreamColor,
   type AtmosphereProjectedPoint,
   type AtmosphereScene,
@@ -1693,6 +1694,11 @@ export function drawMatrixActivityAnimation(
     const from = scene.particles[link.fromAnchorIndex];
     const to = scene.particles[link.toAnchorIndex];
     if (!from || !to) continue;
+    const linkLifecycleOpacity = Math.min(
+      resolveMatrixWalkLifecycleOpacity(from, motionMode),
+      resolveMatrixWalkLifecycleOpacity(to, motionMode),
+    );
+    if (linkLifecycleOpacity <= 0.01) continue;
     resolveAtmosphereProjectedPointInPlace(
       projectedFrom,
       scene,
@@ -1743,7 +1749,7 @@ export function drawMatrixActivityAnimation(
       link.colorHue,
     );
     context.strokeStyle = linkPaint;
-    context.globalAlpha = safeOpacity * link.intensity;
+    context.globalAlpha = safeOpacity * link.intensity * linkLifecycleOpacity;
     strokeMatrixActivityDepthRoute(
       context,
       route,
@@ -1767,7 +1773,7 @@ export function drawMatrixActivityAnimation(
         );
         resolveMatrixHexRoutePointInPlace(packetPoint, route, packetProgress);
         context.strokeStyle = linkPaint;
-        context.globalAlpha = safeOpacity * link.intensity;
+        context.globalAlpha = safeOpacity * link.intensity * linkLifecycleOpacity;
         for (const interval of resolveMatrixActivityTrailIntervals(packetProgress)) {
           const intervalDepthScale = resolveMatrixActivityRouteDepthScale(
             motionMode,
@@ -1791,7 +1797,7 @@ export function drawMatrixActivityAnimation(
           context.stroke();
         }
         context.fillStyle = linkPaint;
-        context.globalAlpha = safeOpacity * link.intensity;
+        context.globalAlpha = safeOpacity * link.intensity * linkLifecycleOpacity;
         const packetDepthScale = resolveMatrixActivityRouteDepthScale(
           motionMode,
           packetProgress,
@@ -1819,6 +1825,8 @@ export function drawMatrixActivityAnimation(
     const pulse = state.pulses[index]!;
     const particle = scene.particles[pulse.anchorIndex];
     if (!particle) continue;
+    const pulseLifecycleOpacity = resolveMatrixWalkLifecycleOpacity(particle, motionMode);
+    if (pulseLifecycleOpacity <= 0.01) continue;
     resolveAtmosphereProjectedPointInPlace(
       projectedFrom,
       scene,
@@ -1845,7 +1853,7 @@ export function drawMatrixActivityAnimation(
       pulse.category,
       pulse.semanticRole,
       pulsePaint,
-      safeOpacity,
+      safeOpacity * pulseLifecycleOpacity,
       pulse.intensity,
     );
     if (
@@ -1858,7 +1866,7 @@ export function drawMatrixActivityAnimation(
         projectedFrom,
         pulse.category,
         pulsePaint,
-        safeOpacity,
+        safeOpacity * pulseLifecycleOpacity,
         pulse.intensity,
       );
       telemetryRingCount += 1;

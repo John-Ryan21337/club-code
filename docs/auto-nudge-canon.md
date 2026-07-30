@@ -7,8 +7,8 @@ interrupt work already running.
 ## Exact-thread policy
 
 - The server stores mode, editable standing-order text, background choice,
-  round cap, time cap, authority revision, and dispatch accounting on the exact
-  thread projection.
+  round cap, authority revision, and dispatch accounting on the exact thread
+  projection.
 - No thread inherits another thread's prompt, mode, caps, or background choice.
   A thread without an enabled policy is Off, and draft threads cannot run.
 - Saving an enabled policy treats the current completed turn as a baseline; it
@@ -19,8 +19,8 @@ interrupt work already running.
   means On, and the animated cyan/green state means On with background
   continuation selected. Minimizing or opening Settings does not disable an
   enabled policy.
-- Defaults are five automated rounds and 30 minutes. The hard configurable
-  bounds are 1–20 rounds and 5–120 minutes.
+- The default is five automated rounds. The hard configurable bound is 1–20
+  rounds.
 
 ## Built-in prompt policy
 
@@ -46,15 +46,12 @@ interrupt work already running.
   automated follow-up. Elapsed idle time, route changes, settings changes,
   provider refreshes, and repeating timer ticks cannot create or renew that
   authority.
-- The five-second timeout is a one-shot safety debounce after eligible terminal
-  evidence appears. Its short countdown interval only updates display state.
-  The background coordinator's repeating interval only reconciles the
-  host/browser emergency-suppression signal. Neither interval has a dispatch
-  path.
-- The maximum-minutes value is a run ceiling, not a nudge schedule.
+- Completion evidence is handed directly to the dispatcher, which rechecks all
+  safety gates before transport. There is no nudge delay, countdown, elapsed
+  run ceiling, or periodic dispatch cadence.
 - Each independently opted-in thread can continue in the background. There is
   no single background owner and no project-wide prompt.
-- At timeout handoff, the dispatcher re-reads the exact authority revision,
+- At completion-event handoff, the dispatcher re-reads the exact authority revision,
   completed turn, thread policy, queue, provider readiness, caps, pending
   approvals or user input, plan state, errors, local exact-thread composer
   draft, and Stop state. Stale or missing evidence fails closed.
@@ -83,7 +80,7 @@ interrupt work already running.
 ## Stop, persistence, and scope
 
 - Per-thread Stop revokes that thread's authority. Off, provider/config changes,
-  archive/delete, manual work, and the hard caps also prevent dispatch without
+  archive/delete, manual work, and the hard round cap also prevent dispatch without
   sending a provider interrupt.
 - Emergency Stop sets a durable browser/host suppression barrier and requests
   Stop for known connected threads. The background coordinator periodically
@@ -98,6 +95,6 @@ interrupt work already running.
 
 Every automated follow-up is a real provider request and may consume tokens,
 credits, quota, or money quickly. Operators are responsible for provider
-charges, and Club Code cannot reimburse consumed usage. Use conservative caps,
+charges, and Club Code cannot reimburse consumed usage. Use conservative round caps,
 carefully scoped exact-thread prompts or skills, and active monitoring,
 including the phone Web UI when away.

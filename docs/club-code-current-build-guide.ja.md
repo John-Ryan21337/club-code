@@ -14,7 +14,7 @@ Club Code は現在テスト中のアルファ版ソフトウェアです。信�
 > **Auto Nudge は実際のお金を短時間で消費する可能性があります。** 自動 follow-up
 > は毎回、本物の provider request です。token、credit、quota、従量課金を急速に
 > 消費する場合があります。provider の請求は利用者自身の責任であり、Club Code の
-> maintainers はその費用を補償または負担できません。round と時間の上限を小さく
+> maintainers はその費用を補償または負担できません。round 上限を小さく
 > 設定し、その thread 専用の慎重な prompt または skill を用意し、離席中も phone
 > Web UI などで監視してください。夜間に無人で実行する場合は、費用上の危険を理解し
 > 受け入れた場合に限ってください。
@@ -29,25 +29,25 @@ Club Code は Cafe Code の coding-agent chat を土台にして、local-first d
 を足した build。chat が主役で、terminal drawer や偽 VS Code を店内に増築は
 してません。席が狭くなるからね、解散〜😂
 
-| 分野                | 現行 Club Code に入っていること                                                                                                                                                                                                                                   |
-| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 看板と互換性        | 表では **Club Code**。でも `cafe-code`、`@cafecode/*`、`CAFE_CODE_*`、protocol、data path は互換性のため残す。看板を替えて常連さんのボトル札まで捨てる事故はしません🙅‍♀️                                                                                            |
-| Provider            | Codex、Claude、OpenCode に加えて、別枠の **LM Studio Local**。Cafe Code の Codex 0.146 protocol 対応も取り込み済み。local chat model は main composer の model picker に出るよ🤖                                                                                  |
-| Prompt 操作         | thread ごとの draft 復元、見える follow-up queue、対応 provider の **Steer**、durable FIFO、画像と bounded `.txt`、camera preview・前後切替・撮り直し・system camera fallback 📸                                                                                  |
-| Auto Nudge          | thread ごとの mode、編集できる standing-order、round/time cap、foreground または opt-in background、minimize、thread ごとの Stop と既知の接続 thread 向け Emergency Stop、普通の history に残る message。server が受理した operator work が先。ここ超重要⚠️       |
-| Atmosphere          | 全画面 snow/rain/Matrix、日英 mix、2ch glyph、fixed/rainbow/stream別 rainbow/music reactive、shimmer、live-work word、Flat/Forward/Reverse/Warp/Walk Forward/Walk Reverse。画面が働いてる、あたしより偉い🌧️🌈                                                     |
-| Mobile presentation | composer 横の touch-size toggle で、その renderer だけ Desktop / Mobile optimized を切替。Mobile は今の見た目を壊さず Matrix を on、Desktop に戻しても Matrix は消さない。スマホが店の desktop まで着替えさせる事故なし📱👗                                       |
-| 世界時計とお天気    | 透明で move/resize/collapse できる multi-city clock。rainbow shimmer、amber nixie、analog、old-school LED。weather は別の local opt-in で default off。勝手な天気通信、出禁です🕰️🌦️                                                                               |
-| Activity line       | provider が本当に報告した network/database/build/agent delegation だけを route、packet、trail、endpoint で表示。safe な reported filename は bounded live-work vocabulary にだけ使える。prompt、command、SQL、secret、妄想 traffic は混ぜない。盛るのはラメだけ✨ |
-| Ambient media       | YouTube、Spotify、direct local media、desktop VLC、画像/GIF、bounded directory cycle、floating/custom/Theater/Cinema、adaptive glow、Spectrum と 395 preset の MilkDrop/Butterchurn visualizer 🎬🎶                                                               |
-| YouTube list        | Japanese、EDM、K-pop の三本を one-click 選択。同じ filename の再 import はその browser の list を置換、新しい filename なら追加。embed 不可や unavailable は bounded pass 内で skip。入店拒否の一人で店ごと閉めない方式💃                                         |
-| Project Resources   | 透明で move/resize/collapse できる panel。host CPU/RAM/network、project disk、GPU/VRAM、host が出せる measured temperature を Matrix 色 graph で表示 📈                                                                                                           |
-| Observatory         | provider-reported Workflow と read-only Workspace。project tree、bounded text、SQLite table、verified file focus、最大八 pane。file/database を編集せず、勝手に model context にも入れない。見る専のお客様です👀                                                  |
-| Supervised browser  | temporary sandbox tab、assisted action ごとの native approval、exact origin/thread/provider に縛った Codex/Claude grant。sensitive field は prompt と routine log に入れない。身分証チェック厳しめ🔐                                                              |
-| Usage と通知        | provider-reported usage/paid state、advisory Model Pacing、cache/compaction counter、Ultra Caching handoff、privacy-safe completion sound と固定の日英 speech。架空の「token saved 億万長者」はやらない💸                                                         |
-| Personalization     | local settings profile、Club Code first-run presentation、対応 desktop の whole-window opacity、動作を止めず presentation だけ隠す Meeting Privacy。昼用 profile と夜用 profile、はい優勝🏆                                                                       |
-| Connection          | LAN Web UI と、到達可能な Cafe Code/Club Code server への saved direct connection。project/thread/provider/subscription は選択 server ごと。スマホから見張り番もできる📱                                                                                          |
-| Desktop workflow    | thread の project 間 move、Recycle Bin/restore/permanent delete、external editor 選択、real path open、source/package update check、provider/session/checkpoint lifecycle hardening。地味だけどこういう子が一番仕事できる👏                                       |
+| 分野                | 現行 Club Code に入っていること                                                                                                                                                                                                                                           |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 看板と互換性        | 表では **Club Code**。でも `cafe-code`、`@cafecode/*`、`CAFE_CODE_*`、protocol、data path は互換性のため残す。看板を替えて常連さんのボトル札まで捨てる事故はしません🙅‍♀️                                                                                                    |
+| Provider            | Codex、Claude、OpenCode に加えて、別枠の **LM Studio Local**。Cafe Code の Codex 0.146 protocol 対応も取り込み済み。local chat model は main composer の model picker に出るよ🤖                                                                                          |
+| Prompt 操作         | thread ごとの draft 復元、見える follow-up queue、対応 provider の **Steer**、durable FIFO、画像と bounded `.txt`、camera preview・前後切替・撮り直し・system camera fallback 📸                                                                                          |
+| Auto Nudge          | thread ごとの mode、編集できる standing-order、round cap、foreground または opt-in background、minimize、thread ごとの Stop と既知の接続 thread 向け Emergency Stop、普通の history に残る message。server が受理した operator work が先。ここ超重要⚠️                    |
+| Atmosphere          | 全画面 snow/rain/Matrix、日英 mix、2ch glyph、fixed/rainbow/stream別 rainbow/music reactive、shimmer、live-work word、Flat/Forward/Reverse/Warp/Walk Forward/Walk Reverse。Matrix Walk はランダムな位置から設定した距離だけ落下し、中心から外向きの wind も調整できる🌧️🌈 |
+| Mobile presentation | composer 横の touch-size toggle で、その renderer だけ Desktop / Mobile optimized を切替。Mobile は今の見た目を壊さず Matrix を on、Desktop に戻しても Matrix は消さない。スマホが店の desktop まで着替えさせる事故なし📱👗                                               |
+| 世界時計とお天気    | 透明で move/resize/collapse できる multi-city clock。rainbow shimmer、amber nixie、analog、old-school LED。weather は別の local opt-in で default off。勝手な天気通信、出禁です🕰️🌦️                                                                                       |
+| Activity line       | provider が本当に報告した network/database/build/agent delegation だけを route、packet、trail、endpoint で表示。safe な reported filename は bounded live-work vocabulary にだけ使える。prompt、command、SQL、secret、妄想 traffic は混ぜない。盛るのはラメだけ✨         |
+| Ambient media       | YouTube、Spotify、direct local media、desktop VLC、画像/GIF、bounded directory cycle、floating/custom/Theater/Cinema、adaptive glow、Spectrum と 395 preset の MilkDrop/Butterchurn visualizer 🎬🎶                                                                       |
+| YouTube list        | Japanese、EDM、K-pop の三本を one-click 選択。同じ filename の再 import はその browser の list を置換、新しい filename なら追加。embed 不可や unavailable は bounded pass 内で skip。入店拒否の一人で店ごと閉めない方式💃                                                 |
+| Project Resources   | 透明で move/resize/collapse できる panel。host CPU/RAM/network、project disk、GPU/VRAM、host が出せる measured temperature を Matrix 色 graph で表示 📈                                                                                                                   |
+| Observatory         | provider-reported Workflow と read-only Workspace。project tree、bounded text、SQLite table、verified file focus、最大八 pane。file/database を編集せず、勝手に model context にも入れない。見る専のお客様です👀                                                          |
+| Supervised browser  | temporary sandbox tab、assisted action ごとの native approval、exact origin/thread/provider に縛った Codex/Claude grant。sensitive field は prompt と routine log に入れない。身分証チェック厳しめ🔐                                                                      |
+| Usage と通知        | provider-reported usage/paid state、advisory Model Pacing、cache/compaction counter、Ultra Caching handoff、privacy-safe completion sound と固定の日英 speech。架空の「token saved 億万長者」はやらない💸                                                                 |
+| Personalization     | local settings profile、Club Code first-run presentation、対応 desktop の whole-window opacity、動作を止めず presentation だけ隠す Meeting Privacy。昼用 profile と夜用 profile、はい優勝🏆                                                                               |
+| Connection          | LAN Web UI と、到達可能な Cafe Code/Club Code server への saved direct connection。project/thread/provider/subscription は選択 server ごと。スマホから見張り番もできる📱                                                                                                  |
+| Desktop workflow    | thread の project 間 move、Recycle Bin/restore/permanent delete、external editor 選択、real path open、source/package update check、provider/session/checkpoint lifecycle hardening。地味だけどこういう子が一番仕事できる👏                                               |
 
 ## Auto Nudge、酔って押す前にここ読んでね⚠️
 
@@ -56,14 +56,12 @@ Auto Nudge は **時間で発火しません。完了 event で発火します**
 1. その exact thread で provider が新しい completed turn を報告する。
 2. その thread で受理された operator follow-up が FIFO 順に全部終わる。
 3. provider、transport、approval、user input、draft、cap などの safety gate が全部 OK。
-4. そのあと五秒の safety debounce でもう一回ぜんぶ確認。
+4. dispatch の直前に safety gate をもう一回ぜんぶ確認。
 5. その completed turn は一回だけ消費。次の nudge には、次の completed-turn identity が必要。
 
-五秒は「五秒ごとに営業LINE送ります〜💕」じゃないです。再確認の debounce。
-background coordinator の repeating interval は host/browser の Emergency Stop suppression を
-再確認するだけで、schedule や dispatch の path はありません。maximum minutes は run の
-終了上限で、nudge 間隔ではありません。idle の時計だけ眺めても provider request は
-生えない。**壁時計に token を飲ませない**、それなです🫡
+nudge timer、countdown、経過時間による run 上限、定期 dispatch はありません。
+idle の時計だけ眺めても provider request は生えない。**壁時計に token を飲ませない**、
+それなです🫡
 
 built-in の入口も plan-driven に更新済み。**Steady Progress** は今の context をそのまま
 引き継ぎ、handoff / plan / canon / PR を照合して、次に検証できる slice へ最大二 lane。
@@ -77,7 +75,7 @@ B thread に化けることはありません。伝票は席ごと、これ歌�
 background continuation も exact thread ごとの opt-in。Settings や別 chat を見ていても
 controller を維持します。複数 renderer が同じ completion を見ても、exact environment server が
 command を直列化し、正しい revision/turn の消費を一回だけ許可。初期 cap は
-5 rounds / 30 minutes、設定できる硬い範囲は 1–20 rounds / 5–120 minutes。
+5 rounds、設定できる硬い範囲は 1–20 rounds。
 
 control は最初から minimize で、collapsed bar は chat manuscript の幅だけ。Off は赤、On は
 緑、exact-thread background continuation 付き On は cyan/green の animation。collapse は
@@ -92,7 +90,7 @@ exact-thread draft を確認するけど、別 device で入力中・送信前�
 
 安全に使うコツ、ガチでこれ👇
 
-- round と time cap は小さく。最初から満卓にしない。
+- round cap は小さく。最初から満卓にしない。
 - exact-thread prompt に objective、stop condition、verification、scope を書く。用途別の
   小さな skill にするのも有効。でも skill は無料券ではないよ。
 - **Steady progress** は bounded continuation 向き。hardcore fan-out は並列調査が本当に必要で、

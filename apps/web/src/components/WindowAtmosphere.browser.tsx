@@ -41,6 +41,8 @@ const mocks = vi.hoisted(() => ({
       | "walk-reverse",
     fallingEffectMatrixWalkStartFontSize: 1,
     fallingEffectMatrixWalkEndFontSize: 72,
+    fallingEffectMatrixWalkLifecyclePercent: 30,
+    fallingEffectMatrixCenterWindIntensity: 4,
     fallingEffectOpacity: 0.35,
     fallingEffectSpeed: 1,
     fallingEffectDensity: 1,
@@ -220,6 +222,8 @@ beforeEach(() => {
   mocks.settings.fallingEffectMatrixMotionMode = "flat";
   mocks.settings.fallingEffectMatrixWalkStartFontSize = 1;
   mocks.settings.fallingEffectMatrixWalkEndFontSize = 72;
+  mocks.settings.fallingEffectMatrixWalkLifecyclePercent = 30;
+  mocks.settings.fallingEffectMatrixCenterWindIntensity = 4;
   mocks.settings.fallingEffectActivityLinks = true;
   mocks.settings.fallingEffectActivityLinkNetworkEnabled = true;
   mocks.settings.fallingEffectActivityLinkDatabaseEnabled = true;
@@ -835,6 +839,9 @@ describe("WindowAtmosphere", () => {
           expect.any(Number),
           expect.any(Boolean),
           expect.any(Object),
+          motionMode,
+          30,
+          4,
         );
         expect(mocks.drawAtmosphereScene.mock.calls.at(-1)?.[5]).toBe(motionMode);
         expect(frameCallbacks.size).toBe(0);

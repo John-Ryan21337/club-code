@@ -4945,7 +4945,7 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
       }
     });
 
-    it("saves Auto Nudge limits through one exact thread authority instead of client settings", async () => {
+    it("saves the Auto Nudge round cap through one exact thread authority instead of client settings", async () => {
       let snapshot = createSnapshotForTargetUser({
         targetMessageId: "msg-user-auto-nudge-limits" as MessageId,
         targetText: "exact thread limits",
@@ -4967,8 +4967,7 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
       try {
         await expandAutoNudgeControls();
         await page.getByLabelText("Maximum rounds").fill("8");
-        await page.getByLabelText("Maximum minutes").fill("90");
-        await page.getByRole("button", { name: "Save limits" }).click();
+        await page.getByRole("button", { name: "Save round cap" }).click();
 
         await vi.waitFor(
           () => {

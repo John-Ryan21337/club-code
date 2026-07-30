@@ -56,6 +56,8 @@ export const SETTINGS_PROFILE_CLIENT_KEYS = [
   "fallingEffectMatrixMotionMode",
   "fallingEffectMatrixWalkStartFontSize",
   "fallingEffectMatrixWalkEndFontSize",
+  "fallingEffectMatrixWalkLifecyclePercent",
+  "fallingEffectMatrixCenterWindIntensity",
   "fallingEffectOpacity",
   "fallingEffectSpeed",
   "fallingEffectDensity",

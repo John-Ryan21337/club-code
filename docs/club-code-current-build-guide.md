@@ -17,7 +17,7 @@ work, and verify important results.
 > real provider request and may rapidly consume tokens, credits, quota, or paid
 > usage. You remain responsible for provider charges; Club Code maintainers
 > cannot reimburse or assume responsibility for those costs. Use conservative
-> round and time caps, write a carefully scoped prompt or skill for the exact
+> round caps, write a carefully scoped prompt or skill for the exact
 > thread, and monitor active runs—including from the phone Web UI when away.
 > Leave it running unattended overnight only when you knowingly accept the cost
 > risk.
@@ -31,25 +31,25 @@ Club Code keeps Cafe Code's coding-agent chat foundation and compatibility
 identifiers, then adds a local-first desktop experience, bounded automation,
 operator observability, media, and extensive presentation controls.
 
-| Area                 | Current Club Code behavior                                                                                                                                                                                                                                                                  |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Product shape        | Branded Club Code desktop and Web UI, while retaining compatible `cafe-code`, `@cafecode/*`, `CAFE_CODE_*`, protocol, and data-path identifiers. It stays chat-centered and does not restore an in-app terminal or pretend to be a full editor.                                             |
-| Providers            | Codex, Claude, and OpenCode remain available. The build incorporates Cafe Code's Codex 0.146 protocol support and adds a separate **LM Studio Local** provider whose callable local models appear in the main model picker.                                                                 |
-| Prompt workflow      | Exact-thread draft recovery, visible queued follow-ups, provider-aware **Steer**, durable FIFO ordering, image and bounded `.txt` attachments, and a camera button with preview, front/rear selection, retake, and system-camera fallback.                                                  |
-| Auto Nudge           | Exact-thread mode, editable standing-order text, per-thread round/time caps, foreground or opt-in background continuation, minimized controls, per-thread Stop, an emergency stop for known connected threads, and normal-history messages. Server-accepted operator work goes first.       |
-| Atmosphere           | Full-window snow, rain, or Matrix; Roman/Japanese mix; 2ch glyph enrichment; fixed, rainbow, per-stream rainbow, and music-reactive colors; shimmer speed; live-work vocabulary; and Flat, Forward, Reverse, Warp, Walk Forward, and Walk Reverse motion.                                   |
-| Mobile presentation  | A touch-sized composer toggle switches the current renderer between responsive Desktop and forced Mobile optimized layout. Explicit Mobile also enables/selects Matrix without resetting its appearance; returning to Desktop leaves Matrix on.                                             |
-| Clock and weather    | An optional transparent, movable multi-city clock offers rainbow shimmer, amber nixie, analog, and old-school LED styles. Weather is separately disabled by default and requires renderer-local network consent.                                                                            |
-| Verified activity    | Optional Matrix routes for provider-observed network, database, build, and agent-delegation activity. Safe reported filenames may enrich the bounded live-work vocabulary. Lines, packets, trails, endpoints, and telemetry never use prompts, commands, SQL, secrets, or invented traffic. |
-| Ambient media        | YouTube, Spotify embeds, direct local media, desktop VLC playback, a single image/GIF or bounded image-directory cycle, floating/custom/Theater/Cinema layouts, adaptive glow, and a Spectrum or bundled 395-preset MilkDrop/Butterchurn visualizer.                                        |
-| YouTube queues       | Three bundled one-click lists—Japanese, EDM, and K-pop—plus local `.txt` list import. Reimporting the same filename replaces that browser's list; a new filename adds another choice. Non-embeddable or unavailable videos are skipped within the bounded queue pass.                       |
-| Resource monitor     | A transparent, movable, resizable, collapsible Project Resources panel with Matrix-colored graphs for host CPU/RAM/network, selected-project disk volume, GPU/VRAM, and measured hardware temperatures where the host exposes them.                                                         |
-| Observatories        | Provider-reported Workflow views plus a read-only Workspace Observatory with bounded project tree, text preview, SQLite table viewing, verified file focus, and up to eight tiled panes. These views do not edit files/databases or silently add their contents to model context.           |
-| Supervised browser   | A temporary sandboxed desktop browser with native approval for assisted actions and an explicit, origin/thread/provider-bound Codex or Claude grant. Sensitive fields stay out of prompts and routine logs.                                                                                 |
-| Usage and completion | Provider-reported usage windows and paid-usage state, advisory Model Pacing, cache/compaction counters, Ultra Caching handoff behavior, and optional privacy-safe completion sounds or fixed English/Japanese speech.                                                                       |
-| Personalization      | Locally persisted settings profiles for presentation/client preferences, first-run Club Code presentation defaults, whole-window opacity on supported desktop builds, and Meeting Privacy for hiding selected projects from presentation surfaces without stopping their work.              |
-| Connections          | A LAN-capable Web UI and saved direct connections to other reachable Cafe Code/Club Code servers. Projects, threads, providers, and subscriptions are scoped to the selected server.                                                                                                        |
-| Desktop workflow     | Thread movement between projects, recycle-bin/restore/permanent-delete flows, configurable external editor, real-path opening, separate source and packaged update checks, and hardened provider/session/checkpoint lifecycle handling.                                                     |
+| Area                 | Current Club Code behavior                                                                                                                                                                                                                                                                                                                           |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Product shape        | Branded Club Code desktop and Web UI, while retaining compatible `cafe-code`, `@cafecode/*`, `CAFE_CODE_*`, protocol, and data-path identifiers. It stays chat-centered and does not restore an in-app terminal or pretend to be a full editor.                                                                                                      |
+| Providers            | Codex, Claude, and OpenCode remain available. The build incorporates Cafe Code's Codex 0.146 protocol support and adds a separate **LM Studio Local** provider whose callable local models appear in the main model picker.                                                                                                                          |
+| Prompt workflow      | Exact-thread draft recovery, visible queued follow-ups, provider-aware **Steer**, durable FIFO ordering, image and bounded `.txt` attachments, and a camera button with preview, front/rear selection, retake, and system-camera fallback.                                                                                                           |
+| Auto Nudge           | Exact-thread mode, editable standing-order text, a per-thread round cap, foreground or opt-in background continuation, minimized controls, per-thread Stop, an emergency stop for known connected threads, and normal-history messages. Server-accepted operator work goes first.                                                                    |
+| Atmosphere           | Full-window snow, rain, or Matrix; Roman/Japanese mix; 2ch glyph enrichment; fixed, rainbow, per-stream rainbow, and music-reactive colors; shimmer speed; live-work vocabulary; and Flat, Forward, Reverse, Warp, Walk Forward, and Walk Reverse motion. Matrix Walk adds randomized bounded lifecycle distance and adjustable outward center wind. |
+| Mobile presentation  | A touch-sized composer toggle switches the current renderer between responsive Desktop and forced Mobile optimized layout. Explicit Mobile also enables/selects Matrix without resetting its appearance; returning to Desktop leaves Matrix on.                                                                                                      |
+| Clock and weather    | An optional transparent, movable multi-city clock offers rainbow shimmer, amber nixie, analog, and old-school LED styles. Weather is separately disabled by default and requires renderer-local network consent.                                                                                                                                     |
+| Verified activity    | Optional Matrix routes for provider-observed network, database, build, and agent-delegation activity. Safe reported filenames may enrich the bounded live-work vocabulary. Lines, packets, trails, endpoints, and telemetry never use prompts, commands, SQL, secrets, or invented traffic.                                                          |
+| Ambient media        | YouTube, Spotify embeds, direct local media, desktop VLC playback, a single image/GIF or bounded image-directory cycle, floating/custom/Theater/Cinema layouts, adaptive glow, and a Spectrum or bundled 395-preset MilkDrop/Butterchurn visualizer.                                                                                                 |
+| YouTube queues       | Three bundled one-click lists—Japanese, EDM, and K-pop—plus local `.txt` list import. Reimporting the same filename replaces that browser's list; a new filename adds another choice. Non-embeddable or unavailable videos are skipped within the bounded queue pass.                                                                                |
+| Resource monitor     | A transparent, movable, resizable, collapsible Project Resources panel with Matrix-colored graphs for host CPU/RAM/network, selected-project disk volume, GPU/VRAM, and measured hardware temperatures where the host exposes them.                                                                                                                  |
+| Observatories        | Provider-reported Workflow views plus a read-only Workspace Observatory with bounded project tree, text preview, SQLite table viewing, verified file focus, and up to eight tiled panes. These views do not edit files/databases or silently add their contents to model context.                                                                    |
+| Supervised browser   | A temporary sandboxed desktop browser with native approval for assisted actions and an explicit, origin/thread/provider-bound Codex or Claude grant. Sensitive fields stay out of prompts and routine logs.                                                                                                                                          |
+| Usage and completion | Provider-reported usage windows and paid-usage state, advisory Model Pacing, cache/compaction counters, Ultra Caching handoff behavior, and optional privacy-safe completion sounds or fixed English/Japanese speech.                                                                                                                                |
+| Personalization      | Locally persisted settings profiles for presentation/client preferences, first-run Club Code presentation defaults, whole-window opacity on supported desktop builds, and Meeting Privacy for hiding selected projects from presentation surfaces without stopping their work.                                                                       |
+| Connections          | A LAN-capable Web UI and saved direct connections to other reachable Cafe Code/Club Code servers. Projects, threads, providers, and subscriptions are scoped to the selected server.                                                                                                                                                                 |
+| Desktop workflow     | Thread movement between projects, recycle-bin/restore/permanent-delete flows, configurable external editor, real-path opening, separate source and packaged update checks, and hardened provider/session/checkpoint lifecycle handling.                                                                                                              |
 
 ## Auto Nudge: Exact Behavior and Safe Use
 
@@ -60,15 +60,12 @@ Auto Nudge is **completion-driven, not time-driven**:
    order.
 3. The thread, provider, transport, approvals, user input, draft, and configured
    caps must still be eligible.
-4. A five-second safety debounce rechecks those facts before dispatch.
+4. Those facts are rechecked immediately before dispatch.
 5. That completed turn is consumed at most once. Only a later completed-turn
    identity can authorize another automated follow-up.
 
-The five-second debounce is not a repeating schedule. The background
-coordinator's repeating interval only reconciles the host/browser emergency
-suppression signal; it has no scheduling or dispatch path. The configured
-maximum minutes is a run ceiling, not a nudge interval. Idle wall-clock time by
-itself does not authorize a provider request.
+There is no nudge timer, countdown, elapsed run ceiling, or periodic dispatch
+cadence. Idle wall-clock time by itself does not authorize a provider request.
 
 The two built-in starting modes now supply plan-driven continuation prompts.
 **Steady Progress** resumes current context, reconciles the applicable
@@ -85,8 +82,7 @@ Background continuation is separately opt-in for the exact thread. It keeps the
 controller alive while the user visits Settings or another chat. Concurrent
 renderers may observe the same completion, but the exact environment server
 serializes commands and permits only one valid revision/turn consumption. The
-default run limits are five rounds and 30 minutes; the hard configurable ranges
-are 1–20 rounds and 5–120 minutes.
+default round limit is five; the hard configurable range is 1–20 rounds.
 
 The control starts minimized and its collapsed bar is limited to the chat
 manuscript width. Red means Off, green means On, and an animated cyan/green
@@ -103,7 +99,7 @@ signal shared automatically by unrelated machines.
 
 Use it conservatively:
 
-- Prefer a small round cap and a short time cap.
+- Prefer a small round cap.
 - Write an objective, stopping condition, verification requirement, and scope
   limit into the exact-thread prompt. A narrowly designed skill can make that
   standing order more repeatable.

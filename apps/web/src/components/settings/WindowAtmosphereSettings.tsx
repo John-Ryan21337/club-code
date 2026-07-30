@@ -18,8 +18,10 @@ import {
   DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
   DEFAULT_FALLING_EFFECT_MATRIX_COLOR_MODE,
   DEFAULT_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE,
+  DEFAULT_FALLING_EFFECT_MATRIX_CENTER_WIND_INTENSITY,
   DEFAULT_FALLING_EFFECT_MATRIX_MOTION_MODE,
   DEFAULT_FALLING_EFFECT_MATRIX_WALK_END_FONT_SIZE,
+  DEFAULT_FALLING_EFFECT_MATRIX_WALK_LIFECYCLE_PERCENT,
   DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE,
   DEFAULT_FALLING_EFFECT_SPEED,
   FALLING_EFFECT_MATRIX_WALK_FONT_SIZE_STEP,
@@ -28,7 +30,9 @@ import {
   MAX_FALLING_EFFECT_JAPANESE_RATIO,
   MAX_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
   MAX_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE,
+  MAX_FALLING_EFFECT_MATRIX_CENTER_WIND_INTENSITY,
   MAX_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE,
+  MAX_FALLING_EFFECT_MATRIX_WALK_LIFECYCLE_PERCENT,
   MAX_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
   MAX_FALLING_EFFECT_SPEED,
   MIN_AMBIENT_OPACITY,
@@ -36,7 +40,9 @@ import {
   MIN_FALLING_EFFECT_JAPANESE_RATIO,
   MIN_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
   MIN_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE,
+  MIN_FALLING_EFFECT_MATRIX_CENTER_WIND_INTENSITY,
   MIN_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE,
+  MIN_FALLING_EFFECT_MATRIX_WALK_LIFECYCLE_PERCENT,
   MIN_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
   MIN_FALLING_EFFECT_SPEED,
 } from "@cafecode/contracts/settings";
@@ -217,6 +223,10 @@ export function WindowAtmosphereSettings() {
       DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE ||
     settings.fallingEffectMatrixWalkEndFontSize !==
       DEFAULT_FALLING_EFFECT_MATRIX_WALK_END_FONT_SIZE ||
+    settings.fallingEffectMatrixWalkLifecyclePercent !==
+      DEFAULT_FALLING_EFFECT_MATRIX_WALK_LIFECYCLE_PERCENT ||
+    settings.fallingEffectMatrixCenterWindIntensity !==
+      DEFAULT_FALLING_EFFECT_MATRIX_CENTER_WIND_INTENSITY ||
     settings.fallingEffectOpacity !== DEFAULT_AMBIENT_OPACITY ||
     settings.fallingEffectSpeed !== DEFAULT_FALLING_EFFECT_SPEED ||
     settings.fallingEffectDensity !== DEFAULT_FALLING_EFFECT_DENSITY ||
@@ -268,6 +278,10 @@ export function WindowAtmosphereSettings() {
                     DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE,
                   fallingEffectMatrixWalkEndFontSize:
                     DEFAULT_FALLING_EFFECT_MATRIX_WALK_END_FONT_SIZE,
+                  fallingEffectMatrixWalkLifecyclePercent:
+                    DEFAULT_FALLING_EFFECT_MATRIX_WALK_LIFECYCLE_PERCENT,
+                  fallingEffectMatrixCenterWindIntensity:
+                    DEFAULT_FALLING_EFFECT_MATRIX_CENTER_WIND_INTENSITY,
                   fallingEffectOpacity: DEFAULT_AMBIENT_OPACITY,
                   fallingEffectSpeed: DEFAULT_FALLING_EFFECT_SPEED,
                   fallingEffectDensity: DEFAULT_FALLING_EFFECT_DENSITY,
@@ -337,6 +351,53 @@ export function WindowAtmosphereSettings() {
             </RadioGroup>
           }
         />
+      ) : null}
+
+      {controlsEnabled &&
+      settings.fallingEffectKind === "matrix" &&
+      (settings.fallingEffectMatrixMotionMode === "walk-forward" ||
+        settings.fallingEffectMatrixMotionMode === "walk-reverse") ? (
+        <>
+          <SettingsRow
+            title="Walk symbol lifecycle distance"
+            description="Set how far each randomly placed Matrix stream falls before its font expansion cycle fades out and respawns elsewhere in the background."
+            control={
+              <div className="flex items-center gap-2">
+                <WholePixelFontSizeField
+                  value={settings.fallingEffectMatrixWalkLifecyclePercent}
+                  fallback={DEFAULT_FALLING_EFFECT_MATRIX_WALK_LIFECYCLE_PERCENT}
+                  minimum={MIN_FALLING_EFFECT_MATRIX_WALK_LIFECYCLE_PERCENT}
+                  maximum={MAX_FALLING_EFFECT_MATRIX_WALK_LIFECYCLE_PERCENT}
+                  inputLabel="Walk symbol lifecycle distance"
+                  decrementLabel="Decrease Walk symbol lifecycle distance"
+                  incrementLabel="Increase Walk symbol lifecycle distance"
+                  onCommit={(value) =>
+                    updateSettings({ fallingEffectMatrixWalkLifecyclePercent: value })
+                  }
+                />
+                <span className="text-xs text-muted-foreground">%</span>
+              </div>
+            }
+          />
+          <SettingsRow
+            title="Motion from center wind intensity"
+            description="Fan falling streams away from the viewport center. Centered symbols receive little horizontal motion; symbols nearer the left and right edges receive progressively stronger outward motion."
+            control={
+              <WholePixelFontSizeField
+                value={settings.fallingEffectMatrixCenterWindIntensity}
+                fallback={DEFAULT_FALLING_EFFECT_MATRIX_CENTER_WIND_INTENSITY}
+                minimum={MIN_FALLING_EFFECT_MATRIX_CENTER_WIND_INTENSITY}
+                maximum={MAX_FALLING_EFFECT_MATRIX_CENTER_WIND_INTENSITY}
+                inputLabel="Motion from center wind intensity"
+                decrementLabel="Decrease Motion from center wind intensity"
+                incrementLabel="Increase Motion from center wind intensity"
+                onCommit={(value) =>
+                  updateSettings({ fallingEffectMatrixCenterWindIntensity: value })
+                }
+              />
+            }
+          />
+        </>
       ) : null}
 
       {controlsEnabled && settings.fallingEffectKind === "matrix" ? (

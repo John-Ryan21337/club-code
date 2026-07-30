@@ -2,21 +2,27 @@ import {
   DEFAULT_FALLING_EFFECT_DENSITY,
   DEFAULT_FALLING_EFFECT_JAPANESE_RATIO,
   DEFAULT_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE,
+  DEFAULT_FALLING_EFFECT_MATRIX_CENTER_WIND_INTENSITY,
   DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
+  DEFAULT_FALLING_EFFECT_MATRIX_WALK_LIFECYCLE_PERCENT,
   DEFAULT_FALLING_EFFECT_MATRIX_WALK_END_FONT_SIZE,
   DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE,
   FALLING_EFFECT_MATRIX_WALK_FONT_SIZE_STEP,
   MAX_FALLING_EFFECT_DENSITY,
   MAX_FALLING_EFFECT_JAPANESE_RATIO,
   MAX_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE,
+  MAX_FALLING_EFFECT_MATRIX_CENTER_WIND_INTENSITY,
   MAX_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
   MAX_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE,
+  MAX_FALLING_EFFECT_MATRIX_WALK_LIFECYCLE_PERCENT,
   MAX_FALLING_EFFECT_SPEED,
   MIN_FALLING_EFFECT_DENSITY,
   MIN_FALLING_EFFECT_JAPANESE_RATIO,
   MIN_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE,
+  MIN_FALLING_EFFECT_MATRIX_CENTER_WIND_INTENSITY,
   MIN_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
   MIN_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE,
+  MIN_FALLING_EFFECT_MATRIX_WALK_LIFECYCLE_PERCENT,
   MIN_FALLING_EFFECT_SPEED,
   type AmbientColor,
   type FallingEffectKind,
@@ -97,6 +103,8 @@ export const MAX_MATRIX_TOKEN_FONT_SIZE = 18;
 export const MAX_MATRIX_TOKEN_WIDTH_PX = 144;
 const MATRIX_2CH_TOKEN_PROBABILITY = 0.08;
 const MATRIX_WORK_TOKEN_PROBABILITY = 0.34;
+const MATRIX_WALK_FADE_START_PROGRESS = 0.72;
+const MATRIX_CENTER_WIND_MAX_SPEED_PX_PER_SECOND = 60;
 const MATRIX_PERSPECTIVE_FONT_MIN_PX = 1;
 const MATRIX_PERSPECTIVE_FONT_MAX_PX = MAX_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE;
 const MATRIX_PERSPECTIVE_FONT_STEP_PX = 0.5;
@@ -132,6 +140,14 @@ export interface AtmosphereParticle {
   matrixLanguage: "english" | "japanese" | null;
   matrixToken: string | null;
   matrixWorkToken: string | null;
+  /** Viewport Y where the current bounded Matrix Walk lifecycle began. */
+  matrixLifecycleStartY: number;
+  /** Normalized 0..1 travel/font lifecycle, independent from viewport Y. */
+  matrixLifecycleProgress: number;
+  /** Current lifecycle alpha; it fades to zero before the next spawn. */
+  matrixLifecycleOpacity: number;
+  /** Increments on respawn so deterministic positions do not repeat. */
+  matrixLifecycleGeneration: number;
 }
 
 export interface AtmosphereScene {
@@ -236,6 +252,9 @@ export function createAtmosphereScene(
   japaneseRatio = DEFAULT_FALLING_EFFECT_JAPANESE_RATIO,
   enriched2ch = false,
   workVocabulary: MatrixWorkVocabulary = { english: [], japanese: [] },
+  motionMode: FallingEffectMatrixMotionMode = "flat",
+  matrixWalkLifecyclePercent = DEFAULT_FALLING_EFFECT_MATRIX_WALK_LIFECYCLE_PERCENT,
+  matrixCenterWindIntensity = DEFAULT_FALLING_EFFECT_MATRIX_CENTER_WIND_INTENSITY,
 ): AtmosphereScene {
   const count = calculateAtmosphereParticleCount(kind, width, height, density);
   const particles = Array.from({ length: count }, (_, index): AtmosphereParticle => {
@@ -254,6 +273,10 @@ export function createAtmosphereScene(
         matrixLanguage: null,
         matrixToken: null,
         matrixWorkToken: null,
+        matrixLifecycleStartY: 0,
+        matrixLifecycleProgress: 0,
+        matrixLifecycleOpacity: 1,
+        matrixLifecycleGeneration: 0,
       };
     }
 
@@ -273,10 +296,20 @@ export function createAtmosphereScene(
         matrixToken === null && workTokens.length > 0 && random() < MATRIX_WORK_TOKEN_PROBABILITY
           ? (workTokens[Math.floor(random() * workTokens.length)] ?? null)
           : null;
+      const walk = isMatrixWalkMotionMode(motionMode);
+      const lifecycleTravel = resolveMatrixWalkLifecycleDistance(
+        height,
+        matrixWalkLifecyclePercent,
+      );
+      const lifecycleProgress = walk ? random() : 0;
+      const lifecycleStartY = walk ? random() * Math.max(0, height - lifecycleTravel) : 0;
+      const walkX =
+        count > 0 ? ((index + 0.15 + random() * 0.7) / count) * width : random() * width;
+      const x = walk ? walkX : matrixX;
       return {
-        x: matrixX,
-        y: random() * height,
-        velocityX: 0,
+        x,
+        y: walk ? lifecycleStartY + lifecycleProgress * lifecycleTravel : random() * height,
+        velocityX: walk ? resolveMatrixCenterWindVelocity(x, width, matrixCenterWindIntensity) : 0,
         velocityY: 55 + random() * 85,
         size: 12 + Math.round(random() * 5),
         phase: random() * Math.PI * 2,
@@ -285,6 +318,10 @@ export function createAtmosphereScene(
         matrixLanguage: usesJapanese ? "japanese" : "english",
         matrixToken,
         matrixWorkToken,
+        matrixLifecycleStartY: lifecycleStartY,
+        matrixLifecycleProgress: lifecycleProgress,
+        matrixLifecycleOpacity: resolveMatrixLifecycleOpacity(lifecycleProgress),
+        matrixLifecycleGeneration: 0,
       };
     }
 
@@ -300,6 +337,10 @@ export function createAtmosphereScene(
       matrixLanguage: null,
       matrixToken: null,
       matrixWorkToken: null,
+      matrixLifecycleStartY: 0,
+      matrixLifecycleProgress: 0,
+      matrixLifecycleOpacity: 1,
+      matrixLifecycleGeneration: 0,
     };
   });
 
@@ -365,15 +406,151 @@ export function clampFallingEffectJapaneseRatio(ratio: number): number {
   );
 }
 
+export function clampMatrixWalkLifecyclePercent(percent: number): number {
+  if (!Number.isFinite(percent)) {
+    return DEFAULT_FALLING_EFFECT_MATRIX_WALK_LIFECYCLE_PERCENT;
+  }
+  return Math.min(
+    MAX_FALLING_EFFECT_MATRIX_WALK_LIFECYCLE_PERCENT,
+    Math.max(MIN_FALLING_EFFECT_MATRIX_WALK_LIFECYCLE_PERCENT, Math.round(percent)),
+  );
+}
+
+export function clampMatrixCenterWindIntensity(intensity: number): number {
+  if (!Number.isFinite(intensity)) {
+    return DEFAULT_FALLING_EFFECT_MATRIX_CENTER_WIND_INTENSITY;
+  }
+  return Math.min(
+    MAX_FALLING_EFFECT_MATRIX_CENTER_WIND_INTENSITY,
+    Math.max(MIN_FALLING_EFFECT_MATRIX_CENTER_WIND_INTENSITY, Math.round(intensity)),
+  );
+}
+
+export function isMatrixWalkMotionMode(mode: FallingEffectMatrixMotionMode): boolean {
+  return mode === "walk-forward" || mode === "walk-reverse";
+}
+
+function resolveMatrixWalkLifecycleDistance(height: number, requestedPercent: number): number {
+  return Math.max(
+    1,
+    Math.max(0, height) * (clampMatrixWalkLifecyclePercent(requestedPercent) / 100),
+  );
+}
+
+function resolveMatrixCenterWindVelocity(
+  x: number,
+  width: number,
+  requestedIntensity: number,
+): number {
+  const halfWidth = Math.max(1, width * 0.5);
+  const normalizedDistanceFromCenter = Math.min(1, Math.max(-1, (x - width * 0.5) / halfWidth));
+  return (
+    normalizedDistanceFromCenter *
+    (clampMatrixCenterWindIntensity(requestedIntensity) /
+      MAX_FALLING_EFFECT_MATRIX_CENTER_WIND_INTENSITY) *
+    MATRIX_CENTER_WIND_MAX_SPEED_PX_PER_SECOND
+  );
+}
+
+function resolveMatrixLifecycleOpacity(progress: number): number {
+  const fadeProgress = Math.min(
+    1,
+    Math.max(
+      0,
+      (progress - MATRIX_WALK_FADE_START_PROGRESS) / (1 - MATRIX_WALK_FADE_START_PROGRESS),
+    ),
+  );
+  return 1 - fadeProgress * fadeProgress * (3 - fadeProgress * 2);
+}
+
+export function resolveMatrixWalkLifecycleOpacity(
+  particle: AtmosphereParticle,
+  motionMode: FallingEffectMatrixMotionMode,
+): number {
+  return isMatrixWalkMotionMode(motionMode)
+    ? Math.min(1, Math.max(0, particle.matrixLifecycleOpacity))
+    : 1;
+}
+
+function matrixLifecycleRandom(particle: AtmosphereParticle, salt: number): number {
+  const value =
+    Math.sin(
+      (particle.phase + 1) * 12.9898 +
+        (particle.matrixLifecycleGeneration + 1) * 78.233 +
+        salt * 37.719,
+    ) * 43_758.5453;
+  return value - Math.floor(value);
+}
+
+function respawnMatrixWalkParticle(
+  scene: AtmosphereScene,
+  particle: AtmosphereParticle,
+  particleIndex: number,
+  lifecyclePercent: number,
+  windIntensity: number,
+): void {
+  particle.matrixLifecycleGeneration += 1;
+  particle.matrixLifecycleProgress = 0;
+  particle.matrixLifecycleOpacity = 1;
+  const travel = resolveMatrixWalkLifecycleDistance(scene.height, lifecyclePercent);
+  const horizontalBandCount = Math.max(1, scene.particles.length);
+  particle.x =
+    ((particleIndex + 0.15 + matrixLifecycleRandom(particle, 1) * 0.7) / horizontalBandCount) *
+    scene.width;
+  particle.matrixLifecycleStartY =
+    matrixLifecycleRandom(particle, 2) * Math.max(0, scene.height - travel);
+  particle.y = particle.matrixLifecycleStartY;
+  particle.velocityX = resolveMatrixCenterWindVelocity(particle.x, scene.width, windIntensity);
+  particle.glyphOffset =
+    (particle.glyphOffset +
+      17 +
+      Math.floor(matrixLifecycleRandom(particle, 3) * particle.glyphs.length)) %
+    particle.glyphs.length;
+}
+
 export function advanceAtmosphereSceneInPlace(
   scene: AtmosphereScene,
   elapsedSeconds: number,
   requestedSpeed: number,
+  motionMode: FallingEffectMatrixMotionMode = "flat",
+  matrixWalkLifecyclePercent = DEFAULT_FALLING_EFFECT_MATRIX_WALK_LIFECYCLE_PERCENT,
+  matrixCenterWindIntensity = DEFAULT_FALLING_EFFECT_MATRIX_CENTER_WIND_INTENSITY,
 ): void {
   const deltaSeconds = Math.min(MAX_ATMOSPHERE_FRAME_DELTA_SECONDS, Math.max(0, elapsedSeconds));
   const speed = clampFallingEffectSpeed(requestedSpeed);
 
-  for (const particle of scene.particles) {
+  for (const [particleIndex, particle] of scene.particles.entries()) {
+    if (scene.kind === "matrix" && isMatrixWalkMotionMode(motionMode)) {
+      const lifecycleDistance = resolveMatrixWalkLifecycleDistance(
+        scene.height,
+        matrixWalkLifecyclePercent,
+      );
+      const verticalDistance = particle.velocityY * deltaSeconds * speed;
+      particle.matrixLifecycleProgress += verticalDistance / lifecycleDistance;
+      if (particle.matrixLifecycleProgress >= 1) {
+        respawnMatrixWalkParticle(
+          scene,
+          particle,
+          particleIndex,
+          matrixWalkLifecyclePercent,
+          matrixCenterWindIntensity,
+        );
+        continue;
+      }
+      particle.y =
+        particle.matrixLifecycleStartY + particle.matrixLifecycleProgress * lifecycleDistance;
+      particle.velocityX = resolveMatrixCenterWindVelocity(
+        particle.x,
+        scene.width,
+        matrixCenterWindIntensity,
+      );
+      particle.x += particle.velocityX * deltaSeconds * speed;
+      particle.matrixLifecycleOpacity = resolveMatrixLifecycleOpacity(
+        particle.matrixLifecycleProgress,
+      );
+      continue;
+    }
+
     if (scene.kind === "snow") {
       particle.x +=
         (particle.velocityX + Math.sin(particle.phase + particle.y * 0.01) * 8) *
@@ -684,13 +861,12 @@ function resolveDirectionalPerspectiveX(
     return centerX;
   }
 
-  const normalizedColumnX = Math.min(
-    1,
-    Math.max(-1, ((sourceX - outerColumnInset) / generatedColumnSpan) * 2 - 1),
-  );
+  const rawNormalizedColumnX = ((sourceX - outerColumnInset) / generatedColumnSpan) * 2 - 1;
+  const normalizedColumnX = Math.min(1, Math.max(-1, rawNormalizedColumnX));
   const edgePreservingScale =
     perspectiveScale + (1 - perspectiveScale) * Math.abs(normalizedColumnX);
-  return centerX + normalizedColumnX * centerX * edgePreservingScale;
+  const overflowX = (rawNormalizedColumnX - normalizedColumnX) * (generatedColumnSpan * 0.5);
+  return centerX + normalizedColumnX * centerX * edgePreservingScale + overflowX;
 }
 
 /**
@@ -739,7 +915,9 @@ export function resolveAtmosphereProjectedPointInPlace(
     const reverse = motionMode === "reverse" || motionMode === "walk-reverse";
     const walk = motionMode === "walk-forward" || motionMode === "walk-reverse";
     const geometryDepth = walk
-      ? Math.min(1, Math.max(0, safeY / Math.max(1, scene.height)))
+      ? scene.kind === "matrix"
+        ? Math.min(1, Math.max(0, particle.matrixLifecycleProgress))
+        : Math.min(1, Math.max(0, safeY / Math.max(1, scene.height)))
       : depth;
     const projectedDepth = reverse ? 1 - geometryDepth : geometryDepth;
     const perspectiveScale = 0.58 + projectedDepth * 0.72;
@@ -863,6 +1041,8 @@ export function drawAtmosphereScene(
     context.textAlign = "center";
     context.textBaseline = "middle";
     for (const particle of scene.particles) {
+      const lifecycleOpacity = resolveMatrixWalkLifecycleOpacity(particle, motionMode);
+      if (lifecycleOpacity <= 0) continue;
       context.fillStyle =
         matrixColorFrame === undefined
           ? color
@@ -896,7 +1076,8 @@ export function drawAtmosphereScene(
             Math.floor(Math.max(0, particle.y) / particle.size)) %
           particle.glyphs.length;
         context.globalAlpha =
-          trailIndex === 0 ? normalizedOpacity : normalizedOpacity * (1 - trailIndex / 8) * 0.7;
+          (trailIndex === 0 ? normalizedOpacity : normalizedOpacity * (1 - trailIndex / 8) * 0.7) *
+          lifecycleOpacity;
         context.fillText(
           // An AA token is one intact glyph at the head of a column, not the
           // repeated glyph for every tail position. Repeating it made a single
