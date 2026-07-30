@@ -1,10 +1,5 @@
 import type { AutoNudgeMode } from "~/autoNudger";
-import {
-  MAX_AUTO_NUDGE_MAX_MINUTES,
-  MAX_AUTO_NUDGE_MAX_ROUNDS,
-  MIN_AUTO_NUDGE_MAX_MINUTES,
-  MIN_AUTO_NUDGE_MAX_ROUNDS,
-} from "@cafecode/contracts";
+import { MAX_AUTO_NUDGE_MAX_ROUNDS, MIN_AUTO_NUDGE_MAX_ROUNDS } from "@cafecode/contracts";
 import type {
   BackgroundAutoNudgeLedgerEntry,
   BackgroundAutoNudgeStatus,
@@ -28,7 +23,6 @@ const AUTO_NUDGE_MODE_LABELS: Readonly<Record<AutoNudgeMode, string>> = {
 
 export function AutoNudgeControl(props: {
   mode: AutoNudgeMode;
-  countdownSeconds: number | null;
   disabled: boolean;
   backgroundEnabled: boolean;
   backgroundDispatchSupported: boolean;
@@ -36,26 +30,21 @@ export function AutoNudgeControl(props: {
   backgroundStatus: BackgroundAutoNudgeStatus;
   backgroundRounds: number;
   backgroundMaxRounds: number;
-  backgroundMaxMinutes: number;
   backgroundReason: string | null;
   backgroundLedger: readonly BackgroundAutoNudgeLedgerEntry[];
   onModeChange: (mode: AutoNudgeMode) => void;
   onMaxRoundsChange: (rounds: number) => void;
-  onMaxMinutesChange: (minutes: number) => void;
   onBackgroundChange: (enabled: boolean) => void;
   onPauseBackground: () => void;
   onResumeBackground: () => void;
   onStop: () => void;
 }) {
   const isActive = props.mode !== "off";
-  const status =
-    props.countdownSeconds === null
-      ? props.backgroundOwnedByThisThread
-        ? `Background ${props.backgroundStatus}`
-        : isActive
-          ? "Armed for the next safely settled turn"
-          : "Off"
-      : `Next nudge in ${props.countdownSeconds}s`;
+  const status = props.backgroundOwnedByThisThread
+    ? `Background ${props.backgroundStatus}`
+    : isActive
+      ? "Armed for the next newly completed response"
+      : "Off";
 
   return (
     <div
@@ -65,8 +54,9 @@ export function AutoNudgeControl(props: {
       <div className="min-w-0">
         <div className="font-medium text-foreground">Auto nudge - {status}</div>
         <p className="mt-0.5 text-muted-foreground">
-          Mode is saved for this thread only. Background continuation is opt-in, owns one thread,
-          and stops at {props.backgroundMaxRounds} rounds or {props.backgroundMaxMinutes} minutes.
+          Mode is saved for this thread only. A nudge is authorized only by a newly completed
+          response. Background continuation is opt-in, owns one thread, and stops at{" "}
+          {props.backgroundMaxRounds} rounds.
         </p>
         {props.backgroundOwnedByThisThread ? (
           <div className="mt-1 text-muted-foreground" aria-live="polite">
@@ -154,36 +144,6 @@ export function AutoNudgeControl(props: {
               <NumberFieldDecrement aria-label="Decrease Auto Nudge round cap" />
               <NumberFieldInput aria-label="Auto Nudge maximum rounds for this thread" />
               <NumberFieldIncrement aria-label="Increase Auto Nudge round cap" />
-            </NumberFieldGroup>
-          </NumberField>
-        </label>
-        <label className="flex items-center gap-1 whitespace-nowrap text-muted-foreground">
-          Minutes
-          <NumberField
-            value={props.backgroundMaxMinutes}
-            min={MIN_AUTO_NUDGE_MAX_MINUTES}
-            max={MAX_AUTO_NUDGE_MAX_MINUTES}
-            step={5}
-            size="sm"
-            className="w-24"
-            disabled={props.disabled}
-            onValueChange={(value) => {
-              if (value !== null && Number.isFinite(value)) {
-                props.onMaxMinutesChange(
-                  Math.round(
-                    Math.min(
-                      MAX_AUTO_NUDGE_MAX_MINUTES,
-                      Math.max(MIN_AUTO_NUDGE_MAX_MINUTES, value),
-                    ),
-                  ),
-                );
-              }
-            }}
-          >
-            <NumberFieldGroup>
-              <NumberFieldDecrement aria-label="Decrease Auto Nudge time cap" />
-              <NumberFieldInput aria-label="Auto Nudge maximum minutes for this thread" />
-              <NumberFieldIncrement aria-label="Increase Auto Nudge time cap" />
             </NumberFieldGroup>
           </NumberField>
         </label>

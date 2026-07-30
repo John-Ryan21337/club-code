@@ -1,9 +1,6 @@
 import {
-  DEFAULT_AUTO_NUDGE_MAX_MINUTES,
   DEFAULT_AUTO_NUDGE_MAX_ROUNDS,
-  MAX_AUTO_NUDGE_MAX_MINUTES,
   MAX_AUTO_NUDGE_MAX_ROUNDS,
-  MIN_AUTO_NUDGE_MAX_MINUTES,
   MIN_AUTO_NUDGE_MAX_ROUNDS,
   type AutoNudgeMode,
 } from "@cafecode/contracts";
@@ -22,7 +19,6 @@ export interface AutoNudgeThreadPolicy {
   readonly mode: AutoNudgeMode;
   readonly backgroundContinuation: boolean;
   readonly maxRounds: number;
-  readonly maxMinutes: number;
 }
 
 interface StoredAutoNudgeThreadPolicy extends AutoNudgeThreadPolicy {
@@ -46,7 +42,6 @@ export const DEFAULT_AUTO_NUDGE_THREAD_POLICY: AutoNudgeThreadPolicy = Object.fr
   mode: "off",
   backgroundContinuation: false,
   maxRounds: DEFAULT_AUTO_NUDGE_MAX_ROUNDS,
-  maxMinutes: DEFAULT_AUTO_NUDGE_MAX_MINUTES,
 });
 
 function safeId(value: unknown): value is string {
@@ -72,8 +67,7 @@ export function isValidAutoNudgeThreadPolicy(
     typeof candidate.backgroundContinuation === "boolean" &&
     (!candidate.backgroundContinuation || candidate.mode !== "off") &&
     (!options?.requireBackgroundContinuation || candidate.backgroundContinuation) &&
-    safeInteger(candidate.maxRounds, MIN_AUTO_NUDGE_MAX_ROUNDS, MAX_AUTO_NUDGE_MAX_ROUNDS) &&
-    safeInteger(candidate.maxMinutes, MIN_AUTO_NUDGE_MAX_MINUTES, MAX_AUTO_NUDGE_MAX_MINUTES)
+    safeInteger(candidate.maxRounds, MIN_AUTO_NUDGE_MAX_ROUNDS, MAX_AUTO_NUDGE_MAX_ROUNDS)
   );
 }
 
@@ -88,7 +82,6 @@ function policyFromEntry(entry: StoredAutoNudgeThreadPolicy): AutoNudgeThreadPol
     mode: entry.mode,
     backgroundContinuation: entry.backgroundContinuation,
     maxRounds: entry.maxRounds,
-    maxMinutes: entry.maxMinutes,
   });
 }
 
@@ -124,7 +117,6 @@ function readEntries(
         mode: candidate.mode,
         backgroundContinuation: candidate.backgroundContinuation,
         maxRounds: candidate.maxRounds,
-        maxMinutes: candidate.maxMinutes,
         updatedAt: candidate.updatedAt,
       });
     }
@@ -212,7 +204,6 @@ export class AutoNudgeThreadPolicyStore {
       mode: patch.mode ?? current.mode,
       backgroundContinuation: patch.backgroundContinuation ?? current.backgroundContinuation,
       maxRounds: patch.maxRounds ?? current.maxRounds,
-      maxMinutes: patch.maxMinutes ?? current.maxMinutes,
     };
     const normalized: AutoNudgeThreadPolicy = {
       ...candidate,

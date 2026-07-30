@@ -322,8 +322,9 @@ two modes use the plan-driven continuation prompts defined in
 `apps/web/src/autoNudger.ts`; the prompt text is not currently editable per
 thread. Enabling the feature, mounting, reloading, or navigating to an already
 completed thread only baselines that terminal identity. A later changed exact
-provider terminal identity creates the one-shot authority; the five-second
-delay only provides a cancellation/recheck window.
+provider terminal identity creates the one-shot authority and dispatches only
+after the complete safety gate is rechecked. No timer or wall-clock transition
+can create authority.
 
 A separate default-off option can persist one explicitly chosen thread as the
 background-continuation owner. In this PR7 lineage, however, root background
@@ -333,8 +334,8 @@ This prevents automation from overtaking queued operator input after
 navigation. The controls and bounded state remain visible, but foreground Auto
 Nudge is the only dispatching path at this head.
 
-One background run defaults to five automated rounds or 30 minutes and is
-configurable only within hard limits of 1–20 rounds and 5–120 minutes. The
+One background run defaults to five automated rounds and is configurable only
+within hard limits of 1–20 rounds. The
 control exposes pause, resume, stop, ownership transfer, restart, and a bounded
 40-entry ledger. Every dispatch is an ordinary visible
 `thread.turn.start` user message; sent entries retain only its normal message
@@ -630,16 +631,16 @@ still denied.
 ### Auto Nudge, usage, pacing, and efficiency
 
 Auto Nudge is a durable per-thread preference. Once per newly observed,
-provider-confirmed terminal identity, it may send the selected predefined
-plan-driven Steady Progress or Hardcore Fanout continuation prompt after a
-five-second cancellation/recheck debounce. Elapsed time never mints authority,
-and the prompt is not currently editable per thread. Dispatch is foreground-only
-for the visible chat at this head. Navigation cancels the timer; returning
-baselines the existing completion and waits for a newer terminal identity.
+provider-confirmed terminal identity, it may immediately send the selected
+predefined plan-driven Steady Progress or Hardcore Fanout continuation prompt
+after rechecking the complete safety gate. The prompt is not currently editable
+per thread. Dispatch is foreground-only for the visible chat at this head.
+Navigation invalidates any armed identity; returning baselines the existing
+completion and waits for a newer terminal identity.
 
 The app-level background controller can persist ownership across chat/settings
-navigation and reload, defaults to five rounds/30 minutes, and cannot exceed 20
-rounds/120 minutes. At this PR7 head it deliberately pauses before dispatch
+navigation and reload, defaults to five rounds, and cannot exceed 20 rounds.
+At this PR7 head it deliberately pauses before dispatch
 because durable manual FIFO truth is unavailable to the root coordinator.
 Unsupported/denied locking and missing FIFO truth both fail closed. Auto Nudge
 is not an immortal background agent, an all-chat scheduler, or unbounded

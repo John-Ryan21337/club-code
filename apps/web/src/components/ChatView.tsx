@@ -186,8 +186,6 @@ import {
   waitForStartedServerThread,
 } from "./ChatView.logic";
 import {
-  AUTO_NUDGE_DELAY_MS,
-  AutoNudgeTimerController,
   autoNudgePromptForMode,
   canDispatchAutoNudge,
   canScheduleAutoNudge,
@@ -2213,21 +2211,10 @@ export default function ChatView(props: ChatViewProps) {
   const backgroundAutoNudgeLastOwnerForRoute =
     autoNudgeThreadRef !== null &&
     isLastBackgroundAutoNudgeOwner(backgroundAutoNudgeState, autoNudgeThreadRef);
-  const [autoNudgeCountdownSeconds, setAutoNudgeCountdownSeconds] = useState<number | null>(null);
   const [autoNudgeActivityRevision, setAutoNudgeActivityRevision] = useState(0);
   const autoNudgeLedgerRef = useRef(getAutoNudgeTurnLedger());
   const autoNudgeTerminalTurnKeyRef = useRef<string | null>(null);
   const armedAutoNudgeTerminalTurnKeyRef = useRef<string | null>(null);
-  const [autoNudgeTimerController] = useState(
-    () =>
-      new AutoNudgeTimerController({
-        now: () => Date.now(),
-        setTimeout: (callback, delayMs) => window.setTimeout(callback, delayMs),
-        clearTimeout: (timer) => window.clearTimeout(timer),
-        setInterval: (callback, intervalMs) => window.setInterval(callback, intervalMs),
-        clearInterval: (timer) => window.clearInterval(timer),
-      }),
-  );
   const runAutoNudgeMutation = useCallback(
     async (mutation: () => void | Promise<void>): Promise<void> => {
       if (!supportsAutoNudgeExecutionLock()) {
@@ -2253,17 +2240,13 @@ export default function ChatView(props: ChatViewProps) {
     },
     [],
   );
-  const cancelScheduledAutoNudge = useCallback(
-    (consumeScheduledTurn: boolean) => {
-      const scheduledTurnKey = autoNudgeTimerController.scheduledTurnKey;
-      if (consumeScheduledTurn && scheduledTurnKey) {
-        autoNudgeLedgerRef.current.mark(scheduledTurnKey);
-      }
-      autoNudgeTimerController.cancel();
-      setAutoNudgeCountdownSeconds(null);
-    },
-    [autoNudgeTimerController],
-  );
+  const cancelScheduledAutoNudge = useCallback((consumeScheduledTurn: boolean) => {
+    const armedTurnKey = armedAutoNudgeTerminalTurnKeyRef.current;
+    if (consumeScheduledTurn && armedTurnKey) {
+      autoNudgeLedgerRef.current.mark(armedTurnKey);
+    }
+    armedAutoNudgeTerminalTurnKeyRef.current = null;
+  }, []);
   const recordManualAutoNudgeActivity = useCallback(() => {
     const terminalTurnKey = autoNudgeTerminalTurnKeyRef.current;
     armedAutoNudgeTerminalTurnKeyRef.current = null;
@@ -5784,51 +5767,38 @@ export default function ChatView(props: ChatViewProps) {
       cancelScheduledAutoNudge(false);
       return;
     }
-    if (autoNudgeTimerController.scheduledTurnKey === terminalTurnKey) return;
-
-    cancelScheduledAutoNudge(false);
-    autoNudgeTimerController.schedule({
-      turnKey: terminalTurnKey,
-      delayMs: AUTO_NUDGE_DELAY_MS,
-      onCountdown: setAutoNudgeCountdownSeconds,
-      onDispatch: (scheduledTurnKey) => {
-        setAutoNudgeCountdownSeconds(null);
-        void navigator.locks
-          .request(AUTO_NUDGE_EXECUTION_LOCK_NAME, { mode: "exclusive" }, async (lock) => {
-            if (!lock) return;
-            const policyStore = getAutoNudgeThreadPolicyStore();
-            policyStore.reloadFromStorage();
-            const currentPolicy = policyStore.getPolicy(autoNudgeThreadRef);
-            const ledger = autoNudgeLedgerRef.current;
-            ledger.reloadFromStorage();
-            const currentEligibility = {
-              ...autoNudgeEligibilityRef.current,
-              mode: currentPolicy.mode,
-            };
-            if (
-              currentPolicy.backgroundContinuation ||
-              !canDispatchAutoNudge({
-                scheduledTurnKey,
-                current: currentEligibility,
-                alreadyConsumed: ledger.has(scheduledTurnKey),
-              })
-            ) {
-              return;
-            }
-            // Persist the claim before transport. A failure may skip a nudge,
-            // but no reload or second window may duplicate one.
-            armedAutoNudgeTerminalTurnKeyRef.current = null;
-            ledger.mark(scheduledTurnKey);
-            await autoNudgeDispatchRef.current?.(currentPolicy.mode);
+    void navigator.locks
+      .request(AUTO_NUDGE_EXECUTION_LOCK_NAME, { mode: "exclusive" }, async (lock) => {
+        if (!lock) return;
+        const policyStore = getAutoNudgeThreadPolicyStore();
+        policyStore.reloadFromStorage();
+        const currentPolicy = policyStore.getPolicy(autoNudgeThreadRef);
+        const ledger = autoNudgeLedgerRef.current;
+        ledger.reloadFromStorage();
+        const currentEligibility = {
+          ...autoNudgeEligibilityRef.current,
+          mode: currentPolicy.mode,
+        };
+        if (
+          currentPolicy.backgroundContinuation ||
+          !canDispatchAutoNudge({
+            terminalTurnKey,
+            current: currentEligibility,
+            alreadyConsumed: ledger.has(terminalTurnKey),
           })
-          .catch(() => {
-            // Lock/dispatch failures fail closed. A claim made before a
-            // transport failure is intentionally not replayed.
-          });
-      },
-    });
-
-    return () => cancelScheduledAutoNudge(false);
+        ) {
+          return;
+        }
+        // Persist the completion-event claim before transport. A failure may
+        // skip one nudge, but no reload or second window may duplicate it.
+        armedAutoNudgeTerminalTurnKeyRef.current = null;
+        ledger.mark(terminalTurnKey);
+        await autoNudgeDispatchRef.current?.(currentPolicy.mode);
+      })
+      .catch(() => {
+        // Lock/dispatch failures fail closed. A claim made before a transport
+        // failure is intentionally not replayed.
+      });
   }, [
     autoNudgeActivityRevision,
     autoNudgeContextKey,
@@ -5838,17 +5808,9 @@ export default function ChatView(props: ChatViewProps) {
     autoNudgePolicy.mode,
     autoNudgeTerminalTurnKey,
     autoNudgeThreadRef,
-    autoNudgeTimerController,
     backgroundAutoNudgeOwnerForRoute,
     cancelScheduledAutoNudge,
   ]);
-
-  useEffect(
-    () => () => {
-      cancelScheduledAutoNudge(false);
-    },
-    [cancelScheduledAutoNudge],
-  );
 
   const onSteer = async (e?: { preventDefault: () => void }) => {
     e?.preventDefault();
@@ -6718,9 +6680,7 @@ export default function ChatView(props: ChatViewProps) {
       }
     });
   };
-  const changeAutoNudgeLimits = (
-    patch: Pick<Partial<AutoNudgeThreadPolicy>, "maxRounds" | "maxMinutes">,
-  ) => {
+  const changeAutoNudgeLimits = (patch: Pick<Partial<AutoNudgeThreadPolicy>, "maxRounds">) => {
     if (!autoNudgeThreadRef) return;
     void runAutoNudgeMutation(() => {
       const policyStore = getAutoNudgeThreadPolicyStore();
@@ -6937,7 +6897,6 @@ export default function ChatView(props: ChatViewProps) {
               <div className="relative z-10">
                 <AutoNudgeControl
                   mode={autoNudgePolicy.mode}
-                  countdownSeconds={autoNudgeCountdownSeconds}
                   disabled={!isServerThread}
                   backgroundEnabled={
                     backgroundAutoNudgeState.owner !== null && !backgroundAutoNudgeOwnerForRoute
@@ -6947,7 +6906,6 @@ export default function ChatView(props: ChatViewProps) {
                   backgroundStatus={backgroundAutoNudgeState.status}
                   backgroundRounds={backgroundAutoNudgeState.sentRounds}
                   backgroundMaxRounds={autoNudgePolicy.maxRounds}
-                  backgroundMaxMinutes={autoNudgePolicy.maxMinutes}
                   backgroundReason={backgroundAutoNudgeState.reason}
                   backgroundLedger={
                     backgroundAutoNudgeLastOwnerForRoute
@@ -6960,7 +6918,6 @@ export default function ChatView(props: ChatViewProps) {
                   }
                   onModeChange={changeAutoNudgeMode}
                   onMaxRoundsChange={(maxRounds) => changeAutoNudgeLimits({ maxRounds })}
-                  onMaxMinutesChange={(maxMinutes) => changeAutoNudgeLimits({ maxMinutes })}
                   onBackgroundChange={changeAutoNudgeBackground}
                   onPauseBackground={pauseAutoNudgeBackground}
                   onResumeBackground={resumeAutoNudgeBackground}

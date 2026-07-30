@@ -46,7 +46,6 @@ describe("per-thread Auto Nudge policy", () => {
       mode: "hardcore-fanout",
       backgroundContinuation: true,
       maxRounds: 8,
-      maxMinutes: 45,
     });
 
     const onOtherThread = new AutoNudgeThreadPolicyStore(storage);
@@ -58,7 +57,6 @@ describe("per-thread Auto Nudge policy", () => {
       mode: "hardcore-fanout",
       backgroundContinuation: true,
       maxRounds: 8,
-      maxMinutes: 45,
     });
     expect(afterReturn.getPolicy(threadB).mode).toBe("off");
   });
@@ -134,7 +132,6 @@ describe("per-thread Auto Nudge policy", () => {
             mode: "steady-progress",
             backgroundContinuation: true,
             maxRounds: 999,
-            maxMinutes: 30,
             updatedAt: 1,
           },
         ],
