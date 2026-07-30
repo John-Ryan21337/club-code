@@ -114,23 +114,31 @@ teardown clear the reactive state.
 
 The optional **Provider activity links** layer turns only safe,
 provider-observed network, database, and build/compile categories into brief
-Matrix pulses. At most 24 recent category/hash events and eight simultaneous
-links are retained, and visual state expires after roughly 2.2 seconds. A pulse
-may exist without a line. A line exists only when two events have the same
-category and exact same provider-reported item or tool identity. A shared agent,
-operation label, dependency label, temporal proximity, or similar wording is
-not enough.
+Matrix pulses. The master switch retains three independent checkboxes:
+**Network / web**, **Database / query**, and **Build / compile**. All three
+category inputs default on when absent so older settings retain their behavior;
+clearing all three produces no activity events, pulses, or links. At most 24
+recent category/hash events and eight simultaneous links are retained, and
+visual state expires after roughly 2.2 seconds. A pulse may exist without a
+line. A line exists only when two events have the same category and exact same
+provider-reported item or tool identity. A shared agent, operation label,
+dependency label, temporal proximity, or similar wording is not enough.
 
 Connected falling strings use reviewed semantic pairs—NETWORK/FETCH,
 DATABASE/QUERY, BUILD/COMPILE, or fixed Japanese counterparts according to the
 string's existing language assignment—rather than random glyph meaning or raw
 provider identifiers. Routes use horizontal and +/-60-degree hex-grid segments.
-A bright white packet travels over the total polyline length with a short
-fading trail. The base route is either independently randomized or follows the
-selected Matrix palette, including rotating/per-string modes.
-Reduced-motion replaces packet travel and rapid flashes with a dim static
-route. Full-screen opacity, event/link counts, lifetime, brightness, and frame
-work remain capped.
+A packet travels over the total polyline length with a short fading trail. Each
+route, packet, and trail shares one deterministic hue in Random mode, while a
+glyph shared by multiple routes renders once using its newest attached route's
+hue. Matrix mode follows the selected Matrix palette and interpolates between
+independently cycling endpoint colors. Activity marks use the same configured
+opacity cap as Matrix glyph heads and remain legible until a short terminal
+fade; no activity draw raises its canvas alpha above that cap.
+Reduced-motion removes packet
+travel, rapid flashes, and continuously repainted fading while retaining the
+same static route until its bounded expiry. Full-screen opacity, event/link
+counts, lifetime, and frame work remain capped.
 
 The telemetry projection never retains or draws prompts, model output, command
 text/output, URLs, request bodies, SQL text/values, credentials, cookies, raw
@@ -306,7 +314,8 @@ values:
 - Matrix is enabled in regular uniform `rainbow` mode at `0.55` opacity, speed
   `4`, density `2.5`, and Japanese ratio `0.45`. Rainbow Extra remains
   selectable but is not the first-run mode. 2ch enrichment, bounded live-work
-  vocabulary, activity links, and Matrix-colored link routes are enabled.
+  vocabulary, all three activity-link category inputs, activity links, and
+  Matrix-colored link routes are enabled.
 - The ambient-video surface is enabled with a null source, custom layout with
   bottom-right/large as its preset fallback, floating presentation, and
   adaptive auto glow at `0.65`. The bundled Japanese URL example becomes the

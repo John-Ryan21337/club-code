@@ -6,6 +6,7 @@ import {
   type ErrorComponentProps,
   useLocation,
   useNavigate,
+  useParams,
 } from "@tanstack/react-router";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { QueryClient, useQueryClient } from "@tanstack/react-query";
@@ -74,6 +75,7 @@ import {
   resolveInitialServerAuthGateState,
   updatePrimaryEnvironmentDescriptor,
 } from "../environments/primary";
+import { resolveThreadRouteRef } from "../threadRoutes";
 
 export const Route = createRootRouteWithContext<{
   queryClient: QueryClient;
@@ -96,6 +98,10 @@ export const Route = createRootRouteWithContext<{
 
 function RootRouteView() {
   const pathname = useLocation({ select: (location) => location.pathname });
+  const selectedThreadRef = useParams({
+    strict: false,
+    select: (params) => resolveThreadRouteRef(params),
+  });
   const { authGateState } = Route.useRouteContext();
   const primaryEnvironmentAuthenticated = authGateState.status === "authenticated";
   const [shutdownOverlayVisible, setShutdownOverlayVisible] = useState(false);
@@ -165,7 +171,7 @@ function RootRouteView() {
         <AppearanceSettingsSync />
         <AmbianceLayer />
         <PowerSaveBlockerSync />
-        <WindowAtmosphere />
+        <WindowAtmosphere selectedThreadRef={selectedThreadRef} />
         <AtmosphereConsole />
         <EmbeddedBrowserWorkspace />
         {primaryEnvironmentAuthenticated ? <BackgroundAutoNudgeCoordinator /> : null}

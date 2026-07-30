@@ -1,11 +1,18 @@
-import { EventId, type OrchestrationThreadActivity } from "@cafecode/contracts";
+import {
+  EnvironmentId,
+  EventId,
+  ThreadId,
+  type OrchestrationThreadActivity,
+} from "@cafecode/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
   decodeMatrixWorkVocabulary,
   deriveMatrixWorkVocabulary,
   encodeMatrixWorkVocabulary,
+  selectMatrixWorkVocabularyKey,
 } from "./matrixWorkVocabulary";
+import type { AppState } from "./store";
 
 function activity(
   id: string,
@@ -145,11 +152,125 @@ describe("Matrix live work vocabulary", () => {
     expect(decodeMatrixWorkVocabulary("{broken")).toEqual({ english: [], japanese: [] });
   });
 
+  it("round-trips a safely truncated long basename", () => {
+    const longFileName = "WindowAtmosphereConnectionRenderer.tsx";
+    const truncated = `${longFileName.slice(0, 31)}…`;
+    const vocabulary = deriveMatrixWorkVocabulary([
+      activity("9", {
+        itemType: "file_change",
+        data: { item: { changes: [{ path: `apps/web/src/${longFileName}` }] } },
+      }),
+    ]);
+
+    expect(vocabulary.english).toContain(truncated);
+    expect(vocabulary.japanese).toContain(truncated);
+    expect(decodeMatrixWorkVocabulary(encodeMatrixWorkVocabulary(vocabulary))).toEqual(vocabulary);
+  });
+
+  it("uses only the routed thread, including its ready-state completion tail", () => {
+    const selectedEnvironmentId = EnvironmentId.make("environment-selected");
+    const activeEnvironmentId = EnvironmentId.make("environment-active-elsewhere");
+    const selectedThreadId = ThreadId.make("thread-selected");
+    const backgroundThreadId = ThreadId.make("thread-background");
+    const selected = activity("1", {
+      itemType: "web_search",
+      itemId: "selected-search",
+    });
+    const background = activity("2", {
+      itemType: "command_execution",
+      itemId: "background-build",
+      observed: { providerObserved: true, activityType: "build" },
+    });
+    const collision = activity("3", {
+      itemType: "command_execution",
+      itemId: "collision-database",
+      observed: { providerObserved: true, activityType: "database" },
+    });
+    const state = {
+      activeEnvironmentId,
+      environmentStateById: {
+        [selectedEnvironmentId]: {
+          activityIdsByThreadId: {
+            [selectedThreadId]: [selected.id],
+            [backgroundThreadId]: [background.id],
+          },
+          activityByThreadId: {
+            [selectedThreadId]: { [selected.id]: selected },
+            [backgroundThreadId]: { [background.id]: background },
+          },
+          threadSessionById: {
+            [selectedThreadId]: { status: "ready" },
+            [backgroundThreadId]: { status: "running" },
+          },
+        },
+        [activeEnvironmentId]: {
+          activityIdsByThreadId: { [selectedThreadId]: [collision.id] },
+          activityByThreadId: { [selectedThreadId]: { [collision.id]: collision } },
+        },
+      },
+    } as unknown as AppState;
+
+    const vocabulary = decodeMatrixWorkVocabulary(
+      selectMatrixWorkVocabularyKey(state, {
+        environmentId: selectedEnvironmentId,
+        threadId: selectedThreadId,
+      }),
+    );
+
+    expect(vocabulary.english).toContain("SEARCH");
+    expect(vocabulary.english).not.toContain("BUILD");
+    expect(vocabulary.english).not.toContain("DATABASE");
+    expect(selectMatrixWorkVocabularyKey(state, null)).toBe("");
+  });
+
+  it("fails closed for prototype-key routes and malformed route state", () => {
+    const environmentId = EnvironmentId.make("environment-safe");
+    const threadId = ThreadId.make("thread-safe");
+    const state = {
+      environmentStateById: {
+        [environmentId]: {
+          activityIdsByThreadId: {},
+          activityByThreadId: {},
+        },
+      },
+    } as unknown as AppState;
+
+    for (const prototypeKey of ["__proto__", "constructor"] as const) {
+      expect(
+        selectMatrixWorkVocabularyKey(state, {
+          environmentId: EnvironmentId.make(prototypeKey),
+          threadId,
+        }),
+      ).toBe("");
+      expect(
+        selectMatrixWorkVocabularyKey(state, {
+          environmentId,
+          threadId: ThreadId.make(prototypeKey),
+        }),
+      ).toBe("");
+    }
+
+    const inheritedRoute = Object.create({
+      environmentId,
+      threadId,
+    }) as { environmentId: EnvironmentId; threadId: ThreadId };
+    expect(selectMatrixWorkVocabularyKey(state, inheritedRoute)).toBe("");
+    expect(selectMatrixWorkVocabularyKey(null as unknown as AppState, inheritedRoute)).toBe("");
+  });
+
   it("never rehydrates an injected secret or opaque identifier into the canvas", () => {
+    const truncatedOpaque = `${"abCDefGhIjKlMnOpQrStUvWxYz123456789".slice(0, 31)}…`;
     expect(
       decodeMatrixWorkVocabulary(
         JSON.stringify([
-          ["BUILD", "BUILD", "構築", "api_token.json", "abCDefGhIjKlMnOpQrStUvWxYz12"],
+          [
+            "BUILD",
+            "BUILD",
+            "構築",
+            "api_token.json",
+            "abCDefGhIjKlMnOpQrStUvWxYz12",
+            truncatedOpaque,
+          ],
           ["構築", "BUILD", "safe-file.ts"],
         ]),
       ),

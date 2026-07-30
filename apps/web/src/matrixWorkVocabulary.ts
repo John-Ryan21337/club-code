@@ -1,4 +1,4 @@
-import type { OrchestrationThreadActivity } from "@cafecode/contracts";
+import type { OrchestrationThreadActivity, ScopedThreadRef } from "@cafecode/contracts";
 
 import type { AppState } from "./store";
 
@@ -90,6 +90,24 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+const UNSAFE_RECORD_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
+function isSafeOwnRecordKey(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && !UNSAFE_RECORD_KEYS.has(value);
+}
+
+function ownDataProperty(record: unknown, key: string): unknown {
+  if (!isRecord(record)) return undefined;
+  const descriptor = Object.getOwnPropertyDescriptor(record, key);
+  return descriptor && "value" in descriptor ? descriptor.value : undefined;
+}
+
+function isMatrixThreadActivity(value: unknown): value is OrchestrationThreadActivity {
+  if (!isRecord(value)) return false;
+  const kind = ownDataProperty(value, "kind");
+  return typeof kind === "string";
+}
+
 function pushBounded(target: string[], seen: Set<string>, value: string) {
   if (
     value.length === 0 ||
@@ -142,6 +160,14 @@ function isLikelyHighEntropyFileName(name: string): boolean {
   );
 }
 
+function isSafeTruncatedFileName(value: string): boolean {
+  if (value.length !== MAX_MATRIX_WORK_FILENAME_CHARS || !value.endsWith("…")) {
+    return false;
+  }
+  const visiblePrefix = value.slice(0, -1);
+  return safeFileName(visiblePrefix) === visiblePrefix;
+}
+
 function isSafeDecodedTerm(value: unknown, language: "english" | "japanese"): value is string {
   if (
     typeof value !== "string" ||
@@ -154,7 +180,8 @@ function isSafeDecodedTerm(value: unknown, language: "english" | "japanese"): va
     language === "english" ? ENGLISH_FIXED_VOCABULARY_TERMS : JAPANESE_FIXED_VOCABULARY_TERMS;
   return (
     fixedTerms.has(value) ||
-    (!ALL_FIXED_VOCABULARY_TERMS.has(value) && safeFileName(value) === value)
+    (!ALL_FIXED_VOCABULARY_TERMS.has(value) &&
+      (safeFileName(value) === value || isSafeTruncatedFileName(value)))
   );
 }
 
@@ -337,24 +364,33 @@ export function decodeMatrixWorkVocabulary(value: string): MatrixWorkVocabulary 
   }
 }
 
-export function selectMatrixWorkVocabularyKey(state: AppState): string {
-  const environmentId = state.activeEnvironmentId;
-  if (!environmentId) return "";
-  const environment = state.environmentStateById[environmentId];
-  if (!environment) return "";
+/**
+ * Derives work terms only from the explicitly routed thread. Background work
+ * must never leak into the selected thread's Matrix vocabulary.
+ */
+export function selectMatrixWorkVocabularyKey(
+  state: AppState,
+  selectedThreadRef: ScopedThreadRef | null = null,
+): string {
+  if (!isRecord(state) || !isRecord(selectedThreadRef)) return "";
+  const environmentId = ownDataProperty(selectedThreadRef, "environmentId");
+  const threadId = ownDataProperty(selectedThreadRef, "threadId");
+  if (!isSafeOwnRecordKey(environmentId) || !isSafeOwnRecordKey(threadId)) return "";
 
-  const activities = environment.threadIds
-    .filter((threadId) => environment.threadSessionById[threadId]?.status === "running")
-    .flatMap((threadId) => {
-      const ids = environment.activityIdsByThreadId[threadId] ?? [];
-      const byId = environment.activityByThreadId[threadId] ?? {};
-      return ids.slice(-80).flatMap((id) => {
-        const activity = byId[id];
-        return activity ? [activity] : [];
-      });
-    })
-    .toSorted((left, right) => left.createdAt.localeCompare(right.createdAt))
-    .slice(-160);
+  const environmentStateById = ownDataProperty(state, "environmentStateById");
+  const environment = ownDataProperty(environmentStateById, environmentId);
+  if (!isRecord(environment)) return "";
+  const activityIdsByThreadId = ownDataProperty(environment, "activityIdsByThreadId");
+  const activityByThreadId = ownDataProperty(environment, "activityByThreadId");
+  const ids = ownDataProperty(activityIdsByThreadId, threadId);
+  const byId = ownDataProperty(activityByThreadId, threadId);
+  if (!Array.isArray(ids) || !isRecord(byId)) return "";
+
+  const activities = ids.slice(-160).flatMap((id) => {
+    if (!isSafeOwnRecordKey(id)) return [];
+    const activity = ownDataProperty(byId, id);
+    return isMatrixThreadActivity(activity) ? [activity] : [];
+  });
 
   return encodeMatrixWorkVocabulary(deriveMatrixWorkVocabulary(activities));
 }
