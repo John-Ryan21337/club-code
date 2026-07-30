@@ -227,8 +227,34 @@ describe("CollaborationAuthorization", () => {
         }),
       );
 
-      expect(reason).toBe("session-lifetime-invalid");
+      expect(reason).toBe("principal-invalid");
       expect(lookupCount).toBe(0);
+    }),
+  );
+
+  it.effect("rejects forged principal shapes through the typed Effect error channel", () =>
+    Effect.gen(function* () {
+      const validPrincipal = principal();
+      for (const forgedPrincipal of [
+        null,
+        { ...validPrincipal, issuedAt: {} },
+        { ...validPrincipal, expiresAt: { epochMilliseconds: Number.NaN } },
+        { ...validPrincipal, sessionId: "session with spaces" },
+        { ...validPrincipal, clientRole: "owner" },
+      ]) {
+        let lookupCount = 0;
+        const failure = yield* authorize(
+          { principal: forgedPrincipal },
+          authority(() => {
+            lookupCount += 1;
+            return Effect.succeed(membership());
+          }),
+        ).pipe(Effect.flip);
+
+        expect(failure).toBeInstanceOf(CollaborationAuthorizationError);
+        expect(failure.reason).toBe("principal-invalid");
+        expect(lookupCount).toBe(0);
+      }
     }),
   );
 

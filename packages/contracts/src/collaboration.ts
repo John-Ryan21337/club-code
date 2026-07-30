@@ -23,14 +23,18 @@ export const COLLABORATION_ISO_DATE_TIME_CHARS = 24;
 const CollaborationIdentifier = Schema.String.check(
   Schema.isNonEmpty(),
   Schema.isMaxLength(COLLABORATION_IDENTIFIER_MAX_CHARS),
-  Schema.makeFilter((value) =>
-    value === value.trim() ? undefined : "collaboration identifier must not have outer whitespace",
-  ),
+  Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/),
 );
 const CollaborationIsoDateTime = Schema.String.check(
   Schema.isMinLength(COLLABORATION_ISO_DATE_TIME_CHARS),
   Schema.isMaxLength(COLLABORATION_ISO_DATE_TIME_CHARS),
   Schema.isPattern(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/),
+  Schema.makeFilter((value) => {
+    const epochMillis = Date.parse(value);
+    return Number.isFinite(epochMillis) && new Date(epochMillis).toISOString() === value
+      ? undefined
+      : "collaboration timestamp must be a canonical, valid UTC instant";
+  }),
 );
 
 export const SharedProjectId = CollaborationIdentifier.pipe(Schema.brand("SharedProjectId"));
@@ -85,7 +89,7 @@ export const CollaborationPermission = Schema.Literals([
 ]);
 export type CollaborationPermission = typeof CollaborationPermission.Type;
 
-const ALL_COLLABORATION_PERMISSIONS = [
+const ALL_COLLABORATION_PERMISSIONS = Object.freeze([
   "project.manage-members",
   "project.manage-settings",
   "transcript.read",
@@ -101,12 +105,12 @@ const ALL_COLLABORATION_PERMISSIONS = [
   "file.apply",
   "file.tombstone",
   "audit.read",
-] as const satisfies ReadonlyArray<CollaborationPermission>;
+] as const satisfies ReadonlyArray<CollaborationPermission>);
 
-export const COLLABORATION_ROLE_PERMISSIONS = {
+export const COLLABORATION_ROLE_PERMISSIONS = Object.freeze({
   owner: ALL_COLLABORATION_PERMISSIONS,
   admin: ALL_COLLABORATION_PERMISSIONS,
-  operator: [
+  operator: Object.freeze([
     "transcript.read",
     "transcript.append",
     "chat.read",
@@ -120,8 +124,8 @@ export const COLLABORATION_ROLE_PERMISSIONS = {
     "file.apply",
     "file.tombstone",
     "audit.read",
-  ],
-  contributor: [
+  ]),
+  contributor: Object.freeze([
     "transcript.read",
     "transcript.append",
     "chat.read",
@@ -130,11 +134,11 @@ export const COLLABORATION_ROLE_PERMISSIONS = {
     "task.manage",
     "file.read",
     "file.publish",
-  ],
-  viewer: ["transcript.read", "chat.read", "task.read", "file.read"],
+  ]),
+  viewer: Object.freeze(["transcript.read", "chat.read", "task.read", "file.read"]),
 } as const satisfies Readonly<
   Record<CollaborationProjectRole, ReadonlyArray<CollaborationPermission>>
->;
+>);
 
 export const CollaborationPermissions = Schema.Array(CollaborationPermission).check(
   Schema.isMaxLength(ALL_COLLABORATION_PERMISSIONS.length),

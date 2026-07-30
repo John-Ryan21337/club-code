@@ -6,6 +6,7 @@ import type {
 } from "@cafecode/contracts";
 import {
   COLLABORATION_ACCESS_SESSION_MAX_LIFETIME_MILLIS,
+  CollaborationPrincipal as CollaborationPrincipalSchema,
   CollaborationProjectMembershipSnapshot,
   collaborationRoleAllowsPermission,
   type CollaborationProjectMembershipSnapshot as CollaborationProjectMembershipSnapshotType,
@@ -17,6 +18,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
 export type CollaborationAuthorizationFailureReason =
+  | "principal-invalid"
   | "project-mismatch"
   | "session-not-yet-valid"
   | "session-expired"
@@ -49,7 +51,7 @@ export interface CollaborationAuthorizationInput {
    * device session and signature have been validated. Client payloads must
    * never be decoded directly into this trusted input.
    */
-  readonly principal: CollaborationPrincipal;
+  readonly principal: unknown;
   readonly targetProjectId: SharedProjectId;
   readonly permission: CollaborationPermission;
 }
@@ -74,11 +76,22 @@ export class CollaborationMembershipAuthority extends Context.Service<
 >()("cafecode/collaboration/CollaborationMembershipAuthority") {}
 
 const decodeMembershipSnapshot = Schema.decodeUnknownEffect(CollaborationProjectMembershipSnapshot);
+const decodePrincipal = Schema.decodeUnknownEffect(CollaborationPrincipalSchema);
+const encodePrincipal = Schema.encodeUnknownEffect(CollaborationPrincipalSchema);
 
 function deny(
   reason: CollaborationAuthorizationFailureReason,
 ): Effect.Effect<never, CollaborationAuthorizationError> {
   return Effect.fail(new CollaborationAuthorizationError({ reason }));
+}
+
+export function validateCollaborationPrincipal(
+  principal: unknown,
+): Effect.Effect<CollaborationPrincipal, CollaborationAuthorizationError> {
+  return encodePrincipal(principal, { onExcessProperty: "error" }).pipe(
+    Effect.flatMap((encoded) => decodePrincipal(encoded, { onExcessProperty: "error" })),
+    Effect.catch(() => deny("principal-invalid")),
+  );
 }
 
 /**
@@ -96,7 +109,13 @@ export function authorizeCollaborationPermission(
   CollaborationMembershipAuthority
 > {
   return Effect.gen(function* () {
-    const { permission, principal, targetProjectId } = input;
+    const { permission, targetProjectId } = input;
+
+    // The authentication layer is expected to provide a decoded principal, but
+    // authorization remains fail-closed if an in-process caller bypasses that
+    // boundary with a forged object. Encoding validates the schema's Type side
+    // without accepting or normalizing an untrusted wire representation.
+    const principal = yield* validateCollaborationPrincipal(input.principal);
 
     // Reject a cross-project principal before consulting project persistence.
     // Besides preventing IDOR, this avoids turning membership lookup timing
@@ -105,10 +124,19 @@ export function authorizeCollaborationPermission(
       return yield* deny("project-mismatch");
     }
 
-    const issuedAtEpochMillis = DateTime.toEpochMillis(principal.issuedAt);
-    const expiresAtEpochMillis = DateTime.toEpochMillis(principal.expiresAt);
+    const issuedAtEpochMillis = DateTime.isDateTime(principal.issuedAt)
+      ? DateTime.toEpochMillis(principal.issuedAt)
+      : Number.NaN;
+    const expiresAtEpochMillis = DateTime.isDateTime(principal.expiresAt)
+      ? DateTime.toEpochMillis(principal.expiresAt)
+      : Number.NaN;
     const lifetimeMillis = expiresAtEpochMillis - issuedAtEpochMillis;
-    if (lifetimeMillis <= 0 || lifetimeMillis > COLLABORATION_ACCESS_SESSION_MAX_LIFETIME_MILLIS) {
+    if (
+      !Number.isFinite(issuedAtEpochMillis) ||
+      !Number.isFinite(expiresAtEpochMillis) ||
+      lifetimeMillis <= 0 ||
+      lifetimeMillis > COLLABORATION_ACCESS_SESSION_MAX_LIFETIME_MILLIS
+    ) {
       return yield* deny("session-lifetime-invalid");
     }
 

@@ -5,7 +5,6 @@ import type {
   CollaborationMembershipEpoch,
   CollaborationPhaseOneAuthoredEventType,
   CollaborationPermission,
-  CollaborationPrincipal,
   DeviceId,
   SharedProjectId,
   UserId,
@@ -15,7 +14,6 @@ import {
   COLLABORATION_EVENT_MAX_FUTURE_SKEW_MILLIS,
   COLLABORATION_EVENT_MAX_OFFLINE_AGE_MILLIS,
   COLLABORATION_EVENT_PAYLOAD_MAX_UTF8_BYTES,
-  COLLABORATION_IDENTIFIER_MAX_CHARS,
   COLLABORATION_PHASE_ONE_EVENT_PERMISSIONS,
   CollaborationEventProposal as CollaborationEventProposalSchema,
   CollaborationOperatorChatMessagePayload,
@@ -35,6 +33,7 @@ import {
   CollaborationAuthorizationError,
   type CollaborationAuthorizationGrant,
   CollaborationMembershipAuthority,
+  validateCollaborationPrincipal,
 } from "./CollaborationAuthorization.ts";
 
 const COLLABORATION_EVENT_PROPOSAL_SIGNATURE_DOMAIN = "cafecode-collaboration-event-proposal-v1";
@@ -119,7 +118,7 @@ export class CollaborationDeviceKeyAuthority extends Context.Service<
 >()("cafecode/collaboration/CollaborationDeviceKeyAuthority") {}
 
 export interface CollaborationEventAdmissionInput {
-  readonly principal: CollaborationPrincipal;
+  readonly principal: unknown;
   readonly targetProjectId: SharedProjectId;
   readonly proposal: unknown;
 }
@@ -212,48 +211,6 @@ function verifyEd25519Signature(
   }
 }
 
-function isCanonicalUntrustedIdentifier(value: unknown): value is string {
-  return (
-    typeof value === "string" &&
-    value.length > 0 &&
-    value.length <= COLLABORATION_IDENTIFIER_MAX_CHARS &&
-    value === value.trim()
-  );
-}
-
-function hasCanonicalProposalIdentifiers(value: unknown): boolean {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return false;
-  }
-  const proposal = value as Record<string, unknown>;
-  const actor = proposal.actor;
-  if (typeof actor !== "object" || actor === null || Array.isArray(actor)) {
-    return false;
-  }
-  const actorRecord = actor as Record<string, unknown>;
-  const actorIdentifiersAreCanonical =
-    actorRecord.kind === "operator"
-      ? isCanonicalUntrustedIdentifier(actorRecord.userId) &&
-        isCanonicalUntrustedIdentifier(actorRecord.deviceId)
-      : actorRecord.kind === "agent"
-        ? isCanonicalUntrustedIdentifier(actorRecord.userId) &&
-          isCanonicalUntrustedIdentifier(actorRecord.deviceId) &&
-          isCanonicalUntrustedIdentifier(actorRecord.agentId)
-        : actorRecord.kind === "system"
-          ? isCanonicalUntrustedIdentifier(actorRecord.serviceId)
-          : false;
-  return (
-    isCanonicalUntrustedIdentifier(proposal.sharedProjectId) &&
-    isCanonicalUntrustedIdentifier(proposal.eventId) &&
-    isCanonicalUntrustedIdentifier(proposal.commandId) &&
-    isCanonicalUntrustedIdentifier(proposal.deviceKeyId) &&
-    (proposal.causationEventId === null ||
-      isCanonicalUntrustedIdentifier(proposal.causationEventId)) &&
-    (proposal.correlationId === null || isCanonicalUntrustedIdentifier(proposal.correlationId)) &&
-    actorIdentifiersAreCanonical
-  );
-}
-
 function decodeEventPayload(
   eventType: CollaborationEventProposal["type"],
   payload: unknown,
@@ -283,10 +240,8 @@ export function admitCollaborationEventProposal(
   CollaborationDeviceKeyAuthority | CollaborationMembershipAuthority
 > {
   return Effect.gen(function* () {
-    const { principal, targetProjectId } = input;
-    if (!hasCanonicalProposalIdentifiers(input.proposal)) {
-      return yield* deny("proposal-invalid");
-    }
+    const { targetProjectId } = input;
+    const principal = yield* validateCollaborationPrincipal(input.principal);
     const proposal = yield* decodeEventProposal(input.proposal, {
       onExcessProperty: "error",
     }).pipe(
@@ -378,6 +333,8 @@ export function admitCollaborationEventProposal(
     if (activeDeviceKey === null) {
       return yield* deny("device-key-not-found");
     }
+    const authorityPublicKeySpkiDer =
+      typeof activeDeviceKey === "object" ? activeDeviceKey.publicKeySpkiDer : undefined;
     if (
       typeof activeDeviceKey !== "object" ||
       activeDeviceKey.sharedProjectId !== targetProjectId ||
@@ -385,10 +342,14 @@ export function admitCollaborationEventProposal(
       activeDeviceKey.deviceId !== principal.deviceId ||
       activeDeviceKey.deviceKeyId !== proposal.deviceKeyId ||
       activeDeviceKey.membershipEpoch !== principal.membershipEpoch ||
-      !(activeDeviceKey.publicKeySpkiDer instanceof Uint8Array)
+      !(authorityPublicKeySpkiDer instanceof Uint8Array)
     ) {
       return yield* deny("device-key-mismatch");
     }
+    // Snapshot authority-owned bytes before parsing and verification so a
+    // mutable key-store buffer cannot change between the canonical-DER check
+    // and the signature operation.
+    const publicKeySpkiDer = Buffer.from(authorityPublicKeySpkiDer);
 
     let signatureBytes: Uint8Array;
     try {
@@ -400,7 +361,7 @@ export function admitCollaborationEventProposal(
       signatureBytes.byteLength !== COLLABORATION_ED25519_SIGNATURE_BYTES ||
       Buffer.from(signatureBytes).toString("base64url") !== proposal.authorSignature ||
       !verifyEd25519Signature(
-        activeDeviceKey.publicKeySpkiDer,
+        publicKeySpkiDer,
         signatureBytes,
         collaborationEventProposalSignatureBytes(proposal),
       )

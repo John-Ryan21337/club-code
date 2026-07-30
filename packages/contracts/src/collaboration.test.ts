@@ -94,6 +94,9 @@ describe("collaboration contracts", () => {
         ).toISOString(),
       }),
     ).toThrow();
+    for (const sessionId of ["session with spaces", "session/with/slash", "s\u0000x", "café"]) {
+      expect(() => decodePrincipal({ ...valid, sessionId })).toThrow();
+    }
   });
 
   it("round-trips a project membership snapshot", () => {
@@ -172,6 +175,21 @@ describe("collaboration contracts", () => {
         }),
       ).toThrow();
     }
+
+    for (const invalidTimestamp of [
+      "2026-02-30T00:00:00.000Z",
+      "2026-07-30T24:00:00.000Z",
+      "2026-07-30T00:00:00.000+00:00",
+    ]) {
+      expect(() =>
+        decodeMembership({
+          sharedProjectId: "shared-project-1",
+          epoch: 1,
+          members: [member(1)],
+          updatedAt: invalidTimestamp,
+        }),
+      ).toThrow();
+    }
   });
 
   it("rejects duplicate permissions and permissions above the member role", () => {
@@ -203,6 +221,13 @@ describe("collaboration contracts", () => {
         updatedAt: "2026-07-30T00:00:00.000Z",
       }),
     ).toThrow();
+  });
+
+  it("keeps the server-owned role permission ceilings immutable", () => {
+    expect(Object.isFrozen(COLLABORATION_ROLE_PERMISSIONS)).toBe(true);
+    for (const permissions of Object.values(COLLABORATION_ROLE_PERMISSIONS)) {
+      expect(Object.isFrozen(permissions)).toBe(true);
+    }
   });
 
   it("round-trips an attributed append-only event envelope", () => {
@@ -298,6 +323,15 @@ describe("collaboration contracts", () => {
         occurredAt: "2026-07-30T00:00:01Z",
       }),
     ).toThrow();
+    for (const eventId of [
+      "event with spaces",
+      "event/with/slash",
+      "event\u0000suffix",
+      "\u00e9",
+      "e\u0301",
+    ]) {
+      expect(() => decodeEventProposal({ ...proposal, eventId })).toThrow();
+    }
   });
 
   it("defines distinct bounded payload contracts for chat and shared prompts", () => {
