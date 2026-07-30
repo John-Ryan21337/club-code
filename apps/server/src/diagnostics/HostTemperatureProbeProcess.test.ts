@@ -31,7 +31,7 @@ describe("HostTemperatureProbeProcess", () => {
     ).toBeNull();
   });
 
-  it("uses fixed shell-free bounded WMI arguments and reports missing namespaces unsupported", async () => {
+  it("uses fixed shell-free bounded WMI arguments and reports a missing provider", async () => {
     let invocation:
       | {
           executable: string;
@@ -46,7 +46,9 @@ describe("HostTemperatureProbeProcess", () => {
       callback: (error: Error | null, stdout: string, stderr: string) => void,
     ) => {
       invocation = { executable, args, options };
-      queueMicrotask(() => callback(null, "[]\r\n", ""));
+      queueMicrotask(() =>
+        callback(null, '{"CafeCodeTemperatureStatus":"provider-missing"}\r\n', ""),
+      );
       return { kill: vi.fn() } as unknown as ChildProcess;
     }) as unknown as typeof execFile;
     const probe = makeHostTemperatureProbeProcessForTest({
@@ -56,7 +58,14 @@ describe("HostTemperatureProbeProcess", () => {
       exec: execute,
     });
 
-    await expect(probe.read()).resolves.toEqual(unavailableTemperatureTelemetry("unsupported"));
+    await expect(probe.read()).resolves.toEqual({
+      version: 1,
+      status: "unavailable",
+      sensors: [],
+      reason: "unsupported",
+      detail:
+        "Libre Hardware Monitor or Open Hardware Monitor WMI is not available. Install and run a supported sensor provider to expose measured host temperatures.",
+    });
     if (!invocation) throw new Error("Expected the temperature probe to launch.");
     expect(invocation.executable).toBe(WINDOWS_POWERSHELL);
     expect(invocation.args).toEqual(TEMPERATURE_PROBE_ARGS);
@@ -70,6 +79,7 @@ describe("HostTemperatureProbeProcess", () => {
     expect((invocation.options.env as NodeJS.ProcessEnv).PATH).toBeUndefined();
     expect(TEMPERATURE_PROBE_ARGS.join(" ")).toContain("root/LibreHardwareMonitor");
     expect(TEMPERATURE_PROBE_ARGS.join(" ")).toContain("root/OpenHardwareMonitor");
+    expect(TEMPERATURE_PROBE_ARGS.join(" ")).toContain("Get-CimClass");
     await probe.close();
   });
 

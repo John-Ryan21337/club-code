@@ -18,6 +18,15 @@ const TEMPERATURE_DETAIL: Readonly<Record<ServerSystemTemperatureUnavailableReas
   stale: "The previous hardware temperature sample is no longer current.",
 };
 
+const WINDOWS_TEMPERATURE_DETAIL = {
+  "provider-missing":
+    "Libre Hardware Monitor or Open Hardware Monitor WMI is not available. Install and run a supported sensor provider to expose measured host temperatures.",
+  "no-temperature-sensors":
+    "A supported hardware monitor is available, but it did not expose any measured temperature sensors.",
+} as const;
+
+export type WindowsTemperatureUnavailableStatus = keyof typeof WINDOWS_TEMPERATURE_DETAIL;
+
 const UNSAFE_LABEL_CODE_POINTS = /[\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Zl}\p{Zp}]+/gu;
 
 export interface RawTemperatureSample {
@@ -36,6 +45,18 @@ export function unavailableTemperatureTelemetry(
     sensors: [],
     reason,
     detail: TEMPERATURE_DETAIL[reason],
+  };
+}
+
+export function unavailableWindowsTemperatureTelemetry(
+  status: WindowsTemperatureUnavailableStatus,
+): ServerSystemTemperatureTelemetry {
+  return {
+    version: 1,
+    status: "unavailable",
+    sensors: [],
+    reason: "unsupported",
+    detail: WINDOWS_TEMPERATURE_DETAIL[status],
   };
 }
 
@@ -144,6 +165,20 @@ export function parseTemperatureProbeOutput(output: string): ServerSystemTempera
   if (output.length === 0) return unavailableTemperatureTelemetry("unsupported");
   try {
     const parsed: unknown = JSON.parse(output);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const record = parsed as Record<string, unknown>;
+      if (
+        Object.keys(record).length === 1 &&
+        (record.CafeCodeTemperatureStatus === "provider-missing" ||
+          record.CafeCodeTemperatureStatus === "no-temperature-sensors" ||
+          record.CafeCodeTemperatureStatus === "probe-failed")
+      ) {
+        if (record.CafeCodeTemperatureStatus === "probe-failed") {
+          return unavailableTemperatureTelemetry("probe-failed");
+        }
+        return unavailableWindowsTemperatureTelemetry(record.CafeCodeTemperatureStatus);
+      }
+    }
     const values = Array.isArray(parsed) ? parsed : [parsed];
     if (values.length === 0) return unavailableTemperatureTelemetry("unsupported");
     if (

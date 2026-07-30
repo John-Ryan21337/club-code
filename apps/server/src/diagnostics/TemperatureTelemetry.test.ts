@@ -58,6 +58,44 @@ describe("TemperatureTelemetry", () => {
     );
   });
 
+  it("distinguishes a missing Windows sensor provider from a provider without sensors", () => {
+    expect(
+      parseTemperatureProbeOutput(
+        JSON.stringify({ CafeCodeTemperatureStatus: "provider-missing" }),
+      ),
+    ).toEqual({
+      version: 1,
+      status: "unavailable",
+      sensors: [],
+      reason: "unsupported",
+      detail:
+        "Libre Hardware Monitor or Open Hardware Monitor WMI is not available. Install and run a supported sensor provider to expose measured host temperatures.",
+    });
+    expect(
+      parseTemperatureProbeOutput(
+        JSON.stringify({ CafeCodeTemperatureStatus: "no-temperature-sensors" }),
+      ),
+    ).toEqual({
+      version: 1,
+      status: "unavailable",
+      sensors: [],
+      reason: "unsupported",
+      detail:
+        "A supported hardware monitor is available, but it did not expose any measured temperature sensors.",
+    });
+    expect(
+      parseTemperatureProbeOutput(JSON.stringify({ CafeCodeTemperatureStatus: "probe-failed" })),
+    ).toEqual(unavailableTemperatureTelemetry("probe-failed"));
+    expect(
+      parseTemperatureProbeOutput(
+        JSON.stringify({
+          CafeCodeTemperatureStatus: "provider-missing",
+          injected: "ignored",
+        }),
+      ),
+    ).toEqual(unavailableTemperatureTelemetry("unsupported"));
+  });
+
   it("keeps distinct same-label sensors with stable safe suffixes", () => {
     const samples = [
       {

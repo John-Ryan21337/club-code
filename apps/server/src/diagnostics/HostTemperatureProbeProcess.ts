@@ -35,8 +35,11 @@ const WINDOWS_TEMPERATURE_SCRIPT = [
   "Import-Module $cimModule -ErrorAction Stop",
   "Import-Module $utilityModule -ErrorAction Stop",
   "$sources=@(@{Namespace='root/LibreHardwareMonitor';Source='libre-hardware-monitor'},@{Namespace='root/OpenHardwareMonitor';Source='open-hardware-monitor'})",
-  "foreach($candidate in $sources){try{$rows=@();foreach($sensor in @(CimCmdlets\\Get-CimInstance -Namespace $candidate.Namespace -ClassName Sensor -ErrorAction Stop)){if($sensor.SensorType -eq 'Temperature' -and $rows.Count -lt 128){$rows += [PSCustomObject]@{Source=$candidate.Source;Name=$sensor.Name;Identifier=$sensor.Identifier;Value=$sensor.Value}}};if($rows.Count -gt 0){$rows | Microsoft.PowerShell.Utility\\ConvertTo-Json -Compress -Depth 3;exit 0}}catch{}}",
-  "'[]'",
+  "$providerAvailable=$false",
+  "$providerReadFailed=$false",
+  "foreach($candidate in $sources){try{CimCmdlets\\Get-CimClass -Namespace $candidate.Namespace -ClassName Sensor -ErrorAction Stop | Out-Null;$providerAvailable=$true;try{$rows=@();foreach($sensor in @(CimCmdlets\\Get-CimInstance -Namespace $candidate.Namespace -ClassName Sensor -ErrorAction Stop)){if($sensor.SensorType -eq 'Temperature' -and $rows.Count -lt 128){$rows += [PSCustomObject]@{Source=$candidate.Source;Name=$sensor.Name;Identifier=$sensor.Identifier;Value=$sensor.Value}}};if($rows.Count -gt 0){$rows | Microsoft.PowerShell.Utility\\ConvertTo-Json -Compress -Depth 3;exit 0}}catch{$providerReadFailed=$true}}catch{}}",
+  "$status=if(-not $providerAvailable){'provider-missing'}elseif($providerReadFailed){'probe-failed'}else{'no-temperature-sensors'}",
+  "[PSCustomObject]@{CafeCodeTemperatureStatus=$status} | Microsoft.PowerShell.Utility\\ConvertTo-Json -Compress",
 ].join(";");
 
 const WINDOWS_POWERSHELL_ARGS = [

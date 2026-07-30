@@ -89,6 +89,7 @@ documentation use Club Code.
 | Local settings profiles                                   | Implemented                 | Desktop/mobile/custom profiles persist locally without copying exact-thread Auto Nudge authority or other live identities                                   |
 | World clock and optional weather                          | Landed - validation pending | One-to-six-city transparent clock; weather is default-off renderer-local consent, excluded from profiles and other clients                                  |
 | Transparent Project Resources monitor                     | Landed - validation pending | Movable/resizable overlay uses no timeline space; CPU/RAM/disk/network, measured temperatures, and stable per-adapter GPU/VRAM cards                        |
+| Host RGB lighting synchronization                         | Partial                     | Default-off provider-neutral frame boundary exists; no production adapter or device-support claim exists yet                                                |
 | Provider usage, paid/extra usage, and Model Pacing        | Landed - validation pending | Every configured provider remains visible; only provider-reported facts are shown; pacing remains advisory                                                  |
 | Non-interrupting cross-provider follow-ups                | Landed - validation pending | Native live steer where explicitly supported; otherwise the per-thread queue waits and only an explicit Stop may interrupt                                  |
 | Ultra Caching and hierarchical summaries                  | Partial                     | Stable handoffs and earlier compaction exist; no persistent multi-level summary index                                                                       |
@@ -241,6 +242,14 @@ temperature when available, and bounded history. Temperature cards use only
 measured CPU, GPU, RAM, VRAM, storage, case/ambient, or other sensor classes;
 missing sources remain explicitly unavailable and are never estimated.
 
+On Windows, the protected Libre Hardware Monitor and Open Hardware Monitor WMI
+probe distinguishes two fixed unavailable states: neither supported provider
+is present, or a supported provider is present but exposes no temperature
+sensors. The detail crosses the telemetry boundary as bounded fixed product
+prose; raw WMI errors, hardware identifiers, and sensor-provider output do not.
+This improves diagnosis but does not bundle, install, or silently start a
+sensor provider.
+
 Polling and Matrix-palette subscription run only while the document is visible
 and the panel is expanded. The transparent frame and cards reuse the Matrix
 palette, including cycling and music-responsive colors, without feeding metrics
@@ -263,6 +272,26 @@ cross-origin-tainted, or denied frames fall back immediately to the fixed color.
 Automatic fallback retries stop after three consecutive misses and resume only
 for explicit media activity. This capability does not make live cross-origin
 YouTube iframe pixels readable.
+
+### Hardware lighting synchronization boundary
+
+The server contains a provider-neutral hardware-lighting controller boundary
+for future synchronization of the current bounded RGB palette. It is inert
+unless an operator-facing caller explicitly enables it, accepts only bounded
+integer RGB frames, serializes device writes, caps updates at 20 frames per
+second, contains adapter errors, and becomes permanently inactive after
+cleanup. It does not scan executable paths or the registry, invoke bundled or
+installed vendor utilities, open a network socket, access HID/SMBus directly,
+or claim that any detected component is supported.
+
+The planned first production adapter is a separately reviewed, explicit
+loopback-only [OpenRGB SDK](https://gitlab.com/CalcProgrammer1/OpenRGB/-/blob/master/Documentation/OpenRGBSDK.md)
+client. OpenRGB is not bundled and its documented binary protocol has no
+authentication handshake, so remote/LAN endpoints are outside the approved
+boundary. Club Code must capability-probe the exact adapter-selected
+controllers before offering synchronization and must keep unsupported devices
+visible as unsupported. Proprietary RGB Fusion libraries and drivers are not an
+approved Club Code integration boundary and must not be invoked directly.
 
 ### Bounded local/VLC queues
 
@@ -1003,10 +1032,14 @@ complete:
 8. Perform a Linux/KDE compositor feasibility spike for safe whole-window
    opacity/blur. Unsupported Electron behavior must remain fail-closed.
 9. Decide whether to bundle a trusted hardware sensor backend or document an
-   operator-installed Libre/Open Hardware Monitor service. When neither WMI
-   namespace exposes a requested sensor class, CPU, DIMM/RAM, storage,
-   VRAM-junction, and case/ambient temperatures must remain explicitly
-   unavailable rather than estimated.
+   operator-installed Libre/Open Hardware Monitor service. Missing Windows
+   providers and providers without temperature sensors are now distinguished;
+   CPU, DIMM/RAM, storage, VRAM-junction, and case/ambient classes still remain
+   explicitly unavailable rather than estimated when no measured sensor exists.
+10. Implement and independently audit an opt-in loopback-only OpenRGB SDK
+    adapter, device capability inventory, renderer setting, palette bridge, and
+    teardown/recovery path. The current provider-neutral boundary performs no
+    device I/O and is not a shipped synchronization feature.
 
 ## External and policy constraints
 
