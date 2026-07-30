@@ -95,4 +95,58 @@ describe("collaboration replay contracts", () => {
       }),
     ).toThrow();
   });
+
+  it("rejects cross-project, discontinuous, and cursor-inconsistent pages", () => {
+    const event = {
+      version: 1 as const,
+      sharedProjectId: "shared-project-1",
+      sequence: 1,
+      eventId: "event-1",
+      commandId: "command-1",
+      membershipEpoch: 1,
+      actor: {
+        kind: "operator" as const,
+        userId: "user-1",
+        deviceId: "device-1",
+      },
+      deviceKeyId: "device-key-1",
+      type: "operator-chat.message",
+      payload: { body: "hello" },
+      payloadSha256: "a".repeat(64),
+      previousEventSha256: null,
+      authorSignature: "A".repeat(86),
+      causationEventId: null,
+      correlationId: null,
+      occurredAt: "2026-07-30T12:00:00.000Z",
+      receivedAt: "2026-07-30T12:00:01.000Z",
+    };
+    for (const page of [
+      {
+        sharedProjectId: "shared-project-1",
+        events: [{ ...event, sharedProjectId: "shared-project-2" }],
+        nextCursor: 1,
+        hasMore: false,
+      },
+      {
+        sharedProjectId: "shared-project-1",
+        events: [event, { ...event, sequence: 3, eventId: "event-3", commandId: "command-3" }],
+        nextCursor: 3,
+        hasMore: false,
+      },
+      {
+        sharedProjectId: "shared-project-1",
+        events: [event],
+        nextCursor: 2,
+        hasMore: false,
+      },
+      {
+        sharedProjectId: "shared-project-1",
+        events: [],
+        nextCursor: 0,
+        hasMore: true,
+      },
+    ]) {
+      expect(() => decodePage(page)).toThrow();
+    }
+  });
 });

@@ -11,6 +11,7 @@ import {
   COLLABORATION_EVENT_REPLAY_MAX_LIMIT,
   CollaborationEventEnvelope as CollaborationEventEnvelopeSchema,
   CollaborationEventProposal as CollaborationEventProposalSchema,
+  CollaborationEventReplayPage as CollaborationEventReplayPageSchema,
   CollaborationEventReplayRequest as CollaborationEventReplayRequestSchema,
 } from "@cafecode/contracts";
 import { Buffer } from "node:buffer";
@@ -25,8 +26,10 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import {
+  admitCollaborationEventProposal,
   collaborationEventProposalSignatureBytes,
   type CollaborationAdmittedEventProposal,
+  CollaborationDeviceKeyAuthority,
   isCollaborationAdmittedEventProposal,
 } from "./CollaborationEventAdmission.ts";
 import {
@@ -39,6 +42,7 @@ const IDEMPOTENCY_DOMAIN = "cafecode-collaboration-event-idempotency-v1";
 const decodeEnvelope = Schema.decodeUnknownSync(CollaborationEventEnvelopeSchema);
 const decodeProposal = Schema.decodeUnknownEffect(CollaborationEventProposalSchema);
 const decodeStoredProposal = Schema.decodeUnknownSync(CollaborationEventProposalSchema);
+const decodeReplayPage = Schema.decodeUnknownSync(CollaborationEventReplayPageSchema);
 const decodeReplayRequest = Schema.decodeUnknownEffect(CollaborationEventReplayRequestSchema);
 
 export type CollaborationEventStoreFailureReason =
@@ -56,7 +60,11 @@ export class CollaborationEventStoreError extends Data.TaggedError("Collaboratio
 export interface CollaborationEventStoreShape {
   readonly append: (
     admitted: CollaborationAdmittedEventProposal,
-  ) => Effect.Effect<CollaborationEventEnvelope, CollaborationEventStoreError>;
+  ) => Effect.Effect<
+    CollaborationEventEnvelope,
+    CollaborationEventStoreError,
+    CollaborationDeviceKeyAuthority | CollaborationMembershipAuthority
+  >;
   readonly replay: (
     input: CollaborationEventReplayInput,
   ) => Effect.Effect<
@@ -273,20 +281,20 @@ const makeStore = Effect.gen(function* () {
       if (!isCollaborationAdmittedEventProposal(admitted)) {
         return yield* Effect.fail(fail(operation, "invalid-admitted-event"));
       }
-      const authorization = admitted?.authorization;
+      const initialAuthorization = admitted.authorization;
       const proposal = yield* decodeProposal(admitted?.proposal, {
         onExcessProperty: "error",
       }).pipe(Effect.mapError(() => fail(operation, "invalid-admitted-event")));
+
       if (
-        !authorization ||
         !(admitted.payloadBytes instanceof Uint8Array) ||
-        authorization.principal.sharedProjectId !== proposal.sharedProjectId ||
-        authorization.principal.userId !==
+        initialAuthorization.principal.sharedProjectId !== proposal.sharedProjectId ||
+        initialAuthorization.principal.userId !==
           (proposal.actor.kind === "operator" ? proposal.actor.userId : undefined) ||
-        authorization.principal.deviceId !==
+        initialAuthorization.principal.deviceId !==
           (proposal.actor.kind === "operator" ? proposal.actor.deviceId : undefined) ||
-        authorization.principal.membershipEpoch !== proposal.membershipEpoch ||
-        authorization.permission !== admitted.permission ||
+        initialAuthorization.principal.membershipEpoch !== proposal.membershipEpoch ||
+        initialAuthorization.permission !== admitted.permission ||
         JSON.stringify(admitted.payload) !== proposal.payloadJson ||
         sha256(admitted.payloadBytes) !== proposal.payloadSha256 ||
         Buffer.compare(Buffer.from(admitted.payloadBytes), Buffer.from(proposal.payloadJson)) !== 0
@@ -313,6 +321,19 @@ const makeStore = Effect.gen(function* () {
             ON CONFLICT(shared_project_id) DO UPDATE
             SET shared_project_id = excluded.shared_project_id
           `;
+          // An admitted proposal is an in-process capability, not a durable
+          // authorization lease. Re-run admission only after acquiring the
+          // project writer reservation, so a same-database membership
+          // revocation and the durable append are ordered by SQLite rather
+          // than leaving a queueing window between authorization and write.
+          const currentlyAdmitted = yield* admitCollaborationEventProposal({
+            principal: initialAuthorization.principal,
+            targetProjectId: proposal.sharedProjectId,
+            proposal,
+          }).pipe(Effect.mapError(() => fail(operation, "invalid-admitted-event")));
+          if (currentlyAdmitted.permission !== admitted.permission) {
+            return yield* Effect.fail(fail(operation, "invalid-admitted-event"));
+          }
           const existingRows = yield* sql<CollaborationEventRow>`
             SELECT ${sql.unsafe(selectColumns)}
             FROM collaboration_events
@@ -564,12 +585,23 @@ const makeStore = Effect.gen(function* () {
           if (request.afterSequence < tailSequence && events.length === 0) {
             return yield* Effect.fail(fail(operation, "integrity-failure"));
           }
-          return {
-            sharedProjectId: request.sharedProjectId,
-            events,
-            nextCursor: events.at(-1)?.sequence ?? request.afterSequence,
-            hasMore,
-          } satisfies CollaborationEventReplayPage;
+          // The SQL estimate avoids materializing a page that cannot fit, but
+          // validate the exact serialized result at the protocol boundary as
+          // a fail-closed guard against a schema expansion or malformed stored
+          // row making the estimate stale.
+          return yield* Effect.try({
+            try: () =>
+              decodeReplayPage(
+                {
+                  sharedProjectId: request.sharedProjectId,
+                  events,
+                  nextCursor: events.at(-1)?.sequence ?? request.afterSequence,
+                  hasMore,
+                },
+                { onExcessProperty: "error" },
+              ),
+            catch: () => fail(operation, "integrity-failure"),
+          });
         }),
       );
     }).pipe(
