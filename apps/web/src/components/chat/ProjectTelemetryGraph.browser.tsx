@@ -841,7 +841,8 @@ describe("ProjectTelemetryGraph", () => {
       const gpuCard = document.querySelector('[data-project-telemetry-card="Host GPU"]');
       expect(cpuCard?.querySelector("[data-project-telemetry-series]")).not.toBeNull();
       expect(gpuCard?.querySelector("[data-project-telemetry-series]")).toBeNull();
-      expect(gpuCard?.querySelector("[data-project-telemetry-graph-hidden]")).not.toBeNull();
+      expect(gpuCard?.querySelector('[role="img"]')).toBeNull();
+      expect(gpuCard?.children).toHaveLength(2);
       const toggle = page.getByRole("switch", { name: "Hide unavailable resource graphs" });
       await expect.element(toggle).toBeChecked();
       await toggle.click();

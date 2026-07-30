@@ -346,9 +346,7 @@ function TelemetryCard(props: {
           {props.value}
         </span>
       </div>
-      {props.hideGraph ? (
-        <div aria-hidden="true" className="h-7" data-project-telemetry-graph-hidden="true" />
-      ) : (
+      {!props.hideGraph ? (
         <TelemetrySparkline
           color={props.color}
           label={props.label}
@@ -357,7 +355,7 @@ function TelemetryCard(props: {
             : { measurement: props.historyMeasurement })}
           values={props.history}
         />
-      )}
+      ) : null}
       <div className="truncate text-xs text-muted-foreground">{props.detail}</div>
     </div>
   );
