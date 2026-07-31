@@ -281,10 +281,12 @@ in the current-source guides, not in a second drifting feature catalog here.
 ## Run From Source
 
 For this fork, the dependable install path documented here is a source checkout.
-Build support is not the same as a signed, notarized,
-publisher-authenticated artifact. Verify the provenance of any packaged build
-before installing it. The compatibility-named npm package may lag the repository
-and is not the fresh-build path documented here.
+There is currently no Club Code npm, AUR, pacman, or Debian package documented
+here. The upstream `@cafeai/cafe-code` npm package and compatibility-named
+`cafe-code` package recipes install or package Cafe Code, not Club Code. Build
+support is not the same as a signed, notarized, publisher-authenticated artifact.
+Verify the provenance and product identity of any packaged build before
+installing it.
 
 Install Node.js 24.13.1 and Corepack, then run Club Code from a checkout. The
 repository pins the exact Yarn release through Corepack:
@@ -295,13 +297,13 @@ cd club-code
 corepack enable
 corepack yarn install --immutable
 corepack yarn build:desktop
-corepack yarn workspace @cafecode/desktop start
+corepack yarn start:desktop
 ```
 
 Debug mode:
 
 ```bash
-corepack yarn workspace @cafecode/desktop start --cafe-debug
+corepack yarn start:desktop:debug
 ```
 
 ### Browser Web UI Firewall Ports
@@ -348,16 +350,7 @@ If you want Codex or Claude to perform the source installation, paste this into
 the CLI:
 
 ```text
-Install Club Code from source. Clone https://github.com/John-Ryan21337/club-code.git, install Node.js 24.13.1 and Corepack, run corepack enable, run corepack yarn install --immutable, run corepack yarn build:desktop, then start it with corepack yarn workspace @cafecode/desktop start. Also verify Codex CLI is installed and logged in with codex login, and Claude Code is installed and logged in with claude auth login if I want Claude support.
-```
-
-The compatibility npm path remains available but may lag current repository
-work:
-
-```bash
-npx @cafeai/cafe-code
-npm install -g @cafeai/cafe-code
-cafe-code
+Install Club Code from source. Clone https://github.com/John-Ryan21337/club-code.git, install Node.js 24.13.1 and Corepack, run corepack enable, run corepack yarn install --immutable, run corepack yarn build:desktop, then start it with corepack yarn start:desktop. Also verify Codex CLI is installed and logged in with codex login, and Claude Code is installed and logged in with claude auth login if I want Claude support.
 ```
 
 Club Code supports these provider integrations:
@@ -382,12 +375,6 @@ corepack yarn install --immutable
 corepack yarn start:desktop
 ```
 
-Run the desktop package directly:
-
-```bash
-corepack yarn workspace @cafecode/desktop start
-```
-
 Debug mode:
 
 ```bash
@@ -405,75 +392,14 @@ corepack yarn typecheck
 corepack yarn test
 ```
 
-### Local Arch Package
+### Club Code Package Status
 
-Build a local pacman package from the Linux AppImage artifact:
-
-```bash
-corepack yarn install --immutable
-corepack yarn dist:arch:local
-sudo pacman -U release/arch/cafe-code-*.pkg.tar.zst
-```
-
-To build and install in one step:
-
-```bash
-corepack yarn dist:arch:local --install
-```
-
-This helper builds a package from the current checkout and does not publish
-anything.
-
-### AUR Source Package
-
-The compatibility-named `cafe-code` AUR directory is a legacy upstream recipe:
-it pins `cafeai/cafe-code` version `0.0.51`, not this Club Code checkout. It is
-packaging scaffolding, not a current Club Code artifact. To inspect or build
-that pinned recipe on Arch Linux:
-
-```bash
-corepack yarn dist:aur:cafe-code
-```
-
-The package is written to `packaging/aur/cafe-code/`. Its `PKGBUILD`, generated
-`.SRCINFO`, launcher, desktop entry, and packaging license are kept there.
-
-If you intentionally maintain that legacy upstream AUR listing, stage its
-metadata with:
-
-```bash
-git clone ssh://aur@aur.archlinux.org/cafe-code.git ../aur-cafe-code
-cp -a packaging/aur/cafe-code/. ../aur-cafe-code/
-cd ../aur-cafe-code
-makepkg --printsrcinfo > .SRCINFO
-git add .gitignore .SRCINFO LICENSE PKGBUILD cafe-code.desktop cafe-code.sh
-git commit -m "Initial cafe-code package"
-git push
-```
-
-Before treating it as a Club Code package, update and audit the upstream URL,
-source commit or tag, checksums, version, description and branding, generated
-`.SRCINFO`, installed AppImage, and launcher. Changing only `pkgver` is not
-enough.
-
-### Debian Package
-
-Build a Debian package for the host architecture:
-
-```bash
-corepack yarn install --immutable
-corepack yarn dist:desktop:deb
-```
-
-Explicit architecture targets are also available:
-
-```bash
-corepack yarn dist:desktop:deb:x64
-corepack yarn dist:desktop:deb:arm64
-```
-
-The package is written to `release/`. Install the emitted file with a graphical
-package installer or with `sudo apt install ./release/<file>.deb`.
+No Club Code npm, AUR, pacman, or Debian package is currently published or
+documented as an installation path. Compatibility-named Cafe Code packaging
+helpers remain in the source tree for upstream compatibility and development,
+but they are not Club Code install or publishing instructions. Use the source
+checkout workflow above until Club Code-specific artifacts and package metadata
+are published and verified.
 
 ## 日本語でも、もう一杯。え、まだ飲むのぉ？🍾
 
@@ -627,10 +553,12 @@ VLC lane には VLC、native completion speech には対応 OS voice の install
 
 ### ソースから動かす
 
-この fork で案内する install path は source checkout。build できることと、署名・notarize
-済みの publisher-authenticated artifact は同じ意味ではありません。packaged build は
-provenance を確認してから使ってね。compatibility 名の npm package は repository より遅れる
-場合があり、fresh build の案内ではありません。
+この fork で案内する install path は source checkout です。現在、Club Code の npm、AUR、
+pacman、Debian package は install path として案内していません。upstream の
+`@cafeai/cafe-code` npm package と compatibility 名の `cafe-code` package recipe が
+install/package するのは Cafe Code であり、Club Code ではありません。build できることと、
+署名・notarize 済みの publisher-authenticated artifact は同じ意味ではありません。packaged
+build は provenance と product identity を確認してから使ってください。
 
 Node.js 24.13.1 と Corepack を先に入れます。Yarn は repository 側で固定済み。
 
@@ -640,13 +568,13 @@ cd club-code
 corepack enable
 corepack yarn install --immutable
 corepack yarn build:desktop
-corepack yarn workspace @cafecode/desktop start
+corepack yarn start:desktop
 ```
 
 debug mode:
 
 ```bash
-corepack yarn workspace @cafecode/desktop start --cafe-debug
+corepack yarn start:desktop:debug
 ```
 
 LAN の別 device から Web UI を開くなら、Club Code で LAN access を enable にして、
@@ -687,15 +615,7 @@ Electron safe storage で暗号化し、browser credential は現在の browser 
 Codex または Claude に source install を頼むなら、これを渡せます。
 
 ```text
-Club Code をソースから入れてください。https://github.com/John-Ryan21337/club-code.git を clone して、Node.js 24.13.1 と Corepack を入れ、corepack enable、corepack yarn install --immutable、corepack yarn build:desktop、corepack yarn workspace @cafecode/desktop start まで実行してください。Codex を使うなら codex login、Claude を使うなら claude auth login も確認してください。
-```
-
-compatibility npm path:
-
-```bash
-npx @cafeai/cafe-code
-npm install -g @cafeai/cafe-code
-cafe-code
+Club Code をソースから入れてください。https://github.com/John-Ryan21337/club-code.git を clone して、Node.js 24.13.1 と Corepack を入れ、corepack enable、corepack yarn install --immutable、corepack yarn build:desktop、corepack yarn start:desktop まで実行してください。Codex を使うなら codex login、Claude を使うなら claude auth login も確認してください。
 ```
 
 Codex は `codex login`、Claude は `claude auth login` が必要。OpenCode は upstream provider
@@ -709,12 +629,6 @@ checkout から app を動かす基本 command:
 ```bash
 corepack yarn install --immutable
 corepack yarn start:desktop
-```
-
-desktop package を直接起動:
-
-```bash
-corepack yarn workspace @cafecode/desktop start
 ```
 
 debug mode:
@@ -732,71 +646,13 @@ corepack yarn typecheck
 corepack yarn test
 ```
 
-### Local Arch package
+### Club Code package の状態
 
-Linux AppImage artifact から local pacman package を build:
-
-```bash
-corepack yarn install --immutable
-corepack yarn dist:arch:local
-sudo pacman -U release/arch/cafe-code-*.pkg.tar.zst
-```
-
-build と install を一回で実行:
-
-```bash
-corepack yarn dist:arch:local --install
-```
-
-この helper は current checkout から package を作るだけで、publish はしません。
-
-### AUR source package
-
-compatibility 名の `cafe-code` AUR directory は legacy upstream recipe です。
-`cafeai/cafe-code` version `0.0.51` を pin しており、この Club Code checkout ではありません。
-inspection/build:
-
-```bash
-corepack yarn dist:aur:cafe-code
-```
-
-output は `packaging/aur/cafe-code/`。そこに `PKGBUILD`、generated `.SRCINFO`、launcher、
-desktop entry、packaging license を保持します。
-
-その legacy upstream AUR listing を意図的に管理する場合だけ、metadata を stage:
-
-```bash
-git clone ssh://aur@aur.archlinux.org/cafe-code.git ../aur-cafe-code
-cp -a packaging/aur/cafe-code/. ../aur-cafe-code/
-cd ../aur-cafe-code
-makepkg --printsrcinfo > .SRCINFO
-git add .gitignore .SRCINFO LICENSE PKGBUILD cafe-code.desktop cafe-code.sh
-git commit -m "Initial cafe-code package"
-git push
-```
-
-Club Code package と扱う前に、upstream URL、source commit/tag、checksum、version、description、
-branding、generated `.SRCINFO`、installed AppImage、launcher を全部 audit してください。
-`pkgver` だけ替えるのは不可。酔ってても label の貼り替えだけで中身を変えた顔はしない〜🏷️
-
-### Debian package
-
-host architecture 用 Debian package:
-
-```bash
-corepack yarn install --immutable
-corepack yarn dist:desktop:deb
-```
-
-architecture を明示:
-
-```bash
-corepack yarn dist:desktop:deb:x64
-corepack yarn dist:desktop:deb:arm64
-```
-
-output は `release/`。graphical installer または
-`sudo apt install ./release/<file>.deb` で install します。
+現在、Club Code の npm、AUR、pacman、Debian package は公開済み install path として案内して
+いません。source tree には upstream compatibility と development 用の Cafe Code 名
+packaging helper が残っていますが、Club Code の install/publish 手順ではありません。
+Club Code 専用 artifact と package metadata が公開・検証されるまでは、上の source checkout
+手順を使ってください。
 
 ## License
 
