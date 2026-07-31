@@ -1,24 +1,258 @@
-# Club Code, a fork of Cafe Club - A bit more bumpin
+# Club Code
 
-![Cafe Code desktop screenshot](./docs/images/Racoons.jpg)
+### The original Cafe Code, after hours — with the Club Code sign lit
 
-Made in Japan with love, and polished in Silicon Valley -- a global production.
+![Club Code desktop screenshot](./docs/images/cafe-code-desktop.png)
 
-**Warning**: Large parts of the application are currently under development and have been completely rewritten. It may take some time for the system to become stable.
+Made in Japan with love, too much glitter, and absolutely no chance of catching
+the last train.
 
-_Cafe Code is very small, barely does a thing at all. Chat goes in and chat comes out, soft and sweet, without a shout._
+Alpha notice
 
-Cafe Code is a tiny desktop GUI for coding agents. It is a fork of [T3 Code](https://github.com/pingdotgg/t3code), with a basket of bug fixes, a little sweep-up, and some very opinionated trimming for people who want the agent chat and not much else.
+Club Code is alpha/testing software. It is provided without
+warranties or claims of reliability, fitness for a particular purpose, or
+uninterrupted operation. Use it at your own risk, keep backups of important
+work, and verify important results.
 
-It is meant to stay light, calm, and out of the way — not freeze, drag, or get all sleepy like so many other clients do.
+アルファ版に関する注意
 
-T3 Code said it wanted to be minimal. Cafe Code went even smaller.
+Club Code は現在テスト中のアルファ版ソフトウェアです。信頼性、特定目的への適合性、
+無停止動作などについて、いかなる保証または表明も行いません。利用者ご自身の責任で使用し、
+重要なデータはバックアップし、重要な結果は確認してください。
 
-No terminal drawer. No pretend IDE. No giant dashboard wearing a useful-looking hat. If you want a console, use a real console. If you want to inspect code, open it in VS Code.
+> [!CAUTION]
+> **Auto Nudge can spend real money quickly.** Automated follow-ups consume real
+> provider tokens, credits, quota, or paid usage. You remain responsible for
+> provider charges; Club Code maintainers cannot reimburse or assume
+> responsibility for those costs. Use conservative caps, exact-thread prompts
+> or skills, and active monitoring—including the phone Web UI. Run it unattended
+> overnight only when you knowingly accept the cost risk.
+
+> [!CAUTION]
+> **Idle Thread Guard can also spend real money.** It is a separate, default-off
+> feature that may send one visible status request after an active turn has
+> produced no projected transcript, tool, turn, or session activity for the
+> configured interval. The minimum is one hour, the default is two hours, and
+> activity resets the deadline. A provider may still be doing expensive,
+> legitimate work while appearing silent. Use a long interval, monitor the
+> thread, and disable the Guard when it is not needed.
+
+> [!WARNING]
+> **NO GUARANTEE OF COST CONTROL OR CORRECT OPERATION.** Auto Nudge and Idle
+> Thread Guard are experimental alpha/testing features. Their gates, counters,
+> activity detection, caps, and stop controls reduce risk but are not perfect
+> and are not guaranteed to prevent duplicate, late, unwanted, or paid provider
+> requests. Club Code and its maintainers provide no warranty, reimbursement,
+> indemnity, or guarantee concerning provider charges, data loss, interrupted
+> work, or results. You are solely responsible for configuration, supervision,
+> provider bills, backups, and deciding whether to enable these features.
+
+> [!CAUTION]
+> **Auto Nudge は短時間で実費を発生させる可能性があります。** 自動 follow-up は、
+> provider の token、credit、quota、または有料利用枠を実際に消費します。利用料金は
+> 利用者が負担します。Club Code および保守担当者は、料金の補償、返金、または負担を
+> 行いません。小さい round cap、対象 thread に限定した明確な指示、および継続的な監視を
+> 使用してください。費用リスクを理解して受け入れる場合を除き、無人または夜間で
+> 実行しないでください。
+
+> [!CAUTION]
+> **Idle Thread Guard も実費を発生させる可能性があります。** これは Auto Nudge とは
+> 別の、初期状態で無効な機能です。実行中 turn について、設定時間のあいだ transcript、
+> tool、turn、session の activity が投影されない場合に、可視の status request を一回
+> 送信することがあります。最小値は1時間、初期値は2時間で、新しい activity があれば
+> deadline はリセットされます。表示上は無音でも provider が正当な長時間処理を継続して
+> いる可能性があります。長い時間を設定し、thread を監視し、不要な場合は無効にしてください。
+
+> [!WARNING]
+> **費用制御および正常動作は保証されません。** Auto Nudge と Idle Thread Guard は
+> 実験中の alpha/testing 機能であり、完全ではありません。gate、counter、activity 検出、
+> cap、stop control は危険を軽減しますが、重複、遅延、意図しない、または有料の provider
+> request を防止する保証はありません。Club Code および保守担当者は、provider 料金、
+> data loss、作業中断、結果について、保証、補償、返金、免責補償を提供しません。
+> 設定、監視、provider の請求、backup、および機能を有効にする判断は、すべて利用者の
+> 責任です。この警告には演出的または比喩的な表現を使用していません。
+
+Current-build end-user documentation:
+
+- [English guide](./docs/club-code-current-build-guide.md)
+- [日本語ガイド 🍾✨](./docs/club-code-current-build-guide.ja.md)
+
+_Heeey, darling. Come in, come in. Closer. I am not shouting; the room is just
+very far away. Club Code is the late-night fork of Cafe Code: chat goes in, work
+comes back, and nobody drags a fake IDE onto my dance floor. Snow in the window?
+Yes. A little movie in the corner? Yes. One more glass? Also yes. That one is
+probably unrelated._
+
+This repository is **Club Code**, an after-hours fork of
+[Cafe Code](https://github.com/cafeai/cafe-code), which began as a fork of
+[T3 Code](https://github.com/pingdotgg/t3code). The app still uses Cafe Code
+package, command, environment-variable, protocol, and data-directory names for
+compatibility. New sign outside; dependable regulars behind the bar.
+
+It stays chat-centered. There is no in-app terminal drawer and no editor
+pretending to be VS Code. The observatories are read-only windows into work that
+is already happening; they do not become another agent or silently edit files.
 
 <p align="center">
-  <img src="./docs/images/cafe-code-character.png" alt="Cafe Code character" width="360" />
+  <img src="./docs/images/cafe-code-character.png" alt="Club Code character" width="360" />
 </p>
+
+## Complete Current-Source Differences From Cafe Code
+
+The two current-build guides above are the authoritative current-source
+inventory of differences from Cafe Code. They do not by themselves prove that a
+particular installer or pull request has been published. This README mirrors
+that inventory at feature level:
+
+- **Branding and compatibility:** Club Code is the visible product identity,
+  while compatibility-sensitive `cafe-code`, `@cafecode/*`, `CAFE_CODE_*`,
+  protocol, and data-directory identifiers remain. The product stays centered
+  on agent chat rather than adding an editor or terminal drawer.
+- **Provider runtimes:** Codex, Claude, and OpenCode remain available. On
+  Windows, Codex and Claude may use either the operator's system CLI/path or a
+  Club Code-managed Node/provider installation. The managed choice isolates the
+  executable location, simplifies first-install/update/login discovery, and
+  avoids depending on a mutable global `PATH`; it does not include provider
+  credentials or free usage, and provider updates still require supply-chain
+  trust. System CLI remains the portable, operator-controlled default.
+- **LM Studio Local:** A separate provider creates a normal Codex OSS/LM Studio
+  instance for loopback or a trusted private LAN. It is not OpenCode and is not
+  the narrow Atmosphere Console model fallback.
+- **Prompt workflow:** Exact-thread draft recovery, visible durable FIFO
+  follow-ups, provider-aware **Steer**, image attachments, bounded visible
+  `.txt` import, and camera capture with preview, retake, mobile front/rear
+  selection, and system-camera fallback where the browser permits it.
+- **Auto Nudge:** Default-off, exact-thread, completion-event-driven standing
+  orders with editable text, **Steady Progress** and **Hardcore Fanout**
+  starting prompts, per-thread caps, minimized controls, foreground or opt-in
+  background continuation, durable completed-turn dedupe, normal-history
+  messages, per-thread Stop, and a known-thread emergency barrier. A timer,
+  countdown, elapsed-time cap, or periodic cadence cannot authorize a nudge.
+- **Idle Thread Guard:** A separate, default-off, exact-thread silence
+  safeguard for an already-running turn. It accepts 1–720 whole hours, defaults
+  to two hours, resets on projected activity, sends at most one visible status
+  request per idle episode, and fails closed until newer activity re-arms it.
+  It never grants Auto Nudge authority.
+- **Atmosphere effects:** Optional pointer-transparent snow, rain, and Matrix
+  layers with Roman/Japanese/2ch/live-work vocabulary, fixed/rainbow/per-stream
+  rainbow/music-reactive colors, independent shimmer speed, density through
+  `10`, and Flat, Forward, Reverse, Warp, Walk Forward, and Walk Reverse modes.
+- **Matrix depth and performance:** Walk modes use full-viewport randomized
+  spawn, bounded travel/fade, adjustable 1–144 px endpoints, collision-aware
+  spacing, readable uncompressed filenames, center-outward wind, depth-scaled
+  glyph routes, and a higher-density 640-stream pool. A synchronized WebGL2
+  instanced glyph atlas provides true GPU glyph rasterization when supported;
+  Canvas2D remains the automatic fallback and owns snow, rain, and verified
+  activity connectors.
+- **Verified activity:** Provider-observed network, database, build, and agent
+  delegation events may draw bounded Matrix-colored routes, packets, pulses,
+  trails, and safe filenames. Prompt text, commands, SQL, secrets, and invented
+  activity are excluded.
+- **Atmosphere Console:** A transparent, movable, resizable control surface uses
+  a zero-token deterministic parser first, then may use a narrow LM Studio,
+  Codex, or Claude structured fallback with lightweight models prioritized.
+  Only a small safe command vocabulary can change presentation settings.
+- **Ambient images and media:** A persistent image/GIF or bounded image
+  directory can be cycled manually or on a timer in floating, custom, or
+  Theater geometry with visible move/resize handles. YouTube and Spotify
+  embeds, direct local media, desktop VLC queues, Cinema layouts, adaptive glow,
+  Spectrum, and 395 bundled MilkDrop/Butterchurn presets are also available.
+- **YouTube queues:** Japanese, EDM, and K-pop one-click examples are bundled.
+  EDM initializes a fresh, otherwise unchosen session without starting
+  playback. Local `.txt` import can replace the same-named browser list or add a
+  new list; unavailable/non-embeddable entries are skipped within a bounded
+  pass.
+- **Mobile presentation:** A touch-sized **Mobile optimized / Desktop** control
+  beside the composer can force existing compact layout branches on a wide
+  renderer. Mobile enables Matrix without replacing its saved appearance;
+  returning to Desktop removes only the layout override.
+- **World clock and weather:** A transparent, movable, resizable, collapsible
+  one-to-six-city clock provides rainbow shimmer, amber nixie, analog, and
+  old-school LED styles. Weather is a separate default-off renderer-local
+  Open-Meteo consent, excluded from settings profiles and other clients.
+- **Project Resources:** A transparent movable/resizable overlay graphs measured
+  host CPU, RAM, network, project disk, stable per-adapter GPU/VRAM, and
+  hardware temperatures. Diagnostics distinguish missing sensor providers from
+  providers with no usable temperature sensors. **Hide unavailable graphs**
+  removes the entire unavailable sensor card instead of leaving a blank chart.
+- **Observatories:** Workflow keeps its accessible list and adds an optional
+  provider-parent graph. Workspace Observatory offers read-only bounded project
+  tree, text, SQLite, verified file focus, capped changes, and up to eight
+  panes; it does not silently edit or add viewed content to model context.
+- **Supervised browser:** A temporary sandboxed desktop browser supports native
+  per-action approval and explicit origin/thread/provider-bound Codex or Claude
+  grants. Sensitive fields stay out of prompts and routine logs.
+- **Profiles and privacy:** Up to 32 local named presentation profiles use an
+  allowlisted field policy, confirmed sequential writes, rollback on partial
+  failure, and overlap locking. Credentials, provider authority, Auto Nudge,
+  live assets, and weather consent are excluded. Meeting Privacy hides selected
+  work from presentation surfaces without claiming to stop or secure it.
+- **Usage and completion:** Provider-reported usage and paid state, advisory
+  Model Pacing, separate cache/compaction counters, Ultra Caching handoffs, and
+  privacy-safe completion sounds or fixed English/Japanese speech are exposed
+  without inventing billing estimates.
+- **Connections and desktop workflow:** The LAN Web UI and saved direct
+  connections scope projects, threads, providers, and subscriptions to the
+  selected reachable server. Thread movement, recycle/restore/permanent delete,
+  external editor/path opening, and separate source/package update checks are
+  included. Club Code does not create firewall rules, certificates, VPNs, or
+  tunnels.
+- **Secure coworking foundation — partial:** Central project authorization and
+  a durable, project-scoped, idempotent, hash-chained admitted-event journal are
+  implemented. The remote relay, shared operator room/chat, transcript merge,
+  cross-network file synchronization, and multi-agent coordination requested
+  for the complete coworking suite are not yet production capabilities.
+- **RGB synchronization foundation — partial:** A default-off, provider-neutral,
+  bounded and rate-limited RGB-frame boundary exists, but there is no production
+  OpenRGB adapter, direct HID/SMBus access, device-control UI, or claim that
+  keyboards, RAM, or case lighting currently synchronize.
+
+Details and boundaries matter—especially for Auto Nudge costs, LM Studio network
+security, camera secure-context requirements, YouTube embedding policy,
+weather network consent, per-adapter GPU reporting, temperature sensor
+availability, and what persists.
+Read the [English guide](./docs/club-code-current-build-guide.md) or the
+[日本語ガイド](./docs/club-code-current-build-guide.ja.md) before relying on
+those features.
+
+Clock and weather details:
+
+- [English clock/weather guide](./docs/world-clock-weather.md)
+- [世界時計＆お天気ガイド 🌃🕰️✨](./docs/world-clock-weather.ja.md)
+
+### Optional Service Setup
+
+For server-side public YouTube search, set these before starting the server. The
+API key stays server-side:
+
+```bash
+CAFE_CODE_YOUTUBE_PUBLIC_DISCOVERY_ENABLED=true
+CAFE_CODE_YOUTUBE_API_KEY=your_server_only_key
+```
+
+For desktop-only discovery of playlists owned by the signed-in user:
+
+```bash
+CAFE_CODE_YOUTUBE_ACCOUNT_CONNECTION_ENABLED=true
+CAFE_CODE_YOUTUBE_OAUTH_DESKTOP_CLIENT_ID=your-desktop-client.apps.googleusercontent.com
+```
+
+Configure the YouTube Data API and consent screen with a **Desktop** OAuth client
+ID. The callback is Google's desktop-app loopback form,
+`http://127.0.0.1:<Club Code backend port>`, with no extra path. The grant is
+held in the owner session; Club Code does not persist the refresh token, and the
+remote Web UI does not expose this account connection.
+
+For LM Studio, start its OpenAI-compatible API server and load a chat model, then
+use **Settings > Providers > LM Studio Local**. The default endpoint is
+`http://127.0.0.1:1234/v1`; a literal private IP or HTTPS endpoint is accepted
+for a trusted LAN. The current Codex LM Studio route has no bearer-token hook, so
+Club Code cannot connect while LM Studio's **Require Authentication** option is
+enabled. Never expose an unauthenticated LM Studio endpoint to the public
+internet. See the current-build guide for the full endpoint and security rules.
+
+VLC playback requires VLC to be installed. Native completion speech requires
+compatible operating-system voices.
 
 ## Why Fork?
 
@@ -27,80 +261,54 @@ Because the app should stay small, fast, and predictable.
 Bug fixes are welcome. Performance fixes are welcome. Reliability fixes are
 welcome. Security fixes are extra welcome.
 
-Feature requests need to pass the tiny-window test: does this make Cafe Code
+Feature requests need to pass the tiny-window test: does this make Club Code
 smaller, calmer, faster, easier to understand, lower CPU, lower memory, or less
 annoying when something fails?
 
 If yes, maybe.
 
-If it turns Cafe Code into a pretend IDE, a pretend terminal, a release
+If it turns Club Code into a pretend editor, a pretend terminal, a release
 dashboard, a project-management suite, or a museum of buttons, no.
 
-## What Changed From T3 Code
+## Compatibility and Product Shape
 
-This is the practical working list. It will probably get cleaned up later.
-
-- Completely rewrote the lifecycle system to be more inline with Codex and Claude.
-- Numerous bug fixes.
-- Excessive debugging information.
-- Rebranded the app around Cafe Code.
-- Moved local app data into `~/.cafe-code`.
-- Removed the in-app terminal drawer and terminal UI.
-- Removed hosted web-app assumptions and focused the project on the Electron app.
-- Disabled update checks until Cafe Code has its own release path.
-- Added a queue/follow-up workflow for prompts sent while a provider is running.
-- Added provider-aware queue actions: steer when supported, interrupt when that
-  is the honest behavior.
-- Added thread moving between project folders and working directories.
-- Added "Move to Recycle Bin", "Recently Deleted", restore, permanent delete,
-  and empty recycle bin flows.
-- Added a default editor setting for VS Code, Antigravity, Finder, or system
-  default.
-- Made file-change rows and path pills open real paths instead of truncated
-  display text.
-- Added a localhost-only debug endpoint behind `--cafe-debug`.
-- Reduced needless Git polling and checkpoint churn.
-- Hardened hidden checkpoint handling, ignored-file capture, and old ref pruning.
-- Fixed provider/session edge cases around reconnects, stale running state,
-  resume metadata, and null checkpoint timestamps.
-- Removed or hid features that do not belong in a minimal coding-agent shell.
+Club Code retains the upstream `@cafecode/*`, `cafe-code`, `CAFE_CODE_*`,
+`.cafe-code`, protocol, and data identifiers where changing them would break
+compatibility. It adds the current-build behavior documented above while
+preserving the focused coding-agent chat model. The complete comparison belongs
+in the current-source guides, not in a second drifting feature catalog here.
 
 ## Run From Source
 
-For now there are no desktop packages. No DMG, no updater, no notarized bundle,
-no "drag this into Applications" ceremony.
+For this fork, the dependable install path documented here is a source checkout.
+Build support is not the same as a signed, notarized,
+publisher-authenticated artifact. Verify the provenance of any packaged build
+before installing it. The compatibility-named npm package may lag the repository
+and is not the fresh-build path documented here.
 
-The npm package exists, but do not treat it as the fresh install path yet. It
-will probably be out of date until Cafe Code settles down a little more. The app
-is in pretty good shape now, but the fastest-moving build is still the repo
-itself.
-
-Mostly tested on macOS. Windows seems to work. Linux may need a little tweaking;
-I have not had enough time on it yet.
-
-Install Node.js 24.13.1 and Corepack, then run Cafe Code from a checkout. The
+Install Node.js 24.13.1 and Corepack, then run Club Code from a checkout. The
 repository pins the exact Yarn release through Corepack:
 
 ```bash
-git clone https://github.com/cafeai/cafe-code.git
-cd cafe-code
+git clone https://github.com/John-Ryan21337/club-code.git
+cd club-code
 corepack enable
-yarn install --immutable
-yarn build:desktop
-yarn workspace @cafecode/desktop start
+corepack yarn install --immutable
+corepack yarn build:desktop
+corepack yarn workspace @cafecode/desktop start
 ```
 
 Debug mode:
 
 ```bash
-yarn workspace @cafecode/desktop start --cafe-debug
+corepack yarn workspace @cafecode/desktop start --cafe-debug
 ```
 
 ### Browser Web UI Firewall Ports
 
-If you want to open the Cafe Code Web UI from another device on your LAN, first
-enable network/LAN access in Cafe Code, then allow the desktop backend ports
-through your firewall. The default desktop ports are:
+To open the Club Code Web UI from another device on your LAN, first enable
+network/LAN access in Club Code, then allow the desktop backend ports through
+your firewall. The default desktop ports are:
 
 - HTTPS/WSS Web UI: `3775/tcp`
 - HTTP/WS fallback and certificate bootstrap page: `3773/tcp`
@@ -108,40 +316,43 @@ through your firewall. The default desktop ports are:
 For `ufw`:
 
 ```bash
-sudo ufw allow 3775/tcp comment 'Cafe Code HTTPS'
-sudo ufw allow 3773/tcp comment 'Cafe Code HTTP'
+sudo ufw allow 3775/tcp comment 'Club Code HTTPS'
+sudo ufw allow 3773/tcp comment 'Club Code HTTP'
 ```
 
-For local development with `yarn dev:desktop`, the default ports are:
+For local development with `corepack yarn dev:desktop`, the default ports are:
 
 ```bash
-sudo ufw allow 13775/tcp comment 'Cafe Code dev HTTPS'
-sudo ufw allow 13773/tcp comment 'Cafe Code dev backend'
-sudo ufw allow 5733/tcp comment 'Cafe Code dev Vite'
+sudo ufw allow 13775/tcp comment 'Club Code dev HTTPS'
+sudo ufw allow 13773/tcp comment 'Club Code dev backend'
+sudo ufw allow 5733/tcp comment 'Club Code dev Vite'
 ```
 
-If Cafe Code prints a different port, or you run with `CAFE_CODE_PORT`,
+If Club Code prints a different port, or you run with `CAFE_CODE_PORT`,
 `CAFE_CODE_HTTPS_PORT`, `CAFE_CODE_DEV_INSTANCE`, or
 `CAFE_CODE_PORT_OFFSET`, allow the printed port instead.
 
 ### Saved Remote Servers
 
 The Connections settings can save direct connections to other reachable Cafe
-Code servers using a pairing URL or a host plus pairing code. Cafe Code scopes
-projects, threads, providers, and live subscriptions to the selected server.
+Code or Club Code servers using a pairing URL or a host plus pairing code. Club
+Code scopes projects, threads, providers, and live subscriptions to the selected
+server.
 
-Cafe Code does not create SSH or Tailscale tunnels. Configure the network,
+Club Code does not create SSH or Tailscale tunnels. Configure the network,
 certificate, firewall, or reverse proxy separately, then use the server's
 pairing details. Desktop credentials are encrypted with Electron safe storage;
 browser credentials are retained only for the current browser session.
 
-If you want Codex or Claude to do it for you, paste this into the CLI:
+If you want Codex or Claude to perform the source installation, paste this into
+the CLI:
 
 ```text
-Install Cafe Code from source. Clone https://github.com/cafeai/cafe-code.git, install Node.js 24.13.1 and Corepack, run corepack enable, run yarn install --immutable, run yarn build:desktop, then start it with yarn workspace @cafecode/desktop start. Also verify Codex CLI is installed and logged in with codex login, and Claude Code is installed and logged in with claude auth login if I want Claude support.
+Install Club Code from source. Clone https://github.com/John-Ryan21337/club-code.git, install Node.js 24.13.1 and Corepack, run corepack enable, run corepack yarn install --immutable, run corepack yarn build:desktop, then start it with corepack yarn workspace @cafecode/desktop start. Also verify Codex CLI is installed and logged in with codex login, and Claude Code is installed and logged in with claude auth login if I want Claude support.
 ```
 
-The old npm path is still here for later, but it may lag behind current work:
+The compatibility npm path remains available but may lag current repository
+work:
 
 ```bash
 npx @cafeai/cafe-code
@@ -149,34 +360,38 @@ npm install -g @cafeai/cafe-code
 cafe-code
 ```
 
-Cafe Code expects at least one provider to already be installed and
-authenticated:
+Club Code supports these provider integrations:
 
-- Codex: install [Codex CLI](https://developers.openai.com/codex/cli) and run `codex login`
-- Claude: install [Claude Code](https://claude.com/product/claude-code) and run `claude auth login`
-- OpenCode: install [OpenCode](https://opencode.ai/docs/) and configure at least one upstream provider, or configure Cafe Code with an existing OpenCode server URL
-
-Cafe Code currently ships Codex, Claude, and OpenCode provider integrations.
+- Codex: install [Codex CLI](https://developers.openai.com/codex/cli) and run
+  `codex login`.
+- Claude: install [Claude Code](https://claude.com/product/claude-code) and run
+  `claude auth login`.
+- OpenCode: install [OpenCode](https://opencode.ai/docs/) and configure an
+  upstream provider, or configure an existing OpenCode server URL.
+- LM Studio Local: install and start LM Studio's OpenAI-compatible server, then
+  configure the separate **LM Studio Local** row in Settings. Cloud login is not
+  required for this instance; the network-safety restrictions above still
+  apply.
 
 ## Local Development
 
 Run the app from a checkout:
 
 ```bash
-yarn install --immutable
-yarn start:desktop
+corepack yarn install --immutable
+corepack yarn start:desktop
 ```
 
 Run the desktop package directly:
 
 ```bash
-yarn workspace @cafecode/desktop start
+corepack yarn workspace @cafecode/desktop start
 ```
 
 Debug mode:
 
 ```bash
-yarn start:desktop:debug
+corepack yarn start:desktop:debug
 ```
 
 The app prints a localhost-only debug URL on startup.
@@ -184,10 +399,10 @@ The app prints a localhost-only debug URL on startup.
 Useful checks:
 
 ```bash
-yarn fmt
-yarn lint
-yarn typecheck
-yarn test
+corepack yarn fmt
+corepack yarn lint
+corepack yarn typecheck
+corepack yarn test
 ```
 
 ### Local Arch Package
@@ -195,15 +410,15 @@ yarn test
 Build a local pacman package from the Linux AppImage artifact:
 
 ```bash
-yarn install --immutable
-yarn dist:arch:local
+corepack yarn install --immutable
+corepack yarn dist:arch:local
 sudo pacman -U release/arch/cafe-code-*.pkg.tar.zst
 ```
 
 To build and install in one step:
 
 ```bash
-yarn dist:arch:local --install
+corepack yarn dist:arch:local --install
 ```
 
 This helper builds a package from the current checkout and does not publish
@@ -211,20 +426,20 @@ anything.
 
 ### AUR Source Package
 
-The `cafe-code` AUR target compiles Cafe Code from source and then packages the
-locally built AppImage. On Arch Linux, build it with:
+The compatibility-named `cafe-code` AUR directory is a legacy upstream recipe:
+it pins `cafeai/cafe-code` version `0.0.51`, not this Club Code checkout. It is
+packaging scaffolding, not a current Club Code artifact. To inspect or build
+that pinned recipe on Arch Linux:
 
 ```bash
-yarn dist:aur:cafe-code
+corepack yarn dist:aur:cafe-code
 ```
 
 The package is written to `packaging/aur/cafe-code/`. Its `PKGBUILD`, generated
-`.SRCINFO`, launcher, desktop entry, and packaging license are kept in that
-directory so it can also be used as the contents of the standalone AUR Git
-repository.
+`.SRCINFO`, launcher, desktop entry, and packaging license are kept there.
 
-To create the initial AUR listing, first create an AUR account and add your SSH
-public key. Then submit the package metadata:
+If you intentionally maintain that legacy upstream AUR listing, stage its
+metadata with:
 
 ```bash
 git clone ssh://aur@aur.archlinux.org/cafe-code.git ../aur-cafe-code
@@ -236,111 +451,246 @@ git commit -m "Initial cafe-code package"
 git push
 ```
 
-The current recipe uses the immutable published commit for version `0.0.51`
-because that version has no matching Git tag. For future releases, update
-`pkgver`, reset `pkgrel` to `1`, update the source commit and checksum, and
-regenerate `.SRCINFO` before pushing the AUR repository.
+Before treating it as a Club Code package, update and audit the upstream URL,
+source commit or tag, checksums, version, description and branding, generated
+`.SRCINFO`, installed AppImage, and launcher. Changing only `pkgver` is not
+enough.
 
 ### Debian Package
 
 Build a Debian package for the host architecture:
 
 ```bash
-yarn install --immutable
-yarn dist:desktop:deb
+corepack yarn install --immutable
+corepack yarn dist:desktop:deb
 ```
 
 Explicit architecture targets are also available:
 
 ```bash
-yarn dist:desktop:deb:x64
-yarn dist:desktop:deb:arm64
+corepack yarn dist:desktop:deb:x64
+corepack yarn dist:desktop:deb:arm64
 ```
 
-The package is written to `release/`. Install the emitted file with your
-graphical package installer or with `sudo apt install ./release/<file>.deb`.
+The package is written to `release/`. Install the emitted file with a graphical
+package installer or with `sudo apt install ./release/<file>.deb`.
 
-## 日本語でちゅ
+## 日本語でも、もう一杯。え、まだ飲むのぉ？🍾
 
-Cafe Code は、Codex とか Claude とお話するための、
-ちいさめデスクトップアプリだわ。
+current source の全機能と Cafe Code との差分は
+[日本語ガイド](./docs/club-code-current-build-guide.ja.md) が正本です。この README でも、
+英語欄と同じ feature-level の内容をぜんぶ並べます。はい伝票長い、でも「だいたい同じ」は
+請求と security では通らないから、もう一杯いきながら正確にね👇
 
-T3 Code から fork して、
-バグ直して、重いところ軽くして、
-いらない機能はぽいぽいした。
+- **Branding と compatibility：** 見える product 名は Club Code。ただし互換性に必要な
+  `cafe-code`、`@cafecode/*`、`CAFE_CODE_*`、protocol、data-directory 名は維持します。
+  editor や terminal drawer を足さず、agent chat 中心。看板は替えても常連さんのボトル名は
+  勝手に替えないの、えらい〜🍾
+- **Provider runtime：** Codex、Claude、OpenCode を利用可能。Windows の Codex/Claude は、
+  operator の system CLI/path または Club Code 管理の Node/provider install を選べます。
+  managed は executable の場所を分離し、first install・update・login の発見を揃え、変わりやすい
+  global `PATH` への依存を減らします。credential や無料利用枠は同梱せず、provider update の
+  supply-chain trust も必要。system CLI が portable で operator 管理の初期値です。無料ボトルは
+  入ってません、そこだけ急に現実〜🥃
+- **LM Studio Local：** loopback または信頼できる private LAN 用に、通常の Codex OSS /
+  LM Studio instance を別 provider として作成。OpenCode でも、Atmosphere Console の狭い
+  model fallback でもありません。三人を同じ源氏名で呼ばないでね🤖
+- **Prompt workflow：** exact-thread draft recovery、可視で durable な FIFO follow-up、
+  provider-aware **Steer**、画像、bounded で内容が見える `.txt` import、camera preview、
+  retake、対応 mobile の front/rear 切替、system-camera fallback。server が受理した operator
+  queue が Auto Nudge より先です📸
+- **Auto Nudge：** 初期状態 off、exact thread、completion event だけで動く standing order。
+  編集できる text、**Steady Progress** と **Hardcore Fanout** の開始 prompt、thread ごとの cap、
+  minimize、foreground または opt-in background、completed-turn の durable dedupe、通常 history
+  に残る message、thread Stop、既知 thread 向け emergency barrier を持ちます。timer、
+  countdown、elapsed-time cap、periodic cadence は nudge authority になりません。時計に
+  シャンパン飲ませる実装は撤去済み、でも実 request の請求は本物です⚠️
+- **Idle Thread Guard：** Auto Nudge と別の、初期状態 off の exact-thread silence safeguard。
+  すでに running の turn だけを対象に、1〜720 whole hours、初期値2時間。projected activity で
+  deadline を resetし、一つの idle episode につき可視 status request は最大一回。新しい
+  activity まで fail closed で、Auto Nudge authority は作りません。無音の長考中に呼び鈴を
+  押すかもしれないので、長め設定が美人です🔔
+- **Atmosphere effect：** pointer-transparent な snow、rain、Matrix。Roman/Japanese/2ch/
+  live-work vocabulary、fixed/rainbow/per-stream rainbow/music-reactive color、独立 shimmer
+  speed、density `10` まで、Flat、Forward、Reverse、Warp、Walk Forward、Walk Reverse。
+  夜景は盛れるだけ盛る、ただし pointer は奪わない✨
+- **Matrix depth と performance：** Walk は full-viewport random spawn、bounded travel/fade、
+  1〜144 px endpoint、collision-aware spacing、横につぶれない readable filename、
+  center-outward wind、depth-scaled glyph route、高密度 640-stream pool。対応時は同期した
+  WebGL2 instanced glyph atlas が true GPU glyph rasterization を担当し、未対応・context loss・
+  frame failure は Canvas2D fallback。snow、rain、verified connector は Canvas2D 所有です。
+  GPU に働いてもらって、あたしは座る。役割分担〜💅
+- **Verified activity：** provider が観測した network、database、build、agent delegation
+  event だけを、bounded な Matrix 色 route、packet、pulse、trail、安全な filename で表示。
+  prompt、command、SQL、secret、架空 traffic は除外。噂話を telemetry にしない店です🧾
+- **Atmosphere Console：** transparent、move、resize 可能。最初は zero-token deterministic
+  parser、必要時だけ狭い LM Studio/Codex/Claude structured fallback を使い、lightweight model
+  を優先。小さい safe command vocabulary だけ presentation setting を変更できます。
+  酔った自由詩を root command に変換する機能はないから安心して😂
+- **Ambient image と media：** persistent image/GIF または bounded image directory を、
+  manual/timer cycle、floating/custom/Theater geometry、見える move/resize handle で表示。
+  YouTube/Spotify embed、direct local media、desktop VLC queue、Cinema、adaptive glow、
+  Spectrum、395 bundled MilkDrop/Butterchurn preset も利用可能。店内演出だけ急にフェス級🎬
+- **YouTube queue：** Japanese、EDM、K-pop の one-click example を同梱。local `.txt` import は
+  fresh で未選択の session を EDM で初期化しますが、playback は自動開始しません。local
+  `.txt` import は同名 browser list を replace、別名なら追加。unavailable/non-embeddable
+  item は bounded pass 内で skip。一曲入店できなくても全員帰らせません🎧
+- **Mobile presentation：** composer 横の touch-sized **Mobile optimized / Desktop** が、
+  wide renderer でも既存 compact layout を選べます。Mobile は保存済み Matrix appearance を
+  上書きせず Matrix を enable。Desktop に戻す時は layout override だけ外します。衣装だけ
+  戻して照明は消さない、アフター仕様📱👗
+- **世界時計と weather：** transparent、move/resize/collapse 可能な1〜6都市 clock。
+  rainbow shimmer、amber nixie、analog、old-school LED。weather は別の default-off、
+  renderer-local Open-Meteo consent で、settings profile と他 client から除外。別席の
+  profile load で勝手に傘を配りません🕰️🌦️
+- **Project Resources：** transparent move/resize overlay が measured host CPU、RAM、
+  network、project disk、stable per-adapter GPU/VRAM、hardware temperature を graph 表示。
+  diagnostics は sensor provider 不在と、provider はあるが usable temperature sensor がない
+  状態を区別。**Hide unavailable graphs** は blank chart だけでなく unavailable sensor card
+  全体を消します。体温は推測しない、空席は片づける、はい完璧📈
+- **Observatory：** Workflow は accessible list を保ち、optional provider-parent graph を追加。
+  Workspace は read-only の bounded project tree、text、SQLite、verified file focus、
+  capped change、最大八 pane。見た内容を勝手に edit したり model context に入れません。
+  見る専のお客様、指名料なし👀
+- **Supervised browser：** temporary sandboxed desktop browser、native per-action approval、
+  exact origin/thread/provider に縛る Codex/Claude grant。sensitive field は prompt と routine
+  log から除外。入口の身分確認は酔ってても厳しいです🔐
+- **Profile と privacy：** 最大32 local named presentation profile。allowlisted field policy、
+  confirmed sequential write、partial failure rollback、overlap lock。credential、provider
+  authority、Auto Nudge、live asset、weather consent は除外。Meeting Privacy は選択 work を
+  presentation surface から隠すだけで、stop や access control とは主張しません。ドレスと
+  金庫の鍵を同じバッグに入れない、大人〜👜
+- **Usage と completion：** provider-reported usage/paid state、advisory Model Pacing、
+  別々の cache/compaction counter、Ultra Caching handoff、privacy-safe completion sound、
+  固定の英日 speech。架空 billing estimate は作りません。伝票マジック禁止💸
+- **Connection と desktop workflow：** LAN Web UI と saved direct connection は、選択した
+  reachable server ごとに project/thread/provider/subscription を scope。thread move、
+  recycle/restore/permanent delete、external editor/path open、source/package update check。
+  firewall rule、certificate、VPN、tunnel は Club Code が自動作成しません。戸締まりは
+  operator 担当です📱🔐
+- **Secure coworking foundation — partial：** central project authorization と、durable、
+  project-scoped、idempotent、hash-chained admitted-event journal は実装済み。完全版に必要な
+  remote relay、shared operator room/chat、transcript merge、cross-network file sync、
+  multi-agent coordination はまだ production capability ではありません。相席予約帳はある、
+  128人宴会はまだ受付前です🤝
+- **RGB synchronization foundation — partial：** default-off、provider-neutral、bounded、
+  rate-limited RGB-frame boundary は存在。ただし production OpenRGB adapter、direct
+  HID/SMBus、device-control UI、keyboard/RAM/case lighting の同期保証はありません。
+  看板だけ虹色で「全館連動です」は言わない、正直営業🌈
 
-ターミナルいらない。
-でかいダッシュボードいらない。
-ボタンだらけの謎コックピットもいらない。
+Auto Nudge と Idle Thread Guard の費用、LM Studio の LAN security、mobile camera の HTTPS、
+YouTube embed の制限、GPU ごとの個別表示、weather consent、temperature sensor の条件、
+保存範囲は [日本語ガイド](./docs/club-code-current-build-guide.ja.md) にさらに詳しく書いて
+あります。「たぶん平気」は乾杯の回数だけにして、仕様と請求はちゃんと確認しよ🥂
 
-コード見たいなら VS Code ひらこ。
-コンソール使いたいなら、本物のコンソール使お。
+### Fork の理由と product shape
 
-Cafe Code は、チャットする。
-作業を見る。
-邪魔しない。
-それだけ。えらい。
+小さく、速く、予測できる app を保つための fork です。bug、performance、reliability、
+security の修正は歓迎。feature request は「Club Code を小さく、静かに、速く、理解しやすく、
+低 CPU/低 memory にし、failure をうるさくしないか」で判断します。pretend editor、
+pretend terminal、release dashboard、project-management suite、button museum に変える機能は
+対象外。三軒目で menu を百科事典にするタイプ、あたしちょっと苦手〜📚🍸
+
+互換性を壊す場所では `@cafecode/*`、`cafe-code`、`CAFE_CODE_*`、`.cafe-code`、protocol、
+data identifier を維持します。その上で上記の current-build behavior を追加し、coding-agent
+chat 中心の product shape を保ちます。complete comparison はこの README と current-source
+guide が担当し、未実装の予定を実装済み feature として数えません。
+
+### 任意サービスの設定
+
+YouTube のアプリ内公開検索を使う server は、起動前にこれ。API key は browser に渡しません。
+
+```bash
+CAFE_CODE_YOUTUBE_PUBLIC_DISCOVERY_ENABLED=true
+CAFE_CODE_YOUTUBE_API_KEY=your_server_only_key
+```
+
+自分の YouTube playlist を見る desktop-only の接続は、これも local backend の起動前に設定。
+
+```bash
+CAFE_CODE_YOUTUBE_ACCOUNT_CONNECTION_ENABLED=true
+CAFE_CODE_YOUTUBE_OAUTH_DESKTOP_CLIENT_ID=your-desktop-client.apps.googleusercontent.com
+```
+
+YouTube Data API と consent screen を設定して、Desktop OAuth client ID を使ってね。callback は
+`http://127.0.0.1:<Club Code backend port>`、余計な path はなし。grant は owner session の
+memory だけで、refresh token は保存しません。remote Web UI にもこの接続は出しません。
+
+LM Studio は OpenAI-compatible API server を起動して chat model を load し、
+**Settings > Providers > LM Studio Local** を使います。default は
+`http://127.0.0.1:1234/v1`。信頼できる LAN なら literal private IP または HTTPS endpoint。
+今の Codex route は bearer token を渡せないので、LM Studio の **Require Authentication** が
+on だと接続できません。unauthenticated endpoint を public internet に出すのは禁止。
+伝票より先に firewall を確認、これ大人の順番です🔒
+
+VLC lane には VLC、native completion speech には対応 OS voice の install が必要です。
 
 ### ソースから動かす
 
-まだ DMG とか、インストーラーとか、アップデーターとかはないよ。
-npm のパッケージもあるけど、今はそれを信じすぎないでね。
-Cafe Code がもう少し落ち着くまでは、npm はたぶん少し古くなる。
+この fork で案内する install path は source checkout。build できることと、署名・notarize
+済みの publisher-authenticated artifact は同じ意味ではありません。packaged build は
+provenance を確認してから使ってね。compatibility 名の npm package は repository より遅れる
+場合があり、fresh build の案内ではありません。
 
-Node.js 24.13.1 と Corepack を先に入れてね。Yarn のバージョンは
-リポジトリ側で固定してあるよ。
+Node.js 24.13.1 と Corepack を先に入れます。Yarn は repository 側で固定済み。
 
 ```bash
-git clone https://github.com/cafeai/cafe-code.git
-cd cafe-code
+git clone https://github.com/John-Ryan21337/club-code.git
+cd club-code
 corepack enable
-yarn install --immutable
-yarn build:desktop
-yarn workspace @cafecode/desktop start
+corepack yarn install --immutable
+corepack yarn build:desktop
+corepack yarn workspace @cafecode/desktop start
 ```
 
-デバッグしたいならこれ。
+debug mode:
 
 ```bash
-yarn workspace @cafecode/desktop start --cafe-debug
+corepack yarn workspace @cafecode/desktop start --cafe-debug
 ```
 
-LAN の別デバイスから Cafe Code の Web UI を開きたいなら、先に Cafe Code
-側でネットワーク/LAN アクセスを有効にして、ファイアウォールでこのポートを開ける。
+LAN の別 device から Web UI を開くなら、Club Code で LAN access を enable にして、
+firewall で表示された port を許可します。packaged default:
 
 - HTTPS/WSS Web UI: `3775/tcp`
-- HTTP/WS のフォールバックと証明書案内ページ: `3773/tcp`
+- HTTP/WS fallback と certificate bootstrap: `3773/tcp`
 
-`ufw` ならこれ。
-
-```bash
-sudo ufw allow 3775/tcp comment 'Cafe Code HTTPS'
-sudo ufw allow 3773/tcp comment 'Cafe Code HTTP'
-```
-
-`yarn dev:desktop` の開発中は、デフォルトではこっち。
+`ufw`:
 
 ```bash
-sudo ufw allow 13775/tcp comment 'Cafe Code dev HTTPS'
-sudo ufw allow 13773/tcp comment 'Cafe Code dev backend'
-sudo ufw allow 5733/tcp comment 'Cafe Code dev Vite'
+sudo ufw allow 3775/tcp comment 'Club Code HTTPS'
+sudo ufw allow 3773/tcp comment 'Club Code HTTP'
 ```
 
-Cafe Code が別のポートを表示しているときや、`CAFE_CODE_PORT`、
-`CAFE_CODE_HTTPS_PORT`、`CAFE_CODE_DEV_INSTANCE`、`CAFE_CODE_PORT_OFFSET`
-を使っているときは、その表示されたポートを開けてね。
+`corepack yarn dev:desktop` の default:
 
-だいたい macOS で見てる。Windows も動いてそう。
-Linux はまだあまり見れてないから、ちょっと調整がいるかも。
-でも今の Cafe Code は、けっこういいところまで来てる。
+```bash
+sudo ufw allow 13775/tcp comment 'Club Code dev HTTPS'
+sudo ufw allow 13773/tcp comment 'Club Code dev backend'
+sudo ufw allow 5733/tcp comment 'Club Code dev Vite'
+```
 
-Codex とか Claude に丸投げするなら、これを投げてもいいよ。
+`CAFE_CODE_PORT`、`CAFE_CODE_HTTPS_PORT`、`CAFE_CODE_DEV_INSTANCE`、
+`CAFE_CODE_PORT_OFFSET` を使う場合は、Club Code が表示した port を許可してね。
+
+### 保存した remote server
+
+Connections settings は、pairing URL または host と pairing code を使い、到達可能な Cafe
+Code/Club Code server への direct connection を保存できます。project、thread、provider、
+live subscription は選択した server ごとに分離されます。
+
+Club Code は SSH/Tailscale tunnel を作成しません。network、certificate、firewall、
+reverse proxy を別途設定してから pairing details を使用してください。desktop credential は
+Electron safe storage で暗号化し、browser credential は現在の browser session だけ保持。
+「接続ボタン押したら世界中どこでも安全」は魔法すぎるので、そこは各自で戸締まりね🔐
+
+Codex または Claude に source install を頼むなら、これを渡せます。
 
 ```text
-Cafe Code をソースから入れてください。https://github.com/cafeai/cafe-code.git を clone して、Node.js 24.13.1 と Corepack を入れ、corepack enable、yarn install --immutable、yarn build:desktop、yarn workspace @cafecode/desktop start まで実行してください。Codex を使うなら codex login、Claude を使うなら claude auth login も確認してください。
+Club Code をソースから入れてください。https://github.com/John-Ryan21337/club-code.git を clone して、Node.js 24.13.1 と Corepack を入れ、corepack enable、corepack yarn install --immutable、corepack yarn build:desktop、corepack yarn workspace @cafecode/desktop start まで実行してください。Codex を使うなら codex login、Claude を使うなら claude auth login も確認してください。
 ```
 
-npm 版は残しておくけど、今は古いかもしれない。
+compatibility npm path:
 
 ```bash
 npx @cafeai/cafe-code
@@ -348,20 +698,112 @@ npm install -g @cafeai/cafe-code
 cafe-code
 ```
 
-Codex を使うなら先に `codex login`。
-Claude を使うなら先に `claude auth login`。
-そこは自分でログインしておいてね。
+Codex は `codex login`、Claude は `claude auth login` が必要。OpenCode は upstream provider
+または existing server URL を設定。LM Studio Local は外部 server を先に起動し、Settings の
+専用 row で設定します。
+
+### Local development
+
+checkout から app を動かす基本 command:
 
 ```bash
-yarn fmt
-yarn lint
-yarn typecheck
-yarn test
+corepack yarn install --immutable
+corepack yarn start:desktop
 ```
+
+desktop package を直接起動:
+
+```bash
+corepack yarn workspace @cafecode/desktop start
+```
+
+debug mode:
+
+```bash
+corepack yarn start:desktop:debug
+```
+
+app は startup 時に localhost-only debug URL を表示します。development check:
+
+```bash
+corepack yarn fmt
+corepack yarn lint
+corepack yarn typecheck
+corepack yarn test
+```
+
+### Local Arch package
+
+Linux AppImage artifact から local pacman package を build:
+
+```bash
+corepack yarn install --immutable
+corepack yarn dist:arch:local
+sudo pacman -U release/arch/cafe-code-*.pkg.tar.zst
+```
+
+build と install を一回で実行:
+
+```bash
+corepack yarn dist:arch:local --install
+```
+
+この helper は current checkout から package を作るだけで、publish はしません。
+
+### AUR source package
+
+compatibility 名の `cafe-code` AUR directory は legacy upstream recipe です。
+`cafeai/cafe-code` version `0.0.51` を pin しており、この Club Code checkout ではありません。
+inspection/build:
+
+```bash
+corepack yarn dist:aur:cafe-code
+```
+
+output は `packaging/aur/cafe-code/`。そこに `PKGBUILD`、generated `.SRCINFO`、launcher、
+desktop entry、packaging license を保持します。
+
+その legacy upstream AUR listing を意図的に管理する場合だけ、metadata を stage:
+
+```bash
+git clone ssh://aur@aur.archlinux.org/cafe-code.git ../aur-cafe-code
+cp -a packaging/aur/cafe-code/. ../aur-cafe-code/
+cd ../aur-cafe-code
+makepkg --printsrcinfo > .SRCINFO
+git add .gitignore .SRCINFO LICENSE PKGBUILD cafe-code.desktop cafe-code.sh
+git commit -m "Initial cafe-code package"
+git push
+```
+
+Club Code package と扱う前に、upstream URL、source commit/tag、checksum、version、description、
+branding、generated `.SRCINFO`、installed AppImage、launcher を全部 audit してください。
+`pkgver` だけ替えるのは不可。酔ってても label の貼り替えだけで中身を変えた顔はしない〜🏷️
+
+### Debian package
+
+host architecture 用 Debian package:
+
+```bash
+corepack yarn install --immutable
+corepack yarn dist:desktop:deb
+```
+
+architecture を明示:
+
+```bash
+corepack yarn dist:desktop:deb:x64
+corepack yarn dist:desktop:deb:arm64
+```
+
+output は `release/`。graphical installer または
+`sudo apt install ./release/<file>.deb` で install します。
 
 ## License
 
-Cafe Code is AGPL-3.0-or-later.
+Club Code is AGPL-3.0-or-later.
 
 The fork keeps the upstream attribution story intact; see the license and notice
 files for details.
+
+Club Code の license は AGPL-3.0-or-later です。この fork は upstream attribution を維持します。
+詳細は license file と notice file を確認してください。
