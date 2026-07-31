@@ -14,10 +14,10 @@ describe("ProjectTelemetryGraph geometry", () => {
         height: 700,
       }),
     ).toEqual({
-      x: 640,
+      x: 432,
       y: PROJECT_TELEMETRY_PANEL_MARGIN,
-      width: 352,
-      height: 400,
+      width: 560,
+      height: 684,
     });
   });
 
@@ -66,10 +66,10 @@ describe("ProjectTelemetryGraph geometry", () => {
         { width: 800, height: 600 },
       ),
     ).toEqual({
-      x: 440,
+      x: 232,
       y: 8,
-      width: 352,
-      height: 400,
+      width: 560,
+      height: 584,
     });
   });
 });

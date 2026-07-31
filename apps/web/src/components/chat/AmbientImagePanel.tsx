@@ -18,6 +18,7 @@ import {
 
 import {
   clampAmbientMediaGeometry,
+  DEFAULT_AMBIENT_MEDIA_GEOMETRY,
   readAmbientMediaGeometry,
   readOrSeedAmbientMediaGeometry,
   writeAmbientMediaGeometry,
@@ -219,8 +220,8 @@ export function AmbientImagePanel({
   }, [cycle.length, cycleSeconds]);
   const [panelElement, setPanelElement] = useState<HTMLElement | null>(null);
   const pane = useParentSize(panelElement);
-  const [customGeometry, setCustomGeometry] = useState<NormalizedAmbientMediaGeometry | null>(() =>
-    readAmbientMediaGeometry("image"),
+  const [customGeometry, setCustomGeometry] = useState<NormalizedAmbientMediaGeometry | null>(
+    () => readAmbientMediaGeometry("image") ?? DEFAULT_AMBIENT_MEDIA_GEOMETRY.image,
   );
   const geometryRef = useRef(customGeometry);
   const interactionRef = useRef<PointerInteraction | null>(null);

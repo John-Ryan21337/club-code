@@ -24,6 +24,7 @@ import { cn } from "~/lib/utils";
 import { ambientAudioCaptureStore, useAmbientAudioCapture } from "../../ambientAudioCapture";
 import {
   clampAmbientMediaGeometry,
+  DEFAULT_AMBIENT_MEDIA_GEOMETRY,
   readAmbientMediaGeometry,
   readOrSeedAmbientMediaGeometry,
   writeAmbientMediaGeometry,
@@ -410,8 +411,8 @@ export function AmbientVideoWorkspace({
   const serverConfig = useServerConfig();
   const [rootElement, setRootElement] = useState<HTMLDivElement | null>(null);
   const [chatAnchor, setChatAnchor] = useState<HTMLElement | null>(null);
-  const [customGeometry, setCustomGeometry] = useState<NormalizedAmbientMediaGeometry | null>(() =>
-    readAmbientMediaGeometry("video"),
+  const [customGeometry, setCustomGeometry] = useState<NormalizedAmbientMediaGeometry | null>(
+    () => readAmbientMediaGeometry("video") ?? DEFAULT_AMBIENT_MEDIA_GEOMETRY.video,
   );
   const customGeometryRef = useRef(customGeometry);
   const pendingGeometryRef = useRef<NormalizedAmbientMediaGeometry | null>(null);
@@ -443,7 +444,7 @@ export function AmbientVideoWorkspace({
   useEffect(() => {
     // The workspace normally mounts before Settings. Wait for the
     // authoritative server snapshot so a persisted source always wins over
-    // the first-run Japanese example.
+    // the first-run EDM example.
     youtubeUrlQueueStore.initializeBundledDefault(
       serverConfig !== null && settings.ambientVideoSource === null,
     );

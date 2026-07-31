@@ -213,8 +213,8 @@ describe("YouTube URL queue and device-local list library", () => {
     expect(kpop.report).toMatchObject({ accepted: 8, invalid: 0 });
   });
 
-  it("loads Japanese music only for an untouched, allowed first-run session", () => {
-    expect(DEFAULT_YOUTUBE_URL_QUEUE_EXAMPLE_ID).toBe("japanese");
+  it("loads EDM only for an untouched, allowed first-run session", () => {
+    expect(DEFAULT_YOUTUBE_URL_QUEUE_EXAMPLE_ID).toBe("edm");
 
     const preservedSourceStore = createYouTubeUrlQueueStore();
     expect(preservedSourceStore.initializeBundledDefault(false)).toBe(false);
@@ -224,19 +224,19 @@ describe("YouTube URL queue and device-local list library", () => {
     expect(freshStore.initializeBundledDefault(true)).toBe(true);
     expect(freshStore.getSnapshot()).toMatchObject({
       active: true,
-      count: 71,
+      count: 30,
       index: 0,
-      currentSource: { kind: "video", id: JAPANESE_SOURCE_VIDEO_IDS[0] },
-      exampleId: "japanese",
+      currentSource: { kind: "video", id: EDM_SOURCE_VIDEO_IDS[0] },
+      exampleId: "edm",
     });
     expect(freshStore.initializeBundledDefault(true)).toBe(false);
 
     const userControlledStore = createYouTubeUrlQueueStore();
-    expect(userControlledStore.loadExample("edm")).toBe(true);
+    expect(userControlledStore.loadExample("japanese")).toBe(true);
     expect(userControlledStore.initializeBundledDefault(true)).toBe(false);
     expect(userControlledStore.getSnapshot()).toMatchObject({
-      count: 30,
-      exampleId: "edm",
+      count: 71,
+      exampleId: "japanese",
     });
     userControlledStore.clear();
     expect(userControlledStore.initializeBundledDefault(true)).toBe(false);

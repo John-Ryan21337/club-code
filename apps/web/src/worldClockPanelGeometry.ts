@@ -20,10 +20,10 @@ export const WORLD_CLOCK_PANEL_MIN_HEIGHT = 180;
 export const WORLD_CLOCK_PANEL_COLLAPSED_HEIGHT = 44;
 
 export const WORLD_CLOCK_PANEL_DEFAULT_GEOMETRY: WorldClockPanelGeometry = {
-  x: WORLD_CLOCK_PANEL_MARGIN,
-  y: 56,
-  width: 390,
-  height: 360,
+  x: 441,
+  y: 125,
+  width: 532,
+  height: 277,
   collapsed: false,
 };
 

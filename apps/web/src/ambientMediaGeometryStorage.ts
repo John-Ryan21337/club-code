@@ -34,6 +34,21 @@ export interface AmbientMediaGeometryDocument {
   };
 }
 
+export const DEFAULT_AMBIENT_MEDIA_GEOMETRY: Readonly<
+  Record<AmbientMediaSlot, NormalizedAmbientMediaGeometry>
+> = {
+  video: {
+    x: 0.6774646302793284,
+    y: 0.6255640799392868,
+    width: 0.3095883906824472,
+  },
+  image: {
+    x: 0.01849568434032059,
+    y: 0.5171621621621622,
+    width: 0.3104192355117139,
+  },
+};
+
 const AmbientMediaGeometryCandidateSchema = Schema.Struct({
   x: Schema.Number,
   y: Schema.Number,

@@ -296,7 +296,7 @@ describe("client settings", () => {
       ambientImageEnabled: true,
       ambientImageAsset: CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET,
       ambientImagePresentationMode: "floating",
-      ambientImageLayoutMode: "preset",
+      ambientImageLayoutMode: "custom",
       ambientImagePresetPlacement: "bottom-left",
       ambientImagePresetSize: "large",
       ambientImageGlowEnabled: true,

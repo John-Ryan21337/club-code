@@ -541,22 +541,22 @@ describe("ProjectTelemetryGraph", () => {
         name: "Selected project system telemetry",
       });
       await expect.element(panel).toBeVisible();
-      await vi.waitFor(() => expect(panel.element().style.left).toBe("540px"));
+      await vi.waitFor(() => expect(panel.element().style.left).toBe("332px"));
 
       const move = page.getByRole("button", { name: "Move project resource graphs" });
       move.element().focus();
       await userEvent.keyboard("{ArrowLeft}{ArrowDown}");
       await vi.waitFor(() => {
-        expect(panel.element().style.left).toBe("532px");
-        expect(panel.element().style.top).toBe("16px");
+        expect(panel.element().style.left).toBe("324px");
+        expect(panel.element().style.top).toBe("8px");
       });
 
       const resize = page.getByRole("button", { name: "Resize project resource graphs" });
       resize.element().focus();
       await userEvent.keyboard("{ArrowRight}{ArrowDown}");
       await vi.waitFor(() => {
-        expect(panel.element().style.width).toBe("360px");
-        expect(panel.element().style.height).toBe("408px");
+        expect(panel.element().style.width).toBe("568px");
+        expect(panel.element().style.height).toBe("504px");
       });
 
       const moveElement = move.element();
@@ -586,11 +586,11 @@ describe("ProjectTelemetryGraph", () => {
         window.localStorage.getItem(PROJECT_TELEMETRY_PANEL_STORAGE_KEY) ?? "null",
       ) as { x: number; y: number; width: number; height: number } | null;
       expect(persisted).toMatchObject({
-        width: 360,
-        height: 408,
+        width: 568,
+        height: 504,
       });
-      expect(persisted?.x).toBeLessThan(532);
-      expect(persisted?.y).toBeGreaterThan(16);
+      expect(persisted?.x).toBeLessThan(324);
+      expect(persisted?.y).toBe(8);
 
       await mounted.unmount();
       const restored = await render(renderPanel(420, 300));
@@ -609,7 +609,7 @@ describe("ProjectTelemetryGraph", () => {
           expect(panelRect.right).toBeLessThanOrEqual(anchorRect.right);
           expect(panelRect.bottom).toBeLessThanOrEqual(anchorRect.bottom);
         });
-        expect(restoredPanel.element().style.width).toBe("360px");
+        expect(restoredPanel.element().style.width).toBe("404px");
         expect(restoredPanel.element().style.height).toBe("284px");
       } finally {
         await restored.unmount();

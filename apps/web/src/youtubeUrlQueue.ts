@@ -13,7 +13,7 @@ export const YOUTUBE_URL_QUEUE_MAX_ITEMS = 200;
 export const YOUTUBE_URL_QUEUE_MAX_URL_LENGTH = 2_048;
 export const YOUTUBE_URL_QUEUE_MAX_SAVED_LISTS = 32;
 export const YOUTUBE_URL_QUEUE_LIBRARY_STORAGE_KEY = "club-code:youtube-url-queue-library:v1";
-export const DEFAULT_YOUTUBE_URL_QUEUE_EXAMPLE_ID = "japanese";
+export const DEFAULT_YOUTUBE_URL_QUEUE_EXAMPLE_ID = "edm";
 
 export type YouTubeUrlQueueExampleId = "japanese" | "edm" | "kpop";
 

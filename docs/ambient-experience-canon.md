@@ -744,7 +744,7 @@ Three exact public example files are committed and selectable in Settings:
 
 These source-line totals and accepted queue totals are deliberately distinct.
 For an untouched session whose persisted ambient-video source is still unset,
-Club Code initializes the session queue from the Japanese example.
+Club Code initializes the session queue from the EDM example.
 For the branded fresh profile, the enabled video surface activates that queue
 and requests autoplay of its first accepted item. Initialization does not set a
 persisted source or write the parsed queue into Client Settings, and it does not

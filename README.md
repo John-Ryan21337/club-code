@@ -28,6 +28,50 @@ Club Code は現在テスト中のアルファ版ソフトウェアです。信�
 > or skills, and active monitoring—including the phone Web UI. Run it unattended
 > overnight only when you knowingly accept the cost risk.
 
+> [!CAUTION]
+> **Idle Thread Guard can also spend real money.** It is a separate, default-off
+> feature that may send one visible status request after an active turn has
+> produced no projected transcript, tool, turn, or session activity for the
+> configured interval. The minimum is one hour, the default is two hours, and
+> activity resets the deadline. A provider may still be doing expensive,
+> legitimate work while appearing silent. Use a long interval, monitor the
+> thread, and disable the Guard when it is not needed.
+
+> [!WARNING]
+> **NO GUARANTEE OF COST CONTROL OR CORRECT OPERATION.** Auto Nudge and Idle
+> Thread Guard are experimental alpha/testing features. Their gates, counters,
+> activity detection, caps, and stop controls reduce risk but are not perfect
+> and are not guaranteed to prevent duplicate, late, unwanted, or paid provider
+> requests. Club Code and its maintainers provide no warranty, reimbursement,
+> indemnity, or guarantee concerning provider charges, data loss, interrupted
+> work, or results. You are solely responsible for configuration, supervision,
+> provider bills, backups, and deciding whether to enable these features.
+
+> [!CAUTION]
+> **Auto Nudge は短時間で実費を発生させる可能性があります。** 自動 follow-up は、
+> provider の token、credit、quota、または有料利用枠を実際に消費します。利用料金は
+> 利用者が負担します。Club Code および保守担当者は、料金の補償、返金、または負担を
+> 行いません。小さい round cap、対象 thread に限定した明確な指示、および継続的な監視を
+> 使用してください。費用リスクを理解して受け入れる場合を除き、無人または夜間で
+> 実行しないでください。
+
+> [!CAUTION]
+> **Idle Thread Guard も実費を発生させる可能性があります。** これは Auto Nudge とは
+> 別の、初期状態で無効な機能です。実行中 turn について、設定時間のあいだ transcript、
+> tool、turn、session の activity が投影されない場合に、可視の status request を一回
+> 送信することがあります。最小値は1時間、初期値は2時間で、新しい activity があれば
+> deadline はリセットされます。表示上は無音でも provider が正当な長時間処理を継続して
+> いる可能性があります。長い時間を設定し、thread を監視し、不要な場合は無効にしてください。
+
+> [!WARNING]
+> **費用制御および正常動作は保証されません。** Auto Nudge と Idle Thread Guard は
+> 実験中の alpha/testing 機能であり、完全ではありません。gate、counter、activity 検出、
+> cap、stop control は危険を軽減しますが、重複、遅延、意図しない、または有料の provider
+> request を防止する保証はありません。Club Code および保守担当者は、provider 料金、
+> data loss、作業中断、結果について、保証、補償、返金、免責補償を提供しません。
+> 設定、監視、provider の請求、backup、および機能を有効にする判断は、すべて利用者の
+> 責任です。この警告には演出的または比喩的な表現を使用していません。
+
 Current-build end-user documentation:
 
 - [English guide](./docs/club-code-current-build-guide.md)
@@ -53,46 +97,115 @@ is already happening; they do not become another agent or silently edit files.
   <img src="./docs/images/cafe-code-character.png" alt="Club Code character" width="360" />
 </p>
 
-## Current Club Code Build Overview
+## Complete Current-Source Differences From Cafe Code
 
 The two current-build guides above are the authoritative current-source
-inventory of differences from Cafe Code. They do not by themselves prove that
-an installer or pull request has been published. In short, the current source
-implements:
+inventory of differences from Cafe Code. They do not by themselves prove that a
+particular installer or pull request has been published. This README mirrors
+that inventory at feature level:
 
-- Codex, Claude, and OpenCode, plus a distinct **LM Studio Local** provider for
-  loopback or trusted private-LAN OpenAI-compatible endpoints. OpenCode and LM
-  Studio are separate providers.
-- Exact-thread drafts and FIFO follow-up queues, provider-aware **Steer**, image
-  and bounded `.txt` attachments, and camera capture with mobile front/rear
-  selection where the browser permits it.
-- Completion-driven, exact-thread **Auto Nudge** with editable per-thread text,
-  per-thread caps, minimized controls, foreground or opt-in background
-  continuation, priority for server-accepted operator FIFO work, thread stop,
-  and a host/browser emergency barrier for known connected threads. Wall-clock
-  idleness alone never authorizes a nudge.
-- Optional full-window snow, rain, and Matrix effects; Flat, Forward, Reverse,
-  Warp, Walk Forward, and Walk Reverse depth modes; whole-pixel Walk font
-  endpoints; perspective-scaled activity lines; shimmer; music-reactive colors;
-  and locally saved presentation profiles.
-- A touch-sized **Mobile optimized / Desktop** presentation toggle beside the
-  composer. The renderer-local Mobile choice can force the compact layout on a
-  wide screen, enables Matrix without resetting its saved appearance, and
-  leaves Matrix on when the user returns to Desktop presentation.
-- An optional transparent multi-city world clock with rainbow shimmer, amber
-  nixie, analog, and old-school LED styles. Weather is a separate
-  renderer-local opt-in with bounded direct Open-Meteo requests and an explicit
-  privacy/attribution notice.
-- YouTube and Spotify embeds, three bundled one-click YouTube lists, local list
-  import/replace, direct media, desktop VLC playback, image/GIF ambience, Cinema
-  and Theater layouts, adaptive glow, and Spectrum/MilkDrop visualization.
-- A transparent, movable, resizable Project Resources overlay that reserves no
-  chat-timeline space; evidence-based Matrix activity routes; Workflow and
-  read-only Workspace observatories; a supervised desktop browser;
-  provider-reported usage; Model Pacing; and privacy-safe completion alerts.
-- A LAN-capable Web UI and saved connections to reachable Club Code/Cafe Code
-  servers. Club Code does not create firewall rules, certificates, VPNs, or
-  tunnels for you.
+- **Branding and compatibility:** Club Code is the visible product identity,
+  while compatibility-sensitive `cafe-code`, `@cafecode/*`, `CAFE_CODE_*`,
+  protocol, and data-directory identifiers remain. The product stays centered
+  on agent chat rather than adding an editor or terminal drawer.
+- **Provider runtimes:** Codex, Claude, and OpenCode remain available. On
+  Windows, Codex and Claude may use either the operator's system CLI/path or a
+  Club Code-managed Node/provider installation. The managed choice isolates the
+  executable location, simplifies first-install/update/login discovery, and
+  avoids depending on a mutable global `PATH`; it does not include provider
+  credentials or free usage, and provider updates still require supply-chain
+  trust. System CLI remains the portable, operator-controlled default.
+- **LM Studio Local:** A separate provider creates a normal Codex OSS/LM Studio
+  instance for loopback or a trusted private LAN. It is not OpenCode and is not
+  the narrow Atmosphere Console model fallback.
+- **Prompt workflow:** Exact-thread draft recovery, visible durable FIFO
+  follow-ups, provider-aware **Steer**, image attachments, bounded visible
+  `.txt` import, and camera capture with preview, retake, mobile front/rear
+  selection, and system-camera fallback where the browser permits it.
+- **Auto Nudge:** Default-off, exact-thread, completion-event-driven standing
+  orders with editable text, **Steady Progress** and **Hardcore Fanout**
+  starting prompts, per-thread caps, minimized controls, foreground or opt-in
+  background continuation, durable completed-turn dedupe, normal-history
+  messages, per-thread Stop, and a known-thread emergency barrier. A timer,
+  countdown, elapsed-time cap, or periodic cadence cannot authorize a nudge.
+- **Idle Thread Guard:** A separate, default-off, exact-thread silence
+  safeguard for an already-running turn. It accepts 1–720 whole hours, defaults
+  to two hours, resets on projected activity, sends at most one visible status
+  request per idle episode, and fails closed until newer activity re-arms it.
+  It never grants Auto Nudge authority.
+- **Atmosphere effects:** Optional pointer-transparent snow, rain, and Matrix
+  layers with Roman/Japanese/2ch/live-work vocabulary, fixed/rainbow/per-stream
+  rainbow/music-reactive colors, independent shimmer speed, density through
+  `10`, and Flat, Forward, Reverse, Warp, Walk Forward, and Walk Reverse modes.
+- **Matrix depth and performance:** Walk modes use full-viewport randomized
+  spawn, bounded travel/fade, adjustable 1–144 px endpoints, collision-aware
+  spacing, readable uncompressed filenames, center-outward wind, depth-scaled
+  glyph routes, and a higher-density 640-stream pool. A synchronized WebGL2
+  instanced glyph atlas provides true GPU glyph rasterization when supported;
+  Canvas2D remains the automatic fallback and owns snow, rain, and verified
+  activity connectors.
+- **Verified activity:** Provider-observed network, database, build, and agent
+  delegation events may draw bounded Matrix-colored routes, packets, pulses,
+  trails, and safe filenames. Prompt text, commands, SQL, secrets, and invented
+  activity are excluded.
+- **Atmosphere Console:** A transparent, movable, resizable control surface uses
+  a zero-token deterministic parser first, then may use a narrow LM Studio,
+  Codex, or Claude structured fallback with lightweight models prioritized.
+  Only a small safe command vocabulary can change presentation settings.
+- **Ambient images and media:** A persistent image/GIF or bounded image
+  directory can be cycled manually or on a timer in floating, custom, or
+  Theater geometry with visible move/resize handles. YouTube and Spotify
+  embeds, direct local media, desktop VLC queues, Cinema layouts, adaptive glow,
+  Spectrum, and 395 bundled MilkDrop/Butterchurn presets are also available.
+- **YouTube queues:** Japanese, EDM, and K-pop one-click examples are bundled.
+  EDM initializes a fresh, otherwise unchosen session without starting
+  playback. Local `.txt` import can replace the same-named browser list or add a
+  new list; unavailable/non-embeddable entries are skipped within a bounded
+  pass.
+- **Mobile presentation:** A touch-sized **Mobile optimized / Desktop** control
+  beside the composer can force existing compact layout branches on a wide
+  renderer. Mobile enables Matrix without replacing its saved appearance;
+  returning to Desktop removes only the layout override.
+- **World clock and weather:** A transparent, movable, resizable, collapsible
+  one-to-six-city clock provides rainbow shimmer, amber nixie, analog, and
+  old-school LED styles. Weather is a separate default-off renderer-local
+  Open-Meteo consent, excluded from settings profiles and other clients.
+- **Project Resources:** A transparent movable/resizable overlay graphs measured
+  host CPU, RAM, network, project disk, stable per-adapter GPU/VRAM, and
+  hardware temperatures. Diagnostics distinguish missing sensor providers from
+  providers with no usable temperature sensors. **Hide unavailable graphs**
+  removes the entire unavailable sensor card instead of leaving a blank chart.
+- **Observatories:** Workflow keeps its accessible list and adds an optional
+  provider-parent graph. Workspace Observatory offers read-only bounded project
+  tree, text, SQLite, verified file focus, capped changes, and up to eight
+  panes; it does not silently edit or add viewed content to model context.
+- **Supervised browser:** A temporary sandboxed desktop browser supports native
+  per-action approval and explicit origin/thread/provider-bound Codex or Claude
+  grants. Sensitive fields stay out of prompts and routine logs.
+- **Profiles and privacy:** Up to 32 local named presentation profiles use an
+  allowlisted field policy, confirmed sequential writes, rollback on partial
+  failure, and overlap locking. Credentials, provider authority, Auto Nudge,
+  live assets, and weather consent are excluded. Meeting Privacy hides selected
+  work from presentation surfaces without claiming to stop or secure it.
+- **Usage and completion:** Provider-reported usage and paid state, advisory
+  Model Pacing, separate cache/compaction counters, Ultra Caching handoffs, and
+  privacy-safe completion sounds or fixed English/Japanese speech are exposed
+  without inventing billing estimates.
+- **Connections and desktop workflow:** The LAN Web UI and saved direct
+  connections scope projects, threads, providers, and subscriptions to the
+  selected reachable server. Thread movement, recycle/restore/permanent delete,
+  external editor/path opening, and separate source/package update checks are
+  included. Club Code does not create firewall rules, certificates, VPNs, or
+  tunnels.
+- **Secure coworking foundation — partial:** Central project authorization and
+  a durable, project-scoped, idempotent, hash-chained admitted-event journal are
+  implemented. The remote relay, shared operator room/chat, transcript merge,
+  cross-network file synchronization, and multi-agent coordination requested
+  for the complete coworking suite are not yet production capabilities.
+- **RGB synchronization foundation — partial:** A default-off, provider-neutral,
+  bounded and rate-limited RGB-frame boundary exists, but there is no production
+  OpenRGB adapter, direct HID/SMBus access, device-control UI, or claim that
+  keyboards, RAM, or case lighting currently synchronize.
 
 Details and boundaries matter—especially for Auto Nudge costs, LM Studio network
 security, camera secure-context requirements, YouTube embedding policy,
@@ -365,35 +478,123 @@ package installer or with `sudo apt install ./release/<file>.deb`.
 ## 日本語でも、もう一杯。え、まだ飲むのぉ？🍾
 
 current source の全機能と Cafe Code との差分は
-[日本語ガイド](./docs/club-code-current-build-guide.ja.md) が正本です。ここで同じ長話を
-もう一回やると、README が三軒目みたいに迷子になるので、今夜の伝票だけ置いとくね👇
+[日本語ガイド](./docs/club-code-current-build-guide.ja.md) が正本です。この README でも、
+英語欄と同じ feature-level の内容をぜんぶ並べます。はい伝票長い、でも「だいたい同じ」は
+請求と security では通らないから、もう一杯いきながら正確にね👇
 
-- provider は Codex、Claude、OpenCode、それから別枠の **LM Studio Local**。OpenCode と
-  LM Studio を同じ子扱いしない、名前を間違えると店でも Settings でも怒られます🤖
-- prompt は thread ごとの draft、FIFO queue、対応時の Steer、画像、`.txt`、camera。
-  server が受理した operator queue は Auto Nudge より先。別 device の未送信 draft は
-  server から見えないので、受理されるまでは全 renderer 共通の優先権になりません🙌
-- Auto Nudge は **exact thread の完了 event** でだけ動く。thread ごとに文面と cap を保存し、
-  minimize や opt-in background でも completion と queue を再確認する。時計だけでは送らない。
-  でも一通ごとに本物の provider 料金が動くので、上の警告は素面で読んでね⚠️💸
-- snow/rain/Matrix、Forward/Reverse/Warp/Walk、whole-pixel の Walk size、perspective line、
-  shimmer、music color、YouTube/Spotify/VLC、Cinema、visualizer、settings profile まで
-  current source に入ってる。照明は盛る、未実装の夢は盛らない✨
-- composer 横の **Mobile optimized / Desktop** は renderer-local。Mobile を明示的に選ぶと
-  Matrix も on にするけど見た目の保存値は壊さず、Desktop に戻しても Matrix は残るよ📱👗
-- 世界時計は 1〜6 都市、四つの style、move/resize/collapse。weather は default off の
-  renderer-local consent で profile から除外。別画面から勝手に API 営業開始しません🕰️🌦️
-- Project Resources は透明で move/resize/collapse。CPU/RAM/network/disk と、GPU 1 /
-  GPU 2 それぞれの utilization・VRAM・history、host が本当に出した temperature を表示。
-  sensor がなければ unavailable。
-  体温を占いで作る店ではありません📈
-- Workflow/Workspace は read-only、activity line は provider evidence の分だけ。LAN Web UI は
-  phone から監視できるけど、certificate、firewall、VPN は自動で生えない。戸締まり大事🔐📱
+- **Branding と compatibility：** 見える product 名は Club Code。ただし互換性に必要な
+  `cafe-code`、`@cafecode/*`、`CAFE_CODE_*`、protocol、data-directory 名は維持します。
+  editor や terminal drawer を足さず、agent chat 中心。看板は替えても常連さんのボトル名は
+  勝手に替えないの、えらい〜🍾
+- **Provider runtime：** Codex、Claude、OpenCode を利用可能。Windows の Codex/Claude は、
+  operator の system CLI/path または Club Code 管理の Node/provider install を選べます。
+  managed は executable の場所を分離し、first install・update・login の発見を揃え、変わりやすい
+  global `PATH` への依存を減らします。credential や無料利用枠は同梱せず、provider update の
+  supply-chain trust も必要。system CLI が portable で operator 管理の初期値です。無料ボトルは
+  入ってません、そこだけ急に現実〜🥃
+- **LM Studio Local：** loopback または信頼できる private LAN 用に、通常の Codex OSS /
+  LM Studio instance を別 provider として作成。OpenCode でも、Atmosphere Console の狭い
+  model fallback でもありません。三人を同じ源氏名で呼ばないでね🤖
+- **Prompt workflow：** exact-thread draft recovery、可視で durable な FIFO follow-up、
+  provider-aware **Steer**、画像、bounded で内容が見える `.txt` import、camera preview、
+  retake、対応 mobile の front/rear 切替、system-camera fallback。server が受理した operator
+  queue が Auto Nudge より先です📸
+- **Auto Nudge：** 初期状態 off、exact thread、completion event だけで動く standing order。
+  編集できる text、**Steady Progress** と **Hardcore Fanout** の開始 prompt、thread ごとの cap、
+  minimize、foreground または opt-in background、completed-turn の durable dedupe、通常 history
+  に残る message、thread Stop、既知 thread 向け emergency barrier を持ちます。timer、
+  countdown、elapsed-time cap、periodic cadence は nudge authority になりません。時計に
+  シャンパン飲ませる実装は撤去済み、でも実 request の請求は本物です⚠️
+- **Idle Thread Guard：** Auto Nudge と別の、初期状態 off の exact-thread silence safeguard。
+  すでに running の turn だけを対象に、1〜720 whole hours、初期値2時間。projected activity で
+  deadline を resetし、一つの idle episode につき可視 status request は最大一回。新しい
+  activity まで fail closed で、Auto Nudge authority は作りません。無音の長考中に呼び鈴を
+  押すかもしれないので、長め設定が美人です🔔
+- **Atmosphere effect：** pointer-transparent な snow、rain、Matrix。Roman/Japanese/2ch/
+  live-work vocabulary、fixed/rainbow/per-stream rainbow/music-reactive color、独立 shimmer
+  speed、density `10` まで、Flat、Forward、Reverse、Warp、Walk Forward、Walk Reverse。
+  夜景は盛れるだけ盛る、ただし pointer は奪わない✨
+- **Matrix depth と performance：** Walk は full-viewport random spawn、bounded travel/fade、
+  1〜144 px endpoint、collision-aware spacing、横につぶれない readable filename、
+  center-outward wind、depth-scaled glyph route、高密度 640-stream pool。対応時は同期した
+  WebGL2 instanced glyph atlas が true GPU glyph rasterization を担当し、未対応・context loss・
+  frame failure は Canvas2D fallback。snow、rain、verified connector は Canvas2D 所有です。
+  GPU に働いてもらって、あたしは座る。役割分担〜💅
+- **Verified activity：** provider が観測した network、database、build、agent delegation
+  event だけを、bounded な Matrix 色 route、packet、pulse、trail、安全な filename で表示。
+  prompt、command、SQL、secret、架空 traffic は除外。噂話を telemetry にしない店です🧾
+- **Atmosphere Console：** transparent、move、resize 可能。最初は zero-token deterministic
+  parser、必要時だけ狭い LM Studio/Codex/Claude structured fallback を使い、lightweight model
+  を優先。小さい safe command vocabulary だけ presentation setting を変更できます。
+  酔った自由詩を root command に変換する機能はないから安心して😂
+- **Ambient image と media：** persistent image/GIF または bounded image directory を、
+  manual/timer cycle、floating/custom/Theater geometry、見える move/resize handle で表示。
+  YouTube/Spotify embed、direct local media、desktop VLC queue、Cinema、adaptive glow、
+  Spectrum、395 bundled MilkDrop/Butterchurn preset も利用可能。店内演出だけ急にフェス級🎬
+- **YouTube queue：** Japanese、EDM、K-pop の one-click example を同梱。local `.txt` import は
+  fresh で未選択の session を EDM で初期化しますが、playback は自動開始しません。local
+  `.txt` import は同名 browser list を replace、別名なら追加。unavailable/non-embeddable
+  item は bounded pass 内で skip。一曲入店できなくても全員帰らせません🎧
+- **Mobile presentation：** composer 横の touch-sized **Mobile optimized / Desktop** が、
+  wide renderer でも既存 compact layout を選べます。Mobile は保存済み Matrix appearance を
+  上書きせず Matrix を enable。Desktop に戻す時は layout override だけ外します。衣装だけ
+  戻して照明は消さない、アフター仕様📱👗
+- **世界時計と weather：** transparent、move/resize/collapse 可能な1〜6都市 clock。
+  rainbow shimmer、amber nixie、analog、old-school LED。weather は別の default-off、
+  renderer-local Open-Meteo consent で、settings profile と他 client から除外。別席の
+  profile load で勝手に傘を配りません🕰️🌦️
+- **Project Resources：** transparent move/resize overlay が measured host CPU、RAM、
+  network、project disk、stable per-adapter GPU/VRAM、hardware temperature を graph 表示。
+  diagnostics は sensor provider 不在と、provider はあるが usable temperature sensor がない
+  状態を区別。**Hide unavailable graphs** は blank chart だけでなく unavailable sensor card
+  全体を消します。体温は推測しない、空席は片づける、はい完璧📈
+- **Observatory：** Workflow は accessible list を保ち、optional provider-parent graph を追加。
+  Workspace は read-only の bounded project tree、text、SQLite、verified file focus、
+  capped change、最大八 pane。見た内容を勝手に edit したり model context に入れません。
+  見る専のお客様、指名料なし👀
+- **Supervised browser：** temporary sandboxed desktop browser、native per-action approval、
+  exact origin/thread/provider に縛る Codex/Claude grant。sensitive field は prompt と routine
+  log から除外。入口の身分確認は酔ってても厳しいです🔐
+- **Profile と privacy：** 最大32 local named presentation profile。allowlisted field policy、
+  confirmed sequential write、partial failure rollback、overlap lock。credential、provider
+  authority、Auto Nudge、live asset、weather consent は除外。Meeting Privacy は選択 work を
+  presentation surface から隠すだけで、stop や access control とは主張しません。ドレスと
+  金庫の鍵を同じバッグに入れない、大人〜👜
+- **Usage と completion：** provider-reported usage/paid state、advisory Model Pacing、
+  別々の cache/compaction counter、Ultra Caching handoff、privacy-safe completion sound、
+  固定の英日 speech。架空 billing estimate は作りません。伝票マジック禁止💸
+- **Connection と desktop workflow：** LAN Web UI と saved direct connection は、選択した
+  reachable server ごとに project/thread/provider/subscription を scope。thread move、
+  recycle/restore/permanent delete、external editor/path open、source/package update check。
+  firewall rule、certificate、VPN、tunnel は Club Code が自動作成しません。戸締まりは
+  operator 担当です📱🔐
+- **Secure coworking foundation — partial：** central project authorization と、durable、
+  project-scoped、idempotent、hash-chained admitted-event journal は実装済み。完全版に必要な
+  remote relay、shared operator room/chat、transcript merge、cross-network file sync、
+  multi-agent coordination はまだ production capability ではありません。相席予約帳はある、
+  128人宴会はまだ受付前です🤝
+- **RGB synchronization foundation — partial：** default-off、provider-neutral、bounded、
+  rate-limited RGB-frame boundary は存在。ただし production OpenRGB adapter、direct
+  HID/SMBus、device-control UI、keyboard/RAM/case lighting の同期保証はありません。
+  看板だけ虹色で「全館連動です」は言わない、正直営業🌈
 
-Auto Nudge の費用、LM Studio の LAN security、mobile camera の HTTPS、YouTube embed の
-制限、GPU ごとの個別表示、weather consent、temperature sensor の条件、保存範囲は
-[日本語ガイド](./docs/club-code-current-build-guide.ja.md) に正確に書いてあります。
-「たぶん平気」は乾杯の回数だけにして、仕様と請求はちゃんと確認しよ🥂
+Auto Nudge と Idle Thread Guard の費用、LM Studio の LAN security、mobile camera の HTTPS、
+YouTube embed の制限、GPU ごとの個別表示、weather consent、temperature sensor の条件、
+保存範囲は [日本語ガイド](./docs/club-code-current-build-guide.ja.md) にさらに詳しく書いて
+あります。「たぶん平気」は乾杯の回数だけにして、仕様と請求はちゃんと確認しよ🥂
+
+### Fork の理由と product shape
+
+小さく、速く、予測できる app を保つための fork です。bug、performance、reliability、
+security の修正は歓迎。feature request は「Club Code を小さく、静かに、速く、理解しやすく、
+低 CPU/低 memory にし、failure をうるさくしないか」で判断します。pretend editor、
+pretend terminal、release dashboard、project-management suite、button museum に変える機能は
+対象外。三軒目で menu を百科事典にするタイプ、あたしちょっと苦手〜📚🍸
+
+互換性を壊す場所では `@cafecode/*`、`cafe-code`、`CAFE_CODE_*`、`.cafe-code`、protocol、
+data identifier を維持します。その上で上記の current-build behavior を追加し、coding-agent
+chat 中心の product shape を保ちます。complete comparison はこの README と current-source
+guide が担当し、未実装の予定を実装済み feature として数えません。
 
 ### 任意サービスの設定
 
@@ -472,6 +673,17 @@ sudo ufw allow 5733/tcp comment 'Club Code dev Vite'
 `CAFE_CODE_PORT`、`CAFE_CODE_HTTPS_PORT`、`CAFE_CODE_DEV_INSTANCE`、
 `CAFE_CODE_PORT_OFFSET` を使う場合は、Club Code が表示した port を許可してね。
 
+### 保存した remote server
+
+Connections settings は、pairing URL または host と pairing code を使い、到達可能な Cafe
+Code/Club Code server への direct connection を保存できます。project、thread、provider、
+live subscription は選択した server ごとに分離されます。
+
+Club Code は SSH/Tailscale tunnel を作成しません。network、certificate、firewall、
+reverse proxy を別途設定してから pairing details を使用してください。desktop credential は
+Electron safe storage で暗号化し、browser credential は現在の browser session だけ保持。
+「接続ボタン押したら世界中どこでも安全」は魔法すぎるので、そこは各自で戸締まりね🔐
+
 Codex または Claude に source install を頼むなら、これを渡せます。
 
 ```text
@@ -490,7 +702,28 @@ Codex は `codex login`、Claude は `claude auth login` が必要。OpenCode �
 または existing server URL を設定。LM Studio Local は外部 server を先に起動し、Settings の
 専用 row で設定します。
 
-development check:
+### Local development
+
+checkout から app を動かす基本 command:
+
+```bash
+corepack yarn install --immutable
+corepack yarn start:desktop
+```
+
+desktop package を直接起動:
+
+```bash
+corepack yarn workspace @cafecode/desktop start
+```
+
+debug mode:
+
+```bash
+corepack yarn start:desktop:debug
+```
+
+app は startup 時に localhost-only debug URL を表示します。development check:
 
 ```bash
 corepack yarn fmt
@@ -499,9 +732,71 @@ corepack yarn typecheck
 corepack yarn test
 ```
 
-Arch/AUR/Debian package の command と現在の注意点は、この README の英語
-**Local Development** section が正本です。command は言語で変わらないから、酔って翻訳して
-別 option を生やさないのが安全〜🍸
+### Local Arch package
+
+Linux AppImage artifact から local pacman package を build:
+
+```bash
+corepack yarn install --immutable
+corepack yarn dist:arch:local
+sudo pacman -U release/arch/cafe-code-*.pkg.tar.zst
+```
+
+build と install を一回で実行:
+
+```bash
+corepack yarn dist:arch:local --install
+```
+
+この helper は current checkout から package を作るだけで、publish はしません。
+
+### AUR source package
+
+compatibility 名の `cafe-code` AUR directory は legacy upstream recipe です。
+`cafeai/cafe-code` version `0.0.51` を pin しており、この Club Code checkout ではありません。
+inspection/build:
+
+```bash
+corepack yarn dist:aur:cafe-code
+```
+
+output は `packaging/aur/cafe-code/`。そこに `PKGBUILD`、generated `.SRCINFO`、launcher、
+desktop entry、packaging license を保持します。
+
+その legacy upstream AUR listing を意図的に管理する場合だけ、metadata を stage:
+
+```bash
+git clone ssh://aur@aur.archlinux.org/cafe-code.git ../aur-cafe-code
+cp -a packaging/aur/cafe-code/. ../aur-cafe-code/
+cd ../aur-cafe-code
+makepkg --printsrcinfo > .SRCINFO
+git add .gitignore .SRCINFO LICENSE PKGBUILD cafe-code.desktop cafe-code.sh
+git commit -m "Initial cafe-code package"
+git push
+```
+
+Club Code package と扱う前に、upstream URL、source commit/tag、checksum、version、description、
+branding、generated `.SRCINFO`、installed AppImage、launcher を全部 audit してください。
+`pkgver` だけ替えるのは不可。酔ってても label の貼り替えだけで中身を変えた顔はしない〜🏷️
+
+### Debian package
+
+host architecture 用 Debian package:
+
+```bash
+corepack yarn install --immutable
+corepack yarn dist:desktop:deb
+```
+
+architecture を明示:
+
+```bash
+corepack yarn dist:desktop:deb:x64
+corepack yarn dist:desktop:deb:arm64
+```
+
+output は `release/`。graphical installer または
+`sudo apt install ./release/<file>.deb` で install します。
 
 ## License
 
@@ -509,3 +804,6 @@ Club Code is AGPL-3.0-or-later.
 
 The fork keeps the upstream attribution story intact; see the license and notice
 files for details.
+
+Club Code の license は AGPL-3.0-or-later です。この fork は upstream attribution を維持します。
+詳細は license file と notice file を確認してください。

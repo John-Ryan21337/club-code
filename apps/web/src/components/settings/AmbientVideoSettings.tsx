@@ -529,7 +529,7 @@ export function AmbientVideoSettings() {
 
       <SettingsRow
         title="Session URL queue"
-        description="Choose one of the included Japanese music, EDM, or K-pop lists, or add a named local .txt file containing one strict YouTube video URL per line. Re-uploading the same filename replaces that list; a new filename adds another one-click option. During playback, videos that YouTube reports as unavailable or not allowed to be embedded are skipped automatically. Japanese music populates a new, otherwise unchosen session by default without turning playback on. Blank/comment lines are ignored. Imported lists stay on this browser/device and are never uploaded, logged, prompted, or saved to server settings."
+        description="Choose one of the included Japanese music, EDM, or K-pop lists, or add a named local .txt file containing one strict YouTube video URL per line. Re-uploading the same filename replaces that list; a new filename adds another one-click option. During playback, videos that YouTube reports as unavailable or not allowed to be embedded are skipped automatically. EDM populates a new, otherwise unchosen session by default without turning playback on. Blank/comment lines are ignored. Imported lists stay on this browser/device and are never uploaded, logged, prompted, or saved to server settings."
         status={
           queueError ? (
             <span className="text-destructive">{queueError}</span>

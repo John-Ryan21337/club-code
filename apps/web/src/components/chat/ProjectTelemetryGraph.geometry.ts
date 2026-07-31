@@ -14,12 +14,10 @@ export const PROJECT_TELEMETRY_PANEL_MARGIN = 8;
 export const PROJECT_TELEMETRY_PANEL_MIN_WIDTH = 280;
 export const PROJECT_TELEMETRY_PANEL_MIN_HEIGHT = 220;
 export const PROJECT_TELEMETRY_PANEL_DEFAULT_GEOMETRY: ProjectTelemetryPanelGeometry = {
-  // A deliberately large finite x value makes a fresh panel start at the
-  // right edge after clamping without persisting a viewport-specific offset.
-  x: Number.MAX_SAFE_INTEGER,
-  y: PROJECT_TELEMETRY_PANEL_MARGIN,
-  width: 352,
-  height: 400,
+  x: 2631,
+  y: 12,
+  width: 560,
+  height: 803,
 };
 
 function clamp(value: number, minimum: number, maximum: number): number {

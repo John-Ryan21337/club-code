@@ -77,10 +77,10 @@ const DEFAULT_PREFERENCES: Preferences = {
   lmStudioEnabled: false,
   providerMode: "local",
   geometry: {
-    x: 321,
-    y: 280,
-    width: 622,
-    height: 477.5,
+    x: 448,
+    y: 428.5,
+    width: 530,
+    height: 398.5,
   },
 };
 

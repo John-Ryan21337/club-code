@@ -1172,7 +1172,7 @@ export const CLUB_CODE_FIRST_RUN_CLIENT_SETTINGS: ClientSettings = Schema.decode
   ambientImageEnabled: true,
   ambientImageAsset: CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET,
   ambientImagePresentationMode: "floating",
-  ambientImageLayoutMode: "preset",
+  ambientImageLayoutMode: "custom",
   ambientImagePresetPlacement: "bottom-left",
   ambientImagePresetSize: "large",
   ambientImageGlowEnabled: true,
