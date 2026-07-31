@@ -78,10 +78,10 @@ Current-build end-user documentation:
 - [日本語ガイド 🍾✨](./docs/club-code-current-build-guide.ja.md)
 
 _Heeey, darling. Come in, come in. Closer. I am not shouting; the room is just
-very far away. Club Code is the late-night fork of Cafe Code: chat goes in, work
-comes back, and nobody drags a fake IDE onto my dance floor. Snow in the window?
-Yes. A little movie in the corner? Yes. One more glass? Also yes. That one is
-probably unrelated._
+very far away. Club Code is the late-night fork of Cafe Code: chat goes in,
+agents get to work, and the operator gets a whole after-hours control room around
+them. Snow in the window? Yes. A little movie in the corner? Yes. One more glass?
+Also yes. That one is probably unrelated._
 
 This repository is **Club Code**, an after-hours fork of
 [Cafe Code](https://github.com/cafeai/cafe-code), which began as a fork of
@@ -89,9 +89,10 @@ This repository is **Club Code**, an after-hours fork of
 package, command, environment-variable, protocol, and data-directory names for
 compatibility. New sign outside; dependable regulars behind the bar.
 
-It stays chat-centered. There is no in-app terminal drawer and no editor
-pretending to be VS Code. The observatories are read-only windows into work that
-is already happening; they do not become another agent or silently edit files.
+The conversation remains the operational center while observatories, media,
+telemetry, automation, profiles, and collaboration expand what operators can see
+and control. Read-only surfaces stay read-only unless a capability explicitly
+declares, authorizes, and audits a mutation.
 
 <p align="center">
   <img src="./docs/images/cafe-code-character.png" alt="Club Code character" width="360" />
@@ -106,8 +107,9 @@ that inventory at feature level:
 
 - **Branding and compatibility:** Club Code is the visible product identity,
   while compatibility-sensitive `cafe-code`, `@cafecode/*`, `CAFE_CODE_*`,
-  protocol, and data-directory identifiers remain. The product stays centered
-  on agent chat rather than adding an editor or terminal drawer.
+  protocol, and data-directory identifiers remain. The product stays agent-first
+  while expanding operator-controlled visibility, presentation, automation, and
+  collaboration.
 - **Provider runtimes:** Codex, Claude, and OpenCode remain available. On
   Windows, Codex and Claude may use either the operator's system CLI/path or a
   Club Code-managed Node/provider installation. The managed choice isolates the
@@ -254,29 +256,53 @@ internet. See the current-build guide for the full endpoint and security rules.
 VLC playback requires VLC to be installed. Native completion speech requires
 compatible operating-system voices.
 
-## Why Fork?
+## Why Club Code?
 
-Because the app should stay small, fast, and predictable.
+Club Code turns a strong coding-agent core into an operator-owned environment
+for sustained work: expressive enough to feel personal, observable enough to
+understand, and connected enough to support collaboration across devices and,
+as secure coworking matures, across people. It should feel like a late-night
+control room where the operator can see what agents are doing, shape how the
+workspace looks and sounds, and keep authority over local files, credentials,
+provider spending, and context.
 
-Bug fixes are welcome. Performance fixes are welcome. Reliability fixes are
-welcome. Security fixes are extra welcome.
+This fork is not governed by tiny-window minimalism. Atmosphere and media,
+workflow and workspace observatories, profiles, telemetry, provider choice,
+supervised automation, mobile/LAN access, and secure coworking are part of the
+product direction. Feature breadth is welcome when each capability is optional,
+composable, reversible, truthfully labeled, and bounded in CPU, memory, network,
+storage, and token cost.
 
-Feature requests need to pass the tiny-window test: does this make Club Code
-smaller, calmer, faster, easier to understand, lower CPU, lower memory, or less
-annoying when something fails?
+New work should pass two tests: operator value and operator safety.
 
-If yes, maybe.
+- **Operator intent outranks automation.** Manual work, visible queues, approvals,
+  Stop controls, and explicit authority come first.
+- **Evidence outranks theater.** Report what providers, sensors, files, and
+  runtimes actually prove; show unavailable, partial, and planned states honestly.
+- **Power does not require surrender.** Credentials and private context stay
+  least-privilege; shared work stays sandboxed, attributable, recoverable, and
+  unable to erase another operator's local ownership.
+- **Personalization stays optional.** A rich workspace may be vivid, quiet,
+  transparent, musical, information-dense, or stripped back without forcing the
+  same presentation on every operator or device.
+- **Long-running work remains disciplined.** Performance, accessibility,
+  privacy, reliability, bounded resource use, and token-efficient context are
+  release requirements, not reasons to forbid ambitious features.
 
-If it turns Club Code into a pretend editor, a pretend terminal, a release
-dashboard, a project-management suite, or a museum of buttons, no.
+The Club Code test is therefore not “does this make the window smaller?” It is:
+does this make operators more capable, aware, expressive, or able to collaborate
+without hiding cost, state, risk, or authority? If yes—and it can be delivered
+with honest boundaries—it belongs in the conversation.
 
 ## Compatibility and Product Shape
 
 Club Code retains the upstream `@cafecode/*`, `cafe-code`, `CAFE_CODE_*`,
 `.cafe-code`, protocol, and data identifiers where changing them would break
-compatibility. It adds the current-build behavior documented above while
-preserving the focused coding-agent chat model. The complete comparison belongs
-in the current-source guides, not in a second drifting feature catalog here.
+compatibility. Those internal identifiers do not define the product vision.
+Club Code remains agent-first while extending beyond a chat window into
+operator-controlled observability, media, automation, profiles, telemetry, and
+secure collaboration. Documentation must distinguish implemented, partial, and
+planned capabilities instead of presenting intention as shipped behavior.
 
 ## Run From Source
 
@@ -410,8 +436,9 @@ current source の全機能と Cafe Code との差分は
 
 - **Branding と compatibility：** 見える product 名は Club Code。ただし互換性に必要な
   `cafe-code`、`@cafecode/*`、`CAFE_CODE_*`、protocol、data-directory 名は維持します。
-  editor や terminal drawer を足さず、agent chat 中心。看板は替えても常連さんのボトル名は
-  勝手に替えないの、えらい〜🍾
+  agent-first のまま、operator-controlled visibility、presentation、automation、
+  collaboration へ広げます。看板も floor も育てるけど、常連さんのボトル名は勝手に
+  替えないの、えらい〜🍾
 - **Provider runtime：** Codex、Claude、OpenCode を利用可能。Windows の Codex/Claude は、
   operator の system CLI/path または Club Code 管理の Node/provider install を選べます。
   managed は executable の場所を分離し、first install・update・login の発見を揃え、変わりやすい
@@ -509,18 +536,45 @@ YouTube embed の制限、GPU ごとの個別表示、weather consent、temperat
 保存範囲は [日本語ガイド](./docs/club-code-current-build-guide.ja.md) にさらに詳しく書いて
 あります。「たぶん平気」は乾杯の回数だけにして、仕様と請求はちゃんと確認しよ🥂
 
-### Fork の理由と product shape
+### Club Code を作る理由と product shape
 
-小さく、速く、予測できる app を保つための fork です。bug、performance、reliability、
-security の修正は歓迎。feature request は「Club Code を小さく、静かに、速く、理解しやすく、
-低 CPU/低 memory にし、failure をうるさくしないか」で判断します。pretend editor、
-pretend terminal、release dashboard、project-management suite、button museum に変える機能は
-対象外。三軒目で menu を百科事典にするタイプ、あたしちょっと苦手〜📚🍸
+Club Code は、強い coding-agent core を、長い仕事を一緒に走れる operator-owned environment
+へ育てるための fork です。自分の場所だと思えるくらい expressive、何が起きているか追える
+くらい observable、device をまたいで、secure coworking が育ったら人とも一緒に働けるくらい
+connected。夜更けの control room みたいに、agent の動きが見えて、workspace の見た目と音を
+自分で作れて、local file、credential、provider 料金、context の authority は operator が
+握ったまま。はい、鍵と伝票は店側に勝手に渡しませ〜ん🔑🥃
+
+この fork は tiny-window minimalism を doctrine にしません。atmosphere と media、
+Workflow/Workspace Observatory、profile、telemetry、provider choice、supervised automation、
+mobile/LAN access、secure coworking は余計な飾りではなく product direction です。feature が
+多くても、それぞれ optional、composable、reversible、truthfully labeled で、CPU、memory、
+network、storage、token cost が bounded なら歓迎。ボトルは多くても会計と出口は見える店ね🍾
+
+新しい work は operator value と operator safety の二つで判断します。
+
+- **Operator intent は automation より上。** manual work、見える queue、approval、Stop control、
+  explicit authority が先です。
+- **Evidence は演出より上。** provider、sensor、file、runtime が本当に証明したことだけを表示し、
+  unavailable、partial、planned を正直に分けます。盛るのはラメだけ✨
+- **Power の代わりに ownership を渡さない。** credential と private context は
+  least-privilege。shared work は sandboxed、attributable、recoverable で、別 operator の
+  local ownership を消せません。
+- **Personalization は optional。** vivid、quiet、transparent、musical、information-dense、
+  stripped-back のどれでもよく、全 operator・全 device に同じ presentation を強制しません。
+- **長時間 work ほど discipline。** performance、accessibility、privacy、reliability、
+  bounded resource use、token-efficient context は release requirement。ambitious feature を
+  最初から追い返す理由ではありません。
+
+だから Club Code test は「window が小さくなる？」ではなく、「cost、state、risk、authority を
+隠さず、operator をもっと capable、aware、expressive、collaborative にする？」です。yes で、
+honest boundary を守って届けられるなら、一緒に席へどうぞ〜🥂
 
 互換性を壊す場所では `@cafecode/*`、`cafe-code`、`CAFE_CODE_*`、`.cafe-code`、protocol、
-data identifier を維持します。その上で上記の current-build behavior を追加し、coding-agent
-chat 中心の product shape を保ちます。complete comparison はこの README と current-source
-guide が担当し、未実装の予定を実装済み feature として数えません。
+data identifier を維持します。ただし internal identifier は product vision ではありません。
+Club Code は agent-first のまま、operator-controlled observability、media、automation、
+profile、telemetry、secure collaboration まで chat window の外へ広がります。documentation は
+implemented、partial、planned を分け、予定を実装済みとして見せません。
 
 ### 任意サービスの設定
 
