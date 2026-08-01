@@ -65,7 +65,7 @@ describe("CoworkInvitationRedemptionPanelModel", () => {
     const redeemInvitation = vi.fn<CoworkInvitationRedemptionClient["redeemInvitation"]>(
       async (command) => {
         expect(Object.isFrozen(command)).toBe(true);
-        expect(Object.isFrozen(command.identity)).toBe(true);
+        expect(Object.isFrozen(command.expectedIdentity)).toBe(true);
         expect(Object.isFrozen(command.request)).toBe(true);
         return result();
       },
@@ -78,7 +78,7 @@ describe("CoworkInvitationRedemptionPanelModel", () => {
 
     expect(redeemInvitation).toHaveBeenCalledTimes(1);
     expect(redeemInvitation.mock.calls[0]![0]).toEqual({
-      identity: IDENTITY,
+      expectedIdentity: IDENTITY,
       request: { ...INPUT, commandId: "redeem-command-one" },
     });
     expect(model.getSnapshot()).toEqual({
@@ -216,6 +216,123 @@ describe("CoworkInvitationRedemptionPanelModel", () => {
     expect(model.getSnapshot()).toEqual({ status: "rejected", canSubmit: true, member: null });
   });
 
+  it("does not invoke accessors or Proxy get traps on command input", async () => {
+    let accessorReads = 0;
+    const accessorInput = { ...INPUT };
+    Object.defineProperty(accessorInput, "secret", {
+      enumerable: true,
+      get: () => {
+        accessorReads += 1;
+        return INPUT.secret;
+      },
+    });
+    const proxyInputReads = { count: 0 };
+    const proxyInput = new Proxy(
+      { ...INPUT },
+      {
+        get(target, property, receiver) {
+          proxyInputReads.count += 1;
+          return Reflect.get(target, property, receiver);
+        },
+      },
+    );
+    const accessorRedeem = vi.fn<CoworkInvitationRedemptionClient["redeemInvitation"]>(async () =>
+      result(),
+    );
+    const accessorModel = new CoworkInvitationRedemptionPanelModel(
+      { redeemInvitation: accessorRedeem },
+      IDENTITY,
+    );
+
+    accessorModel.redeem(accessorInput, () => "accessor-input-command");
+    await settle();
+
+    expect(accessorReads).toBe(0);
+    expect(accessorRedeem).not.toHaveBeenCalled();
+    expect(accessorModel.getSnapshot()).toEqual({
+      status: "rejected",
+      canSubmit: true,
+      member: null,
+    });
+
+    const proxyRedeem = vi.fn<CoworkInvitationRedemptionClient["redeemInvitation"]>(async () =>
+      result(),
+    );
+    const proxyModel = new CoworkInvitationRedemptionPanelModel(
+      { redeemInvitation: proxyRedeem },
+      IDENTITY,
+    );
+    proxyModel.redeem(proxyInput, () => "proxy-input-command");
+    await settle();
+
+    expect(proxyInputReads.count).toBe(0);
+    expect(proxyRedeem).toHaveBeenCalledTimes(1);
+    expect(proxyRedeem.mock.calls[0]![0].request).toEqual({
+      ...INPUT,
+      commandId: "proxy-input-command",
+    });
+    expect(proxyModel.getSnapshot().status).toBe("succeeded");
+  });
+
+  it("contains a reentrant command-id factory before any capability dispatch", async () => {
+    const redeemInvitation = vi.fn<CoworkInvitationRedemptionClient["redeemInvitation"]>(async () =>
+      result(),
+    );
+    const model = new CoworkInvitationRedemptionPanelModel({ redeemInvitation }, IDENTITY);
+
+    model.redeem(INPUT, () => {
+      model.redeem(INPUT, () => "nested-command");
+      model.stop();
+      return "outer-command";
+    });
+    await settle();
+
+    expect(redeemInvitation).not.toHaveBeenCalled();
+    expect(model.getSnapshot()).toEqual({
+      status: "unavailable",
+      canSubmit: false,
+      member: null,
+    });
+  });
+
+  it("does not dispatch after a pending-state observer closes the scope", async () => {
+    const redeemInvitation = vi.fn<CoworkInvitationRedemptionClient["redeemInvitation"]>(async () =>
+      result(),
+    );
+    const model = new CoworkInvitationRedemptionPanelModel({ redeemInvitation }, IDENTITY);
+    const unsubscribe = model.subscribe(() => {
+      if (model.getSnapshot().status === "pending") model.stop();
+    });
+
+    model.redeem(INPUT, () => "observer-stop-command");
+    unsubscribe();
+    await settle();
+
+    expect(redeemInvitation).not.toHaveBeenCalled();
+    expect(model.getSnapshot()).toEqual({
+      status: "unavailable",
+      canSubmit: false,
+      member: null,
+    });
+  });
+
+  it("snapshots listeners so subscription mutation cannot extend one notification pass", () => {
+    const model = new CoworkInvitationRedemptionPanelModel(
+      { redeemInvitation: vi.fn(async () => result()) },
+      IDENTITY,
+    );
+    const lateListener = vi.fn();
+    const firstListener = vi.fn(() => {
+      model.subscribe(lateListener);
+    });
+    model.subscribe(firstListener);
+
+    model.start();
+
+    expect(firstListener).toHaveBeenCalledTimes(1);
+    expect(lateListener).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["null member", () => result({ member: null })],
     [
@@ -234,6 +351,14 @@ describe("CoworkInvitationRedemptionPanelModel", () => {
       () => Object.assign(Object.create({ disposition: "applied" }), result()),
     ],
     ["transparent proxy", () => new Proxy(result(), {})],
+    [
+      "nested transparent proxy",
+      () => {
+        const payload = result();
+        return { ...payload, member: new Proxy(payload.member, {}) };
+      },
+    ],
+    ["symbol-bearing response", () => Object.assign(result(), { [Symbol("hidden")]: "forbidden" })],
     [
       "sparse permissions",
       () => {
@@ -305,6 +430,37 @@ describe("CoworkInvitationRedemptionPanelModel", () => {
       canSubmit: false,
       member: null,
     });
+    expect(redeemInvitation).not.toHaveBeenCalled();
+  });
+
+  it("does not invoke authenticated-identity accessors and rejects identity Proxies", () => {
+    let accessorReads = 0;
+    const accessorIdentity = { ...IDENTITY };
+    Object.defineProperty(accessorIdentity, "userId", {
+      enumerable: true,
+      get: () => {
+        accessorReads += 1;
+        return IDENTITY.userId;
+      },
+    });
+    const redeemInvitation = vi.fn<CoworkInvitationRedemptionClient["redeemInvitation"]>(async () =>
+      result(),
+    );
+    const accessorModel = new CoworkInvitationRedemptionPanelModel(
+      { redeemInvitation },
+      accessorIdentity,
+    );
+    const proxyModel = new CoworkInvitationRedemptionPanelModel(
+      { redeemInvitation },
+      new Proxy({ ...IDENTITY }, {}),
+    );
+
+    accessorModel.redeem(INPUT, () => "accessor-identity-command");
+    proxyModel.redeem(INPUT, () => "proxy-identity-command");
+
+    expect(accessorReads).toBe(0);
+    expect(accessorModel.getSnapshot().status).toBe("unavailable");
+    expect(proxyModel.getSnapshot().status).toBe("unavailable");
     expect(redeemInvitation).not.toHaveBeenCalled();
   });
 

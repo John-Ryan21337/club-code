@@ -81,7 +81,7 @@ describe("CoworkInvitationRedemptionPanel", () => {
       .toHaveTextContent("Browser Operator");
     expect(document.body.textContent).not.toContain(TOKEN);
     expect(redeemInvitation).toHaveBeenCalledWith({
-      identity: IDENTITY,
+      expectedIdentity: IDENTITY,
       request: {
         commandId: "browser-redeem-command",
         sharedProjectId: "browser-shared-project",
@@ -89,6 +89,31 @@ describe("CoworkInvitationRedemptionPanel", () => {
         displayName: "Browser Operator",
       },
     });
+  });
+
+  it("uses required native form constraints before creating a command", async () => {
+    const redeemInvitation = vi.fn<CoworkInvitationRedemptionClient["redeemInvitation"]>(async () =>
+      redemptionResult(),
+    );
+    const createCommandId = vi.fn(() => "must-not-be-created");
+    mounted = await render(
+      <CoworkInvitationRedemptionPanel
+        client={{ redeemInvitation }}
+        identity={IDENTITY}
+        createCommandId={createCommandId}
+      />,
+    );
+
+    await expect.element(page.getByLabelText("Shared project ID")).toHaveAttribute("required");
+    await expect
+      .element(page.getByLabelText("One-time invitation token"))
+      .toHaveAttribute("required");
+    await expect.element(page.getByLabelText("Display name")).toHaveAttribute("required");
+    await page.getByRole("button", { name: "Redeem invitation" }).click();
+
+    expect(createCommandId).not.toHaveBeenCalled();
+    expect(redeemInvitation).not.toHaveBeenCalled();
+    await expect.element(page.getByRole("status")).toHaveTextContent("Ready to redeem");
   });
 
   it("keeps an indeterminate request out of the form and retries the exact command", async () => {

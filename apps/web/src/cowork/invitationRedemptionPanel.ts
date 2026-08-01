@@ -31,7 +31,13 @@ export interface CoworkInvitationRedemptionRequest {
 }
 
 export interface CoworkInvitationRedemptionCommand {
-  readonly identity: Readonly<CoworkInvitationRedemptionIdentity>;
+  /**
+   * Renderer-side response/scope evidence only. A production transport must
+   * omit this field and derive the store identity from its authenticated
+   * server session; it is deliberately not named like the store's `identity`
+   * input so the whole command cannot be forwarded accidentally.
+   */
+  readonly expectedIdentity: Readonly<CoworkInvitationRedemptionIdentity>;
   readonly request: Readonly<CoworkInvitationRedemptionRequest>;
 }
 
@@ -174,6 +180,47 @@ function canonicalIdentity(value: unknown): Readonly<CoworkInvitationRedemptionI
   });
 }
 
+function snapshotRequestInput(
+  input: CoworkInvitationRedemptionInput,
+): CoworkInvitationRedemptionInput {
+  if (input === null || typeof input !== "object") {
+    throw new Error("redemption input must be a plain object");
+  }
+  let prototype: object | null;
+  let descriptors: Record<PropertyKey, PropertyDescriptor>;
+  try {
+    prototype = Object.getPrototypeOf(input);
+    descriptors = Object.getOwnPropertyDescriptors(input);
+  } catch {
+    throw new Error("redemption input could not be inspected safely");
+  }
+  if (prototype !== Object.prototype) {
+    throw new Error("redemption input must use the intrinsic object prototype");
+  }
+  const expectedKeys = ["sharedProjectId", "secret", "displayName"] as const;
+  const keys = Reflect.ownKeys(descriptors);
+  if (
+    keys.length !== expectedKeys.length ||
+    keys.some(
+      (key) =>
+        typeof key === "symbol" ||
+        (key !== "sharedProjectId" && key !== "secret" && key !== "displayName"),
+    )
+  ) {
+    throw new Error("redemption input must contain only the expected fields");
+  }
+  const values = Object.fromEntries(
+    expectedKeys.map((key) => {
+      const descriptor = descriptors[key];
+      if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
+        throw new Error("redemption input fields must be enumerable own data properties");
+      }
+      return [key, descriptor.value];
+    }),
+  ) as unknown as CoworkInvitationRedemptionInput;
+  return values;
+}
+
 function canonicalRequest(
   input: CoworkInvitationRedemptionInput,
   commandId: string,
@@ -200,12 +247,12 @@ function commandMatchesIdentity(
   identity: CoworkInvitationRedemptionIdentity,
 ): boolean {
   return (
-    command.identity === identity &&
-    command.identity.sessionId === identity.sessionId &&
-    command.identity.userId === identity.userId &&
-    command.identity.deviceId === identity.deviceId &&
-    command.identity.issuedAt === identity.issuedAt &&
-    command.identity.expiresAt === identity.expiresAt
+    command.expectedIdentity === identity &&
+    command.expectedIdentity.sessionId === identity.sessionId &&
+    command.expectedIdentity.userId === identity.userId &&
+    command.expectedIdentity.deviceId === identity.deviceId &&
+    command.expectedIdentity.issuedAt === identity.issuedAt &&
+    command.expectedIdentity.expiresAt === identity.expiresAt
   );
 }
 
@@ -217,6 +264,7 @@ export class CoworkInvitationRedemptionPanelModel {
   #attempt: ActiveAttempt | null = null;
   #generation = 0;
   #closed = false;
+  #constructing = false;
 
   constructor(client: CoworkInvitationRedemptionClient, identity: unknown) {
     this.#client = client;
@@ -250,29 +298,57 @@ export class CoworkInvitationRedemptionPanelModel {
     if (
       this.#closed ||
       this.#identity === null ||
+      this.#constructing ||
       this.#attempt !== null ||
       (this.#state.status !== "idle" && this.#state.status !== "rejected")
     ) {
       return;
     }
 
+    const constructionGeneration = this.#generation;
+    this.#constructing = true;
+    let command: Readonly<CoworkInvitationRedemptionCommand>;
     try {
-      const request = canonicalRequest(input, createCommandId());
-      const command = Object.freeze({ identity: this.#identity, request });
-      const attempt: ActiveAttempt = {
-        generation: ++this.#generation,
-        command,
-        status: "pending",
-      };
-      this.#attempt = attempt;
-      this.#setState(state("pending"));
-      this.#dispatch(attempt);
+      // Snapshot only descriptor values before invoking the command-id
+      // factory. Unlike structuredClone, this does not manufacture another
+      // transient copy of the one-time secret, and it never invokes a field
+      // accessor or Proxy `get` trap.
+      const inputSnapshot = snapshotRequestInput(input);
+      const request = canonicalRequest(inputSnapshot, createCommandId());
+      command = Object.freeze({ expectedIdentity: this.#identity, request });
     } catch {
       // Validation failures are definitive and retain neither the capability
       // nor a retry command. The UI can correct the explicit inputs.
-      this.#attempt = null;
-      this.#setState(state("rejected"));
+      if (!this.#closed && this.#generation === constructionGeneration && this.#attempt === null) {
+        this.#setState(state("rejected"));
+      }
+      return;
+    } finally {
+      this.#constructing = false;
     }
+
+    // Command-id factories are injected and may run arbitrary synchronous
+    // code. If one closed or restarted this scope, the freshly constructed
+    // capability must never cross the adapter boundary.
+    if (
+      this.#closed ||
+      this.#generation !== constructionGeneration ||
+      this.#attempt !== null ||
+      (this.#state.status !== "idle" && this.#state.status !== "rejected")
+    ) {
+      return;
+    }
+
+    const attempt: ActiveAttempt = {
+      generation: ++this.#generation,
+      command,
+      status: "pending",
+    };
+    this.#attempt = attempt;
+    this.#setState(state("pending"));
+    // Subscribers are also arbitrary synchronous code. A listener may close
+    // the scope while observing `pending`; do not dispatch after that cleanup.
+    if (this.#isCurrent(attempt)) this.#dispatch(attempt);
   }
 
   retry(): void {
@@ -282,7 +358,7 @@ export class CoworkInvitationRedemptionPanelModel {
     this.#setState(state("pending"));
     // An indeterminate transport acknowledgement may have committed upstream.
     // Reuse the exact frozen object and command id; never reconstruct a secret.
-    this.#dispatch(attempt);
+    if (this.#isCurrent(attempt)) this.#dispatch(attempt);
   }
 
   discardIndeterminate(): void {
@@ -307,10 +383,15 @@ export class CoworkInvitationRedemptionPanelModel {
       this.#markIndeterminate(attempt);
       return;
     }
-    void Promise.resolve(response).then(
-      (value) => this.#accept(attempt, value),
-      () => this.#markIndeterminate(attempt),
-    );
+    try {
+      void Promise.resolve(response).then(
+        (value) => this.#accept(attempt, value),
+        () => this.#markIndeterminate(attempt),
+      );
+    } catch {
+      // Contain even a synchronously hostile thenable-assimilation surface.
+      this.#markIndeterminate(attempt);
+    }
   }
 
   #accept(attempt: ActiveAttempt, value: unknown): void {
@@ -371,7 +452,9 @@ export class CoworkInvitationRedemptionPanelModel {
 
   #setState(next: CoworkInvitationRedemptionState): void {
     this.#state = next;
-    for (const listener of this.#listeners) {
+    // Snapshot the observer set so a listener cannot grow this notification
+    // pass indefinitely by subscribing more listeners during iteration.
+    for (const listener of Array.from(this.#listeners)) {
       try {
         listener();
       } catch {
