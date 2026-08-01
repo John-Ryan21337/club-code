@@ -55,6 +55,7 @@ const MANAGED_DIRECTORY = ".club-code-managed";
 const STAGING_DIRECTORY = "staging";
 const RECOVERY_DIRECTORY = "recovery";
 const TEMP_NAME_PATTERN = /^upload-[a-f0-9]{32}\.tmp$/u;
+const MATERIALIZE_TEMP_NAME_PATTERN = /^materialize-[a-f0-9]{32}\.tmp$/u;
 const DIGEST_PATTERN = /^[a-f0-9]{64}$/u;
 const WINDOWS_RESERVED_FILE_STEM =
   /^(?:con|prn|aux|nul|com[1-9\u00b9\u00b2\u00b3]|lpt[1-9\u00b9\u00b2\u00b3])$/iu;
@@ -307,24 +308,100 @@ async function fsyncDirectory(path: string): Promise<void> {
 async function hashFile(
   operation: Operation,
   path: string,
-  signal: AbortSignal | undefined,
+  expectedMaxBytes: number,
+  ...signals: ReadonlyArray<AbortSignal | undefined>
 ): Promise<{ readonly sha256: string; readonly byteSize: number }> {
+  const before = await lstat(path, { bigint: true });
+  if (
+    !before.isFile() ||
+    before.isSymbolicLink() ||
+    before.nlink !== 1n ||
+    before.size > BigInt(expectedMaxBytes)
+  )
+    throw new Error("unsafe leaf");
   const handle = await open(path, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
   const hash = createHash("sha256");
   let byteSize = 0;
   try {
+    const opened = await handle.stat({ bigint: true });
+    if (
+      !opened.isFile() ||
+      opened.nlink !== 1n ||
+      opened.dev !== before.dev ||
+      opened.ino !== before.ino ||
+      opened.size !== before.size
+    )
+      throw new Error("unsafe leaf");
     const buffer = Buffer.allocUnsafe(1024 * 1024);
     for (;;) {
-      throwIfCancelled(operation, signal);
+      throwIfCancelled(operation, ...signals);
       const read = await handle.read(buffer, 0, buffer.byteLength, null);
       if (read.bytesRead === 0) break;
       hash.update(buffer.subarray(0, read.bytesRead));
       byteSize += read.bytesRead;
+      if (byteSize > expectedMaxBytes) throw fail(operation, "content-invalid");
     }
   } finally {
     await handle.close();
   }
   return { sha256: hash.digest("hex"), byteSize };
+}
+
+async function writeAll(handle: FileHandle, bytes: Uint8Array): Promise<void> {
+  let offset = 0;
+  while (offset < bytes.byteLength) {
+    const written = await handle.write(bytes, offset, bytes.byteLength - offset, null);
+    if (written.bytesWritten <= 0) throw new Error("short write");
+    offset += written.bytesWritten;
+  }
+}
+
+async function nextWithCancellation<T>(
+  operation: Operation,
+  iterator: AsyncIterator<T>,
+  ...signals: ReadonlyArray<AbortSignal | undefined>
+): Promise<IteratorResult<T>> {
+  throwIfCancelled(operation, ...signals);
+  const activeSignals = signals.filter((signal): signal is AbortSignal => signal !== undefined);
+  if (activeSignals.length === 0) return iterator.next();
+  let removeListeners: (() => void) | undefined;
+  const cancelled = new Promise<never>((_, reject) => {
+    const onAbort = () => reject(fail(operation, "cancelled"));
+    for (const signal of activeSignals) signal.addEventListener("abort", onAbort, { once: true });
+    removeListeners = () => {
+      for (const signal of activeSignals) signal.removeEventListener("abort", onAbort);
+    };
+    if (activeSignals.some((signal) => signal.aborted)) onAbort();
+  });
+  try {
+    return await Promise.race([iterator.next(), cancelled]);
+  } finally {
+    removeListeners?.();
+  }
+}
+
+async function waitWithCancellation(
+  operation: Operation,
+  promise: Promise<void>,
+  ...signals: ReadonlyArray<AbortSignal | undefined>
+): Promise<void> {
+  throwIfCancelled(operation, ...signals);
+  const activeSignals = signals.filter((signal): signal is AbortSignal => signal !== undefined);
+  if (activeSignals.length === 0) return promise;
+  let removeListeners: (() => void) | undefined;
+  const cancelled = new Promise<never>((_, reject) => {
+    const onAbort = () => reject(fail(operation, "cancelled"));
+    for (const signal of activeSignals) signal.addEventListener("abort", onAbort, { once: true });
+    removeListeners = () => {
+      for (const signal of activeSignals) signal.removeEventListener("abort", onAbort);
+    };
+    if (activeSignals.some((signal) => signal.aborted)) onAbort();
+  });
+  try {
+    await Promise.race([promise, cancelled]);
+  } finally {
+    removeListeners?.();
+  }
 }
 
 async function safeUnlink(path: string): Promise<void> {
@@ -340,7 +417,12 @@ async function safeUnlink(path: string): Promise<void> {
 class ProjectMutex {
   readonly #tails = new Map<string, Promise<void>>();
 
-  async run<A>(key: string, signal: AbortSignal | undefined, action: () => Promise<A>): Promise<A> {
+  async run<A>(
+    key: string,
+    operation: Operation,
+    signals: ReadonlyArray<AbortSignal | undefined>,
+    action: () => Promise<A>,
+  ): Promise<A> {
     const previous = this.#tails.get(key) ?? Promise.resolve();
     let release!: () => void;
     const ticket = new Promise<void>((resolveTicket) => {
@@ -349,20 +431,7 @@ class ProjectMutex {
     const tail = previous.then(() => ticket);
     this.#tails.set(key, tail);
     try {
-      if (signal) {
-        await Promise.race([
-          previous,
-          new Promise<never>((_, reject) => {
-            if (signal.aborted) reject(fail("blob.put", "cancelled"));
-            else
-              signal.addEventListener("abort", () => reject(fail("blob.put", "cancelled")), {
-                once: true,
-              });
-          }),
-        ]);
-      } else {
-        await previous;
-      }
+      await waitWithCancellation(operation, previous, ...signals);
       return await action();
     } finally {
       release();
@@ -376,6 +445,10 @@ function projectStorageKey(projectId: SharedProjectId): string {
     .update("club-code/cowork-project-blob-root/v1\0")
     .update(projectId)
     .digest("hex");
+}
+
+function sha256Path(relativePath: SharedReplicaRelativePath): string {
+  return createHash("sha256").update(relativePath).digest("hex");
 }
 
 function versionFromCurrentState(
@@ -439,6 +512,8 @@ function mapUnknown(operation: Operation, cause: unknown): CollaborationReplicaS
       "unsafe promoted blob",
       "replacement recovery collision",
       "recovery collision",
+      "installed target missing",
+      "tombstone rollback collision",
     ].includes(cause.message)
   )
     return fail(operation, "unsafe-storage");
@@ -474,9 +549,10 @@ export function makeCollaborationReplicaStorage(
       const blobRoot = await makeRootIdentity(options.blobRoot);
       const managedRootPath = await ensureDirectory(replicaRoot, [MANAGED_DIRECTORY]);
       const managedRoot = await makeRootIdentity(managedRootPath);
-      await ensureDirectory(managedRoot, [STAGING_DIRECTORY]);
+      const managedStaging = await ensureDirectory(managedRoot, [STAGING_DIRECTORY]);
       await ensureDirectory(managedRoot, [RECOVERY_DIRECTORY]);
       const mutex = new ProjectMutex();
+      const blobReservations = new Map<string, Map<string, { byteSize: number; count: number }>>();
 
       const readCurrent = (
         operation: Operation,
@@ -519,8 +595,17 @@ export function makeCollaborationReplicaStorage(
         }
       };
 
+      const cleanupMaterializeStaging = async () => {
+        const entries = await readdir(managedStaging, { withFileTypes: true });
+        for (const entry of entries) {
+          if (!entry.isFile() || !MATERIALIZE_TEMP_NAME_PATTERN.test(entry.name))
+            throw new Error("unsafe staging entry");
+          await safeUnlink(resolve(managedStaging, entry.name));
+        }
+      };
+
       const blobUsage = async (bucket: string) => {
-        let total = 0;
+        let total = 0n;
         for (const entry of await readdir(bucket, { withFileTypes: true })) {
           if (entry.name === STAGING_DIRECTORY && entry.isDirectory()) continue;
           if (!entry.isFile() || !DIGEST_PATTERN.test(entry.name))
@@ -529,10 +614,10 @@ export function makeCollaborationReplicaStorage(
           const stats = await lstat(path, { bigint: true });
           if (!stats.isFile() || stats.isSymbolicLink() || stats.nlink !== 1n)
             throw new Error("unsafe blob");
-          total += Number(stats.size);
-          if (!Number.isSafeInteger(total)) throw new Error("blob quota overflow");
+          total += stats.size;
+          if (total > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error("blob quota overflow");
         }
-        return total;
+        return Number(total);
       };
 
       const verifyBlob = async (
@@ -540,7 +625,7 @@ export function makeCollaborationReplicaStorage(
         bucket: string,
         digest: string,
         byteSize: number,
-        signal: AbortSignal | undefined,
+        ...signals: ReadonlyArray<AbortSignal | undefined>
       ) => {
         const path = resolve(bucket, digest);
         const entry = await exactEntry(bucket, digest);
@@ -549,7 +634,7 @@ export function makeCollaborationReplicaStorage(
         const stats = await lstat(path, { bigint: true });
         if (!stats.isFile() || stats.isSymbolicLink() || stats.nlink !== 1n)
           throw new Error("unsafe blob");
-        const observed = await hashFile(operation, path, signal);
+        const observed = await hashFile(operation, path, byteSize, ...signals);
         if (observed.byteSize !== byteSize || observed.sha256 !== digest)
           throw fail(operation, "content-invalid");
         return path;
@@ -563,6 +648,50 @@ export function makeCollaborationReplicaStorage(
         const staging = await ensureDirectory(blobRoot, [entry.name, STAGING_DIRECTORY]);
         await cleanupStaging(staging);
       }
+      await cleanupMaterializeStaging();
+
+      const reservedBytes = (projectKey: string) => {
+        let total = 0;
+        for (const reservation of blobReservations.get(projectKey)?.values() ?? [])
+          total += reservation.byteSize;
+        return total;
+      };
+
+      const releaseBlobReservation = (projectKey: string, digest: string) => {
+        const project = blobReservations.get(projectKey);
+        const reservation = project?.get(digest);
+        if (!project || !reservation) return;
+        if (reservation.count > 1)
+          project.set(digest, { ...reservation, count: reservation.count - 1 });
+        else project.delete(digest);
+        if (project.size === 0) blobReservations.delete(projectKey);
+      };
+
+      const reserveBlob = async (
+        projectKey: string,
+        bucket: string,
+        digest: string,
+        byteSize: number,
+        ...signals: ReadonlyArray<AbortSignal | undefined>
+      ) =>
+        mutex.run(projectKey, "blob.put", signals, async () => {
+          const existing = await verifyBlob("blob.put", bucket, digest, byteSize, ...signals);
+          if (existing !== null) return false;
+          const project = blobReservations.get(projectKey) ?? new Map();
+          const reservation = project.get(digest);
+          if (reservation && reservation.byteSize !== byteSize)
+            throw fail("blob.put", "content-invalid");
+          if (reservation) {
+            project.set(digest, { ...reservation, count: reservation.count + 1 });
+          } else {
+            const used = await blobUsage(bucket);
+            if (used + reservedBytes(projectKey) + byteSize > projectQuota)
+              throw fail("blob.put", "quota-exceeded");
+            project.set(digest, { byteSize, count: 1 });
+          }
+          blobReservations.set(projectKey, project);
+          return true;
+        });
 
       const putBlob: CollaborationReplicaStorageShape["putBlob"] = (input) =>
         Effect.gen(function* () {
@@ -583,58 +712,82 @@ export function makeCollaborationReplicaStorage(
           const staged = yield* Effect.tryPromise({
             try: async (effectSignal) => {
               throwIfCancelled("blob.put", input.signal, effectSignal);
-              const { bucket, staging } = await blobProjectDirectory(request.sharedProjectId);
-              const existing = await verifyBlob(
-                "blob.put",
+              const { key, bucket, staging } = await blobProjectDirectory(request.sharedProjectId);
+              const reserved = await reserveBlob(
+                key,
                 bucket,
                 request.contentSha256,
                 request.byteSize,
                 input.signal,
+                effectSignal,
               );
-              if (existing !== null) return { bucket, tempPath: null };
+              if (!reserved) return { key, bucket, tempPath: null, reserved: false };
               const tempName = `upload-${randomBytes(16).toString("hex")}.tmp`;
               const tempPath = resolve(staging, tempName);
-              const handle = await open(
-                tempPath,
-                fsConstants.O_CREAT |
-                  fsConstants.O_EXCL |
-                  fsConstants.O_WRONLY |
-                  (fsConstants.O_NOFOLLOW ?? 0),
-                0o600,
-              );
-              const digest = createHash("sha256");
-              let byteSize = 0;
               try {
-                for await (const frame of input.source) {
-                  throwIfCancelled("blob.put", input.signal, effectSignal);
+                const handle = await open(
+                  tempPath,
+                  fsConstants.O_CREAT |
+                    fsConstants.O_EXCL |
+                    fsConstants.O_WRONLY |
+                    (fsConstants.O_NOFOLLOW ?? 0),
+                  0o600,
+                );
+                const digest = createHash("sha256");
+                let byteSize = 0;
+                const iterator = input.source[Symbol.asyncIterator]();
+                try {
+                  for (;;) {
+                    const next = await nextWithCancellation(
+                      "blob.put",
+                      iterator,
+                      input.signal,
+                      effectSignal,
+                    );
+                    if (next.done) break;
+                    const frame = next.value;
+                    if (
+                      !(frame instanceof Uint8Array) ||
+                      frame.byteLength === 0 ||
+                      frame.byteLength > frameLimit
+                    )
+                      throw fail("blob.put", "content-invalid");
+                    const stableFrame = Buffer.from(frame);
+                    byteSize += stableFrame.byteLength;
+                    if (byteSize > request.byteSize || byteSize > chunkLimit)
+                      throw fail("blob.put", "content-invalid");
+                    digest.update(stableFrame);
+                    await writeAll(handle, stableFrame);
+                  }
                   if (
-                    !(frame instanceof Uint8Array) ||
-                    frame.byteLength === 0 ||
-                    frame.byteLength > frameLimit
+                    byteSize !== request.byteSize ||
+                    digest.digest("hex") !== request.contentSha256
                   )
                     throw fail("blob.put", "content-invalid");
-                  byteSize += frame.byteLength;
-                  if (byteSize > request.byteSize || byteSize > chunkLimit)
-                    throw fail("blob.put", "content-invalid");
-                  digest.update(frame);
-                  await handle.write(frame);
+                  await handle.sync();
+                } catch (cause) {
+                  try {
+                    void Promise.resolve(iterator.return?.()).catch(() => undefined);
+                  } catch {
+                    // Preserve the validated storage failure over producer cleanup.
+                  }
+                  throw cause;
+                } finally {
+                  await handle.close().catch(() => undefined);
                 }
-                if (byteSize !== request.byteSize || digest.digest("hex") !== request.contentSha256)
-                  throw fail("blob.put", "content-invalid");
-                await handle.sync();
               } catch (cause) {
-                await handle.close().catch(() => undefined);
                 await safeUnlink(tempPath).catch(() => undefined);
+                releaseBlobReservation(key, request.contentSha256);
                 throw cause;
               }
-              await handle.close();
-              return { bucket, tempPath };
+              return { key, bucket, tempPath, reserved: true };
             },
             catch: (cause) => mapUnknown("blob.put", cause),
           });
-          const cleanupStaged = staged.tempPath
-            ? Effect.promise(() => safeUnlink(staged.tempPath!).catch(() => undefined))
-            : Effect.void;
+          const cleanupStaged = Effect.promise(async () => {
+            if (staged.tempPath) await safeUnlink(staged.tempPath).catch(() => undefined);
+            if (staged.reserved) releaseBlobReservation(staged.key, request.contentSha256);
+          });
           const currentState = yield* readCurrent("blob.put", input.principal, request).pipe(
             Effect.onError(() => cleanupStaged),
           );
@@ -646,9 +799,9 @@ export function makeCollaborationReplicaStorage(
             catch: (cause) => mapUnknown("blob.put", cause),
           }).pipe(Effect.onError(() => cleanupStaged));
           const disposition = yield* Effect.tryPromise({
-            try: async () =>
-              mutex.run(projectStorageKey(request.sharedProjectId), input.signal, async () => {
-                throwIfCancelled("blob.put", input.signal);
+            try: async (effectSignal) =>
+              mutex.run(staged.key, "blob.put", [input.signal, effectSignal], async () => {
+                throwIfCancelled("blob.put", input.signal, effectSignal);
                 await assertRootIdentity(blobRoot);
                 const existing = await verifyBlob(
                   "blob.put",
@@ -656,14 +809,27 @@ export function makeCollaborationReplicaStorage(
                   request.contentSha256,
                   request.byteSize,
                   input.signal,
+                  effectSignal,
                 );
                 if (existing !== null) {
                   if (staged.tempPath) await safeUnlink(staged.tempPath);
                   return "already-present" as const;
                 }
                 if (staged.tempPath === null) throw new Error("missing staged blob");
+                const stagedObserved = await hashFile(
+                  "blob.put",
+                  staged.tempPath,
+                  request.byteSize,
+                  input.signal,
+                  effectSignal,
+                );
+                if (
+                  stagedObserved.byteSize !== request.byteSize ||
+                  stagedObserved.sha256 !== request.contentSha256
+                )
+                  throw fail("blob.put", "content-invalid");
                 const used = await blobUsage(staged.bucket);
-                if (used + request.byteSize > projectQuota)
+                if (used + reservedBytes(staged.key) > projectQuota)
                   throw fail("blob.put", "quota-exceeded");
                 const finalPath = resolve(staged.bucket, request.contentSha256);
                 // This is an atomic create-if-absent promotion. A rename could
@@ -678,15 +844,22 @@ export function makeCollaborationReplicaStorage(
                     request.contentSha256,
                     request.byteSize,
                     input.signal,
+                    effectSignal,
                   );
                   if (racedBlob === null) throw cause;
                   await safeUnlink(staged.tempPath);
                   return "already-present" as const;
                 }
                 await safeUnlink(staged.tempPath);
-                const stats = await lstat(finalPath, { bigint: true });
-                if (!stats.isFile() || stats.isSymbolicLink() || stats.nlink !== 1n)
-                  throw new Error("unsafe promoted blob");
+                const promoted = await verifyBlob(
+                  "blob.put",
+                  staged.bucket,
+                  request.contentSha256,
+                  request.byteSize,
+                  input.signal,
+                  effectSignal,
+                );
+                if (promoted === null) throw new Error("unsafe promoted blob");
                 await fsyncDirectory(staged.bucket);
                 return "stored" as const;
               }),
@@ -725,149 +898,219 @@ export function makeCollaborationReplicaStorage(
           )
             return yield* Effect.fail(fail("version.materialize", "quota-exceeded"));
           const result = yield* Effect.tryPromise({
-            try: async (effectSignal) => {
-              throwIfCancelled("version.materialize", input.signal, effectSignal);
-              await options.sandboxPathAuthority
-                .assertContained(request.relativePath)
-                .pipe(Effect.runPromise);
-              const segments = request.relativePath.split("/");
-              const parent = await ensureDirectory(replicaRoot, segments.slice(0, -1));
-              const checked = await assertSafeRelativePath(replicaRoot, request.relativePath, {
-                allowMissingLeaf: true,
-              });
-              if (checked.exists) {
-                const observed = await hashFile(
-                  "version.materialize",
-                  checked.absolutePath,
-                  input.signal,
-                );
-                if (
-                  observed.sha256 === version.manifest.contentSha256 &&
-                  observed.byteSize === version.manifest.byteSize
-                )
-                  return "already-materialized" as const;
-              }
-              const tempPath = resolve(
-                parent,
-                `.${segments.at(-1)!}.club-code-${randomBytes(16).toString("hex")}.tmp`,
-              );
-              const output = await open(
-                tempPath,
-                fsConstants.O_CREAT |
-                  fsConstants.O_EXCL |
-                  fsConstants.O_WRONLY |
-                  (fsConstants.O_NOFOLLOW ?? 0),
-                0o600,
-              );
-              const fullDigest = createHash("sha256");
-              let fullSize = 0;
-              try {
-                const { bucket } = await blobProjectDirectory(request.sharedProjectId);
-                for (const chunk of version.manifest.chunks) {
+            try: async (effectSignal) =>
+              mutex.run(
+                `replica:${projectStorageKey(request.sharedProjectId)}:${sha256Path(request.relativePath)}`,
+                "version.materialize",
+                [input.signal, effectSignal],
+                async () => {
                   throwIfCancelled("version.materialize", input.signal, effectSignal);
-                  const blobPath = await verifyBlob(
-                    "version.materialize",
-                    bucket,
-                    chunk.contentSha256,
-                    chunk.byteSize,
-                    input.signal,
+                  await options.sandboxPathAuthority
+                    .assertContained(request.relativePath)
+                    .pipe(Effect.runPromise);
+                  const freshState = await Effect.runPromise(
+                    readCurrent("version.materialize", input.principal, request),
                   );
-                  if (blobPath === null) throw fail("version.materialize", "not-found");
-                  const blob = await open(
-                    blobPath,
-                    fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0),
-                  );
-                  const chunkDigest = createHash("sha256");
-                  let chunkSize = 0;
-                  try {
-                    const buffer = Buffer.allocUnsafe(frameLimit);
-                    for (;;) {
-                      throwIfCancelled("version.materialize", input.signal, effectSignal);
-                      const read = await blob.read(buffer, 0, buffer.byteLength, null);
-                      if (read.bytesRead === 0) break;
-                      const bytes = buffer.subarray(0, read.bytesRead);
-                      chunkDigest.update(bytes);
-                      fullDigest.update(bytes);
-                      chunkSize += read.bytesRead;
-                      fullSize += read.bytesRead;
-                      if (fullSize > fileLimit) throw fail("version.materialize", "quota-exceeded");
-                      await output.write(bytes);
-                    }
-                  } finally {
-                    await blob.close();
+                  versionFromCurrentState("version.materialize", freshState, request.versionId);
+                  const segments = request.relativePath.split("/");
+                  const parent = await ensureDirectory(replicaRoot, segments.slice(0, -1));
+                  const checked = await assertSafeRelativePath(replicaRoot, request.relativePath, {
+                    allowMissingLeaf: true,
+                  });
+                  if (checked.exists) {
+                    const observed = await hashFile(
+                      "version.materialize",
+                      checked.absolutePath,
+                      fileLimit,
+                      input.signal,
+                      effectSignal,
+                    );
+                    if (
+                      observed.sha256 === version.manifest.contentSha256 &&
+                      observed.byteSize === version.manifest.byteSize
+                    )
+                      return "already-materialized" as const;
                   }
-                  if (
-                    chunkSize !== chunk.byteSize ||
-                    chunkDigest.digest("hex") !== chunk.contentSha256
-                  )
-                    throw fail("version.materialize", "content-invalid");
-                }
-                if (
-                  fullSize !== version.manifest.byteSize ||
-                  fullDigest.digest("hex") !== version.manifest.contentSha256
-                )
-                  throw fail("version.materialize", "content-invalid");
-                await output.sync();
-              } catch (cause) {
-                await output.close().catch(() => undefined);
-                await safeUnlink(tempPath).catch(() => undefined);
-                throw cause;
-              }
-              await output.close();
-              try {
-                await assertRootIdentity(replicaRoot);
-                const commitState = await Effect.runPromise(
-                  readCurrent("version.materialize", input.principal, request),
-                );
-                versionFromCurrentState("version.materialize", commitState, request.versionId);
-                await options.sandboxPathAuthority
-                  .assertContained(request.relativePath)
-                  .pipe(Effect.runPromise);
-                const beforeReplace = await assertSafeRelativePath(
-                  replicaRoot,
-                  request.relativePath,
-                  { allowMissingLeaf: true },
-                );
-                if (process.platform === "win32" && beforeReplace.exists) {
-                  const projectRecovery = projectStorageKey(request.sharedProjectId);
-                  const recoveryParent = await ensureDirectory(managedRoot, [
-                    RECOVERY_DIRECTORY,
-                    projectRecovery,
-                    "replacements",
-                    request.versionId,
-                  ]);
-                  const recoveryPath = resolve(
-                    recoveryParent,
-                    createHash("sha256").update(request.relativePath).digest("hex"),
+                  const tempPath = resolve(
+                    managedStaging,
+                    `materialize-${randomBytes(16).toString("hex")}.tmp`,
                   );
-                  if (
-                    (await exactEntry(recoveryParent, recoveryPath.split(/[\\/]/u).at(-1)!)) !==
-                    null
-                  )
-                    throw new Error("replacement recovery collision");
-                  await rename(beforeReplace.absolutePath, recoveryPath);
+                  const output = await open(
+                    tempPath,
+                    fsConstants.O_CREAT |
+                      fsConstants.O_EXCL |
+                      fsConstants.O_WRONLY |
+                      (fsConstants.O_NOFOLLOW ?? 0),
+                    0o600,
+                  );
+                  const fullDigest = createHash("sha256");
+                  let fullSize = 0;
+                  let outputDevice = -1n;
+                  let outputInode = -1n;
                   try {
-                    await rename(tempPath, beforeReplace.absolutePath);
+                    const outputIdentity = await output.stat({ bigint: true });
+                    if (!outputIdentity.isFile() || outputIdentity.nlink !== 1n)
+                      throw new Error("unsafe staging entry");
+                    outputDevice = outputIdentity.dev;
+                    outputInode = outputIdentity.ino;
+                    const { bucket } = await blobProjectDirectory(request.sharedProjectId);
+                    for (const chunk of version.manifest.chunks) {
+                      throwIfCancelled("version.materialize", input.signal, effectSignal);
+                      const blobPath = await verifyBlob(
+                        "version.materialize",
+                        bucket,
+                        chunk.contentSha256,
+                        chunk.byteSize,
+                        input.signal,
+                        effectSignal,
+                      );
+                      if (blobPath === null) throw fail("version.materialize", "not-found");
+                      const blobBefore = await lstat(blobPath, { bigint: true });
+                      if (
+                        !blobBefore.isFile() ||
+                        blobBefore.isSymbolicLink() ||
+                        blobBefore.nlink !== 1n ||
+                        blobBefore.size !== BigInt(chunk.byteSize)
+                      )
+                        throw new Error("unsafe blob");
+                      const blob = await open(
+                        blobPath,
+                        fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0),
+                      );
+                      const chunkDigest = createHash("sha256");
+                      let chunkSize = 0;
+                      try {
+                        const blobOpened = await blob.stat({ bigint: true });
+                        if (
+                          !blobOpened.isFile() ||
+                          blobOpened.nlink !== 1n ||
+                          blobOpened.dev !== blobBefore.dev ||
+                          blobOpened.ino !== blobBefore.ino ||
+                          blobOpened.size !== blobBefore.size
+                        )
+                          throw new Error("unsafe blob");
+                        const buffer = Buffer.allocUnsafe(frameLimit);
+                        for (;;) {
+                          throwIfCancelled("version.materialize", input.signal, effectSignal);
+                          const read = await blob.read(buffer, 0, buffer.byteLength, null);
+                          if (read.bytesRead === 0) break;
+                          const bytes = buffer.subarray(0, read.bytesRead);
+                          chunkDigest.update(bytes);
+                          fullDigest.update(bytes);
+                          chunkSize += read.bytesRead;
+                          fullSize += read.bytesRead;
+                          if (fullSize > fileLimit)
+                            throw fail("version.materialize", "quota-exceeded");
+                          await writeAll(output, bytes);
+                        }
+                      } finally {
+                        await blob.close();
+                      }
+                      if (
+                        chunkSize !== chunk.byteSize ||
+                        chunkDigest.digest("hex") !== chunk.contentSha256
+                      )
+                        throw fail("version.materialize", "content-invalid");
+                    }
+                    if (
+                      fullSize !== version.manifest.byteSize ||
+                      fullDigest.digest("hex") !== version.manifest.contentSha256
+                    )
+                      throw fail("version.materialize", "content-invalid");
+                    await output.sync();
                   } catch (cause) {
-                    await rename(recoveryPath, beforeReplace.absolutePath).catch(() => undefined);
+                    await output.close().catch(() => undefined);
+                    await safeUnlink(tempPath).catch(() => undefined);
                     throw cause;
                   }
-                  await fsyncDirectory(recoveryParent);
-                } else {
-                  await rename(tempPath, beforeReplace.absolutePath);
-                }
-                await fsyncDirectory(parent);
-                return "materialized" as const;
-              } finally {
-                await safeUnlink(tempPath).catch(() => undefined);
-              }
-            },
-            catch: (cause) => mapUnknown("version.materialize", cause),
-          });
-          const finalState = yield* readCurrent("version.materialize", input.principal, request);
-          yield* Effect.try({
-            try: () =>
-              versionFromCurrentState("version.materialize", finalState, request.versionId),
+                  await output.close();
+                  try {
+                    const stagedIdentity = await lstat(tempPath, { bigint: true });
+                    if (
+                      !stagedIdentity.isFile() ||
+                      stagedIdentity.isSymbolicLink() ||
+                      stagedIdentity.nlink !== 1n ||
+                      stagedIdentity.dev !== outputDevice ||
+                      stagedIdentity.ino !== outputInode ||
+                      stagedIdentity.size !== BigInt(fullSize)
+                    )
+                      throw new Error("unsafe staging entry");
+                    await assertRootIdentity(replicaRoot);
+                    const commitState = await Effect.runPromise(
+                      readCurrent("version.materialize", input.principal, request),
+                    );
+                    versionFromCurrentState("version.materialize", commitState, request.versionId);
+                    await options.sandboxPathAuthority
+                      .assertContained(request.relativePath)
+                      .pipe(Effect.runPromise);
+                    const beforeReplace = await assertSafeRelativePath(
+                      replicaRoot,
+                      request.relativePath,
+                      { allowMissingLeaf: true },
+                    );
+                    const recoveryParent = await ensureDirectory(managedRoot, [
+                      RECOVERY_DIRECTORY,
+                      projectStorageKey(request.sharedProjectId),
+                      "replacements",
+                      request.versionId,
+                    ]);
+                    const recoveryPath = beforeReplace.exists
+                      ? resolve(recoveryParent, `previous-${randomBytes(16).toString("hex")}`)
+                      : null;
+                    if (recoveryPath) {
+                      await rename(beforeReplace.absolutePath, recoveryPath);
+                    }
+                    try {
+                      await rename(tempPath, beforeReplace.absolutePath);
+                    } catch (cause) {
+                      if (recoveryPath)
+                        await rename(recoveryPath, beforeReplace.absolutePath).catch(
+                          () => undefined,
+                        );
+                      throw cause;
+                    }
+                    await fsyncDirectory(parent);
+                    await fsyncDirectory(recoveryParent);
+                    try {
+                      const installedObserved = await hashFile(
+                        "version.materialize",
+                        beforeReplace.absolutePath,
+                        fileLimit,
+                        input.signal,
+                        effectSignal,
+                      );
+                      if (
+                        installedObserved.byteSize !== version.manifest.byteSize ||
+                        installedObserved.sha256 !== version.manifest.contentSha256
+                      )
+                        throw fail("version.materialize", "content-invalid");
+                      const finalState = await Effect.runPromise(
+                        readCurrent("version.materialize", input.principal, request),
+                      );
+                      versionFromCurrentState("version.materialize", finalState, request.versionId);
+                    } catch (cause) {
+                      const installed = await assertSafeRelativePath(
+                        replicaRoot,
+                        request.relativePath,
+                        { allowMissingLeaf: false },
+                      );
+                      if (!installed.exists) throw new Error("installed target missing", { cause });
+                      const stalePath = resolve(
+                        recoveryParent,
+                        `stale-${randomBytes(16).toString("hex")}`,
+                      );
+                      await rename(installed.absolutePath, stalePath);
+                      if (recoveryPath) await rename(recoveryPath, installed.absolutePath);
+                      await fsyncDirectory(parent);
+                      await fsyncDirectory(recoveryParent);
+                      throw cause;
+                    }
+                    return "materialized" as const;
+                  } finally {
+                    await safeUnlink(tempPath).catch(() => undefined);
+                  }
+                },
+              ),
             catch: (cause) => mapUnknown("version.materialize", cause),
           });
           return decodeMaterializeResult({
@@ -895,47 +1138,86 @@ export function makeCollaborationReplicaStorage(
           )
             return yield* Effect.fail(fail("tombstone.materialize", "not-found"));
           const disposition = yield* Effect.tryPromise({
-            try: async (effectSignal) => {
-              throwIfCancelled("tombstone.materialize", input.signal, effectSignal);
-              await options.sandboxPathAuthority
-                .assertContained(request.relativePath)
-                .pipe(Effect.runPromise);
-              const checked = await assertSafeRelativePath(replicaRoot, request.relativePath, {
-                allowMissingLeaf: true,
-              });
-              if (!checked.exists) return "already-absent" as const;
-              const recoveryParent = await ensureDirectory(managedRoot, [
-                RECOVERY_DIRECTORY,
-                projectStorageKey(request.sharedProjectId),
-                "tombstones",
-                request.tombstoneId,
-              ]);
-              const recoveryName = createHash("sha256").update(request.relativePath).digest("hex");
-              const recoveryPath = resolve(recoveryParent, recoveryName);
-              if ((await exactEntry(recoveryParent, recoveryName)) !== null)
-                throw new Error("recovery collision");
-              await assertRootIdentity(replicaRoot);
-              const commitState = await Effect.runPromise(
-                readCurrent("tombstone.materialize", input.principal, request),
-              );
-              if (
-                commitState.head?.kind !== "tombstone" ||
-                commitState.head.tombstoneId !== request.tombstoneId
-              )
-                throw fail("tombstone.materialize", "not-found");
-              await rename(checked.absolutePath, recoveryPath);
-              await fsyncDirectory(dirname(checked.absolutePath));
-              await fsyncDirectory(recoveryParent);
-              return "moved-to-recovery" as const;
-            },
+            try: async (effectSignal) =>
+              mutex.run(
+                `replica:${projectStorageKey(request.sharedProjectId)}:${sha256Path(request.relativePath)}`,
+                "tombstone.materialize",
+                [input.signal, effectSignal],
+                async () => {
+                  throwIfCancelled("tombstone.materialize", input.signal, effectSignal);
+                  await options.sandboxPathAuthority
+                    .assertContained(request.relativePath)
+                    .pipe(Effect.runPromise);
+                  const freshState = await Effect.runPromise(
+                    readCurrent("tombstone.materialize", input.principal, request),
+                  );
+                  if (
+                    freshState.head?.kind !== "tombstone" ||
+                    freshState.head.tombstoneId !== request.tombstoneId ||
+                    !freshState.tombstones.some(
+                      (tombstone) => tombstone.tombstoneId === request.tombstoneId,
+                    )
+                  )
+                    throw fail("tombstone.materialize", "not-found");
+                  const checked = await assertSafeRelativePath(replicaRoot, request.relativePath, {
+                    allowMissingLeaf: true,
+                  });
+                  if (!checked.exists) return "already-absent" as const;
+                  const recoveryParent = await ensureDirectory(managedRoot, [
+                    RECOVERY_DIRECTORY,
+                    projectStorageKey(request.sharedProjectId),
+                    "tombstones",
+                    request.tombstoneId,
+                  ]);
+                  const recoveryName = `deleted-${randomBytes(16).toString("hex")}`;
+                  const recoveryPath = resolve(recoveryParent, recoveryName);
+                  await assertRootIdentity(replicaRoot);
+                  const commitState = await Effect.runPromise(
+                    readCurrent("tombstone.materialize", input.principal, request),
+                  );
+                  if (
+                    commitState.head?.kind !== "tombstone" ||
+                    commitState.head.tombstoneId !== request.tombstoneId
+                  )
+                    throw fail("tombstone.materialize", "not-found");
+                  const beforeMove = await assertSafeRelativePath(
+                    replicaRoot,
+                    request.relativePath,
+                    {
+                      allowMissingLeaf: false,
+                    },
+                  );
+                  if (!beforeMove.exists) return "already-absent" as const;
+                  await rename(beforeMove.absolutePath, recoveryPath);
+                  await fsyncDirectory(dirname(beforeMove.absolutePath));
+                  await fsyncDirectory(recoveryParent);
+                  try {
+                    const finalState = await Effect.runPromise(
+                      readCurrent("tombstone.materialize", input.principal, request),
+                    );
+                    if (
+                      finalState.head?.kind !== "tombstone" ||
+                      finalState.head.tombstoneId !== request.tombstoneId ||
+                      !finalState.tombstones.some(
+                        (tombstone) => tombstone.tombstoneId === request.tombstoneId,
+                      )
+                    )
+                      throw fail("tombstone.materialize", "not-found");
+                  } catch (cause) {
+                    const target = await assertSafeRelativePath(replicaRoot, request.relativePath, {
+                      allowMissingLeaf: true,
+                    });
+                    if (target.exists) throw new Error("tombstone rollback collision", { cause });
+                    await rename(recoveryPath, target.absolutePath);
+                    await fsyncDirectory(dirname(target.absolutePath));
+                    await fsyncDirectory(recoveryParent);
+                    throw cause;
+                  }
+                  return "moved-to-recovery" as const;
+                },
+              ),
             catch: (cause) => mapUnknown("tombstone.materialize", cause),
           });
-          const finalState = yield* readCurrent("tombstone.materialize", input.principal, request);
-          if (
-            finalState.head?.kind !== "tombstone" ||
-            finalState.head.tombstoneId !== request.tombstoneId
-          )
-            return yield* Effect.fail(fail("tombstone.materialize", "not-found"));
           return decodeMaterializeResult({
             disposition,
             sharedProjectId: request.sharedProjectId,

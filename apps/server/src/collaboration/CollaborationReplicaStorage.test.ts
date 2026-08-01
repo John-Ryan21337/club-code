@@ -2,7 +2,17 @@ import type { CollaborationFileState as FileState } from "@cafecode/contracts";
 import { CollaborationFileState, SharedProjectId } from "@cafecode/contracts";
 import { assert, describe, it } from "@effect/vitest";
 import { createHash } from "node:crypto";
-import { link, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import {
+  link,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rename,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -100,16 +110,18 @@ function tombstoneState(relativePath = "src/deleted.txt") {
   };
 }
 
-function fileAuthority(readState: () => FileState): CollaborationFileSyncStoreShape {
+function fileAuthority(
+  readState: () => FileState | Promise<FileState>,
+): CollaborationFileSyncStoreShape {
   return {
     publish: () => Effect.die("unused publish"),
     tombstone: () => Effect.die("unused tombstone"),
-    read: () => Effect.sync(readState),
+    read: () => Effect.promise(() => Promise.resolve(readState())),
   };
 }
 
 async function harness(
-  readState: () => FileState,
+  readState: () => FileState | Promise<FileState>,
   limits: {
     readonly projectBlobQuotaBytes?: number;
     readonly streamFrameMaxBytes?: number;
@@ -245,6 +257,39 @@ describe("CollaborationReplicaStorage", () => {
     }
   });
 
+  it("materializes a portable maximum-length leaf without deriving an oversized temp name", async () => {
+    const relativePath = `deep/${"a".repeat(255)}`;
+    const version = versionState(["long-leaf"], { relativePath });
+    const test = await harness(() => version.state);
+    try {
+      await Effect.runPromise(
+        test.storage.putBlob({
+          principal: {},
+          request: putRequest(version),
+          source: bytes("long-leaf"),
+        }),
+      );
+      const result = await Effect.runPromise(
+        test.storage.materializeVersion({
+          principal: {},
+          request: {
+            sharedProjectId: projectId,
+            relativePath,
+            deviceKeyId: "key-1",
+            versionId: version.versionId,
+          },
+        }),
+      );
+      assert.equal(result.disposition, "materialized");
+      assert.equal(
+        await readFile(join(test.replicaRoot, "deep", "a".repeat(255)), "utf8"),
+        "long-leaf",
+      );
+    } finally {
+      await test.cleanup();
+    }
+  });
+
   it("rejects oversized frames and digest mismatches without retaining staging bytes", async () => {
     const version = versionState(["abcd"]);
     const test = await harness(() => version.state, { streamFrameMaxBytes: 2 });
@@ -292,6 +337,52 @@ describe("CollaborationReplicaStorage", () => {
       );
       await assertNoUploadTemps(test.blobRoot);
     } finally {
+      await test.cleanup();
+    }
+  });
+
+  it("reserves quota before streaming so concurrent uploads cannot overcommit staging", async () => {
+    const version = versionState(["abc", "def"]);
+    const test = await harness(() => version.state, { projectBlobQuotaBytes: 3 });
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let firstPullStarted!: () => void;
+    const firstPulled = new Promise<void>((resolve) => {
+      firstPullStarted = resolve;
+    });
+    try {
+      const first = Effect.runPromise(
+        test.storage.putBlob({
+          principal: {},
+          request: putRequest(version, 0),
+          source: (async function* () {
+            firstPullStarted();
+            await firstGate;
+            yield Buffer.from("abc");
+          })(),
+        }),
+      );
+      await firstPulled;
+      let secondPulled = false;
+      await expectReason(
+        test.storage.putBlob({
+          principal: {},
+          request: putRequest(version, 1),
+          source: (async function* () {
+            secondPulled = true;
+            yield Buffer.from("def");
+          })(),
+        }),
+        "quota-exceeded",
+      );
+      assert.isFalse(secondPulled);
+      releaseFirst();
+      assert.equal((await first).disposition, "stored");
+      await assertNoUploadTemps(test.blobRoot);
+    } finally {
+      releaseFirst();
       await test.cleanup();
     }
   });
@@ -357,6 +448,41 @@ describe("CollaborationReplicaStorage", () => {
     }
   });
 
+  it("cancels a hung upload iterator and removes its staging file", async () => {
+    const version = versionState(["cancelled"]);
+    const test = await harness(() => version.state);
+    try {
+      const controller = new AbortController();
+      let returned = false;
+      const source: AsyncIterable<Uint8Array> = {
+        [Symbol.asyncIterator]() {
+          return {
+            next: () => new Promise<IteratorResult<Uint8Array>>(() => undefined),
+            return: () => {
+              returned = true;
+              return Promise.resolve({ done: true, value: undefined });
+            },
+          };
+        },
+      };
+      const pending = expectReason(
+        test.storage.putBlob({
+          principal: {},
+          request: putRequest(version),
+          signal: controller.signal,
+          source,
+        }),
+        "cancelled",
+      );
+      setTimeout(() => controller.abort(), 10);
+      await pending;
+      assert.isTrue(returned);
+      await assertNoUploadTemps(test.blobRoot);
+    } finally {
+      await test.cleanup();
+    }
+  });
+
   it("cleans only recognized crash-stage files when a project bucket is reopened", async () => {
     const version = versionState(["recovered"]);
     const projectKey = createHash("sha256")
@@ -372,6 +498,22 @@ describe("CollaborationReplicaStorage", () => {
     });
     try {
       assert.deepEqual(await readdir(join(test.blobRoot, projectKey, "staging")), []);
+    } finally {
+      await test.cleanup();
+    }
+  });
+
+  it("cleans only recognized materialization crash stages on startup", async () => {
+    const version = versionState(["recovered"]);
+    const test = await harness(() => version.state, {
+      beforeStorage: async ({ replicaRoot }) => {
+        const staging = join(replicaRoot, ".club-code-managed", "staging");
+        await mkdir(staging, { recursive: true });
+        await writeFile(join(staging, `materialize-${"b".repeat(32)}.tmp`), "partial");
+      },
+    });
+    try {
+      assert.deepEqual(await readdir(join(test.replicaRoot, ".club-code-managed", "staging")), []);
     } finally {
       await test.cleanup();
     }
@@ -450,6 +592,48 @@ describe("CollaborationReplicaStorage", () => {
     }
   });
 
+  it("refuses a symlink or junction ancestor without touching its external target", async () => {
+    const version = versionState(["remote"], { relativePath: "escape/shared.txt" });
+    const test = await harness(() => version.state);
+    const outside = join(test.outer, "outside-directory");
+    try {
+      await mkdir(outside);
+      await writeFile(join(outside, "shared.txt"), "outside");
+      try {
+        await symlink(
+          outside,
+          join(test.replicaRoot, "escape"),
+          process.platform === "win32" ? "junction" : "dir",
+        );
+      } catch (error) {
+        if (
+          process.platform === "win32" &&
+          typeof error === "object" &&
+          error !== null &&
+          "code" in error &&
+          error.code === "EPERM"
+        )
+          return;
+        throw error;
+      }
+      await expectReason(
+        test.storage.materializeVersion({
+          principal: {},
+          request: {
+            sharedProjectId: projectId,
+            relativePath: version.relativePath,
+            deviceKeyId: "key-1",
+            versionId: version.versionId,
+          },
+        }),
+        "unsafe-storage",
+      );
+      assert.equal(await readFile(join(outside, "shared.txt"), "utf8"), "outside");
+    } finally {
+      await test.cleanup();
+    }
+  });
+
   it("moves tombstoned files to recovery and makes retries harmless", async () => {
     const tombstone = tombstoneState();
     const test = await harness(() => tombstone.state);
@@ -501,6 +685,111 @@ describe("CollaborationReplicaStorage", () => {
         }),
       );
       assert.equal(retry.disposition, "already-absent");
+    } finally {
+      await test.cleanup();
+    }
+  });
+
+  it("rolls back a version replacement when the authorized head changes during commit", async () => {
+    const version = versionState(["remote"], { relativePath: "src/raced.txt" });
+    const noHead = decodeState({ ...version.state, head: null, headVersion: null });
+    let race = false;
+    let reads = 0;
+    const test = await harness(() => {
+      if (!race) return version.state;
+      reads += 1;
+      return reads < 4 ? version.state : noHead;
+    });
+    try {
+      await Effect.runPromise(
+        test.storage.putBlob({
+          principal: {},
+          request: putRequest(version),
+          source: bytes("remote"),
+        }),
+      );
+      await mkdir(join(test.replicaRoot, "src"));
+      await writeFile(join(test.replicaRoot, "src", "raced.txt"), "local");
+      race = true;
+      await expectReason(
+        test.storage.materializeVersion({
+          principal: {},
+          request: {
+            sharedProjectId: projectId,
+            relativePath: version.relativePath,
+            deviceKeyId: "key-1",
+            versionId: version.versionId,
+          },
+        }),
+        "not-found",
+      );
+      assert.equal(await readFile(join(test.replicaRoot, "src", "raced.txt"), "utf8"), "local");
+    } finally {
+      await test.cleanup();
+    }
+  });
+
+  it("rolls back a tombstone move when the authorized head changes during commit", async () => {
+    const tombstone = tombstoneState("src/raced-delete.txt");
+    const noHead: FileState = { ...tombstone.state, head: null };
+    let reads = 0;
+    const test = await harness(() => {
+      reads += 1;
+      return reads < 4 ? tombstone.state : noHead;
+    });
+    try {
+      await mkdir(join(test.replicaRoot, "src"));
+      await writeFile(join(test.replicaRoot, "src", "raced-delete.txt"), "keep me");
+      await expectReason(
+        test.storage.materializeTombstone({
+          principal: {},
+          request: {
+            sharedProjectId: projectId,
+            relativePath: tombstone.relativePath,
+            deviceKeyId: "key-1",
+            tombstoneId: tombstone.tombstoneId,
+          },
+        }),
+        "not-found",
+      );
+      assert.equal(
+        await readFile(join(test.replicaRoot, "src", "raced-delete.txt"), "utf8"),
+        "keep me",
+      );
+    } finally {
+      await test.cleanup();
+    }
+  });
+
+  it("refuses a tombstone target swapped to a directory before the move", async () => {
+    const tombstone = tombstoneState("src/type-race.txt");
+    let reads = 0;
+    let target = "";
+    const test = await harness(async () => {
+      reads += 1;
+      if (reads === 3) {
+        await rm(target);
+        await mkdir(target);
+      }
+      return tombstone.state;
+    });
+    try {
+      target = join(test.replicaRoot, "src", "type-race.txt");
+      await mkdir(join(test.replicaRoot, "src"));
+      await writeFile(target, "local");
+      await expectReason(
+        test.storage.materializeTombstone({
+          principal: {},
+          request: {
+            sharedProjectId: projectId,
+            relativePath: tombstone.relativePath,
+            deviceKeyId: "key-1",
+            tombstoneId: tombstone.tombstoneId,
+          },
+        }),
+        "unsafe-storage",
+      );
+      assert.deepEqual(await readdir(target), []);
     } finally {
       await test.cleanup();
     }
