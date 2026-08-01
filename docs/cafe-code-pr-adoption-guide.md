@@ -111,6 +111,8 @@ PR #8 is a draft release aggregate, not the recommended Cafe review unit. It con
 
 ## Validation gates
 
+At this snapshot GitHub reported no configured checks for PRs #13 through #20. `MERGEABLE/CLEAN` describes branch topology, not test evidence; Cafe maintainers must run the recorded local gates (or equivalent CI) on the exact adopted heads.
+
 Run the repository gates after each meaningful stack layer and again at the final exact head:
 
 ```sh
