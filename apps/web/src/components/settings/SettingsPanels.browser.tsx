@@ -1491,9 +1491,11 @@ describe("settings panels", () => {
     setServerConfigSnapshot({
       ...config,
       clientSettings: {
-        ...config.clientSettings,
-        fallingEffectMatrixColorMode: "rainbow-extra",
-        fallingEffectMatrixColorCycleSpeed: 32,
+          ...config.clientSettings,
+          fallingEffectMatrixColorMode: "rainbow-extra",
+          fallingEffectMatrixColorCycleSpeed: 32,
+          fallingEffectMatrixMotionMode: "tunnel",
+          fallingEffect2chEnriched: true,
         fallingEffectLiveWorkVocabulary: true,
         fallingEffectActivityLinks: true,
         fallingEffectActivityLinkNetworkEnabled: false,
@@ -1513,22 +1515,24 @@ describe("settings panels", () => {
     );
 
     await expect
-      .element(page.getByLabelText("Changed settings"))
-      .toHaveTextContent(
-        "Matrix color mode | Matrix color-cycle speed | Matrix live work vocabulary | Matrix activity links | Matrix activity link inputs | Matrix activity link colors | Matrix verified route visibility",
+        .element(page.getByLabelText("Changed settings"))
+        .toHaveTextContent(
+          "Matrix color mode | Matrix color-cycle speed | Atmosphere motion | 2ch-inspired Matrix enrichment | Matrix live work vocabulary | Matrix activity links | Matrix activity link inputs | Matrix activity link colors | Matrix verified route visibility",
       );
     await page.getByRole("button", { name: "Apply settings reset" }).click();
 
     await vi.waitFor(() => {
       expect(confirm).toHaveBeenCalledWith(
-        expect.stringContaining(
-          "Matrix color mode, Matrix color-cycle speed, Matrix live work vocabulary, Matrix activity links, Matrix activity link inputs, Matrix activity link colors, Matrix verified route visibility",
+          expect.stringContaining(
+            "Matrix color mode, Matrix color-cycle speed, Atmosphere motion, 2ch-inspired Matrix enrichment, Matrix live work vocabulary, Matrix activity links, Matrix activity link inputs, Matrix activity link colors, Matrix verified route visibility",
         ),
       );
       expect(updateClientSettings).toHaveBeenCalledWith(
         expect.objectContaining({
-          fallingEffectMatrixColorMode: "fixed",
-          fallingEffectMatrixColorCycleSpeed: 1,
+            fallingEffectMatrixColorMode: "fixed",
+            fallingEffectMatrixColorCycleSpeed: 1,
+            fallingEffectMatrixMotionMode: "flat",
+            fallingEffect2chEnriched: false,
           fallingEffectLiveWorkVocabulary: false,
           fallingEffectActivityLinks: false,
           fallingEffectActivityLinkNetworkEnabled: true,
@@ -1540,8 +1544,10 @@ describe("settings panels", () => {
         }),
       );
       expect(getServerConfig()?.clientSettings).toMatchObject({
-        fallingEffectMatrixColorMode: "fixed",
-        fallingEffectMatrixColorCycleSpeed: 1,
+          fallingEffectMatrixColorMode: "fixed",
+          fallingEffectMatrixColorCycleSpeed: 1,
+          fallingEffectMatrixMotionMode: "flat",
+          fallingEffect2chEnriched: false,
         fallingEffectLiveWorkVocabulary: false,
         fallingEffectActivityLinks: false,
         fallingEffectActivityLinkNetworkEnabled: true,

@@ -16,6 +16,7 @@ import {
   DEFAULT_FALLING_EFFECT_LIVE_WORK_VOCABULARY,
   DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
   DEFAULT_FALLING_EFFECT_MATRIX_COLOR_MODE,
+  DEFAULT_FALLING_EFFECT_MATRIX_MOTION_MODE,
   DEFAULT_FALLING_EFFECT_SPEED,
   MAX_AMBIENT_OPACITY,
   MAX_FALLING_EFFECT_DENSITY,
@@ -106,6 +107,34 @@ export function WindowAtmosphereSettings() {
   const { updateSettings } = useUpdateSettings();
   const serverConfig = useServerConfig();
   const atmosphereAvailable = serverConfig?.ambientExperienceCapabilities.atmosphere === true;
+  const controlsEnabled = atmosphereAvailable && settings.fallingEffectsEnabled;
+  const hasNonDefaultValue =
+    settings.fallingEffectsEnabled !== DEFAULT_FALLING_EFFECTS_ENABLED ||
+    settings.fallingEffectKind !== DEFAULT_FALLING_EFFECT_KIND ||
+    settings.fallingEffectColor !== DEFAULT_AMBIENT_COLOR ||
+    settings.fallingEffectMatrixColorMode !== DEFAULT_FALLING_EFFECT_MATRIX_COLOR_MODE ||
+    settings.fallingEffectMatrixColorCycleSpeed !==
+      DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED ||
+    settings.fallingEffectMatrixMotionMode !== DEFAULT_FALLING_EFFECT_MATRIX_MOTION_MODE ||
+    settings.fallingEffectOpacity !== DEFAULT_AMBIENT_OPACITY ||
+    settings.fallingEffectSpeed !== DEFAULT_FALLING_EFFECT_SPEED ||
+    settings.fallingEffectDensity !== DEFAULT_FALLING_EFFECT_DENSITY ||
+    settings.fallingEffectJapaneseRatio !== DEFAULT_FALLING_EFFECT_JAPANESE_RATIO ||
+    settings.fallingEffect2chEnriched !== DEFAULT_FALLING_EFFECT_2CH_ENRICHED ||
+    settings.fallingEffectLiveWorkVocabulary !== DEFAULT_FALLING_EFFECT_LIVE_WORK_VOCABULARY ||
+    settings.fallingEffectActivityLinks !== DEFAULT_FALLING_EFFECT_ACTIVITY_LINKS ||
+    settings.fallingEffectActivityLinkNetworkEnabled !==
+      DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_NETWORK_ENABLED ||
+    settings.fallingEffectActivityLinkDatabaseEnabled !==
+      DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_DATABASE_ENABLED ||
+    settings.fallingEffectActivityLinkBuildEnabled !==
+      DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_BUILD_ENABLED ||
+    settings.fallingEffectActivityLinkAgentEnabled !==
+      DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_AGENT_ENABLED ||
+    settings.fallingEffectActivityLinkColorMode !==
+      DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_COLOR_MODE ||
+    settings.fallingEffectActivityLinkRetentionSeconds !==
+      DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS;
 
   return (
     <SettingsSection title="Window atmosphere">
@@ -120,32 +149,7 @@ export function WindowAtmosphereSettings() {
           )
         }
         resetAction={
-          settings.fallingEffectsEnabled !== DEFAULT_FALLING_EFFECTS_ENABLED ||
-          settings.fallingEffectKind !== DEFAULT_FALLING_EFFECT_KIND ||
-          settings.fallingEffectColor !== DEFAULT_AMBIENT_COLOR ||
-          settings.fallingEffectMatrixColorMode !== DEFAULT_FALLING_EFFECT_MATRIX_COLOR_MODE ||
-          settings.fallingEffectMatrixColorCycleSpeed !==
-            DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED ||
-          settings.fallingEffectOpacity !== DEFAULT_AMBIENT_OPACITY ||
-          settings.fallingEffectSpeed !== DEFAULT_FALLING_EFFECT_SPEED ||
-          settings.fallingEffectDensity !== DEFAULT_FALLING_EFFECT_DENSITY ||
-          settings.fallingEffectJapaneseRatio !== DEFAULT_FALLING_EFFECT_JAPANESE_RATIO ||
-          settings.fallingEffect2chEnriched !== DEFAULT_FALLING_EFFECT_2CH_ENRICHED ||
-          settings.fallingEffectActivityLinks !== DEFAULT_FALLING_EFFECT_ACTIVITY_LINKS ||
-          settings.fallingEffectActivityLinkNetworkEnabled !==
-            DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_NETWORK_ENABLED ||
-          settings.fallingEffectActivityLinkDatabaseEnabled !==
-            DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_DATABASE_ENABLED ||
-          settings.fallingEffectActivityLinkBuildEnabled !==
-            DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_BUILD_ENABLED ||
-          settings.fallingEffectActivityLinkAgentEnabled !==
-            DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_AGENT_ENABLED ||
-          settings.fallingEffectActivityLinkColorMode !==
-            DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_COLOR_MODE ||
-          settings.fallingEffectActivityLinkRetentionSeconds !==
-            DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS ||
-          settings.fallingEffectLiveWorkVocabulary !==
-            DEFAULT_FALLING_EFFECT_LIVE_WORK_VOCABULARY ? (
+          hasNonDefaultValue ? (
             <SettingResetButton
               label="window atmosphere"
               onClick={() =>
@@ -156,6 +160,7 @@ export function WindowAtmosphereSettings() {
                   fallingEffectMatrixColorMode: DEFAULT_FALLING_EFFECT_MATRIX_COLOR_MODE,
                   fallingEffectMatrixColorCycleSpeed:
                     DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
+                  fallingEffectMatrixMotionMode: DEFAULT_FALLING_EFFECT_MATRIX_MOTION_MODE,
                   fallingEffectOpacity: DEFAULT_AMBIENT_OPACITY,
                   fallingEffectSpeed: DEFAULT_FALLING_EFFECT_SPEED,
                   fallingEffectDensity: DEFAULT_FALLING_EFFECT_DENSITY,
@@ -192,7 +197,7 @@ export function WindowAtmosphereSettings() {
         }
       />
 
-      {atmosphereAvailable && settings.fallingEffectsEnabled ? (
+      {controlsEnabled ? (
         <SettingsRow
           title="Effect"
           description="Choose what falls through the window."
@@ -227,9 +232,48 @@ export function WindowAtmosphereSettings() {
         />
       ) : null}
 
-      {atmosphereAvailable &&
-      settings.fallingEffectsEnabled &&
-      settings.fallingEffectKind === "matrix" ? (
+      {controlsEnabled ? (
+        <SettingsRow
+          title="Atmosphere motion"
+          description="Flat preserves classic falling geometry. Forward and Reverse add depth travel; Warp sends the same particles through a bounded center tunnel."
+          control={
+            <RadioGroup
+              value={settings.fallingEffectMatrixMotionMode}
+              onValueChange={(value) => {
+                if (
+                  value === "flat" ||
+                  value === "forward" ||
+                  value === "reverse" ||
+                  value === "tunnel"
+                ) {
+                  updateSettings({ fallingEffectMatrixMotionMode: value });
+                }
+              }}
+              aria-label="Atmosphere motion"
+              className="flex-row flex-wrap gap-4"
+            >
+              {(
+                [
+                  ["flat", "Flat"],
+                  ["forward", "Forward"],
+                  ["reverse", "Reverse"],
+                  ["tunnel", "Warp"],
+                ] as const
+              ).map(([value, label]) => (
+                <label
+                  key={value}
+                  className="flex cursor-pointer items-center gap-1.5 text-xs font-medium"
+                >
+                  <Radio value={value} />
+                  <span>{label}</span>
+                </label>
+              ))}
+            </RadioGroup>
+          }
+        />
+      ) : null}
+
+      {controlsEnabled && settings.fallingEffectKind === "matrix" ? (
         <>
           <SettingsRow
             title="Matrix color mode"

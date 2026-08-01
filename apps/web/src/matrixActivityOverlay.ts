@@ -4,11 +4,14 @@ import {
   MAX_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
   MIN_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
   type FallingEffectActivityLinkColorMode,
+  type FallingEffectMatrixMotionMode,
 } from "@cafecode/contracts/settings";
 
 import type { AppState } from "./store";
 import {
+  resolveAtmosphereProjectedPointInPlace,
   resolveMatrixStreamColor,
+  type AtmosphereProjectedPoint,
   type AtmosphereScene,
   type MatrixColorFrame,
 } from "./windowAtmosphere";
@@ -1160,6 +1163,38 @@ export function createMatrixHexRoute(from: MatrixHexPoint, to: MatrixHexPoint): 
   return { points, segmentLengths, totalLength };
 }
 
+export function createMatrixTunnelRoute(
+  from: MatrixHexPoint,
+  to: MatrixHexPoint,
+  center: MatrixHexPoint,
+): MatrixHexRoute {
+  const safeFrom = {
+    x: Number.isFinite(from.x) ? from.x : 0,
+    y: Number.isFinite(from.y) ? from.y : 0,
+  };
+  const safeTo = {
+    x: Number.isFinite(to.x) ? to.x : safeFrom.x,
+    y: Number.isFinite(to.y) ? to.y : safeFrom.y,
+  };
+  const safeCenter = {
+    x: Number.isFinite(center.x) ? center.x : (safeFrom.x + safeTo.x) * 0.5,
+    y: Number.isFinite(center.y) ? center.y : (safeFrom.y + safeTo.y) * 0.5,
+  };
+  const points: MatrixHexPoint[] = [{ ...safeFrom }];
+  appendDistinctPoint(points, safeCenter);
+  appendDistinctPoint(points, safeTo);
+  const segmentLengths: number[] = [];
+  let totalLength = 0;
+  for (let index = 1; index < points.length; index += 1) {
+    const previous = points[index - 1]!;
+    const current = points[index]!;
+    const length = Math.hypot(current.x - previous.x, current.y - previous.y);
+    segmentLengths.push(length);
+    totalLength += length;
+  }
+  return { points, segmentLengths, totalLength };
+}
+
 export function matrixHexRoutePointAt(
   route: MatrixHexRoute,
   requestedProgress: number,
@@ -1308,6 +1343,8 @@ function resolveMatrixActivityLinkPaint(
   matrixColorFrame: MatrixColorFrame,
   from: AtmosphereScene["particles"][number],
   to: AtmosphereScene["particles"][number],
+  fromPoint: AtmosphereProjectedPoint,
+  toPoint: AtmosphereProjectedPoint,
   colorHue: number,
 ): string | CanvasGradient {
   if (colorMode === "random") return randomMatrixActivityColor(colorHue);
@@ -1316,7 +1353,7 @@ function resolveMatrixActivityLinkPaint(
   const toColor = resolveMatrixStreamColor(matrixColorFrame, to);
   if (fromColor === toColor) return fromColor;
 
-  const gradient = context.createLinearGradient(from.x, from.y, to.x, to.y);
+  const gradient = context.createLinearGradient(fromPoint.x, fromPoint.y, toPoint.x, toPoint.y);
   gradient.addColorStop(0, fromColor);
   gradient.addColorStop(1, toColor);
   return gradient;
@@ -1325,6 +1362,7 @@ function resolveMatrixActivityLinkPaint(
 function drawMatrixActivityPulse(
   context: CanvasRenderingContext2D,
   particle: AtmosphereScene["particles"][number],
+  projectedPoint: AtmosphereProjectedPoint,
   category: MatrixActivityCategory,
   semanticRole: MatrixActivityPulse["semanticRole"],
   paint: string,
@@ -1336,23 +1374,23 @@ function drawMatrixActivityPulse(
   context.lineWidth = 0.75 + intensity;
   context.beginPath();
   context.arc(
-    particle.x,
-    particle.y,
-    particle.size * (0.75 + (1 - intensity) * 0.9),
+    projectedPoint.x,
+    projectedPoint.y,
+    particle.size * projectedPoint.scale * (0.75 + (1 - intensity) * 0.9),
     0,
     Math.PI * 2,
   );
   context.stroke();
   context.fillStyle = paint;
   context.globalAlpha = safeOpacity * intensity;
-  context.font = `${Math.min(15, Math.max(10, particle.size))}px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace`;
+  context.font = `${Math.min(15, Math.max(10, particle.size * projectedPoint.scale))}px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace`;
   context.textAlign = "center";
   context.textBaseline = "middle";
   context.fillText(
     resolveMatrixActivityTerm(category, semanticRole, particle.matrixLanguage),
-    particle.x,
-    particle.y,
-    144,
+    projectedPoint.x,
+    projectedPoint.y,
+    144 * projectedPoint.scale,
   );
 }
 
@@ -1397,6 +1435,7 @@ function resolveRenderedMatrixActivityCount(
 function drawMatrixActivityTelemetryRing(
   context: CanvasRenderingContext2D,
   particle: AtmosphereScene["particles"][number],
+  projectedPoint: AtmosphereProjectedPoint,
   category: MatrixActivityCategory,
   paint: string,
   safeOpacity: number,
@@ -1406,10 +1445,10 @@ function drawMatrixActivityTelemetryRing(
   const glyphCount = Math.min(MAX_MATRIX_ACTIVITY_TELEMETRY_GLYPHS, label.length);
   if (glyphCount === 0) return;
 
-  const radius = Math.min(30, Math.max(20, particle.size * 1.65));
+  const radius = Math.min(30, Math.max(20, particle.size * 1.65)) * projectedPoint.scale;
   const glyphAngle = (Math.PI * 2) / glyphCount;
   context.save();
-  context.translate(particle.x, particle.y);
+  context.translate(projectedPoint.x, projectedPoint.y);
   context.fillStyle = paint;
   context.globalAlpha = safeOpacity * intensity;
   context.font = "7px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
@@ -1432,6 +1471,7 @@ export function drawMatrixActivityAnimation(
   atmosphereOpacity: number,
   colorMode: FallingEffectActivityLinkColorMode,
   matrixColorFrame: MatrixColorFrame,
+  motionMode: FallingEffectMatrixMotionMode = "flat",
 ): void {
   if (scene.kind !== "matrix") return;
   const renderedLinkCount = resolveRenderedMatrixActivityCount(
@@ -1453,28 +1493,39 @@ export function drawMatrixActivityAnimation(
   context.rect(0, 0, scene.width, scene.height);
   context.clip();
   context.lineCap = "round";
+  const projectedFrom: AtmosphereProjectedPoint = { x: 0, y: 0, scale: 1 };
+  const projectedTo: AtmosphereProjectedPoint = { x: 0, y: 0, scale: 1 };
   const packetCount = resolveMatrixActivityPacketCount(renderedLinkCount);
   for (let index = 0; index < renderedLinkCount; index += 1) {
     const link = state.links[index]!;
     const from = scene.particles[link.fromAnchorIndex];
     const to = scene.particles[link.toAnchorIndex];
     if (!from || !to) continue;
-    const route = createMatrixHexRoute(
-      {
-        x: Math.min(scene.width, Math.max(0, from.x)),
-        y: Math.min(scene.height, Math.max(0, from.y)),
-      },
-      {
-        x: Math.min(scene.width, Math.max(0, to.x)),
-        y: Math.min(scene.height, Math.max(0, to.y)),
-      },
-    );
+    resolveAtmosphereProjectedPointInPlace(projectedFrom, scene, from, from.x, from.y, motionMode);
+    resolveAtmosphereProjectedPointInPlace(projectedTo, scene, to, to.x, to.y, motionMode);
+    const fromPoint = {
+      x: Math.min(scene.width, Math.max(0, projectedFrom.x)),
+      y: Math.min(scene.height, Math.max(0, projectedFrom.y)),
+    };
+    const toPoint = {
+      x: Math.min(scene.width, Math.max(0, projectedTo.x)),
+      y: Math.min(scene.height, Math.max(0, projectedTo.y)),
+    };
+    const route =
+      motionMode === "tunnel"
+        ? createMatrixTunnelRoute(fromPoint, toPoint, {
+            x: scene.width * 0.5,
+            y: scene.height * 0.5,
+          })
+        : createMatrixHexRoute(fromPoint, toPoint);
     const linkPaint = resolveMatrixActivityLinkPaint(
       context,
       colorMode,
       matrixColorFrame,
       from,
       to,
+      projectedFrom,
+      projectedTo,
       link.colorHue,
     );
     context.strokeStyle = linkPaint;
@@ -1513,6 +1564,14 @@ export function drawMatrixActivityAnimation(
     const pulse = state.pulses[index]!;
     const particle = scene.particles[pulse.anchorIndex];
     if (!particle) continue;
+    resolveAtmosphereProjectedPointInPlace(
+      projectedFrom,
+      scene,
+      particle,
+      particle.x,
+      particle.y,
+      motionMode,
+    );
     // Matrix routes may interpolate their two endpoint colors. Keep endpoint
     // lettering on its own existing glyph paint; random routes already share
     // that exact hue with both endpoint glyphs and the route.
@@ -1525,6 +1584,7 @@ export function drawMatrixActivityAnimation(
     drawMatrixActivityPulse(
       context,
       particle,
+      projectedFrom,
       pulse.category,
       pulse.semanticRole,
       pulsePaint,
@@ -1538,6 +1598,7 @@ export function drawMatrixActivityAnimation(
       drawMatrixActivityTelemetryRing(
         context,
         particle,
+        projectedFrom,
         pulse.category,
         pulsePaint,
         safeOpacity,
