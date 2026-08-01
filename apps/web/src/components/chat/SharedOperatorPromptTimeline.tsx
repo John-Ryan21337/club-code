@@ -5,10 +5,14 @@ import {
   type UserId,
 } from "@cafecode/contracts";
 import { BookOpenTextIcon, RefreshCwIcon } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 
 import { cn } from "~/lib/utils";
 import { Button } from "../ui/button.tsx";
+import {
+  buildSharedOperatorPromptLaneWindow,
+  SHARED_OPERATOR_PROMPT_VISIBLE_LANE_LIMIT,
+} from "./SharedOperatorPromptLanes.model.ts";
 import {
   appendSharedOperatorPromptPage,
   decodeSharedOperatorPromptPage,
@@ -23,6 +27,8 @@ import {
 } from "./SharedOperatorPromptTimeline.model.ts";
 
 const REMOVED_PROMPT_NOTICE = "This shared operator prompt was removed.";
+
+type SharedOperatorPromptPresentationMode = "merged" | "lanes";
 
 function formatOccurredAt(iso: string): string {
   return new Intl.DateTimeFormat(undefined, {
@@ -47,8 +53,10 @@ function SharedOperatorPromptRow(props: {
       )}
       data-prompt-id={props.entry.messageId}
     >
-      <header className="flex min-w-0 items-baseline gap-2 text-xs">
-        <strong className="truncate">{props.authorName}</strong>
+      <header className="flex min-w-0 flex-wrap items-baseline gap-2 text-xs">
+        <strong className="min-w-0 break-words [unicode-bidi:plaintext]" dir="auto">
+          {props.authorName}
+        </strong>
         {props.isCurrentOperator ? (
           <span className="rounded bg-cyan-500/10 px-1.5 py-0.5 text-[10px] uppercase text-cyan-700 dark:text-cyan-300">
             You
@@ -123,6 +131,13 @@ export function SharedOperatorPromptTimeline({
   );
   const timelineRef = useRef(timeline);
   const [pageState, setPageState] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [presentation, setPresentation] = useState<{
+    readonly client: SharedOperatorPromptTimelineClient | null;
+    readonly scopeKey: string | null;
+    readonly mode: SharedOperatorPromptPresentationMode;
+    readonly laneWindowStart: number;
+  }>({ client: null, scopeKey: null, mode: "merged", laneWindowStart: 0 });
+  const laneSelectorId = useId();
   const generationRef = useRef(0);
   const generationAbortRef = useRef<AbortController | null>(null);
   const pageAbortRef = useRef<AbortController | null>(null);
@@ -248,6 +263,10 @@ export function SharedOperatorPromptTimeline({
   }, [client, scopeKey, updateTimeline]);
 
   useEffect(() => {
+    setPresentation({ client, scopeKey, mode: "merged", laneWindowStart: 0 });
+  }, [client, scopeKey]);
+
+  useEffect(() => {
     if (connectionState === "online") return;
     pageAbortRef.current?.abort();
     pageAbortRef.current = null;
@@ -297,6 +316,20 @@ export function SharedOperatorPromptTimeline({
     scopeKey !== null;
   const visibleTimeline = scopeIsActive ? timeline : EMPTY_SHARED_OPERATOR_PROMPT_TIMELINE;
   const visiblePageState = scopeIsActive ? pageState : "idle";
+  const visiblePresentation =
+    presentation.client === client && presentation.scopeKey === scopeKey
+      ? presentation
+      : { client, scopeKey, mode: "merged" as const, laneWindowStart: 0 };
+  let laneWindow: ReturnType<typeof buildSharedOperatorPromptLaneWindow> | null = null;
+  try {
+    laneWindow = buildSharedOperatorPromptLaneWindow(
+      visibleTimeline.entries,
+      authors ?? [],
+      visiblePresentation.laneWindowStart,
+    );
+  } catch {
+    laneWindow = null;
+  }
 
   if (client === null) return null;
   if (
@@ -347,6 +380,32 @@ export function SharedOperatorPromptTimeline({
               ? "Offline"
               : "Reconnecting"}
         </p>
+        <div
+          aria-label="Shared prompt presentation"
+          className="mt-2 inline-flex rounded-md border border-border/60 p-0.5"
+          role="group"
+        >
+          <Button
+            aria-pressed={visiblePresentation.mode === "merged"}
+            onClick={() =>
+              setPresentation({ client, scopeKey, mode: "merged", laneWindowStart: 0 })
+            }
+            size="xs"
+            type="button"
+            variant={visiblePresentation.mode === "merged" ? "secondary" : "ghost"}
+          >
+            Merged
+          </Button>
+          <Button
+            aria-pressed={visiblePresentation.mode === "lanes"}
+            onClick={() => setPresentation({ client, scopeKey, mode: "lanes", laneWindowStart: 0 })}
+            size="xs"
+            type="button"
+            variant={visiblePresentation.mode === "lanes" ? "secondary" : "ghost"}
+          >
+            Side by side
+          </Button>
+        </div>
       </header>
 
       <div className="flex min-h-0 flex-1 flex-col">
@@ -371,13 +430,17 @@ export function SharedOperatorPromptTimeline({
                 : "Shared prompt history is current"}
           </Button>
         </div>
-        {visibleTimeline.entries.length === 0 ? (
+        {laneWindow === null ? (
+          <div className="flex flex-1 items-center justify-center p-4 text-sm text-muted-foreground">
+            No prompt history was admitted.
+          </div>
+        ) : visibleTimeline.entries.length === 0 ? (
           <div className="flex flex-1 items-center justify-center p-4 text-sm text-muted-foreground">
             {visiblePageState === "error"
               ? "No prompt history was admitted."
               : "No project-visible operator prompts loaded."}
           </div>
-        ) : (
+        ) : visiblePresentation.mode === "merged" ? (
           <ol
             aria-label="Project-visible operator prompts"
             className="min-h-0 flex-1 space-y-2 overflow-y-auto overflow-x-hidden p-3"
@@ -391,6 +454,94 @@ export function SharedOperatorPromptTimeline({
               />
             ))}
           </ol>
+        ) : (
+          <div className="flex min-h-0 flex-1 flex-col" data-shared-prompt-lanes="true">
+            {laneWindow.totalLaneCount > SHARED_OPERATOR_PROMPT_VISIBLE_LANE_LIMIT ? (
+              <div className="flex flex-wrap items-center gap-2 border-b border-border/40 px-3 py-2 text-xs">
+                <label htmlFor={laneSelectorId}>First visible operator lane</label>
+                <select
+                  className="max-w-64 rounded-md border border-border bg-background px-2 py-1"
+                  id={laneSelectorId}
+                  onChange={(event) => {
+                    const laneWindowStart = Number(event.currentTarget.value);
+                    setPresentation({ client, scopeKey, mode: "lanes", laneWindowStart });
+                  }}
+                  value={laneWindow.windowStart}
+                >
+                  {authors
+                    .slice(
+                      0,
+                      Math.max(1, authors.length - SHARED_OPERATOR_PROMPT_VISIBLE_LANE_LIMIT + 1),
+                    )
+                    .map((author, index) => (
+                      <option key={author.userId} value={index}>
+                        Lane {index + 1}: {author.displayName}
+                      </option>
+                    ))}
+                </select>
+                <span className="text-muted-foreground">
+                  Showing at most {SHARED_OPERATOR_PROMPT_VISIBLE_LANE_LIMIT} of{" "}
+                  {laneWindow.totalLaneCount}
+                  {" operator lanes."}
+                </span>
+              </div>
+            ) : null}
+            {laneWindow.hiddenFormerOperatorPromptCount > 0 ? (
+              <p className="border-b border-border/40 px-3 py-2 text-xs text-muted-foreground">
+                {laneWindow.hiddenFormerOperatorPromptCount} prompt
+                {laneWindow.hiddenFormerOperatorPromptCount === 1 ? "" : "s"} from former project
+                operators {laneWindow.hiddenFormerOperatorPromptCount === 1 ? "remains" : "remain"}
+                {" available in the merged view."}
+              </p>
+            ) : null}
+            <div
+              aria-label="Side-by-side current operator prompt lanes"
+              className="min-h-0 flex-1 overflow-x-auto overflow-y-hidden p-3"
+              role="region"
+              tabIndex={0}
+            >
+              <div className="flex h-full min-w-max gap-3">
+                {laneWindow.lanes.map((lane, laneIndex) => (
+                  <section
+                    aria-label={`Prompt lane ${laneWindow.windowStart + laneIndex + 1} of ${laneWindow.totalLaneCount} for ${lane.displayName}`}
+                    className="flex h-full w-72 shrink-0 flex-col rounded-lg border border-border/60 bg-card/30"
+                    key={lane.userId}
+                  >
+                    <header className="border-b border-border/50 px-3 py-2">
+                      <h3
+                        className="break-words text-sm font-semibold [unicode-bidi:plaintext]"
+                        dir="auto"
+                      >
+                        {lane.displayName}
+                      </h3>
+                      <p className="text-xs text-muted-foreground">
+                        {lane.entries.length} authored prompt{lane.entries.length === 1 ? "" : "s"}
+                      </p>
+                    </header>
+                    {lane.entries.length === 0 ? (
+                      <p className="p-3 text-xs text-muted-foreground">
+                        No prompts in this bounded window.
+                      </p>
+                    ) : (
+                      <ol
+                        aria-label={`Prompts in lane ${laneWindow.windowStart + laneIndex + 1} of ${laneWindow.totalLaneCount} authored by ${lane.displayName}`}
+                        className="min-h-0 flex-1 space-y-2 overflow-y-auto p-2"
+                      >
+                        {lane.entries.map((entry) => (
+                          <SharedOperatorPromptRow
+                            authorName={lane.displayName}
+                            entry={entry}
+                            isCurrentOperator={entry.authorUserId === currentUserId}
+                            key={entry.messageId}
+                          />
+                        ))}
+                      </ol>
+                    )}
+                  </section>
+                ))}
+              </div>
+            </div>
+          </div>
         )}
       </div>
     </section>
