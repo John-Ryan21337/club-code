@@ -10,7 +10,11 @@ import * as Layer from "effect/Layer";
 export class CollaborationSandboxPathError extends Data.TaggedError(
   "CollaborationSandboxPathError",
 )<{
-  readonly reason: "root-unavailable" | "outside-sandbox" | "link-or-reparse-point";
+  readonly reason:
+    | "root-unavailable"
+    | "root-identity-changed"
+    | "outside-sandbox"
+    | "link-or-reparse-point";
 }> {}
 
 export interface CollaborationSandboxPathAuthorityShape {
@@ -46,11 +50,23 @@ export function makeCollaborationSandboxPathAuthority(
       const canonicalRoot = await realpath(workspaceRoot);
       const rootStats = await lstat(canonicalRoot);
       if (!rootStats.isDirectory()) throw new Error("sandbox root is not a directory");
+      const rootIdentity = { dev: rootStats.dev, ino: rootStats.ino };
 
       return {
         assertContained: (relativePath) =>
           Effect.tryPromise({
             try: async () => {
+              const currentRootStats = await lstat(canonicalRoot);
+              if (
+                !currentRootStats.isDirectory() ||
+                currentRootStats.isSymbolicLink() ||
+                currentRootStats.dev !== rootIdentity.dev ||
+                currentRootStats.ino !== rootIdentity.ino
+              ) {
+                throw new CollaborationSandboxPathError({
+                  reason: "root-identity-changed",
+                });
+              }
               const segments = relativePath.split("/");
               const lexicalCandidate = resolve(canonicalRoot, ...segments);
               if (!isContained(canonicalRoot, lexicalCandidate)) {
@@ -65,7 +81,7 @@ export function makeCollaborationSandboxPathAuthority(
                   // Node reports Windows junctions and ordinary symlinks here.
                   // realpath containment below also rejects other reparse-point
                   // redirects whose target leaves the trusted workspace root.
-                  if (stats.isSymbolicLink()) {
+                  if (stats.isSymbolicLink() || (stats.isFile() && stats.nlink > 1)) {
                     throw new CollaborationSandboxPathError({
                       reason: "link-or-reparse-point",
                     });

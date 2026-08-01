@@ -30,11 +30,23 @@ describe("migration 075 collaboration file sync", () => {
           "collaboration_file_conflicts",
           "collaboration_file_contents",
           "collaboration_file_heads",
+          "collaboration_file_paths",
           "collaboration_file_tombstones",
           "collaboration_file_versions",
           "collaboration_file_write_locks",
         ],
       );
+      const historyObjects = yield* sql<{ readonly type: string; readonly name: string }>`
+        SELECT type, name FROM sqlite_master
+        WHERE name IN (
+          'collaboration_database_snapshot_history',
+          'trg_collaboration_database_snapshot_history'
+        ) ORDER BY type, name
+      `;
+      assert.deepEqual(historyObjects, [
+        { type: "table", name: "collaboration_database_snapshot_history" },
+        { type: "trigger", name: "trg_collaboration_database_snapshot_history" },
+      ]);
     }).pipe(Effect.provide(NodeSqliteClient.layerMemory())),
   );
 });

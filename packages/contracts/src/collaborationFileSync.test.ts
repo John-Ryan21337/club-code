@@ -4,10 +4,12 @@ import * as Schema from "effect/Schema";
 import {
   CollaborationFileContentManifest,
   CollaborationFilePublishCommand,
+  CollaborationFileTombstoneCommand,
 } from "./collaborationFileSync.ts";
 
 const decodeManifest = Schema.decodeUnknownSync(CollaborationFileContentManifest);
 const decodePublish = Schema.decodeUnknownSync(CollaborationFilePublishCommand);
+const decodeTombstone = Schema.decodeUnknownSync(CollaborationFileTombstoneCommand);
 const hash = "a".repeat(64);
 
 describe("collaboration file synchronization contracts", () => {
@@ -65,5 +67,17 @@ describe("collaboration file synchronization contracts", () => {
         }),
       );
     }
+  });
+
+  it("requires every tombstone to identify a previously admitted revision", () => {
+    assert.throws(() =>
+      decodeTombstone({
+        commandId: "tombstone-1",
+        sharedProjectId: "project-1",
+        relativePath: "safe/file.txt",
+        deviceKeyId: "key-1",
+        expectedHeadRevisionId: null,
+      }),
+    );
   });
 });

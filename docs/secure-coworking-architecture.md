@@ -344,15 +344,28 @@ raised only after load, partition, revocation, abuse, and backpressure testing.
 - Every file read, publish, and tombstone resolves current membership and the
   exact active device key. Portable path schemas reject absolute, UNC,
   drive/device, ADS, traversal, non-NFC, and reserved-name inputs. A dedicated
-  sandbox-path authority rejects existing symlink, junction, and reparse-point
-  escapes and must be called again by the future materializer immediately
-  before filesystem access to close the metadata-to-I/O TOCTOU boundary.
+  sandbox-path authority rejects existing symlink, junction, reparse-point, and
+  hardlink escapes, and detects replacement of the selected replica root. A
+  conservative compatibility/case-fold key prevents aliases from receiving
+  separate authority on case-insensitive replicas. The authority must still be
+  called again by the future materializer immediately before filesystem access
+  to close the metadata-to-I/O TOCTOU boundary.
 - Declared database files integrate with migration 071 rather than byte merging.
-  A database version can advance the canonical file head only when its exact
-  content hash is already the current serialized database head and its lease,
-  holder, membership epoch, and fencing token remain current. Older snapshots
-  from the same fenced writer remain immutable forks. SQLite/DuckDB/LMDB live
-  sidecars are rejected and never enter the manifest store.
+  Migration 075 journals every fenced database head before it can be referenced
+  by file metadata. A database version can advance the canonical file head only
+  when its exact content hash is already the current serialized database head
+  and its lease, holder, membership epoch, fencing token, complete snapshot,
+  declared size, and sidecar exclusion remain current. Only journal-proven older
+  snapshots from that same fenced writer may remain immutable forks. Plain file
+  tombstones cannot remove database heads. SQLite/DuckDB/LMDB live sidecars are
+  rejected and never enter the manifest store.
+- Tombstones must name an immutable regular-file version already admitted for
+  the exact project and path. They cannot introduce a delete marker for a
+  local-only path. Same-project/path composite foreign keys prevent a head from
+  targeting another project's revision, while per-record hashes and semantic
+  receipt replay checks detect timestamp, manifest, version, conflict, actor,
+  and response substitution. Reads remain bounded but always hydrate and verify
+  the canonical head even when more than 100 newer forks exist.
 - File-backed adversarial tests exercise two independent SQLite clients racing
   the same empty head, membership/device revocation, stale CAS retention,
   append-only tombstones, exact actor-bound idempotency, corrupt stored

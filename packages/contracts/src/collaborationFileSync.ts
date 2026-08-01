@@ -125,7 +125,10 @@ export const CollaborationFileTombstoneCommand = Schema.Struct({
   sharedProjectId: SharedProjectId,
   relativePath: SharedReplicaRelativePath,
   deviceKeyId: CollaborationDeviceKeyId,
-  expectedHeadRevisionId: Schema.NullOr(CollaborationFileRevisionId),
+  // A remote tombstone must name a version already admitted for this exact
+  // project-relative path. It can never introduce a delete marker for an
+  // otherwise local-only path.
+  expectedHeadRevisionId: CollaborationFileRevisionId,
 });
 export type CollaborationFileTombstoneCommand = typeof CollaborationFileTombstoneCommand.Type;
 
@@ -145,7 +148,7 @@ export const CollaborationFileTombstone = Schema.Struct({
   tombstoneId: CollaborationFileTombstoneId,
   sharedProjectId: SharedProjectId,
   relativePath: SharedReplicaRelativePath,
-  previousHeadRevisionId: Schema.NullOr(CollaborationFileRevisionId),
+  previousHeadRevisionId: CollaborationFileRevisionId,
   createdByUserId: UserId,
   createdByDeviceId: DeviceId,
   createdAt: Schema.DateTimeUtcFromString,

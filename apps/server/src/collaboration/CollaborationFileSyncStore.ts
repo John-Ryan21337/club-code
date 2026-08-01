@@ -23,6 +23,7 @@ import {
   CollaborationFileTombstoneCommand,
   CollaborationFileTombstoneResult,
   CollaborationFileVersion,
+  CollaborationDatabaseSnapshot,
   isDatabaseSidecarPath,
 } from "@cafecode/contracts";
 import { createHash } from "node:crypto";
@@ -52,6 +53,7 @@ export type CollaborationFileSyncStoreFailureReason =
   | "database-declaration-required"
   | "database-authority-invalid"
   | "database-sidecar-forbidden"
+  | "revision-not-found"
   | "idempotency-conflict"
   | "integrity-failure"
   | "storage-unavailable";
@@ -122,10 +124,12 @@ interface VersionRow {
   readonly contentSha256: string;
   readonly byteSize: number;
   readonly chunkManifestJson: string;
+  readonly chunkManifestSha256: string;
   readonly contentKindJson: string;
   readonly createdByUserId: string;
   readonly createdByDeviceId: string;
   readonly createdAt: string;
+  readonly recordSha256: string;
 }
 
 interface TombstoneRow {
@@ -135,7 +139,9 @@ interface TombstoneRow {
   readonly previousHeadRevisionId: string | null;
   readonly createdByUserId: string;
   readonly createdByDeviceId: string;
+  readonly commandId: string;
   readonly createdAt: string;
+  readonly recordSha256: string;
 }
 
 interface ConflictRow {
@@ -147,6 +153,7 @@ interface ConflictRow {
   readonly proposedRevisionId: string;
   readonly proposedRevisionKind: "version" | "tombstone";
   readonly createdAt: string;
+  readonly recordSha256: string;
 }
 
 interface ReceiptRow {
@@ -173,10 +180,13 @@ interface DatabaseAuthorityRow {
   readonly leaseExpiresAt: string | null;
 }
 
-interface DatabaseSnapshotAuthority {
-  readonly createdByUserId?: unknown;
-  readonly createdByDeviceId?: unknown;
-  readonly contentSha256?: unknown;
+interface DatabaseSnapshotHistoryRow {
+  readonly snapshotJson: string;
+  readonly leaseId: string;
+  readonly holderUserId: string;
+  readonly holderDeviceId: string;
+  readonly membershipEpoch: number;
+  readonly fencingToken: number;
 }
 
 const decodePublish = Schema.decodeUnknownEffect(CollaborationFilePublishCommand);
@@ -189,6 +199,7 @@ const decodeTombstone = Schema.decodeUnknownSync(CollaborationFileTombstone);
 const decodeConflict = Schema.decodeUnknownSync(CollaborationFileConflict);
 const decodePublishResult = Schema.decodeUnknownSync(CollaborationFilePublishResult);
 const decodeTombstoneResult = Schema.decodeUnknownSync(CollaborationFileTombstoneResult);
+const decodeDatabaseSnapshot = Schema.decodeUnknownSync(CollaborationDatabaseSnapshot);
 
 const DATABASE_PATH_PATTERN = /(?:^|\/)[^/]+\.(?:db|db3|sqlite|sqlite3|duckdb|lmdb|mdb)$/iu;
 
@@ -219,6 +230,42 @@ function canonicalParse(value: string): unknown {
   return parsed;
 }
 
+function portablePathKey(relativePath: string): string {
+  // Use an intentionally conservative compatibility/case fold so aliases such
+  // as full-width forms, final sigma, and sharp-s cannot receive independent
+  // authority on Windows or default macOS filesystems. Over-collapsing is safe:
+  // the first admitted display spelling remains canonical for every replica.
+  return relativePath.normalize("NFKC").toUpperCase().toLowerCase().normalize("NFC");
+}
+
+function versionIdentity(version: Omit<FileVersion, "versionId" | "createdAt">): string {
+  return sha256(
+    canonicalJson([
+      "club-code/cowork-file-version/v1",
+      version.sharedProjectId,
+      version.relativePath,
+      version.manifest,
+      version.contentKind,
+      version.createdByUserId,
+      version.createdByDeviceId,
+    ]),
+  );
+}
+
+function conflictIdentity(conflict: Omit<FileConflict, "conflictId" | "createdAt">): string {
+  return sha256(
+    canonicalJson([
+      "club-code/cowork-file-conflict/v1",
+      conflict.sharedProjectId,
+      conflict.relativePath,
+      conflict.expectedHeadRevisionId,
+      conflict.observedHeadRevisionId,
+      conflict.proposedRevisionId,
+      conflict.proposedRevisionKind,
+    ]),
+  );
+}
+
 function headFromRow(row: HeadRow | undefined): FileHead | null {
   if (!row) return null;
   if (
@@ -247,6 +294,9 @@ function headFromRow(row: HeadRow | undefined): FileHead | null {
 }
 
 function versionFromRow(row: VersionRow): FileVersion {
+  if (sha256(row.chunkManifestJson) !== row.chunkManifestSha256) {
+    throw new Error("corrupt chunk manifest hash");
+  }
   const manifest = decodeManifest(
     {
       ...(canonicalParse(row.chunkManifestJson) as object),
@@ -255,7 +305,7 @@ function versionFromRow(row: VersionRow): FileVersion {
     },
     { onExcessProperty: "error" },
   );
-  return decodeVersion(
+  const version = decodeVersion(
     {
       versionId: row.versionId,
       sharedProjectId: row.sharedProjectId,
@@ -270,10 +320,17 @@ function versionFromRow(row: VersionRow): FileVersion {
     },
     { onExcessProperty: "error" },
   );
+  if (version.versionId !== versionIdentity(version)) {
+    throw new Error("corrupt collaboration file version identity");
+  }
+  if (row.recordSha256 !== sha256(canonicalJson(version))) {
+    throw new Error("corrupt collaboration file version record");
+  }
+  return version;
 }
 
 function tombstoneFromRow(row: TombstoneRow): FileTombstone {
-  return decodeTombstone(
+  const tombstone = decodeTombstone(
     {
       tombstoneId: row.tombstoneId,
       sharedProjectId: row.sharedProjectId,
@@ -285,10 +342,28 @@ function tombstoneFromRow(row: TombstoneRow): FileTombstone {
     },
     { onExcessProperty: "error" },
   );
+  const expectedId = sha256(
+    canonicalJson([
+      "club-code/cowork-file-tombstone/v1",
+      tombstone.sharedProjectId,
+      tombstone.relativePath,
+      row.commandId,
+      tombstone.previousHeadRevisionId,
+      tombstone.createdByUserId,
+      tombstone.createdByDeviceId,
+    ]),
+  );
+  if (tombstone.tombstoneId !== expectedId) {
+    throw new Error("corrupt collaboration file tombstone identity");
+  }
+  if (row.recordSha256 !== sha256(canonicalJson({ tombstone, commandId: row.commandId }))) {
+    throw new Error("corrupt collaboration file tombstone record");
+  }
+  return tombstone;
 }
 
 function conflictFromRow(row: ConflictRow): FileConflict {
-  return decodeConflict(
+  const conflict = decodeConflict(
     {
       conflictId: row.conflictId,
       sharedProjectId: row.sharedProjectId,
@@ -301,6 +376,13 @@ function conflictFromRow(row: ConflictRow): FileConflict {
     },
     { onExcessProperty: "error" },
   );
+  if (conflict.conflictId !== conflictIdentity(conflict)) {
+    throw new Error("corrupt collaboration file conflict identity");
+  }
+  if (row.recordSha256 !== sha256(canonicalJson(conflict))) {
+    throw new Error("corrupt collaboration file conflict record");
+  }
+  return conflict;
 }
 
 function commandRequestJson(
@@ -321,11 +403,38 @@ const makeStore = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
   const lockPath = (sharedProjectId: SharedProjectId, relativePath: string) => sql`
-    INSERT INTO collaboration_file_write_locks (shared_project_id, relative_path)
-    VALUES (${sharedProjectId}, ${relativePath})
-    ON CONFLICT(shared_project_id, relative_path)
-    DO UPDATE SET relative_path = excluded.relative_path
+    INSERT INTO collaboration_file_write_locks (shared_project_id, portable_path_key)
+    VALUES (${sharedProjectId}, ${portablePathKey(relativePath)})
+    ON CONFLICT(shared_project_id, portable_path_key)
+    DO UPDATE SET portable_path_key = excluded.portable_path_key
   `;
+
+  const assertPortablePathSpelling = (
+    operation: Operation,
+    sharedProjectId: SharedProjectId,
+    relativePath: string,
+    register: boolean,
+    now?: string,
+  ) =>
+    Effect.gen(function* () {
+      const key = portablePathKey(relativePath);
+      if (register) {
+        yield* sql`
+          INSERT INTO collaboration_file_paths (
+            shared_project_id, portable_path_key, relative_path, registered_at
+          ) VALUES (${sharedProjectId}, ${key}, ${relativePath}, ${now!})
+          ON CONFLICT(shared_project_id, portable_path_key) DO NOTHING
+        `;
+      }
+      const rows = yield* sql<{ readonly relativePath: string }>`
+        SELECT relative_path AS "relativePath"
+        FROM collaboration_file_paths
+        WHERE shared_project_id = ${sharedProjectId} AND portable_path_key = ${key}
+      `;
+      if (rows[0] && rows[0].relativePath !== relativePath) {
+        return yield* Effect.fail(fail(operation, "path-unsafe"));
+      }
+    });
 
   const readHeadRow = (sharedProjectId: string, relativePath: string) =>
     sql<HeadRow>`
@@ -334,6 +443,90 @@ const makeStore = Effect.gen(function* () {
       FROM collaboration_file_heads
       WHERE shared_project_id = ${sharedProjectId} AND relative_path = ${relativePath}
     `;
+
+  const readVersionRowsById = (versionId: string) => sql<VersionRow>`
+    SELECT v.version_id AS "versionId", v.shared_project_id AS "sharedProjectId",
+      v.relative_path AS "relativePath", v.content_sha256 AS "contentSha256",
+      c.byte_size AS "byteSize", c.chunk_manifest_json AS "chunkManifestJson",
+      c.chunk_manifest_sha256 AS "chunkManifestSha256",
+      v.content_kind_json AS "contentKindJson", v.created_by_user_id AS "createdByUserId",
+      v.created_by_device_id AS "createdByDeviceId", v.created_at AS "createdAt",
+      v.record_sha256 AS "recordSha256"
+    FROM collaboration_file_versions v
+    JOIN collaboration_file_contents c
+      ON c.shared_project_id = v.shared_project_id AND c.content_sha256 = v.content_sha256
+    WHERE v.version_id = ${versionId}
+  `;
+
+  const readTombstoneRowsById = (tombstoneId: string) => sql<TombstoneRow>`
+    SELECT tombstone_id AS "tombstoneId", shared_project_id AS "sharedProjectId",
+      relative_path AS "relativePath", previous_head_revision_id AS "previousHeadRevisionId",
+      created_by_user_id AS "createdByUserId", created_by_device_id AS "createdByDeviceId",
+      command_id AS "commandId", created_at AS "createdAt", record_sha256 AS "recordSha256"
+    FROM collaboration_file_tombstones WHERE tombstone_id = ${tombstoneId}
+  `;
+
+  const readConflictRowsById = (conflictId: string) => sql<ConflictRow>`
+    SELECT conflict_id AS "conflictId", shared_project_id AS "sharedProjectId",
+      relative_path AS "relativePath", expected_head_revision_id AS "expectedHeadRevisionId",
+      observed_head_revision_id AS "observedHeadRevisionId",
+      proposed_revision_id AS "proposedRevisionId",
+      proposed_revision_kind AS "proposedRevisionKind", created_at AS "createdAt",
+      record_sha256 AS "recordSha256"
+    FROM collaboration_file_conflicts WHERE conflict_id = ${conflictId}
+  `;
+
+  const assertStoredChunks = (
+    operation: Operation,
+    sharedProjectId: SharedProjectId,
+    manifest: FileManifest,
+  ) =>
+    Effect.gen(function* () {
+      const chunks = yield* sql<{
+        readonly index: number;
+        readonly offset: number;
+        readonly byteSize: number;
+        readonly contentSha256: string;
+      }>`
+        SELECT chunk_index AS "index", chunk_offset AS "offset", byte_size AS "byteSize",
+          chunk_sha256 AS "contentSha256"
+        FROM collaboration_file_chunks
+        WHERE shared_project_id = ${sharedProjectId}
+          AND content_sha256 = ${manifest.contentSha256}
+        ORDER BY chunk_index ASC
+      `;
+      if (canonicalJson(chunks) !== canonicalJson(manifest.chunks)) {
+        return yield* Effect.fail(fail(operation, "integrity-failure"));
+      }
+    });
+
+  const readRevisionKind = (sharedProjectId: string, relativePath: string, revisionId: string) =>
+    sql<{ readonly kind: "version" | "tombstone"; readonly contentKind: string | null }>`
+      SELECT ${"version"} AS kind, content_kind AS "contentKind"
+      FROM collaboration_file_versions
+      WHERE shared_project_id = ${sharedProjectId} AND relative_path = ${relativePath}
+        AND version_id = ${revisionId}
+      UNION ALL
+      SELECT ${"tombstone"} AS kind, NULL AS "contentKind"
+      FROM collaboration_file_tombstones
+      WHERE shared_project_id = ${sharedProjectId} AND relative_path = ${relativePath}
+        AND tombstone_id = ${revisionId}
+    `;
+
+  const assertKnownRevision = (
+    operation: Operation,
+    sharedProjectId: SharedProjectId,
+    relativePath: string,
+    revisionId: string | null,
+  ) =>
+    Effect.gen(function* () {
+      if (revisionId === null) return null;
+      const rows = yield* readRevisionKind(sharedProjectId, relativePath, revisionId);
+      if (rows.length !== 1) {
+        return yield* Effect.fail(fail(operation, "revision-not-found"));
+      }
+      return rows[0]!;
+    });
 
   const assertPath = (operation: Operation, relativePath: PublishCommand["relativePath"]) =>
     Effect.gen(function* () {
@@ -417,16 +610,30 @@ const makeStore = Effect.gen(function* () {
           AND database_id = ${command.contentKind.databaseId}
       `;
       const row = rows[0];
-      let snapshot: DatabaseSnapshotAuthority | null = null;
+      const historyRows = yield* sql<DatabaseSnapshotHistoryRow>`
+        SELECT snapshot_json AS "snapshotJson", lease_id AS "leaseId",
+          holder_user_id AS "holderUserId", holder_device_id AS "holderDeviceId",
+          membership_epoch AS "membershipEpoch", fencing_token AS "fencingToken"
+        FROM collaboration_database_snapshot_history
+        WHERE shared_project_id = ${command.sharedProjectId}
+          AND database_id = ${command.contentKind.databaseId}
+          AND content_sha256 = ${command.manifest.contentSha256}
+      `;
+      const history = historyRows[0];
+      let snapshot: typeof CollaborationDatabaseSnapshot.Type;
       try {
-        snapshot = row?.headSnapshotJson
-          ? (canonicalParse(row.headSnapshotJson) as DatabaseSnapshotAuthority)
-          : null;
+        snapshot = decodeDatabaseSnapshot(canonicalParse(history!.snapshotJson), {
+          onExcessProperty: "error",
+        });
       } catch {
-        return yield* Effect.fail(fail(operation, "integrity-failure"));
+        return yield* Effect.fail(
+          fail(operation, history ? "integrity-failure" : "database-authority-invalid"),
+        );
       }
+      const expiryMillis = row?.leaseExpiresAt ? Date.parse(row.leaseExpiresAt) : Number.NaN;
       if (
         !row ||
+        !history ||
         row.relativePath !== command.relativePath ||
         row.engine !== command.contentKind.engine ||
         row.coordinationKind !== "serialized-head" ||
@@ -435,17 +642,38 @@ const makeStore = Effect.gen(function* () {
         row.holderDeviceId !== principal.deviceId ||
         row.leaseMembershipEpoch !== principal.membershipEpoch ||
         row.leaseFencingToken !== command.contentKind.fencingToken ||
-        row.leaseExpiresAt === null ||
-        Date.parse(row.leaseExpiresAt) <= Date.parse(now)
+        !Number.isFinite(expiryMillis) ||
+        new Date(expiryMillis).toISOString() !== row.leaseExpiresAt ||
+        expiryMillis <= Date.parse(now) ||
+        history.leaseId !== command.contentKind.leaseId ||
+        history.holderUserId !== principal.userId ||
+        history.holderDeviceId !== principal.deviceId ||
+        history.membershipEpoch !== principal.membershipEpoch ||
+        history.fencingToken !== command.contentKind.fencingToken ||
+        snapshot.sharedProjectId !== command.sharedProjectId ||
+        snapshot.databaseId !== command.contentKind.databaseId ||
+        snapshot.relativePath !== command.relativePath ||
+        snapshot.engine !== command.contentKind.engine ||
+        snapshot.contentSha256 !== command.manifest.contentSha256 ||
+        snapshot.byteSize !== command.manifest.byteSize ||
+        snapshot.createdByUserId !== principal.userId ||
+        snapshot.createdByDeviceId !== principal.deviceId ||
+        snapshot.sidecarsExcluded !== true
       ) {
         return yield* Effect.fail(fail(operation, "database-authority-invalid"));
+      }
+      if (
+        row.headContentSha256 === command.manifest.contentSha256 &&
+        row.headSnapshotJson !== history.snapshotJson
+      ) {
+        return yield* Effect.fail(fail(operation, "integrity-failure"));
       }
       // A current serialized database head may advance the shared file head.
       // Older/private database snapshots from the same fenced writer remain
       // admissible as immutable forks, but can never win the canonical CAS.
       return (
         row.headContentSha256 === command.manifest.contentSha256 &&
-        snapshot?.contentSha256 === command.manifest.contentSha256 &&
+        snapshot.contentSha256 === command.manifest.contentSha256 &&
         snapshot.createdByUserId === principal.userId &&
         snapshot.createdByDeviceId === principal.deviceId
       );
@@ -482,21 +710,110 @@ const makeStore = Effect.gen(function* () {
       try {
         const parsed = canonicalParse(row.responseJson);
         if (operation === "publish") {
+          const publishCommand = command as PublishCommand;
           const decoded = decodePublishResult(parsed, { onExcessProperty: "error" });
           if (
+            decoded.disposition === "already-applied" ||
             decoded.version.sharedProjectId !== command.sharedProjectId ||
-            decoded.version.relativePath !== command.relativePath
+            decoded.version.relativePath !== command.relativePath ||
+            canonicalJson(decoded.version.manifest) !== canonicalJson(publishCommand.manifest) ||
+            canonicalJson(decoded.version.contentKind) !==
+              canonicalJson(publishCommand.contentKind) ||
+            decoded.version.createdByUserId !== principal.userId ||
+            decoded.version.createdByDeviceId !== principal.deviceId ||
+            decoded.version.versionId !== versionIdentity(decoded.version)
           ) {
             throw new Error("receipt target mismatch");
+          }
+          const storedVersions = yield* readVersionRowsById(decoded.version.versionId);
+          if (
+            storedVersions.length !== 1 ||
+            canonicalJson(versionFromRow(storedVersions[0]!)) !== canonicalJson(decoded.version)
+          ) {
+            throw new Error("receipt version mismatch");
+          }
+          yield* assertStoredChunks(operation, command.sharedProjectId, decoded.version.manifest);
+          if (decoded.disposition === "head-advanced") {
+            if (
+              decoded.conflict !== null ||
+              decoded.head?.kind !== "version" ||
+              decoded.head.revisionId !== decoded.version.versionId ||
+              decoded.head.versionId !== decoded.version.versionId
+            ) {
+              throw new Error("receipt head mismatch");
+            }
+          } else {
+            if (
+              decoded.conflict === null ||
+              decoded.conflict.sharedProjectId !== command.sharedProjectId ||
+              decoded.conflict.relativePath !== command.relativePath ||
+              decoded.conflict.expectedHeadRevisionId !== command.expectedHeadRevisionId ||
+              decoded.conflict.observedHeadRevisionId !== (decoded.head?.revisionId ?? null) ||
+              decoded.conflict.proposedRevisionId !== decoded.version.versionId ||
+              decoded.conflict.proposedRevisionKind !== "version" ||
+              decoded.conflict.conflictId !== conflictIdentity(decoded.conflict)
+            ) {
+              throw new Error("receipt conflict mismatch");
+            }
+            const storedConflicts = yield* readConflictRowsById(decoded.conflict.conflictId);
+            if (
+              storedConflicts.length !== 1 ||
+              canonicalJson(conflictFromRow(storedConflicts[0]!)) !==
+                canonicalJson(decoded.conflict)
+            ) {
+              throw new Error("receipt stored conflict mismatch");
+            }
           }
           return { ...decoded, disposition: "already-applied" as const };
         }
         const decoded = decodeTombstoneResult(parsed, { onExcessProperty: "error" });
         if (
+          decoded.disposition === "already-applied" ||
           decoded.tombstone.sharedProjectId !== command.sharedProjectId ||
-          decoded.tombstone.relativePath !== command.relativePath
+          decoded.tombstone.relativePath !== command.relativePath ||
+          decoded.tombstone.previousHeadRevisionId !== command.expectedHeadRevisionId ||
+          decoded.tombstone.createdByUserId !== principal.userId ||
+          decoded.tombstone.createdByDeviceId !== principal.deviceId
         ) {
           throw new Error("receipt target mismatch");
+        }
+        const storedTombstones = yield* readTombstoneRowsById(decoded.tombstone.tombstoneId);
+        if (
+          storedTombstones.length !== 1 ||
+          storedTombstones[0]!.commandId !== command.commandId ||
+          canonicalJson(tombstoneFromRow(storedTombstones[0]!)) !== canonicalJson(decoded.tombstone)
+        ) {
+          throw new Error("receipt tombstone mismatch");
+        }
+        if (decoded.disposition === "head-advanced") {
+          if (
+            decoded.conflict !== null ||
+            decoded.head?.kind !== "tombstone" ||
+            decoded.head.revisionId !== decoded.tombstone.tombstoneId ||
+            decoded.head.tombstoneId !== decoded.tombstone.tombstoneId
+          ) {
+            throw new Error("receipt tombstone head mismatch");
+          }
+        } else {
+          if (
+            decoded.conflict === null ||
+            decoded.conflict.sharedProjectId !== command.sharedProjectId ||
+            decoded.conflict.relativePath !== command.relativePath ||
+            decoded.conflict.expectedHeadRevisionId !== command.expectedHeadRevisionId ||
+            decoded.conflict.observedHeadRevisionId !== (decoded.head?.revisionId ?? null) ||
+            decoded.conflict.proposedRevisionId !== decoded.tombstone.tombstoneId ||
+            decoded.conflict.proposedRevisionKind !== "tombstone" ||
+            decoded.conflict.conflictId !== conflictIdentity(decoded.conflict)
+          ) {
+            throw new Error("receipt tombstone conflict mismatch");
+          }
+          const storedConflicts = yield* readConflictRowsById(decoded.conflict.conflictId);
+          if (
+            storedConflicts.length !== 1 ||
+            canonicalJson(conflictFromRow(storedConflicts[0]!)) !== canonicalJson(decoded.conflict)
+          ) {
+            throw new Error("receipt stored tombstone conflict mismatch");
+          }
         }
         return { ...decoded, disposition: "already-applied" as const };
       } catch {
@@ -611,9 +928,22 @@ const makeStore = Effect.gen(function* () {
             command.deviceKeyId,
           );
           const now = DateTime.formatIso(yield* DateTime.now);
+          yield* assertPortablePathSpelling(
+            "publish",
+            command.sharedProjectId,
+            command.relativePath,
+            true,
+            now,
+          );
           const requestJson = commandRequestJson(command, principal);
           const retry = yield* retryReceipt("publish", command, principal, requestJson);
           if (retry !== null) return retry as PublishResult;
+          yield* assertKnownRevision(
+            "publish",
+            command.sharedProjectId,
+            command.relativePath,
+            command.expectedHeadRevisionId,
+          );
           const databaseHeadIsCurrent = yield* verifyDatabaseAuthority(
             "publish",
             command,
@@ -622,35 +952,49 @@ const makeStore = Effect.gen(function* () {
           );
           yield* storeManifest(command.sharedProjectId, command.manifest, now, "publish");
 
-          const versionId = sha256(
-            canonicalJson([
-              "club-code/cowork-file-version/v1",
-              command.sharedProjectId,
-              command.relativePath,
-              command.manifest,
-              command.contentKind,
-              principal.userId,
-              principal.deviceId,
-            ]),
-          );
+          const versionId = versionIdentity({
+            sharedProjectId: command.sharedProjectId,
+            relativePath: command.relativePath,
+            manifest: command.manifest,
+            contentKind: command.contentKind,
+            createdByUserId: principal.userId,
+            createdByDeviceId: principal.deviceId,
+          });
           const contentKindJson = canonicalJson(command.contentKind);
+          const proposedVersion = decodeVersion(
+            {
+              versionId,
+              sharedProjectId: command.sharedProjectId,
+              relativePath: command.relativePath,
+              manifest: command.manifest,
+              contentKind: command.contentKind,
+              createdByUserId: principal.userId,
+              createdByDeviceId: principal.deviceId,
+              createdAt: now,
+            },
+            { onExcessProperty: "error" },
+          );
+          const versionRecordSha256 = sha256(canonicalJson(proposedVersion));
           yield* sql`
             INSERT INTO collaboration_file_versions (
               version_id, shared_project_id, relative_path, content_sha256,
-              content_kind, content_kind_json, created_by_user_id, created_by_device_id, created_at
+              content_kind, content_kind_json, created_by_user_id, created_by_device_id,
+              created_at, record_sha256
             ) VALUES (
               ${versionId}, ${command.sharedProjectId}, ${command.relativePath},
               ${command.manifest.contentSha256}, ${command.contentKind.kind}, ${contentKindJson},
-              ${principal.userId}, ${principal.deviceId}, ${now}
+              ${principal.userId}, ${principal.deviceId}, ${now}, ${versionRecordSha256}
             ) ON CONFLICT(version_id) DO NOTHING
           `;
           const versionRows = yield* sql<VersionRow>`
             SELECT v.version_id AS "versionId", v.shared_project_id AS "sharedProjectId",
               v.relative_path AS "relativePath", v.content_sha256 AS "contentSha256",
               c.byte_size AS "byteSize", c.chunk_manifest_json AS "chunkManifestJson",
+              c.chunk_manifest_sha256 AS "chunkManifestSha256",
               v.content_kind_json AS "contentKindJson",
               v.created_by_user_id AS "createdByUserId",
-              v.created_by_device_id AS "createdByDeviceId", v.created_at AS "createdAt"
+              v.created_by_device_id AS "createdByDeviceId", v.created_at AS "createdAt",
+              v.record_sha256 AS "recordSha256"
             FROM collaboration_file_versions v
             JOIN collaboration_file_contents c
               ON c.shared_project_id = v.shared_project_id
@@ -702,40 +1046,55 @@ const makeStore = Effect.gen(function* () {
             head = { revisionId: version.versionId, kind: "version", versionId: version.versionId };
             disposition = "head-advanced";
           } else {
-            const conflictId = sha256(
-              canonicalJson([
-                "club-code/cowork-file-conflict/v1",
-                command.sharedProjectId,
-                command.relativePath,
-                command.expectedHeadRevisionId,
-                head?.revisionId ?? null,
-                version.versionId,
-                "version",
-              ]),
+            const conflictValue = {
+              sharedProjectId: command.sharedProjectId,
+              relativePath: command.relativePath,
+              expectedHeadRevisionId: command.expectedHeadRevisionId,
+              observedHeadRevisionId: head?.revisionId ?? null,
+              proposedRevisionId: version.versionId,
+              proposedRevisionKind: "version" as const,
+            };
+            const conflictId = conflictIdentity(conflictValue);
+            const proposedConflict = decodeConflict(
+              { conflictId, ...conflictValue, createdAt: now },
+              { onExcessProperty: "error" },
             );
+            const conflictRecordSha256 = sha256(canonicalJson(proposedConflict));
             yield* sql`
               INSERT INTO collaboration_file_conflicts (
                 conflict_id, shared_project_id, relative_path, expected_head_revision_id,
-                observed_head_revision_id, proposed_revision_id, proposed_revision_kind, created_at
+                observed_head_revision_id, proposed_revision_id, proposed_revision_kind,
+                created_at, record_sha256
               ) VALUES (
                 ${conflictId}, ${command.sharedProjectId}, ${command.relativePath},
                 ${command.expectedHeadRevisionId}, ${head?.revisionId ?? null}, ${version.versionId},
-                ${"version"}, ${now}
+                ${"version"}, ${now}, ${conflictRecordSha256}
               ) ON CONFLICT(conflict_id) DO NOTHING
             `;
-            conflict = decodeConflict(
-              {
-                conflictId,
-                sharedProjectId: command.sharedProjectId,
-                relativePath: command.relativePath,
-                expectedHeadRevisionId: command.expectedHeadRevisionId,
-                observedHeadRevisionId: head?.revisionId ?? null,
-                proposedRevisionId: version.versionId,
-                proposedRevisionKind: "version",
-                createdAt: now,
-              },
-              { onExcessProperty: "error" },
-            );
+            const conflictRows = yield* sql<ConflictRow>`
+              SELECT conflict_id AS "conflictId", shared_project_id AS "sharedProjectId",
+                relative_path AS "relativePath", expected_head_revision_id AS "expectedHeadRevisionId",
+                observed_head_revision_id AS "observedHeadRevisionId",
+                proposed_revision_id AS "proposedRevisionId",
+                proposed_revision_kind AS "proposedRevisionKind", created_at AS "createdAt",
+                record_sha256 AS "recordSha256"
+              FROM collaboration_file_conflicts WHERE conflict_id = ${conflictId}
+            `;
+            try {
+              conflict = conflictFromRow(conflictRows[0]!);
+              if (
+                conflict.sharedProjectId !== conflictValue.sharedProjectId ||
+                conflict.relativePath !== conflictValue.relativePath ||
+                conflict.expectedHeadRevisionId !== conflictValue.expectedHeadRevisionId ||
+                conflict.observedHeadRevisionId !== conflictValue.observedHeadRevisionId ||
+                conflict.proposedRevisionId !== conflictValue.proposedRevisionId ||
+                conflict.proposedRevisionKind !== conflictValue.proposedRevisionKind
+              ) {
+                throw new Error("conflict identity mismatch");
+              }
+            } catch {
+              return yield* Effect.fail(fail("publish", "integrity-failure"));
+            }
             disposition = "fork-preserved";
           }
           const result: PublishResult = { disposition, version, head, conflict };
@@ -765,10 +1124,34 @@ const makeStore = Effect.gen(function* () {
             command.sharedProjectId,
             command.deviceKeyId,
           );
+          const now = DateTime.formatIso(yield* DateTime.now);
+          yield* assertPortablePathSpelling(
+            "tombstone",
+            command.sharedProjectId,
+            command.relativePath,
+            true,
+            now,
+          );
           const requestJson = commandRequestJson(command, principal);
           const retry = yield* retryReceipt("tombstone", command, principal, requestJson);
           if (retry !== null) return retry as TombstoneResult;
-          const now = DateTime.formatIso(yield* DateTime.now);
+          if (isDatabaseSidecarPath(command.relativePath)) {
+            return yield* Effect.fail(fail("tombstone", "database-sidecar-forbidden"));
+          }
+          const targetRevision = yield* assertKnownRevision(
+            "tombstone",
+            command.sharedProjectId,
+            command.relativePath,
+            command.expectedHeadRevisionId,
+          );
+          if (targetRevision?.kind !== "version") {
+            return yield* Effect.fail(fail("tombstone", "revision-not-found"));
+          }
+          if (targetRevision.contentKind === "database") {
+            // Database removal requires its own lease-aware operation. A plain
+            // file tombstone must never bypass serialized-head authority.
+            return yield* Effect.fail(fail("tombstone", "database-authority-invalid"));
+          }
           const headRows = yield* readHeadRow(command.sharedProjectId, command.relativePath);
           let head: FileHead | null;
           try {
@@ -787,16 +1170,7 @@ const makeStore = Effect.gen(function* () {
               principal.deviceId,
             ]),
           );
-          yield* sql`
-            INSERT INTO collaboration_file_tombstones (
-              tombstone_id, shared_project_id, relative_path, previous_head_revision_id,
-              created_by_user_id, created_by_device_id, created_at
-            ) VALUES (
-              ${tombstoneId}, ${command.sharedProjectId}, ${command.relativePath},
-              ${command.expectedHeadRevisionId}, ${principal.userId}, ${principal.deviceId}, ${now}
-            ) ON CONFLICT(tombstone_id) DO NOTHING
-          `;
-          const tombstoneValue = decodeTombstone(
+          const proposedTombstone = decodeTombstone(
             {
               tombstoneId,
               sharedProjectId: command.sharedProjectId,
@@ -808,6 +1182,43 @@ const makeStore = Effect.gen(function* () {
             },
             { onExcessProperty: "error" },
           );
+          const tombstoneRecordSha256 = sha256(
+            canonicalJson({ tombstone: proposedTombstone, commandId: command.commandId }),
+          );
+          yield* sql`
+            INSERT INTO collaboration_file_tombstones (
+              tombstone_id, shared_project_id, relative_path, previous_head_revision_id,
+              created_by_user_id, created_by_device_id, command_id, created_at, record_sha256
+            ) VALUES (
+              ${tombstoneId}, ${command.sharedProjectId}, ${command.relativePath},
+              ${command.expectedHeadRevisionId}, ${principal.userId}, ${principal.deviceId},
+              ${command.commandId}, ${now}, ${tombstoneRecordSha256}
+            ) ON CONFLICT(tombstone_id) DO NOTHING
+          `;
+          const storedTombstones = yield* sql<TombstoneRow>`
+            SELECT tombstone_id AS "tombstoneId", shared_project_id AS "sharedProjectId",
+              relative_path AS "relativePath", previous_head_revision_id AS "previousHeadRevisionId",
+              created_by_user_id AS "createdByUserId", created_by_device_id AS "createdByDeviceId",
+              command_id AS "commandId", created_at AS "createdAt",
+              record_sha256 AS "recordSha256"
+            FROM collaboration_file_tombstones WHERE tombstone_id = ${tombstoneId}
+          `;
+          let tombstoneValue: FileTombstone;
+          try {
+            tombstoneValue = tombstoneFromRow(storedTombstones[0]!);
+            if (
+              tombstoneValue.sharedProjectId !== command.sharedProjectId ||
+              tombstoneValue.relativePath !== command.relativePath ||
+              tombstoneValue.previousHeadRevisionId !== command.expectedHeadRevisionId ||
+              tombstoneValue.createdByUserId !== principal.userId ||
+              tombstoneValue.createdByDeviceId !== principal.deviceId ||
+              storedTombstones[0]!.commandId !== command.commandId
+            ) {
+              throw new Error("tombstone identity mismatch");
+            }
+          } catch {
+            return yield* Effect.fail(fail("tombstone", "integrity-failure"));
+          }
           let conflict: FileConflict | null = null;
           let disposition: TombstoneResult["disposition"];
           if ((head?.revisionId ?? null) === command.expectedHeadRevisionId) {
@@ -830,40 +1241,56 @@ const makeStore = Effect.gen(function* () {
             };
             disposition = "head-advanced";
           } else {
-            const conflictId = sha256(
-              canonicalJson([
-                "club-code/cowork-file-conflict/v1",
-                command.sharedProjectId,
-                command.relativePath,
-                command.expectedHeadRevisionId,
-                head?.revisionId ?? null,
-                tombstoneValue.tombstoneId,
-                "tombstone",
-              ]),
+            const conflictValue = {
+              sharedProjectId: command.sharedProjectId,
+              relativePath: command.relativePath,
+              expectedHeadRevisionId: command.expectedHeadRevisionId,
+              observedHeadRevisionId: head?.revisionId ?? null,
+              proposedRevisionId: tombstoneValue.tombstoneId,
+              proposedRevisionKind: "tombstone" as const,
+            };
+            const conflictId = conflictIdentity(conflictValue);
+            const proposedConflict = decodeConflict(
+              { conflictId, ...conflictValue, createdAt: now },
+              { onExcessProperty: "error" },
             );
+            const conflictRecordSha256 = sha256(canonicalJson(proposedConflict));
             yield* sql`
               INSERT INTO collaboration_file_conflicts (
                 conflict_id, shared_project_id, relative_path, expected_head_revision_id,
-                observed_head_revision_id, proposed_revision_id, proposed_revision_kind, created_at
+                observed_head_revision_id, proposed_revision_id, proposed_revision_kind,
+                created_at, record_sha256
               ) VALUES (
                 ${conflictId}, ${command.sharedProjectId}, ${command.relativePath},
                 ${command.expectedHeadRevisionId}, ${head?.revisionId ?? null},
-                ${tombstoneValue.tombstoneId}, ${"tombstone"}, ${now}
+                ${tombstoneValue.tombstoneId}, ${"tombstone"}, ${now},
+                ${conflictRecordSha256}
               ) ON CONFLICT(conflict_id) DO NOTHING
             `;
-            conflict = decodeConflict(
-              {
-                conflictId,
-                sharedProjectId: command.sharedProjectId,
-                relativePath: command.relativePath,
-                expectedHeadRevisionId: command.expectedHeadRevisionId,
-                observedHeadRevisionId: head?.revisionId ?? null,
-                proposedRevisionId: tombstoneValue.tombstoneId,
-                proposedRevisionKind: "tombstone",
-                createdAt: now,
-              },
-              { onExcessProperty: "error" },
-            );
+            const conflictRows = yield* sql<ConflictRow>`
+              SELECT conflict_id AS "conflictId", shared_project_id AS "sharedProjectId",
+                relative_path AS "relativePath", expected_head_revision_id AS "expectedHeadRevisionId",
+                observed_head_revision_id AS "observedHeadRevisionId",
+                proposed_revision_id AS "proposedRevisionId",
+                proposed_revision_kind AS "proposedRevisionKind", created_at AS "createdAt",
+                record_sha256 AS "recordSha256"
+              FROM collaboration_file_conflicts WHERE conflict_id = ${conflictId}
+            `;
+            try {
+              conflict = conflictFromRow(conflictRows[0]!);
+              if (
+                conflict.sharedProjectId !== conflictValue.sharedProjectId ||
+                conflict.relativePath !== conflictValue.relativePath ||
+                conflict.expectedHeadRevisionId !== conflictValue.expectedHeadRevisionId ||
+                conflict.observedHeadRevisionId !== conflictValue.observedHeadRevisionId ||
+                conflict.proposedRevisionId !== conflictValue.proposedRevisionId ||
+                conflict.proposedRevisionKind !== conflictValue.proposedRevisionKind
+              ) {
+                throw new Error("conflict identity mismatch");
+              }
+            } catch {
+              return yield* Effect.fail(fail("tombstone", "integrity-failure"));
+            }
             disposition = "tombstone-preserved";
           }
           const result: TombstoneResult = {
@@ -895,55 +1322,140 @@ const makeStore = Effect.gen(function* () {
         request.sharedProjectId,
         request.deviceKeyId,
       );
+      yield* assertPortablePathSpelling(
+        "read",
+        request.sharedProjectId,
+        request.relativePath,
+        false,
+      );
       const headRows = yield* readHeadRow(request.sharedProjectId, request.relativePath);
-      const versionRows = yield* sql<VersionRow>`
+      let head: FileHead | null;
+      try {
+        head = headFromRow(headRows[0]);
+      } catch {
+        return yield* Effect.fail(fail("read", "integrity-failure"));
+      }
+      const versionRows = [
+        ...(yield* sql<VersionRow>`
         SELECT v.version_id AS "versionId", v.shared_project_id AS "sharedProjectId",
           v.relative_path AS "relativePath", v.content_sha256 AS "contentSha256",
           c.byte_size AS "byteSize", c.chunk_manifest_json AS "chunkManifestJson",
+          c.chunk_manifest_sha256 AS "chunkManifestSha256",
           v.content_kind_json AS "contentKindJson",
           v.created_by_user_id AS "createdByUserId",
-          v.created_by_device_id AS "createdByDeviceId", v.created_at AS "createdAt"
+          v.created_by_device_id AS "createdByDeviceId", v.created_at AS "createdAt",
+          v.record_sha256 AS "recordSha256"
         FROM collaboration_file_versions v
         JOIN collaboration_file_contents c
           ON c.shared_project_id = v.shared_project_id AND c.content_sha256 = v.content_sha256
         WHERE v.shared_project_id = ${request.sharedProjectId}
           AND v.relative_path = ${request.relativePath}
         ORDER BY v.created_at DESC, v.version_id DESC LIMIT 100
-      `;
-      const tombstoneRows = yield* sql<TombstoneRow>`
+      `),
+      ];
+      if (
+        head?.kind === "version" &&
+        !versionRows.some((row) => row.versionId === head!.versionId)
+      ) {
+        const headVersionRows = yield* sql<VersionRow>`
+          SELECT v.version_id AS "versionId", v.shared_project_id AS "sharedProjectId",
+            v.relative_path AS "relativePath", v.content_sha256 AS "contentSha256",
+            c.byte_size AS "byteSize", c.chunk_manifest_json AS "chunkManifestJson",
+            c.chunk_manifest_sha256 AS "chunkManifestSha256",
+            v.content_kind_json AS "contentKindJson",
+            v.created_by_user_id AS "createdByUserId",
+            v.created_by_device_id AS "createdByDeviceId", v.created_at AS "createdAt",
+            v.record_sha256 AS "recordSha256"
+          FROM collaboration_file_versions v
+          JOIN collaboration_file_contents c
+            ON c.shared_project_id = v.shared_project_id AND c.content_sha256 = v.content_sha256
+          WHERE v.shared_project_id = ${request.sharedProjectId}
+            AND v.relative_path = ${request.relativePath} AND v.version_id = ${head.versionId}
+        `;
+        versionRows.push(...headVersionRows);
+      }
+      const tombstoneRows = [
+        ...(yield* sql<TombstoneRow>`
         SELECT tombstone_id AS "tombstoneId", shared_project_id AS "sharedProjectId",
           relative_path AS "relativePath", previous_head_revision_id AS "previousHeadRevisionId",
           created_by_user_id AS "createdByUserId", created_by_device_id AS "createdByDeviceId",
-          created_at AS "createdAt"
+          command_id AS "commandId", created_at AS "createdAt",
+          record_sha256 AS "recordSha256"
         FROM collaboration_file_tombstones
         WHERE shared_project_id = ${request.sharedProjectId} AND relative_path = ${request.relativePath}
         ORDER BY created_at DESC, tombstone_id DESC LIMIT 100
-      `;
+      `),
+      ];
+      if (
+        head?.kind === "tombstone" &&
+        !tombstoneRows.some((row) => row.tombstoneId === head!.tombstoneId)
+      ) {
+        const headTombstoneRows = yield* sql<TombstoneRow>`
+          SELECT tombstone_id AS "tombstoneId", shared_project_id AS "sharedProjectId",
+            relative_path AS "relativePath", previous_head_revision_id AS "previousHeadRevisionId",
+            created_by_user_id AS "createdByUserId", created_by_device_id AS "createdByDeviceId",
+            command_id AS "commandId", created_at AS "createdAt",
+            record_sha256 AS "recordSha256"
+          FROM collaboration_file_tombstones
+          WHERE shared_project_id = ${request.sharedProjectId}
+            AND relative_path = ${request.relativePath} AND tombstone_id = ${head.tombstoneId}
+        `;
+        tombstoneRows.push(...headTombstoneRows);
+      }
       const conflictRows = yield* sql<ConflictRow>`
         SELECT conflict_id AS "conflictId", shared_project_id AS "sharedProjectId",
           relative_path AS "relativePath", expected_head_revision_id AS "expectedHeadRevisionId",
           observed_head_revision_id AS "observedHeadRevisionId",
           proposed_revision_id AS "proposedRevisionId",
-          proposed_revision_kind AS "proposedRevisionKind", created_at AS "createdAt"
+          proposed_revision_kind AS "proposedRevisionKind", created_at AS "createdAt",
+          record_sha256 AS "recordSha256"
         FROM collaboration_file_conflicts
         WHERE shared_project_id = ${request.sharedProjectId} AND relative_path = ${request.relativePath}
         ORDER BY created_at DESC, conflict_id DESC LIMIT 100
       `;
       try {
-        const head = headFromRow(headRows[0]);
         const versions = versionRows.map(versionFromRow);
+        for (const version of versions) {
+          yield* assertStoredChunks("read", request.sharedProjectId, version.manifest);
+        }
+        const tombstones = tombstoneRows.map(tombstoneFromRow);
+        const conflicts = conflictRows.map(conflictFromRow);
         const headVersion =
           head?.kind === "version"
             ? (versions.find((version) => version.versionId === head.versionId) ?? null)
             : null;
+        if (head?.kind === "version" && headVersion === null) {
+          throw new Error("version head target mismatch");
+        }
+        if (
+          head?.kind === "tombstone" &&
+          !tombstones.some((tombstone) => tombstone.tombstoneId === head.tombstoneId)
+        ) {
+          throw new Error("tombstone head target mismatch");
+        }
+        for (const conflict of conflicts) {
+          for (const revisionId of [
+            conflict.expectedHeadRevisionId,
+            conflict.observedHeadRevisionId,
+            conflict.proposedRevisionId,
+          ]) {
+            if (revisionId === null) continue;
+            const revisions = yield* readRevisionKind(
+              request.sharedProjectId,
+              request.relativePath,
+              revisionId,
+            );
+            if (revisions.length !== 1) throw new Error("conflict revision target mismatch");
+          }
+        }
         return {
           sharedProjectId: request.sharedProjectId,
           relativePath: request.relativePath,
           head,
           headVersion,
           forks: versions.filter((version) => version.versionId !== headVersion?.versionId),
-          tombstones: tombstoneRows.map(tombstoneFromRow),
-          conflicts: conflictRows.map(conflictFromRow),
+          tombstones,
+          conflicts,
         } satisfies FileState;
       } catch {
         return yield* Effect.fail(fail("read", "integrity-failure"));

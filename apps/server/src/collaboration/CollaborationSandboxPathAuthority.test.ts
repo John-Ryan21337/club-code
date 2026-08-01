@@ -1,6 +1,6 @@
 import { SharedReplicaRelativePath } from "@cafecode/contracts";
 import { assert, describe, it } from "@effect/vitest";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { link, mkdir, mkdtemp, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -99,6 +99,41 @@ describe("CollaborationSandboxPathAuthority", () => {
     } finally {
       await rm(root, { recursive: true, force: true });
       await rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a hardlinked file that could mutate content outside the replica", async () => {
+    const root = await mkdtemp(join(tmpdir(), "club-code-file-sandbox-hardlink-"));
+    const outside = join(root, "..", `${root.split(/[\\/]/u).at(-1)}-outside.txt`);
+    try {
+      await writeFile(outside, "private");
+      await link(outside, join(root, "shared.txt"));
+      const authority = await Effect.runPromise(makeCollaborationSandboxPathAuthority(root));
+      const error = await Effect.runPromise(
+        authority.assertContained(decodePath("shared.txt")).pipe(Effect.flip),
+      );
+      assert.equal(error.reason, "link-or-reparse-point");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+      await rm(outside, { force: true });
+    }
+  });
+
+  it("rejects a replica root replaced after authority construction", async () => {
+    const root = await mkdtemp(join(tmpdir(), "club-code-file-sandbox-root-swap-"));
+    const movedRoot = `${root}-moved`;
+    try {
+      await mkdir(join(root, "safe"));
+      const authority = await Effect.runPromise(makeCollaborationSandboxPathAuthority(root));
+      await rename(root, movedRoot);
+      await mkdir(root);
+      const error = await Effect.runPromise(
+        authority.assertContained(decodePath("safe/value.txt")).pipe(Effect.flip),
+      );
+      assert.equal(error.reason, "root-identity-changed");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+      await rm(movedRoot, { recursive: true, force: true });
     }
   });
 });

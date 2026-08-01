@@ -284,6 +284,17 @@ describe("CollaborationFileSyncStore", () => {
               command: publishCommand({ commandId: "tomb-publish", value: "keep me" }),
             });
           }).pipe(Effect.provide(layer));
+          const second = yield* Effect.gen(function* () {
+            const store = yield* CollaborationFileSyncStore;
+            return yield* store.publish({
+              principal,
+              command: publishCommand({
+                commandId: "tomb-publish-2",
+                value: "keep me too",
+                expectedHeadRevisionId: first.version.versionId,
+              }),
+            });
+          }).pipe(Effect.provide(layer));
           const stale = yield* Effect.gen(function* () {
             const store = yield* CollaborationFileSyncStore;
             return yield* store.tombstone({
@@ -293,12 +304,12 @@ describe("CollaborationFileSyncStore", () => {
                 sharedProjectId: projectId,
                 relativePath: "src/shared.txt",
                 deviceKeyId: "key-2",
-                expectedHeadRevisionId: null,
+                expectedHeadRevisionId: first.version.versionId,
               },
             });
           }).pipe(Effect.provide(layer));
           assert.equal(stale.disposition, "tombstone-preserved");
-          assert.equal(stale.head?.revisionId, first.version.versionId);
+          assert.equal(stale.head?.revisionId, second.version.versionId);
           const accepted = yield* Effect.gen(function* () {
             const store = yield* CollaborationFileSyncStore;
             return yield* store.tombstone({
@@ -308,7 +319,7 @@ describe("CollaborationFileSyncStore", () => {
                 sharedProjectId: projectId,
                 relativePath: "src/shared.txt",
                 deviceKeyId: "key-2",
-                expectedHeadRevisionId: first.version.versionId,
+                expectedHeadRevisionId: second.version.versionId,
               },
             });
           }).pipe(Effect.provide(layer));
@@ -326,7 +337,7 @@ describe("CollaborationFileSyncStore", () => {
                 (SELECT COUNT(*) FROM collaboration_file_tombstones) AS tombstones
             `;
           }).pipe(Effect.provide(layer));
-          assert.deepEqual(counts[0], { contents: 1, versions: 1, tombstones: 2 });
+          assert.deepEqual(counts[0], { contents: 2, versions: 2, tombstones: 2 });
         });
       },
       (root) => Effect.promise(() => rm(root, { recursive: true, force: true })),
@@ -399,6 +410,138 @@ describe("CollaborationFileSyncStore", () => {
             });
           }).pipe(Effect.provide(layer), Effect.flip);
           expectFailure(collision, "idempotency-conflict");
+
+          const receiptRows = yield* Effect.gen(function* () {
+            const sql = yield* SqlClient.SqlClient;
+            return yield* sql<{ readonly responseJson: string }>`
+              SELECT response_json AS "responseJson"
+              FROM collaboration_file_command_receipts
+              WHERE shared_project_id = ${projectId} AND command_id = ${command.commandId}
+            `;
+          }).pipe(Effect.provide(layer));
+          const substituted = JSON.parse(receiptRows[0]!.responseJson) as {
+            version: { createdAt: string };
+          };
+          substituted.version.createdAt = "2026-08-01T12:00:01.000Z";
+          const substitutedJson = JSON.stringify(substituted);
+          yield* Effect.gen(function* () {
+            const sql = yield* SqlClient.SqlClient;
+            yield* sql`
+              UPDATE collaboration_file_command_receipts
+              SET response_json = ${substitutedJson}, response_sha256 = ${hash(substitutedJson)}
+              WHERE shared_project_id = ${projectId} AND command_id = ${command.commandId}
+            `;
+          }).pipe(Effect.provide(layer));
+          const substitution = yield* Effect.gen(function* () {
+            const store = yield* CollaborationFileSyncStore;
+            return yield* store.publish({ principal, command });
+          }).pipe(Effect.provide(layer), Effect.flip);
+          expectFailure(substitution, "integrity-failure");
+        });
+      },
+      (root) => Effect.promise(() => rm(root, { recursive: true, force: true })),
+    ),
+  );
+
+  it.effect("rejects tombstones for paths and revisions that were never shared", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => mkdtemp(join(tmpdir(), "club-code-file-unknown-tombstone-"))),
+      (root) => {
+        const filename = join(root, "authority.sqlite");
+        const activeUsers = new Set(["user-1"]);
+        const activeDevices = new Set(["device-1:key-1"]);
+        const layer = fileLayer(filename, root, activeUsers, activeDevices);
+        return Effect.gen(function* () {
+          yield* TestClock.setTime(NOW);
+          yield* setupDatabase.pipe(Effect.provide(layer));
+          const error = yield* Effect.gen(function* () {
+            const store = yield* CollaborationFileSyncStore;
+            return yield* store.tombstone({
+              principal,
+              command: {
+                commandId: "unknown-tombstone",
+                sharedProjectId: projectId,
+                relativePath: "private/local-only.txt",
+                deviceKeyId: "key-1",
+                expectedHeadRevisionId: hash("unknown-revision"),
+              },
+            });
+          }).pipe(Effect.provide(layer), Effect.flip);
+          expectFailure(error, "revision-not-found");
+          const rows = yield* Effect.gen(function* () {
+            const sql = yield* SqlClient.SqlClient;
+            return yield* sql<{ readonly tombstones: number; readonly paths: number }>`
+              SELECT
+                (SELECT COUNT(*) FROM collaboration_file_tombstones) AS tombstones,
+                (SELECT COUNT(*) FROM collaboration_file_paths) AS paths
+            `;
+          }).pipe(Effect.provide(layer));
+          assert.deepEqual(rows[0], { tombstones: 0, paths: 0 });
+        });
+      },
+      (root) => Effect.promise(() => rm(root, { recursive: true, force: true })),
+    ),
+  );
+
+  it.effect("prevents case-fold aliases from splitting one portable path authority", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => mkdtemp(join(tmpdir(), "club-code-file-case-fold-"))),
+      (root) => {
+        const filename = join(root, "authority.sqlite");
+        const activeUsers = new Set(["user-1", "user-2"]);
+        const activeDevices = new Set(["device-1:key-1", "device-2:key-2"]);
+        const layer = fileLayer(filename, root, activeUsers, activeDevices);
+        return Effect.gen(function* () {
+          yield* TestClock.setTime(NOW);
+          yield* setupDatabase.pipe(Effect.provide(layer));
+          yield* Effect.gen(function* () {
+            const store = yield* CollaborationFileSyncStore;
+            yield* store.publish({
+              principal,
+              command: publishCommand({
+                commandId: "case-first",
+                value: "first",
+                relativePath: "Src/Shared.txt",
+              }),
+            });
+          }).pipe(Effect.provide(layer));
+          const error = yield* Effect.gen(function* () {
+            const store = yield* CollaborationFileSyncStore;
+            return yield* store.publish({
+              principal: secondPrincipal,
+              command: publishCommand({
+                commandId: "case-second",
+                value: "second",
+                deviceKeyId: "key-2",
+                relativePath: "src/shared.txt",
+              }),
+            });
+          }).pipe(Effect.provide(layer), Effect.flip);
+          expectFailure(error, "path-unsafe");
+          yield* Effect.gen(function* () {
+            const store = yield* CollaborationFileSyncStore;
+            yield* store.publish({
+              principal,
+              command: publishCommand({
+                commandId: "case-unicode-first",
+                value: "unicode",
+                relativePath: "docs/Straße.txt",
+              }),
+            });
+          }).pipe(Effect.provide(layer));
+          const unicodeAlias = yield* Effect.gen(function* () {
+            const store = yield* CollaborationFileSyncStore;
+            return yield* store.publish({
+              principal: secondPrincipal,
+              command: publishCommand({
+                commandId: "case-unicode-second",
+                value: "unicode alias",
+                deviceKeyId: "key-2",
+                relativePath: "docs/STRASSE.txt",
+              }),
+            });
+          }).pipe(Effect.provide(layer), Effect.flip);
+          expectFailure(unicodeAlias, "path-unsafe");
         });
       },
       (root) => Effect.promise(() => rm(root, { recursive: true, force: true })),
@@ -527,6 +670,21 @@ describe("CollaborationFileSyncStore", () => {
             const current = yield* publishDatabase("file-db-2", "database-v2");
             assert.equal(current.disposition, "head-advanced");
 
+            const databaseTombstone = yield* Effect.gen(function* () {
+              const store = yield* CollaborationFileSyncStore;
+              return yield* store.tombstone({
+                principal,
+                command: {
+                  commandId: "file-db-tombstone",
+                  sharedProjectId: projectId,
+                  relativePath: "data/shared.sqlite",
+                  deviceKeyId: "key-1",
+                  expectedHeadRevisionId: current.version.versionId,
+                },
+              });
+            }).pipe(Effect.provide(layer), Effect.flip);
+            expectFailure(databaseTombstone, "database-authority-invalid");
+
             const badFence = yield* Effect.gen(function* () {
               const store = yield* CollaborationFileSyncStore;
               return yield* store.publish({
@@ -550,6 +708,40 @@ describe("CollaborationFileSyncStore", () => {
               });
             }).pipe(Effect.provide(layer), Effect.flip);
             expectFailure(badFence, "database-authority-invalid");
+
+            yield* Effect.gen(function* () {
+              const sql = yield* SqlClient.SqlClient;
+              yield* sql`
+                UPDATE collaboration_database_snapshot_history
+                SET holder_device_id = ${"device-2"}
+                WHERE shared_project_id = ${projectId}
+                  AND database_id = ${"database-1"}
+                  AND content_sha256 = ${secondSnapshot.contentSha256}
+              `;
+            }).pipe(Effect.provide(layer));
+            const corruptHistory = yield* Effect.gen(function* () {
+              const store = yield* CollaborationFileSyncStore;
+              return yield* store.publish({
+                principal,
+                command: {
+                  commandId: "file-db-corrupt-history",
+                  sharedProjectId: projectId,
+                  relativePath: "data/shared.sqlite",
+                  deviceKeyId: "key-1",
+                  expectedHeadRevisionId: current.version.versionId,
+                  manifest: manifest("database-v2"),
+                  contentKind: {
+                    kind: "database",
+                    databaseId: "database-1",
+                    engine: "sqlite",
+                    coordination: "serialized-head",
+                    leaseId: lease.leaseId,
+                    fencingToken: lease.fencingToken,
+                  },
+                },
+              });
+            }).pipe(Effect.provide(layer), Effect.flip);
+            expectFailure(corruptHistory, "database-authority-invalid");
 
             const sidecar = yield* Effect.gen(function* () {
               const store = yield* CollaborationFileSyncStore;
@@ -598,9 +790,20 @@ describe("CollaborationFileSyncStore", () => {
               command: publishCommand({ commandId: "corrupt-1", value: "before" }),
             });
             const sql = yield* SqlClient.SqlClient;
+            const substitutedManifestJson = JSON.stringify({
+              chunks: [
+                {
+                  index: 0,
+                  offset: 0,
+                  byteSize: Buffer.byteLength("before"),
+                  contentSha256: hash("different chunk"),
+                },
+              ],
+            });
             yield* sql`
               UPDATE collaboration_file_contents SET
-                chunk_manifest_json = ${"{}"}, chunk_manifest_sha256 = ${hash("{}")}
+                chunk_manifest_json = ${substitutedManifestJson},
+                chunk_manifest_sha256 = ${hash(substitutedManifestJson)}
               WHERE shared_project_id = ${projectId}
             `;
           }).pipe(Effect.provide(layer));
@@ -616,6 +819,80 @@ describe("CollaborationFileSyncStore", () => {
             });
           }).pipe(Effect.provide(layer), Effect.flip);
           expectFailure(error, "integrity-failure");
+        });
+      },
+      (root) => Effect.promise(() => rm(root, { recursive: true, force: true })),
+    ),
+  );
+
+  it.effect("hydrates the canonical head even when bounded fork history is newer", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => mkdtemp(join(tmpdir(), "club-code-file-bounded-head-"))),
+      (root) => {
+        const filename = join(root, "authority.sqlite");
+        const activeUsers = new Set(["user-1"]);
+        const activeDevices = new Set(["device-1:key-1"]);
+        const layer = fileLayer(filename, root, activeUsers, activeDevices);
+        return Effect.gen(function* () {
+          yield* TestClock.setTime(NOW);
+          yield* setupDatabase.pipe(Effect.provide(layer));
+          const candidates = Array.from({ length: 105 }, (_, index) => `bounded-${index}`)
+            .map((value) => ({
+              value,
+              versionId: hash(
+                JSON.stringify([
+                  "club-code/cowork-file-version/v1",
+                  projectId,
+                  "src/bounded.txt",
+                  manifest(value),
+                  { kind: "regular-file" },
+                  principal.userId,
+                  principal.deviceId,
+                ]),
+              ),
+            }))
+            .toSorted((left, right) => left.versionId.localeCompare(right.versionId));
+          const [headCandidate, ...forkCandidates] = candidates;
+          const head = yield* Effect.gen(function* () {
+            const store = yield* CollaborationFileSyncStore;
+            return yield* store.publish({
+              principal,
+              command: publishCommand({
+                commandId: "bounded-head",
+                value: headCandidate!.value,
+                relativePath: "src/bounded.txt",
+              }),
+            });
+          }).pipe(Effect.provide(layer));
+          yield* Effect.forEach(
+            forkCandidates,
+            (candidate, index) =>
+              Effect.gen(function* () {
+                const store = yield* CollaborationFileSyncStore;
+                yield* store.publish({
+                  principal,
+                  command: publishCommand({
+                    commandId: `bounded-fork-${index}`,
+                    value: candidate.value,
+                    relativePath: "src/bounded.txt",
+                  }),
+                });
+              }).pipe(Effect.provide(layer)),
+            { concurrency: 1, discard: true },
+          );
+          const state = yield* Effect.gen(function* () {
+            const store = yield* CollaborationFileSyncStore;
+            return yield* store.read({
+              principal,
+              request: {
+                sharedProjectId: projectId,
+                relativePath: "src/bounded.txt",
+                deviceKeyId: "key-1",
+              },
+            });
+          }).pipe(Effect.provide(layer));
+          assert.equal(state.headVersion?.versionId, head.version.versionId);
+          assert.equal(state.forks.length, 100);
         });
       },
       (root) => Effect.promise(() => rm(root, { recursive: true, force: true })),
