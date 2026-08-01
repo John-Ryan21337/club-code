@@ -25,8 +25,6 @@ import { scopeThreadRef } from "@cafecode/client-runtime";
 import {
   DEFAULT_UNIFIED_SETTINGS,
   DEFAULT_APP_ACCENT_COLOR,
-  DEFAULT_AUTO_NUDGE_BACKGROUND_CONTINUATION,
-  DEFAULT_AUTO_NUDGE_MAX_ROUNDS,
   DEFAULT_BRAND_WORDMARK_PREFIX,
   DEFAULT_CONTINUE_BACKGROUND_ANIMATIONS,
   DEFAULT_SHOW_SIDEBAR_ATTRIBUTION,
@@ -38,11 +36,9 @@ import {
   DEFAULT_SHOW_SIDEBAR_SEARCH,
   DEFAULT_THEME_ACCENT_COLOR,
   MAX_BRAND_WORDMARK_PREFIX_LENGTH,
-  MAX_AUTO_NUDGE_MAX_ROUNDS,
   MAX_SIDEBAR_BRAND_IMAGE_FILE_BYTES,
   MAX_SIDEBAR_STAR_SPEED,
   MIN_SIDEBAR_STAR_SPEED,
-  MIN_AUTO_NUDGE_MAX_ROUNDS,
   MIN_WORKFLOW_STALL_WARNING_SECONDS,
   MAX_WORKFLOW_STALL_WARNING_SECONDS,
   type ChatCopyFormat,
@@ -53,7 +49,6 @@ import { createModelSelection } from "@cafecode/shared/model";
 import * as Duration from "effect/Duration";
 import * as Equal from "effect/Equal";
 import { APP_VERSION } from "../../branding";
-import { getBackgroundAutoNudgeController } from "../../backgroundAutoNudger";
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import { TraitsPicker } from "../chat/TraitsPicker";
 import { useTheme } from "../../hooks/useTheme";
@@ -176,13 +171,6 @@ function clampWorkflowStallWarningSeconds(value: number | null): number {
       MAX_WORKFLOW_STALL_WARNING_SECONDS,
       Math.max(MIN_WORKFLOW_STALL_WARNING_SECONDS, value),
     ),
-  );
-}
-
-function clampAutoNudgeMaxRounds(value: number | null): number {
-  if (value === null || !Number.isFinite(value)) return DEFAULT_AUTO_NUDGE_MAX_ROUNDS;
-  return Math.round(
-    Math.min(MAX_AUTO_NUDGE_MAX_ROUNDS, Math.max(MIN_AUTO_NUDGE_MAX_ROUNDS, value)),
   );
 }
 
@@ -458,6 +446,10 @@ export function useSettingsRestore(onRestored?: () => void) {
       DEFAULT_UNIFIED_SETTINGS.fallingEffectMatrixColorMode
         ? ["Matrix color mode"]
         : []),
+      ...(settings.fallingEffectMatrixColorCycleSpeed !==
+      DEFAULT_UNIFIED_SETTINGS.fallingEffectMatrixColorCycleSpeed
+        ? ["Matrix color-cycle speed"]
+        : []),
       ...(settings.fallingEffectOpacity !== DEFAULT_UNIFIED_SETTINGS.fallingEffectOpacity
         ? ["Falling effect opacity"]
         : []),
@@ -487,12 +479,18 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.fallingEffectActivityLinkDatabaseEnabled !==
         DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinkDatabaseEnabled ||
       settings.fallingEffectActivityLinkBuildEnabled !==
-        DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinkBuildEnabled
+        DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinkBuildEnabled ||
+      settings.fallingEffectActivityLinkAgentEnabled !==
+        DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinkAgentEnabled
         ? ["Matrix activity link inputs"]
         : []),
       ...(settings.fallingEffectActivityLinkColorMode !==
       DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinkColorMode
         ? ["Matrix activity link colors"]
+        : []),
+      ...(settings.fallingEffectActivityLinkRetentionSeconds !==
+      DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinkRetentionSeconds
+        ? ["Matrix verified route visibility"]
         : []),
       ...(settings.appAccentColor !== DEFAULT_UNIFIED_SETTINGS.appAccentColor
         ? ["Accent color"]
@@ -571,6 +569,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.fallingEffectKind,
       settings.fallingEffectColor,
       settings.fallingEffectMatrixColorMode,
+      settings.fallingEffectMatrixColorCycleSpeed,
       settings.fallingEffectOpacity,
       settings.fallingEffectSpeed,
       settings.fallingEffectDensity,
@@ -581,7 +580,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.fallingEffectActivityLinkNetworkEnabled,
       settings.fallingEffectActivityLinkDatabaseEnabled,
       settings.fallingEffectActivityLinkBuildEnabled,
+      settings.fallingEffectActivityLinkAgentEnabled,
       settings.fallingEffectActivityLinkColorMode,
+      settings.fallingEffectActivityLinkRetentionSeconds,
       settings.themeAccentColor,
       settings.automaticGitFetchInterval,
       settings.enableAssistantStreaming,
@@ -627,6 +628,8 @@ export function useSettingsRestore(onRestored?: () => void) {
       fallingEffectKind: DEFAULT_UNIFIED_SETTINGS.fallingEffectKind,
       fallingEffectColor: DEFAULT_UNIFIED_SETTINGS.fallingEffectColor,
       fallingEffectMatrixColorMode: DEFAULT_UNIFIED_SETTINGS.fallingEffectMatrixColorMode,
+      fallingEffectMatrixColorCycleSpeed:
+        DEFAULT_UNIFIED_SETTINGS.fallingEffectMatrixColorCycleSpeed,
       fallingEffectOpacity: DEFAULT_UNIFIED_SETTINGS.fallingEffectOpacity,
       fallingEffectSpeed: DEFAULT_UNIFIED_SETTINGS.fallingEffectSpeed,
       fallingEffectDensity: DEFAULT_UNIFIED_SETTINGS.fallingEffectDensity,
@@ -640,8 +643,12 @@ export function useSettingsRestore(onRestored?: () => void) {
         DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinkDatabaseEnabled,
       fallingEffectActivityLinkBuildEnabled:
         DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinkBuildEnabled,
+      fallingEffectActivityLinkAgentEnabled:
+        DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinkAgentEnabled,
       fallingEffectActivityLinkColorMode:
         DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinkColorMode,
+      fallingEffectActivityLinkRetentionSeconds:
+        DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinkRetentionSeconds,
       themeAccentColor: DEFAULT_UNIFIED_SETTINGS.themeAccentColor,
       defaultEditor: DEFAULT_UNIFIED_SETTINGS.defaultEditor,
       diffWordWrap: DEFAULT_UNIFIED_SETTINGS.diffWordWrap,
@@ -1122,73 +1129,6 @@ export function AppearanceSettingsPanel() {
               }
               aria-label="Keep animations running in background"
             />
-          }
-        />
-
-        <SettingsRow
-          title="Auto Nudge background continuation"
-          description="Allow one explicitly selected chat to continue after you navigate away. Default off; the owned chat still stops on manual activity, queued work, provider trouble, or its round cap."
-          resetAction={
-            settings.autoNudgeBackgroundContinuation !==
-            DEFAULT_UNIFIED_SETTINGS.autoNudgeBackgroundContinuation ? (
-              <SettingResetButton
-                label="Auto Nudge background continuation"
-                onClick={() =>
-                  updateSettings({
-                    autoNudgeBackgroundContinuation: DEFAULT_AUTO_NUDGE_BACKGROUND_CONTINUATION,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <Switch
-              checked={settings.autoNudgeBackgroundContinuation}
-              onCheckedChange={(checked) => {
-                const enabled = Boolean(checked);
-                if (!enabled) {
-                  getBackgroundAutoNudgeController().stop(
-                    "Background continuation was disabled in settings.",
-                  );
-                }
-                updateSettings({ autoNudgeBackgroundContinuation: enabled });
-              }}
-              aria-label="Allow Auto Nudge background continuation"
-            />
-          }
-        />
-
-        <SettingsRow
-          title="Auto Nudge round cap"
-          description="Maximum automated prompts in one explicitly started background run."
-          resetAction={
-            settings.autoNudgeMaxRounds !== DEFAULT_UNIFIED_SETTINGS.autoNudgeMaxRounds ? (
-              <SettingResetButton
-                label="Auto Nudge round cap"
-                onClick={() =>
-                  updateSettings({ autoNudgeMaxRounds: DEFAULT_AUTO_NUDGE_MAX_ROUNDS })
-                }
-              />
-            ) : null
-          }
-          control={
-            <NumberField
-              value={settings.autoNudgeMaxRounds}
-              min={MIN_AUTO_NUDGE_MAX_ROUNDS}
-              max={MAX_AUTO_NUDGE_MAX_ROUNDS}
-              step={1}
-              size="sm"
-              className="w-28"
-              onValueChange={(value) =>
-                updateSettings({ autoNudgeMaxRounds: clampAutoNudgeMaxRounds(value) })
-              }
-            >
-              <NumberFieldGroup>
-                <NumberFieldDecrement aria-label="Decrease Auto Nudge round cap" />
-                <NumberFieldInput aria-label="Auto Nudge maximum rounds" />
-                <NumberFieldIncrement aria-label="Increase Auto Nudge round cap" />
-              </NumberFieldGroup>
-            </NumberField>
           }
         />
 

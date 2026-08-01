@@ -106,7 +106,7 @@ import { cn } from "~/lib/utils";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { newCommandId, newDraftId, newMessageId, newThreadId } from "~/lib/utils";
 import { getProviderModelCapabilities, resolveSelectableProvider } from "../providerModels";
-import { useSettings, useUpdateSettings } from "../hooks/useSettings";
+import { useSettings } from "../hooks/useSettings";
 import { resolveAppModelSelectionForInstance } from "../modelSelection";
 import {
   deriveLogicalProjectKeyFromSettings,
@@ -129,6 +129,7 @@ import {
   canAutoStartQueuedFollowUpTurn,
   canExpandQueuedFollowUpText,
   canStartQueuedFollowUpTurn,
+  collectRetainedFollowUpThreadTargets,
   decideQueuedFollowUpAction,
   decideFollowUpDelivery,
   hasQueuedFollowUpDispatchBeenObserved,
@@ -136,6 +137,7 @@ import {
   previewQueuedFollowUpText,
   queuedFollowUpActionLabel,
   queuedFollowUpActionTitle,
+  readRetryableSteerFailurePayload,
   rekeyQueuedFollowUpsForActiveThread,
   selectQueuedFollowUpDispatchCandidate,
 } from "./chat/followUpQueue";
@@ -184,20 +186,26 @@ import {
   waitForStartedServerThread,
 } from "./ChatView.logic";
 import {
-  type AutoNudgeMode,
   autoNudgePromptForMode,
   canDispatchAutoNudge,
   canScheduleAutoNudge,
   consumeAutoNudgeTerminalForManualActivity,
   getAutoNudgeTurnLedger,
+  resolveArmedAutoNudgeTerminal,
 } from "../autoNudger";
 import {
   getBackgroundAutoNudgeController,
   isBackgroundAutoNudgeOwner,
   isLastBackgroundAutoNudgeOwner,
-  supportsBackgroundAutoNudgeDispatchLock,
   useBackgroundAutoNudgeState,
 } from "../backgroundAutoNudger";
+import {
+  AUTO_NUDGE_EXECUTION_LOCK_NAME,
+  getAutoNudgeThreadPolicyStore,
+  supportsAutoNudgeExecutionLock,
+  useAutoNudgeThreadPolicy,
+  type AutoNudgeThreadPolicy,
+} from "../autoNudgeThreadPolicy";
 import { useComposerHandleContext } from "../composerHandleContext";
 import {
   useServerAvailableEditors,
@@ -227,19 +235,6 @@ const IMAGE_ONLY_BOOTSTRAP_PROMPT =
 const EMPTY_ACTIVITIES: OrchestrationThreadActivity[] = [];
 const EMPTY_PROPOSED_PLANS: Thread["proposedPlans"] = [];
 const EMPTY_BOOLEAN_RECORD: Readonly<Record<string, boolean>> = {};
-function providerAccountCanAcceptTurn(provider: ServerProvider | null): boolean {
-  const snapshot = provider?.accountRateLimits?.rateLimits;
-  if (!snapshot) return true;
-  if (snapshot.rateLimitReachedType || snapshot.spendControlReached) return false;
-  if (
-    (snapshot.primary?.usedPercent ?? 0) >= 100 ||
-    (snapshot.secondary?.usedPercent ?? 0) >= 100
-  ) {
-    return false;
-  }
-  const credits = snapshot.credits;
-  return credits === undefined || credits === null || credits.unlimited || credits.hasCredits;
-}
 const DEBUG_SNAPSHOT_VERSION = 11;
 const DEBUG_TEXT_PREVIEW_LIMIT = 120;
 const DEBUG_JSON_PREVIEW_LIMIT = 600;
@@ -281,6 +276,23 @@ const CLOSED_THREAD_GOAL_DIALOG: ThreadGoalDialogRequest = {
   seedObjective: null,
   confirmReplacement: false,
 };
+
+function autoNudgeProviderCanAcceptTurn(provider: ServerProvider | null): boolean {
+  if (
+    !provider ||
+    provider.status !== "ready" ||
+    !provider.enabled ||
+    !provider.installed ||
+    provider.availability === "unavailable" ||
+    provider.auth.status !== "authenticated"
+  ) {
+    return false;
+  }
+  const limits = provider.accountRateLimits?.rateLimits;
+  if (!limits) return true;
+  if (limits.rateLimitReachedType || limits.spendControlReached) return false;
+  return (limits.primary?.usedPercent ?? 0) < 100 && (limits.secondary?.usedPercent ?? 0) < 100;
+}
 
 function redactDebugSecrets(value: string): string {
   let redacted = value;
@@ -1623,24 +1635,20 @@ function threadHasProviderInterruptFailedForRecovery(
   });
 }
 
-function readRetryableSteerFailure(
-  activity: OrchestrationThreadActivity,
-): { readonly messageId: MessageId; readonly turnKind: CodexNonSteerableTurnKind } | null {
+function readRetryableSteerFailure(activity: OrchestrationThreadActivity): {
+  readonly messageId: MessageId;
+  readonly turnKind: CodexNonSteerableTurnKind | null;
+} | null {
   if (activity.kind !== "provider.turn.steer.failed") {
     return null;
   }
-  const payload = readDebugRecord(activity.payload);
-  if (payload === null || readDebugBoolean(payload.retryableFollowUp) !== true) {
-    return null;
-  }
-  const messageId = readDebugString(payload.messageId);
-  const turnKind = readDebugString(payload.codexNonSteerableTurnKind);
-  if (messageId === null || (turnKind !== "review" && turnKind !== "compact")) {
+  const payload = readRetryableSteerFailurePayload(activity.payload);
+  if (payload === null) {
     return null;
   }
   return {
-    messageId: MessageId.make(messageId),
-    turnKind,
+    messageId: MessageId.make(payload.messageId),
+    turnKind: payload.nonSteerableTurnKind,
   };
 }
 
@@ -1902,7 +1910,6 @@ export default function ChatView(props: ChatViewProps) {
     (store) => store.setThreadWorkflowNodeExpanded,
   );
   const settings = useSettings();
-  const { updateSettings: updateClientSettings } = useUpdateSettings();
   const setStickyComposerModelSelection = useComposerDraftStore(
     (store) => store.setStickyModelSelection,
   );
@@ -1964,53 +1971,6 @@ export default function ChatView(props: ChatViewProps) {
     Record<string, string | null>
   >({});
   const [isConnecting, _setIsConnecting] = useState(false);
-  // The selected mode is a durable global client preference. Dispatch is
-  // authorized only by a newly completed response in the current thread.
-  const autoNudgeMode: AutoNudgeMode = settings.autoNudgeMode;
-  const backgroundAutoNudgeState = useBackgroundAutoNudgeState();
-  const backgroundAutoNudgeOwnerForRoute =
-    routeKind === "server" &&
-    isBackgroundAutoNudgeOwner(backgroundAutoNudgeState, {
-      environmentId,
-      threadId,
-    });
-  const backgroundAutoNudgeLastOwnerForRoute =
-    routeKind === "server" &&
-    isLastBackgroundAutoNudgeOwner(backgroundAutoNudgeState, {
-      environmentId,
-      threadId,
-    });
-  const [autoNudgeActivityRevision, setAutoNudgeActivityRevision] = useState(0);
-  const autoNudgeLedgerRef = useRef(getAutoNudgeTurnLedger());
-  // Keep the latest settled terminal identity available to synchronous
-  // composer handlers. A user action before the completion effect runs still
-  // consumes that exact turn.
-  const autoNudgeTerminalTurnKeyRef = useRef<string | null>(null);
-  const autoNudgeCompletionBaselineRef = useRef<{
-    threadKey: string | null;
-    initialized: boolean;
-  }>({ threadKey: null, initialized: false });
-  const recordManualAutoNudgeActivity = useCallback(() => {
-    consumeAutoNudgeTerminalForManualActivity(
-      autoNudgeLedgerRef.current,
-      autoNudgeTerminalTurnKeyRef.current,
-    );
-    if (backgroundAutoNudgeOwnerForRoute) {
-      getBackgroundAutoNudgeController().pause("Manual composer activity detected.");
-    }
-    setAutoNudgeActivityRevision((revision) => revision + 1);
-  }, [backgroundAutoNudgeOwnerForRoute]);
-  const stopAutoNudge = useCallback(() => {
-    consumeAutoNudgeTerminalForManualActivity(
-      autoNudgeLedgerRef.current,
-      autoNudgeTerminalTurnKeyRef.current,
-    );
-    getBackgroundAutoNudgeController().stop("Auto Nudge stopped by the operator.");
-    updateClientSettings({
-      autoNudgeMode: "off",
-      autoNudgeBackgroundContinuation: false,
-    });
-  }, [updateClientSettings]);
   const [isRevertingCheckpoint, setIsRevertingCheckpoint] = useState(false);
   const [respondingRequestIds, setRespondingRequestIds] = useState<ApprovalRequestId[]>([]);
   const [respondingUserInputRequestIds, setRespondingUserInputRequestIds] = useState<
@@ -2236,6 +2196,79 @@ export default function ChatView(props: ChatViewProps) {
   );
   const isServerThread = routeKind === "server" && serverThread !== undefined;
   const activeThread = isServerThread ? serverThread : localDraftThread;
+  const autoNudgeThreadRef = useMemo(
+    () =>
+      routeKind === "server"
+        ? { environmentId: String(environmentId), threadId: String(threadId) }
+        : null,
+    [environmentId, routeKind, threadId],
+  );
+  const autoNudgePolicy = useAutoNudgeThreadPolicy(autoNudgeThreadRef);
+  const backgroundAutoNudgeState = useBackgroundAutoNudgeState();
+  const backgroundAutoNudgeOwnerForRoute =
+    autoNudgeThreadRef !== null &&
+    isBackgroundAutoNudgeOwner(backgroundAutoNudgeState, autoNudgeThreadRef);
+  const backgroundAutoNudgeLastOwnerForRoute =
+    autoNudgeThreadRef !== null &&
+    isLastBackgroundAutoNudgeOwner(backgroundAutoNudgeState, autoNudgeThreadRef);
+  const [autoNudgeActivityRevision, setAutoNudgeActivityRevision] = useState(0);
+  const autoNudgeLedgerRef = useRef(getAutoNudgeTurnLedger());
+  const autoNudgeTerminalTurnKeyRef = useRef<string | null>(null);
+  const armedAutoNudgeTerminalTurnKeyRef = useRef<string | null>(null);
+  const runAutoNudgeMutation = useCallback(
+    async (mutation: () => void | Promise<void>): Promise<void> => {
+      if (!supportsAutoNudgeExecutionLock()) {
+        await mutation();
+        return;
+      }
+      let ranMutation = false;
+      try {
+        await navigator.locks.request(
+          AUTO_NUDGE_EXECUTION_LOCK_NAME,
+          { mode: "exclusive" },
+          async (lock) => {
+            if (!lock) return;
+            ranMutation = true;
+            await mutation();
+          },
+        );
+      } catch {
+        // Automatic execution also fails closed when the lock service is
+        // unhealthy. Preserve the operator's local Off/policy action.
+        if (!ranMutation) await mutation();
+      }
+    },
+    [],
+  );
+  const cancelScheduledAutoNudge = useCallback((consumeScheduledTurn: boolean) => {
+    const armedTurnKey = armedAutoNudgeTerminalTurnKeyRef.current;
+    if (consumeScheduledTurn && armedTurnKey) {
+      autoNudgeLedgerRef.current.mark(armedTurnKey);
+    }
+    armedAutoNudgeTerminalTurnKeyRef.current = null;
+  }, []);
+  const recordManualAutoNudgeActivity = useCallback(() => {
+    const terminalTurnKey = autoNudgeTerminalTurnKeyRef.current;
+    armedAutoNudgeTerminalTurnKeyRef.current = null;
+    autoNudgeLedgerRef.current.reloadFromStorage();
+    consumeAutoNudgeTerminalForManualActivity(autoNudgeLedgerRef.current, terminalTurnKey);
+    cancelScheduledAutoNudge(true);
+    if (autoNudgeThreadRef && backgroundAutoNudgeOwnerForRoute) {
+      void runAutoNudgeMutation(() => {
+        autoNudgeLedgerRef.current.reloadFromStorage();
+        consumeAutoNudgeTerminalForManualActivity(autoNudgeLedgerRef.current, terminalTurnKey);
+        const controller = getBackgroundAutoNudgeController();
+        controller.reloadFromStorage();
+        controller.pause(autoNudgeThreadRef, "Manual composer activity detected.");
+      });
+    }
+    setAutoNudgeActivityRevision((revision) => revision + 1);
+  }, [
+    autoNudgeThreadRef,
+    backgroundAutoNudgeOwnerForRoute,
+    cancelScheduledAutoNudge,
+    runAutoNudgeMutation,
+  ]);
   const runtimeMode = composerRuntimeMode ?? activeThread?.runtimeMode ?? DEFAULT_RUNTIME_MODE;
   const interactionMode =
     composerInteractionMode ?? activeThread?.interactionMode ?? DEFAULT_INTERACTION_MODE;
@@ -2359,49 +2392,58 @@ export default function ChatView(props: ChatViewProps) {
     [activeLatestTurn?.turnId, activeThreadId, recordTimelineScrollDebugEvent],
   );
   useEffect(() => {
-    if (!activeThread) {
+    if (Object.keys(pendingSteerDispatchByMessageIdRef.current).length === 0) {
       return;
     }
 
-    for (const activity of activeThread.activities) {
-      const retryableFailure = readRetryableSteerFailure(activity);
-      if (retryableFailure === null) {
-        continue;
-      }
-      const pending =
-        pendingSteerDispatchByMessageIdRef.current[String(retryableFailure.messageId)];
-      if (!pending) {
-        continue;
-      }
-
-      removePendingSteerDispatch(retryableFailure.messageId);
-      setOptimisticUserMessages((existing) => {
-        const removed = existing.filter((message) => message.id === retryableFailure.messageId);
-        for (const message of removed) {
-          revokeUserMessagePreviewUrls(message);
+    for (const thread of allThreads) {
+      for (const activity of thread.activities) {
+        const retryableFailure = readRetryableSteerFailure(activity);
+        if (retryableFailure === null) {
+          continue;
         }
-        return existing.filter((message) => message.id !== retryableFailure.messageId);
-      });
+        const pending =
+          pendingSteerDispatchByMessageIdRef.current[String(retryableFailure.messageId)];
+        if (!pending) {
+          continue;
+        }
 
-      const queuedItem: FollowUpQueueItem = {
-        ...pending.snapshot,
-        id: newMessageId(),
-        environmentId: pending.environmentId,
-        threadId: pending.threadId,
-        queuedAt: activity.createdAt,
-        expanded: false,
-        blockedReason: null,
-        automaticSteerRetry: {
-          nonSteerableTurnKind: retryableFailure.turnKind,
-          sourceMessageId: retryableFailure.messageId,
-        },
-      };
-      setFollowUpQueueByThreadId((existing) => ({
-        ...existing,
-        [pending.threadId]: [...(existing[pending.threadId] ?? EMPTY_FOLLOW_UP_QUEUE), queuedItem],
-      }));
+        const queuedItem: FollowUpQueueItem = {
+          ...pending.snapshot,
+          images: pending.snapshot.images.map(cloneComposerImageForRetry),
+          id: newMessageId(),
+          environmentId: pending.environmentId,
+          threadId: pending.threadId,
+          queuedAt: activity.createdAt,
+          expanded: false,
+          blockedReason: null,
+          automaticSteerRetry:
+            retryableFailure.turnKind === null
+              ? null
+              : {
+                  nonSteerableTurnKind: retryableFailure.turnKind,
+                  sourceMessageId: retryableFailure.messageId,
+                },
+        };
+        removePendingSteerDispatch(retryableFailure.messageId);
+        setOptimisticUserMessages((existing) => {
+          const removed = existing.filter((message) => message.id === retryableFailure.messageId);
+          for (const message of removed) {
+            revokeUserMessagePreviewUrls(message);
+          }
+          return existing.filter((message) => message.id !== retryableFailure.messageId);
+        });
+
+        setFollowUpQueueByThreadId((existing) => ({
+          ...existing,
+          [pending.threadId]: [
+            queuedItem,
+            ...(existing[pending.threadId] ?? EMPTY_FOLLOW_UP_QUEUE),
+          ],
+        }));
+      }
     }
-  }, [activeThread, removePendingSteerDispatch, setFollowUpQueueByThreadId]);
+  }, [allThreads, removePendingSteerDispatch, setFollowUpQueueByThreadId]);
   useEffect(() => {
     const recoveries = Object.values(pendingSteerInterruptRecoveryByThreadId);
     if (recoveries.length === 0) {
@@ -2457,6 +2499,24 @@ export default function ChatView(props: ChatViewProps) {
         });
         continue;
       }
+      const firstPendingSteer = pendingSteers[0];
+      if (firstPendingSteer === undefined) {
+        recordFollowUpQueueDebugAttempt("pending-steer-interrupt", "pending-steers-already-clear", {
+          threadId: recovery.threadId,
+        });
+        continue;
+      }
+      const queuedItem: FollowUpQueueItem = {
+        ...firstPendingSteer.snapshot,
+        promptText: merged.promptText,
+        images: merged.images.map(cloneComposerImageForRetry),
+        id: newMessageId(),
+        environmentId: recovery.environmentId,
+        threadId: recovery.threadId,
+        queuedAt: new Date().toISOString(),
+        expanded: false,
+        blockedReason: null,
+      };
 
       updatePendingSteerDispatches((current) => {
         let next: Record<string, PendingSteerDispatch> | null = null;
@@ -2477,26 +2537,6 @@ export default function ChatView(props: ChatViewProps) {
         }
         return existing.filter((message) => !pendingIds.has(String(message.id)));
       });
-
-      const firstPendingSteer = pendingSteers[0];
-      if (firstPendingSteer === undefined) {
-        recordFollowUpQueueDebugAttempt("pending-steer-interrupt", "pending-steers-already-clear", {
-          threadId: recovery.threadId,
-        });
-        continue;
-      }
-
-      const queuedItem: FollowUpQueueItem = {
-        ...firstPendingSteer.snapshot,
-        promptText: merged.promptText,
-        images: merged.images,
-        id: newMessageId(),
-        environmentId: recovery.environmentId,
-        threadId: recovery.threadId,
-        queuedAt: new Date().toISOString(),
-        expanded: false,
-        blockedReason: null,
-      };
 
       // This mirrors upstream Codex TUI's Esc path: once the interrupted turn
       // reaches the UI, drain all pending steers and submit the merged steer
@@ -3366,26 +3406,17 @@ export default function ChatView(props: ChatViewProps) {
       ? (followUpQueueByThreadId[activeThreadId] ?? EMPTY_FOLLOW_UP_QUEUE)
       : EMPTY_FOLLOW_UP_QUEUE;
   const retainedFollowUpThreadRefs = useMemo(() => {
-    const refs: ScopedThreadRef[] = [];
-    const seen = new Set<string>();
-    const pushRef = (ref: ScopedThreadRef) => {
-      const key = scopedThreadKey(ref);
-      if (seen.has(key)) return;
-      seen.add(key);
-      refs.push(ref);
-    };
-
-    for (const items of Object.values(followUpQueueByThreadId)) {
-      const firstItem = items[0];
-      if (firstItem) {
-        pushRef(scopeThreadRef(firstItem.environmentId, firstItem.threadId));
-      }
-    }
-    for (const pending of Object.values(queuedFollowUpPendingDispatchByThreadId)) {
-      pushRef(scopeThreadRef(pending.environmentId, pending.threadId));
-    }
-    return refs;
-  }, [followUpQueueByThreadId, queuedFollowUpPendingDispatchByThreadId]);
+    const targets = collectRetainedFollowUpThreadTargets({
+      queueGroups: Object.values(followUpQueueByThreadId),
+      pendingTurnStarts: Object.values(queuedFollowUpPendingDispatchByThreadId),
+      pendingSteers: Object.values(pendingSteerDispatchByMessageId),
+    });
+    return targets.map((target) => scopeThreadRef(target.environmentId, target.threadId));
+  }, [
+    followUpQueueByThreadId,
+    pendingSteerDispatchByMessageId,
+    queuedFollowUpPendingDispatchByThreadId,
+  ]);
   const totalFollowUpQueueLength = useMemo(
     () => Object.values(followUpQueueByThreadId).reduce((total, items) => total + items.length, 0),
     [followUpQueueByThreadId],
@@ -3509,6 +3540,7 @@ export default function ChatView(props: ChatViewProps) {
     !activeSteeringFollowUpInFlight;
   const canActivateRunningFollowUpQueueAction =
     followUpQueuePhase === "running" &&
+    activeProviderLiveSteerAvailable &&
     activeThread?.session?.status === "running" &&
     firstActiveAutomaticSteerRetryBlocker === null &&
     !isComposerConnecting &&
@@ -3516,14 +3548,17 @@ export default function ChatView(props: ChatViewProps) {
     !followUpQueueDispatchInFlight &&
     !activeQueuedFollowUpPendingDispatch &&
     !activeSteeringFollowUpInFlight;
-  const followUpQueueActionLabel = queuedFollowUpActionLabel({
+  const followUpQueueAction = decideQueuedFollowUpAction({
     phase: followUpQueuePhase,
-    liveSteerSupported: activeProviderLiveSteerAvailable,
+    liveSteerAvailable: activeProviderLiveSteerAvailable,
+    canDispatchNow:
+      followUpQueuePhase === "running"
+        ? canActivateRunningFollowUpQueueAction
+        : followUpQueueCanStartTurn,
   });
-  const followUpQueueActionTitle = queuedFollowUpActionTitle({
-    phase: followUpQueuePhase,
-    liveSteerSupported: activeProviderLiveSteerAvailable,
-  });
+  const followUpQueueActionLabel = queuedFollowUpActionLabel(followUpQueueAction);
+  const followUpQueueActionTitle = queuedFollowUpActionTitle(followUpQueueAction);
+  const followUpQueueActionEnabled = followUpQueueAction !== "wait";
   useEffect(() => {
     if (activeFollowUpQueue.length > 0 && followUpQueueUiIdle && sendInFlightRef.current) {
       setSendInFlight(false);
@@ -3939,7 +3974,9 @@ export default function ChatView(props: ChatViewProps) {
           followUpQueueDispatchInFlight,
           canSteerFollowUpQueue,
           canActivateRunningFollowUpQueueAction,
+          followUpQueueAction,
           followUpQueueActionLabel,
+          followUpQueueActionEnabled,
           waitReasons: activeWaitReasons,
           activeProviderLiveSteerSupported,
           activeProviderLiveSteerAvailable,
@@ -4093,7 +4130,9 @@ export default function ChatView(props: ChatViewProps) {
         canSteerFollowUpQueue,
         canActivateRunningFollowUpQueueAction,
         firstActiveAutomaticSteerRetryBlocker,
+        followUpQueueAction,
         followUpQueueActionLabel,
+        followUpQueueActionEnabled,
         waitReasons: activeWaitReasons,
         isWorking,
         isSendBusy,
@@ -4152,6 +4191,8 @@ export default function ChatView(props: ChatViewProps) {
     environmentId,
     firstActiveAutomaticSteerRetryBlocker,
     firstActiveFollowUpQueueItem,
+    followUpQueueAction,
+    followUpQueueActionEnabled,
     followUpQueueActionLabel,
     followUpQueueCanStartTurn,
     followUpQueueDispatchInFlight,
@@ -5174,6 +5215,12 @@ export default function ChatView(props: ChatViewProps) {
         clearActiveComposerContent();
       }
     } catch (err) {
+      const queuedItemForRetry = options?.queuedItem
+        ? {
+            ...options.queuedItem,
+            images: options.queuedItem.images.map(cloneComposerImageForRetry),
+          }
+        : null;
       removePendingSteerDispatch(messageIdForSend);
       setOptimisticUserMessages((existing) => {
         const removed = existing.filter((message) => message.id === messageIdForSend);
@@ -5182,12 +5229,12 @@ export default function ChatView(props: ChatViewProps) {
         }
         return existing.filter((message) => message.id !== messageIdForSend);
       });
-      if (options?.queuedItem) {
+      if (queuedItemForRetry !== null) {
         setFollowUpQueueByThreadId((existing) => ({
           ...existing,
-          [options.queuedItem!.threadId]: [
-            options.queuedItem!,
-            ...(existing[options.queuedItem!.threadId] ?? EMPTY_FOLLOW_UP_QUEUE),
+          [queuedItemForRetry.threadId]: [
+            queuedItemForRetry,
+            ...(existing[queuedItemForRetry.threadId] ?? EMPTY_FOLLOW_UP_QUEUE),
           ],
         }));
       } else if (promptRef.current.length === 0 && composerImagesRef.current.length === 0) {
@@ -5248,7 +5295,7 @@ export default function ChatView(props: ChatViewProps) {
   const onSend = async (e?: { preventDefault: () => void }) => {
     e?.preventDefault();
     // A real operator send (and the auto sender after its final re-check)
-    // consumes the exact completed turn before touching the provider.
+    // invalidates any outstanding foreground authorization before touching the provider.
     recordManualAutoNudgeActivity();
     const api = readEnvironmentApi(environmentId);
     if (
@@ -5601,9 +5648,6 @@ export default function ChatView(props: ChatViewProps) {
     activeThread.session?.status === "ready"
       ? `${activeThread.environmentId}:${activeThread.id}:${activeLatestTurn.turnId}`
       : null;
-  const autoNudgeThreadKey = activeThread
-    ? `${activeThread.environmentId}:${activeThread.id}`
-    : null;
   const autoNudgeLatestUserMessageAt =
     activeThread?.messages.findLast((message) => message.role === "user")?.createdAt ?? null;
   autoNudgeTerminalTurnKeyRef.current = autoNudgeTerminalTurnKey;
@@ -5624,103 +5668,148 @@ export default function ChatView(props: ChatViewProps) {
     Boolean(activeThread?.error) ||
     showPlanFollowUpPrompt;
   const autoNudgeProviderAvailable =
-    activeProviderStatus?.status === "ready" &&
-    activeProviderStatus.enabled &&
-    activeProviderStatus.installed &&
-    activeProviderStatus.availability !== "unavailable" &&
-    activeProviderStatus.auth.status === "authenticated" &&
-    providerAccountCanAcceptTurn(activeProviderStatus) &&
-    !activeEnvironmentUnavailable;
+    autoNudgeProviderCanAcceptTurn(activeProviderStatus) &&
+    !activeEnvironmentUnavailable &&
+    supportsAutoNudgeExecutionLock();
+  const autoNudgeHasManualActivity =
+    promptRef.current.trim().length > 0 || composerImagesRef.current.length > 0;
   useEffect(() => {
     if (
+      !autoNudgeThreadRef ||
       !backgroundAutoNudgeOwnerForRoute ||
       backgroundAutoNudgeState.status !== "active" ||
-      (!activeFollowUpQueue.length &&
-        !activeSteeringFollowUpInFlight &&
-        !activeQueuedFollowUpPendingDispatch &&
-        !pendingApprovals.length &&
-        !pendingUserInputs.length &&
-        !respondingRequestIds.length &&
-        !respondingUserInputRequestIds.length &&
-        !showPlanFollowUpPrompt)
+      !autoNudgeHasPendingWork
     ) {
       return;
     }
-    getBackgroundAutoNudgeController().pause("Queued work or operator attention is pending.");
+    void runAutoNudgeMutation(() => {
+      const controller = getBackgroundAutoNudgeController();
+      controller.reloadFromStorage();
+      controller.pause(autoNudgeThreadRef, "Queued work or operator attention is pending.");
+    });
   }, [
-    activeFollowUpQueue.length,
-    activeQueuedFollowUpPendingDispatch,
-    activeSteeringFollowUpInFlight,
+    autoNudgeHasPendingWork,
+    autoNudgeThreadRef,
     backgroundAutoNudgeOwnerForRoute,
     backgroundAutoNudgeState.status,
-    pendingApprovals.length,
-    pendingUserInputs.length,
-    respondingRequestIds.length,
-    respondingUserInputRequestIds.length,
-    showPlanFollowUpPrompt,
+    runAutoNudgeMutation,
   ]);
   const autoNudgeEligibilityInput = {
     terminalTurnKey: autoNudgeTerminalTurnKey,
-    // The app-level coordinator exclusively owns an opted-in background
-    // thread, including while it is visible. This prevents duplicate local
-    // and background consumers from racing the same terminal turn.
-    mode: backgroundAutoNudgeOwnerForRoute ? ("off" as const) : autoNudgeMode,
-    hasManualActivity: promptRef.current.trim().length > 0 || composerImagesRef.current.length > 0,
+    // The root coordinator exclusively owns an opted-in background thread,
+    // including while visible, so a foreground timer cannot race it.
+    mode: backgroundAutoNudgeOwnerForRoute ? ("off" as const) : autoNudgePolicy.mode,
+    hasManualActivity: autoNudgeHasManualActivity,
     hasPendingWork: autoNudgeHasPendingWork,
     providerAvailable: autoNudgeProviderAvailable,
   };
   const autoNudgeEligible = canScheduleAutoNudge(autoNudgeEligibilityInput);
   const autoNudgeEligibilityRef = useRef(autoNudgeEligibilityInput);
   autoNudgeEligibilityRef.current = autoNudgeEligibilityInput;
-  const autoNudgeDispatchRef = useRef<(() => void) | null>(null);
-  autoNudgeDispatchRef.current = () => {
-    const prompt = autoNudgePromptForMode(autoNudgeMode);
+  const autoNudgeDispatchRef = useRef<
+    ((mode: AutoNudgeThreadPolicy["mode"]) => Promise<void>) | null
+  >(null);
+  autoNudgeDispatchRef.current = async (mode) => {
+    const prompt = autoNudgePromptForMode(mode);
     if (!prompt) return;
-    // `onSend` reads this ref synchronously, so this does not rely on a
-    // React render race to deliver the exact selected nudge text.
     promptRef.current = prompt;
     composerImagesRef.current = [];
     setComposerDraftPrompt(composerDraftTarget, prompt);
-    void onSend();
+    await onSend();
   };
+
+  const autoNudgeContextKey = activeThread
+    ? `${activeThread.environmentId}:${activeThread.id}:${activeThread.projectId}`
+    : null;
+  const observedAutoNudgeTerminalRef = useRef<{
+    readonly contextKey: string;
+    readonly terminalTurnKey: string | null;
+  } | null>(null);
 
   useEffect(() => {
     const terminalTurnKey = autoNudgeTerminalTurnKey;
-    const baseline = autoNudgeCompletionBaselineRef.current;
-    if (baseline.threadKey !== autoNudgeThreadKey) {
-      baseline.threadKey = autoNudgeThreadKey;
-      baseline.initialized = false;
-    }
-    if (!baseline.initialized) {
-      baseline.initialized = true;
-      if (terminalTurnKey !== null) {
-        // A completed turn already present when the view loads is context,
-        // not a newly generated completion event.
-        autoNudgeLedgerRef.current.mark(terminalTurnKey);
-      }
+    const previousObservation = observedAutoNudgeTerminalRef.current;
+    if (autoNudgeContextKey === null) {
+      observedAutoNudgeTerminalRef.current = null;
+      armedAutoNudgeTerminalTurnKeyRef.current = null;
+      cancelScheduledAutoNudge(false);
       return;
     }
+    observedAutoNudgeTerminalRef.current = { contextKey: autoNudgeContextKey, terminalTurnKey };
+    if (previousObservation === null || previousObservation.contextKey !== autoNudgeContextKey) {
+      // Enabling, remounting, or navigating to an already-completed thread
+      // establishes a baseline. Only a later exact terminal-key change may
+      // authorize an automated continuation.
+      armedAutoNudgeTerminalTurnKeyRef.current = null;
+      cancelScheduledAutoNudge(false);
+      return;
+    }
+    autoNudgeLedgerRef.current.reloadFromStorage();
     const alreadySent = terminalTurnKey !== null && autoNudgeLedgerRef.current.has(terminalTurnKey);
-    if (!autoNudgeEligible || terminalTurnKey === null || alreadySent) return;
+    armedAutoNudgeTerminalTurnKeyRef.current = resolveArmedAutoNudgeTerminal({
+      previousObservation,
+      currentObservation: { contextKey: autoNudgeContextKey, terminalTurnKey },
+      currentlyArmedTerminalTurnKey: armedAutoNudgeTerminalTurnKeyRef.current,
+      invalidatedByOperatorState:
+        (backgroundAutoNudgeOwnerForRoute ? "off" : autoNudgePolicy.mode) === "off" ||
+        autoNudgeHasManualActivity ||
+        autoNudgeHasPendingWork,
+      alreadyConsumed: alreadySent,
+    });
+    const armedTerminalTurnKey = armedAutoNudgeTerminalTurnKeyRef.current;
     if (
-      !canDispatchAutoNudge({
-        terminalTurnKey,
-        current: autoNudgeEligibilityRef.current,
-        alreadyConsumed: autoNudgeLedgerRef.current.has(terminalTurnKey),
-      })
+      !autoNudgeEligible ||
+      !autoNudgeThreadRef ||
+      terminalTurnKey === null ||
+      alreadySent ||
+      armedTerminalTurnKey !== terminalTurnKey
     ) {
+      cancelScheduledAutoNudge(false);
       return;
     }
-    // Consume synchronously with the completion observation. Re-renders and
-    // duplicate completion events cannot authorize another prompt.
-    autoNudgeLedgerRef.current.mark(terminalTurnKey);
-    autoNudgeDispatchRef.current?.();
+    void navigator.locks
+      .request(AUTO_NUDGE_EXECUTION_LOCK_NAME, { mode: "exclusive" }, async (lock) => {
+        if (!lock) return;
+        const policyStore = getAutoNudgeThreadPolicyStore();
+        policyStore.reloadFromStorage();
+        const currentPolicy = policyStore.getPolicy(autoNudgeThreadRef);
+        const ledger = autoNudgeLedgerRef.current;
+        ledger.reloadFromStorage();
+        const currentEligibility = {
+          ...autoNudgeEligibilityRef.current,
+          mode: currentPolicy.mode,
+        };
+        if (
+          currentPolicy.backgroundContinuation ||
+          !canDispatchAutoNudge({
+            terminalTurnKey,
+            current: currentEligibility,
+            alreadyConsumed: ledger.has(terminalTurnKey),
+          })
+        ) {
+          return;
+        }
+        // Persist the completion-event claim before transport. A failure may
+        // skip one nudge, but no reload or second window may duplicate it.
+        armedAutoNudgeTerminalTurnKeyRef.current = null;
+        ledger.mark(terminalTurnKey);
+        await autoNudgeDispatchRef.current?.(currentPolicy.mode);
+      })
+      .catch(() => {
+        // Lock/dispatch failures fail closed. A claim made before a transport
+        // failure is intentionally not replayed.
+      });
   }, [
     autoNudgeActivityRevision,
+    autoNudgeContextKey,
     autoNudgeEligible,
-    autoNudgeMode,
+    autoNudgeHasManualActivity,
+    autoNudgeHasPendingWork,
+    autoNudgePolicy.mode,
     autoNudgeTerminalTurnKey,
-    autoNudgeThreadKey,
+    autoNudgeThreadRef,
+    backgroundAutoNudgeOwnerForRoute,
+    cancelScheduledAutoNudge,
   ]);
 
   const onSteer = async (e?: { preventDefault: () => void }) => {
@@ -5824,81 +5913,26 @@ export default function ChatView(props: ChatViewProps) {
     });
   };
 
-  const dispatchFollowUpQueueInterrupt = async (item: FollowUpQueueItem) => {
-    const api = readEnvironmentApi(environmentId);
-    if (!api) {
-      recordFollowUpQueueDebugAttempt("manual-interrupt", "environment-api-missing", {
-        threadId: item.threadId,
-        itemId: item.id,
-      });
-      toastManager.add({
-        type: "error",
-        title: "Could not interrupt turn",
-        description: "Club Code is not connected.",
-      });
-      return;
-    }
-    if (!activeThread || activeThread.id !== item.threadId) {
-      recordFollowUpQueueDebugAttempt("manual-interrupt", "thread-not-active", {
-        threadId: item.threadId,
-        itemId: item.id,
-      });
-      return;
-    }
-
-    const turnId = activeThread.session?.activeTurnId ?? undefined;
-    updateManualStopBarrier(item.threadId, null);
-    armPendingSteerInterruptRecovery(activeThread);
-    recordFollowUpQueueDebugAttempt("manual-interrupt", "interrupt-requested", {
-      threadId: item.threadId,
-      itemId: item.id,
-    });
-
-    try {
-      await api.orchestration.dispatchCommand({
-        type: "thread.turn.interrupt",
-        commandId: newCommandId(),
-        threadId: item.threadId,
-        ...(turnId !== undefined ? { turnId } : {}),
-        createdAt: new Date().toISOString(),
-      });
-      setThreadError(item.threadId, null);
-    } catch (error) {
-      updatePendingSteerInterruptRecoveries((current) => {
-        if (!(item.threadId in current)) {
-          return current;
-        }
-        const next = { ...current };
-        delete next[item.threadId];
-        return next;
-      });
-      const message = error instanceof Error ? error.message : "Failed to interrupt active turn.";
-      recordFollowUpQueueDebugAttempt("manual-interrupt", "interrupt-failed", {
-        threadId: item.threadId,
-        itemId: item.id,
-      });
-      setThreadError(item.threadId, message);
-      toastManager.add({
-        type: "error",
-        title: "Could not interrupt turn",
-        description: message,
-      });
-    }
-  };
-
   const onActivateFollowUpQueueItem = (itemId: string) => {
     if (!activeThreadId) return;
     const item = followUpQueueByThreadIdRef.current[activeThreadId]?.find(
       (entry) => entry.id === itemId,
     );
     if (!item) return;
+    if (item.blockedReason !== null) {
+      recordFollowUpQueueDebugAttempt("manual-activate", "queued-follow-up-blocked", {
+        threadId: item.threadId,
+        itemId: item.id,
+      });
+      return;
+    }
 
     // Clicking a specific queued row is explicit delivery intent and is the
     // renderer equivalent of upstream's interrupt-and-submit path.
     updateManualStopBarrier(item.threadId, null);
     const action = decideQueuedFollowUpAction({
       phase: followUpQueuePhase,
-      liveSteerSupported: activeProviderLiveSteerAvailable,
+      liveSteerAvailable: activeProviderLiveSteerAvailable,
       canDispatchNow:
         followUpQueuePhase === "running"
           ? canActivateRunningFollowUpQueueAction
@@ -5927,11 +5961,6 @@ export default function ChatView(props: ChatViewProps) {
         return;
       }
       void dispatchSteerSnapshot(item, { queuedItem: item });
-      return;
-    }
-
-    if (action === "interrupt") {
-      void dispatchFollowUpQueueInterrupt(item);
       return;
     }
 
@@ -6635,6 +6664,106 @@ export default function ChatView(props: ChatViewProps) {
     void onRevertToTurnCountRef.current(targetTurnCount);
   }, []);
 
+  const changeAutoNudgeMode = (mode: AutoNudgeThreadPolicy["mode"]) => {
+    if (!autoNudgeThreadRef) return;
+    cancelScheduledAutoNudge(mode === "off");
+    void runAutoNudgeMutation(() => {
+      const policyStore = getAutoNudgeThreadPolicyStore();
+      const controller = getBackgroundAutoNudgeController();
+      policyStore.reloadFromStorage();
+      controller.reloadFromStorage();
+      const policy = policyStore.setPolicy(autoNudgeThreadRef, { mode });
+      if (mode === "off") {
+        controller.stop(autoNudgeThreadRef, "Auto Nudge was turned off for this thread.");
+      } else {
+        controller.synchronizePolicy(autoNudgeThreadRef, policy);
+      }
+    });
+  };
+  const changeAutoNudgeLimits = (patch: Pick<Partial<AutoNudgeThreadPolicy>, "maxRounds">) => {
+    if (!autoNudgeThreadRef) return;
+    void runAutoNudgeMutation(() => {
+      const policyStore = getAutoNudgeThreadPolicyStore();
+      const controller = getBackgroundAutoNudgeController();
+      policyStore.reloadFromStorage();
+      controller.reloadFromStorage();
+      const policy = policyStore.setPolicy(autoNudgeThreadRef, patch);
+      controller.synchronizePolicy(autoNudgeThreadRef, policy);
+    });
+  };
+  const changeAutoNudgeBackground = (enabled: boolean) => {
+    if (!autoNudgeThreadRef || !activeThread || !isServerThread) return;
+    cancelScheduledAutoNudge(false);
+    void runAutoNudgeMutation(() => {
+      const policyStore = getAutoNudgeThreadPolicyStore();
+      const controller = getBackgroundAutoNudgeController();
+      policyStore.reloadFromStorage();
+      controller.reloadFromStorage();
+      const previousOwner = controller.getSnapshot().owner;
+      if (enabled) {
+        if (
+          previousOwner &&
+          (previousOwner.environmentId !== autoNudgeThreadRef.environmentId ||
+            previousOwner.threadId !== autoNudgeThreadRef.threadId)
+        ) {
+          policyStore.setPolicy(previousOwner, { backgroundContinuation: false });
+        }
+        const policy = policyStore.setPolicy(autoNudgeThreadRef, {
+          backgroundContinuation: true,
+        });
+        if (
+          !controller.start(
+            autoNudgeThreadRef,
+            autoNudgeLatestUserMessageAt,
+            autoNudgeTerminalTurnKey,
+            policy,
+          )
+        )
+          return;
+        if (autoNudgeHasPendingWork) {
+          controller.pause(autoNudgeThreadRef, "Queued work or operator attention is pending.");
+        }
+        return;
+      }
+      policyStore.setPolicy(autoNudgeThreadRef, { backgroundContinuation: false });
+      controller.stop(autoNudgeThreadRef, "Background continuation stopped by the operator.");
+    });
+  };
+  const pauseAutoNudgeBackground = () => {
+    if (!autoNudgeThreadRef) return;
+    void runAutoNudgeMutation(() => {
+      const controller = getBackgroundAutoNudgeController();
+      controller.reloadFromStorage();
+      controller.pause(autoNudgeThreadRef, "Paused by the operator.");
+    });
+  };
+  const resumeAutoNudgeBackground = () => {
+    if (!autoNudgeThreadRef) return;
+    void runAutoNudgeMutation(() => {
+      const policyStore = getAutoNudgeThreadPolicyStore();
+      const controller = getBackgroundAutoNudgeController();
+      policyStore.reloadFromStorage();
+      controller.reloadFromStorage();
+      controller.synchronizePolicy(autoNudgeThreadRef, policyStore.getPolicy(autoNudgeThreadRef));
+      controller.resume(autoNudgeThreadRef);
+    });
+  };
+  const stopAutoNudge = () => {
+    if (!autoNudgeThreadRef) return;
+    cancelScheduledAutoNudge(true);
+    void runAutoNudgeMutation(() => {
+      const policyStore = getAutoNudgeThreadPolicyStore();
+      const controller = getBackgroundAutoNudgeController();
+      policyStore.reloadFromStorage();
+      controller.reloadFromStorage();
+      policyStore.setPolicy(autoNudgeThreadRef, {
+        mode: "off",
+        backgroundContinuation: false,
+      });
+      controller.stop(autoNudgeThreadRef, "Auto Nudge stopped by the operator.");
+    });
+  };
+
   // Empty state: no active thread
   if (!activeThread) {
     return <NoActiveThreadState />;
@@ -6767,69 +6896,31 @@ export default function ChatView(props: ChatViewProps) {
               <ComposerBannerStack className="relative z-0" items={composerBannerItems} />
               <div className="relative z-10">
                 <AutoNudgeControl
-                  mode={autoNudgeMode}
+                  mode={autoNudgePolicy.mode}
                   disabled={!isServerThread}
-                  backgroundEnabled={settings.autoNudgeBackgroundContinuation}
-                  backgroundDispatchSupported={supportsBackgroundAutoNudgeDispatchLock()}
+                  backgroundEnabled={
+                    backgroundAutoNudgeState.owner !== null && !backgroundAutoNudgeOwnerForRoute
+                  }
+                  backgroundDispatchSupported={supportsAutoNudgeExecutionLock()}
                   backgroundOwnedByThisThread={backgroundAutoNudgeOwnerForRoute}
                   backgroundStatus={backgroundAutoNudgeState.status}
                   backgroundRounds={backgroundAutoNudgeState.sentRounds}
-                  backgroundMaxRounds={settings.autoNudgeMaxRounds}
+                  backgroundMaxRounds={autoNudgePolicy.maxRounds}
                   backgroundReason={backgroundAutoNudgeState.reason}
                   backgroundLedger={
-                    backgroundAutoNudgeLastOwnerForRoute ? backgroundAutoNudgeState.ledger : []
+                    backgroundAutoNudgeLastOwnerForRoute
+                      ? backgroundAutoNudgeState.ledger.filter(
+                          (entry) =>
+                            entry.owner?.environmentId === autoNudgeThreadRef?.environmentId &&
+                            entry.owner?.threadId === autoNudgeThreadRef?.threadId,
+                        )
+                      : []
                   }
-                  onModeChange={(mode) => {
-                    if (mode === "off") {
-                      consumeAutoNudgeTerminalForManualActivity(
-                        autoNudgeLedgerRef.current,
-                        autoNudgeTerminalTurnKeyRef.current,
-                      );
-                    }
-                    if (mode === "off") {
-                      getBackgroundAutoNudgeController().stop("Auto Nudge mode was turned off.");
-                    }
-                    updateClientSettings({
-                      autoNudgeMode: mode,
-                      ...(mode === "off" ? { autoNudgeBackgroundContinuation: false } : {}),
-                    });
-                  }}
-                  onBackgroundChange={(enabled) => {
-                    if (!activeThread || !isServerThread) return;
-                    if (enabled) {
-                      getBackgroundAutoNudgeController().start(
-                        {
-                          environmentId: activeThread.environmentId,
-                          threadId: activeThread.id,
-                        },
-                        autoNudgeLatestUserMessageAt,
-                        autoNudgeTerminalTurnKey,
-                      );
-                      if (
-                        activeFollowUpQueue.length > 0 ||
-                        activeSteeringFollowUpInFlight ||
-                        activeQueuedFollowUpPendingDispatch ||
-                        pendingApprovals.length > 0 ||
-                        pendingUserInputs.length > 0 ||
-                        respondingRequestIds.length > 0 ||
-                        respondingUserInputRequestIds.length > 0 ||
-                        showPlanFollowUpPrompt
-                      ) {
-                        getBackgroundAutoNudgeController().pause(
-                          "Queued work or operator attention is pending.",
-                        );
-                      }
-                    } else {
-                      getBackgroundAutoNudgeController().stop(
-                        "Background continuation stopped by the operator.",
-                      );
-                    }
-                    updateClientSettings({ autoNudgeBackgroundContinuation: enabled });
-                  }}
-                  onPauseBackground={() =>
-                    getBackgroundAutoNudgeController().pause("Paused by the operator.")
-                  }
-                  onResumeBackground={() => getBackgroundAutoNudgeController().resume()}
+                  onModeChange={changeAutoNudgeMode}
+                  onMaxRoundsChange={(maxRounds) => changeAutoNudgeLimits({ maxRounds })}
+                  onBackgroundChange={changeAutoNudgeBackground}
+                  onPauseBackground={pauseAutoNudgeBackground}
+                  onResumeBackground={resumeAutoNudgeBackground}
                   onStop={stopAutoNudge}
                 />
                 <ChatComposer
@@ -6880,6 +6971,7 @@ export default function ChatView(props: ChatViewProps) {
                   steeringFollowUpItems={steeringFollowUpViewItems}
                   followUpQueueActionLabel={followUpQueueActionLabel}
                   followUpQueueActionTitle={followUpQueueActionTitle}
+                  followUpQueueActionEnabled={followUpQueueActionEnabled}
                   promptRef={promptRef}
                   composerImagesRef={composerImagesRef}
                   shouldAutoScrollRef={isAtEndRef}

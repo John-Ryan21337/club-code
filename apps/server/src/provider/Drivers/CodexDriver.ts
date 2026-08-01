@@ -116,6 +116,10 @@ const withInstanceIdentity =
       ...snapshot.runtimeCapabilities,
       liveSteer: "supported",
       threadGoals: "supported",
+      accountUsage:
+        snapshot.auth.type === "chatgpt" || snapshot.accountRateLimits
+          ? "supported"
+          : "unsupported",
     },
   });
 

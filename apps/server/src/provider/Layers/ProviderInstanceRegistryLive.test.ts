@@ -310,6 +310,7 @@ describe("ProviderInstanceRegistryLive — all drivers slice", () => {
         `codex:home:${path.resolve("/home/julius/.codex")}`,
       );
       expect(codexSnapshot.runtimeCapabilities?.liveSteer).toBe("supported");
+      expect(codexSnapshot.runtimeCapabilities?.accountUsage).toBe("unsupported");
 
       const claudeSnapshot = yield* claude!.snapshot.getSnapshot;
       expect(claudeSnapshot.instanceId).toBe(claudeId);
@@ -323,6 +324,7 @@ describe("ProviderInstanceRegistryLive — all drivers slice", () => {
       // private capability object, so both surfaces must agree even for the
       // initial disabled/pending snapshot before a CLI probe has completed.
       expect(claudeSnapshot.runtimeCapabilities?.liveSteer).toBe("supported");
+      expect(claudeSnapshot.runtimeCapabilities?.accountUsage).toBe("unsupported");
       expect(claude!.adapter.capabilities.liveSteer).toBe("supported");
     }).pipe(Effect.provide(testLayer)),
   );

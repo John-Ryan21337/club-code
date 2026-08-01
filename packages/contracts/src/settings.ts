@@ -172,6 +172,13 @@ export const DEFAULT_AMBIENT_OPACITY = 0.35;
 export const MIN_FALLING_EFFECT_SPEED = 0.25;
 export const MAX_FALLING_EFFECT_SPEED = 4;
 export const DEFAULT_FALLING_EFFECT_SPEED = 1;
+/**
+ * Independent hue-cycle multiplier. The upper bound is intentionally high
+ * enough for a visible shimmer, but changes no particle or canvas draw budget.
+ */
+export const MIN_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED = 0.25;
+export const MAX_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED = 64;
+export const DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED = 1;
 export const MIN_FALLING_EFFECT_DENSITY = 0.5;
 export const MAX_FALLING_EFFECT_DENSITY = 2.5;
 export const DEFAULT_FALLING_EFFECT_DENSITY = 1;
@@ -201,10 +208,27 @@ export const DEFAULT_FALLING_EFFECT_ACTIVITY_LINKS = false;
 export const DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_NETWORK_ENABLED = true;
 export const DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_DATABASE_ENABLED = true;
 export const DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_BUILD_ENABLED = true;
+export const DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_AGENT_ENABLED = true;
 export const FallingEffectActivityLinkColorMode = Schema.Literals(["random", "matrix"]);
 export type FallingEffectActivityLinkColorMode = typeof FallingEffectActivityLinkColorMode.Type;
 export const DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_COLOR_MODE: FallingEffectActivityLinkColorMode =
   "random";
+/**
+ * Controls only how long an already verified exact provider route remains
+ * visible. It never creates activity events or claims measured throughput.
+ */
+export const MIN_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS = 8;
+export const MAX_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS = 120;
+export const DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS = 30;
+export const FallingEffectActivityLinkRetentionSeconds = Schema.Number.check(
+  Schema.isInt(),
+  Schema.isBetween({
+    minimum: MIN_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
+    maximum: MAX_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
+  }),
+);
+export type FallingEffectActivityLinkRetentionSeconds =
+  typeof FallingEffectActivityLinkRetentionSeconds.Type;
 
 export const HexColor = TrimmedNonEmptyString.check(Schema.isPattern(/^#[0-9A-Fa-f]{6}$/)).pipe(
   Schema.decodeTo(
@@ -249,6 +273,14 @@ export const FallingEffectMatrixColorMode = Schema.Literals([
 ]);
 export type FallingEffectMatrixColorMode = typeof FallingEffectMatrixColorMode.Type;
 export const DEFAULT_FALLING_EFFECT_MATRIX_COLOR_MODE: FallingEffectMatrixColorMode = "fixed";
+
+export const FallingEffectMatrixColorCycleSpeed = Schema.Number.check(
+  Schema.isBetween({
+    minimum: MIN_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
+    maximum: MAX_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
+  }),
+);
+export type FallingEffectMatrixColorCycleSpeed = typeof FallingEffectMatrixColorCycleSpeed.Type;
 
 export const FallingEffectSpeed = Schema.Number.check(
   Schema.isBetween({
@@ -525,6 +557,9 @@ export const ClientSettingsSchema = Schema.Struct({
   fallingEffectMatrixColorMode: FallingEffectMatrixColorMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_MATRIX_COLOR_MODE)),
   ),
+  fallingEffectMatrixColorCycleSpeed: FallingEffectMatrixColorCycleSpeed.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED)),
+  ),
   fallingEffectOpacity: AmbientOpacity.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_OPACITY)),
   ),
@@ -559,8 +594,16 @@ export const ClientSettingsSchema = Schema.Struct({
   fallingEffectActivityLinkBuildEnabled: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_BUILD_ENABLED)),
   ),
+  fallingEffectActivityLinkAgentEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_AGENT_ENABLED)),
+  ),
   fallingEffectActivityLinkColorMode: FallingEffectActivityLinkColorMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_COLOR_MODE)),
+  ),
+  fallingEffectActivityLinkRetentionSeconds: FallingEffectActivityLinkRetentionSeconds.pipe(
+    Schema.withDecodingDefault(
+      Effect.succeed(DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS),
+    ),
   ),
   ambientVideoEnabled: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_VIDEO_ENABLED)),
@@ -695,9 +738,9 @@ export const ClientSettingsSchema = Schema.Struct({
   modelPacingReservePercent: ModelPacingReservePercent.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_MODEL_PACING_RESERVE_PERCENT)),
   ),
-  // Durable, device-wide policy. Background continuation is a separate,
-  // default-off permission and always has one explicit thread owner plus hard
-  // round cap in the renderer coordinator.
+  // Legacy device-wide defaults retained for decode compatibility and the
+  // one-time migration into the renderer's exact-thread policy registry.
+  // New Auto Nudge writes are thread-scoped; these fields are not authoritative.
   autoNudgeMode: AutoNudgeMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_AUTO_NUDGE_MODE)),
   ),
@@ -774,6 +817,7 @@ export const AMBIENT_CLIENT_SETTINGS_KEYS = [
   "fallingEffectKind",
   "fallingEffectColor",
   "fallingEffectMatrixColorMode",
+  "fallingEffectMatrixColorCycleSpeed",
   "fallingEffectOpacity",
   "fallingEffectSpeed",
   "fallingEffectDensity",
@@ -784,7 +828,9 @@ export const AMBIENT_CLIENT_SETTINGS_KEYS = [
   "fallingEffectActivityLinkNetworkEnabled",
   "fallingEffectActivityLinkDatabaseEnabled",
   "fallingEffectActivityLinkBuildEnabled",
+  "fallingEffectActivityLinkAgentEnabled",
   "fallingEffectActivityLinkColorMode",
+  "fallingEffectActivityLinkRetentionSeconds",
   "ambientVideoEnabled",
   "ambientVideoSource",
   "ambientVideoLayoutMode",
@@ -818,6 +864,7 @@ export const DEFAULT_AMBIENT_CLIENT_SETTINGS: AmbientClientSettings = {
   fallingEffectKind: DEFAULT_FALLING_EFFECT_KIND,
   fallingEffectColor: DEFAULT_AMBIENT_COLOR,
   fallingEffectMatrixColorMode: DEFAULT_FALLING_EFFECT_MATRIX_COLOR_MODE,
+  fallingEffectMatrixColorCycleSpeed: DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
   fallingEffectOpacity: DEFAULT_AMBIENT_OPACITY,
   fallingEffectSpeed: DEFAULT_FALLING_EFFECT_SPEED,
   fallingEffectDensity: DEFAULT_FALLING_EFFECT_DENSITY,
@@ -828,7 +875,9 @@ export const DEFAULT_AMBIENT_CLIENT_SETTINGS: AmbientClientSettings = {
   fallingEffectActivityLinkNetworkEnabled: DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_NETWORK_ENABLED,
   fallingEffectActivityLinkDatabaseEnabled: DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_DATABASE_ENABLED,
   fallingEffectActivityLinkBuildEnabled: DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_BUILD_ENABLED,
+  fallingEffectActivityLinkAgentEnabled: DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_AGENT_ENABLED,
   fallingEffectActivityLinkColorMode: DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_COLOR_MODE,
+  fallingEffectActivityLinkRetentionSeconds: DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
   ambientVideoEnabled: DEFAULT_AMBIENT_VIDEO_ENABLED,
   ambientVideoSource: DEFAULT_AMBIENT_VIDEO_SOURCE,
   ambientVideoLayoutMode: DEFAULT_AMBIENT_VIDEO_LAYOUT_MODE,
@@ -891,6 +940,7 @@ export const CLUB_CODE_FIRST_RUN_CLIENT_SETTINGS: ClientSettings = Schema.decode
   fallingEffectActivityLinkNetworkEnabled: true,
   fallingEffectActivityLinkDatabaseEnabled: true,
   fallingEffectActivityLinkBuildEnabled: true,
+  fallingEffectActivityLinkAgentEnabled: true,
   fallingEffectActivityLinkColorMode: "matrix",
   ambientVideoEnabled: true,
   ambientVideoSource: null,
@@ -909,12 +959,12 @@ export const CLUB_CODE_FIRST_RUN_CLIENT_SETTINGS: ClientSettings = Schema.decode
   ambientImagePresetPlacement: "bottom-left",
   ambientImagePresetSize: "large",
   ambientImageGlowEnabled: true,
+  providerUsageWidgetEnabled: true,
+  modelPacingEnabled: true,
   ambientImageGlowColor: "auto",
   ambientImageGlowOpacity: 0.35,
   workflowObservatoryEnabled: true,
-  providerUsageWidgetEnabled: true,
   providerUsagePollMinutes: 2,
-  modelPacingEnabled: true,
   modelPacingReservePercent: 5,
 });
 
@@ -1461,6 +1511,7 @@ export const ClientSettingsPatch = Schema.Struct({
   fallingEffectKind: Schema.optionalKey(FallingEffectKind),
   fallingEffectColor: Schema.optionalKey(AmbientColor),
   fallingEffectMatrixColorMode: Schema.optionalKey(FallingEffectMatrixColorMode),
+  fallingEffectMatrixColorCycleSpeed: Schema.optionalKey(FallingEffectMatrixColorCycleSpeed),
   fallingEffectOpacity: Schema.optionalKey(AmbientOpacity),
   fallingEffectSpeed: Schema.optionalKey(FallingEffectSpeed),
   fallingEffectDensity: Schema.optionalKey(FallingEffectDensity),
@@ -1471,7 +1522,11 @@ export const ClientSettingsPatch = Schema.Struct({
   fallingEffectActivityLinkNetworkEnabled: Schema.optionalKey(Schema.Boolean),
   fallingEffectActivityLinkDatabaseEnabled: Schema.optionalKey(Schema.Boolean),
   fallingEffectActivityLinkBuildEnabled: Schema.optionalKey(Schema.Boolean),
+  fallingEffectActivityLinkAgentEnabled: Schema.optionalKey(Schema.Boolean),
   fallingEffectActivityLinkColorMode: Schema.optionalKey(FallingEffectActivityLinkColorMode),
+  fallingEffectActivityLinkRetentionSeconds: Schema.optionalKey(
+    FallingEffectActivityLinkRetentionSeconds,
+  ),
   ambientVideoEnabled: Schema.optionalKey(Schema.Boolean),
   ambientVideoSource: Schema.optionalKey(AmbientVideoSource),
   ambientVideoLayoutMode: Schema.optionalKey(AmbientMediaLayoutMode),

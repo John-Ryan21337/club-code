@@ -27,6 +27,7 @@ import {
   resolveMatrixAtmosphereColorFrame,
   shouldAnimateAtmosphere,
   type AtmosphereScene,
+  type MatrixColorFrame,
 } from "../windowAtmosphere";
 
 const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
@@ -53,6 +54,10 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
   const kind = useSettings((settings) => settings.fallingEffectKind);
   const configuredColor = useSettings((settings) => settings.fallingEffectColor);
   const matrixColorMode = useSettings((settings) => settings.fallingEffectMatrixColorMode);
+  const matrixColorCycleSpeed = useSettings(
+    (settings) => settings.fallingEffectMatrixColorCycleSpeed,
+  );
+  const matrixColorCycleSpeedRef = useRef(matrixColorCycleSpeed);
   const opacity = useSettings((settings) => settings.fallingEffectOpacity);
   const speed = useSettings((settings) => settings.fallingEffectSpeed);
   const density = useSettings((settings) => settings.fallingEffectDensity);
@@ -71,9 +76,16 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
   const activityLinkBuildEnabled = useSettings(
     (settings) => settings.fallingEffectActivityLinkBuildEnabled,
   );
+  const activityLinkAgentEnabled = useSettings(
+    (settings) => settings.fallingEffectActivityLinkAgentEnabled,
+  );
   const activityLinkColorMode = useSettings(
     (settings) => settings.fallingEffectActivityLinkColorMode,
   );
+  const activityLinkRetentionSeconds = useSettings(
+    (settings) => settings.fallingEffectActivityLinkRetentionSeconds,
+  );
+  const activityLinkRetentionMsRef = useRef(activityLinkRetentionSeconds * 1_000);
   const continueBackgroundAnimations = useSettings(
     (settings) => settings.continueBackgroundAnimations,
   );
@@ -83,6 +95,7 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const sceneRef = useRef<AtmosphereScene | null>(null);
   const invalidateCommittedFrameRef = useRef<(() => void) | null>(null);
+  const invalidateStaticMatrixColorFrameRef = useRef<(() => void) | null>(null);
   const matrixWorkVocabularyKey = useStore((state) =>
     liveWorkVocabularyEnabled && kind === "matrix"
       ? selectMatrixWorkVocabularyKey(state, selectedThreadRef)
@@ -95,11 +108,20 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
   const matrixWorkVocabularyRef = useRef(matrixWorkVocabulary);
   const matrixActivityEventsKey = useStore((state) =>
     activityLinksEnabled && kind === "matrix"
-      ? selectMatrixActivityEventsKey(state, selectedThreadRef, {
-          network: activityLinkNetworkEnabled,
-          database: activityLinkDatabaseEnabled,
-          build: activityLinkBuildEnabled,
-        })
+      ? selectMatrixActivityEventsKey(
+          state,
+          selectedThreadRef,
+          {
+            network: activityLinkNetworkEnabled,
+            database: activityLinkDatabaseEnabled,
+            build: activityLinkBuildEnabled,
+            agent: activityLinkAgentEnabled,
+          },
+          {
+            nowMs: Date.now(),
+            requestedTtlMs: activityLinkRetentionSeconds * 1_000,
+          },
+        )
       : "",
   );
   const matrixActivityEvents = useMemo(
@@ -117,6 +139,17 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
     matrixWorkVocabularyRef.current = matrixWorkVocabulary;
     matrixActivityEventsRef.current = matrixActivityEvents;
   }, [matrixActivityEvents, matrixWorkVocabulary]);
+
+  useLayoutEffect(() => {
+    matrixColorCycleSpeedRef.current = matrixColorCycleSpeed;
+    invalidateStaticMatrixColorFrameRef.current?.();
+    invalidateCommittedFrameRef.current?.();
+  }, [matrixColorCycleSpeed]);
+
+  useLayoutEffect(() => {
+    activityLinkRetentionMsRef.current = activityLinkRetentionSeconds * 1_000;
+    invalidateCommittedFrameRef.current?.();
+  }, [activityLinkRetentionSeconds]);
 
   useLayoutEffect(() => {
     const scene = sceneRef.current;
@@ -152,6 +185,7 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
     let resizeFrame: number | null = null;
     let staticActivityExpiryTimer: number | null = null;
     let lastFrameTime: number | null = null;
+    let staticReducedMotionMatrixColorFrame: MatrixColorFrame | null = null;
 
     const clearCanvasBitmap = () => {
       context.save();
@@ -175,6 +209,10 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
       }
     };
 
+    const invalidateStaticMatrixColorFrame = () => {
+      staticReducedMotionMatrixColorFrame = null;
+    };
+
     const scheduleStaticActivityExpiry = (nowMs: number) => {
       cancelStaticActivityExpiry();
       if (
@@ -189,9 +227,15 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
 
       let nearestExpiryAtMs = Number.POSITIVE_INFINITY;
       for (const event of matrixActivityEventsRef.current) {
-        const expiryAtMs = event.observedAtMs + MATRIX_ACTIVITY_TTL_MS;
-        if (Number.isFinite(expiryAtMs) && expiryAtMs > nowMs) {
-          nearestExpiryAtMs = Math.min(nearestExpiryAtMs, expiryAtMs);
+        const pulseExpiryAtMs = event.observedAtMs + MATRIX_ACTIVITY_TTL_MS;
+        if (Number.isFinite(pulseExpiryAtMs) && pulseExpiryAtMs > nowMs) {
+          nearestExpiryAtMs = Math.min(nearestExpiryAtMs, pulseExpiryAtMs);
+        }
+        if (matrixActivityState.linkCount > 0) {
+          const routeExpiryAtMs = event.observedAtMs + activityLinkRetentionMsRef.current;
+          if (Number.isFinite(routeExpiryAtMs) && routeExpiryAtMs > nowMs) {
+            nearestExpiryAtMs = Math.min(nearestExpiryAtMs, routeExpiryAtMs);
+          }
         }
       }
       if (!Number.isFinite(nearestExpiryAtMs)) {
@@ -242,17 +286,26 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
         reducedMotionActive || lastFrameTime === null ? 0 : (timestamp - lastFrameTime) / 1_000;
       lastFrameTime = timestamp;
       advanceAtmosphereSceneInPlace(scene, elapsedSeconds, speed);
+      if (!reducedMotionActive) {
+        staticReducedMotionMatrixColorFrame = null;
+      }
       const matrixColorFrame =
         kind === "matrix"
-          ? resolveMatrixAtmosphereColorFrame(
-              matrixColorMode,
-              configuredColor,
-              resolvedTheme === "dark",
-              timestamp,
-              localMediaAudioSignalStore.getSnapshot(),
-              matrixColorState,
-            )
+          ? reducedMotionActive && staticReducedMotionMatrixColorFrame !== null
+            ? staticReducedMotionMatrixColorFrame
+            : resolveMatrixAtmosphereColorFrame(
+                matrixColorMode,
+                configuredColor,
+                resolvedTheme === "dark",
+                timestamp,
+                localMediaAudioSignalStore.getSnapshot(),
+                matrixColorState,
+                matrixColorCycleSpeedRef.current,
+              )
           : undefined;
+      if (reducedMotionActive && matrixColorFrame !== undefined) {
+        staticReducedMotionMatrixColorFrame = matrixColorFrame;
+      }
       const color =
         matrixColorFrame?.color ??
         resolveAtmosphereColor(kind, configuredColor, resolvedTheme === "dark");
@@ -265,6 +318,7 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
           activityNow,
           scene.particles.length,
           reducedMotionActive,
+          activityLinkRetentionMsRef.current,
         );
         drawMatrixActivityAnimation(
           context,
@@ -323,6 +377,7 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
       }
     };
     invalidateCommittedFrameRef.current = invalidateCommittedFrame;
+    invalidateStaticMatrixColorFrameRef.current = invalidateStaticMatrixColorFrame;
 
     const handleResize = () => {
       if (resizeFrame !== null) {
@@ -351,6 +406,9 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
       }
       if (invalidateCommittedFrameRef.current === invalidateCommittedFrame) {
         invalidateCommittedFrameRef.current = null;
+      }
+      if (invalidateStaticMatrixColorFrameRef.current === invalidateStaticMatrixColorFrame) {
+        invalidateStaticMatrixColorFrameRef.current = null;
       }
       sceneRef.current = null;
       clearCanvasBitmap();

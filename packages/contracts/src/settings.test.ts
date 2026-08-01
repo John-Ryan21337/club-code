@@ -46,15 +46,18 @@ import {
   DEFAULT_CLIENT_SETTINGS,
   DEFAULT_CONTINUE_BACKGROUND_ANIMATIONS,
   DEFAULT_FALLING_EFFECT_2CH_ENRICHED,
+  DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_AGENT_ENABLED,
   DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_BUILD_ENABLED,
   DEFAULT_FALLING_EFFECT_ACTIVITY_LINKS,
   DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_COLOR_MODE,
   DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_DATABASE_ENABLED,
   DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_NETWORK_ENABLED,
+  DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
   DEFAULT_FALLING_EFFECT_DENSITY,
   DEFAULT_FALLING_EFFECT_JAPANESE_RATIO,
   DEFAULT_FALLING_EFFECT_KIND,
   DEFAULT_FALLING_EFFECT_LIVE_WORK_VOCABULARY,
+  DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
   DEFAULT_FALLING_EFFECT_MATRIX_COLOR_MODE,
   DEFAULT_FALLING_EFFECT_SPEED,
   DEFAULT_FALLING_EFFECTS_ENABLED,
@@ -78,6 +81,8 @@ import {
   MAX_BRAND_WORDMARK_PREFIX_LENGTH,
   MAX_FALLING_EFFECT_DENSITY,
   MAX_FALLING_EFFECT_JAPANESE_RATIO,
+  MAX_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
+  MAX_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
   MAX_FALLING_EFFECT_SPEED,
   MAX_MODEL_PACING_RESERVE_PERCENT,
   MAX_PROVIDER_USAGE_POLL_MINUTES,
@@ -90,6 +95,8 @@ import {
   MIN_AMBIENT_OPACITY,
   MIN_FALLING_EFFECT_DENSITY,
   MIN_FALLING_EFFECT_JAPANESE_RATIO,
+  MIN_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
+  MIN_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
   MIN_FALLING_EFFECT_SPEED,
   MIN_MODEL_PACING_RESERVE_PERCENT,
   MIN_PROVIDER_USAGE_POLL_MINUTES,
@@ -206,6 +213,9 @@ describe("client settings", () => {
   it("keeps conservative defaults separate from the Club Code first-run profile", () => {
     expect(DEFAULT_CLIENT_SETTINGS.fallingEffectsEnabled).toBe(false);
     expect(DEFAULT_CLIENT_SETTINGS.fallingEffectMatrixColorMode).toBe("fixed");
+    expect(DEFAULT_CLIENT_SETTINGS.fallingEffectMatrixColorCycleSpeed).toBe(
+      DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
+    );
     expect(DEFAULT_CLIENT_SETTINGS.ambientVideoEnabled).toBe(false);
     expect(DEFAULT_CLIENT_SETTINGS.ambientImageEnabled).toBe(false);
     expect(DEFAULT_CLIENT_SETTINGS.providerUsageWidgetEnabled).toBe(false);
@@ -226,6 +236,7 @@ describe("client settings", () => {
       fallingEffectActivityLinkNetworkEnabled: true,
       fallingEffectActivityLinkDatabaseEnabled: true,
       fallingEffectActivityLinkBuildEnabled: true,
+      fallingEffectActivityLinkAgentEnabled: true,
       fallingEffectActivityLinkColorMode: "matrix",
       ambientVideoEnabled: true,
       ambientVideoSource: null,
@@ -244,12 +255,12 @@ describe("client settings", () => {
       ambientImagePresetPlacement: "bottom-left",
       ambientImagePresetSize: "large",
       ambientImageGlowEnabled: true,
+      providerUsageWidgetEnabled: true,
+      modelPacingEnabled: true,
       ambientImageGlowColor: "auto",
       ambientImageGlowOpacity: 0.35,
       workflowObservatoryEnabled: true,
-      providerUsageWidgetEnabled: true,
       providerUsagePollMinutes: 2,
-      modelPacingEnabled: true,
       modelPacingReservePercent: 5,
     });
     expect(CLUB_CODE_FIRST_RUN_CLIENT_SETTINGS.onboardingCompleted).toBe(false);
@@ -404,6 +415,7 @@ describe("client settings", () => {
       fallingEffectKind: DEFAULT_FALLING_EFFECT_KIND,
       fallingEffectColor: DEFAULT_AMBIENT_COLOR,
       fallingEffectMatrixColorMode: DEFAULT_FALLING_EFFECT_MATRIX_COLOR_MODE,
+      fallingEffectMatrixColorCycleSpeed: DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
       fallingEffectOpacity: DEFAULT_AMBIENT_OPACITY,
       fallingEffectSpeed: DEFAULT_FALLING_EFFECT_SPEED,
       fallingEffectDensity: DEFAULT_FALLING_EFFECT_DENSITY,
@@ -415,7 +427,10 @@ describe("client settings", () => {
       fallingEffectActivityLinkDatabaseEnabled:
         DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_DATABASE_ENABLED,
       fallingEffectActivityLinkBuildEnabled: DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_BUILD_ENABLED,
+      fallingEffectActivityLinkAgentEnabled: DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_AGENT_ENABLED,
       fallingEffectActivityLinkColorMode: DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_COLOR_MODE,
+      fallingEffectActivityLinkRetentionSeconds:
+        DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
       ambientVideoEnabled: DEFAULT_AMBIENT_VIDEO_ENABLED,
       ambientVideoSource: DEFAULT_AMBIENT_VIDEO_SOURCE,
       ambientVideoLayoutMode: DEFAULT_AMBIENT_VIDEO_LAYOUT_MODE,
@@ -452,6 +467,9 @@ describe("client settings", () => {
     expect(decoded.timestampFormat).toBe("24-hour");
     expect(decoded.showSidebarMascot).toBe(false);
     expect(decoded.fallingEffectMatrixColorMode).toBe("fixed");
+    expect(decoded.fallingEffectMatrixColorCycleSpeed).toBe(
+      DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
+    );
     expect(pickAmbientSettings(decoded)).toEqual(DEFAULT_AMBIENT_CLIENT_SETTINGS);
   });
 
@@ -470,6 +488,7 @@ describe("client settings", () => {
       fallingEffectKind: "matrix",
       fallingEffectColor: "  #12AbEf  ",
       fallingEffectMatrixColorMode: "music-reactive",
+      fallingEffectMatrixColorCycleSpeed: MAX_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
       fallingEffectOpacity: MAX_AMBIENT_OPACITY,
       fallingEffectSpeed: MAX_FALLING_EFFECT_SPEED,
       fallingEffectDensity: MAX_FALLING_EFFECT_DENSITY,
@@ -480,7 +499,9 @@ describe("client settings", () => {
       fallingEffectActivityLinkNetworkEnabled: false,
       fallingEffectActivityLinkDatabaseEnabled: true,
       fallingEffectActivityLinkBuildEnabled: false,
+      fallingEffectActivityLinkAgentEnabled: true,
       fallingEffectActivityLinkColorMode: "matrix",
+      fallingEffectActivityLinkRetentionSeconds: MAX_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
       ambientVideoEnabled: true,
       ambientVideoSource: { kind: "video", id: "dQw4w9WgXcQ" },
       ambientVideoLayoutMode: "custom",
@@ -506,6 +527,7 @@ describe("client settings", () => {
       fallingEffectKind: "matrix",
       fallingEffectColor: "#12abef",
       fallingEffectMatrixColorMode: "music-reactive",
+      fallingEffectMatrixColorCycleSpeed: MAX_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
       fallingEffectOpacity: MAX_AMBIENT_OPACITY,
       fallingEffectSpeed: MAX_FALLING_EFFECT_SPEED,
       fallingEffectDensity: MAX_FALLING_EFFECT_DENSITY,
@@ -516,7 +538,9 @@ describe("client settings", () => {
       fallingEffectActivityLinkNetworkEnabled: false,
       fallingEffectActivityLinkDatabaseEnabled: true,
       fallingEffectActivityLinkBuildEnabled: false,
+      fallingEffectActivityLinkAgentEnabled: true,
       fallingEffectActivityLinkColorMode: "matrix",
+      fallingEffectActivityLinkRetentionSeconds: MAX_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
       ambientVideoEnabled: true,
       ambientVideoSource: { kind: "video", id: "dQw4w9WgXcQ" },
       ambientVideoLayoutMode: "custom",
@@ -702,11 +726,12 @@ describe("client settings", () => {
     ).toThrow();
   });
 
-  it("bounds ambient colors, Matrix color modes, opacity, speed, density, Japanese ratio, and layout enums", () => {
+  it("bounds ambient colors, Matrix color modes and cycle speed, opacity, motion, density, Japanese ratio, and layout enums", () => {
     expect(
       decodeClientSettingsPatch({
         fallingEffectColor: "auto",
         fallingEffectMatrixColorMode: "rainbow-extra",
+        fallingEffectMatrixColorCycleSpeed: MIN_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
         fallingEffectOpacity: MIN_AMBIENT_OPACITY,
         fallingEffectSpeed: MIN_FALLING_EFFECT_SPEED,
         fallingEffectDensity: MIN_FALLING_EFFECT_DENSITY,
@@ -717,13 +742,17 @@ describe("client settings", () => {
         fallingEffectActivityLinkNetworkEnabled: false,
         fallingEffectActivityLinkDatabaseEnabled: false,
         fallingEffectActivityLinkBuildEnabled: false,
+        fallingEffectActivityLinkAgentEnabled: false,
         fallingEffectActivityLinkColorMode: "random",
+        fallingEffectActivityLinkRetentionSeconds:
+          MIN_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
         ambientVideoGlowOpacity: MAX_AMBIENT_OPACITY,
         ambientVideoGlowMode: "adaptive",
       }),
     ).toEqual({
       fallingEffectColor: "auto",
       fallingEffectMatrixColorMode: "rainbow-extra",
+      fallingEffectMatrixColorCycleSpeed: MIN_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
       fallingEffectOpacity: MIN_AMBIENT_OPACITY,
       fallingEffectSpeed: MIN_FALLING_EFFECT_SPEED,
       fallingEffectDensity: MIN_FALLING_EFFECT_DENSITY,
@@ -734,7 +763,9 @@ describe("client settings", () => {
       fallingEffectActivityLinkNetworkEnabled: false,
       fallingEffectActivityLinkDatabaseEnabled: false,
       fallingEffectActivityLinkBuildEnabled: false,
+      fallingEffectActivityLinkAgentEnabled: false,
       fallingEffectActivityLinkColorMode: "random",
+      fallingEffectActivityLinkRetentionSeconds: MIN_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
       ambientVideoGlowOpacity: MAX_AMBIENT_OPACITY,
       ambientVideoGlowMode: "adaptive",
     });
@@ -750,6 +781,13 @@ describe("client settings", () => {
       { fallingEffectsEnabled: "yes" },
       { fallingEffectKind: "hail" },
       { fallingEffectMatrixColorMode: "beat-sync" },
+      {
+        fallingEffectMatrixColorCycleSpeed: MIN_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED - 0.01,
+      },
+      {
+        fallingEffectMatrixColorCycleSpeed: MAX_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED + 0.01,
+      },
+      { fallingEffectMatrixColorCycleSpeed: Number.NaN },
       { fallingEffectOpacity: MIN_AMBIENT_OPACITY - 0.01 },
       { fallingEffectOpacity: MAX_AMBIENT_OPACITY + 0.01 },
       { fallingEffectOpacity: Number.NaN },
@@ -767,7 +805,17 @@ describe("client settings", () => {
       { fallingEffectActivityLinkNetworkEnabled: "yes" },
       { fallingEffectActivityLinkDatabaseEnabled: "yes" },
       { fallingEffectActivityLinkBuildEnabled: "yes" },
+      { fallingEffectActivityLinkAgentEnabled: "yes" },
       { fallingEffectActivityLinkColorMode: "category" },
+      {
+        fallingEffectActivityLinkRetentionSeconds:
+          MIN_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS - 1,
+      },
+      {
+        fallingEffectActivityLinkRetentionSeconds:
+          MAX_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS + 1,
+      },
+      { fallingEffectActivityLinkRetentionSeconds: 30.5 },
       { ambientVideoLayoutMode: "floating" },
       { ambientVideoPresentationMode: "fullscreen" },
       { ambientVideoGlowMode: "live-frames" },

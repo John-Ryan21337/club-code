@@ -669,6 +669,78 @@ it.layer(IsolatedOpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
     }),
   );
 
+  it.effect("uses the native subtask part for delegation instead of fuzzy tool names", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const threadId = asThreadId("thread-opencode-native-subtask");
+      runtimeMock.state.subscribedEvents = [
+        {
+          type: "message.part.updated",
+          properties: {
+            sessionID: "http://127.0.0.1:9999/session",
+            part: {
+              id: "part-native-subtask",
+              sessionID: "http://127.0.0.1:9999/session",
+              messageID: "message-native-subtask",
+              type: "subtask",
+              prompt: "private delegated prompt",
+              description: "private agent description",
+              agent: "private-agent-name",
+            },
+          },
+        },
+        {
+          type: "message.part.updated",
+          properties: {
+            sessionID: "http://127.0.0.1:9999/session",
+            part: {
+              id: "part-fuzzy-agent-name",
+              sessionID: "http://127.0.0.1:9999/session",
+              messageID: "message-native-subtask",
+              type: "tool",
+              callID: "call-fuzzy-agent-name",
+              tool: "mcp__browser__user_agent_lookup",
+              state: {
+                status: "running",
+                input: {},
+                time: { start: 1 },
+              },
+            },
+          },
+        },
+      ];
+      const eventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.threadId === threadId),
+        Stream.take(4),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+
+      const events = Array.from(yield* Fiber.join(eventsFiber).pipe(Effect.timeout("1 second")));
+      const lifecycleItems = events.filter(
+        (
+          event,
+        ): event is Extract<(typeof events)[number], { type: "item.started" | "item.updated" }> =>
+          event.type === "item.started" || event.type === "item.updated",
+      );
+      assert.deepEqual(
+        lifecycleItems.map((event) => event.payload.itemType),
+        ["collab_agent_tool_call", "mcp_tool_call"],
+      );
+      assert.equal(lifecycleItems[0]?.payload.title, "Subagent task");
+      assert.doesNotMatch(
+        JSON.stringify(lifecycleItems[0]?.payload),
+        /private|agent-name|prompt|description/iu,
+      );
+    }),
+  );
+
   it.effect("writes provider-native observability records using the session thread id", () =>
     Effect.gen(function* () {
       const nativeEvents: Array<{

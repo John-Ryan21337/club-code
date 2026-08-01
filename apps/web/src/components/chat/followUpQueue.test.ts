@@ -4,6 +4,7 @@ import {
   canAutoStartQueuedFollowUpTurn,
   canStartQueuedFollowUpTurn,
   canExpandQueuedFollowUpText,
+  collectRetainedFollowUpThreadTargets,
   decideQueuedFollowUpAction,
   decideFollowUpDelivery,
   hasQueuedFollowUpDispatchBeenObserved,
@@ -11,6 +12,7 @@ import {
   previewQueuedFollowUpText,
   queuedFollowUpActionLabel,
   queuedFollowUpActionTitle,
+  readRetryableSteerFailurePayload,
   rekeyQueuedFollowUpsForActiveThread,
   selectQueuedFollowUpDispatchCandidate,
 } from "./followUpQueue";
@@ -87,6 +89,33 @@ describe("followUpQueue", () => {
         latestTurn: { turnId: "turn-1", state: "running" },
       }),
     ).toBe(true);
+
+    expect(
+      isLiveSteerAvailableForThread({
+        liveSteerSupported: false,
+        provider: "claudeAgent",
+        activeTurnId: "turn-1",
+        latestTurn: { turnId: "turn-1", state: "running" },
+      }),
+    ).toBe(false);
+
+    expect(
+      isLiveSteerAvailableForThread({
+        liveSteerSupported: true,
+        provider: "claudeAgent",
+        activeTurnId: null,
+        latestTurn: { turnId: "turn-1", state: "running" },
+      }),
+    ).toBe(false);
+
+    expect(
+      isLiveSteerAvailableForThread({
+        liveSteerSupported: true,
+        provider: "claudeAgent",
+        activeTurnId: "turn-1",
+        latestTurn: { turnId: "turn-1", state: "completed" },
+      }),
+    ).toBe(false);
   });
 
   it("normalizes queue preview text", () => {
@@ -104,51 +133,132 @@ describe("followUpQueue", () => {
     ).toBe(true);
   });
 
+  it("preserves every retryable steer failure while retaining Codex retry detail", () => {
+    expect(
+      readRetryableSteerFailurePayload({
+        messageId: "message-capability-churn",
+        retryableFollowUp: true,
+        retryAfter: "active-turn",
+      }),
+    ).toEqual({
+      messageId: "message-capability-churn",
+      nonSteerableTurnKind: null,
+    });
+    expect(
+      readRetryableSteerFailurePayload({
+        messageId: "message-review",
+        retryableFollowUp: true,
+        codexNonSteerableTurnKind: "review",
+      }),
+    ).toEqual({
+      messageId: "message-review",
+      nonSteerableTurnKind: "review",
+    });
+    expect(
+      readRetryableSteerFailurePayload({
+        messageId: "message-fatal",
+        retryableFollowUp: false,
+      }),
+    ).toBeNull();
+  });
+
+  it("retains background thread detail while a steer result is still pending", () => {
+    expect(
+      collectRetainedFollowUpThreadTargets({
+        queueGroups: [
+          [
+            {
+              environmentId: "local",
+              threadId: "queued-thread",
+            },
+          ],
+        ],
+        pendingTurnStarts: [
+          {
+            environmentId: "local",
+            threadId: "queued-thread",
+          },
+        ],
+        pendingSteers: [
+          {
+            environmentId: "remote",
+            threadId: "background-steer-thread",
+          },
+        ],
+      }),
+    ).toEqual([
+      {
+        environmentId: "local",
+        threadId: "queued-thread",
+      },
+      {
+        environmentId: "remote",
+        threadId: "background-steer-thread",
+      },
+    ]);
+  });
+
   it("chooses a concrete queued-item action instead of silently no-oping", () => {
     expect(
       decideQueuedFollowUpAction({
         phase: "running",
-        liveSteerSupported: true,
+        liveSteerAvailable: true,
         canDispatchNow: true,
       }),
     ).toBe("steer");
     expect(
       decideQueuedFollowUpAction({
         phase: "ready",
-        liveSteerSupported: true,
+        liveSteerAvailable: true,
         canDispatchNow: true,
       }),
     ).toBe("send");
     expect(
       decideQueuedFollowUpAction({
         phase: "running",
-        liveSteerSupported: false,
+        liveSteerAvailable: false,
         canDispatchNow: true,
       }),
-    ).toBe("interrupt");
+    ).toBe("wait");
     expect(
       decideQueuedFollowUpAction({
         phase: "running",
-        liveSteerSupported: false,
+        liveSteerAvailable: false,
         canDispatchNow: false,
       }),
     ).toBe("wait");
     expect(
       decideQueuedFollowUpAction({
         phase: "ready",
-        liveSteerSupported: true,
+        liveSteerAvailable: true,
         canDispatchNow: false,
       }),
     ).toBe("wait");
   });
 
-  it("labels queued item actions by provider capability and phase", () => {
-    expect(queuedFollowUpActionLabel({ phase: "running", liveSteerSupported: true })).toBe("Send");
-    expect(queuedFollowUpActionLabel({ phase: "running", liveSteerSupported: false })).toBe("Send");
-    expect(queuedFollowUpActionLabel({ phase: "ready", liveSteerSupported: false })).toBe("Send");
-    expect(queuedFollowUpActionTitle({ phase: "running", liveSteerSupported: false })).toContain(
-      "as soon as the active turn can accept it",
-    );
+  it("changes a queued action from steer to wait when capability availability changes", () => {
+    expect(
+      decideQueuedFollowUpAction({
+        phase: "running",
+        liveSteerAvailable: true,
+        canDispatchNow: true,
+      }),
+    ).toBe("steer");
+    expect(
+      decideQueuedFollowUpAction({
+        phase: "running",
+        liveSteerAvailable: false,
+        canDispatchNow: true,
+      }),
+    ).toBe("wait");
+  });
+
+  it("derives queued item labels from the safe action decision", () => {
+    expect(queuedFollowUpActionLabel("steer")).toBe("Steer");
+    expect(queuedFollowUpActionLabel("wait")).toBe("Waiting");
+    expect(queuedFollowUpActionLabel("send")).toBe("Send");
+    expect(queuedFollowUpActionTitle("steer")).toContain("without interrupting");
+    expect(queuedFollowUpActionTitle("wait")).toContain("as soon as the active turn can accept it");
   });
 
   it("starts queued follow-ups from the visible idle state without consulting stale send flags", () => {

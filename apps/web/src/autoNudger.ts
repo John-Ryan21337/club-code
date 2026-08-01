@@ -39,6 +39,50 @@ export interface AutoNudgeEligibility {
   providerAvailable: boolean;
 }
 
+export interface AutoNudgeTerminalObservation {
+  readonly contextKey: string;
+  readonly terminalTurnKey: string | null;
+}
+
+/**
+ * Only a changed provider-confirmed terminal identity in the same mounted
+ * thread context grants one-shot scheduling authority. Initial hydration,
+ * remount, navigation, and policy changes merely establish a baseline.
+ */
+export function isNewAutoNudgeTerminalEdge(
+  previous: AutoNudgeTerminalObservation | null,
+  current: AutoNudgeTerminalObservation,
+): boolean {
+  return (
+    previous !== null &&
+    previous.contextKey === current.contextKey &&
+    current.terminalTurnKey !== null &&
+    current.terminalTurnKey !== previous.terminalTurnKey
+  );
+}
+
+export function resolveArmedAutoNudgeTerminal(input: {
+  readonly previousObservation: AutoNudgeTerminalObservation;
+  readonly currentObservation: AutoNudgeTerminalObservation;
+  readonly currentlyArmedTerminalTurnKey: string | null;
+  readonly invalidatedByOperatorState: boolean;
+  readonly alreadyConsumed: boolean;
+}): string | null {
+  if (
+    input.invalidatedByOperatorState ||
+    input.alreadyConsumed ||
+    input.currentObservation.terminalTurnKey === null
+  ) {
+    return null;
+  }
+  if (isNewAutoNudgeTerminalEdge(input.previousObservation, input.currentObservation)) {
+    return input.currentObservation.terminalTurnKey;
+  }
+  return input.currentlyArmedTerminalTurnKey === input.currentObservation.terminalTurnKey
+    ? input.currentlyArmedTerminalTurnKey
+    : null;
+}
+
 export function canScheduleAutoNudge(input: AutoNudgeEligibility): boolean {
   return (
     input.mode !== "off" &&
@@ -49,7 +93,7 @@ export function canScheduleAutoNudge(input: AutoNudgeEligibility): boolean {
   );
 }
 
-/** Repeat every safety gate immediately before consuming a completion event. */
+/** The completion-event handoff repeats the complete gate before transport. */
 export function canDispatchAutoNudge(input: {
   readonly terminalTurnKey: string | null;
   readonly current: AutoNudgeEligibility;
@@ -67,7 +111,8 @@ const MAX_AUTO_NUDGE_LEDGER_ENTRIES = 256;
 const MAX_AUTO_NUDGE_TURN_KEY_LENGTH = 512;
 const MAX_AUTO_NUDGE_LEDGER_STORAGE_CHARACTERS =
   MAX_AUTO_NUDGE_LEDGER_ENTRIES * (MAX_AUTO_NUDGE_TURN_KEY_LENGTH + 8);
-export const AUTO_NUDGE_SESSION_LEDGER_STORAGE_KEY = "club-code.auto-nudge.consumed-turns.v1";
+export const AUTO_NUDGE_SESSION_LEDGER_STORAGE_KEY = "cafe-code.auto-nudge.consumed-turns.v1";
+export const AUTO_NUDGE_LEDGER_STORAGE_KEY = "cafe-code.auto-nudge.consumed-turns.v2";
 
 export interface AutoNudgeLedgerStorage {
   getItem(key: string): string | null;
@@ -81,10 +126,13 @@ function isSafeTurnKey(value: unknown): value is string {
   );
 }
 
-function readLedgerKeys(storage: AutoNudgeLedgerStorage | null): string[] {
+function readLedgerKeys(
+  storage: AutoNudgeLedgerStorage | null,
+  key = AUTO_NUDGE_LEDGER_STORAGE_KEY,
+): string[] {
   if (!storage) return [];
   try {
-    const raw = storage.getItem(AUTO_NUDGE_SESSION_LEDGER_STORAGE_KEY) ?? "[]";
+    const raw = storage.getItem(key) ?? "[]";
     if (raw.length > MAX_AUTO_NUDGE_LEDGER_STORAGE_CHARACTERS) return [];
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
@@ -95,11 +143,11 @@ function readLedgerKeys(storage: AutoNudgeLedgerStorage | null): string[] {
 }
 
 /**
- * A bounded, session-scoped once-per-terminal-turn ledger.
+ * A bounded, durable once-per-terminal-turn ledger.
  *
- * The global mode is durable client settings. The consumed-turn ledger is
- * deliberately session storage: it survives route remounts and renderer
- * reloads without turning Auto Nudge into an immortal background worker.
+ * Thread policies independently decide whether execution is enabled. Durable
+ * consumption only prevents a completed provider turn from being submitted
+ * again after navigation, another renderer window, or an app restart.
  */
 export class AutoNudgeTurnLedger {
   private readonly keyList: string[];
@@ -108,6 +156,7 @@ export class AutoNudgeTurnLedger {
   constructor(
     initialKeys: Iterable<string> = [],
     private readonly onChange?: (keys: readonly string[]) => void,
+    private readonly onReload?: () => readonly string[],
   ) {
     this.keyList = [];
     for (const key of initialKeys) {
@@ -125,8 +174,29 @@ export class AutoNudgeTurnLedger {
     return this.keySet.has(key);
   }
 
+  reloadFromStorage(): void {
+    if (!this.onReload) return;
+    this.keyList.splice(0, this.keyList.length);
+    this.keySet.clear();
+    for (const key of this.onReload()) {
+      if (!isSafeTurnKey(key) || this.keySet.has(key)) continue;
+      this.keyList.push(key);
+      this.keySet.add(key);
+    }
+    while (this.keyList.length > MAX_AUTO_NUDGE_LEDGER_ENTRIES) {
+      const removed = this.keyList.shift();
+      if (removed) this.keySet.delete(removed);
+    }
+  }
+
   mark(key: string): void {
-    if (!isSafeTurnKey(key) || this.keySet.has(key)) return;
+    if (!isSafeTurnKey(key)) return;
+    if (this.keySet.has(key)) {
+      // Re-persisting a duplicate merges any claims written by another
+      // renderer since this instance last reloaded.
+      this.onChange?.(this.keyList);
+      return;
+    }
     this.keyList.push(key);
     this.keySet.add(key);
     while (this.keyList.length > MAX_AUTO_NUDGE_LEDGER_ENTRIES) {
@@ -139,7 +209,7 @@ export class AutoNudgeTurnLedger {
 
 /**
  * A real operator action consumes the currently settled turn even if React
- * has not yet handled its completion event. This keeps a cleared draft from
+ * has not yet dispatched its continuation. This keeps a cleared draft from
  * reviving an old completion into an unsolicited provider request.
  */
 export function consumeAutoNudgeTerminalForManualActivity(
@@ -149,42 +219,82 @@ export function consumeAutoNudgeTerminalForManualActivity(
   if (terminalTurnKey) ledger.mark(terminalTurnKey);
 }
 
-function resolveSessionStorage(): AutoNudgeLedgerStorage | null {
+function resolveLocalStorage(): AutoNudgeLedgerStorage | null {
   if (typeof window === "undefined") return null;
   try {
-    return window.sessionStorage;
+    return window.localStorage;
   } catch {
     return null;
   }
 }
 
 let sharedAutoNudgeTurnLedger: AutoNudgeTurnLedger | null = null;
+let removeLedgerStorageListener: (() => void) | null = null;
 
 export function createAutoNudgeTurnLedger(
   storage: AutoNudgeLedgerStorage | null,
 ): AutoNudgeTurnLedger {
-  return new AutoNudgeTurnLedger(readLedgerKeys(storage), (keys) => {
-    try {
-      storage?.setItem(AUTO_NUDGE_SESSION_LEDGER_STORAGE_KEY, JSON.stringify(keys));
-    } catch {
-      // Storage can be disabled or exhausted; in-memory deduplication remains.
-    }
-  });
+  return new AutoNudgeTurnLedger(
+    readLedgerKeys(storage),
+    (keys) => {
+      try {
+        const merged = [...readLedgerKeys(storage), ...keys];
+        const unique = [...new Set(merged)].slice(-MAX_AUTO_NUDGE_LEDGER_ENTRIES);
+        storage?.setItem(AUTO_NUDGE_LEDGER_STORAGE_KEY, JSON.stringify(unique));
+      } catch {
+        // Storage can be disabled or exhausted; in-memory deduplication remains.
+      }
+    },
+    () => readLedgerKeys(storage),
+  );
 }
 
 export function getAutoNudgeTurnLedger(): AutoNudgeTurnLedger {
   if (sharedAutoNudgeTurnLedger) return sharedAutoNudgeTurnLedger;
-  sharedAutoNudgeTurnLedger = createAutoNudgeTurnLedger(resolveSessionStorage());
+  const storage = resolveLocalStorage();
+  if (storage && readLedgerKeys(storage).length === 0 && typeof window !== "undefined") {
+    try {
+      const legacyKeys = readLedgerKeys(
+        window.sessionStorage,
+        AUTO_NUDGE_SESSION_LEDGER_STORAGE_KEY,
+      );
+      if (legacyKeys.length > 0) {
+        storage.setItem(AUTO_NUDGE_LEDGER_STORAGE_KEY, JSON.stringify(legacyKeys));
+        window.sessionStorage.removeItem(AUTO_NUDGE_SESSION_LEDGER_STORAGE_KEY);
+      }
+    } catch {
+      // A denied legacy session store does not weaken the new durable ledger.
+    }
+  }
+  sharedAutoNudgeTurnLedger = createAutoNudgeTurnLedger(storage);
+  if (typeof window !== "undefined") {
+    const onStorage = (event: StorageEvent) => {
+      if (
+        event.storageArea === window.localStorage &&
+        event.key === AUTO_NUDGE_LEDGER_STORAGE_KEY
+      ) {
+        sharedAutoNudgeTurnLedger?.reloadFromStorage();
+      }
+    };
+    window.addEventListener("storage", onStorage);
+    removeLedgerStorageListener = () => window.removeEventListener("storage", onStorage);
+  }
   return sharedAutoNudgeTurnLedger;
 }
 
 export function __resetAutoNudgeTurnLedgerForTests(options?: {
   clearSessionStorage?: boolean;
+  clearStorage?: boolean;
 }): void {
+  removeLedgerStorageListener?.();
+  removeLedgerStorageListener = null;
   sharedAutoNudgeTurnLedger = null;
-  if (!options?.clearSessionStorage) return;
+  if (!options?.clearSessionStorage && !options?.clearStorage) return;
   try {
-    resolveSessionStorage()?.removeItem(AUTO_NUDGE_SESSION_LEDGER_STORAGE_KEY);
+    resolveLocalStorage()?.removeItem(AUTO_NUDGE_LEDGER_STORAGE_KEY);
+    if (typeof window !== "undefined") {
+      window.sessionStorage.removeItem(AUTO_NUDGE_SESSION_LEDGER_STORAGE_KEY);
+    }
   } catch {
     // Best-effort test isolation for storage-denied browser contexts.
   }

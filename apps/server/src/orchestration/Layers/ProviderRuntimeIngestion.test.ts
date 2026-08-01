@@ -1946,7 +1946,7 @@ describe("ProviderRuntimeIngestion", () => {
       type: "item.started" | "item.updated" | "item.completed",
       eventId: string,
       itemId: ReturnType<typeof asItemId>,
-      itemType: "command_execution" | "dynamic_tool_call" | "web_search",
+      itemType: "command_execution" | "dynamic_tool_call" | "collab_agent_tool_call" | "web_search",
       data: unknown,
       provider = type === "item.updated" ? "claude" : "codex",
     ) => {
@@ -1977,6 +1977,40 @@ describe("ProviderRuntimeIngestion", () => {
     emitItem("item.completed", "evt-matrix-build-completed", buildItemId, "command_execution", {
       command: sensitiveBuildCommand,
     });
+    const headlessBuildItemId = asItemId("item-headless-build");
+    emitItem(
+      "item.started",
+      "evt-matrix-headless-build-started",
+      headlessBuildItemId,
+      "command_execution",
+      undefined,
+    );
+    emitItem(
+      "item.completed",
+      "evt-matrix-headless-build-completed",
+      headlessBuildItemId,
+      "command_execution",
+      {
+        command: "powershell.exe -Command '$null | corepack yarn typecheck'",
+      },
+    );
+    const classifiedHeadlessBuildItemId = asItemId("item-classified-headless-build");
+    const classifiedHeadlessBuildCommand =
+      "powershell.exe -Command '$null | corepack yarn workspace @cafecode/web typecheck'";
+    emitItem(
+      "item.started",
+      "evt-matrix-classified-headless-build-started",
+      classifiedHeadlessBuildItemId,
+      "command_execution",
+      { command: classifiedHeadlessBuildCommand },
+    );
+    emitItem(
+      "item.completed",
+      "evt-matrix-classified-headless-build-completed",
+      classifiedHeadlessBuildItemId,
+      "command_execution",
+      { command: classifiedHeadlessBuildCommand },
+    );
     emitItem(
       "item.completed",
       "evt-matrix-database-completed",
@@ -1997,6 +2031,28 @@ describe("ProviderRuntimeIngestion", () => {
         query: "private prompt",
         url: "https://credential.example.test",
       },
+    );
+    const agentItemId = asItemId("item-agent-dispatch");
+    emitItem(
+      "item.started",
+      "evt-matrix-agent-started",
+      agentItemId,
+      "collab_agent_tool_call",
+      undefined,
+    );
+    emitItem(
+      "item.completed",
+      "evt-matrix-agent-completed",
+      agentItemId,
+      "collab_agent_tool_call",
+      {
+        toolName: "Task",
+        input: {
+          description: "private agent name",
+          prompt: "private delegated task",
+        },
+      },
+      "claude",
     );
     const openCodeItemId = asItemId("item-opencode-build");
     for (const [type, status] of [
@@ -2150,6 +2206,22 @@ describe("ProviderRuntimeIngestion", () => {
         /super-private|token|command|path|url|sql|item-build/iu,
       );
     }
+    expect(payloadFor("evt-matrix-headless-build-started").observed).toBeUndefined();
+    expect(payloadFor("evt-matrix-headless-build-completed").observed).toEqual({
+      providerObserved: true,
+      activityType: "build",
+    });
+    expect(payloadFor("evt-matrix-headless-build-completed").itemId).toBe(headlessBuildItemId);
+    for (const eventId of [
+      "evt-matrix-classified-headless-build-started",
+      "evt-matrix-classified-headless-build-completed",
+    ]) {
+      expect(payloadFor(eventId).observed).toEqual({
+        providerObserved: true,
+        activityType: "build",
+      });
+      expect(payloadFor(eventId).itemId).toBe(classifiedHeadlessBuildItemId);
+    }
     expect(payloadFor("evt-matrix-database-completed").observed).toEqual({
       providerObserved: true,
       activityType: "database",
@@ -2158,6 +2230,15 @@ describe("ProviderRuntimeIngestion", () => {
       providerObserved: true,
       activityType: "network",
     });
+    for (const eventId of ["evt-matrix-agent-started", "evt-matrix-agent-completed"]) {
+      const payload = payloadFor(eventId);
+      expect(payload.itemId).toBe(agentItemId);
+      expect(payload.observed).toEqual({
+        providerObserved: true,
+        activityType: "agent",
+      });
+      expect(JSON.stringify(payload.observed)).not.toMatch(/private|agent name|delegated|task/iu);
+    }
     for (const status of ["pending", "running", "completed"]) {
       const payload = payloadFor(`evt-matrix-opencode-${status}`);
       expect(payload.itemId).toBe(openCodeItemId);

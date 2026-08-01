@@ -27,7 +27,6 @@ import {
   ProviderDriverKind,
   type ProviderInstanceId,
   type ServerProvider,
-  type ServerProviderAccountRateLimits,
   type ServerProviderAccountRateLimitSnapshot,
   type ServerProviderAccountRateLimitWindow,
   type ServerProviderUpdateState,
@@ -123,10 +122,10 @@ export const mergeProviderSnapshot = (
           (previousProvider.auth.type === "local" || nextProvider.auth.type === "local")
             ? nextProvider.models
             : mergeProviderModels(previousProvider.models, nextProvider.models),
-        // Carry forward event-sourced account rate limits when an incoming snapshot
-        // omits them. Claude's periodic probe never sends a prompt, so it produces no
-        // `accountRateLimits`; without this, each refresh would wipe the limits accrued
-        // from `rate_limit_event`s.
+        // Carry forward a known-good event-sourced or polled account snapshot
+        // when a same-account refresh omits it (for example, a transient usage
+        // endpoint failure). Never carry it across logout or observable account
+        // identity churn.
         //
         // Codex is different: its account-usage snapshots are account-bound probe
         // results from upstream `account/rateLimits/read` or the equivalent usage
@@ -135,7 +134,13 @@ export const mergeProviderSnapshot = (
         // as unknown instead of preserving stale percentages from a previous account.
         ...(nextProvider.accountRateLimits === undefined &&
         previousProvider.accountRateLimits !== undefined &&
-        nextProvider.driver !== ProviderDriverKind.make("codex")
+        nextProvider.driver !== ProviderDriverKind.make("codex") &&
+        previousProvider.driver === nextProvider.driver &&
+        previousProvider.auth.status === "authenticated" &&
+        nextProvider.auth.status === "authenticated" &&
+        previousProvider.auth.type === nextProvider.auth.type &&
+        previousProvider.auth.email !== undefined &&
+        previousProvider.auth.email === nextProvider.auth.email
           ? { accountRateLimits: previousProvider.accountRateLimits }
           : {}),
       };
@@ -156,6 +161,47 @@ export const mergeProviderSnapshots = (
   }
 
   return orderProviderSnapshots([...mergedProviders.values()]);
+};
+
+export const mergeProviderAccountRateLimitWindow = (
+  provider: ServerProvider,
+  input: {
+    readonly slot: "primary" | "secondary";
+    readonly window: ServerProviderAccountRateLimitWindow;
+    readonly checkedAt: string;
+  },
+): ServerProvider => {
+  const previousRateLimits = provider.accountRateLimits;
+  const previousByLimitId = previousRateLimits?.rateLimitsByLimitId;
+  const baseSnapshot = previousByLimitId?.claude ?? previousRateLimits?.rateLimits ?? {};
+  const eventWindow: ServerProviderAccountRateLimitWindow = {
+    ...input.window,
+    checkedAt: input.checkedAt,
+  };
+  const nextSnapshot: ServerProviderAccountRateLimitSnapshot =
+    input.slot === "primary"
+      ? { ...baseSnapshot, primary: eventWindow }
+      : { ...baseSnapshot, secondary: eventWindow };
+  return {
+    ...provider,
+    accountRateLimits: {
+      rateLimits: nextSnapshot,
+      rateLimitsByLimitId: {
+        ...previousByLimitId,
+        // Claude's polled snapshot uses this canonical key. Update it as
+        // well as the legacy top-level snapshot so renderers cannot prefer
+        // stale keyed data over the fresh event.
+        claude: nextSnapshot,
+      },
+      ...(previousRateLimits?.rateLimitResetCredits !== undefined
+        ? { rateLimitResetCredits: previousRateLimits.rateLimitResetCredits }
+        : {}),
+      ...(previousRateLimits?.paidUsage !== undefined
+        ? { paidUsage: previousRateLimits.paidUsage }
+        : {}),
+      checkedAt: input.checkedAt,
+    },
+  };
 };
 
 export const selectProvidersByKind = (
@@ -439,26 +485,7 @@ export const ProviderRegistryLive = Layer.effect(
               // race at boot). Drop it — the next event will land once it's registered.
               return [{ changed: false }, previousProviders];
             }
-            const previousRateLimits = provider.accountRateLimits;
-            const baseSnapshot = previousRateLimits?.rateLimits ?? {};
-            const nextSnapshot: ServerProviderAccountRateLimitSnapshot =
-              input.slot === "primary"
-                ? { ...baseSnapshot, primary: input.window }
-                : { ...baseSnapshot, secondary: input.window };
-            const nextRateLimits: ServerProviderAccountRateLimits = {
-              rateLimits: nextSnapshot,
-              ...(previousRateLimits?.rateLimitsByLimitId != null
-                ? { rateLimitsByLimitId: previousRateLimits.rateLimitsByLimitId }
-                : {}),
-              ...(previousRateLimits?.rateLimitResetCredits !== undefined
-                ? { rateLimitResetCredits: previousRateLimits.rateLimitResetCredits }
-                : {}),
-              checkedAt: input.checkedAt,
-            };
-            const nextProvider: ServerProvider = {
-              ...provider,
-              accountRateLimits: nextRateLimits,
-            };
+            const nextProvider = mergeProviderAccountRateLimitWindow(provider, input);
             if (Equal.equals(provider, nextProvider)) {
               return [{ changed: false }, previousProviders];
             }

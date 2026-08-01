@@ -25,6 +25,7 @@ import type {
   ServerProviderAccountRateLimitSnapshot,
   ServerProviderAccountRateLimitWindow,
   ServerProviderAccountRateLimitResetCredit,
+  ServerProviderPaidUsage,
 } from "@cafecode/contracts";
 import { ServerSettingsError } from "@cafecode/contracts";
 
@@ -399,6 +400,45 @@ function mapGeneratedRateLimitSnapshot(
   };
 }
 
+function mapCodexPaidUsage(
+  snapshot: ServerProviderAccountRateLimitSnapshot,
+  checkedAt: string,
+): ServerProviderPaidUsage | undefined {
+  const credits = snapshot.credits;
+  const spendLimit = snapshot.individualLimit;
+  if ((!credits || credits === null) && (!spendLimit || spendLimit === null)) {
+    return undefined;
+  }
+
+  const remainingPercent =
+    spendLimit &&
+    Number.isFinite(spendLimit.remainingPercent) &&
+    spendLimit.remainingPercent >= 0 &&
+    spendLimit.remainingPercent <= 100
+      ? spendLimit.remainingPercent
+      : undefined;
+  const status =
+    spendLimit || credits?.hasCredits === true
+      ? ("enabled" as const)
+      : credits?.unlimited === true
+        ? ("unlimited" as const)
+        : ("disabled" as const);
+
+  return {
+    status,
+    checkedAt,
+    ...(credits?.balance ? { balance: credits.balance } : {}),
+    ...(spendLimit ? { used: spendLimit.used, limit: spendLimit.limit } : {}),
+    ...(remainingPercent !== undefined
+      ? {
+          remainingPercent,
+          utilizationPercent: 100 - remainingPercent,
+        }
+      : {}),
+    ...(spendLimit ? { resetsAt: spendLimit.resetsAt } : {}),
+  };
+}
+
 function mapGeneratedRateLimitResetCredits(
   summary:
     | CodexSchema.V2GetAccountRateLimitsResponse__RateLimitResetCreditsSummary
@@ -446,11 +486,14 @@ function codexAppServerRateLimitsToServer(
           ]),
         );
   const rateLimitResetCredits = mapGeneratedRateLimitResetCredits(response.rateLimitResetCredits);
+  const rateLimits = mapGeneratedRateLimitSnapshot(response.rateLimits);
+  const paidUsage = mapCodexPaidUsage(rateLimits, checkedAt);
 
   return {
-    rateLimits: mapGeneratedRateLimitSnapshot(response.rateLimits),
+    rateLimits,
     ...(byLimitId ? { rateLimitsByLimitId: byLimitId } : {}),
     ...(rateLimitResetCredits !== undefined ? { rateLimitResetCredits } : {}),
+    ...(paidUsage ? { paidUsage } : {}),
     checkedAt,
   };
 }
@@ -658,11 +701,13 @@ function parseCodexAccountRateLimitsPayload(
       });
     }
   }
+  const paidUsage = mapCodexPaidUsage(primarySnapshot, checkedAt);
 
   return {
     rateLimits: rateLimitsByLimitId.codex ?? primarySnapshot,
     rateLimitsByLimitId,
     ...(rateLimitResetCredits !== undefined ? { rateLimitResetCredits } : {}),
+    ...(paidUsage ? { paidUsage } : {}),
     checkedAt,
   };
 }

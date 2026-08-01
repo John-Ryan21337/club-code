@@ -177,21 +177,18 @@ export function canExpandQueuedFollowUpText(text: string): boolean {
   return previewQueuedFollowUpText(trimmed).length > 88;
 }
 
-export type QueuedFollowUpAction = "steer" | "interrupt" | "send" | "wait";
+export type QueuedFollowUpAction = "steer" | "send" | "wait";
 
 export interface QueuedFollowUpActionInput {
   phase: SessionPhase;
-  liveSteerSupported: boolean;
+  liveSteerAvailable: boolean;
   canDispatchNow: boolean;
 }
 
 export function decideQueuedFollowUpAction(input: QueuedFollowUpActionInput): QueuedFollowUpAction {
   if (input.phase === "running") {
-    if (!input.canDispatchNow) {
+    if (!input.canDispatchNow || !input.liveSteerAvailable) {
       return "wait";
-    }
-    if (!input.liveSteerSupported) {
-      return "interrupt";
     }
     return "steer";
   }
@@ -199,24 +196,105 @@ export function decideQueuedFollowUpAction(input: QueuedFollowUpActionInput): Qu
   return input.canDispatchNow ? "send" : "wait";
 }
 
-export function queuedFollowUpActionLabel(input: {
-  readonly phase: SessionPhase;
-  readonly liveSteerSupported: boolean;
-}): "Send" {
-  if (input.phase !== "running") {
-    return "Send";
+export function queuedFollowUpActionLabel(
+  action: QueuedFollowUpAction,
+): "Send" | "Steer" | "Waiting" {
+  switch (action) {
+    case "steer":
+      return "Steer";
+    case "send":
+      return "Send";
+    case "wait":
+      return "Waiting";
   }
-  return "Send";
 }
 
-export function queuedFollowUpActionTitle(input: {
-  readonly phase: SessionPhase;
-  readonly liveSteerSupported: boolean;
-}): string {
-  if (input.phase !== "running") {
-    return "Send this queued follow-up now.";
+export function queuedFollowUpActionTitle(action: QueuedFollowUpAction): string {
+  switch (action) {
+    case "steer":
+      return "Steer this queued follow-up into the active turn without interrupting it.";
+    case "send":
+      return "Send this queued follow-up now.";
+    case "wait":
+      return "Club Code will send this follow-up as soon as the active turn can accept it.";
   }
-  return "Club Code will send this follow-up as soon as the active turn can accept it.";
+}
+
+export type RetryableSteerFailureTurnKind = "review" | "compact";
+
+export interface RetryableSteerFailurePayload {
+  messageId: string;
+  nonSteerableTurnKind: RetryableSteerFailureTurnKind | null;
+}
+
+export function readRetryableSteerFailurePayload(
+  payload: unknown,
+): RetryableSteerFailurePayload | null {
+  if (payload === null || typeof payload !== "object" || Array.isArray(payload)) {
+    return null;
+  }
+
+  const record = payload as Record<string, unknown>;
+  if (record.retryableFollowUp !== true || typeof record.messageId !== "string") {
+    return null;
+  }
+
+  const messageId = record.messageId.trim();
+  if (messageId.length === 0) {
+    return null;
+  }
+
+  const turnKind = record.codexNonSteerableTurnKind;
+  return {
+    messageId,
+    nonSteerableTurnKind: turnKind === "review" || turnKind === "compact" ? turnKind : null,
+  };
+}
+
+export interface FollowUpThreadTarget<
+  EnvironmentKey extends string = string,
+  ThreadKey extends string = string,
+> {
+  readonly environmentId: EnvironmentKey;
+  readonly threadId: ThreadKey;
+}
+
+export function collectRetainedFollowUpThreadTargets<
+  EnvironmentKey extends string,
+  ThreadKey extends string,
+>(input: {
+  readonly queueGroups: readonly (readonly FollowUpThreadTarget<EnvironmentKey, ThreadKey>[])[];
+  readonly pendingTurnStarts: readonly FollowUpThreadTarget<EnvironmentKey, ThreadKey>[];
+  readonly pendingSteers: readonly FollowUpThreadTarget<EnvironmentKey, ThreadKey>[];
+}): FollowUpThreadTarget<EnvironmentKey, ThreadKey>[] {
+  const targets: FollowUpThreadTarget<EnvironmentKey, ThreadKey>[] = [];
+  const seen = new Set<string>();
+  const push = (target: FollowUpThreadTarget<EnvironmentKey, ThreadKey> | undefined) => {
+    if (target === undefined) {
+      return;
+    }
+    const key = JSON.stringify([target.environmentId, target.threadId]);
+    if (seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    targets.push({
+      environmentId: target.environmentId,
+      threadId: target.threadId,
+    });
+  };
+
+  for (const queue of input.queueGroups) {
+    push(queue[0]);
+  }
+  for (const pending of input.pendingTurnStarts) {
+    push(pending);
+  }
+  for (const pending of input.pendingSteers) {
+    push(pending);
+  }
+
+  return targets;
 }
 
 export interface RekeyQueuedFollowUpsInput<

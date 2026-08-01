@@ -4520,6 +4520,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       const instanceId = ProviderInstanceId.make("codex_personal");
       const usageRefreshCalls = yield* Ref.make<ReadonlyArray<ProviderInstanceId>>([]);
       const fullRefreshCalls = yield* Ref.make(0);
+      const usageWidgetEnabled = yield* Ref.make(false);
       const provider = {
         instanceId,
         driver: ProviderDriverKind.make("codex"),
@@ -4545,10 +4546,30 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 Effect.as([provider]),
               ),
           },
+          clientSettings: {
+            getSettings: Ref.get(usageWidgetEnabled).pipe(
+              Effect.map((enabled) => ({
+                ...DEFAULT_CLIENT_SETTINGS,
+                providerUsageWidgetEnabled: enabled,
+              })),
+            ),
+          },
         },
       });
 
       const wsUrl = yield* getWsServerUrl("/ws");
+      const disabledResult = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.serverRefreshProviders]({
+            instanceId,
+            usageOnly: true,
+          }),
+        ),
+      );
+      assert.deepEqual(disabledResult.providers, [provider]);
+      assert.deepEqual(yield* Ref.get(usageRefreshCalls), []);
+
+      yield* Ref.set(usageWidgetEnabled, true);
       const result = yield* Effect.scoped(
         withWsRpcClient(wsUrl, (client) =>
           client[WS_METHODS.serverRefreshProviders]({
@@ -4557,7 +4578,6 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           }),
         ),
       );
-
       assert.deepEqual(result.providers, [provider]);
       assert.deepEqual(yield* Ref.get(usageRefreshCalls), [instanceId]);
       assert.equal(yield* Ref.get(fullRefreshCalls), 0);

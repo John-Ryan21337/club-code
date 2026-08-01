@@ -294,6 +294,15 @@ interface ToolInFlight {
   readonly input: Record<string, unknown>;
   readonly partialInputJson: string;
   readonly lastEmittedInputFingerprint?: string;
+  /**
+   * The delegating `Agent`/`Task` tool_use id when this call came from a
+   * sub-agent rather than the orchestrator. Agent SDK 0.3.216 forwards a
+   * sub-agent's `tool_use`/`tool_result` blocks into the parent stream by
+   * default with `parent_tool_use_id` set, so delegated work already reaches
+   * this adapter; carrying the id lets consumers attribute it instead of
+   * seeing it as the orchestrator's own activity.
+   */
+  readonly parentToolUseId?: string;
 }
 
 type RuntimeFork = <A, E>(effect: Effect.Effect<A, E, never>) => Fiber.Fiber<A, E>;
@@ -1299,17 +1308,20 @@ const findClaudeSessionIdByMessageUuid = Effect.fn(
   return undefined;
 });
 
-function classifyToolItemType(toolName: string): CanonicalItemType {
-  const normalized = toolName.toLowerCase();
-  if (normalized.includes("agent")) {
-    return "collab_agent_tool_call";
-  }
-  if (
-    normalized === "task" ||
-    normalized === "agent" ||
-    normalized.includes("subagent") ||
-    normalized.includes("sub-agent")
-  ) {
+type ClaudeToolUseSource = "tool_use" | "server_tool_use" | "mcp_tool_use";
+
+// Claude Code's documented built-in delegation tool is `Agent`; `Task` remains
+// its supported legacy alias. Do not infer delegation from a custom/MCP name:
+// Matrix marks this category VERIFIED, so a false positive would overclaim work
+// that the provider never delegated.
+const CLAUDE_DELEGATION_TOOL_NAMES = new Set(["agent", "task"]);
+
+function classifyToolItemType(
+  toolName: string,
+  source: ClaudeToolUseSource = "tool_use",
+): CanonicalItemType {
+  const normalized = toolName.trim().toLowerCase();
+  if (source === "tool_use" && CLAUDE_DELEGATION_TOOL_NAMES.has(normalized)) {
     return "collab_agent_tool_call";
   }
   if (
@@ -1398,7 +1410,11 @@ function extractPlanStepsFromTodoInput(input: Record<string, unknown>): PlanStep
     }));
 }
 
-function summarizeToolRequest(toolName: string, input: Record<string, unknown>): string {
+function summarizeToolRequest(
+  toolName: string,
+  input: Record<string, unknown>,
+  itemType = classifyToolItemType(toolName),
+): string {
   const commandValue = input.command ?? input.cmd;
   const command = typeof commandValue === "string" ? commandValue : undefined;
   if (command && command.trim().length > 0) {
@@ -1406,7 +1422,6 @@ function summarizeToolRequest(toolName: string, input: Record<string, unknown>):
   }
 
   // For agent/subagent tools, prefer human-readable description or prompt over raw JSON
-  const itemType = classifyToolItemType(toolName);
   if (itemType === "collab_agent_tool_call") {
     const description =
       typeof input.description === "string" ? input.description.trim() : undefined;
@@ -2957,15 +2972,24 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       }
 
       const toolName = block.name;
-      const itemType = classifyToolItemType(toolName);
+      const itemType = classifyToolItemType(toolName, block.type);
       const toolInput =
         typeof block.input === "object" && block.input !== null
           ? (block.input as Record<string, unknown>)
           : {};
       const itemId = block.id;
-      const detail = summarizeToolRequest(toolName, toolInput);
+      const detail = summarizeToolRequest(toolName, toolInput, itemType);
       const inputFingerprint =
         Object.keys(toolInput).length > 0 ? toolInputFingerprint(toolInput) : undefined;
+
+      // A non-empty `parent_tool_use_id` means this block belongs to a
+      // sub-agent's turn, not the orchestrator's. Treat only a non-empty
+      // string as attribution so a malformed value degrades to "unattributed"
+      // rather than inventing a delegating tool that does not exist.
+      const parentToolUseId =
+        typeof message.parent_tool_use_id === "string" && message.parent_tool_use_id.length > 0
+          ? message.parent_tool_use_id
+          : undefined;
 
       const tool: ToolInFlight = {
         itemId,
@@ -2976,6 +3000,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         input: toolInput,
         partialInputJson: "",
         ...(inputFingerprint ? { lastEmittedInputFingerprint: inputFingerprint } : {}),
+        ...(parentToolUseId ? { parentToolUseId } : {}),
       };
       context.inFlightTools.set(index, tool);
 
@@ -2996,6 +3021,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           data: {
             toolName: tool.toolName,
             input: toolInput,
+            ...(tool.parentToolUseId ? { parentToolUseId: tool.parentToolUseId } : {}),
           },
         },
         providerRefs: nativeProviderRefs(context, {

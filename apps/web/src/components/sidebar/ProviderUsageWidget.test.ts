@@ -1,7 +1,7 @@
 import type { ServerProvider } from "@cafecode/contracts";
 import { describe, expect, it } from "vitest";
 
-import { buildProviderUsageRows } from "./ProviderUsageWidget";
+import { buildProviderUsageRows, canRefreshProviderUsage } from "./ProviderUsageWidget";
 
 function provider(overrides: Partial<ServerProvider> = {}): ServerProvider {
   return {
@@ -26,6 +26,11 @@ describe("buildProviderUsageRows", () => {
       buildProviderUsageRows([
         provider({
           displayName: "Codex Personal",
+          runtimeCapabilities: {
+            liveSteer: "supported",
+            threadGoals: "supported",
+            accountUsage: "unsupported",
+          },
           accountRateLimits: {
             checkedAt: "2026-07-23T20:05:00.000Z",
             rateLimits: {},
@@ -57,6 +62,7 @@ describe("buildProviderUsageRows", () => {
         instanceId: "codex",
         name: "Codex Personal",
         checkedAt: "2026-07-23T20:05:00.000Z",
+        state: "available",
         exhaustionNotices: [],
         windows: [
           {
@@ -82,13 +88,190 @@ describe("buildProviderUsageRows", () => {
     ]);
   });
 
-  it("omits unauthenticated and unsupported providers without fabricating usage", () => {
+  it("keeps unauthenticated and unsupported configured providers visible without fabricating usage", () => {
     expect(
       buildProviderUsageRows([
         provider({ auth: { status: "unauthenticated" } }),
-        provider({ driver: "opencode" as ServerProvider["driver"] }),
+        provider({
+          instanceId: "opencode" as ServerProvider["instanceId"],
+          driver: "opencode" as ServerProvider["driver"],
+        }),
       ]),
-    ).toEqual([]);
+    ).toMatchObject([
+      {
+        instanceId: "codex",
+        state: "unauthenticated",
+        stateMessage: "Sign in to read provider-reported usage.",
+        checkedAt: null,
+        windows: [],
+        paidUsage: null,
+      },
+      {
+        instanceId: "opencode",
+        name: "OpenCode",
+        state: "unsupported",
+        stateMessage: "This provider does not expose account usage to Club Code.",
+        checkedAt: null,
+        windows: [],
+        paidUsage: null,
+      },
+    ]);
+  });
+
+  it("distinguishes disabled, unavailable, unknown-auth, and supported no-data states", () => {
+    expect(
+      buildProviderUsageRows([
+        provider({
+          instanceId: "disabled" as ServerProvider["instanceId"],
+          enabled: false,
+          status: "disabled",
+        }),
+        provider({
+          instanceId: "unavailable" as ServerProvider["instanceId"],
+          availability: "unavailable",
+          enabled: false,
+          installed: false,
+        }),
+        provider({
+          instanceId: "unknown-auth" as ServerProvider["instanceId"],
+          auth: { status: "unknown" },
+        }),
+        provider({
+          instanceId: "no-data" as ServerProvider["instanceId"],
+          runtimeCapabilities: {
+            liveSteer: "supported",
+            threadGoals: "supported",
+            accountUsage: "experimental",
+          },
+        }),
+      ]).map(({ instanceId, state }) => ({ instanceId, state })),
+    ).toEqual([
+      { instanceId: "disabled", state: "disabled" },
+      { instanceId: "unavailable", state: "unavailable" },
+      { instanceId: "unknown-auth", state: "auth-unknown" },
+      { instanceId: "no-data", state: "no-data" },
+    ]);
+  });
+
+  it("surfaces provider-reported paid usage and marks old facts stale", () => {
+    expect(
+      buildProviderUsageRows(
+        [
+          provider({
+            accountRateLimits: {
+              checkedAt: "2026-07-23T20:05:00.000Z",
+              rateLimits: {},
+              paidUsage: {
+                status: "enabled",
+                balance: "35.00",
+                used: "15.00",
+                limit: "50.00",
+                utilizationPercent: 30,
+                remainingPercent: 70,
+                currency: "USD",
+              },
+            },
+          }),
+        ],
+        { nowMs: Date.parse("2026-07-23T20:20:01.000Z"), pollMinutes: 2 },
+      ),
+    ).toMatchObject([
+      {
+        state: "available",
+        stale: true,
+        paidUsageStale: true,
+        paidUsage: {
+          status: "enabled",
+          balance: "35.00",
+          used: "15.00",
+          limit: "50.00",
+          utilizationPercent: 30,
+          remainingPercent: 70,
+          currency: "USD",
+        },
+      },
+    ]);
+  });
+
+  it("keeps a fresh Claude event distinct from older keyed and paid facts", () => {
+    const rows = buildProviderUsageRows(
+      [
+        provider({
+          instanceId: "claudeAgent" as ServerProvider["instanceId"],
+          driver: "claudeAgent" as ServerProvider["driver"],
+          accountRateLimits: {
+            checkedAt: "2026-07-23T20:15:00.000Z",
+            rateLimits: {},
+            rateLimitsByLimitId: {
+              claude: {
+                primary: {
+                  usedPercent: 55,
+                  checkedAt: "2026-07-23T20:15:00.000Z",
+                },
+                secondary: {
+                  usedPercent: 40,
+                  checkedAt: "2026-07-23T20:00:00.000Z",
+                },
+              },
+            },
+            paidUsage: {
+              status: "enabled",
+              used: "12",
+              limit: "50",
+              checkedAt: "2026-07-23T20:00:00.000Z",
+            },
+          },
+        }),
+      ],
+      { nowMs: Date.parse("2026-07-23T20:16:00.000Z"), pollMinutes: 2 },
+    );
+
+    expect(rows[0]).toMatchObject({
+      stale: false,
+      paidUsageStale: true,
+      windows: [
+        { key: "claude:primary", stale: false },
+        { key: "claude:secondary", stale: true },
+      ],
+    });
+  });
+
+  it("refreshes only authenticated, available providers that declare usage support", () => {
+    expect(
+      canRefreshProviderUsage(
+        provider({
+          runtimeCapabilities: {
+            liveSteer: "supported",
+            threadGoals: "supported",
+            accountUsage: "supported",
+          },
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      canRefreshProviderUsage(
+        provider({
+          driver: "opencode" as ServerProvider["driver"],
+          runtimeCapabilities: {
+            liveSteer: "unsupported",
+            threadGoals: "unsupported",
+            accountUsage: "unsupported",
+          },
+        }),
+      ),
+    ).toBe(false);
+    expect(
+      canRefreshProviderUsage(
+        provider({
+          runtimeCapabilities: {
+            liveSteer: "supported",
+            threadGoals: "supported",
+            accountUsage: "experimental",
+          },
+          auth: { status: "unauthenticated" },
+        }),
+      ),
+    ).toBe(false);
   });
 
   it("surfaces provider-declared exhaustion even when no usage window is available", () => {

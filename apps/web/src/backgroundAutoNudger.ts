@@ -1,11 +1,11 @@
-import {
-  MAX_AUTO_NUDGE_MAX_ROUNDS,
-  MIN_AUTO_NUDGE_MAX_ROUNDS,
-  type AutoNudgeMode,
-} from "@cafecode/contracts";
 import { useSyncExternalStore } from "react";
 
 import { autoNudgePromptForMode } from "./autoNudger";
+import {
+  isValidAutoNudgeThreadPolicy,
+  supportsAutoNudgeExecutionLock,
+  type AutoNudgeThreadPolicy,
+} from "./autoNudgeThreadPolicy";
 
 export const AUTO_NUDGE_BACKGROUND_STORAGE_KEY = "club-code.auto-nudge.background.v1";
 const MAX_BACKGROUND_LEDGER_ENTRIES = 40;
@@ -25,6 +25,7 @@ export interface BackgroundAutoNudgeLedgerEntry {
   readonly at: string;
   readonly kind: "started" | "sent" | "paused" | "resumed" | "stopped";
   readonly detail: string;
+  readonly owner?: BackgroundAutoNudgeThreadRef;
   readonly terminalTurnKey?: string;
   readonly messageId?: string;
 }
@@ -32,26 +33,20 @@ export interface BackgroundAutoNudgeLedgerEntry {
 export interface BackgroundAutoNudgeState {
   readonly owner: BackgroundAutoNudgeThreadRef | null;
   readonly lastOwner: BackgroundAutoNudgeThreadRef | null;
+  /** The exact owner's policy captured for this bounded run. */
+  readonly runPolicy: AutoNudgeThreadPolicy | null;
   readonly status: BackgroundAutoNudgeStatus;
   readonly sentRounds: number;
   readonly baselineUserMessageAt: string | null;
-  readonly completionBaselineTurnKey: string | null;
-  readonly completionBaselineInitialized: boolean;
+  readonly baselineTerminalTurnKey: string | null;
   readonly expectedAutomatedUserMessageAt: string | null;
   readonly expectedAutomatedUserMessageDeadlineAt: string | null;
   readonly reason: string | null;
   readonly ledger: readonly BackgroundAutoNudgeLedgerEntry[];
 }
 
-export interface BackgroundAutoNudgeSettings {
-  readonly mode: AutoNudgeMode;
-  readonly enabled: boolean;
-  readonly maxRounds: number;
-}
-
 export interface BackgroundAutoNudgeObservation {
   readonly nowMs: number;
-  readonly settings: BackgroundAutoNudgeSettings;
   readonly thread:
     | {
         readonly exists: true;
@@ -77,6 +72,23 @@ export interface BackgroundAutoNudgeDispatch {
   readonly round: number;
 }
 
+/**
+ * Background dispatch must fail closed until the root coordinator can observe
+ * the exact thread's manual follow-up FIFO. A visible ChatView has that truth,
+ * but shell projections alone do not.
+ */
+export type BackgroundAutoNudgeRootDecision =
+  | "observe-exact-thread"
+  | "pause-missing-manual-queue-truth";
+
+export function decideBackgroundAutoNudgeRootAction(
+  hasExactThreadManualQueueTruth: boolean,
+): BackgroundAutoNudgeRootDecision {
+  return hasExactThreadManualQueueTruth
+    ? "observe-exact-thread"
+    : "pause-missing-manual-queue-truth";
+}
+
 export interface BackgroundAutoNudgeStorage {
   getItem(key: string): string | null;
   setItem(key: string, value: string): void;
@@ -86,11 +98,11 @@ export interface BackgroundAutoNudgeStorage {
 const EMPTY_STATE: BackgroundAutoNudgeState = {
   owner: null,
   lastOwner: null,
+  runPolicy: null,
   status: "stopped",
   sentRounds: 0,
   baselineUserMessageAt: null,
-  completionBaselineTurnKey: null,
-  completionBaselineInitialized: false,
+  baselineTerminalTurnKey: null,
   expectedAutomatedUserMessageAt: null,
   expectedAutomatedUserMessageDeadlineAt: null,
   reason: null,
@@ -124,16 +136,6 @@ function trimLedger(
     ...remaining.slice(-(MAX_BACKGROUND_LEDGER_ENTRIES - sent.length)),
   ]);
   return entries.filter((entry) => retained.has(entry));
-}
-
-function validSettings(settings: BackgroundAutoNudgeSettings): boolean {
-  return (
-    settings.enabled &&
-    settings.mode !== "off" &&
-    Number.isInteger(settings.maxRounds) &&
-    settings.maxRounds >= MIN_AUTO_NUDGE_MAX_ROUNDS &&
-    settings.maxRounds <= MAX_AUTO_NUDGE_MAX_ROUNDS
-  );
 }
 
 function readState(storage: BackgroundAutoNudgeStorage | null): BackgroundAutoNudgeState {
@@ -173,6 +175,8 @@ function readState(storage: BackgroundAutoNudgeStorage | null): BackgroundAutoNu
                 entry.kind === "stopped") &&
               typeof entry.detail === "string" &&
               entry.detail.length <= 300 &&
+              (entry.owner === undefined ||
+                (safeId(entry.owner.environmentId) && safeId(entry.owner.threadId))) &&
               (entry.terminalTurnKey === undefined || safeId(entry.terminalTurnKey)) &&
               (entry.messageId === undefined || safeId(entry.messageId)),
             ),
@@ -193,13 +197,19 @@ function readState(storage: BackgroundAutoNudgeStorage | null): BackgroundAutoNu
       Date.parse(expectedAutomatedUserMessageDeadlineAt) -
         Date.parse(expectedAutomatedUserMessageAt) ===
         AUTO_NUDGE_PROJECTION_ACK_TIMEOUT_MS;
-    const lastSentTurnKey = ledger.findLast((entry) => entry.kind === "sent")?.terminalTurnKey;
-    const persistedCompletionBaseline = safeId(parsed.completionBaselineTurnKey)
-      ? parsed.completionBaselineTurnKey
+    const runPolicy = isValidAutoNudgeThreadPolicy(parsed.runPolicy, {
+      requireBackgroundContinuation: true,
+    })
+      ? {
+          mode: parsed.runPolicy.mode,
+          backgroundContinuation: true,
+          maxRounds: parsed.runPolicy.maxRounds,
+        }
       : null;
     return {
       owner,
       lastOwner,
+      runPolicy: owner ? runPolicy : null,
       status: owner ? status : "stopped",
       sentRounds:
         Number.isInteger(parsed.sentRounds) && (parsed.sentRounds ?? -1) >= 0
@@ -208,9 +218,9 @@ function readState(storage: BackgroundAutoNudgeStorage | null): BackgroundAutoNu
       baselineUserMessageAt: safeIso(parsed.baselineUserMessageAt)
         ? parsed.baselineUserMessageAt
         : null,
-      completionBaselineTurnKey: persistedCompletionBaseline ?? lastSentTurnKey ?? null,
-      completionBaselineInitialized:
-        parsed.completionBaselineInitialized === true || lastSentTurnKey !== undefined,
+      baselineTerminalTurnKey: safeId(parsed.baselineTerminalTurnKey)
+        ? parsed.baselineTerminalTurnKey
+        : null,
       expectedAutomatedUserMessageAt: expectedProjectionIsValid
         ? expectedAutomatedUserMessageAt
         : null,
@@ -260,8 +270,11 @@ export class BackgroundAutoNudgeController {
    * becomes an empty, stopped state, which is safer than reusing stale memory.
    */
   reloadFromStorage(): void {
-    this.state = readState(this.storage);
+    const next = readState(this.storage);
+    if (JSON.stringify(next) === JSON.stringify(this.state)) return;
+    this.state = next;
     this.sequence = Math.max(this.sequence, this.state.ledger.length);
+    this.emit();
   }
 
   subscribe = (listener: () => void): (() => void) => {
@@ -276,6 +289,10 @@ export class BackgroundAutoNudgeController {
     } catch {
       // The in-memory safety state remains authoritative for this renderer.
     }
+    this.emit();
+  }
+
+  private emit(): void {
     for (const listener of this.listeners) listener();
   }
 
@@ -284,13 +301,16 @@ export class BackgroundAutoNudgeController {
     detail: string,
     nowMs: number,
     extra?: Pick<BackgroundAutoNudgeLedgerEntry, "terminalTurnKey" | "messageId">,
+    ownerOverride?: BackgroundAutoNudgeThreadRef,
   ): BackgroundAutoNudgeLedgerEntry {
     this.sequence += 1;
+    const entryOwner = ownerOverride ?? this.state.owner;
     return {
       id: `${nowMs}-${this.sequence}`,
       at: new Date(nowMs).toISOString(),
       kind,
       detail: detail.slice(0, 300),
+      ...(entryOwner ? { owner: entryOwner } : {}),
       ...extra,
     };
   }
@@ -308,29 +328,61 @@ export class BackgroundAutoNudgeController {
   start(
     owner: BackgroundAutoNudgeThreadRef,
     latestUserMessageAt: string | null,
-    terminalTurnKey: string | null,
+    baselineTerminalTurnKey: string | null,
+    runPolicy: AutoNudgeThreadPolicy,
     nowMs = Date.now(),
-  ): void {
+  ): boolean {
+    if (
+      !safeId(owner.environmentId) ||
+      !safeId(owner.threadId) ||
+      !isValidAutoNudgeThreadPolicy(runPolicy, { requireBackgroundContinuation: true })
+    ) {
+      return false;
+    }
     const next: BackgroundAutoNudgeState = {
       owner,
       lastOwner: owner,
+      runPolicy: { ...runPolicy },
       status: "active",
       sentRounds: 0,
       baselineUserMessageAt: latestUserMessageAt,
-      completionBaselineTurnKey: terminalTurnKey,
-      completionBaselineInitialized: true,
+      baselineTerminalTurnKey,
       expectedAutomatedUserMessageAt: null,
       expectedAutomatedUserMessageDeadlineAt: null,
       reason: null,
       ledger: this.state.ledger,
     };
     this.write(
-      this.withEntry(next, this.entry("started", "Background continuation started.", nowMs)),
+      this.withEntry(
+        next,
+        this.entry("started", "Background continuation started.", nowMs, undefined, owner),
+      ),
     );
+    return true;
   }
 
-  pause(reason: string, nowMs = Date.now()): void {
-    if (this.state.status !== "active") return;
+  synchronizePolicy(
+    owner: BackgroundAutoNudgeThreadRef,
+    policy: AutoNudgeThreadPolicy,
+    nowMs = Date.now(),
+  ): void {
+    if (!sameOwner(this.state.owner, owner)) return;
+    if (!isValidAutoNudgeThreadPolicy(policy, { requireBackgroundContinuation: true })) {
+      this.stop(owner, "Background continuation was disabled for this thread.", nowMs);
+      return;
+    }
+    if (
+      this.state.runPolicy?.mode === policy.mode &&
+      this.state.runPolicy.backgroundContinuation === policy.backgroundContinuation &&
+      this.state.runPolicy.maxRounds === policy.maxRounds
+    ) {
+      return;
+    }
+    this.write({ ...this.state, runPolicy: { ...policy } });
+  }
+
+  pause(owner: BackgroundAutoNudgeThreadRef, reason: string, nowMs = Date.now()): void {
+    if (!sameOwner(this.state.owner, owner) || this.state.status !== "active") return;
     this.write(
       this.withEntry(
         { ...this.state, status: "paused", reason },
@@ -339,8 +391,8 @@ export class BackgroundAutoNudgeController {
     );
   }
 
-  resume(nowMs = Date.now()): void {
-    if (!this.state.owner || this.state.status !== "paused") return;
+  resume(owner: BackgroundAutoNudgeThreadRef, nowMs = Date.now()): void {
+    if (!sameOwner(this.state.owner, owner) || this.state.status !== "paused") return;
     this.write(
       this.withEntry(
         { ...this.state, status: "active", reason: null },
@@ -349,13 +401,18 @@ export class BackgroundAutoNudgeController {
     );
   }
 
-  stop(reason = "Stopped by the operator.", nowMs = Date.now()): void {
-    if (!this.state.owner && this.state.status === "stopped") return;
+  stop(
+    owner: BackgroundAutoNudgeThreadRef,
+    reason = "Stopped by the operator.",
+    nowMs = Date.now(),
+  ): void {
+    if (!sameOwner(this.state.owner, owner)) return;
     this.write(
       this.withEntry(
         {
           ...this.state,
           owner: null,
+          runPolicy: null,
           status: "stopped",
           reason,
           expectedAutomatedUserMessageAt: null,
@@ -392,16 +449,20 @@ export class BackgroundAutoNudgeController {
     const owner = this.state.owner;
     if (!owner || this.state.status !== "active") return null;
 
-    if (!validSettings(input.settings)) {
-      this.stop("Background continuation was disabled.", input.nowMs);
+    const runPolicy = this.state.runPolicy;
+    if (
+      !runPolicy ||
+      !isValidAutoNudgeThreadPolicy(runPolicy, { requireBackgroundContinuation: true })
+    ) {
+      this.stop(owner, "Background continuation has no valid thread policy.", input.nowMs);
       return null;
     }
     if (!input.thread.exists || input.thread.archived) {
-      this.stop("The owned thread is missing, deleted, or archived.", input.nowMs);
+      this.stop(owner, "The owned thread is missing, deleted, or archived.", input.nowMs);
       return null;
     }
-    if (this.state.sentRounds >= input.settings.maxRounds) {
-      const reason = `Round cap reached (${input.settings.maxRounds}).`;
+    if (this.state.sentRounds >= runPolicy.maxRounds) {
+      const reason = `Round cap reached (${runPolicy.maxRounds}).`;
       this.write(
         this.withEntry(
           { ...this.state, status: "exhausted", reason },
@@ -417,7 +478,7 @@ export class BackgroundAutoNudgeController {
       latestUserMessageAt !== this.state.baselineUserMessageAt &&
       latestUserMessageAt !== this.state.expectedAutomatedUserMessageAt
     ) {
-      this.pause("Manual thread activity detected.", input.nowMs);
+      this.pause(owner, "Manual thread activity detected.", input.nowMs);
       return null;
     }
     if (
@@ -426,6 +487,7 @@ export class BackgroundAutoNudgeController {
       input.nowMs >= Date.parse(this.state.expectedAutomatedUserMessageDeadlineAt)
     ) {
       this.pause(
+        owner,
         "The automated prompt was not projected within 60 seconds; continuation paused.",
         input.nowMs,
       );
@@ -446,11 +508,11 @@ export class BackgroundAutoNudgeController {
       !input.thread.providerAvailable ||
       (!input.thread.sessionReady && !input.thread.isRunning)
     ) {
-      this.pause("Provider or transport is not ready.", input.nowMs);
+      this.pause(owner, "Provider or transport is not ready.", input.nowMs);
       return null;
     }
     if (input.thread.hasPendingWork) {
-      this.pause("Queued work or operator attention is pending.", input.nowMs);
+      this.pause(owner, "Queued work or operator attention is pending.", input.nowMs);
       return null;
     }
     if (input.thread.isRunning) {
@@ -458,18 +520,10 @@ export class BackgroundAutoNudgeController {
     }
 
     const turnKey = input.thread.terminalTurnKey;
-    if (!this.state.completionBaselineInitialized) {
-      this.write({
-        ...this.state,
-        completionBaselineTurnKey: turnKey,
-        completionBaselineInitialized: true,
-      });
-      return null;
-    }
     if (!turnKey) {
       return null;
     }
-    if (turnKey === this.state.completionBaselineTurnKey) {
+    if (turnKey === this.state.baselineTerminalTurnKey) {
       return null;
     }
     const consumed =
@@ -489,13 +543,14 @@ export class BackgroundAutoNudgeController {
         this.write({
           ...this.state,
           baselineUserMessageAt: latestUserMessageAt,
+          baselineTerminalTurnKey: turnKey,
           expectedAutomatedUserMessageAt: null,
         });
       }
       return null;
     }
 
-    const prompt = autoNudgePromptForMode(input.settings.mode);
+    const prompt = autoNudgePromptForMode(runPolicy.mode);
     if (!prompt) return null;
     const messageId = input.newMessageId();
     const createdAt = new Date(input.nowMs).toISOString();
@@ -506,7 +561,7 @@ export class BackgroundAutoNudgeController {
           ...this.state,
           sentRounds: round,
           baselineUserMessageAt: latestUserMessageAt,
-          completionBaselineTurnKey: turnKey,
+          baselineTerminalTurnKey: turnKey,
           expectedAutomatedUserMessageAt: createdAt,
           expectedAutomatedUserMessageDeadlineAt: new Date(
             input.nowMs + AUTO_NUDGE_PROJECTION_ACK_TIMEOUT_MS,
@@ -523,15 +578,29 @@ export class BackgroundAutoNudgeController {
 }
 
 let sharedController: BackgroundAutoNudgeController | null = null;
+let removeStorageListener: (() => void) | null = null;
 
 export function getBackgroundAutoNudgeController(): BackgroundAutoNudgeController {
-  sharedController ??= new BackgroundAutoNudgeController(resolveStorage());
+  if (sharedController) return sharedController;
+  sharedController = new BackgroundAutoNudgeController(resolveStorage());
+  if (typeof window !== "undefined") {
+    const onStorage = (event: StorageEvent) => {
+      if (
+        event.storageArea === window.localStorage &&
+        event.key === AUTO_NUDGE_BACKGROUND_STORAGE_KEY
+      ) {
+        sharedController?.reloadFromStorage();
+      }
+    };
+    window.addEventListener("storage", onStorage);
+    removeStorageListener = () => window.removeEventListener("storage", onStorage);
+  }
   return sharedController;
 }
 
 /** Background dispatch is intentionally unavailable without a cross-tab lock. */
 export function supportsBackgroundAutoNudgeDispatchLock(): boolean {
-  return typeof navigator !== "undefined" && typeof navigator.locks?.request === "function";
+  return supportsAutoNudgeExecutionLock();
 }
 
 export function useBackgroundAutoNudgeState(): BackgroundAutoNudgeState {
@@ -542,6 +611,8 @@ export function useBackgroundAutoNudgeState(): BackgroundAutoNudgeState {
 export function __resetBackgroundAutoNudgeControllerForTests(options?: {
   readonly clearStorage?: boolean;
 }): void {
+  removeStorageListener?.();
+  removeStorageListener = null;
   sharedController = null;
   if (!options?.clearStorage) return;
   try {

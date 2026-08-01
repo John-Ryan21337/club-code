@@ -2,12 +2,26 @@ import { describe, expect, it } from "vitest";
 
 import { classifyMatrixActivityObservation } from "./matrixActivityObservation.ts";
 
-const observation = (activityType: "network" | "database" | "build") => ({
+const observation = (activityType: "network" | "database" | "build" | "agent") => ({
   providerObserved: true,
   activityType,
 });
 
 describe("classifyMatrixActivityObservation", () => {
+  it("classifies an exact canonical agent lifecycle without inspecting provider content", () => {
+    const result = classifyMatrixActivityObservation({
+      itemType: "collab_agent_tool_call",
+      data: {
+        prompt: "private delegated task",
+        description: "private agent name",
+      },
+    });
+
+    expect(result).toEqual(observation("agent"));
+    expect(Object.keys(result ?? {}).toSorted()).toEqual(["activityType", "providerObserved"]);
+    expect(JSON.stringify(result)).not.toMatch(/private|task|name/iu);
+  });
+
   it("classifies canonical web searches without inspecting provider content", () => {
     const result = classifyMatrixActivityObservation({
       itemType: "web_search",
@@ -131,6 +145,9 @@ describe("classifyMatrixActivityObservation", () => {
       "database",
     ],
     ["pwsh.exe -Command 'corepack yarn workspace @cafecode/web typecheck'", "build"],
+    ["powershell.exe -Command '$null | corepack yarn typecheck'", "build"],
+    ["powershell.exe -Command '$null | corepack yarn workspace @cafecode/web typecheck'", "build"],
+    ["pwsh.exe -Command '$null | curl https://example.test'", "network"],
   ] as const)(
     "classifies one exact Windows PowerShell wrapper without retaining its command: %s",
     (command, activityType) => {
@@ -293,6 +310,22 @@ describe("classifyMatrixActivityObservation", () => {
     "powershell.exe -Command 'curl \"${env:PRIVATE_URL}\"'",
     "powershell.exe -Command 'corepack yarn build:desktop > build.log'",
     "powershell.exe -Command 'corepack yarn \"build:desktop'",
+    "powershell.exe -Command '$NULL | corepack yarn build:desktop'",
+    "powershell.exe -Command '$null| corepack yarn build:desktop'",
+    "powershell.exe -Command '$null |  corepack yarn build:desktop'",
+    "powershell.exe -Command '$null | corepack yarn build:desktop '",
+    "powershell.exe -Command '$null | corepack yarn build:desktop | Out-Null'",
+    "powershell.exe -Command '$null | corepack yarn build:desktop; curl https://example.test'",
+    "powershell.exe -Command '$null | & corepack yarn build:desktop'",
+    "powershell.exe -Command '$null | $(corepack yarn build:desktop)'",
+    "powershell.exe -Command '$null | corepack yarn build:desktop > build.log'",
+    "powershell.exe -Command '$null | curl @args'",
+    "powershell.exe -Command '$null | tsc @args'",
+    "powershell.exe -Command '$null | \"curl\" https://example.test'",
+    "powershell.exe -Command \"$null | 'curl' https://example.test\"",
+    "powershell.exe -Command '$null | corepack\u0085yarn build'",
+    "powershell.exe -Command '$null | corepack\u2028yarn build'",
+    "powershell.exe -Command '$null | corepack\u2029yarn build'",
     "cmd.exe /c 'corepack yarn build:desktop'",
     "bash -lc 'corepack yarn build:desktop'",
   ])("rejects a non-canonical or ambiguous Windows command wrapper: %s", (command) => {

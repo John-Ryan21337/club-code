@@ -1,6 +1,6 @@
 import type { CanonicalItemType } from "@cafecode/contracts";
 
-export type MatrixActivityType = "network" | "database" | "build";
+export type MatrixActivityType = "network" | "database" | "build" | "agent";
 
 export interface MatrixActivityObservation {
   readonly providerObserved: true;
@@ -17,6 +17,8 @@ const MAX_COMMAND_LENGTH = 4_096;
 const MAX_COMMAND_TOKEN_LENGTH = 512;
 const MAX_COMMAND_TOKENS = 6;
 const WINDOWS_POWERSHELL_EXECUTABLES = new Set(["powershell.exe", "pwsh.exe"]);
+const WINDOWS_POWERSHELL_HEADLESS_NULL_PIPE_PREFIX = "$null | ";
+const SAFE_UNQUOTED_NPM_SCOPE_TOKEN = /^@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._/-]*$/iu;
 
 const OBSERVATIONS = {
   network: Object.freeze({
@@ -30,6 +32,10 @@ const OBSERVATIONS = {
   build: Object.freeze({
     providerObserved: true,
     activityType: "build",
+  }),
+  agent: Object.freeze({
+    providerObserved: true,
+    activityType: "agent",
   }),
 } as const satisfies Record<MatrixActivityType, MatrixActivityObservation>;
 
@@ -108,6 +114,12 @@ const SERVER_TOOL_IDENTITIES: Readonly<
       "compile",
       "compile_project",
     ]),
+  },
+  // Agent communication uses one exact canonical lifecycle item type below;
+  // arbitrary MCP server/tool names must not be reinterpreted as orchestration.
+  agent: {
+    servers: new Set(),
+    tools: new Set(),
   },
 };
 
@@ -194,7 +206,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function hasControlCharacter(value: string): boolean {
   for (const character of value) {
     const codePoint = character.codePointAt(0);
-    if (codePoint !== undefined && (codePoint <= 0x1f || codePoint === 0x7f)) {
+    if (
+      codePoint !== undefined &&
+      (codePoint <= 0x1f ||
+        (codePoint >= 0x7f && codePoint <= 0x9f) ||
+        codePoint === 0x2028 ||
+        codePoint === 0x2029)
+    ) {
       return true;
     }
   }
@@ -487,9 +505,23 @@ function unwrapCanonicalWindowsPowerShellCommand(command: string): string | unde
     return undefined;
   }
 
+  const prefixedCommand = inner.startsWith(WINDOWS_POWERSHELL_HEADLESS_NULL_PIPE_PREFIX)
+    ? inner.slice(WINDOWS_POWERSHELL_HEADLESS_NULL_PIPE_PREFIX.length)
+    : inner;
+  const classifiedInner = boundedString(prefixedCommand, MAX_COMMAND_LENGTH);
+  if (!classifiedInner || classifiedInner !== prefixedCommand) {
+    return undefined;
+  }
+  // A bare quoted value is a PowerShell string expression, not an executable
+  // invocation. Executing a quoted path would require the already-rejected
+  // call operator (`&`).
+  if (classifiedInner.startsWith("'") || classifiedInner.startsWith('"')) {
+    return undefined;
+  }
+
   let nestedQuote: "'" | '"' | undefined;
-  for (let index = 0; index < inner.length; index += 1) {
-    const character = inner[index] ?? "";
+  for (let index = 0; index < classifiedInner.length; index += 1) {
+    const character = classifiedInner[index] ?? "";
     if (nestedQuote) {
       if (character === nestedQuote) {
         nestedQuote = undefined;
@@ -502,6 +534,15 @@ function unwrapCanonicalWindowsPowerShellCommand(command: string): string | unde
       continue;
     }
 
+    if (character === "@" && (index === 0 || /\s/u.test(classifiedInner[index - 1] ?? ""))) {
+      let tokenEnd = index + 1;
+      while (tokenEnd < classifiedInner.length && !/\s/u.test(classifiedInner[tokenEnd] ?? "")) {
+        tokenEnd += 1;
+      }
+      if (!SAFE_UNQUOTED_NPM_SCOPE_TOKEN.test(classifiedInner.slice(index, tokenEnd))) {
+        return undefined;
+      }
+    }
     if (character === "'" || character === '"') {
       nestedQuote = character;
       continue;
@@ -519,12 +560,12 @@ function unwrapCanonicalWindowsPowerShellCommand(command: string): string | unde
       character === "$" ||
       character === "(" ||
       character === ")" ||
-      (character === "@" && inner[index + 1] === "(")
+      (character === "@" && classifiedInner[index + 1] === "(")
     ) {
       return undefined;
     }
   }
-  return nestedQuote === undefined ? inner : undefined;
+  return nestedQuote === undefined ? classifiedInner : undefined;
 }
 
 function normalizedArgument(token: string | undefined): string | undefined {
@@ -687,6 +728,9 @@ function commandFromSanitizedData(data: unknown): string | undefined {
 export function classifyMatrixActivityObservation(
   input: MatrixActivityObservationInput,
 ): MatrixActivityObservation | undefined {
+  if (input.itemType === "collab_agent_tool_call") {
+    return OBSERVATIONS.agent;
+  }
   if (input.itemType === "web_search") {
     return classifyExactWebSearchData(input.data) ? OBSERVATIONS.network : undefined;
   }

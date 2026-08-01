@@ -1101,28 +1101,6 @@ describe("settings panels", () => {
     });
   });
 
-  it("keeps background Auto Nudge opt-in with a visible round cap", async () => {
-    const desktopBridge = createDesktopBridgeStub();
-    window.desktopBridge = desktopBridge;
-    const { updateClientSettings } = installClientSettingsNativeApi(desktopBridge);
-    setServerConfigSnapshot(createBaseServerConfig());
-
-    mounted = await renderWithTestRouter(
-      <AppAtomRegistryProvider>
-        <AppearanceSettingsPanel />
-      </AppAtomRegistryProvider>,
-    );
-
-    await expect.element(page.getByText("Auto Nudge background continuation")).toBeInTheDocument();
-    await expect.element(page.getByLabelText("Auto Nudge maximum rounds")).toHaveValue("5");
-    await page.getByLabelText("Allow Auto Nudge background continuation").click();
-    await vi.waitFor(() => {
-      expect(updateClientSettings).toHaveBeenCalledWith({
-        autoNudgeBackgroundContinuation: true,
-      });
-    });
-  });
-
   it("persists appearance preferences from Appearance settings", async () => {
     const desktopBridge = createDesktopBridgeStub();
     window.desktopBridge = desktopBridge;
@@ -1361,12 +1339,16 @@ describe("settings panels", () => {
     await page.getByRole("radio", { name: "Rainbow Extra", exact: true }).click();
     await page.getByRole("radio", { name: "Music reactive · uniform", exact: true }).click();
     await page.getByRole("radio", { name: "Music reactive · Rainbow Extra", exact: true }).click();
+    await page.getByLabelText("Increase Matrix color-cycle speed").click();
     await page.getByRole("radio", { name: "Fixed", exact: true }).click();
     await page.getByRole("radio", { name: "Music reactive · Rainbow Extra", exact: true }).click();
 
     await vi.waitFor(() => {
       expect(updateClientSettings).toHaveBeenCalledWith({
         fallingEffectMatrixColorMode: "fixed",
+      });
+      expect(updateClientSettings).toHaveBeenCalledWith({
+        fallingEffectMatrixColorCycleSpeed: 1.25,
       });
       expect(updateClientSettings).toHaveBeenCalledWith({
         fallingEffectMatrixColorMode: "rainbow",
@@ -1400,15 +1382,22 @@ describe("settings panels", () => {
       name: "Build / compile",
       exact: true,
     });
+    const agentActivityInput = page.getByRole("checkbox", {
+      name: "Agent / delegation",
+      exact: true,
+    });
     await expect.element(networkActivityInput).toHaveAttribute("aria-checked", "true");
     await expect.element(databaseActivityInput).toHaveAttribute("aria-checked", "true");
     await expect.element(buildActivityInput).toHaveAttribute("aria-checked", "true");
+    await expect.element(agentActivityInput).toHaveAttribute("aria-checked", "true");
     await networkActivityInput.click();
     await databaseActivityInput.click();
     await buildActivityInput.click();
+    await agentActivityInput.click();
     await page.getByRole("radio", { name: "Follow Matrix colors", exact: true }).click();
     await page.getByRole("radio", { name: "Random independent", exact: true }).click();
     await page.getByRole("radio", { name: "Follow Matrix colors", exact: true }).click();
+    await page.getByLabelText("Increase verified route visibility").click();
     await vi.waitFor(() => {
       expect(updateClientSettings).toHaveBeenCalledWith({ fallingEffectActivityLinks: true });
       expect(updateClientSettings).toHaveBeenCalledWith({
@@ -1421,10 +1410,16 @@ describe("settings panels", () => {
         fallingEffectActivityLinkBuildEnabled: false,
       });
       expect(updateClientSettings).toHaveBeenCalledWith({
+        fallingEffectActivityLinkAgentEnabled: false,
+      });
+      expect(updateClientSettings).toHaveBeenCalledWith({
         fallingEffectActivityLinkColorMode: "random",
       });
       expect(updateClientSettings).toHaveBeenCalledWith({
         fallingEffectActivityLinkColorMode: "matrix",
+      });
+      expect(updateClientSettings).toHaveBeenCalledWith({
+        fallingEffectActivityLinkRetentionSeconds: 31,
       });
     });
     await expect
@@ -1464,13 +1459,16 @@ describe("settings panels", () => {
       fallingEffectsEnabled: false,
       fallingEffectKind: "matrix",
       fallingEffectMatrixColorMode: "music-reactive-extra",
+      fallingEffectMatrixColorCycleSpeed: 1.25,
       fallingEffect2chEnriched: true,
       fallingEffectLiveWorkVocabulary: true,
       fallingEffectActivityLinks: true,
       fallingEffectActivityLinkNetworkEnabled: false,
       fallingEffectActivityLinkDatabaseEnabled: false,
       fallingEffectActivityLinkBuildEnabled: false,
+      fallingEffectActivityLinkAgentEnabled: false,
       fallingEffectActivityLinkColorMode: "matrix",
+      fallingEffectActivityLinkRetentionSeconds: 31,
     });
 
     await expect.element(page.getByText("Sidebar star speed")).toBeInTheDocument();
@@ -1495,12 +1493,15 @@ describe("settings panels", () => {
       clientSettings: {
         ...config.clientSettings,
         fallingEffectMatrixColorMode: "rainbow-extra",
+        fallingEffectMatrixColorCycleSpeed: 32,
         fallingEffectLiveWorkVocabulary: true,
         fallingEffectActivityLinks: true,
         fallingEffectActivityLinkNetworkEnabled: false,
         fallingEffectActivityLinkDatabaseEnabled: false,
         fallingEffectActivityLinkBuildEnabled: false,
+        fallingEffectActivityLinkAgentEnabled: false,
         fallingEffectActivityLinkColorMode: "matrix",
+        fallingEffectActivityLinkRetentionSeconds: 90,
       },
     });
     const onRestored = vi.fn();
@@ -1514,35 +1515,41 @@ describe("settings panels", () => {
     await expect
       .element(page.getByLabelText("Changed settings"))
       .toHaveTextContent(
-        "Matrix color mode | Matrix live work vocabulary | Matrix activity links | Matrix activity link inputs | Matrix activity link colors",
+        "Matrix color mode | Matrix color-cycle speed | Matrix live work vocabulary | Matrix activity links | Matrix activity link inputs | Matrix activity link colors | Matrix verified route visibility",
       );
     await page.getByRole("button", { name: "Apply settings reset" }).click();
 
     await vi.waitFor(() => {
       expect(confirm).toHaveBeenCalledWith(
         expect.stringContaining(
-          "Matrix color mode, Matrix live work vocabulary, Matrix activity links, Matrix activity link inputs, Matrix activity link colors",
+          "Matrix color mode, Matrix color-cycle speed, Matrix live work vocabulary, Matrix activity links, Matrix activity link inputs, Matrix activity link colors, Matrix verified route visibility",
         ),
       );
       expect(updateClientSettings).toHaveBeenCalledWith(
         expect.objectContaining({
           fallingEffectMatrixColorMode: "fixed",
+          fallingEffectMatrixColorCycleSpeed: 1,
           fallingEffectLiveWorkVocabulary: false,
           fallingEffectActivityLinks: false,
           fallingEffectActivityLinkNetworkEnabled: true,
           fallingEffectActivityLinkDatabaseEnabled: true,
           fallingEffectActivityLinkBuildEnabled: true,
+          fallingEffectActivityLinkAgentEnabled: true,
           fallingEffectActivityLinkColorMode: "random",
+          fallingEffectActivityLinkRetentionSeconds: 30,
         }),
       );
       expect(getServerConfig()?.clientSettings).toMatchObject({
         fallingEffectMatrixColorMode: "fixed",
+        fallingEffectMatrixColorCycleSpeed: 1,
         fallingEffectLiveWorkVocabulary: false,
         fallingEffectActivityLinks: false,
         fallingEffectActivityLinkNetworkEnabled: true,
         fallingEffectActivityLinkDatabaseEnabled: true,
         fallingEffectActivityLinkBuildEnabled: true,
+        fallingEffectActivityLinkAgentEnabled: true,
         fallingEffectActivityLinkColorMode: "random",
+        fallingEffectActivityLinkRetentionSeconds: 30,
       });
       expect(onRestored).toHaveBeenCalledOnce();
     });

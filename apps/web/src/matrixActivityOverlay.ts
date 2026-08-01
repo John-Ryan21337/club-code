@@ -1,5 +1,10 @@
 import type { OrchestrationThreadActivity, ScopedThreadRef } from "@cafecode/contracts";
-import type { FallingEffectActivityLinkColorMode } from "@cafecode/contracts/settings";
+import {
+  DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
+  MAX_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
+  MIN_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
+  type FallingEffectActivityLinkColorMode,
+} from "@cafecode/contracts/settings";
 
 import type { AppState } from "./store";
 import {
@@ -10,8 +15,14 @@ import {
 
 export const MAX_MATRIX_ACTIVITY_EVENTS = 24;
 export const MAX_MATRIX_ACTIVITY_ENCODED_CHARS = 8_192;
-export const MAX_MATRIX_ACTIVITY_LINKS = 8;
-export const MATRIX_ACTIVITY_TTL_MS = 2_200;
+export const MAX_MATRIX_ACTIVITY_LINKS = 12;
+/** Standalone activity pulses retain the original short, non-configurable lifetime. */
+export const MATRIX_ACTIVITY_TTL_MS = 8_000;
+/** Default visibility for an already verified route; callers may supply the persisted bounded TTL. */
+export const DEFAULT_MATRIX_ACTIVITY_ROUTE_TTL_MS =
+  DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS * 1_000;
+const MIN_MATRIX_ACTIVITY_TTL_MS = MIN_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS * 1_000;
+const MAX_MATRIX_ACTIVITY_TTL_MS = MAX_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS * 1_000;
 /** Keep links fully legible until this short terminal fade begins. */
 export const MATRIX_ACTIVITY_TERMINAL_FADE_MS = 400;
 // Keep this aligned with the per-thread activity retention cap in store.ts.
@@ -21,27 +32,47 @@ const MAX_MATRIX_ACTIVITY_SOURCE_ACTIVITIES = 500;
 /** A single provider turn may legitimately contain a full-day build or migration. */
 export const MATRIX_ACTIVITY_MAX_CORRELATION_MS = 24 * 60 * 60 * 1_000;
 export const MATRIX_ACTIVITY_PACKET_TRAVEL_MS = 720;
+/** Repeated packets make each real correlated route easy to see without inventing extra traffic. */
+export const MATRIX_ACTIVITY_PACKET_COUNT = 3;
+/**
+ * Bound decorative packet instances per frame for Pi-class GPUs. A packet
+ * paints one circle and one trail, with at most one extra trail stroke when
+ * that trail wraps over the route boundary.
+ */
+export const MAX_MATRIX_ACTIVITY_PACKET_DRAWS = 30;
+export const MATRIX_ACTIVITY_MIN_PACKETS_PER_LINK = 2;
+export const MATRIX_ACTIVITY_PACKET_TRAIL_PROGRESS = 0.12;
 export const MATRIX_ACTIVITY_LINK_PULSE_MS = 180;
+/** Circular lettering is intentionally limited because Canvas text is rendered one glyph at a time. */
+export const MAX_MATRIX_ACTIVITY_TELEMETRY_RINGS = 6;
+export const MAX_MATRIX_ACTIVITY_TELEMETRY_GLYPHS = 28;
 const MAX_ACTIVITY_RELATIONS = 4;
 const MAX_FUTURE_CLOCK_SKEW_MS = 250;
 const SAFE_RELATION_VALUE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/u;
 
-export type MatrixActivityCategory = "network" | "database" | "build";
+export type MatrixActivityCategory = "network" | "database" | "build" | "agent";
 
 export interface MatrixActivityInputSelection {
   readonly network: boolean;
   readonly database: boolean;
   readonly build: boolean;
+  readonly agent: boolean;
 }
 
 export const ALL_MATRIX_ACTIVITY_INPUTS: MatrixActivityInputSelection = {
   network: true,
   database: true,
   build: true,
+  agent: true,
 };
 
 function hasSelectedMatrixActivityInput(selection: MatrixActivityInputSelection): boolean {
-  return selection.network === true || selection.database === true || selection.build === true;
+  return (
+    selection.network === true ||
+    selection.database === true ||
+    selection.build === true ||
+    selection.agent === true
+  );
 }
 
 export interface MatrixActivityEvent {
@@ -50,6 +81,27 @@ export interface MatrixActivityEvent {
   readonly observedAtMs: number;
   /** Hashes only: raw provider IDs and operation names never reach the canvas. */
   readonly relationHashes: readonly number[];
+  /**
+   * One canonical provider-observed agent dispatch can be visualized as a
+   * category -> operation route even when that provider emits no separate
+   * lifecycle start. This is one verified event with two decorative anchors,
+   * not a second provider event or a throughput measurement.
+   */
+  readonly verifiedAgentDispatch?: {
+    readonly operationAnchorSeed: number;
+    readonly relationHash: number;
+  };
+}
+
+/**
+ * A deterministic retention window for deciding which provider observations
+ * may consume the bounded Matrix activity payload. Supplying `nowMs` avoids
+ * letting routes already expired at the caller's configured TTL crowd newer
+ * pulses out of the 24-event budget.
+ */
+export interface MatrixActivityRetentionWindow {
+  readonly nowMs?: number;
+  readonly requestedTtlMs?: number;
 }
 
 export interface MatrixActivityPulse {
@@ -64,6 +116,8 @@ export interface MatrixActivityPulse {
 export interface MatrixActivityLink {
   fromAnchorIndex: number;
   toAnchorIndex: number;
+  /** Only this endpoint may receive linked-operation telemetry lettering. */
+  operationAnchorIndex: number;
   category: MatrixActivityCategory;
   intensity: number;
   linePulse: number;
@@ -94,19 +148,26 @@ export interface MatrixHexRoute {
   readonly totalLength: number;
 }
 
+export interface MatrixActivityProgressInterval {
+  readonly startProgress: number;
+  readonly endProgress: number;
+}
+
 const CATEGORY_COLOR: Record<MatrixActivityCategory, string> = {
   network: "#38bdf8",
   database: "#a78bfa",
   build: "#fbbf24",
+  agent: "#f472b6",
 };
 
 const CATEGORY_CODE: Record<MatrixActivityCategory, number> = {
   network: 0,
   database: 1,
   build: 2,
+  agent: 3,
 };
 
-const CODE_CATEGORY = ["network", "database", "build"] as const;
+const CODE_CATEGORY = ["network", "database", "build", "agent"] as const;
 const CATEGORY_TERM: Record<
   MatrixActivityCategory,
   Record<"english" | "japanese", readonly [category: string, operation: string]>
@@ -122,6 +183,10 @@ const CATEGORY_TERM: Record<
   build: {
     english: ["BUILD", "COMPILE"],
     japanese: ["構築", "コンパイル"],
+  },
+  agent: {
+    english: ["AGENT", "DISPATCH"],
+    japanese: ["エージェント", "委任"],
   },
 };
 
@@ -202,6 +267,7 @@ const STRUCTURED_ACTIVITY_CATEGORIES = new Map<string, MatrixActivityCategory>([
   ["compile", "build"],
   ["compiler", "build"],
   ["transpile", "build"],
+  ["agent", "agent"],
 ]);
 
 function collectActivityCategory(value: unknown, categories: Set<MatrixActivityCategory>): void {
@@ -259,6 +325,305 @@ function activityRelationHashes(
   return hashes;
 }
 
+const PROVIDER_TOOL_LIFECYCLE_KIND = /^tool\.(?:started|updated|completed)$/u;
+
+function isExplicitlyProviderObserved(payload: Record<string, unknown>): boolean {
+  const observed = isRecord(payload.observed) ? payload.observed : null;
+  return observed?.providerObserved === true;
+}
+
+/**
+ * Raw lifecycle identities exist only in this bounded renderer derivation.
+ * They are never encoded or retained by the canvas.
+ */
+function exactLifecycleRelationIdentity(
+  activity: OrchestrationThreadActivity,
+  payload: Record<string, unknown>,
+): string | null {
+  if (!PROVIDER_TOOL_LIFECYCLE_KIND.test(activity.kind) || activity.turnId === null) {
+    return null;
+  }
+  const turnId = String(activity.turnId);
+  const itemType = ownDataProperty(payload, "itemType");
+  const itemId = ownDataProperty(payload, "itemId");
+  if (
+    !SAFE_RELATION_VALUE.test(turnId) ||
+    typeof itemType !== "string" ||
+    !SAFE_RELATION_VALUE.test(itemType) ||
+    typeof itemId !== "string" ||
+    !SAFE_RELATION_VALUE.test(itemId)
+  ) {
+    return null;
+  }
+  return JSON.stringify(["turn", turnId, "type", itemType, "item", itemId]);
+}
+
+interface LifecycleCategoryAttestation {
+  category: MatrixActivityCategory | null;
+  completionCategory: MatrixActivityCategory | null;
+  completionObservedAtMs: number | null;
+  completionSourceOffset: number | null;
+  completionAttestationCount: number;
+  conflicted: boolean;
+  lifecycleEventCount: number;
+}
+
+function collectLifecycleCategoryAttestations(
+  activities: readonly OrchestrationThreadActivity[],
+): ReadonlyMap<string, LifecycleCategoryAttestation> {
+  const attestations = new Map<string, LifecycleCategoryAttestation>();
+  for (let sourceOffset = 0; sourceOffset < activities.length; sourceOffset += 1) {
+    const activity = activities[sourceOffset]!;
+    const payload = isRecord(activity.payload) ? activity.payload : null;
+    if (!payload) continue;
+    const relationIdentity = exactLifecycleRelationIdentity(activity, payload);
+    if (relationIdentity === null) continue;
+
+    const existing = attestations.get(relationIdentity) ?? {
+      category: null,
+      completionCategory: null,
+      completionObservedAtMs: null,
+      completionSourceOffset: null,
+      completionAttestationCount: 0,
+      conflicted: false,
+      lifecycleEventCount: 0,
+    };
+    existing.lifecycleEventCount += 1;
+    if (isExplicitlyProviderObserved(payload)) {
+      const category = activityCategory(activity, payload);
+      if (category === null) {
+        // An explicit but malformed or internally conflicting attestation
+        // invalidates propagation for this exact lifecycle identity.
+        existing.conflicted = true;
+      } else if (existing.category !== null && existing.category !== category) {
+        existing.conflicted = true;
+      } else {
+        existing.category = category;
+      }
+      if (activity.kind === "tool.completed") {
+        existing.completionAttestationCount += 1;
+        const observedAtMs = Date.parse(activity.createdAt);
+        if (
+          category === null ||
+          !Number.isFinite(observedAtMs) ||
+          (existing.completionCategory !== null && existing.completionCategory !== category)
+        ) {
+          existing.conflicted = true;
+        } else {
+          existing.completionCategory = category;
+          existing.completionObservedAtMs = observedAtMs;
+          existing.completionSourceOffset = sourceOffset;
+        }
+      }
+    }
+    attestations.set(relationIdentity, existing);
+  }
+  return attestations;
+}
+
+function propagatedLifecycleCategory(
+  activity: OrchestrationThreadActivity,
+  payload: Record<string, unknown>,
+  attestations: ReadonlyMap<string, LifecycleCategoryAttestation>,
+  sourceOffset: number,
+): MatrixActivityCategory | null {
+  const directCategory = activityCategory(activity, payload);
+  if (directCategory !== null || isExplicitlyProviderObserved(payload)) {
+    return directCategory;
+  }
+  if (activity.kind !== "tool.started") return null;
+  const relationIdentity = exactLifecycleRelationIdentity(activity, payload);
+  if (relationIdentity === null) return null;
+  const attestation = attestations.get(relationIdentity);
+  const startedAtMs = Date.parse(activity.createdAt);
+  if (
+    !attestation ||
+    attestation.conflicted ||
+    attestation.completionAttestationCount !== 1 ||
+    attestation.category === null ||
+    attestation.completionCategory !== attestation.category ||
+    attestation.completionObservedAtMs === null ||
+    attestation.completionSourceOffset === null ||
+    sourceOffset >= attestation.completionSourceOffset ||
+    !Number.isFinite(startedAtMs)
+  ) {
+    return null;
+  }
+  const durationMs = attestation.completionObservedAtMs - startedAtMs;
+  return durationMs >= 0 && durationMs <= MATRIX_ACTIVITY_MAX_CORRELATION_MS
+    ? attestation.category
+    : null;
+}
+
+function deriveVerifiedAgentDispatch(
+  activity: OrchestrationThreadActivity,
+  payload: Record<string, unknown>,
+  category: MatrixActivityCategory,
+  attestations: ReadonlyMap<string, LifecycleCategoryAttestation>,
+  anchorSeed: number,
+  relationHashes: readonly number[],
+): MatrixActivityEvent["verifiedAgentDispatch"] {
+  if (
+    category !== "agent" ||
+    activity.kind !== "tool.completed" ||
+    ownDataProperty(payload, "itemType") !== "collab_agent_tool_call" ||
+    !isExplicitlyProviderObserved(payload)
+  ) {
+    return undefined;
+  }
+  const relationIdentity = exactLifecycleRelationIdentity(activity, payload);
+  const attestation = relationIdentity === null ? undefined : attestations.get(relationIdentity);
+  if (
+    relationIdentity === null ||
+    !attestation ||
+    attestation.conflicted ||
+    attestation.category !== "agent" ||
+    attestation.completionCategory !== "agent" ||
+    attestation.completionAttestationCount !== 1 ||
+    attestation.lifecycleEventCount !== 1
+  ) {
+    return undefined;
+  }
+  const relationHash = relationHashes[0];
+  if (!Number.isSafeInteger(relationHash) || relationHash === undefined || relationHash < 0) {
+    return undefined;
+  }
+  return {
+    operationAnchorSeed: hashSafeIdentity(
+      JSON.stringify(["verified-agent-dispatch-operation", anchorSeed]),
+    ),
+    relationHash: hashSafeRelationIdentity(
+      JSON.stringify(["verified-agent-dispatch", relationHash]),
+    ),
+  };
+}
+
+function isValidVerifiedAgentDispatch(event: MatrixActivityEvent): event is MatrixActivityEvent & {
+  readonly verifiedAgentDispatch: NonNullable<MatrixActivityEvent["verifiedAgentDispatch"]>;
+} {
+  const route = event.verifiedAgentDispatch;
+  return (
+    event.category === "agent" &&
+    route !== undefined &&
+    Number.isInteger(route.operationAnchorSeed) &&
+    route.operationAnchorSeed >= 0 &&
+    route.operationAnchorSeed <= 0xffffffff &&
+    Number.isSafeInteger(route.relationHash) &&
+    route.relationHash >= 0
+  );
+}
+
+/**
+ * Preserve the newest bounded set of exact lifecycle pairs before filling the
+ * remaining visual budget with standalone activity. A verified route must not
+ * disappear merely because newer, unrelated provider observations arrived.
+ */
+function resolveMatrixActivityRouteTtlMs(requestedTtlMs: number | undefined): number {
+  return typeof requestedTtlMs === "number" && Number.isFinite(requestedTtlMs)
+    ? Math.min(
+        MAX_MATRIX_ACTIVITY_TTL_MS,
+        Math.max(MIN_MATRIX_ACTIVITY_TTL_MS, Math.round(requestedTtlMs)),
+      )
+    : DEFAULT_MATRIX_ACTIVITY_ROUTE_TTL_MS;
+}
+
+function resolveMatrixActivityRetentionReferenceMs(
+  events: readonly MatrixActivityEvent[],
+  requestedNowMs: number | undefined,
+): number {
+  if (typeof requestedNowMs === "number" && Number.isFinite(requestedNowMs)) {
+    return requestedNowMs;
+  }
+  let newestObservedAtMs = Number.NEGATIVE_INFINITY;
+  for (const event of events) {
+    if (Number.isFinite(event.observedAtMs)) {
+      newestObservedAtMs = Math.max(newestObservedAtMs, event.observedAtMs);
+    }
+  }
+  return Number.isFinite(newestObservedAtMs) ? newestObservedAtMs : 0;
+}
+
+function selectBoundedMatrixActivityEvents(
+  events: readonly MatrixActivityEvent[],
+  retentionWindow: MatrixActivityRetentionWindow = {},
+): readonly MatrixActivityEvent[] {
+  if (events.length <= MAX_MATRIX_ACTIVITY_EVENTS) return events;
+
+  const referenceNowMs = resolveMatrixActivityRetentionReferenceMs(events, retentionWindow.nowMs);
+  const routeTtlMs = resolveMatrixActivityRouteTtlMs(retentionWindow.requestedTtlMs);
+
+  const selectedOffsets = new Set<number>();
+  const selectedSingleEventRelations = new Set<string>();
+  let selectedSingleEventRoutes = 0;
+  for (
+    let offset = events.length - 1;
+    offset >= 0 && selectedSingleEventRoutes < MAX_MATRIX_ACTIVITY_LINKS;
+    offset -= 1
+  ) {
+    const event = events[offset]!;
+    if (!isValidVerifiedAgentDispatch(event)) continue;
+    const relationKey = `agent-dispatch:${event.verifiedAgentDispatch.relationHash}`;
+    if (selectedSingleEventRelations.has(relationKey)) continue;
+    if (
+      event.observedAtMs <= referenceNowMs - routeTtlMs ||
+      event.observedAtMs > referenceNowMs + MAX_FUTURE_CLOCK_SKEW_MS
+    ) {
+      continue;
+    }
+    selectedSingleEventRelations.add(relationKey);
+    selectedOffsets.add(offset);
+    selectedSingleEventRoutes += 1;
+  }
+  const newestOffsetByRelation = new Map<string, number>();
+  const resolvedRelations = new Set<string>();
+  for (let offset = events.length - 1; offset >= 0; offset -= 1) {
+    const event = events[offset]!;
+    for (const relationHash of event.relationHashes.slice(0, MAX_ACTIVITY_RELATIONS)) {
+      if (!Number.isSafeInteger(relationHash) || relationHash < 0) continue;
+      const relationKey = `${event.category}:${relationHash}`;
+      if (resolvedRelations.has(relationKey)) continue;
+      const newestOffset = newestOffsetByRelation.get(relationKey);
+      if (newestOffset === undefined) {
+        newestOffsetByRelation.set(relationKey, offset);
+        continue;
+      }
+
+      resolvedRelations.add(relationKey);
+      const newest = events[newestOffset]!;
+      const correlationDurationMs = newest.observedAtMs - event.observedAtMs;
+      if (
+        !Number.isFinite(correlationDurationMs) ||
+        correlationDurationMs < 0 ||
+        correlationDurationMs > MATRIX_ACTIVITY_MAX_CORRELATION_MS
+      ) {
+        continue;
+      }
+      if (
+        newest.observedAtMs <= referenceNowMs - routeTtlMs ||
+        newest.observedAtMs > referenceNowMs + MAX_FUTURE_CLOCK_SKEW_MS
+      ) {
+        continue;
+      }
+      const additionalEvents =
+        Number(!selectedOffsets.has(offset)) + Number(!selectedOffsets.has(newestOffset));
+      if (selectedOffsets.size + additionalEvents > MAX_MATRIX_ACTIVITY_EVENTS) continue;
+      selectedOffsets.add(offset);
+      selectedOffsets.add(newestOffset);
+    }
+  }
+
+  for (
+    let offset = events.length - 1;
+    offset >= 0 && selectedOffsets.size < MAX_MATRIX_ACTIVITY_EVENTS;
+    offset -= 1
+  ) {
+    selectedOffsets.add(offset);
+  }
+  return [...selectedOffsets]
+    .toSorted((left, right) => left - right)
+    .map((offset) => events[offset]!);
+}
+
 /**
  * Converts provider projection activity into category/timing/hash-only events.
  * Summary, prompt, command output, SQL values, URLs, paths, and raw relation
@@ -267,38 +632,63 @@ function activityRelationHashes(
 export function deriveMatrixActivityEvents(
   activities: readonly OrchestrationThreadActivity[],
   inputSelection: MatrixActivityInputSelection = ALL_MATRIX_ACTIVITY_INPUTS,
+  retentionWindow: MatrixActivityRetentionWindow = {},
 ): readonly MatrixActivityEvent[] {
   if (!hasSelectedMatrixActivityInput(inputSelection)) return [];
 
+  const sourceActivities = activities.slice(-MAX_MATRIX_ACTIVITY_SOURCE_ACTIVITIES);
+  const attestations = collectLifecycleCategoryAttestations(sourceActivities);
   const events: MatrixActivityEvent[] = [];
-  for (const activity of activities.slice(-MAX_MATRIX_ACTIVITY_SOURCE_ACTIVITIES)) {
+  for (let sourceOffset = 0; sourceOffset < sourceActivities.length; sourceOffset += 1) {
+    const activity = sourceActivities[sourceOffset]!;
     const payload = isRecord(activity.payload) ? activity.payload : null;
     if (!payload) continue;
-    const category = activityCategory(activity, payload);
+    const category = propagatedLifecycleCategory(activity, payload, attestations, sourceOffset);
     const observedAtMs = Date.parse(activity.createdAt);
     if (category === null || inputSelection[category] !== true || !Number.isFinite(observedAtMs)) {
       continue;
     }
+    const anchorSeed = hashSafeIdentity(String(activity.id));
+    const relationHashes = activityRelationHashes(activity, payload);
+    const verifiedAgentDispatch = deriveVerifiedAgentDispatch(
+      activity,
+      payload,
+      category,
+      attestations,
+      anchorSeed,
+      relationHashes,
+    );
     events.push({
-      anchorSeed: hashSafeIdentity(String(activity.id)),
+      anchorSeed,
       category,
       observedAtMs,
-      relationHashes: activityRelationHashes(activity, payload),
+      relationHashes,
+      ...(verifiedAgentDispatch !== undefined ? { verifiedAgentDispatch } : {}),
     });
   }
-  return events.slice(-MAX_MATRIX_ACTIVITY_EVENTS);
+  return selectBoundedMatrixActivityEvents(events, retentionWindow);
 }
 
-export function encodeMatrixActivityEvents(events: readonly MatrixActivityEvent[]): string {
+export function encodeMatrixActivityEvents(
+  events: readonly MatrixActivityEvent[],
+  retentionWindow: MatrixActivityRetentionWindow = {},
+): string {
   return JSON.stringify(
-    events
-      .slice(-MAX_MATRIX_ACTIVITY_EVENTS)
-      .map((event) => [
+    selectBoundedMatrixActivityEvents(events, retentionWindow).map((event) => {
+      const encoded: Array<number | readonly number[]> = [
         event.anchorSeed,
         CATEGORY_CODE[event.category],
         event.observedAtMs,
         event.relationHashes.slice(0, MAX_ACTIVITY_RELATIONS),
-      ]),
+      ];
+      if (isValidVerifiedAgentDispatch(event)) {
+        encoded.push([
+          event.verifiedAgentDispatch.operationAnchorSeed,
+          event.verifiedAgentDispatch.relationHash,
+        ]);
+      }
+      return encoded;
+    }),
   );
 }
 
@@ -307,10 +697,10 @@ export function decodeMatrixActivityEvents(value: string): readonly MatrixActivi
   try {
     const parsed = JSON.parse(value) as unknown;
     if (!Array.isArray(parsed)) return [];
-    return parsed.slice(-MAX_MATRIX_ACTIVITY_EVENTS).flatMap((entry) => {
+    const events = parsed.flatMap((entry) => {
       if (
         !Array.isArray(entry) ||
-        entry.length !== 4 ||
+        (entry.length !== 4 && entry.length !== 5) ||
         !Number.isInteger(entry[0]) ||
         entry[0] < 0 ||
         entry[0] > 0xffffffff ||
@@ -322,6 +712,20 @@ export function decodeMatrixActivityEvents(value: string): readonly MatrixActivi
       }
       const category = CODE_CATEGORY[entry[1]];
       if (category === undefined) return [];
+      const encodedAgentDispatch = entry[4];
+      if (
+        encodedAgentDispatch !== undefined &&
+        (category !== "agent" ||
+          !Array.isArray(encodedAgentDispatch) ||
+          encodedAgentDispatch.length !== 2 ||
+          !Number.isInteger(encodedAgentDispatch[0]) ||
+          encodedAgentDispatch[0] < 0 ||
+          encodedAgentDispatch[0] > 0xffffffff ||
+          !Number.isSafeInteger(encodedAgentDispatch[1]) ||
+          encodedAgentDispatch[1] < 0)
+      ) {
+        return [];
+      }
       const relationHashes = entry[3]
         .filter((hash): hash is number => Number.isSafeInteger(hash) && hash >= 0)
         .slice(0, MAX_ACTIVITY_RELATIONS);
@@ -331,9 +735,18 @@ export function decodeMatrixActivityEvents(value: string): readonly MatrixActivi
           category,
           observedAtMs: entry[2],
           relationHashes,
+          ...(encodedAgentDispatch !== undefined
+            ? {
+                verifiedAgentDispatch: {
+                  operationAnchorSeed: encodedAgentDispatch[0] as number,
+                  relationHash: encodedAgentDispatch[1] as number,
+                },
+              }
+            : {}),
         },
       ];
     });
+    return selectBoundedMatrixActivityEvents(events);
   } catch {
     return [];
   }
@@ -347,6 +760,7 @@ export function selectMatrixActivityEventsKey(
   state: AppState,
   selectedThreadRef: ScopedThreadRef | null = null,
   inputSelection: MatrixActivityInputSelection = ALL_MATRIX_ACTIVITY_INPUTS,
+  retentionWindow: MatrixActivityRetentionWindow = {},
 ): string {
   if (!isRecord(state) || !isRecord(selectedThreadRef)) return "";
   const environmentId = ownDataProperty(selectedThreadRef, "environmentId");
@@ -368,7 +782,10 @@ export function selectMatrixActivityEventsKey(
     const activity = ownDataProperty(byId, id);
     return isMatrixThreadActivity(activity) ? [activity] : [];
   });
-  return encodeMatrixActivityEvents(deriveMatrixActivityEvents(activities, inputSelection));
+  return encodeMatrixActivityEvents(
+    deriveMatrixActivityEvents(activities, inputSelection, retentionWindow),
+    retentionWindow,
+  );
 }
 
 export function createMatrixActivityAnimationState(): MatrixActivityAnimationState {
@@ -394,6 +811,19 @@ export function resolveMatrixActivityTerm(
   return terms[semanticRole === "category" ? 0 : 1];
 }
 
+/**
+ * This label describes an exact provider-reported lifecycle correlation. It
+ * deliberately does not claim a byte rate: activity events contain no
+ * provider-observed byte count or measurement interval.
+ */
+export function resolveMatrixActivityTelemetryLabel(
+  category: MatrixActivityCategory,
+  language: "english" | "japanese" | null,
+): string {
+  const operation = resolveMatrixActivityTerm(category, "operation", language);
+  return `${operation} • VERIFIED •`.slice(0, MAX_MATRIX_ACTIVITY_TELEMETRY_GLYPHS);
+}
+
 function writePulse(
   state: MatrixActivityAnimationState,
   index: number,
@@ -416,7 +846,9 @@ function writeLink(
 
 /**
  * Reuses its arrays/maps on every frame. Reduced motion keeps a static route
- * while disabling the traveling packet.
+ * while disabling the traveling packet. The requested TTL changes only exact
+ * correlated routes and their endpoints; standalone pulses keep their fixed
+ * short lifetime.
  */
 export function updateMatrixActivityAnimationInPlace(
   state: MatrixActivityAnimationState,
@@ -424,6 +856,7 @@ export function updateMatrixActivityAnimationInPlace(
   nowMs: number,
   particleCount: number,
   reducedMotion: boolean,
+  requestedTtlMs = DEFAULT_MATRIX_ACTIVITY_ROUTE_TTL_MS,
 ): MatrixActivityAnimationState {
   state.pulseCount = 0;
   state.linkCount = 0;
@@ -435,15 +868,21 @@ export function updateMatrixActivityAnimationInPlace(
   if (!Number.isSafeInteger(particleCount) || particleCount <= 0 || !Number.isFinite(nowMs)) {
     return state;
   }
+  const ttlMs = resolveMatrixActivityRouteTtlMs(requestedTtlMs);
 
-  const boundedEvents = events.slice(-MAX_MATRIX_ACTIVITY_EVENTS);
+  const boundedEvents = selectBoundedMatrixActivityEvents(events, {
+    nowMs,
+    requestedTtlMs: ttlMs,
+  });
   interface PreparedEvent {
     readonly event: MatrixActivityEvent;
     readonly eventOffset: number;
     readonly ageMs: number;
     readonly anchorIndex: number;
-    readonly intensity: number;
-    readonly live: boolean;
+    readonly pulseIntensity: number;
+    readonly pulseLive: boolean;
+    readonly routeIntensity: number;
+    readonly routeLive: boolean;
   }
   interface LinkCandidate {
     readonly previous: PreparedEvent;
@@ -465,20 +904,25 @@ export function updateMatrixActivityAnimationInPlace(
     }
     const ageMs = nowMs - event.observedAtMs;
     if (ageMs < -MAX_FUTURE_CLOCK_SKEW_MS) continue;
-    const live = ageMs < MATRIX_ACTIVITY_TTL_MS;
+    const pulseLive = ageMs < MATRIX_ACTIVITY_TTL_MS;
+    const routeLive = ageMs < ttlMs;
     preparedEvents[eventOffset] = {
       event,
       eventOffset,
       ageMs,
       anchorIndex: event.anchorSeed % particleCount,
-      intensity: live
+      pulseIntensity: pulseLive
         ? Math.min(
             1,
             Math.max(0, MATRIX_ACTIVITY_TTL_MS - Math.max(0, ageMs)) /
               MATRIX_ACTIVITY_TERMINAL_FADE_MS,
           )
         : 0,
-      live,
+      pulseLive,
+      routeIntensity: routeLive
+        ? Math.min(1, Math.max(0, ttlMs - Math.max(0, ageMs)) / MATRIX_ACTIVITY_TERMINAL_FADE_MS)
+        : 0,
+      routeLive,
     };
   }
 
@@ -531,6 +975,33 @@ export function updateMatrixActivityAnimationInPlace(
   // otherwise share a string whose semantic role cannot be both operation and
   // category at once.
   const candidates: LinkCandidate[] = [];
+  // Some providers report an agent delegation as one completed canonical
+  // tool event. Give that one verified dispatch two deterministic decorative
+  // anchors; this does not synthesize another provider event or claim traffic.
+  for (let eventOffset = preparedEvents.length - 1; eventOffset >= 0; eventOffset -= 1) {
+    const prepared = preparedEvents[eventOffset];
+    if (!prepared?.routeLive || !isValidVerifiedAgentDispatch(prepared.event)) continue;
+    let operationAnchorIndex =
+      prepared.event.verifiedAgentDispatch.operationAnchorSeed % particleCount;
+    if (operationAnchorIndex === prepared.anchorIndex) {
+      if (particleCount < 2) continue;
+      operationAnchorIndex = (operationAnchorIndex + 1) % particleCount;
+    }
+    candidates.push({
+      previous: prepared,
+      current: {
+        ...prepared,
+        event: {
+          anchorSeed: prepared.event.verifiedAgentDispatch.operationAnchorSeed,
+          category: prepared.event.category,
+          observedAtMs: prepared.event.observedAtMs,
+          relationHashes: [],
+        },
+        anchorIndex: operationAnchorIndex,
+      },
+      relationHash: prepared.event.verifiedAgentDispatch.relationHash,
+    });
+  }
   for (let eventOffset = preparedEvents.length - 1; eventOffset >= 0; eventOffset -= 1) {
     const prepared = preparedEvents[eventOffset];
     if (!prepared) continue;
@@ -545,7 +1016,7 @@ export function updateMatrixActivityAnimationInPlace(
       }
       state.resolvedRelationHashes.add(relationKey);
       const current = preparedEvents[currentEventOffset];
-      if (!current?.live || current.anchorIndex === prepared.anchorIndex) continue;
+      if (!current?.routeLive || current.anchorIndex === prepared.anchorIndex) continue;
       const correlationDurationMs = current.event.observedAtMs - prepared.event.observedAtMs;
       if (
         !Number.isFinite(correlationDurationMs) ||
@@ -576,9 +1047,9 @@ export function updateMatrixActivityAnimationInPlace(
       Number(!state.pulseIndexByAnchor.has(previous.anchorIndex)) +
       Number(!state.pulseIndexByAnchor.has(current.anchorIndex));
     if (state.pulseCount + missingPulseCount > MAX_MATRIX_ACTIVITY_EVENTS) continue;
-    const previousPulseIndex = ensurePulse(previous, current.intensity, "category", colorHue);
+    const previousPulseIndex = ensurePulse(previous, current.routeIntensity, "category", colorHue);
     if (previousPulseIndex === undefined) continue;
-    const currentPulseIndex = ensurePulse(current, current.intensity, "operation", colorHue);
+    const currentPulseIndex = ensurePulse(current, current.routeIntensity, "operation", colorHue);
     if (currentPulseIndex === undefined) continue;
 
     state.linkPairs.add(pair);
@@ -592,10 +1063,11 @@ export function updateMatrixActivityAnimationInPlace(
     writeLink(state, state.linkCount, {
       fromAnchorIndex: previous.anchorIndex,
       toAnchorIndex: current.anchorIndex,
+      operationAnchorIndex: current.anchorIndex,
       category: current.event.category,
       // The newest exact lifecycle event owns the visual TTL. The older
       // endpoint remains only as bounded correlation evidence.
-      intensity: current.intensity,
+      intensity: current.routeIntensity,
       linePulse: reducedMotion
         ? 1
         : Math.min(1, 0.22 + trianglePulse * 0.28 + indicatorFlash * 0.78),
@@ -612,8 +1084,8 @@ export function updateMatrixActivityAnimationInPlace(
   // overwrite a connected string's fixed category -> operation role.
   for (let eventOffset = preparedEvents.length - 1; eventOffset >= 0; eventOffset -= 1) {
     const prepared = preparedEvents[eventOffset];
-    if (!prepared?.live) continue;
-    ensurePulse(prepared, prepared.intensity, "category", null);
+    if (!prepared?.pulseLive) continue;
+    ensurePulse(prepared, prepared.pulseIntensity, "category", null);
   }
   return state;
 }
@@ -716,6 +1188,80 @@ export function matrixHexRoutePointAt(
   return route.points.at(-1)!;
 }
 
+function normalizeMatrixActivityCycleProgress(requestedProgress: number): number {
+  if (!Number.isFinite(requestedProgress)) return 0;
+  const normalized = requestedProgress % 1;
+  return normalized < 0 ? normalized + 1 : normalized;
+}
+
+/**
+ * Resolve the packet density from the number of routes that can actually be
+ * drawn. The route count is capped independently so corrupted renderer state
+ * cannot bypass the frame budget.
+ */
+export function resolveMatrixActivityPacketCount(requestedLinkCount: number): number {
+  if (!Number.isFinite(requestedLinkCount)) return 0;
+  const linkCount = Math.min(
+    MAX_MATRIX_ACTIVITY_LINKS,
+    Math.max(0, Math.floor(requestedLinkCount)),
+  );
+  if (linkCount === 0) return 0;
+  return Math.min(
+    MATRIX_ACTIVITY_PACKET_COUNT,
+    Math.max(
+      MATRIX_ACTIVITY_MIN_PACKETS_PER_LINK,
+      Math.floor(MAX_MATRIX_ACTIVITY_PACKET_DRAWS / linkCount),
+    ),
+  );
+}
+
+/** Return one deterministic, evenly staggered packet position on a cyclic route. */
+export function resolveMatrixActivityPacketProgress(
+  baseProgress: number,
+  requestedPacketIndex: number,
+  requestedPacketCount: number,
+): number {
+  if (!Number.isFinite(requestedPacketCount)) {
+    return normalizeMatrixActivityCycleProgress(baseProgress);
+  }
+  const packetCount = Math.min(
+    MATRIX_ACTIVITY_PACKET_COUNT,
+    Math.max(1, Math.floor(requestedPacketCount)),
+  );
+  const packetIndex = Number.isFinite(requestedPacketIndex)
+    ? Math.min(packetCount - 1, Math.max(0, Math.floor(requestedPacketIndex)))
+    : 0;
+  return normalizeMatrixActivityCycleProgress(baseProgress + packetIndex / packetCount);
+}
+
+/**
+ * Split a fixed-length cyclic packet trail into one or two bounded route
+ * intervals. Returning the tail-end interval first preserves travel order when
+ * the trail crosses progress zero.
+ */
+export function resolveMatrixActivityTrailIntervals(
+  packetProgress: number,
+  requestedTrailProgress = MATRIX_ACTIVITY_PACKET_TRAIL_PROGRESS,
+): readonly MatrixActivityProgressInterval[] {
+  const endProgress = normalizeMatrixActivityCycleProgress(packetProgress);
+  const trailProgress = Number.isFinite(requestedTrailProgress)
+    ? Math.min(1, Math.max(0, requestedTrailProgress))
+    : MATRIX_ACTIVITY_PACKET_TRAIL_PROGRESS;
+  if (trailProgress === 0) return [];
+  if (endProgress >= trailProgress) {
+    return [{ startProgress: endProgress - trailProgress, endProgress }];
+  }
+
+  const wrappedStartProgress = 1 - (trailProgress - endProgress);
+  if (endProgress === 0) {
+    return [{ startProgress: wrappedStartProgress, endProgress: 1 }];
+  }
+  return [
+    { startProgress: wrappedStartProgress, endProgress: 1 },
+    { startProgress: 0, endProgress },
+  ];
+}
+
 function traceMatrixHexRoute(context: CanvasRenderingContext2D, route: MatrixHexRoute): void {
   const first = route.points[0];
   if (!first) return;
@@ -810,6 +1356,75 @@ function drawMatrixActivityPulse(
   );
 }
 
+/**
+ * `linkColorHue` is retained on a pulse so shared endpoints have stable
+ * paint, but a hue alone is not correlation evidence. Recheck the bounded
+ * link list before putting VERIFIED text on an endpoint.
+ */
+function isVerifiedMatrixActivityOperationEndpoint(
+  state: MatrixActivityAnimationState,
+  pulse: MatrixActivityPulse,
+  renderedLinkCount: number,
+): boolean {
+  if (pulse.semanticRole !== "operation" || pulse.linkColorHue === null) return false;
+  for (let index = 0; index < renderedLinkCount; index += 1) {
+    const link = state.links[index];
+    if (
+      link &&
+      link.category === pulse.category &&
+      link.operationAnchorIndex === pulse.anchorIndex &&
+      link.colorHue === pulse.linkColorHue
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function resolveRenderedMatrixActivityCount(
+  requestedCount: number,
+  availableCount: number,
+  maximumCount: number,
+): number {
+  if (!Number.isFinite(requestedCount) || !Number.isFinite(availableCount)) return 0;
+  return Math.min(
+    maximumCount,
+    Math.max(0, Math.floor(requestedCount)),
+    Math.max(0, Math.floor(availableCount)),
+  );
+}
+
+function drawMatrixActivityTelemetryRing(
+  context: CanvasRenderingContext2D,
+  particle: AtmosphereScene["particles"][number],
+  category: MatrixActivityCategory,
+  paint: string,
+  safeOpacity: number,
+  intensity: number,
+): void {
+  const label = resolveMatrixActivityTelemetryLabel(category, particle.matrixLanguage);
+  const glyphCount = Math.min(MAX_MATRIX_ACTIVITY_TELEMETRY_GLYPHS, label.length);
+  if (glyphCount === 0) return;
+
+  const radius = Math.min(30, Math.max(20, particle.size * 1.65));
+  const glyphAngle = (Math.PI * 2) / glyphCount;
+  context.save();
+  context.translate(particle.x, particle.y);
+  context.fillStyle = paint;
+  context.globalAlpha = safeOpacity * intensity;
+  context.font = "7px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+  context.textAlign = "center";
+  context.textBaseline = "middle";
+  for (let index = 0; index < glyphCount; index += 1) {
+    // The outer restore resets the accumulated turn after the final glyph.
+    // This avoids one save/restore pair per glyph while retaining the same
+    // center-relative transform for every bounded ring.
+    if (index > 0) context.rotate(glyphAngle);
+    context.fillText(label[index]!, 0, -radius);
+  }
+  context.restore();
+}
+
 export function drawMatrixActivityAnimation(
   context: CanvasRenderingContext2D,
   scene: AtmosphereScene,
@@ -818,7 +1433,18 @@ export function drawMatrixActivityAnimation(
   colorMode: FallingEffectActivityLinkColorMode,
   matrixColorFrame: MatrixColorFrame,
 ): void {
-  if (scene.kind !== "matrix" || (state.pulseCount === 0 && state.linkCount === 0)) return;
+  if (scene.kind !== "matrix") return;
+  const renderedLinkCount = resolveRenderedMatrixActivityCount(
+    state.linkCount,
+    state.links.length,
+    MAX_MATRIX_ACTIVITY_LINKS,
+  );
+  const renderedPulseCount = resolveRenderedMatrixActivityCount(
+    state.pulseCount,
+    state.pulses.length,
+    MAX_MATRIX_ACTIVITY_EVENTS,
+  );
+  if (renderedPulseCount === 0 && renderedLinkCount === 0) return;
   const safeOpacity = Math.min(1, Math.max(0, atmosphereOpacity));
   if (safeOpacity === 0) return;
 
@@ -827,7 +1453,8 @@ export function drawMatrixActivityAnimation(
   context.rect(0, 0, scene.width, scene.height);
   context.clip();
   context.lineCap = "round";
-  for (let index = 0; index < state.linkCount; index += 1) {
+  const packetCount = resolveMatrixActivityPacketCount(renderedLinkCount);
+  for (let index = 0; index < renderedLinkCount; index += 1) {
     const link = state.links[index]!;
     const from = scene.particles[link.fromAnchorIndex];
     const to = scene.particles[link.toAnchorIndex];
@@ -857,37 +1484,67 @@ export function drawMatrixActivityAnimation(
     context.stroke();
 
     if (!state.reducedMotion) {
-      const packet = matrixHexRoutePointAt(route, link.packetProgress);
-      const trailProgress = Math.max(0, link.packetProgress - 0.12);
-      context.strokeStyle = linkPaint;
-      context.globalAlpha = safeOpacity * link.intensity;
-      context.lineWidth = 1.25 + link.linePulse;
-      traceMatrixHexRouteInterval(context, route, trailProgress, link.packetProgress);
-      context.stroke();
-      context.fillStyle = linkPaint;
-      context.globalAlpha = safeOpacity * link.intensity;
-      context.beginPath();
-      context.arc(packet.x, packet.y, 1 + link.intensity * 1.4, 0, Math.PI * 2);
-      context.fill();
+      // These repeated packets are decorative replay of one verified link,
+      // never evidence of event multiplicity, throughput, or transfer rate.
+      for (let packetIndex = 0; packetIndex < packetCount; packetIndex += 1) {
+        const packetProgress = resolveMatrixActivityPacketProgress(
+          link.packetProgress,
+          packetIndex,
+          packetCount,
+        );
+        const packet = matrixHexRoutePointAt(route, packetProgress);
+        context.strokeStyle = linkPaint;
+        context.globalAlpha = safeOpacity * link.intensity;
+        context.lineWidth = 1.25 + link.linePulse;
+        for (const interval of resolveMatrixActivityTrailIntervals(packetProgress)) {
+          traceMatrixHexRouteInterval(context, route, interval.startProgress, interval.endProgress);
+          context.stroke();
+        }
+        context.fillStyle = linkPaint;
+        context.globalAlpha = safeOpacity * link.intensity;
+        context.beginPath();
+        context.arc(packet.x, packet.y, 1 + link.intensity * 1.4, 0, Math.PI * 2);
+        context.fill();
+      }
     }
   }
-  for (let index = 0; index < state.pulseCount; index += 1) {
+  let telemetryRingCount = 0;
+  for (let index = 0; index < renderedPulseCount; index += 1) {
     const pulse = state.pulses[index]!;
     const particle = scene.particles[pulse.anchorIndex];
     if (!particle) continue;
+    // Matrix routes may interpolate their two endpoint colors. Keep endpoint
+    // lettering on its own existing glyph paint; random routes already share
+    // that exact hue with both endpoint glyphs and the route.
+    const pulsePaint =
+      colorMode === "matrix"
+        ? resolveMatrixStreamColor(matrixColorFrame, particle)
+        : pulse.linkColorHue === null
+          ? CATEGORY_COLOR[pulse.category]
+          : randomMatrixActivityColor(pulse.linkColorHue);
     drawMatrixActivityPulse(
       context,
       particle,
       pulse.category,
       pulse.semanticRole,
-      colorMode === "matrix"
-        ? resolveMatrixStreamColor(matrixColorFrame, particle)
-        : pulse.linkColorHue === null
-          ? CATEGORY_COLOR[pulse.category]
-          : randomMatrixActivityColor(pulse.linkColorHue),
+      pulsePaint,
       safeOpacity,
       pulse.intensity,
     );
+    if (
+      telemetryRingCount < MAX_MATRIX_ACTIVITY_TELEMETRY_RINGS &&
+      isVerifiedMatrixActivityOperationEndpoint(state, pulse, renderedLinkCount)
+    ) {
+      drawMatrixActivityTelemetryRing(
+        context,
+        particle,
+        pulse.category,
+        pulsePaint,
+        safeOpacity,
+        pulse.intensity,
+      );
+      telemetryRingCount += 1;
+    }
   }
   context.restore();
 }

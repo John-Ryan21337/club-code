@@ -19,11 +19,15 @@ const mocks = vi.hoisted(() => ({
   selectedActivityInputSelections: [] as unknown[],
   selectedVocabularyThreadRefs: [] as unknown[],
   drawnActivityLinkCounts: [] as number[],
+  matrixColorCycleSpeeds: [] as number[],
+  matrixColorTimestamps: [] as number[],
+  drawnMatrixColors: [] as string[],
   settings: {
     fallingEffectsEnabled: true,
     fallingEffectKind: "matrix" as const,
     fallingEffectColor: "auto" as const,
     fallingEffectMatrixColorMode: "rainbow-extra" as const,
+    fallingEffectMatrixColorCycleSpeed: 32,
     fallingEffectOpacity: 0.35,
     fallingEffectSpeed: 1,
     fallingEffectDensity: 1,
@@ -34,7 +38,9 @@ const mocks = vi.hoisted(() => ({
     fallingEffectActivityLinkNetworkEnabled: true as boolean,
     fallingEffectActivityLinkDatabaseEnabled: true as boolean,
     fallingEffectActivityLinkBuildEnabled: true as boolean,
+    fallingEffectActivityLinkAgentEnabled: true as boolean,
     fallingEffectActivityLinkColorMode: "matrix" as const,
+    fallingEffectActivityLinkRetentionSeconds: 30,
     continueBackgroundAnimations: false,
   } satisfies Partial<UnifiedSettings>,
   createAtmosphereScene: vi.fn(() => ({
@@ -88,11 +94,11 @@ vi.mock("../matrixWorkVocabulary", () => ({
 }));
 
 vi.mock("../matrixActivityOverlay", () => ({
-  MATRIX_ACTIVITY_TTL_MS: 2_200,
+  MATRIX_ACTIVITY_TTL_MS: 8_000,
   selectMatrixActivityEventsKey: (
     state: { activityEventsKey: string },
     selectedThreadRef: unknown,
-    inputSelection: { network: boolean; database: boolean; build: boolean },
+    inputSelection: { network: boolean; database: boolean; build: boolean; agent: boolean },
   ) => {
     mocks.selectedActivityThreadRefs.push(selectedThreadRef);
     mocks.selectedActivityInputSelections.push(inputSelection);
@@ -129,13 +135,17 @@ vi.mock("../windowAtmosphere", () => ({
   fitAtmosphereDpr: () => 1,
   advanceAtmosphereSceneInPlace: vi.fn(),
   applyMatrixWorkVocabularyInPlace: mocks.applyMatrixWorkVocabularyInPlace,
-  resolveMatrixAtmosphereColorFrame: () => ({
-    color: "#4ade80",
-    perStream: true,
-    baseHue: 120,
-    saturation: 88,
-    lightness: 62,
-  }),
+  resolveMatrixAtmosphereColorFrame: (...args: unknown[]) => {
+    mocks.matrixColorCycleSpeeds.push(args[6] as number);
+    mocks.matrixColorTimestamps.push(args[3] as number);
+    return {
+      color: `hsl(${String(args[3])})`,
+      perStream: true,
+      baseHue: 120,
+      saturation: 88,
+      lightness: 62,
+    };
+  },
   resolveAtmosphereColor: () => "#4ade80",
   drawAtmosphereScene: mocks.drawAtmosphereScene,
   shouldAnimateAtmosphere: (state: { reducedMotion: boolean }) => !state.reducedMotion,
@@ -161,14 +171,20 @@ beforeEach(() => {
   mocks.activityEventsKey = "activity-1";
   mocks.activityObservedAtMs = Date.now();
   mocks.workVocabularyKey = "";
+  mocks.settings.fallingEffectMatrixColorCycleSpeed = 32;
   mocks.settings.fallingEffectActivityLinks = true;
   mocks.settings.fallingEffectActivityLinkNetworkEnabled = true;
   mocks.settings.fallingEffectActivityLinkDatabaseEnabled = true;
   mocks.settings.fallingEffectActivityLinkBuildEnabled = true;
+  mocks.settings.fallingEffectActivityLinkAgentEnabled = true;
+  mocks.settings.fallingEffectActivityLinkRetentionSeconds = 30;
   mocks.selectedActivityThreadRefs = [];
   mocks.selectedActivityInputSelections = [];
   mocks.selectedVocabularyThreadRefs = [];
   mocks.drawnActivityLinkCounts = [];
+  mocks.matrixColorCycleSpeeds = [];
+  mocks.matrixColorTimestamps = [];
+  mocks.drawnMatrixColors = [];
   mocks.createAtmosphereScene.mockClear();
   mocks.updateMatrixActivityAnimationInPlace.mockReset();
   mocks.updateMatrixActivityAnimationInPlace.mockImplementation(
@@ -176,8 +192,11 @@ beforeEach(() => {
       state: { pulseCount: number; linkCount: number },
       events: readonly { observedAtMs: number }[],
       nowMs: number,
+      _particleCount: number,
+      _reducedMotion: boolean,
+      ttlMs: number,
     ) => {
-      const liveEventCount = events.filter((event) => nowMs - event.observedAtMs < 2_200).length;
+      const liveEventCount = events.filter((event) => nowMs - event.observedAtMs < ttlMs).length;
       state.pulseCount = liveEventCount;
       state.linkCount = liveEventCount >= 2 ? 1 : 0;
       return state;
@@ -188,7 +207,10 @@ beforeEach(() => {
     const state = args[2] as { linkCount: number };
     mocks.drawnActivityLinkCounts.push(state.linkCount);
   });
-  mocks.drawAtmosphereScene.mockClear();
+  mocks.drawAtmosphereScene.mockReset();
+  mocks.drawAtmosphereScene.mockImplementation((...args: unknown[]) => {
+    mocks.drawnMatrixColors.push(args[2] as string);
+  });
   mocks.applyMatrixWorkVocabularyInPlace.mockClear();
   nextFrameId = 1;
   frameCallbacks = new Map();
@@ -260,6 +282,7 @@ describe("WindowAtmosphere", () => {
       network: true,
       database: true,
       build: true,
+      agent: true,
     });
     expect(mocks.selectedVocabularyThreadRefs.at(-1)).toEqual({
       environmentId,
@@ -281,6 +304,39 @@ describe("WindowAtmosphere", () => {
     expect(mocks.createAtmosphereScene).toHaveBeenCalledTimes(1);
   });
 
+  it("forwards color-cycle speed changes without reseeding the Matrix scene", async () => {
+    (reducedMotionQuery as unknown as { matches: boolean }).matches = true;
+    mounted = await render(<WindowAtmosphere selectedThreadRef={TEST_SELECTED_THREAD_REF} />);
+    await expect.poll(() => mocks.matrixColorCycleSpeeds.at(-1)).toBe(32);
+
+    mocks.settings.fallingEffectMatrixColorCycleSpeed = 64;
+    await mounted.rerender(<WindowAtmosphere selectedThreadRef={TEST_SELECTED_THREAD_REF} />);
+
+    expect(mocks.matrixColorCycleSpeeds.at(-1)).toBe(64);
+    expect(mocks.createAtmosphereScene).toHaveBeenCalledTimes(1);
+  });
+
+  it("applies verified-route retention changes without reseeding the Matrix scene", async () => {
+    (reducedMotionQuery as unknown as { matches: boolean }).matches = true;
+    mounted = await render(<WindowAtmosphere selectedThreadRef={TEST_SELECTED_THREAD_REF} />);
+    await expect
+      .poll(() => mocks.updateMatrixActivityAnimationInPlace.mock.calls.at(-1)?.[5])
+      .toBe(30_000);
+
+    mocks.settings.fallingEffectActivityLinkRetentionSeconds = 60;
+    await mounted.rerender(<WindowAtmosphere selectedThreadRef={TEST_SELECTED_THREAD_REF} />);
+
+    expect(mocks.updateMatrixActivityAnimationInPlace).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.any(Array),
+      expect.any(Number),
+      12,
+      true,
+      60_000,
+    );
+    expect(mocks.createAtmosphereScene).toHaveBeenCalledTimes(1);
+  });
+
   it("filters all unchecked activity inputs and repaints without reseeding", async () => {
     (reducedMotionQuery as unknown as { matches: boolean }).matches = true;
     mounted = await render(<WindowAtmosphere selectedThreadRef={TEST_SELECTED_THREAD_REF} />);
@@ -291,12 +347,14 @@ describe("WindowAtmosphere", () => {
     mocks.settings.fallingEffectActivityLinkNetworkEnabled = false;
     mocks.settings.fallingEffectActivityLinkDatabaseEnabled = false;
     mocks.settings.fallingEffectActivityLinkBuildEnabled = false;
+    mocks.settings.fallingEffectActivityLinkAgentEnabled = false;
     await mounted.rerender(<WindowAtmosphere selectedThreadRef={TEST_SELECTED_THREAD_REF} />);
 
     expect(mocks.selectedActivityInputSelections.at(-1)).toEqual({
       network: false,
       database: false,
       build: false,
+      agent: false,
     });
     expect(mocks.updateMatrixActivityAnimationInPlace).toHaveBeenLastCalledWith(
       expect.anything(),
@@ -304,6 +362,7 @@ describe("WindowAtmosphere", () => {
       expect.any(Number),
       12,
       true,
+      30_000,
     );
     expect(mocks.drawAtmosphereScene).toHaveBeenCalledTimes(1);
     expect(mocks.createAtmosphereScene).toHaveBeenCalledTimes(1);
@@ -333,6 +392,7 @@ describe("WindowAtmosphere", () => {
       expect.any(Number),
       12,
       true,
+      30_000,
     );
     expect(mocks.applyMatrixWorkVocabularyInPlace.mock.invocationCallOrder.at(-1)).toBeLessThan(
       mocks.drawAtmosphereScene.mock.invocationCallOrder[0]!,
@@ -394,6 +454,7 @@ describe("WindowAtmosphere", () => {
       10_000,
       12,
       false,
+      30_000,
     );
 
     mocks.activityEventsKey = "activity-2";
@@ -409,6 +470,7 @@ describe("WindowAtmosphere", () => {
       20_000,
       12,
       false,
+      30_000,
     );
     expect(mocks.createAtmosphereScene).toHaveBeenCalledTimes(1);
 
@@ -445,6 +507,7 @@ describe("WindowAtmosphere", () => {
       expect.any(Number),
       12,
       true,
+      30_000,
     );
     expect(mocks.createAtmosphereScene).toHaveBeenCalledTimes(1);
 
@@ -453,6 +516,22 @@ describe("WindowAtmosphere", () => {
     await mounted.rerender(<WindowAtmosphere selectedThreadRef={TEST_SELECTED_THREAD_REF} />);
     expect(mocks.applyMatrixWorkVocabularyInPlace).toHaveBeenCalledTimes(1);
     expect(mocks.drawAtmosphereScene).toHaveBeenCalledTimes(1);
+    expect(mocks.createAtmosphereScene).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the reduced-motion Matrix palette static through unrelated repaints", async () => {
+    (reducedMotionQuery as unknown as { matches: boolean }).matches = true;
+    const performanceNow = vi.spyOn(performance, "now").mockReturnValue(1_000);
+    mounted = await render(<WindowAtmosphere selectedThreadRef={TEST_SELECTED_THREAD_REF} />);
+    await expect.poll(() => mocks.drawnMatrixColors.length).toBeGreaterThan(0);
+    const initialColor = mocks.drawnMatrixColors.at(-1);
+
+    performanceNow.mockReturnValue(2_000);
+    mocks.activityEventsKey = "activity-2";
+    await mounted.rerender(<WindowAtmosphere selectedThreadRef={TEST_SELECTED_THREAD_REF} />);
+
+    expect(mocks.matrixColorTimestamps).toEqual([1_000]);
+    expect(mocks.drawnMatrixColors.at(-1)).toBe(initialColor);
     expect(mocks.createAtmosphereScene).toHaveBeenCalledTimes(1);
   });
 
@@ -481,17 +560,33 @@ describe("WindowAtmosphere", () => {
     mounted = await render(<WindowAtmosphere selectedThreadRef={TEST_SELECTED_THREAD_REF} />);
     expect(mocks.drawnActivityLinkCounts).toEqual([1]);
     expect(setTimeout).toHaveBeenCalledTimes(1);
-    expect(setTimeout.mock.calls[0]?.[1]).toBe(2_201);
+    expect(setTimeout.mock.calls[0]?.[1]).toBe(8_001);
     expect(timerCallbacks.size).toBe(1);
 
-    now.mockReturnValue(102_201);
-    const [timerId, expire] = timerCallbacks.entries().next().value as [WindowTimer, () => void];
-    timerCallbacks.delete(timerId);
-    expire();
+    now.mockReturnValue(108_001);
+    const [pulseTimerId, expirePulse] = timerCallbacks.entries().next().value as [
+      WindowTimer,
+      () => void,
+    ];
+    timerCallbacks.delete(pulseTimerId);
+    expirePulse();
 
-    expect(mocks.drawnActivityLinkCounts).toEqual([1, 0]);
+    expect(mocks.drawnActivityLinkCounts).toEqual([1, 1]);
+    expect(timerCallbacks.size).toBe(1);
+    expect(setTimeout).toHaveBeenCalledTimes(2);
+    expect(setTimeout.mock.calls[1]?.[1]).toBe(22_000);
+
+    now.mockReturnValue(130_001);
+    const [routeTimerId, expireRoute] = timerCallbacks.entries().next().value as [
+      WindowTimer,
+      () => void,
+    ];
+    timerCallbacks.delete(routeTimerId);
+    expireRoute();
+
+    expect(mocks.drawnActivityLinkCounts).toEqual([1, 1, 0]);
     expect(timerCallbacks.size).toBe(0);
-    expect(setTimeout).toHaveBeenCalledTimes(1);
+    expect(setTimeout).toHaveBeenCalledTimes(2);
     expect(mocks.createAtmosphereScene).toHaveBeenCalledTimes(1);
   });
 

@@ -39,6 +39,11 @@ documentation use Club Code.
 
 - Chat and provider truth remain primary. Presentation cannot invent a running,
   completed, stalled, authenticated, or usage state.
+- Follow-up intent never becomes an implicit stop. Native provider steering is
+  used only when the current runtime snapshot and active-turn identity prove it
+  safe; otherwise the per-thread queue waits for a normal turn boundary. A
+  missing, stale, or changing capability snapshot cannot interrupt provider
+  work.
 - Decorative, media, browser, observatory, pacing, and alert features are
   operator-switchable or capability-gated. A fresh-install presentation
   profile may initialize explicit visual settings, but they do not silently add
@@ -53,37 +58,38 @@ documentation use Club Code.
 
 ## Request coverage at a glance
 
-| Requested area                                            | Current status              | Canonical boundary                                                                                                                                |
-| --------------------------------------------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Snow, rain, and Matrix over the whole window              | Implemented                 | Off switch, density, speed, opacity, color, motion and performance bounds                                                                         |
-| Roman/Japanese Matrix mix, coding terms, 2ch and cat AA   | Implemented                 | Reviewed glyph pool; matching English/Japanese live terms; bounded safe activity labels and basenames only                                        |
-| Rainbow and music-reactive Matrix color                   | Landed - validation pending | Uniform and per-string rainbow/music modes reuse direct, VLC, or one explicitly approved display-audio signal                                     |
-| Matrix project-activity pulses and links                  | Landed - validation pending | Network/database/build pulses; links require explicit provider correlation and carry bounded hex-routed packets                                   |
-| Movable local environment-control LLM                     | Implemented                 | Deterministic zero-token grammar first; fixed loopback LM Studio fallback only                                                                    |
-| Query LM Studio models as a chat provider                 | Landed - validation pending | Explicit LM Studio instance template creates a normal Codex OSS provider instance; LM Studio remains external                                     |
-| Persistent image/GIF ambience and 10 MiB limit            | Landed - validation pending | Single image plus bounded directory queue, timed/manual cycling, custom geometry and theater presentation                                         |
-| YouTube video/search/playlists/text queues/skip controls  | Partial                     | Strict session queues include two public examples; the fresh profile activates the Japanese queue and requests embeddable playback                |
-| Spotify connector and visualizer                          | Partial                     | Official Embed plus explicit display-audio visualization; no Spotify library/search/account browser                                               |
-| Cinema layout and video behind/alongside chat             | Partial                     | Club Code Cinema retains project/chat rails; native iframe fullscreen remains player-owned                                                        |
-| Adaptive TV-style media glow                              | Landed - validation pending | YouTube uses bounded artwork; approved direct/VLC video uses bounded live frames; live iframe pixels remain unavailable                           |
-| Broad local formats through installed VLC                 | Landed - validation pending | Bounded picker-owned queues, previous/next, one-child playback, failure skip, and cleanup; no network stream or raw VLC args                      |
-| Hundreds of Winamp-like visualizations                    | Implemented                 | Spectrum plus 395 local Butterchurn/MilkDrop presets                                                                                              |
-| Current local title with filename fallback                | Implemented                 | Current item uses a bounded sanitized filename without extension; rich embedded metadata extraction is not claimed                                |
-| Workflow graph, elapsed/activity, and stall hints         | Landed - validation pending | Existing semantic cards remain; graph edges and “possibly stalled” hints use only provider evidence                                               |
-| Complete sub-agent/provider activity coverage             | Partial                     | Supported projections show reported hierarchy/activity, but providers do not expose every event                                                   |
-| Live read-only file/SQLite panes and bounded diffs        | Landed - validation pending | Visibility-aware polling, capped line changes, and primary-key-proven row changes                                                                 |
-| Per-agent file/DB focus and writer attribution            | Partial                     | Explicit provider-observed file focus exists; coverage is incomplete and DB writer remains unknown                                                |
-| Agent-operable embedded browser                           | Landed - validation pending | Codex/Claude get a bounded supervised DOM tool grant; provider secret/OTP entry remains unavailable                                               |
-| Pixel OCR/image recognition                               | Not implemented             | DOM/accessibility text exists, but there is no screenshot or pixel-recognition worker                                                             |
-| Inbox email-code retrieval                                | Not implemented             | The operator-only transient secret field is not an inbox connector or 2FA automation                                                              |
-| Persistent Auto Nudge                                     | Landed - validation pending | Optional one-thread background ownership is completion-event-only with a hard round cap, durable dedupe, visible history, and stop/pause controls |
-| Usage windows and Model Pacing                            | Partial                     | Reported windows and advisory pacing exist; no autonomous routing or spend scheduling                                                             |
-| Ultra Caching and hierarchical summaries                  | Partial                     | Stable handoffs and earlier compaction exist; no persistent multi-level summary index                                                             |
-| Auditor-as-fixer workflow                                 | Partial                     | Installable cross-project skill exists; Club Code does not automatically enforce or orchestrate it                                                |
-| Tokens-saved meter per model                              | Partial                     | Honest provider cache/compaction counters exist; exact counterfactual savings cannot be measured                                                  |
-| Completion ping, English/Japanese speech and stereo order | Partial                     | Windows exact installed voices support the complete path; no bundled voice pack or full cross-platform parity                                     |
-| Whole-window KDE-like transparency                        | Partial                     | Capability-gated whole-window opacity is validated on Windows; Linux/KDE parity is absent                                                         |
-| Chat file picker defaults to all files and accepts `.txt` | Implemented                 | Text is visibly imported into the prompt; unsupported arbitrary files remain rejected                                                             |
+| Requested area                                            | Current status              | Canonical boundary                                                                                                                        |
+| --------------------------------------------------------- | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| Snow, rain, and Matrix over the whole window              | Implemented                 | Off switch, density, speed, opacity, color, motion and performance bounds                                                                 |
+| Roman/Japanese Matrix mix, coding terms, 2ch and cat AA   | Implemented                 | Reviewed glyph pool; matching English/Japanese live terms; bounded safe activity labels and basenames only                                |
+| Rainbow and music-reactive Matrix color                   | Landed - validation pending | Uniform and per-string rainbow/music modes reuse direct, VLC, or one explicitly approved display-audio signal                             |
+| Matrix project-activity pulses and links                  | Landed - validation pending | Network/database/build pulses; links require explicit provider correlation and carry bounded hex-routed packets                           |
+| Movable local environment-control LLM                     | Implemented                 | Deterministic zero-token grammar first; fixed loopback LM Studio fallback only                                                            |
+| Query LM Studio models as a chat provider                 | Landed - validation pending | Explicit LM Studio instance template creates a normal Codex OSS provider instance; LM Studio remains external                             |
+| Persistent image/GIF ambience and 10 MiB limit            | Landed - validation pending | Single image plus bounded directory queue, timed/manual cycling, custom geometry and theater presentation                                 |
+| YouTube video/search/playlists/text queues/skip controls  | Partial                     | Strict session queues include two public examples; the fresh profile activates the Japanese queue and requests embeddable playback        |
+| Spotify connector and visualizer                          | Partial                     | Official Embed plus explicit display-audio visualization; no Spotify library/search/account browser                                       |
+| Cinema layout and video behind/alongside chat             | Partial                     | Club Code Cinema retains project/chat rails; native iframe fullscreen remains player-owned                                                |
+| Adaptive TV-style media glow                              | Landed - validation pending | YouTube uses bounded artwork; approved direct/VLC video uses bounded live frames; live iframe pixels remain unavailable                   |
+| Broad local formats through installed VLC                 | Landed - validation pending | Bounded picker-owned queues, previous/next, one-child playback, failure skip, and cleanup; no network stream or raw VLC args              |
+| Hundreds of Winamp-like visualizations                    | Implemented                 | Spectrum plus 395 local Butterchurn/MilkDrop presets                                                                                      |
+| Current local title with filename fallback                | Implemented                 | Current item uses a bounded sanitized filename without extension; rich embedded metadata extraction is not claimed                        |
+| Workflow graph, elapsed/activity, and stall hints         | Landed - validation pending | Existing semantic cards remain; graph edges and “possibly stalled” hints use only provider evidence                                       |
+| Complete sub-agent/provider activity coverage             | Partial                     | Supported projections show reported hierarchy/activity, but providers do not expose every event                                           |
+| Live read-only file/SQLite panes and bounded diffs        | Landed - validation pending | Visibility-aware polling, capped line changes, and primary-key-proven row changes                                                         |
+| Per-agent file/DB focus and writer attribution            | Partial                     | Explicit provider-observed file focus exists; coverage is incomplete and DB writer remains unknown                                        |
+| Agent-operable embedded browser                           | Landed - validation pending | Codex/Claude get a bounded supervised DOM tool grant; provider secret/OTP entry remains unavailable                                       |
+| Pixel OCR/image recognition                               | Not implemented             | DOM/accessibility text exists, but there is no screenshot or pixel-recognition worker                                                     |
+| Inbox email-code retrieval                                | Not implemented             | The operator-only transient secret field is not an inbox connector or 2FA automation                                                      |
+| Persistent Auto Nudge                                     | Partial - background gated  | Foreground exact-thread terminal-edge dispatch is live; background ownership fails closed until exact-thread manual FIFO truth is durable |
+| Provider usage, paid/extra usage, and Model Pacing        | Landed - validation pending | Every configured provider remains visible; only provider-reported facts are shown; pacing remains advisory                                |
+| Non-interrupting cross-provider follow-ups                | Landed - validation pending | Native live steer where explicitly supported; otherwise the per-thread queue waits and only an explicit Stop may interrupt                |
+| Ultra Caching and hierarchical summaries                  | Partial                     | Stable handoffs and earlier compaction exist; no persistent multi-level summary index                                                     |
+| Auditor-as-fixer workflow                                 | Partial                     | Installable cross-project skill exists; Club Code does not automatically enforce or orchestrate it                                        |
+| Tokens-saved meter per model                              | Partial                     | Honest provider cache/compaction counters exist; exact counterfactual savings cannot be measured                                          |
+| Completion ping, English/Japanese speech and stereo order | Partial                     | Windows exact installed voices support the complete path; no bundled voice pack or full cross-platform parity                             |
+| Whole-window KDE-like transparency                        | Partial                     | Capability-gated whole-window opacity is validated on Windows; Linux/KDE parity is absent                                                 |
+| Chat file picker defaults to all files and accepts `.txt` | Implemented                 | Text is visibly imported into the prompt; unsupported arbitrary files remain rejected                                                     |
 
 ## Active delivery additions - final composite validation pending
 
@@ -113,28 +119,49 @@ the signal. Signal loss, source replacement, capture stop, staleness, and
 teardown clear the reactive state.
 
 The optional **Provider activity links** layer turns only safe,
-provider-observed network, database, and build/compile categories into brief
-Matrix pulses. The master switch retains three independent checkboxes:
-**Network / web**, **Database / query**, and **Build / compile**. All three
-category inputs default on when absent so older settings retain their behavior;
-clearing all three produces no activity events, pulses, or links. At most 24
-recent category/hash events and eight simultaneous links are retained, and
-visual state expires after roughly 2.2 seconds. A pulse may exist without a
-line. A line exists only when two events have the same category and exact same
-provider-reported item or tool identity. A shared agent, operation label,
+provider-observed network, database, build/compile, and exact agent-delegation
+lifecycles into brief Matrix pulses. The master switch retains four independent
+checkboxes: **Network / web**, **Database / query**, **Build / compile**, and
+**Agent / delegation**. All four category inputs default on when absent so
+older settings retain their behavior; clearing all four produces no activity
+events, pulses, or links. At most 24
+recent category/hash events and 12 simultaneous links are retained, and visual
+state has a persisted **Verified route visibility** control from 8 to 120
+seconds, defaulting to 30 seconds. This duration only keeps an already verified
+exact route and its bounded decorative packet replay visible longer; it never
+creates provider activity, infers event frequency, or claims throughput.
+Unpaired standalone pulses retain their fixed eight-second lifetime. A pulse
+may exist without a line. A line exists only when two events have the same category and exact same
+provider-reported item or tool identity. A shared agent name, operation label,
 dependency label, temporal proximity, or similar wording is not enough.
 
 Connected falling strings use reviewed semantic pairs—NETWORK/FETCH,
-DATABASE/QUERY, BUILD/COMPILE, or fixed Japanese counterparts according to the
+DATABASE/QUERY, BUILD/COMPILE, AGENT/DISPATCH, or fixed Japanese counterparts according to the
 string's existing language assignment—rather than random glyph meaning or raw
 provider identifiers. Routes use horizontal and +/-60-degree hex-grid segments.
-A packet travels over the total polyline length with a short fading trail. Each
-route, packet, and trail shares one deterministic hue in Random mode, while a
+Up to three evenly spaced packets repeatedly travel over each real correlated
+route with short fading trails, making sparse provider events easier to see
+without inventing additional activity or implying throughput. Packet trails
+wrap continuously across the route boundary. The renderer uses three packets
+per route through ten visible links and two at the 11- and 12-link cap, bounding
+decorative packet instances to 30 per frame for Pi-class devices. Each route,
+packet, and trail shares one deterministic hue in Random mode, while a
 glyph shared by multiple routes renders once using its newest attached route's
 hue. Matrix mode follows the selected Matrix palette and interpolates between
 independently cycling endpoint colors. Activity marks use the same configured
 opacity cap as Matrix glyph heads and remain legible until a short terminal
 fade; no activity draw raises its canvas alpha above that cap.
+The operation endpoint of up to six verified correlated routes also carries
+bounded circular lettering such as `FETCH • VERIFIED •`. The ring text uses
+only the reviewed operation vocabulary, the linked endpoint's existing glyph
+paint (the shared route hue in random mode and its Matrix stream color in
+Matrix mode), and glyph-head opacity;
+standalone pulses do not receive a telemetry ring. `VERIFIED` means only that
+the two safe lifecycle events share the exact provider-reported relation
+identity. It does not claim that Club Code measured network throughput. A real
+bytes-per-second label requires provider-observed byte counts and a trustworthy
+measurement interval through a separately reviewed contract; animation cadence
+is never presented as a transfer rate.
 Reduced-motion removes packet
 travel, rapid flashes, and continuously repainted fading while retaining the
 same static route until its bounded expiry. Full-screen opacity, event/link
@@ -261,25 +288,65 @@ restart, or shutdown. Completion rechecks tab/origin identity before returning
 a result. OpenCode remains unavailable until it has an equally safe ephemeral
 per-session injection path.
 
+### Non-interrupting provider steering
+
+A follow-up submitted while a provider turn is running is accepted as
+thread-scoped intent. When the current provider snapshot explicitly advertises
+live steering and the renderer can bind the request to the concrete active
+turn, Club Code uses the provider's native steering path. Every supported model
+on the Claude adapter, including Opus, Sonnet, and Fable, receives that input
+through its long-lived streaming prompt queue; Codex uses its expected-turn
+steering command.
+
+If live steering is unsupported, temporarily unavailable, missing from a
+snapshot, stale, or no longer bound to the projected active turn, the follow-up
+stays in the renderer's per-thread queue. Its action remains visibly waiting
+and disabled while the turn runs, then the normal queue controller sends it
+after a provider-confirmed safe boundary. Capability refresh, navigation,
+provider choice, and model choice cannot convert that intent into a stop.
+OpenCode and any future configured provider follow the same fail-closed rule
+until their adapter explicitly proves native live steering support.
+
+Only the operator's explicit Stop control may dispatch
+`thread.turn.interrupt`. Queue activation, steering fallback, Auto Nudge,
+provider-status churn, renderer reconnect, and model pacing never invoke Stop
+on the operator's behalf. Tests cover supported native steering,
+unsupported/missing and changing capability waiting, an accessible inert
+waiting control, cross-driver capability snapshots, and Claude's zero-interrupt
+streaming-input path.
+
 ### Bounded background Auto Nudge
 
-Ordinary Auto Nudge remains a foreground once-per-terminal-turn feature. A
-separate default-off option may give exactly one explicitly chosen thread an
-app-level background continuation owner, so leaving chat for Settings does not
-unmount its controller. The exact operator-approved prompt is dispatched
-immediately only when a new provider-confirmed response completes.
+Ordinary Auto Nudge is a foreground once-per-new-terminal-edge feature. Its
+two modes use the plan-driven continuation prompts defined in
+`apps/web/src/autoNudger.ts`; the prompt text is not currently editable per
+thread. Enabling the feature, mounting, reloading, or navigating to an already
+completed thread only baselines that terminal identity. A later changed exact
+provider terminal identity creates the one-shot authority and dispatches only
+after the complete safety gate is rechecked. No timer or wall-clock transition
+can create authority.
+
+A separate default-off option can persist one explicitly chosen thread as the
+background-continuation owner. In this PR7 lineage, however, root background
+dispatch is intentionally paused before observation or transport because the
+root shell does not yet own durable exact-thread manual follow-up FIFO truth.
+This prevents automation from overtaking queued operator input after
+navigation. The controls and bounded state remain visible, but foreground Auto
+Nudge is the only dispatching path at this head.
 
 One background run defaults to five automated rounds and is configurable only
-within a hard limit of 1–20 rounds. The control exposes pause, resume, stop,
-ownership transfer, restart, and a bounded 40-entry ledger. Every dispatch is an ordinary visible
+within hard limits of 1–20 rounds. The
+control exposes pause, resume, stop, ownership transfer, restart, and a bounded
+40-entry ledger. Every dispatch is an ordinary visible
 `thread.turn.start` user message; sent entries retain only its normal message
 ID and terminal-turn key.
 
-The terminal turn is consumed before transport, and the durable sent ledger
+When background dispatch is enabled by a lineage with exact-thread FIFO truth,
+the terminal turn is consumed before transport, and the durable sent ledger
 prevents reload or full-app restart duplication. A persisted expected-message
 timestamp spans the transport/projection gap; if that exact user row does not
 appear within 60 seconds, the controller pauses for operator recovery. Manual
-composer/send/steer activity, offscreen drafts, renderer queues, approvals or
+composer/send/steer activity, offscreen drafts, exact-thread queues, approvals or
 user input, provider/transport trouble, missing or archived ownership,
 settings disable/stop, and either hard cap win over automation. Every supported
 background dispatch first acquires an exclusive `navigator.locks` gate and
@@ -311,11 +378,12 @@ capability. An existing explicit desktop setting remains untouched.
 The first-run Client Settings profile contains these explicit presentation
 values:
 
-- Matrix is enabled in regular uniform `rainbow` mode at `0.55` opacity, speed
-  `4`, density `2.5`, and Japanese ratio `0.45`. Rainbow Extra remains
-  selectable but is not the first-run mode. 2ch enrichment, bounded live-work
-  vocabulary, all three activity-link category inputs, activity links, and
-  Matrix-colored link routes are enabled.
+- Matrix is enabled in regular uniform `rainbow` mode at `0.55` opacity, falling
+  speed `4`, color-cycle speed `1` (the original 18-second cycle), density
+  `2.5`, and Japanese ratio `0.45`. Rainbow Extra remains selectable but is not
+  the first-run mode. 2ch enrichment, bounded live-work vocabulary, all four
+  activity-link category inputs, activity links, and Matrix-colored link routes
+  are enabled.
 - The ambient-video surface is enabled with a null source, custom layout with
   bottom-right/large as its preset fallback, floating presentation, and
   adaptive auto glow at `0.65`. The bundled Japanese URL example becomes the
@@ -324,8 +392,9 @@ values:
   availability may still prevent playback.
 - The bundled ambience GIF is seeded into the managed ambient store and starts
   bottom-left/large/floating with auto glow at `0.35`.
-- Workflow Observatory, the provider usage widget at a two-minute poll, and
-  advisory Model Pacing with a 5% reserve are enabled.
+- Workflow Observatory is enabled. Provider Usage and advisory Model Pacing
+  remain off until the operator enables them; their prepared values are a
+  two-minute poll and a 5% reserve.
 
 These settings remain independently editable and can be disabled. Default-on
 live-work terms and activity links still use only the bounded and sanitized
@@ -336,10 +405,17 @@ SQL, URLs, secrets, raw paths, or unreported activity.
 
 Snow, rain, and Matrix effects cover the Club Code viewport without receiving
 pointer input. Controls include off/on, effect kind, fixed color, opacity,
-speed, density, and a 0-100% Roman-to-Japanese Matrix stream mix. The same ratio
-selects English or Japanese switchable live terms. The Matrix pool contains
-reviewed coding-flavored kana and kanji. Optional 2ch-inspired glyphs and intact
-cat AA apply only to Japanese streams. Their conservative
+falling speed, density, and a 0-100% Roman-to-Japanese Matrix stream mix. Matrix
+also has an independent persisted `0.25`-`64` color-cycle multiplier: `1`
+preserves the original 18-second rainbow while the highest values provide a
+rapid shimmer without increasing particles or per-frame draw work. The
+multiplier drives Rainbow and Rainbow Extra hue motion and the continuous hue
+drift of music-reactive modes; beat impulses retain their signal-defined size.
+Matrix-colored activity links, packets, endpoints, and telemetry lettering use
+the same resolved color frame. The same language ratio selects English or
+Japanese switchable live terms. The Matrix pool contains reviewed
+coding-flavored kana and kanji. Optional 2ch-inspired glyphs and intact cat AA
+apply only to Japanese streams. Their conservative
 compatibility/recovery default is off; the explicit fresh-install profile
 enables them, and the operator can disable them independently.
 
@@ -554,27 +630,71 @@ still denied.
 
 ### Auto Nudge, usage, pacing, and efficiency
 
-Auto Nudge is a durable per-device preference. Exactly once per newly completed
-provider-confirmed terminal turn, it may immediately send the selected
-operator-approved Steady Progress or Hardcore Fanout prompt. No timer,
-countdown, elapsed-time cap, or wall-clock transition can authorize a prompt.
-Dispatch is foreground-only for the visible chat unless the operator separately
-enables bounded background continuation and explicitly assigns its single owner.
+Auto Nudge is a durable per-thread preference. Once per newly observed,
+provider-confirmed terminal identity, it may immediately send the selected
+predefined plan-driven Steady Progress or Hardcore Fanout continuation prompt
+after rechecking the complete safety gate. The prompt is not currently editable
+per thread. Dispatch is foreground-only for the visible chat at this head.
+Navigation invalidates any armed identity; returning baselines the existing
+completion and waits for a newer terminal identity.
 
-With background continuation, the app-level controller survives chat/settings
+The app-level background controller can persist ownership across chat/settings
 navigation and reload, defaults to five rounds, and cannot exceed 20 rounds.
-Its normal-history messages, dedupe, fail-closed projection acknowledgement,
-exclusive cross-tab Web Lock, pause/resume/stop/transfer controls,
-durable 40-entry ledger, and stop conditions are defined above. Unsupported or
-denied locking makes background continuation unavailable. Auto Nudge is not an
-immortal background agent, an all-chat scheduler, or unbounded fan-out.
+At this PR7 head it deliberately pauses before dispatch
+because durable manual FIFO truth is unavailable to the root coordinator.
+Unsupported/denied locking and missing FIFO truth both fail closed. Auto Nudge
+is not an immortal background agent, an all-chat scheduler, or unbounded
+fan-out.
 
-The optional top-left/sidebar Usage widget polls provider-reported Codex and
-Claude windows at the configured one-to-five-minute cadence. It shows a meter,
-remaining allowance, and reset timing only when the provider exposes them.
-Model Pacing compares reported allowance, reset time, and an operator reserve.
-It is advisory and does not silently switch models, schedule agents, or spend
-quota.
+The optional top-left/sidebar Usage widget retains a conservative schema
+default of Off, but a genuinely new Club Code profile enables it and Model
+Pacing in the branded first-run profile. It lists every configured provider
+instance, including disabled, unavailable, unauthenticated, unsupported, and
+no-data states. While Club Code is visible it polls only authenticated instances
+that explicitly declare account-usage support, at the configured
+one-to-five-minute cadence. The server enforces a per-instance cooldown, so
+staggered windows or tabs cannot multiply provider subprocesses; repeated
+manual refreshes inside that cooldown reuse the last result. A failed or
+malformed refresh retains the last known-good provider snapshot. Plan windows
+and paid facts carry their own observation time, so a fresh live rate event
+cannot re-date an older weekly window or paid balance. Old values remain
+visible only with a stale label.
+
+Codex usage uses the supported account-usage path and may include plan windows,
+an exact provider-formatted paid-credit balance, spend used/limit,
+provider-reported remaining percentage, and reset time. Amount strings are
+opaque: Club Code does not prepend a currency, convert units, or infer that an
+unlabelled number is dollars.
+
+Claude plan and extra-usage polling is experimental and is offered only for
+the documented `pro`, `max`, `team`, and `enterprise` subscription auth types
+on Claude Code 2.1.216 or newer. API-key, Bedrock, Vertex, older CLI, unknown
+identity, and unsupported sessions are not refreshable. Each poll creates a
+separate bounded, no-prompt Agent SDK query, waits only for initialization and
+the structured usage control response, strictly reduces it to plan windows and
+extra-usage facts, binds those facts to the already checked account identity,
+and tears it down. It never reuses, steers, pauses, resumes, or interrupts an
+active chat Query. The upstream control internally scans local Claude
+transcripts to calculate behavior attribution; enabling Provider Usage is
+therefore explicit consent to that provider-side scan. Club Code discards the
+behavior result and retains no transcript-derived detail. Claude may report extra usage used,
+monthly limit, utilization, and an explicit currency; it does not report a
+separate current paid balance, so the widget says that the balance is not
+reported instead of deriving one. Session cost estimates, transcript behavior,
+skills, account identity, and raw control payloads are discarded. Account
+switches, unknown identity, and unsupported SDK/CLI pairs fail closed and leave
+no usage attached to the wrong account.
+
+Providers such as OpenCode that expose no account-usage source remain visible
+with an explicit unsupported state. Platform availability follows the selected
+provider runtime; the renderer does not claim Codex or Claude usage support on
+an OS/architecture where that provider is unavailable.
+
+Model Pacing compares trustworthy, non-stale reported plan allowance, reset
+time, and an operator reserve. Paid balances and extra-usage limits are
+informational and do not grant authority to spend. Pacing is advisory and does
+not silently switch models, schedule agents, interrupt in-progress work, or
+spend quota.
 
 The efficiency display reports available cache-read, cache-write, and observed
 compaction data by driver/model. It is not an additive billing estimate. An
@@ -772,6 +892,10 @@ complete:
   thumbnail is a live frame or overlay its UI inside foreign fullscreen.
 - Exact counterfactual tokens or dollars saved cannot be claimed without a
   provider-issued measurement source.
+- Claude subscription usage is exposed by an explicitly experimental Agent SDK
+  control method. A Cafe Code product PR must retain the experimental/fail-closed
+  boundary and complete Anthropic authentication/product-policy review before
+  enabling claude.ai subscription polling for third-party users.
 - Email-code support, if ever added, is an explicit connector with least
   privilege and user approval. It is not autonomous login or authentication
   bypass.
@@ -791,14 +915,17 @@ Direct local-media queues/object URLs, VLC playback sessions, YouTube URL
 queues, display-capture streams, live audio levels, embedded-browser snapshots,
 sensitive browser fields, provider-browser grants, and local control sentences
 are session/process-only unless the operator explicitly transfers safe text
-into another surface. Auto Nudge policy is Client Settings; its single owner,
-bounded run state, and 40-entry ledger are bounded per-device browser storage.
+into another surface. Auto Nudge's exact-thread policies, single owner, bounded
+run state, and 40-entry ledger are bounded per-device browser storage. Legacy
+Client Settings fields are migration input only, not the active policy.
 
 OAuth tokens, raw local paths, VLC session tokens, browser secrets, captured
 audio, browser-tool bearers/headers/typed values, prompt text, and file contents
 are excluded from ordinary settings, the durable provider command ledger, and
-telemetry. Provider-backed usage aggregates by driver/model rather than
-configured account identity.
+telemetry. Provider usage snapshots exclude credentials, account IDs, raw
+provider payloads, Claude session-cost estimates, and transcript-derived
+behavior. Usage is displayed per configured instance without exposing its
+provider account identity.
 
 ## Release acceptance
 
