@@ -74,14 +74,20 @@ export default Effect.gen(function* () {
       shared_project_id TEXT NOT NULL,
       target_message_id TEXT NOT NULL,
       command_id TEXT NOT NULL,
-      input_sha256 TEXT NOT NULL CHECK(length(input_sha256) = 64),
+      input_sha256 TEXT NOT NULL CHECK(
+        length(input_sha256) = 64 AND input_sha256 = lower(input_sha256) AND
+        input_sha256 NOT GLOB '*[^0-9a-f]*'
+      ),
       actor_user_id TEXT NOT NULL,
       actor_device_id TEXT NOT NULL,
       membership_epoch INTEGER NOT NULL CHECK(
         membership_epoch >= 0 AND membership_epoch <= 2147483647
       ),
       reason TEXT NOT NULL,
-      tombstone_sha256 TEXT NOT NULL CHECK(length(tombstone_sha256) = 64),
+      tombstone_sha256 TEXT NOT NULL CHECK(
+        length(tombstone_sha256) = 64 AND tombstone_sha256 = lower(tombstone_sha256) AND
+        tombstone_sha256 NOT GLOB '*[^0-9a-f]*'
+      ),
       created_at TEXT NOT NULL,
       PRIMARY KEY(shared_project_id, target_message_id),
       UNIQUE(shared_project_id, command_id),
@@ -97,7 +103,10 @@ export default Effect.gen(function* () {
         ON DELETE CASCADE,
       packet_id TEXT NOT NULL,
       command_id TEXT NOT NULL,
-      input_sha256 TEXT NOT NULL CHECK(length(input_sha256) = 64),
+      input_sha256 TEXT NOT NULL CHECK(
+        length(input_sha256) = 64 AND input_sha256 = lower(input_sha256) AND
+        input_sha256 NOT GLOB '*[^0-9a-f]*'
+      ),
       base_packet_id TEXT,
       sources_json TEXT NOT NULL,
       excluded_sources_json TEXT NOT NULL,
@@ -107,7 +116,10 @@ export default Effect.gen(function* () {
       through_sequence INTEGER NOT NULL CHECK(
         through_sequence >= 0 AND through_sequence <= 9007199254740991
       ),
-      packet_sha256 TEXT NOT NULL CHECK(length(packet_sha256) = 64),
+      packet_sha256 TEXT NOT NULL CHECK(
+        length(packet_sha256) = 64 AND packet_sha256 = lower(packet_sha256) AND
+        packet_sha256 NOT GLOB '*[^0-9a-f]*'
+      ),
       created_by_user_id TEXT NOT NULL,
       created_by_device_id TEXT NOT NULL,
       membership_epoch INTEGER NOT NULL CHECK(

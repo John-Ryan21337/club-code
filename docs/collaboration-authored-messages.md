@@ -40,11 +40,14 @@ Messages marked `excluded-sensitive`, tombstoned messages, and messages already 
 packet are recorded as exclusions. A delta packet rechecks the base packet's sources so a message
 tombstoned after the base packet was created is explicitly revoked and cannot silently re-enter via
 base reuse. Consumers must apply the newest packet's exclusion list to the entire resolved base
-chain before attaching context.
+chain before attaching context. Exact replay of an older packet command also fails once one of its
+sources is tombstoned; idempotency cannot be used to resurrect a revoked source.
 
 Read pages, source counts, message characters/UTF-8 bytes, context budgets, and packet source counts
-are all bounded. SQLite writer reservations serialize concurrent project appends across processes,
-and stored body, message-chain, tombstone, and packet hashes fail closed on corruption.
+are all bounded. Token admission uses UTF-8 byte length as a conservative upper bound instead of an
+optimistic bytes-per-token heuristic. SQLite writer reservations serialize concurrent project
+appends across processes, page reads recheck current membership before returning, and stored body,
+input-receipt, message-chain, tombstone, and packet hashes fail closed on corruption.
 
 ## Deferred integration
 

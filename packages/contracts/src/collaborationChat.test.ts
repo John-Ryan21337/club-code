@@ -3,13 +3,16 @@ import * as Schema from "effect/Schema";
 
 import {
   COLLABORATION_AUTHORED_MESSAGE_MAX_CHARS,
+  COLLABORATION_CONTEXT_EXCLUDED_SOURCE_MAX_COUNT,
   COLLABORATION_CONTEXT_SOURCE_MAX_COUNT,
   CollaborationAppendAuthoredMessageRequest,
+  CollaborationContextPacket,
   CollaborationCreateContextPacketRequest,
 } from "./collaborationChat.ts";
 
 const decodeAppend = Schema.decodeUnknownSync(CollaborationAppendAuthoredMessageRequest);
 const decodePacket = Schema.decodeUnknownSync(CollaborationCreateContextPacketRequest);
+const decodeContextPacket = Schema.decodeUnknownSync(CollaborationContextPacket);
 
 describe("collaboration authored-message contracts", () => {
   it("accepts only explicit shared operator chat or authored prompts", () => {
@@ -81,6 +84,38 @@ describe("collaboration authored-message contracts", () => {
           ),
           sourceKinds: base.sourceKinds,
         },
+      }),
+    ).toThrow();
+  });
+
+  it("bounds combined delta exclusions without rejecting a full base revocation overlay", () => {
+    const packet = {
+      sharedProjectId: "project-1",
+      packetId: "packet-1",
+      basePacketId: "packet-base",
+      sources: [],
+      excludedSources: Array.from(
+        { length: COLLABORATION_CONTEXT_EXCLUDED_SOURCE_MAX_COUNT },
+        (_, index) => ({ messageId: `message-${index}`, reason: "tombstoned" as const }),
+      ),
+      tokenBudget: 1,
+      estimatedTokens: 0,
+      encodedBytes: 0,
+      throughSequence: 0,
+      packetSha256: "a".repeat(64),
+      createdByUserId: "user-1",
+      createdByDeviceId: "device-1",
+      membershipEpoch: 1,
+      createdAt: "2026-08-01T12:00:00.000Z",
+    };
+    expect(() => decodeContextPacket(packet)).not.toThrow();
+    expect(() =>
+      decodeContextPacket({
+        ...packet,
+        excludedSources: [
+          ...packet.excludedSources,
+          { messageId: "message-overflow", reason: "tombstoned" },
+        ],
       }),
     ).toThrow();
   });

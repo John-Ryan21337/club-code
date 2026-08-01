@@ -33,6 +33,7 @@ const NOW = Date.parse("2026-08-01T12:00:00.000Z");
 const projectId = Schema.decodeUnknownSync(SharedProjectId)("project-authored-messages");
 const decodePrincipal = Schema.decodeUnknownSync(CollaborationPrincipal);
 const decodeMembership = Schema.decodeUnknownSync(CollaborationProjectMembershipSnapshot);
+const encodeMembership = Schema.encodeUnknownSync(CollaborationProjectMembershipSnapshot);
 const decodeAppend = Schema.decodeUnknownSync(CollaborationAppendAuthoredMessageRequest);
 const encodeAppend = Schema.encodeUnknownSync(CollaborationAppendAuthoredMessageRequest);
 const decodeTombstone = Schema.decodeUnknownSync(CollaborationTombstoneAuthoredMessageRequest);
@@ -253,20 +254,21 @@ describe("CollaborationAuthoredMessageStore", () => {
       });
       yield* store.append({ principal: secondPrincipal, command: appendCommand(32) });
 
+      const firstPacketCommand = decodePacket({
+        commandId: "packet-command-1",
+        sharedProjectId: projectId,
+        packetId: "packet-1",
+        basePacketId: null,
+        selection: {
+          messageIds: ["message-30", "message-31"],
+          sourceKinds: ["operator-chat", "authored-prompt"],
+        },
+        tokenBudget: 100,
+        encodedByteBudget: 1_000,
+      });
       const firstPacket = yield* store.createContextPacket({
         principal: firstPrincipal,
-        command: decodePacket({
-          commandId: "packet-command-1",
-          sharedProjectId: projectId,
-          packetId: "packet-1",
-          basePacketId: null,
-          selection: {
-            messageIds: ["message-30", "message-31"],
-            sourceKinds: ["operator-chat", "authored-prompt"],
-          },
-          tokenBudget: 100,
-          encodedByteBudget: 1_000,
-        }),
+        command: firstPacketCommand,
       });
       assert.deepEqual(
         firstPacket.sources.map((source) => source.messageId),
@@ -291,6 +293,11 @@ describe("CollaborationAuthoredMessageStore", () => {
           reason: "remove this source from reusable context",
         }),
       });
+
+      const revokedRetry = yield* store
+        .createContextPacket({ principal: firstPrincipal, command: firstPacketCommand })
+        .pipe(Effect.flip);
+      expectFailure(revokedRetry, "context-source-revoked");
 
       const delta = yield* store.createContextPacket({
         principal: firstPrincipal,
@@ -320,6 +327,70 @@ describe("CollaborationAuthoredMessageStore", () => {
       );
     }).pipe(Effect.provide(memoryLayer)),
   );
+
+  it.effect("uses a conservative token bound for adversarial one-byte token candidates", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW);
+      yield* runMigrations();
+      yield* seedProject;
+      const store = yield* CollaborationAuthoredMessageStore;
+      const command = decodeAppend({
+        ...encodeAppend(appendCommand(35)),
+        body: "!@#$%^&*()_+{}[]",
+      });
+      yield* store.append({ principal: firstPrincipal, command });
+      const failure = yield* store
+        .createContextPacket({
+          principal: firstPrincipal,
+          command: decodePacket({
+            commandId: "packet-command-budget",
+            sharedProjectId: projectId,
+            packetId: "packet-budget",
+            basePacketId: null,
+            selection: { messageIds: ["message-35"], sourceKinds: ["operator-chat"] },
+            tokenBudget: 4,
+            encodedByteBudget: 1_000,
+          }),
+        })
+        .pipe(Effect.flip);
+      expectFailure(failure, "context-budget-exceeded");
+    }).pipe(Effect.provide(memoryLayer)),
+  );
+
+  it.effect("rechecks membership authority before returning a message page", () => {
+    let authorizationReads = 0;
+    const revokedMembership = decodeMembership({
+      ...encodeMembership(membership),
+      epoch: 2,
+      updatedAt: "2026-08-01T12:00:00.000Z",
+    });
+    const changingMembershipLayer = Layer.succeed(CollaborationMembershipAuthority, {
+      getCurrent: () =>
+        Effect.sync(() => (authorizationReads++ === 0 ? membership : revokedMembership)),
+    });
+    const layer = Layer.merge(
+      CollaborationAuthoredMessageStoreLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
+      changingMembershipLayer,
+    );
+    return Effect.gen(function* () {
+      yield* TestClock.setTime(NOW);
+      yield* runMigrations();
+      yield* seedProject;
+      const store = yield* CollaborationAuthoredMessageStore;
+      const failure = yield* store
+        .page({
+          principal: firstPrincipal,
+          request: decodePage({
+            sharedProjectId: projectId,
+            afterSequence: 0,
+            kinds: ["operator-chat"],
+          }),
+        })
+        .pipe(Effect.flip);
+      expectFailure(failure, "access-denied");
+      assert.equal(authorizationReads, 2);
+    }).pipe(Effect.provide(layer));
+  });
 
   it.effect("serializes concurrent appends across two file-backed SQLite clients", () =>
     Effect.acquireUseRelease(
@@ -402,5 +473,80 @@ describe("CollaborationAuthoredMessageStore", () => {
       },
       (directory) => Effect.promise(() => rm(directory, { recursive: true, force: true })),
     ),
+  );
+
+  it.effect("binds persisted message, tombstone, and packet receipts into integrity hashes", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW);
+      yield* runMigrations();
+      yield* seedProject;
+      const store = yield* CollaborationAuthoredMessageStore;
+      yield* store.append({ principal: firstPrincipal, command: appendCommand(51) });
+      yield* store.append({ principal: firstPrincipal, command: appendCommand(52) });
+      yield* store.append({ principal: firstPrincipal, command: appendCommand(53) });
+      const packetCommand = decodePacket({
+        commandId: "packet-command-integrity",
+        sharedProjectId: projectId,
+        packetId: "packet-integrity",
+        basePacketId: null,
+        selection: { messageIds: ["message-51"], sourceKinds: ["operator-chat"] },
+        tokenBudget: 100,
+        encodedByteBudget: 1_000,
+      });
+      yield* store.createContextPacket({ principal: firstPrincipal, command: packetCommand });
+      yield* store.tombstone({
+        principal: firstPrincipal,
+        command: decodeTombstone({
+          commandId: "tombstone-integrity",
+          sharedProjectId: projectId,
+          targetMessageId: "message-52",
+          targetKind: "operator-chat",
+          reason: "integrity coverage",
+        }),
+      });
+      const sql = yield* SqlClient.SqlClient;
+      const corruptHash = "0".repeat(64);
+
+      yield* sql`
+        UPDATE collaboration_context_packets SET input_sha256 = ${corruptHash}
+        WHERE shared_project_id = ${projectId} AND packet_id = ${"packet-integrity"}
+      `;
+      const packetFailure = yield* store
+        .createContextPacket({ principal: firstPrincipal, command: packetCommand })
+        .pipe(Effect.flip);
+      expectFailure(packetFailure, "integrity-failure");
+
+      yield* sql`
+        UPDATE collaboration_authored_message_tombstones SET input_sha256 = ${corruptHash}
+        WHERE shared_project_id = ${projectId} AND target_message_id = ${"message-52"}
+      `;
+      const tombstoneFailure = yield* store
+        .page({
+          principal: firstPrincipal,
+          request: decodePage({
+            sharedProjectId: projectId,
+            afterSequence: 1,
+            kinds: ["operator-chat"],
+          }),
+        })
+        .pipe(Effect.flip);
+      expectFailure(tombstoneFailure, "integrity-failure");
+
+      yield* sql`
+        UPDATE collaboration_authored_messages SET input_sha256 = ${corruptHash}
+        WHERE shared_project_id = ${projectId} AND message_id = ${"message-53"}
+      `;
+      const messageFailure = yield* store
+        .page({
+          principal: firstPrincipal,
+          request: decodePage({
+            sharedProjectId: projectId,
+            afterSequence: 2,
+            kinds: ["operator-chat"],
+          }),
+        })
+        .pipe(Effect.flip);
+      expectFailure(messageFailure, "integrity-failure");
+    }).pipe(Effect.provide(memoryLayer)),
   );
 });

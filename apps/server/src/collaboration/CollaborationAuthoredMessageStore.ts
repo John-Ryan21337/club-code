@@ -64,6 +64,7 @@ export type CollaborationAuthoredMessageStoreFailureReason =
   | "access-denied"
   | "not-found"
   | "idempotency-conflict"
+  | "context-source-revoked"
   | "context-budget-exceeded"
   | "integrity-failure"
   | "storage-unavailable";
@@ -134,6 +135,7 @@ interface MessageRow {
   readonly occurredAt: string;
   readonly receivedAt: string;
   readonly tombstoneCommandId: string | null;
+  readonly tombstoneInputSha256: string | null;
   readonly tombstoneActorUserId: string | null;
   readonly tombstoneActorDeviceId: string | null;
   readonly tombstoneMembershipEpoch: number | null;
@@ -180,6 +182,7 @@ const messageColumns = `
   m.occurred_at AS "occurredAt",
   m.received_at AS "receivedAt",
   t.command_id AS "tombstoneCommandId",
+  t.input_sha256 AS "tombstoneInputSha256",
   t.actor_user_id AS "tombstoneActorUserId",
   t.actor_device_id AS "tombstoneActorDeviceId",
   t.membership_epoch AS "tombstoneMembershipEpoch",
@@ -263,6 +266,8 @@ function messageHashInput(row: Omit<MessageRow, "messageSha256">) {
     row.projectSequence,
     row.operatorSequence,
     row.messageId,
+    row.commandId,
+    row.inputSha256,
     row.kind,
     row.bodySha256,
     row.contextInclusion,
@@ -280,6 +285,7 @@ function tombstoneHashInput(row: MessageRow) {
     row.sharedProjectId,
     row.messageId,
     row.tombstoneCommandId,
+    row.tombstoneInputSha256,
     row.tombstoneActorUserId,
     row.tombstoneActorDeviceId,
     row.tombstoneMembershipEpoch,
@@ -307,6 +313,7 @@ function verifyMessageRow(
         hasTombstone !==
         [
           row.tombstoneActorUserId,
+          row.tombstoneInputSha256,
           row.tombstoneActorDeviceId,
           row.tombstoneMembershipEpoch,
           row.tombstoneReason,
@@ -375,6 +382,8 @@ function verifyPacketRow(
       const hashInput = JSON.stringify([
         row.sharedProjectId,
         row.packetId,
+        row.commandId,
+        row.inputSha256,
         row.basePacketId,
         sources,
         excludedSources,
@@ -570,6 +579,7 @@ const makeStore = Effect.gen(function* () {
             occurredAt: DateTime.formatIso(command.occurredAt),
             receivedAt,
             tombstoneCommandId: null,
+            tombstoneInputSha256: null,
             tombstoneActorUserId: null,
             tombstoneActorDeviceId: null,
             tombstoneMembershipEpoch: null,
@@ -676,6 +686,7 @@ const makeStore = Effect.gen(function* () {
             command.sharedProjectId,
             command.targetMessageId,
             command.commandId,
+            inputSha256,
             grant.principal.userId,
             grant.principal.deviceId,
             grant.principal.membershipEpoch,
@@ -772,6 +783,9 @@ const makeStore = Effect.gen(function* () {
         nextCursor: messages.at(-1)?.projectSequence ?? request.afterSequence,
         hasMore: rows.length > messages.length,
       };
+      for (const kind of request.kinds) {
+        yield* authorize(input?.principal, request.sharedProjectId, kind, "read", operation);
+      }
       return yield* Effect.try({
         try: () =>
           decodePage(encodePage(result, { onExcessProperty: "error" }), {
@@ -818,6 +832,7 @@ const makeStore = Effect.gen(function* () {
             return yield* Effect.fail(fail(operation, "integrity-failure"));
           }
           if (existingRows.length === 1) {
+            const existingPacket = yield* verifyPacketRow(existingRows[0]!, operation);
             if (
               existingRows[0]!.packetId !== command.packetId ||
               existingRows[0]!.commandId !== command.commandId ||
@@ -825,7 +840,31 @@ const makeStore = Effect.gen(function* () {
             ) {
               return yield* Effect.fail(fail(operation, "idempotency-conflict"));
             }
-            return yield* verifyPacketRow(existingRows[0]!, operation);
+            if (existingPacket.sources.length > 0) {
+              const existingSourceIdsJson = JSON.stringify(
+                existingPacket.sources.map((source) => source.messageId),
+              );
+              const existingSourceRows = yield* sql<MessageRow>`
+                SELECT ${sql.unsafe(messageColumns)}
+                FROM collaboration_authored_messages m
+                LEFT JOIN collaboration_authored_message_tombstones t
+                  ON t.shared_project_id = m.shared_project_id
+                 AND t.target_message_id = m.message_id
+                WHERE m.shared_project_id = ${command.sharedProjectId}
+                  AND m.message_id IN (SELECT value FROM json_each(${existingSourceIdsJson}))
+                ORDER BY m.project_sequence ASC
+              `;
+              if (existingSourceRows.length !== existingPacket.sources.length) {
+                return yield* Effect.fail(fail(operation, "integrity-failure"));
+              }
+              for (const row of existingSourceRows) {
+                const message = yield* verifyMessageRow(row, operation);
+                if (message.tombstone !== null) {
+                  return yield* Effect.fail(fail(operation, "context-source-revoked"));
+                }
+              }
+            }
+            return existingPacket;
           }
           let baseThroughSequence = 0;
           const inheritedExcludedSources: Array<{
@@ -927,7 +966,10 @@ const makeStore = Effect.gen(function* () {
               continue;
             }
             const sourceBytes = new TextEncoder().encode(message.body).byteLength;
-            const sourceTokens = Math.ceil(sourceBytes / 4);
+            // UTF-8 bytes are a conservative upper bound for BPE-style tokenizers.
+            // A bytes/4 heuristic can undercount punctuation or adversarial text and
+            // authorize a packet larger than the operator's token budget.
+            const sourceTokens = sourceBytes;
             if (
               estimatedTokens + sourceTokens > command.tokenBudget ||
               encodedBytes + sourceBytes > command.encodedByteBudget
@@ -951,6 +993,8 @@ const makeStore = Effect.gen(function* () {
           const packetHashInput = JSON.stringify([
             command.sharedProjectId,
             command.packetId,
+            command.commandId,
+            inputSha256,
             command.basePacketId,
             sources,
             excludedSources,
