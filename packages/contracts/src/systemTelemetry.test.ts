@@ -133,4 +133,69 @@ describe("ServerProjectSystemTelemetryResult", () => {
       detail: null,
     });
   });
+
+  it.each([
+    {
+      label: "memory used bytes do not match total minus available",
+      update: (input: ReturnType<typeof projectSystemTelemetryFixture>) => ({
+        memory: { ...input.memory, usedBytes: 5_999 },
+      }),
+    },
+    {
+      label: "memory percentage does not match its byte counters",
+      update: (input: ReturnType<typeof projectSystemTelemetryFixture>) => ({
+        memory: { ...input.memory, utilizationPercent: 50 },
+      }),
+    },
+    {
+      label: "project-volume addressable bytes exceed total",
+      update: (input: ReturnType<typeof projectSystemTelemetryFixture>) => ({
+        projectVolume: { ...input.projectVolume, availableBytes: 3_000 },
+      }),
+    },
+    {
+      label: "project-volume percentage does not use its addressable capacity",
+      update: (input: ReturnType<typeof projectSystemTelemetryFixture>) => ({
+        projectVolume: { ...input.projectVolume, utilizationPercent: 70 },
+      }),
+    },
+  ])("rejects contradictory telemetry: $label", ({ update }) => {
+    const input = projectSystemTelemetryFixture();
+    expect(() => decodeProjectSystemTelemetry({ ...input, ...update(input) })).toThrow();
+  });
+
+  it("rejects an available project volume with no addressable capacity", () => {
+    const input = projectSystemTelemetryFixture();
+    expect(() =>
+      decodeProjectSystemTelemetry({
+        ...input,
+        projectVolume: {
+          ...input.projectVolume,
+          usedBytes: 0,
+          availableBytes: 0,
+          utilizationPercent: 0,
+        },
+      }),
+    ).toThrow();
+  });
+
+  it("accepts a project-volume percentage rounded to whole-percent probe precision", () => {
+    const input = projectSystemTelemetryFixture();
+    const parsed = decodeProjectSystemTelemetry({
+      ...input,
+      projectVolume: {
+        ...input.projectVolume,
+        usedBytes: 7_499,
+        availableBytes: 2_501,
+        utilizationPercent: 75,
+      },
+    });
+
+    expect(parsed.projectVolume).toMatchObject({
+      status: "available",
+      usedBytes: 7_499,
+      availableBytes: 2_501,
+      utilizationPercent: 75,
+    });
+  });
 });

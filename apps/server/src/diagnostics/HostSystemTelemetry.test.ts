@@ -52,11 +52,11 @@ describe("HostSystemTelemetry", () => {
       totalBytes: 8_000,
       availableBytes: 3_000,
     });
-    expect(memoryCountersFromRuntime(32_000, 0, 12_000, "linux")).toEqual({
+    expect(memoryCountersFromRuntime(32_000, 0, 12_000, "win32")).toEqual({
       totalBytes: 32_000,
       availableBytes: 12_000,
     });
-    expect(memoryCountersFromRuntime(32_000, 64_000, 12_000, "linux")).toEqual({
+    expect(memoryCountersFromRuntime(32_000, 64_000, 12_000, "win32")).toEqual({
       totalBytes: 32_000,
       availableBytes: 12_000,
     });
@@ -76,14 +76,47 @@ describe("HostSystemTelemetry", () => {
     });
   });
 
-  it("fails unconstrained macOS memory closed instead of treating free pages as available", () => {
-    expect(() => memoryCountersFromRuntime(32_000, 0, 1_000, "darwin")).toThrow(
+  it.each([
+    { platform: "linux" as const, constrainedTotalBytes: 0 },
+    { platform: "darwin" as const, constrainedTotalBytes: 0 },
+    { platform: "darwin" as const, constrainedTotalBytes: 8_000 },
+    { platform: "freebsd" as const, constrainedTotalBytes: 0 },
+  ])(
+    "fails unsupported $platform memory closed instead of treating raw free pages as available",
+    ({ platform, constrainedTotalBytes }) => {
+      expect(() =>
+        memoryCountersFromRuntime(32_000, constrainedTotalBytes, 1_000, platform),
+      ).toThrow("Process-available memory is unsupported on this platform.");
+    },
+  );
+
+  it.each([
+    { hostTotalBytes: 0, constrainedTotalBytes: 0, availableBytes: 0 },
+    { hostTotalBytes: Number.NaN, constrainedTotalBytes: 0, availableBytes: 0 },
+    { hostTotalBytes: 32_000, constrainedTotalBytes: Number.NaN, availableBytes: 1_000 },
+    { hostTotalBytes: 32_000, constrainedTotalBytes: -1, availableBytes: 1_000 },
+    { hostTotalBytes: 32_000, constrainedTotalBytes: 0, availableBytes: -1 },
+    { hostTotalBytes: 32_000, constrainedTotalBytes: 0, availableBytes: 32_001 },
+    {
+      hostTotalBytes: 32_000,
+      constrainedTotalBytes: 0,
+      availableBytes: Number.MAX_SAFE_INTEGER + 1,
+    },
+  ])("rejects invalid live runtime memory counters: %j", (memory) => {
+    expect(() =>
+      memoryCountersFromRuntime(
+        memory.hostTotalBytes,
+        memory.constrainedTotalBytes,
+        memory.availableBytes,
+        "win32",
+      ),
+    ).toThrow("Invalid runtime memory counters.");
+  });
+
+  it("rejects a platform constraint whose available-memory counter does not account for it", () => {
+    expect(() => memoryCountersFromRuntime(32_000, 8_000, 3_000, "win32")).toThrow(
       "Process-available memory is unsupported on this platform.",
     );
-    expect(memoryCountersFromRuntime(32_000, 8_000, 3_000, "darwin")).toEqual({
-      totalBytes: 8_000,
-      availableBytes: 3_000,
-    });
   });
 
   it("fails an invalid monotonic timestamp closed without corrupting the CPU baseline", () => {
@@ -350,6 +383,25 @@ describe("HostSystemTelemetry", () => {
       status: "warming",
       utilizationPercent: null,
       logicalProcessorCount: 2,
+    });
+  });
+
+  it("fails aggregate CPU counter overflow closed", () => {
+    const nearLimit = Math.floor(Number.MAX_SAFE_INTEGER / 2);
+    const sampler = makeHostSystemTelemetrySampler(
+      makeRuntime({
+        readCpuTimes: () => [
+          cpuTimes({ busy: nearLimit, idle: nearLimit }),
+          cpuTimes({ busy: nearLimit, idle: nearLimit }),
+        ],
+      }),
+    );
+
+    expect(sampler.sample({ sampledAtMonotonicMs: 1_000, platform: "linux" }).cpu).toEqual({
+      status: "unavailable",
+      utilizationPercent: null,
+      logicalProcessorCount: 2,
+      detail: "CPU telemetry is unavailable.",
     });
   });
 

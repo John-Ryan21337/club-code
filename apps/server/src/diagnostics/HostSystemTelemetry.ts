@@ -262,18 +262,34 @@ export function memoryCountersFromRuntime(
   availableBytes: number,
   platform: NodeJS.Platform,
 ): MemoryCounters {
+  if (
+    !isSafeNonNegativeInteger(hostTotalBytes) ||
+    hostTotalBytes <= 0 ||
+    !isSafeNonNegativeInteger(constrainedTotalBytes) ||
+    !isSafeNonNegativeInteger(availableBytes)
+  ) {
+    throw new Error("Invalid runtime memory counters.");
+  }
   const hasEffectiveConstraint =
     isSafeNonNegativeInteger(constrainedTotalBytes) &&
     constrainedTotalBytes > 0 &&
     constrainedTotalBytes < hostTotalBytes;
-  // On unconstrained macOS, libuv reports only Mach free pages and excludes
-  // reusable inactive/purgeable/cache pages. Presenting that as "available"
-  // makes a healthy Mac look nearly exhausted, so fail closed until a
-  // dedicated pressure-aware adapter is available.
-  if (platform === "darwin" && !hasEffectiveConstraint) {
+  // Libuv documents that unconstrained `uv_get_available_memory()` falls back
+  // to `uv_get_free_memory()`. Linux and macOS raw free-page counters exclude
+  // substantial reusable cache/inactive memory, so presenting them as
+  // process-available makes a healthy machine look nearly exhausted. Windows'
+  // available-physical-memory counter is pressure-aware; constrained Linux is
+  // also supported because libuv accounts for the cgroup limit there.
+  const supportsTrustworthyAvailableMemory =
+    (platform === "win32" && !hasEffectiveConstraint) ||
+    (platform === "linux" && hasEffectiveConstraint);
+  if (!supportsTrustworthyAvailableMemory) {
     throw new Error("Process-available memory is unsupported on this platform.");
   }
   const totalBytes = hasEffectiveConstraint ? constrainedTotalBytes : hostTotalBytes;
+  if (availableBytes > totalBytes) {
+    throw new Error("Invalid runtime memory counters.");
+  }
   return { totalBytes, availableBytes };
 }
 

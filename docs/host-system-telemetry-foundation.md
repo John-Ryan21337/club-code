@@ -28,9 +28,12 @@ The first sample warms a baseline. Reads inside the one-second minimum interval 
 result, topology/platform changes reset the baseline, invalid or stalled counters fail closed, and a
 transient read failure does not destroy the last healthy baseline.
 
-Memory uses the process-effective constraint when Node reports one. Unconstrained macOS memory
-fails closed because raw Mach free pages omit reusable inactive, purgeable, and cache pages and can
-make a healthy machine appear exhausted.
+Memory uses the process-effective constraint when Node reports one. Constrained Linux and
+unconstrained Windows are the runtime-backed paths in this slice. Other unconstrained platforms,
+including Linux and macOS, fail closed because libuv falls back to raw free-page counters there;
+those counters can omit reusable cache, inactive, or purgeable memory and make a healthy machine
+appear exhausted. Other constrained platforms also fail closed because libuv currently applies
+constraints to its available-memory result only on Linux.
 
 ## Deferred integration
 
