@@ -96,6 +96,54 @@ function threadHasUnsettledTurnStart(thread: OrchestrationReadModel["threads"][n
   return false;
 }
 
+function isActiveProviderActivityKind(kind: string): boolean {
+  return (
+    kind.endsWith(".started") ||
+    kind.endsWith(".progress") ||
+    kind.endsWith(".updated") ||
+    kind.endsWith(".requested")
+  );
+}
+
+function isAutoNudgeInvalidatingProviderActivityKind(kind: string): boolean {
+  // These rows are deliberately excluded from historical work logs because
+  // they are projection/checkpoint bookkeeping rather than transcript or
+  // provider-work movement. Both can legitimately land after terminalization
+  // and must not suppress a settled completion-triggered send.
+  return kind !== "context-window.updated" && kind !== "checkpoint.captured";
+}
+
+function threadHasPostCompletionProviderActivity(
+  thread: OrchestrationReadModel["threads"][number],
+  completedTurnId: NonNullable<OrchestrationReadModel["threads"][number]["latestTurn"]>["turnId"],
+): boolean {
+  const completedAt = thread.latestTurn?.completedAt;
+  if (completedAt === null || completedAt === undefined) {
+    return false;
+  }
+
+  // The orchestration read model deliberately preserves the provider's
+  // original completion boundary while later message/activity events retain
+  // their own timestamps. That lets this atomic command gate invalidate a
+  // completion-triggered send without adding wall-clock scheduling authority.
+  const messageContinued = thread.messages.some(
+    (message) =>
+      message.turnId === completedTurnId &&
+      (message.updatedAt > completedAt || (message.updatedAt === completedAt && message.streaming)),
+  );
+  if (messageContinued) {
+    return true;
+  }
+
+  return thread.activities.some(
+    (activity) =>
+      activity.turnId === completedTurnId &&
+      isAutoNudgeInvalidatingProviderActivityKind(activity.kind) &&
+      (activity.createdAt > completedAt ||
+        (activity.createdAt === completedAt && isActiveProviderActivityKind(activity.kind))),
+  );
+}
+
 function activeTurnIdForSteer(
   thread: OrchestrationReadModel["threads"][number],
 ): NonNullable<OrchestrationReadModel["threads"][number]["latestTurn"]>["turnId"] | null {
@@ -783,6 +831,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         return yield* rejectAutoNudgeCommand(
           command,
           `Auto Nudge dispatch for thread '${command.threadId}' does not target its exact current completed turn.`,
+        );
+      }
+      if (threadHasPostCompletionProviderActivity(targetThread, command.completedTurnId)) {
+        return yield* rejectAutoNudgeCommand(
+          command,
+          `Auto Nudge dispatch for thread '${command.threadId}' was invalidated because provider text or activity continued after its completed-turn boundary.`,
         );
       }
       if (config.baselineSettledTurnId === command.completedTurnId) {
