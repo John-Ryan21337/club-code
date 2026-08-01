@@ -1,6 +1,7 @@
 import {
   appendProjectResourcesHistory,
   PROJECT_RESOURCES_HISTORY_LIMIT,
+  ProjectResourcesTelemetryValidationError,
   projectResourcesGapPoint,
   projectResourcesHistoryPoint,
   projectResourcesTelemetryFrame,
@@ -18,6 +19,7 @@ import { Switch } from "../ui/switch.tsx";
 import {
   buildProjectResourceSparklinePath,
   formatProjectResourcePercent,
+  isAvailableProjectResourceMetric,
   projectResourceMetricHistory,
   shouldRenderProjectResourceCard,
 } from "./ProjectResourcesPanel.model.ts";
@@ -28,6 +30,7 @@ const DEFAULT_STALE_AFTER_MS = 15_000;
 const ERROR_RETRY_INTERVAL_MS = 10_000;
 const MINIMUM_TIMER_MS = 250;
 const MAXIMUM_TIMER_MS = 2_147_483_647;
+const MAXIMUM_FUTURE_SAMPLE_SKEW_MS = 60_000;
 
 interface ProjectResourcesView {
   readonly targetKey: string;
@@ -54,6 +57,7 @@ interface PollRunner {
   activeAbort: AbortController | null;
   activeToken: number | null;
   timer: ReturnType<typeof setTimeout> | null;
+  requestTimer: ReturnType<typeof setTimeout> | null;
   staleTimer: ReturnType<typeof setTimeout> | null;
   failureReported: boolean;
 }
@@ -79,10 +83,21 @@ function boundedDelay(...values: readonly number[]): number {
   return Math.min(MAXIMUM_TIMER_MS, Math.max(MINIMUM_TIMER_MS, Math.trunc(value)));
 }
 
-const safeFailureCode = (error: unknown): string => {
-  const value = error instanceof Error ? error.name : typeof error;
-  return /^[A-Za-z][A-Za-z0-9_.:-]{0,63}$/.test(value) ? value : "TelemetryReadFailure";
-};
+function safeNow(now: () => number): number {
+  try {
+    const value = now();
+    return Number.isSafeInteger(value) && value >= 0 ? value : Date.now();
+  } catch {
+    return Date.now();
+  }
+}
+
+const safeFailureCode = (error: unknown, timedOut: boolean): string =>
+  timedOut
+    ? "TelemetryReadTimeout"
+    : error instanceof ProjectResourcesTelemetryValidationError
+      ? "TelemetryResponseInvalid"
+      : "TelemetryReadFailure";
 
 function ProjectResourceSparkline(props: {
   readonly label: string;
@@ -138,7 +153,7 @@ function ProjectResourceCard(props: {
         </span>
         <span className="ml-auto text-xs font-semibold">{value}</span>
       </div>
-      {props.metric.status === "available" ? (
+      {isAvailableProjectResourceMetric(props.metric) ? (
         <ProjectResourceSparkline
           color={props.color}
           label={props.metricKey}
@@ -186,7 +201,12 @@ export function ProjectResourcesPanel({
   const panelId = useId();
   const targetKey = String(projectId);
   const [internalHideUnavailableGraphs, setInternalHideUnavailableGraphs] = useState(false);
-  const hideUnavailableGraphs = controlledHideUnavailableGraphs ?? internalHideUnavailableGraphs;
+  const lastHideValueRef = useRef<boolean | undefined>(controlledHideUnavailableGraphs);
+  if (controlledHideUnavailableGraphs !== undefined) {
+    lastHideValueRef.current = controlledHideUnavailableGraphs;
+  }
+  const hideUnavailableGraphs =
+    controlledHideUnavailableGraphs ?? lastHideValueRef.current ?? internalHideUnavailableGraphs;
   const [view, setView] = useState<ProjectResourcesView>(() => emptyView(targetKey));
   const visibleView = view.targetKey === targetKey ? view : emptyView(targetKey);
   const runnerRef = useRef<PollRunner>({
@@ -196,9 +216,14 @@ export function ProjectResourcesPanel({
     activeAbort: null,
     activeToken: null,
     timer: null,
+    requestTimer: null,
     staleTimer: null,
     failureReported: false,
   });
+  const nowRef = useRef(now);
+  const onReadFailureRef = useRef(onReadFailure);
+  nowRef.current = now;
+  onReadFailureRef.current = onReadFailure;
 
   useEffect(() => {
     const runner = runnerRef.current;
@@ -219,7 +244,7 @@ export function ProjectResourcesPanel({
           current.targetKey === targetKey && current.frame !== null
             ? appendProjectResourcesHistory(
                 current.history,
-                projectResourcesGapPoint(now()),
+                projectResourcesGapPoint(safeNow(nowRef.current)),
                 historyLimit,
               )
             : current.targetKey === targetKey
@@ -260,6 +285,12 @@ export function ProjectResourcesPanel({
       currentRunner.activeToken = activeRequest.token;
       let nextDelay = activeRequest.pollIntervalMs;
       let outageRecorded = false;
+      let timedOut = false;
+      const reportFailure = (code: string) => {
+        if (runnerRef.current.failureReported) return;
+        runnerRef.current.failureReported = true;
+        onReadFailureRef.current?.(code);
+      };
       const recordUnavailable = () => {
         if (outageRecorded || runnerRef.current.desired?.token !== activeRequest.token) return;
         outageRecorded = true;
@@ -272,16 +303,22 @@ export function ProjectResourcesPanel({
           frame: null,
           history: appendProjectResourcesHistory(
             current.targetKey === activeRequest.targetKey ? current.history : [],
-            projectResourcesGapPoint(now()),
+            projectResourcesGapPoint(safeNow(nowRef.current)),
             activeRequest.historyLimit,
           ),
           state: "unavailable",
         }));
       };
       const requestTimeout = setTimeout(() => {
+        if (runnerRef.current.requestTimer === requestTimeout) {
+          runnerRef.current.requestTimer = null;
+        }
+        timedOut = true;
         abort.abort();
         recordUnavailable();
+        reportFailure("TelemetryReadTimeout");
       }, activeRequest.requestTimeoutMs);
+      currentRunner.requestTimer = requestTimeout;
 
       currentRunner.inFlight = Promise.resolve()
         .then(() =>
@@ -293,12 +330,18 @@ export function ProjectResourcesPanel({
         .then((telemetry) => {
           if (abort.signal.aborted || runnerRef.current.desired?.token !== activeRequest.token)
             return;
-          if (telemetry.projectId !== activeRequest.projectId) {
-            throw Object.assign(new Error(), { name: "ProjectResourcesProjectMismatch" });
-          }
           const frame = projectResourcesTelemetryFrame(telemetry);
-          runnerRef.current.failureReported = false;
+          if (frame.projectId !== activeRequest.projectId) {
+            throw new ProjectResourcesTelemetryValidationError();
+          }
           nextDelay = boundedDelay(activeRequest.pollIntervalMs, frame.minimumSampleIntervalMs);
+          const freshnessWindowMs = activeRequest.staleAfterMs;
+          const receivedAtMs = safeNow(nowRef.current);
+          const sampleAgeMs = receivedAtMs - frame.sampledAtMs;
+          if (sampleAgeMs < -MAXIMUM_FUTURE_SAMPLE_SKEW_MS || sampleAgeMs >= freshnessWindowMs) {
+            throw new ProjectResourcesTelemetryValidationError();
+          }
+          runnerRef.current.failureReported = false;
           setView((current) => ({
             targetKey: activeRequest.targetKey,
             frame,
@@ -312,21 +355,19 @@ export function ProjectResourcesPanel({
           if (runnerRef.current.staleTimer !== null) clearTimeout(runnerRef.current.staleTimer);
           runnerRef.current.staleTimer = setTimeout(
             recordUnavailable,
-            boundedDelay(activeRequest.staleAfterMs, nextDelay * 3),
+            boundedDelay(freshnessWindowMs - Math.max(0, sampleAgeMs)),
           );
         })
         .catch((error: unknown) => {
           if (runnerRef.current.desired?.token !== activeRequest.token) return;
           recordUnavailable();
           nextDelay = boundedDelay(activeRequest.pollIntervalMs, ERROR_RETRY_INTERVAL_MS);
-          if (!runnerRef.current.failureReported) {
-            runnerRef.current.failureReported = true;
-            onReadFailure?.(safeFailureCode(error));
-          }
+          reportFailure(safeFailureCode(error, timedOut));
         })
         .finally(() => {
           clearTimeout(requestTimeout);
           const latestRunner = runnerRef.current;
+          if (latestRunner.requestTimer === requestTimeout) latestRunner.requestTimer = null;
           if (latestRunner.activeToken === activeRequest.token) {
             latestRunner.activeAbort = null;
             latestRunner.activeToken = null;
@@ -354,16 +395,16 @@ export function ProjectResourcesPanel({
     return () => {
       if (runner.desired?.token === token) runner.desired = null;
       if (runner.timer !== null) clearTimeout(runner.timer);
+      if (runner.requestTimer !== null) clearTimeout(runner.requestTimer);
       if (runner.staleTimer !== null) clearTimeout(runner.staleTimer);
       runner.timer = null;
+      runner.requestTimer = null;
       runner.staleTimer = null;
       if (runner.activeToken === token) runner.activeAbort?.abort();
     };
   }, [
     client,
     historyLimit,
-    now,
-    onReadFailure,
     pollIntervalMs,
     pollingEnabled,
     projectId,
@@ -383,19 +424,32 @@ export function ProjectResourcesPanel({
       visibleView.state === "loading" ? "Waiting for telemetry." : "Telemetry unavailable.",
     );
   const cpuDetail =
-    cpu.status === "available"
-      ? "Measured host CPU utilization."
-      : (cpu.detail ?? "CPU telemetry unavailable.");
+    visibleView.frame === null
+      ? visibleView.state === "loading"
+        ? "Waiting for host CPU telemetry."
+        : "CPU telemetry unavailable."
+      : isAvailableProjectResourceMetric(cpu)
+        ? "Measured host CPU utilization."
+        : cpu.status === "warming"
+          ? "Collecting a host CPU baseline."
+          : "CPU telemetry unavailable.";
   const memoryDetail =
-    memory.status === "available"
-      ? "Measured host memory utilization."
-      : (memory.detail ?? "Memory telemetry unavailable.");
+    visibleView.frame === null
+      ? visibleView.state === "loading"
+        ? "Waiting for host memory telemetry."
+        : "Memory telemetry unavailable."
+      : isAvailableProjectResourceMetric(memory)
+        ? "Measured host memory utilization."
+        : "Memory telemetry unavailable.";
   const setHideUnavailableGraphs = (checked: boolean) => {
     if (controlledHideUnavailableGraphs === undefined) {
+      lastHideValueRef.current = checked;
       setInternalHideUnavailableGraphs(checked);
     }
     onHideUnavailableGraphsChange?.(checked);
   };
+  const renderCpu = shouldRenderProjectResourceCard(cpu, hideUnavailableGraphs);
+  const renderMemory = shouldRenderProjectResourceCard(memory, hideUnavailableGraphs);
 
   return (
     <aside
@@ -413,16 +467,16 @@ export function ProjectResourcesPanel({
             Project resources
           </h2>
           <p className="truncate text-xs text-muted-foreground">
-            {projectName ?? "Selected project"} · host measurements
+            {projectName ?? "Selected project"} &middot; host measurements
           </p>
         </div>
         <label
           className="ml-auto flex items-center gap-2 text-xs text-muted-foreground"
           htmlFor={panelId}
         >
-          Hide unavailable graphs
+          Hide unavailable metrics
           <Switch
-            aria-label="Hide unavailable resource graphs"
+            aria-label="Hide unavailable resource metrics"
             checked={hideUnavailableGraphs}
             id={panelId}
             onCheckedChange={(checked) => setHideUnavailableGraphs(Boolean(checked))}
@@ -430,7 +484,7 @@ export function ProjectResourcesPanel({
         </label>
       </div>
       <div className="mt-2 grid grid-cols-2 gap-2">
-        {shouldRenderProjectResourceCard(cpu, hideUnavailableGraphs) ? (
+        {renderCpu ? (
           <ProjectResourceCard
             color="var(--cafe-project-telemetry-cpu, #0891b2)"
             detail={cpuDetail}
@@ -441,7 +495,7 @@ export function ProjectResourcesPanel({
             metricKey="cpu"
           />
         ) : null}
-        {shouldRenderProjectResourceCard(memory, hideUnavailableGraphs) ? (
+        {renderMemory ? (
           <ProjectResourceCard
             color="var(--cafe-project-telemetry-memory, #db2777)"
             detail={memoryDetail}
@@ -451,6 +505,11 @@ export function ProjectResourcesPanel({
             metric={memory}
             metricKey="memory"
           />
+        ) : null}
+        {!renderCpu && !renderMemory ? (
+          <p className="col-span-2 text-xs text-muted-foreground" role="status">
+            No measured resource telemetry is available.
+          </p>
         ) : null}
       </div>
     </aside>

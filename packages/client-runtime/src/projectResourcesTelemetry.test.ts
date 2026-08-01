@@ -7,6 +7,7 @@ import {
   projectResourcesGapPoint,
   projectResourcesHistoryPoint,
   projectResourcesTelemetryFrame,
+  ProjectResourcesTelemetryValidationError,
   type ProjectResourcesTelemetryHistoryPoint,
 } from "./projectResourcesTelemetry.ts";
 
@@ -79,6 +80,55 @@ describe("project resources telemetry client model", () => {
       cpuPercent: null,
       memoryPercent: null,
     });
+    expect(frame.cpu.detail).toBeNull();
+    expect(frame.memory.detail).toBeNull();
+  });
+
+  it("rejects malformed, encoded, non-finite, and contradictory client results", () => {
+    const telemetry = telemetryFixture();
+    expect(() =>
+      projectResourcesTelemetryFrame({
+        ...telemetry,
+        sampledAt: "2026-08-01T12:00:00.000Z",
+      }),
+    ).toThrow(ProjectResourcesTelemetryValidationError);
+    expect(() =>
+      projectResourcesTelemetryFrame({
+        ...telemetry,
+        cpu: { ...telemetry.cpu, utilizationPercent: Number.NaN },
+      }),
+    ).toThrow(ProjectResourcesTelemetryValidationError);
+    expect(() =>
+      projectResourcesTelemetryFrame({
+        ...telemetry,
+        memory: { ...telemetry.memory, utilizationPercent: 101 },
+      }),
+    ).toThrow(ProjectResourcesTelemetryValidationError);
+    expect(() =>
+      projectResourcesTelemetryFrame({
+        ...telemetry,
+        extraTransportField: "not decoded",
+      }),
+    ).toThrow(ProjectResourcesTelemetryValidationError);
+    expect(() =>
+      projectResourcesTelemetryFrame({
+        ...telemetry,
+        sampledAt: DateTime.makeUnsafe("1969-12-31T23:59:59.999Z"),
+      }),
+    ).toThrow(ProjectResourcesTelemetryValidationError);
+    expect(() =>
+      projectResourcesTelemetryFrame({
+        ...telemetry,
+        minimumSampleIntervalMs: Number.MAX_SAFE_INTEGER + 1,
+      }),
+    ).toThrow(ProjectResourcesTelemetryValidationError);
+
+    expect(
+      projectResourcesHistoryPoint({
+        ...projectResourcesTelemetryFrame(telemetry),
+        cpu: { status: "available", utilizationPercent: Number.NaN, detail: null },
+      }).cpuPercent,
+    ).toBeNull();
   });
 
   it("bounds history and keeps explicit outage gaps", () => {
@@ -98,5 +148,29 @@ describe("project resources telemetry client model", () => {
       history[3],
       { sampledAtMs: 9, cpuPercent: null, memoryPercent: null },
     ]);
+  });
+
+  it("normalizes hostile history values, copies inputs, and coalesces outage gaps", () => {
+    const mutable = [
+      { sampledAtMs: 1, cpuPercent: 25, memoryPercent: 50 },
+      { sampledAtMs: 2, cpuPercent: null, memoryPercent: null },
+    ];
+    const history = appendProjectResourcesHistory(
+      mutable,
+      { sampledAtMs: 3, cpuPercent: -1, memoryPercent: 101 },
+      Number.POSITIVE_INFINITY,
+    );
+    mutable[0]!.cpuPercent = 99;
+    expect(history).toEqual([
+      { sampledAtMs: 1, cpuPercent: 25, memoryPercent: 50 },
+      { sampledAtMs: 3, cpuPercent: null, memoryPercent: null },
+    ]);
+    expect(() =>
+      appendProjectResourcesHistory(history, {
+        sampledAtMs: Number.NaN,
+        cpuPercent: 50,
+        memoryPercent: 50,
+      }),
+    ).toThrow(ProjectResourcesTelemetryValidationError);
   });
 });

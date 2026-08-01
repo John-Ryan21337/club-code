@@ -32,6 +32,18 @@ describe("ProjectResourcesPanel model", () => {
     );
   });
 
+  it("treats malformed available values and invalid chart geometry as unavailable", () => {
+    for (const value of [Number.NaN, Number.POSITIVE_INFINITY, -1, 101]) {
+      expect(formatProjectResourcePercent(available(value))).toBe("Unavailable");
+      expect(shouldRenderProjectResourceCard(available(value), true)).toBe(false);
+      expect(buildProjectResourceSparklinePath([25, value, 75])).toBe(
+        "M 0.00 18.00 L 0.00 18.00M 100.00 6.00 L 100.00 6.00",
+      );
+    }
+    expect(buildProjectResourceSparklinePath([50], Number.NaN, 24)).toBe("");
+    expect(buildProjectResourceSparklinePath([50], 100, -1)).toBe("");
+  });
+
   it("removes non-available cards only when the hide option is engaged", () => {
     const unavailable: ProjectResourcesMetric = {
       status: "unavailable",
