@@ -172,11 +172,16 @@ export const CollaborationDatabaseSnapshot = Schema.Struct({
   createdByDeviceId: DeviceId,
   createdAt: CollaborationDatabaseTimestamp,
 }).check(
-  Schema.makeFilter((snapshot) =>
-    isDatabaseSidecarPath(snapshot.relativePath)
-      ? "database snapshots must not publish live sidecar files"
-      : undefined,
-  ),
+  Schema.makeFilter((snapshot) => {
+    if (isDatabaseSidecarPath(snapshot.relativePath)) {
+      return "database snapshots must not publish live sidecar files";
+    }
+    return snapshot.engine === "unknown" &&
+      snapshot.consistency !== "offline-copy" &&
+      snapshot.consistency !== "logical-export"
+      ? "unknown database engines require an offline copy or logical export"
+      : undefined;
+  }),
 );
 export type CollaborationDatabaseSnapshot = typeof CollaborationDatabaseSnapshot.Type;
 
