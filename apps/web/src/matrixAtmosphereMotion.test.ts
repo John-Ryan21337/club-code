@@ -1,9 +1,11 @@
-import type { FallingEffectMatrixMotionMode } from "@cafecode/contracts/settings";
+import {
+  DEFAULT_FALLING_EFFECT_MATRIX_WALK_END_FONT_SIZE,
+  DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE,
+  type FallingEffectMatrixMotionMode,
+} from "@cafecode/contracts/settings";
 import { describe, expect, it, vi } from "vitest";
 
 import {
-  MATRIX_WALK_FONT_MAX_PX,
-  MATRIX_WALK_FONT_MIN_PX,
   drawAtmosphereScene,
   resolveAtmosphereProjectedPointInPlace,
   resolveAtmosphereRenderOpacity,
@@ -41,9 +43,20 @@ function project(
   x: number,
   y: number,
   mode: FallingEffectMatrixMotionMode,
+  walkStartFontSize = DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE,
+  walkEndFontSize = DEFAULT_FALLING_EFFECT_MATRIX_WALK_END_FONT_SIZE,
 ): AtmosphereProjectedPoint {
-  const output = { x: 0, y: 0, scale: 0 };
-  resolveAtmosphereProjectedPointInPlace(output, scene, particle, x, y, mode);
+  const output = { x: 0, y: 0, scale: 0, depthScale: 0 };
+  resolveAtmosphereProjectedPointInPlace(
+    output,
+    scene,
+    particle,
+    x,
+    y,
+    mode,
+    walkStartFontSize,
+    walkEndFontSize,
+  );
   return output;
 }
 
@@ -94,6 +107,7 @@ describe("atmosphere motion projection", () => {
         x: 73.25,
         y: -19.5,
         scale: 1,
+        depthScale: 1,
       });
     }
   });
@@ -127,10 +141,32 @@ describe("atmosphere motion projection", () => {
       const topReverse = project(scene, particle, 80, 0, "walk-reverse");
       const bottomReverse = project(scene, particle, 80, scene.height, "walk-reverse");
 
-      expect(topForward.scale * particle.size).toBeCloseTo(MATRIX_WALK_FONT_MIN_PX, 10);
-      expect(bottomForward.scale * particle.size).toBeCloseTo(MATRIX_WALK_FONT_MAX_PX, 10);
-      expect(topReverse.scale * particle.size).toBeCloseTo(MATRIX_WALK_FONT_MAX_PX, 10);
-      expect(bottomReverse.scale * particle.size).toBeCloseTo(MATRIX_WALK_FONT_MIN_PX, 10);
+      expect(topForward.scale * particle.size).toBeCloseTo(
+        DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE,
+        10,
+      );
+      expect(bottomForward.scale * particle.size).toBeCloseTo(
+        DEFAULT_FALLING_EFFECT_MATRIX_WALK_END_FONT_SIZE,
+        10,
+      );
+      expect(topReverse.scale * particle.size).toBeCloseTo(
+        DEFAULT_FALLING_EFFECT_MATRIX_WALK_END_FONT_SIZE,
+        10,
+      );
+      expect(bottomReverse.scale * particle.size).toBeCloseTo(
+        DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE,
+        10,
+      );
+      expect(topForward.depthScale).toBe(1);
+      expect(bottomForward.depthScale).toBe(
+        DEFAULT_FALLING_EFFECT_MATRIX_WALK_END_FONT_SIZE /
+          DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE,
+      );
+      expect(topReverse.depthScale).toBe(
+        DEFAULT_FALLING_EFFECT_MATRIX_WALK_END_FONT_SIZE /
+          DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE,
+      );
+      expect(bottomReverse.depthScale).toBe(1);
       expect(topForward.y).toBe(0);
       expect(bottomForward.y).toBe(scene.height);
       expect(topReverse.y).toBe(0);
@@ -142,21 +178,146 @@ describe("atmosphere motion projection", () => {
     }
   });
 
+  it("uses configurable absolute Walk endpoints and particle-independent connector depth", () => {
+    const startFontSize = 12;
+    const endFontSize = 24;
+    const smallParticle = createParticle({ size: 3 });
+    const largeParticle = createParticle({ size: 90 });
+    const scene = createScene("matrix", smallParticle);
+
+    for (const particle of [smallParticle, largeParticle]) {
+      const topForward = project(
+        scene,
+        particle,
+        80,
+        0,
+        "walk-forward",
+        startFontSize,
+        endFontSize,
+      );
+      const bottomForward = project(
+        scene,
+        particle,
+        80,
+        scene.height,
+        "walk-forward",
+        startFontSize,
+        endFontSize,
+      );
+      const topReverse = project(
+        scene,
+        particle,
+        80,
+        0,
+        "walk-reverse",
+        startFontSize,
+        endFontSize,
+      );
+      const bottomReverse = project(
+        scene,
+        particle,
+        80,
+        scene.height,
+        "walk-reverse",
+        startFontSize,
+        endFontSize,
+      );
+
+      expect(topForward.scale * particle.size).toBeCloseTo(12, 10);
+      expect(bottomForward.scale * particle.size).toBeCloseTo(24, 10);
+      expect(topReverse.scale * particle.size).toBeCloseTo(24, 10);
+      expect(bottomReverse.scale * particle.size).toBeCloseTo(12, 10);
+      expect(topForward.depthScale).toBe(1);
+      expect(bottomForward.depthScale).toBeCloseTo(2, 10);
+      expect(topReverse.depthScale).toBeCloseTo(2, 10);
+      expect(bottomReverse.depthScale).toBe(1);
+    }
+  });
+
+  it("preserves descending Walk endpoints instead of silently reordering them", () => {
+    const particle = createParticle();
+    const scene = createScene("matrix", particle);
+    const topForward = project(scene, particle, 80, 0, "walk-forward", 24, 12);
+    const bottomForward = project(scene, particle, 80, scene.height, "walk-forward", 24, 12);
+    const topReverse = project(scene, particle, 80, 0, "walk-reverse", 24, 12);
+    const bottomReverse = project(scene, particle, 80, scene.height, "walk-reverse", 24, 12);
+
+    expect(topForward.scale * particle.size).toBeCloseTo(24, 10);
+    expect(bottomForward.scale * particle.size).toBeCloseTo(12, 10);
+    expect(topReverse.scale * particle.size).toBeCloseTo(12, 10);
+    expect(bottomReverse.scale * particle.size).toBeCloseTo(24, 10);
+    expect(topForward.depthScale).toBe(1);
+    expect(bottomForward.depthScale).toBeCloseTo(0.5, 10);
+    expect(topReverse.depthScale).toBeCloseTo(0.5, 10);
+    expect(bottomReverse.depthScale).toBe(1);
+  });
+
+  it("keeps equal Walk endpoints at one connector-depth scale in both directions", () => {
+    const particle = createParticle();
+    const scene = createScene("matrix", particle);
+
+    for (const mode of ["walk-forward", "walk-reverse"] as const) {
+      for (const y of [0, scene.height * 0.432_187, scene.height]) {
+        const projected = project(scene, particle, 80, y, mode, 17.25, 17.25);
+        expect(projected.scale * particle.size).toBeCloseTo(17.25, 10);
+        expect(projected.depthScale).toBe(1);
+      }
+    }
+  });
+
+  it("ignores configurable Walk endpoints in every non-Walk projection", () => {
+    const particle = createParticle();
+    const scene = createScene("matrix", particle);
+
+    for (const mode of ["flat", "forward", "reverse", "tunnel"] as const) {
+      expect(project(scene, particle, 80, 120, mode, 0.01, 144)).toEqual(
+        project(scene, particle, 80, 120, mode),
+      );
+    }
+  });
+
   it("renders Walk Matrix glyphs with two-decimal endpoint font sizes", () => {
     const particle = createParticle({ y: 0 });
     const scene = createScene("matrix", particle);
     const forwardTop = createContextRecorder();
-    drawAtmosphereScene(forwardTop.context, scene, "#00ff00", 0.6, undefined, "walk-forward");
-    expect(forwardTop.fonts.at(-1)).toMatch(/^1\.00px /u);
+    drawAtmosphereScene(
+      forwardTop.context,
+      scene,
+      "#00ff00",
+      0.6,
+      undefined,
+      "walk-forward",
+      12.34,
+      24.56,
+    );
+    expect(forwardTop.fonts.at(-1)).toMatch(/^12\.34px /u);
 
     particle.y = scene.height;
     const forwardBottom = createContextRecorder();
-    drawAtmosphereScene(forwardBottom.context, scene, "#00ff00", 0.6, undefined, "walk-forward");
-    expect(forwardBottom.fonts.at(-1)).toMatch(/^72\.00px /u);
+    drawAtmosphereScene(
+      forwardBottom.context,
+      scene,
+      "#00ff00",
+      0.6,
+      undefined,
+      "walk-forward",
+      12.34,
+      24.56,
+    );
+    expect(forwardBottom.fonts.at(-1)).toMatch(/^24\.56px /u);
 
     const reverseBottom = createContextRecorder();
-    drawAtmosphereScene(reverseBottom.context, scene, "#00ff00", 0.6, undefined, "walk-reverse");
-    expect(reverseBottom.fonts.at(-1)).toMatch(/^1\.00px /u);
+    drawAtmosphereScene(
+      reverseBottom.context,
+      scene,
+      "#00ff00",
+      0.6,
+      undefined,
+      "walk-reverse",
+      12.34,
+      24.56,
+    );
+    expect(reverseBottom.fonts.at(-1)).toMatch(/^12\.34px /u);
   });
 
   it("routes Warp from the exact center to a bounded radial far plane", () => {
@@ -167,7 +328,12 @@ describe("atmosphere motion projection", () => {
       const center = project(scene, particle, 80, -margin, "tunnel");
       const far = project(scene, particle, 80, scene.height + margin, "tunnel");
 
-      expect(center).toEqual({ x: scene.width / 2, y: scene.height / 2, scale: 0.4 });
+      expect(center).toEqual({
+        x: scene.width / 2,
+        y: scene.height / 2,
+        scale: 0.4,
+        depthScale: 0.4,
+      });
       expect(Number.isFinite(far.x)).toBe(true);
       expect(Number.isFinite(far.y)).toBe(true);
       expect(far.scale).toBeCloseTo(1.35, 10);

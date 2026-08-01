@@ -60,6 +60,8 @@ import {
   DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
   DEFAULT_FALLING_EFFECT_MATRIX_COLOR_MODE,
   DEFAULT_FALLING_EFFECT_MATRIX_MOTION_MODE,
+  DEFAULT_FALLING_EFFECT_MATRIX_WALK_END_FONT_SIZE,
+  DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE,
   DEFAULT_FALLING_EFFECT_SPEED,
   DEFAULT_FALLING_EFFECTS_ENABLED,
   DEFAULT_MODEL_PACING_ENABLED,
@@ -83,6 +85,7 @@ import {
   MAX_FALLING_EFFECT_DENSITY,
   MAX_FALLING_EFFECT_JAPANESE_RATIO,
   MAX_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
+  MAX_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE,
   MAX_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
   MAX_FALLING_EFFECT_SPEED,
   MAX_MODEL_PACING_RESERVE_PERCENT,
@@ -97,6 +100,7 @@ import {
   MIN_FALLING_EFFECT_DENSITY,
   MIN_FALLING_EFFECT_JAPANESE_RATIO,
   MIN_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
+  MIN_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE,
   MIN_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
   MIN_FALLING_EFFECT_SPEED,
   MIN_MODEL_PACING_RESERVE_PERCENT,
@@ -418,6 +422,8 @@ describe("client settings", () => {
       fallingEffectMatrixColorMode: DEFAULT_FALLING_EFFECT_MATRIX_COLOR_MODE,
       fallingEffectMatrixColorCycleSpeed: DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
       fallingEffectMatrixMotionMode: DEFAULT_FALLING_EFFECT_MATRIX_MOTION_MODE,
+      fallingEffectMatrixWalkStartFontSize: DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE,
+      fallingEffectMatrixWalkEndFontSize: DEFAULT_FALLING_EFFECT_MATRIX_WALK_END_FONT_SIZE,
       fallingEffectOpacity: DEFAULT_AMBIENT_OPACITY,
       fallingEffectSpeed: DEFAULT_FALLING_EFFECT_SPEED,
       fallingEffectDensity: DEFAULT_FALLING_EFFECT_DENSITY,
@@ -472,8 +478,12 @@ describe("client settings", () => {
     expect(decoded.fallingEffectMatrixColorCycleSpeed).toBe(
       DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
     );
-    expect(decoded.fallingEffectMatrixMotionMode).toBe(
-      DEFAULT_FALLING_EFFECT_MATRIX_MOTION_MODE,
+    expect(decoded.fallingEffectMatrixMotionMode).toBe(DEFAULT_FALLING_EFFECT_MATRIX_MOTION_MODE);
+    expect(decoded.fallingEffectMatrixWalkStartFontSize).toBe(
+      DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE,
+    );
+    expect(decoded.fallingEffectMatrixWalkEndFontSize).toBe(
+      DEFAULT_FALLING_EFFECT_MATRIX_WALK_END_FONT_SIZE,
     );
     expect(pickAmbientSettings(decoded)).toEqual(DEFAULT_AMBIENT_CLIENT_SETTINGS);
   });
@@ -495,6 +505,8 @@ describe("client settings", () => {
       fallingEffectMatrixColorMode: "music-reactive",
       fallingEffectMatrixColorCycleSpeed: MAX_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
       fallingEffectMatrixMotionMode: "tunnel",
+      fallingEffectMatrixWalkStartFontSize: 12.34,
+      fallingEffectMatrixWalkEndFontSize: 98.76,
       fallingEffectOpacity: MAX_AMBIENT_OPACITY,
       fallingEffectSpeed: MAX_FALLING_EFFECT_SPEED,
       fallingEffectDensity: MAX_FALLING_EFFECT_DENSITY,
@@ -535,6 +547,8 @@ describe("client settings", () => {
       fallingEffectMatrixColorMode: "music-reactive",
       fallingEffectMatrixColorCycleSpeed: MAX_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
       fallingEffectMatrixMotionMode: "tunnel",
+      fallingEffectMatrixWalkStartFontSize: 12.34,
+      fallingEffectMatrixWalkEndFontSize: 98.76,
       fallingEffectOpacity: MAX_AMBIENT_OPACITY,
       fallingEffectSpeed: MAX_FALLING_EFFECT_SPEED,
       fallingEffectDensity: MAX_FALLING_EFFECT_DENSITY,
@@ -752,6 +766,8 @@ describe("client settings", () => {
         fallingEffectMatrixColorMode: "rainbow-extra",
         fallingEffectMatrixColorCycleSpeed: MIN_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
         fallingEffectMatrixMotionMode: "reverse",
+        fallingEffectMatrixWalkStartFontSize: MIN_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE,
+        fallingEffectMatrixWalkEndFontSize: MAX_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE,
         fallingEffectOpacity: MIN_AMBIENT_OPACITY,
         fallingEffectSpeed: MIN_FALLING_EFFECT_SPEED,
         fallingEffectDensity: MIN_FALLING_EFFECT_DENSITY,
@@ -774,6 +790,8 @@ describe("client settings", () => {
       fallingEffectMatrixColorMode: "rainbow-extra",
       fallingEffectMatrixColorCycleSpeed: MIN_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
       fallingEffectMatrixMotionMode: "reverse",
+      fallingEffectMatrixWalkStartFontSize: MIN_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE,
+      fallingEffectMatrixWalkEndFontSize: MAX_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE,
       fallingEffectOpacity: MIN_AMBIENT_OPACITY,
       fallingEffectSpeed: MIN_FALLING_EFFECT_SPEED,
       fallingEffectDensity: MIN_FALLING_EFFECT_DENSITY,
@@ -810,6 +828,14 @@ describe("client settings", () => {
         fallingEffectMatrixColorCycleSpeed: MAX_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED + 0.01,
       },
       { fallingEffectMatrixColorCycleSpeed: Number.NaN },
+      {
+        fallingEffectMatrixWalkStartFontSize: MIN_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE - 0.01,
+      },
+      {
+        fallingEffectMatrixWalkEndFontSize: MAX_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE + 0.01,
+      },
+      { fallingEffectMatrixWalkStartFontSize: 1.001 },
+      { fallingEffectMatrixWalkEndFontSize: Number.NaN },
       { fallingEffectOpacity: MIN_AMBIENT_OPACITY - 0.01 },
       { fallingEffectOpacity: MAX_AMBIENT_OPACITY + 0.01 },
       { fallingEffectOpacity: Number.NaN },

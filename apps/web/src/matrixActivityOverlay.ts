@@ -1,6 +1,8 @@
 import type { OrchestrationThreadActivity, ScopedThreadRef } from "@cafecode/contracts";
 import {
   DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
+  DEFAULT_FALLING_EFFECT_MATRIX_WALK_END_FONT_SIZE,
+  DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE,
   MAX_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
   MIN_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
   type FallingEffectActivityLinkColorMode,
@@ -1545,7 +1547,7 @@ function drawMatrixActivityPulse(
   safeOpacity: number,
   intensity: number,
 ): void {
-  const boundedScale = clampMatrixActivityDepthScale(projectedPoint.scale);
+  const boundedScale = clampMatrixActivityDepthScale(projectedPoint.depthScale);
   context.strokeStyle = paint;
   context.globalAlpha = safeOpacity * intensity;
   context.lineWidth = 0.75 + intensity;
@@ -1624,7 +1626,7 @@ function drawMatrixActivityTelemetryRing(
 
   const radius =
     Math.min(30, Math.max(20, particle.size * 1.65)) *
-    clampMatrixActivityDepthScale(projectedPoint.scale);
+    clampMatrixActivityDepthScale(projectedPoint.depthScale);
   const glyphAngle = (Math.PI * 2) / glyphCount;
   context.save();
   context.translate(projectedPoint.x, projectedPoint.y);
@@ -1651,6 +1653,8 @@ export function drawMatrixActivityAnimation(
   colorMode: FallingEffectActivityLinkColorMode,
   matrixColorFrame: MatrixColorFrame,
   motionMode: FallingEffectMatrixMotionMode = "flat",
+  walkStartFontSize = DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE,
+  walkEndFontSize = DEFAULT_FALLING_EFFECT_MATRIX_WALK_END_FONT_SIZE,
 ): void {
   if (scene.kind !== "matrix") return;
   const renderedLinkCount = resolveRenderedMatrixActivityCount(
@@ -1672,8 +1676,8 @@ export function drawMatrixActivityAnimation(
   context.rect(0, 0, scene.width, scene.height);
   context.clip();
   context.lineCap = "round";
-  const projectedFrom: AtmosphereProjectedPoint = { x: 0, y: 0, scale: 1 };
-  const projectedTo: AtmosphereProjectedPoint = { x: 0, y: 0, scale: 1 };
+  const projectedFrom: AtmosphereProjectedPoint = { x: 0, y: 0, scale: 1, depthScale: 1 };
+  const projectedTo: AtmosphereProjectedPoint = { x: 0, y: 0, scale: 1, depthScale: 1 };
   const fromPoint: MutableMatrixHexPoint = { x: 0, y: 0 };
   const toPoint: MutableMatrixHexPoint = { x: 0, y: 0 };
   const intervalStartPoint: MutableMatrixHexPoint = { x: 0, y: 0 };
@@ -1689,8 +1693,26 @@ export function drawMatrixActivityAnimation(
     const from = scene.particles[link.fromAnchorIndex];
     const to = scene.particles[link.toAnchorIndex];
     if (!from || !to) continue;
-    resolveAtmosphereProjectedPointInPlace(projectedFrom, scene, from, from.x, from.y, motionMode);
-    resolveAtmosphereProjectedPointInPlace(projectedTo, scene, to, to.x, to.y, motionMode);
+    resolveAtmosphereProjectedPointInPlace(
+      projectedFrom,
+      scene,
+      from,
+      from.x,
+      from.y,
+      motionMode,
+      walkStartFontSize,
+      walkEndFontSize,
+    );
+    resolveAtmosphereProjectedPointInPlace(
+      projectedTo,
+      scene,
+      to,
+      to.x,
+      to.y,
+      motionMode,
+      walkStartFontSize,
+      walkEndFontSize,
+    );
     fromPoint.x = Math.min(scene.width, Math.max(0, projectedFrom.x));
     fromPoint.y = Math.min(scene.height, Math.max(0, projectedFrom.y));
     toPoint.x = Math.min(scene.width, Math.max(0, projectedTo.x));
@@ -1727,8 +1749,8 @@ export function drawMatrixActivityAnimation(
       route,
       0.75 + link.intensity * (0.35 + link.linePulse * 0.4),
       motionMode,
-      projectedFrom.scale,
-      projectedTo.scale,
+      projectedFrom.depthScale,
+      projectedTo.depthScale,
       tunnelCenterProgress,
       intervalStartPoint,
       intervalEndPoint,
@@ -1750,8 +1772,8 @@ export function drawMatrixActivityAnimation(
           const intervalDepthScale = resolveMatrixActivityRouteDepthScale(
             motionMode,
             (interval.startProgress + interval.endProgress) * 0.5,
-            projectedFrom.scale,
-            projectedTo.scale,
+            projectedFrom.depthScale,
+            projectedTo.depthScale,
             tunnelCenterProgress,
           );
           context.lineWidth = resolveMatrixActivityDepthLineWidth(
@@ -1773,8 +1795,8 @@ export function drawMatrixActivityAnimation(
         const packetDepthScale = resolveMatrixActivityRouteDepthScale(
           motionMode,
           packetProgress,
-          projectedFrom.scale,
-          projectedTo.scale,
+          projectedFrom.depthScale,
+          projectedTo.depthScale,
           tunnelCenterProgress,
         );
         context.beginPath();
@@ -1804,6 +1826,8 @@ export function drawMatrixActivityAnimation(
       particle.x,
       particle.y,
       motionMode,
+      walkStartFontSize,
+      walkEndFontSize,
     );
     // Matrix routes may interpolate their two endpoint colors. Keep endpoint
     // lettering on its own existing glyph paint; random routes already share

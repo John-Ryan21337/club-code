@@ -35,6 +35,8 @@ const mocks = vi.hoisted(() => ({
       | "tunnel"
       | "walk-forward"
       | "walk-reverse",
+    fallingEffectMatrixWalkStartFontSize: 1,
+    fallingEffectMatrixWalkEndFontSize: 72,
     fallingEffectOpacity: 0.35,
     fallingEffectSpeed: 1,
     fallingEffectDensity: 1,
@@ -200,6 +202,8 @@ beforeEach(() => {
   mocks.settings.fallingEffectKind = "matrix";
   mocks.settings.fallingEffectMatrixColorCycleSpeed = 32;
   mocks.settings.fallingEffectMatrixMotionMode = "flat";
+  mocks.settings.fallingEffectMatrixWalkStartFontSize = 1;
+  mocks.settings.fallingEffectMatrixWalkEndFontSize = 72;
   mocks.settings.fallingEffectActivityLinks = true;
   mocks.settings.fallingEffectActivityLinkNetworkEnabled = true;
   mocks.settings.fallingEffectActivityLinkDatabaseEnabled = true;
@@ -604,6 +608,39 @@ describe("WindowAtmosphere", () => {
         expect(frameCallbacks.size).toBe(0);
       }
     }
+  });
+
+  it("forwards configurable Walk endpoints to glyph and connector rendering", async () => {
+    (reducedMotionQuery as unknown as { matches: boolean }).matches = true;
+    mocks.settings.fallingEffectMatrixMotionMode = "walk-forward";
+    mocks.settings.fallingEffectMatrixWalkStartFontSize = 12.34;
+    mocks.settings.fallingEffectMatrixWalkEndFontSize = 24.56;
+    mounted = await render(<WindowAtmosphere selectedThreadRef={TEST_SELECTED_THREAD_REF} />);
+
+    await expect
+      .poll(() => mocks.drawAtmosphereScene.mock.calls.at(-1)?.slice(5, 8))
+      .toEqual(["walk-forward", 12.34, 24.56]);
+    expect(mocks.drawMatrixActivityAnimation.mock.calls.at(-1)?.slice(6, 9)).toEqual([
+      "walk-forward",
+      12.34,
+      24.56,
+    ]);
+
+    mocks.settings.fallingEffectMatrixMotionMode = "walk-reverse";
+    mocks.settings.fallingEffectMatrixWalkStartFontSize = 8.01;
+    mocks.settings.fallingEffectMatrixWalkEndFontSize = 48.02;
+    await mounted.rerender(<WindowAtmosphere selectedThreadRef={TEST_SELECTED_THREAD_REF} />);
+
+    expect(mocks.drawAtmosphereScene.mock.calls.at(-1)?.slice(5, 8)).toEqual([
+      "walk-reverse",
+      8.01,
+      48.02,
+    ]);
+    expect(mocks.drawMatrixActivityAnimation.mock.calls.at(-1)?.slice(6, 9)).toEqual([
+      "walk-reverse",
+      8.01,
+      48.02,
+    ]);
   });
 
   it("expires a reduced-motion static activity link with one bounded timer", async () => {
