@@ -31,20 +31,20 @@ Do not combine the cowork commits from #8 with #13 or its forthcoming dependent 
 | #2  | Club foundation restacked on Cafe 0.146                                                 | `baseline/cafe-dev-20260729` at `77af7bcf29c512caba07a00d04c53ae9cd2c536e` | `agent/4c-default-layout` at `fde09e8e178c32f1259b138b7e5cb1074953705f`                | open, ready, clean                                               |
 | #3  | Preserve explicit Claude Opus 4.8 alias regression coverage                             | `agent/4c-default-layout`                                                  | `agent/claude-opus-5-support` at `8fb978ac7b81b95efac013765bec004d99d4243d`            | open, ready, clean                                               |
 | #4  | Matrix provider-activity link foundation                                                | `agent/claude-opus-5-support`                                              | `agent/matrix-activity-connecting-lines` at `92e56252202fbcea621b17eedacb05e4f22f3796` | open, ready, clean                                               |
-| #7  | Provider usage, completion-event-only Auto Nudge, steering safety, and Matrix hardening | `agent/matrix-activity-connecting-lines`                                   | `agent/local-priority-integration` at `cdb4e15680a1b265d27359ce64e1580f8c0a97ed`       | open; GitHub reported `CONFLICTING/DIRTY` at this snapshot       |
+| #7  | Provider usage, completion-event-only Auto Nudge, steering safety, and Matrix hardening | `agent/matrix-activity-connecting-lines`                                   | `agent/local-priority-integration` at `a24a58f2fcbb8bc64fc95cd95ce2518a28c6f699`       | open, ready, clean after an ancestry-only restack                |
 | #13 | Secure cowork authorization, signed event admission, and durable event journal          | `agent/local-priority-integration`                                         | `feature/cowork-foundation` at `8ad2ec37e4db8464f351d67e5ad1fb99e6c29939`              | open, ready, clean after merging the current #7 base             |
 | #14 | Conflict-safe shared database coordination                                              | `feature/cowork-foundation`                                                | `feature/cowork-database-coordination` at `a3c1650a86e6b5b8c4c7f5eda716fd6d4f56e74d`   | open, ready, clean                                               |
 | #8  | Aggregate current local release                                                         | `agent/local-priority-integration`                                         | `release/local-20260728` at `457be1418541bfb0ab08ae5bf9aac8a729ead23f`                 | open draft; GitHub reported `CONFLICTING/DIRTY` at this snapshot |
 | #15 | Hide stale unavailable Project Resources sensor graphs                                  | `release/local-20260728`                                                   | `work/profiles-telemetry-safety` at `9270cc56ffd05132f3ca02bce1582860850c8f0a`         | open, ready, clean; separate from the cowork ladder              |
 
-At the dated snapshot above, GitHub reported #7 as conflicting while another lane was actively restacking it. Re-check rather than treating that observation as immutable: if it is still conflicting, do not land it until it is restacked on the current #4 head and its gates are rerun. The same rule applies to #8 if the omnibus path is deliberately chosen. PRs #13 and #14 were both `MERGEABLE/CLEAN` at this snapshot.
+PR #7 was restacked on the current #4 head with a normal non-force merge whose tree is identical to its prior head; GitHub reported it `MERGEABLE/CLEAN` after focused and full gates passed. Re-check rather than treating that observation as immutable if any base moves again. The same rule applies to #8 if the omnibus path is deliberately chosen. PRs #13 and #14 were also `MERGEABLE/CLEAN` after the #7 restack.
 
 ## Recommended merge order
 
 1. Land #2 on the pinned Cafe baseline, or semantically rebase its delta onto the Cafe target selected by the maintainers.
 2. Land #3 on #2.
 3. Land #4 on #3.
-4. Restack and land #7 on the current #4 head.
+4. Land the repaired #7 on the current #4 head.
 5. Land #13 on the repaired #7 head.
 6. Land #14, the narrow database-coordination PR, on #13.
 7. Land invitations/membership after its final published base is declared. The conservative order is after database coordination because both slices extend collaboration persistence and migration lineage.
@@ -76,7 +76,7 @@ git rev-list --reverse 8dc05d58f6457a0a31e14215d3617a9af9aa7760^..375849ce173ce8
 git rev-list --reverse a48d9c93aac6e34579e1571289bc37389a216edd^..a3c1650a86e6b5b8c4c7f5eda716fd6d4f56e74d | git cherry-pick --stdin
 ```
 
-Do not cherry-pick `8fb978ac` or `92e56252` after PR #2: both are branch-local copies of the same completion-event-only Auto Nudge cleanup already present as `fde09e8e`. Do not cherry-pick PR #13's final merge commit `8ad2ec37`; apply the contiguous cowork series shown above after #7 instead.
+Do not cherry-pick `8fb978ac` or `92e56252` after PR #2: both are branch-local copies of the same completion-event-only Auto Nudge cleanup already present as `fde09e8e`. PR #7's published `a24a58f2` restack commit changes ancestry only, so the curated semantic range intentionally ends at `cdb4e156`. Do not cherry-pick PR #13's final merge commit `8ad2ec37`; apply the contiguous cowork series shown above after #7 instead.
 
 PR #15 is a separate one-commit telemetry follow-up. Cherry-pick `9270cc56ffd05132f3ca02bce1582860850c8f0a` only into a tree that already contains #8's Project Resources implementation; it is not part of the cowork sequence.
 
