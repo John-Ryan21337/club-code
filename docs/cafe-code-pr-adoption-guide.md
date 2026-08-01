@@ -17,6 +17,8 @@ These counts describe `John-Ryan21337/club-code`, not pull requests already subm
 - [cafeai/cafe-code PR #15](https://github.com/cafeai/cafe-code/pull/15), linked to [issue #14](https://github.com/cafeai/cafe-code/issues/14), recuts the audited #23 telemetry foundation at `79398c7d0a36942c525d630537e9f0980232742c` as a dependency-free six-file/899-line review unit.
 - [cafeai/cafe-code PR #17](https://github.com/cafeai/cafe-code/pull/17), linked to [issue #16](https://github.com/cafeai/cafe-code/issues/16), recuts #22 into an audited five-file/715-line save/apply-only profiles slice at `bdc8f802a232b2cd14a9d1ca035c6170068e3de8`; screenshots remain required before it becomes review-ready.
 
+The larger cowork suite has deliberately not been dumped upstream. [Cafe issue #18](https://github.com/cafeai/cafe-code/issues/18) proposes only the security-first shared-project identity, authorization, membership-epoch, and signed-event foundation and asks for maintainer direction before a third direct draft. This respects Cafe's warning that it is not actively accepting contributions, strongly prefers small focused changes, and requires UI evidence.
+
 The active implementation foundation is:
 
 `#2 -> #3 -> #4 -> #7`
