@@ -131,16 +131,20 @@ type KeyRow = {
   readonly membershipEpoch: number;
   readonly activatedAt: string;
   readonly revokedAt: string | null;
-  readonly boundUserId?: string;
+  readonly boundUserId?: string | null;
 };
 
 type CurrentStatusKeyRow = KeyRow & {
+  readonly challengeId: string | null;
   readonly challengeSharedProjectId: string | null;
   readonly challengeUserId: string | null;
   readonly challengeDeviceId: string | null;
   readonly challengeDeviceKeyId: string | null;
   readonly challengePublicKeySpkiDer: Uint8Array | null;
+  readonly challengeNonceSha256: string | null;
   readonly challengeMembershipEpoch: number | null;
+  readonly challengeIssuedAt: string | null;
+  readonly challengeExpiresAt: string | null;
   readonly challengeCompletedAt: string | null;
 };
 
@@ -433,17 +437,19 @@ function makeStore() {
           k.public_key_spki_der AS "publicKeySpkiDer",
           k.membership_epoch AS "membershipEpoch", k.activated_at AS "activatedAt",
           k.revoked_at AS "revokedAt", d.user_id AS "boundUserId",
-          c.shared_project_id AS "challengeSharedProjectId",
+          c.challenge_id AS "challengeId", c.shared_project_id AS "challengeSharedProjectId",
           c.user_id AS "challengeUserId", c.device_id AS "challengeDeviceId",
           c.device_key_id AS "challengeDeviceKeyId",
           c.public_key_spki_der AS "challengePublicKeySpkiDer",
+          c.nonce_sha256 AS "challengeNonceSha256",
           c.membership_epoch AS "challengeMembershipEpoch",
+          c.issued_at AS "challengeIssuedAt", c.expires_at AS "challengeExpiresAt",
           c.completed_at AS "challengeCompletedAt"
         FROM collaboration_device_keys k
-        JOIN collaboration_project_devices d
+        LEFT JOIN collaboration_project_devices d
           ON d.shared_project_id = k.shared_project_id AND d.device_id = k.device_id
         LEFT JOIN collaboration_device_enrollment_challenges c
-          ON c.device_key_id = k.device_key_id
+          ON c.shared_project_id = k.shared_project_id AND c.device_key_id = k.device_key_id
         WHERE k.shared_project_id = ${sharedProjectId} AND k.device_id = ${deviceId}
           AND k.revoked_at IS NULL
         LIMIT 2
@@ -506,22 +512,50 @@ function makeStore() {
               const key = yield* keyFromRow(operation, rows[0]!);
               const row = rows[0]!;
               if (
+                row.challengeId === null ||
+                row.challengeSharedProjectId === null ||
+                row.challengeUserId === null ||
+                row.challengeDeviceId === null ||
+                row.challengeDeviceKeyId === null ||
+                row.challengePublicKeySpkiDer === null ||
+                row.challengeNonceSha256 === null ||
+                row.challengeMembershipEpoch === null ||
+                row.challengeIssuedAt === null ||
+                row.challengeExpiresAt === null ||
+                row.challengeCompletedAt === null
+              ) {
+                return yield* Effect.fail(fail(operation, "stored-corruption"));
+              }
+              const challengeRow: ChallengeRow = {
+                challengeId: row.challengeId,
+                sharedProjectId: row.challengeSharedProjectId,
+                userId: row.challengeUserId,
+                deviceId: row.challengeDeviceId,
+                deviceKeyId: row.challengeDeviceKeyId,
+                publicKeySpkiDer: row.challengePublicKeySpkiDer,
+                nonceSha256: row.challengeNonceSha256,
+                membershipEpoch: row.challengeMembershipEpoch,
+                issuedAt: row.challengeIssuedAt,
+                expiresAt: row.challengeExpiresAt,
+                completedAt: row.challengeCompletedAt,
+              };
+              const challenge = yield* challengeFromRow(operation, challengeRow);
+              const activatedAt = DateTime.toEpochMillis(key.activatedAt);
+              if (
                 key.sharedProjectId !== request.sharedProjectId ||
                 key.userId !== actor.userId ||
                 key.deviceId !== actor.deviceId ||
                 key.revokedAt !== null ||
-                row.challengeSharedProjectId !== key.sharedProjectId ||
-                row.challengeUserId !== key.userId ||
-                row.challengeDeviceId !== key.deviceId ||
-                row.challengeDeviceKeyId !== key.deviceKeyId ||
-                row.challengeMembershipEpoch !== key.membershipEpoch ||
-                row.challengeCompletedAt === null ||
-                !isCanonicalTimestamp(row.challengeCompletedAt) ||
+                challenge.sharedProjectId !== key.sharedProjectId ||
+                challenge.userId !== key.userId ||
+                challenge.deviceId !== key.deviceId ||
+                challenge.deviceKeyId !== key.deviceKeyId ||
+                challenge.publicKeySpkiDer !== key.publicKeySpkiDer ||
+                challenge.membershipEpoch !== key.membershipEpoch ||
+                !SHA256_PATTERN.test(row.challengeNonceSha256) ||
                 row.challengeCompletedAt !== proofTimestamp(key.activatedAt) ||
-                row.challengePublicKeySpkiDer === null ||
-                !Buffer.from(row.challengePublicKeySpkiDer).equals(
-                  Buffer.from(row.publicKeySpkiDer),
-                )
+                activatedAt < DateTime.toEpochMillis(challenge.issuedAt) ||
+                activatedAt >= DateTime.toEpochMillis(challenge.expiresAt)
               ) {
                 return yield* Effect.fail(fail(operation, "stored-corruption"));
               }
@@ -885,7 +919,7 @@ function makeStore() {
             if (current.userId !== actor.userId || current.deviceId !== actor.deviceId) {
               return yield* Effect.fail(fail(operation, "device-key-not-found"));
             }
-            if (current.revokedAt !== null)
+            if (current.revokedAt !== null || current.membershipEpoch !== actor.membershipEpoch)
               return yield* Effect.fail(fail(operation, "device-key-not-active"));
             yield* sql`
               UPDATE collaboration_device_keys SET revoked_at = ${nowString}

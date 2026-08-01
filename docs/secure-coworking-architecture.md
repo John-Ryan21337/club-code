@@ -336,9 +336,11 @@ raised only after load, partition, revocation, abuse, and backpressure testing.
   and revocation. The response is bounded to identity, current epoch, status,
   key ID, and activation time. It never exposes key bytes, enrollment nonces,
   digests, receipt hashes, or another device. A stale-epoch key reports
-  enrollment required, while malformed or substituted persisted key material
-  fails closed. The returned key ID can be passed to the existing self-only,
-  actor/epoch/request-bound idempotent revocation command.
+  enrollment required, while missing device bindings or malformed/substituted
+  key and enrollment-challenge lineage fail closed. The returned key ID can be
+  passed to the existing self-only, actor/epoch/request-bound idempotent
+  revocation command; a key from an older membership epoch cannot be revoked as
+  though it were current authority.
 - `packages/contracts/src/fileSync.ts` defines conflict-safe database
   coordination modes, portable normalized replica paths, consistent immutable
   snapshot descriptors, bounded writer leases, and identity-bound

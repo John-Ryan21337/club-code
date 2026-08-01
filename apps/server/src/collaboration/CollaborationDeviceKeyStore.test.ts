@@ -380,6 +380,115 @@ describe("CollaborationDeviceKeyStore", () => {
     }).pipe(Effect.provide(memoryLayer)),
   );
 
+  it.effect(
+    "does not disguise missing binding or corrupt challenge lineage as enrollment state",
+    () =>
+      Effect.gen(function* () {
+        yield* TestClock.setTime(NOW);
+        yield* seedProject("project-status-corruption");
+        const store = yield* CollaborationDeviceKeyStore;
+        const actor = principal("project-status-corruption");
+        const enrolled = yield* enroll(store, actor, "status-corruption");
+        const sql = yield* SqlClient.SqlClient;
+
+        yield* sql`
+        UPDATE collaboration_device_enrollment_challenges
+        SET expires_at = ${"2026-08-01T12:06:00.000Z"}
+        WHERE device_key_id = ${enrolled.completed.key.deviceKeyId}
+      `;
+        const badLifetime = yield* store
+          .getCurrentDeviceKeyStatus({
+            principal: actor,
+            request: { sharedProjectId: actor.sharedProjectId },
+          })
+          .pipe(Effect.flip);
+        expectFailure(badLifetime, "stored-corruption");
+        yield* sql`
+        UPDATE collaboration_device_enrollment_challenges
+        SET expires_at = ${"2026-08-01T12:05:00.000Z"}
+        WHERE device_key_id = ${enrolled.completed.key.deviceKeyId}
+      `;
+
+        yield* sql`PRAGMA ignore_check_constraints = ON`;
+        yield* sql`
+        UPDATE collaboration_device_enrollment_challenges
+        SET nonce_sha256 = ${"g".repeat(64)}
+        WHERE device_key_id = ${enrolled.completed.key.deviceKeyId}
+      `;
+        yield* sql`PRAGMA ignore_check_constraints = OFF`;
+        const badDigest = yield* store
+          .getCurrentDeviceKeyStatus({
+            principal: actor,
+            request: { sharedProjectId: actor.sharedProjectId },
+          })
+          .pipe(Effect.flip);
+        expectFailure(badDigest, "stored-corruption");
+      }).pipe(Effect.provide(memoryLayer)),
+  );
+
+  it.effect("fails closed when an active key has lost its durable device binding", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW);
+      yield* seedProject("project-status-missing-binding");
+      const store = yield* CollaborationDeviceKeyStore;
+      const actor = principal("project-status-missing-binding");
+      const enrolled = yield* enroll(store, actor, "status-missing-binding");
+      const sql = yield* SqlClient.SqlClient;
+
+      yield* sql`PRAGMA foreign_keys = OFF`;
+      yield* sql`
+        DELETE FROM collaboration_project_devices
+        WHERE shared_project_id = ${actor.sharedProjectId} AND device_id = ${actor.deviceId}
+      `;
+      const retained = yield* sql<{ readonly count: number }>`
+        SELECT COUNT(*) AS count FROM collaboration_device_keys
+        WHERE device_key_id = ${enrolled.completed.key.deviceKeyId}
+      `;
+      assert.equal(retained[0]?.count, 1);
+      yield* sql`PRAGMA foreign_keys = ON`;
+
+      const missingBinding = yield* store
+        .getCurrentDeviceKeyStatus({
+          principal: actor,
+          request: { sharedProjectId: actor.sharedProjectId },
+        })
+        .pipe(Effect.flip);
+      expectFailure(missingBinding, "stored-corruption");
+    }).pipe(Effect.provide(memoryLayer)),
+  );
+
+  it.effect("does not self-revoke an active key from a stale membership epoch", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW);
+      yield* seedProject("project-stale-revoke");
+      const store = yield* CollaborationDeviceKeyStore;
+      const actor = principal("project-stale-revoke");
+      const enrolled = yield* enroll(store, actor, "stale-revoke");
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`
+        UPDATE collaboration_projects SET membership_epoch = 2
+        WHERE shared_project_id = ${actor.sharedProjectId}
+      `;
+      const currentActor = principal("project-stale-revoke", "owner-1", actor.deviceId, 2);
+      const staleRevoke = yield* store
+        .revokeKey({
+          principal: currentActor,
+          request: {
+            commandId: "revoke-stale-epoch-key",
+            sharedProjectId: currentActor.sharedProjectId,
+            deviceKeyId: enrolled.completed.key.deviceKeyId,
+          },
+        })
+        .pipe(Effect.flip);
+      expectFailure(staleRevoke, "device-key-not-active");
+      const rows = yield* sql<{ readonly revokedAt: string | null }>`
+        SELECT revoked_at AS "revokedAt" FROM collaboration_device_keys
+        WHERE device_key_id = ${enrolled.completed.key.deviceKeyId}
+      `;
+      assert.isNull(rows[0]?.revokedAt);
+    }).pipe(Effect.provide(memoryLayer)),
+  );
+
   it.effect("rotates by revoking the old key before exposing the new authority", () =>
     Effect.gen(function* () {
       yield* TestClock.setTime(NOW);
