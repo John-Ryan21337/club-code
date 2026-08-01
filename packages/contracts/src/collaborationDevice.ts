@@ -131,6 +131,46 @@ export const CollaborationDeviceKeyRecord = Schema.Struct({
 );
 export type CollaborationDeviceKeyRecord = typeof CollaborationDeviceKeyRecord.Type;
 
+/**
+ * Authenticated current-device lookup. User and device identity are
+ * intentionally absent: the server derives both from the authenticated
+ * principal instead of accepting an object-reference selector from a client.
+ */
+export const CollaborationCurrentDeviceKeyStatusRequest = Schema.Struct({
+  sharedProjectId: SharedProjectId,
+});
+export type CollaborationCurrentDeviceKeyStatusRequest =
+  typeof CollaborationCurrentDeviceKeyStatusRequest.Type;
+
+/** Public metadata sufficient to present and self-revoke the current key. */
+export const CollaborationCurrentDeviceKeyPublicRecord = Schema.Struct({
+  deviceKeyId: CollaborationDeviceKeyId,
+  activatedAt: Schema.DateTimeUtcFromString,
+});
+export type CollaborationCurrentDeviceKeyPublicRecord =
+  typeof CollaborationCurrentDeviceKeyPublicRecord.Type;
+
+const CollaborationCurrentDeviceKeyStatusIdentity = {
+  sharedProjectId: SharedProjectId,
+  userId: UserId,
+  deviceId: DeviceId,
+  membershipEpoch: CollaborationMembershipEpoch,
+} as const;
+
+export const CollaborationCurrentDeviceKeyStatus = Schema.Union([
+  Schema.Struct({
+    ...CollaborationCurrentDeviceKeyStatusIdentity,
+    status: Schema.Literal("enrollment-required"),
+    activeKey: Schema.Null,
+  }),
+  Schema.Struct({
+    ...CollaborationCurrentDeviceKeyStatusIdentity,
+    status: Schema.Literal("active"),
+    activeKey: CollaborationCurrentDeviceKeyPublicRecord,
+  }),
+]);
+export type CollaborationCurrentDeviceKeyStatus = typeof CollaborationCurrentDeviceKeyStatus.Type;
+
 export const CollaborationDeviceKeyMutationResult = Schema.Struct({
   disposition: Schema.Literals(["activated", "revoked", "already-applied"]),
   key: CollaborationDeviceKeyRecord,
