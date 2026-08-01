@@ -444,6 +444,22 @@ describe("CollaborationNetworkAdapter", () => {
     sockets.push(replacement);
   });
 
+  it("caps pre-resolution WebSocket occupancy per source", async () => {
+    const handle = await startCollaborationNetworkAdapter(
+      options(makeFacade(), { maxConnections: 4, maxConnectionsPerSource: 1 }),
+    );
+    handles.push(handle);
+    const first = await openWebSocket(handle.port!);
+    sockets.push(first);
+    await expect(openWebSocket(handle.port!)).rejects.toThrow();
+
+    const closed = socketClose(first);
+    first.terminate();
+    await closed;
+    const replacement = await openWebSocket(handle.port!);
+    sockets.push(replacement);
+  });
+
   it("releases a connection admission when the WebSocket upgrade throws", async () => {
     let failUpgrade = true;
     const handle = await startCollaborationNetworkAdapter({

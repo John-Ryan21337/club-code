@@ -73,6 +73,8 @@ export interface CollaborationNetworkAdapterConfig {
   /** Exact serialized origins accepted from HTTP and WebSocket clients. */
   readonly allowedOrigins: ReadonlyArray<string>;
   readonly maxConnections?: number;
+  /** Caps unauthenticated upgrade occupancy from one network source. */
+  readonly maxConnectionsPerSource?: number;
   readonly maxSubscriptionsPerConnection?: number;
   readonly maxInFlightRequestsPerConnection?: number;
   readonly requestsPerMinute?: number;
@@ -138,6 +140,7 @@ interface ValidatedConfig {
   readonly allowedHosts: ReadonlySet<string>;
   readonly allowedOrigins: ReadonlySet<string>;
   readonly maxConnections: number;
+  readonly maxConnectionsPerSource: number;
   readonly maxSubscriptions: number;
   readonly maxInFlight: number;
   readonly requestsPerMinute: number;
@@ -237,6 +240,11 @@ function validateConfig(input: CollaborationNetworkAdapterConfig): ValidatedConf
     maxConnections: positiveInteger(
       input.maxConnections ?? COLLABORATION_NETWORK_MAX_CONNECTIONS,
       "collaboration network connection limit",
+    ),
+    maxConnectionsPerSource: positiveInteger(
+      input.maxConnectionsPerSource ??
+        Math.min(4, input.maxConnections ?? COLLABORATION_NETWORK_MAX_CONNECTIONS),
+      "collaboration network per-source connection limit",
     ),
     maxSubscriptions: positiveInteger(
       input.maxSubscriptionsPerConnection ?? COLLABORATION_NETWORK_MAX_SUBSCRIPTIONS_PER_CONNECTION,
@@ -443,18 +451,26 @@ class NonceReplayGuard {
 
 class ConnectionAdmission {
   #active = 0;
+  readonly #bySource = new Map<string, number>();
   readonly maximum: number;
-  constructor(maximum: number) {
+  readonly maximumPerSource: number;
+  constructor(maximum: number, maximumPerSource: number) {
     this.maximum = maximum;
+    this.maximumPerSource = maximumPerSource;
   }
-  acquire(): (() => void) | null {
-    if (this.#active >= this.maximum) return null;
+  acquire(source: string): (() => void) | null {
+    const sourceActive = this.#bySource.get(source) ?? 0;
+    if (this.#active >= this.maximum || sourceActive >= this.maximumPerSource) return null;
     this.#active += 1;
+    this.#bySource.set(source, sourceActive + 1);
     let released = false;
     return () => {
       if (released) return;
       released = true;
       this.#active -= 1;
+      const current = this.#bySource.get(source) ?? 1;
+      if (current <= 1) this.#bySource.delete(source);
+      else this.#bySource.set(source, current - 1);
     };
   }
 }
@@ -678,7 +694,10 @@ export async function startCollaborationNetworkAdapter(
   );
   const replayRates = new FixedWindowRateGate(config.replaysPerMinute, config.maxConnections * 16);
   const nonces = new NonceReplayGuard(config.nonceTtlMs, config.maxRememberedNonces);
-  const connections = new ConnectionAdmission(config.maxConnections);
+  const connections = new ConnectionAdmission(
+    config.maxConnections,
+    config.maxConnectionsPerSource,
+  );
   const activeControllers = new Set<AbortController>();
   const sockets = new Set<NodeWS.WebSocket>();
   let draining = false;
@@ -743,7 +762,9 @@ export async function startCollaborationNetworkAdapter(
 
   server.on("request", async (request, response) => {
     const accepted = boundary(request);
-    const release = connections.acquire();
+    const release = connections.acquire(
+      stableKey("source", request.socket.remoteAddress ?? "unknown"),
+    );
     if (
       !accepted ||
       !release ||
@@ -822,7 +843,9 @@ export async function startCollaborationNetworkAdapter(
 
   server.on("upgrade", (request, socket, head) => {
     const accepted = boundary(request);
-    const release = connections.acquire();
+    const release = connections.acquire(
+      stableKey("source", request.socket.remoteAddress ?? "unknown"),
+    );
     if (
       !accepted ||
       !release ||
