@@ -15,4 +15,4 @@ This slice adds a listener-independent server boundary for the shared authored-m
 
 ## Deliberate exclusions
 
-This change does not add an HTTP, RPC, WebSocket, or public network listener. It does not add UI, OS key custody, file synchronization, database migrations, agent dispatch, or server-wide orchestration methods. A later transport binding may expose only the project-scoped facade methods; it must not translate this facade into a general server orchestration RPC surface.
+This facade slice itself does not add an HTTP, RPC, WebSocket, or public network listener. It does not add UI, OS key custody, file synchronization, database migrations, agent dispatch, or server-wide orchestration methods. The subsequent [collaboration network adapter](./collaboration-network-adapter.md) binds only these project-scoped methods on a separate default-off listener; it does not translate the facade into a general server orchestration RPC surface.
