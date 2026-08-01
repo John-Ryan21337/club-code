@@ -4,7 +4,7 @@ import {
   SharedProjectId,
 } from "@cafecode/contracts";
 import { assert, describe, it } from "@effect/vitest";
-import { generateKeyPairSync, sign } from "node:crypto";
+import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -173,6 +173,33 @@ describe("CollaborationDeviceKeyStore", () => {
         columns.some((column) => /private|secret|nonce/i.test(column.name)),
         false,
       );
+    }).pipe(Effect.provide(memoryLayer)),
+  );
+
+  it.effect("rejects low-order Ed25519 keys which OpenSSL would accept for forged proofs", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW);
+      yield* seedProject("project-low-order");
+      const store = yield* CollaborationDeviceKeyStore;
+      const actor = principal("project-low-order");
+      const spkiPrefix = Buffer.from("302a300506032b6570032100", "hex");
+      const lowOrderPoints = [
+        Buffer.alloc(32),
+        Buffer.concat([Buffer.from([1]), Buffer.alloc(31)]),
+      ];
+      for (const [index, point] of lowOrderPoints.entries()) {
+        const error = yield* store
+          .beginEnrollment({
+            principal: actor,
+            request: {
+              commandId: `begin-low-order-${index}`,
+              sharedProjectId: actor.sharedProjectId,
+              publicKeySpkiDer: Buffer.concat([spkiPrefix, point]).toString("base64url"),
+            },
+          })
+          .pipe(Effect.flip);
+        expectFailure(error, "invalid-input");
+      }
     }).pipe(Effect.provide(memoryLayer)),
   );
 
@@ -354,6 +381,62 @@ describe("CollaborationDeviceKeyStore", () => {
     }).pipe(Effect.provide(memoryLayer)),
   );
 
+  it.effect("rejects completion when membership changes after proof generation", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW);
+      yield* seedProject("project-proof-membership");
+      const store = yield* CollaborationDeviceKeyStore;
+      const actor = principal("project-proof-membership");
+      const keys = keyPair();
+      const begun = yield* store.beginEnrollment({
+        principal: actor,
+        request: {
+          commandId: "begin-proof-membership",
+          sharedProjectId: actor.sharedProjectId,
+          publicKeySpkiDer: keys.publicKeySpkiDer,
+        },
+      });
+      const proofSignature = sign(
+        null,
+        collaborationDeviceEnrollmentProofBytes({
+          challenge: begun.challenge,
+          nonce: begun.nonce!,
+        }),
+        keys.privateKey,
+      ).toString("base64url");
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`
+        UPDATE collaboration_projects SET membership_epoch = 2
+        WHERE shared_project_id = ${"project-proof-membership"}
+      `;
+      yield* sql`
+        DELETE FROM collaboration_project_members
+        WHERE shared_project_id = ${"project-proof-membership"}
+          AND user_id = ${actor.userId}
+      `;
+
+      const error = yield* store
+        .completeEnrollment({
+          principal: actor,
+          request: {
+            commandId: "complete-proof-membership",
+            sharedProjectId: actor.sharedProjectId,
+            challengeId: begun.challenge.challengeId,
+            nonce: begun.nonce!,
+            proofSignature,
+          },
+        })
+        .pipe(Effect.flip);
+      expectFailure(error, "membership-epoch-mismatch");
+      const rows = yield* sql<{ readonly completedAt: string | null }>`
+        SELECT completed_at AS "completedAt"
+        FROM collaboration_device_enrollment_challenges
+        WHERE challenge_id = ${begun.challenge.challengeId}
+      `;
+      assert.isNull(rows[0]!.completedAt);
+    }).pipe(Effect.provide(memoryLayer)),
+  );
+
   it.effect("never resurrects a key after the project membership epoch changes", () =>
     Effect.gen(function* () {
       yield* TestClock.setTime(NOW);
@@ -439,6 +522,74 @@ describe("CollaborationDeviceKeyStore", () => {
     }).pipe(Effect.provide(memoryLayer)),
   );
 
+  it.effect("rejects validly rehashed enrollment receipts substituted from another actor", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW);
+      yield* seedProject("project-receipt-result", ["owner-1", "owner-2"]);
+      const store = yield* CollaborationDeviceKeyStore;
+      const firstActor = principal("project-receipt-result", "owner-1");
+      const secondActor = principal("project-receipt-result", "owner-2");
+      const first = yield* enroll(store, firstActor, "receipt-result-first");
+      yield* enroll(store, secondActor, "receipt-result-second");
+
+      const sql = yield* SqlClient.SqlClient;
+      const replacementBegin = yield* sql<{ readonly resultJson: string }>`
+        SELECT result_json AS "resultJson"
+        FROM collaboration_device_command_receipts
+        WHERE shared_project_id = ${"project-receipt-result"}
+          AND command_id = ${"begin-receipt-result-second"}
+      `;
+      const replacementBeginJson = replacementBegin[0]!.resultJson;
+      const replacementBeginHash = createHash("sha256").update(replacementBeginJson).digest("hex");
+      yield* sql`
+        UPDATE collaboration_device_command_receipts
+        SET result_json = ${replacementBeginJson}, result_sha256 = ${replacementBeginHash}
+        WHERE shared_project_id = ${"project-receipt-result"}
+          AND command_id = ${"begin-receipt-result-first"}
+      `;
+      const beginReplay = yield* store
+        .beginEnrollment({
+          principal: firstActor,
+          request: {
+            commandId: "begin-receipt-result-first",
+            sharedProjectId: firstActor.sharedProjectId,
+            publicKeySpkiDer: first.keys.publicKeySpkiDer,
+          },
+        })
+        .pipe(Effect.flip);
+      expectFailure(beginReplay, "stored-corruption");
+
+      const replacement = yield* sql<{ readonly resultJson: string }>`
+        SELECT result_json AS "resultJson"
+        FROM collaboration_device_command_receipts
+        WHERE shared_project_id = ${"project-receipt-result"}
+          AND command_id = ${"complete-receipt-result-second"}
+      `;
+      const replacementJson = replacement[0]!.resultJson;
+      const replacementHash = createHash("sha256").update(replacementJson).digest("hex");
+      yield* sql`
+        UPDATE collaboration_device_command_receipts
+        SET result_json = ${replacementJson}, result_sha256 = ${replacementHash}
+        WHERE shared_project_id = ${"project-receipt-result"}
+          AND command_id = ${"complete-receipt-result-first"}
+      `;
+
+      const replay = yield* store
+        .completeEnrollment({
+          principal: firstActor,
+          request: {
+            commandId: "complete-receipt-result-first",
+            sharedProjectId: firstActor.sharedProjectId,
+            challengeId: first.begun.challenge.challengeId,
+            nonce: first.begun.nonce!,
+            proofSignature: first.proofSignature,
+          },
+        })
+        .pipe(Effect.flip);
+      expectFailure(replay, "stored-corruption");
+    }).pipe(Effect.provide(memoryLayer)),
+  );
+
   it.effect("fails closed when persisted key bytes are not canonical Ed25519", () =>
     Effect.gen(function* () {
       yield* TestClock.setTime(NOW);
@@ -455,6 +606,32 @@ describe("CollaborationDeviceKeyStore", () => {
       const error = yield* store
         .getActiveEd25519PublicKey({
           sharedProjectId: decodeProjectId("project-corruption"),
+          userId: actor.userId,
+          deviceId: actor.deviceId,
+          deviceKeyId: enrolled.completed.key.deviceKeyId,
+          membershipEpoch: actor.membershipEpoch,
+        })
+        .pipe(Effect.flip);
+      expectFailure(error, "stored-corruption");
+    }).pipe(Effect.provide(memoryLayer)),
+  );
+
+  it.effect("fails closed when persisted key timestamps are not canonical server timestamps", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW);
+      yield* seedProject("project-timestamp-corruption");
+      const store = yield* CollaborationDeviceKeyStore;
+      const actor = principal("project-timestamp-corruption");
+      const enrolled = yield* enroll(store, actor, "timestamp-corruption");
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`
+        UPDATE collaboration_device_keys
+        SET activated_at = ${"2026-08-01 12:00:00"}
+        WHERE device_key_id = ${enrolled.completed.key.deviceKeyId}
+      `;
+      const error = yield* store
+        .getActiveEd25519PublicKey({
+          sharedProjectId: decodeProjectId("project-timestamp-corruption"),
           userId: actor.userId,
           deviceId: actor.deviceId,
           deviceKeyId: enrolled.completed.key.deviceKeyId,
@@ -540,5 +717,96 @@ describe("CollaborationDeviceKeyStore", () => {
       },
       (directory) => Effect.promise(() => rm(directory, { recursive: true, force: true })),
     ),
+  );
+
+  it.effect(
+    "serializes a two-client revoke-versus-rotate race without resurrecting authority",
+    () =>
+      Effect.acquireUseRelease(
+        Effect.promise(() => mkdtemp(join(tmpdir(), "club-code-device-revoke-rotate-"))),
+        (directory) => {
+          const filename = join(directory, "state.sqlite");
+          const actor = principal("project-revoke-rotate");
+          return Effect.gen(function* () {
+            yield* TestClock.setTime(NOW);
+            const prepared = yield* Effect.gen(function* () {
+              yield* runMigrations();
+              yield* seedProject("project-revoke-rotate");
+              const store = yield* CollaborationDeviceKeyStore;
+              const current = yield* enroll(store, actor, "revoke-rotate-current");
+              const replacementKeys = keyPair();
+              const replacement = yield* store.beginEnrollment({
+                principal: actor,
+                request: {
+                  commandId: "begin-revoke-rotate-replacement",
+                  sharedProjectId: actor.sharedProjectId,
+                  publicKeySpkiDer: replacementKeys.publicKeySpkiDer,
+                },
+              });
+              return { current, replacement, replacementKeys };
+            }).pipe(Effect.provide(fileLayer(filename)));
+
+            const replacementNonce = prepared.replacement.nonce!;
+            const completeReplacement = Effect.gen(function* () {
+              const store = yield* CollaborationDeviceKeyStore;
+              return yield* store.completeEnrollment({
+                principal: actor,
+                request: {
+                  commandId: "complete-revoke-rotate-replacement",
+                  sharedProjectId: actor.sharedProjectId,
+                  challengeId: prepared.replacement.challenge.challengeId,
+                  nonce: replacementNonce,
+                  proofSignature: sign(
+                    null,
+                    collaborationDeviceEnrollmentProofBytes({
+                      challenge: prepared.replacement.challenge,
+                      nonce: replacementNonce,
+                    }),
+                    prepared.replacementKeys.privateKey,
+                  ).toString("base64url"),
+                },
+              });
+            }).pipe(Effect.provide(fileLayer(filename)));
+            const revokeCurrent = Effect.gen(function* () {
+              const store = yield* CollaborationDeviceKeyStore;
+              return yield* store
+                .revokeKey({
+                  principal: actor,
+                  request: {
+                    commandId: "revoke-during-rotate",
+                    sharedProjectId: actor.sharedProjectId,
+                    deviceKeyId: prepared.current.completed.key.deviceKeyId,
+                  },
+                })
+                .pipe(
+                  Effect.match({
+                    onFailure: (error) => ({ kind: "failure" as const, error }),
+                    onSuccess: (result) => ({ kind: "success" as const, result }),
+                  }),
+                );
+            }).pipe(Effect.provide(fileLayer(filename)));
+
+            const [completed, revoked] = yield* Effect.all([completeReplacement, revokeCurrent], {
+              concurrency: "unbounded",
+            });
+            assert.equal(completed.key.deviceKeyId, prepared.replacement.challenge.deviceKeyId);
+            if (revoked.kind === "failure") {
+              expectFailure(revoked.error, "device-key-not-active");
+            }
+
+            const state = yield* Effect.gen(function* () {
+              const sql = yield* SqlClient.SqlClient;
+              return yield* sql<{ readonly deviceKeyId: string }>`
+              SELECT device_key_id AS "deviceKeyId"
+              FROM collaboration_device_keys
+              WHERE shared_project_id = ${"project-revoke-rotate"}
+                AND device_id = ${actor.deviceId} AND revoked_at IS NULL
+            `;
+            }).pipe(Effect.provide(fileLayer(filename)));
+            assert.deepEqual(state, [{ deviceKeyId: prepared.replacement.challenge.deviceKeyId }]);
+          });
+        },
+        (directory) => Effect.promise(() => rm(directory, { recursive: true, force: true })),
+      ),
   );
 });

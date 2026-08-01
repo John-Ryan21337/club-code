@@ -2,7 +2,6 @@ import {
   COLLABORATION_ACCESS_SESSION_MAX_LIFETIME_MILLIS,
   COLLABORATION_DEVICE_CHALLENGE_LIFETIME_MILLIS,
   COLLABORATION_ED25519_SIGNATURE_BYTES,
-  COLLABORATION_ED25519_SPKI_DER_BYTES,
   CollaborationBeginDeviceEnrollmentRequest,
   CollaborationBeginDeviceEnrollmentResult,
   CollaborationCompleteDeviceEnrollmentRequest,
@@ -17,7 +16,7 @@ import {
   type CollaborationPrincipal as Principal,
   type SharedProjectId,
 } from "@cafecode/contracts";
-import { createHash, createPublicKey, randomBytes, randomUUID, verify } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { Buffer } from "node:buffer";
 
 import * as Context from "effect/Context";
@@ -33,6 +32,10 @@ import {
   type CollaborationDeviceKeyAuthorityShape,
 } from "./CollaborationEventAdmission.ts";
 import { validateCollaborationPrincipal } from "./CollaborationAuthorization.ts";
+import {
+  canonicalEd25519PublicKeySpkiDer,
+  verifyStrictEd25519Signature,
+} from "./CollaborationEd25519.ts";
 
 const PROOF_DOMAIN = "club-code/cowork-device-enrollment/v1";
 const NONCE_HASH_DOMAIN = "club-code/cowork-device-enrollment-nonce/v1\0";
@@ -128,6 +131,10 @@ const sha256 = (value: string | Uint8Array): string =>
   createHash("sha256").update(value).digest("hex");
 const nonceSha256 = (nonce: string): string => sha256(`${NONCE_HASH_DOMAIN}${nonce}`);
 const nowIso = (millis: number): string => new Date(millis).toISOString();
+const isCanonicalTimestamp = (value: string): boolean => {
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) && new Date(parsed).toISOString() === value;
+};
 
 function fail(operation: string, reason: CollaborationDeviceKeyStoreFailureReason) {
   return new CollaborationDeviceKeyStoreError({ operation, reason });
@@ -167,31 +174,13 @@ function parseCanonicalJson(
   });
 }
 
-function canonicalEd25519PublicKey(encoded: string): Buffer | null {
-  try {
-    const bytes = Buffer.from(encoded, "base64url");
-    if (
-      bytes.byteLength !== COLLABORATION_ED25519_SPKI_DER_BYTES ||
-      bytes.toString("base64url") !== encoded
-    ) {
-      return null;
-    }
-    const key = createPublicKey({ key: bytes, format: "der", type: "spki" });
-    if (key.asymmetricKeyType !== "ed25519") return null;
-    const canonical = key.export({ format: "der", type: "spki" });
-    return canonical.equals(bytes) ? Buffer.from(bytes) : null;
-  } catch {
-    return null;
-  }
-}
-
 function encodedPublicKey(
   operation: string,
   value: Uint8Array,
 ): Effect.Effect<string, CollaborationDeviceKeyStoreError> {
   if (!(value instanceof Uint8Array)) return Effect.fail(fail(operation, "stored-corruption"));
   const encoded = Buffer.from(value).toString("base64url");
-  return canonicalEd25519PublicKey(encoded) === null
+  return canonicalEd25519PublicKeySpkiDer(encoded) === null
     ? Effect.fail(fail(operation, "stored-corruption"))
     : Effect.succeed(encoded);
 }
@@ -349,6 +338,13 @@ function makeStore() {
 
     const challengeFromRow = (operation: string, row: ChallengeRow) =>
       Effect.gen(function* () {
+        if (
+          !isCanonicalTimestamp(row.issuedAt) ||
+          !isCanonicalTimestamp(row.expiresAt) ||
+          (row.completedAt !== null && !isCanonicalTimestamp(row.completedAt))
+        ) {
+          return yield* Effect.fail(fail(operation, "stored-corruption"));
+        }
         const publicKeySpkiDer = yield* encodedPublicKey(operation, row.publicKeySpkiDer);
         return yield* strictDecode(operation, CollaborationDeviceEnrollmentChallenge, {
           challengeId: row.challengeId,
@@ -366,6 +362,12 @@ function makeStore() {
     const keyFromRow = (operation: string, row: KeyRow) =>
       Effect.gen(function* () {
         if (row.boundUserId !== undefined && row.boundUserId !== row.userId) {
+          return yield* Effect.fail(fail(operation, "stored-corruption"));
+        }
+        if (
+          !isCanonicalTimestamp(row.activatedAt) ||
+          (row.revokedAt !== null && !isCanonicalTimestamp(row.revokedAt))
+        ) {
           return yield* Effect.fail(fail(operation, "stored-corruption"));
         }
         const publicKeySpkiDer = yield* encodedPublicKey(operation, row.publicKeySpkiDer);
@@ -415,7 +417,7 @@ function makeStore() {
           CollaborationBeginDeviceEnrollmentRequest,
           input.request,
         );
-        const publicKey = canonicalEd25519PublicKey(request.publicKeySpkiDer);
+        const publicKey = canonicalEd25519PublicKeySpkiDer(request.publicKeySpkiDer);
         if (publicKey === null) return yield* Effect.fail(fail(operation, "invalid-input"));
         const nonce = decodeEnrollmentNonce(randomBytes(32).toString("base64url"));
         const challengeId = `device-challenge-${randomUUID()}`;
@@ -446,18 +448,23 @@ function makeStore() {
                 return yield* Effect.fail(fail(operation, "stored-corruption"));
               const persisted = yield* challengeFromRow(operation, rows[0]!);
               if (
+                challenge.sharedProjectId !== request.sharedProjectId ||
+                challenge.userId !== actor.userId ||
+                challenge.deviceId !== actor.deviceId ||
+                challenge.membershipEpoch !== actor.membershipEpoch ||
+                challenge.publicKeySpkiDer !== request.publicKeySpkiDer ||
                 receipt.resultJson !==
-                JSON.stringify({
-                  challengeId: persisted.challengeId,
-                  sharedProjectId: persisted.sharedProjectId,
-                  userId: persisted.userId,
-                  deviceId: persisted.deviceId,
-                  deviceKeyId: persisted.deviceKeyId,
-                  publicKeySpkiDer: persisted.publicKeySpkiDer,
-                  membershipEpoch: persisted.membershipEpoch,
-                  issuedAt: proofTimestamp(persisted.issuedAt),
-                  expiresAt: proofTimestamp(persisted.expiresAt),
-                })
+                  JSON.stringify({
+                    challengeId: persisted.challengeId,
+                    sharedProjectId: persisted.sharedProjectId,
+                    userId: persisted.userId,
+                    deviceId: persisted.deviceId,
+                    deviceKeyId: persisted.deviceKeyId,
+                    publicKeySpkiDer: persisted.publicKeySpkiDer,
+                    membershipEpoch: persisted.membershipEpoch,
+                    issuedAt: proofTimestamp(persisted.issuedAt),
+                    expiresAt: proofTimestamp(persisted.expiresAt),
+                  })
               )
                 return yield* Effect.fail(fail(operation, "stored-corruption"));
               return yield* strictDecode(operation, CollaborationBeginDeviceEnrollmentResult, {
@@ -542,7 +549,28 @@ function makeStore() {
               if (rows.length !== 1)
                 return yield* Effect.fail(fail(operation, "stored-corruption"));
               const persisted = yield* keyFromRow(operation, rows[0]!);
+              const challengeRows = yield* selectChallenge(
+                request.sharedProjectId,
+                request.challengeId,
+              );
+              if (challengeRows.length !== 1)
+                return yield* Effect.fail(fail(operation, "stored-corruption"));
+              const persistedChallengeRow = challengeRows[0]!;
+              const persistedChallenge = yield* challengeFromRow(operation, persistedChallengeRow);
               if (
+                storedKey.sharedProjectId !== request.sharedProjectId ||
+                storedKey.userId !== actor.userId ||
+                storedKey.deviceId !== actor.deviceId ||
+                storedKey.membershipEpoch !== actor.membershipEpoch ||
+                persistedChallenge.challengeId !== request.challengeId ||
+                persistedChallenge.sharedProjectId !== request.sharedProjectId ||
+                persistedChallenge.userId !== actor.userId ||
+                persistedChallenge.deviceId !== actor.deviceId ||
+                persistedChallenge.deviceKeyId !== storedKey.deviceKeyId ||
+                persistedChallenge.publicKeySpkiDer !== storedKey.publicKeySpkiDer ||
+                persistedChallenge.membershipEpoch !== actor.membershipEpoch ||
+                persistedChallengeRow.completedAt === null ||
+                persistedChallengeRow.completedAt !== proofTimestamp(storedKey.activatedAt) ||
                 persisted.sharedProjectId !== storedKey.sharedProjectId ||
                 persisted.userId !== storedKey.userId ||
                 persisted.deviceId !== storedKey.deviceId ||
@@ -573,7 +601,7 @@ function makeStore() {
               return yield* Effect.fail(fail(operation, "challenge-consumed"));
             if (now >= Date.parse(row.expiresAt))
               return yield* Effect.fail(fail(operation, "challenge-expired"));
-            const publicKey = canonicalEd25519PublicKey(challenge.publicKeySpkiDer);
+            const publicKey = canonicalEd25519PublicKeySpkiDer(challenge.publicKeySpkiDer);
             if (publicKey === null) return yield* Effect.fail(fail(operation, "stored-corruption"));
             let signature: Buffer;
             try {
@@ -584,12 +612,14 @@ function makeStore() {
             if (
               signature.byteLength !== COLLABORATION_ED25519_SIGNATURE_BYTES ||
               signature.toString("base64url") !== request.proofSignature ||
-              !verify(
-                null,
-                collaborationDeviceEnrollmentProofBytes({ challenge, nonce: request.nonce }),
-                createPublicKey({ key: publicKey, format: "der", type: "spki" }),
+              !verifyStrictEd25519Signature({
+                publicKeySpkiDer: publicKey,
                 signature,
-              )
+                signedBytes: collaborationDeviceEnrollmentProofBytes({
+                  challenge,
+                  nonce: request.nonce,
+                }),
+              })
             )
               return yield* Effect.fail(fail(operation, "proof-invalid"));
 
@@ -692,6 +722,10 @@ function makeStore() {
                 return yield* Effect.fail(fail(operation, "stored-corruption"));
               const persisted = yield* keyFromRow(operation, rows[0]!);
               if (
+                key.sharedProjectId !== request.sharedProjectId ||
+                key.deviceKeyId !== request.deviceKeyId ||
+                key.userId !== actor.userId ||
+                key.deviceId !== actor.deviceId ||
                 persisted.sharedProjectId !== key.sharedProjectId ||
                 persisted.userId !== key.userId ||
                 persisted.deviceId !== key.deviceId ||
@@ -787,7 +821,7 @@ function makeStore() {
             key.revokedAt !== null
           )
             throw fail("device-key.authority", "stored-corruption");
-          const bytes = canonicalEd25519PublicKey(key.publicKeySpkiDer);
+          const bytes = canonicalEd25519PublicKeySpkiDer(key.publicKeySpkiDer);
           if (bytes === null) throw fail("device-key.authority", "stored-corruption");
           return {
             sharedProjectId: lookup.sharedProjectId,

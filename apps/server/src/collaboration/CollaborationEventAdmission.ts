@@ -19,7 +19,7 @@ import {
   CollaborationOperatorChatMessagePayload,
   CollaborationSharedTranscriptPromptPayload,
 } from "@cafecode/contracts";
-import { createHash, createPublicKey, verify } from "node:crypto";
+import { createHash } from "node:crypto";
 import { Buffer } from "node:buffer";
 
 import * as Context from "effect/Context";
@@ -36,9 +36,9 @@ import {
   isCollaborationAuthorizationGrant,
   validateCollaborationPrincipal,
 } from "./CollaborationAuthorization.ts";
+import { verifyStrictEd25519Signature } from "./CollaborationEd25519.ts";
 
 const COLLABORATION_EVENT_PROPOSAL_SIGNATURE_DOMAIN = "cafecode-collaboration-event-proposal-v1";
-const COLLABORATION_ED25519_SPKI_BYTES = 44;
 const decodeEventProposal = Schema.decodeUnknownEffect(CollaborationEventProposalSchema);
 const decodeOperatorChatMessagePayload = Schema.decodeUnknownEffect(
   CollaborationOperatorChatMessagePayload,
@@ -221,32 +221,11 @@ function verifyEd25519Signature(
   signatureBytes: Uint8Array,
   signedBytes: Uint8Array,
 ): boolean {
-  if (
-    publicKeyDer.byteLength !== COLLABORATION_ED25519_SPKI_BYTES ||
-    signatureBytes.byteLength !== COLLABORATION_ED25519_SIGNATURE_BYTES
-  ) {
-    return false;
-  }
-  try {
-    const publicKey = createPublicKey({
-      key: Buffer.from(publicKeyDer),
-      format: "der",
-      type: "spki",
-    });
-    if (publicKey.asymmetricKeyType !== "ed25519") {
-      return false;
-    }
-    const canonicalDer = publicKey.export({ format: "der", type: "spki" });
-    if (
-      canonicalDer.byteLength !== publicKeyDer.byteLength ||
-      !canonicalDer.equals(Buffer.from(publicKeyDer))
-    ) {
-      return false;
-    }
-    return verify(null, signedBytes, publicKey, signatureBytes);
-  } catch {
-    return false;
-  }
+  return verifyStrictEd25519Signature({
+    publicKeySpkiDer: publicKeyDer,
+    signature: signatureBytes,
+    signedBytes,
+  });
 }
 
 function decodeEventPayload(
