@@ -2,14 +2,23 @@ import { assert, describe, it } from "@effect/vitest";
 import * as Schema from "effect/Schema";
 
 import {
+  COLLABORATION_BLOB_CHUNK_MAX_BYTES,
+  CollaborationBlobPutRequest,
   CollaborationFileContentManifest,
   CollaborationFilePublishCommand,
   CollaborationFileTombstoneCommand,
+  CollaborationMaterializeTombstoneRequest,
+  CollaborationMaterializeVersionRequest,
 } from "./collaborationFileSync.ts";
 
 const decodeManifest = Schema.decodeUnknownSync(CollaborationFileContentManifest);
 const decodePublish = Schema.decodeUnknownSync(CollaborationFilePublishCommand);
 const decodeTombstone = Schema.decodeUnknownSync(CollaborationFileTombstoneCommand);
+const decodeBlobPut = Schema.decodeUnknownSync(CollaborationBlobPutRequest);
+const decodeMaterializeVersion = Schema.decodeUnknownSync(CollaborationMaterializeVersionRequest);
+const decodeMaterializeTombstone = Schema.decodeUnknownSync(
+  CollaborationMaterializeTombstoneRequest,
+);
 const hash = "a".repeat(64);
 
 describe("collaboration file synchronization contracts", () => {
@@ -78,6 +87,45 @@ describe("collaboration file synchronization contracts", () => {
         deviceKeyId: "key-1",
         expectedHeadRevisionId: null,
       }),
+    );
+  });
+
+  it("bounds blob admission and requires an exact authorized version chunk identity", () => {
+    const request = {
+      sharedProjectId: "project-1",
+      relativePath: "safe/file.txt",
+      deviceKeyId: "key-1",
+      versionId: hash,
+      chunkIndex: 0,
+      contentSha256: "b".repeat(64),
+      byteSize: 3,
+    };
+    assert.equal(decodeBlobPut(request).byteSize, 3);
+    assert.throws(() =>
+      decodeBlobPut({ ...request, byteSize: COLLABORATION_BLOB_CHUNK_MAX_BYTES + 1 }),
+    );
+    assert.throws(() => decodeBlobPut({ ...request, chunkIndex: -1 }));
+    assert.throws(() => decodeBlobPut({ ...request, contentSha256: "client-label" }));
+  });
+
+  it("separates immutable version materialization from recoverable tombstones", () => {
+    assert.equal(
+      decodeMaterializeVersion({
+        sharedProjectId: "project-1",
+        relativePath: "safe/file.txt",
+        deviceKeyId: "key-1",
+        versionId: hash,
+      }).versionId,
+      hash,
+    );
+    assert.equal(
+      decodeMaterializeTombstone({
+        sharedProjectId: "project-1",
+        relativePath: "safe/file.txt",
+        deviceKeyId: "key-1",
+        tombstoneId: "b".repeat(64),
+      }).tombstoneId,
+      "b".repeat(64),
     );
   });
 });
