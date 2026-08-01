@@ -172,6 +172,17 @@ export const DEFAULT_AMBIENT_OPACITY = 0.35;
 export const MIN_FALLING_EFFECT_SPEED = 0.25;
 export const MAX_FALLING_EFFECT_SPEED = 4;
 export const DEFAULT_FALLING_EFFECT_SPEED = 1;
+/** Baseline Matrix glyph size for non-Walk modes. */
+export const MIN_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE = 1;
+export const MAX_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE = 72;
+export const DEFAULT_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE = 14;
+export const FallingEffectMatrixBaseFontSize = Schema.Int.check(
+  Schema.isBetween({
+    minimum: MIN_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE,
+    maximum: MAX_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE,
+  }),
+);
+export type FallingEffectMatrixBaseFontSize = typeof FallingEffectMatrixBaseFontSize.Type;
 /**
  * Independent hue-cycle multiplier. The upper bound is intentionally high
  * enough for a visible shimmer, but changes no particle or canvas draw budget.
@@ -180,7 +191,8 @@ export const MIN_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED = 0.25;
 export const MAX_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED = 64;
 export const DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED = 1;
 export const MIN_FALLING_EFFECT_DENSITY = 0.5;
-export const MAX_FALLING_EFFECT_DENSITY = 2.5;
+/** High-density Matrix scenes remain bounded by the renderer's hard stream cap. */
+export const MAX_FALLING_EFFECT_DENSITY = 10;
 export const DEFAULT_FALLING_EFFECT_DENSITY = 1;
 /**
  * Probability that a Matrix stream uses the Japanese glyph pool and Japanese
@@ -256,6 +268,7 @@ export type AmbientOpacity = typeof AmbientOpacity.Type;
 export const FallingEffectKind = Schema.Literals(["snow", "rain", "matrix"]);
 export type FallingEffectKind = typeof FallingEffectKind.Type;
 export const DEFAULT_FALLING_EFFECTS_ENABLED = false;
+export const DEFAULT_FALLING_EFFECTS_OVER_CINEMA_ENABLED = false;
 export const DEFAULT_FALLING_EFFECT_KIND: FallingEffectKind = "snow";
 
 /**
@@ -281,6 +294,67 @@ export const FallingEffectMatrixColorCycleSpeed = Schema.Number.check(
   }),
 );
 export type FallingEffectMatrixColorCycleSpeed = typeof FallingEffectMatrixColorCycleSpeed.Type;
+
+/**
+ * Historical Matrix naming is retained for stored-settings compatibility, but
+ * the projection applies to snow and rain as well as Matrix glyph streams.
+ */
+export const FallingEffectMatrixMotionMode = Schema.Literals([
+  "flat",
+  "forward",
+  "reverse",
+  "tunnel",
+  "walk-forward",
+  "walk-reverse",
+]);
+export type FallingEffectMatrixMotionMode = typeof FallingEffectMatrixMotionMode.Type;
+export const DEFAULT_FALLING_EFFECT_MATRIX_MOTION_MODE: FallingEffectMatrixMotionMode = "flat";
+
+export const MIN_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE = 1;
+export const MAX_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE = 144;
+// Canvas2D and the glyph atlas share integer font buckets so fitted labels use
+// identical metrics on the fallback and GPU paths.
+export const FALLING_EFFECT_MATRIX_WALK_FONT_SIZE_STEP = 1;
+// Keep decoding legacy two-decimal endpoints without putting new controls or
+// glyph-cache keys back on that costly grid.
+const LEGACY_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE_MINIMUM = 0.01;
+const LEGACY_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE_PRECISION = 0.01;
+export const DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE = 1;
+export const DEFAULT_FALLING_EFFECT_MATRIX_WALK_END_FONT_SIZE = 72;
+export const FallingEffectMatrixWalkFontSize = Schema.Number.check(
+  Schema.isMultipleOf(LEGACY_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE_PRECISION),
+  Schema.isBetween({
+    minimum: LEGACY_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE_MINIMUM,
+    maximum: MAX_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE,
+  }),
+);
+export type FallingEffectMatrixWalkFontSize = typeof FallingEffectMatrixWalkFontSize.Type;
+
+/** Percentage of the viewport traversed before a Walk stream fades and respawns. */
+export const MIN_FALLING_EFFECT_MATRIX_WALK_LIFECYCLE_PERCENT = 5;
+export const MAX_FALLING_EFFECT_MATRIX_WALK_LIFECYCLE_PERCENT = 100;
+export const DEFAULT_FALLING_EFFECT_MATRIX_WALK_LIFECYCLE_PERCENT = 30;
+export const FallingEffectMatrixWalkLifecyclePercent = Schema.Int.check(
+  Schema.isBetween({
+    minimum: MIN_FALLING_EFFECT_MATRIX_WALK_LIFECYCLE_PERCENT,
+    maximum: MAX_FALLING_EFFECT_MATRIX_WALK_LIFECYCLE_PERCENT,
+  }),
+);
+export type FallingEffectMatrixWalkLifecyclePercent =
+  typeof FallingEffectMatrixWalkLifecyclePercent.Type;
+
+/** Outward horizontal drift derived from distance to the viewport center. */
+export const MIN_FALLING_EFFECT_MATRIX_CENTER_WIND_INTENSITY = 0;
+export const MAX_FALLING_EFFECT_MATRIX_CENTER_WIND_INTENSITY = 10;
+export const DEFAULT_FALLING_EFFECT_MATRIX_CENTER_WIND_INTENSITY = 4;
+export const FallingEffectMatrixCenterWindIntensity = Schema.Int.check(
+  Schema.isBetween({
+    minimum: MIN_FALLING_EFFECT_MATRIX_CENTER_WIND_INTENSITY,
+    maximum: MAX_FALLING_EFFECT_MATRIX_CENTER_WIND_INTENSITY,
+  }),
+);
+export type FallingEffectMatrixCenterWindIntensity =
+  typeof FallingEffectMatrixCenterWindIntensity.Type;
 
 export const FallingEffectSpeed = Schema.Number.check(
   Schema.isBetween({
@@ -548,8 +622,14 @@ export const ClientSettingsSchema = Schema.Struct({
   fallingEffectsEnabled: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECTS_ENABLED)),
   ),
+  fallingEffectsOverCinemaEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECTS_OVER_CINEMA_ENABLED)),
+  ),
   fallingEffectKind: FallingEffectKind.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_KIND)),
+  ),
+  fallingEffectMatrixBaseFontSize: FallingEffectMatrixBaseFontSize.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE)),
   ),
   fallingEffectColor: AmbientColor.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_COLOR)),
@@ -559,6 +639,23 @@ export const ClientSettingsSchema = Schema.Struct({
   ),
   fallingEffectMatrixColorCycleSpeed: FallingEffectMatrixColorCycleSpeed.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED)),
+  ),
+  fallingEffectMatrixMotionMode: FallingEffectMatrixMotionMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_MATRIX_MOTION_MODE)),
+  ),
+  fallingEffectMatrixWalkStartFontSize: FallingEffectMatrixWalkFontSize.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE)),
+  ),
+  fallingEffectMatrixWalkEndFontSize: FallingEffectMatrixWalkFontSize.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_MATRIX_WALK_END_FONT_SIZE)),
+  ),
+  fallingEffectMatrixWalkLifecyclePercent: FallingEffectMatrixWalkLifecyclePercent.pipe(
+    Schema.withDecodingDefault(
+      Effect.succeed(DEFAULT_FALLING_EFFECT_MATRIX_WALK_LIFECYCLE_PERCENT),
+    ),
+  ),
+  fallingEffectMatrixCenterWindIntensity: FallingEffectMatrixCenterWindIntensity.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_MATRIX_CENTER_WIND_INTENSITY)),
   ),
   fallingEffectOpacity: AmbientOpacity.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_OPACITY)),
@@ -814,10 +911,17 @@ export type ClientSettings = typeof ClientSettingsSchema.Type;
 
 export const AMBIENT_CLIENT_SETTINGS_KEYS = [
   "fallingEffectsEnabled",
+  "fallingEffectsOverCinemaEnabled",
   "fallingEffectKind",
+  "fallingEffectMatrixBaseFontSize",
   "fallingEffectColor",
   "fallingEffectMatrixColorMode",
   "fallingEffectMatrixColorCycleSpeed",
+  "fallingEffectMatrixMotionMode",
+  "fallingEffectMatrixWalkStartFontSize",
+  "fallingEffectMatrixWalkEndFontSize",
+  "fallingEffectMatrixWalkLifecyclePercent",
+  "fallingEffectMatrixCenterWindIntensity",
   "fallingEffectOpacity",
   "fallingEffectSpeed",
   "fallingEffectDensity",
@@ -861,10 +965,17 @@ export type AmbientClientSettings = Pick<
 
 export const DEFAULT_AMBIENT_CLIENT_SETTINGS: AmbientClientSettings = {
   fallingEffectsEnabled: DEFAULT_FALLING_EFFECTS_ENABLED,
+  fallingEffectsOverCinemaEnabled: DEFAULT_FALLING_EFFECTS_OVER_CINEMA_ENABLED,
   fallingEffectKind: DEFAULT_FALLING_EFFECT_KIND,
+  fallingEffectMatrixBaseFontSize: DEFAULT_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE,
   fallingEffectColor: DEFAULT_AMBIENT_COLOR,
   fallingEffectMatrixColorMode: DEFAULT_FALLING_EFFECT_MATRIX_COLOR_MODE,
   fallingEffectMatrixColorCycleSpeed: DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
+  fallingEffectMatrixMotionMode: DEFAULT_FALLING_EFFECT_MATRIX_MOTION_MODE,
+  fallingEffectMatrixWalkStartFontSize: DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE,
+  fallingEffectMatrixWalkEndFontSize: DEFAULT_FALLING_EFFECT_MATRIX_WALK_END_FONT_SIZE,
+  fallingEffectMatrixWalkLifecyclePercent: DEFAULT_FALLING_EFFECT_MATRIX_WALK_LIFECYCLE_PERCENT,
+  fallingEffectMatrixCenterWindIntensity: DEFAULT_FALLING_EFFECT_MATRIX_CENTER_WIND_INTENSITY,
   fallingEffectOpacity: DEFAULT_AMBIENT_OPACITY,
   fallingEffectSpeed: DEFAULT_FALLING_EFFECT_SPEED,
   fallingEffectDensity: DEFAULT_FALLING_EFFECT_DENSITY,
@@ -1508,10 +1619,21 @@ export const ClientSettingsPatch = Schema.Struct({
   diffWordWrap: Schema.optionalKey(Schema.Boolean),
   continueBackgroundAnimations: Schema.optionalKey(Schema.Boolean),
   fallingEffectsEnabled: Schema.optionalKey(Schema.Boolean),
+  fallingEffectsOverCinemaEnabled: Schema.optionalKey(Schema.Boolean),
   fallingEffectKind: Schema.optionalKey(FallingEffectKind),
+  fallingEffectMatrixBaseFontSize: Schema.optionalKey(FallingEffectMatrixBaseFontSize),
   fallingEffectColor: Schema.optionalKey(AmbientColor),
   fallingEffectMatrixColorMode: Schema.optionalKey(FallingEffectMatrixColorMode),
   fallingEffectMatrixColorCycleSpeed: Schema.optionalKey(FallingEffectMatrixColorCycleSpeed),
+  fallingEffectMatrixMotionMode: Schema.optionalKey(FallingEffectMatrixMotionMode),
+  fallingEffectMatrixWalkStartFontSize: Schema.optionalKey(FallingEffectMatrixWalkFontSize),
+  fallingEffectMatrixWalkEndFontSize: Schema.optionalKey(FallingEffectMatrixWalkFontSize),
+  fallingEffectMatrixWalkLifecyclePercent: Schema.optionalKey(
+    FallingEffectMatrixWalkLifecyclePercent,
+  ),
+  fallingEffectMatrixCenterWindIntensity: Schema.optionalKey(
+    FallingEffectMatrixCenterWindIntensity,
+  ),
   fallingEffectOpacity: Schema.optionalKey(AmbientOpacity),
   fallingEffectSpeed: Schema.optionalKey(FallingEffectSpeed),
   fallingEffectDensity: Schema.optionalKey(FallingEffectDensity),

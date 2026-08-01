@@ -1,14 +1,20 @@
 import type { OrchestrationThreadActivity, ScopedThreadRef } from "@cafecode/contracts";
 import {
   DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
+  DEFAULT_FALLING_EFFECT_MATRIX_WALK_END_FONT_SIZE,
+  DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE,
   MAX_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
   MIN_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
   type FallingEffectActivityLinkColorMode,
+  type FallingEffectMatrixMotionMode,
 } from "@cafecode/contracts/settings";
 
 import type { AppState } from "./store";
 import {
+  resolveAtmosphereProjectedPointInPlace,
+  resolveMatrixWalkLifecycleOpacity,
   resolveMatrixStreamColor,
+  type AtmosphereProjectedPoint,
   type AtmosphereScene,
   type MatrixColorFrame,
 } from "./windowAtmosphere";
@@ -46,6 +52,15 @@ export const MATRIX_ACTIVITY_LINK_PULSE_MS = 180;
 /** Circular lettering is intentionally limited because Canvas text is rendered one glyph at a time. */
 export const MAX_MATRIX_ACTIVITY_TELEMETRY_RINGS = 6;
 export const MAX_MATRIX_ACTIVITY_TELEMETRY_GLYPHS = 28;
+/** Fixed subdivision keeps tapered depth routes smooth without unbounded per-frame strokes. */
+export const MATRIX_ACTIVITY_DEPTH_ROUTE_SEGMENTS = 8;
+export const MIN_MATRIX_ACTIVITY_DEPTH_SCALE = 0.4;
+export const MAX_MATRIX_ACTIVITY_DEPTH_SCALE = 4;
+export const MIN_MATRIX_ACTIVITY_DEPTH_LINE_WIDTH = 0.5;
+export const MAX_MATRIX_ACTIVITY_DEPTH_LINE_WIDTH = 8;
+export const MAX_MATRIX_ACTIVITY_DEPTH_PACKET_RADIUS = 6;
+const MATRIX_ACTIVITY_WALK_GLYPH_ATTACHMENT_RATIO = 0.45;
+const MATRIX_ACTIVITY_WALK_MAX_ROUTE_INSET_RATIO = 0.35;
 const MAX_ACTIVITY_RELATIONS = 4;
 const MAX_FUTURE_CLOCK_SKEW_MS = 250;
 const SAFE_RELATION_VALUE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/u;
@@ -140,6 +155,11 @@ export interface MatrixActivityAnimationState {
 export interface MatrixHexPoint {
   readonly x: number;
   readonly y: number;
+}
+
+interface MutableMatrixHexPoint {
+  x: number;
+  y: number;
 }
 
 export interface MatrixHexRoute {
@@ -1160,17 +1180,92 @@ export function createMatrixHexRoute(from: MatrixHexPoint, to: MatrixHexPoint): 
   return { points, segmentLengths, totalLength };
 }
 
-export function matrixHexRoutePointAt(
+export function createMatrixTunnelRoute(
+  from: MatrixHexPoint,
+  to: MatrixHexPoint,
+  center: MatrixHexPoint,
+): MatrixHexRoute {
+  const safeFrom = {
+    x: Number.isFinite(from.x) ? from.x : 0,
+    y: Number.isFinite(from.y) ? from.y : 0,
+  };
+  const safeTo = {
+    x: Number.isFinite(to.x) ? to.x : safeFrom.x,
+    y: Number.isFinite(to.y) ? to.y : safeFrom.y,
+  };
+  const safeCenter = {
+    x: Number.isFinite(center.x) ? center.x : (safeFrom.x + safeTo.x) * 0.5,
+    y: Number.isFinite(center.y) ? center.y : (safeFrom.y + safeTo.y) * 0.5,
+  };
+  const points: MatrixHexPoint[] = [{ ...safeFrom }];
+  appendDistinctPoint(points, safeCenter);
+  appendDistinctPoint(points, safeTo);
+  const segmentLengths: number[] = [];
+  let totalLength = 0;
+  for (let index = 1; index < points.length; index += 1) {
+    const previous = points[index - 1]!;
+    const current = points[index]!;
+    const length = Math.hypot(current.x - previous.x, current.y - previous.y);
+    segmentLengths.push(length);
+    totalLength += length;
+  }
+  return { points, segmentLengths, totalLength };
+}
+
+function createMatrixRouteFromPoints(points: readonly MatrixHexPoint[]): MatrixHexRoute {
+  const distinctPoints: MatrixHexPoint[] = [];
+  for (const point of points) {
+    appendDistinctPoint(distinctPoints, {
+      x: Number.isFinite(point.x) ? point.x : 0,
+      y: Number.isFinite(point.y) ? point.y : 0,
+    });
+  }
+  const segmentLengths: number[] = [];
+  let totalLength = 0;
+  for (let index = 1; index < distinctPoints.length; index += 1) {
+    const previous = distinctPoints[index - 1]!;
+    const current = distinctPoints[index]!;
+    const length = Math.hypot(current.x - previous.x, current.y - previous.y);
+    segmentLengths.push(length);
+    totalLength += length;
+  }
+  return { points: distinctPoints, segmentLengths, totalLength };
+}
+
+/**
+ * Resolve into caller-owned storage. Tapered routes sample this helper many
+ * times per frame, so allocating a fresh point for every subdivision would
+ * create avoidable renderer GC pressure at the bounded 12-link maximum.
+ */
+function resolveMatrixHexRoutePointInPlace(
+  output: MutableMatrixHexPoint,
   route: MatrixHexRoute,
   requestedProgress: number,
-): MatrixHexPoint {
-  if (route.points.length === 0) return { x: 0, y: 0 };
-  if (route.totalLength <= 0) return route.points[0]!;
+): void {
+  if (route.points.length === 0) {
+    output.x = 0;
+    output.y = 0;
+    return;
+  }
+  if (route.totalLength <= 0) {
+    output.x = route.points[0]!.x;
+    output.y = route.points[0]!.y;
+    return;
+  }
   const progress = Number.isFinite(requestedProgress)
     ? Math.min(1, Math.max(0, requestedProgress))
     : 0;
-  if (progress === 0) return route.points[0]!;
-  if (progress === 1) return route.points.at(-1)!;
+  if (progress === 0) {
+    output.x = route.points[0]!.x;
+    output.y = route.points[0]!.y;
+    return;
+  }
+  if (progress === 1) {
+    const last = route.points.at(-1)!;
+    output.x = last.x;
+    output.y = last.y;
+    return;
+  }
   let remaining = route.totalLength * progress;
   for (let index = 0; index < route.segmentLengths.length; index += 1) {
     const length = route.segmentLengths[index]!;
@@ -1178,14 +1273,71 @@ export function matrixHexRoutePointAt(
     const to = route.points[index + 1]!;
     if (remaining <= length || index === route.segmentLengths.length - 1) {
       const ratio = length <= 0 ? 0 : Math.min(1, remaining / length);
-      return {
-        x: from.x + (to.x - from.x) * ratio,
-        y: from.y + (to.y - from.y) * ratio,
-      };
+      output.x = from.x + (to.x - from.x) * ratio;
+      output.y = from.y + (to.y - from.y) * ratio;
+      return;
     }
     remaining -= length;
   }
-  return route.points.at(-1)!;
+  const last = route.points.at(-1)!;
+  output.x = last.x;
+  output.y = last.y;
+}
+
+export function matrixHexRoutePointAt(
+  route: MatrixHexRoute,
+  requestedProgress: number,
+): MatrixHexPoint {
+  const output: MutableMatrixHexPoint = { x: 0, y: 0 };
+  resolveMatrixHexRoutePointInPlace(output, route, requestedProgress);
+  return output;
+}
+
+/**
+ * Attach a Walk connector to each glyph's visible edge instead of drawing
+ * through the center of differently scaled text. The reviewed hex bends are
+ * retained, and each inset is bounded independently so very large endpoints
+ * cannot invert or erase the route.
+ */
+export function createMatrixActivityWalkAttachmentRoute(
+  route: MatrixHexRoute,
+  requestedFromFontSize: number,
+  requestedToFontSize: number,
+): MatrixHexRoute {
+  if (route.totalLength <= 0 || route.points.length < 2) return route;
+  const maximumInset = route.totalLength * MATRIX_ACTIVITY_WALK_MAX_ROUTE_INSET_RATIO;
+  const fromInset = Math.min(
+    maximumInset,
+    Math.max(
+      0,
+      (Number.isFinite(requestedFromFontSize) ? requestedFromFontSize : 0) *
+        MATRIX_ACTIVITY_WALK_GLYPH_ATTACHMENT_RATIO,
+    ),
+  );
+  const toInset = Math.min(
+    maximumInset,
+    Math.max(
+      0,
+      (Number.isFinite(requestedToFontSize) ? requestedToFontSize : 0) *
+        MATRIX_ACTIVITY_WALK_GLYPH_ATTACHMENT_RATIO,
+    ),
+  );
+  const startDistance = fromInset;
+  const endDistance = route.totalLength - toInset;
+  const startPoint: MutableMatrixHexPoint = { x: 0, y: 0 };
+  const endPoint: MutableMatrixHexPoint = { x: 0, y: 0 };
+  resolveMatrixHexRoutePointInPlace(startPoint, route, startDistance / route.totalLength);
+  resolveMatrixHexRoutePointInPlace(endPoint, route, endDistance / route.totalLength);
+  const points: MatrixHexPoint[] = [{ ...startPoint }];
+  let traversed = 0;
+  for (let index = 0; index < route.segmentLengths.length; index += 1) {
+    traversed += route.segmentLengths[index]!;
+    if (traversed > startDistance && traversed < endDistance) {
+      points.push(route.points[index + 1]!);
+    }
+  }
+  points.push({ ...endPoint });
+  return createMatrixRouteFromPoints(points);
 }
 
 function normalizeMatrixActivityCycleProgress(requestedProgress: number): number {
@@ -1278,11 +1430,13 @@ function traceMatrixHexRouteInterval(
   route: MatrixHexRoute,
   startProgress: number,
   endProgress: number,
+  startPoint: MutableMatrixHexPoint,
+  endPoint: MutableMatrixHexPoint,
 ): void {
   const start = Math.min(startProgress, endProgress);
   const end = Math.max(startProgress, endProgress);
-  const startPoint = matrixHexRoutePointAt(route, start);
-  const endPoint = matrixHexRoutePointAt(route, end);
+  resolveMatrixHexRoutePointInPlace(startPoint, route, start);
+  resolveMatrixHexRoutePointInPlace(endPoint, route, end);
   const startDistance = route.totalLength * start;
   const endDistance = route.totalLength * end;
   context.beginPath();
@@ -1298,6 +1452,135 @@ function traceMatrixHexRouteInterval(
   context.lineTo(endPoint.x, endPoint.y);
 }
 
+function clampMatrixActivityDepthScale(scale: number): number {
+  if (!Number.isFinite(scale)) return 1;
+  return Math.min(
+    MAX_MATRIX_ACTIVITY_DEPTH_SCALE,
+    Math.max(MIN_MATRIX_ACTIVITY_DEPTH_SCALE, scale),
+  );
+}
+
+function interpolateMatrixActivityDepthScale(from: number, to: number, progress: number): number {
+  return from + (to - from) * progress;
+}
+
+/**
+ * Resolve the bounded perspective scale at one point along a verified route.
+ * Ordinary depth routes interpolate between their projected endpoints. Warp
+ * routes narrow to the reviewed center-plane scale before flaring back out.
+ */
+export function resolveMatrixActivityRouteDepthScale(
+  motionMode: FallingEffectMatrixMotionMode,
+  requestedProgress: number,
+  fromScale: number,
+  toScale: number,
+  requestedTunnelCenterProgress = 0.5,
+): number {
+  if (motionMode === "flat") return 1;
+  const progress = Number.isFinite(requestedProgress)
+    ? Math.min(1, Math.max(0, requestedProgress))
+    : 0;
+  const safeFromScale = clampMatrixActivityDepthScale(fromScale);
+  const safeToScale = clampMatrixActivityDepthScale(toScale);
+  if (motionMode !== "tunnel") {
+    if (progress === 0) return safeFromScale;
+    if (progress === 1) return safeToScale;
+    return interpolateMatrixActivityDepthScale(safeFromScale, safeToScale, progress);
+  }
+
+  const centerProgress = Number.isFinite(requestedTunnelCenterProgress)
+    ? Math.min(1, Math.max(0, requestedTunnelCenterProgress))
+    : 0.5;
+  if (progress === centerProgress) return MIN_MATRIX_ACTIVITY_DEPTH_SCALE;
+  if (progress === 0) return safeFromScale;
+  if (progress === 1) return safeToScale;
+  if (centerProgress <= 0) {
+    return interpolateMatrixActivityDepthScale(
+      MIN_MATRIX_ACTIVITY_DEPTH_SCALE,
+      safeToScale,
+      progress,
+    );
+  }
+  if (centerProgress >= 1) {
+    return interpolateMatrixActivityDepthScale(
+      safeFromScale,
+      MIN_MATRIX_ACTIVITY_DEPTH_SCALE,
+      progress,
+    );
+  }
+  return progress <= centerProgress
+    ? interpolateMatrixActivityDepthScale(
+        safeFromScale,
+        MIN_MATRIX_ACTIVITY_DEPTH_SCALE,
+        progress / centerProgress,
+      )
+    : interpolateMatrixActivityDepthScale(
+        MIN_MATRIX_ACTIVITY_DEPTH_SCALE,
+        safeToScale,
+        (progress - centerProgress) / (1 - centerProgress),
+      );
+}
+
+function resolveMatrixActivityDepthLineWidth(baseWidth: number, depthScale: number): number {
+  return Math.min(
+    MAX_MATRIX_ACTIVITY_DEPTH_LINE_WIDTH,
+    Math.max(MIN_MATRIX_ACTIVITY_DEPTH_LINE_WIDTH, baseWidth * depthScale),
+  );
+}
+
+function strokeMatrixActivityDepthRoute(
+  context: CanvasRenderingContext2D,
+  route: MatrixHexRoute,
+  baseWidth: number,
+  motionMode: FallingEffectMatrixMotionMode,
+  fromScale: number,
+  toScale: number,
+  tunnelCenterProgress: number,
+  intervalStartPoint: MutableMatrixHexPoint,
+  intervalEndPoint: MutableMatrixHexPoint,
+): void {
+  if (motionMode === "flat" || route.totalLength <= 0) {
+    context.lineWidth =
+      motionMode === "flat"
+        ? baseWidth
+        : resolveMatrixActivityDepthLineWidth(
+            baseWidth,
+            resolveMatrixActivityRouteDepthScale(
+              motionMode,
+              0.5,
+              fromScale,
+              toScale,
+              tunnelCenterProgress,
+            ),
+          );
+    traceMatrixHexRoute(context, route);
+    context.stroke();
+    return;
+  }
+
+  for (let index = 0; index < MATRIX_ACTIVITY_DEPTH_ROUTE_SEGMENTS; index += 1) {
+    const startProgress = index / MATRIX_ACTIVITY_DEPTH_ROUTE_SEGMENTS;
+    const endProgress = (index + 1) / MATRIX_ACTIVITY_DEPTH_ROUTE_SEGMENTS;
+    const depthScale = resolveMatrixActivityRouteDepthScale(
+      motionMode,
+      (startProgress + endProgress) * 0.5,
+      fromScale,
+      toScale,
+      tunnelCenterProgress,
+    );
+    context.lineWidth = resolveMatrixActivityDepthLineWidth(baseWidth, depthScale);
+    traceMatrixHexRouteInterval(
+      context,
+      route,
+      startProgress,
+      endProgress,
+      intervalStartPoint,
+      intervalEndPoint,
+    );
+    context.stroke();
+  }
+}
+
 function randomMatrixActivityColor(hue: number): string {
   return `hsl(${hue.toFixed(1)} 86% 62%)`;
 }
@@ -1308,6 +1591,8 @@ function resolveMatrixActivityLinkPaint(
   matrixColorFrame: MatrixColorFrame,
   from: AtmosphereScene["particles"][number],
   to: AtmosphereScene["particles"][number],
+  fromPoint: AtmosphereProjectedPoint,
+  toPoint: AtmosphereProjectedPoint,
   colorHue: number,
 ): string | CanvasGradient {
   if (colorMode === "random") return randomMatrixActivityColor(colorHue);
@@ -1316,7 +1601,7 @@ function resolveMatrixActivityLinkPaint(
   const toColor = resolveMatrixStreamColor(matrixColorFrame, to);
   if (fromColor === toColor) return fromColor;
 
-  const gradient = context.createLinearGradient(from.x, from.y, to.x, to.y);
+  const gradient = context.createLinearGradient(fromPoint.x, fromPoint.y, toPoint.x, toPoint.y);
   gradient.addColorStop(0, fromColor);
   gradient.addColorStop(1, toColor);
   return gradient;
@@ -1325,34 +1610,36 @@ function resolveMatrixActivityLinkPaint(
 function drawMatrixActivityPulse(
   context: CanvasRenderingContext2D,
   particle: AtmosphereScene["particles"][number],
+  projectedPoint: AtmosphereProjectedPoint,
   category: MatrixActivityCategory,
   semanticRole: MatrixActivityPulse["semanticRole"],
   paint: string,
   safeOpacity: number,
   intensity: number,
 ): void {
+  const boundedScale = clampMatrixActivityDepthScale(projectedPoint.depthScale);
   context.strokeStyle = paint;
   context.globalAlpha = safeOpacity * intensity;
   context.lineWidth = 0.75 + intensity;
   context.beginPath();
   context.arc(
-    particle.x,
-    particle.y,
-    particle.size * (0.75 + (1 - intensity) * 0.9),
+    projectedPoint.x,
+    projectedPoint.y,
+    particle.size * boundedScale * (0.75 + (1 - intensity) * 0.9),
     0,
     Math.PI * 2,
   );
   context.stroke();
   context.fillStyle = paint;
   context.globalAlpha = safeOpacity * intensity;
-  context.font = `${Math.min(15, Math.max(10, particle.size))}px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace`;
+  context.font = `${Math.min(15, Math.max(10, particle.size * boundedScale))}px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace`;
   context.textAlign = "center";
   context.textBaseline = "middle";
   context.fillText(
     resolveMatrixActivityTerm(category, semanticRole, particle.matrixLanguage),
-    particle.x,
-    particle.y,
-    144,
+    projectedPoint.x,
+    projectedPoint.y,
+    144 * boundedScale,
   );
 }
 
@@ -1397,6 +1684,7 @@ function resolveRenderedMatrixActivityCount(
 function drawMatrixActivityTelemetryRing(
   context: CanvasRenderingContext2D,
   particle: AtmosphereScene["particles"][number],
+  projectedPoint: AtmosphereProjectedPoint,
   category: MatrixActivityCategory,
   paint: string,
   safeOpacity: number,
@@ -1406,10 +1694,12 @@ function drawMatrixActivityTelemetryRing(
   const glyphCount = Math.min(MAX_MATRIX_ACTIVITY_TELEMETRY_GLYPHS, label.length);
   if (glyphCount === 0) return;
 
-  const radius = Math.min(30, Math.max(20, particle.size * 1.65));
+  const radius =
+    Math.min(30, Math.max(20, particle.size * 1.65)) *
+    clampMatrixActivityDepthScale(projectedPoint.depthScale);
   const glyphAngle = (Math.PI * 2) / glyphCount;
   context.save();
-  context.translate(particle.x, particle.y);
+  context.translate(projectedPoint.x, projectedPoint.y);
   context.fillStyle = paint;
   context.globalAlpha = safeOpacity * intensity;
   context.font = "7px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
@@ -1432,6 +1722,9 @@ export function drawMatrixActivityAnimation(
   atmosphereOpacity: number,
   colorMode: FallingEffectActivityLinkColorMode,
   matrixColorFrame: MatrixColorFrame,
+  motionMode: FallingEffectMatrixMotionMode = "flat",
+  walkStartFontSize = DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE,
+  walkEndFontSize = DEFAULT_FALLING_EFFECT_MATRIX_WALK_END_FONT_SIZE,
 ): void {
   if (scene.kind !== "matrix") return;
   const renderedLinkCount = resolveRenderedMatrixActivityCount(
@@ -1453,35 +1746,98 @@ export function drawMatrixActivityAnimation(
   context.rect(0, 0, scene.width, scene.height);
   context.clip();
   context.lineCap = "round";
+  const projectedFrom: AtmosphereProjectedPoint = { x: 0, y: 0, scale: 1, depthScale: 1 };
+  const projectedTo: AtmosphereProjectedPoint = { x: 0, y: 0, scale: 1, depthScale: 1 };
+  const fromPoint: MutableMatrixHexPoint = { x: 0, y: 0 };
+  const toPoint: MutableMatrixHexPoint = { x: 0, y: 0 };
+  const intervalStartPoint: MutableMatrixHexPoint = { x: 0, y: 0 };
+  const intervalEndPoint: MutableMatrixHexPoint = { x: 0, y: 0 };
+  const packetPoint: MutableMatrixHexPoint = { x: 0, y: 0 };
+  const tunnelCenter: MatrixHexPoint = {
+    x: scene.width * 0.5,
+    y: scene.height * 0.5,
+  };
   const packetCount = resolveMatrixActivityPacketCount(renderedLinkCount);
   for (let index = 0; index < renderedLinkCount; index += 1) {
     const link = state.links[index]!;
     const from = scene.particles[link.fromAnchorIndex];
     const to = scene.particles[link.toAnchorIndex];
     if (!from || !to) continue;
-    const route = createMatrixHexRoute(
-      {
-        x: Math.min(scene.width, Math.max(0, from.x)),
-        y: Math.min(scene.height, Math.max(0, from.y)),
-      },
-      {
-        x: Math.min(scene.width, Math.max(0, to.x)),
-        y: Math.min(scene.height, Math.max(0, to.y)),
-      },
+    const linkLifecycleOpacity = Math.min(
+      resolveMatrixWalkLifecycleOpacity(from, motionMode),
+      resolveMatrixWalkLifecycleOpacity(to, motionMode),
     );
+    if (linkLifecycleOpacity <= 0.01) continue;
+    resolveAtmosphereProjectedPointInPlace(
+      projectedFrom,
+      scene,
+      from,
+      from.x,
+      from.y,
+      motionMode,
+      walkStartFontSize,
+      walkEndFontSize,
+    );
+    resolveAtmosphereProjectedPointInPlace(
+      projectedTo,
+      scene,
+      to,
+      to.x,
+      to.y,
+      motionMode,
+      walkStartFontSize,
+      walkEndFontSize,
+    );
+    fromPoint.x = Math.min(scene.width, Math.max(0, projectedFrom.x));
+    fromPoint.y = Math.min(scene.height, Math.max(0, projectedFrom.y));
+    toPoint.x = Math.min(scene.width, Math.max(0, projectedTo.x));
+    toPoint.y = Math.min(scene.height, Math.max(0, projectedTo.y));
+    const centerRoute =
+      motionMode === "tunnel"
+        ? createMatrixTunnelRoute(fromPoint, toPoint, tunnelCenter)
+        : createMatrixHexRoute(fromPoint, toPoint);
+    const walkMode = motionMode === "walk-forward" || motionMode === "walk-reverse";
+    const route = walkMode
+      ? createMatrixActivityWalkAttachmentRoute(
+          centerRoute,
+          Math.abs(from.size * projectedFrom.scale),
+          Math.abs(to.size * projectedTo.scale),
+        )
+      : centerRoute;
+    const tunnelCenterProgress =
+      motionMode === "tunnel" && route.totalLength > 0
+        ? Math.min(
+            1,
+            Math.max(
+              0,
+              Math.hypot(tunnelCenter.x - fromPoint.x, tunnelCenter.y - fromPoint.y) /
+                route.totalLength,
+            ),
+          )
+        : 0.5;
     const linkPaint = resolveMatrixActivityLinkPaint(
       context,
       colorMode,
       matrixColorFrame,
       from,
       to,
+      projectedFrom,
+      projectedTo,
       link.colorHue,
     );
     context.strokeStyle = linkPaint;
-    context.globalAlpha = safeOpacity * link.intensity;
-    context.lineWidth = 0.75 + link.intensity * (0.35 + link.linePulse * 0.4);
-    traceMatrixHexRoute(context, route);
-    context.stroke();
+    context.globalAlpha = safeOpacity * link.intensity * linkLifecycleOpacity;
+    strokeMatrixActivityDepthRoute(
+      context,
+      route,
+      0.75 + link.intensity * (0.35 + link.linePulse * 0.4),
+      motionMode,
+      projectedFrom.depthScale,
+      projectedTo.depthScale,
+      tunnelCenterProgress,
+      intervalStartPoint,
+      intervalEndPoint,
+    );
 
     if (!state.reducedMotion) {
       // These repeated packets are decorative replay of one verified link,
@@ -1492,18 +1848,51 @@ export function drawMatrixActivityAnimation(
           packetIndex,
           packetCount,
         );
-        const packet = matrixHexRoutePointAt(route, packetProgress);
+        resolveMatrixHexRoutePointInPlace(packetPoint, route, packetProgress);
         context.strokeStyle = linkPaint;
-        context.globalAlpha = safeOpacity * link.intensity;
-        context.lineWidth = 1.25 + link.linePulse;
+        context.globalAlpha = safeOpacity * link.intensity * linkLifecycleOpacity;
         for (const interval of resolveMatrixActivityTrailIntervals(packetProgress)) {
-          traceMatrixHexRouteInterval(context, route, interval.startProgress, interval.endProgress);
+          const intervalDepthScale = resolveMatrixActivityRouteDepthScale(
+            motionMode,
+            (interval.startProgress + interval.endProgress) * 0.5,
+            projectedFrom.depthScale,
+            projectedTo.depthScale,
+            tunnelCenterProgress,
+          );
+          context.lineWidth = resolveMatrixActivityDepthLineWidth(
+            1.25 + link.linePulse,
+            intervalDepthScale,
+          );
+          traceMatrixHexRouteInterval(
+            context,
+            route,
+            interval.startProgress,
+            interval.endProgress,
+            intervalStartPoint,
+            intervalEndPoint,
+          );
           context.stroke();
         }
         context.fillStyle = linkPaint;
-        context.globalAlpha = safeOpacity * link.intensity;
+        context.globalAlpha = safeOpacity * link.intensity * linkLifecycleOpacity;
+        const packetDepthScale = resolveMatrixActivityRouteDepthScale(
+          motionMode,
+          packetProgress,
+          projectedFrom.depthScale,
+          projectedTo.depthScale,
+          tunnelCenterProgress,
+        );
         context.beginPath();
-        context.arc(packet.x, packet.y, 1 + link.intensity * 1.4, 0, Math.PI * 2);
+        context.arc(
+          packetPoint.x,
+          packetPoint.y,
+          Math.min(
+            MAX_MATRIX_ACTIVITY_DEPTH_PACKET_RADIUS,
+            (1 + link.intensity * 1.4) * packetDepthScale,
+          ),
+          0,
+          Math.PI * 2,
+        );
         context.fill();
       }
     }
@@ -1513,6 +1902,18 @@ export function drawMatrixActivityAnimation(
     const pulse = state.pulses[index]!;
     const particle = scene.particles[pulse.anchorIndex];
     if (!particle) continue;
+    const pulseLifecycleOpacity = resolveMatrixWalkLifecycleOpacity(particle, motionMode);
+    if (pulseLifecycleOpacity <= 0.01) continue;
+    resolveAtmosphereProjectedPointInPlace(
+      projectedFrom,
+      scene,
+      particle,
+      particle.x,
+      particle.y,
+      motionMode,
+      walkStartFontSize,
+      walkEndFontSize,
+    );
     // Matrix routes may interpolate their two endpoint colors. Keep endpoint
     // lettering on its own existing glyph paint; random routes already share
     // that exact hue with both endpoint glyphs and the route.
@@ -1525,10 +1926,11 @@ export function drawMatrixActivityAnimation(
     drawMatrixActivityPulse(
       context,
       particle,
+      projectedFrom,
       pulse.category,
       pulse.semanticRole,
       pulsePaint,
-      safeOpacity,
+      safeOpacity * pulseLifecycleOpacity,
       pulse.intensity,
     );
     if (
@@ -1538,9 +1940,10 @@ export function drawMatrixActivityAnimation(
       drawMatrixActivityTelemetryRing(
         context,
         particle,
+        projectedFrom,
         pulse.category,
         pulsePaint,
-        safeOpacity,
+        safeOpacity * pulseLifecycleOpacity,
         pulse.intensity,
       );
       telemetryRingCount += 1;

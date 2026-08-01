@@ -1494,6 +1494,10 @@ describe("settings panels", () => {
         ...config.clientSettings,
         fallingEffectMatrixColorMode: "rainbow-extra",
         fallingEffectMatrixColorCycleSpeed: 32,
+        fallingEffectMatrixMotionMode: "tunnel",
+        fallingEffectMatrixWalkStartFontSize: 12,
+        fallingEffectMatrixWalkEndFontSize: 24,
+        fallingEffect2chEnriched: true,
         fallingEffectLiveWorkVocabulary: true,
         fallingEffectActivityLinks: true,
         fallingEffectActivityLinkNetworkEnabled: false,
@@ -1515,20 +1519,24 @@ describe("settings panels", () => {
     await expect
       .element(page.getByLabelText("Changed settings"))
       .toHaveTextContent(
-        "Matrix color mode | Matrix color-cycle speed | Matrix live work vocabulary | Matrix activity links | Matrix activity link inputs | Matrix activity link colors | Matrix verified route visibility",
+        "Matrix color mode | Matrix color-cycle speed | Atmosphere motion | Walk perspective sizes | 2ch-inspired Matrix enrichment | Matrix live work vocabulary | Matrix activity links | Matrix activity link inputs | Matrix activity link colors | Matrix verified route visibility",
       );
     await page.getByRole("button", { name: "Apply settings reset" }).click();
 
     await vi.waitFor(() => {
       expect(confirm).toHaveBeenCalledWith(
         expect.stringContaining(
-          "Matrix color mode, Matrix color-cycle speed, Matrix live work vocabulary, Matrix activity links, Matrix activity link inputs, Matrix activity link colors, Matrix verified route visibility",
+          "Matrix color mode, Matrix color-cycle speed, Atmosphere motion, Walk perspective sizes, 2ch-inspired Matrix enrichment, Matrix live work vocabulary, Matrix activity links, Matrix activity link inputs, Matrix activity link colors, Matrix verified route visibility",
         ),
       );
       expect(updateClientSettings).toHaveBeenCalledWith(
         expect.objectContaining({
           fallingEffectMatrixColorMode: "fixed",
           fallingEffectMatrixColorCycleSpeed: 1,
+          fallingEffectMatrixMotionMode: "flat",
+          fallingEffectMatrixWalkStartFontSize: 1,
+          fallingEffectMatrixWalkEndFontSize: 72,
+          fallingEffect2chEnriched: false,
           fallingEffectLiveWorkVocabulary: false,
           fallingEffectActivityLinks: false,
           fallingEffectActivityLinkNetworkEnabled: true,
@@ -1542,6 +1550,10 @@ describe("settings panels", () => {
       expect(getServerConfig()?.clientSettings).toMatchObject({
         fallingEffectMatrixColorMode: "fixed",
         fallingEffectMatrixColorCycleSpeed: 1,
+        fallingEffectMatrixMotionMode: "flat",
+        fallingEffectMatrixWalkStartFontSize: 1,
+        fallingEffectMatrixWalkEndFontSize: 72,
+        fallingEffect2chEnriched: false,
         fallingEffectLiveWorkVocabulary: false,
         fallingEffectActivityLinks: false,
         fallingEffectActivityLinkNetworkEnabled: true,

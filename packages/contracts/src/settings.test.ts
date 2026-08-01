@@ -57,10 +57,17 @@ import {
   DEFAULT_FALLING_EFFECT_JAPANESE_RATIO,
   DEFAULT_FALLING_EFFECT_KIND,
   DEFAULT_FALLING_EFFECT_LIVE_WORK_VOCABULARY,
+  DEFAULT_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE,
+  DEFAULT_FALLING_EFFECT_MATRIX_CENTER_WIND_INTENSITY,
   DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
   DEFAULT_FALLING_EFFECT_MATRIX_COLOR_MODE,
+  DEFAULT_FALLING_EFFECT_MATRIX_MOTION_MODE,
+  DEFAULT_FALLING_EFFECT_MATRIX_WALK_END_FONT_SIZE,
+  DEFAULT_FALLING_EFFECT_MATRIX_WALK_LIFECYCLE_PERCENT,
+  DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE,
   DEFAULT_FALLING_EFFECT_SPEED,
   DEFAULT_FALLING_EFFECTS_ENABLED,
+  DEFAULT_FALLING_EFFECTS_OVER_CINEMA_ENABLED,
   DEFAULT_MODEL_PACING_ENABLED,
   DEFAULT_MODEL_PACING_RESERVE_PERCENT,
   DEFAULT_POWER_SAVE_BLOCKER_MODE,
@@ -82,6 +89,7 @@ import {
   MAX_FALLING_EFFECT_DENSITY,
   MAX_FALLING_EFFECT_JAPANESE_RATIO,
   MAX_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
+  MAX_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE,
   MAX_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
   MAX_FALLING_EFFECT_SPEED,
   MAX_MODEL_PACING_RESERVE_PERCENT,
@@ -96,6 +104,7 @@ import {
   MIN_FALLING_EFFECT_DENSITY,
   MIN_FALLING_EFFECT_JAPANESE_RATIO,
   MIN_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
+  MIN_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE,
   MIN_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
   MIN_FALLING_EFFECT_SPEED,
   MIN_MODEL_PACING_RESERVE_PERCENT,
@@ -412,10 +421,17 @@ describe("client settings", () => {
   it("defaults every ambient preference to the canonical reset vector", () => {
     expect(DEFAULT_AMBIENT_CLIENT_SETTINGS).toEqual({
       fallingEffectsEnabled: DEFAULT_FALLING_EFFECTS_ENABLED,
+      fallingEffectsOverCinemaEnabled: DEFAULT_FALLING_EFFECTS_OVER_CINEMA_ENABLED,
       fallingEffectKind: DEFAULT_FALLING_EFFECT_KIND,
+      fallingEffectMatrixBaseFontSize: DEFAULT_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE,
       fallingEffectColor: DEFAULT_AMBIENT_COLOR,
       fallingEffectMatrixColorMode: DEFAULT_FALLING_EFFECT_MATRIX_COLOR_MODE,
       fallingEffectMatrixColorCycleSpeed: DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
+      fallingEffectMatrixMotionMode: DEFAULT_FALLING_EFFECT_MATRIX_MOTION_MODE,
+      fallingEffectMatrixWalkStartFontSize: DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE,
+      fallingEffectMatrixWalkEndFontSize: DEFAULT_FALLING_EFFECT_MATRIX_WALK_END_FONT_SIZE,
+      fallingEffectMatrixWalkLifecyclePercent: DEFAULT_FALLING_EFFECT_MATRIX_WALK_LIFECYCLE_PERCENT,
+      fallingEffectMatrixCenterWindIntensity: DEFAULT_FALLING_EFFECT_MATRIX_CENTER_WIND_INTENSITY,
       fallingEffectOpacity: DEFAULT_AMBIENT_OPACITY,
       fallingEffectSpeed: DEFAULT_FALLING_EFFECT_SPEED,
       fallingEffectDensity: DEFAULT_FALLING_EFFECT_DENSITY,
@@ -470,6 +486,13 @@ describe("client settings", () => {
     expect(decoded.fallingEffectMatrixColorCycleSpeed).toBe(
       DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
     );
+    expect(decoded.fallingEffectMatrixMotionMode).toBe(DEFAULT_FALLING_EFFECT_MATRIX_MOTION_MODE);
+    expect(decoded.fallingEffectMatrixWalkStartFontSize).toBe(
+      DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE,
+    );
+    expect(decoded.fallingEffectMatrixWalkEndFontSize).toBe(
+      DEFAULT_FALLING_EFFECT_MATRIX_WALK_END_FONT_SIZE,
+    );
     expect(pickAmbientSettings(decoded)).toEqual(DEFAULT_AMBIENT_CLIENT_SETTINGS);
   });
 
@@ -489,6 +512,9 @@ describe("client settings", () => {
       fallingEffectColor: "  #12AbEf  ",
       fallingEffectMatrixColorMode: "music-reactive",
       fallingEffectMatrixColorCycleSpeed: MAX_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
+      fallingEffectMatrixMotionMode: "tunnel",
+      fallingEffectMatrixWalkStartFontSize: 12.34,
+      fallingEffectMatrixWalkEndFontSize: 98.76,
       fallingEffectOpacity: MAX_AMBIENT_OPACITY,
       fallingEffectSpeed: MAX_FALLING_EFFECT_SPEED,
       fallingEffectDensity: MAX_FALLING_EFFECT_DENSITY,
@@ -528,6 +554,9 @@ describe("client settings", () => {
       fallingEffectColor: "#12abef",
       fallingEffectMatrixColorMode: "music-reactive",
       fallingEffectMatrixColorCycleSpeed: MAX_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
+      fallingEffectMatrixMotionMode: "tunnel",
+      fallingEffectMatrixWalkStartFontSize: 12.34,
+      fallingEffectMatrixWalkEndFontSize: 98.76,
       fallingEffectOpacity: MAX_AMBIENT_OPACITY,
       fallingEffectSpeed: MAX_FALLING_EFFECT_SPEED,
       fallingEffectDensity: MAX_FALLING_EFFECT_DENSITY,
@@ -570,7 +599,7 @@ describe("client settings", () => {
     expect(pickAmbientSettings(reset)).toEqual(DEFAULT_AMBIENT_CLIENT_SETTINGS);
   });
 
-  it("accepts exactly the three falling effects and five Matrix color modes", () => {
+  it("accepts the bounded effect, color, motion, and activity modes", () => {
     for (const fallingEffectKind of ["snow", "rain", "matrix"] as const) {
       expect(decodeClientSettingsPatch({ fallingEffectKind })).toEqual({ fallingEffectKind });
     }
@@ -588,6 +617,18 @@ describe("client settings", () => {
     for (const fallingEffectActivityLinkColorMode of ["random", "matrix"] as const) {
       expect(decodeClientSettingsPatch({ fallingEffectActivityLinkColorMode })).toEqual({
         fallingEffectActivityLinkColorMode,
+      });
+    }
+    for (const fallingEffectMatrixMotionMode of [
+      "flat",
+      "forward",
+      "reverse",
+      "tunnel",
+      "walk-forward",
+      "walk-reverse",
+    ] as const) {
+      expect(decodeClientSettingsPatch({ fallingEffectMatrixMotionMode })).toEqual({
+        fallingEffectMatrixMotionMode,
       });
     }
   });
@@ -732,6 +773,9 @@ describe("client settings", () => {
         fallingEffectColor: "auto",
         fallingEffectMatrixColorMode: "rainbow-extra",
         fallingEffectMatrixColorCycleSpeed: MIN_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
+        fallingEffectMatrixMotionMode: "reverse",
+        fallingEffectMatrixWalkStartFontSize: MIN_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE,
+        fallingEffectMatrixWalkEndFontSize: MAX_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE,
         fallingEffectOpacity: MIN_AMBIENT_OPACITY,
         fallingEffectSpeed: MIN_FALLING_EFFECT_SPEED,
         fallingEffectDensity: MIN_FALLING_EFFECT_DENSITY,
@@ -753,6 +797,9 @@ describe("client settings", () => {
       fallingEffectColor: "auto",
       fallingEffectMatrixColorMode: "rainbow-extra",
       fallingEffectMatrixColorCycleSpeed: MIN_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
+      fallingEffectMatrixMotionMode: "reverse",
+      fallingEffectMatrixWalkStartFontSize: MIN_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE,
+      fallingEffectMatrixWalkEndFontSize: MAX_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE,
       fallingEffectOpacity: MIN_AMBIENT_OPACITY,
       fallingEffectSpeed: MIN_FALLING_EFFECT_SPEED,
       fallingEffectDensity: MIN_FALLING_EFFECT_DENSITY,
@@ -781,6 +828,7 @@ describe("client settings", () => {
       { fallingEffectsEnabled: "yes" },
       { fallingEffectKind: "hail" },
       { fallingEffectMatrixColorMode: "beat-sync" },
+      { fallingEffectMatrixMotionMode: "hyperspace" },
       {
         fallingEffectMatrixColorCycleSpeed: MIN_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED - 0.01,
       },
@@ -788,6 +836,12 @@ describe("client settings", () => {
         fallingEffectMatrixColorCycleSpeed: MAX_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED + 0.01,
       },
       { fallingEffectMatrixColorCycleSpeed: Number.NaN },
+      { fallingEffectMatrixWalkStartFontSize: 0 },
+      {
+        fallingEffectMatrixWalkEndFontSize: MAX_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE + 0.01,
+      },
+      { fallingEffectMatrixWalkStartFontSize: 1.001 },
+      { fallingEffectMatrixWalkEndFontSize: Number.NaN },
       { fallingEffectOpacity: MIN_AMBIENT_OPACITY - 0.01 },
       { fallingEffectOpacity: MAX_AMBIENT_OPACITY + 0.01 },
       { fallingEffectOpacity: Number.NaN },
