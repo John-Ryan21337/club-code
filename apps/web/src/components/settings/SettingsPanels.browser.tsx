@@ -49,6 +49,10 @@ import {
   setServerConfigSnapshot,
 } from "../../rpc/serverState";
 import { useUiStateStore } from "../../uiStateStore";
+import {
+  SETTINGS_PROFILE_LIBRARY_STORAGE_KEY,
+  settingsProfileLibraryStore,
+} from "../../settingsProfiles";
 import { youtubeUrlQueueStore } from "../../youtubeUrlQueue";
 import { toastManager } from "../ui/toast";
 import { ConnectionsSettings } from "./ConnectionsSettings";
@@ -736,6 +740,7 @@ describe("settings panels", () => {
     await __resetLocalApiForTests();
     localMediaStore.clear();
     localStorage.clear();
+    settingsProfileLibraryStore.resetForTests();
     useUiStateStore.setState({ defaultAdvertisedEndpointKey: null });
     authAccessHarness.reset();
   });
@@ -750,6 +755,7 @@ describe("settings panels", () => {
     Reflect.deleteProperty(window, "desktopBridge");
     Reflect.deleteProperty(window, "nativeApi");
     document.body.innerHTML = "";
+    settingsProfileLibraryStore.resetForTests();
     resetServerStateForTests();
     await __resetLocalApiForTests();
     localMediaStore.clear();
@@ -1099,6 +1105,188 @@ describe("settings panels", () => {
     await vi.waitFor(() => {
       expect(updateClientSettings).toHaveBeenCalledWith({ chatCopyFormat: "plainText" });
     });
+  });
+
+  it("saves and switches persistent local settings profiles in one action", async () => {
+    const desktopBridge = createDesktopBridgeStub();
+    window.desktopBridge = desktopBridge;
+    const { updateClientSettings } = installClientSettingsNativeApi(desktopBridge);
+    setServerConfigSnapshot(createBaseServerConfig());
+
+    mounted = await renderWithTestRouter(
+      <AppAtomRegistryProvider>
+        <AppearanceSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    const nameInput = page.getByLabelText("Settings profile name");
+    await nameInput.fill("Mobile");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await expect.element(page.getByText("Saved “Mobile”.", { exact: true })).toBeInTheDocument();
+
+    await page.getByLabelText("Keep animations running in background").click();
+    await vi.waitFor(() => {
+      expect(updateClientSettings).toHaveBeenCalledWith({
+        continueBackgroundAnimations: true,
+      });
+    });
+    await page.getByLabelText("Theme preference").click();
+    await page.getByText("Light", { exact: true }).click();
+
+    await nameInput.fill("Desktop");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await expect.element(page.getByText("Saved “Desktop”.", { exact: true })).toBeInTheDocument();
+
+    // Save creates a distinct named preset. A normalized collision must not
+    // silently overwrite another profile; explicit replacement belongs to
+    // Update active so the operator can see which preset is being changed.
+    await nameInput.fill(" ＭＯＢＩＬＥ ");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await expect
+      .element(
+        page.getByText(
+          "A profile named “Mobile” already exists. Choose another name, or load that profile and use Update active after making changes.",
+          { exact: true },
+        ),
+      )
+      .toBeInTheDocument();
+    expect(settingsProfileLibraryStore.getSnapshot().activeProfileId).toBe("profile:desktop");
+    expect(settingsProfileLibraryStore.resolve("profile:mobile")?.theme).toBe("dark");
+
+    // Saved profiles are also exposed as one-tap buttons for narrow/mobile
+    // settings surfaces; selecting one applies it without a separate Apply step.
+    await page.getByRole("button", { name: "Mobile", exact: true }).click();
+
+    await vi.waitFor(() => {
+      const profilePatch = updateClientSettings.mock.calls.at(-1)?.[0];
+      expect(profilePatch).toMatchObject({
+        continueBackgroundAnimations: false,
+      });
+      expect(profilePatch).not.toHaveProperty("autoNudgeMode");
+      expect(profilePatch).not.toHaveProperty("providerModelPreferences");
+      expect(profilePatch).not.toHaveProperty("modelPacingEnabled");
+      expect(profilePatch).not.toHaveProperty("ambientVideoEnabled");
+      expect(profilePatch).not.toHaveProperty("ambientVideoSource");
+      expect(profilePatch).not.toHaveProperty("ambientImageEnabled");
+      expect(profilePatch).not.toHaveProperty("ambientImageAsset");
+      expect(profilePatch).not.toHaveProperty("sidebarBrandImage");
+      expect(profilePatch).not.toHaveProperty("providerUsageWidgetEnabled");
+      expect(profilePatch).not.toHaveProperty("providerUsagePollMinutes");
+      expect(profilePatch).not.toHaveProperty("powerSaveBlockerMode");
+      expect(profilePatch).not.toHaveProperty("notificationsEnabled");
+      expect(profilePatch).not.toHaveProperty("defaultEditor");
+      expect(profilePatch).toHaveProperty(
+        "ambientImageCycleSeconds",
+        DEFAULT_CLIENT_SETTINGS.ambientImageCycleSeconds,
+      );
+    });
+    await expect.element(page.getByText("Loaded “Mobile”.", { exact: true })).toBeInTheDocument();
+    await expect.element(page.getByLabelText("Theme preference")).toHaveTextContent("Dark");
+
+    // The active select cannot emit its current value. A dedicated Reload action
+    // lets the user discard later edits without switching through another profile.
+    await page.getByLabelText("Keep animations running in background").click();
+    await vi.waitFor(() => {
+      expect(updateClientSettings.mock.calls.at(-1)?.[0]).toEqual({
+        continueBackgroundAnimations: true,
+      });
+    });
+    await page.getByRole("button", { name: "Reload active settings profile" }).click();
+    await vi.waitFor(() => {
+      expect(updateClientSettings.mock.calls.at(-1)?.[0]).toMatchObject({
+        continueBackgroundAnimations: false,
+      });
+    });
+
+    await page.getByLabelText("Keep animations running in background").click();
+    await page.getByRole("button", { name: "Update active" }).click();
+    await expect.element(page.getByText("Updated “Mobile”.", { exact: true })).toBeInTheDocument();
+    await page.getByLabelText("Keep animations running in background").click();
+    await page.getByRole("button", { name: "Reload active settings profile" }).click();
+    await vi.waitFor(() => {
+      expect(updateClientSettings.mock.calls.at(-1)?.[0]).toMatchObject({
+        continueBackgroundAnimations: true,
+      });
+    });
+
+    const persistedProfiles = JSON.parse(
+      localStorage.getItem(SETTINGS_PROFILE_LIBRARY_STORAGE_KEY) ?? "{}",
+    );
+    expect(persistedProfiles.activeProfileId).toBe("profile:mobile");
+    expect(persistedProfiles.profiles.map((profile: { name: string }) => profile.name)).toEqual([
+      "Mobile",
+      "Desktop",
+    ]);
+  });
+
+  it("rolls the theme back and keeps the prior active profile when loading settings fails", async () => {
+    const desktopBridge = createDesktopBridgeStub();
+    window.desktopBridge = desktopBridge;
+    const { updateClientSettings } = installClientSettingsNativeApi(desktopBridge);
+    setServerConfigSnapshot(createBaseServerConfig());
+
+    mounted = await renderWithTestRouter(
+      <AppAtomRegistryProvider>
+        <AppearanceSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    const nameInput = page.getByLabelText("Settings profile name");
+    await nameInput.fill("Mobile");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await page.getByLabelText("Keep animations running in background").click();
+    await page.getByLabelText("Theme preference").click();
+    await page.getByText("Light", { exact: true }).click();
+    await nameInput.fill("Desktop");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+
+    updateClientSettings.mockRejectedValueOnce(new Error("profile write failed"));
+    await page.getByRole("combobox", { name: "Active settings profile" }).click();
+    await page.getByRole("option", { name: "Mobile" }).click();
+
+    await expect
+      .element(page.getByText("profile write failed", { exact: true }))
+      .toBeInTheDocument();
+    await expect.element(page.getByLabelText("Theme preference")).toHaveTextContent("Light");
+    await expect
+      .element(page.getByLabelText("Keep animations running in background"))
+      .toBeChecked();
+    expect(settingsProfileLibraryStore.getSnapshot().activeProfileId).toBe("profile:desktop");
+  });
+
+  it("refreshes the visible profile library after another window changes local storage", async () => {
+    setServerConfigSnapshot(createBaseServerConfig());
+    mounted = await renderWithTestRouter(
+      <AppAtomRegistryProvider>
+        <AppearanceSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    localStorage.setItem(
+      SETTINGS_PROFILE_LIBRARY_STORAGE_KEY,
+      JSON.stringify({
+        version: 1,
+        activeProfileId: "profile:mobile",
+        profiles: [
+          {
+            name: "Mobile",
+            theme: "dark",
+            clientSettings: { sidebarThreadPreviewCount: 2 },
+            createdAt: "2026-07-29T08:00:00.000Z",
+            updatedAt: "2026-07-29T08:00:00.000Z",
+          },
+        ],
+      }),
+    );
+    window.dispatchEvent(
+      new StorageEvent("storage", {
+        key: SETTINGS_PROFILE_LIBRARY_STORAGE_KEY,
+      }),
+    );
+
+    await expect
+      .element(page.getByRole("combobox", { name: "Active settings profile" }))
+      .toHaveTextContent("Mobile");
   });
 
   it("persists appearance preferences from Appearance settings", async () => {

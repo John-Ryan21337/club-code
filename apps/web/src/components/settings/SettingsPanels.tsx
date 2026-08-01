@@ -131,6 +131,7 @@ import { LocalMediaSettings } from "./LocalMediaSettings";
 import { WindowOpacitySettings } from "./WindowOpacitySettings";
 import { isProjectHiddenForMeeting } from "../../meetingPrivacy";
 import { useUiStateStore } from "../../uiStateStore";
+import { SettingsProfiles } from "./SettingsProfiles";
 
 const THEME_OPTIONS = [
   {
@@ -859,6 +860,8 @@ export function AppearanceSettingsPanel() {
 
   return (
     <SettingsPageContainer>
+      <SettingsProfiles />
+
       <SettingsSection title="Appearance">
         <SettingsRow
           title="Theme"
