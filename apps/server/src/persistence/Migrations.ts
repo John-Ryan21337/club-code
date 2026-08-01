@@ -78,6 +78,7 @@ import Migration0064 from "./Migrations/064_ProviderPacingPendingLaunchCompatibi
 import Migration0065 from "./Migrations/065_ForkLineageCompatibility.ts";
 import Migration0070 from "./Migrations/070_CollaborationEvents.ts";
 import Migration0071 from "./Migrations/071_CollaborationDatabaseCoordination.ts";
+import Migration0072 from "./Migrations/072_CollaborationMemberships.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -164,6 +165,7 @@ export const migrationEntries = [
   [65, "ForkLineageCompatibility", Migration0065],
   [70, "CollaborationEvents", Migration0070],
   [71, "CollaborationDatabaseCoordination", Migration0071],
+  [72, "CollaborationMemberships", Migration0072],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

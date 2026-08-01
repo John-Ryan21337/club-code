@@ -147,6 +147,7 @@ describe("065_ForkLineageCompatibility", () => {
           [65, "ForkLineageCompatibility"],
           [70, "CollaborationEvents"],
           [71, "CollaborationDatabaseCoordination"],
+          [72, "CollaborationMemberships"],
         ],
       );
 
