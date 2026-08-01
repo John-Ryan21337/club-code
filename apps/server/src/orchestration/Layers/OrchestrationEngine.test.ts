@@ -1463,7 +1463,7 @@ describe("OrchestrationEngine", () => {
     await system.dispose();
   });
 
-  it("serializes manual reservation and Auto Nudge in server arrival order", async () => {
+  it("serializes manual enqueue and Auto Nudge in server arrival order", async () => {
     const system = await createOrchestrationSystem();
     const { engine } = system;
     const createdAt = new Date().toISOString();
@@ -1538,11 +1538,16 @@ describe("OrchestrationEngine", () => {
     const firstReservationCommandId = CommandId.make("cmd-reserve-before-auto-nudge");
     await system.run(
       engine.dispatch({
-        type: "thread.manual-follow-up.reserve",
+        type: "thread.manual-follow-up.enqueue",
         commandId: firstReservationCommandId,
         threadId,
         followUpId: firstFollowUpId,
-        messageId: asMessageId("message-before-auto-nudge"),
+        message: {
+          messageId: asMessageId("message-before-auto-nudge"),
+          role: "user",
+          text: "Manual work takes priority.",
+          attachments: [],
+        },
         dispatch,
         createdAt,
       }),
@@ -1591,11 +1596,16 @@ describe("OrchestrationEngine", () => {
     const laterFollowUpId = ManualFollowUpId.make("manual-follow-up-after-auto-nudge");
     await system.run(
       engine.dispatch({
-        type: "thread.manual-follow-up.reserve",
+        type: "thread.manual-follow-up.enqueue",
         commandId: CommandId.make("cmd-reserve-after-auto-nudge"),
         threadId,
         followUpId: laterFollowUpId,
-        messageId: asMessageId("message-after-auto-nudge"),
+        message: {
+          messageId: asMessageId("message-after-auto-nudge"),
+          role: "user",
+          text: "Later manual work remains queued.",
+          attachments: [],
+        },
         dispatch,
         createdAt,
       }),
@@ -1607,7 +1617,7 @@ describe("OrchestrationEngine", () => {
     expect(thread?.manualFollowUps).toEqual([
       expect.objectContaining({
         id: laterFollowUpId,
-        status: "reserving",
+        status: "queued",
       }),
     ]);
 

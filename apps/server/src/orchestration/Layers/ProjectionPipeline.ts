@@ -1,6 +1,7 @@
 import {
   ApprovalRequestId,
   DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+  migrateStoredAutoNudgeBuiltInPrompt,
   type ChatAttachment,
   type OrchestrationEvent,
   ThreadId,
@@ -946,7 +947,13 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           }
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
-            autoNudge: event.payload.config,
+            autoNudge: {
+              ...event.payload.config,
+              prompt: migrateStoredAutoNudgeBuiltInPrompt(
+                event.payload.config.mode,
+                event.payload.config.prompt,
+              ),
+            },
             updatedAt: maxIso(
               existingRow.value.updatedAt,
               event.payload.config.armedAt ?? event.occurredAt,

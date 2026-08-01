@@ -215,11 +215,11 @@ import {
 } from "./ChatView.logic";
 import {
   type AutoNudgeMode,
-  autoNudgePromptForMode,
   canDispatchAutoNudge,
   canScheduleAutoNudge,
   consumeAutoNudgeTerminalForManualActivity,
   getAutoNudgeTurnLedger,
+  normalizeAutoNudgeBuiltInPrompt,
 } from "../autoNudger";
 import { manualFollowUpPriorityStore } from "../manualFollowUpPriorityStore";
 import {
@@ -6306,8 +6306,7 @@ export default function ChatView(props: ChatViewProps) {
       );
       return;
     }
-    const prompt =
-      config.prompt.trim().length === 0 ? (autoNudgePromptForMode(mode) ?? "") : config.prompt;
+    const prompt = normalizeAutoNudgeBuiltInPrompt(mode, config.prompt);
     void configureActiveThreadAutoNudge(
       {
         mode,
