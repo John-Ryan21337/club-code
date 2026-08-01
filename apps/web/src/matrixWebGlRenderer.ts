@@ -168,6 +168,8 @@ export interface MatrixWebGl2Capability {
   readonly reason: MatrixWebGl2FallbackReason | null;
   readonly maxTextureSize: number;
   readonly maxVertexAttributes: number;
+  readonly maxViewportWidth: number;
+  readonly maxViewportHeight: number;
 }
 
 interface MatrixGpuResources {
@@ -348,15 +350,38 @@ function readPositiveLimit(gl: WebGL2RenderingContext, parameter: number): numbe
   return typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
 }
 
+function readViewportLimits(gl: WebGL2RenderingContext): readonly [number, number] {
+  const value: unknown = gl.getParameter(gl.MAX_VIEWPORT_DIMS);
+  const dimensions =
+    Array.isArray(value) || ArrayBuffer.isView(value)
+      ? (value as unknown as ArrayLike<unknown>)
+      : null;
+  if (dimensions !== null && dimensions.length >= 2) {
+    const width = Number(dimensions[0]);
+    const height = Number(dimensions[1]);
+    if (Number.isFinite(width) && Number.isFinite(height)) {
+      return [Math.max(0, Math.floor(width)), Math.max(0, Math.floor(height))];
+    }
+  }
+  return [0, 0];
+}
+
 function inspectContext(gl: WebGL2RenderingContext): MatrixWebGl2Capability {
   const maxTextureSize = readPositiveLimit(gl, gl.MAX_TEXTURE_SIZE);
   const maxVertexAttributes = readPositiveLimit(gl, gl.MAX_VERTEX_ATTRIBS);
-  const supported = maxTextureSize >= 256 && maxVertexAttributes >= 4;
+  const [maxViewportWidth, maxViewportHeight] = readViewportLimits(gl);
+  const supported =
+    maxTextureSize >= 256 &&
+    maxVertexAttributes >= 4 &&
+    maxViewportWidth >= 256 &&
+    maxViewportHeight >= 256;
   return {
     supported,
     reason: supported ? null : "insufficient-capability",
     maxTextureSize,
     maxVertexAttributes,
+    maxViewportWidth,
+    maxViewportHeight,
   };
 }
 
@@ -378,6 +403,8 @@ export function detectMatrixWebGl2Capability(
       reason: "webgl2-unavailable",
       maxTextureSize: 0,
       maxVertexAttributes: 0,
+      maxViewportWidth: 0,
+      maxViewportHeight: 0,
     };
   }
   return inspectContext(gl);
@@ -445,80 +472,87 @@ function initializeResources(
   const texture = gl.createTexture();
   const resolutionLocation = gl.getUniformLocation(program, "u_resolution");
   const atlasLocation = gl.getUniformLocation(program, "u_atlas");
-  if (
-    !vertexArray ||
-    !quadBuffer ||
-    !instanceBuffer ||
-    !texture ||
-    !resolutionLocation ||
-    !atlasLocation
-  ) {
+  try {
+    if (
+      !vertexArray ||
+      !quadBuffer ||
+      !instanceBuffer ||
+      !texture ||
+      !resolutionLocation ||
+      !atlasLocation
+    ) {
+      throw new Error("Matrix WebGL resource allocation failed.");
+    }
+
+    gl.bindVertexArray(vertexArray);
+    gl.bindBuffer(gl.ARRAY_BUFFER, quadBuffer);
+    gl.bufferData(
+      gl.ARRAY_BUFFER,
+      new Float32Array([0, 0, 1, 0, 0, 1, 0, 1, 1, 0, 1, 1]),
+      gl.STATIC_DRAW,
+    );
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+
+    gl.bindBuffer(gl.ARRAY_BUFFER, instanceBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, maxGlyphInstances * INSTANCE_STRIDE_BYTES, gl.DYNAMIC_DRAW);
+    for (let attribute = 1; attribute <= 3; attribute += 1) {
+      gl.enableVertexAttribArray(attribute);
+      gl.vertexAttribPointer(
+        attribute,
+        4,
+        gl.FLOAT,
+        false,
+        INSTANCE_STRIDE_BYTES,
+        (attribute - 1) * 4 * Float32Array.BYTES_PER_ELEMENT,
+      );
+      gl.vertexAttribDivisor(attribute, 1);
+    }
+
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    // Atlas UVs use the Canvas2D source's top-origin coordinates and the vertex
+    // shader assigns v0 to the top of each quad. Flipping the upload as well
+    // mirrors glyphs and selects rows from the opposite side of the atlas.
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, atlas.source);
+    if (gl.getError() !== gl.NO_ERROR) {
+      throw new Error("Matrix WebGL resource initialization failed.");
+    }
+
+    gl.useProgram(program);
+    gl.uniform1i(atlasLocation, 0);
+    gl.enable(gl.BLEND);
+    // Keep RGB premultiplied for the transparent canvas compositor while
+    // accumulating alpha with the Porter-Duff source-over equation. blendFunc
+    // alone would apply SRC_ALPHA to alpha too, squaring translucent coverage.
+    gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    gl.disable(gl.DEPTH_TEST);
+    gl.disable(gl.CULL_FACE);
+    gl.bindVertexArray(null);
+
+    return {
+      program,
+      vertexArray,
+      quadBuffer,
+      instanceBuffer,
+      texture,
+      resolutionLocation,
+      atlasLocation,
+    };
+  } catch (error) {
     if (texture) gl.deleteTexture(texture);
     if (instanceBuffer) gl.deleteBuffer(instanceBuffer);
     if (quadBuffer) gl.deleteBuffer(quadBuffer);
     if (vertexArray) gl.deleteVertexArray(vertexArray);
     gl.deleteProgram(program);
-    throw new Error("Matrix WebGL resource allocation failed.");
+    throw error;
   }
-
-  gl.bindVertexArray(vertexArray);
-  gl.bindBuffer(gl.ARRAY_BUFFER, quadBuffer);
-  gl.bufferData(
-    gl.ARRAY_BUFFER,
-    new Float32Array([0, 0, 1, 0, 0, 1, 0, 1, 1, 0, 1, 1]),
-    gl.STATIC_DRAW,
-  );
-  gl.enableVertexAttribArray(0);
-  gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
-
-  gl.bindBuffer(gl.ARRAY_BUFFER, instanceBuffer);
-  gl.bufferData(gl.ARRAY_BUFFER, maxGlyphInstances * INSTANCE_STRIDE_BYTES, gl.DYNAMIC_DRAW);
-  for (let attribute = 1; attribute <= 3; attribute += 1) {
-    gl.enableVertexAttribArray(attribute);
-    gl.vertexAttribPointer(
-      attribute,
-      4,
-      gl.FLOAT,
-      false,
-      INSTANCE_STRIDE_BYTES,
-      (attribute - 1) * 4 * Float32Array.BYTES_PER_ELEMENT,
-    );
-    gl.vertexAttribDivisor(attribute, 1);
-  }
-
-  gl.activeTexture(gl.TEXTURE0);
-  gl.bindTexture(gl.TEXTURE_2D, texture);
-  // Atlas UVs use the Canvas2D source's top-origin coordinates and the vertex
-  // shader assigns v0 to the top of each quad. Flipping the upload as well
-  // mirrors glyphs and selects rows from the opposite side of the atlas.
-  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
-  gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, atlas.source);
-
-  gl.useProgram(program);
-  gl.uniform1i(atlasLocation, 0);
-  gl.enable(gl.BLEND);
-  // Keep RGB premultiplied for the transparent canvas compositor while
-  // accumulating alpha with the Porter-Duff source-over equation. blendFunc
-  // alone would apply SRC_ALPHA to alpha too, squaring translucent coverage.
-  gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
-  gl.disable(gl.DEPTH_TEST);
-  gl.disable(gl.CULL_FACE);
-  gl.bindVertexArray(null);
-
-  return {
-    program,
-    vertexArray,
-    quadBuffer,
-    instanceBuffer,
-    texture,
-    resolutionLocation,
-    atlasLocation,
-  };
 }
 
 function resolveAtlasEntry(atlas: MatrixGlyphAtlas, glyph: string | number): MatrixGlyphAtlasEntry {
@@ -552,6 +586,8 @@ export class MatrixWebGl2Renderer {
   readonly #onAvailabilityChange: ((availability: MatrixGpuAvailability) => void) | undefined;
   #gl: WebGL2RenderingContext;
   #resources: MatrixGpuResources | null;
+  #maxViewportWidth: number;
+  #maxViewportHeight: number;
   #contextLost = false;
   #disposed = false;
 
@@ -571,9 +607,25 @@ export class MatrixWebGl2Renderer {
       this.#onAvailabilityChange?.("unavailable");
       return;
     }
+    const capability = inspectContext(gl);
+    if (
+      !capability.supported ||
+      this.#atlas.width > capability.maxTextureSize ||
+      this.#atlas.height > capability.maxTextureSize
+    ) {
+      this.#contextLost = true;
+      this.#onAvailabilityChange?.("unavailable");
+      return;
+    }
     try {
+      const resources = initializeResources(gl, this.#atlas, this.#maxGlyphInstances);
+      if (this.#resources !== null && !this.#gl.isContextLost()) {
+        deleteResources(this.#gl, this.#resources);
+      }
       this.#gl = gl;
-      this.#resources = initializeResources(gl, this.#atlas, this.#maxGlyphInstances);
+      this.#resources = resources;
+      this.#maxViewportWidth = capability.maxViewportWidth;
+      this.#maxViewportHeight = capability.maxViewportHeight;
       this.#contextLost = false;
       this.#onAvailabilityChange?.("available");
     } catch {
@@ -590,6 +642,8 @@ export class MatrixWebGl2Renderer {
     maxGlyphInstances: number,
     maxDevicePixelRatio: number,
     maxBackingPixels: number,
+    maxViewportWidth: number,
+    maxViewportHeight: number,
     acquireContext: (canvas: HTMLCanvasElement) => WebGL2RenderingContext | null,
     onAvailabilityChange?: (availability: MatrixGpuAvailability) => void,
   ) {
@@ -599,6 +653,8 @@ export class MatrixWebGl2Renderer {
     this.#maxGlyphInstances = maxGlyphInstances;
     this.#maxDevicePixelRatio = maxDevicePixelRatio;
     this.#maxBackingPixels = maxBackingPixels;
+    this.#maxViewportWidth = maxViewportWidth;
+    this.#maxViewportHeight = maxViewportHeight;
     this.#instanceData = new Float32Array(maxGlyphInstances * INSTANCE_FLOATS);
     this.#acquireContext = acquireContext;
     this.#onAvailabilityChange = onAvailabilityChange;
@@ -636,12 +692,25 @@ export class MatrixWebGl2Renderer {
     const width = Math.max(1, Number.isFinite(frame.width) ? frame.width : 1);
     const height = Math.max(1, Number.isFinite(frame.height) ? frame.height : 1);
     const requestedDpr = clamp(frame.devicePixelRatio, 1, this.#maxDevicePixelRatio);
-    const fittedDpr = Math.min(
-      requestedDpr,
-      Math.sqrt(this.#maxBackingPixels / Math.max(1, width * height)),
+    const fittedDpr = Math.max(
+      Number.MIN_VALUE,
+      Math.min(
+        requestedDpr,
+        Math.sqrt(this.#maxBackingPixels / width / height),
+        this.#maxViewportWidth / width,
+        this.#maxViewportHeight / height,
+      ),
     );
-    const backingWidth = Math.max(1, Math.round(width * fittedDpr));
-    const backingHeight = Math.max(1, Math.round(height * fittedDpr));
+    // Floor both dimensions so rounding can never exceed either the aggregate
+    // pixel budget or the context's viewport limits.
+    const backingWidth = Math.max(
+      1,
+      Math.min(this.#maxViewportWidth, Math.floor(width * fittedDpr)),
+    );
+    const backingHeight = Math.max(
+      1,
+      Math.min(this.#maxViewportHeight, Math.floor(height * fittedDpr)),
+    );
     if (this.#canvas.width !== backingWidth) this.#canvas.width = backingWidth;
     if (this.#canvas.height !== backingHeight) this.#canvas.height = backingHeight;
 
@@ -654,6 +723,10 @@ export class MatrixWebGl2Renderer {
       }
       const entry = resolveAtlasEntry(this.#atlas, glyph.glyph);
       const fontSize = glyph.fontSizePx * glyph.scale;
+      if (!Number.isFinite(fontSize) || fontSize <= 0) {
+        droppedGlyphs += 1;
+        continue;
+      }
       const naturalContentWidth = fontSize * entry.contentWidthPerEm;
       const horizontalFit =
         Number.isFinite(glyph.maxWidthPx) &&
@@ -667,6 +740,15 @@ export class MatrixWebGl2Renderer {
       // glyph then retains Canvas2D-compatible font sizing.
       const glyphWidth = fontSize * entry.quadWidthPerEm * horizontalFit;
       const glyphHeight = fontSize * entry.quadHeightPerEm;
+      if (
+        !Number.isFinite(glyphWidth) ||
+        glyphWidth <= 0 ||
+        !Number.isFinite(glyphHeight) ||
+        glyphHeight <= 0
+      ) {
+        droppedGlyphs += 1;
+        continue;
+      }
       const offset = renderedGlyphs * INSTANCE_FLOATS;
       this.#instanceData[offset] = glyph.x - glyphWidth / 2;
       this.#instanceData[offset + 1] = glyph.y - glyphHeight / 2;
@@ -777,6 +859,8 @@ export function createMatrixWebGl2Renderer(
         maxGlyphInstances,
         maxDevicePixelRatio,
         maxBackingPixels,
+        capability.maxViewportWidth,
+        capability.maxViewportHeight,
         acquireContext,
         options.onAvailabilityChange,
       ),

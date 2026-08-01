@@ -170,20 +170,7 @@ function WholePixelFontSizeField({
       }}
     >
       <NumberFieldGroup>
-        <NumberFieldDecrement
-          aria-label={decrementLabel}
-          onClick={() => {
-            const normalizedValue = clampWholePixelFontSize(
-              clampWholePixelFontSize(value, fallback, minimum, maximum) -
-                FALLING_EFFECT_MATRIX_WALK_FONT_SIZE_STEP,
-              fallback,
-              minimum,
-              maximum,
-            );
-            setDraftValue(normalizedValue);
-            onCommit(normalizedValue);
-          }}
-        />
+        <NumberFieldDecrement aria-label={decrementLabel} />
         <NumberFieldInput
           aria-label={inputLabel}
           onFocus={(event) => {
@@ -201,20 +188,7 @@ function WholePixelFontSizeField({
             }
           }}
         />
-        <NumberFieldIncrement
-          aria-label={incrementLabel}
-          onClick={() => {
-            const normalizedValue = clampWholePixelFontSize(
-              clampWholePixelFontSize(value, fallback, minimum, maximum) +
-                FALLING_EFFECT_MATRIX_WALK_FONT_SIZE_STEP,
-              fallback,
-              minimum,
-              maximum,
-            );
-            setDraftValue(normalizedValue);
-            onCommit(normalizedValue);
-          }}
-        />
+        <NumberFieldIncrement aria-label={incrementLabel} />
       </NumberFieldGroup>
     </NumberField>
   );

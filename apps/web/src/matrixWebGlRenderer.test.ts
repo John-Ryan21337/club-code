@@ -80,6 +80,8 @@ function createWebGl2Context() {
     LINK_STATUS: 0x8b82,
     MAX_TEXTURE_SIZE: 0x0d33,
     MAX_VERTEX_ATTRIBS: 0x8869,
+    MAX_VIEWPORT_DIMS: 0x0d3a,
+    NO_ERROR: 0,
     ONE: 1,
     ONE_MINUS_SRC_ALPHA: 0x0303,
     RGBA: 0x1908,
@@ -125,8 +127,13 @@ function createWebGl2Context() {
     enable: vi.fn(),
     enableVertexAttribArray: vi.fn(),
     getParameter: vi.fn((parameter: number) =>
-      parameter === constants.MAX_TEXTURE_SIZE ? 4_096 : 16,
+      parameter === constants.MAX_TEXTURE_SIZE
+        ? 4_096
+        : parameter === constants.MAX_VIEWPORT_DIMS
+          ? new Int32Array([4_096, 4_096])
+          : 16,
     ),
+    getError: vi.fn(() => constants.NO_ERROR),
     getProgramInfoLog: vi.fn(() => ""),
     getProgramParameter: vi.fn(() => true),
     getShaderInfoLog: vi.fn(() => ""),
@@ -191,6 +198,8 @@ describe("Matrix WebGL2 renderer", () => {
       reason: "webgl2-unavailable",
       maxTextureSize: 0,
       maxVertexAttributes: 0,
+      maxViewportWidth: 0,
+      maxViewportHeight: 0,
     });
     expect(
       createMatrixWebGl2Renderer(canvas as unknown as HTMLCanvasElement, ["0", "1"], {
@@ -244,6 +253,81 @@ describe("Matrix WebGL2 renderer", () => {
     );
     expect(canvas.width).toBe(1_600);
     expect(canvas.height).toBe(1_200);
+  });
+
+  it("fits backing dimensions within both the exact pixel budget and viewport limits", () => {
+    const pixelCanvas = createCanvas();
+    const pixelContext = createWebGl2Context();
+    const pixelSelection = createMatrixWebGl2Renderer(
+      pixelCanvas as unknown as HTMLCanvasElement,
+      ["0"],
+      {
+        acquireContext: () => pixelContext,
+        createCanvas: createAtlasCanvas,
+        maxBackingPixels: 8,
+      },
+    );
+    expect(pixelSelection.kind).toBe("webgl2");
+    if (pixelSelection.kind !== "webgl2") return;
+    pixelSelection.renderer.render({ ...frame([]), width: 3, height: 3 });
+    expect(pixelCanvas.width * pixelCanvas.height).toBeLessThanOrEqual(8);
+
+    const viewportCanvas = createCanvas();
+    const viewportContext = createWebGl2Context();
+    vi.mocked(viewportContext.getParameter).mockImplementation((parameter: number) =>
+      parameter === viewportContext.MAX_TEXTURE_SIZE
+        ? 4_096
+        : parameter === viewportContext.MAX_VIEWPORT_DIMS
+          ? new Int32Array([300, 280])
+          : 16,
+    );
+    const viewportSelection = createMatrixWebGl2Renderer(
+      viewportCanvas as unknown as HTMLCanvasElement,
+      ["0"],
+      {
+        acquireContext: () => viewportContext,
+        createCanvas: createAtlasCanvas,
+      },
+    );
+    expect(viewportSelection.kind).toBe("webgl2");
+    if (viewportSelection.kind !== "webgl2") return;
+    viewportSelection.renderer.render({ ...frame([]), width: 1_000, height: 500 });
+    expect(viewportCanvas.width).toBe(300);
+    expect(viewportCanvas.height).toBe(150);
+    expect(viewportContext.viewport).toHaveBeenLastCalledWith(0, 0, 300, 150);
+  });
+
+  it("drops a finite-input glyph whose composite scale overflows", () => {
+    const canvas = createCanvas();
+    const gl = createWebGl2Context();
+    const selection = createMatrixWebGl2Renderer(canvas as unknown as HTMLCanvasElement, ["0"], {
+      acquireContext: () => gl,
+      createCanvas: createAtlasCanvas,
+    });
+    expect(selection.kind).toBe("webgl2");
+    if (selection.kind !== "webgl2") return;
+
+    expect(
+      selection.renderer.render(
+        frame([
+          {
+            glyph: "0",
+            x: 0,
+            y: 0,
+            fontSizePx: Number.MAX_VALUE,
+            scale: 2,
+            opacity: 1,
+            color: green,
+          },
+        ]),
+      ),
+    ).toEqual({
+      status: "empty",
+      renderedGlyphs: 0,
+      droppedGlyphs: 1,
+      drawCalls: 0,
+    });
+    expect(gl.bufferSubData).not.toHaveBeenCalled();
   });
 
   it("uses double-buffered presentation and preserves the Canvas2D token-width bound", () => {
@@ -399,5 +483,57 @@ describe("Matrix WebGL2 renderer", () => {
     selection.renderer.dispose();
     expect(canvas.removeEventListener).toHaveBeenCalledTimes(2);
     expect(selection.renderer.render(frame([])).status).toBe("disposed");
+  });
+
+  it("fails closed when a restored context no longer supports the retained atlas", () => {
+    const canvas = createCanvas();
+    const firstContext = createWebGl2Context();
+    const restoredContext = createWebGl2Context();
+    vi.mocked(restoredContext.getParameter).mockImplementation((parameter: number) =>
+      parameter === restoredContext.MAX_TEXTURE_SIZE
+        ? 128
+        : parameter === restoredContext.MAX_VIEWPORT_DIMS
+          ? new Int32Array([4_096, 4_096])
+          : 16,
+    );
+    const acquireContext = vi
+      .fn<() => WebGL2RenderingContext | null>()
+      .mockReturnValueOnce(firstContext)
+      .mockReturnValue(restoredContext);
+    const availability = vi.fn();
+    const selection = createMatrixWebGl2Renderer(canvas as unknown as HTMLCanvasElement, ["0"], {
+      acquireContext,
+      createCanvas: createAtlasCanvas,
+      onAvailabilityChange: availability,
+    });
+    expect(selection.kind).toBe("webgl2");
+    if (selection.kind !== "webgl2") return;
+
+    canvas.dispatch("webglcontextlost", { preventDefault: vi.fn() } as unknown as Event);
+    canvas.dispatch("webglcontextrestored");
+    expect(restoredContext.texImage2D).not.toHaveBeenCalled();
+    expect(availability).toHaveBeenLastCalledWith("unavailable");
+    expect(selection.renderer.render(frame([])).status).toBe("context-lost");
+  });
+
+  it("releases every partial allocation when texture initialization fails", () => {
+    const canvas = createCanvas();
+    const gl = createWebGl2Context();
+    vi.mocked(gl.getError).mockReturnValue(0x0505);
+
+    expect(
+      createMatrixWebGl2Renderer(canvas as unknown as HTMLCanvasElement, ["0"], {
+        acquireContext: () => gl,
+        createCanvas: createAtlasCanvas,
+      }),
+    ).toEqual({
+      kind: "canvas2d-fallback",
+      reason: "gpu-initialization-failed",
+      requiresFreshCanvas: true,
+    });
+    expect(gl.deleteTexture).toHaveBeenCalledOnce();
+    expect(gl.deleteBuffer).toHaveBeenCalledTimes(2);
+    expect(gl.deleteVertexArray).toHaveBeenCalledOnce();
+    expect(gl.deleteProgram).toHaveBeenCalledOnce();
   });
 });

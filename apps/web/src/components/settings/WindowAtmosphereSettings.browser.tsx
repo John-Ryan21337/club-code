@@ -178,11 +178,14 @@ describe("WindowAtmosphereSettings motion", () => {
     const mounted = await render(<WindowAtmosphereSettings />);
 
     await page.getByLabelText("Increase Walk start font size").click();
+    expect(mocks.updateSettings).toHaveBeenCalledTimes(1);
     expect(mocks.updateSettings).toHaveBeenLastCalledWith({
       fallingEffectMatrixWalkStartFontSize: 2,
     });
 
+    mocks.updateSettings.mockClear();
     await page.getByLabelText("Decrease Walk end font size").click();
+    expect(mocks.updateSettings).toHaveBeenCalledTimes(1);
     expect(mocks.updateSettings).toHaveBeenLastCalledWith({
       fallingEffectMatrixWalkEndFontSize: 71,
     });
