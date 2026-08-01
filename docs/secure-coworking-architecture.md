@@ -261,11 +261,29 @@ raised only after load, partition, revocation, abuse, and backpressure testing.
 - Focused contract and server tests cover principal serialization, the
   cross-project IDOR matrix, epoch revocation, membership removal, session
   validity, and permission narrowing.
-- Device key enrollment/signature verification, durable membership and event
-  stores, invites, coordinator transport, subscriptions, chat/transcript UI,
-  sandboxed agent runners, and file materialization remain unimplemented. No
-  current code from this phase exposes a network endpoint or mutates shared
-  files.
+- Migration 070 and `CollaborationEventStore` durably persist only admitted
+  events in a strict SQLite journal. Each project receives an independent
+  monotonic sequence and SHA-256 hash chain; exact idempotent retries return the
+  original event, while command-ID reuse with different content fails closed.
+  Replay is reauthorized on every call, capped at 500 events and 1 MiB of
+  encoded data, and validates project scope, contiguity, cursor alignment, and
+  stored hashes before returning data.
+- Append recomputes the proposal hash, preserves the verified device-key
+  identity, and repeats admission after reserving the SQLite writer so a
+  membership or key revocation observed before commit prevents the append.
+  Two independent mutation-authorized audits added forged-admission,
+  cross-project replay, concurrent-writer, revocation-race, corrupt-chain, and
+  malformed-page regressions.
+- Device key enrollment/signature verification at a network boundary, durable
+  membership, invites, coordinator transport, subscriptions, chat/transcript
+  UI, sandboxed agent runners, file synchronization/materialization, and signed
+  checkpoints remain unimplemented. The current storage slice exposes no
+  network endpoint and mutates no shared project file.
+
+Residual boundary: exact revocation linearizability must be revisited if
+membership or key authority moves to a remote non-transactional service.
+Sequence-only clients must also retain and verify their prior hash anchor until
+signed checkpoints or equivalent key-history proofs are implemented.
 
 ### Phase 0: security foundation
 
