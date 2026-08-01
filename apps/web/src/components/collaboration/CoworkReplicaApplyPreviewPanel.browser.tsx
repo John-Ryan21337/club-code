@@ -122,8 +122,10 @@ describe("CoworkReplicaApplyPreviewPanel", () => {
         outcome: "preserve-local-no-overwrite",
       },
     ];
+    const hiddenPlanToken = "f".repeat(64);
     const previewReplicaApplyPlan = vi.fn(async () => ({
       ...plan(entries),
+      planToken: hiddenPlanToken,
       summary: {
         ...plan().summary,
         applyVersionCount: 0,
@@ -162,6 +164,8 @@ describe("CoworkReplicaApplyPreviewPanel", () => {
       .toBeVisible();
     expect(document.body.textContent).not.toContain("successfully applied");
     expect(document.body.textContent).not.toContain("C:\\");
+    expect(document.body.textContent).not.toContain(hiddenPlanToken);
+    expect(document.body.textContent).not.toContain(hiddenPlanToken.slice(0, 8));
     expect(previewReplicaApplyPlan).toHaveBeenCalledWith(
       expect.objectContaining({ sharedProjectId: "project-one", cursor: null, limit: 50 }),
     );
@@ -289,5 +293,88 @@ describe("CoworkReplicaApplyPreviewPanel", () => {
     );
     await expect.element(page.getByRole("alert")).toBeVisible();
     expect(client.previewReplicaApplyPlan).toHaveBeenCalledTimes(2);
+  });
+
+  it("hides prior-scope paths synchronously when the injected client changes", async () => {
+    const firstClient: CoworkReplicaApplyPreviewClient = {
+      createCommandId: () => "command-one",
+      previewReplicaApplyPlan: vi.fn(async () => plan([entry("private/first-client.ts")])),
+      approveReplicaApplyPlan: vi.fn(),
+    };
+    const secondRequest: { resolve?: (value: unknown) => void } = {};
+    const secondClient: CoworkReplicaApplyPreviewClient = {
+      createCommandId: () => "command-two",
+      previewReplicaApplyPlan: vi.fn(
+        () =>
+          new Promise((resolve) => {
+            secondRequest.resolve = resolve;
+          }),
+      ),
+      approveReplicaApplyPlan: vi.fn(),
+    };
+    mounted = await render(
+      <CoworkReplicaApplyPreviewPanel client={firstClient} sharedProjectId="project-one" />,
+    );
+    await expect.element(page.getByText("private/first-client.ts")).toBeVisible();
+    await mounted.rerender(
+      <CoworkReplicaApplyPreviewPanel client={secondClient} sharedProjectId="project-one" />,
+    );
+    expect(document.body.textContent).not.toContain("private/first-client.ts");
+    await expect.element(page.getByRole("status")).toHaveTextContent(/Loading immutable/);
+    await expect.poll(() => typeof secondRequest.resolve === "function").toBe(true);
+    secondRequest.resolve?.(plan([entry("shared/second-client.ts")]));
+    await expect.element(page.getByText("shared/second-client.ts")).toBeVisible();
+  });
+
+  it("aborts an in-flight approval on a project authority switch without rendering stale receipt truth", async () => {
+    const approvalRequest: { signal?: AbortSignal } = {};
+    const client: CoworkReplicaApplyPreviewClient = {
+      createCommandId: () => "command-one",
+      previewReplicaApplyPlan: vi.fn(async ({ sharedProjectId }) => ({
+        ...plan([entry(`${sharedProjectId}/shared.ts`)]),
+        sharedProjectId,
+      })),
+      approveReplicaApplyPlan: vi.fn(
+        (_command, { signal }) =>
+          new Promise<unknown>(() => {
+            approvalRequest.signal = signal;
+          }),
+      ),
+    };
+    mounted = await render(
+      <CoworkReplicaApplyPreviewPanel client={client} sharedProjectId="project-one" />,
+    );
+    await page.getByRole("checkbox").click();
+    await page.getByRole("button", { name: "Approve exact plan" }).click();
+    await expect.poll(() => approvalRequest.signal !== undefined).toBe(true);
+    await mounted.rerender(
+      <CoworkReplicaApplyPreviewPanel client={client} sharedProjectId="project-two" />,
+    );
+    expect(approvalRequest.signal?.aborted).toBe(true);
+    expect(document.body.textContent).not.toContain("project-one/shared.ts");
+    expect(document.body.textContent).not.toContain("Approval was accepted");
+    await expect.element(page.getByText("project-two/shared.ts")).toBeVisible();
+  });
+
+  it("catches synchronous command-id failures without dispatching approval", async () => {
+    const approveReplicaApplyPlan = vi.fn();
+    mounted = await render(
+      <CoworkReplicaApplyPreviewPanel
+        client={{
+          createCommandId: () => {
+            throw new Error("unavailable");
+          },
+          previewReplicaApplyPlan: vi.fn(async () => plan()),
+          approveReplicaApplyPlan,
+        }}
+        sharedProjectId="project-one"
+      />,
+    );
+    await page.getByRole("checkbox").click();
+    await page.getByRole("button", { name: "Approve exact plan" }).click();
+    await expect
+      .element(page.getByText("A safe immutable approval command could not be created."))
+      .toBeVisible();
+    expect(approveReplicaApplyPlan).not.toHaveBeenCalled();
   });
 });

@@ -153,6 +153,7 @@ describe("cowork replica apply preview model", () => {
     ["unbounded prose", { ...plan(), entries: [{ ...applyEntry(), reason: "provider output" }] }],
     ["invalid membership epoch", { ...plan(), membershipEpoch: 0 }],
     ["invalid fence", { ...plan(), fence: 0 }],
+    ["negative-zero revision", { ...plan(), manifestRevision: -0 }],
     ["uppercase hash", { ...plan(), planToken: "A".repeat(64) }],
     ["unbalanced summary", { ...plan(), summary: summary({ totalEntryCount: 2 }) }],
     ["live WAL apply", { ...plan(), entries: [applyEntry("data/account.db-wal")] }],
@@ -229,6 +230,50 @@ describe("cowork replica apply preview model", () => {
         "project-one",
       ),
     ).toThrow(/plain array/);
+  });
+
+  it("rejects transparent Proxy wrappers after descriptor validation", () => {
+    expect(() => decodeCoworkReplicaApplyPreviewPage(new Proxy(plan(), {}), "project-one")).toThrow(
+      /proxy or uncloneable/,
+    );
+    expect(() =>
+      decodeCoworkReplicaApplyPreviewPage(
+        { ...plan(), entries: new Proxy([applyEntry()], {}) },
+        "project-one",
+      ),
+    ).toThrow(/proxy or uncloneable/);
+  });
+
+  it.each([
+    "data/project.sqlite-wal",
+    "data/project.sqlite-shm",
+    "data/project.sqlite-journal",
+    "data/project.sqlite-mj 0123ABCD",
+    "data/project.duckdb.wal",
+    "data/LOCK.MDB",
+  ])("rejects known live database sidecar content action %s", (relativePath) => {
+    expect(() =>
+      decodeCoworkReplicaApplyPreviewPage(
+        { ...plan(), entries: [applyEntry(relativePath)] },
+        "project-one",
+      ),
+    ).toThrow(/sidecars can only be skipped/);
+  });
+
+  it.each([
+    ".club-code-managed/staging/private.bin",
+    "\uff0eclub-code-managed/staging/private.bin",
+    "src/CONOUT$.txt",
+    "src/bidi-\u202eright-to-left.txt",
+    "src/zero\u200bwidth.txt",
+    "src/line\u2028separator.txt",
+  ])("rejects private or visually unsafe portable path %s", (relativePath) => {
+    expect(() =>
+      decodeCoworkReplicaApplyPreviewPage(
+        { ...plan(), entries: [applyEntry(relativePath)] },
+        "project-one",
+      ),
+    ).toThrow(/relativePath is invalid/);
   });
 
   it("snapshots mutable pages and entries", () => {
@@ -369,5 +414,66 @@ describe("cowork replica apply preview model", () => {
     expect(() =>
       decodeCoworkReplicaApplyApprovalResponse({ ...receipt, applied: true }, command),
     ).toThrow(/unsupported shape/);
+    expect(() => decodeCoworkReplicaApplyApprovalResponse(new Proxy(receipt, {}), command)).toThrow(
+      /proxy or uncloneable/,
+    );
+  });
+
+  it("rejects cursor cycles and portable aliases across page boundaries", () => {
+    const firstSummary = summary({ applyVersionCount: 3, totalEntryCount: 3, totalBytes: 384 });
+    const first = beginCoworkReplicaApplyPreviewView(
+      decodeCoworkReplicaApplyPreviewPage(
+        { ...plan([applyEntry("docs/Stra\u00dfe.txt")], "cursor-a"), summary: firstSummary },
+        "project-one",
+      ),
+    );
+    expect(() =>
+      appendCoworkReplicaApplyPreviewPage(
+        first,
+        decodeCoworkReplicaApplyPreviewPage(
+          { ...plan([applyEntry("docs/STRASSE.txt")], "cursor-b"), summary: firstSummary },
+          "project-one",
+        ),
+        "cursor-a",
+      ),
+    ).toThrow(/repeated a path/);
+
+    const second = appendCoworkReplicaApplyPreviewPage(
+      first,
+      decodeCoworkReplicaApplyPreviewPage(
+        { ...plan([applyEntry("src/a.ts")], "cursor-b"), summary: firstSummary },
+        "project-one",
+      ),
+      "cursor-a",
+    );
+    expect(() =>
+      appendCoworkReplicaApplyPreviewPage(
+        second,
+        decodeCoworkReplicaApplyPreviewPage(
+          { ...plan([applyEntry("src/b.ts")], "cursor-a"), summary: firstSummary },
+          "project-one",
+        ),
+        "cursor-b",
+      ),
+    ).toThrow(/did not advance/);
+  });
+
+  it("requires the fourth bounded page to be terminal", () => {
+    const boundedSummary = summary({
+      applyVersionCount: 5,
+      totalEntryCount: 5,
+      totalBytes: 640,
+    });
+    const page = (relativePath: string, nextCursor: string | null) =>
+      decodeCoworkReplicaApplyPreviewPage(
+        { ...plan([applyEntry(relativePath)], nextCursor), summary: boundedSummary },
+        "project-one",
+      );
+    const first = beginCoworkReplicaApplyPreviewView(page("a.ts", "cursor-a"));
+    const second = appendCoworkReplicaApplyPreviewPage(first, page("b.ts", "cursor-b"), "cursor-a");
+    const third = appendCoworkReplicaApplyPreviewPage(second, page("c.ts", "cursor-c"), "cursor-b");
+    expect(() =>
+      appendCoworkReplicaApplyPreviewPage(third, page("d.ts", "cursor-d"), "cursor-c"),
+    ).toThrow(/page bound/);
   });
 });

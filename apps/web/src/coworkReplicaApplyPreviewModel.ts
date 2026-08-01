@@ -1,3 +1,5 @@
+import { isDatabaseSidecarPath } from "@cafecode/contracts";
+
 export const COWORK_REPLICA_APPLY_PREVIEW_PAGE_LIMIT = 50;
 export const COWORK_REPLICA_APPLY_PREVIEW_MAX_ENTRIES = 200;
 export const COWORK_REPLICA_APPLY_PREVIEW_MAX_PAGES = 4;
@@ -10,8 +12,10 @@ const MAX_PATH_CHARS = 4_096;
 const MAX_PATH_UTF8_BYTES = 4_096;
 const MAX_PATH_SEGMENT_CHARS = 255;
 const MAX_PATH_SEGMENT_UTF8_BYTES = 255;
+const MANAGED_REPLICA_DIRECTORY = ".club-code-managed";
+const FORBIDDEN_PATH_CHARACTER = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u;
 const WINDOWS_RESERVED_FILE_STEM =
-  /^(?:con|prn|aux|nul|com[1-9\u00b9\u00b2\u00b3]|lpt[1-9\u00b9\u00b2\u00b3])$/iu;
+  /^(?:con|prn|aux|nul|clock\$|conin\$|conout\$|com[0-9\u00b9\u00b2\u00b3]|lpt[0-9\u00b9\u00b2\u00b3])$/iu;
 
 export type CoworkReplicaApplyAction =
   | "publish-version"
@@ -101,6 +105,22 @@ function fail(message: string): never {
   throw new CoworkReplicaApplyPreviewPayloadError(message);
 }
 
+function assertCloneSafePayload(value: unknown, label: string): void {
+  // Descriptor validation runs first, so this proof cannot invoke an accessor that the
+  // allowlist has not already rejected. Native structured cloning then gives the browser a
+  // reliable fail-closed way to reject otherwise-transparent Proxy wrappers anywhere in the
+  // transport graph. Do not replace this with JSON serialization: JSON invokes accessors,
+  // erases sparse-array shape, and silently discards symbols.
+  if (typeof globalThis.structuredClone !== "function") {
+    fail(`${label} cannot be verified in this browser`);
+  }
+  try {
+    globalThis.structuredClone(value);
+  } catch {
+    fail(`${label} must not contain proxy or uncloneable transport values`);
+  }
+}
+
 function compareCodeUnits(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
@@ -180,7 +200,12 @@ function hash(value: unknown, label: string): string {
 }
 
 function integer(value: unknown, label: string, minimum = 0, maximum = Number.MAX_SAFE_INTEGER) {
-  if (!Number.isSafeInteger(value) || (value as number) < minimum || (value as number) > maximum) {
+  if (
+    !Number.isSafeInteger(value) ||
+    Object.is(value, -0) ||
+    (value as number) < minimum ||
+    (value as number) > maximum
+  ) {
     fail(`${label} is invalid`);
   }
   return value as number;
@@ -213,6 +238,7 @@ function relativePath(value: unknown): string {
     value.startsWith("/") ||
     value.includes("\\") ||
     value.includes(":") ||
+    FORBIDDEN_PATH_CHARACTER.test(value) ||
     hasForbiddenPathCodeUnit(value) ||
     new TextEncoder().encode(value).byteLength > MAX_PATH_UTF8_BYTES
   ) {
@@ -220,6 +246,7 @@ function relativePath(value: unknown): string {
   }
   const segments = value.split("/");
   if (
+    portablePathKey(segments[0] ?? "") === MANAGED_REPLICA_DIRECTORY ||
     segments.some(
       (segment) =>
         segment.length === 0 ||
@@ -239,18 +266,6 @@ function relativePath(value: unknown): string {
 
 function portablePathKey(value: string): string {
   return value.normalize("NFKC").toUpperCase().toLowerCase().normalize("NFC");
-}
-
-function isVolatileDatabaseSidecar(path: string): boolean {
-  const folded = path.toLowerCase();
-  return (
-    folded.endsWith("-wal") ||
-    folded.endsWith("-shm") ||
-    folded.endsWith("-journal") ||
-    folded.endsWith(".db-wal") ||
-    folded.endsWith(".db-shm") ||
-    folded.endsWith(".db-journal")
-  );
 }
 
 const actionOutcome: Record<CoworkReplicaApplyAction, CoworkReplicaApplyOutcome> = {
@@ -287,7 +302,7 @@ function decodeEntry(value: unknown): CoworkReplicaApplyPreviewEntry {
   if (candidate.outcome !== actionOutcome[action])
     fail("preview entry outcome does not match action");
   const path = relativePath(candidate.relativePath);
-  if (action !== "skip-volatile-sidecar" && isVolatileDatabaseSidecar(path)) {
+  if (action !== "skip-volatile-sidecar" && isDatabaseSidecarPath(path)) {
     fail("volatile database sidecars can only be skipped");
   }
   const expectedBaseSha256 = nullableHash(candidate.expectedBaseSha256, "expectedBaseSha256");
@@ -310,7 +325,7 @@ function decodeEntry(value: unknown): CoworkReplicaApplyPreviewEntry {
     }
   } else if (action === "skip-volatile-sidecar") {
     if (
-      !isVolatileDatabaseSidecar(path) ||
+      !isDatabaseSidecarPath(path) ||
       expectedBaseSha256 !== null ||
       contentSha256 !== null ||
       databaseSnapshotSha256 !== null ||
@@ -456,6 +471,7 @@ export function decodeCoworkReplicaApplyPreviewPage(
   }
   if (entries.length === 0 && nextCursor !== null) fail("empty preview page cannot continue");
   if (entries.length > summary.totalEntryCount) fail("preview page exceeds its summary");
+  assertCloneSafePayload(value, "apply preview page");
   return Object.freeze({ ...binding, summary, entries: Object.freeze(entries), nextCursor });
 }
 
@@ -526,7 +542,7 @@ export function appendCoworkReplicaApplyPreviewPage(
     fail("pagination cursor did not advance");
   }
   if (
-    current.consumedCursors.length + 1 >= COWORK_REPLICA_APPLY_PREVIEW_MAX_PAGES &&
+    current.consumedCursors.length + 2 >= COWORK_REPLICA_APPLY_PREVIEW_MAX_PAGES &&
     page.nextCursor !== null
   ) {
     fail("preview exceeds its page bound");
@@ -582,6 +598,7 @@ export function decodeCoworkReplicaApplyApprovalResponse(
   const status = statusDescriptor && "value" in statusDescriptor ? statusDescriptor.value : null;
   if (status === "authority-changed" || status === "rejected") {
     const terminal = record(value, ["status"], "approval response");
+    assertCloneSafePayload(value, "approval response");
     return Object.freeze({ status: terminal.status as "authority-changed" | "rejected" });
   }
   if (status !== "accepted" && status !== "replayed") fail("approval response status is invalid");
@@ -594,5 +611,6 @@ export function decodeCoworkReplicaApplyApprovalResponse(
   if (receipt.commandId !== command.commandId || !sameBinding(receipt, command)) {
     fail("approval receipt does not match the immutable command");
   }
+  assertCloneSafePayload(value, "approval receipt");
   return receipt;
 }

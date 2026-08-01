@@ -40,9 +40,11 @@ portable filesystem aliases. Approval remains disabled until the terminal page i
 entry counts and bytes exactly reconcile with the immutable summary.
 
 Transport data is decoded through exact plain-object and dense plain-array allowlists. Accessors,
-symbols, inherited properties, sparse arrays, subclasses, arbitrary prose, absolute paths,
-traversal, non-canonical Unicode, unpaired surrogates, Windows device aliases, unexpected fields,
+symbols, inherited properties, sparse arrays, subclasses, Proxy wrappers, arbitrary prose,
+absolute paths, traversal, Unicode control/format characters, non-canonical Unicode, unpaired
+surrogates, the private `.club-code-managed` directory, Windows device aliases, unexpected fields,
 and oversized data fail closed. Responses are copied into deeply immutable views before rendering.
+The plan token is retained only inside the immutable approval command and is never rendered.
 
 ## Explicit planned outcomes
 
@@ -55,10 +57,11 @@ The plan uses fixed local labels, not backend prose, for:
 - preserved conflict forks with audit references; and
 - preserved local files when overwrite is forbidden.
 
-Any WAL, SHM, or journal path presented as a content action is rejected. A database snapshot must
-have matching content and snapshot hashes. Tombstones cannot carry content. Conflict outcomes
-require both an expected base and an audit reference. The UI receives no file bodies and performs
-no recursive source-workspace discovery or path selection.
+Any known database sidecar presented as a content action is rejected, including SQLite WAL, SHM,
+journal and master-journal files, DuckDB `.wal`, and LMDB `lock.mdb`. A database snapshot must have
+matching content and snapshot hashes. Tombstones cannot carry content. Conflict outcomes require
+both an expected base and an audit reference. The UI receives no file bodies and performs no
+recursive source-workspace discovery or path selection.
 
 ## Receipt-only truth and fail-closed recovery
 
@@ -81,3 +84,8 @@ tokens, enforcing fencing and base-hash compare-and-swap, storing an idempotent 
 and scheduling any separately audited apply operation. It must reject stale authority before a
 write and must never accept arbitrary local paths, live SQLite/WAL/SHM/journal synchronization,
 overwrite-on-conflict, or source-workspace recursion.
+
+Renderer state is synchronously scoped to the exact injected client identity and project ID. A
+project or environment/client identity change (the injection boundary for operator authority),
+unmount, or StrictMode lifecycle change aborts the old request and cannot paint the prior scope's
+paths while the replacement effect starts.

@@ -36,6 +36,13 @@ export interface CoworkReplicaApplyPreviewPanelProps {
 type PreviewState = "loading" | "ready" | "error";
 type ApprovalState = "idle" | "submitting" | "indeterminate" | "accepted" | "rejected";
 
+interface ScopedPreviewResult {
+  readonly client: CoworkReplicaApplyPreviewClient;
+  readonly sharedProjectId: string;
+  readonly state: PreviewState;
+  readonly view: CoworkReplicaApplyPreviewView | null;
+}
+
 const actionLabel: Record<CoworkReplicaApplyAction, string> = {
   "publish-version": "Publish version if manifest head still matches",
   "apply-version": "Apply version only if local base hash still matches",
@@ -87,8 +94,8 @@ function EntryEvidence({ entry }: { readonly entry: CoworkReplicaApplyPreviewEnt
       </div>
       {entry.action === "skip-volatile-sidecar" ? (
         <p className="mt-2 text-xs font-medium text-amber-700 dark:text-amber-300">
-          WAL, SHM, and journal files are never synchronized. A consolidated immutable database
-          snapshot is required instead.
+          Live database sidecars, including WAL, SHM, journal, master-journal, and lock files, are
+          never synchronized. A consolidated immutable database snapshot is required instead.
         </p>
       ) : null}
       {entry.action === "preserve-conflict" || entry.action === "no-overwrite" ? (
@@ -107,8 +114,12 @@ function PreviewContents({
   readonly client: CoworkReplicaApplyPreviewClient;
   readonly sharedProjectId: string;
 }) {
-  const [view, setView] = useState<CoworkReplicaApplyPreviewView | null>(null);
-  const [previewState, setPreviewState] = useState<PreviewState>("loading");
+  const [previewResult, setPreviewResult] = useState<ScopedPreviewResult>(() => ({
+    client,
+    sharedProjectId,
+    state: "loading",
+    view: null,
+  }));
   const [approvalState, setApprovalState] = useState<ApprovalState>("idle");
   const [confirmed, setConfirmed] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -120,6 +131,7 @@ function PreviewContents({
   const requestSequence = useRef(0);
   const activeRequest = useRef<AbortController | null>(null);
   const pendingCommandRef = useRef<CoworkReplicaApplyApprovalCommand | null>(null);
+  const approvalInFlightRef = useRef<CoworkReplicaApplyApprovalCommand | null>(null);
 
   const requestPage = useCallback(
     async (
@@ -132,8 +144,7 @@ function PreviewContents({
       const abort = new AbortController();
       activeRequest.current = abort;
       if (cursor === null) {
-        setPreviewState("loading");
-        setView(null);
+        setPreviewResult({ client, sharedProjectId, state: "loading", view: null });
         setConfirmed(false);
         pendingCommandRef.current = null;
         setPendingCommand(null);
@@ -153,13 +164,11 @@ function PreviewContents({
           : beginCoworkReplicaApplyPreviewView(page);
         if (!mounted.current || abort.signal.aborted || sequence !== requestSequence.current)
           return;
-        setView(next);
-        setPreviewState("ready");
+        setPreviewResult({ client, sharedProjectId, state: "ready", view: next });
       } catch {
         if (!mounted.current || abort.signal.aborted || sequence !== requestSequence.current)
           return;
-        setView(null);
-        setPreviewState("error");
+        setPreviewResult({ client, sharedProjectId, state: "error", view: null });
       } finally {
         if (mounted.current && sequence === requestSequence.current) setLoadingMore(false);
       }
@@ -176,11 +185,14 @@ function PreviewContents({
       requestSequence.current += 1;
       activeRequest.current?.abort();
       activeRequest.current = null;
+      approvalInFlightRef.current = null;
     };
   }, [requestPage]);
 
   const submitApproval = useCallback(
     async (command: CoworkReplicaApplyApprovalCommand) => {
+      if (approvalInFlightRef.current !== null) return;
+      approvalInFlightRef.current = command;
       const sequence = ++requestSequence.current;
       activeRequest.current?.abort();
       const abort = new AbortController();
@@ -198,6 +210,8 @@ function PreviewContents({
           "The approval acknowledgement is indeterminate. Retry only the exact frozen command, or refresh and discard it.",
         );
         return;
+      } finally {
+        if (approvalInFlightRef.current === command) approvalInFlightRef.current = null;
       }
       let response;
       try {
@@ -246,6 +260,16 @@ function PreviewContents({
     [client, requestPage],
   );
 
+  // Effects run after commit. Bind rendered data to the exact client identity and project during
+  // render as well, so a prop switch can never paint the previous environment's paths or receipt
+  // state for even one frame while cleanup and the replacement request are pending.
+  const currentResult =
+    previewResult.client === client && previewResult.sharedProjectId === sharedProjectId
+      ? previewResult
+      : null;
+  const previewState = currentResult?.state ?? "loading";
+  const view = currentResult?.view ?? null;
+
   if (previewState === "loading") {
     return (
       <p aria-live="polite" className="px-4 py-6 text-sm text-muted-foreground" role="status">
@@ -279,7 +303,6 @@ function PreviewContents({
       <div className="border-b border-border/60 px-4 py-3 text-xs text-muted-foreground">
         <div className="grid gap-1 sm:grid-cols-2">
           <span>Plan {compactHash(view.planSha256)}</span>
-          <span>Token {compactHash(view.planToken)}</span>
           <span>Device {view.deviceId}</span>
           <span>Membership epoch {view.membershipEpoch}</span>
           <span>Manifest revision {view.manifestRevision}</span>
