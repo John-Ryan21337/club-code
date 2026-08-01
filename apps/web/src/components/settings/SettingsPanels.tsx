@@ -447,18 +447,19 @@ export function useSettingsRestore(onRestored?: () => void) {
         ? ["Falling effect color"]
         : []),
       ...listChangedMatrixAtmosphereSettingLabels({
+        fallingEffectMatrixBaseFontSize: settings.fallingEffectMatrixBaseFontSize,
         fallingEffectMatrixColorMode: settings.fallingEffectMatrixColorMode,
         fallingEffectMatrixColorCycleSpeed: settings.fallingEffectMatrixColorCycleSpeed,
         fallingEffectMatrixMotionMode: settings.fallingEffectMatrixMotionMode,
         fallingEffectMatrixWalkStartFontSize: settings.fallingEffectMatrixWalkStartFontSize,
         fallingEffectMatrixWalkEndFontSize: settings.fallingEffectMatrixWalkEndFontSize,
+        fallingEffectMatrixWalkLifecyclePercent: settings.fallingEffectMatrixWalkLifecyclePercent,
+        fallingEffectMatrixCenterWindIntensity: settings.fallingEffectMatrixCenterWindIntensity,
         fallingEffect2chEnriched: settings.fallingEffect2chEnriched,
         fallingEffectLiveWorkVocabulary: settings.fallingEffectLiveWorkVocabulary,
         fallingEffectActivityLinks: settings.fallingEffectActivityLinks,
-        fallingEffectActivityLinkNetworkEnabled:
-          settings.fallingEffectActivityLinkNetworkEnabled,
-        fallingEffectActivityLinkDatabaseEnabled:
-          settings.fallingEffectActivityLinkDatabaseEnabled,
+        fallingEffectActivityLinkNetworkEnabled: settings.fallingEffectActivityLinkNetworkEnabled,
+        fallingEffectActivityLinkDatabaseEnabled: settings.fallingEffectActivityLinkDatabaseEnabled,
         fallingEffectActivityLinkBuildEnabled: settings.fallingEffectActivityLinkBuildEnabled,
         fallingEffectActivityLinkAgentEnabled: settings.fallingEffectActivityLinkAgentEnabled,
         fallingEffectActivityLinkColorMode: settings.fallingEffectActivityLinkColorMode,
@@ -554,11 +555,14 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.fallingEffectsEnabled,
       settings.fallingEffectKind,
       settings.fallingEffectColor,
+      settings.fallingEffectMatrixBaseFontSize,
+      settings.fallingEffectMatrixCenterWindIntensity,
       settings.fallingEffectMatrixColorMode,
       settings.fallingEffectMatrixColorCycleSpeed,
       settings.fallingEffectMatrixMotionMode,
       settings.fallingEffectMatrixWalkStartFontSize,
       settings.fallingEffectMatrixWalkEndFontSize,
+      settings.fallingEffectMatrixWalkLifecyclePercent,
       settings.fallingEffectOpacity,
       settings.fallingEffectSpeed,
       settings.fallingEffectDensity,
@@ -1258,7 +1262,6 @@ export function AppearanceSettingsPanel() {
     </SettingsPageContainer>
   );
 }
-
 
 export function ChatSettingsPanel() {
   const settings = useSettings();

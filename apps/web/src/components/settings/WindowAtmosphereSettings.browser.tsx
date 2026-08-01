@@ -1,7 +1,10 @@
 import "../../index.css";
 
 import {
+  DEFAULT_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE,
+  DEFAULT_FALLING_EFFECT_MATRIX_CENTER_WIND_INTENSITY,
   DEFAULT_FALLING_EFFECT_MATRIX_WALK_END_FONT_SIZE,
+  DEFAULT_FALLING_EFFECT_MATRIX_WALK_LIFECYCLE_PERCENT,
   DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE,
   DEFAULT_FALLING_EFFECT_MATRIX_MOTION_MODE,
   DEFAULT_UNIFIED_SETTINGS,
@@ -43,6 +46,32 @@ beforeEach(() => {
 });
 
 describe("WindowAtmosphereSettings motion", () => {
+  it("keeps the cinema falling overlay opt-in and persists both toggle states", async () => {
+    const mounted = await render(<WindowAtmosphereSettings />);
+    const toggle = page.getByRole("switch", {
+      name: "Overlay cinema video with falling atmosphere",
+    });
+
+    await expect.element(toggle).not.toBeChecked();
+    await toggle.click();
+    expect(mocks.updateSettings).toHaveBeenLastCalledWith({
+      fallingEffectsOverCinemaEnabled: true,
+    });
+
+    mocks.settings = {
+      ...mocks.settings,
+      fallingEffectsOverCinemaEnabled: true,
+    };
+    await mounted.rerender(<WindowAtmosphereSettings />);
+    await expect.element(toggle).toBeChecked();
+    await toggle.click();
+    expect(mocks.updateSettings).toHaveBeenLastCalledWith({
+      fallingEffectsOverCinemaEnabled: false,
+    });
+
+    await mounted.unmount();
+  });
+
   it("offers every motion mode for snow, rain, and Matrix", async () => {
     const mounted = await render(<WindowAtmosphereSettings />);
 
@@ -80,13 +109,38 @@ describe("WindowAtmosphereSettings motion", () => {
     await mounted.unmount();
   });
 
-  it("commits directly typed Walk endpoints exactly once at their two-decimal values", async () => {
+  it("persists a Matrix-only baseline for non-Walk glyph modes", async () => {
+    mocks.settings = { ...mocks.settings, fallingEffectKind: "matrix" };
+    const mounted = await render(<WindowAtmosphereSettings />);
+    const baseInput = page.getByLabelText("Matrix base font size", { exact: true });
+
+    await expect.element(baseInput).toHaveValue("14");
+    await expect
+      .element(
+        page.getByText(
+          /Rain and snow geometry are unchanged\. Walk modes continue to use their absolute Start and End sizes\./u,
+        ),
+      )
+      .toBeInTheDocument();
+
+    await baseInput.fill("27.6");
+    expect(mocks.updateSettings).not.toHaveBeenCalled();
+    await userEvent.keyboard("{Enter}");
+    expect(mocks.updateSettings).toHaveBeenCalledTimes(1);
+    expect(mocks.updateSettings).toHaveBeenLastCalledWith({
+      fallingEffectMatrixBaseFontSize: 28,
+    });
+
+    await mounted.unmount();
+  });
+
+  it("commits directly typed Walk endpoints exactly once on the 1px grid", async () => {
     const mounted = await render(<WindowAtmosphereSettings />);
     const startInput = page.getByLabelText("Walk start font size", { exact: true });
     const endInput = page.getByLabelText("Walk end font size", { exact: true });
 
-    await expect.element(startInput).toHaveValue("1.00");
-    await expect.element(endInput).toHaveValue("72.00");
+    await expect.element(startInput).toHaveValue("1");
+    await expect.element(endInput).toHaveValue("72");
 
     await startInput.fill("12.34");
     await expect.element(startInput).toHaveValue("12.34");
@@ -94,7 +148,7 @@ describe("WindowAtmosphereSettings motion", () => {
     await endInput.click();
     expect(mocks.updateSettings).toHaveBeenCalledTimes(1);
     expect(mocks.updateSettings).toHaveBeenLastCalledWith({
-      fallingEffectMatrixWalkStartFontSize: 12.34,
+      fallingEffectMatrixWalkStartFontSize: 12,
     });
 
     mocks.updateSettings.mockClear();
@@ -104,7 +158,7 @@ describe("WindowAtmosphereSettings motion", () => {
     await startInput.click();
     expect(mocks.updateSettings).toHaveBeenCalledTimes(1);
     expect(mocks.updateSettings).toHaveBeenLastCalledWith({
-      fallingEffectMatrixWalkEndFontSize: 98.76,
+      fallingEffectMatrixWalkEndFontSize: 99,
     });
 
     mocks.updateSettings.mockClear();
@@ -114,24 +168,33 @@ describe("WindowAtmosphereSettings motion", () => {
     await userEvent.keyboard("{Enter}");
     expect(mocks.updateSettings).toHaveBeenCalledTimes(1);
     expect(mocks.updateSettings).toHaveBeenLastCalledWith({
-      fallingEffectMatrixWalkStartFontSize: 17.89,
+      fallingEffectMatrixWalkStartFontSize: 18,
     });
 
     await mounted.unmount();
   });
 
-  it("steps persisted Walk endpoints at 0.01px resolution and enforces UI bounds", async () => {
+  it("steps persisted Walk endpoints at 1px resolution and enforces UI bounds", async () => {
     const mounted = await render(<WindowAtmosphereSettings />);
 
     await page.getByLabelText("Increase Walk start font size").click();
     expect(mocks.updateSettings).toHaveBeenLastCalledWith({
-      fallingEffectMatrixWalkStartFontSize: 1.01,
+      fallingEffectMatrixWalkStartFontSize: 2,
     });
 
     await page.getByLabelText("Decrease Walk end font size").click();
     expect(mocks.updateSettings).toHaveBeenLastCalledWith({
-      fallingEffectMatrixWalkEndFontSize: 71.99,
+      fallingEffectMatrixWalkEndFontSize: 71,
     });
+
+    // Reflect those committed values through the mocked settings source before
+    // moving to each bound, matching the real persisted-settings round trip.
+    mocks.settings = {
+      ...mocks.settings,
+      fallingEffectMatrixWalkStartFontSize: 2,
+      fallingEffectMatrixWalkEndFontSize: 71,
+    };
+    await mounted.rerender(<WindowAtmosphereSettings />);
 
     mocks.settings = {
       ...mocks.settings,
@@ -146,13 +209,78 @@ describe("WindowAtmosphereSettings motion", () => {
     await mounted.unmount();
   });
 
+  it("shows bounded Matrix Walk lifecycle and center-wind controls only in Walk modes", async () => {
+    mocks.settings = {
+      ...mocks.settings,
+      fallingEffectKind: "matrix",
+      fallingEffectMatrixMotionMode: "flat",
+    };
+    const mounted = await render(<WindowAtmosphereSettings />);
+    await expect
+      .element(page.getByLabelText("Walk symbol lifecycle distance", { exact: true }))
+      .not.toBeInTheDocument();
+    await expect
+      .element(page.getByLabelText("Motion from center wind intensity", { exact: true }))
+      .not.toBeInTheDocument();
+
+    mocks.settings = {
+      ...mocks.settings,
+      fallingEffectMatrixMotionMode: "walk-forward",
+    };
+    await mounted.rerender(<WindowAtmosphereSettings />);
+    const lifecycle = page.getByLabelText("Walk symbol lifecycle distance", { exact: true });
+    const wind = page.getByLabelText("Motion from center wind intensity", { exact: true });
+    await expect.element(lifecycle).toHaveValue("30");
+    await expect.element(wind).toHaveValue("4");
+
+    await lifecycle.fill("48");
+    await userEvent.keyboard("{Enter}");
+    expect(mocks.updateSettings).toHaveBeenLastCalledWith({
+      fallingEffectMatrixWalkLifecyclePercent: 48,
+    });
+
+    await wind.fill("9");
+    await userEvent.keyboard("{Enter}");
+    expect(mocks.updateSettings).toHaveBeenLastCalledWith({
+      fallingEffectMatrixCenterWindIntensity: 9,
+    });
+
+    await mounted.unmount();
+  });
+
+  it("normalizes legacy two-decimal Walk endpoints for display without rewriting on mount", async () => {
+    mocks.settings = {
+      ...mocks.settings,
+      fallingEffectMatrixWalkStartFontSize: 0.01,
+      fallingEffectMatrixWalkEndFontSize: 12.34,
+    };
+    const mounted = await render(<WindowAtmosphereSettings />);
+
+    await expect
+      .element(page.getByLabelText("Walk start font size", { exact: true }))
+      .toHaveValue("1");
+    await expect
+      .element(page.getByLabelText("Walk end font size", { exact: true }))
+      .toHaveValue("12");
+    expect(mocks.updateSettings).not.toHaveBeenCalled();
+
+    await page.getByLabelText("Increase Walk start font size").click();
+    expect(mocks.updateSettings).toHaveBeenLastCalledWith({
+      fallingEffectMatrixWalkStartFontSize: 2,
+    });
+
+    await mounted.unmount();
+  });
+
   it("restores Flat with the complete atmosphere reset", async () => {
     mocks.settings = {
       ...mocks.settings,
       fallingEffectMatrixMotionMode: "reverse",
+      fallingEffectMatrixBaseFontSize: 28,
       fallingEffectMatrixWalkStartFontSize: 12,
       fallingEffectMatrixWalkEndFontSize: 24,
       fallingEffect2chEnriched: true,
+      fallingEffectsOverCinemaEnabled: true,
     };
     const mounted = await render(<WindowAtmosphereSettings />);
 
@@ -161,9 +289,14 @@ describe("WindowAtmosphereSettings motion", () => {
     expect(mocks.updateSettings).toHaveBeenLastCalledWith(
       expect.objectContaining({
         fallingEffectMatrixMotionMode: DEFAULT_FALLING_EFFECT_MATRIX_MOTION_MODE,
+        fallingEffectMatrixBaseFontSize: DEFAULT_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE,
         fallingEffectMatrixWalkStartFontSize: DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE,
         fallingEffectMatrixWalkEndFontSize: DEFAULT_FALLING_EFFECT_MATRIX_WALK_END_FONT_SIZE,
+        fallingEffectMatrixWalkLifecyclePercent:
+          DEFAULT_FALLING_EFFECT_MATRIX_WALK_LIFECYCLE_PERCENT,
+        fallingEffectMatrixCenterWindIntensity: DEFAULT_FALLING_EFFECT_MATRIX_CENTER_WIND_INTENSITY,
         fallingEffect2chEnriched: false,
+        fallingEffectsOverCinemaEnabled: false,
       }),
     );
 

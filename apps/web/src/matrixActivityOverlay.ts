@@ -12,6 +12,7 @@ import {
 import type { AppState } from "./store";
 import {
   resolveAtmosphereProjectedPointInPlace,
+  resolveMatrixWalkLifecycleOpacity,
   resolveMatrixStreamColor,
   type AtmosphereProjectedPoint,
   type AtmosphereScene,
@@ -58,6 +59,8 @@ export const MAX_MATRIX_ACTIVITY_DEPTH_SCALE = 4;
 export const MIN_MATRIX_ACTIVITY_DEPTH_LINE_WIDTH = 0.5;
 export const MAX_MATRIX_ACTIVITY_DEPTH_LINE_WIDTH = 8;
 export const MAX_MATRIX_ACTIVITY_DEPTH_PACKET_RADIUS = 6;
+const MATRIX_ACTIVITY_WALK_GLYPH_ATTACHMENT_RATIO = 0.45;
+const MATRIX_ACTIVITY_WALK_MAX_ROUTE_INSET_RATIO = 0.35;
 const MAX_ACTIVITY_RELATIONS = 4;
 const MAX_FUTURE_CLOCK_SKEW_MS = 250;
 const SAFE_RELATION_VALUE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/u;
@@ -1209,6 +1212,26 @@ export function createMatrixTunnelRoute(
   return { points, segmentLengths, totalLength };
 }
 
+function createMatrixRouteFromPoints(points: readonly MatrixHexPoint[]): MatrixHexRoute {
+  const distinctPoints: MatrixHexPoint[] = [];
+  for (const point of points) {
+    appendDistinctPoint(distinctPoints, {
+      x: Number.isFinite(point.x) ? point.x : 0,
+      y: Number.isFinite(point.y) ? point.y : 0,
+    });
+  }
+  const segmentLengths: number[] = [];
+  let totalLength = 0;
+  for (let index = 1; index < distinctPoints.length; index += 1) {
+    const previous = distinctPoints[index - 1]!;
+    const current = distinctPoints[index]!;
+    const length = Math.hypot(current.x - previous.x, current.y - previous.y);
+    segmentLengths.push(length);
+    totalLength += length;
+  }
+  return { points: distinctPoints, segmentLengths, totalLength };
+}
+
 /**
  * Resolve into caller-owned storage. Tapered routes sample this helper many
  * times per frame, so allocating a fresh point for every subdivision would
@@ -1268,6 +1291,53 @@ export function matrixHexRoutePointAt(
   const output: MutableMatrixHexPoint = { x: 0, y: 0 };
   resolveMatrixHexRoutePointInPlace(output, route, requestedProgress);
   return output;
+}
+
+/**
+ * Attach a Walk connector to each glyph's visible edge instead of drawing
+ * through the center of differently scaled text. The reviewed hex bends are
+ * retained, and each inset is bounded independently so very large endpoints
+ * cannot invert or erase the route.
+ */
+export function createMatrixActivityWalkAttachmentRoute(
+  route: MatrixHexRoute,
+  requestedFromFontSize: number,
+  requestedToFontSize: number,
+): MatrixHexRoute {
+  if (route.totalLength <= 0 || route.points.length < 2) return route;
+  const maximumInset = route.totalLength * MATRIX_ACTIVITY_WALK_MAX_ROUTE_INSET_RATIO;
+  const fromInset = Math.min(
+    maximumInset,
+    Math.max(
+      0,
+      (Number.isFinite(requestedFromFontSize) ? requestedFromFontSize : 0) *
+        MATRIX_ACTIVITY_WALK_GLYPH_ATTACHMENT_RATIO,
+    ),
+  );
+  const toInset = Math.min(
+    maximumInset,
+    Math.max(
+      0,
+      (Number.isFinite(requestedToFontSize) ? requestedToFontSize : 0) *
+        MATRIX_ACTIVITY_WALK_GLYPH_ATTACHMENT_RATIO,
+    ),
+  );
+  const startDistance = fromInset;
+  const endDistance = route.totalLength - toInset;
+  const startPoint: MutableMatrixHexPoint = { x: 0, y: 0 };
+  const endPoint: MutableMatrixHexPoint = { x: 0, y: 0 };
+  resolveMatrixHexRoutePointInPlace(startPoint, route, startDistance / route.totalLength);
+  resolveMatrixHexRoutePointInPlace(endPoint, route, endDistance / route.totalLength);
+  const points: MatrixHexPoint[] = [{ ...startPoint }];
+  let traversed = 0;
+  for (let index = 0; index < route.segmentLengths.length; index += 1) {
+    traversed += route.segmentLengths[index]!;
+    if (traversed > startDistance && traversed < endDistance) {
+      points.push(route.points[index + 1]!);
+    }
+  }
+  points.push({ ...endPoint });
+  return createMatrixRouteFromPoints(points);
 }
 
 function normalizeMatrixActivityCycleProgress(requestedProgress: number): number {
@@ -1693,6 +1763,11 @@ export function drawMatrixActivityAnimation(
     const from = scene.particles[link.fromAnchorIndex];
     const to = scene.particles[link.toAnchorIndex];
     if (!from || !to) continue;
+    const linkLifecycleOpacity = Math.min(
+      resolveMatrixWalkLifecycleOpacity(from, motionMode),
+      resolveMatrixWalkLifecycleOpacity(to, motionMode),
+    );
+    if (linkLifecycleOpacity <= 0.01) continue;
     resolveAtmosphereProjectedPointInPlace(
       projectedFrom,
       scene,
@@ -1717,10 +1792,18 @@ export function drawMatrixActivityAnimation(
     fromPoint.y = Math.min(scene.height, Math.max(0, projectedFrom.y));
     toPoint.x = Math.min(scene.width, Math.max(0, projectedTo.x));
     toPoint.y = Math.min(scene.height, Math.max(0, projectedTo.y));
-    const route =
+    const centerRoute =
       motionMode === "tunnel"
         ? createMatrixTunnelRoute(fromPoint, toPoint, tunnelCenter)
         : createMatrixHexRoute(fromPoint, toPoint);
+    const walkMode = motionMode === "walk-forward" || motionMode === "walk-reverse";
+    const route = walkMode
+      ? createMatrixActivityWalkAttachmentRoute(
+          centerRoute,
+          Math.abs(from.size * projectedFrom.scale),
+          Math.abs(to.size * projectedTo.scale),
+        )
+      : centerRoute;
     const tunnelCenterProgress =
       motionMode === "tunnel" && route.totalLength > 0
         ? Math.min(
@@ -1743,7 +1826,7 @@ export function drawMatrixActivityAnimation(
       link.colorHue,
     );
     context.strokeStyle = linkPaint;
-    context.globalAlpha = safeOpacity * link.intensity;
+    context.globalAlpha = safeOpacity * link.intensity * linkLifecycleOpacity;
     strokeMatrixActivityDepthRoute(
       context,
       route,
@@ -1767,7 +1850,7 @@ export function drawMatrixActivityAnimation(
         );
         resolveMatrixHexRoutePointInPlace(packetPoint, route, packetProgress);
         context.strokeStyle = linkPaint;
-        context.globalAlpha = safeOpacity * link.intensity;
+        context.globalAlpha = safeOpacity * link.intensity * linkLifecycleOpacity;
         for (const interval of resolveMatrixActivityTrailIntervals(packetProgress)) {
           const intervalDepthScale = resolveMatrixActivityRouteDepthScale(
             motionMode,
@@ -1791,7 +1874,7 @@ export function drawMatrixActivityAnimation(
           context.stroke();
         }
         context.fillStyle = linkPaint;
-        context.globalAlpha = safeOpacity * link.intensity;
+        context.globalAlpha = safeOpacity * link.intensity * linkLifecycleOpacity;
         const packetDepthScale = resolveMatrixActivityRouteDepthScale(
           motionMode,
           packetProgress,
@@ -1819,6 +1902,8 @@ export function drawMatrixActivityAnimation(
     const pulse = state.pulses[index]!;
     const particle = scene.particles[pulse.anchorIndex];
     if (!particle) continue;
+    const pulseLifecycleOpacity = resolveMatrixWalkLifecycleOpacity(particle, motionMode);
+    if (pulseLifecycleOpacity <= 0.01) continue;
     resolveAtmosphereProjectedPointInPlace(
       projectedFrom,
       scene,
@@ -1845,7 +1930,7 @@ export function drawMatrixActivityAnimation(
       pulse.category,
       pulse.semanticRole,
       pulsePaint,
-      safeOpacity,
+      safeOpacity * pulseLifecycleOpacity,
       pulse.intensity,
     );
     if (
@@ -1858,7 +1943,7 @@ export function drawMatrixActivityAnimation(
         projectedFrom,
         pulse.category,
         pulsePaint,
-        safeOpacity,
+        safeOpacity * pulseLifecycleOpacity,
         pulse.intensity,
       );
       telemetryRingCount += 1;

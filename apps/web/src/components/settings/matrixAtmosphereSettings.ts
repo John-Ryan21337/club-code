@@ -5,11 +5,14 @@ import {
 } from "@cafecode/contracts/settings";
 
 const MATRIX_ATMOSPHERE_SETTING_LABELS = [
+  ["fallingEffectMatrixBaseFontSize", "Matrix base font size"],
   ["fallingEffectMatrixColorMode", "Matrix color mode"],
   ["fallingEffectMatrixColorCycleSpeed", "Matrix color-cycle speed"],
   ["fallingEffectMatrixMotionMode", "Atmosphere motion"],
   ["fallingEffectMatrixWalkStartFontSize", "Walk perspective sizes"],
   ["fallingEffectMatrixWalkEndFontSize", "Walk perspective sizes"],
+  ["fallingEffectMatrixWalkLifecyclePercent", "Walk symbol lifecycle distance"],
+  ["fallingEffectMatrixCenterWindIntensity", "Motion from center wind intensity"],
   ["fallingEffect2chEnriched", "2ch-inspired Matrix enrichment"],
   ["fallingEffectLiveWorkVocabulary", "Matrix live work vocabulary"],
   ["fallingEffectActivityLinks", "Matrix activity links"],
@@ -41,13 +44,17 @@ export function createMatrixAtmosphereRestorePatch(): Pick<
   MatrixAtmosphereSettingKey
 > {
   return {
+    fallingEffectMatrixBaseFontSize: DEFAULT_UNIFIED_SETTINGS.fallingEffectMatrixBaseFontSize,
     fallingEffectMatrixColorMode: DEFAULT_UNIFIED_SETTINGS.fallingEffectMatrixColorMode,
-    fallingEffectMatrixColorCycleSpeed:
-      DEFAULT_UNIFIED_SETTINGS.fallingEffectMatrixColorCycleSpeed,
+    fallingEffectMatrixColorCycleSpeed: DEFAULT_UNIFIED_SETTINGS.fallingEffectMatrixColorCycleSpeed,
     fallingEffectMatrixMotionMode: DEFAULT_UNIFIED_SETTINGS.fallingEffectMatrixMotionMode,
     fallingEffectMatrixWalkStartFontSize:
       DEFAULT_UNIFIED_SETTINGS.fallingEffectMatrixWalkStartFontSize,
     fallingEffectMatrixWalkEndFontSize: DEFAULT_UNIFIED_SETTINGS.fallingEffectMatrixWalkEndFontSize,
+    fallingEffectMatrixWalkLifecyclePercent:
+      DEFAULT_UNIFIED_SETTINGS.fallingEffectMatrixWalkLifecyclePercent,
+    fallingEffectMatrixCenterWindIntensity:
+      DEFAULT_UNIFIED_SETTINGS.fallingEffectMatrixCenterWindIntensity,
     fallingEffect2chEnriched: DEFAULT_UNIFIED_SETTINGS.fallingEffect2chEnriched,
     fallingEffectLiveWorkVocabulary: DEFAULT_UNIFIED_SETTINGS.fallingEffectLiveWorkVocabulary,
     fallingEffectActivityLinks: DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinks,

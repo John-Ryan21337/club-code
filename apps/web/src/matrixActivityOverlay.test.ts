@@ -30,6 +30,7 @@ import {
   MAX_MATRIX_ACTIVITY_PACKET_DRAWS,
   MAX_MATRIX_ACTIVITY_TELEMETRY_GLYPHS,
   MAX_MATRIX_ACTIVITY_TELEMETRY_RINGS,
+  createMatrixActivityWalkAttachmentRoute,
   createMatrixActivityAnimationState,
   createMatrixHexRoute,
   createMatrixTunnelRoute,
@@ -588,6 +589,10 @@ describe("Matrix provider activity overlay", () => {
     ]);
     expect(paired).toHaveLength(2);
     expect(paired.every((event) => event.verifiedAgentDispatch === undefined)).toBe(true);
+    const pairedAnimation = createMatrixActivityAnimationState();
+    updateMatrixActivityAnimationInPlace(pairedAnimation, paired, now, 160, false);
+    expect(pairedAnimation.linkCount).toBe(1);
+    expect(pairedAnimation.links[0]).toMatchObject({ category: "agent" });
 
     for (const ineligible of [
       activity(
@@ -1334,6 +1339,72 @@ describe("Matrix provider activity overlay", () => {
     expect(recording.draws.every((draw) => draw.alpha === 0.61)).toBe(true);
   });
 
+  it("fades Walk connectors with their lifecycle anchors and drops completed anchors", () => {
+    const now = Date.parse("2026-07-23T12:00:01.000Z");
+    const events = [
+      {
+        anchorSeed: 0,
+        category: "network" as const,
+        observedAtMs: now,
+        relationHashes: [11],
+      },
+      {
+        anchorSeed: 1,
+        category: "network" as const,
+        observedAtMs: now,
+        relationHashes: [11],
+      },
+    ];
+    const scene = createAtmosphereScene(
+      "matrix",
+      640,
+      480,
+      createSeededRandom(831),
+      undefined,
+      0,
+      false,
+      { english: [], japanese: [] },
+      "walk-forward",
+      30,
+      4,
+    );
+    const state = createMatrixActivityAnimationState();
+    updateMatrixActivityAnimationInPlace(state, events, now, scene.particles.length, false);
+    expect(state.linkCount).toBe(1);
+    const link = state.links[0]!;
+    const from = scene.particles[link.fromAnchorIndex]!;
+    const to = scene.particles[link.toAnchorIndex]!;
+    from.matrixLifecycleOpacity = 0.25;
+    to.matrixLifecycleOpacity = 0.25;
+
+    const fading = createRecordingContext();
+    drawMatrixActivityAnimation(
+      fading.context,
+      scene,
+      state,
+      0.6,
+      "matrix",
+      UNIFORM_MATRIX_FRAME,
+      "walk-forward",
+    );
+    expect(fading.draws.length).toBeGreaterThan(0);
+    expect(fading.draws.every((draw) => draw.alpha === 0.15)).toBe(true);
+
+    from.matrixLifecycleOpacity = 0;
+    to.matrixLifecycleOpacity = 0;
+    const completed = createRecordingContext();
+    drawMatrixActivityAnimation(
+      completed.context,
+      scene,
+      state,
+      0.6,
+      "matrix",
+      UNIFORM_MATRIX_FRAME,
+      "walk-forward",
+    );
+    expect(completed.draws).toEqual([]);
+  });
+
   it("labels correlated falling strings with fixed safe English/Japanese category pairs", () => {
     expect(resolveMatrixActivityTerm("network", "category", "english")).toBe("NETWORK");
     expect(resolveMatrixActivityTerm("network", "operation", "japanese")).toBe("取得");
@@ -1636,6 +1707,20 @@ describe("Matrix provider activity overlay", () => {
     expect(resolveMatrixActivityRouteDepthScale("tunnel", 0.37, 1.2, 1.3, 0.37)).toBe(0.4);
   });
 
+  it("attaches Walk routes to each differently scaled glyph edge", () => {
+    const centerRoute = createMatrixHexRoute({ x: 0, y: 40 }, { x: 200, y: 40 });
+    const attached = createMatrixActivityWalkAttachmentRoute(centerRoute, 20, 80);
+
+    expect(attached.points[0]).toEqual({ x: 9, y: 40 });
+    expect(attached.points.at(-1)).toEqual({ x: 164, y: 40 });
+    expect(attached.totalLength).toBe(155);
+
+    const bounded = createMatrixActivityWalkAttachmentRoute(centerRoute, 1_000, 1_000);
+    expect(bounded.points[0]).toEqual({ x: 70, y: 40 });
+    expect(bounded.points.at(-1)).toEqual({ x: 130, y: 40 });
+    expect(bounded.totalLength).toBe(60);
+  });
+
   it("flares depth routes and packets while preserving Flat's exact single stroke", () => {
     const scene = createAtmosphereScene("matrix", 400, 240, createSeededRandom(712), 1, 0);
     const from = scene.particles[0]!;
@@ -1643,9 +1728,11 @@ describe("Matrix provider activity overlay", () => {
     from.x = 60;
     from.y = 0;
     from.size = 3;
+    from.matrixLifecycleProgress = 0;
     to.x = 340;
     to.y = scene.height;
     to.size = 90;
+    to.matrixLifecycleProgress = 1;
     const state = createMatrixActivityAnimationState();
     state.links.push({
       fromAnchorIndex: 0,
@@ -1769,6 +1856,65 @@ describe("Matrix provider activity overlay", () => {
         (radius) => radius > 0 && radius <= MAX_MATRIX_ACTIVITY_DEPTH_PACKET_RADIUS,
       ),
     ).toBe(true);
+  });
+
+  it("keeps a verified connector visible in every perspective mode", () => {
+    const scene = createAtmosphereScene("matrix", 400, 240, createSeededRandom(713), 1, 0);
+    const from = scene.particles[0]!;
+    const to = scene.particles[1]!;
+    from.x = 60;
+    from.y = 0;
+    to.x = 340;
+    to.y = scene.height;
+    const state = createMatrixActivityAnimationState();
+    state.links.push({
+      fromAnchorIndex: 0,
+      toAnchorIndex: 1,
+      operationAnchorIndex: 1,
+      category: "network",
+      intensity: 1,
+      linePulse: 1,
+      colorHue: 184,
+      packetProgress: 0,
+    });
+    state.linkCount = 1;
+    state.reducedMotion = true;
+
+    for (const motionMode of [
+      "flat",
+      "forward",
+      "reverse",
+      "tunnel",
+      "walk-forward",
+      "walk-reverse",
+    ] as const) {
+      const recording = createRecordingContext();
+      drawMatrixActivityAnimation(
+        recording.context,
+        scene,
+        state,
+        0.8,
+        "random",
+        UNIFORM_MATRIX_FRAME,
+        motionMode,
+        12,
+        32,
+      );
+
+      const connectorStrokes = recording.draws.filter((draw) => draw.kind === "stroke");
+      expect(connectorStrokes, motionMode).toHaveLength(
+        motionMode === "flat" ? 1 : MATRIX_ACTIVITY_DEPTH_ROUTE_SEGMENTS,
+      );
+      expect(
+        connectorStrokes.every(
+          (draw) =>
+            Number.isFinite(draw.lineWidth) &&
+            draw.lineWidth > 0 &&
+            draw.lineWidth <= MAX_MATRIX_ACTIVITY_DEPTH_LINE_WIDTH,
+        ),
+        motionMode,
+      ).toBe(true);
+    }
   });
 
   it("renders a Warp route narrowest around its center plane", () => {
@@ -2113,68 +2259,75 @@ describe("Matrix provider activity overlay", () => {
     expect(recording.draws.every((draw) => draw.style !== "#ffffff")).toBe(true);
   });
 
-  it("renders a real selected-thread agent lifecycle through the complete canvas path", () => {
-    const environmentId = EnvironmentId.make("environment-render-integration");
-    const threadId = ThreadId.make("thread-render-integration");
-    const now = Date.parse("2026-07-23T12:00:01.000Z");
-    const lifecycle = [
-      activity(
-        "integration-start",
-        "2026-07-23T12:00:00.800Z",
-        {
-          itemType: "collab_agent_tool_call",
-          itemId: "integration-agent",
-          observed: { providerObserved: true, activityType: "agent" },
-        },
-        "tool.started",
-      ),
-      activity(
-        "integration-complete",
-        "2026-07-23T12:00:01.000Z",
-        {
-          itemType: "collab_agent_tool_call",
-          itemId: "integration-agent",
-          observed: { providerObserved: true, activityType: "agent" },
-        },
-        "tool.completed",
-      ),
-    ];
-    const appState = {
-      environmentStateById: {
-        [environmentId]: {
-          activityIdsByThreadId: { [threadId]: lifecycle.map((entry) => entry.id) },
-          activityByThreadId: {
-            [threadId]: Object.fromEntries(lifecycle.map((entry) => [entry.id, entry])),
+  it.each([
+    ["network", "web_search"],
+    ["database", "dynamic_tool_call"],
+    ["agent", "collab_agent_tool_call"],
+  ] as const)(
+    "renders a real selected-thread %s lifecycle through the complete canvas path",
+    (category, itemType) => {
+      const environmentId = EnvironmentId.make("environment-render-integration");
+      const threadId = ThreadId.make("thread-render-integration");
+      const now = Date.parse("2026-07-23T12:00:01.000Z");
+      const lifecycle = [
+        activity(
+          "integration-start",
+          "2026-07-23T12:00:00.800Z",
+          {
+            itemType,
+            itemId: `integration-${category}`,
+            observed: { providerObserved: true, activityType: category },
+          },
+          "tool.started",
+        ),
+        activity(
+          "integration-complete",
+          "2026-07-23T12:00:01.000Z",
+          {
+            itemType,
+            itemId: `integration-${category}`,
+            observed: { providerObserved: true, activityType: category },
+          },
+          "tool.completed",
+        ),
+      ];
+      const appState = {
+        environmentStateById: {
+          [environmentId]: {
+            activityIdsByThreadId: { [threadId]: lifecycle.map((entry) => entry.id) },
+            activityByThreadId: {
+              [threadId]: Object.fromEntries(lifecycle.map((entry) => [entry.id, entry])),
+            },
           },
         },
-      },
-    } as unknown as AppState;
-    const events = decodeMatrixActivityEvents(
-      selectMatrixActivityEventsKey(appState, { environmentId, threadId }),
-    );
-    const scene = createAtmosphereScene("matrix", 640, 480, createSeededRandom(17), undefined, 0);
-    const animation = createMatrixActivityAnimationState();
-    updateMatrixActivityAnimationInPlace(animation, events, now, scene.particles.length, false);
-    const recording = createRecordingContext();
-    drawMatrixActivityAnimation(
-      recording.context,
-      scene,
-      animation,
-      0.5,
-      "matrix",
-      UNIFORM_MATRIX_FRAME,
-    );
+      } as unknown as AppState;
+      const events = decodeMatrixActivityEvents(
+        selectMatrixActivityEventsKey(appState, { environmentId, threadId }),
+      );
+      const scene = createAtmosphereScene("matrix", 640, 480, createSeededRandom(17), undefined, 0);
+      const animation = createMatrixActivityAnimationState();
+      updateMatrixActivityAnimationInPlace(animation, events, now, scene.particles.length, false);
+      const recording = createRecordingContext();
+      drawMatrixActivityAnimation(
+        recording.context,
+        scene,
+        animation,
+        0.5,
+        "matrix",
+        UNIFORM_MATRIX_FRAME,
+      );
 
-    expect(events).toHaveLength(2);
-    expect(events.every((event) => event.category === "agent")).toBe(true);
-    expect(animation.linkCount).toBe(1);
-    expect(recording.draws.filter((draw) => draw.kind === "stroke")).toHaveLength(
-      1 + MATRIX_ACTIVITY_PACKET_COUNT + 2,
-    );
-    expect(recording.draws.filter((draw) => draw.kind === "fill")).toHaveLength(
-      MATRIX_ACTIVITY_PACKET_COUNT,
-    );
-    expect(recording.draws.every((draw) => draw.alpha === 0.5)).toBe(true);
-    expect(recording.draws.every((draw) => draw.style === UNIFORM_MATRIX_FRAME.color)).toBe(true);
-  });
+      expect(events).toHaveLength(2);
+      expect(events.every((event) => event.category === category)).toBe(true);
+      expect(animation.linkCount).toBe(1);
+      expect(recording.draws.filter((draw) => draw.kind === "stroke")).toHaveLength(
+        1 + MATRIX_ACTIVITY_PACKET_COUNT + 2,
+      );
+      expect(recording.draws.filter((draw) => draw.kind === "fill")).toHaveLength(
+        MATRIX_ACTIVITY_PACKET_COUNT,
+      );
+      expect(recording.draws.every((draw) => draw.alpha === 0.5)).toBe(true);
+      expect(recording.draws.every((draw) => draw.style === UNIFORM_MATRIX_FRAME.color)).toBe(true);
+    },
+  );
 });
