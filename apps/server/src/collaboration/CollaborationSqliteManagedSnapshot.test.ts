@@ -37,7 +37,10 @@ function time(offsetMillis: number) {
   return new Date(Date.now() + offsetMillis).toISOString();
 }
 
-function makeFixture(root: string) {
+function makeFixture(
+  root: string,
+  limits: { readonly snapshotMaxBytes?: number; readonly snapshotStorageMaxBytes?: number } = {},
+) {
   const principal = decodePrincipal({
     sessionId: "session-sqlite-1",
     sharedProjectId: projectId,
@@ -86,12 +89,23 @@ function makeFixture(root: string) {
     },
   });
   let exclusiveCalls = 0;
+  let deviceKeyBytes = new Uint8Array(44);
+  let deviceKeyCalls = 0;
+  let swapDeviceKeyAtCall: number | null = null;
   const makeService = makeCollaborationSqliteManagedSnapshot({
     replicaRoot: root,
     membershipAuthority: { getCurrent: () => Effect.succeed(membership) },
     deviceKeyAuthority: {
       getActiveEd25519PublicKey: (lookup) =>
-        Effect.succeed({ ...lookup, publicKeySpkiDer: new Uint8Array(44) }),
+        Effect.sync(() => {
+          deviceKeyCalls += 1;
+          if (deviceKeyCalls === swapDeviceKeyAtCall) {
+            const replacement = new Uint8Array(deviceKeyBytes);
+            replacement[0] = replacement[0] === 0 ? 1 : 0;
+            deviceKeyBytes = replacement;
+          }
+          return { ...lookup, publicKeySpkiDer: new Uint8Array(deviceKeyBytes) };
+        }),
     },
     databaseAuthority: { getCurrent: () => Effect.sync(() => encodeBinding(binding)) },
     sandboxPathAuthority: { assertContained: () => Effect.void },
@@ -101,6 +115,7 @@ function makeFixture(root: string) {
           exclusiveCalls += 1;
         }).pipe(Effect.andThen(effect)),
     },
+    ...limits,
   });
   const request = {
     operationId: "snapshot-operation-1",
@@ -121,6 +136,9 @@ function makeFixture(root: string) {
       binding = next;
     },
     getExclusiveCalls: () => exclusiveCalls,
+    swapDeviceKeyAtNextRecheck: () => {
+      swapDeviceKeyAtCall = deviceKeyCalls + 2;
+    },
   };
 }
 
@@ -282,7 +300,7 @@ describe("CollaborationSqliteManagedSnapshot", () => {
             ...fixture.getBinding(),
             headSnapshot: captured.artifact.snapshot,
           });
-          yield* Effect.promise(() => writeFile(`${path}-wal`, "not-a-live-wal"));
+          yield* Effect.promise(() => writeFile(`${path}-WAL`, "not-a-live-wal"));
           const replicaHash = yield* Effect.promise(() => sha256File(path));
           const error = yield* service
             .restore({
@@ -298,6 +316,91 @@ describe("CollaborationSqliteManagedSnapshot", () => {
             })
             .pipe(Effect.flip);
           expectFailure(error, "sidecar-active");
+        }),
+      (root) => Effect.promise(() => rm(root, { recursive: true, force: true })),
+    ),
+  );
+
+  it.effect("rejects same-ID device-key replacement across capture authority rechecks", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => mkdtemp(join(tmpdir(), "club-code-sqlite-key-swap-"))),
+      (root) =>
+        Effect.gen(function* () {
+          yield* TestClock.setTime(Date.now());
+          yield* Effect.promise(() => mkdir(join(root, "data"), { recursive: true }));
+          const path = join(root, "data", "project.sqlite");
+          const database = new DatabaseSync(path);
+          database.exec("CREATE TABLE notes(value TEXT NOT NULL)");
+          database.close();
+          const fixture = makeFixture(root);
+          const service = yield* fixture.makeService;
+          fixture.swapDeviceKeyAtNextRecheck();
+          const error = yield* service
+            .capture({ principal: fixture.principal, request: fixture.request })
+            .pipe(Effect.flip);
+          expectFailure(error, "authority-changed");
+        }),
+      (root) => Effect.promise(() => rm(root, { recursive: true, force: true })),
+    ),
+  );
+
+  it.effect("fails closed after a server-clock rollback", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => mkdtemp(join(tmpdir(), "club-code-sqlite-clock-"))),
+      (root) =>
+        Effect.gen(function* () {
+          const now = Date.now();
+          yield* TestClock.setTime(now);
+          yield* Effect.promise(() => mkdir(join(root, "data"), { recursive: true }));
+          const path = join(root, "data", "project.sqlite");
+          const database = new DatabaseSync(path);
+          database.exec("CREATE TABLE notes(value TEXT NOT NULL)");
+          database.close();
+          const fixture = makeFixture(root);
+          const service = yield* fixture.makeService;
+          yield* service.capture({ principal: fixture.principal, request: fixture.request });
+          yield* TestClock.setTime(now - 1);
+          const error = yield* service
+            .capture({
+              principal: fixture.principal,
+              request: { ...fixture.request, operationId: "clock-rollback-capture" },
+            })
+            .pipe(Effect.flip);
+          expectFailure(error, "lease-invalid");
+        }),
+      (root) => Effect.promise(() => rm(root, { recursive: true, force: true })),
+    ),
+  );
+
+  it.effect("bounds retained artifact, staging, and recovery storage per database", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => mkdtemp(join(tmpdir(), "club-code-sqlite-storage-"))),
+      (root) =>
+        Effect.gen(function* () {
+          yield* TestClock.setTime(Date.now());
+          yield* Effect.promise(() => mkdir(join(root, "data"), { recursive: true }));
+          const path = join(root, "data", "project.sqlite");
+          const database = new DatabaseSync(path);
+          database.exec(
+            "PRAGMA page_size=4096; CREATE TABLE notes(value TEXT NOT NULL); INSERT INTO notes VALUES ('first')",
+          );
+          database.close();
+          const fixture = makeFixture(root, {
+            snapshotMaxBytes: 16_384,
+            snapshotStorageMaxBytes: 16_384,
+          });
+          const service = yield* fixture.makeService;
+          yield* service.capture({ principal: fixture.principal, request: fixture.request });
+          const changed = new DatabaseSync(path);
+          changed.exec("UPDATE notes SET value='second'");
+          changed.close();
+          const error = yield* service
+            .capture({
+              principal: fixture.principal,
+              request: { ...fixture.request, operationId: "storage-quota-capture" },
+            })
+            .pipe(Effect.flip);
+          expectFailure(error, "quota-exceeded");
         }),
       (root) => Effect.promise(() => rm(root, { recursive: true, force: true })),
     ),

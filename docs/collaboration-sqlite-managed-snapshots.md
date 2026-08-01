@@ -13,8 +13,10 @@ consolidated into one standalone SQLite file while the source remains readable. 
 
 Before and after backup, the adapter checks current membership, active device-key authority, the
 declared SQLite binding, writer lease, fencing token, membership epoch, and expected canonical
-head. It revalidates the sandbox path and source file identity, rejects links and case aliases,
-and bounds the backup to the configured quota. The produced artifact is content-addressed and is
+head. The second check requires the exact enrolled device-key bytes to remain unchanged under the
+same key ID and fails closed if the server clock moves backward. It revalidates the sandbox path
+and source file identity, rejects links and case aliases, and bounds both one backup and retained
+artifact/staging/recovery bytes with a per-database quota. The produced artifact is content-addressed and is
 accepted only after SQLite integrity, schema hash, application/user version, page geometry, and
 file hash checks. A head change during capture retains the artifact as an explicit conflict fork;
 it does not silently advance the head.
@@ -30,9 +32,10 @@ not sufficient because a POSIX process can retain the old inode. The adapter the
 
 1. resolves the artifact only from project, database, and content hashes inside managed storage;
 2. rechecks its hash, integrity, identity metadata, current head, lease, fence, membership, device
-   key, replica hash, sandbox containment, and absence of sidecars;
+   key bytes, replica hash, sandbox containment, and case-insensitive absence of sidecars;
 3. copies into a no-follow exclusive staging file;
-4. retains the prior replica as a recovery hard link and atomically replaces the managed replica;
+4. freshly revalidates the replica/root identity and sidecar absence after the asynchronous copy,
+   then retains the prior replica as a recovery hard link and atomically replaces the managed replica;
 5. validates the installed database and checks authority again, rolling back on any late change.
 
 Busy, corrupt, unsupported, oversized, missing, changed-authority, and sidecar-active cases fail
@@ -46,3 +49,10 @@ database merge. Production wiring must inject the durable database-binding autho
 quiescence authority shared by every local SQLite opener. The adapter operates only beneath an
 already-authorized managed replica root. External-service databases remain API-only, and unknown
 engines remain private forks or engine-specific logical exports.
+
+The included mutex is process-local. Production enablement must add a cross-process exclusion
+backend and durable, request-bound operation receipts before more than one server process may own
+the same managed replica. The current `operationId` is a transport correlation field, not a claim
+of restart-durable idempotency. Recovery artifacts are intentionally retained and count against
+the configured per-database storage quota; a separately reviewed retention UI/policy must decide
+when an operator-authorized recovery copy may be removed.

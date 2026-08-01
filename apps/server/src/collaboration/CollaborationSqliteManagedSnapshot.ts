@@ -52,6 +52,8 @@ const SNAPSHOT_DIRECTORY = "sqlite-snapshots";
 const STAGING_DIRECTORY = "staging";
 const RECOVERY_DIRECTORY = "recovery";
 const SQLITE_HEADER = Buffer.from("SQLite format 3\0", "utf8");
+const SQLITE_STORAGE_MAX_BYTES = 8 * 1024 * 1024 * 1024;
+const SQLITE_STORAGE_ENTRY_MAX = 4_096;
 
 type Operation = "capture" | "restore";
 
@@ -132,6 +134,8 @@ export interface CollaborationSqliteManagedSnapshotOptions {
   readonly sandboxPathAuthority: CollaborationSandboxPathAuthorityShape;
   readonly quiescenceAuthority: CollaborationSqliteReplicaQuiescenceAuthorityShape;
   readonly snapshotMaxBytes?: number;
+  /** Logical bytes retained per managed database, including recovery copies and staging. */
+  readonly snapshotStorageMaxBytes?: number;
   readonly busyTimeoutMs?: number;
 }
 
@@ -232,6 +236,38 @@ async function ensureDirectory(root: RootIdentity, segments: ReadonlyArray<strin
   return cursor;
 }
 
+async function boundedDirectoryBytes(root: string, limit: number): Promise<number> {
+  const pending = [root];
+  let entries = 0;
+  let bytes = 0;
+  while (pending.length > 0) {
+    const directory = pending.pop()!;
+    const directoryStats = await lstat(directory, { bigint: true });
+    if (!directoryStats.isDirectory() || directoryStats.isSymbolicLink())
+      throw new Error("unsafe storage");
+    const canonicalDirectory = await realpath(directory);
+    if (!isContained(root, canonicalDirectory)) throw new Error("unsafe storage");
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      entries += 1;
+      if (entries > SQLITE_STORAGE_ENTRY_MAX) throw new Error("storage entry quota");
+      const path = resolve(directory, entry.name);
+      if (!isContained(root, path) || entry.isSymbolicLink()) throw new Error("unsafe storage");
+      if (entry.isDirectory()) {
+        pending.push(path);
+        continue;
+      }
+      if (!entry.isFile()) throw new Error("unsafe storage");
+      const stats = await lstat(path, { bigint: true });
+      if (!stats.isFile() || stats.isSymbolicLink()) throw new Error("unsafe storage");
+      const size = Number(stats.size);
+      if (!Number.isSafeInteger(size) || size < 0) throw new Error("unsafe storage");
+      bytes += size;
+      if (!Number.isSafeInteger(bytes) || bytes > limit) throw new Error("storage byte quota");
+    }
+  }
+  return bytes;
+}
+
 interface SafeTarget {
   readonly path: string;
   readonly exists: boolean;
@@ -298,12 +334,26 @@ async function assertNoSqliteSidecars(targetPath: string): Promise<void> {
   const fileName = targetPath.slice(
     Math.max(targetPath.lastIndexOf("/"), targetPath.lastIndexOf("\\")) + 1,
   );
+  const foldedFileName = fileName.toLowerCase();
   for (const entry of await readdir(parent, { withFileTypes: true })) {
-    if (entry.name === fileName) continue;
-    if (entry.name.startsWith(`${fileName}-`) || entry.name === `${fileName}.wal`) {
-      if (isDatabaseSidecarPath(entry.name)) throw new Error("active sidecar");
+    const foldedEntryName = entry.name.toLowerCase();
+    if (foldedEntryName === foldedFileName) continue;
+    if (
+      foldedEntryName.startsWith(`${foldedFileName}-`) ||
+      foldedEntryName === `${foldedFileName}.wal`
+    ) {
+      if (isDatabaseSidecarPath(foldedEntryName)) throw new Error("active sidecar");
     }
   }
+}
+
+function sameTarget(left: SafeTarget, right: SafeTarget): boolean {
+  return (
+    left.path === right.path &&
+    left.exists === right.exists &&
+    left.dev === right.dev &&
+    left.ino === right.ino
+  );
 }
 
 function throwIfCancelled(
@@ -519,6 +569,14 @@ function currentHead(binding: CollaborationDatabaseBinding) {
   return binding.headSnapshot?.contentSha256 ?? null;
 }
 
+function deviceKeyFingerprint(publicKeySpkiDer: Uint8Array): string {
+  return createHash("sha256")
+    .update("club-code-sqlite-device-key-v1")
+    .update("\0")
+    .update(publicKeySpkiDer)
+    .digest("hex");
+}
+
 function verifyLease(
   operation: Operation,
   binding: CollaborationDatabaseBinding,
@@ -559,6 +617,8 @@ function mapUnknown(operation: Operation, cause: unknown) {
   if (message.includes("unsupported") || message.includes("attached database"))
     return fail(operation, "unsupported-database");
   if (message.includes("active sidecar")) return fail(operation, "sidecar-active");
+  if (message.includes("storage byte quota") || message.includes("storage entry quota"))
+    return fail(operation, "quota-exceeded");
   if (
     [
       "unsafe root",
@@ -572,6 +632,7 @@ function mapUnknown(operation: Operation, cause: unknown) {
       "missing ancestor",
       "target changed",
       "target appeared",
+      "unsafe storage",
     ].includes(message)
   )
     return fail(operation, "unsafe-storage");
@@ -610,12 +671,16 @@ export function makeCollaborationSqliteManagedSnapshot(
   options: CollaborationSqliteManagedSnapshotOptions,
 ): Effect.Effect<CollaborationSqliteManagedSnapshotShape, CollaborationSqliteManagedSnapshotError> {
   const maxBytes = options.snapshotMaxBytes ?? COLLABORATION_SQLITE_SNAPSHOT_MAX_BYTES;
+  const storageMaxBytes = options.snapshotStorageMaxBytes ?? SQLITE_STORAGE_MAX_BYTES;
   const busyTimeoutMs = options.busyTimeoutMs ?? 5_000;
   if (
     !Number.isSafeInteger(maxBytes) ||
     maxBytes < 1 ||
     maxBytes > COLLABORATION_SQLITE_SNAPSHOT_MAX_BYTES ||
     maxBytes > COLLABORATION_MATERIALIZED_FILE_MAX_BYTES ||
+    !Number.isSafeInteger(storageMaxBytes) ||
+    storageMaxBytes < maxBytes ||
+    storageMaxBytes > SQLITE_STORAGE_MAX_BYTES ||
     !Number.isSafeInteger(busyTimeoutMs) ||
     busyTimeoutMs < 0 ||
     busyTimeoutMs > 60_000
@@ -629,6 +694,7 @@ export function makeCollaborationSqliteManagedSnapshot(
       const managedRoot = await makeRootIdentity(managedRootPath);
       await ensureDirectory(managedRoot, [SNAPSHOT_DIRECTORY]);
       const mutex = new KeyedMutex();
+      let lastAuthorityTimeMillis = Number.NEGATIVE_INFINITY;
 
       const authorize = (
         operation: Operation,
@@ -678,17 +744,19 @@ export function makeCollaborationSqliteManagedSnapshot(
             );
           const now = yield* DateTime.now;
           yield* Effect.try({
-            try: () =>
-              verifyLease(
-                operation,
-                binding,
-                request,
-                grant.principal,
-                DateTime.toEpochMillis(now),
-              ),
+            try: () => {
+              const nowMillis = DateTime.toEpochMillis(now);
+              if (nowMillis < lastAuthorityTimeMillis) throw fail(operation, "lease-invalid");
+              lastAuthorityTimeMillis = nowMillis;
+              verifyLease(operation, binding, request, grant.principal, nowMillis);
+            },
             catch: (cause) => mapUnknown(operation, cause),
           });
-          return { principal: grant.principal, binding };
+          return {
+            principal: grant.principal,
+            binding,
+            deviceKeySha256: deviceKeyFingerprint(new Uint8Array(key.publicKeySpkiDer)),
+          };
         });
 
       const artifactDirectories = async (
@@ -791,6 +859,12 @@ export function makeCollaborationSqliteManagedSnapshot(
                   if (!isContained(directories.bucket, artifactPath))
                     throw new Error("outside root");
                   try {
+                    const retainedBytes = await boundedDirectoryBytes(
+                      directories.bucket,
+                      storageMaxBytes,
+                    );
+                    if (retainedBytes + observed.byteSize > storageMaxBytes)
+                      throw fail("capture", "quota-exceeded");
                     await link(tempPath, artifactPath);
                   } catch (error) {
                     if (!isNodeError(error, "EEXIST")) throw error;
@@ -824,7 +898,10 @@ export function makeCollaborationSqliteManagedSnapshot(
             input.principal,
             request,
           ).pipe(Effect.mapError(() => fail("capture", "authority-changed")));
-          if (!sameLeaseAuthority(initial.binding, finalAuthority.binding))
+          if (
+            !sameLeaseAuthority(initial.binding, finalAuthority.binding) ||
+            initial.deviceKeySha256 !== finalAuthority.deviceKeySha256
+          )
             return yield* Effect.fail(fail("capture", "authority-changed"));
           const finalHead = currentHead(finalAuthority.binding);
           const snapshot = {
@@ -1041,6 +1118,14 @@ export function makeCollaborationSqliteManagedSnapshot(
                           }
                         };
                         try {
+                          const retainedBytes = await boundedDirectoryBytes(
+                            directories.bucket,
+                            storageMaxBytes,
+                          );
+                          const requiredBytes =
+                            observedArtifact.byteSize + (observedReplica?.byteSize ?? 0);
+                          if (retainedBytes + requiredBytes > storageMaxBytes)
+                            throw fail("restore", "quota-exceeded");
                           await copyFileVerified(
                             "restore",
                             artifactPath,
@@ -1049,11 +1134,19 @@ export function makeCollaborationSqliteManagedSnapshot(
                             input.signal,
                             effectSignal,
                           );
-                          if (target.exists) {
-                            await link(target.path, recoveryPath);
+                          const refreshedTarget = await inspectReplicaTarget(
+                            replicaRoot,
+                            initial.binding.relativePath,
+                          );
+                          if (!sameTarget(target, refreshedTarget))
+                            throw new Error("target changed");
+                          await assertRootIdentity(replicaRoot);
+                          await assertNoSqliteSidecars(refreshedTarget.path);
+                          if (refreshedTarget.exists) {
+                            await link(refreshedTarget.path, recoveryPath);
                             recoveryMade = true;
                           }
-                          await rename(stagePath, target.path);
+                          await rename(stagePath, refreshedTarget.path);
                           installed = true;
                           const installedInspection = inspectDatabase(target.path, busyTimeoutMs);
                           const installedHash = await hashFile("restore", target.path, maxBytes);
@@ -1091,7 +1184,8 @@ export function makeCollaborationSqliteManagedSnapshot(
                       Effect.mapError(() => fail("restore", "authority-changed")),
                       Effect.flatMap((finalAuthority) =>
                         sameLeaseAuthority(initial.binding, finalAuthority.binding) &&
-                        currentHead(finalAuthority.binding) === initialHead
+                        currentHead(finalAuthority.binding) === initialHead &&
+                        initial.deviceKeySha256 === finalAuthority.deviceKeySha256
                           ? Effect.void
                           : Effect.fail(fail("restore", "authority-changed")),
                       ),

@@ -30,6 +30,7 @@ const SnapshotOperationId = Schema.String.check(
 export type CollaborationSqliteSnapshotOperationId = typeof SnapshotOperationId.Type;
 
 const FenceRequest = {
+  /** Correlation only until a production binding supplies durable request-bound receipts. */
   operationId: SnapshotOperationId,
   sharedProjectId: SharedProjectId,
   databaseId: CollaborationDatabaseId,
