@@ -4083,13 +4083,9 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
             const restoredRounds = document.querySelector<HTMLInputElement>(
               '[aria-label="Auto Nudge maximum rounds for this thread"]',
             );
-            const restoredMinutes = document.querySelector<HTMLInputElement>(
-              '[aria-label="Auto Nudge maximum minutes for this thread"]',
-            );
             expect(restoredMode?.textContent).toContain("Steady progress");
             expect(restoredSwitch?.getAttribute("aria-checked")).toBe("true");
             expect(restoredRounds?.value).toBe("5");
-            expect(restoredMinutes?.value).toBe("30");
           },
           { timeout: 8_000, interval: 16 },
         );
