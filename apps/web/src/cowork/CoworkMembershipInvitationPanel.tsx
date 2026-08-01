@@ -42,6 +42,12 @@ const roleRank: Readonly<Record<CollaborationProjectRole, number>> = {
 
 const inviteRoles = ["admin", "operator", "contributor", "viewer"] as const;
 
+function parseWholeHours(value: string): number | null {
+  if (!/^(0|[1-9]\d*)$/.test(value)) return null;
+  const hours = Number(value);
+  return Number.isSafeInteger(hours) ? hours : null;
+}
+
 function MembershipInvitationPanelInner({
   client,
   sharedProjectId,
@@ -59,6 +65,7 @@ function MembershipInvitationPanelInner({
   const roleId = useId();
   const delayId = useId();
   const lifetimeId = useId();
+  const tokenHeadingId = useId();
   const [role, setRole] = useState<CollaborationProjectRole>("viewer");
   const [permissions, setPermissions] = useState<ReadonlyArray<CollaborationPermission>>(
     COLLABORATION_ROLE_PERMISSIONS.viewer,
@@ -80,6 +87,20 @@ function MembershipInvitationPanelInner({
     setPermissions(COLLABORATION_ROLE_PERMISSIONS[nextRole]);
   };
 
+  const eligibleRoles = useMemo(
+    () =>
+      inviteRoles.filter(
+        (candidate) => state.actorRole !== null && roleRank[candidate] < roleRank[state.actorRole],
+      ),
+    [state.actorRole],
+  );
+  const roleIsEligible = eligibleRoles.some((candidate) => candidate === role);
+
+  useEffect(() => {
+    if (roleIsEligible || eligibleRoles.length === 0) return;
+    chooseRole(eligibleRoles.at(-1) ?? "viewer");
+  }, [eligibleRoles, roleIsEligible]);
+
   const togglePermission = (permission: CollaborationPermission) => {
     setPermissions((current) =>
       current.includes(permission)
@@ -90,19 +111,24 @@ function MembershipInvitationPanelInner({
     );
   };
 
-  const delayMillis = Number(delayHours) * 60 * 60_000;
-  const lifetimeMillis = Number(lifetimeHours) * 60 * 60_000;
+  const parsedDelayHours = parseWholeHours(delayHours);
+  const parsedLifetimeHours = parseWholeHours(lifetimeHours);
+  const delayMillis = parsedDelayHours === null ? null : parsedDelayHours * 60 * 60_000;
+  const lifetimeMillis = parsedLifetimeHours === null ? null : parsedLifetimeHours * 60 * 60_000;
   const formIsValid =
-    Number.isInteger(delayMillis) &&
+    roleIsEligible &&
+    delayMillis !== null &&
+    Number.isSafeInteger(delayMillis) &&
     delayMillis >= 0 &&
     delayMillis <= COLLABORATION_INVITE_MAX_NOT_BEFORE_DELAY_MILLIS &&
-    Number.isInteger(lifetimeMillis) &&
+    lifetimeMillis !== null &&
+    Number.isSafeInteger(lifetimeMillis) &&
     lifetimeMillis >= COLLABORATION_INVITE_MIN_LIFETIME_MILLIS &&
     lifetimeMillis <= COLLABORATION_INVITE_MAX_LIFETIME_MILLIS &&
     permissions.length > 0;
 
   const createInvitation = () => {
-    if (!formIsValid) return;
+    if (!formIsValid || delayMillis === null || lifetimeMillis === null) return;
     model.createInvitation(
       {
         role,
@@ -113,6 +139,8 @@ function MembershipInvitationPanelInner({
       createCommandId,
     );
   };
+
+  const creationFieldsLocked = state.creation.status !== "idle";
 
   return (
     <section className="min-w-0 overflow-hidden" aria-labelledby={headingId}>
@@ -153,20 +181,13 @@ function MembershipInvitationPanelInner({
                   chooseRole(event.currentTarget.value as CollaborationProjectRole)
                 }
               >
-                {inviteRoles
-                  .filter(
-                    (candidate) =>
-                      state.actorRole !== null && roleRank[candidate] < roleRank[state.actorRole],
-                  )
-                  .map((candidate) => (
-                    <option key={candidate} value={candidate}>
-                      {candidate}
-                    </option>
-                  ))}
+                {eligibleRoles.map((candidate) => (
+                  <option key={candidate} value={candidate}>
+                    {candidate}
+                  </option>
+                ))}
               </select>
-              <fieldset
-                disabled={state.creation.status === "pending" || state.creation.status === "lost"}
-              >
+              <fieldset disabled={creationFieldsLocked}>
                 <legend>Permissions</legend>
                 {COLLABORATION_ROLE_PERMISSIONS[role].map((permission) => (
                   <label className="block" key={permission}>
@@ -187,7 +208,7 @@ function MembershipInvitationPanelInner({
                 max="168"
                 step="1"
                 value={delayHours}
-                disabled={state.creation.status === "pending" || state.creation.status === "lost"}
+                disabled={creationFieldsLocked}
                 onChange={(event) => setDelayHours(event.currentTarget.value)}
               />
               <label htmlFor={lifetimeId}>Lifetime in hours (1 to 720)</label>
@@ -198,7 +219,7 @@ function MembershipInvitationPanelInner({
                 max="720"
                 step="1"
                 value={lifetimeHours}
-                disabled={state.creation.status === "pending" || state.creation.status === "lost"}
+                disabled={creationFieldsLocked}
                 onChange={(event) => setLifetimeHours(event.currentTarget.value)}
               />
               <button
@@ -207,14 +228,17 @@ function MembershipInvitationPanelInner({
                   !formIsValid ||
                   !state.creation.canCreate ||
                   state.creation.status === "pending" ||
-                  state.creation.status === "lost"
+                  state.creation.status === "lost" ||
+                  state.creation.status === "presented"
                 }
               >
                 {state.creation.status === "pending"
                   ? "Creating invitationâ€¦"
                   : state.creation.status === "failed"
                     ? "Retry same invitation request"
-                    : "Create invitation"}
+                    : state.creation.status === "presented"
+                      ? "Create unavailable while token is visible"
+                      : "Create invitation"}
               </button>
               {state.creation.status === "failed" ? (
                 <p role="alert">
@@ -228,7 +252,8 @@ function MembershipInvitationPanelInner({
                 </p>
               ) : null}
               {state.creation.status === "presented" && state.creation.secret !== null ? (
-                <div role="alert" aria-label="One-time invitation token">
+                <div role="group" aria-labelledby={tokenHeadingId}>
+                  <h4 id={tokenHeadingId}>One-time invitation token</h4>
                   <p>
                     Share this token now. It cannot be shown again after dismissal or a context
                     change.

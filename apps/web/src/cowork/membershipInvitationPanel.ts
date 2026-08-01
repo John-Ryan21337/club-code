@@ -395,7 +395,11 @@ export class MembershipInvitationPanelModel {
     this.#active = null;
     this.#attempts.clear();
     this.#createAttempt = null;
-    if (this.#state.creation.secret !== null || this.#state.creation.status !== "idle") {
+    if (
+      this.#state.creation.secret !== null ||
+      this.#state.creation.status !== "idle" ||
+      this.#state.creation.canCreate
+    ) {
       this.#setState(Object.freeze({ ...this.#state, creation: creationState("idle", false) }));
     }
   }
@@ -414,7 +418,8 @@ export class MembershipInvitationPanelModel {
         (attempt) => attempt.status === "pending" || attempt.status === "refreshing",
       ) ||
       this.#createAttempt?.status === "pending" ||
-      this.#state.creation.status === "lost"
+      this.#state.creation.status === "lost" ||
+      this.#state.creation.status === "presented"
     ) {
       return;
     }
@@ -449,6 +454,10 @@ export class MembershipInvitationPanelModel {
       }
       this.#createAttempt = attempt;
     } else {
+      // A transport failure is an indeterminate acknowledgement. Only the
+      // original immutable command may be replayed; silently applying changed
+      // visible form values to that old command would misrepresent authority.
+      if (!this.#sameCreateInput(attempt.request, input)) return;
       attempt.status = "pending";
     }
 
@@ -531,7 +540,9 @@ export class MembershipInvitationPanelModel {
     create: NonNullable<MembershipInvitationClient["createInvitation"]>,
   ): Promise<void> {
     try {
-      const decoded = decodeCreateResult(await create(attempt.request));
+      const decoded = decodeCreateResult(
+        await Reflect.apply(create, this.client, [attempt.request]),
+      );
       if (
         !this.#isActive(scope) ||
         this.#createAttempt !== attempt ||
@@ -545,7 +556,8 @@ export class MembershipInvitationPanelModel {
       if (
         this.#state.epoch !== attempt.request.expectedMembershipEpoch ||
         this.#state.revision !== attempt.request.expectedMembershipRevision ||
-        this.#actor?.userId !== attempt.request.actorUserId
+        this.#actor?.userId !== attempt.request.actorUserId ||
+        !this.#canCreate(attempt.request.role, attempt.request.permissions)
       ) {
         throw new Error("invitation authority changed while creating");
       }
@@ -570,6 +582,13 @@ export class MembershipInvitationPanelModel {
         throw new Error("invitation result did not match the requested grant");
       }
 
+      const existing = this.#invitations.find(
+        (candidate) => candidate.invitationId === invitation.invitationId,
+      );
+      if (existing !== undefined) {
+        throw new Error("invitation result reused an existing invitation identifier");
+      }
+
       const loaded = cloneInvitation(invitation);
       this.#invitations = Object.freeze(
         [
@@ -587,11 +606,20 @@ export class MembershipInvitationPanelModel {
 
       if (disposition === "already-applied") {
         attempt.status = "failed";
-        this.#setCreation("lost", loaded.invitationId);
+        this.#state = Object.freeze({
+          ...this.#state,
+          creation: creationState("lost", false, loaded.invitationId),
+        });
       } else {
         this.#createAttempt = null;
-        this.#setCreation("presented", loaded.invitationId, secret);
+        this.#state = Object.freeze({
+          ...this.#state,
+          creation: creationState("presented", false, loaded.invitationId, secret),
+        });
       }
+      // Publish the new invitation and its one-time presentation state in one
+      // observer notification. A transient earlier token-bearing snapshot
+      // would unnecessarily extend the plaintext reference lifetime in React.
       this.#publishReady();
     } catch {
       if (
@@ -860,8 +888,7 @@ export class MembershipInvitationPanelModel {
     secret: string | null = null,
   ): void {
     const canCreate =
-      status !== "pending" &&
-      status !== "lost" &&
+      (status === "idle" || status === "failed") &&
       this.#state.status === "ready" &&
       this.#canCreateAny();
     this.#setState(
@@ -901,8 +928,7 @@ export class MembershipInvitationPanelModel {
         invitations,
         creation: creationState(
           this.#state.creation.status,
-          this.#state.creation.status !== "pending" &&
-            this.#state.creation.status !== "lost" &&
+          (this.#state.creation.status === "idle" || this.#state.creation.status === "failed") &&
             this.#canCreateAny(),
           this.#state.creation.invitationId,
           this.#state.creation.secret,

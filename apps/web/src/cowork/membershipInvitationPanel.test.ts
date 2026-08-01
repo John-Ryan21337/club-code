@@ -502,14 +502,24 @@ describe("MembershipInvitationPanelModel", () => {
 
   it("presents a strictly scoped token once and drops it on dismissal", async () => {
     const { client: baseClient } = harness(async () => page(PROJECT_A, "owner", []));
+    let source!: ReturnType<typeof createResult>;
     const createInvitation = vi.fn<NonNullable<MembershipInvitationClient["createInvitation"]>>(
-      async (request) => createResult(request),
+      async (request) => {
+        source = createResult(request);
+        return source;
+      },
     );
     const client: MembershipInvitationClient = { ...baseClient, createInvitation };
     const commandFactory = vi.fn(() => "create-command-1");
     const model = new MembershipInvitationPanelModel(client, OWNER, PROJECT_A);
     model.start(PROJECT_A);
     await settle();
+    const tokenSnapshots: unknown[] = [];
+    model.subscribe(() => {
+      if (model.getSnapshot().creation.secret !== null) {
+        tokenSnapshots.push(model.getSnapshot());
+      }
+    });
 
     model.createInvitation(CREATE_INPUT, commandFactory);
     await settle();
@@ -527,10 +537,15 @@ describe("MembershipInvitationPanelModel", () => {
     });
     expect(model.getSnapshot().creation).toEqual({
       status: "presented",
-      canCreate: true,
+      canCreate: false,
       invitationId: "invite-created",
       secret: "A".repeat(43),
     });
+    source.result.secret = "E".repeat(43);
+    source.result.invitation.role = "contributor";
+    expect(model.getSnapshot().creation.secret).toBe("A".repeat(43));
+    expect(model.getSnapshot().invitations[0]?.role).toBe("viewer");
+    expect(tokenSnapshots).toHaveLength(1);
 
     model.dismissInvitationSecret();
     expect(model.getSnapshot().creation).toEqual({
@@ -564,6 +579,11 @@ describe("MembershipInvitationPanelModel", () => {
     model.createInvitation({ ...CREATE_INPUT, lifetimeMillis: 60_000 }, commandFactory);
     await settle();
     expect(commandFactory).toHaveBeenCalledTimes(1);
+    expect(createInvitation).toHaveBeenCalledTimes(1);
+    expect(model.getSnapshot().creation.status).toBe("failed");
+
+    model.createInvitation(CREATE_INPUT, commandFactory);
+    await settle();
     expect(createInvitation.mock.calls[1]![0]).toBe(createInvitation.mock.calls[0]![0]);
     expect(model.getSnapshot().creation).toMatchObject({
       status: "lost",
@@ -580,14 +600,40 @@ describe("MembershipInvitationPanelModel", () => {
     expect(model.getSnapshot().creation).toMatchObject({ status: "idle", canCreate: true });
   });
 
-  it("rejects stale or hostile create results without retaining a token", async () => {
+  it.each([
+    [
+      "stale membership epoch",
+      (response: ReturnType<typeof createResult>) => {
+        response.scope.expectedMembershipEpoch = 8;
+      },
+    ],
+    [
+      "cross-operator creator",
+      (response: ReturnType<typeof createResult>) => {
+        response.result.invitation.createdByUserId = VIEWER;
+      },
+    ],
+    [
+      "role drift",
+      (response: ReturnType<typeof createResult>) => {
+        response.result.invitation.role = "contributor";
+      },
+    ],
+    [
+      "expiry drift",
+      (response: ReturnType<typeof createResult>) => {
+        response.result.invitation.expiresAt = "2026-08-02T13:00:00.000Z";
+      },
+    ],
+  ])("rejects %s create results without retaining a token", async (_name, mutate) => {
     const { client: baseClient } = harness(async () => page(PROJECT_A, "owner", []));
     const client: MembershipInvitationClient = {
       ...baseClient,
-      createInvitation: vi.fn(async (request) => ({
-        ...createResult(request),
-        scope: { ...request, expectedMembershipEpoch: 8 },
-      })),
+      createInvitation: vi.fn(async (request) => {
+        const response = createResult(request);
+        mutate(response);
+        return response;
+      }),
     };
     const model = new MembershipInvitationPanelModel(client, OWNER, PROJECT_A);
     model.start(PROJECT_A);
@@ -600,6 +646,56 @@ describe("MembershipInvitationPanelModel", () => {
       secret: null,
       invitationId: null,
     });
+    expect(model.getSnapshot().invitations).toEqual([]);
+  });
+
+  it.each([
+    [
+      "sparse array",
+      (response: ReturnType<typeof createResult>) => {
+        const sparse: string[] = [];
+        sparse.length = 4;
+        response.scope.permissions = sparse as typeof response.scope.permissions;
+      },
+    ],
+    [
+      "array subclass",
+      (response: ReturnType<typeof createResult>) => {
+        class HostilePermissions extends Array<string> {}
+        response.result.invitation.permissions = new HostilePermissions(
+          ...response.result.invitation.permissions,
+        );
+      },
+    ],
+    [
+      "proxy with a throwing prototype trap",
+      (response: ReturnType<typeof createResult>) =>
+        new Proxy(response, {
+          getPrototypeOf: () => {
+            throw new Error("proxy trap");
+          },
+        }),
+    ],
+  ])("fails closed on a hostile %s create payload", async (_name, mutate) => {
+    const { client: baseClient } = harness(async () => page(PROJECT_A, "owner", []));
+    const createInvitation = vi.fn<NonNullable<MembershipInvitationClient["createInvitation"]>>(
+      async (request) => {
+        const response = createResult(request);
+        return mutate(response) ?? response;
+      },
+    );
+    const model = new MembershipInvitationPanelModel(
+      { ...baseClient, createInvitation },
+      OWNER,
+      PROJECT_A,
+    );
+    model.start(PROJECT_A);
+    await settle();
+
+    model.createInvitation(CREATE_INPUT, () => "hostile-shape-command");
+    await settle();
+
+    expect(model.getSnapshot().creation).toMatchObject({ status: "failed", secret: null });
     expect(model.getSnapshot().invitations).toEqual([]);
   });
 
@@ -631,7 +727,7 @@ describe("MembershipInvitationPanelModel", () => {
     expect(model.getSnapshot().creation).toMatchObject({ status: "failed", secret: null });
   });
 
-  it("drops a presented token on superseding request and ignores late results after context loss", async () => {
+  it("blocks a superseding create until dismissal and ignores late results after context loss", async () => {
     const late = deferred<unknown>();
     const { client: baseClient } = harness(async () => page(PROJECT_A, "owner", []));
     const createInvitation = vi
@@ -647,6 +743,13 @@ describe("MembershipInvitationPanelModel", () => {
     expect(model.getSnapshot().creation.secret).toBe("A".repeat(43));
 
     model.createInvitation(CREATE_INPUT, () => "second-create-command");
+    expect(createInvitation).toHaveBeenCalledTimes(1);
+    expect(model.getSnapshot().creation).toMatchObject({
+      status: "presented",
+      secret: "A".repeat(43),
+    });
+    model.dismissInvitationSecret();
+    model.createInvitation(CREATE_INPUT, () => "second-create-command");
     expect(model.getSnapshot().creation).toMatchObject({ status: "pending", secret: null });
     const secondRequest = createInvitation.mock.calls[1]![0];
     model.start(PROJECT_B);
@@ -658,5 +761,118 @@ describe("MembershipInvitationPanelModel", () => {
 
     model.stop();
     expect(model.getSnapshot().creation.secret).toBeNull();
+  });
+
+  it("allows only one outstanding create and clears idle authority on stop", async () => {
+    const pending = deferred<unknown>();
+    const { client: baseClient } = harness(async () => page(PROJECT_A, "owner", []));
+    const createInvitation = vi.fn<NonNullable<MembershipInvitationClient["createInvitation"]>>(
+      () => pending.promise,
+    );
+    const commandFactory = vi.fn(() => "single-create-command");
+    const model = new MembershipInvitationPanelModel(
+      { ...baseClient, createInvitation },
+      OWNER,
+      PROJECT_A,
+    );
+    model.start(PROJECT_A);
+    await settle();
+
+    model.createInvitation(CREATE_INPUT, commandFactory);
+    model.createInvitation(CREATE_INPUT, commandFactory);
+    expect(createInvitation).toHaveBeenCalledTimes(1);
+    expect(commandFactory).toHaveBeenCalledTimes(1);
+
+    model.stop();
+    expect(model.getSnapshot().creation).toEqual({
+      status: "idle",
+      canCreate: false,
+      invitationId: null,
+      secret: null,
+    });
+    pending.resolve(createResult(createInvitation.mock.calls[0]![0]));
+    await settle();
+    expect(model.getSnapshot().creation.secret).toBeNull();
+  });
+
+  it("preserves an injected method receiver and sanitizes synchronous failures", async () => {
+    const { client: baseClient } = harness(async () => page(PROJECT_A, "owner", []));
+    const observed: { receiver: unknown } = { receiver: null };
+    const client: MembershipInvitationClient = {
+      ...baseClient,
+      createInvitation(request) {
+        observed.receiver = this;
+        expect(Object.isFrozen(request)).toBe(true);
+        throw new Error(`secret=${"Z".repeat(43)}`);
+      },
+    };
+    const model = new MembershipInvitationPanelModel(client, OWNER, PROJECT_A);
+    model.start(PROJECT_A);
+    await settle();
+
+    model.createInvitation(CREATE_INPUT, () => "receiver-create-command");
+    await settle();
+
+    expect(observed.receiver).toBe(client);
+    expect(model.getSnapshot().creation).toMatchObject({ status: "failed", secret: null });
+    expect(JSON.stringify(model.getSnapshot())).not.toContain("ZZZZ");
+  });
+
+  it("contains a hostile thenable failure without retaining its error text", async () => {
+    const { client: baseClient } = harness(async () => page(PROJECT_A, "owner", []));
+    let thenReads = 0;
+    const createInvitation = vi.fn<NonNullable<MembershipInvitationClient["createInvitation"]>>(
+      () => {
+        const thenable = {};
+        // oxlint-disable-next-line no-thenable -- deliberate hostile adapter fixture
+        Object.defineProperty(thenable, "then", {
+          get: () => {
+            thenReads += 1;
+            throw new Error(`credential=${"Q".repeat(43)}`);
+          },
+        });
+        return thenable as Promise<unknown>;
+      },
+    );
+    const model = new MembershipInvitationPanelModel(
+      { ...baseClient, createInvitation },
+      OWNER,
+      PROJECT_A,
+    );
+    model.start(PROJECT_A);
+    await settle();
+
+    model.createInvitation(CREATE_INPUT, () => "thenable-create-command");
+    await settle();
+
+    expect(thenReads).toBe(1);
+    expect(model.getSnapshot().creation).toMatchObject({ status: "failed", secret: null });
+    expect(JSON.stringify(model.getSnapshot())).not.toContain("credential");
+  });
+
+  it("rejects a create result that collides with an existing invitation id", async () => {
+    const { client: baseClient } = harness();
+    const createInvitation = vi.fn<NonNullable<MembershipInvitationClient["createInvitation"]>>(
+      async (request) => ({
+        ...createResult(request),
+        result: {
+          ...createResult(request).result,
+          invitation: invitation(request.sharedProjectId, "invite-1"),
+        },
+      }),
+    );
+    const model = new MembershipInvitationPanelModel(
+      { ...baseClient, createInvitation },
+      OWNER,
+      PROJECT_A,
+    );
+    model.start(PROJECT_A);
+    await settle();
+
+    model.createInvitation(CREATE_INPUT, () => "collision-create-command");
+    await settle();
+
+    expect(model.getSnapshot().creation).toMatchObject({ status: "failed", secret: null });
+    expect(model.getSnapshot().invitations).toMatchObject([{ invitationId: "invite-1" }]);
   });
 });

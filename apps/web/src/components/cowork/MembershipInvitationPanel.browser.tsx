@@ -234,8 +234,11 @@ describe("CoworkMembershipInvitationPanel", () => {
       .toBeVisible();
     await page.getByRole("button", { name: "Create invitation" }).click();
     await expect
-      .element(page.getByRole("alert", { name: "One-time invitation token" }))
+      .element(page.getByRole("group", { name: "One-time invitation token" }))
       .toHaveTextContent("B".repeat(43));
+    await expect
+      .element(page.getByRole("button", { name: "Create unavailable while token is visible" }))
+      .toBeDisabled();
     expect(createInvitation.mock.calls[0]![0]).toMatchObject({
       sharedProjectId: PROJECT_A,
       actorUserId: OWNER,
@@ -245,8 +248,55 @@ describe("CoworkMembershipInvitationPanel", () => {
       lifetimeMillis: 24 * 60 * 60_000,
     });
 
-    await page.getByRole("button", { name: "Dismiss token" }).click();
+    await page.getByRole("button", { name: "Dismiss token", exact: true }).click();
     await expect.element(page.getByText("B".repeat(43))).not.toBeInTheDocument();
+  });
+
+  it("drops a presented token when the injected client identity changes", async () => {
+    const { client: baseClient } = clientHarness();
+    const createInvitation = vi.fn<NonNullable<MembershipInvitationClient["createInvitation"]>>(
+      async (request) => ({
+        scope: { ...request, permissions: [...request.permissions] },
+        result: {
+          disposition: "created",
+          invitation: {
+            invitationId: "invite-client-change",
+            sharedProjectId: request.sharedProjectId,
+            role: request.role,
+            permissions: [...request.permissions],
+            createdByUserId: request.actorUserId,
+            notBefore: "2026-08-01T12:00:00.000Z",
+            expiresAt: "2026-08-02T12:00:00.000Z",
+          },
+          secret: "D".repeat(43),
+        },
+      }),
+    );
+    const firstClient: MembershipInvitationClient = { ...baseClient, createInvitation };
+    mounted = await render(
+      <CoworkMembershipInvitationPanel
+        client={firstClient}
+        sharedProjectId={PROJECT_A}
+        actorUserId={OWNER}
+        createCommandId={() => "browser-client-change"}
+      />,
+    );
+    await page.getByRole("button", { name: "Create invitation" }).click();
+    await expect.element(page.getByText("D".repeat(43))).toBeVisible();
+
+    const replacement = clientHarness().client;
+    await mounted.rerender(
+      <CoworkMembershipInvitationPanel
+        client={replacement}
+        sharedProjectId={PROJECT_A}
+        actorUserId={OWNER}
+      />,
+    );
+
+    await expect.element(page.getByText("D".repeat(43))).not.toBeInTheDocument();
+    await expect
+      .element(page.getByRole("form", { name: "Create project invitation" }))
+      .not.toBeInTheDocument();
   });
 
   it("does not expose a stale StrictMode load after a project switch", async () => {
