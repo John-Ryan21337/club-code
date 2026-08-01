@@ -4,9 +4,9 @@ This guide is for Cafe Code maintainers who want to review or adopt Club Code ch
 
 ## Published PR inventory
 
-The repository has published 22 pull requests:
+The repository has published 23 pull requests:
 
-- fourteen open implementation PRs: [#2](https://github.com/John-Ryan21337/club-code/pull/2), [#3](https://github.com/John-Ryan21337/club-code/pull/3), [#4](https://github.com/John-Ryan21337/club-code/pull/4), [#7](https://github.com/John-Ryan21337/club-code/pull/7), [#8](https://github.com/John-Ryan21337/club-code/pull/8), [#13](https://github.com/John-Ryan21337/club-code/pull/13), [#14](https://github.com/John-Ryan21337/club-code/pull/14), [#15](https://github.com/John-Ryan21337/club-code/pull/15), [#17](https://github.com/John-Ryan21337/club-code/pull/17), [#18](https://github.com/John-Ryan21337/club-code/pull/18), [#19](https://github.com/John-Ryan21337/club-code/pull/19), [#20](https://github.com/John-Ryan21337/club-code/pull/20), [#21](https://github.com/John-Ryan21337/club-code/pull/21), and [#22](https://github.com/John-Ryan21337/club-code/pull/22);
+- fifteen open implementation PRs: [#2](https://github.com/John-Ryan21337/club-code/pull/2), [#3](https://github.com/John-Ryan21337/club-code/pull/3), [#4](https://github.com/John-Ryan21337/club-code/pull/4), [#7](https://github.com/John-Ryan21337/club-code/pull/7), [#8](https://github.com/John-Ryan21337/club-code/pull/8), [#13](https://github.com/John-Ryan21337/club-code/pull/13), [#14](https://github.com/John-Ryan21337/club-code/pull/14), [#15](https://github.com/John-Ryan21337/club-code/pull/15), [#17](https://github.com/John-Ryan21337/club-code/pull/17), [#18](https://github.com/John-Ryan21337/club-code/pull/18), [#19](https://github.com/John-Ryan21337/club-code/pull/19), [#20](https://github.com/John-Ryan21337/club-code/pull/20), [#21](https://github.com/John-Ryan21337/club-code/pull/21), [#22](https://github.com/John-Ryan21337/club-code/pull/22), and [#23](https://github.com/John-Ryan21337/club-code/pull/23);
 - this open documentation PR, [#16](https://github.com/John-Ryan21337/club-code/pull/16), which adds this adoption guide directly against `main`;
 - four merged documentation PRs: #9 through #12;
 - two closed, archived pacing PRs: #5 and #6; and
@@ -24,6 +24,7 @@ After #7, choose one of these paths:
 - **Matrix GPU path:** `#7 -> #18`; #18 is independent of cowork and extracts WebGL2 glyph rendering plus Walk parity without Auto Nudge, provider, or server files.
 - **Auto Nudge safety path:** `#7 -> #19`; #19 reconstructs dependency-complete server authority, completion-only dispatch, active-output invalidation, and restart fail-closed behavior without Idle Guard or unrelated #8 features.
 - **Settings profiles path:** `#7 -> #22`; #22 is a five-file web-only extraction that excludes credentials, project paths, exact-thread Auto Nudge state, media assets, native controls, telemetry, and #15.
+- **Host telemetry foundation:** `#7 -> #23`; #23 independently adds measured aggregate CPU and process-effective RAM contracts/server sampling without temperatures, GPU, project-volume probes, endpoints, polling, or graph UI.
 
 Do not combine the cowork commits from #8 with #13, #14, #17, #20, or #21.
 
@@ -41,6 +42,7 @@ Do not combine the cowork commits from #8 with #13, #14, #17, #20, or #21.
 | #20 | Audited device-key enrollment, rotation, revocation, and current-key admission          | `feature/cowork-membership-invites`                                        | `feature/cowork-device-authority` at `76957bce4c9d89d2126012b45beb37ebdc31f172`           | open, audited, clean                                             |
 | #21 | Audited shared operator chat, authored prompts, and pointer-only context packets        | `feature/cowork-device-authority`                                          | `feature/cowork-chat-context-after-devices` at `036132ea0d459e867448f5427b6b704bf1c8b7a0` | open, audited, clean                                             |
 | #22 | Audited local named Settings profiles                                                   | `agent/local-priority-integration`                                         | `feature/settings-profiles` at `8e4b7245b37905622b7bf3207e304dbbeb05537a`                 | open, audited, clean; separate from cowork and telemetry         |
+| #23 | Truthful host CPU and process-effective RAM sampler                                     | `agent/local-priority-integration`                                         | `feature/host-system-telemetry` at `138a1a025462c9476591bfed97f26ccd15997b5d`             | open, gated, clean; no temperatures, GPU, endpoint, or graph UI  |
 | #18 | WebGL2 Matrix glyph rendering and Walk parity                                           | `agent/local-priority-integration`                                         | `agent/matrix-webgl-gpu-pr` at `fa2be7e92c744440f6bf47f20174d85a4041a21d`                 | open, audited, clean; separate from the cowork ladder            |
 | #19 | Completion-only Auto Nudge server authority                                             | `agent/local-priority-integration`                                         | `feature/auto-nudge-server-authority` at `99cb7fe621bbe62443d5b07e4a264a42ba0a47a7`       | open, audited, clean; overlaps #8 Auto Nudge                     |
 | #8  | Aggregate current local release                                                         | `agent/local-priority-integration`                                         | `release/local-20260728` at `457be1418541bfb0ab08ae5bf9aac8a729ead23f`                    | open draft; GitHub reported `CONFLICTING/DIRTY` at this snapshot |
@@ -81,6 +83,9 @@ git rev-list --reverse 7b09d366d6e31928dbbb8aca8f6fff61e8171879..cdb4e15680a1b26
 # PR #22: independent five-file Settings profiles extraction on #7.
 git cherry-pick eb07f8be b12dec8b a2b1086b 8e4b7245
 
+# PR #23: independent host telemetry contracts/server sampler on #7.
+git cherry-pick ec99821f f8a88f50 138a1a02
+
 # PR #13: the contiguous pre-restack cowork foundation series.
 git rev-list --reverse 8dc05d58f6457a0a31e14215d3617a9af9aa7760^..375849ce173ce81c90aad62e1bf958f3ef470917 | git cherry-pick --stdin
 
@@ -111,6 +116,8 @@ PR #21 continues after #20. It contains shared operator-authored chat/prompts an
 
 PR #22 is an independent five-file web child of #7. Its profile allowlist explicitly excludes credentials, provider/network security, private project paths, exact-thread Auto Nudge state, legacy minute fields, media assets, native controls, pacing, telemetry, and PR #15.
 
+PR #23 is an independent contracts/server child of #7. It reports only measurements available through the bounded Node runtime adapter. CPU/RAM temperatures, GPU, storage temperatures, fans, RGB, project-volume probes, RPC exposure, renderer polling, and graph UI remain deferred and must not be inferred from its unavailable values.
+
 When adopting onto a newer Cafe target instead of the pinned baseline, treat these commands as an ordering manifest, not a promise of conflict-free application. Resolve migrations, settings schemas, provider lifecycle, and security boundaries semantically; never select an entire side of a conflict wholesale.
 
 ## Omnibus #8 overlap warning
@@ -125,7 +132,7 @@ PR #8 is a draft release aggregate, not the recommended Cafe review unit. It con
 
 ## Validation gates
 
-At this snapshot GitHub reported no configured checks for PRs #13 through #22. `MERGEABLE/CLEAN` describes branch topology, not test evidence; Cafe maintainers must run the recorded local gates (or equivalent CI) on the exact adopted heads.
+At this snapshot GitHub reported no configured checks for PRs #13 through #23. `MERGEABLE/CLEAN` describes branch topology, not test evidence; Cafe maintainers must run the recorded local gates (or equivalent CI) on the exact adopted heads.
 
 Run the repository gates after each meaningful stack layer and again at the final exact head:
 
@@ -148,6 +155,7 @@ git diff --check
 - #20: audited device authority 40/40, full repository tests, actor/epoch-bound receipts, rotate/revoke races, timestamp corruption, and adversarial low-order Ed25519 key rejection;
 - #21: audited chat/context 20/20, full repository tests, principal-bound receipts, tombstone replay revocation, conservative token admission, membership recheck, corruption, and two-client ordering;
 - #22: audited profile units 23/23, Settings Chromium 41/41, full web 1,387/1,387 before final audit, full repository tests, duplicate/prototype/quota/timestamp adversarial coverage, and exhaustive private-field exclusion;
+- #23: contracts 6/6, host sampler 20/20, typecheck 9/9, full repository tests 9/9 with server 1,592 passed/1 skipped, truthful warming/unavailable states, counter-failure and topology-change coverage, and no fabricated sensor measurements;
 - #18: audited Matrix/settings units 133/133, focused Chromium 46/46, full Chromium 281/281, WebGL limits/context/fallback coverage, and full repository tests;
 - #19: audited authority 96/96, browser 11/11, engine 19/19, full repository tests, and controlled proof that timer/minute/countdown state cannot authorize dispatch;
 - #15: current-snapshot availability and simulated telemetry-outage browser regressions.
