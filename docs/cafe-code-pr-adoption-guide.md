@@ -43,6 +43,8 @@ Each row is a separately reviewable lane. Finish and validate one row before sta
 Club Code release commit `b5e20ab3` is the behavioral reference, but it is not a clean Cafe cherry-pick because it also localizes Club-only Auto Nudge and Idle Thread Guard controls. Recut it on current Cafe `main` in three review units: (1) the persisted `system` / `en` / `ja` / `dual` preference and localization provider, (2) static first-party UI catalogs with dynamic/transcript/code exclusions, and only after the matching automation features exist, (3) authored localized built-in prompt variants. Preserve custom prompts byte-for-byte. Dual mode must not translate or duplicate transcript context, and changing language must have no authority side effect.
 
 Use `docs/ui-localization-canon.md` at release head `47961f97` as the safety contract. Do not copy the release commit wholesale and do not add a runtime machine-translation/network dependency.
+For Cafe itself, prefer a typed opt-in renderer-local implementation modeled on the existing theme hook: no contracts/server setting, no npm localization dependency, and no MutationObserver bridge over React-owned DOM. Keep the runtime preference/translator under 100 non-test lines if practical, then submit the visible language selector and Settings-shell migration as a second screenshot-backed PR; migrate additional surfaces feature-by-feature.
+
 For every localization unit, gate locale resolution and fallback, renderer-local persistence isolation, catalog coverage, English/Japanese/dual screenshots, recognized built-in prompt migration, byte-identical custom prompt preservation, and proof that a language change cannot enable, arm, reset, retry, or dispatch automation.
 
 ### Agent execution loop for every slice
