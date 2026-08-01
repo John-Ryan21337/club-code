@@ -1,5 +1,6 @@
 import {
   CheckIcon,
+  EyeIcon,
   PencilIcon,
   RefreshCwIcon,
   SaveIcon,
@@ -12,6 +13,7 @@ import { useClientSettingsHydrated, useSettings, useUpdateSettings } from "../..
 import { useTheme } from "../../hooks/useTheme";
 import {
   captureSettingsProfilePayload,
+  compareSettingsProfile,
   mutateSettingsProfileLibrary,
   settingsProfileLibraryStore,
   settingsProfileMatches,
@@ -19,7 +21,15 @@ import {
   SettingsProfileError,
   useSettingsProfileLibrary,
 } from "../../settingsProfiles";
-import { ensureLocalApi } from "../../localApi";
+import {
+  AlertDialog,
+  AlertDialogClose,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogPopup,
+  AlertDialogTitle,
+} from "../ui/alert-dialog";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
@@ -67,6 +77,20 @@ function isSameSavedProfile(left: SettingsProfile, right: SettingsProfile): bool
   );
 }
 
+function profileDifferenceLabel(key: string): string {
+  if (key === "theme") return "Theme";
+  return key
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/^./, (character) => character.toUpperCase());
+}
+
+function profileDifferenceValue(value: boolean | number | string | undefined): string {
+  if (value === undefined) return "Not set";
+  if (typeof value === "boolean") return value ? "On" : "Off";
+  const normalized = String(value).replace(/\s+/gu, " ").trim();
+  return normalized.length > 80 ? `${normalized.slice(0, 77)}…` : normalized;
+}
+
 export function SettingsProfiles() {
   const library = useSettingsProfileLibrary();
   const settings = useSettings();
@@ -80,17 +104,44 @@ export function SettingsProfiles() {
   const [nameDraft, setNameDraft] = useState(activeProfile?.name ?? "");
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<ProfileNotice | null>(null);
+  const [previewProfileId, setPreviewProfileId] = useState<string | null>(null);
+  const [pendingDeleteProfile, setPendingDeleteProfile] = useState<SettingsProfile | null>(null);
 
   const currentPayload = useMemo(
     () => captureSettingsProfilePayload(settings, theme),
     [settings, theme],
   );
-  const activeProfileIsCurrent =
-    activeProfile !== null && settingsProfileMatches(activeProfile, currentPayload);
+  const activeProfileDifferences = useMemo(
+    () => (activeProfile === null ? [] : compareSettingsProfile(activeProfile, currentPayload)),
+    [activeProfile, currentPayload],
+  );
+  // Older profiles are deliberately sparse patches. Treat one as current when
+  // applying it would make no change; exact document equality would incorrectly
+  // enable Reload merely because a later allowlisted field is absent.
+  const activeProfileIsCurrent = activeProfile !== null && activeProfileDifferences.length === 0;
+  const previewProfile =
+    previewProfileId === null
+      ? null
+      : (library.profiles.find((profile) => profile.id === previewProfileId) ?? null);
+  const previewProfileDifferences = useMemo(
+    () =>
+      previewProfile === null
+        ? []
+        : previewProfile.id === activeProfile?.id
+          ? activeProfileDifferences
+          : compareSettingsProfile(previewProfile, currentPayload),
+    [activeProfile?.id, activeProfileDifferences, currentPayload, previewProfile],
+  );
+  const activeProfilePreviewVisible =
+    activeProfile !== null && previewProfile?.id === activeProfile.id;
 
   useEffect(() => {
     setNameDraft(activeProfile?.name ?? "");
   }, [activeProfile?.id, activeProfile?.name]);
+
+  useEffect(() => {
+    if (previewProfileId !== null && previewProfile === null) setPreviewProfileId(null);
+  }, [previewProfile, previewProfileId]);
 
   const reportError = useCallback((error: unknown) => {
     setNotice({
@@ -181,23 +232,20 @@ export function SettingsProfiles() {
     }
   }, [activeProfile, busy, nameDraft, reportError]);
 
-  const handleDelete = useCallback(async () => {
-    if (!activeProfile || busy) return;
+  const handleConfirmDelete = useCallback(async () => {
+    if (!pendingDeleteProfile || busy) return;
+    const profile = pendingDeleteProfile;
     setBusy(true);
     try {
-      const confirmed = await ensureLocalApi().dialogs.confirm(
-        `Delete the local settings profile “${activeProfile.name}”?`,
-      );
-      if (!confirmed) return;
       const removal = await mutateSettingsProfileLibrary(settingsProfileLibraryStore, () => {
-        const latest = settingsProfileLibraryStore.resolve(activeProfile.id);
+        const latest = settingsProfileLibraryStore.resolve(profile.id);
         if (latest === null) return { kind: "missing" as const };
-        if (!isSameSavedProfile(activeProfile, latest)) {
+        if (!isSameSavedProfile(profile, latest)) {
           return { kind: "changed" as const };
         }
         return {
           kind: "removed" as const,
-          persisted: settingsProfileLibraryStore.remove(activeProfile.id),
+          persisted: settingsProfileLibraryStore.remove(profile.id),
         };
       });
       if (removal.kind !== "removed") {
@@ -205,8 +253,8 @@ export function SettingsProfiles() {
           tone: "warning",
           message:
             removal.kind === "missing"
-              ? `“${activeProfile.name}” was already removed or renamed in another window.`
-              : `“${activeProfile.name}” changed in another window and was not deleted. Review it and try again.`,
+              ? `“${profile.name}” was already removed or renamed in another window.`
+              : `“${profile.name}” changed in another window and was not deleted. Review it and try again.`,
         });
         return;
       }
@@ -216,13 +264,14 @@ export function SettingsProfiles() {
           ? null
           : (settingsProfileLibraryStore.resolve(nextSnapshot.activeProfileId) ?? null);
       setNameDraft(nextActive?.name ?? "");
-      setNotice(mutationNotice("Deleted", activeProfile.name, removal.persisted));
+      setNotice(mutationNotice("Deleted", profile.name, removal.persisted));
     } catch (error) {
       reportError(error);
     } finally {
+      setPendingDeleteProfile(null);
       setBusy(false);
     }
-  }, [activeProfile, busy, reportError]);
+  }, [busy, pendingDeleteProfile, reportError]);
 
   const handleSwitch = useCallback(
     async (profileId: string, reloadActive = false) => {
@@ -403,6 +452,21 @@ export function SettingsProfiles() {
               <RefreshCwIcon aria-hidden="true" />
               Reload
             </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              aria-controls="settings-profile-difference-preview"
+              aria-expanded={activeProfilePreviewVisible}
+              disabled={busy || !settingsHydrated || activeProfile === null}
+              onClick={() =>
+                setPreviewProfileId((profileId) =>
+                  profileId === activeProfile?.id ? null : (activeProfile?.id ?? null),
+                )
+              }
+            >
+              <EyeIcon aria-hidden="true" />
+              {activeProfilePreviewVisible ? "Hide preview" : "Preview changes"}
+            </Button>
           </>
         }
       >
@@ -415,21 +479,70 @@ export function SettingsProfiles() {
             {library.profiles.map((profile) => {
               const isActive = profile.id === library.activeProfileId;
               return (
-                <Button
-                  key={profile.id}
-                  size="sm"
-                  variant={isActive ? "secondary" : "outline"}
-                  className="max-w-48 shrink-0"
-                  aria-pressed={isActive}
-                  title={`Load ${profile.name}`}
-                  disabled={busy || !settingsHydrated}
-                  onClick={() => void handleSwitch(profile.id, isActive)}
-                >
-                  <span className="truncate">{profile.name}</span>
-                </Button>
+                <div key={profile.id} className="flex shrink-0">
+                  <Button
+                    size="sm"
+                    variant={isActive ? "secondary" : "outline"}
+                    className="max-w-48 rounded-r-none"
+                    aria-pressed={isActive}
+                    title={`Load ${profile.name}`}
+                    disabled={busy || !settingsHydrated}
+                    onClick={() => void handleSwitch(profile.id, isActive)}
+                  >
+                    <span className="truncate">{profile.name}</span>
+                  </Button>
+                  <Button
+                    size="icon-sm"
+                    variant={previewProfile?.id === profile.id ? "secondary" : "outline"}
+                    className="rounded-l-none border-l-0"
+                    aria-label={`Preview ${profile.name}`}
+                    aria-controls="settings-profile-difference-preview"
+                    aria-expanded={previewProfile?.id === profile.id}
+                    disabled={busy || !settingsHydrated}
+                    onClick={() =>
+                      setPreviewProfileId((profileId) =>
+                        profileId === profile.id ? null : profile.id,
+                      )
+                    }
+                  >
+                    <EyeIcon aria-hidden="true" />
+                  </Button>
+                </div>
               );
             })}
           </div>
+        ) : null}
+        {previewProfile !== null ? (
+          <section
+            id="settings-profile-difference-preview"
+            className="mb-3.5 rounded-lg border bg-muted/30 p-3 text-sm"
+            aria-label={`Changes from loading ${previewProfile.name}`}
+          >
+            <p className="font-medium">
+              {previewProfileDifferences.length === 0
+                ? "This profile would not change the current safe preferences."
+                : `${previewProfileDifferences.length} safe preference${previewProfileDifferences.length === 1 ? "" : "s"} would change.`}
+            </p>
+            {previewProfileDifferences.length > 0 ? (
+              <dl className="mt-2 grid gap-2">
+                {previewProfileDifferences.map((difference) => (
+                  <div
+                    key={difference.key}
+                    className="grid gap-0.5 sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)] sm:gap-3"
+                  >
+                    <dt className="font-medium">{profileDifferenceLabel(difference.key)}</dt>
+                    <dd className="min-w-0 break-words text-muted-foreground">
+                      <span className="sr-only">Current: </span>
+                      {profileDifferenceValue(difference.currentValue)}
+                      <span aria-hidden="true"> → </span>
+                      <span className="sr-only">Saved profile: </span>
+                      {profileDifferenceValue(difference.savedValue)}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+            ) : null}
+          </section>
         ) : null}
       </SettingsRow>
 
@@ -508,7 +621,7 @@ export function SettingsProfiles() {
               variant="outline"
               className="text-destructive hover:text-destructive"
               disabled={busy || activeProfile === null}
-              onClick={() => void handleDelete()}
+              onClick={() => setPendingDeleteProfile(activeProfile)}
             >
               <Trash2Icon aria-hidden="true" />
               Delete
@@ -516,6 +629,36 @@ export function SettingsProfiles() {
           </div>
         </div>
       </SettingsRow>
+      <AlertDialog
+        open={pendingDeleteProfile !== null}
+        onOpenChange={(open) => {
+          if (!open && !busy) setPendingDeleteProfile(null);
+        }}
+      >
+        <AlertDialogPopup>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Delete settings profile “{pendingDeleteProfile?.name ?? ""}”?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              This removes only the local saved preset. It does not change the preferences that are
+              currently applied.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogClose render={<Button variant="outline" disabled={busy} />}>
+              Cancel
+            </AlertDialogClose>
+            <Button
+              variant="destructive"
+              disabled={busy}
+              onClick={() => void handleConfirmDelete()}
+            >
+              Delete profile
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogPopup>
+      </AlertDialog>
     </SettingsSection>
   );
 }

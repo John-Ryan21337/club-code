@@ -1153,6 +1153,15 @@ describe("settings panels", () => {
     expect(settingsProfileLibraryStore.getSnapshot().activeProfileId).toBe("profile:desktop");
     expect(settingsProfileLibraryStore.resolve("profile:mobile")?.theme).toBe("dark");
 
+    const writesBeforePreview = updateClientSettings.mock.calls.length;
+    await page.getByRole("button", { name: "Preview Mobile", exact: true }).click();
+    const mobilePreview = page.getByRole("region", { name: "Changes from loading Mobile" });
+    await expect.element(mobilePreview).toHaveTextContent("2 safe preferences would change.");
+    await expect.element(mobilePreview).toHaveTextContent("Theme");
+    expect(updateClientSettings).toHaveBeenCalledTimes(writesBeforePreview);
+    await page.getByRole("button", { name: "Preview Mobile", exact: true }).click();
+    await expect.element(mobilePreview).not.toBeInTheDocument();
+
     // Saved profiles are also exposed as one-tap buttons for narrow/mobile
     // settings surfaces; selecting one applies it without a separate Apply step.
     await page.getByRole("button", { name: "Mobile", exact: true }).click();
@@ -1191,6 +1200,12 @@ describe("settings panels", () => {
         continueBackgroundAnimations: true,
       });
     });
+    await page.getByRole("button", { name: "Preview changes" }).click();
+    const preview = page.getByRole("region", { name: "Changes from loading Mobile" });
+    await expect.element(preview).toHaveTextContent("1 safe preference would change.");
+    await expect.element(preview).toHaveTextContent("Continue Background Animations");
+    await expect.element(preview).toHaveTextContent("Current: On");
+    await expect.element(preview).toHaveTextContent("Saved profile: Off");
     await page.getByRole("button", { name: "Reload active settings profile" }).click();
     await vi.waitFor(() => {
       expect(updateClientSettings.mock.calls.at(-1)?.[0]).toMatchObject({
@@ -1217,6 +1232,22 @@ describe("settings panels", () => {
       "Mobile",
       "Desktop",
     ]);
+  });
+
+  it("keeps the empty-library preview control collapsed and truthfully labeled", async () => {
+    setServerConfigSnapshot(createBaseServerConfig());
+    mounted = await renderWithTestRouter(
+      <AppAtomRegistryProvider>
+        <AppearanceSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    const preview = page.getByRole("button", { name: "Preview changes" });
+    await expect.element(preview).toBeDisabled();
+    await expect.element(preview).toHaveAttribute("aria-expanded", "false");
+    await expect
+      .element(page.getByRole("region", { name: /Changes from loading/u }))
+      .not.toBeInTheDocument();
   });
 
   it("rolls the theme back and keeps the prior active profile when loading settings fails", async () => {
@@ -1254,6 +1285,60 @@ describe("settings panels", () => {
     expect(settingsProfileLibraryStore.getSnapshot().activeProfileId).toBe("profile:desktop");
   });
 
+  it("requires an accessible delete confirmation and rejects a stale profile snapshot", async () => {
+    setServerConfigSnapshot(createBaseServerConfig());
+    mounted = await renderWithTestRouter(
+      <AppAtomRegistryProvider>
+        <AppearanceSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    await page.getByLabelText("Settings profile name").fill("Mobile");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await page.getByRole("button", { name: "Delete", exact: true }).click();
+    const dialog = page.getByRole("alertdialog");
+    await expect.element(dialog).toHaveTextContent("Delete settings profile “Mobile”?");
+    await expect
+      .element(dialog)
+      .toHaveTextContent(
+        "This removes only the local saved preset. It does not change the preferences that are currently applied.",
+      );
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect.element(dialog).not.toBeInTheDocument();
+    expect(settingsProfileLibraryStore.resolve("profile:mobile")?.name).toBe("Mobile");
+
+    await page.getByRole("button", { name: "Delete", exact: true }).click();
+    const persisted = JSON.parse(
+      localStorage.getItem(SETTINGS_PROFILE_LIBRARY_STORAGE_KEY) ?? "{}",
+    ) as {
+      profiles: Array<{ updatedAt: string; clientSettings: Record<string, unknown> }>;
+    };
+    persisted.profiles[0]!.updatedAt = "2026-07-30T12:00:00.000Z";
+    persisted.profiles[0]!.clientSettings.sidebarThreadPreviewCount = 9;
+    localStorage.setItem(SETTINGS_PROFILE_LIBRARY_STORAGE_KEY, JSON.stringify(persisted));
+    window.dispatchEvent(
+      new StorageEvent("storage", { key: SETTINGS_PROFILE_LIBRARY_STORAGE_KEY }),
+    );
+    await page.getByRole("button", { name: "Delete profile", exact: true }).click();
+
+    await expect
+      .element(
+        page.getByText(
+          "“Mobile” changed in another window and was not deleted. Review it and try again.",
+          { exact: true },
+        ),
+      )
+      .toBeInTheDocument();
+    expect(settingsProfileLibraryStore.resolve("profile:mobile")?.clientSettings).toMatchObject({
+      sidebarThreadPreviewCount: 9,
+    });
+
+    await page.getByRole("button", { name: "Delete", exact: true }).click();
+    await page.getByRole("button", { name: "Delete profile", exact: true }).click();
+    await expect.element(page.getByText("Deleted “Mobile”.", { exact: true })).toBeInTheDocument();
+    expect(settingsProfileLibraryStore.getSnapshot().profiles).toEqual([]);
+  });
+
   it("refreshes the visible profile library after another window changes local storage", async () => {
     setServerConfigSnapshot(createBaseServerConfig());
     mounted = await renderWithTestRouter(
@@ -1287,6 +1372,44 @@ describe("settings panels", () => {
     await expect
       .element(page.getByRole("combobox", { name: "Active settings profile" }))
       .toHaveTextContent("Mobile");
+  });
+
+  it("treats a sparse active profile as current when loading it would make no change", async () => {
+    setServerConfigSnapshot(createBaseServerConfig());
+    localStorage.setItem(
+      SETTINGS_PROFILE_LIBRARY_STORAGE_KEY,
+      JSON.stringify({
+        version: 1,
+        activeProfileId: "profile:sparse",
+        profiles: [
+          {
+            name: "Sparse",
+            theme: "dark",
+            clientSettings: {},
+            createdAt: "2026-07-29T08:00:00.000Z",
+            updatedAt: "2026-07-29T08:00:00.000Z",
+          },
+        ],
+      }),
+    );
+    settingsProfileLibraryStore.refreshFromStorage();
+
+    mounted = await renderWithTestRouter(
+      <AppAtomRegistryProvider>
+        <AppearanceSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    await expect
+      .element(page.getByText("“Sparse” matches the current preferences.", { exact: true }))
+      .toBeInTheDocument();
+    await expect
+      .element(page.getByRole("button", { name: "Reload active settings profile" }))
+      .toBeDisabled();
+    await page.getByRole("button", { name: "Preview changes" }).click();
+    await expect
+      .element(page.getByRole("region", { name: "Changes from loading Sparse" }))
+      .toHaveTextContent("This profile would not change the current safe preferences.");
   });
 
   it("persists appearance preferences from Appearance settings", async () => {

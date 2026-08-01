@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   captureSettingsProfilePayload,
+  compareSettingsProfile,
   createSettingsProfileLibraryStore,
   mutateSettingsProfileLibrary,
   SETTINGS_PROFILE_CLIENT_FIELD_POLICY,
@@ -165,6 +166,58 @@ describe("settings profile library", () => {
     expect(payload.clientSettings).not.toHaveProperty("powerSaveBlockerMode");
     expect(payload.clientSettings).not.toHaveProperty("notificationsEnabled");
     expect(payload.clientSettings).not.toHaveProperty("defaultEditor");
+  });
+
+  it("previews only the safe sparse patch that loading a profile would apply", () => {
+    const store = createSettingsProfileLibraryStore(createStorage());
+    const saved = store.upsert("Sparse", {
+      theme: "dark",
+      clientSettings: {
+        timestampFormat: "24-hour",
+      },
+    }).profile;
+    const current = captureSettingsProfilePayload(
+      {
+        ...DEFAULT_UNIFIED_SETTINGS,
+        timestampFormat: "locale",
+        continueBackgroundAnimations: true,
+      },
+      "light",
+    );
+
+    expect(compareSettingsProfile(saved, current)).toEqual([
+      { key: "theme", savedValue: "dark", currentValue: "light" },
+      { key: "timestampFormat", savedValue: "24-hour", currentValue: "locale" },
+    ]);
+    expect(compareSettingsProfile(saved, current)).not.toContainEqual(
+      expect.objectContaining({ key: "continueBackgroundAnimations" }),
+    );
+    expect(Object.isFrozen(compareSettingsProfile(saved, current))).toBe(true);
+  });
+
+  it("does not execute accessor-backed values while building a profile preview", () => {
+    const getter = vi.fn(() => true);
+    const clientSettings = {};
+    Object.defineProperty(clientSettings, "continueBackgroundAnimations", {
+      enumerable: true,
+      get: getter,
+    });
+    const profile = {
+      id: "profile:hostile",
+      name: "Hostile",
+      theme: "dark",
+      clientSettings,
+      createdAt: "2026-07-29T08:00:00.000Z",
+      updatedAt: "2026-07-29T08:00:00.000Z",
+    };
+
+    expect(
+      compareSettingsProfile(
+        profile as never,
+        captureSettingsProfilePayload(DEFAULT_UNIFIED_SETTINGS, "dark"),
+      ),
+    ).toEqual([]);
+    expect(getter).not.toHaveBeenCalled();
   });
 
   it("persists named profiles and the active selection in a versioned local document", () => {
