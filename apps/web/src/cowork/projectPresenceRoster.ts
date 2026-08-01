@@ -32,16 +32,29 @@ export interface ProjectPresenceRosterState {
   readonly overflowCount: number;
 }
 
-const empty: ProjectPresenceRosterState = {
+interface ActiveSubscription {
+  readonly sharedProjectId: SharedProjectId;
+  closed: boolean;
+  unsubscribe: (() => void) | null;
+}
+
+const loadingState = (): ProjectPresenceRosterState => ({
   status: "loading",
   version: 0,
   participants: [],
   overflowCount: 0,
-};
+});
+
+function emptyState(
+  status: Extract<ProjectPresenceRosterState["status"], "resync-required" | "unavailable">,
+  version: number,
+): ProjectPresenceRosterState {
+  return { status, version, participants: [], overflowCount: 0 };
+}
 
 function aggregate(entries: ReadonlyArray<CollaborationPresenceRosterEntry>, limit: number) {
   const byUser = new Map<string, ProjectPresenceParticipant>();
-  for (const entry of entries) {
+  for (const entry of entries.slice(0, COLLABORATION_PRESENCE_ROSTER_MAX)) {
     const previous = byUser.get(entry.userId);
     const state =
       previous?.state === "online" || entry.state === "online"
@@ -53,10 +66,10 @@ function aggregate(entries: ReadonlyArray<CollaborationPresenceRosterEntry>, lim
     byUser.set(entry.userId, {
       userId: entry.userId,
       state,
-      capabilities: [...capabilities].sort() as ProjectPresenceParticipant["capabilities"],
+      capabilities: [...capabilities].toSorted() as ProjectPresenceParticipant["capabilities"],
     });
   }
-  const participants = [...byUser.values()].sort((a, b) => a.userId.localeCompare(b.userId));
+  const participants = [...byUser.values()].toSorted((a, b) => a.userId.localeCompare(b.userId));
   return {
     participants: participants.slice(0, limit),
     overflowCount: Math.max(0, participants.length - limit),
@@ -65,8 +78,11 @@ function aggregate(entries: ReadonlyArray<CollaborationPresenceRosterEntry>, lim
 
 export class ProjectPresenceRosterModel {
   #entries = new Map<string, CollaborationPresenceRosterEntry>();
-  #state: ProjectPresenceRosterState = empty;
-  #unsubscribe: (() => void) | null = null;
+  #state: ProjectPresenceRosterState = loadingState();
+  #active: ActiveSubscription | null = null;
+  #hasSnapshot = false;
+  #listeners = new Set<() => void>();
+
   constructor(
     readonly client: ProjectPresenceSubscriptionClient | null,
     readonly rosterLimit = COLLABORATION_PRESENCE_INITIAL_ROSTER_LIMIT,
@@ -75,49 +91,160 @@ export class ProjectPresenceRosterModel {
       !Number.isSafeInteger(rosterLimit) ||
       rosterLimit < 1 ||
       rosterLimit > COLLABORATION_PRESENCE_ROSTER_MAX
-    )
+    ) {
       throw new Error("invalid presence roster limit");
+    }
   }
-  get state() {
-    return this.#state;
-  }
+
+  readonly getSnapshot = (): ProjectPresenceRosterState => this.#state;
+
+  readonly subscribe = (listener: () => void): (() => void) => {
+    this.#listeners.add(listener);
+    return () => this.#listeners.delete(listener);
+  };
+
   start(sharedProjectId: SharedProjectId): void {
     this.stop();
     this.#entries.clear();
-    this.#state = empty;
-    if (!this.client) return;
-    this.#unsubscribe = this.client.subscribe({
-      sharedProjectId,
-      rosterLimit: this.rosterLimit,
-      onUpdate: (u) => this.apply(u),
-      onError: () => {
-        this.#state = { ...this.#state, status: "unavailable" };
-      },
-    });
-  }
-  stop(): void {
-    this.#unsubscribe?.();
-    this.#unsubscribe = null;
-  }
-  apply(update: CollaborationPresenceUpdate): void {
-    update.kind === "snapshot" ? this.snapshot(update.snapshot) : this.delta(update.delta);
-  }
-  private snapshot(snapshot: CollaborationPresenceSnapshot): void {
-    if (snapshot.version < this.#state.version) return;
-    this.#entries = new Map(snapshot.entries.map((entry) => [entry.sessionId, entry]));
-    this.publish("ready", snapshot.version);
-  }
-  private delta(delta: CollaborationPresenceDelta): void {
-    if (delta.version <= this.#state.version) return;
-    if (delta.version !== this.#state.version + 1) {
-      this.#state = { ...this.#state, status: "resync-required" };
+    this.#hasSnapshot = false;
+    this.#setState(loadingState());
+
+    if (!this.client) {
+      this.#setState(emptyState("unavailable", 0));
       return;
     }
-    for (const id of delta.removedSessionIds) this.#entries.delete(id);
-    for (const entry of delta.upserts) this.#entries.set(entry.sessionId, entry);
-    this.publish("ready", delta.version);
+
+    const active: ActiveSubscription = { sharedProjectId, closed: false, unsubscribe: null };
+    this.#active = active;
+
+    let unsubscribe: (() => void) | null = null;
+    try {
+      unsubscribe = this.client.subscribe({
+        sharedProjectId,
+        rosterLimit: this.rosterLimit,
+        onUpdate: (update) => {
+          if (this.#isActive(active)) this.#apply(active, update);
+        },
+        onError: () => {
+          if (this.#isActive(active)) this.#fail(active);
+        },
+      });
+    } catch {
+      this.#fail(active);
+      return;
+    }
+
+    if (!this.#isActive(active)) {
+      this.#invokeUnsubscribe(unsubscribe);
+      return;
+    }
+    active.unsubscribe = unsubscribe;
   }
-  private publish(status: ProjectPresenceRosterState["status"], version: number): void {
-    this.#state = { status, version, ...aggregate([...this.#entries.values()], this.rosterLimit) };
+
+  stop(): void {
+    const active = this.#active;
+    if (!active) return;
+    this.#close(active);
+  }
+
+  #apply(active: ActiveSubscription, update: CollaborationPresenceUpdate): void {
+    if (update.kind === "snapshot") {
+      this.#applySnapshot(active, update.snapshot);
+    } else {
+      this.#applyDelta(active, update.delta);
+    }
+  }
+
+  #applySnapshot(active: ActiveSubscription, snapshot: CollaborationPresenceSnapshot): void {
+    if (
+      snapshot.sharedProjectId !== active.sharedProjectId ||
+      snapshot.version < this.#state.version
+    )
+      return;
+    if (snapshot.entries.length > COLLABORATION_PRESENCE_ROSTER_MAX) {
+      this.#requireResync();
+      return;
+    }
+    this.#entries = new Map(snapshot.entries.map((entry) => [entry.sessionId, entry]));
+    this.#hasSnapshot = true;
+    this.#publish("ready", snapshot.version);
+  }
+
+  #applyDelta(active: ActiveSubscription, delta: CollaborationPresenceDelta): void {
+    if (
+      delta.sharedProjectId !== active.sharedProjectId ||
+      this.#state.status === "resync-required" ||
+      delta.version <= this.#state.version
+    ) {
+      return;
+    }
+    if (!this.#hasSnapshot || delta.version !== this.#state.version + 1) {
+      this.#requireResync();
+      return;
+    }
+    if (
+      delta.removedSessionIds.length > COLLABORATION_PRESENCE_ROSTER_MAX ||
+      delta.upserts.length > COLLABORATION_PRESENCE_ROSTER_MAX
+    ) {
+      this.#requireResync();
+      return;
+    }
+    const entries = new Map(this.#entries);
+    for (const id of delta.removedSessionIds) entries.delete(id);
+    for (const entry of delta.upserts) entries.set(entry.sessionId, entry);
+    if (entries.size > COLLABORATION_PRESENCE_ROSTER_MAX) {
+      this.#requireResync();
+      return;
+    }
+    this.#entries = entries;
+    this.#publish("ready", delta.version);
+  }
+
+  #requireResync(): void {
+    this.#entries.clear();
+    this.#hasSnapshot = false;
+    this.#setState(emptyState("resync-required", this.#state.version));
+  }
+
+  #fail(active: ActiveSubscription): void {
+    const version = this.#state.version;
+    this.#entries.clear();
+    this.#hasSnapshot = false;
+    this.#close(active);
+    this.#setState(emptyState("unavailable", version));
+  }
+
+  #close(active: ActiveSubscription): void {
+    if (active.closed) return;
+    active.closed = true;
+    if (this.#active === active) this.#active = null;
+    const unsubscribe = active.unsubscribe;
+    active.unsubscribe = null;
+    this.#invokeUnsubscribe(unsubscribe);
+  }
+
+  #isActive(active: ActiveSubscription): boolean {
+    return !active.closed && this.#active === active;
+  }
+
+  #invokeUnsubscribe(unsubscribe: (() => void) | null): void {
+    try {
+      unsubscribe?.();
+    } catch {
+      // The injected transport owns its diagnostics. UI cleanup must remain fail-closed.
+    }
+  }
+
+  #publish(status: ProjectPresenceRosterState["status"], version: number): void {
+    this.#setState({
+      status,
+      version,
+      ...aggregate([...this.#entries.values()], this.rosterLimit),
+    });
+  }
+
+  #setState(state: ProjectPresenceRosterState): void {
+    this.#state = state;
+    for (const listener of this.#listeners) listener();
   }
 }
