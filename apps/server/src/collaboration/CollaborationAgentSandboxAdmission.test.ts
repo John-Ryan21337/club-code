@@ -106,6 +106,8 @@ interface State {
   task: typeof baseTask;
   replicaGeneration: number;
   keyActive: boolean;
+  keyMaterial: number;
+  mutateAttestedPolicy: boolean;
   attestationMode: "valid" | "incomplete" | "wrong-hash" | "unsupported";
   onAttest?: () => void;
   auditEvents: Array<Record<string, unknown>>;
@@ -121,6 +123,8 @@ const makeState = (): State => ({
   task: baseTask,
   replicaGeneration: 1,
   keyActive: true,
+  keyMaterial: 0,
+  mutateAttestedPolicy: false,
   attestationMode: "valid",
   auditEvents: [],
   terminationMismatch: false,
@@ -135,7 +139,9 @@ const makeLayer = (state: State) =>
     Layer.succeed(CollaborationDeviceKeyAuthority, {
       getActiveEd25519PublicKey: (lookup) =>
         Effect.succeed(
-          state.keyActive ? { ...lookup, publicKeySpkiDer: new Uint8Array(44) } : null,
+          state.keyActive
+            ? { ...lookup, publicKeySpkiDer: new Uint8Array(44).fill(state.keyMaterial) }
+            : null,
         ),
     }),
     Layer.succeed(CollaborationTaskStore, {
@@ -219,9 +225,12 @@ const makeLayer = (state: State) =>
         ),
     }),
     Layer.succeed(CollaborationAgentIsolationAuthority, {
-      attest: ({ policySha256 }: { readonly policySha256: string }) =>
+      attest: ({ policy, policySha256 }) =>
         Effect.sync(() => {
           state.onAttest?.();
+          if (state.mutateAttestedPolicy) {
+            Reflect.set(policy.network.allowlist[0]!, "hostname", "attacker.example");
+          }
           if (state.attestationMode === "incomplete") return { available: false };
           const selectedBackend =
             state.attestationMode === "unsupported"
@@ -330,6 +339,25 @@ describe("CollaborationAgentSandboxAdmission", () => {
     }).pipe(Effect.provide(makeLayer(state)));
   });
 
+  it.effect("detaches attested policy and rejects an in-place device key swap", () => {
+    const state = makeState();
+    return Effect.gen(function* () {
+      yield* TestClock.setTime(NOW);
+      const service = yield* CollaborationAgentSandboxAdmissionService;
+
+      state.mutateAttestedPolicy = true;
+      const admitted = yield* service.admit({ principal, request });
+      assert.equal(admitted.policy.network.allowlist[0]?.hostname, "registry.example.com");
+
+      state.mutateAttestedPolicy = false;
+      state.onAttest = () => {
+        state.keyMaterial = 1;
+      };
+      const swappedKey = yield* service.admit({ principal, request }).pipe(Effect.flip);
+      expectFailure(swappedKey, "authority-changed");
+    }).pipe(Effect.provide(makeLayer(state)));
+  });
+
   it.effect(
     "fails closed when membership, device, task, or replica authority races attestation",
     () => {
@@ -406,6 +434,15 @@ describe("CollaborationAgentSandboxAdmission", () => {
             hostPath: "C:/Users/Alice/.ssh",
           },
         ];
+        expectFailure(
+          yield* service.admit({ principal, request }).pipe(Effect.flip),
+          "scope-unavailable",
+        );
+        state.toolchainsOverride = Array.from({ length: 9 }, (_, index) => ({
+          toolchainId: `toolchain-${index}`,
+          access: "read-only",
+          source: "club-managed-toolchain",
+        }));
         expectFailure(
           yield* service.admit({ principal, request }).pipe(Effect.flip),
           "scope-unavailable",

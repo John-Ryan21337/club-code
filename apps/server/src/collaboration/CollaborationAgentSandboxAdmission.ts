@@ -25,6 +25,7 @@ import {
   CollaborationAgentWritableScope,
   CollaborationManagedReplicaBinding,
 } from "@cafecode/contracts";
+import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 
 import * as Context from "effect/Context";
@@ -198,6 +199,12 @@ const policyHash = (policy: CollaborationAgentSandboxPolicyType) =>
     .update(JSON.stringify(encodePolicy(policy)))
     .digest("hex");
 
+/** Isolation adapters receive a detached policy, never the returned object. */
+const detachedPolicy = (policy: CollaborationAgentSandboxPolicyType) =>
+  decodePolicy(JSON.parse(JSON.stringify(encodePolicy(policy))), {
+    onExcessProperty: "error",
+  });
+
 const backendSupportedOnHost = (backend: CollaborationAgentIsolationAttestationType["backend"]) =>
   process.platform === "win32"
     ? backend.startsWith("windows-")
@@ -270,6 +277,7 @@ const makeService = Effect.succeed({
           key.publicKeySpkiDer.byteLength !== 44
         )
           return yield* Effect.fail(fail("admit", "device-key-unavailable"));
+        const devicePublicKey = Buffer.from(key.publicKeySpkiDer);
 
         const tasks = yield* CollaborationTaskStore;
         const task = yield* tasks
@@ -320,68 +328,78 @@ const makeService = Effect.succeed({
             Effect.flatMap((value) => decodeQuotas(value, { onExcessProperty: "error" })),
             Effect.mapError(() => fail("admit", "quota-policy-invalid")),
           );
-        const policy = decodePolicy(
-          {
-            version: 1,
-            admissionId: request.admissionId,
-            sharedProjectId: request.sharedProjectId,
-            taskId: request.taskId,
-            taskRevision: task.revision,
-            fencingToken: task.fencingToken,
-            leaseId: request.leaseId,
-            agentId: request.agentId,
-            actorUserId: principal.userId,
-            actorDeviceId: principal.deviceId,
-            membershipEpoch: principal.membershipEpoch,
-            isolation: {
-              mode: "strict-project",
-              hostAccess: "none",
-              privilegeEscalation: "deny",
-              providerDangerFullAccess: false,
-            },
-            filesystem: {
-              managedReplica: replica,
-              replicaAccess: "task-scoped-write",
-              writableScope: scope,
-              toolchains,
-              hostHome: "unmounted",
-              hostCredentials: "unmounted",
-              temporaryStorage: "ephemeral-private",
-            },
-            network,
-            quotas: quota,
-            environment: {
-              inheritHostEnvironment: false,
-              ephemeralHome: true,
-              credentialBroker: "none",
-              variables: {
-                CLUB_CODE_SHARED_AGENT: "1",
-                CI: "1",
-                NO_COLOR: "1",
-                LANG: "C.UTF-8",
-                TZ: "UTC",
+        const policy = yield* Effect.try({
+          try: () =>
+            decodePolicy(
+              {
+                version: 1,
+                admissionId: request.admissionId,
+                sharedProjectId: request.sharedProjectId,
+                taskId: request.taskId,
+                taskRevision: task.revision,
+                fencingToken: task.fencingToken,
+                leaseId: request.leaseId,
+                agentId: request.agentId,
+                actorUserId: principal.userId,
+                actorDeviceId: principal.deviceId,
+                membershipEpoch: principal.membershipEpoch,
+                isolation: {
+                  mode: "strict-project",
+                  hostAccess: "none",
+                  privilegeEscalation: "deny",
+                  providerDangerFullAccess: false,
+                },
+                filesystem: {
+                  managedReplica: replica,
+                  replicaAccess: "task-scoped-write",
+                  writableScope: scope,
+                  toolchains,
+                  hostHome: "unmounted",
+                  hostCredentials: "unmounted",
+                  temporaryStorage: "ephemeral-private",
+                },
+                network,
+                quotas: quota,
+                environment: {
+                  inheritHostEnvironment: false,
+                  ephemeralHome: true,
+                  credentialBroker: "none",
+                  variables: {
+                    CLUB_CODE_SHARED_AGENT: "1",
+                    CI: "1",
+                    NO_COLOR: "1",
+                    LANG: "C.UTF-8",
+                    TZ: "UTC",
+                  },
+                },
+                telemetry: {
+                  persistence: "metadata-only",
+                  promptPersistence: "forbidden",
+                  providerOutputPersistence: "forbidden",
+                  environmentPersistence: "forbidden",
+                },
+                lifecycle: {
+                  cancelSignal: "required",
+                  revocationSignal: "required",
+                  killScope: "entire-sandbox-process-tree",
+                },
               },
-            },
-            telemetry: {
-              persistence: "metadata-only",
-              promptPersistence: "forbidden",
-              providerOutputPersistence: "forbidden",
-              environmentPersistence: "forbidden",
-            },
-            lifecycle: {
-              cancelSignal: "required",
-              revocationSignal: "required",
-              killScope: "entire-sandbox-process-tree",
-            },
-          },
-          { onExcessProperty: "error" },
-        );
+              { onExcessProperty: "error" },
+            ),
+          // An authority may return an otherwise valid but oversized mount
+          // set. Keep that synchronous schema failure in the audited
+          // fail-closed admission path instead of escaping as a defect.
+          catch: () => fail("admit", "scope-unavailable"),
+        });
         const digest = policyHash(policy);
+        const policyForAttestation = detachedPolicy(policy);
         const isolation = yield* CollaborationAgentIsolationAuthority;
-        const attestation = yield* isolation.attest({ policy, policySha256: digest }).pipe(
-          Effect.flatMap((value) => decodeAttestation(value, { onExcessProperty: "error" })),
-          Effect.mapError(() => fail("admit", "isolation-unavailable")),
-        );
+        const attestation = yield* isolation
+          .attest({ policy: policyForAttestation, policySha256: digest })
+          .pipe(
+            Effect.flatMap((value) => decodeAttestation(value, { onExcessProperty: "error" })),
+            Effect.mapError(() => fail("admit", "isolation-unavailable")),
+          );
         const attestationNow = yield* DateTime.now;
         const attestationNowMillis = DateTime.toEpochMillis(attestationNow);
         const attestationIssued = DateTime.toEpochMillis(attestation.issuedAt);
@@ -423,7 +441,8 @@ const makeService = Effect.succeed({
           finalKey.deviceKeyId !== request.deviceKeyId ||
           finalKey.membershipEpoch !== principal.membershipEpoch ||
           !(finalKey.publicKeySpkiDer instanceof Uint8Array) ||
-          finalKey.publicKeySpkiDer.byteLength !== 44
+          finalKey.publicKeySpkiDer.byteLength !== 44 ||
+          !Buffer.from(finalKey.publicKeySpkiDer).equals(devicePublicKey)
         )
           return yield* Effect.fail(fail("admit", "authority-changed"));
         const finalTask = yield* tasks
@@ -437,7 +456,12 @@ const makeService = Effect.succeed({
           })
           .pipe(Effect.mapError(() => fail("admit", "authority-changed")));
         const finalNow = yield* DateTime.now;
-        if (attestationExpires <= DateTime.toEpochMillis(finalNow))
+        const finalNowMillis = DateTime.toEpochMillis(finalNow);
+        if (
+          finalNowMillis < attestationNowMillis ||
+          finalNowMillis < attestationIssued ||
+          attestationExpires <= finalNowMillis
+        )
           return yield* Effect.fail(fail("admit", "authority-changed"));
         yield* verifyTaskBinding(
           request,
