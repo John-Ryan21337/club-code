@@ -138,6 +138,22 @@ describe("CoworkDeviceEnrollmentModel", () => {
     });
   });
 
+  it("makes the signer-visible challenge transitively immutable", async () => {
+    const sign = vi.fn<CoworkDeviceEnrollmentSigner["signEnrollmentProof"]>(
+      async (signingChallenge) => {
+        expect(Reflect.set(signingChallenge.issuedAt, "epochMilliseconds", 0)).toBe(false);
+        expect(Reflect.set(signingChallenge.expiresAt, "epochMilliseconds", 0)).toBe(false);
+        return SIGNATURE;
+      },
+    );
+    const h = harness({ sign });
+    h.model.enroll(
+      vi.fn().mockReturnValueOnce("begin-command").mockReturnValueOnce("complete-command"),
+    );
+    await status(h.model, "activated");
+    expect(sign).toHaveBeenCalledOnce();
+  });
+
   it("retries an indeterminate begin with the same object and treats nonce-null replay as lost", async () => {
     const begin = vi
       .fn<CoworkDeviceEnrollmentClient["beginEnrollment"]>()
@@ -218,9 +234,54 @@ describe("CoworkDeviceEnrollmentModel", () => {
       const h = harness({ identity: { publicKeySpkiDer } });
       h.model.enroll(() => "begin-command");
       await vi.waitFor(() => expect(h.getPublicIdentity).toHaveBeenCalledOnce());
-      await status(h.model, "idle");
+      await status(h.model, "prepare-failed");
       expect(h.beginEnrollment).not.toHaveBeenCalled();
     }
+  });
+
+  it("captures only the exact adapter methods and does not publicly re-export capabilities", async () => {
+    const h = harness();
+    const swappedIdentity = vi.fn(async () => ({ ...scope, publicKeySpkiDer: PUBLIC_KEY }));
+    const swappedSign = vi.fn(async () => SIGNATURE);
+    const swappedBegin = vi.fn(async () => ({
+      disposition: "created",
+      challenge: challenge(),
+      nonce: NONCE,
+    }));
+    const swappedComplete = vi.fn(async () => activated());
+    Object.defineProperties(h.signer, {
+      getPublicIdentity: { configurable: true, value: swappedIdentity },
+      signEnrollmentProof: { configurable: true, value: swappedSign },
+    });
+    Object.defineProperties(h.client, {
+      beginEnrollment: { configurable: true, value: swappedBegin },
+      completeEnrollment: { configurable: true, value: swappedComplete },
+    });
+
+    h.model.enroll(
+      vi.fn().mockReturnValueOnce("begin-command").mockReturnValueOnce("complete-command"),
+    );
+    await status(h.model, "activated");
+
+    expect(h.getPublicIdentity).toHaveBeenCalledOnce();
+    expect(h.beginEnrollment).toHaveBeenCalledOnce();
+    expect(h.signEnrollmentProof).toHaveBeenCalledOnce();
+    expect(h.completeEnrollment).toHaveBeenCalledOnce();
+    expect(swappedIdentity).not.toHaveBeenCalled();
+    expect(swappedBegin).not.toHaveBeenCalled();
+    expect(swappedSign).not.toHaveBeenCalled();
+    expect(swappedComplete).not.toHaveBeenCalled();
+    expect(Object.hasOwn(h.model, "client")).toBe(false);
+    expect(Object.hasOwn(h.model, "signer")).toBe(false);
+  });
+
+  it("rejects proxy-wrapped scope before retaining or invoking adapter capabilities", () => {
+    const h = harness();
+    expect(
+      () => new CoworkDeviceEnrollmentModel(h.client, h.signer, new Proxy(scope, {})),
+    ).toThrow();
+    expect(h.getPublicIdentity).not.toHaveBeenCalled();
+    expect(h.beginEnrollment).not.toHaveBeenCalled();
   });
 
   it("rejects proxy, accessor, and excess-field adapter payloads fail closed", async () => {
@@ -236,6 +297,93 @@ describe("CoworkDeviceEnrollmentModel", () => {
       await status(h.model, "retry-begin");
       expect(h.signEnrollmentProof).not.toHaveBeenCalled();
     }
+
+    for (const payload of payloads) {
+      const h = harness({ complete: async () => payload });
+      h.model.enroll(
+        vi.fn().mockReturnValueOnce("begin-command").mockReturnValueOnce("complete-command"),
+      );
+      await status(h.model, "retry-complete");
+      expect(h.completeEnrollment).toHaveBeenCalledOnce();
+    }
+
+    const identityBase = { ...scope, publicKeySpkiDer: PUBLIC_KEY };
+    for (const identity of [
+      new Proxy(identityBase, {}),
+      Object.defineProperty({ ...identityBase }, "injected", {
+        enumerable: true,
+        get: () => true,
+      }),
+      { ...identityBase, injected: true },
+    ]) {
+      const h = harness({ getIdentity: async () => identity });
+      h.model.enroll(() => "begin-command");
+      await status(h.model, "prepare-failed");
+      expect(h.beginEnrollment).not.toHaveBeenCalled();
+    }
+  });
+
+  it("stops synchronously at every published lifecycle boundary before the next capability", async () => {
+    const cases = [
+      {
+        stopAt: "reading-signer",
+        assertStopped: (h: ReturnType<typeof harness>) =>
+          expect(h.getPublicIdentity).not.toHaveBeenCalled(),
+      },
+      {
+        stopAt: "beginning",
+        assertStopped: (h: ReturnType<typeof harness>) =>
+          expect(h.beginEnrollment).not.toHaveBeenCalled(),
+      },
+      {
+        stopAt: "signing",
+        assertStopped: (h: ReturnType<typeof harness>) =>
+          expect(h.signEnrollmentProof).not.toHaveBeenCalled(),
+      },
+      {
+        stopAt: "completing",
+        assertStopped: (h: ReturnType<typeof harness>) =>
+          expect(h.completeEnrollment).not.toHaveBeenCalled(),
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      const h = harness();
+      const unsubscribe = h.model.subscribe(() => {
+        if (h.model.getSnapshot().status === testCase.stopAt) h.model.stop();
+      });
+      h.model.enroll(
+        vi.fn().mockReturnValueOnce("begin-command").mockReturnValueOnce("complete-command"),
+      );
+      await vi.waitFor(() => expect(h.model.getSnapshot().status).toBe(testCase.stopAt));
+      await Promise.resolve();
+      testCase.assertStopped(h);
+      expect(JSON.stringify(h.model.getSnapshot())).not.toContain(NONCE);
+      expect(JSON.stringify(h.model.getSnapshot())).not.toContain(SIGNATURE);
+      unsubscribe();
+    }
+  });
+
+  it("does not reattach a nonce-bearing completion after command creation stops the model", async () => {
+    const h = harness();
+    const createCommandId = vi
+      .fn()
+      .mockReturnValueOnce("begin-command")
+      .mockImplementationOnce(() => {
+        h.model.stop();
+        return "complete-command";
+      });
+    h.model.enroll(createCommandId);
+    await vi.waitFor(() => expect(createCommandId).toHaveBeenCalledTimes(2));
+    await Promise.resolve();
+    expect(h.completeEnrollment).not.toHaveBeenCalled();
+
+    h.model.start();
+    h.model.enroll(
+      vi.fn().mockReturnValueOnce("new-begin-command").mockReturnValueOnce("new-complete-command"),
+    );
+    await status(h.model, "activated");
+    expect(h.completeEnrollment).toHaveBeenCalledOnce();
   });
 
   it("drops late begin results after stop and never signs them", async () => {
@@ -260,7 +408,7 @@ describe("CoworkDeviceEnrollmentModel", () => {
       }) as CoworkDeviceEnrollmentSigner["getPublicIdentity"],
     });
     syncIdentity.model.enroll(() => "begin-command");
-    await status(syncIdentity.model, "idle");
+    await status(syncIdentity.model, "prepare-failed");
     expect(syncIdentity.beginEnrollment).not.toHaveBeenCalled();
 
     const syncBegin = harness({
@@ -288,8 +436,24 @@ describe("CoworkDeviceEnrollmentModel", () => {
         hostileThenable) as unknown as CoworkDeviceEnrollmentSigner["getPublicIdentity"],
     });
     hostileIdentity.model.enroll(() => "begin-command");
-    await status(hostileIdentity.model, "idle");
+    await status(hostileIdentity.model, "prepare-failed");
     expect(hostileIdentity.beginEnrollment).not.toHaveBeenCalled();
+
+    const hostileSign = harness({
+      sign: (() =>
+        hostileThenable) as unknown as CoworkDeviceEnrollmentSigner["signEnrollmentProof"],
+    });
+    hostileSign.model.enroll(() => "begin-command");
+    await status(hostileSign.model, "retry-sign");
+
+    const hostileComplete = harness({
+      complete: (() =>
+        hostileThenable) as unknown as CoworkDeviceEnrollmentClient["completeEnrollment"],
+    });
+    hostileComplete.model.enroll(
+      vi.fn().mockReturnValueOnce("begin-command").mockReturnValueOnce("complete-command"),
+    );
+    await status(hostileComplete.model, "retry-complete");
 
     const syncSign = harness({
       sign: (() => {

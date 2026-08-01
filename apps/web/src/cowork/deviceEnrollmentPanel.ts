@@ -66,6 +66,7 @@ export interface CoworkDeviceEnrollmentSigner {
 
 export type CoworkDeviceEnrollmentStatus =
   | "idle"
+  | "prepare-failed"
   | "reading-signer"
   | "beginning"
   | "signing"
@@ -312,6 +313,14 @@ function timestamp(value: CoworkDeviceEnrollmentChallenge["issuedAt"]): string {
   return typeof value === "string" ? value : DateTime.formatIso(value);
 }
 
+function immutableChallenge(
+  challenge: CoworkDeviceEnrollmentChallenge,
+): Readonly<CoworkDeviceEnrollmentChallenge> {
+  if (typeof challenge.issuedAt !== "string") Object.freeze(challenge.issuedAt);
+  if (typeof challenge.expiresAt !== "string") Object.freeze(challenge.expiresAt);
+  return Object.freeze({ ...challenge });
+}
+
 function sameScope(
   identity: CoworkDeviceEnrollmentSignerIdentity,
   scope: CoworkDeviceEnrollmentScope,
@@ -346,6 +355,12 @@ function stateFor(
 
 export class CoworkDeviceEnrollmentModel {
   readonly #scope: CoworkDeviceEnrollmentScope;
+  readonly #client: CoworkDeviceEnrollmentClient;
+  readonly #signer: CoworkDeviceEnrollmentSigner;
+  readonly #beginEnrollment: CoworkDeviceEnrollmentClient["beginEnrollment"];
+  readonly #completeEnrollment: CoworkDeviceEnrollmentClient["completeEnrollment"];
+  readonly #getPublicIdentity: CoworkDeviceEnrollmentSigner["getPublicIdentity"];
+  readonly #signEnrollmentProof: CoworkDeviceEnrollmentSigner["signEnrollmentProof"];
   #state: CoworkDeviceEnrollmentState;
   #active: ActiveScope | null = null;
   #generation = 0;
@@ -356,11 +371,26 @@ export class CoworkDeviceEnrollmentModel {
   #listeners = new Set<() => void>();
 
   constructor(
-    readonly client: CoworkDeviceEnrollmentClient,
-    readonly signer: CoworkDeviceEnrollmentSigner,
+    client: CoworkDeviceEnrollmentClient,
+    signer: CoworkDeviceEnrollmentSigner,
     scope: CoworkDeviceEnrollmentScope,
   ) {
+    assertPlainData(scope, "enrollment scope");
     this.#scope = Object.freeze({ ...decodeScope(scope, strictOptions) });
+    this.#client = client;
+    this.#signer = signer;
+    this.#beginEnrollment = client.beginEnrollment;
+    this.#completeEnrollment = client.completeEnrollment;
+    this.#getPublicIdentity = signer.getPublicIdentity;
+    this.#signEnrollmentProof = signer.signEnrollmentProof;
+    if (
+      typeof this.#beginEnrollment !== "function" ||
+      typeof this.#completeEnrollment !== "function" ||
+      typeof this.#getPublicIdentity !== "function" ||
+      typeof this.#signEnrollmentProof !== "function"
+    ) {
+      throw new Error("device enrollment adapters must expose callable exact capabilities");
+    }
     this.#state = stateFor(this.#scope, "idle");
   }
 
@@ -399,7 +429,12 @@ export class CoworkDeviceEnrollmentModel {
       void this.#complete(active, this.#completeAttempt);
       return;
     }
-    if (this.#state.status !== "idle" && this.#state.status !== "activated") return;
+    if (
+      this.#state.status !== "idle" &&
+      this.#state.status !== "prepare-failed" &&
+      this.#state.status !== "activated"
+    )
+      return;
     this.#clearSecrets();
     void this.#prepare(active, createCommandId);
   }
@@ -419,18 +454,22 @@ export class CoworkDeviceEnrollmentModel {
   }
 
   async #prepare(active: ActiveScope, createCommandId: () => string): Promise<void> {
+    if (!this.#isActive(active)) return;
     this.#working = true;
     this.#setState(stateFor(this.#scope, "reading-signer"));
+    if (!this.#isActive(active)) return;
     try {
       const identity = decodeSignerIdentity(
-        await Reflect.apply(this.signer.getPublicIdentity, this.signer, []),
+        await Reflect.apply(this.#getPublicIdentity, this.#signer, []),
       );
       if (!this.#isActive(active)) return;
       if (!sameScope(identity, this.#scope)) throw new Error("signer identity scope mismatch");
+      const commandId = decodeCommandId(createCommandId(), strictOptions);
+      if (!this.#isActive(active)) return;
       const request = Object.freeze(
         decodeBeginRequest(
           {
-            commandId: decodeCommandId(createCommandId(), strictOptions),
+            commandId,
             sharedProjectId: this.#scope.sharedProjectId,
             publicKeySpkiDer: identity.publicKeySpkiDer,
           },
@@ -445,7 +484,7 @@ export class CoworkDeviceEnrollmentModel {
       if (!this.#isActive(active)) return;
       this.#working = false;
       this.#clearSecrets();
-      this.#setState(stateFor(this.#scope, "idle"));
+      this.#setState(stateFor(this.#scope, "prepare-failed"));
     }
   }
 
@@ -454,14 +493,15 @@ export class CoworkDeviceEnrollmentModel {
     attempt: BeginAttempt,
     createCommandId: () => string,
   ): Promise<void> {
-    if (this.#working) return;
+    if (this.#working || !this.#isCurrent(active, attempt)) return;
     this.#working = true;
     this.#setState(
       stateFor(this.#scope, "beginning", { publicKeySpkiDer: attempt.identity.publicKeySpkiDer }),
     );
+    if (!this.#isCurrent(active, attempt)) return;
     try {
       const result = decodeBeginResult(
-        await Reflect.apply(this.client.beginEnrollment, this.client, [attempt.request]),
+        await Reflect.apply(this.#beginEnrollment, this.#client, [attempt.request]),
       );
       if (!this.#isCurrent(active, attempt)) return;
       const challenge = result.challenge;
@@ -494,7 +534,10 @@ export class CoworkDeviceEnrollmentModel {
       if (result.nonce === null) throw new Error("a new challenge requires its one-time nonce");
       this.#beginAttempt = null;
       this.#working = false;
-      const secret = Object.freeze({ challenge: Object.freeze(challenge), nonce: result.nonce });
+      const secret = Object.freeze({
+        challenge: immutableChallenge(challenge),
+        nonce: result.nonce,
+      });
       this.#enrollment = secret;
       await this.#sign(active, secret, createCommandId);
     } catch {
@@ -515,7 +558,7 @@ export class CoworkDeviceEnrollmentModel {
     secret: EnrollmentSecret,
     createCommandId: () => string,
   ): Promise<void> {
-    if (this.#working) return;
+    if (this.#working || !this.#isActive(active) || this.#enrollment !== secret) return;
     this.#working = true;
     this.#setState(
       stateFor(this.#scope, "signing", {
@@ -525,9 +568,10 @@ export class CoworkDeviceEnrollmentModel {
         challengeExpiresAt: timestamp(secret.challenge.expiresAt),
       }),
     );
+    if (!this.#isActive(active) || this.#enrollment !== secret) return;
     try {
       const proofSignature = decodeSignature(
-        await Reflect.apply(this.signer.signEnrollmentProof, this.signer, [
+        await Reflect.apply(this.#signEnrollmentProof, this.#signer, [
           secret.challenge,
           secret.nonce,
         ]),
@@ -536,10 +580,12 @@ export class CoworkDeviceEnrollmentModel {
       const signatureBytes = decodeBase64Url(proofSignature);
       if (signatureBytes?.length !== 64) throw new Error("signer proof is not canonical");
       if (!this.#isActive(active) || this.#enrollment !== secret) return;
+      const commandId = decodeCommandId(createCommandId(), strictOptions);
+      if (!this.#isActive(active) || this.#enrollment !== secret) return;
       const request = Object.freeze(
         decodeCompleteRequest(
           {
-            commandId: decodeCommandId(createCommandId(), strictOptions),
+            commandId,
             sharedProjectId: this.#scope.sharedProjectId,
             challengeId: secret.challenge.challengeId,
             nonce: secret.nonce,
@@ -568,7 +614,7 @@ export class CoworkDeviceEnrollmentModel {
   }
 
   async #complete(active: ActiveScope, attempt: CompleteAttempt): Promise<void> {
-    if (this.#working) return;
+    if (this.#working || !this.#isActive(active) || this.#completeAttempt !== attempt) return;
     this.#working = true;
     this.#setState(
       stateFor(this.#scope, "completing", {
@@ -578,9 +624,10 @@ export class CoworkDeviceEnrollmentModel {
         challengeExpiresAt: timestamp(attempt.challenge.expiresAt),
       }),
     );
+    if (!this.#isActive(active) || this.#completeAttempt !== attempt) return;
     try {
       const result = decodeMutationResult(
-        await Reflect.apply(this.client.completeEnrollment, this.client, [attempt.request]),
+        await Reflect.apply(this.#completeEnrollment, this.#client, [attempt.request]),
       );
       if (!this.#isActive(active) || this.#completeAttempt !== attempt) return;
       const key = result.key;

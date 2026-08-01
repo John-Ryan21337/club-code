@@ -121,6 +121,26 @@ describe("CoworkDeviceEnrollmentPanel", () => {
     expect(h.completeEnrollment).toHaveBeenCalledTimes(1);
   });
 
+  it("reports signer preparation failure without claiming that a request was sent", async () => {
+    const h = harness();
+    h.getPublicIdentity.mockRejectedValueOnce(new Error("signer unavailable"));
+    mounted = await render(
+      <CoworkDeviceEnrollmentPanel
+        {...scope}
+        client={h.client}
+        signer={h.signer}
+        createCommandId={() => "browser-begin-command"}
+      />,
+    );
+    await page.getByRole("button", { name: "Enroll this device" }).click();
+    await expect.element(page.getByRole("status")).toHaveTextContent("could not be prepared");
+    await expect.element(page.getByRole("alert")).toHaveTextContent("No enrollment request");
+    await expect
+      .element(page.getByRole("button", { name: "Retry enrollment setup" }))
+      .toBeVisible();
+    expect(h.beginEnrollment).not.toHaveBeenCalled();
+  });
+
   it("makes a lost begin acknowledgement explicit and never signs a replay without its nonce", async () => {
     const h = harness();
     h.beginEnrollment.mockRejectedValueOnce(new Error("connection closed")).mockResolvedValueOnce({

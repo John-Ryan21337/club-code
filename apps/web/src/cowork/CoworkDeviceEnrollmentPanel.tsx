@@ -58,11 +58,13 @@ function Panel({
   const buttonLabel =
     state.status === "activated"
       ? "Rotate this device key"
-      : retrying
-        ? "Retry exact enrollment command"
-        : working
-          ? "Enrolling this device…"
-          : "Enroll this device";
+      : state.status === "prepare-failed"
+        ? "Retry enrollment setup"
+        : retrying
+          ? "Retry exact enrollment command"
+          : working
+            ? "Enrolling this device…"
+            : "Enroll this device";
 
   return (
     <section className="min-w-0 overflow-hidden" aria-labelledby={headingId}>
@@ -84,23 +86,25 @@ function Panel({
       <p aria-live="polite" aria-atomic="true" role="status">
         {state.status === "idle"
           ? "This device is ready for explicit enrollment."
-          : state.status === "reading-signer"
-            ? "Reading this device’s public signing identity."
-            : state.status === "beginning"
-              ? "Requesting one fixed-lifetime server challenge."
-              : state.status === "signing"
-                ? "The device signer is proving possession without exporting its private key."
-                : state.status === "completing"
-                  ? "Submitting the exact challenge proof."
-                  : state.status === "retry-begin"
-                    ? "The challenge acknowledgement is indeterminate."
-                    : state.status === "retry-sign"
-                      ? "The local proof was not produced."
-                      : state.status === "retry-complete"
-                        ? "The activation acknowledgement is indeterminate."
-                        : state.status === "lost-nonce"
-                          ? "The challenge exists, but its one-time nonce is unrecoverable."
-                          : "This device key is active."}
+          : state.status === "prepare-failed"
+            ? "The device signing identity or enrollment command could not be prepared."
+            : state.status === "reading-signer"
+              ? "Reading this device’s public signing identity."
+              : state.status === "beginning"
+                ? "Requesting one fixed-lifetime server challenge."
+                : state.status === "signing"
+                  ? "The device signer is proving possession without exporting its private key."
+                  : state.status === "completing"
+                    ? "Submitting the exact challenge proof."
+                    : state.status === "retry-begin"
+                      ? "The challenge acknowledgement is indeterminate."
+                      : state.status === "retry-sign"
+                        ? "The local proof was not produced."
+                        : state.status === "retry-complete"
+                          ? "The activation acknowledgement is indeterminate."
+                          : state.status === "lost-nonce"
+                            ? "The challenge exists, but its one-time nonce is unrecoverable."
+                            : "This device key is active."}
       </p>
 
       {state.deviceKeyId !== null ? (
@@ -117,6 +121,11 @@ function Panel({
         <p role="alert">
           An exact begin replay correctly returned no nonce. Club Code cannot reconstruct it or
           silently mint a replacement. Discard this attempt, then explicitly start a new challenge.
+        </p>
+      ) : null}
+      {state.status === "prepare-failed" ? (
+        <p role="alert">
+          No enrollment request was sent. Verify this device's signer, then retry explicitly.
         </p>
       ) : null}
       {retrying ? (
