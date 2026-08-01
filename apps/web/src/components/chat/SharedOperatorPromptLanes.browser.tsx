@@ -133,7 +133,7 @@ describe("shared operator prompt lanes", () => {
         page.getByRole("button", { name: "Merged" }).element().getAttribute("aria-pressed"),
       ).toBe("true");
       await page.getByRole("button", { name: "Side by side" }).click();
-      await expect.element(page.getByLabelText("Prompt lane for Operator 1")).toBeVisible();
+      await expect.element(page.getByLabelText("Prompt lane 2 of 2 for Operator 1")).toBeVisible();
       await expect.element(page.getByText("Operator prompt #4")).toBeVisible();
       await expect.element(page.getByText("Operator prompt #6")).toBeVisible();
       await expect
@@ -171,13 +171,15 @@ describe("shared operator prompt lanes", () => {
     try {
       await expect.element(page.getByText("Lane zero")).toBeVisible();
       await page.getByRole("button", { name: "Side by side" }).click();
-      expect(document.querySelectorAll('[aria-label^="Prompt lane for "]')).toHaveLength(20);
-      await expect.element(page.getByLabelText("Prompt lane for Operator 0")).toBeVisible();
-      expect(page.getByLabelText("Prompt lane for Operator 23").query()).toBeNull();
+      expect(document.querySelectorAll('[aria-label^="Prompt lane "]')).toHaveLength(20);
+      await expect.element(page.getByLabelText("Prompt lane 1 of 24 for Operator 0")).toBeVisible();
+      expect(page.getByLabelText("Prompt lane 24 of 24 for Operator 23").query()).toBeNull();
       await page.getByLabelText("First visible operator lane").selectOptions("4");
-      expect(document.querySelectorAll('[aria-label^="Prompt lane for "]')).toHaveLength(20);
-      await expect.element(page.getByLabelText("Prompt lane for Operator 23")).toBeVisible();
-      expect(page.getByLabelText("Prompt lane for Operator 0").query()).toBeNull();
+      expect(document.querySelectorAll('[aria-label^="Prompt lane "]')).toHaveLength(20);
+      await expect
+        .element(page.getByLabelText("Prompt lane 24 of 24 for Operator 23"))
+        .toBeVisible();
+      expect(page.getByLabelText("Prompt lane 1 of 24 for Operator 0").query()).toBeNull();
       expect(readAuthoredMessages).toHaveBeenCalledTimes(1);
     } finally {
       await mounted.unmount();
@@ -212,7 +214,7 @@ describe("shared operator prompt lanes", () => {
       await expect
         .element(
           page.getByText(
-            "1 prompt from former project operators remain available in the merged view.",
+            "1 prompt from former project operators remains available in the merged view.",
           ),
         )
         .toBeVisible();
@@ -257,6 +259,148 @@ describe("shared operator prompt lanes", () => {
         page.getByRole("button", { name: "Merged" }).element().getAttribute("aria-pressed"),
       ).toBe("true");
       await vi.waitFor(() => expect(readAuthoredMessages).toHaveBeenCalledTimes(2));
+    } finally {
+      await mounted.unmount();
+    }
+  });
+
+  it("resets presentation across injected-client replacement without resurrecting old state", async () => {
+    const never = new Promise<CollaborationAuthoredMessagePage>(() => undefined);
+    const firstRead = vi
+      .fn<SharedOperatorPromptTimelineClient["readAuthoredMessages"]>()
+      .mockResolvedValueOnce(
+        promptPage([
+          prompt({ projectSequence: 1, operatorSequence: 1, body: "FIRST_CLIENT_BODY" }),
+        ]),
+      )
+      .mockImplementationOnce(() => never);
+    const secondRead = vi
+      .fn<SharedOperatorPromptTimelineClient["readAuthoredMessages"]>()
+      .mockImplementation(() => never);
+    const firstClient = { readAuthoredMessages: firstRead };
+    const secondClient = { readAuthoredMessages: secondRead };
+    const mounted = await render(
+      <SharedOperatorPromptTimeline
+        client={firstClient}
+        currentUserId={currentUserId}
+        participants={[participant(0)]}
+        projectId={projectId}
+      />,
+    );
+    try {
+      await expect.element(page.getByText("FIRST_CLIENT_BODY")).toBeVisible();
+      await page.getByRole("button", { name: "Side by side" }).click();
+      await mounted.rerender(
+        <SharedOperatorPromptTimeline
+          client={secondClient}
+          currentUserId={currentUserId}
+          participants={[participant(0)]}
+          projectId={projectId}
+        />,
+      );
+      expect(document.body.textContent).not.toContain("FIRST_CLIENT_BODY");
+      expect(
+        page.getByRole("button", { name: "Merged" }).element().getAttribute("aria-pressed"),
+      ).toBe("true");
+      await vi.waitFor(() => expect(secondRead).toHaveBeenCalledTimes(1));
+
+      await mounted.rerender(
+        <SharedOperatorPromptTimeline
+          client={firstClient}
+          currentUserId={currentUserId}
+          participants={[participant(0)]}
+          projectId={projectId}
+        />,
+      );
+      expect(document.body.textContent).not.toContain("FIRST_CLIENT_BODY");
+      expect(
+        page.getByRole("button", { name: "Merged" }).element().getAttribute("aria-pressed"),
+      ).toBe("true");
+      await vi.waitFor(() => expect(firstRead).toHaveBeenCalledTimes(2));
+    } finally {
+      await mounted.unmount();
+    }
+  });
+
+  it("gives duplicate Unicode names positional labels and component-local selector ids", async () => {
+    const longName = `夜${"界".repeat(80)}`;
+    const roster = Array.from({ length: 24 }, (_, index) => ({
+      ...participant(index),
+      displayName: index < 2 ? longName : `Operator ${index}`,
+    }));
+    const makeClient = () => ({
+      readAuthoredMessages: vi.fn(async () =>
+        promptPage([
+          prompt({ projectSequence: 1, operatorSequence: 1, body: "First panel prompt" }),
+          prompt({
+            projectSequence: 2,
+            operatorSequence: 1,
+            authorIndex: 1,
+            body: "Second prompt",
+          }),
+        ]),
+      ),
+    });
+    const firstClient = makeClient();
+    const secondClient = makeClient();
+    const mounted = await render(
+      <div>
+        <SharedOperatorPromptTimeline
+          client={firstClient}
+          currentUserId={currentUserId}
+          participants={roster}
+          projectId={projectId}
+        />
+        <SharedOperatorPromptTimeline
+          client={secondClient}
+          currentUserId={currentUserId}
+          participants={roster}
+          projectId={projectId}
+        />
+      </div>,
+    );
+    try {
+      await vi.waitFor(() => {
+        expect(firstClient.readAuthoredMessages).toHaveBeenCalledTimes(1);
+        expect(secondClient.readAuthoredMessages).toHaveBeenCalledTimes(1);
+      });
+      const sideBySideButtons = [...document.querySelectorAll("button")].filter(
+        (button) => button.textContent?.trim() === "Side by side",
+      );
+      expect(sideBySideButtons).toHaveLength(2);
+      sideBySideButtons.forEach((button) => button.click());
+      await vi.waitFor(() => {
+        const selectorLabels = [...document.querySelectorAll("label")].filter(
+          (label) => label.textContent === "First visible operator lane",
+        );
+        expect(selectorLabels).toHaveLength(2);
+      });
+      const labels = [...document.querySelectorAll("label")].filter(
+        (label) => label.textContent === "First visible operator lane",
+      );
+      const selectorIds = labels.map((label) => label.htmlFor);
+      expect(labels).toHaveLength(2);
+      expect(new Set(selectorIds).size).toBe(2);
+      selectorIds.forEach((selectorId) =>
+        expect(document.getElementById(selectorId)).not.toBeNull(),
+      );
+      const laneLabels = [...document.querySelectorAll<HTMLElement>('[aria-label^="Prompt lane "]')]
+        .map((lane) => lane.getAttribute("aria-label"))
+        .filter((label): label is string => label !== null && label.includes(longName));
+      expect(new Set(laneLabels)).toEqual(
+        new Set([`Prompt lane 1 of 24 for ${longName}`, `Prompt lane 2 of 24 for ${longName}`]),
+      );
+      const promptListLabels = [
+        ...document.querySelectorAll<HTMLElement>('[aria-label^="Prompts in lane "]'),
+      ]
+        .map((list) => list.getAttribute("aria-label"))
+        .filter((label): label is string => label !== null && label.includes(longName));
+      expect(new Set(promptListLabels)).toEqual(
+        new Set([
+          `Prompts in lane 1 of 24 authored by ${longName}`,
+          `Prompts in lane 2 of 24 authored by ${longName}`,
+        ]),
+      );
     } finally {
       await mounted.unmount();
     }

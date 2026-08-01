@@ -68,9 +68,10 @@ describe("shared operator prompt lane presentation", () => {
     expect(middle.totalLaneCount).toBe(24);
 
     const bounded = buildSharedOperatorPromptLaneWindow([], authors, 999);
-    expect(bounded.windowStart).toBe(23);
-    expect(bounded.lanes).toHaveLength(1);
-    expect(bounded.lanes[0]!.userId).toBe("operator-23");
+    expect(bounded.windowStart).toBe(4);
+    expect(bounded.lanes).toHaveLength(SHARED_OPERATOR_PROMPT_VISIBLE_LANE_LIMIT);
+    expect(bounded.lanes[0]!.userId).toBe("operator-4");
+    expect(bounded.lanes.at(-1)!.userId).toBe("operator-23");
   });
 
   it("does not invent attribution for former operators", () => {
@@ -142,5 +143,29 @@ describe("shared operator prompt lane presentation", () => {
     expect(() => buildSharedOperatorPromptLaneWindow([hostile], [author(0)], 0)).toThrow(
       /inspected safely/,
     );
+  });
+
+  it("rejects unsafe attribution controls and bodies outside the parent admission boundary", () => {
+    expect(() =>
+      buildSharedOperatorPromptLaneWindow(
+        [],
+        [{ ...author(0), displayName: "Operator\u202eYou" }],
+        0,
+      ),
+    ).toThrow(/displayName/);
+    expect(() =>
+      buildSharedOperatorPromptLaneWindow(
+        [entry({ projectSequence: 1, operatorSequence: 1, body: "   " })],
+        [author(0)],
+        0,
+      ),
+    ).toThrow(/body/);
+    expect(() =>
+      buildSharedOperatorPromptLaneWindow(
+        [entry({ projectSequence: 1, operatorSequence: 1, body: "unsafe\uD800" })],
+        [author(0)],
+        0,
+      ),
+    ).toThrow(/body/);
   });
 });

@@ -122,6 +122,24 @@ function positiveSafeInteger(value: unknown, label: string): number {
   return value as number;
 }
 
+function hasUnsafeAttributionControl(value: string): boolean {
+  for (const character of value) {
+    const codePoint = character.codePointAt(0)!;
+    if (
+      codePoint <= 0x1f ||
+      (codePoint >= 0x7f && codePoint <= 0x9f) ||
+      codePoint === 0x200e ||
+      codePoint === 0x200f ||
+      (codePoint >= 0x202a && codePoint <= 0x202e) ||
+      (codePoint >= 0x2066 && codePoint <= 0x2069) ||
+      (codePoint >= 0xd800 && codePoint <= 0xdfff)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function snapshotEntry(value: unknown, index: number): SharedOperatorPromptEntry {
   const label = `prompt entries[${index}]`;
   const candidate = exactRecord(
@@ -154,6 +172,8 @@ function snapshotEntry(value: unknown, index: number): SharedOperatorPromptEntry
     (typeof candidate.body !== "string" ||
       candidate.body.length === 0 ||
       candidate.body.length > COLLABORATION_AUTHORED_MESSAGE_MAX_CHARS ||
+      candidate.body.trim().length === 0 ||
+      /[\uD800-\uDFFF]/u.test(candidate.body) ||
       new TextEncoder().encode(candidate.body).byteLength >
         COLLABORATION_AUTHORED_MESSAGE_MAX_UTF8_BYTES)
   ) {
@@ -197,7 +217,9 @@ function snapshotAuthor(value: unknown, index: number): SharedOperatorPromptAuth
   if (
     typeof candidate.displayName !== "string" ||
     candidate.displayName.length === 0 ||
-    candidate.displayName.length > 128
+    candidate.displayName.length > 128 ||
+    candidate.displayName.trim() !== candidate.displayName ||
+    hasUnsafeAttributionControl(candidate.displayName)
   ) {
     fail(`${label}.displayName is invalid`);
   }
@@ -258,7 +280,10 @@ export function buildSharedOperatorPromptLaneWindow(
   }
 
   const totalLaneCount = authors.length;
-  const maximumWindowStart = Math.max(0, totalLaneCount - 1);
+  const maximumWindowStart = Math.max(
+    0,
+    totalLaneCount - SHARED_OPERATOR_PROMPT_VISIBLE_LANE_LIMIT,
+  );
   const windowStart = Math.min(requestedWindowStart, maximumWindowStart);
   const visibleAuthors = authors.slice(
     windowStart,

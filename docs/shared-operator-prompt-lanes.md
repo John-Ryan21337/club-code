@@ -11,7 +11,9 @@ The merged view preserves authoritative project order. Side-by-side lanes use on
 current roster snapshot for attribution and preserve each operator's validated monotonic
 `operatorSequence`. At most 20 participant lanes render simultaneously in a bounded horizontal
 scroll region. If the authenticated roster is larger, an explicit first-lane selector moves that
-20-lane window; it never expands the record or transport bounds. Prompts authored by operators who
+full 20-lane window and clamps at the final complete window; it never expands the record or
+transport bounds. Duplicate or long Unicode display names retain exact roster attribution while
+assistive labels add only lane position, never user IDs. Prompts authored by operators who
 are no longer in the current roster remain visible under the fixed former-operator attribution in
 merged mode, but are not assigned to a current participant lane.
 
