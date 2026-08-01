@@ -117,7 +117,9 @@ describe("CoworkMembershipInvitationPanel", () => {
     await expect.element(page.getByText("Browser Owner")).toBeVisible();
     await expect.element(page.getByRole("list", { name: "Pending invitations" })).toBeVisible();
     await expect.element(page.getByText(/viewer invitation invite-browser/)).toBeVisible();
-    await expect.element(page.getByRole("button", { name: "Revoke invitation" })).toBeVisible();
+    await expect
+      .element(page.getByRole("button", { name: "Revoke invitation invite-browser" }))
+      .toBeVisible();
     expect(document.body.textContent).not.toContain("secret");
     expect(load).toHaveBeenCalledWith({ sharedProjectId: PROJECT_A, limit: 100 });
   });
@@ -140,14 +142,16 @@ describe("CoworkMembershipInvitationPanel", () => {
         createCommandId={createCommandId}
       />,
     );
-    const revoke = page.getByRole("button", { name: "Revoke invitation" });
+    const revoke = page.getByRole("button", { name: "Revoke invitation invite-browser" });
     await expect.element(revoke).toBeVisible();
     await revoke.click();
-    await expect.element(page.getByRole("button", { name: "Revoking…" })).toBeDisabled();
+    await expect
+      .element(page.getByRole("button", { name: "Revoking invitation invite-browser" }))
+      .toBeDisabled();
     expect(revokeInvitation).toHaveBeenCalledTimes(1);
 
     rejectFirst(new Error("lost response"));
-    const retry = page.getByRole("button", { name: "Retry revoke" });
+    const retry = page.getByRole("button", { name: "Retry revoke invitation invite-browser" });
     await expect.element(retry).toBeVisible();
     await expect.element(page.getByRole("alert")).toHaveTextContent("Retry uses the same command");
     await retry.click();
@@ -155,6 +159,44 @@ describe("CoworkMembershipInvitationPanel", () => {
     await expect.element(page.getByText("No pending invitations.")).toBeVisible();
     expect(createCommandId).toHaveBeenCalledTimes(1);
     expect(revokeInvitation.mock.calls[1]![0]).toBe(revokeInvitation.mock.calls[0]![0]);
+  });
+
+  it("disambiguates invitation actions and disables other revokes while one is active", async () => {
+    const response = readPage();
+    response.invitations.push({
+      ...response.invitations[0]!,
+      invitationId: "invite-browser-2",
+    });
+    const revokeInvitation = vi.fn<MembershipInvitationClient["revokeInvitation"]>(
+      () => new Promise(() => undefined),
+    );
+    const client: MembershipInvitationClient = {
+      load: vi.fn(async () => response),
+      revokeInvitation,
+    };
+    mounted = await render(
+      <CoworkMembershipInvitationPanel
+        client={client}
+        sharedProjectId={PROJECT_A}
+        actorUserId={OWNER}
+        createCommandId={() => "browser-active-command"}
+      />,
+    );
+
+    const first = page.getByRole("button", {
+      name: "Revoke invitation invite-browser",
+      exact: true,
+    });
+    await expect.element(first).toBeVisible();
+    await first.click();
+
+    await expect
+      .element(page.getByRole("button", { name: "Revoking invitation invite-browser" }))
+      .toBeDisabled();
+    await expect
+      .element(page.getByRole("button", { name: "Wait to revoke invitation invite-browser-2" }))
+      .toBeDisabled();
+    expect(revokeInvitation).toHaveBeenCalledTimes(1);
   });
 
   it("does not expose a stale StrictMode load after a project switch", async () => {

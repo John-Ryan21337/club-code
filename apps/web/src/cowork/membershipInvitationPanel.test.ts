@@ -99,11 +99,20 @@ function harness(load: MembershipInvitationClient["load"] = vi.fn(async () => pa
 }
 
 async function settle() {
-  await Promise.resolve();
-  await Promise.resolve();
+  for (let index = 0; index < 6; index += 1) await Promise.resolve();
 }
 
 describe("MembershipInvitationPanelModel", () => {
+  it("starts with a deeply immutable empty snapshot", () => {
+    const { client } = harness();
+    const model = new MembershipInvitationPanelModel(client, OWNER, PROJECT_A);
+    const state = model.getSnapshot();
+
+    expect(Object.isFrozen(state)).toBe(true);
+    expect(Object.isFrozen(state.members)).toBe(true);
+    expect(Object.isFrozen(state.invitations)).toBe(true);
+  });
+
   it("loads a bounded project-scoped snapshot and detaches it from mutable input", async () => {
     const source = page();
     const { client } = harness(async () => source);
@@ -137,6 +146,18 @@ describe("MembershipInvitationPanelModel", () => {
     ["duplicate invitation", () => page(PROJECT_A, "owner", [invitation(), invitation()])],
     ["cursor beyond revision", () => ({ ...page(), nextCursor: 13 })],
     ["secret-bearing excess field", () => ({ ...page(), invitationSecret: "do-not-render" })],
+    [
+      "overlong invitation interval",
+      () => ({
+        ...page(),
+        invitations: [
+          {
+            ...invitation(),
+            expiresAt: "2026-09-01T12:00:00.001Z",
+          },
+        ],
+      }),
+    ],
     ["unknown actor", () => page()],
   ])("rejects hostile read payload: %s", async (_name, makePayload) => {
     const actor = _name === "unknown actor" ? decodeUserId("not-a-member") : OWNER;
@@ -151,6 +172,58 @@ describe("MembershipInvitationPanelModel", () => {
       members: [],
       invitations: [],
     });
+  });
+
+  it("rejects inherited or accessor-backed adapter data without invoking the accessor", async () => {
+    let accessorReads = 0;
+    const accessorPage = page();
+    const snapshot = accessorPage.snapshot;
+    Object.defineProperty(accessorPage, "snapshot", {
+      enumerable: true,
+      get: () => {
+        accessorReads += 1;
+        return snapshot;
+      },
+    });
+    const inheritedPage = page();
+    Object.setPrototypeOf(inheritedPage, { credential: "must-not-be-observed" });
+    const load = vi
+      .fn<MembershipInvitationClient["load"]>()
+      .mockResolvedValueOnce(accessorPage)
+      .mockResolvedValueOnce(inheritedPage);
+    const { client } = harness(load);
+    const model = new MembershipInvitationPanelModel(client, OWNER, PROJECT_A);
+
+    model.start(PROJECT_A);
+    await settle();
+    expect(model.getSnapshot().status).toBe("unavailable");
+    expect(accessorReads).toBe(0);
+
+    model.start(PROJECT_A);
+    await settle();
+    expect(model.getSnapshot().status).toBe("unavailable");
+  });
+
+  it("publishes deterministic member and invitation ordering", async () => {
+    const unordered = page(PROJECT_A, "owner", [
+      invitation(PROJECT_A, "invite-2"),
+      invitation(PROJECT_A, "invite-1"),
+    ]);
+    unordered.snapshot.members.reverse();
+    const { client } = harness(async () => unordered);
+    const model = new MembershipInvitationPanelModel(client, OWNER, PROJECT_A);
+
+    model.start(PROJECT_A);
+    await settle();
+
+    expect(model.getSnapshot().members.map(({ displayName }) => displayName)).toEqual([
+      "Project Owner",
+      "Project Viewer",
+    ]);
+    expect(model.getSnapshot().invitations.map(({ invitationId }) => invitationId)).toEqual([
+      "invite-1",
+      "invite-2",
+    ]);
   });
 
   it("never offers revocation above the current actor role ceiling", async () => {
@@ -203,6 +276,34 @@ describe("MembershipInvitationPanelModel", () => {
     expect(model.getSnapshot().invitations).toEqual([]);
   });
 
+  it("permits only one active revoke across the project", async () => {
+    const pending = deferred<unknown>();
+    const { client, revokeInvitation } = harness(async () =>
+      page(PROJECT_A, "owner", [
+        invitation(PROJECT_A, "invite-1"),
+        invitation(PROJECT_A, "invite-2"),
+      ]),
+    );
+    revokeInvitation.mockImplementationOnce(() => pending.promise);
+    const commandFactory = vi
+      .fn<() => string>()
+      .mockReturnValueOnce("first-command")
+      .mockReturnValueOnce("second-command");
+    const model = new MembershipInvitationPanelModel(client, OWNER, PROJECT_A);
+    model.start(PROJECT_A);
+    await settle();
+
+    model.revokeInvitation("invite-1" as never, commandFactory);
+    model.revokeInvitation("invite-2" as never, commandFactory);
+
+    expect(revokeInvitation).toHaveBeenCalledTimes(1);
+    expect(commandFactory).toHaveBeenCalledTimes(1);
+    expect(model.getSnapshot().invitations).toMatchObject([
+      { invitationId: "invite-1", revokeBlocked: false, revokeStatus: "pending" },
+      { invitationId: "invite-2", revokeBlocked: true, revokeStatus: "idle" },
+    ]);
+  });
+
   it("fails closed on a stale or hostile mutation response without replacing the command", async () => {
     const { client, revokeInvitation } = harness();
     revokeInvitation.mockResolvedValueOnce({
@@ -222,6 +323,79 @@ describe("MembershipInvitationPanelModel", () => {
     model.revokeInvitation("invite-1" as never, commandFactory);
     expect(commandFactory).toHaveBeenCalledTimes(1);
     expect(revokeInvitation.mock.calls[1]![0]).toBe(revokeInvitation.mock.calls[0]![0]);
+  });
+
+  it("refreshes current authority after an indeterminate revoke before allowing retry", async () => {
+    const revokedAuthority = page();
+    revokedAuthority.snapshot.epoch = 8;
+    revokedAuthority.snapshot.members[0] = member("owner-1", "viewer");
+    const load = vi
+      .fn<MembershipInvitationClient["load"]>()
+      .mockResolvedValueOnce(page())
+      .mockResolvedValueOnce(revokedAuthority);
+    const { client, revokeInvitation } = harness(load);
+    revokeInvitation.mockRejectedValueOnce(new Error("credential=/private/secret"));
+    const commandFactory = vi.fn(() => "refresh-command");
+    const model = new MembershipInvitationPanelModel(client, OWNER, PROJECT_A);
+    model.start(PROJECT_A);
+    await settle();
+
+    model.revokeInvitation("invite-1" as never, commandFactory);
+    await settle();
+
+    expect(load).toHaveBeenCalledTimes(2);
+    expect(model.getSnapshot()).toMatchObject({
+      status: "ready",
+      epoch: 8,
+      actorRole: "viewer",
+      invitations: [{ invitationId: "invite-1", canRevoke: false, revokeStatus: "idle" }],
+    });
+    expect(JSON.stringify(model.getSnapshot())).not.toContain("credential");
+    model.revokeInvitation("invite-1" as never, commandFactory);
+    expect(revokeInvitation).toHaveBeenCalledTimes(1);
+    expect(commandFactory).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["epoch rollback", 6],
+    ["membership change under a reused epoch", 7],
+  ])("rejects %s during a failed-revoke authority refresh", async (_name, epoch) => {
+    const regressed = page();
+    regressed.snapshot.epoch = epoch;
+    regressed.snapshot.members[0] = member("owner-1", "viewer");
+    const load = vi
+      .fn<MembershipInvitationClient["load"]>()
+      .mockResolvedValueOnce(page())
+      .mockResolvedValueOnce(regressed);
+    const { client, revokeInvitation } = harness(load);
+    revokeInvitation.mockRejectedValueOnce(new Error("indeterminate"));
+    const model = new MembershipInvitationPanelModel(client, OWNER, PROJECT_A);
+    model.start(PROJECT_A);
+    await settle();
+
+    model.revokeInvitation("invite-1" as never, () => "rollback-command");
+    await settle();
+
+    expect(model.getSnapshot()).toMatchObject({
+      epoch: 7,
+      actorRole: "owner",
+      invitations: [{ invitationId: "invite-1", canRevoke: true, revokeStatus: "failed" }],
+    });
+  });
+
+  it("isolates throwing subscribers so loading and other subscribers still progress", async () => {
+    const { client } = harness();
+    const model = new MembershipInvitationPanelModel(client, OWNER, PROJECT_A);
+    const observed = vi.fn();
+    model.subscribe(() => {
+      throw new Error("observer failure");
+    });
+    model.subscribe(observed);
+
+    expect(() => model.start(PROJECT_A)).not.toThrow();
+    await settle();
+    expect(model.getSnapshot().status).toBe("ready");
+    expect(observed).toHaveBeenCalled();
   });
 
   it("ignores late loads and mutations after a project switch or stop", async () => {
@@ -266,6 +440,29 @@ describe("MembershipInvitationPanelModel", () => {
     const stopped = model.getSnapshot();
     pending.resolve({ disposition: "applied", member: null, membershipEpoch: 7 });
     await settle();
+    expect(model.getSnapshot()).toBe(stopped);
+  });
+
+  it("ignores a late failed-revoke authority refresh after stop", async () => {
+    const refresh = deferred<unknown>();
+    const load = vi
+      .fn<MembershipInvitationClient["load"]>()
+      .mockResolvedValueOnce(page())
+      .mockImplementationOnce(() => refresh.promise);
+    const { client, revokeInvitation } = harness(load);
+    revokeInvitation.mockRejectedValueOnce(new Error("indeterminate"));
+    const model = new MembershipInvitationPanelModel(client, OWNER, PROJECT_A);
+    model.start(PROJECT_A);
+    await settle();
+    model.revokeInvitation("invite-1" as never, () => "stopped-refresh-command");
+    await settle();
+    expect(model.getSnapshot().invitations[0]?.revokeStatus).toBe("refreshing");
+
+    model.stop();
+    const stopped = model.getSnapshot();
+    refresh.resolve(page());
+    await settle();
+
     expect(model.getSnapshot()).toBe(stopped);
   });
 

@@ -47,7 +47,7 @@ function MembershipInvitationPanelInner({
   };
 
   return (
-    <section aria-labelledby={headingId}>
+    <section className="min-w-0 overflow-hidden" aria-labelledby={headingId}>
       <h2 id={headingId}>Project access</h2>
       <p aria-live="polite" aria-atomic="true" role="status">
         {state.status === "loading"
@@ -64,10 +64,11 @@ function MembershipInvitationPanelInner({
             {state.nextCursor}.
           </p>
           <h3>Members</h3>
-          <ul aria-label="Project members">
+          <ul className="min-w-0" aria-label="Project members">
             {state.members.map((member) => (
-              <li key={member.userId}>
-                <span>{member.displayName}</span> <span>({member.userId})</span>: {member.role}
+              <li className="min-w-0 break-words" key={member.userId}>
+                <span>{member.displayName}</span>{" "}
+                <span className="break-all">({member.userId})</span>: {member.role}
               </li>
             ))}
           </ul>
@@ -76,28 +77,48 @@ function MembershipInvitationPanelInner({
           {state.invitations.length === 0 ? (
             <p>No pending invitations.</p>
           ) : (
-            <ul aria-label="Pending invitations">
+            <ul className="min-w-0" aria-label="Pending invitations">
               {state.invitations.map((invitation) => (
-                <li key={invitation.invitationId}>
-                  <p>
-                    <span>{invitation.role}</span> invitation {invitation.invitationId}
+                <li className="min-w-0 break-words" key={invitation.invitationId}>
+                  <p className="min-w-0">
+                    <span>{invitation.role}</span> invitation{" "}
+                    <span className="break-all">{invitation.invitationId}</span>
                   </p>
-                  <p>
-                    Created by {invitation.createdByUserId}; valid{" "}
-                    {displayTime(invitation.notBefore)} to {displayTime(invitation.expiresAt)};{" "}
-                    {invitation.permissionCount} permissions.
+                  <p className="min-w-0 break-words">
+                    Created by <span className="break-all">{invitation.createdByUserId}</span>;
+                    valid {displayTime(invitation.notBefore)} to {displayTime(invitation.expiresAt)}
+                    ; {invitation.permissionCount} permissions.
                   </p>
                   {invitation.canRevoke ? (
                     <button
                       type="button"
-                      disabled={invitation.revokeStatus === "pending"}
+                      aria-label={
+                        invitation.revokeStatus === "pending"
+                          ? `Revoking invitation ${invitation.invitationId}`
+                          : invitation.revokeStatus === "refreshing"
+                            ? `Refreshing access for invitation ${invitation.invitationId}`
+                            : invitation.revokeBlocked
+                              ? `Wait to revoke invitation ${invitation.invitationId}`
+                              : invitation.revokeStatus === "failed"
+                                ? `Retry revoke invitation ${invitation.invitationId}`
+                                : `Revoke invitation ${invitation.invitationId}`
+                      }
+                      disabled={
+                        invitation.revokeStatus === "pending" ||
+                        invitation.revokeStatus === "refreshing" ||
+                        invitation.revokeBlocked
+                      }
                       onClick={() => revoke(invitation.invitationId)}
                     >
                       {invitation.revokeStatus === "pending"
                         ? "Revoking…"
-                        : invitation.revokeStatus === "failed"
-                          ? "Retry revoke"
-                          : "Revoke invitation"}
+                        : invitation.revokeStatus === "refreshing"
+                          ? "Refreshing access…"
+                          : invitation.revokeBlocked
+                            ? "Wait for active revoke"
+                            : invitation.revokeStatus === "failed"
+                              ? "Retry revoke"
+                              : "Revoke invitation"}
                     </button>
                   ) : null}
                   {invitation.revokeStatus === "failed" ? (

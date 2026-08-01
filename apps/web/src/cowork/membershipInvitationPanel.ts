@@ -1,5 +1,6 @@
 import {
   COLLABORATION_EVENT_SEQUENCE_MAX,
+  COLLABORATION_INVITE_MAX_LIFETIME_MILLIS,
   CollaborationInvitationGrant,
   CollaborationMembershipCommandId,
   CollaborationMembershipMutationResult,
@@ -17,6 +18,9 @@ import * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
 
 const MEMBERSHIP_INVITATION_PAGE_MAX = 100;
+const PLAIN_DATA_MAX_ARRAY_LENGTH = 512;
+const PLAIN_DATA_MAX_NODES = 8_192;
+const PLAIN_DATA_MAX_OBJECT_PROPERTIES = 32;
 
 const MembershipInvitationReadPage = Schema.Struct({
   snapshot: CollaborationProjectMembershipSnapshot,
@@ -39,7 +43,10 @@ const MembershipInvitationReadPage = Schema.Struct({
           invitation.role === "owner" ||
           !collaborationPermissionsFitRole(invitation.role, invitation.permissions) ||
           DateTime.toEpochMillis(invitation.expiresAt) <=
-            DateTime.toEpochMillis(invitation.notBefore),
+            DateTime.toEpochMillis(invitation.notBefore) ||
+          DateTime.toEpochMillis(invitation.expiresAt) -
+            DateTime.toEpochMillis(invitation.notBefore) >
+            COLLABORATION_INVITE_MAX_LIFETIME_MILLIS,
       )
     ) {
       return "invitation metadata must be project-scoped and fit its role";
@@ -83,7 +90,8 @@ export interface MembershipInvitationMetadata {
   readonly expiresAt: string;
   readonly permissionCount: number;
   readonly canRevoke: boolean;
-  readonly revokeStatus: "idle" | "pending" | "failed";
+  readonly revokeBlocked: boolean;
+  readonly revokeStatus: "idle" | "pending" | "refreshing" | "failed";
 }
 
 export interface MembershipInvitationPanelState {
@@ -113,7 +121,7 @@ interface RevokeAttempt {
     readonly sharedProjectId: SharedProjectId;
     readonly invitationId: CollaborationInvitationId;
   }>;
-  status: "pending" | "failed";
+  status: "pending" | "refreshing" | "failed";
 }
 
 interface ActiveScope {
@@ -135,13 +143,95 @@ const decodeRevokeRequestSchema = Schema.decodeUnknownSync(CollaborationRevokeIn
 const decodeMutationSchema = Schema.decodeUnknownSync(CollaborationMembershipMutationResult);
 const decodeCommandIdSchema = Schema.decodeUnknownSync(CollaborationMembershipCommandId);
 const strictOptions = { onExcessProperty: "error" } as const;
-const decodePage = (value: unknown) => decodePageSchema(value, strictOptions);
+const decodePage = (value: unknown) => {
+  assertPlainData(value);
+  return decodePageSchema(value, strictOptions);
+};
 const decodeRevokeRequest = (value: unknown) => decodeRevokeRequestSchema(value, strictOptions);
-const decodeMutation = (value: unknown) => decodeMutationSchema(value, strictOptions);
+const decodeMutation = (value: unknown) => {
+  assertPlainData(value);
+  return decodeMutationSchema(value, strictOptions);
+};
 const decodeCommandId = (value: unknown) => decodeCommandIdSchema(value, strictOptions);
 
+/**
+ * Injected clients are an explicit trust boundary. Validate JSON-like own data
+ * properties before Effect Schema can observe an inherited or accessor-backed
+ * value, and bound the walk before looking at attacker-controlled collections.
+ */
+function assertPlainData(root: unknown): void {
+  const pending: unknown[] = [root];
+  let visited = 0;
+
+  while (pending.length > 0) {
+    if (++visited > PLAIN_DATA_MAX_NODES) throw new Error("adapter payload is too large");
+    const value = pending.pop();
+    if (value === null || typeof value !== "object") continue;
+
+    if (Array.isArray(value)) {
+      if (Object.getPrototypeOf(value) !== Array.prototype) {
+        throw new Error("adapter arrays must use the intrinsic prototype");
+      }
+      if (value.length > PLAIN_DATA_MAX_ARRAY_LENGTH) {
+        throw new Error("adapter array is too large");
+      }
+      const descriptors = Object.getOwnPropertyDescriptors(value);
+      const keys = Reflect.ownKeys(descriptors);
+      if (keys.some((key) => typeof key === "symbol")) {
+        throw new Error("adapter arrays must not have symbol properties");
+      }
+      if (keys.length !== value.length + 1 || !("length" in descriptors)) {
+        throw new Error("adapter arrays must be dense and unadorned");
+      }
+      for (let index = 0; index < value.length; index += 1) {
+        const descriptor = descriptors[String(index)];
+        if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
+          throw new Error("adapter arrays must contain own data elements");
+        }
+        pending.push(descriptor.value);
+      }
+      continue;
+    }
+
+    if (Object.getPrototypeOf(value) !== Object.prototype) {
+      throw new Error("adapter objects must use the intrinsic prototype");
+    }
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    const keys = Reflect.ownKeys(descriptors);
+    if (keys.length > PLAIN_DATA_MAX_OBJECT_PROPERTIES) {
+      throw new Error("adapter object has too many properties");
+    }
+    for (const key of keys) {
+      if (typeof key === "symbol") throw new Error("adapter objects must not have symbols");
+      const descriptor = descriptors[key];
+      if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
+        throw new Error("adapter objects must contain enumerable own data properties");
+      }
+      pending.push(descriptor.value);
+    }
+  }
+}
+
+function compareText(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function membershipFingerprint(snapshot: typeof CollaborationProjectMembershipSnapshot.Type) {
+  return JSON.stringify(
+    snapshot.members
+      .map((member) => ({
+        userId: member.userId,
+        displayName: member.displayName,
+        role: member.role,
+        permissions: member.permissions.toSorted(compareText),
+        joinedAt: member.joinedAt,
+      }))
+      .toSorted((left, right) => compareText(left.userId, right.userId)),
+  );
+}
+
 function initialState(sharedProjectId: SharedProjectId): MembershipInvitationPanelState {
-  return {
+  return Object.freeze({
     status: "loading",
     sharedProjectId,
     epoch: 0,
@@ -149,21 +239,21 @@ function initialState(sharedProjectId: SharedProjectId): MembershipInvitationPan
     nextCursor: 0,
     hasMore: false,
     actorRole: null,
-    members: [],
-    invitations: [],
-  };
+    members: Object.freeze([]),
+    invitations: Object.freeze([]),
+  });
 }
 
 function unavailableState(
   sharedProjectId: SharedProjectId,
   previous?: MembershipInvitationPanelState,
 ): MembershipInvitationPanelState {
-  return {
+  return Object.freeze({
     ...initialState(sharedProjectId),
     status: "unavailable",
     epoch: previous?.sharedProjectId === sharedProjectId ? previous.epoch : 0,
     revision: previous?.sharedProjectId === sharedProjectId ? previous.revision : 0,
-  };
+  });
 }
 
 function cloneMember(member: CollaborationProjectMember): MembershipInvitationMember {
@@ -193,6 +283,7 @@ export class MembershipInvitationPanelModel {
   #members: ReadonlyArray<MembershipInvitationMember> = [];
   #invitations: ReadonlyArray<LoadedInvitation> = [];
   #actor: CollaborationProjectMember | null = null;
+  #membershipFingerprint: string | null = null;
   #attempts = new Map<CollaborationInvitationId, RevokeAttempt>();
   #listeners = new Set<() => void>();
 
@@ -222,6 +313,7 @@ export class MembershipInvitationPanelModel {
     this.#members = [];
     this.#invitations = [];
     this.#actor = null;
+    this.#membershipFingerprint = null;
     this.#attempts.clear();
     this.#setState(initialState(sharedProjectId));
     void this.#load(scope);
@@ -243,6 +335,13 @@ export class MembershipInvitationPanelModel {
 
     const previous = this.#attempts.get(invitationId);
     if (previous?.status === "pending") return;
+    if (
+      [...this.#attempts.values()].some(
+        (candidate) => candidate.status === "pending" || candidate.status === "refreshing",
+      )
+    ) {
+      return;
+    }
 
     let attempt = previous;
     if (!attempt) {
@@ -283,8 +382,26 @@ export class MembershipInvitationPanelModel {
         ...actor,
         permissions: Object.freeze([...actor.permissions]),
       });
-      this.#members = Object.freeze(decoded.snapshot.members.map(cloneMember));
-      this.#invitations = Object.freeze(decoded.invitations.map(cloneInvitation));
+      this.#membershipFingerprint = membershipFingerprint(decoded.snapshot);
+      this.#members = Object.freeze(
+        decoded.snapshot.members
+          .map(cloneMember)
+          .toSorted(
+            (left, right) =>
+              compareText(left.displayName, right.displayName) ||
+              compareText(left.userId, right.userId),
+          ),
+      );
+      this.#invitations = Object.freeze(
+        decoded.invitations
+          .map(cloneInvitation)
+          .toSorted(
+            (left, right) =>
+              compareText(left.notBefore, right.notBefore) ||
+              compareText(left.expiresAt, right.expiresAt) ||
+              compareText(left.invitationId, right.invitationId),
+          ),
+      );
       this.#state = Object.freeze({
         status: "ready",
         sharedProjectId: scope.sharedProjectId,
@@ -302,6 +419,7 @@ export class MembershipInvitationPanelModel {
         this.#members = [];
         this.#invitations = [];
         this.#actor = null;
+        this.#membershipFingerprint = null;
         this.#attempts.clear();
         this.#setState(unavailableState(scope.sharedProjectId, this.#state));
       }
@@ -326,8 +444,97 @@ export class MembershipInvitationPanelModel {
       this.#publishReady();
     } catch {
       if (!this.#isActive(scope) || this.#attempts.get(invitation.invitationId) !== attempt) return;
-      attempt.status = "failed";
+      attempt.status = "refreshing";
       this.#publishReady();
+      await this.#refreshAfterFailedRevoke(scope, invitation, attempt);
+    }
+  }
+
+  async #refreshAfterFailedRevoke(
+    scope: ActiveScope,
+    invitation: LoadedInvitation,
+    attempt: RevokeAttempt,
+  ): Promise<void> {
+    try {
+      const input = Object.freeze({
+        sharedProjectId: scope.sharedProjectId,
+        limit: MEMBERSHIP_INVITATION_PAGE_MAX,
+      });
+      const decoded = decodePage(await this.client.load(input));
+      if (
+        !this.#isActive(scope) ||
+        this.#attempts.get(invitation.invitationId) !== attempt ||
+        attempt.status !== "refreshing" ||
+        decoded.snapshot.sharedProjectId !== scope.sharedProjectId
+      ) {
+        return;
+      }
+      const actor = decoded.snapshot.members.find((member) => member.userId === this.actorUserId);
+      if (!actor) throw new Error("current actor is not a project member");
+      const refreshedFingerprint = membershipFingerprint(decoded.snapshot);
+      if (
+        decoded.snapshot.epoch < this.#state.epoch ||
+        decoded.revision < this.#state.revision ||
+        (decoded.snapshot.epoch === this.#state.epoch &&
+          refreshedFingerprint !== this.#membershipFingerprint)
+      ) {
+        throw new Error("membership refresh regressed authority");
+      }
+
+      this.#actor = Object.freeze({
+        ...actor,
+        permissions: Object.freeze([...actor.permissions]),
+      });
+      this.#membershipFingerprint = refreshedFingerprint;
+      this.#members = Object.freeze(
+        decoded.snapshot.members
+          .map(cloneMember)
+          .toSorted(
+            (left, right) =>
+              compareText(left.displayName, right.displayName) ||
+              compareText(left.userId, right.userId),
+          ),
+      );
+      this.#invitations = Object.freeze(
+        decoded.invitations
+          .map(cloneInvitation)
+          .toSorted(
+            (left, right) =>
+              compareText(left.notBefore, right.notBefore) ||
+              compareText(left.expiresAt, right.expiresAt) ||
+              compareText(left.invitationId, right.invitationId),
+          ),
+      );
+      this.#state = Object.freeze({
+        status: "ready",
+        sharedProjectId: scope.sharedProjectId,
+        epoch: decoded.snapshot.epoch,
+        revision: decoded.revision,
+        nextCursor: decoded.nextCursor,
+        hasMore: decoded.hasMore,
+        actorRole: actor.role,
+        members: this.#members,
+        invitations: Object.freeze([]),
+      });
+
+      const refreshedInvitation = this.#invitations.find(
+        (candidate) => candidate.invitationId === invitation.invitationId,
+      );
+      if (!refreshedInvitation || !this.#canRevoke(refreshedInvitation)) {
+        this.#attempts.delete(invitation.invitationId);
+      } else {
+        attempt.status = "failed";
+      }
+      this.#publishReady();
+    } catch {
+      if (
+        this.#isActive(scope) &&
+        this.#attempts.get(invitation.invitationId) === attempt &&
+        attempt.status === "refreshing"
+      ) {
+        attempt.status = "failed";
+        this.#publishReady();
+      }
     }
   }
 
@@ -343,6 +550,9 @@ export class MembershipInvitationPanelModel {
 
   #publishReady(): void {
     if (this.#state.status !== "ready") return;
+    const activeInvitationId = [...this.#attempts.entries()].find(
+      ([, attempt]) => attempt.status === "pending" || attempt.status === "refreshing",
+    )?.[0];
     const invitations = Object.freeze(
       this.#invitations.map((invitation) => {
         const attempt = this.#attempts.get(invitation.invitationId);
@@ -354,6 +564,8 @@ export class MembershipInvitationPanelModel {
           expiresAt: invitation.expiresAt,
           permissionCount: invitation.permissions.length,
           canRevoke: this.#canRevoke(invitation),
+          revokeBlocked:
+            activeInvitationId !== undefined && activeInvitationId !== invitation.invitationId,
           revokeStatus: attempt?.status ?? "idle",
         });
       }),
@@ -367,6 +579,12 @@ export class MembershipInvitationPanelModel {
 
   #setState(state: MembershipInvitationPanelState): void {
     this.#state = state;
-    for (const listener of this.#listeners) listener();
+    for (const listener of this.#listeners) {
+      try {
+        listener();
+      } catch {
+        // One observer must not prevent other subscribers or boundary work.
+      }
+    }
   }
 }
