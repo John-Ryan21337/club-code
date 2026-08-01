@@ -258,6 +258,32 @@ expand its sandbox, authorize an approval, or reveal a credential. Sensitive
 operations require a local approval tied to the exact project, actor, task,
 resource, and expiry.
 
+The admission boundary now represents this policy as strict contracts rather
+than provider flags. It can issue only a `not-started` admission after current
+membership, active device key, claimed task revision, lease, fencing token, and
+membership epoch agree. The proposed sandbox must bind the exact managed
+replica generation, a non-empty task-relative writable allowlist, optional
+read-only Club-managed toolchains, default-deny project-scoped public egress,
+and bounded CPU, memory, process, runtime, writable-byte, and output quotas.
+Home directories, credential stores, inherited host environment variables,
+credential brokers, host access, privilege escalation, and provider
+`danger-full-access` cannot be represented by the policy schema.
+
+Before accepting an admission, the server requires a short-lived attestation
+from a supported OS isolation backend: Linux container/Landlock/microVM, macOS
+Seatbelt/virtualization, or Windows AppContainer/Hyper-V. The attestation binds
+the canonical policy hash and proves mount isolation, write filtering, secret
+denial, environment scrubbing, default-deny egress with DNS-rebinding
+protection, quotas, whole-process-tree termination, and revocation signaling.
+The server then rechecks every mutable authority. Any membership, key, task,
+lease, fence, replica, scope, egress, or quota change fails closed before a
+launch token can exist. Cancellation and revocation commands require egress
+denial and whole-sandbox-process-tree termination. Audit records contain only
+bounded identity, policy-hash, backend, count, reason, and timestamp metadata;
+raw prompts, provider output, environment contents, and credentials are not
+accepted. A concrete runner and backend adapter remain separately reviewed
+work: this admission slice does not launch a provider process.
+
 ## Capacity
 
 The protocol and persistence schemas enforce a hard ceiling of 128 members so
@@ -409,6 +435,18 @@ separately reviewed boundaries.
   the same empty head, membership/device revocation, stale CAS retention,
   append-only tombstones, exact actor-bound idempotency, corrupt stored
   manifests, database head/fence checks, and WAL/sidecar rejection.
+- `packages/contracts/src/collaborationAgentSandbox.ts` and
+  `CollaborationAgentSandboxAdmission` define and enforce the pre-launch shared
+  agent boundary. Strict schemas make host/home/credential mounts, inherited
+  environment variables, provider `danger-full-access`, allow-by-default or
+  private-network egress, unbounded quotas, incomplete isolation attestations,
+  and partial-process termination invalid. Admission revalidates membership,
+  device, lease/fence/epoch, replica generation, task scope, egress, and quota
+  authorities after isolation attestation and returns `launch: not-started`
+  only when all bindings remain exact. Adversarial tests cover path and secret
+  mount escapes, environment and egress broadening, quota excess, unsupported
+  or incomplete backends, revocation/fence/replica races, metadata-only audit,
+  and whole-process-tree termination acknowledgements.
 - Coordinator transport, network enrollment endpoints, subscriptions,
   chat/transcript UI, OS-backed private-key generation/storage, sandboxed agent
   runners, blob upload/download transport, filesystem materialization, and
