@@ -1,4 +1,6 @@
 import {
+  COLLABORATION_EVENT_SEQUENCE_MAX,
+  COLLABORATION_MEMBERSHIP_EPOCH_MAX,
   CollaborationAuthoredMessageCommandId,
   CollaborationAuthoredMessageId,
   CollaborationMembershipEpoch,
@@ -279,8 +281,8 @@ describe("SharedOperatorPromptTimeline model", () => {
   it("snapshots roster attribution and rejects duplicate or accessor-backed members", () => {
     const authors = snapshotSharedOperatorPromptAuthors(participants);
     expect(authors).toEqual([
-      { userId: userA, displayName: "Aiko" },
-      { userId: userB, displayName: "Ren" },
+      expect.objectContaining({ userId: userA, displayName: "Aiko", canReadTranscript: true }),
+      expect.objectContaining({ userId: userB, displayName: "Ren", canReadTranscript: true }),
     ]);
     expect(Object.isFrozen(authors)).toBe(true);
 
@@ -290,5 +292,60 @@ describe("SharedOperatorPromptTimeline model", () => {
     const accessor = { ...participants[0] };
     Object.defineProperty(accessor, "displayName", { enumerable: true, get: () => "Hidden" });
     expect(() => snapshotSharedOperatorPromptAuthors([accessor])).toThrow(/data property/);
+  });
+
+  it("snapshots transcript authority and every membership-replacement field", () => {
+    const withoutRead = {
+      ...participants[1]!,
+      permissions: ["chat.read"] as const,
+    };
+    const first = snapshotSharedOperatorPromptAuthors([withoutRead])[0]!;
+    const rejoined = snapshotSharedOperatorPromptAuthors([
+      { ...withoutRead, joinedAt: "2026-08-01T11:01:00.000Z" },
+    ])[0]!;
+    expect(first.canReadTranscript).toBe(false);
+    expect(rejoined.membershipFingerprint).not.toBe(first.membershipFingerprint);
+  });
+
+  it("rejects attribution control characters and contract-bound integer overflow", () => {
+    expect(() =>
+      snapshotSharedOperatorPromptAuthors([{ ...participants[0]!, displayName: "Aiko\u202eYou" }]),
+    ).toThrow(/displayName/);
+    expect(() =>
+      decodeSharedOperatorPromptPage(
+        page([
+          {
+            ...prompt({ sequence: 1 }),
+            membershipEpoch: COLLABORATION_MEMBERSHIP_EPOCH_MAX + 1,
+          },
+        ]),
+        projectA,
+        0,
+      ),
+    ).toThrow(/membershipEpoch.*bound/);
+    const overSequence = {
+      ...prompt({ sequence: 1 }),
+      projectSequence: COLLABORATION_EVENT_SEQUENCE_MAX + 1,
+    };
+    expect(() =>
+      decodeSharedOperatorPromptPage(
+        {
+          ...page([overSequence]),
+          nextCursor: COLLABORATION_EVENT_SEQUENCE_MAX + 1,
+        },
+        projectA,
+        0,
+      ),
+    ).toThrow(/projectSequence.*invalid/);
+  });
+
+  it("rejects a page whose retained prompt bodies exceed the contract byte budget", () => {
+    const messages = Array.from({ length: 17 }, (_, index) => ({
+      ...prompt({ sequence: index + 1 }),
+      body: "x".repeat(32_768),
+    }));
+    expect(() => decodeSharedOperatorPromptPage(page(messages), projectA, 0)).toThrow(
+      /retained UTF-8 byte bound/,
+    );
   });
 });

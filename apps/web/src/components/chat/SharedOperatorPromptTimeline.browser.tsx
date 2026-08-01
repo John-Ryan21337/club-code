@@ -188,6 +188,42 @@ describe("SharedOperatorPromptTimeline", () => {
     }
   });
 
+  it("contains synchronous throws and hostile thenables while allowing bounded retries", async () => {
+    const readAuthoredMessages = vi
+      .fn<SharedOperatorPromptTimelineClient["readAuthoredMessages"]>()
+      .mockImplementationOnce(() => {
+        throw new Error("SECRET_SYNCHRONOUS_TRANSPORT_DETAIL");
+      })
+      .mockImplementationOnce(
+        () =>
+          new Proxy(
+            {},
+            {
+              get: (_target, key) => {
+                if (key === "then") throw new Error("SECRET_THENABLE_TRANSPORT_DETAIL");
+                return undefined;
+              },
+            },
+          ) as Promise<unknown>,
+      )
+      .mockResolvedValueOnce(promptPage([prompt({ sequence: 1 })]));
+    const mounted = await render(
+      <SharedOperatorPromptTimeline {...panelProps({ readAuthoredMessages })} />,
+    );
+    try {
+      await expect.element(page.getByText("No prompt history was admitted.")).toBeVisible();
+      expect(document.body.textContent).not.toContain("SECRET_SYNCHRONOUS_TRANSPORT_DETAIL");
+      await page.getByRole("button", { name: "Load more shared operator prompts" }).click();
+      await vi.waitFor(() => expect(readAuthoredMessages).toHaveBeenCalledTimes(2));
+      expect(document.body.textContent).not.toContain("SECRET_THENABLE_TRANSPORT_DETAIL");
+      await page.getByRole("button", { name: "Load more shared operator prompts" }).click();
+      await expect.element(page.getByText("Shared prompt 1")).toBeVisible();
+      expect(readAuthoredMessages).toHaveBeenCalledTimes(3);
+    } finally {
+      await mounted.unmount();
+    }
+  });
+
   it("pages from the exact admitted cursor and does not fetch while offline", async () => {
     const readAuthoredMessages = vi
       .fn<SharedOperatorPromptTimelineClient["readAuthoredMessages"]>()
@@ -247,6 +283,77 @@ describe("SharedOperatorPromptTimeline", () => {
       await expect.element(page.getByText("Shared prompt 1")).toBeVisible();
       expect(document.body.textContent).not.toContain("STALE_PROJECT_PROMPT");
       expect(readAuthoredMessages).toHaveBeenCalledTimes(2);
+    } finally {
+      await mounted.unmount();
+    }
+  });
+
+  it("requires current transcript-read authority and reacts to permission replacement", async () => {
+    const readAuthoredMessages = vi.fn(async () => promptPage([prompt({ sequence: 1 })]));
+    const revokedParticipants: readonly CollaborationProjectMember[] = [
+      { ...participants[0]!, permissions: ["chat.read"] },
+      participants[1]!,
+    ];
+    const mounted = await render(
+      <SharedOperatorPromptTimeline
+        {...panelProps({ readAuthoredMessages })}
+        participants={revokedParticipants}
+      />,
+    );
+    try {
+      await expect
+        .element(page.getByLabelText("Shared operator prompt timeline unavailable"))
+        .toBeVisible();
+      expect(readAuthoredMessages).not.toHaveBeenCalled();
+      await mounted.rerender(
+        <SharedOperatorPromptTimeline {...panelProps({ readAuthoredMessages })} />,
+      );
+      await expect.element(page.getByText("Shared prompt 1")).toBeVisible();
+      expect(readAuthoredMessages).toHaveBeenCalledTimes(1);
+      await mounted.rerender(
+        <SharedOperatorPromptTimeline
+          {...panelProps({ readAuthoredMessages })}
+          participants={revokedParticipants}
+        />,
+      );
+      await expect
+        .element(page.getByLabelText("Shared operator prompt timeline unavailable"))
+        .toBeVisible();
+      expect(document.body.textContent).not.toContain("Shared prompt 1");
+      expect(readAuthoredMessages).toHaveBeenCalledTimes(1);
+    } finally {
+      await mounted.unmount();
+    }
+  });
+
+  it("never renders the prior project while the replacement scope is loading", async () => {
+    const replacement = deferred<unknown>();
+    const readAuthoredMessages = vi
+      .fn<SharedOperatorPromptTimelineClient["readAuthoredMessages"]>()
+      .mockResolvedValueOnce(promptPage([prompt({ sequence: 1, body: "PROJECT_A_PRIVATE" })]))
+      .mockImplementationOnce(() => replacement.promise);
+    const mounted = await render(
+      <SharedOperatorPromptTimeline {...panelProps({ readAuthoredMessages })} />,
+    );
+    try {
+      await expect.element(page.getByText("PROJECT_A_PRIVATE")).toBeVisible();
+      await mounted.rerender(
+        <SharedOperatorPromptTimeline
+          client={{ readAuthoredMessages }}
+          currentUserId={userA}
+          participants={participants}
+          projectId={projectB}
+        />,
+      );
+      expect(document.body.textContent).not.toContain("PROJECT_A_PRIVATE");
+      await vi.waitFor(() => expect(readAuthoredMessages).toHaveBeenCalledTimes(2));
+      replacement.resolve(
+        promptPage([prompt({ sequence: 1, body: "PROJECT_B_VISIBLE", projectId: projectB })], {
+          projectId: projectB,
+        }),
+      );
+      await expect.element(page.getByText("PROJECT_B_VISIBLE")).toBeVisible();
+      expect(document.body.textContent).not.toContain("PROJECT_A_PRIVATE");
     } finally {
       await mounted.unmount();
     }

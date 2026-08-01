@@ -66,9 +66,10 @@ function SharedOperatorPromptRow(props: {
       </header>
       <p
         className={cn(
-          "mt-2 whitespace-pre-wrap break-words text-sm",
+          "mt-2 whitespace-pre-wrap break-words text-sm [unicode-bidi:plaintext]",
           props.entry.body === null && "italic text-muted-foreground",
         )}
+        dir="auto"
       >
         {props.entry.body ?? REMOVED_PROMPT_NOTICE}
       </p>
@@ -103,14 +104,20 @@ export function SharedOperatorPromptTimeline({
   const participantFingerprint = authors
     ?.map(
       (author) =>
-        `${author.userId.length}:${author.userId}:${author.displayName.length}:${author.displayName}`,
+        `${author.userId.length}:${author.userId}:${author.displayName.length}:${author.displayName}:${author.membershipFingerprint.length}:${author.membershipFingerprint}`,
     )
     .join("|");
   const authorNames = new Map((authors ?? []).map((author) => [author.userId, author.displayName]));
   const projectValid = isSharedOperatorPromptIdentifier(projectId);
   const currentUserValid = isSharedOperatorPromptIdentifier(currentUserId);
   const rosterValid = authors !== null;
-  const currentUserInRoster = authors?.some((author) => author.userId === currentUserId) ?? false;
+  const currentAuthor = authors?.find((author) => author.userId === currentUserId);
+  const currentUserInRoster = currentAuthor !== undefined;
+  const currentUserCanRead = currentAuthor?.canReadTranscript === true;
+  const scopeKey =
+    projectValid && currentUserValid && participantFingerprint !== undefined
+      ? JSON.stringify([projectId, currentUserId, participantFingerprint])
+      : null;
   const [timeline, setTimeline] = useState<SharedOperatorPromptTimelineState>(
     EMPTY_SHARED_OPERATOR_PROMPT_TIMELINE,
   );
@@ -120,6 +127,10 @@ export function SharedOperatorPromptTimeline({
   const generationAbortRef = useRef<AbortController | null>(null);
   const pageAbortRef = useRef<AbortController | null>(null);
   const pageInFlightRef = useRef(false);
+  const activeScopeRef = useRef<{
+    readonly client: typeof client;
+    readonly key: string | null;
+  } | null>(null);
 
   const updateTimeline = useCallback((next: SharedOperatorPromptTimelineState) => {
     timelineRef.current = next;
@@ -135,6 +146,9 @@ export function SharedOperatorPromptTimeline({
         !currentUserValid ||
         !rosterValid ||
         !currentUserInRoster ||
+        !currentUserCanRead ||
+        activeScopeRef.current?.client !== client ||
+        activeScopeRef.current.key !== scopeKey ||
         !timelineRef.current.hasMore ||
         pageInFlightRef.current ||
         generationRef.current !== expectedGeneration
@@ -149,16 +163,33 @@ export function SharedOperatorPromptTimeline({
       pageAbortRef.current = abort;
       pageInFlightRef.current = true;
       setPageState("loading");
-      void client
-        .readAuthoredMessages({
-          sharedProjectId: projectId,
-          afterSequence: requestedAfterSequence,
-          limit: SHARED_OPERATOR_PROMPT_PAGE_LIMIT,
-          kinds: ["authored-prompt"],
-          signal: abort.signal,
+      void Promise.resolve()
+        .then(() => {
+          if (
+            abort.signal.aborted ||
+            generationRef.current !== expectedGeneration ||
+            activeScopeRef.current?.client !== client ||
+            activeScopeRef.current.key !== scopeKey
+          ) {
+            throw new DOMException("The shared prompt read was superseded.", "AbortError");
+          }
+          return client.readAuthoredMessages({
+            sharedProjectId: projectId,
+            afterSequence: requestedAfterSequence,
+            limit: SHARED_OPERATOR_PROMPT_PAGE_LIMIT,
+            kinds: ["authored-prompt"],
+            signal: abort.signal,
+          });
         })
         .then((payload) => {
-          if (abort.signal.aborted || generationRef.current !== expectedGeneration) return;
+          if (
+            abort.signal.aborted ||
+            generationRef.current !== expectedGeneration ||
+            activeScopeRef.current?.client !== client ||
+            activeScopeRef.current.key !== scopeKey
+          ) {
+            return;
+          }
           const page = decodeSharedOperatorPromptPage(
             payload,
             String(projectId),
@@ -188,10 +219,12 @@ export function SharedOperatorPromptTimeline({
       client,
       connectionState,
       currentUserInRoster,
+      currentUserCanRead,
       currentUserValid,
       projectId,
       projectValid,
       rosterValid,
+      scopeKey,
       updateTimeline,
     ],
   );
@@ -199,6 +232,8 @@ export function SharedOperatorPromptTimeline({
   useEffect(() => {
     generationAbortRef.current?.abort();
     const generationAbort = new AbortController();
+    const activeScope = { client, key: scopeKey };
+    activeScopeRef.current = activeScope;
     generationAbortRef.current = generationAbort;
     generationRef.current += 1;
     pageAbortRef.current?.abort();
@@ -206,8 +241,11 @@ export function SharedOperatorPromptTimeline({
     pageInFlightRef.current = false;
     updateTimeline(EMPTY_SHARED_OPERATOR_PROMPT_TIMELINE);
     setPageState("idle");
-    return () => generationAbort.abort();
-  }, [client, currentUserId, participantFingerprint, projectId, updateTimeline]);
+    return () => {
+      generationAbort.abort();
+      if (activeScopeRef.current === activeScope) activeScopeRef.current = null;
+    };
+  }, [client, scopeKey, updateTimeline]);
 
   useEffect(() => {
     if (connectionState === "online") return;
@@ -224,7 +262,10 @@ export function SharedOperatorPromptTimeline({
       !projectValid ||
       !currentUserValid ||
       !rosterValid ||
-      !currentUserInRoster
+      !currentUserInRoster ||
+      !currentUserCanRead ||
+      activeScopeRef.current?.client !== client ||
+      activeScopeRef.current.key !== scopeKey
     ) {
       return;
     }
@@ -242,20 +283,36 @@ export function SharedOperatorPromptTimeline({
     client,
     connectionState,
     currentUserInRoster,
+    currentUserCanRead,
     currentUserValid,
     projectValid,
     requestPage,
     rosterValid,
+    scopeKey,
   ]);
 
+  const scopeIsActive =
+    activeScopeRef.current?.client === client &&
+    activeScopeRef.current.key === scopeKey &&
+    scopeKey !== null;
+  const visibleTimeline = scopeIsActive ? timeline : EMPTY_SHARED_OPERATOR_PROMPT_TIMELINE;
+  const visiblePageState = scopeIsActive ? pageState : "idle";
+
   if (client === null) return null;
-  if (!projectValid || !currentUserValid || authors === null || !currentUserInRoster) {
+  if (
+    !projectValid ||
+    !currentUserValid ||
+    authors === null ||
+    !currentUserInRoster ||
+    !currentUserCanRead
+  ) {
     return (
       <section
         aria-label="Shared operator prompt timeline unavailable"
         className={cn("rounded-lg border border-destructive/50 p-3 text-sm", className)}
       >
-        Shared operator prompts are unavailable because the project identity or roster is invalid.
+        Shared operator prompts are unavailable because the project identity, roster, or transcript
+        permission is invalid.
       </section>
     );
   }
@@ -283,7 +340,7 @@ export function SharedOperatorPromptTimeline({
         </p>
         <p aria-live="polite" className="mt-1 text-xs text-muted-foreground">
           {connectionState === "online"
-            ? pageState === "error"
+            ? visiblePageState === "error"
               ? "Prompt history is temporarily unavailable."
               : "Connected"
             : connectionState === "offline"
@@ -296,22 +353,27 @@ export function SharedOperatorPromptTimeline({
         <div className="flex items-center justify-center border-b border-border/40 p-1.5">
           <Button
             aria-label="Load more shared operator prompts"
-            disabled={pageState === "loading" || !timeline.hasMore || connectionState !== "online"}
+            disabled={
+              visiblePageState === "loading" ||
+              !visibleTimeline.hasMore ||
+              connectionState !== "online" ||
+              !scopeIsActive
+            }
             onClick={() => requestPage(generationRef.current)}
             size="xs"
             variant="ghost"
           >
-            <RefreshCwIcon className={cn(pageState === "loading" && "animate-spin")} />
-            {timeline.truncated
+            <RefreshCwIcon className={cn(visiblePageState === "loading" && "animate-spin")} />
+            {visibleTimeline.truncated
               ? "Bounded prompt window reached"
-              : timeline.hasMore
+              : visibleTimeline.hasMore
                 ? "Load more shared prompts"
                 : "Shared prompt history is current"}
           </Button>
         </div>
-        {timeline.entries.length === 0 ? (
+        {visibleTimeline.entries.length === 0 ? (
           <div className="flex flex-1 items-center justify-center p-4 text-sm text-muted-foreground">
-            {pageState === "error"
+            {visiblePageState === "error"
               ? "No prompt history was admitted."
               : "No project-visible operator prompts loaded."}
           </div>
@@ -320,7 +382,7 @@ export function SharedOperatorPromptTimeline({
             aria-label="Project-visible operator prompts"
             className="min-h-0 flex-1 space-y-2 overflow-y-auto overflow-x-hidden p-3"
           >
-            {timeline.entries.map((entry) => (
+            {visibleTimeline.entries.map((entry) => (
               <SharedOperatorPromptRow
                 authorName={authorNames.get(entry.authorUserId) ?? "Former project operator"}
                 entry={entry}

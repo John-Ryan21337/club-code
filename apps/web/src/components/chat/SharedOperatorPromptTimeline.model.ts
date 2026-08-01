@@ -1,6 +1,9 @@
 import {
   COLLABORATION_AUTHORED_MESSAGE_MAX_CHARS,
   COLLABORATION_AUTHORED_MESSAGE_MAX_UTF8_BYTES,
+  COLLABORATION_AUTHORED_MESSAGE_PAGE_MAX_UTF8_BYTES,
+  COLLABORATION_EVENT_SEQUENCE_MAX,
+  COLLABORATION_MEMBERSHIP_EPOCH_MAX,
   COLLABORATION_PROJECT_MEMBER_LIMIT,
   collaborationRoleAllowsPermission,
   type CollaborationAuthoredMessagePageRequest,
@@ -83,6 +86,8 @@ export interface SharedOperatorPromptTimelineState {
 export interface SharedOperatorPromptAuthor {
   readonly userId: string;
   readonly displayName: string;
+  readonly canReadTranscript: boolean;
+  readonly membershipFingerprint: string;
 }
 
 export const EMPTY_SHARED_OPERATOR_PROMPT_TIMELINE: SharedOperatorPromptTimelineState =
@@ -200,9 +205,21 @@ function nonNegativeSafeInteger(value: unknown, label: string): number {
   return value as number;
 }
 
+function boundedNonNegativeInteger(value: unknown, maximum: number, label: string): number {
+  const decoded = nonNegativeSafeInteger(value, label);
+  if (decoded > maximum) fail(`${label} exceeds its bound`);
+  return decoded;
+}
+
 function positiveSafeInteger(value: unknown, label: string): number {
   const decoded = nonNegativeSafeInteger(value, label);
   if (decoded === 0) fail(`${label} is invalid`);
+  return decoded;
+}
+
+function boundedPositiveInteger(value: unknown, maximum: number, label: string): number {
+  const decoded = positiveSafeInteger(value, label);
+  if (decoded > maximum) fail(`${label} exceeds its bound`);
   return decoded;
 }
 
@@ -248,6 +265,24 @@ function authoredBody(value: unknown): string {
   return value;
 }
 
+function hasUnsafeAttributionControl(value: string): boolean {
+  for (const character of value) {
+    const codePoint = character.codePointAt(0)!;
+    if (
+      codePoint <= 0x1f ||
+      (codePoint >= 0x7f && codePoint <= 0x9f) ||
+      codePoint === 0x200e ||
+      codePoint === 0x200f ||
+      (codePoint >= 0x202a && codePoint <= 0x202e) ||
+      (codePoint >= 0x2066 && codePoint <= 0x2069) ||
+      (codePoint >= 0xd800 && codePoint <= 0xdfff)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function tombstone(value: unknown, expectedMessageId: string): boolean {
   if (value === null) return false;
   const candidate = exactRecord(value, TOMBSTONE_KEYS, "prompt tombstone");
@@ -259,7 +294,11 @@ function tombstone(value: unknown, expectedMessageId: string): boolean {
   }
   identifier(candidate.actorUserId, "prompt tombstone actorUserId");
   identifier(candidate.actorDeviceId, "prompt tombstone actorDeviceId");
-  nonNegativeSafeInteger(candidate.membershipEpoch, "prompt tombstone membershipEpoch");
+  boundedNonNegativeInteger(
+    candidate.membershipEpoch,
+    COLLABORATION_MEMBERSHIP_EPOCH_MAX,
+    "prompt tombstone membershipEpoch",
+  );
   if (
     typeof candidate.reason !== "string" ||
     candidate.reason.length === 0 ||
@@ -289,7 +328,11 @@ function promptEntry(value: unknown, expectedProjectId: string): SharedOperatorP
   const messageId = identifier(candidate.messageId, "authored prompt messageId");
   const body = authoredBody(candidate.body);
   identifier(candidate.authorDeviceId, "authored prompt authorDeviceId");
-  nonNegativeSafeInteger(candidate.membershipEpoch, "authored prompt membershipEpoch");
+  boundedNonNegativeInteger(
+    candidate.membershipEpoch,
+    COLLABORATION_MEMBERSHIP_EPOCH_MAX,
+    "authored prompt membershipEpoch",
+  );
   optionalSha256(candidate.previousMessageSha256, "authored prompt previousMessageSha256");
   const messageSha256 = sha256(candidate.messageSha256, "authored prompt messageSha256");
   const occurredAtIso = canonicalUtc(candidate.occurredAt, "authored prompt occurredAt");
@@ -298,12 +341,14 @@ function promptEntry(value: unknown, expectedProjectId: string): SharedOperatorP
   return Object.freeze({
     messageId,
     authorUserId: identifier(candidate.authorUserId, "authored prompt authorUserId"),
-    projectSequence: positiveSafeInteger(
+    projectSequence: boundedPositiveInteger(
       candidate.projectSequence,
+      COLLABORATION_EVENT_SEQUENCE_MAX,
       "authored prompt projectSequence",
     ),
-    operatorSequence: positiveSafeInteger(
+    operatorSequence: boundedPositiveInteger(
       candidate.operatorSequence,
+      COLLABORATION_EVENT_SEQUENCE_MAX,
       "authored prompt operatorSequence",
     ),
     body: removed ? null : body,
@@ -318,7 +363,11 @@ export function decodeSharedOperatorPromptPage(
   requestedAfterSequence: number,
 ): SharedOperatorPromptPage {
   identifier(expectedProjectId, "expected shared project id");
-  nonNegativeSafeInteger(requestedAfterSequence, "requested cursor");
+  boundedNonNegativeInteger(
+    requestedAfterSequence,
+    COLLABORATION_EVENT_SEQUENCE_MAX,
+    "requested cursor",
+  );
   const candidate = exactRecord(
     value,
     ["sharedProjectId", "messages", "mergedOrder", "lanePositions", "nextCursor", "hasMore"],
@@ -366,19 +415,40 @@ export function decodeSharedOperatorPromptPage(
     if (
       identifier(lane.messageId, `lanePositions[${index}].messageId`) !== entry.messageId ||
       identifier(lane.userId, `lanePositions[${index}].userId`) !== entry.authorUserId ||
-      positiveSafeInteger(lane.projectSequence, `lanePositions[${index}].projectSequence`) !==
-        entry.projectSequence ||
-      positiveSafeInteger(lane.operatorSequence, `lanePositions[${index}].operatorSequence`) !==
-        entry.operatorSequence
+      boundedPositiveInteger(
+        lane.projectSequence,
+        COLLABORATION_EVENT_SEQUENCE_MAX,
+        `lanePositions[${index}].projectSequence`,
+      ) !== entry.projectSequence ||
+      boundedPositiveInteger(
+        lane.operatorSequence,
+        COLLABORATION_EVENT_SEQUENCE_MAX,
+        `lanePositions[${index}].operatorSequence`,
+      ) !== entry.operatorSequence
     ) {
       fail("prompt page lane position is inconsistent");
     }
   }
-  const nextCursor = nonNegativeSafeInteger(candidate.nextCursor, "page nextCursor");
+  const nextCursor = boundedNonNegativeInteger(
+    candidate.nextCursor,
+    COLLABORATION_EVENT_SEQUENCE_MAX,
+    "page nextCursor",
+  );
   const expectedNextCursor = entries.at(-1)?.projectSequence ?? requestedAfterSequence;
   if (nextCursor !== expectedNextCursor) fail("prompt page cursor is inconsistent");
   if (typeof candidate.hasMore !== "boolean") fail("prompt page hasMore is invalid");
   if (entries.length === 0 && candidate.hasMore) fail("empty prompt page cannot continue");
+  const retainedUtf8Bytes = entries.reduce(
+    (total, entry) =>
+      total +
+      new TextEncoder().encode(
+        `${entry.messageId}\u0000${entry.authorUserId}\u0000${entry.occurredAtIso}\u0000${entry.messageSha256}\u0000${entry.body ?? ""}`,
+      ).byteLength,
+    0,
+  );
+  if (retainedUtf8Bytes > COLLABORATION_AUTHORED_MESSAGE_PAGE_MAX_UTF8_BYTES) {
+    fail("prompt page exceeds its retained UTF-8 byte bound");
+  }
   return Object.freeze({
     sharedProjectId,
     entries: Object.freeze(entries),
@@ -484,7 +554,8 @@ export function snapshotSharedOperatorPromptAuthors(
       typeof candidate.displayName !== "string" ||
       candidate.displayName.length === 0 ||
       candidate.displayName.length > 128 ||
-      candidate.displayName.trim() !== candidate.displayName
+      candidate.displayName.trim() !== candidate.displayName ||
+      hasUnsafeAttributionControl(candidate.displayName)
     ) {
       fail(`project members[${index}].displayName is invalid`);
     }
@@ -516,8 +587,13 @@ export function snapshotSharedOperatorPromptAuthors(
     if (new Set(permissionNames).size !== permissionNames.length) {
       fail(`project members[${index}].permissions contains duplicates`);
     }
-    canonicalUtc(candidate.joinedAt, `project members[${index}].joinedAt`);
-    return Object.freeze({ userId, displayName: candidate.displayName });
+    const joinedAtIso = canonicalUtc(candidate.joinedAt, `project members[${index}].joinedAt`);
+    return Object.freeze({
+      userId,
+      displayName: candidate.displayName,
+      canReadTranscript: permissionNames.includes("transcript.read"),
+      membershipFingerprint: JSON.stringify([role, permissionNames, joinedAtIso]),
+    });
   });
   return Object.freeze(authors);
 }
