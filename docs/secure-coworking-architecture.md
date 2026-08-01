@@ -328,6 +328,19 @@ raised only after load, partition, revocation, abuse, and backpressure testing.
   validly rehashed receipt substitution. File-backed two-client tests exercise
   competing rotations plus revoke-versus-rotate races and prove exactly one key
   remains current.
+- `getCurrentDeviceKeyStatus` is the authenticated, server-only discovery
+  boundary for a later device-management UI. Its request carries only the
+  project ID; user and device identity come from the validated principal and
+  are rechecked against current membership, membership epoch, and the durable
+  project/device binding under the same project writer lock used by rotation
+  and revocation. The response is bounded to identity, current epoch, status,
+  key ID, and activation time. It never exposes key bytes, enrollment nonces,
+  digests, receipt hashes, or another device. A stale-epoch key reports
+  enrollment required, while missing device bindings or malformed/substituted
+  key and enrollment-challenge lineage fail closed. The returned key ID can be
+  passed to the existing self-only, actor/epoch/request-bound idempotent
+  revocation command; a key from an older membership epoch cannot be revoked as
+  though it were current authority.
 - `packages/contracts/src/fileSync.ts` defines conflict-safe database
   coordination modes, portable normalized replica paths, consistent immutable
   snapshot descriptors, bounded writer leases, and identity-bound

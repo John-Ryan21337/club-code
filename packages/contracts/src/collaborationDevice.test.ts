@@ -6,14 +6,26 @@ import {
   COLLABORATION_ED25519_SPKI_DER_BASE64URL_CHARS,
   CollaborationBeginDeviceEnrollmentResult,
   CollaborationCompleteDeviceEnrollmentRequest,
+  CollaborationCurrentDeviceKeyStatus,
+  CollaborationCurrentDeviceKeyStatusRequest,
   CollaborationDeviceKeyMutationResult,
 } from "./collaborationDevice.ts";
+import {
+  CollaborationTransportDeviceKeyRevokeRequest,
+  CollaborationTransportDeviceKeyStatusRequest,
+  CollaborationTransportOperation,
+} from "./collaborationTransport.ts";
 
 const decodeBeginResult = Schema.decodeUnknownSync(CollaborationBeginDeviceEnrollmentResult);
 const decodeMutationResult = Schema.decodeUnknownSync(CollaborationDeviceKeyMutationResult);
 const decodeCompleteRequest = Schema.decodeUnknownSync(
   CollaborationCompleteDeviceEnrollmentRequest,
 );
+const decodeCurrentStatus = Schema.decodeUnknownSync(CollaborationCurrentDeviceKeyStatus);
+const decodeCurrentStatusRequest = Schema.decodeUnknownSync(
+  CollaborationCurrentDeviceKeyStatusRequest,
+);
+const decodeTransportOperation = Schema.decodeUnknownSync(CollaborationTransportOperation);
 
 describe("collaboration device contracts", () => {
   it("round-trips bounded challenge and key mutation payloads", () => {
@@ -78,5 +90,68 @@ describe("collaboration device contracts", () => {
         { onExcessProperty: "error" },
       ),
     ).toThrow();
+  });
+
+  it("keeps current-device discovery bounded to server-derived identity and public status", () => {
+    expect(
+      decodeCurrentStatusRequest({ sharedProjectId: "project-1" }, { onExcessProperty: "error" }),
+    ).toEqual({ sharedProjectId: "project-1" });
+    expect(() =>
+      decodeCurrentStatusRequest(
+        { sharedProjectId: "project-1", userId: "other-user" },
+        { onExcessProperty: "error" },
+      ),
+    ).toThrow();
+
+    const identity = {
+      sharedProjectId: "project-1",
+      userId: "user-1",
+      deviceId: "device-1",
+      membershipEpoch: 3,
+    };
+    expect(
+      decodeCurrentStatus(
+        {
+          ...identity,
+          status: "active",
+          activeKey: {
+            deviceKeyId: "device-key-1",
+            activatedAt: "2026-08-01T12:00:00.000Z",
+          },
+        },
+        { onExcessProperty: "error" },
+      ).status,
+    ).toBe("active");
+    expect(
+      decodeCurrentStatus(
+        { ...identity, status: "enrollment-required", activeKey: null },
+        { onExcessProperty: "error" },
+      ).status,
+    ).toBe("enrollment-required");
+    expect(() =>
+      decodeCurrentStatus(
+        {
+          ...identity,
+          status: "active",
+          activeKey: {
+            deviceKeyId: "device-key-1",
+            activatedAt: "2026-08-01T12:00:00.000Z",
+            publicKeySpkiDer: "forbidden",
+          },
+        },
+        { onExcessProperty: "error" },
+      ),
+    ).toThrow();
+  });
+
+  it("admits only the two current-device operations into the network command surface", () => {
+    expect(decodeTransportOperation("device-key.status")).toBe("device-key.status");
+    expect(decodeTransportOperation("device-key.revoke")).toBe("device-key.revoke");
+    expect(CollaborationTransportDeviceKeyStatusRequest).toBe(
+      CollaborationCurrentDeviceKeyStatusRequest,
+    );
+    expect(CollaborationTransportDeviceKeyRevokeRequest).not.toBeUndefined();
+    expect(() => decodeTransportOperation("device-key.list")).toThrow();
+    expect(() => decodeTransportOperation("device-enrollment.begin")).toThrow();
   });
 });
