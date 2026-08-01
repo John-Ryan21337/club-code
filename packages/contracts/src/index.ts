@@ -4,6 +4,7 @@ export * from "./collaborationDevice.ts";
 export * from "./collaborationFileSync.ts";
 export * from "./collaborationMembership.ts";
 export * from "./collaborationChat.ts";
+export * from "./collaborationTask.ts";
 export * from "./fileSync.ts";
 export * from "./auth.ts";
 export * from "./environment.ts";
