@@ -233,10 +233,9 @@ describe("CollaborationPresenceAuthority", () => {
         });
         advanceMembershipEpoch();
         yield* authority.recheckProject(PROJECT_ID);
-        expect(updates.at(-1)).toMatchObject({
-          kind: "delta",
-          delta: { removedSessionIds: [opened.sessionId] },
-        });
+        // A revoked session is detached before the removal is published, so it
+        // cannot keep observing the project through its old subscription.
+        expect(updates).toHaveLength(1);
 
         const reopened = yield* authority.open({
           ...input(openRequest("open-2")),
@@ -284,5 +283,110 @@ describe("CollaborationPresenceAuthority", () => {
           ),
         ).toBe("slow-consumer");
       }).pipe(Effect.provide(TestClock.layer())),
+  );
+
+  it.effect("binds idempotency receipts to the complete request semantics", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW);
+      const { authority, input } = harness({ maxSessionsPerDevice: 2 });
+      const opened = yield* authority.open(input(openRequest("same-open")));
+      expect(
+        yield* failureCode(
+          authority.open(input({ ...openRequest("same-open"), state: "away", capabilities: [] })),
+        ),
+      ).toBe("conflict");
+
+      const heartbeat = {
+        requestId: "same-heartbeat",
+        sharedProjectId: PROJECT_ID,
+        sessionId: opened.sessionId,
+        state: "online",
+        capabilities: ["operator-chat"],
+      };
+      yield* authority.heartbeat(input(heartbeat));
+      expect(
+        yield* failureCode(
+          authority.heartbeat(input({ ...heartbeat, state: "away", capabilities: [] })),
+        ),
+      ).toBe("conflict");
+
+      const second = yield* authority.open(input(openRequest("second-open")));
+      yield* authority.close(
+        input({
+          requestId: "same-close",
+          sharedProjectId: PROJECT_ID,
+          sessionId: second.sessionId,
+        }),
+      );
+      expect(
+        yield* failureCode(
+          authority.close(
+            input({
+              requestId: "same-close",
+              sharedProjectId: PROJECT_ID,
+              sessionId: opened.sessionId,
+            }),
+          ),
+        ),
+      ).toBe("conflict");
+    }).pipe(Effect.provide(TestClock.layer())),
+  );
+
+  it.effect("detaches closed subscribers and defensively copies consumer updates", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW);
+      const { authority, input } = harness({ maxSessionsPerDevice: 2 });
+      const first = yield* authority.open(input(openRequest("first-open")));
+      const updates: CollaborationPresenceUpdate[] = [];
+      yield* authority.subscribe({
+        ...input({ sharedProjectId: PROJECT_ID, sessionId: first.sessionId, afterVersion: 0 }),
+        consumer: {
+          offer: (update) => {
+            updates.push(update);
+            if (update.kind === "snapshot")
+              (update.snapshot.entries as unknown as Array<unknown>).splice(0);
+            if (update.kind === "delta")
+              (update.delta.upserts as unknown as Array<unknown>).splice(0);
+            return true;
+          },
+        },
+      });
+      yield* authority.close(
+        input({
+          requestId: "close-first",
+          sharedProjectId: PROJECT_ID,
+          sessionId: first.sessionId,
+        }),
+      );
+      const countAfterClose = updates.length;
+      const second = yield* authority.open(input(openRequest("second-open")));
+      yield* authority.heartbeat(
+        input({
+          requestId: "second-heartbeat",
+          sharedProjectId: PROJECT_ID,
+          sessionId: second.sessionId,
+          state: "away",
+          capabilities: [],
+        }),
+      );
+      expect(updates).toHaveLength(countAfterClose);
+      const current = yield* authority.snapshot(
+        input({ sharedProjectId: PROJECT_ID, sessionId: second.sessionId, afterVersion: 0 }),
+      );
+      expect(current.entries).toHaveLength(1);
+      expect(current.entries[0]?.state).toBe("away");
+    }).pipe(Effect.provide(TestClock.layer())),
+  );
+
+  it.effect("enforces the project-wide public roster bound", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW);
+      const { authority, input } = harness({ maxSessionsPerDevice: 129 });
+      for (let index = 0; index < 128; index += 1)
+        yield* authority.open(input(openRequest(`bounded-open-${index}`)));
+      expect(yield* failureCode(authority.open(input(openRequest("bounded-open-overflow"))))).toBe(
+        "resource-exhausted",
+      );
+    }).pipe(Effect.provide(TestClock.layer())),
   );
 });

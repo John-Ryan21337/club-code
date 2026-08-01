@@ -3,6 +3,7 @@ import {
   COLLABORATION_PRESENCE_HEARTBEAT_INTERVAL_MILLIS,
   COLLABORATION_PRESENCE_INITIAL_ROSTER_LIMIT,
   COLLABORATION_PRESENCE_MAX_SESSIONS_PER_DEVICE,
+  COLLABORATION_PRESENCE_ROSTER_MAX,
   COLLABORATION_PRESENCE_SESSION_TTL_MILLIS,
   CollaborationPresenceCapabilities,
   CollaborationPresenceCloseRequest,
@@ -18,7 +19,7 @@ import {
   type SharedProjectId,
 } from "@cafecode/contracts";
 import { CollaborationDeviceKeyId } from "@cafecode/contracts";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, createHmac, randomBytes } from "node:crypto";
 
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
@@ -144,16 +145,26 @@ interface Session {
   readonly deviceKeyId: string;
   readonly openRequestId: string;
   entry: CollaborationPresenceRosterEntry;
-  readonly heartbeatReceipts: Set<string>;
+  readonly heartbeatReceipts: Map<string, string>;
+}
+
+interface OpenReceipt {
+  readonly sessionId: string;
+  readonly fingerprint: string;
+}
+
+interface Subscriber {
+  readonly sessionId: string;
+  readonly consumer: CollaborationPresenceConsumer;
 }
 
 interface ProjectState {
   version: number;
   readonly sessions: Map<string, Session>;
-  readonly openReceipts: Map<string, string>;
-  readonly closeReceipts: Set<string>;
+  readonly openReceipts: Map<string, OpenReceipt>;
+  readonly closeReceipts: Map<string, string>;
   readonly deltas: CollaborationPresenceDelta[];
-  readonly subscribers: Map<number, CollaborationPresenceConsumer>;
+  readonly subscribers: Map<number, Subscriber>;
 }
 
 function failure(code: CollaborationPresenceErrorCode): CollaborationPresenceError {
@@ -161,9 +172,8 @@ function failure(code: CollaborationPresenceErrorCode): CollaborationPresenceErr
 }
 
 function isoRef(secret: Uint8Array, domain: string, value: string): string {
-  return createHash("sha256")
+  return createHmac("sha256", secret)
     .update("cafecode-collaboration-presence-audit/v1\0")
-    .update(secret)
     .update(domain)
     .update("\0")
     .update(value)
@@ -173,6 +183,31 @@ function isoRef(secret: Uint8Array, domain: string, value: string): string {
 
 function deviceReceiptKey(principal: CollaborationPrincipal, requestId: string): string {
   return `${principal.sharedProjectId}\0${principal.userId}\0${principal.deviceId}\0${requestId}`;
+}
+
+function requestFingerprint(domain: string, value: unknown): string {
+  return createHash("sha256")
+    .update(`cafecode-collaboration-presence-${domain}/v1\0`)
+    .update(JSON.stringify(value))
+    .digest("hex");
+}
+
+function openFingerprint(request: typeof CollaborationPresenceOpenRequest.Type): string {
+  return requestFingerprint("open", {
+    sharedProjectId: request.sharedProjectId,
+    state: request.state,
+    capabilities: [...request.capabilities].toSorted(),
+    supersedesSessionId: request.supersedesSessionId,
+  });
+}
+
+function heartbeatFingerprint(request: typeof CollaborationPresenceHeartbeatRequest.Type): string {
+  return requestFingerprint("heartbeat", {
+    sharedProjectId: request.sharedProjectId,
+    sessionId: request.sessionId,
+    state: request.state,
+    capabilities: [...request.capabilities].toSorted(),
+  });
 }
 
 function sessionId(): typeof CollaborationPresenceSessionId.Type {
@@ -191,11 +226,31 @@ function snapshot(
   return { sharedProjectId: projectId, version: project.version, entries };
 }
 
+function copyRosterEntry(
+  entry: CollaborationPresenceRosterEntry,
+): CollaborationPresenceRosterEntry {
+  return { ...entry, capabilities: [...entry.capabilities] };
+}
+
 function copySnapshot(value: CollaborationPresenceSnapshot): CollaborationPresenceSnapshot {
   return {
     ...value,
-    entries: value.entries.map((entry) => ({ ...entry, capabilities: [...entry.capabilities] })),
+    entries: value.entries.map(copyRosterEntry),
   };
+}
+
+function copyDelta(value: CollaborationPresenceDelta): CollaborationPresenceDelta {
+  return {
+    ...value,
+    upserts: value.upserts.map(copyRosterEntry),
+    removedSessionIds: [...value.removedSessionIds],
+  };
+}
+
+function copyUpdate(value: CollaborationPresenceUpdate): CollaborationPresenceUpdate {
+  return value.kind === "snapshot"
+    ? { kind: "snapshot", snapshot: copySnapshot(value.snapshot) }
+    : { kind: "delta", delta: copyDelta(value.delta) };
 }
 
 /**
@@ -231,7 +286,7 @@ export function makeCollaborationPresenceAuthority(
       version: 0,
       sessions: new Map(),
       openReceipts: new Map(),
-      closeReceipts: new Set(),
+      closeReceipts: new Map(),
       deltas: [],
       subscribers: new Map(),
     };
@@ -250,7 +305,11 @@ export function makeCollaborationPresenceAuthority(
         outcome,
         projectRef: isoRef(options.auditSecret, "project", projectId),
         actorRef: principal
-          ? isoRef(options.auditSecret, "actor", `${principal.userId}\0${principal.deviceId}`)
+          ? isoRef(
+              options.auditSecret,
+              "actor",
+              `${projectId}\0${principal.userId}\0${principal.deviceId}`,
+            )
           : null,
       })
       .pipe(Effect.catch(() => Effect.void));
@@ -297,14 +356,20 @@ export function makeCollaborationPresenceAuthority(
     const delta: CollaborationPresenceDelta = {
       sharedProjectId: projectId,
       version: project.version as never,
-      upserts: [...(change.upserts ?? [])],
+      upserts: (change.upserts ?? []).map(copyRosterEntry),
       removedSessionIds: [...(change.removed ?? [])],
     };
     project.deltas.push(delta);
     if (project.deltas.length > replayLimit)
       project.deltas.splice(0, project.deltas.length - replayLimit);
-    for (const [subscriberId, consumer] of project.subscribers) {
-      if (!consumer.offer({ kind: "delta", delta })) project.subscribers.delete(subscriberId);
+    for (const [subscriberId, subscriber] of project.subscribers) {
+      let accepted = false;
+      try {
+        accepted = subscriber.consumer.offer(copyUpdate({ kind: "delta", delta }));
+      } catch {
+        accepted = false;
+      }
+      if (!accepted) project.subscribers.delete(subscriberId);
     }
   };
   const remove = (
@@ -313,8 +378,8 @@ export function makeCollaborationPresenceAuthority(
     id: typeof CollaborationPresenceSessionId.Type,
   ) => {
     if (!project.sessions.delete(id)) return;
-    for (const [key, receiptSessionId] of project.openReceipts) {
-      if (receiptSessionId === id) project.openReceipts.delete(key);
+    for (const [subscriberId, subscriber] of project.subscribers) {
+      if (subscriber.sessionId === id) project.subscribers.delete(subscriberId);
     }
     publish(projectId, project, { removed: [id] });
   };
@@ -329,10 +394,17 @@ export function makeCollaborationPresenceAuthority(
     deviceKeyId: unknown,
     projectId: SharedProjectId,
     id: typeof CollaborationPresenceSessionId.Type,
-  ): Effect.Effect<Session, CollaborationPresenceError> =>
+    now?: number,
+  ): Effect.Effect<
+    { readonly project: ProjectState; readonly session: Session },
+    CollaborationPresenceError
+  > =>
     Effect.gen(function* () {
       const verified = yield* authorize(principal, deviceKeyId, projectId);
-      const session = projectFor(projectId).sessions.get(id);
+      const project = projects.get(projectId);
+      if (!project) return yield* Effect.fail(failure("not-found"));
+      if (now !== undefined) purge(projectId, project, now);
+      const session = project.sessions.get(id);
       const decodedKey = yield* decodeDeviceKeyId(deviceKeyId).pipe(
         Effect.mapError(() => failure("not-found")),
       );
@@ -345,7 +417,7 @@ export function makeCollaborationPresenceAuthority(
       ) {
         return yield* Effect.fail(failure("not-found"));
       }
-      return session;
+      return { project, session };
     });
 
   const open: CollaborationPresenceAuthorityShape["open"] = (input) =>
@@ -365,9 +437,11 @@ export function makeCollaborationPresenceAuthority(
       const project = projectFor(request.sharedProjectId);
       purge(request.sharedProjectId, project, now);
       const receiptKey = deviceReceiptKey(principal, request.requestId);
-      const replayedId = project.openReceipts.get(receiptKey);
-      if (replayedId) {
-        const replayed = project.sessions.get(replayedId);
+      const fingerprint = openFingerprint(request);
+      const receipt = project.openReceipts.get(receiptKey);
+      if (receipt) {
+        if (receipt.fingerprint !== fingerprint) return yield* Effect.fail(failure("conflict"));
+        const replayed = project.sessions.get(receipt.sessionId);
         if (replayed) {
           yield* audit("open", "accepted", request.sharedProjectId, principal);
           return {
@@ -383,7 +457,7 @@ export function makeCollaborationPresenceAuthority(
             ),
           };
         }
-        project.openReceipts.delete(receiptKey);
+        return yield* Effect.fail(failure("conflict"));
       }
       if (request.supersedesSessionId !== null) {
         const superseded = project.sessions.get(request.supersedesSessionId);
@@ -401,8 +475,11 @@ export function makeCollaborationPresenceAuthority(
           session.principal.deviceId === principal.deviceId,
       );
       if (held.length >= maxSessions) return yield* Effect.fail(failure("resource-exhausted"));
+      if (project.sessions.size >= COLLABORATION_PRESENCE_ROSTER_MAX)
+        return yield* Effect.fail(failure("resource-exhausted"));
       const expiresAt = DateTime.add(DateTime.makeUnsafe(now), { milliseconds: ttlMillis });
-      const id = sessionId();
+      let id = sessionId();
+      while (project.sessions.has(id)) id = sessionId();
       const entry: CollaborationPresenceRosterEntry = {
         sessionId: id,
         userId: principal.userId,
@@ -420,9 +497,11 @@ export function makeCollaborationPresenceAuthority(
         deviceKeyId,
         openRequestId: request.requestId,
         entry,
-        heartbeatReceipts: new Set(),
+        heartbeatReceipts: new Map(),
       });
-      project.openReceipts.set(receiptKey, id);
+      project.openReceipts.set(receiptKey, { sessionId: id, fingerprint });
+      while (project.openReceipts.size > 256)
+        project.openReceipts.delete(project.openReceipts.keys().next().value!);
       publish(request.sharedProjectId, project, { upserts: [entry] });
       // Recheck after mutation so a just-revoked device never remains published.
       const rechecked = yield* authorize(
@@ -430,7 +509,12 @@ export function makeCollaborationPresenceAuthority(
         input.deviceKeyId,
         request.sharedProjectId,
       ).pipe(Effect.catch(() => Effect.succeed(null)));
-      if (rechecked === null) {
+      if (
+        rechecked === null ||
+        rechecked.userId !== principal.userId ||
+        rechecked.deviceId !== principal.deviceId ||
+        rechecked.membershipEpoch !== principal.membershipEpoch
+      ) {
         remove(request.sharedProjectId, project, id);
         return yield* Effect.fail(failure("not-found"));
       }
@@ -455,18 +539,22 @@ export function makeCollaborationPresenceAuthority(
         Effect.mapError(() => failure("invalid-request")),
       );
       const now = DateTime.toEpochMillis(yield* DateTime.now);
-      const project = projectFor(request.sharedProjectId);
-      purge(request.sharedProjectId, project, now);
-      const session = yield* checkSession(
+      const checked = yield* checkSession(
         input.principal,
         input.deviceKeyId,
         request.sharedProjectId,
         request.sessionId,
+        now,
       );
-      if (!session.heartbeatReceipts.has(request.requestId)) {
-        session.heartbeatReceipts.add(request.requestId);
+      const { project, session } = checked;
+      const fingerprint = heartbeatFingerprint(request);
+      const priorFingerprint = session.heartbeatReceipts.get(request.requestId);
+      if (priorFingerprint !== undefined && priorFingerprint !== fingerprint)
+        return yield* Effect.fail(failure("conflict"));
+      if (priorFingerprint === undefined) {
+        session.heartbeatReceipts.set(request.requestId, fingerprint);
         while (session.heartbeatReceipts.size > 64)
-          session.heartbeatReceipts.delete(session.heartbeatReceipts.values().next().value!);
+          session.heartbeatReceipts.delete(session.heartbeatReceipts.keys().next().value!);
         session.entry = {
           ...session.entry,
           state: request.state,
@@ -474,6 +562,20 @@ export function makeCollaborationPresenceAuthority(
           expiresAt: DateTime.add(DateTime.makeUnsafe(now), { milliseconds: ttlMillis }),
         };
         publish(request.sharedProjectId, project, { upserts: [session.entry] });
+        const rechecked = yield* authorize(
+          input.principal,
+          input.deviceKeyId,
+          request.sharedProjectId,
+        ).pipe(Effect.catch(() => Effect.succeed(null)));
+        if (
+          rechecked === null ||
+          rechecked.userId !== session.principal.userId ||
+          rechecked.deviceId !== session.principal.deviceId ||
+          rechecked.membershipEpoch !== session.principal.membershipEpoch
+        ) {
+          remove(request.sharedProjectId, project, session.id);
+          return yield* Effect.fail(failure("not-found"));
+        }
       }
       yield* audit("heartbeat", "accepted", request.sharedProjectId, session.principal);
       return copySnapshot(
@@ -490,27 +592,30 @@ export function makeCollaborationPresenceAuthority(
       const request = yield* decodeClose(input.request, { onExcessProperty: "error" }).pipe(
         Effect.mapError(() => failure("invalid-request")),
       );
-      const project = projectFor(request.sharedProjectId);
       const principal = yield* authorize(
         input.principal,
         input.deviceKeyId,
         request.sharedProjectId,
       );
+      const project = projects.get(request.sharedProjectId);
+      if (!project) return yield* Effect.fail(failure("not-found"));
       const receiptKey = deviceReceiptKey(principal, request.requestId);
-      if (project.closeReceipts.has(receiptKey)) {
+      const priorSessionId = project.closeReceipts.get(receiptKey);
+      if (priorSessionId !== undefined) {
+        if (priorSessionId !== request.sessionId) return yield* Effect.fail(failure("conflict"));
         yield* audit("close", "accepted", request.sharedProjectId, principal);
         return;
       }
-      const session = yield* checkSession(
+      const { session } = yield* checkSession(
         input.principal,
         input.deviceKeyId,
         request.sharedProjectId,
         request.sessionId,
       );
       remove(request.sharedProjectId, project, session.id);
-      project.closeReceipts.add(receiptKey);
+      project.closeReceipts.set(receiptKey, request.sessionId);
       while (project.closeReceipts.size > 256)
-        project.closeReceipts.delete(project.closeReceipts.values().next().value!);
+        project.closeReceipts.delete(project.closeReceipts.keys().next().value!);
       yield* audit("close", "accepted", request.sharedProjectId, session.principal);
     }).pipe(
       Effect.catch((cause) =>
@@ -524,13 +629,12 @@ export function makeCollaborationPresenceAuthority(
         Effect.mapError(() => failure("invalid-request")),
       );
       const now = DateTime.toEpochMillis(yield* DateTime.now);
-      const project = projectFor(request.sharedProjectId);
-      purge(request.sharedProjectId, project, now);
-      const session = yield* checkSession(
+      const { project, session } = yield* checkSession(
         input.principal,
         input.deviceKeyId,
         request.sharedProjectId,
         request.sessionId,
+        now,
       );
       yield* audit("snapshot", "accepted", request.sharedProjectId, session.principal);
       return copySnapshot(
@@ -552,13 +656,12 @@ export function makeCollaborationPresenceAuthority(
         Effect.mapError(() => failure("invalid-request")),
       );
       const now = DateTime.toEpochMillis(yield* DateTime.now);
-      const project = projectFor(request.sharedProjectId);
-      purge(request.sharedProjectId, project, now);
-      const session = yield* checkSession(
+      const { project, session } = yield* checkSession(
         input.principal,
         input.deviceKeyId,
         request.sharedProjectId,
         request.sessionId,
+        now,
       );
       const limit = request.rosterLimit ?? COLLABORATION_PRESENCE_INITIAL_ROSTER_LIMIT;
       const retained = project.deltas.filter((delta) => delta.version > request.afterVersion);
@@ -572,15 +675,38 @@ export function makeCollaborationPresenceAuthority(
               snapshot: copySnapshot(snapshot(request.sharedProjectId, project, limit)),
             }
           : { kind: "delta", delta: retained[0]! };
-      if (!input.consumer.offer(initial)) return yield* Effect.fail(failure("slow-consumer"));
+      const offer = (update: CollaborationPresenceUpdate): boolean => {
+        try {
+          return input.consumer.offer(copyUpdate(update));
+        } catch {
+          return false;
+        }
+      };
+      if (!offer(initial)) return yield* Effect.fail(failure("slow-consumer"));
       if (!mustResync) {
         for (const delta of retained.slice(1)) {
-          if (!input.consumer.offer({ kind: "delta", delta }))
-            return yield* Effect.fail(failure("slow-consumer"));
+          if (!offer({ kind: "delta", delta })) return yield* Effect.fail(failure("slow-consumer"));
         }
       }
+      if (!Number.isSafeInteger(nextSubscriberId) || nextSubscriberId >= Number.MAX_SAFE_INTEGER)
+        return yield* Effect.fail(failure("resource-exhausted"));
       const subscriberId = nextSubscriberId++;
-      project.subscribers.set(subscriberId, input.consumer);
+      project.subscribers.set(subscriberId, { sessionId: session.id, consumer: input.consumer });
+      const rechecked = yield* authorize(
+        input.principal,
+        input.deviceKeyId,
+        request.sharedProjectId,
+      ).pipe(Effect.catch(() => Effect.succeed(null)));
+      if (
+        rechecked === null ||
+        rechecked.userId !== session.principal.userId ||
+        rechecked.deviceId !== session.principal.deviceId ||
+        rechecked.membershipEpoch !== session.principal.membershipEpoch ||
+        !project.sessions.has(session.id)
+      ) {
+        project.subscribers.delete(subscriberId);
+        return yield* Effect.fail(failure("not-found"));
+      }
       yield* audit("subscribe", "accepted", request.sharedProjectId, session.principal);
       return { unsubscribe: () => project.subscribers.delete(subscriberId) };
     }).pipe(
@@ -591,7 +717,8 @@ export function makeCollaborationPresenceAuthority(
 
   const recheckProject: CollaborationPresenceAuthorityShape["recheckProject"] = (projectId) =>
     Effect.gen(function* () {
-      const project = projectFor(projectId);
+      const project = projects.get(projectId);
+      if (!project) return;
       for (const session of project.sessions.values()) {
         const current = yield* authorize(session.principal, session.deviceKeyId, projectId).pipe(
           Effect.catch(() => Effect.succeed(null)),
