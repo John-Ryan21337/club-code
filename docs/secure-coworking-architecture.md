@@ -334,6 +334,14 @@ raised only after load, partition, revocation, abuse, and backpressure testing.
   compare-and-swap head updates whose expected hash matches the snapshot base
   and whose fencing tokens remain exact integers. These are contracts only; no
   live database file is copied.
+- `packages/contracts/src/collaborationSqliteSnapshot.ts` and
+  `apps/server/src/collaboration/CollaborationSqliteManagedSnapshot.ts` define the narrow SQLite
+  managed-snapshot plane. Capture uses native online backup to consolidate committed WAL state
+  without copying sidecars. Restore requires an injected whole-replica quiescence authority,
+  revalidates the lease/fence/head and content identity around an atomic managed-replica
+  replacement, retains recovery material, and rolls back on late authority changes. It exposes
+  no listener, arbitrary path selection, page merge, or automatic head mutation. See
+  `docs/collaboration-sqlite-managed-snapshots.md`.
 - `packages/contracts/src/collaborationFileSync.ts`, migration 075, and
   `CollaborationFileSyncStore` add the server-side content-addressed metadata
   authority. Chunk manifests, contents, and versions are immutable. Canonical
