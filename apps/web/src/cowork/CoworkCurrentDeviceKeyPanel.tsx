@@ -22,23 +22,12 @@ function displayTime(value: string | null): string {
 }
 
 function Panel({
-  client,
-  sharedProjectId,
-  userId,
-  deviceId,
-  membershipEpoch,
+  model,
   createCommandId = defaultCommandId,
-}: CoworkCurrentDeviceKeyPanelProps & { readonly client: CoworkCurrentDeviceKeyClient }) {
-  const model = useMemo(
-    () =>
-      new CoworkCurrentDeviceKeyModel(client, {
-        sharedProjectId,
-        userId,
-        deviceId,
-        membershipEpoch,
-      }),
-    [client, deviceId, membershipEpoch, sharedProjectId, userId],
-  );
+}: {
+  readonly model: CoworkCurrentDeviceKeyModel;
+  readonly createCommandId: (() => string) | undefined;
+}) {
   const state = useSyncExternalStore(model.subscribe, model.getSnapshot, model.getSnapshot);
   const headingId = useId();
 
@@ -156,6 +145,30 @@ function Panel({
 }
 
 export function CoworkCurrentDeviceKeyPanel(props: CoworkCurrentDeviceKeyPanelProps) {
+  const model = useMemo(() => {
+    if (props.client === null) return null;
+    try {
+      return new CoworkCurrentDeviceKeyModel(props.client, {
+        sharedProjectId: props.sharedProjectId,
+        userId: props.userId,
+        deviceId: props.deviceId,
+        membershipEpoch: props.membershipEpoch,
+      });
+    } catch {
+      return null;
+    }
+  }, [props.client, props.deviceId, props.membershipEpoch, props.sharedProjectId, props.userId]);
   if (props.client === null) return null;
-  return <Panel {...props} client={props.client} />;
+  if (model === null) {
+    return (
+      <section aria-label="Current device key panel unavailable" role="alert">
+        <h2>This device&apos;s cowork key is unavailable</h2>
+        <p>
+          No key details were admitted because the current project, device authority, or injected
+          client is invalid.
+        </p>
+      </section>
+    );
+  }
+  return <Panel createCommandId={props.createCommandId} model={model} />;
 }

@@ -175,6 +175,27 @@ describe("CoworkCurrentDeviceKeyModel", () => {
     expect(createCommandId).toHaveBeenCalledOnce();
   });
 
+  it("admits only one command construction across a reentrant command-id callback", async () => {
+    const h = harness();
+    const nestedCommandId = vi.fn(() => "nested-command-must-not-run");
+    const createCommandId = vi.fn(() => {
+      h.model.confirmSelfRevoke(nestedCommandId);
+      return "outer-reentrant-command";
+    });
+    h.model.start();
+    await phase(h.model, "active");
+    h.model.requestSelfRevoke();
+    h.model.confirmSelfRevoke(createCommandId);
+    await phase(h.model, "enrollment-required");
+
+    expect(createCommandId).toHaveBeenCalledOnce();
+    expect(nestedCommandId).not.toHaveBeenCalled();
+    expect(h.revokeCurrentDeviceKey).toHaveBeenCalledOnce();
+    expect(h.revokeCurrentDeviceKey.mock.calls[0]![0]).toMatchObject({
+      commandId: "outer-reentrant-command",
+    });
+  });
+
   it("keeps the exact retry after malformed or authority-drifted revoke results", async () => {
     const results = [
       { ...revoked(), disposition: "activated" },
@@ -266,6 +287,78 @@ describe("CoworkCurrentDeviceKeyModel", () => {
     });
     throwing.model.start();
     await phase(throwing.model, "unavailable");
+
+    const hostileRevokeThenable = {};
+    Reflect.defineProperty(hostileRevokeThenable, ["th", "en"].join(""), {
+      get() {
+        throw new Error("hostile revoke then getter");
+      },
+    });
+    const revokeHostile = harness({
+      revoke: (() =>
+        hostileRevokeThenable) as unknown as CoworkCurrentDeviceKeyClient["revokeCurrentDeviceKey"],
+    });
+    revokeHostile.model.start();
+    await phase(revokeHostile.model, "active");
+    revokeHostile.model.requestSelfRevoke();
+    revokeHostile.model.confirmSelfRevoke(() => "hostile-revoke-command");
+    await phase(revokeHostile.model, "retry-revoke");
+    expect(revokeHostile.revokeCurrentDeviceKey).toHaveBeenCalledOnce();
+  });
+
+  it("rejects an accessor-backed or hostile client before retaining its capability", () => {
+    const accessorClient = {
+      revokeCurrentDeviceKey: async () => revoked(),
+    } as unknown as CoworkCurrentDeviceKeyClient;
+    Object.defineProperty(accessorClient, "getCurrentDeviceKeyStatus", {
+      enumerable: true,
+      get: () => async () => activeStatus(),
+    });
+    expect(() => new CoworkCurrentDeviceKeyModel(accessorClient, scope)).toThrow(
+      /own callable getCurrentDeviceKeyStatus/,
+    );
+
+    const hostileClient = new Proxy(
+      {},
+      {
+        getOwnPropertyDescriptor() {
+          throw new Error("SECRET_CLIENT_TRAP_DETAIL");
+        },
+      },
+    ) as CoworkCurrentDeviceKeyClient;
+    expect(() => new CoworkCurrentDeviceKeyModel(hostileClient, scope)).toThrow(
+      /could not be inspected safely/,
+    );
+  });
+
+  it("bounds hostile scalar responses before schema decoding", async () => {
+    const oversizedSecret = "S".repeat(4097);
+    const h = harness({
+      status: async () => ({ ...activeStatus(), injected: oversizedSecret }),
+    });
+    h.model.start();
+    await phase(h.model, "unavailable");
+    expect(h.model.getSnapshot().deviceKeyId).toBeNull();
+    expect(JSON.stringify(h.model.getSnapshot())).not.toContain(oversizedSecret);
+  });
+
+  it("isolates throwing and self-expanding observers from authority transitions", async () => {
+    const h = harness();
+    let expandingCalls = 0;
+    const expandingListener = (): (() => void) => () => {
+      expandingCalls += 1;
+      h.model.subscribe(expandingListener());
+    };
+    h.model.subscribe(expandingListener());
+    h.model.subscribe(() => {
+      throw new Error("observer failure must not alter authority state");
+    });
+
+    h.model.start();
+    await phase(h.model, "active");
+    expect(expandingCalls).toBe(3);
+    expect(h.getCurrentDeviceKeyStatus).toHaveBeenCalledOnce();
+    expect(h.model.getSnapshot().deviceKeyId).toBe(DEVICE_KEY_ID);
   });
 
   it("can be stopped at published lifecycle boundaries before invoking the next client method", async () => {

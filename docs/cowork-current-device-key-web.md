@@ -13,6 +13,8 @@ the caller's authenticated scope, and then presents either the current active ke
 activation time or `enrollment-required`. Excess, incomplete, accessor-backed, proxy-wrapped,
 cross-scope, stale-epoch, or otherwise malformed responses are concealed as unavailable. No key
 bytes, challenge, proof, nonce, digest, receipt, or another device can enter presentation state.
+Plain-data inspection also bounds scalar strings before cloning, and invalid replacement clients
+or scopes fail closed to fixed copy without leaving the prior key presentation committed.
 
 Self-revocation requires a separate destructive confirmation after an active status was admitted.
 Confirmation freezes one request containing only a new command ID, the same project, and the exact
@@ -22,6 +24,8 @@ revocation time. An indeterminate acknowledgement retains that exact frozen requ
 the same object and never creates a replacement command. Project, user, device, membership-epoch,
 or injected-client replacement synchronously removes old key, confirmation, pending, and retry
 presentation, stops the old model, and ignores its late result.
+Command-ID construction is reentrancy-guarded, while snapshot-isolated observers cannot expand an
+active notification pass or convert an authority result into a transport outcome.
 
 This child deliberately does not compose with PR #43's separate enrollment signer UI. A future
 production surface must inject an authenticated transport adapter and authoritative current scope;

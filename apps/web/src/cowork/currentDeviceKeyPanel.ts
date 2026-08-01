@@ -14,6 +14,7 @@ import * as Schema from "effect/Schema";
 
 const PLAIN_DATA_MAX_NODES = 32;
 const PLAIN_DATA_MAX_PROPERTIES = 12;
+const PLAIN_DATA_MAX_STRING_CHARS = 4096;
 const strictOptions = { onExcessProperty: "error" } as const;
 
 const CurrentDeviceKeyScope = Schema.Struct({
@@ -79,6 +80,9 @@ function assertPlainData(root: unknown, label: string): void {
   while (pending.length > 0) {
     if (++visited > PLAIN_DATA_MAX_NODES) throw new Error(`${label} is too large`);
     const value = pending.pop();
+    if (typeof value === "string" && value.length > PLAIN_DATA_MAX_STRING_CHARS) {
+      throw new Error(`${label} contains an oversized string`);
+    }
     if (value === null || typeof value !== "object") continue;
     let prototype: object | null;
     let descriptors: Record<PropertyKey, PropertyDescriptor>;
@@ -195,6 +199,7 @@ export class CoworkCurrentDeviceKeyModel {
   #state: CoworkCurrentDeviceKeyState;
   #active: ActiveGeneration | null = null;
   #attempt: RevokeAttempt | null = null;
+  #constructingCommand = false;
   #generation = 0;
   #listeners = new Set<() => void>();
 
@@ -273,9 +278,16 @@ export class CoworkCurrentDeviceKeyModel {
 
   confirmSelfRevoke(createCommandId: () => string): void {
     const active = this.#active;
-    if (!this.#isActive(active) || this.#state.phase !== "confirming-revoke") return;
+    if (
+      !this.#isActive(active) ||
+      this.#state.phase !== "confirming-revoke" ||
+      this.#constructingCommand
+    ) {
+      return;
+    }
     const activeKey = activeKeyFromState(this.#state);
     if (activeKey === null) return;
+    this.#constructingCommand = true;
     try {
       const commandId = decodeCommandId(createCommandId(), strictOptions);
       if (!this.#isActive(active) || this.#state.phase !== "confirming-revoke") return;
@@ -296,6 +308,8 @@ export class CoworkCurrentDeviceKeyModel {
       if (!this.#isActive(active) || this.#state.phase !== "confirming-revoke") return;
       this.#attempt = null;
       this.#setState(stateFor(this.#scope, "prepare-failed", activeKey));
+    } finally {
+      this.#constructingCommand = false;
     }
   }
 
@@ -375,6 +389,14 @@ export class CoworkCurrentDeviceKeyModel {
 
   #setState(state: CoworkCurrentDeviceKeyState): void {
     this.#state = state;
-    for (const listener of this.#listeners) listener();
+    const listeners = Array.from(this.#listeners);
+    for (const listener of listeners) {
+      try {
+        listener();
+      } catch {
+        // A renderer observer is not part of the device-key authority. Keep
+        // hostile or stale subscribers from changing a transport outcome.
+      }
+    }
   }
 }

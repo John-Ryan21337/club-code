@@ -175,6 +175,43 @@ describe("CoworkCurrentDeviceKeyPanel", () => {
     expect(h.revokeCurrentDeviceKey).not.toHaveBeenCalled();
   });
 
+  it("clears prior key details when a replacement client is invalid", async () => {
+    const first = harness();
+    mounted = await render(<CoworkCurrentDeviceKeyPanel {...scope} client={first.client} />);
+    await expect.element(page.getByText(DEVICE_KEY_ID)).toBeVisible();
+
+    const invalidClient = {
+      revokeCurrentDeviceKey: vi.fn(async () => revoked()),
+    } as unknown as CoworkCurrentDeviceKeyClient;
+    await mounted.rerender(<CoworkCurrentDeviceKeyPanel {...scope} client={invalidClient} />);
+
+    expect(document.body.textContent).not.toContain(DEVICE_KEY_ID);
+    await expect
+      .element(page.getByRole("alert", { name: "Current device key panel unavailable" }))
+      .toHaveTextContent("No key details were admitted");
+    expect(first.getCurrentDeviceKeyStatus).toHaveBeenCalledOnce();
+  });
+
+  it("clears prior key details when replacement scope validation fails", async () => {
+    const h = harness();
+    mounted = await render(<CoworkCurrentDeviceKeyPanel {...scope} client={h.client} />);
+    await expect.element(page.getByText(DEVICE_KEY_ID)).toBeVisible();
+
+    await mounted.rerender(
+      <CoworkCurrentDeviceKeyPanel
+        {...scope}
+        client={h.client}
+        membershipEpoch={"invalid-epoch" as unknown as typeof scope.membershipEpoch}
+      />,
+    );
+
+    expect(document.body.textContent).not.toContain(DEVICE_KEY_ID);
+    await expect
+      .element(page.getByRole("alert", { name: "Current device key panel unavailable" }))
+      .toHaveTextContent("No key details were admitted");
+    expect(h.getCurrentDeviceKeyStatus).toHaveBeenCalledOnce();
+  });
+
   it("drops a late pending revoke when membership authority changes", async () => {
     const nextStatus = new Promise<unknown>(() => undefined);
     let statusRead = 0;
