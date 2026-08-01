@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   SHARED_TASK_PAGE_LIMIT,
   SharedTaskAgentCoordinationModel,
+  classifySharedTaskClientError,
   type SharedTaskMutationRequest,
 } from "./taskAgentCoordinationModel";
 
@@ -75,7 +76,7 @@ describe("SharedTaskAgentCoordinationModel", () => {
 
   it("bounds pages and refuses mismatched project or cursor responses", () => {
     const model = new SharedTaskAgentCoordinationModel(project("project-a"));
-    const ticket = model.beginPage("cursor-a")!;
+    const ticket = model.beginPage(null)!;
     expect(
       model.acceptPage(ticket, {
         sharedProjectId: project("project-b"),
@@ -123,11 +124,20 @@ describe("SharedTaskAgentCoordinationModel", () => {
     expect(snapshot.tasks.find((value) => value.taskId === "task-a")?.revision).toBe(2);
     expect(snapshot.revisionConflicts.has("task-b")).toBe(true);
 
+    const canonicalRefresh = model.beginPage(null)!;
+    model.acceptPage(canonicalRefresh, {
+      sharedProjectId: project("project-a"),
+      requestCursor: null,
+      tasks: [task("task-b", 3)],
+      nextCursor: null,
+    });
+    expect(model.snapshot().revisionConflicts.has("task-b")).toBe(false);
+
     const third = model.beginPage(null)!;
     model.acceptPage(third, {
       sharedProjectId: project("project-a"),
       requestCursor: null,
-      tasks: [task("task-b", 4, { title: "Canonical title" })],
+      tasks: [task("task-b", 4)],
       nextCursor: null,
     });
     expect(model.snapshot().revisionConflicts.has("task-b")).toBe(false);
@@ -143,8 +153,10 @@ describe("SharedTaskAgentCoordinationModel", () => {
     const retryState = model.snapshot().commandByTaskId.get("task-a");
     expect(retryState?.kind).toBe("retry");
     if (retryState?.kind !== "retry") throw new Error("expected retry state");
-    expect(retryState.request).toBe(request);
-    expect(model.beginCommand(retryState.request)?.request).toBe(request);
+    expect(retryState.request).toStrictEqual(request);
+    expect(Object.isFrozen(retryState)).toBe(true);
+    expect(Object.isFrozen(retryState.request)).toBe(true);
+    expect(model.beginCommand(retryState.request)?.request).toBe(retryState.request);
 
     expect(
       model.beginCommand(
@@ -169,6 +181,13 @@ describe("SharedTaskAgentCoordinationModel", () => {
     ).toBe(true);
     expect(model.snapshot().commandByTaskId.get("task-a")?.kind).toBe("conflict");
 
+    const refresh = model.beginPage(null)!;
+    model.acceptPage(refresh, {
+      sharedProjectId: project("project-a"),
+      requestCursor: null,
+      tasks: [task("task-a", 1)],
+      nextCursor: null,
+    });
     const stale = model.beginCommand(command({ commandId: "command-2" }))!;
     model.selectProject(project("project-b"));
     expect(
@@ -178,5 +197,130 @@ describe("SharedTaskAgentCoordinationModel", () => {
         task: task("task-a", 2),
       }),
     ).toBe(false);
+  });
+
+  it("rejects cursor cycles, replayed page tickets, and out-of-chain cursors", () => {
+    const model = new SharedTaskAgentCoordinationModel(project("project-a"));
+    expect(model.beginPage("invented")).toBeNull();
+    expect(model.snapshot().pageState).toBe("error");
+
+    const first = model.beginPage(null)!;
+    expect(
+      model.acceptPage(first, {
+        sharedProjectId: project("project-a"),
+        requestCursor: null,
+        tasks: [task("task-a", 1)],
+        nextCursor: "next-a",
+      }),
+    ).toBe(true);
+    expect(
+      model.acceptPage(first, {
+        sharedProjectId: project("project-a"),
+        requestCursor: null,
+        tasks: [task("task-replay", 1)],
+        nextCursor: null,
+      }),
+    ).toBe(false);
+
+    const second = model.beginPage("next-a")!;
+    model.acceptPage(second, {
+      sharedProjectId: project("project-a"),
+      requestCursor: "next-a",
+      tasks: [],
+      nextCursor: "next-a",
+    });
+    expect(model.snapshot().pageState).toBe("error");
+  });
+
+  it("defensively copies tasks and rejects regressing immutable task authority", () => {
+    const model = new SharedTaskAgentCoordinationModel(project("project-a"));
+    const mutable = task("task-a", 2);
+    seed(model, [mutable]);
+
+    (mutable as { title: string }).title = "Changed after acceptance";
+    expect(model.snapshot().tasks[0]?.title).toBe("Task task-a");
+    expect(Object.isFrozen(model.snapshot().tasks[0])).toBe(true);
+    expect(Object.isFrozen(model.snapshot().tasks[0]?.dependencies)).toBe(true);
+
+    const page = model.beginPage(null)!;
+    model.acceptPage(page, {
+      sharedProjectId: project("project-a"),
+      requestCursor: null,
+      tasks: [task("task-a", 3, { title: "Hostile replacement" })],
+      nextCursor: null,
+    });
+    expect(model.snapshot().tasks[0]?.revision).toBe(2);
+    expect(model.snapshot().revisionConflicts.has("task-a")).toBe(true);
+  });
+
+  it("serializes each task command attempt and ignores replayed tickets", () => {
+    const model = new SharedTaskAgentCoordinationModel(project("project-a"));
+    seed(model, [task("task-a", 1)]);
+    const first = model.beginCommand(command())!;
+    expect(model.beginCommand(command({ commandId: "command-other" }))).toBeNull();
+    model.rejectCommand(first, { kind: "retry", message: "Retry safely." });
+
+    const retry = model.snapshot().commandByTaskId.get("task-a");
+    if (retry?.kind !== "retry") throw new Error("expected retry state");
+    const second = model.beginCommand(retry.request)!;
+    expect(
+      model.acceptCommand(first, {
+        sharedProjectId: project("project-a"),
+        commandId: "command-1",
+        task: task("task-a", 2),
+      }),
+    ).toBe(false);
+    expect(
+      model.acceptCommand(second, {
+        sharedProjectId: project("project-a"),
+        commandId: "command-1",
+        task: task("task-a", 2),
+      }),
+    ).toBe(true);
+    expect(model.snapshot().tasks[0]?.revision).toBe(2);
+  });
+
+  it("requires the exact next revision in a command acknowledgement", () => {
+    const model = new SharedTaskAgentCoordinationModel(project("project-a"));
+    seed(model, [task("task-a", 1)]);
+    const ticket = model.beginCommand(command())!;
+    model.acceptCommand(ticket, {
+      sharedProjectId: project("project-a"),
+      commandId: "command-1",
+      task: task("task-a", 3),
+    });
+    expect(model.snapshot().tasks[0]?.revision).toBe(1);
+    expect(model.snapshot().commandByTaskId.get("task-a")?.kind).toBe("conflict");
+  });
+
+  it("can reactivate after lifecycle cleanup without accepting stale work", () => {
+    const model = new SharedTaskAgentCoordinationModel(project("project-a"));
+    const stale = model.beginPage(null)!;
+    model.dispose();
+    model.activate();
+    expect(
+      model.acceptPage(stale, {
+        sharedProjectId: project("project-a"),
+        requestCursor: null,
+        tasks: [task("task-stale", 1)],
+        nextCursor: null,
+      }),
+    ).toBe(false);
+    expect(model.beginPage(null)).not.toBeNull();
+  });
+
+  it("classifies hostile thrown values without invoking an unhandled getter", () => {
+    const hostile = new Proxy(
+      {},
+      {
+        has: () => {
+          throw new Error("hostile proxy");
+        },
+      },
+    );
+    expect(classifySharedTaskClientError(hostile)).toEqual({
+      kind: "retry",
+      message: "No acknowledgement was received. Retry sends the same ID.",
+    });
   });
 });

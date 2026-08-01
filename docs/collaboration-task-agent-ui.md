@@ -25,15 +25,25 @@ An integrating transport must:
 - return only the matching project, command ID, task ID, and authoritative updated task.
 
 The pure coordination model rejects stale project generations, responses after disposal,
-mismatched cursors/projects/command IDs/task IDs, and oversized pages. Tasks are deduplicated by
-opaque task ID and advance only by revision. Two different task snapshots at the same revision are
-shown as an explicit conflict and disable mutation until refresh. A command ID is permanently bound
-to one project, task, operation, and expected revision within the mounted model; reusing it for
-different intent produces a conflict, while a retry reuses the same request object and ID.
+mismatched or replayed request attempts, cursor cycles, out-of-chain cursors, mismatched
+projects/command IDs/task IDs, non-exact command revisions, and oversized pages. Tasks and command
+requests are copied and frozen before retention so an injected adapter cannot mutate accepted UI
+authority after a request begins. Tasks are deduplicated by opaque task ID and advance only when
+revision, fencing token, immutable authored fields, update time, and any continuing lease membership
+epoch remain monotonic. Conflicting snapshots disable mutation until an authoritative refresh. A
+command ID is permanently bound to one project, task, operation, and expected revision within the
+mounted model; reusing it for different intent produces a conflict, while an indeterminate retry
+reuses the same frozen request object and ID. Only one command attempt per task may be in flight.
 
-At most eight active agent leases are expanded. Additional leases remain represented by an
-explicit capped count and hidden-state label, matching the server authority's eight-live-agent
-project limit without creating an unbounded renderer surface.
+React lifecycle cleanup invalidates all outstanding page and command tickets. The model can then
+reactivate for React StrictMode's development effect replay without accepting results from the
+disposed generation; a real project switch or unmount likewise makes late responses inert.
+
+At most eight recorded agent leases are expanded. The panel deliberately does not infer current
+liveness from renderer wall-clock time: the server remains authoritative for whether a recorded
+lease is still active. Additional lease records remain represented by an explicit capped count and
+hidden-state label, matching the server authority's eight-live-agent project limit without creating
+an unbounded renderer surface.
 
 ## Deliberate non-goals
 

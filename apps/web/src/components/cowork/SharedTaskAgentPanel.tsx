@@ -43,9 +43,13 @@ function EnabledSharedTaskAgentPanel({
   );
   const [snapshot, setSnapshot] = useState<SharedTaskAgentSnapshot>(() => model.snapshot());
 
-  useEffect(() => () => model.dispose(), [model]);
-
   const publish = useCallback(() => setSnapshot(model.snapshot()), [model]);
+
+  useEffect(() => {
+    model.activate();
+    publish();
+    return () => model.dispose();
+  }, [client, model, publish]);
 
   const loadPage = useCallback(
     async (cursor: SharedTaskCursor) => {
@@ -76,7 +80,7 @@ function EnabledSharedTaskAgentPanel({
       publish();
       if (ticket === null) return;
       try {
-        const result = await client.dispatch(request);
+        const result = await client.dispatch(ticket.request);
         if (model.acceptCommand(ticket, result)) publish();
       } catch (error) {
         if (model.rejectCommand(ticket, classifySharedTaskClientError(error))) publish();
@@ -110,6 +114,7 @@ function EnabledSharedTaskAgentPanel({
   return (
     <section
       aria-label="Shared task and agent coordination"
+      aria-busy={snapshot.pageState === "loading"}
       className="flex min-h-0 flex-col gap-3 rounded-xl border border-border/70 bg-card/80 p-4"
     >
       <header className="flex flex-wrap items-start justify-between gap-3">
@@ -149,7 +154,7 @@ function EnabledSharedTaskAgentPanel({
 
       {leaseCount > SHARED_TASK_VISIBLE_AGENT_LEASE_LIMIT ? (
         <p role="status" className="text-xs text-muted-foreground">
-          Showing {SHARED_TASK_VISIBLE_AGENT_LEASE_LIMIT} of {leaseCount} active agent leases.
+          Showing {SHARED_TASK_VISIBLE_AGENT_LEASE_LIMIT} of {leaseCount} recorded agent leases.
         </p>
       ) : null}
 
@@ -171,7 +176,7 @@ function EnabledSharedTaskAgentPanel({
         </ul>
       )}
 
-      {snapshot.nextCursor !== null ? (
+      {snapshot.nextCursor !== null && snapshot.pageState !== "error" ? (
         <Button
           type="button"
           variant="outline"
@@ -205,6 +210,7 @@ function SharedTaskRow({
 }) {
   const lease = task.activeAgentLease;
   const isPending = commandState.kind === "pending";
+  const commandBlocked = isPending || commandState.kind === "conflict" || revisionConflict;
 
   return (
     <li className="rounded-lg border border-border/60 bg-background/50 p-3">
@@ -215,7 +221,7 @@ function SharedTaskRow({
             {task.status} · revision {task.revision} · fence {task.fencingToken}
           </p>
         </div>
-        <span className="rounded-full border border-border/60 px-2 py-0.5 text-[11px]">
+        <span className="max-w-full break-all rounded-full border border-border/60 px-2 py-0.5 text-[11px]">
           {task.ownerUserId === null ? "Unassigned" : `Owner ${task.ownerUserId}`}
         </span>
       </div>
@@ -238,7 +244,7 @@ function SharedTaskRow({
 
       {lease !== null && !showLease ? (
         <p className="mt-2 text-xs text-muted-foreground">
-          Lease hidden by the eight-agent display cap.
+          Lease record hidden by the eight-agent display cap.
         </p>
       ) : null}
 
@@ -274,7 +280,7 @@ function SharedTaskRow({
           <Button
             type="button"
             size="sm"
-            disabled={isPending || revisionConflict}
+            disabled={commandBlocked}
             onClick={() => onStartCommand(task, "claim")}
           >
             {isPending ? "Claiming…" : "Claim task"}
@@ -284,7 +290,7 @@ function SharedTaskRow({
           <Button
             type="button"
             size="sm"
-            disabled={isPending || revisionConflict}
+            disabled={commandBlocked}
             onClick={() => onStartCommand(task, "complete")}
           >
             {isPending ? "Completing…" : "Complete task"}
