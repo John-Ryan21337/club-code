@@ -4,7 +4,7 @@ This guide is for Cafe Code maintainers who want to review or adopt Club Code ch
 
 ## Instructions for Cafe Code developers and coding agents
 
-The parity reference for this snapshot is Club Code `release/local-20260728` at `47961f979b1e10e9f05993631dac1136b666fabe`. Treat that release as evidence of the intended combined behavior, not as a branch to merge wholesale. The review units below are the source of truth for adopting individual capabilities.
+The parity reference for this snapshot is Club Code `release/local-20260728` at `47961f97cfc05e4818802b6a62f89a3c22a24fe6`. Treat that release as evidence of the intended combined behavior, not as a branch to merge wholesale. The review units below are the source of truth for adopting individual capabilities.
 
 Use this operating instruction when assigning the upgrade to an LLM coding agent:
 
@@ -12,7 +12,7 @@ Use this operating instruction when assigning the upgrade to an LLM coding agent
 
 ### Install the Club Code reference build
 
-Before comparing behavior, install the exact Club Code reference on a separate checkout. [PR #50](https://github.com/John-Ryan21337/club-code/pull/50) adds copy-paste Codex/Claude Code setup instructions to the README for macOS Intel/Apple Silicon, Windows 10/11 x64/ARM64, Arch Linux x64/ARM64, and Raspberry Pi 5 on a 64-bit ARM64 desktop OS. It directs the agent to `release/local-20260728`, currently verified at `47961f979b1e10e9f05993631dac1136b666fabe`, instead of treating `main` as the combined-build parity target.
+Before comparing behavior, install the exact Club Code reference on a separate checkout. [PR #50](https://github.com/John-Ryan21337/club-code/pull/50) adds copy-paste Codex/Claude Code setup instructions to the README for macOS Intel/Apple Silicon, Windows 10/11 x64/ARM64, Arch Linux x64/ARM64, and Raspberry Pi 5 on a 64-bit ARM64 desktop OS. It directs the agent to `release/local-20260728`, currently verified at `47961f97cfc05e4818802b6a62f89a3c22a24fe6`, instead of treating `main` as the combined-build parity target.
 
 The install agent must ask before elevation, package or `PATH` changes, firewall exposure, or checkout replacement; preserve existing `.cafe-code` state and credentials; use Node 24.13.1 plus the pinned Yarn 4.17.1; and verify that a real Club Code window launches. Raspberry Pi 5 remains experimental source-only because published Linux artifacts are x64-only. A Pi agent must use native ARM64 Node and report Electron, native-module, GPU, or memory limitations rather than claiming the x64 AppImage is compatible.
 
@@ -132,7 +132,7 @@ Do not combine the cowork commits from #8 with #13, #14, #17, #20, or #21.
 | #33 | Audited truthful Project Resources CPU/RAM UI                                           | `feature/host-system-telemetry`                                            | `feature/project-resources-truthful-telemetry` at `af4921eceb2e1d42b7a10dc436344aa99a5361f6` | open, audited, clean; requires #23                                    |
 | #18 | WebGL2 Matrix glyph rendering and Walk parity                                           | `agent/local-priority-integration`                                         | `agent/matrix-webgl-gpu-pr` at `fa2be7e92c744440f6bf47f20174d85a4041a21d`                    | open, audited, clean; separate from the cowork ladder                 |
 | #19 | Completion-only Auto Nudge server authority                                             | `agent/local-priority-integration`                                         | `feature/auto-nudge-server-authority` at `99cb7fe621bbe62443d5b07e4a264a42ba0a47a7`          | open, audited, clean; overlaps #8 Auto Nudge                          |
-| #8  | Aggregate current local release                                                         | `agent/local-priority-integration`                                         | `release/local-20260728` at `47961f979b1e10e9f05993631dac1136b666fabe`                       | open draft; GitHub reported `CONFLICTING/DIRTY` at this snapshot      |
+| #8  | Aggregate current local release                                                         | `agent/local-priority-integration`                                         | `release/local-20260728` at `47961f97cfc05e4818802b6a62f89a3c22a24fe6`                       | open draft; GitHub reported `CONFLICTING/DIRTY` at this snapshot      |
 | #15 | Hide stale unavailable Project Resources sensor graphs                                  | `release/local-20260728`                                                   | `work/profiles-telemetry-safety` at `9270cc56ffd05132f3ca02bce1582860850c8f0a`               | open, ready, clean; separate from the cowork ladder                   |
 
 PR #7 was restacked on the current #4 head with a normal non-force merge whose tree is identical to its prior head; GitHub reported it `MERGEABLE/CLEAN` after focused and full gates passed. Re-check rather than treating that observation as immutable if any base moves again. The same rule applies to #8 if the omnibus path is deliberately chosen. PRs #13 through #49 in the active ladder were published from clean, gated heads and GitHub reported every non-draft open PR mergeable at this snapshot. Re-check GitHub's asynchronously computed mergeability and the exact head SHA immediately before landing any slice.
