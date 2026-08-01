@@ -5,6 +5,8 @@ import {
   CollaborationBeginDeviceEnrollmentRequest,
   CollaborationBeginDeviceEnrollmentResult,
   CollaborationCompleteDeviceEnrollmentRequest,
+  CollaborationCurrentDeviceKeyStatus,
+  CollaborationCurrentDeviceKeyStatusRequest,
   CollaborationDeviceEnrollmentChallenge,
   CollaborationDeviceEnrollmentNonce,
   CollaborationDeviceKeyRecord,
@@ -12,6 +14,7 @@ import {
   type CollaborationBeginDeviceEnrollmentResult as BeginResult,
   type CollaborationDeviceEnrollmentChallenge as EnrollmentChallenge,
   type CollaborationDeviceEnrollmentNonce as EnrollmentNonce,
+  type CollaborationCurrentDeviceKeyStatus as CurrentDeviceKeyStatus,
   type CollaborationDeviceKeyMutationResult as MutationResult,
   type CollaborationPrincipal as Principal,
   type SharedProjectId,
@@ -71,6 +74,10 @@ export class CollaborationDeviceKeyStoreError extends Data.TaggedError(
 }> {}
 
 export interface CollaborationDeviceKeyStoreShape {
+  readonly getCurrentDeviceKeyStatus: (input: {
+    readonly principal: unknown;
+    readonly request: unknown;
+  }) => Effect.Effect<CurrentDeviceKeyStatus, CollaborationDeviceKeyStoreError>;
   readonly beginEnrollment: (input: {
     readonly principal: unknown;
     readonly request: unknown;
@@ -124,7 +131,21 @@ type KeyRow = {
   readonly membershipEpoch: number;
   readonly activatedAt: string;
   readonly revokedAt: string | null;
-  readonly boundUserId?: string;
+  readonly boundUserId?: string | null;
+};
+
+type CurrentStatusKeyRow = KeyRow & {
+  readonly challengeId: string | null;
+  readonly challengeSharedProjectId: string | null;
+  readonly challengeUserId: string | null;
+  readonly challengeDeviceId: string | null;
+  readonly challengeDeviceKeyId: string | null;
+  readonly challengePublicKeySpkiDer: Uint8Array | null;
+  readonly challengeNonceSha256: string | null;
+  readonly challengeMembershipEpoch: number | null;
+  readonly challengeIssuedAt: string | null;
+  readonly challengeExpiresAt: string | null;
+  readonly challengeCompletedAt: string | null;
 };
 
 const sha256 = (value: string | Uint8Array): string =>
@@ -408,6 +429,155 @@ function makeStore() {
         WHERE k.shared_project_id = ${sharedProjectId} AND k.device_key_id = ${deviceKeyId}
         LIMIT 2
       `;
+
+    const selectActiveDeviceKeys = (sharedProjectId: SharedProjectId, deviceId: string) =>
+      sql<CurrentStatusKeyRow>`
+        SELECT k.shared_project_id AS "sharedProjectId", k.user_id AS "userId",
+          k.device_id AS "deviceId", k.device_key_id AS "deviceKeyId",
+          k.public_key_spki_der AS "publicKeySpkiDer",
+          k.membership_epoch AS "membershipEpoch", k.activated_at AS "activatedAt",
+          k.revoked_at AS "revokedAt", d.user_id AS "boundUserId",
+          c.challenge_id AS "challengeId", c.shared_project_id AS "challengeSharedProjectId",
+          c.user_id AS "challengeUserId", c.device_id AS "challengeDeviceId",
+          c.device_key_id AS "challengeDeviceKeyId",
+          c.public_key_spki_der AS "challengePublicKeySpkiDer",
+          c.nonce_sha256 AS "challengeNonceSha256",
+          c.membership_epoch AS "challengeMembershipEpoch",
+          c.issued_at AS "challengeIssuedAt", c.expires_at AS "challengeExpiresAt",
+          c.completed_at AS "challengeCompletedAt"
+        FROM collaboration_device_keys k
+        LEFT JOIN collaboration_project_devices d
+          ON d.shared_project_id = k.shared_project_id AND d.device_id = k.device_id
+        LEFT JOIN collaboration_device_enrollment_challenges c
+          ON c.shared_project_id = k.shared_project_id AND c.device_key_id = k.device_key_id
+        WHERE k.shared_project_id = ${sharedProjectId} AND k.device_id = ${deviceId}
+          AND k.revoked_at IS NULL
+        LIMIT 2
+      `;
+
+    const getCurrentDeviceKeyStatus: CollaborationDeviceKeyStoreShape["getCurrentDeviceKeyStatus"] =
+      (input) => {
+        const operation = "device-key.status";
+        return Effect.gen(function* () {
+          const request = yield* strictDecode(
+            operation,
+            CollaborationCurrentDeviceKeyStatusRequest,
+            input.request,
+          );
+          return yield* sql.withTransaction(
+            Effect.gen(function* () {
+              // Use the same project writer lock as enrollment and revocation.
+              // The returned snapshot is therefore entirely before or after a
+              // concurrent mutation, never assembled from both states.
+              yield* lockProject(request.sharedProjectId);
+              const now = DateTime.toEpochMillis(yield* DateTime.now);
+              const actor = yield* authorizeCurrentMember(
+                operation,
+                input.principal,
+                request.sharedProjectId,
+                now,
+              );
+              const bindings = yield* sql<{ readonly userId: string }>`
+                SELECT user_id AS "userId" FROM collaboration_project_devices
+                WHERE shared_project_id = ${request.sharedProjectId}
+                  AND device_id = ${actor.deviceId}
+                LIMIT 2
+              `;
+              if (bindings.length > 1)
+                return yield* Effect.fail(fail(operation, "stored-corruption"));
+              if (bindings[0] && bindings[0].userId !== actor.userId) {
+                return yield* Effect.fail(fail(operation, "device-identity-conflict"));
+              }
+
+              const rows = yield* selectActiveDeviceKeys(request.sharedProjectId, actor.deviceId);
+              if (rows.length > 1) return yield* Effect.fail(fail(operation, "stored-corruption"));
+
+              const identity = {
+                sharedProjectId: request.sharedProjectId,
+                userId: actor.userId,
+                deviceId: actor.deviceId,
+                membershipEpoch: actor.membershipEpoch,
+              };
+              if (rows.length === 0) {
+                return yield* strictDecode(operation, CollaborationCurrentDeviceKeyStatus, {
+                  ...identity,
+                  status: "enrollment-required",
+                  activeKey: null,
+                });
+              }
+
+              // Decode and validate even a stale-epoch row. A corrupt or
+              // substituted public key must never be disguised as a harmless
+              // enrollment-required status.
+              const key = yield* keyFromRow(operation, rows[0]!);
+              const row = rows[0]!;
+              if (
+                row.challengeId === null ||
+                row.challengeSharedProjectId === null ||
+                row.challengeUserId === null ||
+                row.challengeDeviceId === null ||
+                row.challengeDeviceKeyId === null ||
+                row.challengePublicKeySpkiDer === null ||
+                row.challengeNonceSha256 === null ||
+                row.challengeMembershipEpoch === null ||
+                row.challengeIssuedAt === null ||
+                row.challengeExpiresAt === null ||
+                row.challengeCompletedAt === null
+              ) {
+                return yield* Effect.fail(fail(operation, "stored-corruption"));
+              }
+              const challengeRow: ChallengeRow = {
+                challengeId: row.challengeId,
+                sharedProjectId: row.challengeSharedProjectId,
+                userId: row.challengeUserId,
+                deviceId: row.challengeDeviceId,
+                deviceKeyId: row.challengeDeviceKeyId,
+                publicKeySpkiDer: row.challengePublicKeySpkiDer,
+                nonceSha256: row.challengeNonceSha256,
+                membershipEpoch: row.challengeMembershipEpoch,
+                issuedAt: row.challengeIssuedAt,
+                expiresAt: row.challengeExpiresAt,
+                completedAt: row.challengeCompletedAt,
+              };
+              const challenge = yield* challengeFromRow(operation, challengeRow);
+              const activatedAt = DateTime.toEpochMillis(key.activatedAt);
+              if (
+                key.sharedProjectId !== request.sharedProjectId ||
+                key.userId !== actor.userId ||
+                key.deviceId !== actor.deviceId ||
+                key.revokedAt !== null ||
+                challenge.sharedProjectId !== key.sharedProjectId ||
+                challenge.userId !== key.userId ||
+                challenge.deviceId !== key.deviceId ||
+                challenge.deviceKeyId !== key.deviceKeyId ||
+                challenge.publicKeySpkiDer !== key.publicKeySpkiDer ||
+                challenge.membershipEpoch !== key.membershipEpoch ||
+                !SHA256_PATTERN.test(row.challengeNonceSha256) ||
+                row.challengeCompletedAt !== proofTimestamp(key.activatedAt) ||
+                activatedAt < DateTime.toEpochMillis(challenge.issuedAt) ||
+                activatedAt >= DateTime.toEpochMillis(challenge.expiresAt)
+              ) {
+                return yield* Effect.fail(fail(operation, "stored-corruption"));
+              }
+              if (key.membershipEpoch !== actor.membershipEpoch) {
+                return yield* strictDecode(operation, CollaborationCurrentDeviceKeyStatus, {
+                  ...identity,
+                  status: "enrollment-required",
+                  activeKey: null,
+                });
+              }
+              return yield* strictDecode(operation, CollaborationCurrentDeviceKeyStatus, {
+                ...identity,
+                status: "active",
+                activeKey: {
+                  deviceKeyId: key.deviceKeyId,
+                  activatedAt: proofTimestamp(key.activatedAt),
+                },
+              });
+            }),
+          );
+        }).pipe(Effect.mapError(mapStorageFailure(operation)));
+      };
 
     const beginEnrollment: CollaborationDeviceKeyStoreShape["beginEnrollment"] = (input) => {
       const operation = "device-enrollment.begin";
@@ -749,7 +919,7 @@ function makeStore() {
             if (current.userId !== actor.userId || current.deviceId !== actor.deviceId) {
               return yield* Effect.fail(fail(operation, "device-key-not-found"));
             }
-            if (current.revokedAt !== null)
+            if (current.revokedAt !== null || current.membershipEpoch !== actor.membershipEpoch)
               return yield* Effect.fail(fail(operation, "device-key-not-active"));
             yield* sql`
               UPDATE collaboration_device_keys SET revoked_at = ${nowString}
@@ -834,6 +1004,7 @@ function makeStore() {
         }).pipe(Effect.mapError(mapStorageFailure("device-key.authority")));
 
     return {
+      getCurrentDeviceKeyStatus,
       beginEnrollment,
       completeEnrollment,
       revokeKey,
