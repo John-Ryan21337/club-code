@@ -148,6 +148,7 @@ describe("065_ForkLineageCompatibility", () => {
           [66, "ProjectionThreadAutoNudge"],
           [67, "ProjectionThreadManualFollowUps"],
           [68, "ProjectionThreadGoals"],
+          [69, "MigrateAutoNudgeBuiltInPrompts"],
         ],
       );
 
