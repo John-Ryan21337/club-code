@@ -195,6 +195,14 @@ export interface SettingsProfileMutationResult {
   readonly replaced: boolean;
 }
 
+export type SettingsProfileDifferenceKey = "theme" | SettingsProfileClientKey;
+
+export interface SettingsProfileDifference {
+  readonly key: SettingsProfileDifferenceKey;
+  readonly savedValue: SettingsProfileTheme | boolean | number | string;
+  readonly currentValue: SettingsProfileTheme | boolean | number | string | undefined;
+}
+
 export interface SettingsProfileLibraryStorage {
   readonly getItem: (key: string) => string | null;
   readonly setItem: (key: string, value: string) => void;
@@ -420,6 +428,63 @@ export function settingsProfileMatches(
     }
   }
   return true;
+}
+
+/**
+ * Describe the exact safe patch a profile would apply to the current preferences.
+ *
+ * Sparse older profiles intentionally omit newer fields, so an absent saved key is
+ * not a difference: loading that profile leaves the current value alone. The same
+ * own-data-property boundary used by profile sanitization keeps this helper from
+ * invoking accessors on caller-owned objects.
+ */
+export function compareSettingsProfile(
+  profile: SettingsProfile,
+  current: SettingsProfilePayload,
+): readonly SettingsProfileDifference[] {
+  const differences: SettingsProfileDifference[] = [];
+  const savedTheme = readOwnDataProperty(profile, "theme");
+  const currentTheme = readOwnDataProperty(current, "theme");
+  if (isTheme(savedTheme) && isTheme(currentTheme) && savedTheme !== currentTheme) {
+    differences.push(
+      Object.freeze({ key: "theme", savedValue: savedTheme, currentValue: currentTheme }),
+    );
+  }
+
+  const savedSettings = readOwnDataProperty(profile, "clientSettings");
+  const currentSettings = readOwnDataProperty(current, "clientSettings");
+  if (
+    typeof savedSettings !== "object" ||
+    savedSettings === null ||
+    Array.isArray(savedSettings) ||
+    typeof currentSettings !== "object" ||
+    currentSettings === null ||
+    Array.isArray(currentSettings)
+  ) {
+    return Object.freeze(differences);
+  }
+
+  for (const key of SETTINGS_PROFILE_CLIENT_KEYS) {
+    const savedValue = readOwnDataProperty(savedSettings, key);
+    if (savedValue === MISSING_DATA_PROPERTY) continue;
+    const decodedSavedValue = decodeClientSetting(key, savedValue);
+    if (decodedSavedValue === undefined) continue;
+
+    const candidateCurrentValue = readOwnDataProperty(currentSettings, key);
+    const currentValue =
+      candidateCurrentValue === MISSING_DATA_PROPERTY
+        ? undefined
+        : decodeClientSetting(key, candidateCurrentValue);
+    if (Object.is(decodedSavedValue, currentValue)) continue;
+    differences.push(
+      Object.freeze({
+        key,
+        savedValue: decodedSavedValue,
+        currentValue,
+      }),
+    );
+  }
+  return Object.freeze(differences);
 }
 
 function freezeSettingsProfile(profile: SettingsProfile): SettingsProfile {
