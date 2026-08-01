@@ -12,7 +12,7 @@ import {
   UserId,
 } from "@cafecode/contracts";
 import { it } from "@effect/vitest";
-import { createHash, generateKeyPairSync, sign, verify } from "node:crypto";
+import { createHash, createPublicKey, generateKeyPairSync, sign, verify } from "node:crypto";
 
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -579,6 +579,44 @@ describe("CollaborationEventAdmission", () => {
             {
               key: keyAuthority(() =>
                 Effect.succeed(activeDeviceKey({ publicKeySpkiDer: nonCanonicalSpki })),
+              ),
+            },
+          ),
+        ),
+      ).toBe("signature-invalid");
+    }),
+  );
+
+  it.effect("rejects low-order Ed25519 keys even when OpenSSL accepts the forged signature", () =>
+    Effect.gen(function* () {
+      const lowOrderSpki = Buffer.concat([
+        Buffer.from("302a300506032b6570032100", "hex"),
+        Buffer.from([1]),
+        Buffer.alloc(31),
+      ]);
+      const forgedSignature = Buffer.concat([Buffer.from([1]), Buffer.alloc(63)]);
+      const unsigned = signedProposal();
+      const proposal = decodeProposal({
+        ...unsigned,
+        authorSignature: forgedSignature.toString("base64url"),
+      });
+      const opensslKey = createPublicKey({ key: lowOrderSpki, format: "der", type: "spki" });
+      expect(
+        verify(
+          null,
+          collaborationEventProposalSignatureBytes(proposal),
+          opensslKey,
+          forgedSignature,
+        ),
+      ).toBe(true);
+
+      expect(
+        yield* denialReason(
+          admit(
+            { proposal },
+            {
+              key: keyAuthority(() =>
+                Effect.succeed(activeDeviceKey({ publicKeySpkiDer: lowOrderSpki })),
               ),
             },
           ),

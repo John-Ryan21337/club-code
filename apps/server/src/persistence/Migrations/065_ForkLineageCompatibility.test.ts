@@ -148,6 +148,7 @@ describe("065_ForkLineageCompatibility", () => {
           [70, "CollaborationEvents"],
           [71, "CollaborationDatabaseCoordination"],
           [72, "CollaborationMemberships"],
+          [73, "CollaborationDeviceKeys"],
         ],
       );
 

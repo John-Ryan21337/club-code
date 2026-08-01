@@ -79,6 +79,7 @@ import Migration0065 from "./Migrations/065_ForkLineageCompatibility.ts";
 import Migration0070 from "./Migrations/070_CollaborationEvents.ts";
 import Migration0071 from "./Migrations/071_CollaborationDatabaseCoordination.ts";
 import Migration0072 from "./Migrations/072_CollaborationMemberships.ts";
+import Migration0073 from "./Migrations/073_CollaborationDeviceKeys.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -166,6 +167,7 @@ export const migrationEntries = [
   [70, "CollaborationEvents", Migration0070],
   [71, "CollaborationDatabaseCoordination", Migration0071],
   [72, "CollaborationMemberships", Migration0072],
+  [73, "CollaborationDeviceKeys", Migration0073],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>
