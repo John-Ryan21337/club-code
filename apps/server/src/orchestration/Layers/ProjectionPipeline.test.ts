@@ -3111,6 +3111,73 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
     }),
   );
 
+  it.effect("preserves the provider completion boundary when later activities arrive", () =>
+    Effect.gen(function* () {
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const eventStore = yield* OrchestrationEventStore;
+      const sql = yield* SqlClient.SqlClient;
+      const appendAndProject = (event: Parameters<typeof eventStore.append>[0]) =>
+        eventStore
+          .append(event)
+          .pipe(Effect.flatMap((savedEvent) => projectionPipeline.projectEvent(savedEvent)));
+      const threadId = ThreadId.make("thread-completion-boundary");
+      const turnId = TurnId.make("turn-completion-boundary");
+      const completedAt = "2026-01-01T00:00:05.000Z";
+
+      yield* appendAndProject({
+        type: "thread.turn-diff-completed",
+        eventId: EventId.make("evt-completion-boundary-terminal"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: completedAt,
+        commandId: CommandId.make("cmd-completion-boundary-terminal"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-completion-boundary-terminal"),
+        metadata: {},
+        payload: {
+          threadId,
+          turnId,
+          checkpointTurnCount: 1,
+          checkpointRef: CheckpointRef.make("refs/cafe/checkpoints/completion-boundary"),
+          status: "ready",
+          files: [],
+          assistantMessageId: null,
+          completedAt,
+        },
+      });
+      yield* appendAndProject({
+        type: "thread.activity-appended",
+        eventId: EventId.make("evt-completion-boundary-late-activity"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: "2026-01-01T00:00:08.000Z",
+        commandId: CommandId.make("cmd-completion-boundary-late-activity"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-completion-boundary-late-activity"),
+        metadata: {},
+        payload: {
+          threadId,
+          activity: {
+            id: EventId.make("activity-completion-boundary-late"),
+            tone: "info",
+            kind: "provider.tool.completed",
+            summary: "Late provider activity",
+            payload: {},
+            turnId,
+            createdAt: "2026-01-01T00:00:08.000Z",
+          },
+        },
+      });
+
+      const rows = yield* sql<{ readonly completedAt: string | null }>`
+        SELECT completed_at AS "completedAt"
+        FROM projection_turns
+        WHERE thread_id = ${threadId} AND turn_id = ${turnId}
+      `;
+      assert.deepEqual(rows, [{ completedAt }]);
+    }),
+  );
+
   it.effect(
     "resolves turn-count conflicts when checkpoint completion rewrites provisional turns",
     () =>

@@ -72,7 +72,19 @@ function makeThread(input: {
     proposedPlans: [],
     activities: [],
     checkpoints: [],
-    session: null,
+    session:
+      input.latestTurnId === undefined
+        ? null
+        : {
+            threadId: input.id,
+            status: "ready",
+            providerName: "codex",
+            providerInstanceId: ProviderInstanceId.make("codex"),
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: SERVER_NOW,
+          },
   };
 }
 
@@ -361,6 +373,12 @@ it.effect("dispatches only the persisted exact-thread prompt and rejects duplica
     assert.equal(turnStartEvent?.type, "thread.turn-start-requested");
     if (turnStartEvent?.type === "thread.turn-start-requested") {
       assert.equal(turnStartEvent.payload.dispatchSource, "auto-nudge");
+      assert.deepEqual(turnStartEvent.payload.autoNudgeAuthority, {
+        authorityRevision: 5,
+        completedTurnId: TURN_COMPLETED,
+        completedAt: SERVER_NOW,
+        dispatchSource: "foreground",
+      });
     }
 
     const duplicateFailure = yield* Effect.flip(
@@ -939,6 +957,35 @@ it.effect("advances every distinct Stop so an in-flight Off configure cannot re-
       }),
     );
     assert.match(staleDispatch.detail, /is off/);
+  }),
+);
+
+it.effect("revokes Auto Nudge atomically before stopping its provider session", () =>
+  Effect.gen(function* () {
+    yield* TestClock.setTime(Date.parse(SERVER_NOW));
+    const events = asPlannedEvents(
+      yield* decideOrchestrationCommand({
+        readModel: makeReadModel([
+          makeThread({
+            id: THREAD_A,
+            latestTurnId: TURN_COMPLETED,
+            autoNudge: enabledConfig({ authorityRevision: 5 }),
+          }),
+        ]),
+        command: {
+          type: "thread.session.stop",
+          commandId: CommandId.make("command-provider-stop-revokes-auto-nudge"),
+          threadId: THREAD_A,
+          createdAt: SERVER_NOW,
+        },
+      }),
+    );
+
+    assert.deepEqual(
+      events.map((event) => event.type),
+      ["thread.auto-nudge-stopped", "thread.session-stop-requested"],
+    );
+    assert.equal(events[1]?.causationEventId, events[0]?.eventId);
   }),
 );
 

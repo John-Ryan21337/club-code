@@ -195,16 +195,6 @@ function shouldPromoteLatestTurn(input: {
   return input.currentLatestTurn.value.requestedAt <= candidateRequestedAt;
 }
 
-function extendCompletedTurnAt(turn: ProjectionTurnById, observedAt: string): ProjectionTurnById {
-  if (!isTerminalTurnState(turn.state)) {
-    return turn;
-  }
-  return {
-    ...turn,
-    completedAt: maxIso(turn.completedAt, observedAt),
-  };
-}
-
 function doesActivityAffectThreadShellSummary(
   activity: Extract<OrchestrationEvent, { readonly type: "thread.activity-appended" }>,
 ): boolean {
@@ -1614,17 +1604,9 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             createdAt: event.payload.activity.createdAt,
           });
 
-          if (event.payload.activity.turnId !== null) {
-            const existingTurn = yield* projectionTurnRepository.getByTurnId({
-              threadId: event.payload.threadId,
-              turnId: event.payload.activity.turnId,
-            });
-            if (Option.isSome(existingTurn) && isTerminalTurnState(existingTurn.value.state)) {
-              yield* projectionTurnRepository.upsertByTurnId(
-                extendCompletedTurnAt(existingTurn.value, event.payload.activity.createdAt),
-              );
-            }
-          }
+          // Activities retain their own observation time. Never move the
+          // provider's terminal boundary: Auto Nudge authority and restart
+          // replay must compare against the exact completion that was accepted.
           return;
 
         case "thread.reverted": {

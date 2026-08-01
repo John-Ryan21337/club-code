@@ -9,6 +9,7 @@ import {
   type ChatAttachment,
   ModelSelection,
   type ProviderThreadGoal,
+  type OrchestrationEvent,
   ProviderRuntimeEvent,
   ProviderSession,
   ProviderDriverKind,
@@ -54,6 +55,7 @@ import {
   isProviderInstanceMissingError,
   providerErrorLabel,
   providerErrorLabelFromInstanceHint,
+  autoNudgeTurnStartCancellationReason,
   ProviderCommandReactorLive,
 } from "./ProviderCommandReactor.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
@@ -591,6 +593,145 @@ describe("ProviderCommandReactor", () => {
       markThreadReady,
     };
   }
+
+  it("rechecks exact Auto Nudge authority at the provider boundary", async () => {
+    const harness = await createHarness({ startReactor: false });
+    const thread = (await harness.readModel()).threads[0];
+    if (thread === undefined) {
+      throw new Error("Expected the harness thread.");
+    }
+
+    const completedTurnId = asTurnId("auto-nudge-completed-turn");
+    const acceptedAt = "2026-01-01T00:00:02.000Z";
+    const authoritativeThread = {
+      ...thread,
+      latestTurn: {
+        turnId: completedTurnId,
+        state: "completed" as const,
+        requestedAt: "2026-01-01T00:00:00.000Z",
+        startedAt: "2026-01-01T00:00:00.500Z",
+        completedAt: "2026-01-01T00:00:01.000Z",
+        assistantMessageId: null,
+      },
+      autoNudge: {
+        authorityRevision: 7,
+        mode: "steady-progress" as const,
+        prompt: "Continue safely",
+        backgroundContinuation: false,
+        maxRounds: 5,
+        armedAt: "2026-01-01T00:00:00.000Z",
+        baselineSettledTurnId: null,
+        lastDispatchedSettledTurnId: completedTurnId,
+        roundsDispatched: 1,
+        lastDispatchedAt: acceptedAt,
+      },
+      session: {
+        threadId: thread.id,
+        status: "ready" as const,
+        providerName: "codex",
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        runtimeMode: thread.runtimeMode,
+        activeTurnId: null,
+        lastError: null,
+        updatedAt: acceptedAt,
+      },
+    };
+    const event = {
+      sequence: 10,
+      eventId: EventId.make("event-auto-nudge-provider-boundary"),
+      aggregateKind: "thread" as const,
+      aggregateId: authoritativeThread.id,
+      occurredAt: acceptedAt,
+      commandId: CommandId.make("command-auto-nudge-provider-boundary"),
+      causationEventId: null,
+      correlationId: CommandId.make("command-auto-nudge-provider-boundary"),
+      metadata: {},
+      type: "thread.turn-start-requested" as const,
+      payload: {
+        threadId: authoritativeThread.id,
+        messageId: asMessageId("message-auto-nudge-provider-boundary"),
+        modelSelection: {
+          ...authoritativeThread.modelSelection,
+          options: [...(authoritativeThread.modelSelection.options ?? [])],
+        },
+        runtimeMode: authoritativeThread.runtimeMode,
+        interactionMode: authoritativeThread.interactionMode,
+        dispatchSource: "auto-nudge" as const,
+        autoNudgeAuthority: {
+          authorityRevision: 7,
+          completedTurnId,
+          completedAt: "2026-01-01T00:00:01.000Z",
+          dispatchSource: "foreground" as const,
+        },
+        createdAt: acceptedAt,
+      },
+    } satisfies Extract<OrchestrationEvent, { type: "thread.turn-start-requested" }>;
+
+    expect(autoNudgeTurnStartCancellationReason(authoritativeThread, event)).toBeUndefined();
+    expect(
+      autoNudgeTurnStartCancellationReason(
+        {
+          ...authoritativeThread,
+          autoNudge: {
+            ...authoritativeThread.autoNudge,
+            authorityRevision: 8,
+            mode: "off",
+            prompt: "",
+            armedAt: null,
+          },
+        },
+        event,
+      ),
+    ).toContain("off");
+    expect(
+      autoNudgeTurnStartCancellationReason(
+        {
+          ...authoritativeThread,
+          manualFollowUps: [
+            {
+              id: asManualFollowUpId("manual-wins-provider-race"),
+              message: {
+                messageId: asMessageId("manual-wins-provider-race-message"),
+                role: "user",
+                text: "manual work",
+                attachments: [],
+              },
+              dispatch: {
+                modelSelection: authoritativeThread.modelSelection,
+                titleSeed: "Thread",
+                runtimeMode: authoritativeThread.runtimeMode,
+                interactionMode: authoritativeThread.interactionMode,
+              },
+              status: "queued",
+              enqueuedAt: acceptedAt,
+              activatedAt: null,
+              activationCommandId: null,
+            },
+          ],
+        },
+        event,
+      ),
+    ).toContain("manual follow-up");
+    expect(
+      autoNudgeTurnStartCancellationReason(
+        {
+          ...authoritativeThread,
+          activities: [
+            {
+              id: EventId.make("late-provider-progress"),
+              tone: "info",
+              kind: "provider.tool.progress",
+              summary: "Provider output resumed",
+              payload: {},
+              turnId: completedTurnId,
+              createdAt: acceptedAt,
+            },
+          ],
+        },
+        event,
+      ),
+    ).toContain("provider activity continued");
+  });
 
   it("replaces a Codex goal with an ordered clear then active unbudgeted set", async () => {
     const harness = await createHarness({ threadGoals: "supported" });

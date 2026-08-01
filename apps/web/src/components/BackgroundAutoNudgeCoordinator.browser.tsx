@@ -407,6 +407,51 @@ describe("BackgroundAutoNudgeCoordinator exact-thread authority", () => {
     ]);
   });
 
+  it("baselines completions observed during Emergency Stop instead of releasing them later", async () => {
+    const completedDuringStop = threadFixture({
+      environmentId: "environment-a",
+      threadId: "thread-a",
+      completedTurnId: "turn-during-stop",
+    });
+    mocks.environmentStateById = {
+      "environment-a": environmentFixture("environment-a", [
+        withoutCompletedTurn(completedDuringStop),
+      ]),
+    };
+    const mounted = await render(<BackgroundAutoNudgeCoordinator />);
+
+    mocks.globallySuppressed = true;
+    mocks.executionBlocked = true;
+    mocks.environmentStateById = {
+      "environment-a": environmentFixture("environment-a", [completedDuringStop]),
+    };
+    await mounted.rerender(<BackgroundAutoNudgeCoordinator />);
+
+    const dispatch = installEnvironmentApi("environment-a");
+    mocks.globallySuppressed = false;
+    mocks.executionBlocked = false;
+    await mounted.rerender(<BackgroundAutoNudgeCoordinator />);
+    await new Promise((resolve) => window.setTimeout(resolve, 50));
+    expect(dispatch).not.toHaveBeenCalled();
+
+    const nextCompletion = threadFixture({
+      environmentId: "environment-a",
+      threadId: "thread-a",
+      completedTurnId: "turn-after-stop",
+    });
+    mocks.environmentStateById = {
+      "environment-a": environmentFixture("environment-a", [nextCompletion]),
+    };
+    await mounted.rerender(<BackgroundAutoNudgeCoordinator />);
+    await waitForCalls(dispatch, 1);
+    expect(commands(dispatch)[0]).toEqual(
+      expect.objectContaining({
+        type: "thread.auto-nudge.dispatch",
+        completedTurnId: "turn-after-stop",
+      }),
+    );
+  });
+
   it("always yields exact-thread authority to queued operator follow-ups", async () => {
     const owner = {};
     const dispatchA = installEnvironmentApi("environment-a");

@@ -1550,6 +1550,19 @@ export const ThreadTurnStartRequestedPayload = Schema.Struct({
   ),
   sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
   dispatchSource: Schema.optional(TurnDispatchSource),
+  /**
+   * Immutable provenance for the final server-side Auto Nudge authority check.
+   * The provider reactor must fail closed when this is absent or no longer
+   * matches the exact thread projection immediately before provider delivery.
+   */
+  autoNudgeAuthority: Schema.optional(
+    Schema.Struct({
+      authorityRevision: ThreadAutoNudgeAuthorityRevision,
+      completedTurnId: TurnId,
+      completedAt: IsoDateTime,
+      dispatchSource: ThreadAutoNudgeDispatchSource,
+    }),
+  ),
   manualFollowUpId: Schema.optional(ManualFollowUpId),
   manualFollowUpActivationCommandId: Schema.optional(CommandId),
   createdAt: IsoDateTime,

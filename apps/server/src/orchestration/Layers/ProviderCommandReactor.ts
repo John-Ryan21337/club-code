@@ -116,6 +116,114 @@ function areStringArraysEqual(
   );
 }
 
+function areModelSelectionsEqual(left: ModelSelection, right: ModelSelection): boolean {
+  if (left.instanceId !== right.instanceId || left.model !== right.model) {
+    return false;
+  }
+  const leftOptions = left.options ?? [];
+  const rightOptions = right.options ?? [];
+  return (
+    leftOptions.length === rightOptions.length &&
+    leftOptions.every((leftOption) =>
+      rightOptions.some(
+        (rightOption) => rightOption.id === leftOption.id && rightOption.value === leftOption.value,
+      ),
+    )
+  );
+}
+
+function isActiveProviderActivityKind(kind: string): boolean {
+  return (
+    kind.endsWith(".started") ||
+    kind.endsWith(".progress") ||
+    kind.endsWith(".updated") ||
+    kind.endsWith(".requested")
+  );
+}
+
+/**
+ * Final fail-closed authority gate at the provider boundary. Command
+ * acceptance and provider execution are intentionally asynchronous, so Stop,
+ * a configuration replacement, manual FIFO work, or resumed provider output
+ * can revoke a previously accepted Auto Nudge before it consumes tokens.
+ */
+export function autoNudgeTurnStartCancellationReason(
+  thread: OrchestrationThread,
+  event: Extract<ProviderIntentEvent, { type: "thread.turn-start-requested" }>,
+): string | undefined {
+  if (event.payload.dispatchSource !== "auto-nudge") {
+    return undefined;
+  }
+
+  const authority = event.payload.autoNudgeAuthority;
+  if (authority === undefined) {
+    return "missing immutable Auto Nudge authority provenance";
+  }
+
+  const config = thread.autoNudge;
+  if (thread.archivedAt !== null || thread.deletedAt !== null) {
+    return "the thread is archived or deleted";
+  }
+  if (config.mode === "off") {
+    return "Auto Nudge is off";
+  }
+  if (config.authorityRevision !== authority.authorityRevision) {
+    return "Auto Nudge authority was replaced or stopped";
+  }
+  if (config.lastDispatchedSettledTurnId !== authority.completedTurnId) {
+    return "the accepted completed-turn identity is no longer authoritative";
+  }
+  if (authority.dispatchSource === "background" && !config.backgroundContinuation) {
+    return "background continuation is no longer authorized";
+  }
+  if (thread.manualFollowUps.length > 0) {
+    return "manual follow-up work has priority";
+  }
+  if (thread.session?.status !== "ready" || thread.session.activeTurnId !== null) {
+    return "the provider session is no longer ready";
+  }
+  if (
+    thread.latestTurn === null ||
+    thread.latestTurn.state !== "completed" ||
+    thread.latestTurn.completedAt === null ||
+    thread.latestTurn.turnId !== authority.completedTurnId ||
+    thread.latestTurn.completedAt !== authority.completedAt
+  ) {
+    return "the exact accepted provider completion is no longer current";
+  }
+  if (
+    event.payload.modelSelection === undefined ||
+    !areModelSelectionsEqual(thread.modelSelection, event.payload.modelSelection) ||
+    thread.runtimeMode !== event.payload.runtimeMode ||
+    thread.interactionMode !== event.payload.interactionMode
+  ) {
+    return "the provider configuration changed after Auto Nudge acceptance";
+  }
+
+  const providerTextContinued = thread.messages.some(
+    (message) =>
+      message.turnId === authority.completedTurnId &&
+      (message.updatedAt > authority.completedAt ||
+        (message.updatedAt === authority.completedAt && message.streaming)),
+  );
+  if (providerTextContinued) {
+    return "provider text continued after Auto Nudge acceptance";
+  }
+
+  const providerActivityContinued = thread.activities.some(
+    (activity) =>
+      activity.turnId === authority.completedTurnId &&
+      activity.kind !== "context-window.updated" &&
+      activity.kind !== "checkpoint.captured" &&
+      (activity.createdAt > authority.completedAt ||
+        (activity.createdAt === authority.completedAt &&
+          isActiveProviderActivityKind(activity.kind))),
+  );
+  return providerActivityContinued
+    ? "provider activity continued after Auto Nudge acceptance"
+    : undefined;
+}
+
 const turnStartKeyForEvent = (event: ProviderIntentEvent): string =>
   event.commandId !== null ? `command:${event.commandId}` : `event:${event.eventId}`;
 
@@ -1660,6 +1768,15 @@ const make = Effect.gen(function* () {
 
     const thread = yield* resolveThread(event.payload.threadId);
     if (!thread) {
+      return;
+    }
+    const autoNudgeCancellationReason = autoNudgeTurnStartCancellationReason(thread, event);
+    if (autoNudgeCancellationReason !== undefined) {
+      yield* Effect.logWarning("provider command reactor cancelled stale Auto Nudge delivery", {
+        threadId: event.payload.threadId,
+        messageId: event.payload.messageId,
+        reason: autoNudgeCancellationReason,
+      });
       return;
     }
     const project = yield* resolveProject(thread.projectId);

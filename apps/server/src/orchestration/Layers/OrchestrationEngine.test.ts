@@ -1533,6 +1533,24 @@ describe("OrchestrationEngine", () => {
         createdAt,
       }),
     );
+    await system.run(
+      engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-ready-manual-auto-nudge-order"),
+        threadId,
+        session: {
+          threadId,
+          status: "ready",
+          providerName: "codex",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: createdAt,
+        },
+        createdAt,
+      }),
+    );
 
     const firstFollowUpId = ManualFollowUpId.make("manual-follow-up-before-auto-nudge");
     const firstReservationCommandId = CommandId.make("cmd-reserve-before-auto-nudge");
@@ -1688,6 +1706,24 @@ describe("OrchestrationEngine", () => {
         status: "ready",
         files: [],
         checkpointTurnCount: 1,
+        createdAt,
+      }),
+    );
+    await system.run(
+      engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-ready-auto-nudge-atomic"),
+        threadId,
+        session: {
+          threadId,
+          status: "ready",
+          providerName: "codex",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: createdAt,
+        },
         createdAt,
       }),
     );

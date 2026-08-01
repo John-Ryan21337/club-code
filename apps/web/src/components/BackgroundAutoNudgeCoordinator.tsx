@@ -216,9 +216,7 @@ export function BackgroundAutoNudgeCoordinator() {
   // Only a projection transition to a different completed-turn identity may
   // dispatch. Initial hydration and config changes merely establish context.
   useEffect(() => {
-    if (getConfirmedAutoNudgeArming().getSuppressedSnapshot()) {
-      return;
-    }
+    const suppressionActive = getConfirmedAutoNudgeArming().getSuppressedSnapshot();
     const liveRoutes = new Set<string>();
 
     for (const environment of Object.values(environmentStateById)) {
@@ -234,6 +232,7 @@ export function BackgroundAutoNudgeCoordinator() {
           observedCompletedTurnByRouteRef.current.get(currentRouteKey) ?? null;
         observedCompletedTurnByRouteRef.current.set(currentRouteKey, completedTurnKey);
         if (
+          suppressionActive ||
           !hadPrevious ||
           completedTurnKey === null ||
           completedTurnKey === previousCompletedTurnKey

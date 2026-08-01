@@ -824,6 +824,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           `Thread '${command.threadId}' has pending or running provider work.`,
         );
       }
+      if (targetThread.session?.status !== "ready") {
+        return yield* rejectAutoNudgeCommand(
+          command,
+          `Thread '${command.threadId}' does not have a ready provider session for Auto Nudge.`,
+        );
+      }
       if (config.roundsDispatched >= config.maxRounds) {
         return yield* rejectAutoNudgeCommand(
           command,
@@ -888,6 +894,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           runtimeMode: targetThread.runtimeMode,
           interactionMode: targetThread.interactionMode,
           dispatchSource: "auto-nudge",
+          autoNudgeAuthority: {
+            authorityRevision: config.authorityRevision,
+            completedTurnId: command.completedTurnId,
+            completedAt: targetThread.latestTurn.completedAt,
+            dispatchSource: command.dispatchSource,
+          },
           createdAt: dispatchedAt,
         },
       };
@@ -1647,24 +1659,43 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.session.stop": {
-      yield* requireThread({
+      const targetThread = yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
       });
-      return {
+      const stoppedAt = yield* nowIso;
+      const autoNudgeStopEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: stoppedAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.auto-nudge-stopped",
+        payload: {
+          threadId: command.threadId,
+          authorityRevision: revokeAutoNudgeAuthorityRevision(
+            currentThreadAutoNudgeConfig(targetThread),
+          ),
+          stoppedAt,
+        },
+      };
+      const sessionStopEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...withEventBase({
           aggregateKind: "thread",
           aggregateId: command.threadId,
           occurredAt: command.createdAt,
           commandId: command.commandId,
         }),
+        causationEventId: autoNudgeStopEvent.eventId,
         type: "thread.session-stop-requested",
         payload: {
           threadId: command.threadId,
           createdAt: command.createdAt,
         },
       };
+      return [autoNudgeStopEvent, sessionStopEvent];
     }
 
     case "thread.goal.set": {
