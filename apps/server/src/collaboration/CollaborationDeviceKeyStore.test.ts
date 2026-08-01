@@ -203,6 +203,183 @@ describe("CollaborationDeviceKeyStore", () => {
     }).pipe(Effect.provide(memoryLayer)),
   );
 
+  it.effect("returns only the authenticated current device's bounded public status", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW);
+      yield* seedProject("project-status");
+      const store = yield* CollaborationDeviceKeyStore;
+      const actor = principal("project-status");
+      assert.deepEqual(
+        yield* store.getCurrentDeviceKeyStatus({
+          principal: actor,
+          request: { sharedProjectId: actor.sharedProjectId },
+        }),
+        {
+          sharedProjectId: actor.sharedProjectId,
+          userId: actor.userId,
+          deviceId: actor.deviceId,
+          membershipEpoch: actor.membershipEpoch,
+          status: "enrollment-required",
+          activeKey: null,
+        },
+      );
+
+      const enrolled = yield* enroll(store, actor, "status");
+      const active = yield* store.getCurrentDeviceKeyStatus({
+        principal: actor,
+        request: { sharedProjectId: actor.sharedProjectId },
+      });
+      assert.equal(active.status, "active");
+      if (active.status !== "active") return assert.fail("expected an active key");
+      assert.deepEqual(active.activeKey, {
+        deviceKeyId: enrolled.completed.key.deviceKeyId,
+        activatedAt: enrolled.completed.key.activatedAt,
+      });
+      assert.deepEqual(Object.keys(active).toSorted(), [
+        "activeKey",
+        "deviceId",
+        "membershipEpoch",
+        "sharedProjectId",
+        "status",
+        "userId",
+      ]);
+      assert.deepEqual(Object.keys(active.activeKey).toSorted(), ["activatedAt", "deviceKeyId"]);
+      assert.notInclude(JSON.stringify(active), enrolled.keys.publicKeySpkiDer);
+      assert.notMatch(JSON.stringify(active), /nonce|digest|receipt|hash|private|secret/i);
+
+      yield* store.revokeKey({
+        principal: actor,
+        request: {
+          commandId: "revoke-status",
+          sharedProjectId: actor.sharedProjectId,
+          deviceKeyId: active.activeKey.deviceKeyId,
+        },
+      });
+      assert.equal(
+        (yield* store.getCurrentDeviceKeyStatus({
+          principal: actor,
+          request: { sharedProjectId: actor.sharedProjectId },
+        })).status,
+        "enrollment-required",
+      );
+    }).pipe(Effect.provide(memoryLayer)),
+  );
+
+  it.effect("derives status identity server-side and rejects foreign or stale authority", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW);
+      yield* seedProject("project-status-auth", ["owner-1", "owner-2"]);
+      yield* seedProject("project-status-other");
+      const store = yield* CollaborationDeviceKeyStore;
+      const actor = principal("project-status-auth");
+      const enrolled = yield* enroll(store, actor, "status-auth");
+
+      for (const request of [
+        { sharedProjectId: actor.sharedProjectId, userId: "owner-2" },
+        { sharedProjectId: actor.sharedProjectId, deviceId: "foreign-device" },
+      ]) {
+        const invalid = yield* store
+          .getCurrentDeviceKeyStatus({ principal: actor, request })
+          .pipe(Effect.flip);
+        expectFailure(invalid, "invalid-input");
+      }
+      const crossProject = yield* store
+        .getCurrentDeviceKeyStatus({
+          principal: actor,
+          request: { sharedProjectId: decodeProjectId("project-status-other") },
+        })
+        .pipe(Effect.flip);
+      expectFailure(crossProject, "project-mismatch");
+
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`
+        UPDATE collaboration_projects SET membership_epoch = 2
+        WHERE shared_project_id = ${"project-status-auth"}
+      `;
+      const currentActor = principal("project-status-auth", "owner-1", "device-owner-1", 2);
+      const staleStatus = yield* store.getCurrentDeviceKeyStatus({
+        principal: currentActor,
+        request: { sharedProjectId: currentActor.sharedProjectId },
+      });
+      assert.equal(staleStatus.status, "enrollment-required");
+
+      yield* sql`
+        UPDATE collaboration_device_keys SET public_key_spki_der = ${Buffer.alloc(44)}
+        WHERE device_key_id = ${enrolled.completed.key.deviceKeyId}
+      `;
+      const corrupt = yield* store
+        .getCurrentDeviceKeyStatus({
+          principal: currentActor,
+          request: { sharedProjectId: currentActor.sharedProjectId },
+        })
+        .pipe(Effect.flip);
+      expectFailure(corrupt, "stored-corruption");
+
+      yield* sql`
+        DELETE FROM collaboration_project_members
+        WHERE shared_project_id = ${"project-status-auth"} AND user_id = ${"owner-1"}
+      `;
+      const removed = yield* store
+        .getCurrentDeviceKeyStatus({
+          principal: currentActor,
+          request: { sharedProjectId: currentActor.sharedProjectId },
+        })
+        .pipe(Effect.flip);
+      expectFailure(removed, "member-not-found");
+    }).pipe(Effect.provide(memoryLayer)),
+  );
+
+  it.effect("fails closed on device binding substitution and foreign self-revocation", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW);
+      yield* seedProject("project-status-binding", ["owner-1", "owner-2"]);
+      const store = yield* CollaborationDeviceKeyStore;
+      const actor = principal("project-status-binding");
+      const enrolled = yield* enroll(store, actor, "status-binding");
+      const otherActor = principal("project-status-binding", "owner-2", "device-owner-2");
+      const foreignRevoke = yield* store
+        .revokeKey({
+          principal: otherActor,
+          request: {
+            commandId: "foreign-revoke",
+            sharedProjectId: otherActor.sharedProjectId,
+            deviceKeyId: enrolled.completed.key.deviceKeyId,
+          },
+        })
+        .pipe(Effect.flip);
+      expectFailure(foreignRevoke, "device-key-not-found");
+
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`
+        UPDATE collaboration_device_keys SET device_key_id = ${"substituted-device-key"}
+        WHERE device_key_id = ${enrolled.completed.key.deviceKeyId}
+      `;
+      const keySubstitution = yield* store
+        .getCurrentDeviceKeyStatus({
+          principal: actor,
+          request: { sharedProjectId: actor.sharedProjectId },
+        })
+        .pipe(Effect.flip);
+      expectFailure(keySubstitution, "stored-corruption");
+      yield* sql`
+        UPDATE collaboration_device_keys SET device_key_id = ${enrolled.completed.key.deviceKeyId}
+        WHERE device_key_id = ${"substituted-device-key"}
+      `;
+      yield* sql`
+        UPDATE collaboration_project_devices SET user_id = ${"owner-2"}
+        WHERE shared_project_id = ${"project-status-binding"}
+          AND device_id = ${actor.deviceId}
+      `;
+      const substituted = yield* store
+        .getCurrentDeviceKeyStatus({
+          principal: actor,
+          request: { sharedProjectId: actor.sharedProjectId },
+        })
+        .pipe(Effect.flip);
+      expectFailure(substituted, "device-identity-conflict");
+    }).pipe(Effect.provide(memoryLayer)),
+  );
+
   it.effect("rotates by revoking the old key before exposing the new authority", () =>
     Effect.gen(function* () {
       yield* TestClock.setTime(NOW);
@@ -808,5 +985,149 @@ describe("CollaborationDeviceKeyStore", () => {
         },
         (directory) => Effect.promise(() => rm(directory, { recursive: true, force: true })),
       ),
+  );
+
+  it.effect("serializes file-backed status reads against revocation", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => mkdtemp(join(tmpdir(), "club-code-device-status-revoke-"))),
+      (directory) => {
+        const filename = join(directory, "state.sqlite");
+        const actor = principal("project-status-revoke-race");
+        return Effect.gen(function* () {
+          yield* TestClock.setTime(NOW);
+          const enrolled = yield* Effect.gen(function* () {
+            yield* runMigrations();
+            yield* seedProject("project-status-revoke-race");
+            const store = yield* CollaborationDeviceKeyStore;
+            return yield* enroll(store, actor, "status-revoke-race");
+          }).pipe(Effect.provide(fileLayer(filename)));
+
+          const read = Effect.gen(function* () {
+            const store = yield* CollaborationDeviceKeyStore;
+            return yield* store.getCurrentDeviceKeyStatus({
+              principal: actor,
+              request: { sharedProjectId: actor.sharedProjectId },
+            });
+          }).pipe(Effect.provide(fileLayer(filename)));
+          const revoke = Effect.gen(function* () {
+            const store = yield* CollaborationDeviceKeyStore;
+            return yield* store.revokeKey({
+              principal: actor,
+              request: {
+                commandId: "revoke-status-race",
+                sharedProjectId: actor.sharedProjectId,
+                deviceKeyId: enrolled.completed.key.deviceKeyId,
+              },
+            });
+          }).pipe(Effect.provide(fileLayer(filename)));
+
+          const [observed, revoked] = yield* Effect.all([read, revoke], {
+            concurrency: "unbounded",
+          });
+          assert.equal(revoked.disposition, "revoked");
+          assert.include(["active", "enrollment-required"], observed.status);
+          if (observed.status === "active") {
+            assert.equal(observed.activeKey.deviceKeyId, enrolled.completed.key.deviceKeyId);
+          }
+          const finalStatus = yield* Effect.gen(function* () {
+            const store = yield* CollaborationDeviceKeyStore;
+            return yield* store.getCurrentDeviceKeyStatus({
+              principal: actor,
+              request: { sharedProjectId: actor.sharedProjectId },
+            });
+          }).pipe(Effect.provide(fileLayer(filename)));
+          assert.equal(finalStatus.status, "enrollment-required");
+        });
+      },
+      (directory) => Effect.promise(() => rm(directory, { recursive: true, force: true })),
+    ),
+  );
+
+  it.effect("serializes file-backed status reads against key rotation", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => mkdtemp(join(tmpdir(), "club-code-device-status-rotate-"))),
+      (directory) => {
+        const filename = join(directory, "state.sqlite");
+        const actor = principal("project-status-rotate-race");
+        return Effect.gen(function* () {
+          yield* TestClock.setTime(NOW);
+          const prepared = yield* Effect.gen(function* () {
+            yield* runMigrations();
+            yield* seedProject("project-status-rotate-race");
+            const store = yield* CollaborationDeviceKeyStore;
+            const current = yield* enroll(store, actor, "status-rotate-current");
+            const replacementKeys = keyPair();
+            const replacement = yield* store.beginEnrollment({
+              principal: actor,
+              request: {
+                commandId: "begin-status-rotate-replacement",
+                sharedProjectId: actor.sharedProjectId,
+                publicKeySpkiDer: replacementKeys.publicKeySpkiDer,
+              },
+            });
+            return { current, replacement, replacementKeys };
+          }).pipe(Effect.provide(fileLayer(filename)));
+
+          const read = Effect.gen(function* () {
+            const store = yield* CollaborationDeviceKeyStore;
+            return yield* store.getCurrentDeviceKeyStatus({
+              principal: actor,
+              request: { sharedProjectId: actor.sharedProjectId },
+            });
+          }).pipe(Effect.provide(fileLayer(filename)));
+          const rotate = Effect.gen(function* () {
+            const store = yield* CollaborationDeviceKeyStore;
+            const nonce = prepared.replacement.nonce!;
+            return yield* store.completeEnrollment({
+              principal: actor,
+              request: {
+                commandId: "complete-status-rotate-replacement",
+                sharedProjectId: actor.sharedProjectId,
+                challengeId: prepared.replacement.challenge.challengeId,
+                nonce,
+                proofSignature: sign(
+                  null,
+                  collaborationDeviceEnrollmentProofBytes({
+                    challenge: prepared.replacement.challenge,
+                    nonce,
+                  }),
+                  prepared.replacementKeys.privateKey,
+                ).toString("base64url"),
+              },
+            });
+          }).pipe(Effect.provide(fileLayer(filename)));
+
+          const [observed, rotated] = yield* Effect.all([read, rotate], {
+            concurrency: "unbounded",
+          });
+          assert.equal(observed.status, "active");
+          if (observed.status !== "active") return assert.fail("expected an active key");
+          assert.include(
+            [
+              prepared.current.completed.key.deviceKeyId,
+              prepared.replacement.challenge.deviceKeyId,
+            ],
+            observed.activeKey.deviceKeyId,
+          );
+          assert.equal(rotated.key.deviceKeyId, prepared.replacement.challenge.deviceKeyId);
+
+          const finalStatus = yield* Effect.gen(function* () {
+            const store = yield* CollaborationDeviceKeyStore;
+            return yield* store.getCurrentDeviceKeyStatus({
+              principal: actor,
+              request: { sharedProjectId: actor.sharedProjectId },
+            });
+          }).pipe(Effect.provide(fileLayer(filename)));
+          assert.equal(finalStatus.status, "active");
+          if (finalStatus.status === "active") {
+            assert.equal(
+              finalStatus.activeKey.deviceKeyId,
+              prepared.replacement.challenge.deviceKeyId,
+            );
+          }
+        });
+      },
+      (directory) => Effect.promise(() => rm(directory, { recursive: true, force: true })),
+    ),
   );
 });
