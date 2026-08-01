@@ -12,6 +12,7 @@ import {
   UserId,
   type CollaborationAppendAuthoredMessageRequest,
   type CollaborationAuthoredMessage,
+  type CollaborationAuthoredMessageKind,
   type CollaborationTransportPage,
 } from "@cafecode/contracts";
 import * as DateTime from "effect/DateTime";
@@ -41,21 +42,24 @@ function authoredMessage(input: {
   readonly projectId?: typeof projectA;
   readonly messageId?: CollaborationAuthoredMessage["messageId"];
   readonly body?: string;
+  readonly kind?: CollaborationAuthoredMessageKind;
+  readonly contextInclusion?: CollaborationAuthoredMessage["contextInclusion"];
+  readonly occurredAt?: CollaborationAuthoredMessage["occurredAt"];
 }): CollaborationAuthoredMessage {
   return {
     sharedProjectId: input.projectId ?? projectA,
     projectSequence: input.sequence,
     operatorSequence: input.sequence,
     messageId: input.messageId ?? CollaborationAuthoredMessageId.make(`message-${input.sequence}`),
-    kind: "operator-chat",
+    kind: input.kind ?? "operator-chat",
     body: input.body ?? `message ${input.sequence}`,
-    contextInclusion: "eligible",
+    contextInclusion: input.contextInclusion ?? "eligible",
     authorUserId: userA,
     authorDeviceId: DeviceId.make("device-a"),
     membershipEpoch: CollaborationMembershipEpoch.make(1),
     previousMessageSha256: null,
     messageSha256: CollaborationSha256.make("a".repeat(64)),
-    occurredAt: DateTime.makeUnsafe("2026-08-01T12:00:00.000Z"),
+    occurredAt: input.occurredAt ?? DateTime.makeUnsafe("2026-08-01T12:00:00.000Z"),
     receivedAt: DateTime.makeUnsafe("2026-08-01T12:00:00.100Z"),
     tombstone: null,
   };
@@ -199,12 +203,39 @@ describe("shared operator chat network composition", () => {
     expect(command).toHaveBeenCalledTimes(2);
   });
 
+  it("uses the authored-page default when a caller omits its page limit", async () => {
+    const command = vi.fn(async (_operation: unknown, _request: unknown) => transportPage());
+    const composition = createSharedOperatorChatNetworkComposition({
+      projectId: projectA,
+      networkClient: networkClient({ command }),
+    });
+
+    await composition.client.readAuthoredMessages({
+      sharedProjectId: projectA,
+      afterSequence: 0,
+      kinds: ["operator-chat"],
+      signal: new AbortController().signal,
+    });
+
+    expect(command.mock.calls[0]?.[1]).toMatchObject({ limit: 100 });
+  });
+
   it("rejects hostile page project, order, lane, and forward-progress responses", async () => {
     const valid = transportPage({ messages: [authoredMessage({ sequence: 1 })] });
+    const first = authoredMessage({ sequence: 1 });
+    const second = authoredMessage({ sequence: 2 });
+    const reversed = transportPage({ messages: [second, first] });
+    const wrongKind = transportPage({
+      messages: [authoredMessage({ sequence: 1, kind: "authored-prompt" })],
+    });
+    const wrongLaneOrder = transportPage({ messages: [first, second] });
     const hostilePages = [
       { ...valid, sharedProjectId: projectB },
       { ...valid, mergedOrder: [] },
       { ...valid, lanePositions: [{ ...valid.lanePositions[0]!, projectSequence: 99 }] },
+      reversed,
+      wrongKind,
+      { ...wrongLaneOrder, lanePositions: wrongLaneOrder.lanePositions.toReversed() },
       transportPage({ messages: [], hasMore: true }),
       { ...valid, unexpected: "hostile" },
     ];
@@ -218,6 +249,20 @@ describe("shared operator chat network composition", () => {
         SharedOperatorChatNetworkCompositionError,
       );
     }
+  });
+
+  it("enforces the authored-page byte ceiling after replacing the opaque cursor", async () => {
+    const messages = Array.from({ length: 17 }, (_, index) =>
+      authoredMessage({ sequence: index + 1, body: "x".repeat(32_768) }),
+    );
+    const composition = createSharedOperatorChatNetworkComposition({
+      projectId: projectA,
+      networkClient: networkClient({ command: async () => transportPage({ messages }) }),
+    });
+
+    await expect(composition.client.readAuthoredMessages(pageRequest())).rejects.toMatchObject({
+      code: "protocol-error",
+    });
   });
 
   it("forwards exact append retry fields and strictly correlates its acknowledgement", async () => {
@@ -271,6 +316,261 @@ describe("shared operator chat network composition", () => {
     await expect(hostile.client.appendAuthoredMessage(appendRequest())).rejects.toMatchObject({
       code: "protocol-error",
     });
+
+    const mismatches = [
+      authoredMessage({ sequence: 1, messageId: request.messageId, body: "different body" }),
+      authoredMessage({
+        sequence: 1,
+        messageId: request.messageId,
+        body: request.body,
+        kind: "authored-prompt",
+      }),
+      authoredMessage({
+        sequence: 1,
+        messageId: request.messageId,
+        body: request.body,
+        contextInclusion: "excluded-sensitive",
+      }),
+      authoredMessage({
+        sequence: 1,
+        messageId: request.messageId,
+        body: request.body,
+        occurredAt: DateTime.makeUnsafe("2026-08-01T12:00:01.000Z"),
+      }),
+    ];
+    for (const mismatch of mismatches) {
+      const mismatchComposition = createSharedOperatorChatNetworkComposition({
+        projectId: projectA,
+        networkClient: networkClient({ command: async () => mismatch }),
+      });
+      await expect(
+        mismatchComposition.client.appendAuthoredMessage(appendRequest()),
+      ).rejects.toMatchObject({ code: "protocol-error" });
+    }
+  });
+
+  it("invalidates late read and append completions across explicit disconnect", async () => {
+    const pageDeferred = deferred<CollaborationTransportPage>();
+    const appendDeferred = deferred<CollaborationAuthoredMessage>();
+    const command = vi
+      .fn()
+      .mockImplementationOnce(() => pageDeferred.promise)
+      .mockImplementationOnce(() => appendDeferred.promise);
+    const composition = createSharedOperatorChatNetworkComposition({
+      projectId: projectA,
+      networkClient: networkClient({ command }),
+    });
+
+    const page = composition.client.readAuthoredMessages(pageRequest());
+    const append = composition.client.appendAuthoredMessage(appendRequest());
+    composition.disconnect();
+    pageDeferred.resolve(
+      transportPage({ messages: [authoredMessage({ sequence: 1 })], nextCursor: "late-cursor" }),
+    );
+    appendDeferred.resolve(
+      authoredMessage({
+        sequence: 2,
+        messageId: appendRequest().messageId,
+        body: appendRequest().body,
+      }),
+    );
+
+    await expect(page).rejects.toMatchObject({ code: "cancelled" });
+    await expect(append).rejects.toMatchObject({ code: "cancelled" });
+    await expect(composition.client.readAuthoredMessages(pageRequest(1))).rejects.toMatchObject({
+      code: "cursor-unavailable",
+    });
+
+    const conflictDeferred = deferred<CollaborationAuthoredMessage>();
+    const staleConflict = createSharedOperatorChatNetworkComposition({
+      projectId: projectA,
+      networkClient: networkClient({ command: () => conflictDeferred.promise }),
+    });
+    const staleAppend = staleConflict.client.appendAuthoredMessage(appendRequest());
+    staleConflict.disconnect();
+    conflictDeferred.reject(new CollaborationNetworkClientError("conflict"));
+    await expect(staleAppend).rejects.toMatchObject({ code: "cancelled" });
+
+    const abortDeferred = deferred<CollaborationTransportPage>();
+    const abortController = new AbortController();
+    const abortComposition = createSharedOperatorChatNetworkComposition({
+      projectId: projectA,
+      networkClient: networkClient({ command: () => abortDeferred.promise }),
+    });
+    const abortedPage = abortComposition.client.readAuthoredMessages({
+      ...pageRequest(),
+      signal: abortController.signal,
+    });
+    abortController.abort();
+    abortDeferred.resolve(transportPage());
+    await expect(abortedPage).rejects.toMatchObject({ code: "cancelled" });
+  });
+
+  it("contains hostile request, response, state, and disconnect capabilities", async () => {
+    const composition = createSharedOperatorChatNetworkComposition({
+      projectId: projectA,
+      networkClient: networkClient({
+        state: () => {
+          throw new Error("SECRET_STATE_DETAIL");
+        },
+        disconnect: () => {
+          throw new Error("SECRET_DISCONNECT_DETAIL");
+        },
+        command: async () =>
+          new Proxy(
+            {},
+            {
+              getOwnPropertyDescriptor() {
+                throw new Error("SECRET_RESPONSE_DETAIL");
+              },
+            },
+          ),
+      }),
+    });
+    expect(composition.getSnapshot()).toBe("offline");
+    expect(() => composition.disconnect()).not.toThrow();
+
+    const hostileRequest = new Proxy(
+      {},
+      {
+        getOwnPropertyDescriptor() {
+          throw new Error("SECRET_REQUEST_DETAIL");
+        },
+      },
+    );
+    await expect(
+      composition.client.readAuthoredMessages(hostileRequest as ReturnType<typeof pageRequest>),
+    ).rejects.toMatchObject({ code: "protocol-error" });
+
+    const connectedComposition = createSharedOperatorChatNetworkComposition({
+      projectId: projectA,
+      networkClient: networkClient({
+        command: async () =>
+          new Proxy(
+            {},
+            {
+              getOwnPropertyDescriptor() {
+                throw new Error("SECRET_RESPONSE_DETAIL");
+              },
+            },
+          ),
+      }),
+    });
+    const failure = connectedComposition.client.readAuthoredMessages(pageRequest());
+    await expect(failure).rejects.toMatchObject({ code: "protocol-error" });
+    await expect(failure).rejects.not.toThrow("SECRET_RESPONSE_DETAIL");
+
+    const getHostileResponse = new Proxy(transportPage(), {
+      get(target, property, receiver) {
+        if (property === "then") return undefined;
+        void target;
+        void receiver;
+        throw new Error("SECRET_GET_TRAP_DETAIL");
+      },
+    });
+    const safelyCloned = createSharedOperatorChatNetworkComposition({
+      projectId: projectA,
+      networkClient: networkClient({ command: async () => getHostileResponse }),
+    });
+    await expect(safelyCloned.client.readAuthoredMessages(pageRequest())).resolves.toMatchObject({
+      sharedProjectId: projectA,
+      messages: [],
+    });
+
+    const accessorClient = { ...networkClient({}) };
+    Object.defineProperty(accessorClient, "command", {
+      enumerable: true,
+      get() {
+        throw new Error("SECRET_CLIENT_DETAIL");
+      },
+    });
+    expect(() =>
+      createSharedOperatorChatNetworkComposition({
+        projectId: projectA,
+        networkClient: accessorClient,
+      }),
+    ).toThrow(/protocol-error/);
+  });
+
+  it("deduplicates reentrant connect and ignores its stale completion after disconnect", async () => {
+    const pending = deferred<void>();
+    let state: "disconnected" | "connecting" | "connected" = "disconnected";
+    let nested: Promise<void> | undefined;
+    let composition!: ReturnType<typeof createSharedOperatorChatNetworkComposition>;
+    const connect = vi.fn(() => {
+      state = "connecting";
+      nested = composition.connect();
+      return pending.promise.then(() => {
+        state = "connected";
+      });
+    });
+    const disconnect = vi.fn(() => {
+      state = "disconnected";
+    });
+    composition = createSharedOperatorChatNetworkComposition({
+      projectId: projectA,
+      networkClient: networkClient({ state: () => state, connect, disconnect }),
+    });
+
+    const connecting = composition.connect();
+    await vi.waitFor(() => expect(connect).toHaveBeenCalledOnce());
+    expect(nested).toBe(connecting);
+    composition.disconnect();
+    pending.resolve();
+
+    await expect(connecting).rejects.toMatchObject({ code: "cancelled" });
+    expect(composition.getSnapshot()).toBe("offline");
+    expect(disconnect).toHaveBeenCalledOnce();
+  });
+
+  it("does not start a connection after a reconnecting observer disconnects synchronously", async () => {
+    let state: "disconnected" | "connected" = "disconnected";
+    const connect = vi.fn(async () => {
+      state = "connected";
+    });
+    const composition = createSharedOperatorChatNetworkComposition({
+      projectId: projectA,
+      networkClient: networkClient({
+        state: () => state,
+        connect,
+        disconnect: () => {
+          state = "disconnected";
+        },
+      }),
+    });
+    composition.subscribe(() => {
+      if (composition.getSnapshot() === "reconnecting") composition.disconnect();
+    });
+
+    await expect(composition.connect()).rejects.toMatchObject({ code: "cancelled" });
+    expect(connect).not.toHaveBeenCalled();
+    expect(composition.getSnapshot()).toBe("offline");
+  });
+
+  it("does not publish a state result made stale by reentrant disconnect", () => {
+    let composition!: ReturnType<typeof createSharedOperatorChatNetworkComposition>;
+    let reenter = false;
+    const disconnect = vi.fn(() => {
+      reenter = false;
+    });
+    composition = createSharedOperatorChatNetworkComposition({
+      projectId: projectA,
+      networkClient: networkClient({
+        state: () => {
+          if (reenter) {
+            composition.disconnect();
+            return "connected";
+          }
+          return "disconnected";
+        },
+        disconnect,
+      }),
+    });
+    reenter = true;
+
+    expect(composition.refreshState()).toBe("offline");
+    expect(composition.getSnapshot()).toBe("offline");
+    expect(disconnect).toHaveBeenCalledOnce();
   });
 
   it("maps only the bounded network conflict code into a conflict disposition", async () => {

@@ -92,4 +92,58 @@ describe("SharedOperatorChatNetworkPanel", () => {
       await mounted.unmount();
     }
   });
+
+  it("clears panel-local state when a same-project composition is replaced", async () => {
+    const firstCommand = vi.fn(async () => emptyPage());
+    const secondCommand = vi.fn(async () => emptyPage());
+    const first = createSharedOperatorChatNetworkComposition({
+      projectId,
+      networkClient: {
+        state: () => "connected",
+        connect: async () => undefined,
+        disconnect: () => undefined,
+        command: firstCommand,
+        subscribeReplay: vi.fn(),
+      } as unknown as CollaborationNetworkClient,
+    });
+    const second = createSharedOperatorChatNetworkComposition({
+      projectId,
+      networkClient: {
+        state: () => "connected",
+        connect: async () => undefined,
+        disconnect: () => undefined,
+        command: secondCommand,
+        subscribeReplay: vi.fn(),
+      } as unknown as CollaborationNetworkClient,
+    });
+    const mounted = await render(
+      <SharedOperatorChatNetworkPanel
+        composition={first}
+        currentUserId={currentUserId}
+        participants={participants}
+      />,
+    );
+
+    try {
+      const composer = page.getByPlaceholder("Visible to everyone in this shared project");
+      await vi.waitFor(() => expect(firstCommand).toHaveBeenCalledOnce());
+      await composer.fill("must not cross composition authority");
+      await expect.element(composer).toHaveValue("must not cross composition authority");
+
+      await mounted.rerender(
+        <SharedOperatorChatNetworkPanel
+          composition={second}
+          currentUserId={currentUserId}
+          participants={participants}
+        />,
+      );
+
+      await expect
+        .element(page.getByPlaceholder("Visible to everyone in this shared project"))
+        .toHaveValue("");
+      await vi.waitFor(() => expect(secondCommand).toHaveBeenCalledOnce());
+    } finally {
+      await mounted.unmount();
+    }
+  });
 });

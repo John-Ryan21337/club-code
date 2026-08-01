@@ -64,4 +64,6 @@ The adopting host must still supply a network client that:
 Construction and mounting perform no I/O. The host owns explicit `connect()`, `disconnect()`, and
 read-only `refreshState()` calls. The composition adds no automatic reconnect, polling, timer,
 background retry, listener launch, credential persistence, identity assertion, or private-key
-handling. It does not make cross-network coworking live by itself.
+handling. Replacing a composition remounts the project panel even when the project ID is unchanged,
+so prior drafts, messages, pending sends, and late async work do not cross the replacement authority
+boundary. It does not make cross-network coworking live by itself.

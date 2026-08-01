@@ -6,6 +6,18 @@ import {
 } from "./SharedOperatorChatPanel.tsx";
 import type { SharedOperatorChatNetworkComposition } from "./SharedOperatorChatNetworkComposition.ts";
 
+const compositionKeys = new WeakMap<SharedOperatorChatNetworkComposition, number>();
+let nextCompositionKey = 1;
+
+function compositionKey(composition: SharedOperatorChatNetworkComposition): number {
+  const existing = compositionKeys.get(composition);
+  if (existing !== undefined) return existing;
+  const key = nextCompositionKey;
+  nextCompositionKey += 1;
+  compositionKeys.set(composition, key);
+  return key;
+}
+
 export interface SharedOperatorChatNetworkPanelProps extends Omit<
   SharedOperatorChatPanelProps,
   "client" | "connectionState" | "projectId"
@@ -28,6 +40,7 @@ export function SharedOperatorChatNetworkPanel({
   );
   return (
     <SharedOperatorChatPanel
+      key={compositionKey(composition)}
       {...panelProps}
       client={composition.client}
       connectionState={connectionState}
