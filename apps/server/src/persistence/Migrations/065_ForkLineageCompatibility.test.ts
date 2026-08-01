@@ -146,6 +146,7 @@ describe("065_ForkLineageCompatibility", () => {
           [64, "ProviderPacingPendingLaunchCompatibility"],
           [65, "ForkLineageCompatibility"],
           [70, "CollaborationEvents"],
+          [71, "CollaborationDatabaseCoordination"],
         ],
       );
 
