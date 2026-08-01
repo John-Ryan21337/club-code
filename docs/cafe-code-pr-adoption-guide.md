@@ -4,9 +4,9 @@ This guide is for Cafe Code maintainers who want to review or adopt Club Code ch
 
 ## Published PR inventory
 
-The repository has published 25 pull requests:
+The repository has published 26 pull requests:
 
-- seventeen open implementation PRs: [#2](https://github.com/John-Ryan21337/club-code/pull/2), [#3](https://github.com/John-Ryan21337/club-code/pull/3), [#4](https://github.com/John-Ryan21337/club-code/pull/4), [#7](https://github.com/John-Ryan21337/club-code/pull/7), [#8](https://github.com/John-Ryan21337/club-code/pull/8), [#13](https://github.com/John-Ryan21337/club-code/pull/13), [#14](https://github.com/John-Ryan21337/club-code/pull/14), [#15](https://github.com/John-Ryan21337/club-code/pull/15), [#17](https://github.com/John-Ryan21337/club-code/pull/17), [#18](https://github.com/John-Ryan21337/club-code/pull/18), [#19](https://github.com/John-Ryan21337/club-code/pull/19), [#20](https://github.com/John-Ryan21337/club-code/pull/20), [#21](https://github.com/John-Ryan21337/club-code/pull/21), [#22](https://github.com/John-Ryan21337/club-code/pull/22), [#23](https://github.com/John-Ryan21337/club-code/pull/23), [#24](https://github.com/John-Ryan21337/club-code/pull/24), and [#25](https://github.com/John-Ryan21337/club-code/pull/25);
+- eighteen open implementation PRs: [#2](https://github.com/John-Ryan21337/club-code/pull/2), [#3](https://github.com/John-Ryan21337/club-code/pull/3), [#4](https://github.com/John-Ryan21337/club-code/pull/4), [#7](https://github.com/John-Ryan21337/club-code/pull/7), [#8](https://github.com/John-Ryan21337/club-code/pull/8), [#13](https://github.com/John-Ryan21337/club-code/pull/13), [#14](https://github.com/John-Ryan21337/club-code/pull/14), [#15](https://github.com/John-Ryan21337/club-code/pull/15), [#17](https://github.com/John-Ryan21337/club-code/pull/17), [#18](https://github.com/John-Ryan21337/club-code/pull/18), [#19](https://github.com/John-Ryan21337/club-code/pull/19), [#20](https://github.com/John-Ryan21337/club-code/pull/20), [#21](https://github.com/John-Ryan21337/club-code/pull/21), [#22](https://github.com/John-Ryan21337/club-code/pull/22), [#23](https://github.com/John-Ryan21337/club-code/pull/23), [#24](https://github.com/John-Ryan21337/club-code/pull/24), [#25](https://github.com/John-Ryan21337/club-code/pull/25), and [#26](https://github.com/John-Ryan21337/club-code/pull/26);
 - this open documentation PR, [#16](https://github.com/John-Ryan21337/club-code/pull/16), which adds this adoption guide directly against `main`;
 - four merged documentation PRs: #9 through #12;
 - two closed, archived pacing PRs: #5 and #6; and
@@ -20,7 +20,7 @@ The active implementation foundation is:
 
 After #7, choose one of these paths:
 
-- **Recommended, reviewable path:** `#13 cowork foundation -> #14 database coordination -> #17 memberships/invites -> #20 device-key authority -> #21 shared chat/context`, then adopt independent child #24 (file-sync authority), #25 (transport façade), or both in either order before a future integration/UI slice.
+- **Recommended, reviewable path:** `#13 cowork foundation -> #14 database coordination -> #17 memberships/invites -> #20 device-key authority -> #21 shared chat/context`, then adopt independent child #24 (file-sync authority) and/or #25 (transport façade); #26 adds audited blob storage/materialization only after #24.
 - **Draft omnibus path:** `#8`, which contains the current local-release aggregate and overlaps the narrow cowork work.
 - **Telemetry follow-up:** `#8 -> #15`; #15 is not a cowork dependency and is useful only with the Project Resources implementation from #8.
 - **Matrix GPU path:** `#7 -> #18`; #18 is independent of cowork and extracts WebGL2 glyph rendering plus Walk parity without Auto Nudge, provider, or server files.
@@ -45,6 +45,7 @@ Do not combine the cowork commits from #8 with #13, #14, #17, #20, or #21.
 | #21 | Audited shared operator chat, authored prompts, and pointer-only context packets        | `feature/cowork-device-authority`                                          | `feature/cowork-chat-context-after-devices` at `036132ea0d459e867448f5427b6b704bf1c8b7a0` | open, audited, clean                                              |
 | #24 | Audited content-addressed file and fenced database-snapshot authority                   | `feature/cowork-chat-context-after-devices`                                | `feature/cowork-file-sync-authority` at `dc2fa5f2a615aa4d606ca4f6c188085dbef9e822`        | open, audited, clean; independent child of #21                    |
 | #25 | Bounded authenticated collaboration transport façade                                    | `feature/cowork-chat-context-after-devices`                                | `feature/cowork-transport-facade` at `3e64125221c9209250989ea4640880b70e4da21d`           | open, gated, clean; independent child of #21                      |
+| #26 | Audited quota-bounded blob storage and managed-replica materialization                  | `feature/cowork-file-sync-authority`                                       | `feature/cowork-managed-replica` at `98cf8eea891d0c65dcac1401b6258e3494916f6d`            | open, audited, clean; requires #24                                |
 | #22 | Audited local named Settings profiles                                                   | `agent/local-priority-integration`                                         | `feature/settings-profiles` at `8e4b7245b37905622b7bf3207e304dbbeb05537a`                 | open, audited, clean; separate from cowork and telemetry          |
 | #23 | Audited truthful host CPU and process-effective RAM sampler                             | `agent/local-priority-integration`                                         | `feature/host-system-telemetry` at `b2d70cbc86d315107de1b42e3519ae89eb8012cb`             | open, audited, clean; no temperatures, GPU, endpoint, or graph UI |
 | #18 | WebGL2 Matrix glyph rendering and Walk parity                                           | `agent/local-priority-integration`                                         | `agent/matrix-webgl-gpu-pr` at `fa2be7e92c744440f6bf47f20174d85a4041a21d`                 | open, audited, clean; separate from the cowork ladder             |
@@ -52,7 +53,7 @@ Do not combine the cowork commits from #8 with #13, #14, #17, #20, or #21.
 | #8  | Aggregate current local release                                                         | `agent/local-priority-integration`                                         | `release/local-20260728` at `457be1418541bfb0ab08ae5bf9aac8a729ead23f`                    | open draft; GitHub reported `CONFLICTING/DIRTY` at this snapshot  |
 | #15 | Hide stale unavailable Project Resources sensor graphs                                  | `release/local-20260728`                                                   | `work/profiles-telemetry-safety` at `9270cc56ffd05132f3ca02bce1582860850c8f0a`            | open, ready, clean; separate from the cowork ladder               |
 
-PR #7 was restacked on the current #4 head with a normal non-force merge whose tree is identical to its prior head; GitHub reported it `MERGEABLE/CLEAN` after focused and full gates passed. Re-check rather than treating that observation as immutable if any base moves again. The same rule applies to #8 if the omnibus path is deliberately chosen. PRs #13, #14, #17, #20, #21, #24, and #25 were also `MERGEABLE/CLEAN` after the #7 restack.
+PR #7 was restacked on the current #4 head with a normal non-force merge whose tree is identical to its prior head; GitHub reported it `MERGEABLE/CLEAN` after focused and full gates passed. Re-check rather than treating that observation as immutable if any base moves again. The same rule applies to #8 if the omnibus path is deliberately chosen. PRs #13, #14, #17, #20, #21, #24, #25, and #26 were also `MERGEABLE/CLEAN` after the #7 restack.
 
 ## Recommended merge order
 
@@ -66,7 +67,8 @@ PR #7 was restacked on the current #4 head with a normal non-force merge whose t
 8. Land #20, the audited device-key authority PR, on #17. It owns migration 073 and binds event admission to the member's current non-revoked Ed25519 key.
 9. Land #21, the audited shared chat/context PR, on #20. It owns migration 074 and stores only explicit operator-authored shared text plus pointer-only context packets.
 10. Land #24 and/or #25 on #21. They are independent siblings: #24 owns file/database publication authority; #25 owns a transport-neutral authenticated façade and opens no listener.
-11. Add blob transport/materialization, a reviewed network adapter, task/agent coordination, presence, and UI only through later bounded PRs.
+11. If adopting managed file bytes, land #26 on #24. It owns quota-bounded blobs and no-follow replica materialization; it does not depend on #25.
+12. Add a reviewed network adapter, task/agent coordination, presence, and UI only through later bounded PRs.
 
 ## Curated cherry-pick order
 
@@ -111,6 +113,9 @@ git cherry-pick 1c764de9 dc2fa5f2
 
 # PR #25: independent bounded transport facade. Apply after #21, with or without #24.
 git cherry-pick 3e641252
+
+# PR #26: managed blob storage/materialization plus independent audit. Apply after #24.
+git cherry-pick b0862961 98cf8eea
 ```
 
 Do not cherry-pick `8fb978ac` or `92e56252` after PR #2: both are branch-local copies of the same completion-event-only Auto Nudge cleanup already present as `fde09e8e`. PR #7's published `a24a58f2` restack commit changes ancestry only, so the curated semantic range intentionally ends at `cdb4e156`. Do not cherry-pick PR #13's final merge commit `8ad2ec37`; apply the contiguous cowork series shown above after #7 instead.
@@ -129,6 +134,8 @@ PR #24 is an independent child of #21. It owns content-addressed versions, recov
 
 PR #25 is another independent child of #21. It provides resolver-only authenticated admission, membership/device rechecks, encrypted project-bound cursors, keyed audit references, and bounded replay/backpressure/cancellation. It opens no listener or socket and exposes no orchestration RPC.
 
+PR #26 continues only the #24 file-authority path. It provides quota-bounded content-addressed blob bytes and a no-follow managed-replica materializer with recoverable tombstone moves, atomic staging/replacement, crash cleanup, filesystem identity defenses, and post-commit rollback. It still opens no network listener and leaves cross-process locking and remote non-transactional revocation linearizability as explicit future boundaries.
+
 PR #22 is an independent five-file web child of #7. Its profile allowlist explicitly excludes credentials, provider/network security, private project paths, exact-thread Auto Nudge state, legacy minute fields, media assets, native controls, pacing, telemetry, and PR #15.
 
 PR #23 is an independent contracts/server child of #7. It reports only measurements available through the bounded Node runtime adapter. CPU/RAM temperatures, GPU, storage temperatures, fans, RGB, project-volume probes, RPC exposure, renderer polling, and graph UI remain deferred and must not be inferred from its unavailable values.
@@ -139,15 +146,15 @@ When adopting onto a newer Cafe target instead of the pinned baseline, treat the
 
 PR #8 is a draft release aggregate, not the recommended Cafe review unit. It contains Auto Nudge, Idle Thread Guard, Matrix modes, telemetry, profiles, media, camera, LM Studio, and early cowork/database-contract work in one large branch.
 
-- Do not merge #8 and then merge #13, #14, #17, #20, #21, #24, or #25: cowork contracts, architecture, authorization, event admission, event persistence, database coordination, membership, device authority, authored-context, file-authority, and transport surfaces overlap or share migration lineage.
-- Do not merge #13/#14/#17/#20/#21/#24/#25 and then cherry-pick equivalent cowork commits from #8.
+- Do not merge #8 and then merge #13, #14, #17, #20, #21, #24, #25, or #26: cowork contracts, architecture, authorization, event admission, event persistence, database coordination, membership, device authority, authored-context, file-authority, materialization, and transport surfaces overlap or share migration lineage.
+- Do not merge #13/#14/#17/#20/#21/#24/#25/#26 and then cherry-pick equivalent cowork commits from #8.
 - Do not merge #19 and then retain #8's overlapping Auto Nudge authority, migrations, projections, or renderer coordinator changes.
 - Do not infer that #8 completes the user-visible cowork suite. Its own description leaves server-authoritative database admission, engine-specific snapshot adapters, secure replica materialization, network transport, and UI as later work.
 - Prefer extracting a narrow, independently gated PR from #8 for each non-cowork feature family that Cafe maintainers want.
 
 ## Validation gates
 
-At this snapshot GitHub reported no configured checks for PRs #13 through #25. `MERGEABLE/CLEAN` describes branch topology, not test evidence; Cafe maintainers must run the recorded local gates (or equivalent CI) on the exact adopted heads.
+At this snapshot GitHub reported no configured checks for PRs #13 through #26. `MERGEABLE/CLEAN` describes branch topology, not test evidence; Cafe maintainers must run the recorded local gates (or equivalent CI) on the exact adopted heads.
 
 Run the repository gates after each meaningful stack layer and again at the final exact head:
 
@@ -171,6 +178,7 @@ git diff --check
 - #21: audited chat/context 20/20, full repository tests, principal-bound receipts, tombstone replay revocation, conservative token admission, membership recheck, corruption, and two-client ordering;
 - #24: audited file authority 19/19, typecheck 9/9, full repository tests 9/9 with server 1,685 passed/1 skipped, database provenance, rehashed-substitution, case-fold alias, root replacement/hardlink, and bounded-head adversarial coverage;
 - #25: transport façade 10/10, typecheck 9/9, full repository tests 9/9 with server 1,680 passed/1 skipped, membership/device pre/post checks, cursor binding, concurrency/backpressure, cancellation, and slow-consumer coverage;
+- #26: collaboration 135/135 with focused blob/materializer 24/24, typecheck 9/9, isolated full repository tests 9/9 with server 1,703 passed/1 skipped, short-write/cancellation/quota/hash-open/current-head/tombstone/crash-recovery/filesystem-escape adversarial coverage;
 - #22: audited profile units 23/23, Settings Chromium 41/41, full web 1,387/1,387 before final audit, full repository tests, duplicate/prototype/quota/timestamp adversarial coverage, and exhaustive private-field exclusion;
 - #23: audited telemetry 44/44, typecheck 9/9, full repository tests 9/9 with server 1,604 passed/1 skipped and contracts 169 passed, truthful warming/unavailable states, overflow and relational-arithmetic guards, counter-failure and topology-change coverage, and no fabricated sensor measurements;
 - #18: audited Matrix/settings units 133/133, focused Chromium 46/46, full Chromium 281/281, WebGL limits/context/fallback coverage, and full repository tests;
@@ -181,6 +189,6 @@ A green exit code is not enough for generated or packaged work. Verify that expe
 
 ## Security and scope boundaries
 
-The narrow cowork ladder intentionally does not expose the existing server-wide orchestration RPC to remote members. #13, #20, #21, #24, and #25 open no network endpoint or listener and retain no private key. #24 mutates only its managed collaboration store; it does not materialize remote bytes into an operator workspace. Future slices must preserve project-scoped authorization, current-membership and current-device-key checks, server-clock decisions, exact idempotency, revocation handling, bounded replay, recoverable deletion, managed-replica filesystem containment, and fail-closed corruption behavior.
+The narrow cowork ladder intentionally does not expose the existing server-wide orchestration RPC to remote members. #13, #20, #21, #24, #25, and #26 open no network endpoint or listener and retain no private key. #26 materializes only inside its managed replica after #24 authority; it never grants remote access to an arbitrary operator workspace. Future slices must preserve project-scoped authorization, current-membership and current-device-key checks, server-clock decisions, exact idempotency, revocation handling, bounded replay, recoverable deletion, managed-replica filesystem containment, and fail-closed corruption behavior.
 
 Database files require a separate coordination policy. Prefer an authenticated external database service; otherwise use private per-operator forks plus immutable consistent snapshots. A serialized shared head is compatibility-only and requires a server-authoritative lease, monotonically increasing fencing token, and compare-and-swap publication. Never synchronize live SQLite pages or WAL/SHM/journal sidecars, DuckDB WAL files, or LMDB lock files between operators.
