@@ -1,0 +1,7 @@
+# Project presence web roster
+
+`ProjectPresenceRosterModel` and `ProjectPresenceRoster` are disabled-by-default, web-only presentation surfaces. They perform no fetch, polling, timer, socket, RPC, or launcher work: callers must explicitly inject a subscription client and select a shared project. A null client renders the bounded unavailable state and cannot reach a network.
+
+It replaces local state on authoritative snapshots, accepts only the next same-project delta version, and clears potentially stale entries when a gap or subscription failure requires resync. Multiple device sessions collapse into one participant with coarse online/away/offline state and the two safe capabilities. The normal display is capped at 20 participants; protocol input and defensive consumption are capped at 128. The component exposes loading, unavailable, resync-required, current roster, and overflow states through labeled semantic markup and a polite status region.
+
+The model deliberately cannot carry prompts, paths, provider/model output, tasks, device keys, credentials, or activity history. Unmount, project switching, StrictMode effect replay, late callbacks, duplicate/out-of-order deltas, and membership-revocation transport errors cannot retain a stale active subscription or stale roster. Cleanup invokes each injected unsubscribe at most once, including a subscription that fails synchronously before returning its cleanup function.
