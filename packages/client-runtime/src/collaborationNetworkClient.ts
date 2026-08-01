@@ -158,11 +158,24 @@ export interface CollaborationNetworkClient {
 
 interface PendingSubscription {
   readonly requestId: RequestId;
+  readonly reservation: symbol;
+  readonly sharedProjectId: string;
   readonly onPage: (page: TransportPage) => void;
   readonly resolve: (result: ReplayResult) => void;
   readonly reject: (cause: CollaborationNetworkClientError) => void;
   readonly removeAbortListener: () => void;
   cancelSent: boolean;
+}
+
+interface AllocatedFrame {
+  readonly frame: CollaborationNetworkRequestFrame;
+  readonly reservation: symbol;
+  readonly sharedProjectId: string;
+}
+
+interface PendingCommandAbort {
+  readonly controller: AbortController;
+  code: CollaborationNetworkClientErrorCode;
 }
 
 function fail(code: CollaborationNetworkClientErrorCode): CollaborationNetworkClientError {
@@ -177,6 +190,7 @@ function isLoopbackHost(hostname: string): boolean {
 }
 
 function exactOrigin(value: string, label: string): URL {
+  if (typeof value !== "string") throw new Error(`${label} must be an exact HTTP(S) origin`);
   let parsed: URL;
   try {
     parsed = new URL(value);
@@ -242,6 +256,25 @@ function parseFrame(body: string): typeof CollaborationNetworkServerFrame.Type {
   return strictDecode(CollaborationNetworkServerFrame, parsed);
 }
 
+function statusForError(code: CollaborationNetworkPublicErrorCode): number {
+  switch (code) {
+    case "invalid-request":
+      return 400;
+    case "not-found":
+      return 404;
+    case "conflict":
+      return 409;
+    case "cancelled":
+      return 408;
+    case "rate-limited":
+    case "resource-exhausted":
+    case "slow-consumer":
+      return 429;
+    case "unavailable":
+      return 503;
+  }
+}
+
 function requestSchema(operation: CommandOperation | "message.subscribe-replay") {
   switch (operation) {
     case "message.append":
@@ -276,38 +309,66 @@ export function createCollaborationNetworkClient(
   config: CollaborationNetworkClientConfig,
 ): CollaborationNetworkClient {
   const server = exactOrigin(config.serverOrigin, "collaboration server origin");
-  exactOrigin(config.clientOrigin, "collaboration client origin");
+  const clientOrigin = exactOrigin(config.clientOrigin, "collaboration client origin").origin;
+  const sessionEvidence = config.sessionEvidence;
   if (
-    config.sessionEvidence.length === 0 ||
-    `Bearer ${config.sessionEvidence}`.length > MAX_AUTHORIZATION_CHARS ||
-    !/^[A-Za-z0-9._~-]+$/.test(config.sessionEvidence)
+    typeof sessionEvidence !== "string" ||
+    sessionEvidence.length === 0 ||
+    `Bearer ${sessionEvidence}`.length > MAX_AUTHORIZATION_CHARS ||
+    !/^[A-Za-z0-9._~-]+$/.test(sessionEvidence)
   ) {
     throw new Error("collaboration session evidence is invalid");
   }
-  const authorization = `Bearer ${config.sessionEvidence}`;
+  if (
+    typeof config.createRequestId !== "function" ||
+    typeof config.createDeviceProof !== "function" ||
+    typeof config.requestHttp !== "function" ||
+    typeof config.openSocket !== "function"
+  ) {
+    throw new Error("collaboration network client adapters are invalid");
+  }
+  const createRequestId = config.createRequestId;
+  const createDeviceProof = config.createDeviceProof;
+  const requestHttp = config.requestHttp;
+  const openSocket = config.openSocket;
+  const authorization = `Bearer ${sessionEvidence}`;
   const commandUrl = `${server.origin}${COLLABORATION_NETWORK_COMMAND_PATH}`;
   const socketProtocol = server.protocol === "https:" ? "wss:" : "ws:";
   const socketUrl = `${socketProtocol}//${server.host}${COLLABORATION_NETWORK_SOCKET_PATH}`;
   let currentState: ClientState = "disconnected";
+  let connectionGeneration = 0;
   let socket: CollaborationNetworkSocket | null = null;
   let connectPromise: Promise<void> | null = null;
   let settleConnect: {
     readonly resolve: () => void;
     readonly reject: (cause: Error) => void;
   } | null = null;
-  const activeIds = new Set<string>();
-  const commandControllers = new Map<string, AbortController>();
+  const activeIds = new Map<string, symbol>();
+  const commandControllers = new Map<string, PendingCommandAbort>();
   const subscriptions = new Map<string, PendingSubscription>();
-  let subscriptionReservations = 0;
+  const completedSocketIds = new Set<string>();
+  const subscriptionReservations = new Set<symbol>();
   const outbound: Array<{ readonly encoded: string; readonly bytes: number }> = [];
   let outboundBytes = 0;
   let flushing = false;
   const state = (): ClientState => currentState;
 
+  const releaseRequestId = (requestId: RequestId, reservation: symbol) => {
+    if (activeIds.get(requestId) === reservation) activeIds.delete(requestId);
+  };
+
+  const rememberCompletedSocketId = (requestId: RequestId) => {
+    if (completedSocketIds.size >= COLLABORATION_NETWORK_MAX_OUTBOUND_QUEUE_MESSAGES) {
+      const oldest = completedSocketIds.values().next().value;
+      if (oldest !== undefined) completedSocketIds.delete(oldest);
+    }
+    completedSocketIds.add(requestId);
+  };
+
   const rejectSubscriptions = (code: CollaborationNetworkClientErrorCode) => {
     for (const pending of subscriptions.values()) {
       pending.removeAbortListener();
-      activeIds.delete(pending.requestId);
+      releaseRequestId(pending.requestId, pending.reservation);
       pending.reject(fail(code));
     }
     subscriptions.clear();
@@ -315,17 +376,30 @@ export function createCollaborationNetworkClient(
     outboundBytes = 0;
   };
 
-  const abortCommands = () => {
-    for (const controller of commandControllers.values()) controller.abort();
-    commandControllers.clear();
+  const abortCommand = (
+    pending: PendingCommandAbort,
+    code: CollaborationNetworkClientErrorCode,
+  ) => {
+    if (pending.controller.signal.aborted) return;
+    pending.code = code;
+    pending.controller.abort();
   };
 
-  const transitionDisconnected = () => {
+  const abortCommands = (code: CollaborationNetworkClientErrorCode) => {
+    for (const pending of commandControllers.values()) abortCommand(pending, code);
+  };
+
+  const transitionDisconnected = (generation: number) => {
+    if (generation !== connectionGeneration) return;
     const wasConnecting = currentState === "connecting";
+    connectionGeneration += 1;
     currentState = "disconnected";
     socket = null;
-    abortCommands();
+    abortCommands("unavailable");
     rejectSubscriptions("unavailable");
+    activeIds.clear();
+    subscriptionReservations.clear();
+    completedSocketIds.clear();
     if (wasConnecting) settleConnect?.reject(fail("unavailable"));
     settleConnect = null;
     connectPromise = null;
@@ -334,21 +408,23 @@ export function createCollaborationNetworkClient(
   const flush = () => {
     if (flushing || currentState !== "connected" || socket === null || socket.readyState !== 1)
       return;
+    const generation = connectionGeneration;
+    const activeSocket = socket;
     flushing = true;
     try {
       while (outbound.length > 0) {
         const next = outbound.shift();
         if (!next) break;
         outboundBytes -= next.bytes;
-        socket.send(next.encoded);
+        activeSocket.send(next.encoded);
       }
     } catch {
       try {
-        socket.close(1008, "transport unavailable");
+        activeSocket.close(1008, "transport unavailable");
       } catch {
         // The peer is already unavailable.
       }
-      transitionDisconnected();
+      transitionDisconnected(generation);
     } finally {
       flushing = false;
     }
@@ -359,6 +435,8 @@ export function createCollaborationNetworkClient(
     const bytes = textEncoder.encode(encoded).byteLength;
     const buffered = socket?.bufferedAmount ?? 0;
     if (
+      !Number.isSafeInteger(buffered) ||
+      buffered < 0 ||
       outbound.length >= COLLABORATION_NETWORK_MAX_OUTBOUND_QUEUE_MESSAGES ||
       outboundBytes + bytes > COLLABORATION_NETWORK_MAX_OUTBOUND_QUEUE_UTF8_BYTES ||
       buffered + outboundBytes + bytes > COLLABORATION_NETWORK_MAX_OUTBOUND_QUEUE_UTF8_BYTES
@@ -370,10 +448,11 @@ export function createCollaborationNetworkClient(
     flush();
   };
 
-  const receive = (data: unknown) => {
+  const receive = (generation: number, data: unknown) => {
+    if (generation !== connectionGeneration) return;
     if (typeof data !== "string") {
       socket?.close(1008, "invalid response");
-      transitionDisconnected();
+      transitionDisconnected(generation);
       return;
     }
     let frame: typeof CollaborationNetworkServerFrame.Type;
@@ -381,40 +460,61 @@ export function createCollaborationNetworkClient(
       frame = parseFrame(data);
     } catch {
       socket?.close(1008, "invalid response");
-      transitionDisconnected();
+      transitionDisconnected(generation);
       return;
     }
     if (frame.requestId === null) {
       socket?.close(1008, "invalid response");
-      transitionDisconnected();
+      transitionDisconnected(generation);
       return;
     }
     const pending = subscriptions.get(frame.requestId);
-    if (!pending) return;
+    if (!pending) {
+      if (completedSocketIds.has(frame.requestId)) return;
+      socket?.close(1008, "invalid response");
+      transitionDisconnected(generation);
+      return;
+    }
     if (frame.type === "replay-page") {
+      if (frame.page.sharedProjectId !== pending.sharedProjectId) {
+        socket?.close(1008, "invalid response");
+        transitionDisconnected(generation);
+        return;
+      }
       try {
-        pending.onPage(frame.page);
+        const outcome = pending.onPage(frame.page) as unknown;
+        if (
+          outcome !== null &&
+          (typeof outcome === "object" || typeof outcome === "function") &&
+          typeof (outcome as { readonly then?: unknown }).then === "function"
+        ) {
+          void Promise.resolve(outcome).catch(() => cancelSubscription(pending, "cancelled"));
+        }
       } catch {
         cancelSubscription(pending, "cancelled");
       }
       return;
     }
+    if (frame.type === "result") {
+      try {
+        if (frame.operation !== "message.subscribe-replay") throw fail("protocol-error");
+        const result = strictDecode(CollaborationTransportReplayResult, frame.payload);
+        if (result.sharedProjectId !== pending.sharedProjectId) throw fail("protocol-error");
+      } catch {
+        socket?.close(1008, "invalid response");
+        transitionDisconnected(generation);
+        return;
+      }
+    }
     subscriptions.delete(frame.requestId);
-    activeIds.delete(frame.requestId);
+    rememberCompletedSocketId(frame.requestId);
+    releaseRequestId(frame.requestId, pending.reservation);
     pending.removeAbortListener();
     if (frame.type === "error") {
       pending.reject(fail(frame.code));
       return;
     }
-    if (frame.operation !== "message.subscribe-replay") {
-      pending.reject(fail("protocol-error"));
-      return;
-    }
-    try {
-      pending.resolve(strictDecode(CollaborationTransportReplayResult, frame.payload));
-    } catch {
-      pending.reject(fail("protocol-error"));
-    }
+    pending.resolve(strictDecode(CollaborationTransportReplayResult, frame.payload));
   };
 
   const cancelSubscription = (
@@ -422,7 +522,8 @@ export function createCollaborationNetworkClient(
     localCode: CollaborationNetworkClientErrorCode,
   ) => {
     if (!subscriptions.delete(pending.requestId)) return;
-    activeIds.delete(pending.requestId);
+    rememberCompletedSocketId(pending.requestId);
+    releaseRequestId(pending.requestId, pending.reservation);
     pending.removeAbortListener();
     if (!pending.cancelSent && currentState === "connected") {
       pending.cancelSent = true;
@@ -442,7 +543,7 @@ export function createCollaborationNetworkClient(
   const allocateFrame = async (
     operation: CommandOperation | "message.subscribe-replay",
     request: unknown,
-  ): Promise<CollaborationNetworkRequestFrame> => {
+  ): Promise<AllocatedFrame> => {
     const validRequest = strictDecode(requestSchema(operation), request, "invalid-request");
     if (
       textEncoder.encode(encodeJson(validRequest, COLLABORATION_TRANSPORT_REQUEST_MAX_UTF8_BYTES))
@@ -452,15 +553,21 @@ export function createCollaborationNetworkClient(
     }
     let requestId: RequestId;
     try {
-      requestId = decodeRequestId(config.createRequestId(), { onExcessProperty: "error" });
+      requestId = decodeRequestId(createRequestId(), { onExcessProperty: "error" });
     } catch {
       throw fail("invalid-request");
     }
-    if (activeIds.has(requestId)) throw fail("resource-exhausted");
-    activeIds.add(requestId);
+    if (
+      activeIds.has(requestId) ||
+      (operation === "message.subscribe-replay" && completedSocketIds.has(requestId))
+    ) {
+      throw fail("resource-exhausted");
+    }
+    const reservation = Symbol(requestId);
+    activeIds.set(requestId, reservation);
     let proof: DeviceProof;
     try {
-      const supplied = await config.createDeviceProof({
+      const supplied = await createDeviceProof({
         requestId,
         operation,
         request: validRequest,
@@ -469,16 +576,20 @@ export function createCollaborationNetworkClient(
         onExcessProperty: "error",
       });
     } catch {
-      activeIds.delete(requestId);
+      releaseRequestId(requestId, reservation);
       throw fail("invalid-request");
     }
     return {
-      version: COLLABORATION_NETWORK_PROTOCOL_VERSION,
-      type: "request",
-      requestId,
-      operation,
-      proof,
-      request: validRequest,
+      frame: {
+        version: COLLABORATION_NETWORK_PROTOCOL_VERSION,
+        type: "request",
+        requestId,
+        operation,
+        proof,
+        request: validRequest,
+      },
+      reservation,
+      sharedProjectId: (validRequest as { readonly sharedProjectId: string }).sharedProjectId,
     };
   };
 
@@ -486,6 +597,7 @@ export function createCollaborationNetworkClient(
     if (currentState === "connected") return Promise.resolve();
     if (connectPromise) return connectPromise;
     currentState = "connecting";
+    const generation = ++connectionGeneration;
     let resolveConnect!: () => void;
     let rejectConnect!: (cause: Error) => void;
     const pendingConnect = new Promise<void>((resolve, reject) => {
@@ -494,33 +606,80 @@ export function createCollaborationNetworkClient(
     });
     connectPromise = pendingConnect;
     settleConnect = { resolve: resolveConnect, reject: rejectConnect };
+    let factoryReturned = false;
+    let openSignalled = false;
+    const finishOpen = () => {
+      if (
+        !factoryReturned ||
+        !openSignalled ||
+        generation !== connectionGeneration ||
+        currentState !== "connecting" ||
+        socket === null
+      ) {
+        return;
+      }
+      currentState = "connected";
+      settleConnect?.resolve();
+      settleConnect = null;
+      flush();
+    };
     try {
-      const openedSocket = config.openSocket({
+      const openedSocket = openSocket({
         url: socketUrl,
-        headers: { Authorization: authorization, Origin: config.clientOrigin },
+        headers: { Authorization: authorization, Origin: clientOrigin },
         onOpen: () => {
-          if (currentState !== "connecting") return;
-          currentState = "connected";
-          settleConnect?.resolve();
-          settleConnect = null;
-          flush();
+          openSignalled = true;
+          finishOpen();
         },
-        onMessage: receive,
-        onClose: transitionDisconnected,
-        onError: transitionDisconnected,
+        onMessage: (data) => receive(generation, data),
+        onClose: () => transitionDisconnected(generation),
+        onError: () => transitionDisconnected(generation),
       });
-      if (state() === "disconnected") openedSocket.close(1000, "connection cancelled");
-      else socket = openedSocket;
+      if (
+        openedSocket === null ||
+        typeof openedSocket !== "object" ||
+        typeof openedSocket.send !== "function" ||
+        typeof openedSocket.close !== "function"
+      ) {
+        throw new Error("invalid collaboration socket adapter");
+      }
+      factoryReturned = true;
+      if (generation !== connectionGeneration || state() === "disconnected") {
+        openedSocket.close(1000, "connection cancelled");
+      } else {
+        socket = openedSocket;
+        finishOpen();
+      }
     } catch {
-      transitionDisconnected();
+      transitionDisconnected(generation);
     }
     return pendingConnect;
   };
 
   const disconnect = () => {
     if (currentState === "disconnected") return;
-    for (const pending of subscriptions.values()) cancelSubscription(pending, "cancelled");
-    abortCommands();
+    const cancelledSubscriptions = [...subscriptions.values()];
+    for (const pending of cancelledSubscriptions) {
+      if (!subscriptions.delete(pending.requestId)) continue;
+      releaseRequestId(pending.requestId, pending.reservation);
+      pending.removeAbortListener();
+      pending.reject(fail("cancelled"));
+    }
+    for (const pending of cancelledSubscriptions) {
+      if (pending.cancelSent || currentState !== "connected") continue;
+      pending.cancelSent = true;
+      try {
+        offer({
+          version: COLLABORATION_NETWORK_PROTOCOL_VERSION,
+          type: "cancel",
+          requestId: pending.requestId,
+        });
+      } catch {
+        // All local waiters are already cancelled; the peer is best effort.
+      }
+    }
+    abortCommands("cancelled");
+    connectionGeneration += 1;
     currentState = "disconnected";
     try {
       socket?.close(1000, "client disconnect");
@@ -528,6 +687,11 @@ export function createCollaborationNetworkClient(
       // Closing is best effort after local state has been made inert.
     }
     socket = null;
+    outbound.length = 0;
+    outboundBytes = 0;
+    activeIds.clear();
+    subscriptionReservations.clear();
+    completedSocketIds.clear();
     settleConnect?.reject(fail("cancelled"));
     settleConnect = null;
     connectPromise = null;
@@ -542,48 +706,72 @@ export function createCollaborationNetworkClient(
     if (activeIds.size >= COLLABORATION_TRANSPORT_PROJECT_MAX_CONCURRENCY)
       throw fail("resource-exhausted");
     if (options.signal?.aborted) throw fail("cancelled");
-    const frame = await allocateFrame(operation, request);
-    if (currentState !== "connected" || options.signal?.aborted) {
-      activeIds.delete(frame.requestId);
+    const operationGeneration = connectionGeneration;
+    const allocated = await allocateFrame(operation, request);
+    const { frame, reservation, sharedProjectId } = allocated;
+    if (
+      operationGeneration !== connectionGeneration ||
+      currentState !== "connected" ||
+      options.signal?.aborted
+    ) {
+      releaseRequestId(frame.requestId, reservation);
       throw fail(options.signal?.aborted ? "cancelled" : "not-connected");
     }
-    const abort = new AbortController();
-    commandControllers.set(frame.requestId, abort);
-    const onAbort = () => abort.abort();
+    const pendingAbort: PendingCommandAbort = {
+      controller: new AbortController(),
+      code: "cancelled",
+    };
+    commandControllers.set(frame.requestId, pendingAbort);
+    const onAbort = () => abortCommand(pendingAbort, "cancelled");
     options.signal?.addEventListener("abort", onAbort, { once: true });
     try {
       const encoded = encodeJson(frame, COLLABORATION_NETWORK_INBOUND_FRAME_MAX_UTF8_BYTES);
-      const response = await config.requestHttp({
+      const response = await requestHttp({
         url: commandUrl,
         headers: {
           Authorization: authorization,
           "Content-Type": "application/json",
-          Origin: config.clientOrigin,
+          Origin: clientOrigin,
         },
         body: encoded,
-        signal: abort.signal,
+        signal: pendingAbort.controller.signal,
       });
-      if (!Number.isSafeInteger(response.status) || response.status < 100 || response.status > 599)
+      if (
+        response === null ||
+        typeof response !== "object" ||
+        !Number.isSafeInteger(response.status) ||
+        response.status < 100 ||
+        response.status > 599 ||
+        typeof response.body !== "string"
+      ) {
         throw fail("protocol-error");
+      }
       const serverFrame = parseFrame(response.body);
       if (serverFrame.requestId !== frame.requestId) throw fail("protocol-error");
-      if (serverFrame.type === "error") throw fail(serverFrame.code);
+      if (serverFrame.type === "error") {
+        if (response.status !== statusForError(serverFrame.code)) throw fail("protocol-error");
+        throw fail(serverFrame.code);
+      }
       if (serverFrame.type !== "result" || serverFrame.operation !== operation)
         throw fail("protocol-error");
+      if (response.status !== 200) throw fail("protocol-error");
       const bytes = textEncoder.encode(response.body).byteLength;
       if (bytes > COLLABORATION_TRANSPORT_RESPONSE_MAX_UTF8_BYTES) throw fail("resource-exhausted");
-      return strictDecode(
+      const decoded = strictDecode(
         responseSchema(operation),
         serverFrame.payload,
       ) as CommandShape[Operation]["response"];
+      if ((decoded as { readonly sharedProjectId: string }).sharedProjectId !== sharedProjectId)
+        throw fail("protocol-error");
+      return decoded;
     } catch (cause) {
-      if (abort.signal.aborted) throw fail("cancelled");
+      if (pendingAbort.controller.signal.aborted) throw fail(pendingAbort.code);
       if (cause instanceof CollaborationNetworkClientError) throw cause;
       throw fail("unavailable");
     } finally {
       options.signal?.removeEventListener("abort", onAbort);
       commandControllers.delete(frame.requestId);
-      activeIds.delete(frame.requestId);
+      releaseRequestId(frame.requestId, reservation);
     }
   };
 
@@ -594,21 +782,29 @@ export function createCollaborationNetworkClient(
     if (currentState !== "connected") throw fail("not-connected");
     if (
       activeIds.size >= COLLABORATION_TRANSPORT_PROJECT_MAX_CONCURRENCY ||
-      subscriptions.size + subscriptionReservations >=
+      subscriptions.size + subscriptionReservations.size >=
         COLLABORATION_NETWORK_MAX_SUBSCRIPTIONS_PER_CONNECTION
     ) {
       throw fail("resource-exhausted");
     }
+    if (typeof options?.onPage !== "function") throw fail("invalid-request");
     if (options.signal?.aborted) throw fail("cancelled");
-    subscriptionReservations += 1;
-    let frame: CollaborationNetworkRequestFrame;
+    const operationGeneration = connectionGeneration;
+    const subscriptionReservation = Symbol("subscription");
+    subscriptionReservations.add(subscriptionReservation);
+    let allocated: AllocatedFrame;
     try {
-      frame = await allocateFrame("message.subscribe-replay", request);
+      allocated = await allocateFrame("message.subscribe-replay", request);
     } finally {
-      subscriptionReservations -= 1;
+      subscriptionReservations.delete(subscriptionReservation);
     }
-    if (currentState !== "connected" || options.signal?.aborted) {
-      activeIds.delete(frame.requestId);
+    const { frame, reservation, sharedProjectId } = allocated;
+    if (
+      operationGeneration !== connectionGeneration ||
+      currentState !== "connected" ||
+      options.signal?.aborted
+    ) {
+      releaseRequestId(frame.requestId, reservation);
       throw fail(options.signal?.aborted ? "cancelled" : "not-connected");
     }
     return new Promise<ReplayResult>((resolve, reject) => {
@@ -618,6 +814,8 @@ export function createCollaborationNetworkClient(
       };
       const pending: PendingSubscription = {
         requestId: frame.requestId,
+        reservation,
+        sharedProjectId,
         onPage: options.onPage,
         resolve,
         reject,
@@ -630,7 +828,7 @@ export function createCollaborationNetworkClient(
         offer(frame);
       } catch (cause) {
         subscriptions.delete(frame.requestId);
-        activeIds.delete(frame.requestId);
+        releaseRequestId(frame.requestId, reservation);
         pending.removeAbortListener();
         reject(cause instanceof CollaborationNetworkClientError ? cause : fail("unavailable"));
       }

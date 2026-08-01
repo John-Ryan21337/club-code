@@ -11,17 +11,19 @@ The only destinations it derives are:
 - `/api/collaboration/v1/socket` for bounded replay subscriptions and exact cancellation frames.
 
 Configuration accepts an exact server origin, an exact client Origin value, opaque session
-evidence, a request-ID source, and a fresh device-proof function. It has no principal, user, role,
-membership, or project authorization claims. The server remains the authority that resolves those
-claims. Session evidence is sent only as a bearer header; URL credentials, paths in origins,
-queries, fragments, and insecure non-loopback origins are rejected.
+evidence, a request-ID source, and a device-proof function invoked once for every request frame. It
+has no principal, user, role, membership, or project authorization claims. The server remains the
+authority that resolves those claims and determines proof freshness. Session evidence is sent only
+as a bearer header; URL credentials, paths in origins, queries, fragments, encoded-host aliases,
+and insecure non-loopback origins are rejected.
 
 Both directions use the shared strict schemas and byte limits. The client also caps in-flight work,
 replay subscriptions, queued messages, and queued bytes at the contract limits. Caller cancellation
 aborts HTTP work or emits one matching WebSocket cancel frame. A malformed, oversized, binary, or
 uncorrelated server response fails closed with a stable public error and disconnects the socket when
-appropriate. Transport exceptions, URLs, credentials, response bodies, and local paths are not
-included in public errors.
+appropriate. Response payloads are bound back to the requested shared project, and callbacks from
+an invalidated socket generation cannot affect an explicitly reconnected client. Transport
+exceptions, URLs, credentials, response bodies, and local paths are not included in public errors.
 
 This package deliberately does not compose a listener, tunnel, launcher, filesystem sync, task
 transport, database replication, provider execution, or agent orchestration. Those capabilities

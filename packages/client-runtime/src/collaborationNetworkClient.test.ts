@@ -1,5 +1,6 @@
 import type {
   CollaborationNetworkClientFrame,
+  CollaborationNetworkDeviceProof,
   CollaborationNetworkRequestFrame,
   CollaborationNetworkServerFrame,
   CollaborationTransportPage,
@@ -19,9 +20,9 @@ const SESSION = "opaque.session_evidence-1";
 const SERVER_ORIGIN = "https://cowork.example";
 const CLIENT_ORIGIN = "https://club-code.example";
 
-function page(): CollaborationTransportPage {
+function page(sharedProjectId = "project-1"): CollaborationTransportPage {
   return {
-    sharedProjectId: "project-1",
+    sharedProjectId,
     messages: [],
     mergedOrder: [],
     lanePositions: [],
@@ -158,8 +159,11 @@ describe("collaboration network client", () => {
     for (const serverOrigin of [
       "https://cowork.example/extra",
       "https://cowork.example/?query=1",
+      "https://cowork.example/#fragment",
       "https://user:secret@cowork.example",
+      "https://%63owork.example",
       "http://cowork.example",
+      "http://[::ffff:127.0.0.1]",
     ]) {
       expect(() => harness({ serverOrigin })).toThrow(/exact|HTTPS/);
     }
@@ -184,6 +188,37 @@ describe("collaboration network client", () => {
     const failure = test.client.command("message.page", replayRequest());
     await expect(failure).rejects.toMatchObject({ code: "protocol-error" });
     await expect(failure).rejects.not.toThrow(SESSION);
+  });
+
+  it("binds HTTP status and response project to the request", async () => {
+    for (const response of [
+      {
+        status: 503,
+        body: JSON.stringify({
+          version: 1,
+          type: "result",
+          requestId: "request-1",
+          operation: "message.page",
+          payload: page(),
+        }),
+      },
+      {
+        status: 200,
+        body: JSON.stringify({
+          version: 1,
+          type: "result",
+          requestId: "request-1",
+          operation: "message.page",
+          payload: page("project-2"),
+        }),
+      },
+    ]) {
+      const test = harness({ requestHttp: async () => response });
+      await test.client.connect();
+      await expect(test.client.command("message.page", replayRequest())).rejects.toMatchObject({
+        code: "protocol-error",
+      });
+    }
   });
 
   it("rejects excess request properties before proof generation or network I/O", async () => {
@@ -238,6 +273,51 @@ describe("collaboration network client", () => {
     await expect(result).resolves.toMatchObject({ deliveredBatches: 1, caughtUp: true });
   });
 
+  it("disconnects rather than delivering a replay page for another project", async () => {
+    const test = harness();
+    const onPage = vi.fn();
+    await test.client.connect();
+    const result = test.client.subscribeReplay(replayRequest(), { onPage });
+    await vi.waitFor(() => expect(test.socket.sent).toHaveLength(1));
+    const sent = JSON.parse(test.socket.sent[0]!) as CollaborationNetworkRequestFrame;
+    test.socketInput()!.onMessage(
+      JSON.stringify({
+        version: 1,
+        type: "replay-page",
+        requestId: sent.requestId,
+        page: page("project-2"),
+      }),
+    );
+    await expect(result).rejects.toMatchObject({ code: "unavailable" });
+    expect(onPage).not.toHaveBeenCalled();
+    expect(test.client.state()).toBe("disconnected");
+  });
+
+  it("contains an asynchronous replay observer failure with one cancellation", async () => {
+    const test = harness();
+    await test.client.connect();
+    const result = test.client.subscribeReplay(replayRequest(), {
+      onPage: async () => {
+        throw new Error(SESSION);
+      },
+    });
+    await vi.waitFor(() => expect(test.socket.sent).toHaveLength(1));
+    const sent = JSON.parse(test.socket.sent[0]!) as CollaborationNetworkRequestFrame;
+    test.socketInput()!.onMessage(
+      JSON.stringify({
+        version: 1,
+        type: "replay-page",
+        requestId: sent.requestId,
+        page: page(),
+      }),
+    );
+    await expect(result).rejects.toMatchObject({ code: "cancelled" });
+    expect(test.socket.sent.map((encoded) => JSON.parse(encoded))).toEqual([
+      sent,
+      { version: 1, type: "cancel", requestId: sent.requestId },
+    ]);
+  });
+
   it("sends one exact cancel frame and never reconnects after a close", async () => {
     const test = harness();
     const abort = new AbortController();
@@ -280,6 +360,109 @@ describe("collaboration network client", () => {
     expect(attempts).toBe(2);
   });
 
+  it("ignores late callbacks from an invalidated socket generation", async () => {
+    const inputs: CollaborationNetworkSocketOpenInput[] = [];
+    const sockets: FakeSocket[] = [];
+    const test = harness({
+      openSocket: (input) => {
+        const opened = new FakeSocket();
+        inputs.push(input);
+        sockets.push(opened);
+        input.onOpen();
+        return opened;
+      },
+    });
+    await test.client.connect();
+    test.client.disconnect();
+    await test.client.connect();
+
+    inputs[0]!.onMessage("not-json");
+    inputs[0]!.onError();
+    inputs[0]!.onClose();
+    inputs[0]!.onOpen();
+
+    expect(test.client.state()).toBe("connected");
+    expect(sockets[1]!.closed).toBeNull();
+  });
+
+  it("does not let late proof completion consume or release a new generation reservation", async () => {
+    let resolveFirstProof!: (proof: CollaborationNetworkDeviceProof) => void;
+    const firstProof = new Promise<CollaborationNetworkDeviceProof>((resolve) => {
+      resolveFirstProof = resolve;
+    });
+    let proofCalls = 0;
+    let resolveHttp!: () => void;
+    const requestHttp = vi.fn(
+      (input: Parameters<CollaborationNetworkClientConfig["requestHttp"]>[0]) =>
+        new Promise<{ readonly status: number; readonly body: string }>((resolve) => {
+          const request = JSON.parse(input.body) as CollaborationNetworkRequestFrame;
+          resolveHttp = () =>
+            resolve({
+              status: 200,
+              body: JSON.stringify({
+                version: 1,
+                type: "result",
+                requestId: request.requestId,
+                operation: request.operation,
+                payload: page(),
+              }),
+            });
+        }),
+    );
+    const proof = () => {
+      proofCalls += 1;
+      if (proofCalls === 1) return firstProof;
+      return {
+        deviceId: "device-1",
+        deviceKeyId: "device-key-1",
+        issuedAtMs: proofCalls,
+        nonce: `nonce-${proofCalls}`,
+        signature: `signature-${proofCalls}`,
+      };
+    };
+    const test = harness({
+      createRequestId: () => "request-same",
+      createDeviceProof: proof,
+      requestHttp,
+    });
+    await test.client.connect();
+    const stale = test.client.command("message.page", replayRequest());
+    await vi.waitFor(() => expect(proofCalls).toBe(1));
+    test.client.disconnect();
+    await test.client.connect();
+    const current = test.client.command("message.page", replayRequest());
+    await vi.waitFor(() => expect(requestHttp).toHaveBeenCalledTimes(1));
+
+    resolveFirstProof({
+      deviceId: "device-1",
+      deviceKeyId: "device-key-1",
+      issuedAtMs: 1,
+      nonce: "nonce-stale",
+      signature: "signature-stale",
+    });
+    await expect(stale).rejects.toMatchObject({ code: "not-connected" });
+    await expect(test.client.command("message.page", replayRequest())).rejects.toMatchObject({
+      code: "resource-exhausted",
+    });
+    resolveHttp();
+    await expect(current).resolves.toMatchObject({ sharedProjectId: "project-1" });
+  });
+
+  it("reports a socket-loss abort as unavailable instead of caller cancellation", async () => {
+    const requestHttp = vi.fn(
+      (input: Parameters<CollaborationNetworkClientConfig["requestHttp"]>[0]) =>
+        new Promise<never>((_resolve, reject) => {
+          input.signal.addEventListener("abort", () => reject(new Error(SESSION)), { once: true });
+        }),
+    );
+    const test = harness({ requestHttp });
+    await test.client.connect();
+    const command = test.client.command("message.page", replayRequest());
+    await vi.waitFor(() => expect(requestHttp).toHaveBeenCalledTimes(1));
+    test.socketInput()!.onClose();
+    await expect(command).rejects.toMatchObject({ code: "unavailable" });
+  });
+
   it("aborts in-flight HTTP work when explicitly disconnected", async () => {
     const requestHttp = vi.fn(
       (input: Parameters<CollaborationNetworkClientConfig["requestHttp"]>[0]) =>
@@ -312,12 +495,35 @@ describe("collaboration network client", () => {
     );
   });
 
+  it("cancels every local subscription even when the first disconnect send fails", async () => {
+    const test = harness();
+    await test.client.connect();
+    const pending = Array.from({ length: 2 }, () =>
+      test.client.subscribeReplay(replayRequest(), { onPage: () => undefined }),
+    );
+    await vi.waitFor(() => expect(test.socket.sent).toHaveLength(2));
+    test.socket.send = () => {
+      throw new Error(SESSION);
+    };
+    test.client.disconnect();
+    for (const result of pending) {
+      await expect(result).rejects.toMatchObject({ code: "cancelled" });
+    }
+  });
+
   it("enforces the socket-buffer bound", async () => {
     const buffered = harness();
     buffered.socket.bufferedAmount = 2 * 1_024 * 1_024;
     await buffered.client.connect();
     await expect(
       buffered.client.subscribeReplay(replayRequest(), { onPage: () => undefined }),
+    ).rejects.toMatchObject({ code: "resource-exhausted" });
+
+    const invalid = harness();
+    invalid.socket.bufferedAmount = Number.NaN;
+    await invalid.client.connect();
+    await expect(
+      invalid.client.subscribeReplay(replayRequest(), { onPage: () => undefined }),
     ).rejects.toMatchObject({ code: "resource-exhausted" });
   });
 
