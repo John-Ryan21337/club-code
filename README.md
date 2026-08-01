@@ -317,14 +317,58 @@ installing it.
 Install Node.js 24.13.1 and Corepack, then run Club Code from a checkout. The
 repository pins the exact Yarn release through Corepack:
 
+The current verified combined-build branch is `release/local-20260728` (observed
+at `457be1418541bfb0ab08ae5bf9aac8a729ead23f`). `main` contains published
+documentation and merged repository work, but it is not yet the full local-build
+parity target. Agents should report the actual branch head they install in case
+the release branch has advanced.
+
 ```bash
-git clone https://github.com/John-Ryan21337/club-code.git
+git clone --branch release/local-20260728 --single-branch https://github.com/John-Ryan21337/club-code.git
 cd club-code
 corepack enable
 corepack yarn install --immutable
 corepack yarn build:desktop
 corepack yarn start:desktop
 ```
+
+### Let Codex or Claude Code set it up
+
+The easiest source installation is to open either **Codex CLI** or **Claude
+Code** in the directory that should contain the checkout and give it the setup
+instruction below. The agent must inspect the machine first, explain every
+administrator-level change, preserve existing Club/Cafe settings and provider
+credentials, and verify the resulting app instead of merely reporting that a
+command exited successfully.
+
+Start an interactive agent with `codex` or `claude`, then paste:
+
+```text
+Install Club Code from https://github.com/John-Ryan21337/club-code.git on this machine. First detect the exact OS/version, CPU architecture, shell, available disk space, and whether a graphical desktop session is available. Supported setup targets for this guide are macOS on Apple Silicon or Intel, Windows 10/11 on x64 or ARM64, Arch Linux on x64 or ARM64, and Raspberry Pi 5 running a 64-bit ARM64 desktop OS. Use a fresh source checkout of release/local-20260728, currently verified at 457be1418541bfb0ab08ae5bf9aac8a729ead23f; report the actual head if the branch has advanced. Do not install @cafeai/cafe-code, the cafe-code npm package, or compatibility-named Cafe Code AUR/pacman recipes. Ask before using sudo, administrator elevation, changing PATH, installing system packages, opening firewall ports, or replacing an existing checkout. Preserve existing .cafe-code data, settings, projects, and provider credentials. Install or select the repository-validated Node.js 24.13.1 runtime and Corepack, verify the host is using Node 24 rather than an unsupported newer major, enable the repository-pinned Yarn 4.17.1, clone the selected release branch, run corepack yarn install --immutable, run corepack yarn build:desktop, and start it with corepack yarn start:desktop. On Raspberry Pi 5, require a 64-bit OS and native ARM64 Node, treat the installation as experimental source-only, and do not claim that the x64 Linux release AppImage supports the Pi. Install native build or Electron runtime dependencies only when the detected platform actually needs them. Do not enable LAN access or change firewall rules unless I explicitly request remote access. If I want Codex or Claude as a Club Code provider, verify the already-authorized CLI with codex login or claude auth login without printing credentials. Finally verify by effect: confirm the Club Code desktop window launches from this checkout, report the exact git commit, Node/Yarn versions, platform/architecture, commands used, provider health, and any unsupported or deferred capability. Do not call the installation complete if the window did not launch.
+```
+
+Platform expectations for the agent:
+
+| Platform       | Required handling                                                                                                                                                                                                                                                                                                                                                    |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| macOS          | Support current Intel and Apple Silicon machines. Install Xcode Command Line Tools only if native dependency compilation requires them. Use an ARM64 Node runtime on Apple Silicon and x64 Node on Intel. A locally built DMG is optional; source launch remains the documented path, and signing/notarization must not be implied.                                  |
+| Windows 10/11  | Use PowerShell and native Windows Git/Node. Match Node architecture to Windows, install Visual Studio C++ Build Tools only if a native module actually needs compilation, and do not require Developer Mode or global provider installation. A source launch should use the system Codex/Claude CLI unless a separately built packaged managed runtime is available. |
+| Arch Linux     | Use a native Node 24 runtime even if the rolling repository has moved to a newer unsupported major. Install only the missing native build/runtime packages through `pacman` after approval. There is no published Club Code AUR package; compatibility-named package helpers still identify Cafe Code.                                                               |
+| Raspberry Pi 5 | Require a 64-bit ARM64 OS with a graphical desktop, native ARM64 Node 24, adequate free storage, and the platform's Chromium/Electron runtime libraries. This is an experimental source build: published Linux releases are x64-only, and the agent must report native-module, Electron, GPU, or memory limitations instead of masking them.                         |
+
+Agent verification checklist:
+
+- `node --version` reports the validated `v24.13.1` target (or the agent clearly
+  reports why another compatible Node 24 patch was necessary), and
+  `corepack yarn --version` reports `4.17.1`.
+- The clone's `origin` is `John-Ryan21337/club-code`, and the agent reports its
+  exact checked-out commit.
+- Immutable dependency installation and `build:desktop` complete, then a real
+  Club Code window launches from that checkout.
+- Existing `.cafe-code` state is not erased or silently migrated, credentials
+  are not printed, and provider login is performed only when requested.
+- LAN exposure, firewall changes, packaging, signing, and auto-start remain
+  opt-in follow-up work.
 
 Debug mode:
 
@@ -371,13 +415,6 @@ Club Code does not create SSH or Tailscale tunnels. Configure the network,
 certificate, firewall, or reverse proxy separately, then use the server's
 pairing details. Desktop credentials are encrypted with Electron safe storage;
 browser credentials are retained only for the current browser session.
-
-If you want Codex or Claude to perform the source installation, paste this into
-the CLI:
-
-```text
-Install Club Code from source. Clone https://github.com/John-Ryan21337/club-code.git, install Node.js 24.13.1 and Corepack, run corepack enable, run corepack yarn install --immutable, run corepack yarn build:desktop, then start it with corepack yarn start:desktop. Also verify Codex CLI is installed and logged in with codex login, and Claude Code is installed and logged in with claude auth login if I want Claude support.
-```
 
 Club Code supports these provider integrations:
 
@@ -616,14 +653,54 @@ build は provenance と product identity を確認してから使ってくだ�
 
 Node.js 24.13.1 と Corepack を先に入れます。Yarn は repository 側で固定済み。
 
+現在の verified combined-build branch は `release/local-20260728`（確認済み head は
+`457be1418541bfb0ab08ae5bf9aac8a729ead23f`）。`main` は公開 document と merge 済み repository
+work を持つけど、まだ full local-build parity target じゃないの。release branch が進んだ場合に
+備えて、agent は実際に install した branch head を報告してね。酔ってても commit は指差し確認よぉ。
+
 ```bash
-git clone https://github.com/John-Ryan21337/club-code.git
+git clone --branch release/local-20260728 --single-branch https://github.com/John-Ryan21337/club-code.git
 cd club-code
 corepack enable
 corepack yarn install --immutable
 corepack yarn build:desktop
 corepack yarn start:desktop
 ```
+
+### Codex / Claude Code に丸投げして入れるの、ほら乾杯っ🍾
+
+ねえ常連さん、terminal と朝までにらめっこしなくていいのよぉ。install 先の親 directory で
+**Codex CLI** か **Claude Code** を `codex` または `claude` で起動して、下の伝票をそのまま
+渡してね。ただし `sudo`、administrator、`PATH`、firewall は勝手に触らせないの。酔ってても
+鍵と credential は守る、歌舞伎町の hostess にもそこは譲れないんだからぁ🔐
+
+```text
+この machine に https://github.com/John-Ryan21337/club-code.git から Club Code を install してください。最初に OS と version、CPU architecture、shell、空き disk、graphical desktop session の有無を正確に検出してください。この guide の対象は Apple Silicon/Intel macOS、x64/ARM64 Windows 10/11、x64/ARM64 Arch Linux、64-bit ARM64 desktop OS の Raspberry Pi 5 です。現在 457be1418541bfb0ab08ae5bf9aac8a729ead23f で検証済みの release/local-20260728 を fresh source checkout として使い、branch が進んでいたら実際の head を報告してください。@cafeai/cafe-code、cafe-code npm package、Cafe Code 名の compatibility AUR/pacman recipe は install しないでください。sudo、administrator elevation、PATH 変更、system package install、firewall port 開放、既存 checkout の置換を行う前に必ず確認を取ってください。既存の .cafe-code data、settings、projects、provider credentials を保存してください。repository で検証済みの Node.js 24.13.1 と Corepack を install または選択し、unsupported な新しい major ではなく Node 24 が実際に使われていることを確認し、repository が固定した Yarn 4.17.1 を有効化してください。選択した release branch を clone し、corepack yarn install --immutable、corepack yarn build:desktop、corepack yarn start:desktop の順で実行してください。Raspberry Pi 5 は 64-bit OS と native ARM64 Node を必須にし、experimental な source-only setup として扱い、x64 Linux release AppImage が Pi 対応だとは絶対に書かないでください。native build dependency と Electron runtime library は検出した platform で本当に必要なものだけ入れてください。私が remote access を明示的に頼まない限り LAN access と firewall rule は変更しないでください。Club Code provider として Codex または Claude を使う場合、credential を表示せず codex login または claude auth login で authorized CLI を確認してください。最後は exit code ではなく effect を確認し、この checkout から Club Code desktop window が実際に起動したこと、exact git commit、Node/Yarn version、platform/architecture、実行 command、provider health、unsupported/deferred capability を報告してください。window が起動していない場合は install 完了と報告しないでください。
+```
+
+お店じゃ席ごとに bottle が違うみたいに、machine ごとの扱いも違うの。ここ、酔っぱらいの
+冗談じゃなくて実務表だから agent は守ってねぇ：
+
+| Platform       | agent が守ること                                                                                                                                                                                                                                                                                                                                      |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| macOS          | Intel と Apple Silicon を対象にし、native dependency の compile が必要な場合だけ Xcode Command Line Tools を入れます。Apple Silicon は ARM64 Node、Intel は x64 Node。local DMG build は optional で、source launch が正本。署名/notarization 済みとは言わないこと。                                                                                  |
+| Windows 10/11  | PowerShell と native Windows Git/Node を使い、Node architecture を Windows に合わせます。Visual Studio C++ Build Tools は native module が実際に compile を要求した場合だけ。Developer Mode と global provider install は必須にしません。source launch は、別途 packaged managed runtime を build 済みでない限り system Codex/Claude CLI を使います。 |
+| Arch Linux     | rolling repository が unsupported な新 major に進んでいても native Node 24 を選びます。不足する build/runtime package だけ、承認後に `pacman` で入れます。公開済み Club Code AUR package はなく、compatibility package helper の identity は Cafe Code のままです。                                                                                   |
+| Raspberry Pi 5 | graphical desktop のある 64-bit ARM64 OS、native ARM64 Node 24、十分な空き storage、platform 用 Chromium/Electron runtime library が必須。experimental source build で、公開 Linux release は x64-only。native module、Electron、GPU、memory の limitation は隠さず報告します。                                                                       |
+
+最後の会計、じゃなくて verification はこれ。全部そろうまで「できたぁ」は禁止よ：
+
+- `node --version` は検証 target の `v24.13.1`。別の compatible Node 24 patch が必要なら理由を
+  明記し、`corepack yarn --version` は `4.17.1`。
+- clone の `origin` は `John-Ryan21337/club-code`。checked-out exact commit を報告。
+- immutable dependency install と `build:desktop` のあと、その checkout から本物の Club Code
+  window が起動。
+- 既存 `.cafe-code` state を消去・無断 migration せず、credential を表示せず、provider login
+  は依頼された場合だけ。
+- LAN exposure、firewall、packaging、signing、auto-start は全部 opt-in の follow-up。
+
+ほら、これなら agent に任せてる間に一杯飲めるでしょぉ？ でも Raspberry Pi に x64 AppImage
+を着せて「似合う似合う」はだめ。サイズ違いの dress は、あたしでも見抜くんだからねぇ💋
 
 debug mode:
 
@@ -665,12 +742,6 @@ Club Code は SSH/Tailscale tunnel を作成しません。network、certificate
 reverse proxy を別途設定してから pairing details を使用してください。desktop credential は
 Electron safe storage で暗号化し、browser credential は現在の browser session だけ保持。
 「接続ボタン押したら世界中どこでも安全」は魔法すぎるので、そこは各自で戸締まりね🔐
-
-Codex または Claude に source install を頼むなら、これを渡せます。
-
-```text
-Club Code をソースから入れてください。https://github.com/John-Ryan21337/club-code.git を clone して、Node.js 24.13.1 と Corepack を入れ、corepack enable、corepack yarn install --immutable、corepack yarn build:desktop、corepack yarn start:desktop まで実行してください。Codex を使うなら codex login、Claude を使うなら claude auth login も確認してください。
-```
 
 Codex は `codex login`、Claude は `claude auth login` が必要。OpenCode は upstream provider
 または existing server URL を設定。LM Studio Local は外部 server を先に起動し、Settings の
