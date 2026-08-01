@@ -150,6 +150,7 @@ describe("065_ForkLineageCompatibility", () => {
           [72, "CollaborationMemberships"],
           [73, "CollaborationDeviceKeys"],
           [74, "CollaborationAuthoredMessages"],
+          [75, "CollaborationFileSync"],
         ],
       );
 

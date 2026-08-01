@@ -334,11 +334,35 @@ raised only after load, partition, revocation, abuse, and backpressure testing.
   compare-and-swap head updates whose expected hash matches the snapshot base
   and whose fencing tokens remain exact integers. These are contracts only; no
   live database file is copied.
+- `packages/contracts/src/collaborationFileSync.ts`, migration 075, and
+  `CollaborationFileSyncStore` add the server-side content-addressed metadata
+  authority. Chunk manifests, contents, and versions are immutable. Canonical
+  path heads advance only through optimistic revision CAS; a stale writer keeps
+  its version and receives a deterministic conflict record instead of
+  overwriting another operator. Tombstones are append-only revisions and never
+  delete content, versions, or a participant's local file.
+- Every file read, publish, and tombstone resolves current membership and the
+  exact active device key. Portable path schemas reject absolute, UNC,
+  drive/device, ADS, traversal, non-NFC, and reserved-name inputs. A dedicated
+  sandbox-path authority rejects existing symlink, junction, and reparse-point
+  escapes and must be called again by the future materializer immediately
+  before filesystem access to close the metadata-to-I/O TOCTOU boundary.
+- Declared database files integrate with migration 071 rather than byte merging.
+  A database version can advance the canonical file head only when its exact
+  content hash is already the current serialized database head and its lease,
+  holder, membership epoch, and fencing token remain current. Older snapshots
+  from the same fenced writer remain immutable forks. SQLite/DuckDB/LMDB live
+  sidecars are rejected and never enter the manifest store.
+- File-backed adversarial tests exercise two independent SQLite clients racing
+  the same empty head, membership/device revocation, stale CAS retention,
+  append-only tombstones, exact actor-bound idempotency, corrupt stored
+  manifests, database head/fence checks, and WAL/sidecar rejection.
 - Coordinator transport, network enrollment endpoints, subscriptions,
   chat/transcript UI, OS-backed private-key generation/storage, sandboxed agent
-  runners, file synchronization/materialization, and signed checkpoints remain
-  unimplemented. The current storage slice stores public keys only, exposes no
-  network endpoint, and mutates no shared project file.
+  runners, blob upload/download transport, filesystem materialization, and
+  signed checkpoints remain unimplemented. The current file storage slice
+  stores content-addressed metadata only, exposes no network endpoint, accepts
+  no blob bytes, and mutates no shared project file.
 
 Residual boundary: exact revocation linearizability must be revisited if
 membership or key authority moves to a remote non-transactional service.
@@ -373,7 +397,7 @@ expiry is enforced on every completion, so retained rows grant no authority.
 
 ### Phase 3: safe file exchange
 
-- Content-addressed blob and manifest service
+- Content-addressed manifest authority (implemented); blob transport remains
 - Dedicated managed replica and secure materializer
 - Publish/apply preview
 - Recovery-only tombstones

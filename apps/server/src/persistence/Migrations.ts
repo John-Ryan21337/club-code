@@ -81,6 +81,7 @@ import Migration0071 from "./Migrations/071_CollaborationDatabaseCoordination.ts
 import Migration0072 from "./Migrations/072_CollaborationMemberships.ts";
 import Migration0073 from "./Migrations/073_CollaborationDeviceKeys.ts";
 import Migration0074 from "./Migrations/074_CollaborationAuthoredMessages.ts";
+import Migration0075 from "./Migrations/075_CollaborationFileSync.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -170,6 +171,7 @@ export const migrationEntries = [
   [72, "CollaborationMemberships", Migration0072],
   [73, "CollaborationDeviceKeys", Migration0073],
   [74, "CollaborationAuthoredMessages", Migration0074],
+  [75, "CollaborationFileSync", Migration0075],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>
