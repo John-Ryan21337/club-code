@@ -193,6 +193,31 @@ function migrateThreadAutoNudgeConfig(
   };
 }
 
+function failClosedAutoNudgeAuthorityAfterBootstrap(
+  config: typeof ThreadAutoNudgeConfig.Type,
+  latestTurn: OrchestrationLatestTurn | null,
+): typeof ThreadAutoNudgeConfig.Type {
+  if (
+    config.mode === "off" ||
+    latestTurn?.state !== "completed" ||
+    config.baselineSettledTurnId === latestTurn.turnId ||
+    config.lastDispatchedSettledTurnId === latestTurn.turnId
+  ) {
+    return config;
+  }
+
+  // The lightweight command model intentionally omits transcript/activity
+  // history. On process bootstrap, consume no tokens from a completion whose
+  // original ingestion boundary cannot be reconstructed from that model.
+  // Later provider completions replace latestTurn and remain eligible. This
+  // is a restart-only, in-memory baseline—not elapsed-time authority and not
+  // a claim that an automated send occurred.
+  return {
+    ...config,
+    baselineSettledTurnId: latestTurn.turnId,
+  };
+}
+
 function computeSnapshotSequence(
   stateRows: ReadonlyArray<Schema.Schema.Type<typeof ProjectionStateDbRowSchema>>,
 ): number {
@@ -1863,6 +1888,11 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 if (!row) {
                   continue;
                 }
+                const latestTurn = latestTurnByThread.get(row.threadId) ?? null;
+                const autoNudge = failClosedAutoNudgeAuthorityAfterBootstrap(
+                  migrateThreadAutoNudgeConfig(row.autoNudge),
+                  latestTurn,
+                );
                 threads.push({
                   id: row.threadId,
                   projectId: row.projectId,
@@ -1872,9 +1902,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   interactionMode: row.interactionMode,
                   branch: row.branch,
                   worktreePath: row.worktreePath,
-                  autoNudge: migrateThreadAutoNudgeConfig(row.autoNudge),
+                  autoNudge,
                   manualFollowUps: row.manualFollowUps,
-                  latestTurn: latestTurnByThread.get(row.threadId) ?? null,
+                  latestTurn,
                   createdAt: row.createdAt,
                   updatedAt: row.updatedAt,
                   archivedAt: row.archivedAt,

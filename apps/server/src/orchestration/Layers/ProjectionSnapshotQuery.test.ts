@@ -443,6 +443,14 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         },
       ]);
 
+      const commandReadModel = yield* snapshotQuery.getCommandReadModel();
+      assert.equal(
+        commandReadModel.threads[0]?.autoNudge.baselineSettledTurnId,
+        asTurnId("turn-1"),
+      );
+      assert.deepEqual(commandReadModel.threads[0]?.messages, []);
+      assert.deepEqual(commandReadModel.threads[0]?.activities, []);
+
       const shellSnapshot = yield* snapshotQuery.getShellSnapshot();
       assert.isFalse(JSON.stringify(shellSnapshot).includes(secretAutoNudgePrompt));
       assert.isFalse(JSON.stringify(shellSnapshot).includes(secretManualFollowUpPrompt));
