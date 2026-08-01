@@ -4,9 +4,9 @@ This guide is for Cafe Code maintainers who want to review or adopt Club Code ch
 
 ## Published PR inventory
 
-The repository has published 18 pull requests:
+The repository has published 19 pull requests:
 
-- ten open implementation PRs: [#2](https://github.com/John-Ryan21337/club-code/pull/2), [#3](https://github.com/John-Ryan21337/club-code/pull/3), [#4](https://github.com/John-Ryan21337/club-code/pull/4), [#7](https://github.com/John-Ryan21337/club-code/pull/7), [#8](https://github.com/John-Ryan21337/club-code/pull/8), [#13](https://github.com/John-Ryan21337/club-code/pull/13), [#14](https://github.com/John-Ryan21337/club-code/pull/14), [#15](https://github.com/John-Ryan21337/club-code/pull/15), [#17](https://github.com/John-Ryan21337/club-code/pull/17), and [#18](https://github.com/John-Ryan21337/club-code/pull/18);
+- eleven open implementation PRs: [#2](https://github.com/John-Ryan21337/club-code/pull/2), [#3](https://github.com/John-Ryan21337/club-code/pull/3), [#4](https://github.com/John-Ryan21337/club-code/pull/4), [#7](https://github.com/John-Ryan21337/club-code/pull/7), [#8](https://github.com/John-Ryan21337/club-code/pull/8), [#13](https://github.com/John-Ryan21337/club-code/pull/13), [#14](https://github.com/John-Ryan21337/club-code/pull/14), [#15](https://github.com/John-Ryan21337/club-code/pull/15), [#17](https://github.com/John-Ryan21337/club-code/pull/17), [#18](https://github.com/John-Ryan21337/club-code/pull/18), and [#19](https://github.com/John-Ryan21337/club-code/pull/19);
 - this open documentation PR, [#16](https://github.com/John-Ryan21337/club-code/pull/16), which adds this adoption guide directly against `main`;
 - four merged documentation PRs: #9 through #12;
 - two closed, archived pacing PRs: #5 and #6; and
@@ -22,6 +22,7 @@ After #7, choose one of these paths:
 - **Draft omnibus path:** `#8`, which contains the current local-release aggregate and overlaps the narrow cowork work.
 - **Telemetry follow-up:** `#8 -> #15`; #15 is not a cowork dependency and is useful only with the Project Resources implementation from #8.
 - **Matrix GPU path:** `#7 -> #18`; #18 is independent of cowork and extracts WebGL2 glyph rendering plus Walk parity without Auto Nudge, provider, or server files.
+- **Auto Nudge safety path:** `#7 -> #19`; #19 reconstructs dependency-complete server authority, completion-only dispatch, active-output invalidation, and restart fail-closed behavior without Idle Guard or unrelated #8 features.
 
 Do not combine the cowork commits from #8 with #13, #14, or #17.
 
@@ -37,6 +38,7 @@ Do not combine the cowork commits from #8 with #13, #14, or #17.
 | #14 | Conflict-safe shared database coordination                                              | `feature/cowork-foundation`                                                | `feature/cowork-database-coordination` at `a3c1650a86e6b5b8c4c7f5eda716fd6d4f56e74d`   | open, ready, clean                                               |
 | #17 | Secure memberships and one-time project invitations                                     | `feature/cowork-database-coordination`                                     | `feature/cowork-membership-invites` at `1973b2c1e9d4cc4b85a85077524ecd9a681639b6`      | open, ready, clean                                               |
 | #18 | WebGL2 Matrix glyph rendering and Walk parity                                           | `agent/local-priority-integration`                                         | `agent/matrix-webgl-gpu-pr` at `08caa94a3c049c9d3732cfd4b746f97c96aa0afb`              | open, ready, clean; separate from the cowork ladder              |
+| #19 | Completion-only Auto Nudge server authority                                             | `agent/local-priority-integration`                                         | `feature/auto-nudge-server-authority` at `70ceae5caf4e2b13a70ddfb824357546d51c8f7e`    | open, ready, clean; overlaps #8 Auto Nudge                       |
 | #8  | Aggregate current local release                                                         | `agent/local-priority-integration`                                         | `release/local-20260728` at `457be1418541bfb0ab08ae5bf9aac8a729ead23f`                 | open draft; GitHub reported `CONFLICTING/DIRTY` at this snapshot |
 | #15 | Hide stale unavailable Project Resources sensor graphs                                  | `release/local-20260728`                                                   | `work/profiles-telemetry-safety` at `9270cc56ffd05132f3ca02bce1582860850c8f0a`         | open, ready, clean; separate from the cowork ladder              |
 
@@ -86,6 +88,8 @@ PR #15 is a separate one-commit telemetry follow-up. Cherry-pick `9270cc56ffd051
 
 PR #18 is a Matrix-only side branch on #7. Prefer merging the reviewed PR; if cherry-picking, preserve its commit order and rerun its contracts, Matrix unit, Chromium, type, and full repository gates.
 
+PR #19 is the reviewable Auto Nudge path after #7. Do not combine it with #8's overlapping Auto Nudge implementation. Its larger coherent surface is required because PR #7 did not yet contain server-authoritative dispatch contracts, projections, migrations, manual-FIFO priority, or restart hydration.
+
 When adopting onto a newer Cafe target instead of the pinned baseline, treat these commands as an ordering manifest, not a promise of conflict-free application. Resolve migrations, settings schemas, provider lifecycle, and security boundaries semantically; never select an entire side of a conflict wholesale.
 
 ## Omnibus #8 overlap warning
@@ -94,6 +98,7 @@ PR #8 is a draft release aggregate, not the recommended Cafe review unit. It con
 
 - Do not merge #8 and then merge #13, #14, or #17: cowork contracts, architecture, authorization, event admission, event persistence, database coordination, and membership surfaces overlap or share migration lineage.
 - Do not merge #13/#14/#17 and then cherry-pick equivalent cowork commits from #8.
+- Do not merge #19 and then retain #8's overlapping Auto Nudge authority, migrations, projections, or renderer coordinator changes.
 - Do not infer that #8 completes the user-visible cowork suite. Its own description leaves server-authoritative database admission, engine-specific snapshot adapters, secure replica materialization, network transport, and UI as later work.
 - Prefer extracting a narrow, independently gated PR from #8 for each non-cowork feature family that Cafe maintainers want.
 
@@ -118,6 +123,7 @@ git diff --check
 - #14: concurrent lease acquisition, fencing, compare-and-swap publication, idempotency/principal binding, and file-backed SQLite concurrency tests;
 - #17: server-clock expiry, digest-only secrets, actor-bound idempotency, one-time redemption, role ceilings, membership epoch changes, corruption handling, and two-client redemption tests;
 - #18: contracts 37/37, Matrix units 95/95, Chromium 80/80, WebGL shader/context/fallback coverage, and full repository tests;
+- #19: server 148, web 95, contracts 85, browser 31, full repository tests, and controlled proof that timer/minute/countdown state cannot authorize dispatch;
 - #15: current-snapshot availability and simulated telemetry-outage browser regressions.
 
 A green exit code is not enough for generated or packaged work. Verify that expected bundles/artifacts were freshly produced and contain the intended feature markers before publishing the adopted head.
