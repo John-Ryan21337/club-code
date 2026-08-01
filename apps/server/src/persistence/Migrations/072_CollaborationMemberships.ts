@@ -33,7 +33,8 @@ export default Effect.gen(function* () {
       shared_project_id TEXT NOT NULL REFERENCES collaboration_projects(shared_project_id)
         ON DELETE CASCADE,
       secret_sha256 TEXT NOT NULL UNIQUE CHECK(
-        length(secret_sha256) = 64 AND secret_sha256 = lower(secret_sha256)
+        length(secret_sha256) = 64 AND secret_sha256 = lower(secret_sha256) AND
+        secret_sha256 NOT GLOB '*[^0-9a-f]*'
       ),
       role TEXT NOT NULL CHECK(role IN ('admin', 'operator', 'contributor', 'viewer')),
       permissions_json TEXT NOT NULL,
@@ -69,8 +70,17 @@ export default Effect.gen(function* () {
         'member.change-role',
         'member.remove'
       )),
-      input_sha256 TEXT NOT NULL CHECK(length(input_sha256) = 64),
+      input_sha256 TEXT NOT NULL CHECK(
+        length(input_sha256) = 64 AND input_sha256 = lower(input_sha256) AND
+        input_sha256 NOT GLOB '*[^0-9a-f]*'
+      ),
+      actor_user_id TEXT NOT NULL,
+      actor_device_id TEXT NOT NULL,
       result_json TEXT NOT NULL,
+      result_sha256 TEXT NOT NULL CHECK(
+        length(result_sha256) = 64 AND result_sha256 = lower(result_sha256) AND
+        result_sha256 NOT GLOB '*[^0-9a-f]*'
+      ),
       created_at TEXT NOT NULL,
       PRIMARY KEY(shared_project_id, command_id)
     ) STRICT

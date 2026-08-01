@@ -9,6 +9,10 @@ import {
   SharedProjectId,
 } from "@cafecode/contracts";
 import { assert, describe, it } from "@effect/vitest";
+import { createHash } from "node:crypto";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -16,6 +20,8 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 
+import { runMigrations } from "../persistence/Migrations.ts";
+import * as NodeSqliteClient from "../persistence/NodeSqliteClient.ts";
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import {
   CollaborationMembershipStore,
@@ -29,6 +35,17 @@ const decodePrincipal = Schema.decodeUnknownSync(CollaborationPrincipal);
 const decodeIdentity = Schema.decodeUnknownSync(CollaborationAuthenticatedIdentity);
 
 const layer = CollaborationMembershipStoreLive.pipe(Layer.provideMerge(SqlitePersistenceMemory));
+
+function fileBackedStoreLayer(dbPath: string) {
+  return CollaborationMembershipStoreLive.pipe(
+    Layer.provideMerge(
+      NodeSqliteClient.layer({
+        filename: dbPath,
+        busyTimeoutMs: 15_000,
+      }),
+    ),
+  );
+}
 
 function isStoreError(
   value: unknown,
@@ -143,6 +160,131 @@ describe("CollaborationMembershipStore", () => {
     }).pipe(Effect.provide(layer)),
   );
 
+  it.effect("binds manager receipts to the authenticated user and device", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW);
+      yield* seedProject("project-actor-bound", [
+        { userId: "owner-1", role: "owner" },
+        { userId: "admin-1", role: "admin" },
+      ]);
+      const store = yield* CollaborationMembershipStore;
+      const request = createRequest("project-actor-bound");
+      yield* store.createInvitation({
+        principal: principal("project-actor-bound"),
+        request,
+      });
+
+      const crossActorReplay = yield* store
+        .createInvitation({
+          principal: principal("project-actor-bound", "admin-1"),
+          request,
+        })
+        .pipe(Effect.flip);
+      assert.equal(isStoreError(crossActorReplay, "command-conflict"), true);
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect("binds redemption receipts to the authenticated redeemer", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW);
+      yield* seedProject("project-redeem-actor");
+      const store = yield* CollaborationMembershipStore;
+      const invitation = yield* store.createInvitation({
+        principal: principal("project-redeem-actor"),
+        request: createRequest("project-redeem-actor"),
+      });
+      const request = {
+        commandId: "redeem-actor-bound",
+        sharedProjectId: "project-redeem-actor",
+        secret: invitation.secret,
+        displayName: "Redeemer",
+      };
+      yield* store.redeemInvitation({ identity: identity("member-1"), request });
+
+      const crossActorReplay = yield* store
+        .redeemInvitation({ identity: identity("member-2"), request })
+        .pipe(Effect.flip);
+      assert.equal(isStoreError(crossActorReplay, "command-conflict"), true);
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect("rejects a validly rehashed receipt whose response does not match its command", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW);
+      yield* seedProject("project-receipt-integrity");
+      const store = yield* CollaborationMembershipStore;
+      const request = createRequest("project-receipt-integrity");
+      const created = yield* store.createInvitation({
+        principal: principal("project-receipt-integrity"),
+        request,
+      });
+      const forgedResult = JSON.stringify({
+        ...created.invitation,
+        role: "viewer",
+        permissions: [...COLLABORATION_ROLE_PERMISSIONS.viewer],
+      });
+      const forgedSha256 = createHash("sha256").update(forgedResult).digest("hex");
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`
+        UPDATE collaboration_membership_command_receipts
+        SET result_json = ${forgedResult}, result_sha256 = ${forgedSha256}
+        WHERE shared_project_id = ${"project-receipt-integrity"}
+          AND command_id = ${request.commandId}
+      `;
+
+      const replay = yield* store
+        .createInvitation({
+          principal: principal("project-receipt-integrity"),
+          request,
+        })
+        .pipe(Effect.flip);
+      assert.equal(isStoreError(replay, "stored-corruption"), true);
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect("rejects a validly rehashed redemption receipt that elevates the stored grant", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW);
+      yield* seedProject("project-redeem-receipt-integrity");
+      const store = yield* CollaborationMembershipStore;
+      const invitation = yield* store.createInvitation({
+        principal: principal("project-redeem-receipt-integrity"),
+        request: createRequest("project-redeem-receipt-integrity"),
+      });
+      const request = {
+        commandId: "redeem-forged-role",
+        sharedProjectId: "project-redeem-receipt-integrity",
+        secret: invitation.secret,
+        displayName: "Member",
+      };
+      const redeemed = yield* store.redeemInvitation({
+        identity: identity("member-1"),
+        request,
+      });
+      const forgedResult = JSON.stringify({
+        member: {
+          ...redeemed.member!,
+          role: "operator",
+          permissions: [...COLLABORATION_ROLE_PERMISSIONS.operator],
+        },
+        membershipEpoch: redeemed.membershipEpoch,
+      });
+      const forgedSha256 = createHash("sha256").update(forgedResult).digest("hex");
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`
+        UPDATE collaboration_membership_command_receipts
+        SET result_json = ${forgedResult}, result_sha256 = ${forgedSha256}
+        WHERE shared_project_id = ${"project-redeem-receipt-integrity"}
+          AND command_id = ${request.commandId}
+      `;
+
+      const replay = yield* store
+        .redeemInvitation({ identity: identity("member-1"), request })
+        .pipe(Effect.flip);
+      assert.equal(isStoreError(replay, "stored-corruption"), true);
+    }).pipe(Effect.provide(layer)),
+  );
+
   it.effect("rejects expired and not-yet-valid invitations using the server clock", () =>
     Effect.gen(function* () {
       yield* TestClock.setTime(NOW);
@@ -222,6 +364,30 @@ describe("CollaborationMembershipStore", () => {
         })
         .pipe(Effect.flip);
       assert.equal(isStoreError(escalation, "role-ceiling-exceeded"), true);
+
+      const ownerGrant = yield* store
+        .createInvitation({
+          principal: principal("project-a"),
+          request: {
+            ...createRequest("project-a", "create-owner"),
+            role: "owner",
+            permissions: [...COLLABORATION_ROLE_PERMISSIONS.owner],
+          },
+        })
+        .pipe(Effect.flip);
+      assert.equal(isStoreError(ownerGrant, "role-ceiling-exceeded"), true);
+
+      const permissionEscalation = yield* store
+        .createInvitation({
+          principal: principal("project-a"),
+          request: {
+            ...createRequest("project-a", "create-overpowered-viewer"),
+            role: "viewer",
+            permissions: [...COLLABORATION_ROLE_PERMISSIONS.contributor],
+          },
+        })
+        .pipe(Effect.flip);
+      assert.equal(isStoreError(permissionEscalation, "role-ceiling-exceeded"), true);
     }).pipe(Effect.provide(layer)),
   );
 
@@ -256,6 +422,80 @@ describe("CollaborationMembershipStore", () => {
       assert.equal(snapshot.epoch, 2);
       assert.equal(snapshot.members.length, 2);
     }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect("serializes one-time redemption across two file-backed SQLite clients", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => mkdtemp(join(tmpdir(), "club-code-membership-redeem-"))),
+      (directory) => {
+        const dbPath = join(directory, "state.sqlite");
+        const setupLayer = fileBackedStoreLayer(dbPath);
+        const firstLayer = fileBackedStoreLayer(dbPath);
+        const secondLayer = fileBackedStoreLayer(dbPath);
+        return Effect.gen(function* () {
+          yield* TestClock.setTime(NOW);
+          const invitation = yield* Effect.gen(function* () {
+            yield* runMigrations();
+            yield* seedProject("project-file-race");
+            const store = yield* CollaborationMembershipStore;
+            return yield* store.createInvitation({
+              principal: principal("project-file-race"),
+              request: createRequest("project-file-race"),
+            });
+          }).pipe(Effect.provide(setupLayer));
+
+          const redeem = (userId: string, targetLayer: ReturnType<typeof fileBackedStoreLayer>) =>
+            Effect.gen(function* () {
+              const store = yield* CollaborationMembershipStore;
+              return yield* store.redeemInvitation({
+                identity: identity(userId),
+                request: {
+                  commandId: `redeem-file-${userId}`,
+                  sharedProjectId: "project-file-race",
+                  secret: invitation.secret,
+                  displayName: userId,
+                },
+              });
+            }).pipe(
+              Effect.provide(targetLayer),
+              Effect.map((value) => ({ _tag: "Success" as const, value })),
+              Effect.catch((error) => Effect.succeed({ _tag: "Failure" as const, error })),
+            );
+
+          const outcomes = yield* Effect.all(
+            [redeem("racer-1", firstLayer), redeem("racer-2", secondLayer)],
+            { concurrency: "unbounded" },
+          );
+          const successes = outcomes.filter((outcome) => outcome._tag === "Success");
+          const failures = outcomes.filter((outcome) => outcome._tag === "Failure");
+          assert.equal(successes.length, 1);
+          assert.equal(failures.length, 1);
+          assert.equal(isStoreError(failures[0]!.error, "invitation-consumed"), true);
+
+          const persisted = yield* Effect.gen(function* () {
+            const sql = yield* SqlClient.SqlClient;
+            return yield* sql<{
+              readonly membershipEpoch: number;
+              readonly memberCount: number;
+              readonly redemptionReceiptCount: number;
+            }>`
+              SELECT membership_epoch AS "membershipEpoch",
+                (SELECT COUNT(*) FROM collaboration_project_members
+                  WHERE shared_project_id = ${"project-file-race"}) AS "memberCount",
+                (SELECT COUNT(*) FROM collaboration_membership_command_receipts
+                  WHERE shared_project_id = ${"project-file-race"}
+                    AND operation = ${"invitation.redeem"}) AS "redemptionReceiptCount"
+              FROM collaboration_projects
+              WHERE shared_project_id = ${"project-file-race"}
+            `;
+          }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: dbPath })));
+          assert.equal(persisted[0]?.membershipEpoch, 2);
+          assert.equal(persisted[0]?.memberCount, 2);
+          assert.equal(persisted[0]?.redemptionReceiptCount, 1);
+        });
+      },
+      (directory) => Effect.promise(() => rm(directory, { recursive: true, force: true })),
+    ),
   );
 
   it.effect(
@@ -387,6 +627,28 @@ describe("CollaborationMembershipStore", () => {
         .pipe(Effect.flip);
       assert.equal(isStoreError(corruptInvite, "stored-corruption"), true);
 
+      const invalidTimestamp = yield* store.createInvitation({
+        principal: principal("project-corrupt"),
+        request: createRequest("project-corrupt", "create-invalid-timestamp"),
+      });
+      yield* sql`
+        UPDATE collaboration_project_invitations
+        SET expires_at = ${"not-a-time"}
+        WHERE invitation_id = ${invalidTimestamp.invitation.invitationId}
+      `;
+      const corruptTimestamp = yield* store
+        .redeemInvitation({
+          identity: identity("user-corrupt-time"),
+          request: {
+            commandId: "redeem-corrupt-time",
+            sharedProjectId: "project-corrupt",
+            secret: invalidTimestamp.secret,
+            displayName: "Corrupt Time",
+          },
+        })
+        .pipe(Effect.flip);
+      assert.equal(isStoreError(corruptTimestamp, "stored-corruption"), true);
+
       yield* sql`
         UPDATE collaboration_project_members
         SET permissions_json = ${"{}"}
@@ -396,6 +658,27 @@ describe("CollaborationMembershipStore", () => {
         .getCurrent(decodeProjectId("project-corrupt"))
         .pipe(Effect.flip);
       assert.equal(isStoreError(corruptSnapshot, "stored-corruption"), true);
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect("rejects a persisted project without exactly one initial owner", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW);
+      yield* seedProject("project-ownerless", []);
+      const store = yield* CollaborationMembershipStore;
+      const ownerless = yield* store
+        .getCurrent(decodeProjectId("project-ownerless"))
+        .pipe(Effect.flip);
+      assert.equal(isStoreError(ownerless, "stored-corruption"), true);
+
+      yield* seedProject("project-two-owners", [
+        { userId: "owner-1", role: "owner" },
+        { userId: "owner-2", role: "owner" },
+      ]);
+      const twoOwners = yield* store
+        .getCurrent(decodeProjectId("project-two-owners"))
+        .pipe(Effect.flip);
+      assert.equal(isStoreError(twoOwners, "stored-corruption"), true);
     }).pipe(Effect.provide(layer)),
   );
 });

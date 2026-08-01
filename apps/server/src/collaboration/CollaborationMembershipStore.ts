@@ -123,7 +123,15 @@ type InvitationRow = {
 type ReceiptRow = {
   readonly operation: string;
   readonly inputSha256: string;
+  readonly actorUserId: string;
+  readonly actorDeviceId: string;
   readonly resultJson: string;
+  readonly resultSha256: string;
+};
+
+type ReceiptActor = {
+  readonly userId: string;
+  readonly deviceId: string;
 };
 
 const roleRank: Readonly<Record<CollaborationProjectRole, number>> = {
@@ -142,9 +150,10 @@ const fail = (
 
 const isoNow = (epochMillis: number): string => new Date(epochMillis).toISOString();
 const sha256 = (value: string): string => createHash("sha256").update(value).digest("hex");
-const inputSha256 = (operation: string, request: unknown): string =>
-  sha256(JSON.stringify([operation, request]));
+const inputSha256 = (operation: string, request: unknown, actor: ReceiptActor): string =>
+  sha256(JSON.stringify([operation, request, { userId: actor.userId, deviceId: actor.deviceId }]));
 const secretSha256 = (secret: string): string => sha256(`club-code/cowork-invite/v1\0${secret}`);
+const sha256Pattern = /^[a-f0-9]{64}$/;
 
 function isStoreError(cause: unknown): cause is CollaborationMembershipStoreError {
   return (
@@ -243,7 +252,7 @@ function makeStore() {
             joinedAt: row.joinedAt,
           });
         }
-        return yield* strictDecode(
+        const snapshot = yield* strictDecode(
           operation,
           CollaborationProjectMembershipSnapshot,
           {
@@ -254,6 +263,10 @@ function makeStore() {
           },
           "stored-corruption",
         );
+        if (snapshot.members.filter((member) => member.role === "owner").length !== 1) {
+          return yield* fail(operation, "stored-corruption");
+        }
+        return snapshot;
       });
 
     const authorizeManager = (
@@ -313,17 +326,41 @@ function makeStore() {
       return Effect.void;
     };
 
+    const lockProject = (sharedProjectId: SharedProjectId) => sql`
+      UPDATE collaboration_projects
+      SET shared_project_id = shared_project_id
+      WHERE shared_project_id = ${sharedProjectId}
+    `;
+
     const getReceipt = (sharedProjectId: SharedProjectId, commandId: string) =>
       sql<ReceiptRow>`
-        SELECT operation, input_sha256 AS "inputSha256", result_json AS "resultJson"
+        SELECT operation, input_sha256 AS "inputSha256",
+          actor_user_id AS "actorUserId", actor_device_id AS "actorDeviceId",
+          result_json AS "resultJson", result_sha256 AS "resultSha256"
         FROM collaboration_membership_command_receipts
         WHERE shared_project_id = ${sharedProjectId} AND command_id = ${commandId}
       `.pipe(Effect.map((rows) => rows[0]));
 
-    const requireMatchingReceipt = (operation: string, receipt: ReceiptRow, expectedHash: string) =>
-      receipt.operation === operation && receipt.inputSha256 === expectedHash
+    const requireMatchingReceipt = (
+      operation: string,
+      receipt: ReceiptRow,
+      expectedHash: string,
+      actor: ReceiptActor,
+    ) => {
+      if (
+        !sha256Pattern.test(receipt.inputSha256) ||
+        !sha256Pattern.test(receipt.resultSha256) ||
+        sha256(receipt.resultJson) !== receipt.resultSha256
+      ) {
+        return fail(operation, "stored-corruption");
+      }
+      return receipt.operation === operation &&
+        receipt.inputSha256 === expectedHash &&
+        receipt.actorUserId === actor.userId &&
+        receipt.actorDeviceId === actor.deviceId
         ? Effect.void
         : fail(operation, "command-conflict");
+    };
 
     const requireOneChangedRow = (operation: string) =>
       Effect.gen(function* () {
@@ -338,16 +375,21 @@ function makeStore() {
       commandId: string,
       operation: string,
       hash: string,
+      actor: ReceiptActor,
       result: unknown,
       nowIso: string,
-    ) =>
-      sql`
+    ) => {
+      const resultJson = JSON.stringify(result);
+      return sql`
         INSERT INTO collaboration_membership_command_receipts(
-          shared_project_id, command_id, operation, input_sha256, result_json, created_at
+          shared_project_id, command_id, operation, input_sha256,
+          actor_user_id, actor_device_id, result_json, result_sha256, created_at
         ) VALUES (
-          ${sharedProjectId}, ${commandId}, ${operation}, ${hash}, ${JSON.stringify(result)}, ${nowIso}
+          ${sharedProjectId}, ${commandId}, ${operation}, ${hash},
+          ${actor.userId}, ${actor.deviceId}, ${resultJson}, ${sha256(resultJson)}, ${nowIso}
         )
       `;
+    };
 
     const decodeStoredMutation = (operation: string, receipt: ReceiptRow) =>
       Effect.gen(function* () {
@@ -361,6 +403,34 @@ function makeStore() {
         return result;
       });
 
+    const decodeStoredInvitation = (operation: string, row: InvitationRow) =>
+      Effect.gen(function* () {
+        const permissions = yield* parseJson(operation, row.permissionsJson);
+        const invitation = yield* strictDecode(
+          operation,
+          CollaborationInvitationGrant,
+          {
+            invitationId: row.invitationId,
+            sharedProjectId: row.sharedProjectId,
+            role: row.role,
+            permissions,
+            createdByUserId: row.createdByUserId,
+            notBefore: row.notBefore,
+            expiresAt: row.expiresAt,
+          },
+          "stored-corruption",
+        );
+        if (
+          invitation.role === "owner" ||
+          !collaborationPermissionsFitRole(invitation.role, invitation.permissions) ||
+          DateTime.toEpochMillis(invitation.expiresAt) <=
+            DateTime.toEpochMillis(invitation.notBefore)
+        ) {
+          return yield* fail(operation, "stored-corruption");
+        }
+        return invitation;
+      });
+
     const createInvitation: CollaborationMembershipStoreShape["createInvitation"] = (input) => {
       const operation = "invitation.create";
       return Effect.gen(function* () {
@@ -369,26 +439,27 @@ function makeStore() {
           CollaborationCreateInvitationRequest,
           input.request,
         );
-        const hash = inputSha256(operation, request);
         const secret = decodeInvitationSecret(randomBytes(32).toString("base64url"));
         const digest = secretSha256(secret);
         const invitationId = `invite-${randomUUID()}`;
-        const now = DateTime.toEpochMillis(yield* DateTime.now);
-        const nowIso = isoNow(now);
-        const notBefore = isoNow(now + request.notBeforeDelayMillis);
-        const expiresAt = isoNow(now + request.notBeforeDelayMillis + request.lifetimeMillis);
 
         return yield* sql.withTransaction(
           Effect.gen(function* () {
+            yield* lockProject(request.sharedProjectId);
+            const now = DateTime.toEpochMillis(yield* DateTime.now);
+            const nowIso = isoNow(now);
+            const notBefore = isoNow(now + request.notBeforeDelayMillis);
+            const expiresAt = isoNow(now + request.notBeforeDelayMillis + request.lifetimeMillis);
             const manager = yield* authorizeManager(
               operation,
               input.principal,
               request.sharedProjectId,
               now,
             );
+            const hash = inputSha256(operation, request, manager.principal);
             const receipt = yield* getReceipt(request.sharedProjectId, request.commandId);
             if (receipt) {
-              yield* requireMatchingReceipt(operation, receipt, hash);
+              yield* requireMatchingReceipt(operation, receipt, hash, manager.principal);
               const stored = yield* parseJson(operation, receipt.resultJson);
               const invitation = yield* strictDecode(
                 operation,
@@ -396,6 +467,33 @@ function makeStore() {
                 stored,
                 "stored-corruption",
               );
+              const rows = yield* sql<InvitationRow>`
+                SELECT invitation_id AS "invitationId", shared_project_id AS "sharedProjectId",
+                  role, permissions_json AS "permissionsJson",
+                  created_by_user_id AS "createdByUserId", not_before AS "notBefore",
+                  expires_at AS "expiresAt", redeemed_at AS "redeemedAt",
+                  redeemed_by_user_id AS "redeemedByUserId", revoked_at AS "revokedAt"
+                FROM collaboration_project_invitations
+                WHERE invitation_id = ${invitation.invitationId}
+              `;
+              if (rows.length !== 1) return yield* fail(operation, "stored-corruption");
+              const persisted = yield* decodeStoredInvitation(operation, rows[0]!);
+              if (
+                invitation.sharedProjectId !== request.sharedProjectId ||
+                invitation.role !== request.role ||
+                JSON.stringify(invitation.permissions) !== JSON.stringify(request.permissions) ||
+                invitation.createdByUserId !== manager.principal.userId ||
+                persisted.sharedProjectId !== invitation.sharedProjectId ||
+                persisted.role !== invitation.role ||
+                JSON.stringify(persisted.permissions) !== JSON.stringify(invitation.permissions) ||
+                persisted.createdByUserId !== invitation.createdByUserId ||
+                DateTime.toEpochMillis(persisted.notBefore) !==
+                  DateTime.toEpochMillis(invitation.notBefore) ||
+                DateTime.toEpochMillis(persisted.expiresAt) !==
+                  DateTime.toEpochMillis(invitation.expiresAt)
+              ) {
+                return yield* fail(operation, "stored-corruption");
+              }
               return { disposition: "already-applied", invitation, secret: null } as const;
             }
             yield* validateGrantCeiling(
@@ -433,6 +531,7 @@ function makeStore() {
               request.commandId,
               operation,
               hash,
+              manager.principal,
               encodedInvitation,
               nowIso,
             );
@@ -451,30 +550,27 @@ function makeStore() {
           input.request,
         );
         const identity = yield* validateAuthenticatedIdentity(operation, input.identity);
-        const now = DateTime.toEpochMillis(yield* DateTime.now);
-        const issuedAt = DateTime.toEpochMillis(identity.issuedAt);
-        const identityExpiresAt = DateTime.toEpochMillis(identity.expiresAt);
-        if (now < issuedAt || now >= identityExpiresAt) {
-          return yield* fail(operation, "unauthenticated");
-        }
-        const hash = inputSha256(operation, {
-          ...request,
-          // Bind idempotency to the authenticated redeemer without persisting
-          // the invitation capability in a command receipt.
-          secret: secretSha256(request.secret),
-          userId: identity.userId,
-          deviceId: identity.deviceId,
-        });
         const digest = secretSha256(request.secret);
-        const nowIso = isoNow(now);
 
         return yield* sql.withTransaction(
           Effect.gen(function* () {
-            const receipt = yield* getReceipt(request.sharedProjectId, request.commandId);
-            if (receipt) {
-              yield* requireMatchingReceipt(operation, receipt, hash);
-              return yield* decodeStoredMutation(operation, receipt);
+            yield* lockProject(request.sharedProjectId);
+            const now = DateTime.toEpochMillis(yield* DateTime.now);
+            const issuedAt = DateTime.toEpochMillis(identity.issuedAt);
+            const identityExpiresAt = DateTime.toEpochMillis(identity.expiresAt);
+            if (now < issuedAt || now >= identityExpiresAt) {
+              return yield* fail(operation, "unauthenticated");
             }
+            const hash = inputSha256(
+              operation,
+              {
+                ...request,
+                // Bind idempotency without persisting the invitation capability.
+                secret: digest,
+              },
+              identity,
+            );
+            const nowIso = isoNow(now);
             const invites = yield* sql<InvitationRow>`
               SELECT invitation_id AS "invitationId", shared_project_id AS "sharedProjectId",
                 role, permissions_json AS "permissionsJson",
@@ -489,26 +585,24 @@ function makeStore() {
             if (row.sharedProjectId !== request.sharedProjectId) {
               return yield* fail(operation, "project-mismatch");
             }
-            const permissions = yield* parseJson(operation, row.permissionsJson);
-            const invitation = yield* strictDecode(
-              operation,
-              CollaborationInvitationGrant,
-              {
-                invitationId: row.invitationId,
-                sharedProjectId: row.sharedProjectId,
-                role: row.role,
-                permissions,
-                createdByUserId: row.createdByUserId,
-                notBefore: row.notBefore,
-                expiresAt: row.expiresAt,
-              },
-              "stored-corruption",
-            );
-            if (
-              invitation.role === "owner" ||
-              !collaborationPermissionsFitRole(invitation.role, invitation.permissions)
-            ) {
-              return yield* fail(operation, "stored-corruption");
+            const invitation = yield* decodeStoredInvitation(operation, row);
+            const receipt = yield* getReceipt(request.sharedProjectId, request.commandId);
+            if (receipt) {
+              yield* requireMatchingReceipt(operation, receipt, hash, identity);
+              const result = yield* decodeStoredMutation(operation, receipt);
+              const snapshot = yield* loadSnapshot(request.sharedProjectId, operation);
+              if (
+                result.member === null ||
+                result.member.userId !== identity.userId ||
+                result.member.displayName !== request.displayName ||
+                result.member.role !== invitation.role ||
+                JSON.stringify(result.member.permissions) !==
+                  JSON.stringify(invitation.permissions) ||
+                result.membershipEpoch > snapshot.epoch
+              ) {
+                return yield* fail(operation, "stored-corruption");
+              }
+              return result;
             }
             if (row.revokedAt !== null) return yield* fail(operation, "invitation-revoked");
             if (row.redeemedAt !== null) return yield* fail(operation, "invitation-consumed");
@@ -565,6 +659,7 @@ function makeStore() {
               request.commandId,
               operation,
               hash,
+              identity,
               storedResult,
               nowIso,
             );
@@ -585,21 +680,26 @@ function makeStore() {
           CollaborationRevokeInvitationRequest,
           input.request,
         );
-        const hash = inputSha256(operation, request);
-        const now = DateTime.toEpochMillis(yield* DateTime.now);
-        const nowIso = isoNow(now);
         return yield* sql.withTransaction(
           Effect.gen(function* () {
+            yield* lockProject(request.sharedProjectId);
+            const now = DateTime.toEpochMillis(yield* DateTime.now);
+            const nowIso = isoNow(now);
             const manager = yield* authorizeManager(
               operation,
               input.principal,
               request.sharedProjectId,
               now,
             );
+            const hash = inputSha256(operation, request, manager.principal);
             const receipt = yield* getReceipt(request.sharedProjectId, request.commandId);
             if (receipt) {
-              yield* requireMatchingReceipt(operation, receipt, hash);
-              return yield* decodeStoredMutation(operation, receipt);
+              yield* requireMatchingReceipt(operation, receipt, hash, manager.principal);
+              const result = yield* decodeStoredMutation(operation, receipt);
+              if (result.member !== null || result.membershipEpoch > manager.snapshot.epoch) {
+                return yield* fail(operation, "stored-corruption");
+              }
+              return result;
             }
             const rows = yield* sql<InvitationRow>`
               SELECT invitation_id AS "invitationId", shared_project_id AS "sharedProjectId",
@@ -654,6 +754,7 @@ function makeStore() {
               request.commandId,
               operation,
               hash,
+              manager.principal,
               storedResult,
               nowIso,
             );
@@ -674,21 +775,32 @@ function makeStore() {
           CollaborationChangeMemberRoleRequest,
           input.request,
         );
-        const hash = inputSha256(operation, request);
-        const now = DateTime.toEpochMillis(yield* DateTime.now);
-        const nowIso = isoNow(now);
         return yield* sql.withTransaction(
           Effect.gen(function* () {
+            yield* lockProject(request.sharedProjectId);
+            const now = DateTime.toEpochMillis(yield* DateTime.now);
+            const nowIso = isoNow(now);
             const manager = yield* authorizeManager(
               operation,
               input.principal,
               request.sharedProjectId,
               now,
             );
+            const hash = inputSha256(operation, request, manager.principal);
             const receipt = yield* getReceipt(request.sharedProjectId, request.commandId);
             if (receipt) {
-              yield* requireMatchingReceipt(operation, receipt, hash);
-              return yield* decodeStoredMutation(operation, receipt);
+              yield* requireMatchingReceipt(operation, receipt, hash, manager.principal);
+              const result = yield* decodeStoredMutation(operation, receipt);
+              if (
+                result.member === null ||
+                result.member.userId !== request.userId ||
+                result.member.role !== request.role ||
+                JSON.stringify(result.member.permissions) !== JSON.stringify(request.permissions) ||
+                result.membershipEpoch > manager.snapshot.epoch
+              ) {
+                return yield* fail(operation, "stored-corruption");
+              }
+              return result;
             }
             const target = manager.snapshot.members.find(
               (member) => member.userId === request.userId,
@@ -730,6 +842,7 @@ function makeStore() {
               request.commandId,
               operation,
               hash,
+              manager.principal,
               storedResult,
               nowIso,
             );
@@ -750,21 +863,26 @@ function makeStore() {
           CollaborationRemoveMemberRequest,
           input.request,
         );
-        const hash = inputSha256(operation, request);
-        const now = DateTime.toEpochMillis(yield* DateTime.now);
-        const nowIso = isoNow(now);
         return yield* sql.withTransaction(
           Effect.gen(function* () {
+            yield* lockProject(request.sharedProjectId);
+            const now = DateTime.toEpochMillis(yield* DateTime.now);
+            const nowIso = isoNow(now);
             const manager = yield* authorizeManager(
               operation,
               input.principal,
               request.sharedProjectId,
               now,
             );
+            const hash = inputSha256(operation, request, manager.principal);
             const receipt = yield* getReceipt(request.sharedProjectId, request.commandId);
             if (receipt) {
-              yield* requireMatchingReceipt(operation, receipt, hash);
-              return yield* decodeStoredMutation(operation, receipt);
+              yield* requireMatchingReceipt(operation, receipt, hash, manager.principal);
+              const result = yield* decodeStoredMutation(operation, receipt);
+              if (result.member !== null || result.membershipEpoch > manager.snapshot.epoch) {
+                return yield* fail(operation, "stored-corruption");
+              }
+              return result;
             }
             const target = manager.snapshot.members.find(
               (member) => member.userId === request.userId,
@@ -798,6 +916,7 @@ function makeStore() {
               request.commandId,
               operation,
               hash,
+              manager.principal,
               storedResult,
               nowIso,
             );
