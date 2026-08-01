@@ -28,7 +28,13 @@ const mocks = vi.hoisted(() => ({
     fallingEffectColor: "auto" as const,
     fallingEffectMatrixColorMode: "rainbow-extra" as const,
     fallingEffectMatrixColorCycleSpeed: 32,
-    fallingEffectMatrixMotionMode: "flat" as "flat" | "forward" | "reverse" | "tunnel",
+    fallingEffectMatrixMotionMode: "flat" as
+      | "flat"
+      | "forward"
+      | "reverse"
+      | "tunnel"
+      | "walk-forward"
+      | "walk-reverse",
     fallingEffectOpacity: 0.35,
     fallingEffectSpeed: 1,
     fallingEffectDensity: 1,
@@ -570,7 +576,14 @@ describe("WindowAtmosphere", () => {
     mounted = await render(<WindowAtmosphere selectedThreadRef={TEST_SELECTED_THREAD_REF} />);
 
     for (const kind of ["snow", "rain", "matrix"] as const) {
-      for (const motionMode of ["flat", "forward", "reverse", "tunnel"] as const) {
+      for (const motionMode of [
+        "flat",
+        "forward",
+        "reverse",
+        "tunnel",
+        "walk-forward",
+        "walk-reverse",
+      ] as const) {
         mocks.settings.fallingEffectKind = kind;
         mocks.settings.fallingEffectMatrixMotionMode = motionMode;
         await mounted.rerender(

@@ -14,6 +14,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   DEFAULT_MATRIX_ACTIVITY_ROUTE_TTL_MS,
+  MATRIX_ACTIVITY_DEPTH_ROUTE_SEGMENTS,
   MATRIX_ACTIVITY_LINK_PULSE_MS,
   MATRIX_ACTIVITY_MAX_CORRELATION_MS,
   MATRIX_ACTIVITY_MIN_PACKETS_PER_LINK,
@@ -22,6 +23,8 @@ import {
   MATRIX_ACTIVITY_TERMINAL_FADE_MS,
   MATRIX_ACTIVITY_TTL_MS,
   MAX_MATRIX_ACTIVITY_ENCODED_CHARS,
+  MAX_MATRIX_ACTIVITY_DEPTH_LINE_WIDTH,
+  MAX_MATRIX_ACTIVITY_DEPTH_PACKET_RADIUS,
   MAX_MATRIX_ACTIVITY_EVENTS,
   MAX_MATRIX_ACTIVITY_LINKS,
   MAX_MATRIX_ACTIVITY_PACKET_DRAWS,
@@ -37,6 +40,7 @@ import {
   matrixHexRoutePointAt,
   resolveMatrixActivityPacketCount,
   resolveMatrixActivityPacketProgress,
+  resolveMatrixActivityRouteDepthScale,
   resolveMatrixActivityTelemetryLabel,
   resolveMatrixActivityTerm,
   resolveMatrixActivityTrailIntervals,
@@ -108,17 +112,21 @@ interface RecordedCanvasDraw {
 
 function createRecordingContext(): {
   readonly context: CanvasRenderingContext2D;
+  readonly arcRadii: number[];
   readonly draws: RecordedCanvasDraw[];
   readonly gradients: RecordedGradient[];
   readonly rotations: number[];
   readonly translations: Array<readonly [number, number]>;
 } {
+  const arcRadii: number[] = [];
   const draws: RecordedCanvasDraw[] = [];
   const gradients: RecordedGradient[] = [];
   const rotations: number[] = [];
   const translations: Array<readonly [number, number]> = [];
   const context = {
-    arc: vi.fn(),
+    arc: vi.fn((_x: number, _y: number, radius: number) => {
+      arcRadii.push(radius);
+    }),
     beginPath: vi.fn(),
     clip: vi.fn(),
     createLinearGradient: vi.fn((x0: number, y0: number, x1: number, y1: number) => {
@@ -202,7 +210,7 @@ function createRecordingContext(): {
       translations.push([x, y]);
     }),
   } as unknown as CanvasRenderingContext2D;
-  return { context, draws, gradients, rotations, translations };
+  return { context, arcRadii, draws, gradients, rotations, translations };
 }
 
 describe("Matrix provider activity overlay", () => {
@@ -1617,6 +1625,144 @@ describe("Matrix provider activity overlay", () => {
       Math.hypot(center.x - from.x, center.y - from.y) +
         Math.hypot(to.x - center.x, to.y - center.y),
     );
+  });
+
+  it("narrows Warp at its center and mirrors bounded route depth", () => {
+    expect(resolveMatrixActivityRouteDepthScale("flat", 0.75, 4, 0.4)).toBe(1);
+    expect(resolveMatrixActivityRouteDepthScale("walk-forward", 0, 0.1, 9)).toBe(0.4);
+    expect(resolveMatrixActivityRouteDepthScale("walk-forward", 1, 0.1, 9)).toBe(4);
+    expect(resolveMatrixActivityRouteDepthScale("walk-reverse", 0, 9, 0.1)).toBe(4);
+    expect(resolveMatrixActivityRouteDepthScale("walk-reverse", 1, 9, 0.1)).toBe(0.4);
+    expect(resolveMatrixActivityRouteDepthScale("tunnel", 0.37, 1.2, 1.3, 0.37)).toBe(0.4);
+  });
+
+  it("flares depth routes and packets while preserving Flat's exact single stroke", () => {
+    const scene = createAtmosphereScene("matrix", 400, 240, createSeededRandom(712), 1, 0);
+    const from = scene.particles[0]!;
+    const to = scene.particles[1]!;
+    from.x = 60;
+    from.y = 0;
+    to.x = 340;
+    to.y = scene.height;
+    const state = createMatrixActivityAnimationState();
+    state.links.push({
+      fromAnchorIndex: 0,
+      toAnchorIndex: 1,
+      operationAnchorIndex: 1,
+      category: "build",
+      intensity: 1,
+      linePulse: 1,
+      colorHue: 42,
+      packetProgress: 0.91,
+    });
+    state.linkCount = 1;
+    state.reducedMotion = true;
+
+    const flat = createRecordingContext();
+    drawMatrixActivityAnimation(
+      flat.context,
+      scene,
+      state,
+      0.8,
+      "random",
+      UNIFORM_MATRIX_FRAME,
+      "flat",
+    );
+    const flatStrokes = flat.draws.filter((draw) => draw.kind === "stroke");
+    expect(flatStrokes).toHaveLength(1);
+    expect(flatStrokes[0]!.lineWidth).toBe(1.5);
+
+    const walk = createRecordingContext();
+    drawMatrixActivityAnimation(
+      walk.context,
+      scene,
+      state,
+      0.8,
+      "random",
+      UNIFORM_MATRIX_FRAME,
+      "walk-forward",
+    );
+    const walkStrokes = walk.draws.filter((draw) => draw.kind === "stroke");
+    expect(walkStrokes).toHaveLength(MATRIX_ACTIVITY_DEPTH_ROUTE_SEGMENTS);
+    expect(walkStrokes[0]!.lineWidth).toBeLessThan(walkStrokes.at(-1)!.lineWidth);
+    expect(
+      walkStrokes.every(
+        (draw) => draw.lineWidth > 0 && draw.lineWidth <= MAX_MATRIX_ACTIVITY_DEPTH_LINE_WIDTH,
+      ),
+    ).toBe(true);
+
+    const reverseWalk = createRecordingContext();
+    drawMatrixActivityAnimation(
+      reverseWalk.context,
+      scene,
+      state,
+      0.8,
+      "random",
+      UNIFORM_MATRIX_FRAME,
+      "walk-reverse",
+    );
+    const reverseWalkStrokes = reverseWalk.draws.filter((draw) => draw.kind === "stroke");
+    expect(reverseWalkStrokes).toHaveLength(MATRIX_ACTIVITY_DEPTH_ROUTE_SEGMENTS);
+    expect(reverseWalkStrokes[0]!.lineWidth).toBeGreaterThan(reverseWalkStrokes.at(-1)!.lineWidth);
+
+    state.reducedMotion = false;
+    const movingWalk = createRecordingContext();
+    drawMatrixActivityAnimation(
+      movingWalk.context,
+      scene,
+      state,
+      0.8,
+      "random",
+      UNIFORM_MATRIX_FRAME,
+      "walk-forward",
+    );
+    expect(movingWalk.arcRadii).toHaveLength(MATRIX_ACTIVITY_PACKET_COUNT);
+    expect(
+      movingWalk.arcRadii.every(
+        (radius) => radius > 0 && radius <= MAX_MATRIX_ACTIVITY_DEPTH_PACKET_RADIUS,
+      ),
+    ).toBe(true);
+  });
+
+  it("renders a Warp route narrowest around its center plane", () => {
+    const scene = createAtmosphereScene("matrix", 400, 240, createSeededRandom(991), 1, 0);
+    const from = scene.particles[0]!;
+    const to = scene.particles[1]!;
+    from.x = 40;
+    from.y = 0;
+    to.x = 360;
+    to.y = scene.height;
+    const state = createMatrixActivityAnimationState();
+    state.links.push({
+      fromAnchorIndex: 0,
+      toAnchorIndex: 1,
+      operationAnchorIndex: 1,
+      category: "network",
+      intensity: 1,
+      linePulse: 1,
+      colorHue: 184,
+      packetProgress: 0,
+    });
+    state.linkCount = 1;
+    state.reducedMotion = true;
+
+    const recording = createRecordingContext();
+    drawMatrixActivityAnimation(
+      recording.context,
+      scene,
+      state,
+      0.8,
+      "random",
+      UNIFORM_MATRIX_FRAME,
+      "tunnel",
+    );
+    const widths = recording.draws
+      .filter((draw) => draw.kind === "stroke")
+      .map((draw) => draw.lineWidth);
+    expect(widths).toHaveLength(MATRIX_ACTIVITY_DEPTH_ROUTE_SEGMENTS);
+    const narrowest = Math.min(...widths);
+    expect(narrowest).toBeLessThan(widths[0]!);
+    expect(narrowest).toBeLessThan(widths.at(-1)!);
   });
 
   it("staggers packets distinctly and preserves a full trail across the cyclic route boundary", () => {

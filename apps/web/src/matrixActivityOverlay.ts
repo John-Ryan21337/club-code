@@ -49,6 +49,13 @@ export const MATRIX_ACTIVITY_LINK_PULSE_MS = 180;
 /** Circular lettering is intentionally limited because Canvas text is rendered one glyph at a time. */
 export const MAX_MATRIX_ACTIVITY_TELEMETRY_RINGS = 6;
 export const MAX_MATRIX_ACTIVITY_TELEMETRY_GLYPHS = 28;
+/** Fixed subdivision keeps tapered depth routes smooth without unbounded per-frame strokes. */
+export const MATRIX_ACTIVITY_DEPTH_ROUTE_SEGMENTS = 8;
+export const MIN_MATRIX_ACTIVITY_DEPTH_SCALE = 0.4;
+export const MAX_MATRIX_ACTIVITY_DEPTH_SCALE = 4;
+export const MIN_MATRIX_ACTIVITY_DEPTH_LINE_WIDTH = 0.5;
+export const MAX_MATRIX_ACTIVITY_DEPTH_LINE_WIDTH = 8;
+export const MAX_MATRIX_ACTIVITY_DEPTH_PACKET_RADIUS = 6;
 const MAX_ACTIVITY_RELATIONS = 4;
 const MAX_FUTURE_CLOCK_SKEW_MS = 250;
 const SAFE_RELATION_VALUE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/u;
@@ -143,6 +150,11 @@ export interface MatrixActivityAnimationState {
 export interface MatrixHexPoint {
   readonly x: number;
   readonly y: number;
+}
+
+interface MutableMatrixHexPoint {
+  x: number;
+  y: number;
 }
 
 export interface MatrixHexRoute {
@@ -1195,17 +1207,40 @@ export function createMatrixTunnelRoute(
   return { points, segmentLengths, totalLength };
 }
 
-export function matrixHexRoutePointAt(
+/**
+ * Resolve into caller-owned storage. Tapered routes sample this helper many
+ * times per frame, so allocating a fresh point for every subdivision would
+ * create avoidable renderer GC pressure at the bounded 12-link maximum.
+ */
+function resolveMatrixHexRoutePointInPlace(
+  output: MutableMatrixHexPoint,
   route: MatrixHexRoute,
   requestedProgress: number,
-): MatrixHexPoint {
-  if (route.points.length === 0) return { x: 0, y: 0 };
-  if (route.totalLength <= 0) return route.points[0]!;
+): void {
+  if (route.points.length === 0) {
+    output.x = 0;
+    output.y = 0;
+    return;
+  }
+  if (route.totalLength <= 0) {
+    output.x = route.points[0]!.x;
+    output.y = route.points[0]!.y;
+    return;
+  }
   const progress = Number.isFinite(requestedProgress)
     ? Math.min(1, Math.max(0, requestedProgress))
     : 0;
-  if (progress === 0) return route.points[0]!;
-  if (progress === 1) return route.points.at(-1)!;
+  if (progress === 0) {
+    output.x = route.points[0]!.x;
+    output.y = route.points[0]!.y;
+    return;
+  }
+  if (progress === 1) {
+    const last = route.points.at(-1)!;
+    output.x = last.x;
+    output.y = last.y;
+    return;
+  }
   let remaining = route.totalLength * progress;
   for (let index = 0; index < route.segmentLengths.length; index += 1) {
     const length = route.segmentLengths[index]!;
@@ -1213,14 +1248,24 @@ export function matrixHexRoutePointAt(
     const to = route.points[index + 1]!;
     if (remaining <= length || index === route.segmentLengths.length - 1) {
       const ratio = length <= 0 ? 0 : Math.min(1, remaining / length);
-      return {
-        x: from.x + (to.x - from.x) * ratio,
-        y: from.y + (to.y - from.y) * ratio,
-      };
+      output.x = from.x + (to.x - from.x) * ratio;
+      output.y = from.y + (to.y - from.y) * ratio;
+      return;
     }
     remaining -= length;
   }
-  return route.points.at(-1)!;
+  const last = route.points.at(-1)!;
+  output.x = last.x;
+  output.y = last.y;
+}
+
+export function matrixHexRoutePointAt(
+  route: MatrixHexRoute,
+  requestedProgress: number,
+): MatrixHexPoint {
+  const output: MutableMatrixHexPoint = { x: 0, y: 0 };
+  resolveMatrixHexRoutePointInPlace(output, route, requestedProgress);
+  return output;
 }
 
 function normalizeMatrixActivityCycleProgress(requestedProgress: number): number {
@@ -1313,11 +1358,13 @@ function traceMatrixHexRouteInterval(
   route: MatrixHexRoute,
   startProgress: number,
   endProgress: number,
+  startPoint: MutableMatrixHexPoint,
+  endPoint: MutableMatrixHexPoint,
 ): void {
   const start = Math.min(startProgress, endProgress);
   const end = Math.max(startProgress, endProgress);
-  const startPoint = matrixHexRoutePointAt(route, start);
-  const endPoint = matrixHexRoutePointAt(route, end);
+  resolveMatrixHexRoutePointInPlace(startPoint, route, start);
+  resolveMatrixHexRoutePointInPlace(endPoint, route, end);
   const startDistance = route.totalLength * start;
   const endDistance = route.totalLength * end;
   context.beginPath();
@@ -1331,6 +1378,135 @@ function traceMatrixHexRouteInterval(
     }
   }
   context.lineTo(endPoint.x, endPoint.y);
+}
+
+function clampMatrixActivityDepthScale(scale: number): number {
+  if (!Number.isFinite(scale)) return 1;
+  return Math.min(
+    MAX_MATRIX_ACTIVITY_DEPTH_SCALE,
+    Math.max(MIN_MATRIX_ACTIVITY_DEPTH_SCALE, scale),
+  );
+}
+
+function interpolateMatrixActivityDepthScale(from: number, to: number, progress: number): number {
+  return from + (to - from) * progress;
+}
+
+/**
+ * Resolve the bounded perspective scale at one point along a verified route.
+ * Ordinary depth routes interpolate between their projected endpoints. Warp
+ * routes narrow to the reviewed center-plane scale before flaring back out.
+ */
+export function resolveMatrixActivityRouteDepthScale(
+  motionMode: FallingEffectMatrixMotionMode,
+  requestedProgress: number,
+  fromScale: number,
+  toScale: number,
+  requestedTunnelCenterProgress = 0.5,
+): number {
+  if (motionMode === "flat") return 1;
+  const progress = Number.isFinite(requestedProgress)
+    ? Math.min(1, Math.max(0, requestedProgress))
+    : 0;
+  const safeFromScale = clampMatrixActivityDepthScale(fromScale);
+  const safeToScale = clampMatrixActivityDepthScale(toScale);
+  if (motionMode !== "tunnel") {
+    if (progress === 0) return safeFromScale;
+    if (progress === 1) return safeToScale;
+    return interpolateMatrixActivityDepthScale(safeFromScale, safeToScale, progress);
+  }
+
+  const centerProgress = Number.isFinite(requestedTunnelCenterProgress)
+    ? Math.min(1, Math.max(0, requestedTunnelCenterProgress))
+    : 0.5;
+  if (progress === centerProgress) return MIN_MATRIX_ACTIVITY_DEPTH_SCALE;
+  if (progress === 0) return safeFromScale;
+  if (progress === 1) return safeToScale;
+  if (centerProgress <= 0) {
+    return interpolateMatrixActivityDepthScale(
+      MIN_MATRIX_ACTIVITY_DEPTH_SCALE,
+      safeToScale,
+      progress,
+    );
+  }
+  if (centerProgress >= 1) {
+    return interpolateMatrixActivityDepthScale(
+      safeFromScale,
+      MIN_MATRIX_ACTIVITY_DEPTH_SCALE,
+      progress,
+    );
+  }
+  return progress <= centerProgress
+    ? interpolateMatrixActivityDepthScale(
+        safeFromScale,
+        MIN_MATRIX_ACTIVITY_DEPTH_SCALE,
+        progress / centerProgress,
+      )
+    : interpolateMatrixActivityDepthScale(
+        MIN_MATRIX_ACTIVITY_DEPTH_SCALE,
+        safeToScale,
+        (progress - centerProgress) / (1 - centerProgress),
+      );
+}
+
+function resolveMatrixActivityDepthLineWidth(baseWidth: number, depthScale: number): number {
+  return Math.min(
+    MAX_MATRIX_ACTIVITY_DEPTH_LINE_WIDTH,
+    Math.max(MIN_MATRIX_ACTIVITY_DEPTH_LINE_WIDTH, baseWidth * depthScale),
+  );
+}
+
+function strokeMatrixActivityDepthRoute(
+  context: CanvasRenderingContext2D,
+  route: MatrixHexRoute,
+  baseWidth: number,
+  motionMode: FallingEffectMatrixMotionMode,
+  fromScale: number,
+  toScale: number,
+  tunnelCenterProgress: number,
+  intervalStartPoint: MutableMatrixHexPoint,
+  intervalEndPoint: MutableMatrixHexPoint,
+): void {
+  if (motionMode === "flat" || route.totalLength <= 0) {
+    context.lineWidth =
+      motionMode === "flat"
+        ? baseWidth
+        : resolveMatrixActivityDepthLineWidth(
+            baseWidth,
+            resolveMatrixActivityRouteDepthScale(
+              motionMode,
+              0.5,
+              fromScale,
+              toScale,
+              tunnelCenterProgress,
+            ),
+          );
+    traceMatrixHexRoute(context, route);
+    context.stroke();
+    return;
+  }
+
+  for (let index = 0; index < MATRIX_ACTIVITY_DEPTH_ROUTE_SEGMENTS; index += 1) {
+    const startProgress = index / MATRIX_ACTIVITY_DEPTH_ROUTE_SEGMENTS;
+    const endProgress = (index + 1) / MATRIX_ACTIVITY_DEPTH_ROUTE_SEGMENTS;
+    const depthScale = resolveMatrixActivityRouteDepthScale(
+      motionMode,
+      (startProgress + endProgress) * 0.5,
+      fromScale,
+      toScale,
+      tunnelCenterProgress,
+    );
+    context.lineWidth = resolveMatrixActivityDepthLineWidth(baseWidth, depthScale);
+    traceMatrixHexRouteInterval(
+      context,
+      route,
+      startProgress,
+      endProgress,
+      intervalStartPoint,
+      intervalEndPoint,
+    );
+    context.stroke();
+  }
 }
 
 function randomMatrixActivityColor(hue: number): string {
@@ -1369,6 +1545,7 @@ function drawMatrixActivityPulse(
   safeOpacity: number,
   intensity: number,
 ): void {
+  const boundedScale = clampMatrixActivityDepthScale(projectedPoint.scale);
   context.strokeStyle = paint;
   context.globalAlpha = safeOpacity * intensity;
   context.lineWidth = 0.75 + intensity;
@@ -1376,21 +1553,21 @@ function drawMatrixActivityPulse(
   context.arc(
     projectedPoint.x,
     projectedPoint.y,
-    particle.size * projectedPoint.scale * (0.75 + (1 - intensity) * 0.9),
+    particle.size * boundedScale * (0.75 + (1 - intensity) * 0.9),
     0,
     Math.PI * 2,
   );
   context.stroke();
   context.fillStyle = paint;
   context.globalAlpha = safeOpacity * intensity;
-  context.font = `${Math.min(15, Math.max(10, particle.size * projectedPoint.scale))}px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace`;
+  context.font = `${Math.min(15, Math.max(10, particle.size * boundedScale))}px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace`;
   context.textAlign = "center";
   context.textBaseline = "middle";
   context.fillText(
     resolveMatrixActivityTerm(category, semanticRole, particle.matrixLanguage),
     projectedPoint.x,
     projectedPoint.y,
-    144 * projectedPoint.scale,
+    144 * boundedScale,
   );
 }
 
@@ -1445,7 +1622,9 @@ function drawMatrixActivityTelemetryRing(
   const glyphCount = Math.min(MAX_MATRIX_ACTIVITY_TELEMETRY_GLYPHS, label.length);
   if (glyphCount === 0) return;
 
-  const radius = Math.min(30, Math.max(20, particle.size * 1.65)) * projectedPoint.scale;
+  const radius =
+    Math.min(30, Math.max(20, particle.size * 1.65)) *
+    clampMatrixActivityDepthScale(projectedPoint.scale);
   const glyphAngle = (Math.PI * 2) / glyphCount;
   context.save();
   context.translate(projectedPoint.x, projectedPoint.y);
@@ -1495,6 +1674,15 @@ export function drawMatrixActivityAnimation(
   context.lineCap = "round";
   const projectedFrom: AtmosphereProjectedPoint = { x: 0, y: 0, scale: 1 };
   const projectedTo: AtmosphereProjectedPoint = { x: 0, y: 0, scale: 1 };
+  const fromPoint: MutableMatrixHexPoint = { x: 0, y: 0 };
+  const toPoint: MutableMatrixHexPoint = { x: 0, y: 0 };
+  const intervalStartPoint: MutableMatrixHexPoint = { x: 0, y: 0 };
+  const intervalEndPoint: MutableMatrixHexPoint = { x: 0, y: 0 };
+  const packetPoint: MutableMatrixHexPoint = { x: 0, y: 0 };
+  const tunnelCenter: MatrixHexPoint = {
+    x: scene.width * 0.5,
+    y: scene.height * 0.5,
+  };
   const packetCount = resolveMatrixActivityPacketCount(renderedLinkCount);
   for (let index = 0; index < renderedLinkCount; index += 1) {
     const link = state.links[index]!;
@@ -1503,21 +1691,25 @@ export function drawMatrixActivityAnimation(
     if (!from || !to) continue;
     resolveAtmosphereProjectedPointInPlace(projectedFrom, scene, from, from.x, from.y, motionMode);
     resolveAtmosphereProjectedPointInPlace(projectedTo, scene, to, to.x, to.y, motionMode);
-    const fromPoint = {
-      x: Math.min(scene.width, Math.max(0, projectedFrom.x)),
-      y: Math.min(scene.height, Math.max(0, projectedFrom.y)),
-    };
-    const toPoint = {
-      x: Math.min(scene.width, Math.max(0, projectedTo.x)),
-      y: Math.min(scene.height, Math.max(0, projectedTo.y)),
-    };
+    fromPoint.x = Math.min(scene.width, Math.max(0, projectedFrom.x));
+    fromPoint.y = Math.min(scene.height, Math.max(0, projectedFrom.y));
+    toPoint.x = Math.min(scene.width, Math.max(0, projectedTo.x));
+    toPoint.y = Math.min(scene.height, Math.max(0, projectedTo.y));
     const route =
       motionMode === "tunnel"
-        ? createMatrixTunnelRoute(fromPoint, toPoint, {
-            x: scene.width * 0.5,
-            y: scene.height * 0.5,
-          })
+        ? createMatrixTunnelRoute(fromPoint, toPoint, tunnelCenter)
         : createMatrixHexRoute(fromPoint, toPoint);
+    const tunnelCenterProgress =
+      motionMode === "tunnel" && route.totalLength > 0
+        ? Math.min(
+            1,
+            Math.max(
+              0,
+              Math.hypot(tunnelCenter.x - fromPoint.x, tunnelCenter.y - fromPoint.y) /
+                route.totalLength,
+            ),
+          )
+        : 0.5;
     const linkPaint = resolveMatrixActivityLinkPaint(
       context,
       colorMode,
@@ -1530,9 +1722,17 @@ export function drawMatrixActivityAnimation(
     );
     context.strokeStyle = linkPaint;
     context.globalAlpha = safeOpacity * link.intensity;
-    context.lineWidth = 0.75 + link.intensity * (0.35 + link.linePulse * 0.4);
-    traceMatrixHexRoute(context, route);
-    context.stroke();
+    strokeMatrixActivityDepthRoute(
+      context,
+      route,
+      0.75 + link.intensity * (0.35 + link.linePulse * 0.4),
+      motionMode,
+      projectedFrom.scale,
+      projectedTo.scale,
+      tunnelCenterProgress,
+      intervalStartPoint,
+      intervalEndPoint,
+    );
 
     if (!state.reducedMotion) {
       // These repeated packets are decorative replay of one verified link,
@@ -1543,18 +1743,51 @@ export function drawMatrixActivityAnimation(
           packetIndex,
           packetCount,
         );
-        const packet = matrixHexRoutePointAt(route, packetProgress);
+        resolveMatrixHexRoutePointInPlace(packetPoint, route, packetProgress);
         context.strokeStyle = linkPaint;
         context.globalAlpha = safeOpacity * link.intensity;
-        context.lineWidth = 1.25 + link.linePulse;
         for (const interval of resolveMatrixActivityTrailIntervals(packetProgress)) {
-          traceMatrixHexRouteInterval(context, route, interval.startProgress, interval.endProgress);
+          const intervalDepthScale = resolveMatrixActivityRouteDepthScale(
+            motionMode,
+            (interval.startProgress + interval.endProgress) * 0.5,
+            projectedFrom.scale,
+            projectedTo.scale,
+            tunnelCenterProgress,
+          );
+          context.lineWidth = resolveMatrixActivityDepthLineWidth(
+            1.25 + link.linePulse,
+            intervalDepthScale,
+          );
+          traceMatrixHexRouteInterval(
+            context,
+            route,
+            interval.startProgress,
+            interval.endProgress,
+            intervalStartPoint,
+            intervalEndPoint,
+          );
           context.stroke();
         }
         context.fillStyle = linkPaint;
         context.globalAlpha = safeOpacity * link.intensity;
+        const packetDepthScale = resolveMatrixActivityRouteDepthScale(
+          motionMode,
+          packetProgress,
+          projectedFrom.scale,
+          projectedTo.scale,
+          tunnelCenterProgress,
+        );
         context.beginPath();
-        context.arc(packet.x, packet.y, 1 + link.intensity * 1.4, 0, Math.PI * 2);
+        context.arc(
+          packetPoint.x,
+          packetPoint.y,
+          Math.min(
+            MAX_MATRIX_ACTIVITY_DEPTH_PACKET_RADIUS,
+            (1 + link.intensity * 1.4) * packetDepthScale,
+          ),
+          0,
+          Math.PI * 2,
+        );
         context.fill();
       }
     }

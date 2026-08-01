@@ -291,6 +291,8 @@ export const FallingEffectMatrixMotionMode = Schema.Literals([
   "forward",
   "reverse",
   "tunnel",
+  "walk-forward",
+  "walk-reverse",
 ]);
 export type FallingEffectMatrixMotionMode = typeof FallingEffectMatrixMotionMode.Type;
 export const DEFAULT_FALLING_EFFECT_MATRIX_MOTION_MODE: FallingEffectMatrixMotionMode = "flat";
