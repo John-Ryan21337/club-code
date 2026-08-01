@@ -468,6 +468,193 @@ it.effect("dispatches only the persisted exact-thread prompt and rejects duplica
   }),
 );
 
+it.effect("invalidates dispatch when provider text or activity continues after completion", () =>
+  Effect.gen(function* () {
+    yield* TestClock.setTime(Date.parse(SERVER_NOW));
+    const dispatchCommand = {
+      type: "thread.auto-nudge.dispatch",
+      commandId: CommandId.make("command-post-completion-activity"),
+      threadId: THREAD_A,
+      expectedAuthorityRevision: 5,
+      completedTurnId: TURN_COMPLETED,
+      dispatchSource: "foreground",
+      messageId: MessageId.make("message-post-completion-activity"),
+      createdAt: SERVER_NOW,
+    } satisfies Extract<OrchestrationCommand, { type: "thread.auto-nudge.dispatch" }>;
+    const baseThread = makeThread({
+      id: THREAD_A,
+      latestTurnId: TURN_COMPLETED,
+      autoNudge: enabledConfig(),
+    });
+
+    const streamingFailure = yield* Effect.flip(
+      decideOrchestrationCommand({
+        readModel: makeReadModel([
+          {
+            ...baseThread,
+            messages: [
+              {
+                id: MessageId.make("message-late-stream"),
+                role: "assistant",
+                text: "Provider output is still arriving",
+                turnId: TURN_COMPLETED,
+                streaming: true,
+                createdAt: SERVER_NOW,
+                updatedAt: "2026-07-28T12:00:01.000Z",
+              },
+            ],
+          },
+        ]),
+        command: dispatchCommand,
+      }),
+    );
+    assert.match(streamingFailure.detail, /text or activity continued/i);
+
+    const replacementFailure = yield* Effect.flip(
+      decideOrchestrationCommand({
+        readModel: makeReadModel([
+          {
+            ...baseThread,
+            messages: [
+              {
+                id: MessageId.make("message-late-replacement"),
+                role: "assistant",
+                text: "Provider replaced its final response",
+                turnId: TURN_COMPLETED,
+                streaming: false,
+                createdAt: SERVER_NOW,
+                updatedAt: "2026-07-28T12:00:01.000Z",
+              },
+            ],
+          },
+        ]),
+        command: {
+          ...dispatchCommand,
+          commandId: CommandId.make("command-late-replacement"),
+          messageId: MessageId.make("message-dispatch-after-replacement"),
+        },
+      }),
+    );
+    assert.match(replacementFailure.detail, /text or activity continued/i);
+
+    const activityFailure = yield* Effect.flip(
+      decideOrchestrationCommand({
+        readModel: makeReadModel([
+          {
+            ...baseThread,
+            activities: [
+              {
+                id: EventId.make("activity-late-tool"),
+                tone: "tool",
+                kind: "tool.updated",
+                summary: "Command is still producing output",
+                payload: {},
+                turnId: TURN_COMPLETED,
+                createdAt: "2026-07-28T12:00:01.000Z",
+              },
+            ],
+          },
+        ]),
+        command: {
+          ...dispatchCommand,
+          commandId: CommandId.make("command-late-activity"),
+          messageId: MessageId.make("message-dispatch-after-activity"),
+        },
+      }),
+    );
+    assert.match(activityFailure.detail, /text or activity continued/i);
+
+    const simultaneousFailure = yield* Effect.flip(
+      decideOrchestrationCommand({
+        readModel: makeReadModel([
+          {
+            ...baseThread,
+            activities: [
+              {
+                id: EventId.make("activity-simultaneous-tool"),
+                tone: "tool",
+                kind: "tool.updated",
+                summary: "Command activity shares the completion timestamp",
+                payload: {},
+                turnId: TURN_COMPLETED,
+                createdAt: SERVER_NOW,
+              },
+            ],
+          },
+        ]),
+        command: {
+          ...dispatchCommand,
+          commandId: CommandId.make("command-simultaneous-activity"),
+          messageId: MessageId.make("message-dispatch-after-simultaneous-activity"),
+        },
+      }),
+    );
+    assert.match(simultaneousFailure.detail, /text or activity continued/i);
+
+    const unaffectedDispatch = yield* decideOrchestrationCommand({
+      readModel: makeReadModel([
+        {
+          ...baseThread,
+          messages: [
+            {
+              id: MessageId.make("message-settled-before-completion"),
+              role: "assistant",
+              text: "Settled provider response",
+              turnId: TURN_COMPLETED,
+              // Some lifecycle paths close the provider turn before the
+              // lightweight command projection observes the matching message
+              // replacement. The terminal boundary still settles an older
+              // streaming row; only text at/after that boundary invalidates
+              // Auto Nudge.
+              streaming: true,
+              createdAt: "2026-07-28T11:59:58.000Z",
+              updatedAt: "2026-07-28T11:59:59.000Z",
+            },
+          ],
+          activities: [
+            {
+              id: EventId.make("activity-completed-at-boundary"),
+              tone: "tool",
+              kind: "tool.completed",
+              summary: "Command completed",
+              payload: {},
+              turnId: TURN_COMPLETED,
+              createdAt: SERVER_NOW,
+            },
+            {
+              id: EventId.make("activity-late-context-window"),
+              tone: "info",
+              kind: "context-window.updated",
+              summary: "Context window updated",
+              payload: {},
+              turnId: TURN_COMPLETED,
+              createdAt: "2026-07-28T12:00:01.000Z",
+            },
+            {
+              id: EventId.make("activity-late-checkpoint"),
+              tone: "info",
+              kind: "checkpoint.captured",
+              summary: "Checkpoint captured",
+              payload: {},
+              turnId: TURN_COMPLETED,
+              createdAt: "2026-07-28T12:00:02.000Z",
+            },
+          ],
+        },
+      ]),
+      command: {
+        ...dispatchCommand,
+        commandId: CommandId.make("command-settled-activity"),
+        messageId: MessageId.make("message-settled-activity"),
+      },
+    });
+    assert.deepEqual(
+      asPlannedEvents(unaffectedDispatch).map((event) => event.type),
+      ["thread.auto-nudge-dispatched", "thread.message-sent", "thread.turn-start-requested"],
+    );
+  }),
+);
+
 it.effect("rejects stale, baseline, non-current, unsettled, and inactive dispatch authority", () =>
   Effect.gen(function* () {
     yield* TestClock.setTime(Date.parse(SERVER_NOW));
