@@ -4,9 +4,9 @@ This guide is for Cafe Code maintainers who want to review or adopt Club Code ch
 
 ## Published PR inventory
 
-The repository has published 34 pull requests:
+The repository has published 35 pull requests:
 
-- twenty-six open implementation PRs: [#2](https://github.com/John-Ryan21337/club-code/pull/2), [#3](https://github.com/John-Ryan21337/club-code/pull/3), [#4](https://github.com/John-Ryan21337/club-code/pull/4), [#7](https://github.com/John-Ryan21337/club-code/pull/7), [#8](https://github.com/John-Ryan21337/club-code/pull/8), [#13](https://github.com/John-Ryan21337/club-code/pull/13), [#14](https://github.com/John-Ryan21337/club-code/pull/14), [#15](https://github.com/John-Ryan21337/club-code/pull/15), [#17](https://github.com/John-Ryan21337/club-code/pull/17), [#18](https://github.com/John-Ryan21337/club-code/pull/18), [#19](https://github.com/John-Ryan21337/club-code/pull/19), [#20](https://github.com/John-Ryan21337/club-code/pull/20), [#21](https://github.com/John-Ryan21337/club-code/pull/21), [#22](https://github.com/John-Ryan21337/club-code/pull/22), [#23](https://github.com/John-Ryan21337/club-code/pull/23), [#24](https://github.com/John-Ryan21337/club-code/pull/24), [#25](https://github.com/John-Ryan21337/club-code/pull/25), [#26](https://github.com/John-Ryan21337/club-code/pull/26), [#27](https://github.com/John-Ryan21337/club-code/pull/27), [#28](https://github.com/John-Ryan21337/club-code/pull/28), [#29](https://github.com/John-Ryan21337/club-code/pull/29), [#30](https://github.com/John-Ryan21337/club-code/pull/30), [#31](https://github.com/John-Ryan21337/club-code/pull/31), [#32](https://github.com/John-Ryan21337/club-code/pull/32), [#33](https://github.com/John-Ryan21337/club-code/pull/33), and [#34](https://github.com/John-Ryan21337/club-code/pull/34);
+- twenty-seven open implementation PRs: [#2](https://github.com/John-Ryan21337/club-code/pull/2), [#3](https://github.com/John-Ryan21337/club-code/pull/3), [#4](https://github.com/John-Ryan21337/club-code/pull/4), [#7](https://github.com/John-Ryan21337/club-code/pull/7), [#8](https://github.com/John-Ryan21337/club-code/pull/8), [#13](https://github.com/John-Ryan21337/club-code/pull/13), [#14](https://github.com/John-Ryan21337/club-code/pull/14), [#15](https://github.com/John-Ryan21337/club-code/pull/15), [#17](https://github.com/John-Ryan21337/club-code/pull/17), [#18](https://github.com/John-Ryan21337/club-code/pull/18), [#19](https://github.com/John-Ryan21337/club-code/pull/19), [#20](https://github.com/John-Ryan21337/club-code/pull/20), [#21](https://github.com/John-Ryan21337/club-code/pull/21), [#22](https://github.com/John-Ryan21337/club-code/pull/22), [#23](https://github.com/John-Ryan21337/club-code/pull/23), [#24](https://github.com/John-Ryan21337/club-code/pull/24), [#25](https://github.com/John-Ryan21337/club-code/pull/25), [#26](https://github.com/John-Ryan21337/club-code/pull/26), [#27](https://github.com/John-Ryan21337/club-code/pull/27), [#28](https://github.com/John-Ryan21337/club-code/pull/28), [#29](https://github.com/John-Ryan21337/club-code/pull/29), [#30](https://github.com/John-Ryan21337/club-code/pull/30), [#31](https://github.com/John-Ryan21337/club-code/pull/31), [#32](https://github.com/John-Ryan21337/club-code/pull/32), [#33](https://github.com/John-Ryan21337/club-code/pull/33), [#34](https://github.com/John-Ryan21337/club-code/pull/34), and [#35](https://github.com/John-Ryan21337/club-code/pull/35);
 - this open documentation PR, [#16](https://github.com/John-Ryan21337/club-code/pull/16), which adds this adoption guide directly against `main`;
 - four merged documentation PRs: #9 through #12;
 - two closed, archived pacing PRs: #5 and #6; and
@@ -30,7 +30,7 @@ After #7, choose one of these paths:
 - **Telemetry paths:** `#23 -> #33` is the narrow truthful CPU/RAM foundation plus UI. `#8 -> #15` is the overlapping omnibus-release follow-up. Neither is a cowork dependency; do not combine equivalent Project Resources UI changes from both paths.
 - **Matrix GPU path:** `#7 -> #18`; #18 is independent of cowork and extracts WebGL2 glyph rendering plus Walk parity without Auto Nudge, provider, or server files.
 - **Auto Nudge safety path:** `#7 -> #19`; #19 reconstructs dependency-complete server authority, completion-only dispatch, active-output invalidation, and restart fail-closed behavior without Idle Guard or unrelated #8 features.
-- **Settings profiles path:** `#7 -> #22`; #22 is a five-file web-only extraction that excludes credentials, project paths, exact-thread Auto Nudge state, media assets, native controls, telemetry, and #15.
+- **Settings profiles path:** `#7 -> #22 -> #35`; #22 is the safe local named-profile foundation, while #35 adds audited inspect-before-load preview and cross-window-safe deletion without broadening the allowlist. Both exclude credentials, project paths, exact-thread Auto Nudge state, media assets, native controls, telemetry, and #15.
 - **Host telemetry foundation:** `#7 -> #23`; #23 independently adds measured aggregate CPU and process-effective RAM contracts/server sampling without temperatures, GPU, project-volume probes, endpoints, polling, or graph UI.
 
 Do not combine the cowork commits from #8 with #13, #14, #17, #20, or #21.
@@ -59,6 +59,7 @@ Do not combine the cowork commits from #8 with #13, #14, #17, #20, or #21.
 | #31 | Audited fenced SQLite managed snapshot and restore                                      | `feature/cowork-managed-replica`                                           | `feature/cowork-sqlite-managed-snapshot` at `d1b8c4ed3e9c3a338945b9559295e961cf6364f2`       | open, audited, clean; requires #26                                |
 | #32 | Audited injected shared operator chat and prompt UI                                     | `feature/cowork-chat-context-after-devices`                                | `feature/cowork-shared-operator-chat-ui` at `03ccea08c39d173770756f4150bd9cf68c1a8111`       | open, audited, clean; web-only child of #21                       |
 | #22 | Audited local named Settings profiles                                                   | `agent/local-priority-integration`                                         | `feature/settings-profiles` at `8e4b7245b37905622b7bf3207e304dbbeb05537a`                    | open, audited, clean; separate from cowork and telemetry          |
+| #35 | Audited safe Settings profile preview and deletion                                      | `feature/settings-profiles`                                                | `feature/settings-profiles-management` at `1d8ee249ddc91bdadad7ac5e66c322f9436f3b72`         | open, audited, clean; requires #22                                |
 | #23 | Audited truthful host CPU and process-effective RAM sampler                             | `agent/local-priority-integration`                                         | `feature/host-system-telemetry` at `b2d70cbc86d315107de1b42e3519ae89eb8012cb`                | open, audited, clean; no temperatures, GPU, endpoint, or graph UI |
 | #33 | Audited truthful Project Resources CPU/RAM UI                                           | `feature/host-system-telemetry`                                            | `feature/project-resources-truthful-telemetry` at `af4921eceb2e1d42b7a10dc436344aa99a5361f6` | open, audited, clean; requires #23                                |
 | #18 | WebGL2 Matrix glyph rendering and Walk parity                                           | `agent/local-priority-integration`                                         | `agent/matrix-webgl-gpu-pr` at `fa2be7e92c744440f6bf47f20174d85a4041a21d`                    | open, audited, clean; separate from the cowork ladder             |
@@ -66,7 +67,7 @@ Do not combine the cowork commits from #8 with #13, #14, #17, #20, or #21.
 | #8  | Aggregate current local release                                                         | `agent/local-priority-integration`                                         | `release/local-20260728` at `457be1418541bfb0ab08ae5bf9aac8a729ead23f`                       | open draft; GitHub reported `CONFLICTING/DIRTY` at this snapshot  |
 | #15 | Hide stale unavailable Project Resources sensor graphs                                  | `release/local-20260728`                                                   | `work/profiles-telemetry-safety` at `9270cc56ffd05132f3ca02bce1582860850c8f0a`               | open, ready, clean; separate from the cowork ladder               |
 
-PR #7 was restacked on the current #4 head with a normal non-force merge whose tree is identical to its prior head; GitHub reported it `MERGEABLE/CLEAN` after focused and full gates passed. Re-check rather than treating that observation as immutable if any base moves again. The same rule applies to #8 if the omnibus path is deliberately chosen. PRs #13, #14, #17, #20, #21, #24, #25, #26, #27, #28, #29, #30, #31, #32, #33, and #34 were also `MERGEABLE/CLEAN` after the #7 restack.
+PR #7 was restacked on the current #4 head with a normal non-force merge whose tree is identical to its prior head; GitHub reported it `MERGEABLE/CLEAN` after focused and full gates passed. Re-check rather than treating that observation as immutable if any base moves again. The same rule applies to #8 if the omnibus path is deliberately chosen. PRs #13, #14, #17, #20, #21, #24, #25, #26, #27, #28, #29, #30, #31, #32, #33, #34, and #35 were also `MERGEABLE/CLEAN` after the #7 restack.
 
 ## Recommended merge order
 
@@ -153,6 +154,9 @@ git cherry-pick 44030cee af4921ec
 
 # PR #34: injected project presence roster plus independent audit. Apply after #28.
 git cherry-pick 0fae9951 6e4abd05
+
+# PR #35: safe Settings profile preview/deletion plus independent audit. Apply after #22.
+git cherry-pick bdea0c89 1d8ee249
 ```
 
 Do not cherry-pick `8fb978ac` or `92e56252` after PR #2: both are branch-local copies of the same completion-event-only Auto Nudge cleanup already present as `fde09e8e`. PR #7's published `a24a58f2` restack commit changes ancestry only, so the curated semantic range intentionally ends at `cdb4e156`. Do not cherry-pick PR #13's final merge commit `8ad2ec37`; apply the contiguous cowork series shown above after #7 instead.
@@ -187,6 +191,8 @@ PR #32 is an independent web-only child of #21. It adds an injected shared opera
 
 PR #22 is an independent five-file web child of #7. Its profile allowlist explicitly excludes credentials, provider/network security, private project paths, exact-thread Auto Nudge state, legacy minute fields, media assets, native controls, pacing, telemetry, and PR #15.
 
+PR #35 continues only the #22 local-profile path. It adds sparse allowlist-only inspect-before-load previews for active/inactive profiles, an accessible in-app delete confirmation, and immutable cross-window conflict rechecks under the mutation lock. Preview is read-only; patch-semantic equality prevents needless writes. It adds no opaque JSON import/export and does not broaden #22's security exclusions.
+
 PR #23 is an independent contracts/server child of #7. It reports only measurements available through the bounded Node runtime adapter. CPU/RAM temperatures, GPU, storage temperatures, fans, RGB, project-volume probes, RPC exposure, renderer polling, and graph UI remain deferred and must not be inferred from its unavailable values.
 
 PR #33 is the narrow web/client-runtime child of #23. It strictly decodes, bounds, and normalizes only measured aggregate CPU and process-effective RAM; preserves measured zero; turns unavailable/invalid values into graph gaps; provides true single-flight lifecycle-safe polling through an injected client; and makes Hide unavailable metrics remove unavailable cards. It adds no production endpoint/client wiring and continues to make no temperature, GPU, disk, fan, RGB, or project-volume claim.
@@ -204,11 +210,12 @@ PR #8 is a draft release aggregate, not the recommended Cafe review unit. It con
 - Do not merge #19 and then retain #8's overlapping Auto Nudge authority, migrations, projections, or renderer coordinator changes.
 - Do not infer that #8 completes the user-visible cowork suite. Its own description leaves server-authoritative database admission, engine-specific snapshot adapters, secure replica materialization, network transport, and UI as later work.
 - Do not combine #33 with #8/#15's equivalent Project Resources UI changes; #33 is the narrow path after #23.
+- Do not combine #35 with equivalent profile-management changes from #8; land it only after the narrow #22 foundation.
 - Prefer extracting a narrow, independently gated PR from #8 for each non-cowork feature family that Cafe maintainers want.
 
 ## Validation gates
 
-At this snapshot GitHub reported no configured checks for the newly published PRs through #34. `MERGEABLE/CLEAN` describes branch topology, not test evidence; Cafe maintainers must run the recorded local gates (or equivalent CI) on the exact adopted heads.
+At this snapshot GitHub reported no configured checks for the newly published PRs through #35. `MERGEABLE/CLEAN` describes branch topology, not test evidence; Cafe maintainers must run the recorded local gates (or equivalent CI) on the exact adopted heads.
 
 Run the repository gates after each meaningful stack layer and again at the final exact head:
 
@@ -241,6 +248,7 @@ git diff --check
 - #32: focused model 5/5 and Chromium 7/7, web typecheck, repository format/lint, full typecheck 9/9, full repository tests 9/9 with server 1,670 passed/1 skipped, pagination/idempotent-retry/project-switch/tombstone/privacy/accessibility coverage;
 - #33: client runtime 5/5, UI model 4/4, Chromium 10/10, full typecheck 9/9, full repository tests 9/9 with server 1,604 passed/1 skipped, malformed/stale/future/nonfinite/zero/timeout/StrictMode/project-switch/privacy/hide-setting coverage;
 - #34: focused model 10/10 and Chromium 4/4, focused lint/web typecheck, repository format/lint, full typecheck 9/9 and full repository tests 9/9 twice after repairs with server 1,689 passed/1 skipped, snapshot-before-delta/project-switch/revocation/gap/exact-cleanup/roster-cap/accessibility coverage, plus controlled no-timer/no-network proof;
+- #35: focused profiles 25/25 and Chromium 44/44, repository format/lint, full typecheck 9/9, full repository tests 9/9 with server 1,572 passed/1 skipped, sparse-patch/accessor/prototype/mutable-snapshot/inactive-preview/no-write/delete-cancel/delete-conflict/empty-library accessibility coverage;
 - #22: audited profile units 23/23, Settings Chromium 41/41, full web 1,387/1,387 before final audit, full repository tests, duplicate/prototype/quota/timestamp adversarial coverage, and exhaustive private-field exclusion;
 - #23: audited telemetry 44/44, typecheck 9/9, full repository tests 9/9 with server 1,604 passed/1 skipped and contracts 169 passed, truthful warming/unavailable states, overflow and relational-arithmetic guards, counter-failure and topology-change coverage, and no fabricated sensor measurements;
 - #18: audited Matrix/settings units 133/133, focused Chromium 46/46, full Chromium 281/281, WebGL limits/context/fallback coverage, and full repository tests;
