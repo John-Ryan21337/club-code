@@ -1,6 +1,9 @@
 import type {
+  CollaborationDatabaseAcquireLeaseCommand,
   CollaborationDatabaseBinding,
+  CollaborationDatabaseConfigureCommand,
   CollaborationDatabaseLeaseCommand,
+  CollaborationDatabasePublishHeadCommand,
   CollaborationDatabaseReleaseResult,
   CollaborationDatabaseSnapshot,
   CollaborationDatabaseWriterLease,
@@ -304,6 +307,64 @@ function decodeReceiptResponse(
   return decoded;
 }
 
+function receiptResponseMatchesRequest(
+  operation: Operation,
+  response: unknown,
+  command:
+    | CollaborationDatabaseConfigureCommand
+    | CollaborationDatabaseAcquireLeaseCommand
+    | CollaborationDatabaseLeaseCommand
+    | CollaborationDatabasePublishHeadCommand,
+  principal: Pick<CollaborationPrincipal, "userId" | "deviceId" | "membershipEpoch">,
+): boolean {
+  switch (operation) {
+    case "configure": {
+      const configured = command as CollaborationDatabaseConfigureCommand;
+      const binding = response as CollaborationDatabaseBinding;
+      return (
+        binding.relativePath === configured.relativePath &&
+        binding.engine === configured.engine &&
+        canonicalJson(binding.policy) === canonicalJson(configured.policy) &&
+        binding.headSnapshot === null &&
+        binding.lastFencingToken === 0 &&
+        binding.activeLease === null
+      );
+    }
+    case "acquire": {
+      const lease = response as CollaborationDatabaseWriterLease;
+      return (
+        lease.holderUserId === principal.userId &&
+        lease.holderDeviceId === principal.deviceId &&
+        lease.membershipEpoch === principal.membershipEpoch
+      );
+    }
+    case "renew": {
+      const renewed = response as CollaborationDatabaseWriterLease;
+      const leaseCommand = command as CollaborationDatabaseLeaseCommand;
+      return (
+        renewed.leaseId === leaseCommand.leaseId &&
+        renewed.fencingToken === leaseCommand.fencingToken &&
+        renewed.holderUserId === principal.userId &&
+        renewed.holderDeviceId === principal.deviceId &&
+        renewed.membershipEpoch === principal.membershipEpoch
+      );
+    }
+    case "release": {
+      const released = response as CollaborationDatabaseReleaseResult;
+      const leaseCommand = command as CollaborationDatabaseLeaseCommand;
+      return (
+        released.leaseId === leaseCommand.leaseId &&
+        released.fencingToken === leaseCommand.fencingToken
+      );
+    }
+    case "publish":
+      return (
+        canonicalJson(response) ===
+        canonicalJson((command as CollaborationDatabasePublishHeadCommand).update.snapshot)
+      );
+  }
+}
+
 const makeStore = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
@@ -341,6 +402,12 @@ const makeStore = Effect.gen(function* () {
     commandId: string,
     operation: Operation,
     requestJson: string,
+    command:
+      | CollaborationDatabaseConfigureCommand
+      | CollaborationDatabaseAcquireLeaseCommand
+      | CollaborationDatabaseLeaseCommand
+      | CollaborationDatabasePublishHeadCommand,
+    principal: Pick<CollaborationPrincipal, "userId" | "deviceId" | "membershipEpoch">,
   ) =>
     Effect.gen(function* () {
       const rows = yield* sql<ReceiptRow>`
@@ -359,10 +426,14 @@ const makeStore = Effect.gen(function* () {
       if (sha256(row.responseJson) !== row.responseSha256) {
         return yield* Effect.fail(fail(operation, "integrity-failure"));
       }
-      return yield* Effect.try({
+      const response = yield* Effect.try({
         try: () => decodeReceiptResponse(operation, row.responseJson, projectId, databaseId),
         catch: () => fail(operation, "integrity-failure"),
       });
+      if (!receiptResponseMatchesRequest(operation, response, command, principal)) {
+        return yield* Effect.fail(fail(operation, "integrity-failure"));
+      }
+      return response;
     });
 
   const storeReceipt = (
@@ -403,6 +474,8 @@ const makeStore = Effect.gen(function* () {
             command.commandId,
             operation,
             requestJson,
+            command,
+            grant.principal,
           );
           if (retry !== null) {
             const { binding: current } = yield* readState(
@@ -495,6 +568,8 @@ const makeStore = Effect.gen(function* () {
             command.commandId,
             operation,
             requestJson,
+            command,
+            grant.principal,
           );
           if (retry !== null) return retry as CollaborationDatabaseWriterLease;
           if (binding.policy.kind !== "serialized-head") {
@@ -590,6 +665,8 @@ const makeStore = Effect.gen(function* () {
             command.commandId,
             operation,
             requestJson,
+            command,
+            grant.principal,
           );
           if (retry !== null) return retry as CollaborationDatabaseReleaseResult;
           const now = DateTime.formatIso(yield* DateTime.now);
@@ -663,6 +740,8 @@ const makeStore = Effect.gen(function* () {
             command.commandId,
             operation,
             requestJson,
+            command,
+            grant.principal,
           );
           if (retry !== null) return retry as CollaborationDatabaseSnapshot;
           const now = DateTime.formatIso(yield* DateTime.now);

@@ -6,6 +6,9 @@ import {
 } from "@cafecode/contracts";
 import { assert, describe, it } from "@effect/vitest";
 import { createHash } from "node:crypto";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -15,6 +18,8 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
+import { runMigrations } from "../persistence/Migrations.ts";
+import * as NodeSqliteClient from "../persistence/NodeSqliteClient.ts";
 import { CollaborationMembershipAuthority } from "./CollaborationAuthorization.ts";
 import {
   CollaborationDatabaseStore,
@@ -77,6 +82,20 @@ const testLayer = Layer.merge(
   membershipLayer,
 );
 
+function fileBackedStoreLayer(filename: string) {
+  return Layer.merge(
+    CollaborationDatabaseStoreLive.pipe(
+      Layer.provideMerge(
+        NodeSqliteClient.layer({
+          filename,
+          busyTimeoutMs: 15_000,
+        }),
+      ),
+    ),
+    membershipLayer,
+  );
+}
+
 const configureCommand = {
   commandId: "configure-1",
   sharedProjectId: projectId,
@@ -96,6 +115,186 @@ function expectStoreFailure(error: unknown, reason: CollaborationDatabaseStoreEr
 }
 
 describe("CollaborationDatabaseStore", () => {
+  it.effect("serializes competing leases across two file-backed SQLite clients", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => mkdtemp(join(tmpdir(), "club-code-database-store-acquire-"))),
+      (directory) => {
+        const dbPath = join(directory, "state.sqlite");
+        const setupLayer = fileBackedStoreLayer(dbPath);
+        const firstLayer = fileBackedStoreLayer(dbPath);
+        const secondLayer = fileBackedStoreLayer(dbPath);
+        return Effect.gen(function* () {
+          yield* TestClock.setTime(NOW);
+          yield* Effect.gen(function* () {
+            yield* runMigrations();
+            const store = yield* CollaborationDatabaseStore;
+            yield* store.configure({ principal, command: configureCommand });
+          }).pipe(Effect.provide(setupLayer));
+
+          const acquire = (
+            commandId: string,
+            holder: typeof principal,
+            layer: ReturnType<typeof fileBackedStoreLayer>,
+          ) =>
+            Effect.gen(function* () {
+              const store = yield* CollaborationDatabaseStore;
+              return yield* store.acquireLease({
+                principal: holder,
+                command: {
+                  commandId,
+                  sharedProjectId: projectId,
+                  databaseId: "database-1",
+                },
+              });
+            }).pipe(
+              Effect.provide(layer),
+              Effect.map((value) => ({ _tag: "Success" as const, value })),
+              Effect.catch((error) => Effect.succeed({ _tag: "Failure" as const, error })),
+            );
+
+          const outcomes = yield* Effect.all(
+            [
+              acquire("acquire-file-1", principal, firstLayer),
+              acquire("acquire-file-2", secondPrincipal, secondLayer),
+            ],
+            { concurrency: "unbounded" },
+          );
+          const successes = outcomes.filter((outcome) => outcome._tag === "Success");
+          const failures = outcomes.filter((outcome) => outcome._tag === "Failure");
+          assert.equal(successes.length, 1);
+          assert.equal(failures.length, 1);
+          assert.equal(successes[0]!.value.fencingToken, 1);
+          expectStoreFailure(failures[0]!.error, "lease-unavailable");
+          const persisted = yield* Effect.gen(function* () {
+            const sql = yield* SqlClient.SqlClient;
+            return yield* sql<{
+              readonly activeLeaseId: string | null;
+              readonly lastFencingToken: number;
+              readonly receiptCount: number;
+            }>`
+              SELECT active_lease_id AS "activeLeaseId",
+                last_fencing_token AS "lastFencingToken",
+                (SELECT COUNT(*) FROM collaboration_database_command_receipts
+                  WHERE shared_project_id = ${projectId}
+                    AND database_id = ${"database-1"}
+                    AND operation = ${"acquire"}) AS "receiptCount"
+              FROM collaboration_database_states
+              WHERE shared_project_id = ${projectId} AND database_id = ${"database-1"}
+            `;
+          }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: dbPath })));
+          assert.equal(persisted[0]?.activeLeaseId, successes[0]!.value.leaseId);
+          assert.equal(persisted[0]?.lastFencingToken, 1);
+          assert.equal(persisted[0]?.receiptCount, 1);
+        });
+      },
+      (directory) => Effect.promise(() => rm(directory, { recursive: true, force: true })),
+    ),
+  );
+
+  it.effect("allows only one same-base publish across two file-backed SQLite clients", () =>
+    Effect.acquireUseRelease(
+      Effect.promise(() => mkdtemp(join(tmpdir(), "club-code-database-store-cas-"))),
+      (directory) => {
+        const dbPath = join(directory, "state.sqlite");
+        const setupLayer = fileBackedStoreLayer(dbPath);
+        const firstLayer = fileBackedStoreLayer(dbPath);
+        const secondLayer = fileBackedStoreLayer(dbPath);
+        return Effect.gen(function* () {
+          yield* TestClock.setTime(NOW);
+          const lease = yield* Effect.gen(function* () {
+            yield* runMigrations();
+            const store = yield* CollaborationDatabaseStore;
+            yield* store.configure({ principal, command: configureCommand });
+            return yield* store.acquireLease({
+              principal,
+              command: {
+                commandId: "acquire-cas",
+                sharedProjectId: projectId,
+                databaseId: "database-1",
+              },
+            });
+          }).pipe(Effect.provide(setupLayer));
+
+          const publish = (
+            commandId: string,
+            contentSha256: string,
+            layer: ReturnType<typeof fileBackedStoreLayer>,
+          ) =>
+            Effect.gen(function* () {
+              const store = yield* CollaborationDatabaseStore;
+              return yield* store.publishHead({
+                principal,
+                command: {
+                  commandId,
+                  update: {
+                    sharedProjectId: projectId,
+                    databaseId: "database-1",
+                    snapshot: {
+                      sharedProjectId: projectId,
+                      databaseId: "database-1",
+                      relativePath: "data/project.sqlite",
+                      engine: "sqlite",
+                      contentSha256,
+                      baseContentSha256: null,
+                      schemaSha256: "f".repeat(64),
+                      byteSize: 4_096,
+                      consistency: "online-backup",
+                      sidecarsExcluded: true,
+                      createdByUserId: "user-1",
+                      createdByDeviceId: "device-1",
+                      createdAt: "2026-08-01T12:00:00.000Z",
+                    },
+                    expectedHeadContentSha256: null,
+                    authorUserId: "user-1",
+                    authorDeviceId: "device-1",
+                    leaseId: lease.leaseId,
+                    fencingToken: lease.fencingToken,
+                    membershipEpoch: 1,
+                  },
+                },
+              });
+            }).pipe(
+              Effect.provide(layer),
+              Effect.map((value) => ({ _tag: "Success" as const, value })),
+              Effect.catch((error) => Effect.succeed({ _tag: "Failure" as const, error })),
+            );
+
+          const outcomes = yield* Effect.all(
+            [
+              publish("publish-file-1", "a".repeat(64), firstLayer),
+              publish("publish-file-2", "b".repeat(64), secondLayer),
+            ],
+            { concurrency: "unbounded" },
+          );
+          const successes = outcomes.filter((outcome) => outcome._tag === "Success");
+          const failures = outcomes.filter((outcome) => outcome._tag === "Failure");
+          assert.equal(successes.length, 1);
+          assert.equal(failures.length, 1);
+          expectStoreFailure(failures[0]!.error, "head-conflict");
+          assert.include(["a".repeat(64), "b".repeat(64)], successes[0]!.value.contentSha256);
+          const persisted = yield* Effect.gen(function* () {
+            const sql = yield* SqlClient.SqlClient;
+            return yield* sql<{
+              readonly headContentSha256: string | null;
+              readonly receiptCount: number;
+            }>`
+              SELECT head_content_sha256 AS "headContentSha256",
+                (SELECT COUNT(*) FROM collaboration_database_command_receipts
+                  WHERE shared_project_id = ${projectId}
+                    AND database_id = ${"database-1"}
+                    AND operation = ${"publish"}) AS "receiptCount"
+              FROM collaboration_database_states
+              WHERE shared_project_id = ${projectId} AND database_id = ${"database-1"}
+            `;
+          }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: dbPath })));
+          assert.equal(persisted[0]?.headContentSha256, successes[0]!.value.contentSha256);
+          assert.equal(persisted[0]?.receiptCount, 1);
+        });
+      },
+      (directory) => Effect.promise(() => rm(directory, { recursive: true, force: true })),
+    ),
+  );
+
   it.effect("binds one canonical project path and returns idempotent configure receipts", () =>
     Effect.gen(function* () {
       yield* TestClock.setTime(NOW);
@@ -306,6 +505,44 @@ describe("CollaborationDatabaseStore", () => {
       `;
       const retry = yield* store
         .configure({ principal, command: configureCommand })
+        .pipe(Effect.catch((error) => Effect.succeed(error)));
+      expectStoreFailure(retry, "integrity-failure");
+    }).pipe(Effect.provide(testLayer)),
+  );
+
+  it.effect("rejects a validly hashed lease receipt whose holder differs from its request", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(NOW);
+      const store = yield* CollaborationDatabaseStore;
+      const sql = yield* SqlClient.SqlClient;
+      yield* store.configure({ principal, command: configureCommand });
+      const command = {
+        commandId: "acquire-holder-receipt",
+        sharedProjectId: projectId,
+        databaseId: "database-1",
+      };
+      yield* store.acquireLease({ principal, command });
+      const rows = yield* sql<{ readonly responseJson: string }>`
+        SELECT response_json AS "responseJson"
+        FROM collaboration_database_command_receipts
+        WHERE shared_project_id = ${projectId} AND database_id = ${"database-1"}
+          AND command_id = ${command.commandId}
+      `;
+      const crossedJson = JSON.stringify({
+        ...(JSON.parse(rows[0]!.responseJson) as Record<string, unknown>),
+        holderUserId: "user-2",
+        holderDeviceId: "device-2",
+      });
+      const crossedHash = createHash("sha256").update(crossedJson, "utf8").digest("hex");
+      yield* sql`
+        UPDATE collaboration_database_command_receipts
+        SET response_json = ${crossedJson}, response_sha256 = ${crossedHash}
+        WHERE shared_project_id = ${projectId} AND database_id = ${"database-1"}
+          AND command_id = ${command.commandId}
+      `;
+
+      const retry = yield* store
+        .acquireLease({ principal, command })
         .pipe(Effect.catch((error) => Effect.succeed(error)));
       expectStoreFailure(retry, "integrity-failure");
     }).pipe(Effect.provide(testLayer)),
