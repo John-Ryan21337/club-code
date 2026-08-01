@@ -38,5 +38,7 @@ constraints to its available-memory result only on Linux.
 ## Deferred integration
 
 This slice opens no endpoint and adds no renderer polling. Project selection, bounded service-level
-caching, RPC authorization, project-volume probes, GPU/platform adapters, and measured-only graph
-rendering belong in separately reviewed adoption PRs.
+caching, RPC authorization, project-volume probes, and GPU/platform adapters belong in separately
+reviewed adoption PRs. The first renderer-only adoption seam is documented in
+[Project Resources telemetry UI](./project-resources-telemetry-ui.md); it remains transport-injected
+and is not mounted into the application by either slice.
