@@ -303,22 +303,42 @@ raised only after load, partition, revocation, abuse, and backpressure testing.
   Two independent mutation-authorized audits added forged-admission,
   cross-project replay, concurrent-writer, revocation-race, corrupt-chain, and
   malformed-page regressions.
+- Migration 072 and `CollaborationMembershipStore` provide server-clock,
+  single-use invitations and epoch-incrementing role/removal mutations. Invite
+  secrets are stored only as digests and mutation receipts are bound to the
+  authenticated user and device.
+- Migration 073 and `CollaborationDeviceKeyStore` provide durable per-project
+  device enrollment. The server generates a one-use 256-bit challenge nonce,
+  stores only its domain-separated digest, and activates a key only after a
+  canonical Ed25519 SPKI key verifies the challenge signature. Rotation revokes
+  the prior key before inserting its replacement in one SQLite writer
+  transaction; an index enforces at most one active key per project/device.
+  The event-admission authority returns a key only when project, user, device,
+  key ID, current member, and current membership epoch all match. Any membership
+  epoch change makes older enrolled keys unusable until re-enrollment, preventing
+  removed-and-reinvited identities from resurrecting an old key.
+- Device command receipts include user, device, and membership epoch. Stored
+  challenges, keys, receipts, and their canonical hashes are cross-checked on
+  replay; corrupt public-key bytes fail closed. File-backed two-client tests
+  exercise competing rotations and prove exactly one key remains current.
 - `packages/contracts/src/fileSync.ts` defines conflict-safe database
   coordination modes, portable normalized replica paths, consistent immutable
   snapshot descriptors, bounded writer leases, and identity-bound
   compare-and-swap head updates whose expected hash matches the snapshot base
   and whose fencing tokens remain exact integers. These are contracts only; no
   live database file is copied.
-- Device key enrollment/signature verification at a network boundary, durable
-  membership, invites, coordinator transport, subscriptions, chat/transcript
-  UI, sandboxed agent runners, file synchronization/materialization, and signed
-  checkpoints remain unimplemented. The current storage slice exposes no
-  network endpoint and mutates no shared project file.
+- Coordinator transport, network enrollment endpoints, subscriptions,
+  chat/transcript UI, OS-backed private-key generation/storage, sandboxed agent
+  runners, file synchronization/materialization, and signed checkpoints remain
+  unimplemented. The current storage slice stores public keys only, exposes no
+  network endpoint, and mutates no shared project file.
 
 Residual boundary: exact revocation linearizability must be revisited if
 membership or key authority moves to a remote non-transactional service.
 Sequence-only clients must also retain and verify their prior hash anchor until
 signed checkpoints or equivalent key-history proofs are implemented.
+Expired enrollment challenge cleanup is deferred to a bounded maintenance job;
+expiry is enforced on every completion, so retained rows grant no authority.
 
 ### Phase 0: security foundation
 
@@ -371,6 +391,7 @@ signed checkpoints or equivalent key-history proofs are implemented.
 New shared contracts should live in:
 
 - `packages/contracts/src/collaboration.ts`
+- `packages/contracts/src/collaborationDevice.ts`
 - `packages/contracts/src/sharedProject.ts`
 - `packages/contracts/src/fileSync.ts`
 - branded IDs in `packages/contracts/src/baseSchemas.ts`
