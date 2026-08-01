@@ -4,9 +4,9 @@ This guide is for Cafe Code maintainers who want to review or adopt Club Code ch
 
 ## Published PR inventory
 
-The repository has published 37 pull requests:
+The repository has published 38 pull requests:
 
-- twenty-nine open implementation PRs: [#2](https://github.com/John-Ryan21337/club-code/pull/2), [#3](https://github.com/John-Ryan21337/club-code/pull/3), [#4](https://github.com/John-Ryan21337/club-code/pull/4), [#7](https://github.com/John-Ryan21337/club-code/pull/7), [#8](https://github.com/John-Ryan21337/club-code/pull/8), [#13](https://github.com/John-Ryan21337/club-code/pull/13), [#14](https://github.com/John-Ryan21337/club-code/pull/14), [#15](https://github.com/John-Ryan21337/club-code/pull/15), [#17](https://github.com/John-Ryan21337/club-code/pull/17), [#18](https://github.com/John-Ryan21337/club-code/pull/18), [#19](https://github.com/John-Ryan21337/club-code/pull/19), [#20](https://github.com/John-Ryan21337/club-code/pull/20), [#21](https://github.com/John-Ryan21337/club-code/pull/21), [#22](https://github.com/John-Ryan21337/club-code/pull/22), [#23](https://github.com/John-Ryan21337/club-code/pull/23), [#24](https://github.com/John-Ryan21337/club-code/pull/24), [#25](https://github.com/John-Ryan21337/club-code/pull/25), [#26](https://github.com/John-Ryan21337/club-code/pull/26), [#27](https://github.com/John-Ryan21337/club-code/pull/27), [#28](https://github.com/John-Ryan21337/club-code/pull/28), [#29](https://github.com/John-Ryan21337/club-code/pull/29), [#30](https://github.com/John-Ryan21337/club-code/pull/30), [#31](https://github.com/John-Ryan21337/club-code/pull/31), [#32](https://github.com/John-Ryan21337/club-code/pull/32), [#33](https://github.com/John-Ryan21337/club-code/pull/33), [#34](https://github.com/John-Ryan21337/club-code/pull/34), [#35](https://github.com/John-Ryan21337/club-code/pull/35), [#36](https://github.com/John-Ryan21337/club-code/pull/36), and [#37](https://github.com/John-Ryan21337/club-code/pull/37);
+- thirty open implementation PRs: [#2](https://github.com/John-Ryan21337/club-code/pull/2), [#3](https://github.com/John-Ryan21337/club-code/pull/3), [#4](https://github.com/John-Ryan21337/club-code/pull/4), [#7](https://github.com/John-Ryan21337/club-code/pull/7), [#8](https://github.com/John-Ryan21337/club-code/pull/8), [#13](https://github.com/John-Ryan21337/club-code/pull/13), [#14](https://github.com/John-Ryan21337/club-code/pull/14), [#15](https://github.com/John-Ryan21337/club-code/pull/15), [#17](https://github.com/John-Ryan21337/club-code/pull/17), [#18](https://github.com/John-Ryan21337/club-code/pull/18), [#19](https://github.com/John-Ryan21337/club-code/pull/19), [#20](https://github.com/John-Ryan21337/club-code/pull/20), [#21](https://github.com/John-Ryan21337/club-code/pull/21), [#22](https://github.com/John-Ryan21337/club-code/pull/22), [#23](https://github.com/John-Ryan21337/club-code/pull/23), [#24](https://github.com/John-Ryan21337/club-code/pull/24), [#25](https://github.com/John-Ryan21337/club-code/pull/25), [#26](https://github.com/John-Ryan21337/club-code/pull/26), [#27](https://github.com/John-Ryan21337/club-code/pull/27), [#28](https://github.com/John-Ryan21337/club-code/pull/28), [#29](https://github.com/John-Ryan21337/club-code/pull/29), [#30](https://github.com/John-Ryan21337/club-code/pull/30), [#31](https://github.com/John-Ryan21337/club-code/pull/31), [#32](https://github.com/John-Ryan21337/club-code/pull/32), [#33](https://github.com/John-Ryan21337/club-code/pull/33), [#34](https://github.com/John-Ryan21337/club-code/pull/34), [#35](https://github.com/John-Ryan21337/club-code/pull/35), [#36](https://github.com/John-Ryan21337/club-code/pull/36), [#37](https://github.com/John-Ryan21337/club-code/pull/37), and [#38](https://github.com/John-Ryan21337/club-code/pull/38);
 - this open documentation PR, [#16](https://github.com/John-Ryan21337/club-code/pull/16), which adds this adoption guide directly against `main`;
 - four merged documentation PRs: #9 through #12;
 - two closed, archived pacing PRs: #5 and #6; and
@@ -25,7 +25,7 @@ The active implementation foundation is:
 
 After #7, choose one of these paths:
 
-- **Recommended, reviewable path:** `#13 cowork foundation -> #14 database coordination -> #17 memberships/invites -> #20 device-key authority -> #21 shared chat/context`, then adopt independent child #24 (file-sync authority), #25 (transport façade), and/or #32 (injected shared operator chat UI); #26 adds audited blob storage/materialization after #24, #31 adds fenced SQLite snapshot/restore and #37 adds read-only replica/conflict status after #26, #27 adds audited task/agent authority after #24, #36 adds its injected admission-not-started task/agent UI, #29 adds audited sandbox admission after #27, while #28 adds audited ephemeral project presence, #34 adds its injected roster UI, and #30 adds the default-off chat/context network adapter after #25.
+- **Recommended, reviewable path:** `#13 cowork foundation -> #14 database coordination -> #17 memberships/invites -> #20 device-key authority -> #21 shared chat/context`; optionally add #38's injected membership/revocation UI after #17. Then adopt independent child #24 (file-sync authority), #25 (transport façade), and/or #32 (injected shared operator chat UI); #26 adds audited blob storage/materialization after #24, #31 adds fenced SQLite snapshot/restore and #37 adds read-only replica/conflict status after #26, #27 adds audited task/agent authority after #24, #36 adds its injected admission-not-started task/agent UI, #29 adds audited sandbox admission after #27, while #28 adds audited ephemeral project presence, #34 adds its injected roster UI, and #30 adds the default-off chat/context network adapter after #25.
 - **Draft omnibus path:** `#8`, which contains the current local-release aggregate and overlaps the narrow cowork work.
 - **Telemetry paths:** `#23 -> #33` is the narrow truthful CPU/RAM foundation plus UI. `#8 -> #15` is the overlapping omnibus-release follow-up. Neither is a cowork dependency; do not combine equivalent Project Resources UI changes from both paths.
 - **Matrix GPU path:** `#7 -> #18`; #18 is independent of cowork and extracts WebGL2 glyph rendering plus Walk parity without Auto Nudge, provider, or server files.
@@ -46,6 +46,7 @@ Do not combine the cowork commits from #8 with #13, #14, #17, #20, or #21.
 | #13 | Secure cowork authorization, signed event admission, and durable event journal          | `agent/local-priority-integration`                                         | `feature/cowork-foundation` at `8ad2ec37e4db8464f351d67e5ad1fb99e6c29939`                    | open, ready, clean after merging the current #7 base              |
 | #14 | Conflict-safe shared database coordination                                              | `feature/cowork-foundation`                                                | `feature/cowork-database-coordination` at `a3c1650a86e6b5b8c4c7f5eda716fd6d4f56e74d`         | open, ready, clean                                                |
 | #17 | Secure memberships and one-time project invitations                                     | `feature/cowork-database-coordination`                                     | `feature/cowork-membership-invites` at `1973b2c1e9d4cc4b85a85077524ecd9a681639b6`            | open, ready, clean                                                |
+| #38 | Audited injected membership, pending-invitation, and revocation UI                      | `feature/cowork-membership-invites`                                        | `feature/cowork-membership-invite-ui` at `0a68a4115d01d8ae220d32c4db337dcf48d3e805`          | open, audited, clean; web-only child of #17; no invite creation   |
 | #20 | Audited device-key enrollment, rotation, revocation, and current-key admission          | `feature/cowork-membership-invites`                                        | `feature/cowork-device-authority` at `76957bce4c9d89d2126012b45beb37ebdc31f172`              | open, audited, clean                                              |
 | #21 | Audited shared operator chat, authored prompts, and pointer-only context packets        | `feature/cowork-device-authority`                                          | `feature/cowork-chat-context-after-devices` at `036132ea0d459e867448f5427b6b704bf1c8b7a0`    | open, audited, clean                                              |
 | #24 | Audited content-addressed file and fenced database-snapshot authority                   | `feature/cowork-chat-context-after-devices`                                | `feature/cowork-file-sync-authority` at `dc2fa5f2a615aa4d606ca4f6c188085dbef9e822`           | open, audited, clean; independent child of #21                    |
@@ -69,7 +70,7 @@ Do not combine the cowork commits from #8 with #13, #14, #17, #20, or #21.
 | #8  | Aggregate current local release                                                         | `agent/local-priority-integration`                                         | `release/local-20260728` at `457be1418541bfb0ab08ae5bf9aac8a729ead23f`                       | open draft; GitHub reported `CONFLICTING/DIRTY` at this snapshot  |
 | #15 | Hide stale unavailable Project Resources sensor graphs                                  | `release/local-20260728`                                                   | `work/profiles-telemetry-safety` at `9270cc56ffd05132f3ca02bce1582860850c8f0a`               | open, ready, clean; separate from the cowork ladder               |
 
-PR #7 was restacked on the current #4 head with a normal non-force merge whose tree is identical to its prior head; GitHub reported it `MERGEABLE/CLEAN` after focused and full gates passed. Re-check rather than treating that observation as immutable if any base moves again. The same rule applies to #8 if the omnibus path is deliberately chosen. PRs #13, #14, #17, #20, #21, #24, #25, #26, #27, #28, #29, #30, #31, #32, #33, #34, #35, #36, and #37 were also `MERGEABLE/CLEAN` after the #7 restack.
+PR #7 was restacked on the current #4 head with a normal non-force merge whose tree is identical to its prior head; GitHub reported it `MERGEABLE/CLEAN` after focused and full gates passed. Re-check rather than treating that observation as immutable if any base moves again. The same rule applies to #8 if the omnibus path is deliberately chosen. PRs #13, #14, #17, #20, #21, #24, #25, #26, #27, #28, #29, #30, #31, #32, #33, #34, #35, #36, #37, and #38 were also `MERGEABLE/CLEAN` after the #7 restack.
 
 ## Recommended merge order
 
@@ -79,7 +80,7 @@ PR #7 was restacked on the current #4 head with a normal non-force merge whose t
 4. Land the repaired #7 on the current #4 head.
 5. Land #13 on the repaired #7 head.
 6. Land #14, the narrow database-coordination PR, on #13.
-7. Land #17, the secure memberships/invitations PR, on #14. It owns migration 072 after #14's database migration 071.
+7. Land #17, the secure memberships/invitations PR, on #14. It owns migration 072 after #14's database migration 071. Optionally land #38 on #17 for its injected read/revoke UI; invitation creation and plaintext-token handling remain absent.
 8. Land #20, the audited device-key authority PR, on #17. It owns migration 073 and binds event admission to the member's current non-revoked Ed25519 key.
 9. Land #21, the audited shared chat/context PR, on #20. It owns migration 074 and stores only explicit operator-authored shared text plus pointer-only context packets.
 10. Land #24, #25, and/or #32 on #21. They are independent siblings: #24 owns file/database publication authority; #25 owns a transport-neutral authenticated façade and opens no listener; #32 owns an injected-only web transcript/composer and opens no transport.
@@ -117,6 +118,9 @@ git rev-list --reverse a48d9c93aac6e34579e1571289bc37389a216edd^..a3c1650a86e6b5
 
 # PR #17: membership/invitations plus its independent audit repair.
 git cherry-pick dfc14718 1973b2c1
+
+# PR #38: injected membership/invitation read-and-revoke UI plus independent audit. Apply after #17.
+git cherry-pick 645346ef 0a68a411
 
 # PR #20: device authority plus its independent cryptographic audit repair.
 git cherry-pick 6227e02c 76957bce
@@ -179,6 +183,8 @@ PR #20 continues the cowork ladder after #17. Its audit rejects low-order and id
 
 PR #21 continues after #20. It contains shared operator-authored chat/prompts and pointer-only context packets, not private messages, provider output, reconstructed prompt bodies, endpoints, subscriptions, or UI.
 
+PR #38 is an independent web-only child of #17. It presents strictly bounded current memberships and pending invitations and offers one project-wide, authority-refreshed, idempotent revocation operation. Payloads and snapshots are strict immutable plain data; epoch/revision rollback and same-epoch membership mutation fail closed. It creates or redeems no invitation, transports or stores no plaintext token, and starts no timer, network primitive, process, provider, or agent.
+
 PR #24 is an independent child of #21. It owns content-addressed versions, recoverable tombstones, portable path authority, compare-and-swap heads, and fenced consistent database-snapshot provenance. It does not implement blob transport/quotas or the no-follow filesystem materializer and never merges live database pages or volatile sidecars.
 
 PR #25 is another independent child of #21. It provides resolver-only authenticated admission, membership/device rechecks, encrypted project-bound cursors, keyed audit references, and bounded replay/backpressure/cancellation. It opens no listener or socket and exposes no orchestration RPC.
@@ -217,8 +223,8 @@ When adopting onto a newer Cafe target instead of the pinned baseline, treat the
 
 PR #8 is a draft release aggregate, not the recommended Cafe review unit. It contains Auto Nudge, Idle Thread Guard, Matrix modes, telemetry, profiles, media, camera, LM Studio, and early cowork/database-contract work in one large branch.
 
-- Do not merge #8 and then merge #13, #14, #17, #20, #21, #24, #25, #26, #27, #28, #29, #30, #31, #32, #34, #36, or #37: cowork contracts, architecture, authorization, event admission, event persistence, database coordination, membership, device authority, authored-context, file-authority, materialization/status, task authority/UI, sandbox policy, transport, presence, network-adapter, SQLite-snapshot, shared-chat UI, and presence-roster surfaces overlap or share migration lineage.
-- Do not merge #13/#14/#17/#20/#21/#24/#25/#26/#27/#28/#29/#30/#31/#32/#34/#36/#37 and then cherry-pick equivalent cowork commits from #8.
+- Do not merge #8 and then merge #13, #14, #17, #20, #21, #24, #25, #26, #27, #28, #29, #30, #31, #32, #34, #36, #37, or #38: cowork contracts, architecture, authorization, event admission, event persistence, database coordination, membership/UI, device authority, authored-context, file-authority, materialization/status, task authority/UI, sandbox policy, transport, presence, network-adapter, SQLite-snapshot, shared-chat UI, and presence-roster surfaces overlap or share migration lineage.
+- Do not merge #13/#14/#17/#20/#21/#24/#25/#26/#27/#28/#29/#30/#31/#32/#34/#36/#37/#38 and then cherry-pick equivalent cowork commits from #8.
 - Do not merge #19 and then retain #8's overlapping Auto Nudge authority, migrations, projections, or renderer coordinator changes.
 - Do not infer that #8 completes the user-visible cowork suite. Its own description leaves server-authoritative database admission, engine-specific snapshot adapters, secure replica materialization, network transport, and UI as later work.
 - Do not combine #33 with #8/#15's equivalent Project Resources UI changes; #33 is the narrow path after #23.
@@ -227,7 +233,7 @@ PR #8 is a draft release aggregate, not the recommended Cafe review unit. It con
 
 ## Validation gates
 
-At this snapshot GitHub reported no configured checks for the newly published PRs through #37. `MERGEABLE/CLEAN` describes branch topology, not test evidence; Cafe maintainers must run the recorded local gates (or equivalent CI) on the exact adopted heads.
+At this snapshot GitHub reported no configured checks for the newly published PRs through #38. `MERGEABLE/CLEAN` describes branch topology, not test evidence; Cafe maintainers must run the recorded local gates (or equivalent CI) on the exact adopted heads.
 
 Run the repository gates after each meaningful stack layer and again at the final exact head:
 
@@ -263,6 +269,7 @@ git diff --check
 - #35: focused profiles 25/25 and Chromium 44/44, repository format/lint, full typecheck 9/9, full repository tests 9/9 with server 1,572 passed/1 skipped, sparse-patch/accessor/prototype/mutable-snapshot/inactive-preview/no-write/delete-cancel/delete-conflict/empty-library accessibility coverage;
 - #36: focused task model 11/11 and Chromium 5/5, web typecheck, repository format/lint, full typecheck 9/9, full repository tests 9/9 with server 1,697 passed/1 skipped, StrictMode/replay/cursor-cycle/exact-ACK/monotonic-fence/concurrent-attempt/conflict/hostile-payload/privacy/accessibility coverage, plus controlled no-timer/no-network/no-process proof;
 - #37: focused replica model 21/21 and Chromium 6/6, web typecheck, repository format/lint, full typecheck 9/9, full repository tests 9/9 with server 1,703 passed/1 skipped, strict-plain-payload/mutable-input/portable-path/alias/stable-order/cross-page-replay/evidence-consistency/privacy/read-only coverage;
+- #38: focused membership/invitation model 22/22 and Chromium 5/5, repository format/lint, full typecheck 9/9, full repository tests 9/9 with server 1,644 passed/1 skipped, plain-payload/accessor/shape/interval/order/revoke-concurrency/idempotency/authority-refresh/rollback/stale-lifecycle/overflow/accessibility coverage, plus a controlled no-timer/no-network/no-process/no-create/no-redeem proof;
 - #22: audited profile units 23/23, Settings Chromium 41/41, full web 1,387/1,387 before final audit, full repository tests, duplicate/prototype/quota/timestamp adversarial coverage, and exhaustive private-field exclusion;
 - #23: audited telemetry 44/44, typecheck 9/9, full repository tests 9/9 with server 1,604 passed/1 skipped and contracts 169 passed, truthful warming/unavailable states, overflow and relational-arithmetic guards, counter-failure and topology-change coverage, and no fabricated sensor measurements;
 - #18: audited Matrix/settings units 133/133, focused Chromium 46/46, full Chromium 281/281, WebGL limits/context/fallback coverage, and full repository tests;
