@@ -1,6 +1,7 @@
 export * from "./baseSchemas.ts";
 export * from "./collaboration.ts";
 export * from "./collaborationDevice.ts";
+export * from "./collaborationFileSync.ts";
 export * from "./collaborationMembership.ts";
 export * from "./collaborationChat.ts";
 export * from "./fileSync.ts";
