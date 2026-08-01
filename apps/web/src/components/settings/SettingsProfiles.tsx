@@ -111,16 +111,29 @@ export function SettingsProfiles() {
     () => captureSettingsProfilePayload(settings, theme),
     [settings, theme],
   );
-  const activeProfileIsCurrent =
-    activeProfile !== null && settingsProfileMatches(activeProfile, currentPayload);
+  const activeProfileDifferences = useMemo(
+    () => (activeProfile === null ? [] : compareSettingsProfile(activeProfile, currentPayload)),
+    [activeProfile, currentPayload],
+  );
+  // Older profiles are deliberately sparse patches. Treat one as current when
+  // applying it would make no change; exact document equality would incorrectly
+  // enable Reload merely because a later allowlisted field is absent.
+  const activeProfileIsCurrent = activeProfile !== null && activeProfileDifferences.length === 0;
   const previewProfile =
     previewProfileId === null
       ? null
       : (library.profiles.find((profile) => profile.id === previewProfileId) ?? null);
   const previewProfileDifferences = useMemo(
-    () => (previewProfile === null ? [] : compareSettingsProfile(previewProfile, currentPayload)),
-    [currentPayload, previewProfile],
+    () =>
+      previewProfile === null
+        ? []
+        : previewProfile.id === activeProfile?.id
+          ? activeProfileDifferences
+          : compareSettingsProfile(previewProfile, currentPayload),
+    [activeProfile?.id, activeProfileDifferences, currentPayload, previewProfile],
   );
+  const activeProfilePreviewVisible =
+    activeProfile !== null && previewProfile?.id === activeProfile.id;
 
   useEffect(() => {
     setNameDraft(activeProfile?.name ?? "");
@@ -443,7 +456,7 @@ export function SettingsProfiles() {
               size="sm"
               variant="outline"
               aria-controls="settings-profile-difference-preview"
-              aria-expanded={previewProfile?.id === activeProfile?.id}
+              aria-expanded={activeProfilePreviewVisible}
               disabled={busy || !settingsHydrated || activeProfile === null}
               onClick={() =>
                 setPreviewProfileId((profileId) =>
@@ -452,7 +465,7 @@ export function SettingsProfiles() {
               }
             >
               <EyeIcon aria-hidden="true" />
-              {previewProfile?.id === activeProfile?.id ? "Hide preview" : "Preview changes"}
+              {activeProfilePreviewVisible ? "Hide preview" : "Preview changes"}
             </Button>
           </>
         }

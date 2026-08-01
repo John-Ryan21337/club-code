@@ -1234,6 +1234,22 @@ describe("settings panels", () => {
     ]);
   });
 
+  it("keeps the empty-library preview control collapsed and truthfully labeled", async () => {
+    setServerConfigSnapshot(createBaseServerConfig());
+    mounted = await renderWithTestRouter(
+      <AppAtomRegistryProvider>
+        <AppearanceSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    const preview = page.getByRole("button", { name: "Preview changes" });
+    await expect.element(preview).toBeDisabled();
+    await expect.element(preview).toHaveAttribute("aria-expanded", "false");
+    await expect
+      .element(page.getByRole("region", { name: /Changes from loading/u }))
+      .not.toBeInTheDocument();
+  });
+
   it("rolls the theme back and keeps the prior active profile when loading settings fails", async () => {
     const desktopBridge = createDesktopBridgeStub();
     window.desktopBridge = desktopBridge;
@@ -1356,6 +1372,44 @@ describe("settings panels", () => {
     await expect
       .element(page.getByRole("combobox", { name: "Active settings profile" }))
       .toHaveTextContent("Mobile");
+  });
+
+  it("treats a sparse active profile as current when loading it would make no change", async () => {
+    setServerConfigSnapshot(createBaseServerConfig());
+    localStorage.setItem(
+      SETTINGS_PROFILE_LIBRARY_STORAGE_KEY,
+      JSON.stringify({
+        version: 1,
+        activeProfileId: "profile:sparse",
+        profiles: [
+          {
+            name: "Sparse",
+            theme: "dark",
+            clientSettings: {},
+            createdAt: "2026-07-29T08:00:00.000Z",
+            updatedAt: "2026-07-29T08:00:00.000Z",
+          },
+        ],
+      }),
+    );
+    settingsProfileLibraryStore.refreshFromStorage();
+
+    mounted = await renderWithTestRouter(
+      <AppAtomRegistryProvider>
+        <AppearanceSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    await expect
+      .element(page.getByText("“Sparse” matches the current preferences.", { exact: true }))
+      .toBeInTheDocument();
+    await expect
+      .element(page.getByRole("button", { name: "Reload active settings profile" }))
+      .toBeDisabled();
+    await page.getByRole("button", { name: "Preview changes" }).click();
+    await expect
+      .element(page.getByRole("region", { name: "Changes from loading Sparse" }))
+      .toHaveTextContent("This profile would not change the current safe preferences.");
   });
 
   it("persists appearance preferences from Appearance settings", async () => {
