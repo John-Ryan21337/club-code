@@ -2,6 +2,7 @@ import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vitest";
 
 import {
+  COLLABORATION_DATABASE_FENCING_TOKEN_MAX,
   COLLABORATION_DATABASE_LEASE_MAX_LIFETIME_MILLIS,
   CollaborationDatabaseCoordinationPolicy,
   CollaborationDatabaseHeadUpdate,
@@ -36,6 +37,7 @@ const snapshot = {
 describe("collaboration database file contracts", () => {
   it("accepts only normalized project-relative paths", () => {
     expect(decodePath("data/project.sqlite")).toBe("data/project.sqlite");
+    expect(decodePath("data/😀.sqlite")).toBe("data/😀.sqlite");
 
     for (const path of [
       "/data/project.sqlite",
@@ -46,15 +48,26 @@ describe("collaboration database file contracts", () => {
       "data/./project.sqlite",
       "data/../project.sqlite",
       "data/project.sqlite\u0000",
+      " data/project.sqlite",
+      "data/project.sqlite ",
+      "data/project.sqlite.",
+      "data/CON.sqlite",
+      "data/aux",
+      "data/COM¹.log",
+      `data/${"a".repeat(256)}.sqlite`,
+      `data/${"é".repeat(128)}.sqlite`,
+      "data/cafe\u0301.sqlite",
+      "data/project\uD800.sqlite",
     ]) {
       expect(() => decodePath(path)).toThrow();
     }
   });
 
   it("makes unsafe live-file replication unrepresentable in every policy", () => {
-    expect(
-      decodePolicy({ kind: "external-service", fileReplication: "forbidden" }),
-    ).toEqual({ kind: "external-service", fileReplication: "forbidden" });
+    expect(decodePolicy({ kind: "external-service", fileReplication: "forbidden" })).toEqual({
+      kind: "external-service",
+      fileReplication: "forbidden",
+    });
     expect(
       decodePolicy({
         kind: "private-forks",
@@ -91,9 +104,14 @@ describe("collaboration database file contracts", () => {
     expect(() => decodeSnapshot({ ...snapshot, sidecarsExcluded: false })).toThrow();
     expect(() => decodeSnapshot({ ...snapshot, consistency: "filesystem-copy" })).toThrow();
     expect(() => decodeSnapshot({ ...snapshot, contentSha256: "not-a-hash" })).toThrow();
+    expect(() => decodeSnapshot({ ...snapshot, createdAt: "sometime tomorrow" })).toThrow();
     expect(() =>
       decodeSnapshot({ ...snapshot, relativePath: "data/project.sqlite-wal" }),
     ).toThrow();
+    expect(() =>
+      decodeSnapshot({ ...snapshot, relativePath: "data/project.duckdb.wal" }),
+    ).toThrow();
+    expect(() => decodeSnapshot({ ...snapshot, relativePath: "data/lock.mdb" })).toThrow();
   });
 
   it("rejects unbounded writer leases", () => {
@@ -111,8 +129,12 @@ describe("collaboration database file contracts", () => {
 
     expect(decodeLease(lease)).toMatchObject({ fencingToken: 7 });
     expect(() => decodeLease({ ...lease, expiresAt: lease.grantedAt })).toThrow();
+    expect(() => decodeLease({ ...lease, expiresAt: "2026-07-31T20:15:00.001Z" })).toThrow();
     expect(() =>
-      decodeLease({ ...lease, expiresAt: "2026-07-31T20:15:00.001Z" }),
+      decodeLease({
+        ...lease,
+        fencingToken: COLLABORATION_DATABASE_FENCING_TOKEN_MAX + 1,
+      }),
     ).toThrow();
   });
 
@@ -122,6 +144,8 @@ describe("collaboration database file contracts", () => {
       databaseId: "database-1",
       snapshot,
       expectedHeadContentSha256: "b".repeat(64),
+      authorUserId: "user-1",
+      authorDeviceId: "device-1",
       leaseId: "lease-1",
       fencingToken: 7,
       membershipEpoch: 4,
@@ -141,12 +165,33 @@ describe("collaboration database file contracts", () => {
         sharedProjectId: "shared-project-2",
       }),
     ).toThrow();
+    expect(() =>
+      decodeHeadUpdate({
+        ...update,
+        authorUserId: "user-2",
+      }),
+    ).toThrow();
+    expect(() =>
+      decodeHeadUpdate({
+        ...update,
+        authorDeviceId: "device-2",
+      }),
+    ).toThrow();
+    expect(() =>
+      decodeHeadUpdate({
+        ...update,
+        expectedHeadContentSha256: "d".repeat(64),
+      }),
+    ).toThrow();
   });
 
-  it("identifies SQLite live sidecars case-insensitively", () => {
+  it("identifies known live database sidecars case-insensitively", () => {
     expect(isDatabaseSidecarPath("data/project.sqlite-wal")).toBe(true);
     expect(isDatabaseSidecarPath("data/PROJECT.SQLITE-SHM")).toBe(true);
     expect(isDatabaseSidecarPath("data/project.sqlite-journal")).toBe(true);
+    expect(isDatabaseSidecarPath("data/project.sqlite-mj 0123ABCD")).toBe(true);
+    expect(isDatabaseSidecarPath("data/project.duckdb.wal")).toBe(true);
+    expect(isDatabaseSidecarPath("data/LOCK.MDB")).toBe(true);
     expect(isDatabaseSidecarPath("data/project.sqlite")).toBe(false);
   });
 });

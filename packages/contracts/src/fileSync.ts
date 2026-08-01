@@ -1,7 +1,7 @@
 import * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
 
-import { IsoDateTime, PositiveInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { PositiveInt } from "./baseSchemas.ts";
 import {
   CollaborationMembershipEpoch,
   CollaborationSha256,
@@ -13,45 +13,112 @@ import {
 export const COLLABORATION_DATABASE_LEASE_MAX_LIFETIME_MILLIS = 15 * 60 * 1_000;
 export const COLLABORATION_DATABASE_FILE_MAX_BYTES = 1024 * 1024 * 1024 * 1024;
 export const COLLABORATION_REPLICA_PATH_MAX_CHARS = 4_096;
+export const COLLABORATION_REPLICA_PATH_MAX_UTF8_BYTES = 4_096;
+export const COLLABORATION_REPLICA_PATH_SEGMENT_MAX_CHARS = 255;
+export const COLLABORATION_REPLICA_PATH_SEGMENT_MAX_UTF8_BYTES = 255;
+export const COLLABORATION_DATABASE_FENCING_TOKEN_MAX = Number.MAX_SAFE_INTEGER;
 
-export const SharedReplicaRelativePath = TrimmedNonEmptyString.check(
-  Schema.isMaxLength(COLLABORATION_REPLICA_PATH_MAX_CHARS),
-  Schema.makeFilter((path) => {
-    if (
-      path.startsWith("/") ||
-      path.includes("\\") ||
-      path.includes(":") ||
-      /[\u0000-\u001f\u007f]/u.test(path)
-    ) {
-      return "must be a normalized project-relative path";
-    }
+const CollaborationDatabaseIdentifier = Schema.String.check(
+  Schema.isNonEmpty(),
+  Schema.isMaxLength(128),
+  Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/),
+);
 
-    const segments = path.split("/");
-    return segments.some(
-      (segment) => segment.length === 0 || segment === "." || segment === "..",
-    )
-      ? "must not contain empty, current-directory, or parent-directory segments"
-      : undefined;
+const CollaborationDatabaseTimestamp = Schema.String.check(
+  Schema.isMinLength(24),
+  Schema.isMaxLength(24),
+  Schema.isPattern(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/),
+  Schema.makeFilter((value) => {
+    const epochMillis = Date.parse(value);
+    return Number.isFinite(epochMillis) && new Date(epochMillis).toISOString() === value
+      ? undefined
+      : "database timestamp must be a canonical, valid UTC instant";
   }),
+);
+
+const WINDOWS_RESERVED_FILE_STEM =
+  /^(?:con|prn|aux|nul|com[1-9\u00b9\u00b2\u00b3]|lpt[1-9\u00b9\u00b2\u00b3])$/iu;
+
+function hasForbiddenReplicaPathCodeUnit(path: string): boolean {
+  for (let index = 0; index < path.length; index += 1) {
+    const codeUnit = path.charCodeAt(index);
+    if (codeUnit <= 0x1f || codeUnit === 0x7f) {
+      return true;
+    }
+    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+      const nextCodeUnit = path.charCodeAt(index + 1);
+      if (nextCodeUnit < 0xdc00 || nextCodeUnit > 0xdfff) {
+        return true;
+      }
+      index += 1;
+    } else if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function invalidReplicaPath(path: string): string | undefined {
+  if (
+    path.length === 0 ||
+    path.trim() !== path ||
+    path.normalize("NFC") !== path ||
+    path.startsWith("/") ||
+    path.includes("\\") ||
+    path.includes(":") ||
+    hasForbiddenReplicaPathCodeUnit(path)
+  ) {
+    return "must be a canonical normalized project-relative path";
+  }
+  if (new TextEncoder().encode(path).byteLength > COLLABORATION_REPLICA_PATH_MAX_UTF8_BYTES) {
+    return `must be at most ${COLLABORATION_REPLICA_PATH_MAX_UTF8_BYTES} UTF-8 bytes`;
+  }
+
+  for (const segment of path.split("/")) {
+    if (segment.length === 0 || segment === "." || segment === "..") {
+      return "must not contain empty, current-directory, or parent-directory segments";
+    }
+    if (
+      segment.length > COLLABORATION_REPLICA_PATH_SEGMENT_MAX_CHARS ||
+      new TextEncoder().encode(segment).byteLength >
+        COLLABORATION_REPLICA_PATH_SEGMENT_MAX_UTF8_BYTES
+    ) {
+      return "contains a path segment that exceeds portable filesystem limits";
+    }
+    if (segment.endsWith(".") || segment.endsWith(" ")) {
+      return "must not contain path segments ending in a dot or space";
+    }
+    const stem = segment.split(".", 1)[0]!;
+    if (WINDOWS_RESERVED_FILE_STEM.test(stem)) {
+      return "must not contain a Windows reserved device name";
+    }
+  }
+  return undefined;
+}
+
+export const SharedReplicaRelativePath = Schema.String.check(
+  Schema.isNonEmpty(),
+  Schema.isMaxLength(COLLABORATION_REPLICA_PATH_MAX_CHARS),
+  Schema.makeFilter(invalidReplicaPath),
 ).pipe(Schema.brand("SharedReplicaRelativePath"));
 export type SharedReplicaRelativePath = typeof SharedReplicaRelativePath.Type;
 
-export const CollaborationDatabaseId = TrimmedNonEmptyString.check(
-  Schema.isMaxLength(128),
-).pipe(Schema.brand("CollaborationDatabaseId"));
+export const CollaborationDatabaseId = CollaborationDatabaseIdentifier.pipe(
+  Schema.brand("CollaborationDatabaseId"),
+);
 export type CollaborationDatabaseId = typeof CollaborationDatabaseId.Type;
 
-export const CollaborationDatabaseLeaseId = TrimmedNonEmptyString.check(
-  Schema.isMaxLength(128),
-).pipe(Schema.brand("CollaborationDatabaseLeaseId"));
+export const CollaborationDatabaseLeaseId = CollaborationDatabaseIdentifier.pipe(
+  Schema.brand("CollaborationDatabaseLeaseId"),
+);
 export type CollaborationDatabaseLeaseId = typeof CollaborationDatabaseLeaseId.Type;
 
-export const CollaborationDatabaseEngine = Schema.Literals([
-  "sqlite",
-  "duckdb",
-  "lmdb",
-  "unknown",
-]);
+export const CollaborationDatabaseFencingToken = PositiveInt.check(
+  Schema.isLessThanOrEqualTo(COLLABORATION_DATABASE_FENCING_TOKEN_MAX),
+);
+export type CollaborationDatabaseFencingToken = typeof CollaborationDatabaseFencingToken.Type;
+
+export const CollaborationDatabaseEngine = Schema.Literals(["sqlite", "duckdb", "lmdb", "unknown"]);
 export type CollaborationDatabaseEngine = typeof CollaborationDatabaseEngine.Type;
 
 /**
@@ -93,19 +160,17 @@ export const CollaborationDatabaseSnapshot = Schema.Struct({
   contentSha256: CollaborationSha256,
   baseContentSha256: Schema.NullOr(CollaborationSha256),
   schemaSha256: Schema.NullOr(CollaborationSha256),
-  byteSize: PositiveInt.check(
-    Schema.isLessThanOrEqualTo(COLLABORATION_DATABASE_FILE_MAX_BYTES),
-  ),
+  byteSize: PositiveInt.check(Schema.isLessThanOrEqualTo(COLLABORATION_DATABASE_FILE_MAX_BYTES)),
   consistency: Schema.Literals([
     "online-backup",
-    "checkpointed-copy",
+    "quiesced-checkpoint-copy",
     "offline-copy",
     "logical-export",
   ]),
   sidecarsExcluded: Schema.Literal(true),
   createdByUserId: UserId,
   createdByDeviceId: DeviceId,
-  createdAt: IsoDateTime,
+  createdAt: CollaborationDatabaseTimestamp,
 }).check(
   Schema.makeFilter((snapshot) =>
     isDatabaseSidecarPath(snapshot.relativePath)
@@ -122,7 +187,7 @@ export const CollaborationDatabaseWriterLease = Schema.Struct({
   holderUserId: UserId,
   holderDeviceId: DeviceId,
   membershipEpoch: CollaborationMembershipEpoch,
-  fencingToken: PositiveInt,
+  fencingToken: CollaborationDatabaseFencingToken,
   grantedAt: Schema.DateTimeUtcFromString,
   expiresAt: Schema.DateTimeUtcFromString,
 }).check(
@@ -136,41 +201,60 @@ export const CollaborationDatabaseWriterLease = Schema.Struct({
         ? Date.parse(lease.expiresAt)
         : DateTime.toEpochMillis(lease.expiresAt);
     const lifetimeMillis = expiresAtEpochMillis - grantedAtEpochMillis;
-    return lifetimeMillis > 0 &&
-      lifetimeMillis <= COLLABORATION_DATABASE_LEASE_MAX_LIFETIME_MILLIS
+    return lifetimeMillis > 0 && lifetimeMillis <= COLLABORATION_DATABASE_LEASE_MAX_LIFETIME_MILLIS
       ? undefined
       : `database writer lease lifetime must be greater than zero and at most ${COLLABORATION_DATABASE_LEASE_MAX_LIFETIME_MILLIS} milliseconds`;
   }),
 );
-export type CollaborationDatabaseWriterLease =
-  typeof CollaborationDatabaseWriterLease.Type;
+export type CollaborationDatabaseWriterLease = typeof CollaborationDatabaseWriterLease.Type;
 
 /**
  * Compare-and-swap command for advancing a canonical database head. The
  * coordinator must atomically verify the expected head, membership epoch,
- * lease identity, fencing token, and lease expiry before accepting it.
+ * lease identity, holder identities, fencing token, and lease expiry before
+ * accepting it. The author identities must also match the authenticated
+ * principal; neither identity nor lease authority is trusted from this
+ * client-supplied command alone.
  */
 export const CollaborationDatabaseHeadUpdate = Schema.Struct({
   sharedProjectId: SharedProjectId,
   databaseId: CollaborationDatabaseId,
   snapshot: CollaborationDatabaseSnapshot,
   expectedHeadContentSha256: Schema.NullOr(CollaborationSha256),
+  authorUserId: UserId,
+  authorDeviceId: DeviceId,
   leaseId: CollaborationDatabaseLeaseId,
-  fencingToken: PositiveInt,
+  fencingToken: CollaborationDatabaseFencingToken,
   membershipEpoch: CollaborationMembershipEpoch,
 }).check(
-  Schema.makeFilter((update) =>
-    update.snapshot.sharedProjectId !== update.sharedProjectId ||
-    update.snapshot.databaseId !== update.databaseId
-      ? "database head update and snapshot identities must match"
-      : undefined,
-  ),
+  Schema.makeFilter((update) => {
+    if (
+      update.snapshot.sharedProjectId !== update.sharedProjectId ||
+      update.snapshot.databaseId !== update.databaseId
+    ) {
+      return "database head update and snapshot identities must match";
+    }
+    if (
+      update.snapshot.createdByUserId !== update.authorUserId ||
+      update.snapshot.createdByDeviceId !== update.authorDeviceId
+    ) {
+      return "database head update author and snapshot creator identities must match";
+    }
+    return update.snapshot.baseContentSha256 === update.expectedHeadContentSha256
+      ? undefined
+      : "database head update expected hash must match the snapshot base hash";
+  }),
 );
 export type CollaborationDatabaseHeadUpdate = typeof CollaborationDatabaseHeadUpdate.Type;
 
-const SQLITE_SIDECAR_SUFFIXES = ["-wal", "-shm", "-journal"] as const;
+const DATABASE_SIDECAR_SUFFIXES = ["-wal", "-shm", "-journal", ".wal"] as const;
 
 export function isDatabaseSidecarPath(path: string): boolean {
-  const normalized = path.toLocaleLowerCase("en-US");
-  return SQLITE_SIDECAR_SUFFIXES.some((suffix) => normalized.endsWith(suffix));
+  const normalized = path.toLowerCase();
+  const fileName = normalized.slice(normalized.lastIndexOf("/") + 1);
+  return (
+    DATABASE_SIDECAR_SUFFIXES.some((suffix) => normalized.endsWith(suffix)) ||
+    /^.+-mj [a-f0-9]+$/u.test(fileName) ||
+    fileName === "lock.mdb"
+  );
 }

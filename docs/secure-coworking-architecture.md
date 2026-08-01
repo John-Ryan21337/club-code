@@ -195,8 +195,10 @@ sides. Binary files are immutable versions and never auto-merge.
 
 Database containers receive stricter treatment than ordinary binary files.
 Club Code never copies a live database file between peers and never replicates
-SQLite `-wal`, `-shm`, or rollback-journal sidecars. Projects choose one of
-three explicit coordination modes:
+known live sidecars, including SQLite `-wal`, `-shm`, rollback/super-journals,
+DuckDB `.wal`, or LMDB `lock.mdb`. An unknown database engine must use a proven
+offline copy or logical export because generic sidecar discovery is not a safe
+consistency boundary. Projects choose one of three explicit coordination modes:
 
 1. `external-service` (preferred for client/server databases): one database
    service owns transactions and users collaborate through its authenticated
@@ -213,11 +215,12 @@ three explicit coordination modes:
 
 Other operators may keep working concurrently in private forks even when a
 canonical-head lease is held. Club Code produces snapshots through an engine's
-online backup API, a completed checkpoint, an offline copy, or a logical
-export; it never treats copying an open database container as a consistent
-snapshot. Generic row-level merging is impossible without understanding the
-database schema and application invariants, so an unresolved changeset is kept
-as a reviewable conflict artifact instead of being guessed or overwritten.
+online backup API, a checkpoint copy made while engine writes are held and
+quiesced, an offline copy, or a logical export; completing a checkpoint and
+then copying a database that remains live is not a consistent snapshot.
+Generic row-level merging is impossible without understanding the database
+schema and application invariants, so an unresolved changeset is kept as a
+reviewable conflict artifact instead of being guessed or overwritten.
 
 Agent edits use per-lane worktrees or branches and enter a merge queue. A later
 phase may add a vetted CRDT such as Yjs or Automerge for keystroke-level text
@@ -301,9 +304,11 @@ raised only after load, partition, revocation, abuse, and backpressure testing.
   cross-project replay, concurrent-writer, revocation-race, corrupt-chain, and
   malformed-page regressions.
 - `packages/contracts/src/fileSync.ts` defines conflict-safe database
-  coordination modes, normalized replica paths, consistent immutable snapshot
-  descriptors, bounded writer leases, and compare-and-swap head updates with
-  fencing tokens. These are contracts only; no live database file is copied.
+  coordination modes, portable normalized replica paths, consistent immutable
+  snapshot descriptors, bounded writer leases, and identity-bound
+  compare-and-swap head updates whose expected hash matches the snapshot base
+  and whose fencing tokens remain exact integers. These are contracts only; no
+  live database file is copied.
 - Device key enrollment/signature verification at a network boundary, durable
   membership, invites, coordinator transport, subscriptions, chat/transcript
   UI, sandboxed agent runners, file synchronization/materialization, and signed
