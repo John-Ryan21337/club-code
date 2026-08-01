@@ -19,6 +19,10 @@ import {
 export const COLLABORATION_FILE_CHUNK_MAX_BYTES = 64 * 1024 * 1024;
 export const COLLABORATION_FILE_MAX_CHUNKS = 16_384;
 export const COLLABORATION_FILE_MAX_BYTES = 1024 * 1024 * 1024 * 1024;
+export const COLLABORATION_BLOB_STREAM_FRAME_MAX_BYTES = 1024 * 1024;
+export const COLLABORATION_BLOB_CHUNK_MAX_BYTES = 8 * 1024 * 1024;
+export const COLLABORATION_MATERIALIZED_FILE_MAX_BYTES = 1024 * 1024 * 1024;
+export const COLLABORATION_PROJECT_BLOB_QUOTA_MAX_BYTES = 20 * 1024 * 1024 * 1024;
 
 const CollaborationFileIdentifier = Schema.String.check(
   Schema.isNonEmpty(),
@@ -220,3 +224,52 @@ export const CollaborationFileState = Schema.Struct({
   }),
 );
 export type CollaborationFileState = typeof CollaborationFileState.Type;
+
+export const CollaborationBlobPutRequest = Schema.Struct({
+  sharedProjectId: SharedProjectId,
+  relativePath: SharedReplicaRelativePath,
+  deviceKeyId: CollaborationDeviceKeyId,
+  versionId: CollaborationFileVersionId,
+  chunkIndex: NonNegativeInt.check(Schema.isLessThan(COLLABORATION_FILE_MAX_CHUNKS)),
+  contentSha256: CollaborationSha256,
+  byteSize: PositiveInt.check(Schema.isLessThanOrEqualTo(COLLABORATION_BLOB_CHUNK_MAX_BYTES)),
+});
+export type CollaborationBlobPutRequest = typeof CollaborationBlobPutRequest.Type;
+
+export const CollaborationBlobPutResult = Schema.Struct({
+  disposition: Schema.Literals(["stored", "already-present"]),
+  contentSha256: CollaborationSha256,
+  byteSize: PositiveInt,
+});
+export type CollaborationBlobPutResult = typeof CollaborationBlobPutResult.Type;
+
+export const CollaborationMaterializeVersionRequest = Schema.Struct({
+  sharedProjectId: SharedProjectId,
+  relativePath: SharedReplicaRelativePath,
+  deviceKeyId: CollaborationDeviceKeyId,
+  versionId: CollaborationFileVersionId,
+});
+export type CollaborationMaterializeVersionRequest =
+  typeof CollaborationMaterializeVersionRequest.Type;
+
+export const CollaborationMaterializeTombstoneRequest = Schema.Struct({
+  sharedProjectId: SharedProjectId,
+  relativePath: SharedReplicaRelativePath,
+  deviceKeyId: CollaborationDeviceKeyId,
+  tombstoneId: CollaborationFileTombstoneId,
+});
+export type CollaborationMaterializeTombstoneRequest =
+  typeof CollaborationMaterializeTombstoneRequest.Type;
+
+export const CollaborationMaterializeResult = Schema.Struct({
+  disposition: Schema.Literals([
+    "materialized",
+    "already-materialized",
+    "moved-to-recovery",
+    "already-absent",
+  ]),
+  sharedProjectId: SharedProjectId,
+  relativePath: SharedReplicaRelativePath,
+  revisionId: CollaborationFileRevisionId,
+});
+export type CollaborationMaterializeResult = typeof CollaborationMaterializeResult.Type;
