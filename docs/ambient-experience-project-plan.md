@@ -43,11 +43,39 @@ boundaries, and operator control.
   plain alpha, no-warranty, own-risk notice and the same explicit warning that
   Auto Nudge can rapidly consume real paid tokens or credits. Japanese
   personality and humor never alter or obscure those notices.
+- UI localization follows the [localization canon](./ui-localization-canon.md):
+  renderer-local `system`, `en`, `ja`, and `dual` choices cover first-party
+  controls and authored automation defaults while user/provider/project content
+  remains untouched. Language changes never enable, arm, re-arm, reset, or
+  dispatch automation. Dual built-in prompts carry a direct warning that their
+  greater input length can consume more provider tokens or credits.
 - Linear owns actionable status, ownership, dependencies, blockers, and current
   PR state. Notion owns durable decisions, research, handoffs, and release
   notes. Git/GitHub plus exact gates, artifacts, and runtime observations remain
   the technical source of truth. Link these records rather than copying
   competing status narratives between them.
+
+## Canonical intake and preservation checkpoint (2026-08-01)
+
+The [Club Code Operator Feature Canon](./club-code-operator-feature-canon.md)
+is the complete product-request intake ledger. It preserves exact automation
+texts and safety rules, provider-runtime meaning, Matrix geometry and GPU
+requirements, ambient/media behavior, truthful telemetry, profiles, secure
+coworking, database coordination, distribution, shortcuts, documentation, and
+granular Cafe Code adoption expectations. Status in that ledger never replaces
+source/test/release evidence.
+
+The [UI Localization Canon](./ui-localization-canon.md) defines the four-mode
+English/Japanese presentation contract, bilingual learning layout, complete
+first-party string boundary, custom-prompt preservation, token warning, and
+strict separation between language selection and automation authority.
+
+The [project-state preservation ledger](./project-state-preservation-2026-08-01.md)
+records the safe consolidation of stale lane work before filesystem cleanup.
+All registered worktree heads were anchored, four complete-history bundles and
+15 tracked patches were verified/captured, and every dirty or untracked-only
+lane was retained. Future work must consult that ledger before deleting a
+remaining lane or recreating an apparently missing slice.
 
 ## Status definitions
 
@@ -95,6 +123,7 @@ boundaries, and operator control.
 | Completion alerts                | Partial                     | Windows exact-voice stereo path, ping, up to eight local 5-MiB/15-second clips, and honest web fallback                                                                                                         |
 | Whole-window opacity             | Partial                     | Validated Windows 65–100% capability path; no Linux/KDE blur or compositor parity                                                                                                                               |
 | Club Code branding               | Implemented                 | Club Code visible default with compatibility identifiers retained                                                                                                                                               |
+| English/Japanese UI localization | In progress                 | Renderer-local `system`/English/Japanese/dual contract; current source and focused tests must prove first-party coverage, prompt migration safety, responsive bilingual presentation, and no automation side effects |
 
 ## Current source and focused evidence
 
@@ -184,22 +213,29 @@ changed after this ledger.
    the fixed missing-provider versus no-sensors distinction; this host has two
    measured NVIDIA GPU temperatures but no Libre/Open Hardware Monitor WMI
    provider, so CPU/RAM/storage/ambient values remain honestly unavailable.
-3. **Auto Nudge safety remains release-critical.** Preserve the implemented
+3. **Japanese and dual-language UI is an urgent parallel lane.** Add the
+   renderer-local Follow system, English, 日本語, and English + 日本語 choices;
+   cover first-party buttons, settings, descriptions, warnings, accessibility
+   text, and built-in automation prompts without translating user/provider
+   content. Preserve every custom prompt byte-for-byte, warn that bilingual
+   prompts cost more input tokens, and prove language changes create no
+   automation authority or arming side effect.
+4. **Auto Nudge safety remains release-critical.** Preserve the implemented
    plan-driven prompt text. Dispatch only on a newly observed exact
    provider-confirmed completed response after the server-accepted exact-thread
    manual FIFO drains. Wall-clock time, polling, countdowns, idle duration, and
    route visibility never authorize a send.
-4. **Exact build proof is complete at `417fd56f`.** The exact source was gated,
+5. **Exact build proof is complete at `417fd56f`.** The exact source was gated,
    built, pushed, relaunched, and matched to the running client; loopback and LAN
    returned HTTP 200. Desktop, Start-menu, and the existing pinned taskbar
    shortcuts all resolve through PowerShell to
    `M:\ClubCode-local-release\Start-CafeCode.ps1`. Re-run this proof after any
    source change; device-specific mobile acceptance remains separate.
-5. **Finish the Cafe-to-Club review lineage.** Publish and gate the exact
+6. **Finish the Cafe-to-Club review lineage.** Publish and gate the exact
    current release tree through the PR ladder. Do not answer that Cafe Code can
    reproduce the entire current Club Code build until the current heads,
    dependencies, mergeability, and exact-tip gates prove it.
-6. **Run remaining device/browser acceptance.** This includes restrictive
+7. **Run remaining device/browser acceptance.** This includes restrictive
    Android browsing (especially DuckDuckGo) for YouTube, secure-context mobile
    camera capture, live LM Studio loopback/private-LAN discovery without
    crashing the host, multi-GPU/temperature telemetry, and desktop/LAN Matrix
@@ -212,6 +248,7 @@ changed after this ledger.
 | Auto Nudge ownership and text         | Exact-thread editable standing orders; built-in Steady Progress and Hardcore Fanout prompts resume the current plan/canon/PR context; no project-wide prompt inheritance                                                                                                                                        | Preserve exact prompt regressions and integrate concurrent changes without recreating the feature                                                                                         |
 | Auto Nudge authority and cost         | Completion-event-only, default-off, bounded rounds, durable dedupe, visible history, Stop, and accepted manual-FIFO priority; no time-based sending                                                                                                                                                             | Fresh safety gate must prove repeated timers/idle transitions cannot dispatch; retain paid-token warnings in EN/JA docs                                                                   |
 | Auto Nudge presentation               | Starts minimized at chat-manuscript width; red Off, green On, and accessible animated cyan/green when background continuation is enabled                                                                                                                                                                        | Desktop and phone browser smoke, including Settings navigation while an enabled exact thread continues                                                                                    |
+| English/Japanese UI localization      | Four-mode renderer-local requirement is now canonical: Follow system, English, 日本語, and English + 日本語; dual mode pairs compact labels and stacks longer authored copy                                                                                                                                        | Implement and audit every first-party UI surface; preserve user/provider content and custom prompts; warn about dual-template input cost; prove switching language cannot enable, arm, re-arm, reset, or dispatch automation                              |
 | Manual queue, Steer, and drafts       | Enter during active work creates visible editable/removable exact-thread FIFO rows; the head can Steer only with proven provider support; prompt-free server reservation precedes payload upload; unsent drafts recover locally                                                                                 | Cross-renderer authority begins only after server acceptance; verify queue/Steer behavior on each supported adapter                                                                       |
 | Matrix motion and typography          | Snow/rain/Matrix share Flat, Forward, Reverse, Warp, Walk Forward, and Walk Reverse; Flat/Forward/Reverse/Warp use an editable 1–72px Matrix base font; Walk endpoints use editable 1–144px whole-pixel values with continuous interpolation; near lines flare, far lines taper, and Warp narrows toward center | Live performance/corner/full-viewport smoke at small and large endpoint sizes; retain legacy fractional-value decoding only for migration                                                 |
 | Matrix activity, shimmer, and depth   | Provider-neutral safe category pulses/links, depth-scaled routes, rainbow/music modes, cinema glyph overlay, and console clipping exist                                                                                                                                                                         | Prove Network/database/build/agent links adapter by adapter; absence of exact evidence must produce no fake link, including Claude/local-provider gaps                                    |
@@ -286,6 +323,7 @@ moved earlier head needs exact-head gates rather than stale body results.
 | P2-05 | Auditor-as-fixer should be a repeatable Club Code workflow, not only an installed skill.                                                                                                  | Add an opt-in orchestration template: independent audit, same-context repair, validation, and another independent model only after a failed quality gate.                                                                                                                                                                                                                                                                                                                                                                                                             | Preserves user authority and dirty work; exact changed files/tests are logged; no forced model if unavailable; bounded rounds and explicit stop.                                                                                                                                                                                                                                                                                                                                               |
 | P2-06 | Spotify "connector" parity. Current implementation is an Embed, not an account library/search browser.                                                                                    | Feasibility and implementation through official Spotify APIs with minimal scopes for search and operator-owned playlists; keep playback in supported Embed/SDK rules.                                                                                                                                                                                                                                                                                                                                                                                                 | No password collection or entitlement bypass; token storage and revocation reviewed; scopes displayed; unsupported regions/accounts fail honestly.                                                                                                                                                                                                                                                                                                                                             |
 | P2-07 | **Top priority; security foundation partial.** Secure multi-operator shared projects need authenticated chat/transcript, bounded agent collaboration, and sandboxed file synchronization. | Build from the existing centralized authorizer and durable admitted-event journal. Add device enrollment and invites, authenticated outbound relay/subscriptions, attributed operator chat/transcript, compact context packets, then a separate content-addressed synchronization/materialization boundary. Keep transport, room UI, file mutation, and agent dispatch as independently auditable slices.                                                                                                                                                             | Removed members/keys cannot append or replay; project IDs cannot cross; retries are idempotent; pages are bounded and chain-verifiable; every prompt has operator attribution and visibility; no participant can escape the shared-project sandbox or delete another operator's source copy; conflicts/recovery are explicit; participant ceiling remains protocol-capped at 128 but load-tested support must be claimed separately.                                                           |
+| P2-08 | **In progress.** First-party UI language support is not yet release-proven across every surface.                                                                                       | Add renderer-local Follow system, English, 日本語, and English + 日本語 presentation. Use authored strings for controls/settings/descriptions/warnings/accessibility and built-in Auto Nudge/Idle Guard templates; never translate transcript, code, filenames, provider output, identifiers, secrets, or custom prompts.                                                                                                                                            | Catalog audit and EN/JA/dual desktop/responsive smokes prove coverage; recognized built-ins alone migrate; custom prompts remain byte-identical; dual templates warn of increased input-token cost; switching or resolving language cannot enable, arm, re-arm, reset, enqueue, dispatch, retry, alter caps/timing, or mint Auto Nudge/Idle Guard authority.                                      |
 
 ### Phase 3 - privileged automation and platform expansion
 
@@ -453,4 +491,9 @@ Each item requires:
       browser access, exact token savings, or Linux/KDE transparency.
 - [ ] English and Japanese public docs retain identical plain alpha,
       no-warranty, own-risk, and Auto Nudge paid-usage warnings.
+- [ ] English, Japanese, and dual UI smokes cover first-party buttons, settings,
+      descriptions, dialogs, warnings, statuses, tooltips, accessibility names,
+      and packaged Auto Nudge/Idle Guard prompts. Custom prompts and all
+      user/provider/project content remain unchanged; dual prompt cost is
+      warned; language changes produce no enable/arm/reset/dispatch side effect.
 - [ ] Backlog items remain visible rather than being relabeled as complete.

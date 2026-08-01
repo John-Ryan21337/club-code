@@ -23,6 +23,13 @@ remain partial, intentionally bounded, externally blocked, or not implemented.
 This distinction is part of the product contract. A design note, setting,
 scaffold, or test fixture is not by itself a shipped feature.
 
+The [Club Code Operator Feature Canon](./club-code-operator-feature-canon.md)
+is the authoritative intake ledger for operator-requested behavior, exact
+automation prompts, distribution expectations, and permanent safety
+constraints. This document remains the detailed implementation canon; where
+the intake ledger records an unimplemented request, it must not be read as a
+claim that the request has shipped.
+
 ## Purpose and naming
 
 Club Code is the user-facing name of this fork. Upstream Cafe Code package
