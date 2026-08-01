@@ -272,6 +272,29 @@ The initial supported limits are deliberately separate:
 Presence and viewers are cheaper than file and agent fanout. The limits may be
 raised only after load, partition, revocation, abuse, and backpressure testing.
 
+### Shared task and agent authority
+
+Migration 076 adds a transport-neutral task authority. Task title and body
+fields are explicitly operator-authored, bounded, NFC-normalized, and reject
+credential material and raw private-home paths. Provider output, secrets,
+dispatch payloads, and arbitrary metadata are not accepted.
+
+Every create, claim, reassign, completion, cancellation, reopen, dependency
+edit, and agent-lease operation is authorized against the current membership
+epoch and active device key both before and after the project writer lock. Task
+revisions are compare-and-swap values and every successful mutation advances a
+monotonic fencing token. A task has at most one live agent lease, leases use the
+server clock, and a project is capped at eight live agent leases. Dependency
+lists are capped at 32, must resolve inside the project, and are cycle checked
+before commit.
+
+The current task row is an integrity-checked projection. Accountability is an
+append-only, hash-chained audit history with principal-bound exact idempotency.
+Completion and cancellation preserve history and can be explicitly reopened;
+no task mutation physically deletes work. Network listeners, sockets, provider
+dispatch, orchestration RPC, file materialization, and UI remain later,
+separately reviewed boundaries.
+
 ## Delivery phases
 
 ### Current implementation evidence
