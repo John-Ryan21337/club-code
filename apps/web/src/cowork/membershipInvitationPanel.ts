@@ -1,6 +1,9 @@
 import {
   COLLABORATION_EVENT_SEQUENCE_MAX,
   COLLABORATION_INVITE_MAX_LIFETIME_MILLIS,
+  COLLABORATION_ROLE_PERMISSIONS,
+  CollaborationCreateInvitationRequest,
+  CollaborationCreateInvitationResult,
   CollaborationInvitationGrant,
   CollaborationMembershipCommandId,
   CollaborationMembershipMutationResult,
@@ -9,10 +12,11 @@ import {
   NonNegativeInt,
   collaborationPermissionsFitRole,
   type CollaborationInvitationId,
+  type CollaborationPermission,
   type CollaborationProjectMember,
   type CollaborationProjectRole,
-  type SharedProjectId,
-  type UserId,
+  SharedProjectId,
+  UserId,
 } from "@cafecode/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
@@ -61,6 +65,25 @@ const MembershipInvitationReadPage = Schema.Struct({
   }),
 );
 
+const CreateInvitationScope = Schema.Struct({
+  commandId: CollaborationMembershipCommandId,
+  sharedProjectId: SharedProjectId,
+  actorUserId: UserId,
+  expectedMembershipEpoch: NonNegativeInt,
+  expectedMembershipRevision: NonNegativeInt.check(
+    Schema.isLessThanOrEqualTo(COLLABORATION_EVENT_SEQUENCE_MAX),
+  ),
+  role: CollaborationCreateInvitationRequest.fields.role,
+  permissions: CollaborationCreateInvitationRequest.fields.permissions,
+  notBeforeDelayMillis: CollaborationCreateInvitationRequest.fields.notBeforeDelayMillis,
+  lifetimeMillis: CollaborationCreateInvitationRequest.fields.lifetimeMillis,
+});
+
+const ScopedCreateInvitationResult = Schema.Struct({
+  scope: CreateInvitationScope,
+  result: CollaborationCreateInvitationResult,
+});
+
 export interface MembershipInvitationClient {
   readonly load: (input: {
     readonly sharedProjectId: SharedProjectId;
@@ -73,6 +96,29 @@ export interface MembershipInvitationClient {
       readonly invitationId: CollaborationInvitationId;
     }>,
   ) => Promise<unknown>;
+  readonly createInvitation?: (request: MembershipInvitationCreateRequest) => Promise<unknown>;
+}
+
+export interface MembershipInvitationCreateInput {
+  readonly role: CollaborationProjectRole;
+  readonly permissions: ReadonlyArray<CollaborationPermission>;
+  readonly notBeforeDelayMillis: number;
+  readonly lifetimeMillis: number;
+}
+
+export interface MembershipInvitationCreateRequest extends MembershipInvitationCreateInput {
+  readonly commandId: string;
+  readonly sharedProjectId: SharedProjectId;
+  readonly actorUserId: UserId;
+  readonly expectedMembershipEpoch: number;
+  readonly expectedMembershipRevision: number;
+}
+
+export interface MembershipInvitationCreationState {
+  readonly status: "idle" | "pending" | "failed" | "lost" | "presented";
+  readonly canCreate: boolean;
+  readonly invitationId: CollaborationInvitationId | null;
+  readonly secret: string | null;
 }
 
 export interface MembershipInvitationMember {
@@ -104,6 +150,7 @@ export interface MembershipInvitationPanelState {
   readonly actorRole: CollaborationProjectRole | null;
   readonly members: ReadonlyArray<MembershipInvitationMember>;
   readonly invitations: ReadonlyArray<MembershipInvitationMetadata>;
+  readonly creation: MembershipInvitationCreationState;
 }
 
 interface LoadedInvitation {
@@ -124,6 +171,11 @@ interface RevokeAttempt {
   status: "pending" | "refreshing" | "failed";
 }
 
+interface CreateAttempt {
+  readonly request: Readonly<MembershipInvitationCreateRequest>;
+  status: "pending" | "failed";
+}
+
 interface ActiveScope {
   readonly generation: number;
   readonly sharedProjectId: SharedProjectId;
@@ -142,6 +194,8 @@ const decodePageSchema = Schema.decodeUnknownSync(MembershipInvitationReadPage);
 const decodeRevokeRequestSchema = Schema.decodeUnknownSync(CollaborationRevokeInvitationRequest);
 const decodeMutationSchema = Schema.decodeUnknownSync(CollaborationMembershipMutationResult);
 const decodeCommandIdSchema = Schema.decodeUnknownSync(CollaborationMembershipCommandId);
+const decodeCreateScopeSchema = Schema.decodeUnknownSync(CreateInvitationScope);
+const decodeCreateResultSchema = Schema.decodeUnknownSync(ScopedCreateInvitationResult);
 const strictOptions = { onExcessProperty: "error" } as const;
 const decodePage = (value: unknown) => {
   assertPlainData(value);
@@ -153,6 +207,11 @@ const decodeMutation = (value: unknown) => {
   return decodeMutationSchema(value, strictOptions);
 };
 const decodeCommandId = (value: unknown) => decodeCommandIdSchema(value, strictOptions);
+const decodeCreateScope = (value: unknown) => decodeCreateScopeSchema(value, strictOptions);
+const decodeCreateResult = (value: unknown) => {
+  assertPlainData(value);
+  return decodeCreateResultSchema(value, strictOptions);
+};
 
 /**
  * Injected clients are an explicit trust boundary. Validate JSON-like own data
@@ -230,6 +289,15 @@ function membershipFingerprint(snapshot: typeof CollaborationProjectMembershipSn
   );
 }
 
+function creationState(
+  status: MembershipInvitationCreationState["status"],
+  canCreate: boolean,
+  invitationId: CollaborationInvitationId | null = null,
+  secret: string | null = null,
+): MembershipInvitationCreationState {
+  return Object.freeze({ status, canCreate, invitationId, secret });
+}
+
 function initialState(sharedProjectId: SharedProjectId): MembershipInvitationPanelState {
   return Object.freeze({
     status: "loading",
@@ -241,6 +309,7 @@ function initialState(sharedProjectId: SharedProjectId): MembershipInvitationPan
     actorRole: null,
     members: Object.freeze([]),
     invitations: Object.freeze([]),
+    creation: creationState("idle", false),
   });
 }
 
@@ -285,6 +354,7 @@ export class MembershipInvitationPanelModel {
   #actor: CollaborationProjectMember | null = null;
   #membershipFingerprint: string | null = null;
   #attempts = new Map<CollaborationInvitationId, RevokeAttempt>();
+  #createAttempt: CreateAttempt | null = null;
   #listeners = new Set<() => void>();
 
   constructor(
@@ -315,6 +385,7 @@ export class MembershipInvitationPanelModel {
     this.#actor = null;
     this.#membershipFingerprint = null;
     this.#attempts.clear();
+    this.#createAttempt = null;
     this.#setState(initialState(sharedProjectId));
     void this.#load(scope);
   }
@@ -323,15 +394,104 @@ export class MembershipInvitationPanelModel {
     if (this.#active) this.#active.closed = true;
     this.#active = null;
     this.#attempts.clear();
+    this.#createAttempt = null;
+    if (this.#state.creation.secret !== null || this.#state.creation.status !== "idle") {
+      this.#setState(Object.freeze({ ...this.#state, creation: creationState("idle", false) }));
+    }
+  }
+
+  createInvitation(input: MembershipInvitationCreateInput, createCommandId: () => string): void {
+    const scope = this.#active;
+    const create = this.client.createInvitation;
+    if (
+      !scope ||
+      scope.closed ||
+      !create ||
+      this.#state.status !== "ready" ||
+      !this.#canCreate(input.role, input.permissions) ||
+      input.permissions.length === 0 ||
+      [...this.#attempts.values()].some(
+        (attempt) => attempt.status === "pending" || attempt.status === "refreshing",
+      ) ||
+      this.#createAttempt?.status === "pending" ||
+      this.#state.creation.status === "lost"
+    ) {
+      return;
+    }
+
+    let attempt = this.#createAttempt;
+    if (!attempt) {
+      let commandId: string;
+      try {
+        commandId = decodeCommandId(createCommandId());
+        const decoded = decodeCreateScope({
+          commandId,
+          sharedProjectId: scope.sharedProjectId,
+          actorUserId: this.actorUserId,
+          expectedMembershipEpoch: this.#state.epoch,
+          expectedMembershipRevision: this.#state.revision,
+          role: input.role,
+          permissions: [...input.permissions],
+          notBeforeDelayMillis: input.notBeforeDelayMillis,
+          lifetimeMillis: input.lifetimeMillis,
+        });
+        attempt = {
+          request: Object.freeze({
+            ...decoded,
+            permissions: Object.freeze([...decoded.permissions]),
+          }),
+          status: "pending",
+        };
+      } catch {
+        this.#createAttempt = null;
+        this.#setCreation("idle");
+        return;
+      }
+      this.#createAttempt = attempt;
+    } else {
+      attempt.status = "pending";
+    }
+
+    this.#setCreation("pending");
+    void this.#create(scope, attempt, create);
+  }
+
+  dismissInvitationSecret(): void {
+    if (this.#state.creation.status !== "presented" && this.#state.creation.status !== "lost") {
+      return;
+    }
+    if (this.#state.creation.status === "lost") return;
+    this.#createAttempt = null;
+    this.#setCreation("idle");
   }
 
   revokeInvitation(invitationId: CollaborationInvitationId, createCommandId: () => string): void {
     const scope = this.#active;
-    if (!scope || scope.closed || this.#state.status !== "ready") return;
+    if (
+      !scope ||
+      scope.closed ||
+      this.#state.status !== "ready" ||
+      this.#createAttempt?.status === "pending"
+    ) {
+      return;
+    }
     const invitation = this.#invitations.find(
       (candidate) => candidate.invitationId === invitationId,
     );
     if (!invitation || !this.#canRevoke(invitation)) return;
+
+    const resolvingLostSecret =
+      this.#state.creation.status === "lost" && this.#state.creation.invitationId === invitationId;
+    if (
+      this.#state.creation.status === "lost" &&
+      this.#state.creation.invitationId !== invitationId
+    ) {
+      return;
+    }
+    if (!resolvingLostSecret) {
+      this.#createAttempt = null;
+      this.#setCreation("idle");
+    }
 
     const previous = this.#attempts.get(invitationId);
     if (previous?.status === "pending") return;
@@ -365,6 +525,86 @@ export class MembershipInvitationPanelModel {
     void this.#revoke(scope, invitation, attempt);
   }
 
+  async #create(
+    scope: ActiveScope,
+    attempt: CreateAttempt,
+    create: NonNullable<MembershipInvitationClient["createInvitation"]>,
+  ): Promise<void> {
+    try {
+      const decoded = decodeCreateResult(await create(attempt.request));
+      if (
+        !this.#isActive(scope) ||
+        this.#createAttempt !== attempt ||
+        attempt.status !== "pending"
+      ) {
+        return;
+      }
+      if (!this.#sameCreateScope(decoded.scope, attempt.request)) {
+        throw new Error("invitation response scope did not match the request");
+      }
+      if (
+        this.#state.epoch !== attempt.request.expectedMembershipEpoch ||
+        this.#state.revision !== attempt.request.expectedMembershipRevision ||
+        this.#actor?.userId !== attempt.request.actorUserId
+      ) {
+        throw new Error("invitation authority changed while creating");
+      }
+
+      const { invitation, disposition, secret } = decoded.result;
+      const permissionMatch =
+        invitation.permissions.length === attempt.request.permissions.length &&
+        invitation.permissions.every(
+          (permission, index) => permission === attempt.request.permissions[index],
+        );
+      if (
+        invitation.sharedProjectId !== attempt.request.sharedProjectId ||
+        invitation.createdByUserId !== attempt.request.actorUserId ||
+        invitation.role !== attempt.request.role ||
+        !permissionMatch ||
+        DateTime.toEpochMillis(invitation.expiresAt) -
+          DateTime.toEpochMillis(invitation.notBefore) !==
+          attempt.request.lifetimeMillis ||
+        (disposition === "created" && secret === null) ||
+        (disposition === "already-applied" && secret !== null)
+      ) {
+        throw new Error("invitation result did not match the requested grant");
+      }
+
+      const loaded = cloneInvitation(invitation);
+      this.#invitations = Object.freeze(
+        [
+          ...this.#invitations.filter(
+            (candidate) => candidate.invitationId !== loaded.invitationId,
+          ),
+          loaded,
+        ].toSorted(
+          (left, right) =>
+            compareText(left.notBefore, right.notBefore) ||
+            compareText(left.expiresAt, right.expiresAt) ||
+            compareText(left.invitationId, right.invitationId),
+        ),
+      );
+
+      if (disposition === "already-applied") {
+        attempt.status = "failed";
+        this.#setCreation("lost", loaded.invitationId);
+      } else {
+        this.#createAttempt = null;
+        this.#setCreation("presented", loaded.invitationId, secret);
+      }
+      this.#publishReady();
+    } catch {
+      if (
+        this.#isActive(scope) &&
+        this.#createAttempt === attempt &&
+        attempt.status === "pending"
+      ) {
+        attempt.status = "failed";
+        this.#setCreation("failed");
+      }
+    }
+  }
+
   async #load(scope: ActiveScope): Promise<void> {
     try {
       const input = Object.freeze({
@@ -383,6 +623,7 @@ export class MembershipInvitationPanelModel {
         permissions: Object.freeze([...actor.permissions]),
       });
       this.#membershipFingerprint = membershipFingerprint(decoded.snapshot);
+      this.#createAttempt = null;
       this.#members = Object.freeze(
         decoded.snapshot.members
           .map(cloneMember)
@@ -412,6 +653,7 @@ export class MembershipInvitationPanelModel {
         actorRole: actor.role,
         members: this.#members,
         invitations: [],
+        creation: creationState("idle", this.#canCreateAny()),
       });
       this.#publishReady();
     } catch {
@@ -421,6 +663,7 @@ export class MembershipInvitationPanelModel {
         this.#actor = null;
         this.#membershipFingerprint = null;
         this.#attempts.clear();
+        this.#createAttempt = null;
         this.#setState(unavailableState(scope.sharedProjectId, this.#state));
       }
     }
@@ -441,6 +684,13 @@ export class MembershipInvitationPanelModel {
       this.#invitations = Object.freeze(
         this.#invitations.filter((candidate) => candidate.invitationId !== invitation.invitationId),
       );
+      if (
+        this.#state.creation.status === "lost" &&
+        this.#state.creation.invitationId === invitation.invitationId
+      ) {
+        this.#createAttempt = null;
+        this.#setCreation("idle");
+      }
       this.#publishReady();
     } catch {
       if (!this.#isActive(scope) || this.#attempts.get(invitation.invitationId) !== attempt) return;
@@ -505,6 +755,12 @@ export class MembershipInvitationPanelModel {
               compareText(left.invitationId, right.invitationId),
           ),
       );
+      const lostInvitationId =
+        this.#state.creation.status === "lost" ? this.#state.creation.invitationId : null;
+      const lostInvitationStillExists = this.#invitations.some(
+        (candidate) => candidate.invitationId === lostInvitationId,
+      );
+      if (!lostInvitationStillExists) this.#createAttempt = null;
       this.#state = Object.freeze({
         status: "ready",
         sharedProjectId: scope.sharedProjectId,
@@ -515,6 +771,9 @@ export class MembershipInvitationPanelModel {
         actorRole: actor.role,
         members: this.#members,
         invitations: Object.freeze([]),
+        creation: lostInvitationStillExists
+          ? creationState("lost", false, lostInvitationId)
+          : creationState("idle", this.#canCreateAny()),
       });
 
       const refreshedInvitation = this.#invitations.find(
@@ -548,6 +807,71 @@ export class MembershipInvitationPanelModel {
     );
   }
 
+  #canCreate(
+    role: CollaborationProjectRole,
+    permissions: ReadonlyArray<CollaborationPermission>,
+  ): boolean {
+    const actor = this.#actor;
+    return (
+      this.client.createInvitation !== undefined &&
+      actor !== null &&
+      (actor.role === "owner" || actor.role === "admin") &&
+      actor.permissions.includes("project.manage-members") &&
+      role !== "owner" &&
+      roleRank[role] < roleRank[actor.role] &&
+      collaborationPermissionsFitRole(role, permissions)
+    );
+  }
+
+  #canCreateAny(): boolean {
+    return this.#canCreate("viewer", COLLABORATION_ROLE_PERMISSIONS.viewer);
+  }
+
+  #sameCreateInput(
+    request: MembershipInvitationCreateRequest,
+    input: MembershipInvitationCreateInput,
+  ): boolean {
+    return (
+      request.role === input.role &&
+      request.notBeforeDelayMillis === input.notBeforeDelayMillis &&
+      request.lifetimeMillis === input.lifetimeMillis &&
+      request.permissions.length === input.permissions.length &&
+      request.permissions.every((permission, index) => permission === input.permissions[index])
+    );
+  }
+
+  #sameCreateScope(
+    actual: typeof CreateInvitationScope.Type,
+    expected: MembershipInvitationCreateRequest,
+  ): boolean {
+    return (
+      actual.commandId === expected.commandId &&
+      actual.sharedProjectId === expected.sharedProjectId &&
+      actual.actorUserId === expected.actorUserId &&
+      actual.expectedMembershipEpoch === expected.expectedMembershipEpoch &&
+      actual.expectedMembershipRevision === expected.expectedMembershipRevision &&
+      this.#sameCreateInput(actual, expected)
+    );
+  }
+
+  #setCreation(
+    status: MembershipInvitationCreationState["status"],
+    invitationId: CollaborationInvitationId | null = null,
+    secret: string | null = null,
+  ): void {
+    const canCreate =
+      status !== "pending" &&
+      status !== "lost" &&
+      this.#state.status === "ready" &&
+      this.#canCreateAny();
+    this.#setState(
+      Object.freeze({
+        ...this.#state,
+        creation: creationState(status, canCreate, invitationId, secret),
+      }),
+    );
+  }
+
   #publishReady(): void {
     if (this.#state.status !== "ready") return;
     const activeInvitationId = [...this.#attempts.entries()].find(
@@ -570,7 +894,21 @@ export class MembershipInvitationPanelModel {
         });
       }),
     );
-    this.#setState(Object.freeze({ ...this.#state, members: this.#members, invitations }));
+    this.#setState(
+      Object.freeze({
+        ...this.#state,
+        members: this.#members,
+        invitations,
+        creation: creationState(
+          this.#state.creation.status,
+          this.#state.creation.status !== "pending" &&
+            this.#state.creation.status !== "lost" &&
+            this.#canCreateAny(),
+          this.#state.creation.invitationId,
+          this.#state.creation.secret,
+        ),
+      }),
+    );
   }
 
   #isActive(scope: ActiveScope): boolean {

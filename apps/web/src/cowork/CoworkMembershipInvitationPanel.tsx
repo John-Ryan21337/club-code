@@ -1,5 +1,15 @@
-import type { CollaborationInvitationId, SharedProjectId, UserId } from "@cafecode/contracts";
-import { useEffect, useId, useMemo, useSyncExternalStore } from "react";
+import {
+  COLLABORATION_INVITE_MAX_LIFETIME_MILLIS,
+  COLLABORATION_INVITE_MAX_NOT_BEFORE_DELAY_MILLIS,
+  COLLABORATION_INVITE_MIN_LIFETIME_MILLIS,
+  COLLABORATION_ROLE_PERMISSIONS,
+  type CollaborationInvitationId,
+  type CollaborationPermission,
+  type CollaborationProjectRole,
+  type SharedProjectId,
+  type UserId,
+} from "@cafecode/contracts";
+import { useEffect, useId, useMemo, useState, useSyncExternalStore } from "react";
 
 import {
   type MembershipInvitationClient,
@@ -22,6 +32,16 @@ function displayTime(value: string): string {
   return Number.isFinite(epochMillis) ? new Date(epochMillis).toLocaleString() : "Unavailable";
 }
 
+const roleRank: Readonly<Record<CollaborationProjectRole, number>> = {
+  owner: 4,
+  admin: 3,
+  operator: 2,
+  contributor: 1,
+  viewer: 0,
+};
+
+const inviteRoles = ["admin", "operator", "contributor", "viewer"] as const;
+
 function MembershipInvitationPanelInner({
   client,
   sharedProjectId,
@@ -36,6 +56,15 @@ function MembershipInvitationPanelInner({
   );
   const state = useSyncExternalStore(model.subscribe, model.getSnapshot, model.getSnapshot);
   const headingId = useId();
+  const roleId = useId();
+  const delayId = useId();
+  const lifetimeId = useId();
+  const [role, setRole] = useState<CollaborationProjectRole>("viewer");
+  const [permissions, setPermissions] = useState<ReadonlyArray<CollaborationPermission>>(
+    COLLABORATION_ROLE_PERMISSIONS.viewer,
+  );
+  const [delayHours, setDelayHours] = useState("0");
+  const [lifetimeHours, setLifetimeHours] = useState("24");
 
   useEffect(() => {
     model.start(sharedProjectId);
@@ -44,6 +73,45 @@ function MembershipInvitationPanelInner({
 
   const revoke = (invitationId: CollaborationInvitationId) => {
     model.revokeInvitation(invitationId, createCommandId);
+  };
+
+  const chooseRole = (nextRole: CollaborationProjectRole) => {
+    setRole(nextRole);
+    setPermissions(COLLABORATION_ROLE_PERMISSIONS[nextRole]);
+  };
+
+  const togglePermission = (permission: CollaborationPermission) => {
+    setPermissions((current) =>
+      current.includes(permission)
+        ? current.filter((candidate) => candidate !== permission)
+        : COLLABORATION_ROLE_PERMISSIONS[role].filter(
+            (candidate) => candidate === permission || current.includes(candidate),
+          ),
+    );
+  };
+
+  const delayMillis = Number(delayHours) * 60 * 60_000;
+  const lifetimeMillis = Number(lifetimeHours) * 60 * 60_000;
+  const formIsValid =
+    Number.isInteger(delayMillis) &&
+    delayMillis >= 0 &&
+    delayMillis <= COLLABORATION_INVITE_MAX_NOT_BEFORE_DELAY_MILLIS &&
+    Number.isInteger(lifetimeMillis) &&
+    lifetimeMillis >= COLLABORATION_INVITE_MIN_LIFETIME_MILLIS &&
+    lifetimeMillis <= COLLABORATION_INVITE_MAX_LIFETIME_MILLIS &&
+    permissions.length > 0;
+
+  const createInvitation = () => {
+    if (!formIsValid) return;
+    model.createInvitation(
+      {
+        role,
+        permissions,
+        notBeforeDelayMillis: delayMillis,
+        lifetimeMillis,
+      },
+      createCommandId,
+    );
   };
 
   return (
@@ -63,6 +131,116 @@ function MembershipInvitationPanelInner({
             Current role: <strong>{state.actorRole}</strong>. Read revision {state.revision}, cursor{" "}
             {state.nextCursor}.
           </p>
+          {state.creation.canCreate || state.creation.status !== "idle" ? (
+            <form
+              aria-label="Create project invitation"
+              onSubmit={(event) => {
+                event.preventDefault();
+                createInvitation();
+              }}
+            >
+              <h3>Create invitation</h3>
+              <p>
+                The invitation token is shown once in this panel. It is not copied, saved, logged,
+                synchronized, or recoverable.
+              </p>
+              <label htmlFor={roleId}>Role</label>
+              <select
+                id={roleId}
+                value={role}
+                disabled={state.creation.status === "pending" || state.creation.status === "lost"}
+                onChange={(event) =>
+                  chooseRole(event.currentTarget.value as CollaborationProjectRole)
+                }
+              >
+                {inviteRoles
+                  .filter(
+                    (candidate) =>
+                      state.actorRole !== null && roleRank[candidate] < roleRank[state.actorRole],
+                  )
+                  .map((candidate) => (
+                    <option key={candidate} value={candidate}>
+                      {candidate}
+                    </option>
+                  ))}
+              </select>
+              <fieldset
+                disabled={state.creation.status === "pending" || state.creation.status === "lost"}
+              >
+                <legend>Permissions</legend>
+                {COLLABORATION_ROLE_PERMISSIONS[role].map((permission) => (
+                  <label className="block" key={permission}>
+                    <input
+                      type="checkbox"
+                      checked={permissions.includes(permission)}
+                      onChange={() => togglePermission(permission)}
+                    />{" "}
+                    {permission}
+                  </label>
+                ))}
+              </fieldset>
+              <label htmlFor={delayId}>Activation delay in hours (0 to 168)</label>
+              <input
+                id={delayId}
+                type="number"
+                min="0"
+                max="168"
+                step="1"
+                value={delayHours}
+                disabled={state.creation.status === "pending" || state.creation.status === "lost"}
+                onChange={(event) => setDelayHours(event.currentTarget.value)}
+              />
+              <label htmlFor={lifetimeId}>Lifetime in hours (1 to 720)</label>
+              <input
+                id={lifetimeId}
+                type="number"
+                min="1"
+                max="720"
+                step="1"
+                value={lifetimeHours}
+                disabled={state.creation.status === "pending" || state.creation.status === "lost"}
+                onChange={(event) => setLifetimeHours(event.currentTarget.value)}
+              />
+              <button
+                type="submit"
+                disabled={
+                  !formIsValid ||
+                  !state.creation.canCreate ||
+                  state.creation.status === "pending" ||
+                  state.creation.status === "lost"
+                }
+              >
+                {state.creation.status === "pending"
+                  ? "Creating invitationâ€¦"
+                  : state.creation.status === "failed"
+                    ? "Retry same invitation request"
+                    : "Create invitation"}
+              </button>
+              {state.creation.status === "failed" ? (
+                <p role="alert">
+                  Creation was not confirmed. Retry reuses the exact same command and scope.
+                </p>
+              ) : null}
+              {state.creation.status === "lost" ? (
+                <p role="alert">
+                  This invitation exists, but its one-time token was not recoverable. Revoke
+                  invitation {state.creation.invitationId}, then create a new one.
+                </p>
+              ) : null}
+              {state.creation.status === "presented" && state.creation.secret !== null ? (
+                <div role="alert" aria-label="One-time invitation token">
+                  <p>
+                    Share this token now. It cannot be shown again after dismissal or a context
+                    change.
+                  </p>
+                  <code className="break-all">{state.creation.secret}</code>
+                  <button type="button" onClick={() => model.dismissInvitationSecret()}>
+                    Dismiss token
+                  </button>
+                </div>
+              ) : null}
+            </form>
+          ) : null}
           <h3>Members</h3>
           <ul className="min-w-0" aria-label="Project members">
             {state.members.map((member) => (

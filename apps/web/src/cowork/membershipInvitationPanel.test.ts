@@ -98,6 +98,27 @@ function harness(load: MembershipInvitationClient["load"] = vi.fn(async () => pa
   return { client, revokeInvitation };
 }
 
+const CREATE_INPUT = Object.freeze({
+  role: "viewer" as const,
+  permissions: Object.freeze(["transcript.read", "chat.read", "task.read", "file.read"] as const),
+  notBeforeDelayMillis: 0,
+  lifetimeMillis: 24 * 60 * 60_000,
+});
+
+function createResult(
+  request: Parameters<NonNullable<MembershipInvitationClient["createInvitation"]>>[0],
+  disposition: "created" | "already-applied" = "created",
+) {
+  return {
+    scope: { ...request, permissions: [...request.permissions] },
+    result: {
+      disposition,
+      invitation: invitation(request.sharedProjectId, "invite-created"),
+      secret: disposition === "created" ? "A".repeat(43) : null,
+    },
+  };
+}
+
 async function settle() {
   for (let index = 0; index < 6; index += 1) await Promise.resolve();
 }
@@ -111,6 +132,7 @@ describe("MembershipInvitationPanelModel", () => {
     expect(Object.isFrozen(state)).toBe(true);
     expect(Object.isFrozen(state.members)).toBe(true);
     expect(Object.isFrozen(state.invitations)).toBe(true);
+    expect(Object.isFrozen(state.creation)).toBe(true);
   });
 
   it("loads a bounded project-scoped snapshot and detaches it from mutable input", async () => {
@@ -476,5 +498,165 @@ describe("MembershipInvitationPanelModel", () => {
     await settle();
     expect(revokeInvitation).not.toHaveBeenCalled();
     expect(model.getSnapshot().invitations[0]?.revokeStatus).toBe("idle");
+  });
+
+  it("presents a strictly scoped token once and drops it on dismissal", async () => {
+    const { client: baseClient } = harness(async () => page(PROJECT_A, "owner", []));
+    const createInvitation = vi.fn<NonNullable<MembershipInvitationClient["createInvitation"]>>(
+      async (request) => createResult(request),
+    );
+    const client: MembershipInvitationClient = { ...baseClient, createInvitation };
+    const commandFactory = vi.fn(() => "create-command-1");
+    const model = new MembershipInvitationPanelModel(client, OWNER, PROJECT_A);
+    model.start(PROJECT_A);
+    await settle();
+
+    model.createInvitation(CREATE_INPUT, commandFactory);
+    await settle();
+
+    const request = createInvitation.mock.calls[0]![0];
+    expect(Object.isFrozen(request)).toBe(true);
+    expect(Object.isFrozen(request.permissions)).toBe(true);
+    expect(request).toEqual({
+      commandId: "create-command-1",
+      sharedProjectId: PROJECT_A,
+      actorUserId: OWNER,
+      expectedMembershipEpoch: 7,
+      expectedMembershipRevision: 12,
+      ...CREATE_INPUT,
+    });
+    expect(model.getSnapshot().creation).toEqual({
+      status: "presented",
+      canCreate: true,
+      invitationId: "invite-created",
+      secret: "A".repeat(43),
+    });
+
+    model.dismissInvitationSecret();
+    expect(model.getSnapshot().creation).toEqual({
+      status: "idle",
+      canCreate: true,
+      invitationId: null,
+      secret: null,
+    });
+    expect(JSON.stringify(model.getSnapshot())).not.toContain("A".repeat(43));
+  });
+
+  it("reuses one exact command after an indeterminate ACK and locks a lost token until revoke", async () => {
+    const { client: baseClient, revokeInvitation } = harness(async () =>
+      page(PROJECT_A, "owner", []),
+    );
+    const createInvitation = vi
+      .fn<NonNullable<MembershipInvitationClient["createInvitation"]>>()
+      .mockRejectedValueOnce(new Error("response lost"))
+      .mockImplementationOnce(async (request) => createResult(request, "already-applied"));
+    const client: MembershipInvitationClient = { ...baseClient, createInvitation };
+    const commandFactory = vi.fn(() => "create-command-replay");
+    const model = new MembershipInvitationPanelModel(client, OWNER, PROJECT_A);
+    model.start(PROJECT_A);
+    await settle();
+
+    model.createInvitation(CREATE_INPUT, commandFactory);
+    await settle();
+    expect(model.getSnapshot().creation.status).toBe("failed");
+    expect(model.getSnapshot().creation.secret).toBeNull();
+
+    model.createInvitation({ ...CREATE_INPUT, lifetimeMillis: 60_000 }, commandFactory);
+    await settle();
+    expect(commandFactory).toHaveBeenCalledTimes(1);
+    expect(createInvitation.mock.calls[1]![0]).toBe(createInvitation.mock.calls[0]![0]);
+    expect(model.getSnapshot().creation).toMatchObject({
+      status: "lost",
+      invitationId: "invite-created",
+      secret: null,
+      canCreate: false,
+    });
+
+    model.createInvitation(CREATE_INPUT, commandFactory);
+    expect(createInvitation).toHaveBeenCalledTimes(2);
+    model.revokeInvitation("invite-created" as never, () => "revoke-lost-token");
+    await settle();
+    expect(revokeInvitation).toHaveBeenCalledTimes(1);
+    expect(model.getSnapshot().creation).toMatchObject({ status: "idle", canCreate: true });
+  });
+
+  it("rejects stale or hostile create results without retaining a token", async () => {
+    const { client: baseClient } = harness(async () => page(PROJECT_A, "owner", []));
+    const client: MembershipInvitationClient = {
+      ...baseClient,
+      createInvitation: vi.fn(async (request) => ({
+        ...createResult(request),
+        scope: { ...request, expectedMembershipEpoch: 8 },
+      })),
+    };
+    const model = new MembershipInvitationPanelModel(client, OWNER, PROJECT_A);
+    model.start(PROJECT_A);
+    await settle();
+
+    model.createInvitation(CREATE_INPUT, () => "hostile-create-command");
+    await settle();
+    expect(model.getSnapshot().creation).toMatchObject({
+      status: "failed",
+      secret: null,
+      invitationId: null,
+    });
+    expect(model.getSnapshot().invitations).toEqual([]);
+  });
+
+  it("does not invoke accessors in a create response", async () => {
+    let secretReads = 0;
+    const { client: baseClient } = harness(async () => page(PROJECT_A, "owner", []));
+    const createInvitation = vi.fn<NonNullable<MembershipInvitationClient["createInvitation"]>>(
+      async (request) => {
+        const response = createResult(request);
+        const result = response.result;
+        Object.defineProperty(result, "secret", {
+          enumerable: true,
+          get: () => {
+            secretReads += 1;
+            return "C".repeat(43);
+          },
+        });
+        return response;
+      },
+    );
+    const client: MembershipInvitationClient = { ...baseClient, createInvitation };
+    const model = new MembershipInvitationPanelModel(client, OWNER, PROJECT_A);
+    model.start(PROJECT_A);
+    await settle();
+
+    model.createInvitation(CREATE_INPUT, () => "accessor-create-command");
+    await settle();
+    expect(secretReads).toBe(0);
+    expect(model.getSnapshot().creation).toMatchObject({ status: "failed", secret: null });
+  });
+
+  it("drops a presented token on superseding request and ignores late results after context loss", async () => {
+    const late = deferred<unknown>();
+    const { client: baseClient } = harness(async () => page(PROJECT_A, "owner", []));
+    const createInvitation = vi
+      .fn<NonNullable<MembershipInvitationClient["createInvitation"]>>()
+      .mockImplementationOnce(async (request) => createResult(request))
+      .mockImplementationOnce(() => late.promise);
+    const client: MembershipInvitationClient = { ...baseClient, createInvitation };
+    const model = new MembershipInvitationPanelModel(client, OWNER, PROJECT_A);
+    model.start(PROJECT_A);
+    await settle();
+    model.createInvitation(CREATE_INPUT, () => "first-create-command");
+    await settle();
+    expect(model.getSnapshot().creation.secret).toBe("A".repeat(43));
+
+    model.createInvitation(CREATE_INPUT, () => "second-create-command");
+    expect(model.getSnapshot().creation).toMatchObject({ status: "pending", secret: null });
+    const secondRequest = createInvitation.mock.calls[1]![0];
+    model.start(PROJECT_B);
+    await settle();
+    late.resolve(createResult(secondRequest));
+    await settle();
+    expect(model.getSnapshot().sharedProjectId).toBe(PROJECT_B);
+    expect(model.getSnapshot().creation.secret).toBeNull();
+
+    model.stop();
+    expect(model.getSnapshot().creation.secret).toBeNull();
   });
 });
