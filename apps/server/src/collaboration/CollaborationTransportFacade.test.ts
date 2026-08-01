@@ -181,7 +181,11 @@ function makeHarness(overrides: Partial<CollaborationTransportFacadeOptions> = {
   const trustedPrincipal = principal();
   const principalResolver: CollaborationTransportPrincipalResolver = {
     resolve: () =>
-      Effect.succeed({ principal: trustedPrincipal, deviceKeyId: "device-key-1" as never }),
+      Effect.succeed({
+        principal: trustedPrincipal,
+        deviceKeyId: "device-key-1" as never,
+        deviceKeyCredential: "active",
+      }),
   };
   const membership = decodeMembership({
     sharedProjectId: PROJECT_ID,
@@ -303,7 +307,11 @@ describe("CollaborationTransportFacade", () => {
         principalResolver: {
           resolve: () => {
             resolutions += 1;
-            return Effect.succeed({ principal: principal(), deviceKeyId: "device-key-1" as never });
+            return Effect.succeed({
+              principal: principal(),
+              deviceKeyId: "device-key-1" as never,
+              deviceKeyCredential: "active",
+            });
           },
         },
         deviceKeyAuthority: authority,
@@ -332,15 +340,70 @@ describe("CollaborationTransportFacade", () => {
     }),
   );
 
+  it.effect("confines retained revoke credentials and hostile resolver output", () =>
+    Effect.gen(function* () {
+      let statusCalls = 0;
+      const retained = makeHarness({
+        principalResolver: {
+          resolve: () =>
+            Effect.succeed({
+              principal: principal(),
+              deviceKeyId: "device-key-1" as never,
+              deviceKeyCredential: "retained-revocation-replay",
+            }),
+        },
+        deviceKeyStore: makeDeviceKeyStore(
+          {
+            getActiveEd25519PublicKey: () => Effect.succeed(null),
+          },
+          {
+            getCurrentDeviceKeyStatus: () => {
+              statusCalls += 1;
+              return Effect.succeed(currentDeviceStatus() as never);
+            },
+          },
+        ),
+      }).facade;
+      expect(
+        yield* failureCode(
+          retained.getCurrentDeviceKeyStatus({
+            authentication: "opaque",
+            request: { sharedProjectId: PROJECT_ID },
+          }),
+        ),
+      ).toBe("not-found");
+      expect(statusCalls).toBe(0);
+
+      const hostileOutput = new Proxy(
+        {},
+        {
+          ownKeys() {
+            throw new Error("SECRET_RESOLVER_TRAP_DETAIL");
+          },
+        },
+      );
+      const hostile = makeHarness({
+        principalResolver: {
+          resolve: () => Effect.succeed(hostileOutput as never),
+        },
+      }).facade;
+      expect(
+        yield* failureCode(hostile.append({ authentication: {}, request: appendRequest() })),
+      ).toBe("not-found");
+    }),
+  );
+
   it.effect("self-revokes only the authenticated key and preserves exact command reuse", () =>
     Effect.gen(function* () {
       let keyChecks = 0;
       let revocations = 0;
       const receivedRequests: unknown[] = [];
       const authority: CollaborationDeviceKeyAuthorityShape = {
-        getActiveEd25519PublicKey: () => {
+        getActiveEd25519PublicKey: (lookup) => {
           keyChecks += 1;
-          return Effect.succeed(null);
+          return Effect.succeed(
+            revocations === 0 ? { ...lookup, publicKeySpkiDer: new Uint8Array([1]) } : null,
+          );
         },
       };
       const store = makeDeviceKeyStore(authority, {
@@ -352,7 +415,18 @@ describe("CollaborationTransportFacade", () => {
           );
         },
       });
-      const { facade } = makeHarness({ deviceKeyAuthority: authority, deviceKeyStore: store });
+      const { facade } = makeHarness({
+        principalResolver: {
+          resolve: () =>
+            Effect.succeed({
+              principal: principal(),
+              deviceKeyId: "device-key-1" as never,
+              deviceKeyCredential: revocations === 0 ? "active" : "retained-revocation-replay",
+            }),
+        },
+        deviceKeyAuthority: authority,
+        deviceKeyStore: store,
+      });
       const request = {
         commandId: "device-revoke-command-1",
         sharedProjectId: PROJECT_ID,
@@ -365,7 +439,7 @@ describe("CollaborationTransportFacade", () => {
         (yield* facade.revokeCurrentDeviceKey({ authentication: "opaque", request })).disposition,
       ).toBe("already-applied");
       expect(receivedRequests).toEqual([request, request]);
-      expect(keyChecks).toBe(0);
+      expect(keyChecks).toBe(1);
 
       expect(
         yield* failureCode(
@@ -423,6 +497,7 @@ describe("CollaborationTransportFacade", () => {
               Effect.succeed({
                 principal: principal(OTHER_PROJECT_ID),
                 deviceKeyId: "device-key-1" as never,
+                deviceKeyCredential: "active",
               }),
           },
           messageStore: makeStore({

@@ -33,15 +33,19 @@ describe("coworkCurrentDeviceKeyClientFromNetwork", () => {
       sharedProjectId: "project-1",
       deviceKeyId: "device-key-1",
     }) as never;
+    const statusOptions = Object.freeze({ signal: new AbortController().signal });
+    const revokeOptions = Object.freeze({ signal: new AbortController().signal });
 
-    await adapter.getCurrentDeviceKeyStatus(statusRequest);
-    await adapter.revokeCurrentDeviceKey(revokeRequest);
-    await adapter.revokeCurrentDeviceKey(revokeRequest);
+    await adapter.getCurrentDeviceKeyStatus(statusRequest, statusOptions);
+    await adapter.revokeCurrentDeviceKey(revokeRequest, revokeOptions);
+    await adapter.revokeCurrentDeviceKey(revokeRequest, revokeOptions);
 
-    expect(status).toHaveBeenCalledWith(statusRequest);
+    expect(status).toHaveBeenCalledWith(statusRequest, statusOptions);
     expect(Reflect.ownKeys(status.mock.calls[0]![0] as object)).toEqual(["sharedProjectId"]);
     expect(revoke.mock.calls[0]![0]).toBe(revokeRequest);
     expect(revoke.mock.calls[1]![0]).toBe(revokeRequest);
+    expect(revoke.mock.calls[0]![1]).toBe(revokeOptions);
+    expect(revoke.mock.calls[1]![1]).toBe(revokeOptions);
     expect(Object.isFrozen(adapter)).toBe(true);
   });
 
@@ -55,5 +59,20 @@ describe("coworkCurrentDeviceKeyClientFromNetwork", () => {
     });
     Object.defineProperty(accessor, "revokeCurrentDeviceKey", { value: vi.fn() });
     expect(() => coworkCurrentDeviceKeyClientFromNetwork(accessor)).toThrow(/own callable/);
+
+    const hostile = new Proxy(
+      {},
+      {
+        getOwnPropertyDescriptor() {
+          throw new Error("SECRET_PROXY_TRAP_DETAIL");
+        },
+      },
+    ) as CollaborationNetworkClient;
+    expect(() => coworkCurrentDeviceKeyClientFromNetwork(hostile)).toThrow(
+      /could not be inspected safely/,
+    );
+    expect(() => coworkCurrentDeviceKeyClientFromNetwork(hostile)).not.toThrow(
+      /SECRET_PROXY_TRAP_DETAIL/,
+    );
   });
 });

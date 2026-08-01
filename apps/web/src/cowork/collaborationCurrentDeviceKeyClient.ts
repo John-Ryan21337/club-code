@@ -6,7 +6,12 @@ function ownCallable<Key extends "getCurrentDeviceKeyStatus" | "revokeCurrentDev
   client: CollaborationNetworkClient,
   key: Key,
 ): CollaborationNetworkClient[Key] {
-  const descriptor = Object.getOwnPropertyDescriptor(client, key);
+  let descriptor: PropertyDescriptor | undefined;
+  try {
+    descriptor = Object.getOwnPropertyDescriptor(client, key);
+  } catch {
+    throw new Error("collaboration network client could not be inspected safely");
+  }
   if (
     !descriptor ||
     !Object.hasOwn(descriptor, "value") ||
@@ -30,9 +35,11 @@ export function coworkCurrentDeviceKeyClientFromNetwork(
   return Object.freeze({
     getCurrentDeviceKeyStatus: (
       request: Parameters<CoworkCurrentDeviceKeyClient["getCurrentDeviceKeyStatus"]>[0],
-    ) => Reflect.apply(status, client, [request]),
+      options?: Parameters<CoworkCurrentDeviceKeyClient["getCurrentDeviceKeyStatus"]>[1],
+    ) => Reflect.apply(status, client, [request, options]),
     revokeCurrentDeviceKey: (
       request: Parameters<CoworkCurrentDeviceKeyClient["revokeCurrentDeviceKey"]>[0],
-    ) => Reflect.apply(revoke, client, [request]),
+      options?: Parameters<CoworkCurrentDeviceKeyClient["revokeCurrentDeviceKey"]>[1],
+    ) => Reflect.apply(revoke, client, [request, options]),
   });
 }

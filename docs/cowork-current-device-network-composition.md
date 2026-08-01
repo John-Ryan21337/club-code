@@ -19,16 +19,20 @@ enrollment boundary.
 
 Self-revoke additionally requires the requested key ID to equal the resolver-issued current key.
 The device store remains the durable authority for membership, current-key state, and command
-receipts. The facade permits the exact command receipt replay after revocation without requiring
-the just-revoked key to remain active; a different command against a revoked key is rejected by the
-store. A deployed resolver must therefore be able to verify the original credential against retained
-public identity material long enough to reach that exact receipt; this verification does not grant
-authority for a new command. Responses must be `revoked` or `already-applied`, contain the exact
-resolved scope and key, and include a revocation timestamp.
+receipts. The resolver contract explicitly distinguishes an `active` credential from a
+`retained-revocation-replay` credential. The latter is admitted only for `device-key.revoke`, and the
+device-key store then verifies the original principal, membership epoch, request hash, actor tuple,
+receipt hash, persisted key row, and revoked timestamp before returning `already-applied`; a
+different command ID or request fails closed. A deployed resolver must retain enough public identity
+material to verify that original signed request and may attest the retained credential class only
+after successful verification. That attestation cannot authorize status, chat, subscription, or a
+new revocation command. Responses must be `revoked` or `already-applied`, contain the exact resolved
+scope and key, and include a revocation timestamp.
 
 `coworkCurrentDeviceKeyClientFromNetwork` is the narrow web composition. It captures only the
 network client's two own callable device methods, freezes the adapter, forwards status without
-adding selectors, and preserves the same revoke request object for the panel's explicit retry.
+adding selectors, forwards explicit cancellation, and preserves the same revoke request object for
+the panel's explicit retry.
 
 This slice does not add device enumeration, other-device revocation, enrollment, key material,
 operating-system custody, credential persistence, a listener launcher, automatic reconnect,

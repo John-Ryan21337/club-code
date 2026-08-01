@@ -29,9 +29,11 @@ export type CoworkCurrentDeviceKeyScope = typeof CurrentDeviceKeyScope.Type;
 export interface CoworkCurrentDeviceKeyClient {
   readonly getCurrentDeviceKeyStatus: (
     request: Readonly<typeof CollaborationCurrentDeviceKeyStatusRequest.Type>,
+    options?: { readonly signal?: AbortSignal },
   ) => Promise<unknown>;
   readonly revokeCurrentDeviceKey: (
     request: Readonly<typeof CollaborationRevokeDeviceKeyRequest.Type>,
+    options?: { readonly signal?: AbortSignal },
   ) => Promise<unknown>;
 }
 
@@ -59,6 +61,7 @@ export interface CoworkCurrentDeviceKeyState {
 interface ActiveGeneration {
   readonly id: number;
   closed: boolean;
+  controller: AbortController | null;
 }
 
 interface RevokeAttempt {
@@ -228,13 +231,17 @@ export class CoworkCurrentDeviceKeyModel {
 
   start(): void {
     this.stop();
-    const active = { id: ++this.#generation, closed: false };
+    const active = { id: ++this.#generation, closed: false, controller: null };
     this.#active = active;
     void this.#readStatus(active);
   }
 
   stop(): void {
-    if (this.#active) this.#active.closed = true;
+    if (this.#active) {
+      this.#active.closed = true;
+      this.#active.controller?.abort();
+      this.#active.controller = null;
+    }
     this.#active = null;
     this.#attempt = null;
     this.#state = stateFor(this.#scope, "idle");
@@ -325,9 +332,12 @@ export class CoworkCurrentDeviceKeyModel {
     this.#attempt = null;
     this.#setState(stateFor(this.#scope, "loading"));
     if (!this.#isActive(active)) return;
+    const controller = new AbortController();
+    active.controller = controller;
     try {
       const raw = await Reflect.apply(this.#getCurrentDeviceKeyStatus, this.#client, [
         this.#statusRequest,
+        { signal: controller.signal },
       ]);
       if (!this.#isActive(active)) return;
       assertPlainData(raw, "current-device key status response");
@@ -347,6 +357,8 @@ export class CoworkCurrentDeviceKeyModel {
       if (!this.#isActive(active)) return;
       this.#attempt = null;
       this.#setState(stateFor(this.#scope, "unavailable"));
+    } finally {
+      if (active.controller === controller) active.controller = null;
     }
   }
 
@@ -354,9 +366,12 @@ export class CoworkCurrentDeviceKeyModel {
     if (!this.#isCurrent(active, attempt)) return;
     this.#setState(stateFor(this.#scope, "revoking", attempt));
     if (!this.#isCurrent(active, attempt)) return;
+    const controller = new AbortController();
+    active.controller = controller;
     try {
       const raw = await Reflect.apply(this.#revokeCurrentDeviceKey, this.#client, [
         attempt.request,
+        { signal: controller.signal },
       ]);
       if (!this.#isCurrent(active, attempt)) return;
       assertPlainData(raw, "current-device key revocation response");
@@ -376,6 +391,8 @@ export class CoworkCurrentDeviceKeyModel {
     } catch {
       if (!this.#isCurrent(active, attempt)) return;
       this.#setState(stateFor(this.#scope, "retry-revoke", attempt));
+    } finally {
+      if (active.controller === controller) active.controller = null;
     }
   }
 

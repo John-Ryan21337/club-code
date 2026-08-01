@@ -82,6 +82,12 @@ export class CollaborationTransportError extends Data.TaggedError("Collaboration
 export interface CollaborationTransportResolvedPrincipal {
   readonly principal: CollaborationPrincipal;
   readonly deviceKeyId: CollaborationDeviceKeyId;
+  /**
+   * Server-attested credential class. A retained credential is valid only for
+   * replaying an already committed revocation; the store's exact receipt gate
+   * must reject every new command made with it.
+   */
+  readonly deviceKeyCredential: "active" | "retained-revocation-replay";
 }
 
 /**
@@ -443,12 +449,48 @@ export function makeCollaborationTransportFacade(
     projectId: SharedProjectId,
     permissions: ReadonlyArray<CollaborationPermission>,
     signal: AbortSignal | undefined,
-    requireActiveDeviceKey = true,
+    allowRetainedRevocationReplay = false,
   ): Effect.Effect<CollaborationTransportResolvedPrincipal, CollaborationTransportError> =>
     Effect.gen(function* () {
-      const resolved = yield* options.principalResolver
+      const resolverOutput = yield* options.principalResolver
         .resolve({ authentication, targetProjectId: projectId, operation, signal })
         .pipe(Effect.mapError(() => error(operation, "not-found")));
+      const resolved = yield* Effect.try({
+        try: () => {
+          if (typeof resolverOutput !== "object" || resolverOutput === null) throw new Error();
+          const keys = Reflect.ownKeys(resolverOutput);
+          if (
+            keys.length !== 3 ||
+            !keys.every(
+              (key) =>
+                typeof key === "string" &&
+                (key === "principal" || key === "deviceKeyId" || key === "deviceKeyCredential"),
+            )
+          ) {
+            throw new Error();
+          }
+          const principal = Object.getOwnPropertyDescriptor(resolverOutput, "principal");
+          const deviceKeyId = Object.getOwnPropertyDescriptor(resolverOutput, "deviceKeyId");
+          const credential = Object.getOwnPropertyDescriptor(resolverOutput, "deviceKeyCredential");
+          if (
+            !principal ||
+            !("value" in principal) ||
+            !deviceKeyId ||
+            !("value" in deviceKeyId) ||
+            !credential ||
+            !("value" in credential) ||
+            (credential.value !== "active" && credential.value !== "retained-revocation-replay")
+          ) {
+            throw new Error();
+          }
+          return {
+            principal: principal.value,
+            deviceKeyId: deviceKeyId.value,
+            deviceKeyCredential: credential.value,
+          };
+        },
+        catch: () => error(operation, "not-found"),
+      });
       const deviceKeyId = yield* decodeDeviceKeyId(resolved.deviceKeyId, {
         onExcessProperty: "error",
       }).pipe(Effect.mapError(() => error(operation, "not-found")));
@@ -462,7 +504,11 @@ export function makeCollaborationTransportFacade(
           Effect.mapError(() => error(operation, "not-found")),
         );
       }
-      if (!requireActiveDeviceKey) return { principal: resolved.principal, deviceKeyId };
+      if (resolved.deviceKeyCredential === "retained-revocation-replay") {
+        if (!allowRetainedRevocationReplay)
+          return yield* Effect.fail(error(operation, "not-found"));
+        return { ...resolved, deviceKeyId };
+      }
       const key = yield* options.deviceKeyAuthority
         .getActiveEd25519PublicKey({
           sharedProjectId: projectId,
@@ -473,7 +519,7 @@ export function makeCollaborationTransportFacade(
         })
         .pipe(Effect.mapError(() => error(operation, "not-found")));
       if (key === null) return yield* Effect.fail(error(operation, "not-found"));
-      return { principal: resolved.principal, deviceKeyId };
+      return { ...resolved, deviceKeyId };
     });
 
   const revalidate = (
@@ -514,8 +560,8 @@ export function makeCollaborationTransportFacade(
     readonly transport: CollaborationTransportInput;
     readonly projectId: SharedProjectId;
     readonly permissions: ReadonlyArray<CollaborationPermission>;
-    readonly authorizeDeviceKey?: boolean;
     readonly revalidateDeviceKey?: boolean;
+    readonly allowRetainedRevocationReplay?: boolean;
     readonly run: (
       resolved: CollaborationTransportResolvedPrincipal,
     ) => Effect.Effect<A, CollaborationTransportError>;
@@ -543,7 +589,7 @@ export function makeCollaborationTransportFacade(
             input.projectId,
             input.permissions,
             input.transport.signal,
-            input.authorizeDeviceKey,
+            input.allowRetainedRevocationReplay,
           ),
         );
         const result = yield* withCancellation(
@@ -862,8 +908,8 @@ export function makeCollaborationTransportFacade(
         transport: input,
         projectId: request.sharedProjectId,
         permissions: [],
-        authorizeDeviceKey: false,
         revalidateDeviceKey: false,
+        allowRetainedRevocationReplay: true,
         run: (resolved) => {
           if (request.deviceKeyId !== resolved.deviceKeyId) {
             return Effect.fail(error("device-key.revoke", "not-found"));

@@ -72,9 +72,10 @@ describe("CoworkCurrentDeviceKeyModel", () => {
     await phase(h.model, "active");
 
     expect(h.getCurrentDeviceKeyStatus).toHaveBeenCalledOnce();
-    expect(h.getCurrentDeviceKeyStatus).toHaveBeenCalledWith({
+    expect(h.getCurrentDeviceKeyStatus.mock.calls[0]![0]).toEqual({
       sharedProjectId: scope.sharedProjectId,
     });
+    expect(h.getCurrentDeviceKeyStatus.mock.calls[0]![1]?.signal).toBeInstanceOf(AbortSignal);
     expect(Reflect.ownKeys(h.getCurrentDeviceKeyStatus.mock.calls[0]![0])).toEqual([
       "sharedProjectId",
     ]);
@@ -171,6 +172,7 @@ describe("CoworkCurrentDeviceKeyModel", () => {
     h.model.retrySelfRevoke();
     await phase(h.model, "enrollment-required");
     expect(revoke.mock.calls[1]![0]).toBe(originalRequest);
+    expect(revoke.mock.calls[1]![1]?.signal).not.toBe(revoke.mock.calls[0]![1]?.signal);
     expect(Object.isFrozen(originalRequest)).toBe(true);
     expect(createCommandId).toHaveBeenCalledOnce();
   });
@@ -218,12 +220,17 @@ describe("CoworkCurrentDeviceKeyModel", () => {
 
   it("clears pending authority synchronously and drops late status or revoke results after stop", async () => {
     let resolveStatus!: (value: unknown) => void;
+    let statusSignal: AbortSignal | undefined;
     const statusPending = harness({
-      status: () => new Promise((resolve) => (resolveStatus = resolve)),
+      status: (_request, options) => {
+        statusSignal = options?.signal;
+        return new Promise((resolve) => (resolveStatus = resolve));
+      },
     });
     statusPending.model.start();
     await phase(statusPending.model, "loading");
     statusPending.model.stop();
+    expect(statusSignal?.aborted).toBe(true);
     expect(statusPending.model.getSnapshot().phase).toBe("idle");
     resolveStatus(activeStatus());
     await Promise.resolve();
@@ -231,8 +238,12 @@ describe("CoworkCurrentDeviceKeyModel", () => {
     expect(statusPending.model.getSnapshot().phase).toBe("idle");
 
     let resolveRevoke!: (value: unknown) => void;
+    let revokeSignal: AbortSignal | undefined;
     const revokePending = harness({
-      revoke: () => new Promise((resolve) => (resolveRevoke = resolve)),
+      revoke: (_request, options) => {
+        revokeSignal = options?.signal;
+        return new Promise((resolve) => (resolveRevoke = resolve));
+      },
     });
     revokePending.model.start();
     await phase(revokePending.model, "active");
@@ -240,6 +251,7 @@ describe("CoworkCurrentDeviceKeyModel", () => {
     revokePending.model.confirmSelfRevoke(() => "pending-revoke-command");
     await phase(revokePending.model, "revoking");
     revokePending.model.stop();
+    expect(revokeSignal?.aborted).toBe(true);
     expect(revokePending.model.getSnapshot()).toMatchObject({
       phase: "idle",
       deviceKeyId: null,
