@@ -112,6 +112,12 @@ describe("collaboration database file contracts", () => {
       decodeSnapshot({ ...snapshot, relativePath: "data/project.duckdb.wal" }),
     ).toThrow();
     expect(() => decodeSnapshot({ ...snapshot, relativePath: "data/lock.mdb" })).toThrow();
+    expect(() =>
+      decodeSnapshot({ ...snapshot, engine: "unknown", consistency: "online-backup" }),
+    ).toThrow();
+    expect(
+      decodeSnapshot({ ...snapshot, engine: "unknown", consistency: "offline-copy" }),
+    ).toMatchObject({ engine: "unknown", consistency: "offline-copy" });
   });
 
   it("rejects unbounded writer leases", () => {
