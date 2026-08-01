@@ -4,7 +4,10 @@ import { describe, expect, it } from "vitest";
 import {
   COLLABORATION_DATABASE_FENCING_TOKEN_MAX,
   COLLABORATION_DATABASE_LEASE_MAX_LIFETIME_MILLIS,
+  CollaborationDatabaseBinding,
+  CollaborationDatabaseConfigureCommand,
   CollaborationDatabaseCoordinationPolicy,
+  CollaborationDatabaseCommandId,
   CollaborationDatabaseHeadUpdate,
   CollaborationDatabaseSnapshot,
   CollaborationDatabaseWriterLease,
@@ -14,6 +17,9 @@ import {
 
 const decodePath = Schema.decodeUnknownSync(SharedReplicaRelativePath);
 const decodePolicy = Schema.decodeUnknownSync(CollaborationDatabaseCoordinationPolicy);
+const decodeCommandId = Schema.decodeUnknownSync(CollaborationDatabaseCommandId);
+const decodeBinding = Schema.decodeUnknownSync(CollaborationDatabaseBinding);
+const decodeConfigure = Schema.decodeUnknownSync(CollaborationDatabaseConfigureCommand);
 const decodeSnapshot = Schema.decodeUnknownSync(CollaborationDatabaseSnapshot);
 const decodeLease = Schema.decodeUnknownSync(CollaborationDatabaseWriterLease);
 const decodeHeadUpdate = Schema.decodeUnknownSync(CollaborationDatabaseHeadUpdate);
@@ -35,6 +41,32 @@ const snapshot = {
 };
 
 describe("collaboration database file contracts", () => {
+  it("uses bounded opaque database command identifiers", () => {
+    expect(decodeCommandId("command-1")).toBe("command-1");
+    expect(() => decodeCommandId(" command-1")).toThrow();
+    expect(() => decodeCommandId("command/1")).toThrow();
+    expect(() => decodeCommandId("a".repeat(129))).toThrow();
+  });
+
+  it("rejects bindings that target known live database sidecars", () => {
+    const command = {
+      commandId: "configure-1",
+      sharedProjectId: "shared-project-1",
+      databaseId: "database-1",
+      relativePath: "data/project.sqlite",
+      engine: "sqlite" as const,
+      policy: {
+        kind: "serialized-head" as const,
+        fileReplication: "immutable-snapshots-only" as const,
+        leaseLifetimeMillis: 60_000,
+      },
+    };
+    expect(decodeConfigure(command)).toMatchObject({ databaseId: "database-1" });
+    expect(() =>
+      decodeConfigure({ ...command, relativePath: "data/project.sqlite-wal" }),
+    ).toThrow();
+  });
+
   it("accepts only normalized project-relative paths", () => {
     expect(decodePath("data/project.sqlite")).toBe("data/project.sqlite");
     expect(decodePath("data/😀.sqlite")).toBe("data/😀.sqlite");
@@ -142,6 +174,43 @@ describe("collaboration database file contracts", () => {
         fencingToken: COLLABORATION_DATABASE_FENCING_TOKEN_MAX + 1,
       }),
     ).toThrow();
+  });
+
+  it("binds decoded head and lease identities to their database state", () => {
+    const lease = {
+      sharedProjectId: "shared-project-1",
+      databaseId: "database-1",
+      leaseId: "lease-1",
+      holderUserId: "user-1",
+      holderDeviceId: "device-1",
+      membershipEpoch: 4,
+      fencingToken: 7,
+      grantedAt: "2026-07-31T20:00:00.000Z",
+      expiresAt: "2026-07-31T20:15:00.000Z",
+    };
+    const binding = {
+      sharedProjectId: "shared-project-1",
+      databaseId: "database-1",
+      relativePath: "data/project.sqlite",
+      engine: "sqlite" as const,
+      policy: {
+        kind: "serialized-head" as const,
+        fileReplication: "immutable-snapshots-only" as const,
+        leaseLifetimeMillis: 60_000,
+      },
+      headSnapshot: snapshot,
+      lastFencingToken: 7,
+      activeLease: lease,
+    };
+
+    expect(decodeBinding(binding)).toMatchObject({ lastFencingToken: 7 });
+    expect(() =>
+      decodeBinding({ ...binding, headSnapshot: { ...snapshot, databaseId: "database-2" } }),
+    ).toThrow();
+    expect(() =>
+      decodeBinding({ ...binding, activeLease: { ...lease, databaseId: "database-2" } }),
+    ).toThrow();
+    expect(() => decodeBinding({ ...binding, lastFencingToken: 8 })).toThrow();
   });
 
   it("binds a head update to its project, database, base hash, epoch, lease, and fence", () => {

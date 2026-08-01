@@ -77,6 +77,7 @@ import Migration0062 from "./Migrations/062_UsageStatsTokenSavings.ts";
 import Migration0064 from "./Migrations/064_ProviderPacingPendingLaunchCompatibility.ts";
 import Migration0065 from "./Migrations/065_ForkLineageCompatibility.ts";
 import Migration0070 from "./Migrations/070_CollaborationEvents.ts";
+import Migration0071 from "./Migrations/071_CollaborationDatabaseCoordination.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -162,6 +163,7 @@ export const migrationEntries = [
   // migration 62. Keep a later convergence boundary for every shipped lineage.
   [65, "ForkLineageCompatibility", Migration0065],
   [70, "CollaborationEvents", Migration0070],
+  [71, "CollaborationDatabaseCoordination", Migration0071],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

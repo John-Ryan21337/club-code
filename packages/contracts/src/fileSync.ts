@@ -1,7 +1,7 @@
 import * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
 
-import { PositiveInt } from "./baseSchemas.ts";
+import { NonNegativeInt, PositiveInt } from "./baseSchemas.ts";
 import {
   CollaborationMembershipEpoch,
   CollaborationSha256,
@@ -112,6 +112,11 @@ export const CollaborationDatabaseLeaseId = CollaborationDatabaseIdentifier.pipe
   Schema.brand("CollaborationDatabaseLeaseId"),
 );
 export type CollaborationDatabaseLeaseId = typeof CollaborationDatabaseLeaseId.Type;
+
+export const CollaborationDatabaseCommandId = CollaborationDatabaseIdentifier.pipe(
+  Schema.brand("CollaborationDatabaseCommandId"),
+);
+export type CollaborationDatabaseCommandId = typeof CollaborationDatabaseCommandId.Type;
 
 export const CollaborationDatabaseFencingToken = PositiveInt.check(
   Schema.isLessThanOrEqualTo(COLLABORATION_DATABASE_FENCING_TOKEN_MAX),
@@ -251,6 +256,88 @@ export const CollaborationDatabaseHeadUpdate = Schema.Struct({
   }),
 );
 export type CollaborationDatabaseHeadUpdate = typeof CollaborationDatabaseHeadUpdate.Type;
+
+export const CollaborationDatabaseConfigureCommand = Schema.Struct({
+  commandId: CollaborationDatabaseCommandId,
+  sharedProjectId: SharedProjectId,
+  databaseId: CollaborationDatabaseId,
+  relativePath: SharedReplicaRelativePath,
+  engine: CollaborationDatabaseEngine,
+  policy: CollaborationDatabaseCoordinationPolicy,
+}).check(
+  Schema.makeFilter((command) =>
+    isDatabaseSidecarPath(command.relativePath)
+      ? "database bindings must not target live database sidecar files"
+      : undefined,
+  ),
+);
+export type CollaborationDatabaseConfigureCommand =
+  typeof CollaborationDatabaseConfigureCommand.Type;
+
+export const CollaborationDatabaseAcquireLeaseCommand = Schema.Struct({
+  commandId: CollaborationDatabaseCommandId,
+  sharedProjectId: SharedProjectId,
+  databaseId: CollaborationDatabaseId,
+});
+export type CollaborationDatabaseAcquireLeaseCommand =
+  typeof CollaborationDatabaseAcquireLeaseCommand.Type;
+
+export const CollaborationDatabaseLeaseCommand = Schema.Struct({
+  commandId: CollaborationDatabaseCommandId,
+  sharedProjectId: SharedProjectId,
+  databaseId: CollaborationDatabaseId,
+  leaseId: CollaborationDatabaseLeaseId,
+  fencingToken: CollaborationDatabaseFencingToken,
+});
+export type CollaborationDatabaseLeaseCommand = typeof CollaborationDatabaseLeaseCommand.Type;
+
+export const CollaborationDatabasePublishHeadCommand = Schema.Struct({
+  commandId: CollaborationDatabaseCommandId,
+  update: CollaborationDatabaseHeadUpdate,
+});
+export type CollaborationDatabasePublishHeadCommand =
+  typeof CollaborationDatabasePublishHeadCommand.Type;
+
+export const CollaborationDatabaseBinding = Schema.Struct({
+  sharedProjectId: SharedProjectId,
+  databaseId: CollaborationDatabaseId,
+  relativePath: SharedReplicaRelativePath,
+  engine: CollaborationDatabaseEngine,
+  policy: CollaborationDatabaseCoordinationPolicy,
+  headSnapshot: Schema.NullOr(CollaborationDatabaseSnapshot),
+  lastFencingToken: NonNegativeInt.check(
+    Schema.isLessThanOrEqualTo(COLLABORATION_DATABASE_FENCING_TOKEN_MAX),
+  ),
+  activeLease: Schema.NullOr(CollaborationDatabaseWriterLease),
+}).check(
+  Schema.makeFilter((binding) => {
+    if (
+      binding.headSnapshot !== null &&
+      (binding.headSnapshot.sharedProjectId !== binding.sharedProjectId ||
+        binding.headSnapshot.databaseId !== binding.databaseId ||
+        binding.headSnapshot.relativePath !== binding.relativePath ||
+        binding.headSnapshot.engine !== binding.engine)
+    ) {
+      return "database binding and head snapshot identities must match";
+    }
+    return binding.activeLease !== null &&
+      (binding.activeLease.sharedProjectId !== binding.sharedProjectId ||
+        binding.activeLease.databaseId !== binding.databaseId ||
+        binding.activeLease.fencingToken !== binding.lastFencingToken)
+      ? "database binding and active lease identities and fence must match"
+      : undefined;
+  }),
+);
+export type CollaborationDatabaseBinding = typeof CollaborationDatabaseBinding.Type;
+
+export const CollaborationDatabaseReleaseResult = Schema.Struct({
+  sharedProjectId: SharedProjectId,
+  databaseId: CollaborationDatabaseId,
+  leaseId: CollaborationDatabaseLeaseId,
+  fencingToken: CollaborationDatabaseFencingToken,
+  released: Schema.Literal(true),
+});
+export type CollaborationDatabaseReleaseResult = typeof CollaborationDatabaseReleaseResult.Type;
 
 const DATABASE_SIDECAR_SUFFIXES = ["-wal", "-shm", "-journal", ".wal"] as const;
 
