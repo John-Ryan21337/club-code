@@ -281,15 +281,31 @@ dispatch payloads, and arbitrary metadata are not accepted.
 
 Every create, claim, reassign, completion, cancellation, reopen, dependency
 edit, and agent-lease operation is authorized against the current membership
-epoch and active device key both before and after the project writer lock. Task
+epoch and active device key before the project writer lock, again after it is
+held, and immediately before commit. Reads and history recheck authorization
+after assembling their result. Reassignment targets must still be current
+members whose role permits task management; stale membership rows are not an
+authority source. Stored task ownership is historical state rather than a
+foreign-key authority edge, so an owned task cannot prevent membership
+revocation. Task
 revisions are compare-and-swap values and every successful mutation advances a
 monotonic fencing token. A task has at most one live agent lease, leases use the
-server clock, and a project is capped at eight live agent leases. Dependency
-lists are capped at 32, must resolve inside the project, and are cycle checked
-before commit.
+server clock, renewal/release remain bound to the granting membership epoch, and
+active lease identifiers are unique inside a project. A project is capped at
+eight live agent leases and 10,000 durable tasks.
+Dependency lists are capped at 32, must resolve inside the project, and are
+cycle checked before commit. Completion revalidates both the declared graph and
+its normalized dependency projection. A completed prerequisite cannot be
+reopened while a completed dependent still relies on it.
 
 The current task row is an integrity-checked projection. Accountability is an
 append-only, hash-chained audit history with principal-bound exact idempotency.
+The hash binds the command input digest as well as the attributed task snapshot,
+so idempotency metadata cannot be rewritten independently of the audit chain.
+History binds every row back to the same project and task snapshot and validates
+the project-global predecessor, including at page boundaries. History responses
+are bounded by both event count and a 1 MiB encoded-payload ceiling. Server time
+may advance or remain equal but cannot move behind the task or audit tail.
 Completion and cancellation preserve history and can be explicitly reopened;
 no task mutation physically deletes work. Network listeners, sockets, provider
 dispatch, orchestration RPC, file materialization, and UI remain later,

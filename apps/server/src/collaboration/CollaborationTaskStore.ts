@@ -10,12 +10,16 @@ import type {
 } from "@cafecode/contracts";
 import {
   COLLABORATION_ACTIVE_AGENT_LEASE_LIMIT,
+  COLLABORATION_TASK_HISTORY_PAGE_MAX_UTF8_BYTES,
+  COLLABORATION_TASK_PROJECT_LIMIT,
+  CollaborationProjectMembershipSnapshot,
   CollaborationCreateTaskCommand as CreateSchema,
   CollaborationSharedTask as TaskSchema,
   CollaborationTaskAuditEvent as AuditSchema,
   CollaborationTaskHistoryRequest as HistorySchema,
   CollaborationTaskMutationCommand as MutationSchema,
   CollaborationTaskReadRequest as ReadSchema,
+  collaborationRoleAllowsPermission,
 } from "@cafecode/contracts";
 import { createHash } from "node:crypto";
 
@@ -34,6 +38,7 @@ import { CollaborationDeviceKeyAuthority } from "./CollaborationEventAdmission.t
 type Operation =
   | CollaborationCreateTaskCommand["kind"]
   | CollaborationTaskMutationCommand["kind"]
+  | "mutate"
   | "read"
   | "history";
 export type CollaborationTaskStoreFailureReason =
@@ -50,6 +55,7 @@ export type CollaborationTaskStoreFailureReason =
   | "lease-active"
   | "lease-mismatch"
   | "agent-capacity"
+  | "task-capacity"
   | "integrity-failure"
   | "storage-unavailable";
 
@@ -163,12 +169,29 @@ const decodeCreateCommand = Schema.decodeUnknownEffect(CreateSchema);
 const decodeMutationCommand = Schema.decodeUnknownEffect(MutationSchema);
 const decodeReadRequest = Schema.decodeUnknownEffect(ReadSchema);
 const decodeHistoryRequest = Schema.decodeUnknownEffect(HistorySchema);
+const decodeMembership = Schema.decodeUnknownEffect(CollaborationProjectMembershipSnapshot);
 const decodeCreate = (value: unknown) => decodeCreateCommand(value, { onExcessProperty: "error" });
 const decodeMutation = (value: unknown) =>
   decodeMutationCommand(value, { onExcessProperty: "error" });
 
 function taskPayload(row: Omit<TaskRow, "recordSha256">) {
   return JSON.stringify(row);
+}
+function auditPayload(event: CollaborationTaskAuditEvent, inputSha256: string) {
+  const encoded = encodeAudit(event);
+  return JSON.stringify({
+    sharedProjectId: encoded.sharedProjectId,
+    sequence: encoded.sequence,
+    commandId: encoded.commandId,
+    operation: encoded.operation,
+    task: encoded.task,
+    actorUserId: encoded.actorUserId,
+    actorDeviceId: encoded.actorDeviceId,
+    membershipEpoch: encoded.membershipEpoch,
+    previousEventSha256: encoded.previousEventSha256,
+    createdAt: encoded.createdAt,
+    inputSha256,
+  });
 }
 function rowToTask(row: TaskRow, operation: Operation): CollaborationSharedTask {
   const { recordSha256: _record, ...payload } = row;
@@ -219,11 +242,21 @@ function auditFromRow(row: AuditRow, operation: Operation) {
     eventSha256: row.eventSha256,
     createdAt: row.createdAt,
   });
-  const unsigned = { ...encodeAudit(event), eventSha256: undefined };
-  if (hash("club-code-collaboration-task-audit-v1", JSON.stringify(unsigned)) !== row.eventSha256)
+  if (
+    event.sharedProjectId !== row.sharedProjectId ||
+    event.task.sharedProjectId !== row.sharedProjectId ||
+    event.task.taskId !== row.taskId ||
+    hash("club-code-collaboration-task-audit-v1", auditPayload(event, row.inputSha256)) !==
+      row.eventSha256
+  )
     throw fail(operation, "integrity-failure");
   return event;
 }
+const auditFromRowEffect = (row: AuditRow, operation: Operation) =>
+  Effect.try({
+    try: () => auditFromRow(row, operation),
+    catch: (error) => (isStoreError(error) ? error : fail(operation, "integrity-failure")),
+  });
 
 const makeStore = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -267,8 +300,69 @@ const makeStore = Effect.gen(function* () {
     sql`INSERT INTO collaboration_task_write_locks(shared_project_id) VALUES(${project}) ON CONFLICT(shared_project_id) DO UPDATE SET shared_project_id=excluded.shared_project_id`;
   const rowsFor = (project: string, task: string) =>
     sql<TaskRow>`SELECT ${sql.unsafe(taskColumns)} FROM collaboration_tasks WHERE shared_project_id=${project} AND task_id=${task}`;
+  const dependencyRowsFor = (project: string, task: string) =>
+    sql<{
+      readonly taskId: string;
+    }>`SELECT depends_on_task_id AS "taskId" FROM collaboration_task_dependencies WHERE shared_project_id=${project} AND task_id=${task} ORDER BY depends_on_task_id`;
+  const loadTask = (operation: Operation, project: string, taskId: string) =>
+    Effect.gen(function* () {
+      const rows = yield* rowsFor(project, taskId);
+      if (rows.length !== 1)
+        return yield* Effect.fail(
+          fail(operation, rows.length === 0 ? "not-found" : "integrity-failure"),
+        );
+      const task = yield* Effect.try({
+        try: () => rowToTask(rows[0]!, operation),
+        catch: (error) => (isStoreError(error) ? error : fail(operation, "integrity-failure")),
+      });
+      const projected = (yield* dependencyRowsFor(project, taskId)).map((row) => row.taskId);
+      const declared = task.dependencies.toSorted();
+      if (JSON.stringify(projected) !== JSON.stringify(declared))
+        return yield* Effect.fail(fail(operation, "integrity-failure"));
+      return task;
+    });
+  const assertAssignableOwner = (
+    operation: Operation,
+    project: SharedProjectId,
+    userId: string,
+    membershipEpoch: number,
+  ) =>
+    Effect.gen(function* () {
+      const authority = yield* CollaborationMembershipAuthority;
+      const raw = yield* authority
+        .getCurrent(project)
+        .pipe(Effect.mapError(() => fail(operation, "not-authorized")));
+      const current = yield* decodeMembership(raw, { onExcessProperty: "error" }).pipe(
+        Effect.mapError(() => fail(operation, "not-authorized")),
+      );
+      const member = current.members.find((candidate) => candidate.userId === userId);
+      if (
+        current.sharedProjectId !== project ||
+        current.epoch !== membershipEpoch ||
+        !member ||
+        !member.permissions.includes("task.manage") ||
+        !collaborationRoleAllowsPermission(member.role, "task.manage")
+      )
+        return yield* Effect.fail(fail(operation, "not-authorized"));
+    });
   const commandRows = (project: string, command: string) =>
     sql<AuditRow>`SELECT ${sql.unsafe(auditColumns)} FROM collaboration_task_audit_events WHERE shared_project_id=${project} AND command_id=${command}`;
+  const validatedAudit = (operation: Operation, row: AuditRow) =>
+    Effect.gen(function* () {
+      const event = yield* auditFromRowEffect(row, operation);
+      if (row.sequence === 1) {
+        if (event.previousEventSha256 !== null)
+          return yield* Effect.fail(fail(operation, "integrity-failure"));
+        return event;
+      }
+      const predecessor =
+        yield* sql<AuditRow>`SELECT ${sql.unsafe(auditColumns)} FROM collaboration_task_audit_events WHERE shared_project_id=${row.sharedProjectId} AND sequence=${row.sequence - 1}`;
+      if (predecessor.length !== 1) return yield* Effect.fail(fail(operation, "integrity-failure"));
+      const previous = yield* auditFromRowEffect(predecessor[0]!, operation);
+      if (event.previousEventSha256 !== previous.eventSha256)
+        return yield* Effect.fail(fail(operation, "integrity-failure"));
+      return event;
+    });
   const inputHash = (command: unknown, principal: CollaborationPrincipal) =>
     hash(
       "club-code-collaboration-task-command-v1",
@@ -286,20 +380,24 @@ const makeStore = Effect.gen(function* () {
     rows: ReadonlyArray<AuditRow>,
     expectedHash: string,
     principal: CollaborationPrincipal,
-  ) => {
-    if (rows.length !== 1)
-      throw fail(operation, rows.length === 0 ? "not-found" : "integrity-failure");
-    const row = rows[0]!;
-    if (
-      row.inputSha256 !== expectedHash ||
-      row.actorUserId !== principal.userId ||
-      row.actorDeviceId !== principal.deviceId ||
-      row.membershipEpoch !== principal.membershipEpoch ||
-      row.operation !== operation
-    )
-      throw fail(operation, "idempotency-conflict");
-    return auditFromRow(row, operation);
-  };
+  ) =>
+    Effect.gen(function* () {
+      if (rows.length !== 1)
+        return yield* Effect.fail(
+          fail(operation, rows.length === 0 ? "not-found" : "integrity-failure"),
+        );
+      const row = rows[0]!;
+      if (
+        row.inputSha256 !== expectedHash ||
+        row.actorUserId !== principal.userId ||
+        row.actorDeviceId !== principal.deviceId ||
+        row.membershipEpoch !== principal.membershipEpoch ||
+        row.operation !== operation
+      )
+        return yield* Effect.fail(fail(operation, "idempotency-conflict"));
+      yield* loadTask(operation, row.sharedProjectId, row.taskId);
+      return yield* validatedAudit(operation, row);
+    });
   const appendAudit = (
     operation: CollaborationTaskAuditEvent["operation"],
     commandId: string,
@@ -311,7 +409,9 @@ const makeStore = Effect.gen(function* () {
     Effect.gen(function* () {
       const tails =
         yield* sql<AuditRow>`SELECT ${sql.unsafe(auditColumns)} FROM collaboration_task_audit_events WHERE shared_project_id=${task.sharedProjectId} ORDER BY sequence DESC LIMIT 1`;
-      const tail = tails.length === 0 ? null : auditFromRow(tails[0]!, operation);
+      const tail = tails.length === 0 ? null : yield* validatedAudit(operation, tails[0]!);
+      if (tail !== null && Date.parse(now) < DateTime.toEpochMillis(tail.createdAt))
+        return yield* Effect.fail(fail(operation, "integrity-failure"));
       const sequence = (tail?.sequence ?? 0) + 1;
       if (!Number.isSafeInteger(sequence))
         return yield* Effect.fail(fail(operation, "integrity-failure"));
@@ -329,7 +429,11 @@ const makeStore = Effect.gen(function* () {
         eventSha256: undefined,
         createdAt: now,
       };
-      const eventSha256 = hash("club-code-collaboration-task-audit-v1", JSON.stringify(unsigned));
+      const event = decodeAudit({ ...unsigned, eventSha256: "0".repeat(64) });
+      const eventSha256 = hash(
+        "club-code-collaboration-task-audit-v1",
+        auditPayload(event, inputSha256),
+      );
       yield* sql`INSERT INTO collaboration_task_audit_events(shared_project_id,sequence,command_id,input_sha256,operation,task_id,task_json,actor_user_id,actor_device_id,membership_epoch,previous_event_sha256,event_sha256,created_at)
       VALUES(${task.sharedProjectId},${sequence},${commandId},${inputSha256},${operation},${task.taskId},${JSON.stringify(encodedTask)},${principal.userId},${principal.deviceId},${principal.membershipEpoch},${tail?.eventSha256 ?? null},${eventSha256},${now})`;
       return decodeAudit({ ...unsigned, eventSha256 });
@@ -393,12 +497,33 @@ const makeStore = Effect.gen(function* () {
             "task.manage",
           );
           const prior = yield* commandRows(command.sharedProjectId, command.commandId);
-          if (prior.length > 0) return replay(operation, prior, digest, principal);
+          if (prior.length > 0) {
+            const event = yield* replay(operation, prior, digest, principal);
+            yield* authorize(
+              operation,
+              principal,
+              command.sharedProjectId,
+              command.deviceKeyId,
+              "task.manage",
+            );
+            return event;
+          }
           if ((yield* rowsFor(command.sharedProjectId, command.taskId)).length !== 0)
             return yield* Effect.fail(fail(operation, "idempotency-conflict"));
-          for (const dependency of command.dependencies)
-            if ((yield* rowsFor(command.sharedProjectId, dependency)).length !== 1)
-              return yield* Effect.fail(fail(operation, "dependency-missing"));
+          const taskCount = yield* sql<{
+            readonly count: number;
+          }>`SELECT COUNT(*) AS count FROM collaboration_tasks WHERE shared_project_id=${command.sharedProjectId}`;
+          if ((taskCount[0]?.count ?? 0) >= COLLABORATION_TASK_PROJECT_LIMIT)
+            return yield* Effect.fail(fail(operation, "task-capacity"));
+          for (const dependency of command.dependencies) {
+            const loaded = yield* loadTask(operation, command.sharedProjectId, dependency).pipe(
+              Effect.mapError((error) =>
+                error.reason === "not-found" ? fail(operation, "dependency-missing") : error,
+              ),
+            );
+            if (loaded.sharedProjectId !== command.sharedProjectId)
+              return yield* Effect.fail(fail(operation, "integrity-failure"));
+          }
           const nowInstant = yield* DateTime.now;
           const now = DateTime.formatIso(nowInstant);
           const task = decodeTask({
@@ -446,7 +571,22 @@ const makeStore = Effect.gen(function* () {
         VALUES(${row.sharedProjectId},${row.taskId},${row.provenance},${row.title},${row.body},${row.status},NULL,${row.dependenciesJson},1,0,${row.createdByUserId},${row.createdAt},${row.updatedAt},${record})`;
           for (const dependency of command.dependencies)
             yield* sql`INSERT INTO collaboration_task_dependencies(shared_project_id,task_id,depends_on_task_id) VALUES(${command.sharedProjectId},${command.taskId},${dependency})`;
-          return yield* appendAudit(operation, command.commandId, digest, task, principal, now);
+          const event = yield* appendAudit(
+            operation,
+            command.commandId,
+            digest,
+            task,
+            principal,
+            now,
+          );
+          yield* authorize(
+            operation,
+            principal,
+            command.sharedProjectId,
+            command.deviceKeyId,
+            "task.manage",
+          );
+          return event;
         }),
       );
     }).pipe(Effect.mapError((e) => (isStoreError(e) ? e : fail("create", "storage-unavailable"))));
@@ -454,7 +594,7 @@ const makeStore = Effect.gen(function* () {
   const mutate: CollaborationTaskStoreShape["mutate"] = (input) =>
     Effect.gen(function* () {
       const command = yield* decodeMutation(input.command).pipe(
-        Effect.mapError(() => fail("claim", "invalid-request")),
+        Effect.mapError(() => fail("mutate", "invalid-request")),
       );
       const operation = command.kind;
       const permission = operation.startsWith("agent.")
@@ -479,13 +619,18 @@ const makeStore = Effect.gen(function* () {
             permission,
           );
           const prior = yield* commandRows(command.sharedProjectId, command.commandId);
-          if (prior.length > 0) return replay(operation, prior, digest, principal);
-          const rows = yield* rowsFor(command.sharedProjectId, command.taskId);
-          if (rows.length !== 1)
-            return yield* Effect.fail(
-              fail(operation, rows.length === 0 ? "not-found" : "integrity-failure"),
+          if (prior.length > 0) {
+            const event = yield* replay(operation, prior, digest, principal);
+            yield* authorize(
+              operation,
+              principal,
+              command.sharedProjectId,
+              command.deviceKeyId,
+              permission,
             );
-          const current = rowToTask(rows[0]!, operation);
+            return event;
+          }
+          const current = yield* loadTask(operation, command.sharedProjectId, command.taskId);
           if (current.revision !== command.expectedRevision)
             return yield* Effect.fail(fail(operation, "revision-conflict"));
           const nextRevision = current.revision + 1;
@@ -495,6 +640,8 @@ const makeStore = Effect.gen(function* () {
           const nowInstant = yield* DateTime.now;
           const now = DateTime.formatIso(nowInstant);
           const nowMs = Date.parse(now);
+          if (nowMs < DateTime.toEpochMillis(current.updatedAt))
+            return yield* Effect.fail(fail(operation, "integrity-failure"));
           let status = current.status;
           let owner = current.ownerUserId;
           let dependencies = [...current.dependencies];
@@ -507,21 +654,31 @@ const makeStore = Effect.gen(function* () {
           } else if (operation === "reassign") {
             if (status === "completed" || status === "cancelled")
               return yield* Effect.fail(fail(operation, "invalid-transition"));
-            const members = yield* sql<{
-              userId: string;
-            }>`SELECT user_id AS "userId" FROM collaboration_project_members WHERE shared_project_id=${command.sharedProjectId} AND user_id=${command.ownerUserId}`;
-            if (members.length !== 1) return yield* Effect.fail(fail(operation, "not-authorized"));
+            yield* assertAssignableOwner(
+              operation,
+              command.sharedProjectId,
+              command.ownerUserId,
+              principal.membershipEpoch,
+            );
             status = "claimed";
             owner = command.ownerUserId;
             lease = null;
           } else if (operation === "complete") {
             if (status !== "claimed" || owner !== principal.userId)
               return yield* Effect.fail(fail(operation, "invalid-transition"));
-            const blocked = yield* sql<{
-              count: number;
-            }>`SELECT COUNT(*) AS count FROM collaboration_task_dependencies d JOIN collaboration_tasks t ON t.shared_project_id=d.shared_project_id AND t.task_id=d.depends_on_task_id WHERE d.shared_project_id=${command.sharedProjectId} AND d.task_id=${command.taskId} AND t.status <> 'completed'`;
-            if ((blocked[0]?.count ?? 0) > 0)
-              return yield* Effect.fail(fail(operation, "dependency-blocked"));
+            for (const dependency of current.dependencies) {
+              const prerequisite = yield* loadTask(
+                operation,
+                command.sharedProjectId,
+                dependency,
+              ).pipe(
+                Effect.mapError((error) =>
+                  error.reason === "not-found" ? fail(operation, "integrity-failure") : error,
+                ),
+              );
+              if (prerequisite.status !== "completed")
+                return yield* Effect.fail(fail(operation, "dependency-blocked"));
+            }
             status = "completed";
             lease = null;
           } else if (operation === "cancel") {
@@ -532,6 +689,17 @@ const makeStore = Effect.gen(function* () {
           } else if (operation === "reopen") {
             if (status !== "completed" && status !== "cancelled")
               return yield* Effect.fail(fail(operation, "invalid-transition"));
+            const completedRows =
+              yield* sql<TaskRow>`SELECT ${sql.unsafe(taskColumns)} FROM collaboration_tasks WHERE shared_project_id=${command.sharedProjectId} AND status='completed'`;
+            for (const row of completedRows) {
+              const dependent = yield* Effect.try({
+                try: () => rowToTask(row, operation),
+                catch: (error) =>
+                  isStoreError(error) ? error : fail(operation, "integrity-failure"),
+              });
+              if (dependent.dependencies.includes(command.taskId))
+                return yield* Effect.fail(fail(operation, "dependency-blocked"));
+            }
             status = "open";
             owner = null;
             lease = null;
@@ -543,14 +711,22 @@ const makeStore = Effect.gen(function* () {
             )
               return yield* Effect.fail(fail(operation, "invalid-transition"));
             for (const dep of command.dependencies) {
-              const found = yield* rowsFor(command.sharedProjectId, dep);
-              if (found.length !== 1)
-                return yield* Effect.fail(fail(operation, "dependency-missing"));
-              const cycle = yield* sql<{
-                hit: number;
-              }>`WITH RECURSIVE reach(id) AS (SELECT depends_on_task_id FROM collaboration_task_dependencies WHERE shared_project_id=${command.sharedProjectId} AND task_id=${dep} UNION SELECT d.depends_on_task_id FROM collaboration_task_dependencies d JOIN reach r ON d.task_id=r.id WHERE d.shared_project_id=${command.sharedProjectId}) SELECT COUNT(*) AS hit FROM reach WHERE id=${command.taskId}`;
-              if ((cycle[0]?.hit ?? 0) > 0)
+              yield* loadTask(operation, command.sharedProjectId, dep).pipe(
+                Effect.mapError((error) =>
+                  error.reason === "not-found" ? fail(operation, "dependency-missing") : error,
+                ),
+              );
+              const reach = yield* sql<{
+                taskId: string;
+              }>`WITH RECURSIVE reach(id) AS (SELECT depends_on_task_id FROM collaboration_task_dependencies WHERE shared_project_id=${command.sharedProjectId} AND task_id=${dep} UNION SELECT d.depends_on_task_id FROM collaboration_task_dependencies d JOIN reach r ON d.task_id=r.id WHERE d.shared_project_id=${command.sharedProjectId}) SELECT id AS "taskId" FROM reach`;
+              if (reach.some((entry) => entry.taskId === command.taskId))
                 return yield* Effect.fail(fail(operation, "dependency-cycle"));
+              for (const entry of reach)
+                yield* loadTask(operation, command.sharedProjectId, entry.taskId).pipe(
+                  Effect.mapError((error) =>
+                    error.reason === "not-found" ? fail(operation, "integrity-failure") : error,
+                  ),
+                );
             }
             dependencies = [...command.dependencies];
             lease = null;
@@ -559,10 +735,23 @@ const makeStore = Effect.gen(function* () {
               return yield* Effect.fail(fail(operation, "invalid-transition"));
             if (lease !== null && DateTime.toEpochMillis(lease.expiresAt) > nowMs)
               return yield* Effect.fail(fail(operation, "lease-active"));
-            const active = yield* sql<{
-              count: number;
-            }>`SELECT COUNT(*) AS count FROM collaboration_tasks WHERE shared_project_id=${command.sharedProjectId} AND active_lease_expires_at>${now}`;
-            if ((active[0]?.count ?? 0) >= COLLABORATION_ACTIVE_AGENT_LEASE_LIMIT)
+            const duplicateLeaseIds =
+              yield* sql<TaskRow>`SELECT ${sql.unsafe(taskColumns)} FROM collaboration_tasks WHERE shared_project_id=${command.sharedProjectId} AND active_lease_id=${command.leaseId} AND task_id<>${command.taskId}`;
+            for (const row of duplicateLeaseIds)
+              yield* loadTask(operation, command.sharedProjectId, row.taskId);
+            if (duplicateLeaseIds.length > 0)
+              return yield* Effect.fail(fail(operation, "lease-active"));
+            const active =
+              yield* sql<TaskRow>`SELECT ${sql.unsafe(taskColumns)} FROM collaboration_tasks WHERE shared_project_id=${command.sharedProjectId} AND active_lease_expires_at>${now} ORDER BY task_id LIMIT ${COLLABORATION_ACTIVE_AGENT_LEASE_LIMIT + 1}`;
+            for (const row of active) {
+              const activeTask = yield* loadTask(operation, command.sharedProjectId, row.taskId);
+              if (
+                activeTask.activeAgentLease === null ||
+                DateTime.toEpochMillis(activeTask.activeAgentLease.expiresAt) <= nowMs
+              )
+                return yield* Effect.fail(fail(operation, "integrity-failure"));
+            }
+            if (active.length >= COLLABORATION_ACTIVE_AGENT_LEASE_LIMIT)
               return yield* Effect.fail(fail(operation, "agent-capacity"));
             lease = {
               leaseId: command.leaseId,
@@ -580,6 +769,7 @@ const makeStore = Effect.gen(function* () {
               lease.leaseId !== command.leaseId ||
               lease.holderUserId !== principal.userId ||
               lease.holderDeviceId !== principal.deviceId ||
+              lease.membershipEpoch !== principal.membershipEpoch ||
               DateTime.toEpochMillis(lease.expiresAt) <= nowMs
             )
               return yield* Effect.fail(fail(operation, "lease-mismatch"));
@@ -594,7 +784,8 @@ const makeStore = Effect.gen(function* () {
               lease === null ||
               lease.leaseId !== command.leaseId ||
               lease.holderUserId !== principal.userId ||
-              lease.holderDeviceId !== principal.deviceId
+              lease.holderDeviceId !== principal.deviceId ||
+              lease.membershipEpoch !== principal.membershipEpoch
             )
               return yield* Effect.fail(fail(operation, "lease-mismatch"));
             lease = null;
@@ -622,68 +813,94 @@ const makeStore = Effect.gen(function* () {
             for (const dep of dependencies)
               yield* sql`INSERT INTO collaboration_task_dependencies(shared_project_id,task_id,depends_on_task_id) VALUES(${command.sharedProjectId},${command.taskId},${dep})`;
           }
-          return yield* appendAudit(operation, command.commandId, digest, next, principal, now);
+          const event = yield* appendAudit(
+            operation,
+            command.commandId,
+            digest,
+            next,
+            principal,
+            now,
+          );
+          const commitPrincipal = yield* authorize(
+            operation,
+            principal,
+            command.sharedProjectId,
+            command.deviceKeyId,
+            permission,
+          );
+          if (operation === "reassign")
+            yield* assertAssignableOwner(
+              operation,
+              command.sharedProjectId,
+              command.ownerUserId,
+              commitPrincipal.membershipEpoch,
+            );
+          return event;
         }),
       );
-    }).pipe(Effect.mapError((e) => (isStoreError(e) ? e : fail("claim", "storage-unavailable"))));
+    }).pipe(Effect.mapError((e) => (isStoreError(e) ? e : fail("mutate", "storage-unavailable"))));
 
   const read: CollaborationTaskStoreShape["read"] = (input) =>
     Effect.gen(function* () {
       const request = yield* decodeReadRequest(input.request, {
         onExcessProperty: "error",
       }).pipe(Effect.mapError(() => fail("read", "invalid-request")));
-      yield* authorize(
+      const principal = yield* authorize(
         "read",
         input.principal,
         request.sharedProjectId,
         request.deviceKeyId,
         "task.read",
       );
-      const rows = yield* rowsFor(request.sharedProjectId, request.taskId);
-      if (rows.length !== 1)
-        return yield* Effect.fail(
-          fail("read", rows.length === 0 ? "not-found" : "integrity-failure"),
-        );
-      try {
-        return rowToTask(rows[0]!, "read");
-      } catch (error) {
-        return yield* Effect.fail(isStoreError(error) ? error : fail("read", "integrity-failure"));
-      }
+      const task = yield* loadTask("read", request.sharedProjectId, request.taskId);
+      yield* authorize(
+        "read",
+        principal,
+        request.sharedProjectId,
+        request.deviceKeyId,
+        "task.read",
+      );
+      return task;
     }).pipe(Effect.mapError((e) => (isStoreError(e) ? e : fail("read", "storage-unavailable"))));
   const history: CollaborationTaskStoreShape["history"] = (input) =>
     Effect.gen(function* () {
       const request = yield* decodeHistoryRequest(input.request, {
         onExcessProperty: "error",
       }).pipe(Effect.mapError(() => fail("history", "invalid-request")));
-      yield* authorize(
+      const principal = yield* authorize(
         "history",
         input.principal,
         request.sharedProjectId,
         request.deviceKeyId,
         "task.read",
       );
+      yield* loadTask("history", request.sharedProjectId, request.taskId);
       const rows =
         yield* sql<AuditRow>`SELECT ${sql.unsafe(auditColumns)} FROM collaboration_task_audit_events WHERE shared_project_id=${request.sharedProjectId} AND task_id=${request.taskId} AND sequence>${request.afterSequence} ORDER BY sequence ASC LIMIT ${request.limit}`;
       const events = [];
+      // Include the JSON array delimiters and inter-event comma so the bound
+      // applies to the returned encoded page, not merely the sum of objects.
+      let encodedBytes = 2;
       for (const row of rows) {
-        const event = auditFromRow(row, "history");
-        const predecessor =
-          row.sequence === 1
-            ? []
-            : yield* sql<{ readonly eventSha256: string }>`
-                SELECT event_sha256 AS "eventSha256"
-                FROM collaboration_task_audit_events
-                WHERE shared_project_id = ${request.sharedProjectId}
-                  AND sequence = ${row.sequence - 1}
-              `;
+        const event = yield* validatedAudit("history", row);
+        const eventBytes = Buffer.byteLength(JSON.stringify(encodeAudit(event)), "utf8");
+        const separatorBytes = events.length === 0 ? 0 : 1;
         if (
-          (row.sequence === 1 && event.previousEventSha256 !== null) ||
-          (row.sequence > 1 &&
-            (predecessor.length !== 1 || event.previousEventSha256 !== predecessor[0]!.eventSha256))
+          events.length > 0 &&
+          encodedBytes + separatorBytes + eventBytes >
+            COLLABORATION_TASK_HISTORY_PAGE_MAX_UTF8_BYTES
         )
-          return yield* Effect.fail(fail("history", "integrity-failure"));
+          break;
+        encodedBytes += separatorBytes + eventBytes;
         events.push(event);
       }
+      yield* authorize(
+        "history",
+        principal,
+        request.sharedProjectId,
+        request.deviceKeyId,
+        "task.read",
+      );
       return events;
     }).pipe(Effect.mapError((e) => (isStoreError(e) ? e : fail("history", "storage-unavailable"))));
   return { create, mutate, read, history } satisfies CollaborationTaskStoreShape;

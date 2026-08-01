@@ -5,21 +5,34 @@ import { NonNegativeInt, PositiveInt } from "./baseSchemas.ts";
 import {
   CollaborationAgentId,
   CollaborationDeviceKeyId,
+  COLLABORATION_MEMBERSHIP_EPOCH_MAX,
+  DeviceId,
   SharedProjectId,
   UserId,
 } from "./collaboration.ts";
 
 export const COLLABORATION_TASK_DEPENDENCY_LIMIT = 32;
 export const COLLABORATION_TASK_PAGE_LIMIT = 256;
+export const COLLABORATION_TASK_HISTORY_PAGE_MAX_UTF8_BYTES = 1024 * 1024;
 export const COLLABORATION_ACTIVE_AGENT_LEASE_LIMIT = 8;
+export const COLLABORATION_TASK_PROJECT_LIMIT = 10_000;
 export const COLLABORATION_AGENT_LEASE_MAX_MILLIS = 15 * 60_000;
 export const COLLABORATION_TASK_TITLE_MAX_UTF8_BYTES = 512;
 export const COLLABORATION_TASK_BODY_MAX_UTF8_BYTES = 32_768;
 
+const hasCredentialMaterial = (value: string) =>
+  /-----BEGIN [A-Z ]*PRIVATE KEY-----|\b(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9_-]{16,}|\bsk-(?:ant|proj)-[A-Za-z0-9_-]{16,}|\bgh[opsu]_[A-Za-z0-9]{20,}|\bgithub_pat_[A-Za-z0-9_]{20,}|\bglpat-[A-Za-z0-9_-]{16,}|\bxox[baprs]-[A-Za-z0-9-]{16,}|\b(?:AKIA|ASIA)[A-Z0-9]{16}\b|\bAIza[A-Za-z0-9_-]{35}\b/u.test(
+    value,
+  );
 const Identifier = Schema.String.check(
   Schema.isNonEmpty(),
   Schema.isMaxLength(128),
   Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/),
+  Schema.makeFilter((value) =>
+    hasCredentialMaterial(value)
+      ? "task identifier must not contain credential material"
+      : undefined,
+  ),
 );
 const utf8 = (value: string) => new TextEncoder().encode(value).byteLength;
 const hasForbiddenControl = (value: string) =>
@@ -33,6 +46,18 @@ const hasForbiddenControl = (value: string) =>
       point === 127
     );
   });
+const hasUnsafeUnicode = (value: string) =>
+  Array.from(value).some((character) => {
+    const point = character.codePointAt(0)!;
+    return (
+      (point >= 0xd800 && point <= 0xdfff) ||
+      (point >= 0x202a && point <= 0x202e) ||
+      (point >= 0x2066 && point <= 0x2069) ||
+      point === 0xfeff ||
+      (point & 0xffff) === 0xfffe ||
+      (point & 0xffff) === 0xffff
+    );
+  });
 const safeOperatorText = (limit: number) =>
   Schema.String.check(
     Schema.isNonEmpty(),
@@ -43,17 +68,19 @@ const safeOperatorText = (limit: number) =>
       hasForbiddenControl(value) ? "task text must not contain control characters" : undefined,
     ),
     Schema.makeFilter((value) =>
+      hasUnsafeUnicode(value) ? "task text must not contain unsafe Unicode controls" : undefined,
+    ),
+    Schema.makeFilter((value) =>
+      value.trim().length > 0 ? undefined : "task text must contain visible content",
+    ),
+    Schema.makeFilter((value) =>
       utf8(value) <= limit ? undefined : `task text exceeds ${limit} UTF-8 bytes`,
     ),
     Schema.makeFilter((value) =>
-      /-----BEGIN [A-Z ]*PRIVATE KEY-----|\b(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9_-]{16,}|\bgh[opsu]_[A-Za-z0-9]{20,}/u.test(
-        value,
-      )
-        ? "task text must not contain credential material"
-        : undefined,
+      hasCredentialMaterial(value) ? "task text must not contain credential material" : undefined,
     ),
     Schema.makeFilter((value) =>
-      /(?:^|[\s'"`])(?:[A-Za-z]:\\Users\\[^\s'"`]+|\/Users\/[^\s/'"`]+|\/home\/[^\s/'"`]+)/u.test(
+      /(?:[A-Za-z]:[\\/]Users[\\/][^\s'"`]+|\\\\[^\s\\]+\\[^\s\\]+|\/Users\/[^\s/'"`]+|\/home\/[^\s/'"`]+|\/root\/[^\s'"`]+)/u.test(
         value,
       )
         ? "task text must not contain raw private home paths"
@@ -77,6 +104,10 @@ export const CollaborationTaskFencingToken = NonNegativeInt.check(
   Schema.isLessThanOrEqualTo(Number.MAX_SAFE_INTEGER),
 );
 export type CollaborationTaskFencingToken = typeof CollaborationTaskFencingToken.Type;
+export const CollaborationTaskSequence = NonNegativeInt.check(
+  Schema.isLessThanOrEqualTo(Number.MAX_SAFE_INTEGER),
+);
+export type CollaborationTaskSequence = typeof CollaborationTaskSequence.Type;
 
 export const CollaborationTaskStatus = Schema.Literals([
   "open",
@@ -98,8 +129,10 @@ export const CollaborationTaskAgentLease = Schema.Struct({
   leaseId: CollaborationTaskLeaseId,
   agentId: CollaborationAgentId,
   holderUserId: UserId,
-  holderDeviceId: Identifier,
-  membershipEpoch: NonNegativeInt,
+  holderDeviceId: DeviceId,
+  membershipEpoch: NonNegativeInt.check(
+    Schema.isLessThanOrEqualTo(COLLABORATION_MEMBERSHIP_EPOCH_MAX),
+  ),
   fencingToken: CollaborationTaskFencingToken,
   grantedAt: Schema.DateTimeUtcFromString,
   expiresAt: Schema.DateTimeUtcFromString,
@@ -113,7 +146,10 @@ export const CollaborationTaskAgentLease = Schema.Struct({
       typeof lease.expiresAt === "string"
         ? Date.parse(lease.expiresAt)
         : DateTime.toEpochMillis(lease.expiresAt);
-    return expiresAt > grantedAt ? undefined : "agent lease must expire after it is granted";
+    const duration = expiresAt - grantedAt;
+    return duration > 0 && duration <= COLLABORATION_AGENT_LEASE_MAX_MILLIS
+      ? undefined
+      : "agent lease duration is outside the supported range";
   }),
 );
 export type CollaborationTaskAgentLease = typeof CollaborationTaskAgentLease.Type;
@@ -133,7 +169,39 @@ export const CollaborationSharedTask = Schema.Struct({
   createdByUserId: UserId,
   createdAt: Schema.DateTimeUtcFromString,
   updatedAt: Schema.DateTimeUtcFromString,
-});
+}).check(
+  Schema.makeFilter((task) =>
+    task.dependencies.includes(task.taskId) ? "a task cannot depend on itself" : undefined,
+  ),
+  Schema.makeFilter((task) =>
+    task.fencingToken === task.revision - 1
+      ? undefined
+      : "task revision and fencing token are inconsistent",
+  ),
+  Schema.makeFilter((task) => {
+    if (task.status === "open" && task.ownerUserId !== null)
+      return "open tasks cannot retain an owner";
+    if ((task.status === "claimed" || task.status === "completed") && task.ownerUserId === null)
+      return "claimed and completed tasks require an owner";
+    if (task.activeAgentLease === null) return undefined;
+    return task.status === "claimed" &&
+      task.ownerUserId === task.activeAgentLease.holderUserId &&
+      task.fencingToken === task.activeAgentLease.fencingToken
+      ? undefined
+      : "active task lease is inconsistent with task ownership or fencing";
+  }),
+  Schema.makeFilter((task) => {
+    const createdAt =
+      typeof task.createdAt === "string"
+        ? Date.parse(task.createdAt)
+        : DateTime.toEpochMillis(task.createdAt);
+    const updatedAt =
+      typeof task.updatedAt === "string"
+        ? Date.parse(task.updatedAt)
+        : DateTime.toEpochMillis(task.updatedAt);
+    return updatedAt >= createdAt ? undefined : "task update cannot predate creation";
+  }),
+);
 export type CollaborationSharedTask = typeof CollaborationSharedTask.Type;
 
 const CommonCommand = {
@@ -226,11 +294,58 @@ export const CollaborationTaskAuditEvent = Schema.Struct({
   task: CollaborationSharedTask,
   actorUserId: UserId,
   actorDeviceId: Identifier,
-  membershipEpoch: NonNegativeInt,
+  membershipEpoch: NonNegativeInt.check(
+    Schema.isLessThanOrEqualTo(COLLABORATION_MEMBERSHIP_EPOCH_MAX),
+  ),
   previousEventSha256: Schema.NullOr(Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/))),
   eventSha256: Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/)),
   createdAt: Schema.DateTimeUtcFromString,
-});
+}).check(
+  Schema.makeFilter((event) =>
+    event.task.sharedProjectId === event.sharedProjectId
+      ? undefined
+      : "audit event task must belong to the same project",
+  ),
+  Schema.makeFilter((event) => {
+    const task = event.task;
+    if (event.operation === "create")
+      return task.revision === 1 &&
+        task.createdByUserId === event.actorUserId &&
+        task.status === "open"
+        ? undefined
+        : "create audit snapshot is inconsistent";
+    if (task.revision <= 1) return "mutation audit snapshot must advance the task revision";
+    if (event.operation === "claim")
+      return task.status === "claimed" && task.ownerUserId === event.actorUserId
+        ? undefined
+        : "claim audit snapshot is inconsistent";
+    if (event.operation === "reassign")
+      return task.status === "claimed" ? undefined : "reassign audit snapshot is inconsistent";
+    if (event.operation === "complete")
+      return task.status === "completed" && task.ownerUserId === event.actorUserId
+        ? undefined
+        : "complete audit snapshot is inconsistent";
+    if (event.operation === "cancel")
+      return task.status === "cancelled" && task.activeAgentLease === null
+        ? undefined
+        : "cancel audit snapshot is inconsistent";
+    if (event.operation === "reopen")
+      return task.status === "open" && task.ownerUserId === null
+        ? undefined
+        : "reopen audit snapshot is inconsistent";
+    if (event.operation === "set-dependencies" || event.operation === "agent.release")
+      return task.activeAgentLease === null
+        ? undefined
+        : "lease-free audit snapshot is inconsistent";
+    const lease = task.activeAgentLease;
+    return lease !== null &&
+      lease.holderUserId === event.actorUserId &&
+      lease.holderDeviceId === event.actorDeviceId &&
+      lease.membershipEpoch === event.membershipEpoch
+      ? undefined
+      : "agent lease audit snapshot is inconsistent";
+  }),
+);
 export type CollaborationTaskAuditEvent = typeof CollaborationTaskAuditEvent.Type;
 
 export const CollaborationTaskReadRequest = Schema.Struct({
@@ -244,7 +359,7 @@ export const CollaborationTaskHistoryRequest = Schema.Struct({
   sharedProjectId: SharedProjectId,
   taskId: CollaborationTaskId,
   deviceKeyId: CollaborationDeviceKeyId,
-  afterSequence: NonNegativeInt,
+  afterSequence: CollaborationTaskSequence,
   limit: PositiveInt.check(Schema.isLessThanOrEqualTo(COLLABORATION_TASK_PAGE_LIMIT)),
 });
 export type CollaborationTaskHistoryRequest = typeof CollaborationTaskHistoryRequest.Type;
