@@ -12,7 +12,10 @@ The repository has published 26 pull requests:
 - two closed, archived pacing PRs: #5 and #6; and
 - one closed, obsolete omnibus PR: #1.
 
-These counts describe `John-Ryan21337/club-code`, not pull requests already submitted to Cafe Code upstream. The first direct upstream submission is now [cafeai/cafe-code draft PR #15](https://github.com/cafeai/cafe-code/pull/15), linked to the required issue-first proposal [cafeai/cafe-code issue #14](https://github.com/cafeai/cafe-code/issues/14). It reconstructs the audited #23 telemetry foundation directly on Cafe `main` at `79398c7d0a36942c525d630537e9f0980232742c` as a dependency-free six-file/899-line review unit.
+These counts describe `John-Ryan21337/club-code`, not pull requests already submitted to Cafe Code upstream. Two direct upstream drafts now reconstruct audited Club slices on current Cafe `main` after issue-first proposals:
+
+- [cafeai/cafe-code PR #15](https://github.com/cafeai/cafe-code/pull/15), linked to [issue #14](https://github.com/cafeai/cafe-code/issues/14), recuts the audited #23 telemetry foundation at `79398c7d0a36942c525d630537e9f0980232742c` as a dependency-free six-file/899-line review unit.
+- [cafeai/cafe-code PR #17](https://github.com/cafeai/cafe-code/pull/17), linked to [issue #16](https://github.com/cafeai/cafe-code/issues/16), recuts #22 into an audited five-file/715-line save/apply-only profiles slice at `bdc8f802a232b2cd14a9d1ca035c6170068e3de8`; screenshots remain required before it becomes review-ready.
 
 The active implementation foundation is:
 
