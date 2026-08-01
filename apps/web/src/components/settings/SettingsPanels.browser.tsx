@@ -1137,6 +1137,22 @@ describe("settings panels", () => {
     await page.getByRole("button", { name: "Save", exact: true }).click();
     await expect.element(page.getByText("Saved “Desktop”.", { exact: true })).toBeInTheDocument();
 
+    // Save creates a distinct named preset. A normalized collision must not
+    // silently overwrite another profile; explicit replacement belongs to
+    // Update active so the operator can see which preset is being changed.
+    await nameInput.fill(" ＭＯＢＩＬＥ ");
+    await page.getByRole("button", { name: "Save", exact: true }).click();
+    await expect
+      .element(
+        page.getByText(
+          "A profile named “Mobile” already exists. Choose another name, or load that profile and use Update active after making changes.",
+          { exact: true },
+        ),
+      )
+      .toBeInTheDocument();
+    expect(settingsProfileLibraryStore.getSnapshot().activeProfileId).toBe("profile:desktop");
+    expect(settingsProfileLibraryStore.resolve("profile:mobile")?.theme).toBe("dark");
+
     // Saved profiles are also exposed as one-tap buttons for narrow/mobile
     // settings surfaces; selecting one applies it without a separate Apply step.
     await page.getByRole("button", { name: "Mobile", exact: true }).click();

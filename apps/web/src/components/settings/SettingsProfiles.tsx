@@ -106,9 +106,15 @@ export function SettingsProfiles() {
     if (!settingsHydrated || busy) return;
     setBusy(true);
     try {
-      const result = await mutateSettingsProfileLibrary(settingsProfileLibraryStore, () =>
-        settingsProfileLibraryStore.upsert(nameDraft, currentPayload),
-      );
+      const result = await mutateSettingsProfileLibrary(settingsProfileLibraryStore, () => {
+        const existing = settingsProfileLibraryStore.resolveByName(nameDraft);
+        if (existing !== null) {
+          throw new SettingsProfileError(
+            `A profile named “${existing.name}” already exists. Choose another name, or load that profile and use Update active after making changes.`,
+          );
+        }
+        return settingsProfileLibraryStore.upsert(nameDraft, currentPayload);
+      });
       setNameDraft(result.profile.name);
       setNotice(
         mutationNotice(
@@ -429,7 +435,7 @@ export function SettingsProfiles() {
 
       <SettingsRow
         title="Save current preferences"
-        description="Profile definitions stay in this browser or desktop client. Loading one applies its safe preferences to the current Cafe environment."
+        description="Save creates a new profile in this browser or desktop client. Loading one applies its safe preferences to the current Cafe environment; use Update active to replace the selected profile."
         status={
           notice ? (
             <span

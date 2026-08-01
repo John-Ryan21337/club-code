@@ -269,7 +269,39 @@ describe("settings profile library", () => {
     expect(store.getSnapshot().profiles).toHaveLength(1);
     expect(() => store.upsert("Desktop/Private", payload)).toThrow(SettingsProfileError);
     expect(() => store.upsert("Desktop\u202ePrivate", payload)).toThrow(SettingsProfileError);
+    expect(() => store.upsert("Broken\ud800Name", payload)).toThrow(SettingsProfileError);
     expect(() => store.upsert("x".repeat(257), payload)).toThrow(SettingsProfileError);
+  });
+
+  it("resolves normalized names without exposing duplicate persisted profile IDs", () => {
+    const storage = createStorage({
+      [SETTINGS_PROFILE_LIBRARY_STORAGE_KEY]: JSON.stringify({
+        version: SETTINGS_PROFILE_LIBRARY_VERSION,
+        activeProfileId: "profile:mobile",
+        profiles: [
+          {
+            name: "Ｍｏｂｉｌｅ",
+            theme: "dark",
+            clientSettings: { sidebarThreadPreviewCount: 2 },
+            createdAt: "2026-07-29T08:00:00.000Z",
+            updatedAt: "2026-07-29T08:00:00.000Z",
+          },
+          {
+            name: "mobile",
+            theme: "light",
+            clientSettings: { sidebarThreadPreviewCount: 9 },
+            createdAt: "2026-07-29T09:00:00.000Z",
+            updatedAt: "2026-07-29T09:00:00.000Z",
+          },
+        ],
+      }),
+    });
+
+    const store = createSettingsProfileLibraryStore(storage);
+
+    expect(store.getSnapshot().profiles).toHaveLength(1);
+    expect(store.resolveByName(" MOBILE ")?.name).toBe("Mobile");
+    expect(store.resolveByName("mobile")?.clientSettings.sidebarThreadPreviewCount).toBe(2);
   });
 
   it("limits the library by valid profile count rather than malformed candidate position", () => {
@@ -326,6 +358,31 @@ describe("settings profile library", () => {
     expect(createSettingsProfileLibraryStore(futureStorage).getSnapshot().profiles).toEqual([]);
   });
 
+  it("repairs non-canonical imported timestamps without retaining attacker-controlled date text", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-30T10:00:00.000Z"));
+    const storage = createStorage({
+      [SETTINGS_PROFILE_LIBRARY_STORAGE_KEY]: JSON.stringify({
+        version: SETTINGS_PROFILE_LIBRARY_VERSION,
+        activeProfileId: "profile:mobile",
+        profiles: [
+          {
+            name: "Mobile",
+            theme: "dark",
+            clientSettings: {},
+            createdAt: "0",
+            updatedAt: "2026-02-31",
+          },
+        ],
+      }),
+    });
+
+    const profile = createSettingsProfileLibraryStore(storage).resolve("profile:mobile");
+
+    expect(profile?.createdAt).toBe("2026-07-30T10:00:00.000Z");
+    expect(profile?.updatedAt).toBe("2026-07-30T10:00:00.000Z");
+  });
+
   it("drops unknown, secret, execution, and malformed fields independently on restore", () => {
     const storage = createStorage({
       [SETTINGS_PROFILE_LIBRARY_STORAGE_KEY]: JSON.stringify({
@@ -343,6 +400,7 @@ describe("settings profile library", () => {
               timestampFormat: "24-hour",
               autoNudgeMode: "prompt",
               autoNudgeMaxRounds: 999,
+              autoNudgeMaxMinutes: 30,
               modelPacingReservePercent: 99,
               providerModelPreferences: {
                 "private-account": { hiddenModels: [], modelOrder: [] },
@@ -376,6 +434,7 @@ describe("settings profile library", () => {
       timestampFormat: "24-hour",
     });
     expect(profile?.clientSettings).not.toHaveProperty("autoNudgeMode");
+    expect(profile?.clientSettings).not.toHaveProperty("autoNudgeMaxMinutes");
     expect(profile?.clientSettings).not.toHaveProperty("modelPacingReservePercent");
     expect(profile?.clientSettings).not.toHaveProperty("providerModelPreferences");
     expect(profile?.clientSettings).not.toHaveProperty("ambientVideoEnabled");
@@ -417,6 +476,22 @@ describe("settings profile library", () => {
     expect(getter).not.toHaveBeenCalled();
     expect(sanitized.clientSettings).not.toHaveProperty("fallingEffectsEnabled");
     expect(sanitized.clientSettings).not.toHaveProperty("serverPassword");
+  });
+
+  it("drops prototype-pollution keys from imported profile settings", () => {
+    const storage = createStorage({
+      [SETTINGS_PROFILE_LIBRARY_STORAGE_KEY]:
+        '{"version":1,"activeProfileId":"profile:mobile","profiles":[{"name":"Mobile","theme":"dark","clientSettings":{"__proto__":{"polluted":true},"constructor":{"prototype":{"polluted":true}},"prototype":{"polluted":true},"autoNudgeMaxMinutes":30,"timestampFormat":"24-hour"},"createdAt":"2026-07-29T08:00:00.000Z","updatedAt":"2026-07-29T08:00:00.000Z"}]}',
+    });
+
+    const profile = createSettingsProfileLibraryStore(storage).resolve("profile:mobile");
+
+    expect(profile?.clientSettings).toEqual({ timestampFormat: "24-hour" });
+    expect(profile?.clientSettings).not.toHaveProperty("__proto__");
+    expect(profile?.clientSettings).not.toHaveProperty("constructor");
+    expect(profile?.clientSettings).not.toHaveProperty("prototype");
+    expect(profile?.clientSettings).not.toHaveProperty("autoNudgeMaxMinutes");
+    expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
   });
 
   it("keeps retained values scalar and bounded before schema decoding", () => {
@@ -524,6 +599,45 @@ describe("settings profile library", () => {
 
     expect(result.persisted).toBe(false);
     expect(store.resolve(result.profile.id)?.name).toBe("Mobile");
+  });
+
+  it("leaves the prior durable document intact when a quota failure creates session-only state", () => {
+    const durableDocument = JSON.stringify({
+      version: SETTINGS_PROFILE_LIBRARY_VERSION,
+      activeProfileId: "profile:mobile",
+      profiles: [
+        {
+          name: "Mobile",
+          theme: "dark",
+          clientSettings: { sidebarThreadPreviewCount: 2 },
+          createdAt: "2026-07-29T08:00:00.000Z",
+          updatedAt: "2026-07-29T08:00:00.000Z",
+        },
+      ],
+    });
+    const baseStorage = createStorage({
+      [SETTINGS_PROFILE_LIBRARY_STORAGE_KEY]: durableDocument,
+    });
+    const storage = {
+      ...baseStorage,
+      setItem: vi.fn(() => {
+        throw new DOMException("blocked", "QuotaExceededError");
+      }),
+    };
+    const store = createSettingsProfileLibraryStore(storage);
+
+    const result = store.upsert(
+      "Desktop",
+      captureSettingsProfilePayload(DEFAULT_UNIFIED_SETTINGS, "light"),
+    );
+
+    expect(result.persisted).toBe(false);
+    expect(store.getSnapshot().profiles.map((profile) => profile.name)).toEqual([
+      "Mobile",
+      "Desktop",
+    ]);
+    expect(baseStorage.read(SETTINGS_PROFILE_LIBRARY_STORAGE_KEY)).toBe(durableDocument);
+    expect(createSettingsProfileLibraryStore(baseStorage).getSnapshot().profiles).toHaveLength(1);
   });
 
   it("retries a session-only active marker and refreshes external storage changes", () => {

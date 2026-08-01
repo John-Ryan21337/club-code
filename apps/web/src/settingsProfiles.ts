@@ -205,6 +205,7 @@ export interface SettingsProfileLibraryStore {
   readonly getSnapshot: () => SettingsProfileLibrarySnapshot;
   readonly subscribe: (listener: () => void) => () => void;
   readonly resolve: (profileId: string) => SettingsProfile | null;
+  readonly resolveByName: (name: string) => SettingsProfile | null;
   readonly upsert: (name: string, payload: SettingsProfilePayload) => SettingsProfileMutationResult;
   readonly updateActive: (payload: SettingsProfilePayload) => SettingsProfileMutationResult;
   readonly rename: (profileId: string, name: string) => SettingsProfileMutationResult;
@@ -256,6 +257,7 @@ function normalizedName(value: string): string {
     const isWhitespace = /\s/u.test(character);
     return (
       (!isWhitespace && (codePoint <= 0x1f || codePoint === 0x7f)) ||
+      (codePoint >= 0xd800 && codePoint <= 0xdfff) ||
       /\p{Cf}|\p{Zl}|\p{Zp}/u.test(character) ||
       character === "/" ||
       character === "\\"
@@ -264,7 +266,7 @@ function normalizedName(value: string): string {
   const name = canonical.trim().replace(/\s+/gu, " ");
   if (
     name.length === 0 ||
-    name.length > SETTINGS_PROFILE_MAX_NAME_LENGTH ||
+    Array.from(name).length > SETTINGS_PROFILE_MAX_NAME_LENGTH ||
     containsForbiddenCharacter
   ) {
     throw new SettingsProfileError(
@@ -287,7 +289,9 @@ function isTheme(value: unknown): value is SettingsProfileTheme {
 }
 
 function isIsoDate(value: unknown): value is string {
-  return typeof value === "string" && Number.isFinite(Date.parse(value));
+  if (typeof value !== "string" || value.length !== 24) return false;
+  const parsed = new Date(value);
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString() === value;
 }
 
 const MISSING_DATA_PROPERTY = Symbol("missing-data-property");
@@ -563,6 +567,10 @@ export function createSettingsProfileLibraryStore(
       return () => listeners.delete(listener);
     },
     resolve: (profileId) => snapshot.profiles.find((profile) => profile.id === profileId) ?? null,
+    resolveByName: (nameInput) => {
+      const id = profileIdFromName(normalizedName(nameInput));
+      return snapshot.profiles.find((profile) => profile.id === id) ?? null;
+    },
     upsert: (nameInput, payload) => {
       const name = normalizedName(nameInput);
       const sanitizedPayload = sanitizeSettingsProfilePayload(payload);
