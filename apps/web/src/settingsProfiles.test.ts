@@ -107,6 +107,8 @@ describe("settings profile library", () => {
       defaultEditor: "vscode",
       autoNudgeMode: "prompt",
       autoNudgeMaxRounds: 99,
+      // Legacy time-based Auto Nudge data must not survive as compatibility payload.
+      autoNudgeMaxMinutes: 30,
       modelPacingEnabled: true,
       providerModelPreferences: {
         "claude-private": { hiddenModels: ["secret-model"], modelOrder: [] },
@@ -125,6 +127,7 @@ describe("settings profile library", () => {
       defaultProviderInstanceId: "claude-private",
       observability: { otlpTracesUrl: "https://private.example", otlpMetricsUrl: "" },
       addProjectBaseDirectory: "C:\\private",
+      serverPassword: "never-store-this-credential",
     } as unknown as UnifiedSettings;
 
     const payload = captureSettingsProfilePayload(settings, "dark");
@@ -141,6 +144,7 @@ describe("settings profile library", () => {
     ).toBe(true);
     expect(payload.clientSettings).not.toHaveProperty("autoNudgeMode");
     expect(payload.clientSettings).not.toHaveProperty("autoNudgeMaxRounds");
+    expect(payload.clientSettings).not.toHaveProperty("autoNudgeMaxMinutes");
     expect(payload.clientSettings).not.toHaveProperty("modelPacingEnabled");
     expect(payload.clientSettings).not.toHaveProperty("providerModelPreferences");
     expect(payload.clientSettings).not.toHaveProperty("sidebarProjectGroupingOverrides");
@@ -148,6 +152,7 @@ describe("settings profile library", () => {
     expect(payload.clientSettings).not.toHaveProperty("defaultProviderInstanceId");
     expect(payload.clientSettings).not.toHaveProperty("observability");
     expect(payload.clientSettings).not.toHaveProperty("addProjectBaseDirectory");
+    expect(payload.clientSettings).not.toHaveProperty("serverPassword");
     expect(payload.clientSettings).not.toHaveProperty("ambientVideoEnabled");
     expect(payload.clientSettings).not.toHaveProperty("ambientVideoSource");
     expect(payload.clientSettings).not.toHaveProperty("ambientImageEnabled");
