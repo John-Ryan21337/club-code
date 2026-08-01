@@ -10,6 +10,12 @@ Use this operating instruction when assigning the upgrade to an LLM coding agent
 
 > Upgrade Cafe Code toward the documented Club Code parity target one reviewable feature slice at a time. Start from a clean branch based on the Cafe maintainer's selected current commit, read the target repository's instructions, and re-check the selected Club PR's base, head, diff, tests, and mergeability. Do not merge or cherry-pick omnibus PR #8. Select exactly one feature lane below, bring over its prerequisites in order, and port the semantic change rather than blindly resolving ancestry conflicts. Preserve Cafe's current architecture and naming where upstream has moved. Keep contracts, server authority, storage, transport, UI, and production composition as separate commits or PRs whenever the source ladder separates them. Run deterministic focused tests after each slice and the full repository gates before publishing. Do not claim a UI is operational until its authority and production adapter are deliberately composed. Do not add timers, polling, automatic reconnect, public listeners, remote orchestration, arbitrary workspace access, or private-key exposure unless a reviewed source slice explicitly authorizes that capability. Stop and report if a prerequisite is missing, a security invariant cannot be preserved, the target base invalidates the source design, or new maintainer authority is required.
 
+### Install the Club Code reference build
+
+Before comparing behavior, install the exact Club Code reference on a separate checkout. [PR #50](https://github.com/John-Ryan21337/club-code/pull/50) adds copy-paste Codex/Claude Code setup instructions to the README for macOS Intel/Apple Silicon, Windows 10/11 x64/ARM64, Arch Linux x64/ARM64, and Raspberry Pi 5 on a 64-bit ARM64 desktop OS. It directs the agent to `release/local-20260728`, currently verified at `457be1418541bfb0ab08ae5bf9aac8a729ead23f`, instead of treating `main` as the combined-build parity target.
+
+The install agent must ask before elevation, package or `PATH` changes, firewall exposure, or checkout replacement; preserve existing `.cafe-code` state and credentials; use Node 24.13.1 plus the pinned Yarn 4.17.1; and verify that a real Club Code window launches. Raspberry Pi 5 remains experimental source-only because published Linux artifacts are x64-only. A Pi agent must use native ARM64 Node and report Electron, native-module, GPU, or memory limitations rather than claiming the x64 AppImage is compatible.
+
 ### Piece-by-piece parity plan
 
 Each row is a separately reviewable lane. Finish and validate one row before starting another unless Cafe maintainers explicitly approve a stacked series.
@@ -44,10 +50,10 @@ Full parity is not a single merge. It is achieved only when every chosen lane's 
 
 ## Published PR inventory
 
-The repository has published 49 pull requests:
+The repository has published 50 pull requests:
 
 - forty-one open implementation PRs: [#2](https://github.com/John-Ryan21337/club-code/pull/2), [#3](https://github.com/John-Ryan21337/club-code/pull/3), [#4](https://github.com/John-Ryan21337/club-code/pull/4), [#7](https://github.com/John-Ryan21337/club-code/pull/7), [#8](https://github.com/John-Ryan21337/club-code/pull/8), [#13](https://github.com/John-Ryan21337/club-code/pull/13), [#14](https://github.com/John-Ryan21337/club-code/pull/14), [#15](https://github.com/John-Ryan21337/club-code/pull/15), [#17](https://github.com/John-Ryan21337/club-code/pull/17), [#18](https://github.com/John-Ryan21337/club-code/pull/18), [#19](https://github.com/John-Ryan21337/club-code/pull/19), [#20](https://github.com/John-Ryan21337/club-code/pull/20), [#21](https://github.com/John-Ryan21337/club-code/pull/21), [#22](https://github.com/John-Ryan21337/club-code/pull/22), [#23](https://github.com/John-Ryan21337/club-code/pull/23), [#24](https://github.com/John-Ryan21337/club-code/pull/24), [#25](https://github.com/John-Ryan21337/club-code/pull/25), [#26](https://github.com/John-Ryan21337/club-code/pull/26), [#27](https://github.com/John-Ryan21337/club-code/pull/27), [#28](https://github.com/John-Ryan21337/club-code/pull/28), [#29](https://github.com/John-Ryan21337/club-code/pull/29), [#30](https://github.com/John-Ryan21337/club-code/pull/30), [#31](https://github.com/John-Ryan21337/club-code/pull/31), [#32](https://github.com/John-Ryan21337/club-code/pull/32), [#33](https://github.com/John-Ryan21337/club-code/pull/33), [#34](https://github.com/John-Ryan21337/club-code/pull/34), [#35](https://github.com/John-Ryan21337/club-code/pull/35), [#36](https://github.com/John-Ryan21337/club-code/pull/36), [#37](https://github.com/John-Ryan21337/club-code/pull/37), [#38](https://github.com/John-Ryan21337/club-code/pull/38), [#39](https://github.com/John-Ryan21337/club-code/pull/39), [#40](https://github.com/John-Ryan21337/club-code/pull/40), [#41](https://github.com/John-Ryan21337/club-code/pull/41), [#42](https://github.com/John-Ryan21337/club-code/pull/42), [#43](https://github.com/John-Ryan21337/club-code/pull/43), [#44](https://github.com/John-Ryan21337/club-code/pull/44), [#45](https://github.com/John-Ryan21337/club-code/pull/45), [#46](https://github.com/John-Ryan21337/club-code/pull/46), [#47](https://github.com/John-Ryan21337/club-code/pull/47), [#48](https://github.com/John-Ryan21337/club-code/pull/48), and [#49](https://github.com/John-Ryan21337/club-code/pull/49);
-- this open documentation PR, [#16](https://github.com/John-Ryan21337/club-code/pull/16), which adds this adoption guide directly against `main`;
+- two open documentation PRs: this adoption guide, [#16](https://github.com/John-Ryan21337/club-code/pull/16), and [#50](https://github.com/John-Ryan21337/club-code/pull/50), which adds the agent-friendly cross-platform setup guide;
 - four merged documentation PRs: #9 through #12;
 - two closed, archived pacing PRs: #5 and #6; and
 - one closed, obsolete omnibus PR: #1.
@@ -339,7 +345,7 @@ PR #8 is a draft release aggregate, not the recommended Cafe review unit. It con
 
 ## Validation gates
 
-At this snapshot GitHub reported no configured checks for the newly published PRs through #49. `MERGEABLE/CLEAN` describes branch topology, not test evidence; Cafe maintainers must run the recorded local gates (or equivalent CI) on the exact adopted heads.
+At this snapshot GitHub reported no configured checks for the newly published PRs through #50. `MERGEABLE/CLEAN` describes branch topology, not test evidence; Cafe maintainers must run the recorded local gates (or equivalent CI) on the exact adopted heads.
 
 Run the repository gates after each meaningful stack layer and again at the final exact head:
 
