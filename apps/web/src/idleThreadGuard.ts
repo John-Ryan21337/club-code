@@ -1,4 +1,4 @@
-import type { EnvironmentId, ThreadId } from "@cafecode/contracts";
+import type { BuiltInPromptLanguage, EnvironmentId, ThreadId } from "@cafecode/contracts";
 import { useSyncExternalStore } from "react";
 
 export const IDLE_THREAD_GUARD_MIN_HOURS = 1;
@@ -7,6 +7,46 @@ export const IDLE_THREAD_GUARD_DEFAULT_HOURS = 2;
 export const IDLE_THREAD_GUARD_PROMPT_MAX_CHARS = 240;
 export const IDLE_THREAD_GUARD_DEFAULT_PROMPT =
   "Status update: are you still active, and is work still happening?";
+export const IDLE_THREAD_GUARD_DEFAULT_PROMPT_JAPANESE =
+  "状況を教えてください。まだアクティブで、作業は続いていますか？";
+export const IDLE_THREAD_GUARD_DEFAULT_PROMPT_DUAL = `${IDLE_THREAD_GUARD_DEFAULT_PROMPT}\n\n${IDLE_THREAD_GUARD_DEFAULT_PROMPT_JAPANESE}`;
+
+export const IDLE_THREAD_GUARD_BUILT_IN_PROMPTS: Readonly<
+  Record<Exclude<BuiltInPromptLanguage, "system">, string>
+> = {
+  en: IDLE_THREAD_GUARD_DEFAULT_PROMPT,
+  ja: IDLE_THREAD_GUARD_DEFAULT_PROMPT_JAPANESE,
+  dual: IDLE_THREAD_GUARD_DEFAULT_PROMPT_DUAL,
+};
+
+export function idleThreadGuardDefaultPromptForLanguage(
+  language: BuiltInPromptLanguage = "en",
+): string {
+  return IDLE_THREAD_GUARD_BUILT_IN_PROMPTS[language === "system" ? "en" : language];
+}
+
+const idleThreadGuardBuiltInPromptSet = new Set(Object.values(IDLE_THREAD_GUARD_BUILT_IN_PROMPTS));
+
+/** Replaces only empty or Club Code-authored text; custom text is returned exactly. */
+export function normalizeIdleThreadGuardBuiltInPrompt(
+  prompt: string,
+  language: BuiltInPromptLanguage = "en",
+): string {
+  const trimmed = prompt.trim();
+  return trimmed.length === 0 || idleThreadGuardBuiltInPromptSet.has(trimmed)
+    ? idleThreadGuardDefaultPromptForLanguage(language)
+    : prompt;
+}
+
+/** Migrates a stored built-in between languages without touching operator text. */
+export function migrateStoredIdleThreadGuardBuiltInPrompt(
+  prompt: string,
+  language: BuiltInPromptLanguage = "en",
+): string {
+  return idleThreadGuardBuiltInPromptSet.has(prompt.trim())
+    ? idleThreadGuardDefaultPromptForLanguage(language)
+    : prompt;
+}
 
 const STORAGE_KEY = "club-code:idle-thread-guard:v1";
 

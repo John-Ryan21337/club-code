@@ -1,9 +1,14 @@
-import { MAX_AUTO_NUDGE_MAX_ROUNDS, MIN_AUTO_NUDGE_MAX_ROUNDS } from "@cafecode/contracts";
+import {
+  MAX_AUTO_NUDGE_MAX_ROUNDS,
+  migrateStoredAutoNudgeBuiltInPrompt,
+  MIN_AUTO_NUDGE_MAX_ROUNDS,
+} from "@cafecode/contracts";
 import { ChevronDownIcon } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 
 import type { AutoNudgeMode } from "~/autoNudger";
 import { cn } from "~/lib/utils";
+import { useUiLocalization } from "~/uiLocalization";
 import { Button } from "../ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible";
 import { Input } from "../ui/input";
@@ -15,6 +20,12 @@ const AUTO_NUDGE_MODE_LABELS: Readonly<Record<AutoNudgeMode, string>> = {
   off: "Off",
   "hardcore-fanout": "Hardcore fan out",
   "steady-progress": "Steady progress",
+};
+
+const AUTO_NUDGE_MODE_LABELS_JA: Readonly<Record<AutoNudgeMode, string>> = {
+  off: "オフ",
+  "hardcore-fanout": "ハードコア・ファンアウト",
+  "steady-progress": "着実に進行",
 };
 
 function parseBoundedInteger(raw: string, minimum: number, maximum: number): number | null {
@@ -57,6 +68,7 @@ export function AutoNudgeControl(props: AutoNudgeControlProps) {
 }
 
 function ThreadScopedAutoNudgeControl(props: AutoNudgeControlProps) {
+  const { language, t } = useUiLocalization();
   const promptFieldId = useId();
   const promptHelpId = useId();
   const promptStatusId = useId();
@@ -66,7 +78,12 @@ function ThreadScopedAutoNudgeControl(props: AutoNudgeControlProps) {
   const summaryStateId = useId();
   const summaryStatusId = useId();
   const [expanded, setExpanded] = useState(false);
-  const [draftPrompt, setDraftPrompt] = useState(props.persistedPrompt);
+  const localizedPersistedPrompt = migrateStoredAutoNudgeBuiltInPrompt(
+    props.mode,
+    props.persistedPrompt,
+    language,
+  );
+  const [draftPrompt, setDraftPrompt] = useState(localizedPersistedPrompt);
   const [draftMaxRounds, setDraftMaxRounds] = useState(String(props.maxRounds));
   const [localSavePending, setLocalSavePending] = useState(false);
   const [localLimitsSavePending, setLocalLimitsSavePending] = useState(false);
@@ -74,6 +91,7 @@ function ThreadScopedAutoNudgeControl(props: AutoNudgeControlProps) {
   const [limitsSaveFailed, setLimitsSaveFailed] = useState(false);
   const mountedRef = useRef(false);
   const promptScopeRef = useRef(props.promptScopeKey);
+  const persistedPromptRef = useRef(props.persistedPrompt);
   const saveAttemptRef = useRef(0);
   const limitsSaveAttemptRef = useRef(0);
   promptScopeRef.current = props.promptScopeKey;
@@ -89,10 +107,16 @@ function ThreadScopedAutoNudgeControl(props: AutoNudgeControlProps) {
 
   useEffect(() => {
     saveAttemptRef.current += 1;
-    setDraftPrompt(props.persistedPrompt);
+    const persistedPromptChanged = persistedPromptRef.current !== props.persistedPrompt;
+    persistedPromptRef.current = props.persistedPrompt;
+    setDraftPrompt((current) =>
+      persistedPromptChanged
+        ? localizedPersistedPrompt
+        : migrateStoredAutoNudgeBuiltInPrompt(props.mode, current, language),
+    );
     setLocalSavePending(false);
     setSaveFailed(false);
-  }, [props.persistedPrompt, props.promptEditable, props.promptScopeKey]);
+  }, [language, localizedPersistedPrompt, props.mode, props.persistedPrompt, props.promptEditable]);
   useEffect(() => {
     limitsSaveAttemptRef.current += 1;
     setDraftMaxRounds(String(props.maxRounds));
@@ -109,18 +133,24 @@ function ThreadScopedAutoNudgeControl(props: AutoNudgeControlProps) {
   const promptIsTooLong = draftPrompt.length > props.promptMaxLength;
   const promptIsValid = !promptIsTooLong && (!isActive || !promptIsBlank);
   const promptStatus = !props.promptEditable
-    ? "Prompt unavailable for this thread"
+    ? t("Prompt unavailable for this thread", "このスレッドではプロンプトを利用できません")
     : saveFailed
-      ? "Prompt could not be saved. Try again."
+      ? t(
+          "Prompt could not be saved. Try again.",
+          "プロンプトを保存できませんでした。もう一度お試しください。",
+        )
       : promptSaving
-        ? "Saving prompt"
+        ? t("Saving prompt", "プロンプトを保存中")
         : isActive && promptIsBlank
-          ? "Prompt cannot be empty"
+          ? t("Prompt cannot be empty", "プロンプトは空にできません")
           : promptIsTooLong
-            ? `Prompt exceeds the ${props.promptMaxLength}-character limit`
+            ? t(
+                `Prompt exceeds the ${props.promptMaxLength}-character limit`,
+                `プロンプトが${props.promptMaxLength}文字の上限を超えています`,
+              )
             : promptChanged
-              ? "Unsaved changes"
-              : "Saved";
+              ? t("Unsaved changes", "未保存の変更")
+              : t("Saved", "保存済み");
   const parsedMaxRounds = parseBoundedInteger(
     draftMaxRounds,
     MIN_AUTO_NUDGE_MAX_ROUNDS,
@@ -129,25 +159,31 @@ function ThreadScopedAutoNudgeControl(props: AutoNudgeControlProps) {
   const limitsChanged = parsedMaxRounds !== null && parsedMaxRounds !== props.maxRounds;
   const limitsAreValid = parsedMaxRounds !== null;
   const limitsStatus = !props.promptEditable
-    ? "Round cap unavailable for this thread"
+    ? t("Round cap unavailable for this thread", "このスレッドではラウンド上限を利用できません")
     : limitsSaveFailed
-      ? "Round cap could not be saved. Try again."
+      ? t(
+          "Round cap could not be saved. Try again.",
+          "ラウンド上限を保存できませんでした。もう一度お試しください。",
+        )
       : limitsSaving
-        ? "Saving round cap"
+        ? t("Saving round cap", "ラウンド上限を保存中")
         : !limitsAreValid
-          ? "Enter a whole number within the allowed range"
+          ? t("Enter a whole number within the allowed range", "許可範囲内の整数を入力してください")
           : limitsChanged
-            ? "Unsaved round-cap change"
-            : "Round cap saved";
+            ? t("Unsaved round-cap change", "ラウンド上限の変更は未保存です")
+            : t("Round cap saved", "ラウンド上限を保存しました");
   const status = props.globallySuppressed
-    ? "Emergency stop is active"
+    ? t("Emergency stop is active", "緊急停止が有効です")
     : props.arming
-      ? "Saving this thread"
+      ? t("Saving this thread", "このスレッドを保存中")
       : props.disabled
-        ? "Unavailable for this thread"
+        ? t("Unavailable for this thread", "このスレッドでは利用できません")
         : isActive
-          ? "Armed for the next newly completed response"
-          : "Off";
+          ? t(
+              "Armed for the next newly completed response",
+              "次に新しく完了する応答に対して作動します",
+            )
+          : t("Off", "オフ");
   const visualState =
     !isActive || props.globallySuppressed
       ? ("off" as const)
@@ -157,10 +193,13 @@ function ThreadScopedAutoNudgeControl(props: AutoNudgeControlProps) {
   const stopAvailable = isActive || props.arming || props.backgroundEnabled;
   const visualStateDescription =
     visualState === "off"
-      ? "Auto Nudge is off."
+      ? t("Auto Nudge is off.", "Auto Nudge はオフです。")
       : visualState === "background"
-        ? "Auto Nudge is on with background continuation."
-        : "Auto Nudge is on.";
+        ? t(
+            "Auto Nudge is on with background continuation.",
+            "Auto Nudge はバックグラウンド継続付きでオンです。",
+          )
+        : t("Auto Nudge is on.", "Auto Nudge はオンです。");
 
   const savePrompt = async () => {
     if (!props.promptEditable || !promptChanged || !promptIsValid || configurationSaving) return;
@@ -236,7 +275,10 @@ function ThreadScopedAutoNudgeControl(props: AutoNudgeControlProps) {
           <CollapsibleTrigger
             type="button"
             aria-describedby={`${summaryStateId} ${summaryStatusId}`}
-            aria-label={`${expanded ? "Collapse" : "Expand"} Auto Nudge controls`}
+            aria-label={t(
+              `${expanded ? "Collapse" : "Expand"} Auto Nudge controls`,
+              `Auto Nudge の操作を${expanded ? "折りたたむ" : "展開する"}`,
+            )}
             className={cn(
               "relative flex min-h-11 min-w-0 flex-1 items-center gap-2 overflow-hidden rounded-xl border px-3 py-2 text-left shadow-sm transition-colors motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/70",
               visualState === "off" &&
@@ -266,7 +308,9 @@ function ThreadScopedAutoNudgeControl(props: AutoNudgeControlProps) {
             <span id={summaryStateId} className="sr-only">
               {visualStateDescription}
             </span>
-            <span className="relative z-10 shrink-0 font-medium">Auto Nudge</span>
+            <span className="relative z-10 shrink-0 font-medium">
+              {t("Auto Nudge", "自動ナッジ")}
+            </span>
             <span
               id={summaryStatusId}
               className="relative z-10 min-w-0 flex-1 truncate opacity-85"
@@ -290,7 +334,7 @@ function ThreadScopedAutoNudgeControl(props: AutoNudgeControlProps) {
               className="min-h-11 shrink-0 px-2.5 sm:px-3"
               onClick={props.onStop}
             >
-              Stop this thread
+              {t("Stop this thread", "このスレッドを停止")}
             </Button>
           ) : null}
         </div>
@@ -304,31 +348,34 @@ function ThreadScopedAutoNudgeControl(props: AutoNudgeControlProps) {
               data-auto-nudge-cost-warning="true"
               role="note"
             >
-              <span className="font-semibold">Paid-usage warning:</span> Auto Nudge can rapidly
-              consume provider tokens, credits, and paid usage. You are responsible for provider
-              charges; Club Code cannot reimburse them. Use a conservative round cap, monitor active
-              runs (including through the phone web UI), and use a carefully scoped prompt or skill
-              for this exact thread. Leave it unattended only if you accept the cost risk.
+              <span className="font-semibold">
+                {t("Paid-usage warning:", "有料利用に関する警告：")}
+              </span>{" "}
+              {t(
+                "Auto Nudge can rapidly consume provider tokens, credits, and paid usage. You are responsible for provider charges; Club Code cannot reimburse them. Use a conservative round cap, monitor active runs (including through the phone web UI), and use a carefully scoped prompt or skill for this exact thread. Leave it unattended only if you accept the cost risk.",
+                "Auto Nudge はプロバイダーのトークン、クレジット、有料利用枠を急速に消費する可能性があります。プロバイダー料金は利用者の責任であり、Club Code は補償できません。控えめなラウンド上限を使用し、電話の Web UI を含め実行中の処理を監視し、このスレッドだけを対象にした慎重なプロンプトまたはスキルを使用してください。費用リスクを受け入れる場合に限り無人で実行してください。",
+              )}
             </div>
             <p className="text-muted-foreground">
-              Auto Nudge does not send on an idle-time or repeating schedule. It can hand off once
-              only when this exact thread generates a new completed response and its accepted
-              operator queue is empty. Mode, prompt, and limits are saved only for this thread.
-              Background continuation is opt-in and stops at {props.maxRounds} rounds. Stop this
-              thread blocks only its future handoffs; Emergency Stop all blocks every thread.
-              Neither action can retract a prompt already handed to a provider.
+              {t(
+                `Auto Nudge does not send on an idle-time or repeating schedule. It can hand off once only when this exact thread generates a new completed response and its accepted operator queue is empty. Mode, prompt, and limits are saved only for this thread. Background continuation is opt-in and stops at ${props.maxRounds} rounds. Stop this thread blocks only its future handoffs; Emergency Stop all blocks every thread. Neither action can retract a prompt already handed to a provider.`,
+                `Auto Nudge はアイドル時間や反復タイマーでは送信しません。このスレッドが新しい完了応答を生成し、受理済みのオペレーターキューが空のときだけ1回引き継ぎます。モード、プロンプト、上限はこのスレッドだけに保存されます。バックグラウンド継続は任意で、${props.maxRounds}ラウンドで停止します。「このスレッドを停止」は今後の引き継ぎだけを止め、「すべて緊急停止」は全スレッドを止めます。すでにプロバイダーへ渡したプロンプトは取り消せません。`,
+              )}
             </p>
             {props.backgroundEnabled ? (
               <div className="mt-1 text-muted-foreground">
-                Background continuation is enabled for this thread - {props.roundsDispatched}/
-                {props.maxRounds} rounds dispatched.
+                {t(
+                  `Background continuation is enabled for this thread - ${props.roundsDispatched}/${props.maxRounds} rounds dispatched.`,
+                  `このスレッドではバックグラウンド継続が有効です — ${props.roundsDispatched}/${props.maxRounds}ラウンドを送信済みです。`,
+                )}
               </div>
             ) : null}
             {props.globallySuppressed ? (
               <div className="mt-1 text-destructive" role="status">
-                Emergency Stop all is blocking Auto Nudge in every thread. Saved prompts and limits
-                remain, but every thread is being forced Off until you explicitly allow Auto Nudge
-                again.
+                {t(
+                  "Emergency Stop all is blocking Auto Nudge in every thread. Saved prompts and limits remain, but every thread is being forced Off until you explicitly allow Auto Nudge again.",
+                  "「すべて緊急停止」が全スレッドの Auto Nudge を遮断しています。保存済みのプロンプトと上限は保持されますが、Auto Nudge を明示的に再許可するまで全スレッドが強制的にオフになります。",
+                )}
               </div>
             ) : null}
             <div className="mt-2 flex w-full flex-wrap items-center gap-2">
@@ -347,15 +394,24 @@ function ThreadScopedAutoNudgeControl(props: AutoNudgeControlProps) {
               >
                 <SelectTrigger
                   size="sm"
-                  aria-label="Auto nudge mode"
+                  aria-label={t("Auto nudge mode", "Auto Nudge モード")}
                   className="max-w-full sm:max-w-48"
                 >
-                  <span className="flex-1 truncate">{AUTO_NUDGE_MODE_LABELS[props.mode]}</span>
+                  <span className="flex-1 truncate">
+                    {t(
+                      AUTO_NUDGE_MODE_LABELS[props.mode] ?? "Off",
+                      AUTO_NUDGE_MODE_LABELS_JA[props.mode] ?? "オフ",
+                    )}
+                  </span>
                 </SelectTrigger>
                 <SelectPopup alignItemWithTrigger={false}>
-                  <SelectItem value="off">Off</SelectItem>
-                  <SelectItem value="hardcore-fanout">Hardcore fan out</SelectItem>
-                  <SelectItem value="steady-progress">Steady progress</SelectItem>
+                  <SelectItem value="off">{t("Off", "オフ")}</SelectItem>
+                  <SelectItem value="hardcore-fanout">
+                    {t("Hardcore fan out", "ハードコア・ファンアウト")}
+                  </SelectItem>
+                  <SelectItem value="steady-progress">
+                    {t("Steady progress", "着実に進行")}
+                  </SelectItem>
                 </SelectPopup>
               </Select>
               <label className="flex min-w-0 items-center gap-2 text-muted-foreground sm:whitespace-nowrap">
@@ -367,10 +423,13 @@ function ThreadScopedAutoNudgeControl(props: AutoNudgeControlProps) {
                     props.globallySuppressed ||
                     props.mode === "off"
                   }
-                  aria-label="Continue this thread in background"
+                  aria-label={t(
+                    "Continue this thread in background",
+                    "このスレッドをバックグラウンドで継続",
+                  )}
                   onCheckedChange={(checked) => props.onBackgroundChange(Boolean(checked))}
                 />
-                Continue this thread in background
+                {t("Continue this thread in background", "このスレッドをバックグラウンドで継続")}
               </label>
               {props.globallySuppressed ? (
                 <Button
@@ -379,7 +438,7 @@ function ThreadScopedAutoNudgeControl(props: AutoNudgeControlProps) {
                   variant="outline"
                   onClick={props.onAllowAutoNudgeAgain}
                 >
-                  Allow Auto Nudge again
+                  {t("Allow Auto Nudge again", "Auto Nudge を再許可")}
                 </Button>
               ) : (
                 <Button
@@ -388,7 +447,7 @@ function ThreadScopedAutoNudgeControl(props: AutoNudgeControlProps) {
                   variant="destructive-outline"
                   onClick={props.onEmergencyStopAll}
                 >
-                  Emergency Stop all
+                  {t("Emergency Stop all", "すべて緊急停止")}
                 </Button>
               )}
             </div>
@@ -401,7 +460,7 @@ function ThreadScopedAutoNudgeControl(props: AutoNudgeControlProps) {
             >
               <div className="mb-1 flex flex-wrap items-center justify-between gap-1">
                 <label className="font-medium text-foreground" htmlFor={promptFieldId}>
-                  Prompt for this thread
+                  {t("Prompt for this thread", "このスレッドのプロンプト")}
                 </label>
                 <span
                   id={promptStatusId}
@@ -431,10 +490,19 @@ function ThreadScopedAutoNudgeControl(props: AutoNudgeControlProps) {
               <div className="mt-1 flex flex-wrap items-center justify-between gap-2">
                 <p id={promptHelpId} className="text-muted-foreground">
                   {!props.promptEditable
-                    ? "Open a persisted thread to edit its prompt."
+                    ? t(
+                        "Open a persisted thread to edit its prompt.",
+                        "保存済みスレッドを開いてプロンプトを編集してください。",
+                      )
                     : props.mode === "off"
-                      ? "Auto Nudge is off. Saving this text does not enable it."
-                      : "This text is used only by this thread."}{" "}
+                      ? t(
+                          "Auto Nudge is off. Saving this text does not enable it.",
+                          "Auto Nudge はオフです。この文章を保存しても有効にはなりません。",
+                        )
+                      : t(
+                          "This text is used only by this thread.",
+                          "この文章はこのスレッドだけで使用されます。",
+                        )}{" "}
                   {draftPrompt.length}/{props.promptMaxLength}
                 </p>
                 <Button
@@ -445,7 +513,9 @@ function ThreadScopedAutoNudgeControl(props: AutoNudgeControlProps) {
                     !props.promptEditable || !promptChanged || !promptIsValid || configurationSaving
                   }
                 >
-                  {promptSaving ? "Saving prompt…" : "Save prompt"}
+                  {promptSaving
+                    ? t("Saving prompt…", "プロンプトを保存中…")
+                    : t("Save prompt", "プロンプトを保存")}
                 </Button>
               </div>
             </form>
@@ -457,7 +527,9 @@ function ThreadScopedAutoNudgeControl(props: AutoNudgeControlProps) {
               }}
             >
               <div className="mb-1 flex flex-wrap items-center justify-between gap-1">
-                <span className="font-medium text-foreground">Round cap for this thread</span>
+                <span className="font-medium text-foreground">
+                  {t("Round cap for this thread", "このスレッドのラウンド上限")}
+                </span>
                 <span
                   id={limitsStatusId}
                   className={limitsSaveFailed ? "text-destructive" : "text-muted-foreground"}
@@ -469,7 +541,7 @@ function ThreadScopedAutoNudgeControl(props: AutoNudgeControlProps) {
               </div>
               <div className="grid gap-2">
                 <label className="grid gap-1 text-muted-foreground" htmlFor={maxRoundsFieldId}>
-                  Maximum rounds
+                  {t("Maximum rounds", "最大ラウンド数")}
                   <Input
                     nativeInput
                     id={maxRoundsFieldId}
@@ -494,8 +566,10 @@ function ThreadScopedAutoNudgeControl(props: AutoNudgeControlProps) {
               </div>
               <div className="mt-1 flex flex-wrap items-center justify-between gap-2">
                 <p id={limitsHelpId} className="text-muted-foreground">
-                  Whole numbers only: {MIN_AUTO_NUDGE_MAX_ROUNDS}-{MAX_AUTO_NUDGE_MAX_ROUNDS}{" "}
-                  rounds. Saving replaces only this thread's revision-checked authority.
+                  {t(
+                    `Whole numbers only: ${MIN_AUTO_NUDGE_MAX_ROUNDS}-${MAX_AUTO_NUDGE_MAX_ROUNDS} rounds. Saving replaces only this thread's revision-checked authority.`,
+                    `整数のみ：${MIN_AUTO_NUDGE_MAX_ROUNDS}～${MAX_AUTO_NUDGE_MAX_ROUNDS}ラウンド。保存すると、このスレッドのリビジョン確認済み権限だけが置き換わります。`,
+                  )}
                 </p>
                 <Button
                   type="submit"
@@ -503,7 +577,9 @@ function ThreadScopedAutoNudgeControl(props: AutoNudgeControlProps) {
                   variant="outline"
                   disabled={!props.promptEditable || !limitsChanged || configurationSaving}
                 >
-                  {limitsSaving ? "Saving round cap..." : "Save round cap"}
+                  {limitsSaving
+                    ? t("Saving round cap...", "ラウンド上限を保存中…")
+                    : t("Save round cap", "ラウンド上限を保存")}
                 </Button>
               </div>
             </form>

@@ -11,6 +11,7 @@ import { getRouter } from "./router";
 import { APP_DISPLAY_NAME } from "./branding";
 import { syncDocumentWindowControlsOverlayClass } from "./lib/windowControlsOverlay";
 import { installMobileDebugLogging } from "./lib/mobileDebugLog";
+import { UiLocalizationProvider } from "./uiLocalization";
 
 // Mobile DOM debugging — no-op unless enabled; see lib/mobileDebugLog.ts.
 installMobileDebugLogging();
@@ -46,6 +47,8 @@ document.title = APP_DISPLAY_NAME;
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
-    <RouterProvider router={router} />
+    <UiLocalizationProvider>
+      <RouterProvider router={router} />
+    </UiLocalizationProvider>
   </React.StrictMode>,
 );

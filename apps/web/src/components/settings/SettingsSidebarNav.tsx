@@ -29,6 +29,7 @@ import {
   SidebarSeparator,
   useSidebar,
 } from "../ui/sidebar";
+import { useUiLocalization } from "../../uiLocalization";
 
 export type SettingsSectionPath =
   | "/settings/appearance"
@@ -102,6 +103,7 @@ export const SETTINGS_NAV_GROUPS: ReadonlyArray<SettingsNavGroup> = [
 ];
 
 export function SettingsSidebarNav({ pathname }: { pathname: string }) {
+  const { t } = useUiLocalization();
   const navigate = useNavigate();
   const canGoBack = useCanGoBack();
   const { isMobile, setOpenMobile } = useSidebar();
@@ -131,7 +133,7 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
         {SETTINGS_NAV_GROUPS.map((group) => (
           <SidebarGroup key={group.label} className="px-2 py-2 first:pt-3">
             <SidebarGroupLabel className="h-6 px-2 text-[11px] uppercase tracking-wide text-muted-foreground/60">
-              {group.label}
+              {t(group.label)}
             </SidebarGroupLabel>
             <SidebarMenu>
               {group.items.map((item) => {
@@ -157,7 +159,7 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
                             : "size-4 shrink-0 text-muted-foreground/60"
                         }
                       />
-                      <span className="truncate">{item.label}</span>
+                      <span className="truncate">{t(item.label)}</span>
                     </SidebarMenuButton>
                   </SidebarMenuItem>
                 );
@@ -177,7 +179,7 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
               onClick={handleBackClick}
             >
               <ArrowLeftIcon className="size-4" />
-              <span>Back</span>
+              <span>{t("Back")}</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>

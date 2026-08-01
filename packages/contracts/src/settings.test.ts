@@ -154,6 +154,13 @@ function pickAmbientSettings(settings: ClientSettings): AmbientClientSettings {
 }
 
 describe("client settings", () => {
+  it("defaults the renderer UI language to system and accepts only supported modes", () => {
+    expect(decodeClientSettings({}).uiLanguage).toBe("system");
+    expect(decodeClientSettingsPatch({ uiLanguage: "ja" })).toEqual({ uiLanguage: "ja" });
+    expect(decodeClientSettingsPatch({ uiLanguage: "dual" })).toEqual({ uiLanguage: "dual" });
+    expect(() => decodeClientSettingsPatch({ uiLanguage: "fr" })).toThrow();
+  });
+
   it("keeps every per-device completion audio option off by default", () => {
     expect(decodeClientSettings({})).toMatchObject({
       notificationsEnabled: false,

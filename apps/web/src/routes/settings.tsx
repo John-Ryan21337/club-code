@@ -14,8 +14,10 @@ import { Button } from "../components/ui/button";
 import { SidebarInset } from "../components/ui/sidebar";
 import { SidebarTriggerWithUnreadDot } from "../components/sidebar/unseenCompletions";
 import { isElectron } from "../env";
+import { useUiLocalization } from "../uiLocalization";
 
 function RestoreDefaultsButton({ onRestored }: { onRestored: () => void }) {
+  const { t } = useUiLocalization();
   const { changedSettingLabels, restoreDefaults } = useSettingsRestore(onRestored);
 
   return (
@@ -26,12 +28,13 @@ function RestoreDefaultsButton({ onRestored }: { onRestored: () => void }) {
       onClick={() => void restoreDefaults()}
     >
       <RotateCcwIcon className="size-3.5" />
-      Restore defaults
+      {t("Restore defaults")}
     </Button>
   );
 }
 
 function SettingsContentLayout() {
+  const { t } = useUiLocalization();
   const location = useLocation();
   const navigate = useNavigate();
   const canGoBack = useCanGoBack();
@@ -68,7 +71,7 @@ function SettingsContentLayout() {
           <header className="border-b border-border px-3 py-2 sm:px-5">
             <div className="flex min-h-7 items-center gap-2 sm:min-h-6">
               <SidebarTriggerWithUnreadDot className="md:hidden" />
-              <span className="text-sm font-medium text-foreground">Settings</span>
+              <span className="text-sm font-medium text-foreground">{t("Settings")}</span>
               {showRestoreDefaults ? (
                 <div className="ms-auto flex items-center gap-2">
                   <RestoreDefaultsButton onRestored={handleRestored} />
@@ -81,7 +84,7 @@ function SettingsContentLayout() {
         {isElectron && (
           <div className="drag-region flex h-[52px] shrink-0 items-center border-b border-border px-5 wco:h-[env(titlebar-area-height)] wco:pr-[calc(100vw-env(titlebar-area-width)-env(titlebar-area-x)+1em)]">
             <span className="text-xs font-medium tracking-wide text-muted-foreground/70">
-              Settings
+              {t("Settings")}
             </span>
             {showRestoreDefaults ? (
               <div className="ms-auto flex items-center gap-2">

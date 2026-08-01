@@ -44,6 +44,7 @@ import {
   type ChatCopyFormat,
   type DefaultEditorSelection,
   type PowerSaveBlockerMode,
+  type UiLanguagePreference,
 } from "@cafecode/contracts/settings";
 import { createModelSelection } from "@cafecode/shared/model";
 import * as Duration from "effect/Duration";
@@ -144,6 +145,7 @@ import { WindowOpacitySettings } from "./WindowOpacitySettings";
 import { isProjectHiddenForMeeting } from "../../meetingPrivacy";
 import { useUiStateStore } from "../../uiStateStore";
 import { SettingsProfiles } from "./SettingsProfiles";
+import { useUiLocalization } from "../../uiLocalization";
 
 const THEME_OPTIONS = [
   {
@@ -795,6 +797,7 @@ export function AppearanceSettingsPanel() {
   const { theme, setTheme } = useTheme();
   const settings = useSettings();
   const { updateSettings } = useUpdateSettings();
+  const { t } = useUiLocalization();
   const sidebarImageInputRef = useRef<HTMLInputElement | null>(null);
   const sidebarImagePreviewUrlRef = useRef<string | null>(null);
   const [sidebarImageError, setSidebarImageError] = useState<string | null>(null);
@@ -874,6 +877,63 @@ export function AppearanceSettingsPanel() {
   return (
     <SettingsPageContainer>
       <SettingsProfiles />
+
+      <SettingsSection title={t("Language", "言語")}>
+        <SettingsRow
+          title={t("Interface language", "インターフェース言語")}
+          description={t(
+            "Choose English, Japanese, both languages, or follow this device.",
+            "英語、日本語、両言語表示、またはこの端末の言語設定を選択します。",
+          )}
+          status={
+            settings.uiLanguage === "dual"
+              ? t(
+                  "Dual language mode displays both languages and uses longer built-in automation prompts, which can consume more input tokens.",
+                  "両言語モードでは英語と日本語を併記し、組み込み自動化プロンプトも長くなるため、入力トークンの消費量が増える場合があります。",
+                )
+              : undefined
+          }
+          control={
+            <Select
+              value={settings.uiLanguage}
+              onValueChange={(value) => {
+                if (value === "system" || value === "en" || value === "ja" || value === "dual") {
+                  updateSettings({ uiLanguage: value satisfies UiLanguagePreference });
+                }
+              }}
+            >
+              <SelectTrigger
+                className="w-full sm:w-56"
+                aria-label={t("Interface language", "インターフェース言語")}
+              >
+                <SelectValue>
+                  {settings.uiLanguage === "system"
+                    ? t("Follow system", "システム設定に従う")
+                    : settings.uiLanguage === "en"
+                      ? t("English", "英語")
+                      : settings.uiLanguage === "ja"
+                        ? "日本語"
+                        : "English + 日本語"}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectPopup align="end" alignItemWithTrigger={false}>
+                <SelectItem hideIndicator value="system">
+                  {t("Follow system", "システム設定に従う")}
+                </SelectItem>
+                <SelectItem hideIndicator value="en">
+                  {t("English", "英語")}
+                </SelectItem>
+                <SelectItem hideIndicator value="ja">
+                  日本語
+                </SelectItem>
+                <SelectItem hideIndicator value="dual">
+                  English + 日本語
+                </SelectItem>
+              </SelectPopup>
+            </Select>
+          }
+        />
+      </SettingsSection>
 
       <SettingsSection title="Appearance">
         <SettingsRow

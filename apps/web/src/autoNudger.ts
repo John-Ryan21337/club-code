@@ -1,15 +1,20 @@
 import {
   AUTO_NUDGE_BUILT_IN_PROMPTS,
+  autoNudgeBuiltInPromptForLanguage,
   normalizeAutoNudgeBuiltInPrompt,
   type AutoNudgeMode,
+  type BuiltInPromptLanguage,
 } from "@cafecode/contracts";
 
 export type { AutoNudgeMode } from "@cafecode/contracts";
 
 export const AUTO_NUDGE_PROMPTS = AUTO_NUDGE_BUILT_IN_PROMPTS;
 
-export function autoNudgePromptForMode(mode: AutoNudgeMode): string | null {
-  return mode === "off" ? null : AUTO_NUDGE_PROMPTS[mode];
+export function autoNudgePromptForMode(
+  mode: AutoNudgeMode,
+  language: BuiltInPromptLanguage = "en",
+): string | null {
+  return mode === "off" ? null : autoNudgeBuiltInPromptForLanguage(mode, language);
 }
 
 export { normalizeAutoNudgeBuiltInPrompt };

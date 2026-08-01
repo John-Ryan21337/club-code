@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  AUTO_NUDGE_BUILT_IN_PROMPTS_DUAL,
+  AUTO_NUDGE_BUILT_IN_PROMPTS_JAPANESE,
+  autoNudgeBuiltInPromptForLanguage,
+  migrateStoredAutoNudgeBuiltInPrompt,
+} from "@cafecode/contracts";
+import {
   AUTO_NUDGE_PROMPTS,
   AutoNudgeTurnLedger,
   autoNudgePromptForMode,
@@ -30,6 +36,9 @@ describe("auto nudger safety gates", () => {
       expect(prompt.length).toBeLessThan(1_200);
     }
     expect(autoNudgePromptForMode("off")).toBeNull();
+    expect(autoNudgePromptForMode("steady-progress", "ja")).toBe(
+      AUTO_NUDGE_BUILT_IN_PROMPTS_JAPANESE["steady-progress"],
+    );
   });
 
   it("upgrades recognized defaults across modes without touching custom prompts", () => {
@@ -45,6 +54,38 @@ describe("auto nudger safety gates", () => {
     expect(normalizeAutoNudgeBuiltInPrompt("steady-progress", "My custom continuation")).toBe(
       "My custom continuation",
     );
+  });
+
+  it("provides authored Japanese and dual-language defaults", () => {
+    expect(autoNudgeBuiltInPromptForLanguage("steady-progress", "ja")).toBe(
+      AUTO_NUDGE_BUILT_IN_PROMPTS_JAPANESE["steady-progress"],
+    );
+    expect(autoNudgeBuiltInPromptForLanguage("hardcore-fanout", "dual")).toBe(
+      AUTO_NUDGE_BUILT_IN_PROMPTS_DUAL["hardcore-fanout"],
+    );
+    expect(AUTO_NUDGE_BUILT_IN_PROMPTS_DUAL["steady-progress"]).toContain(
+      AUTO_NUDGE_PROMPTS["steady-progress"],
+    );
+    expect(AUTO_NUDGE_BUILT_IN_PROMPTS_DUAL["steady-progress"]).toContain(
+      AUTO_NUDGE_BUILT_IN_PROMPTS_JAPANESE["steady-progress"],
+    );
+  });
+
+  it("migrates every built-in language variant but preserves custom text exactly", () => {
+    for (const source of [
+      AUTO_NUDGE_PROMPTS["steady-progress"],
+      AUTO_NUDGE_BUILT_IN_PROMPTS_JAPANESE["steady-progress"],
+      AUTO_NUDGE_BUILT_IN_PROMPTS_DUAL["steady-progress"],
+      "Keep a few lanes going, make steady progress",
+    ]) {
+      expect(migrateStoredAutoNudgeBuiltInPrompt("steady-progress", source, "ja")).toBe(
+        AUTO_NUDGE_BUILT_IN_PROMPTS_JAPANESE["steady-progress"],
+      );
+    }
+
+    const custom = "  My custom continuation — 続けてください  ";
+    expect(migrateStoredAutoNudgeBuiltInPrompt("steady-progress", custom, "dual")).toBe(custom);
+    expect(normalizeAutoNudgeBuiltInPrompt("hardcore-fanout", custom, "ja")).toBe(custom);
   });
 
   it("fails closed for disable, manual input, pending work, and an unavailable provider", () => {

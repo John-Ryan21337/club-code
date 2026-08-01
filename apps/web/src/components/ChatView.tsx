@@ -228,6 +228,7 @@ import {
   normalizeAutoNudgeBuiltInPrompt,
 } from "../autoNudger";
 import { manualFollowUpPriorityStore } from "../manualFollowUpPriorityStore";
+import { resolveUiLanguage } from "../uiLocalization";
 import {
   getConfirmedAutoNudgeArming,
   useAutoNudgeSuppressedState,
@@ -6605,7 +6606,11 @@ export default function ChatView(props: ChatViewProps) {
       );
       return;
     }
-    const prompt = normalizeAutoNudgeBuiltInPrompt(mode, config.prompt);
+    const prompt = normalizeAutoNudgeBuiltInPrompt(
+      mode,
+      config.prompt,
+      resolveUiLanguage(settings.uiLanguage),
+    );
     void configureActiveThreadAutoNudge(
       {
         mode,

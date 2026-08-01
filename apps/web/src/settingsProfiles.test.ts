@@ -155,6 +155,7 @@ describe("settings profile library", () => {
 
     expect(SETTINGS_PROFILE_CLIENT_KEYS).toEqual(expectedKeys);
     expect(SETTINGS_PROFILE_CLIENT_FIELD_POLICY).toMatchObject({
+      uiLanguage: "renderer-identity",
       notificationsEnabled: "consent",
       completionAlertSoundEnabled: "event-output-activation",
       completionAlertSpeechEnabled: "event-output-activation",

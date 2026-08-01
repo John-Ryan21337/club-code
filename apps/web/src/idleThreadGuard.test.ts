@@ -1,10 +1,51 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  IDLE_THREAD_GUARD_DEFAULT_PROMPT,
+  IDLE_THREAD_GUARD_DEFAULT_PROMPT_DUAL,
+  IDLE_THREAD_GUARD_DEFAULT_PROMPT_JAPANESE,
   idleThreadGuardAcknowledgedBarrier,
+  idleThreadGuardDefaultPromptForLanguage,
   isIdleThreadGuardDue,
   latestIdleActivityAt,
+  migrateStoredIdleThreadGuardBuiltInPrompt,
+  normalizeIdleThreadGuardBuiltInPrompt,
 } from "./idleThreadGuard";
+
+describe("Idle Thread Guard language-aware built-in prompts", () => {
+  it("provides English, Japanese, and authored bilingual defaults", () => {
+    expect(idleThreadGuardDefaultPromptForLanguage("en")).toBe(IDLE_THREAD_GUARD_DEFAULT_PROMPT);
+    expect(idleThreadGuardDefaultPromptForLanguage("ja")).toBe(
+      IDLE_THREAD_GUARD_DEFAULT_PROMPT_JAPANESE,
+    );
+    expect(idleThreadGuardDefaultPromptForLanguage("dual")).toBe(
+      IDLE_THREAD_GUARD_DEFAULT_PROMPT_DUAL,
+    );
+    expect(IDLE_THREAD_GUARD_DEFAULT_PROMPT_DUAL).toContain(IDLE_THREAD_GUARD_DEFAULT_PROMPT);
+    expect(IDLE_THREAD_GUARD_DEFAULT_PROMPT_DUAL).toContain(
+      IDLE_THREAD_GUARD_DEFAULT_PROMPT_JAPANESE,
+    );
+  });
+
+  it("migrates all built-ins without changing custom operator text", () => {
+    for (const source of [
+      IDLE_THREAD_GUARD_DEFAULT_PROMPT,
+      IDLE_THREAD_GUARD_DEFAULT_PROMPT_JAPANESE,
+      IDLE_THREAD_GUARD_DEFAULT_PROMPT_DUAL,
+    ]) {
+      expect(migrateStoredIdleThreadGuardBuiltInPrompt(source, "ja")).toBe(
+        IDLE_THREAD_GUARD_DEFAULT_PROMPT_JAPANESE,
+      );
+    }
+    expect(normalizeIdleThreadGuardBuiltInPrompt("   ", "dual")).toBe(
+      IDLE_THREAD_GUARD_DEFAULT_PROMPT_DUAL,
+    );
+
+    const custom = "  Check only after my nightly import — 夜間処理後のみ  ";
+    expect(migrateStoredIdleThreadGuardBuiltInPrompt(custom, "dual")).toBe(custom);
+    expect(normalizeIdleThreadGuardBuiltInPrompt(custom, "ja")).toBe(custom);
+  });
+});
 
 describe("Idle Thread Guard safety timing", () => {
   it("uses the newest transcript, tool, session, or arming activity", () => {

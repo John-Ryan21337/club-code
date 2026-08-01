@@ -2,6 +2,7 @@ import { Undo2Icon } from "lucide-react";
 import { type ComponentPropsWithoutRef, type ReactNode, useEffect, useState } from "react";
 
 import { cn } from "../../lib/utils";
+import { useUiLocalization } from "../../uiLocalization";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
@@ -28,13 +29,14 @@ export function SettingsSection({
   headerAction?: ReactNode;
   children: ReactNode;
 }) {
+  const { t } = useUiLocalization();
   return (
     <section {...sectionProps} className={cn("space-y-2.5", className)}>
       <div className="flex items-center justify-between px-1">
         <h2 className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-foreground/50">
           <span className="inline-block h-px w-3 bg-border" aria-hidden />
           {icon}
-          {title}
+          {t(title)}
         </h2>
         <div className="flex h-5 min-w-5 items-center justify-end">{headerAction}</div>
       </div>
@@ -62,6 +64,9 @@ export function SettingsRow({
   control?: ReactNode;
   children?: ReactNode;
 }) {
+  const { t } = useUiLocalization();
+  const localizedTitle = typeof title === "string" ? t(title) : title;
+  const localizedDescription = typeof description === "string" ? t(description) : description;
   return (
     <div
       {...rowProps}
@@ -75,13 +80,13 @@ export function SettingsRow({
         <div className="min-w-0 flex-1 space-y-1">
           <div className="flex min-h-5 items-center gap-1.5">
             <h3 className="text-[13px] font-semibold tracking-[-0.01em] text-foreground">
-              {title}
+              {localizedTitle}
             </h3>
             <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center">
               {resetAction}
             </span>
           </div>
-          <p className="text-xs text-muted-foreground/80">{description}</p>
+          <p className="text-xs text-muted-foreground/80">{localizedDescription}</p>
           {status ? <div className="pt-0.5 text-[11px] text-muted-foreground">{status}</div> : null}
         </div>
         {control ? (
@@ -96,6 +101,7 @@ export function SettingsRow({
 }
 
 export function SettingResetButton({ label, onClick }: { label: string; onClick: () => void }) {
+  const { t } = useUiLocalization();
   return (
     <Tooltip>
       <TooltipTrigger
@@ -103,7 +109,7 @@ export function SettingResetButton({ label, onClick }: { label: string; onClick:
           <Button
             size="icon-xs"
             variant="ghost"
-            aria-label={`Reset ${label} to default`}
+            aria-label={t(`Reset ${label} to default`)}
             className="size-5 rounded-sm p-0 text-muted-foreground hover:text-foreground"
             onClick={(event) => {
               event.stopPropagation();
@@ -114,7 +120,7 @@ export function SettingResetButton({ label, onClick }: { label: string; onClick:
           </Button>
         }
       />
-      <TooltipPopup side="top">Reset to default</TooltipPopup>
+      <TooltipPopup side="top">{t("Reset to default")}</TooltipPopup>
     </Tooltip>
   );
 }

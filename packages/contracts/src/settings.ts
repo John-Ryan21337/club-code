@@ -31,6 +31,14 @@ export const TimestampFormat = Schema.Literals(["locale", "12-hour", "24-hour"])
 export type TimestampFormat = typeof TimestampFormat.Type;
 export const DEFAULT_TIMESTAMP_FORMAT: TimestampFormat = "locale";
 
+/**
+ * Per-renderer UI language. `system` resolves against the browser/OS locale,
+ * while `dual` presents English and Japanese together for language learning.
+ */
+export const UiLanguagePreference = Schema.Literals(["system", "en", "ja", "dual"]);
+export type UiLanguagePreference = typeof UiLanguagePreference.Type;
+export const DEFAULT_UI_LANGUAGE: UiLanguagePreference = "system";
+
 export const ChatCopyFormat = Schema.Literals(["markdown", "plainText"]);
 export type ChatCopyFormat = typeof ChatCopyFormat.Type;
 export const DEFAULT_CHAT_COPY_FORMAT: ChatCopyFormat = "markdown";
@@ -654,6 +662,9 @@ export const DEFAULT_SIDEBAR_THREAD_PREVIEW_COUNT: SidebarThreadPreviewCount = 6
 
 export const ClientSettingsSchema = Schema.Struct({
   autoOpenPlanSidebar: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  uiLanguage: UiLanguagePreference.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_UI_LANGUAGE)),
+  ),
   // Per-device first-run flow. `onboardingCompleted` gates the full-screen
   // onboarding surface so it only appears on a fresh install (and never loops
   // back to itself once finished or skipped). `dismissedFirstRunHints` holds
@@ -1855,6 +1866,7 @@ export type ServerSettingsPatch = typeof ServerSettingsPatch.Type;
 
 export const ClientSettingsPatch = Schema.Struct({
   autoOpenPlanSidebar: Schema.optionalKey(Schema.Boolean),
+  uiLanguage: Schema.optionalKey(UiLanguagePreference),
   onboardingCompleted: Schema.optionalKey(Schema.Boolean),
   dismissedFirstRunHints: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
   notificationsEnabled: Schema.optionalKey(Schema.Boolean),

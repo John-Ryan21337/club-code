@@ -2,7 +2,10 @@ import type { ClientSettings, ClientSettingsPatch } from "@cafecode/contracts/se
 
 export type RendererLocalClientSettingsPatch = Pick<
   ClientSettingsPatch,
-  "atmosphereConsoleEnabled" | "mobileOptimizedPresentation" | "worldClockWeatherEnabled"
+  | "atmosphereConsoleEnabled"
+  | "mobileOptimizedPresentation"
+  | "uiLanguage"
+  | "worldClockWeatherEnabled"
 >;
 
 /**
@@ -17,6 +20,7 @@ export function partitionRendererLocalClientSettingsPatch(patch: ClientSettingsP
   const {
     atmosphereConsoleEnabled,
     mobileOptimizedPresentation,
+    uiLanguage,
     worldClockWeatherEnabled,
     ...sharedPatch
   } = patch;
@@ -25,6 +29,7 @@ export function partitionRendererLocalClientSettingsPatch(patch: ClientSettingsP
     localPatch: {
       ...(atmosphereConsoleEnabled === undefined ? {} : { atmosphereConsoleEnabled }),
       ...(mobileOptimizedPresentation === undefined ? {} : { mobileOptimizedPresentation }),
+      ...(uiLanguage === undefined ? {} : { uiLanguage }),
       ...(worldClockWeatherEnabled === undefined ? {} : { worldClockWeatherEnabled }),
     },
   };
@@ -34,6 +39,7 @@ export function withoutRendererLocalClientSettings(settings: ClientSettings): Cl
   const {
     atmosphereConsoleEnabled: _atmosphereConsole,
     mobileOptimizedPresentation: _mobilePresentation,
+    uiLanguage: _uiLanguage,
     worldClockWeatherEnabled: _weatherConsent,
     ...sharedSettings
   } = settings;
@@ -44,13 +50,17 @@ export function withRendererLocalClientSettings(
   sharedSettings: ClientSettings,
   localSettings: Pick<
     ClientSettings,
-    "atmosphereConsoleEnabled" | "mobileOptimizedPresentation" | "worldClockWeatherEnabled"
+    | "atmosphereConsoleEnabled"
+    | "mobileOptimizedPresentation"
+    | "uiLanguage"
+    | "worldClockWeatherEnabled"
   >,
 ): ClientSettings {
   return {
     ...sharedSettings,
     atmosphereConsoleEnabled: localSettings.atmosphereConsoleEnabled,
     mobileOptimizedPresentation: localSettings.mobileOptimizedPresentation,
+    uiLanguage: localSettings.uiLanguage,
     worldClockWeatherEnabled: localSettings.worldClockWeatherEnabled,
   };
 }

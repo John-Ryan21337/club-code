@@ -31,6 +31,7 @@ export type SettingsProfileTheme = "light" | "dark" | "system";
 export type SettingsProfileClientFieldPolicy =
   | "include"
   | "client-bookkeeping"
+  | "renderer-identity"
   | "consent"
   | "external-operation"
   | "external-media-activation"
@@ -48,6 +49,9 @@ export type SettingsProfileClientFieldPolicy =
 
 export const SETTINGS_PROFILE_CLIENT_FIELD_POLICY = {
   autoOpenPlanSidebar: "include",
+  // Language belongs to the person using this renderer, not to a project or
+  // presentation profile that another operator might load.
+  uiLanguage: "renderer-identity",
   onboardingCompleted: "client-bookkeeping",
   dismissedFirstRunHints: "client-bookkeeping",
   // Notification permission/subscription state is owned by its settings controller.

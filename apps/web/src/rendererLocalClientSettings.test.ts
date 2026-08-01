@@ -12,6 +12,7 @@ describe("renderer-local client settings", () => {
     const { localPatch, sharedPatch } = partitionRendererLocalClientSettingsPatch({
       atmosphereConsoleEnabled: false,
       mobileOptimizedPresentation: true,
+      uiLanguage: "dual",
       worldClockWeatherEnabled: true,
       worldClockEnabled: true,
     });
@@ -19,6 +20,7 @@ describe("renderer-local client settings", () => {
     expect(localPatch).toEqual({
       atmosphereConsoleEnabled: false,
       mobileOptimizedPresentation: true,
+      uiLanguage: "dual",
       worldClockWeatherEnabled: true,
     });
     expect(sharedPatch).toEqual({ worldClockEnabled: true });
@@ -29,6 +31,7 @@ describe("renderer-local client settings", () => {
       ...DEFAULT_CLIENT_SETTINGS,
       atmosphereConsoleEnabled: false,
       mobileOptimizedPresentation: true,
+      uiLanguage: "ja",
       worldClockWeatherEnabled: true,
     };
 
@@ -38,6 +41,7 @@ describe("renderer-local client settings", () => {
     expect(withoutRendererLocalClientSettings(settings)).not.toHaveProperty(
       "mobileOptimizedPresentation",
     );
+    expect(withoutRendererLocalClientSettings(settings)).not.toHaveProperty("uiLanguage");
     expect(withoutRendererLocalClientSettings(settings)).not.toHaveProperty(
       "worldClockWeatherEnabled",
     );
@@ -50,17 +54,20 @@ describe("renderer-local client settings", () => {
           ...DEFAULT_CLIENT_SETTINGS,
           atmosphereConsoleEnabled: false,
           mobileOptimizedPresentation: true,
+          uiLanguage: "en",
           worldClockWeatherEnabled: true,
         },
         {
           atmosphereConsoleEnabled: true,
           mobileOptimizedPresentation: false,
+          uiLanguage: "dual",
           worldClockWeatherEnabled: false,
         },
       ),
     ).toMatchObject({
       atmosphereConsoleEnabled: true,
       mobileOptimizedPresentation: false,
+      uiLanguage: "dual",
       worldClockWeatherEnabled: false,
     });
   });

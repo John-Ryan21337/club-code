@@ -1,5 +1,5 @@
 import { ChevronDownIcon } from "lucide-react";
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 
 import {
   configureIdleThreadGuard,
@@ -8,11 +8,14 @@ import {
   IDLE_THREAD_GUARD_MAX_HOURS,
   IDLE_THREAD_GUARD_MIN_HOURS,
   IDLE_THREAD_GUARD_PROMPT_MAX_CHARS,
+  idleThreadGuardDefaultPromptForLanguage,
   idleThreadGuardScopeKey,
+  migrateStoredIdleThreadGuardBuiltInPrompt,
   type IdleThreadGuardScope,
   useIdleThreadGuardState,
 } from "../../idleThreadGuard";
 import { cn } from "../../lib/utils";
+import { useUiLocalization } from "../../uiLocalization";
 import { Button } from "../ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible";
 import { Input } from "../ui/input";
@@ -46,15 +49,20 @@ function ThreadScopedIdleThreadGuardControl({
   readonly scopeKey: string;
   readonly disabled: boolean;
 }) {
+  const { language, t } = useUiLocalization();
   const state = useIdleThreadGuardState();
   const config = state.configs[scopeKey];
+  const defaultPrompt = idleThreadGuardDefaultPromptForLanguage(language);
+  const localizedSavedPrompt = migrateStoredIdleThreadGuardBuiltInPrompt(
+    config?.prompt ?? IDLE_THREAD_GUARD_DEFAULT_PROMPT,
+    language,
+  );
   const [expanded, setExpanded] = useState(false);
   const [draftHours, setDraftHours] = useState(
     String(config?.idleHours ?? IDLE_THREAD_GUARD_DEFAULT_HOURS),
   );
-  const [draftPrompt, setDraftPrompt] = useState(
-    config?.prompt ?? IDLE_THREAD_GUARD_DEFAULT_PROMPT,
-  );
+  const [draftPrompt, setDraftPrompt] = useState(localizedSavedPrompt);
+  const persistedPromptRef = useRef(config?.prompt ?? IDLE_THREAD_GUARD_DEFAULT_PROMPT);
   const hoursId = useId();
   const promptId = useId();
   const enabled = config?.enabled ?? false;
@@ -71,8 +79,15 @@ function ThreadScopedIdleThreadGuardControl({
 
   useEffect(() => {
     setDraftHours(String(config?.idleHours ?? IDLE_THREAD_GUARD_DEFAULT_HOURS));
-    setDraftPrompt(config?.prompt ?? IDLE_THREAD_GUARD_DEFAULT_PROMPT);
-  }, [config?.idleHours, config?.prompt]);
+    const persistedPrompt = config?.prompt ?? IDLE_THREAD_GUARD_DEFAULT_PROMPT;
+    const persistedPromptChanged = persistedPromptRef.current !== persistedPrompt;
+    persistedPromptRef.current = persistedPrompt;
+    setDraftPrompt((current) =>
+      persistedPromptChanged
+        ? localizedSavedPrompt
+        : migrateStoredIdleThreadGuardBuiltInPrompt(current, language),
+    );
+  }, [config?.idleHours, config?.prompt, language, localizedSavedPrompt]);
 
   const save = (nextEnabled = enabled) => {
     if (!scope) return;
@@ -80,7 +95,7 @@ function ThreadScopedIdleThreadGuardControl({
       configureIdleThreadGuard(scope, {
         enabled: false,
         idleHours: config?.idleHours ?? IDLE_THREAD_GUARD_DEFAULT_HOURS,
-        prompt: config?.prompt ?? IDLE_THREAD_GUARD_DEFAULT_PROMPT,
+        prompt: config?.prompt ?? defaultPrompt,
       });
       return;
     }
@@ -93,14 +108,20 @@ function ThreadScopedIdleThreadGuardControl({
   };
 
   const status = disabled
-    ? "Unavailable for this thread"
+    ? t("Unavailable for this thread", "このスレッドでは利用できません")
     : !enabled
-      ? "Off"
+      ? t("Off", "オフ")
       : config?.lastError
-        ? "Paused after an unacknowledged request"
+        ? t("Paused after an unacknowledged request", "未確認のリクエスト後に一時停止中")
         : config?.awaitingActivityAfterDispatchAt
-          ? "Status requested; waiting for new activity"
-          : `Armed after ${config?.idleHours ?? IDLE_THREAD_GUARD_DEFAULT_HOURS}h of silence`;
+          ? t(
+              "Status requested; waiting for new activity",
+              "状況を確認済み。新しいアクティビティを待機中",
+            )
+          : t(
+              `Armed after ${config?.idleHours ?? IDLE_THREAD_GUARD_DEFAULT_HOURS}h of silence`,
+              `${config?.idleHours ?? IDLE_THREAD_GUARD_DEFAULT_HOURS}時間の無通信後に作動します`,
+            );
 
   return (
     <div
@@ -111,7 +132,10 @@ function ThreadScopedIdleThreadGuardControl({
       <Collapsible open={expanded} onOpenChange={setExpanded}>
         <CollapsibleTrigger
           type="button"
-          aria-label={`${expanded ? "Collapse" : "Expand"} Idle Thread Guard controls`}
+          aria-label={t(
+            `${expanded ? "Collapse" : "Expand"} Idle Thread Guard controls`,
+            `Idle Thread Guard の操作を${expanded ? "折りたたむ" : "展開する"}`,
+          )}
           className={cn(
             "flex min-h-11 w-full min-w-0 items-center gap-2 overflow-hidden rounded-xl border px-3 py-2 text-left shadow-sm transition-colors motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/70",
             enabled
@@ -120,7 +144,9 @@ function ThreadScopedIdleThreadGuardControl({
           )}
           data-idle-thread-guard-visual-state={enabled ? "active" : "off"}
         >
-          <span className="shrink-0 font-medium">Idle Thread Guard</span>
+          <span className="shrink-0 font-medium">
+            {t("Idle Thread Guard", "アイドルスレッドガード")}
+          </span>
           <span className="min-w-0 flex-1 truncate opacity-85" aria-live="polite">
             {status}
           </span>
@@ -138,31 +164,41 @@ function ThreadScopedIdleThreadGuardControl({
               className="mb-2 rounded-lg border border-amber-500/60 bg-amber-500/10 px-2.5 py-2 text-amber-950 dark:text-amber-100"
               role="note"
             >
-              <span className="font-semibold">Paid-usage warning:</span> never set an idle guard
-              aggressively. A status request can consume tokens while a provider is silently doing
-              long-running work. Club Code enforces a hard one-hour minimum; use 2–48 hours or
-              higher when practical.
+              <span className="font-semibold">
+                {t("Paid-usage warning:", "有料利用に関する警告：")}
+              </span>{" "}
+              {t(
+                "Never configure an Idle Thread Guard aggressively. A status request can consume tokens while a provider is silently doing long-running work. Club Code enforces a hard one-hour minimum; use 2–48 hours or higher when practical.",
+                "Idle Thread Guard を短い間隔で設定しないでください。プロバイダーが長時間処理を無言で続けている間にも、状況確認はトークンを消費する可能性があります。Club Code は最小1時間を強制します。可能なら2～48時間以上を使用してください。",
+              )}
             </div>
             <p className="text-muted-foreground">
-              This is separate from Auto Nudge. It watches only a currently running turn. Any new
-              transcript text, tool activity, or session update resets its deadline, so it may never
-              fire. It sends at most one status request per idle episode and waits for newer
-              activity before it can re-arm.
+              {t(
+                "This is separate from Auto Nudge. It watches only a currently running turn. Any new transcript text, tool activity, or session update resets its deadline, so it may never fire. It sends at most one status request per idle episode and waits for newer activity before it can re-arm.",
+                "これは Auto Nudge とは別の機能で、現在実行中のターンだけを監視します。新しいトランスクリプト、ツール動作、またはセッション更新があるたびに期限がリセットされるため、一度も送信されない場合があります。アイドル状態1回につき状況確認は最大1回だけ送信し、新しいアクティビティがあるまで再作動しません。",
+              )}
             </p>
             <div className="mt-2 flex items-center justify-between gap-3 rounded-lg border border-border/60 p-2">
               <div>
-                <div className="font-medium">Enable for this thread</div>
-                <div className="text-[10px] text-muted-foreground">Opt-in; Off by default.</div>
+                <div className="font-medium">
+                  {t("Enable for this thread", "このスレッドで有効にする")}
+                </div>
+                <div className="text-[10px] text-muted-foreground">
+                  {t("Opt-in; Off by default.", "任意設定。初期状態はオフです。")}
+                </div>
               </div>
               <Switch
                 checked={enabled}
                 disabled={disabled || !scope}
-                aria-label="Enable Idle Thread Guard for this thread"
+                aria-label={t(
+                  "Enable Idle Thread Guard for this thread",
+                  "このスレッドで Idle Thread Guard を有効にする",
+                )}
                 onCheckedChange={(checked) => save(Boolean(checked))}
               />
             </div>
             <label className="mt-2 block font-medium" htmlFor={hoursId}>
-              Idle hours
+              {t("Idle hours", "アイドル時間")}
             </label>
             <Input
               id={hoursId}
@@ -182,11 +218,13 @@ function ThreadScopedIdleThreadGuardControl({
                 validHours ? "text-muted-foreground" : "text-destructive",
               )}
             >
-              Whole hours only, {IDLE_THREAD_GUARD_MIN_HOURS}–{IDLE_THREAD_GUARD_MAX_HOURS}. Values
-              below one hour are never accepted.
+              {t(
+                `Whole hours only, ${IDLE_THREAD_GUARD_MIN_HOURS}–${IDLE_THREAD_GUARD_MAX_HOURS}. Values below one hour are never accepted.`,
+                `整数の時間のみ、${IDLE_THREAD_GUARD_MIN_HOURS}～${IDLE_THREAD_GUARD_MAX_HOURS}。1時間未満の値は受け付けません。`,
+              )}
             </p>
             <label className="mt-2 block font-medium" htmlFor={promptId}>
-              Status request
+              {t("Status request", "状況確認メッセージ")}
             </label>
             <Textarea
               id={promptId}
@@ -209,7 +247,7 @@ function ThreadScopedIdleThreadGuardControl({
                 disabled={disabled || !scope || !changed || !validHours || !validPrompt}
                 onClick={() => save()}
               >
-                Save Guard settings
+                {t("Save Guard settings", "ガード設定を保存")}
               </Button>
             </div>
           </div>
