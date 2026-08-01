@@ -1,0 +1,121 @@
+# Adopting Club Code changes in Cafe Code
+
+This guide is for Cafe Code maintainers who want to review or adopt Club Code changes without pulling in the entire local-release branch. It records the published GitHub state observed on 2026-08-01. Re-check each pull request's head SHA and mergeability immediately before landing it; stacked branch state can change after this snapshot.
+
+## Published PR inventory
+
+The repository has published 15 pull requests:
+
+- eight open implementation PRs: [#2](https://github.com/John-Ryan21337/club-code/pull/2), [#3](https://github.com/John-Ryan21337/club-code/pull/3), [#4](https://github.com/John-Ryan21337/club-code/pull/4), [#7](https://github.com/John-Ryan21337/club-code/pull/7), [#8](https://github.com/John-Ryan21337/club-code/pull/8), [#13](https://github.com/John-Ryan21337/club-code/pull/13), [#14](https://github.com/John-Ryan21337/club-code/pull/14), and [#15](https://github.com/John-Ryan21337/club-code/pull/15);
+- four merged documentation PRs: #9 through #12;
+- two closed, archived pacing PRs: #5 and #6; and
+- one closed, obsolete omnibus PR: #1.
+
+The active implementation foundation is:
+
+`#2 -> #3 -> #4 -> #7`
+
+After #7, choose one of these paths:
+
+- **Recommended, reviewable path:** `#13 cowork foundation -> #14 database coordination -> narrow invitations/membership -> later transport/UI slices`.
+- **Draft omnibus path:** `#8`, which contains the current local-release aggregate and overlaps the narrow cowork work.
+- **Telemetry follow-up:** `#8 -> #15`; #15 is not a cowork dependency and is useful only with the Project Resources implementation from #8.
+
+Do not combine the cowork commits from #8 with #13 or its forthcoming dependent PRs.
+
+## Active ladder snapshot
+
+| PR  | Purpose                                                                                 | Exact base branch                                                          | Observed head                                                                          | Snapshot state                                                   |
+| --- | --------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| #2  | Club foundation restacked on Cafe 0.146                                                 | `baseline/cafe-dev-20260729` at `77af7bcf29c512caba07a00d04c53ae9cd2c536e` | `agent/4c-default-layout` at `fde09e8e178c32f1259b138b7e5cb1074953705f`                | open, ready, clean                                               |
+| #3  | Preserve explicit Claude Opus 4.8 alias regression coverage                             | `agent/4c-default-layout`                                                  | `agent/claude-opus-5-support` at `8fb978ac7b81b95efac013765bec004d99d4243d`            | open, ready, clean                                               |
+| #4  | Matrix provider-activity link foundation                                                | `agent/claude-opus-5-support`                                              | `agent/matrix-activity-connecting-lines` at `92e56252202fbcea621b17eedacb05e4f22f3796` | open, ready, clean                                               |
+| #7  | Provider usage, completion-event-only Auto Nudge, steering safety, and Matrix hardening | `agent/matrix-activity-connecting-lines`                                   | `agent/local-priority-integration` at `cdb4e15680a1b265d27359ce64e1580f8c0a97ed`       | open; GitHub reported `CONFLICTING/DIRTY` at this snapshot       |
+| #13 | Secure cowork authorization, signed event admission, and durable event journal          | `agent/local-priority-integration`                                         | `feature/cowork-foundation` at `8ad2ec37e4db8464f351d67e5ad1fb99e6c29939`              | open, ready, clean after merging the current #7 base             |
+| #14 | Conflict-safe shared database coordination                                              | `feature/cowork-foundation`                                                | `feature/cowork-database-coordination` at `a3c1650a86e6b5b8c4c7f5eda716fd6d4f56e74d`   | open, ready, clean                                               |
+| #8  | Aggregate current local release                                                         | `agent/local-priority-integration`                                         | `release/local-20260728` at `457be1418541bfb0ab08ae5bf9aac8a729ead23f`                 | open draft; GitHub reported `CONFLICTING/DIRTY` at this snapshot |
+| #15 | Hide stale unavailable Project Resources sensor graphs                                  | `release/local-20260728`                                                   | `work/profiles-telemetry-safety` at `9270cc56ffd05132f3ca02bce1582860850c8f0a`         | open, ready, clean; separate from the cowork ladder              |
+
+At the dated snapshot above, GitHub reported #7 as conflicting while another lane was actively restacking it. Re-check rather than treating that observation as immutable: if it is still conflicting, do not land it until it is restacked on the current #4 head and its gates are rerun. The same rule applies to #8 if the omnibus path is deliberately chosen. PRs #13 and #14 were both `MERGEABLE/CLEAN` at this snapshot.
+
+## Recommended merge order
+
+1. Land #2 on the pinned Cafe baseline, or semantically rebase its delta onto the Cafe target selected by the maintainers.
+2. Land #3 on #2.
+3. Land #4 on #3.
+4. Restack and land #7 on the current #4 head.
+5. Land #13 on the repaired #7 head.
+6. Land #14, the narrow database-coordination PR, on #13.
+7. Land invitations/membership after its final published base is declared. The conservative order is after database coordination because both slices extend collaboration persistence and migration lineage.
+8. Add transport, replica materialization, operator chat, task/agent coordination, and UI only through later bounded PRs.
+
+The invitations PR number and final head do not exist on GitHub at this snapshot. Do not cite a local worktree or unpublished commit as an adoption dependency.
+
+## Curated cherry-pick order
+
+Merging the PRs through GitHub is preferred because their base branches document review boundaries. If a maintainer must cherry-pick onto the exact pinned baseline, use a clean integration branch and the order below:
+
+```sh
+# PR #2: all commits after the pinned Cafe baseline, oldest first.
+git rev-list --reverse 77af7bcf29c512caba07a00d04c53ae9cd2c536e..fde09e8e178c32f1259b138b7e5cb1074953705f | git cherry-pick --stdin
+
+# PR #3: its semantic delta only. The branch-tip cleanup commit duplicates #2.
+git cherry-pick 325ca70cf78c9556f4c1668e87534670c5a16c4e
+
+# PR #4: its semantic delta only. The branch-tip cleanup commit duplicates #2.
+git cherry-pick 7b09d366d6e31928dbbb8aca8f6fff61e8171879
+
+# PR #7: the unique integration range, including its later safety repairs.
+git rev-list --reverse 7b09d366d6e31928dbbb8aca8f6fff61e8171879..cdb4e15680a1b265d27359ce64e1580f8c0a97ed | git cherry-pick --stdin
+
+# PR #13: the contiguous pre-restack cowork foundation series.
+git rev-list --reverse 8dc05d58f6457a0a31e14215d3617a9af9aa7760^..375849ce173ce81c90aad62e1bf958f3ef470917 | git cherry-pick --stdin
+
+# PR #14: the contiguous database-coordination series.
+git rev-list --reverse a48d9c93aac6e34579e1571289bc37389a216edd^..a3c1650a86e6b5b8c4c7f5eda716fd6d4f56e74d | git cherry-pick --stdin
+```
+
+Do not cherry-pick `8fb978ac` or `92e56252` after PR #2: both are branch-local copies of the same completion-event-only Auto Nudge cleanup already present as `fde09e8e`. Do not cherry-pick PR #13's final merge commit `8ad2ec37`; apply the contiguous cowork series shown above after #7 instead.
+
+PR #15 is a separate one-commit telemetry follow-up. Cherry-pick `9270cc56ffd05132f3ca02bce1582860850c8f0a` only into a tree that already contains #8's Project Resources implementation; it is not part of the cowork sequence.
+
+When adopting onto a newer Cafe target instead of the pinned baseline, treat these commands as an ordering manifest, not a promise of conflict-free application. Resolve migrations, settings schemas, provider lifecycle, and security boundaries semantically; never select an entire side of a conflict wholesale.
+
+## Omnibus #8 overlap warning
+
+PR #8 is a draft release aggregate, not the recommended Cafe review unit. It contains Auto Nudge, Idle Thread Guard, Matrix modes, telemetry, profiles, media, camera, LM Studio, and early cowork/database-contract work in one large branch.
+
+- Do not merge #8 and then merge #13 or #14: cowork contracts, architecture, authorization, event admission, event persistence, and database-coordination contracts overlap.
+- Do not merge #13/#14 and then cherry-pick the equivalent cowork commits from #8.
+- Do not infer that #8 completes the user-visible cowork suite. Its own description leaves server-authoritative database admission, engine-specific snapshot adapters, secure replica materialization, network transport, and UI as later work.
+- Prefer extracting a narrow, independently gated PR from #8 for each non-cowork feature family that Cafe maintainers want.
+
+## Validation gates
+
+Run the repository gates after each meaningful stack layer and again at the final exact head:
+
+```sh
+corepack yarn fmt
+corepack yarn lint
+corepack yarn typecheck
+corepack yarn test
+corepack yarn build:desktop
+git diff --check
+```
+
+`build:desktop` is required for this ladder because #2 and later aggregate layers touch Electron, backend bootstrap, provider startup, or bundled boundaries. Also retain the focused evidence advertised by each PR:
+
+- #3: shared model-catalog regression tests;
+- #4 and #7: Matrix, provider activity, steering, Auto Nudge, browser, and contracts tests;
+- #13: collaboration contracts, authorization, event admission, event-store, migration, replay, revocation, and corruption tests;
+- #14: concurrent lease acquisition, fencing, compare-and-swap publication, idempotency/principal binding, and file-backed SQLite concurrency tests;
+- #15: current-snapshot availability and simulated telemetry-outage browser regressions; and
+- invitations/membership: server-clock expiry, digest-only secrets, one-time redemption, role ceilings, membership epoch changes, command collisions, and concurrent redemption tests.
+
+A green exit code is not enough for generated or packaged work. Verify that expected bundles/artifacts were freshly produced and contain the intended feature markers before publishing the adopted head.
+
+## Security and scope boundaries
+
+The narrow cowork ladder intentionally does not expose the existing server-wide orchestration RPC to remote members. #13 opens no network endpoint and mutates no shared project files. Future slices must preserve project-scoped authorization, current-membership checks, server-clock decisions, exact idempotency, revocation handling, bounded replay, recoverable deletion, managed-replica filesystem containment, and fail-closed corruption behavior.
+
+Database files require a separate coordination policy. Prefer an authenticated external database service; otherwise use private per-operator forks plus immutable consistent snapshots. A serialized shared head is compatibility-only and requires a server-authoritative lease, monotonically increasing fencing token, and compare-and-swap publication. Never synchronize live SQLite pages or WAL/SHM/journal sidecars, DuckDB WAL files, or LMDB lock files between operators.
