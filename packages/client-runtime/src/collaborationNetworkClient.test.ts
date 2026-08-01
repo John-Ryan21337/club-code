@@ -31,6 +31,36 @@ function page(sharedProjectId = "project-1"): CollaborationTransportPage {
   } as never;
 }
 
+function currentDeviceStatus(sharedProjectId = "project-1") {
+  return {
+    sharedProjectId,
+    userId: "user-1",
+    deviceId: "device-1",
+    membershipEpoch: 3,
+    status: "active",
+    activeKey: {
+      deviceKeyId: "device-key-1",
+      activatedAt: "2026-08-01T12:00:00.000Z",
+    },
+  } as const;
+}
+
+function revokedDeviceKey(sharedProjectId = "project-1") {
+  return {
+    disposition: "revoked",
+    key: {
+      sharedProjectId,
+      userId: "user-1",
+      deviceId: "device-1",
+      deviceKeyId: "device-key-1",
+      publicKeySpkiDer: "A".repeat(59),
+      membershipEpoch: 3,
+      activatedAt: "2026-08-01T12:00:00.000Z",
+      revokedAt: "2026-08-01T13:00:00.000Z",
+    },
+  } as const;
+}
+
 class FakeSocket implements CollaborationNetworkSocket {
   readonly sent: string[] = [];
   readyState = 1;
@@ -153,6 +183,119 @@ describe("collaboration network client", () => {
     expect(proofs).toHaveBeenCalledTimes(1);
     expect(JSON.parse(httpCall!.body)).not.toHaveProperty("userId");
     expect(JSON.parse(httpCall!.body)).not.toHaveProperty("role");
+  });
+
+  it("adapts the bounded network client to exact current-device status and revoke methods", async () => {
+    const requests: CollaborationNetworkRequestFrame[] = [];
+    const requestHttp = vi.fn(
+      async (input: Parameters<CollaborationNetworkClientConfig["requestHttp"]>[0]) => {
+        const request = JSON.parse(input.body) as CollaborationNetworkRequestFrame;
+        requests.push(request);
+        const payload =
+          request.operation === "device-key.status" ? currentDeviceStatus() : revokedDeviceKey();
+        return {
+          status: 200,
+          body: JSON.stringify({
+            version: 1,
+            type: "result",
+            requestId: request.requestId,
+            operation: request.operation,
+            payload,
+          }),
+        };
+      },
+    );
+    const test = harness({ requestHttp });
+    await test.client.connect();
+    await expect(
+      test.client.getCurrentDeviceKeyStatus({ sharedProjectId: "project-1" } as never),
+    ).resolves.toMatchObject({
+      sharedProjectId: "project-1",
+      status: "active",
+      activeKey: { deviceKeyId: "device-key-1" },
+    });
+    const revokeRequest = Object.freeze({
+      commandId: "device-revoke-command-1",
+      sharedProjectId: "project-1",
+      deviceKeyId: "device-key-1",
+    }) as never;
+    await expect(test.client.revokeCurrentDeviceKey(revokeRequest)).resolves.toMatchObject({
+      disposition: "revoked",
+      key: { sharedProjectId: "project-1", deviceKeyId: "device-key-1" },
+    });
+    await expect(test.client.revokeCurrentDeviceKey(revokeRequest)).resolves.toMatchObject({
+      disposition: "revoked",
+      key: { sharedProjectId: "project-1", deviceKeyId: "device-key-1" },
+    });
+
+    expect(requests.map(({ operation }) => operation)).toEqual([
+      "device-key.status",
+      "device-key.revoke",
+      "device-key.revoke",
+    ]);
+    expect(requests[0]!.request).toEqual({ sharedProjectId: "project-1" });
+    expect(Reflect.ownKeys(requests[0]!.request as object)).toEqual(["sharedProjectId"]);
+    expect(requests[1]!.request).toEqual(requests[2]!.request);
+    expect((requests[1]!.request as { readonly commandId: string }).commandId).toBe(
+      "device-revoke-command-1",
+    );
+  });
+
+  it("rejects cross-project current-device responses and forbidden request selectors", async () => {
+    const proof = vi.fn();
+    const test = harness({ createDeviceProof: proof });
+    await test.client.connect();
+    await expect(
+      test.client.getCurrentDeviceKeyStatus({
+        sharedProjectId: "project-1",
+        deviceId: "forged-device",
+      } as never),
+    ).rejects.toMatchObject({ code: "invalid-request" });
+    expect(proof).not.toHaveBeenCalled();
+
+    const mismatched = harness({
+      requestHttp: async (input) => {
+        const request = JSON.parse(input.body) as CollaborationNetworkRequestFrame;
+        return {
+          status: 200,
+          body: JSON.stringify({
+            version: 1,
+            type: "result",
+            requestId: request.requestId,
+            operation: request.operation,
+            payload: currentDeviceStatus("project-2"),
+          }),
+        };
+      },
+    });
+    await mismatched.client.connect();
+    await expect(
+      mismatched.client.getCurrentDeviceKeyStatus({ sharedProjectId: "project-1" } as never),
+    ).rejects.toMatchObject({ code: "protocol-error" });
+
+    const mismatchedRevoke = harness({
+      requestHttp: async (input) => {
+        const request = JSON.parse(input.body) as CollaborationNetworkRequestFrame;
+        return {
+          status: 200,
+          body: JSON.stringify({
+            version: 1,
+            type: "result",
+            requestId: request.requestId,
+            operation: request.operation,
+            payload: revokedDeviceKey("project-2"),
+          }),
+        };
+      },
+    });
+    await mismatchedRevoke.client.connect();
+    await expect(
+      mismatchedRevoke.client.revokeCurrentDeviceKey({
+        commandId: "device-revoke-command-1",
+        sharedProjectId: "project-1",
+        deviceKeyId: "device-key-1",
+      } as never),
+    ).rejects.toMatchObject({ code: "protocol-error" });
   });
 
   it("rejects non-exact, credentialed, and insecure non-loopback origins", () => {

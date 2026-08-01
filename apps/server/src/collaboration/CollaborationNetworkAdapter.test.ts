@@ -71,6 +71,8 @@ function makeFacade(
     tombstone: succeedFacadeRequest,
     page: succeedFacadeRequest,
     createContextPacket: succeedFacadeRequest,
+    getCurrentDeviceKeyStatus: succeedFacadeRequest,
+    revokeCurrentDeviceKey: succeedFacadeRequest,
     replaySubscription: (input) =>
       Effect.sync(() => {
         input.consumer.offer(replayPage());
@@ -269,6 +271,61 @@ describe("CollaborationNetworkAdapter", () => {
     expect((authentication as CollaborationNetworkAuthentication | null)?.bodySha256).toMatch(
       /^[a-f0-9]{64}$/,
     );
+  });
+
+  it("routes only fixed current-device status and revoke commands with opaque authentication", async () => {
+    const received: Array<{ readonly operation: string; readonly input: unknown }> = [];
+    const handle = await startCollaborationNetworkAdapter(
+      options(
+        makeFacade({
+          getCurrentDeviceKeyStatus: (input) => {
+            received.push({ operation: "device-key.status", input });
+            return Effect.succeed({ status: "active" } as never);
+          },
+          revokeCurrentDeviceKey: (input) => {
+            received.push({ operation: "device-key.revoke", input });
+            return Effect.succeed({ disposition: "revoked" } as never);
+          },
+        }),
+      ),
+    );
+    handles.push(handle);
+
+    const status = await requestJson(
+      handle.port!,
+      frame("device-key.status", { sharedProjectId: "shared-project-network-1" }),
+    );
+    const revoke = await requestJson(
+      handle.port!,
+      frame("device-key.revoke", {
+        commandId: "network-device-revoke-1",
+        sharedProjectId: "shared-project-network-1",
+        deviceKeyId: "device-key-1",
+      }),
+    );
+    expect(status).toMatchObject({
+      status: 200,
+      body: { type: "result", operation: "device-key.status", payload: { status: "active" } },
+    });
+    expect(revoke).toMatchObject({
+      status: 200,
+      body: {
+        type: "result",
+        operation: "device-key.revoke",
+        payload: { disposition: "revoked" },
+      },
+    });
+    expect(received.map(({ operation }) => operation)).toEqual([
+      "device-key.status",
+      "device-key.revoke",
+    ]);
+    for (const { input } of received) {
+      const authentication = (
+        input as { readonly authentication: CollaborationNetworkAuthentication }
+      ).authentication;
+      expect(authentication).toMatchObject({ sessionToken: TOKEN, origin: ORIGIN });
+      expect(authentication).not.toHaveProperty("principal");
+    }
   });
 
   it("rejects Host, Origin, target-form, query-string, and authorization mismatches generically", async () => {

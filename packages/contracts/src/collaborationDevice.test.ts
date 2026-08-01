@@ -10,6 +10,11 @@ import {
   CollaborationCurrentDeviceKeyStatusRequest,
   CollaborationDeviceKeyMutationResult,
 } from "./collaborationDevice.ts";
+import {
+  CollaborationTransportDeviceKeyRevokeRequest,
+  CollaborationTransportDeviceKeyStatusRequest,
+  CollaborationTransportOperation,
+} from "./collaborationTransport.ts";
 
 const decodeBeginResult = Schema.decodeUnknownSync(CollaborationBeginDeviceEnrollmentResult);
 const decodeMutationResult = Schema.decodeUnknownSync(CollaborationDeviceKeyMutationResult);
@@ -20,6 +25,7 @@ const decodeCurrentStatus = Schema.decodeUnknownSync(CollaborationCurrentDeviceK
 const decodeCurrentStatusRequest = Schema.decodeUnknownSync(
   CollaborationCurrentDeviceKeyStatusRequest,
 );
+const decodeTransportOperation = Schema.decodeUnknownSync(CollaborationTransportOperation);
 
 describe("collaboration device contracts", () => {
   it("round-trips bounded challenge and key mutation payloads", () => {
@@ -136,5 +142,16 @@ describe("collaboration device contracts", () => {
         { onExcessProperty: "error" },
       ),
     ).toThrow();
+  });
+
+  it("admits only the two current-device operations into the network command surface", () => {
+    expect(decodeTransportOperation("device-key.status")).toBe("device-key.status");
+    expect(decodeTransportOperation("device-key.revoke")).toBe("device-key.revoke");
+    expect(CollaborationTransportDeviceKeyStatusRequest).toBe(
+      CollaborationCurrentDeviceKeyStatusRequest,
+    );
+    expect(CollaborationTransportDeviceKeyRevokeRequest).not.toBeUndefined();
+    expect(() => decodeTransportOperation("device-key.list")).toThrow();
+    expect(() => decodeTransportOperation("device-enrollment.begin")).toThrow();
   });
 });

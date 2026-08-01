@@ -31,3 +31,7 @@ This child deliberately does not compose with PR #43's separate enrollment signe
 production surface must inject an authenticated transport adapter and authoritative current scope;
 it must not add client-selected identity, device lists, background refresh, or browser key custody
 to this boundary.
+
+The authenticated network composition is documented in
+`docs/cowork-current-device-network-composition.md`. Its explicit web adapter exposes only current
+status and self-revoke, and preserves the exact revoke request for an operator-triggered retry.

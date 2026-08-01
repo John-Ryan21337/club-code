@@ -15,6 +15,10 @@ import {
   CollaborationTransportAppendResponse,
   CollaborationTransportCreateContextRequest,
   CollaborationTransportCreateContextResponse,
+  CollaborationTransportDeviceKeyRevokeRequest,
+  CollaborationTransportDeviceKeyRevokeResponse,
+  CollaborationTransportDeviceKeyStatusRequest,
+  CollaborationTransportDeviceKeyStatusResponse,
   CollaborationTransportPage,
   CollaborationTransportPageRequest,
   CollaborationTransportReplayRequest,
@@ -30,6 +34,10 @@ import {
   type CollaborationAuthoredMessage as AppendResponse,
   type CollaborationContextPacket as CreateContextResponse,
   type CollaborationCreateContextPacketRequest as CreateContextRequest,
+  type CollaborationCurrentDeviceKeyStatus as DeviceKeyStatusResponse,
+  type CollaborationCurrentDeviceKeyStatusRequest as DeviceKeyStatusRequest,
+  type CollaborationDeviceKeyMutationResult as DeviceKeyRevokeResponse,
+  type CollaborationRevokeDeviceKeyRequest as DeviceKeyRevokeRequest,
   type CollaborationTransportPage as TransportPage,
   type CollaborationTransportPageRequest as PageRequest,
   type CollaborationTransportReplayRequest as ReplayRequest,
@@ -48,7 +56,13 @@ const decodeRequestId = Schema.decodeUnknownSync(CollaborationNetworkRequestId);
 const decodeDeviceProof = Schema.decodeUnknownSync(CollaborationNetworkDeviceProof);
 
 type ClientState = "disconnected" | "connecting" | "connected";
-type CommandOperation = "message.append" | "message.tombstone" | "message.page" | "context.create";
+type CommandOperation =
+  | "message.append"
+  | "message.tombstone"
+  | "message.page"
+  | "context.create"
+  | "device-key.status"
+  | "device-key.revoke";
 
 interface CommandShape {
   readonly "message.append": { readonly request: AppendRequest; readonly response: AppendResponse };
@@ -60,6 +74,14 @@ interface CommandShape {
   readonly "context.create": {
     readonly request: CreateContextRequest;
     readonly response: CreateContextResponse;
+  };
+  readonly "device-key.status": {
+    readonly request: DeviceKeyStatusRequest;
+    readonly response: DeviceKeyStatusResponse;
+  };
+  readonly "device-key.revoke": {
+    readonly request: DeviceKeyRevokeRequest;
+    readonly response: DeviceKeyRevokeResponse;
   };
 }
 
@@ -154,6 +176,14 @@ export interface CollaborationNetworkClient {
     request: ReplayRequest,
     options: CollaborationReplaySubscriptionOptions,
   ) => Promise<ReplayResult>;
+  readonly getCurrentDeviceKeyStatus: (
+    request: Readonly<DeviceKeyStatusRequest>,
+    options?: { readonly signal?: AbortSignal },
+  ) => Promise<DeviceKeyStatusResponse>;
+  readonly revokeCurrentDeviceKey: (
+    request: Readonly<DeviceKeyRevokeRequest>,
+    options?: { readonly signal?: AbortSignal },
+  ) => Promise<DeviceKeyRevokeResponse>;
 }
 
 interface PendingSubscription {
@@ -285,6 +315,10 @@ function requestSchema(operation: CommandOperation | "message.subscribe-replay")
       return CollaborationTransportPageRequest;
     case "context.create":
       return CollaborationTransportCreateContextRequest;
+    case "device-key.status":
+      return CollaborationTransportDeviceKeyStatusRequest;
+    case "device-key.revoke":
+      return CollaborationTransportDeviceKeyRevokeRequest;
     case "message.subscribe-replay":
       return CollaborationTransportReplayRequest;
   }
@@ -300,9 +334,21 @@ function responseSchema(operation: CommandOperation | "message.subscribe-replay"
       return CollaborationTransportPage;
     case "context.create":
       return CollaborationTransportCreateContextResponse;
+    case "device-key.status":
+      return CollaborationTransportDeviceKeyStatusResponse;
+    case "device-key.revoke":
+      return CollaborationTransportDeviceKeyRevokeResponse;
     case "message.subscribe-replay":
       return CollaborationTransportReplayResult;
   }
+}
+
+function responseProjectId(operation: CommandOperation, response: unknown): unknown {
+  if (operation === "device-key.revoke") {
+    return (response as { readonly key: { readonly sharedProjectId: unknown } }).key
+      .sharedProjectId;
+  }
+  return (response as { readonly sharedProjectId: unknown }).sharedProjectId;
 }
 
 export function createCollaborationNetworkClient(
@@ -761,8 +807,7 @@ export function createCollaborationNetworkClient(
         responseSchema(operation),
         serverFrame.payload,
       ) as CommandShape[Operation]["response"];
-      if ((decoded as { readonly sharedProjectId: string }).sharedProjectId !== sharedProjectId)
-        throw fail("protocol-error");
+      if (responseProjectId(operation, decoded) !== sharedProjectId) throw fail("protocol-error");
       return decoded;
     } catch (cause) {
       if (pendingAbort.controller.signal.aborted) throw fail(pendingAbort.code);
@@ -835,5 +880,22 @@ export function createCollaborationNetworkClient(
     });
   };
 
-  return { state, connect, disconnect, command, subscribeReplay };
+  const getCurrentDeviceKeyStatus: CollaborationNetworkClient["getCurrentDeviceKeyStatus"] = (
+    request,
+    options,
+  ) => command("device-key.status", request, options);
+  const revokeCurrentDeviceKey: CollaborationNetworkClient["revokeCurrentDeviceKey"] = (
+    request,
+    options,
+  ) => command("device-key.revoke", request, options);
+
+  return {
+    state,
+    connect,
+    disconnect,
+    command,
+    subscribeReplay,
+    getCurrentDeviceKeyStatus,
+    revokeCurrentDeviceKey,
+  };
 }

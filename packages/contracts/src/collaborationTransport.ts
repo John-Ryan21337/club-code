@@ -10,6 +10,12 @@ import {
   CollaborationTombstoneAuthoredMessageRequest,
 } from "./collaborationChat.ts";
 import { SharedProjectId } from "./collaboration.ts";
+import {
+  CollaborationCurrentDeviceKeyStatus,
+  CollaborationCurrentDeviceKeyStatusRequest,
+  CollaborationDeviceKeyMutationResult,
+  CollaborationRevokeDeviceKeyRequest,
+} from "./collaborationDevice.ts";
 
 export const COLLABORATION_TRANSPORT_REQUEST_MAX_UTF8_BYTES = 96 * 1_024;
 export const COLLABORATION_TRANSPORT_RESPONSE_MAX_UTF8_BYTES = 640 * 1_024;
@@ -81,6 +87,8 @@ export const CollaborationTransportOperation = Schema.Literals([
   "message.tombstone",
   "message.page",
   "context.create",
+  "device-key.status",
+  "device-key.revoke",
   "message.subscribe-replay",
 ]);
 export type CollaborationTransportOperation = typeof CollaborationTransportOperation.Type;
@@ -104,3 +112,8 @@ export const CollaborationTransportCreateContextRequest = CollaborationCreateCon
 export const CollaborationTransportAppendResponse = CollaborationAuthoredMessage;
 export const CollaborationTransportTombstoneResponse = CollaborationAuthoredMessage;
 export const CollaborationTransportCreateContextResponse = CollaborationContextPacket;
+export const CollaborationTransportDeviceKeyStatusRequest =
+  CollaborationCurrentDeviceKeyStatusRequest;
+export const CollaborationTransportDeviceKeyStatusResponse = CollaborationCurrentDeviceKeyStatus;
+export const CollaborationTransportDeviceKeyRevokeRequest = CollaborationRevokeDeviceKeyRequest;
+export const CollaborationTransportDeviceKeyRevokeResponse = CollaborationDeviceKeyMutationResult;

@@ -19,6 +19,7 @@ import { describe, expect } from "vitest";
 
 import type { CollaborationAuthoredMessageStoreShape } from "./CollaborationAuthoredMessageStore.ts";
 import type { CollaborationDeviceKeyAuthorityShape } from "./CollaborationEventAdmission.ts";
+import type { CollaborationDeviceKeyStoreShape } from "./CollaborationDeviceKeyStore.ts";
 import {
   type CollaborationTransportAuditEvent,
   type CollaborationTransportFacadeOptions,
@@ -161,6 +162,20 @@ function makeStore(
   };
 }
 
+function makeDeviceKeyStore(
+  authority: CollaborationDeviceKeyAuthorityShape,
+  overrides: Partial<CollaborationDeviceKeyStoreShape> = {},
+): CollaborationDeviceKeyStoreShape {
+  return {
+    getCurrentDeviceKeyStatus: () => Effect.die("not used"),
+    beginEnrollment: () => Effect.die("not used"),
+    completeEnrollment: () => Effect.die("not used"),
+    revokeKey: () => Effect.die("not used"),
+    getActiveEd25519PublicKey: authority.getActiveEd25519PublicKey,
+    ...overrides,
+  };
+}
+
 function makeHarness(overrides: Partial<CollaborationTransportFacadeOptions> = {}) {
   const auditEvents: CollaborationTransportAuditEvent[] = [];
   const trustedPrincipal = principal();
@@ -186,10 +201,12 @@ function makeHarness(overrides: Partial<CollaborationTransportFacadeOptions> = {
     getActiveEd25519PublicKey: (lookup) =>
       Effect.succeed({ ...lookup, publicKeySpkiDer: new Uint8Array([1, 2, 3]) }),
   };
+  const deviceKeyStore = makeDeviceKeyStore(deviceKeyAuthority);
   const options: CollaborationTransportFacadeOptions = {
     principalResolver,
     membershipAuthority: { getCurrent: () => Effect.succeed(membership) },
     deviceKeyAuthority,
+    deviceKeyStore,
     messageStore: makeStore(),
     auditSink: {
       record: (event) => Effect.sync(() => void auditEvents.push(event)),
@@ -207,7 +224,161 @@ function failureCode<A>(effect: Effect.Effect<A, CollaborationTransportError>) {
   );
 }
 
+function currentDeviceStatus() {
+  return {
+    sharedProjectId: PROJECT_ID,
+    userId: "operator-1",
+    deviceId: "device-1",
+    membershipEpoch: 4,
+    status: "active",
+    activeKey: {
+      deviceKeyId: "device-key-1",
+      activatedAt: "2026-08-01T12:00:00.000Z",
+    },
+  } as const;
+}
+
+function revokedDeviceKey(disposition: "revoked" | "already-applied" = "revoked") {
+  return {
+    disposition,
+    key: {
+      sharedProjectId: PROJECT_ID,
+      userId: "operator-1",
+      deviceId: "device-1",
+      deviceKeyId: "device-key-1",
+      publicKeySpkiDer: "A".repeat(59),
+      membershipEpoch: 4,
+      activatedAt: "2026-08-01T12:00:00.000Z",
+      revokedAt: "2026-08-01T13:00:00.000Z",
+    },
+  } as const;
+}
+
 describe("CollaborationTransportFacade", () => {
+  it.effect("resolves current-device status only from opaque authentication", () =>
+    Effect.gen(function* () {
+      let receivedPrincipal: unknown;
+      let receivedRequest: unknown;
+      const authority: CollaborationDeviceKeyAuthorityShape = {
+        getActiveEd25519PublicKey: (lookup) =>
+          Effect.succeed({ ...lookup, publicKeySpkiDer: new Uint8Array([1]) }),
+      };
+      const { facade, trustedPrincipal } = makeHarness({
+        deviceKeyAuthority: authority,
+        deviceKeyStore: makeDeviceKeyStore(authority, {
+          getCurrentDeviceKeyStatus: (input) => {
+            receivedPrincipal = input.principal;
+            receivedRequest = input.request;
+            return Effect.succeed(currentDeviceStatus() as never);
+          },
+        }),
+      });
+
+      const result = yield* facade.getCurrentDeviceKeyStatus({
+        authentication: { token: "opaque", principal: principal(OTHER_PROJECT_ID) },
+        request: { sharedProjectId: PROJECT_ID },
+      });
+      expect(receivedPrincipal).toBe(trustedPrincipal);
+      expect(receivedRequest).toEqual({ sharedProjectId: PROJECT_ID });
+      expect(Reflect.ownKeys(receivedRequest as object)).toEqual(["sharedProjectId"]);
+      expect(result).toMatchObject({
+        sharedProjectId: PROJECT_ID,
+        userId: "operator-1",
+        deviceId: "device-1",
+        membershipEpoch: 4,
+        status: "active",
+        activeKey: { deviceKeyId: "device-key-1" },
+      });
+    }),
+  );
+
+  it.effect("fails closed on forged status selectors and cross-scope store output", () =>
+    Effect.gen(function* () {
+      let resolutions = 0;
+      const authority: CollaborationDeviceKeyAuthorityShape = {
+        getActiveEd25519PublicKey: (lookup) =>
+          Effect.succeed({ ...lookup, publicKeySpkiDer: new Uint8Array([1]) }),
+      };
+      const { facade } = makeHarness({
+        principalResolver: {
+          resolve: () => {
+            resolutions += 1;
+            return Effect.succeed({ principal: principal(), deviceKeyId: "device-key-1" as never });
+          },
+        },
+        deviceKeyAuthority: authority,
+        deviceKeyStore: makeDeviceKeyStore(authority, {
+          getCurrentDeviceKeyStatus: () =>
+            Effect.succeed({ ...currentDeviceStatus(), userId: "other-user" } as never),
+        }),
+      });
+      expect(
+        yield* failureCode(
+          facade.getCurrentDeviceKeyStatus({
+            authentication: "opaque",
+            request: { sharedProjectId: PROJECT_ID, userId: "forged-user" },
+          }),
+        ),
+      ).toBe("invalid-request");
+      expect(resolutions).toBe(0);
+      expect(
+        yield* failureCode(
+          facade.getCurrentDeviceKeyStatus({
+            authentication: "opaque",
+            request: { sharedProjectId: PROJECT_ID },
+          }),
+        ),
+      ).toBe("unavailable");
+    }),
+  );
+
+  it.effect("self-revokes only the authenticated key and preserves exact command reuse", () =>
+    Effect.gen(function* () {
+      let keyChecks = 0;
+      let revocations = 0;
+      const receivedRequests: unknown[] = [];
+      const authority: CollaborationDeviceKeyAuthorityShape = {
+        getActiveEd25519PublicKey: () => {
+          keyChecks += 1;
+          return Effect.succeed(null);
+        },
+      };
+      const store = makeDeviceKeyStore(authority, {
+        revokeKey: (input) => {
+          receivedRequests.push(input.request);
+          revocations += 1;
+          return Effect.succeed(
+            revokedDeviceKey(revocations === 1 ? "revoked" : "already-applied") as never,
+          );
+        },
+      });
+      const { facade } = makeHarness({ deviceKeyAuthority: authority, deviceKeyStore: store });
+      const request = {
+        commandId: "device-revoke-command-1",
+        sharedProjectId: PROJECT_ID,
+        deviceKeyId: "device-key-1",
+      } as const;
+      expect(
+        (yield* facade.revokeCurrentDeviceKey({ authentication: "opaque", request })).disposition,
+      ).toBe("revoked");
+      expect(
+        (yield* facade.revokeCurrentDeviceKey({ authentication: "opaque", request })).disposition,
+      ).toBe("already-applied");
+      expect(receivedRequests).toEqual([request, request]);
+      expect(keyChecks).toBe(0);
+
+      expect(
+        yield* failureCode(
+          facade.revokeCurrentDeviceKey({
+            authentication: "opaque",
+            request: { ...request, deviceKeyId: "other-device-key" },
+          }),
+        ),
+      ).toBe("not-found");
+      expect(revocations).toBe(2);
+    }),
+  );
+
   it.effect("uses only the resolver-issued principal and emits metadata-only audit", () =>
     Effect.gen(function* () {
       let receivedPrincipal: unknown;

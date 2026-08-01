@@ -3,6 +3,8 @@ import type {
   CollaborationAuthoredMessage,
   CollaborationContextPacket,
   CollaborationCreateContextPacketRequest,
+  CollaborationCurrentDeviceKeyStatus,
+  CollaborationDeviceKeyMutationResult,
   CollaborationDeviceKeyId,
   CollaborationPermission,
   CollaborationPrincipal,
@@ -25,6 +27,10 @@ import {
   CollaborationDeviceKeyId as DeviceKeyIdSchema,
   CollaborationTombstoneAuthoredMessageRequest as TombstoneRequestSchema,
   CollaborationTransportCursor as CursorSchema,
+  CollaborationTransportDeviceKeyRevokeRequest as DeviceKeyRevokeRequestSchema,
+  CollaborationTransportDeviceKeyRevokeResponse as DeviceKeyRevokeResponseSchema,
+  CollaborationTransportDeviceKeyStatusRequest as DeviceKeyStatusRequestSchema,
+  CollaborationTransportDeviceKeyStatusResponse as DeviceKeyStatusResponseSchema,
   CollaborationTransportPage as PageSchema,
   CollaborationTransportPageRequest as PageRequestSchema,
   CollaborationTransportReplayRequest as ReplayRequestSchema,
@@ -47,6 +53,10 @@ import {
   type CollaborationAuthoredMessageStoreShape,
 } from "./CollaborationAuthoredMessageStore.ts";
 import type { CollaborationDeviceKeyAuthorityShape } from "./CollaborationEventAdmission.ts";
+import type {
+  CollaborationDeviceKeyStoreError,
+  CollaborationDeviceKeyStoreShape,
+} from "./CollaborationDeviceKeyStore.ts";
 
 const CURSOR_DOMAIN = "club-code/cowork-transport-cursor/v1\0";
 const CURSOR_VERSION = 1;
@@ -135,6 +145,12 @@ export interface CollaborationTransportFacadeShape {
       readonly consumer: CollaborationTransportReplayConsumer;
     },
   ) => Effect.Effect<CollaborationTransportReplayResult, CollaborationTransportError>;
+  readonly getCurrentDeviceKeyStatus: (
+    input: CollaborationTransportInput,
+  ) => Effect.Effect<CollaborationCurrentDeviceKeyStatus, CollaborationTransportError>;
+  readonly revokeCurrentDeviceKey: (
+    input: CollaborationTransportInput,
+  ) => Effect.Effect<CollaborationDeviceKeyMutationResult, CollaborationTransportError>;
 }
 
 export class CollaborationTransportFacade extends Context.Service<
@@ -146,6 +162,7 @@ export interface CollaborationTransportFacadeOptions {
   readonly principalResolver: CollaborationTransportPrincipalResolver;
   readonly membershipAuthority: CollaborationMembershipAuthorityShape;
   readonly deviceKeyAuthority: CollaborationDeviceKeyAuthorityShape;
+  readonly deviceKeyStore: CollaborationDeviceKeyStoreShape;
   readonly messageStore: CollaborationAuthoredMessageStoreShape;
   readonly auditSink: CollaborationTransportAuditSink;
   /** At least 32 random bytes from server-owned configuration. */
@@ -160,11 +177,15 @@ const decodeTombstone = Schema.decodeUnknownEffect(TombstoneRequestSchema);
 const decodeContext = Schema.decodeUnknownEffect(ContextRequestSchema);
 const decodePageRequest = Schema.decodeUnknownEffect(PageRequestSchema);
 const decodeReplayRequest = Schema.decodeUnknownEffect(ReplayRequestSchema);
+const decodeDeviceKeyStatusRequest = Schema.decodeUnknownEffect(DeviceKeyStatusRequestSchema);
+const decodeDeviceKeyRevokeRequest = Schema.decodeUnknownEffect(DeviceKeyRevokeRequestSchema);
 const encodeStoredPage = Schema.encodeUnknownEffect(StoredPageSchema);
 const decodeDeviceKeyId = Schema.decodeUnknownEffect(DeviceKeyIdSchema);
 const decodeCursor = Schema.decodeUnknownSync(CursorSchema);
 const decodePage = Schema.decodeUnknownEffect(PageSchema);
 const decodeReplayResult = Schema.decodeUnknownEffect(ReplayResultSchema);
+const decodeDeviceKeyStatusResponse = Schema.decodeUnknownEffect(DeviceKeyStatusResponseSchema);
+const decodeDeviceKeyRevokeResponse = Schema.decodeUnknownEffect(DeviceKeyRevokeResponseSchema);
 
 function error(
   operation: CollaborationTransportOperation,
@@ -311,6 +332,35 @@ function mapStoreFailure(
   }
 }
 
+function mapDeviceKeyStoreFailure(
+  operation: "device-key.status" | "device-key.revoke",
+  cause: CollaborationDeviceKeyStoreError,
+): CollaborationTransportError {
+  switch (cause.reason) {
+    case "invalid-input":
+      return error(operation, "invalid-request");
+    case "command-conflict":
+    case "device-key-not-active":
+      return error(operation, "conflict");
+    case "unauthenticated":
+    case "project-mismatch":
+    case "membership-unavailable":
+    case "membership-epoch-mismatch":
+    case "member-not-found":
+    case "device-identity-conflict":
+    case "device-key-not-found":
+      return error(operation, "not-found");
+    case "challenge-not-found":
+    case "challenge-expired":
+    case "challenge-consumed":
+    case "challenge-mismatch":
+    case "proof-invalid":
+    case "stored-corruption":
+    case "storage-failure":
+      return error(operation, "unavailable");
+  }
+}
+
 function projectPermissions(
   operation: CollaborationTransportOperation,
   request: {
@@ -322,6 +372,7 @@ function projectPermissions(
     };
   },
 ): ReadonlyArray<CollaborationPermission> {
+  if (operation === "device-key.status" || operation === "device-key.revoke") return [];
   const kinds = request.kinds ??
     request.selection?.sourceKinds ?? [request.kind ?? request.targetKind!];
   const suffix =
@@ -392,6 +443,7 @@ export function makeCollaborationTransportFacade(
     projectId: SharedProjectId,
     permissions: ReadonlyArray<CollaborationPermission>,
     signal: AbortSignal | undefined,
+    requireActiveDeviceKey = true,
   ): Effect.Effect<CollaborationTransportResolvedPrincipal, CollaborationTransportError> =>
     Effect.gen(function* () {
       const resolved = yield* options.principalResolver
@@ -410,6 +462,7 @@ export function makeCollaborationTransportFacade(
           Effect.mapError(() => error(operation, "not-found")),
         );
       }
+      if (!requireActiveDeviceKey) return { principal: resolved.principal, deviceKeyId };
       const key = yield* options.deviceKeyAuthority
         .getActiveEd25519PublicKey({
           sharedProjectId: projectId,
@@ -428,6 +481,7 @@ export function makeCollaborationTransportFacade(
     resolved: CollaborationTransportResolvedPrincipal,
     projectId: SharedProjectId,
     permissions: ReadonlyArray<CollaborationPermission>,
+    requireActiveDeviceKey = true,
   ) =>
     // Revalidation directly checks the already server-issued identity. The
     // resolver is intentionally not called with invented authentication data.
@@ -442,6 +496,7 @@ export function makeCollaborationTransportFacade(
           Effect.mapError(() => error(operation, "not-found")),
         );
       }
+      if (!requireActiveDeviceKey) return;
       const key = yield* options.deviceKeyAuthority
         .getActiveEd25519PublicKey({
           sharedProjectId: projectId,
@@ -459,6 +514,8 @@ export function makeCollaborationTransportFacade(
     readonly transport: CollaborationTransportInput;
     readonly projectId: SharedProjectId;
     readonly permissions: ReadonlyArray<CollaborationPermission>;
+    readonly authorizeDeviceKey?: boolean;
+    readonly revalidateDeviceKey?: boolean;
     readonly run: (
       resolved: CollaborationTransportResolvedPrincipal,
     ) => Effect.Effect<A, CollaborationTransportError>;
@@ -486,6 +543,7 @@ export function makeCollaborationTransportFacade(
             input.projectId,
             input.permissions,
             input.transport.signal,
+            input.authorizeDeviceKey,
           ),
         );
         const result = yield* withCancellation(
@@ -493,7 +551,13 @@ export function makeCollaborationTransportFacade(
           input.transport.signal,
           input.run(actor),
         );
-        yield* revalidate(input.operation, actor, input.projectId, input.permissions);
+        yield* revalidate(
+          input.operation,
+          actor,
+          input.projectId,
+          input.permissions,
+          input.revalidateDeviceKey,
+        );
         const responseBytes = byteLength(result) ?? responseLimit + 1;
         if (responseBytes > responseLimit)
           return yield* Effect.fail(error(input.operation, "resource-exhausted"));
@@ -746,11 +810,94 @@ export function makeCollaborationTransportFacade(
       });
     });
 
+  const getCurrentDeviceKeyStatus: CollaborationTransportFacadeShape["getCurrentDeviceKeyStatus"] =
+    (input) =>
+      Effect.gen(function* () {
+        yield* checkFrame("device-key.status", input);
+        const request = yield* decodeDeviceKeyStatusRequest(input.request, {
+          onExcessProperty: "error",
+        }).pipe(Effect.mapError(() => error("device-key.status", "invalid-request")));
+        return yield* execute({
+          operation: "device-key.status",
+          transport: input,
+          projectId: request.sharedProjectId,
+          permissions: [],
+          run: (resolved) =>
+            options.deviceKeyStore
+              .getCurrentDeviceKeyStatus({
+                principal: resolved.principal,
+                request,
+              })
+              .pipe(
+                Effect.mapError((cause) => mapDeviceKeyStoreFailure("device-key.status", cause)),
+                Effect.flatMap((result) =>
+                  decodeDeviceKeyStatusResponse(result, { onExcessProperty: "error" }).pipe(
+                    Effect.mapError(() => error("device-key.status", "unavailable")),
+                  ),
+                ),
+                Effect.filterOrFail(
+                  (result) =>
+                    result.sharedProjectId === request.sharedProjectId &&
+                    result.userId === resolved.principal.userId &&
+                    result.deviceId === resolved.principal.deviceId &&
+                    result.membershipEpoch === resolved.principal.membershipEpoch &&
+                    result.status === "active" &&
+                    result.activeKey.deviceKeyId === resolved.deviceKeyId,
+                  () => error("device-key.status", "unavailable"),
+                ),
+              ),
+        });
+      });
+
+  const revokeCurrentDeviceKey: CollaborationTransportFacadeShape["revokeCurrentDeviceKey"] = (
+    input,
+  ) =>
+    Effect.gen(function* () {
+      yield* checkFrame("device-key.revoke", input);
+      const request = yield* decodeDeviceKeyRevokeRequest(input.request, {
+        onExcessProperty: "error",
+      }).pipe(Effect.mapError(() => error("device-key.revoke", "invalid-request")));
+      return yield* execute({
+        operation: "device-key.revoke",
+        transport: input,
+        projectId: request.sharedProjectId,
+        permissions: [],
+        authorizeDeviceKey: false,
+        revalidateDeviceKey: false,
+        run: (resolved) => {
+          if (request.deviceKeyId !== resolved.deviceKeyId) {
+            return Effect.fail(error("device-key.revoke", "not-found"));
+          }
+          return options.deviceKeyStore.revokeKey({ principal: resolved.principal, request }).pipe(
+            Effect.mapError((cause) => mapDeviceKeyStoreFailure("device-key.revoke", cause)),
+            Effect.flatMap((result) =>
+              decodeDeviceKeyRevokeResponse(result, { onExcessProperty: "error" }).pipe(
+                Effect.mapError(() => error("device-key.revoke", "unavailable")),
+              ),
+            ),
+            Effect.filterOrFail(
+              (result) =>
+                (result.disposition === "revoked" || result.disposition === "already-applied") &&
+                result.key.sharedProjectId === request.sharedProjectId &&
+                result.key.userId === resolved.principal.userId &&
+                result.key.deviceId === resolved.principal.deviceId &&
+                result.key.deviceKeyId === resolved.deviceKeyId &&
+                result.key.membershipEpoch === resolved.principal.membershipEpoch &&
+                result.key.revokedAt !== null,
+              () => error("device-key.revoke", "unavailable"),
+            ),
+          );
+        },
+      });
+    });
+
   return CollaborationTransportFacade.of({
     append,
     tombstone,
     page,
     createContextPacket,
     replaySubscription,
+    getCurrentDeviceKeyStatus,
+    revokeCurrentDeviceKey,
   });
 }

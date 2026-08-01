@@ -8,6 +8,7 @@ The client never reconnects or retries on a timer.
 The only destinations it derives are:
 
 - `POST /api/collaboration/v1/command` for append, tombstone, page, and context-packet commands.
+- The same fixed command path for authenticated current-device key status and exact self-revoke.
 - `/api/collaboration/v1/socket` for bounded replay subscriptions and exact cancellation frames.
 
 Configuration accepts an exact server origin, an exact client Origin value, opaque session

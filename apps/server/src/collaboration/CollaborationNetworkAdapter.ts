@@ -648,6 +648,10 @@ async function executeFacade(
       return Effect.runPromise(facade.page(input));
     case "context.create":
       return Effect.runPromise(facade.createContextPacket(input));
+    case "device-key.status":
+      return Effect.runPromise(facade.getCurrentDeviceKeyStatus(input));
+    case "device-key.revoke":
+      return Effect.runPromise(facade.revokeCurrentDeviceKey(input));
     case "message.subscribe-replay":
       if (!offerReplayPage)
         throw new CollaborationTransportError({
