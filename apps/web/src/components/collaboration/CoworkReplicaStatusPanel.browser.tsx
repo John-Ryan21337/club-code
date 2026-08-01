@@ -32,7 +32,7 @@ function statusPage(sharedProjectId: string, relativePath = "data/project.db") {
         ],
         conflictRefs: [hashes[8]],
         materialization: "recovery-preserved",
-        operatorAttention: ["database-fork-needs-selection"],
+        operatorAttention: ["database-fork-needs-selection", "recovery-copy-preserved"],
       },
     ],
   };

@@ -29,14 +29,20 @@ mounted view.
 Cursors, project identifiers, revisions, paths, attention text, hashes, forks, tombstones, and
 conflict lists are independently bounded. Objects use an exact allowlisted shape, so a response
 that adds a private path, body, credential, or unreviewed field is rejected rather than rendered.
+Only plain data-property objects and dense plain arrays are admitted: inherited fields, symbols,
+accessors, sparse arrays, and collection subclasses fail closed before any response value is used.
 
 Every response must name the currently selected project. Entries must be canonically ordered and
-unique. Entry revisions cannot exceed the project revision. Pagination must retain the same
-project revision, use the exact requested cursor, remain globally ordered, and never repeat a path.
+unique under the same portable filesystem alias fold used by replica admission. Paths also retain
+the shared-replica UTF-8, Unicode scalar, segment, and Windows reserved-name limits. Entry revisions
+cannot exceed the project revision. Pagination must retain the same project revision, use the exact
+requested cursor, remain globally ordered, and never repeat a path.
 Heads, forks, and tombstones cannot reuse a revision identity; version evidence requires a content
 hash while tombstones forbid one. Conflicts and failed materializations require explicit operator
-attention. Attention reasons are fixed codes mapped to local UI copy, not backend-provided prose,
-so provider output, credentials, or other arbitrary text cannot enter through that field.
+attention that matches the displayed evidence. Revision identities also cannot be reused by another
+path or page in the mounted view. Attention reasons are fixed codes mapped to local UI copy, not
+backend-provided prose, so provider output, credentials, or other arbitrary text cannot enter
+through that field.
 
 Changing projects or unmounting aborts the in-flight request and advances a request sequence.
 Responses from an older request, a previous project, a React StrictMode setup pass, or an unmounted

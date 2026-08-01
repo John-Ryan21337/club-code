@@ -48,7 +48,7 @@ describe("cowork replica status model", () => {
           ],
           conflictRefs: [hashes[8]],
           materialization: "recovery-preserved",
-          operatorAttention: ["database-fork-needs-selection"],
+          operatorAttention: ["database-fork-needs-selection", "recovery-copy-preserved"],
         },
       ]),
       "project-one",
@@ -69,6 +69,9 @@ describe("cowork replica status model", () => {
     ["absolute POSIX path", page([entry("/private/source.ts")])],
     ["absolute Windows path", page([entry("C:\\private\\source.ts")])],
     ["parent traversal", page([entry("src/../secret")])],
+    ["reserved Windows device", page([entry("src/CON.txt")])],
+    ["unpaired surrogate", page([entry("src/\ud800.txt")])],
+    ["oversized UTF-8 segment", page([entry(`src/${"界".repeat(86)}`)])],
     ["private field", { ...page([]), absolutePath: "/private/source.ts" }],
     ["file body field", page([{ ...entry("src/main.ts"), fileBody: "secret" }])],
     ["credentials field", page([{ ...entry("src/main.ts"), credential: "secret" }])],
@@ -129,6 +132,106 @@ describe("cowork replica status model", () => {
         "project-one",
       ),
     ).toThrow(/conflictRefs contains duplicates/);
+    expect(() =>
+      decodeCoworkReplicaStatusPage(
+        page([entry("README.md"), { ...entry("readme.md"), head: null }]),
+        "project-one",
+      ),
+    ).toThrow(/portable path aliases/);
+  });
+
+  it("rejects inherited, symbolic, accessor, sparse, and subclassed payload shapes", () => {
+    const inherited = Object.assign(Object.create({ privatePath: "/private/source.ts" }), page([]));
+    expect(() => decodeCoworkReplicaStatusPage(inherited, "project-one")).toThrow(/plain object/);
+
+    const symbolic = page([]) as ReturnType<typeof page> & { [key: symbol]: string };
+    symbolic[Symbol("credential")] = "secret";
+    expect(() => decodeCoworkReplicaStatusPage(symbolic, "project-one")).toThrow(
+      /unsupported shape/,
+    );
+
+    const accessor = page([]);
+    Object.defineProperty(accessor, "entries", {
+      enumerable: true,
+      get: () => [],
+    });
+    expect(() => decodeCoworkReplicaStatusPage(accessor, "project-one")).toThrow(/data property/);
+
+    const sparseEntries = Array(1);
+    expect(() => decodeCoworkReplicaStatusPage(page(sparseEntries), "project-one")).toThrow(
+      /unsupported shape|data property/,
+    );
+
+    class StatusEntries extends Array<unknown> {}
+    expect(() => decodeCoworkReplicaStatusPage(page(new StatusEntries()), "project-one")).toThrow(
+      /plain array/,
+    );
+  });
+
+  it("requires evidence-specific attention and rejects revision reuse across paths", () => {
+    expect(() =>
+      decodeCoworkReplicaStatusPage(
+        page([
+          {
+            ...entry("src/main.ts"),
+            forks: [{ revisionId: hashes[3], contentSha256: hashes[4], auditRef: hashes[5] }],
+          },
+        ]),
+        "project-one",
+      ),
+    ).toThrow(/conflicts and forks require matching/);
+    expect(() =>
+      decodeCoworkReplicaStatusPage(
+        page([
+          {
+            ...entry("src/main.ts"),
+            materialization: "failed",
+            operatorAttention: ["conflict-needs-resolution"],
+          },
+        ]),
+        "project-one",
+      ),
+    ).toThrow(/failed materialization requires matching/);
+    expect(() =>
+      decodeCoworkReplicaStatusPage(
+        page([entry("a.ts"), { ...entry("b.ts"), manifestRevision: 8 }]),
+        "project-one",
+      ),
+    ).toThrow(/duplicate revision identity/);
+
+    const first = {
+      ...entry("a.ts"),
+      conflictRefs: [hashes[8]],
+      operatorAttention: ["conflict-needs-resolution"],
+    };
+    const second = {
+      ...entry("b.ts"),
+      head: {
+        kind: "version",
+        revisionId: hashes[3],
+        contentSha256: hashes[4],
+        auditRef: hashes[5],
+      },
+      conflictRefs: [hashes[8]],
+      operatorAttention: ["conflict-needs-resolution"],
+    };
+    expect(() => decodeCoworkReplicaStatusPage(page([first, second]), "project-one")).toThrow(
+      /duplicate conflict reference/,
+    );
+  });
+
+  it("snapshots mutable transport data into a deeply immutable view", () => {
+    const rawEntry = entry("src/main.ts");
+    const rawPage = page([rawEntry]);
+    const decoded = decodeCoworkReplicaStatusPage(rawPage, "project-one");
+    rawEntry.relativePath = "src/changed.ts";
+    rawEntry.head.revisionId = hashes[9];
+    rawPage.entries.push(entry("src/late.ts"));
+
+    expect(decoded.entries).toHaveLength(1);
+    expect(decoded.entries[0]?.relativePath).toBe("src/main.ts");
+    expect(decoded.entries[0]?.head?.revisionId).toBe(hashes[0]);
+    expect(Object.isFrozen(decoded.entries[0]?.head)).toBe(true);
   });
 
   it("enforces stable pagination revision, cursor, uniqueness, ordering, and bounds", () => {
@@ -151,16 +254,33 @@ describe("cowork replica status model", () => {
     expect(() =>
       appendCoworkReplicaStatusPage(
         first,
-        decodeCoworkReplicaStatusPage(page([entry("b.ts")], null, 10), "project-one"),
+        decodeCoworkReplicaStatusPage(
+          page([{ ...entry("b.ts"), head: null }], null, 10),
+          "project-one",
+        ),
         "next",
       ),
     ).toThrow(/revision changed/);
     expect(() =>
       appendCoworkReplicaStatusPage(
         first,
-        decodeCoworkReplicaStatusPage(page([entry("b.ts")], "next"), "project-one"),
+        decodeCoworkReplicaStatusPage(
+          page([{ ...entry("b.ts"), head: null }], "next"),
+          "project-one",
+        ),
         "next",
       ),
     ).toThrow(/cursor did not advance/);
+
+    const portableFirst = beginCoworkReplicaStatusView(
+      decodeCoworkReplicaStatusPage(page([entry("README.md")], "portable"), "project-one"),
+    );
+    const portableSecond = decodeCoworkReplicaStatusPage(
+      page([{ ...entry("readme.md"), head: null }]),
+      "project-one",
+    );
+    expect(() => appendCoworkReplicaStatusPage(portableFirst, portableSecond, "portable")).toThrow(
+      /portable path alias/,
+    );
   });
 });
