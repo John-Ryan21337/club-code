@@ -572,6 +572,35 @@ describe("BackgroundAutoNudgeCoordinator exact-thread authority", () => {
     expect(commands(dispatch)[0]?.completedTurnId).toBe("turn-delayed-ready");
   });
 
+  it("does not revive a completion observed while global Stop is active", async () => {
+    const dispatch = installEnvironmentApi("environment-a");
+    const terminal = threadFixture({
+      environmentId: "environment-a",
+      threadId: "thread-a",
+      completedTurnId: "turn-during-stop",
+    });
+    mocks.environmentStateById = {
+      "environment-a": environmentFixture("environment-a", [withoutCompletedTurn(terminal)]),
+    };
+
+    const mounted = await render(<BackgroundAutoNudgeCoordinator />);
+    mocks.globallySuppressed = true;
+    mocks.environmentStateById = {
+      "environment-a": environmentFixture("environment-a", [terminal]),
+    };
+    await mounted.rerender(<BackgroundAutoNudgeCoordinator />);
+    expect(
+      commands(dispatch).some((command) => command.type === "thread.auto-nudge.dispatch"),
+    ).toBe(false);
+
+    mocks.globallySuppressed = false;
+    await mounted.rerender(<BackgroundAutoNudgeCoordinator />);
+    await new Promise((resolve) => window.setTimeout(resolve, 50));
+    expect(
+      commands(dispatch).some((command) => command.type === "thread.auto-nudge.dispatch"),
+    ).toBe(false);
+  });
+
   it("honors a foreground manual-send cancellation in the background lane", async () => {
     const dispatch = installEnvironmentApi("environment-a");
     const terminal = threadFixture({

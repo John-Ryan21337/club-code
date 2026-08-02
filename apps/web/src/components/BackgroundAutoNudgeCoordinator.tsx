@@ -221,9 +221,7 @@ export function BackgroundAutoNudgeCoordinator() {
   // Only a projection transition to a different completed-turn identity may
   // dispatch. Initial hydration and config changes merely establish context.
   useEffect(() => {
-    if (getConfirmedAutoNudgeArming().getSuppressedSnapshot()) {
-      return;
-    }
+    const suppressionActive = getConfirmedAutoNudgeArming().getSuppressedSnapshot();
     const liveRoutes = new Set<string>();
 
     for (const environment of Object.values(environmentStateById)) {
@@ -240,6 +238,12 @@ export function BackgroundAutoNudgeCoordinator() {
         observedCompletedTurnByRouteRef.current.set(currentRouteKey, completedTurnKey);
         if (!hadPrevious) {
           // Initial hydration establishes a baseline and cannot authorize work.
+          pendingCompletedTurnByRouteRef.current.delete(currentRouteKey);
+          continue;
+        }
+        if (suppressionActive) {
+          // Stop consumes any completion observed while suppression is active;
+          // clearing Stop cannot revive it later.
           pendingCompletedTurnByRouteRef.current.delete(currentRouteKey);
           continue;
         }
