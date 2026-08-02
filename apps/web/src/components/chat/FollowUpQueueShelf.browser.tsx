@@ -234,7 +234,6 @@ describe("FollowUpQueueShelf", () => {
                 sizeBytes: 64,
                 previewUrl:
                   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
-                file: new File(["image"], "cat.png", { type: "image/png" }),
               },
             ],
             queuedAt: "2026-05-22T00:00:00.000Z",

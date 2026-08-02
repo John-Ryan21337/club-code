@@ -9,6 +9,7 @@ import {
   type ChatAttachment,
   ModelSelection,
   type ProviderThreadGoal,
+  type OrchestrationEvent,
   ProviderRuntimeEvent,
   ProviderSession,
   ProviderDriverKind,
@@ -20,6 +21,7 @@ import {
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   EventId,
+  ManualFollowUpId,
   MessageId,
   ProjectId,
   ThreadId,
@@ -53,6 +55,7 @@ import {
   isProviderInstanceMissingError,
   providerErrorLabel,
   providerErrorLabelFromInstanceHint,
+  autoNudgeTurnStartCancellationReason,
   ProviderCommandReactorLive,
 } from "./ProviderCommandReactor.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
@@ -67,6 +70,46 @@ const asProjectId = (value: string): ProjectId => ProjectId.make(value);
 const asApprovalRequestId = (value: string): ApprovalRequestId => ApprovalRequestId.make(value);
 const asMessageId = (value: string): MessageId => MessageId.make(value);
 const asTurnId = (value: string): TurnId => TurnId.make(value);
+const asManualFollowUpId = (value: string): ManualFollowUpId => ManualFollowUpId.make(value);
+
+function manualFollowUpCommands(suffix: string, createdAt: string) {
+  const followUpId = asManualFollowUpId(`manual-follow-up-${suffix}`);
+  const activationCommandId = CommandId.make(`cmd-manual-follow-up-activate-${suffix}`);
+  return {
+    followUpId,
+    activationCommandId,
+    enqueue: {
+      type: "thread.manual-follow-up.enqueue" as const,
+      commandId: CommandId.make(`cmd-manual-follow-up-enqueue-${suffix}`),
+      threadId: ThreadId.make("thread-1"),
+      followUpId,
+      message: {
+        messageId: asMessageId(`manual-follow-up-message-${suffix}`),
+        role: "user" as const,
+        text: `manual follow-up ${suffix}`,
+        attachments: [],
+      },
+      dispatch: {
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        titleSeed: "Thread",
+        runtimeMode: "approval-required" as const,
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      },
+      createdAt,
+    },
+    activate: {
+      type: "thread.manual-follow-up.activate" as const,
+      commandId: activationCommandId,
+      threadId: ThreadId.make("thread-1"),
+      followUpId,
+      activationMode: "automatic-after-settlement" as const,
+      createdAt,
+    },
+  };
+}
 
 const deriveServerPathsSync = (baseDir: string, devUrl: URL | undefined) =>
   Effect.runSync(deriveServerPaths(baseDir, devUrl).pipe(Effect.provide(NodeServices.layer)));
@@ -171,6 +214,7 @@ describe("ProviderCommandReactor", () => {
     readonly sessionModelSwitch?: "unsupported" | "in-session";
     readonly liveSteer?: "supported" | "unsupported";
     readonly threadGoals?: "supported" | "unsupported";
+    readonly sendTurnFailureDetail?: string;
     readonly startReactor?: boolean;
   }) {
     const now = "2026-01-01T00:00:00.000Z";
@@ -244,14 +288,23 @@ describe("ProviderCommandReactor", () => {
       runtimeSessions.push(session);
       return Effect.succeed(session);
     });
-    const sendTurn = vi.fn((input: unknown) => {
+    const sendTurn = vi.fn((sendInput: unknown) => {
       const threadId =
-        typeof input === "object" &&
-        input !== null &&
-        "threadId" in input &&
-        typeof input.threadId === "string"
-          ? ThreadId.make(input.threadId)
+        typeof sendInput === "object" &&
+        sendInput !== null &&
+        "threadId" in sendInput &&
+        typeof sendInput.threadId === "string"
+          ? ThreadId.make(sendInput.threadId)
           : ThreadId.make("thread-1");
+      if (input?.sendTurnFailureDetail !== undefined) {
+        return Effect.fail(
+          new ProviderAdapterRequestError({
+            provider: "codex",
+            method: "sendTurn",
+            detail: input.sendTurnFailureDetail,
+          }),
+        );
+      }
       return Effect.succeed({
         threadId,
         turnId: asTurnId("turn-1"),
@@ -541,6 +594,145 @@ describe("ProviderCommandReactor", () => {
     };
   }
 
+  it("rechecks exact Auto Nudge authority at the provider boundary", async () => {
+    const harness = await createHarness({ startReactor: false });
+    const thread = (await harness.readModel()).threads[0];
+    if (thread === undefined) {
+      throw new Error("Expected the harness thread.");
+    }
+
+    const completedTurnId = asTurnId("auto-nudge-completed-turn");
+    const acceptedAt = "2026-01-01T00:00:02.000Z";
+    const authoritativeThread = {
+      ...thread,
+      latestTurn: {
+        turnId: completedTurnId,
+        state: "completed" as const,
+        requestedAt: "2026-01-01T00:00:00.000Z",
+        startedAt: "2026-01-01T00:00:00.500Z",
+        completedAt: "2026-01-01T00:00:01.000Z",
+        assistantMessageId: null,
+      },
+      autoNudge: {
+        authorityRevision: 7,
+        mode: "steady-progress" as const,
+        prompt: "Continue safely",
+        backgroundContinuation: false,
+        maxRounds: 5,
+        armedAt: "2026-01-01T00:00:00.000Z",
+        baselineSettledTurnId: null,
+        lastDispatchedSettledTurnId: completedTurnId,
+        roundsDispatched: 1,
+        lastDispatchedAt: acceptedAt,
+      },
+      session: {
+        threadId: thread.id,
+        status: "ready" as const,
+        providerName: "codex",
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        runtimeMode: thread.runtimeMode,
+        activeTurnId: null,
+        lastError: null,
+        updatedAt: acceptedAt,
+      },
+    };
+    const event = {
+      sequence: 10,
+      eventId: EventId.make("event-auto-nudge-provider-boundary"),
+      aggregateKind: "thread" as const,
+      aggregateId: authoritativeThread.id,
+      occurredAt: acceptedAt,
+      commandId: CommandId.make("command-auto-nudge-provider-boundary"),
+      causationEventId: null,
+      correlationId: CommandId.make("command-auto-nudge-provider-boundary"),
+      metadata: {},
+      type: "thread.turn-start-requested" as const,
+      payload: {
+        threadId: authoritativeThread.id,
+        messageId: asMessageId("message-auto-nudge-provider-boundary"),
+        modelSelection: {
+          ...authoritativeThread.modelSelection,
+          options: [...(authoritativeThread.modelSelection.options ?? [])],
+        },
+        runtimeMode: authoritativeThread.runtimeMode,
+        interactionMode: authoritativeThread.interactionMode,
+        dispatchSource: "auto-nudge" as const,
+        autoNudgeAuthority: {
+          authorityRevision: 7,
+          completedTurnId,
+          completedAt: "2026-01-01T00:00:01.000Z",
+          dispatchSource: "foreground" as const,
+        },
+        createdAt: acceptedAt,
+      },
+    } satisfies Extract<OrchestrationEvent, { type: "thread.turn-start-requested" }>;
+
+    expect(autoNudgeTurnStartCancellationReason(authoritativeThread, event)).toBeUndefined();
+    expect(
+      autoNudgeTurnStartCancellationReason(
+        {
+          ...authoritativeThread,
+          autoNudge: {
+            ...authoritativeThread.autoNudge,
+            authorityRevision: 8,
+            mode: "off",
+            prompt: "",
+            armedAt: null,
+          },
+        },
+        event,
+      ),
+    ).toContain("off");
+    expect(
+      autoNudgeTurnStartCancellationReason(
+        {
+          ...authoritativeThread,
+          manualFollowUps: [
+            {
+              id: asManualFollowUpId("manual-wins-provider-race"),
+              message: {
+                messageId: asMessageId("manual-wins-provider-race-message"),
+                role: "user",
+                text: "manual work",
+                attachments: [],
+              },
+              dispatch: {
+                modelSelection: authoritativeThread.modelSelection,
+                titleSeed: "Thread",
+                runtimeMode: authoritativeThread.runtimeMode,
+                interactionMode: authoritativeThread.interactionMode,
+              },
+              status: "queued",
+              enqueuedAt: acceptedAt,
+              activatedAt: null,
+              activationCommandId: null,
+            },
+          ],
+        },
+        event,
+      ),
+    ).toContain("manual follow-up");
+    expect(
+      autoNudgeTurnStartCancellationReason(
+        {
+          ...authoritativeThread,
+          activities: [
+            {
+              id: EventId.make("late-provider-progress"),
+              tone: "info",
+              kind: "provider.tool.progress",
+              summary: "Provider output resumed",
+              payload: {},
+              turnId: completedTurnId,
+              createdAt: acceptedAt,
+            },
+          ],
+        },
+        event,
+      ),
+    ).toContain("provider activity continued");
+  });
+
   it("replaces a Codex goal with an ordered clear then active unbudgeted set", async () => {
     const harness = await createHarness({ threadGoals: "supported" });
     const threadId = ThreadId.make("thread-1");
@@ -602,6 +794,133 @@ describe("ProviderCommandReactor", () => {
       tokensUsed: 0,
       timeUsedSeconds: 0,
     });
+  });
+
+  it("removes a manual follow-up only after the provider accepts its turn", async () => {
+    const harness = await createHarness();
+    const commands = manualFollowUpCommands("accepted", "2026-01-01T00:00:01.000Z");
+
+    await Effect.runPromise(harness.engine.dispatch(commands.enqueue));
+    await Effect.runPromise(harness.engine.dispatch(commands.activate));
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    await waitFor(async () => {
+      const readModel = await harness.readModel();
+      const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+      return thread?.manualFollowUps.length === 0;
+    });
+
+    const readModel = await harness.readModel();
+    const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+    expect(
+      thread?.messages.filter(
+        (message) => message.id === asMessageId("manual-follow-up-message-accepted"),
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("requeues a manual follow-up when asynchronous provider delivery is rejected", async () => {
+    const harness = await createHarness({
+      sendTurnFailureDetail: "provider rejected the turn",
+    });
+    const commands = manualFollowUpCommands("rejected", "2026-01-01T00:00:01.000Z");
+
+    await Effect.runPromise(harness.engine.dispatch(commands.enqueue));
+    await Effect.runPromise(harness.engine.dispatch(commands.activate));
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    await waitFor(async () => {
+      const readModel = await harness.readModel();
+      const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+      return (
+        thread?.manualFollowUps[0]?.status === "queued" &&
+        thread.session?.status === "ready" &&
+        thread.session.lastError?.includes("provider rejected the turn") === true
+      );
+    });
+
+    const readModel = await harness.readModel();
+    const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+    expect(thread?.manualFollowUps).toEqual([
+      expect.objectContaining({
+        id: commands.followUpId,
+        status: "queued",
+        activatedAt: null,
+        activationCommandId: null,
+      }),
+    ]);
+    expect(
+      thread?.messages.filter(
+        (message) => message.id === asMessageId("manual-follow-up-message-rejected"),
+      ),
+    ).toHaveLength(1);
+    expect(
+      thread?.activities.some((activity) => activity.kind === "provider.turn.start.failed"),
+    ).toBe(true);
+  });
+
+  it("releases an unresolved manual handoff on restart when no provider delivery is proven", async () => {
+    const harness = await createHarness({ startReactor: false });
+    const commands = manualFollowUpCommands("restart-release", "2026-01-01T00:00:01.000Z");
+
+    await Effect.runPromise(harness.engine.dispatch(commands.enqueue));
+    await Effect.runPromise(harness.engine.dispatch(commands.activate));
+    const beforeRestart = await harness.readModel();
+    expect(beforeRestart.threads[0]?.manualFollowUps[0]).toEqual(
+      expect.objectContaining({
+        id: commands.followUpId,
+        status: "handoff",
+        activationCommandId: commands.activationCommandId,
+      }),
+    );
+
+    await harness.startReactor();
+    await waitFor(async () => {
+      const readModel = await harness.readModel();
+      return readModel.threads[0]?.manualFollowUps[0]?.status === "queued";
+    });
+
+    const afterRestart = await harness.readModel();
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+    expect(
+      afterRestart.threads[0]?.messages.filter(
+        (message) => message.id === asMessageId("manual-follow-up-message-restart-release"),
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("accepts an unresolved manual handoff on restart when an active provider turn proves delivery", async () => {
+    const harness = await createHarness({ startReactor: false });
+    const commands = manualFollowUpCommands("restart-accept", "2026-01-01T00:00:01.000Z");
+
+    await Effect.runPromise(harness.engine.dispatch(commands.enqueue));
+    await Effect.runPromise(harness.engine.dispatch(commands.activate));
+    harness.runtimeSessions.push({
+      provider: ProviderDriverKind.make("codex"),
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      status: "running",
+      runtimeMode: "approval-required",
+      model: "gpt-5-codex",
+      threadId: ThreadId.make("thread-1"),
+      resumeCursor: { opaque: "restart-delivery-proof" },
+      activeTurnId: asTurnId("manual-follow-up-provider-turn"),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:02.000Z",
+    });
+
+    await harness.startReactor();
+    await waitFor(async () => {
+      const readModel = await harness.readModel();
+      return readModel.threads[0]?.manualFollowUps.length === 0;
+    });
+
+    const afterRestart = await harness.readModel();
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+    expect(
+      afterRestart.threads[0]?.messages.filter(
+        (message) => message.id === asMessageId("manual-follow-up-message-restart-accept"),
+      ),
+    ).toHaveLength(1);
   });
 
   it("clears interrupted turn starts on startup without resending provider work", async () => {

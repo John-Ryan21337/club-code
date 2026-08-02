@@ -3,6 +3,7 @@ import "../index.css";
 
 import {
   DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES,
+  DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
   EventId,
   type DesktopBridge,
   ORCHESTRATION_WS_METHODS,
@@ -16,6 +17,7 @@ import {
   type RuntimeMode,
   type ServerConfig,
   type ServerLifecycleWelcomePayload,
+  type ThreadAutoNudgeConfig,
   type ThreadId,
   type TurnId,
   WS_METHODS,
@@ -37,15 +39,6 @@ import { render } from "vitest-browser-react";
 import { useCommandPaletteStore } from "../commandPaletteStore";
 import { useComposerDraftStore, DraftId } from "../composerDraftStore";
 import { __resetEnvironmentApiOverridesForTests } from "../environmentApi";
-import { __resetAutoNudgeTurnLedgerForTests } from "../autoNudger";
-import {
-  __resetBackgroundAutoNudgeControllerForTests,
-  getBackgroundAutoNudgeController,
-} from "../backgroundAutoNudger";
-import {
-  __resetAutoNudgeThreadPolicyStoreForTests,
-  getAutoNudgeThreadPolicyStore,
-} from "../autoNudgeThreadPolicy";
 import { isMacPlatform } from "../lib/utils";
 import { resetSourceControlDiscoveryStateForTests } from "../lib/sourceControlDiscoveryState";
 import { __resetLocalApiForTests } from "../localApi";
@@ -59,6 +52,17 @@ import { createAuthenticatedSessionHandlers } from "../../test/authHttpHandlers"
 import { BrowserWsRpcHarness, type NormalizedWsRpcRequestBody } from "../../test/wsRpcHarness";
 
 import { DEFAULT_CLIENT_SETTINGS } from "@cafecode/contracts/settings";
+import { __resetAutoNudgeTurnLedgerForTests } from "../autoNudger";
+import {
+  AUTO_NUDGE_SUPPRESSION_STORAGE_KEY,
+  __resetConfirmedAutoNudgeArmingForTests,
+  getConfirmedAutoNudgeArming,
+} from "../confirmedAutoNudgeArming";
+import {
+  resetSavedEnvironmentRegistryStoreForTests,
+  useSavedEnvironmentRegistryStore,
+  waitForSavedEnvironmentRegistryHydration,
+} from "../environments/runtime";
 
 vi.mock("../lib/gitStatusState", () => ({
   useGitStatus: () => ({ data: null, error: null, cause: null, isPending: false }),
@@ -318,6 +322,8 @@ function createSnapshotForTargetUser(options: {
         updatedAt: NOW_ISO,
         archivedAt: null,
         deletedAt: null,
+        autoNudge: DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+        manualFollowUps: [],
         messages,
         activities: [],
         proposedPlans: [],
@@ -383,6 +389,8 @@ function addThreadToSnapshot(
         updatedAt: NOW_ISO,
         archivedAt: null,
         deletedAt: null,
+        autoNudge: DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+        manualFollowUps: [],
         messages: [],
         activities: [],
         proposedPlans: [],
@@ -401,6 +409,20 @@ function addThreadToSnapshot(
   };
 }
 
+function setThreadAutoNudgeConfig(
+  snapshot: OrchestrationReadModel,
+  threadId: ThreadId,
+  autoNudge: ThreadAutoNudgeConfig,
+): OrchestrationReadModel {
+  return {
+    ...snapshot,
+    snapshotSequence: snapshot.snapshotSequence + 1,
+    threads: snapshot.threads.map((thread) =>
+      thread.id === threadId ? { ...thread, autoNudge } : thread,
+    ),
+  };
+}
+
 function toShellThread(thread: OrchestrationReadModel["threads"][number]) {
   return {
     id: thread.id,
@@ -412,6 +434,18 @@ function toShellThread(thread: OrchestrationReadModel["threads"][number]) {
     branch: thread.branch,
     worktreePath: thread.worktreePath,
     latestTurn: thread.latestTurn,
+    autoNudge: {
+      authorityRevision: thread.autoNudge.authorityRevision,
+      mode: thread.autoNudge.mode,
+      backgroundContinuation: thread.autoNudge.backgroundContinuation,
+      maxRounds: thread.autoNudge.maxRounds,
+      armedAt: thread.autoNudge.armedAt,
+      baselineSettledTurnId: thread.autoNudge.baselineSettledTurnId,
+      lastDispatchedSettledTurnId: thread.autoNudge.lastDispatchedSettledTurnId,
+      roundsDispatched: thread.autoNudge.roundsDispatched,
+      lastDispatchedAt: thread.autoNudge.lastDispatchedAt,
+    },
+    manualFollowUpCount: thread.manualFollowUps.length,
     createdAt: thread.createdAt,
     updatedAt: thread.updatedAt,
     archivedAt: thread.archivedAt,
@@ -730,6 +764,8 @@ function createSnapshotWithSecondaryProject(options?: {
             lastError: null,
             updatedAt: isoAt(31),
           },
+          autoNudge: DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+          manualFollowUps: [],
           archivedAt: null,
         },
       ]
@@ -762,6 +798,8 @@ function createSnapshotWithSecondaryProject(options?: {
             lastError: null,
             updatedAt: isoAt(25),
           },
+          autoNudge: DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+          manualFollowUps: [],
           archivedAt: isoAt(26),
         },
       ]
@@ -1083,6 +1121,25 @@ async function waitForElement<T extends Element>(
     throw new Error(errorMessage);
   }
   return element;
+}
+
+async function expandAutoNudgeControls(): Promise<void> {
+  if (document.querySelector('button[aria-label="Collapse Auto Nudge controls"]')) {
+    return;
+  }
+  const expand = await waitForElement(
+    () =>
+      document.querySelector<HTMLButtonElement>('button[aria-label="Expand Auto Nudge controls"]'),
+    "Unable to find minimized Auto Nudge controls.",
+  );
+  expand.click();
+  await waitForElement(
+    () =>
+      document.querySelector<HTMLButtonElement>(
+        'button[aria-label="Collapse Auto Nudge controls"]',
+      ),
+    "Auto Nudge controls did not expand.",
+  );
 }
 
 async function waitForURL(
@@ -1678,6 +1735,14 @@ async function mountChatView(options: {
   await waitForAppBootstrap();
   await waitForLayout();
 
+  // The Atmosphere console has its own browser suite. Keep this full-app
+  // fixture focused on ChatView behavior by closing the global default-open
+  // panel before callers interact with controls beneath it.
+  document
+    .querySelector<HTMLButtonElement>('button[aria-label="Close atmosphere console"]')
+    ?.click();
+  await waitForLayout();
+
   const cleanup = async () => {
     customWsRpcResolver = null;
     await screen.unmount();
@@ -1788,9 +1853,8 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
     await setViewport(DEFAULT_VIEWPORT);
     localStorage.clear();
     sessionStorage.clear();
-    __resetAutoNudgeTurnLedgerForTests();
-    __resetBackgroundAutoNudgeControllerForTests();
-    __resetAutoNudgeThreadPolicyStoreForTests();
+    __resetAutoNudgeTurnLedgerForTests({ clearSessionStorage: true });
+    __resetConfirmedAutoNudgeArmingForTests({ clearStorage: true });
     document.body.innerHTML = "";
     wsRequests.length = 0;
     customWsRpcResolver = null;
@@ -3965,127 +4029,54 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
   }
 
   if (chatViewBrowserPart === "navigation") {
-    it("keeps Auto Nudge enabled only for its exact background thread across navigation", async () => {
-      const secondThreadId = "thread-auto-nudge-disabled" as ThreadId;
+    it("saves distinct Auto Nudge prompts to exact same-project threads without arming either", async () => {
+      const secondThreadId = "thread-auto-nudge-b" as ThreadId;
       let snapshot = addThreadToSnapshot(
         createSnapshotForTargetUser({
-          targetMessageId: "msg-user-auto-nudge-owner" as MessageId,
-          targetText: "auto nudge owner",
+          targetMessageId: "msg-user-auto-nudge-a" as MessageId,
+          targetText: "thread A",
         }),
         secondThreadId,
       );
-      snapshot = {
-        ...snapshot,
-        threads: snapshot.threads.map((thread) =>
-          thread.id === secondThreadId
-            ? {
-                ...thread,
-                messages: [
-                  createUserMessage({
-                    id: "msg-user-auto-nudge-disabled" as MessageId,
-                    text: "disabled thread must stay disabled",
-                    offsetSeconds: 100,
-                  }),
-                  createAssistantMessage({
-                    id: "msg-assistant-auto-nudge-disabled" as MessageId,
-                    text: "settled",
-                    offsetSeconds: 101,
-                  }),
-                ],
-                latestTurn: {
-                  turnId: "turn-auto-nudge-disabled" as TurnId,
-                  state: "completed" as const,
-                  requestedAt: isoAt(98),
-                  startedAt: isoAt(99),
-                  completedAt: isoAt(102),
-                  assistantMessageId: "msg-assistant-auto-nudge-disabled" as MessageId,
-                },
-                updatedAt: isoAt(102),
-                session: thread.session
-                  ? { ...thread.session, status: "ready" as const, updatedAt: isoAt(102) }
-                  : null,
-              }
-            : thread,
-        ),
-      };
+      snapshot = setThreadAutoNudgeConfig(snapshot, THREAD_ID, {
+        ...DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+        authorityRevision: 3,
+        prompt: "Saved prompt A",
+      });
+      snapshot = setThreadAutoNudgeConfig(snapshot, secondThreadId, {
+        ...DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+        authorityRevision: 9,
+        prompt: "Saved prompt B",
+      });
       const mounted = await mountChatView({
         viewport: DEFAULT_VIEWPORT,
         snapshot,
+        resolveRpc: (body) =>
+          body._tag === ORCHESTRATION_WS_METHODS.dispatchCommand
+            ? { sequence: snapshot.snapshotSequence + 1 }
+            : undefined,
       });
 
       try {
-        const modeSelect = await waitForElement(
-          () => document.querySelector<HTMLButtonElement>('button[aria-label="Auto nudge mode"]'),
-          "Unable to find Auto Nudge mode select.",
-        );
-        expect(modeSelect.textContent).toContain("Off");
-        modeSelect.click();
-        (await waitForSelectItemContainingText("Steady progress")).click();
-
-        const ownerRef = {
-          environmentId: String(LOCAL_ENVIRONMENT_ID),
-          threadId: String(THREAD_ID),
-        };
+        await expandAutoNudgeControls();
+        const promptInput = page.getByRole("textbox", { name: "Prompt for this thread" });
+        await expect.element(promptInput).toHaveValue("Saved prompt A");
+        await promptInput.fill("Exact prompt for thread A");
+        await page.getByRole("button", { name: "Save prompt" }).click();
         await vi.waitFor(
           () => {
-            expect(getAutoNudgeThreadPolicyStore().getPolicy(ownerRef).mode).toBe(
-              "steady-progress",
-            );
-          },
-          { timeout: 8_000, interval: 16 },
-        );
-        const backgroundSwitch = await waitForElement(
-          () =>
-            document.querySelector<HTMLElement>(
-              '[aria-label="Continue this thread in background"]',
-            ),
-          "Unable to find background continuation switch.",
-        );
-        backgroundSwitch.click();
-        await vi.waitFor(
-          () => {
-            expect(getAutoNudgeThreadPolicyStore().getPolicy(ownerRef)).toMatchObject({
-              mode: "steady-progress",
-              backgroundContinuation: true,
-            });
-            expect(getBackgroundAutoNudgeController().getSnapshot()).toMatchObject({
-              owner: ownerRef,
-              status: "paused",
-              reason: "Background continuation is waiting for exact-thread manual queue state.",
-            });
-          },
-          { timeout: 8_000, interval: 16 },
-        );
-
-        await mounted.router.navigate({ to: "/settings/appearance" });
-        await waitForURL(
-          mounted.router,
-          (path) => path === "/settings/appearance",
-          "Settings navigation should complete.",
-        );
-        await mounted.router.navigate({
-          to: "/$environmentId/$threadId",
-          params: { environmentId: LOCAL_ENVIRONMENT_ID, threadId: THREAD_ID },
-        });
-        await waitForURL(
-          mounted.router,
-          (path) => path === serverThreadPath(THREAD_ID),
-          "Owner thread should reopen after settings.",
-        );
-        await vi.waitFor(
-          () => {
-            const restoredMode = document.querySelector<HTMLButtonElement>(
-              'button[aria-label="Auto nudge mode"]',
-            );
-            const restoredSwitch = document.querySelector<HTMLElement>(
-              '[aria-label="Continue this thread in background"]',
-            );
-            const restoredRounds = document.querySelector<HTMLInputElement>(
-              '[aria-label="Auto Nudge maximum rounds for this thread"]',
-            );
-            expect(restoredMode?.textContent).toContain("Steady progress");
-            expect(restoredSwitch?.getAttribute("aria-checked")).toBe("true");
-            expect(restoredRounds?.value).toBe("5");
+            expect(
+              wsRequests.some(
+                (request) =>
+                  request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+                  request.type === "thread.auto-nudge.configure" &&
+                  request.threadId === THREAD_ID &&
+                  request.expectedAuthorityRevision === 3 &&
+                  request.mode === "off" &&
+                  request.backgroundContinuation === false &&
+                  request.prompt === "Exact prompt for thread A",
+              ),
+            ).toBe(true);
           },
           { timeout: 8_000, interval: 16 },
         );
@@ -4094,43 +4085,446 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
           to: "/$environmentId/$threadId",
           params: { environmentId: LOCAL_ENVIRONMENT_ID, threadId: secondThreadId },
         });
-        await waitForURL(
-          mounted.router,
-          (path) => path === serverThreadPath(secondThreadId),
-          "Disabled thread navigation should complete.",
-        );
+        await expandAutoNudgeControls();
+        await expect.element(promptInput).toHaveValue("Saved prompt B");
+        await promptInput.fill("Different prompt for thread B");
+        await page.getByRole("button", { name: "Save prompt" }).click();
         await vi.waitFor(
           () => {
-            const disabledMode = document.querySelector<HTMLButtonElement>(
-              'button[aria-label="Auto nudge mode"]',
-            );
-            const disabledSwitch = document.querySelector<HTMLElement>(
-              '[aria-label="Continue this thread in background"]',
-            );
-            expect(disabledMode?.textContent).toContain("Off");
-            expect(disabledSwitch?.getAttribute("aria-checked")).toBe("false");
-            expect(
-              getAutoNudgeThreadPolicyStore().getPolicy({
-                environmentId: String(LOCAL_ENVIRONMENT_ID),
-                threadId: String(secondThreadId),
-              }).mode,
-            ).toBe("off");
             expect(
               wsRequests.some(
                 (request) =>
                   request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
-                  request.type === "thread.turn.start" &&
-                  request.threadId === secondThreadId,
+                  request.type === "thread.auto-nudge.configure" &&
+                  request.threadId === secondThreadId &&
+                  request.expectedAuthorityRevision === 9 &&
+                  request.mode === "off" &&
+                  request.backgroundContinuation === false &&
+                  request.prompt === "Different prompt for thread B",
               ),
-            ).toBe(false);
+            ).toBe(true);
           },
           { timeout: 8_000, interval: 16 },
         );
+        expect(
+          wsRequests.some((request) => request._tag === WS_METHODS.serverUpdateClientSettings),
+        ).toBe(false);
+      } finally {
+        await mounted.cleanup();
+      }
+    });
 
-        expect(getBackgroundAutoNudgeController().getSnapshot().owner).toEqual(ownerRef);
-        expect(getAutoNudgeThreadPolicyStore().getPolicy(ownerRef).backgroundContinuation).toBe(
-          true,
+    it("blocks a second same-thread configure while the exact revision write is pending", async () => {
+      let resolveConfigure!: (value: { sequence: number }) => void;
+      const configureResponse = new Promise<{ sequence: number }>((resolve) => {
+        resolveConfigure = resolve;
+      });
+      let snapshot = createSnapshotForTargetUser({
+        targetMessageId: "msg-user-auto-nudge-pending" as MessageId,
+        targetText: "pending exact revision",
+      });
+      snapshot = setThreadAutoNudgeConfig(snapshot, THREAD_ID, {
+        ...DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+        authorityRevision: 12,
+        prompt: "Original prompt",
+      });
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot,
+        resolveRpc: (body) =>
+          body._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+          body.type === "thread.auto-nudge.configure"
+            ? configureResponse
+            : undefined,
+      });
+
+      try {
+        await expandAutoNudgeControls();
+        await page.getByRole("textbox", { name: "Prompt for this thread" }).fill("Pending prompt");
+        await page.getByRole("button", { name: "Save prompt" }).click();
+        await vi.waitFor(
+          () => {
+            expect(
+              wsRequests.filter(
+                (request) =>
+                  request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+                  request.type === "thread.auto-nudge.configure",
+              ),
+            ).toHaveLength(1);
+          },
+          { timeout: 8_000, interval: 16 },
         );
+        const pendingSaveButton = await waitForElement(
+          () =>
+            Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find((button) =>
+              button.textContent?.includes("Saving prompt"),
+            ) ?? null,
+          "Prompt save did not enter its pending state.",
+        );
+        expect(pendingSaveButton.disabled).toBe(true);
+        pendingSaveButton.click();
+        expect(
+          wsRequests.filter(
+            (request) =>
+              request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+              request.type === "thread.auto-nudge.configure",
+          ),
+        ).toHaveLength(1);
+        await expect
+          .element(page.getByRole("combobox", { name: "Auto nudge mode" }))
+          .toBeDisabled();
+      } finally {
+        resolveConfigure({ sequence: snapshot.snapshotSequence + 1 });
+        await mounted.cleanup();
+      }
+    });
+
+    it("blocks enable when a different localhost port has durably stopped Auto Nudge", async () => {
+      let snapshot = createSnapshotForTargetUser({
+        targetMessageId: "msg-user-auto-nudge-cross-port-stop" as MessageId,
+        targetText: "cross-port durable Stop",
+      });
+      snapshot = setThreadAutoNudgeConfig(snapshot, THREAD_ID, {
+        ...DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+        authorityRevision: 13,
+        prompt: "Saved exact-thread prompt",
+      });
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot,
+        resolveRpc: (body) =>
+          body._tag === ORCHESTRATION_WS_METHODS.dispatchCommand
+            ? { sequence: snapshot.snapshotSequence + 1 }
+            : undefined,
+      });
+
+      try {
+        await expandAutoNudgeControls();
+        const arming = getConfirmedAutoNudgeArming();
+        expect(arming.getSuppressedSnapshot()).toBe(false);
+        const modeTrigger = page.getByRole("combobox", { name: "Auto nudge mode" });
+        const modeTriggerElement = modeTrigger.element() as HTMLButtonElement;
+        expect(modeTriggerElement.disabled).toBe(false);
+        // Cookies are host-scoped but localStorage events are origin/port
+        // scoped. Reproduce another renderer's Stop without notifying this
+        // renderer's stale React snapshot.
+        document.cookie = `${encodeURIComponent(AUTO_NUDGE_SUPPRESSION_STORAGE_KEY)}=${encodeURIComponent("v1:other-localhost-port")}; Path=/; Max-Age=3600; SameSite=Strict`;
+        expect(arming.getSuppressedSnapshot()).toBe(false);
+
+        // Exercise the late race synchronously when the stale control is still
+        // enabled. The coordinator may instead converge first and disable the
+        // trigger; both paths must preserve the durable Stop.
+        if (!modeTriggerElement.disabled) {
+          modeTriggerElement.click();
+          await vi.waitFor(
+            () => {
+              const optionAvailable = Array.from(
+                document.querySelectorAll<HTMLElement>('[role="option"]'),
+              ).some((option) => option.textContent?.trim() === "Steady progress");
+              expect(modeTriggerElement.disabled || optionAvailable).toBe(true);
+            },
+            { timeout: 8_000, interval: 16 },
+          );
+          const steadyProgressOption = Array.from(
+            document.querySelectorAll<HTMLElement>('[role="option"]'),
+          ).find((option) => option.textContent?.trim() === "Steady progress");
+          if (!modeTriggerElement.disabled) {
+            expect(steadyProgressOption).toBeTruthy();
+            steadyProgressOption?.click();
+          }
+        }
+
+        await expect
+          .element(page.getByText("Emergency Stop all is blocking Auto Nudge in every thread."))
+          .toBeInTheDocument();
+        expect(arming.getSuppressedSnapshot()).toBe(true);
+        expect(
+          wsRequests.some(
+            (request) =>
+              request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+              request.type === "thread.auto-nudge.configure",
+          ),
+        ).toBe(false);
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
+    it("uses unconditional exact-thread Stop when mode or paid background execution is turned off", async () => {
+      let snapshot = createSnapshotForTargetUser({
+        targetMessageId: "msg-user-auto-nudge-stop" as MessageId,
+        targetText: "cost-sensitive stop",
+      });
+      snapshot = setThreadAutoNudgeConfig(snapshot, THREAD_ID, {
+        ...DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+        authorityRevision: 17,
+        mode: "steady-progress",
+        prompt: "Keep this exact thread moving",
+        backgroundContinuation: true,
+        armedAt: isoAt(900),
+      });
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot,
+        resolveRpc: (body) =>
+          body._tag === ORCHESTRATION_WS_METHODS.dispatchCommand
+            ? { sequence: snapshot.snapshotSequence + 1 }
+            : undefined,
+      });
+
+      try {
+        await expandAutoNudgeControls();
+        await page.getByRole("switch", { name: "Continue this thread in background" }).click();
+        await vi.waitFor(
+          () => {
+            expect(
+              wsRequests.filter(
+                (request) =>
+                  request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+                  request.type === "thread.auto-nudge.stop" &&
+                  request.threadId === THREAD_ID,
+              ),
+            ).toHaveLength(1);
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+        await page.getByRole("combobox", { name: "Auto nudge mode" }).click();
+        await page.getByRole("option", { name: "Off" }).click();
+        await vi.waitFor(
+          () => {
+            expect(
+              wsRequests.filter(
+                (request) =>
+                  request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+                  request.type === "thread.auto-nudge.stop" &&
+                  request.threadId === THREAD_ID,
+              ),
+            ).toHaveLength(2);
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+        expect(
+          wsRequests.some(
+            (request) =>
+              request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+              request.type === "thread.auto-nudge.configure" &&
+              request.mode === "off",
+          ),
+        ).toBe(false);
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
+    it("keeps Emergency Stop latched while the saved-environment registry is not hydrated", async () => {
+      await waitForSavedEnvironmentRegistryHydration();
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: createSnapshotForTargetUser({
+          targetMessageId: "msg-user-auto-nudge-emergency" as MessageId,
+          targetText: "emergency stop",
+        }),
+      });
+
+      try {
+        await expandAutoNudgeControls();
+        resetSavedEnvironmentRegistryStoreForTests();
+        await page.getByRole("button", { name: "Emergency Stop all" }).click();
+        await expect
+          .element(page.getByRole("button", { name: "Allow Auto Nudge again" }))
+          .toBeInTheDocument();
+        await page.getByRole("button", { name: "Allow Auto Nudge again" }).click();
+        await expect
+          .element(page.getByText("Still stopping Auto Nudge threads"))
+          .toBeInTheDocument();
+        expect(getConfirmedAutoNudgeArming().getSuppressedSnapshot()).toBe(true);
+      } finally {
+        await mounted.cleanup();
+        await waitForSavedEnvironmentRegistryHydration();
+      }
+    });
+
+    it("keeps Emergency Stop latched while a saved environment is disconnected", async () => {
+      await waitForSavedEnvironmentRegistryHydration();
+      const savedEnvironmentId = EnvironmentId.make("environment-auto-nudge-offline");
+      useSavedEnvironmentRegistryStore.setState({
+        byId: {
+          [savedEnvironmentId]: {
+            environmentId: savedEnvironmentId,
+            label: "Offline Auto Nudge environment",
+            wsBaseUrl: "wss://offline.invalid/ws",
+            httpBaseUrl: "https://offline.invalid",
+            createdAt: NOW_ISO,
+            lastConnectedAt: null,
+          },
+        },
+      });
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: createSnapshotForTargetUser({
+          targetMessageId: "msg-user-auto-nudge-offline" as MessageId,
+          targetText: "offline environment stop",
+        }),
+      });
+
+      try {
+        await expandAutoNudgeControls();
+        await page.getByRole("button", { name: "Emergency Stop all" }).click();
+        await page.getByRole("button", { name: "Allow Auto Nudge again" }).click();
+        await expect
+          .element(page.getByText(/known environment is disconnected or still hydrating/i))
+          .toBeInTheDocument();
+        expect(getConfirmedAutoNudgeArming().getSuppressedSnapshot()).toBe(true);
+      } finally {
+        await mounted.cleanup();
+        resetSavedEnvironmentRegistryStoreForTests();
+        await waitForSavedEnvironmentRegistryHydration();
+      }
+    });
+
+    it("dispatches foreground Auto Nudge authority without a prompt or composer send", async () => {
+      const completedTurnId = "turn-auto-nudge-foreground" as TurnId;
+      const baseSnapshot = createSnapshotForTargetUser({
+        targetMessageId: "msg-user-auto-nudge-dispatch" as MessageId,
+        targetText: "foreground dispatch",
+      });
+      const baseThread = baseSnapshot.threads[0]!;
+      let snapshot: OrchestrationReadModel = {
+        ...baseSnapshot,
+        threads: [
+          {
+            ...baseThread,
+            latestTurn: {
+              turnId: completedTurnId,
+              state: "running" as const,
+              requestedAt: isoAt(1_000),
+              startedAt: isoAt(1_001),
+              completedAt: null,
+              assistantMessageId: null,
+            },
+            session: baseThread.session
+              ? {
+                  ...baseThread.session,
+                  status: "running" as const,
+                  activeTurnId: completedTurnId,
+                  updatedAt: isoAt(1_001),
+                }
+              : null,
+            updatedAt: isoAt(1_001),
+          },
+        ],
+      };
+      snapshot = setThreadAutoNudgeConfig(snapshot, THREAD_ID, {
+        ...DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+        authorityRevision: 22,
+        mode: "steady-progress",
+        prompt: "Server-sourced exact-thread prompt",
+        // Foreground authority is bounded against the browser's live clock.
+        // Keep this positive-path fixture freshly armed instead of coupling it
+        // to the suite's fixed projection timestamp.
+        armedAt: new Date(Date.now() - 1_000).toISOString(),
+      });
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot,
+        resolveRpc: (body) =>
+          body._tag === ORCHESTRATION_WS_METHODS.dispatchCommand
+            ? { sequence: snapshot.snapshotSequence + 1 }
+            : undefined,
+      });
+
+      try {
+        const runningThread = snapshot.threads[0]!;
+        const completedThread: OrchestrationReadModel["threads"][number] = {
+          ...runningThread,
+          latestTurn: {
+            ...runningThread.latestTurn!,
+            state: "completed",
+            completedAt: isoAt(1_010),
+          },
+          session: runningThread.session
+            ? {
+                ...runningThread.session,
+                status: "ready",
+                activeTurnId: null,
+                updatedAt: isoAt(1_010),
+              }
+            : null,
+          updatedAt: isoAt(1_010),
+        };
+        const transientlyBlockedThread: OrchestrationReadModel["threads"][number] = {
+          ...completedThread,
+          session: completedThread.session
+            ? {
+                ...completedThread.session,
+                lastError: "Transient projection error",
+              }
+            : null,
+        };
+        fixture.snapshot = {
+          ...snapshot,
+          snapshotSequence: snapshot.snapshotSequence + 1,
+          threads: [transientlyBlockedThread],
+          updatedAt: isoAt(1_010),
+        };
+        rpcHarness.emitStreamValue(ORCHESTRATION_WS_METHODS.subscribeThread, {
+          kind: "snapshot",
+          snapshot: {
+            snapshotSequence: fixture.snapshot.snapshotSequence,
+            thread: transientlyBlockedThread,
+          },
+        });
+        await waitForLayout();
+        expect(
+          wsRequests.some(
+            (request) =>
+              request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+              request.type === "thread.auto-nudge.dispatch",
+          ),
+        ).toBe(false);
+
+        fixture.snapshot = {
+          ...fixture.snapshot,
+          snapshotSequence: fixture.snapshot.snapshotSequence + 1,
+          threads: [completedThread],
+          updatedAt: isoAt(1_011),
+        };
+        rpcHarness.emitStreamValue(ORCHESTRATION_WS_METHODS.subscribeThread, {
+          kind: "snapshot",
+          snapshot: {
+            snapshotSequence: fixture.snapshot.snapshotSequence,
+            thread: completedThread,
+          },
+        });
+
+        let dispatchRequest: NormalizedWsRpcRequestBody | undefined;
+        await vi.waitFor(
+          () => {
+            dispatchRequest = wsRequests.find(
+              (request) =>
+                request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+                request.type === "thread.auto-nudge.dispatch",
+            );
+            expect(dispatchRequest).toBeDefined();
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+        expect(dispatchRequest).toMatchObject({
+          type: "thread.auto-nudge.dispatch",
+          threadId: THREAD_ID,
+          expectedAuthorityRevision: 22,
+          completedTurnId,
+          dispatchSource: "foreground",
+        });
+        expect("prompt" in (dispatchRequest ?? {})).toBe(false);
+        expect("message" in (dispatchRequest ?? {})).toBe(false);
+        expect(
+          wsRequests.some(
+            (request) =>
+              request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+              request.type === "thread.turn.start",
+          ),
+        ).toBe(false);
       } finally {
         await mounted.cleanup();
       }
@@ -5610,6 +6004,7 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
       try {
         await waitForServerConfigToApply();
         window.desktopBridge = {
+          getLocalEnvironmentBootstrap: () => null,
           pickFolder,
           setTheme: vi.fn().mockResolvedValue(undefined),
         } as unknown as NonNullable<typeof window.desktopBridge>;

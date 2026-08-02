@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_RUNTIME_MODE,
+  DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
   EnvironmentId,
   ProjectId,
   ProviderInstanceId,
@@ -34,6 +35,8 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     worktreePath: null,
     turnDiffSummaries: [],
     activities: [],
+    autoNudge: DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+    manualFollowUps: [],
     ...overrides,
   };
 }

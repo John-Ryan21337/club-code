@@ -1,5 +1,7 @@
 import {
   ApprovalRequestId,
+  DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+  migrateStoredAutoNudgeBuiltInPrompt,
   type ChatAttachment,
   type OrchestrationEvent,
   ThreadId,
@@ -191,16 +193,6 @@ function shouldPromoteLatestTurn(input: {
   // because that makes the renderer offer steer/interrupt or latency diagnostics
   // for a turn the provider no longer owns.
   return input.currentLatestTurn.value.requestedAt <= candidateRequestedAt;
-}
-
-function extendCompletedTurnAt(turn: ProjectionTurnById, observedAt: string): ProjectionTurnById {
-  if (!isTerminalTurnState(turn.state)) {
-    return turn;
-  }
-  return {
-    ...turn,
-    completedAt: maxIso(turn.completedAt, observedAt),
-  };
 }
 
 function doesActivityAffectThreadShellSummary(
@@ -824,6 +816,8 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             interactionMode: event.payload.interactionMode,
             branch: event.payload.branch,
             worktreePath: event.payload.worktreePath,
+            autoNudge: DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+            manualFollowUps: [],
             latestTurnId: null,
             createdAt: event.payload.createdAt,
             updatedAt: event.payload.updatedAt,
@@ -930,6 +924,180 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             ...existingRow.value,
             interactionMode: event.payload.interactionMode,
             updatedAt: event.payload.updatedAt,
+          });
+          return;
+        }
+
+        case "thread.auto-nudge-configured": {
+          const existingRow = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isNone(existingRow)) {
+            return;
+          }
+          yield* projectionThreadRepository.upsert({
+            ...existingRow.value,
+            autoNudge: {
+              ...event.payload.config,
+              prompt: migrateStoredAutoNudgeBuiltInPrompt(
+                event.payload.config.mode,
+                event.payload.config.prompt,
+              ),
+            },
+            updatedAt: maxIso(
+              existingRow.value.updatedAt,
+              event.payload.config.armedAt ?? event.occurredAt,
+            ),
+          });
+          return;
+        }
+
+        case "thread.auto-nudge-stopped": {
+          const existingRow = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isNone(existingRow)) {
+            return;
+          }
+          yield* projectionThreadRepository.upsert({
+            ...existingRow.value,
+            autoNudge: {
+              authorityRevision: event.payload.authorityRevision,
+              mode: "off",
+              prompt: existingRow.value.autoNudge.prompt,
+              backgroundContinuation: false,
+              maxRounds: existingRow.value.autoNudge.maxRounds,
+              armedAt: null,
+              baselineSettledTurnId: null,
+              lastDispatchedSettledTurnId: null,
+              roundsDispatched: 0,
+              lastDispatchedAt: null,
+            },
+            updatedAt: maxIso(existingRow.value.updatedAt, event.payload.stoppedAt),
+          });
+          return;
+        }
+
+        case "thread.auto-nudge-dispatched": {
+          const existingRow = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (
+            Option.isNone(existingRow) ||
+            existingRow.value.autoNudge.mode === "off" ||
+            existingRow.value.autoNudge.authorityRevision !== event.payload.authorityRevision
+          ) {
+            return;
+          }
+          yield* projectionThreadRepository.upsert({
+            ...existingRow.value,
+            autoNudge: {
+              ...existingRow.value.autoNudge,
+              lastDispatchedSettledTurnId: event.payload.completedTurnId,
+              roundsDispatched: event.payload.roundsDispatched,
+              lastDispatchedAt: event.payload.dispatchedAt,
+            },
+            updatedAt: maxIso(existingRow.value.updatedAt, event.payload.dispatchedAt),
+          });
+          return;
+        }
+
+        case "thread.manual-follow-up-enqueued": {
+          const existingRow = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isNone(existingRow)) {
+            return;
+          }
+          yield* projectionThreadRepository.upsert({
+            ...existingRow.value,
+            manualFollowUps: [...existingRow.value.manualFollowUps, event.payload.item],
+            updatedAt: maxIso(existingRow.value.updatedAt, event.payload.item.enqueuedAt),
+          });
+          return;
+        }
+
+        case "thread.manual-follow-up-cancelled": {
+          const existingRow = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isNone(existingRow)) {
+            return;
+          }
+          yield* projectionThreadRepository.upsert({
+            ...existingRow.value,
+            manualFollowUps: existingRow.value.manualFollowUps.filter(
+              (item) => item.id !== event.payload.followUpId,
+            ),
+            updatedAt: maxIso(existingRow.value.updatedAt, event.payload.cancelledAt),
+          });
+          return;
+        }
+
+        case "thread.manual-follow-up-activated": {
+          const existingRow = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isNone(existingRow)) {
+            return;
+          }
+          yield* projectionThreadRepository.upsert({
+            ...existingRow.value,
+            manualFollowUps: existingRow.value.manualFollowUps.map((item) =>
+              item.id === event.payload.followUpId
+                ? {
+                    ...item,
+                    status: "handoff" as const,
+                    activatedAt: event.payload.activatedAt,
+                    activationCommandId: event.payload.activationCommandId,
+                  }
+                : item,
+            ),
+            updatedAt: maxIso(existingRow.value.updatedAt, event.payload.activatedAt),
+          });
+          return;
+        }
+
+        case "thread.manual-follow-up-accepted": {
+          const existingRow = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isNone(existingRow)) {
+            return;
+          }
+          yield* projectionThreadRepository.upsert({
+            ...existingRow.value,
+            manualFollowUps: existingRow.value.manualFollowUps.filter(
+              (item) =>
+                item.id !== event.payload.followUpId ||
+                item.activationCommandId !== event.payload.activationCommandId,
+            ),
+            updatedAt: maxIso(existingRow.value.updatedAt, event.payload.acceptedAt),
+          });
+          return;
+        }
+
+        case "thread.manual-follow-up-released": {
+          const existingRow = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isNone(existingRow)) {
+            return;
+          }
+          yield* projectionThreadRepository.upsert({
+            ...existingRow.value,
+            manualFollowUps: existingRow.value.manualFollowUps.map((item) =>
+              item.id === event.payload.followUpId &&
+              item.activationCommandId === event.payload.activationCommandId
+                ? {
+                    ...item,
+                    status: "queued" as const,
+                    activatedAt: null,
+                    activationCommandId: null,
+                  }
+                : item,
+            ),
+            updatedAt: maxIso(existingRow.value.updatedAt, event.payload.releasedAt),
           });
           return;
         }
@@ -1107,25 +1275,14 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             // Keep shell lifecycle selection on the provider-owned turn.
             return;
           }
-          const currentLatestTurn =
-            existingRow.value.latestTurnId === null
-              ? Option.none<ProjectionTurnById>()
-              : yield* projectionTurnRepository.getByTurnId({
-                  threadId: event.payload.threadId,
-                  turnId: existingRow.value.latestTurnId,
-                });
-          const candidateTurn = yield* projectionTurnRepository.getByTurnId({
-            threadId: event.payload.threadId,
-            turnId: event.payload.turnId,
-          });
-          const latestTurnId = shouldPromoteLatestTurn({
-            currentLatestTurn,
-            candidateTurn,
-            candidateTurnId: event.payload.turnId,
-            candidateObservedAt: event.payload.completedAt,
-          })
-            ? event.payload.turnId
-            : existingRow.value.latestTurnId;
+          // Diff capture is asynchronous and cannot order provider turns. An
+          // older turn's diff can finish after a newer turn starts, so it may
+          // fill an empty latest pointer or update the same turn only.
+          const latestTurnId =
+            existingRow.value.latestTurnId === null ||
+            existingRow.value.latestTurnId === event.payload.turnId
+              ? event.payload.turnId
+              : existingRow.value.latestTurnId;
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
             latestTurnId,
@@ -1447,17 +1604,9 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             createdAt: event.payload.activity.createdAt,
           });
 
-          if (event.payload.activity.turnId !== null) {
-            const existingTurn = yield* projectionTurnRepository.getByTurnId({
-              threadId: event.payload.threadId,
-              turnId: event.payload.activity.turnId,
-            });
-            if (Option.isSome(existingTurn) && isTerminalTurnState(existingTurn.value.state)) {
-              yield* projectionTurnRepository.upsertByTurnId(
-                extendCompletedTurnAt(existingTurn.value, event.payload.activity.createdAt),
-              );
-            }
-          }
+          // Activities retain their own observation time. Never move the
+          // provider's terminal boundary: Auto Nudge authority and restart
+          // replay must compare against the exact completion that was accepted.
           return;
 
         case "thread.reverted": {

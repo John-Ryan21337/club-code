@@ -529,7 +529,9 @@ const makeWsRpcLayer = (
       const resolvePromptProviderInstanceId = (
         command: Extract<
           OrchestrationCommand,
-          { readonly type: "thread.turn.start" | "thread.turn.steer" }
+          {
+            readonly type: "thread.auto-nudge.dispatch" | "thread.turn.start" | "thread.turn.steer";
+          }
         >,
       ): Effect.Effect<ProviderInstanceId | undefined> => {
         if (command.type === "thread.turn.start") {
@@ -555,7 +557,11 @@ const makeWsRpcLayer = (
 
       const refreshCodexUsageAfterPrompt = (command: OrchestrationCommand): Effect.Effect<void> =>
         Effect.gen(function* () {
-          if (command.type !== "thread.turn.start" && command.type !== "thread.turn.steer") {
+          if (
+            command.type !== "thread.auto-nudge.dispatch" &&
+            command.type !== "thread.turn.start" &&
+            command.type !== "thread.turn.steer"
+          ) {
             return;
           }
 
@@ -751,44 +757,33 @@ const makeWsRpcLayer = (
             ORCHESTRATION_WS_METHODS.dispatchCommand,
             Effect.gen(function* () {
               const normalizedCommand = yield* normalizeDispatchCommand(command);
-              const shouldStopSessionAfterArchive =
-                normalizedCommand.type === "thread.archive"
-                  ? yield* projectionSnapshotQuery
-                      .getThreadShellById(normalizedCommand.threadId)
-                      .pipe(
-                        Effect.map(
-                          Option.match({
-                            onNone: () => false,
-                            onSome: (thread) =>
-                              thread.session !== null && thread.session.status !== "stopped",
-                          }),
-                        ),
-                        Effect.catch(() => Effect.succeed(false)),
-                      )
-                  : false;
               const result = yield* dispatchNormalizedCommand(normalizedCommand);
               if (normalizedCommand.type === "thread.archive") {
-                if (shouldStopSessionAfterArchive) {
-                  yield* Effect.gen(function* () {
-                    const stopCommand = yield* normalizeDispatchCommand({
-                      type: "thread.session.stop",
-                      commandId: CommandId.make(
-                        `session-stop-for-archive:${normalizedCommand.commandId}`,
-                      ),
-                      threadId: normalizedCommand.threadId,
-                      createdAt: yield* nowIso,
-                    });
-
-                    yield* dispatchNormalizedCommand(stopCommand);
-                  }).pipe(
-                    Effect.catchCause((cause) =>
-                      Effect.logWarning("failed to stop provider session during archive", {
-                        threadId: normalizedCommand.threadId,
-                        cause,
-                      }),
+                // Always serialize an idempotent provider stop behind archive.
+                // A pre-dispatch shell check races with Auto Nudge: a turn may
+                // start after the check but before archive commits. Once
+                // archive revokes dispatch authority, this unconditional stop
+                // catches any provider work that won the queue immediately
+                // before it.
+                yield* Effect.gen(function* () {
+                  const stopCommand = yield* normalizeDispatchCommand({
+                    type: "thread.session.stop",
+                    commandId: CommandId.make(
+                      `session-stop-for-archive:${normalizedCommand.commandId}`,
                     ),
-                  );
-                }
+                    threadId: normalizedCommand.threadId,
+                    createdAt: yield* nowIso,
+                  });
+
+                  yield* dispatchNormalizedCommand(stopCommand);
+                }).pipe(
+                  Effect.catchCause((cause) =>
+                    Effect.logWarning("failed to stop provider session during archive", {
+                      threadId: normalizedCommand.threadId,
+                      cause,
+                    }),
+                  ),
+                );
               }
               return result;
             }).pipe(
@@ -814,7 +809,15 @@ const makeWsRpcLayer = (
                 }),
               ),
             ).pipe(
-              Effect.map((events) => Array.from(events)),
+              Effect.map((events) =>
+                Array.from(events).filter(
+                  // Saved Auto Nudge text belongs to exact-thread detail
+                  // state. Global replay has no thread scope, so reconnecting
+                  // shell clients must recover this config from the detail
+                  // snapshot/subscription instead of receiving every prompt.
+                  (event) => event.type !== "thread.auto-nudge-configured",
+                ),
+              ),
               Effect.flatMap(enrichOrchestrationEvents),
               Effect.mapError(
                 (cause) =>

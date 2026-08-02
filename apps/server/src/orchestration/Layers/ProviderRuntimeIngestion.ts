@@ -4,6 +4,7 @@ import {
   CommandId,
   MessageId,
   type OrchestrationEvent,
+  type OrchestrationCommand,
   type OrchestrationMessage,
   type OrchestrationProposedPlanId,
   CheckpointRef,
@@ -1776,6 +1777,10 @@ const make = Effect.gen(function* () {
       const now = event.createdAt;
       const eventTurnId = toTurnId(event.turnId);
       const activeTurnId = thread.session?.activeTurnId ?? null;
+      let deferredCompletedTurnSessionSet: Extract<
+        OrchestrationCommand,
+        { readonly type: "thread.session.set" }
+      > | null = null;
 
       if (event.type === "thread.goal.updated" || event.type === "thread.goal.cleared") {
         const goalIsActive =
@@ -2106,7 +2111,7 @@ const make = Effect.gen(function* () {
             );
           }
 
-          yield* orchestrationEngine.dispatch({
+          const sessionSetCommand = {
             type: "thread.session.set",
             commandId: providerCommandId(event, "thread-session-set"),
             threadId: thread.id,
@@ -2124,7 +2129,18 @@ const make = Effect.gen(function* () {
             },
             ...(terminalTurnRecovery ? { terminalTurnRecovery } : {}),
             createdAt: now,
-          });
+          } satisfies Extract<OrchestrationCommand, { readonly type: "thread.session.set" }>;
+
+          if (event.type === "turn.completed") {
+            // Auto Nudge authority is completion-triggered. Publish that
+            // terminal boundary only after this same runtime event has
+            // finalized buffered assistant text and its derived activities,
+            // so the renderer cannot enqueue an automated send in the middle
+            // of completion ingestion. This is event ordering, not a timer.
+            deferredCompletedTurnSessionSet = sessionSetCommand;
+          } else {
+            yield* orchestrationEngine.dispatch(sessionSetCommand);
+          }
         }
       }
 
@@ -2466,6 +2482,10 @@ const make = Effect.gen(function* () {
           createdAt: activity.createdAt,
         }),
       ).pipe(Effect.asVoid);
+
+      if (deferredCompletedTurnSessionSet !== null) {
+        yield* orchestrationEngine.dispatch(deferredCompletedTurnSessionSet);
+      }
     });
 
   const processDomainEvent = (event: RuntimeIngestionDomainEvent) =>

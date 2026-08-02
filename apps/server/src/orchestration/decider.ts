@@ -2,6 +2,15 @@ import type {
   OrchestrationCommand,
   OrchestrationEvent,
   OrchestrationReadModel,
+  OrchestrationThread,
+  ThreadAutoNudgeConfig,
+} from "@cafecode/contracts";
+import {
+  DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+  MANUAL_FOLLOW_UP_MAX_ITEMS,
+  PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
+  PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
+  THREAD_AUTO_NUDGE_MAX_AUTHORITY_REVISION,
 } from "@cafecode/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -56,6 +65,54 @@ function threadHasUnsettledTurnStart(thread: OrchestrationReadModel["threads"][n
   return false;
 }
 
+function isActiveProviderActivityKind(kind: string): boolean {
+  return (
+    kind.endsWith(".started") ||
+    kind.endsWith(".progress") ||
+    kind.endsWith(".updated") ||
+    kind.endsWith(".requested")
+  );
+}
+
+function isAutoNudgeInvalidatingProviderActivityKind(kind: string): boolean {
+  // These rows are deliberately excluded from historical work logs because
+  // they are projection/checkpoint bookkeeping rather than transcript or
+  // provider-work movement. Both can legitimately land after terminalization
+  // and must not suppress a settled completion-triggered send.
+  return kind !== "context-window.updated" && kind !== "checkpoint.captured";
+}
+
+function threadHasPostCompletionProviderActivity(
+  thread: OrchestrationReadModel["threads"][number],
+  completedTurnId: NonNullable<OrchestrationReadModel["threads"][number]["latestTurn"]>["turnId"],
+): boolean {
+  const completedAt = thread.latestTurn?.completedAt;
+  if (completedAt === null || completedAt === undefined) {
+    return false;
+  }
+
+  // The orchestration read model deliberately preserves the provider's
+  // original completion boundary while later message/activity events retain
+  // their own timestamps. That lets this atomic command gate invalidate a
+  // completion-triggered send without adding wall-clock scheduling authority.
+  const messageContinued = thread.messages.some(
+    (message) =>
+      message.turnId === completedTurnId &&
+      (message.updatedAt > completedAt || (message.updatedAt === completedAt && message.streaming)),
+  );
+  if (messageContinued) {
+    return true;
+  }
+
+  return thread.activities.some(
+    (activity) =>
+      activity.turnId === completedTurnId &&
+      isAutoNudgeInvalidatingProviderActivityKind(activity.kind) &&
+      (activity.createdAt > completedAt ||
+        (activity.createdAt === completedAt && isActiveProviderActivityKind(activity.kind))),
+  );
+}
+
 function activeTurnIdForSteer(
   thread: OrchestrationReadModel["threads"][number],
 ): NonNullable<OrchestrationReadModel["threads"][number]["latestTurn"]>["turnId"] | null {
@@ -72,6 +129,58 @@ function activeTurnIdForSteer(
     return thread.latestTurn.turnId;
   }
   return null;
+}
+
+function currentThreadAutoNudgeConfig(thread: OrchestrationThread): ThreadAutoNudgeConfig {
+  return thread.autoNudge ?? DEFAULT_THREAD_AUTO_NUDGE_CONFIG;
+}
+
+function nextAutoNudgeAuthorityRevision(input: {
+  readonly command: OrchestrationCommand;
+  readonly current: ThreadAutoNudgeConfig;
+}): Effect.Effect<number, OrchestrationCommandInvariantError> {
+  if (input.current.authorityRevision >= THREAD_AUTO_NUDGE_MAX_AUTHORITY_REVISION) {
+    return Effect.fail(
+      new OrchestrationCommandInvariantError({
+        commandType: input.command.type,
+        detail: "Auto Nudge authority revision is exhausted and cannot be advanced safely.",
+      }),
+    );
+  }
+  return Effect.succeed(input.current.authorityRevision + 1);
+}
+
+function revokeAutoNudgeAuthorityRevision(current: ThreadAutoNudgeConfig): number {
+  // Every distinct Stop is a revocation barrier, even when the projection is
+  // currently Off. A configure command formed against that Off revision can
+  // still be in flight from another renderer and arrive after Stop; keeping
+  // the revision stable would let it re-arm paid work. Command-receipt
+  // idempotency handles retries of the same Stop command id.
+  return Math.min(current.authorityRevision + 1, THREAD_AUTO_NUDGE_MAX_AUTHORITY_REVISION);
+}
+
+function rejectAutoNudgeCommand(
+  command: OrchestrationCommand,
+  detail: string,
+): Effect.Effect<never, OrchestrationCommandInvariantError> {
+  return Effect.fail(
+    new OrchestrationCommandInvariantError({
+      commandType: command.type,
+      detail,
+    }),
+  );
+}
+
+function rejectManualFollowUpCommand(
+  command: OrchestrationCommand,
+  detail: string,
+): Effect.Effect<never, OrchestrationCommandInvariantError> {
+  return Effect.fail(
+    new OrchestrationCommandInvariantError({
+      commandType: command.type,
+      detail,
+    }),
+  );
 }
 
 const decideCommandSequence = Effect.fn("decideCommandSequence")(function* ({
@@ -315,13 +424,29 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.delete": {
-      yield* requireThread({
+      const targetThread = yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
       });
       const occurredAt = yield* nowIso;
-      return {
+      const current = currentThreadAutoNudgeConfig(targetThread);
+      const authorityRevision = revokeAutoNudgeAuthorityRevision(current);
+      const stopEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.auto-nudge-stopped",
+        payload: {
+          threadId: command.threadId,
+          authorityRevision,
+          stoppedAt: occurredAt,
+        },
+      };
+      const deletedEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...withEventBase({
           aggregateKind: "thread",
           aggregateId: command.threadId,
@@ -334,6 +459,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           deletedAt: occurredAt,
         },
       };
+      return [stopEvent, deletedEvent];
     }
 
     case "thread.restore": {
@@ -365,13 +491,29 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.archive": {
-      yield* requireThreadNotArchived({
+      const targetThread = yield* requireThreadNotArchived({
         readModel,
         command,
         threadId: command.threadId,
       });
       const occurredAt = yield* nowIso;
-      return {
+      const current = currentThreadAutoNudgeConfig(targetThread);
+      const authorityRevision = revokeAutoNudgeAuthorityRevision(current);
+      const stopEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.auto-nudge-stopped",
+        payload: {
+          threadId: command.threadId,
+          authorityRevision,
+          stoppedAt: occurredAt,
+        },
+      };
+      const archivedEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...withEventBase({
           aggregateKind: "thread",
           aggregateId: command.threadId,
@@ -385,6 +527,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           updatedAt: occurredAt,
         },
       };
+      return [stopEvent, archivedEvent];
     }
 
     case "thread.unarchive": {
@@ -504,12 +647,690 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
-    case "thread.turn.start": {
+    case "thread.auto-nudge.configure": {
+      const targetThread = yield* requireThreadNotArchived({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      if (targetThread.deletedAt !== null) {
+        return yield* rejectAutoNudgeCommand(
+          command,
+          `Thread '${command.threadId}' is in the Recycle Bin and cannot enable Auto Nudge.`,
+        );
+      }
+
+      const current = currentThreadAutoNudgeConfig(targetThread);
+      if (command.expectedAuthorityRevision !== current.authorityRevision) {
+        return yield* rejectAutoNudgeCommand(
+          command,
+          `Auto Nudge authority revision for thread '${command.threadId}' is stale.`,
+        );
+      }
+      const authorityRevision = yield* nextAutoNudgeAuthorityRevision({
+        command,
+        current,
+      });
+      const configuredAt = yield* nowIso;
+      const baselineSettledTurnId =
+        targetThread.latestTurn?.state === "completed" &&
+        targetThread.latestTurn.completedAt !== null
+          ? targetThread.latestTurn.turnId
+          : null;
+      const config: ThreadAutoNudgeConfig =
+        command.mode === "off"
+          ? {
+              authorityRevision,
+              mode: "off",
+              prompt: command.prompt,
+              backgroundContinuation: false,
+              maxRounds: command.maxRounds,
+              armedAt: null,
+              baselineSettledTurnId: null,
+              lastDispatchedSettledTurnId: null,
+              roundsDispatched: 0,
+              lastDispatchedAt: null,
+            }
+          : {
+              authorityRevision,
+              mode: command.mode,
+              prompt: command.prompt,
+              backgroundContinuation: command.backgroundContinuation,
+              maxRounds: command.maxRounds,
+              armedAt: configuredAt,
+              baselineSettledTurnId,
+              lastDispatchedSettledTurnId: null,
+              roundsDispatched: 0,
+              lastDispatchedAt: null,
+            };
+
+      return {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: configuredAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.auto-nudge-configured",
+        payload: {
+          threadId: command.threadId,
+          config,
+        },
+      };
+    }
+
+    case "thread.auto-nudge.stop": {
       const targetThread = yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
       });
+      const current = currentThreadAutoNudgeConfig(targetThread);
+      const authorityRevision = revokeAutoNudgeAuthorityRevision(current);
+      const stoppedAt = yield* nowIso;
+
+      return {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: stoppedAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.auto-nudge-stopped",
+        payload: {
+          threadId: command.threadId,
+          authorityRevision,
+          stoppedAt,
+        },
+      };
+    }
+
+    case "thread.auto-nudge.dispatch": {
+      const targetThread = yield* requireThreadNotArchived({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      if (targetThread.deletedAt !== null) {
+        return yield* rejectAutoNudgeCommand(
+          command,
+          `Thread '${command.threadId}' is in the Recycle Bin and cannot dispatch Auto Nudge.`,
+        );
+      }
+      if (targetThread.manualFollowUps.length > 0) {
+        return yield* rejectAutoNudgeCommand(
+          command,
+          `Thread '${command.threadId}' has accepted manual follow-up intent or an unresolved provider handoff. Manual operator work has priority over Auto Nudge.`,
+        );
+      }
+
+      const config = currentThreadAutoNudgeConfig(targetThread);
+      if (config.mode === "off") {
+        return yield* rejectAutoNudgeCommand(
+          command,
+          `Auto Nudge is off for thread '${command.threadId}'.`,
+        );
+      }
+      if (command.expectedAuthorityRevision !== config.authorityRevision) {
+        return yield* rejectAutoNudgeCommand(
+          command,
+          `Auto Nudge authority revision for thread '${command.threadId}' is stale.`,
+        );
+      }
+      if (targetThread.messages.some((message) => message.id === command.messageId)) {
+        return yield* rejectAutoNudgeCommand(
+          command,
+          `Auto Nudge message '${command.messageId}' already exists on thread '${command.threadId}'.`,
+        );
+      }
+      if (command.dispatchSource === "background" && !config.backgroundContinuation) {
+        return yield* rejectAutoNudgeCommand(
+          command,
+          `Background Auto Nudge is not enabled for thread '${command.threadId}'.`,
+        );
+      }
+      if (
+        targetThread.latestTurn === null ||
+        targetThread.latestTurn.state !== "completed" ||
+        targetThread.latestTurn.completedAt === null ||
+        targetThread.latestTurn.turnId !== command.completedTurnId
+      ) {
+        return yield* rejectAutoNudgeCommand(
+          command,
+          `Auto Nudge dispatch for thread '${command.threadId}' does not target its exact current completed turn.`,
+        );
+      }
+      if (threadHasPostCompletionProviderActivity(targetThread, command.completedTurnId)) {
+        return yield* rejectAutoNudgeCommand(
+          command,
+          `Auto Nudge dispatch for thread '${command.threadId}' was invalidated because provider text or activity continued after its completed-turn boundary.`,
+        );
+      }
+      if (config.baselineSettledTurnId === command.completedTurnId) {
+        return yield* rejectAutoNudgeCommand(
+          command,
+          `Auto Nudge dispatch for thread '${command.threadId}' targets the configuration baseline turn.`,
+        );
+      }
+      if (config.lastDispatchedSettledTurnId === command.completedTurnId) {
+        return yield* rejectAutoNudgeCommand(
+          command,
+          `Auto Nudge already dispatched for completed turn '${command.completedTurnId}'.`,
+        );
+      }
+      if (threadHasUnsettledTurnStart(targetThread)) {
+        return yield* rejectAutoNudgeCommand(
+          command,
+          `Thread '${command.threadId}' has pending or running provider work.`,
+        );
+      }
+      if (targetThread.session?.status !== "ready") {
+        return yield* rejectAutoNudgeCommand(
+          command,
+          `Thread '${command.threadId}' does not have a ready provider session for Auto Nudge.`,
+        );
+      }
+      if (config.roundsDispatched >= config.maxRounds) {
+        return yield* rejectAutoNudgeCommand(
+          command,
+          `Auto Nudge round cap is exhausted for thread '${command.threadId}'.`,
+        );
+      }
+
+      const dispatchedAt = yield* nowIso;
+      const roundsDispatched = config.roundsDispatched + 1;
+      const dispatchEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: dispatchedAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.auto-nudge-dispatched",
+        payload: {
+          threadId: command.threadId,
+          authorityRevision: config.authorityRevision,
+          completedTurnId: command.completedTurnId,
+          dispatchSource: command.dispatchSource,
+          messageId: command.messageId,
+          roundsDispatched,
+          dispatchedAt,
+        },
+      };
+      const userMessageEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: dispatchedAt,
+          commandId: command.commandId,
+        }),
+        causationEventId: dispatchEvent.eventId,
+        type: "thread.message-sent",
+        payload: {
+          threadId: command.threadId,
+          messageId: command.messageId,
+          role: "user",
+          text: config.prompt,
+          attachments: [],
+          turnId: null,
+          streaming: false,
+          createdAt: dispatchedAt,
+          updatedAt: dispatchedAt,
+        },
+      };
+      const turnStartRequestedEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: dispatchedAt,
+          commandId: command.commandId,
+        }),
+        causationEventId: userMessageEvent.eventId,
+        type: "thread.turn-start-requested",
+        payload: {
+          threadId: command.threadId,
+          messageId: command.messageId,
+          modelSelection: targetThread.modelSelection,
+          runtimeMode: targetThread.runtimeMode,
+          interactionMode: targetThread.interactionMode,
+          dispatchSource: "auto-nudge",
+          autoNudgeAuthority: {
+            authorityRevision: config.authorityRevision,
+            completedTurnId: command.completedTurnId,
+            completedAt: targetThread.latestTurn.completedAt,
+            dispatchSource: command.dispatchSource,
+          },
+          createdAt: dispatchedAt,
+        },
+      };
+
+      return [dispatchEvent, userMessageEvent, turnStartRequestedEvent];
+    }
+
+    case "thread.manual-follow-up.enqueue": {
+      const targetThread = yield* requireThreadNotArchived({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      if (targetThread.deletedAt !== null) {
+        return yield* rejectManualFollowUpCommand(
+          command,
+          `Thread '${command.threadId}' is in the Recycle Bin and cannot accept a manual follow-up.`,
+        );
+      }
+      if (targetThread.manualFollowUps.length >= MANUAL_FOLLOW_UP_MAX_ITEMS) {
+        return yield* rejectManualFollowUpCommand(
+          command,
+          `Thread '${command.threadId}' already has the maximum ${MANUAL_FOLLOW_UP_MAX_ITEMS} manual follow-ups.`,
+        );
+      }
+      if (command.message.text.length > PROVIDER_SEND_TURN_MAX_INPUT_CHARS) {
+        return yield* rejectManualFollowUpCommand(
+          command,
+          `Manual follow-up input exceeds the ${PROVIDER_SEND_TURN_MAX_INPUT_CHARS} character limit.`,
+        );
+      }
+      if (command.message.attachments.length > PROVIDER_SEND_TURN_MAX_ATTACHMENTS) {
+        return yield* rejectManualFollowUpCommand(
+          command,
+          `Manual follow-up exceeds the ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} attachment limit.`,
+        );
+      }
+      if (command.message.text.trim().length === 0 && command.message.attachments.length === 0) {
+        return yield* rejectManualFollowUpCommand(
+          command,
+          "A manual follow-up requires input text or at least one attachment.",
+        );
+      }
+      if (targetThread.manualFollowUps.some((item) => item.id === command.followUpId)) {
+        return yield* rejectManualFollowUpCommand(
+          command,
+          `Manual follow-up '${command.followUpId}' already exists on thread '${command.threadId}'.`,
+        );
+      }
+      if (
+        targetThread.messages.some((message) => message.id === command.message.messageId) ||
+        targetThread.manualFollowUps.some(
+          (item) => item.message.messageId === command.message.messageId,
+        )
+      ) {
+        return yield* rejectManualFollowUpCommand(
+          command,
+          `Manual follow-up message '${command.message.messageId}' already exists on thread '${command.threadId}'.`,
+        );
+      }
+
+      const enqueuedEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.manual-follow-up-enqueued",
+        payload: {
+          threadId: command.threadId,
+          item: {
+            id: command.followUpId,
+            message: command.message,
+            dispatch: command.dispatch,
+            status: "queued",
+            enqueuedAt: command.createdAt,
+            activatedAt: null,
+            activationCommandId: null,
+          },
+        },
+      };
+      const countChangedEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        causationEventId: enqueuedEvent.eventId,
+        type: "thread.manual-follow-up-count-changed",
+        payload: {
+          threadId: command.threadId,
+          count: targetThread.manualFollowUps.length + 1,
+          updatedAt: command.createdAt,
+        },
+      };
+      return [enqueuedEvent, countChangedEvent];
+    }
+
+    case "thread.manual-follow-up.cancel": {
+      const targetThread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const item = targetThread.manualFollowUps.find((entry) => entry.id === command.followUpId);
+      if (item === undefined) {
+        return yield* rejectManualFollowUpCommand(
+          command,
+          `Manual follow-up '${command.followUpId}' does not exist on thread '${command.threadId}'.`,
+        );
+      }
+      if (item.status !== "queued") {
+        return yield* rejectManualFollowUpCommand(
+          command,
+          `Manual follow-up '${command.followUpId}' already has an unresolved provider handoff and cannot be cancelled.`,
+        );
+      }
+      const cancelledEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.manual-follow-up-cancelled",
+        payload: {
+          threadId: command.threadId,
+          followUpId: command.followUpId,
+          cancelledAt: command.createdAt,
+        },
+      };
+      const countChangedEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        causationEventId: cancelledEvent.eventId,
+        type: "thread.manual-follow-up-count-changed",
+        payload: {
+          threadId: command.threadId,
+          count: targetThread.manualFollowUps.length - 1,
+          updatedAt: command.createdAt,
+        },
+      };
+      return [cancelledEvent, countChangedEvent];
+    }
+
+    case "thread.manual-follow-up.activate": {
+      const targetThread = yield* requireThreadNotArchived({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      if (targetThread.deletedAt !== null) {
+        return yield* rejectManualFollowUpCommand(
+          command,
+          `Thread '${command.threadId}' is in the Recycle Bin and cannot activate a manual follow-up.`,
+        );
+      }
+      const head = targetThread.manualFollowUps[0];
+      if (head === undefined) {
+        return yield* rejectManualFollowUpCommand(
+          command,
+          `Thread '${command.threadId}' has no manual follow-up to activate.`,
+        );
+      }
+      if (head.id !== command.followUpId) {
+        return yield* rejectManualFollowUpCommand(
+          command,
+          `Manual follow-up '${command.followUpId}' is not the FIFO head for thread '${command.threadId}'.`,
+        );
+      }
+      if (head.status !== "queued") {
+        return yield* rejectManualFollowUpCommand(
+          command,
+          `Manual follow-up '${command.followUpId}' already has an unresolved provider handoff.`,
+        );
+      }
+      const existingMessage = targetThread.messages.find(
+        (message) => message.id === head.message.messageId,
+      );
+      if (
+        existingMessage !== undefined &&
+        (existingMessage.role !== "user" ||
+          existingMessage.text !== head.message.text ||
+          JSON.stringify(existingMessage.attachments ?? []) !==
+            JSON.stringify(head.message.attachments))
+      ) {
+        return yield* rejectManualFollowUpCommand(
+          command,
+          `Manual follow-up message '${head.message.messageId}' conflicts with existing thread content.`,
+        );
+      }
+
+      const sourceProposedPlan = head.dispatch.sourceProposedPlan;
+      const sourceThread = sourceProposedPlan
+        ? yield* requireThread({
+            readModel,
+            command,
+            threadId: sourceProposedPlan.threadId,
+          })
+        : null;
+      const sourcePlan =
+        sourceProposedPlan && sourceThread
+          ? sourceThread.proposedPlans.find((entry) => entry.id === sourceProposedPlan.planId)
+          : null;
+      if (sourceProposedPlan && !sourcePlan) {
+        return yield* rejectManualFollowUpCommand(
+          command,
+          `Proposed plan '${sourceProposedPlan.planId}' does not exist on thread '${sourceProposedPlan.threadId}'.`,
+        );
+      }
+      if (sourceThread && sourceThread.projectId !== targetThread.projectId) {
+        return yield* rejectManualFollowUpCommand(
+          command,
+          `Proposed plan '${sourceProposedPlan?.planId}' belongs to thread '${sourceThread.id}' in a different project.`,
+        );
+      }
+
+      const unsettled = threadHasUnsettledTurnStart(targetThread);
+      if (unsettled && command.activationMode === "automatic-after-settlement") {
+        return yield* rejectManualFollowUpCommand(
+          command,
+          `Thread '${command.threadId}' became active before automatic manual follow-up activation. The queued follow-up remains pending until the turn settles or the operator explicitly chooses Steer.`,
+        );
+      }
+      const activeTurnId = unsettled ? activeTurnIdForSteer(targetThread) : null;
+      if (unsettled && activeTurnId === null) {
+        return yield* rejectManualFollowUpCommand(
+          command,
+          `Thread '${command.threadId}' has a provider start in progress that is not yet safely steerable.`,
+        );
+      }
+
+      const activatedEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.manual-follow-up-activated",
+        payload: {
+          threadId: command.threadId,
+          followUpId: command.followUpId,
+          messageId: head.message.messageId,
+          activationCommandId: command.commandId,
+          activatedAt: command.createdAt,
+        },
+      };
+      const userMessageEvent: Omit<OrchestrationEvent, "sequence"> | null =
+        existingMessage === undefined
+          ? {
+              ...withEventBase({
+                aggregateKind: "thread",
+                aggregateId: command.threadId,
+                occurredAt: command.createdAt,
+                commandId: command.commandId,
+              }),
+              causationEventId: activatedEvent.eventId,
+              type: "thread.message-sent",
+              payload: {
+                threadId: command.threadId,
+                messageId: head.message.messageId,
+                role: "user",
+                text: head.message.text,
+                attachments: head.message.attachments,
+                turnId: activeTurnId,
+                streaming: false,
+                createdAt: command.createdAt,
+                updatedAt: command.createdAt,
+              },
+            }
+          : null;
+      const providerRequestedEvent: Omit<OrchestrationEvent, "sequence"> =
+        activeTurnId === null
+          ? {
+              ...withEventBase({
+                aggregateKind: "thread",
+                aggregateId: command.threadId,
+                occurredAt: command.createdAt,
+                commandId: command.commandId,
+              }),
+              causationEventId: userMessageEvent?.eventId ?? activatedEvent.eventId,
+              type: "thread.turn-start-requested",
+              payload: {
+                threadId: command.threadId,
+                messageId: head.message.messageId,
+                modelSelection: head.dispatch.modelSelection,
+                titleSeed: head.dispatch.titleSeed,
+                runtimeMode: head.dispatch.runtimeMode,
+                interactionMode: head.dispatch.interactionMode,
+                ...(sourceProposedPlan !== undefined ? { sourceProposedPlan } : {}),
+                dispatchSource: "user",
+                manualFollowUpId: head.id,
+                manualFollowUpActivationCommandId: command.commandId,
+                createdAt: command.createdAt,
+              },
+            }
+          : {
+              ...withEventBase({
+                aggregateKind: "thread",
+                aggregateId: command.threadId,
+                occurredAt: command.createdAt,
+                commandId: command.commandId,
+              }),
+              causationEventId: userMessageEvent?.eventId ?? activatedEvent.eventId,
+              type: "thread.turn-steer-requested",
+              payload: {
+                threadId: command.threadId,
+                messageId: head.message.messageId,
+                dispatchSource: "user",
+                manualFollowUpId: head.id,
+                manualFollowUpActivationCommandId: command.commandId,
+                createdAt: command.createdAt,
+              },
+            };
+
+      return userMessageEvent === null
+        ? [activatedEvent, providerRequestedEvent]
+        : [activatedEvent, userMessageEvent, providerRequestedEvent];
+    }
+
+    case "thread.manual-follow-up.accept": {
+      const targetThread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const head = targetThread.manualFollowUps[0];
+      if (
+        head === undefined ||
+        head.id !== command.followUpId ||
+        head.status !== "handoff" ||
+        head.activationCommandId !== command.activationCommandId
+      ) {
+        return yield* rejectManualFollowUpCommand(
+          command,
+          `Manual follow-up '${command.followUpId}' does not have the matching active provider handoff on thread '${command.threadId}'.`,
+        );
+      }
+      const acceptedEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.acceptedAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.manual-follow-up-accepted",
+        payload: {
+          threadId: command.threadId,
+          followUpId: command.followUpId,
+          activationCommandId: command.activationCommandId,
+          acceptedAt: command.acceptedAt,
+        },
+      };
+      const countChangedEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.acceptedAt,
+          commandId: command.commandId,
+        }),
+        causationEventId: acceptedEvent.eventId,
+        type: "thread.manual-follow-up-count-changed",
+        payload: {
+          threadId: command.threadId,
+          count: targetThread.manualFollowUps.length - 1,
+          updatedAt: command.acceptedAt,
+        },
+      };
+      return [acceptedEvent, countChangedEvent];
+    }
+
+    case "thread.manual-follow-up.release": {
+      const targetThread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const head = targetThread.manualFollowUps[0];
+      if (
+        head === undefined ||
+        head.id !== command.followUpId ||
+        head.status !== "handoff" ||
+        head.activationCommandId !== command.activationCommandId
+      ) {
+        return yield* rejectManualFollowUpCommand(
+          command,
+          `Manual follow-up '${command.followUpId}' does not have the matching active provider handoff on thread '${command.threadId}'.`,
+        );
+      }
+      return {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.releasedAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.manual-follow-up-released",
+        payload: {
+          threadId: command.threadId,
+          followUpId: command.followUpId,
+          activationCommandId: command.activationCommandId,
+          releasedAt: command.releasedAt,
+        },
+      };
+    }
+
+    case "thread.turn.start": {
+      if (command.dispatchSource === "auto-nudge") {
+        return yield* rejectAutoNudgeCommand(
+          command,
+          "Automated turns must use exact-thread Auto Nudge dispatch authority.",
+        );
+      }
+      const targetThread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      if (targetThread.manualFollowUps.length > 0) {
+        return yield* rejectManualFollowUpCommand(
+          command,
+          `Thread '${command.threadId}' has queued manual follow-ups. Activate the FIFO head instead of bypassing operator intent.`,
+        );
+      }
       if (threadHasUnsettledTurnStart(targetThread)) {
         const activeTurnId = activeTurnIdForSteer(targetThread);
         if (activeTurnId !== null) {
@@ -545,6 +1366,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             payload: {
               threadId: command.threadId,
               messageId: command.message.messageId,
+              ...(command.dispatchSource !== undefined
+                ? { dispatchSource: command.dispatchSource }
+                : {}),
               createdAt: command.createdAt,
             },
           };
@@ -618,6 +1442,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           runtimeMode: targetThread.runtimeMode,
           interactionMode: targetThread.interactionMode,
           ...(sourceProposedPlan !== undefined ? { sourceProposedPlan } : {}),
+          ...(command.dispatchSource !== undefined
+            ? { dispatchSource: command.dispatchSource }
+            : {}),
           createdAt: command.createdAt,
         },
       };
@@ -655,11 +1482,23 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.turn.steer": {
+      if (command.dispatchSource === "auto-nudge") {
+        return yield* rejectAutoNudgeCommand(
+          command,
+          "Automated turns must use exact-thread Auto Nudge dispatch authority.",
+        );
+      }
       const targetThread = yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
       });
+      if (targetThread.manualFollowUps.length > 0) {
+        return yield* rejectManualFollowUpCommand(
+          command,
+          `Thread '${command.threadId}' has queued manual follow-ups. Activate the FIFO head instead of bypassing operator intent.`,
+        );
+      }
       const activeTurnId =
         targetThread.session?.status === "running" ? targetThread.session.activeTurnId : null;
       const userMessageEvent: Omit<OrchestrationEvent, "sequence"> = {
@@ -698,6 +1537,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             modelSelection: targetThread.modelSelection,
             runtimeMode: targetThread.runtimeMode,
             interactionMode: targetThread.interactionMode,
+            ...(command.dispatchSource !== undefined
+              ? { dispatchSource: command.dispatchSource }
+              : {}),
             createdAt: command.createdAt,
           },
         };
@@ -715,6 +1557,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           threadId: command.threadId,
           messageId: command.message.messageId,
+          ...(command.dispatchSource !== undefined
+            ? { dispatchSource: command.dispatchSource }
+            : {}),
           createdAt: command.createdAt,
         },
       };
@@ -774,12 +1619,29 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.checkpoint.revert": {
-      yield* requireThread({
+      const targetThread = yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
       });
-      return {
+      const stoppedAt = yield* nowIso;
+      const stopEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: stoppedAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.auto-nudge-stopped",
+        payload: {
+          threadId: command.threadId,
+          authorityRevision: revokeAutoNudgeAuthorityRevision(
+            currentThreadAutoNudgeConfig(targetThread),
+          ),
+          stoppedAt,
+        },
+      };
+      const revertEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...withEventBase({
           aggregateKind: "thread",
           aggregateId: command.threadId,
@@ -793,27 +1655,47 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           createdAt: command.createdAt,
         },
       };
+      return [stopEvent, revertEvent];
     }
 
     case "thread.session.stop": {
-      yield* requireThread({
+      const targetThread = yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
       });
-      return {
+      const stoppedAt = yield* nowIso;
+      const autoNudgeStopEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: stoppedAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.auto-nudge-stopped",
+        payload: {
+          threadId: command.threadId,
+          authorityRevision: revokeAutoNudgeAuthorityRevision(
+            currentThreadAutoNudgeConfig(targetThread),
+          ),
+          stoppedAt,
+        },
+      };
+      const sessionStopEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...withEventBase({
           aggregateKind: "thread",
           aggregateId: command.threadId,
           occurredAt: command.createdAt,
           commandId: command.commandId,
         }),
+        causationEventId: autoNudgeStopEvent.eventId,
         type: "thread.session-stop-requested",
         payload: {
           threadId: command.threadId,
           createdAt: command.createdAt,
         },
       };
+      return [autoNudgeStopEvent, sessionStopEvent];
     }
 
     case "thread.goal.set": {
@@ -1101,12 +1983,29 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.revert.complete": {
-      yield* requireThread({
+      const targetThread = yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
       });
-      return {
+      const stoppedAt = yield* nowIso;
+      const stopEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: stoppedAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.auto-nudge-stopped",
+        payload: {
+          threadId: command.threadId,
+          authorityRevision: revokeAutoNudgeAuthorityRevision(
+            currentThreadAutoNudgeConfig(targetThread),
+          ),
+          stoppedAt,
+        },
+      };
+      const revertedEvent: Omit<OrchestrationEvent, "sequence"> = {
         ...withEventBase({
           aggregateKind: "thread",
           aggregateId: command.threadId,
@@ -1119,6 +2018,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           turnCount: command.turnCount,
         },
       };
+      return [stopEvent, revertedEvent];
     }
 
     case "thread.activity.append": {
