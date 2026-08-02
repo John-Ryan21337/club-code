@@ -4396,21 +4396,21 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
             ...baseThread,
             latestTurn: {
               turnId: completedTurnId,
-              state: "completed" as const,
+              state: "running" as const,
               requestedAt: isoAt(1_000),
               startedAt: isoAt(1_001),
-              completedAt: isoAt(1_010),
+              completedAt: null,
               assistantMessageId: null,
             },
             session: baseThread.session
               ? {
                   ...baseThread.session,
-                  status: "ready" as const,
-                  activeTurnId: null,
-                  updatedAt: isoAt(1_010),
+                  status: "running" as const,
+                  activeTurnId: completedTurnId,
+                  updatedAt: isoAt(1_001),
                 }
               : null,
-            updatedAt: isoAt(1_010),
+            updatedAt: isoAt(1_001),
           },
         ],
       };
@@ -4434,6 +4434,69 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
       });
 
       try {
+        const runningThread = snapshot.threads[0]!;
+        const completedThread: OrchestrationReadModel["threads"][number] = {
+          ...runningThread,
+          latestTurn: {
+            ...runningThread.latestTurn!,
+            state: "completed",
+            completedAt: isoAt(1_010),
+          },
+          session: runningThread.session
+            ? {
+                ...runningThread.session,
+                status: "ready",
+                activeTurnId: null,
+                updatedAt: isoAt(1_010),
+              }
+            : null,
+          updatedAt: isoAt(1_010),
+        };
+        const transientlyBlockedThread: OrchestrationReadModel["threads"][number] = {
+          ...completedThread,
+          session: completedThread.session
+            ? {
+                ...completedThread.session,
+                lastError: "Transient projection error",
+              }
+            : null,
+        };
+        fixture.snapshot = {
+          ...snapshot,
+          snapshotSequence: snapshot.snapshotSequence + 1,
+          threads: [transientlyBlockedThread],
+          updatedAt: isoAt(1_010),
+        };
+        rpcHarness.emitStreamValue(ORCHESTRATION_WS_METHODS.subscribeThread, {
+          kind: "snapshot",
+          snapshot: {
+            snapshotSequence: fixture.snapshot.snapshotSequence,
+            thread: transientlyBlockedThread,
+          },
+        });
+        await waitForLayout();
+        expect(
+          wsRequests.some(
+            (request) =>
+              request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+              request.type === "thread.auto-nudge.dispatch",
+          ),
+        ).toBe(false);
+
+        fixture.snapshot = {
+          ...fixture.snapshot,
+          snapshotSequence: fixture.snapshot.snapshotSequence + 1,
+          threads: [completedThread],
+          updatedAt: isoAt(1_011),
+        };
+        rpcHarness.emitStreamValue(ORCHESTRATION_WS_METHODS.subscribeThread, {
+          kind: "snapshot",
+          snapshot: {
+            snapshotSequence: fixture.snapshot.snapshotSequence,
+            thread: completedThread,
+          },
+        });
+
         let dispatchRequest: NormalizedWsRpcRequestBody | undefined;
         await vi.waitFor(
           () => {

@@ -3,6 +3,7 @@ import {
   AUTO_NUDGE_PROMPTS,
   AutoNudgeTurnLedger,
   autoNudgePromptForMode,
+  autoNudgeTerminalTurnKey,
   canDispatchAutoNudge,
   canScheduleAutoNudge,
   consumeAutoNudgeTerminalForManualActivity,
@@ -62,6 +63,23 @@ describe("auto nudger safety gates", () => {
     ledger.mark(eligible.terminalTurnKey);
     expect(ledger.has(eligible.terminalTurnKey)).toBe(true);
     expect(ledger.has("environment:thread:new-turn:2026-07-23T00:01:00.000Z")).toBe(false);
+  });
+
+  it("shares one collision-safe terminal identity across foreground and background lanes", () => {
+    const key = autoNudgeTerminalTurnKey({
+      environmentId: "environment:a",
+      threadId: "thread:b",
+      completedTurnId: "turn:c",
+    });
+
+    expect(key).toBe('["environment:a","thread:b","turn:c"]');
+    expect(key).not.toBe(
+      autoNudgeTerminalTurnKey({
+        environmentId: "environment",
+        threadId: "a:thread",
+        completedTurnId: "b:turn:c",
+      }),
+    );
   });
 
   it("bounds observed terminal memory and can forget an observation", () => {
