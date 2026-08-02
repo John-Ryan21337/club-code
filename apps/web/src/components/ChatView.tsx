@@ -221,6 +221,7 @@ import {
 } from "./ChatView.logic";
 import {
   type AutoNudgeMode,
+  autoNudgeTerminalTurnKey as buildAutoNudgeTerminalTurnKey,
   canDispatchAutoNudge,
   canScheduleAutoNudge,
   consumeAutoNudgeTerminalForManualActivity,
@@ -6133,9 +6134,23 @@ export default function ChatView(props: ChatViewProps) {
       return;
     }
     if (!hasSendableContent) return;
+    const isFirstMessage = !isServerThread || activeThread.messages.length === 0;
+    if (
+      isServerThread &&
+      !isFirstMessage &&
+      activeAutoNudgeConfig !== null &&
+      activeAutoNudgeConfig.mode !== "off"
+    ) {
+      // Established-thread operator sends enter through the prompt-free
+      // reservation barrier even while the thread looks idle. This gives
+      // manual intent authoritative FIFO priority before attachment encoding
+      // or an Auto Nudge dispatch can consume the same completion.
+      pinTimelineToEndForLocalMessage();
+      enqueueFollowUpSnapshot(snapshot);
+      return;
+    }
     if (!activeProject) return;
     const threadIdForSend = activeThread.id;
-    const isFirstMessage = !isServerThread || activeThread.messages.length === 0;
     const baseBranchForWorktree =
       isFirstMessage && sendEnvMode === "worktree" && !activeThread.worktreePath
         ? activeThreadBranch
@@ -6334,14 +6349,26 @@ export default function ChatView(props: ChatViewProps) {
     }
   };
 
-  const autoNudgeCompletedTurnId =
+  const autoNudgeObservedCompletedTurnId =
     isServerThread &&
     activeThread &&
     activeLatestTurn?.state === "completed" &&
-    activeLatestTurn.completedAt &&
-    latestTurnSettled &&
-    activeThread.session?.status === "ready"
+    activeLatestTurn.completedAt
       ? activeLatestTurn.turnId
+      : null;
+  const autoNudgeObservedTerminalTurnKey =
+    autoNudgeContextKey !== null && activeThread && autoNudgeObservedCompletedTurnId !== null
+      ? buildAutoNudgeTerminalTurnKey({
+          environmentId: activeThread.environmentId,
+          threadId: activeThread.id,
+          completedTurnId: autoNudgeObservedCompletedTurnId,
+        })
+      : null;
+  const autoNudgeCompletedTurnId =
+    autoNudgeObservedCompletedTurnId !== null &&
+    latestTurnSettled &&
+    activeThread?.session?.status === "ready"
+      ? autoNudgeObservedCompletedTurnId
       : null;
   const autoNudgeConfigAccountsForCompletedTurn =
     autoNudgeCompletedTurnId !== null &&
@@ -6356,9 +6383,11 @@ export default function ChatView(props: ChatViewProps) {
     activeAutoNudgeConfig.roundsDispatched < activeAutoNudgeConfig.maxRounds &&
     !activeAutoNudgeConfig.backgroundContinuation &&
     !autoNudgeConfigAccountsForCompletedTurn
-      ? `${autoNudgeContextKey}:${autoNudgeCompletedTurnId}:${activeAutoNudgeConfig.authorityRevision}`
+      ? autoNudgeObservedTerminalTurnKey
       : null;
-  autoNudgeTerminalTurnKeyRef.current = autoNudgeTerminalTurnKey;
+  // Manual sends consume the shared terminal identity even while background
+  // continuation owns dispatch or the final ready projection is still landing.
+  autoNudgeTerminalTurnKeyRef.current = autoNudgeObservedTerminalTurnKey;
   const autoNudgeHasPendingWork =
     isWorking ||
     isComposerConnecting ||
@@ -6418,11 +6447,16 @@ export default function ChatView(props: ChatViewProps) {
     readonly contextKey: string;
     readonly terminalTurnKey: string | null;
   } | null>(null);
+  const pendingAutoNudgeCompletionRef = useRef<{
+    readonly contextKey: string;
+    readonly terminalTurnKey: string;
+  } | null>(null);
 
   useEffect(() => {
     const terminalTurnKey = autoNudgeTerminalTurnKey;
     if (autoNudgeContextKey === null) {
       previousAutoNudgeCompletionRef.current = null;
+      pendingAutoNudgeCompletionRef.current = null;
       return;
     }
     const previousCompletion = previousAutoNudgeCompletionRef.current;
@@ -6430,15 +6464,33 @@ export default function ChatView(props: ChatViewProps) {
       contextKey: autoNudgeContextKey,
       terminalTurnKey,
     };
+    if (previousCompletion === null || previousCompletion.contextKey !== autoNudgeContextKey) {
+      pendingAutoNudgeCompletionRef.current = null;
+      return;
+    }
+    if (previousCompletion.terminalTurnKey !== terminalTurnKey) {
+      pendingAutoNudgeCompletionRef.current =
+        terminalTurnKey === null ? null : { contextKey: autoNudgeContextKey, terminalTurnKey };
+    }
+    const pendingCompletion = pendingAutoNudgeCompletionRef.current;
     if (
-      previousCompletion === null ||
-      previousCompletion.contextKey !== autoNudgeContextKey ||
-      previousCompletion.terminalTurnKey === terminalTurnKey
+      pendingCompletion === null ||
+      pendingCompletion.contextKey !== autoNudgeContextKey ||
+      pendingCompletion.terminalTurnKey !== terminalTurnKey
     ) {
       return;
     }
     const alreadySent = terminalTurnKey !== null && autoNudgeLedgerRef.current.has(terminalTurnKey);
-    if (!autoNudgeEligible || terminalTurnKey === null || alreadySent) {
+    if (terminalTurnKey === null || alreadySent) {
+      pendingAutoNudgeCompletionRef.current = null;
+      return;
+    }
+    if (autoNudgeEligibilityRef.current.hasManualActivity) {
+      autoNudgeLedgerRef.current.mark(terminalTurnKey);
+      pendingAutoNudgeCompletionRef.current = null;
+      return;
+    }
+    if (!autoNudgeEligible) {
       return;
     }
     if (
@@ -6471,6 +6523,7 @@ export default function ChatView(props: ChatViewProps) {
       createdAt: new Date().toISOString(),
     };
     autoNudgeLedgerRef.current.mark(terminalTurnKey);
+    pendingAutoNudgeCompletionRef.current = null;
     if (!getConfirmedAutoNudgeArming().confirmExecutionAuthorized()) return;
     void api.orchestration.dispatchCommand(command).catch(() => {
       if (autoNudgeContextKeyRef.current !== authority.contextKey) return;

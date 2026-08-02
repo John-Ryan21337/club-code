@@ -6,7 +6,7 @@ import {
 } from "@cafecode/contracts";
 import { useEffect, useRef } from "react";
 
-import { getAutoNudgeTurnLedger } from "../autoNudger";
+import { autoNudgeTerminalTurnKey, getAutoNudgeTurnLedger } from "../autoNudger";
 import { useComposerDraftStore } from "../composerDraftStore";
 import {
   getConfirmedAutoNudgeArming,
@@ -64,7 +64,11 @@ function authorityKey(
 }
 
 function terminalKey(shell: ThreadShell, completedTurnId: string): string {
-  return `${shell.environmentId}:${shell.id}:${completedTurnId}`;
+  return autoNudgeTerminalTurnKey({
+    environmentId: shell.environmentId,
+    threadId: shell.id,
+    completedTurnId,
+  });
 }
 
 function routeKey(shell: ThreadShell): string {
@@ -153,6 +157,7 @@ export function BackgroundAutoNudgeCoordinator() {
   const globallySuppressed = useAutoNudgeSuppressedState();
   const environmentStateById = useStore((store) => store.environmentStateById);
   const observedCompletedTurnByRouteRef = useRef(new Map<string, string | null>());
+  const pendingCompletedTurnByRouteRef = useRef(new Map<string, string>());
   const stopRequestsRef = useRef(new Set<string>());
 
   // Cross-port suppression polling is intentionally isolated from the
@@ -233,18 +238,31 @@ export function BackgroundAutoNudgeCoordinator() {
         const previousCompletedTurnKey =
           observedCompletedTurnByRouteRef.current.get(currentRouteKey) ?? null;
         observedCompletedTurnByRouteRef.current.set(currentRouteKey, completedTurnKey);
-        if (
-          !hadPrevious ||
-          completedTurnKey === null ||
-          completedTurnKey === previousCompletedTurnKey
-        ) {
+        if (!hadPrevious) {
+          // Initial hydration establishes a baseline and cannot authorize work.
+          pendingCompletedTurnByRouteRef.current.delete(currentRouteKey);
+          continue;
+        }
+        if (completedTurnKey !== previousCompletedTurnKey) {
+          if (completedTurnKey === null) {
+            pendingCompletedTurnByRouteRef.current.delete(currentRouteKey);
+          } else {
+            pendingCompletedTurnByRouteRef.current.set(currentRouteKey, completedTurnKey);
+          }
+        }
+        const pendingCompletedTurnKey =
+          pendingCompletedTurnByRouteRef.current.get(currentRouteKey) ?? null;
+        if (completedTurnKey === null || pendingCompletedTurnKey !== completedTurnKey) {
           continue;
         }
 
         const authority = projectedAuthority(environment, threadId);
         if (!authority) continue;
         const ledger = getAutoNudgeTurnLedger();
-        if (ledger.has(authority.terminalKey) || ledger.has(authority.key)) continue;
+        if (ledger.has(authority.terminalKey) || ledger.has(authority.key)) {
+          pendingCompletedTurnByRouteRef.current.delete(currentRouteKey);
+          continue;
+        }
 
         const currentAuthority = projectedAuthority(environment, threadId);
         if (!currentAuthority || currentAuthority.key !== authority.key) continue;
@@ -259,6 +277,7 @@ export function BackgroundAutoNudgeCoordinator() {
           })
         ) {
           ledger.mark(authority.terminalKey);
+          pendingCompletedTurnByRouteRef.current.delete(currentRouteKey);
           continue;
         }
         const draft = useComposerDraftStore.getState().getComposerDraft({
@@ -267,6 +286,7 @@ export function BackgroundAutoNudgeCoordinator() {
         });
         if (Boolean(draft?.prompt.trim()) || (draft?.images.length ?? 0) > 0) {
           ledger.mark(authority.terminalKey);
+          pendingCompletedTurnByRouteRef.current.delete(currentRouteKey);
           continue;
         }
         if (
@@ -296,6 +316,7 @@ export function BackgroundAutoNudgeCoordinator() {
         const arming = getConfirmedAutoNudgeArming();
         if (!arming.confirmExecutionAuthorized()) continue;
         ledger.mark(authority.terminalKey);
+        pendingCompletedTurnByRouteRef.current.delete(currentRouteKey);
         if (!arming.confirmExecutionAuthorized()) continue;
         void api.orchestration
           .dispatchCommand({
@@ -317,6 +338,7 @@ export function BackgroundAutoNudgeCoordinator() {
     for (const observedRouteKey of observedCompletedTurnByRouteRef.current.keys()) {
       if (!liveRoutes.has(observedRouteKey)) {
         observedCompletedTurnByRouteRef.current.delete(observedRouteKey);
+        pendingCompletedTurnByRouteRef.current.delete(observedRouteKey);
       }
     }
   }, [environmentStateById, globallySuppressed]);

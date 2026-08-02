@@ -32,6 +32,19 @@ export interface AutoNudgeEligibility {
   providerAvailable: boolean;
 }
 
+/**
+ * One shared terminal identity for foreground dispatch, background dispatch,
+ * and synchronous operator cancellation. Keep the parts encoded as JSON so
+ * opaque provider ids cannot collide through delimiter characters.
+ */
+export function autoNudgeTerminalTurnKey(input: {
+  readonly environmentId: string;
+  readonly threadId: string;
+  readonly completedTurnId: string;
+}): string {
+  return JSON.stringify([input.environmentId, input.threadId, input.completedTurnId]);
+}
+
 export function canScheduleAutoNudge(input: AutoNudgeEligibility): boolean {
   return (
     input.mode !== "off" &&

@@ -51,7 +51,7 @@ interface TestEnvironmentState {
 }
 
 interface TestSession {
-  status: "ready";
+  status: "ready" | "running";
   provider: "claude";
   providerInstanceId: string;
 }
@@ -150,7 +150,11 @@ vi.mock("../store", () => {
   return { useStore };
 });
 
-import { __resetAutoNudgeTurnLedgerForTests } from "../autoNudger";
+import {
+  __resetAutoNudgeTurnLedgerForTests,
+  autoNudgeTerminalTurnKey,
+  getAutoNudgeTurnLedger,
+} from "../autoNudger";
 import { manualFollowUpPriorityStore } from "../manualFollowUpPriorityStore";
 import { BackgroundAutoNudgeCoordinator } from "./BackgroundAutoNudgeCoordinator";
 
@@ -228,6 +232,18 @@ function withoutCompletedTurn(fixture: TestThreadFixture): TestThreadFixture {
     ...fixture,
     summary: { ...fixture.summary, latestTurn: null },
     turnState: { latestTurn: null },
+  };
+}
+
+function withSessionStatus(
+  fixture: TestThreadFixture,
+  status: TestSession["status"],
+): TestThreadFixture {
+  const session = { ...fixture.session, status };
+  return {
+    ...fixture,
+    summary: { ...fixture.summary, session },
+    session,
   };
 }
 
@@ -526,6 +542,62 @@ describe("BackgroundAutoNudgeCoordinator exact-thread authority", () => {
     await mounted.rerender(<BackgroundAutoNudgeCoordinator />);
     await waitForCalls(dispatch, 1);
     expect(commands(dispatch)[0]?.completedTurnId).toBe("turn-b");
+  });
+
+  it("keeps a new completion pending until the ready projection arrives", async () => {
+    const dispatch = installEnvironmentApi("environment-a");
+    const terminal = threadFixture({
+      environmentId: "environment-a",
+      threadId: "thread-a",
+      completedTurnId: "turn-delayed-ready",
+    });
+    mocks.environmentStateById = {
+      "environment-a": environmentFixture("environment-a", [withoutCompletedTurn(terminal)]),
+    };
+
+    const mounted = await render(<BackgroundAutoNudgeCoordinator />);
+    mocks.environmentStateById = {
+      "environment-a": environmentFixture("environment-a", [
+        withSessionStatus(terminal, "running"),
+      ]),
+    };
+    await mounted.rerender(<BackgroundAutoNudgeCoordinator />);
+    expect(dispatch).not.toHaveBeenCalled();
+
+    mocks.environmentStateById = {
+      "environment-a": environmentFixture("environment-a", [terminal]),
+    };
+    await mounted.rerender(<BackgroundAutoNudgeCoordinator />);
+    await waitForCalls(dispatch, 1);
+    expect(commands(dispatch)[0]?.completedTurnId).toBe("turn-delayed-ready");
+  });
+
+  it("honors a foreground manual-send cancellation in the background lane", async () => {
+    const dispatch = installEnvironmentApi("environment-a");
+    const terminal = threadFixture({
+      environmentId: "environment-a",
+      threadId: "thread-a",
+      completedTurnId: "turn-manually-consumed",
+    });
+    mocks.environmentStateById = {
+      "environment-a": environmentFixture("environment-a", [withoutCompletedTurn(terminal)]),
+    };
+
+    const mounted = await render(<BackgroundAutoNudgeCoordinator />);
+    getAutoNudgeTurnLedger().mark(
+      autoNudgeTerminalTurnKey({
+        environmentId: "environment-a",
+        threadId: "thread-a",
+        completedTurnId: "turn-manually-consumed",
+      }),
+    );
+    mocks.environmentStateById = {
+      "environment-a": environmentFixture("environment-a", [terminal]),
+    };
+    await mounted.rerender(<BackgroundAutoNudgeCoordinator />);
+    await new Promise((resolve) => window.setTimeout(resolve, 50));
+
+    expect(dispatch).not.toHaveBeenCalled();
   });
 
   it("dispatches two same-project threads independently and never sends the prompt", async () => {

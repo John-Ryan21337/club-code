@@ -5281,21 +5281,21 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
             ...baseThread,
             latestTurn: {
               turnId: completedTurnId,
-              state: "completed" as const,
+              state: "running" as const,
               requestedAt: isoAt(1_000),
               startedAt: isoAt(1_001),
-              completedAt: isoAt(1_010),
+              completedAt: null,
               assistantMessageId: null,
             },
             session: baseThread.session
               ? {
                   ...baseThread.session,
-                  status: "ready" as const,
-                  activeTurnId: null,
-                  updatedAt: isoAt(1_010),
+                  status: "running" as const,
+                  activeTurnId: completedTurnId,
+                  updatedAt: isoAt(1_001),
                 }
               : null,
-            updatedAt: isoAt(1_010),
+            updatedAt: isoAt(1_001),
           },
         ],
       };
@@ -5319,6 +5319,69 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
       });
 
       try {
+        const runningThread = snapshot.threads[0]!;
+        const completedThread: OrchestrationReadModel["threads"][number] = {
+          ...runningThread,
+          latestTurn: {
+            ...runningThread.latestTurn!,
+            state: "completed",
+            completedAt: isoAt(1_010),
+          },
+          session: runningThread.session
+            ? {
+                ...runningThread.session,
+                status: "ready",
+                activeTurnId: null,
+                updatedAt: isoAt(1_010),
+              }
+            : null,
+          updatedAt: isoAt(1_010),
+        };
+        const transientlyBlockedThread: OrchestrationReadModel["threads"][number] = {
+          ...completedThread,
+          session: completedThread.session
+            ? {
+                ...completedThread.session,
+                lastError: "Transient projection error",
+              }
+            : null,
+        };
+        fixture.snapshot = {
+          ...snapshot,
+          snapshotSequence: snapshot.snapshotSequence + 1,
+          threads: [transientlyBlockedThread],
+          updatedAt: isoAt(1_010),
+        };
+        rpcHarness.emitStreamValue(ORCHESTRATION_WS_METHODS.subscribeThread, {
+          kind: "snapshot",
+          snapshot: {
+            snapshotSequence: fixture.snapshot.snapshotSequence,
+            thread: transientlyBlockedThread,
+          },
+        });
+        await waitForLayout();
+        expect(
+          wsRequests.some(
+            (request) =>
+              request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+              request.type === "thread.auto-nudge.dispatch",
+          ),
+        ).toBe(false);
+
+        fixture.snapshot = {
+          ...fixture.snapshot,
+          snapshotSequence: fixture.snapshot.snapshotSequence + 1,
+          threads: [completedThread],
+          updatedAt: isoAt(1_011),
+        };
+        rpcHarness.emitStreamValue(ORCHESTRATION_WS_METHODS.subscribeThread, {
+          kind: "snapshot",
+          snapshot: {
+            snapshotSequence: fixture.snapshot.snapshotSequence,
+            thread: completedThread,
+          },
+        });
+
         let dispatchRequest: NormalizedWsRpcRequestBody | undefined;
         await vi.waitFor(
           () => {
@@ -5345,6 +5408,93 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
             (request) =>
               request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
               request.type === "thread.turn.start",
+          ),
+        ).toBe(false);
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
+    it("reserves established-thread manual intent before Auto Nudge can reuse the completion", async () => {
+      const completedTurnId = "turn-auto-nudge-manual-priority" as TurnId;
+      const baseSnapshot = createSnapshotForTargetUser({
+        targetMessageId: "msg-user-auto-nudge-manual-priority" as MessageId,
+        targetText: "manual priority",
+      });
+      const baseThread = baseSnapshot.threads[0]!;
+      let snapshot: OrchestrationReadModel = {
+        ...baseSnapshot,
+        threads: [
+          {
+            ...baseThread,
+            latestTurn: {
+              turnId: completedTurnId,
+              state: "completed" as const,
+              requestedAt: isoAt(1_000),
+              startedAt: isoAt(1_001),
+              completedAt: isoAt(1_010),
+              assistantMessageId: null,
+            },
+            session: baseThread.session
+              ? {
+                  ...baseThread.session,
+                  status: "ready" as const,
+                  activeTurnId: null,
+                  updatedAt: isoAt(1_010),
+                }
+              : null,
+            updatedAt: isoAt(1_010),
+          },
+        ],
+      };
+      snapshot = setThreadAutoNudgeConfig(snapshot, THREAD_ID, {
+        ...DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+        authorityRevision: 23,
+        mode: "steady-progress",
+        prompt: "Server-sourced exact-thread prompt",
+        armedAt: isoAt(1_000),
+        baselineSettledTurnId: completedTurnId,
+      });
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot,
+        resolveRpc: (body) =>
+          body._tag === ORCHESTRATION_WS_METHODS.dispatchCommand
+            ? { sequence: snapshot.snapshotSequence + 1 }
+            : undefined,
+      });
+
+      try {
+        useComposerDraftStore.getState().setPrompt(THREAD_REF, "Operator message wins");
+        await waitForLayout();
+        const sendButton = await waitForSendButton();
+        expect(sendButton.disabled).toBe(false);
+        sendButton.click();
+
+        await vi.waitFor(
+          () => {
+            expect(
+              wsRequests.some(
+                (request) =>
+                  request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+                  request.type === "thread.manual-follow-up.reserve",
+              ),
+            ).toBe(true);
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+        expect(
+          wsRequests.some(
+            (request) =>
+              request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+              request.type === "thread.turn.start",
+          ),
+        ).toBe(false);
+        expect(
+          wsRequests.some(
+            (request) =>
+              request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+              request.type === "thread.auto-nudge.dispatch",
           ),
         ).toBe(false);
       } finally {
