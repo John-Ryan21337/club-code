@@ -1,4 +1,4 @@
-import type {
+﻿import type {
   ApprovalRequestId,
   EnvironmentId,
   ModelSelection,
@@ -209,6 +209,28 @@ function composerDraftTargetsEqual(
   return left.environmentId === right.environmentId && left.threadId === right.threadId;
 }
 
+/**
+ * Terminal-style prompt history.
+ *
+ * One session-wide ring, like a shell: ArrowUp from an empty composer walks
+ * back through what was sent, ArrowDown walks forward and restores the draft
+ * that was in progress before recall started. Kept at module scope so history
+ * survives the composer remounting across thread switches.
+ */
+const COMPOSER_PROMPT_HISTORY_LIMIT = 100;
+const composerPromptHistory: string[] = [];
+
+function recordComposerPromptHistory(prompt: string): void {
+  const trimmed = prompt.trim();
+  if (trimmed.length === 0) return;
+  // Consecutive duplicates add nothing to recall, matching shell behavior.
+  if (composerPromptHistory.at(-1) === trimmed) return;
+  composerPromptHistory.push(trimmed);
+  if (composerPromptHistory.length > COMPOSER_PROMPT_HISTORY_LIMIT) {
+    composerPromptHistory.shift();
+  }
+}
+
 const ComposerFooterModeControls = memo(function ComposerFooterModeControls(props: {
   provider: ProviderDriverKind;
   showInteractionModeToggle: boolean;
@@ -256,7 +278,7 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
               {/*
                 `shrink-0` is required: this trigger is a flex row inside the
                 horizontally-constrained composer footer. Without it a long
-                label — notably the dual English + Japanese UI language — wins
+                label â€” notably the dual English + Japanese UI language â€” wins
                 the shrink negotiation and compresses the icon to zero width,
                 so the icon vanishes while the text survives.
               */}
@@ -295,8 +317,8 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
             onClick={props.onToggleInteractionMode}
             title={
               props.interactionMode === "plan"
-                ? "Plan mode — click to return to normal build mode"
-                : "Default mode — click to enter plan mode"
+                ? "Plan mode â€” click to return to normal build mode"
+                : "Default mode â€” click to enter plan mode"
             }
           >
             <BotIcon />
@@ -1037,7 +1059,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
 
   // Resolve which configured instance the composer is currently targeting.
   // Priority:
-  //   1. The composer draft's `activeProvider` — the user's unsaved pick
+  //   1. The composer draft's `activeProvider` â€” the user's unsaved pick
   //      from the model picker (must win, otherwise the UI appears to
   //      ignore picker selections).
   //   2. Thread's persisted instance id (server-side saved selection).
@@ -1120,7 +1142,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const selectedComposerModelOptions = composerModelOptions?.[selectedInstanceId];
 
   // Resolve the active instance's snapshot by `instanceId` so a custom
-  // instance gets its own slash commands, skills, and model list — not
+  // instance gets its own slash commands, skills, and model list â€” not
   // the first snapshot for the same driver kind.
   const selectedProviderEntry = useMemo(
     () => providerInstanceEntries.find((entry) => entry.instanceId === selectedInstanceId),
@@ -1273,7 +1295,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const isOnScreenKeyboardDevice = useHasOnScreenKeyboard();
   const isComposerCollapsedMobile = isOnScreenKeyboardDevice && !isComposerFocused;
 
-  // TEMPORARY: mobile DOM debugging — remove with lib/mobileDebugLog.ts.
+  // TEMPORARY: mobile DOM debugging â€” remove with lib/mobileDebugLog.ts.
   useEffect(() => {
     mobileDebugLog("composer-state", {
       isOnScreenKeyboardDevice,
@@ -1551,6 +1573,54 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     },
     [composerDraftTarget, promptRef, scheduleComposerFocus, setComposerDraftPrompt],
   );
+
+  // `null` means "not recalling"; otherwise the index into `composerPromptHistory`.
+  const promptHistoryIndexRef = useRef<number | null>(null);
+  // Text this component just wrote via recall. Applying it re-enters
+  // `onPromptChange`, and without this the echo would look like a manual edit
+  // and cancel recall after a single step.
+  const recalledPromptEchoRef = useRef<string | null>(null);
+
+  const applyRecalledPrompt = (nextPrompt: string): void => {
+    recalledPromptEchoRef.current = nextPrompt;
+    setPromptFromTraits(nextPrompt);
+  };
+
+  /**
+   * Walk prompt history. Returns true when the key was consumed, so the caret
+   * keeps its normal line-movement behavior whenever recall does not apply.
+   */
+  const navigatePromptHistory = (key: "ArrowUp" | "ArrowDown"): boolean => {
+    if (composerPromptHistory.length === 0) return false;
+    const currentIndex = promptHistoryIndexRef.current;
+
+    if (key === "ArrowUp") {
+      // Only start recalling from an empty composer, so ArrowUp can never
+      // discard text the operator is still writing.
+      let nextIndex: number;
+      if (currentIndex === null) {
+        if (promptRef.current.length > 0) return false;
+        nextIndex = composerPromptHistory.length - 1;
+      } else {
+        if (currentIndex === 0) return true;
+        nextIndex = currentIndex - 1;
+      }
+      promptHistoryIndexRef.current = nextIndex;
+      applyRecalledPrompt(composerPromptHistory[nextIndex] ?? "");
+      return true;
+    }
+
+    if (currentIndex === null) return false;
+    if (currentIndex >= composerPromptHistory.length - 1) {
+      // Past the newest entry: leave recall and return to an empty composer.
+      promptHistoryIndexRef.current = null;
+      applyRecalledPrompt("");
+      return true;
+    }
+    promptHistoryIndexRef.current = currentIndex + 1;
+    applyRecalledPrompt(composerPromptHistory[promptHistoryIndexRef.current] ?? "");
+    return true;
+  };
 
   const providerTraitsMenuContent = renderProviderTraitsMenuContent({
     provider: selectedProvider,
@@ -1912,6 +1982,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       cursorAdjacentToMention: boolean,
     ) => {
       onManualActivity?.();
+      // A manual edit ends recall; the text is now the operator's own draft.
+      // The echo of our own recall write must not, or recall would stop after
+      // a single step.
+      if (recalledPromptEchoRef.current === nextPrompt) {
+        recalledPromptEchoRef.current = null;
+      } else {
+        recalledPromptEchoRef.current = null;
+        promptHistoryIndexRef.current = null;
+      }
       if (activePendingProgress?.activeQuestion && pendingUserInputs.length > 0) {
         setComposerCursor(nextCursor);
         setComposerTrigger(
@@ -2215,6 +2294,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const submitComposer = useCallback(
     (event?: { preventDefault: () => void }) => {
       const keepKeyboardClosed = isOnScreenKeyboardDevice;
+      // Record before `onSend` clears the draft, so ArrowUp can recall it.
+      recordComposerPromptHistory(promptRef.current);
+      promptHistoryIndexRef.current = null;
       mobileDebugLog("submit-start", { keepKeyboardClosed, ...domSnapshot() });
       void Promise.resolve(onSend(event)).finally(() => {
         mobileDebugLog("submit-settled", { keepKeyboardClosed, ...domSnapshot() });
@@ -2225,7 +2307,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         requestComposerEditorFocus();
       });
     },
-    [dismissMobileComposerKeyboard, isOnScreenKeyboardDevice, onSend, requestComposerEditorFocus],
+    [
+      dismissMobileComposerKeyboard,
+      isOnScreenKeyboardDevice,
+      onSend,
+      promptRef,
+      requestComposerEditorFocus,
+    ],
   );
   const steerComposer = useCallback(
     (event?: { preventDefault: () => void }) => {
@@ -2316,6 +2404,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         onSelectComposerItem(selectedItem);
         return true;
       }
+    }
+    // Shell-style recall, only once the command menu has declined the key.
+    if (key === "ArrowUp" || key === "ArrowDown") {
+      if (navigatePromptHistory(key)) {
+        event.preventDefault();
+        return true;
+      }
+      return false;
     }
     if (key === "Enter" && !event.shiftKey) {
       const command = resolveShortcutCommand(event, keybindings, {
@@ -2818,7 +2914,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         >
           <div className="mb-1.5 flex items-center justify-between gap-2">
             <label className="text-xs font-medium" htmlFor="ephemeral-browser-context">
-              One-time browser context · not saved
+              One-time browser context Â· not saved
             </label>
             <button
               className="text-xs text-muted-foreground underline-offset-2 hover:underline"
@@ -3098,7 +3194,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   onClick={expandMobileComposer}
                   aria-label={`${composerImages.length} ${
                     composerImages.length === 1 ? "attachment" : "attachments"
-                  } attached — expand composer`}
+                  } attached â€” expand composer`}
                 >
                   <ImageIcon aria-hidden="true" className="size-3" />
                   {composerImages.length}{" "}

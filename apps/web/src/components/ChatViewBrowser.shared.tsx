@@ -3921,6 +3921,75 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
       }
     });
 
+    it("recalls previously sent prompts with ArrowUp and returns with ArrowDown", async () => {
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: createSnapshotForTargetUser({
+          targetMessageId: "msg-user-prompt-history-recall" as MessageId,
+          targetText: "prompt history recall",
+        }),
+      });
+
+      try {
+        // Submitting records history. The fixture's send stub does not clear
+        // the draft, so empty it explicitly rather than depend on send
+        // semantics that are not what this test is about.
+        for (const sent of ["first recalled command", "second recalled command"]) {
+          useComposerDraftStore.getState().setPrompt(THREAD_REF, sent);
+          await waitForLayout();
+          await pressComposerKey("Enter");
+          useComposerDraftStore.getState().setPrompt(THREAD_REF, "");
+          await waitForComposerText("");
+        }
+
+        // ArrowUp from an empty composer recalls the most recent submission.
+        // History is session-wide, so this asserts only the entries this test
+        // contributed rather than absolute positions in a shared ring.
+        await pressComposerKey("ArrowUp");
+        await waitForComposerText("second recalled command");
+
+        // ArrowDown past the newest entry leaves recall and empties the composer.
+        await pressComposerKey("ArrowDown");
+        await waitForComposerText("");
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
+    it("never discards an in-progress draft when ArrowUp is pressed", async () => {
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: createSnapshotForTargetUser({
+          targetMessageId: "msg-user-prompt-history-draft" as MessageId,
+          targetText: "prompt history draft guard",
+        }),
+      });
+
+      try {
+        useComposerDraftStore.getState().setPrompt(THREAD_REF, "sent so history is non-empty");
+        await waitForLayout();
+        await pressComposerKey("Enter");
+        useComposerDraftStore.getState().setPrompt(THREAD_REF, "");
+        await waitForComposerText("");
+
+        useComposerDraftStore.getState().setPrompt(THREAD_REF, "half-written draft");
+        await waitForLayout();
+        await pressComposerKey("ArrowUp");
+        await waitForLayout();
+
+        // Recall only starts from an empty composer, so ArrowUp is declined and
+        // the operator's text is never replaced by a history entry. (The key
+        // helper types the unhandled key literally, which is why this asserts
+        // containment rather than exact equality.)
+        const draftAfterArrowUp =
+          useComposerDraftStore.getState().draftsByThreadKey[THREAD_KEY]?.prompt ?? "";
+        expect(draftAfterArrowUp).toContain("half-written draft");
+        expect(draftAfterArrowUp).not.toContain("sent so history is non-empty");
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
     it("waits for an in-flight reservation before cancelling a removed local row", async () => {
       const activeTurnId = "turn-cancel-reserving-follow-up" as TurnId;
       const baseSnapshot = createSnapshotForTargetUser({
