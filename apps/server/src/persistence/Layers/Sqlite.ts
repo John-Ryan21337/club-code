@@ -24,6 +24,14 @@ const setup = Layer.effectDiscard(
     const sql = yield* SqlClient.SqlClient;
     yield* sql`PRAGMA busy_timeout = 15000;`;
     yield* sql`PRAGMA journal_mode = WAL;`;
+    // Without a size limit the WAL file is never truncated, only reused in
+    // place, so a single bulk transaction (a migration, or the activity
+    // compaction script's one-transaction rewrite) sets a permanent multi-GiB
+    // high-water mark — observed live at 2.9 GiB with 99.999% dead frames.
+    // This bound makes each checkpoint reset truncate the file. It can never
+    // discard unwritten frames: truncation happens only after a successful
+    // reset, so there is no risk to committed data.
+    yield* sql`PRAGMA journal_size_limit = 67108864;`;
     yield* sql`PRAGMA foreign_keys = ON;`;
     yield* runMigrations();
   }),
