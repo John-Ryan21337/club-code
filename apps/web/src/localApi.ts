@@ -241,10 +241,17 @@ export function readLocalApi(): LocalApi | undefined {
   }
 
   const primaryEnvironment = getPrimaryKnownEnvironment();
-  cachedApi = primaryEnvironment
-    ? createLocalApi(getPrimaryEnvironmentConnection().client)
-    : createBrowserLocalApi();
-  return cachedApi;
+  if (primaryEnvironment) {
+    cachedApi = createLocalApi(getPrimaryEnvironmentConnection().client);
+    return cachedApi;
+  }
+  // No backend is paired yet. Return the client-less fallback WITHOUT caching
+  // it: many components call this during initial render, and caching here
+  // permanently pinned an API whose every backend call rejects with "Local
+  // backend API is unavailable" for the rest of the session — settings writes
+  // silently failed and rolled back even though the environment connected
+  // moments later. Re-resolve on the next call instead.
+  return createBrowserLocalApi();
 }
 
 export function ensureLocalApi(): LocalApi {

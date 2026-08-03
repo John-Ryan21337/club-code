@@ -3982,6 +3982,49 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
       }
     });
 
+    it("keeps compact footer controls and icons visible in dual-language mode", async () => {
+      // The compact footer is a different code path (CompactComposerControlsMenu)
+      // from the wide footer covered above; dual-language regressions there
+      // would otherwise ship unseen exactly as the wide-footer one did.
+      const mounted = await mountChatView({
+        viewport: COMPACT_FOOTER_VIEWPORT,
+        snapshot: createSnapshotForTargetUser({
+          targetMessageId: "msg-user-dual-language-compact" as MessageId,
+          targetText: "dual language compact footer geometry",
+        }),
+      });
+
+      try {
+        replaceClientSettingsSnapshot({ ...DEFAULT_CLIENT_SETTINGS, uiLanguage: "dual" });
+        const row = await waitForElement(
+          () =>
+            document.querySelector<HTMLElement>('[data-chat-composer-collapsed-controls="true"]'),
+          "Unable to find composer collapsed controls row.",
+        );
+        await waitForLayout();
+        await vi.waitFor(
+          () => {
+            expect(document.documentElement.dataset.uiLanguage).toBe("dual");
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+
+        const rowRect = row.getBoundingClientRect();
+        expect(row.scrollWidth).toBeLessThanOrEqual(Math.ceil(row.clientWidth));
+        const icons = Array.from(row.querySelectorAll<SVGElement>("svg"));
+        expect(icons.length).toBeGreaterThan(0);
+        for (const icon of icons) {
+          const rect = icon.getBoundingClientRect();
+          expect(rect.width).toBeGreaterThan(0);
+          expect(rect.height).toBeGreaterThan(0);
+          expect(rect.left).toBeGreaterThanOrEqual(rowRect.left - 0.5);
+          expect(rect.right).toBeLessThanOrEqual(rowRect.right + 0.5);
+        }
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
     it("recalls previously sent prompts with ArrowUp and returns with ArrowDown", async () => {
       const mounted = await mountChatView({
         viewport: DEFAULT_VIEWPORT,

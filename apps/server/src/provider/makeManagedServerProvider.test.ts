@@ -494,4 +494,75 @@ describe("makeManagedServerProvider", () => {
       }),
     ),
   );
+
+  it.effect("retains known account usage when a full refresh cannot fetch it", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        // Usage endpoints authenticate with short-lived tokens that only the
+        // provider's own CLI refreshes. A scheduled health probe running while
+        // that token is expired must not erase the last known usage for the
+        // same authenticated account (Codex went blank during long
+        // Claude-only sessions exactly this way). Logout still clears it.
+        const settingsRef = yield* Ref.make<TestSettings>({ enabled: true });
+        const settingsChanges = yield* PubSub.unbounded<TestSettings>();
+        const withUsage: ServerProvider = {
+          ...refreshedSnapshot,
+          auth: { status: "authenticated", email: "operator@example.com" },
+          accountRateLimits: refreshedAccountRateLimits,
+        };
+        // Value-driven probe: construction may run the check more than once
+        // concurrently, so branch on the current phase value instead of a call
+        // counter to stay order-independent.
+        const nextProbe = yield* Ref.make<ServerProvider>(withUsage);
+        const provider = yield* makeManagedServerProvider<TestSettings>({
+          maintenanceCapabilities,
+          getSettings: Ref.get(settingsRef),
+          streamSettings: Stream.fromPubSub(settingsChanges),
+          haveSettingsChanged: () => true,
+          initialSnapshot: () => Effect.succeed(initialSnapshot),
+          checkProvider: Ref.get(nextProbe),
+          refreshInterval: "1 hour",
+        });
+
+        const firstUpdate = yield* Stream.take(provider.streamChanges, 1).pipe(
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+        yield* Effect.yieldNow;
+        yield* Fiber.join(firstUpdate);
+        assert.deepStrictEqual(
+          (yield* provider.getSnapshot).accountRateLimits,
+          refreshedAccountRateLimits,
+        );
+
+        // Same account, usage fetch failed (stale token → undefined).
+        yield* Ref.set(nextProbe, { ...withUsage, accountRateLimits: undefined });
+        const secondUpdate = yield* Stream.take(provider.streamChanges, 1).pipe(
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+        yield* Effect.yieldNow;
+        yield* PubSub.publish(settingsChanges, { enabled: true });
+        yield* Fiber.join(secondUpdate);
+        const retained = yield* provider.getSnapshot;
+        assert.deepStrictEqual(retained.accountRateLimits, refreshedAccountRateLimits);
+
+        // Signed out: account-bound data must clear.
+        yield* Ref.set(nextProbe, {
+          ...withUsage,
+          accountRateLimits: undefined,
+          auth: { status: "unauthenticated" },
+        });
+        const thirdUpdate = yield* Stream.take(provider.streamChanges, 1).pipe(
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+        yield* Effect.yieldNow;
+        yield* PubSub.publish(settingsChanges, { enabled: true });
+        yield* Fiber.join(thirdUpdate);
+        const signedOut = yield* provider.getSnapshot;
+        assert.strictEqual(signedOut.accountRateLimits, undefined);
+      }),
+    ),
+  );
 });

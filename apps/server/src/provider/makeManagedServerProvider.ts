@@ -191,7 +191,26 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
       return yield* Ref.get(snapshotStateRef).pipe(Effect.map((state) => state.snapshot));
     }
 
-    const nextSnapshot = yield* input.checkProvider;
+    const probedSnapshot = yield* input.checkProvider;
+    const previousSnapshot = yield* Ref.get(snapshotStateRef).pipe(
+      Effect.map((state) => state.snapshot),
+    );
+    // Account-usage endpoints authenticate with short-lived tokens that only
+    // the provider's own CLI refreshes. A full health probe that cannot fetch
+    // usage right now (e.g. Codex's ChatGPT token expired during a long
+    // Claude-only session) must not erase the last known usage for the same
+    // authenticated account — the sidebar marks it stale by `checkedAt` age
+    // instead. Logout and account replacement still clear it, because the auth
+    // identity below no longer matches.
+    const nextSnapshot: ServerProvider =
+      probedSnapshot.accountRateLimits === undefined &&
+      previousSnapshot.accountRateLimits !== undefined &&
+      probedSnapshot.auth.status === "authenticated" &&
+      previousSnapshot.auth.status === "authenticated" &&
+      probedSnapshot.auth.email === previousSnapshot.auth.email &&
+      probedSnapshot.auth.type === previousSnapshot.auth.type
+        ? { ...probedSnapshot, accountRateLimits: previousSnapshot.accountRateLimits }
+        : probedSnapshot;
     const nextGeneration = yield* Ref.modify(snapshotStateRef, (state) => {
       const generation = input.enrichSnapshot
         ? state.enrichmentGeneration + 1
