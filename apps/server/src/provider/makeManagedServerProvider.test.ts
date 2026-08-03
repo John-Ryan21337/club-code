@@ -535,8 +535,9 @@ describe("makeManagedServerProvider", () => {
           refreshedAccountRateLimits,
         );
 
-        // Same account, usage fetch failed (stale token → undefined).
-        yield* Ref.set(nextProbe, { ...withUsage, accountRateLimits: undefined });
+        // Same account, usage fetch failed (stale token → absent field).
+        const { accountRateLimits: _elidedUsage, ...withoutUsage } = withUsage;
+        yield* Ref.set(nextProbe, withoutUsage);
         const secondUpdate = yield* Stream.take(provider.streamChanges, 1).pipe(
           Stream.runCollect,
           Effect.forkChild,
@@ -549,8 +550,7 @@ describe("makeManagedServerProvider", () => {
 
         // Signed out: account-bound data must clear.
         yield* Ref.set(nextProbe, {
-          ...withUsage,
-          accountRateLimits: undefined,
+          ...withoutUsage,
           auth: { status: "unauthenticated" },
         });
         const thirdUpdate = yield* Stream.take(provider.streamChanges, 1).pipe(
