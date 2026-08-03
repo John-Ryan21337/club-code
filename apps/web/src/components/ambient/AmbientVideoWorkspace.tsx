@@ -284,7 +284,17 @@ function useRetainedElementRect(
   // the retained normalized geometry can be reprojected. Keep the last exact
   // chat rect during that gap so a long-lived iframe is never unmounted merely
   // because Settings removed its anchor.
-  return measurement.retainedMeasuredRect;
+  if (measurement.retainedMeasuredRect !== null) {
+    return measurement.retainedMeasuredRect;
+  }
+  // Nothing has ever been measured. The chat anchor only exists inside
+  // ChatView, so enabling ambient media from Settings before chat has been
+  // laid out once would otherwise leave the player permanently anchor-less:
+  // mounted and audible, but with no visible surface and no way to recover.
+  // Fall back to the workspace root so the player is always placeable.
+  return containerRect !== null && containerRect.width > 0 && containerRect.height > 0
+    ? containerRect
+    : null;
 }
 
 function presetGeometry(input: {
