@@ -171,6 +171,17 @@ class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
   }
 }
 
+// The resume-transcript assertions below must not see an ambient
+// CLAUDE_CONFIG_DIR (e.g. when this suite runs inside a Claude Code session),
+// since makeClaudeEnvironment deliberately preserves an explicit one over the
+// configured Claude homePath. Drop it so transcript lookup resolves under each
+// test's temporary home deterministically.
+const baseEnvWithoutClaudeConfigDir = (): NodeJS.ProcessEnv => {
+  const env = { ...process.env };
+  delete env.CLAUDE_CONFIG_DIR;
+  return env;
+};
+
 function makeHarness(config?: {
   readonly nativeEventLogPath?: string;
   readonly nativeEventLogger?: ClaudeAdapterLiveOptions["nativeEventLogger"];
@@ -190,6 +201,7 @@ function makeHarness(config?: {
 
   const adapterOptions: ClaudeAdapterLiveOptions = {
     ...(config?.instanceId ? { instanceId: config.instanceId } : {}),
+    environment: baseEnvWithoutClaudeConfigDir(),
     createQuery: (input) => {
       createInput = input;
       return query;
