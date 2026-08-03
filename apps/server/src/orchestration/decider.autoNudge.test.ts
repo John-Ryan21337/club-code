@@ -137,6 +137,7 @@ function enabledConfig(
     armedAt: "2026-07-28T11:59:00.000Z",
     baselineSettledTurnId: TURN_BASELINE,
     lastDispatchedSettledTurnId: null,
+    lastDispatchedMessageId: null,
     roundsDispatched: 0,
     lastDispatchedAt: null,
     ...overrides,
@@ -182,6 +183,7 @@ it.effect("saves Off text for one exact thread without granting dispatch authori
       armedAt: null,
       baselineSettledTurnId: null,
       lastDispatchedSettledTurnId: null,
+      lastDispatchedMessageId: null,
       roundsDispatched: 0,
       lastDispatchedAt: null,
     });
@@ -371,6 +373,7 @@ it.effect("dispatches only the persisted exact-thread prompt and rejects duplica
             latestTurnId: TURN_COMPLETED,
             autoNudge: enabledConfig({
               lastDispatchedSettledTurnId: TURN_COMPLETED,
+              lastDispatchedMessageId: null,
               roundsDispatched: 1,
             }),
           }),
@@ -1053,6 +1056,7 @@ it.effect("revokes Auto Nudge before a checkpoint rewind can expose a consumed t
         latestTurnId: TURN_COMPLETED,
         autoNudge: enabledConfig({
           lastDispatchedSettledTurnId: TURN_COMPLETED,
+          lastDispatchedMessageId: null,
           roundsDispatched: 2,
         }),
       }),
@@ -1172,5 +1176,157 @@ it.effect("ignores out-of-order dispatch accounting with a mismatched authority 
       },
     });
     assert.deepEqual(projected.threads[0]?.autoNudge, enabledConfig({ authorityRevision: 8 }));
+  }),
+);
+
+it.effect("arming during a running turn records that turn as the baseline", () =>
+  Effect.gen(function* () {
+    // Regression: the baseline was recorded only for completed turns, so
+    // arming mid-turn left it null and the operator's own in-flight turn
+    // dispatched a nudge ~500ms after it settled.
+    yield* TestClock.setTime(Date.parse(SERVER_NOW));
+    const runningTurnId = TurnId.make("turn-running-at-arm");
+    const base = makeThread({ id: THREAD_A });
+    const initial = makeReadModel([
+      {
+        ...base,
+        latestTurn: {
+          turnId: runningTurnId,
+          state: "running",
+          requestedAt: SERVER_NOW,
+          startedAt: SERVER_NOW,
+          completedAt: null,
+          assistantMessageId: null,
+        },
+      },
+    ]);
+
+    const configured = yield* decideOrchestrationCommand({
+      readModel: initial,
+      command: {
+        type: "thread.auto-nudge.configure",
+        commandId: CommandId.make("command-arm-running"),
+        threadId: THREAD_A,
+        expectedAuthorityRevision: 0,
+        mode: "steady-progress",
+        prompt: "Prompt owned by thread A",
+        backgroundContinuation: false,
+        maxRounds: 5,
+        createdAt: SERVER_NOW,
+      },
+    });
+    const event = asPlannedEvents(configured)[0];
+    assert.equal(event?.type, "thread.auto-nudge-configured");
+    if (event?.type !== "thread.auto-nudge-configured") {
+      return yield* Effect.die("Expected an Auto Nudge configured event.");
+    }
+    assert.equal(event.payload.config.baselineSettledTurnId, runningTurnId);
+  }),
+);
+
+it.effect("rejects a foreground dispatch for the turn its own message started", () =>
+  Effect.gen(function* () {
+    // Regression: the nudge's own turn completion re-armed the next dispatch,
+    // chaining nudges into a paid loop until the round cap or a manual Stop.
+    yield* TestClock.setTime(Date.parse(SERVER_NOW));
+    const nudgeMessageId = MessageId.make("message-prior-nudge");
+    const nudgeTurnId = TurnId.make("turn-started-by-nudge");
+    const base = makeThread({
+      id: THREAD_A,
+      latestTurnId: nudgeTurnId,
+      autoNudge: enabledConfig({
+        lastDispatchedSettledTurnId: TURN_COMPLETED,
+        lastDispatchedMessageId: nudgeMessageId,
+        roundsDispatched: 1,
+        lastDispatchedAt: SERVER_NOW,
+      }),
+    });
+    const initial = makeReadModel([
+      {
+        ...base,
+        messages: [
+          {
+            id: nudgeMessageId,
+            role: "user",
+            text: "Prompt owned by thread A",
+            turnId: nudgeTurnId,
+            streaming: false,
+            createdAt: SERVER_NOW,
+            updatedAt: SERVER_NOW,
+          },
+        ],
+      },
+    ]);
+
+    const rejection = yield* Effect.flip(
+      decideOrchestrationCommand({
+        readModel: initial,
+        command: {
+          type: "thread.auto-nudge.dispatch",
+          commandId: CommandId.make("command-self-turn"),
+          threadId: THREAD_A,
+          expectedAuthorityRevision: 5,
+          completedTurnId: nudgeTurnId,
+          dispatchSource: "foreground",
+          messageId: MessageId.make("message-self-turn"),
+          createdAt: SERVER_NOW,
+        },
+      }),
+    );
+    assert.match(rejection.detail, /started by its own previous dispatch/i);
+  }),
+);
+
+it.effect("allows chaining off its own turn when background continuation is on", () =>
+  Effect.gen(function* () {
+    // Background continuation exists to keep an unattended thread moving
+    // across rounds; the self-turn guard must not break it. Rounds stay
+    // bounded by maxRounds.
+    yield* TestClock.setTime(Date.parse(SERVER_NOW));
+    const nudgeMessageId = MessageId.make("message-prior-nudge-bg");
+    const nudgeTurnId = TurnId.make("turn-started-by-nudge-bg");
+    const base = makeThread({
+      id: THREAD_A,
+      latestTurnId: nudgeTurnId,
+      autoNudge: enabledConfig({
+        backgroundContinuation: true,
+        lastDispatchedSettledTurnId: TURN_COMPLETED,
+        lastDispatchedMessageId: nudgeMessageId,
+        roundsDispatched: 1,
+        lastDispatchedAt: SERVER_NOW,
+      }),
+    });
+    const initial = makeReadModel([
+      {
+        ...base,
+        messages: [
+          {
+            id: nudgeMessageId,
+            role: "user",
+            text: "Prompt owned by thread A",
+            turnId: nudgeTurnId,
+            streaming: false,
+            createdAt: SERVER_NOW,
+            updatedAt: SERVER_NOW,
+          },
+        ],
+      },
+    ]);
+
+    const dispatched = yield* decideOrchestrationCommand({
+      readModel: initial,
+      command: {
+        type: "thread.auto-nudge.dispatch",
+        commandId: CommandId.make("command-self-turn-bg"),
+        threadId: THREAD_A,
+        expectedAuthorityRevision: 5,
+        completedTurnId: nudgeTurnId,
+        dispatchSource: "background",
+        messageId: MessageId.make("message-self-turn-bg"),
+        createdAt: SERVER_NOW,
+      },
+    });
+    const events = asPlannedEvents(dispatched);
+    assert.equal(events[0]?.type, "thread.auto-nudge-dispatched");
   }),
 );

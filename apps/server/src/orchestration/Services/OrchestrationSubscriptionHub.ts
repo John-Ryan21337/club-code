@@ -163,6 +163,7 @@ function eventForRoute(
         armedAt: config.armedAt,
         baselineSettledTurnId: config.baselineSettledTurnId,
         lastDispatchedSettledTurnId: config.lastDispatchedSettledTurnId,
+        lastDispatchedMessageId: config.lastDispatchedMessageId,
         roundsDispatched: config.roundsDispatched,
         lastDispatchedAt: config.lastDispatchedAt,
       },

@@ -6373,7 +6373,18 @@ export default function ChatView(props: ChatViewProps) {
   const autoNudgeConfigAccountsForCompletedTurn =
     autoNudgeCompletedTurnId !== null &&
     (activeAutoNudgeConfig?.baselineSettledTurnId === autoNudgeCompletedTurnId ||
-      activeAutoNudgeConfig?.lastDispatchedSettledTurnId === autoNudgeCompletedTurnId);
+      activeAutoNudgeConfig?.lastDispatchedSettledTurnId === autoNudgeCompletedTurnId ||
+      // The turn our own dispatched message started is Auto Nudge's work, not
+      // fresh operator-visible progress; without this a foreground nudge
+      // re-armed itself off its own turn's completion. The server enforces the
+      // same rule; checking here avoids even proposing the dispatch.
+      (activeAutoNudgeConfig != null &&
+        activeAutoNudgeConfig.lastDispatchedMessageId !== null &&
+        (activeThread?.messages ?? []).some(
+          (message) =>
+            message.id === activeAutoNudgeConfig.lastDispatchedMessageId &&
+            message.turnId === autoNudgeCompletedTurnId,
+        )));
   const autoNudgeTerminalTurnKey =
     autoNudgeContextKey !== null &&
     autoNudgeCompletedTurnId !== null &&

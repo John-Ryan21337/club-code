@@ -1,7 +1,7 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
-import { IsoDateTime, NonNegativeInt, TurnId } from "./baseSchemas.ts";
+import { IsoDateTime, MessageId, NonNegativeInt, TurnId } from "./baseSchemas.ts";
 
 export const AutoNudgeMode = Schema.Literals(["off", "hardcore-fanout", "steady-progress"]);
 export type AutoNudgeMode = typeof AutoNudgeMode.Type;
@@ -173,6 +173,14 @@ const ThreadAutoNudgeRunFields = {
   maxRounds: AutoNudgeMaxRounds,
   baselineSettledTurnId: Schema.NullOr(TurnId),
   lastDispatchedSettledTurnId: Schema.NullOr(TurnId),
+  // The user message the last dispatch injected. The turn that message starts
+  // is Auto Nudge's own work: without background continuation its completion
+  // must never authorize the next dispatch, or one nudge chains into a paid
+  // nudge loop. Decoding default keeps configurations persisted before this
+  // field valid.
+  lastDispatchedMessageId: Schema.NullOr(MessageId).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   roundsDispatched: NonNegativeInt,
   lastDispatchedAt: Schema.NullOr(IsoDateTime),
 } as const;
@@ -225,6 +233,7 @@ export const DEFAULT_THREAD_AUTO_NUDGE_CONFIG: ThreadAutoNudgeConfig = {
   armedAt: null,
   baselineSettledTurnId: null,
   lastDispatchedSettledTurnId: null,
+  lastDispatchedMessageId: null,
   roundsDispatched: 0,
   lastDispatchedAt: null,
 };
@@ -241,6 +250,7 @@ export const DEFAULT_THREAD_AUTO_NUDGE_SUMMARY: ThreadAutoNudgeSummary = {
   armedAt: null,
   baselineSettledTurnId: null,
   lastDispatchedSettledTurnId: null,
+  lastDispatchedMessageId: null,
   roundsDispatched: 0,
   lastDispatchedAt: null,
 };

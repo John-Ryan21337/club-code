@@ -421,6 +421,7 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
             armedAt: now,
             baselineSettledTurnId: null,
             lastDispatchedSettledTurnId: null,
+            lastDispatchedMessageId: null,
             roundsDispatched: 0,
             lastDispatchedAt: null,
           },

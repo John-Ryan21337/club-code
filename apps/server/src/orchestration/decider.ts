@@ -703,11 +703,13 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         current,
       });
       const configuredAt = yield* nowIso;
-      const baselineSettledTurnId =
-        targetThread.latestTurn?.state === "completed" &&
-        targetThread.latestTurn.completedAt !== null
-          ? targetThread.latestTurn.turnId
-          : null;
+      // The baseline is whatever turn the thread already has at arming time,
+      // regardless of state. A turn RUNNING while the operator arms is the
+      // operator's own work: recording only completed turns left the baseline
+      // null in that case, so the running turn's completion looked like fresh
+      // idle work and dispatched a nudge ~500ms after it settled — while the
+      // operator was actively driving the thread.
+      const baselineSettledTurnId = targetThread.latestTurn?.turnId ?? null;
       const config: ThreadAutoNudgeConfig =
         command.mode === "off"
           ? {
@@ -719,6 +721,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
               armedAt: null,
               baselineSettledTurnId: null,
               lastDispatchedSettledTurnId: null,
+              lastDispatchedMessageId: null,
               roundsDispatched: 0,
               lastDispatchedAt: null,
             }
@@ -731,6 +734,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
               armedAt: configuredAt,
               baselineSettledTurnId,
               lastDispatchedSettledTurnId: null,
+              lastDispatchedMessageId: null,
               roundsDispatched: 0,
               lastDispatchedAt: null,
             };
@@ -850,6 +854,25 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           command,
           `Auto Nudge already dispatched for completed turn '${command.completedTurnId}'.`,
         );
+      }
+      // A turn started by our own dispatched message is Auto Nudge's work, not
+      // the operator's. Without background continuation its completion must
+      // never authorize the next round — otherwise one nudge chains into a
+      // self-perpetuating loop of paid turns until the round cap or a manual
+      // Stop. Background continuation explicitly opts into chained rounds and
+      // remains bounded by maxRounds.
+      if (!config.backgroundContinuation && config.lastDispatchedMessageId !== null) {
+        const dispatchedOwnTurn = targetThread.messages.some(
+          (message) =>
+            message.id === config.lastDispatchedMessageId &&
+            message.turnId === command.completedTurnId,
+        );
+        if (dispatchedOwnTurn) {
+          return yield* rejectAutoNudgeCommand(
+            command,
+            `Auto Nudge dispatch for thread '${command.threadId}' targets the turn started by its own previous dispatch.`,
+          );
+        }
       }
       if (threadHasUnsettledTurnStart(targetThread)) {
         return yield* rejectAutoNudgeCommand(

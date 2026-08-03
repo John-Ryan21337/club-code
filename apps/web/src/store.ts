@@ -385,6 +385,7 @@ function toThreadAutoNudgeSummary(config: ThreadAutoNudgeConfig): ThreadAutoNudg
     armedAt: config.armedAt,
     baselineSettledTurnId: config.baselineSettledTurnId,
     lastDispatchedSettledTurnId: config.lastDispatchedSettledTurnId,
+    lastDispatchedMessageId: config.lastDispatchedMessageId,
     roundsDispatched: config.roundsDispatched,
     lastDispatchedAt: config.lastDispatchedAt,
   };
@@ -654,6 +655,7 @@ function threadAutoNudgeSummariesEqual(
     left.armedAt === right.armedAt &&
     left.baselineSettledTurnId === right.baselineSettledTurnId &&
     left.lastDispatchedSettledTurnId === right.lastDispatchedSettledTurnId &&
+    left.lastDispatchedMessageId === right.lastDispatchedMessageId &&
     left.roundsDispatched === right.roundsDispatched &&
     left.lastDispatchedAt === right.lastDispatchedAt
   );
@@ -2004,6 +2006,7 @@ function applyEnvironmentOrchestrationEvent(
           armedAt: null,
           baselineSettledTurnId: null,
           lastDispatchedSettledTurnId: null,
+          lastDispatchedMessageId: null,
           roundsDispatched: 0,
           lastDispatchedAt: null,
         },
@@ -2020,6 +2023,7 @@ function applyEnvironmentOrchestrationEvent(
               autoNudge: {
                 ...thread.autoNudge,
                 lastDispatchedSettledTurnId: event.payload.completedTurnId,
+                lastDispatchedMessageId: event.payload.messageId,
                 roundsDispatched: event.payload.roundsDispatched,
                 lastDispatchedAt: event.payload.dispatchedAt,
               },

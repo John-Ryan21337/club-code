@@ -980,6 +980,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
               armedAt: null,
               baselineSettledTurnId: null,
               lastDispatchedSettledTurnId: null,
+              lastDispatchedMessageId: null,
               roundsDispatched: 0,
               lastDispatchedAt: null,
             },
@@ -1004,6 +1005,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             autoNudge: {
               ...existingRow.value.autoNudge,
               lastDispatchedSettledTurnId: event.payload.completedTurnId,
+              lastDispatchedMessageId: null,
               roundsDispatched: event.payload.roundsDispatched,
               lastDispatchedAt: event.payload.dispatchedAt,
             },

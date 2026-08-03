@@ -630,6 +630,7 @@ export function projectEvent(
                 armedAt: null,
                 baselineSettledTurnId: null,
                 lastDispatchedSettledTurnId: null,
+                lastDispatchedMessageId: null,
                 roundsDispatched: 0,
                 lastDispatchedAt: null,
               },
@@ -661,6 +662,7 @@ export function projectEvent(
               autoNudge: {
                 ...current,
                 lastDispatchedSettledTurnId: payload.completedTurnId,
+                lastDispatchedMessageId: payload.messageId,
                 roundsDispatched: payload.roundsDispatched,
                 lastDispatchedAt: payload.dispatchedAt,
               },
