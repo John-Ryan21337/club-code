@@ -408,7 +408,14 @@ function AmbianceCanvas() {
           // Context compaction reads as fog; other tool starts as gusts.
           if (kind.includes("compaction") || summary.toLowerCase().includes("compact")) {
             engine.pulseFog();
-          } else if (signals.lastActivityTone === "tool" && kind.endsWith("started")) {
+          } else if (
+            // Orchestration (`local_agent`/`local_workflow`/`local_bash`) reports
+            // its lifecycle as `task.*` with an `info` tone, not the `tool` tone
+            // a direct tool call uses. Gating bursts on tone alone left the sky
+            // completely still while a delegating agent was doing real work.
+            (signals.lastActivityTone === "tool" || kind.startsWith("task.")) &&
+            kind.endsWith("started")
+          ) {
             engine.pulseBurst();
           }
         }
