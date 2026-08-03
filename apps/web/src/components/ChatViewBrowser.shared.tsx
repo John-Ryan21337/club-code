@@ -57,6 +57,8 @@ import { createAuthenticatedSessionHandlers } from "../../test/authHttpHandlers"
 import { BrowserWsRpcHarness, type NormalizedWsRpcRequestBody } from "../../test/wsRpcHarness";
 
 import { DEFAULT_CLIENT_SETTINGS } from "@cafecode/contracts/settings";
+import { replaceClientSettingsSnapshot } from "../hooks/clientSettingsState";
+import { UiLocalizationProvider } from "../uiLocalization";
 import { __resetAutoNudgeTurnLedgerForTests } from "../autoNudger";
 import {
   AUTO_NUDGE_SUPPRESSION_STORAGE_KEY,
@@ -1772,8 +1774,15 @@ async function mountChatView(options: {
   );
 
   const screen = await render(
+    // `main.tsx` wraps the app in `UiLocalizationProvider`, but this harness
+    // did not, so every dual-language behavior was untestable here — which is
+    // how a dual-language layout defect reached a release. Mirror the real
+    // provider tree. English resolves to identity, so existing cases are
+    // unaffected.
     <AppAtomRegistryProvider>
-      <RouterProvider router={router} />
+      <UiLocalizationProvider>
+        <RouterProvider router={router} />
+      </UiLocalizationProvider>
     </AppAtomRegistryProvider>,
     {
       container: host,
@@ -3917,6 +3926,58 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
         );
       } finally {
         FileReader.prototype.readAsDataURL = originalReadAsDataUrl;
+        await mounted.cleanup();
+      }
+    });
+
+    it("keeps every composer footer control and icon visible in dual-language mode", async () => {
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: createSnapshotForTargetUser({
+          targetMessageId: "msg-user-dual-language-footer" as MessageId,
+          targetText: "dual language footer geometry",
+        }),
+      });
+
+      try {
+        // `uiLanguage` is renderer-local: it is deliberately never taken from
+        // the environment server, so seeding `serverConfig.clientSettings` has
+        // no effect. Drive the renderer snapshot directly.
+        replaceClientSettingsSnapshot({ ...DEFAULT_CLIENT_SETTINGS, uiLanguage: "dual" });
+        const row = await waitForElement(
+          () =>
+            document.querySelector<HTMLElement>('[data-chat-composer-collapsed-controls="true"]'),
+          "Unable to find composer collapsed controls row.",
+        );
+        await waitForLayout();
+
+        // Control: prove the fixture actually put the UI in dual mode. Without
+        // this the geometry assertions below could pass vacuously against an
+        // English layout and report the bug as fixed.
+        await vi.waitFor(
+          () => {
+            expect(document.documentElement.dataset.uiLanguage).toBe("dual");
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+
+        const rowRect = row.getBoundingClientRect();
+        // The row scrolls horizontally with its scrollbar hidden, so anything
+        // wider than the visible box is silently unreachable rather than
+        // clipped with a cue. Overflow here is the defect, not a cosmetic one.
+        expect(row.scrollWidth).toBeLessThanOrEqual(Math.ceil(row.clientWidth));
+
+        const icons = Array.from(row.querySelectorAll<SVGElement>("svg"));
+        expect(icons.length).toBeGreaterThan(0);
+        for (const icon of icons) {
+          const rect = icon.getBoundingClientRect();
+          // A flex-shrunk icon collapses to zero width while its label survives.
+          expect(rect.width).toBeGreaterThan(0);
+          expect(rect.height).toBeGreaterThan(0);
+          expect(rect.left).toBeGreaterThanOrEqual(rowRect.left - 0.5);
+          expect(rect.right).toBeLessThanOrEqual(rowRect.right + 0.5);
+        }
+      } finally {
         await mounted.cleanup();
       }
     });

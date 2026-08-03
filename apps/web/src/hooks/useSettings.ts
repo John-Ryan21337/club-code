@@ -23,6 +23,7 @@ import { ensureLocalApi } from "~/localApi";
 import * as Struct from "effect/Struct";
 import * as Equal from "effect/Equal";
 import { applyClientSettingsPatch } from "@cafecode/shared/clientSettings";
+import { toastManager } from "../components/ui/toast";
 import { applyServerSettingsPatch } from "@cafecode/shared/serverSettings";
 import {
   applyClientSettingsUpdated,
@@ -131,6 +132,18 @@ async function maybeImportLocalClientSettingsToServer(): Promise<void> {
 
 function reportSettingsWriteFailure(scope: "server" | "client" | "unified", error: unknown): void {
   console.error(`${CLIENT_SETTINGS_PERSISTENCE_ERROR_SCOPE} ${scope} update failed`, error);
+  // A rejected write rolls the optimistic value back, so the control silently
+  // returns to its previous position. Reporting only to the console made that
+  // read as a dead toggle: the setting appeared to do nothing, with no error
+  // anywhere an operator or a log reader could see it. Surface it.
+  toastManager.add({
+    title: "Setting was not saved",
+    description:
+      error instanceof Error
+        ? error.message
+        : `The ${scope} settings write failed and the previous value was restored.`,
+    type: "error",
+  });
 }
 
 // ── Key sets for routing patches ─────────────────────────────────────
