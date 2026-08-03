@@ -1347,6 +1347,83 @@ routing.layer("ProviderServiceLive routing", (it) => {
     }),
   );
 
+  it.effect("stops the bound provider before starting a replacement provider", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const threadId = asThreadId("thread-provider-replacement-order");
+
+      yield* provider.startSession(threadId, {
+        provider: ProviderDriverKind.make("claudeAgent"),
+        providerInstanceId: claudeAgentInstanceId,
+        threadId,
+        cwd: "/tmp/project-provider-replacement-order",
+        runtimeMode: "full-access",
+      });
+
+      const calls: string[] = [];
+      const stopClaude = routing.claude.stopSession.getMockImplementation();
+      const startCodex = routing.codex.startSession.getMockImplementation();
+      assert.ok(stopClaude);
+      assert.ok(startCodex);
+      routing.claude.stopSession.mockImplementationOnce((stoppedThreadId) =>
+        Effect.sync(() => calls.push("stop-claude")).pipe(
+          Effect.andThen(stopClaude(stoppedThreadId)),
+        ),
+      );
+      routing.codex.startSession.mockImplementationOnce((input) => {
+        calls.push("start-codex");
+        return startCodex(input);
+      });
+
+      yield* provider.startSession(threadId, {
+        provider: ProviderDriverKind.make("codex"),
+        providerInstanceId: codexInstanceId,
+        threadId,
+        cwd: "/tmp/project-provider-replacement-order",
+        runtimeMode: "full-access",
+      });
+
+      assert.deepEqual(calls, ["stop-claude", "start-codex"]);
+    }),
+  );
+
+  it.effect("does not start a replacement when the bound provider cannot be stopped", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const threadId = asThreadId("thread-provider-replacement-stop-failure");
+
+      yield* provider.startSession(threadId, {
+        provider: ProviderDriverKind.make("claudeAgent"),
+        providerInstanceId: claudeAgentInstanceId,
+        threadId,
+        runtimeMode: "full-access",
+      });
+
+      routing.codex.startSession.mockClear();
+      routing.claude.stopSession.mockImplementationOnce(() =>
+        Effect.fail(
+          new ProviderAdapterRequestError({
+            provider: "claudeAgent",
+            method: "stopSession",
+            detail: "still active",
+          }),
+        ),
+      );
+
+      const exit = yield* Effect.exit(
+        provider.startSession(threadId, {
+          provider: ProviderDriverKind.make("codex"),
+          providerInstanceId: codexInstanceId,
+          threadId,
+          runtimeMode: "full-access",
+        }),
+      );
+
+      assert.equal(Exit.isFailure(exit), true);
+      assert.equal(routing.codex.startSession.mock.calls.length, 0);
+    }),
+  );
+
   it.effect("recovers stale sessions for sendTurn using persisted cwd", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;

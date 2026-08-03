@@ -841,6 +841,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   const stopStaleSessionsForThread = Effect.fn("stopStaleSessionsForThread")(function* (input: {
     readonly threadId: ThreadId;
     readonly currentInstanceId: ProviderInstanceId;
+    readonly requireSuccess?: boolean;
   }) {
     const currentAdapters = yield* getAdapterEntries;
     yield* Effect.forEach(
@@ -854,15 +855,18 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
                 return;
               }
 
-              yield* adapter.stopSession(input.threadId).pipe(
-                Effect.catchCause((cause) =>
-                  Effect.logWarning("provider.session.stop-stale-failed", {
-                    threadId: input.threadId,
-                    provider: adapter.provider,
-                    cause,
-                  }),
-                ),
-              );
+              const stop = adapter.stopSession(input.threadId);
+              yield* input.requireSuccess
+                ? stop
+                : stop.pipe(
+                    Effect.catchCause((cause) =>
+                      Effect.logWarning("provider.session.stop-stale-failed", {
+                        threadId: input.threadId,
+                        provider: adapter.provider,
+                        cause,
+                      }),
+                    ),
+                  );
             }),
       { discard: true },
     );
@@ -946,6 +950,24 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           "provider.additional_directories.count": effectiveAdditionalDirectories?.length ?? 0,
         });
         const adapter = yield* registry.getByInstance(resolvedInstanceId);
+        // A provider switch must retire the previously bound adapter before
+        // the replacement adapter can emit session lifecycle events. Starting
+        // the replacement first creates a split-brain window: its start event
+        // persists the new binding while the old adapter still reports an
+        // active session for the same thread. Concurrent list/goal operations
+        // then either fail the binding invariant or route back to the old
+        // provider. A failed replacement remains recoverable from the durable
+        // prior binding/resume cursor.
+        if (
+          persistedBinding?.providerInstanceId !== undefined &&
+          persistedBinding.providerInstanceId !== resolvedInstanceId
+        ) {
+          yield* stopStaleSessionsForThread({
+            threadId,
+            currentInstanceId: resolvedInstanceId,
+            requireSuccess: true,
+          });
+        }
         const startInput = {
           ...input,
           providerInstanceId: resolvedInstanceId,
@@ -1003,10 +1025,9 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
             : {}),
         };
 
-        yield* stopStaleSessionsForThread({
-          threadId,
-          currentInstanceId: resolvedInstanceId,
-        });
+        // Also clean up any unbound stale adapter sessions that were not
+        // represented by the durable binding (for example after recovery).
+        yield* stopStaleSessionsForThread({ threadId, currentInstanceId: resolvedInstanceId });
         const usedRejectedResumeCursorRecovery = yield* Ref.get(recoveredFromRejectedResumeCursor);
         yield* upsertSessionBinding(sessionWithInstance, threadId, {
           modelSelection: input.modelSelection,
