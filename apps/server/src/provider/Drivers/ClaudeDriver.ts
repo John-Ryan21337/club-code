@@ -29,6 +29,7 @@ import { makeClaudeTextGeneration } from "../../textGeneration/ClaudeTextGenerat
 import { ServerConfig } from "../../config.ts";
 import { ProviderDriverError } from "../Errors.ts";
 import { makeClaudeAdapter } from "../Layers/ClaudeAdapter.ts";
+import { isClaudeSubscriptionPlanType } from "../claudeSubscription.ts";
 import {
   checkClaudeProviderStatus,
   makePendingClaudeProvider,
@@ -63,17 +64,16 @@ const DRIVER_KIND = ProviderDriverKind.make("claudeAgent");
 const SNAPSHOT_REFRESH_INTERVAL = Duration.minutes(5);
 const CAPABILITIES_PROBE_TTL = Duration.minutes(5);
 const CLAUDE_ACCOUNT_USAGE_MINIMUM_VERSION = "2.1.216";
-const CLAUDE_SUBSCRIPTION_AUTH_TYPES = new Set(["pro", "max", "team", "enterprise"]);
 
 export function supportsClaudeAccountUsage(
   snapshot: Pick<ServerProvider, "auth" | "version">,
 ): boolean {
-  const authType = snapshot.auth.type?.trim().toLowerCase();
   const accountEmail = snapshot.auth.email?.trim();
   return (
     snapshot.auth.status === "authenticated" &&
-    authType !== undefined &&
-    CLAUDE_SUBSCRIPTION_AUTH_TYPES.has(authType) &&
+    // The SDK decorates this string ("Claude Max", "Claude Max 20x
+    // Subscription"). Canonicalize instead of exact-matching bare plan names.
+    isClaudeSubscriptionPlanType(snapshot.auth.type) &&
     accountEmail !== undefined &&
     accountEmail.length > 0 &&
     snapshot.version !== null &&

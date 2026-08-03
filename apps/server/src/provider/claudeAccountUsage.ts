@@ -5,11 +5,15 @@ import type {
   ServerProviderPaidUsage,
 } from "@cafecode/contracts";
 
+import {
+  CLAUDE_SUBSCRIPTION_PLAN_TYPES,
+  normalizeClaudeSubscriptionType,
+} from "./claudeSubscription.ts";
+
 const FIVE_HOUR_WINDOW_MINS = 300;
 const SEVEN_DAY_WINDOW_MINS = 10_080;
 const MAX_MODEL_SCOPED_WINDOWS = 32;
 const MAX_LABEL_LENGTH = 80;
-const CLAUDE_SUBSCRIPTION_TYPES = new Set(["pro", "max", "team", "enterprise"]);
 const ISO_TIMESTAMP_PATTERN =
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2})$/;
 
@@ -155,9 +159,18 @@ export function parseClaudeAccountUsage(
 
   let planType: string | undefined;
   if (root.subscription_type !== undefined && root.subscription_type !== null) {
-    const rawPlanType = readBoundedString(root.subscription_type, MAX_LABEL_LENGTH)?.toLowerCase();
-    if (!rawPlanType || !CLAUDE_SUBSCRIPTION_TYPES.has(rawPlanType)) return undefined;
-    planType = rawPlanType;
+    const rawPlanType = readBoundedString(root.subscription_type, MAX_LABEL_LENGTH);
+    // Canonicalize the decorated upstream plan string before gating on it, so
+    // this decoder and the driver capability gate cannot disagree.
+    const normalizedPlanType = normalizeClaudeSubscriptionType(rawPlanType);
+    if (
+      !normalizedPlanType ||
+      !CLAUDE_SUBSCRIPTION_PLAN_TYPES.has(normalizedPlanType) ||
+      !rawPlanType
+    ) {
+      return undefined;
+    }
+    planType = normalizedPlanType;
   }
 
   const baseSnapshot: ServerProviderAccountRateLimitSnapshot = {

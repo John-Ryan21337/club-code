@@ -57,4 +57,39 @@ describe("supportsClaudeAccountUsage", () => {
       ),
     ).toBe(false);
   });
+
+  it("accepts the decorated subscription strings the Claude CLI actually reports", () => {
+    // Regression: a live `auth.type` of "Claude Max" reported account usage as
+    // unsupported, which disabled the `/usage` probe and the sidebar refresh,
+    // leaving the widget with only a reset time and "usage unknown".
+    for (const type of [
+      "Claude Max",
+      "Claude Max Subscription",
+      "Claude Max 20x Subscription",
+      "claude_max",
+      "Claude Pro Subscription",
+      "Claude Team Subscription",
+      "Claude Enterprise Subscription",
+    ]) {
+      expect(
+        supportsClaudeAccountUsage(
+          claudeProvider({
+            auth: { status: "authenticated", type, email: "operator@example.com" },
+          }),
+        ),
+      ).toBe(true);
+    }
+  });
+
+  it("still refuses unentitled authentication however it is decorated", () => {
+    for (const type of ["Claude Free Subscription", "free", "Anthropic API Key"]) {
+      expect(
+        supportsClaudeAccountUsage(
+          claudeProvider({
+            auth: { status: "authenticated", type, email: "operator@example.com" },
+          }),
+        ),
+      ).toBe(false);
+    }
+  });
 });

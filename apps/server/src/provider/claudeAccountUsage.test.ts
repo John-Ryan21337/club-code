@@ -109,6 +109,43 @@ describe("parseClaudeAccountUsage", () => {
     expect(JSON.stringify(parsed)).not.toContain("total_cost_usd");
   });
 
+  it("decodes decorated subscription strings and canonicalizes the reported plan", () => {
+    // Regression: the decoder exact-matched bare plan names, so a decorated
+    // `subscription_type` discarded the entire `/usage` response.
+    for (const [reported, expectedPlanType] of [
+      ["Claude Max", "max"],
+      ["Claude Max 20x Subscription", "max"],
+      ["claude_pro", "pro"],
+      ["Claude Team Subscription", "team"],
+    ] as const) {
+      const parsed = parseClaudeAccountUsage(
+        {
+          subscription_type: reported,
+          rate_limits_available: true,
+          rate_limits: {
+            five_hour: { utilization: 20, resets_at: "2026-07-27T10:00:00.000Z" },
+          },
+        },
+        CHECKED_AT,
+      );
+      expect(parsed?.rateLimits.planType).toBe(expectedPlanType);
+      expect(parsed?.rateLimits.primary?.usedPercent).toBe(20);
+    }
+  });
+
+  it("rejects subscription strings that name no known plan family", () => {
+    expect(
+      parseClaudeAccountUsage(
+        {
+          subscription_type: "some-future-plan",
+          rate_limits_available: true,
+          rate_limits: { five_hour: { utilization: 20, resets_at: "2026-07-27T10:00:00.000Z" } },
+        },
+        CHECKED_AT,
+      ),
+    ).toBeUndefined();
+  });
+
   it("returns a checked empty snapshot when subscription limits do not apply", () => {
     expect(
       parseClaudeAccountUsage(
