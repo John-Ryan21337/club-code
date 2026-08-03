@@ -533,6 +533,57 @@ describe("Matrix provider activity overlay", () => {
     );
   });
 
+  it("draws a connector for delegated work reported as task lifecycle", () => {
+    // Orchestration (`local_agent`/`local_workflow`/`local_bash`) reports
+    // `task.*`, not `tool.*`. Without a provider attestation the overlay has no
+    // evidence and correctly draws nothing, so the sky stayed empty while a
+    // delegating agent was working.
+    const now = Date.now();
+    const turnId = TurnId.make("turn-delegated-task");
+    const started = activity(
+      "delegated-task-started",
+      new Date(now - 100).toISOString(),
+      {
+        taskId: "delegated-task-id",
+        taskType: "local_agent",
+        detail: "delegated description that must never be projected",
+        observed: {
+          providerObserved: true,
+          activityType: "agent",
+          toolId: "delegated-task-id",
+        },
+      },
+      "task.started",
+      turnId,
+    );
+    const completed = activity(
+      "delegated-task-completed",
+      new Date(now - 50).toISOString(),
+      {
+        taskId: "delegated-task-id",
+        status: "completed",
+        observed: {
+          providerObserved: true,
+          activityType: "agent",
+          toolId: "delegated-task-id",
+        },
+      },
+      "task.completed",
+      turnId,
+    );
+
+    const events = deriveMatrixActivityEvents([started, completed]);
+    expect(events).toHaveLength(2);
+    expect(events.map((event) => event.category)).toEqual(["agent", "agent"]);
+    expect(events[0]?.relationHashes).toEqual(events[1]?.relationHashes);
+    expect(JSON.stringify(events)).not.toMatch(/delegated-task-id|delegated description/iu);
+
+    const animation = createMatrixActivityAnimationState();
+    updateMatrixActivityAnimationInPlace(animation, events, now, 160, false);
+    expect(animation.linkCount).toBe(1);
+    expect(animation.links[0]).toMatchObject({ category: "agent" });
+  });
+
   it("draws one honest verified route for a lone canonical agent dispatch", () => {
     const now = Date.parse("2026-07-23T12:00:01.000Z");
     const loneDispatch = activity(

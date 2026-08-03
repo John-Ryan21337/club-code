@@ -623,6 +623,17 @@ function runtimeEventToActivities(
             ...(event.payload.description
               ? { detail: truncateDetail(event.payload.description) }
               : {}),
+            // Attest the delegation so activity connectors can render it. This
+            // event came from the provider runtime stream, so `providerObserved`
+            // is a fact rather than a claim; `toolId` gives the started/completed
+            // pair a stable relation identity within the turn. Without this the
+            // renderer has no evidence and deliberately draws nothing, which is
+            // why orchestration looked idle while delegated work was running.
+            observed: {
+              providerObserved: true,
+              activityType: "agent",
+              toolId: event.payload.taskId,
+            },
           },
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
@@ -669,6 +680,13 @@ function runtimeEventToActivities(
             status: event.payload.status,
             ...(event.payload.summary ? { detail: truncateDetail(event.payload.summary) } : {}),
             ...(event.payload.usage !== undefined ? { usage: event.payload.usage } : {}),
+            // Pairs with the matching `task.started` attestation above; the
+            // shared `toolId` is what lets a connector span the delegation.
+            observed: {
+              providerObserved: true,
+              activityType: "agent",
+              toolId: event.payload.taskId,
+            },
           },
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
