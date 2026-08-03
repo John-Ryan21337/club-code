@@ -253,7 +253,14 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
               aria-label="Claude permission mode"
               title={claudePermissionModeOption.description}
             >
-              <ClaudePermissionModeIcon className="size-4" />
+              {/*
+                `shrink-0` is required: this trigger is a flex row inside the
+                horizontally-constrained composer footer. Without it a long
+                label — notably the dual English + Japanese UI language — wins
+                the shrink negotiation and compresses the icon to zero width,
+                so the icon vanishes while the text survives.
+              */}
+              <ClaudePermissionModeIcon className="size-4 shrink-0" />
               <SelectValue>{claudePermissionModeOption.label}</SelectValue>
             </SelectTrigger>
             <SelectPopup alignItemWithTrigger={false}>
@@ -314,7 +321,8 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
             aria-label="Runtime mode"
             title={runtimeModeOption.description}
           >
-            <RuntimeModeIcon className="size-4" />
+            {/* Same flex-shrink protection as the Claude permission trigger. */}
+            <RuntimeModeIcon className="size-4 shrink-0" />
             <SelectValue>{runtimeModeOption.label}</SelectValue>
           </SelectTrigger>
           <SelectPopup alignItemWithTrigger={false}>
