@@ -29,6 +29,7 @@ import {
   type ServerProvider,
   type ServerProviderAccountRateLimitSnapshot,
   type ServerProviderAccountRateLimitWindow,
+  ServerProviderRateLimitResetCreditError,
   type ServerProviderUpdateState,
 } from "@cafecode/contracts";
 import * as Cause from "effect/Cause";
@@ -256,6 +257,7 @@ const buildSnapshotSource = (instance: ProviderInstance): ProviderSnapshotSource
   getSnapshot: instance.snapshot.getSnapshot,
   refresh: instance.snapshot.refresh,
   refreshAccountUsage: instance.snapshot.refreshAccountUsage,
+  consumeRateLimitResetCredit: instance.snapshot.consumeRateLimitResetCredit,
   streamChanges: instance.snapshot.streamChanges,
 });
 
@@ -604,6 +606,44 @@ export const ProviderRegistryLive = Layer.effect(
       );
     });
 
+    const consumeInstanceRateLimitResetCredit = Effect.fn("consumeInstanceRateLimitResetCredit")(
+      function* (input: {
+        readonly instanceId: ProviderInstanceId;
+        readonly attemptId: string;
+        readonly creditId?: string;
+      }) {
+        const sources = yield* getLiveSources;
+        const providerSource = sources.find(
+          (candidate) => candidate.instanceId === input.instanceId,
+        );
+        if (!providerSource?.consumeRateLimitResetCredit) {
+          // Unknown instance and no-reset-capability are the same answer to the
+          // caller: nothing here can be redeemed. Fail rather than silently
+          // returning a "nothing happened" outcome, so the operator is never
+          // told a reset was attempted when none was.
+          return yield* Effect.fail(
+            new ServerProviderRateLimitResetCreditError({
+              instanceId: input.instanceId,
+              reason: "This provider does not support redeemable usage limit resets.",
+            }),
+          );
+        }
+
+        const result = yield* providerSource.consumeRateLimitResetCredit({
+          attemptId: input.attemptId,
+          ...(input.creditId !== undefined ? { creditId: input.creditId } : {}),
+        });
+        // Publish the post-redemption snapshot through the same correlation path
+        // as a usage refresh so every subscriber sees the new balance. A publish
+        // failure must not turn a completed redemption into a reported failure.
+        const providers = yield* correlateSnapshotWithSource(providerSource, result.snapshot).pipe(
+          Effect.flatMap(syncProvider),
+          Effect.catchCause(() => Ref.get(providersRef)),
+        );
+        return { outcome: result.outcome, providers };
+      },
+    );
+
     const getProviderMaintenanceCapabilitiesForInstance = Effect.fn(
       "getProviderMaintenanceCapabilitiesForInstance",
     )(function* (instanceId: ProviderInstanceId, provider: ProviderDriverKind) {
@@ -817,6 +857,7 @@ export const ProviderRegistryLive = Layer.effect(
         refreshInstance(instanceId).pipe(Effect.catchCause(recoverRefreshFailure)),
       refreshInstanceAccountUsage: (instanceId: ProviderInstanceId) =>
         refreshInstanceAccountUsage(instanceId).pipe(Effect.catchCause(recoverRefreshFailure)),
+      consumeInstanceRateLimitResetCredit,
       getProviderMaintenanceCapabilitiesForInstance,
       setProviderMaintenanceActionState,
       updateProviderAccountRateLimits,

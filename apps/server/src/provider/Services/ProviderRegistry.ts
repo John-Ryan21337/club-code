@@ -11,6 +11,8 @@ import type {
   ProviderDriverKind,
   ServerProvider,
   ServerProviderAccountRateLimitWindow,
+  ServerProviderRateLimitResetCreditError,
+  ServerProviderRateLimitResetCreditOutcome,
   ServerProviderUpdateState,
 } from "@cafecode/contracts";
 import * as Context from "effect/Context";
@@ -58,6 +60,27 @@ export interface ProviderRegistryShape {
   readonly refreshInstanceAccountUsage: (
     instanceId: ProviderInstanceId,
   ) => Effect.Effect<ReadonlyArray<ServerProvider>>;
+
+  /**
+   * Redeem one usage-limit reset credit for a provider instance and return the
+   * upstream outcome alongside the refreshed snapshot list.
+   *
+   * Irreversible and operator-initiated: never call this from a poll, retry, or
+   * any automatic path. `attemptId` identifies one logical attempt so that a
+   * transport-level retry cannot spend a second credit. Fails when the instance
+   * is unknown or its provider cannot hold redeemable credits.
+   */
+  readonly consumeInstanceRateLimitResetCredit: (input: {
+    readonly instanceId: ProviderInstanceId;
+    readonly attemptId: string;
+    readonly creditId?: string;
+  }) => Effect.Effect<
+    {
+      readonly outcome: ServerProviderRateLimitResetCreditOutcome;
+      readonly providers: ReadonlyArray<ServerProvider>;
+    },
+    ServerProviderRateLimitResetCreditError
+  >;
 
   /**
    * Resolve the maintenance capabilities owned by one live provider instance.

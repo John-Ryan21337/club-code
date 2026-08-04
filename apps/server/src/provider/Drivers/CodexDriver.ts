@@ -21,11 +21,17 @@
  *
  * @module provider/Drivers/CodexDriver
  */
-import { CodexSettings, ProviderDriverKind, type ServerProvider } from "@cafecode/contracts";
+import {
+  CodexSettings,
+  ProviderDriverKind,
+  ServerProviderRateLimitResetCreditError,
+  type ServerProvider,
+} from "@cafecode/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -39,6 +45,7 @@ import { makeCodexAdapter } from "../Layers/CodexAdapter.ts";
 import {
   checkCodexCliProviderStatus,
   checkCodexProviderStatus,
+  consumeCodexRateLimitResetCredit,
   makePendingCodexProvider,
   readCodexAccountRateLimits,
 } from "../Layers/CodexProvider.ts";
@@ -68,6 +75,12 @@ const DRIVER_KIND = ProviderDriverKind.make("codex");
 // neither path creates hidden Codex app-server sessions or repeated CLI probe
 // queues.
 const PERIODIC_SNAPSHOT_REFRESH_INTERVAL = Duration.minutes(5);
+/**
+ * Redemption spawns an app-server and makes one network round trip, so it needs
+ * far more headroom than the badge probe — but it must still be bounded, since
+ * the operator is waiting on a button.
+ */
+const RATE_LIMIT_RESET_CREDIT_TIMEOUT_MS = 30_000;
 const UPDATE_DEFINITION = {
   provider: DRIVER_KIND,
   npmPackageName: "@openai/codex",
@@ -120,6 +133,9 @@ const withInstanceIdentity =
         snapshot.auth.type === "chatgpt" || snapshot.accountRateLimits
           ? "supported"
           : "unsupported",
+      // Reset credits are granted against a ChatGPT account. API-key and OSS
+      // instances can report usage but can never hold a redeemable credit.
+      accountRateLimitResets: snapshot.auth.type === "chatgpt" ? "supported" : "unsupported",
     },
   });
 
@@ -339,6 +355,72 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
             ),
             Effect.provideService(FileSystem.FileSystem, fileSystem),
             Effect.provideService(Path.Path, path),
+          );
+        },
+        // Redeeming a reset credit is an irreversible account mutation, so it
+        // takes the versioned app-server request rather than the badge's
+        // lightweight HTTP read — see `consumeCodexRateLimitResetCredit`. The
+        // operator-initiated RPC is the only caller.
+        consumeRateLimitResetCredit: ({ settings, snapshot, attemptId, creditId }) => {
+          if (
+            settings.ossMode ||
+            snapshot.auth.status !== "authenticated" ||
+            snapshot.auth.type !== "chatgpt"
+          ) {
+            return Effect.fail(
+              new ServerProviderRateLimitResetCreditError({
+                instanceId,
+                reason: "Codex must be signed in with ChatGPT to redeem a usage limit reset.",
+              }),
+            );
+          }
+          return refreshCodexShadowHome.pipe(
+            Effect.catch((cause) =>
+              Effect.logWarning("codex.home.authRefreshBeforeResetCreditFailed", {
+                instanceId,
+                detail: cause.message,
+              }),
+            ),
+            Effect.andThen(
+              consumeCodexRateLimitResetCredit({
+                binaryPath: settings.binaryPath,
+                ...(settings.homePath ? { homePath: settings.homePath } : {}),
+                cwd: process.cwd(),
+                attemptId,
+                ...(creditId !== undefined ? { creditId } : {}),
+                environment: effectiveEnvironment,
+              }),
+            ),
+            Effect.scoped,
+            Effect.timeoutOption(Duration.millis(RATE_LIMIT_RESET_CREDIT_TIMEOUT_MS)),
+            Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+            Effect.provideService(FileSystem.FileSystem, fileSystem),
+            Effect.provideService(Path.Path, path),
+            Effect.flatMap((outcome) =>
+              // A timeout is genuinely ambiguous: codex may have redeemed
+              // before we stopped waiting. Never report success, and never
+              // imply the credit is safe — the refreshed balance decides.
+              Option.isSome(outcome)
+                ? Effect.succeed(outcome.value)
+                : Effect.fail(
+                    new ServerProviderRateLimitResetCreditError({
+                      instanceId,
+                      reason:
+                        "Codex did not answer the usage limit reset in time. Refresh usage to see whether the credit was spent.",
+                    }),
+                  ),
+            ),
+            Effect.catch((cause) =>
+              cause instanceof ServerProviderRateLimitResetCreditError
+                ? Effect.fail(cause)
+                : Effect.fail(
+                    new ServerProviderRateLimitResetCreditError({
+                      instanceId,
+                      reason: `Codex rejected the usage limit reset: ${cause.message}`,
+                      cause,
+                    }),
+                  ),
+            ),
           );
         },
         enrichSnapshot: ({ snapshot, publishSnapshot }) =>
