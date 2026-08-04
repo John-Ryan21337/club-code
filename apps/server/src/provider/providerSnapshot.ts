@@ -235,6 +235,7 @@ export function buildServerProvider(input: {
     runtimeCapabilities: input.runtimeCapabilities ?? {
       liveSteer: "unsupported",
       accountUsage: "unsupported",
+      accountRateLimitResets: "unsupported",
       threadGoals: "unsupported",
     },
     ...(versionAdvisory ? { versionAdvisory } : {}),

@@ -141,6 +141,13 @@ const withInstanceIdentity =
       ...snapshot.runtimeCapabilities,
       liveSteer: "supported",
       accountUsage: supportsClaudeAccountUsage(snapshot) ? "experimental" : "unsupported",
+      // Anthropic subscriptions currently grant no redeemable usage-limit reset
+      // credit. Anthropic announced a separate Agent SDK monthly credit, then
+      // paused that program before launch (June 16, 2026). The SDK's structured
+      // usage response likewise exposes only plan windows and paid extra usage,
+      // with no credit inventory or claim method. Keep this explicit so the
+      // widget renders zero without inventing an account mutation.
+      accountRateLimitResets: "unsupported",
       // Claude `active_goal` is progress telemetry, not a durable public
       // create/get/update/clear control plane. Keep it in the work log and do
       // not expose Codex goal controls for Claude instances.

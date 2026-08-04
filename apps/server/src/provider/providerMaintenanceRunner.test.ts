@@ -169,6 +169,7 @@ function makeRegistry(
       refresh: () => Ref.get(providersRef),
       refreshInstance: () => Ref.get(providersRef),
       refreshInstanceAccountUsage: () => Ref.get(providersRef),
+      consumeInstanceRateLimitResetCredit: () => Effect.die("unused in maintenance tests"),
       getProviderMaintenanceCapabilitiesForInstance: (_instanceId, provider) =>
         Effect.succeed(lifecycleFor(provider)),
       setProviderMaintenanceActionState,

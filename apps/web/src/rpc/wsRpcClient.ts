@@ -122,6 +122,14 @@ export interface WsRpcClient {
     readonly refreshProviders: (
       input?: RpcInput<typeof WS_METHODS.serverRefreshProviders>,
     ) => ReturnType<RpcUnaryMethod<typeof WS_METHODS.serverRefreshProviders>>;
+    /**
+     * Redeem one usage-limit reset credit. Irreversible — call only from an
+     * explicit operator action, and reuse `attemptId` when retrying that same
+     * action so the backend cannot spend a second credit.
+     */
+    readonly consumeProviderRateLimitResetCredit: RpcUnaryMethod<
+      typeof WS_METHODS.serverConsumeProviderRateLimitResetCredit
+    >;
     readonly loginProvider: RpcUnaryMethod<typeof WS_METHODS.serverLoginProvider>;
     readonly updateProvider: RpcUnaryMethod<typeof WS_METHODS.serverUpdateProvider>;
     readonly restartProviderRuntime: RpcUnaryMethod<typeof WS_METHODS.serverRestartProviderRuntime>;
@@ -300,6 +308,10 @@ export function createWsRpcClient(transport: WsTransport): WsRpcClient {
         transport.request((client) => client[WS_METHODS.serverInterpretAtmosphereCommand](input)),
       refreshProviders: (input) =>
         transport.request((client) => client[WS_METHODS.serverRefreshProviders](input ?? {})),
+      consumeProviderRateLimitResetCredit: (input) =>
+        transport.request((client) =>
+          client[WS_METHODS.serverConsumeProviderRateLimitResetCredit](input),
+        ),
       loginProvider: (input) =>
         transport.request((client) => client[WS_METHODS.serverLoginProvider](input)),
       updateProvider: (input) =>

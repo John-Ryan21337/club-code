@@ -11,6 +11,7 @@ import { getPrimaryEnvironmentConnection } from "../../environments/runtime";
 import { useSettings } from "../../hooks/useSettings";
 import { applyProvidersUpdated, useServerProviders } from "../../rpc/serverState";
 import { cn } from "../../lib/utils";
+import { toastManager } from "../ui/toast";
 import {
   calculateModelPacing,
   formatModelPacingDuration,
@@ -44,6 +45,21 @@ type ProviderUsageState =
   | "auth-unknown"
   | "no-data";
 
+/**
+ * Redeemable usage-limit reset credits for one provider.
+ *
+ * `availableCount` is always a number so the widget can state a balance rather
+ * than hide the row: an absent or malformed upstream field reads as zero, which
+ * is also the permanent answer for providers that grant no such credit at all.
+ * Only the authoritative aggregate is trusted — the optional per-credit list can
+ * be redacted, so counting its rows would understate the balance.
+ */
+interface ProviderResetCredits {
+  readonly availableCount: number;
+  readonly supported: boolean;
+  readonly redeemable: boolean;
+}
+
 interface ProviderUsageRow {
   readonly instanceId: ServerProvider["instanceId"];
   readonly name: string;
@@ -56,6 +72,7 @@ interface ProviderUsageRow {
   readonly exhaustionNotices: ReadonlyArray<UsageExhaustionNotice>;
   readonly paidUsage: ServerProviderPaidUsage | null;
   readonly paidUsageStale: boolean;
+  readonly resetCredits: ProviderResetCredits;
 }
 
 const clampPercent = (value: number): number => Math.max(0, Math.min(100, value));
@@ -250,6 +267,21 @@ function baseProviderUsageState(provider: ServerProvider): {
   };
 }
 
+function resetCreditsForProvider(provider: ServerProvider): ProviderResetCredits {
+  const supported = provider.runtimeCapabilities?.accountRateLimitResets === "supported";
+  const reported = provider.accountRateLimits?.rateLimitResetCredits?.availableCount;
+  const availableCount =
+    typeof reported === "number" && Number.isSafeInteger(reported) && reported >= 0 ? reported : 0;
+  return {
+    availableCount,
+    supported,
+    // Never offer redemption on a provider that cannot redeem, and never offer
+    // it against a zero balance — the request would only burn a round trip to
+    // come back `noCredit`.
+    redeemable: supported && availableCount > 0,
+  };
+}
+
 export function buildProviderUsageRows(
   providers: ReadonlyArray<ServerProvider>,
   options: {
@@ -276,6 +308,7 @@ export function buildProviderUsageRows(
         exhaustionNotices: [],
         paidUsage: null,
         paidUsageStale: false,
+        resetCredits: resetCreditsForProvider(provider),
       };
     }
 
@@ -327,6 +360,7 @@ export function buildProviderUsageRows(
       exhaustionNotices,
       paidUsage,
       paidUsageStale,
+      resetCredits: resetCreditsForProvider(provider),
     };
   });
 }
@@ -343,6 +377,41 @@ function formatPaidValue(value: string, currency: string | null | undefined): st
 function paidUsageLabel(driver: ServerProvider["driver"]): string {
   return driver === "claudeAgent" ? "Extra usage" : "Paid usage";
 }
+
+/**
+ * Identity for one logical redemption attempt, forwarded upstream as the
+ * idempotency key. A retry of the same attempt must reuse it so the backend
+ * collapses the retry instead of spending a second credit; every new operator
+ * click mints a fresh one.
+ */
+function newResetAttemptId(): string {
+  return typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID()
+    : `reset-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
+}
+
+const RESET_OUTCOME_TOASTS = {
+  reset: {
+    type: "success",
+    title: "Usage limit reset",
+    description: "A reset credit was redeemed and the limit window was reset.",
+  },
+  nothingToReset: {
+    type: "info",
+    title: "Nothing to reset",
+    description: "No usage limit was in effect, so no credit was spent.",
+  },
+  noCredit: {
+    type: "warning",
+    title: "No reset credit available",
+    description: "This account holds no redeemable usage limit reset credit.",
+  },
+  alreadyRedeemed: {
+    type: "info",
+    title: "Reset credit already redeemed",
+    description: "That credit was already spent; no additional credit was used.",
+  },
+} as const;
 
 function contextualRecommendation(
   pacing: ModelPacingResult,
@@ -369,6 +438,14 @@ export function ProviderUsageWidget() {
   const [refreshing, setRefreshing] = useState(false);
   const [refreshFailed, setRefreshFailed] = useState(false);
   const [nowMs, setNowMs] = useState(() => Date.now());
+  // Redemption is irreversible, so the button arms a confirmation first rather
+  // than spending a credit on a single stray click in a dense sidebar.
+  const [armedResetInstanceId, setArmedResetInstanceId] = useState<
+    ServerProvider["instanceId"] | null
+  >(null);
+  const [redeemingInstanceId, setRedeemingInstanceId] = useState<
+    ServerProvider["instanceId"] | null
+  >(null);
   const refreshInFlight = useRef(false);
   const currentRefreshableInstanceIds = useMemo(
     () =>
@@ -435,6 +512,33 @@ export function ProviderUsageWidget() {
       setRefreshing(false);
     }
   }, [refreshableInstanceIds]);
+
+  const redeemResetCredit = useCallback(async (instanceId: ServerProvider["instanceId"]) => {
+    setRedeemingInstanceId(instanceId);
+    try {
+      const connection = getPrimaryEnvironmentConnection();
+      // One attempt id per confirmed click. This is deliberately not retried
+      // here: a redemption whose result never arrived may still have been
+      // applied upstream, and the refreshed balance is the honest answer.
+      const result = await connection.client.server.consumeProviderRateLimitResetCredit({
+        instanceId,
+        attemptId: newResetAttemptId(),
+      });
+      applyProvidersUpdated({ providers: result.providers });
+      setNowMs(Date.now());
+      toastManager.add({ ...RESET_OUTCOME_TOASTS[result.outcome] });
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: "Usage limit reset failed",
+        description:
+          error instanceof Error ? error.message : "The provider rejected the reset request.",
+      });
+    } finally {
+      setRedeemingInstanceId(null);
+      setArmedResetInstanceId(null);
+    }
+  }, []);
 
   useEffect(() => {
     if (!settings.providerUsageWidgetEnabled) {
@@ -668,6 +772,74 @@ export function ProviderUsageWidget() {
                           Paid usage is stale; showing the last provider-reported values.
                         </div>
                       ) : null}
+                    </div>
+                  ) : null}
+                  {provider.state === "available" ? (
+                    <div
+                      className="rounded border border-sidebar-border/60 bg-sidebar-accent/35 px-1.5 py-1.5 text-[9px] leading-relaxed text-sidebar-foreground/65"
+                      data-provider-reset-credits={provider.resetCredits.availableCount}
+                      data-provider-reset-credits-supported={
+                        provider.resetCredits.supported || undefined
+                      }
+                    >
+                      <div className="flex items-center justify-between gap-2 tabular-nums">
+                        <span className="font-medium text-sidebar-foreground/75">
+                          Usage limit resets
+                        </span>
+                        <span className="font-medium">
+                          {provider.resetCredits.availableCount} available
+                        </span>
+                      </div>
+                      {provider.resetCredits.supported ? (
+                        provider.resetCredits.redeemable ? (
+                          armedResetInstanceId === provider.instanceId ? (
+                            <div className="mt-1 flex items-center justify-between gap-2">
+                              <span className="min-w-0 text-sidebar-foreground/55">
+                                Spend one credit? This cannot be undone.
+                              </span>
+                              <span className="flex shrink-0 items-center gap-1">
+                                <button
+                                  className="rounded border border-primary/40 bg-primary/10 px-1.5 py-0.5 font-medium text-sidebar-foreground/85 hover:bg-primary/20 disabled:opacity-45"
+                                  disabled={redeemingInstanceId !== null}
+                                  onClick={() => void redeemResetCredit(provider.instanceId)}
+                                  type="button"
+                                >
+                                  {redeemingInstanceId === provider.instanceId
+                                    ? "Resetting…"
+                                    : "Confirm reset"}
+                                </button>
+                                <button
+                                  className="rounded px-1.5 py-0.5 text-sidebar-foreground/55 hover:bg-sidebar-accent disabled:opacity-45"
+                                  disabled={redeemingInstanceId !== null}
+                                  onClick={() => setArmedResetInstanceId(null)}
+                                  type="button"
+                                >
+                                  Cancel
+                                </button>
+                              </span>
+                            </div>
+                          ) : (
+                            <div className="mt-1 flex justify-end">
+                              <button
+                                className="rounded border border-sidebar-border/70 px-1.5 py-0.5 font-medium text-sidebar-foreground/75 hover:bg-sidebar-accent disabled:opacity-45"
+                                disabled={redeemingInstanceId !== null}
+                                onClick={() => setArmedResetInstanceId(provider.instanceId)}
+                                type="button"
+                              >
+                                Use a reset credit
+                              </button>
+                            </div>
+                          )
+                        ) : (
+                          <div className="mt-0.5 text-sidebar-foreground/45">
+                            A reset credit appears here when this account is granted one.
+                          </div>
+                        )
+                      ) : (
+                        <div className="mt-0.5 text-sidebar-foreground/45">
+                          This provider does not grant usage limit reset credits.
+                        </div>
+                      )}
                     </div>
                   ) : null}
                   {provider.state === "available"

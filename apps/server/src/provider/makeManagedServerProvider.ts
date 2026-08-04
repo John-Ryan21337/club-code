@@ -1,4 +1,9 @@
-import type { ServerProvider, ServerProviderAccountRateLimits } from "@cafecode/contracts";
+import type {
+  ServerProvider,
+  ServerProviderAccountRateLimits,
+  ServerProviderRateLimitResetCreditError,
+  ServerProviderRateLimitResetCreditOutcome,
+} from "@cafecode/contracts";
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
@@ -99,6 +104,20 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
     readonly settings: Settings;
     readonly snapshot: ServerProvider;
   }) => Effect.Effect<ServerProviderAccountRateLimits | undefined, ServerSettingsError>;
+  /**
+   * Redeem one usage-limit reset credit for this instance. Only providers that
+   * can hold redeemable credits supply this; supplying it also requires
+   * `refreshAccountUsage`, which re-reads the post-redemption balance.
+   */
+  readonly consumeRateLimitResetCredit?: (input: {
+    readonly settings: Settings;
+    readonly snapshot: ServerProvider;
+    readonly attemptId: string;
+    readonly creditId?: string;
+  }) => Effect.Effect<
+    ServerProviderRateLimitResetCreditOutcome,
+    ServerProviderRateLimitResetCreditError
+  >;
   readonly enrichSnapshot?: (input: {
     readonly settings: Settings;
     readonly snapshot: ServerProvider;
@@ -312,6 +331,46 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
     );
   });
 
+  const consumeRateLimitResetCredit = Effect.fn("consumeRateLimitResetCredit")(
+    function* (consumeInput: { readonly attemptId: string; readonly creditId?: string }) {
+      const consume = input.consumeRateLimitResetCredit;
+      if (!consume) {
+        // Unreachable via the shape: the capability is only exposed when the
+        // driver supplies an implementation.
+        return {
+          outcome: "noCredit" as const,
+          snapshot: (yield* Ref.get(snapshotStateRef)).snapshot,
+        };
+      }
+
+      const settings = yield* input.getSettings;
+      const outcome = yield* consume({
+        settings,
+        snapshot: (yield* Ref.get(snapshotStateRef)).snapshot,
+        attemptId: consumeInput.attemptId,
+        ...(consumeInput.creditId !== undefined ? { creditId: consumeInput.creditId } : {}),
+      });
+
+      // Redemption changes both the credit balance and (on `reset`) the limit
+      // windows, so re-read usage directly rather than through the polling path:
+      // the cooldown gate and the usage single-flight would both happily hand
+      // back a snapshot read before this redemption landed.
+      yield* Ref.set(lastAccountUsageAttemptRef, yield* Clock.currentTimeMillis);
+      const snapshot = yield* snapshotMutationSemaphore
+        .withPermits(1)(applyAccountUsageBase())
+        .pipe(
+          // A failed post-redemption read must not mask a completed redemption.
+          // Report the outcome against the last known snapshot; the next poll
+          // reconciles the balance.
+          Effect.catchCause(() =>
+            Ref.get(snapshotStateRef).pipe(Effect.map((state) => state.snapshot)),
+          ),
+        );
+
+      return { outcome, snapshot };
+    },
+  );
+
   yield* Stream.runForEach(input.streamSettings, (nextSettings) =>
     Effect.asVoid(applySnapshot(nextSettings)),
   ).pipe(Effect.forkScoped);
@@ -342,6 +401,9 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
             Effect.orDie,
           ),
         }
+      : {}),
+    ...(input.consumeRateLimitResetCredit
+      ? { consumeRateLimitResetCredit: consumeRateLimitResetCredit }
       : {}),
     get streamChanges() {
       return Stream.fromPubSub(changesPubSub);

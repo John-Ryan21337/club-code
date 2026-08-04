@@ -1,4 +1,8 @@
-import type { ServerProvider } from "@cafecode/contracts";
+import type {
+  ServerProvider,
+  ServerProviderRateLimitResetCreditError,
+  ServerProviderRateLimitResetCreditOutcome,
+} from "@cafecode/contracts";
 import type * as Effect from "effect/Effect";
 import type * as Stream from "effect/Stream";
 import type { ProviderMaintenanceCapabilities } from "../providerMaintenance.ts";
@@ -13,5 +17,22 @@ export interface ServerProviderShape {
    * bounded usage-only path omit this capability.
    */
   readonly refreshAccountUsage?: Effect.Effect<ServerProvider>;
+  /**
+   * Redeem one usage-limit reset credit and return both the upstream outcome
+   * and the provider snapshot re-read afterwards. Providers whose accounts
+   * cannot hold redeemable reset credits omit this capability entirely.
+   *
+   * Irreversible and operator-initiated only — no polling path may call it.
+   */
+  readonly consumeRateLimitResetCredit?: (input: {
+    readonly attemptId: string;
+    readonly creditId?: string;
+  }) => Effect.Effect<
+    {
+      readonly outcome: ServerProviderRateLimitResetCreditOutcome;
+      readonly snapshot: ServerProvider;
+    },
+    ServerProviderRateLimitResetCreditError
+  >;
   readonly streamChanges: Stream.Stream<ServerProvider>;
 }

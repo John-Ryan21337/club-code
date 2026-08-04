@@ -61,6 +61,9 @@ import {
   ServerProviderLoginError,
   ServerProviderLoginInput,
   ServerProviderLoginResult,
+  ServerProviderRateLimitResetCreditError,
+  ServerProviderRateLimitResetCreditOutcome,
+  ServerProviders,
   ServerProviderUpdateError,
   ServerProviderUpdateInput,
   ServerProviderRuntimeRestartError,
@@ -178,6 +181,7 @@ export const WS_METHODS = {
   // Server meta
   serverGetConfig: "server.getConfig",
   serverRefreshProviders: "server.refreshProviders",
+  serverConsumeProviderRateLimitResetCredit: "server.consumeProviderRateLimitResetCredit",
   serverLoginProvider: "server.loginProvider",
   serverUpdateProvider: "server.updateProvider",
   serverRestartProviderRuntime: "server.restartProviderRuntime",
@@ -260,6 +264,40 @@ export const WsServerRefreshProvidersRpc = Rpc.make(WS_METHODS.serverRefreshProv
   }),
   success: ServerProviderUpdatedPayload,
 });
+
+/**
+ * Redeem one usage-limit reset credit for a provider instance.
+ *
+ * Redemption is irreversible and account-scoped, so it is always operator
+ * initiated — nothing on the polling path may call this. The refreshed provider
+ * list rides back with the outcome so the widget reflects the new balance and
+ * reset windows without a second round trip.
+ */
+export const WsServerConsumeProviderRateLimitResetCreditRpc = Rpc.make(
+  WS_METHODS.serverConsumeProviderRateLimitResetCredit,
+  {
+    payload: Schema.Struct({
+      instanceId: ProviderInstanceId,
+      /**
+       * Target a specific granted credit. When omitted the provider backend
+       * selects the next available one, which is the normal operator path.
+       */
+      creditId: Schema.optional(Schema.String.check(Schema.isMaxLength(200))),
+      /**
+       * Client-generated identity for one logical redemption attempt, forwarded
+       * upstream as the idempotency key. A transport retry of the same attempt
+       * must reuse this value so the backend collapses it instead of spending a
+       * second credit; a new operator click must mint a new one.
+       */
+      attemptId: Schema.String.check(Schema.isMinLength(8), Schema.isMaxLength(200)),
+    }),
+    success: Schema.Struct({
+      outcome: ServerProviderRateLimitResetCreditOutcome,
+      providers: ServerProviders,
+    }),
+    error: ServerProviderRateLimitResetCreditError,
+  },
+);
 
 export const WsServerUpdateProviderRpc = Rpc.make(WS_METHODS.serverUpdateProvider, {
   payload: ServerProviderUpdateInput,
@@ -663,6 +701,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetConfigRpc,
   WsServerInterpretAtmosphereCommandRpc,
   WsServerRefreshProvidersRpc,
+  WsServerConsumeProviderRateLimitResetCreditRpc,
   WsServerLoginProviderRpc,
   WsServerUpdateProviderRpc,
   WsServerRestartProviderRuntimeRpc,

@@ -193,6 +193,70 @@ describe("buildProviderUsageRows", () => {
     ]);
   });
 
+  it("reports polled Codex reset-credit inventory and enables redemption only above zero", () => {
+    const [withCredit, withoutCredit] = buildProviderUsageRows([
+      provider({
+        runtimeCapabilities: {
+          liveSteer: "supported",
+          threadGoals: "supported",
+          accountUsage: "supported",
+          accountRateLimitResets: "supported",
+        },
+        accountRateLimits: {
+          checkedAt: "2026-07-23T20:05:00.000Z",
+          rateLimits: {},
+          rateLimitResetCredits: { availableCount: 2, credits: null },
+        },
+      }),
+      provider({
+        instanceId: "codex-zero" as ServerProvider["instanceId"],
+        runtimeCapabilities: {
+          liveSteer: "supported",
+          threadGoals: "supported",
+          accountUsage: "supported",
+          accountRateLimitResets: "supported",
+        },
+        accountRateLimits: {
+          checkedAt: "2026-07-23T20:05:00.000Z",
+          rateLimits: {},
+          rateLimitResetCredits: { availableCount: 0 },
+        },
+      }),
+    ]);
+
+    expect(withCredit?.resetCredits).toEqual({
+      availableCount: 2,
+      supported: true,
+      redeemable: true,
+    });
+    expect(withoutCredit?.resetCredits).toEqual({
+      availableCount: 0,
+      supported: true,
+      redeemable: false,
+    });
+  });
+
+  it("renders Claude reset credits as an explicit zero without a false claim action", () => {
+    const [claude] = buildProviderUsageRows([
+      provider({
+        instanceId: "claudeAgent" as ServerProvider["instanceId"],
+        driver: "claudeAgent" as ServerProvider["driver"],
+        runtimeCapabilities: {
+          liveSteer: "supported",
+          threadGoals: "unsupported",
+          accountUsage: "experimental",
+          accountRateLimitResets: "unsupported",
+        },
+      }),
+    ]);
+
+    expect(claude?.resetCredits).toEqual({
+      availableCount: 0,
+      supported: false,
+      redeemable: false,
+    });
+  });
+
   it("keeps a fresh Claude event distinct from older keyed and paid facts", () => {
     const rows = buildProviderUsageRows(
       [
