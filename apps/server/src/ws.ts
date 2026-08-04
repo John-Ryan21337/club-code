@@ -1068,6 +1068,19 @@ const makeWsRpcLayer = (
             ).pipe(Effect.map((providers) => ({ providers }))),
             { "rpc.aggregate": "server" },
           ),
+        [WS_METHODS.serverConsumeProviderRateLimitResetCredit]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverConsumeProviderRateLimitResetCredit,
+            // Operator-initiated and irreversible: unlike the usage poll this is
+            // never gated on the widget consent flag, and it is never retried
+            // here — `attemptId` is what makes a client retry safe.
+            providerRegistry.consumeInstanceRateLimitResetCredit({
+              instanceId: input.instanceId,
+              attemptId: input.attemptId,
+              ...(input.creditId !== undefined ? { creditId: input.creditId } : {}),
+            }),
+            { "rpc.aggregate": "server" },
+          ),
         [WS_METHODS.serverUpdateProvider]: (input) =>
           observeRpcEffect(
             WS_METHODS.serverUpdateProvider,

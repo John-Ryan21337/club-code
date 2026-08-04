@@ -234,6 +234,7 @@ export function buildServerProvider(input: {
     ...(input.probe.accountRateLimits ? { accountRateLimits: input.probe.accountRateLimits } : {}),
     runtimeCapabilities: input.runtimeCapabilities ?? {
       liveSteer: "unsupported",
+      accountRateLimitResets: "unsupported",
       threadGoals: "unsupported",
       accountUsage: "unsupported",
     },

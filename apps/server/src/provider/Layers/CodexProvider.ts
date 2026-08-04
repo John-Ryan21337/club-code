@@ -1136,6 +1136,56 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
   } satisfies CodexAppServerProviderSnapshot;
 });
 
+/**
+ * Redeem one Codex usage-limit reset credit.
+ *
+ * The usage *badge* deliberately mirrors Codex's `wham/usage` HTTP read so
+ * drawing a widget never spawns a hidden app-server. Redemption takes the
+ * opposite trade on purpose: it is an irreversible, account-scoped mutation, so
+ * it goes through the versioned `account/rateLimitResetCredit/consume` request —
+ * the same contract Codex's own TUI uses — rather than an inferred REST body,
+ * and lets codex own credential, base-URL, and account-id resolution.
+ *
+ * `attemptId` is forwarded as the upstream idempotency key: reusing it collapses
+ * a retried attempt instead of spending a second credit.
+ */
+export const consumeCodexRateLimitResetCredit = Effect.fn("consumeCodexRateLimitResetCredit")(
+  function* (input: {
+    readonly binaryPath: string;
+    readonly homePath?: string;
+    readonly cwd: string;
+    readonly attemptId: string;
+    readonly creditId?: string;
+    readonly environment?: NodeJS.ProcessEnv;
+  }) {
+    // `~` is not shell-expanded for spawned env vars — mirror the probe path.
+    const resolvedHomePath = input.homePath ? expandHomePath(input.homePath) : undefined;
+    const clientContext = yield* Layer.build(
+      CodexClient.layerCommand({
+        command: input.binaryPath,
+        args: buildCodexProviderAppServerArgs(),
+        cwd: input.cwd,
+        env: {
+          ...(input.environment ?? process.env),
+          ...(resolvedHomePath ? { CODEX_HOME: resolvedHomePath } : {}),
+        },
+      }),
+    );
+    const client = yield* Effect.service(CodexClient.CodexAppServerClient).pipe(
+      Effect.provide(clientContext),
+    );
+
+    yield* client.request("initialize", buildCodexInitializeParams());
+    yield* client.notify("initialized", undefined);
+
+    const response = yield* client.request("account/rateLimitResetCredit/consume", {
+      idempotencyKey: input.attemptId,
+      ...(input.creditId ? { creditId: input.creditId } : {}),
+    });
+    return response.outcome;
+  },
+);
+
 const emptyCodexModelsFromSettings = (codexSettings: CodexSettings): ServerProvider["models"] =>
   codexSettings.customModels
     .map((model) => model.trim())

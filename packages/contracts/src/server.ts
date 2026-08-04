@@ -163,6 +163,26 @@ export const ServerProviderAccountRateLimitResetCredits = Schema.Struct({
 export type ServerProviderAccountRateLimitResetCredits =
   typeof ServerProviderAccountRateLimitResetCredits.Type;
 
+/**
+ * Result of redeeming one usage-limit reset credit, mirroring the Codex
+ * app-server `account/rateLimitResetCredit/consume` outcome enum:
+ *
+ *  - `reset`           — a credit was consumed and the limit window was reset.
+ *  - `nothingToReset`  — no window was limited, so no credit was spent.
+ *  - `noCredit`        — the account holds no redeemable credit.
+ *  - `alreadyRedeemed` — the targeted credit was already spent.
+ *
+ * Only `reset` consumes a credit; every other outcome leaves the balance intact.
+ */
+export const ServerProviderRateLimitResetCreditOutcome = Schema.Literals([
+  "reset",
+  "nothingToReset",
+  "noCredit",
+  "alreadyRedeemed",
+]);
+export type ServerProviderRateLimitResetCreditOutcome =
+  typeof ServerProviderRateLimitResetCreditOutcome.Type;
+
 export const ServerProviderAccountRateLimits = Schema.Struct({
   rateLimits: ServerProviderAccountRateLimitSnapshot,
   rateLimitsByLimitId: Schema.optionalKey(
@@ -241,6 +261,22 @@ export const ServerProviderAccountUsageSupport = Schema.Literals([
   "unsupported",
 ]);
 export type ServerProviderAccountUsageSupport = typeof ServerProviderAccountUsageSupport.Type;
+/**
+ * Whether this provider can redeem a usage-limit reset credit on demand.
+ *
+ * Only Codex/ChatGPT grants redeemable reset credits today. Anthropic paused its
+ * separately announced Agent SDK monthly-credit program before launch, and the
+ * Claude SDK exposes no credit inventory or claim method. The Claude driver
+ * therefore reports `unsupported`, and the usage widget renders a hard zero
+ * rather than hiding the row. Absence means a pre-capability server; renderers
+ * treat it as unsupported.
+ */
+export const ServerProviderAccountRateLimitResetSupport = Schema.Literals([
+  "supported",
+  "unsupported",
+]);
+export type ServerProviderAccountRateLimitResetSupport =
+  typeof ServerProviderAccountRateLimitResetSupport.Type;
 
 export const ServerProviderRuntimeCapabilities = Schema.Struct({
   liveSteer: ServerProviderLiveSteerSupport.pipe(
@@ -253,6 +289,7 @@ export const ServerProviderRuntimeCapabilities = Schema.Struct({
   // always stamp this field; retaining absence lets renderers distinguish a
   // legacy snapshot containing real usage from an explicit unsupported claim.
   accountUsage: Schema.optionalKey(ServerProviderAccountUsageSupport),
+  accountRateLimitResets: Schema.optionalKey(ServerProviderAccountRateLimitResetSupport),
 });
 export type ServerProviderRuntimeCapabilities = typeof ServerProviderRuntimeCapabilities.Type;
 
@@ -1082,6 +1119,19 @@ export class ServerProviderUpdateError extends Schema.TaggedErrorClass<ServerPro
 ) {
   override get message(): string {
     return `Provider update failed for ${this.provider}: ${this.reason}`;
+  }
+}
+
+export class ServerProviderRateLimitResetCreditError extends Schema.TaggedErrorClass<ServerProviderRateLimitResetCreditError>()(
+  "ServerProviderRateLimitResetCreditError",
+  {
+    instanceId: ProviderInstanceId,
+    reason: TrimmedNonEmptyString,
+    cause: Schema.optional(Schema.Defect),
+  },
+) {
+  override get message(): string {
+    return `Usage limit reset failed for ${this.instanceId}: ${this.reason}`;
   }
 }
 

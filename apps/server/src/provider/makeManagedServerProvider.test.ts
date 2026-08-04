@@ -494,4 +494,51 @@ describe("makeManagedServerProvider", () => {
       }),
     ),
   );
+
+  it.effect("redeems only on explicit invocation and re-reads the post-redemption balance", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const consumeCalls = yield* Ref.make(0);
+        const usageCalls = yield* Ref.make(0);
+        const provider = yield* makeManagedServerProvider<TestSettings>({
+          maintenanceCapabilities,
+          getSettings: Effect.succeed({ enabled: true }),
+          streamSettings: Stream.empty,
+          haveSettingsChanged: (previous, next) => previous.enabled !== next.enabled,
+          initialSnapshot: () => Effect.succeed(refreshedSnapshot),
+          checkProvider: Effect.succeed(refreshedSnapshot),
+          refreshAccountUsage: () =>
+            Ref.updateAndGet(usageCalls, (count) => count + 1).pipe(
+              Effect.map(() => ({
+                ...refreshedAccountRateLimits,
+                rateLimitResetCredits: { availableCount: 0 },
+              })),
+            ),
+          consumeRateLimitResetCredit: ({ attemptId }) =>
+            Ref.update(consumeCalls, (count) => count + 1).pipe(
+              Effect.map(() => {
+                assert.strictEqual(attemptId, "attempt-123");
+                return "reset" as const;
+              }),
+            ),
+          refreshInterval: "1 hour",
+        });
+
+        assert.strictEqual(yield* Ref.get(consumeCalls), 0);
+        const consume = provider.consumeRateLimitResetCredit;
+        assert.isDefined(consume);
+        if (!consume) return;
+
+        const result = yield* consume({ attemptId: "attempt-123" });
+
+        assert.strictEqual(result.outcome, "reset");
+        assert.strictEqual(yield* Ref.get(consumeCalls), 1);
+        assert.strictEqual(yield* Ref.get(usageCalls), 1);
+        assert.strictEqual(
+          result.snapshot.accountRateLimits?.rateLimitResetCredits?.availableCount,
+          0,
+        );
+      }),
+    ),
+  );
 });
