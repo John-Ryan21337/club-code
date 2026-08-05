@@ -156,6 +156,7 @@ export type ServerProviderAccountRateLimits = typeof ServerProviderAccountRateLi
 export const ServerProviderModel = Schema.Struct({
   slug: TrimmedNonEmptyString,
   name: TrimmedNonEmptyString,
+  modelSpecialty: Schema.optional(TrimmedNonEmptyString),
   shortName: Schema.optional(TrimmedNonEmptyString),
   subProvider: Schema.optional(TrimmedNonEmptyString),
   isCustom: Schema.Boolean,

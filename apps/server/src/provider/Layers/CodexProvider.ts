@@ -101,6 +101,7 @@ function codexAccountAuthLabel(account: CodexSchema.V2GetAccountResponse["accoun
     case "self_serve_business_usage_based":
     case "business":
       return "ChatGPT Business Subscription";
+    case "ent26":
     case "enterprise_cbp_usage_based":
     case "enterprise":
       return "ChatGPT Enterprise Subscription";
@@ -897,12 +898,13 @@ const STATIC_CODEX_MODELS: ReadonlyArray<ServerProviderModel> = [
   },
 ];
 
-function parseCodexModelListResponse(
+export function parseCodexModelListResponse(
   response: CodexSchema.V2ModelListResponse,
 ): ReadonlyArray<ServerProviderModel> {
   return response.data.map((model) => ({
     slug: model.model,
     name: toDisplayName(model),
+    ...(model.modelSpecialty ? { modelSpecialty: model.modelSpecialty } : {}),
     isCustom: false,
     capabilities: mapCodexModelCapabilities(model),
   }));
