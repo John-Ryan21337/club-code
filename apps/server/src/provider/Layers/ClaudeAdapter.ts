@@ -169,6 +169,10 @@ type ClaudeForwardCompatibleSystemMessage =
       readonly content: string;
       readonly trigger?: string;
       readonly direction?: string;
+      // Agent SDK 0.3.222 distinguishes a persistent main-session fallback
+      // from a fallback local to a subagent, /btw question, or background fork.
+      // Older runtimes omit this field, which upstream defines as session scope.
+      readonly scope?: "session" | "local";
       readonly original_model?: string;
       readonly fallback_model?: string;
       readonly request_id?: string;
@@ -3687,6 +3691,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           subtype: message.subtype,
           trigger: message.trigger,
           direction: message.direction,
+          scope: message.scope ?? "session",
           originalModel: message.original_model,
           fallbackModel: message.fallback_model,
           requestId: message.request_id,

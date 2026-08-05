@@ -997,12 +997,13 @@ const STATIC_CODEX_MODELS: ReadonlyArray<ServerProviderModel> = [
   },
 ];
 
-function parseCodexModelListResponse(
+export function parseCodexModelListResponse(
   response: CodexSchema.V2ModelListResponse,
 ): ReadonlyArray<ServerProviderModel> {
   return response.data.map((model) => ({
     slug: model.model,
     name: toDisplayName(model),
+    ...(model.modelSpecialty ? { modelSpecialty: model.modelSpecialty } : {}),
     isCustom: false,
     capabilities: mapCodexModelCapabilities(model),
   }));
