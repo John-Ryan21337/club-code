@@ -21,6 +21,7 @@ import { getPrimaryEnvironmentConnection } from "../../environments/runtime";
 import { useSettings } from "../../hooks/useSettings";
 import { applyProvidersUpdated, useServerProviders } from "../../rpc/serverState";
 import { cn } from "../../lib/utils";
+import { useIsMobile } from "../../hooks/useMediaQuery";
 import { toastManager } from "../ui/toast";
 import {
   calculateModelPacing,
@@ -116,6 +117,7 @@ function currentViewportHeight(): number {
 }
 
 export function ProviderUsageScrollRegion({ children }: { readonly children: ReactNode }) {
+  const isMobile = useIsMobile();
   const regionRef = useRef<HTMLElement>(null);
   const dragRef = useRef<{ readonly pointerY: number; readonly height: number } | null>(null);
   const [height, setHeight] = useState(readStoredProviderUsageHeight);
@@ -195,32 +197,39 @@ export function ProviderUsageScrollRegion({ children }: { readonly children: Rea
       <section
         ref={regionRef}
         aria-label="Provider usage limits"
-        className="max-h-[min(42svh,28rem)] overflow-y-auto overscroll-contain rounded-lg border border-sidebar-border/70 bg-sidebar-accent/25 p-2.5 sm:max-h-[min(var(--provider-usage-height),calc(100svh-12rem))]"
+        className={cn(
+          "overflow-y-auto overscroll-contain rounded-lg border border-sidebar-border/70 bg-sidebar-accent/25 p-2.5",
+          isMobile
+            ? "max-h-[min(30svh,14rem)]"
+            : "max-h-[min(var(--provider-usage-height),calc(100svh-12rem))]",
+        )}
         data-slot="provider-usage-widget"
       >
         {children}
       </section>
-      <div
-        aria-label="Resize provider usage and thread sections"
-        aria-orientation="horizontal"
-        aria-valuemax={Math.max(
-          MIN_PROVIDER_USAGE_HEIGHT_PX,
-          currentViewportHeight() - MIN_THREAD_REGION_HEIGHT_PX,
-        )}
-        aria-valuemin={MIN_PROVIDER_USAGE_HEIGHT_PX}
-        aria-valuenow={height}
-        className="group/resizer relative hidden h-2 cursor-row-resize touch-none items-center justify-center sm:flex"
-        data-slot="provider-usage-resizer"
-        onKeyDown={handleSeparatorKeyDown}
-        onPointerCancel={finishPointerResize}
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        onPointerUp={finishPointerResize}
-        role="separator"
-        tabIndex={0}
-      >
-        <span className="h-px w-full bg-sidebar-border/70 transition-colors group-hover/resizer:bg-sidebar-ring group-focus-visible/resizer:bg-sidebar-ring" />
-      </div>
+      {!isMobile ? (
+        <div
+          aria-label="Resize provider usage and thread sections"
+          aria-orientation="horizontal"
+          aria-valuemax={Math.max(
+            MIN_PROVIDER_USAGE_HEIGHT_PX,
+            currentViewportHeight() - MIN_THREAD_REGION_HEIGHT_PX,
+          )}
+          aria-valuemin={MIN_PROVIDER_USAGE_HEIGHT_PX}
+          aria-valuenow={height}
+          className="group/resizer relative flex h-2 cursor-row-resize touch-none items-center justify-center"
+          data-slot="provider-usage-resizer"
+          onKeyDown={handleSeparatorKeyDown}
+          onPointerCancel={finishPointerResize}
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={finishPointerResize}
+          role="separator"
+          tabIndex={0}
+        >
+          <span className="h-px w-full bg-sidebar-border/70 transition-colors group-hover/resizer:bg-sidebar-ring group-focus-visible/resizer:bg-sidebar-ring" />
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -31,8 +31,9 @@ it("bounds tall provider usage so the thread region remains reachable", async ()
   const threads = document.querySelector<HTMLElement>('[data-testid="thread-region"]');
   expect(usage).not.toBeNull();
   expect(threads).not.toBeNull();
+  expect(document.querySelector('[data-slot="provider-usage-resizer"]')).toBeNull();
   expect(usage!.scrollHeight).toBeGreaterThan(usage!.clientHeight);
-  expect(usage!.clientHeight).toBeLessThanOrEqual(210);
+  expect(usage!.clientHeight).toBeLessThanOrEqual(150);
   expect(threads!.getBoundingClientRect().height).toBeGreaterThan(0);
   expect(threads!.getBoundingClientRect().bottom).toBeLessThanOrEqual(500);
 });
