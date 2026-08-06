@@ -22,6 +22,7 @@ import { DesktopNotificationWatcher } from "../components/DesktopNotificationWat
 import { EmbeddedBrowserWorkspace } from "../components/EmbeddedBrowserWorkspace";
 import { BackgroundAutoNudgeCoordinator } from "../components/BackgroundAutoNudgeCoordinator";
 import { IdleThreadGuardCoordinator } from "../components/IdleThreadGuardCoordinator";
+import { MobileSettingsProfileBootstrap } from "../components/MobileSettingsProfileBootstrap";
 import { ProviderUpdateLaunchNotification } from "../components/ProviderUpdateLaunchNotification";
 import { WindowAtmosphere } from "../components/WindowAtmosphere";
 import { WorldClockWidget } from "../components/WorldClockWidget";
@@ -171,6 +172,7 @@ function RootRouteView() {
         {primaryEnvironmentAuthenticated ? <ServerStateBootstrap /> : null}
         <EnvironmentConnectionManagerBootstrap />
         <AppearanceSettingsSync />
+        <MobileSettingsProfileBootstrap />
         <AmbianceLayer />
         <PowerSaveBlockerSync />
         <WindowAtmosphere selectedThreadRef={selectedThreadRef} />

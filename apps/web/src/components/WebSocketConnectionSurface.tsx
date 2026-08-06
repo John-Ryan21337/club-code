@@ -10,6 +10,7 @@ import {
 import { getPrimaryEnvironmentConnection } from "../environments/runtime";
 
 const FORCED_WS_RECONNECT_DEBOUNCE_MS = 5_000;
+export const EXHAUSTED_WS_RECONNECT_RETRY_MS = 15_000;
 type WsAutoReconnectTrigger = "focus" | "online" | "visible";
 
 export function shouldAutoReconnect(
@@ -43,6 +44,15 @@ export function shouldRestartStalledReconnect(
     status.nextRetryAt === expectedNextRetryAt &&
     status.online &&
     status.hasConnected
+  );
+}
+
+export function shouldRestartExhaustedReconnect(status: WsConnectionStatus): boolean {
+  return (
+    status.reconnectPhase === "exhausted" &&
+    status.online &&
+    status.hasConnected &&
+    status.phase === "disconnected"
   );
 }
 
@@ -141,6 +151,22 @@ export function WebSocketConnectionCoordinator() {
     status.reconnectAttemptCount,
     status.reconnectPhase,
   ]);
+
+  useEffect(() => {
+    if (!shouldRestartExhaustedReconnect(status)) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      if (shouldRestartExhaustedReconnect(getWsConnectionStatus())) {
+        runReconnect();
+      }
+    }, EXHAUSTED_WS_RECONNECT_RETRY_MS);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [status.hasConnected, status.online, status.phase, status.reconnectPhase]);
 
   return null;
 }
