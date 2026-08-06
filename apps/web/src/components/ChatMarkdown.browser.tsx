@@ -83,6 +83,26 @@ describe("ChatMarkdown", () => {
     }
   });
 
+  it("presents workspace files as downloadable links in the remote web UI", async () => {
+    const screen = await render(
+      <ChatMarkdown text="[report.zip](reports/report.zip)" cwd={"M:\\ClubCode"} />,
+    );
+
+    try {
+      const link = page.getByRole("link", { name: "report.zip" });
+      await expect
+        .element(link)
+        .toHaveAttribute(
+          "href",
+          "/api/workspace-download?root=M%3A%5CClubCode&path=reports%2Freport.zip",
+        );
+      await expect.element(link).toHaveAttribute("download", "");
+      expect(openInPreferredEditorMock).not.toHaveBeenCalled();
+    } finally {
+      await screen.unmount();
+    }
+  });
+
   it("keeps line anchors working after rewriting file uri hrefs", async () => {
     const filePath =
       "/Users/yashsingh/p/sco/claude-code-extract/src/utils/permissions/PermissionRule.ts";
@@ -403,12 +423,7 @@ describe("ChatMarkdown", () => {
     }
   });
 
-  it("copies markdown file paths instead of opening editors in pure browser sessions", async () => {
-    const writeText = vi.fn(async () => undefined);
-    Object.defineProperty(navigator, "clipboard", {
-      configurable: true,
-      value: { writeText },
-    });
+  it("turns workspace file paths into downloads in pure browser sessions", async () => {
     const filePath = "/Users/yashsingh/p/t3code/apps/web/src/components/ChatMarkdown.tsx";
     const screen = await render(
       <ChatMarkdown
@@ -419,11 +434,13 @@ describe("ChatMarkdown", () => {
 
     try {
       const link = page.getByRole("link", { name: "ChatMarkdown.tsx" });
-      await link.click();
-
-      await vi.waitFor(() => {
-        expect(writeText).toHaveBeenCalledWith(filePath);
-      });
+      await expect.element(link).toHaveAttribute("download", "");
+      await expect
+        .element(link)
+        .toHaveAttribute(
+          "href",
+          "/api/workspace-download?root=%2FUsers%2Fyashsingh%2Fp%2Ft3code&path=apps%2Fweb%2Fsrc%2Fcomponents%2FChatMarkdown.tsx",
+        );
       expect(openInPreferredEditorMock).not.toHaveBeenCalled();
     } finally {
       await screen.unmount();

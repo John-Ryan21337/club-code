@@ -4,6 +4,7 @@ import {
   isPathInsideWorkspace,
   resolveMarkdownFileLinkMeta,
   resolveMarkdownFileLinkTarget,
+  resolveWorkspaceDownloadTarget,
   rewriteMarkdownFileUriHref,
 } from "./markdown-links";
 
@@ -227,5 +228,29 @@ describe("markdown file link workspace policy", () => {
     ).toMatchObject({
       openPolicy: "direct",
     });
+  });
+});
+
+describe("resolveWorkspaceDownloadTarget", () => {
+  it("maps a generated workspace file to a server-safe root and relative path", () => {
+    expect(
+      resolveWorkspaceDownloadTarget("M:\\ClubCode\\reports\\result.zip", "M:\\ClubCode"),
+    ).toEqual({
+      workspaceRoot: "M:\\ClubCode",
+      relativePath: "reports/result.zip",
+    });
+  });
+
+  it("uses the longest matching additional workspace root", () => {
+    expect(
+      resolveWorkspaceDownloadTarget("/repo/docs/output.pdf", "/repo", ["/repo/docs"]),
+    ).toEqual({
+      workspaceRoot: "/repo/docs",
+      relativePath: "output.pdf",
+    });
+  });
+
+  it("does not offer downloads for paths outside registered workspace roots", () => {
+    expect(resolveWorkspaceDownloadTarget("/etc/passwd", "/repo")).toBeNull();
   });
 });
