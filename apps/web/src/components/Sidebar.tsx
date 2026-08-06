@@ -4309,7 +4309,7 @@ export default function Sidebar() {
   return (
     <>
       <SidebarChromeHeader isElectron={isElectron} />
-      <ProviderUsageWidget />
+      {!isOnSettings || !isMobile ? <ProviderUsageWidget /> : null}
 
       {isOnSettings ? (
         <>
