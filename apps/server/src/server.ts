@@ -9,6 +9,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { ServerConfig } from "./config.ts";
 import {
   attachmentsRouteLayer,
+  workspaceDownloadRouteLayer,
   ambientImageServeRouteLayer,
   ambientImageRemoveRouteLayer,
   ambientImageUploadRouteLayer,
@@ -351,6 +352,7 @@ const baseRoutesLayer = Layer.mergeAll(
   authSessionRouteLayer,
   authWebSocketTokenRouteLayer,
   attachmentsRouteLayer,
+  workspaceDownloadRouteLayer,
 );
 
 export const youTubeAccountRoutesLayer = Layer.mergeAll(

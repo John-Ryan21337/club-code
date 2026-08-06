@@ -1672,6 +1672,51 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("downloads authenticated workspace files as browser attachments", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const workspaceRoot = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "club-code-workspace-download-",
+      });
+      yield* fileSystem.makeDirectory(path.join(workspaceRoot, "reports"));
+      yield* fileSystem.writeFileString(path.join(workspaceRoot, "reports", "result.txt"), "ok");
+
+      yield* buildAppUnderTest();
+      const response = yield* HttpClient.get(
+        `/api/workspace-download?root=${encodeURIComponent(workspaceRoot)}&path=${encodeURIComponent("reports/result.txt")}`,
+        { headers: { cookie: yield* getAuthenticatedSessionCookieHeader() } },
+      );
+
+      assert.equal(response.status, 200);
+      assert.equal(yield* response.text, "ok");
+      assert.include(response.headers["content-disposition"] ?? "", 'filename="result.txt"');
+      assert.equal(response.headers["cache-control"], "no-store");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("rejects workspace download traversal before reading a host file", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const parent = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "club-code-workspace-download-traversal-",
+      });
+      const workspaceRoot = path.join(parent, "workspace");
+      yield* fileSystem.makeDirectory(workspaceRoot);
+      yield* fileSystem.writeFileString(path.join(parent, "secret.txt"), "secret");
+
+      yield* buildAppUnderTest();
+      const response = yield* HttpClient.get(
+        `/api/workspace-download?root=${encodeURIComponent(workspaceRoot)}&path=${encodeURIComponent("../secret.txt")}`,
+        { headers: { cookie: yield* getAuthenticatedSessionCookieHeader() } },
+      );
+
+      assert.equal(response.status, 400);
+      assert.notInclude(yield* response.text, "secret");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("serves the fallback project favicon when no icon exists", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
