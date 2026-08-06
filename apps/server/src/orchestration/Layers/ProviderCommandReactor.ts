@@ -3,7 +3,7 @@ import {
   CommandId,
   EventId,
   type ManualFollowUpId,
-  type MessageId,
+  MessageId,
   type ModelSelection,
   type OrchestrationMessage,
   type OrchestrationEvent,
@@ -126,6 +126,9 @@ const HANDLED_TURN_START_KEY_MAX = 10_000;
 const HANDLED_TURN_START_KEY_TTL = Duration.minutes(30);
 const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
 const DEFAULT_THREAD_TITLE = "New thread";
+const RESTART_RECOVERY_PROMPT = "Club Code restarted, continue what you were doing";
+const RESTART_RECOVERY_DETAIL =
+  "Club Code restarted while this provider turn was still projected as running, but no live provider runtime remained. Club Code started one durable continuation turn.";
 const PROVIDER_CONTINUATION_BOOTSTRAP_TRANSCRIPT_MAX_CHARS = 40_000;
 const PROVIDER_CONTINUATION_BOOTSTRAP_MIN_TRANSCRIPT_CHARS = 500;
 const ORPHANED_TURN_START_RESTART_DETAIL =
@@ -841,6 +844,103 @@ const make = Effect.gen(function* () {
       });
     }
   });
+
+  const recoverOrphanedRunningTurnsOnStartup = Effect.fn("recoverOrphanedRunningTurnsOnStartup")(
+    function* () {
+      const shellSnapshot = yield* projectionSnapshotQuery.getShellSnapshot();
+      const providerSessions = yield* providerService.listSessions();
+      const liveRunningThreadIds = new Set(
+        providerSessions
+          .filter((session) => session.status === "running")
+          .map((session) => String(session.threadId)),
+      );
+      const candidates = shellSnapshot.threads.filter(
+        (thread) =>
+          thread.deletedAt === null &&
+          thread.archivedAt === null &&
+          thread.session?.status === "running" &&
+          thread.session.activeTurnId !== null &&
+          thread.latestTurn?.state === "running" &&
+          thread.latestTurn.turnId === thread.session.activeTurnId &&
+          thread.manualFollowUpCount === 0 &&
+          !thread.hasPendingApprovals &&
+          !thread.hasPendingUserInput &&
+          !liveRunningThreadIds.has(String(thread.id)),
+      );
+      let recoveredCount = 0;
+
+      yield* Effect.forEach(
+        candidates,
+        (shellThread) =>
+          Effect.gen(function* () {
+            const thread = yield* resolveThread(shellThread.id);
+            if (
+              thread === undefined ||
+              thread.goal?.status === "active" ||
+              thread.session === null ||
+              thread.session.status !== "running" ||
+              thread.session.activeTurnId !== shellThread.latestTurn?.turnId
+            ) {
+              return;
+            }
+            const interruptedTurnId = thread.session.activeTurnId;
+            const recoveredAt = DateTime.formatIso(yield* DateTime.now);
+            const recoveryKey = `${thread.id}:${interruptedTurnId}`;
+
+            // Clear only the stale runtime marker. The deterministic command id
+            // below makes the continuation idempotent if startup is retried after
+            // dispatch but before the new provider turn becomes visible.
+            yield* setThreadSession({
+              threadId: thread.id,
+              session: {
+                ...thread.session,
+                status: "ready",
+                activeTurnId: null,
+                lastError: RESTART_RECOVERY_DETAIL,
+                updatedAt: recoveredAt,
+              },
+              createdAt: recoveredAt,
+            });
+            yield* appendProviderDiagnosticActivity({
+              threadId: thread.id,
+              kind: "runtime.restart-recovery",
+              summary: "Continuing after Club Code restart",
+              detail: RESTART_RECOVERY_DETAIL,
+              turnId: interruptedTurnId,
+              createdAt: recoveredAt,
+              payload: { interruptedTurnId },
+            });
+            yield* orchestrationEngine.dispatch({
+              type: "thread.turn.start",
+              commandId: CommandId.make(`server:restart-recovery:${recoveryKey}`),
+              threadId: thread.id,
+              message: {
+                messageId: MessageId.make(`restart-recovery:${recoveryKey}`),
+                role: "user",
+                text: RESTART_RECOVERY_PROMPT,
+                attachments: [],
+              },
+              modelSelection: thread.modelSelection,
+              runtimeMode: thread.runtimeMode,
+              interactionMode: thread.interactionMode,
+              dispatchSource: "user",
+              createdAt: recoveredAt,
+            });
+            recoveredCount += 1;
+          }),
+        { concurrency: 1, discard: true },
+      );
+
+      if (recoveredCount > 0) {
+        yield* Effect.logWarning(
+          "provider command reactor continued orphaned turns after restart",
+          {
+            threadCount: recoveredCount,
+          },
+        );
+      }
+    },
+  );
 
   const resumeActiveCodexGoalsOnStartup = Effect.fn("resumeActiveCodexGoalsOnStartup")(
     function* () {
@@ -2975,6 +3075,16 @@ const make = Effect.gen(function* () {
 
     yield* Effect.forkScoped(
       Stream.runForEach(orchestrationEngine.streamDomainEvents, processEvent),
+    );
+    // Give the hot event-stream subscriber a scheduling turn before startup
+    // recovery dispatches continuation commands through that stream.
+    yield* Effect.yieldNow;
+    yield* recoverOrphanedRunningTurnsOnStartup().pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("provider command reactor failed to continue orphaned turns", {
+          cause: Cause.pretty(cause),
+        }),
+      ),
     );
   });
 

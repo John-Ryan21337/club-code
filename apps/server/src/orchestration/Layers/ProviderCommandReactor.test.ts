@@ -937,6 +937,129 @@ describe("ProviderCommandReactor", () => {
     expect(harness.sendTurn).not.toHaveBeenCalled();
   });
 
+  it("continues a projected running turn once when its provider runtime was lost on restart", async () => {
+    const harness = await createHarness({ startReactor: false });
+    const threadId = ThreadId.make("thread-1");
+    const interruptedTurnId = asTurnId("turn-before-restart");
+    const now = "2026-01-01T00:00:00.000Z";
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-running-turn-before-restart"),
+        threadId,
+        message: {
+          messageId: asMessageId("user-message-running-before-restart"),
+          role: "user",
+          text: "work in progress before restart",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-running-session-before-restart"),
+        threadId,
+        session: {
+          threadId,
+          status: "running",
+          providerName: ProviderDriverKind.make("codex"),
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          runtimeMode: "approval-required",
+          activeTurnId: interruptedTurnId,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+
+    await harness.startReactor();
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+    expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+      threadId,
+      input: "Club Code restarted, continue what you were doing",
+    });
+    const thread = (await harness.readModel()).threads.find((entry) => entry.id === threadId);
+    expect(
+      thread?.messages.filter(
+        (message) => message.text === "Club Code restarted, continue what you were doing",
+      ),
+    ).toHaveLength(1);
+    expect(
+      thread?.activities.some((activity) => activity.kind === "runtime.restart-recovery"),
+    ).toBe(true);
+  });
+
+  it("does not continue a projected running turn while its provider runtime is still live", async () => {
+    const harness = await createHarness({ startReactor: false });
+    const threadId = ThreadId.make("thread-1");
+    const activeTurnId = asTurnId("live-turn-after-backend-restart");
+    const now = "2026-01-01T00:00:00.000Z";
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-live-turn-before-backend-restart"),
+        threadId,
+        message: {
+          messageId: asMessageId("user-message-live-before-backend-restart"),
+          role: "user",
+          text: "provider is still working",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-live-session-before-backend-restart"),
+        threadId,
+        session: {
+          threadId,
+          status: "running",
+          providerName: ProviderDriverKind.make("codex"),
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          runtimeMode: "approval-required",
+          activeTurnId,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+    harness.runtimeSessions.push({
+      threadId,
+      provider: ProviderDriverKind.make("codex"),
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      status: "running",
+      runtimeMode: "approval-required",
+      activeTurnId,
+      resumeCursor: { opaque: "live-runtime" },
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    await harness.startReactor();
+    await waitForEventLoopTurn();
+
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+    const thread = (await harness.readModel()).threads.find((entry) => entry.id === threadId);
+    expect(
+      thread?.messages.some(
+        (message) => message.text === "Club Code restarted, continue what you were doing",
+      ),
+    ).toBe(false);
+  });
+
   it("reacts to thread.turn.start by ensuring session and sending provider turn", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
