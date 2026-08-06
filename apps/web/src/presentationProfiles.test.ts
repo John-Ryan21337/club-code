@@ -1,7 +1,12 @@
 import type { SettingsProfile } from "./settingsProfiles";
 import { describe, expect, it } from "vitest";
 
-import { buildPresentationProfilePatch, resolvePresentationProfile } from "./presentationProfiles";
+import {
+  buildPresentationProfilePatch,
+  createPresentationSwitchCoordinator,
+  presentationProfilePatchMatches,
+  resolvePresentationProfile,
+} from "./presentationProfiles";
 
 function profile(name: string, mobileOptimizedPresentation: boolean): SettingsProfile {
   return {
@@ -44,5 +49,37 @@ describe("buildPresentationProfilePatch", () => {
     expect(buildPresentationProfilePatch(staleMobile, "mobile")).toMatchObject({
       mobileOptimizedPresentation: true,
     });
+  });
+
+  it("detects when a competing settings write supersedes part of the selected profile", () => {
+    const patch = {
+      mobileOptimizedPresentation: false,
+      fallingEffectKind: "matrix" as const,
+      fallingEffectSpeed: 4,
+    };
+    expect(presentationProfilePatchMatches({ ...patch }, patch)).toBe(true);
+    expect(presentationProfilePatchMatches({ ...patch, fallingEffectKind: "rain" }, patch)).toBe(
+      false,
+    );
+  });
+});
+
+describe("createPresentationSwitchCoordinator", () => {
+  it("keeps one switch authoritative across component remounts", async () => {
+    const coordinator = createPresentationSwitchCoordinator();
+    let finishDesktop!: (value: boolean) => void;
+    const desktopOperation = new Promise<boolean>((resolve) => {
+      finishDesktop = resolve;
+    });
+    const desktop = coordinator.run("desktop", () => desktopOperation);
+    const unintendedMobile = coordinator.run("mobile", async () => true);
+
+    expect(coordinator.getSnapshot()).toEqual({ busy: true, targetMode: "desktop" });
+    await expect(unintendedMobile).resolves.toBe(false);
+    finishDesktop(true);
+    await expect(desktop).resolves.toBe(true);
+    expect(coordinator.getSnapshot()).toEqual({ busy: false, targetMode: null });
+
+    await expect(coordinator.run("mobile", async () => true)).resolves.toBe(true);
   });
 });
