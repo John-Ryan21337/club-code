@@ -1,4 +1,8 @@
-import { DEFAULT_UNIFIED_SETTINGS, type UnifiedSettings } from "@cafecode/contracts/settings";
+import {
+  CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET,
+  DEFAULT_UNIFIED_SETTINGS,
+  type UnifiedSettings,
+} from "@cafecode/contracts/settings";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -57,10 +61,10 @@ describe("settings profile library", () => {
       confirmThreadDelete: false,
       worldClockWeatherEnabled: true,
       ambientVideoEnabled: true,
-      ambientVideoSource: { kind: "video", id: "private-video" },
+      ambientVideoSource: { kind: "video", id: "dQw4w9WgXcQ" },
       ambientImageEnabled: true,
-      ambientImageAsset: { url: "file:///private/image.gif" },
-      ambientImageCycleAssets: [{ url: "file:///private/second.gif" }],
+      ambientImageAsset: CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET,
+      ambientImageCycleAssets: [CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET],
       ambientImageCycleEnabled: true,
       providerUsageWidgetEnabled: true,
       providerUsagePollMinutes: 1,
@@ -99,6 +103,19 @@ describe("settings profile library", () => {
 
     expect(payload.theme).toBe("dark");
     expect(payload.clientSettings.ambientVideoLayoutMode).toBe("custom");
+    expect(payload.clientSettings.ambientVideoEnabled).toBe(true);
+    expect(payload.clientSettings.ambientVideoSource).toEqual({
+      kind: "video",
+      id: "dQw4w9WgXcQ",
+    });
+    expect(payload.clientSettings.ambientImageEnabled).toBe(true);
+    expect(payload.clientSettings.ambientImageAsset).toEqual(
+      CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET,
+    );
+    expect(payload.clientSettings.ambientImageCycleAssets).toEqual([
+      CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET,
+    ]);
+    expect(payload.clientSettings.ambientImageCycleEnabled).toBe(true);
     expect(payload.clientSettings.ambientImageGlowOpacity).toBe(0.42);
     expect(payload.clientSettings.mobileOptimizedPresentation).toBe(true);
     expect(payload.clientSettings.timestampFormat).toBe("24-hour");
@@ -120,12 +137,6 @@ describe("settings profile library", () => {
     expect(payload.clientSettings).not.toHaveProperty("confirmThreadArchive");
     expect(payload.clientSettings).not.toHaveProperty("confirmThreadDelete");
     expect(payload.clientSettings).not.toHaveProperty("worldClockWeatherEnabled");
-    expect(payload.clientSettings).not.toHaveProperty("ambientVideoEnabled");
-    expect(payload.clientSettings).not.toHaveProperty("ambientVideoSource");
-    expect(payload.clientSettings).not.toHaveProperty("ambientImageEnabled");
-    expect(payload.clientSettings).not.toHaveProperty("ambientImageAsset");
-    expect(payload.clientSettings).not.toHaveProperty("ambientImageCycleAssets");
-    expect(payload.clientSettings).not.toHaveProperty("ambientImageCycleEnabled");
     expect(payload.clientSettings).not.toHaveProperty("providerUsageWidgetEnabled");
     expect(payload.clientSettings).not.toHaveProperty("providerUsagePollMinutes");
     expect(payload.clientSettings).not.toHaveProperty("defaultEditor");
@@ -174,12 +185,12 @@ describe("settings profile library", () => {
       fallingEffectActivityLinkAgentEnabled: "live-operational-input",
       ambianceEnabled: "ambient-activation",
       ambianceReactMode: "live-operational-input",
-      ambientVideoEnabled: "external-media-activation",
-      ambientVideoSource: "external-media-activation",
-      ambientImageEnabled: "external-media-activation",
-      ambientImageAsset: "local-asset-reference",
-      ambientImageCycleAssets: "local-asset-reference",
-      ambientImageCycleEnabled: "external-media-activation",
+      ambientVideoEnabled: "include",
+      ambientVideoSource: "include",
+      ambientImageEnabled: "include",
+      ambientImageAsset: "include",
+      ambientImageCycleAssets: "include",
+      ambientImageCycleEnabled: "include",
       sidebarBrandImage: "local-asset-reference",
       sidebarBrandImageDataUrl: "local-asset-reference",
       providerUsageWidgetEnabled: "provider-operation",
@@ -423,10 +434,10 @@ describe("settings profile library", () => {
               notificationsEnabled: true,
               worldClockWeatherEnabled: true,
               ambientVideoEnabled: true,
-              ambientVideoSource: { kind: "video", id: "private-video" },
+              ambientVideoSource: { kind: "video", id: "dQw4w9WgXcQ" },
               ambientImageEnabled: true,
-              ambientImageAsset: { url: "file:///private/image.gif" },
-              ambientImageCycleAssets: [{ url: "file:///private/second.gif" }],
+              ambientImageAsset: CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET,
+              ambientImageCycleAssets: [CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET],
               ambientImageCycleEnabled: true,
               providerUsageWidgetEnabled: true,
               providerUsagePollMinutes: 1,
@@ -454,6 +465,12 @@ describe("settings profile library", () => {
     expect(profile?.clientSettings).toEqual({
       fallingEffectOpacity: 0.42,
       timestampFormat: "24-hour",
+      ambientVideoEnabled: true,
+      ambientVideoSource: { kind: "video", id: "dQw4w9WgXcQ" },
+      ambientImageEnabled: true,
+      ambientImageAsset: CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET,
+      ambientImageCycleAssets: [CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET],
+      ambientImageCycleEnabled: true,
     });
     expect(profile?.clientSettings).not.toHaveProperty("fallingEffectsEnabled");
     expect(profile?.clientSettings).not.toHaveProperty("atmosphereConsoleEnabled");
@@ -463,12 +480,6 @@ describe("settings profile library", () => {
     expect(profile?.clientSettings).not.toHaveProperty("completionAlertSpeechEnabled");
     expect(profile?.clientSettings).not.toHaveProperty("notificationsEnabled");
     expect(profile?.clientSettings).not.toHaveProperty("worldClockWeatherEnabled");
-    expect(profile?.clientSettings).not.toHaveProperty("ambientVideoEnabled");
-    expect(profile?.clientSettings).not.toHaveProperty("ambientVideoSource");
-    expect(profile?.clientSettings).not.toHaveProperty("ambientImageEnabled");
-    expect(profile?.clientSettings).not.toHaveProperty("ambientImageAsset");
-    expect(profile?.clientSettings).not.toHaveProperty("ambientImageCycleAssets");
-    expect(profile?.clientSettings).not.toHaveProperty("ambientImageCycleEnabled");
     expect(profile?.clientSettings).not.toHaveProperty("providerUsageWidgetEnabled");
     expect(profile?.clientSettings).not.toHaveProperty("providerUsagePollMinutes");
     expect(profile?.clientSettings).not.toHaveProperty("defaultEditor");
@@ -483,7 +494,7 @@ describe("settings profile library", () => {
     expect(profile?.clientSettings).not.toHaveProperty("futureCompatiblePreference");
   });
 
-  it("migrates legacy documents and scrubs unsafe fields from durable storage", () => {
+  it("migrates legacy documents, retains ambient media, and scrubs unsafe fields", () => {
     const storage = createStorage({
       [SETTINGS_PROFILE_LIBRARY_STORAGE_KEY]: JSON.stringify({
         version: 1,
@@ -501,7 +512,7 @@ describe("settings profile library", () => {
               fallingEffectActivityLinkNetworkEnabled: true,
               ambianceReactMode: "live",
               confirmThreadDelete: false,
-              ambientVideoSource: { kind: "video", id: "private-video" },
+              ambientVideoSource: { kind: "video", id: "dQw4w9WgXcQ" },
               autoNudgeMode: "hardcore-fanout",
               idleThreadGuardEnabled: true,
               providerModelPreferences: {
@@ -520,9 +531,13 @@ describe("settings profile library", () => {
 
     expect(restored.resolve("profile:mobile")?.clientSettings).toEqual({
       timestampFormat: "24-hour",
+      ambientVideoSource: { kind: "video", id: "dQw4w9WgXcQ" },
     });
     expect(persisted.version).toBe(SETTINGS_PROFILE_LIBRARY_VERSION);
-    expect(persisted.profiles[0].clientSettings).toEqual({ timestampFormat: "24-hour" });
+    expect(persisted.profiles[0].clientSettings).toEqual({
+      timestampFormat: "24-hour",
+      ambientVideoSource: { kind: "video", id: "dQw4w9WgXcQ" },
+    });
   });
 
   it("migrates the immediately previous document version through the current scrub boundary", () => {
@@ -560,7 +575,7 @@ describe("settings profile library", () => {
     });
   });
 
-  it("re-scrubs unsafe fields injected into a current-version storage document", () => {
+  it("retains ambient media while re-scrubbing unsafe fields in a current document", () => {
     const storage = createStorage({
       [SETTINGS_PROFILE_LIBRARY_STORAGE_KEY]: JSON.stringify({
         version: SETTINGS_PROFILE_LIBRARY_VERSION,
@@ -572,6 +587,8 @@ describe("settings profile library", () => {
             clientSettings: {
               chatCopyFormat: "plainText",
               ambientImageEnabled: true,
+              ambientVideoSource: { kind: "video", id: "not-a-youtube-id" },
+              ambientImageAsset: { url: "file:///private/image.gif" },
               serverPassword: "do-not-retain",
             },
             createdAt: "2026-07-29T08:00:00.000Z",
@@ -586,8 +603,15 @@ describe("settings profile library", () => {
 
     expect(restored.resolve("profile:desktop")?.clientSettings).toEqual({
       chatCopyFormat: "plainText",
+      ambientImageEnabled: true,
     });
-    expect(persisted.profiles[0].clientSettings).toEqual({ chatCopyFormat: "plainText" });
+    expect(persisted.profiles[0].clientSettings).toEqual({
+      chatCopyFormat: "plainText",
+      ambientImageEnabled: true,
+    });
+    expect(persisted.profiles[0].clientSettings).not.toHaveProperty("ambientVideoSource");
+    expect(persisted.profiles[0].clientSettings).not.toHaveProperty("ambientImageAsset");
+    expect(persisted.profiles[0].clientSettings).not.toHaveProperty("serverPassword");
   });
 
   it("exposes immutable profile boundaries so callers cannot inject authority fields", () => {

@@ -7,8 +7,8 @@ import * as Schema from "effect/Schema";
 import { useEffect, useSyncExternalStore } from "react";
 
 export const SETTINGS_PROFILE_LIBRARY_STORAGE_KEY = "cafe-code:settings-profile-library:v1";
-export const SETTINGS_PROFILE_LIBRARY_VERSION = 3;
-const LEGACY_SETTINGS_PROFILE_LIBRARY_VERSIONS = new Set([1, 2]);
+export const SETTINGS_PROFILE_LIBRARY_VERSION = 4;
+const LEGACY_SETTINGS_PROFILE_LIBRARY_VERSIONS = new Set([1, 2, 3]);
 export const SETTINGS_PROFILE_MAX_COUNT = 32;
 export const SETTINGS_PROFILE_MAX_NAME_LENGTH = 64;
 export const SETTINGS_PROFILE_MAX_STORAGE_BYTES = 512 * 1024;
@@ -21,8 +21,10 @@ export type SettingsProfileTheme = "light" | "dark" | "system";
  * This exhaustive policy is a security boundary. Every ClientSettings field must be classified,
  * so adding a field to the shared schema fails typecheck until profiles deliberately include or
  * exclude it. Include renderer-only appearance, layout, theme-adjacent, and usability preferences.
- * Exclude fields that carry identity, path, asset, consent, or authority data, and fields whose
- * application activates external media, provider, native-machine, or exact-thread behavior.
+ * Exclude fields that carry identity, raw paths/assets, consent, or authority data, and fields whose
+ * application activates providers, native-machine behavior, or exact-thread behavior. Ambient
+ * media is deliberately profile-owned: YouTube sources are validated public identifiers and image
+ * references are authenticated, content-addressed server assets rather than local paths or bytes.
  *
  * Add compatible client preferences deliberately in a later document version or as an
  * optional field in this version. Older profiles patch only the keys they actually contain,
@@ -104,8 +106,11 @@ export const SETTINGS_PROFILE_CLIENT_FIELD_POLICY = {
   fallingEffectActivityLinkAgentEnabled: "live-operational-input",
   fallingEffectActivityLinkColorMode: "include",
   fallingEffectActivityLinkRetentionSeconds: "include",
-  ambientVideoEnabled: "external-media-activation",
-  ambientVideoSource: "external-media-activation",
+  // Ambient media is part of the saved presentation. Loading a profile is the
+  // explicit operator action that authorizes activation; sources remain
+  // bounded by the shared schema and carry no provider credentials.
+  ambientVideoEnabled: "include",
+  ambientVideoSource: "include",
   ambientVideoLayoutMode: "include",
   ambientVideoPresetPlacement: "include",
   ambientVideoPresetSize: "include",
@@ -114,10 +119,10 @@ export const SETTINGS_PROFILE_CLIENT_FIELD_POLICY = {
   ambientVideoGlowMode: "include",
   ambientVideoGlowColor: "include",
   ambientVideoGlowOpacity: "include",
-  ambientImageEnabled: "external-media-activation",
-  ambientImageAsset: "local-asset-reference",
-  ambientImageCycleAssets: "local-asset-reference",
-  ambientImageCycleEnabled: "external-media-activation",
+  ambientImageEnabled: "include",
+  ambientImageAsset: "include",
+  ambientImageCycleAssets: "include",
+  ambientImageCycleEnabled: "include",
   ambientImageCycleSeconds: "include",
   ambientImagePresentationMode: "include",
   ambientImageLayoutMode: "include",
@@ -474,7 +479,7 @@ function toPersistedProfile(profile: SettingsProfile): PersistedSettingsProfile 
     theme: profile.theme,
     // Re-sanitize at the durable boundary even though normal mutation paths
     // already sanitize. This prevents a stale or externally mutated object
-    // from smuggling authority, consent, identity, or asset fields to storage.
+    // from smuggling authority, consent, identity, or raw local asset fields to storage.
     clientSettings: sanitizeSettingsProfileClientSettings(profile.clientSettings),
     createdAt: profile.createdAt,
     updatedAt: profile.updatedAt,

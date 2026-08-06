@@ -338,7 +338,7 @@ export function SettingsProfiles() {
               {notice.message}
             </span>
           ) : (
-            "Profiles capture the theme plus safe UI appearance, layout, and inert usability preferences. They do not include permissions or consent, destructive-action confirmations, completion-alert activation, live media or ambient activation, live thread/provider-fed visuals and assets, keybindings, playback state, local files, uploaded sounds, native host controls, provider/auth or server/network settings, model identity or pacing, project-specific state, or exact-thread Auto Nudge and Idle Thread Guard authority."
+            "Profiles capture the theme, UI appearance and layout, ambient YouTube/GIF activation and configuration, and inert usability preferences. GIF entries are content-addressed server assets; profiles never store their source file paths or image bytes. Profiles do not include permissions or consent, destructive-action confirmations, completion-alert activation, live thread/provider-fed visuals, keybindings, playback position or URL-queue progress, local files, uploaded sounds, native host controls, provider/auth or server/network settings, model identity or pacing, project-specific state, or exact-thread Auto Nudge and Idle Thread Guard authority."
           )
         }
       >
