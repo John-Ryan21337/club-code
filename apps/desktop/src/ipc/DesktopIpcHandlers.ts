@@ -48,6 +48,7 @@ import {
   typeInEmbeddedBrowser,
 } from "./methods/embeddedBrowser.ts";
 import {
+  copyText,
   confirm,
   getAppBranding,
   getLocalEnvironmentBootstrap,
@@ -106,6 +107,7 @@ export const installDesktopIpcHandlers = Effect.gen(function* () {
   yield* ipc.handle(openExternal);
   yield* ipc.handle(openPath);
   yield* ipc.handle(revealPath);
+  yield* ipc.handle(copyText);
 
   yield* ipc.handle(getUpdateState);
   yield* ipc.handle(setUpdateChannel);

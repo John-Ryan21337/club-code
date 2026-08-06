@@ -33,6 +33,7 @@ import { getPrimaryEnvironmentConnection } from "../environments/runtime";
 import { getPrimaryKnownEnvironment } from "../environments/primary";
 import { useStore } from "../store";
 import { resolveThreadRouteRef } from "../threadRoutes";
+import { copyTextToClipboard } from "../lib/copyToClipboard";
 
 const CLOSED_STATE: EmbeddedBrowserState = {
   status: "closed",
@@ -483,11 +484,7 @@ export function EmbeddedBrowserWorkspace() {
   const copyOcrText = () =>
     run(async () => {
       if (snapshot?.ocr?.status !== "completed") return;
-      if (!navigator.clipboard?.writeText) {
-        setStatus("Clipboard access is unavailable. Select the OCR preview text to copy it.");
-        return;
-      }
-      await navigator.clipboard.writeText(snapshot.ocr.text);
+      await copyTextToClipboard(snapshot.ocr.text);
       setStatus("Redacted visible-viewport OCR text copied to the clipboard.");
     });
 

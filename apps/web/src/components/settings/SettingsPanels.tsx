@@ -22,6 +22,7 @@ import {
   type ScopedThreadRef,
 } from "@cafecode/contracts";
 import { scopeThreadRef } from "@cafecode/client-runtime";
+import { copyTextToClipboard } from "../../lib/copyToClipboard";
 import {
   DEFAULT_UNIFIED_SETTINGS,
   DEFAULT_APP_ACCENT_COLOR,
@@ -1377,7 +1378,7 @@ export function ChatSettingsPanel() {
         const api = ensureLocalApi();
         return api.server.openSystemPromptFile().then(async ({ path }) => {
           if (!canOpenLocalEditor) {
-            await navigator.clipboard.writeText(path);
+            await copyTextToClipboard(path);
             toastManager.add({
               title: "Path copied",
               description: path,
