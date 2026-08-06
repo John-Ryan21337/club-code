@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import type { WsConnectionStatus } from "../rpc/wsConnectionState";
-import { shouldAutoReconnect, shouldRestartStalledReconnect } from "./WebSocketConnectionSurface";
+import {
+  shouldAutoReconnect,
+  shouldRestartExhaustedReconnect,
+  shouldRestartStalledReconnect,
+} from "./WebSocketConnectionSurface";
 
 function makeStatus(overrides: Partial<WsConnectionStatus> = {}): WsConnectionStatus {
   return {
@@ -108,6 +112,30 @@ describe("WebSocketConnectionSurface.logic", () => {
           reconnectPhase: "attempting",
         }),
         "2026-04-03T20:00:01.000Z",
+      ),
+    ).toBe(false);
+  });
+
+  it("starts a fresh bounded cycle after a connected mobile client exhausts retries", () => {
+    expect(
+      shouldRestartExhaustedReconnect(
+        makeStatus({
+          hasConnected: true,
+          online: true,
+          phase: "disconnected",
+          reconnectAttemptCount: 8,
+          reconnectPhase: "exhausted",
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      shouldRestartExhaustedReconnect(
+        makeStatus({
+          hasConnected: false,
+          online: true,
+          phase: "disconnected",
+          reconnectPhase: "exhausted",
+        }),
       ),
     ).toBe(false);
   });
