@@ -1,7 +1,7 @@
 import type { SettingsProfile } from "./settingsProfiles";
 import { describe, expect, it } from "vitest";
 
-import { resolvePresentationProfile } from "./presentationProfiles";
+import { buildPresentationProfilePatch, resolvePresentationProfile } from "./presentationProfiles";
 
 function profile(name: string, mobileOptimizedPresentation: boolean): SettingsProfile {
   return {
@@ -30,5 +30,19 @@ describe("resolvePresentationProfile", () => {
   it("fails closed when multiple profiles could own one presentation button", () => {
     const profiles = [profile("Workstation", false), profile("Laptop", false)];
     expect(resolvePresentationProfile(profiles, "desktop")).toBeNull();
+  });
+});
+
+describe("buildPresentationProfilePatch", () => {
+  it("makes the button association authoritative over a stale captured mode", () => {
+    const staleDesktop = profile("Desktop Profile", true);
+    const staleMobile = profile("Mobile Profile", false);
+
+    expect(buildPresentationProfilePatch(staleDesktop, "desktop")).toMatchObject({
+      mobileOptimizedPresentation: false,
+    });
+    expect(buildPresentationProfilePatch(staleMobile, "mobile")).toMatchObject({
+      mobileOptimizedPresentation: true,
+    });
   });
 });

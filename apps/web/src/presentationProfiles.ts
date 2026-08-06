@@ -30,6 +30,16 @@ export function resolvePresentationProfile(
   return matching.length === 1 ? matching[0]! : null;
 }
 
+export function buildPresentationProfilePatch(
+  profile: SettingsProfile,
+  mode: PresentationProfileMode,
+): SettingsProfile["clientSettings"] {
+  return {
+    ...profile.clientSettings,
+    mobileOptimizedPresentation: mode === "mobile",
+  };
+}
+
 export function usePresentationProfiles() {
   const library = useSettingsProfileLibrary();
   const hydrated = useClientSettingsHydrated();
@@ -78,7 +88,7 @@ export function usePresentationProfiles() {
       const previousTheme = theme;
       try {
         if (profile.theme !== previousTheme) setTheme(profile.theme);
-        await updateClientSettingsConfirmed(profile.clientSettings);
+        await updateClientSettingsConfirmed(buildPresentationProfilePatch(profile, mode));
         if (!settingsProfileLibraryStore.activate(profile.id)) {
           toastManager.add({
             type: "warning",
