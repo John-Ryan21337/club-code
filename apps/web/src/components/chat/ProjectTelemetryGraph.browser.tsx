@@ -776,6 +776,63 @@ describe("ProjectTelemetryGraph", () => {
     }
   });
 
+  it("hides retained GPU and temperature projections after telemetry becomes unavailable", async () => {
+    const diagnostic = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const telemetry = telemetryFixture({ projectId: projectA, minimumSampleIntervalMs: 250 });
+    let rejectOutage!: (reason: unknown) => void;
+    const outage = new Promise<ServerProjectSystemTelemetryResult>((_resolve, reject) => {
+      rejectOutage = reject;
+    });
+    const readTelemetry = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ...telemetry,
+        gpu: {
+          status: "available" as const,
+          adapters: [
+            {
+              index: 0,
+              name: "GPU 0",
+              utilizationPercent: 50,
+              memoryTotalBytes: 8 * 1024 ** 3,
+              memoryUsedBytes: 2 * 1024 ** 3,
+              memoryUtilizationPercent: 25,
+              temperatureCelsius: 48,
+            },
+          ],
+          reason: null,
+          detail: null,
+        },
+      })
+      .mockImplementation(() => outage);
+    const mounted = await render(
+      <ProjectTelemetryGraph
+        environmentId={environmentA}
+        hideUnavailableGraphs
+        pollIntervalMs={250}
+        projectId={projectA}
+        readTelemetry={readTelemetry}
+      />,
+    );
+
+    try {
+      await page.getByLabelText("Expand Resources").click();
+      await expect.element(page.getByLabelText(/GPU 1: 50%/i)).toBeVisible();
+      await expect.element(page.getByLabelText(/^CPU temp: 62/i)).toBeVisible();
+
+      await vi.waitFor(() => expect(readTelemetry).toHaveBeenCalledTimes(2));
+      rejectOutage({ _tag: "TelemetryOffline" });
+      await vi.waitFor(() =>
+        expect(document.querySelectorAll("[data-project-telemetry-card]")).toHaveLength(0),
+      );
+      expect(document.querySelector('[data-project-telemetry-card="GPU 1"]')).toBeNull();
+      expect(document.querySelector('[data-project-telemetry-card="CPU temp"]')).toBeNull();
+    } finally {
+      diagnostic.mockRestore();
+      await mounted.unmount();
+    }
+  });
+
   it("renders unsupported temperature classes explicitly unavailable without estimates", async () => {
     const mounted = await render(
       <ProjectTelemetryGraph

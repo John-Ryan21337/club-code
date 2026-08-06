@@ -778,6 +778,12 @@ export function ProjectTelemetryGraph({
         (visibleView.status === "unavailable" ? "Telemetry unavailable" : "Waiting"));
   const gpuLoading = visibleView.status === "loading";
   const telemetryUnavailable = visibleView.status === "unavailable";
+  // A retained projection is useful for bounded history, but it is not a
+  // current measurement after the transport enters loading or unavailable.
+  // Keep the hide-unavailable decision tied to the current successful sample
+  // so a stale GPU/temperature value cannot keep an unavailable card visible.
+  const currentGpuPercent = telemetry === null ? null : visibleView.gpu.gpuPercent;
+  const currentVramPercent = telemetry === null ? null : visibleView.gpu.vramPercent;
   const gpuDetail = gpuLoading
     ? "Waiting"
     : telemetryUnavailable
@@ -843,7 +849,9 @@ export function ProjectTelemetryGraph({
     },
   ] as const;
   const displayedTemperatureCards = hideUnavailableGraphs
-    ? temperatureCards.filter((card) => card.metric.celsius !== null)
+    ? telemetry === null
+      ? []
+      : temperatureCards.filter((card) => card.metric.celsius !== null)
     : temperatureCards;
   const lastSample =
     visibleView.snapshot === null
@@ -1003,7 +1011,7 @@ export function ProjectTelemetryGraph({
               ) : null}
               {displayedGpuAdapters.length === 0 ? (
                 <>
-                  {!hideUnavailableGraphs || visibleView.gpu.gpuPercent !== null ? (
+                  {!hideUnavailableGraphs || currentGpuPercent !== null ? (
                     <TelemetryCard
                       color={colors.gpu}
                       detail={gpuDetail}
@@ -1017,7 +1025,7 @@ export function ProjectTelemetryGraph({
                       }
                     />
                   ) : null}
-                  {!hideUnavailableGraphs || visibleView.gpu.vramPercent !== null ? (
+                  {!hideUnavailableGraphs || currentVramPercent !== null ? (
                     <TelemetryCard
                       color={colors.vram}
                       detail={vramDetail}
