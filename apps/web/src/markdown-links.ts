@@ -32,6 +32,11 @@ export interface MarkdownFileLinkMeta {
   column?: number;
 }
 
+export interface WorkspaceDownloadTarget {
+  workspaceRoot: string;
+  relativePath: string;
+}
+
 function safeDecode(value: string): string {
   try {
     return decodeURIComponent(value);
@@ -160,6 +165,34 @@ export function isPathInsideWorkspace(
     }
     return target === workspace || target.startsWith(`${workspace}/`);
   });
+}
+
+export function resolveWorkspaceDownloadTarget(
+  targetPath: string,
+  cwd: string | undefined,
+  additionalWorkspaceRoots: ReadonlyArray<string> = [],
+): WorkspaceDownloadTarget | null {
+  const target = normalizePathForWorkspaceComparison(splitPathAndPosition(targetPath).path);
+  if (target.length === 0) return null;
+
+  const roots = [cwd, ...additionalWorkspaceRoots]
+    .filter((root): root is string => typeof root === "string" && root.trim().length > 0)
+    .map((workspaceRoot) => ({
+      workspaceRoot,
+      normalized: normalizePathForWorkspaceComparison(workspaceRoot),
+    }))
+    .filter(({ normalized }) => normalized.length > 0)
+    .sort((left, right) => right.normalized.length - left.normalized.length);
+
+  const match = roots.find(
+    ({ normalized }) => target !== normalized && target.startsWith(`${normalized}/`),
+  );
+  if (!match) return null;
+
+  return {
+    workspaceRoot: match.workspaceRoot,
+    relativePath: target.slice(match.normalized.length + 1),
+  };
 }
 
 function hasExternalScheme(path: string): boolean {

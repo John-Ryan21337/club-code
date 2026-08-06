@@ -17,7 +17,7 @@ import {
 } from "~/components/ui/sheet";
 import { Skeleton } from "~/components/ui/skeleton";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
-import { useIsMobile } from "~/hooks/useMediaQuery";
+import { useIsPhysicalMobile } from "~/hooks/useMediaQuery";
 import { useSettings } from "~/hooks/useSettings";
 import { getLocalStorageItem, setLocalStorageItem } from "~/hooks/useLocalStorage";
 import * as Schema from "effect/Schema";
@@ -99,7 +99,7 @@ function SidebarProvider({
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
 }) {
-  const isMobile = useIsMobile();
+  const isMobile = useIsPhysicalMobile();
   const mobileOptimizedPresentation = useSettings(
     (settings) => settings.mobileOptimizedPresentation,
   );

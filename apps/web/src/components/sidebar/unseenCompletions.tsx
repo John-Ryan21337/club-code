@@ -7,7 +7,7 @@ import { useUiStateStore } from "../../uiStateStore";
 import { hasUnseenCompletion } from "../Sidebar.logic";
 import { SidebarTrigger } from "../ui/sidebar";
 import { cn } from "~/lib/utils";
-import { useIsMobile } from "../../hooks/useMediaQuery";
+import { useIsPhysicalMobile } from "../../hooks/useMediaQuery";
 
 /** True when any thread has a completed turn the user hasn't viewed yet. */
 export function useHasUnseenThreadCompletions(): boolean {
@@ -47,7 +47,7 @@ export function UnseenCompletionsDot({ className }: { className?: string }) {
  */
 export function SidebarTriggerWithUnreadDot({ className }: { className?: string }) {
   const hasUnseenCompletions = useHasUnseenThreadCompletions();
-  const isMobile = useIsMobile();
+  const isMobile = useIsPhysicalMobile();
   return (
     <span
       className={cn(

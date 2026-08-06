@@ -1258,6 +1258,84 @@ export const attachmentsRouteLayer = HttpRouter.add(
   }).pipe(Effect.catchTag("AuthError", respondToAuthError)),
 );
 
+function isPathInsideRoot(path: Path.Path, root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return (
+    relative.length === 0 ||
+    (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
+  );
+}
+
+function attachmentFilenameHeader(filename: string): string {
+  const ascii = filename.replace(/[^\x20-\x7e]/g, "_").replace(/["\\]/g, "_") || "download";
+  return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
+}
+
+export const workspaceDownloadRouteLayer = HttpRouter.add(
+  "GET",
+  "/api/workspace-download",
+  Effect.gen(function* () {
+    yield* requireOwnerRequest;
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const url = HttpServerRequest.toURL(request);
+    if (Option.isNone(url)) {
+      return HttpServerResponse.text("Bad Request", { status: 400 });
+    }
+
+    const requestedRoot = url.value.searchParams.get("root")?.trim();
+    const relativePath = url.value.searchParams.get("path")?.trim();
+    if (!requestedRoot || !relativePath) {
+      return HttpServerResponse.text("Missing workspace download parameters", { status: 400 });
+    }
+
+    const path = yield* Path.Path;
+    if (path.isAbsolute(relativePath)) {
+      return HttpServerResponse.text("Invalid workspace file path", { status: 400 });
+    }
+
+    const fileSystem = yield* FileSystem.FileSystem;
+    const candidatePath = path.resolve(requestedRoot, relativePath);
+    if (!isPathInsideRoot(path, path.resolve(requestedRoot), candidatePath)) {
+      return HttpServerResponse.text("Invalid workspace file path", { status: 400 });
+    }
+
+    const resolved = yield* Effect.all({
+      root: fileSystem.realPath(requestedRoot),
+      file: fileSystem.realPath(candidatePath),
+    }).pipe(Effect.catch(() => Effect.succeed(null)));
+    if (!resolved || !isPathInsideRoot(path, resolved.root, resolved.file)) {
+      return HttpServerResponse.text(resolved ? "Invalid workspace file path" : "Not Found", {
+        status: resolved ? 403 : 404,
+      });
+    }
+
+    const fileInfo = yield* fileSystem
+      .stat(resolved.file)
+      .pipe(Effect.catch(() => Effect.succeed(null)));
+    if (!fileInfo || fileInfo.type !== "File") {
+      return HttpServerResponse.text("Not Found", { status: 404 });
+    }
+
+    return yield* HttpServerResponse.file(resolved.file, {
+      status: 200,
+      headers: {
+        "Cache-Control": "no-store",
+        "Content-Disposition": attachmentFilenameHeader(path.basename(resolved.file)),
+        "X-Content-Type-Options": "nosniff",
+      },
+    }).pipe(
+      Effect.catch(() =>
+        Effect.succeed(HttpServerResponse.text("Internal Server Error", { status: 500 })),
+      ),
+    );
+  }).pipe(
+    Effect.catchTag("AuthError", respondToAuthError),
+    Effect.catch(() =>
+      Effect.succeed(HttpServerResponse.text("Internal Server Error", { status: 500 })),
+    ),
+  ),
+);
+
 export const projectFaviconRouteLayer = HttpRouter.add(
   "GET",
   "/api/project-favicon",

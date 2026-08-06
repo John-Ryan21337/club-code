@@ -25,3 +25,13 @@ export function resolveMobileLayout(
 ): boolean {
   return viewportMatchesMobile || mobileOptimizedPresentation;
 }
+
+export function resolveProfileAwareMobileLayout(
+  viewportMatchesMobile: boolean,
+  mobileOptimizedPresentation: boolean,
+  activeProfileId: string | null,
+): boolean {
+  return activeProfileId === null
+    ? resolveMobileLayout(viewportMatchesMobile, mobileOptimizedPresentation)
+    : mobileOptimizedPresentation;
+}

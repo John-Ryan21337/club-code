@@ -13,10 +13,12 @@ export const ComposerPresentationToggle = memo(function ComposerPresentationTogg
   mobileOptimized,
   viewportMobile,
   onToggle,
+  disabled = false,
 }: {
   mobileOptimized: boolean;
   viewportMobile: boolean;
   onToggle: () => void;
+  disabled?: boolean;
 }) {
   const effectiveMobile = mobileOptimized || viewportMobile;
   const label = mobileOptimized
@@ -34,6 +36,7 @@ export const ComposerPresentationToggle = memo(function ComposerPresentationTogg
           <Button
             aria-label={label}
             aria-pressed={mobileOptimized}
+            disabled={disabled}
             className={cn(
               // Keep the target genuinely touch-sized even when a wide desktop
               // viewport would normally shrink toolbar buttons at `sm`.

@@ -21,7 +21,7 @@ import { getPrimaryEnvironmentConnection } from "../../environments/runtime";
 import { useSettings } from "../../hooks/useSettings";
 import { applyProvidersUpdated, useServerProviders } from "../../rpc/serverState";
 import { cn } from "../../lib/utils";
-import { useIsMobile } from "../../hooks/useMediaQuery";
+import { useIsPhysicalMobile } from "../../hooks/useMediaQuery";
 import { toastManager } from "../ui/toast";
 import {
   calculateModelPacing,
@@ -117,7 +117,7 @@ function currentViewportHeight(): number {
 }
 
 export function ProviderUsageScrollRegion({ children }: { readonly children: ReactNode }) {
-  const isMobile = useIsMobile();
+  const isMobile = useIsPhysicalMobile();
   const regionRef = useRef<HTMLElement>(null);
   const dragRef = useRef<{ readonly pointerY: number; readonly height: number } | null>(null);
   const [height, setHeight] = useState(readStoredProviderUsageHeight);

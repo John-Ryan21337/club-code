@@ -34,6 +34,7 @@ import { useTheme } from "../hooks/useTheme";
 import {
   normalizeMarkdownLinkDestination,
   resolveMarkdownFileLinkMeta,
+  resolveWorkspaceDownloadTarget,
   rewriteMarkdownFileUriHref,
 } from "../markdown-links";
 import { readLocalApi } from "../localApi";
@@ -350,6 +351,7 @@ interface MarkdownFileLinkProps {
   filePath: string;
   label: string;
   openPolicy: "direct" | "confirm";
+  downloadHref?: string | undefined;
   theme: "light" | "dark";
   className?: string | undefined;
 }
@@ -454,6 +456,7 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
   filePath,
   label,
   openPolicy,
+  downloadHref,
   theme,
   className,
 }: MarkdownFileLinkProps) {
@@ -483,7 +486,9 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
 
   const handleOpen = useCallback(() => {
     if (!canOpenLocalEditor) {
-      handleCopy(targetPath, "Full path");
+      if (!downloadHref) {
+        handleCopy(targetPath, "Full path");
+      }
       return;
     }
 
@@ -516,7 +521,18 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
         }),
       );
     });
-  }, [canOpenLocalEditor, handleCopy, openPolicy, targetPath]);
+  }, [canOpenLocalEditor, downloadHref, handleCopy, openPolicy, targetPath]);
+
+  const handleDownload = useCallback(() => {
+    if (!downloadHref) return;
+    const anchor = document.createElement("a");
+    anchor.href = downloadHref;
+    anchor.download = "";
+    anchor.rel = "noopener";
+    document.body.append(anchor);
+    anchor.click();
+    anchor.remove();
+  }, [downloadHref]);
 
   const handleReveal = useCallback(() => {
     if (!canRevealLocalPath) {
@@ -570,6 +586,7 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
           ...(canRevealLocalPath
             ? ([{ id: "reveal", label: getFileManagerRevealLabel() }] as const)
             : []),
+          ...(downloadHref ? ([{ id: "download", label: "Download file" }] as const) : []),
           { id: "copy-relative", label: "Copy relative path" },
           { id: "copy-full", label: "Copy full path" },
         ] as const,
@@ -584,6 +601,10 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
         handleReveal();
         return;
       }
+      if (clicked === "download") {
+        handleDownload();
+        return;
+      }
       if (clicked === "copy-relative") {
         handleCopy(displayPath, "Relative path");
         return;
@@ -596,7 +617,9 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
       canOpenLocalEditor,
       canRevealLocalPath,
       displayPath,
+      downloadHref,
       handleCopy,
+      handleDownload,
       handleOpen,
       handleReveal,
       targetPath,
@@ -608,12 +631,14 @@ const MarkdownFileLink = memo(function MarkdownFileLink({
       <TooltipTrigger
         render={
           <a
-            href={href}
+            href={!canOpenLocalEditor && downloadHref ? downloadHref : href}
+            download={!canOpenLocalEditor && downloadHref ? "" : undefined}
             className={cn(MARKDOWN_FILE_LINK_CLASS_NAME, className)}
             data-open-policy={openPolicy}
             onClick={(event) => {
-              event.preventDefault();
               event.stopPropagation();
+              if (!canOpenLocalEditor && downloadHref) return;
+              event.preventDefault();
               handleOpen();
             }}
             onContextMenu={handleContextMenu}
@@ -652,6 +677,7 @@ function areMarkdownFileLinkPropsEqual(
     previous.filePath === next.filePath &&
     previous.label === next.label &&
     previous.openPolicy === next.openPolicy &&
+    previous.downloadHref === next.downloadHref &&
     previous.theme === next.theme &&
     previous.className === next.className
   );
@@ -720,6 +746,17 @@ function ChatMarkdown({
             `L${fileLinkMeta.line}${fileLinkMeta.column ? `:C${fileLinkMeta.column}` : ""}`,
           );
         }
+        const downloadTarget = resolveWorkspaceDownloadTarget(
+          fileLinkMeta.filePath,
+          cwd,
+          additionalWorkspaceRoots,
+        );
+        const downloadHref = downloadTarget
+          ? `/api/workspace-download?${new URLSearchParams({
+              root: downloadTarget.workspaceRoot,
+              path: downloadTarget.relativePath,
+            }).toString()}`
+          : undefined;
 
         return (
           <MarkdownFileLink
@@ -729,6 +766,7 @@ function ChatMarkdown({
             filePath={fileLinkMeta.filePath}
             label={labelParts.join(" · ")}
             openPolicy={fileLinkMeta.openPolicy}
+            downloadHref={downloadHref}
             theme={resolvedTheme}
             className={props.className}
           />
@@ -764,6 +802,8 @@ function ChatMarkdown({
       },
     }),
     [
+      additionalWorkspaceRoots,
+      cwd,
       diffThemeName,
       fileLinkParentSuffixByPath,
       isStreaming,

@@ -187,7 +187,7 @@ import {
 import { sortThreads } from "../lib/threadSort";
 import { SidebarUpdatePill } from "./sidebar/SidebarUpdatePill";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
-import { useIsMobile } from "~/hooks/useMediaQuery";
+import { useIsPhysicalMobile } from "~/hooks/useMediaQuery";
 import { CommandDialogTrigger } from "./ui/command";
 import { FirstRunHint } from "./FirstRunHint";
 import {
@@ -1054,7 +1054,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
   // sits near the screen edge, so it is easy to mis-tap. Always require the
   // two-step "tap archive -> tap Confirm" flow on mobile, regardless of the
   // user's confirm-archive setting. Desktop keeps the setting-driven behavior.
-  const archiveRequiresConfirmation = useIsMobile();
+  const archiveRequiresConfirmation = useIsPhysicalMobile();
   const appSettingsConfirmThreadArchive =
     confirmThreadArchiveSetting || archiveRequiresConfirmation;
   const defaultThreadEnvMode = useSettings<ThreadEnvMode>(

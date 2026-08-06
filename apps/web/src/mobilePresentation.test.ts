@@ -1,7 +1,11 @@
 import { DEFAULT_CLIENT_SETTINGS } from "@cafecode/contracts/settings";
 import { describe, expect, it } from "vitest";
 
-import { createMobileOptimizedPresentationPatch, resolveMobileLayout } from "./mobilePresentation";
+import {
+  createMobileOptimizedPresentationPatch,
+  resolveMobileLayout,
+  resolveProfileAwareMobileLayout,
+} from "./mobilePresentation";
 import {
   partitionRendererLocalClientSettingsPatch,
   withoutRendererLocalClientSettings,
@@ -14,6 +18,12 @@ describe("mobile presentation", () => {
     expect(resolveMobileLayout(false, true)).toBe(true);
     expect(resolveMobileLayout(true, false)).toBe(true);
     expect(resolveMobileLayout(true, true)).toBe(true);
+  });
+
+  it("lets an active Desktop Profile override a physical phone viewport", () => {
+    expect(resolveProfileAwareMobileLayout(true, false, "profile:desktop%20profile")).toBe(false);
+    expect(resolveProfileAwareMobileLayout(true, true, "profile:mobile%20profile")).toBe(true);
+    expect(resolveProfileAwareMobileLayout(true, false, null)).toBe(true);
   });
 
   it("enables Matrix while preserving every existing Matrix configuration value", () => {

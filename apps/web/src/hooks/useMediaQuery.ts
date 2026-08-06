@@ -1,5 +1,6 @@
 import { useCallback, useSyncExternalStore } from "react";
-import { resolveMobileLayout } from "../mobilePresentation";
+import { resolveProfileAwareMobileLayout } from "../mobilePresentation";
+import { useSettingsProfileLibrary } from "../settingsProfiles";
 import { useSettings } from "./useSettings";
 
 const BREAKPOINTS = {
@@ -85,12 +86,23 @@ export function useMediaQuery(query: BreakpointQuery | MediaQueryInput | (string
 }
 
 export function useIsMobile(): boolean {
-  const viewportMatchesMobile = useMediaQuery("max-md");
-  const touchOnlyDevice = useMediaQuery("(hover: none) and (pointer: coarse)");
+  const physicalMobile = useIsPhysicalMobile();
+  const activeProfileId = useSettingsProfileLibrary().activeProfileId;
   const mobileOptimizedPresentation = useSettings(
     (settings) => settings.mobileOptimizedPresentation,
   );
-  return resolveMobileLayout(viewportMatchesMobile || touchOnlyDevice, mobileOptimizedPresentation);
+  return resolveProfileAwareMobileLayout(
+    physicalMobile,
+    mobileOptimizedPresentation,
+    activeProfileId,
+  );
+}
+
+/** Device/viewport mobile state for navigation chrome that profiles must not reshape. */
+export function useIsPhysicalMobile(): boolean {
+  const viewportMatchesMobile = useMediaQuery("max-md");
+  const touchOnlyDevice = useMediaQuery("(hover: none) and (pointer: coarse)");
+  return viewportMatchesMobile || touchOnlyDevice;
 }
 
 const ON_SCREEN_KEYBOARD_MEDIA_QUERY = "(hover: none) and (pointer: coarse)";

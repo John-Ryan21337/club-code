@@ -3,8 +3,12 @@ import { SidebarInset } from "./ui/sidebar";
 import { SidebarTriggerWithUnreadDot } from "./sidebar/unseenCompletions";
 import { isElectron } from "../env";
 import { cn } from "~/lib/utils";
+import { MonitorIcon, SmartphoneIcon } from "lucide-react";
+import { Button } from "./ui/button";
+import { usePresentationProfiles } from "../presentationProfiles";
 
 export function NoActiveThreadState() {
+  const presentation = usePresentationProfiles();
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden bg-background">
@@ -37,6 +41,29 @@ export function NoActiveThreadState() {
               <EmptyDescription className="mt-2 text-sm text-muted-foreground/78">
                 Select an existing thread or create a new one to get started.
               </EmptyDescription>
+              <div
+                className="mt-5 flex flex-wrap justify-center gap-2"
+                aria-label="Workspace profile"
+              >
+                <Button
+                  size="sm"
+                  variant={presentation.activeMode === "desktop" ? "default" : "outline"}
+                  disabled={presentation.busy || presentation.desktopProfile === null}
+                  onClick={() => void presentation.switchTo("desktop")}
+                >
+                  <MonitorIcon aria-hidden="true" />
+                  {presentation.desktopProfile?.name ?? "Desktop Profile"}
+                </Button>
+                <Button
+                  size="sm"
+                  variant={presentation.activeMode === "mobile" ? "default" : "outline"}
+                  disabled={presentation.busy || presentation.mobileProfile === null}
+                  onClick={() => void presentation.switchTo("mobile")}
+                >
+                  <SmartphoneIcon aria-hidden="true" />
+                  {presentation.mobileProfile?.name ?? "Mobile Profile"}
+                </Button>
+              </div>
             </EmptyHeader>
           </div>
         </Empty>
