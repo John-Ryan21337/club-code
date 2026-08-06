@@ -5,7 +5,7 @@ import type {
   ServerProviderPaidUsage,
 } from "@cafecode/contracts";
 import { GaugeIcon, RefreshCwIcon } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { getPrimaryEnvironmentConnection } from "../../environments/runtime";
 import { useSettings } from "../../hooks/useSettings";
@@ -73,6 +73,18 @@ interface ProviderUsageRow {
   readonly paidUsage: ServerProviderPaidUsage | null;
   readonly paidUsageStale: boolean;
   readonly resetCredits: ProviderResetCredits;
+}
+
+export function ProviderUsageScrollRegion({ children }: { readonly children: ReactNode }) {
+  return (
+    <section
+      aria-label="Provider usage limits"
+      className="mx-2 mb-1 max-h-[min(42svh,28rem)] shrink-0 overflow-y-auto overscroll-contain rounded-lg border border-sidebar-border/70 bg-sidebar-accent/25 p-2.5 group-data-[collapsible=icon]:hidden"
+      data-slot="provider-usage-widget"
+    >
+      {children}
+    </section>
+  );
 }
 
 const clampPercent = (value: number): number => Math.max(0, Math.min(100, value));
@@ -598,10 +610,7 @@ export function ProviderUsageWidget() {
   }
 
   return (
-    <section
-      aria-label="Provider usage limits"
-      className="mx-2 mb-1 rounded-lg border border-sidebar-border/70 bg-sidebar-accent/25 p-2.5 group-data-[collapsible=icon]:hidden"
-    >
+    <ProviderUsageScrollRegion>
       <div className="flex items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-1.5 text-[11px] font-semibold text-sidebar-foreground/85">
           <GaugeIcon aria-hidden className="size-3.5" />
@@ -964,6 +973,6 @@ export function ProviderUsageWidget() {
           Some usage windows could not refresh.
         </p>
       ) : null}
-    </section>
+    </ProviderUsageScrollRegion>
   );
 }
