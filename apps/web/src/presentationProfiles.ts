@@ -86,7 +86,15 @@ export function usePresentationProfiles() {
       switchingRef.current = true;
       setBusy(true);
       const previousTheme = theme;
+      const previousMode = mobileOptimized ? "mobile" : "desktop";
       try {
+        // Presentation mode is renderer-local while the rest of a saved
+        // profile is shared with the connected environment. Establish the
+        // target layout first so shared visual effects cannot render for a
+        // frame in the old layout while the split write is in flight.
+        await updateClientSettingsConfirmed({
+          mobileOptimizedPresentation: mode === "mobile",
+        });
         if (profile.theme !== previousTheme) setTheme(profile.theme);
         await updateClientSettingsConfirmed(buildPresentationProfilePatch(profile, mode));
         if (!settingsProfileLibraryStore.activate(profile.id)) {
@@ -99,6 +107,15 @@ export function usePresentationProfiles() {
         return true;
       } catch (error) {
         if (profile.theme !== previousTheme) setTheme(previousTheme);
+        if (previousMode !== mode) {
+          try {
+            await updateClientSettingsConfirmed({
+              mobileOptimizedPresentation: previousMode === "mobile",
+            });
+          } catch (rollbackError) {
+            console.error("[PRESENTATION_PROFILE] mode rollback failed", rollbackError);
+          }
+        }
         toastManager.add({
           type: "error",
           title: "Profile was not switched",
@@ -110,7 +127,15 @@ export function usePresentationProfiles() {
         setBusy(false);
       }
     },
-    [desktopProfile, hydrated, mobileProfile, setTheme, theme, updateClientSettingsConfirmed],
+    [
+      desktopProfile,
+      hydrated,
+      mobileOptimized,
+      mobileProfile,
+      setTheme,
+      theme,
+      updateClientSettingsConfirmed,
+    ],
   );
 
   return {
