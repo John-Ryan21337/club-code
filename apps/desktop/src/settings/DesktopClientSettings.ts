@@ -69,6 +69,21 @@ const readClientSettings = (
     ),
   );
 
+const readRendererClientSettings = (input: {
+  readonly fileSystem: FileSystem.FileSystem;
+  readonly settingsPath: string;
+  readonly legacySettingsPath: string;
+}): Effect.Effect<Option.Option<ClientSettings>> =>
+  input.fileSystem.exists(input.settingsPath).pipe(
+    Effect.orElseSucceed(() => false),
+    Effect.flatMap((rendererDocumentExists) =>
+      readClientSettings(
+        input.fileSystem,
+        rendererDocumentExists ? input.settingsPath : input.legacySettingsPath,
+      ),
+    ),
+  );
+
 const writeClientSettings = Effect.fnUntraced(function* (input: {
   readonly fileSystem: FileSystem.FileSystem;
   readonly path: Path.Path;
@@ -92,9 +107,11 @@ export const layer = Layer.effect(
     const path = yield* Path.Path;
 
     return DesktopClientSettings.of({
-      get: readClientSettings(fileSystem, environment.clientSettingsPath).pipe(
-        Effect.withSpan("desktop.clientSettings.get"),
-      ),
+      get: readRendererClientSettings({
+        fileSystem,
+        settingsPath: environment.clientSettingsPath,
+        legacySettingsPath: environment.legacyClientSettingsPath,
+      }).pipe(Effect.withSpan("desktop.clientSettings.get")),
       set: (settings) =>
         writeClientSettings({
           fileSystem,

@@ -67,8 +67,13 @@ describe("DesktopEnvironment", () => {
       );
       assert.equal(
         environment.clientSettingsPath,
+        path.join(environment.stateDir, "renderer-client-settings.json"),
+      );
+      assert.equal(
+        environment.legacyClientSettingsPath,
         path.join(environment.stateDir, "client-settings.json"),
       );
+      assert.notEqual(environment.clientSettingsPath, environment.legacyClientSettingsPath);
       assert.equal(
         environment.savedEnvironmentRegistryPath,
         path.join(environment.stateDir, "saved-environments.json"),

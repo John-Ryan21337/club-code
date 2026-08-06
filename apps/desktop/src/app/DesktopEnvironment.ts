@@ -45,7 +45,14 @@ export interface DesktopEnvironmentShape {
   readonly baseDir: string;
   readonly stateDir: string;
   readonly desktopSettingsPath: string;
+  /** Renderer-local preferences. Never shared with the backend settings authority. */
   readonly clientSettingsPath: string;
+  /**
+   * Former combined client-settings document, now owned by the backend.
+   * Desktop persistence reads this only when seeding a renderer document for
+   * an existing installation; it must never write to it.
+   */
+  readonly legacyClientSettingsPath: string;
   readonly savedEnvironmentRegistryPath: string;
   readonly providerDaemonMarkerPath: string;
   readonly providerDaemonCredentialPath: string;
@@ -185,7 +192,8 @@ const makeDesktopEnvironment = Effect.fn("desktop.environment.make")(function* (
     baseDir,
     stateDir,
     desktopSettingsPath: path.join(stateDir, "desktop-settings.json"),
-    clientSettingsPath: path.join(stateDir, "client-settings.json"),
+    clientSettingsPath: path.join(stateDir, "renderer-client-settings.json"),
+    legacyClientSettingsPath: path.join(stateDir, "client-settings.json"),
     savedEnvironmentRegistryPath: path.join(stateDir, "saved-environments.json"),
     providerDaemonMarkerPath: path.join(stateDir, "provider-daemon.json"),
     providerDaemonCredentialPath: path.join(stateDir, "provider-daemon-token.bin"),

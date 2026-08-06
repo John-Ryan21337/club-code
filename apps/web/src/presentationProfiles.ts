@@ -201,15 +201,7 @@ export function usePresentationProfiles() {
         }
       });
     },
-    [
-      desktopProfile,
-      hydrated,
-      mobileOptimized,
-      mobileProfile,
-      setTheme,
-      theme,
-      updateClientSettingsConfirmed,
-    ],
+    [desktopProfile, hydrated, mobileProfile, setTheme, theme, updateClientSettingsConfirmed],
   );
 
   return {

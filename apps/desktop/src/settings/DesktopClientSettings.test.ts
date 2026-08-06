@@ -42,6 +42,7 @@ const clientSettings: ClientSettings = {
 };
 
 const decodeClientSettingsJson = Schema.decodeEffect(Schema.fromJsonString(ClientSettingsSchema));
+const encodeClientSettingsJson = Schema.encodeEffect(Schema.fromJsonString(ClientSettingsSchema));
 const decodeRecordJson = Schema.decodeEffect(
   Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)),
 );
@@ -112,6 +113,34 @@ describe("DesktopClientSettings", () => {
             ),
             "settings",
           ),
+        );
+      }),
+    ),
+  );
+
+  it.effect("seeds from the legacy backend document without ever overwriting it", () =>
+    withClientSettings(
+      Effect.gen(function* () {
+        const environment = yield* DesktopEnvironment.DesktopEnvironment;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const settings = yield* DesktopClientSettings.DesktopClientSettings;
+        const legacyJson = `${yield* encodeClientSettingsJson(clientSettings)}\n`;
+        yield* fileSystem.makeDirectory(environment.stateDir, { recursive: true });
+        yield* fileSystem.writeFileString(environment.legacyClientSettingsPath, legacyJson);
+
+        assert.isFalse(yield* fileSystem.exists(environment.clientSettingsPath));
+        assert.deepEqual(yield* settings.get, Option.some(clientSettings));
+
+        const rendererSettings = {
+          ...clientSettings,
+          mobileOptimizedPresentation: true,
+        };
+        yield* settings.set(rendererSettings);
+
+        assert.deepEqual(yield* settings.get, Option.some(rendererSettings));
+        assert.equal(
+          yield* fileSystem.readFileString(environment.legacyClientSettingsPath),
+          legacyJson,
         );
       }),
     ),
