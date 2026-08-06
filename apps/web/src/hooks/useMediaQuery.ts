@@ -86,10 +86,11 @@ export function useMediaQuery(query: BreakpointQuery | MediaQueryInput | (string
 
 export function useIsMobile(): boolean {
   const viewportMatchesMobile = useMediaQuery("max-md");
+  const touchOnlyDevice = useMediaQuery("(hover: none) and (pointer: coarse)");
   const mobileOptimizedPresentation = useSettings(
     (settings) => settings.mobileOptimizedPresentation,
   );
-  return resolveMobileLayout(viewportMatchesMobile, mobileOptimizedPresentation);
+  return resolveMobileLayout(viewportMatchesMobile || touchOnlyDevice, mobileOptimizedPresentation);
 }
 
 const ON_SCREEN_KEYBOARD_MEDIA_QUERY = "(hover: none) and (pointer: coarse)";
