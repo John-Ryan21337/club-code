@@ -36,7 +36,7 @@ describe("copyTextToClipboard", () => {
     expect(copyText).toHaveBeenCalledExactlyOnceWith("prompt history");
   });
 
-  it("falls back to a selection copy when the browser clipboard rejects", async () => {
+  it("falls back without disturbing keyboard focus or the existing selection", async () => {
     Reflect.deleteProperty(window, "desktopBridge");
     const writeText = vi.fn(async () => {
       throw new Error("permission denied");
@@ -51,9 +51,30 @@ describe("copyTextToClipboard", () => {
       value: execCommand,
     });
 
-    await copyTextToClipboard("chat history");
+    const selectedText = document.createElement("span");
+    selectedText.textContent = "selected conversation text";
+    const focusTarget = document.createElement("button");
+    focusTarget.type = "button";
+    document.body.append(selectedText, focusTarget);
+    focusTarget.focus();
 
-    expect(writeText).toHaveBeenCalledExactlyOnceWith("chat history");
-    expect(execCommand).toHaveBeenCalledExactlyOnceWith("copy");
+    const range = document.createRange();
+    range.selectNodeContents(selectedText);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+
+    try {
+      await copyTextToClipboard("chat history");
+
+      expect(writeText).toHaveBeenCalledExactlyOnceWith("chat history");
+      expect(execCommand).toHaveBeenCalledExactlyOnceWith("copy");
+      expect(document.activeElement).toBe(focusTarget);
+      expect(window.getSelection()?.toString()).toBe("selected conversation text");
+    } finally {
+      window.getSelection()?.removeAllRanges();
+      selectedText.remove();
+      focusTarget.remove();
+    }
   });
 });
