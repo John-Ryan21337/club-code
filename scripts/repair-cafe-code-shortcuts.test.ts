@@ -1,6 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import * as NodePath from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
@@ -15,6 +16,8 @@ const powershellPath = NodePath.join(
   "powershell.exe",
 );
 
+const quotePowerShellSingle = (value: string): string => `'${value.replaceAll("'", "''")}'`;
+
 afterEach(() => {
   for (const directory of temporaryDirectories.splice(0)) {
     rmSync(directory, { recursive: true, force: true });
@@ -25,17 +28,7 @@ describe("Cafe Code shortcut repair", () => {
   it.skipIf(process.platform !== "win32")(
     "rewrites only a shortcut already bound to the validated checkout",
     () => {
-      const userProfileRoot = execFileSync(
-        powershellPath,
-        [
-          "-NoProfile",
-          "-NonInteractive",
-          "-Command",
-          "[Environment]::GetFolderPath('UserProfile')",
-        ],
-        { encoding: "utf8" },
-      ).trim();
-      const root = mkdtempSync(NodePath.join(userProfileRoot, "club-code-shortcut-test-"));
+      const root = mkdtempSync(NodePath.join(homedir(), "club-code-shortcut-test-"));
       temporaryDirectories.push(root);
       const repoRoot = NodePath.join(root, "checkout");
       mkdirSync(repoRoot, { recursive: true });
@@ -47,111 +40,51 @@ describe("Cafe Code shortcut repair", () => {
       const unrelated = NodePath.join(root, "Unrelated.lnk");
       const workingOnly = NodePath.join(root, "Working Only Cafe Code.lnk");
       const powershellOwned = NodePath.join(root, "PowerShell Owned Cafe Code.lnk");
-      const createScript = [
-        "$shell = New-Object -ComObject WScript.Shell",
-        `$known = $shell.CreateShortcut('${recognized.replaceAll("'", "''")}')`,
-        `$known.TargetPath = '${NodePath.join(repoRoot, "Start-CafeCode.ps1").replaceAll("'", "''")}'`,
-        `$known.WorkingDirectory = '${repoRoot.replaceAll("'", "''")}'`,
-        "$known.Save()",
-        `$foreign = $shell.CreateShortcut('${foreign.replaceAll("'", "''")}')`,
-        "$foreign.TargetPath = 'C:\\old\\Start-CafeCode.ps1'",
-        "$foreign.WorkingDirectory = 'C:\\old'",
-        "$foreign.Save()",
-        `$other = $shell.CreateShortcut('${unrelated.replaceAll("'", "''")}')`,
-        "$other.TargetPath = 'C:\\Windows\\notepad.exe'",
-        "$other.Save()",
-        `$workingOnly = $shell.CreateShortcut('${workingOnly.replaceAll("'", "''")}')`,
-        "$workingOnly.TargetPath = 'C:\\Windows\\notepad.exe'",
-        `$workingOnly.WorkingDirectory = '${repoRoot.replaceAll("'", "''")}'`,
-        "$workingOnly.Save()",
-        `$powershellOwned = $shell.CreateShortcut('${powershellOwned.replaceAll("'", "''")}')`,
-        `$powershellOwned.TargetPath = '${powershellPath.replaceAll("'", "''")}'`,
-        `$powershellOwned.Arguments = '-NoProfile -File "${NodePath.join(repoRoot, "Start-CafeCode.ps1").replaceAll("'", "''")}" -Wait'`,
-        `$powershellOwned.WorkingDirectory = '${repoRoot.replaceAll("'", "''")}'`,
-        "$powershellOwned.Save()",
-      ].join("; ");
-      execFileSync(powershellPath, ["-NoProfile", "-NonInteractive", "-Command", createScript], {
-        stdio: "ignore",
-      });
-
-      execFileSync(
-        powershellPath,
+      const testHarness = NodePath.join(root, "shortcut-test-harness.ps1");
+      writeFileSync(
+        testHarness,
         [
-          "-NoProfile",
-          "-NonInteractive",
-          "-ExecutionPolicy",
-          "Bypass",
-          "-File",
-          scriptPath,
-          "-RepoRoot",
-          repoRoot,
-          "-CandidatePaths",
-          recognized,
-        ],
-        { stdio: "ignore" },
+          "$ErrorActionPreference = 'Stop'",
+          "$shell = New-Object -ComObject WScript.Shell",
+          "function New-TestShortcut {",
+          "  param([string]$Path, [string]$Target, [string]$Working = '', [string]$Arguments = '')",
+          "  $shortcut = $shell.CreateShortcut($Path)",
+          "  try {",
+          "    $shortcut.TargetPath = $Target",
+          "    if ($Working) { $shortcut.WorkingDirectory = $Working }",
+          "    if ($Arguments) { $shortcut.Arguments = $Arguments }",
+          "    $shortcut.Save()",
+          "  } finally {",
+          "    [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($shortcut)",
+          "  }",
+          "}",
+          `New-TestShortcut ${quotePowerShellSingle(recognized)} ${quotePowerShellSingle(NodePath.join(repoRoot, "Start-CafeCode.ps1"))} ${quotePowerShellSingle(repoRoot)}`,
+          `New-TestShortcut ${quotePowerShellSingle(foreign)} 'C:\\old\\Start-CafeCode.ps1' 'C:\\old'`,
+          `New-TestShortcut ${quotePowerShellSingle(unrelated)} 'C:\\Windows\\notepad.exe'`,
+          `New-TestShortcut ${quotePowerShellSingle(workingOnly)} 'C:\\Windows\\notepad.exe' ${quotePowerShellSingle(repoRoot)}`,
+          `New-TestShortcut ${quotePowerShellSingle(powershellOwned)} ${quotePowerShellSingle(powershellPath)} ${quotePowerShellSingle(repoRoot)} ${quotePowerShellSingle(`-NoProfile -File "${NodePath.join(repoRoot, "Start-CafeCode.ps1")}" -Wait`)}`,
+          "[void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell)",
+          `& ${quotePowerShellSingle(scriptPath)} -RepoRoot ${quotePowerShellSingle(repoRoot)} -CandidatePaths ${quotePowerShellSingle(recognized)} | Out-Null`,
+          `& ${quotePowerShellSingle(scriptPath)} -RepoRoot ${quotePowerShellSingle(repoRoot)} -CandidatePaths ${quotePowerShellSingle(powershellOwned)} | Out-Null`,
+          `& ${quotePowerShellSingle(scriptPath)} -RepoRoot ${quotePowerShellSingle(repoRoot)} -CandidatePaths ${quotePowerShellSingle(workingOnly)} | Out-Null`,
+          `& ${quotePowerShellSingle(scriptPath)} -RepoRoot ${quotePowerShellSingle(repoRoot)} -CandidatePaths ${quotePowerShellSingle(foreign)} | Out-Null`,
+          "$shell = New-Object -ComObject WScript.Shell",
+          `$known = $shell.CreateShortcut(${quotePowerShellSingle(recognized)})`,
+          `$foreign = $shell.CreateShortcut(${quotePowerShellSingle(foreign)})`,
+          `$other = $shell.CreateShortcut(${quotePowerShellSingle(unrelated)})`,
+          `$workingOnly = $shell.CreateShortcut(${quotePowerShellSingle(workingOnly)})`,
+          `$powershellOwned = $shell.CreateShortcut(${quotePowerShellSingle(powershellOwned)})`,
+          "[PSCustomObject]@{ KnownTarget = $known.TargetPath; KnownArguments = $known.Arguments; KnownWorking = $known.WorkingDirectory; ForeignTarget = $foreign.TargetPath; OtherTarget = $other.TargetPath; WorkingOnlyTarget = $workingOnly.TargetPath; PowershellOwnedArguments = $powershellOwned.Arguments } | ConvertTo-Json -Compress",
+          "$known, $foreign, $other, $workingOnly, $powershellOwned | ForEach-Object { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($_) }",
+          "[void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell)",
+        ].join("\n"),
       );
-      execFileSync(
-        powershellPath,
-        [
-          "-NoProfile",
-          "-NonInteractive",
-          "-ExecutionPolicy",
-          "Bypass",
-          "-File",
-          scriptPath,
-          "-RepoRoot",
-          repoRoot,
-          "-CandidatePaths",
-          powershellOwned,
-        ],
-        { stdio: "ignore" },
-      );
-      execFileSync(
-        powershellPath,
-        [
-          "-NoProfile",
-          "-NonInteractive",
-          "-ExecutionPolicy",
-          "Bypass",
-          "-File",
-          scriptPath,
-          "-RepoRoot",
-          repoRoot,
-          "-CandidatePaths",
-          workingOnly,
-        ],
-        { stdio: "ignore" },
-      );
-      execFileSync(
-        powershellPath,
-        [
-          "-NoProfile",
-          "-NonInteractive",
-          "-ExecutionPolicy",
-          "Bypass",
-          "-File",
-          scriptPath,
-          "-RepoRoot",
-          repoRoot,
-          "-CandidatePaths",
-          foreign,
-        ],
-        { stdio: "ignore" },
-      );
-
-      const inspectScript = [
-        "$shell = New-Object -ComObject WScript.Shell",
-        `$known = $shell.CreateShortcut('${recognized.replaceAll("'", "''")}')`,
-        `$foreign = $shell.CreateShortcut('${foreign.replaceAll("'", "''")}')`,
-        `$other = $shell.CreateShortcut('${unrelated.replaceAll("'", "''")}')`,
-        `$workingOnly = $shell.CreateShortcut('${workingOnly.replaceAll("'", "''")}')`,
-        `$powershellOwned = $shell.CreateShortcut('${powershellOwned.replaceAll("'", "''")}')`,
-        "[PSCustomObject]@{ KnownTarget = $known.TargetPath; KnownArguments = $known.Arguments; KnownWorking = $known.WorkingDirectory; ForeignTarget = $foreign.TargetPath; OtherTarget = $other.TargetPath; WorkingOnlyTarget = $workingOnly.TargetPath; PowershellOwnedArguments = $powershellOwned.Arguments } | ConvertTo-Json -Compress",
-      ].join("; ");
       const observed = JSON.parse(
-        execFileSync(powershellPath, ["-NoProfile", "-NonInteractive", "-Command", inspectScript], {
-          encoding: "utf8",
-        }),
+        execFileSync(
+          powershellPath,
+          ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", testHarness],
+          { encoding: "utf8" },
+        ),
       ) as {
         KnownTarget: string;
         KnownArguments: string;
