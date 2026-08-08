@@ -376,6 +376,7 @@ export interface DesktopBridge {
   openExternal: (url: string) => Promise<boolean>;
   openPath: (path: string) => Promise<boolean>;
   revealPath: (path: string) => Promise<boolean>;
+  copyText: (text: string) => Promise<void>;
   onMenuAction: (listener: (action: string) => void) => () => void;
   getUpdateState: () => Promise<DesktopUpdateState>;
   setUpdateChannel: (channel: DesktopUpdateChannel) => Promise<DesktopUpdateState>;

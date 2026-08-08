@@ -1,7 +1,11 @@
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import { describe, expect, it, vi } from "vitest";
 
+import * as ElectronShell from "../electron/ElectronShell.ts";
+import { COPY_TEXT_CHANNEL } from "./channels.ts";
 import * as DesktopIpc from "./DesktopIpc.ts";
+import { copyText } from "./methods/window.ts";
 
 function makeTopFrame(url: string): DesktopIpc.DesktopIpcWebFrame {
   const frame = {
@@ -161,5 +165,43 @@ describe("DesktopIpc sender validation", () => {
 
     expect(event.returnValue).toBeNull();
     expect(calls).toBe(0);
+  });
+
+  it("decodes trusted clipboard writes and rejects invalid payloads", async () => {
+    const ipcMain = makeIpcMainStub();
+    const ipc = DesktopIpc.make(ipcMain.ipcMain);
+    const sender = { id: 10, isDestroyed: () => false };
+    const copiedTexts: string[] = [];
+    const electronShellLayer = Layer.succeed(ElectronShell.ElectronShell, {
+      openExternal: () => Effect.succeed(false),
+      openPath: () => Effect.succeed(false),
+      revealPath: () => Effect.succeed(false),
+      copyText: (text) =>
+        Effect.sync(() => {
+          copiedTexts.push(text);
+        }),
+    } satisfies ElectronShell.ElectronShellShape);
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          yield* ipc.trustWebContents(sender);
+          yield* ipc.handle(copyText);
+
+          const listener = ipcMain.getInvokeListener();
+          const event = {
+            sender,
+            senderFrame: makeTopFrame("file:///Applications/CafeCode/index.html"),
+          };
+          yield* Effect.promise(() => Promise.resolve(listener(event, "clipboard text")));
+          yield* Effect.promise(() =>
+            expect(listener(event, { text: "not a string payload" })).rejects.toThrow(),
+          );
+        }),
+      ).pipe(Effect.provide(electronShellLayer)),
+    );
+
+    expect(ipcMain.ipcMain.handle).toHaveBeenCalledWith(COPY_TEXT_CHANNEL, expect.any(Function));
+    expect(copiedTexts).toEqual(["clipboard text"]);
   });
 });

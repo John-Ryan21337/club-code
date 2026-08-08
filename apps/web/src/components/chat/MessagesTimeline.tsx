@@ -48,6 +48,7 @@ import { buildExpandedImagePreview, ExpandedImagePreview } from "./ExpandedImage
 import { ProposedPlanCard } from "./ProposedPlanCard";
 import { MessageCopyButton } from "./MessageCopyButton";
 import { stackedThreadToast, toastManager } from "../ui/toast";
+import { copyTextToClipboard } from "../../lib/copyToClipboard";
 import {
   computeStableMessagesTimelineRows,
   MAX_VISIBLE_WORK_LOG_ENTRIES,
@@ -1158,10 +1159,7 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
           provider: ctx.activeProvider,
         });
         try {
-          if (typeof navigator === "undefined" || !navigator.clipboard?.writeText) {
-            throw new Error("Clipboard is unavailable.");
-          }
-          await navigator.clipboard.writeText(copyText);
+          await copyTextToClipboard(copyText);
           toastManager.add(stackedThreadToast({ type: "success", title: "Copied message" }));
         } catch (error) {
           toastManager.add(
@@ -1952,7 +1950,7 @@ function openFileWithPreferredEditor(input: {
     return;
   }
   if (!getLocalShellCapabilities().canOpenLocalEditor) {
-    void navigator.clipboard?.writeText(absolutePath).catch((error: unknown) => {
+    void copyTextToClipboard(absolutePath).catch((error: unknown) => {
       console.warn("Failed to copy file path", error);
     });
     return;
