@@ -42,6 +42,15 @@ function makeIpcMainStub() {
   };
 }
 
+function makeElectronShellLayer(onCopyText: (text: string) => void) {
+  return Layer.succeed(ElectronShell.ElectronShell, {
+    openExternal: () => Effect.succeed(false),
+    openPath: () => Effect.succeed(false),
+    revealPath: () => Effect.succeed(false),
+    copyText: (text) => Effect.sync(() => onCopyText(text)),
+  } satisfies ElectronShell.ElectronShellShape);
+}
+
 describe("DesktopIpc sender validation", () => {
   it("classifies only file and loopback renderer URLs as trusted", () => {
     expect(DesktopIpc.isTrustedDesktopIpcFrameUrl("file:///Applications/CafeCode/index.html")).toBe(
@@ -172,15 +181,7 @@ describe("DesktopIpc sender validation", () => {
     const ipc = DesktopIpc.make(ipcMain.ipcMain);
     const sender = { id: 10, isDestroyed: () => false };
     const copiedTexts: string[] = [];
-    const electronShellLayer = Layer.succeed(ElectronShell.ElectronShell, {
-      openExternal: () => Effect.succeed(false),
-      openPath: () => Effect.succeed(false),
-      revealPath: () => Effect.succeed(false),
-      copyText: (text) =>
-        Effect.sync(() => {
-          copiedTexts.push(text);
-        }),
-    } satisfies ElectronShell.ElectronShellShape);
+    const electronShellLayer = makeElectronShellLayer((text) => copiedTexts.push(text));
 
     await Effect.runPromise(
       Effect.scoped(
@@ -203,5 +204,29 @@ describe("DesktopIpc sender validation", () => {
 
     expect(ipcMain.ipcMain.handle).toHaveBeenCalledWith(COPY_TEXT_CHANNEL, expect.any(Function));
     expect(copiedTexts).toEqual(["clipboard text"]);
+  });
+
+  it("rejects clipboard writes from untrusted renderer origins", async () => {
+    const ipcMain = makeIpcMainStub();
+    const ipc = DesktopIpc.make(ipcMain.ipcMain);
+    const sender = { id: 11, isDestroyed: () => false };
+    const copiedTexts: string[] = [];
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          yield* ipc.trustWebContents(sender);
+          yield* ipc.handle(copyText);
+        }),
+      ).pipe(Effect.provide(makeElectronShellLayer((text) => copiedTexts.push(text)))),
+    );
+
+    await expect(
+      ipcMain.getInvokeListener()(
+        { sender, senderFrame: makeTopFrame("https://evil.example/") },
+        "sensitive clipboard text",
+      ),
+    ).rejects.toThrow(DesktopIpc.DesktopIpcSenderValidationError);
+    expect(copiedTexts).toEqual([]);
   });
 });
