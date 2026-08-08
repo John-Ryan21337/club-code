@@ -1161,7 +1161,7 @@ function summarizeDebugThreadLifecycle(thread: Thread, nowMs: number) {
   const latestTurn = thread.latestTurn;
   const activeTurnId = session?.activeTurnId ?? null;
   const latestTurnId = latestTurn?.turnId ?? null;
-  const phase = derivePhase(session);
+  const phase = derivePhase(session, latestTurn);
   const latestTurnSettled = isLatestTurnSettled(latestTurn, session);
   const activeTurnMessages =
     latestTurnId === null
@@ -3077,7 +3077,7 @@ export default function ChatView(props: ChatViewProps) {
     selectedProviderByThreadId ?? threadProvider ?? ProviderDriverKind.make("codex"),
   );
   const selectedProvider: ProviderDriverKind = lockedProvider ?? unlockedSelectedProvider;
-  const phase = derivePhase(activeThread?.session ?? null);
+  const phase = derivePhase(activeThread?.session ?? null, activeLatestTurn);
   const isProviderConnecting = phase === "connecting";
   const isComposerConnecting = isConnecting || isProviderConnecting;
   const threadActivities = activeThread?.activities ?? EMPTY_ACTIVITIES;

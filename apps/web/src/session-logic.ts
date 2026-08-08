@@ -1455,9 +1455,25 @@ export function inferCheckpointTurnCountByTurnId(
   return result;
 }
 
-export function derivePhase(session: ThreadSession | null): SessionPhase {
+export function derivePhase(
+  session: ThreadSession | null,
+  latestTurn: LatestTurnTiming | null = null,
+): SessionPhase {
   if (!session || session.status === "closed") return "disconnected";
   if (session.status === "connecting") return "connecting";
-  if (session.status === "running") return "running";
+  // The provider command reactor can keep an orchestrator active after the
+  // provider's latest response has terminalized. During that handoff the
+  // transport-facing session status may already read `ready`, while the
+  // durable orchestration status remains `running`. Treat either signal as
+  // active work so the composer keeps accepting operator intent through the
+  // steer/queue path instead of rendering an idle Send action that cannot own
+  // the still-running thread.
+  if (
+    session.status === "running" ||
+    session.orchestrationStatus === "running" ||
+    (latestTurn !== null && !isLatestTurnSettled(latestTurn, session))
+  ) {
+    return "running";
+  }
   return "ready";
 }

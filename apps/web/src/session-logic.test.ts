@@ -1,6 +1,7 @@
 import {
   EventId,
   MessageId,
+  ProviderDriverKind,
   ThreadId,
   TurnId,
   type OrchestrationThreadActivity,
@@ -14,6 +15,7 @@ import {
   deriveHistoricalWorkLogSummaries,
   derivePendingApprovals,
   derivePendingUserInputs,
+  derivePhase,
   deriveTimelineEntries,
   deriveWorkLogEntries,
   findLatestProposedPlan,
@@ -24,6 +26,42 @@ import {
   hasToolActivityForTurn,
   isLatestTurnSettled,
 } from "./session-logic";
+
+describe("derivePhase", () => {
+  it("keeps the composer in running mode while orchestration continues after provider response", () => {
+    expect(
+      derivePhase({
+        status: "ready",
+        provider: ProviderDriverKind.make("codex"),
+        orchestrationStatus: "running",
+        activeTurnId: TurnId.make("turn-orchestrator-running"),
+        createdAt: "2026-08-08T07:59:00.000Z",
+        updatedAt: "2026-08-08T08:00:00.000Z",
+      }),
+    ).toBe("running");
+  });
+
+  it("keeps the composer in running mode when a stale ready session still has a live turn", () => {
+    const turnId = TurnId.make("turn-live-after-ready-snapshot");
+    expect(
+      derivePhase(
+        {
+          status: "ready",
+          provider: ProviderDriverKind.make("codex"),
+          orchestrationStatus: "ready",
+          activeTurnId: turnId,
+          createdAt: "2026-08-08T07:59:00.000Z",
+          updatedAt: "2026-08-08T08:00:00.000Z",
+        },
+        {
+          turnId,
+          startedAt: "2026-08-08T07:59:00.000Z",
+          completedAt: null,
+        },
+      ),
+    ).toBe("running");
+  });
+});
 
 function makeActivity(overrides: {
   id?: string;
