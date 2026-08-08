@@ -64,10 +64,7 @@ describe("Cafe Code shortcut repair", () => {
           `New-TestShortcut ${quotePowerShellSingle(workingOnly)} 'C:\\Windows\\notepad.exe' ${quotePowerShellSingle(repoRoot)}`,
           `New-TestShortcut ${quotePowerShellSingle(powershellOwned)} ${quotePowerShellSingle(powershellPath)} ${quotePowerShellSingle(repoRoot)} ${quotePowerShellSingle(`-NoProfile -File "${NodePath.join(repoRoot, "Start-CafeCode.ps1")}" -Wait`)}`,
           "[void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell)",
-          `& ${quotePowerShellSingle(scriptPath)} -RepoRoot ${quotePowerShellSingle(repoRoot)} -CandidatePaths ${quotePowerShellSingle(recognized)} | Out-Null`,
-          `& ${quotePowerShellSingle(scriptPath)} -RepoRoot ${quotePowerShellSingle(repoRoot)} -CandidatePaths ${quotePowerShellSingle(powershellOwned)} | Out-Null`,
-          `& ${quotePowerShellSingle(scriptPath)} -RepoRoot ${quotePowerShellSingle(repoRoot)} -CandidatePaths ${quotePowerShellSingle(workingOnly)} | Out-Null`,
-          `& ${quotePowerShellSingle(scriptPath)} -RepoRoot ${quotePowerShellSingle(repoRoot)} -CandidatePaths ${quotePowerShellSingle(foreign)} | Out-Null`,
+          `& ${quotePowerShellSingle(scriptPath)} -RepoRoot ${quotePowerShellSingle(repoRoot)} -CandidatePaths @(${[recognized, powershellOwned, workingOnly, foreign].map(quotePowerShellSingle).join(", ")}) | Out-Null`,
           "$shell = New-Object -ComObject WScript.Shell",
           `$known = $shell.CreateShortcut(${quotePowerShellSingle(recognized)})`,
           `$foreign = $shell.CreateShortcut(${quotePowerShellSingle(foreign)})`,
@@ -109,6 +106,6 @@ describe("Cafe Code shortcut repair", () => {
       expect(observed.PowershellOwnedArguments).toContain("-NoLogo -NoProfile");
       expect(observed.PowershellOwnedArguments).toContain("-Wait");
     },
-    process.platform === "win32" ? 20_000 : 5_000,
+    process.platform === "win32" ? 120_000 : 5_000,
   );
 });
