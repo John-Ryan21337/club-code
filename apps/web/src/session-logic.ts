@@ -1455,10 +1455,7 @@ export function inferCheckpointTurnCountByTurnId(
   return result;
 }
 
-export function derivePhase(
-  session: ThreadSession | null,
-  latestTurn: LatestTurnTiming | null = null,
-): SessionPhase {
+export function derivePhase(session: ThreadSession | null): SessionPhase {
   if (!session || session.status === "closed") return "disconnected";
   if (session.status === "connecting") return "connecting";
   // The provider command reactor can keep an orchestrator active after the
@@ -1468,11 +1465,7 @@ export function derivePhase(
   // active work so the composer keeps accepting operator intent through the
   // steer/queue path instead of rendering an idle Send action that cannot own
   // the still-running thread.
-  if (
-    session.status === "running" ||
-    session.orchestrationStatus === "running" ||
-    (latestTurn !== null && !isLatestTurnSettled(latestTurn, session))
-  ) {
+  if (session.status === "running" || session.orchestrationStatus === "running") {
     return "running";
   }
   return "ready";

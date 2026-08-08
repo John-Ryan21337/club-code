@@ -24,6 +24,7 @@ import * as Stream from "effect/Stream";
 import { HttpClient } from "effect/unstable/http";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import { compareSemverVersions, parseSemver } from "@cafecode/shared/semver";
+import { approvedProviderCliVersion } from "@cafecode/shared/providerCompatibility";
 
 import { makeClaudeTextGeneration } from "../../textGeneration/ClaudeTextGeneration.ts";
 import { ServerConfig } from "../../config.ts";
@@ -64,6 +65,7 @@ const DRIVER_KIND = ProviderDriverKind.make("claudeAgent");
 const SNAPSHOT_REFRESH_INTERVAL = Duration.minutes(5);
 const CAPABILITIES_PROBE_TTL = Duration.minutes(5);
 const CLAUDE_ACCOUNT_USAGE_MINIMUM_VERSION = "2.1.216";
+const APPROVED_CLAUDE_CODE_VERSION = approvedProviderCliVersion("claude");
 
 export function supportsClaudeAccountUsage(
   snapshot: Pick<ServerProvider, "auth" | "version">,
@@ -94,10 +96,11 @@ function isClaudeNativeCommandPath(commandPath: string): boolean {
 const UPDATE_DEFINITION = {
   provider: DRIVER_KIND,
   npmPackageName: "@anthropic-ai/claude-code",
+  approvedVersion: APPROVED_CLAUDE_CODE_VERSION,
   homebrewFormula: "claude-code",
   nativeUpdate: {
     executable: "claude",
-    args: ["update"],
+    args: ["install", APPROVED_CLAUDE_CODE_VERSION],
     lockKey: "claude-native",
     isCommandPath: isClaudeNativeCommandPath,
   },

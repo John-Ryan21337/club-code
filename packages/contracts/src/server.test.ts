@@ -120,6 +120,7 @@ describe("ServerProvider", () => {
     });
 
     expect(parsed.versionAdvisory?.canUpdate).toBe(false);
+    expect(parsed.versionAdvisory?.approvedVersion).toBeNull();
   });
 
   it("decodes continuation group metadata", () => {

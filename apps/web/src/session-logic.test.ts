@@ -41,25 +41,30 @@ describe("derivePhase", () => {
     ).toBe("running");
   });
 
-  it("keeps the composer in running mode when a stale ready session still has a live turn", () => {
-    const turnId = TurnId.make("turn-live-after-ready-snapshot");
+  it("returns to ready when both durable activity signals are ready", () => {
     expect(
-      derivePhase(
-        {
-          status: "ready",
-          provider: ProviderDriverKind.make("codex"),
-          orchestrationStatus: "ready",
-          activeTurnId: turnId,
-          createdAt: "2026-08-08T07:59:00.000Z",
-          updatedAt: "2026-08-08T08:00:00.000Z",
-        },
-        {
-          turnId,
-          startedAt: "2026-08-08T07:59:00.000Z",
-          completedAt: null,
-        },
-      ),
-    ).toBe("running");
+      derivePhase({
+        status: "ready",
+        provider: ProviderDriverKind.make("codex"),
+        orchestrationStatus: "ready",
+        activeTurnId: TurnId.make("turn-orphaned-after-provider-crash"),
+        createdAt: "2026-08-08T07:59:00.000Z",
+        updatedAt: "2026-08-08T08:00:00.000Z",
+      }),
+    ).toBe("ready");
+  });
+
+  it("keeps a closed session disconnected even if orchestration state is stale", () => {
+    expect(
+      derivePhase({
+        status: "closed",
+        provider: ProviderDriverKind.make("codex"),
+        orchestrationStatus: "running",
+        activeTurnId: TurnId.make("turn-stale-after-close"),
+        createdAt: "2026-08-08T07:59:00.000Z",
+        updatedAt: "2026-08-08T08:00:00.000Z",
+      }),
+    ).toBe("disconnected");
   });
 });
 
