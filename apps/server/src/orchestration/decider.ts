@@ -512,48 +512,56 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       });
       if (threadHasUnsettledTurnStart(targetThread)) {
         const activeTurnId = activeTurnIdForSteer(targetThread);
-        if (activeTurnId !== null) {
-          const userMessageEvent: Omit<OrchestrationEvent, "sequence"> = {
-            ...withEventBase({
-              aggregateKind: "thread",
-              aggregateId: command.threadId,
-              occurredAt: command.createdAt,
-              commandId: command.commandId,
-            }),
-            type: "thread.message-sent",
-            payload: {
-              threadId: command.threadId,
-              messageId: command.message.messageId,
-              role: "user",
-              text: command.message.text,
-              attachments: command.message.attachments,
-              turnId: activeTurnId,
-              streaming: false,
-              createdAt: command.createdAt,
-              updatedAt: command.createdAt,
-            },
-          };
-          const turnSteerRequestedEvent: Omit<OrchestrationEvent, "sequence"> = {
-            ...withEventBase({
-              aggregateKind: "thread",
-              aggregateId: command.threadId,
-              occurredAt: command.createdAt,
-              commandId: command.commandId,
-            }),
-            causationEventId: userMessageEvent.eventId,
-            type: "thread.turn-steer-requested",
-            payload: {
-              threadId: command.threadId,
-              messageId: command.message.messageId,
-              createdAt: command.createdAt,
-            },
-          };
-          return [userMessageEvent, turnSteerRequestedEvent];
-        }
-        return yield* new OrchestrationCommandInvariantError({
-          commandType: command.type,
-          detail: `Thread '${command.threadId}' already has a turn starting or running. Queue a follow-up or steer the active turn instead of starting another turn.`,
-        });
+        // The renderer can submit from an older ready snapshot while the
+        // authoritative aggregate has already moved to `starting`. Claude can
+        // also remain live while briefly projecting `running` without an
+        // active turn id as SDK response segments cross a terminal-looking
+        // boundary. Rejecting here loses the renderer's only durable handoff
+        // and exposes a recoverable projection race to the user.
+        //
+        // Persist one steer intent even when `activeTurnId` is null. The
+        // ProviderCommandReactor resolves that intent against live provider
+        // state in sequence: it steers a materialized active turn, or submits
+        // the same message as the next turn when no active provider turn
+        // remains. Command receipts keep exact retries idempotent, while the
+        // original message id and attachments remain bound to one accepted
+        // orchestration command.
+        const userMessageEvent: Omit<OrchestrationEvent, "sequence"> = {
+          ...withEventBase({
+            aggregateKind: "thread",
+            aggregateId: command.threadId,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          }),
+          type: "thread.message-sent",
+          payload: {
+            threadId: command.threadId,
+            messageId: command.message.messageId,
+            role: "user",
+            text: command.message.text,
+            attachments: command.message.attachments,
+            turnId: activeTurnId,
+            streaming: false,
+            createdAt: command.createdAt,
+            updatedAt: command.createdAt,
+          },
+        };
+        const turnSteerRequestedEvent: Omit<OrchestrationEvent, "sequence"> = {
+          ...withEventBase({
+            aggregateKind: "thread",
+            aggregateId: command.threadId,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          }),
+          causationEventId: userMessageEvent.eventId,
+          type: "thread.turn-steer-requested",
+          payload: {
+            threadId: command.threadId,
+            messageId: command.message.messageId,
+            createdAt: command.createdAt,
+          },
+        };
+        return [userMessageEvent, turnSteerRequestedEvent];
       }
       const sourceProposedPlan = command.sourceProposedPlan;
       const sourceThread = sourceProposedPlan

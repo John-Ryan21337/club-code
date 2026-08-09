@@ -2561,6 +2561,12 @@ describe("ProviderCommandReactor", () => {
         input: "this should become the next turn",
       },
       {
+        name: "starting session without an active turn id",
+        threadId: ThreadId.make("thread-1"),
+        status: "starting" as const,
+        input: "preserve this while the first turn materializes",
+      },
+      {
         name: "stopped session after restart",
         threadId: stoppedThreadId,
         status: "stopped" as const,

@@ -1,8 +1,10 @@
 import {
+  type ChatAttachment,
   CheckpointRef,
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   MessageId,
+  type OrchestrationCommand,
   ProjectId,
   ThreadId,
   TurnId,
@@ -301,10 +303,19 @@ describe("OrchestrationEngine", () => {
     await system.dispose();
   });
 
-  it("rejects a second turn start while the first start is still materializing", async () => {
+  it("durably routes repeated turn starts while the provider turn is unsettled", async () => {
     const createdAt = now();
     const system = await createOrchestrationSystem();
     const { engine } = system;
+    const queuedAttachments = [
+      {
+        type: "image" as const,
+        id: "attachment-follow-up-1",
+        name: "follow-up.png",
+        mimeType: "image/png",
+        sizeBytes: 128,
+      },
+    ] as unknown as ChatAttachment[];
 
     await system.run(
       engine.dispatch({
@@ -361,24 +372,62 @@ describe("OrchestrationEngine", () => {
     );
     expect(threadAfterFirstStart?.session?.status).toBe("starting");
 
-    await expect(
-      system.run(
-        engine.dispatch({
-          type: "thread.turn.start",
-          commandId: CommandId.make("cmd-turn-start-single-flight-2"),
+    const materializingFollowUp = {
+      type: "thread.turn.start",
+      commandId: CommandId.make("cmd-turn-start-single-flight-2"),
+      threadId: ThreadId.make("thread-single-flight"),
+      message: {
+        messageId: asMessageId("msg-single-flight-2"),
+        role: "user",
+        text: "second",
+        attachments: queuedAttachments,
+      },
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      runtimeMode: "approval-required",
+      createdAt: "2026-01-01T00:00:01.000Z",
+    } satisfies OrchestrationCommand;
+
+    await system.run(engine.dispatch(materializingFollowUp));
+    // A reconnect can retry the exact command after its response is lost. The
+    // durable command receipt must return the prior result without duplicating
+    // either the user message or provider intent.
+    await system.run(engine.dispatch(materializingFollowUp));
+
+    await system.run(
+      engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-running-without-active-turn"),
+        threadId: ThreadId.make("thread-single-flight"),
+        session: {
           threadId: ThreadId.make("thread-single-flight"),
-          message: {
-            messageId: asMessageId("msg-single-flight-2"),
-            role: "user",
-            text: "second",
-            attachments: [],
-          },
-          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          status: "running",
+          providerName: "claudeAgent",
+          providerInstanceId: ProviderInstanceId.make("claudeAgent"),
           runtimeMode: "approval-required",
-          createdAt: "2026-01-01T00:00:01.000Z",
-        }),
-      ),
-    ).rejects.toThrow("already has a turn starting or running");
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: "2026-01-01T00:00:02.000Z",
+        },
+        createdAt: "2026-01-01T00:00:02.000Z",
+      }),
+    );
+
+    await system.run(
+      engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-running-without-active-turn"),
+        threadId: ThreadId.make("thread-single-flight"),
+        message: {
+          messageId: asMessageId("msg-running-without-active-turn"),
+          role: "user",
+          text: "third",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: "2026-01-01T00:00:03.000Z",
+      }),
+    );
 
     const events = await system.run(
       Stream.runCollect(engine.readEvents(0)).pipe(
@@ -386,7 +435,24 @@ describe("OrchestrationEngine", () => {
       ),
     );
     expect(events.filter((event) => event.type === "thread.turn-start-requested")).toHaveLength(1);
-    expect(events.filter((event) => event.type === "thread.message-sent")).toHaveLength(1);
+    expect(events.filter((event) => event.type === "thread.turn-steer-requested")).toHaveLength(2);
+    expect(events.filter((event) => event.type === "thread.message-sent")).toHaveLength(3);
+    expect(
+      events.find(
+        (event): event is Extract<OrchestrationEvent, { type: "thread.message-sent" }> =>
+          event.type === "thread.message-sent" && event.payload.messageId === "msg-single-flight-2",
+      )?.payload,
+    ).toMatchObject({
+      turnId: null,
+      attachments: queuedAttachments,
+    });
+    expect(
+      events.find(
+        (event): event is Extract<OrchestrationEvent, { type: "thread.message-sent" }> =>
+          event.type === "thread.message-sent" &&
+          event.payload.messageId === "msg-running-without-active-turn",
+      )?.payload.turnId,
+    ).toBeNull();
 
     await system.dispose();
   });
