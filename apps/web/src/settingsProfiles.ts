@@ -81,6 +81,13 @@ export const SETTINGS_PROFILE_CLIENT_FIELD_POLICY = {
   fallingEffectsEnabled: "ambient-activation",
   atmosphereConsoleEnabled: "ambient-activation",
   fallingEffectsOverCinemaEnabled: "ambient-activation",
+  // Lighting sync controls native hardware and therefore requires a direct
+  // operator choice on this host; presentation profiles cannot activate or
+  // retarget it implicitly.
+  hardwareLightingSyncEnabled: "native-machine-control",
+  hardwareLightingControllerIds: "native-machine-control",
+  hardwareLightingBrightness: "native-machine-control",
+  hardwareLightingRestoreOnDisable: "native-machine-control",
   fallingEffectKind: "include",
   fallingEffectMatrixBaseFontSize: "include",
   fallingEffectColor: "include",

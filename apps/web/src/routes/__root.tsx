@@ -25,6 +25,7 @@ import { IdleThreadGuardCoordinator } from "../components/IdleThreadGuardCoordin
 import { MobileSettingsProfileBootstrap } from "../components/MobileSettingsProfileBootstrap";
 import { ProviderUpdateLaunchNotification } from "../components/ProviderUpdateLaunchNotification";
 import { WindowAtmosphere } from "../components/WindowAtmosphere";
+import { HardwareLightingMatrixSync } from "../components/HardwareLightingMatrixSync";
 import { WorldClockWidget } from "../components/WorldClockWidget";
 import {
   WebSocketConnectionCoordinator,
@@ -176,6 +177,7 @@ function RootRouteView() {
         <AmbianceLayer />
         <PowerSaveBlockerSync />
         <WindowAtmosphere selectedThreadRef={selectedThreadRef} />
+        <HardwareLightingMatrixSync />
         {primaryEnvironmentAuthenticated ? <WorldClockWidget /> : null}
         <AtmosphereConsole />
         <EmbeddedBrowserWorkspace />

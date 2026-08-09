@@ -14,6 +14,7 @@ import {
   AgentBrowserRpcError,
   CommandId,
   EventId,
+  HardwareLightingRpcError,
   type OrchestrationCommand,
   OrchestrationDispatchCommandError,
   type OrchestrationEvent,
@@ -104,11 +105,18 @@ import {
   type SessionCredentialChange,
 } from "./auth/Services/SessionCredentialService.ts";
 import { respondToAuthError } from "./auth/http.ts";
+import { deriveAuthClientMetadata } from "./auth/utils.ts";
 import { ensureSystemPromptFile } from "./systemPromptFile.ts";
 import * as TextGeneration from "./textGeneration/TextGeneration.ts";
 import { makeWebSocketConnectionFlowControl } from "./websocket/ConnectionFlowControl.ts";
 import { encodeThreadDetailSnapshotStreamItems } from "./websocket/ThreadDetailSnapshotStream.ts";
 import { addProviderWebSocketDiagnostics } from "@cafecode/shared/providerPipelineDiagnostics";
+import {
+  HardwareLightingService,
+  HardwareLightingServiceLive,
+  type HardwareLightingServiceShape,
+} from "./lighting/HardwareLightingService.ts";
+import { canPublishHardwareLightingFrame } from "./lighting/HardwareLightingAuthority.ts";
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
 const isWorkspacePathOutsideRootError = Schema.is(WorkspacePathOutsideRootError);
 
@@ -183,6 +191,8 @@ function toAuthAccessStreamEvent(
 const makeWsRpcLayer = (
   currentSessionId: AuthSessionId,
   orchestrationSubscriptionHub: OrchestrationSubscriptionHubShape,
+  hardwareLighting: HardwareLightingServiceShape,
+  canPublishHardwareLighting: boolean,
 ) =>
   WsRpcGroup.toLayer(
     Effect.gen(function* () {
@@ -1195,10 +1205,41 @@ const makeWsRpcLayer = (
         [WS_METHODS.serverUpdateClientSettings]: ({ patch }) =>
           observeRpcEffect(
             WS_METHODS.serverUpdateClientSettings,
-            clientSettings.updateSettings(patch),
+            clientSettings
+              .updateSettings(patch)
+              .pipe(Effect.tap((settings) => hardwareLighting.reconcile(settings))),
             {
               "rpc.aggregate": "server",
             },
+          ),
+        [WS_METHODS.hardwareLightingGetStatus]: (_input) =>
+          observeRpcEffect(
+            WS_METHODS.hardwareLightingGetStatus,
+            clientSettings.getSettings.pipe(Effect.flatMap(hardwareLighting.getStatus)),
+            { "rpc.aggregate": "hardware-lighting" },
+          ),
+        [WS_METHODS.hardwareLightingRefresh]: (_input) =>
+          observeRpcEffect(
+            WS_METHODS.hardwareLightingRefresh,
+            clientSettings.getSettings.pipe(Effect.flatMap(hardwareLighting.refresh)),
+            { "rpc.aggregate": "hardware-lighting" },
+          ),
+        [WS_METHODS.hardwareLightingApplyFrame]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.hardwareLightingApplyFrame,
+            Effect.gen(function* () {
+              if (!canPublishHardwareLighting) {
+                return yield* Effect.fail(
+                  new HardwareLightingRpcError({
+                    detail:
+                      "Physical lighting frames are accepted only from the local Club Code desktop client.",
+                  }),
+                );
+              }
+              const settings = yield* clientSettings.getSettings;
+              return yield* hardwareLighting.applyFrame(settings, input);
+            }),
+            { "rpc.aggregate": "hardware-lighting" },
           ),
         [WS_METHODS.usageStatsGet]: (_input) =>
           observeRpcEffect(WS_METHODS.usageStatsGet, usageStats.get, {
@@ -1652,6 +1693,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
   Effect.gen(function* () {
     const orchestrationEngine = yield* OrchestrationEngineService;
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
+    const hardwareLighting = yield* HardwareLightingService;
     const initialSnapshot = yield* projectionSnapshotQuery.getSnapshotSequence().pipe(Effect.orDie);
     const orchestrationSubscriptionHub = yield* makeOrchestrationSubscriptionHub({
       orchestrationEngine,
@@ -1665,11 +1707,22 @@ export const websocketRpcRouteLayer = Layer.unwrap(
         const serverAuth = yield* ServerAuth;
         const sessions = yield* SessionCredentialService;
         const session = yield* serverAuth.authenticateWebSocketUpgrade(request);
+        const clientMetadata = deriveAuthClientMetadata({ request });
+        const canPublishHardwareLighting = canPublishHardwareLightingFrame({
+          role: session.role,
+          browser: clientMetadata.browser,
+          ipAddress: clientMetadata.ipAddress,
+        });
         const rpcWebSocketHttpEffect = yield* RpcServer.toHttpEffectWebsocket(WsRpcGroup, {
           disableTracing: true,
         }).pipe(
           Effect.provide(
-            makeWsRpcLayer(session.sessionId, orchestrationSubscriptionHub).pipe(
+            makeWsRpcLayer(
+              session.sessionId,
+              orchestrationSubscriptionHub,
+              hardwareLighting,
+              canPublishHardwareLighting,
+            ).pipe(
               Layer.provideMerge(RpcSerialization.layerJson),
               Layer.provide(ProviderJournalMessageRepairLive),
               Layer.provide(ProviderMaintenanceRunner.layer),
@@ -1705,4 +1758,4 @@ export const websocketRpcRouteLayer = Layer.unwrap(
       }).pipe(Effect.catchTag("AuthError", respondToAuthError)),
     );
   }),
-);
+).pipe(Layer.provide(HardwareLightingServiceLive));

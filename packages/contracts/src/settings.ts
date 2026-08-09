@@ -310,6 +310,25 @@ export const DEFAULT_ATMOSPHERE_CONSOLE_ENABLED = true;
  */
 export const DEFAULT_FALLING_EFFECTS_OVER_CINEMA_ENABLED = false;
 export const DEFAULT_FALLING_EFFECT_KIND: FallingEffectKind = "snow";
+export const DEFAULT_HARDWARE_LIGHTING_SYNC_ENABLED = false;
+export const DEFAULT_HARDWARE_LIGHTING_CONTROLLER_IDS: readonly string[] = [];
+export const DEFAULT_HARDWARE_LIGHTING_BRIGHTNESS = 1;
+export const DEFAULT_HARDWARE_LIGHTING_RESTORE_ON_DISABLE = true;
+export const HardwareLightingControllerIds = Schema.Array(
+  Schema.String.check(
+    Schema.isMinLength(16),
+    Schema.isMaxLength(64),
+    Schema.isPattern(/^[a-f0-9]+$/u),
+  ),
+).check(
+  Schema.isMaxLength(64),
+  Schema.makeFilter((ids) =>
+    new Set(ids).size === ids.length ? undefined : "must not contain duplicate controller IDs",
+  ),
+);
+export const HardwareLightingBrightness = Schema.Number.check(
+  Schema.isBetween({ minimum: 0.05, maximum: 1 }),
+);
 
 /**
  * Matrix-only palette behavior. "fixed" preserves the original configured,
@@ -738,6 +757,18 @@ export const ClientSettingsSchema = Schema.Struct({
   ),
   fallingEffectsOverCinemaEnabled: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECTS_OVER_CINEMA_ENABLED)),
+  ),
+  hardwareLightingSyncEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_HARDWARE_LIGHTING_SYNC_ENABLED)),
+  ),
+  hardwareLightingControllerIds: HardwareLightingControllerIds.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_HARDWARE_LIGHTING_CONTROLLER_IDS)),
+  ),
+  hardwareLightingBrightness: HardwareLightingBrightness.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_HARDWARE_LIGHTING_BRIGHTNESS)),
+  ),
+  hardwareLightingRestoreOnDisable: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_HARDWARE_LIGHTING_RESTORE_ON_DISABLE)),
   ),
   fallingEffectKind: FallingEffectKind.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_KIND)),
@@ -1897,6 +1928,10 @@ export const ClientSettingsPatch = Schema.Struct({
   fallingEffectsEnabled: Schema.optionalKey(Schema.Boolean),
   atmosphereConsoleEnabled: Schema.optionalKey(Schema.Boolean),
   fallingEffectsOverCinemaEnabled: Schema.optionalKey(Schema.Boolean),
+  hardwareLightingSyncEnabled: Schema.optionalKey(Schema.Boolean),
+  hardwareLightingControllerIds: Schema.optionalKey(HardwareLightingControllerIds),
+  hardwareLightingBrightness: Schema.optionalKey(HardwareLightingBrightness),
+  hardwareLightingRestoreOnDisable: Schema.optionalKey(Schema.Boolean),
   fallingEffectKind: Schema.optionalKey(FallingEffectKind),
   fallingEffectMatrixBaseFontSize: Schema.optionalKey(FallingEffectMatrixBaseFontSize),
   fallingEffectColor: Schema.optionalKey(AmbientColor),

@@ -19,11 +19,26 @@ import { render } from "vitest-browser-react";
 const mocks = vi.hoisted(() => ({
   settings: null as unknown as UnifiedSettings,
   updateSettings: vi.fn(),
+  updateClientSettingsConfirmed: vi.fn(),
+  getHardwareLightingStatus: vi.fn(),
+  refreshHardwareLighting: vi.fn(),
 }));
 
 vi.mock("../../hooks/useSettings", () => ({
   useSettings: () => mocks.settings,
-  useUpdateSettings: () => ({ updateSettings: mocks.updateSettings }),
+  useUpdateSettings: () => ({
+    updateSettings: mocks.updateSettings,
+    updateClientSettingsConfirmed: mocks.updateClientSettingsConfirmed,
+  }),
+}));
+
+vi.mock("../../localApi", () => ({
+  ensureLocalApi: () => ({
+    server: {
+      getHardwareLightingStatus: mocks.getHardwareLightingStatus,
+      refreshHardwareLighting: mocks.refreshHardwareLighting,
+    },
+  }),
 }));
 
 vi.mock("../../rpc/serverState", () => ({
@@ -43,9 +58,55 @@ beforeEach(() => {
     fallingEffectMatrixMotionMode: "flat",
   };
   mocks.updateSettings.mockReset();
+  mocks.updateClientSettingsConfirmed.mockReset();
+  mocks.updateClientSettingsConfirmed.mockResolvedValue(undefined);
+  const lightingStatus = {
+    state: "available" as const,
+    adapter: "OpenRGB SDK (loopback)" as const,
+    detail: "OpenRGB is connected with 1 compatible controller.",
+    protocolVersion: 5,
+    controllers: [
+      {
+        id: "0123456789abcdef0123456789abcdef",
+        name: "Desk Keyboard",
+        vendor: "Example Vendor",
+        type: "keyboard" as const,
+        ledCount: 104,
+        supported: true,
+      },
+    ],
+    selectedControllerCount: 0,
+    lastFrameAt: null,
+    lastDisposition: null,
+  };
+  mocks.getHardwareLightingStatus.mockReset();
+  mocks.getHardwareLightingStatus.mockResolvedValue(lightingStatus);
+  mocks.refreshHardwareLighting.mockReset();
+  mocks.refreshHardwareLighting.mockResolvedValue(lightingStatus);
 });
 
 describe("WindowAtmosphereSettings motion", () => {
+  it("discovers and explicitly opts into Matrix keyboard and case lighting", async () => {
+    mocks.settings = {
+      ...mocks.settings,
+      fallingEffectKind: "matrix",
+    };
+    const mounted = await render(<WindowAtmosphereSettings />);
+
+    await page.getByRole("button", { name: "Refresh devices" }).click();
+    expect(mocks.refreshHardwareLighting).toHaveBeenCalledOnce();
+    await expect.element(page.getByText("Desk Keyboard")).toBeInTheDocument();
+
+    await page
+      .getByRole("switch", { name: "Sync Matrix palette to keyboard and case RGB" })
+      .click();
+    expect(mocks.updateClientSettingsConfirmed).toHaveBeenLastCalledWith({
+      hardwareLightingSyncEnabled: true,
+    });
+
+    await mounted.unmount();
+  });
+
   it("persists the renderer-local Atmosphere console kill switch", async () => {
     const mounted = await render(<WindowAtmosphereSettings />);
     const toggle = page.getByRole("switch", { name: "Show Atmosphere console" });

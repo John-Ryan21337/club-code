@@ -146,6 +146,15 @@ export interface WsRpcClient {
     readonly updateClientSettings: (
       patch: ClientSettingsPatch,
     ) => ReturnType<RpcUnaryMethod<typeof WS_METHODS.serverUpdateClientSettings>>;
+    readonly getHardwareLightingStatus: RpcUnaryNoArgMethod<
+      typeof WS_METHODS.hardwareLightingGetStatus
+    >;
+    readonly refreshHardwareLighting: RpcUnaryNoArgMethod<
+      typeof WS_METHODS.hardwareLightingRefresh
+    >;
+    readonly applyHardwareLightingFrame: RpcUnaryMethod<
+      typeof WS_METHODS.hardwareLightingApplyFrame
+    >;
     readonly discoverSourceControl: RpcUnaryNoArgMethod<
       typeof WS_METHODS.serverDiscoverSourceControl
     >;
@@ -331,6 +340,12 @@ export function createWsRpcClient(transport: WsTransport): WsRpcClient {
         transport.request((client) => client[WS_METHODS.serverGetClientSettings]({})),
       updateClientSettings: (patch) =>
         transport.request((client) => client[WS_METHODS.serverUpdateClientSettings]({ patch })),
+      getHardwareLightingStatus: () =>
+        transport.request((client) => client[WS_METHODS.hardwareLightingGetStatus]({})),
+      refreshHardwareLighting: () =>
+        transport.request((client) => client[WS_METHODS.hardwareLightingRefresh]({})),
+      applyHardwareLightingFrame: (input) =>
+        transport.request((client) => client[WS_METHODS.hardwareLightingApplyFrame](input)),
       discoverSourceControl: () =>
         transport.request((client) => client[WS_METHODS.serverDiscoverSourceControl]({})),
       getTraceDiagnostics: () =>

@@ -25,6 +25,8 @@ import {
   DEFAULT_FALLING_EFFECT_MATRIX_WALK_LIFECYCLE_PERCENT,
   DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE,
   DEFAULT_FALLING_EFFECT_SPEED,
+  DEFAULT_HARDWARE_LIGHTING_BRIGHTNESS,
+  DEFAULT_HARDWARE_LIGHTING_RESTORE_ON_DISABLE,
   FALLING_EFFECT_MATRIX_WALK_FONT_SIZE_STEP,
   MAX_AMBIENT_OPACITY,
   MAX_FALLING_EFFECT_DENSITY,
@@ -47,9 +49,11 @@ import {
   MIN_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
   MIN_FALLING_EFFECT_SPEED,
 } from "@cafecode/contracts/settings";
+import type { HardwareLightingStatus } from "@cafecode/contracts";
 import { useEffect, useState } from "react";
 
 import { useSettings, useUpdateSettings } from "../../hooks/useSettings";
+import { ensureLocalApi } from "../../localApi";
 import { useServerConfig } from "../../rpc/serverState";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
@@ -206,10 +210,53 @@ function clampFallingEffectOpacityPercent(value: number | null): number {
 
 export function WindowAtmosphereSettings() {
   const settings = useSettings();
-  const { updateSettings } = useUpdateSettings();
+  const { updateSettings, updateClientSettingsConfirmed } = useUpdateSettings();
+  const [lightingStatus, setLightingStatus] = useState<HardwareLightingStatus | null>(null);
+  const [lightingBusy, setLightingBusy] = useState(false);
   const serverConfig = useServerConfig();
   const atmosphereAvailable = serverConfig?.ambientExperienceCapabilities.atmosphere === true;
   const controlsEnabled = atmosphereAvailable && settings.fallingEffectsEnabled;
+
+  useEffect(() => {
+    let cancelled = false;
+    void ensureLocalApi()
+      .server.getHardwareLightingStatus()
+      .then((status) => {
+        if (!cancelled) setLightingStatus(status);
+      })
+      .catch(() => {
+        if (!cancelled) setLightingStatus(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const refreshLightingStatus = async (discover: boolean) => {
+    setLightingBusy(true);
+    try {
+      const status = discover
+        ? await ensureLocalApi().server.refreshHardwareLighting()
+        : await ensureLocalApi().server.getHardwareLightingStatus();
+      setLightingStatus(status);
+    } catch (error) {
+      console.error("[HARDWARE_LIGHTING] Status refresh failed", error);
+      setLightingStatus(null);
+    } finally {
+      setLightingBusy(false);
+    }
+  };
+
+  const commitLightingSettings = async (
+    patch: Parameters<typeof updateClientSettingsConfirmed>[0],
+  ) => {
+    try {
+      await updateClientSettingsConfirmed(patch);
+      await refreshLightingStatus(false);
+    } catch {
+      // The settings hook already reports the failed write and rolls back.
+    }
+  };
   const hasNonDefaultValue =
     settings.atmosphereConsoleEnabled !== DEFAULT_ATMOSPHERE_CONSOLE_ENABLED ||
     settings.fallingEffectsEnabled !== DEFAULT_FALLING_EFFECTS_ENABLED ||
@@ -334,6 +381,146 @@ export function WindowAtmosphereSettings() {
           />
         }
       />
+
+      <SettingsRow
+        title="Keyboard & case RGB"
+        description="Mirror the resolved Matrix palette to compatible devices through OpenRGB's local SDK server. Club Code connects only to 127.0.0.1:6742, never scans the network, and restores the previous lighting when sync stops by default."
+        status={
+          <span
+            className={
+              lightingStatus?.state === "active"
+                ? "text-emerald-600 dark:text-emerald-400"
+                : lightingStatus?.state === "error" || lightingStatus?.state === "unavailable"
+                  ? "text-amber-600 dark:text-amber-400"
+                  : undefined
+            }
+          >
+            {lightingStatus?.detail ??
+              "OpenRGB status is not available until the local backend is connected."}
+          </span>
+        }
+        control={
+          <div className="flex items-center gap-2">
+            <Button
+              size="xs"
+              variant="outline"
+              disabled={lightingBusy}
+              onClick={() => void refreshLightingStatus(true)}
+            >
+              {lightingBusy ? "Checking…" : "Refresh devices"}
+            </Button>
+            <Switch
+              checked={settings.hardwareLightingSyncEnabled}
+              disabled={!atmosphereAvailable || lightingBusy}
+              onCheckedChange={(checked) =>
+                void commitLightingSettings({ hardwareLightingSyncEnabled: Boolean(checked) })
+              }
+              aria-label="Sync Matrix palette to keyboard and case RGB"
+            />
+          </div>
+        }
+      >
+        <div className="mt-3 space-y-3 border-t border-border/50 py-3">
+          {lightingStatus?.controllers.length ? (
+            <div className="grid gap-2 sm:grid-cols-2">
+              {lightingStatus.controllers.map((controller) => {
+                const selected = settings.hardwareLightingControllerIds.includes(controller.id);
+                return (
+                  <label
+                    key={controller.id}
+                    className="flex min-w-0 cursor-pointer items-start gap-2 rounded-lg border border-border/55 bg-background/35 px-3 py-2 text-xs has-data-disabled:cursor-not-allowed has-data-disabled:opacity-55"
+                  >
+                    <Checkbox
+                      checked={selected}
+                      disabled={!controller.supported || lightingBusy}
+                      aria-label={`${selected ? "Remove" : "Add"} ${controller.name} lighting controller`}
+                      onCheckedChange={(checked) => {
+                        const next = checked
+                          ? [...settings.hardwareLightingControllerIds, controller.id]
+                          : settings.hardwareLightingControllerIds.filter(
+                              (id) => id !== controller.id,
+                            );
+                        void commitLightingSettings({ hardwareLightingControllerIds: next });
+                      }}
+                    />
+                    <span className="min-w-0">
+                      <span className="block truncate font-medium text-foreground">
+                        {controller.name || "Unnamed OpenRGB controller"}
+                      </span>
+                      <span className="block truncate text-[11px] text-muted-foreground">
+                        {[controller.vendor, controller.type, `${controller.ledCount} LEDs`]
+                          .filter(Boolean)
+                          .join(" · ")}
+                        {controller.supported ? "" : " · Direct color mode unavailable"}
+                      </span>
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              Start OpenRGB, enable its SDK server, then choose Refresh devices. OpenRGB remains the
+              hardware/vendor compatibility layer; Club Code never launches vendor tools.
+            </p>
+          )}
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <label className="flex items-center gap-2 text-xs text-muted-foreground">
+              Brightness
+              <NumberField
+                value={Math.round(settings.hardwareLightingBrightness * 100)}
+                min={5}
+                max={100}
+                step={5}
+                size="sm"
+                className="w-24"
+                onValueCommitted={(value) => {
+                  const percent =
+                    value === null ? DEFAULT_HARDWARE_LIGHTING_BRIGHTNESS * 100 : value;
+                  void commitLightingSettings({
+                    hardwareLightingBrightness: Math.min(1, Math.max(0.05, percent / 100)),
+                  });
+                }}
+              >
+                <NumberFieldGroup>
+                  <NumberFieldDecrement aria-label="Decrease hardware lighting brightness" />
+                  <NumberFieldInput aria-label="Hardware lighting brightness percent" />
+                  <NumberFieldIncrement aria-label="Increase hardware lighting brightness" />
+                </NumberFieldGroup>
+              </NumberField>
+              <span>%</span>
+            </label>
+            <label className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Checkbox
+                checked={settings.hardwareLightingRestoreOnDisable}
+                onCheckedChange={(checked) =>
+                  void commitLightingSettings({
+                    hardwareLightingRestoreOnDisable: Boolean(checked),
+                  })
+                }
+                aria-label="Restore previous lighting when Matrix sync stops"
+              />
+              Restore previous lighting when sync stops
+            </label>
+            {(settings.hardwareLightingBrightness !== DEFAULT_HARDWARE_LIGHTING_BRIGHTNESS ||
+              settings.hardwareLightingRestoreOnDisable !==
+                DEFAULT_HARDWARE_LIGHTING_RESTORE_ON_DISABLE) && (
+              <Button
+                size="xs"
+                variant="ghost"
+                onClick={() =>
+                  void commitLightingSettings({
+                    hardwareLightingBrightness: DEFAULT_HARDWARE_LIGHTING_BRIGHTNESS,
+                    hardwareLightingRestoreOnDisable: DEFAULT_HARDWARE_LIGHTING_RESTORE_ON_DISABLE,
+                  })
+                }
+              >
+                Reset lighting options
+              </Button>
+            )}
+          </div>
+        </div>
+      </SettingsRow>
 
       {controlsEnabled ? (
         <SettingsRow

@@ -109,6 +109,11 @@ import {
 } from "./sourceControl.ts";
 import { UsageStatsGetResult, UsageStatsSnapshot } from "./usageStats.ts";
 import {
+  HardwareLightingFrameInput,
+  HardwareLightingRpcError,
+  HardwareLightingStatus,
+} from "./hardwareLighting.ts";
+import {
   AgentBrowserCompleteInputSchema,
   AgentBrowserCompleteResultSchema,
   AgentBrowserRpcError,
@@ -200,6 +205,9 @@ export const WS_METHODS = {
   serverGetRuntimeLayerDiagnostics: "server.getRuntimeLayerDiagnostics",
   serverSignalProcess: "server.signalProcess",
   serverInterpretAtmosphereCommand: "server.interpretAtmosphereCommand",
+  hardwareLightingGetStatus: "hardwareLighting.getStatus",
+  hardwareLightingRefresh: "hardwareLighting.refresh",
+  hardwareLightingApplyFrame: "hardwareLighting.applyFrame",
 
   // Usage stats
   usageStatsGet: "usageStats.get",
@@ -345,6 +353,24 @@ export const WsServerUpdateClientSettingsRpc = Rpc.make(WS_METHODS.serverUpdateC
   payload: Schema.Struct({ patch: ClientSettingsPatch }),
   success: ClientSettingsSchema,
   error: ClientSettingsError,
+});
+
+export const WsHardwareLightingGetStatusRpc = Rpc.make(WS_METHODS.hardwareLightingGetStatus, {
+  payload: Schema.Struct({}),
+  success: HardwareLightingStatus,
+  error: Schema.Union([HardwareLightingRpcError, ClientSettingsError]),
+});
+
+export const WsHardwareLightingRefreshRpc = Rpc.make(WS_METHODS.hardwareLightingRefresh, {
+  payload: Schema.Struct({}),
+  success: HardwareLightingStatus,
+  error: Schema.Union([HardwareLightingRpcError, ClientSettingsError]),
+});
+
+export const WsHardwareLightingApplyFrameRpc = Rpc.make(WS_METHODS.hardwareLightingApplyFrame, {
+  payload: HardwareLightingFrameInput,
+  success: HardwareLightingStatus,
+  error: Schema.Union([HardwareLightingRpcError, ClientSettingsError]),
 });
 
 export const WsServerDiscoverSourceControlRpc = Rpc.make(WS_METHODS.serverDiscoverSourceControl, {
@@ -712,6 +738,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerUpdateSettingsRpc,
   WsServerGetClientSettingsRpc,
   WsServerUpdateClientSettingsRpc,
+  WsHardwareLightingGetStatusRpc,
+  WsHardwareLightingRefreshRpc,
+  WsHardwareLightingApplyFrameRpc,
   WsServerDiscoverSourceControlRpc,
   WsServerGetTraceDiagnosticsRpc,
   WsServerGetProcessDiagnosticsRpc,

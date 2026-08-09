@@ -71,6 +71,10 @@ import {
   DEFAULT_FALLING_EFFECT_SPEED,
   DEFAULT_FALLING_EFFECTS_ENABLED,
   DEFAULT_FALLING_EFFECTS_OVER_CINEMA_ENABLED,
+  DEFAULT_HARDWARE_LIGHTING_BRIGHTNESS,
+  DEFAULT_HARDWARE_LIGHTING_CONTROLLER_IDS,
+  DEFAULT_HARDWARE_LIGHTING_RESTORE_ON_DISABLE,
+  DEFAULT_HARDWARE_LIGHTING_SYNC_ENABLED,
   FALLING_EFFECT_MATRIX_WALK_FONT_SIZE_STEP,
   DEFAULT_LM_STUDIO_BASE_URL,
   DEFAULT_MOBILE_OPTIMIZED_PRESENTATION,
@@ -178,6 +182,40 @@ describe("client settings", () => {
   it("defaults power-save blocking to off", () => {
     expect(DEFAULT_CLIENT_SETTINGS.powerSaveBlockerMode).toBe(DEFAULT_POWER_SAVE_BLOCKER_MODE);
     expect(decodeClientSettings({}).powerSaveBlockerMode).toBe("off");
+  });
+
+  it("keeps hardware lighting inert and validates its machine-local configuration", () => {
+    const defaults = decodeClientSettings({});
+    expect(defaults.hardwareLightingSyncEnabled).toBe(DEFAULT_HARDWARE_LIGHTING_SYNC_ENABLED);
+    expect(defaults.hardwareLightingControllerIds).toEqual(
+      DEFAULT_HARDWARE_LIGHTING_CONTROLLER_IDS,
+    );
+    expect(defaults.hardwareLightingBrightness).toBe(DEFAULT_HARDWARE_LIGHTING_BRIGHTNESS);
+    expect(defaults.hardwareLightingRestoreOnDisable).toBe(
+      DEFAULT_HARDWARE_LIGHTING_RESTORE_ON_DISABLE,
+    );
+
+    const controllerId = "0123456789abcdef0123456789abcdef";
+    expect(
+      decodeClientSettingsPatch({
+        hardwareLightingSyncEnabled: true,
+        hardwareLightingControllerIds: [controllerId],
+        hardwareLightingBrightness: 0.5,
+        hardwareLightingRestoreOnDisable: false,
+      }),
+    ).toEqual({
+      hardwareLightingSyncEnabled: true,
+      hardwareLightingControllerIds: [controllerId],
+      hardwareLightingBrightness: 0.5,
+      hardwareLightingRestoreOnDisable: false,
+    });
+    expect(() =>
+      decodeClientSettingsPatch({ hardwareLightingControllerIds: [controllerId, controllerId] }),
+    ).toThrow();
+    expect(() =>
+      decodeClientSettingsPatch({ hardwareLightingControllerIds: ["raw-device-path"] }),
+    ).toThrow();
+    expect(() => decodeClientSettingsPatch({ hardwareLightingBrightness: 0 })).toThrow();
   });
 
   it("defaults chat selection copy to Markdown", () => {
