@@ -680,6 +680,18 @@ function installClientSettingsNativeApi(desktopBridge: DesktopBridge) {
   const updateClientSettings = vi
     .fn<LocalApi["server"]["updateClientSettings"]>()
     .mockResolvedValue(DEFAULT_CLIENT_SETTINGS);
+  const getHardwareLightingStatus = vi
+    .fn<LocalApi["server"]["getHardwareLightingStatus"]>()
+    .mockResolvedValue({
+      state: "unavailable",
+      adapter: "OpenRGB SDK (loopback)",
+      detail: "OpenRGB is not available in the settings browser fixture.",
+      protocolVersion: null,
+      controllers: [],
+      selectedControllerCount: 0,
+      lastFrameAt: null,
+      lastDisposition: null,
+    });
   window.nativeApi = {
     dialogs: {
       pickFolder: desktopBridge.pickFolder,
@@ -692,6 +704,7 @@ function installClientSettingsNativeApi(desktopBridge: DesktopBridge) {
     server: {
       updateSettings,
       updateClientSettings,
+      getHardwareLightingStatus,
     },
     shell: {
       openExternal: async (url: string) => {
@@ -1596,15 +1609,15 @@ describe("settings panels", () => {
     const snowEffect = page.getByRole("radio", { name: "Snow", exact: true });
     const rainEffect = page.getByRole("radio", { name: "Rain", exact: true });
     const matrixEffect = page.getByRole("radio", { name: "Matrix", exact: true });
-    await expect.element(snowEffect).toHaveAttribute("aria-checked", "true");
-    await rainEffect.click();
-    await vi.waitFor(() => {
-      expect(updateClientSettings).toHaveBeenCalledWith({ fallingEffectKind: "rain" });
-    });
     await expect.element(rainEffect).toHaveAttribute("aria-checked", "true");
     await snowEffect.click();
     await vi.waitFor(() => {
       expect(updateClientSettings).toHaveBeenCalledWith({ fallingEffectKind: "snow" });
+    });
+    await expect.element(snowEffect).toHaveAttribute("aria-checked", "true");
+    await rainEffect.click();
+    await vi.waitFor(() => {
+      expect(updateClientSettings).toHaveBeenCalledWith({ fallingEffectKind: "rain" });
     });
     await matrixEffect.click();
 
@@ -1715,6 +1728,7 @@ describe("settings panels", () => {
     await page.getByLabelText("Increase falling effect opacity").click();
     await page.getByLabelText("Increase falling effect speed").click();
     await page.getByLabelText("Increase falling effect density").click();
+    await page.getByLabelText("Make rain and snow react to aggregate token usage").click();
     await page.getByLabelText("Increase Japanese stream ratio").click();
     await page.getByLabelText("Use 2ch-inspired Matrix enrichment").click();
     await page.getByLabelText("Use live work vocabulary in Matrix rain").click();
@@ -1723,6 +1737,7 @@ describe("settings panels", () => {
       expect(updateClientSettings).toHaveBeenCalledWith({ fallingEffectOpacity: 0.4 });
       expect(updateClientSettings).toHaveBeenCalledWith({ fallingEffectSpeed: 1.25 });
       expect(updateClientSettings).toHaveBeenCalledWith({ fallingEffectDensity: 1.25 });
+      expect(updateClientSettings).toHaveBeenCalledWith({ fallingEffectUsageReactive: true });
       expect(updateClientSettings).toHaveBeenCalledWith({ fallingEffectJapaneseRatio: 0.5 });
       expect(updateClientSettings).toHaveBeenCalledWith({ fallingEffect2chEnriched: true });
       expect(updateClientSettings).toHaveBeenCalledWith({

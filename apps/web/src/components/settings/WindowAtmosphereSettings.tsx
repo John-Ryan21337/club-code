@@ -11,6 +11,7 @@ import {
   DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
   DEFAULT_FALLING_EFFECT_ACTIVITY_LINKS,
   DEFAULT_FALLING_EFFECT_DENSITY,
+  DEFAULT_FALLING_EFFECT_USAGE_REACTIVE,
   DEFAULT_FALLING_EFFECTS_ENABLED,
   DEFAULT_FALLING_EFFECTS_OVER_CINEMA_ENABLED,
   DEFAULT_FALLING_EFFECT_JAPANESE_RATIO,
@@ -279,6 +280,7 @@ export function WindowAtmosphereSettings() {
     settings.fallingEffectOpacity !== DEFAULT_AMBIENT_OPACITY ||
     settings.fallingEffectSpeed !== DEFAULT_FALLING_EFFECT_SPEED ||
     settings.fallingEffectDensity !== DEFAULT_FALLING_EFFECT_DENSITY ||
+    settings.fallingEffectUsageReactive !== DEFAULT_FALLING_EFFECT_USAGE_REACTIVE ||
     settings.fallingEffectJapaneseRatio !== DEFAULT_FALLING_EFFECT_JAPANESE_RATIO ||
     settings.fallingEffect2chEnriched !== DEFAULT_FALLING_EFFECT_2CH_ENRICHED ||
     settings.fallingEffectLiveWorkVocabulary !== DEFAULT_FALLING_EFFECT_LIVE_WORK_VOCABULARY ||
@@ -335,6 +337,7 @@ export function WindowAtmosphereSettings() {
                   fallingEffectOpacity: DEFAULT_AMBIENT_OPACITY,
                   fallingEffectSpeed: DEFAULT_FALLING_EFFECT_SPEED,
                   fallingEffectDensity: DEFAULT_FALLING_EFFECT_DENSITY,
+                  fallingEffectUsageReactive: DEFAULT_FALLING_EFFECT_USAGE_REACTIVE,
                   fallingEffectJapaneseRatio: DEFAULT_FALLING_EFFECT_JAPANESE_RATIO,
                   fallingEffect2chEnriched: DEFAULT_FALLING_EFFECT_2CH_ENRICHED,
                   fallingEffectActivityLinks: DEFAULT_FALLING_EFFECT_ACTIVITY_LINKS,
@@ -1065,6 +1068,32 @@ export function WindowAtmosphereSettings() {
             </NumberField>
             <span className="text-xs text-muted-foreground">%</span>
           </div>
+        }
+      />
+
+      <SettingsRow
+        title="Usage-reactive rain and snow"
+        description="Use aggregate output-token throughput across every thread and project on this Club Code server. Your speed and density settings remain the calm baseline; active output raises them smoothly within the existing renderer caps and fades over about five seconds. No prompts, filenames, or thread identities enter the effect."
+        status={
+          settings.fallingEffectUsageReactive && !settings.usageStatsEnabled ? (
+            <span className="text-amber-600 dark:text-amber-400">
+              Usage collection is off, so the atmosphere will remain at its baseline.
+            </span>
+          ) : settings.fallingEffectKind === "matrix" ? (
+            <span className="text-muted-foreground">
+              Select rain or snow to see token-rate reactivity.
+            </span>
+          ) : null
+        }
+        control={
+          <Switch
+            checked={settings.fallingEffectUsageReactive}
+            disabled={!controlsEnabled}
+            onCheckedChange={(checked) =>
+              updateSettings({ fallingEffectUsageReactive: Boolean(checked) })
+            }
+            aria-label="Make rain and snow react to aggregate token usage"
+          />
         }
       />
 

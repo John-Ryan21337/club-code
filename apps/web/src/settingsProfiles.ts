@@ -101,6 +101,9 @@ export const SETTINGS_PROFILE_CLIENT_FIELD_POLICY = {
   fallingEffectOpacity: "include",
   fallingEffectSpeed: "include",
   fallingEffectDensity: "include",
+  // Aggregate token timing reveals when any project on this server is active.
+  // Loading a visual/layout profile must not begin observing it implicitly.
+  fallingEffectUsageReactive: "live-operational-input",
   fallingEffectJapaneseRatio: "include",
   fallingEffect2chEnriched: "include",
   // These switches admit live provider/thread activity into an ambient renderer.

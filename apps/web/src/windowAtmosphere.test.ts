@@ -286,6 +286,69 @@ describe("window atmosphere", () => {
     expect(particle.y - initialY).toBeCloseTo(velocityY * MAX_ATMOSPHERE_FRAME_DELTA_SECONDS * 2);
   });
 
+  it("renders a bounded active subset for usage-reactive rain and snow", () => {
+    const rain = createAtmosphereScene("rain", 800, 600, createSeededRandom(7), 2.5);
+    const activeRainParticle = rain.particles[0];
+    const inactiveRainParticle = rain.particles[7];
+    expect(activeRainParticle).toBeDefined();
+    expect(inactiveRainParticle).toBeDefined();
+    const activeRainY = activeRainParticle?.y;
+    const inactiveRainPosition = inactiveRainParticle
+      ? { x: inactiveRainParticle.x, y: inactiveRainParticle.y }
+      : null;
+    advanceAtmosphereSceneInPlace(rain, 0.05, 2, "flat", undefined, undefined, 7);
+    expect(activeRainParticle?.y).not.toBe(activeRainY);
+    expect(inactiveRainParticle).toMatchObject(inactiveRainPosition ?? {});
+
+    const rainStroke = vi.fn();
+    const rainContext = {
+      clearRect: vi.fn(),
+      save: vi.fn(),
+      restore: vi.fn(),
+      beginPath: vi.fn(),
+      moveTo: vi.fn(),
+      lineTo: vi.fn(),
+      stroke: rainStroke,
+    } as unknown as CanvasRenderingContext2D;
+    drawAtmosphereScene(
+      rainContext,
+      rain,
+      "#38bdf8",
+      0.35,
+      undefined,
+      "flat",
+      undefined,
+      undefined,
+      undefined,
+      7,
+    );
+    expect(rainStroke).toHaveBeenCalledTimes(7);
+
+    const snow = createAtmosphereScene("snow", 800, 600, createSeededRandom(9), 2.5);
+    const snowArc = vi.fn();
+    const snowContext = {
+      clearRect: vi.fn(),
+      save: vi.fn(),
+      restore: vi.fn(),
+      beginPath: vi.fn(),
+      arc: snowArc,
+      fill: vi.fn(),
+    } as unknown as CanvasRenderingContext2D;
+    drawAtmosphereScene(
+      snowContext,
+      snow,
+      "#f8fafc",
+      0.35,
+      undefined,
+      "flat",
+      undefined,
+      undefined,
+      undefined,
+      5,
+    );
+    expect(snowArc).toHaveBeenCalledTimes(5);
+  });
+
   it("resolves conservative automatic colors while preserving explicit colors", () => {
     expect(resolveAtmosphereColor("snow", "auto", true)).toBe("#f8fafc");
     expect(resolveAtmosphereColor("rain", "auto", false)).toBe("#0369a1");

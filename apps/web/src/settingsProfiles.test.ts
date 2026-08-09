@@ -45,6 +45,7 @@ describe("settings profile library", () => {
       ambianceEnabled: true,
       ambianceReactMode: "live",
       fallingEffectLiveWorkVocabulary: true,
+      fallingEffectUsageReactive: true,
       fallingEffectActivityLinks: true,
       fallingEffectActivityLinkNetworkEnabled: true,
       fallingEffectActivityLinkDatabaseEnabled: true,
@@ -128,6 +129,7 @@ describe("settings profile library", () => {
     expect(payload.clientSettings).not.toHaveProperty("ambianceEnabled");
     expect(payload.clientSettings).not.toHaveProperty("ambianceReactMode");
     expect(payload.clientSettings).not.toHaveProperty("fallingEffectLiveWorkVocabulary");
+    expect(payload.clientSettings).not.toHaveProperty("fallingEffectUsageReactive");
     expect(payload.clientSettings).not.toHaveProperty("fallingEffectActivityLinks");
     expect(payload.clientSettings).not.toHaveProperty("fallingEffectActivityLinkNetworkEnabled");
     expect(payload.clientSettings).not.toHaveProperty("fallingEffectActivityLinkDatabaseEnabled");
@@ -180,6 +182,7 @@ describe("settings profile library", () => {
       atmosphereConsoleEnabled: "ambient-activation",
       fallingEffectsOverCinemaEnabled: "ambient-activation",
       fallingEffectLiveWorkVocabulary: "live-operational-input",
+      fallingEffectUsageReactive: "live-operational-input",
       fallingEffectActivityLinks: "live-operational-input",
       fallingEffectActivityLinkNetworkEnabled: "live-operational-input",
       fallingEffectActivityLinkDatabaseEnabled: "live-operational-input",
