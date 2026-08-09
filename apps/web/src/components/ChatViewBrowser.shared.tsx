@@ -70,7 +70,9 @@ import {
   useSavedEnvironmentRegistryStore,
   waitForSavedEnvironmentRegistryHydration,
 } from "../environments/runtime";
+import { __setComposerVideoReferenceCreatorForTests } from "../composerVideoReference";
 
+const createVideoReferenceStub = vi.fn();
 vi.mock("../lib/gitStatusState", () => ({
   useGitStatus: () => ({ data: null, error: null, cause: null, isPending: false }),
   useGitStatuses: () => new Map(),
@@ -1013,6 +1015,22 @@ function resolveWsRpc(body: NormalizedWsRpcRequestBody): unknown {
       },
     } satisfies ServerProjectSystemTelemetryResult;
   }
+  if (
+    tag === WS_METHODS.hardwareLightingGetStatus ||
+    tag === WS_METHODS.hardwareLightingRefresh ||
+    tag === WS_METHODS.hardwareLightingApplyFrame
+  ) {
+    return {
+      state: "disabled",
+      adapter: "OpenRGB SDK (loopback)",
+      detail: "Hardware lighting is disabled in browser tests.",
+      protocolVersion: null,
+      controllers: [],
+      selectedControllerCount: 0,
+      lastFrameAt: null,
+      lastDisposition: tag === WS_METHODS.hardwareLightingApplyFrame ? "disabled" : null,
+    };
+  }
   if (tag === WS_METHODS.serverDiscoverSourceControl) {
     return {
       versionControlSystems: [],
@@ -1866,6 +1884,27 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
   });
 
   beforeEach(async () => {
+    createVideoReferenceStub.mockReset();
+    createVideoReferenceStub.mockImplementation(async (file: File) => ({
+      contactSheet: new File([new Uint8Array([0xff, 0xd8, 0xff])], "rain-video-reference.jpg", {
+        type: "image/jpeg",
+      }),
+      analysis: {
+        sourceName: file.name,
+        mimeType: file.type || "video/webm",
+        sizeBytes: file.size,
+        durationSeconds: 6,
+        width: 1280,
+        height: 720,
+        sampleTimestampsSeconds: [0.05, 3, 5.95],
+        meanFrameDelta: 0.08,
+        loopSimilarity: 0.92,
+        motionClass: "moderate" as const,
+        palette: ["#00e000", "#002000"],
+        audioAnalyzed: false as const,
+      },
+    }));
+    __setComposerVideoReferenceCreatorForTests(createVideoReferenceStub);
     await rpcHarness.reset({
       resolveUnary: resolveWsRpc,
       getInitialStreamValues: (request) => {
@@ -1948,6 +1987,7 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
   });
 
   afterEach(() => {
+    __setComposerVideoReferenceCreatorForTests(null);
     customWsRpcResolver = null;
     document.body.innerHTML = "";
   });
@@ -3374,6 +3414,60 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
       }
     });
 
+    it("turns a selected WebM into a local visual reference without retaining the raw video", async () => {
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: createSnapshotForTargetUser({
+          targetMessageId: "msg-user-attach-video" as MessageId,
+          targetText: "attach video target",
+        }),
+      });
+
+      try {
+        await waitForComposerEditor();
+        useComposerDraftStore.getState().setPrompt(THREAD_REF, "Recreate this falling effect");
+        await waitForComposerText("Recreate this falling effect");
+
+        const fileInput = document.querySelector<HTMLInputElement>(
+          '[data-chat-composer-form="true"] input[type="file"]',
+        );
+        expect(fileInput).toBeTruthy();
+        const video = new File([new Uint8Array([1, 2, 3])], "rain-loop.webm", {
+          type: "video/webm",
+        });
+        const transfer = new DataTransfer();
+        transfer.items.add(video);
+        fileInput!.files = transfer.files;
+        fileInput!.dispatchEvent(new Event("change", { bubbles: true }));
+
+        await vi.waitFor(
+          () =>
+            expect(document.body.textContent).toContain("Video reference added to this message"),
+          { timeout: 8_000, interval: 16 },
+        );
+        await vi.waitFor(
+          () =>
+            expect(useComposerDraftStore.getState().getComposerDraft(THREAD_REF)?.prompt).toContain(
+              "EffectRecreationSpec v1",
+            ),
+          { timeout: 8_000, interval: 16 },
+        );
+
+        const draft = useComposerDraftStore.getState().getComposerDraft(THREAD_REF);
+        expect(createVideoReferenceStub).toHaveBeenCalledOnce();
+        expect(createVideoReferenceStub).toHaveBeenCalledWith(video);
+        expect(draft?.prompt).toContain("Audio analyzed: no");
+        expect(draft?.prompt).toContain("WebGL2 acceleration");
+        expect(draft?.images.map((image) => image.name)).toEqual(["rain-video-reference.jpg"]);
+        expect(draft?.images.some((image) => image.name.endsWith(".webm"))).toBe(false);
+        expect(
+          document.querySelector('button[aria-label="Preview rain-video-reference.jpg"]'),
+        ).toBeTruthy();
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
     it("preserves typing that lands while a selected text file is being read", async () => {
       const mounted = await mountChatView({
         viewport: DEFAULT_VIEWPORT,
@@ -3565,7 +3659,9 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
         await vi.waitFor(
           () => {
             expect(document.body.textContent).toContain("Some files were not added");
-            expect(document.body.textContent).toContain("Attach images or plain-text .txt files.");
+            expect(document.body.textContent).toContain(
+              "Attach images, plain-text .txt files, or WebM, MP4, MOV, OGV, MKV, and other browser-decodable video references.",
+            );
           },
           { timeout: 8_000, interval: 16 },
         );
