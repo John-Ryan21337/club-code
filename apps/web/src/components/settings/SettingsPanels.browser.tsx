@@ -1568,6 +1568,15 @@ describe("settings panels", () => {
       expect(updateClientSettings).toHaveBeenCalledWith({ showSidebarAttribution: false });
     });
 
+    await expect.element(page.getByText("Prompt automation controls")).toBeInTheDocument();
+    await page.getByLabelText("Show prompt automation controls").click();
+
+    await vi.waitFor(() => {
+      expect(updateClientSettings).toHaveBeenCalledWith({
+        showComposerThreadAutomationControls: true,
+      });
+    });
+
     await expect.element(page.getByText("Background animations")).toBeInTheDocument();
     await page.getByLabelText("Keep animations running in background").click();
 

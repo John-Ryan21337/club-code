@@ -134,6 +134,7 @@ export const SETTINGS_PROFILE_CLIENT_FIELD_POLICY = {
   showSidebarSearch: "include",
   showSidebarMascot: "include",
   showSidebarAttribution: "include",
+  showComposerThreadAutomationControls: "include",
   brandWordmarkPrefix: "include",
   sidebarBrandImage: "local-asset-reference",
   sidebarBrandImageDataUrl: "local-asset-reference",

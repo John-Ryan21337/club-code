@@ -79,6 +79,7 @@ import {
   DEFAULT_POWER_SAVE_BLOCKER_MODE,
   DEFAULT_PROVIDER_USAGE_POLL_MINUTES,
   DEFAULT_PROVIDER_USAGE_WIDGET_ENABLED,
+  DEFAULT_SHOW_COMPOSER_THREAD_AUTOMATION_CONTROLS,
   DEFAULT_SHOW_SIDEBAR_ATTRIBUTION,
   DEFAULT_SIDEBAR_BRAND_IMAGE_DATA_URL,
   DEFAULT_SIDEBAR_BRAND_IMAGE,
@@ -218,6 +219,9 @@ describe("client settings", () => {
     expect(DEFAULT_CLIENT_SETTINGS.showSidebarSearch).toBe(DEFAULT_SHOW_SIDEBAR_SEARCH);
     expect(DEFAULT_CLIENT_SETTINGS.showSidebarMascot).toBe(DEFAULT_SHOW_SIDEBAR_MASCOT);
     expect(DEFAULT_CLIENT_SETTINGS.showSidebarAttribution).toBe(DEFAULT_SHOW_SIDEBAR_ATTRIBUTION);
+    expect(DEFAULT_CLIENT_SETTINGS.showComposerThreadAutomationControls).toBe(
+      DEFAULT_SHOW_COMPOSER_THREAD_AUTOMATION_CONTROLS,
+    );
     expect(DEFAULT_CLIENT_SETTINGS.brandWordmarkPrefix).toBe(DEFAULT_BRAND_WORDMARK_PREFIX);
     expect(DEFAULT_CLIENT_SETTINGS.sidebarBrandImage).toBe(DEFAULT_SIDEBAR_BRAND_IMAGE);
     expect(DEFAULT_CLIENT_SETTINGS.sidebarBrandImageDataUrl).toBe(
@@ -238,6 +242,7 @@ describe("client settings", () => {
     expect(decodeClientSettings({}).showSidebarSearch).toBe(true);
     expect(decodeClientSettings({}).showSidebarMascot).toBe(true);
     expect(decodeClientSettings({}).showSidebarAttribution).toBe(true);
+    expect(decodeClientSettings({}).showComposerThreadAutomationControls).toBe(false);
     expect(decodeClientSettings({}).brandWordmarkPrefix).toBe("Club");
     expect(decodeClientSettings({}).sidebarBrandImage).toBeNull();
     expect(decodeClientSettings({}).sidebarBrandImageDataUrl).toBe("");
@@ -246,6 +251,9 @@ describe("client settings", () => {
     expect(decodeClientSettings({}).appAccentColor).toBe("");
     expect(decodeClientSettings({}).workflowObservatoryEnabled).toBe(true);
     expect(decodeClientSettings({}).workflowStallWarningSeconds).toBe(180);
+    expect(decodeClientSettingsPatch({ showComposerThreadAutomationControls: true })).toEqual({
+      showComposerThreadAutomationControls: true,
+    });
   });
 
   it("round-trips the per-device mobile presentation override", () => {

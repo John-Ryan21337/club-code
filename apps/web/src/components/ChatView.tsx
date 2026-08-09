@@ -8131,44 +8131,46 @@ export default function ChatView(props: ChatViewProps) {
             <div className="relative isolate">
               <ComposerBannerStack className="relative z-0" items={composerBannerItems} />
               <div className="relative z-10">
-                <div
-                  className="mx-auto grid w-full min-w-0 max-w-208 grid-cols-1 items-start gap-2 sm:grid-cols-2"
-                  data-composer-thread-automation-controls="true"
-                >
-                  <AutoNudgeControl
-                    mode={autoNudgeMode}
-                    disabled={!isServerThread || !activeAutoNudgeConfig}
-                    arming={autoNudgeArming}
-                    backgroundEnabled={activeAutoNudgeConfig?.backgroundContinuation ?? false}
-                    roundsDispatched={activeAutoNudgeConfig?.roundsDispatched ?? 0}
-                    maxRounds={activeAutoNudgeConfig?.maxRounds ?? 5}
-                    globallySuppressed={autoNudgeSuppressed}
-                    promptScopeKey={autoNudgeContextKey ?? routeThreadKey}
-                    persistedPrompt={activeAutoNudgeConfig?.prompt ?? ""}
-                    promptMaxLength={THREAD_AUTO_NUDGE_PROMPT_MAX_CHARS}
-                    promptSaving={autoNudgePendingWrite?.kind === "prompt"}
-                    promptEditable={Boolean(isServerThread && activeAutoNudgeConfig)}
-                    onSavePrompt={onSaveAutoNudgePrompt}
-                    limitsSaving={autoNudgePendingWrite?.kind === "limits"}
-                    onSaveLimits={onSaveAutoNudgeLimits}
-                    onModeChange={onAutoNudgeModeChange}
-                    onBackgroundChange={onAutoNudgeBackgroundChange}
-                    onStop={onStopAutoNudgeThread}
-                    onEmergencyStopAll={onEmergencyStopAllAutoNudge}
-                    onAllowAutoNudgeAgain={onAllowAutoNudgeAgain}
-                  />
-                  <IdleThreadGuardControl
-                    scope={
-                      isServerThread && activeThread
-                        ? {
-                            environmentId: activeThread.environmentId,
-                            threadId: activeThread.id,
-                          }
-                        : null
-                    }
-                    disabled={!isServerThread || !activeThread}
-                  />
-                </div>
+                {settings.showComposerThreadAutomationControls ? (
+                  <div
+                    className="mx-auto grid w-full min-w-0 max-w-208 grid-cols-1 items-start gap-2 sm:grid-cols-2"
+                    data-composer-thread-automation-controls="true"
+                  >
+                    <AutoNudgeControl
+                      mode={autoNudgeMode}
+                      disabled={!isServerThread || !activeAutoNudgeConfig}
+                      arming={autoNudgeArming}
+                      backgroundEnabled={activeAutoNudgeConfig?.backgroundContinuation ?? false}
+                      roundsDispatched={activeAutoNudgeConfig?.roundsDispatched ?? 0}
+                      maxRounds={activeAutoNudgeConfig?.maxRounds ?? 5}
+                      globallySuppressed={autoNudgeSuppressed}
+                      promptScopeKey={autoNudgeContextKey ?? routeThreadKey}
+                      persistedPrompt={activeAutoNudgeConfig?.prompt ?? ""}
+                      promptMaxLength={THREAD_AUTO_NUDGE_PROMPT_MAX_CHARS}
+                      promptSaving={autoNudgePendingWrite?.kind === "prompt"}
+                      promptEditable={Boolean(isServerThread && activeAutoNudgeConfig)}
+                      onSavePrompt={onSaveAutoNudgePrompt}
+                      limitsSaving={autoNudgePendingWrite?.kind === "limits"}
+                      onSaveLimits={onSaveAutoNudgeLimits}
+                      onModeChange={onAutoNudgeModeChange}
+                      onBackgroundChange={onAutoNudgeBackgroundChange}
+                      onStop={onStopAutoNudgeThread}
+                      onEmergencyStopAll={onEmergencyStopAllAutoNudge}
+                      onAllowAutoNudgeAgain={onAllowAutoNudgeAgain}
+                    />
+                    <IdleThreadGuardControl
+                      scope={
+                        isServerThread && activeThread
+                          ? {
+                              environmentId: activeThread.environmentId,
+                              threadId: activeThread.id,
+                            }
+                          : null
+                      }
+                      disabled={!isServerThread || !activeThread}
+                    />
+                  </div>
+                ) : null}
                 <ChatComposer
                   composerRef={composerRef}
                   composerDraftTarget={composerDraftTarget}

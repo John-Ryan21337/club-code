@@ -205,7 +205,14 @@ function createBaseServerConfig(): ServerConfig {
     settings: {
       ...DEFAULT_SERVER_SETTINGS,
     },
-    clientSettings: { ...DEFAULT_CLIENT_SETTINGS, onboardingCompleted: true },
+    // This harness exercises the thread-automation controls in many focused
+    // cases. Keep them explicitly visible here even though the product default
+    // is hidden; the layout suite separately proves the default-off chrome.
+    clientSettings: {
+      ...DEFAULT_CLIENT_SETTINGS,
+      onboardingCompleted: true,
+      showComposerThreadAutomationControls: true,
+    },
     ambientExperienceCapabilities: DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES,
   };
 }
@@ -7629,6 +7636,34 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
   }
 
   if (chatViewBrowserPart === "layout") {
+    it("hides prompt automation controls by default without removing the composer", async () => {
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: createSnapshotForTargetUser({
+          targetMessageId: "msg-user-composer-automation-hidden" as MessageId,
+          targetText: "composer automation hidden",
+        }),
+        configureFixture: (nextFixture) => {
+          nextFixture.serverConfig = {
+            ...nextFixture.serverConfig,
+            clientSettings: {
+              ...nextFixture.serverConfig.clientSettings,
+              showComposerThreadAutomationControls: false,
+            },
+          };
+        },
+      });
+
+      try {
+        expect(
+          document.querySelector('[data-composer-thread-automation-controls="true"]'),
+        ).toBeNull();
+        expect(document.querySelector('[data-chat-composer-form="true"]')).toBeTruthy();
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
     it("centers Auto Nudge and Idle Thread Guard over the composer in responsive order", async () => {
       const mounted = await mountChatView({
         viewport: DEFAULT_VIEWPORT,

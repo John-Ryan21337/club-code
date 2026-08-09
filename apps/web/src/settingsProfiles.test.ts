@@ -53,6 +53,7 @@ describe("settings profile library", () => {
       ambientVideoLayoutMode: "custom",
       ambientImageGlowOpacity: 0.42,
       mobileOptimizedPresentation: true,
+      showComposerThreadAutomationControls: true,
       timestampFormat: "24-hour",
       notificationsEnabled: true,
       completionAlertSoundEnabled: true,
@@ -118,6 +119,7 @@ describe("settings profile library", () => {
     expect(payload.clientSettings.ambientImageCycleEnabled).toBe(true);
     expect(payload.clientSettings.ambientImageGlowOpacity).toBe(0.42);
     expect(payload.clientSettings.mobileOptimizedPresentation).toBe(true);
+    expect(payload.clientSettings.showComposerThreadAutomationControls).toBe(true);
     expect(payload.clientSettings.timestampFormat).toBe("24-hour");
     expect(Object.keys(payload.clientSettings)).toEqual([...SETTINGS_PROFILE_CLIENT_KEYS]);
     expect(payload.clientSettings).not.toHaveProperty("fallingEffectsEnabled");

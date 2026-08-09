@@ -100,6 +100,7 @@ export const DEFAULT_WORLD_CLOCK_WEATHER_ENABLED = false;
 export const DEFAULT_SHOW_SIDEBAR_SEARCH = true;
 export const DEFAULT_SHOW_SIDEBAR_MASCOT = true;
 export const DEFAULT_SHOW_SIDEBAR_ATTRIBUTION = true;
+export const DEFAULT_SHOW_COMPOSER_THREAD_AUTOMATION_CONTROLS = false;
 export const DEFAULT_BRAND_WORDMARK_PREFIX = "Club";
 export const DEFAULT_SIDEBAR_BRAND_IMAGE_DATA_URL = "";
 export const DEFAULT_SIDEBAR_BRAND_IMAGE = null;
@@ -889,6 +890,9 @@ export const ClientSettingsSchema = Schema.Struct({
   ),
   showSidebarAttribution: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SHOW_SIDEBAR_ATTRIBUTION)),
+  ),
+  showComposerThreadAutomationControls: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_SHOW_COMPOSER_THREAD_AUTOMATION_CONTROLS)),
   ),
   brandWordmarkPrefix: TrimmedString.check(
     Schema.isMaxLength(MAX_BRAND_WORDMARK_PREFIX_LENGTH),
@@ -1947,6 +1951,7 @@ export const ClientSettingsPatch = Schema.Struct({
   showSidebarSearch: Schema.optionalKey(Schema.Boolean),
   showSidebarMascot: Schema.optionalKey(Schema.Boolean),
   showSidebarAttribution: Schema.optionalKey(Schema.Boolean),
+  showComposerThreadAutomationControls: Schema.optionalKey(Schema.Boolean),
   brandWordmarkPrefix: Schema.optionalKey(
     TrimmedString.check(Schema.isMaxLength(MAX_BRAND_WORDMARK_PREFIX_LENGTH)),
   ),

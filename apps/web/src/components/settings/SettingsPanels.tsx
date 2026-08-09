@@ -29,6 +29,7 @@ import {
   DEFAULT_BRAND_WORDMARK_PREFIX,
   DEFAULT_CONTINUE_BACKGROUND_ANIMATIONS,
   DEFAULT_SHOW_SIDEBAR_ATTRIBUTION,
+  DEFAULT_SHOW_COMPOSER_THREAD_AUTOMATION_CONTROLS,
   DEFAULT_SIDEBAR_BRAND_IMAGE,
   DEFAULT_SIDEBAR_STAR_SPEED,
   DEFAULT_WORKFLOW_OBSERVATORY_ENABLED,
@@ -432,6 +433,10 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.showSidebarAttribution !== DEFAULT_UNIFIED_SETTINGS.showSidebarAttribution
         ? ["Sidebar attribution"]
         : []),
+      ...(settings.showComposerThreadAutomationControls !==
+      DEFAULT_UNIFIED_SETTINGS.showComposerThreadAutomationControls
+        ? ["Prompt automation controls"]
+        : []),
       ...(settings.brandWordmarkPrefix !== DEFAULT_UNIFIED_SETTINGS.brandWordmarkPrefix
         ? ["Branding prefix"]
         : []),
@@ -581,6 +586,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.showSidebarSearch,
       settings.showSidebarMascot,
       settings.showSidebarAttribution,
+      settings.showComposerThreadAutomationControls,
       settings.sidebarBrandImage,
       settings.sidebarStarSpeed,
       settings.workflowObservatoryEnabled,
@@ -642,6 +648,8 @@ export function useSettingsRestore(onRestored?: () => void) {
       showSidebarSearch: DEFAULT_UNIFIED_SETTINGS.showSidebarSearch,
       showSidebarMascot: DEFAULT_UNIFIED_SETTINGS.showSidebarMascot,
       showSidebarAttribution: DEFAULT_UNIFIED_SETTINGS.showSidebarAttribution,
+      showComposerThreadAutomationControls:
+        DEFAULT_UNIFIED_SETTINGS.showComposerThreadAutomationControls,
       brandWordmarkPrefix: DEFAULT_UNIFIED_SETTINGS.brandWordmarkPrefix,
       sidebarBrandImage: DEFAULT_UNIFIED_SETTINGS.sidebarBrandImage,
       sidebarBrandImageDataUrl: "",
@@ -1178,6 +1186,34 @@ export function AppearanceSettingsPanel() {
                 updateSettings({ showSidebarAttribution: Boolean(checked) })
               }
               aria-label="Show sidebar attribution"
+            />
+          }
+        />
+
+        <SettingsRow
+          title="Prompt automation controls"
+          description="Show Auto Nudge and Idle Thread Guard above the prompt. Hiding these controls does not stop automation that is already enabled."
+          resetAction={
+            settings.showComposerThreadAutomationControls !==
+            DEFAULT_UNIFIED_SETTINGS.showComposerThreadAutomationControls ? (
+              <SettingResetButton
+                label="prompt automation controls"
+                onClick={() =>
+                  updateSettings({
+                    showComposerThreadAutomationControls:
+                      DEFAULT_SHOW_COMPOSER_THREAD_AUTOMATION_CONTROLS,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.showComposerThreadAutomationControls}
+              onCheckedChange={(checked) =>
+                updateSettings({ showComposerThreadAutomationControls: Boolean(checked) })
+              }
+              aria-label="Show prompt automation controls"
             />
           }
         />
