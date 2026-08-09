@@ -2,9 +2,6 @@ import { useSyncExternalStore } from "react";
 
 import type { YouTubeSource } from "@cafecode/contracts/settings";
 
-import edmYouTubeUrlQueueText from "../../../examples/youtube-url-queues/EDMYoutubeList.txt?raw";
-import japaneseYouTubeUrlQueueText from "../../../examples/youtube-url-queues/JPMusic.txt?raw";
-import kpopYouTubeUrlQueueText from "../../../examples/youtube-url-queues/KPOPList.txt?raw";
 import { parseYouTubeSource } from "./ambientVideo";
 
 export const YOUTUBE_URL_QUEUE_MAX_BYTES = 256 * 1_024;
@@ -13,8 +10,6 @@ export const YOUTUBE_URL_QUEUE_MAX_ITEMS = 200;
 export const YOUTUBE_URL_QUEUE_MAX_URL_LENGTH = 2_048;
 export const YOUTUBE_URL_QUEUE_MAX_SAVED_LISTS = 32;
 export const YOUTUBE_URL_QUEUE_LIBRARY_STORAGE_KEY = "club-code:youtube-url-queue-library:v1";
-export const DEFAULT_YOUTUBE_URL_QUEUE_EXAMPLE_ID = "edm";
-
 export type YouTubeUrlQueueExampleId = "japanese" | "edm" | "kpop";
 
 export interface YouTubeUrlQueueExample {
@@ -24,26 +19,9 @@ export interface YouTubeUrlQueueExample {
   readonly text: string;
 }
 
-export const YOUTUBE_URL_QUEUE_EXAMPLES: readonly YouTubeUrlQueueExample[] = [
-  {
-    id: "japanese",
-    logicalName: "JPMusic",
-    label: "Japanese music",
-    text: japaneseYouTubeUrlQueueText,
-  },
-  {
-    id: "edm",
-    logicalName: "EDMYoutubeList",
-    label: "EDM",
-    text: edmYouTubeUrlQueueText,
-  },
-  {
-    id: "kpop",
-    logicalName: "KPOPList",
-    label: "K-pop",
-    text: kpopYouTubeUrlQueueText,
-  },
-];
+// Club Code ships without preloaded media. Users can still import and save
+// their own device-local queues through the playlist library.
+export const YOUTUBE_URL_QUEUE_EXAMPLES: readonly YouTubeUrlQueueExample[] = [];
 
 export interface YouTubeUrlQueueParseReport {
   readonly accepted: number;
@@ -84,8 +62,6 @@ export interface YouTubeUrlQueueStore {
   readonly subscribe: (listener: () => void) => () => void;
   readonly load: (result: YouTubeUrlQueueParseResult) => boolean;
   readonly loadList: (listId: string) => boolean;
-  readonly loadExample: (exampleId: YouTubeUrlQueueExampleId) => boolean;
-  readonly initializeBundledDefault: (allowed: boolean) => boolean;
   readonly clear: () => void;
   readonly next: () => boolean;
   readonly previous: () => boolean;
@@ -201,22 +177,6 @@ export function parseYouTubeUrlQueueText(text: string): YouTubeUrlQueueParseResu
       totalLines: lines.length,
     },
   };
-}
-
-export function getYouTubeUrlQueueExample(
-  exampleId: YouTubeUrlQueueExampleId,
-): YouTubeUrlQueueExample {
-  const example = YOUTUBE_URL_QUEUE_EXAMPLES.find((candidate) => candidate.id === exampleId);
-  if (!example) {
-    throw new Error(`Unknown bundled YouTube URL queue: ${exampleId}`);
-  }
-  return example;
-}
-
-export function parseYouTubeUrlQueueExample(
-  exampleId: YouTubeUrlQueueExampleId,
-): YouTubeUrlQueueParseResult {
-  return parseYouTubeUrlQueueText(getYouTubeUrlQueueExample(exampleId).text);
 }
 
 export async function readYouTubeUrlQueueFile(
@@ -607,17 +567,6 @@ export function createYouTubeUrlQueueStore(): YouTubeUrlQueueStore {
     loadList: (listId) => {
       const option = youtubeUrlQueueLibraryStore.resolve(listId);
       return option === null ? false : load(option.result, option.id, option.exampleId);
-    },
-    loadExample: (exampleId) => {
-      const option = youtubeUrlQueueLibraryStore.resolve(exampleId);
-      return option === null ? false : load(option.result, option.id, exampleId);
-    },
-    initializeBundledDefault: (allowed) => {
-      if (!allowed || snapshot.revision !== 0) return false;
-      const option = youtubeUrlQueueLibraryStore.resolve(DEFAULT_YOUTUBE_URL_QUEUE_EXAMPLE_ID);
-      return option === null
-        ? false
-        : load(option.result, option.id, DEFAULT_YOUTUBE_URL_QUEUE_EXAMPLE_ID);
     },
     clear: () => {
       videoIds = [];

@@ -127,7 +127,7 @@ afterEach(async () => {
   await page.viewport(1_280, 720);
 });
 
-it("seeds the EDM URL queue from the normal workspace without opening Settings", async () => {
+it("keeps the first-run workspace queue empty without opening Settings", async () => {
   setServerConfigSnapshot(makeConfig(null));
   mounted = await render(
     <AppAtomRegistryProvider>
@@ -137,14 +137,13 @@ it("seeds the EDM URL queue from the normal workspace without opening Settings",
     </AppAtomRegistryProvider>,
   );
 
-  await expect.poll(() => youtubeUrlQueueStore.getSnapshot().exampleId).toBe("edm");
+  await expect.poll(() => youtubeUrlQueueStore.getSnapshot().revision).toBe(0);
   expect(youtubeUrlQueueStore.getSnapshot()).toMatchObject({
-    active: true,
-    count: 30,
-    index: 0,
-    currentSource: { kind: "video", id: "VGG0coMYaRQ" },
+    active: false,
+    count: 0,
+    currentSource: null,
+    exampleId: null,
   });
-  // Seeding supplies a session queue only. It does not request playback.
   await expect.element(page.getByTitle("Ambient YouTube URL queue player")).not.toBeInTheDocument();
 });
 

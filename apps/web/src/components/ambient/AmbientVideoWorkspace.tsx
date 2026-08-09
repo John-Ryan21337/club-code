@@ -451,15 +451,6 @@ export function AmbientVideoWorkspace({
   const localMediaElement = useLocalMediaElement();
   const [localMediaPaused, setLocalMediaPaused] = useState(true);
 
-  useEffect(() => {
-    // The workspace normally mounts before Settings. Wait for the
-    // authoritative server snapshot so a persisted source always wins over
-    // the first-run EDM example.
-    youtubeUrlQueueStore.initializeBundledDefault(
-      serverConfig !== null && settings.ambientVideoSource === null,
-    );
-  }, [serverConfig, settings.ambientVideoSource]);
-
   const source = youtubeUrlQueue.currentSource ?? settings.ambientVideoSource;
   const queueActive = youtubeUrlQueue.active && youtubeUrlQueue.currentSource !== null;
   const spotifySource = source?.kind === "spotify" ? source : null;

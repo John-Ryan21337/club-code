@@ -309,7 +309,7 @@ export const DEFAULT_ATMOSPHERE_CONSOLE_ENABLED = true;
  * into a clipped, pointer-transparent copy of the selected falling effect.
  */
 export const DEFAULT_FALLING_EFFECTS_OVER_CINEMA_ENABLED = false;
-export const DEFAULT_FALLING_EFFECT_KIND: FallingEffectKind = "snow";
+export const DEFAULT_FALLING_EFFECT_KIND: FallingEffectKind = "rain";
 export const DEFAULT_HARDWARE_LIGHTING_SYNC_ENABLED = false;
 export const DEFAULT_HARDWARE_LIGHTING_CONTROLLER_IDS: readonly string[] = [];
 export const DEFAULT_HARDWARE_LIGHTING_BRIGHTNESS = 1;
@@ -1191,7 +1191,7 @@ export const CLUB_CODE_FIRST_RUN_CLIENT_SETTINGS: ClientSettings = Schema.decode
 )({
   ...DEFAULT_CLIENT_SETTINGS,
   fallingEffectsEnabled: true,
-  fallingEffectKind: "matrix",
+  fallingEffectKind: "rain",
   fallingEffectMatrixColorMode: "rainbow",
   fallingEffectOpacity: 0.55,
   fallingEffectSpeed: 4,
@@ -1205,7 +1205,7 @@ export const CLUB_CODE_FIRST_RUN_CLIENT_SETTINGS: ClientSettings = Schema.decode
   fallingEffectActivityLinkBuildEnabled: true,
   fallingEffectActivityLinkAgentEnabled: true,
   fallingEffectActivityLinkColorMode: "matrix",
-  ambientVideoEnabled: true,
+  ambientVideoEnabled: false,
   ambientVideoSource: null,
   ambientVideoLayoutMode: "custom",
   ambientVideoPresetPlacement: "bottom-right",
@@ -1215,7 +1215,7 @@ export const CLUB_CODE_FIRST_RUN_CLIENT_SETTINGS: ClientSettings = Schema.decode
   ambientVideoGlowMode: "adaptive",
   ambientVideoGlowColor: "auto",
   ambientVideoGlowOpacity: 0.65,
-  ambientImageEnabled: true,
+  ambientImageEnabled: false,
   ambientImageAsset: CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET,
   ambientImagePresentationMode: "floating",
   ambientImageLayoutMode: "custom",

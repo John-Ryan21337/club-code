@@ -310,6 +310,7 @@ describe("client settings", () => {
   it("keeps conservative defaults separate from the Club Code first-run profile", () => {
     expect(DEFAULT_CLIENT_SETTINGS.fallingEffectsEnabled).toBe(false);
     expect(DEFAULT_CLIENT_SETTINGS.fallingEffectsOverCinemaEnabled).toBe(false);
+    expect(DEFAULT_CLIENT_SETTINGS.fallingEffectKind).toBe("rain");
     expect(DEFAULT_CLIENT_SETTINGS.fallingEffectMatrixColorMode).toBe("fixed");
     expect(DEFAULT_CLIENT_SETTINGS.fallingEffectMatrixColorCycleSpeed).toBe(
       DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
@@ -322,7 +323,7 @@ describe("client settings", () => {
     expect(CLUB_CODE_FIRST_RUN_CLIENT_SETTINGS).toEqual({
       ...DEFAULT_CLIENT_SETTINGS,
       fallingEffectsEnabled: true,
-      fallingEffectKind: "matrix",
+      fallingEffectKind: "rain",
       fallingEffectMatrixColorMode: "rainbow",
       fallingEffectOpacity: 0.55,
       fallingEffectSpeed: 4,
@@ -336,7 +337,7 @@ describe("client settings", () => {
       fallingEffectActivityLinkBuildEnabled: true,
       fallingEffectActivityLinkAgentEnabled: true,
       fallingEffectActivityLinkColorMode: "matrix",
-      ambientVideoEnabled: true,
+      ambientVideoEnabled: false,
       ambientVideoSource: null,
       ambientVideoLayoutMode: "custom",
       ambientVideoPresetPlacement: "bottom-right",
@@ -346,7 +347,7 @@ describe("client settings", () => {
       ambientVideoGlowMode: "adaptive",
       ambientVideoGlowColor: "auto",
       ambientVideoGlowOpacity: 0.65,
-      ambientImageEnabled: true,
+      ambientImageEnabled: false,
       ambientImageAsset: CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET,
       ambientImagePresentationMode: "floating",
       ambientImageLayoutMode: "custom",
