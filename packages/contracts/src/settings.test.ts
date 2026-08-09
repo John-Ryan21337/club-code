@@ -57,6 +57,7 @@ import {
   DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_NETWORK_ENABLED,
   DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
   DEFAULT_FALLING_EFFECT_DENSITY,
+  DEFAULT_FALLING_EFFECT_USAGE_REACTIVE,
   DEFAULT_FALLING_EFFECT_JAPANESE_RATIO,
   DEFAULT_FALLING_EFFECT_KIND,
   DEFAULT_FALLING_EFFECT_LIVE_WORK_VOCABULARY,
@@ -311,6 +312,7 @@ describe("client settings", () => {
     expect(DEFAULT_CLIENT_SETTINGS.fallingEffectsEnabled).toBe(false);
     expect(DEFAULT_CLIENT_SETTINGS.fallingEffectsOverCinemaEnabled).toBe(false);
     expect(DEFAULT_CLIENT_SETTINGS.fallingEffectKind).toBe("rain");
+    expect(DEFAULT_CLIENT_SETTINGS.fallingEffectUsageReactive).toBe(false);
     expect(DEFAULT_CLIENT_SETTINGS.fallingEffectMatrixColorMode).toBe("fixed");
     expect(DEFAULT_CLIENT_SETTINGS.fallingEffectMatrixColorCycleSpeed).toBe(
       DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
@@ -473,6 +475,7 @@ describe("client settings", () => {
       fallingEffectOpacity: DEFAULT_AMBIENT_OPACITY,
       fallingEffectSpeed: DEFAULT_FALLING_EFFECT_SPEED,
       fallingEffectDensity: DEFAULT_FALLING_EFFECT_DENSITY,
+      fallingEffectUsageReactive: DEFAULT_FALLING_EFFECT_USAGE_REACTIVE,
       fallingEffectJapaneseRatio: DEFAULT_FALLING_EFFECT_JAPANESE_RATIO,
       fallingEffect2chEnriched: DEFAULT_FALLING_EFFECT_2CH_ENRICHED,
       fallingEffectLiveWorkVocabulary: DEFAULT_FALLING_EFFECT_LIVE_WORK_VOCABULARY,
@@ -564,6 +567,7 @@ describe("client settings", () => {
       fallingEffectOpacity: MAX_AMBIENT_OPACITY,
       fallingEffectSpeed: MAX_FALLING_EFFECT_SPEED,
       fallingEffectDensity: MAX_FALLING_EFFECT_DENSITY,
+      fallingEffectUsageReactive: true,
       fallingEffectJapaneseRatio: MAX_FALLING_EFFECT_JAPANESE_RATIO,
       fallingEffect2chEnriched: true,
       fallingEffectLiveWorkVocabulary: true,
@@ -608,6 +612,7 @@ describe("client settings", () => {
       fallingEffectOpacity: MAX_AMBIENT_OPACITY,
       fallingEffectSpeed: MAX_FALLING_EFFECT_SPEED,
       fallingEffectDensity: MAX_FALLING_EFFECT_DENSITY,
+      fallingEffectUsageReactive: true,
       fallingEffectJapaneseRatio: MAX_FALLING_EFFECT_JAPANESE_RATIO,
       fallingEffect2chEnriched: true,
       fallingEffectLiveWorkVocabulary: true,
@@ -841,6 +846,7 @@ describe("client settings", () => {
         fallingEffectOpacity: MIN_AMBIENT_OPACITY,
         fallingEffectSpeed: MIN_FALLING_EFFECT_SPEED,
         fallingEffectDensity: MIN_FALLING_EFFECT_DENSITY,
+        fallingEffectUsageReactive: false,
         fallingEffectJapaneseRatio: MIN_FALLING_EFFECT_JAPANESE_RATIO,
         fallingEffect2chEnriched: false,
         fallingEffectLiveWorkVocabulary: false,
@@ -868,6 +874,7 @@ describe("client settings", () => {
       fallingEffectOpacity: MIN_AMBIENT_OPACITY,
       fallingEffectSpeed: MIN_FALLING_EFFECT_SPEED,
       fallingEffectDensity: MIN_FALLING_EFFECT_DENSITY,
+      fallingEffectUsageReactive: false,
       fallingEffectJapaneseRatio: MIN_FALLING_EFFECT_JAPANESE_RATIO,
       fallingEffect2chEnriched: false,
       fallingEffectLiveWorkVocabulary: false,

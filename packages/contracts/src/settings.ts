@@ -226,6 +226,12 @@ export const MIN_FALLING_EFFECT_DENSITY = 0.5;
 export const MAX_FALLING_EFFECT_DENSITY = 10;
 export const DEFAULT_FALLING_EFFECT_DENSITY = 1;
 /**
+ * Aggregate output-token activity is a live operational input. Keep it off
+ * until the operator explicitly allows the atmosphere to observe that
+ * privacy-safe numeric signal.
+ */
+export const DEFAULT_FALLING_EFFECT_USAGE_REACTIVE = false;
+/**
  * Probability that a Matrix stream uses the Japanese glyph pool and Japanese
  * live-work terms. The remainder use Roman glyphs and English live-work terms.
  */
@@ -811,6 +817,9 @@ export const ClientSettingsSchema = Schema.Struct({
   fallingEffectDensity: FallingEffectDensity.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_DENSITY)),
   ),
+  fallingEffectUsageReactive: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_USAGE_REACTIVE)),
+  ),
   fallingEffectJapaneseRatio: FallingEffectJapaneseRatio.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_JAPANESE_RATIO)),
   ),
@@ -1076,6 +1085,7 @@ export const AMBIENT_CLIENT_SETTINGS_KEYS = [
   "fallingEffectOpacity",
   "fallingEffectSpeed",
   "fallingEffectDensity",
+  "fallingEffectUsageReactive",
   "fallingEffectJapaneseRatio",
   "fallingEffect2chEnriched",
   "fallingEffectLiveWorkVocabulary",
@@ -1131,6 +1141,7 @@ export const DEFAULT_AMBIENT_CLIENT_SETTINGS: AmbientClientSettings = {
   fallingEffectOpacity: DEFAULT_AMBIENT_OPACITY,
   fallingEffectSpeed: DEFAULT_FALLING_EFFECT_SPEED,
   fallingEffectDensity: DEFAULT_FALLING_EFFECT_DENSITY,
+  fallingEffectUsageReactive: DEFAULT_FALLING_EFFECT_USAGE_REACTIVE,
   fallingEffectJapaneseRatio: DEFAULT_FALLING_EFFECT_JAPANESE_RATIO,
   fallingEffect2chEnriched: DEFAULT_FALLING_EFFECT_2CH_ENRICHED,
   fallingEffectLiveWorkVocabulary: DEFAULT_FALLING_EFFECT_LIVE_WORK_VOCABULARY,
@@ -1949,6 +1960,7 @@ export const ClientSettingsPatch = Schema.Struct({
   fallingEffectOpacity: Schema.optionalKey(AmbientOpacity),
   fallingEffectSpeed: Schema.optionalKey(FallingEffectSpeed),
   fallingEffectDensity: Schema.optionalKey(FallingEffectDensity),
+  fallingEffectUsageReactive: Schema.optionalKey(Schema.Boolean),
   fallingEffectJapaneseRatio: Schema.optionalKey(FallingEffectJapaneseRatio),
   fallingEffect2chEnriched: Schema.optionalKey(Schema.Boolean),
   fallingEffectLiveWorkVocabulary: Schema.optionalKey(Schema.Boolean),
