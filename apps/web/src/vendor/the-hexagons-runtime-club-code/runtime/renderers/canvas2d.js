@@ -1,4 +1,4 @@
-import { MATERIALS, qualityLimits } from "../config.js";
+import { MATERIALS } from "../config.js";
 import { diamondTileColors, hexToRgb, meshEnergyColor, spectralBeamColor, spectralBeamOpacity } from "../color.js";
 import { tessellationFacets } from "../geometry.js";
 import { facetPaletteIndex } from "../pattern.js";
@@ -8,10 +8,34 @@ const mix = (a, b, amount) => a.map((value, index) => value + (b[index] - value)
 const clamp = (value, minimum, maximum) => Math.min(maximum, Math.max(minimum, value));
 const smoothstep = (edge0,edge1,value) => { const normalized=clamp((value-edge0)/(edge1-edge0),0,1);return normalized*normalized*(3-2*normalized); };
 
+// Canvas draws every extrusion face as an individual path on Chromium's main
+// thread. Keep its full-frame geometry and backing stores substantially below
+// the instanced WebGL budgets so a decorative fallback cannot starve host UI.
+const CANVAS_QUALITY_LIMITS = Object.freeze({
+  performance: Object.freeze({ dpr: .5, backingPixels: 600_000, tiles: 32, minimumIdleMs: 500 }),
+  balanced: Object.freeze({ dpr: .625, backingPixels: 900_000, tiles: 48, minimumIdleMs: 250 }),
+  cinematic: Object.freeze({ dpr: .75, backingPixels: 1_250_000, tiles: 64, minimumIdleMs: 150 }),
+});
+
+export function canvasQualityLimits(quality) {
+  return CANVAS_QUALITY_LIMITS[quality] ?? CANVAS_QUALITY_LIMITS.cinematic;
+}
+
 export function fitCanvasDpr(width, height, requested, settings) {
-  const limits = qualityLimits(settings.quality);
+  const limits = canvasQualityLimits(settings.quality);
   const bounded = Math.min(window.devicePixelRatio || 1, requested, limits.dpr);
-  return Math.max(0.5, Math.min(bounded, Math.sqrt(limits.backingPixels / Math.max(1, width * height))));
+  let fitted = Math.max(0.01, Math.min(bounded, Math.sqrt(limits.backingPixels / Math.max(1, width * height))));
+  // Canvas dimensions are rounded independently. Correct for that rounding so
+  // large viewports remain inside the advertised backing-store budget rather
+  // than relying on a DPR floor that can exceed it by several times.
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const backingWidth = Math.max(1, Math.round(width * fitted));
+    const backingHeight = Math.max(1, Math.round(height * fitted));
+    const backingPixels = backingWidth * backingHeight;
+    if (backingPixels <= limits.backingPixels) break;
+    fitted *= Math.sqrt(limits.backingPixels / backingPixels) * 0.999;
+  }
+  return fitted;
 }
 
 function pathPolygon(context, points) {
@@ -164,6 +188,6 @@ export function createCanvasRenderer(canvas){
   const spectralCanvas=document.createElement("canvas"),spectralContext=spectralCanvas.getContext("2d",{alpha:true});if(!spectralContext)return{available:false,fallbackReason:"canvas2d-unavailable",dispose(){}};
   let dpr=1,disposed=false;
   function resize(width,height,requestedDpr,settings){dpr=fitCanvasDpr(width,height,requestedDpr,settings);for(const target of[canvas,frameCanvas,spectralCanvas]){target.width=Math.max(1,Math.round(width*dpr));target.height=Math.max(1,Math.round(height*dpr));if(target.style){target.style.width=`${width}px`;target.style.height=`${height}px`;}}}
-  function render(frame,settings,lights){if(disposed)return{status:"disposed",drawCalls:0};frameContext.setTransform(dpr,0,0,dpr,0,0);sourceGradient(frameContext,frame,lights.behind,spectralContext,spectralCanvas,dpr);drawGapParticles(frameContext,frame,meshEnergyColor(frame.time,settings));drawTiles(frameContext,frame,settings,lights.front);context.save();context.setTransform(1,0,0,1,0,0);context.globalCompositeOperation="copy";context.drawImage(frameCanvas,0,0);context.restore();const mesh=settings.tessellationMode==="cairo-pentagon"?"cairo-four-pentagon":settings.tessellationMode==="hexagram"?"hexagram-twelve-facet":"bounded-three-prism";return{status:"rendered",drawCalls:1,tileInstances:frame.grid.tiles.length,gapInstances:frame.gapInstanceCount,dpr,mesh};}
+  function render(frame,settings,lights){if(disposed)return{status:"disposed",drawCalls:0};const startedAt=performance.now();frameContext.setTransform(dpr,0,0,dpr,0,0);sourceGradient(frameContext,frame,lights.behind,spectralContext,spectralCanvas,dpr);drawGapParticles(frameContext,frame,meshEnergyColor(frame.time,settings));drawTiles(frameContext,frame,settings,lights.front);context.save();context.setTransform(1,0,0,1,0,0);context.globalCompositeOperation="copy";context.drawImage(frameCanvas,0,0);context.restore();const limits=canvasQualityLimits(settings.quality),mesh=settings.tessellationMode==="cairo-pentagon"?"cairo-four-pentagon":settings.tessellationMode==="hexagram"?"hexagram-twelve-facet":"bounded-three-prism";return{status:"rendered",drawCalls:1,tileInstances:frame.grid.tiles.length,tileBudget:limits.tiles,minimumIdleMs:limits.minimumIdleMs,renderDurationMs:performance.now()-startedAt,gapInstances:frame.gapInstanceCount,dpr,mesh};}
   return{available:true,fallbackReason:null,resize,render,dispose(){disposed=true;}};
 }
