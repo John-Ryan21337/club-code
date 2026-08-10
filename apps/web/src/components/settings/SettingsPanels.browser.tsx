@@ -1174,10 +1174,14 @@ describe("settings panels", () => {
       expect(profilePatch).not.toHaveProperty("autoNudgeMode");
       expect(profilePatch).not.toHaveProperty("providerModelPreferences");
       expect(profilePatch).not.toHaveProperty("modelPacingEnabled");
-      expect(profilePatch).not.toHaveProperty("ambientVideoEnabled");
-      expect(profilePatch).not.toHaveProperty("ambientVideoSource");
-      expect(profilePatch).not.toHaveProperty("ambientImageEnabled");
-      expect(profilePatch).not.toHaveProperty("ambientImageAsset");
+      expect(profilePatch).toMatchObject({
+        ambientVideoEnabled: DEFAULT_CLIENT_SETTINGS.ambientVideoEnabled,
+        ambientVideoSource: DEFAULT_CLIENT_SETTINGS.ambientVideoSource,
+        ambientImageEnabled: DEFAULT_CLIENT_SETTINGS.ambientImageEnabled,
+        ambientImageAsset: DEFAULT_CLIENT_SETTINGS.ambientImageAsset,
+        ambientImageCycleAssets: DEFAULT_CLIENT_SETTINGS.ambientImageCycleAssets,
+        ambientImageCycleEnabled: DEFAULT_CLIENT_SETTINGS.ambientImageCycleEnabled,
+      });
       expect(profilePatch).not.toHaveProperty("sidebarBrandImage");
       expect(profilePatch).not.toHaveProperty("providerUsageWidgetEnabled");
       expect(profilePatch).not.toHaveProperty("providerUsagePollMinutes");
