@@ -304,6 +304,13 @@ export type AmbientOpacity = typeof AmbientOpacity.Type;
 
 export const FallingEffectKind = Schema.Literals(["snow", "rain", "matrix"]);
 export type FallingEffectKind = typeof FallingEffectKind.Type;
+export const MAX_HEXAGONS_BACKGROUND_PRESET_JSON_LENGTH = 32_768;
+export const HexagonsBackgroundPresetJson = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(MAX_HEXAGONS_BACKGROUND_PRESET_JSON_LENGTH),
+);
+export type HexagonsBackgroundPresetJson = typeof HexagonsBackgroundPresetJson.Type;
+export const DEFAULT_HEXAGONS_BACKGROUND_ENABLED = false;
+export const DEFAULT_HEXAGONS_BACKGROUND_PRESET_JSON = null;
 export const DEFAULT_FALLING_EFFECTS_ENABLED = false;
 /**
  * Compatibility default: the console existed before this persisted kill
@@ -755,6 +762,12 @@ export const ClientSettingsSchema = Schema.Struct({
   worldClockWeatherEnabled: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_WORLD_CLOCK_WEATHER_ENABLED)),
   ),
+  hexagonsBackgroundEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_HEXAGONS_BACKGROUND_ENABLED)),
+  ),
+  hexagonsBackgroundPresetJson: Schema.NullOr(HexagonsBackgroundPresetJson).pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_HEXAGONS_BACKGROUND_PRESET_JSON)),
+  ),
   fallingEffectsEnabled: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECTS_ENABLED)),
   ),
@@ -1069,6 +1082,8 @@ export const ClientSettingsSchema = Schema.Struct({
 export type ClientSettings = typeof ClientSettingsSchema.Type;
 
 export const AMBIENT_CLIENT_SETTINGS_KEYS = [
+  "hexagonsBackgroundEnabled",
+  "hexagonsBackgroundPresetJson",
   "fallingEffectsEnabled",
   "atmosphereConsoleEnabled",
   "fallingEffectsOverCinemaEnabled",
@@ -1125,6 +1140,8 @@ export type AmbientClientSettings = Pick<
 >;
 
 export const DEFAULT_AMBIENT_CLIENT_SETTINGS: AmbientClientSettings = {
+  hexagonsBackgroundEnabled: DEFAULT_HEXAGONS_BACKGROUND_ENABLED,
+  hexagonsBackgroundPresetJson: DEFAULT_HEXAGONS_BACKGROUND_PRESET_JSON,
   fallingEffectsEnabled: DEFAULT_FALLING_EFFECTS_ENABLED,
   atmosphereConsoleEnabled: DEFAULT_ATMOSPHERE_CONSOLE_ENABLED,
   fallingEffectsOverCinemaEnabled: DEFAULT_FALLING_EFFECTS_OVER_CINEMA_ENABLED,
@@ -1936,6 +1953,8 @@ export const ClientSettingsPatch = Schema.Struct({
   worldClockLocationIds: Schema.optionalKey(WorldClockLocationIds),
   // See the ClientSettings field above: transport routing keeps this local.
   worldClockWeatherEnabled: Schema.optionalKey(Schema.Boolean),
+  hexagonsBackgroundEnabled: Schema.optionalKey(Schema.Boolean),
+  hexagonsBackgroundPresetJson: Schema.optionalKey(Schema.NullOr(HexagonsBackgroundPresetJson)),
   fallingEffectsEnabled: Schema.optionalKey(Schema.Boolean),
   atmosphereConsoleEnabled: Schema.optionalKey(Schema.Boolean),
   fallingEffectsOverCinemaEnabled: Schema.optionalKey(Schema.Boolean),

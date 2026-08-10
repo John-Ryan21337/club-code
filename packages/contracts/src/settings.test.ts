@@ -76,6 +76,8 @@ import {
   DEFAULT_HARDWARE_LIGHTING_CONTROLLER_IDS,
   DEFAULT_HARDWARE_LIGHTING_RESTORE_ON_DISABLE,
   DEFAULT_HARDWARE_LIGHTING_SYNC_ENABLED,
+  DEFAULT_HEXAGONS_BACKGROUND_ENABLED,
+  DEFAULT_HEXAGONS_BACKGROUND_PRESET_JSON,
   FALLING_EFFECT_MATRIX_WALK_FONT_SIZE_STEP,
   DEFAULT_LM_STUDIO_BASE_URL,
   DEFAULT_MOBILE_OPTIMIZED_PRESENTATION,
@@ -107,6 +109,7 @@ import {
   MAX_FALLING_EFFECT_MATRIX_WALK_LIFECYCLE_PERCENT,
   MAX_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
   MAX_FALLING_EFFECT_SPEED,
+  MAX_HEXAGONS_BACKGROUND_PRESET_JSON_LENGTH,
   MAX_MODEL_PACING_RESERVE_PERCENT,
   MAX_PROVIDER_USAGE_POLL_MINUTES,
   MAX_SIDEBAR_BRAND_IMAGE_DATA_URL_LENGTH,
@@ -267,6 +270,12 @@ describe("client settings", () => {
       DEFAULT_SIDEBAR_BRAND_IMAGE_DATA_URL,
     );
     expect(DEFAULT_CLIENT_SETTINGS.sidebarStarSpeed).toBe(DEFAULT_SIDEBAR_STAR_SPEED);
+    expect(DEFAULT_CLIENT_SETTINGS.hexagonsBackgroundEnabled).toBe(
+      DEFAULT_HEXAGONS_BACKGROUND_ENABLED,
+    );
+    expect(DEFAULT_CLIENT_SETTINGS.hexagonsBackgroundPresetJson).toBe(
+      DEFAULT_HEXAGONS_BACKGROUND_PRESET_JSON,
+    );
     expect(DEFAULT_CLIENT_SETTINGS.themeAccentColor).toBe(DEFAULT_THEME_ACCENT_COLOR);
     expect(DEFAULT_CLIENT_SETTINGS.appAccentColor).toBe(DEFAULT_APP_ACCENT_COLOR);
     expect(DEFAULT_CLIENT_SETTINGS.workflowObservatoryEnabled).toBe(
@@ -488,6 +497,8 @@ describe("client settings", () => {
       fallingEffectActivityLinkColorMode: DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_COLOR_MODE,
       fallingEffectActivityLinkRetentionSeconds:
         DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
+      hexagonsBackgroundEnabled: DEFAULT_HEXAGONS_BACKGROUND_ENABLED,
+      hexagonsBackgroundPresetJson: DEFAULT_HEXAGONS_BACKGROUND_PRESET_JSON,
       ambientVideoEnabled: DEFAULT_AMBIENT_VIDEO_ENABLED,
       ambientVideoSource: DEFAULT_AMBIENT_VIDEO_SOURCE,
       ambientVideoLayoutMode: DEFAULT_AMBIENT_VIDEO_LAYOUT_MODE,
@@ -541,6 +552,28 @@ describe("client settings", () => {
       DEFAULT_FALLING_EFFECT_MATRIX_WALK_END_FONT_SIZE,
     );
     expect(pickAmbientSettings(decoded)).toEqual(DEFAULT_AMBIENT_CLIENT_SETTINGS);
+  });
+
+  it("persists a bounded The Hexagons preset without enabling it by default", () => {
+    const preset = '{"kind":"the-hexagons-background"}';
+    expect(
+      decodeClientSettingsPatch({
+        hexagonsBackgroundEnabled: true,
+        hexagonsBackgroundPresetJson: preset,
+      }),
+    ).toEqual({
+      hexagonsBackgroundEnabled: true,
+      hexagonsBackgroundPresetJson: preset,
+    });
+    expect(decodeClientSettingsPatch({ hexagonsBackgroundPresetJson: null })).toEqual({
+      hexagonsBackgroundPresetJson: null,
+    });
+    expect(() => decodeClientSettingsPatch({ hexagonsBackgroundPresetJson: " " })).toThrow();
+    expect(() =>
+      decodeClientSettingsPatch({
+        hexagonsBackgroundPresetJson: "x".repeat(MAX_HEXAGONS_BACKGROUND_PRESET_JSON_LENGTH + 1),
+      }),
+    ).toThrow();
   });
 
   it("preserves legacy YouTube sources while accepting the additive Spotify source", () => {
