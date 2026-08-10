@@ -78,6 +78,10 @@ export const SETTINGS_PROFILE_CLIENT_FIELD_POLICY = {
   worldClockLocationIds: "include",
   // Weather is a separate network/approximate-location consent.
   worldClockWeatherEnabled: "consent",
+  // The imported document contains normalized presentation only. Loading a
+  // profile may select it, but a profile must not activate the renderer.
+  hexagonsBackgroundEnabled: "ambient-activation",
+  hexagonsBackgroundPresetJson: "include",
   fallingEffectsEnabled: "ambient-activation",
   atmosphereConsoleEnabled: "ambient-activation",
   fallingEffectsOverCinemaEnabled: "ambient-activation",

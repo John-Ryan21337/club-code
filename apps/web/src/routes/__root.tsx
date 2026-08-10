@@ -26,6 +26,7 @@ import { MobileSettingsProfileBootstrap } from "../components/MobileSettingsProf
 import { ProviderUpdateLaunchNotification } from "../components/ProviderUpdateLaunchNotification";
 import { WindowAtmosphere } from "../components/WindowAtmosphere";
 import { HardwareLightingMatrixSync } from "../components/HardwareLightingMatrixSync";
+import { HexagonsBackground } from "../components/HexagonsBackground";
 import { WorldClockWidget } from "../components/WorldClockWidget";
 import {
   WebSocketConnectionCoordinator,
@@ -174,6 +175,7 @@ function RootRouteView() {
         <EnvironmentConnectionManagerBootstrap />
         <AppearanceSettingsSync />
         <MobileSettingsProfileBootstrap />
+        <HexagonsBackground />
         <AmbianceLayer />
         <PowerSaveBlockerSync />
         <WindowAtmosphere selectedThreadRef={selectedThreadRef} />

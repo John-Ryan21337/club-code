@@ -68,6 +68,8 @@ describe("settings profile library", () => {
       ambientImageAsset: CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET,
       ambientImageCycleAssets: [CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET],
       ambientImageCycleEnabled: true,
+      hexagonsBackgroundEnabled: true,
+      hexagonsBackgroundPresetJson: '{"kind":"the-hexagons-background"}',
       providerUsageWidgetEnabled: true,
       providerUsagePollMinutes: 1,
       defaultEditor: "vscode",
@@ -119,6 +121,9 @@ describe("settings profile library", () => {
     ]);
     expect(payload.clientSettings.ambientImageCycleEnabled).toBe(true);
     expect(payload.clientSettings.ambientImageGlowOpacity).toBe(0.42);
+    expect(payload.clientSettings.hexagonsBackgroundPresetJson).toBe(
+      '{"kind":"the-hexagons-background"}',
+    );
     expect(payload.clientSettings.mobileOptimizedPresentation).toBe(true);
     expect(payload.clientSettings.showComposerThreadAutomationControls).toBe(true);
     expect(payload.clientSettings.timestampFormat).toBe("24-hour");
@@ -128,6 +133,7 @@ describe("settings profile library", () => {
     expect(payload.clientSettings).not.toHaveProperty("fallingEffectsOverCinemaEnabled");
     expect(payload.clientSettings).not.toHaveProperty("ambianceEnabled");
     expect(payload.clientSettings).not.toHaveProperty("ambianceReactMode");
+    expect(payload.clientSettings).not.toHaveProperty("hexagonsBackgroundEnabled");
     expect(payload.clientSettings).not.toHaveProperty("fallingEffectLiveWorkVocabulary");
     expect(payload.clientSettings).not.toHaveProperty("fallingEffectUsageReactive");
     expect(payload.clientSettings).not.toHaveProperty("fallingEffectActivityLinks");
@@ -196,6 +202,8 @@ describe("settings profile library", () => {
       ambientImageAsset: "include",
       ambientImageCycleAssets: "include",
       ambientImageCycleEnabled: "include",
+      hexagonsBackgroundEnabled: "ambient-activation",
+      hexagonsBackgroundPresetJson: "include",
       sidebarBrandImage: "local-asset-reference",
       sidebarBrandImageDataUrl: "local-asset-reference",
       providerUsageWidgetEnabled: "provider-operation",
