@@ -116,7 +116,6 @@ import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
 import { useCommandPaletteStore } from "../commandPaletteStore";
 import { buildTemporaryWorktreeBranchName } from "@cafecode/shared/git";
 import { useHasOnScreenKeyboard, useIsMobile, useMediaQuery } from "../hooks/useMediaQuery";
-import { RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY } from "../rightPanelLayout";
 import { BranchToolbar } from "./BranchToolbar";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
 import PlanSidebar from "./PlanSidebar";
@@ -2125,10 +2124,14 @@ export default function ChatView(props: ChatViewProps) {
   const [draftPlanSidebarOpenByThreadKey, setDraftPlanSidebarOpenByThreadKey] = useState<
     Record<string, boolean>
   >({});
-  const viewportUsesPlanSidebarSheet = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
   const viewportMatchesMobile = useMediaQuery("max-md");
   const isMobile = useIsMobile();
-  const shouldUsePlanSidebarSheet = isMobile || viewportUsesPlanSidebarSheet;
+  // Desktop presentation owns a persistent inline workspace panel, even when
+  // the window is narrower than the normal responsive breakpoint. A modal
+  // sheet dismisses on an outside press, which made the Plan / Workflow panel
+  // disappear whenever the operator returned to the chat. Mobile presentation
+  // keeps the dismissible sheet so it does not permanently cover the thread.
+  const shouldUsePlanSidebarSheet = isMobile;
   const hasOnScreenKeyboard = useHasOnScreenKeyboard();
   const draftPlanSidebarOpen =
     routeKind === "draft" ? draftPlanSidebarOpenByThreadKey[routeThreadKey] : undefined;

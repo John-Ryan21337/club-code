@@ -51,6 +51,7 @@ import { AppAtomRegistryProvider } from "../rpc/atomRegistry";
 import { getServerConfig } from "../rpc/serverState";
 import { getRouter } from "../router";
 import { deriveLogicalProjectKeyFromSettings } from "../logicalProject";
+import { settingsProfileLibraryStore } from "../settingsProfiles";
 import { selectBootstrapCompleteForActiveEnvironment, useStore } from "../store";
 import { useUiStateStore } from "../uiStateStore";
 import { createAuthenticatedSessionHandlers } from "../../test/authHttpHandlers";
@@ -1957,6 +1958,7 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
     await setViewport(DEFAULT_VIEWPORT);
     localStorage.clear();
     sessionStorage.clear();
+    settingsProfileLibraryStore.resetForTests();
     __resetAutoNudgeTurnLedgerForTests({ clearSessionStorage: true });
     __resetConfirmedAutoNudgeArmingForTests({ clearStorage: true });
     document.body.innerHTML = "";
@@ -1983,6 +1985,9 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
       projectExpandedById: {},
       projectOrder: [],
       threadLastVisitedAtById: {},
+      threadPlanSidebarOpenById: {},
+      threadRightPanelTabById: {},
+      threadWorkflowNodeExpandedById: {},
     });
   });
 
@@ -7832,6 +7837,67 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
           Math.abs(expandedAutoNudgeBounds.width - expandedIdleGuardBounds.width),
         ).toBeLessThanOrEqual(1);
         expect(expandedIdleGuardBounds.right).toBeLessThanOrEqual(controlsBounds.right + 1);
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
+    it("keeps Plan / Workflow inline when desktop presentation is narrower than 980px", async () => {
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: createSnapshotForTargetUser({
+          targetMessageId: "msg-user-persistent-desktop-plan-panel" as MessageId,
+          targetText: "persistent desktop plan panel",
+        }),
+        configureFixture: (nextFixture) => {
+          nextFixture.serverConfig = {
+            ...nextFixture.serverConfig,
+            clientSettings: {
+              ...nextFixture.serverConfig.clientSettings,
+              mobileOptimizedPresentation: false,
+            },
+          };
+        },
+      });
+
+      try {
+        expect(document.querySelector('[data-chat-presentation="desktop"]')).toBeTruthy();
+
+        await page.getByRole("button", { name: "Plan / Workflow" }).click();
+
+        const closePanelButton = await waitForElement(
+          () => document.querySelector<HTMLElement>('[aria-label="Close Plan and Workflow panel"]'),
+          "Unable to find the open Plan / Workflow panel.",
+        );
+        expect(closePanelButton.closest('[data-slot="sheet-popup"]')).toBeNull();
+
+        await page.getByRole("heading", { name: THREAD_TITLE }).click();
+
+        expect(document.querySelector('[aria-label="Close Plan and Workflow panel"]')).toBeTruthy();
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
+    it("keeps Plan / Workflow in a sheet for mobile presentation", async () => {
+      useUiStateStore.setState({
+        threadPlanSidebarOpenById: { [THREAD_KEY]: true },
+      });
+      const mounted = await mountChatView({
+        viewport: COMPACT_FOOTER_VIEWPORT,
+        snapshot: createSnapshotForTargetUser({
+          targetMessageId: "msg-user-mobile-plan-sheet" as MessageId,
+          targetText: "mobile plan sheet",
+        }),
+      });
+
+      try {
+        expect(document.querySelector('[data-chat-presentation="mobile"]')).toBeTruthy();
+        const closePanelButton = await waitForElement(
+          () => document.querySelector<HTMLElement>('[aria-label="Close Plan and Workflow panel"]'),
+          "Unable to find the mobile Plan / Workflow panel.",
+        );
+        expect(closePanelButton.closest('[data-slot="sheet-popup"]')).toBeTruthy();
       } finally {
         await mounted.cleanup();
       }

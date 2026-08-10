@@ -11,6 +11,20 @@ import {
 
 export const DEFAULT_MOBILE_SETTINGS_PROFILE_NAME = "Mobile Profile";
 
+export function mobileSettingsProfileBootstrapPayload(
+  settings: Parameters<typeof captureSettingsProfilePayload>[0],
+  theme: Parameters<typeof captureSettingsProfilePayload>[1],
+) {
+  const payload = captureSettingsProfilePayload(settings, theme);
+  return {
+    ...payload,
+    clientSettings: {
+      ...payload.clientSettings,
+      mobileOptimizedPresentation: true,
+    },
+  };
+}
+
 export function shouldSeedMobileSettingsProfile(input: {
   readonly isMobile: boolean;
   readonly settingsHydrated: boolean;
@@ -41,8 +55,15 @@ export function MobileSettingsProfileBootstrap() {
     attemptedRef.current = true;
     settingsProfileLibraryStore.upsert(
       DEFAULT_MOBILE_SETTINGS_PROFILE_NAME,
-      captureSettingsProfilePayload(settings, theme),
+      mobileSettingsProfileBootstrapPayload(settings, theme),
     );
+    // A natural phone viewport does not authorize a persistent presentation
+    // override. Keep the new profile available for the Mobile button, but do
+    // not let its active marker suppress responsive mobile layout before the
+    // operator explicitly selects it.
+    if (!settings.mobileOptimizedPresentation) {
+      settingsProfileLibraryStore.activate(null);
+    }
   }, [isMobile, library.profiles.length, settings, settingsHydrated, theme]);
 
   return null;
