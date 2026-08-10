@@ -84,10 +84,14 @@ function profileDifferenceLabel(key: string): string {
     .replace(/^./, (character) => character.toUpperCase());
 }
 
-function profileDifferenceValue(value: boolean | number | string | undefined): string {
+function profileDifferenceValue(value: unknown): string {
   if (value === undefined) return "Not set";
   if (typeof value === "boolean") return value ? "On" : "Off";
-  const normalized = String(value).replace(/\s+/gu, " ").trim();
+  const serialized =
+    typeof value === "object" && value !== null
+      ? (JSON.stringify(value) ?? "Not set")
+      : String(value);
+  const normalized = serialized.replace(/\s+/gu, " ").trim();
   return normalized.length > 80 ? `${normalized.slice(0, 77)}…` : normalized;
 }
 
@@ -558,7 +562,15 @@ export function SettingsProfiles() {
               {notice.message}
             </span>
           ) : (
-            "Profiles capture the theme plus safe UI appearance, layout, completion-alert, ambiance, and usability preferences. They do not include keybindings, OS/Web notification activation, external media playback or playlist libraries, local or uploaded assets, provider-usage polling, native editor or power controls, window transparency or panel geometry, provider/auth or server/network settings, model favorites or pacing, project-specific state, or exact-thread Auto Nudge."
+            <>
+              Profiles save the theme, appearance, layout, alerts, ambient media, and usability
+              settings. Media references contain only bounded service IDs and authenticated image
+              asset IDs. Profiles never store image bytes or source paths. Profiles exclude
+              notification permission, keybindings, playback progress, and provider usage polling.
+              Profiles also exclude native controls, window and panel geometry, and provider or
+              network configuration. They do not include model choices, pacing, project state, or
+              exact-thread Auto Nudge.
+            </>
           )
         }
       >

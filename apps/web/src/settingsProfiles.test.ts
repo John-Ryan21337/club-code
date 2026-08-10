@@ -1,4 +1,5 @@
 import {
+  CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET,
   ClientSettingsSchema,
   DEFAULT_UNIFIED_SETTINGS,
   type UnifiedSettings,
@@ -76,6 +77,12 @@ describe("settings profile library", () => {
     expect(SETTINGS_PROFILE_CLIENT_FIELD_POLICY.notificationsEnabled).toBe("external-operation");
     expect(SETTINGS_PROFILE_CLIENT_FIELD_POLICY.defaultEditor).toBe("native-machine-control");
     expect(SETTINGS_PROFILE_CLIENT_FIELD_POLICY.ambientImageCycleSeconds).toBe("include");
+    expect(SETTINGS_PROFILE_CLIENT_FIELD_POLICY.ambientVideoEnabled).toBe("include");
+    expect(SETTINGS_PROFILE_CLIENT_FIELD_POLICY.ambientVideoSource).toBe("include");
+    expect(SETTINGS_PROFILE_CLIENT_FIELD_POLICY.ambientImageEnabled).toBe("include");
+    expect(SETTINGS_PROFILE_CLIENT_FIELD_POLICY.ambientImageAsset).toBe("include");
+    expect(SETTINGS_PROFILE_CLIENT_FIELD_POLICY.ambientImageCycleAssets).toBe("include");
+    expect(SETTINGS_PROFILE_CLIENT_FIELD_POLICY.ambientImageCycleEnabled).toBe("include");
   });
 
   it("captures only the explicit local preference allowlist", () => {
@@ -86,15 +93,10 @@ describe("settings profile library", () => {
       ambientImageCycleSeconds: 45,
       notificationsEnabled: true,
       ambientVideoEnabled: true,
-      ambientVideoSource: { kind: "video", id: "private-video" },
+      ambientVideoSource: { kind: "video", id: "dQw4w9WgXcQ" },
       ambientImageEnabled: true,
-      ambientImageAsset: {
-        id: "private-image",
-        mimeType: "image/png",
-        width: 100,
-        height: 100,
-      },
-      ambientImageCycleAssets: [],
+      ambientImageAsset: CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET,
+      ambientImageCycleAssets: [CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET],
       ambientImageCycleEnabled: true,
       sidebarBrandImage: {
         id: "private-brand",
@@ -137,12 +139,20 @@ describe("settings profile library", () => {
     expect(payload.clientSettings.fallingEffectsEnabled).toBe(true);
     expect(payload.clientSettings.timestampFormat).toBe("24-hour");
     expect(payload.clientSettings.ambientImageCycleSeconds).toBe(45);
+    expect(payload.clientSettings.ambientVideoEnabled).toBe(true);
+    expect(payload.clientSettings.ambientVideoSource).toEqual({
+      kind: "video",
+      id: "dQw4w9WgXcQ",
+    });
+    expect(payload.clientSettings.ambientImageEnabled).toBe(true);
+    expect(payload.clientSettings.ambientImageAsset).toEqual(
+      CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET,
+    );
+    expect(payload.clientSettings.ambientImageCycleAssets).toEqual([
+      CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET,
+    ]);
+    expect(payload.clientSettings.ambientImageCycleEnabled).toBe(true);
     expect(Object.keys(payload.clientSettings)).toEqual([...SETTINGS_PROFILE_CLIENT_KEYS]);
-    expect(
-      Object.values(payload.clientSettings).every((value) =>
-        ["boolean", "number", "string"].includes(typeof value),
-      ),
-    ).toBe(true);
     expect(payload.clientSettings).not.toHaveProperty("autoNudgeMode");
     expect(payload.clientSettings).not.toHaveProperty("autoNudgeMaxRounds");
     expect(payload.clientSettings).not.toHaveProperty("autoNudgeMaxMinutes");
@@ -154,12 +164,6 @@ describe("settings profile library", () => {
     expect(payload.clientSettings).not.toHaveProperty("observability");
     expect(payload.clientSettings).not.toHaveProperty("addProjectBaseDirectory");
     expect(payload.clientSettings).not.toHaveProperty("serverPassword");
-    expect(payload.clientSettings).not.toHaveProperty("ambientVideoEnabled");
-    expect(payload.clientSettings).not.toHaveProperty("ambientVideoSource");
-    expect(payload.clientSettings).not.toHaveProperty("ambientImageEnabled");
-    expect(payload.clientSettings).not.toHaveProperty("ambientImageAsset");
-    expect(payload.clientSettings).not.toHaveProperty("ambientImageCycleAssets");
-    expect(payload.clientSettings).not.toHaveProperty("ambientImageCycleEnabled");
     expect(payload.clientSettings).not.toHaveProperty("sidebarBrandImage");
     expect(payload.clientSettings).not.toHaveProperty("providerUsageWidgetEnabled");
     expect(payload.clientSettings).not.toHaveProperty("providerUsagePollMinutes");
@@ -195,6 +199,46 @@ describe("settings profile library", () => {
     expect(Object.isFrozen(compareSettingsProfile(saved, current))).toBe(true);
   });
 
+  it("previews bounded media values without flattening their structure", () => {
+    const store = createSettingsProfileLibraryStore(createStorage());
+    const saved = store.upsert("Cinema", {
+      theme: "dark",
+      clientSettings: {
+        ambientVideoEnabled: true,
+        ambientVideoSource: { kind: "video", id: "dQw4w9WgXcQ" },
+        ambientImageAsset: CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET,
+        ambientImageCycleAssets: [],
+      },
+    }).profile;
+    const current = captureSettingsProfilePayload(
+      {
+        ...DEFAULT_UNIFIED_SETTINGS,
+        ambientVideoEnabled: false,
+        ambientVideoSource: null,
+        ambientImageAsset: null,
+        ambientImageCycleAssets: [],
+      },
+      "dark",
+    );
+
+    expect(compareSettingsProfile(saved, current)).toEqual([
+      { key: "ambientVideoEnabled", savedValue: true, currentValue: false },
+      {
+        key: "ambientVideoSource",
+        savedValue: { kind: "video", id: "dQw4w9WgXcQ" },
+        currentValue: null,
+      },
+      {
+        key: "ambientImageAsset",
+        savedValue: CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET,
+        currentValue: null,
+      },
+    ]);
+    expect(compareSettingsProfile(saved, current)).not.toContainEqual(
+      expect.objectContaining({ key: "ambientImageCycleAssets" }),
+    );
+  });
+
   it("does not execute accessor-backed values while building a profile preview", () => {
     const getter = vi.fn(() => true);
     const clientSettings = {};
@@ -218,6 +262,28 @@ describe("settings profile library", () => {
       ),
     ).toEqual([]);
     expect(getter).not.toHaveBeenCalled();
+  });
+
+  it("rejects accessor-backed nested media without executing caller code", () => {
+    const idGetter = vi.fn(() => "dQw4w9WgXcQ");
+    const source = { kind: "video" };
+    Object.defineProperty(source, "id", {
+      enumerable: true,
+      get: idGetter,
+    });
+
+    const payload = captureSettingsProfilePayload(
+      {
+        ...DEFAULT_UNIFIED_SETTINGS,
+        ambientVideoEnabled: true,
+        ambientVideoSource: source,
+      } as unknown as UnifiedSettings,
+      "dark",
+    );
+
+    expect(payload.clientSettings.ambientVideoEnabled).toBe(true);
+    expect(payload.clientSettings).not.toHaveProperty("ambientVideoSource");
+    expect(idGetter).not.toHaveBeenCalled();
   });
 
   it("persists named profiles and the active selection in a versioned local document", () => {
@@ -436,7 +502,7 @@ describe("settings profile library", () => {
     expect(profile?.updatedAt).toBe("2026-07-30T10:00:00.000Z");
   });
 
-  it("drops unknown, secret, execution, and malformed fields independently on restore", () => {
+  it("retains bounded media while dropping unknown, secret, execution, and malformed fields", () => {
     const storage = createStorage({
       [SETTINGS_PROFILE_LIBRARY_STORAGE_KEY]: JSON.stringify({
         version: SETTINGS_PROFILE_LIBRARY_VERSION,
@@ -459,14 +525,11 @@ describe("settings profile library", () => {
                 "private-account": { hiddenModels: [], modelOrder: [] },
               },
               ambientVideoEnabled: true,
-              ambientVideoSource: { kind: "video", id: "private-video" },
+              ambientVideoSource: { kind: "video", id: "dQw4w9WgXcQ" },
               ambientImageEnabled: true,
-              ambientImageAsset: {
-                id: "private-image",
-                mimeType: "image/png",
-                width: 100,
-                height: 100,
-              },
+              ambientImageAsset: CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET,
+              ambientImageCycleAssets: [CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET],
+              ambientImageCycleEnabled: true,
               providerUsageWidgetEnabled: true,
               providerUsagePollMinutes: 1,
               powerSaveBlockerMode: "always",
@@ -485,15 +548,17 @@ describe("settings profile library", () => {
     expect(profile?.clientSettings).toEqual({
       fallingEffectsEnabled: true,
       timestampFormat: "24-hour",
+      ambientVideoEnabled: true,
+      ambientVideoSource: { kind: "video", id: "dQw4w9WgXcQ" },
+      ambientImageEnabled: true,
+      ambientImageAsset: CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET,
+      ambientImageCycleAssets: [CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET],
+      ambientImageCycleEnabled: true,
     });
     expect(profile?.clientSettings).not.toHaveProperty("autoNudgeMode");
     expect(profile?.clientSettings).not.toHaveProperty("autoNudgeMaxMinutes");
     expect(profile?.clientSettings).not.toHaveProperty("modelPacingReservePercent");
     expect(profile?.clientSettings).not.toHaveProperty("providerModelPreferences");
-    expect(profile?.clientSettings).not.toHaveProperty("ambientVideoEnabled");
-    expect(profile?.clientSettings).not.toHaveProperty("ambientVideoSource");
-    expect(profile?.clientSettings).not.toHaveProperty("ambientImageEnabled");
-    expect(profile?.clientSettings).not.toHaveProperty("ambientImageAsset");
     expect(profile?.clientSettings).not.toHaveProperty("providerUsageWidgetEnabled");
     expect(profile?.clientSettings).not.toHaveProperty("providerUsagePollMinutes");
     expect(profile?.clientSettings).not.toHaveProperty("powerSaveBlockerMode");
@@ -501,6 +566,122 @@ describe("settings profile library", () => {
     expect(profile?.clientSettings).not.toHaveProperty("weatherCities");
     expect(profile?.clientSettings).not.toHaveProperty("cameraEnabled");
     expect(profile?.clientSettings).not.toHaveProperty("futureCompatiblePreference");
+  });
+
+  it("drops malformed media references without discarding independent activation settings", () => {
+    const payload = captureSettingsProfilePayload(
+      {
+        ...DEFAULT_UNIFIED_SETTINGS,
+        ambientVideoEnabled: true,
+        ambientVideoSource: { kind: "video", id: "not-a-youtube-id" },
+        ambientImageEnabled: true,
+        ambientImageAsset: {
+          ...CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET,
+          url: "file:///private/image.gif",
+        },
+        ambientImageCycleAssets: [
+          {
+            ...CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET,
+            id: "not-content-addressed.gif",
+          },
+        ],
+        ambientImageCycleEnabled: true,
+      } as unknown as UnifiedSettings,
+      "dark",
+    );
+
+    expect(payload.clientSettings).toMatchObject({
+      ambientVideoEnabled: true,
+      ambientImageEnabled: true,
+      ambientImageCycleEnabled: true,
+    });
+    expect(payload.clientSettings).not.toHaveProperty("ambientVideoSource");
+    expect(payload.clientSettings).not.toHaveProperty("ambientImageAsset");
+    expect(payload.clientSettings).not.toHaveProperty("ambientImageCycleAssets");
+  });
+
+  it("retains only schema-owned media fields and drops paths, bytes, credentials, and authority", () => {
+    const videoSource = {
+      kind: "video" as const,
+      id: "dQw4w9WgXcQ",
+      sourcePath: "C:\\private\\video.mp4",
+      bytes: [1, 2, 3],
+      providerCredential: "never-store-this-token",
+      threadAuthority: "thread_private",
+    };
+    const imageAsset = {
+      ...CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET,
+      sourcePath: "C:\\private\\image.gif",
+      bytes: [71, 73, 70],
+      providerCredential: "never-store-this-image-token",
+      threadAuthority: "thread_image_private",
+    };
+
+    const payload = captureSettingsProfilePayload(
+      {
+        ...DEFAULT_UNIFIED_SETTINGS,
+        ambientVideoSource: videoSource,
+        ambientImageAsset: imageAsset,
+        ambientImageCycleAssets: [imageAsset],
+      } as unknown as UnifiedSettings,
+      "dark",
+    );
+    const serialized = JSON.stringify(payload);
+
+    expect(payload.clientSettings.ambientVideoSource).toEqual({
+      kind: "video",
+      id: "dQw4w9WgXcQ",
+    });
+    expect(payload.clientSettings.ambientImageAsset).toEqual(
+      CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET,
+    );
+    expect(payload.clientSettings.ambientImageCycleAssets).toEqual([
+      CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET,
+    ]);
+    expect(serialized).not.toContain("sourcePath");
+    expect(serialized).not.toContain("bytes");
+    expect(serialized).not.toContain("providerCredential");
+    expect(serialized).not.toContain("threadAuthority");
+    expect(serialized).not.toContain("never-store-this-token");
+    expect(serialized).not.toContain("thread_private");
+  });
+
+  it("rejects nested media with a hostile prototype or excessive depth", () => {
+    const inheritedIdGetter = vi.fn(() => "dQw4w9WgXcQ");
+    const inheritedSource = Object.create({
+      get id() {
+        return inheritedIdGetter();
+      },
+    }) as Record<string, unknown>;
+    Object.defineProperty(inheritedSource, "kind", {
+      enumerable: true,
+      value: "video",
+    });
+    let metadata: Record<string, unknown> = { value: true };
+    for (let depth = 0; depth < 8; depth += 1) metadata = { child: metadata };
+
+    const inheritedPayload = captureSettingsProfilePayload(
+      {
+        ...DEFAULT_UNIFIED_SETTINGS,
+        ambientVideoSource: inheritedSource,
+      } as unknown as UnifiedSettings,
+      "dark",
+    );
+    const deepPayload = captureSettingsProfilePayload(
+      {
+        ...DEFAULT_UNIFIED_SETTINGS,
+        ambientVideoSource: {
+          kind: "video",
+          id: "dQw4w9WgXcQ",
+          metadata,
+        },
+      } as unknown as UnifiedSettings,
+      "dark",
+    );
+
+    expect(inheritedPayload.clientSettings).not.toHaveProperty("ambientVideoSource");
+    expect(deepPayload.clientSettings).not.toHaveProperty("ambientVideoSource");
+    expect(inheritedIdGetter).not.toHaveBeenCalled();
   });
 
   it("ignores inherited settings and accessors without executing caller-owned code", () => {
@@ -547,7 +728,7 @@ describe("settings profile library", () => {
     expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
   });
 
-  it("keeps retained values scalar and bounded before schema decoding", () => {
+  it("keeps ordinary retained values scalar and bounded before schema decoding", () => {
     const nestedGetter = vi.fn(() => "surprise");
     const nestedValue = {};
     Object.defineProperty(nestedValue, "toString", {
@@ -590,10 +771,22 @@ describe("settings profile library", () => {
   it("does not expose mutable references to its persisted profile document", () => {
     const storage = createStorage();
     const store = createSettingsProfileLibraryStore(storage);
+    const source = { kind: "video" as const, id: "dQw4w9WgXcQ" };
+    const asset = { ...CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET };
     const saved = store.upsert(
       "Mobile",
-      captureSettingsProfilePayload(DEFAULT_UNIFIED_SETTINGS, "dark"),
+      captureSettingsProfilePayload(
+        {
+          ...DEFAULT_UNIFIED_SETTINGS,
+          ambientVideoSource: source,
+          ambientImageAsset: asset,
+          ambientImageCycleAssets: [asset],
+        },
+        "dark",
+      ),
     );
+    Reflect.set(source, "id", "M7lc1UVf-VE");
+    Reflect.set(asset, "url", "/api/ambient-media/image/changed.gif");
     const snapshot = store.getSnapshot();
     const resolved = store.resolve(saved.profile.id);
 
@@ -601,12 +794,27 @@ describe("settings profile library", () => {
     expect(Object.isFrozen(snapshot.profiles)).toBe(true);
     expect(Object.isFrozen(resolved)).toBe(true);
     expect(Object.isFrozen(resolved?.clientSettings)).toBe(true);
+    expect(Object.isFrozen(resolved?.clientSettings.ambientVideoSource)).toBe(true);
+    expect(Object.isFrozen(resolved?.clientSettings.ambientImageAsset)).toBe(true);
+    expect(Object.isFrozen(resolved?.clientSettings.ambientImageCycleAssets)).toBe(true);
+    expect(Object.isFrozen(resolved?.clientSettings.ambientImageCycleAssets?.[0])).toBe(true);
+    expect(resolved?.clientSettings.ambientVideoSource).toEqual({
+      kind: "video",
+      id: "dQw4w9WgXcQ",
+    });
+    expect(resolved?.clientSettings.ambientImageAsset).toEqual(
+      CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET,
+    );
     expect(Reflect.set(resolved?.clientSettings ?? {}, "serverPassword", "never-store-me")).toBe(
       false,
     );
     expect(Reflect.set(resolved ?? {}, "name", "Mutated")).toBe(false);
 
-    store.rename(saved.profile.id, "Phone");
+    const renamed = store.rename(saved.profile.id, "Phone");
+    expect(Object.isFrozen(renamed.profile)).toBe(true);
+    expect(Object.isFrozen(renamed.profile.clientSettings)).toBe(true);
+    expect(Object.isFrozen(renamed.profile.clientSettings.ambientVideoSource)).toBe(true);
+    expect(Reflect.set(renamed.profile, "name", "Mutated again")).toBe(false);
     const document = JSON.parse(storage.read(SETTINGS_PROFILE_LIBRARY_STORAGE_KEY) ?? "{}");
     expect(document.profiles[0].name).toBe("Phone");
     expect(document.profiles[0].clientSettings).not.toHaveProperty("serverPassword");
@@ -633,6 +841,46 @@ describe("settings profile library", () => {
 
     expect(profile?.clientSettings).toEqual({ sidebarThreadPreviewCount: 2 });
     expect(profile?.clientSettings).not.toHaveProperty("fallingEffectsEnabled");
+  });
+
+  it("loads version-one profiles and writes the expanded document version on the next mutation", () => {
+    const storage = createStorage({
+      [SETTINGS_PROFILE_LIBRARY_STORAGE_KEY]: JSON.stringify({
+        version: 1,
+        activeProfileId: "profile:mobile",
+        profiles: [
+          {
+            name: "Mobile",
+            theme: "dark",
+            clientSettings: {
+              timestampFormat: "24-hour",
+              ambientVideoLayoutMode: "custom",
+              ambientVideoEnabled: true,
+              ambientVideoSource: { kind: "video", id: "dQw4w9WgXcQ" },
+              ambientImageEnabled: true,
+              ambientImageAsset: CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET,
+              ambientImageCycleAssets: [CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET],
+              ambientImageCycleEnabled: true,
+            },
+            createdAt: "2026-07-29T08:00:00.000Z",
+            updatedAt: "2026-07-29T08:00:00.000Z",
+          },
+        ],
+      }),
+    });
+    const store = createSettingsProfileLibraryStore(storage);
+
+    expect(store.resolve("profile:mobile")?.clientSettings).toEqual({
+      timestampFormat: "24-hour",
+      ambientVideoLayoutMode: "custom",
+    });
+    expect(store.activate("profile:mobile")).toBe(true);
+    const migrated = JSON.parse(storage.read(SETTINGS_PROFILE_LIBRARY_STORAGE_KEY) ?? "{}");
+    expect(migrated.version).toBe(SETTINGS_PROFILE_LIBRARY_VERSION);
+    expect(migrated.profiles[0].clientSettings).toEqual({
+      timestampFormat: "24-hour",
+      ambientVideoLayoutMode: "custom",
+    });
   });
 
   it("keeps an in-memory profile but reports when durable storage is unavailable", () => {
