@@ -13,6 +13,12 @@ const FORCED_WS_RECONNECT_DEBOUNCE_MS = 5_000;
 export const EXHAUSTED_WS_RECONNECT_RETRY_MS = 15_000;
 type WsAutoReconnectTrigger = "focus" | "online" | "visible";
 
+export function reconnectPrimaryWebSocketTransport(connection: {
+  readonly client: { readonly reconnect: () => Promise<void> };
+}): Promise<void> {
+  return connection.client.reconnect();
+}
+
 export function shouldAutoReconnect(
   status: WsConnectionStatus,
   trigger: WsAutoReconnectTrigger,
@@ -30,8 +36,7 @@ export function shouldAutoReconnect(
 
   return (
     status.online &&
-    status.hasConnected &&
-    (uiState === "reconnecting" || status.reconnectPhase === "exhausted")
+    (uiState === "error" || uiState === "reconnecting" || status.reconnectPhase === "exhausted")
   );
 }
 
@@ -42,22 +47,17 @@ export function shouldRestartStalledReconnect(
   return (
     status.reconnectPhase === "waiting" &&
     status.nextRetryAt === expectedNextRetryAt &&
-    status.online &&
-    status.hasConnected
+    status.online
   );
 }
 
 export function shouldRestartExhaustedReconnect(status: WsConnectionStatus): boolean {
-  return (
-    status.reconnectPhase === "exhausted" &&
-    status.online &&
-    status.hasConnected &&
-    status.phase === "disconnected"
-  );
+  return status.reconnectPhase === "exhausted" && status.online && status.phase === "disconnected";
 }
 
 export function WebSocketConnectionCoordinator() {
   const status = useWsConnectionStatus();
+  const restartExhaustedReconnect = shouldRestartExhaustedReconnect(status);
   const lastForcedReconnectAtRef = useRef(0);
 
   // Reconnect status is surfaced inline by ConnectionStatusIndicator in the chat
@@ -65,11 +65,16 @@ export function WebSocketConnectionCoordinator() {
   // transport can keep retrying without stacking toasts.
   const runReconnect = useEffectEvent(() => {
     lastForcedReconnectAtRef.current = Date.now();
-    void getPrimaryEnvironmentConnection()
-      .reconnect()
-      .catch((error) => {
-        console.warn("Automatic WebSocket reconnect failed", { error });
-      });
+    // Automatic recovery only needs to replace the transport session. Waiting
+    // on EnvironmentConnection.reconnect() would also wait for the next shell
+    // snapshot. A second focus/timer recovery can reset that bootstrap gate and
+    // leave the older automatic-reconnect promise pending forever. The primary
+    // shell subscription already resubscribes and applies a fresh snapshot when
+    // its transport changes, and the primary connection has no remote metadata
+    // refresh step to skip here.
+    void reconnectPrimaryWebSocketTransport(getPrimaryEnvironmentConnection()).catch((error) => {
+      console.warn("Automatic WebSocket reconnect failed", { error });
+    });
   });
   const syncBrowserOnlineStatus = useEffectEvent(() => {
     setBrowserOnlineStatus(navigator.onLine !== false);
@@ -121,12 +126,7 @@ export function WebSocketConnectionCoordinator() {
   }, []);
 
   useEffect(() => {
-    if (
-      status.reconnectPhase !== "waiting" ||
-      status.nextRetryAt === null ||
-      !status.online ||
-      !status.hasConnected
-    ) {
+    if (status.reconnectPhase !== "waiting" || status.nextRetryAt === null || !status.online) {
       return;
     }
 
@@ -144,16 +144,10 @@ export function WebSocketConnectionCoordinator() {
     return () => {
       window.clearTimeout(timeoutId);
     };
-  }, [
-    status.hasConnected,
-    status.nextRetryAt,
-    status.online,
-    status.reconnectAttemptCount,
-    status.reconnectPhase,
-  ]);
+  }, [status.nextRetryAt, status.online, status.reconnectAttemptCount, status.reconnectPhase]);
 
   useEffect(() => {
-    if (!shouldRestartExhaustedReconnect(status)) {
+    if (!restartExhaustedReconnect) {
       return;
     }
 
@@ -166,7 +160,7 @@ export function WebSocketConnectionCoordinator() {
     return () => {
       window.clearTimeout(timeoutId);
     };
-  }, [status.hasConnected, status.online, status.phase, status.reconnectPhase]);
+  }, [restartExhaustedReconnect]);
 
   return null;
 }
