@@ -953,6 +953,9 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           return;
         }
 
+        case "thread.auto-nudge-summary-changed":
+          return;
+
         case "thread.auto-nudge-stopped": {
           const existingRow = yield* projectionThreadRepository.getById({
             threadId: event.payload.threadId,
@@ -967,6 +970,31 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
               maxRounds: existingRow.value.autoNudge.maxRounds,
             },
             updatedAt: maxIso(existingRow.value.updatedAt, event.payload.stoppedAt),
+          });
+          return;
+        }
+
+        case "thread.auto-nudge-dispatched": {
+          const existingRow = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (
+            Option.isNone(existingRow) ||
+            existingRow.value.autoNudge.mode === "off" ||
+            existingRow.value.autoNudge.authorityRevision !== event.payload.authorityRevision
+          ) {
+            return;
+          }
+          yield* projectionThreadRepository.upsert({
+            ...existingRow.value,
+            autoNudge: {
+              ...existingRow.value.autoNudge,
+              lastDispatchedSettledTurnId: event.payload.completedTurnId,
+              lastDispatchedMessageId: event.payload.messageId,
+              roundsDispatched: event.payload.roundsDispatched,
+              lastDispatchedAt: event.payload.dispatchedAt,
+            },
+            updatedAt: maxIso(existingRow.value.updatedAt, event.payload.dispatchedAt),
           });
           return;
         }
@@ -1019,6 +1047,70 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
               (item) => item.id !== event.payload.followUpId,
             ),
             updatedAt: maxIso(existingRow.value.updatedAt, event.payload.cancelledAt),
+          });
+          return;
+        }
+
+        case "thread.manual-follow-up-activated": {
+          const existingRow = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isNone(existingRow)) return;
+          yield* projectionThreadRepository.upsert({
+            ...existingRow.value,
+            manualFollowUps: existingRow.value.manualFollowUps.map((item) =>
+              item.id === event.payload.followUpId && item.status !== "reserving"
+                ? {
+                    ...item,
+                    status: "handoff" as const,
+                    activatedAt: event.payload.activatedAt,
+                    activationCommandId: event.payload.activationCommandId,
+                  }
+                : item,
+            ),
+            updatedAt: maxIso(existingRow.value.updatedAt, event.payload.activatedAt),
+          });
+          return;
+        }
+
+        case "thread.manual-follow-up-accepted": {
+          const existingRow = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isNone(existingRow)) return;
+          yield* projectionThreadRepository.upsert({
+            ...existingRow.value,
+            manualFollowUps: existingRow.value.manualFollowUps.filter(
+              (item) =>
+                item.id !== event.payload.followUpId ||
+                item.status === "reserving" ||
+                item.activationCommandId !== event.payload.activationCommandId,
+            ),
+            updatedAt: maxIso(existingRow.value.updatedAt, event.payload.acceptedAt),
+          });
+          return;
+        }
+
+        case "thread.manual-follow-up-released": {
+          const existingRow = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isNone(existingRow)) return;
+          yield* projectionThreadRepository.upsert({
+            ...existingRow.value,
+            manualFollowUps: existingRow.value.manualFollowUps.map((item) =>
+              item.id === event.payload.followUpId &&
+              item.status !== "reserving" &&
+              item.activationCommandId === event.payload.activationCommandId
+                ? {
+                    ...item,
+                    status: "queued" as const,
+                    activatedAt: null,
+                    activationCommandId: null,
+                  }
+                : item,
+            ),
+            updatedAt: maxIso(existingRow.value.updatedAt, event.payload.releasedAt),
           });
           return;
         }

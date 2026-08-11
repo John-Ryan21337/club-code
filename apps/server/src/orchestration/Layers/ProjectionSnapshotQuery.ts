@@ -179,6 +179,25 @@ function toThreadAutoNudgeSummary(config: ThreadAutoNudgeConfig): ThreadAutoNudg
   };
 }
 
+export function failClosedAutoNudgeAuthorityAfterBootstrap(
+  config: ThreadAutoNudgeConfig,
+  latestTurn: OrchestrationLatestTurn | null,
+): ThreadAutoNudgeConfig {
+  if (
+    config.mode === "off" ||
+    latestTurn?.state !== "completed" ||
+    config.baselineSettledTurnId === latestTurn.turnId ||
+    config.lastDispatchedSettledTurnId === latestTurn.turnId
+  ) {
+    return config;
+  }
+
+  // The lightweight command model cannot reconstruct the original output and
+  // activity boundary after restart. Treat the persisted completion as the new
+  // baseline. A later provider completion can authorize work normally.
+  return { ...config, baselineSettledTurnId: latestTurn.turnId };
+}
+
 function computeSnapshotSequence(
   stateRows: ReadonlyArray<Schema.Schema.Type<typeof ProjectionStateDbRowSchema>>,
 ): number {
@@ -1855,6 +1874,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 if (!row) {
                   continue;
                 }
+                const latestTurn = latestTurnByThread.get(row.threadId) ?? null;
                 threads.push({
                   id: row.threadId,
                   projectId: row.projectId,
@@ -1864,9 +1884,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   interactionMode: row.interactionMode,
                   branch: row.branch,
                   worktreePath: row.worktreePath,
-                  autoNudge: row.autoNudge,
+                  autoNudge: failClosedAutoNudgeAuthorityAfterBootstrap(row.autoNudge, latestTurn),
                   manualFollowUps: row.manualFollowUps,
-                  latestTurn: latestTurnByThread.get(row.threadId) ?? null,
+                  latestTurn,
                   createdAt: row.createdAt,
                   updatedAt: row.updatedAt,
                   archivedAt: row.archivedAt,

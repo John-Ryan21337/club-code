@@ -20,6 +20,7 @@ import { RepositoryIdentityResolver } from "../../project/Services/RepositoryIde
 import { RepositoryIdentityResolverLive } from "../../project/Layers/RepositoryIdentityResolver.ts";
 import { ORCHESTRATION_PROJECTOR_NAMES } from "./ProjectionPipeline.ts";
 import {
+  failClosedAutoNudgeAuthorityAfterBootstrap,
   OrchestrationProjectionSnapshotQueryLive,
   THREAD_DETAIL_ACTIVITY_LIMIT,
   THREAD_DETAIL_MESSAGE_LIMIT,
@@ -31,6 +32,28 @@ const asTurnId = (value: string): TurnId => TurnId.make(value);
 const asMessageId = (value: string): MessageId => MessageId.make(value);
 const asEventId = (value: string): EventId => EventId.make(value);
 const asCheckpointRef = (value: string): CheckpointRef => CheckpointRef.make(value);
+
+it("fails closed over a persisted completion after process bootstrap", () => {
+  const completedTurnId = TurnId.make("persisted-completed-turn");
+  const config = {
+    ...DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+    authorityRevision: 3,
+    mode: "steady-progress" as const,
+    prompt: "Continue.",
+    armedAt: "2026-08-11T00:00:00.000Z",
+  };
+  const failedClosed = failClosedAutoNudgeAuthorityAfterBootstrap(config, {
+    turnId: completedTurnId,
+    state: "completed",
+    requestedAt: "2026-08-11T00:00:30.000Z",
+    startedAt: "2026-08-11T00:00:31.000Z",
+    completedAt: "2026-08-11T00:01:00.000Z",
+    assistantMessageId: null,
+  });
+  assert.strictEqual(failedClosed.baselineSettledTurnId, completedTurnId);
+  assert.strictEqual(failedClosed.lastDispatchedSettledTurnId, null);
+  assert.strictEqual(failedClosed.roundsDispatched, 0);
+});
 
 const projectionSnapshotLayer = it.layer(
   OrchestrationProjectionSnapshotQueryLive.pipe(

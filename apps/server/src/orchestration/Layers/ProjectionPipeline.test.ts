@@ -315,6 +315,8 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
             status: "queued",
             reservationCommandId,
             enqueuedAt: now,
+            activatedAt: null,
+            activationCommandId: null,
           },
         },
       });
