@@ -209,6 +209,33 @@ describe("settings profile library", () => {
     });
   });
 
+  it("sanitizes hostile in-memory values again before building an apply patch", () => {
+    const activationGetter = vi.fn(() => true);
+    const hostileSettings = {
+      timestampFormat: "24-hour",
+      notificationsEnabled: true,
+      providerUsageWidgetEnabled: true,
+    } as Record<string, unknown>;
+    Object.defineProperty(hostileSettings, "ambientVideoEnabled", {
+      enumerable: true,
+      get: activationGetter,
+    });
+
+    const patch = buildSettingsProfileApplyPatch(
+      hostileSettings as unknown as SettingsProfileClientSettings,
+    );
+
+    expect(patch).toEqual({
+      timestampFormat: "24-hour",
+      ambientVideoEnabled: false,
+      ambientImageEnabled: false,
+      ambientImageCycleEnabled: false,
+    });
+    expect(activationGetter).not.toHaveBeenCalled();
+    expect(patch).not.toHaveProperty("notificationsEnabled");
+    expect(patch).not.toHaveProperty("providerUsageWidgetEnabled");
+  });
+
   it("previews only the safe sparse patch that loading a profile would apply", () => {
     const store = createSettingsProfileLibraryStore(createStorage());
     const saved = store.upsert("Sparse", {

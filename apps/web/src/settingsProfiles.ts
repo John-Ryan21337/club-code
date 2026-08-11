@@ -540,8 +540,13 @@ export function captureSettingsProfilePayload(
 export function buildSettingsProfileApplyPatch(
   clientSettings: SettingsProfileClientSettings,
 ): ClientSettingsPatch {
+  // Treat this exported boundary as untrusted even though the library store
+  // normally returns a frozen, sanitized profile. A forged in-memory profile
+  // must not smuggle excluded settings into the server patch or execute an
+  // activation getter while the patch is built.
+  const safeClientSettings = sanitizeSettingsProfileClientSettings(clientSettings);
   return {
-    ...clientSettings,
+    ...safeClientSettings,
     ambientVideoEnabled: false,
     ambientImageEnabled: false,
     ambientImageCycleEnabled: false,

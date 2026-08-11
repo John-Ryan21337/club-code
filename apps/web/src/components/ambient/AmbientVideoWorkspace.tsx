@@ -31,6 +31,7 @@ import {
 } from "../../ambientMediaGeometryStorage";
 import {
   AMBIENT_VIDEO_PRESET_WIDTHS,
+  ambientVideoAdaptiveArtworkShouldLoad,
   ambientVideoCinemaLayoutFits,
   ambientVideoPlayerShouldMount,
   ambientVideoSourceSupportsPlaylistNavigation,
@@ -279,11 +280,12 @@ export function AmbientVideoWorkspace({ children }: { readonly children: ReactNo
           : queueActive
             ? `queue:${youtubeUrlQueue.index}:${youtubeUrlQueue.revision}:${source.id}`
             : `${source.kind}:${source.id}`;
-  const adaptiveYouTubeGlowEnabled =
-    settings.ambientVideoGlowEnabled &&
-    settings.ambientVideoGlowMode === "adaptive" &&
-    source !== null &&
-    source.kind !== "spotify";
+  const adaptiveYouTubeGlowEnabled = ambientVideoAdaptiveArtworkShouldLoad(
+    settings.ambientVideoEnabled,
+    settings.ambientVideoGlowEnabled,
+    settings.ambientVideoGlowMode,
+    source,
+  );
   const sourceInitialYouTubeVideoId =
     source?.kind === "video"
       ? source.id

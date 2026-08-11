@@ -1,4 +1,5 @@
 import type {
+  AmbientVideoGlowMode,
   AmbientVideoSource,
   AmbientMediaPresetPlacement,
   AmbientMediaPresetSize,
@@ -171,6 +172,26 @@ export function ambientVideoPlayerShouldMount(
   cinemaEffective: boolean,
 ): boolean {
   return locallyRenderable && (floatingVisible || cinemaEffective);
+}
+
+/**
+ * Artwork sampling is an external media request. Keep it behind the same
+ * explicit playback toggle as the player so changing a saved source or glow
+ * style cannot contact YouTube while ambient video is off.
+ */
+export function ambientVideoAdaptiveArtworkShouldLoad(
+  videoEnabled: boolean,
+  glowEnabled: boolean,
+  glowMode: AmbientVideoGlowMode,
+  source: AmbientVideoSource,
+): boolean {
+  return (
+    videoEnabled &&
+    glowEnabled &&
+    glowMode === "adaptive" &&
+    source !== null &&
+    source.kind !== "spotify"
+  );
 }
 
 export function ambientVideoPresetPosition(
