@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  ambientVideoAdaptiveArtworkShouldLoad,
   ambientVideoCinemaLayoutFits,
   ambientVideoPlayerShouldMount,
   ambientVideoPresetPosition,
@@ -67,6 +68,28 @@ describe("ambientVideoPlayerShouldMount", () => {
     expect(ambientVideoPlayerShouldMount(true, true, false)).toBe(true);
     expect(ambientVideoPlayerShouldMount(true, false, true)).toBe(true);
     expect(ambientVideoPlayerShouldMount(false, true, true)).toBe(false);
+  });
+});
+
+describe("ambientVideoAdaptiveArtworkShouldLoad", () => {
+  const videoSource = { kind: "video", id: "dQw4w9WgXcQ" } as const;
+
+  it("keeps external artwork disabled until ambient video is explicitly enabled", () => {
+    expect(ambientVideoAdaptiveArtworkShouldLoad(false, true, "adaptive", videoSource)).toBe(false);
+    expect(ambientVideoAdaptiveArtworkShouldLoad(true, true, "adaptive", videoSource)).toBe(true);
+  });
+
+  it("does not sample artwork for fixed glows, missing sources, or Spotify embeds", () => {
+    expect(ambientVideoAdaptiveArtworkShouldLoad(true, true, "fixed", videoSource)).toBe(false);
+    expect(ambientVideoAdaptiveArtworkShouldLoad(true, false, "adaptive", videoSource)).toBe(false);
+    expect(ambientVideoAdaptiveArtworkShouldLoad(true, true, "adaptive", null)).toBe(false);
+    expect(
+      ambientVideoAdaptiveArtworkShouldLoad(true, true, "adaptive", {
+        kind: "spotify",
+        entityType: "playlist",
+        id: "37i9dQZF1DXcBWIGoYBM5M",
+      }),
+    ).toBe(false);
   });
 });
 

@@ -12,6 +12,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useClientSettingsHydrated, useSettings, useUpdateSettings } from "../../hooks/useSettings";
 import { useTheme } from "../../hooks/useTheme";
 import {
+  buildSettingsProfileApplyPatch,
   captureSettingsProfilePayload,
   compareSettingsProfile,
   mutateSettingsProfileLibrary,
@@ -84,10 +85,14 @@ function profileDifferenceLabel(key: string): string {
     .replace(/^./, (character) => character.toUpperCase());
 }
 
-function profileDifferenceValue(value: boolean | number | string | undefined): string {
+function profileDifferenceValue(value: unknown): string {
   if (value === undefined) return "Not set";
   if (typeof value === "boolean") return value ? "On" : "Off";
-  const normalized = String(value).replace(/\s+/gu, " ").trim();
+  const serialized =
+    typeof value === "object" && value !== null
+      ? (JSON.stringify(value) ?? "Not set")
+      : String(value);
+  const normalized = serialized.replace(/\s+/gu, " ").trim();
   return normalized.length > 80 ? `${normalized.slice(0, 77)}…` : normalized;
 }
 
@@ -305,7 +310,7 @@ export function SettingsProfiles() {
           themeWriteAttempted = true;
           setTheme(profile.theme);
         }
-        await updateSettingsAsync(profile.clientSettings);
+        await updateSettingsAsync(buildSettingsProfileApplyPatch(profile.clientSettings));
 
         let activation:
           | { readonly kind: "activated"; readonly persisted: boolean }
@@ -558,7 +563,11 @@ export function SettingsProfiles() {
               {notice.message}
             </span>
           ) : (
-            "Profiles capture the theme plus safe UI appearance, layout, completion-alert, ambiance, and usability preferences. They do not include keybindings, OS/Web notification activation, external media playback or playlist libraries, local or uploaded assets, provider-usage polling, native editor or power controls, window transparency or panel geometry, provider/auth or server/network settings, model favorites or pacing, project-specific state, or exact-thread Auto Nudge."
+            <>
+              Profiles save presentation settings and bounded media configuration. Loading a profile
+              stops media playback and image cycles. Profiles do not save local paths, credentials,
+              permissions, providers, network settings, project state, or thread automation.
+            </>
           )
         }
       >
