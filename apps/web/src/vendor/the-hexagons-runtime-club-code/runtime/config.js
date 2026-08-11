@@ -1,4 +1,4 @@
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 10;
 
 export const GOLDEN_RATIO = (1 + Math.sqrt(5)) / 2;
 export const SILVER_RATIO = 1 + Math.sqrt(2);
@@ -33,12 +33,18 @@ export const DEFAULT_SETTINGS = Object.freeze({
   displayDiagonalInches: 48,
   tripletLongSpanInches: 0.5,
   manualCssPixelsPerInch: 0,
+  tessellationMode: "rhombille",
   material: "glass",
   tileBase: "white",
   customDiamondColorsEnabled: false,
   diamondColorA: "#f2efe3",
   diamondColorB: "#f2efe3",
   diamondColorC: "#f2efe3",
+  colorPattern: "facet",
+  patternScale: 1,
+  patternPhase: 0,
+  patternRotation: 0,
+  patternMirror: false,
   foregroundIllumination: 0.82,
   gapWidth: 0.035,
   separationAmount: 0.16,
@@ -137,8 +143,10 @@ const ENUMS = {
   quality: ["performance", "balanced", "cinematic"],
   alignmentMode: ["seamless", "whole-tiles"],
   ratioPreset: Object.keys(RATIO_PRESETS),
+  tessellationMode: ["rhombille", "cairo-pentagon", "hexagram"],
   material: Object.keys(MATERIALS),
   tileBase: ["white", "dark"],
+  colorPattern: ["facet", "backyard-star", "rotating-triplets", "checker", "rings", "seeded-mosaic"],
   emberPattern: ["organic", "rings", "hexagon", "star"],
   pistonMode: ["off", "radial", "wave", "pit"],
   behindLightType: ["point", "point-bar", "bar", "laser", "ripple", "total"],
@@ -159,6 +167,9 @@ const NUMBER_BOUNDS = {
   displayDiagonalInches: [10, 120],
   tripletLongSpanInches: [0.12, 4],
   manualCssPixelsPerInch: [0, 400],
+  patternScale: [1, 12],
+  patternPhase: [0, 5],
+  patternRotation: [0, 5],
   foregroundIllumination: [0, 1],
   gapWidth: [0, 0.18],
   separationAmount: [0, 0.42],
@@ -190,7 +201,7 @@ const NUMBER_BOUNDS = {
   frontLightFixedY: [-0.5, 1.5],
   frontRainbowSpeed: [0.02, 64],
   frontPrismStrength: [0, 12],
-  particleCount: [0, 2000],
+  particleCount: [0, 20000],
   meshEnergyRainbowSpeed: [0.02, 64],
   particleSpeed: [0, 4],
   particleSpeedVariation: [0, 1],
@@ -211,7 +222,7 @@ const BOOLEAN_KEYS = new Set([
   "enabled", "continueBackgroundAnimations", "ratioLockOnResize", "separationCycle", "customDiamondColorsEnabled",
   "emberPulse", "pointerAttractionEnabled", "pointerLightDepthEnabled", "behindLightEnabled", "behindRainbowCycle",
   "frontLightEnabled", "frontRainbowCycle", "fallingEffectsEnabled", "fallingAutoColor",
-  "fallingReflectionEnabled", "meshEnergyRainbowCycle",
+  "fallingReflectionEnabled", "meshEnergyRainbowCycle", "patternMirror",
 ]);
 
 const COLOR_KEYS = ["diamondColorA", "diamondColorB", "diamondColorC", "emberColorA", "emberColorB", "behindLightColor", "frontLightColor", "meshEnergyColor", "fallingColor"];
@@ -219,6 +230,8 @@ const clamp = (value, minimum, maximum) => Math.min(maximum, Math.max(minimum, v
 
 function migrateLegacySettings(input) {
   const migrated = { ...input };
+  const sourceSchemaVersion = Number.isInteger(input.schemaVersion) ? input.schemaVersion : 1;
+  if (sourceSchemaVersion <= 8 && input.colorPattern === "backyard-star") migrated.colorPattern = "rotating-triplets";
   const copy = (legacy, targets) => {
     if (input[legacy] === undefined) return;
     for (const target of targets) if (input[target] === undefined) migrated[target] = input[legacy];
@@ -264,6 +277,9 @@ export function normalizeSettings(input = {}) {
   output.particleCount = Math.round(output.particleCount);
   output.fallingTrail = Math.round(output.fallingTrail);
   output.fallingMatrixBaseFontSize = Math.round(output.fallingMatrixBaseFontSize);
+  output.patternScale = Math.round(output.patternScale);
+  output.patternPhase = Math.round(output.patternPhase);
+  output.patternRotation = Math.round(output.patternRotation);
   output.seed = Math.round(output.seed) >>> 0;
   for (const key of BOOLEAN_KEYS) {
     if (typeof source[key] === "boolean") output[key] = source[key];
@@ -280,7 +296,7 @@ export function presentationProfile(settings) {
 }
 
 export function settingsAffectGeometry(previous, next) {
-  return ["alignmentMode", "ratioPreset", "ratioLockOnResize", "displayDiagonalInches",
+  return ["alignmentMode", "ratioPreset", "ratioLockOnResize", "displayDiagonalInches", "tessellationMode",
     "tripletLongSpanInches", "manualCssPixelsPerInch", "quality", "seed"]
     .some((key) => previous[key] !== next[key]);
 }
@@ -292,7 +308,7 @@ export function settingsAffectFallingScene(previous, next) {
 }
 
 export function qualityLimits(quality) {
-  if (quality === "performance") return { dpr: 1, backingPixels: 3_000_000, tiles: 3200, reflections: 4096 };
-  if (quality === "balanced") return { dpr: 1.5, backingPixels: 5_000_000, tiles: 5600, reflections: 8192 };
-  return { dpr: 2, backingPixels: 8_388_608, tiles: 8192, reflections: 16384 };
+  if (quality === "performance") return { dpr: 1, backingPixels: 3_000_000, tiles: 3200, meshParticles: 4000, reflections: 4096 };
+  if (quality === "balanced") return { dpr: 1.5, backingPixels: 5_000_000, tiles: 5600, meshParticles: 10000, reflections: 8192 };
+  return { dpr: 2, backingPixels: 8_388_608, tiles: 8192, meshParticles: 20000, reflections: 16384 };
 }

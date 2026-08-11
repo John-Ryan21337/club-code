@@ -1,5 +1,5 @@
 import { MATERIALS, qualityLimits } from "./config.js";
-import { hexVertices } from "./geometry.js";
+import { tessellationBoundary } from "./geometry.js";
 
 const TAU = Math.PI * 2;
 const ROMAN_GLYPHS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz@#$%&*+-=<>[]{}";
@@ -430,13 +430,16 @@ export function createFallingLayer(canvas, gpuCanvas, reflectionCanvas, reflecti
   }
 
   function rebuildMask(tileFrame, settings) {
-    const nextSignature = `${tileFrame.grid.radius}:${tileFrame.grid.tiles.length}:${settings.gapWidth}:${width}:${height}:${dpr}`;
+    const nextSignature = `${tileFrame.grid.mode}:${tileFrame.grid.radius}:${tileFrame.grid.tiles.length}:${settings.gapWidth}:${width}:${height}:${dpr}`;
     if (nextSignature === maskSignature) return;
     maskSignature = nextSignature; clearSurface(maskContext, maskCanvas); maskContext.setTransform(dpr,0,0,dpr,0,0);
     maskContext.fillStyle = "#fff"; maskContext.beginPath();
     const scale = Math.max(0, 1 - settings.gapWidth);
     for (const tile of tileFrame.grid.tiles) {
-      const points = hexVertices(tile.x, tile.y, tileFrame.grid.radius, scale);
+      const points = tessellationBoundary(tileFrame.grid.mode, tile.x, tile.y, tileFrame.grid.radius).map(([x, y]) => [
+        tile.x + (x - tile.x) * scale,
+        tile.y + (y - tile.y) * scale,
+      ]);
       maskContext.moveTo(points[0][0], points[0][1]);
       for (let index = 1; index < points.length; index += 1) maskContext.lineTo(points[index][0], points[index][1]);
       maskContext.closePath();

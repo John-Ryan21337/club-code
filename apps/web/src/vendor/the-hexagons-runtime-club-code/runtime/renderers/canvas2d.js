@@ -1,6 +1,7 @@
 import { MATERIALS, qualityLimits } from "../config.js";
 import { diamondTileColors, hexToRgb, meshEnergyColor, spectralBeamColor, spectralBeamOpacity } from "../color.js";
-import { threeRhombi } from "../geometry.js";
+import { tessellationFacets } from "../geometry.js";
+import { facetPaletteIndex } from "../pattern.js";
 
 const rgb = (value, alpha = 1) => `rgba(${Math.round(value[0] * 255)},${Math.round(value[1] * 255)},${Math.round(value[2] * 255)},${alpha})`;
 const mix = (a, b, amount) => a.map((value, index) => value + (b[index] - value) * amount);
@@ -135,16 +136,22 @@ function prismSample(frame, light, x, y) {
 
 function emberPatternMask(settings,frame,x,y){if(settings.emberPattern==="organic")return 1;const px=(x-frame.viewport.width*.5)/Math.max(1,frame.viewport.height),py=(y-frame.viewport.height*.5)/Math.max(1,frame.viewport.height),radial=Math.hypot(px,py);if(settings.emberPattern==="rings")return(.5+.5*Math.cos(radial*44-frame.time*1.8))**12;if(settings.emberPattern==="hexagon"){const qx=Math.abs(px),qy=Math.abs(py),hex=Math.max(qx*.8660254+qy*.5,qy);return 1-smoothstep(.012,.035,Math.abs(hex-.34));}const target=.27+.11*Math.cos(Math.atan2(py,px)*6);return 1-smoothstep(.012,.04,Math.abs(radial-target));}
 
+function polygonCentroid(points){const total=points.reduce((sum,point)=>[sum[0]+point[0],sum[1]+point[1]],[0,0]);return[total[0]/points.length,total[1]/points.length];}
+function scalePolygon(points,center,scale){return points.map(([x,y])=>[center[0]+(x-center[0])*scale,center[1]+(y-center[1])*scale]);}
+function facetDirection(mode,facet){if(mode==="cairo-pentagon"){const angle=Math.PI/2-facet*Math.PI/2;return[Math.cos(angle),-Math.sin(angle)];}if(mode==="hexagram"){const angle=facet*Math.PI/6;return[Math.cos(angle),Math.sin(angle)];}return facet===0?[.25,.433]:facet===1?[-.5,0]:[.25,-.433];}
+
 function drawTiles(context,frame,settings,light){
-  const material=MATERIALS[settings.material],darkBase=[.004,.006,.008],baseWhite=settings.tileBase==="white"?[.93,.925,.89]:[.055,.06,.064],base=mix(darkBase,baseWhite,settings.foregroundIllumination),customColors=diamondTileColors(settings),facetBases=settings.customDiamondColorsEnabled?customColors.map((color)=>mix(darkBase,color,settings.foregroundIllumination)):[base,base,base],emberColors=[hexToRgb(settings.emberColorA),hexToRgb(settings.emberColorB)],gapScale=1-settings.gapWidth;
-  for(let index=0;index<frame.grid.tiles.length;index+=1){const offset=index*8,centerX=frame.tileInstances[offset],centerY=frame.tileInstances[offset+1],radius=frame.tileInstances[offset+2],height=frame.tileInstances[offset+3],phase=frame.tileInstances[offset+4],pulse=frame.tileInstances[offset+5],separation=frame.tileInstances[offset+6];
-    const baseRhombi=threeRhombi(centerX,centerY,radius,Math.max(.04,gapScale-separation*.14));const directions=[[.25,.433],[-.5,0],[.25,-.433]];const tops=[];
-    for(let facet=0;facet<3;facet+=1){const facetHeight=height+Math.sin(frame.time*settings.facetReliefSpeed*Math.PI*2+phase+facet*2.094)*settings.facetRelief;const shift=tileShift(centerX,centerY,facetHeight,radius,frame,settings);const direction=directions[facet],length=Math.hypot(...direction),sx=direction[0]/length*radius*separation*.48,sy=direction[1]/length*radius*separation*.48;
-      const bottom=baseRhombi[facet].map(([x,y])=>[x+sx,y+sy]);const top=bottom.map(([x,y])=>[x+shift[0],y+shift[1]]);tops.push(top);
-      for(let edge=0;edge<4;edge+=1){const next=(edge+1)%4;pathPolygon(context,[bottom[edge],bottom[next],top[next],top[edge]]);context.fillStyle=rgb(mix([.002,.004,.006],facetBases[facet],.14+edge*.03));context.fill();}
+  const material=MATERIALS[settings.material],darkBase=[.004,.006,.008],baseWhite=settings.tileBase==="white"?[.93,.925,.89]:[.055,.06,.064],base=mix(darkBase,baseWhite,settings.foregroundIllumination),customColors=diamondTileColors(settings),emberColors=[hexToRgb(settings.emberColorA),hexToRgb(settings.emberColorB)],gapScale=1-settings.gapWidth,mode=settings.tessellationMode;
+  for(let index=0;index<frame.grid.tiles.length;index+=1){const offset=index*8,centerX=frame.tileInstances[offset],centerY=frame.tileInstances[offset+1],radius=frame.tileInstances[offset+2],height=frame.tileInstances[offset+3],phase=frame.tileInstances[offset+4],pulse=frame.tileInstances[offset+5],separation=frame.tileInstances[offset+6],pattern=frame.tileInstances[offset+7];
+    let baseFacets=tessellationFacets(mode,centerX,centerY,radius,mode==="cairo-pentagon"?1:Math.max(.04,gapScale-separation*.14));
+    if(mode==="cairo-pentagon")baseFacets=baseFacets.map((points)=>scalePolygon(points,polygonCentroid(points),Math.max(.04,1-settings.gapWidth*1.5-separation*.08)));
+    const tops=[],facetBases=[];
+    for(let facet=0;facet<baseFacets.length;facet+=1){const paletteIndex=facetPaletteIndex(facet,pattern,settings),facetBase=settings.customDiamondColorsEnabled?mix(darkBase,customColors[paletteIndex],settings.foregroundIllumination):base;facetBases.push(facetBase);const facetHeight=height+Math.sin(frame.time*settings.facetReliefSpeed*Math.PI*2+phase+facet*2.094)*settings.facetRelief;const shift=tileShift(centerX,centerY,facetHeight,radius,frame,settings);const direction=facetDirection(mode,facet),length=Math.max(.001,Math.hypot(...direction)),sx=direction[0]/length*radius*separation*.48,sy=direction[1]/length*radius*separation*.48;
+      const bottom=baseFacets[facet].map(([x,y])=>[x+sx,y+sy]);const top=bottom.map(([x,y])=>[x+shift[0],y+shift[1]]);tops.push(top);
+      for(let edge=0;edge<bottom.length;edge+=1){const next=(edge+1)%bottom.length;pathPolygon(context,[bottom[edge],bottom[next],top[next],top[edge]]);context.fillStyle=rgb(mix([.002,.004,.006],facetBase,.14+edge*.03));context.fill();}
     }
     const source=sourceInfluence(frame,light,centerX,centerY);const prism=prismSample(frame,light,centerX,centerY);const neutralSource=source*(1-.92*prism.spectrumAmount);
-    for(let facet=0;facet<3;facet+=1){const surface=facetBases[facet].map(value=>value*(.72+material.specular*.2+neutralSource*.3));const emberWave=.55+.45*Math.sin(frame.time*2.6+phase+facet*2.094),ember=pulse*emberWave*emberPatternMask(settings,frame,centerX,centerY);let color=mix(surface,mix(emberColors[0],emberColors[1],emberWave),clamp(ember,0,.9));
+    for(let facet=0;facet<tops.length;facet+=1){const surface=facetBases[facet].map(value=>value*(.72+material.specular*.2+neutralSource*.3));const emberWave=.55+.45*Math.sin(frame.time*2.6+phase+facet*2.094),ember=pulse*emberWave*emberPatternMask(settings,frame,centerX,centerY);let color=mix(surface,mix(emberColors[0],emberColors[1],emberWave),clamp(ember,0,.9));
       if(prism.influence>0&&prism.spectrumAmount>0)color=mix(color,prism.color,clamp(prism.influence*(.06+.16*material.specular)*prism.spectrumAmount,0,.94));
       pathPolygon(context,tops[facet]);context.fillStyle=rgb(color);context.fill();
     }
@@ -157,6 +164,6 @@ export function createCanvasRenderer(canvas){
   const spectralCanvas=document.createElement("canvas"),spectralContext=spectralCanvas.getContext("2d",{alpha:true});if(!spectralContext)return{available:false,fallbackReason:"canvas2d-unavailable",dispose(){}};
   let dpr=1,disposed=false;
   function resize(width,height,requestedDpr,settings){dpr=fitCanvasDpr(width,height,requestedDpr,settings);for(const target of[canvas,frameCanvas,spectralCanvas]){target.width=Math.max(1,Math.round(width*dpr));target.height=Math.max(1,Math.round(height*dpr));if(target.style){target.style.width=`${width}px`;target.style.height=`${height}px`;}}}
-  function render(frame,settings,lights){if(disposed)return{status:"disposed",drawCalls:0};frameContext.setTransform(dpr,0,0,dpr,0,0);sourceGradient(frameContext,frame,lights.behind,spectralContext,spectralCanvas,dpr);drawGapParticles(frameContext,frame,meshEnergyColor(frame.time,settings));drawTiles(frameContext,frame,settings,lights.front);context.save();context.setTransform(1,0,0,1,0,0);context.globalCompositeOperation="copy";context.drawImage(frameCanvas,0,0);context.restore();return{status:"rendered",drawCalls:1,tileInstances:frame.grid.tiles.length,gapInstances:frame.gapInstanceCount,dpr,mesh:"bounded-three-prism"};}
+  function render(frame,settings,lights){if(disposed)return{status:"disposed",drawCalls:0};frameContext.setTransform(dpr,0,0,dpr,0,0);sourceGradient(frameContext,frame,lights.behind,spectralContext,spectralCanvas,dpr);drawGapParticles(frameContext,frame,meshEnergyColor(frame.time,settings));drawTiles(frameContext,frame,settings,lights.front);context.save();context.setTransform(1,0,0,1,0,0);context.globalCompositeOperation="copy";context.drawImage(frameCanvas,0,0);context.restore();const mesh=settings.tessellationMode==="cairo-pentagon"?"cairo-four-pentagon":settings.tessellationMode==="hexagram"?"hexagram-twelve-facet":"bounded-three-prism";return{status:"rendered",drawCalls:1,tileInstances:frame.grid.tiles.length,gapInstances:frame.gapInstanceCount,dpr,mesh};}
   return{available:true,fallbackReason:null,resize,render,dispose(){disposed=true;}};
 }
