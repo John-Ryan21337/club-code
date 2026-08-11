@@ -7,6 +7,8 @@ import { setImmediate as waitForEventLoopTurn } from "node:timers/promises";
 
 import {
   type ChatAttachment,
+  type OrchestrationEvent,
+  type OrchestrationThread,
   ModelSelection,
   type ProviderThreadGoal,
   ProviderRuntimeEvent,
@@ -50,6 +52,7 @@ import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
 import {
+  autoNudgeTurnStartCancellationReason,
   isProviderInstanceMissingError,
   providerErrorLabel,
   providerErrorLabelFromInstanceHint,
@@ -159,6 +162,84 @@ describe("ProviderCommandReactor", () => {
       });
 
       expect(isProviderInstanceMissingError(error)).toBe(true);
+    });
+  });
+
+  describe("Auto Nudge final delivery authority", () => {
+    const completedAt = "2026-08-11T00:01:00.000Z";
+    const completedTurnId = TurnId.make("auto-nudge-completed-turn");
+    const event = {
+      type: "thread.turn-start-requested",
+      payload: {
+        threadId: ThreadId.make("auto-nudge-thread"),
+        messageId: MessageId.make("auto-nudge-message"),
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5.6-sol",
+        },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        dispatchSource: "auto-nudge",
+        autoNudgeAuthority: {
+          authorityRevision: 2,
+          completedTurnId,
+          completedAt,
+          dispatchSource: "foreground",
+        },
+      },
+    } as Extract<OrchestrationEvent, { type: "thread.turn-start-requested" }>;
+    const thread = {
+      archivedAt: null,
+      deletedAt: null,
+      modelSelection: event.payload.modelSelection,
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      autoNudge: {
+        authorityRevision: 2,
+        mode: "steady-progress",
+        prompt: "Continue.",
+        backgroundContinuation: false,
+        maxRounds: 3,
+        armedAt: completedAt,
+        baselineSettledTurnId: null,
+        lastDispatchedSettledTurnId: completedTurnId,
+        lastDispatchedMessageId: event.payload.messageId,
+        roundsDispatched: 1,
+        lastDispatchedAt: completedAt,
+      },
+      manualFollowUps: [],
+      session: { status: "ready", activeTurnId: null },
+      latestTurn: { turnId: completedTurnId, state: "completed", completedAt },
+      messages: [],
+      activities: [],
+    } as unknown as OrchestrationThread;
+
+    it("permits unchanged exact-thread authority", () => {
+      expect(autoNudgeTurnStartCancellationReason(thread, event)).toBeUndefined();
+    });
+
+    it("cancels when manual work arrives or provider output continues", () => {
+      const withManual = {
+        ...thread,
+        manualFollowUps: [{ id: "manual-priority" }],
+      } as unknown as OrchestrationThread;
+      expect(autoNudgeTurnStartCancellationReason(withManual, event)).toBe(
+        "manual follow-up work has priority",
+      );
+
+      const withLateText = {
+        ...thread,
+        messages: [
+          {
+            turnId: completedTurnId,
+            updatedAt: "2026-08-11T00:01:01.000Z",
+            streaming: false,
+          },
+        ],
+      } as unknown as OrchestrationThread;
+      expect(autoNudgeTurnStartCancellationReason(withLateText, event)).toBe(
+        "provider text continued after acceptance",
+      );
     });
   });
 
