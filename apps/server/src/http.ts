@@ -93,11 +93,13 @@ const STATIC_CONTENT_SECURITY_POLICY = [
   // The packaged diff/syntax worker instantiates its bundled Oniguruma WASM.
   // `wasm-unsafe-eval` permits that compilation without enabling JavaScript eval.
   "script-src 'self' 'wasm-unsafe-eval'",
-  "style-src 'self' https://fonts.googleapis.com",
-  "style-src-elem 'self' https://fonts.googleapis.com",
+  // Base UI hoists one fixed scroll-lock rule through React. Permit only that
+  // byte-exact stylesheet instead of allowing arbitrary inline styles.
+  "style-src 'self' 'sha256-kLmvWqfziFavKtqHqRsb90f006UAK2Dmd0It5Iz2KFA=' https://fonts.googleapis.com",
+  "style-src-elem 'self' 'sha256-kLmvWqfziFavKtqHqRsb90f006UAK2Dmd0It5Iz2KFA=' https://fonts.googleapis.com",
   "style-src-attr 'unsafe-inline'",
   "font-src 'self' https://fonts.gstatic.com data:",
-  "img-src 'self' data: blob:",
+  "img-src 'self' data: blob: https://cdn.jsdelivr.net",
   "media-src 'self' blob: cafecode-media:",
   "worker-src 'self' blob:",
   // Saved Club Code environments are user-selected HTTP(S)/WS(S) origins.
