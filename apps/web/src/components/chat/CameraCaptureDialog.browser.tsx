@@ -79,6 +79,10 @@ function dialogProps(
   };
 }
 
+async function startCamera(): Promise<void> {
+  await page.getByRole("button", { name: "Start camera" }).click();
+}
+
 beforeEach(() => {
   const assignedSources = new WeakMap<HTMLMediaElement, MediaStream | null>();
   Object.defineProperty(HTMLMediaElement.prototype, "srcObject", {
@@ -107,7 +111,7 @@ afterEach(() => {
   }
 });
 
-it("requests only an explicitly opened environment camera and enumerates after permission", async () => {
+it("waits for an explicit camera action and enumerates only after permission", async () => {
   const selected = cameraStream("rear", "environment");
   let resolvePermission!: (stream: MediaStream) => void;
   const permission = new Promise<MediaStream>((resolve) => {
@@ -136,6 +140,9 @@ it("requests only an explicitly opened environment camera and enumerates after p
       })}
     />,
   );
+  expect(getUserMedia).not.toHaveBeenCalled();
+
+  await startCamera();
   await vi.waitFor(() => expect(getUserMedia).toHaveBeenCalledOnce());
   expect(getUserMedia).toHaveBeenCalledWith({
     audio: false,
@@ -184,6 +191,7 @@ it("captures a bounded JPEG, stops the preview, retakes, and accepts the new pho
   const mounted = await render(
     <CameraCaptureDialog {...dialogProps({ onAcceptFile, onOpenChange })} />,
   );
+  await startCamera();
   await vi.waitFor(() => expect(getUserMedia).toHaveBeenCalledOnce());
   let preview = page.getByLabelText("Camera preview").element() as HTMLVideoElement;
   expect(preview.srcObject).toBe(first.stream);
@@ -245,6 +253,7 @@ it("serializes photo acceptance and ignores its late completion after close", as
   const mounted = await render(
     <CameraCaptureDialog {...dialogProps({ onAcceptFile, onOpenChange })} />,
   );
+  await startCamera();
   const preview = page.getByLabelText("Camera preview").element() as HTMLVideoElement;
   Object.defineProperties(preview, {
     videoHeight: { configurable: true, value: 480 },
@@ -291,6 +300,7 @@ it("keeps the captured photo available when the attachment target rejects it", a
   const mounted = await render(
     <CameraCaptureDialog {...dialogProps({ onAcceptFile, onOpenChange })} />,
   );
+  await startCamera();
   const preview = page.getByLabelText("Camera preview").element() as HTMLVideoElement;
   Object.defineProperties(preview, {
     videoHeight: { configurable: true, value: 480 },
@@ -330,6 +340,7 @@ it("stops a failed switch stream, restores the prior camera, and cleans up on un
   });
 
   const mounted = await render(<CameraCaptureDialog {...dialogProps()} />);
+  await startCamera();
   await vi.waitFor(() => expect(enumerateDevices).toHaveBeenCalledOnce());
   await page.getByRole("button", { name: "Switch front or rear camera" }).click();
   await vi.waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(3));
@@ -364,6 +375,7 @@ it("stops a late permission result after the dialog scope closes", async () => {
   const props = dialogProps();
 
   const mounted = await render(<CameraCaptureDialog {...props} />);
+  await startCamera();
   await vi.waitFor(() => expect(getUserMedia).toHaveBeenCalledOnce());
   await mounted.rerender(<CameraCaptureDialog {...props} open={false} />);
   resolvePermission(late.stream);
@@ -394,6 +406,7 @@ it("shows permission failure and invokes the system fallback before closing", as
       })}
     />,
   );
+  await startCamera();
   await expect.element(page.getByRole("alert")).toHaveTextContent("Camera permission was denied");
 
   await page.getByRole("button", { name: "System camera" }).click();

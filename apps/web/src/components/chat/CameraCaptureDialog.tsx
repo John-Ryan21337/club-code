@@ -30,6 +30,7 @@ type CameraStatus =
   | "captured"
   | "capturing"
   | "error"
+  | "idle"
   | "loading"
   | "ready"
   | "switching";
@@ -86,7 +87,7 @@ export const CameraCaptureDialog = memo(function CameraCaptureDialog({
   const acceptingPhotoRef = useRef<CapturedPhoto | null>(null);
   const capturedPhotoRef = useRef<CapturedPhoto | null>(null);
 
-  const [status, setStatus] = useState<CameraStatus>("loading");
+  const [status, setStatus] = useState<CameraStatus>("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [cameraDevices, setCameraDevices] = useState<readonly MediaDeviceInfo[]>([]);
   const [facingMode, setFacingMode] = useState<CameraFacingMode>("environment");
@@ -217,14 +218,15 @@ export const CameraCaptureDialog = memo(function CameraCaptureDialog({
     setFacingMode("environment");
     activeFacingModeRef.current = "environment";
     clearCapturedPhoto();
-    void startCamera("environment");
+    setStatus("idle");
+    setErrorMessage(null);
 
     return () => {
       requestGenerationRef.current += 1;
       releaseActiveStream();
       clearCapturedPhoto();
     };
-  }, [clearCapturedPhoto, open, releaseActiveStream, startCamera]);
+  }, [clearCapturedPhoto, open, releaseActiveStream]);
 
   const closeDialog = useCallback(() => {
     requestGenerationRef.current += 1;
@@ -355,7 +357,7 @@ export const CameraCaptureDialog = memo(function CameraCaptureDialog({
         <DialogHeader>
           <DialogTitle>Take a photo</DialogTitle>
           <DialogDescription>
-            Preview the camera, capture a photo, then choose whether to attach it.
+            Start the camera, capture a photo, then choose whether to attach it.
           </DialogDescription>
         </DialogHeader>
 
@@ -407,6 +409,14 @@ export const CameraCaptureDialog = memo(function CameraCaptureDialog({
                       : "Starting camera…"}
               </div>
             )}
+            {status === "idle" ? (
+              <div className="absolute inset-0 flex items-center justify-center bg-black/55">
+                <Button type="button" onClick={() => void startCamera("environment")}>
+                  <CameraIcon aria-hidden="true" />
+                  Start camera
+                </Button>
+              </div>
+            ) : null}
           </div>
 
           {errorMessage ? (
@@ -448,6 +458,11 @@ export const CameraCaptureDialog = memo(function CameraCaptureDialog({
                 Use photo
               </Button>
             </>
+          ) : status === "error" ? (
+            <Button type="button" onClick={() => void startCamera(activeFacingModeRef.current)}>
+              <RefreshCwIcon aria-hidden="true" />
+              Try again
+            </Button>
           ) : (
             <>
               <Button

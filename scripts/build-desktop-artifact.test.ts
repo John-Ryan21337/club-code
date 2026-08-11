@@ -168,7 +168,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
           hardenedRuntime: true,
           entitlements: "apps/desktop/resources/entitlements.mac.plist",
           entitlementsInherit: "apps/desktop/resources/entitlements.mac.inherit.plist",
-          entitlementsLoginHelper: "apps/desktop/resources/entitlements.mac.inherit.plist",
+          entitlementsLoginHelper: "apps/desktop/resources/entitlements.mac.login-helper.plist",
         },
       });
 
@@ -236,6 +236,16 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       assert.equal(contents.includes("com.apple.security.device.audio-input"), false);
       assert.equal(contents.includes("com.apple.security.device.microphone"), false);
     }
+
+    const loginHelperContents = readFileSync(
+      new URL("../apps/desktop/resources/entitlements.mac.login-helper.plist", import.meta.url),
+      "utf8",
+    );
+    const loginHelperEntitlements = [
+      ...loginHelperContents.matchAll(/<key>([^<]+)<\/key>\s*<true\/>/g),
+    ].map(([, entitlement]) => entitlement);
+    assert.deepStrictEqual(loginHelperEntitlements, requiredEntitlements.slice(0, 3));
+    assert.equal(loginHelperContents.includes("com.apple.security.device.camera"), false);
   });
 
   it("requires a Debian artifact instead of accepting builder metadata alone", () => {

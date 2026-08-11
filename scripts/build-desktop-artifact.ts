@@ -850,7 +850,7 @@ export function resolveMacDesktopBuildConfig(
             hardenedRuntime: true,
             entitlements: "apps/desktop/resources/entitlements.mac.plist",
             entitlementsInherit: "apps/desktop/resources/entitlements.mac.inherit.plist",
-            entitlementsLoginHelper: "apps/desktop/resources/entitlements.mac.inherit.plist",
+            entitlementsLoginHelper: "apps/desktop/resources/entitlements.mac.login-helper.plist",
           }
         : {
             identity: null,
