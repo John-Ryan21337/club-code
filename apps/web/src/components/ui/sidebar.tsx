@@ -155,6 +155,7 @@ function SidebarProvider({
           className,
         )}
         data-slot="sidebar-wrapper"
+        data-mobile-layout={isMobile ? "true" : "false"}
         style={
           {
             "--sidebar-width": SIDEBAR_WIDTH,
