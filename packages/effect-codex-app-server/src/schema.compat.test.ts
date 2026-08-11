@@ -19,22 +19,6 @@ it("decodes the Codex 0.146 enterprise plan without treating it as an unknown ac
   }
 });
 
-it("encodes the stable thread pin filter and metadata update", () => {
-  assert.deepEqual(Schema.encodeSync(CodexSchema.V2ThreadListParams)({ isPinned: true }), {
-    isPinned: true,
-  });
-  assert.deepEqual(
-    Schema.encodeSync(CodexSchema.V2ThreadMetadataUpdateParams)({
-      threadId: "0199f60f-45af-7000-8000-000000000001",
-      isPinned: false,
-    }),
-    {
-      threadId: "0199f60f-45af-7000-8000-000000000001",
-      isPinned: false,
-    },
-  );
-});
-
 it("decodes 0.146 app-tool and remote-skill presentation metadata", () => {
   const tool = Schema.decodeUnknownSync(CodexSchema.V2AppsReadResponse__AppToolSummary)({
     description: "Reads a remote workspace.",
@@ -86,4 +70,55 @@ it("decodes the 0.146 managed configuration requirements while tolerating older 
   assert.equal(current.browserUse?.disableAutoReview, true);
   assert.equal(current.featureRequirements?.["in_app_updates"], false);
   assert.deepEqual(legacy, {});
+});
+
+it("encodes the Codex 0.147 section filter and provider-private thread move", () => {
+  assert.deepEqual(
+    Schema.encodeSync(CodexSchema.V2ThreadListParams)({
+      sectionId: "0199f60f-45af-7000-8000-000000000001",
+      sortKey: "section_position",
+    }),
+    {
+      sectionId: "0199f60f-45af-7000-8000-000000000001",
+      sortKey: "section_position",
+    },
+  );
+  assert.deepEqual(
+    Schema.encodeSync(CodexSchema.V2ThreadSectionMoveParams)({
+      threadId: "0199f60f-45af-7000-8000-000000000002",
+      sectionId: "0199f60f-45af-7000-8000-000000000001",
+      beforeThreadId: null,
+    }),
+    {
+      threadId: "0199f60f-45af-7000-8000-000000000002",
+      sectionId: "0199f60f-45af-7000-8000-000000000001",
+      beforeThreadId: null,
+    },
+  );
+});
+
+it("decodes the Codex 0.147 nonblocking user-input request metadata", () => {
+  const decoded = Schema.decodeUnknownSync(CodexSchema.ToolRequestUserInputParams)({
+    threadId: "thread-1",
+    turnId: "turn-1",
+    itemId: "item-1",
+    questions: [
+      {
+        id: "choice",
+        header: "Choice",
+        question: "Which path should be used?",
+        options: [
+          {
+            label: "Default",
+            description: "Continue with the recommended path.",
+          },
+        ],
+      },
+    ],
+    isBlocking: false,
+    autoResolutionMs: null,
+  });
+
+  assert.equal(decoded.isBlocking, false);
+  assert.equal(decoded.autoResolutionMs, null);
 });
