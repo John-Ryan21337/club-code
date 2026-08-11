@@ -83,10 +83,18 @@ function withinViewport(x, y, halfWidth, halfHeight, viewport, whole) {
     y + halfHeight >= 0 && y - halfHeight <= viewport.height;
 }
 
-function buildOffsetRowGrid(viewport, display, settings, mode, dimensions) {
+function tileLimit(settings, maximumTiles) {
+  const qualityTileLimit = qualityLimits(settings.quality).tiles;
+  const requestedTileLimit = Math.floor(Number(maximumTiles));
+  return Number.isFinite(requestedTileLimit)
+    ? Math.max(1, Math.min(qualityTileLimit, requestedTileLimit))
+    : qualityTileLimit;
+}
+
+function buildOffsetRowGrid(viewport, display, settings, mode, dimensions, maximumTiles) {
   const initialMetrics = resolveTileMetrics(viewport, display, settings);
   const whole = settings.alignmentMode === "whole-tiles";
-  const limit = qualityLimits(settings.quality).tiles;
+  const limit = tileLimit(settings, maximumTiles);
   const collect = (radius) => {
     const { halfWidth, halfHeight, columnStep, rowStep, rowOffset } = dimensions(radius);
     const padding = whole ? 0 : 3;
@@ -111,7 +119,7 @@ function buildOffsetRowGrid(viewport, display, settings, mode, dimensions) {
   let radius = initialMetrics.radius;
   let result = collect(radius);
   const limited = result.candidates.length > limit;
-  for (let attempt = 0; result.candidates.length > limit && attempt < 4; attempt += 1) {
+  for (let attempt = 0; result.candidates.length > limit && attempt < 16; attempt += 1) {
     radius *= Math.sqrt(result.candidates.length / limit) * 1.025;
     result = collect(radius);
   }
@@ -127,11 +135,11 @@ function buildOffsetRowGrid(viewport, display, settings, mode, dimensions) {
   };
 }
 
-export function buildHexGrid(viewport, display, settings) {
+export function buildHexGrid(viewport, display, settings, maximumTiles) {
   const initialMetrics = resolveTileMetrics(viewport, display, settings);
   const { width, height } = viewport;
   const whole = settings.alignmentMode === "whole-tiles";
-  const limit = qualityLimits(settings.quality).tiles;
+  const limit = tileLimit(settings, maximumTiles);
   const collect = (radius) => {
     const apothem = (SQRT3 * radius) / 2;
     const startColumn = whole ? 0 : -2;
@@ -168,7 +176,10 @@ export function buildHexGrid(viewport, display, settings) {
   let radius = initialMetrics.radius;
   let result = collect(radius);
   const limited = result.candidates.length > limit;
-  for (let attempt = 0; result.candidates.length > limit && attempt < 4; attempt += 1) {
+  // Very wide or tall surfaces converge more slowly because one grid axis can
+  // stay quantized at a single row or column. Keep the loop bounded, but allow
+  // enough passes for those aspect ratios to honor the advertised tile cap.
+  for (let attempt = 0; result.candidates.length > limit && attempt < 16; attempt += 1) {
     radius *= Math.sqrt(result.candidates.length / limit) * 1.025;
     result = collect(radius);
   }
@@ -184,30 +195,30 @@ export function buildHexGrid(viewport, display, settings) {
   };
 }
 
-export function buildCairoGrid(viewport, display, settings) {
+export function buildCairoGrid(viewport, display, settings, maximumTiles) {
   return buildOffsetRowGrid(viewport, display, settings, "cairo-pentagon", (radius) => ({
     halfWidth: radius * 11 / 14,
     halfHeight: radius,
     columnStep: radius * 2,
     rowStep: radius,
     rowOffset: radius,
-  }));
+  }), maximumTiles);
 }
 
-export function buildHexagramGrid(viewport, display, settings) {
+export function buildHexagramGrid(viewport, display, settings, maximumTiles) {
   return buildOffsetRowGrid(viewport, display, settings, "hexagram", (radius) => ({
     halfWidth: radius,
     halfHeight: radius * SQRT3 / 2,
     columnStep: radius * 2,
     rowStep: radius * SQRT3,
     rowOffset: radius,
-  }));
+  }), maximumTiles);
 }
 
-export function buildTessellationGrid(viewport, display, settings) {
-  if (settings.tessellationMode === "cairo-pentagon") return buildCairoGrid(viewport, display, settings);
-  if (settings.tessellationMode === "hexagram") return buildHexagramGrid(viewport, display, settings);
-  return buildHexGrid(viewport, display, settings);
+export function buildTessellationGrid(viewport, display, settings, maximumTiles) {
+  if (settings.tessellationMode === "cairo-pentagon") return buildCairoGrid(viewport, display, settings, maximumTiles);
+  if (settings.tessellationMode === "hexagram") return buildHexagramGrid(viewport, display, settings, maximumTiles);
+  return buildHexGrid(viewport, display, settings, maximumTiles);
 }
 
 export function hexVertices(centerX, centerY, radius, scale = 1, shiftX = 0, shiftY = 0) {

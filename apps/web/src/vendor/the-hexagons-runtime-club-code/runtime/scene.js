@@ -16,9 +16,14 @@ function mulberry32(seed) {
   };
 }
 
-function buildGapParticles(grid, settings) {
+function buildGapParticles(grid, settings, maximumParticles) {
   const random = mulberry32(settings.seed ^ 0x50415254);
-  const maximum = Math.min(settings.particleCount, qualityLimits(settings.quality).meshParticles);
+  const requestedMaximum = Math.floor(Number(maximumParticles));
+  const maximum = Math.min(
+    settings.particleCount,
+    qualityLimits(settings.quality).meshParticles,
+    Number.isFinite(requestedMaximum) ? Math.max(0, requestedMaximum) : Number.POSITIVE_INFINITY,
+  );
   if (maximum === 0 || grid.tiles.length === 0) return [];
   const edgeCount = grid.mode === "hexagram" ? 12 : 6;
   return Array.from({ length: maximum }, () => {
@@ -43,9 +48,9 @@ function buildGapParticles(grid, settings) {
   });
 }
 
-export function createScene(viewport, display, settings) {
-  const grid = buildTessellationGrid(viewport, display, settings);
-  const gapParticles = buildGapParticles(grid, settings);
+export function createScene(viewport, display, settings, maximumTiles) {
+  const grid = buildTessellationGrid(viewport, display, settings, maximumTiles);
+  const gapParticles = buildGapParticles(grid, settings, maximumTiles);
   return {
     viewport: { ...viewport },
     display: { ...display },

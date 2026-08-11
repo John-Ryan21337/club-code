@@ -1,7 +1,7 @@
 import { DEFAULT_SETTINGS, normalizeSettings, qualityLimits, settingsAffectFallingScene, settingsAffectGeometry } from "./config.js";
 import { createFallingLayer } from "./falling.js";
 import { advanceScene, createScene, shouldAnimate } from "./scene.js";
-import { createCanvasRenderer } from "./renderers/canvas2d.js";
+import { canvasQualityLimits, createCanvasRenderer } from "./renderers/canvas2d.js";
 import { createWebGlRenderer, resolveLights } from "./renderers/webgl.js";
 
 const LAYER_NAMES = ["tiles-gpu", "tiles-canvas", "reflection-gpu", "reflection-canvas", "vignette", "falling-gpu", "falling-canvas"];
@@ -69,6 +69,7 @@ export async function createHexagonBackground(options = {}) {
   let frameHandle = 0;
   let resizeHandle = 0;
   let lastFrameTime = windowObject.performance.now();
+  let canvasFrameAvailableAt = 0;
   let pointer = { x: 0, y: 0, active: false };
   let activeRenderer = "initializing";
   let fallbackReason = null;
@@ -86,10 +87,11 @@ export async function createHexagonBackground(options = {}) {
   let fallingLayer = null;
   const webgl = createWebGlRenderer(layers["tiles-gpu"], (state) => {
     if (disposed) return;
+    const previousRenderer = activeRenderer;
     gpuOperational = state.status === "restored";
     fallbackReason = state.status === "context-lost" ? state.fallbackReason : null;
     chooseRenderer();
-    if (state.status === "restored") rebuild();
+    if (state.status === "restored" || previousRenderer !== activeRenderer) rebuild();
   });
   gpuOperational = webgl.available;
 
@@ -156,11 +158,29 @@ export async function createHexagonBackground(options = {}) {
     advanceScene(scene, systemReducedMotion(settings, mediaQuery) ? 0 : delta, settings, pointer);
     const lights = resolveLights(scene, settings, pointer);
     lastResult = activeRenderer === "gpu-webgl2" ? webgl.render(scene, settings, lights) : canvasRenderer.render(scene, settings, lights);
+    // A bounded Canvas frame can still be expensive on software rasterizers.
+    // Guarantee a main-thread breathing window after every completed fallback
+    // frame so transport/bootstrap/input tasks run before another frame begins.
+    if (activeRenderer === "canvas2d-fallback") {
+      const measuredDuration = Number(lastResult.renderDurationMs);
+      const scheduledIdleMs = Math.max(
+        canvasQualityLimits(settings.quality).minimumIdleMs,
+        Number.isFinite(measuredDuration) ? measuredDuration : 0,
+      );
+      lastResult = { ...lastResult, scheduledIdleMs };
+      canvasFrameAvailableAt = windowObject.performance.now() + scheduledIdleMs;
+    } else {
+      canvasFrameAvailableAt = 0;
+    }
     if (lastResult.status === "context-lost" || lastResult.status === "gl-error") {
       gpuOperational = false;
       fallbackReason = lastResult.status;
       chooseRenderer();
-      lastResult = canvasRenderer.render(scene, settings, lights);
+      // Canvas needs a coarser, complete grid than WebGL. Rebuild before the
+      // first fallback frame instead of synchronously walking the GPU-sized
+      // scene on the renderer main thread.
+      rebuild();
+      return;
     }
     if (settings.fallingEffectsEnabled) {
       lastFallingResult = ensureFallingLayer().render(systemReducedMotion(settings, mediaQuery) ? 0 : delta, scene, settings);
@@ -177,18 +197,25 @@ export async function createHexagonBackground(options = {}) {
   function rebuild() {
     const size = viewport();
     display = { ...display, width: Math.max(1, Number(display.width) || size.width), height: Math.max(1, Number(display.height) || size.height), scaleFactor: Math.max(0.5, Number(display.scaleFactor) || 1) };
-    scene = createScene(size, display, settings);
+    chooseRenderer();
+    const maximumTiles = activeRenderer === "canvas2d-fallback"
+      ? canvasQualityLimits(settings.quality).tiles
+      : undefined;
+    scene = createScene(size, display, settings, maximumTiles);
     advanceScene(scene, 0, settings, pointer);
     const dpr = desiredDpr(size);
-    webgl.available && webgl.resize(size.width, size.height, dpr);
+    if (activeRenderer === "gpu-webgl2") webgl.resize(size.width, size.height, dpr);
     canvasRenderer.resize(size.width, size.height, dpr, settings);
     fallingLayer?.resize(size.width, size.height, dpr, settings);
-    chooseRenderer();
     draw(0);
   }
 
   function loop(now) {
     frameHandle = 0;
+    if (activeRenderer === "canvas2d-fallback" && now < canvasFrameAvailableAt) {
+      if (animationAllowed()) frameHandle = windowObject.requestAnimationFrame(loop);
+      return;
+    }
     const delta = Math.min(0.1, Math.max(0, (now - lastFrameTime) / 1000));
     lastFrameTime = now;
     draw(delta);
@@ -239,10 +266,12 @@ export async function createHexagonBackground(options = {}) {
     root,
     updateSettings(patch) {
       const previous = settings;
+      const previousRenderer = activeRenderer;
       settings = normalizeSettings({ ...settings, ...patch });
       root.hidden = !settings.enabled;
       const rebuildRequired = settingsAffectGeometry(previous, settings) || settingsAffectFallingScene(previous, settings) || ["particleCount", "particleSpeed", "particleSpeedVariation", "quality", "seed"].some((key) => previous[key] !== settings[key]);
-      if (rebuildRequired) rebuild(); else { chooseRenderer(); draw(0); }
+      chooseRenderer();
+      if (rebuildRequired || previousRenderer !== activeRenderer) rebuild(); else draw(0);
       syncAnimation();
       return controller.getSettings();
     },
