@@ -74,9 +74,12 @@ precision highp float;
 layout(location=0) in vec2 aLocal; layout(location=1) in float aLift;
 layout(location=2) in float aFacet; layout(location=3) in float aSurface;
 layout(location=4) in vec4 aTileA; layout(location=5) in vec4 aTileB;
-uniform vec2 uResolution; uniform float uGapWidth,uPerspective,uFacetRelief,uFacetSpeed,uTime;
-out vec2 vScreen; flat out float vFacet,vSurface,vPhase,vPulse,vRandom; out float vHeight;
-vec2 facetDirection(float face){if(face<.5)return normalize(vec2(.25,.4330127));if(face<1.5)return vec2(-1.,0.);return normalize(vec2(.25,-.4330127));}
+uniform vec2 uResolution; uniform float uGapWidth,uPerspective,uFacetRelief,uFacetSpeed,uTime;uniform int uTessellation;
+out vec2 vScreen; flat out float vFacet,vSurface,vPhase,vPulse,vPattern; out float vHeight;
+vec2 facetDirection(float face){
+ if(uTessellation==1){float angle=1.5707963-face*1.5707963;return vec2(cos(angle),-sin(angle));}
+ if(uTessellation==2){float angle=face*.5235988;return vec2(cos(angle),sin(angle));}
+ if(face<.5)return normalize(vec2(.25,.4330127));if(face<1.5)return vec2(-1.,0.);return normalize(vec2(.25,-.4330127));}
 void main(){vec2 center=aTileA.xy;float radius=aTileA.z;
  float facetHeight=aTileA.w+sin(uTime*uFacetSpeed*6.2831853+aTileB.x+aFacet*2.0943951)*uFacetRelief;
  float separation=aTileB.z;float scale=max(.04,1.-uGapWidth-separation*.14);
@@ -86,13 +89,13 @@ void main(){vec2 center=aTileA.xy;float radius=aTileA.z;
  vec2 parallax=direction*heightPixels*uPerspective*.34+vec2(0.,-heightPixels*.42);
  vec2 position=center+local+parallax*aLift;
  gl_Position=vec4(position.x/uResolution.x*2.-1.,1.-position.y/uResolution.y*2.,0.,1.);
- vScreen=position;vFacet=aFacet;vSurface=aSurface;vPhase=aTileB.x;vPulse=aTileB.y;vRandom=aTileB.w;vHeight=facetHeight;}`;
+ vScreen=position;vFacet=aFacet;vSurface=aSurface;vPhase=aTileB.x;vPulse=aTileB.y;vPattern=aTileB.w;vHeight=facetHeight;}`;
 
 const TILE_FRAGMENT = `#version 300 es
 precision highp float;
-in vec2 vScreen; flat in float vFacet,vSurface,vPhase,vPulse,vRandom; in float vHeight; out vec4 outColor;
+in vec2 vScreen; flat in float vFacet,vSurface,vPhase,vPulse,vPattern; in float vHeight; out vec4 outColor;
 uniform vec2 uResolution,uLightPosition;uniform vec3 uLightColor,uWhiteColor,uMaterial,uDiamondColorA,uDiamondColorB,uDiamondColorC,uEmberColorA,uEmberColorB;
-uniform float uForeground,uLightIntensity,uLightRadius,uBeamWidth,uFanout,uLightSpeed,uPrism,uEnabled,uTime;uniform int uTileBase,uLightType,uPrismMode,uCustomDiamondColors,uEmberPattern;
+uniform float uForeground,uLightIntensity,uLightRadius,uBeamWidth,uFanout,uLightSpeed,uPrism,uEnabled,uTime;uniform int uTileBase,uLightType,uPrismMode,uCustomDiamondColors,uEmberPattern,uPatternRotation,uPatternMirror;
 float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453123);}
 float capsule(vec2 p,vec2 a,vec2 b){vec2 pa=p-a,ba=b-a;float h=clamp(dot(pa,ba)/max(.001,dot(ba,ba)),0.,1.);return length(pa-ba*h);}
 float shapedRadius(int kind,float radius,float beamWidth){return max(1.,uResolution.y*radius*(kind==3?.075:kind==2?.48:1.)*beamWidth);}
@@ -130,9 +133,10 @@ void main(){float rough=uMaterial.x,specular=uMaterial.y,grain=uMaterial.z;
  float beamMask=mix(1.,spectrumWindow,prismAmount);body*=beamMask;
  vec3 neutral=uPrismMode==3?uLightColor:mix(uWhiteColor,uLightColor,.12);vec3 beamColor=prismColor(neutral,visibleSpectrum(spectrumCoordinate),normalizedDistance,spectrumMix);
  beamColor=clamp(beamColor+vec3(gradientNoise(gl_FragCoord.xy)/255.)*spectrumMix,0.,1.);
- float noise=(hash(floor(vScreen*(.18+rough*.35))+vRandom)-.5)*grain;
+ float noise=(hash(floor(vScreen*(.18+rough*.35))+vPhase)-.5)*grain;
  bool side=vSurface>=0.;vec3 darkBase=vec3(.004,.006,.008);vec3 whiteBase=vec3(.93,.925,.89);
- vec3 selectedDiamond=vFacet<.5?uDiamondColorA:(vFacet<1.5?uDiamondColorB:uDiamondColorC);
+ int facetIndex=int(floor(vFacet+.5));int paletteIndex=(facetIndex*(uPatternMirror==1?-1:1)+uPatternRotation+int(floor(vPattern+.5)))%3;if(paletteIndex<0)paletteIndex+=3;
+ vec3 selectedDiamond=paletteIndex==0?uDiamondColorA:(paletteIndex==1?uDiamondColorB:uDiamondColorC);
  vec3 base=uCustomDiamondColors==1?mix(darkBase,selectedDiamond,uForeground):(uTileBase==0?mix(darkBase,whiteBase,uForeground):mix(darkBase,vec3(.055,.06,.064),uForeground));
  float faceLight=side?.13+.055*mod(vSurface,4.):.72+specular*.2;
  float neutralDiffuse=body*(.26+.5*specular)*mix(1.,.08,spectrumMix);
@@ -179,16 +183,29 @@ function makeProgram(gl,vertexSource,fragmentSource){const value=gl.createProgra
 
 function pushVertex(output,point,lift,facet,surface){output.push(point[0],point[1],lift,facet,surface);}
 function pushTriangle(output,a,b,c,liftA,liftB,liftC,facet,surface){pushVertex(output,a,liftA,facet,surface);pushVertex(output,b,liftB,facet,surface);pushVertex(output,c,liftC,facet,surface);}
-function createTileMeshes(){
+function polygonCentroid(points){const total=points.reduce((sum,point)=>[sum[0]+point[0],sum[1]+point[1]],[0,0]);return[total[0]/points.length,total[1]/points.length];}
+function insetPolygon(points,amount){const center=polygonCentroid(points);return points.map((point)=>[center[0]+(point[0]-center[0])*amount,center[1]+(point[1]-center[1])*amount]);}
+function appendPolygon(sides,tops,points,facet){
+  for(let edge=0;edge<points.length;edge+=1){const a=points[edge],b=points[(edge+1)%points.length];pushTriangle(sides,a,b,b,0,0,1,facet,edge);pushTriangle(sides,a,b,a,0,1,1,facet,edge);}
+  for(let index=1;index<points.length-1;index+=1)pushTriangle(tops,points[0],points[index],points[index+1],1,1,1,facet,-1);
+}
+function createTileMeshes(mode){
   const vertices=Array.from({length:6},(_,index)=>[Math.cos(index*Math.PI/3),Math.sin(index*Math.PI/3)]);
-  const rhombi=[[ [0,0],vertices[0],vertices[1],vertices[2] ],[ [0,0],vertices[2],vertices[3],vertices[4] ],[ [0,0],vertices[4],vertices[5],vertices[0] ]];
   const sides=[],tops=[];
-  for(let facet=0;facet<3;facet+=1){const points=rhombi[facet];
-    for(let edge=0;edge<4;edge+=1){const a=points[edge],b=points[(edge+1)%4];pushTriangle(sides,a,b,b,0,0,1,facet,edge);pushTriangle(sides,a,b,a,0,1,1,facet,edge);}
-    pushTriangle(tops,points[0],points[1],points[2],1,1,1,facet,-1);pushTriangle(tops,points[0],points[2],points[3],1,1,1,facet,-1);
+  let facets;
+  if(mode==="cairo-pentagon"){
+    const p={a:[-11/14,0],b:[-3/14,1],c:[3/14,1],d:[11/14,0],e:[3/14,-1],f:[-3/14,-1],lt:[-.5,.5],mt:[0,3/14],rt:[.5,.5],mb:[0,-3/14],rb:[.5,-.5],lb:[-.5,-.5]};
+    facets=[[p.b,p.c,p.rt,p.mt,p.lt],[p.d,p.rb,p.mb,p.mt,p.rt],[p.e,p.f,p.lb,p.mb,p.rb],[p.a,p.lt,p.mt,p.mb,p.lb]].map((points)=>insetPolygon(points,.985));
+  }else if(mode==="hexagram"){
+    const star=Array.from({length:12},(_,index)=>{const angle=index*Math.PI/6,radius=index%2===0?1:.5;return[Math.cos(angle)*radius,Math.sin(angle)*radius];});
+    facets=star.map((point,index)=>[[0,0],point,star[(index+1)%star.length]]);
+  }else facets=[[ [0,0],vertices[0],vertices[1],vertices[2] ],[ [0,0],vertices[2],vertices[3],vertices[4] ],[ [0,0],vertices[4],vertices[5],vertices[0] ]];
+  for(let facet=0;facet<facets.length;facet+=1){
+    appendPolygon(sides,tops,facets[facet],facet);
   }
   return {sides:new Float32Array(sides),tops:new Float32Array(tops)};
 }
+function tessellationIndex(mode){return Math.max(0,["rhombille","cairo-pentagon","hexagram"].indexOf(mode));}
 function lightTypeIndex(type){return Math.max(0,["point","point-bar","bar","laser","ripple","total"].indexOf(type));}
 function prismModeIndex(mode){return Math.max(0,["neon","white-core","white-fringe","solid"].indexOf(mode));}
 function emberPatternIndex(pattern){return Math.max(0,["organic","rings","hexagon","star"].indexOf(pattern));}
@@ -209,8 +226,8 @@ export function createWebGlRenderer(canvas,onStateChange=()=>{}){
   const gl=canvas.getContext("webgl2",{alpha:false,antialias:true,depth:false,stencil:false,failIfMajorPerformanceCaveat:true,powerPreference:"high-performance",premultipliedAlpha:true,preserveDrawingBuffer:false,desynchronized:false});
   if(!gl)return{available:false,fallbackReason:"webgl2-unavailable",dispose(){}};
   if(gl.getParameter(gl.MAX_TEXTURE_SIZE)<256||gl.getParameter(gl.MAX_VERTEX_ATTRIBS)<6)return{available:false,fallbackReason:"insufficient-capability",dispose(){gl.getExtension("WEBGL_lose_context")?.loseContext();}};
-  let disposed=false,contextLost=false,programs,buffers,sideMesh,topMesh,lightMaskTexture,lightMaskFramebuffer,renderedFrames=0,lastError=gl.NO_ERROR;const lose=gl.getExtension("WEBGL_lose_context");
-  const initialize=()=>{programs={background:makeProgram(gl,FULLSCREEN_VERTEX,BACKGROUND_FRAGMENT),tile:makeProgram(gl,TILE_VERTEX,TILE_FRAGMENT),occluder:makeProgram(gl,TILE_VERTEX,OCCLUDER_FRAGMENT),shaft:makeProgram(gl,FULLSCREEN_VERTEX,SHAFT_FRAGMENT),particle:makeProgram(gl,PARTICLE_VERTEX,PARTICLE_FRAGMENT)};buffers={tile:gl.createBuffer(),gap:gl.createBuffer()};const meshes=createTileMeshes();sideMesh=createVao(gl,meshes.sides,buffers.tile);topMesh=createVao(gl,meshes.tops,buffers.tile);lightMaskTexture=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,lightMaskTexture);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA8,Math.max(1,canvas.width),Math.max(1,canvas.height),0,gl.RGBA,gl.UNSIGNED_BYTE,null);lightMaskFramebuffer=gl.createFramebuffer();gl.bindFramebuffer(gl.FRAMEBUFFER,lightMaskFramebuffer);gl.framebufferTexture2D(gl.FRAMEBUFFER,gl.COLOR_ATTACHMENT0,gl.TEXTURE_2D,lightMaskTexture,0);gl.bindFramebuffer(gl.FRAMEBUFFER,null);};
+  let disposed=false,contextLost=false,programs,buffers,sideMeshes,topMeshes,lightMaskTexture,lightMaskFramebuffer,renderedFrames=0,lastError=gl.NO_ERROR;const lose=gl.getExtension("WEBGL_lose_context");
+  const initialize=()=>{programs={background:makeProgram(gl,FULLSCREEN_VERTEX,BACKGROUND_FRAGMENT),tile:makeProgram(gl,TILE_VERTEX,TILE_FRAGMENT),occluder:makeProgram(gl,TILE_VERTEX,OCCLUDER_FRAGMENT),shaft:makeProgram(gl,FULLSCREEN_VERTEX,SHAFT_FRAGMENT),particle:makeProgram(gl,PARTICLE_VERTEX,PARTICLE_FRAGMENT)};buffers={tile:gl.createBuffer(),gap:gl.createBuffer()};sideMeshes={};topMeshes={};for(const mode of["rhombille","cairo-pentagon","hexagram"]){const meshes=createTileMeshes(mode);sideMeshes[mode]=createVao(gl,meshes.sides,buffers.tile);topMeshes[mode]=createVao(gl,meshes.tops,buffers.tile);}lightMaskTexture=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,lightMaskTexture);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA8,Math.max(1,canvas.width),Math.max(1,canvas.height),0,gl.RGBA,gl.UNSIGNED_BYTE,null);lightMaskFramebuffer=gl.createFramebuffer();gl.bindFramebuffer(gl.FRAMEBUFFER,lightMaskFramebuffer);gl.framebufferTexture2D(gl.FRAMEBUFFER,gl.COLOR_ATTACHMENT0,gl.TEXTURE_2D,lightMaskTexture,0);gl.bindFramebuffer(gl.FRAMEBUFFER,null);};
   try{initialize();}catch(error){return{available:false,fallbackReason:"gpu-initialization-failed",error,dispose(){}};}
   const lost=(event)=>{event.preventDefault();contextLost=true;onStateChange({status:"context-lost",fallbackReason:"context-lost"});};
   const restored=()=>{try{initialize();contextLost=false;onStateChange({status:"restored",fallbackReason:null});}catch{onStateChange({status:"context-lost",fallbackReason:"gpu-initialization-failed"});}};
@@ -218,23 +235,24 @@ export function createWebGlRenderer(canvas,onStateChange=()=>{}){
   function resize(width,height,dpr){canvas.width=Math.max(1,Math.round(width*dpr));canvas.height=Math.max(1,Math.round(height*dpr));canvas.style.width=`${width}px`;canvas.style.height=`${height}px`;gl.bindTexture(gl.TEXTURE_2D,lightMaskTexture);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA8,canvas.width,canvas.height,0,gl.RGBA,gl.UNSIGNED_BYTE,null);gl.bindTexture(gl.TEXTURE_2D,null);gl.viewport(0,0,canvas.width,canvas.height);}
   function render(frame,settings,lights){
     if(disposed)return{status:"disposed",drawCalls:0,tileInstances:0};if(contextLost)return{status:"context-lost",drawCalls:0,tileInstances:0};
+    const mode=sideMeshes[settings.tessellationMode]?settings.tessellationMode:"rhombille",sideMesh=sideMeshes[mode],topMesh=topMeshes[mode],modeIndex=tessellationIndex(mode);
     gl.disable(gl.DEPTH_TEST);gl.disable(gl.CULL_FACE);gl.bindBuffer(gl.ARRAY_BUFFER,buffers.tile);gl.bufferData(gl.ARRAY_BUFFER,frame.tileInstances,gl.DYNAMIC_DRAW);let drawCalls=0;
 
     gl.bindFramebuffer(gl.FRAMEBUFFER,lightMaskFramebuffer);gl.viewport(0,0,canvas.width,canvas.height);gl.disable(gl.BLEND);gl.clearColor(0,0,0,1);gl.clear(gl.COLOR_BUFFER_BIT);
     gl.useProgram(programs.background);lightUniforms(gl,programs.background,frame,lights.behind,true);gl.drawArrays(gl.TRIANGLES,0,3);drawCalls+=1;
-    gl.useProgram(programs.occluder);setVec2(gl,programs.occluder,"uResolution",frame.viewport.width,frame.viewport.height);setFloat(gl,programs.occluder,"uGapWidth",settings.gapWidth);setFloat(gl,programs.occluder,"uPerspective",settings.perspectiveStrength);setFloat(gl,programs.occluder,"uFacetRelief",settings.facetRelief);setFloat(gl,programs.occluder,"uFacetSpeed",settings.facetReliefSpeed);setFloat(gl,programs.occluder,"uTime",frame.time);
+    gl.useProgram(programs.occluder);setVec2(gl,programs.occluder,"uResolution",frame.viewport.width,frame.viewport.height);setFloat(gl,programs.occluder,"uGapWidth",settings.gapWidth);setFloat(gl,programs.occluder,"uPerspective",settings.perspectiveStrength);setFloat(gl,programs.occluder,"uFacetRelief",settings.facetRelief);setFloat(gl,programs.occluder,"uFacetSpeed",settings.facetReliefSpeed);setFloat(gl,programs.occluder,"uTime",frame.time);setInt(gl,programs.occluder,"uTessellation",modeIndex);
     gl.bindVertexArray(sideMesh.vao);gl.drawArraysInstanced(gl.TRIANGLES,0,sideMesh.vertexCount,frame.grid.tiles.length);drawCalls+=1;gl.bindVertexArray(topMesh.vao);gl.drawArraysInstanced(gl.TRIANGLES,0,topMesh.vertexCount,frame.grid.tiles.length);drawCalls+=1;gl.bindVertexArray(null);
 
     gl.bindFramebuffer(gl.FRAMEBUFFER,null);gl.viewport(0,0,canvas.width,canvas.height);gl.clearColor(0,0,0,1);gl.clear(gl.COLOR_BUFFER_BIT);
     gl.disable(gl.BLEND);gl.useProgram(programs.background);lightUniforms(gl,programs.background,frame,lights.behind);gl.drawArrays(gl.TRIANGLES,0,3);drawCalls+=1;
     if(frame.gapInstanceCount>0){gl.enable(gl.BLEND);gl.blendFuncSeparate(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA,gl.ONE,gl.ONE_MINUS_SRC_ALPHA);gl.useProgram(programs.particle);setVec2(gl,programs.particle,"uResolution",frame.viewport.width,frame.viewport.height);setVec3(gl,programs.particle,"uColor",meshEnergyColor(frame.time,settings));gl.bindBuffer(gl.ARRAY_BUFFER,buffers.gap);gl.bufferData(gl.ARRAY_BUFFER,frame.gapInstances.subarray(0,frame.gapInstanceCount*4),gl.DYNAMIC_DRAW);gl.enableVertexAttribArray(0);gl.vertexAttribPointer(0,4,gl.FLOAT,false,16,0);gl.drawArrays(gl.POINTS,0,frame.gapInstanceCount);drawCalls+=1;}
-    gl.disable(gl.BLEND);gl.useProgram(programs.tile);lightUniforms(gl,programs.tile,frame,lights.front);const material=MATERIALS[settings.material],diamondColors=diamondTileColors(settings);setVec3(gl,programs.tile,"uMaterial",[material.roughness,material.specular,material.grain]);setVec3(gl,programs.tile,"uDiamondColorA",diamondColors[0]);setVec3(gl,programs.tile,"uDiamondColorB",diamondColors[1]);setVec3(gl,programs.tile,"uDiamondColorC",diamondColors[2]);setVec3(gl,programs.tile,"uEmberColorA",hexToRgb(settings.emberColorA));setVec3(gl,programs.tile,"uEmberColorB",hexToRgb(settings.emberColorB));setFloat(gl,programs.tile,"uGapWidth",settings.gapWidth);setFloat(gl,programs.tile,"uPerspective",settings.perspectiveStrength);setFloat(gl,programs.tile,"uFacetRelief",settings.facetRelief);setFloat(gl,programs.tile,"uFacetSpeed",settings.facetReliefSpeed);setFloat(gl,programs.tile,"uForeground",settings.foregroundIllumination);setFloat(gl,programs.tile,"uTime",frame.time);setInt(gl,programs.tile,"uTileBase",settings.tileBase==="white"?0:1);setInt(gl,programs.tile,"uCustomDiamondColors",settings.customDiamondColorsEnabled?1:0);setInt(gl,programs.tile,"uEmberPattern",emberPatternIndex(settings.emberPattern));
+    gl.disable(gl.BLEND);gl.useProgram(programs.tile);lightUniforms(gl,programs.tile,frame,lights.front);const material=MATERIALS[settings.material],diamondColors=diamondTileColors(settings);setVec3(gl,programs.tile,"uMaterial",[material.roughness,material.specular,material.grain]);setVec3(gl,programs.tile,"uDiamondColorA",diamondColors[0]);setVec3(gl,programs.tile,"uDiamondColorB",diamondColors[1]);setVec3(gl,programs.tile,"uDiamondColorC",diamondColors[2]);setVec3(gl,programs.tile,"uEmberColorA",hexToRgb(settings.emberColorA));setVec3(gl,programs.tile,"uEmberColorB",hexToRgb(settings.emberColorB));setFloat(gl,programs.tile,"uGapWidth",settings.gapWidth);setFloat(gl,programs.tile,"uPerspective",settings.perspectiveStrength);setFloat(gl,programs.tile,"uFacetRelief",settings.facetRelief);setFloat(gl,programs.tile,"uFacetSpeed",settings.facetReliefSpeed);setFloat(gl,programs.tile,"uForeground",settings.foregroundIllumination);setFloat(gl,programs.tile,"uTime",frame.time);setInt(gl,programs.tile,"uTileBase",settings.tileBase==="white"?0:1);setInt(gl,programs.tile,"uCustomDiamondColors",settings.customDiamondColorsEnabled?1:0);setInt(gl,programs.tile,"uEmberPattern",emberPatternIndex(settings.emberPattern));setInt(gl,programs.tile,"uTessellation",modeIndex);setInt(gl,programs.tile,"uPatternRotation",settings.patternRotation);setInt(gl,programs.tile,"uPatternMirror",settings.patternMirror?1:0);
     gl.bindVertexArray(sideMesh.vao);gl.drawArraysInstanced(gl.TRIANGLES,0,sideMesh.vertexCount,frame.grid.tiles.length);drawCalls+=1;
     gl.bindVertexArray(topMesh.vao);gl.drawArraysInstanced(gl.TRIANGLES,0,topMesh.vertexCount,frame.grid.tiles.length);drawCalls+=1;gl.bindVertexArray(null);
     if(lights.behind.enabled&&lights.behind.intensity>0){gl.enable(gl.BLEND);gl.blendFuncSeparate(gl.ONE,gl.ONE,gl.ZERO,gl.ONE);gl.useProgram(programs.shaft);gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,lightMaskTexture);setInt(gl,programs.shaft,"uLightMask",0);setVec2(gl,programs.shaft,"uTextureResolution",canvas.width,canvas.height);setVec2(gl,programs.shaft,"uLightUv",lights.behind.x/Math.max(1,frame.viewport.width),1-lights.behind.y/Math.max(1,frame.viewport.height));setVec3(gl,programs.shaft,"uShaftWhite",lights.behind.prismMode==="solid"?lights.behind.color:lights.behind.white);const shaftScale=lights.behind.type==="ripple"?.18:1;setFloat(gl,programs.shaft,"uShaftStrength",Math.min(3,Math.sqrt(lights.behind.intensity)*(.55+lights.behind.prism/12*.85))*shaftScale);setInt(gl,programs.shaft,"uShaftType",lightTypeIndex(lights.behind.type));gl.drawArrays(gl.TRIANGLES,0,3);gl.bindTexture(gl.TEXTURE_2D,null);drawCalls+=1;}
-    renderedFrames+=1;if(renderedFrames===1||renderedFrames%120===0)lastError=gl.getError();return{status:lastError===gl.NO_ERROR?"rendered":"gl-error",glError:lastError,drawCalls,tileInstances:frame.grid.tiles.length,gapInstances:frame.gapInstanceCount,mesh:"bounded-three-prism",lightShaftSamples:32};
+    renderedFrames+=1;if(renderedFrames===1||renderedFrames%120===0)lastError=gl.getError();return{status:lastError===gl.NO_ERROR?"rendered":"gl-error",glError:lastError,drawCalls,tileInstances:frame.grid.tiles.length,gapInstances:frame.gapInstanceCount,mesh:mode==="rhombille"?"bounded-three-prism":mode==="cairo-pentagon"?"cairo-four-pentagon":"hexagram-twelve-facet",lightShaftSamples:32};
   }
-  return{available:true,fallbackReason:null,resize,render,forceContextLoss(){lose?.loseContext();},forceContextRestore(){lose?.restoreContext();},dispose(){if(disposed)return;disposed=true;canvas.removeEventListener("webglcontextlost",lost);canvas.removeEventListener("webglcontextrestored",restored);Object.values(programs).forEach((value)=>gl.deleteProgram(value));Object.values(buffers).forEach((value)=>gl.deleteBuffer(value));gl.deleteTexture(lightMaskTexture);gl.deleteFramebuffer(lightMaskFramebuffer);gl.deleteBuffer(sideMesh.meshBuffer);gl.deleteBuffer(topMesh.meshBuffer);}};
+  return{available:true,fallbackReason:null,resize,render,forceContextLoss(){lose?.loseContext();},forceContextRestore(){lose?.restoreContext();},dispose(){if(disposed)return;disposed=true;canvas.removeEventListener("webglcontextlost",lost);canvas.removeEventListener("webglcontextrestored",restored);Object.values(programs).forEach((value)=>gl.deleteProgram(value));Object.values(buffers).forEach((value)=>gl.deleteBuffer(value));gl.deleteTexture(lightMaskTexture);gl.deleteFramebuffer(lightMaskFramebuffer);for(const mesh of[...Object.values(sideMeshes),...Object.values(topMeshes)])gl.deleteBuffer(mesh.meshBuffer);}};
 }
 
 function rainbow(time,speed){const hue=(time*speed*60)%360;return hslToRgb(hue);}

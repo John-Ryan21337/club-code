@@ -46,7 +46,7 @@ describe("The Hexagons background preset boundary", () => {
     expect(parsed.document.name).toBe("Black Light");
     expect(parsed.document.target).toBe("club-code");
     expect(parsed.document.settings).toMatchObject({
-      schemaVersion: 7,
+      schemaVersion: 10,
       quality: "cinematic",
       material: "glass",
       frontLightEnabled: true,
@@ -71,14 +71,53 @@ describe("The Hexagons background preset boundary", () => {
   });
 
   it("migrates versionless settings and rejects future settings schemas", () => {
-    expect(parseHexagonsBackgroundText(preset()).document.settings.schemaVersion).toBe(7);
+    expect(parseHexagonsBackgroundText(preset()).document.settings.schemaVersion).toBe(10);
     expect(
       parseHexagonsBackgroundText(preset({ settings: { schemaVersion: 1, material: "glass" } }))
         .document.settings.schemaVersion,
-    ).toBe(7);
+    ).toBe(10);
     expect(() =>
-      parseHexagonsBackgroundText(preset({ settings: { schemaVersion: 8, material: "glass" } })),
-    ).toThrow("settings schema version 8 is not supported");
+      parseHexagonsBackgroundText(preset({ settings: { schemaVersion: 11, material: "glass" } })),
+    ).toThrow("settings schema version 11 is not supported");
+  });
+
+  it("imports schema-10 tessellation and pattern settings without flattening them", () => {
+    const parsed = parseHexagonsBackgroundText(
+      preset({
+        settings: {
+          schemaVersion: 10,
+          tessellationMode: "hexagram",
+          colorPattern: "rings",
+          patternScale: 3,
+          patternPhase: 2,
+          patternRotation: 1,
+          patternMirror: true,
+          particleCount: 12_000,
+        },
+      }),
+    );
+
+    expect(parsed.document.settings).toMatchObject({
+      schemaVersion: 10,
+      tessellationMode: "hexagram",
+      colorPattern: "rings",
+      patternScale: 3,
+      patternPhase: 2,
+      patternRotation: 1,
+      patternMirror: true,
+      particleCount: 12_000,
+    });
+  });
+
+  it("migrates the pre-schema-9 backyard pattern to its corrected layout", () => {
+    const parsed = parseHexagonsBackgroundText(
+      preset({ settings: { schemaVersion: 8, colorPattern: "backyard-star" } }),
+    );
+
+    expect(parsed.document.settings).toMatchObject({
+      schemaVersion: 10,
+      colorPattern: "rotating-triplets",
+    });
   });
 
   it("fails closed for invalid, unsupported, and oversized documents", () => {

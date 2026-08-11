@@ -1,5 +1,6 @@
-import { buildHexGrid, hexVertices } from "./geometry.js";
+import { buildTessellationGrid, tessellationBoundary } from "./geometry.js";
 import { qualityLimits } from "./config.js";
+import { tilePatternOffset } from "./pattern.js";
 
 const TAU = Math.PI * 2;
 const clamp = (value, minimum, maximum) => Math.min(maximum, Math.max(minimum, value));
@@ -17,27 +18,42 @@ function mulberry32(seed) {
 
 function buildGapParticles(grid, settings) {
   const random = mulberry32(settings.seed ^ 0x50415254);
-  const maximum = Math.min(settings.particleCount, qualityLimits(settings.quality).tiles);
-  return Array.from({ length: maximum }, () => ({
-    tileIndex: Math.floor(random() * Math.max(1, grid.tiles.length)),
-    edge: Math.floor(random() * 6),
-    progress: random(),
-    speed: settings.particleSpeed * (1 - settings.particleSpeedVariation + random() * settings.particleSpeedVariation * 2),
-    size: 0.7 + random() * 2.1,
-    phase: random() * TAU,
-  }));
+  const maximum = Math.min(settings.particleCount, qualityLimits(settings.quality).meshParticles);
+  if (maximum === 0 || grid.tiles.length === 0) return [];
+  const edgeCount = grid.mode === "hexagram" ? 12 : 6;
+  return Array.from({ length: maximum }, () => {
+    const tileIndex = Math.floor(random() * Math.max(1, grid.tiles.length));
+    const edge = Math.floor(random() * edgeCount);
+    const tile = grid.tiles[tileIndex];
+    const vertices = tessellationBoundary(grid.mode, tile.x, tile.y, grid.radius);
+    const start = vertices[edge % vertices.length];
+    const end = vertices[(edge + 1) % vertices.length];
+    return {
+      tileIndex,
+      edge,
+      startX: start[0],
+      startY: start[1],
+      endX: end[0],
+      endY: end[1],
+      progress: random(),
+      speed: settings.particleSpeed * (1 - settings.particleSpeedVariation + random() * settings.particleSpeedVariation * 2),
+      size: 0.7 + random() * 2.1,
+      phase: random() * TAU,
+    };
+  });
 }
 
 export function createScene(viewport, display, settings) {
-  const grid = buildHexGrid(viewport, display, settings);
+  const grid = buildTessellationGrid(viewport, display, settings);
+  const gapParticles = buildGapParticles(grid, settings);
   return {
     viewport: { ...viewport },
     display: { ...display },
     grid,
     time: 0,
-    gapParticles: buildGapParticles(grid, settings),
+    gapParticles,
     tileInstances: new Float32Array(grid.tiles.length * 8),
-    gapInstances: new Float32Array(Math.max(1, settings.particleCount) * 4),
+    gapInstances: new Float32Array(Math.max(1, gapParticles.length) * 4),
     gapInstanceCount: 0,
   };
 }
@@ -96,14 +112,10 @@ function writeGapInstances(scene, settings) {
     return;
   }
   for (const particle of scene.gapParticles) {
-    const tile = scene.grid.tiles[particle.tileIndex % scene.grid.tiles.length];
-    const vertices = hexVertices(tile.x, tile.y, scene.grid.radius);
-    const start = vertices[particle.edge];
-    const end = vertices[(particle.edge + 1) % 6];
     const t = (particle.progress + scene.time * particle.speed * 0.18) % 1;
     const offset = count * 4;
-    scene.gapInstances[offset] = start[0] + (end[0] - start[0]) * t;
-    scene.gapInstances[offset + 1] = start[1] + (end[1] - start[1]) * t;
+    scene.gapInstances[offset] = particle.startX + (particle.endX - particle.startX) * t;
+    scene.gapInstances[offset + 1] = particle.startY + (particle.endY - particle.startY) * t;
     scene.gapInstances[offset + 2] = particle.size;
     scene.gapInstances[offset + 3] = cycleOpacity * (0.45 + 0.55 * Math.sin(particle.phase + scene.time * 2.1) ** 2);
     count += 1;
@@ -125,7 +137,7 @@ export function advanceScene(scene, elapsedSeconds, settings, pointer) {
     scene.tileInstances[offset + 4] = tile.phase;
     scene.tileInstances[offset + 5] = tilePulse(tile, scene, settings);
     scene.tileInstances[offset + 6] = tileSeparation(tile, scene, settings);
-    scene.tileInstances[offset + 7] = tile.random;
+    scene.tileInstances[offset + 7] = tilePatternOffset(tile, scene, settings);
   }
   writeGapInstances(scene, settings);
   return scene;

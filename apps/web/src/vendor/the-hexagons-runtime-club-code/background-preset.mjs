@@ -23,7 +23,7 @@ export default Object.freeze({
     "fallingSourceProfile": "club-code",
     "fallingEffectKind": "matrix",
     "fallingReflectionEnabled": true,
-    "schemaVersion": 7
+    "schemaVersion": 10
   },
   "activationHints": {
     "backgroundEnabled": false,
