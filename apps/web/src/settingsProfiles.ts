@@ -1,13 +1,15 @@
 import {
   ClientSettingsSchema,
   type ClientSettings,
+  type ClientSettingsPatch,
   type UnifiedSettings,
 } from "@cafecode/contracts/settings";
 import * as Schema from "effect/Schema";
 import { useEffect, useSyncExternalStore } from "react";
 
 export const SETTINGS_PROFILE_LIBRARY_STORAGE_KEY = "cafe-code:settings-profile-library:v1";
-export const SETTINGS_PROFILE_LIBRARY_VERSION = 1;
+export const SETTINGS_PROFILE_LIBRARY_VERSION = 2;
+const LEGACY_SETTINGS_PROFILE_LIBRARY_VERSIONS = new Set<unknown>([1]);
 export const SETTINGS_PROFILE_MAX_COUNT = 32;
 export const SETTINGS_PROFILE_MAX_NAME_LENGTH = 64;
 export const SETTINGS_PROFILE_MAX_STORAGE_BYTES = 512 * 1024;
@@ -24,8 +26,11 @@ export type SettingsProfileTheme = "light" | "dark" | "system";
  * This exhaustive policy is a security boundary. Every ClientSettings field must be classified,
  * so adding a field to the shared schema fails typecheck until profiles deliberately include or
  * exclude it. Include renderer-only appearance, layout, theme-adjacent, and usability preferences.
- * Exclude fields that carry identity/path/asset data or whose application activates external
- * media, provider, native-machine, server, or exact-thread execution behavior.
+ * Exclude fields that carry identity, raw paths/assets, consent, or authority data, and fields
+ * whose application activates providers, native-machine, server, or exact-thread execution
+ * behavior. Ambient media configuration is deliberately profile-owned: video sources are bounded
+ * opaque identifiers and image references are authenticated, content-addressed server assets
+ * rather than local paths or bytes. Loading a profile never starts external media.
  *
  * Add compatible client preferences deliberately in a later document version or as an
  * optional field in this version. Older profiles patch only the keys they actually contain,
@@ -87,8 +92,10 @@ export const SETTINGS_PROFILE_CLIENT_FIELD_POLICY = {
   fallingEffectActivityLinkAgentEnabled: "include",
   fallingEffectActivityLinkColorMode: "include",
   fallingEffectActivityLinkRetentionSeconds: "include",
+  // A profile can save bounded media sources and presentation settings. It
+  // must not start playback or an image cycle when the profile loads.
   ambientVideoEnabled: "external-media-activation",
-  ambientVideoSource: "external-media-activation",
+  ambientVideoSource: "include",
   ambientVideoLayoutMode: "include",
   ambientVideoPresetPlacement: "include",
   ambientVideoPresetSize: "include",
@@ -98,8 +105,8 @@ export const SETTINGS_PROFILE_CLIENT_FIELD_POLICY = {
   ambientVideoGlowColor: "include",
   ambientVideoGlowOpacity: "include",
   ambientImageEnabled: "external-media-activation",
-  ambientImageAsset: "local-asset-reference",
-  ambientImageCycleAssets: "local-asset-reference",
+  ambientImageAsset: "include",
+  ambientImageCycleAssets: "include",
   ambientImageCycleEnabled: "external-media-activation",
   ambientImageCycleSeconds: "include",
   ambientImagePresentationMode: "include",
@@ -199,8 +206,8 @@ export type SettingsProfileDifferenceKey = "theme" | SettingsProfileClientKey;
 
 export interface SettingsProfileDifference {
   readonly key: SettingsProfileDifferenceKey;
-  readonly savedValue: SettingsProfileTheme | boolean | number | string;
-  readonly currentValue: SettingsProfileTheme | boolean | number | string | undefined;
+  readonly savedValue: unknown;
+  readonly currentValue: unknown;
 }
 
 export interface SettingsProfileLibraryStorage {
@@ -303,6 +310,25 @@ function isIsoDate(value: unknown): value is string {
 }
 
 const MISSING_DATA_PROPERTY = Symbol("missing-data-property");
+const INVALID_PROFILE_VALUE = Symbol("invalid-profile-value");
+const SETTINGS_PROFILE_MAX_NESTED_DEPTH = 6;
+const SETTINGS_PROFILE_MAX_NESTED_NODES = 256;
+const SETTINGS_PROFILE_MAX_NESTED_KEYS = 64;
+const nestedSettingsProfileKeys = new Set<SettingsProfileClientKey>([
+  "ambientVideoSource",
+  "ambientImageAsset",
+  "ambientImageCycleAssets",
+]);
+const settingsProfileClientKeysIntroducedInVersionTwo = new Set<SettingsProfileClientKey>([
+  "ambientVideoSource",
+  "ambientImageAsset",
+  "ambientImageCycleAssets",
+]);
+const settingsProfileVersionOneClientKeys = Object.freeze(
+  SETTINGS_PROFILE_CLIENT_KEYS.filter(
+    (key) => !settingsProfileClientKeysIntroducedInVersionTwo.has(key),
+  ),
+);
 
 function readOwnDataProperty(
   input: object,
@@ -318,10 +344,115 @@ function readOwnDataProperty(
   }
 }
 
+/**
+ * Copy a bounded JSON-like value without reading inherited properties or
+ * invoking accessors. Only the three explicitly named media fields use this
+ * path; every other profile field retains the scalar-only boundary.
+ */
+function cloneNestedProfileValue(
+  value: unknown,
+  budget: { nodes: number },
+  depth = 0,
+): unknown | typeof INVALID_PROFILE_VALUE {
+  budget.nodes += 1;
+  if (
+    budget.nodes > SETTINGS_PROFILE_MAX_NESTED_NODES ||
+    depth > SETTINGS_PROFILE_MAX_NESTED_DEPTH
+  ) {
+    return INVALID_PROFILE_VALUE;
+  }
+  if (value === null || typeof value === "boolean") return value;
+  if (typeof value === "number") return Number.isFinite(value) ? value : INVALID_PROFILE_VALUE;
+  if (typeof value === "string") {
+    return value.length <= SETTINGS_PROFILE_MAX_SCALAR_STRING_LENGTH
+      ? value
+      : INVALID_PROFILE_VALUE;
+  }
+  if (typeof value !== "object") return INVALID_PROFILE_VALUE;
+
+  try {
+    if (Array.isArray(value)) {
+      if (Object.getPrototypeOf(value) !== Array.prototype) return INVALID_PROFILE_VALUE;
+      const length = Object.getOwnPropertyDescriptor(value, "length")?.value;
+      if (
+        typeof length !== "number" ||
+        !Number.isSafeInteger(length) ||
+        length < 0 ||
+        length > SETTINGS_PROFILE_MAX_NESTED_KEYS
+      ) {
+        return INVALID_PROFILE_VALUE;
+      }
+      const result: unknown[] = [];
+      for (let index = 0; index < length; index += 1) {
+        const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+        if (descriptor === undefined || !("value" in descriptor)) return INVALID_PROFILE_VALUE;
+        const entry = cloneNestedProfileValue(descriptor.value, budget, depth + 1);
+        if (entry === INVALID_PROFILE_VALUE) return INVALID_PROFILE_VALUE;
+        result.push(entry);
+      }
+      return result;
+    }
+
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) return INVALID_PROFILE_VALUE;
+    const keys = Reflect.ownKeys(value);
+    if (
+      keys.length > SETTINGS_PROFILE_MAX_NESTED_KEYS ||
+      keys.some((key) => typeof key !== "string")
+    ) {
+      return INVALID_PROFILE_VALUE;
+    }
+    const result: Record<string, unknown> = {};
+    for (const key of keys as string[]) {
+      if (key === "__proto__" || key === "constructor" || key === "prototype") {
+        return INVALID_PROFILE_VALUE;
+      }
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (descriptor === undefined || !("value" in descriptor)) return INVALID_PROFILE_VALUE;
+      const entry = cloneNestedProfileValue(descriptor.value, budget, depth + 1);
+      if (entry === INVALID_PROFILE_VALUE) return INVALID_PROFILE_VALUE;
+      Object.defineProperty(result, key, {
+        configurable: true,
+        enumerable: true,
+        value: entry,
+        writable: true,
+      });
+    }
+    return result;
+  } catch {
+    return INVALID_PROFILE_VALUE;
+  }
+}
+
+function cloneAndFreezeProfileValue<Value>(value: Value): Value {
+  if (Array.isArray(value)) {
+    return Object.freeze(value.map((entry) => cloneAndFreezeProfileValue(entry))) as Value;
+  }
+  if (typeof value === "object" && value !== null) {
+    const clone = Object.fromEntries(
+      Object.entries(value).map(([key, entry]) => [key, cloneAndFreezeProfileValue(entry)]),
+    );
+    return Object.freeze(clone) as Value;
+  }
+  return value;
+}
+
 function decodeClientSetting<Key extends SettingsProfileClientKey>(
   key: Key,
   value: unknown,
 ): ClientSettings[Key] | undefined {
+  if (nestedSettingsProfileKeys.has(key)) {
+    const safeValue = cloneNestedProfileValue(value, { nodes: 0 });
+    if (safeValue === INVALID_PROFILE_VALUE) return undefined;
+    try {
+      const field = ClientSettingsSchema.fields[key];
+      return cloneAndFreezeProfileValue(
+        Schema.decodeUnknownSync(field)(safeValue) as ClientSettings[Key],
+      );
+    } catch {
+      return undefined;
+    }
+  }
   if (
     (typeof value !== "boolean" && typeof value !== "number" && typeof value !== "string") ||
     (typeof value === "string" && value.length > SETTINGS_PROFILE_MAX_SCALAR_STRING_LENGTH)
@@ -346,15 +477,16 @@ function decodeClientSetting<Key extends SettingsProfileClientKey>(
  * Unknown and malformed fields are dropped independently so one forward field does
  * not make every compatible preference in the profile unusable.
  */
-export function sanitizeSettingsProfileClientSettings(
+function sanitizeSettingsProfileClientSettingsForKeys(
   input: unknown,
+  keys: readonly SettingsProfileClientKey[],
 ): SettingsProfileClientSettings {
   if (typeof input !== "object" || input === null || Array.isArray(input)) {
     return Object.freeze({});
   }
   const record = input as Record<string, unknown>;
   const result: Partial<Record<SettingsProfileClientKey, unknown>> = {};
-  for (const key of SETTINGS_PROFILE_CLIENT_KEYS) {
+  for (const key of keys) {
     const value = readOwnDataProperty(record, key);
     // JSON data properties are safe to inspect. Reject inherited properties and
     // accessors so profile capture/sanitization never executes caller-owned code.
@@ -365,6 +497,12 @@ export function sanitizeSettingsProfileClientSettings(
     }
   }
   return Object.freeze(result) as SettingsProfileClientSettings;
+}
+
+export function sanitizeSettingsProfileClientSettings(
+  input: unknown,
+): SettingsProfileClientSettings {
+  return sanitizeSettingsProfileClientSettingsForKeys(input, SETTINGS_PROFILE_CLIENT_KEYS);
 }
 
 function sanitizeSettingsProfilePayload(input: unknown): SettingsProfilePayload {
@@ -395,6 +533,21 @@ export function captureSettingsProfilePayload(
   });
 }
 
+/**
+ * Apply saved media configuration without starting external playback or an
+ * image cycle. The explicit false values also stop media that is already on.
+ */
+export function buildSettingsProfileApplyPatch(
+  clientSettings: SettingsProfileClientSettings,
+): ClientSettingsPatch {
+  return {
+    ...clientSettings,
+    ambientVideoEnabled: false,
+    ambientImageEnabled: false,
+    ambientImageCycleEnabled: false,
+  };
+}
+
 export function settingsProfileMatches(
   profile: SettingsProfile,
   payload: SettingsProfilePayload,
@@ -423,7 +576,13 @@ export function settingsProfileMatches(
       if (profileValue !== payloadValue) return false;
       continue;
     }
-    if (JSON.stringify(profileValue) !== JSON.stringify(payloadValue)) {
+    const decodedProfileValue = decodeClientSetting(key, profileValue);
+    const decodedPayloadValue = decodeClientSetting(key, payloadValue);
+    if (
+      decodedProfileValue === undefined ||
+      decodedPayloadValue === undefined ||
+      JSON.stringify(decodedProfileValue) !== JSON.stringify(decodedPayloadValue)
+    ) {
       return false;
     }
   }
@@ -475,7 +634,12 @@ export function compareSettingsProfile(
       candidateCurrentValue === MISSING_DATA_PROPERTY
         ? undefined
         : decodeClientSetting(key, candidateCurrentValue);
-    if (Object.is(decodedSavedValue, currentValue)) continue;
+    if (
+      Object.is(decodedSavedValue, currentValue) ||
+      JSON.stringify(decodedSavedValue) === JSON.stringify(currentValue)
+    ) {
+      continue;
+    }
     differences.push(
       Object.freeze({
         key,
@@ -516,9 +680,18 @@ function parsePersistedProfiles(raw: string | null): SettingsProfileLibrarySnaps
       readonly activeProfileId?: unknown;
       readonly profiles?: unknown;
     };
-    if (decoded.version !== SETTINGS_PROFILE_LIBRARY_VERSION || !Array.isArray(decoded.profiles)) {
+    if (
+      (decoded.version !== SETTINGS_PROFILE_LIBRARY_VERSION &&
+        !LEGACY_SETTINGS_PROFILE_LIBRARY_VERSIONS.has(decoded.version)) ||
+      !Array.isArray(decoded.profiles)
+    ) {
       return freezeSettingsProfileSnapshot({ activeProfileId: null, profiles: [] });
     }
+    // Version 1 deliberately excluded media activation and media references.
+    // Decode legacy documents with that historical allowlist so data inserted
+    // into an older document cannot acquire version-2 behavior during migration.
+    const clientKeys =
+      decoded.version === 1 ? settingsProfileVersionOneClientKeys : SETTINGS_PROFILE_CLIENT_KEYS;
 
     const profiles: SettingsProfile[] = [];
     const seenIds = new Set<string>();
@@ -549,7 +722,10 @@ function parsePersistedProfiles(raw: string | null): SettingsProfileLibrarySnaps
         id,
         name,
         theme: record.theme,
-        clientSettings: sanitizeSettingsProfileClientSettings(record.clientSettings),
+        clientSettings: sanitizeSettingsProfileClientSettingsForKeys(
+          record.clientSettings,
+          clientKeys,
+        ),
         createdAt,
         updatedAt,
       });
@@ -716,7 +892,13 @@ export function createSettingsProfileLibraryStore(
       const activeProfileId =
         snapshot.activeProfileId === profileId ? id : snapshot.activeProfileId;
       const persisted = replace({ activeProfileId, profiles });
-      return { profile, persisted, replaced: true };
+      return {
+        profile:
+          snapshot.profiles.find((candidate) => candidate.id === id) ??
+          freezeSettingsProfile(profile),
+        persisted,
+        replaced: true,
+      };
     },
     activate: (profileId) => {
       if (profileId !== null && !snapshot.profiles.some((profile) => profile.id === profileId)) {

@@ -1123,6 +1123,11 @@ describe("settings panels", () => {
     await nameInput.fill("Mobile");
     await page.getByRole("button", { name: "Save", exact: true }).click();
     await expect.element(page.getByText("Saved “Mobile”.", { exact: true })).toBeInTheDocument();
+    const savedMobileSettings =
+      settingsProfileLibraryStore.resolve("profile:mobile")?.clientSettings;
+    expect(savedMobileSettings).not.toHaveProperty("ambientVideoEnabled");
+    expect(savedMobileSettings).not.toHaveProperty("ambientImageEnabled");
+    expect(savedMobileSettings).not.toHaveProperty("ambientImageCycleEnabled");
 
     await page.getByLabelText("Keep animations running in background").click();
     await vi.waitFor(() => {
@@ -1174,10 +1179,14 @@ describe("settings panels", () => {
       expect(profilePatch).not.toHaveProperty("autoNudgeMode");
       expect(profilePatch).not.toHaveProperty("providerModelPreferences");
       expect(profilePatch).not.toHaveProperty("modelPacingEnabled");
-      expect(profilePatch).not.toHaveProperty("ambientVideoEnabled");
-      expect(profilePatch).not.toHaveProperty("ambientVideoSource");
-      expect(profilePatch).not.toHaveProperty("ambientImageEnabled");
-      expect(profilePatch).not.toHaveProperty("ambientImageAsset");
+      expect(profilePatch).toMatchObject({
+        ambientVideoEnabled: false,
+        ambientVideoSource: DEFAULT_CLIENT_SETTINGS.ambientVideoSource,
+        ambientImageEnabled: false,
+        ambientImageAsset: DEFAULT_CLIENT_SETTINGS.ambientImageAsset,
+        ambientImageCycleAssets: DEFAULT_CLIENT_SETTINGS.ambientImageCycleAssets,
+        ambientImageCycleEnabled: false,
+      });
       expect(profilePatch).not.toHaveProperty("sidebarBrandImage");
       expect(profilePatch).not.toHaveProperty("providerUsageWidgetEnabled");
       expect(profilePatch).not.toHaveProperty("providerUsagePollMinutes");
