@@ -391,6 +391,24 @@ export const SETTINGS_JA: Readonly<Record<string, string>> = {
   "Show current weather in world clock": "世界時計に現在の天気を表示",
   "Open-Meteo terms": "Open-Meteo 利用規約",
   "Window atmosphere": "ウィンドウアンビエンス",
+  "The Hexagons background": "The Hexagons 背景",
+  "Show imported The Hexagons background": "インポートした The Hexagons 背景を表示",
+  "Show an imported .hexbg.json design behind Club Code. Club Code keeps control of falling effects and motion safety.":
+    "インポートした .hexbg.json デザインを Club Code の背景に表示します。落下エフェクトとモーション安全設定は Club Code が管理します。",
+  "Import a preset before you turn on this background.":
+    "この背景をオンにする前に、プリセットをインポートしてください。",
+  "Background preset": "背景プリセット",
+  "Create and edit the preset in The Hexagons. Club Code imports the finished design.":
+    "プリセットの作成と編集は The Hexagons で行います。Club Code は完成したデザインをインポートします。",
+  "Import The Hexagons background preset": "The Hexagons 背景プリセットをインポート",
+  "Import preset": "プリセットをインポート",
+  "Replace preset": "プリセットを置き換え",
+  "Remove preset": "プリセットを削除",
+  "Turn on the background when you are ready.": "準備ができたら背景をオンにしてください。",
+  "Background was not imported": "背景をインポートできませんでした",
+  "Club Code could not read the background file.":
+    "Club Code は背景ファイルを読み取れませんでした。",
+  "Background preset removed": "背景プリセットを削除しました",
   "Atmosphere console": "アンビエンスコンソール",
   "Show Atmosphere console": "アンビエンスコンソールを表示",
   "Show the movable, resizable local atmosphere command panel. Turning this off fully unmounts the console and stops its listeners and local requests.":

@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => ({
   settings: null as unknown as UnifiedSettings,
   updateSettings: vi.fn(),
   updateClientSettingsConfirmed: vi.fn(),
+  toastAdd: vi.fn(),
   getHardwareLightingStatus: vi.fn(),
   refreshHardwareLighting: vi.fn(),
 }));
@@ -47,6 +48,11 @@ vi.mock("../../rpc/serverState", () => ({
   }),
 }));
 
+vi.mock("../ui/toast", () => ({
+  stackedThreadToast: (toast: unknown) => toast,
+  toastManager: { add: mocks.toastAdd },
+}));
+
 import { WindowAtmosphereSettings } from "./WindowAtmosphereSettings";
 
 beforeEach(() => {
@@ -60,6 +66,7 @@ beforeEach(() => {
   mocks.updateSettings.mockReset();
   mocks.updateClientSettingsConfirmed.mockReset();
   mocks.updateClientSettingsConfirmed.mockResolvedValue(undefined);
+  mocks.toastAdd.mockReset();
   const lightingStatus = {
     state: "available" as const,
     adapter: "OpenRGB SDK (loopback)" as const,
@@ -348,6 +355,121 @@ describe("WindowAtmosphereSettings motion", () => {
     await mounted.unmount();
   });
 
+  it("imports, activates, and removes a finished The Hexagons preset", async () => {
+    const mounted = await render(<WindowAtmosphereSettings />);
+    const toggle = page.getByRole("switch", {
+      name: "Show imported The Hexagons background",
+    });
+
+    await expect.element(toggle).toBeDisabled();
+    const input = document.querySelector(
+      'input[aria-label="Import The Hexagons background preset"]',
+    ) as HTMLInputElement | null;
+    expect(input).not.toBeNull();
+    Object.defineProperty(input, "files", {
+      configurable: true,
+      value: [
+        new File(
+          [
+            JSON.stringify({
+              kind: "the-hexagons-background",
+              formatVersion: 1,
+              name: "Black Light",
+              target: "club-code",
+              settings: {
+                material: "glass",
+                frontLightEnabled: true,
+                frontLightColor: "#9900ff",
+              },
+            }),
+          ],
+          "black-light.hexbg.json",
+          { type: "application/json" },
+        ),
+      ],
+    });
+    input!.dispatchEvent(new Event("change", { bubbles: true }));
+
+    await vi.waitFor(() => expect(mocks.updateClientSettingsConfirmed).toHaveBeenCalledOnce());
+    const importedPatch = mocks.updateClientSettingsConfirmed.mock.calls[0]?.[0];
+    expect(importedPatch).toEqual({
+      hexagonsBackgroundPresetJson: expect.any(String),
+    });
+    const stored = JSON.parse(importedPatch?.hexagonsBackgroundPresetJson as string) as {
+      activationHints: { backgroundEnabled: boolean };
+      hostPolicyHints: { renderer: string };
+      name: string;
+    };
+    expect(stored).toMatchObject({
+      name: "Black Light",
+      activationHints: { backgroundEnabled: false },
+      hostPolicyHints: { renderer: "auto" },
+    });
+
+    mocks.settings = {
+      ...mocks.settings,
+      hexagonsBackgroundPresetJson: importedPatch?.hexagonsBackgroundPresetJson as string,
+    };
+    mocks.updateClientSettingsConfirmed.mockClear();
+    await mounted.rerender(<WindowAtmosphereSettings />);
+    await expect.element(toggle).toBeEnabled();
+    await toggle.click();
+    expect(mocks.updateClientSettingsConfirmed).toHaveBeenLastCalledWith({
+      hexagonsBackgroundEnabled: true,
+    });
+
+    mocks.updateClientSettingsConfirmed.mockClear();
+    await page.getByRole("button", { name: "Remove preset" }).click();
+    expect(mocks.updateClientSettingsConfirmed).toHaveBeenLastCalledWith({
+      hexagonsBackgroundEnabled: false,
+      hexagonsBackgroundPresetJson: null,
+    });
+
+    await mounted.unmount();
+  });
+
+  it("reports invalid files once and leaves write failures to the settings layer", async () => {
+    const mounted = await render(<WindowAtmosphereSettings />);
+    const input = document.querySelector(
+      'input[aria-label="Import The Hexagons background preset"]',
+    ) as HTMLInputElement | null;
+    expect(input).not.toBeNull();
+
+    Object.defineProperty(input, "files", {
+      configurable: true,
+      value: [new File(["not json"], "broken.hexbg.json", { type: "application/json" })],
+    });
+    input!.dispatchEvent(new Event("change", { bubbles: true }));
+    await vi.waitFor(() => expect(mocks.toastAdd).toHaveBeenCalledOnce());
+    expect(mocks.updateClientSettingsConfirmed).not.toHaveBeenCalled();
+
+    mocks.toastAdd.mockClear();
+    mocks.updateClientSettingsConfirmed.mockRejectedValueOnce(new Error("Disk write failed"));
+    Object.defineProperty(input, "files", {
+      configurable: true,
+      value: [
+        new File(
+          [
+            JSON.stringify({
+              kind: "the-hexagons-background",
+              formatVersion: 1,
+              name: "Write Failure",
+              target: "club-code",
+              settings: { material: "glass" },
+            }),
+          ],
+          "write-failure.hexbg.json",
+          { type: "application/json" },
+        ),
+      ],
+    });
+    input!.dispatchEvent(new Event("change", { bubbles: true }));
+    await vi.waitFor(() => expect(mocks.updateClientSettingsConfirmed).toHaveBeenCalledOnce());
+    expect(mocks.toastAdd).not.toHaveBeenCalled();
+
+    await mounted.unmount();
+  });
+
   it("restores Flat with the complete atmosphere reset", async () => {
     mocks.settings = {
       ...mocks.settings,
@@ -357,6 +479,8 @@ describe("WindowAtmosphereSettings motion", () => {
       fallingEffectMatrixWalkEndFontSize: 24,
       fallingEffect2chEnriched: true,
       fallingEffectsOverCinemaEnabled: true,
+      hexagonsBackgroundEnabled: true,
+      hexagonsBackgroundPresetJson: "saved-preset",
     };
     const mounted = await render(<WindowAtmosphereSettings />);
 
@@ -373,6 +497,8 @@ describe("WindowAtmosphereSettings motion", () => {
         fallingEffectMatrixCenterWindIntensity: DEFAULT_FALLING_EFFECT_MATRIX_CENTER_WIND_INTENSITY,
         fallingEffect2chEnriched: false,
         fallingEffectsOverCinemaEnabled: false,
+        hexagonsBackgroundEnabled: false,
+        hexagonsBackgroundPresetJson: null,
       }),
     );
 
