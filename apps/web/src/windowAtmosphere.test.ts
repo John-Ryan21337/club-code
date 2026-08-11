@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   MAX_ATMOSPHERE_CANVAS_PIXELS,
   MAX_ATMOSPHERE_FRAME_DELTA_SECONDS,
@@ -14,6 +14,7 @@ import {
   clampFallingEffectSpeed,
   createAtmosphereScene,
   createSeededRandom,
+  drawAtmosphereScene,
   fitAtmosphereDpr,
   resolveAtmosphereColor,
   resolveMatrixAtmosphereColorFrame,
@@ -89,6 +90,42 @@ describe("window atmosphere model", () => {
     const before = structuredClone(validScene.particles);
     advanceAtmosphereSceneInPlace(validScene, Number.NaN, 1);
     expect(validScene.particles).toEqual(before);
+  });
+
+  it("updates and draws only the active rain and snow subset", () => {
+    const rain = createAtmosphereScene("rain", 800, 600, createSeededRandom(7), 2.5);
+    const activeParticle = rain.particles[0]!;
+    const inactiveParticle = rain.particles[7]!;
+    const activeY = activeParticle.y;
+    const inactivePosition = { x: inactiveParticle.x, y: inactiveParticle.y };
+
+    advanceAtmosphereSceneInPlace(rain, 0.05, 2, 7);
+
+    expect(activeParticle.y).not.toBe(activeY);
+    expect(inactiveParticle).toMatchObject(inactivePosition);
+
+    const stroke = vi.fn();
+    const context = {
+      clearRect: vi.fn(),
+      save: vi.fn(),
+      restore: vi.fn(),
+      beginPath: vi.fn(),
+      moveTo: vi.fn(),
+      lineTo: vi.fn(),
+      stroke,
+    } as unknown as CanvasRenderingContext2D;
+    drawAtmosphereScene(context, rain, "#38bdf8", 0.35, undefined, 7);
+    expect(stroke).toHaveBeenCalledTimes(7);
+
+    const matrix = createAtmosphereScene("matrix", 800, 600, createSeededRandom(9));
+    const matrixContext = {
+      clearRect: vi.fn(),
+      save: vi.fn(),
+      restore: vi.fn(),
+      fillText: vi.fn(),
+    } as unknown as CanvasRenderingContext2D;
+    drawAtmosphereScene(matrixContext, matrix, "#4ade80", 0.35, undefined, 0);
+    expect(matrixContext.fillText).toHaveBeenCalled();
   });
 
   it("resolves theme defaults and deterministic Matrix palettes", () => {

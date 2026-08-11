@@ -2,6 +2,7 @@ import {
   DEFAULT_AMBIENT_COLOR,
   DEFAULT_AMBIENT_OPACITY,
   DEFAULT_FALLING_EFFECT_DENSITY,
+  DEFAULT_FALLING_EFFECT_USAGE_REACTIVE,
   DEFAULT_FALLING_EFFECT_JAPANESE_RATIO,
   DEFAULT_FALLING_EFFECT_KIND,
   DEFAULT_FALLING_EFFECT_MATRIX_COLOR_MODE,
@@ -53,6 +54,7 @@ export function WindowAtmosphereSettings() {
     settings.fallingEffectOpacity !== DEFAULT_AMBIENT_OPACITY ||
     settings.fallingEffectSpeed !== DEFAULT_FALLING_EFFECT_SPEED ||
     settings.fallingEffectDensity !== DEFAULT_FALLING_EFFECT_DENSITY ||
+    settings.fallingEffectUsageReactive !== DEFAULT_FALLING_EFFECT_USAGE_REACTIVE ||
     settings.fallingEffectJapaneseRatio !== DEFAULT_FALLING_EFFECT_JAPANESE_RATIO;
   const controlsEnabled = atmosphereAvailable && settings.fallingEffectsEnabled;
 
@@ -81,6 +83,7 @@ export function WindowAtmosphereSettings() {
                   fallingEffectOpacity: DEFAULT_AMBIENT_OPACITY,
                   fallingEffectSpeed: DEFAULT_FALLING_EFFECT_SPEED,
                   fallingEffectDensity: DEFAULT_FALLING_EFFECT_DENSITY,
+                  fallingEffectUsageReactive: DEFAULT_FALLING_EFFECT_USAGE_REACTIVE,
                   fallingEffectJapaneseRatio: DEFAULT_FALLING_EFFECT_JAPANESE_RATIO,
                 })
               }
@@ -263,6 +266,30 @@ export function WindowAtmosphereSettings() {
             </NumberField>
             <span className="text-xs text-muted-foreground">%</span>
           </div>
+        }
+      />
+
+      <SettingsRow
+        title="Usage-reactive rain and snow"
+        description="Use aggregate output-token activity from all threads. Rain and snow increase within the renderer limits, then return to the selected baseline."
+        status={
+          settings.fallingEffectUsageReactive && !settings.usageStatsEnabled ? (
+            <span className="text-amber-600 dark:text-amber-400">
+              Usage collection is off. The effect will stay at its baseline.
+            </span>
+          ) : settings.fallingEffectKind === "matrix" ? (
+            <span className="text-muted-foreground">Select rain or snow to use this setting.</span>
+          ) : null
+        }
+        control={
+          <Switch
+            checked={settings.fallingEffectUsageReactive}
+            disabled={!controlsEnabled}
+            onCheckedChange={(checked) =>
+              updateSettings({ fallingEffectUsageReactive: Boolean(checked) })
+            }
+            aria-label="Make rain and snow react to aggregate token usage"
+          />
         }
       />
 

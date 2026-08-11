@@ -32,6 +32,8 @@ describe("settings profiles", () => {
     const source = {
       ...DEFAULT_UNIFIED_SETTINGS,
       themeAccentColor: "#123456",
+      fallingEffectsEnabled: true,
+      fallingEffectUsageReactive: true,
       providerApiToken: "secret",
       providerBaseUrl: "https://private.invalid",
       autoNudgeMode: "hardcore",
@@ -48,6 +50,8 @@ describe("settings profiles", () => {
 
     expect(Object.keys(result.clientSettings).toSorted()).toEqual(included);
     expect(result.clientSettings.themeAccentColor).toBe("#123456");
+    expect(result.clientSettings).not.toHaveProperty("fallingEffectsEnabled");
+    expect(result.clientSettings).not.toHaveProperty("fallingEffectUsageReactive");
     expect(result.clientSettings).not.toHaveProperty("providerApiToken");
     expect(result.clientSettings).not.toHaveProperty("providerBaseUrl");
     expect(result.clientSettings).not.toHaveProperty("autoNudgeMode");

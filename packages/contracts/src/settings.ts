@@ -36,6 +36,11 @@ export const DEFAULT_FALLING_EFFECT_SPEED = 1;
 export const MIN_FALLING_EFFECT_DENSITY = 0.5;
 export const MAX_FALLING_EFFECT_DENSITY = 2.5;
 export const DEFAULT_FALLING_EFFECT_DENSITY = 1;
+/**
+ * Aggregate output-token activity is a live operational input. Keep it off
+ * until the operator explicitly enables this numeric signal.
+ */
+export const DEFAULT_FALLING_EFFECT_USAGE_REACTIVE = false;
 export const MIN_FALLING_EFFECT_JAPANESE_RATIO = 0;
 export const MAX_FALLING_EFFECT_JAPANESE_RATIO = 1;
 export const DEFAULT_FALLING_EFFECT_JAPANESE_RATIO = 0.45;
@@ -209,6 +214,9 @@ export const ClientSettingsSchema = Schema.Struct({
   ),
   fallingEffectDensity: FallingEffectDensity.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_DENSITY)),
+  ),
+  fallingEffectUsageReactive: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_USAGE_REACTIVE)),
   ),
   fallingEffectJapaneseRatio: FallingEffectJapaneseRatio.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_JAPANESE_RATIO)),
@@ -809,6 +817,7 @@ export const ClientSettingsPatch = Schema.Struct({
   fallingEffectOpacity: Schema.optionalKey(AmbientOpacity),
   fallingEffectSpeed: Schema.optionalKey(FallingEffectSpeed),
   fallingEffectDensity: Schema.optionalKey(FallingEffectDensity),
+  fallingEffectUsageReactive: Schema.optionalKey(Schema.Boolean),
   fallingEffectJapaneseRatio: Schema.optionalKey(FallingEffectJapaneseRatio),
   showSidebarSearch: Schema.optionalKey(Schema.Boolean),
   showSidebarMascot: Schema.optionalKey(Schema.Boolean),

@@ -207,12 +207,19 @@ export function advanceAtmosphereSceneInPlace(
   scene: AtmosphereScene,
   elapsedSeconds: number,
   requestedSpeed: number,
+  maxFallingParticleCount = Number.POSITIVE_INFINITY,
 ): void {
   const deltaSeconds = Number.isFinite(elapsedSeconds)
     ? Math.min(MAX_ATMOSPHERE_FRAME_DELTA_SECONDS, Math.max(0, elapsedSeconds))
     : 0;
   const speed = clampFallingEffectSpeed(requestedSpeed);
-  for (const particle of scene.particles) {
+  const activeParticleCount =
+    scene.kind !== "matrix" && Number.isFinite(maxFallingParticleCount)
+      ? Math.min(scene.particles.length, Math.max(0, Math.floor(maxFallingParticleCount)))
+      : scene.particles.length;
+  for (let particleIndex = 0; particleIndex < activeParticleCount; particleIndex += 1) {
+    const particle = scene.particles[particleIndex];
+    if (particle === undefined) continue;
     if (scene.kind === "snow") {
       particle.x +=
         (particle.velocityX + Math.sin(particle.phase + particle.y * 0.01) * 8) *
@@ -316,6 +323,7 @@ export function drawAtmosphereScene(
   color: string,
   opacity: number,
   matrixColorFrame?: MatrixColorFrame,
+  maxFallingParticleCount = Number.POSITIVE_INFINITY,
 ): void {
   context.clearRect(0, 0, scene.width, scene.height);
   const normalizedOpacity = Math.min(1, Math.max(0, opacity));
@@ -324,10 +332,16 @@ export function drawAtmosphereScene(
   context.save();
   context.fillStyle = color;
   context.strokeStyle = color;
+  const activeParticleCount =
+    scene.kind !== "matrix" && Number.isFinite(maxFallingParticleCount)
+      ? Math.min(scene.particles.length, Math.max(0, Math.floor(maxFallingParticleCount)))
+      : scene.particles.length;
 
   if (scene.kind === "snow") {
     context.globalAlpha = normalizedOpacity;
-    for (const particle of scene.particles) {
+    for (let particleIndex = 0; particleIndex < activeParticleCount; particleIndex += 1) {
+      const particle = scene.particles[particleIndex];
+      if (particle === undefined) continue;
       context.beginPath();
       context.arc(particle.x, particle.y, particle.size, 0, Math.PI * 2);
       context.fill();
@@ -335,7 +349,9 @@ export function drawAtmosphereScene(
   } else if (scene.kind === "rain") {
     context.globalAlpha = normalizedOpacity;
     context.lineCap = "round";
-    for (const particle of scene.particles) {
+    for (let particleIndex = 0; particleIndex < activeParticleCount; particleIndex += 1) {
+      const particle = scene.particles[particleIndex];
+      if (particle === undefined) continue;
       context.lineWidth = Math.max(0.75, particle.size / 12);
       context.beginPath();
       context.moveTo(particle.x, particle.y);

@@ -54,6 +54,16 @@ describe("WindowAtmosphereSettings", () => {
     expect(testState.updateSettings).toHaveBeenCalledWith({
       fallingEffectMatrixColorMode: "rainbow-extra",
     });
+    document
+      .querySelector<HTMLElement>(
+        '[aria-label="Make rain and snow react to aggregate token usage"]',
+      )
+      ?.click();
+    await vi.waitFor(() => {
+      expect(testState.updateSettings).toHaveBeenCalledWith({
+        fallingEffectUsageReactive: true,
+      });
+    });
 
     await screen.unmount();
   });
@@ -81,6 +91,7 @@ describe("WindowAtmosphereSettings", () => {
       fallingEffectOpacity: 0.8,
       fallingEffectSpeed: 2,
       fallingEffectDensity: 2,
+      fallingEffectUsageReactive: true,
       fallingEffectJapaneseRatio: 0.8,
     };
     const screen = await render(<WindowAtmosphereSettings />);
@@ -94,6 +105,7 @@ describe("WindowAtmosphereSettings", () => {
       fallingEffectOpacity: 0.35,
       fallingEffectSpeed: 1,
       fallingEffectDensity: 1,
+      fallingEffectUsageReactive: false,
       fallingEffectJapaneseRatio: 0.45,
     });
 

@@ -22,7 +22,9 @@ type ProfileFieldPolicy =
   | "asset-or-path"
   | "provider-or-model"
   | "native-control"
-  | "project-specific";
+  | "project-specific"
+  | "ambient-activation"
+  | "live-operational-input";
 
 /**
  * Exhaustive fail-closed policy for local client fields. Server settings are
@@ -41,6 +43,16 @@ export const SETTINGS_PROFILE_FIELD_POLICY = {
   diffIgnoreWhitespace: "include",
   diffWordWrap: "include",
   continueBackgroundAnimations: "include",
+  fallingEffectsEnabled: "ambient-activation",
+  fallingEffectKind: "include",
+  fallingEffectColor: "include",
+  fallingEffectMatrixColorMode: "include",
+  fallingEffectOpacity: "include",
+  fallingEffectSpeed: "include",
+  fallingEffectDensity: "include",
+  // Loading a visual profile must not start observing aggregate token timing.
+  fallingEffectUsageReactive: "live-operational-input",
+  fallingEffectJapaneseRatio: "include",
   showSidebarSearch: "include",
   showSidebarMascot: "include",
   showSidebarAttribution: "include",

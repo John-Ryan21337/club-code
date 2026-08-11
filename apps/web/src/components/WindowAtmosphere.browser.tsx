@@ -1,3 +1,4 @@
+import type { UsageStatsSnapshot } from "@cafecode/contracts";
 import { DEFAULT_UNIFIED_SETTINGS, type UnifiedSettings } from "@cafecode/contracts/settings";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
@@ -8,6 +9,21 @@ import { WindowAtmosphere } from "./WindowAtmosphere";
 const testState = vi.hoisted(() => ({
   settings: null as UnifiedSettings | null,
   atmosphereAvailable: true,
+  usageStatsSubscriber: null as ((snapshot: UsageStatsSnapshot) => void) | null,
+  usageStatsUnsubscribe: vi.fn(),
+}));
+
+vi.mock("../environments/runtime", () => ({
+  getPrimaryEnvironmentConnection: () => ({
+    client: {
+      server: {
+        subscribeUsageStats: (subscriber: (snapshot: UsageStatsSnapshot) => void) => {
+          testState.usageStatsSubscriber = subscriber;
+          return testState.usageStatsUnsubscribe;
+        },
+      },
+    },
+  }),
 }));
 
 vi.mock("../hooks/useSettings", () => ({
@@ -70,6 +86,8 @@ describe("WindowAtmosphere", () => {
       continueBackgroundAnimations: true,
     };
     testState.atmosphereAvailable = true;
+    testState.usageStatsSubscriber = null;
+    testState.usageStatsUnsubscribe.mockReset();
     context = createCanvasContext();
     reducedMotion = false;
     mediaChange = null;
@@ -143,6 +161,51 @@ describe("WindowAtmosphere", () => {
 
     await screen.unmount();
     expect(frames.size).toBe(0);
+  });
+
+  it("uses aggregate output-token deltas for bounded rain activity", async () => {
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(0);
+    testState.settings = {
+      ...DEFAULT_UNIFIED_SETTINGS,
+      fallingEffectsEnabled: true,
+      fallingEffectKind: "rain",
+      fallingEffectUsageReactive: true,
+      continueBackgroundAnimations: true,
+    };
+    HTMLCanvasElement.prototype.getBoundingClientRect = vi.fn(
+      () => ({ width: 400, height: 300 }) as DOMRect,
+    );
+
+    const screen = await render(<WindowAtmosphere />);
+    expect(testState.usageStatsSubscriber).toBeTypeOf("function");
+    testState.usageStatsSubscriber?.({
+      totals: { generatingMs: 0, outputTokens: 1_000, userMessages: 0 },
+      today: { day: "2026-08-11", generatingMs: 0, outputTokens: 1_000, userMessages: 0 },
+      activeSessionCount: 2,
+      collectionEnabled: true,
+      asOfMs: 0,
+    });
+    dateNow.mockReturnValue(1_000);
+    testState.usageStatsSubscriber?.({
+      totals: { generatingMs: 0, outputTokens: 1_150, userMessages: 0 },
+      today: { day: "2026-08-11", generatingMs: 0, outputTokens: 1_150, userMessages: 0 },
+      activeSessionCount: 2,
+      collectionEnabled: true,
+      asOfMs: 1_000,
+    });
+
+    const frame = Array.from(frames.values())[0];
+    frames.clear();
+    frame?.(1_000);
+    const canvas = document.querySelector<HTMLCanvasElement>('[data-testid="window-atmosphere"]');
+    expect(canvas?.dataset.atmosphereUsageReactive).toBe("true");
+    expect(canvas?.dataset.atmosphereUsageTokensPerSecond).toBe("30.0");
+    expect(canvas?.dataset.atmosphereUsageIntensity).toBe("0.500");
+    expect(canvas?.dataset.atmosphereUsageActiveSessions).toBe("2");
+    expect(canvas?.dataset.atmosphereActiveParticleCount).toBe("27");
+
+    await screen.unmount();
+    expect(testState.usageStatsUnsubscribe).toHaveBeenCalledOnce();
   });
 
   it("suppresses rendering and animation under reduced motion", async () => {

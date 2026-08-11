@@ -1,10 +1,20 @@
 import { useEffect, useRef } from "react";
 
+import {
+  createAtmosphereUsageActivityState,
+  observeAtmosphereUsageSnapshot,
+  readAtmosphereUsageActivity,
+  resetAtmosphereUsageActivity,
+  resolveAtmosphereUsageModulation,
+  resolveUsageReactiveCapacityDensity,
+} from "../atmosphereUsageActivity";
+import { getPrimaryEnvironmentConnection } from "../environments/runtime";
 import { useSettings } from "../hooks/useSettings";
 import { useTheme } from "../hooks/useTheme";
 import { useServerConfig } from "../rpc/serverState";
 import {
   advanceAtmosphereSceneInPlace,
+  calculateAtmosphereParticleCount,
   createAtmosphereScene,
   createSeededRandom,
   drawAtmosphereScene,
@@ -36,6 +46,7 @@ export function WindowAtmosphere() {
   const opacity = useSettings((settings) => settings.fallingEffectOpacity);
   const speed = useSettings((settings) => settings.fallingEffectSpeed);
   const density = useSettings((settings) => settings.fallingEffectDensity);
+  const usageReactive = useSettings((settings) => settings.fallingEffectUsageReactive);
   const japaneseRatio = useSettings((settings) => settings.fallingEffectJapaneseRatio);
   const continueBackgroundAnimations = useSettings(
     (settings) => settings.continueBackgroundAnimations,
@@ -44,6 +55,29 @@ export function WindowAtmosphere() {
   const serverConfig = useServerConfig();
   const atmosphereAvailable = serverConfig?.ambientExperienceCapabilities.atmosphere === true;
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const usageActivityStateRef = useRef(createAtmosphereUsageActivityState());
+
+  useEffect(() => {
+    const activityState = usageActivityStateRef.current;
+    resetAtmosphereUsageActivity(activityState, Date.now());
+    if (
+      !atmosphereAvailable ||
+      !enabled ||
+      !usageReactive ||
+      (kind !== "rain" && kind !== "snow")
+    ) {
+      return;
+    }
+
+    const connection = getPrimaryEnvironmentConnection();
+    const unsubscribe = connection.client.server.subscribeUsageStats((snapshot) => {
+      observeAtmosphereUsageSnapshot(activityState, snapshot, Date.now());
+    });
+    return () => {
+      unsubscribe();
+      resetAtmosphereUsageActivity(activityState, Date.now());
+    };
+  }, [atmosphereAvailable, enabled, kind, usageReactive]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -56,6 +90,7 @@ export function WindowAtmosphere() {
     let animationFrame: number | null = null;
     let resizeFrame: number | null = null;
     let lastFrameTime: number | null = null;
+    let baseFallingParticleCount = 0;
 
     const cancelAnimation = () => {
       if (animationFrame !== null) {
@@ -83,12 +118,17 @@ export function WindowAtmosphere() {
       canvas.width = bitmapWidth;
       canvas.height = bitmapHeight;
       context.setTransform(dpr, 0, 0, dpr, 0, 0);
+      baseFallingParticleCount = calculateAtmosphereParticleCount(kind, width, height, density);
+      const capacityDensity =
+        usageReactive && (kind === "rain" || kind === "snow")
+          ? resolveUsageReactiveCapacityDensity(density)
+          : density;
       scene = createAtmosphereScene(
         kind,
         width,
         height,
         createSeededRandom(sceneSeed(kind, width, height)),
-        density,
+        capacityDensity,
         japaneseRatio,
       );
     };
@@ -98,7 +138,26 @@ export function WindowAtmosphere() {
       const elapsedSeconds =
         advance && lastFrameTime !== null ? (timestamp - lastFrameTime) / 1_000 : 0;
       lastFrameTime = timestamp;
-      advanceAtmosphereSceneInPlace(scene, elapsedSeconds, speed);
+      const usageActivity = readAtmosphereUsageActivity(usageActivityStateRef.current, Date.now());
+      const usageModulation = resolveAtmosphereUsageModulation({
+        baseParticleCount: baseFallingParticleCount,
+        baseSpeed: speed,
+        capacityParticleCount: scene.particles.length,
+        enabled: usageReactive,
+        intensity: usageActivity.intensity,
+        kind,
+      });
+      canvas.dataset.atmosphereUsageReactive = usageReactive ? "true" : "false";
+      canvas.dataset.atmosphereUsageTokensPerSecond = usageActivity.tokensPerSecond.toFixed(1);
+      canvas.dataset.atmosphereUsageIntensity = usageActivity.intensity.toFixed(3);
+      canvas.dataset.atmosphereUsageActiveSessions = String(usageActivity.activeSessionCount);
+      canvas.dataset.atmosphereActiveParticleCount = String(usageModulation.activeParticleCount);
+      advanceAtmosphereSceneInPlace(
+        scene,
+        elapsedSeconds,
+        usageModulation.speed,
+        usageModulation.activeParticleCount,
+      );
       const matrixColorFrame =
         kind === "matrix"
           ? resolveMatrixAtmosphereColorFrame(
@@ -115,6 +174,7 @@ export function WindowAtmosphere() {
           resolveAtmosphereColor(kind, configuredColor, resolvedTheme === "dark"),
         opacity,
         matrixColorFrame,
+        usageModulation.activeParticleCount,
       );
     };
 
@@ -181,6 +241,7 @@ export function WindowAtmosphere() {
     opacity,
     resolvedTheme,
     speed,
+    usageReactive,
   ]);
 
   if (!enabled || !atmosphereAvailable) return null;

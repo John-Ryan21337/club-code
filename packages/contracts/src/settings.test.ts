@@ -15,6 +15,7 @@ import {
   DEFAULT_CLIENT_SETTINGS,
   DEFAULT_CONTINUE_BACKGROUND_ANIMATIONS,
   DEFAULT_FALLING_EFFECT_DENSITY,
+  DEFAULT_FALLING_EFFECT_USAGE_REACTIVE,
   DEFAULT_FALLING_EFFECT_JAPANESE_RATIO,
   DEFAULT_FALLING_EFFECT_KIND,
   DEFAULT_FALLING_EFFECT_MATRIX_COLOR_MODE,
@@ -87,6 +88,9 @@ describe("client settings", () => {
     expect(DEFAULT_CLIENT_SETTINGS.fallingEffectOpacity).toBe(DEFAULT_AMBIENT_OPACITY);
     expect(DEFAULT_CLIENT_SETTINGS.fallingEffectSpeed).toBe(DEFAULT_FALLING_EFFECT_SPEED);
     expect(DEFAULT_CLIENT_SETTINGS.fallingEffectDensity).toBe(DEFAULT_FALLING_EFFECT_DENSITY);
+    expect(DEFAULT_CLIENT_SETTINGS.fallingEffectUsageReactive).toBe(
+      DEFAULT_FALLING_EFFECT_USAGE_REACTIVE,
+    );
     expect(DEFAULT_CLIENT_SETTINGS.fallingEffectJapaneseRatio).toBe(
       DEFAULT_FALLING_EFFECT_JAPANESE_RATIO,
     );
@@ -123,6 +127,7 @@ describe("client settings", () => {
         fallingEffectOpacity: 0.5,
         fallingEffectSpeed: 2,
         fallingEffectDensity: 1.5,
+        fallingEffectUsageReactive: true,
         fallingEffectJapaneseRatio: 0.75,
       }),
     ).toEqual({
@@ -133,6 +138,7 @@ describe("client settings", () => {
       fallingEffectOpacity: 0.5,
       fallingEffectSpeed: 2,
       fallingEffectDensity: 1.5,
+      fallingEffectUsageReactive: true,
       fallingEffectJapaneseRatio: 0.75,
     });
     expect(() => decodeClientSettingsPatch({ fallingEffectKind: "fog" })).toThrow();
