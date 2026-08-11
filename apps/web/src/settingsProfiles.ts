@@ -42,6 +42,14 @@ export const SETTINGS_PROFILE_FIELD_POLICY = {
   diffIgnoreWhitespace: "include",
   diffWordWrap: "include",
   continueBackgroundAnimations: "include",
+  fallingEffectsEnabled: "ambient-activation",
+  fallingEffectKind: "include",
+  fallingEffectColor: "include",
+  fallingEffectMatrixColorMode: "include",
+  fallingEffectOpacity: "include",
+  fallingEffectSpeed: "include",
+  fallingEffectDensity: "include",
+  fallingEffectJapaneseRatio: "include",
   // A profile can retain the normalized design, but it must not start a
   // renderer as a side effect of loading the profile.
   hexagonsBackgroundEnabled: "ambient-activation",

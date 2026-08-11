@@ -53,6 +53,7 @@ describe("settings profiles", () => {
     expect(result.clientSettings.hexagonsBackgroundPresetJson).toBe(
       '{"kind":"the-hexagons-background"}',
     );
+    expect(result.clientSettings).not.toHaveProperty("fallingEffectsEnabled");
     expect(result.clientSettings).not.toHaveProperty("hexagonsBackgroundEnabled");
     expect(result.clientSettings).not.toHaveProperty("providerApiToken");
     expect(result.clientSettings).not.toHaveProperty("providerBaseUrl");
