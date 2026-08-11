@@ -38,6 +38,8 @@ describe("settings profiles", () => {
       autoNudgeMaxMinutes: 5,
       mediaPlaylistPath: "C:/private/music",
       telemetryEnabled: true,
+      hexagonsBackgroundEnabled: true,
+      hexagonsBackgroundPresetJson: '{"kind":"the-hexagons-background"}',
     } as typeof DEFAULT_UNIFIED_SETTINGS;
 
     const result = captureSettingsProfile(source, "system");
@@ -48,6 +50,10 @@ describe("settings profiles", () => {
 
     expect(Object.keys(result.clientSettings).toSorted()).toEqual(included);
     expect(result.clientSettings.themeAccentColor).toBe("#123456");
+    expect(result.clientSettings.hexagonsBackgroundPresetJson).toBe(
+      '{"kind":"the-hexagons-background"}',
+    );
+    expect(result.clientSettings).not.toHaveProperty("hexagonsBackgroundEnabled");
     expect(result.clientSettings).not.toHaveProperty("providerApiToken");
     expect(result.clientSettings).not.toHaveProperty("providerBaseUrl");
     expect(result.clientSettings).not.toHaveProperty("autoNudgeMode");

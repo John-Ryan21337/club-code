@@ -9,6 +9,7 @@ const testState = vi.hoisted(() => ({
   settings: null as UnifiedSettings | null,
   atmosphereAvailable: true,
   updateSettings: vi.fn(),
+  toastAdd: vi.fn(),
 }));
 
 vi.mock("../../hooks/useSettings", () => ({
@@ -25,6 +26,11 @@ vi.mock("../../rpc/serverState", () => ({
   }),
 }));
 
+vi.mock("../ui/toast", () => ({
+  stackedThreadToast: (toast: unknown) => toast,
+  toastManager: { add: testState.toastAdd },
+}));
+
 describe("WindowAtmosphereSettings", () => {
   beforeEach(() => {
     testState.settings = {
@@ -34,6 +40,7 @@ describe("WindowAtmosphereSettings", () => {
     };
     testState.atmosphereAvailable = true;
     testState.updateSettings.mockReset();
+    testState.toastAdd.mockReset();
   });
 
   it("offers only the base Matrix settings and persists selections", async () => {
@@ -87,6 +94,8 @@ describe("WindowAtmosphereSettings", () => {
 
     await page.getByLabelText("Reset window atmosphere").click();
     expect(testState.updateSettings).toHaveBeenCalledWith({
+      hexagonsBackgroundEnabled: false,
+      hexagonsBackgroundPresetJson: null,
       fallingEffectsEnabled: false,
       fallingEffectKind: "snow",
       fallingEffectColor: "auto",
@@ -96,6 +105,17 @@ describe("WindowAtmosphereSettings", () => {
       fallingEffectDensity: 1,
       fallingEffectJapaneseRatio: 0.45,
     });
+
+    await screen.unmount();
+  });
+
+  it("keeps The Hexagons disabled until a preset is present", async () => {
+    const screen = await render(<WindowAtmosphereSettings />);
+
+    await expect
+      .element(page.getByLabelText("Show imported The Hexagons background"))
+      .toBeDisabled();
+    await expect.element(page.getByText("Import preset", { exact: true })).toBeInTheDocument();
 
     await screen.unmount();
   });

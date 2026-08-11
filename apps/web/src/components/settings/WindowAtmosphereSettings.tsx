@@ -7,6 +7,8 @@ import {
   DEFAULT_FALLING_EFFECT_MATRIX_COLOR_MODE,
   DEFAULT_FALLING_EFFECT_SPEED,
   DEFAULT_FALLING_EFFECTS_ENABLED,
+  DEFAULT_HEXAGONS_BACKGROUND_ENABLED,
+  DEFAULT_HEXAGONS_BACKGROUND_PRESET_JSON,
   MAX_AMBIENT_OPACITY,
   MAX_FALLING_EFFECT_DENSITY,
   MAX_FALLING_EFFECT_JAPANESE_RATIO,
@@ -16,7 +18,12 @@ import {
   MIN_FALLING_EFFECT_JAPANESE_RATIO,
   MIN_FALLING_EFFECT_SPEED,
 } from "@cafecode/contracts/settings";
+import { useMemo, useRef, useState } from "react";
 
+import {
+  parseStoredHexagonsBackground,
+  readHexagonsBackgroundFile,
+} from "../../hexagonsBackgroundPreset";
 import { useSettings, useUpdateSettings } from "../../hooks/useSettings";
 import { useServerConfig } from "../../rpc/serverState";
 import {
@@ -35,6 +42,7 @@ import {
 } from "../ui/number-field";
 import { Radio, RadioGroup } from "../ui/radio-group";
 import { Switch } from "../ui/switch";
+import { stackedThreadToast, toastManager } from "../ui/toast";
 import { ColorWheelPicker } from "./ColorWheelPicker";
 import { SettingResetButton, SettingsRow, SettingsSection } from "./settingsLayout";
 
@@ -43,9 +51,17 @@ const DEFAULT_ATMOSPHERE_PICKER_COLOR = "#38bdf8";
 export function WindowAtmosphereSettings() {
   const settings = useSettings();
   const { updateSettings } = useUpdateSettings();
+  const backgroundFileInputRef = useRef<HTMLInputElement | null>(null);
+  const [backgroundImportBusy, setBackgroundImportBusy] = useState(false);
+  const hexagonsBackground = useMemo(
+    () => parseStoredHexagonsBackground(settings.hexagonsBackgroundPresetJson),
+    [settings.hexagonsBackgroundPresetJson],
+  );
   const serverConfig = useServerConfig();
   const atmosphereAvailable = serverConfig?.ambientExperienceCapabilities.atmosphere === true;
   const hasNonDefaultValue =
+    settings.hexagonsBackgroundEnabled !== DEFAULT_HEXAGONS_BACKGROUND_ENABLED ||
+    settings.hexagonsBackgroundPresetJson !== DEFAULT_HEXAGONS_BACKGROUND_PRESET_JSON ||
     settings.fallingEffectsEnabled !== DEFAULT_FALLING_EFFECTS_ENABLED ||
     settings.fallingEffectKind !== DEFAULT_FALLING_EFFECT_KIND ||
     settings.fallingEffectColor !== DEFAULT_AMBIENT_COLOR ||
@@ -56,8 +72,104 @@ export function WindowAtmosphereSettings() {
     settings.fallingEffectJapaneseRatio !== DEFAULT_FALLING_EFFECT_JAPANESE_RATIO;
   const controlsEnabled = atmosphereAvailable && settings.fallingEffectsEnabled;
 
+  const importHexagonsBackground = async (file: File) => {
+    setBackgroundImportBusy(true);
+    try {
+      const imported = await readHexagonsBackgroundFile(file);
+      updateSettings({ hexagonsBackgroundPresetJson: imported.serialized });
+      toastManager.add(
+        stackedThreadToast({ type: "success", title: "Background preset imported" }),
+      );
+    } catch (error) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Background was not imported",
+          description: error instanceof Error ? error.message : "Choose a valid .hexbg.json file.",
+        }),
+      );
+    } finally {
+      setBackgroundImportBusy(false);
+      if (backgroundFileInputRef.current) backgroundFileInputRef.current.value = "";
+    }
+  };
+
+  const removeHexagonsBackground = () => {
+    updateSettings({
+      hexagonsBackgroundEnabled: false,
+      hexagonsBackgroundPresetJson: null,
+    });
+    toastManager.add(stackedThreadToast({ type: "success", title: "Background preset removed" }));
+  };
+
   return (
     <SettingsSection title="Window atmosphere">
+      <SettingsRow
+        title="The Hexagons background"
+        description="Show an imported .hexbg.json design behind Cafe Code. Cafe Code keeps control of falling effects and motion safety."
+        status={
+          hexagonsBackground ? (
+            <span className="text-muted-foreground">
+              Imported preset: {hexagonsBackground.document.name}
+            </span>
+          ) : (
+            <span className="text-muted-foreground">
+              Import a preset before you turn on this background.
+            </span>
+          )
+        }
+        control={
+          <Switch
+            checked={settings.hexagonsBackgroundEnabled && hexagonsBackground !== null}
+            disabled={hexagonsBackground === null || backgroundImportBusy}
+            onCheckedChange={(checked) =>
+              updateSettings({ hexagonsBackgroundEnabled: Boolean(checked) })
+            }
+            aria-label="Show imported The Hexagons background"
+          />
+        }
+      />
+
+      <SettingsRow
+        title="Background preset"
+        description="Create and edit the preset in The Hexagons. Cafe Code imports the finished design."
+        control={
+          <div className="flex flex-wrap justify-end gap-2">
+            <input
+              ref={backgroundFileInputRef}
+              className="sr-only"
+              type="file"
+              accept=".hexbg.json,application/json"
+              aria-label="Import The Hexagons background preset"
+              onChange={(event) => {
+                const file = event.currentTarget.files?.[0];
+                if (file) void importHexagonsBackground(file);
+              }}
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={backgroundImportBusy}
+              onClick={() => backgroundFileInputRef.current?.click()}
+            >
+              {hexagonsBackground ? "Replace preset" : "Import preset"}
+            </Button>
+            {hexagonsBackground ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={backgroundImportBusy}
+                onClick={removeHexagonsBackground}
+              >
+                Remove preset
+              </Button>
+            ) : null}
+          </div>
+        }
+      />
+
       <SettingsRow
         title="Falling effects"
         description="Let snow, rain, or Matrix characters drift across the whole Cafe Code window."
@@ -74,6 +186,8 @@ export function WindowAtmosphereSettings() {
               label="window atmosphere"
               onClick={() =>
                 updateSettings({
+                  hexagonsBackgroundEnabled: DEFAULT_HEXAGONS_BACKGROUND_ENABLED,
+                  hexagonsBackgroundPresetJson: DEFAULT_HEXAGONS_BACKGROUND_PRESET_JSON,
                   fallingEffectsEnabled: DEFAULT_FALLING_EFFECTS_ENABLED,
                   fallingEffectKind: DEFAULT_FALLING_EFFECT_KIND,
                   fallingEffectColor: DEFAULT_AMBIENT_COLOR,

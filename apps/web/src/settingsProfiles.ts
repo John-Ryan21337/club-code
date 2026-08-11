@@ -17,6 +17,7 @@ const SETTINGS_PROFILES_MAX_CANDIDATES = SETTINGS_PROFILES_MAX_COUNT * 4;
 
 type ProfileFieldPolicy =
   | "include"
+  | "ambient-activation"
   | "bookkeeping"
   | "external-operation"
   | "asset-or-path"
@@ -41,6 +42,10 @@ export const SETTINGS_PROFILE_FIELD_POLICY = {
   diffIgnoreWhitespace: "include",
   diffWordWrap: "include",
   continueBackgroundAnimations: "include",
+  // A profile can retain the normalized design, but it must not start a
+  // renderer as a side effect of loading the profile.
+  hexagonsBackgroundEnabled: "ambient-activation",
+  hexagonsBackgroundPresetJson: "include",
   showSidebarSearch: "include",
   showSidebarMascot: "include",
   showSidebarAttribution: "include",

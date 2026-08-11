@@ -17,6 +17,7 @@ import { InitialBackendBootstrapSurface } from "../components/InitialBackendBoot
 import { OnboardingSurface } from "../components/OnboardingSurface";
 import { DesktopNotificationWatcher } from "../components/DesktopNotificationWatcher";
 import { ProviderUpdateLaunchNotification } from "../components/ProviderUpdateLaunchNotification";
+import { HexagonsBackground } from "../components/HexagonsBackground";
 import { WindowAtmosphere } from "../components/WindowAtmosphere";
 import {
   WebSocketConnectionCoordinator,
@@ -160,6 +161,7 @@ function RootRouteView() {
         <EnvironmentConnectionManagerBootstrap />
         <AppearanceSettingsSync />
         <PowerSaveBlockerSync />
+        <HexagonsBackground />
         <WindowAtmosphere />
         {primaryEnvironmentAuthenticated ? <EventRouter /> : null}
         {primaryEnvironmentAuthenticated ? <ProviderUpdateLaunchNotification /> : null}

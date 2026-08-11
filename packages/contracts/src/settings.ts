@@ -39,6 +39,13 @@ export const DEFAULT_FALLING_EFFECT_DENSITY = 1;
 export const MIN_FALLING_EFFECT_JAPANESE_RATIO = 0;
 export const MAX_FALLING_EFFECT_JAPANESE_RATIO = 1;
 export const DEFAULT_FALLING_EFFECT_JAPANESE_RATIO = 0.45;
+export const MAX_HEXAGONS_BACKGROUND_PRESET_JSON_LENGTH = 32_768;
+export const HexagonsBackgroundPresetJson = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(MAX_HEXAGONS_BACKGROUND_PRESET_JSON_LENGTH),
+);
+export type HexagonsBackgroundPresetJson = typeof HexagonsBackgroundPresetJson.Type;
+export const DEFAULT_HEXAGONS_BACKGROUND_ENABLED = false;
+export const DEFAULT_HEXAGONS_BACKGROUND_PRESET_JSON = null;
 export const DEFAULT_FALLING_EFFECTS_ENABLED = false;
 export const FallingEffectKind = Schema.Literals(["snow", "rain", "matrix"]);
 export type FallingEffectKind = typeof FallingEffectKind.Type;
@@ -188,6 +195,12 @@ export const ClientSettingsSchema = Schema.Struct({
   diffWordWrap: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   continueBackgroundAnimations: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_CONTINUE_BACKGROUND_ANIMATIONS)),
+  ),
+  hexagonsBackgroundEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_HEXAGONS_BACKGROUND_ENABLED)),
+  ),
+  hexagonsBackgroundPresetJson: Schema.NullOr(HexagonsBackgroundPresetJson).pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_HEXAGONS_BACKGROUND_PRESET_JSON)),
   ),
   fallingEffectsEnabled: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECTS_ENABLED)),
@@ -802,6 +815,8 @@ export const ClientSettingsPatch = Schema.Struct({
   diffIgnoreWhitespace: Schema.optionalKey(Schema.Boolean),
   diffWordWrap: Schema.optionalKey(Schema.Boolean),
   continueBackgroundAnimations: Schema.optionalKey(Schema.Boolean),
+  hexagonsBackgroundEnabled: Schema.optionalKey(Schema.Boolean),
+  hexagonsBackgroundPresetJson: Schema.optionalKey(Schema.NullOr(HexagonsBackgroundPresetJson)),
   fallingEffectsEnabled: Schema.optionalKey(Schema.Boolean),
   fallingEffectKind: Schema.optionalKey(FallingEffectKind),
   fallingEffectColor: Schema.optionalKey(AmbientColor),
