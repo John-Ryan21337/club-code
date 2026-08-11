@@ -22,6 +22,7 @@ import {
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   EventId,
+  ManualFollowUpId,
   MessageId,
   ProjectId,
   ThreadId,
@@ -54,6 +55,7 @@ import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQu
 import {
   autoNudgeTurnStartCancellationReason,
   isProviderInstanceMissingError,
+  manualFollowUpHandoffDeliveryIsProven,
   providerErrorLabel,
   providerErrorLabelFromInstanceHint,
   ProviderCommandReactorLive,
@@ -186,6 +188,7 @@ describe("ProviderCommandReactor", () => {
           completedAt,
           dispatchSource: "foreground",
         },
+        createdAt: "2026-08-11T00:01:01.000Z",
       },
     } as Extract<OrchestrationEvent, { type: "thread.turn-start-requested" }>;
     const thread = {
@@ -208,7 +211,11 @@ describe("ProviderCommandReactor", () => {
         lastDispatchedAt: completedAt,
       },
       manualFollowUps: [],
-      session: { status: "ready", activeTurnId: null },
+      session: {
+        status: "starting",
+        activeTurnId: null,
+        updatedAt: event.payload.createdAt,
+      },
       latestTurn: { turnId: completedTurnId, state: "completed", completedAt },
       messages: [],
       activities: [],
@@ -241,6 +248,102 @@ describe("ProviderCommandReactor", () => {
         "provider text continued after acceptance",
       );
     });
+
+    it("cancels a different pending start instead of borrowing its session marker", () => {
+      const withDifferentPendingStart = {
+        ...thread,
+        session: {
+          ...thread.session,
+          updatedAt: "2026-08-11T00:01:02.000Z",
+        },
+      } as unknown as OrchestrationThread;
+
+      expect(autoNudgeTurnStartCancellationReason(withDifferentPendingStart, event)).toBe(
+        "the provider session is no longer ready",
+      );
+    });
+  });
+
+  describe("manual follow-up startup delivery proof", () => {
+    const activatedAt = "2026-08-11T00:02:00.000Z";
+    const activeTurnId = TurnId.make("manual-active-turn");
+    const messageId = MessageId.make("manual-message");
+    const head = {
+      id: ManualFollowUpId.make("manual-follow-up"),
+      message: { messageId, role: "user", text: "Continue.", attachments: [] },
+      dispatch: {
+        runtimeMode: "full-access",
+        interactionMode: "default",
+      },
+      status: "handoff",
+      reservationCommandId: CommandId.make("manual-reservation"),
+      enqueuedAt: activatedAt,
+      activatedAt,
+      activationCommandId: CommandId.make("manual-activation"),
+    } as unknown as OrchestrationThread["manualFollowUps"][number];
+    const baseThread = {
+      messages: [
+        {
+          id: messageId,
+          role: "user",
+          text: "Continue.",
+          attachments: [],
+          turnId: null,
+          streaming: false,
+          createdAt: activatedAt,
+          updatedAt: activatedAt,
+        },
+      ],
+      session: {
+        status: "running",
+        activeTurnId,
+      },
+      latestTurn: {
+        turnId: activeTurnId,
+        state: "running",
+        requestedAt: activatedAt,
+      },
+    } as unknown as OrchestrationThread;
+
+    it("quarantines new-turn handoffs without an exact public message-to-turn link", () => {
+      expect(manualFollowUpHandoffDeliveryIsProven({ thread: baseThread, head })).toBe(false);
+
+      const unrelatedTurn = {
+        ...baseThread,
+        latestTurn: {
+          ...baseThread.latestTurn!,
+          requestedAt: "2026-08-11T00:02:01.000Z",
+        },
+      } as OrchestrationThread;
+      expect(manualFollowUpHandoffDeliveryIsProven({ thread: unrelatedTurn, head })).toBe(false);
+    });
+
+    it("accepts an exact steer link and rejects conflicting runtime state", () => {
+      const steerThread = {
+        ...baseThread,
+        messages: [{ ...baseThread.messages[0]!, turnId: activeTurnId }],
+      } as OrchestrationThread;
+      expect(manualFollowUpHandoffDeliveryIsProven({ thread: steerThread, head })).toBe(true);
+      expect(
+        manualFollowUpHandoffDeliveryIsProven({
+          thread: steerThread,
+          head,
+          runtimeSession: {
+            status: "running",
+            activeTurnId: TurnId.make("different-runtime-turn"),
+          } as ProviderSession,
+        }),
+      ).toBe(false);
+      expect(
+        manualFollowUpHandoffDeliveryIsProven({
+          thread: steerThread,
+          head,
+          runtimeSession: {
+            status: "ready",
+          } as ProviderSession,
+        }),
+      ).toBe(false);
+    });
   });
 
   async function createHarness(input?: {
@@ -260,6 +363,7 @@ describe("ProviderCommandReactor", () => {
     const runtimeEventPubSub = Effect.runSync(PubSub.unbounded<ProviderRuntimeEvent>());
     let nextSessionIndex = 1;
     let nextGoalRevision = 1;
+    let beforeNextGetCapabilities: (() => void) | undefined;
     const runtimeSessions: Array<ProviderSession> = [];
     let providerGoal: ProviderThreadGoal | null = null;
     const goalOperations: string[] = [];
@@ -446,10 +550,15 @@ describe("ProviderCommandReactor", () => {
       restartProviderRuntime: () => unsupported(),
       listSessions: () => Effect.succeed(runtimeSessions),
       getCapabilities: (_provider) =>
-        Effect.succeed({
-          sessionModelSwitch: input?.sessionModelSwitch ?? "in-session",
-          liveSteer: input?.liveSteer ?? "unsupported",
-          threadGoals: input?.threadGoals ?? "unsupported",
+        Effect.sync(() => {
+          const hook = beforeNextGetCapabilities;
+          beforeNextGetCapabilities = undefined;
+          hook?.();
+          return {
+            sessionModelSwitch: input?.sessionModelSwitch ?? "in-session",
+            liveSteer: input?.liveSteer ?? "unsupported",
+            threadGoals: input?.threadGoals ?? "unsupported",
+          } as const;
         }),
       getInstanceInfo: (instanceId) => {
         const raw = String(instanceId);
@@ -617,6 +726,9 @@ describe("ProviderCommandReactor", () => {
       startReactor,
       drain,
       markThreadReady,
+      beforeNextCapabilities: (hook: () => void) => {
+        beforeNextGetCapabilities = hook;
+      },
     };
   }
 
@@ -744,7 +856,7 @@ describe("ProviderCommandReactor", () => {
     );
 
     await waitFor(() => harness.startSession.mock.calls.length === 1);
-    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1, 10_000);
     expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
       threadId: ThreadId.make("thread-1"),
       input: "hello reactor",
@@ -763,6 +875,144 @@ describe("ProviderCommandReactor", () => {
     const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
     expect(thread?.session?.threadId).toBe("thread-1");
     expect(thread?.session?.runtimeMode).toBe("approval-required");
+  });
+
+  it("delivers an accepted Auto Nudge from its exact projected starting marker", async () => {
+    const harness = await createHarness();
+    const threadId = ThreadId.make("thread-1");
+    const configuredAt = "2026-01-01T00:00:00.000Z";
+    const completedAt = "2026-01-01T00:00:02.000Z";
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.auto-nudge.configure",
+        commandId: CommandId.make("cmd-auto-nudge-configure"),
+        threadId,
+        expectedAuthorityRevision: 0,
+        mode: "steady-progress",
+        prompt: "Continue this exact thread.",
+        backgroundContinuation: false,
+        maxRounds: 2,
+        createdAt: configuredAt,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-auto-nudge-seed-turn"),
+        threadId,
+        message: {
+          messageId: asMessageId("auto-nudge-seed-message"),
+          role: "user",
+          text: "Seed the provider completion.",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: "2026-01-01T00:00:01.000Z",
+      }),
+    );
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1, 10_000);
+    await harness.markThreadReady(threadId, completedAt);
+    await waitFor(async () => {
+      const thread = (await harness.readModel()).threads.find((entry) => entry.id === threadId);
+      return thread?.latestTurn?.state === "completed";
+    }, 10_000);
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.auto-nudge.dispatch",
+        commandId: CommandId.make("cmd-auto-nudge-dispatch"),
+        threadId,
+        expectedAuthorityRevision: 1,
+        completedTurnId: TurnId.make("turn-1"),
+        dispatchSource: "foreground",
+        messageId: asMessageId("auto-nudge-message"),
+        createdAt: "2026-01-01T00:00:03.000Z",
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2, 10_000);
+    expect(harness.sendTurn.mock.calls[1]?.[0]).toMatchObject({
+      threadId,
+      input: "Continue this exact thread.",
+    });
+    expect(harness.steerTurn).not.toHaveBeenCalled();
+  });
+
+  it("rechecks Auto Nudge authority after session preparation and never converts it to steer", async () => {
+    const harness = await createHarness({ liveSteer: "supported" });
+    const threadId = ThreadId.make("thread-1");
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.auto-nudge.configure",
+        commandId: CommandId.make("cmd-auto-nudge-late-race-configure"),
+        threadId,
+        expectedAuthorityRevision: 0,
+        mode: "steady-progress",
+        prompt: "Do not steer this prompt.",
+        backgroundContinuation: false,
+        maxRounds: 2,
+        createdAt: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-auto-nudge-late-race-seed"),
+        threadId,
+        message: {
+          messageId: asMessageId("auto-nudge-late-race-seed-message"),
+          role: "user",
+          text: "Seed completion.",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: "2026-01-01T00:00:01.000Z",
+      }),
+    );
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1, 10_000);
+    await harness.markThreadReady(threadId, "2026-01-01T00:00:02.000Z");
+
+    harness.beforeNextCapabilities(() => {
+      const session = harness.runtimeSessions[0];
+      if (session === undefined) throw new Error("Expected a provider session.");
+      harness.runtimeSessions[0] = {
+        ...session,
+        status: "running",
+        activeTurnId: TurnId.make("late-runtime-turn"),
+        updatedAt: "2026-01-01T00:00:03.500Z",
+      };
+    });
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.auto-nudge.dispatch",
+        commandId: CommandId.make("cmd-auto-nudge-late-race-dispatch"),
+        threadId,
+        expectedAuthorityRevision: 1,
+        completedTurnId: TurnId.make("turn-1"),
+        dispatchSource: "foreground",
+        messageId: asMessageId("auto-nudge-late-race-message"),
+        createdAt: "2026-01-01T00:00:03.000Z",
+      }),
+    );
+
+    await waitFor(async () => {
+      const thread = (await harness.readModel()).threads.find((entry) => entry.id === threadId);
+      return (
+        thread?.activities.some(
+          (activity) => activity.summary === "Auto Nudge delivery cancelled",
+        ) === true
+      );
+    }, 10_000);
+    expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+    expect(harness.steerTurn).not.toHaveBeenCalled();
+    const thread = (await harness.readModel()).threads.find((entry) => entry.id === threadId);
+    expect(thread?.session).toMatchObject({
+      status: "running",
+      activeTurnId: "late-runtime-turn",
+    });
   });
 
   it("prepends the configured system prompt to the first provider turn only", async () => {

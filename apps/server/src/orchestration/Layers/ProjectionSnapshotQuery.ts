@@ -140,6 +140,9 @@ const ProjectionProjectLookupRowSchema = ProjectionProjectDbRowSchema;
 const ProjectionThreadIdLookupRowSchema = Schema.Struct({
   threadId: ThreadId,
 });
+const CancelledAutoNudgeMessageRowSchema = Schema.Struct({
+  messageId: MessageId,
+});
 const ProjectionThreadCheckpointContextThreadRowSchema = Schema.Struct({
   threadId: ThreadId,
   projectId: ProjectId,
@@ -1195,6 +1198,21 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           activities.sequence ASC,
           activities.created_at ASC,
           activities.activity_id ASC
+      `,
+  });
+
+  const listCancelledAutoNudgeMessageRows = SqlSchema.findAll({
+    Request: ThreadIdLookupInput,
+    Result: CancelledAutoNudgeMessageRowSchema,
+    execute: ({ threadId }) =>
+      sql`
+        SELECT DISTINCT json_extract(payload_json, '$.messageId') AS "messageId"
+        FROM projection_thread_activities
+        WHERE thread_id = ${threadId}
+          AND kind = 'runtime.warning'
+          AND summary = 'Auto Nudge delivery cancelled'
+          AND json_extract(payload_json, '$.providerWorkConsumed') = 0
+          AND json_type(payload_json, '$.messageId') = 'text'
       `,
   });
 
@@ -2772,6 +2790,19 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       }),
     );
 
+  const getCancelledAutoNudgeMessageIds: NonNullable<
+    ProjectionSnapshotQueryShape["getCancelledAutoNudgeMessageIds"]
+  > = (threadId) =>
+    listCancelledAutoNudgeMessageRows({ threadId }).pipe(
+      Effect.map((rows) => rows.map((row) => row.messageId)),
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "ProjectionSnapshotQuery.getCancelledAutoNudgeMessageIds:query",
+          "ProjectionSnapshotQuery.getCancelledAutoNudgeMessageIds:decodeRows",
+        ),
+      ),
+    );
+
   const getThreadDetailSnapshotById: ProjectionSnapshotQueryShape["getThreadDetailSnapshotById"] = (
     threadId,
   ) =>
@@ -2826,6 +2857,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     getThreadTurnActivityPage,
     getThreadTurnWorkLogPresence,
     getThreadDetailById,
+    getCancelledAutoNudgeMessageIds,
     getThreadDetailSnapshotById,
   } satisfies ProjectionSnapshotQueryShape;
 });

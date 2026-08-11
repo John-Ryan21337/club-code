@@ -64,6 +64,43 @@ const projectionSnapshotLayer = it.layer(
 );
 
 projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
+  it.effect("reads durable Auto Nudge cancellation markers outside thread detail", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`DELETE FROM projection_thread_activities`;
+      yield* sql`
+        INSERT INTO projection_thread_activities (
+          activity_id,
+          thread_id,
+          turn_id,
+          tone,
+          kind,
+          summary,
+          payload_json,
+          sequence,
+          created_at
+        )
+        VALUES (
+          'cancelled-auto-nudge-activity',
+          'cancelled-auto-nudge-thread',
+          NULL,
+          'info',
+          'runtime.warning',
+          'Auto Nudge delivery cancelled',
+          '{"messageId":"cancelled-auto-nudge-message","providerWorkConsumed":false}',
+          1,
+          '2026-08-11T00:00:00.000Z'
+        )
+      `;
+
+      const cancelledMessageIds = yield* snapshotQuery.getCancelledAutoNudgeMessageIds!(
+        ThreadId.make("cancelled-auto-nudge-thread"),
+      );
+      assert.deepStrictEqual(cancelledMessageIds, [MessageId.make("cancelled-auto-nudge-message")]);
+    }),
+  );
+
   it.effect("hydrates read model from projection tables and computes snapshot sequence", () =>
     Effect.gen(function* () {
       const snapshotQuery = yield* ProjectionSnapshotQuery;
