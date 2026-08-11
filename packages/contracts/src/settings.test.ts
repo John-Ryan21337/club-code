@@ -144,6 +144,7 @@ const decodeClientSettings = Schema.decodeSync(ClientSettingsSchema);
 const decodeClientSettingsPatch = Schema.decodeUnknownSync(ClientSettingsPatch);
 const encodeClientSettings = Schema.encodeSync(ClientSettingsSchema);
 const decodeCodexSettings = Schema.decodeSync(CodexSettings);
+const decodeUnknownJsonString = Schema.decodeUnknownSync(Schema.UnknownFromJsonString);
 const decodeClaudeSettings = Schema.decodeSync(ClaudeSettings);
 const decodeServerSettingsPatch = Schema.decodeUnknownSync(ServerSettingsPatch);
 
@@ -276,6 +277,30 @@ describe("client settings", () => {
     expect(DEFAULT_CLIENT_SETTINGS.hexagonsBackgroundPresetJson).toBe(
       DEFAULT_HEXAGONS_BACKGROUND_PRESET_JSON,
     );
+    const bundledHexagonsPreset = decodeUnknownJsonString(DEFAULT_HEXAGONS_BACKGROUND_PRESET_JSON);
+    expect(DEFAULT_CLIENT_SETTINGS.hexagonsBackgroundEnabled).toBe(false);
+    expect(bundledHexagonsPreset).toMatchObject({
+      kind: "the-hexagons-background",
+      formatVersion: 1,
+      name: "Club Code Default",
+      target: "club-code",
+      settings: {
+        schemaVersion: 10,
+        ratioPreset: "silver-major",
+        tileBase: "white",
+        diamondColorA: "#000000",
+        diamondColorB: "#ffffff",
+        diamondColorC: "#5c5c5c",
+        behindLightColor: "#f56200",
+        behindPrismMode: "neon",
+        frontLightColor: "#9900ff",
+        particleCount: 20_000,
+      },
+      activationHints: {
+        backgroundEnabled: false,
+        fallingEffectsEnabled: false,
+      },
+    });
     expect(DEFAULT_CLIENT_SETTINGS.themeAccentColor).toBe(DEFAULT_THEME_ACCENT_COLOR);
     expect(DEFAULT_CLIENT_SETTINGS.appAccentColor).toBe(DEFAULT_APP_ACCENT_COLOR);
     expect(DEFAULT_CLIENT_SETTINGS.workflowObservatoryEnabled).toBe(

@@ -14,6 +14,7 @@ import {
   DEFAULT_AUTO_NUDGE_MAX_ROUNDS,
   DEFAULT_AUTO_NUDGE_MODE,
 } from "./autoNudge.ts";
+import { DEFAULT_HEXAGONS_BACKGROUND_PRESET_JSON } from "./defaultHexagonsBackground.ts";
 
 export {
   AutoNudgeMaxRounds,
@@ -26,6 +27,11 @@ export {
 } from "./autoNudge.ts";
 
 // ── Client Settings (local-only) ───────────────────────────────
+
+export {
+  CLUB_CODE_DEFAULT_HEXAGONS_BACKGROUND_PRESET,
+  DEFAULT_HEXAGONS_BACKGROUND_PRESET_JSON,
+} from "./defaultHexagonsBackground.ts";
 
 export const TimestampFormat = Schema.Literals(["locale", "12-hour", "24-hour"]);
 export type TimestampFormat = typeof TimestampFormat.Type;
@@ -310,7 +316,6 @@ export const HexagonsBackgroundPresetJson = TrimmedNonEmptyString.check(
 );
 export type HexagonsBackgroundPresetJson = typeof HexagonsBackgroundPresetJson.Type;
 export const DEFAULT_HEXAGONS_BACKGROUND_ENABLED = false;
-export const DEFAULT_HEXAGONS_BACKGROUND_PRESET_JSON = null;
 export const DEFAULT_FALLING_EFFECTS_ENABLED = false;
 /**
  * Compatibility default: the console existed before this persisted kill
