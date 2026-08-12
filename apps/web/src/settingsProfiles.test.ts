@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   buildSettingsProfileApplyPatch,
+  buildSettingsProfileRollbackPatch,
   captureSettingsProfile,
   createSettingsProfilesStore,
   MOBILE_SETTINGS_PROFILE_BOOTSTRAP_MARKER_KEY,
@@ -100,13 +101,15 @@ describe("settings profiles", () => {
     expect(profile.clientSettings).not.toHaveProperty("ambientImageEnabled");
     expect(profile.clientSettings).not.toHaveProperty("ambientImageCycleEnabled");
 
-    expect(buildSettingsProfileApplyPatch(profile.clientSettings)).toMatchObject({
+    const applyPatch = buildSettingsProfileApplyPatch(profile.clientSettings);
+    expect(applyPatch).toMatchObject({
       ambientVideoSource: { kind: "video", id: "dQw4w9WgXcQ" },
       ambientVideoGlowEnabled: true,
       ambientVideoEnabled: false,
       ambientImageEnabled: false,
       ambientImageCycleEnabled: false,
     });
+    expect(Object.isFrozen(applyPatch)).toBe(true);
   });
 
   it("previews only saved fields that would change", () => {
@@ -144,6 +147,40 @@ describe("settings profiles", () => {
     expect(getter).not.toHaveBeenCalled();
   });
 
+  it("does not invoke accessors while it captures or prepares compensation", () => {
+    const captureGetter = vi.fn(() => false);
+    const captureSource = { ...DEFAULT_UNIFIED_SETTINGS } as Record<string, unknown>;
+    Object.defineProperty(captureSource, "showSidebarMascot", { get: captureGetter });
+
+    expect(() => captureSettingsProfile(captureSource as never, "dark")).toThrow(
+      SettingsProfileError,
+    );
+    expect(captureGetter).not.toHaveBeenCalled();
+
+    const rollbackGetter = vi.fn(() => true);
+    const rollbackSource = { ...DEFAULT_UNIFIED_SETTINGS } as Record<string, unknown>;
+    Object.defineProperty(rollbackSource, "ambientVideoEnabled", { get: rollbackGetter });
+    expect(() =>
+      buildSettingsProfileRollbackPatch(
+        rollbackSource as never,
+        buildSettingsProfileApplyPatch(payload().clientSettings),
+      ),
+    ).toThrow(SettingsProfileError);
+    expect(rollbackGetter).not.toHaveBeenCalled();
+
+    const previewProfile = createSettingsProfilesStore(createStorage(), now).create(
+      "Preview accessor",
+      payload(),
+    );
+    const previewGetter = vi.fn(() => previewProfile.clientSettings);
+    const unsafePreview = { ...previewProfile } as Record<string, unknown>;
+    Object.defineProperty(unsafePreview, "clientSettings", { get: previewGetter });
+    expect(() =>
+      getSettingsProfileDifferenceKeys(unsafePreview as never, DEFAULT_UNIFIED_SETTINGS, "dark"),
+    ).toThrow(SettingsProfileError);
+    expect(previewGetter).not.toHaveBeenCalled();
+  });
+
   it("saves, reloads, and applies deterministic IDs without storing unknown fields", () => {
     const storage = createStorage();
     const store = createSettingsProfilesStore(storage, now);
@@ -156,7 +193,11 @@ describe("settings profiles", () => {
       createdAt: "2026-08-01T12:00:00.000Z",
     });
     expect(createSettingsProfilesStore(storage).getSnapshot().profiles).toEqual([created]);
-    expect(JSON.parse(storage.read() ?? "null")).toEqual({ version: 2, profiles: [created] });
+    expect(JSON.parse(storage.read() ?? "null")).toEqual({
+      version: 3,
+      activeProfileId: null,
+      profiles: [created],
+    });
   });
 
   it("does not give legacy documents new media behavior", () => {
@@ -333,6 +374,126 @@ describe("settings profiles", () => {
     expect(first.getSnapshot().profiles.map(({ name }) => name)).toEqual(["First", "Second"]);
   });
 
+  it("migrates an exact version-two library when active state is first written", () => {
+    const sourceStorage = createStorage();
+    const source = createSettingsProfilesStore(sourceStorage, now);
+    const saved = source.create("Legacy", payload());
+    const versionTwo = JSON.stringify({ version: 2, profiles: [saved] });
+    const storage = createStorage(versionTwo);
+    const migrated = createSettingsProfilesStore(storage, now);
+
+    expect(migrated.getSnapshot()).toMatchObject({ activeProfileId: null, profiles: [saved] });
+    expect(migrated.activate(saved)).toBe("activated");
+    expect(JSON.parse(storage.read() ?? "null")).toMatchObject({
+      version: 3,
+      activeProfileId: saved.id,
+    });
+  });
+
+  it("fails closed for malformed or future-shaped version-three libraries", () => {
+    const validStorage = createStorage();
+    const validStore = createSettingsProfilesStore(validStorage, now);
+    const saved = validStore.create("Strict", payload());
+    const valid = JSON.parse(validStorage.read() ?? "null") as Record<string, unknown>;
+    const cases = [
+      { ...valid, activeProfileId: "profile:missing" },
+      { version: 3, activeProfileId: "profile:missing", profiles: [] },
+      { ...valid, futureProfileMetadata: true },
+      { ...valid, profiles: [{ ...saved, futureProfileMetadata: true }] },
+      {
+        ...valid,
+        profiles: [
+          { ...saved, clientSettings: { ...saved.clientSettings, futurePresentationMode: true } },
+        ],
+      },
+      { ...valid, profiles: [null] },
+      { ...valid, version: 4 },
+    ];
+
+    for (const document of cases) {
+      const raw = JSON.stringify(document);
+      const storage = createStorage(raw);
+      const store = createSettingsProfilesStore(storage);
+      expect(store.getSnapshot()).toEqual({
+        activeProfileId: null,
+        profiles: [],
+      });
+      expect(() => store.create("Replacement", payload())).toThrow(
+        "The saved profile library uses an unsupported or invalid format.",
+      );
+      expect(storage.read()).toBe(raw);
+    }
+  });
+
+  it("renames and updates the active profile without losing active identity", () => {
+    const storage = createStorage();
+    const store = createSettingsProfilesStore(storage, now);
+    const saved = store.create("Desk", payload());
+    expect(store.activate(saved)).toBe("activated");
+
+    const renamed = store.rename(saved, "Desktop");
+    expect(typeof renamed).not.toBe("string");
+    if (typeof renamed === "string") throw new Error("Expected a renamed profile.");
+    expect(store.getSnapshot().activeProfileId).toBe(renamed.id);
+
+    const nextPayload = captureSettingsProfile(
+      { ...DEFAULT_UNIFIED_SETTINGS, showSidebarMascot: false },
+      "light",
+    );
+    const updated = store.updateActive(renamed, nextPayload);
+    expect(typeof updated).not.toBe("string");
+    if (typeof updated === "string") throw new Error("Expected an updated profile.");
+    expect(updated).toMatchObject({ theme: "light", clientSettings: { showSidebarMascot: false } });
+    expect(store.getSnapshot().activeProfileId).toBe(updated.id);
+  });
+
+  it("rejects stale rename and update operations from another window", () => {
+    const storage = createStorage();
+    const first = createSettingsProfilesStore(storage, now);
+    const stale = first.create("Shared", payload());
+    expect(first.activate(stale)).toBe("activated");
+    const second = createSettingsProfilesStore(storage, now);
+    const changed = second.updateActive(
+      stale,
+      captureSettingsProfile({ ...DEFAULT_UNIFIED_SETTINGS, showSidebarMascot: false }, "light"),
+    );
+    expect(typeof changed).not.toBe("string");
+
+    expect(first.rename(stale, "Renamed")).toBe("changed");
+    expect(first.updateActive(stale, payload())).toBe("changed");
+  });
+
+  it("does not invoke hostile expected-profile accessors during mutations", () => {
+    const storage = createStorage();
+    const store = createSettingsProfilesStore(storage, now);
+    const saved = store.create("Safe", payload());
+    const idGetter = vi.fn(() => saved.id);
+    const hostile = {} as Record<string, unknown>;
+    Object.defineProperty(hostile, "id", { get: idGetter });
+
+    expect(store.remove(hostile as never)).toBe("changed");
+    expect(store.activate(hostile as never)).toBe("changed");
+    expect(store.rename(hostile as never, "Renamed")).toBe("changed");
+    expect(store.updateActive(hostile as never, payload())).toBe("changed");
+    expect(idGetter).not.toHaveBeenCalled();
+
+    const nameGetter = vi.fn(() => saved.name);
+    const hostileComparable = { ...saved } as Record<string, unknown>;
+    Object.defineProperty(hostileComparable, "name", { get: nameGetter });
+    expect(store.remove(hostileComparable as never)).toBe("changed");
+    expect(nameGetter).not.toHaveBeenCalled();
+    expect(store.resolve(saved.id)).toEqual(saved);
+  });
+
+  it("clears active identity when the active profile is deleted", () => {
+    const storage = createStorage();
+    const store = createSettingsProfilesStore(storage, now);
+    const saved = store.create("Active", payload());
+    expect(store.activate(saved)).toBe("activated");
+    expect(store.remove(saved)).toBe("removed");
+    expect(store.getSnapshot()).toEqual({ activeProfileId: null, profiles: [] });
+  });
+
   it("does not delete a same-name profile that another window replaced", () => {
     const storage = createStorage();
     const first = createSettingsProfilesStore(storage, now);
@@ -462,6 +623,21 @@ describe("settings profiles", () => {
 
     expect(store.seedMobileProfileOnce("Mobile Profile", payload())).toBe("skipped");
     expect(JSON.parse(storage.read(SETTINGS_PROFILES_STORAGE_KEY) ?? "null").profiles).toEqual([]);
+  });
+
+  it("preserves bootstrap deletion authority after the seeded profile was active", () => {
+    const storage = createKeyedStorage();
+    const store = createSettingsProfilesStore(storage, now);
+    expect(store.seedMobileProfileOnce("Mobile Profile", payload())).toBe("created");
+    const mobile = store.resolve("profile:mobile%20profile");
+    expect(mobile).not.toBeNull();
+    expect(store.activate(mobile!)).toBe("activated");
+    expect(store.remove(mobile!)).toBe("removed");
+
+    const reloaded = createSettingsProfilesStore(storage, now);
+    expect(reloaded.getSnapshot()).toEqual({ activeProfileId: null, profiles: [] });
+    expect(reloaded.seedMobileProfileOnce("Mobile Profile", payload())).toBe("skipped");
+    expect(reloaded.getSnapshot()).toEqual({ activeProfileId: null, profiles: [] });
   });
 
   it("records a populated version-two library as considered without changing it", () => {

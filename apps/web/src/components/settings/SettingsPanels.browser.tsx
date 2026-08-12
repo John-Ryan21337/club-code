@@ -39,6 +39,7 @@ import {
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { __resetLocalApiForTests } from "../../localApi";
+import { getClientSettings, updateClientSettingsConfirmed } from "../../hooks/useSettings";
 import {
   captureSettingsProfile,
   createSettingsProfilesStore,
@@ -1199,6 +1200,10 @@ describe("settings panels", () => {
     await page.getByRole("button", { name: "Apply Focus" }).click();
     await vi.waitFor(() => expect(updateClientSettings).toHaveBeenCalledOnce());
     await expect.element(page.getByRole("status")).toBeInTheDocument();
+    await expect
+      .element(page.getByRole("button", { name: "Update active profile Focus" }))
+      .toBeInTheDocument();
+    expect(settingsProfilesStore.getSnapshot().activeProfileId).toBe("profile:focus");
     await expect.element(page.getByText("Applied “Focus”.")).toBeInTheDocument();
 
     const applied = updateClientSettings.mock.calls[0]?.[0];
@@ -1222,6 +1227,7 @@ describe("settings panels", () => {
     await page.getByRole("button", { name: "Delete profile" }).click();
     await expect.element(page.getByText(/Current settings did not change\./u)).toBeInTheDocument();
     await expect.element(page.getByText("No profiles saved yet.")).toBeInTheDocument();
+    expect(settingsProfilesStore.getSnapshot().activeProfileId).toBeNull();
     expect(updateClientSettings).not.toHaveBeenCalled();
   });
 
@@ -1286,6 +1292,214 @@ describe("settings panels", () => {
     await page.getByRole("button", { name: "Preview Shared" }).click();
     await expect
       .element(page.getByRole("region", { name: "Changes from applying Shared" }))
+      .toBeInTheDocument();
+  });
+
+  it("restores settings when a profile is deleted during confirmed apply", async () => {
+    const desktopBridge = createDesktopBridgeStub();
+    window.desktopBridge = desktopBridge;
+    const { updateClientSettings } = installClientSettingsNativeApi(desktopBridge);
+    setServerConfigSnapshot({
+      ...createBaseServerConfig(),
+      clientSettings: {
+        ...DEFAULT_CLIENT_SETTINGS,
+        showSidebarMascot: true,
+      },
+    });
+    const otherWindowStore = createSettingsProfilesStore(window.localStorage);
+    const saved = otherWindowStore.create(
+      "Concurrent",
+      captureSettingsProfile({ ...DEFAULT_UNIFIED_SETTINGS, showSidebarMascot: false }, "light"),
+    );
+    settingsProfilesStore.refresh();
+    updateClientSettings
+      .mockImplementationOnce(async () => {
+        expect(otherWindowStore.remove(saved)).toBe("removed");
+        return DEFAULT_CLIENT_SETTINGS;
+      })
+      .mockResolvedValueOnce(DEFAULT_CLIENT_SETTINGS);
+
+    mounted = await renderWithTestRouter(
+      <AppAtomRegistryProvider>
+        <AppearanceSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    await page.getByRole("button", { name: "Apply Concurrent" }).click();
+    await vi.waitFor(() => expect(updateClientSettings).toHaveBeenCalledTimes(2));
+    expect(updateClientSettings.mock.calls[0]?.[0]).toMatchObject({ showSidebarMascot: false });
+    expect(updateClientSettings.mock.calls[1]?.[0]).toMatchObject({ showSidebarMascot: true });
+    expect(localStorage.getItem("cafe-code:theme")).toBe("dark");
+    expect(settingsProfilesStore.getSnapshot().activeProfileId).toBeNull();
+    await expect
+      .element(page.getByText("“Concurrent” was deleted or renamed while it was being applied."))
+      .toBeInTheDocument();
+  });
+
+  it("restores the theme and keeps the active marker clear when persistence rejects", async () => {
+    const desktopBridge = createDesktopBridgeStub();
+    window.desktopBridge = desktopBridge;
+    const { updateClientSettings } = installClientSettingsNativeApi(desktopBridge);
+    updateClientSettings.mockRejectedValueOnce(new Error("offline"));
+    setServerConfigSnapshot({
+      ...createBaseServerConfig(),
+      clientSettings: DEFAULT_CLIENT_SETTINGS,
+    });
+    const store = createSettingsProfilesStore(window.localStorage);
+    store.create("Rejected", captureSettingsProfile(DEFAULT_UNIFIED_SETTINGS, "light"));
+    settingsProfilesStore.refresh();
+
+    mounted = await renderWithTestRouter(
+      <AppAtomRegistryProvider>
+        <AppearanceSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    await page.getByRole("button", { name: "Apply Rejected" }).click();
+    await expect.element(page.getByText("offline")).toBeInTheDocument();
+    expect(localStorage.getItem("cafe-code:theme")).toBe("dark");
+    expect(settingsProfilesStore.getSnapshot().activeProfileId).toBeNull();
+    expect(updateClientSettings).toHaveBeenCalledTimes(2);
+    expect(updateClientSettings.mock.calls[1]?.[0]).toMatchObject({
+      ambientVideoEnabled: false,
+      ambientImageEnabled: false,
+      ambientImageCycleEnabled: false,
+    });
+  });
+
+  it("publishes the authoritative settings returned by a confirmed write", async () => {
+    const desktopBridge = createDesktopBridgeStub();
+    window.desktopBridge = desktopBridge;
+    const { updateClientSettings } = installClientSettingsNativeApi(desktopBridge);
+    setServerConfigSnapshot({
+      ...createBaseServerConfig(),
+      clientSettings: {
+        ...DEFAULT_CLIENT_SETTINGS,
+        showSidebarMascot: true,
+      },
+    });
+    updateClientSettings.mockResolvedValueOnce({
+      ...DEFAULT_CLIENT_SETTINGS,
+      showSidebarMascot: true,
+      diffWordWrap: false,
+    });
+
+    await updateClientSettingsConfirmed({ showSidebarMascot: false });
+
+    expect(updateClientSettings).toHaveBeenCalledWith({ showSidebarMascot: false });
+    expect(getClientSettings()).toMatchObject({
+      showSidebarMascot: true,
+      diffWordWrap: false,
+    });
+  });
+
+  it("does not overwrite excluded local settings after a confirmed read failure", async () => {
+    const desktopBridge = createDesktopBridgeStub();
+    desktopBridge.getClientSettings = vi.fn().mockRejectedValue(new Error("settings unreadable"));
+    const setClientSettings = vi.fn().mockResolvedValue(undefined);
+    desktopBridge.setClientSettings = setClientSettings;
+    window.desktopBridge = desktopBridge;
+    window.nativeApi = {
+      persistence: {
+        getClientSettings: desktopBridge.getClientSettings,
+        setClientSettings,
+      },
+    } as unknown as LocalApi;
+
+    await expect(updateClientSettingsConfirmed({ showSidebarMascot: false })).rejects.toThrow(
+      "settings unreadable",
+    );
+
+    expect(setClientSettings).not.toHaveBeenCalled();
+  });
+
+  it("attempts settings compensation even when theme restoration fails", async () => {
+    const desktopBridge = createDesktopBridgeStub();
+    window.desktopBridge = desktopBridge;
+    const { updateClientSettings } = installClientSettingsNativeApi(desktopBridge);
+    setServerConfigSnapshot({
+      ...createBaseServerConfig(),
+      clientSettings: {
+        ...DEFAULT_CLIENT_SETTINGS,
+        showSidebarMascot: true,
+      },
+    });
+    const otherWindowStore = createSettingsProfilesStore(window.localStorage);
+    const saved = otherWindowStore.create(
+      "Theme failure",
+      captureSettingsProfile({ ...DEFAULT_UNIFIED_SETTINGS, showSidebarMascot: false }, "light"),
+    );
+    settingsProfilesStore.refresh();
+    updateClientSettings
+      .mockImplementationOnce(async () => {
+        expect(otherWindowStore.remove(saved)).toBe("removed");
+        return { ...DEFAULT_CLIENT_SETTINGS, showSidebarMascot: false };
+      })
+      .mockResolvedValueOnce({ ...DEFAULT_CLIENT_SETTINGS, showSidebarMascot: true });
+
+    mounted = await renderWithTestRouter(
+      <AppAtomRegistryProvider>
+        <AppearanceSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    const nativeSetItem = Storage.prototype.setItem;
+    const setItemSpy = vi
+      .spyOn(Storage.prototype, "setItem")
+      .mockImplementation(function (this: Storage, key, value) {
+        if (key === "cafe-code:theme" && value === "dark") throw new Error("theme storage blocked");
+        return nativeSetItem.call(this, key, value);
+      });
+    try {
+      await page.getByRole("button", { name: "Apply Theme failure" }).click();
+      await vi.waitFor(() => expect(updateClientSettings).toHaveBeenCalledTimes(2));
+      expect(updateClientSettings.mock.calls[1]?.[0]).toMatchObject({ showSidebarMascot: true });
+      expect(settingsProfilesStore.getSnapshot().activeProfileId).toBeNull();
+      await expect
+        .element(
+          page.getByText(
+            "The profile was not activated, and the previous theme could not be restored. Review the current settings before you continue.",
+          ),
+        )
+        .toBeInTheDocument();
+    } finally {
+      setItemSpy.mockRestore();
+    }
+  });
+
+  it("renames and updates the active profile from settings", async () => {
+    const desktopBridge = createDesktopBridgeStub();
+    window.desktopBridge = desktopBridge;
+    installClientSettingsNativeApi(desktopBridge);
+    setServerConfigSnapshot({
+      ...createBaseServerConfig(),
+      clientSettings: DEFAULT_CLIENT_SETTINGS,
+    });
+    const store = createSettingsProfilesStore(window.localStorage);
+    const saved = store.create(
+      "Original",
+      captureSettingsProfile(DEFAULT_UNIFIED_SETTINGS, "dark"),
+    );
+    expect(store.activate(saved)).toBe("activated");
+    settingsProfilesStore.refresh();
+
+    mounted = await renderWithTestRouter(
+      <AppAtomRegistryProvider>
+        <AppearanceSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    await page.getByRole("button", { name: "Rename Original" }).click();
+    await page.getByLabelText("Settings profile name", { exact: true }).fill("Renamed");
+    await page.getByRole("button", { name: "Rename profile" }).click();
+    await expect
+      .element(page.getByRole("button", { name: "Update active profile Renamed" }))
+      .toBeInTheDocument();
+    expect(settingsProfilesStore.getSnapshot().activeProfileId).toBe("profile:renamed");
+
+    await page.getByRole("button", { name: "Update active profile Renamed" }).click();
+    await expect
+      .element(page.getByText("Updated “Renamed” with the current settings."))
       .toBeInTheDocument();
   });
 

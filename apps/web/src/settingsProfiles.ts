@@ -16,8 +16,8 @@ export const SETTINGS_PROFILES_LOCK_NAME = "cafe-code:settings-profiles:v1:mutat
 export const MOBILE_SETTINGS_PROFILE_BOOTSTRAP_MARKER_KEY =
   "cafe-code:settings-profiles:mobile-bootstrap:v1";
 export const MOBILE_SETTINGS_PROFILE_BOOTSTRAP_MARKER_VALUE = "considered";
-const SETTINGS_PROFILES_VERSION = 2;
-const LEGACY_SETTINGS_PROFILES_VERSIONS = new Set<unknown>([1]);
+const SETTINGS_PROFILES_VERSION = 3;
+const LEGACY_SETTINGS_PROFILES_VERSIONS = new Set<unknown>([1, 2]);
 const SETTINGS_PROFILES_MAX_CANDIDATES = SETTINGS_PROFILES_MAX_COUNT * 4;
 
 type ProfileFieldPolicy =
@@ -117,6 +117,7 @@ export interface SettingsProfile extends SettingsProfilePayload {
   readonly createdAt: string;
 }
 export interface SettingsProfilesSnapshot {
+  readonly activeProfileId: string | null;
   readonly profiles: readonly SettingsProfile[];
 }
 export interface SettingsProfilesStorage {
@@ -132,6 +133,8 @@ export type SettingsProfileDifferenceKey =
   | "ambientImageEnabled"
   | "ambientImageCycleEnabled";
 export type SettingsProfileRemovalResult = "removed" | "missing" | "changed";
+export type SettingsProfileActivationResult = "activated" | "missing" | "changed";
+export type SettingsProfileUpdateResult = SettingsProfile | "missing" | "changed" | "inactive";
 
 export class SettingsProfileError extends Error {
   constructor(message: string) {
@@ -222,6 +225,57 @@ const versionTwoIncludedKeys = Object.freeze([
   "timestampFormat",
   "chatCopyFormat",
 ] as const satisfies readonly IncludedKey[]);
+// Version 3 adds active-profile identity but does not grant profiles access to
+// any new client setting. Keep this list independent from both the current
+// field policy and earlier document versions.
+const versionThreeIncludedKeys = Object.freeze([
+  "autoOpenPlanSidebar",
+  "confirmThreadArchive",
+  "confirmThreadDelete",
+  "diffIgnoreWhitespace",
+  "diffWordWrap",
+  "continueBackgroundAnimations",
+  "showSidebarSearch",
+  "showSidebarMascot",
+  "showSidebarAttribution",
+  "brandWordmarkPrefix",
+  "sidebarStarSpeed",
+  "ambianceEnabled",
+  "ambianceEffect",
+  "ambianceIntensity",
+  "ambianceReactMode",
+  "ambianceSurfaceSidebar",
+  "ambianceSurfaceThread",
+  "ambianceSurfaceComposer",
+  "ambianceColor",
+  "ambientVideoSource",
+  "ambientVideoLayoutMode",
+  "ambientVideoPresetPlacement",
+  "ambientVideoPresetSize",
+  "ambientVideoPresentationMode",
+  "ambientVideoGlowEnabled",
+  "ambientVideoGlowMode",
+  "ambientVideoGlowColor",
+  "ambientVideoGlowOpacity",
+  "ambientImageAsset",
+  "ambientImageCycleAssets",
+  "ambientImageCycleSeconds",
+  "ambientImagePresentationMode",
+  "ambientImageLayoutMode",
+  "ambientImagePresetPlacement",
+  "ambientImagePresetSize",
+  "ambientImageGlowEnabled",
+  "ambientImageGlowColor",
+  "ambientImageGlowOpacity",
+  "themeAccentColor",
+  "appAccentColor",
+  "sidebarProjectGroupingMode",
+  "sidebarProjectSortOrder",
+  "sidebarThreadSortOrder",
+  "sidebarThreadPreviewCount",
+  "timestampFormat",
+  "chatCopyFormat",
+] as const satisfies readonly IncludedKey[]);
 const nestedProfileKeys = new Set<IncludedKey>([
   "ambientVideoSource",
   "ambientImageAsset",
@@ -229,13 +283,28 @@ const nestedProfileKeys = new Set<IncludedKey>([
 ]);
 const decodeClientSettings = Schema.decodeUnknownSync(ClientSettingsSchema);
 const emptySnapshot = (): SettingsProfilesSnapshot =>
-  Object.freeze({ profiles: Object.freeze([]) });
+  Object.freeze({ activeProfileId: null, profiles: Object.freeze([]) });
 const ownValue = (input: object, key: PropertyKey): unknown => {
   try {
     const descriptor = Object.getOwnPropertyDescriptor(input, key);
     return descriptor && "value" in descriptor ? descriptor.value : undefined;
   } catch {
     return undefined;
+  }
+};
+const requiredOwnDataValue = (input: unknown, key: PropertyKey): unknown => {
+  if (typeof input !== "object" || input === null) {
+    throw new SettingsProfileError("The profile settings are invalid.");
+  }
+  try {
+    const descriptor = Object.getOwnPropertyDescriptor(input, key);
+    if (descriptor === undefined || !("value" in descriptor)) {
+      throw new SettingsProfileError("The profile settings are invalid.");
+    }
+    return descriptor.value;
+  } catch (cause) {
+    if (cause instanceof SettingsProfileError) throw cause;
+    throw new SettingsProfileError("The profile settings are invalid.");
   }
 };
 const isRecord = (value: unknown): value is Record<string, unknown> => {
@@ -416,7 +485,7 @@ export function captureSettingsProfile(
 ): SettingsProfilePayload {
   if (!isTheme(theme)) throw new SettingsProfileError("Choose a valid theme.");
   const selected: Partial<Record<IncludedKey, unknown>> = {};
-  for (const key of includedKeys) selected[key] = settings[key];
+  for (const key of includedKeys) selected[key] = requiredOwnDataValue(settings, key);
   return Object.freeze({ theme, clientSettings: sanitizeClientSettings(selected) });
 }
 
@@ -428,12 +497,44 @@ export function buildSettingsProfileApplyPatch(
   clientSettings: SettingsProfileClientSettings,
 ): ClientSettingsPatch {
   const safeClientSettings = sanitizeClientSettings(clientSettings);
-  return {
+  return Object.freeze({
     ...safeClientSettings,
     ambientVideoEnabled: false,
     ambientImageEnabled: false,
     ambientImageCycleEnabled: false,
+  });
+}
+
+/** Capture only the fields touched by an apply operation for compensation. */
+export function buildSettingsProfileRollbackPatch(
+  currentSettings: ClientSettings,
+  applyPatch: ClientSettingsPatch,
+): ClientSettingsPatch {
+  const selected: Partial<Record<IncludedKey, unknown>> = {};
+  for (const key of includedKeys) {
+    if (ownValue(applyPatch, key) === undefined) continue;
+    const currentValue = requiredOwnDataValue(currentSettings, key);
+    selected[key] = currentValue;
+  }
+  const activationRollback = (
+    key: "ambientVideoEnabled" | "ambientImageEnabled" | "ambientImageCycleEnabled",
+  ): boolean | undefined => {
+    if (ownValue(applyPatch, key) === undefined) return undefined;
+    const currentValue = requiredOwnDataValue(currentSettings, key);
+    if (typeof currentValue !== "boolean") {
+      throw new SettingsProfileError("The current settings cannot be restored safely.");
+    }
+    return currentValue;
   };
+  const ambientVideoEnabled = activationRollback("ambientVideoEnabled");
+  const ambientImageEnabled = activationRollback("ambientImageEnabled");
+  const ambientImageCycleEnabled = activationRollback("ambientImageCycleEnabled");
+  return Object.freeze({
+    ...sanitizeClientSettings(selected),
+    ...(ambientVideoEnabled === undefined ? {} : { ambientVideoEnabled }),
+    ...(ambientImageEnabled === undefined ? {} : { ambientImageEnabled }),
+    ...(ambientImageCycleEnabled === undefined ? {} : { ambientImageCycleEnabled }),
+  });
 }
 
 function profileValuesEqual(left: unknown, right: unknown): boolean {
@@ -454,10 +555,14 @@ export function getSettingsProfileDifferenceKeys(
   currentSettings: UnifiedSettings,
   currentTheme: SettingsProfileTheme,
 ): readonly SettingsProfileDifferenceKey[] {
+  if (!isRecord(profile)) throw new SettingsProfileError("The profile settings are invalid.");
+  const profileTheme = ownValue(profile, "theme");
+  if (!isTheme(profileTheme)) throw new SettingsProfileError("The profile settings are invalid.");
+  const savedSettings = sanitizeClientSettings(ownValue(profile, "clientSettings"));
   const differences: SettingsProfileDifferenceKey[] = [];
-  if (profile.theme !== currentTheme) differences.push("theme");
+  if (profileTheme !== currentTheme) differences.push("theme");
   for (const key of includedKeys) {
-    const savedValue = ownValue(profile.clientSettings, key);
+    const savedValue = ownValue(savedSettings, key);
     if (savedValue === undefined) continue;
     if (!profileValuesEqual(savedValue, ownValue(currentSettings, key))) {
       differences.push(key);
@@ -474,13 +579,27 @@ export function getSettingsProfileDifferenceKeys(
 }
 
 export function isSameSettingsProfile(left: SettingsProfile, right: SettingsProfile): boolean {
-  return (
-    left.id === right.id &&
-    left.name === right.name &&
-    left.theme === right.theme &&
-    left.createdAt === right.createdAt &&
-    profileValuesEqual(left.clientSettings, right.clientSettings)
-  );
+  if (!isRecord(left) || !isRecord(right)) return false;
+  try {
+    return (
+      ownValue(left, "id") === ownValue(right, "id") &&
+      ownValue(left, "name") === ownValue(right, "name") &&
+      ownValue(left, "theme") === ownValue(right, "theme") &&
+      ownValue(left, "createdAt") === ownValue(right, "createdAt") &&
+      profileValuesEqual(
+        sanitizeClientSettings(ownValue(left, "clientSettings")),
+        sanitizeClientSettings(ownValue(right, "clientSettings")),
+      )
+    );
+  } catch {
+    return false;
+  }
+}
+
+function expectedProfileId(expected: unknown): string | null {
+  if (!isRecord(expected)) return null;
+  const id = ownValue(expected, "id");
+  return typeof id === "string" ? id : null;
 }
 
 function freezeProfile(profile: SettingsProfile): SettingsProfile {
@@ -488,6 +607,33 @@ function freezeProfile(profile: SettingsProfile): SettingsProfile {
     ...profile,
     clientSettings: cloneAndFreezeProfileValue(profile.clientSettings),
   });
+}
+
+function freezeSnapshot(
+  profiles: readonly SettingsProfile[],
+  activeProfileId: string | null,
+): SettingsProfilesSnapshot {
+  return Object.freeze({ activeProfileId, profiles: Object.freeze([...profiles]) });
+}
+
+function hasExactOwnKeys(value: object, expected: readonly string[]): boolean {
+  try {
+    const keys = Reflect.ownKeys(value);
+    return (
+      keys.length === expected.length &&
+      keys.every((key) => typeof key === "string" && expected.includes(key))
+    );
+  } catch {
+    return false;
+  }
+}
+
+function hasOnlyOwnKeys(value: object, allowed: readonly string[]): boolean {
+  try {
+    return Reflect.ownKeys(value).every((key) => typeof key === "string" && allowed.includes(key));
+  } catch {
+    return false;
+  }
 }
 
 function parseSnapshot(raw: string | null): SettingsProfilesSnapshot {
@@ -503,7 +649,18 @@ function parseSnapshot(raw: string | null): SettingsProfilesSnapshot {
     if (version !== SETTINGS_PROFILES_VERSION && !LEGACY_SETTINGS_PROFILES_VERSIONS.has(version)) {
       return emptySnapshot();
     }
-    const clientKeys = version === 1 ? versionOneIncludedKeys : versionTwoIncludedKeys;
+    if (
+      version === SETTINGS_PROFILES_VERSION &&
+      !hasExactOwnKeys(document, ["version", "activeProfileId", "profiles"])
+    ) {
+      return emptySnapshot();
+    }
+    const clientKeys =
+      version === 1
+        ? versionOneIncludedKeys
+        : version === 2
+          ? versionTwoIncludedKeys
+          : versionThreeIncludedKeys;
     const candidates = ownValue(document, "profiles");
     if (!Array.isArray(candidates)) return emptySnapshot();
     const profiles: SettingsProfile[] = [];
@@ -512,6 +669,20 @@ function parseSnapshot(raw: string | null): SettingsProfilesSnapshot {
     for (const candidate of candidates.slice(0, SETTINGS_PROFILES_MAX_CANDIDATES)) {
       if (profiles.length >= SETTINGS_PROFILES_MAX_COUNT) break;
       if (!isRecord(candidate)) continue;
+      if (
+        version === SETTINGS_PROFILES_VERSION &&
+        !hasExactOwnKeys(candidate, ["id", "name", "theme", "clientSettings", "createdAt"])
+      ) {
+        continue;
+      }
+      const persistedClientSettings = ownValue(candidate, "clientSettings");
+      if (
+        version === SETTINGS_PROFILES_VERSION &&
+        (!isRecord(persistedClientSettings) ||
+          !hasOnlyOwnKeys(persistedClientSettings, versionThreeIncludedKeys))
+      ) {
+        continue;
+      }
       const persistedId = ownValue(candidate, "id");
       const persistedName = ownValue(candidate, "name");
       const theme = ownValue(candidate, "theme");
@@ -524,10 +695,7 @@ function parseSnapshot(raw: string | null): SettingsProfilesSnapshot {
         const id = idForName(name);
         const nameKey = name.toLocaleLowerCase("en-US");
         if (persistedId !== id || ids.has(id) || names.has(nameKey)) continue;
-        const clientSettings = sanitizeClientSettings(
-          ownValue(candidate, "clientSettings"),
-          clientKeys,
-        );
+        const clientSettings = sanitizeClientSettings(persistedClientSettings, clientKeys);
         ids.add(id);
         names.add(nameKey);
         profiles.push(freezeProfile({ id, name, theme, clientSettings, createdAt }));
@@ -535,25 +703,45 @@ function parseSnapshot(raw: string | null): SettingsProfilesSnapshot {
         continue;
       }
     }
-    return Object.freeze({ profiles: Object.freeze(profiles) });
+    // Current documents fail closed instead of salvaging a partly corrupt
+    // library. Legacy versions retain their historical bounded salvage rules.
+    if (
+      version === SETTINGS_PROFILES_VERSION &&
+      (candidates.length > SETTINGS_PROFILES_MAX_COUNT || profiles.length !== candidates.length)
+    ) {
+      return emptySnapshot();
+    }
+    const persistedActiveProfileId =
+      version === SETTINGS_PROFILES_VERSION ? ownValue(document, "activeProfileId") : null;
+    if (
+      persistedActiveProfileId !== null &&
+      (typeof persistedActiveProfileId !== "string" ||
+        !profiles.some((profile) => profile.id === persistedActiveProfileId))
+    ) {
+      return emptySnapshot();
+    }
+    return freezeSnapshot(profiles, persistedActiveProfileId);
   } catch {
     return emptySnapshot();
   }
+}
+
+function encodeSnapshot(snapshot: SettingsProfilesSnapshot): string {
+  const encoded = JSON.stringify({
+    version: SETTINGS_PROFILES_VERSION,
+    activeProfileId: snapshot.activeProfileId,
+    profiles: snapshot.profiles,
+  });
+  if (new TextEncoder().encode(encoded).byteLength > SETTINGS_PROFILES_MAX_BYTES) {
+    throw new SettingsProfileError("The local profile library is full.");
+  }
+  return encoded;
 }
 
 function browserStorage(): SettingsProfilesStorage | null {
   if (typeof window === "undefined") return null;
   try {
     return window.localStorage;
-  } catch {
-    return null;
-  }
-}
-
-function readStorage(storage: SettingsProfilesStorage | null): string | null {
-  if (storage === null) return null;
-  try {
-    return storage.getItem(SETTINGS_PROFILES_STORAGE_KEY);
   } catch {
     return null;
   }
@@ -572,6 +760,37 @@ function readStorageEntry(storage: SettingsProfilesStorage | null, key: string):
   }
 }
 
+function hasSafeMutationAuthority(raw: string | null): boolean {
+  if (raw === null) return true;
+  if (new TextEncoder().encode(raw).byteLength > SETTINGS_PROFILES_MAX_BYTES) return false;
+  try {
+    const document = JSON.parse(raw) as unknown;
+    if (!isRecord(document)) return false;
+    const version = ownValue(document, "version");
+    if (version !== 1 && version !== 2 && version !== SETTINGS_PROFILES_VERSION) return false;
+    if (
+      (version !== SETTINGS_PROFILES_VERSION &&
+        !hasExactOwnKeys(document, ["version", "profiles"])) ||
+      (version === SETTINGS_PROFILES_VERSION &&
+        !hasExactOwnKeys(document, ["version", "activeProfileId", "profiles"]))
+    ) {
+      return false;
+    }
+    const candidates = ownValue(document, "profiles");
+    if (!Array.isArray(candidates) || candidates.length > SETTINGS_PROFILES_MAX_COUNT) return false;
+    if (
+      version === SETTINGS_PROFILES_VERSION &&
+      candidates.length === 0 &&
+      ownValue(document, "activeProfileId") !== null
+    ) {
+      return false;
+    }
+    return parseSnapshot(raw).profiles.length === candidates.length;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Bootstrap authority is deliberately narrower than normal profile decoding.
  * An empty decoded snapshot can also mean corrupt, oversized, legacy, or
@@ -585,13 +804,15 @@ function inspectMobileBootstrapLibrary(raw: string | null): MobileBootstrapLibra
   if (new TextEncoder().encode(raw).byteLength > SETTINGS_PROFILES_MAX_BYTES) return "unsafe";
   try {
     const document = JSON.parse(raw) as unknown;
-    if (!isRecord(document) || ownValue(document, "version") !== SETTINGS_PROFILES_VERSION) {
+    if (!isRecord(document)) {
       return "unsafe";
     }
-    const documentKeys = Reflect.ownKeys(document);
+    const version = ownValue(document, "version");
     if (
-      documentKeys.length !== 2 ||
-      documentKeys.some((key) => key !== "version" && key !== "profiles")
+      (version === 2 && !hasExactOwnKeys(document, ["version", "profiles"])) ||
+      (version === SETTINGS_PROFILES_VERSION &&
+        !hasExactOwnKeys(document, ["version", "activeProfileId", "profiles"])) ||
+      (version !== 2 && version !== SETTINGS_PROFILES_VERSION)
     ) {
       return "unsafe";
     }
@@ -599,12 +820,15 @@ function inspectMobileBootstrapLibrary(raw: string | null): MobileBootstrapLibra
     if (!Array.isArray(candidates) || candidates.length > SETTINGS_PROFILES_MAX_COUNT) {
       return "unsafe";
     }
-    if (candidates.length === 0) return "empty";
+    const activeProfileId =
+      version === SETTINGS_PROFILES_VERSION ? ownValue(document, "activeProfileId") : null;
+    if (candidates.length === 0) return activeProfileId === null ? "empty" : "unsafe";
 
     // A populated current-version document is authoritative only when every
     // record survives the normal decoder. A partly corrupt document must not
     // gain a bootstrap marker merely because one other record is readable.
-    return parseSnapshot(raw).profiles.length === candidates.length ? "populated" : "unsafe";
+    const decoded = parseSnapshot(raw);
+    return decoded.profiles.length === candidates.length ? "populated" : "unsafe";
   } catch {
     return "unsafe";
   }
@@ -627,10 +851,32 @@ export function createSettingsProfilesStore(
   storage: SettingsProfilesStorage | null = browserStorage(),
   now: () => Date = () => new Date(),
 ) {
-  let snapshot = parseSnapshot(readStorage(storage));
+  const initialRead = readStorageEntry(storage, SETTINGS_PROFILES_STORAGE_KEY);
+  let snapshot = parseSnapshot(initialRead.ok ? initialRead.value : null);
+  let mutationAllowed = initialRead.ok && hasSafeMutationAuthority(initialRead.value);
   const listeners = new Set<() => void>();
   const refresh = () => {
-    const next = parseSnapshot(readStorage(storage));
+    const read = readStorageEntry(storage, SETTINGS_PROFILES_STORAGE_KEY);
+    const next = parseSnapshot(read.ok ? read.value : null);
+    mutationAllowed = read.ok && hasSafeMutationAuthority(read.value);
+    snapshot = next;
+    for (const listener of listeners) listener();
+  };
+  const assertMutationAllowed = () => {
+    if (!mutationAllowed) {
+      throw new SettingsProfileError(
+        "The saved profile library uses an unsupported or invalid format.",
+      );
+    }
+  };
+  const persist = (next: SettingsProfilesSnapshot, failureMessage: string) => {
+    if (storage === null) throw new SettingsProfileError("Local profile storage is unavailable.");
+    const encoded = encodeSnapshot(next);
+    try {
+      storage.setItem(SETTINGS_PROFILES_STORAGE_KEY, encoded);
+    } catch {
+      throw new SettingsProfileError(failureMessage);
+    }
     snapshot = next;
     for (const listener of listeners) listener();
   };
@@ -681,6 +927,7 @@ export function createSettingsProfilesStore(
     create: (nameInput: string, payloadInput: SettingsProfilePayload) => {
       if (storage === null) throw new SettingsProfileError("Local profile storage is unavailable.");
       refresh();
+      assertMutationAllowed();
       const name = normalizeName(nameInput);
       const id = idForName(name);
       if (snapshot.profiles.some((profile) => profile.id === id)) {
@@ -710,43 +957,93 @@ export function createSettingsProfilesStore(
         clientSettings: sanitizeClientSettings(ownValue(payloadInput, "clientSettings")),
         createdAt,
       });
-      const next = Object.freeze({ profiles: Object.freeze([...snapshot.profiles, profile]) });
-      const encoded = JSON.stringify({
-        version: SETTINGS_PROFILES_VERSION,
-        profiles: next.profiles,
-      });
-      if (new TextEncoder().encode(encoded).byteLength > SETTINGS_PROFILES_MAX_BYTES) {
-        throw new SettingsProfileError("The local profile library is full.");
-      }
-      try {
-        storage.setItem(SETTINGS_PROFILES_STORAGE_KEY, encoded);
-      } catch {
-        throw new SettingsProfileError("The profile could not be saved to local storage.");
-      }
-      snapshot = next;
-      for (const listener of listeners) listener();
+      const next = freezeSnapshot([...snapshot.profiles, profile], snapshot.activeProfileId);
+      persist(next, "The profile could not be saved to local storage.");
       return profile;
     },
     remove: (expected: SettingsProfile): SettingsProfileRemovalResult => {
       if (storage === null) throw new SettingsProfileError("Local profile storage is unavailable.");
-      const current = snapshot.profiles.find((profile) => profile.id === expected.id);
+      refresh();
+      assertMutationAllowed();
+      const expectedId = expectedProfileId(expected);
+      if (expectedId === null) return "changed";
+      const current = snapshot.profiles.find((profile) => profile.id === expectedId);
       if (current === undefined) return "missing";
       if (!isSameSettingsProfile(expected, current)) return "changed";
-      const next = Object.freeze({
-        profiles: Object.freeze(snapshot.profiles.filter((profile) => profile.id !== expected.id)),
-      });
-      const encoded = JSON.stringify({
-        version: SETTINGS_PROFILES_VERSION,
-        profiles: next.profiles,
-      });
-      try {
-        storage.setItem(SETTINGS_PROFILES_STORAGE_KEY, encoded);
-      } catch {
-        throw new SettingsProfileError("The profile could not be deleted from local storage.");
-      }
-      snapshot = next;
-      for (const listener of listeners) listener();
+      const next = freezeSnapshot(
+        snapshot.profiles.filter((profile) => profile.id !== expected.id),
+        snapshot.activeProfileId === expected.id ? null : snapshot.activeProfileId,
+      );
+      persist(next, "The profile could not be deleted from local storage.");
       return "removed";
+    },
+    activate: (expected: SettingsProfile): SettingsProfileActivationResult => {
+      if (storage === null) throw new SettingsProfileError("Local profile storage is unavailable.");
+      refresh();
+      assertMutationAllowed();
+      const expectedId = expectedProfileId(expected);
+      if (expectedId === null) return "changed";
+      const current = snapshot.profiles.find((profile) => profile.id === expectedId);
+      if (current === undefined) return "missing";
+      if (!isSameSettingsProfile(expected, current)) return "changed";
+      if (snapshot.activeProfileId !== current.id) {
+        persist(
+          freezeSnapshot(snapshot.profiles, current.id),
+          "The active profile could not be saved to local storage.",
+        );
+      }
+      return "activated";
+    },
+    rename: (expected: SettingsProfile, nameInput: string): SettingsProfileUpdateResult => {
+      if (storage === null) throw new SettingsProfileError("Local profile storage is unavailable.");
+      refresh();
+      assertMutationAllowed();
+      const expectedId = expectedProfileId(expected);
+      if (expectedId === null) return "changed";
+      const current = snapshot.profiles.find((profile) => profile.id === expectedId);
+      if (current === undefined) return "missing";
+      if (!isSameSettingsProfile(expected, current)) return "changed";
+      const name = normalizeName(nameInput);
+      const id = idForName(name);
+      if (id === current.id && name === current.name) return current;
+      if (snapshot.profiles.some((profile) => profile.id === id && profile.id !== current.id)) {
+        throw new SettingsProfileError(`A profile named “${name}” already exists.`);
+      }
+      const renamed = freezeProfile({ ...current, id, name });
+      const next = freezeSnapshot(
+        snapshot.profiles.map((profile) => (profile.id === current.id ? renamed : profile)),
+        snapshot.activeProfileId === current.id ? renamed.id : snapshot.activeProfileId,
+      );
+      persist(next, "The profile could not be renamed in local storage.");
+      return renamed;
+    },
+    updateActive: (
+      expected: SettingsProfile,
+      payloadInput: SettingsProfilePayload,
+    ): SettingsProfileUpdateResult => {
+      if (storage === null) throw new SettingsProfileError("Local profile storage is unavailable.");
+      refresh();
+      assertMutationAllowed();
+      const expectedId = expectedProfileId(expected);
+      if (expectedId === null) return "changed";
+      const current = snapshot.profiles.find((profile) => profile.id === expectedId);
+      if (current === undefined) return "missing";
+      if (!isSameSettingsProfile(expected, current)) return "changed";
+      if (snapshot.activeProfileId !== current.id) return "inactive";
+      if (!isRecord(payloadInput) || !isTheme(ownValue(payloadInput, "theme"))) {
+        throw new SettingsProfileError("The profile settings are invalid.");
+      }
+      const updated = freezeProfile({
+        ...current,
+        theme: ownValue(payloadInput, "theme") as SettingsProfileTheme,
+        clientSettings: sanitizeClientSettings(ownValue(payloadInput, "clientSettings")),
+      });
+      const next = freezeSnapshot(
+        snapshot.profiles.map((profile) => (profile.id === current.id ? updated : profile)),
+        current.id,
+      );
+      persist(next, "The active profile could not be updated in local storage.");
+      return updated;
     },
   };
 }
