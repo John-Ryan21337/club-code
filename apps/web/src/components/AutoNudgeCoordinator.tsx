@@ -127,6 +127,7 @@ export function AutoNudgeCoordinator() {
             commandId: newCommandId(),
             threadId,
             expectedAuthorityRevision: authority.authorityRevision,
+            expectedGlobalAuthorityRevision: environment.autoNudgeAuthority?.authorityRevision ?? 0,
             completedTurnId: authority.completedTurnId,
             dispatchSource: authority.dispatchSource,
             messageId: newMessageId(),

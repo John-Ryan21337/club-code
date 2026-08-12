@@ -60,6 +60,7 @@ import {
 } from "../../attachmentStore.ts";
 
 export const ORCHESTRATION_PROJECTOR_NAMES = {
+  autoNudgeAuthority: "projection.auto-nudge-authority",
   projects: "projection.projects",
   threads: "projection.threads",
   threadMessages: "projection.thread-messages",
@@ -2443,7 +2444,42 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
       }
     });
 
+    const applyAutoNudgeAuthorityProjection: ProjectorDefinition["apply"] = Effect.fn(
+      "applyAutoNudgeAuthorityProjection",
+    )(function* (event, _attachmentSideEffects) {
+      if (event.type !== "system.auto-nudge-authority-changed") return;
+      const authority = event.payload.authority;
+      yield* sql`
+        INSERT INTO projection_auto_nudge_authority (
+          singleton_key,
+          authority_revision,
+          status,
+          stopped_at,
+          updated_at
+        ) VALUES (
+          'global',
+          ${authority.authorityRevision},
+          ${authority.status},
+          ${authority.stoppedAt},
+          ${authority.updatedAt}
+        )
+        ON CONFLICT (singleton_key) DO UPDATE SET
+          authority_revision = excluded.authority_revision,
+          status = excluded.status,
+          stopped_at = excluded.stopped_at,
+          updated_at = excluded.updated_at
+      `.pipe(
+        Effect.mapError(
+          toPersistenceSqlError("ProjectionPipeline.applyAutoNudgeAuthorityProjection:query"),
+        ),
+      );
+    });
+
     const projectors: ReadonlyArray<ProjectorDefinition> = [
+      {
+        name: ORCHESTRATION_PROJECTOR_NAMES.autoNudgeAuthority,
+        apply: applyAutoNudgeAuthorityProjection,
+      },
       {
         name: ORCHESTRATION_PROJECTOR_NAMES.projects,
         apply: applyProjectsProjection,

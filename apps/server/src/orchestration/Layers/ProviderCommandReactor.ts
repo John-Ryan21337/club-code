@@ -1,5 +1,7 @@
 import {
   type ChatAttachment,
+  DEFAULT_GLOBAL_AUTO_NUDGE_AUTHORITY,
+  type GlobalAutoNudgeAuthority,
   CommandId,
   EventId,
   type ManualFollowUpId,
@@ -146,16 +148,24 @@ function isActiveProviderActivityKind(kind: string): boolean {
 export function autoNudgeTurnStartCancellationReason(
   thread: OrchestrationThread,
   event: Extract<ProviderIntentEvent, { type: "thread.turn-start-requested" }>,
+  globalAuthority: GlobalAutoNudgeAuthority = DEFAULT_GLOBAL_AUTO_NUDGE_AUTHORITY,
 ): string | undefined {
   if (event.payload.dispatchSource !== "auto-nudge") return undefined;
   const authority = event.payload.autoNudgeAuthority;
   if (authority === undefined) return "missing immutable Auto Nudge authority provenance";
+  if (globalAuthority.status !== "allowed") return "Global Auto Nudge Stop is active";
+  if (globalAuthority.authorityRevision !== (authority.globalAuthorityRevision ?? 0)) {
+    return "global Auto Nudge authority was replaced or stopped";
+  }
 
   const config = thread.autoNudge;
   if (thread.archivedAt !== null || thread.deletedAt !== null) return "the thread is inactive";
   if (config.mode === "off") return "Auto Nudge is off";
   if (config.authorityRevision !== authority.authorityRevision) {
     return "Auto Nudge authority was replaced or stopped";
+  }
+  if ((config.globalAuthorityRevision ?? 0) !== (authority.globalAuthorityRevision ?? 0)) {
+    return "the thread belongs to an earlier global Auto Nudge authority";
   }
   if (config.lastDispatchedSettledTurnId !== authority.completedTurnId) {
     return "the accepted completion is no longer authoritative";
@@ -1894,7 +1904,15 @@ const make = Effect.gen(function* () {
     if (!thread) {
       return;
     }
-    const autoNudgeCancellationReason = autoNudgeTurnStartCancellationReason(thread, event);
+    const globalAutoNudgeAuthority = isAutoNudge
+      ? ((yield* projectionSnapshotQuery.getShellSnapshot()).autoNudgeAuthority ??
+        DEFAULT_GLOBAL_AUTO_NUDGE_AUTHORITY)
+      : undefined;
+    const autoNudgeCancellationReason = autoNudgeTurnStartCancellationReason(
+      thread,
+      event,
+      globalAutoNudgeAuthority,
+    );
     if (autoNudgeCancellationReason !== undefined) {
       yield* Effect.logWarning("provider command reactor cancelled stale Auto Nudge delivery", {
         threadId: event.payload.threadId,
@@ -2317,10 +2335,17 @@ const make = Effect.gen(function* () {
     if (isAutoNudge) {
       const freshThread = yield* resolveThread(event.payload.threadId);
       const freshRuntimeSession = yield* getProviderSessionForThread(event.payload.threadId);
+      const freshGlobalAutoNudgeAuthority =
+        (yield* projectionSnapshotQuery.getShellSnapshot()).autoNudgeAuthority ??
+        DEFAULT_GLOBAL_AUTO_NUDGE_AUTHORITY;
       const finalCancellationReason =
         freshThread === undefined
           ? "the thread is no longer active"
-          : (autoNudgeTurnStartCancellationReason(freshThread, event) ??
+          : (autoNudgeTurnStartCancellationReason(
+              freshThread,
+              event,
+              freshGlobalAutoNudgeAuthority,
+            ) ??
             (freshRuntimeSession?.status === "ready"
               ? undefined
               : "the provider runtime is no longer ready"));

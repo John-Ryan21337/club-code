@@ -6,6 +6,7 @@ import type {
   ThreadId,
 } from "@cafecode/contracts";
 import {
+  DEFAULT_GLOBAL_AUTO_NUDGE_AUTHORITY,
   DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
   EventId,
   MessageId,
@@ -325,6 +326,10 @@ function compareThreadActivities(
 export function createEmptyReadModel(nowIso: string): OrchestrationReadModel {
   return {
     snapshotSequence: 0,
+    autoNudgeAuthority: {
+      ...DEFAULT_GLOBAL_AUTO_NUDGE_AUTHORITY,
+      updatedAt: nowIso,
+    },
     projects: [],
     threads: [],
     updatedAt: nowIso,
@@ -342,6 +347,12 @@ export function projectEvent(
   };
 
   switch (event.type) {
+    case "system.auto-nudge-authority-changed":
+      return Effect.succeed({
+        ...nextBase,
+        autoNudgeAuthority: event.payload.authority,
+      });
+
     case "project.created":
       return decodeForEvent(ProjectCreatedPayload, event.payload, event.type, "payload").pipe(
         Effect.map((payload) => {

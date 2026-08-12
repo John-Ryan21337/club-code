@@ -1830,6 +1830,10 @@ export default function ChatView(props: ChatViewProps) {
       [routeKind, routeThreadRef],
     ),
   );
+  const globalAutoNudgeAuthorityRevision = useStore(
+    (store) =>
+      store.environmentStateById[environmentId]?.autoNudgeAuthority?.authorityRevision ?? 0,
+  );
   const setStoreThreadError = useStore((store) => store.setError);
   const markThreadVisited = useUiStateStore((store) => store.markThreadVisited);
   const activeThreadLastVisitedAt = useUiStateStore((store) =>
@@ -2156,6 +2160,7 @@ export default function ChatView(props: ChatViewProps) {
           commandId: newCommandId(),
           threadId: activeThread.id,
           expectedAuthorityRevision: activeThread.autoNudge.authorityRevision,
+          expectedGlobalAuthorityRevision: globalAutoNudgeAuthorityRevision,
           maxRounds: activeThread.autoNudge.maxRounds,
           createdAt: new Date().toISOString(),
         };
@@ -2183,7 +2188,7 @@ export default function ChatView(props: ChatViewProps) {
         setAutoNudgeSavingThreadKey((current) => (current === targetThreadKey ? null : current));
       }
     },
-    [activeThread, isServerThread],
+    [activeThread, globalAutoNudgeAuthorityRevision, isServerThread],
   );
   const runtimeMode = composerRuntimeMode ?? activeThread?.runtimeMode ?? DEFAULT_RUNTIME_MODE;
   const interactionMode =

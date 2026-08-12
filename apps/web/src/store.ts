@@ -1,5 +1,6 @@
 import type {
   EnvironmentId,
+  GlobalAutoNudgeAuthority,
   ModelSelection,
   MessageId,
   OrchestrationCheckpointSummary,
@@ -25,6 +26,7 @@ import type {
 import {
   DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
   DEFAULT_THREAD_AUTO_NUDGE_SUMMARY,
+  DEFAULT_GLOBAL_AUTO_NUDGE_AUTHORITY,
   isProviderDriverKind,
   ProviderDriverKind,
 } from "@cafecode/contracts";
@@ -49,6 +51,8 @@ import { getThreadFromEnvironmentState } from "./threadDerivation";
 const isProviderDriverKindValue = Schema.is(ProviderDriverKind);
 
 export interface EnvironmentState {
+  /** Display projection only. The server remains the authority for execution. */
+  autoNudgeAuthority?: GlobalAutoNudgeAuthority;
   projectIds: ProjectId[];
   projectById: Record<ProjectId, Project>;
 
@@ -107,6 +111,7 @@ export interface AppState {
 }
 
 const initialEnvironmentState: EnvironmentState = {
+  autoNudgeAuthority: DEFAULT_GLOBAL_AUTO_NUDGE_AUTHORITY,
   projectIds: [],
   projectById: {},
   threadIds: [],
@@ -1639,6 +1644,7 @@ function syncEnvironmentShellSnapshot(
   const nextThreadIds = new Set(snapshot.threads.map((thread) => thread.id));
   let nextState: EnvironmentState = {
     ...state,
+    autoNudgeAuthority: snapshot.autoNudgeAuthority ?? DEFAULT_GLOBAL_AUTO_NUDGE_AUTHORITY,
     ...buildProjectState(nextProjects),
     threadIds: [],
     threadIdsByProjectId: {},
@@ -2325,6 +2331,11 @@ function applyEnvironmentShellEvent(
   environmentId: EnvironmentId,
 ): EnvironmentState {
   switch (event.kind) {
+    case "auto-nudge-authority-changed":
+      return {
+        ...state,
+        autoNudgeAuthority: event.authority,
+      };
     case "project-upserted": {
       const nextProject = mapProject(event.project, environmentId);
       const existingProjectId =

@@ -1,6 +1,7 @@
 import {
   ChatAttachment,
   AdditionalWorkspaceRoots,
+  GlobalAutoNudgeAuthority,
   IsoDateTime,
   ManualFollowUpQueue,
   MessageId,
@@ -112,6 +113,7 @@ const ProjectionLatestTurnDbRowSchema = Schema.Struct({
   sourceProposedPlanId: Schema.NullOr(OrchestrationProposedPlanId),
 });
 const ProjectionStateDbRowSchema = ProjectionState;
+const ProjectionAutoNudgeAuthorityDbRowSchema = GlobalAutoNudgeAuthority;
 const ProjectionCountsRowSchema = Schema.Struct({
   projectCount: Schema.Number,
   threadCount: Schema.Number,
@@ -150,6 +152,7 @@ const ProjectionThreadCheckpointContextThreadRowSchema = Schema.Struct({
   worktreePath: Schema.NullOr(Schema.String),
 });
 const REQUIRED_SNAPSHOT_PROJECTORS = [
+  ORCHESTRATION_PROJECTOR_NAMES.autoNudgeAuthority,
   ORCHESTRATION_PROJECTOR_NAMES.projects,
   ORCHESTRATION_PROJECTOR_NAMES.threads,
   ORCHESTRATION_PROJECTOR_NAMES.threadMessages,
@@ -170,6 +173,7 @@ function maxIso(left: string | null, right: string): string {
 function toThreadAutoNudgeSummary(config: ThreadAutoNudgeConfig): ThreadAutoNudgeSummary {
   return {
     authorityRevision: config.authorityRevision,
+    globalAuthorityRevision: config.globalAuthorityRevision ?? 0,
     mode: config.mode,
     backgroundContinuation: config.backgroundContinuation,
     maxRounds: config.maxRounds,
@@ -944,6 +948,21 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       `,
   });
 
+  const readAutoNudgeAuthority = SqlSchema.findOne({
+    Request: Schema.Void,
+    Result: ProjectionAutoNudgeAuthorityDbRowSchema,
+    execute: () =>
+      sql`
+        SELECT
+          authority_revision AS "authorityRevision",
+          status,
+          stopped_at AS "stoppedAt",
+          updated_at AS "updatedAt"
+        FROM projection_auto_nudge_authority
+        WHERE singleton_key = 'global'
+      `,
+  });
+
   const readProjectionCounts = SqlSchema.findOne({
     Request: Schema.Void,
     Result: ProjectionCountsRowSchema,
@@ -1494,6 +1513,14 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               ),
             ),
           ),
+          readAutoNudgeAuthority(undefined).pipe(
+            Effect.mapError(
+              toPersistenceSqlOrDecodeError(
+                "ProjectionSnapshotQuery.getSnapshot:readAutoNudgeAuthority:query",
+                "ProjectionSnapshotQuery.getSnapshot:readAutoNudgeAuthority:decodeRow",
+              ),
+            ),
+          ),
         ]),
       )
       .pipe(
@@ -1509,6 +1536,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             checkpointRows,
             latestTurnRows,
             stateRows,
+            autoNudgeAuthority,
           ]) =>
             Effect.gen(function* () {
               const messagesByThread = new Map<string, Array<OrchestrationMessage>>();
@@ -1688,6 +1716,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
 
               const snapshot = {
                 snapshotSequence: computeSnapshotSequence(stateRows),
+                autoNudgeAuthority,
                 projects,
                 threads,
                 updatedAt: updatedAt ?? "1970-01-01T00:00:00.000Z",
@@ -1768,6 +1797,14 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               ),
             ),
           ),
+          readAutoNudgeAuthority(undefined).pipe(
+            Effect.mapError(
+              toPersistenceSqlOrDecodeError(
+                "ProjectionSnapshotQuery.getCommandReadModel:readAutoNudgeAuthority:query",
+                "ProjectionSnapshotQuery.getCommandReadModel:readAutoNudgeAuthority:decodeRow",
+              ),
+            ),
+          ),
         ]),
       )
       .pipe(
@@ -1780,6 +1817,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             goalRows,
             latestTurnRows,
             stateRows,
+            autoNudgeAuthority,
           ]) =>
             Effect.sync(() => {
               let updatedAt: string | null = null;
@@ -1920,6 +1958,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
 
               return {
                 snapshotSequence: computeSnapshotSequence(stateRows),
+                autoNudgeAuthority,
                 projects,
                 threads,
                 updatedAt: updatedAt ?? "1970-01-01T00:00:00.000Z",
@@ -1970,19 +2009,30 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               ),
             ),
           ),
-          listProjectionStateRows(undefined).pipe(
-            Effect.mapError(
-              toPersistenceSqlOrDecodeError(
-                "ProjectionSnapshotQuery.getShellSnapshot:listProjectionState:query",
-                "ProjectionSnapshotQuery.getShellSnapshot:listProjectionState:decodeRows",
+          Effect.all([
+            listProjectionStateRows(undefined).pipe(
+              Effect.mapError(
+                toPersistenceSqlOrDecodeError(
+                  "ProjectionSnapshotQuery.getShellSnapshot:listProjectionState:query",
+                  "ProjectionSnapshotQuery.getShellSnapshot:listProjectionState:decodeRows",
+                ),
               ),
             ),
-          ),
+            readAutoNudgeAuthority(undefined).pipe(
+              Effect.mapError(
+                toPersistenceSqlOrDecodeError(
+                  "ProjectionSnapshotQuery.getShellSnapshot:readAutoNudgeAuthority:query",
+                  "ProjectionSnapshotQuery.getShellSnapshot:readAutoNudgeAuthority:decodeRow",
+                ),
+              ),
+            ),
+          ]),
         ]),
       )
       .pipe(
-        Effect.flatMap(([projectRows, threadRows, sessionRows, latestTurnRows, stateRows]) =>
+        Effect.flatMap(([projectRows, threadRows, sessionRows, latestTurnRows, authorityState]) =>
           Effect.gen(function* () {
+            const [stateRows, autoNudgeAuthority] = authorityState;
             let updatedAt: string | null = null;
             for (const row of projectRows) {
               updatedAt = maxIso(updatedAt, row.updatedAt);
@@ -2022,6 +2072,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
 
             const snapshot = {
               snapshotSequence: computeSnapshotSequence(stateRows),
+              autoNudgeAuthority,
               projects: projectRows
                 .filter((row) => row.deletedAt === null)
                 .map((row) =>
@@ -2109,19 +2160,30 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               ),
             ),
           ),
-          listProjectionStateRows(undefined).pipe(
-            Effect.mapError(
-              toPersistenceSqlOrDecodeError(
-                "ProjectionSnapshotQuery.getArchivedShellSnapshot:listProjectionState:query",
-                "ProjectionSnapshotQuery.getArchivedShellSnapshot:listProjectionState:decodeRows",
+          Effect.all([
+            listProjectionStateRows(undefined).pipe(
+              Effect.mapError(
+                toPersistenceSqlOrDecodeError(
+                  "ProjectionSnapshotQuery.getArchivedShellSnapshot:listProjectionState:query",
+                  "ProjectionSnapshotQuery.getArchivedShellSnapshot:listProjectionState:decodeRows",
+                ),
               ),
             ),
-          ),
+            readAutoNudgeAuthority(undefined).pipe(
+              Effect.mapError(
+                toPersistenceSqlOrDecodeError(
+                  "ProjectionSnapshotQuery.getArchivedShellSnapshot:readAutoNudgeAuthority:query",
+                  "ProjectionSnapshotQuery.getArchivedShellSnapshot:readAutoNudgeAuthority:decodeRow",
+                ),
+              ),
+            ),
+          ]),
         ]),
       )
       .pipe(
-        Effect.flatMap(([projectRows, threadRows, sessionRows, latestTurnRows, stateRows]) =>
+        Effect.flatMap(([projectRows, threadRows, sessionRows, latestTurnRows, authorityState]) =>
           Effect.gen(function* () {
+            const [stateRows, autoNudgeAuthority] = authorityState;
             let updatedAt: string | null = null;
             for (const row of projectRows) {
               updatedAt = maxIso(updatedAt, row.updatedAt);
@@ -2164,6 +2226,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
 
             const snapshot = {
               snapshotSequence: computeSnapshotSequence(stateRows),
+              autoNudgeAuthority,
               projects: projectRows
                 .filter((row) => row.deletedAt === null && activeProjectIds.has(row.projectId))
                 .map((row) =>
@@ -2251,19 +2314,30 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               ),
             ),
           ),
-          listProjectionStateRows(undefined).pipe(
-            Effect.mapError(
-              toPersistenceSqlOrDecodeError(
-                "ProjectionSnapshotQuery.getDeletedShellSnapshot:listProjectionState:query",
-                "ProjectionSnapshotQuery.getDeletedShellSnapshot:listProjectionState:decodeRows",
+          Effect.all([
+            listProjectionStateRows(undefined).pipe(
+              Effect.mapError(
+                toPersistenceSqlOrDecodeError(
+                  "ProjectionSnapshotQuery.getDeletedShellSnapshot:listProjectionState:query",
+                  "ProjectionSnapshotQuery.getDeletedShellSnapshot:listProjectionState:decodeRows",
+                ),
               ),
             ),
-          ),
+            readAutoNudgeAuthority(undefined).pipe(
+              Effect.mapError(
+                toPersistenceSqlOrDecodeError(
+                  "ProjectionSnapshotQuery.getDeletedShellSnapshot:readAutoNudgeAuthority:query",
+                  "ProjectionSnapshotQuery.getDeletedShellSnapshot:readAutoNudgeAuthority:decodeRow",
+                ),
+              ),
+            ),
+          ]),
         ]),
       )
       .pipe(
-        Effect.flatMap(([projectRows, threadRows, sessionRows, latestTurnRows, stateRows]) =>
+        Effect.flatMap(([projectRows, threadRows, sessionRows, latestTurnRows, authorityState]) =>
           Effect.gen(function* () {
+            const [stateRows, autoNudgeAuthority] = authorityState;
             let updatedAt: string | null = null;
             for (const row of projectRows) {
               updatedAt = maxIso(updatedAt, row.updatedAt);
@@ -2310,6 +2384,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
 
             const snapshot = {
               snapshotSequence: computeSnapshotSequence(stateRows),
+              autoNudgeAuthority,
               projects: projectRows
                 .filter((row) => activeProjectIds.has(row.projectId))
                 .map((row) =>

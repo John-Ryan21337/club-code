@@ -8,6 +8,7 @@ import type {
 } from "@cafecode/contracts";
 import {
   DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
+  DEFAULT_GLOBAL_AUTO_NUDGE_AUTHORITY,
   MANUAL_FOLLOW_UP_MAX_ITEMS,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
@@ -170,6 +171,19 @@ function nextAutoNudgeAuthorityRevision(input: {
     );
   }
   return Effect.succeed(input.current.authorityRevision + 1);
+}
+
+function nextGlobalAutoNudgeAuthorityRevision(
+  command: OrchestrationCommand,
+  current: NonNullable<OrchestrationReadModel["autoNudgeAuthority"]>,
+) {
+  if (current.authorityRevision >= THREAD_AUTO_NUDGE_MAX_AUTHORITY_REVISION) {
+    return rejectAutoNudgeCommand(
+      command,
+      "Global Auto Nudge authority revision is exhausted and cannot advance safely.",
+    );
+  }
+  return Effect.succeed(current.authorityRevision + 1);
 }
 
 function revokeAutoNudgeAuthorityRevision(current: ThreadAutoNudgeConfig): number {
@@ -673,6 +687,18 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         );
       }
       const current = currentThreadAutoNudgeConfig(targetThread);
+      const globalAuthority = readModel.autoNudgeAuthority ?? DEFAULT_GLOBAL_AUTO_NUDGE_AUTHORITY;
+      if (command.mode !== "off") {
+        if (globalAuthority.status !== "allowed") {
+          return yield* rejectAutoNudgeCommand(command, "Global Auto Nudge Stop is active.");
+        }
+        if ((command.expectedGlobalAuthorityRevision ?? 0) !== globalAuthority.authorityRevision) {
+          return yield* rejectAutoNudgeCommand(
+            command,
+            "Global Auto Nudge authority revision is stale.",
+          );
+        }
+      }
       if (command.expectedAuthorityRevision !== current.authorityRevision) {
         return yield* rejectAutoNudgeCommand(
           command,
@@ -686,12 +712,14 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ? {
               ...DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
               authorityRevision,
+              globalAuthorityRevision: globalAuthority.authorityRevision,
               prompt: command.prompt,
               maxRounds: command.maxRounds,
             }
           : {
               ...DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
               authorityRevision,
+              globalAuthorityRevision: globalAuthority.authorityRevision,
               mode: command.mode,
               prompt: command.prompt,
               backgroundContinuation: command.backgroundContinuation,
@@ -729,6 +757,62 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       });
     }
 
+    case "auto-nudge.stop-all": {
+      const current = readModel.autoNudgeAuthority ?? DEFAULT_GLOBAL_AUTO_NUDGE_AUTHORITY;
+      // Stop must remain available at the revision ceiling. Reuse the final
+      // revision there so authority fails closed; Allow still requires a new
+      // revision and therefore cannot reopen exhausted authority.
+      const authorityRevision = Math.min(
+        current.authorityRevision + 1,
+        THREAD_AUTO_NUDGE_MAX_AUTHORITY_REVISION,
+      );
+      return {
+        ...withEventBase({
+          aggregateKind: "system",
+          aggregateId: "auto-nudge-authority",
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "system.auto-nudge-authority-changed",
+        payload: {
+          authority: {
+            authorityRevision,
+            status: "stopped",
+            stoppedAt: command.createdAt,
+            updatedAt: command.createdAt,
+          },
+        },
+      };
+    }
+
+    case "auto-nudge.allow": {
+      const current = readModel.autoNudgeAuthority ?? DEFAULT_GLOBAL_AUTO_NUDGE_AUTHORITY;
+      if (command.expectedAuthorityRevision !== current.authorityRevision) {
+        return yield* rejectAutoNudgeCommand(
+          command,
+          "Global Auto Nudge authority revision is stale.",
+        );
+      }
+      const authorityRevision = yield* nextGlobalAutoNudgeAuthorityRevision(command, current);
+      return {
+        ...withEventBase({
+          aggregateKind: "system",
+          aggregateId: "auto-nudge-authority",
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "system.auto-nudge-authority-changed",
+        payload: {
+          authority: {
+            authorityRevision,
+            status: "allowed",
+            stoppedAt: null,
+            updatedAt: command.createdAt,
+          },
+        },
+      };
+    }
+
     case "thread.auto-nudge.dispatch": {
       const targetThread = yield* requireThreadNotArchived({
         readModel,
@@ -749,6 +833,19 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       }
 
       const config = currentThreadAutoNudgeConfig(targetThread);
+      const globalAuthority = readModel.autoNudgeAuthority ?? DEFAULT_GLOBAL_AUTO_NUDGE_AUTHORITY;
+      if (globalAuthority.status !== "allowed") {
+        return yield* rejectAutoNudgeCommand(command, "Global Auto Nudge Stop is active.");
+      }
+      if (
+        (command.expectedGlobalAuthorityRevision ?? 0) !== globalAuthority.authorityRevision ||
+        (config.globalAuthorityRevision ?? 0) !== globalAuthority.authorityRevision
+      ) {
+        return yield* rejectAutoNudgeCommand(
+          command,
+          "Global Auto Nudge authority revision is stale.",
+        );
+      }
       if (config.mode === "off") {
         return yield* rejectAutoNudgeCommand(
           command,
@@ -893,6 +990,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           dispatchSource: "auto-nudge",
           autoNudgeAuthority: {
             authorityRevision: config.authorityRevision,
+            globalAuthorityRevision: globalAuthority.authorityRevision,
             completedTurnId: command.completedTurnId,
             completedAt: targetThread.latestTurn.completedAt,
             dispatchSource: command.dispatchSource,

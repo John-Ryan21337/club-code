@@ -23,6 +23,9 @@ import {
 import {
   AutoNudgeEnabledMode,
   AutoNudgeMaxRounds,
+  GlobalAutoNudgeAuthority,
+  GlobalAutoNudgeAuthorityRevision,
+  GlobalAutoNudgeAuthorityWithDefault,
   StoredThreadAutoNudgePrompt,
   ThreadAutoNudgeAuthorityRevision,
   ThreadAutoNudgeConfig,
@@ -465,6 +468,7 @@ export type OrchestrationThread = typeof OrchestrationThread.Type;
 
 export const OrchestrationReadModel = Schema.Struct({
   snapshotSequence: NonNegativeInt,
+  autoNudgeAuthority: Schema.optional(GlobalAutoNudgeAuthorityWithDefault),
   projects: Schema.Array(OrchestrationProject),
   threads: Schema.Array(OrchestrationThread),
   updatedAt: IsoDateTime,
@@ -513,6 +517,7 @@ export type OrchestrationThreadShell = typeof OrchestrationThreadShell.Type;
 
 export const OrchestrationShellSnapshot = Schema.Struct({
   snapshotSequence: NonNegativeInt,
+  autoNudgeAuthority: Schema.optional(GlobalAutoNudgeAuthorityWithDefault),
   projects: Schema.Array(OrchestrationProjectShell),
   threads: Schema.Array(OrchestrationThreadShell),
   updatedAt: IsoDateTime,
@@ -520,6 +525,11 @@ export const OrchestrationShellSnapshot = Schema.Struct({
 export type OrchestrationShellSnapshot = typeof OrchestrationShellSnapshot.Type;
 
 export const OrchestrationShellStreamEvent = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("auto-nudge-authority-changed"),
+    sequence: NonNegativeInt,
+    authority: GlobalAutoNudgeAuthority,
+  }),
   Schema.Struct({
     kind: Schema.Literal("project-upserted"),
     sequence: NonNegativeInt,
@@ -746,6 +756,7 @@ const ThreadAutoNudgeConfigureCommandFields = {
   commandId: CommandId,
   threadId: ThreadId,
   expectedAuthorityRevision: ThreadAutoNudgeAuthorityRevision,
+  expectedGlobalAuthorityRevision: Schema.optional(GlobalAutoNudgeAuthorityRevision),
   maxRounds: AutoNudgeMaxRounds,
   createdAt: IsoDateTime,
 } as const;
@@ -772,6 +783,19 @@ export const ThreadAutoNudgeStopCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+export const GlobalAutoNudgeStopCommand = Schema.Struct({
+  type: Schema.Literal("auto-nudge.stop-all"),
+  commandId: CommandId,
+  createdAt: IsoDateTime,
+});
+
+export const GlobalAutoNudgeAllowCommand = Schema.Struct({
+  type: Schema.Literal("auto-nudge.allow"),
+  commandId: CommandId,
+  expectedAuthorityRevision: GlobalAutoNudgeAuthorityRevision,
+  createdAt: IsoDateTime,
+});
+
 /**
  * Automated dispatch carries authority and correlation data only. The server
  * reads the saved exact-thread prompt after it accepts every invariant.
@@ -781,6 +805,7 @@ const ThreadAutoNudgeDispatchCommand = Schema.Struct({
   commandId: CommandId,
   threadId: ThreadId,
   expectedAuthorityRevision: ThreadAutoNudgeAuthorityRevision,
+  expectedGlobalAuthorityRevision: Schema.optional(GlobalAutoNudgeAuthorityRevision),
   completedTurnId: TurnId,
   dispatchSource: ThreadAutoNudgeDispatchSource,
   messageId: MessageId,
@@ -1037,6 +1062,8 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadInteractionModeSetCommand,
   ThreadAutoNudgeConfigureCommand,
   ThreadAutoNudgeStopCommand,
+  GlobalAutoNudgeStopCommand,
+  GlobalAutoNudgeAllowCommand,
   ThreadAutoNudgeDispatchCommand,
   ThreadManualFollowUpReserveCommand,
   ThreadManualFollowUpEnqueueCommand,
@@ -1070,6 +1097,8 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadInteractionModeSetCommand,
   ThreadAutoNudgeConfigureCommand,
   ThreadAutoNudgeStopCommand,
+  GlobalAutoNudgeStopCommand,
+  GlobalAutoNudgeAllowCommand,
   ThreadAutoNudgeDispatchCommand,
   ThreadManualFollowUpReserveCommand,
   ClientThreadManualFollowUpEnqueueCommand,
@@ -1239,6 +1268,7 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.auto-nudge-summary-changed",
   "thread.auto-nudge-stopped",
   "thread.auto-nudge-dispatched",
+  "system.auto-nudge-authority-changed",
   "thread.manual-follow-up-reserved",
   "thread.manual-follow-up-enqueued",
   "thread.manual-follow-up-cancelled",
@@ -1266,7 +1296,7 @@ export const OrchestrationEventType = Schema.Literals([
 ]);
 export type OrchestrationEventType = typeof OrchestrationEventType.Type;
 
-export const OrchestrationAggregateKind = Schema.Literals(["project", "thread"]);
+export const OrchestrationAggregateKind = Schema.Literals(["project", "thread", "system"]);
 export type OrchestrationAggregateKind = typeof OrchestrationAggregateKind.Type;
 export const OrchestrationActorKind = Schema.Literals(["client", "server", "provider"]);
 
@@ -1391,6 +1421,10 @@ export const ThreadAutoNudgeDispatchedPayload = Schema.Struct({
   dispatchedAt: IsoDateTime,
 });
 
+export const GlobalAutoNudgeAuthorityChangedPayload = Schema.Struct({
+  authority: GlobalAutoNudgeAuthority,
+});
+
 export const ThreadManualFollowUpReservedPayload = Schema.Struct({
   threadId: ThreadId,
   item: ManualFollowUpReservedItem,
@@ -1477,6 +1511,7 @@ export const ThreadTurnStartRequestedPayload = Schema.Struct({
   autoNudgeAuthority: Schema.optional(
     Schema.Struct({
       authorityRevision: ThreadAutoNudgeAuthorityRevision,
+      globalAuthorityRevision: Schema.optional(GlobalAutoNudgeAuthorityRevision),
       completedTurnId: TurnId,
       completedAt: IsoDateTime,
       dispatchSource: ThreadAutoNudgeDispatchSource,
@@ -1590,7 +1625,7 @@ const EventBaseFields = {
   sequence: NonNegativeInt,
   eventId: EventId,
   aggregateKind: OrchestrationAggregateKind,
-  aggregateId: Schema.Union([ProjectId, ThreadId]),
+  aggregateId: Schema.Union([ProjectId, ThreadId, Schema.Literal("auto-nudge-authority")]),
   occurredAt: IsoDateTime,
   commandId: Schema.NullOr(CommandId),
   causationEventId: Schema.NullOr(EventId),
@@ -1599,6 +1634,11 @@ const EventBaseFields = {
 } as const;
 
 export const OrchestrationEvent = Schema.Union([
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("system.auto-nudge-authority-changed"),
+    payload: GlobalAutoNudgeAuthorityChangedPayload,
+  }),
   Schema.Struct({
     ...EventBaseFields,
     type: Schema.Literal("project.created"),

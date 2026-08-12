@@ -92,6 +92,42 @@ const hasMetricSnapshot = (
   );
 
 describe("OrchestrationEngine", () => {
+  it("serializes concurrent global Auto Nudge Stops into distinct revisions", async () => {
+    const system = await createOrchestrationSystem();
+    const { engine } = system;
+
+    try {
+      const results = await Promise.all([
+        system.run(
+          engine.dispatch({
+            type: "auto-nudge.stop-all",
+            commandId: CommandId.make("concurrent-global-stop-1"),
+            createdAt: "2026-08-12T01:00:00.000Z",
+          }),
+        ),
+        system.run(
+          engine.dispatch({
+            type: "auto-nudge.stop-all",
+            commandId: CommandId.make("concurrent-global-stop-2"),
+            createdAt: "2026-08-12T01:00:01.000Z",
+          }),
+        ),
+      ]);
+
+      expect(
+        results.map((result) => result.sequence).toSorted((left, right) => left - right),
+      ).toEqual([1, 2]);
+      await expect(system.readModel()).resolves.toMatchObject({
+        autoNudgeAuthority: {
+          authorityRevision: 2,
+          status: "stopped",
+        },
+      });
+    } finally {
+      await system.dispose();
+    }
+  });
+
   it("bootstraps command handling from persisted projections without reading the full snapshot", async () => {
     let nextSequence = 8;
     const eventStore: OrchestrationEventStoreShape = {

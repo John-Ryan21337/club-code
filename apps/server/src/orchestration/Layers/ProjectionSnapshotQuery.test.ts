@@ -64,6 +64,33 @@ const projectionSnapshotLayer = it.layer(
 );
 
 projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
+  it.effect("rehydrates one durable global Auto Nudge authority into command and shell state", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`
+        UPDATE projection_auto_nudge_authority
+        SET
+          authority_revision = 7,
+          status = 'stopped',
+          stopped_at = '2026-08-12T02:00:00.000Z',
+          updated_at = '2026-08-12T02:00:00.000Z'
+        WHERE singleton_key = 'global'
+      `;
+
+      const commandState = yield* snapshotQuery.getCommandReadModel();
+      const shellState = yield* snapshotQuery.getShellSnapshot();
+      const expected = {
+        authorityRevision: 7,
+        status: "stopped" as const,
+        stoppedAt: "2026-08-12T02:00:00.000Z",
+        updatedAt: "2026-08-12T02:00:00.000Z",
+      };
+      assert.deepStrictEqual(commandState.autoNudgeAuthority, expected);
+      assert.deepStrictEqual(shellState.autoNudgeAuthority, expected);
+    }),
+  );
+
   it.effect("reads durable Auto Nudge cancellation markers outside thread detail", () =>
     Effect.gen(function* () {
       const snapshotQuery = yield* ProjectionSnapshotQuery;
@@ -445,6 +472,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       assert.equal(shellSnapshot.snapshotSequence, 5);
       assert.isDefined(shellSnapshot.threads[0]);
       assert.isFalse("prompt" in shellSnapshot.threads[0].autoNudge);
+      assert.equal(shellSnapshot.threads[0].autoNudge.globalAuthorityRevision, 0);
       assert.deepEqual(shellSnapshot.projects, [
         {
           id: asProjectId("project-1"),

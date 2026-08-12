@@ -149,6 +149,36 @@ export const ThreadAutoNudgeAuthorityRevision = NonNegativeInt.check(
 );
 export type ThreadAutoNudgeAuthorityRevision = typeof ThreadAutoNudgeAuthorityRevision.Type;
 
+export const GlobalAutoNudgeAuthorityRevision = ThreadAutoNudgeAuthorityRevision;
+export type GlobalAutoNudgeAuthorityRevision = typeof GlobalAutoNudgeAuthorityRevision.Type;
+
+export const GlobalAutoNudgeAuthority = Schema.Union([
+  Schema.Struct({
+    authorityRevision: GlobalAutoNudgeAuthorityRevision,
+    status: Schema.Literal("allowed"),
+    stoppedAt: Schema.Null,
+    updatedAt: IsoDateTime,
+  }),
+  Schema.Struct({
+    authorityRevision: GlobalAutoNudgeAuthorityRevision,
+    status: Schema.Literal("stopped"),
+    stoppedAt: IsoDateTime,
+    updatedAt: IsoDateTime,
+  }),
+]);
+export type GlobalAutoNudgeAuthority = typeof GlobalAutoNudgeAuthority.Type;
+
+export const DEFAULT_GLOBAL_AUTO_NUDGE_AUTHORITY: GlobalAutoNudgeAuthority = {
+  authorityRevision: 0,
+  status: "allowed",
+  stoppedAt: null,
+  updatedAt: "1970-01-01T00:00:00.000Z",
+};
+
+export const GlobalAutoNudgeAuthorityWithDefault = GlobalAutoNudgeAuthority.pipe(
+  Schema.withDecodingDefault(Effect.succeed(DEFAULT_GLOBAL_AUTO_NUDGE_AUTHORITY)),
+);
+
 /**
  * User-authored Auto Nudge text. Newlines are intentionally valid, while an
  * all-whitespace prompt is not. The prompt is persisted only on the exact
@@ -169,6 +199,9 @@ export type StoredThreadAutoNudgePrompt = typeof StoredThreadAutoNudgePrompt.Typ
 
 const ThreadAutoNudgeRunFields = {
   authorityRevision: ThreadAutoNudgeAuthorityRevision,
+  // Configurations written before the global authority existed belong to
+  // generation zero. The server rejects them after the first global change.
+  globalAuthorityRevision: Schema.optional(GlobalAutoNudgeAuthorityRevision),
   backgroundContinuation: Schema.Boolean,
   maxRounds: AutoNudgeMaxRounds,
   baselineSettledTurnId: Schema.NullOr(TurnId),
@@ -244,6 +277,7 @@ export const ThreadAutoNudgeConfigWithDefault = ThreadAutoNudgeConfig.pipe(
 
 export const DEFAULT_THREAD_AUTO_NUDGE_SUMMARY: ThreadAutoNudgeSummary = {
   authorityRevision: 0,
+  globalAuthorityRevision: 0,
   mode: "off",
   backgroundContinuation: false,
   maxRounds: DEFAULT_AUTO_NUDGE_MAX_ROUNDS,

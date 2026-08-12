@@ -123,6 +123,38 @@ const dispatch = {
 };
 
 describe("Auto Nudge persistence protocol", () => {
+  it("does not resurrect a pre-Stop thread configuration after global Allow", async () => {
+    const legacyConfigured = await seedArmedCompletedThread();
+    const afterStopAndAllow: OrchestrationReadModel = {
+      ...legacyConfigured,
+      autoNudgeAuthority: {
+        authorityRevision: 2,
+        status: "allowed",
+        stoppedAt: null,
+        updatedAt: "2026-08-11T00:02:00.000Z",
+      },
+    };
+
+    await expect(
+      Effect.runPromise(
+        decideOrchestrationCommand({
+          readModel: afterStopAndAllow,
+          command: {
+            type: "thread.auto-nudge.dispatch",
+            commandId: CommandId.make("legacy-auto-nudge-after-global-allow"),
+            threadId,
+            expectedAuthorityRevision: 1,
+            expectedGlobalAuthorityRevision: 2,
+            completedTurnId: TurnId.make("completed-turn"),
+            dispatchSource: "foreground",
+            messageId: MessageId.make("legacy-auto-nudge-message"),
+            createdAt: "2026-08-11T00:02:01.000Z",
+          },
+        }),
+      ),
+    ).rejects.toThrow("Global Auto Nudge authority revision is stale");
+  });
+
   it("admits one prompt-free dispatch only for the exact completed turn", async () => {
     const readModel = await seedArmedCompletedThread();
     const messageId = MessageId.make("auto-nudge-message");
@@ -152,6 +184,7 @@ describe("Auto Nudge persistence protocol", () => {
       dispatchSource: "auto-nudge",
       autoNudgeAuthority: {
         authorityRevision: 1,
+        globalAuthorityRevision: 0,
         completedTurnId: TurnId.make("completed-turn"),
         completedAt: "2026-08-11T00:01:00.000Z",
       },
@@ -253,6 +286,38 @@ describe("Auto Nudge persistence protocol", () => {
       roundsDispatched: 0,
       lastDispatchedMessageId: null,
     });
+  });
+
+  it("stamps enabled configuration with the exact current global authority revision", async () => {
+    const readModel = {
+      ...(await seedThread()),
+      autoNudgeAuthority: {
+        authorityRevision: 2,
+        status: "allowed" as const,
+        stoppedAt: null,
+        updatedAt: now,
+      },
+    };
+    const planned = await Effect.runPromise(
+      decideOrchestrationCommand({
+        readModel,
+        command: {
+          type: "thread.auto-nudge.configure",
+          commandId: CommandId.make("command-auto-nudge-configure-global-generation"),
+          threadId,
+          expectedAuthorityRevision: 0,
+          expectedGlobalAuthorityRevision: 2,
+          mode: "steady-progress",
+          prompt: "Continue this exact thread.",
+          backgroundContinuation: false,
+          maxRounds: 3,
+          createdAt: now,
+        },
+      }),
+    );
+
+    const projected = await applyPlannedEvents(readModel, planned);
+    expect(projected.threads[0]?.autoNudge.globalAuthorityRevision).toBe(2);
   });
 
   it("keeps a running turn eligible after arming, then revokes authority on terminal lifecycle", async () => {

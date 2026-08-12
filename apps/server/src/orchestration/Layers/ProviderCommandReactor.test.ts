@@ -262,6 +262,26 @@ describe("ProviderCommandReactor", () => {
         "the provider session is no longer ready",
       );
     });
+
+    it("cancels at the provider boundary after global Stop or generation replacement", () => {
+      expect(
+        autoNudgeTurnStartCancellationReason(thread, event, {
+          authorityRevision: 1,
+          status: "stopped",
+          stoppedAt: completedAt,
+          updatedAt: completedAt,
+        }),
+      ).toBe("Global Auto Nudge Stop is active");
+
+      expect(
+        autoNudgeTurnStartCancellationReason(thread, event, {
+          authorityRevision: 1,
+          status: "allowed",
+          stoppedAt: null,
+          updatedAt: completedAt,
+        }),
+      ).toBe("global Auto Nudge authority was replaced or stopped");
+    });
   });
 
   describe("manual follow-up startup delivery proof", () => {

@@ -250,6 +250,24 @@ describe("bootstrap selectors", () => {
   });
 });
 
+describe("global Auto Nudge authority shell projection", () => {
+  it("updates one environment without enumerating its threads", () => {
+    const event: OrchestrationShellStreamEvent = {
+      kind: "auto-nudge-authority-changed",
+      sequence: 12,
+      authority: {
+        authorityRevision: 3,
+        status: "stopped",
+        stoppedAt: "2026-08-12T03:00:00.000Z",
+        updatedAt: "2026-08-12T03:00:00.000Z",
+      },
+    };
+    const next = applyShellEvent(makeEmptyState(), event, localEnvironmentId);
+    expect(localEnvironmentStateOf(next).autoNudgeAuthority).toEqual(event.authority);
+    expect(localEnvironmentStateOf(next).threadIds).toEqual([]);
+  });
+});
+
 function makeEvent<T extends OrchestrationEvent["type"]>(
   type: T,
   payload: Extract<OrchestrationEvent, { type: T }>["payload"],
