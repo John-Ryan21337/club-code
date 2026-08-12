@@ -647,7 +647,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
               backgroundContinuation: command.backgroundContinuation,
               maxRounds: command.maxRounds,
               armedAt: configuredAt,
-              baselineSettledTurnId: targetThread.latestTurn?.turnId ?? null,
+              baselineSettledTurnId:
+                targetThread.latestTurn !== null &&
+                targetThread.latestTurn.state !== "running" &&
+                targetThread.latestTurn.completedAt !== null
+                  ? targetThread.latestTurn.turnId
+                  : null,
             };
       return {
         ...withEventBase({

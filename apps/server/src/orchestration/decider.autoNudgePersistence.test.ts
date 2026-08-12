@@ -255,6 +255,134 @@ describe("Auto Nudge persistence protocol", () => {
     });
   });
 
+  it("does not baseline a turn that is still running when Auto Nudge is enabled", async () => {
+    const readModel = await seedThread();
+    const runningTurnId = TurnId.make("running-while-auto-nudge-is-enabled");
+    const running = {
+      ...readModel,
+      threads: [
+        {
+          ...readModel.threads[0]!,
+          latestTurn: {
+            turnId: runningTurnId,
+            state: "running" as const,
+            requestedAt: now,
+            startedAt: now,
+            completedAt: null,
+            assistantMessageId: null,
+          },
+        },
+      ],
+    };
+
+    const planned = await Effect.runPromise(
+      decideOrchestrationCommand({
+        readModel: running,
+        command: {
+          type: "thread.auto-nudge.configure",
+          commandId: CommandId.make("command-auto-nudge-configure-mid-turn"),
+          threadId,
+          expectedAuthorityRevision: 0,
+          mode: "steady-progress",
+          prompt: "Continue after this running turn completes.",
+          backgroundContinuation: false,
+          maxRounds: 3,
+          createdAt: now,
+        },
+      }),
+    );
+
+    const projected = await applyPlannedEvents(running, planned);
+    expect(projected.threads[0]?.autoNudge.baselineSettledTurnId).toBeNull();
+
+    const completed = {
+      ...projected,
+      threads: [
+        {
+          ...projected.threads[0]!,
+          latestTurn: {
+            ...projected.threads[0]!.latestTurn!,
+            state: "completed" as const,
+            completedAt: "2026-08-11T00:02:00.000Z",
+          },
+          session: {
+            threadId,
+            status: "ready" as const,
+            providerName: "codex",
+            providerInstanceId: ProviderInstanceId.make("codex"),
+            runtimeMode: "full-access" as const,
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: "2026-08-11T00:02:00.000Z",
+          },
+        },
+      ],
+    };
+    const dispatched = await Effect.runPromise(
+      decideOrchestrationCommand({
+        readModel: completed,
+        command: {
+          type: "thread.auto-nudge.dispatch",
+          commandId: CommandId.make("command-auto-nudge-dispatch-after-mid-turn-enable"),
+          threadId,
+          expectedAuthorityRevision: 1,
+          completedTurnId: runningTurnId,
+          dispatchSource: "foreground",
+          messageId: MessageId.make("message-auto-nudge-after-mid-turn-enable"),
+          createdAt: "2026-08-11T00:02:01.000Z",
+        },
+      }),
+    );
+    expect(
+      (Array.isArray(dispatched) ? dispatched : [dispatched]).map((event) => event.type),
+    ).toEqual([
+      "thread.auto-nudge-dispatched",
+      "thread.message-sent",
+      "thread.turn-start-requested",
+    ]);
+  });
+
+  it("baselines a turn that is already settled when Auto Nudge is enabled", async () => {
+    const readModel = await seedThread();
+    const settledTurnId = TurnId.make("settled-before-auto-nudge-is-enabled");
+    const settled = {
+      ...readModel,
+      threads: [
+        {
+          ...readModel.threads[0]!,
+          latestTurn: {
+            turnId: settledTurnId,
+            state: "completed" as const,
+            requestedAt: now,
+            startedAt: now,
+            completedAt: "2026-08-11T00:01:00.000Z",
+            assistantMessageId: null,
+          },
+        },
+      ],
+    };
+
+    const planned = await Effect.runPromise(
+      decideOrchestrationCommand({
+        readModel: settled,
+        command: {
+          type: "thread.auto-nudge.configure",
+          commandId: CommandId.make("command-auto-nudge-configure-after-completion"),
+          threadId,
+          expectedAuthorityRevision: 0,
+          mode: "steady-progress",
+          prompt: "Wait for the next completion.",
+          backgroundContinuation: false,
+          maxRounds: 3,
+          createdAt: now,
+        },
+      }),
+    );
+
+    const projected = await applyPlannedEvents(settled, planned);
+    expect(projected.threads[0]?.autoNudge.baselineSettledTurnId).toBe(settledTurnId);
+  });
+
   it("reserves prompt-free identity before storing a manual FIFO payload", async () => {
     let readModel = await seedThread();
     const followUpId = ManualFollowUpId.make("manual-follow-up-1");
