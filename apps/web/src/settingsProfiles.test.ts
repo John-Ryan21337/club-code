@@ -5,6 +5,7 @@ import {
   buildSettingsProfileApplyPatch,
   captureSettingsProfile,
   createSettingsProfilesStore,
+  getSettingsProfileDifferenceKeys,
   SETTINGS_PROFILE_FIELD_POLICY,
   SETTINGS_PROFILES_MAX_COUNT,
   SETTINGS_PROFILES_STORAGE_KEY,
@@ -88,6 +89,22 @@ describe("settings profiles", () => {
       ambientImageEnabled: false,
       ambientImageCycleEnabled: false,
     });
+  });
+
+  it("previews only saved fields that would change", () => {
+    const store = createSettingsProfilesStore(createStorage(), now);
+    const saved = store.create("Preview", payload());
+    const current = {
+      ...DEFAULT_UNIFIED_SETTINGS,
+      showSidebarMascot: !DEFAULT_UNIFIED_SETTINGS.showSidebarMascot,
+      ambientVideoEnabled: true,
+    };
+
+    const differences = getSettingsProfileDifferenceKeys(saved, current, "light");
+
+    expect(differences).toEqual(["theme", "showSidebarMascot", "ambientVideoEnabled"]);
+    expect(Object.isFrozen(differences)).toBe(true);
+    expect(differences).not.toContain("notificationsEnabled");
   });
 
   it("does not invoke activation accessors while it builds an apply patch", () => {
@@ -296,6 +313,39 @@ describe("settings profiles", () => {
     expect(second.getSnapshot().profiles.map(({ name }) => name)).toEqual(["First", "Second"]);
     first.refresh();
     expect(first.getSnapshot().profiles.map(({ name }) => name)).toEqual(["First", "Second"]);
+  });
+
+  it("does not delete a same-name profile that another window replaced", () => {
+    const storage = createStorage();
+    const first = createSettingsProfilesStore(storage, now);
+    const stale = first.create("Shared", payload());
+    const second = createSettingsProfilesStore(storage, () => new Date("2026-08-02T12:00:00.000Z"));
+
+    expect(second.remove(stale)).toBe("removed");
+    const replacement = second.create("Shared", payload());
+    first.refresh();
+
+    expect(first.remove(stale)).toBe("changed");
+    expect(first.resolve(replacement.id)).toEqual(replacement);
+  });
+
+  it("does not publish a deletion when local storage rejects the write", () => {
+    const backing = createStorage();
+    const store = createSettingsProfilesStore(backing, now);
+    const saved = store.create("Keep", payload());
+    const failingStorage: SettingsProfilesStorage = {
+      getItem: backing.getItem,
+      setItem: () => {
+        throw new Error("quota");
+      },
+    };
+    const failingStore = createSettingsProfilesStore(failingStorage, now);
+
+    expect(() => failingStore.remove(saved)).toThrow(
+      "The profile could not be deleted from local storage.",
+    );
+    expect(failingStore.resolve(saved.id)).toEqual(saved);
+    expect(createSettingsProfilesStore(backing).resolve(saved.id)).toEqual(saved);
   });
 
   it("enforces the local profile count before writing", () => {

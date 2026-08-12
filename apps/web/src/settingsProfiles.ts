@@ -121,6 +121,14 @@ export interface SettingsProfilesStorage {
   readonly setItem: (key: string, value: string) => void;
 }
 
+export type SettingsProfileDifferenceKey =
+  | "theme"
+  | IncludedKey
+  | "ambientVideoEnabled"
+  | "ambientImageEnabled"
+  | "ambientImageCycleEnabled";
+export type SettingsProfileRemovalResult = "removed" | "missing" | "changed";
+
 export class SettingsProfileError extends Error {
   constructor(message: string) {
     super(message);
@@ -424,6 +432,53 @@ export function buildSettingsProfileApplyPatch(
   };
 }
 
+function profileValuesEqual(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true;
+  if (typeof left !== "object" || left === null || typeof right !== "object" || right === null) {
+    return false;
+  }
+  try {
+    return JSON.stringify(left) === JSON.stringify(right);
+  } catch {
+    return false;
+  }
+}
+
+/** Return the saved profile fields that would change, without applying them. */
+export function getSettingsProfileDifferenceKeys(
+  profile: SettingsProfile,
+  currentSettings: UnifiedSettings,
+  currentTheme: SettingsProfileTheme,
+): readonly SettingsProfileDifferenceKey[] {
+  const differences: SettingsProfileDifferenceKey[] = [];
+  if (profile.theme !== currentTheme) differences.push("theme");
+  for (const key of includedKeys) {
+    const savedValue = ownValue(profile.clientSettings, key);
+    if (savedValue === undefined) continue;
+    if (!profileValuesEqual(savedValue, ownValue(currentSettings, key))) {
+      differences.push(key);
+    }
+  }
+  for (const key of [
+    "ambientVideoEnabled",
+    "ambientImageEnabled",
+    "ambientImageCycleEnabled",
+  ] as const) {
+    if (ownValue(currentSettings, key) === true) differences.push(key);
+  }
+  return Object.freeze(differences);
+}
+
+function isSameSavedProfile(left: SettingsProfile, right: SettingsProfile): boolean {
+  return (
+    left.id === right.id &&
+    left.name === right.name &&
+    left.theme === right.theme &&
+    left.createdAt === right.createdAt &&
+    profileValuesEqual(left.clientSettings, right.clientSettings)
+  );
+}
+
 function freezeProfile(profile: SettingsProfile): SettingsProfile {
   return Object.freeze({
     ...profile,
@@ -567,6 +622,27 @@ export function createSettingsProfilesStore(
       snapshot = next;
       for (const listener of listeners) listener();
       return profile;
+    },
+    remove: (expected: SettingsProfile): SettingsProfileRemovalResult => {
+      if (storage === null) throw new SettingsProfileError("Local profile storage is unavailable.");
+      const current = snapshot.profiles.find((profile) => profile.id === expected.id);
+      if (current === undefined) return "missing";
+      if (!isSameSavedProfile(expected, current)) return "changed";
+      const next = Object.freeze({
+        profiles: Object.freeze(snapshot.profiles.filter((profile) => profile.id !== expected.id)),
+      });
+      const encoded = JSON.stringify({
+        version: SETTINGS_PROFILES_VERSION,
+        profiles: next.profiles,
+      });
+      try {
+        storage.setItem(SETTINGS_PROFILES_STORAGE_KEY, encoded);
+      } catch {
+        throw new SettingsProfileError("The profile could not be deleted from local storage.");
+      }
+      snapshot = next;
+      for (const listener of listeners) listener();
+      return "removed";
     },
   };
 }

@@ -1178,12 +1178,18 @@ describe("settings panels", () => {
 
     await page.getByLabelText("New settings profile name").fill("Focus");
     await page.getByRole("button", { name: "Save" }).click();
-    await expect.element(page.getByRole("button", { name: "Focus" })).toBeInTheDocument();
+    await expect.element(page.getByText("Focus", { exact: true })).toBeInTheDocument();
     await expect.element(page.getByRole("status")).toBeInTheDocument();
     await expect.element(page.getByText("Saved “Focus” on this device.")).toBeInTheDocument();
 
     updateClientSettings.mockClear();
-    await page.getByRole("button", { name: "Focus" }).click();
+    await page.getByRole("button", { name: "Preview", exact: true }).click();
+    await expect
+      .element(page.getByRole("region", { name: "Changes from applying Focus" }))
+      .toHaveTextContent("Preview does not apply the profile.");
+    expect(updateClientSettings).not.toHaveBeenCalled();
+
+    await page.getByRole("button", { name: "Apply Focus" }).click();
     await vi.waitFor(() => expect(updateClientSettings).toHaveBeenCalledOnce());
     await expect.element(page.getByRole("status")).toBeInTheDocument();
     await expect.element(page.getByText("Applied “Focus”.")).toBeInTheDocument();
@@ -1200,6 +1206,16 @@ describe("settings panels", () => {
     expect(applied).not.toHaveProperty("providerModelPreferences");
     expect(applied).not.toHaveProperty("sidebarBrandImageDataUrl");
     expect(applied).not.toHaveProperty("defaultEditor");
+
+    updateClientSettings.mockClear();
+    await page.getByRole("button", { name: "Delete Focus" }).click();
+    await expect
+      .element(page.getByRole("heading", { name: /Delete settings profile/u }))
+      .toBeInTheDocument();
+    await page.getByRole("button", { name: "Delete profile" }).click();
+    await expect.element(page.getByText(/Current settings did not change\./u)).toBeInTheDocument();
+    await expect.element(page.getByText("No profiles saved yet.")).toBeInTheDocument();
+    expect(updateClientSettings).not.toHaveBeenCalled();
   });
 
   it("shows detected editor icons in the Files & Diffs default editor selector", async () => {
