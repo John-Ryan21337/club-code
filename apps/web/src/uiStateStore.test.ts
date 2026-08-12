@@ -608,6 +608,18 @@ describe("uiStateStore persistence round-trip", () => {
     expect(persisted.mobileOptimizedPresentation).toBe(true);
   });
 
+  it("restores the mobile presentation choice when the renderer reloads", async () => {
+    localStorageStub.setItem(
+      PERSISTED_STATE_KEY,
+      JSON.stringify({ mobileOptimizedPresentation: true } satisfies PersistedUiState),
+    );
+    vi.resetModules();
+
+    const { useUiStateStore: reloadedStore } = await import("./uiStateStore");
+
+    expect(reloadedStore.getState().mobileOptimizedPresentation).toBe(true);
+  });
+
   it("persists explicit per-thread plan sidebar choices", () => {
     const thread1 = ThreadId.make("thread-1");
     const thread2 = ThreadId.make("thread-2");

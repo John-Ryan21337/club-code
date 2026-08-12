@@ -5635,12 +5635,27 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
           () => document.querySelector<HTMLElement>('[data-slot="sidebar-wrapper"]'),
           "Unable to find the sidebar presentation surface.",
         );
+        const composerSurface = await waitForElement(
+          () =>
+            document.querySelector<HTMLElement>(
+              "[data-chat-composer-mobile-collapsed][data-chat-composer-keyboard-open]",
+            ),
+          "Unable to find the composer presentation surface.",
+        );
+        const ambianceCanvas = await waitForElement(
+          () => document.querySelector<HTMLCanvasElement>('[data-cafe-ambiance-canvas="true"]'),
+          "Unable to find the Matrix ambiance canvas.",
+        );
 
         expect(toggle.getAttribute("aria-label")).toBe("Use mobile layout");
         expect(toggle.getAttribute("aria-pressed")).toBe("false");
         expect(toggle.dataset.effectiveMobileLayout).toBe("false");
+        expect(toggle.dataset.mobilePresentationSource).toBe("responsive");
         expect(chatView.dataset.chatPresentation).toBe("desktop");
         expect(sidebarLayout.dataset.mobileLayout).toBe("false");
+        expect(composerSurface.dataset.chatComposerKeyboardOpen).toBe("false");
+        expect(toggle.getBoundingClientRect().width).toBeGreaterThanOrEqual(44);
+        expect(toggle.getBoundingClientRect().height).toBeGreaterThanOrEqual(44);
 
         toggle.click();
 
@@ -5649,8 +5664,57 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
             expect(toggle.getAttribute("aria-label")).toBe("Use automatic layout");
             expect(toggle.getAttribute("aria-pressed")).toBe("true");
             expect(toggle.dataset.effectiveMobileLayout).toBe("true");
+            expect(toggle.dataset.mobilePresentationSource).toBe("operator");
             expect(chatView.dataset.chatPresentation).toBe("mobile");
             expect(sidebarLayout.dataset.mobileLayout).toBe("true");
+            expect(composerSurface.dataset.chatComposerKeyboardOpen).toBe("false");
+            expect(document.querySelector('[data-cafe-ambiance-canvas="true"]')).toBe(
+              ambianceCanvas,
+            );
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+
+        await vi.waitFor(
+          () => {
+            const persisted = JSON.parse(localStorage.getItem("cafe-code:ui-state:v1") ?? "{}") as {
+              mobileOptimizedPresentation?: boolean;
+            };
+            expect(persisted.mobileOptimizedPresentation).toBe(true);
+          },
+          { timeout: 8_000, interval: 50 },
+        );
+
+        await mounted.setViewport(COMPACT_FOOTER_VIEWPORT);
+        toggle.click();
+
+        await vi.waitFor(
+          () => {
+            expect(toggle.getAttribute("aria-pressed")).toBe("false");
+            expect(toggle.dataset.effectiveMobileLayout).toBe("true");
+            expect(toggle.dataset.mobilePresentationSource).toBe("viewport");
+            expect(chatView.dataset.chatPresentation).toBe("mobile");
+            expect(sidebarLayout.dataset.mobileLayout).toBe("true");
+            expect(composerSurface.dataset.chatComposerKeyboardOpen).toBe("false");
+            expect(document.querySelector('[data-cafe-ambiance-canvas="true"]')).toBe(
+              ambianceCanvas,
+            );
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+
+        await mounted.setViewport(WIDE_FOOTER_VIEWPORT);
+
+        await vi.waitFor(
+          () => {
+            expect(toggle.getAttribute("aria-label")).toBe("Use mobile layout");
+            expect(toggle.dataset.effectiveMobileLayout).toBe("false");
+            expect(toggle.dataset.mobilePresentationSource).toBe("responsive");
+            expect(chatView.dataset.chatPresentation).toBe("desktop");
+            expect(sidebarLayout.dataset.mobileLayout).toBe("false");
+            expect(document.querySelector('[data-cafe-ambiance-canvas="true"]')).toBe(
+              ambianceCanvas,
+            );
           },
           { timeout: 8_000, interval: 16 },
         );
