@@ -36,53 +36,62 @@ interface BundledYouTubeQueueSource extends BundledYouTubeQueueCatalogEntry {
 
 export const DEFAULT_BUNDLED_YOUTUBE_QUEUE_ID: BundledYouTubeQueueId = "japanese";
 
-const SOURCES: readonly BundledYouTubeQueueSource[] = [
-  {
-    id: "japanese",
-    label: "Japanese music",
-    itemCount: 71,
-    text: japaneseQueueText,
-    expectedCounts: {
-      totalLines: 78,
-      blank: 0,
-      comment: 1,
-      accepted: 71,
-      duplicate: 3,
-      malformed: 3,
-      overflow: 0,
-    },
-  },
-  {
-    id: "edm",
-    label: "EDM",
-    itemCount: 30,
-    text: edmQueueText,
-    expectedCounts: {
-      totalLines: 32,
-      blank: 0,
-      comment: 1,
-      accepted: 30,
-      duplicate: 0,
-      malformed: 1,
-      overflow: 0,
-    },
-  },
-  {
-    id: "kpop",
-    label: "K-pop",
-    itemCount: 8,
-    text: kpopQueueText,
-    expectedCounts: {
-      totalLines: 9,
-      blank: 0,
-      comment: 1,
-      accepted: 8,
-      duplicate: 0,
-      malformed: 0,
-      overflow: 0,
-    },
-  },
-];
+const SOURCES: readonly BundledYouTubeQueueSource[] = Object.freeze(
+  (
+    [
+      {
+        id: "japanese",
+        label: "Japanese music",
+        itemCount: 71,
+        text: japaneseQueueText,
+        expectedCounts: {
+          totalLines: 78,
+          blank: 0,
+          comment: 1,
+          accepted: 71,
+          duplicate: 3,
+          malformed: 3,
+          overflow: 0,
+        },
+      },
+      {
+        id: "edm",
+        label: "EDM",
+        itemCount: 30,
+        text: edmQueueText,
+        expectedCounts: {
+          totalLines: 32,
+          blank: 0,
+          comment: 1,
+          accepted: 30,
+          duplicate: 0,
+          malformed: 1,
+          overflow: 0,
+        },
+      },
+      {
+        id: "kpop",
+        label: "K-pop",
+        itemCount: 8,
+        text: kpopQueueText,
+        expectedCounts: {
+          totalLines: 9,
+          blank: 0,
+          comment: 1,
+          accepted: 8,
+          duplicate: 0,
+          malformed: 0,
+          overflow: 0,
+        },
+      },
+    ] satisfies readonly BundledYouTubeQueueSource[]
+  ).map((source) =>
+    Object.freeze({
+      ...source,
+      expectedCounts: freezeCounts(source.expectedCounts),
+    }),
+  ),
+);
 
 export const BUNDLED_YOUTUBE_QUEUE_CATALOG: readonly BundledYouTubeQueueCatalogEntry[] =
   Object.freeze(SOURCES.map(({ id, label, itemCount }) => Object.freeze({ id, label, itemCount })));
@@ -110,6 +119,15 @@ function freezeQueue(queue: ParsedYouTubeUrlQueue): ParsedYouTubeUrlQueue {
   });
 }
 
+function loadFailure(
+  reason: "unknown-bundled-queue" | "invalid-bundled-queue",
+): BundledYouTubeQueueLoadResult {
+  return Object.freeze({
+    ok: false,
+    error: Object.freeze({ reason }),
+  });
+}
+
 /**
  * Loads one reviewed queue as immutable normalized IDs and bounded diagnostics.
  * Raw queue text never appears in the result. Loading performs no network,
@@ -118,7 +136,7 @@ function freezeQueue(queue: ParsedYouTubeUrlQueue): ParsedYouTubeUrlQueue {
 export function loadBundledYouTubeQueue(id: string): BundledYouTubeQueueLoadResult {
   const source = SOURCES.find((candidate) => candidate.id === id);
   if (!source) {
-    return { ok: false, error: { reason: "unknown-bundled-queue" } };
+    return loadFailure("unknown-bundled-queue");
   }
 
   const parsed = parseYouTubeUrlQueue(source.text);
@@ -129,15 +147,15 @@ export function loadBundledYouTubeQueue(id: string): BundledYouTubeQueueLoadResu
     parsed.queue.issues.length !== source.expectedCounts.malformed ||
     parsed.queue.issuesTruncated
   ) {
-    return { ok: false, error: { reason: "invalid-bundled-queue" } };
+    return loadFailure("invalid-bundled-queue");
   }
 
-  return {
+  return Object.freeze({
     ok: true,
     entry: Object.freeze({
       id: source.id,
       label: source.label,
       queue: freezeQueue(parsed.queue),
     }),
-  };
+  });
 }
