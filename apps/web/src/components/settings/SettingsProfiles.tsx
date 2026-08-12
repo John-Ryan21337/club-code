@@ -7,6 +7,7 @@ import {
   buildSettingsProfileApplyPatch,
   captureSettingsProfile,
   getSettingsProfileDifferenceKeys,
+  isSameSettingsProfile,
   mutateSettingsProfiles,
   settingsProfilesStore,
   SettingsProfileError,
@@ -89,16 +90,35 @@ export function SettingsProfiles() {
   }, [busy, hydrated, name, reportError, settings, theme]);
 
   const apply = useCallback(
-    async (profileId: string) => {
+    async (expectedProfile: SettingsProfile) => {
       if (!hydrated || busy) return;
       setBusy(true);
       try {
-        const profile = await mutateSettingsProfiles(() =>
-          settingsProfilesStore.resolve(profileId),
-        );
-        if (profile === null) {
-          throw new SettingsProfileError("That settings profile no longer exists.");
+        const resolved = await mutateSettingsProfiles(() => {
+          const current = settingsProfilesStore.resolve(expectedProfile.id);
+          if (current === null) return { kind: "missing" as const };
+          if (!isSameSettingsProfile(expectedProfile, current)) {
+            return { kind: "changed" as const };
+          }
+          return { kind: "current" as const, profile: current };
+        });
+        if (resolved.kind === "missing") {
+          setPreviewProfileId(null);
+          setError(true);
+          setNotice(
+            `“${expectedProfile.name}” was deleted or renamed in another window. Select another profile.`,
+          );
+          return;
         }
+        if (resolved.kind === "changed") {
+          setPreviewProfileId(null);
+          setError(true);
+          setNotice(
+            `“${expectedProfile.name}” changed in another window. Preview the profile again before you apply it.`,
+          );
+          return;
+        }
+        const profile = resolved.profile;
         setTheme(profile.theme);
         updateSettings(buildSettingsProfileApplyPatch(profile.clientSettings));
         setPreviewProfileId(null);
@@ -193,6 +213,7 @@ export function SettingsProfiles() {
               <div key={profile.id} className="flex flex-wrap items-center gap-2">
                 <span className="min-w-0 flex-1 truncate text-sm font-medium">{profile.name}</span>
                 <Button
+                  aria-label={`Preview ${profile.name}`}
                   aria-controls="settings-profile-preview"
                   aria-expanded={previewProfile?.id === profile.id}
                   disabled={busy || !hydrated}
@@ -210,7 +231,7 @@ export function SettingsProfiles() {
                   disabled={busy || !hydrated}
                   size="sm"
                   variant="outline"
-                  onClick={() => void apply(profile.id)}
+                  onClick={() => void apply(profile)}
                 >
                   Apply
                 </Button>
