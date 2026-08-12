@@ -5,7 +5,10 @@ import {
   buildSettingsProfileApplyPatch,
   captureSettingsProfile,
   createSettingsProfilesStore,
+  MOBILE_SETTINGS_PROFILE_BOOTSTRAP_MARKER_KEY,
+  MOBILE_SETTINGS_PROFILE_BOOTSTRAP_MARKER_VALUE,
   SETTINGS_PROFILE_FIELD_POLICY,
+  SETTINGS_PROFILES_MAX_BYTES,
   SETTINGS_PROFILES_MAX_COUNT,
   SETTINGS_PROFILES_STORAGE_KEY,
   SettingsProfileError,
@@ -22,6 +25,21 @@ function createStorage(initial: string | null = null): SettingsProfilesStorage &
       if (key === SETTINGS_PROFILES_STORAGE_KEY) value = next;
     },
     read: () => value,
+  };
+}
+
+function createKeyedStorage(
+  entries: Readonly<Record<string, string>> = {},
+): SettingsProfilesStorage & {
+  read: (key: string) => string | null;
+  remove: (key: string) => void;
+} {
+  const values = new Map(Object.entries(entries));
+  return {
+    getItem: (key) => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, value),
+    read: (key) => values.get(key) ?? null,
+    remove: (key) => values.delete(key),
   };
 }
 
@@ -310,5 +328,159 @@ describe("settings profiles", () => {
       `You can save up to ${SETTINGS_PROFILES_MAX_COUNT} profiles.`,
     );
     expect(storage.read()).toBe(before);
+  });
+
+  it.each([
+    ["malformed", "{"],
+    ["legacy empty", JSON.stringify({ version: 1, profiles: [] })],
+    ["unsupported empty", JSON.stringify({ version: 99, profiles: [] })],
+    [
+      "future-shaped empty",
+      JSON.stringify({ version: 2, profiles: [], futureProfileMetadata: true }),
+    ],
+    ["invalid records", JSON.stringify({ version: 2, profiles: [null] })],
+    [
+      "partly corrupt records",
+      JSON.stringify({
+        version: 2,
+        profiles: [
+          {
+            id: "profile:valid",
+            name: "Valid",
+            theme: "dark",
+            clientSettings: {},
+            createdAt: "2026-08-01T12:00:00.000Z",
+          },
+          null,
+        ],
+      }),
+    ],
+    ["missing profiles", JSON.stringify({ version: 2 })],
+    ["oversized", "x".repeat(SETTINGS_PROFILES_MAX_BYTES + 1)],
+  ])("does not replace a %s profile document during mobile bootstrap", (_label, raw) => {
+    const storage = createKeyedStorage({ [SETTINGS_PROFILES_STORAGE_KEY]: raw });
+    const store = createSettingsProfilesStore(storage, now);
+
+    expect(store.seedMobileProfileOnce("Mobile Profile", payload())).toBe("skipped");
+    expect(storage.read(SETTINGS_PROFILES_STORAGE_KEY)).toBe(raw);
+    expect(storage.read(MOBILE_SETTINGS_PROFILE_BOOTSTRAP_MARKER_KEY)).toBeNull();
+  });
+
+  it("does not treat a profile read failure as an absent library", () => {
+    const setItem = vi.fn();
+    const storage: SettingsProfilesStorage = {
+      getItem: (key) => {
+        if (key === SETTINGS_PROFILES_STORAGE_KEY) throw new Error("blocked");
+        return null;
+      },
+      setItem,
+    };
+
+    expect(
+      createSettingsProfilesStore(storage, now).seedMobileProfileOnce("Mobile", payload()),
+    ).toBe("skipped");
+    expect(setItem).not.toHaveBeenCalled();
+  });
+
+  it.each([null, JSON.stringify({ version: 2, profiles: [] })])(
+    "creates once from an absent or valid empty version-two library",
+    (initial) => {
+      const storage = createKeyedStorage(
+        initial === null ? {} : { [SETTINGS_PROFILES_STORAGE_KEY]: initial },
+      );
+      const first = createSettingsProfilesStore(storage, now);
+      const second = createSettingsProfilesStore(storage, now);
+
+      expect(first.seedMobileProfileOnce("Mobile Profile", payload())).toBe("created");
+      expect(second.seedMobileProfileOnce("Mobile Profile", payload())).toBe("skipped");
+      expect(storage.read(MOBILE_SETTINGS_PROFILE_BOOTSTRAP_MARKER_KEY)).toBe(
+        MOBILE_SETTINGS_PROFILE_BOOTSTRAP_MARKER_VALUE,
+      );
+      expect(
+        JSON.parse(storage.read(SETTINGS_PROFILES_STORAGE_KEY) ?? "null").profiles,
+      ).toHaveLength(1);
+    },
+  );
+
+  it("does not recreate a mobile profile after an authoritative deletion", () => {
+    const storage = createKeyedStorage();
+    const store = createSettingsProfilesStore(storage, now);
+    expect(store.seedMobileProfileOnce("Mobile Profile", payload())).toBe("created");
+
+    storage.setItem(SETTINGS_PROFILES_STORAGE_KEY, JSON.stringify({ version: 2, profiles: [] }));
+    store.refresh();
+
+    expect(store.seedMobileProfileOnce("Mobile Profile", payload())).toBe("skipped");
+    expect(JSON.parse(storage.read(SETTINGS_PROFILES_STORAGE_KEY) ?? "null").profiles).toEqual([]);
+  });
+
+  it("records a populated version-two library as considered without changing it", () => {
+    const storage = createKeyedStorage();
+    const writer = createSettingsProfilesStore(storage, now);
+    writer.create("Desktop", payload());
+    const before = storage.read(SETTINGS_PROFILES_STORAGE_KEY);
+
+    const bootstrap = createSettingsProfilesStore(storage, now);
+    expect(bootstrap.seedMobileProfileOnce("Mobile Profile", payload())).toBe("skipped");
+    expect(storage.read(SETTINGS_PROFILES_STORAGE_KEY)).toBe(before);
+    expect(storage.read(MOBILE_SETTINGS_PROFILE_BOOTSTRAP_MARKER_KEY)).toBe(
+      MOBILE_SETTINGS_PROFILE_BOOTSTRAP_MARKER_VALUE,
+    );
+
+    storage.setItem(SETTINGS_PROFILES_STORAGE_KEY, JSON.stringify({ version: 2, profiles: [] }));
+    const reloaded = createSettingsProfilesStore(storage, now);
+    expect(reloaded.seedMobileProfileOnce("Mobile Profile", payload())).toBe("skipped");
+    expect(JSON.parse(storage.read(SETTINGS_PROFILES_STORAGE_KEY) ?? "null").profiles).toEqual([]);
+  });
+
+  it("fails closed when either bootstrap storage write fails", () => {
+    const markerFailureStorage: SettingsProfilesStorage = {
+      getItem: () => null,
+      setItem: (key) => {
+        if (key === MOBILE_SETTINGS_PROFILE_BOOTSTRAP_MARKER_KEY) throw new Error("quota");
+      },
+    };
+    expect(() =>
+      createSettingsProfilesStore(markerFailureStorage, now).seedMobileProfileOnce(
+        "Mobile Profile",
+        payload(),
+      ),
+    ).toThrow("The mobile profile bootstrap could not be saved to local storage.");
+
+    const storage = createKeyedStorage();
+    const failingLibraryStorage: SettingsProfilesStorage = {
+      getItem: storage.getItem,
+      setItem: (key, value) => {
+        if (key === SETTINGS_PROFILES_STORAGE_KEY) throw new Error("quota");
+        storage.setItem(key, value);
+      },
+    };
+    const store = createSettingsProfilesStore(failingLibraryStorage, now);
+    expect(() => store.seedMobileProfileOnce("Mobile Profile", payload())).toThrow(
+      "The profile could not be saved to local storage.",
+    );
+    expect(storage.read(MOBILE_SETTINGS_PROFILE_BOOTSTRAP_MARKER_KEY)).toBe(
+      MOBILE_SETTINGS_PROFILE_BOOTSTRAP_MARKER_VALUE,
+    );
+    expect(store.seedMobileProfileOnce("Mobile Profile", payload())).toBe("skipped");
+
+    const populatedStorage = createKeyedStorage();
+    createSettingsProfilesStore(populatedStorage, now).create("Desktop", payload());
+    const populatedDocument = populatedStorage.read(SETTINGS_PROFILES_STORAGE_KEY);
+    const populatedMarkerFailure: SettingsProfilesStorage = {
+      getItem: populatedStorage.getItem,
+      setItem: (key, value) => {
+        if (key === MOBILE_SETTINGS_PROFILE_BOOTSTRAP_MARKER_KEY) throw new Error("quota");
+        populatedStorage.setItem(key, value);
+      },
+    };
+    expect(() =>
+      createSettingsProfilesStore(populatedMarkerFailure, now).seedMobileProfileOnce(
+        "Mobile Profile",
+        payload(),
+      ),
+    ).toThrow("The mobile profile bootstrap could not be saved to local storage.");
+    expect(populatedStorage.read(SETTINGS_PROFILES_STORAGE_KEY)).toBe(populatedDocument);
+    expect(populatedStorage.read(MOBILE_SETTINGS_PROFILE_BOOTSTRAP_MARKER_KEY)).toBeNull();
   });
 });

@@ -13,6 +13,9 @@ export const SETTINGS_PROFILES_MAX_COUNT = 16;
 export const SETTINGS_PROFILE_NAME_MAX_LENGTH = 64;
 export const SETTINGS_PROFILES_MAX_BYTES = 256 * 1024;
 export const SETTINGS_PROFILES_LOCK_NAME = "cafe-code:settings-profiles:v1:mutation";
+export const MOBILE_SETTINGS_PROFILE_BOOTSTRAP_MARKER_KEY =
+  "cafe-code:settings-profiles:mobile-bootstrap:v1";
+export const MOBILE_SETTINGS_PROFILE_BOOTSTRAP_MARKER_VALUE = "considered";
 const SETTINGS_PROFILES_VERSION = 2;
 const LEGACY_SETTINGS_PROFILES_VERSIONS = new Set<unknown>([1]);
 const SETTINGS_PROFILES_MAX_CANDIDATES = SETTINGS_PROFILES_MAX_COUNT * 4;
@@ -120,6 +123,8 @@ export interface SettingsProfilesStorage {
   readonly getItem: (key: string) => string | null;
   readonly setItem: (key: string, value: string) => void;
 }
+
+export type MobileSettingsProfileBootstrapResult = "created" | "skipped";
 
 export class SettingsProfileError extends Error {
   constructor(message: string) {
@@ -500,6 +505,70 @@ function readStorage(storage: SettingsProfilesStorage | null): string | null {
   }
 }
 
+type StorageReadResult =
+  | { readonly ok: true; readonly value: string | null }
+  | { readonly ok: false };
+
+function readStorageEntry(storage: SettingsProfilesStorage | null, key: string): StorageReadResult {
+  if (storage === null) return { ok: false };
+  try {
+    return { ok: true, value: storage.getItem(key) };
+  } catch {
+    return { ok: false };
+  }
+}
+
+/**
+ * Bootstrap authority is deliberately narrower than normal profile decoding.
+ * An empty decoded snapshot can also mean corrupt, oversized, legacy, or
+ * unsupported storage. None of those states grants permission to overwrite the
+ * document.
+ */
+type MobileBootstrapLibraryState = "absent" | "empty" | "populated" | "unsafe";
+
+function inspectMobileBootstrapLibrary(raw: string | null): MobileBootstrapLibraryState {
+  if (raw === null) return "absent";
+  if (new TextEncoder().encode(raw).byteLength > SETTINGS_PROFILES_MAX_BYTES) return "unsafe";
+  try {
+    const document = JSON.parse(raw) as unknown;
+    if (!isRecord(document) || ownValue(document, "version") !== SETTINGS_PROFILES_VERSION) {
+      return "unsafe";
+    }
+    const documentKeys = Reflect.ownKeys(document);
+    if (
+      documentKeys.length !== 2 ||
+      documentKeys.some((key) => key !== "version" && key !== "profiles")
+    ) {
+      return "unsafe";
+    }
+    const candidates = ownValue(document, "profiles");
+    if (!Array.isArray(candidates) || candidates.length > SETTINGS_PROFILES_MAX_COUNT) {
+      return "unsafe";
+    }
+    if (candidates.length === 0) return "empty";
+
+    // A populated current-version document is authoritative only when every
+    // record survives the normal decoder. A partly corrupt document must not
+    // gain a bootstrap marker merely because one other record is readable.
+    return parseSnapshot(raw).profiles.length === candidates.length ? "populated" : "unsafe";
+  } catch {
+    return "unsafe";
+  }
+}
+
+function writeMobileBootstrapConsideredMarker(storage: SettingsProfilesStorage): void {
+  try {
+    storage.setItem(
+      MOBILE_SETTINGS_PROFILE_BOOTSTRAP_MARKER_KEY,
+      MOBILE_SETTINGS_PROFILE_BOOTSTRAP_MARKER_VALUE,
+    );
+  } catch {
+    throw new SettingsProfileError(
+      "The mobile profile bootstrap could not be saved to local storage.",
+    );
+  }
+}
+
 export function createSettingsProfilesStore(
   storage: SettingsProfilesStorage | null = browserStorage(),
   now: () => Date = () => new Date(),
@@ -519,6 +588,42 @@ export function createSettingsProfilesStore(
     },
     refresh,
     resolve: (id: string) => snapshot.profiles.find((profile) => profile.id === id) ?? null,
+    seedMobileProfileOnce(
+      nameInput: string,
+      payloadInput: SettingsProfilePayload,
+    ): MobileSettingsProfileBootstrapResult {
+      const marker = readStorageEntry(storage, MOBILE_SETTINGS_PROFILE_BOOTSTRAP_MARKER_KEY);
+      const library = readStorageEntry(storage, SETTINGS_PROFILES_STORAGE_KEY);
+      if (!marker.ok || marker.value !== null || !library.ok) {
+        return "skipped";
+      }
+      const libraryState = inspectMobileBootstrapLibrary(library.value);
+      if (libraryState === "unsafe") return "skipped";
+
+      // Claim the decision before creating the profile. A failed library write
+      // must not cause a new attempt on every mount. A valid populated library
+      // is also a completed decision; marking it considered preserves a later
+      // operator deletion across reloads without changing the library itself.
+      writeMobileBootstrapConsideredMarker(storage!);
+      if (libraryState === "populated") {
+        refresh();
+        return "skipped";
+      }
+
+      // Re-read after claiming the one-time marker. Cooperative browser
+      // windows run this method inside SETTINGS_PROFILES_LOCK_NAME, while this
+      // second check also avoids overwriting a non-cooperative concurrent win.
+      const latestLibrary = readStorageEntry(storage, SETTINGS_PROFILES_STORAGE_KEY);
+      const latestLibraryState = latestLibrary.ok
+        ? inspectMobileBootstrapLibrary(latestLibrary.value)
+        : "unsafe";
+      if (latestLibraryState !== "absent" && latestLibraryState !== "empty") {
+        refresh();
+        return "skipped";
+      }
+
+      return this.create(nameInput, payloadInput) ? "created" : "skipped";
+    },
     create: (nameInput: string, payloadInput: SettingsProfilePayload) => {
       if (storage === null) throw new SettingsProfileError("Local profile storage is unavailable.");
       refresh();
