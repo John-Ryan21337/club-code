@@ -170,6 +170,28 @@ describe("settings profiles", () => {
     expect(profile?.clientSettings).toEqual({ autoOpenPlanSidebar: false });
   });
 
+  it("does not give a version-two document authority over a future-looking field", () => {
+    const raw = JSON.stringify({
+      version: 2,
+      profiles: [
+        {
+          id: "profile:future",
+          name: "Future",
+          theme: "dark",
+          clientSettings: {
+            ambianceEnabled: true,
+            futurePresentationMode: "external-operation",
+          },
+          createdAt: "2026-08-01T12:00:00.000Z",
+        },
+      ],
+    });
+
+    const [profile] = createSettingsProfilesStore(createStorage(raw)).getSnapshot().profiles;
+    expect(profile?.clientSettings).toEqual({ ambianceEnabled: true });
+    expect(profile?.clientSettings).not.toHaveProperty("futurePresentationMode");
+  });
+
   it("rejects malformed nested media configuration without publishing it", () => {
     const storage = createStorage();
     const store = createSettingsProfilesStore(storage, now);

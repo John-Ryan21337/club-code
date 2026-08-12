@@ -157,6 +157,59 @@ const versionOneIncludedKeys = Object.freeze([
   "timestampFormat",
   "chatCopyFormat",
 ] as const satisfies readonly IncludedKey[]);
+// Exact allowlist written by version 2. Decoding must never consult the live
+// policy because a forged future-looking property in an old document could
+// otherwise gain authority after a later field becomes `include`. To change
+// persisted profile fields, bump SETTINGS_PROFILES_VERSION and add a new exact
+// version allowlist instead of modifying this tuple.
+const versionTwoIncludedKeys = Object.freeze([
+  "autoOpenPlanSidebar",
+  "confirmThreadArchive",
+  "confirmThreadDelete",
+  "diffIgnoreWhitespace",
+  "diffWordWrap",
+  "continueBackgroundAnimations",
+  "showSidebarSearch",
+  "showSidebarMascot",
+  "showSidebarAttribution",
+  "brandWordmarkPrefix",
+  "sidebarStarSpeed",
+  "ambianceEnabled",
+  "ambianceEffect",
+  "ambianceIntensity",
+  "ambianceReactMode",
+  "ambianceSurfaceSidebar",
+  "ambianceSurfaceThread",
+  "ambianceSurfaceComposer",
+  "ambianceColor",
+  "ambientVideoSource",
+  "ambientVideoLayoutMode",
+  "ambientVideoPresetPlacement",
+  "ambientVideoPresetSize",
+  "ambientVideoPresentationMode",
+  "ambientVideoGlowEnabled",
+  "ambientVideoGlowMode",
+  "ambientVideoGlowColor",
+  "ambientVideoGlowOpacity",
+  "ambientImageAsset",
+  "ambientImageCycleAssets",
+  "ambientImageCycleSeconds",
+  "ambientImagePresentationMode",
+  "ambientImageLayoutMode",
+  "ambientImagePresetPlacement",
+  "ambientImagePresetSize",
+  "ambientImageGlowEnabled",
+  "ambientImageGlowColor",
+  "ambientImageGlowOpacity",
+  "themeAccentColor",
+  "appAccentColor",
+  "sidebarProjectGroupingMode",
+  "sidebarProjectSortOrder",
+  "sidebarThreadSortOrder",
+  "sidebarThreadPreviewCount",
+  "timestampFormat",
+  "chatCopyFormat",
+] as const satisfies readonly IncludedKey[]);
 const nestedProfileKeys = new Set<IncludedKey>([
   "ambientVideoSource",
   "ambientImageAsset",
@@ -391,7 +444,7 @@ function parseSnapshot(raw: string | null): SettingsProfilesSnapshot {
     if (version !== SETTINGS_PROFILES_VERSION && !LEGACY_SETTINGS_PROFILES_VERSIONS.has(version)) {
       return emptySnapshot();
     }
-    const clientKeys = version === 1 ? versionOneIncludedKeys : includedKeys;
+    const clientKeys = version === 1 ? versionOneIncludedKeys : versionTwoIncludedKeys;
     const candidates = ownValue(document, "profiles");
     if (!Array.isArray(candidates)) return emptySnapshot();
     const profiles: SettingsProfile[] = [];
