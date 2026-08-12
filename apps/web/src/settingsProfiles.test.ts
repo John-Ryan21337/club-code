@@ -146,6 +146,30 @@ describe("settings profiles", () => {
     expect(profile?.clientSettings).toEqual({ showSidebarMascot: false });
   });
 
+  it("keeps the version-one migration on its exact historical allowlist", () => {
+    const raw = JSON.stringify({
+      version: 1,
+      profiles: [
+        {
+          id: "profile:legacy",
+          name: "Legacy",
+          theme: "dark",
+          clientSettings: {
+            autoOpenPlanSidebar: false,
+            ambianceEnabled: true,
+            ambianceEffect: "snow",
+            ambianceColor: "#123456",
+            ambientImageGlowEnabled: true,
+          },
+          createdAt: "2026-08-01T12:00:00.000Z",
+        },
+      ],
+    });
+
+    const [profile] = createSettingsProfilesStore(createStorage(raw)).getSnapshot().profiles;
+    expect(profile?.clientSettings).toEqual({ autoOpenPlanSidebar: false });
+  });
+
   it("rejects malformed nested media configuration without publishing it", () => {
     const storage = createStorage();
     const store = createSettingsProfilesStore(storage, now);

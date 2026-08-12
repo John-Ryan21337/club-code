@@ -133,38 +133,30 @@ const includedKeys = Object.freeze(
     (key): key is IncludedKey => SETTINGS_PROFILE_FIELD_POLICY[key] === "include",
   ),
 );
-const versionTwoProfileKeys = new Set<IncludedKey>([
-  "ambianceEnabled",
-  "ambianceEffect",
-  "ambianceIntensity",
-  "ambianceReactMode",
-  "ambianceSurfaceSidebar",
-  "ambianceSurfaceThread",
-  "ambianceSurfaceComposer",
-  "ambianceColor",
-  "ambientVideoSource",
-  "ambientVideoLayoutMode",
-  "ambientVideoPresetPlacement",
-  "ambientVideoPresetSize",
-  "ambientVideoPresentationMode",
-  "ambientVideoGlowEnabled",
-  "ambientVideoGlowMode",
-  "ambientVideoGlowColor",
-  "ambientVideoGlowOpacity",
-  "ambientImageAsset",
-  "ambientImageCycleAssets",
-  "ambientImageCycleSeconds",
-  "ambientImagePresentationMode",
-  "ambientImageLayoutMode",
-  "ambientImagePresetPlacement",
-  "ambientImagePresetSize",
-  "ambientImageGlowEnabled",
-  "ambientImageGlowColor",
-  "ambientImageGlowOpacity",
-]);
-const versionOneIncludedKeys = Object.freeze(
-  includedKeys.filter((key) => !versionTwoProfileKeys.has(key)),
-);
+// Exact allowlist from the version-1 document contract. Do not derive this as
+// the complement of newer fields: doing that would let a future `include`
+// policy change silently grant old documents authority over a new setting.
+const versionOneIncludedKeys = Object.freeze([
+  "autoOpenPlanSidebar",
+  "confirmThreadArchive",
+  "confirmThreadDelete",
+  "diffIgnoreWhitespace",
+  "diffWordWrap",
+  "continueBackgroundAnimations",
+  "showSidebarSearch",
+  "showSidebarMascot",
+  "showSidebarAttribution",
+  "brandWordmarkPrefix",
+  "sidebarStarSpeed",
+  "themeAccentColor",
+  "appAccentColor",
+  "sidebarProjectGroupingMode",
+  "sidebarProjectSortOrder",
+  "sidebarThreadSortOrder",
+  "sidebarThreadPreviewCount",
+  "timestampFormat",
+  "chatCopyFormat",
+] as const satisfies readonly IncludedKey[]);
 const nestedProfileKeys = new Set<IncludedKey>([
   "ambientVideoSource",
   "ambientImageAsset",
