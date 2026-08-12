@@ -473,7 +473,7 @@ export function getSettingsProfileDifferenceKeys(
   return Object.freeze(differences);
 }
 
-function isSameSavedProfile(left: SettingsProfile, right: SettingsProfile): boolean {
+export function isSameSettingsProfile(left: SettingsProfile, right: SettingsProfile): boolean {
   return (
     left.id === right.id &&
     left.name === right.name &&
@@ -731,7 +731,7 @@ export function createSettingsProfilesStore(
       if (storage === null) throw new SettingsProfileError("Local profile storage is unavailable.");
       const current = snapshot.profiles.find((profile) => profile.id === expected.id);
       if (current === undefined) return "missing";
-      if (!isSameSavedProfile(expected, current)) return "changed";
+      if (!isSameSettingsProfile(expected, current)) return "changed";
       const next = Object.freeze({
         profiles: Object.freeze(snapshot.profiles.filter((profile) => profile.id !== expected.id)),
       });
