@@ -255,7 +255,7 @@ describe("Auto Nudge persistence protocol", () => {
     });
   });
 
-  it("does not baseline a turn that is still running when Auto Nudge is enabled", async () => {
+  it("keeps a running turn eligible after arming, then revokes authority on terminal lifecycle", async () => {
     const readModel = await seedThread();
     const runningTurnId = TurnId.make("running-while-auto-nudge-is-enabled");
     const running = {
@@ -340,6 +340,86 @@ describe("Auto Nudge persistence protocol", () => {
       "thread.message-sent",
       "thread.turn-start-requested",
     ]);
+
+    const archived = await Effect.runPromise(
+      decideOrchestrationCommand({
+        readModel: completed,
+        command: {
+          type: "thread.archive",
+          commandId: CommandId.make("command-archive-after-mid-turn-auto-nudge"),
+          threadId,
+        },
+      }),
+    );
+    const archiveEvents = Array.isArray(archived) ? archived : [archived];
+    expect(archiveEvents.map((event) => event.type)).toEqual([
+      "thread.auto-nudge-stopped",
+      "thread.archived",
+    ]);
+    expect(archiveEvents[0]?.payload).toMatchObject({
+      threadId,
+      authorityRevision: 2,
+    });
+  });
+
+  it.each([
+    {
+      name: "delete",
+      command: {
+        type: "thread.delete" as const,
+        commandId: CommandId.make("command-auto-nudge-delete"),
+        threadId,
+      },
+      terminalType: "thread.deleted",
+    },
+    {
+      name: "archive",
+      command: {
+        type: "thread.archive" as const,
+        commandId: CommandId.make("command-auto-nudge-archive"),
+        threadId,
+      },
+      terminalType: "thread.archived",
+    },
+    {
+      name: "checkpoint rewind",
+      command: {
+        type: "thread.checkpoint.revert" as const,
+        commandId: CommandId.make("command-auto-nudge-checkpoint-revert"),
+        threadId,
+        turnCount: 0,
+        createdAt: now,
+      },
+      terminalType: "thread.checkpoint-revert-requested",
+    },
+    {
+      name: "completed rewind",
+      command: {
+        type: "thread.revert.complete" as const,
+        commandId: CommandId.make("command-auto-nudge-revert-complete"),
+        threadId,
+        turnCount: 0,
+        createdAt: now,
+      },
+      terminalType: "thread.reverted",
+    },
+  ])("revokes exact-thread authority before $name", async ({ command, terminalType }) => {
+    const readModel = await seedArmedCompletedThread();
+    const planned = await Effect.runPromise(decideOrchestrationCommand({ readModel, command }));
+    const events = Array.isArray(planned) ? planned : [planned];
+
+    expect(events.map((event) => event.type)).toEqual(["thread.auto-nudge-stopped", terminalType]);
+    expect(events[0]?.payload).toMatchObject({
+      threadId,
+      authorityRevision: 2,
+    });
+
+    const stopped = await applyPlannedEvents(readModel, events.slice(0, 1));
+    expect(stopped.threads[0]?.autoNudge).toMatchObject({
+      mode: "off",
+      authorityRevision: 2,
+      prompt: "Continue this exact thread.",
+    });
   });
 
   it("baselines a turn that is already settled when Auto Nudge is enabled", async () => {

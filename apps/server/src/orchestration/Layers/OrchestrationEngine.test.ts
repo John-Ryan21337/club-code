@@ -793,6 +793,7 @@ describe("OrchestrationEngine", () => {
     expect(events.map((event) => event.type)).toEqual([
       "project.created",
       "thread.created",
+      "thread.auto-nudge-stopped",
       "thread.deleted",
     ]);
     await system.dispose();
@@ -1370,7 +1371,15 @@ describe("OrchestrationEngine", () => {
           threadId: ThreadId.make("thread-sync"),
         }),
       ),
-    ).rejects.toThrow("already archived");
+    ).resolves.toMatchObject({ sequence: 5 });
+
+    expect(events.map((event) => event.type)).toEqual([
+      "project.created",
+      "thread.created",
+      "thread.auto-nudge-stopped",
+      "thread.auto-nudge-stopped",
+      "thread.archived",
+    ]);
 
     await runtime.dispose();
   });

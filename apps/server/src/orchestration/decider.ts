@@ -172,6 +172,44 @@ function nextAutoNudgeAuthorityRevision(input: {
   return Effect.succeed(input.current.authorityRevision + 1);
 }
 
+function revokeAutoNudgeAuthorityRevision(current: ThreadAutoNudgeConfig): number {
+  if (current.mode === "off") {
+    return current.authorityRevision;
+  }
+  return Math.min(current.authorityRevision + 1, THREAD_AUTO_NUDGE_MAX_AUTHORITY_REVISION);
+}
+
+/**
+ * Terminal thread lifecycle operations must revoke automation in the same
+ * server-authored event batch. Otherwise a renderer with stale authority can
+ * race the lifecycle command and submit paid provider work against a thread
+ * that is being removed or rewound.
+ */
+function planThreadAutoNudgeStop(input: {
+  readonly thread: OrchestrationThread;
+  readonly command: Pick<OrchestrationCommand, "commandId"> & {
+    readonly threadId: OrchestrationThread["id"];
+  };
+  readonly stoppedAt: string;
+}): PlannedOrchestrationEvent {
+  return {
+    ...withEventBase({
+      aggregateKind: "thread",
+      aggregateId: input.command.threadId,
+      occurredAt: input.stoppedAt,
+      commandId: input.command.commandId,
+    }),
+    type: "thread.auto-nudge-stopped",
+    payload: {
+      threadId: input.command.threadId,
+      authorityRevision: revokeAutoNudgeAuthorityRevision(
+        currentThreadAutoNudgeConfig(input.thread),
+      ),
+      stoppedAt: input.stoppedAt,
+    },
+  };
+}
+
 function rejectAutoNudgeCommand(command: OrchestrationCommand, detail: string) {
   return Effect.fail(new OrchestrationCommandInvariantError({ commandType: command.type, detail }));
 }
@@ -421,13 +459,18 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.delete": {
-      yield* requireThread({
+      const targetThread = yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
       });
       const occurredAt = yield* nowIso;
-      return {
+      const stopEvent = planThreadAutoNudgeStop({
+        thread: targetThread,
+        command,
+        stoppedAt: occurredAt,
+      });
+      const deletedEvent: PlannedOrchestrationEvent = {
         ...withEventBase({
           aggregateKind: "thread",
           aggregateId: command.threadId,
@@ -440,6 +483,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           deletedAt: occurredAt,
         },
       };
+      return [stopEvent, deletedEvent];
     }
 
     case "thread.restore": {
@@ -471,13 +515,18 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.archive": {
-      yield* requireThreadNotArchived({
+      const targetThread = yield* requireThreadNotArchived({
         readModel,
         command,
         threadId: command.threadId,
       });
       const occurredAt = yield* nowIso;
-      return {
+      const stopEvent = planThreadAutoNudgeStop({
+        thread: targetThread,
+        command,
+        stoppedAt: occurredAt,
+      });
+      const archivedEvent: PlannedOrchestrationEvent = {
         ...withEventBase({
           aggregateKind: "thread",
           aggregateId: command.threadId,
@@ -491,6 +540,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           updatedAt: occurredAt,
         },
       };
+      return [stopEvent, archivedEvent];
     }
 
     case "thread.unarchive": {
@@ -672,25 +722,11 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
-      const current = currentThreadAutoNudgeConfig(targetThread);
-      const authorityRevision = Math.min(
-        current.authorityRevision + 1,
-        THREAD_AUTO_NUDGE_MAX_AUTHORITY_REVISION,
-      );
-      return {
-        ...withEventBase({
-          aggregateKind: "thread",
-          aggregateId: command.threadId,
-          occurredAt: command.createdAt,
-          commandId: command.commandId,
-        }),
-        type: "thread.auto-nudge-stopped",
-        payload: {
-          threadId: command.threadId,
-          authorityRevision,
-          stoppedAt: command.createdAt,
-        },
-      };
+      return planThreadAutoNudgeStop({
+        thread: targetThread,
+        command,
+        stoppedAt: command.createdAt,
+      });
     }
 
     case "thread.auto-nudge.dispatch": {
@@ -1635,12 +1671,14 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.checkpoint.revert": {
-      yield* requireThread({
+      const targetThread = yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
       });
-      return {
+      const stoppedAt = yield* nowIso;
+      const stopEvent = planThreadAutoNudgeStop({ thread: targetThread, command, stoppedAt });
+      const revertEvent: PlannedOrchestrationEvent = {
         ...withEventBase({
           aggregateKind: "thread",
           aggregateId: command.threadId,
@@ -1654,6 +1692,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           createdAt: command.createdAt,
         },
       };
+      return [stopEvent, revertEvent];
     }
 
     case "thread.session.stop": {
@@ -1962,12 +2001,14 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.revert.complete": {
-      yield* requireThread({
+      const targetThread = yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
       });
-      return {
+      const stoppedAt = yield* nowIso;
+      const stopEvent = planThreadAutoNudgeStop({ thread: targetThread, command, stoppedAt });
+      const revertedEvent: PlannedOrchestrationEvent = {
         ...withEventBase({
           aggregateKind: "thread",
           aggregateId: command.threadId,
@@ -1980,6 +2021,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           turnCount: command.turnCount,
         },
       };
+      return [stopEvent, revertedEvent];
     }
 
     case "thread.activity.append": {
