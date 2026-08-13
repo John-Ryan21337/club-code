@@ -844,10 +844,10 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
         matrixGpuCanvas.style.visibility = matrixGpuRendered ? "visible" : "hidden";
       }
       if (matrixGpuRendered) {
-        sceneContext.clearRect(0, 0, scene.width, scene.height);
-        if (frameContext !== null) {
-          commitAtmosphereCanvasBitmap(canvas, context, frameCanvas);
-        }
+        // The WebGL canvas already contains the complete glyph frame. Clear
+        // the transparent activity overlay directly. Copying an empty 4K
+        // Canvas2D bitmap here caused a full-surface upload on every frame.
+        clearBitmap(canvas, context);
         canvas.dataset.atmosphereRenderer = "webgl2-glyph-atlas";
         canvas.dataset.atmosphereRendererAcceleration = "gpu";
         canvas.dataset.atmosphereTextRasterization = "gpu-glyph-atlas";

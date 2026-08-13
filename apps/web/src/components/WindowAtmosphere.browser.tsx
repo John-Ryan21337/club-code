@@ -486,6 +486,8 @@ describe("WindowAtmosphere", () => {
 
   it("activates the WebGL2 glyph atlas while retaining the Canvas2D activity overlay", async () => {
     mocks.gpuRendererEnabled = true;
+    const drawImage = vi.spyOn(CanvasRenderingContext2D.prototype, "drawImage");
+    const clearRect = vi.spyOn(CanvasRenderingContext2D.prototype, "clearRect");
 
     mounted = await render(<WindowAtmosphere selectedThreadRef={TEST_SELECTED_THREAD_REF} />);
 
@@ -506,6 +508,8 @@ describe("WindowAtmosphere", () => {
     expect(getComputedStyle(gpuCanvasLocator.element()).visibility).toBe("visible");
     expect(mocks.gpuRender).toHaveBeenCalledTimes(1);
     expect(mocks.drawMatrixActivityAnimation).toHaveBeenCalledTimes(1);
+    expect(clearRect).toHaveBeenCalled();
+    expect(drawImage).not.toHaveBeenCalled();
   });
 
   it.each(["flat", "forward", "reverse", "walk-forward", "walk-reverse"] as const)(
