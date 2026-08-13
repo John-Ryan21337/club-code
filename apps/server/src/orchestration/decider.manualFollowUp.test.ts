@@ -754,7 +754,9 @@ it.effect("starts a new operator follow-up queued after an interrupted terminal 
         ? {
             ...interruptedThread.session,
             status: "interrupted",
-            updatedAt: "2026-07-28T11:59:59.000Z",
+            // A late provider-history replay can update the session after the
+            // follow-up was queued. This is not an explicit Stop barrier.
+            updatedAt: "2026-07-28T12:00:01.000Z",
           }
         : null,
     });

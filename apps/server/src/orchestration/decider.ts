@@ -1244,17 +1244,20 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           `Thread '${command.threadId}' became active before automatic manual follow-up activation. The queued follow-up remains pending until the turn settles or the operator explicitly chooses Steer.`,
         );
       }
-      // A stopped/interrupted/error session can be newer than the last turn's
-      // completion (for example, an operator can press Stop after a turn has
-      // already completed). Treat the newest durable terminal timestamp as the
-      // barrier. Comparing only with completedAt would let an older queued row
-      // cross a later explicit Stop.
-      const terminalBoundaryTimes = [
-        Date.parse(targetThread.latestTurn?.completedAt ?? ""),
-        Date.parse(targetThread.session?.updatedAt ?? ""),
-      ].filter(Number.isFinite);
+      // Provider history can replay an interrupted/error session after a
+      // follow-up is queued. Its updatedAt value is not an operator barrier.
+      // A stopped session is different: Stop is an explicit operator barrier,
+      // so include its durable session timestamp when it is newer than the
+      // latest turn completion.
+      const terminalBoundaryTimes = [Date.parse(targetThread.latestTurn?.completedAt ?? "")];
+      if (targetThread.session?.status === "stopped") {
+        terminalBoundaryTimes.push(Date.parse(targetThread.session.updatedAt));
+      }
+      const finiteTerminalBoundaryTimes = terminalBoundaryTimes.filter(Number.isFinite);
       const terminalBoundaryAtMs =
-        terminalBoundaryTimes.length > 0 ? Math.max(...terminalBoundaryTimes) : Number.NaN;
+        finiteTerminalBoundaryTimes.length > 0
+          ? Math.max(...finiteTerminalBoundaryTimes)
+          : Number.NaN;
       const followUpEnqueuedAtMs = Date.parse(head.enqueuedAt);
       const queuedAfterTerminalBarrier =
         (targetThread.session?.status === "interrupted" ||
