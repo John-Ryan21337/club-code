@@ -31,6 +31,7 @@ import { ServerSettingsService } from "../serverSettings.ts";
 import { ProviderSupervisorRegistryLive } from "../providerSupervisor/ProviderSupervisorRegistry.ts";
 import {
   captureProviderDaemonProcessDiagnostic,
+  providerDaemonActiveRpcLiveness,
   runProviderDaemonServer,
   writeProviderDaemonStreamLine,
   type ProviderDaemonServerOptions,
@@ -118,6 +119,25 @@ const makeProviderDaemonServerTestLayer = (providerService: ProviderServiceShape
 const providerDaemonServerTestLayer = makeProviderDaemonServerTestLayer(mockProviderService);
 
 describe("ProviderDaemonServer", () => {
+  it("reports active functional RPC count and oldest age without external reads", () => {
+    assert.deepEqual(providerDaemonActiveRpcLiveness(new Map(), 1_000), {
+      activeRpcCount: 0,
+    });
+    assert.deepEqual(
+      providerDaemonActiveRpcLiveness(
+        new Map([
+          [1, 900],
+          [2, 750],
+        ]),
+        1_000,
+      ),
+      {
+        activeRpcCount: 2,
+        oldestActiveRpcAgeMs: 250,
+      },
+    );
+  });
+
   it("waits for drain and rejects close for a slow daemon event response", async () => {
     class FakeSlowResponse extends EventEmitter {
       writes: string[] = [];
@@ -197,6 +217,8 @@ describe("ProviderDaemonServer", () => {
       assert.equal(liveness.ok, true);
       assert.equal(liveness.mode, "provider-daemon");
       assert.equal(liveness.runtimeBuildId, "runtime-build-test");
+      assert.equal(liveness.activeRpcCount, 0);
+      assert.isUndefined(liveness.oldestActiveRpcAgeMs);
       assert.equal(listSessionsCallCount, 0);
     }).pipe(Effect.scoped, Effect.provide(makeProviderDaemonServerTestLayer(providerService)));
   });

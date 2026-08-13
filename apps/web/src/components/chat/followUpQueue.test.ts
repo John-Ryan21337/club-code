@@ -20,6 +20,7 @@ import {
   rekeyQueuedFollowUpsForActiveThread,
   releaseQueuedFollowUpDispatchClaim,
   selectQueuedFollowUpDispatchCandidate,
+  shouldRetainLocalFollowUpShadow,
   shouldQueueOperatorFollowUp,
   tryClaimQueuedFollowUpDispatch,
 } from "./followUpQueue";
@@ -547,6 +548,40 @@ describe("followUpQueue", () => {
           latestTurn: { requestedAt: "2026-05-25T04:59:59.999Z" },
           session: { activeTurnId: null, updatedAt: "2026-05-25T05:00:01.000Z" },
         },
+      }),
+    ).toBe(false);
+  });
+
+  it("removes a local queue shadow after the server already consumed its exact message", () => {
+    expect(
+      shouldRetainLocalFollowUpShadow({
+        messageId: "msg-consumed",
+        projectedStatus: null,
+        projectedMessages: [{ id: "msg-consumed" }],
+      }),
+    ).toBe(false);
+    expect(
+      shouldRetainLocalFollowUpShadow({
+        messageId: "msg-pending",
+        projectedStatus: null,
+        projectedMessages: [{ id: "msg-unrelated" }],
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps a reserving local shadow but yields to a durable queued item", () => {
+    expect(
+      shouldRetainLocalFollowUpShadow({
+        messageId: "msg-reserving",
+        projectedStatus: "reserving",
+        projectedMessages: [],
+      }),
+    ).toBe(true);
+    expect(
+      shouldRetainLocalFollowUpShadow({
+        messageId: "msg-queued",
+        projectedStatus: "queued",
+        projectedMessages: [],
       }),
     ).toBe(false);
   });

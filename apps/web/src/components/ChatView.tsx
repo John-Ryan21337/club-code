@@ -169,6 +169,7 @@ import {
   rekeyQueuedFollowUpsForActiveThread,
   releaseQueuedFollowUpDispatchClaim,
   selectQueuedFollowUpDispatchCandidate,
+  shouldRetainLocalFollowUpShadow,
   shouldQueueOperatorFollowUp,
   tryClaimQueuedFollowUpDispatch,
 } from "./chat/followUpQueue";
@@ -1426,7 +1427,10 @@ const EMPTY_PROVIDERS: ServerProvider[] = [];
 const EMPTY_PROVIDER_SKILLS: ServerProvider["skills"] = [];
 const EMPTY_PENDING_USER_INPUT_ANSWERS: Record<string, PendingUserInputDraftAnswer> = {};
 const EMPTY_FOLLOW_UP_QUEUE: FollowUpQueueItem[] = [];
-const FOLLOW_UP_QUEUE_WATCHDOG_INTERVAL_MS = 1000;
+// Projection and connection changes start normal queue delivery immediately.
+// This interval is only a safety check for a lost notification.
+// A short interval can repeat a rejected request while the renderer has stale state.
+const FOLLOW_UP_QUEUE_WATCHDOG_INTERVAL_MS = 15_000;
 type EnvironmentUnavailableState = {
   readonly environmentId: EnvironmentId;
   readonly label: string;
@@ -2462,14 +2466,18 @@ export default function ChatView(props: ChatViewProps) {
           item,
         ]),
       );
-      if (projectedItemsById.size === 0) {
-        continue;
-      }
+      const projectedMessages = threadsByKey.get(threadKey)?.messages ?? [];
       const retained: FollowUpQueueItem[] = [];
       let removedAny = false;
       for (const item of items) {
         const projectedItem = projectedItemsById.get(item.id);
-        if (projectedItem === undefined || projectedItem.status === "reserving") {
+        if (
+          shouldRetainLocalFollowUpShadow({
+            messageId: item.messageId,
+            projectedStatus: projectedItem?.status ?? null,
+            projectedMessages,
+          })
+        ) {
           retained.push(item);
           continue;
         }

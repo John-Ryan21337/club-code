@@ -211,6 +211,21 @@ export function hasQueuedFollowUpDispatchBeenObserved(
   );
 }
 
+export function shouldRetainLocalFollowUpShadow(input: {
+  readonly messageId: string;
+  readonly projectedStatus: "reserving" | "queued" | "handoff" | null;
+  readonly projectedMessages: readonly { readonly id: string }[];
+}): boolean {
+  if (input.projectedStatus !== null) {
+    return input.projectedStatus === "reserving";
+  }
+
+  // The server can accept and remove a queued follow-up before the renderer
+  // observes its intermediate queue state. The exact message id proves that
+  // the local shadow was consumed.
+  return !input.projectedMessages.some((message) => message.id === input.messageId);
+}
+
 export function previewQueuedFollowUpText(text: string, fallback = "Image-only follow-up"): string {
   const normalized = text.trim().replace(/\s+/g, " ");
   return normalized.length > 0 ? normalized : fallback;

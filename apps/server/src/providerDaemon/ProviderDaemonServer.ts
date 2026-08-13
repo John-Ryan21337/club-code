@@ -785,6 +785,23 @@ const executeRpcRequest = (
   }
 };
 
+export function providerDaemonActiveRpcLiveness(
+  activeRpcStartedAtMs: ReadonlyMap<number, number>,
+  nowMs: number,
+): { readonly activeRpcCount: number; readonly oldestActiveRpcAgeMs?: number } {
+  let oldestStartedAtMs: number | undefined;
+  for (const startedAtMs of activeRpcStartedAtMs.values()) {
+    oldestStartedAtMs =
+      oldestStartedAtMs === undefined ? startedAtMs : Math.min(oldestStartedAtMs, startedAtMs);
+  }
+  return {
+    activeRpcCount: activeRpcStartedAtMs.size,
+    ...(oldestStartedAtMs === undefined
+      ? {}
+      : { oldestActiveRpcAgeMs: Math.max(0, Math.trunc(nowMs - oldestStartedAtMs)) }),
+  };
+}
+
 function requestCommandId(request: ProviderDaemonRpcRequestValue): string | undefined {
   return "commandId" in request ? request.commandId : undefined;
 }
@@ -1033,6 +1050,8 @@ export const runProviderDaemonServer = (
     const commandLedger = yield* makeProviderDaemonCommandLedger({ ownerKey: mode });
     const leases = new Map<string, ProviderDaemonLease>();
     const rpcMetrics = initialRpcMetrics();
+    const activeRpcStartedAtMs = new Map<number, number>();
+    let nextActiveRpcId = 0;
     const shouldPersistSupervisorBridgeCursor =
       mode === "provider-daemon" && options.supervisorProcess !== undefined;
     let lastPersistedSupervisorBridgeCursor = 0;
@@ -1239,9 +1258,9 @@ export const runProviderDaemonServer = (
           }
 
           // This route is the desktop watchdog's process-liveness boundary.
-          // Never add adapter, SQLite, journal, supervisor, or projection reads
-          // here: a diagnostics query that stalls under long-running provider
-          // load must not convince the watchdog that a live daemon died.
+          // Do not add adapter, SQLite, journal, supervisor, or projection reads.
+          // A slow diagnostic query must not make a live daemon look dead.
+          // The in-memory RPC age also shows a functional provider request that is stuck.
           writeJson(response, 200, {
             ok: true,
             mode,
@@ -1254,6 +1273,7 @@ export const runProviderDaemonServer = (
               : {}),
             startedAt,
             transport,
+            ...providerDaemonActiveRpcLiveness(activeRpcStartedAtMs, performance.now()),
           });
           return;
         }
@@ -1423,6 +1443,9 @@ export const runProviderDaemonServer = (
           }
           const rawBody = await readJsonBody(request);
           const rpcStartedAtMs = performance.now();
+          const activeRpcId = nextActiveRpcId;
+          nextActiveRpcId += 1;
+          activeRpcStartedAtMs.set(activeRpcId, rpcStartedAtMs);
           let rpcMethod: ProviderDaemonRpcRequestValue["method"] | null = null;
           let rpcCommandId: string | undefined;
           let envelope: ProviderDaemonRpcEnvelope;
@@ -1454,6 +1477,8 @@ export const runProviderDaemonServer = (
             );
           } catch (error) {
             envelope = toRpcError(error);
+          } finally {
+            activeRpcStartedAtMs.delete(activeRpcId);
           }
           const rpcDurationMs = roundMs(performance.now() - rpcStartedAtMs);
           const rpcCompletedAt = await runProviderEffect(

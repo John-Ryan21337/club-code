@@ -79,7 +79,6 @@ const BENIGN_ERROR_LOG_SNIPPETS = [
   "state db record_discrepancy: find_thread_path_by_id_str_in_subdir, falling_back",
 ];
 const CODEX_APP_SERVER_FORCE_KILL_AFTER = "2 seconds" as const;
-const CODEX_REMOTE_COMPACTION_V2_FEATURE_CONFIG_KEY = "features.remote_compaction_v2";
 const CODEX_LOCAL_ENVIRONMENT_ID = "local";
 const AGENT_BROWSER_AUTH_ENV = "CAFE_CODE_AGENT_BROWSER_MCP_AUTHORIZATION";
 export const CODEX_ULTRA_CACHING_COMPACT_PROMPT = [
@@ -871,13 +870,6 @@ function buildThreadStartParams(input: {
   // 200k instead of the older 100k override; the per-instance
   // `autoCompactTokenLimit` provider setting lets a user override that default.
   const threadConfig: Record<string, unknown> = {
-    // Upstream Codex rust-v0.143.0 marks remote_compaction_v2 stable and
-    // default-enabled, but its compaction request still builds the normal
-    // model-visible tool set. Cafe has observed text compaction failures from
-    // inherited hosted image-generation tools on accounts/models without that
-    // image model, so this remains a deliberate Cafe reliability quarantine
-    // until a live long-context compaction smoke verifies the v2 path.
-    [CODEX_REMOTE_COMPACTION_V2_FEATURE_CONFIG_KEY]: false,
     model_auto_compact_token_limit:
       input.autoCompactTokenLimit ?? CODEX_DEFAULT_AUTO_COMPACT_TOKEN_LIMIT,
     model_auto_compact_token_limit_scope: CODEX_DEFAULT_AUTO_COMPACT_TOKEN_LIMIT_SCOPE,

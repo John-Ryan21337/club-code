@@ -14,6 +14,7 @@ const powershellPath = NodePath.join(
   "v1.0",
   "powershell.exe",
 );
+const shortcutRepairTestTimeoutMs = process.platform === "win32" ? 45_000 : 15_000;
 
 afterEach(() => {
   for (const directory of temporaryDirectories.splice(0)) {
@@ -176,5 +177,6 @@ describe("Club Code shortcut repair", () => {
       expect(observed.PowershellOwnedArguments).toContain("-NoLogo -NoProfile");
       expect(observed.PowershellOwnedArguments).toContain("-Wait");
     },
+    shortcutRepairTestTimeoutMs,
   );
 });
