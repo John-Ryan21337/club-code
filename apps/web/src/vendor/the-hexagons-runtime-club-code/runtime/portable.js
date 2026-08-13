@@ -204,7 +204,7 @@ export async function createHexagonBackground(options = {}) {
     scene = createScene(size, display, settings, maximumTiles);
     advanceScene(scene, 0, settings, pointer);
     const dpr = desiredDpr(size);
-    if (activeRenderer === "gpu-webgl2") webgl.resize(size.width, size.height, dpr);
+    if (activeRenderer === "gpu-webgl2") webgl.resize(size.width, size.height, dpr, settings.quality);
     canvasRenderer.resize(size.width, size.height, dpr, settings);
     fallingLayer?.resize(size.width, size.height, dpr, settings);
     draw(0);
