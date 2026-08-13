@@ -1244,9 +1244,29 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           `Thread '${command.threadId}' became active before automatic manual follow-up activation. The queued follow-up remains pending until the turn settles or the operator explicitly chooses Steer.`,
         );
       }
+      // A stopped/interrupted/error session can be newer than the last turn's
+      // completion (for example, an operator can press Stop after a turn has
+      // already completed). Treat the newest durable terminal timestamp as the
+      // barrier. Comparing only with completedAt would let an older queued row
+      // cross a later explicit Stop.
+      const terminalBoundaryTimes = [
+        Date.parse(targetThread.latestTurn?.completedAt ?? ""),
+        Date.parse(targetThread.session?.updatedAt ?? ""),
+      ].filter(Number.isFinite);
+      const terminalBoundaryAtMs =
+        terminalBoundaryTimes.length > 0 ? Math.max(...terminalBoundaryTimes) : Number.NaN;
+      const followUpEnqueuedAtMs = Date.parse(head.enqueuedAt);
+      const queuedAfterTerminalBarrier =
+        (targetThread.session?.status === "interrupted" ||
+          targetThread.session?.status === "error" ||
+          targetThread.session?.status === "stopped") &&
+        Number.isFinite(terminalBoundaryAtMs) &&
+        Number.isFinite(followUpEnqueuedAtMs) &&
+        followUpEnqueuedAtMs > terminalBoundaryAtMs;
       if (
         command.activationMode === "automatic-after-settlement" &&
-        targetThread.session?.status !== "ready"
+        targetThread.session?.status !== "ready" &&
+        !queuedAfterTerminalBarrier
       ) {
         return yield* rejectManualFollowUpCommand(
           command,
