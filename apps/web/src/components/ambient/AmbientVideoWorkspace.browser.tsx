@@ -13,7 +13,11 @@ import { render } from "vitest-browser-react";
 
 import { AppAtomRegistryProvider } from "../../rpc/atomRegistry";
 import { resetServerStateForTests, setServerConfigSnapshot } from "../../rpc/serverState";
-import { __resetYouTubeUrlQueueForTests, youtubeUrlQueueStore } from "../../youtubeUrlQueue";
+import {
+  __resetYouTubeUrlQueueForTests,
+  parseYouTubeUrlQueueText,
+  youtubeUrlQueueStore,
+} from "../../youtubeUrlQueue";
 import { localMediaStore } from "../../localMedia";
 import { AmbientVideoWorkspace, useAmbientVideoWorkspace } from "./AmbientVideoWorkspace";
 
@@ -163,7 +167,7 @@ it("marks the document only while a local video background is effective", async 
   expect(document.documentElement.hasAttribute("data-cafe-local-media-background")).toBe(false);
 });
 
-it("seeds the shipped EDM queue without requesting playback", async () => {
+it("does not seed a bundled queue or request playback", async () => {
   setServerConfigSnapshot(makeConfig(null));
   mounted = await render(
     <AppAtomRegistryProvider>
@@ -173,17 +177,17 @@ it("seeds the shipped EDM queue without requesting playback", async () => {
     </AppAtomRegistryProvider>,
   );
 
-  await expect.poll(() => youtubeUrlQueueStore.getSnapshot().exampleId).toBe("edm");
   expect(youtubeUrlQueueStore.getSnapshot()).toMatchObject({
-    active: true,
-    count: 30,
-    currentSource: { kind: "video", id: "VGG0coMYaRQ" },
-    exampleId: "edm",
+    active: false,
+    count: 0,
+    currentSource: null,
+    exampleId: null,
   });
   await expect.element(page.getByTitle("Ambient YouTube URL queue player")).not.toBeInTheDocument();
 });
 
-it("shows the engaged shipped player and keeps the same iframe visible through Settings", async () => {
+it("shows an engaged local queue and keeps the same iframe visible through Settings", async () => {
+  youtubeUrlQueueStore.load(parseYouTubeUrlQueueText("https://youtu.be/testVideo01"));
   const config = makeConfig(null);
   setServerConfigSnapshot({
     ...config,
@@ -203,7 +207,7 @@ it("shows the engaged shipped player and keeps the same iframe visible through S
     </div>,
   );
 
-  await expect.poll(() => youtubeUrlQueueStore.getSnapshot().exampleId).toBe("edm");
+  await expect.poll(() => youtubeUrlQueueStore.getSnapshot().active).toBe(true);
   await expect
     .poll(() =>
       document.querySelector<HTMLIFrameElement>('iframe[title="Ambient YouTube URL queue player"]'),
@@ -241,7 +245,8 @@ it("shows the engaged shipped player and keeps the same iframe visible through S
   await expect.element(page.getByTitle("Ambient YouTube URL queue player")).not.toBeInTheDocument();
 });
 
-it("yields an automatic EDM queue to a saved source that arrives later", async () => {
+it("keeps an operator-loaded local queue active when a saved source arrives later", async () => {
+  youtubeUrlQueueStore.load(parseYouTubeUrlQueueText("https://youtu.be/testVideo01"));
   const initialConfig = makeConfig(null);
   setServerConfigSnapshot({
     ...initialConfig,
@@ -266,7 +271,7 @@ it("yields an automatic EDM queue to a saved source that arrives later", async (
       document.querySelector<HTMLIFrameElement>('iframe[title="Ambient YouTube URL queue player"]'),
     )
     .not.toBeNull();
-  const automaticQueueFrame = document.querySelector<HTMLIFrameElement>(
+  const localQueueFrame = document.querySelector<HTMLIFrameElement>(
     'iframe[title="Ambient YouTube URL queue player"]',
   );
 
@@ -280,21 +285,12 @@ it("yields an automatic EDM queue to a saved source that arrives later", async (
     },
   });
 
-  await expect
-    .poll(() =>
-      document.querySelector<HTMLIFrameElement>('iframe[title="Ambient YouTube video player"]'),
-    )
-    .not.toBeNull();
-  expect(automaticQueueFrame?.isConnected).toBe(false);
+  await expect.poll(() => localQueueFrame?.isConnected).toBe(true);
   expect(youtubeUrlQueueStore.getSnapshot()).toMatchObject({
-    active: false,
-    currentSource: null,
+    active: true,
+    currentSource: { kind: "video", id: "testVideo01" },
   });
-  const savedSourceFrame = document.querySelector<HTMLIFrameElement>(
-    'iframe[title="Ambient YouTube video player"]',
-  );
-  expect(savedSourceFrame?.src).toContain("/embed/dQw4w9WgXcQ");
-  expect(new URL(savedSourceFrame!.src).searchParams.has("autoplay")).toBe(false);
+  await expect.element(page.getByTitle("Ambient YouTube video player")).not.toBeInTheDocument();
 });
 
 it("does not let temporary defaults mask a persisted source that arrives after mount", async () => {

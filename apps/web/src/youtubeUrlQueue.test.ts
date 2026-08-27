@@ -116,15 +116,15 @@ describe("YouTube URL queue and device-local list library", () => {
     const library = createYouTubeUrlQueueLibraryStore(storage);
     expect(library.getSnapshot()).toEqual([]);
 
-    const edmImport = library.upsert(
-      "EDMYoutubeList",
+    const firstImport = library.upsert(
+      "Study Mix",
       parseYouTubeUrlQueueText("https://youtu.be/dQw4w9WgXcQ"),
     );
-    expect(edmImport).toMatchObject({
+    expect(firstImport).toMatchObject({
       replaced: false,
       persisted: true,
       option: {
-        label: "EDMYoutubeList",
+        label: "Study Mix",
         source: "imported",
         replacesBundled: false,
         result: { videoIds: ["dQw4w9WgXcQ"] },
@@ -157,7 +157,7 @@ describe("YouTube URL queue and device-local list library", () => {
     expect(library.resolve(added.option.id)?.result.videoIds).toEqual(["kJQP7kiw5Fk"]);
 
     const restored = createYouTubeUrlQueueLibraryStore(storage);
-    expect(restored.resolve(edmImport.option.id)?.result.videoIds).toEqual(["dQw4w9WgXcQ"]);
+    expect(restored.resolve(firstImport.option.id)?.result.videoIds).toEqual(["dQw4w9WgXcQ"]);
     expect(restored.resolve(added.option.id)?.result.videoIds).toEqual(["kJQP7kiw5Fk"]);
     expect(storage.read(YOUTUBE_URL_QUEUE_LIBRARY_STORAGE_KEY)).not.toContain("youtube.com");
   });

@@ -1917,25 +1917,8 @@ describe("settings panels", () => {
       )
       .toBeInTheDocument();
     await expect
-      .element(page.getByRole("button", { name: "K-pop", exact: true }))
-      .toBeInTheDocument();
-    await page.getByRole("button", { name: "EDM", exact: true }).click();
-    await expect.element(page.getByText("URL 1 of 30")).toBeInTheDocument();
-    await expect.element(page.getByText(/Accepted 30; skipped 1 invalid/)).toBeInTheDocument();
-    await expect
-      .element(page.getByRole("button", { name: "EDM", exact: true }))
-      .toHaveAttribute("aria-pressed", "true");
-    await page.getByRole("button", { name: "Japanese music", exact: true }).click();
-    await expect.element(page.getByText("URL 1 of 71")).toBeInTheDocument();
-    await expect.element(page.getByText(/Accepted 71; skipped 3 invalid/)).toBeInTheDocument();
-    await expect
-      .element(page.getByRole("button", { name: "Japanese music", exact: true }))
-      .toHaveAttribute("aria-pressed", "true");
-    await page.getByRole("button", { name: "K-pop", exact: true }).click();
-    await expect.element(page.getByText("URL 1 of 8")).toBeInTheDocument();
-    await expect
-      .element(page.getByRole("button", { name: "K-pop", exact: true }))
-      .toHaveAttribute("aria-pressed", "true");
+      .element(page.getByRole("button", { name: "Bundled Playlist", exact: true }))
+      .not.toBeInTheDocument();
 
     const queueInput = document.querySelector(
       'input[aria-label="Choose YouTube URL queue text file"]',
@@ -1944,19 +1927,33 @@ describe("settings panels", () => {
     Object.defineProperty(queueInput, "files", {
       configurable: true,
       value: [
-        new File(["https://youtu.be/dQw4w9WgXcQ"], "EDMYoutubeList.txt", {
+        new File(["https://youtu.be/testVideo01"], "Study Mix.txt", {
           type: "text/plain",
         }),
       ],
     });
     queueInput!.dispatchEvent(new Event("change", { bubbles: true }));
-    await expect.element(page.getByText(/EDM replaced\./)).toBeInTheDocument();
+    await expect.element(page.getByText(/Study Mix added\./)).toBeInTheDocument();
     await expect.element(page.getByText("URL 1 of 1")).toBeInTheDocument();
     expect(
       Array.from(document.querySelectorAll("button")).filter(
-        (button) => button.textContent?.trim() === "EDM",
+        (button) => button.textContent?.trim() === "Study Mix",
       ),
     ).toHaveLength(1);
+
+    Object.defineProperty(queueInput, "files", {
+      configurable: true,
+      value: [
+        new File(
+          [["https://youtu.be/testVideo01", "https://youtu.be/testVideo02"].join("\n")],
+          "Study Mix.txt",
+          { type: "text/plain" },
+        ),
+      ],
+    });
+    queueInput!.dispatchEvent(new Event("change", { bubbles: true }));
+    await expect.element(page.getByText(/Study Mix replaced\./)).toBeInTheDocument();
+    await expect.element(page.getByText("URL 1 of 2")).toBeInTheDocument();
 
     Object.defineProperty(queueInput, "files", {
       configurable: true,
@@ -1971,7 +1968,7 @@ describe("settings panels", () => {
     queueInput!.dispatchEvent(new Event("change", { bubbles: true }));
     await expect.element(page.getByText(/Night Drive added\./)).toBeInTheDocument();
     await expect.element(page.getByText("URL 1 of 2")).toBeInTheDocument();
-    await page.getByRole("button", { name: "Japanese music", exact: true }).click();
+    await page.getByRole("button", { name: "Study Mix", exact: true }).click();
     await page.getByRole("button", { name: "Night Drive", exact: true }).click();
     await expect.element(page.getByText("URL 1 of 2")).toBeInTheDocument();
     await expect
