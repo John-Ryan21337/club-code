@@ -21,6 +21,11 @@ const CONNECTION_INTERRUPTED_PATTERNS = [
 const CONNECTION_SEND_FAILURE_MESSAGE =
   "Couldn't reach the server — the connection dropped. Check your connection and try again.";
 
+const ACTIVE_TURN_START_CONFLICT_PATTERNS = [
+  /Orchestration command invariant failed \(thread\.turn\.start\)/i,
+  /already has a turn starting or running/i,
+] as const;
+
 const RECOVERABLE_PROVIDER_ERROR_PATTERNS = [
   // Claude SDK execution diagnostics can arrive as `lastError` even when the
   // turn continues through normal assistant/tool activity. These are internal
@@ -37,6 +42,16 @@ const RECOVERABLE_PROVIDER_ERROR_PATTERNS = [
   // thread-level banner from this non-actionable historical diagnostic.
   /\bSelected model is at capacity\b/i,
 ] as const;
+
+function readErrorMessage(error: unknown): string {
+  if (error instanceof Error || typeof error === "string") {
+    return typeof error === "string" ? error : error.message;
+  }
+  if (typeof error !== "object" || error === null || !("message" in error)) {
+    return "";
+  }
+  return typeof error.message === "string" ? error.message : "";
+}
 
 export function isTransportConnectionErrorMessage(message: string | null | undefined): boolean {
   if (typeof message !== "string") {
@@ -84,9 +99,25 @@ function isConnectionInterruptedMessage(message: string): boolean {
  * retry automatically after this classification.
  */
 export function isIndeterminateTransportError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
+  const message = readErrorMessage(error);
   const normalized = message.trim();
   return normalized.length > 0 && isConnectionInterruptedMessage(normalized);
+}
+
+/**
+ * Detect the authoritative server response that says a renderer attempted a
+ * new turn from stale idle state while the thread was already active. The
+ * payload is still safe to preserve as a manual follow-up; other turn-start
+ * invariant failures must remain visible and must not be rewritten as queue
+ * operations.
+ */
+export function isActiveTurnStartConflict(error: unknown): boolean {
+  const message = readErrorMessage(error);
+  const normalized = message.trim();
+  return (
+    normalized.length > 0 &&
+    ACTIVE_TURN_START_CONFLICT_PATTERNS.every((pattern) => pattern.test(normalized))
+  );
 }
 
 /**
@@ -97,7 +128,7 @@ export function isIndeterminateTransportError(error: unknown): boolean {
  * `fallback` when there is no usable message.
  */
 export function describeSendFailureMessage(error: unknown, fallback: string): string {
-  const message = error instanceof Error ? error.message : typeof error === "string" ? error : "";
+  const message = readErrorMessage(error);
   const normalized = message.trim();
   if (isIndeterminateTransportError(error)) {
     return CONNECTION_SEND_FAILURE_MESSAGE;

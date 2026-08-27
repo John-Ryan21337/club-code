@@ -53,7 +53,7 @@ const ISSUE_VISUALS: Record<
   { label: string; tone: string; icon: typeof WifiOffIcon; spin?: boolean }
 > = {
   reconnecting: {
-    label: "Reconnecting…",
+    label: "App reconnecting…",
     tone: "text-amber-600 dark:text-amber-500",
     icon: LoaderCircleIcon,
     spin: true,
@@ -119,7 +119,7 @@ export function ConnectionStatusIndicator({ className }: { readonly className?: 
               visual.tone,
               className,
             )}
-            aria-label={`Connection ${visual.label}. Show reconnect details.`}
+            aria-label={`Connection status: ${visual.label} Show reconnect details.`}
           >
             <Icon className={cn("size-3", visual.spin && "animate-spin")} aria-hidden="true" />
             <span className="whitespace-nowrap">{visual.label}</span>

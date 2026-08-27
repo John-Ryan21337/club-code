@@ -244,6 +244,7 @@ import {
 } from "~/rpc/serverState";
 import {
   describeSendFailureMessage,
+  isActiveTurnStartConflict,
   isIndeterminateTransportError,
   sanitizeThreadErrorMessage,
 } from "~/rpc/transportError";
@@ -6323,11 +6324,9 @@ export default function ChatView(props: ChatViewProps) {
       });
       turnStartSucceeded = true;
     })().catch(async (err: unknown) => {
-      if (
-        !turnStartSucceeded &&
-        promptRef.current.length === 0 &&
-        composerImagesRef.current.length === 0
-      ) {
+      const recoverAsQueuedFollowUp =
+        !turnStartSucceeded && isServerThread && isActiveTurnStartConflict(err);
+      const removeFailedOptimisticMessage = () => {
         setOptimisticUserMessages((existing) => {
           const removed = existing.filter((message) => message.id === messageIdForSend);
           for (const message of removed) {
@@ -6336,6 +6335,25 @@ export default function ChatView(props: ChatViewProps) {
           const next = existing.filter((message) => message.id !== messageIdForSend);
           return next.length === existing.length ? existing : next;
         });
+      };
+      if (recoverAsQueuedFollowUp) {
+        removeFailedOptimisticMessage();
+        // The server is authoritative about whether a turn is active. A
+        // renderer can briefly retain an idle projection after reconnect or
+        // while a fresh running snapshot is in flight. Preserve this exact
+        // operator payload through the durable FIFO instead of restoring it
+        // as a draft and asking the operator to retry. A newer draft already
+        // in the composer remains untouched. The original turn.start
+        // invariant remains strict for every other conflict.
+        enqueueFollowUpSnapshot(snapshot);
+        return;
+      }
+      if (
+        !turnStartSucceeded &&
+        promptRef.current.length === 0 &&
+        composerImagesRef.current.length === 0
+      ) {
+        removeFailedOptimisticMessage();
         promptRef.current = snapshot.draftPromptText;
         const retryComposerImages = composerImagesSnapshot.map(cloneComposerImageForRetry);
         composerImagesRef.current = retryComposerImages;

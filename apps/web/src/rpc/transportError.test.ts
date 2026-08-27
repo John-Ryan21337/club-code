@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   describeSendFailureMessage,
+  isActiveTurnStartConflict,
   isIndeterminateTransportError,
   isTransportConnectionErrorMessage,
   sanitizeThreadErrorMessage,
@@ -37,6 +38,25 @@ describe("transportError", () => {
       true,
     );
     expect(isIndeterminateTransportError(new Error("Provider rejected the command"))).toBe(false);
+  });
+
+  it("recognizes only the active-turn start invariant as a queue-safe conflict", () => {
+    const conflict =
+      "Orchestration command invariant failed (thread.turn.start): Thread 'thread-1' already has a turn starting or running. Queue a follow-up or steer the active turn instead of starting another turn.";
+
+    expect(isActiveTurnStartConflict(new Error(conflict))).toBe(true);
+    expect(isActiveTurnStartConflict(conflict)).toBe(true);
+    expect(isActiveTurnStartConflict({ message: conflict, _tag: "RpcError" })).toBe(true);
+    expect(
+      isActiveTurnStartConflict(
+        "Orchestration command invariant failed (thread.turn.start): Thread is archived.",
+      ),
+    ).toBe(false);
+    expect(
+      isActiveTurnStartConflict(
+        "Orchestration command invariant failed (thread.turn.steer): Thread already has a turn starting or running.",
+      ),
+    ).toBe(false);
   });
 
   it("drops recoverable Claude resume failures from thread surfaces", () => {
@@ -105,6 +125,12 @@ describe("transportError", () => {
           "Failed to send message.",
         ),
       ).toBe("Select a base branch before sending.");
+      expect(
+        describeSendFailureMessage(
+          { message: "Queue this follow-up instead." },
+          "Failed to send message.",
+        ),
+      ).toBe("Queue this follow-up instead.");
     });
 
     it("falls back when the error carries no usable message", () => {

@@ -571,6 +571,7 @@ export const APP_JA: Readonly<Record<string, string>> = {
   "Enter the admin password": "管理者パスワードを入力",
   Disconnected: "切断済み",
   "Reconnecting…": "再接続中…",
+  "App reconnecting…": "アプリを再接続中…",
   "Client and server versions differ": "クライアントとサーバーのバージョンが異なります",
   "Dismiss version mismatch warning": "バージョン不一致の警告を閉じる",
 
