@@ -26,6 +26,27 @@ interface ProviderSnapshotState {
 
 const ACCOUNT_USAGE_REFRESH_COOLDOWN_MS = 30_000;
 
+function normalizedAccountBinding(value: string | undefined): string | undefined {
+  const normalized = value?.trim().toLowerCase();
+  return normalized ? normalized : undefined;
+}
+
+function hasProviderAccountBindingChanged(
+  previous: ServerProvider["auth"],
+  next: ServerProvider["auth"],
+): boolean {
+  if (previous.status !== next.status) {
+    return true;
+  }
+  if (previous.status !== "authenticated" || next.status !== "authenticated") {
+    return false;
+  }
+  return (
+    normalizedAccountBinding(previous.email) !== normalizedAccountBinding(next.email) ||
+    normalizedAccountBinding(previous.type) !== normalizedAccountBinding(next.type)
+  );
+}
+
 interface SingleFlight<A, E> {
   readonly current: Effect.Effect<Deferred.Deferred<A, E> | null>;
   readonly run: (operation: Effect.Effect<A, E>) => Effect.Effect<A, E>;
@@ -228,8 +249,18 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
       previousSnapshot.auth.status === "authenticated" &&
       probedSnapshot.auth.email === previousSnapshot.auth.email &&
       probedSnapshot.auth.type === previousSnapshot.auth.type
-        ? { ...probedSnapshot, accountRateLimits: previousSnapshot.accountRateLimits }
+        ? {
+            ...probedSnapshot,
+            accountRateLimits: previousSnapshot.accountRateLimits,
+          }
         : probedSnapshot;
+    // A usage attempt made while credentials are expiring or signed out must
+    // not suppress the first poll after the operator signs in again. Keep the
+    // cooldown for one stable account, but clear it whenever the observable
+    // authentication binding changes.
+    if (hasProviderAccountBindingChanged(previousSnapshot.auth, nextSnapshot.auth)) {
+      yield* Ref.set(lastAccountUsageAttemptRef, null);
+    }
     const nextGeneration = yield* Ref.modify(snapshotStateRef, (state) => {
       const generation = input.enrichSnapshot
         ? state.enrichmentGeneration + 1

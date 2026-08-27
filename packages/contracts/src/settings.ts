@@ -25,13 +25,12 @@ export {
   MAX_AUTO_NUDGE_MAX_ROUNDS,
   MIN_AUTO_NUDGE_MAX_ROUNDS,
 } from "./autoNudge.ts";
-
-// ── Client Settings (local-only) ───────────────────────────────
-
 export {
   CLUB_CODE_DEFAULT_HEXAGONS_BACKGROUND_PRESET,
   DEFAULT_HEXAGONS_BACKGROUND_PRESET_JSON,
 } from "./defaultHexagonsBackground.ts";
+
+// ── Client Settings (local-only) ───────────────────────────────
 
 export const TimestampFormat = Schema.Literals(["locale", "12-hour", "24-hour"]);
 export type TimestampFormat = typeof TimestampFormat.Type;
@@ -264,6 +263,7 @@ export const DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_NETWORK_ENABLED = true;
 export const DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_DATABASE_ENABLED = true;
 export const DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_BUILD_ENABLED = true;
 export const DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_AGENT_ENABLED = true;
+export const DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_WORK_ENABLED = true;
 export const FallingEffectActivityLinkColorMode = Schema.Literals(["random", "matrix"]);
 export type FallingEffectActivityLinkColorMode = typeof FallingEffectActivityLinkColorMode.Type;
 export const DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_COLOR_MODE: FallingEffectActivityLinkColorMode =
@@ -315,13 +315,21 @@ export const HexagonsBackgroundPresetJson = TrimmedNonEmptyString.check(
   Schema.isMaxLength(MAX_HEXAGONS_BACKGROUND_PRESET_JSON_LENGTH),
 );
 export type HexagonsBackgroundPresetJson = typeof HexagonsBackgroundPresetJson.Type;
+export const MIN_AMBIENT_BACKGROUND_SURFACE_OPACITY = 0;
+export const MAX_AMBIENT_BACKGROUND_SURFACE_OPACITY = 1;
+export const DEFAULT_AMBIENT_BACKGROUND_MANUSCRIPT_OPACITY = 0.58;
+export const DEFAULT_AMBIENT_BACKGROUND_SIDEBAR_OPACITY = 0.68;
+export const AmbientBackgroundSurfaceOpacity = Schema.Number.check(
+  Schema.isBetween({
+    minimum: MIN_AMBIENT_BACKGROUND_SURFACE_OPACITY,
+    maximum: MAX_AMBIENT_BACKGROUND_SURFACE_OPACITY,
+  }),
+);
+export type AmbientBackgroundSurfaceOpacity = typeof AmbientBackgroundSurfaceOpacity.Type;
 export const DEFAULT_HEXAGONS_BACKGROUND_ENABLED = false;
 export const DEFAULT_FALLING_EFFECTS_ENABLED = false;
-/**
- * Compatibility default: the console existed before this persisted kill
- * switch, so older settings documents retain the current visible behavior.
- */
-export const DEFAULT_ATMOSPHERE_CONSOLE_ENABLED = true;
+/** The Atmosphere Console is opt-in on fresh and legacy-default profiles. */
+export const DEFAULT_ATMOSPHERE_CONSOLE_ENABLED = false;
 /**
  * Cinema media stays visually unobstructed unless the user explicitly opts
  * into a clipped, pointer-transparent copy of the selected falling effect.
@@ -773,6 +781,12 @@ export const ClientSettingsSchema = Schema.Struct({
   hexagonsBackgroundPresetJson: Schema.NullOr(HexagonsBackgroundPresetJson).pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_HEXAGONS_BACKGROUND_PRESET_JSON)),
   ),
+  ambientBackgroundManuscriptOpacity: AmbientBackgroundSurfaceOpacity.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_BACKGROUND_MANUSCRIPT_OPACITY)),
+  ),
+  ambientBackgroundSidebarOpacity: AmbientBackgroundSurfaceOpacity.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_BACKGROUND_SIDEBAR_OPACITY)),
+  ),
   fallingEffectsEnabled: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECTS_ENABLED)),
   ),
@@ -865,6 +879,9 @@ export const ClientSettingsSchema = Schema.Struct({
   ),
   fallingEffectActivityLinkAgentEnabled: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_AGENT_ENABLED)),
+  ),
+  fallingEffectActivityLinkWorkEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_WORK_ENABLED)),
   ),
   fallingEffectActivityLinkColorMode: FallingEffectActivityLinkColorMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_COLOR_MODE)),
@@ -1089,6 +1106,8 @@ export type ClientSettings = typeof ClientSettingsSchema.Type;
 export const AMBIENT_CLIENT_SETTINGS_KEYS = [
   "hexagonsBackgroundEnabled",
   "hexagonsBackgroundPresetJson",
+  "ambientBackgroundManuscriptOpacity",
+  "ambientBackgroundSidebarOpacity",
   "fallingEffectsEnabled",
   "atmosphereConsoleEnabled",
   "fallingEffectsOverCinemaEnabled",
@@ -1114,6 +1133,7 @@ export const AMBIENT_CLIENT_SETTINGS_KEYS = [
   "fallingEffectActivityLinkDatabaseEnabled",
   "fallingEffectActivityLinkBuildEnabled",
   "fallingEffectActivityLinkAgentEnabled",
+  "fallingEffectActivityLinkWorkEnabled",
   "fallingEffectActivityLinkColorMode",
   "fallingEffectActivityLinkRetentionSeconds",
   "ambientVideoEnabled",
@@ -1147,6 +1167,8 @@ export type AmbientClientSettings = Pick<
 export const DEFAULT_AMBIENT_CLIENT_SETTINGS: AmbientClientSettings = {
   hexagonsBackgroundEnabled: DEFAULT_HEXAGONS_BACKGROUND_ENABLED,
   hexagonsBackgroundPresetJson: DEFAULT_HEXAGONS_BACKGROUND_PRESET_JSON,
+  ambientBackgroundManuscriptOpacity: DEFAULT_AMBIENT_BACKGROUND_MANUSCRIPT_OPACITY,
+  ambientBackgroundSidebarOpacity: DEFAULT_AMBIENT_BACKGROUND_SIDEBAR_OPACITY,
   fallingEffectsEnabled: DEFAULT_FALLING_EFFECTS_ENABLED,
   atmosphereConsoleEnabled: DEFAULT_ATMOSPHERE_CONSOLE_ENABLED,
   fallingEffectsOverCinemaEnabled: DEFAULT_FALLING_EFFECTS_OVER_CINEMA_ENABLED,
@@ -1172,6 +1194,7 @@ export const DEFAULT_AMBIENT_CLIENT_SETTINGS: AmbientClientSettings = {
   fallingEffectActivityLinkDatabaseEnabled: DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_DATABASE_ENABLED,
   fallingEffectActivityLinkBuildEnabled: DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_BUILD_ENABLED,
   fallingEffectActivityLinkAgentEnabled: DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_AGENT_ENABLED,
+  fallingEffectActivityLinkWorkEnabled: DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_WORK_ENABLED,
   fallingEffectActivityLinkColorMode: DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_COLOR_MODE,
   fallingEffectActivityLinkRetentionSeconds: DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
   ambientVideoEnabled: DEFAULT_AMBIENT_VIDEO_ENABLED,
@@ -1223,40 +1246,6 @@ export const CLUB_CODE_FIRST_RUN_CLIENT_SETTINGS: ClientSettings = Schema.decode
   ClientSettingsSchema,
 )({
   ...DEFAULT_CLIENT_SETTINGS,
-  fallingEffectsEnabled: true,
-  fallingEffectKind: "rain",
-  fallingEffectMatrixColorMode: "rainbow",
-  fallingEffectOpacity: 0.55,
-  fallingEffectSpeed: 4,
-  fallingEffectDensity: 2.5,
-  fallingEffectJapaneseRatio: 0.45,
-  fallingEffect2chEnriched: true,
-  fallingEffectLiveWorkVocabulary: true,
-  fallingEffectActivityLinks: true,
-  fallingEffectActivityLinkNetworkEnabled: true,
-  fallingEffectActivityLinkDatabaseEnabled: true,
-  fallingEffectActivityLinkBuildEnabled: true,
-  fallingEffectActivityLinkAgentEnabled: true,
-  fallingEffectActivityLinkColorMode: "matrix",
-  ambientVideoEnabled: false,
-  ambientVideoSource: null,
-  ambientVideoLayoutMode: "custom",
-  ambientVideoPresetPlacement: "bottom-right",
-  ambientVideoPresetSize: "large",
-  ambientVideoPresentationMode: "floating",
-  ambientVideoGlowEnabled: true,
-  ambientVideoGlowMode: "adaptive",
-  ambientVideoGlowColor: "auto",
-  ambientVideoGlowOpacity: 0.65,
-  ambientImageEnabled: false,
-  ambientImageAsset: CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET,
-  ambientImagePresentationMode: "floating",
-  ambientImageLayoutMode: "custom",
-  ambientImagePresetPlacement: "bottom-left",
-  ambientImagePresetSize: "large",
-  ambientImageGlowEnabled: true,
-  ambientImageGlowColor: "auto",
-  ambientImageGlowOpacity: 0.35,
   workflowObservatoryEnabled: true,
   providerUsagePollMinutes: 2,
   modelPacingReservePercent: 5,
@@ -1960,6 +1949,8 @@ export const ClientSettingsPatch = Schema.Struct({
   worldClockWeatherEnabled: Schema.optionalKey(Schema.Boolean),
   hexagonsBackgroundEnabled: Schema.optionalKey(Schema.Boolean),
   hexagonsBackgroundPresetJson: Schema.optionalKey(Schema.NullOr(HexagonsBackgroundPresetJson)),
+  ambientBackgroundManuscriptOpacity: Schema.optionalKey(AmbientBackgroundSurfaceOpacity),
+  ambientBackgroundSidebarOpacity: Schema.optionalKey(AmbientBackgroundSurfaceOpacity),
   fallingEffectsEnabled: Schema.optionalKey(Schema.Boolean),
   atmosphereConsoleEnabled: Schema.optionalKey(Schema.Boolean),
   fallingEffectsOverCinemaEnabled: Schema.optionalKey(Schema.Boolean),
@@ -1993,6 +1984,7 @@ export const ClientSettingsPatch = Schema.Struct({
   fallingEffectActivityLinkDatabaseEnabled: Schema.optionalKey(Schema.Boolean),
   fallingEffectActivityLinkBuildEnabled: Schema.optionalKey(Schema.Boolean),
   fallingEffectActivityLinkAgentEnabled: Schema.optionalKey(Schema.Boolean),
+  fallingEffectActivityLinkWorkEnabled: Schema.optionalKey(Schema.Boolean),
   fallingEffectActivityLinkColorMode: Schema.optionalKey(FallingEffectActivityLinkColorMode),
   fallingEffectActivityLinkRetentionSeconds: Schema.optionalKey(
     FallingEffectActivityLinkRetentionSeconds,

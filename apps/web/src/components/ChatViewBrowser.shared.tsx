@@ -7737,6 +7737,39 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
   }
 
   if (chatViewBrowserPart === "layout") {
+    it("bounds the ambient legibility scrim to the prompt width", async () => {
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: createSnapshotForTargetUser({
+          targetMessageId: "msg-user-ambient-scrim-layout" as MessageId,
+          targetText: "ambient scrim layout",
+        }),
+      });
+
+      try {
+        const scrim = await waitForElement(
+          () => document.querySelector<HTMLElement>('[data-chat-manuscript-scrim="true"]'),
+          "Unable to find the ambient manuscript scrim.",
+        );
+        const composer = await waitForElement(
+          () => document.querySelector<HTMLElement>('[data-chat-composer-form="true"]'),
+          "Unable to find the chat composer.",
+        );
+
+        expect(scrim.getAttribute("aria-hidden")).toBe("true");
+        expect(scrim.classList.contains("pointer-events-none")).toBe(true);
+        expect(scrim.classList.contains("max-w-208")).toBe(true);
+        expect(scrim.classList.contains("z-0")).toBe(true);
+
+        const scrimBounds = scrim.getBoundingClientRect();
+        const composerBounds = composer.getBoundingClientRect();
+        expect(Math.abs(scrimBounds.left - composerBounds.left)).toBeLessThanOrEqual(1);
+        expect(Math.abs(scrimBounds.width - composerBounds.width)).toBeLessThanOrEqual(1);
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
     it("hides prompt automation controls by default without removing the composer", async () => {
       const mounted = await mountChatView({
         viewport: DEFAULT_VIEWPORT,

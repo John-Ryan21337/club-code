@@ -486,6 +486,7 @@ export function useSettingsRestore(onRestored?: () => void) {
         fallingEffectActivityLinkDatabaseEnabled: settings.fallingEffectActivityLinkDatabaseEnabled,
         fallingEffectActivityLinkBuildEnabled: settings.fallingEffectActivityLinkBuildEnabled,
         fallingEffectActivityLinkAgentEnabled: settings.fallingEffectActivityLinkAgentEnabled,
+        fallingEffectActivityLinkWorkEnabled: settings.fallingEffectActivityLinkWorkEnabled,
         fallingEffectActivityLinkColorMode: settings.fallingEffectActivityLinkColorMode,
         fallingEffectActivityLinkRetentionSeconds:
           settings.fallingEffectActivityLinkRetentionSeconds,
@@ -615,6 +616,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.fallingEffectActivityLinkDatabaseEnabled,
       settings.fallingEffectActivityLinkBuildEnabled,
       settings.fallingEffectActivityLinkAgentEnabled,
+      settings.fallingEffectActivityLinkWorkEnabled,
       settings.fallingEffectActivityLinkColorMode,
       settings.fallingEffectActivityLinkRetentionSeconds,
       settings.themeAccentColor,

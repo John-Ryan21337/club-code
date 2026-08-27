@@ -65,13 +65,14 @@ const MAX_ACTIVITY_RELATIONS = 4;
 const MAX_FUTURE_CLOCK_SKEW_MS = 250;
 const SAFE_RELATION_VALUE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/u;
 
-export type MatrixActivityCategory = "network" | "database" | "build" | "agent";
+export type MatrixActivityCategory = "network" | "database" | "build" | "agent" | "work";
 
 export interface MatrixActivityInputSelection {
   readonly network: boolean;
   readonly database: boolean;
   readonly build: boolean;
   readonly agent: boolean;
+  readonly work?: boolean;
 }
 
 export const ALL_MATRIX_ACTIVITY_INPUTS: MatrixActivityInputSelection = {
@@ -79,6 +80,7 @@ export const ALL_MATRIX_ACTIVITY_INPUTS: MatrixActivityInputSelection = {
   database: true,
   build: true,
   agent: true,
+  work: true,
 };
 
 function hasSelectedMatrixActivityInput(selection: MatrixActivityInputSelection): boolean {
@@ -86,7 +88,8 @@ function hasSelectedMatrixActivityInput(selection: MatrixActivityInputSelection)
     selection.network === true ||
     selection.database === true ||
     selection.build === true ||
-    selection.agent === true
+    selection.agent === true ||
+    selection.work === true
   );
 }
 
@@ -178,6 +181,7 @@ const CATEGORY_COLOR: Record<MatrixActivityCategory, string> = {
   database: "#a78bfa",
   build: "#fbbf24",
   agent: "#f472b6",
+  work: "#34d399",
 };
 
 const CATEGORY_CODE: Record<MatrixActivityCategory, number> = {
@@ -185,9 +189,10 @@ const CATEGORY_CODE: Record<MatrixActivityCategory, number> = {
   database: 1,
   build: 2,
   agent: 3,
+  work: 4,
 };
 
-const CODE_CATEGORY = ["network", "database", "build", "agent"] as const;
+const CODE_CATEGORY = ["network", "database", "build", "agent", "work"] as const;
 const CATEGORY_TERM: Record<
   MatrixActivityCategory,
   Record<"english" | "japanese", readonly [category: string, operation: string]>
@@ -207,6 +212,10 @@ const CATEGORY_TERM: Record<
   agent: {
     english: ["AGENT", "DISPATCH"],
     japanese: ["エージェント", "委任"],
+  },
+  work: {
+    english: ["WORK", "TOOL"],
+    japanese: ["作業", "道具"],
   },
 };
 
@@ -378,6 +387,20 @@ function exactLifecycleRelationIdentity(
   return JSON.stringify(["turn", turnId, "type", itemType, "item", itemId]);
 }
 
+function genericProviderWorkCategory(
+  activity: OrchestrationThreadActivity,
+  payload: Record<string, unknown>,
+): "work" | null {
+  // Do not reinterpret an explicit-but-invalid category attestation as generic
+  // work. The fallback is only for a canonical provider lifecycle carrying no
+  // category claim at all, and exactLifecycleRelationIdentity supplies the
+  // same bounded turn/type/item proof used by correlation.
+  return ownDataProperty(payload, "observed") === undefined &&
+    exactLifecycleRelationIdentity(activity, payload) !== null
+    ? "work"
+    : null;
+}
+
 interface LifecycleCategoryAttestation {
   category: MatrixActivityCategory | null;
   completionCategory: MatrixActivityCategory | null;
@@ -483,26 +506,32 @@ function deriveVerifiedAgentDispatch(
   anchorSeed: number,
   relationHashes: readonly number[],
 ): MatrixActivityEvent["verifiedAgentDispatch"] {
+  const observed = isRecord(payload.observed) ? payload.observed : null;
+  const providerToolLifecycle =
+    (activity.kind === "tool.started" || activity.kind === "tool.completed") &&
+    ownDataProperty(payload, "itemType") === "collab_agent_tool_call";
+  const providerTaskLifecycle =
+    (activity.kind === "task.started" || activity.kind === "task.completed") &&
+    typeof ownDataProperty(payload, "taskId") === "string" &&
+    ownDataProperty(payload, "taskId") === ownDataProperty(observed, "toolId");
   if (
     category !== "agent" ||
-    activity.kind !== "tool.completed" ||
-    ownDataProperty(payload, "itemType") !== "collab_agent_tool_call" ||
+    (!providerToolLifecycle && !providerTaskLifecycle) ||
     !isExplicitlyProviderObserved(payload)
   ) {
     return undefined;
   }
-  const relationIdentity = exactLifecycleRelationIdentity(activity, payload);
-  const attestation = relationIdentity === null ? undefined : attestations.get(relationIdentity);
-  if (
-    relationIdentity === null ||
-    !attestation ||
-    attestation.conflicted ||
-    attestation.category !== "agent" ||
-    attestation.completionCategory !== "agent" ||
-    attestation.completionAttestationCount !== 1 ||
-    attestation.lifecycleEventCount !== 1
-  ) {
-    return undefined;
+  if (providerToolLifecycle) {
+    const relationIdentity = exactLifecycleRelationIdentity(activity, payload);
+    const attestation = relationIdentity === null ? undefined : attestations.get(relationIdentity);
+    if (
+      relationIdentity === null ||
+      !attestation ||
+      attestation.conflicted ||
+      attestation.category !== "agent"
+    ) {
+      return undefined;
+    }
   }
   const relationHash = relationHashes[0];
   if (!Number.isSafeInteger(relationHash) || relationHash === undefined || relationHash < 0) {
@@ -663,7 +692,9 @@ export function deriveMatrixActivityEvents(
     const activity = sourceActivities[sourceOffset]!;
     const payload = isRecord(activity.payload) ? activity.payload : null;
     if (!payload) continue;
-    const category = propagatedLifecycleCategory(activity, payload, attestations, sourceOffset);
+    const category =
+      propagatedLifecycleCategory(activity, payload, attestations, sourceOffset) ??
+      genericProviderWorkCategory(activity, payload);
     const observedAtMs = Date.parse(activity.createdAt);
     if (category === null || inputSelection[category] !== true || !Number.isFinite(observedAtMs)) {
       continue;
@@ -996,11 +1027,21 @@ export function updateMatrixActivityAnimationInPlace(
   // category at once.
   const candidates: LinkCandidate[] = [];
   // Some providers report an agent delegation as one completed canonical
-  // tool event. Give that one verified dispatch two deterministic decorative
-  // anchors; this does not synthesize another provider event or claim traffic.
+  // tool event. Others report a launch before the delegated work completes.
+  // Give either exact provider-confirmed dispatch two deterministic decorative
+  // anchors immediately. A stable relation hash keeps its later completion
+  // from creating a duplicate route.
+  const verifiedDispatchRelations = new Set<string>();
+  const verifiedDispatchSourceRelations = new Set<string>();
   for (let eventOffset = preparedEvents.length - 1; eventOffset >= 0; eventOffset -= 1) {
     const prepared = preparedEvents[eventOffset];
     if (!prepared?.routeLive || !isValidVerifiedAgentDispatch(prepared.event)) continue;
+    const verifiedRelationKey = `${prepared.event.category}:${prepared.event.verifiedAgentDispatch.relationHash}`;
+    if (verifiedDispatchRelations.has(verifiedRelationKey)) continue;
+    verifiedDispatchRelations.add(verifiedRelationKey);
+    for (const relationHash of prepared.event.relationHashes) {
+      verifiedDispatchSourceRelations.add(`${prepared.event.category}:${relationHash}`);
+    }
     let operationAnchorIndex =
       prepared.event.verifiedAgentDispatch.operationAnchorSeed % particleCount;
     if (operationAnchorIndex === prepared.anchorIndex) {
@@ -1028,6 +1069,7 @@ export function updateMatrixActivityAnimationInPlace(
     for (const relationHash of prepared.event.relationHashes.slice(0, MAX_ACTIVITY_RELATIONS)) {
       if (!Number.isSafeInteger(relationHash) || relationHash < 0) continue;
       const relationKey = `${prepared.event.category}:${relationHash}`;
+      if (verifiedDispatchSourceRelations.has(relationKey)) continue;
       if (state.resolvedRelationHashes.has(relationKey)) continue;
       const currentEventOffset = state.relationEventOffsetByHash.get(relationKey);
       if (currentEventOffset === undefined) {
@@ -1105,6 +1147,13 @@ export function updateMatrixActivityAnimationInPlace(
   for (let eventOffset = preparedEvents.length - 1; eventOffset >= 0; eventOffset -= 1) {
     const prepared = preparedEvents[eventOffset];
     if (!prepared?.pulseLive) continue;
+    if (
+      prepared.event.relationHashes.some((relationHash) =>
+        verifiedDispatchSourceRelations.has(`${prepared.event.category}:${relationHash}`),
+      )
+    ) {
+      continue;
+    }
     ensurePulse(prepared, prepared.pulseIntensity, "category", null);
   }
   return state;

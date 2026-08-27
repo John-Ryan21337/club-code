@@ -267,9 +267,29 @@ export async function createHexagonBackground(options = {}) {
     updateSettings(patch) {
       const previous = settings;
       const previousRenderer = activeRenderer;
-      settings = normalizeSettings({ ...settings, ...patch });
+      const resolvedPatch = { ...patch };
+      if (
+        Object.hasOwn(resolvedPatch, "meshEnergyTracePistons") &&
+        !Object.hasOwn(resolvedPatch, "meshEnergyPattern")
+      ) {
+        resolvedPatch.meshEnergyPattern = resolvedPatch.meshEnergyTracePistons
+          ? "piston-groups"
+          : "tile-grid";
+      }
+      settings = normalizeSettings({ ...settings, ...resolvedPatch });
       root.hidden = !settings.enabled;
-      const rebuildRequired = settingsAffectGeometry(previous, settings) || settingsAffectFallingScene(previous, settings) || ["particleCount", "particleSpeed", "particleSpeedVariation", "quality", "seed"].some((key) => previous[key] !== settings[key]);
+      const rebuildRequired =
+        settingsAffectGeometry(previous, settings) ||
+        settingsAffectFallingScene(previous, settings) ||
+        [
+          "particleCount",
+          "particleSpeed",
+          "particleSpeedVariation",
+          "meshEnergyFlowMode",
+          "meshEnergyFlowAngle",
+          "quality",
+          "seed",
+        ].some((key) => previous[key] !== settings[key]);
       chooseRenderer();
       if (rebuildRequired || previousRenderer !== activeRenderer) rebuild(); else draw(0);
       syncAnimation();

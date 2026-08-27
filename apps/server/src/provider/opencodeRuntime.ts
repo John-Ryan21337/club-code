@@ -29,6 +29,7 @@ import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import { isWindowsCommandNotFound } from "../processRunner.ts";
+import { lowerProviderProcessTreePriority } from "./ProviderProcessPriority.ts";
 import { collectStreamAsString } from "./providerSnapshot.ts";
 import * as NetService from "@cafecode/shared/Net";
 const encodeUnknownJsonStringExit = Schema.encodeUnknownExit(Schema.UnknownFromJsonString);
@@ -357,6 +358,15 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
               }),
           ),
         );
+
+      yield* lowerProviderProcessTreePriority({
+        provider: "opencode",
+        rootPid: Number(child.pid),
+      }).pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        Effect.forkIn(runtimeScope),
+        Effect.asVoid,
+      );
 
       const killOpenCodeProcessGroup = (signal: NodeJS.Signals) =>
         process.platform === "win32"

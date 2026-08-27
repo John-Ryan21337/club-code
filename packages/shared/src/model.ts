@@ -1,6 +1,10 @@
 import {
+  CODEX_SUBAGENT_THREAD_LIMIT_OPTION_ID,
+  DEFAULT_CODEX_SUBAGENT_THREAD_LIMIT,
   DEFAULT_MODEL,
   DEFAULT_MODEL_BY_PROVIDER,
+  MAX_CODEX_SUBAGENT_THREAD_LIMIT,
+  MIN_CODEX_SUBAGENT_THREAD_LIMIT,
   MODEL_SLUG_ALIASES_BY_PROVIDER,
   type ModelCapabilities,
   type ModelSelection,
@@ -75,6 +79,33 @@ export function getModelSelectionBooleanOptionValue(
   id: string,
 ): boolean | undefined {
   return getProviderOptionBooleanSelectionValue(modelSelection?.options, id);
+}
+
+/**
+ * Resolve Cafe's thread-bound Codex worker ceiling from the otherwise generic
+ * model-option bag. Malformed persisted data fails closed to the product
+ * default instead of being rounded or partially parsed.
+ */
+export function parseCodexSubagentThreadLimitOption(
+  options: ReadonlyArray<ProviderOptionSelection> | null | undefined,
+): number | null {
+  const raw = getProviderOptionStringSelectionValue(options, CODEX_SUBAGENT_THREAD_LIMIT_OPTION_ID);
+  if (raw === undefined || !/^\d{1,3}$/.test(raw)) {
+    return null;
+  }
+  const value = Number(raw);
+  return value >= MIN_CODEX_SUBAGENT_THREAD_LIMIT && value <= MAX_CODEX_SUBAGENT_THREAD_LIMIT
+    ? value
+    : null;
+}
+
+export function resolveCodexSubagentThreadLimit(
+  modelSelection: ModelSelection | null | undefined,
+): number {
+  return (
+    parseCodexSubagentThreadLimitOption(modelSelection?.options) ??
+    DEFAULT_CODEX_SUBAGENT_THREAD_LIMIT
+  );
 }
 
 function resolveDescriptorChoiceValue(

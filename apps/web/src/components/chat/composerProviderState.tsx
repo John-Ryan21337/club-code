@@ -1,4 +1,5 @@
 import {
+  CODEX_SUBAGENT_THREAD_LIMIT_OPTION_ID,
   type ProviderDriverKind,
   type ProviderInstanceId,
   type ProviderOptionSelection,
@@ -10,6 +11,7 @@ import {
   getProviderOptionCurrentValue,
   getProviderOptionDescriptors,
   isClaudeUltrathinkPrompt,
+  parseCodexSubagentThreadLimitOption,
 } from "@cafecode/shared/model";
 import type { ReactNode } from "react";
 
@@ -59,11 +61,25 @@ export function getComposerProviderState(input: ComposerProviderStateInput): Com
   const ultrathinkActive =
     (primarySelectDescriptor?.promptInjectedValues?.length ?? 0) > 0 &&
     isClaudeUltrathinkPrompt(prompt);
+  const descriptorSelections = buildProviderOptionSelectionsFromDescriptors(descriptors);
+  const codexSubagentThreadLimit =
+    provider === "codex" ? parseCodexSubagentThreadLimitOption(modelOptions) : null;
 
   return {
     provider,
     promptEffort,
-    modelOptionsForDispatch: buildProviderOptionSelectionsFromDescriptors(descriptors),
+    modelOptionsForDispatch:
+      codexSubagentThreadLimit === null
+        ? descriptorSelections
+        : [
+            ...(descriptorSelections ?? []).filter(
+              (option) => option.id !== CODEX_SUBAGENT_THREAD_LIMIT_OPTION_ID,
+            ),
+            {
+              id: CODEX_SUBAGENT_THREAD_LIMIT_OPTION_ID,
+              value: String(codexSubagentThreadLimit),
+            },
+          ],
     ...(ultrathinkActive
       ? {
           composerFrameClassName: "ultrathink-frame",

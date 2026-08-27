@@ -238,6 +238,7 @@ interface SavedYouTubeUrlQueueList {
 
 const SAVED_LIBRARY_VERSION = 1;
 const VIDEO_ID_PATTERN = /^[A-Za-z0-9_-]{11}$/;
+const FORBIDDEN_LOGICAL_NAME_CHARACTER_PATTERN = /[\p{Cf}\p{Cs}]/u;
 
 function resolveYouTubeUrlQueueLibraryStorage(): YouTubeUrlQueueLibraryStorage | null {
   if (typeof window === "undefined") return null;
@@ -252,7 +253,13 @@ function normalizedLogicalName(value: string): string {
   const logicalName = value.normalize("NFKC").trim().replace(/\s+/g, " ");
   const containsForbiddenCharacter = Array.from(logicalName).some((character) => {
     const codePoint = character.codePointAt(0) ?? 0;
-    return codePoint <= 0x1f || codePoint === 0x7f || character === "/" || character === "\\";
+    return (
+      codePoint <= 0x1f ||
+      codePoint === 0x7f ||
+      FORBIDDEN_LOGICAL_NAME_CHARACTER_PATTERN.test(character) ||
+      character === "/" ||
+      character === "\\"
+    );
   });
   if (
     logicalName.length === 0 ||

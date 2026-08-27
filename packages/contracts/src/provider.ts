@@ -23,6 +23,23 @@ import {
 } from "./orchestration.ts";
 import { ProviderInstanceId, ProviderDriverKind } from "./providerInstance.ts";
 
+export const MIN_CODEX_SUBAGENT_THREAD_LIMIT = 1;
+export const MAX_CODEX_SUBAGENT_THREAD_LIMIT = 128;
+export const DEFAULT_CODEX_SUBAGENT_THREAD_LIMIT = 16;
+export const CODEX_SUBAGENT_THREAD_LIMIT_OPTION_ID = "codexSubagentThreadLimit";
+
+/**
+ * Maximum concurrently open Codex spawned-agent threads for one provider
+ * session, excluding that session's primary thread. The value is carried on
+ * session start so it cannot silently become an application-wide policy.
+ */
+export const CodexSubagentThreadLimit = Schema.Int.check(
+  Schema.isBetween({
+    minimum: MIN_CODEX_SUBAGENT_THREAD_LIMIT,
+    maximum: MAX_CODEX_SUBAGENT_THREAD_LIMIT,
+  }),
+);
+
 const ProviderSessionStatus = Schema.Literals([
   "connecting",
   "ready",
@@ -42,6 +59,7 @@ export const ProviderSession = Schema.Struct({
   cwd: Schema.optional(TrimmedNonEmptyString),
   additionalDirectories: Schema.optional(Schema.Array(TrimmedNonEmptyString)),
   model: Schema.optional(TrimmedNonEmptyString),
+  codexSubagentThreadLimit: Schema.optional(CodexSubagentThreadLimit),
   threadId: ThreadId,
   resumeCursor: Schema.optional(Schema.Unknown),
   activeTurnId: Schema.optional(TurnId),
@@ -63,6 +81,8 @@ export const ProviderSessionStartInput = Schema.Struct({
   approvalPolicy: Schema.optional(ProviderApprovalPolicy),
   sandboxMode: Schema.optional(ProviderSandboxMode),
   interactionMode: Schema.optional(ProviderInteractionMode),
+  /** Concurrently open spawned-agent threads allowed for one Codex session. */
+  codexSubagentThreadLimit: Schema.optional(CodexSubagentThreadLimit),
   runtimeMode: RuntimeMode,
 });
 export type ProviderSessionStartInput = typeof ProviderSessionStartInput.Type;

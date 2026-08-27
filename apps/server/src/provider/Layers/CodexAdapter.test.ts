@@ -27,6 +27,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it, vi } from "@effect/vitest";
 
 import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -298,7 +299,7 @@ validationLayer("CodexAdapterLive validation", (it) => {
       assert.equal(validationRuntimeFactory.factory.mock.calls.length, 0);
     }),
   );
-  it.effect("maps codex model options before starting a session", () =>
+  it.effect("maps Codex model options and thread-bound agent limits before session start", () =>
     Effect.gen(function* () {
       validationRuntimeFactory.factory.mockClear();
       const adapter = yield* CodexAdapter;
@@ -306,6 +307,7 @@ validationLayer("CodexAdapterLive validation", (it) => {
       yield* adapter.startSession({
         provider: ProviderDriverKind.make("codex"),
         threadId: asThreadId("thread-1"),
+        codexSubagentThreadLimit: 16,
         modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "gpt-5.3-codex", [
           { id: "fastMode", value: true },
         ]),
@@ -326,6 +328,7 @@ validationLayer("CodexAdapterLive validation", (it) => {
       assert.deepStrictEqual(runtimeInputWithoutAgentBrowser, {
         appServerCwd: path.join(process.cwd(), "userdata"),
         binaryPath: "codex",
+        codexSubagentThreadLimit: 16,
         cwd: process.cwd(),
         model: "gpt-5.3-codex",
         ossMode: false,
@@ -2800,6 +2803,135 @@ scopedLifecycleLayer("CodexAdapterLive scoped lifecycle", (it) => {
     }),
   );
 });
+
+it.effect("serializes concurrent starts for the same Codex thread", () =>
+  Effect.gen(function* () {
+    const threadId = asThreadId("thread-concurrent-start");
+    const firstStartEntered = yield* Deferred.make<void>();
+    const releaseFirstStart = yield* Deferred.make<void>();
+    const runtimes: Array<FakeCodexRuntime> = [];
+    let activeStarts = 0;
+    let maximumActiveStarts = 0;
+    const runtimeFactory = vi.fn((runtimeOptions: CodexSessionRuntimeOptions) => {
+      const runtime = new FakeCodexRuntime(runtimeOptions);
+      const runtimeIndex = runtimes.length;
+      runtimes.push(runtime);
+      runtime.start = () =>
+        Effect.gen(function* () {
+          activeStarts += 1;
+          maximumActiveStarts = Math.max(maximumActiveStarts, activeStarts);
+          if (runtimeIndex === 0) {
+            yield* Deferred.succeed(firstStartEntered, undefined);
+            yield* Deferred.await(releaseFirstStart);
+          }
+          activeStarts -= 1;
+          return yield* Effect.promise(() => runtime.startImpl());
+        });
+      return Effect.succeed(runtime);
+    });
+    const scope = yield* Scope.make("sequential");
+
+    try {
+      const layer = Layer.effect(
+        CodexAdapter,
+        Effect.gen(function* () {
+          const codexConfig = decodeCodexSettings({});
+          return yield* makeCodexAdapter(codexConfig, { makeRuntime: runtimeFactory });
+        }),
+      ).pipe(
+        Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
+        Layer.provideMerge(ServerSettingsService.layerTest()),
+        Layer.provideMerge(providerSessionDirectoryTestLayer),
+        Layer.provideMerge(NodeServices.layer),
+      );
+      const context = yield* Layer.buildWithScope(layer, scope);
+      const adapter = yield* Effect.service(CodexAdapter).pipe(Effect.provide(context));
+      const input = {
+        provider: ProviderDriverKind.make("codex"),
+        threadId,
+        runtimeMode: "full-access" as const,
+      };
+
+      const firstStart = yield* adapter.startSession(input).pipe(Effect.forkChild);
+      yield* Deferred.await(firstStartEntered);
+      const secondStart = yield* adapter.startSession(input).pipe(Effect.forkChild);
+      yield* Effect.yieldNow;
+
+      assert.equal(runtimeFactory.mock.calls.length, 1);
+      assert.equal(maximumActiveStarts, 1);
+
+      yield* Deferred.succeed(releaseFirstStart, undefined);
+      yield* Fiber.join(firstStart);
+      yield* Fiber.join(secondStart);
+
+      assert.equal(runtimeFactory.mock.calls.length, 2);
+      assert.equal(maximumActiveStarts, 1);
+      assert.equal(runtimes[0]?.closeImpl.mock.calls.length, 1);
+      assert.equal(yield* adapter.hasSession(threadId), true);
+    } finally {
+      yield* Scope.close(scope, Exit.void).pipe(Effect.ignore);
+    }
+  }),
+);
+
+it.effect("does not let stopSession miss an in-flight Codex session start", () =>
+  Effect.gen(function* () {
+    const threadId = asThreadId("thread-stop-during-start");
+    const startEntered = yield* Deferred.make<void>();
+    const releaseStart = yield* Deferred.make<void>();
+    let runtime: FakeCodexRuntime | undefined;
+    const runtimeFactory = vi.fn((runtimeOptions: CodexSessionRuntimeOptions) => {
+      runtime = new FakeCodexRuntime(runtimeOptions);
+      runtime.start = () =>
+        Deferred.succeed(startEntered, undefined).pipe(
+          Effect.andThen(Deferred.await(releaseStart)),
+          Effect.andThen(Effect.promise(() => runtime!.startImpl())),
+        );
+      return Effect.succeed(runtime);
+    });
+    const scope = yield* Scope.make("sequential");
+
+    try {
+      const layer = Layer.effect(
+        CodexAdapter,
+        Effect.gen(function* () {
+          const codexConfig = decodeCodexSettings({});
+          return yield* makeCodexAdapter(codexConfig, { makeRuntime: runtimeFactory });
+        }),
+      ).pipe(
+        Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
+        Layer.provideMerge(ServerSettingsService.layerTest()),
+        Layer.provideMerge(providerSessionDirectoryTestLayer),
+        Layer.provideMerge(NodeServices.layer),
+      );
+      const context = yield* Layer.buildWithScope(layer, scope);
+      const adapter = yield* Effect.service(CodexAdapter).pipe(Effect.provide(context));
+
+      const starting = yield* adapter
+        .startSession({
+          provider: ProviderDriverKind.make("codex"),
+          threadId,
+          runtimeMode: "full-access",
+        })
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(startEntered);
+      const stopping = yield* adapter.stopSession(threadId).pipe(Effect.forkChild);
+      yield* Effect.yieldNow;
+
+      assert.ok(runtime);
+      assert.equal(runtime.closeImpl.mock.calls.length, 0);
+
+      yield* Deferred.succeed(releaseStart, undefined);
+      yield* Fiber.join(starting);
+      yield* Fiber.join(stopping);
+
+      assert.equal(runtime.closeImpl.mock.calls.length, 1);
+      assert.equal(yield* adapter.hasSession(threadId), false);
+    } finally {
+      yield* Scope.close(scope, Exit.void).pipe(Effect.ignore);
+    }
+  }),
+);
 
 const scopedFailureRuntimeFactory = makeScopedRuntimeFactory({ failConstruction: true });
 const scopedFailureLayer = it.layer(

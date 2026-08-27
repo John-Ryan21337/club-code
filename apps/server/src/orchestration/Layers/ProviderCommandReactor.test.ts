@@ -6,11 +6,13 @@ import { performance } from "node:perf_hooks";
 import { setImmediate as waitForEventLoopTurn } from "node:timers/promises";
 
 import {
+  CODEX_SUBAGENT_THREAD_LIMIT_OPTION_ID,
   type ChatAttachment,
   ModelSelection,
   type ProviderThreadGoal,
   ProviderRuntimeEvent,
   ProviderSession,
+  type ProviderSessionStartInput,
   ProviderDriverKind,
   ProviderInstanceId,
 } from "@cafecode/contracts";
@@ -233,6 +235,7 @@ describe("ProviderCommandReactor", () => {
     readonly sendTurnFailureDetail?: string;
     readonly threadGoals?: "supported" | "unsupported";
     readonly startReactor?: boolean;
+    readonly listSessions?: ProviderServiceShape["listSessions"];
   }) {
     const now = "2026-01-01T00:00:00.000Z";
     const baseDir = input?.baseDir ?? fs.mkdtempSync(path.join(os.tmpdir(), "t3code-reactor-"));
@@ -296,6 +299,12 @@ describe("ProviderCommandReactor", () => {
           : {}),
         ...((inputModelSelection?.model ?? modelSelection.model)
           ? { model: inputModelSelection?.model ?? modelSelection.model }
+          : {}),
+        ...(typeof input === "object" &&
+        input !== null &&
+        "codexSubagentThreadLimit" in input &&
+        typeof input.codexSubagentThreadLimit === "number"
+          ? { codexSubagentThreadLimit: input.codexSubagentThreadLimit }
           : {}),
         threadId,
         resumeCursor: resumeCursor ?? { opaque: `resume-${sessionIndex}` },
@@ -435,7 +444,7 @@ describe("ProviderCommandReactor", () => {
       respondToUserInput: respondToUserInput as ProviderServiceShape["respondToUserInput"],
       stopSession: stopSession as ProviderServiceShape["stopSession"],
       restartProviderRuntime: () => unsupported(),
-      listSessions: () => Effect.succeed(runtimeSessions),
+      listSessions: input?.listSessions ?? (() => Effect.succeed(runtimeSessions)),
       getCapabilities: (_provider) =>
         Effect.succeed({
           sessionModelSwitch: input?.sessionModelSwitch ?? "in-session",
@@ -935,6 +944,46 @@ describe("ProviderCommandReactor", () => {
     const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
     expect(thread?.session?.lastError).toContain("before a provider turn started");
     expect(harness.sendTurn).not.toHaveBeenCalled();
+  });
+
+  it("subscribes before startup recovery so newly accepted turns are not stranded", async () => {
+    let releaseListSessions!: () => void;
+    const listSessionsGate = new Promise<void>((resolve) => {
+      releaseListSessions = resolve;
+    });
+    const listSessions = vi.fn(() =>
+      Effect.promise(() => listSessionsGate).pipe(Effect.as<ReadonlyArray<ProviderSession>>([])),
+    );
+    const harness = await createHarness({
+      listSessions,
+      startReactor: false,
+    });
+
+    const startPromise = harness.startReactor();
+    await waitFor(() => listSessions.mock.calls.length > 0);
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-during-startup-recovery"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-during-startup-recovery"),
+          role: "user",
+          text: "Do not strand this prompt while startup recovery is running",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: "2026-01-01T00:00:01.000Z",
+      }),
+    );
+
+    releaseListSessions();
+    await startPromise;
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+    expect(harness.sendTurn).toHaveBeenCalledOnce();
   });
 
   it("continues a projected running turn once when its provider runtime was lost on restart", async () => {
@@ -1524,6 +1573,7 @@ describe("ProviderCommandReactor", () => {
         modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "gpt-5.3-codex", [
           { id: "reasoningEffort", value: "high" },
           { id: "fastMode", value: true },
+          { id: CODEX_SUBAGENT_THREAD_LIMIT_OPTION_ID, value: "64" },
         ]),
       },
       {
@@ -1585,9 +1635,15 @@ describe("ProviderCommandReactor", () => {
 
       await waitFor(() => harness.startSession.mock.calls.length === index + 1);
       await waitFor(() => harness.sendTurn.mock.calls.length === index + 1);
-      expect(harness.startSession.mock.calls[index]?.[1], scenario.name).toMatchObject({
+      const sessionStartInput = harness.startSession.mock.calls[index]?.[1] as
+        | ProviderSessionStartInput
+        | undefined;
+      expect(sessionStartInput, scenario.name).toMatchObject({
         modelSelection: scenario.modelSelection,
       });
+      expect(sessionStartInput?.codexSubagentThreadLimit, scenario.name).toBe(
+        scenario.modelSelection.instanceId === ProviderInstanceId.make("codex") ? 64 : undefined,
+      );
       expect(harness.sendTurn.mock.calls[index]?.[0], scenario.name).toMatchObject({
         threadId: scenario.threadId,
         modelSelection: scenario.modelSelection,

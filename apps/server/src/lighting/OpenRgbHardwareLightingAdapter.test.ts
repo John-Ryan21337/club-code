@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { OpenRgbHardwareLightingAdapter } from "./OpenRgbHardwareLightingAdapter.ts";
 
-const OPENRGB_MAGIC = 0x4f524742;
+const OPENRGB_MAGIC = Buffer.from("ORGB", "ascii");
 
 function u16(value: number): Buffer {
   const output = Buffer.alloc(2);
@@ -86,7 +86,7 @@ interface ReceivedPacket {
 
 function response(deviceId: number, packetId: number, payload: Buffer): Buffer {
   const header = Buffer.alloc(16);
-  header.writeUInt32LE(OPENRGB_MAGIC, 0);
+  OPENRGB_MAGIC.copy(header, 0);
   header.writeUInt32LE(deviceId, 4);
   header.writeUInt32LE(packetId, 8);
   header.writeUInt32LE(payload.length, 12);
@@ -107,6 +107,10 @@ async function startFakeOpenRgb(controllerCount = 1): Promise<{
     socket.on("data", (data) => {
       buffered = Buffer.concat([buffered, data]);
       while (buffered.length >= 16) {
+        if (!buffered.subarray(0, 4).equals(OPENRGB_MAGIC)) {
+          socket.destroy(new Error("fixture received invalid OpenRGB magic"));
+          return;
+        }
         const payloadLength = buffered.readUInt32LE(12);
         if (buffered.length < 16 + payloadLength) return;
         const packet = {

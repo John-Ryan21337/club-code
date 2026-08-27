@@ -14,6 +14,7 @@ describe("transportError", () => {
       isTransportConnectionErrorMessage("Unable to connect to the Club Code server WebSocket."),
     ).toBe(true);
     expect(isTransportConnectionErrorMessage("SocketOpenError: Timeout")).toBe(true);
+    expect(isTransportConnectionErrorMessage("RpcClientDefect: Unknown socket error")).toBe(true);
   });
 
   it("preserves non-transport thread errors", () => {
@@ -32,6 +33,9 @@ describe("transportError", () => {
       true,
     );
     expect(isIndeterminateTransportError("SocketCloseError: 1006")).toBe(true);
+    expect(isIndeterminateTransportError(new Error("RpcClientDefect: Unknown socket error"))).toBe(
+      true,
+    );
     expect(isIndeterminateTransportError(new Error("Provider rejected the command"))).toBe(false);
   });
 

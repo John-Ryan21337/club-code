@@ -1,5 +1,7 @@
 import {
   DEFAULT_AMBIENT_COLOR,
+  DEFAULT_AMBIENT_BACKGROUND_MANUSCRIPT_OPACITY,
+  DEFAULT_AMBIENT_BACKGROUND_SIDEBAR_OPACITY,
   DEFAULT_AMBIENT_OPACITY,
   DEFAULT_ATMOSPHERE_CONSOLE_ENABLED,
   DEFAULT_FALLING_EFFECT_2CH_ENRICHED,
@@ -8,6 +10,7 @@ import {
   DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_COLOR_MODE,
   DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_DATABASE_ENABLED,
   DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_NETWORK_ENABLED,
+  DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_WORK_ENABLED,
   DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
   DEFAULT_FALLING_EFFECT_ACTIVITY_LINKS,
   DEFAULT_FALLING_EFFECT_DENSITY,
@@ -41,6 +44,7 @@ import {
   MAX_FALLING_EFFECT_MATRIX_WALK_LIFECYCLE_PERCENT,
   MAX_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
   MAX_FALLING_EFFECT_SPEED,
+  MAX_AMBIENT_BACKGROUND_SURFACE_OPACITY,
   MIN_AMBIENT_OPACITY,
   MIN_FALLING_EFFECT_DENSITY,
   MIN_FALLING_EFFECT_JAPANESE_RATIO,
@@ -51,6 +55,7 @@ import {
   MIN_FALLING_EFFECT_MATRIX_WALK_LIFECYCLE_PERCENT,
   MIN_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
   MIN_FALLING_EFFECT_SPEED,
+  MIN_AMBIENT_BACKGROUND_SURFACE_OPACITY,
 } from "@cafecode/contracts/settings";
 import type { HardwareLightingStatus } from "@cafecode/contracts";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -217,6 +222,20 @@ function clampFallingEffectOpacityPercent(value: number | null): number {
   return Math.min(MAX_AMBIENT_OPACITY, Math.max(MIN_AMBIENT_OPACITY, opacity));
 }
 
+function clampAmbientBackgroundSurfaceOpacityPercent(
+  value: number | null,
+  fallback: number,
+): number {
+  if (value === null || !Number.isFinite(value)) {
+    return fallback;
+  }
+  const opacity = value / 100;
+  return Math.min(
+    MAX_AMBIENT_BACKGROUND_SURFACE_OPACITY,
+    Math.max(MIN_AMBIENT_BACKGROUND_SURFACE_OPACITY, opacity),
+  );
+}
+
 export function WindowAtmosphereSettings() {
   const settings = useSettings();
   const { updateSettings, updateClientSettingsConfirmed } = useUpdateSettings();
@@ -331,6 +350,8 @@ export function WindowAtmosphereSettings() {
   const hasNonDefaultValue =
     settings.hexagonsBackgroundEnabled !== DEFAULT_HEXAGONS_BACKGROUND_ENABLED ||
     settings.hexagonsBackgroundPresetJson !== DEFAULT_HEXAGONS_BACKGROUND_PRESET_JSON ||
+    settings.ambientBackgroundManuscriptOpacity !== DEFAULT_AMBIENT_BACKGROUND_MANUSCRIPT_OPACITY ||
+    settings.ambientBackgroundSidebarOpacity !== DEFAULT_AMBIENT_BACKGROUND_SIDEBAR_OPACITY ||
     settings.atmosphereConsoleEnabled !== DEFAULT_ATMOSPHERE_CONSOLE_ENABLED ||
     settings.fallingEffectsEnabled !== DEFAULT_FALLING_EFFECTS_ENABLED ||
     settings.fallingEffectsOverCinemaEnabled !== DEFAULT_FALLING_EFFECTS_OVER_CINEMA_ENABLED ||
@@ -365,6 +386,8 @@ export function WindowAtmosphereSettings() {
       DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_BUILD_ENABLED ||
     settings.fallingEffectActivityLinkAgentEnabled !==
       DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_AGENT_ENABLED ||
+    settings.fallingEffectActivityLinkWorkEnabled !==
+      DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_WORK_ENABLED ||
     settings.fallingEffectActivityLinkColorMode !==
       DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_COLOR_MODE ||
     settings.fallingEffectActivityLinkRetentionSeconds !==
@@ -443,6 +466,98 @@ export function WindowAtmosphereSettings() {
       />
 
       <SettingsRow
+        title="Chat backdrop opacity"
+        description="Set the backdrop opacity behind the chat manuscript and prompt when an ambient background is active. The backdrop stays within the prompt width."
+        resetAction={
+          settings.ambientBackgroundManuscriptOpacity !==
+          DEFAULT_AMBIENT_BACKGROUND_MANUSCRIPT_OPACITY ? (
+            <SettingResetButton
+              label="chat backdrop opacity"
+              onClick={() =>
+                updateSettings({
+                  ambientBackgroundManuscriptOpacity: DEFAULT_AMBIENT_BACKGROUND_MANUSCRIPT_OPACITY,
+                })
+              }
+            />
+          ) : null
+        }
+        control={
+          <div className="flex items-center gap-2">
+            <NumberField
+              value={Math.round(settings.ambientBackgroundManuscriptOpacity * 100)}
+              min={Math.round(MIN_AMBIENT_BACKGROUND_SURFACE_OPACITY * 100)}
+              max={Math.round(MAX_AMBIENT_BACKGROUND_SURFACE_OPACITY * 100)}
+              step={1}
+              largeStep={10}
+              size="sm"
+              className="w-28"
+              onValueChange={(value) =>
+                updateSettings({
+                  ambientBackgroundManuscriptOpacity: clampAmbientBackgroundSurfaceOpacityPercent(
+                    value,
+                    DEFAULT_AMBIENT_BACKGROUND_MANUSCRIPT_OPACITY,
+                  ),
+                })
+              }
+            >
+              <NumberFieldGroup>
+                <NumberFieldDecrement aria-label="Decrease chat backdrop opacity" />
+                <NumberFieldInput aria-label="Chat backdrop opacity percent" />
+                <NumberFieldIncrement aria-label="Increase chat backdrop opacity" />
+              </NumberFieldGroup>
+            </NumberField>
+            <span className="text-xs text-muted-foreground">%</span>
+          </div>
+        }
+      />
+
+      <SettingsRow
+        title="Sidebar backdrop opacity"
+        description="Set one backdrop opacity for the left navigation sidebar and right details panels when an ambient background is active. This setting also applies to mobile sheets."
+        resetAction={
+          settings.ambientBackgroundSidebarOpacity !==
+          DEFAULT_AMBIENT_BACKGROUND_SIDEBAR_OPACITY ? (
+            <SettingResetButton
+              label="sidebar backdrop opacity"
+              onClick={() =>
+                updateSettings({
+                  ambientBackgroundSidebarOpacity: DEFAULT_AMBIENT_BACKGROUND_SIDEBAR_OPACITY,
+                })
+              }
+            />
+          ) : null
+        }
+        control={
+          <div className="flex items-center gap-2">
+            <NumberField
+              value={Math.round(settings.ambientBackgroundSidebarOpacity * 100)}
+              min={Math.round(MIN_AMBIENT_BACKGROUND_SURFACE_OPACITY * 100)}
+              max={Math.round(MAX_AMBIENT_BACKGROUND_SURFACE_OPACITY * 100)}
+              step={1}
+              largeStep={10}
+              size="sm"
+              className="w-28"
+              onValueChange={(value) =>
+                updateSettings({
+                  ambientBackgroundSidebarOpacity: clampAmbientBackgroundSurfaceOpacityPercent(
+                    value,
+                    DEFAULT_AMBIENT_BACKGROUND_SIDEBAR_OPACITY,
+                  ),
+                })
+              }
+            >
+              <NumberFieldGroup>
+                <NumberFieldDecrement aria-label="Decrease sidebar backdrop opacity" />
+                <NumberFieldInput aria-label="Sidebar backdrop opacity percent" />
+                <NumberFieldIncrement aria-label="Increase sidebar backdrop opacity" />
+              </NumberFieldGroup>
+            </NumberField>
+            <span className="text-xs text-muted-foreground">%</span>
+          </div>
+        }
+      />
+
+      <SettingsRow
         title="Falling effects"
         description="Let snow, rain, or Matrix characters drift across the whole Club Code window."
         status={
@@ -460,6 +575,8 @@ export function WindowAtmosphereSettings() {
                 updateSettings({
                   hexagonsBackgroundEnabled: DEFAULT_HEXAGONS_BACKGROUND_ENABLED,
                   hexagonsBackgroundPresetJson: DEFAULT_HEXAGONS_BACKGROUND_PRESET_JSON,
+                  ambientBackgroundManuscriptOpacity: DEFAULT_AMBIENT_BACKGROUND_MANUSCRIPT_OPACITY,
+                  ambientBackgroundSidebarOpacity: DEFAULT_AMBIENT_BACKGROUND_SIDEBAR_OPACITY,
                   atmosphereConsoleEnabled: DEFAULT_ATMOSPHERE_CONSOLE_ENABLED,
                   fallingEffectsEnabled: DEFAULT_FALLING_EFFECTS_ENABLED,
                   fallingEffectsOverCinemaEnabled: DEFAULT_FALLING_EFFECTS_OVER_CINEMA_ENABLED,
@@ -493,6 +610,8 @@ export function WindowAtmosphereSettings() {
                     DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_BUILD_ENABLED,
                   fallingEffectActivityLinkAgentEnabled:
                     DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_AGENT_ENABLED,
+                  fallingEffectActivityLinkWorkEnabled:
+                    DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_WORK_ENABLED,
                   fallingEffectActivityLinkColorMode:
                     DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_COLOR_MODE,
                   fallingEffectActivityLinkRetentionSeconds:
@@ -1023,7 +1142,7 @@ export function WindowAtmosphereSettings() {
             <>
               <SettingsRow
                 title="Activity inputs"
-                description="Choose which safe provider-observed activity categories may create Matrix pulses and connecting lines. Clear every checkbox to show no activity overlay."
+                description="Choose which safe provider-observed activity may create Matrix pulses and connecting lines. Work means an exact tool lifecycle whose narrower category is unknown; it never guesses from command text, paths, or output. Clear every checkbox to show no activity overlay."
                 control={
                   <div
                     role="group"
@@ -1073,6 +1192,17 @@ export function WindowAtmosphereSettings() {
                         }
                       />
                       <span>Agent / delegation</span>
+                    </label>
+                    <label className="flex cursor-pointer items-center gap-1.5 text-xs font-medium">
+                      <Checkbox
+                        checked={settings.fallingEffectActivityLinkWorkEnabled}
+                        onCheckedChange={(checked) =>
+                          updateSettings({
+                            fallingEffectActivityLinkWorkEnabled: Boolean(checked),
+                          })
+                        }
+                      />
+                      <span>Work / tool</span>
                     </label>
                   </div>
                 }

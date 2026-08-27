@@ -18,10 +18,12 @@ export function RightPanelSheet(props: {
       }}
     >
       <SheetPopup
+        backdropClassName="cafe-sidebar-sheet-backdrop"
         side="right"
         showCloseButton={false}
         keepMounted
         className={RIGHT_PANEL_SHEET_CLASS_NAME}
+        data-cafe-details-sidebar-shell="true"
       >
         {props.children}
       </SheetPopup>

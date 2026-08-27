@@ -22,6 +22,7 @@ import {
   CODEX_COMPLETED_AGENT_MESSAGE_LEDGER_LIMIT,
   CODEX_ULTRA_CACHING_COMPACT_PROMPT,
   claimCodexSnapshotBackfillWatcher,
+  classifyCodexStderrLines,
   codexAggregateNotificationMethod,
   codexAggregateTurnHasUnfinishedChildren,
   codexChildConversationThreadIdsForTurn,
@@ -49,6 +50,31 @@ import {
   updateCodexPendingSteerProcessingFromNotification,
 } from "./CodexSessionRuntime.ts";
 const isCodexAppServerRequestError = Schema.is(CodexErrors.CodexAppServerRequestError);
+
+describe("Codex stderr classification", () => {
+  it("keeps one failed-command diagnostic and drops its copied output", () => {
+    const firstChunk = classifyCodexStderrLines([
+      "2026-08-11T06:35:00.905Z ERROR codex_core::tools::router: error=Exit code: 1",
+      "Wall time: 0.2 seconds",
+      "Output:",
+      "first copied command-output line",
+    ]);
+    const secondChunk = classifyCodexStderrLines(
+      [
+        "second copied command-output line",
+        "2026-08-11T06:35:01.000Z INFO codex_core::codex: turn completed",
+        "plain stderr after the structured log",
+      ],
+      firstChunk.suppressCommandFailureDetails,
+    );
+
+    assert.deepEqual(firstChunk.messages, [
+      "2026-08-11T06:35:00.905Z ERROR codex_core::tools::router: error=Exit code: 1",
+    ]);
+    assert.deepEqual(secondChunk.messages, ["plain stderr after the structured log"]);
+    assert.equal(secondChunk.suppressCommandFailureDetails, false);
+  });
+});
 
 describe("Codex notification emission timestamps", () => {
   it("accepts valid provider emission time and rejects malformed or future values", () => {
@@ -239,6 +265,25 @@ describe("buildCodexAppServerArgs", () => {
     assert.deepStrictEqual(buildCodexAppServerArgs({ responsesWebsockets: "auto" }), [
       "app-server",
     ]);
+  });
+
+  it("passes the per-session spawned-agent thread ceiling to every Codex app-server mode", () => {
+    const subagentThreadLimitArgs = ["-c", "agents.max_concurrent_threads_per_session=16"];
+    assert.deepStrictEqual(buildCodexAppServerArgs(undefined, false, 16), [
+      "app-server",
+      ...subagentThreadLimitArgs,
+    ]);
+    assert.deepStrictEqual(buildCodexAppServerArgs({ responsesWebsockets: "disabled" }, true, 16), [
+      "--oss",
+      "--local-provider",
+      "lmstudio",
+      "app-server",
+      ...subagentThreadLimitArgs,
+    ]);
+    assert.deepStrictEqual(
+      buildCodexAppServerArgs({ responsesWebsockets: "disabled" }, false, 16).slice(-2),
+      subagentThreadLimitArgs,
+    );
   });
 
   it("uses the Codex OSS transport for local LM Studio sessions", () => {

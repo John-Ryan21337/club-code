@@ -1,10 +1,28 @@
 # Club Code Experience and Operator-Visibility Canon
 
-Status: implementation truth for the current working checkout, not a release,
-build, branch, or publication certificate. Current changes still require
-proportional focused checks and the final composite release gates before any
-release evidence is recorded. Several ideas from the operator request ledger
-remain partial, intentionally bounded, externally blocked, or not implemented.
+Status: implementation truth and dated validation for the current working
+checkout, not a branch, publication, installer, or PR-lineage certificate.
+Several ideas from the operator request ledger remain partial, intentionally
+bounded, externally blocked, or not implemented.
+
+Current-source checkpoint (2026-08-10): local committed `HEAD` and
+`origin/release/local-20260728` both resolve to
+`3f28502d7b8905ae562ddd54d694e64042a121b9`. The working tree also contains
+uncommitted repairs and concurrent feature work. The in-scope Web UI recovery,
+CSP, and Hexagons Canvas fallback repairs passed their focused checks plus the
+full repository format, lint, typecheck, test, and desktop-build gates. The
+restarted client serves the matching built bundle over loopback and the physical
+Ethernet address, and its Desktop, Start-menu, and pinned taskbar shortcuts
+resolve to this checkout. Pairing links now render and submit without waiting
+for the initial session probe, and bootstrap HTTP requests stop after four
+seconds instead of leaving an endless loading surface. A live mobile-size test
+held the first session request open, completed pairing, opened WSS, received the
+workspace snapshot, and removed the loader. A separate Android
+`PhoneDuckDuckGo-repair` session then redeemed the operator link and reached
+WSS. The operator then confirmed that the physical-phone Web portal loads with
+the visual background enabled. These facts do not prove a packaged artifact,
+publication, forced-Canvas behavior, or a mergeable Cafe-to-Club PR chain. The
+`417fd56f` evidence below remains historical exact committed release proof.
 
 ## Status language
 
@@ -76,54 +94,60 @@ documentation use Club Code.
   release notes. Git/GitHub plus exact gates, artifacts, and runtime
   observations remain the technical source of truth. These records link to one
   another instead of duplicating competing status narratives.
+- Restart and renderer recovery are not substitutes for operator automation
+  authority. The current source's one-shot orphaned-turn continuation is a
+  visible, deduplicated provider request, not draft restoration or Auto Nudge;
+  it remains a release-safety item until its opt-in/limit boundary is explicitly
+  accepted and live-validated.
 
 ## Request coverage at a glance
 
-| Requested area                                            | Current status              | Canonical boundary                                                                                                                                             |
-| --------------------------------------------------------- | --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Snow, rain, and Matrix over the whole window              | Implemented                 | Off switch, density, speed, opacity, base font, Flat/Forward/Reverse/Warp/Walk motion and performance bounds                                                   |
-| Roman/Japanese Matrix mix, coding terms, 2ch and cat AA   | Implemented                 | Reviewed glyph pool; matching English/Japanese live terms; bounded safe activity labels and basenames only                                                     |
-| Rainbow and music-reactive Matrix color                   | Landed - validation pending | Uniform and per-string rainbow/music modes reuse direct, VLC, or one explicitly approved display-audio signal                                                  |
-| Matrix project-activity pulses and links                  | Partial                     | Network/database/build/agent pulses are adapter-neutral, but links require exact provider correlation and providers do not expose every event                  |
-| Movable local environment-control LLM                     | Landed - validation pending | Transparent movable/resizable console; deterministic zero-token grammar first, then optional LM Studio, Codex, or Claude narrow-command interpretation         |
-| Query LM Studio models as a chat provider                 | Landed - validation pending | Distinct LM Studio Local setup supports loopback or bounded private-LAN/HTTPS API roots and exposes discovered callable models in the composer                 |
-| Persistent image/GIF ambience and 10 MiB limit            | Landed - validation pending | Single image plus bounded directory queue, timed/manual cycling, custom geometry and theater presentation                                                      |
-| YouTube video/search/playlists/text queues/skip controls  | Partial                     | Three bundled queues; same-name imports replace, new names add, blocked videos skip boundedly, and the iframe survives Settings/mobile layout transitions      |
-| Spotify connector and visualizer                          | Partial                     | Official Embed plus explicit display-audio visualization; no Spotify library/search/account browser                                                            |
-| Cinema layout and video behind/alongside chat             | Partial                     | Club Code Cinema retains project/chat rails and has a default-off falling-glyph overlay; native iframe fullscreen remains player-owned                         |
-| Adaptive TV-style media glow                              | Landed - validation pending | YouTube uses bounded artwork; approved direct/VLC video uses bounded live frames; live iframe pixels remain unavailable                                        |
-| Broad local formats through installed VLC                 | Landed - validation pending | Bounded picker-owned queues, previous/next, one-child playback, failure skip, and cleanup; no network stream or raw VLC args                                   |
-| Hundreds of Winamp-like visualizations                    | Implemented                 | Spectrum plus 395 local Butterchurn/MilkDrop presets                                                                                                           |
-| Current local title with filename fallback                | Implemented                 | Current item uses a bounded sanitized filename without extension; rich embedded metadata extraction is not claimed                                             |
-| Workflow graph, elapsed/activity, and stall hints         | Landed - validation pending | Existing semantic cards remain; graph edges and “possibly stalled” hints use only provider evidence                                                            |
-| Complete sub-agent/provider activity coverage             | Partial                     | Supported projections show reported hierarchy/activity, but providers do not expose every event                                                                |
-| Live read-only file/SQLite panes and bounded diffs        | Landed - validation pending | Visibility-aware polling, capped line changes, and primary-key-proven row changes                                                                              |
-| Per-agent file/DB focus and writer attribution            | Partial                     | Explicit provider-observed file focus exists; coverage is incomplete and DB writer remains unknown                                                             |
-| Agent-operable embedded browser                           | Landed - validation pending | Codex/Claude get a bounded supervised DOM tool grant; provider secret/OTP entry remains unavailable                                                            |
-| Pixel OCR/image recognition                               | Not implemented             | DOM/accessibility text exists, but there is no screenshot or pixel-recognition worker                                                                          |
-| Inbox email-code retrieval                                | Not implemented             | The operator-only transient secret field is not an inbox connector or 2FA automation                                                                           |
-| Persistent Auto Nudge                                     | Landed - validation pending | Exact-thread editable prompts, completion-event-only dispatch, manual-FIFO priority, minimized status controls, hard round caps, durable dedupe, and Stop      |
-| Idle Thread Guard                                         | Landed - validation pending | Separate opt-in running-turn silence guard; hard 1-hour floor, activity reset, one-shot fail-closed dispatch, and explicit paid-usage warning                  |
-| Matrix depth/perspective motion                           | Implemented                 | Full-viewport Flat/Forward/Reverse/Warp/Walk modes; whole-pixel Walk endpoints, bounded travel/fade, center wind, corners, and depth-scaled lines              |
-| Renderer-local Mobile optimized presentation              | Landed - validation pending | One composer toggle reuses responsive mobile branches; enabling it selects Matrix without resetting appearance, while returning to Desktop leaves Matrix on    |
-| Camera prompt attachments                                 | Implemented                 | Explicit camera button, front/rear switching where supported, preview-before-attach, system-camera fallback, exact-thread pinning                              |
-| Local settings profiles                                   | Landed - validation pending | Exhaustively classified safe presentation fields, confirmed sequential writes, compensating rollback, and overlap locks; Desktop/Mobile remain example names   |
-| World clock and optional weather                          | Landed - validation pending | One-to-six-city transparent clock; weather is default-off renderer-local consent, excluded from profiles and other clients                                     |
-| Transparent Project Resources monitor                     | Landed - validation pending | Movable/resizable overlay uses no timeline space; CPU/RAM/disk/network, measured temperatures, and stable per-adapter GPU/VRAM cards                           |
-| Host RGB lighting synchronization                         | Partial                     | Default-off provider-neutral frame boundary exists; no production adapter or device-support claim exists yet                                                   |
-| Provider usage, paid/extra usage, and Model Pacing        | Landed - validation pending | Every configured provider remains visible; only provider-reported facts are shown; pacing remains advisory                                                     |
-| Non-interrupting cross-provider follow-ups                | Landed - validation pending | Native live steer where explicitly supported; otherwise the per-thread queue waits and only an explicit Stop may interrupt                                     |
-| Visible prompt queue and recovered drafts                 | Implemented                 | Enter creates a visible exact-thread FIFO row during active work, the head may Steer when supported, and unsent drafts recover locally after restart           |
-| Authenticated LAN/phone Web UI                            | Landed - validation pending | Matrix/shimmer/lines and responsive controls use the same renderer; HTTPS, pairing, firewall, browser media policy, and device performance still apply         |
-| Secure shared-project coworking foundation                | Partial                     | Central authorization plus a durable project-scoped, idempotent, hash-chained event journal; relay, chat, transcript, file sync, and agent coordination remain |
-| Codex 0.146 compatibility                                 | Implemented                 | Current app-server schemas and compatibility tests are retained; this is not a blanket claim about unreviewed future Codex releases                            |
-| English/Japanese current-build and risk documentation     | Implemented                 | Current-build guides distinguish Cafe/Club behavior and carry plain alpha/no-warranty plus explicit Auto Nudge paid-usage warnings                             |
-| Ultra Caching and hierarchical summaries                  | Partial                     | Stable handoffs and earlier compaction exist; no persistent multi-level summary index                                                                          |
-| Auditor-as-fixer workflow                                 | Partial                     | Installable cross-project skill exists; Club Code does not automatically enforce or orchestrate it                                                             |
-| Tokens-saved meter per model                              | Partial                     | Honest provider cache/compaction counters exist; exact counterfactual savings cannot be measured                                                               |
-| Completion ping, English/Japanese speech and stereo order | Partial                     | Windows exact installed voices support the complete path; no bundled voice pack or full cross-platform parity                                                  |
-| Whole-window KDE-like transparency                        | Partial                     | Capability-gated whole-window opacity is validated on Windows; Linux/KDE parity is absent                                                                      |
-| Chat file picker defaults to all files and accepts `.txt` | Implemented                 | Text is visibly imported into the prompt; unsupported arbitrary files remain rejected                                                                          |
+| Requested area                                            | Current status              | Canonical boundary                                                                                                                                                                      |
+| --------------------------------------------------------- | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Snow, rain, and Matrix over the whole window              | Implemented                 | Off switch, density, speed, opacity, base font, Flat/Forward/Reverse/Warp/Walk motion and performance bounds                                                                            |
+| Roman/Japanese Matrix mix, coding terms, 2ch and cat AA   | Implemented                 | Reviewed glyph pool; matching English/Japanese live terms; bounded safe activity labels and basenames only                                                                              |
+| Rainbow and music-reactive Matrix color                   | Landed - validation pending | Uniform and per-string rainbow/music modes reuse direct, VLC, or one explicitly approved display-audio signal                                                                           |
+| Matrix project-activity pulses and links                  | Partial                     | Network/database/build/agent pulses are adapter-neutral, but links require exact provider correlation and providers do not expose every event                                           |
+| Movable local environment-control LLM                     | Landed - validation pending | Transparent movable/resizable console; deterministic zero-token grammar first, then optional LM Studio, Codex, or Claude narrow-command interpretation                                  |
+| Query LM Studio models as a chat provider                 | Landed - validation pending | Distinct LM Studio Local setup supports loopback or bounded private-LAN/HTTPS API roots and exposes discovered callable models in the composer                                          |
+| Persistent image/GIF ambience and 10 MiB limit            | Landed - validation pending | Single image plus bounded directory queue, timed/manual cycling, custom geometry and theater presentation                                                                               |
+| YouTube video/search/playlists/text queues/skip controls  | Partial                     | No bundled playlist content; local same-name imports replace, new names add, blocked videos skip boundedly, and the iframe survives Settings/mobile layout transitions                  |
+| Spotify connector and visualizer                          | Partial                     | Official Embed plus explicit display-audio visualization; no Spotify library/search/account browser                                                                                     |
+| Cinema layout and video behind/alongside chat             | Partial                     | Club Code Cinema retains project/chat rails and has a default-off falling-glyph overlay; native iframe fullscreen remains player-owned                                                  |
+| Adaptive TV-style media glow                              | Landed - validation pending | YouTube uses bounded artwork; approved direct/VLC video uses bounded live frames; live iframe pixels remain unavailable                                                                 |
+| Broad local formats through installed VLC                 | Landed - validation pending | Bounded picker-owned queues, previous/next, one-child playback, failure skip, and cleanup; no network stream or raw VLC args                                                            |
+| Hundreds of Winamp-like visualizations                    | Implemented                 | Spectrum plus 395 local Butterchurn/MilkDrop presets                                                                                                                                    |
+| Current local title with filename fallback                | Implemented                 | Current item uses a bounded sanitized filename without extension; rich embedded metadata extraction is not claimed                                                                      |
+| Workflow graph, elapsed/activity, and stall hints         | Landed - validation pending | Existing semantic cards remain; graph edges and “possibly stalled” hints use only provider evidence                                                                                     |
+| Complete sub-agent/provider activity coverage             | Partial                     | Supported projections show reported hierarchy/activity, but providers do not expose every event                                                                                         |
+| Live read-only file/SQLite panes and bounded diffs        | Landed - validation pending | Visibility-aware polling, capped line changes, and primary-key-proven row changes                                                                                                       |
+| Per-agent file/DB focus and writer attribution            | Partial                     | Explicit provider-observed file focus exists; coverage is incomplete and DB writer remains unknown                                                                                      |
+| Agent-operable embedded browser                           | Landed - validation pending | Codex/Claude get a bounded supervised DOM tool grant; provider secret/OTP entry remains unavailable                                                                                     |
+| Pixel OCR/image recognition                               | Not implemented             | DOM/accessibility text exists, but there is no screenshot or pixel-recognition worker                                                                                                   |
+| Inbox email-code retrieval                                | Not implemented             | The operator-only transient secret field is not an inbox connector or 2FA automation                                                                                                    |
+| Persistent Auto Nudge                                     | Landed - validation pending | Exact-thread editable prompts, completion-event-only dispatch, manual-FIFO priority, minimized status controls, hard round caps, durable dedupe, and Stop                               |
+| Idle Thread Guard                                         | Landed - validation pending | Separate opt-in running-turn silence guard; hard 1-hour floor, activity reset, one-shot fail-closed dispatch, and explicit paid-usage warning                                           |
+| Matrix depth/perspective motion                           | Implemented                 | Full-viewport Flat/Forward/Reverse/Warp/Walk modes; whole-pixel Walk endpoints, bounded travel/fade, center wind, corners, and depth-scaled lines                                       |
+| Renderer-local Mobile optimized presentation              | Partial                     | One composer toggle now applies a matching presentation profile; its no-profile fallback changes layout only, so the requested Matrix-on guarantee needs repair                         |
+| Camera prompt attachments                                 | Implemented                 | Explicit camera button, front/rear switching where supported, preview-before-attach, system-camera fallback, exact-thread pinning                                                       |
+| Local settings profiles                                   | Landed - validation pending | Exhaustively classified safe presentation fields, confirmed writes/rollback/locks, canonical Desktop/Mobile profile resolution, and mobile-first bootstrap                              |
+| World clock and optional weather                          | Landed - validation pending | One-to-six-city transparent clock; weather is default-off renderer-local consent, excluded from profiles and other clients                                                              |
+| Transparent Project Resources monitor                     | Landed - validation pending | Movable/resizable overlay uses no timeline space; CPU/RAM/disk/network, measured temperatures, and stable per-adapter GPU/VRAM cards                                                    |
+| Host RGB lighting synchronization                         | Partial                     | Default-off provider-neutral frame boundary exists; no production adapter or device-support claim exists yet                                                                            |
+| Provider usage, paid/extra usage, and Model Pacing        | Landed - validation pending | Every configured provider remains visible; only provider-reported facts are shown; pacing remains advisory                                                                              |
+| Non-interrupting cross-provider follow-ups                | Landed - validation pending | Native live steer where explicitly supported; otherwise the per-thread queue waits and only an explicit Stop may interrupt                                                              |
+| Visible prompt queue and recovered drafts                 | Implemented                 | Enter creates a visible exact-thread FIFO row during active work, the head may Steer when supported, and unsent drafts recover locally after restart                                    |
+| Orphaned running-turn recovery after restart              | Partial                     | If no live provider runtime remains, current source emits one deterministic visible continuation per eligible thread/turn; opt-in and global paid-use bounds remain                     |
+| Authenticated LAN/phone Web UI                            | Landed - validation pending | Authenticated mobile-size HTTPS/WSS bootstrap is proven; Matrix/shimmer/lines use the same renderer, while physical-phone, certificate, media-policy, and performance acceptance remain |
+| Secure shared-project coworking foundation                | Partial                     | Central authorization plus a durable project-scoped, idempotent, hash-chained event journal; relay, chat, transcript, file sync, and agent coordination remain                          |
+| Codex 0.146 compatibility                                 | Implemented                 | Current app-server schemas and compatibility tests are retained; this is not a blanket claim about unreviewed future Codex releases                                                     |
+| English/Japanese current-build and risk documentation     | Implemented                 | Current-build guides distinguish Cafe/Club behavior and carry plain alpha/no-warranty plus explicit Auto Nudge paid-usage warnings                                                      |
+| Ultra Caching and hierarchical summaries                  | Partial                     | Stable handoffs and earlier compaction exist; no persistent multi-level summary index                                                                                                   |
+| Auditor-as-fixer workflow                                 | Partial                     | Installable cross-project skill exists; Club Code does not automatically enforce or orchestrate it                                                                                      |
+| Tokens-saved meter per model                              | Partial                     | Honest provider cache/compaction counters exist; exact counterfactual savings cannot be measured                                                                                        |
+| Completion ping, English/Japanese speech and stereo order | Partial                     | Windows exact installed voices support the complete path; no bundled voice pack or full cross-platform parity                                                                           |
+| Whole-window KDE-like transparency                        | Partial                     | Capability-gated whole-window opacity is validated on Windows; Linux/KDE parity is absent                                                                                               |
+| Chat file picker defaults to all files and accepts `.txt` | Implemented                 | Text is visibly imported into the prompt; unsupported arbitrary files remain rejected                                                                                                   |
 
 ## Active delivery additions
 
@@ -152,25 +176,30 @@ microphone, extract iframe audio, retain PCM/frequency bins/history, or persist
 the signal. Signal loss, source replacement, capture stop, staleness, and
 teardown clear the reactive state.
 
-The optional **Provider activity links** layer turns only safe,
-provider-observed network, database, build/compile, and exact agent-delegation
-lifecycles into brief Matrix pulses. The master switch retains four independent
-checkboxes: **Network / web**, **Database / query**, **Build / compile**, and
-**Agent / delegation**. All four category inputs default on when absent so
-older settings retain their behavior; clearing all four produces no activity
-events, pulses, or links. At most 24
+The optional **Provider activity links** layer turns safe provider lifecycles
+into brief Matrix pulses and links. Five independent checkboxes control the
+inputs: **Network / web**, **Database / query**, **Build / compile**,
+**Agent / delegation**, and **Work / tool**. The Work input accepts an exact
+provider tool lifecycle when the narrower category is unknown. It does not
+inspect command text, paths, output, prompts, or summaries to guess a category.
+All five inputs default on when absent, so older settings retain their behavior.
+Clearing all five produces no activity events, pulses, or links. At most 24
 recent category/hash events and 12 simultaneous links are retained, and visual
 state has a persisted **Verified route visibility** control from 8 to 120
 seconds, defaulting to 30 seconds. This duration only keeps an already verified
 exact route and its bounded decorative packet replay visible longer; it never
 creates provider activity, infers event frequency, or claims throughput.
 Unpaired standalone pulses retain their fixed eight-second lifetime. A pulse
-may exist without a line. A line exists only when two events have the same category and exact same
-provider-reported item or tool identity. A shared agent name, operation label,
-dependency label, temporal proximity, or similar wording is not enough.
+may exist without a line. Network, database, build, and neutral work lines require two events
+with the same category and exact same provider-reported item or tool identity.
+An exact provider-confirmed agent launch may immediately draw one bounded
+`AGENT -> DISPATCH` route because that launch event is itself the delegation
+evidence. Its later completion replaces or refreshes that route instead of
+duplicating it. A shared agent name, operation label, dependency label,
+temporal proximity, or similar wording is not enough.
 
 Connected falling strings use reviewed semantic pairs—NETWORK/FETCH,
-DATABASE/QUERY, BUILD/COMPILE, AGENT/DISPATCH, or fixed Japanese counterparts according to the
+DATABASE/QUERY, BUILD/COMPILE, AGENT/DISPATCH, WORK/TOOL, or fixed Japanese counterparts according to the
 string's existing language assignment—rather than random glyph meaning or raw
 provider identifiers. Routes use horizontal and +/-60-degree hex-grid segments.
 Up to three evenly spaced packets repeatedly travel over each real correlated
@@ -191,8 +220,9 @@ only the reviewed operation vocabulary, the linked endpoint's existing glyph
 paint (the shared route hue in random mode and its Matrix stream color in
 Matrix mode), and glyph-head opacity;
 standalone pulses do not receive a telemetry ring. `VERIFIED` means only that
-the two safe lifecycle events share the exact provider-reported relation
-identity. It does not claim that Club Code measured network throughput. A real
+the provider either confirmed the exact agent dispatch or reported two safe
+lifecycle events with the same exact relation identity. It does not claim that
+Club Code measured network throughput. A real
 bytes-per-second label requires provider-observed byte counts and a trustworthy
 measurement interval through a separately reviewed contract; animation cadence
 is never presented as a transfer rate.
@@ -204,8 +234,9 @@ counts, lifetime, and frame work remain capped.
 The telemetry projection never retains or draws prompts, model output, command
 text/output, URLs, request bodies, SQL text/values, credentials, cookies, raw
 paths, raw audio, hidden operating-system traffic, or hidden reasoning. If a
-provider does not report that same-category item/tool relation, the rain does
-not claim it.
+provider does not report an exact item/tool relation, the rain does not claim
+one. A neutral work route claims only that the provider reported the exact tool
+lifecycle. It does not claim network, database, build, or agent activity.
 
 This contract is provider-neutral, not Codex-only: Codex, Claude, and configured
 local-provider orchestration paths may all contribute the same reduced safe
@@ -275,6 +306,12 @@ adapter keeps its own utilization, used/total/free VRAM, measured core
 temperature when available, and bounded history. Temperature cards use only
 measured CPU, GPU, RAM, VRAM, storage, case/ambient, or other sensor classes;
 missing sources remain explicitly unavailable and are never estimated.
+
+The optional **Hide unavailable graphs** preference removes an unavailable
+chart surface entirely instead of rendering an empty plot, synthetic zero, or
+stale last value. When it is off, unavailable remains visibly distinct from a
+measured zero. The preference changes presentation only; it cannot manufacture
+sensor support or suppress the fixed source-level diagnostic.
 
 On Windows, the protected Libre Hardware Monitor and Open Hardware Monitor WMI
 probe distinguishes two fixed unavailable states: neither supported provider
@@ -479,6 +516,15 @@ handoff. The complete queue, terminal, provider, authority, Stop, and round-cap
 gates are re-read before transport. No timer, countdown, elapsed-time cap, or
 wall-clock transition can create eligibility.
 
+Enabling or editing Auto Nudge while a turn is already running records that
+turn as the baseline, so the already-in-flight completion cannot be mistaken
+for newly idle work. Continued provider activity invalidates a stale completion
+proposal before dispatch. A message sent by Auto Nudge cannot use its own turn
+completion to chain another foreground nudge; self-chaining is permitted only
+when the operator explicitly selected exact-thread background continuation,
+and it remains subject to the same hard round cap, FIFO, Stop, and terminal
+identity gates.
+
 One thread policy defaults to five automated rounds and is configurable only
 within a hard limit of 1–20 rounds. Every
 dispatch is an ordinary visible user message. The terminal turn is consumed
@@ -522,31 +568,15 @@ remains disabled and therefore effectively opaque; `0.84` is the
 missing-setting/reset slider value if the operator later enables the
 capability. An existing explicit desktop setting remains untouched.
 
-The first-run Client Settings profile contains these explicit presentation
-values:
+The first-run profile includes the `SeaOfLightsInDarkstaticy` schema-14 preset.
+The background remains off. Snow, rain, Matrix, the Atmosphere Console, ambient
+video, ambient images, image cycles, media glow, and activity links also remain
+off. Auto Nudge and Idle Thread Guard require explicit thread-level activation.
+Club Code ships no playlist content and starts no media queue.
 
-- Matrix is enabled in regular uniform `rainbow` mode at `0.55` opacity, falling
-  speed `4`, color-cycle speed `1` (the original 18-second cycle), density
-  `2.5`, and Japanese ratio `0.45`. Rainbow Extra remains selectable but is not
-  the first-run mode. 2ch enrichment, bounded live-work vocabulary, all four
-  activity-link category inputs, activity links, and Matrix-colored link routes
-  are enabled.
-- The ambient-video surface is enabled with a null source, custom layout with
-  bottom-right/large as its preset fallback, floating presentation, and
-  adaptive auto glow at `0.65`. The bundled Japanese URL example becomes the
-  active session-only queue and requests autoplay of its first accepted item.
-  The source remains null and is not persisted; browser/YouTube policy or item
-  availability may still prevent playback.
-- The bundled ambience GIF is seeded into the managed ambient store and starts
-  bottom-left/large/floating with auto glow at `0.35`.
-- Workflow Observatory is enabled. Provider Usage and advisory Model Pacing
-  remain off until the operator enables them; their prepared values are a
-  two-minute poll and a 5% reserve.
-
-These settings remain independently editable and can be disabled. Default-on
-live-work terms and activity links still use only the bounded and sanitized
-provider evidence defined below; they do not expose prompts, output, commands,
-SQL, URLs, secrets, raw paths, or unreported activity.
+Workflow Observatory is enabled. Provider Usage and advisory Model Pacing
+remain off until the operator enables them. Their prepared values are a
+two-minute poll and a 5% reserve.
 
 ### Full-window atmosphere
 
@@ -563,8 +593,8 @@ the same resolved color frame. The same language ratio selects English or
 Japanese switchable live terms. The Matrix pool contains reviewed
 coding-flavored kana and kanji. Optional 2ch-inspired glyphs and intact cat AA
 apply only to Japanese streams. Their conservative
-compatibility/recovery default is off; the explicit fresh-install profile
-enables them, and the operator can disable them independently.
+compatibility, recovery, and fresh-install defaults are off. The operator can
+enable them independently.
 
 Matrix color has five modes:
 
@@ -579,6 +609,27 @@ Matrix color has five modes:
 Music modes use direct/VLC media or reuse the visualizer's one explicitly
 approved YouTube/Spotify display-audio stream. A stale, stopped, replaced, or
 absent signal safely falls back to the fixed color.
+
+The independently selectable Hexagons ambient background retains its WebGL2
+renderer when available. If WebGL2 is unavailable, lost, or explicitly disabled,
+the Canvas2D fallback renders a complete coarse grid rather than omitting the
+viewport corners. Performance, Balanced, and Cinematic fallback modes cap the
+grid at 32, 48, and 64 tiles; cap backing pixels at 600,000, 900,000, and
+1,250,000; and use minimum post-frame idle periods of 500, 250, and 150 ms.
+Canvas DPR is derived from the backing-pixel budget, including at 4K, instead of
+using a fixed floor that can exceed the budget. A slow frame extends the idle
+period by at least its own render duration so the fallback does not continuously
+occupy the browser main thread. Grid coarsening remains bounded but allows enough
+passes for extreme wide or tall surfaces to meet the selected tile cap. These
+limits apply only to the Hexagons Canvas fallback; they do not reduce GPU geometry
+or alter the separate falling-effects renderer.
+
+Club Code uses The Hexagons settings schema 14. The runtime accepts supported
+older presets and migrates them at the import boundary. It rejects future schema
+versions until Club Code includes a compatible runtime. Schema 14 adds grouped
+piston patterns, six-point-star mesh routes, combined star-and-piston routes, and
+optional directional mesh flow. The imported appearance does not enable the
+background, select a renderer, or change Club Code's motion policy.
 
 The motion selector applies to snow, rain, and Matrix. **Flat** keeps the
 ordinary falling plane. **Forward** and **Reverse** project depth without
@@ -616,8 +667,8 @@ different Y positions. The deterministic 1920x1080 density-10 fixture admits
 1,262 Walk Forward and 1,240 Walk Reverse glyphs, keeping the two directions
 within two percent while retaining font-aware non-overlap.
 
-Verified release source `417fd56fb21f4f2fa181621f04bef091ef1a94a7`
-contains a Matrix WebGL2 glyph-atlas
+The historically verified release source
+`417fd56fb21f4f2fa181621f04bef091ef1a94a7` contains a Matrix WebGL2 glyph-atlas
 path that automatically falls back to Canvas2D when WebGL2 is unavailable,
 insufficient, lost, or cannot render the frame. Snow and rain remain Canvas2D.
 The WebGL2 frame collector deliberately reuses the established Canvas2D motion
@@ -644,17 +695,22 @@ Worker `OffscreenCanvas` remains detected but inactive. WebGL2 support is a
 capability result, not a promise that every device/browser will use it, and the
 Canvas2D fallback remains required.
 
-The exact source anchor above matches `origin/release/local-20260728`, PR #8's
-head, and the relaunched source-mode client. Its full repository test graph
-passed 9/9 tasks, including 1,525 web tests; typecheck passed 9/9 tasks, the
-desktop production build passed 3/3 tasks, and real Chromium WebGL shader/pixel
-coverage passed. Runtime and source hashes matched, and loopback plus LAN health
-checks returned HTTP 200. These facts prove the GPU-capable release path and its
-fallback at that exact anchor; they do not promise that unsupported hardware or
-browsers will select WebGL2.
+At the time of the 2026-07-30 release audit, that exact source anchor matched
+`origin/release/local-20260728`, PR #8's head, and the relaunched source-mode
+client. Its full repository test graph passed 9/9 tasks, including 1,525 web
+tests; typecheck passed 9/9 tasks, the desktop production build passed 3/3
+tasks, and real Chromium WebGL shader/pixel coverage passed. Runtime and source
+hashes matched, and loopback plus LAN health checks returned HTTP 200. The
+current 2026-08-10 working tree is based on later committed head `3f28502d` and
+still contains the WebGL2/fallback implementation. It passed a fresh source
+composite and desktop build, then relaunched and served the matching bundle over
+loopback and physical Ethernet. It remains uncommitted and unpublished, and an
+authenticated external-browser Canvas smoke is still pending. The historical
+evidence proves the earlier exact committed GPU-capable path only at `417fd56f`;
+neither checkpoint promises that unsupported hardware or browsers select WebGL2.
 
-Live-work vocabulary is also off in conservative compatibility/recovery
-defaults and enabled by the explicit fresh-install profile. It accepts only a
+Live-work vocabulary is off in compatibility, recovery, and fresh-install
+defaults. An operator must enable it. It accepts only a
 bounded set of fixed operation labels and safe basename-only filenames from
 explicit provider-observed activity. It excludes summaries, prompts, file
 contents, command output, raw paths, dotfiles, secret-looking names, and
@@ -666,15 +722,16 @@ hidden or unfocused unless the operator explicitly allows background animation.
 
 ### Atmosphere Console and local models
 
-The movable/resizable Atmosphere Console defaults to an open, viewport-clamped
-custom rectangle at `x=321`, `y=280`, `width=622`, and `height=477.5`. It also
+The movable/resizable Atmosphere Console is off by default. When enabled, it
+starts in a viewport-clamped custom rectangle at `x=321`, `y=280`, `width=622`,
+and `height=477.5`. It also
 supports corner anchors plus custom geometry. Its deterministic parser handles
 a fixed atmosphere, Matrix, media transport, and visualizer grammar locally.
 Normal commands use no model tokens.
 
 The console uses a transparent themed surface and has a persisted,
-renderer-local visibility switch. The compatibility default remains on for
-settings documents created before the switch existed. Turning it off unmounts
+renderer-local visibility switch. Fresh and compatibility defaults are off.
+Turning it off unmounts
 the console rather than hiding it, so its pointer/resize listeners are removed
 without writing the choice to a connected environment server. When Matrix is
 selected, a pointer-transparent canvas copies only the console rectangle from
@@ -738,16 +795,9 @@ validated URL forms. It supports previous, next, manual skip, and one bounded
 pass over unavailable items. It does not bypass embedding, regional, privacy,
 age, account, or owner restrictions.
 
-Three exact public example files are committed and selectable in Settings:
-
-- `examples/youtube-url-queues/JPMusic.txt` contains 77 supplied URL lines. The
-  strict parser accepts 71 unique items, reports three duplicates, and reports
-  three malformed 10-character video IDs.
-- `examples/youtube-url-queues/EDMYoutubeList.txt` contains 31 supplied URL
-  lines. The strict parser accepts 30 and reports one malformed 10-character
-  video ID.
-- `examples/youtube-url-queues/KPOPList.txt` contains eight supplied URL lines,
-  all eight of which are accepted.
+Club Code commits no playlist files and loads no playlist on first run. Users
+can import device-local `.txt` queues. A same-name import replaces the local
+entry. A new filename adds a selectable local entry.
 
 These source-line totals and accepted queue totals are deliberately distinct.
 For an untouched session whose persisted ambient-video source is still unset,
@@ -922,6 +972,13 @@ provider-reported remaining percentage, and reset time. Amount strings are
 opaque: Club Code does not prepend a currency, convert units, or infer that an
 unlabelled number is dollars.
 
+Current Codex provider snapshots may also expose provider-reported usage-limit
+reset-credit availability. Settings shows the authoritative aggregate available
+count, including an explicit zero; optional grant rows remain bounded/redacted,
+and opaque credit IDs or account identity never reach the renderer. Reading or
+refreshing those facts does not consume a reset credit, authorize a paid turn,
+or let Model Pacing spend one automatically.
+
 Claude plan and extra-usage polling is experimental and is offered only for
 the documented `pro`, `max`, `team`, and `enterprise` subscription auth types
 on Claude Code 2.1.216 or newer. API-key, Bedrock, Vertex, older CLI, unknown
@@ -1013,6 +1070,33 @@ be saved in the ordinary draft and enters provider/chat context if the operator
 sends it. Other arbitrary file types remain unsupported and are rejected with
 an explanation.
 
+### Restart, drafts, and orphaned turns
+
+An unsent composer draft is renderer-local convenience state and recovers by
+exact environment/thread after ordinary focus changes, navigation, reload, or
+client restart. Recovery does not send the draft, reserve FIFO priority, or
+turn it into provider authority. Attachment persistence can fail independently
+and must retain its visible warning rather than claiming every draft attachment
+is durable.
+
+Current committed source `3f28502d` also contains a separate server startup repair for an
+eligible thread that is still projected `running` although provider inventory
+contains no live running runtime. After excluding archived/deleted threads,
+pending manual follow-ups, approvals/user input, and active goals, it clears the
+stale active marker and dispatches the fixed visible message `Club Code
+restarted, continue what you were doing`. Its command and message identities
+are deterministic per thread/interrupted-turn pair, so startup retries cannot
+legitimately create a second copy for that same pair. A genuinely live provider
+runtime is left alone, and a turn-start request interrupted before provider
+delivery is not blindly resent.
+
+This repair is not Auto Nudge, not a restoration of the operator's unsent draft,
+and not evidence that the original provider work resumed. It is a new
+potentially paid provider turn. The current candidate sweep has no explicit
+operator opt-in or process-wide thread cap, so release acceptance must either
+place it behind visible bounded authority or convert it to a visible queued
+recovery action before Club Code presents restart continuation as complete.
+
 ## Runtime architecture and non-functional contract
 
 ### Independent state and global disable
@@ -1069,6 +1153,12 @@ forms are rejected. The renderer constructs only fixed official embed origins.
 Production CSP/frame policy must keep those origins exact rather than allowing
 a blanket `https:` frame source.
 
+The current production CSP admits Base UI's fixed scroll-lock stylesheet only
+through its exact SHA-256 hash in `style-src` and `style-src-elem`. It admits
+pinned VS Code icon images only from `https://cdn.jsdelivr.net` in `img-src`.
+Neither exception adds general inline-style execution, a blanket `https:` image
+source, or another script origin.
+
 Electron retains context isolation, renderer sandboxing, disabled Node
 integration, and safe external opening. Whole-window opacity, VLC, completion
 speech, display capture, and the embedded browser cross typed, validated
@@ -1100,6 +1190,44 @@ required capabilities. Background-tab throttling, reduced-motion policy, device
 performance, iframe/media policy, and missing provider evidence may reduce or
 pause individual visual/media effects.
 
+The current remote-client path refreshes its connection state after a mobile
+WebSocket interruption rather than pinning the renderer to a stale endpoint.
+Before even one successful connection, an online client may restart an
+error/reconnecting/exhausted transport after the bounded stall or exhausted
+retry cycle, or when a focused/visible client returns. Healthy, actively
+connecting, and offline states do not trigger that restart. Recovery restarts
+only the underlying WebSocket transport so an overlapping high-level reconnect
+cannot strand the authoritative bootstrap snapshot. A first mobile renderer
+with no local profile library may also seed the safe `Mobile Profile` described
+above. Initial connection failure also exposes an explicit Reload action and a
+link back to the HTTP connection-setup page so the operator can install and
+trust the Club Code certificate. GPU/media-heavy atmosphere, clock, console,
+and embedded-browser layers do not mount until the primary environment reports
+an authoritative completed bootstrap. This keeps optional presentation work
+from competing with the first mobile WebSocket and workspace snapshot.
+
+On 2026-08-10, a physical-phone report showed that the earlier client could
+remain on the gray loading surface before it redeemed its pairing token. The
+root auth gate had waited for both the environment descriptor and auth-session
+requests before it rendered the pairing route, and those requests had no local
+deadline. The current source recognizes a pairing-token link immediately and
+applies a four-second abort deadline to descriptor, session, token, and password
+bootstrap requests. A failed request now presents a direct connection-setup
+action and a reload action instead of spinning forever.
+
+After the rebuilt client restarted, an isolated mobile-size browser using a
+DuckDuckGo Android-compatible user agent held its first auth-session request
+open. The pairing POST still started one millisecond later, then the client
+completed authentication, opened WSS, received four protocol frames, loaded the
+workspace, and removed the bootstrap surface. The Web and server copies of the
+served `index-PzqKy9rh.js` bundle were byte-identical at SHA-256
+`FA76DE351BF65CAF419A3BEE29ADDDBA4EB5020E70844A66F162196A40D140CB`.
+A separate `PhoneDuckDuckGo-repair` Android session redeemed the operator link
+and reached WSS at 2026-08-10 11:17:20 UTC. The operator then confirmed that the
+physical-phone Web portal loaded successfully with the visual background
+enabled. Orientation, profile switching, YouTube policy, camera permission,
+and draft preservation still need direct device/browser evidence.
+
 ### Accessibility, responsive behavior, and resource budgets
 
 Controls require accessible names, keyboard operation, visible focus, and
@@ -1115,20 +1243,32 @@ the operator's saved presentation choice for a later larger viewport. Custom
 panels remain clamped and reachable. Native fullscreen remains owned by its
 player.
 
-The composer exposes one touch-sized Mobile optimized presentation toggle.
-Enabling it is an explicit per-device preference that makes a wide viewport use
-the existing responsive mobile sidebar, run-context, chat-padding, and
-right-panel branches; no second copy of the application UI exists. The
-override is stored by that browser or desktop renderer and is never forwarded
-through the environment-wide client-settings RPC, so a phone cannot force a
-connected desktop into its layout. The same tap enables the falling-effects
-layer and selects Matrix while preserving every saved Matrix color, density,
-speed, font, depth, and motion value. Returning to responsive desktop changes
-only the presentation override, so Matrix stays on. A naturally narrow phone
-remains mobile without writing that override or silently changing an
-operator's selected snow/rain/off atmosphere. Orientation and safe-area
-behavior remain viewport-driven, virtual-keyboard detection remains
-touch-capability-driven, and Matrix continues to obey reduced-motion policy.
+The composer exposes one touch-sized Desktop/Mobile presentation toggle. It
+reuses the existing responsive sidebar, run-context, chat-padding, and
+right-panel branches; no second copy of the application UI exists. The active
+layout flag is stored by that browser or desktop renderer and is never
+forwarded through the environment-wide client-settings RPC, so a phone cannot
+force a connected desktop into its layout.
+
+At the current head, the toggle first resolves a canonical `Desktop Profile`
+or `Mobile Profile` (or the sole saved profile whose layout flag matches) and
+applies its allowlisted visual settings. Layout is applied before shared visual
+settings so a profile does not render for an intermediate frame in the wrong
+layout. An active Desktop profile may intentionally request desktop layout even
+on a narrow phone. On a mobile renderer with an empty local profile library,
+Club Code seeds one operator-owned `Mobile Profile` snapshot from the current
+safe settings; it does not ship or overwrite a Desktop profile. When no matching
+profile exists, the toggle changes only the renderer-local layout flag.
+
+That no-profile fallback is a known gap against the earlier requirement that
+explicit Mobile enable must also select and enable Matrix without resetting its
+appearance. The legacy helper and tests still describe that Matrix-on patch,
+but the current profile-authoritative toggle does not call it. Until repaired
+and live-validated, do not claim that every Mobile toggle turns Matrix on or
+that returning to Desktop necessarily preserves a Matrix state created by that
+same toggle. Orientation and safe-area behavior remain viewport-driven,
+virtual-keyboard detection remains touch-capability-driven, and any active
+Matrix presentation continues to obey reduced-motion policy.
 
 Long sessions must not accumulate particles, animation frames, timers,
 listeners, iframes, object URLs, capture tracks, audio graphs, VLC processes,
@@ -1201,6 +1341,20 @@ complete:
     current release tree with mergeable bases, current gate evidence, and no
     unpublished prerequisite branch. Until then, the existing PRs are partial
     review slices rather than a complete reconstruction path.
+15. Repair and verify the profile-authoritative Mobile toggle's no-profile
+    fallback. It must either apply the requested Matrix-on behavior without
+    resetting the operator's Matrix appearance or make the absence of a Mobile
+    profile explicit; dead helper tests are not production proof.
+16. Resolve the authority boundary for automatic orphaned-turn continuation
+    after restart. The current one-shot deterministic send is visible and
+    deduplicated, but it still needs explicit opt-in or an operator-confirmed
+    queued alternative plus a process-wide paid-use bound before release.
+17. Complete physical-phone and forced-Canvas acceptance for the current working
+    tree based on committed head `3f28502d`. Source, desktop-build,
+    relaunched-process, served-bundle, host-LAN, CSP, shortcut, and authenticated
+    mobile-size post-login bootstrap checks are current, but they do not prove
+    Canvas behavior or full media/camera operation in a restrictive phone
+    browser.
 
 ## External and policy constraints
 
@@ -1229,17 +1383,26 @@ first-run profile; existing documents are not overwritten, and malformed
 documents retain the conservative recovery path. The first-run profile contains
 no onboarding, project, thread, local-path, provider/account, capture, or custom
 session-geometry state. Ambient image/GIF assets and their settings are
-persistent.
-The current release contains named-profile persistence and one-click
-create/apply/delete UI. Operators may choose names such as Desktop and Mobile,
-but those are examples rather than shipped built-in profiles. Every client
-setting is explicitly classified by an exhaustive policy: safe presentation
-fields may be captured, while credentials, provider/account and endpoint
-configuration, server/LAN authority, exact-thread Auto Nudge policy or
-authority, weather consent, model pacing/usage activation, project paths,
-transient capture grants, live media/current playback, uploaded assets, native
-geometry, and host-machine controls are excluded. A new setting must be
-classified deliberately rather than silently included or omitted.
+persistent only after an operator selects them.
+The current source contains named-profile persistence and one-click
+create/apply/delete UI. `Desktop Profile` and `Mobile Profile` are canonical
+resolution slots used by the composer presentation toggle, not immutable
+factory profiles: the operator may create, replace, rename, or delete them. A
+mobile renderer seeds `Mobile Profile` only when its local profile library is
+empty, capturing the current exhaustively allowlisted safe settings; it does
+not overwrite an existing profile library or automatically create a Desktop
+profile. If a canonical name is absent, a sole profile with the matching layout
+flag may serve that mode.
+
+Every client setting is explicitly classified by an exhaustive policy: safe
+presentation fields may be captured, while credentials, provider/account and
+endpoint configuration, server/LAN authority, exact-thread Auto Nudge policy
+or authority, weather consent, model pacing/usage activation, project paths,
+transient capture grants, media and visual-effect enable switches, live
+media/current playback, uploaded assets, native geometry, and host-machine
+controls are excluded. Applying a profile never starts media, an image cycle,
+or a visual effect. A new setting must be classified deliberately rather than
+silently included or omitted.
 
 Applying a profile serializes confirmed shared writes, does not persist the
 renderer-local Mobile preference after a failed shared write, compensates the

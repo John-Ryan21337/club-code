@@ -73,6 +73,54 @@ describe("vendored The Hexagons runtime", () => {
     expect(controller.root.isConnected).toBe(false);
   });
 
+  it("applies schema-14 piston groups and directed mesh routes in the host runtime", async () => {
+    const container = document.createElement("div");
+    Object.assign(container.style, {
+      position: "relative",
+      width: "640px",
+      height: "360px",
+    });
+    document.body.append(container);
+
+    const controller = await createHexagonBackground({
+      container,
+      position: "absolute",
+      zIndex: 0,
+      settings: {
+        enabled: true,
+        renderer: "canvas",
+        reducedMotion: "always",
+        fallingEffectsEnabled: false,
+        pistonPattern: "star-hex-twelve",
+        meshEnergyPattern: "stars-and-pistons",
+        meshEnergyFlowMode: "directional",
+        meshEnergyFlowAngle: 270,
+        particleCount: 120,
+      },
+    });
+    destroyBackground = () => controller.destroy();
+
+    expect(controller.getSettings()).toMatchObject({
+      schemaVersion: 14,
+      pistonPattern: "star-hex-twelve",
+      meshEnergyPattern: "stars-and-pistons",
+      meshEnergyTracePistons: true,
+      meshEnergyFlowMode: "directional",
+      meshEnergyFlowAngle: 270,
+    });
+    expect(controller.getState()).toMatchObject({
+      activeRenderer: "canvas2d-fallback",
+      fallingResult: { status: "disabled" },
+    });
+    expect(controller.getState().tileCount).toBeGreaterThan(0);
+
+    controller.updateSettings({ meshEnergyTracePistons: false });
+    expect(controller.getSettings()).toMatchObject({
+      meshEnergyPattern: "tile-grid",
+      meshEnergyTracePistons: false,
+    });
+  });
+
   it("keeps a cinematic 4K Canvas fallback inside its complete-frame tile and DPR budgets", async () => {
     await page.viewport(1_280, 720);
     const container = document.createElement("div");

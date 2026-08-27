@@ -95,12 +95,9 @@ describe("presentation profile switching", () => {
         mobileOptimizedPresentation: false,
         fallingEffectKind: "matrix",
         fallingEffectSpeed: 4,
-        ambientVideoEnabled: true,
         ambientVideoSource: { kind: "video", id: "dQw4w9WgXcQ" },
-        ambientImageEnabled: true,
         ambientImageAsset: CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET,
         ambientImageCycleAssets: [CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET],
-        ambientImageCycleEnabled: true,
       },
     });
     settingsProfileLibraryStore.upsert("Mobile Profile", {
@@ -109,12 +106,9 @@ describe("presentation profile switching", () => {
         mobileOptimizedPresentation: true,
         fallingEffectKind: "rain",
         fallingEffectSpeed: 1.5,
-        ambientVideoEnabled: false,
         ambientVideoSource: null,
-        ambientImageEnabled: false,
         ambientImageAsset: null,
         ambientImageCycleAssets: [],
-        ambientImageCycleEnabled: false,
       },
     });
   });
@@ -123,7 +117,7 @@ describe("presentation profile switching", () => {
     settingsProfileLibraryStore.resetForTests();
   });
 
-  it("switches Desktop and Mobile layouts with their complete ambient media state", async () => {
+  it("switches Desktop and Mobile layouts without activating ambient media", async () => {
     const screen = await render(<PresentationProfileHarness />);
     await expect.element(page.getByTestId("active-mode")).toHaveTextContent("mobile");
 
@@ -136,12 +130,9 @@ describe("presentation profile switching", () => {
       mobileOptimizedPresentation: false,
       fallingEffectKind: "matrix",
       fallingEffectSpeed: 4,
-      ambientVideoEnabled: true,
       ambientVideoSource: { kind: "video", id: "dQw4w9WgXcQ" },
-      ambientImageEnabled: true,
       ambientImageAsset: CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET,
       ambientImageCycleAssets: [CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET],
-      ambientImageCycleEnabled: true,
     });
     expect(settingsProfileLibraryStore.getSnapshot().activeProfileId).toBe(
       "profile:desktop%20profile",
@@ -150,12 +141,12 @@ describe("presentation profile switching", () => {
       mobileOptimizedPresentation: false,
       fallingEffectKind: "matrix",
       fallingEffectSpeed: 4,
-      ambientVideoEnabled: true,
+      ambientVideoEnabled: false,
       ambientVideoSource: { kind: "video", id: "dQw4w9WgXcQ" },
-      ambientImageEnabled: true,
+      ambientImageEnabled: false,
       ambientImageAsset: CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET,
       ambientImageCycleAssets: [CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET],
-      ambientImageCycleEnabled: true,
+      ambientImageCycleEnabled: false,
     });
 
     await page.getByRole("button", { name: "Mobile" }).click();
@@ -167,12 +158,9 @@ describe("presentation profile switching", () => {
       mobileOptimizedPresentation: true,
       fallingEffectKind: "rain",
       fallingEffectSpeed: 1.5,
-      ambientVideoEnabled: false,
       ambientVideoSource: null,
-      ambientImageEnabled: false,
       ambientImageAsset: null,
       ambientImageCycleAssets: [],
-      ambientImageCycleEnabled: false,
     });
     expect(settingsProfileLibraryStore.getSnapshot().activeProfileId).toBe(
       "profile:mobile%20profile",

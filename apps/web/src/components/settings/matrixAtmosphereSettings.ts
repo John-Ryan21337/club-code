@@ -20,6 +20,7 @@ const MATRIX_ATMOSPHERE_SETTING_LABELS = [
   ["fallingEffectActivityLinkDatabaseEnabled", "Matrix activity link inputs"],
   ["fallingEffectActivityLinkBuildEnabled", "Matrix activity link inputs"],
   ["fallingEffectActivityLinkAgentEnabled", "Matrix activity link inputs"],
+  ["fallingEffectActivityLinkWorkEnabled", "Matrix activity link inputs"],
   ["fallingEffectActivityLinkColorMode", "Matrix activity link colors"],
   ["fallingEffectActivityLinkRetentionSeconds", "Matrix verified route visibility"],
 ] as const satisfies ReadonlyArray<readonly [keyof UnifiedSettings, string]>;
@@ -66,6 +67,8 @@ export function createMatrixAtmosphereRestorePatch(): Pick<
       DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinkBuildEnabled,
     fallingEffectActivityLinkAgentEnabled:
       DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinkAgentEnabled,
+    fallingEffectActivityLinkWorkEnabled:
+      DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinkWorkEnabled,
     fallingEffectActivityLinkColorMode: DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinkColorMode,
     fallingEffectActivityLinkRetentionSeconds:
       DEFAULT_UNIFIED_SETTINGS.fallingEffectActivityLinkRetentionSeconds,

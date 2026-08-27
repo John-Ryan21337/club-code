@@ -46,7 +46,7 @@ describe("The Hexagons background preset boundary", () => {
     expect(parsed.document.name).toBe("Black Light");
     expect(parsed.document.target).toBe("club-code");
     expect(parsed.document.settings).toMatchObject({
-      schemaVersion: 10,
+      schemaVersion: 14,
       quality: "cinematic",
       material: "glass",
       frontLightEnabled: true,
@@ -71,14 +71,14 @@ describe("The Hexagons background preset boundary", () => {
   });
 
   it("migrates versionless settings and rejects future settings schemas", () => {
-    expect(parseHexagonsBackgroundText(preset()).document.settings.schemaVersion).toBe(10);
+    expect(parseHexagonsBackgroundText(preset()).document.settings.schemaVersion).toBe(14);
     expect(
       parseHexagonsBackgroundText(preset({ settings: { schemaVersion: 1, material: "glass" } }))
         .document.settings.schemaVersion,
-    ).toBe(10);
+    ).toBe(14);
     expect(() =>
-      parseHexagonsBackgroundText(preset({ settings: { schemaVersion: 11, material: "glass" } })),
-    ).toThrow("settings schema version 11 is not supported");
+      parseHexagonsBackgroundText(preset({ settings: { schemaVersion: 15, material: "glass" } })),
+    ).toThrow("settings schema version 15 is not supported");
   });
 
   it("imports schema-10 tessellation and pattern settings without flattening them", () => {
@@ -98,7 +98,7 @@ describe("The Hexagons background preset boundary", () => {
     );
 
     expect(parsed.document.settings).toMatchObject({
-      schemaVersion: 10,
+      schemaVersion: 14,
       tessellationMode: "hexagram",
       colorPattern: "rings",
       patternScale: 3,
@@ -115,8 +115,33 @@ describe("The Hexagons background preset boundary", () => {
     );
 
     expect(parsed.document.settings).toMatchObject({
-      schemaVersion: 10,
+      schemaVersion: 14,
       colorPattern: "rotating-triplets",
+    });
+  });
+
+  it("preserves schema-14 piston grouping and directed mesh-energy settings", () => {
+    const parsed = parseHexagonsBackgroundText(
+      preset({
+        settings: {
+          schemaVersion: 14,
+          pistonPattern: "star-hex-twelve",
+          meshEnergyPattern: "stars-and-pistons",
+          meshEnergyFlowMode: "directional",
+          meshEnergyFlowAngle: 270,
+          particleCount: 120_000,
+        },
+      }),
+    );
+
+    expect(parsed.document.settings).toMatchObject({
+      schemaVersion: 14,
+      pistonPattern: "star-hex-twelve",
+      meshEnergyPattern: "stars-and-pistons",
+      meshEnergyTracePistons: true,
+      meshEnergyFlowMode: "directional",
+      meshEnergyFlowAngle: 270,
+      particleCount: 120_000,
     });
   });
 

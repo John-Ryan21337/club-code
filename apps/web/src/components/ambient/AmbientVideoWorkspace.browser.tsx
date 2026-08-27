@@ -14,6 +14,7 @@ import { render } from "vitest-browser-react";
 import { AppAtomRegistryProvider } from "../../rpc/atomRegistry";
 import { resetServerStateForTests, setServerConfigSnapshot } from "../../rpc/serverState";
 import { __resetYouTubeUrlQueueForTests, youtubeUrlQueueStore } from "../../youtubeUrlQueue";
+import { localMediaStore } from "../../localMedia";
 import { AmbientVideoWorkspace, useAmbientVideoWorkspace } from "./AmbientVideoWorkspace";
 
 let mounted: Awaited<ReturnType<typeof render>> | null = null;
@@ -115,7 +116,9 @@ async function expectPlayerGeometry(input: {
 beforeEach(() => {
   resetServerStateForTests();
   __resetYouTubeUrlQueueForTests();
+  localMediaStore.clear();
   document.body.innerHTML = "";
+  document.documentElement.removeAttribute("data-cafe-local-media-background");
 });
 
 afterEach(async () => {
@@ -123,11 +126,44 @@ afterEach(async () => {
   mounted = null;
   resetServerStateForTests();
   __resetYouTubeUrlQueueForTests();
+  localMediaStore.clear();
   document.body.innerHTML = "";
+  document.documentElement.removeAttribute("data-cafe-local-media-background");
   await page.viewport(1_280, 720);
 });
 
-it("keeps the first-run workspace queue empty without opening Settings", async () => {
+it("marks the document only while a local video background is effective", async () => {
+  expect(
+    localMediaStore.selectFile(
+      new File(["not-decoded"], "private-video.mp4", { type: "video/mp4" }),
+    ),
+  ).toBe(true);
+  localMediaStore.update({ presentationMode: "background" });
+  setServerConfigSnapshot(makeConfig(null));
+
+  mounted = await render(
+    <AppAtomRegistryProvider>
+      <AmbientVideoWorkspace>
+        <TestChatAnchor />
+      </AmbientVideoWorkspace>
+    </AppAtomRegistryProvider>,
+  );
+
+  await expect.poll(() => document.documentElement.dataset.cafeLocalMediaBackground).toBe("true");
+
+  localMediaStore.update({ presentationMode: "floating" });
+  await expect
+    .poll(() => document.documentElement.hasAttribute("data-cafe-local-media-background"))
+    .toBe(false);
+
+  localMediaStore.update({ presentationMode: "background" });
+  await expect.poll(() => document.documentElement.dataset.cafeLocalMediaBackground).toBe("true");
+  await mounted.unmount();
+  mounted = null;
+  expect(document.documentElement.hasAttribute("data-cafe-local-media-background")).toBe(false);
+});
+
+it("seeds the shipped EDM queue without requesting playback", async () => {
   setServerConfigSnapshot(makeConfig(null));
   mounted = await render(
     <AppAtomRegistryProvider>
@@ -137,32 +173,164 @@ it("keeps the first-run workspace queue empty without opening Settings", async (
     </AppAtomRegistryProvider>,
   );
 
-  await expect.poll(() => youtubeUrlQueueStore.getSnapshot().revision).toBe(0);
+  await expect.poll(() => youtubeUrlQueueStore.getSnapshot().exampleId).toBe("edm");
   expect(youtubeUrlQueueStore.getSnapshot()).toMatchObject({
-    active: false,
-    count: 0,
-    currentSource: null,
-    exampleId: null,
+    active: true,
+    count: 30,
+    currentSource: { kind: "video", id: "VGG0coMYaRQ" },
+    exampleId: "edm",
   });
   await expect.element(page.getByTitle("Ambient YouTube URL queue player")).not.toBeInTheDocument();
+});
+
+it("shows the engaged shipped player and keeps the same iframe visible through Settings", async () => {
+  const config = makeConfig(null);
+  setServerConfigSnapshot({
+    ...config,
+    clientSettings: {
+      ...config.clientSettings,
+      ambientVideoEnabled: true,
+      ambientVideoPresentationMode: "floating",
+    },
+  });
+  mounted = await render(
+    <div style={{ display: "flex", width: "1280px", height: "720px" }}>
+      <AppAtomRegistryProvider>
+        <AmbientVideoWorkspace environmentScopeKey="engaged-player">
+          <TestChatAnchor />
+        </AmbientVideoWorkspace>
+      </AppAtomRegistryProvider>
+    </div>,
+  );
+
+  await expect.poll(() => youtubeUrlQueueStore.getSnapshot().exampleId).toBe("edm");
+  await expect
+    .poll(() =>
+      document.querySelector<HTMLIFrameElement>('iframe[title="Ambient YouTube URL queue player"]'),
+    )
+    .not.toBeNull();
+  const firstFrame = document.querySelector<HTMLIFrameElement>(
+    'iframe[title="Ambient YouTube URL queue player"]',
+  );
+  expect(firstFrame).not.toBeNull();
+  expect(new URL(firstFrame!.src).searchParams.get("autoplay")).toBe("1");
+  await expect.element(page.getByTitle("Ambient YouTube URL queue player")).toBeVisible();
+
+  await mounted.rerender(
+    <div style={{ display: "flex", width: "1280px", height: "720px" }}>
+      <AppAtomRegistryProvider>
+        <AmbientVideoWorkspace environmentScopeKey="engaged-player" retainPlayerWithoutAnchor>
+          <main>Settings</main>
+        </AmbientVideoWorkspace>
+      </AppAtomRegistryProvider>
+    </div>,
+  );
+  await waitForTwoAnimationFrames();
+
+  const settingsFrame = document.querySelector<HTMLIFrameElement>(
+    'iframe[title="Ambient YouTube URL queue player"]',
+  );
+  expect(settingsFrame).toBe(firstFrame);
+  expect(settingsFrame?.isConnected).toBe(true);
+  expect(
+    settingsFrame?.closest<HTMLElement>("[data-ambient-video-layout]")?.style.display,
+  ).not.toBe("none");
+
+  setServerConfigSnapshot(config);
+  await expect.poll(() => firstFrame?.isConnected).toBe(false);
+  await expect.element(page.getByTitle("Ambient YouTube URL queue player")).not.toBeInTheDocument();
+});
+
+it("yields an automatic EDM queue to a saved source that arrives later", async () => {
+  const initialConfig = makeConfig(null);
+  setServerConfigSnapshot({
+    ...initialConfig,
+    clientSettings: {
+      ...initialConfig.clientSettings,
+      ambientVideoEnabled: true,
+      ambientVideoPresentationMode: "floating",
+    },
+  });
+  mounted = await render(
+    <div style={{ display: "flex", width: "1280px", height: "720px" }}>
+      <AppAtomRegistryProvider>
+        <AmbientVideoWorkspace environmentScopeKey="late-saved-source">
+          <TestChatAnchor />
+        </AmbientVideoWorkspace>
+      </AppAtomRegistryProvider>
+    </div>,
+  );
+
+  await expect
+    .poll(() =>
+      document.querySelector<HTMLIFrameElement>('iframe[title="Ambient YouTube URL queue player"]'),
+    )
+    .not.toBeNull();
+  const automaticQueueFrame = document.querySelector<HTMLIFrameElement>(
+    'iframe[title="Ambient YouTube URL queue player"]',
+  );
+
+  const savedConfig = makeConfig({ kind: "video", id: "dQw4w9WgXcQ" });
+  setServerConfigSnapshot({
+    ...savedConfig,
+    clientSettings: {
+      ...savedConfig.clientSettings,
+      ambientVideoEnabled: true,
+      ambientVideoPresentationMode: "floating",
+    },
+  });
+
+  await expect
+    .poll(() =>
+      document.querySelector<HTMLIFrameElement>('iframe[title="Ambient YouTube video player"]'),
+    )
+    .not.toBeNull();
+  expect(automaticQueueFrame?.isConnected).toBe(false);
+  expect(youtubeUrlQueueStore.getSnapshot()).toMatchObject({
+    active: false,
+    currentSource: null,
+  });
+  const savedSourceFrame = document.querySelector<HTMLIFrameElement>(
+    'iframe[title="Ambient YouTube video player"]',
+  );
+  expect(savedSourceFrame?.src).toContain("/embed/dQw4w9WgXcQ");
+  expect(new URL(savedSourceFrame!.src).searchParams.has("autoplay")).toBe(false);
 });
 
 it("does not let temporary defaults mask a persisted source that arrives after mount", async () => {
   mounted = await render(
     <AppAtomRegistryProvider>
       <AmbientVideoWorkspace>
-        <main>Chat workspace</main>
+        <TestChatAnchor />
       </AmbientVideoWorkspace>
     </AppAtomRegistryProvider>,
   );
 
   await expect.poll(() => youtubeUrlQueueStore.getSnapshot().revision).toBe(0);
-  setServerConfigSnapshot(makeConfig({ kind: "video", id: "dQw4w9WgXcQ" }));
+  const config = makeConfig({ kind: "video", id: "dQw4w9WgXcQ" });
+  setServerConfigSnapshot({
+    ...config,
+    clientSettings: {
+      ...config.clientSettings,
+      ambientVideoEnabled: true,
+      ambientVideoPresentationMode: "floating",
+    },
+  });
   await expect.poll(() => youtubeUrlQueueStore.getSnapshot().revision).toBe(0);
   expect(youtubeUrlQueueStore.getSnapshot()).toMatchObject({
     active: false,
     currentSource: null,
   });
+  await expect
+    .poll(() =>
+      document.querySelector<HTMLIFrameElement>('iframe[title="Ambient YouTube video player"]'),
+    )
+    .not.toBeNull();
+  const savedSourceFrame = document.querySelector<HTMLIFrameElement>(
+    'iframe[title="Ambient YouTube video player"]',
+  );
+  expect(savedSourceFrame?.src).toContain("/embed/dQw4w9WgXcQ");
+  expect(new URL(savedSourceFrame!.src).searchParams.has("autoplay")).toBe(false);
 });
 
 it("retains the exact player through Settings and remounts it across environments", async () => {
@@ -292,6 +460,7 @@ it("keeps one compliant player through portrait, landscape, minimum bounds, and 
   });
   expect(firstFrame!.referrerPolicy).toBe("strict-origin-when-cross-origin");
   expect(firstFrame!.allow).toContain("fullscreen");
+  expect(firstFrame!.allow).not.toContain("web-share");
   expect(firstFrame!.sandbox.contains("allow-scripts")).toBe(true);
   expect(firstFrame!.sandbox.contains("allow-same-origin")).toBe(true);
   expect(firstFrame!.sandbox.contains("allow-presentation")).toBe(true);

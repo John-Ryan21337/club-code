@@ -837,6 +837,15 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           `Auto Nudge dispatch for thread '${command.threadId}' does not target its exact current completed turn.`,
         );
       }
+      const actionablePlanForCompletedTurn = targetThread.proposedPlans.some(
+        (plan) => plan.turnId === command.completedTurnId && plan.implementedAt === null,
+      );
+      if (actionablePlanForCompletedTurn) {
+        return yield* rejectAutoNudgeCommand(
+          command,
+          `Thread '${command.threadId}' has a proposed plan awaiting operator review. Plan review has priority over Auto Nudge.`,
+        );
+      }
       if (threadHasPostCompletionProviderActivity(targetThread, command.completedTurnId)) {
         return yield* rejectAutoNudgeCommand(
           command,

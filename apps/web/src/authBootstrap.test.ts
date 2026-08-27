@@ -211,6 +211,7 @@ describe("resolveInitialServerAuthGateState", () => {
 
     expect(fetchMock).toHaveBeenCalledWith("https://remote.example.com/api/auth/session", {
       credentials: "include",
+      signal: expect.any(AbortSignal),
     });
   });
 
@@ -243,6 +244,7 @@ describe("resolveInitialServerAuthGateState", () => {
 
     expect(fetchMock).toHaveBeenCalledWith("http://localhost:5735/api/auth/session", {
       credentials: "include",
+      signal: expect.any(AbortSignal),
     });
   });
 
@@ -284,6 +286,7 @@ describe("resolveInitialServerAuthGateState", () => {
 
     expect(fetchMock).toHaveBeenCalledWith("http://127.0.0.1:5733/api/auth/session", {
       credentials: "include",
+      signal: expect.any(AbortSignal),
     });
   });
 
@@ -368,6 +371,46 @@ describe("resolveInitialServerAuthGateState", () => {
     expect(testWindow.location.searchParams.get("token")).toBeNull();
   });
 
+  it("renders a pairing-token link without waiting for an initial server probe", async () => {
+    const fetchMock = vi.fn<typeof fetch>();
+    vi.stubGlobal("fetch", fetchMock);
+    installTestBrowser("https://192.168.1.107:3775/pair?token=pairing-token");
+
+    const { resolveInitialServerAuthGateState } = await import("./environments/primary");
+
+    await expect(resolveInitialServerAuthGateState()).resolves.toEqual({
+      status: "requires-auth",
+      auth: {
+        policy: "remote-reachable",
+        bootstrapMethods: ["one-time-token"],
+        sessionMethods: ["browser-session-cookie"],
+        sessionCookieName: "t3_session",
+      },
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("aborts a stalled auth request instead of loading forever", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn<typeof fetch>(
+      (_input, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => {
+            reject(new DOMException("The operation was aborted.", "AbortError"));
+          });
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { resolveInitialServerAuthGateState } = await import("./environments/primary");
+    const gateStatePromise = resolveInitialServerAuthGateState();
+    const rejection = expect(gateStatePromise).rejects.toMatchObject({ name: "AbortError" });
+
+    await vi.advanceTimersByTimeAsync(20_000);
+    await rejection;
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
+
   it("allows manual token submission after the initial auth check requires pairing", async () => {
     const fetchMock = vi
       .fn<typeof fetch>()
@@ -449,6 +492,7 @@ describe("resolveInitialServerAuthGateState", () => {
         "content-type": "application/json",
       },
       method: "POST",
+      signal: expect.any(AbortSignal),
     });
   });
 
@@ -495,6 +539,7 @@ describe("resolveInitialServerAuthGateState", () => {
         "content-type": "application/json",
       },
       method: "POST",
+      signal: expect.any(AbortSignal),
     });
   });
 

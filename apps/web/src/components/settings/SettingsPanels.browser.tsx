@@ -54,7 +54,7 @@ import {
   SETTINGS_PROFILE_LIBRARY_STORAGE_KEY,
   settingsProfileLibraryStore,
 } from "../../settingsProfiles";
-import { youtubeUrlQueueLibraryStore, youtubeUrlQueueStore } from "../../youtubeUrlQueue";
+import { __resetYouTubeUrlQueueForTests, youtubeUrlQueueStore } from "../../youtubeUrlQueue";
 import { toastManager } from "../ui/toast";
 import { ConnectionsSettings } from "./ConnectionsSettings";
 import { DiagnosticsSettingsPanel } from "./DiagnosticsSettings";
@@ -756,7 +756,7 @@ describe("settings panels", () => {
     localMediaStore.clear();
     localStorage.clear();
     settingsProfileLibraryStore.resetForTests();
-    youtubeUrlQueueLibraryStore.resetForTests();
+    __resetYouTubeUrlQueueForTests();
     useUiStateStore.setState({ defaultAdvertisedEndpointKey: null });
     authAccessHarness.reset();
   });
@@ -772,7 +772,7 @@ describe("settings panels", () => {
     Reflect.deleteProperty(window, "nativeApi");
     document.body.innerHTML = "";
     settingsProfileLibraryStore.resetForTests();
-    youtubeUrlQueueLibraryStore.resetForTests();
+    __resetYouTubeUrlQueueForTests();
     resetServerStateForTests();
     await __resetLocalApiForTests();
     localMediaStore.clear();
@@ -1679,14 +1679,20 @@ describe("settings panels", () => {
       name: "Agent / delegation",
       exact: true,
     });
+    const workActivityInput = page.getByRole("checkbox", {
+      name: "Work / tool",
+      exact: true,
+    });
     await expect.element(networkActivityInput).toHaveAttribute("aria-checked", "true");
     await expect.element(databaseActivityInput).toHaveAttribute("aria-checked", "true");
     await expect.element(buildActivityInput).toHaveAttribute("aria-checked", "true");
     await expect.element(agentActivityInput).toHaveAttribute("aria-checked", "true");
+    await expect.element(workActivityInput).toHaveAttribute("aria-checked", "true");
     await networkActivityInput.click();
     await databaseActivityInput.click();
     await buildActivityInput.click();
     await agentActivityInput.click();
+    await workActivityInput.click();
     await page.getByRole("radio", { name: "Follow Matrix colors", exact: true }).click();
     await page.getByRole("radio", { name: "Random independent", exact: true }).click();
     await page.getByRole("radio", { name: "Follow Matrix colors", exact: true }).click();
@@ -1704,6 +1710,9 @@ describe("settings panels", () => {
       });
       expect(updateClientSettings).toHaveBeenCalledWith({
         fallingEffectActivityLinkAgentEnabled: false,
+      });
+      expect(updateClientSettings).toHaveBeenCalledWith({
+        fallingEffectActivityLinkWorkEnabled: false,
       });
       expect(updateClientSettings).toHaveBeenCalledWith({
         fallingEffectActivityLinkColorMode: "random",

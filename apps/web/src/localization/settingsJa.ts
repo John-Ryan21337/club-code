@@ -275,8 +275,13 @@ export const SETTINGS_JA: Readonly<Record<string, string>> = {
   "Show provider activity links in Matrix rain": "Matrix 雨にプロバイダー活動リンクを表示",
   "Activity inputs": "活動入力",
   "Matrix activity link inputs": "Matrix 活動リンクの入力",
-  "Choose which safe provider-observed activity categories may create Matrix pulses and connecting lines. Clear every checkbox to show no activity overlay.":
-    "プロバイダーが安全に観測した活動カテゴリのうち、Matrix のパルスと接続線を生成できるものを選びます。すべて外すと活動オーバーレイを表示しません。",
+  "Choose which safe provider-observed activity may create Matrix pulses and connecting lines. Work means an exact tool lifecycle whose narrower category is unknown; it never guesses from command text, paths, or output. Clear every checkbox to show no activity overlay.":
+    "Matrix のパルスと接続線に使う、安全なプロバイダー活動を選びます。Work は詳細カテゴリが不明な正確なツールライフサイクルです。コマンド、パス、出力から推測しません。すべてを外すと活動オーバーレイを表示しません。",
+  "Network / web": "ネットワーク / Web",
+  "Database / query": "データベース / クエリ",
+  "Build / compile": "ビルド / コンパイル",
+  "Agent / delegation": "エージェント / 委任",
+  "Work / tool": "作業 / ツール",
   "Activity link colors": "活動リンクの色",
   "Matrix activity link color mode": "Matrix 活動リンクのカラーモード",
   "Random gives each real link an independent deterministic hue. Matrix follows the selected uniform or per-stream Matrix color animation.":
@@ -324,6 +329,8 @@ export const SETTINGS_JA: Readonly<Record<string, string>> = {
   "Paste a supported YouTube or Spotify URL. Club Code stores only the validated provider, entity type, and ID—not pasted query data.":
     "対応する YouTube または Spotify の URL を貼り付けます。Club Code が保存するのは検証済みのプロバイダー、エンティティ種別、ID のみで、貼り付けたクエリデータは保存しません。",
   "Session URL queue": "セッション URL キュー",
+  "Choose one of the included Japanese music, EDM, or K-pop lists, or add a named local .txt file containing one strict YouTube video URL per line. Re-uploading the same filename replaces that list; a new filename adds another one-click option. During playback, videos that YouTube reports as unavailable or not allowed to be embedded are skipped automatically. EDM populates a new, otherwise unchosen session by default without turning playback on. Blank/comment lines are ignored. Imported lists stay on this browser/device and are never uploaded, logged, prompted, or saved to server settings.":
+    "付属の日本音楽、EDM、K-pop リストから選ぶか、1 行に 1 件の厳密な YouTube 動画 URL を記載した名前付きローカル .txt ファイルを追加します。同じファイル名を再度読み込むとそのリストを置き換え、新しいファイル名ならワンクリックで選べる項目として追加します。再生中に YouTube が利用不可または埋め込み不可と報告した動画は自動的にスキップします。未選択の新しいセッションには EDM リストを用意しますが、再生は自動で有効にしません。空行とコメント行は無視します。読み込んだリストはこのブラウザーまたは端末だけに保存し、アップロード、ログ記録、プロンプトへの追加、サーバー設定への保存は行いません。",
   "Direct queue": "直接キュー",
   "Clear queue": "キューをクリア",
   "Choose YouTube URL queue text file": "YouTube URL キューのテキストファイルを選択",
@@ -400,6 +407,20 @@ export const SETTINGS_JA: Readonly<Record<string, string>> = {
   "Background preset": "背景プリセット",
   "Create and edit the preset in The Hexagons. Club Code imports the finished design.":
     "プリセットの作成と編集は The Hexagons で行います。Club Code は完成したデザインをインポートします。",
+  "Chat backdrop opacity": "チャット背景の不透明度",
+  "Set the backdrop opacity behind the chat manuscript and prompt when an ambient background is active. The backdrop stays within the prompt width.":
+    "アンビエント背景が有効なときに、チャット本文とプロンプトの背後にある背景の不透明度を設定します。この背景はプロンプト幅の内側だけに表示されます。",
+  "Decrease chat backdrop opacity": "チャット背景の不透明度を下げる",
+  "Chat backdrop opacity percent": "チャット背景の不透明度（パーセント）",
+  "Increase chat backdrop opacity": "チャット背景の不透明度を上げる",
+  "Reset chat backdrop opacity to default": "チャット背景の不透明度を既定値に戻す",
+  "Sidebar backdrop opacity": "サイドバー背景の不透明度",
+  "Set one backdrop opacity for the left navigation sidebar and right details panels when an ambient background is active. This setting also applies to mobile sheets.":
+    "アンビエント背景が有効なときに、左のナビゲーションサイドバーと右の詳細パネルへ同じ背景不透明度を設定します。この設定はモバイルシートにも適用されます。",
+  "Decrease sidebar backdrop opacity": "サイドバー背景の不透明度を下げる",
+  "Sidebar backdrop opacity percent": "サイドバー背景の不透明度（パーセント）",
+  "Increase sidebar backdrop opacity": "サイドバー背景の不透明度を上げる",
+  "Reset sidebar backdrop opacity to default": "サイドバー背景の不透明度を既定値に戻す",
   "Import The Hexagons background preset": "The Hexagons 背景プリセットをインポート",
   "Import preset": "プリセットをインポート",
   "Replace preset": "プリセットを置き換え",
@@ -625,6 +646,8 @@ export const SETTINGS_JA: Readonly<Record<string, string>> = {
     "保存済みプロファイルを選ぶとすぐに読み込みます。選択したプロファイルは再起動後も有効です。",
   "Profiles are stored only in this browser or desktop client. Saving the same name replaces that local profile.":
     "プロファイルはこのブラウザーまたはデスクトップクライアントにのみ保存されます。同じ名前で保存するとローカルプロファイルを置き換えます。",
+  "Profiles capture the theme, UI appearance and layout, ambient YouTube/GIF configuration, and inert usability preferences. GIF entries are content-addressed server assets. Profiles never store source file paths or image bytes. Profiles do not start media, image cycles, or visual effects. Profiles exclude permissions, consent, destructive-action confirmations, completion-alert activation, keybindings, local files, uploaded sounds, and native host controls. Profiles also exclude live thread/provider visuals, playback state, URL-queue progress, provider/auth settings, server/network settings, model identity, model pacing, and project state. Profiles never include per-thread Auto Nudge or Idle Thread Guard authority.":
+    "プロファイルには、テーマ、UI の外観と配置、アンビエント YouTube/GIF の設定、および動作を開始しない操作設定を保存します。GIF はコンテンツアドレス方式のサーバー資産として参照し、元のファイルパスや画像バイト列は保存しません。プロファイルからメディア、画像切り替え、視覚効果を開始することはありません。権限、同意、破壊的操作の確認、完了通知の有効化、キーバインド、ローカルファイル、アップロード音声、ネイティブのホスト制御は除外します。さらに、スレッドやプロバイダーのライブ表示、再生状態、URL キューの進行、プロバイダー認証、サーバーやネットワークの設定、モデル識別、モデルのペーシング、プロジェクト状態も除外します。スレッド固有の Auto Nudge または Idle Thread Guard の権限は決して保存しません。",
   "Saved environments": "保存済み環境",
   "Add saved environment": "保存済み環境を追加",
   "Add environment": "環境を追加",

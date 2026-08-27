@@ -16,9 +16,17 @@ import {
   writePrimaryEnvironmentDescriptor,
 } from "../environments/primary";
 import { AppAtomRegistryProvider } from "../rpc/atomRegistry";
-import { recordWsConnectionOpened, resetWsConnectionStateForTests } from "../rpc/wsConnectionState";
+import {
+  recordWsConnectionAttempt,
+  recordWsConnectionErrored,
+  recordWsConnectionOpened,
+  resetWsConnectionStateForTests,
+} from "../rpc/wsConnectionState";
 import { useStore } from "../store";
-import { InitialBackendBootstrapSurface } from "./InitialBackendBootstrapSurface";
+import {
+  InitialBackendBootstrapSurface,
+  resolveWebUiConnectionSetupUrl,
+} from "./InitialBackendBootstrapSurface";
 
 const TEST_ENVIRONMENT_ID = EnvironmentId.make("environment-bootstrap-surface");
 const TEST_PROJECT_ID = ProjectId.make("project-bootstrap-surface");
@@ -84,6 +92,23 @@ function createShellSnapshot(): OrchestrationShellSnapshot {
 }
 
 describe("InitialBackendBootstrapSurface", () => {
+  it("derives the packaged HTTP setup URL from a secure Web UI URL", () => {
+    expect(
+      resolveWebUiConnectionSetupUrl({
+        hostname: "192.168.1.107",
+        port: "3775",
+        protocol: "https:",
+      }),
+    ).toBe("http://192.168.1.107:3773/");
+    expect(
+      resolveWebUiConnectionSetupUrl({
+        hostname: "192.168.1.107",
+        port: "3773",
+        protocol: "http:",
+      }),
+    ).toBe(null);
+  });
+
   beforeEach(() => {
     resetWsConnectionStateForTests();
     resetPrimaryEnvironmentDescriptorForTests();
@@ -191,6 +216,30 @@ describe("InitialBackendBootstrapSurface", () => {
         },
       });
       expect(JSON.stringify(snapshot)).not.toMatch(/socket|url|error|environment/i);
+    } finally {
+      await screen.unmount();
+      host.remove();
+    }
+  });
+
+  it("shows recovery actions when the first WebSocket connection fails", async () => {
+    recordWsConnectionAttempt("wss://192.168.1.107:3775/ws");
+    recordWsConnectionErrored("Unable to connect to the Club Code server WebSocket.");
+
+    const host = document.createElement("div");
+    document.body.append(host);
+    const screen = await render(
+      <AppAtomRegistryProvider>
+        <InitialBackendBootstrapSurface>
+          <div>Workspace loaded</div>
+        </InitialBackendBootstrapSurface>
+      </AppAtomRegistryProvider>,
+      { container: host },
+    );
+
+    try {
+      expect(document.body.textContent).toContain("Waiting for the workspace to respond.");
+      expect(document.body.textContent).toContain("Reload app");
     } finally {
       await screen.unmount();
       host.remove();

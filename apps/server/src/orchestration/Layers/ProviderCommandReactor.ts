@@ -19,6 +19,7 @@ import {
   type RuntimeMode,
   TurnId,
 } from "@cafecode/contracts";
+import { resolveCodexSubagentThreadLimit } from "@cafecode/shared/model";
 import {
   isTemporaryWorktreeBranch,
   LEGACY_WORKTREE_BRANCH_PREFIX,
@@ -1096,6 +1097,7 @@ const make = Effect.gen(function* () {
     });
     const effectiveCwd = workspaceDirectories.cwd;
     const effectiveAdditionalDirectories = workspaceDirectories.additionalDirectories;
+    const desiredCodexSubagentThreadLimit = resolveCodexSubagentThreadLimit(desiredModelSelection);
 
     const startProviderSession = (input?: {
       readonly resumeCursor?: unknown;
@@ -1113,6 +1115,9 @@ const make = Effect.gen(function* () {
         ...(input?.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
         ...(options?.interactionMode !== undefined
           ? { interactionMode: options.interactionMode }
+          : {}),
+        ...(preferredProvider === "codex"
+          ? { codexSubagentThreadLimit: desiredCodexSubagentThreadLimit }
           : {}),
         runtimeMode: desiredRuntimeMode,
       });
@@ -1204,6 +1209,10 @@ const make = Effect.gen(function* () {
         preferredProvider === "claudeAgent" &&
         requestedModelSelection !== undefined &&
         !Equal.equals(previousModelSelection, requestedModelSelection);
+      const codexSubagentThreadLimitChanged =
+        preferredProvider === "codex" &&
+        activeSession.codexSubagentThreadLimit !== undefined &&
+        activeSession.codexSubagentThreadLimit !== desiredCodexSubagentThreadLimit;
 
       if (
         !runtimeModeChanged &&
@@ -1212,7 +1221,8 @@ const make = Effect.gen(function* () {
         !instanceChanged &&
         !providerResumeIdentityChanged &&
         !shouldRestartForModelChange &&
-        !shouldRestartForModelSelectionChange
+        !shouldRestartForModelSelectionChange &&
+        !codexSubagentThreadLimitChanged
       ) {
         return activeSession;
       }
@@ -1246,6 +1256,9 @@ const make = Effect.gen(function* () {
         providerResumeIdentityChanged,
         shouldRestartForModelChange,
         shouldRestartForModelSelectionChange,
+        codexSubagentThreadLimitChanged,
+        previousCodexSubagentThreadLimit: activeSession.codexSubagentThreadLimit,
+        desiredCodexSubagentThreadLimit,
         hasResumeCursor: resumeCursor !== undefined,
       });
       const restartedSession = yield* startProviderSession(
@@ -3025,6 +3038,31 @@ const make = Effect.gen(function* () {
   const worker = yield* makeDrainableWorker(processDomainEventSafely);
 
   const start: ProviderCommandReactorShape["start"] = Effect.fn("start")(function* () {
+    const processEvent = Effect.fn("processEvent")(function* (event: OrchestrationEvent) {
+      if (
+        event.type === "thread.runtime-mode-set" ||
+        event.type === "thread.turn-start-requested" ||
+        event.type === "thread.turn-interrupt-requested" ||
+        event.type === "thread.turn-steer-requested" ||
+        event.type === "thread.approval-response-requested" ||
+        event.type === "thread.user-input-response-requested" ||
+        event.type === "thread.session-stop-requested" ||
+        event.type === "thread.goal-set-requested" ||
+        event.type === "thread.goal-clear-requested"
+      ) {
+        return yield* worker.enqueue(event);
+      }
+    });
+
+    // The engine PubSub is intentionally hot and does not replay. Subscribe
+    // before any startup reconciliation can block so a renderer command that
+    // arrives while recovery is reading provider state cannot be durably
+    // accepted and then missed by the provider-command boundary.
+    yield* Effect.forkScoped(
+      Stream.runForEach(orchestrationEngine.streamDomainEvents, processEvent),
+    );
+    yield* Effect.yieldNow;
+
     yield* recoverInterruptedTurnStartsOnStartup().pipe(
       Effect.catchCause((cause) =>
         Effect.logWarning(
@@ -3057,28 +3095,6 @@ const make = Effect.gen(function* () {
       ),
     );
 
-    const processEvent = Effect.fn("processEvent")(function* (event: OrchestrationEvent) {
-      if (
-        event.type === "thread.runtime-mode-set" ||
-        event.type === "thread.turn-start-requested" ||
-        event.type === "thread.turn-interrupt-requested" ||
-        event.type === "thread.turn-steer-requested" ||
-        event.type === "thread.approval-response-requested" ||
-        event.type === "thread.user-input-response-requested" ||
-        event.type === "thread.session-stop-requested" ||
-        event.type === "thread.goal-set-requested" ||
-        event.type === "thread.goal-clear-requested"
-      ) {
-        return yield* worker.enqueue(event);
-      }
-    });
-
-    yield* Effect.forkScoped(
-      Stream.runForEach(orchestrationEngine.streamDomainEvents, processEvent),
-    );
-    // Give the hot event-stream subscriber a scheduling turn before startup
-    // recovery dispatches continuation commands through that stream.
-    yield* Effect.yieldNow;
     yield* recoverOrphanedRunningTurnsOnStartup().pipe(
       Effect.catchCause((cause) =>
         Effect.logWarning("provider command reactor failed to continue orphaned turns", {

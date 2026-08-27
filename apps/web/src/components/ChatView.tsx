@@ -1957,7 +1957,7 @@ function useLocalDispatchState(input: {
 }
 
 export default function ChatView(props: ChatViewProps) {
-  const { registerChatAnchor, localMediaBackgroundEffective } = useAmbientVideoWorkspace();
+  const { registerChatAnchor } = useAmbientVideoWorkspace();
   const {
     environmentId,
     threadId,
@@ -4675,7 +4675,6 @@ export default function ChatView(props: ChatViewProps) {
     },
     [draftId, routeThreadRef, serverThread, setStoreThreadError],
   );
-
   const focusComposer = useCallback(() => {
     readComposerHandle(composerRef)?.focusAtEnd();
   }, [composerRef]);
@@ -7949,6 +7948,20 @@ export default function ChatView(props: ChatViewProps) {
       settings,
     ],
   );
+  const onPersistThreadModelSelection = useCallback(
+    async (modelSelection: ModelSelection) => {
+      if (!activeThread) return;
+      const api = readEnvironmentApi(activeThread.environmentId);
+      if (!api) return;
+      await api.orchestration.dispatchCommand({
+        type: "thread.meta.update",
+        commandId: newCommandId(),
+        threadId: activeThread.id,
+        modelSelection,
+      });
+    },
+    [activeThread],
+  );
   const onEnvModeChange = useCallback(
     (mode: DraftThreadEnvMode) => {
       if (canOverrideServerThreadEnvMode) {
@@ -8001,10 +8014,8 @@ export default function ChatView(props: ChatViewProps) {
 
   return (
     <div
-      className={cn(
-        "group/chat-view flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden bg-background",
-        localMediaBackgroundEffective && "bg-background/55 backdrop-blur-[1px]",
-      )}
+      className="group/chat-view flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden bg-background"
+      data-chat-view-shell="true"
       data-chat-presentation={isMobile ? "mobile" : "desktop"}
     >
       {/* Top bar — hidden while the mobile composer has the on-screen keyboard
@@ -8060,9 +8071,18 @@ export default function ChatView(props: ChatViewProps) {
       {/* Main content area with optional plan sidebar */}
       <div className="flex min-h-0 min-w-0 flex-1">
         {/* Chat column */}
-        <div className="@container/chat-column flex min-h-0 min-w-0 flex-1 flex-col">
+        <div className="@container/chat-column relative isolate flex min-h-0 min-w-0 flex-1 flex-col">
+          <div
+            aria-hidden="true"
+            className={cn(
+              "pointer-events-none absolute inset-y-0 left-[calc(env(safe-area-inset-left)+0.75rem)] right-[calc(env(safe-area-inset-right)+0.75rem)] z-0 mx-auto max-w-208",
+              !isMobile &&
+                "sm:left-[calc(env(safe-area-inset-left)+1.25rem)] sm:right-[calc(env(safe-area-inset-right)+1.25rem)]",
+            )}
+            data-chat-manuscript-scrim="true"
+          />
           {/* Messages Wrapper */}
-          <div ref={registerChatAnchor} className="relative flex min-h-0 flex-1 flex-col">
+          <div ref={registerChatAnchor} className="relative z-10 flex min-h-0 flex-1 flex-col">
             {activeProject ? (
               <ProjectTelemetryGraph
                 environmentId={activeProject.environmentId}
@@ -8127,7 +8147,7 @@ export default function ChatView(props: ChatViewProps) {
           <div
             data-chat-input-bar="true"
             className={cn(
-              "pl-[calc(env(safe-area-inset-left)+0.75rem)] pr-[calc(env(safe-area-inset-right)+0.75rem)] pt-1.5",
+              "relative z-10 pl-[calc(env(safe-area-inset-left)+0.75rem)] pr-[calc(env(safe-area-inset-right)+0.75rem)] pt-1.5",
               !isMobile &&
                 "sm:pl-[calc(env(safe-area-inset-left)+1.25rem)] sm:pr-[calc(env(safe-area-inset-right)+1.25rem)] sm:pt-2",
               // NOTE: intentionally NOT adding env(safe-area-inset-bottom) here.
@@ -8253,6 +8273,7 @@ export default function ChatView(props: ChatViewProps) {
                     onChangeActivePendingUserInputCustomAnswer
                   }
                   onProviderModelSelect={onProviderModelSelect}
+                  onPersistThreadModelSelection={onPersistThreadModelSelection}
                   toggleInteractionMode={toggleInteractionMode}
                   handleRuntimeModeChange={handleRuntimeModeChange}
                   handleInteractionModeChange={handleInteractionModeChange}

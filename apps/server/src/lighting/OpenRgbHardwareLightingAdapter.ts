@@ -11,7 +11,7 @@ import type {
 
 const OPENRGB_HOST = "127.0.0.1";
 const OPENRGB_PORT = 6_742;
-const OPENRGB_MAGIC = 0x4f524742;
+const OPENRGB_MAGIC = Buffer.from("ORGB", "ascii");
 const OPENRGB_PROTOCOL_VERSION = 5;
 const MAX_PACKET_BYTES = 2 * 1024 * 1024;
 const SOCKET_TIMEOUT_MS = 1_500;
@@ -365,9 +365,8 @@ class OpenRgbConnection {
   private onData(data: Buffer): void {
     this.buffer = Buffer.concat([this.buffer, data]);
     while (this.buffer.length >= 16) {
-      const magic = this.buffer.readUInt32LE(0);
       const payloadSize = this.buffer.readUInt32LE(12);
-      if (magic !== OPENRGB_MAGIC || payloadSize > MAX_PACKET_BYTES) {
+      if (!this.buffer.subarray(0, 4).equals(OPENRGB_MAGIC) || payloadSize > MAX_PACKET_BYTES) {
         this.socket.destroy(new Error("OpenRGB returned an invalid packet header."));
         return;
       }
@@ -392,7 +391,7 @@ class OpenRgbConnection {
 
   send(deviceId: number, packetId: number, payload: Uint8Array = Buffer.alloc(0)): Promise<void> {
     const header = Buffer.allocUnsafe(16);
-    header.writeUInt32LE(OPENRGB_MAGIC, 0);
+    OPENRGB_MAGIC.copy(header, 0);
     header.writeUInt32LE(deviceId >>> 0, 4);
     header.writeUInt32LE(packetId >>> 0, 8);
     header.writeUInt32LE(payload.length, 12);

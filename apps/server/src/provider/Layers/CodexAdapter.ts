@@ -43,6 +43,7 @@ import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/unstable/process";
@@ -2503,7 +2504,61 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     options?.nativeEventLogger === undefined ? nativeEventLogger : undefined;
   const runtimeEventQueue = yield* Queue.unbounded<ProviderRuntimeEvent>();
   const sessions = new Map<ThreadId, CodexAdapterSessionContext>();
+  type SessionLifecycleLockEntry = {
+    readonly semaphore: Semaphore.Semaphore;
+    readonly users: number;
+  };
+  const sessionLifecycleLocksRef = yield* Ref.make<
+    ReadonlyMap<ThreadId, SessionLifecycleLockEntry>
+  >(new Map());
   const prepareRuntimeHome = options?.prepareRuntimeHome ?? Effect.void;
+
+  const acquireSessionLifecycleLock = Effect.fn("CodexAdapter.acquireSessionLifecycleLock")(
+    function* (threadId: ThreadId) {
+      const created = yield* Semaphore.make(1);
+      return yield* Ref.modify(sessionLifecycleLocksRef, (locks) => {
+        const existing = locks.get(threadId);
+        const entry = existing
+          ? { semaphore: existing.semaphore, users: existing.users + 1 }
+          : { semaphore: created, users: 1 };
+        const next = new Map(locks);
+        next.set(threadId, entry);
+        return [entry, next] as const;
+      });
+    },
+  );
+
+  const releaseSessionLifecycleLock = Effect.fn("CodexAdapter.releaseSessionLifecycleLock")(
+    function* (threadId: ThreadId, entry: SessionLifecycleLockEntry) {
+      yield* Ref.update(sessionLifecycleLocksRef, (locks) => {
+        const current = locks.get(threadId);
+        if (!current || current.semaphore !== entry.semaphore) {
+          return locks;
+        }
+        const next = new Map(locks);
+        if (current.users <= 1) {
+          next.delete(threadId);
+        } else {
+          next.set(threadId, { semaphore: current.semaphore, users: current.users - 1 });
+        }
+        return next;
+      });
+    },
+  );
+
+  const withSessionLifecycleLock = <A, E, R>(
+    threadId: ThreadId,
+    effect: Effect.Effect<A, E, R>,
+  ): Effect.Effect<A, E, R> =>
+    Effect.flatMap(acquireSessionLifecycleLock(threadId), (entry) =>
+      // Count waiters as well as the current holder. Removing the keyed lock
+      // only after the last participant exits prevents a late waiter from
+      // acquiring a different semaphore while an earlier operation still
+      // owns this thread, without retaining one lock per historical thread.
+      entry.semaphore
+        .withPermits(1)(effect)
+        .pipe(Effect.ensuring(releaseSessionLifecycleLock(threadId, entry))),
+    );
 
   const prepareRuntimeHomeForSession = Effect.fn("CodexAdapter.prepareRuntimeHomeForSession")(
     function* (threadId: ThreadId, operation: string) {
@@ -2659,7 +2714,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
   ): Effect.Effect<void> =>
     retireSession(threadId, reason, "codex.session.retired-after-transport-fallback");
 
-  const startSession: CodexAdapterShape["startSession"] = (input) =>
+  const startSessionUnlocked: CodexAdapterShape["startSession"] = (input) =>
     Effect.scoped(
       Effect.gen(function* () {
         if (input.provider !== undefined && input.provider !== PROVIDER) {
@@ -2703,6 +2758,9 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
             ? { resumeCursor: input.resumeCursor }
             : {}),
           runtimeMode: input.runtimeMode,
+          ...(input.codexSubagentThreadLimit !== undefined
+            ? { codexSubagentThreadLimit: input.codexSubagentThreadLimit }
+            : {}),
           autoCompactTokenLimit: effectiveAutoCompactTokenLimit,
           ultraCaching: codexConfig.ultraCaching,
           ossMode: codexConfig.ossMode,
@@ -2890,6 +2948,9 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
         return started;
       }),
     );
+
+  const startSession: CodexAdapterShape["startSession"] = (input) =>
+    withSessionLifecycleLock(input.threadId, startSessionUnlocked(input));
 
   const resolveAttachment = Effect.fn("resolveAttachment")(function* (
     method: "turn/start" | "turn/steer",
@@ -3134,13 +3195,16 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
   });
 
   const stopSession: CodexAdapterShape["stopSession"] = (threadId) =>
-    Effect.gen(function* () {
-      const session = sessions.get(threadId);
-      if (!session) {
-        return;
-      }
-      yield* stopSessionInternal(session);
-    });
+    withSessionLifecycleLock(
+      threadId,
+      Effect.gen(function* () {
+        const session = sessions.get(threadId);
+        if (!session) {
+          return;
+        }
+        yield* stopSessionInternal(session);
+      }),
+    );
 
   const listSessions: CodexAdapterShape["listSessions"] = () =>
     Effect.forEach(

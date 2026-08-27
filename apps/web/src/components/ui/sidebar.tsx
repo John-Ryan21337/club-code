@@ -232,6 +232,7 @@ function Sidebar({
       <SidebarInstanceContext value={instanceContextValue}>
         <Sheet onOpenChange={setOpenMobile} open={openMobile} {...props}>
           <SheetPopup
+            backdropClassName="cafe-sidebar-sheet-backdrop"
             className={cn(
               // This Sheet branch renders below `md` or when the operator has
               // explicitly forced Mobile optimized presentation.

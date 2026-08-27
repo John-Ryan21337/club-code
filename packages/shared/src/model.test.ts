@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  CODEX_SUBAGENT_THREAD_LIMIT_OPTION_ID,
+  DEFAULT_CODEX_SUBAGENT_THREAD_LIMIT,
   DEFAULT_MODEL,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -18,6 +20,8 @@ import {
   getProviderOptionStringSelectionValue,
   isClaudeUltrathinkPrompt,
   normalizeModelSlug,
+  parseCodexSubagentThreadLimitOption,
+  resolveCodexSubagentThreadLimit,
   resolveModelSlugForProvider,
   resolveSelectableModel,
   trimOrNull,
@@ -69,6 +73,11 @@ const claudeCaps: ModelCapabilities = createModelCapabilities({
     },
   ],
 });
+
+const codexSubagentSelection = (value: string | boolean) =>
+  createModelSelection(ProviderInstanceId.make("codex"), "gpt-5.6-sol", [
+    { id: CODEX_SUBAGENT_THREAD_LIMIT_OPTION_ID, value },
+  ]);
 
 describe("normalizeModelSlug", () => {
   it("maps known aliases to canonical slugs", () => {
@@ -240,5 +249,21 @@ describe("descriptor helpers", () => {
     ).toBeUndefined();
     expect(getModelSelectionStringOptionValue(selection, "reasoningEffort")).toBe("high");
     expect(getModelSelectionBooleanOptionValue(selection, "fastMode")).toBe(true);
+  });
+
+  it("resolves valid thread-bound Codex worker ceilings including both boundaries", () => {
+    expect(resolveCodexSubagentThreadLimit(codexSubagentSelection("1"))).toBe(1);
+    expect(resolveCodexSubagentThreadLimit(codexSubagentSelection("128"))).toBe(128);
+    expect(parseCodexSubagentThreadLimitOption(codexSubagentSelection("128").options)).toBe(128);
+  });
+
+  it("uses the safe default for missing or malformed Codex worker ceilings", () => {
+    expect(resolveCodexSubagentThreadLimit(undefined)).toBe(DEFAULT_CODEX_SUBAGENT_THREAD_LIMIT);
+    for (const value of ["0", "129", "1.5", " 16 ", "abc", true]) {
+      expect(parseCodexSubagentThreadLimitOption(codexSubagentSelection(value).options)).toBeNull();
+      expect(resolveCodexSubagentThreadLimit(codexSubagentSelection(value))).toBe(
+        DEFAULT_CODEX_SUBAGENT_THREAD_LIMIT,
+      );
+    }
   });
 });

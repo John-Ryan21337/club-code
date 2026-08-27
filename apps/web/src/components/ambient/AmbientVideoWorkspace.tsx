@@ -74,17 +74,16 @@ const MOBILE_DOCKED_MAX_WIDTH = 480;
 // outer panel box.
 const PLAYER_FRAME_BORDER_SIZE = 2;
 const ADAPTIVE_GLOW_LOAD_TIMEOUT_MS = 5_000;
+const LOCAL_MEDIA_BACKGROUND_ATTRIBUTE = "data-cafe-local-media-background";
 
 interface AmbientVideoWorkspaceContextValue {
   readonly registerChatAnchor: (element: HTMLElement | null) => void;
   readonly cinemaEffective: boolean;
-  readonly localMediaBackgroundEffective: boolean;
 }
 
 const AmbientVideoWorkspaceContext = createContext<AmbientVideoWorkspaceContextValue>({
   registerChatAnchor: () => undefined,
   cinemaEffective: false,
-  localMediaBackgroundEffective: false,
 });
 
 export function useAmbientVideoWorkspace(): AmbientVideoWorkspaceContextValue {
@@ -535,6 +534,17 @@ export function AmbientVideoWorkspace({
   const localCinemaEffective = localCinemaRequested && cinemaLayoutFits;
   const localMediaBackgroundEffective =
     localMedia.source?.kind === "video" && localMedia.presentationMode === "background";
+
+  useEffect(() => {
+    const root = document.documentElement;
+    if (!localMediaBackgroundEffective) {
+      root.removeAttribute(LOCAL_MEDIA_BACKGROUND_ATTRIBUTE);
+      return;
+    }
+
+    root.setAttribute(LOCAL_MEDIA_BACKGROUND_ATTRIBUTE, "true");
+    return () => root.removeAttribute(LOCAL_MEDIA_BACKGROUND_ATTRIBUTE);
+  }, [localMediaBackgroundEffective]);
   const localPresentationDominant = localCinemaRequested || localMediaBackgroundEffective;
   const streamingCinemaEffective =
     !localPresentationDominant &&
@@ -868,6 +878,8 @@ export function AmbientVideoWorkspace({
   const retainMountedPlayer =
     retainPlayerWithoutAnchor &&
     chatAnchor === null &&
+    settings.ambientVideoEnabled &&
+    capabilityEnabled &&
     sourceKey !== null &&
     mountedPlayerRef.current?.sourceKey === sourceKey &&
     mountedPlayerRef.current.element.isConnected;
@@ -1095,8 +1107,8 @@ export function AmbientVideoWorkspace({
     mobileDockedVisible && anchorRect ? mobileDockedPlayerSize(anchorRect).playerHeight : null;
 
   const contextValue = useMemo(
-    () => ({ registerChatAnchor, cinemaEffective, localMediaBackgroundEffective }),
-    [cinemaEffective, localMediaBackgroundEffective, registerChatAnchor],
+    () => ({ registerChatAnchor, cinemaEffective }),
+    [cinemaEffective, registerChatAnchor],
   );
 
   return (
@@ -1283,7 +1295,7 @@ export function AmbientVideoWorkspace({
               allow={
                 spotifySource
                   ? "autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
-                  : "accelerometer; autoplay; clipboard-write; encrypted-media; fullscreen; gyroscope; picture-in-picture; web-share"
+                  : "accelerometer; autoplay; clipboard-write; encrypted-media; fullscreen; gyroscope; picture-in-picture"
               }
               allowFullScreen
               className={cn(

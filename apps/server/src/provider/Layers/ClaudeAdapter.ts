@@ -11,6 +11,7 @@ import {
   type FastModeDisabledReason,
   type FastModeState,
   query,
+  type SDKAssistantMessageError,
   type SDKControlInterruptResponse,
   type Options as ClaudeQueryOptions,
   type PermissionMode,
@@ -19,6 +20,8 @@ import {
   type SDKMessage,
   type SDKResultMessage,
   type SettingSource,
+  type SpawnOptions as ClaudeSpawnOptions,
+  type SpawnedProcess as ClaudeSpawnedProcess,
   type SDKUserMessage,
   type ModelUsage,
 } from "@anthropic-ai/claude-agent-sdk";
@@ -77,6 +80,7 @@ import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import { getAgentBrowserBridge } from "../AgentBrowserBridge.ts";
 import { makeClaudeEnvironment } from "../Drivers/ClaudeHome.ts";
+import { spawnProviderProcessAtLowerPriority } from "../ProviderProcessPriority.ts";
 import {
   getClaudeModelCapabilities,
   normalizeClaudeCliEffort,
@@ -344,13 +348,13 @@ interface ClaudeSessionContext {
   lastAssistantUuid: string | undefined;
   lastThreadStartedId: string | undefined;
   hasSubmittedUserPrompt: boolean;
-  authFailureSeen: boolean;
+  terminalAccessError: ClaudeTerminalAccessError | undefined;
   stopped: boolean;
 }
 
 interface ClaudeQueryRuntime extends AsyncIterable<SDKMessage> {
   readonly interrupt: () => Promise<SDKControlInterruptResponse | undefined>;
-  // The 0.3.220 runtime implements this control request, but its public Query
+  // The 0.3.239 runtime implements this control request, but its public Query
   // interface has not exposed the method yet. Keep it optional for older SDKs.
   readonly cancelAsyncMessage?: (messageUuid: string) => Promise<boolean>;
   readonly setModel: (model?: string) => Promise<void>;
@@ -536,18 +540,24 @@ function isClaudeAuthFailureResult(message: SDKMessage): message is SDKResultMes
   );
 }
 
-function isClaudeAuthFailureAssistantMessage(message: SDKMessage): boolean {
+type ClaudeTerminalAccessError = Extract<
+  SDKAssistantMessageError,
+  "authentication_failed" | "account_on_hold"
+>;
+
+function claudeTerminalAccessErrorFromAssistantMessage(
+  message: SDKMessage,
+): ClaudeTerminalAccessError | undefined {
   if (message.type !== "assistant") {
-    return false;
+    return undefined;
   }
   const record = message as Record<string, unknown>;
-  if (record.error === "authentication_failed") {
-    return true;
+  if (record.error === "authentication_failed" || record.error === "account_on_hold") {
+    return record.error;
   }
 
   const content = message.message?.content;
-  return (
-    Array.isArray(content) &&
+  return Array.isArray(content) &&
     content.some((block) => {
       if (!block || typeof block !== "object") {
         return false;
@@ -558,11 +568,16 @@ function isClaudeAuthFailureAssistantMessage(message: SDKMessage): boolean {
         text.toLowerCase().includes("invalid authentication credentials")
       );
     })
-  );
+    ? "authentication_failed"
+    : undefined;
 }
 
 function hasDurableClaudeSessionId(message: SDKMessage): boolean {
-  if (isZeroTurnClaudeExecutionFailure(message) || isClaudeAuthFailureResult(message)) {
+  if (
+    isZeroTurnClaudeExecutionFailure(message) ||
+    isClaudeAuthFailureResult(message) ||
+    claudeTerminalAccessErrorFromAssistantMessage(message) !== undefined
+  ) {
     // Claude Code may allocate a brand-new session id for pre-turn failures
     // such as an invalid resume cursor, then report `error_during_execution`
     // with `num_turns: 0`. That id does not represent the user's durable
@@ -2292,7 +2307,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     if (typeof message.session_id !== "string" || message.session_id.length === 0) {
       return;
     }
-    if (!hasDurableClaudeSessionId(message)) {
+    if (!hasDurableClaudeSessionId(message) || context.terminalAccessError !== undefined) {
       return;
     }
     const nextThreadId = message.session_id;
@@ -3236,19 +3251,27 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     if (message.type !== "assistant") {
       return;
     }
-    if (isClaudeAuthFailureAssistantMessage(message)) {
-      context.authFailureSeen = true;
+    const terminalAccessError = claudeTerminalAccessErrorFromAssistantMessage(message);
+    if (terminalAccessError !== undefined) {
+      const shouldNotify = context.terminalAccessError === undefined;
+      context.terminalAccessError = terminalAccessError;
+      if (shouldNotify) {
+        yield* notifyAuthStatusChanged(true);
+      }
+      const accountOnHold = terminalAccessError === "account_on_hold";
       yield* emitRuntimeWarning(
         context,
-        "Claude authentication failed; suppressing Claude Code's synthetic assistant error and retiring this stale session.",
+        accountOnHold
+          ? "Claude reported that the account is on hold; suppressing its synthetic assistant error and retiring this session."
+          : "Claude authentication failed; suppressing Claude Code's synthetic assistant error and retiring this stale session.",
         {
-          apiErrorStatus: 401,
-          error: "authentication_failed",
+          ...(accountOnHold ? {} : { apiErrorStatus: 401 }),
+          error: terminalAccessError,
           sessionId: typeof message.session_id === "string" ? message.session_id : undefined,
         },
         {
           source: "claude.sdk.message",
-          method: "claude/assistant/authentication_failed",
+          method: `claude/assistant/${terminalAccessError}`,
           payload: message,
         },
       );
@@ -3354,10 +3377,17 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
 
     const status = turnStatusFromResult(message);
     const resultErrors = "errors" in message && Array.isArray(message.errors) ? message.errors : [];
-    const authFailure = isClaudeAuthFailureResult(message);
+    const terminalAccessError: ClaudeTerminalAccessError | undefined =
+      context.terminalAccessError ??
+      (isClaudeAuthFailureResult(message) ? "authentication_failed" : undefined);
+    const terminalAccessFailure = terminalAccessError !== undefined;
+    const shouldNotifyTerminalAccessFailure =
+      terminalAccessFailure && context.terminalAccessError === undefined;
     const errorMessage =
       status !== "completed"
-        ? (resultPrimaryError(message) ?? resultErrors[0] ?? "Claude turn failed.")
+        ? terminalAccessError === "account_on_hold"
+          ? "Claude account is on hold. Review the account status before trying again."
+          : (resultPrimaryError(message) ?? resultErrors[0] ?? "Claude turn failed.")
         : undefined;
     const completedPromptUuid = consumeClaudeResultPrompt(context, message);
     const hasQueuedCafeInput = context.promptLifecycleByUuid.size > 0;
@@ -3379,20 +3409,25 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
             payload: message,
           },
         );
-      } else if (authFailure) {
-        context.authFailureSeen = true;
-        yield* notifyAuthStatusChanged(true);
+      } else if (terminalAccessFailure) {
+        context.terminalAccessError = terminalAccessError;
+        if (shouldNotifyTerminalAccessFailure) {
+          yield* notifyAuthStatusChanged(true);
+        }
+        const accountOnHold = terminalAccessError === "account_on_hold";
         yield* emitRuntimeWarning(
           context,
-          "Claude authentication failed; retiring this stale Claude session so the next turn starts with current login material.",
+          accountOnHold
+            ? "Claude reported that the account is on hold; retiring this session until the account is available again."
+            : "Claude authentication failed; retiring this stale Claude session so the next turn starts with current login material.",
           {
-            apiErrorStatus: 401,
-            error: "authentication_failed",
+            ...(accountOnHold ? {} : { apiErrorStatus: 401 }),
+            error: terminalAccessError,
             sessionId: typeof message.session_id === "string" ? message.session_id : undefined,
           },
           {
             source: "claude.sdk.message",
-            method: "claude/result/authentication_failed",
+            method: `claude/result/${terminalAccessError}`,
             payload: message,
           },
         );
@@ -3414,14 +3449,14 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       }
     }
 
-    if (status === "completed") {
+    if (status === "completed" && !terminalAccessFailure) {
       // A successful turn proves the stored credentials work again (e.g.
       // after the user re-ran /login), so clear any needs-login provider
       // state derived from an earlier 401.
       yield* notifyAuthStatusChanged(false);
     }
 
-    if (!authFailure && hasQueuedCafeInput) {
+    if (!terminalAccessFailure && hasQueuedCafeInput) {
       // Claude's stream-json queue emits a result for the response segment that
       // just finished, then promotes the next queued SDKUserMessage without
       // ending the process. This remains true for recoverable execution-error
@@ -3448,7 +3483,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
 
     context.deferredTurnResult = undefined;
     yield* completeTurn(context, status, errorMessage, message);
-    if (authFailure) {
+    if (terminalAccessFailure) {
       yield* stopSessionInternal(context, {
         emitExitEvent: true,
         interruptStreamFiber: false,
@@ -3535,7 +3570,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     switch (message.subtype) {
       case "api_retry":
         if (isClaudeAuthFailureSystemMessage(message)) {
-          context.authFailureSeen = true;
+          context.terminalAccessError = "authentication_failed";
           yield* notifyAuthStatusChanged(true);
           yield* offerRuntimeEvent({
             ...base,
@@ -4802,6 +4837,53 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           providerInstanceId: boundInstanceId,
         }),
       );
+      const handleClaudeStderr = (data: string) => {
+        const lines = splitClaudeStderrLines(data);
+        if (lines.length === 0) {
+          return;
+        }
+        runFork(
+          Effect.gen(function* () {
+            const context = yield* Ref.get(contextRef);
+            if (!context) {
+              yield* Effect.logWarning("claude.stderr.before-context", {
+                lines,
+              });
+              return;
+            }
+            for (const line of lines) {
+              yield* emitClaudeProcessStderr(context, line);
+            }
+          }).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("claude.stderr.emit-failed", {
+                lines,
+                cause: Cause.pretty(cause),
+              }),
+            ),
+          ),
+        );
+      };
+      const spawnClaudeCodeProcess = (spawnOptions: ClaudeSpawnOptions): ClaudeSpawnedProcess =>
+        spawnProviderProcessAtLowerPriority({
+          command: spawnOptions.command,
+          args: spawnOptions.args,
+          ...(spawnOptions.cwd ? { cwd: spawnOptions.cwd } : {}),
+          env: spawnOptions.env,
+          signal: spawnOptions.signal,
+          onStderr: handleClaudeStderr,
+          onPriorityResult: (result) => {
+            if (result.adjusted) return;
+            runFork(
+              Effect.logWarning("provider.process.priority.unavailable", {
+                provider: PROVIDER,
+                pid: result.pid,
+                priority: result.priority,
+                error: result.error ?? "Unknown operating system error.",
+              }),
+            );
+          },
+        });
       const queryOptions: ClaudeQueryOptions = {
         ...(input.cwd ? { cwd: input.cwd } : {}),
         ...(apiModelId ? { model: apiModelId } : {}),
@@ -4861,33 +4943,11 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         // task/tool lifecycle frames, which makes long turns look silent.
         agentProgressSummaries: true,
         canUseTool,
-        stderr: (data: string) => {
-          const lines = splitClaudeStderrLines(data);
-          if (lines.length === 0) {
-            return;
-          }
-          runFork(
-            Effect.gen(function* () {
-              const context = yield* Ref.get(contextRef);
-              if (!context) {
-                yield* Effect.logWarning("claude.stderr.before-context", {
-                  lines,
-                });
-                return;
-              }
-              for (const line of lines) {
-                yield* emitClaudeProcessStderr(context, line);
-              }
-            }).pipe(
-              Effect.catchCause((cause) =>
-                Effect.logWarning("claude.stderr.emit-failed", {
-                  lines,
-                  cause: Cause.pretty(cause),
-                }),
-              ),
-            ),
-          );
-        },
+        // Club owns the spawn so the provider runtime starts below normal
+        // priority. The same stderr callback remains attached to the custom
+        // process because the SDK only wires it for its default spawner.
+        spawnClaudeCodeProcess,
+        stderr: handleClaudeStderr,
         env: claudeEnvironment,
         ...(claudeAdditionalDirectories.length > 0
           ? { additionalDirectories: [...claudeAdditionalDirectories] }
@@ -4997,7 +5057,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         lastAssistantUuid: undefined,
         lastThreadStartedId: undefined,
         hasSubmittedUserPrompt: false,
-        authFailureSeen: false,
+        terminalAccessError: undefined,
         stopped: false,
       };
       yield* Ref.set(contextRef, context);
@@ -5225,6 +5285,18 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         catch: (cause) => toRequestError(threadId, "turn/interrupt", cause),
       });
 
+      // Claude Code 2.1.239+ can also report queued UUIDs atomically cancelled
+      // by an interrupt. The public SDK Query API still uses the wrapper-style
+      // contract (interrupt, then per-UUID cancellation), but accept the new
+      // receipt field so a future exposed atomic path cannot leave Cafe's
+      // local delivery ledger stale.
+      let cancelledByInterruptCount = 0;
+      for (const messageUuid of receipt?.cancelled ?? []) {
+        if (context.promptLifecycleByUuid.delete(messageUuid)) {
+          cancelledByInterruptCount += 1;
+        }
+      }
+
       // Claude Code 2.1.205+ returns UUIDs for queued inputs that survive an
       // interrupt. Cancel only UUIDs Cafe submitted: the receipt can include
       // internal cron/auto-resume commands, and upstream explicitly requires
@@ -5244,10 +5316,19 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       }
 
       if (cancellationCandidates.size === 0) {
+        if (cancelledByInterruptCount > 0) {
+          yield* Effect.logInfo("claude.turnInterrupt.queuedInputsCancelled", {
+            threadId,
+            providerInstanceId: boundInstanceId,
+            confirmedCancellationCount: cancelledByInterruptCount,
+            cancelledByInterruptCount,
+            receiptCount: receipt?.still_queued.length ?? 0,
+          });
+        }
         return;
       }
 
-      let confirmedCancellationCount = 0;
+      let confirmedCancellationCount = cancelledByInterruptCount;
       let unconfirmedCancellationCount = 0;
       const cancelAsyncMessage = context.query.cancelAsyncMessage;
       if (cancelAsyncMessage) {
@@ -5272,6 +5353,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           threadId,
           providerInstanceId: boundInstanceId,
           confirmedCancellationCount,
+          cancelledByInterruptCount,
           receiptCount: receipt?.still_queued.length ?? 0,
         });
         return;
@@ -5287,8 +5369,10 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           candidateCount: cancellationCandidates.size,
           confirmedCancellationCount,
           unconfirmedCancellationCount,
+          cancelledByInterruptCount,
           receiptCount: receipt?.still_queued.length ?? 0,
           interruptReceiptAdvertised: context.capabilities.has("interrupt_receipt_v1"),
+          interruptCancelQueuedAdvertised: context.capabilities.has("interrupt_cancel_queued_v1"),
           messageLifecycleAdvertised: context.capabilities.has("msg_lifecycle_v1"),
         },
       );

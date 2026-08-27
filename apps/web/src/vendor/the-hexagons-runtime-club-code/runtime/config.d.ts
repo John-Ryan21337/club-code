@@ -3,7 +3,7 @@ export interface HexagonsPresentationSettings {
 }
 
 export interface HexagonsRuntimeSettings extends HexagonsPresentationSettings {
-  readonly schemaVersion: 10;
+  readonly schemaVersion: 14;
   readonly enabled: boolean;
   readonly fallingEffectsEnabled: boolean;
   readonly renderer: "auto" | "gpu" | "canvas";
@@ -21,9 +21,23 @@ export interface HexagonsRuntimeSettings extends HexagonsPresentationSettings {
   readonly patternPhase: number;
   readonly patternRotation: number;
   readonly patternMirror: boolean;
+  readonly pistonPattern:
+    | "individual"
+    | "six-one"
+    | "twelve-rhombus"
+    | "rhombus-six-one"
+    | "star-hex-twelve";
+  readonly meshEnergyTracePistons: boolean;
+  readonly meshEnergyPattern:
+    | "tile-grid"
+    | "piston-groups"
+    | "six-point-stars"
+    | "stars-and-pistons";
+  readonly meshEnergyFlowMode: "natural" | "directional";
+  readonly meshEnergyFlowAngle: number;
 }
 
-export const SCHEMA_VERSION: 10;
+export const SCHEMA_VERSION: 14;
 export const PROFILE_PRESENTATION_KEYS: readonly string[];
 
 export function normalizeSettings(

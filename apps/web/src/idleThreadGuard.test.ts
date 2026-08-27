@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import { EnvironmentId, ThreadId } from "@cafecode/contracts";
+
 import {
   IDLE_THREAD_GUARD_DEFAULT_PROMPT,
   IDLE_THREAD_GUARD_DEFAULT_PROMPT_DUAL,
@@ -10,6 +12,7 @@ import {
   latestIdleActivityAt,
   migrateStoredIdleThreadGuardBuiltInPrompt,
   normalizeIdleThreadGuardBuiltInPrompt,
+  readIdleThreadGuardConfig,
 } from "./idleThreadGuard";
 
 describe("Idle Thread Guard language-aware built-in prompts", () => {
@@ -48,6 +51,15 @@ describe("Idle Thread Guard language-aware built-in prompts", () => {
 });
 
 describe("Idle Thread Guard safety timing", () => {
+  it("has no enabled configuration by default", () => {
+    expect(
+      readIdleThreadGuardConfig({
+        environmentId: EnvironmentId.make("environment-default-off"),
+        threadId: ThreadId.make("thread-default-off"),
+      }),
+    ).toBeNull();
+  });
+
   it("uses the newest transcript, tool, session, or arming activity", () => {
     expect(
       latestIdleActivityAt([

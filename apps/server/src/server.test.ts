@@ -1509,10 +1509,22 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         contentSecurityPolicy.split("; ").find((directive) => directive.startsWith("script-src ")),
         "script-src 'self' 'wasm-unsafe-eval'",
       );
-      assert.include(contentSecurityPolicy, "style-src 'self' https://fonts.googleapis.com");
+      assert.equal(
+        contentSecurityPolicy.split("; ").find((directive) => directive.startsWith("style-src ")),
+        "style-src 'self' 'sha256-kLmvWqfziFavKtqHqRsb90f006UAK2Dmd0It5Iz2KFA=' https://fonts.googleapis.com",
+      );
+      assert.equal(
+        contentSecurityPolicy
+          .split("; ")
+          .find((directive) => directive.startsWith("style-src-elem ")),
+        "style-src-elem 'self' 'sha256-kLmvWqfziFavKtqHqRsb90f006UAK2Dmd0It5Iz2KFA=' https://fonts.googleapis.com",
+      );
       assert.include(contentSecurityPolicy, "style-src-attr 'unsafe-inline'");
       assert.include(contentSecurityPolicy, "font-src 'self' https://fonts.gstatic.com data:");
-      assert.include(contentSecurityPolicy, "img-src 'self' data: blob:");
+      assert.equal(
+        contentSecurityPolicy.split("; ").find((directive) => directive.startsWith("img-src ")),
+        "img-src 'self' data: blob: https://cdn.jsdelivr.net",
+      );
       assert.include(contentSecurityPolicy, "media-src 'self' blob: cafecode-media:");
       assert.include(contentSecurityPolicy, "worker-src 'self' blob:");
       assert.include(contentSecurityPolicy, "connect-src 'self' http: https: ws: wss:");

@@ -182,6 +182,7 @@ const PlanSidebar = memo(function PlanSidebar({
           ? "h-full w-[340px] shrink-0 border-l border-border/70"
           : "h-full w-full",
       )}
+      data-cafe-details-sidebar={mode}
     >
       {/* Header */}
       <div className="flex h-12 shrink-0 items-center justify-between border-b border-border/60 px-3">

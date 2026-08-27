@@ -23,8 +23,9 @@ export type SettingsProfileTheme = "light" | "dark" | "system";
  * exclude it. Include renderer-only appearance, layout, theme-adjacent, and usability preferences.
  * Exclude fields that carry identity, raw paths/assets, consent, or authority data, and fields whose
  * application activates providers, native-machine behavior, or exact-thread behavior. Ambient
- * media is deliberately profile-owned: YouTube sources are validated public identifiers and image
- * references are authenticated, content-addressed server assets rather than local paths or bytes.
+ * media configuration is deliberately profile-owned: YouTube sources are validated public
+ * identifiers and image references are authenticated, content-addressed server assets rather than
+ * local paths or bytes. Media activation remains an explicit choice on each client.
  *
  * Add compatible client preferences deliberately in a later document version or as an
  * optional field in this version. Older profiles patch only the keys they actually contain,
@@ -82,6 +83,8 @@ export const SETTINGS_PROFILE_CLIENT_FIELD_POLICY = {
   // profile may select it, but a profile must not activate the renderer.
   hexagonsBackgroundEnabled: "ambient-activation",
   hexagonsBackgroundPresetJson: "include",
+  ambientBackgroundManuscriptOpacity: "include",
+  ambientBackgroundSidebarOpacity: "include",
   fallingEffectsEnabled: "ambient-activation",
   atmosphereConsoleEnabled: "ambient-activation",
   fallingEffectsOverCinemaEnabled: "ambient-activation",
@@ -118,12 +121,13 @@ export const SETTINGS_PROFILE_CLIENT_FIELD_POLICY = {
   fallingEffectActivityLinkDatabaseEnabled: "live-operational-input",
   fallingEffectActivityLinkBuildEnabled: "live-operational-input",
   fallingEffectActivityLinkAgentEnabled: "live-operational-input",
+  fallingEffectActivityLinkWorkEnabled: "live-operational-input",
   fallingEffectActivityLinkColorMode: "include",
   fallingEffectActivityLinkRetentionSeconds: "include",
-  // Ambient media is part of the saved presentation. Loading a profile is the
-  // explicit operator action that authorizes activation; sources remain
-  // bounded by the shared schema and carry no provider credentials.
-  ambientVideoEnabled: "include",
+  // A profile can save bounded media sources and presentation, but it must not
+  // start playback or an image cycle. Activation remains an explicit choice on
+  // this client after the profile loads.
+  ambientVideoEnabled: "external-media-activation",
   ambientVideoSource: "include",
   ambientVideoLayoutMode: "include",
   ambientVideoPresetPlacement: "include",
@@ -133,10 +137,10 @@ export const SETTINGS_PROFILE_CLIENT_FIELD_POLICY = {
   ambientVideoGlowMode: "include",
   ambientVideoGlowColor: "include",
   ambientVideoGlowOpacity: "include",
-  ambientImageEnabled: "include",
+  ambientImageEnabled: "external-media-activation",
   ambientImageAsset: "include",
   ambientImageCycleAssets: "include",
-  ambientImageCycleEnabled: "include",
+  ambientImageCycleEnabled: "external-media-activation",
   ambientImageCycleSeconds: "include",
   ambientImagePresentationMode: "include",
   ambientImageLayoutMode: "include",

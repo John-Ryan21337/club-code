@@ -3,6 +3,7 @@ const TRANSPORT_ERROR_PATTERNS = [
   /\bSocketOpenError\b/i,
   /Unable to connect to the Club Code server WebSocket\./i,
   /\bping timeout\b/i,
+  /\bRpcClientDefect\b[\s\S]*\bUnknown socket error\b/i,
 ] as const;
 
 // A dropped WebSocket mid-request interrupts the in-flight dispatch fiber, which

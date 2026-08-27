@@ -30,8 +30,7 @@ describe("YouTube URL queue and device-local list library", () => {
     expect(YOUTUBE_URL_QUEUE_EXAMPLES).toEqual([]);
     expect(createYouTubeUrlQueueLibraryStore(createMemoryStorage()).getSnapshot()).toEqual([]);
 
-    const store = createYouTubeUrlQueueStore();
-    expect(store.getSnapshot()).toMatchObject({
+    expect(createYouTubeUrlQueueStore().getSnapshot()).toMatchObject({
       active: false,
       count: 0,
       currentSource: null,
@@ -179,6 +178,31 @@ describe("YouTube URL queue and device-local list library", () => {
     expect(storage.read(YOUTUBE_URL_QUEUE_LIBRARY_STORAGE_KEY)).toBe(
       persistedBeforeRejectedReplacement,
     );
+  });
+
+  it("rejects malformed Unicode names before persistence and skips them during recovery", () => {
+    const malformedName = String.fromCharCode(0xd800);
+    const validQueue = parseYouTubeUrlQueueText("https://youtu.be/dQw4w9WgXcQ");
+    const storage = createMemoryStorage();
+    const library = createYouTubeUrlQueueLibraryStore(storage);
+
+    expect(() => library.upsert(malformedName, validQueue)).toThrow(
+      "Use a playlist filename with 1 to 64 printable characters.",
+    );
+    expect(storage.read(YOUTUBE_URL_QUEUE_LIBRARY_STORAGE_KEY)).toBeNull();
+
+    const malformedStorage = createMemoryStorage(
+      JSON.stringify({
+        version: 1,
+        lists: [{ logicalName: malformedName, videoIds: ["dQw4w9WgXcQ"] }],
+      }),
+    );
+    expect(() => createYouTubeUrlQueueLibraryStore(malformedStorage)).not.toThrow();
+    expect(
+      createYouTubeUrlQueueLibraryStore(malformedStorage)
+        .getSnapshot()
+        .map(({ id }) => id),
+    ).toEqual([]);
   });
 
   it("uses the uploaded .txt filename as the replacement/add identity", async () => {

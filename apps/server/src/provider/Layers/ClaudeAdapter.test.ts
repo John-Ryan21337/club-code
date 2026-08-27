@@ -1232,6 +1232,71 @@ describe("ClaudeAdapterLive", () => {
     },
   );
 
+  it.effect("accepts queued UUIDs cancelled atomically by a Claude interrupt", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+
+      const turn = yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "first prompt",
+        attachments: [],
+      });
+      yield* adapter.steerTurn({
+        threadId: session.threadId,
+        expectedTurnId: turn.turnId,
+        input: "queued steer",
+        attachments: [],
+      });
+
+      const messages = yield* Effect.promise(() =>
+        readPromptMessages(harness.getLastCreateQueryInput(), 2),
+      );
+      const firstMessageUuid = messages[0]?.uuid;
+      const steerMessageUuid = messages[1]?.uuid;
+      assert.isString(firstMessageUuid);
+      assert.isString(steerMessageUuid);
+      if (firstMessageUuid === undefined || steerMessageUuid === undefined) {
+        throw new Error("Expected Cafe to UUID-stamp both Claude prompt messages.");
+      }
+
+      harness.query.emit({
+        type: "command_lifecycle",
+        command_uuid: firstMessageUuid,
+        state: "started",
+        uuid: "atomic-command-lifecycle-started",
+        session_id: "claude-session-atomic-cancel",
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "command_lifecycle",
+        command_uuid: steerMessageUuid,
+        state: "queued",
+        uuid: "atomic-command-lifecycle-queued",
+        session_id: "claude-session-atomic-cancel",
+      } as unknown as SDKMessage);
+      yield* Effect.yieldNow;
+      yield* Effect.yieldNow;
+
+      harness.query.interruptResponse = {
+        still_queued: [],
+        cancelled: [steerMessageUuid, "claude-internal-command"],
+      };
+      yield* adapter.interruptTurn(session.threadId, turn.turnId);
+
+      assert.equal(harness.query.interruptCalls.length, 1);
+      assert.deepEqual(harness.query.cancelAsyncMessageCalls, []);
+      assert.equal(harness.query.closeCalls, 0);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("rejects Claude steer input for a stale active turn id", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
@@ -1574,6 +1639,68 @@ describe("ClaudeAdapterLive", () => {
       );
     },
   );
+
+  it.effect("retires Claude sessions when the SDK reports an account hold", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const runtimeEventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil((event) => event.type === "session.exited"),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "hello",
+        attachments: [],
+      });
+
+      harness.query.emit({
+        type: "assistant",
+        session_id: "held-claude-session",
+        uuid: "assistant-account-on-hold",
+        parent_tool_use_id: null,
+        error: "account_on_hold",
+        message: {
+          id: "synthetic-account-on-hold",
+          model: "<synthetic>",
+          role: "assistant",
+          content: [{ type: "text", text: "This account is on hold." }],
+        },
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "result",
+        subtype: "error_during_execution",
+        is_error: true,
+        errors: [],
+        session_id: "held-claude-session",
+        uuid: "result-account-on-hold",
+      } as unknown as SDKMessage);
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+      assert.equal(
+        runtimeEvents.some((event) => event.type === "content.delta"),
+        false,
+      );
+      const completed = runtimeEvents.find((event) => event.type === "turn.completed");
+      assert.equal(completed?.type, "turn.completed");
+      if (completed?.type === "turn.completed") {
+        assert.equal(completed.payload.state, "failed");
+        assert.include(String(completed.payload.errorMessage), "account is on hold");
+      }
+      assert.equal(harness.query.closeCalls, 1);
+      assert.deepEqual(yield* adapter.listSessions(), []);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
 
   it.effect("notifies the driver when a Claude turn fails with an auth error", () => {
     const authStatusChanged = Effect.runSync(Deferred.make<boolean>());

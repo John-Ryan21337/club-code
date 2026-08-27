@@ -73,6 +73,7 @@ import {
 } from "../composerFooterLayout";
 import { type ComposerPromptEditorHandle, ComposerPromptEditor } from "../ComposerPromptEditor";
 import { ProviderModelPicker } from "./ProviderModelPicker";
+import { ThreadAgentControl } from "./ThreadAgentControl";
 import { CameraCaptureDialog } from "./CameraCaptureDialog";
 import { type ComposerCommandItem, ComposerCommandMenu } from "./ComposerCommandMenu";
 import { ComposerPendingApprovalActions } from "./ComposerPendingApprovalActions";
@@ -909,6 +910,7 @@ export interface ChatComposerProps {
   ) => void;
 
   onProviderModelSelect: (instanceId: ProviderInstanceId, model: string) => void;
+  onPersistThreadModelSelection?: (selection: ModelSelection) => Promise<void> | void;
   toggleInteractionMode: () => void;
   handleRuntimeModeChange: (mode: RuntimeMode) => void;
   handleInteractionModeChange: (mode: ProviderInteractionMode) => void;
@@ -992,6 +994,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     onPreviousActivePendingUserInputQuestion,
     onChangeActivePendingUserInputCustomAnswer,
     onProviderModelSelect,
+    onPersistThreadModelSelection,
     toggleInteractionMode,
     handleRuntimeModeChange,
     handleInteractionModeChange,
@@ -3542,6 +3545,17 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     setIsComposerModelPickerOpen(open);
                   }}
                   onInstanceModelChange={onProviderModelSelect}
+                />
+                <ThreadAgentControl
+                  compact={isComposerFooterCompact}
+                  provider={selectedProvider}
+                  providerInstanceId={selectedInstanceId}
+                  model={selectedModel}
+                  modelOptions={selectedComposerModelOptions}
+                  threadTarget={composerDraftTarget}
+                  {...(routeKind === "server" && onPersistThreadModelSelection
+                    ? { onPersistModelSelection: onPersistThreadModelSelection }
+                    : {})}
                 />
 
                 {isComposerFooterCompact ? (

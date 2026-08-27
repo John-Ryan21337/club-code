@@ -51,6 +51,7 @@ import * as EffectCodexSchema from "effect-codex-app-server/schema";
 import { buildCodexInitializeParams } from "./CodexProvider.ts";
 import { expandHomePath } from "../../pathExpansion.ts";
 import type { AgentBrowserMcpConfig } from "../AgentBrowserBridge.ts";
+import { lowerProviderProcessTreePriority } from "../ProviderProcessPriority.ts";
 import {
   CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS,
   CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS,
@@ -249,15 +250,20 @@ export interface CodexTransportPolicy {
 export function buildCodexAppServerArgs(
   transportPolicy: CodexTransportPolicy | undefined,
   ossMode = false,
+  codexSubagentThreadLimit?: number,
 ): ReadonlyArray<string> {
+  const subagentThreadLimitArgs =
+    codexSubagentThreadLimit === undefined
+      ? []
+      : ["-c", `agents.max_concurrent_threads_per_session=${codexSubagentThreadLimit}`];
   if (ossMode) {
     // Keep documented global flags before the app-server subcommand and name
     // LM Studio explicitly so a non-interactive session never opens Codex's
     // local-provider picker or silently chooses Ollama.
-    return ["--oss", "--local-provider", "lmstudio", "app-server"];
+    return ["--oss", "--local-provider", "lmstudio", "app-server", ...subagentThreadLimitArgs];
   }
   if (transportPolicy?.responsesWebsockets !== "disabled") {
-    return ["app-server"];
+    return ["app-server", ...subagentThreadLimitArgs];
   }
 
   // Codex's built-in `openai` provider cannot be overridden by config. A
@@ -279,6 +285,7 @@ export function buildCodexAppServerArgs(
     `model_providers.${CODEX_HTTP_FALLBACK_PROVIDER_ID}.env_http_headers.OpenAI-Project="OPENAI_PROJECT"`,
     "-c",
     `model_providers.${CODEX_HTTP_FALLBACK_PROVIDER_ID}.supports_websockets=false`,
+    ...subagentThreadLimitArgs,
   ];
 }
 
@@ -293,6 +300,7 @@ export interface CodexSessionRuntimeOptions {
   readonly ossMode?: boolean;
   readonly cwd: string;
   readonly runtimeMode: RuntimeMode;
+  readonly codexSubagentThreadLimit?: number | undefined;
   readonly model?: string;
   readonly serviceTier?: CodexServiceTier | undefined;
   readonly additionalDirectories?: ReadonlyArray<string> | undefined;
@@ -1534,6 +1542,39 @@ function classifyCodexStderrLine(rawLine: string): { readonly message: string } 
   return { message: line };
 }
 
+export function classifyCodexStderrLines(
+  rawLines: ReadonlyArray<string>,
+  suppressCommandFailureDetails = false,
+): {
+  readonly messages: ReadonlyArray<string>;
+  readonly suppressCommandFailureDetails: boolean;
+} {
+  const messages: string[] = [];
+  let suppressDetails = suppressCommandFailureDetails;
+
+  for (const rawLine of rawLines) {
+    const line = rawLine.replaceAll(ANSI_ESCAPE_REGEX, "").trim();
+    const structuredLog = line.match(CODEX_STDERR_LOG_REGEX);
+    if (structuredLog) {
+      // Codex writes the complete failed command output after this header. The
+      // command item already owns that output. Keep only the diagnostic header.
+      suppressDetails = line.includes(" ERROR codex_core::tools::router: error=Exit code:");
+    } else if (suppressDetails) {
+      continue;
+    }
+
+    const classified = classifyCodexStderrLine(line);
+    if (classified) {
+      messages.push(classified.message);
+    }
+  }
+
+  return {
+    messages,
+    suppressCommandFailureDetails: suppressDetails,
+  };
+}
+
 export function isRecoverableThreadResumeError(error: unknown): boolean {
   const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
   if (!message.includes("thread")) {
@@ -2673,7 +2714,11 @@ export const makeCodexSessionRuntime = (
         ? { [AGENT_BROWSER_AUTH_ENV]: options.agentBrowserMcp.authorization }
         : {}),
     };
-    const appServerArgs = buildCodexAppServerArgs(options.transportPolicy, options.ossMode);
+    const appServerArgs = buildCodexAppServerArgs(
+      options.transportPolicy,
+      options.ossMode,
+      options.codexSubagentThreadLimit,
+    );
     const appServerCwd = options.appServerCwd ?? process.cwd();
     const child = yield* spawner
       .spawn(
@@ -2703,6 +2748,15 @@ export const makeCodexSessionRuntime = (
             }),
         ),
       );
+
+    yield* lowerProviderProcessTreePriority({
+      provider: PROVIDER,
+      rootPid: Number(child.pid),
+    }).pipe(
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      Effect.forkIn(runtimeScope),
+      Effect.asVoid,
+    );
 
     const clientContext = yield* CodexClient.layerChildProcess(child, {
       logger: (event) =>
@@ -2746,6 +2800,9 @@ export const makeCodexSessionRuntime = (
         ? { additionalDirectories: options.additionalDirectories }
         : {}),
       ...(options.model ? { model: options.model } : {}),
+      ...(options.codexSubagentThreadLimit !== undefined
+        ? { codexSubagentThreadLimit: options.codexSubagentThreadLimit }
+        : {}),
       threadId: options.threadId,
       ...(options.resumeCursor !== undefined ? { resumeCursor: options.resumeCursor } : {}),
       createdAt: sessionCreatedAt,
@@ -4568,6 +4625,7 @@ export const makeCodexSessionRuntime = (
     );
 
     const stderrRemainderRef = yield* Ref.make("");
+    const stderrCommandFailureDetailsRef = yield* Ref.make(false);
     yield* child.stderr.pipe(
       Stream.decodeText(),
       Stream.runForEach((chunk) =>
@@ -4578,21 +4636,23 @@ export const makeCodexSessionRuntime = (
           return [lines.map((line) => line.replace(/\r$/, "")), remainder] as const;
         }).pipe(
           Effect.flatMap((lines) =>
-            Effect.forEach(
-              lines,
-              (line) => {
-                const classified = classifyCodexStderrLine(line);
-                if (!classified) {
-                  return Effect.void;
-                }
-                return emitEvent({
-                  kind: "notification",
-                  threadId: options.threadId,
-                  method: "process/stderr",
-                  message: classified.message,
-                });
-              },
-              { discard: true },
+            Ref.modify(stderrCommandFailureDetailsRef, (suppressCommandFailureDetails) => {
+              const classified = classifyCodexStderrLines(lines, suppressCommandFailureDetails);
+              return [classified.messages, classified.suppressCommandFailureDetails] as const;
+            }).pipe(
+              Effect.flatMap((messages) =>
+                Effect.forEach(
+                  messages,
+                  (message) =>
+                    emitEvent({
+                      kind: "notification",
+                      threadId: options.threadId,
+                      method: "process/stderr",
+                      message,
+                    }),
+                  { discard: true },
+                ),
+              ),
             ),
           ),
         ),

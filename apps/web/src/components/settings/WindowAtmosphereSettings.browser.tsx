@@ -1,6 +1,8 @@
 import "../../index.css";
 
 import {
+  DEFAULT_AMBIENT_BACKGROUND_MANUSCRIPT_OPACITY,
+  DEFAULT_AMBIENT_BACKGROUND_SIDEBAR_OPACITY,
   DEFAULT_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE,
   DEFAULT_FALLING_EFFECT_MATRIX_CENTER_WIND_INTENSITY,
   DEFAULT_FALLING_EFFECT_MATRIX_WALK_END_FONT_SIZE,
@@ -428,6 +430,45 @@ describe("WindowAtmosphereSettings motion", () => {
     await mounted.unmount();
   });
 
+  it("updates and resets the manuscript and shared sidebar opacity", async () => {
+    mocks.settings = {
+      ...mocks.settings,
+      ambientBackgroundManuscriptOpacity: 0.4,
+      ambientBackgroundSidebarOpacity: 0.7,
+    };
+    const mounted = await render(<WindowAtmosphereSettings />);
+
+    const manuscriptOpacity = page.getByLabelText("Chat backdrop opacity percent", {
+      exact: true,
+    });
+    const sidebarOpacity = page.getByLabelText("Sidebar backdrop opacity percent", {
+      exact: true,
+    });
+    await expect.element(manuscriptOpacity).toHaveValue("40");
+    await expect.element(sidebarOpacity).toHaveValue("70");
+
+    await page.getByLabelText("Increase chat backdrop opacity", { exact: true }).click();
+    expect(mocks.updateSettings).toHaveBeenLastCalledWith({
+      ambientBackgroundManuscriptOpacity: 0.41,
+    });
+    await page.getByLabelText("Decrease sidebar backdrop opacity", { exact: true }).click();
+    expect(mocks.updateSettings).toHaveBeenLastCalledWith({
+      ambientBackgroundSidebarOpacity: 0.69,
+    });
+
+    mocks.updateSettings.mockClear();
+    await page.getByRole("button", { name: "Reset chat backdrop opacity to default" }).click();
+    expect(mocks.updateSettings).toHaveBeenLastCalledWith({
+      ambientBackgroundManuscriptOpacity: DEFAULT_AMBIENT_BACKGROUND_MANUSCRIPT_OPACITY,
+    });
+    await page.getByRole("button", { name: "Reset sidebar backdrop opacity to default" }).click();
+    expect(mocks.updateSettings).toHaveBeenLastCalledWith({
+      ambientBackgroundSidebarOpacity: DEFAULT_AMBIENT_BACKGROUND_SIDEBAR_OPACITY,
+    });
+
+    await mounted.unmount();
+  });
+
   it("reports invalid files once and leaves write failures to the settings layer", async () => {
     const mounted = await render(<WindowAtmosphereSettings />);
     const input = document.querySelector(
@@ -481,6 +522,8 @@ describe("WindowAtmosphereSettings motion", () => {
       fallingEffectsOverCinemaEnabled: true,
       hexagonsBackgroundEnabled: true,
       hexagonsBackgroundPresetJson: "saved-preset",
+      ambientBackgroundManuscriptOpacity: 0.31,
+      ambientBackgroundSidebarOpacity: 0.49,
     };
     const mounted = await render(<WindowAtmosphereSettings />);
 
@@ -499,8 +542,27 @@ describe("WindowAtmosphereSettings motion", () => {
         fallingEffectsOverCinemaEnabled: false,
         hexagonsBackgroundEnabled: false,
         hexagonsBackgroundPresetJson: null,
+        ambientBackgroundManuscriptOpacity: DEFAULT_AMBIENT_BACKGROUND_MANUSCRIPT_OPACITY,
+        ambientBackgroundSidebarOpacity: DEFAULT_AMBIENT_BACKGROUND_SIDEBAR_OPACITY,
       }),
     );
+
+    await mounted.unmount();
+  });
+
+  it("lets the operator disable neutral provider work routes independently", async () => {
+    mocks.settings = {
+      ...mocks.settings,
+      fallingEffectKind: "matrix",
+      fallingEffectActivityLinks: true,
+      fallingEffectActivityLinkWorkEnabled: true,
+    };
+    const mounted = await render(<WindowAtmosphereSettings />);
+
+    await page.getByRole("checkbox", { name: "Work / tool" }).click();
+    expect(mocks.updateSettings).toHaveBeenLastCalledWith({
+      fallingEffectActivityLinkWorkEnabled: false,
+    });
 
     await mounted.unmount();
   });

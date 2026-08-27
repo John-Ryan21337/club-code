@@ -1,4 +1,4 @@
-export const SCHEMA_VERSION = 10;
+export const SCHEMA_VERSION = 14;
 
 export const GOLDEN_RATIO = (1 + Math.sqrt(5)) / 2;
 export const SILVER_RATIO = 1 + Math.sqrt(2);
@@ -56,6 +56,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   emberColorA: "#8c0601",
   emberColorB: "#ff7a09",
   pistonMode: "radial",
+  pistonPattern: "individual",
   pistonAmplitude: 0.72,
   pitDepth: 6,
   pistonSpeed: 0.18,
@@ -100,9 +101,13 @@ export const DEFAULT_SETTINGS = Object.freeze({
   frontPrismMode: "neon",
 
   gapParticles: "cycling",
+  meshEnergyTracePistons: true,
+  meshEnergyPattern: "piston-groups",
   meshEnergyColor: "#21e6d1",
   meshEnergyRainbowCycle: false,
   meshEnergyRainbowSpeed: 0.25,
+  meshEnergyFlowMode: "natural",
+  meshEnergyFlowAngle: 90,
   particleCount: 360,
   particleSpeed: 0.34,
   particleSpeedVariation: 0.55,
@@ -149,6 +154,7 @@ const ENUMS = {
   colorPattern: ["facet", "backyard-star", "rotating-triplets", "checker", "rings", "seeded-mosaic"],
   emberPattern: ["organic", "rings", "hexagon", "star"],
   pistonMode: ["off", "radial", "wave", "pit"],
+  pistonPattern: ["individual", "six-one", "twelve-rhombus", "rhombus-six-one", "star-hex-twelve"],
   behindLightType: ["point", "point-bar", "bar", "laser", "ripple", "total"],
   frontLightType: ["point", "point-bar", "bar", "laser", "ripple", "total"],
   behindLightMotion: ["pointer", "fixed", "orbit", "wander"],
@@ -156,6 +162,8 @@ const ENUMS = {
   behindPrismMode: ["neon", "white-core", "white-fringe", "solid"],
   frontPrismMode: ["neon", "white-core", "white-fringe", "solid"],
   gapParticles: ["off", "constant", "cycling"],
+  meshEnergyPattern: ["tile-grid", "piston-groups", "six-point-stars", "stars-and-pistons"],
+  meshEnergyFlowMode: ["natural", "directional"],
   fallingSourceProfile: ["club-code", "jobsearch"],
   fallingEffectKind: ["matrix", "rain", "snow"],
   fallingMotion: ["flat", "forward", "reverse", "tunnel", "walk-forward", "walk-reverse"],
@@ -201,8 +209,9 @@ const NUMBER_BOUNDS = {
   frontLightFixedY: [-0.5, 1.5],
   frontRainbowSpeed: [0.02, 64],
   frontPrismStrength: [0, 12],
-  particleCount: [0, 20000],
+  particleCount: [0, 200000],
   meshEnergyRainbowSpeed: [0.02, 64],
+  meshEnergyFlowAngle: [0, 360],
   particleSpeed: [0, 4],
   particleSpeedVariation: [0, 1],
   fallingOpacity: [0.05, 1],
@@ -222,7 +231,7 @@ const BOOLEAN_KEYS = new Set([
   "enabled", "continueBackgroundAnimations", "ratioLockOnResize", "separationCycle", "customDiamondColorsEnabled",
   "emberPulse", "pointerAttractionEnabled", "pointerLightDepthEnabled", "behindLightEnabled", "behindRainbowCycle",
   "frontLightEnabled", "frontRainbowCycle", "fallingEffectsEnabled", "fallingAutoColor",
-  "fallingReflectionEnabled", "meshEnergyRainbowCycle", "patternMirror",
+  "fallingReflectionEnabled", "meshEnergyRainbowCycle", "meshEnergyTracePistons", "patternMirror",
 ]);
 
 const COLOR_KEYS = ["diamondColorA", "diamondColorB", "diamondColorC", "emberColorA", "emberColorB", "behindLightColor", "frontLightColor", "meshEnergyColor", "fallingColor"];
@@ -254,6 +263,9 @@ function migrateLegacySettings(input) {
   copy("meshColor", ["meshEnergyColor"]);
   copy("particleRainbowCycle", ["meshEnergyRainbowCycle"]);
   copy("particleRainbowSpeed", ["meshEnergyRainbowSpeed"]);
+  if (input.meshEnergyPattern === undefined && typeof input.meshEnergyTracePistons === "boolean") {
+    migrated.meshEnergyPattern = input.meshEnergyTracePistons ? "piston-groups" : "tile-grid";
+  }
   copy("pistonPointerResponse", ["pointerAttractionEnabled", "pointerLightDepthEnabled"]);
   if (input.interactivePointer === true) migrated.frontLightMotion ??= "pointer";
   if (input.interactivePointer === false) migrated.frontLightMotion ??= "orbit";
@@ -287,6 +299,7 @@ export function normalizeSettings(input = {}) {
   for (const key of COLOR_KEYS) {
     if (/^#[0-9a-f]{6}$/i.test(String(source[key] ?? ""))) output[key] = String(source[key]).toLowerCase();
   }
+  output.meshEnergyTracePistons = output.meshEnergyPattern !== "tile-grid";
   return output;
 }
 
@@ -297,7 +310,7 @@ export function presentationProfile(settings) {
 
 export function settingsAffectGeometry(previous, next) {
   return ["alignmentMode", "ratioPreset", "ratioLockOnResize", "displayDiagonalInches", "tessellationMode",
-    "tripletLongSpanInches", "manualCssPixelsPerInch", "quality", "seed"]
+    "tripletLongSpanInches", "manualCssPixelsPerInch", "quality", "seed", "pistonPattern", "meshEnergyPattern", "meshEnergyTracePistons"]
     .some((key) => previous[key] !== next[key]);
 }
 
@@ -308,7 +321,7 @@ export function settingsAffectFallingScene(previous, next) {
 }
 
 export function qualityLimits(quality) {
-  if (quality === "performance") return { dpr: 1, backingPixels: 3_000_000, tiles: 3200, meshParticles: 4000, reflections: 4096 };
-  if (quality === "balanced") return { dpr: 1.5, backingPixels: 5_000_000, tiles: 5600, meshParticles: 10000, reflections: 8192 };
-  return { dpr: 2, backingPixels: 8_388_608, tiles: 8192, meshParticles: 20000, reflections: 16384 };
+  if (quality === "performance") return { dpr: 1, backingPixels: 3_000_000, tiles: 3200, meshParticles: 40000, reflections: 4096 };
+  if (quality === "balanced") return { dpr: 1.5, backingPixels: 5_000_000, tiles: 5600, meshParticles: 100000, reflections: 8192 };
+  return { dpr: 2, backingPixels: 8_388_608, tiles: 8192, meshParticles: 200000, reflections: 16384 };
 }

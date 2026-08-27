@@ -312,6 +312,8 @@ describe("Matrix provider activity overlay", () => {
       "build",
       "agent",
       "agent",
+      "work",
+      "work",
     ]);
     const encoded = encodeMatrixActivityEvents(events);
     expect(encoded).not.toMatch(
@@ -323,7 +325,75 @@ describe("Matrix provider activity overlay", () => {
     );
   });
 
-  it("attests an unclassified lifecycle start only from one exact matching completion", () => {
+  it("renders exact uncategorized provider tool lifecycles as neutral work", () => {
+    const turnId = TurnId.make("turn-neutral-work");
+    const started = activity(
+      "neutral-work-started",
+      "2026-08-24T09:00:00.000Z",
+      { itemType: "command_execution", itemId: "neutral-work-item" },
+      "tool.started",
+      turnId,
+    );
+    const completed = activity(
+      "neutral-work-completed",
+      "2026-08-24T09:00:00.250Z",
+      {
+        itemType: "command_execution",
+        itemId: "neutral-work-item",
+        title: "Sensitive command title must not reach the canvas",
+        detail: "secret command output must not reach the canvas",
+      },
+      "tool.completed",
+      turnId,
+    );
+
+    const events = deriveMatrixActivityEvents([started, completed], {
+      network: false,
+      database: false,
+      build: false,
+      agent: false,
+      work: true,
+    });
+    expect(events.map((event) => event.category)).toEqual(["work", "work"]);
+    expect(events.every((event) => event.relationHashes.length === 1)).toBe(true);
+
+    const animation = createMatrixActivityAnimationState();
+    updateMatrixActivityAnimationInPlace(
+      animation,
+      events,
+      Date.parse("2026-08-24T09:00:00.300Z"),
+      64,
+      false,
+    );
+    expect(animation.linkCount).toBe(1);
+    expect(resolveMatrixActivityTerm("work", "category", "english")).toBe("WORK");
+    expect(resolveMatrixActivityTerm("work", "operation", "english")).toBe("TOOL");
+    expect(encodeMatrixActivityEvents(events)).not.toMatch(/Sensitive|secret|command/iu);
+
+    expect(
+      deriveMatrixActivityEvents([started, completed], {
+        network: false,
+        database: false,
+        build: false,
+        agent: false,
+        work: false,
+      }),
+    ).toEqual([]);
+  });
+
+  it("does not downgrade malformed explicit category evidence to generic work", () => {
+    expect(
+      deriveMatrixActivityEvents([
+        activity("malformed-work", "2026-08-24T09:00:00.000Z", {
+          itemType: "command_execution",
+          itemId: "malformed-work-item",
+          observed: { providerObserved: false, activityType: "build" },
+        }),
+      ]),
+    ).toEqual([]);
+  });
+
+  it("propagates a narrow category only from one exact matching completion", () => {
     const now = Date.parse("2026-07-23T12:00:01.000Z");
     const turnId = TurnId.make("turn-live-command");
     const started = activity(
@@ -377,7 +447,7 @@ describe("Matrix provider activity overlay", () => {
         TurnId.make("turn-other-command"),
       ),
     ]);
-    expect(crossTurn).toHaveLength(1);
+    expect(crossTurn.map((event) => event.category)).toEqual(["work", "build"]);
 
     const crossType = deriveMatrixActivityEvents([
       started,
@@ -393,7 +463,7 @@ describe("Matrix provider activity overlay", () => {
         turnId,
       ),
     ]);
-    expect(crossType).toHaveLength(1);
+    expect(crossType.map((event) => event.category)).toEqual(["work", "build"]);
 
     const postCompletionStart = deriveMatrixActivityEvents([
       completed,
@@ -408,7 +478,7 @@ describe("Matrix provider activity overlay", () => {
         turnId,
       ),
     ]);
-    expect(postCompletionStart).toHaveLength(1);
+    expect(postCompletionStart.map((event) => event.category)).toEqual(["build", "work"]);
 
     const reversedAtEqualTimestamp = deriveMatrixActivityEvents([
       activity(
@@ -433,7 +503,7 @@ describe("Matrix provider activity overlay", () => {
         turnId,
       ),
     ]);
-    expect(reversedAtEqualTimestamp).toHaveLength(1);
+    expect(reversedAtEqualTimestamp.map((event) => event.category)).toEqual(["build", "work"]);
 
     const unclassifiedUpdate = deriveMatrixActivityEvents([
       activity(
@@ -448,7 +518,7 @@ describe("Matrix provider activity overlay", () => {
       ),
       completed,
     ]);
-    expect(unclassifiedUpdate).toHaveLength(1);
+    expect(unclassifiedUpdate.map((event) => event.category)).toEqual(["work", "build"]);
 
     const staleStart = deriveMatrixActivityEvents([
       activity(
@@ -463,7 +533,7 @@ describe("Matrix provider activity overlay", () => {
       ),
       completed,
     ]);
-    expect(staleStart).toHaveLength(1);
+    expect(staleStart.map((event) => event.category)).toEqual(["work", "build"]);
 
     const duplicateCompletion = deriveMatrixActivityEvents([
       started,
@@ -480,7 +550,7 @@ describe("Matrix provider activity overlay", () => {
         turnId,
       ),
     ]);
-    expect(duplicateCompletion).toHaveLength(2);
+    expect(duplicateCompletion.map((event) => event.category)).toEqual(["work", "build", "build"]);
 
     const conflicting = deriveMatrixActivityEvents([
       started,
@@ -507,7 +577,7 @@ describe("Matrix provider activity overlay", () => {
         turnId,
       ),
     ]);
-    expect(conflicting.map((event) => event.category)).toEqual(["build", "database"]);
+    expect(conflicting.map((event) => event.category)).toEqual(["work", "build", "database"]);
     const conflictingAnimation = createMatrixActivityAnimationState();
     updateMatrixActivityAnimationInPlace(conflictingAnimation, conflicting, now, 160, false);
     expect(conflictingAnimation.linkCount).toBe(0);
@@ -527,13 +597,13 @@ describe("Matrix provider activity overlay", () => {
       ),
       completed,
     ]);
-    expect(malformedAttestation).toHaveLength(1);
-    expect(malformedAttestation[0]?.anchorSeed).toBe(
+    expect(malformedAttestation.map((event) => event.category)).toEqual(["work", "build"]);
+    expect(malformedAttestation[1]?.anchorSeed).toBe(
       deriveMatrixActivityEvents([completed])[0]?.anchorSeed,
     );
   });
 
-  it("draws a connector for delegated work reported as task lifecycle", () => {
+  it("draws an immediate connector for delegated work reported as task lifecycle", () => {
     // Orchestration (`local_agent`/`local_workflow`/`local_bash`) reports
     // `task.*`, not `tool.*`. Without a provider attestation the overlay has no
     // evidence and correctly draws nothing, so the sky stayed empty while a
@@ -571,6 +641,16 @@ describe("Matrix provider activity overlay", () => {
       "task.completed",
       turnId,
     );
+
+    const startedEvents = deriveMatrixActivityEvents([started]);
+    expect(startedEvents).toHaveLength(1);
+    expect(startedEvents[0]?.verifiedAgentDispatch).toEqual({
+      operationAnchorSeed: expect.any(Number),
+      relationHash: expect.any(Number),
+    });
+    const startedAnimation = createMatrixActivityAnimationState();
+    updateMatrixActivityAnimationInPlace(startedAnimation, startedEvents, now, 160, false);
+    expect(startedAnimation.linkCount).toBe(1);
 
     const events = deriveMatrixActivityEvents([started, completed]);
     expect(events).toHaveLength(2);
@@ -639,13 +719,13 @@ describe("Matrix provider activity overlay", () => {
       loneDispatch,
     ]);
     expect(paired).toHaveLength(2);
-    expect(paired.every((event) => event.verifiedAgentDispatch === undefined)).toBe(true);
+    expect(paired.every((event) => event.verifiedAgentDispatch !== undefined)).toBe(true);
     const pairedAnimation = createMatrixActivityAnimationState();
     updateMatrixActivityAnimationInPlace(pairedAnimation, paired, now, 160, false);
     expect(pairedAnimation.linkCount).toBe(1);
     expect(pairedAnimation.links[0]).toMatchObject({ category: "agent" });
 
-    for (const ineligible of [
+    const startedOnly = deriveMatrixActivityEvents([
       activity(
         "agent-start-only",
         new Date(now - 10).toISOString(),
@@ -655,7 +735,18 @@ describe("Matrix provider activity overlay", () => {
           observed: { providerObserved: true, activityType: "agent" },
         },
         "tool.started",
+        TurnId.make("agent-start-only-turn"),
       ),
+    ]);
+    expect(startedOnly[0]?.verifiedAgentDispatch).toEqual({
+      operationAnchorSeed: expect.any(Number),
+      relationHash: expect.any(Number),
+    });
+    const startedOnlyAnimation = createMatrixActivityAnimationState();
+    updateMatrixActivityAnimationInPlace(startedOnlyAnimation, startedOnly, now, 160, false);
+    expect(startedOnlyAnimation.linkCount).toBe(1);
+
+    for (const ineligible of [
       activity("agent-not-attested", new Date(now - 9).toISOString(), {
         itemType: "collab_agent_tool_call",
         itemId: "agent-not-attested-item",
@@ -703,6 +794,31 @@ describe("Matrix provider activity overlay", () => {
     updateMatrixActivityAnimationInPlace(animation, decoded, now, 256, false);
     expect(animation.linkCount).toBe(MAX_MATRIX_ACTIVITY_LINKS);
     expect(animation.pulseCount).toBeLessThanOrEqual(MAX_MATRIX_ACTIVITY_EVENTS);
+  });
+
+  it("fills the bounded connector budget from concurrent provider-confirmed launches", () => {
+    const now = Date.parse("2026-07-23T12:00:01.000Z");
+    const launches = Array.from({ length: MAX_MATRIX_ACTIVITY_LINKS + 8 }, (_, index) =>
+      activity(
+        `concurrent-agent-start-${String(index)}`,
+        new Date(now - index).toISOString(),
+        {
+          itemType: "collab_agent_tool_call",
+          itemId: `concurrent-agent-item-${String(index)}`,
+          observed: { providerObserved: true, activityType: "agent" },
+        },
+        "tool.started",
+        TurnId.make("concurrent-agent-turn"),
+      ),
+    );
+    const events = deriveMatrixActivityEvents(launches);
+    expect(events).toHaveLength(MAX_MATRIX_ACTIVITY_LINKS + 8);
+    expect(events.every((event) => event.verifiedAgentDispatch !== undefined)).toBe(true);
+
+    const animation = createMatrixActivityAnimationState();
+    updateMatrixActivityAnimationInPlace(animation, events, now, 4_096, false);
+    expect(animation.linkCount).toBe(MAX_MATRIX_ACTIVITY_LINKS);
+    expect(animation.pulseCount).toBe(MAX_MATRIX_ACTIVITY_LINKS * 2);
   });
 
   it("filters activity categories before encoding and permits all inputs to be unchecked", () => {

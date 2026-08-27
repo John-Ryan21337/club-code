@@ -74,17 +74,20 @@ precision highp float;
 layout(location=0) in vec2 aLocal; layout(location=1) in float aLift;
 layout(location=2) in float aFacet; layout(location=3) in float aSurface;
 layout(location=4) in vec4 aTileA; layout(location=5) in vec4 aTileB;
+layout(location=6) in vec3 aFacetHeights;
+layout(location=7) in vec3 aFacetCenterX; layout(location=8) in vec3 aFacetCenterY;
 uniform vec2 uResolution; uniform float uGapWidth,uPerspective,uFacetRelief,uFacetSpeed,uTime;uniform int uTessellation;
 out vec2 vScreen; flat out float vFacet,vSurface,vPhase,vPulse,vPattern; out float vHeight;
 vec2 facetDirection(float face){
  if(uTessellation==1){float angle=1.5707963-face*1.5707963;return vec2(cos(angle),-sin(angle));}
  if(uTessellation==2){float angle=face*.5235988;return vec2(cos(angle),sin(angle));}
  if(face<.5)return normalize(vec2(.25,.4330127));if(face<1.5)return vec2(-1.,0.);return normalize(vec2(.25,-.4330127));}
-void main(){vec2 center=aTileA.xy;float radius=aTileA.z;
- float facetHeight=aTileA.w+sin(uTime*uFacetSpeed*6.2831853+aTileB.x+aFacet*2.0943951)*uFacetRelief;
+void main(){vec2 center=aTileA.xy,pistonCenter=center;float radius=aTileA.z;
+ float groupedHeight=aTileA.w;if(uTessellation==0){int facetIndex=int(floor(aFacet+.5));groupedHeight=facetIndex==0?aFacetHeights.x:(facetIndex==1?aFacetHeights.y:aFacetHeights.z);pistonCenter=facetIndex==0?vec2(aFacetCenterX.x,aFacetCenterY.x):(facetIndex==1?vec2(aFacetCenterX.y,aFacetCenterY.y):vec2(aFacetCenterX.z,aFacetCenterY.z));}
+ float facetHeight=groupedHeight+sin(uTime*uFacetSpeed*6.2831853+aTileB.x+aFacet*2.0943951)*uFacetRelief;
  float separation=aTileB.z;float scale=max(.04,1.-uGapWidth-separation*.14);
  vec2 local=aLocal*radius*scale+facetDirection(aFacet)*radius*separation*.48;
- float heightPixels=facetHeight*radius*1.18;vec2 radial=center-uResolution*.5;
+ float heightPixels=facetHeight*radius*1.18;vec2 radial=pistonCenter-uResolution*.5;
  vec2 direction=length(radial)>1.?normalize(radial):vec2(0.,-1.);
  vec2 parallax=direction*heightPixels*uPerspective*.34+vec2(0.,-heightPixels*.42);
  vec2 position=center+local+parallax*aLift;
@@ -228,10 +231,10 @@ function tessellationIndex(mode){return Math.max(0,["rhombille","cairo-pentagon"
 function lightTypeIndex(type){return Math.max(0,["point","point-bar","bar","laser","ripple","total"].indexOf(type));}
 function prismModeIndex(mode){return Math.max(0,["neon","white-core","white-fringe","solid"].indexOf(mode));}
 function emberPatternIndex(pattern){return Math.max(0,["organic","rings","hexagon","star"].indexOf(pattern));}
-function createVao(gl,mesh,instanceBuffer){const vao=gl.createVertexArray();gl.bindVertexArray(vao);const meshBuffer=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,meshBuffer);gl.bufferData(gl.ARRAY_BUFFER,mesh,gl.STATIC_DRAW);
+function createVao(gl,mesh,instanceBuffer,facetBuffer,facetCenterBuffer){const vao=gl.createVertexArray();gl.bindVertexArray(vao);const meshBuffer=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,meshBuffer);gl.bufferData(gl.ARRAY_BUFFER,mesh,gl.STATIC_DRAW);
   gl.enableVertexAttribArray(0);gl.vertexAttribPointer(0,2,gl.FLOAT,false,20,0);
   for(let index=1;index<4;index+=1){gl.enableVertexAttribArray(index);gl.vertexAttribPointer(index,1,gl.FLOAT,false,20,8+(index-1)*4);}
-  gl.bindBuffer(gl.ARRAY_BUFFER,instanceBuffer);for(let index=0;index<2;index+=1){const location=4+index;gl.enableVertexAttribArray(location);gl.vertexAttribPointer(location,4,gl.FLOAT,false,32,index*16);gl.vertexAttribDivisor(location,1);}gl.bindVertexArray(null);return{vao,meshBuffer,vertexCount:mesh.length/5};}
+  gl.bindBuffer(gl.ARRAY_BUFFER,instanceBuffer);for(let index=0;index<2;index+=1){const location=4+index;gl.enableVertexAttribArray(location);gl.vertexAttribPointer(location,4,gl.FLOAT,false,32,index*16);gl.vertexAttribDivisor(location,1);}gl.bindBuffer(gl.ARRAY_BUFFER,facetBuffer);gl.enableVertexAttribArray(6);gl.vertexAttribPointer(6,3,gl.FLOAT,false,12,0);gl.vertexAttribDivisor(6,1);gl.bindBuffer(gl.ARRAY_BUFFER,facetCenterBuffer);for(let index=0;index<2;index+=1){const location=7+index;gl.enableVertexAttribArray(location);gl.vertexAttribPointer(location,3,gl.FLOAT,false,24,index*12);gl.vertexAttribDivisor(location,1);}gl.bindVertexArray(null);return{vao,meshBuffer,vertexCount:mesh.length/5};}
 const uniformCaches=new WeakMap();
 function uniformLocation(gl,target,name){let cache=uniformCaches.get(target);if(!cache){cache=new Map();uniformCaches.set(target,cache);}if(!cache.has(name))cache.set(name,gl.getUniformLocation(target,name));return cache.get(name);}
 function setVec2(gl,target,name,x,y){const location=uniformLocation(gl,target,name);if(location!==null)gl.uniform2f(location,x,y);}
@@ -244,11 +247,11 @@ function lightUniforms(gl,target,frame,light,maskPass=false){setVec2(gl,target,"
 export function createWebGlRenderer(canvas,onStateChange=()=>{}){
   const gl=canvas.getContext("webgl2",{alpha:false,antialias:true,depth:false,stencil:false,failIfMajorPerformanceCaveat:true,powerPreference:"high-performance",premultipliedAlpha:true,preserveDrawingBuffer:false,desynchronized:false});
   if(!gl)return{available:false,fallbackReason:"webgl2-unavailable",dispose(){}};
-  if(gl.getParameter(gl.MAX_TEXTURE_SIZE)<256||gl.getParameter(gl.MAX_VERTEX_ATTRIBS)<6)return{available:false,fallbackReason:"insufficient-capability",dispose(){gl.getExtension("WEBGL_lose_context")?.loseContext();}};
-  let disposed=false,contextLost=false,programs,buffers,sideMeshes,topMeshes,lightMaskTexture,lightMaskFramebuffer,shaftTexture,shaftFramebuffer,shaftWidth=1,shaftHeight=1,renderedFrames=0,lastError=gl.NO_ERROR;const lose=gl.getExtension("WEBGL_lose_context");
+  if(gl.getParameter(gl.MAX_TEXTURE_SIZE)<256||gl.getParameter(gl.MAX_VERTEX_ATTRIBS)<9)return{available:false,fallbackReason:"insufficient-capability",dispose(){gl.getExtension("WEBGL_lose_context")?.loseContext();}};
+  let disposed=false,contextLost=false,programs,buffers,sideMeshes,topMeshes,lightMaskTexture,lightMaskFramebuffer,shaftTexture,shaftFramebuffer,shaftWidth=1,shaftHeight=1,renderedFrames=0,lastError=gl.NO_ERROR,uploadedFacetCenters=null;const lose=gl.getExtension("WEBGL_lose_context");
   const configureRenderTexture=(texture,width,height)=>{gl.bindTexture(gl.TEXTURE_2D,texture);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA8,Math.max(1,width),Math.max(1,height),0,gl.RGBA,gl.UNSIGNED_BYTE,null);};
   const attachFramebuffer=(framebuffer,texture)=>{gl.bindFramebuffer(gl.FRAMEBUFFER,framebuffer);gl.framebufferTexture2D(gl.FRAMEBUFFER,gl.COLOR_ATTACHMENT0,gl.TEXTURE_2D,texture,0);if(gl.checkFramebufferStatus(gl.FRAMEBUFFER)!==gl.FRAMEBUFFER_COMPLETE)throw new Error("WebGL framebuffer is incomplete.");};
-  const initialize=()=>{programs={background:makeProgram(gl,FULLSCREEN_VERTEX,BACKGROUND_FRAGMENT),tile:makeProgram(gl,TILE_VERTEX,TILE_FRAGMENT),occluder:makeProgram(gl,TILE_VERTEX,OCCLUDER_FRAGMENT),shaft:makeProgram(gl,FULLSCREEN_VERTEX,SHAFT_FRAGMENT),composite:makeProgram(gl,FULLSCREEN_VERTEX,COMPOSITE_FRAGMENT),particle:makeProgram(gl,PARTICLE_VERTEX,PARTICLE_FRAGMENT)};buffers={tile:gl.createBuffer(),gap:gl.createBuffer()};sideMeshes={};topMeshes={};for(const mode of["rhombille","cairo-pentagon","hexagram"]){const meshes=createTileMeshes(mode);sideMeshes[mode]=createVao(gl,meshes.sides,buffers.tile);topMeshes[mode]=createVao(gl,meshes.tops,buffers.tile);}lightMaskTexture=gl.createTexture();configureRenderTexture(lightMaskTexture,canvas.width,canvas.height);lightMaskFramebuffer=gl.createFramebuffer();attachFramebuffer(lightMaskFramebuffer,lightMaskTexture);shaftTexture=gl.createTexture();configureRenderTexture(shaftTexture,shaftWidth,shaftHeight);shaftFramebuffer=gl.createFramebuffer();attachFramebuffer(shaftFramebuffer,shaftTexture);gl.bindFramebuffer(gl.FRAMEBUFFER,null);};
+  const initialize=()=>{uploadedFacetCenters=null;programs={background:makeProgram(gl,FULLSCREEN_VERTEX,BACKGROUND_FRAGMENT),tile:makeProgram(gl,TILE_VERTEX,TILE_FRAGMENT),occluder:makeProgram(gl,TILE_VERTEX,OCCLUDER_FRAGMENT),shaft:makeProgram(gl,FULLSCREEN_VERTEX,SHAFT_FRAGMENT),composite:makeProgram(gl,FULLSCREEN_VERTEX,COMPOSITE_FRAGMENT),particle:makeProgram(gl,PARTICLE_VERTEX,PARTICLE_FRAGMENT)};buffers={tile:gl.createBuffer(),facet:gl.createBuffer(),facetCenter:gl.createBuffer(),gap:gl.createBuffer()};sideMeshes={};topMeshes={};for(const mode of["rhombille","cairo-pentagon","hexagram"]){const meshes=createTileMeshes(mode);sideMeshes[mode]=createVao(gl,meshes.sides,buffers.tile,buffers.facet,buffers.facetCenter);topMeshes[mode]=createVao(gl,meshes.tops,buffers.tile,buffers.facet,buffers.facetCenter);}lightMaskTexture=gl.createTexture();configureRenderTexture(lightMaskTexture,canvas.width,canvas.height);lightMaskFramebuffer=gl.createFramebuffer();attachFramebuffer(lightMaskFramebuffer,lightMaskTexture);shaftTexture=gl.createTexture();configureRenderTexture(shaftTexture,shaftWidth,shaftHeight);shaftFramebuffer=gl.createFramebuffer();attachFramebuffer(shaftFramebuffer,shaftTexture);gl.bindFramebuffer(gl.FRAMEBUFFER,null);};
   try{initialize();}catch(error){return{available:false,fallbackReason:"gpu-initialization-failed",error,dispose(){}};}
   const lost=(event)=>{event.preventDefault();contextLost=true;onStateChange({status:"context-lost",fallbackReason:"context-lost"});};
   const restored=()=>{try{initialize();contextLost=false;onStateChange({status:"restored",fallbackReason:null});}catch{onStateChange({status:"context-lost",fallbackReason:"gpu-initialization-failed"});}};
@@ -257,7 +260,7 @@ export function createWebGlRenderer(canvas,onStateChange=()=>{}){
   function render(frame,settings,lights){
     if(disposed)return{status:"disposed",drawCalls:0,tileInstances:0};if(contextLost)return{status:"context-lost",drawCalls:0,tileInstances:0};
     const mode=sideMeshes[settings.tessellationMode]?settings.tessellationMode:"rhombille",sideMesh=sideMeshes[mode],topMesh=topMeshes[mode],modeIndex=tessellationIndex(mode);
-    gl.disable(gl.DEPTH_TEST);gl.disable(gl.CULL_FACE);gl.bindBuffer(gl.ARRAY_BUFFER,buffers.tile);gl.bufferData(gl.ARRAY_BUFFER,frame.tileInstances,gl.DYNAMIC_DRAW);let drawCalls=0;
+    gl.disable(gl.DEPTH_TEST);gl.disable(gl.CULL_FACE);gl.bindBuffer(gl.ARRAY_BUFFER,buffers.tile);gl.bufferData(gl.ARRAY_BUFFER,frame.tileInstances,gl.DYNAMIC_DRAW);gl.bindBuffer(gl.ARRAY_BUFFER,buffers.facet);gl.bufferData(gl.ARRAY_BUFFER,frame.facetHeights,gl.DYNAMIC_DRAW);if(uploadedFacetCenters!==frame.facetCenters){gl.bindBuffer(gl.ARRAY_BUFFER,buffers.facetCenter);gl.bufferData(gl.ARRAY_BUFFER,frame.facetCenters,gl.STATIC_DRAW);uploadedFacetCenters=frame.facetCenters;}let drawCalls=0;
 
     gl.bindFramebuffer(gl.FRAMEBUFFER,lightMaskFramebuffer);gl.viewport(0,0,canvas.width,canvas.height);gl.disable(gl.BLEND);gl.clearColor(0,0,0,1);gl.clear(gl.COLOR_BUFFER_BIT);
     gl.useProgram(programs.background);lightUniforms(gl,programs.background,frame,lights.behind,true);gl.drawArrays(gl.TRIANGLES,0,3);drawCalls+=1;

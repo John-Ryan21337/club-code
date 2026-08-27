@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import * as Schema from "effect/Schema";
 
 import {
+  MAX_CODEX_SUBAGENT_THREAD_LIMIT,
+  MIN_CODEX_SUBAGENT_THREAD_LIMIT,
   ProviderEvent,
   ProviderSendTurnInput,
   ProviderSession,
@@ -21,6 +23,33 @@ function getOptionValue(
 }
 
 describe("ProviderSessionStartInput", () => {
+  it("bounds an optional per-session Codex spawned-agent ceiling", () => {
+    for (const codexSubagentThreadLimit of [
+      MIN_CODEX_SUBAGENT_THREAD_LIMIT,
+      MAX_CODEX_SUBAGENT_THREAD_LIMIT,
+    ]) {
+      expect(
+        decodeProviderSessionStartInput({
+          threadId: "thread-1",
+          provider: "codex",
+          codexSubagentThreadLimit,
+          runtimeMode: "full-access",
+        }).codexSubagentThreadLimit,
+      ).toBe(codexSubagentThreadLimit);
+    }
+
+    for (const codexSubagentThreadLimit of [0, 129, -1, 1.5, Number.NaN]) {
+      expect(() =>
+        decodeProviderSessionStartInput({
+          threadId: "thread-1",
+          provider: "codex",
+          codexSubagentThreadLimit,
+          runtimeMode: "full-access",
+        }),
+      ).toThrow();
+    }
+  });
+
   it("accepts codex-compatible payloads", () => {
     const parsed = decodeProviderSessionStartInput({
       threadId: "thread-1",
