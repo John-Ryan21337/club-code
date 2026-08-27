@@ -226,6 +226,17 @@ export function shouldRetainLocalFollowUpShadow(input: {
   return !input.projectedMessages.some((message) => message.id === input.messageId);
 }
 
+/**
+ * A handoff item is already represented by its user message in the transcript.
+ * Keep it in durable queue control state until the provider acknowledges it,
+ * but do not keep presenting it as an unsent queued message.
+ */
+export function visibleQueuedManualFollowUps<
+  Item extends { readonly status: "reserving" | "queued" | "handoff" },
+>(items: readonly Item[]): Item[] {
+  return items.filter((item) => item.status !== "handoff");
+}
+
 export function previewQueuedFollowUpText(text: string, fallback = "Image-only follow-up"): string {
   const normalized = text.trim().replace(/\s+/g, " ");
   return normalized.length > 0 ? normalized : fallback;

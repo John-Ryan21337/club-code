@@ -2942,6 +2942,73 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
+  it("routes an accepted steer through durable active-turn state when daemon reads time out", async () => {
+    let failInventoryReads = false;
+    const listSessions = vi.fn(() =>
+      failInventoryReads
+        ? Effect.die(new Error("provider daemon listSessions request timed out"))
+        : Effect.succeed<ReadonlyArray<ProviderSession>>([]),
+    );
+    const harness = await createHarness({
+      listSessions,
+      getCapabilitiesFailureDetail: "provider daemon request timed out",
+    });
+    const now = "2026-01-01T00:00:00.000Z";
+    const threadId = ThreadId.make("thread-1");
+    const activeTurnId = asTurnId("turn-during-daemon-read-timeout");
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-set-before-steer-read-timeout"),
+        threadId,
+        session: {
+          threadId,
+          status: "running",
+          providerName: "codex",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          runtimeMode: "approval-required",
+          activeTurnId,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+    failInventoryReads = true;
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.steer",
+        commandId: CommandId.make("cmd-turn-steer-during-daemon-read-timeout"),
+        threadId,
+        message: {
+          messageId: asMessageId("user-message-steer-during-daemon-read-timeout"),
+          role: "user",
+          text: "Keep this accepted steer moving",
+          attachments: [],
+        },
+        createdAt: "2026-01-01T00:00:01.000Z",
+      }),
+    );
+
+    await waitFor(() => harness.steerTurn.mock.calls.length === 1);
+    await harness.drain();
+
+    const thread = (await harness.readModel()).threads.find((entry) => entry.id === threadId);
+    expect(harness.getCapabilities).not.toHaveBeenCalled();
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+    expect(harness.steerTurn).toHaveBeenCalledOnce();
+    expect(harness.steerTurn.mock.calls[0]?.[0]).toMatchObject({
+      threadId,
+      expectedTurnId: activeTurnId,
+      input: "Keep this accepted steer moving",
+    });
+    expect(
+      thread?.activities.some((activity) => activity.kind === "provider.turn.steer.failed"),
+    ).toBe(false);
+  });
+
   it("routes Codex steer while the active turn is running even when assistant text is closed", async () => {
     const harness = await createHarness({ liveSteer: "supported" });
     const now = "2026-01-01T00:00:00.000Z";

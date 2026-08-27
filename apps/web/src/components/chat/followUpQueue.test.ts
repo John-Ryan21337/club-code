@@ -24,6 +24,7 @@ import {
   shouldRetainLocalFollowUpShadow,
   shouldQueueOperatorFollowUp,
   tryClaimQueuedFollowUpDispatch,
+  visibleQueuedManualFollowUps,
 } from "./followUpQueue";
 
 describe("followUpQueue", () => {
@@ -68,6 +69,16 @@ describe("followUpQueue", () => {
     ).toBe(false);
     expect(canAutomaticallyActivateQueuedFollowUp("disconnected")).toBe(false);
     expect(canAutomaticallyActivateQueuedFollowUp("connecting")).toBe(false);
+  });
+
+  it("removes accepted handoffs from the visible queue while retaining later messages", () => {
+    expect(
+      visibleQueuedManualFollowUps([
+        { id: "sent", status: "handoff" as const },
+        { id: "next", status: "queued" as const },
+        { id: "saving", status: "reserving" as const },
+      ]).map((item) => item.id),
+    ).toEqual(["next", "saving"]);
   });
 
   it("appends newly typed operator input behind every earlier queued command", () => {

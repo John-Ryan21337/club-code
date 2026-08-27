@@ -173,6 +173,7 @@ import {
   shouldRetainLocalFollowUpShadow,
   shouldQueueOperatorFollowUp,
   tryClaimQueuedFollowUpDispatch,
+  visibleQueuedManualFollowUps,
 } from "./chat/followUpQueue";
 import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
@@ -3630,6 +3631,10 @@ export default function ChatView(props: ChatViewProps) {
   activeFollowUpThreadKeyRef.current = activeFollowUpThreadKey;
   const activeProjectedManualFollowUps =
     isServerThread && activeThread ? activeThread.manualFollowUps : EMPTY_MANUAL_FOLLOW_UPS;
+  const activeVisibleProjectedManualFollowUps = useMemo(
+    () => visibleQueuedManualFollowUps(activeProjectedManualFollowUps),
+    [activeProjectedManualFollowUps],
+  );
   const activeProjectedManualFollowUpIds = useMemo(
     () => new Set(activeProjectedManualFollowUps.map((item) => item.id)),
     [activeProjectedManualFollowUps],
@@ -3768,6 +3773,8 @@ export default function ChatView(props: ChatViewProps) {
   const firstActiveFollowUpQueueItem =
     firstActiveProjectedManualFollowUp === null ? (activeFollowUpQueue[0] ?? null) : null;
   const activeVisibleFollowUpQueueLength =
+    activeVisibleProjectedManualFollowUps.length + activeFollowUpQueue.length;
+  const activePendingFollowUpQueueLength =
     activeProjectedManualFollowUps.length + activeFollowUpQueue.length;
   const firstActiveAutomaticSteerRetryBlocker =
     activeThread !== undefined && firstActiveFollowUpQueueItem !== null
@@ -3802,7 +3809,7 @@ export default function ChatView(props: ChatViewProps) {
   });
   const followUpQueueViewItems = useMemo<readonly FollowUpQueueViewItem[]>(
     () => [
-      ...activeProjectedManualFollowUps.map((item) => {
+      ...activeVisibleProjectedManualFollowUps.map((item) => {
         const itemKey =
           activeThread === undefined
             ? ""
@@ -3816,11 +3823,9 @@ export default function ChatView(props: ChatViewProps) {
           ? "Cancelling this queued follow-up…"
           : item.status === "reserving"
             ? (localItem?.blockedReason ?? "Receiving this operator follow-up\u2026")
-            : item.status === "handoff"
-              ? "Waiting for the provider to accept this follow-up."
-              : manualFollowUpActivationInFlightKeysRef.current.has(itemKey)
-                ? "Handing this follow-up to the provider…"
-                : null;
+            : manualFollowUpActivationInFlightKeysRef.current.has(itemKey)
+              ? "Handing this follow-up to the provider…"
+              : null;
         return {
           id: item.id,
           preview:
@@ -3857,7 +3862,7 @@ export default function ChatView(props: ChatViewProps) {
     [
       activeFollowUpQueue,
       activeLocalFollowUps,
-      activeProjectedManualFollowUps,
+      activeVisibleProjectedManualFollowUps,
       activeThread,
       expandedDurableManualFollowUpIds,
       manualFollowUpUiRevision,
@@ -3883,7 +3888,7 @@ export default function ChatView(props: ChatViewProps) {
   );
   const activeSteeringFollowUpInFlight = steeringFollowUpViewItems.length > 0;
   const hasEarlierManualFollowUpForActiveThread =
-    activeVisibleFollowUpQueueLength > 0 ||
+    activePendingFollowUpQueueLength > 0 ||
     activeQueuedFollowUpPendingDispatch ||
     activeSteeringFollowUpInFlight ||
     Boolean(

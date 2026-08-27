@@ -1368,20 +1368,20 @@ const make = Effect.gen(function* () {
     const activeSession = providerSessionResolution.session;
     const requestedModelSelection =
       input.modelSelection ?? threadModelSelections.get(input.threadId) ?? thread.modelSelection;
-    const shouldBootstrapProviderContext =
-      input.modelSelection !== undefined
-        ? yield* shouldBootstrapProviderContinuationContext({
-            thread,
-            desiredModelSelection: input.modelSelection,
-            activeSession,
-          })
-        : false;
     const projectedSessionCanRoute =
       !providerSessionResolution.inventoryAvailable &&
       thread.session !== null &&
       thread.session.status !== "stopped" &&
       thread.session.providerName !== null &&
       thread.session.providerInstanceId !== undefined;
+    const shouldBootstrapProviderContext =
+      !projectedSessionCanRoute && input.modelSelection !== undefined
+        ? yield* shouldBootstrapProviderContinuationContext({
+            thread,
+            desiredModelSelection: input.modelSelection,
+            activeSession,
+          })
+        : false;
     // A transient inventory timeout says nothing about whether the bound
     // provider session exists. When the durable projection has an exact
     // provider binding, let ProviderService.sendTurn perform its authoritative
@@ -2437,6 +2437,11 @@ const make = Effect.gen(function* () {
       }).pipe(Effect.ensuring(releaseManualFollowUp()));
     }
 
+    const providerSessionResolution = yield* resolveProviderSessionForThread(
+      event.payload.threadId,
+    );
+    const runtimeActiveSession = providerSessionResolution.session;
+
     const retrySteerAsNextTurn = (input: {
       readonly summary: string;
       readonly detail: string;
@@ -2513,6 +2518,7 @@ const make = Effect.gen(function* () {
           createdAt: observedAt,
           thread,
           ...(project !== undefined ? { project } : {}),
+          providerSessionResolution,
         });
 
         yield* providerService.sendTurn(sendTurnRequest).pipe(
@@ -2539,7 +2545,6 @@ const make = Effect.gen(function* () {
         ),
       );
 
-    const runtimeActiveSession = yield* getProviderSessionForThread(event.payload.threadId);
     const projectedSession = thread.session;
     const activeSession =
       runtimeActiveSession?.status === "running" && runtimeActiveSession.activeTurnId !== undefined
@@ -2593,24 +2598,31 @@ const make = Effect.gen(function* () {
         createdAt: event.payload.createdAt,
       }).pipe(Effect.ensuring(releaseManualFollowUp()));
     }
-    const capabilities = yield* providerService.getCapabilities(providerInstanceId).pipe(
-      Effect.map(Option.some),
-      Effect.catchCause((cause) =>
-        appendProviderFailureActivity({
-          threadId: event.payload.threadId,
-          kind: "provider.turn.steer.failed",
-          summary: "Provider steer failed",
-          detail: formatFailureDetail(cause),
-          turnId: activeSession.activeTurnId,
-          createdAt: event.payload.createdAt,
-          messageId: event.payload.messageId,
-        }).pipe(Effect.ensuring(releaseManualFollowUp()), Effect.as(Option.none())),
-      ),
-    );
-    if (Option.isNone(capabilities)) {
+    // When inventory is temporarily unavailable, the durable running-session
+    // projection is enough to attempt the steer. The provider's authoritative
+    // steer operation will still reject an unsupported or stale active turn,
+    // and the recovery below preserves the follow-up. Do not strand accepted
+    // input on a second diagnostic RPC to the same busy daemon.
+    const liveSteer = !providerSessionResolution.inventoryAvailable
+      ? Option.some("supported" as const)
+      : yield* providerService.getCapabilities(providerInstanceId).pipe(
+          Effect.map((capabilities) => Option.some(capabilities.liveSteer)),
+          Effect.catchCause((cause) =>
+            appendProviderFailureActivity({
+              threadId: event.payload.threadId,
+              kind: "provider.turn.steer.failed",
+              summary: "Provider steer failed",
+              detail: formatFailureDetail(cause),
+              turnId: activeSession.activeTurnId,
+              createdAt: event.payload.createdAt,
+              messageId: event.payload.messageId,
+            }).pipe(Effect.ensuring(releaseManualFollowUp()), Effect.as(Option.none())),
+          ),
+        );
+    if (Option.isNone(liveSteer)) {
       return;
     }
-    if (capabilities.value.liveSteer !== "supported") {
+    if (liveSteer.value !== "supported") {
       return yield* appendProviderFailureActivity({
         threadId: event.payload.threadId,
         kind: "provider.turn.steer.failed",
