@@ -250,6 +250,39 @@ export interface QueuedFollowUpActionInput {
   canDispatchNow: boolean;
 }
 
+export interface RunningQueuedFollowUpActivationInput {
+  phase: SessionPhase;
+  liveSteerAvailable: boolean;
+  hasRetryBlocker: boolean;
+  isConnecting: boolean;
+  isEnvironmentUnavailable: boolean;
+  isDispatchInFlight: boolean;
+  isQueuedDispatchPending: boolean;
+  isSteerInFlight: boolean;
+  headStatus: "reserving" | "queued" | "handoff" | null;
+}
+
+/**
+ * A strict active-turn match already proves that live steer is safe. Do not
+ * require the transport-facing session status too: that field can transiently
+ * lag durable turn state and would make a valid Steer button inert.
+ */
+export function canActivateRunningQueuedFollowUp(
+  input: RunningQueuedFollowUpActivationInput,
+): boolean {
+  return (
+    input.phase === "running" &&
+    input.liveSteerAvailable &&
+    !input.hasRetryBlocker &&
+    !input.isConnecting &&
+    !input.isEnvironmentUnavailable &&
+    !input.isDispatchInFlight &&
+    !input.isQueuedDispatchPending &&
+    !input.isSteerInFlight &&
+    input.headStatus === "queued"
+  );
+}
+
 export function decideQueuedFollowUpAction(input: QueuedFollowUpActionInput): QueuedFollowUpAction {
   if (input.phase === "running") {
     if (!input.canDispatchNow || !input.liveSteerAvailable) {

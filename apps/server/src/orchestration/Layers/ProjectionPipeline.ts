@@ -132,6 +132,17 @@ function maxIso(left: string | null, right: string): string {
   return left !== null && left > right ? left : right;
 }
 
+function hasNewerActiveSessionEvidence(
+  session: {
+    readonly activeTurnId: TurnId | null;
+    readonly updatedAt: string;
+  } | null,
+  turnId: TurnId,
+  completedAt: string,
+): boolean {
+  return session !== null && session.activeTurnId === turnId && session.updatedAt > completedAt;
+}
+
 function isTerminalTurnState(
   state: ProjectionTurn["state"],
 ): state is Extract<ProjectionTurn["state"], "completed" | "error" | "interrupted"> {
@@ -1503,6 +1514,22 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           if (event.payload.status === "missing") {
             return;
           }
+          const existingSession = yield* projectionThreadSessionRepository.getByThreadId({
+            threadId: event.payload.threadId,
+          });
+          if (
+            hasNewerActiveSessionEvidence(
+              Option.isSome(existingSession) ? existingSession.value : null,
+              event.payload.turnId,
+              event.payload.completedAt,
+            )
+          ) {
+            // Checkpoint capture is asynchronous. A steer can be accepted after
+            // the provider completion that initiated capture but before its
+            // ready diff is projected. That older checkpoint is useful metadata,
+            // but it must not close assistant output from the continued turn.
+            return;
+          }
           yield* closeStreamingMessagesForTerminalTurn({
             threadId: event.payload.threadId,
             turnId: event.payload.turnId,
@@ -1812,6 +1839,23 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         });
         return;
       }
+      if (event.type === "thread.manual-follow-up-accepted") {
+        const existingSession = yield* projectionThreadSessionRepository.getByThreadId({
+          threadId: event.payload.threadId,
+        });
+        if (
+          Option.isNone(existingSession) ||
+          existingSession.value.status !== "running" ||
+          existingSession.value.activeTurnId === null
+        ) {
+          return;
+        }
+        yield* projectionThreadSessionRepository.upsert({
+          ...existingSession.value,
+          updatedAt: maxIso(existingSession.value.updatedAt, event.payload.acceptedAt),
+        });
+        return;
+      }
       if (event.type === "thread.turn-diff-completed") {
         if (event.payload.status === "missing") {
           return;
@@ -1822,6 +1866,15 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         if (
           Option.isNone(existingSession) ||
           existingSession.value.activeTurnId !== event.payload.turnId
+        ) {
+          return;
+        }
+        if (
+          hasNewerActiveSessionEvidence(
+            existingSession.value,
+            event.payload.turnId,
+            event.payload.completedAt,
+          )
         ) {
           return;
         }
@@ -1844,6 +1897,16 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
       const existingSession = yield* projectionThreadSessionRepository.getByThreadId({
         threadId: event.payload.threadId,
       });
+      if (
+        Option.isSome(existingSession) &&
+        event.payload.session.status === "starting" &&
+        event.payload.session.updatedAt < existingSession.value.updatedAt
+      ) {
+        // Restart recovery can append a delayed `starting` snapshot after a
+        // newer ready/running observation. Never replace newer state while
+        // retaining only its timestamp on the row.
+        return;
+      }
       const runningActiveTurn =
         event.payload.session.status === "running" && event.payload.session.activeTurnId !== null
           ? yield* projectionTurnRepository.getByTurnId({
@@ -2240,6 +2303,9 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             threadId: event.payload.threadId,
             turnId: event.payload.turnId,
           });
+          const existingSession = yield* projectionThreadSessionRepository.getByThreadId({
+            threadId: event.payload.threadId,
+          });
           const nextState = event.payload.status === "error" ? "error" : "completed";
           yield* projectionTurnRepository.clearCheckpointTurnConflict({
             threadId: event.payload.threadId,
@@ -2248,7 +2314,13 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           });
 
           if (Option.isSome(existingTurn)) {
-            const preservesTurnLifecycle = event.payload.status === "missing";
+            const preservesTurnLifecycle =
+              event.payload.status === "missing" ||
+              hasNewerActiveSessionEvidence(
+                Option.isSome(existingSession) ? existingSession.value : null,
+                event.payload.turnId,
+                event.payload.completedAt,
+              );
             const completedAt = preservesTurnLifecycle
               ? existingTurn.value.completedAt
               : maxIso(existingTurn.value.completedAt, event.payload.completedAt);

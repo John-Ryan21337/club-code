@@ -152,6 +152,7 @@ import {
 import {
   appendOperatorFollowUp,
   canAutomaticallyActivateQueuedFollowUp,
+  canActivateRunningQueuedFollowUp,
   canAutoStartQueuedFollowUpTurn,
   canExpandQueuedFollowUpText,
   canStartQueuedFollowUpTurn,
@@ -3897,17 +3898,17 @@ export default function ChatView(props: ChatViewProps) {
     !followUpQueueDispatchInFlight &&
     !activeQueuedFollowUpPendingDispatch &&
     !activeSteeringFollowUpInFlight;
-  const canActivateRunningFollowUpQueueAction =
-    followUpQueuePhase === "running" &&
-    activeProviderLiveSteerAvailable &&
-    activeThread?.session?.status === "running" &&
-    firstActiveAutomaticSteerRetryBlocker === null &&
-    !isComposerConnecting &&
-    !activeEnvironmentUnavailable &&
-    !followUpQueueDispatchInFlight &&
-    !activeQueuedFollowUpPendingDispatch &&
-    !activeSteeringFollowUpInFlight &&
-    firstActiveProjectedManualFollowUp?.status === "queued";
+  const canActivateRunningFollowUpQueueAction = canActivateRunningQueuedFollowUp({
+    phase: followUpQueuePhase,
+    liveSteerAvailable: activeProviderLiveSteerAvailable,
+    hasRetryBlocker: firstActiveAutomaticSteerRetryBlocker !== null,
+    isConnecting: isComposerConnecting,
+    isEnvironmentUnavailable: activeEnvironmentUnavailable,
+    isDispatchInFlight: followUpQueueDispatchInFlight,
+    isQueuedDispatchPending: activeQueuedFollowUpPendingDispatch,
+    isSteerInFlight: activeSteeringFollowUpInFlight,
+    headStatus: firstActiveProjectedManualFollowUp?.status ?? null,
+  });
   const followUpQueueAction = decideQueuedFollowUpAction({
     phase: followUpQueuePhase,
     liveSteerAvailable: activeProviderLiveSteerAvailable,

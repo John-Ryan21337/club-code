@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   appendOperatorFollowUp,
   canAutomaticallyActivateQueuedFollowUp,
+  canActivateRunningQueuedFollowUp,
   canAutoStartQueuedFollowUpTurn,
   canStartQueuedFollowUpTurn,
   canExpandQueuedFollowUpText,
@@ -320,6 +321,22 @@ describe("followUpQueue", () => {
         canDispatchNow: false,
       }),
     ).toBe("wait");
+  });
+
+  it("keeps explicit Steer responsive when active-turn evidence is already strict", () => {
+    expect(
+      canActivateRunningQueuedFollowUp({
+        phase: "running",
+        liveSteerAvailable: true,
+        hasRetryBlocker: false,
+        isConnecting: false,
+        isEnvironmentUnavailable: false,
+        isDispatchInFlight: false,
+        isQueuedDispatchPending: false,
+        isSteerInFlight: false,
+        headStatus: "queued",
+      }),
+    ).toBe(true);
   });
 
   it("changes a queued action from steer to wait when capability availability changes", () => {

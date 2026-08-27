@@ -86,20 +86,14 @@ const makeProjectionCheckpointRepository = Effect.gen(function* () {
         ON CONFLICT (thread_id, turn_id)
         DO UPDATE SET
           assistant_message_id = CASE
-            WHEN excluded.checkpoint_status = 'missing' THEN COALESCE(
-              projection_turns.assistant_message_id,
-              excluded.assistant_message_id
-            )
+            WHEN projection_turns.assistant_message_id IS NOT NULL
+            THEN projection_turns.assistant_message_id
             ELSE excluded.assistant_message_id
           END,
-          state = CASE
-            WHEN excluded.checkpoint_status = 'missing' THEN projection_turns.state
-            ELSE excluded.state
-          END,
-          completed_at = CASE
-            WHEN excluded.checkpoint_status = 'missing' THEN projection_turns.completed_at
-            ELSE excluded.completed_at
-          END,
+          -- Checkpoint readiness describes captured filesystem metadata. It is
+          -- not provider-owned evidence that an existing turn ended.
+          state = projection_turns.state,
+          completed_at = projection_turns.completed_at,
           checkpoint_turn_count = excluded.checkpoint_turn_count,
           checkpoint_ref = excluded.checkpoint_ref,
           checkpoint_status = excluded.checkpoint_status,

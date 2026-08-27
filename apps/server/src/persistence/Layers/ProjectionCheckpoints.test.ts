@@ -133,6 +133,66 @@ layer("ProjectionCheckpointRepository", (it) => {
     }),
   );
 
+  it.effect(
+    "does not terminalize an existing running turn when checkpoint capture becomes ready",
+    () =>
+      Effect.gen(function* () {
+        const repository = yield* ProjectionCheckpointRepository;
+        const sql = yield* SqlClient.SqlClient;
+        const threadId = ThreadId.make("thread-running-ready-checkpoint");
+        const turnId = TurnId.make("turn-running-ready-checkpoint");
+
+        yield* sql`
+        INSERT INTO projection_turns (
+          thread_id, turn_id, pending_message_id,
+          source_proposed_plan_thread_id, source_proposed_plan_id,
+          assistant_message_id, state, requested_at, started_at, completed_at,
+          checkpoint_turn_count, checkpoint_ref, checkpoint_status, checkpoint_files_json
+        ) VALUES (
+          ${threadId}, ${turnId}, NULL, NULL, NULL,
+          'assistant-live', 'running',
+          '2026-07-14T00:00:00.000Z', '2026-07-14T00:00:00.000Z', NULL,
+          NULL, NULL, NULL, '[]'
+        )
+      `;
+
+        yield* repository.upsert({
+          threadId,
+          turnId,
+          checkpointTurnCount: 1,
+          checkpointRef: CheckpointRef.make("refs/checkpoints/running-ready"),
+          status: "ready",
+          files: [],
+          assistantMessageId: null,
+          completedAt: "2026-07-14T00:00:01.000Z",
+        });
+
+        const rows = yield* sql<{
+          readonly state: string;
+          readonly completedAt: string | null;
+          readonly assistantMessageId: string | null;
+          readonly checkpointStatus: string | null;
+        }>`
+        SELECT
+          state,
+          completed_at AS "completedAt",
+          assistant_message_id AS "assistantMessageId",
+          checkpoint_status AS "checkpointStatus"
+        FROM projection_turns
+        WHERE thread_id = ${threadId} AND turn_id = ${turnId}
+      `;
+
+        assert.deepEqual(rows, [
+          {
+            state: "running",
+            completedAt: null,
+            assistantMessageId: "assistant-live",
+            checkpointStatus: "ready",
+          },
+        ]);
+      }),
+  );
+
   it.effect("ignores incomplete checkpoint projection rows", () =>
     Effect.gen(function* () {
       const repository = yield* ProjectionCheckpointRepository;
