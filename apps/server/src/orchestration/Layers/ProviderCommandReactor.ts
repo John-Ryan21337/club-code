@@ -551,16 +551,34 @@ const make = Effect.gen(function* () {
     });
   });
 
-  const getProviderSessionForThread = Effect.fnUntraced(function* (threadId: ThreadId) {
+  type ProviderSessionResolution =
+    | { readonly inventoryAvailable: true; readonly session: ProviderSession | undefined }
+    | { readonly inventoryAvailable: false; readonly session: undefined };
+
+  const resolveProviderSessionForThread = Effect.fnUntraced(function* (threadId: ThreadId) {
     return yield* providerService.listSessions().pipe(
-      Effect.map((sessions) => sessions.find((session) => session.threadId === threadId)),
+      Effect.map(
+        (sessions): ProviderSessionResolution => ({
+          inventoryAvailable: true,
+          session: sessions.find((session) => session.threadId === threadId),
+        }),
+      ),
       Effect.catchCause((cause) =>
         Effect.logWarning("provider command reactor could not list provider sessions", {
           threadId,
           cause: Cause.pretty(cause),
-        }).pipe(Effect.as(undefined)),
+        }).pipe(
+          Effect.as<ProviderSessionResolution>({
+            inventoryAvailable: false,
+            session: undefined,
+          }),
+        ),
       ),
     );
+  });
+
+  const getProviderSessionForThread = Effect.fnUntraced(function* (threadId: ThreadId) {
+    return (yield* resolveProviderSessionForThread(threadId)).session;
   });
 
   const appendProviderFailureActivity = (input: {
@@ -1337,6 +1355,7 @@ const make = Effect.gen(function* () {
     readonly createdAt: string;
     readonly thread?: OrchestrationThread;
     readonly project?: OrchestrationProjectShell;
+    readonly providerSessionResolution?: ProviderSessionResolution;
   }) {
     const thread = input.thread ?? (yield* resolveThread(input.threadId));
     if (!thread) {
@@ -1344,11 +1363,9 @@ const make = Effect.gen(function* () {
         new Error(`Thread '${input.threadId}' was not found in read model.`),
       );
     }
-    const activeSession = yield* providerService
-      .listSessions()
-      .pipe(
-        Effect.map((sessions) => sessions.find((session) => session.threadId === input.threadId)),
-      );
+    const providerSessionResolution =
+      input.providerSessionResolution ?? (yield* resolveProviderSessionForThread(input.threadId));
+    const activeSession = providerSessionResolution.session;
     const requestedModelSelection =
       input.modelSelection ?? threadModelSelections.get(input.threadId) ?? thread.modelSelection;
     const shouldBootstrapProviderContext =
@@ -1359,14 +1376,42 @@ const make = Effect.gen(function* () {
             activeSession,
           })
         : false;
-    const ensuredSession = yield* ensureSessionForThread(input.threadId, input.createdAt, {
-      ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
-      thread,
-      ...(input.project !== undefined ? { project: input.project } : {}),
-      activeSession,
-      activeSessionResolved: true,
-      ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
-    });
+    const projectedSessionCanRoute =
+      !providerSessionResolution.inventoryAvailable &&
+      thread.session !== null &&
+      thread.session.status !== "stopped" &&
+      thread.session.providerName !== null &&
+      thread.session.providerInstanceId !== undefined;
+    // A transient inventory timeout says nothing about whether the bound
+    // provider session exists. When the durable projection has an exact
+    // provider binding, let ProviderService.sendTurn perform its authoritative
+    // hasSession/recovery check instead of abandoning the accepted prompt.
+    const ensuredSession = projectedSessionCanRoute
+      ? ({
+          provider: ProviderDriverKind.make(thread.session!.providerName!),
+          providerInstanceId: thread.session!.providerInstanceId!,
+          status: thread.session!.status === "running" ? "running" : "ready",
+          runtimeMode: thread.session!.runtimeMode,
+          threadId: input.threadId,
+          ...(thread.modelSelection.model !== undefined
+            ? { model: thread.modelSelection.model }
+            : {}),
+          ...(thread.session!.activeTurnId !== null
+            ? { activeTurnId: thread.session!.activeTurnId }
+            : {}),
+          createdAt: thread.createdAt,
+          updatedAt: thread.session!.updatedAt,
+        } satisfies ProviderSession)
+      : yield* ensureSessionForThread(input.threadId, input.createdAt, {
+          ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
+          thread,
+          ...(input.project !== undefined ? { project: input.project } : {}),
+          activeSession,
+          activeSessionResolved: true,
+          ...(input.interactionMode !== undefined
+            ? { interactionMode: input.interactionMode }
+            : {}),
+        });
     if (input.modelSelection !== undefined) {
       threadModelSelections.set(input.threadId, input.modelSelection);
     }
@@ -1393,8 +1438,9 @@ const make = Effect.gen(function* () {
             )
           : normalizedInput;
     const normalizedAttachments = input.attachments ?? [];
-    const sessionModelSwitch =
-      ensuredSession.providerInstanceId === undefined
+    const sessionModelSwitch = projectedSessionCanRoute
+      ? ("unsupported" as const)
+      : ensuredSession.providerInstanceId === undefined
         ? yield* new ProviderAdapterRequestError({
             provider: providerErrorLabel(ensuredSession.provider),
             method: "thread.turn.start",
@@ -1863,7 +1909,10 @@ const make = Effect.gen(function* () {
         ),
       );
 
-    const runtimeActiveSession = yield* getProviderSessionForThread(event.payload.threadId);
+    const providerSessionResolution = yield* resolveProviderSessionForThread(
+      event.payload.threadId,
+    );
+    const runtimeActiveSession = providerSessionResolution.session;
     if (
       runtimeActiveSession?.status === "running" &&
       runtimeActiveSession.activeTurnId !== undefined
@@ -1973,6 +2022,7 @@ const make = Effect.gen(function* () {
             interactionMode: event.payload.interactionMode,
             createdAt: observedAt,
             ...(project !== undefined ? { project } : {}),
+            providerSessionResolution,
           });
 
           yield* providerService.sendTurn(sendTurnRequest).pipe(
@@ -2084,6 +2134,7 @@ const make = Effect.gen(function* () {
       createdAt: event.payload.createdAt,
       thread,
       ...(project !== undefined ? { project } : {}),
+      providerSessionResolution,
     }).pipe(
       Effect.map(Option.some),
       Effect.catchCause((cause) => handleTurnStartFailure(cause).pipe(Effect.as(Option.none()))),

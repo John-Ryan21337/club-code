@@ -5,6 +5,7 @@ import {
   attachCommandIdToMutatingProviderDaemonRequest,
   isVoidProviderDaemonRpcMethod,
   PROVIDER_DAEMON_MUTATING_RPC_TIMEOUT_MS,
+  PROVIDER_DAEMON_PROMPT_ROUTING_READ_TIMEOUT_MS,
   ProviderDaemonRpcResponseError,
   providerDaemonRpcTimeoutMs,
   remoteProviderCursorProjectorForConfig,
@@ -65,8 +66,18 @@ describe("RemoteProviderService", () => {
     );
     assert.equal(providerDaemonRpcTimeoutMs("sendTurn"), PROVIDER_DAEMON_MUTATING_RPC_TIMEOUT_MS);
     assert.equal(providerDaemonRpcTimeoutMs("steerTurn"), PROVIDER_DAEMON_MUTATING_RPC_TIMEOUT_MS);
-    assert.isUndefined(providerDaemonRpcTimeoutMs("listSessions"));
-    assert.isUndefined(providerDaemonRpcTimeoutMs("getCapabilities"));
+    assert.equal(
+      providerDaemonRpcTimeoutMs("listSessions"),
+      PROVIDER_DAEMON_PROMPT_ROUTING_READ_TIMEOUT_MS,
+    );
+    assert.equal(
+      providerDaemonRpcTimeoutMs("getCapabilities"),
+      PROVIDER_DAEMON_PROMPT_ROUTING_READ_TIMEOUT_MS,
+    );
+    assert.equal(
+      providerDaemonRpcTimeoutMs("getInstanceInfo"),
+      PROVIDER_DAEMON_PROMPT_ROUTING_READ_TIMEOUT_MS,
+    );
     assert.isUndefined(providerDaemonRpcTimeoutMs("interruptTurn"));
     assert.isUndefined(providerDaemonRpcTimeoutMs("stopSession"));
     assert.isUndefined(providerDaemonRpcTimeoutMs("restartProviderRuntime"));

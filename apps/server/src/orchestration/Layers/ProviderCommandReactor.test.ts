@@ -232,6 +232,7 @@ describe("ProviderCommandReactor", () => {
     readonly missingProviderInstanceIds?: ReadonlySet<string>;
     readonly sessionModelSwitch?: "unsupported" | "in-session";
     readonly liveSteer?: "supported" | "unsupported";
+    readonly getCapabilitiesFailureDetail?: string;
     readonly sendTurnFailureDetail?: string;
     readonly threadGoals?: "supported" | "unsupported";
     readonly startReactor?: boolean;
@@ -433,6 +434,21 @@ describe("ProviderCommandReactor", () => {
         }),
       ),
     );
+    const getCapabilities = vi.fn<ProviderServiceShape["getCapabilities"]>((provider) =>
+      input?.getCapabilitiesFailureDetail !== undefined
+        ? Effect.fail(
+            new ProviderAdapterRequestError({
+              provider: String(provider),
+              method: "getCapabilities",
+              detail: input.getCapabilitiesFailureDetail,
+            }),
+          )
+        : Effect.succeed({
+            sessionModelSwitch: input?.sessionModelSwitch ?? "in-session",
+            liveSteer: input?.liveSteer ?? "unsupported",
+            threadGoals: input?.threadGoals ?? "unsupported",
+          }),
+    );
 
     const unsupported = () => Effect.die(new Error("Unsupported provider call in test")) as never;
     const service: ProviderServiceShape = {
@@ -445,12 +461,7 @@ describe("ProviderCommandReactor", () => {
       stopSession: stopSession as ProviderServiceShape["stopSession"],
       restartProviderRuntime: () => unsupported(),
       listSessions: input?.listSessions ?? (() => Effect.succeed(runtimeSessions)),
-      getCapabilities: (_provider) =>
-        Effect.succeed({
-          sessionModelSwitch: input?.sessionModelSwitch ?? "in-session",
-          liveSteer: input?.liveSteer ?? "unsupported",
-          threadGoals: input?.threadGoals ?? "unsupported",
-        }),
+      getCapabilities,
       getInstanceInfo: (instanceId) => {
         const raw = String(instanceId);
         if (input?.missingProviderInstanceIds?.has(raw)) {
@@ -598,6 +609,7 @@ describe("ProviderCommandReactor", () => {
       readModel: () => Effect.runPromise(snapshotQuery.getSnapshot()),
       startSession,
       sendTurn,
+      getCapabilities,
       steerTurn,
       interruptTurn,
       getGoal,
@@ -984,6 +996,77 @@ describe("ProviderCommandReactor", () => {
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
 
     expect(harness.sendTurn).toHaveBeenCalledOnce();
+  });
+
+  it("delivers an accepted prompt through its durable binding when session inventory times out", async () => {
+    let failInventoryReads = false;
+    const listSessions = vi.fn(() =>
+      failInventoryReads
+        ? Effect.die(new Error("provider daemon listSessions request timed out"))
+        : Effect.succeed<ReadonlyArray<ProviderSession>>([]),
+    );
+    const harness = await createHarness({
+      listSessions,
+      getCapabilitiesFailureDetail: "provider daemon request timed out",
+    });
+    const threadId = ThreadId.make("thread-1");
+    const createdAt = "2026-01-01T00:00:01.000Z";
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-ready-session-before-inventory-timeout"),
+        threadId,
+        session: {
+          threadId,
+          status: "ready",
+          providerName: ProviderDriverKind.make("codex"),
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: createdAt,
+        },
+        createdAt,
+      }),
+    );
+    failInventoryReads = true;
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-during-inventory-timeout"),
+        threadId,
+        message: {
+          messageId: asMessageId("user-message-during-inventory-timeout"),
+          role: "user",
+          text: "Keep this accepted prompt moving",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: "2026-01-01T00:00:02.000Z",
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    await harness.drain();
+    await waitFor(async () => {
+      const readModel = await harness.readModel();
+      const thread = readModel.threads.find((entry) => entry.id === threadId);
+      return thread?.session?.status === "running";
+    });
+
+    const readModel = await harness.readModel();
+    const thread = readModel.threads.find((entry) => entry.id === threadId);
+    expect(harness.startSession).not.toHaveBeenCalled();
+    expect(harness.getCapabilities).not.toHaveBeenCalled();
+    expect(harness.sendTurn).toHaveBeenCalledOnce();
+    expect(
+      thread?.activities.some((activity) => activity.kind === "provider.turn.start.failed"),
+    ).toBe(false);
+    expect(thread?.session?.status).toBe("running");
+    expect(thread?.session?.activeTurnId).toBe(asTurnId("turn-1"));
   });
 
   it("continues a projected running turn once when its provider runtime was lost on restart", async () => {
