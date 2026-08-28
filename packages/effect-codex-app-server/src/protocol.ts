@@ -82,6 +82,100 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
+/**
+ * Incremental JSONL line assembly for the app-server stdout stream.
+ *
+ * A single `thread/resume` or `thread/read(includeTurns)` response for a
+ * long-lived thread can be hundreds of megabytes on one line. The previous
+ * implementation concatenated every chunk into one string and re-split the
+ * whole accumulated buffer on each chunk, which is quadratic in the message
+ * size and froze the provider daemon event loop for tens of seconds (long
+ * enough for the desktop watchdog to kill the daemon). This buffer only scans
+ * the newly arrived chunk for newlines and joins the pending parts once, when a
+ * line terminator is actually seen.
+ */
+export interface IncomingLineBuffer {
+  parts: Array<string>;
+  pendingLength: number;
+}
+
+export function makeIncomingLineBuffer(): IncomingLineBuffer {
+  return { parts: [], pendingLength: 0 };
+}
+
+function stripTrailingCarriageReturn(line: string): string {
+  return line.endsWith("\r") ? line.slice(0, -1) : line;
+}
+
+export function appendIncomingChunk(
+  buffer: IncomingLineBuffer,
+  chunk: string,
+): ReadonlyArray<string> {
+  let newlineIndex = chunk.indexOf("\n");
+  if (newlineIndex === -1) {
+    if (chunk.length > 0) {
+      buffer.parts.push(chunk);
+      buffer.pendingLength += chunk.length;
+    }
+    return [];
+  }
+
+  const lines: Array<string> = [];
+  let start = 0;
+  while (newlineIndex !== -1) {
+    const segment = chunk.slice(start, newlineIndex);
+    if (buffer.parts.length > 0) {
+      buffer.parts.push(segment);
+      lines.push(stripTrailingCarriageReturn(buffer.parts.join("")));
+      buffer.parts = [];
+      buffer.pendingLength = 0;
+    } else {
+      lines.push(stripTrailingCarriageReturn(segment));
+    }
+    start = newlineIndex + 1;
+    newlineIndex = chunk.indexOf("\n", start);
+  }
+
+  if (start < chunk.length) {
+    const rest = chunk.slice(start);
+    buffer.parts.push(rest);
+    buffer.pendingLength += rest.length;
+  }
+  return lines;
+}
+
+export function flushIncomingLineBuffer(buffer: IncomingLineBuffer): string {
+  const line = buffer.parts.join("");
+  buffer.parts = [];
+  buffer.pendingLength = 0;
+  return line;
+}
+
+/**
+ * Records the serialized wire length (in UTF-16 code units) of every decoded
+ * JSON-RPC response result object. Callers such as the Codex session runtime
+ * use it to decide whether a thread snapshot is too large to decode or
+ * backfill in full, without re-serializing the payload.
+ */
+const wireMessageLengths = new WeakMap<object, number>();
+
+export function readWireMessageLength(value: unknown): number | undefined {
+  if (!isObject(value)) {
+    return undefined;
+  }
+  return wireMessageLengths.get(value);
+}
+
+function recordWireMessageLength(message: unknown, line: string): void {
+  if (!isObject(message) || !("result" in message)) {
+    return;
+  }
+  const result = message.result;
+  if (isObject(result)) {
+    wireMessageLengths.set(result, line.length);
+  }
+}
+
 function isIncomingRequest(value: unknown): value is CodexAppServerIncomingRequest {
   if (!isObject(value) || typeof value.method !== "string") {
     return false;
@@ -187,7 +281,6 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
       new Map<string, Deferred.Deferred<unknown, CodexError.CodexAppServerError>>(),
     );
     const nextRequestId = yield* Ref.make(1);
-    const remainder = yield* Ref.make("");
     const terminationHandled = yield* Ref.make(false);
 
     const logProtocol = (event: CodexAppServerProtocolLogEvent) => {
@@ -422,13 +515,14 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
         payload: line,
       }).pipe(
         Effect.flatMap(() => decodeWireMessage(line)),
-        Effect.tap((decoded) =>
-          logProtocol({
+        Effect.tap((decoded) => {
+          recordWireMessageLength(decoded, line);
+          return logProtocol({
             direction: "incoming",
             stage: "decoded",
             payload: decoded,
-          }),
-        ),
+          });
+        }),
         Effect.flatMap(routeMessage),
         Effect.catchTag("CodexAppServerProtocolParseError", (error) =>
           logProtocol({
@@ -444,23 +538,25 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
       );
     };
 
+    // The stdin reader is the only consumer of this buffer and runs on one
+    // fiber, so a plain mutable buffer is safe and avoids re-copying the
+    // accumulated text for every chunk of a very large single-line response.
+    const incomingLineBuffer = makeIncomingLineBuffer();
     yield* options.stdio.stdin.pipe(
       Stream.decodeText(),
-      Stream.runForEach((chunk) =>
-        Ref.modify(remainder, (current) => {
-          const combined = current + chunk;
-          const lines = combined.split("\n");
-          const nextRemainder = lines.pop() ?? "";
-          return [lines.map((line) => line.replace(/\r$/, "")), nextRemainder] as const;
-        }).pipe(Effect.flatMap((lines) => Effect.forEach(lines, handleLine, { discard: true }))),
-      ),
+      Stream.runForEach((chunk) => {
+        const lines = appendIncomingChunk(incomingLineBuffer, chunk);
+        return lines.length === 0
+          ? Effect.void
+          : Effect.forEach(lines, handleLine, { discard: true });
+      }),
       Effect.matchEffect({
         onFailure: (error) =>
           handleTermination(() =>
             Effect.succeed(normalizeIncomingError(error, "Codex App Server input stream failed")),
           ),
         onSuccess: () =>
-          Ref.get(remainder).pipe(
+          Effect.sync(() => flushIncomingLineBuffer(incomingLineBuffer)).pipe(
             Effect.flatMap((line) => (line.trim().length === 0 ? Effect.void : handleLine(line))),
             Effect.matchEffect({
               onFailure: (error) => handleTermination(() => Effect.succeed(error)),

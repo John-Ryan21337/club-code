@@ -12,7 +12,11 @@ import type {
   DesktopProviderDaemonManagerShape,
   DesktopProviderDaemonSnapshot,
 } from "../backend/DesktopProviderDaemonManager.ts";
-import { runProviderDaemonHealthWatchdog } from "./DesktopApp.ts";
+import {
+  PROVIDER_DAEMON_LIVE_FAILURE_THRESHOLD,
+  PROVIDER_DAEMON_STALLED_RPC_THRESHOLD_MS,
+  runProviderDaemonHealthWatchdog,
+} from "./DesktopApp.ts";
 
 const endpoint: ProviderDaemonClientConfig = {
   httpBaseUrl: "http://provider-daemon.local",
@@ -58,6 +62,132 @@ function daemonSnapshot(): DesktopProviderDaemonSnapshot {
 }
 
 describe("DesktopApp provider daemon watchdog", () => {
+  it.effect("replaces a live daemon whose functional RPC remains wedged", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const actions: string[] = [];
+        let recovered = false;
+        const quitting = yield* Ref.make(false);
+        const providerDaemonManager: DesktopProviderDaemonManagerShape = {
+          ensureRunning: Effect.succeed(endpoint),
+          recover: (reason) =>
+            Effect.sync(() => {
+              assert.include(reason, "RPC remained active");
+              actions.push("recover-daemon");
+              recovered = true;
+              return endpoint;
+            }),
+          currentConfig: Effect.succeed(Option.some(endpoint)),
+          probeLiveness: Effect.sync(() =>
+            Option.some(
+              recovered
+                ? liveDaemon
+                : {
+                    ...liveDaemon,
+                    activeRpcCount: 1,
+                    oldestActiveRpcAgeMs: PROVIDER_DAEMON_STALLED_RPC_THRESHOLD_MS,
+                  },
+            ),
+          ),
+          refreshHealth: Effect.succeed(Option.none()),
+          snapshot: Effect.sync(daemonSnapshot),
+          stop: Effect.die("watchdog must use recover, not stop"),
+        };
+        const backendManager: DesktopBackendManagerShape = {
+          start: Effect.sync(() => {
+            actions.push("start-backend");
+          }),
+          stop: () =>
+            Effect.sync(() => {
+              actions.push("stop-backend");
+            }),
+          currentConfig: Effect.succeed(Option.none()),
+          snapshot: Effect.succeed({
+            desiredRunning: true,
+            ready: true,
+            activePid: Option.some(process.pid),
+            restartAttempt: 0,
+            restartScheduled: false,
+          }),
+        };
+
+        const watchdog = yield* runProviderDaemonHealthWatchdog({
+          backendManager,
+          providerDaemonManager,
+          quitting,
+          checkInterval: Duration.millis(1),
+        }).pipe(Effect.forkScoped);
+        yield* Effect.yieldNow;
+        yield* TestClock.adjust(Duration.millis(1));
+        yield* Effect.yieldNow;
+        yield* Fiber.interrupt(watchdog);
+
+        assert.deepStrictEqual(actions, ["stop-backend", "recover-daemon", "start-backend"]);
+      }).pipe(Effect.provide(TestClock.layer())),
+    ),
+  );
+
+  it.effect("keeps a live daemon during a short liveness delay", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const actions: string[] = [];
+        let probeCount = 0;
+        const quitting = yield* Ref.make(false);
+
+        const providerDaemonManager: DesktopProviderDaemonManagerShape = {
+          ensureRunning: Effect.succeed(endpoint),
+          recover: () =>
+            Effect.sync(() => {
+              actions.push("recover-daemon");
+              return endpoint;
+            }),
+          currentConfig: Effect.succeed(Option.some(endpoint)),
+          probeLiveness: Effect.sync(() => {
+            probeCount += 1;
+            return Option.none();
+          }),
+          refreshHealth: Effect.succeed(Option.none()),
+          snapshot: Effect.sync(daemonSnapshot),
+          stop: Effect.die("watchdog must use recover, not stop"),
+        };
+        const backendManager: DesktopBackendManagerShape = {
+          start: Effect.sync(() => {
+            actions.push("start-backend");
+          }),
+          stop: () =>
+            Effect.sync(() => {
+              actions.push("stop-backend");
+            }),
+          currentConfig: Effect.succeed(Option.none()),
+          snapshot: Effect.succeed({
+            desiredRunning: true,
+            ready: true,
+            activePid: Option.some(process.pid),
+            restartAttempt: 0,
+            restartScheduled: false,
+          }),
+        };
+
+        const watchdog = yield* runProviderDaemonHealthWatchdog({
+          backendManager,
+          providerDaemonManager,
+          quitting,
+          checkInterval: Duration.millis(1),
+        }).pipe(Effect.forkScoped);
+        yield* Effect.yieldNow;
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          yield* TestClock.adjust(Duration.millis(1));
+          yield* Effect.yieldNow;
+        }
+        yield* Fiber.interrupt(watchdog);
+
+        assert.isAbove(PROVIDER_DAEMON_LIVE_FAILURE_THRESHOLD, 3);
+        assert.isAtLeast(probeCount, 3);
+        assert.deepStrictEqual(actions, []);
+      }).pipe(Effect.provide(TestClock.layer())),
+    ),
+  );
+
   it.effect("restarts the backend around a confirmed provider daemon replacement", () =>
     Effect.scoped(
       Effect.gen(function* () {

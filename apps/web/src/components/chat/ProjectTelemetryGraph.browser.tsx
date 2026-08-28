@@ -137,6 +137,7 @@ describe("ProjectTelemetryGraph", () => {
                 memoryTotalBytes: 8 * 1024 ** 3,
                 memoryUsedBytes: 2 * 1024 ** 3,
                 memoryUtilizationPercent: 25,
+                temperatureCelsius: 50,
               },
             ],
             reason: null,
@@ -153,7 +154,7 @@ describe("ProjectTelemetryGraph", () => {
       expect(panel).not.toBeNull();
       expect(getComputedStyle(panel!).backgroundColor).toBe("rgba(0, 0, 0, 0)");
       const cards = [...document.querySelectorAll<HTMLElement>("[data-project-telemetry-card]")];
-      expect(cards).toHaveLength(13);
+      expect(cards).toHaveLength(14);
       expect(
         cards.every((card) => getComputedStyle(card).backgroundColor === "rgba(0, 0, 0, 0)"),
       ).toBe(true);
@@ -164,7 +165,7 @@ describe("ProjectTelemetryGraph", () => {
       expect(panel?.dataset.matrixPaletteMotion).toBe("frozen");
 
       const series = [...document.querySelectorAll<SVGElement>("[data-project-telemetry-series]")];
-      expect(series).toHaveLength(13);
+      expect(series).toHaveLength(14);
       const firstStrokes = series.map((svg) => {
         const paths = [...svg.querySelectorAll("path")];
         expect(paths).toHaveLength(2);
@@ -296,9 +297,7 @@ describe("ProjectTelemetryGraph", () => {
       await expect.element(page.getByLabelText(/Host network:/i)).toBeVisible();
       await expect
         .element(
-          page.getByLabelText(
-            /GPU 1: 24%\. NVIDIA GeForce RTX 3090 A.*49°C.*selected environment/i,
-          ),
+          page.getByLabelText(/GPU 1: 24%\. NVIDIA GeForce RTX 3090 A.*selected environment/i),
         )
         .toBeVisible();
       await expect
@@ -306,17 +305,87 @@ describe("ProjectTelemetryGraph", () => {
         .toBeVisible();
       await expect
         .element(
-          page.getByLabelText(/GPU 2: 7%\. NVIDIA GeForce RTX 3090 B.*temperature unavailable/i),
+          page.getByLabelText(
+            /GPU 1 temp: 49°C\. NVIDIA GeForce RTX 3090 A.*measured adapter temperature/i,
+          ),
         )
         .toBeVisible();
       await expect
+        .element(page.getByLabelText(/GPU 2: 7%\. NVIDIA GeForce RTX 3090 B/i))
+        .toBeVisible();
+      await expect
         .element(page.getByLabelText(/GPU 2 VRAM: 4 GiB \/ 24 GiB\. 20 GiB free.*17% used/i))
+        .toBeVisible();
+      await expect
+        .element(
+          page.getByLabelText(
+            /GPU 2 temp: Unavailable\. NVIDIA GeForce RTX 3090 B.*adapter temperature unavailable/i,
+          ),
+        )
         .toBeVisible();
 
       const cardLabels = [
         ...document.querySelectorAll<HTMLElement>("[data-project-telemetry-card]"),
       ].map((card) => card.dataset.projectTelemetryCard);
-      expect(cardLabels.slice(4, 8)).toEqual(["GPU 1", "GPU 1 VRAM", "GPU 2", "GPU 2 VRAM"]);
+      expect(cardLabels.slice(4, 10)).toEqual([
+        "GPU 1",
+        "GPU 1 VRAM",
+        "GPU 1 temp",
+        "GPU 2",
+        "GPU 2 VRAM",
+        "GPU 2 temp",
+      ]);
+    } finally {
+      await mounted.unmount();
+      await page.viewport(800, 600);
+    }
+  });
+
+  it("removes only unavailable per-adapter temperature cards when graphs are hidden", async () => {
+    await page.viewport(1_200, 800);
+    const gibibyte = 1024 ** 3;
+    const telemetry = telemetryFixture({ projectId: projectA });
+    const mounted = await render(
+      <ProjectTelemetryGraph
+        environmentId={environmentA}
+        hideUnavailableGraphs
+        pollIntervalMs={Number.MAX_SAFE_INTEGER}
+        projectId={projectA}
+        readTelemetry={vi.fn(async () => ({
+          ...telemetry,
+          gpu: {
+            status: "available" as const,
+            adapters: [
+              {
+                index: 0,
+                name: "NVIDIA GeForce RTX 3090 A",
+                utilizationPercent: 24,
+                memoryTotalBytes: 24 * gibibyte,
+                memoryUsedBytes: 6 * gibibyte,
+                memoryUtilizationPercent: 25,
+                temperatureCelsius: 49,
+              },
+              {
+                index: 1,
+                name: "NVIDIA GeForce RTX 3090 B",
+                utilizationPercent: 7,
+                memoryTotalBytes: 24 * gibibyte,
+                memoryUsedBytes: 4 * gibibyte,
+                memoryUtilizationPercent: 100 / 6,
+              },
+            ],
+            reason: null,
+            detail: null,
+          },
+        }))}
+      />,
+    );
+
+    try {
+      await expect.element(page.getByLabelText(/^GPU 1 temp: 49°C/i)).toBeVisible();
+      expect(document.querySelector('[data-project-telemetry-card="GPU 2 temp"]')).toBeNull();
+      expect(document.querySelector('[data-project-telemetry-card="GPU 2"]')).not.toBeNull();
+      expect(document.querySelector('[data-project-telemetry-card="GPU 2 VRAM"]')).not.toBeNull();
     } finally {
       await mounted.unmount();
       await page.viewport(800, 600);

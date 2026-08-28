@@ -1038,6 +1038,7 @@ export function ProjectTelemetryGraph({
                 </>
               ) : (
                 displayedGpuAdapters.map((adapter) => {
+                  const adapterTemperatureAvailable = adapter.temperatureCelsius !== null;
                   const memory =
                     adapter.memoryUsedBytes !== null &&
                     adapter.memoryTotalBytes !== null &&
@@ -1050,15 +1051,11 @@ export function ProjectTelemetryGraph({
                           utilizationPercent: adapter.memoryUtilizationPercent,
                         }
                       : null;
-                  const temperatureDetail =
-                    adapter.temperatureCelsius === null
-                      ? "temperature unavailable"
-                      : formatTemperature(adapter.temperatureCelsius);
                   return (
                     <Fragment key={adapter.key}>
                       <TelemetryCard
                         color={colors.gpu}
-                        detail={`${adapter.name} · ${temperatureDetail} · selected environment`}
+                        detail={`${adapter.name} · selected environment`}
                         history={gpuAdapterHistory(
                           visibleView.history,
                           adapter.key,
@@ -1066,11 +1063,7 @@ export function ProjectTelemetryGraph({
                         )}
                         icon={GaugeIcon}
                         label={adapter.label}
-                        title={`${adapter.name} · ${
-                          adapter.temperatureCelsius === null
-                            ? "adapter temperature unavailable"
-                            : `measured adapter temperature ${formatTemperature(adapter.temperatureCelsius)}`
-                        }`}
+                        title={`${adapter.name} utilization on the selected environment.`}
                         value={formatPercent(adapter.utilizationPercent)}
                       />
                       {!hideUnavailableGraphs || memory !== null ? (
@@ -1098,6 +1091,32 @@ export function ProjectTelemetryGraph({
                               ? "Unavailable"
                               : `${formatTelemetryBytes(memory.usedBytes)} / ${formatTelemetryBytes(memory.totalBytes)}`
                           }
+                        />
+                      ) : null}
+                      {!hideUnavailableGraphs || adapter.temperatureCelsius !== null ? (
+                        <TelemetryCard
+                          color={colors.tempGpu}
+                          detail={
+                            adapterTemperatureAvailable
+                              ? `${adapter.name} · measured adapter temperature · selected environment`
+                              : `${adapter.name} · adapter temperature unavailable · selected environment`
+                          }
+                          history={normalizeTemperatureHistory(
+                            gpuAdapterHistory(
+                              visibleView.history,
+                              adapter.key,
+                              "temperatureCelsius",
+                            ),
+                          )}
+                          historyMeasurement="temperature"
+                          icon={ThermometerIcon}
+                          label={`${adapter.label} temp`}
+                          title={
+                            adapterTemperatureAvailable
+                              ? `${adapter.name} measured adapter temperature.`
+                              : `${adapter.name} adapter temperature is unavailable. Club Code does not estimate missing values.`
+                          }
+                          value={formatTemperature(adapter.temperatureCelsius)}
                         />
                       ) : null}
                     </Fragment>

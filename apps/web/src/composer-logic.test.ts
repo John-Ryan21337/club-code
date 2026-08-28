@@ -9,7 +9,43 @@ import {
   parseStandaloneComposerGoalCommand,
   parseStandaloneComposerSlashCommand,
   replaceTextRange,
+  shouldDisableComposerEditor,
 } from "./composer-logic";
+
+describe("shouldDisableComposerEditor", () => {
+  it("keeps prompt drafting available while a send is accepted or a provider connects", () => {
+    expect(
+      shouldDisableComposerEditor({
+        isSendBusy: true,
+        isConnecting: true,
+        isApprovalState: false,
+        environmentUnavailable: false,
+        hasPendingProgress: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("disables ordinary drafting for approval and unavailable-environment states", () => {
+    expect(
+      shouldDisableComposerEditor({
+        isSendBusy: false,
+        isConnecting: false,
+        isApprovalState: true,
+        environmentUnavailable: false,
+        hasPendingProgress: false,
+      }),
+    ).toBe(true);
+    expect(
+      shouldDisableComposerEditor({
+        isSendBusy: false,
+        isConnecting: false,
+        isApprovalState: false,
+        environmentUnavailable: true,
+        hasPendingProgress: false,
+      }),
+    ).toBe(true);
+  });
+});
 
 describe("detectComposerTrigger", () => {
   it("detects @path trigger at cursor", () => {

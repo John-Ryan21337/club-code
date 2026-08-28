@@ -14,6 +14,25 @@ export interface ComposerTrigger {
   rangeEnd: number;
 }
 
+export interface ComposerEditorDisabledInput {
+  readonly isSendBusy: boolean;
+  readonly isConnecting: boolean;
+  readonly isApprovalState: boolean;
+  readonly environmentUnavailable: boolean;
+  readonly hasPendingProgress: boolean;
+}
+
+/**
+ * Provider handoff is not an editor lock. The operator must remain able to
+ * draft the next queued message while a previous send is being accepted or a
+ * provider session is connecting. Only states in which the editor represents
+ * a different required response, or the environment cannot retain the draft,
+ * disable ordinary prompt editing.
+ */
+export function shouldDisableComposerEditor(input: ComposerEditorDisabledInput): boolean {
+  return input.isApprovalState || (input.environmentUnavailable && !input.hasPendingProgress);
+}
+
 const isInlineTokenSegment = (
   segment: { type: "text"; text: string } | { type: "mention" } | { type: "skill" },
 ): boolean => segment.type !== "text";

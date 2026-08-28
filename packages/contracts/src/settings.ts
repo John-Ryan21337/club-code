@@ -14,6 +14,7 @@ import {
   DEFAULT_AUTO_NUDGE_MAX_ROUNDS,
   DEFAULT_AUTO_NUDGE_MODE,
 } from "./autoNudge.ts";
+import { DEFAULT_HEXAGONS_BACKGROUND_PRESET_JSON } from "./defaultHexagonsBackground.ts";
 
 export {
   AutoNudgeMaxRounds,
@@ -24,6 +25,10 @@ export {
   MAX_AUTO_NUDGE_MAX_ROUNDS,
   MIN_AUTO_NUDGE_MAX_ROUNDS,
 } from "./autoNudge.ts";
+export {
+  CLUB_CODE_DEFAULT_HEXAGONS_BACKGROUND_PRESET,
+  DEFAULT_HEXAGONS_BACKGROUND_PRESET_JSON,
+} from "./defaultHexagonsBackground.ts";
 
 // ── Client Settings (local-only) ───────────────────────────────
 
@@ -100,6 +105,7 @@ export const DEFAULT_WORLD_CLOCK_WEATHER_ENABLED = false;
 export const DEFAULT_SHOW_SIDEBAR_SEARCH = true;
 export const DEFAULT_SHOW_SIDEBAR_MASCOT = true;
 export const DEFAULT_SHOW_SIDEBAR_ATTRIBUTION = true;
+export const DEFAULT_SHOW_COMPOSER_THREAD_AUTOMATION_CONTROLS = false;
 export const DEFAULT_BRAND_WORDMARK_PREFIX = "Club";
 export const DEFAULT_SIDEBAR_BRAND_IMAGE_DATA_URL = "";
 export const DEFAULT_SIDEBAR_BRAND_IMAGE = null;
@@ -225,6 +231,12 @@ export const MIN_FALLING_EFFECT_DENSITY = 0.5;
 export const MAX_FALLING_EFFECT_DENSITY = 10;
 export const DEFAULT_FALLING_EFFECT_DENSITY = 1;
 /**
+ * Aggregate output-token activity is a live operational input. Keep it off
+ * until the operator explicitly allows the atmosphere to observe that
+ * privacy-safe numeric signal.
+ */
+export const DEFAULT_FALLING_EFFECT_USAGE_REACTIVE = false;
+/**
  * Probability that a Matrix stream uses the Japanese glyph pool and Japanese
  * live-work terms. The remainder use Roman glyphs and English live-work terms.
  */
@@ -251,6 +263,7 @@ export const DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_NETWORK_ENABLED = true;
 export const DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_DATABASE_ENABLED = true;
 export const DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_BUILD_ENABLED = true;
 export const DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_AGENT_ENABLED = true;
+export const DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_WORK_ENABLED = true;
 export const FallingEffectActivityLinkColorMode = Schema.Literals(["random", "matrix"]);
 export type FallingEffectActivityLinkColorMode = typeof FallingEffectActivityLinkColorMode.Type;
 export const DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_COLOR_MODE: FallingEffectActivityLinkColorMode =
@@ -297,18 +310,51 @@ export type AmbientOpacity = typeof AmbientOpacity.Type;
 
 export const FallingEffectKind = Schema.Literals(["snow", "rain", "matrix"]);
 export type FallingEffectKind = typeof FallingEffectKind.Type;
+export const MAX_HEXAGONS_BACKGROUND_PRESET_JSON_LENGTH = 32_768;
+export const HexagonsBackgroundPresetJson = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(MAX_HEXAGONS_BACKGROUND_PRESET_JSON_LENGTH),
+);
+export type HexagonsBackgroundPresetJson = typeof HexagonsBackgroundPresetJson.Type;
+export const MIN_AMBIENT_BACKGROUND_SURFACE_OPACITY = 0;
+export const MAX_AMBIENT_BACKGROUND_SURFACE_OPACITY = 1;
+export const DEFAULT_AMBIENT_BACKGROUND_MANUSCRIPT_OPACITY = 0.58;
+export const DEFAULT_AMBIENT_BACKGROUND_SIDEBAR_OPACITY = 0.68;
+export const AmbientBackgroundSurfaceOpacity = Schema.Number.check(
+  Schema.isBetween({
+    minimum: MIN_AMBIENT_BACKGROUND_SURFACE_OPACITY,
+    maximum: MAX_AMBIENT_BACKGROUND_SURFACE_OPACITY,
+  }),
+);
+export type AmbientBackgroundSurfaceOpacity = typeof AmbientBackgroundSurfaceOpacity.Type;
+export const DEFAULT_HEXAGONS_BACKGROUND_ENABLED = false;
 export const DEFAULT_FALLING_EFFECTS_ENABLED = false;
-/**
- * Compatibility default: the console existed before this persisted kill
- * switch, so older settings documents retain the current visible behavior.
- */
-export const DEFAULT_ATMOSPHERE_CONSOLE_ENABLED = true;
+/** The Atmosphere Console is opt-in on fresh and legacy-default profiles. */
+export const DEFAULT_ATMOSPHERE_CONSOLE_ENABLED = false;
 /**
  * Cinema media stays visually unobstructed unless the user explicitly opts
  * into a clipped, pointer-transparent copy of the selected falling effect.
  */
 export const DEFAULT_FALLING_EFFECTS_OVER_CINEMA_ENABLED = false;
-export const DEFAULT_FALLING_EFFECT_KIND: FallingEffectKind = "snow";
+export const DEFAULT_FALLING_EFFECT_KIND: FallingEffectKind = "rain";
+export const DEFAULT_HARDWARE_LIGHTING_SYNC_ENABLED = false;
+export const DEFAULT_HARDWARE_LIGHTING_CONTROLLER_IDS: readonly string[] = [];
+export const DEFAULT_HARDWARE_LIGHTING_BRIGHTNESS = 1;
+export const DEFAULT_HARDWARE_LIGHTING_RESTORE_ON_DISABLE = true;
+export const HardwareLightingControllerIds = Schema.Array(
+  Schema.String.check(
+    Schema.isMinLength(16),
+    Schema.isMaxLength(64),
+    Schema.isPattern(/^[a-f0-9]+$/u),
+  ),
+).check(
+  Schema.isMaxLength(64),
+  Schema.makeFilter((ids) =>
+    new Set(ids).size === ids.length ? undefined : "must not contain duplicate controller IDs",
+  ),
+);
+export const HardwareLightingBrightness = Schema.Number.check(
+  Schema.isBetween({ minimum: 0.05, maximum: 1 }),
+);
 
 /**
  * Matrix-only palette behavior. "fixed" preserves the original configured,
@@ -729,6 +775,18 @@ export const ClientSettingsSchema = Schema.Struct({
   worldClockWeatherEnabled: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_WORLD_CLOCK_WEATHER_ENABLED)),
   ),
+  hexagonsBackgroundEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_HEXAGONS_BACKGROUND_ENABLED)),
+  ),
+  hexagonsBackgroundPresetJson: Schema.NullOr(HexagonsBackgroundPresetJson).pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_HEXAGONS_BACKGROUND_PRESET_JSON)),
+  ),
+  ambientBackgroundManuscriptOpacity: AmbientBackgroundSurfaceOpacity.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_BACKGROUND_MANUSCRIPT_OPACITY)),
+  ),
+  ambientBackgroundSidebarOpacity: AmbientBackgroundSurfaceOpacity.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_BACKGROUND_SIDEBAR_OPACITY)),
+  ),
   fallingEffectsEnabled: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECTS_ENABLED)),
   ),
@@ -737,6 +795,18 @@ export const ClientSettingsSchema = Schema.Struct({
   ),
   fallingEffectsOverCinemaEnabled: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECTS_OVER_CINEMA_ENABLED)),
+  ),
+  hardwareLightingSyncEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_HARDWARE_LIGHTING_SYNC_ENABLED)),
+  ),
+  hardwareLightingControllerIds: HardwareLightingControllerIds.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_HARDWARE_LIGHTING_CONTROLLER_IDS)),
+  ),
+  hardwareLightingBrightness: HardwareLightingBrightness.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_HARDWARE_LIGHTING_BRIGHTNESS)),
+  ),
+  hardwareLightingRestoreOnDisable: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_HARDWARE_LIGHTING_RESTORE_ON_DISABLE)),
   ),
   fallingEffectKind: FallingEffectKind.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_KIND)),
@@ -779,6 +849,9 @@ export const ClientSettingsSchema = Schema.Struct({
   fallingEffectDensity: FallingEffectDensity.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_DENSITY)),
   ),
+  fallingEffectUsageReactive: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_USAGE_REACTIVE)),
+  ),
   fallingEffectJapaneseRatio: FallingEffectJapaneseRatio.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_JAPANESE_RATIO)),
   ),
@@ -806,6 +879,9 @@ export const ClientSettingsSchema = Schema.Struct({
   ),
   fallingEffectActivityLinkAgentEnabled: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_AGENT_ENABLED)),
+  ),
+  fallingEffectActivityLinkWorkEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_WORK_ENABLED)),
   ),
   fallingEffectActivityLinkColorMode: FallingEffectActivityLinkColorMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_COLOR_MODE)),
@@ -889,6 +965,9 @@ export const ClientSettingsSchema = Schema.Struct({
   ),
   showSidebarAttribution: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SHOW_SIDEBAR_ATTRIBUTION)),
+  ),
+  showComposerThreadAutomationControls: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_SHOW_COMPOSER_THREAD_AUTOMATION_CONTROLS)),
   ),
   brandWordmarkPrefix: TrimmedString.check(
     Schema.isMaxLength(MAX_BRAND_WORDMARK_PREFIX_LENGTH),
@@ -1025,6 +1104,10 @@ export const ClientSettingsSchema = Schema.Struct({
 export type ClientSettings = typeof ClientSettingsSchema.Type;
 
 export const AMBIENT_CLIENT_SETTINGS_KEYS = [
+  "hexagonsBackgroundEnabled",
+  "hexagonsBackgroundPresetJson",
+  "ambientBackgroundManuscriptOpacity",
+  "ambientBackgroundSidebarOpacity",
   "fallingEffectsEnabled",
   "atmosphereConsoleEnabled",
   "fallingEffectsOverCinemaEnabled",
@@ -1041,6 +1124,7 @@ export const AMBIENT_CLIENT_SETTINGS_KEYS = [
   "fallingEffectOpacity",
   "fallingEffectSpeed",
   "fallingEffectDensity",
+  "fallingEffectUsageReactive",
   "fallingEffectJapaneseRatio",
   "fallingEffect2chEnriched",
   "fallingEffectLiveWorkVocabulary",
@@ -1049,6 +1133,7 @@ export const AMBIENT_CLIENT_SETTINGS_KEYS = [
   "fallingEffectActivityLinkDatabaseEnabled",
   "fallingEffectActivityLinkBuildEnabled",
   "fallingEffectActivityLinkAgentEnabled",
+  "fallingEffectActivityLinkWorkEnabled",
   "fallingEffectActivityLinkColorMode",
   "fallingEffectActivityLinkRetentionSeconds",
   "ambientVideoEnabled",
@@ -1080,6 +1165,10 @@ export type AmbientClientSettings = Pick<
 >;
 
 export const DEFAULT_AMBIENT_CLIENT_SETTINGS: AmbientClientSettings = {
+  hexagonsBackgroundEnabled: DEFAULT_HEXAGONS_BACKGROUND_ENABLED,
+  hexagonsBackgroundPresetJson: DEFAULT_HEXAGONS_BACKGROUND_PRESET_JSON,
+  ambientBackgroundManuscriptOpacity: DEFAULT_AMBIENT_BACKGROUND_MANUSCRIPT_OPACITY,
+  ambientBackgroundSidebarOpacity: DEFAULT_AMBIENT_BACKGROUND_SIDEBAR_OPACITY,
   fallingEffectsEnabled: DEFAULT_FALLING_EFFECTS_ENABLED,
   atmosphereConsoleEnabled: DEFAULT_ATMOSPHERE_CONSOLE_ENABLED,
   fallingEffectsOverCinemaEnabled: DEFAULT_FALLING_EFFECTS_OVER_CINEMA_ENABLED,
@@ -1096,6 +1185,7 @@ export const DEFAULT_AMBIENT_CLIENT_SETTINGS: AmbientClientSettings = {
   fallingEffectOpacity: DEFAULT_AMBIENT_OPACITY,
   fallingEffectSpeed: DEFAULT_FALLING_EFFECT_SPEED,
   fallingEffectDensity: DEFAULT_FALLING_EFFECT_DENSITY,
+  fallingEffectUsageReactive: DEFAULT_FALLING_EFFECT_USAGE_REACTIVE,
   fallingEffectJapaneseRatio: DEFAULT_FALLING_EFFECT_JAPANESE_RATIO,
   fallingEffect2chEnriched: DEFAULT_FALLING_EFFECT_2CH_ENRICHED,
   fallingEffectLiveWorkVocabulary: DEFAULT_FALLING_EFFECT_LIVE_WORK_VOCABULARY,
@@ -1104,6 +1194,7 @@ export const DEFAULT_AMBIENT_CLIENT_SETTINGS: AmbientClientSettings = {
   fallingEffectActivityLinkDatabaseEnabled: DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_DATABASE_ENABLED,
   fallingEffectActivityLinkBuildEnabled: DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_BUILD_ENABLED,
   fallingEffectActivityLinkAgentEnabled: DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_AGENT_ENABLED,
+  fallingEffectActivityLinkWorkEnabled: DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_WORK_ENABLED,
   fallingEffectActivityLinkColorMode: DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_COLOR_MODE,
   fallingEffectActivityLinkRetentionSeconds: DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
   ambientVideoEnabled: DEFAULT_AMBIENT_VIDEO_ENABLED,
@@ -1155,40 +1246,6 @@ export const CLUB_CODE_FIRST_RUN_CLIENT_SETTINGS: ClientSettings = Schema.decode
   ClientSettingsSchema,
 )({
   ...DEFAULT_CLIENT_SETTINGS,
-  fallingEffectsEnabled: true,
-  fallingEffectKind: "matrix",
-  fallingEffectMatrixColorMode: "rainbow",
-  fallingEffectOpacity: 0.55,
-  fallingEffectSpeed: 4,
-  fallingEffectDensity: 2.5,
-  fallingEffectJapaneseRatio: 0.45,
-  fallingEffect2chEnriched: true,
-  fallingEffectLiveWorkVocabulary: true,
-  fallingEffectActivityLinks: true,
-  fallingEffectActivityLinkNetworkEnabled: true,
-  fallingEffectActivityLinkDatabaseEnabled: true,
-  fallingEffectActivityLinkBuildEnabled: true,
-  fallingEffectActivityLinkAgentEnabled: true,
-  fallingEffectActivityLinkColorMode: "matrix",
-  ambientVideoEnabled: true,
-  ambientVideoSource: null,
-  ambientVideoLayoutMode: "custom",
-  ambientVideoPresetPlacement: "bottom-right",
-  ambientVideoPresetSize: "large",
-  ambientVideoPresentationMode: "floating",
-  ambientVideoGlowEnabled: true,
-  ambientVideoGlowMode: "adaptive",
-  ambientVideoGlowColor: "auto",
-  ambientVideoGlowOpacity: 0.65,
-  ambientImageEnabled: true,
-  ambientImageAsset: CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET,
-  ambientImagePresentationMode: "floating",
-  ambientImageLayoutMode: "custom",
-  ambientImagePresetPlacement: "bottom-left",
-  ambientImagePresetSize: "large",
-  ambientImageGlowEnabled: true,
-  ambientImageGlowColor: "auto",
-  ambientImageGlowOpacity: 0.35,
   workflowObservatoryEnabled: true,
   providerUsagePollMinutes: 2,
   modelPacingReservePercent: 5,
@@ -1890,9 +1947,17 @@ export const ClientSettingsPatch = Schema.Struct({
   worldClockLocationIds: Schema.optionalKey(WorldClockLocationIds),
   // See the ClientSettings field above: transport routing keeps this local.
   worldClockWeatherEnabled: Schema.optionalKey(Schema.Boolean),
+  hexagonsBackgroundEnabled: Schema.optionalKey(Schema.Boolean),
+  hexagonsBackgroundPresetJson: Schema.optionalKey(Schema.NullOr(HexagonsBackgroundPresetJson)),
+  ambientBackgroundManuscriptOpacity: Schema.optionalKey(AmbientBackgroundSurfaceOpacity),
+  ambientBackgroundSidebarOpacity: Schema.optionalKey(AmbientBackgroundSurfaceOpacity),
   fallingEffectsEnabled: Schema.optionalKey(Schema.Boolean),
   atmosphereConsoleEnabled: Schema.optionalKey(Schema.Boolean),
   fallingEffectsOverCinemaEnabled: Schema.optionalKey(Schema.Boolean),
+  hardwareLightingSyncEnabled: Schema.optionalKey(Schema.Boolean),
+  hardwareLightingControllerIds: Schema.optionalKey(HardwareLightingControllerIds),
+  hardwareLightingBrightness: Schema.optionalKey(HardwareLightingBrightness),
+  hardwareLightingRestoreOnDisable: Schema.optionalKey(Schema.Boolean),
   fallingEffectKind: Schema.optionalKey(FallingEffectKind),
   fallingEffectMatrixBaseFontSize: Schema.optionalKey(FallingEffectMatrixBaseFontSize),
   fallingEffectColor: Schema.optionalKey(AmbientColor),
@@ -1910,6 +1975,7 @@ export const ClientSettingsPatch = Schema.Struct({
   fallingEffectOpacity: Schema.optionalKey(AmbientOpacity),
   fallingEffectSpeed: Schema.optionalKey(FallingEffectSpeed),
   fallingEffectDensity: Schema.optionalKey(FallingEffectDensity),
+  fallingEffectUsageReactive: Schema.optionalKey(Schema.Boolean),
   fallingEffectJapaneseRatio: Schema.optionalKey(FallingEffectJapaneseRatio),
   fallingEffect2chEnriched: Schema.optionalKey(Schema.Boolean),
   fallingEffectLiveWorkVocabulary: Schema.optionalKey(Schema.Boolean),
@@ -1918,6 +1984,7 @@ export const ClientSettingsPatch = Schema.Struct({
   fallingEffectActivityLinkDatabaseEnabled: Schema.optionalKey(Schema.Boolean),
   fallingEffectActivityLinkBuildEnabled: Schema.optionalKey(Schema.Boolean),
   fallingEffectActivityLinkAgentEnabled: Schema.optionalKey(Schema.Boolean),
+  fallingEffectActivityLinkWorkEnabled: Schema.optionalKey(Schema.Boolean),
   fallingEffectActivityLinkColorMode: Schema.optionalKey(FallingEffectActivityLinkColorMode),
   fallingEffectActivityLinkRetentionSeconds: Schema.optionalKey(
     FallingEffectActivityLinkRetentionSeconds,
@@ -1947,6 +2014,7 @@ export const ClientSettingsPatch = Schema.Struct({
   showSidebarSearch: Schema.optionalKey(Schema.Boolean),
   showSidebarMascot: Schema.optionalKey(Schema.Boolean),
   showSidebarAttribution: Schema.optionalKey(Schema.Boolean),
+  showComposerThreadAutomationControls: Schema.optionalKey(Schema.Boolean),
   brandWordmarkPrefix: Schema.optionalKey(
     TrimmedString.check(Schema.isMaxLength(MAX_BRAND_WORDMARK_PREFIX_LENGTH)),
   ),

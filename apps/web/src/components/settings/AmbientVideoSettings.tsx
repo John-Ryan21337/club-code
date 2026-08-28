@@ -127,15 +127,6 @@ export function AmbientVideoSettings() {
     setSourceDraft(ambientSourceInputValue(settings.ambientVideoSource));
   }, [settings.ambientVideoSource]);
 
-  useEffect(() => {
-    // Do not seed from temporary local defaults before the authoritative
-    // server snapshot arrives. Otherwise a saved source could be masked by
-    // the session-only default queue during startup.
-    youtubeUrlQueueStore.initializeBundledDefault(
-      serverConfig !== null && settings.ambientVideoSource === null,
-    );
-  }, [serverConfig, settings.ambientVideoSource]);
-
   useEffect(
     () => () => {
       const controller = searchAbortRef.current;

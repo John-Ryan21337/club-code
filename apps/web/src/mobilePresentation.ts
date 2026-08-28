@@ -3,10 +3,10 @@ import type { ClientSettingsPatch } from "@cafecode/contracts/settings";
 /**
  * Build the complete operator-authored presentation patch.
  *
- * Entering Mobile optimized mode deliberately turns on Matrix, but it does not
- * reset any Matrix appearance or motion values. Leaving the mode changes only
- * the presentation override, so Matrix remains enabled until the operator
- * changes it independently.
+ * Entering Mobile optimized mode deliberately turns on the lightweight Rain
+ * atmosphere without resetting the operator's other effect configuration.
+ * Leaving the mode changes only the presentation override, so Rain remains
+ * enabled until the operator changes it independently.
  */
 export function createMobileOptimizedPresentationPatch(enabled: boolean): ClientSettingsPatch {
   if (!enabled) {
@@ -15,7 +15,7 @@ export function createMobileOptimizedPresentationPatch(enabled: boolean): Client
   return {
     mobileOptimizedPresentation: true,
     fallingEffectsEnabled: true,
-    fallingEffectKind: "matrix",
+    fallingEffectKind: "rain",
   };
 }
 

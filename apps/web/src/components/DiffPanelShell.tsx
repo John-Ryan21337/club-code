@@ -32,6 +32,7 @@ export function DiffPanelShell(props: {
           ? "w-[42vw] min-w-[360px] max-w-[560px] shrink-0 border-l border-border"
           : "w-full",
       )}
+      data-cafe-diff-panel-shell="true"
     >
       {shouldUseDragRegion ? (
         <div className={getDiffPanelHeaderRowClassName(props.mode)}>{props.header}</div>

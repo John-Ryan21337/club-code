@@ -22,6 +22,8 @@ import {
   CODEX_COMPLETED_AGENT_MESSAGE_LEDGER_LIMIT,
   CODEX_ULTRA_CACHING_COMPACT_PROMPT,
   claimCodexSnapshotBackfillWatcher,
+  classifyCodexStderrLines,
+  trimCodexThreadSnapshotForDecode,
   codexAggregateNotificationMethod,
   codexAggregateTurnHasUnfinishedChildren,
   codexChildConversationThreadIdsForTurn,
@@ -49,6 +51,31 @@ import {
   updateCodexPendingSteerProcessingFromNotification,
 } from "./CodexSessionRuntime.ts";
 const isCodexAppServerRequestError = Schema.is(CodexErrors.CodexAppServerRequestError);
+
+describe("Codex stderr classification", () => {
+  it("keeps one failed-command diagnostic and drops its copied output", () => {
+    const firstChunk = classifyCodexStderrLines([
+      "2026-08-11T06:35:00.905Z ERROR codex_core::tools::router: error=Exit code: 1",
+      "Wall time: 0.2 seconds",
+      "Output:",
+      "first copied command-output line",
+    ]);
+    const secondChunk = classifyCodexStderrLines(
+      [
+        "second copied command-output line",
+        "2026-08-11T06:35:01.000Z INFO codex_core::codex: turn completed",
+        "plain stderr after the structured log",
+      ],
+      firstChunk.suppressCommandFailureDetails,
+    );
+
+    assert.deepEqual(firstChunk.messages, [
+      "2026-08-11T06:35:00.905Z ERROR codex_core::tools::router: error=Exit code: 1",
+    ]);
+    assert.deepEqual(secondChunk.messages, ["plain stderr after the structured log"]);
+    assert.equal(secondChunk.suppressCommandFailureDetails, false);
+  });
+});
 
 describe("Codex notification emission timestamps", () => {
   it("accepts valid provider emission time and rejects malformed or future values", () => {
@@ -239,6 +266,25 @@ describe("buildCodexAppServerArgs", () => {
     assert.deepStrictEqual(buildCodexAppServerArgs({ responsesWebsockets: "auto" }), [
       "app-server",
     ]);
+  });
+
+  it("passes the per-session spawned-agent thread ceiling to every Codex app-server mode", () => {
+    const subagentThreadLimitArgs = ["-c", "agents.max_concurrent_threads_per_session=16"];
+    assert.deepStrictEqual(buildCodexAppServerArgs(undefined, false, 16), [
+      "app-server",
+      ...subagentThreadLimitArgs,
+    ]);
+    assert.deepStrictEqual(buildCodexAppServerArgs({ responsesWebsockets: "disabled" }, true, 16), [
+      "--oss",
+      "--local-provider",
+      "lmstudio",
+      "app-server",
+      ...subagentThreadLimitArgs,
+    ]);
+    assert.deepStrictEqual(
+      buildCodexAppServerArgs({ responsesWebsockets: "disabled" }, false, 16).slice(-2),
+      subagentThreadLimitArgs,
+    );
   });
 
   it("uses the Codex OSS transport for local LM Studio sessions", () => {
@@ -1801,7 +1847,6 @@ describe("openCodexThread", () => {
         readonly runtimeWorkspaceRoots?: ReadonlyArray<string>;
       };
       assert.deepStrictEqual(payload.config, {
-        "features.remote_compaction_v2": false,
         model_auto_compact_token_limit: CODEX_DEFAULT_AUTO_COMPACT_TOKEN_LIMIT,
         model_auto_compact_token_limit_scope: "total",
       });
@@ -1850,7 +1895,6 @@ describe("openCodexThread", () => {
       readonly runtimeWorkspaceRoots?: ReadonlyArray<string>;
     };
     assert.deepStrictEqual(payload.config, {
-      "features.remote_compaction_v2": false,
       model_auto_compact_token_limit: CODEX_DEFAULT_AUTO_COMPACT_TOKEN_LIMIT,
       model_auto_compact_token_limit_scope: "total",
       sandbox_workspace_write: {
@@ -1910,7 +1954,6 @@ describe("openCodexThread", () => {
     for (const call of calls) {
       const payload = call.payload as { readonly config?: Record<string, unknown> };
       assert.deepStrictEqual(payload.config, {
-        "features.remote_compaction_v2": false,
         model_auto_compact_token_limit: 150_000,
         model_auto_compact_token_limit_scope: "total",
       });
@@ -2015,5 +2058,58 @@ describe("openCodexThread", () => {
         isCodexAppServerRequestError(error) &&
         error.errorMessage === "timed out waiting for server",
     );
+  });
+});
+
+const makeTrimSnapshotRaw = (turns: ReadonlyArray<Record<string, unknown>>) => ({
+  cwd: "/tmp/project",
+  thread: {
+    id: "thread-1",
+    status: { type: "active" },
+    turns,
+  },
+});
+
+describe("trimCodexThreadSnapshotForDecode", () => {
+  it("returns the payload unchanged when it fits within the tail limit", () => {
+    const raw = makeTrimSnapshotRaw([{ id: "t1", status: "completed", items: [] }]);
+    const result = trimCodexThreadSnapshotForDecode(raw, { tailLimit: 8 });
+    assert.strictEqual(result.value, raw);
+    assert.equal(result.totalTurnCount, 1);
+    assert.equal(result.keptTurnCount, 1);
+  });
+
+  it("keeps the tail, in-progress turns, and explicitly requested turns in upstream order", () => {
+    const turns = Array.from({ length: 20 }, (_, index) => ({
+      id: `t${index}`,
+      status: index === 3 ? "inProgress" : "completed",
+      items: [{ type: "userMessage", id: `m${index}`, content: [] }],
+    }));
+    const raw = makeTrimSnapshotRaw(turns);
+    const result = trimCodexThreadSnapshotForDecode(raw, {
+      tailLimit: 2,
+      keepTurnIds: ["t7"],
+    });
+    const trimmed = result.value as { thread: { turns: ReadonlyArray<{ id: string }> } };
+    assert.deepEqual(
+      trimmed.thread.turns.map((turn) => turn.id),
+      ["t3", "t7", "t18", "t19"],
+    );
+    assert.equal(result.totalTurnCount, 20);
+    assert.equal(result.keptTurnCount, 4);
+    // Thread metadata other than turns is preserved by reference.
+    assert.equal((result.value as { cwd: string }).cwd, "/tmp/project");
+    assert.deepEqual((result.value as { thread: { status: unknown } }).thread.status, {
+      type: "active",
+    });
+    // The original payload is not mutated.
+    assert.equal(raw.thread.turns.length, 20);
+  });
+
+  it("leaves payloads without a turns array untouched", () => {
+    const raw = { thread: { id: "thread-1" } };
+    const result = trimCodexThreadSnapshotForDecode(raw, { tailLimit: 1 });
+    assert.strictEqual(result.value, raw);
+    assert.equal(result.totalTurnCount, 0);
   });
 });

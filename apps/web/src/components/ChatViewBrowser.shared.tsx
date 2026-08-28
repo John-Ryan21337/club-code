@@ -51,6 +51,7 @@ import { AppAtomRegistryProvider } from "../rpc/atomRegistry";
 import { getServerConfig } from "../rpc/serverState";
 import { getRouter } from "../router";
 import { deriveLogicalProjectKeyFromSettings } from "../logicalProject";
+import { settingsProfileLibraryStore } from "../settingsProfiles";
 import { selectBootstrapCompleteForActiveEnvironment, useStore } from "../store";
 import { useUiStateStore } from "../uiStateStore";
 import { createAuthenticatedSessionHandlers } from "../../test/authHttpHandlers";
@@ -70,7 +71,9 @@ import {
   useSavedEnvironmentRegistryStore,
   waitForSavedEnvironmentRegistryHydration,
 } from "../environments/runtime";
+import { __setComposerVideoReferenceCreatorForTests } from "../composerVideoReference";
 
+const createVideoReferenceStub = vi.fn();
 vi.mock("../lib/gitStatusState", () => ({
   useGitStatus: () => ({ data: null, error: null, cause: null, isPending: false }),
   useGitStatuses: () => new Map(),
@@ -205,7 +208,14 @@ function createBaseServerConfig(): ServerConfig {
     settings: {
       ...DEFAULT_SERVER_SETTINGS,
     },
-    clientSettings: { ...DEFAULT_CLIENT_SETTINGS, onboardingCompleted: true },
+    // This harness exercises the thread-automation controls in many focused
+    // cases. Keep them explicitly visible here even though the product default
+    // is hidden; the layout suite separately proves the default-off chrome.
+    clientSettings: {
+      ...DEFAULT_CLIENT_SETTINGS,
+      onboardingCompleted: true,
+      showComposerThreadAutomationControls: true,
+    },
     ambientExperienceCapabilities: DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES,
   };
 }
@@ -1005,6 +1015,22 @@ function resolveWsRpc(body: NormalizedWsRpcRequestBody): unknown {
         detail: null,
       },
     } satisfies ServerProjectSystemTelemetryResult;
+  }
+  if (
+    tag === WS_METHODS.hardwareLightingGetStatus ||
+    tag === WS_METHODS.hardwareLightingRefresh ||
+    tag === WS_METHODS.hardwareLightingApplyFrame
+  ) {
+    return {
+      state: "disabled",
+      adapter: "OpenRGB SDK (loopback)",
+      detail: "Hardware lighting is disabled in browser tests.",
+      protocolVersion: null,
+      controllers: [],
+      selectedControllerCount: 0,
+      lastFrameAt: null,
+      lastDisposition: tag === WS_METHODS.hardwareLightingApplyFrame ? "disabled" : null,
+    };
   }
   if (tag === WS_METHODS.serverDiscoverSourceControl) {
     return {
@@ -1859,6 +1885,27 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
   });
 
   beforeEach(async () => {
+    createVideoReferenceStub.mockReset();
+    createVideoReferenceStub.mockImplementation(async (file: File) => ({
+      contactSheet: new File([new Uint8Array([0xff, 0xd8, 0xff])], "rain-video-reference.jpg", {
+        type: "image/jpeg",
+      }),
+      analysis: {
+        sourceName: file.name,
+        mimeType: file.type || "video/webm",
+        sizeBytes: file.size,
+        durationSeconds: 6,
+        width: 1280,
+        height: 720,
+        sampleTimestampsSeconds: [0.05, 3, 5.95],
+        meanFrameDelta: 0.08,
+        loopSimilarity: 0.92,
+        motionClass: "moderate" as const,
+        palette: ["#00e000", "#002000"],
+        audioAnalyzed: false as const,
+      },
+    }));
+    __setComposerVideoReferenceCreatorForTests(createVideoReferenceStub);
     await rpcHarness.reset({
       resolveUnary: resolveWsRpc,
       getInitialStreamValues: (request) => {
@@ -1911,6 +1958,7 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
     await setViewport(DEFAULT_VIEWPORT);
     localStorage.clear();
     sessionStorage.clear();
+    settingsProfileLibraryStore.resetForTests();
     __resetAutoNudgeTurnLedgerForTests({ clearSessionStorage: true });
     __resetConfirmedAutoNudgeArmingForTests({ clearStorage: true });
     document.body.innerHTML = "";
@@ -1937,10 +1985,14 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
       projectExpandedById: {},
       projectOrder: [],
       threadLastVisitedAtById: {},
+      threadPlanSidebarOpenById: {},
+      threadRightPanelTabById: {},
+      threadWorkflowNodeExpandedById: {},
     });
   });
 
   afterEach(() => {
+    __setComposerVideoReferenceCreatorForTests(null);
     customWsRpcResolver = null;
     document.body.innerHTML = "";
   });
@@ -3367,6 +3419,60 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
       }
     });
 
+    it("turns a selected WebM into a local visual reference without retaining the raw video", async () => {
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: createSnapshotForTargetUser({
+          targetMessageId: "msg-user-attach-video" as MessageId,
+          targetText: "attach video target",
+        }),
+      });
+
+      try {
+        await waitForComposerEditor();
+        useComposerDraftStore.getState().setPrompt(THREAD_REF, "Recreate this falling effect");
+        await waitForComposerText("Recreate this falling effect");
+
+        const fileInput = document.querySelector<HTMLInputElement>(
+          '[data-chat-composer-form="true"] input[type="file"]',
+        );
+        expect(fileInput).toBeTruthy();
+        const video = new File([new Uint8Array([1, 2, 3])], "rain-loop.webm", {
+          type: "video/webm",
+        });
+        const transfer = new DataTransfer();
+        transfer.items.add(video);
+        fileInput!.files = transfer.files;
+        fileInput!.dispatchEvent(new Event("change", { bubbles: true }));
+
+        await vi.waitFor(
+          () =>
+            expect(document.body.textContent).toContain("Video reference added to this message"),
+          { timeout: 8_000, interval: 16 },
+        );
+        await vi.waitFor(
+          () =>
+            expect(useComposerDraftStore.getState().getComposerDraft(THREAD_REF)?.prompt).toContain(
+              "EffectRecreationSpec v1",
+            ),
+          { timeout: 8_000, interval: 16 },
+        );
+
+        const draft = useComposerDraftStore.getState().getComposerDraft(THREAD_REF);
+        expect(createVideoReferenceStub).toHaveBeenCalledOnce();
+        expect(createVideoReferenceStub).toHaveBeenCalledWith(video);
+        expect(draft?.prompt).toContain("Audio analyzed: no");
+        expect(draft?.prompt).toContain("WebGL2 acceleration");
+        expect(draft?.images.map((image) => image.name)).toEqual(["rain-video-reference.jpg"]);
+        expect(draft?.images.some((image) => image.name.endsWith(".webm"))).toBe(false);
+        expect(
+          document.querySelector('button[aria-label="Preview rain-video-reference.jpg"]'),
+        ).toBeTruthy();
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
     it("preserves typing that lands while a selected text file is being read", async () => {
       const mounted = await mountChatView({
         viewport: DEFAULT_VIEWPORT,
@@ -3558,7 +3664,9 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
         await vi.waitFor(
           () => {
             expect(document.body.textContent).toContain("Some files were not added");
-            expect(document.body.textContent).toContain("Attach images or plain-text .txt files.");
+            expect(document.body.textContent).toContain(
+              "Attach images, plain-text .txt files, or WebM, MP4, MOV, OGV, MKV, and other browser-decodable video references.",
+            );
           },
           { timeout: 8_000, interval: 16 },
         );
@@ -7629,6 +7737,67 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
   }
 
   if (chatViewBrowserPart === "layout") {
+    it("bounds the ambient legibility scrim to the prompt width", async () => {
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: createSnapshotForTargetUser({
+          targetMessageId: "msg-user-ambient-scrim-layout" as MessageId,
+          targetText: "ambient scrim layout",
+        }),
+      });
+
+      try {
+        const scrim = await waitForElement(
+          () => document.querySelector<HTMLElement>('[data-chat-manuscript-scrim="true"]'),
+          "Unable to find the ambient manuscript scrim.",
+        );
+        const composer = await waitForElement(
+          () => document.querySelector<HTMLElement>('[data-chat-composer-form="true"]'),
+          "Unable to find the chat composer.",
+        );
+
+        expect(scrim.getAttribute("aria-hidden")).toBe("true");
+        expect(scrim.classList.contains("pointer-events-none")).toBe(true);
+        expect(scrim.classList.contains("max-w-208")).toBe(true);
+        expect(scrim.classList.contains("z-0")).toBe(true);
+
+        const scrimBounds = scrim.getBoundingClientRect();
+        const composerBounds = composer.getBoundingClientRect();
+        expect(Math.abs(scrimBounds.left - composerBounds.left)).toBeLessThanOrEqual(1);
+        expect(Math.abs(scrimBounds.width - composerBounds.width)).toBeLessThanOrEqual(1);
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
+    it("hides prompt automation controls by default without removing the composer", async () => {
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: createSnapshotForTargetUser({
+          targetMessageId: "msg-user-composer-automation-hidden" as MessageId,
+          targetText: "composer automation hidden",
+        }),
+        configureFixture: (nextFixture) => {
+          nextFixture.serverConfig = {
+            ...nextFixture.serverConfig,
+            clientSettings: {
+              ...nextFixture.serverConfig.clientSettings,
+              showComposerThreadAutomationControls: false,
+            },
+          };
+        },
+      });
+
+      try {
+        expect(
+          document.querySelector('[data-composer-thread-automation-controls="true"]'),
+        ).toBeNull();
+        expect(document.querySelector('[data-chat-composer-form="true"]')).toBeTruthy();
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
     it("centers Auto Nudge and Idle Thread Guard over the composer in responsive order", async () => {
       const mounted = await mountChatView({
         viewport: DEFAULT_VIEWPORT,
@@ -7701,6 +7870,67 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
           Math.abs(expandedAutoNudgeBounds.width - expandedIdleGuardBounds.width),
         ).toBeLessThanOrEqual(1);
         expect(expandedIdleGuardBounds.right).toBeLessThanOrEqual(controlsBounds.right + 1);
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
+    it("keeps Plan / Workflow inline when desktop presentation is narrower than 980px", async () => {
+      const mounted = await mountChatView({
+        viewport: DEFAULT_VIEWPORT,
+        snapshot: createSnapshotForTargetUser({
+          targetMessageId: "msg-user-persistent-desktop-plan-panel" as MessageId,
+          targetText: "persistent desktop plan panel",
+        }),
+        configureFixture: (nextFixture) => {
+          nextFixture.serverConfig = {
+            ...nextFixture.serverConfig,
+            clientSettings: {
+              ...nextFixture.serverConfig.clientSettings,
+              mobileOptimizedPresentation: false,
+            },
+          };
+        },
+      });
+
+      try {
+        expect(document.querySelector('[data-chat-presentation="desktop"]')).toBeTruthy();
+
+        await page.getByRole("button", { name: "Plan / Workflow" }).click();
+
+        const closePanelButton = await waitForElement(
+          () => document.querySelector<HTMLElement>('[aria-label="Close Plan and Workflow panel"]'),
+          "Unable to find the open Plan / Workflow panel.",
+        );
+        expect(closePanelButton.closest('[data-slot="sheet-popup"]')).toBeNull();
+
+        await page.getByRole("heading", { name: THREAD_TITLE }).click();
+
+        expect(document.querySelector('[aria-label="Close Plan and Workflow panel"]')).toBeTruthy();
+      } finally {
+        await mounted.cleanup();
+      }
+    });
+
+    it("keeps Plan / Workflow in a sheet for mobile presentation", async () => {
+      useUiStateStore.setState({
+        threadPlanSidebarOpenById: { [THREAD_KEY]: true },
+      });
+      const mounted = await mountChatView({
+        viewport: COMPACT_FOOTER_VIEWPORT,
+        snapshot: createSnapshotForTargetUser({
+          targetMessageId: "msg-user-mobile-plan-sheet" as MessageId,
+          targetText: "mobile plan sheet",
+        }),
+      });
+
+      try {
+        expect(document.querySelector('[data-chat-presentation="mobile"]')).toBeTruthy();
+        const closePanelButton = await waitForElement(
+          () => document.querySelector<HTMLElement>('[aria-label="Close Plan and Workflow panel"]'),
+          "Unable to find the mobile Plan / Workflow panel.",
+        );
+        expect(closePanelButton.closest('[data-slot="sheet-popup"]')).toBeTruthy();
       } finally {
         await mounted.cleanup();
       }

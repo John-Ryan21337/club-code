@@ -38,6 +38,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { HttpClient } from "effect/unstable/http";
 import { ChildProcessSpawner } from "effect/unstable/process";
+import { approvedProviderCliVersion } from "@cafecode/shared/providerCompatibility";
 
 import { makeCodexTextGeneration } from "../../textGeneration/CodexTextGeneration.ts";
 import { ServerConfig } from "../../config.ts";
@@ -60,7 +61,6 @@ import { mergeProviderInstanceEnvironment } from "../ProviderInstanceEnvironment
 import { installBundledAuditAndRepairSkill } from "../BundledAuditAndRepairSkill.ts";
 import {
   enrichProviderSnapshotWithVersionAdvisory,
-  isCodexStandaloneCommandPath,
   makePackageManagedProviderMaintenanceResolver,
   resolveProviderMaintenanceCapabilitiesEffect,
 } from "../providerMaintenance.ts";
@@ -86,16 +86,15 @@ const PERIODIC_SNAPSHOT_REFRESH_INTERVAL = Duration.minutes(5);
  * the operator is waiting on a button.
  */
 const RATE_LIMIT_RESET_CREDIT_TIMEOUT_MS = 30_000;
+const APPROVED_CODEX_VERSION = approvedProviderCliVersion("codex");
 const UPDATE_DEFINITION = {
   provider: DRIVER_KIND,
   npmPackageName: "@openai/codex",
+  approvedVersion: APPROVED_CODEX_VERSION,
   homebrewFormula: "codex",
-  nativeUpdate: {
-    executable: "codex",
-    args: ["update"],
-    lockKey: "codex-native",
-    isCommandPath: isCodexStandaloneCommandPath,
-  },
+  // `codex update` has no exact-version argument. The standardized detached
+  // updater may use it only after proving registry latest equals this pin.
+  nativeUpdate: null,
 } as const;
 const UPDATE = makePackageManagedProviderMaintenanceResolver(UPDATE_DEFINITION);
 const DEFAULT_SHADOW_HOME_ROOT = "~/.cafe-code/codex-homes";

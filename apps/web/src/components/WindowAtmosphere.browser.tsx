@@ -1,6 +1,6 @@
 import "../index.css";
 
-import { EnvironmentId, ThreadId } from "@cafecode/contracts";
+import { EnvironmentId, ThreadId, type UsageStatsSnapshot } from "@cafecode/contracts";
 import type { UnifiedSettings } from "@cafecode/contracts/settings";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { page } from "vitest/browser";
@@ -32,6 +32,8 @@ const mocks = vi.hoisted(() => ({
     drawCalls: 1 as const,
   })),
   gpuDispose: vi.fn(),
+  usageStatsSubscriber: null as ((snapshot: UsageStatsSnapshot) => void) | null,
+  usageStatsUnsubscribe: vi.fn(),
   settings: {
     fallingEffectsEnabled: true as boolean,
     fallingEffectsOverCinemaEnabled: false as boolean,
@@ -54,6 +56,7 @@ const mocks = vi.hoisted(() => ({
     fallingEffectOpacity: 0.35,
     fallingEffectSpeed: 1,
     fallingEffectDensity: 1,
+    fallingEffectUsageReactive: false as boolean,
     fallingEffectJapaneseRatio: 0.5,
     fallingEffect2chEnriched: true,
     fallingEffectLiveWorkVocabulary: true,
@@ -89,6 +92,19 @@ vi.mock("../hooks/useTheme", () => ({
 vi.mock("../rpc/serverState", () => ({
   useServerConfig: () => ({
     ambientExperienceCapabilities: { atmosphere: true },
+  }),
+}));
+
+vi.mock("../environments/runtime", () => ({
+  getPrimaryEnvironmentConnection: () => ({
+    client: {
+      server: {
+        subscribeUsageStats: (subscriber: (snapshot: UsageStatsSnapshot) => void) => {
+          mocks.usageStatsSubscriber = subscriber;
+          return mocks.usageStatsUnsubscribe;
+        },
+      },
+    },
   }),
 }));
 
@@ -157,6 +173,7 @@ vi.mock("../windowAtmosphere", () => ({
   MATRIX_JAPANESE_GLYPHS: "雨",
   MATRIX_ROMAN_GLYPHS: "01",
   createSeededRandom: () => () => 0.5,
+  calculateAtmosphereParticleCount: () => 4,
   createAtmosphereScene: mocks.createAtmosphereScene,
   createMatrixColorAnimationState: () => ({}),
   fitAtmosphereDpr: () => 1,
@@ -263,6 +280,7 @@ beforeEach(() => {
   mocks.settings.fallingEffectActivityLinkBuildEnabled = true;
   mocks.settings.fallingEffectActivityLinkAgentEnabled = true;
   mocks.settings.fallingEffectActivityLinkRetentionSeconds = 30;
+  mocks.settings.fallingEffectUsageReactive = false;
   mocks.selectedActivityThreadRefs = [];
   mocks.selectedActivityInputSelections = [];
   mocks.selectedVocabularyThreadRefs = [];
@@ -273,6 +291,8 @@ beforeEach(() => {
   mocks.gpuRendererEnabled = false;
   mocks.gpuRender.mockClear();
   mocks.gpuDispose.mockClear();
+  mocks.usageStatsSubscriber = null;
+  mocks.usageStatsUnsubscribe.mockReset();
   mocks.createAtmosphereScene.mockReset();
   mocks.createAtmosphereScene.mockImplementation((kind = "matrix") => ({
     kind,
@@ -413,8 +433,61 @@ describe("WindowAtmosphere", () => {
     expect(document.querySelector('[data-testid="cinema-falling-atmosphere"]')).toBeNull();
   });
 
+  it("turns aggregate output-token throughput into bounded rain density", async () => {
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(0);
+    mocks.settings.fallingEffectKind = "rain";
+    mocks.settings.fallingEffectUsageReactive = true;
+
+    mounted = await render(<WindowAtmosphere />);
+    await expect.poll(() => mocks.usageStatsSubscriber).toBeTypeOf("function");
+    const sceneCreationCall = mocks.createAtmosphereScene.mock.calls[0] as
+      | readonly unknown[]
+      | undefined;
+    expect(sceneCreationCall?.[4]).toBe(2.5);
+
+    mocks.usageStatsSubscriber?.({
+      totals: { generatingMs: 1_000, outputTokens: 1_000, userMessages: 1 },
+      today: {
+        day: "2026-08-09",
+        generatingMs: 1_000,
+        outputTokens: 1_000,
+        userMessages: 1,
+      },
+      activeSessionCount: 2,
+      collectionEnabled: true,
+      asOfMs: 0,
+    });
+    dateNow.mockReturnValue(1_000);
+    mocks.usageStatsSubscriber?.({
+      totals: { generatingMs: 2_000, outputTokens: 1_150, userMessages: 1 },
+      today: {
+        day: "2026-08-09",
+        generatingMs: 2_000,
+        outputTokens: 1_150,
+        userMessages: 1,
+      },
+      activeSessionCount: 2,
+      collectionEnabled: true,
+      asOfMs: 1_000,
+    });
+
+    runNextFrame(1_000);
+    const canvas = page.getByTestId("window-atmosphere");
+    await expect.element(canvas).toHaveAttribute("data-atmosphere-usage-reactive", "true");
+    await expect.element(canvas).toHaveAttribute("data-atmosphere-usage-tokens-per-second", "30.0");
+    await expect.element(canvas).toHaveAttribute("data-atmosphere-usage-intensity", "0.500");
+    await expect.element(canvas).toHaveAttribute("data-atmosphere-usage-active-sessions", "2");
+    await expect.element(canvas).toHaveAttribute("data-atmosphere-active-particle-count", "8");
+
+    await mounted.unmount();
+    mounted = null;
+    expect(mocks.usageStatsUnsubscribe).toHaveBeenCalledOnce();
+  });
+
   it("activates the WebGL2 glyph atlas while retaining the Canvas2D activity overlay", async () => {
     mocks.gpuRendererEnabled = true;
+    const drawImage = vi.spyOn(CanvasRenderingContext2D.prototype, "drawImage");
+    const clearRect = vi.spyOn(CanvasRenderingContext2D.prototype, "clearRect");
 
     mounted = await render(<WindowAtmosphere selectedThreadRef={TEST_SELECTED_THREAD_REF} />);
 
@@ -435,6 +508,8 @@ describe("WindowAtmosphere", () => {
     expect(getComputedStyle(gpuCanvasLocator.element()).visibility).toBe("visible");
     expect(mocks.gpuRender).toHaveBeenCalledTimes(1);
     expect(mocks.drawMatrixActivityAnimation).toHaveBeenCalledTimes(1);
+    expect(clearRect).toHaveBeenCalled();
+    expect(drawImage).not.toHaveBeenCalled();
   });
 
   it.each(["flat", "forward", "reverse", "walk-forward", "walk-reverse"] as const)(

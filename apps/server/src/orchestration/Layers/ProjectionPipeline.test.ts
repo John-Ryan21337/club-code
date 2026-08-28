@@ -1451,6 +1451,212 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-diff-completes-
         ]);
       }),
     );
+
+    it.effect("keeps a steered turn active when an older checkpoint finishes late", () =>
+      Effect.gen(function* () {
+        const projectionPipeline = yield* OrchestrationProjectionPipeline;
+        const eventStore = yield* OrchestrationEventStore;
+        const sql = yield* SqlClient.SqlClient;
+        const threadId = ThreadId.make("thread-late-checkpoint-after-steer");
+        const turnId = TurnId.make("turn-late-checkpoint-after-steer");
+        const appendAndProject = (event: Parameters<typeof eventStore.append>[0]) =>
+          eventStore
+            .append(event)
+            .pipe(Effect.flatMap((savedEvent) => projectionPipeline.projectEvent(savedEvent)));
+
+        yield* appendAndProject({
+          type: "project.created",
+          eventId: EventId.make("evt-late-checkpoint-project"),
+          aggregateKind: "project",
+          aggregateId: ProjectId.make("project-late-checkpoint"),
+          occurredAt: "2026-05-24T16:30:00.000Z",
+          commandId: CommandId.make("cmd-late-checkpoint-project"),
+          causationEventId: null,
+          correlationId: CommandId.make("cmd-late-checkpoint-project"),
+          metadata: {},
+          payload: {
+            projectId: ProjectId.make("project-late-checkpoint"),
+            title: "Project",
+            workspaceRoot: "/tmp/project-late-checkpoint",
+            defaultModelSelection: null,
+            scripts: [],
+            createdAt: "2026-05-24T16:30:00.000Z",
+            updatedAt: "2026-05-24T16:30:00.000Z",
+          },
+        });
+        yield* appendAndProject({
+          type: "thread.created",
+          eventId: EventId.make("evt-late-checkpoint-thread"),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: "2026-05-24T16:30:01.000Z",
+          commandId: CommandId.make("cmd-late-checkpoint-thread"),
+          causationEventId: null,
+          correlationId: CommandId.make("cmd-late-checkpoint-thread"),
+          metadata: {},
+          payload: {
+            threadId,
+            projectId: ProjectId.make("project-late-checkpoint"),
+            title: "Thread",
+            modelSelection: {
+              instanceId: ProviderInstanceId.make("codex"),
+              model: "gpt-5-codex",
+            },
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            branch: null,
+            worktreePath: null,
+            createdAt: "2026-05-24T16:30:01.000Z",
+            updatedAt: "2026-05-24T16:30:01.000Z",
+          },
+        });
+        yield* appendAndProject({
+          type: "thread.session-set",
+          eventId: EventId.make("evt-late-checkpoint-running"),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: "2026-05-24T16:30:02.000Z",
+          commandId: CommandId.make("cmd-late-checkpoint-running"),
+          causationEventId: null,
+          correlationId: CommandId.make("cmd-late-checkpoint-running"),
+          metadata: {},
+          payload: {
+            threadId,
+            session: {
+              threadId,
+              status: "running",
+              providerName: "codex",
+              providerInstanceId: ProviderInstanceId.make("codex"),
+              runtimeMode: "full-access",
+              activeTurnId: turnId,
+              lastError: null,
+              updatedAt: "2026-05-24T16:30:02.000Z",
+            },
+          },
+        });
+        yield* appendAndProject({
+          type: "thread.message-sent",
+          eventId: EventId.make("evt-late-checkpoint-streaming"),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: "2026-05-24T16:30:02.500Z",
+          commandId: CommandId.make("cmd-late-checkpoint-streaming"),
+          causationEventId: null,
+          correlationId: CommandId.make("cmd-late-checkpoint-streaming"),
+          metadata: {},
+          payload: {
+            threadId,
+            messageId: MessageId.make("message-late-checkpoint-streaming"),
+            role: "assistant",
+            text: "continued output",
+            turnId,
+            streaming: true,
+            createdAt: "2026-05-24T16:30:02.500Z",
+            updatedAt: "2026-05-24T16:30:02.500Z",
+          },
+        });
+        yield* appendAndProject({
+          type: "thread.manual-follow-up-accepted",
+          eventId: EventId.make("evt-late-checkpoint-steer-accepted"),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: "2026-05-24T16:30:04.000Z",
+          commandId: CommandId.make("cmd-late-checkpoint-steer-accepted"),
+          causationEventId: null,
+          correlationId: CommandId.make("cmd-late-checkpoint-steer-accepted"),
+          metadata: {},
+          payload: {
+            threadId,
+            followUpId: ManualFollowUpId.make("follow-up-late-checkpoint"),
+            activationCommandId: CommandId.make("cmd-late-checkpoint-activation"),
+            acceptedAt: "2026-05-24T16:30:04.000Z",
+          },
+        });
+        yield* appendAndProject({
+          type: "thread.turn-diff-completed",
+          eventId: EventId.make("evt-late-checkpoint-ready"),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: "2026-05-24T16:30:05.000Z",
+          commandId: CommandId.make("cmd-late-checkpoint-ready"),
+          causationEventId: null,
+          correlationId: CommandId.make("cmd-late-checkpoint-ready"),
+          metadata: {},
+          payload: {
+            threadId,
+            turnId,
+            checkpointTurnCount: 1,
+            checkpointRef: CheckpointRef.make("refs/checkpoints/late-after-steer"),
+            status: "ready",
+            files: [],
+            assistantMessageId: MessageId.make("message-late-checkpoint-streaming"),
+            completedAt: "2026-05-24T16:30:03.000Z",
+          },
+        });
+        yield* appendAndProject({
+          type: "thread.session-set",
+          eventId: EventId.make("evt-late-checkpoint-stale-starting"),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: "2026-05-24T16:30:06.000Z",
+          commandId: CommandId.make("cmd-late-checkpoint-stale-starting"),
+          causationEventId: null,
+          correlationId: CommandId.make("cmd-late-checkpoint-stale-starting"),
+          metadata: {},
+          payload: {
+            threadId,
+            session: {
+              threadId,
+              status: "starting",
+              providerName: "codex",
+              providerInstanceId: ProviderInstanceId.make("codex"),
+              runtimeMode: "full-access",
+              activeTurnId: null,
+              lastError: null,
+              updatedAt: "2026-05-24T16:30:03.500Z",
+            },
+          },
+        });
+
+        const rows = yield* sql<{
+          readonly status: string;
+          readonly activeTurnId: string | null;
+          readonly sessionUpdatedAt: string;
+          readonly turnState: string;
+          readonly completedAt: string | null;
+          readonly checkpointStatus: string | null;
+          readonly isStreaming: number;
+        }>`
+          SELECT
+            sessions.status,
+            sessions.active_turn_id AS "activeTurnId",
+            sessions.updated_at AS "sessionUpdatedAt",
+            turns.state AS "turnState",
+            turns.completed_at AS "completedAt",
+            turns.checkpoint_status AS "checkpointStatus",
+            messages.is_streaming AS "isStreaming"
+          FROM projection_thread_sessions sessions
+          JOIN projection_turns turns
+            ON turns.thread_id = sessions.thread_id AND turns.turn_id = ${turnId}
+          JOIN projection_thread_messages messages
+            ON messages.thread_id = sessions.thread_id
+           AND messages.message_id = 'message-late-checkpoint-streaming'
+          WHERE sessions.thread_id = ${threadId}
+        `;
+
+        assert.deepEqual(rows, [
+          {
+            status: "running",
+            activeTurnId: "turn-late-checkpoint-after-steer",
+            sessionUpdatedAt: "2026-05-24T16:30:04.000Z",
+            turnState: "running",
+            completedAt: null,
+            checkpointStatus: "ready",
+            isStreaming: 1,
+          },
+        ]);
+      }),
+    );
   },
 );
 

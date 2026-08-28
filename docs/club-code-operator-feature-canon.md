@@ -173,6 +173,9 @@ behavior. The operator-requested contract is:
 - Modes are Flat, Forward, Reverse, Warp, Walk Forward, and Walk Reverse. Every
   mode retains truthful provider-activity connectors when evidence exists;
   visual absence must not be an accidental mode-specific regression.
+- A provider-confirmed agent launch draws its bounded AGENT -> DISPATCH route
+  immediately. Club Code does not wait for the delegated task to finish, and
+  the later completion cannot duplicate the same route.
 - Walk glyphs spawn randomly throughout the visible viewport, not only along
   its top or bottom edge. A lifecycle falls the selected percentage of page
   height, then fades fully and reconnects routes to newly spawned glyphs.
@@ -283,6 +286,23 @@ Current collaboration foundations do not equal a shipped cross-network room.
 Network transport, durable membership/invites, device enrollment, room UI,
 materialization, sandboxed runners, and live synchronization retain their
 explicit phase status until implemented and independently audited.
+
+## Local agent execution safety
+
+- A Codex spawned-agent ceiling belongs to the thread. It is not a one-prompt
+  launch hint. The supported range is 1 through 128. Changing it restarts the
+  provider session without changing queued prompt order or steer semantics.
+- Club-launched Codex, LM Studio, Claude, and OpenCode provider runtimes start
+  at the operating system's below-normal process priority. Shell-launched
+  descendants are also lowered after they appear. New agent subprocesses then
+  inherit the provider runtime's lower scheduling class.
+- Lower process priority reduces CPU contention during large agent batches. It
+  does not reduce the selected agent limit, model behavior, visual quality, or
+  provider authority. It also does not claim to cap RAM, GPU, disk, or network
+  use.
+- A host that rejects the priority request may still start the provider. Club
+  logs that condition instead of turning a workstation scheduling safeguard
+  into a provider outage.
 
 ## Distribution, shortcuts, documentation, and upstream adoption
 

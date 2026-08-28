@@ -281,6 +281,88 @@ body::after {
   background-size: 256px 256px;
 }
 
+/* Ambient renderers are real backgrounds, not pointer surfaces. Keep application
+   text and controls above them. The centered manuscript scrim and sidebar
+   surfaces use shared opacity settings; cards, dialogs, popovers, and input
+   surfaces retain their normal theme colors and contrast. */
+html[data-cafe-hexagons-background="true"],
+html[data-cafe-hexagons-background="true"] body {
+  background-color: #000;
+}
+
+html:is([data-cafe-hexagons-background="true"], [data-cafe-local-media-background="true"])
+  [data-slot="sidebar-wrapper"] {
+  background-color: transparent !important;
+}
+
+html:is([data-cafe-hexagons-background="true"], [data-cafe-local-media-background="true"])
+  [data-slot="sidebar-container"] {
+  background-color: transparent !important;
+}
+
+html:is([data-cafe-hexagons-background="true"], [data-cafe-local-media-background="true"])
+  [data-slot="sidebar-inset"] {
+  background-color: transparent !important;
+}
+
+html:is([data-cafe-hexagons-background="true"], [data-cafe-local-media-background="true"])
+  [data-chat-view-shell="true"] {
+  background-color: transparent !important;
+}
+
+html:is([data-cafe-hexagons-background="true"], [data-cafe-local-media-background="true"])
+  .cafe-sidebar-sheet-backdrop {
+  background-color: transparent !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+}
+
+html:is([data-cafe-hexagons-background="true"], [data-cafe-local-media-background="true"])
+  [data-chat-manuscript-scrim="true"] {
+  background-color: color-mix(
+    in srgb,
+    var(--background) var(--cafe-ambient-background-manuscript-opacity, 58%),
+    transparent
+  );
+}
+
+html:is([data-cafe-hexagons-background="true"], [data-cafe-local-media-background="true"])
+  [data-slot="sidebar-inner"],
+html:is([data-cafe-hexagons-background="true"], [data-cafe-local-media-background="true"])
+  [data-slot="sidebar"][data-mobile="true"],
+html:is([data-cafe-hexagons-background="true"], [data-cafe-local-media-background="true"])
+  [data-cafe-details-sidebar="sidebar"],
+html:is([data-cafe-hexagons-background="true"], [data-cafe-local-media-background="true"])
+  [data-cafe-details-sidebar-shell="true"] {
+  background-color: color-mix(
+    in srgb,
+    var(--card) var(--cafe-ambient-background-sidebar-opacity, 68%),
+    transparent
+  ) !important;
+}
+
+html:is([data-cafe-hexagons-background="true"], [data-cafe-local-media-background="true"])
+  .cafe-thread-sidebar
+  [data-slot="sidebar-inner"] {
+  background-image: none !important;
+}
+
+html:is([data-cafe-hexagons-background="true"], [data-cafe-local-media-background="true"])
+  .cafe-thread-sidebar
+  [data-slot="sidebar-inner"]::before,
+html:is([data-cafe-hexagons-background="true"], [data-cafe-local-media-background="true"])
+  .cafe-thread-sidebar
+  [data-slot="sidebar-inner"]::after {
+  display: none !important;
+}
+
+html:is([data-cafe-hexagons-background="true"], [data-cafe-local-media-background="true"])
+  [data-cafe-details-sidebar="sheet"],
+html:is([data-cafe-hexagons-background="true"], [data-cafe-local-media-background="true"])
+  [data-cafe-diff-panel-shell="true"] {
+  background-color: transparent !important;
+}
+
 @keyframes cafe-sidebar-star-drift {
   0% {
     opacity: 0;

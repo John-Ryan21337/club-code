@@ -837,6 +837,15 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           `Auto Nudge dispatch for thread '${command.threadId}' does not target its exact current completed turn.`,
         );
       }
+      const actionablePlanForCompletedTurn = targetThread.proposedPlans.some(
+        (plan) => plan.turnId === command.completedTurnId && plan.implementedAt === null,
+      );
+      if (actionablePlanForCompletedTurn) {
+        return yield* rejectAutoNudgeCommand(
+          command,
+          `Thread '${command.threadId}' has a proposed plan awaiting operator review. Plan review has priority over Auto Nudge.`,
+        );
+      }
       if (threadHasPostCompletionProviderActivity(targetThread, command.completedTurnId)) {
         return yield* rejectAutoNudgeCommand(
           command,
@@ -1244,9 +1253,32 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           `Thread '${command.threadId}' became active before automatic manual follow-up activation. The queued follow-up remains pending until the turn settles or the operator explicitly chooses Steer.`,
         );
       }
+      // Provider history can replay an interrupted/error session after a
+      // follow-up is queued. Its updatedAt value is not an operator barrier.
+      // A stopped session is different: Stop is an explicit operator barrier,
+      // so include its durable session timestamp when it is newer than the
+      // latest turn completion.
+      const terminalBoundaryTimes = [Date.parse(targetThread.latestTurn?.completedAt ?? "")];
+      if (targetThread.session?.status === "stopped") {
+        terminalBoundaryTimes.push(Date.parse(targetThread.session.updatedAt));
+      }
+      const finiteTerminalBoundaryTimes = terminalBoundaryTimes.filter(Number.isFinite);
+      const terminalBoundaryAtMs =
+        finiteTerminalBoundaryTimes.length > 0
+          ? Math.max(...finiteTerminalBoundaryTimes)
+          : Number.NaN;
+      const followUpEnqueuedAtMs = Date.parse(head.enqueuedAt);
+      const queuedAfterTerminalBarrier =
+        (targetThread.session?.status === "interrupted" ||
+          targetThread.session?.status === "error" ||
+          targetThread.session?.status === "stopped") &&
+        Number.isFinite(terminalBoundaryAtMs) &&
+        Number.isFinite(followUpEnqueuedAtMs) &&
+        followUpEnqueuedAtMs > terminalBoundaryAtMs;
       if (
         command.activationMode === "automatic-after-settlement" &&
-        targetThread.session?.status !== "ready"
+        targetThread.session?.status !== "ready" &&
+        !queuedAfterTerminalBarrier
       ) {
         return yield* rejectManualFollowUpCommand(
           command,

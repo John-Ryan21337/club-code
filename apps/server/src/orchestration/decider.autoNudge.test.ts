@@ -4,6 +4,7 @@ import {
   DEFAULT_THREAD_AUTO_NUDGE_CONFIG,
   EventId,
   MessageId,
+  OrchestrationProposedPlanId,
   ProjectId,
   ProviderInstanceId,
   THREAD_AUTO_NUDGE_MAX_AUTHORITY_REVISION,
@@ -653,6 +654,79 @@ it.effect("invalidates dispatch when provider text or activity continues after c
     });
     assert.deepEqual(
       asPlannedEvents(unaffectedDispatch).map((event) => event.type),
+      ["thread.auto-nudge-dispatched", "thread.message-sent", "thread.turn-start-requested"],
+    );
+  }),
+);
+
+it.effect("yields exact-thread dispatch authority to an actionable proposed plan", () =>
+  Effect.gen(function* () {
+    yield* TestClock.setTime(Date.parse(SERVER_NOW));
+    const baseThread = makeThread({
+      id: THREAD_A,
+      latestTurnId: TURN_COMPLETED,
+      autoNudge: enabledConfig(),
+    });
+    const actionablePlan = {
+      id: OrchestrationProposedPlanId.make("plan-awaiting-operator"),
+      turnId: TURN_COMPLETED,
+      planMarkdown: "Review this plan before continuing.",
+      implementedAt: null,
+      implementationThreadId: null,
+      createdAt: SERVER_NOW,
+      updatedAt: SERVER_NOW,
+    };
+    const dispatchCommand = {
+      type: "thread.auto-nudge.dispatch",
+      commandId: CommandId.make("command-actionable-plan"),
+      threadId: THREAD_A,
+      expectedAuthorityRevision: 5,
+      completedTurnId: TURN_COMPLETED,
+      dispatchSource: "foreground",
+      messageId: MessageId.make("message-actionable-plan"),
+      createdAt: SERVER_NOW,
+    } satisfies Extract<OrchestrationCommand, { type: "thread.auto-nudge.dispatch" }>;
+
+    const blocked = yield* Effect.flip(
+      decideOrchestrationCommand({
+        readModel: makeReadModel([
+          {
+            ...baseThread,
+            proposedPlans: [actionablePlan],
+          },
+        ]),
+        command: dispatchCommand,
+      }),
+    );
+    assert.match(blocked.detail, /plan review has priority/i);
+
+    const allowedAfterImplementation = yield* decideOrchestrationCommand({
+      readModel: makeReadModel([
+        {
+          ...baseThread,
+          proposedPlans: [
+            {
+              ...actionablePlan,
+              id: OrchestrationProposedPlanId.make("plan-older-unresolved"),
+              turnId: TurnId.make("turn-older-plan"),
+              updatedAt: "2026-07-28T11:59:59.000Z",
+            },
+            {
+              ...actionablePlan,
+              id: OrchestrationProposedPlanId.make("plan-implemented"),
+              implementedAt: "2026-07-28T12:00:01.000Z",
+            },
+          ],
+        },
+      ]),
+      command: {
+        ...dispatchCommand,
+        commandId: CommandId.make("command-implemented-plan"),
+        messageId: MessageId.make("message-implemented-plan"),
+      },
+    });
+    assert.deepEqual(
+      asPlannedEvents(allowedAfterImplementation).map((event) => event.type),
       ["thread.auto-nudge-dispatched", "thread.message-sent", "thread.turn-start-requested"],
     );
   }),

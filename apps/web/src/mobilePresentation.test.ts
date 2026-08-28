@@ -26,7 +26,7 @@ describe("mobile presentation", () => {
     expect(resolveProfileAwareMobileLayout(true, false, null)).toBe(true);
   });
 
-  it("enables Matrix while preserving every existing Matrix configuration value", () => {
+  it("enables Rain while preserving every existing effect configuration value", () => {
     const configured = {
       ...DEFAULT_CLIENT_SETTINGS,
       fallingEffectsEnabled: false,
@@ -50,16 +50,16 @@ describe("mobile presentation", () => {
       ...configured,
       mobileOptimizedPresentation: true,
       fallingEffectsEnabled: true,
-      fallingEffectKind: "matrix",
+      fallingEffectKind: "rain",
     });
   });
 
-  it("restores responsive desktop presentation without turning Matrix off", () => {
+  it("restores responsive desktop presentation without turning Rain off", () => {
     const enabled = {
       ...DEFAULT_CLIENT_SETTINGS,
       mobileOptimizedPresentation: true,
       fallingEffectsEnabled: true,
-      fallingEffectKind: "matrix" as const,
+      fallingEffectKind: "rain" as const,
     };
 
     const restored = {
@@ -72,10 +72,10 @@ describe("mobile presentation", () => {
     });
     expect(restored.mobileOptimizedPresentation).toBe(false);
     expect(restored.fallingEffectsEnabled).toBe(true);
-    expect(restored.fallingEffectKind).toBe("matrix");
+    expect(restored.fallingEffectKind).toBe("rain");
   });
 
-  it("keeps the layout override local while leaving Matrix changes server-shareable", () => {
+  it("keeps the layout override local while leaving Rain changes server-shareable", () => {
     const { localPatch, sharedPatch } = partitionRendererLocalClientSettingsPatch(
       createMobileOptimizedPresentationPatch(true),
     );
@@ -83,7 +83,7 @@ describe("mobile presentation", () => {
     expect(localPatch).toEqual({ mobileOptimizedPresentation: true });
     expect(sharedPatch).toEqual({
       fallingEffectsEnabled: true,
-      fallingEffectKind: "matrix",
+      fallingEffectKind: "rain",
     });
     expect(sharedPatch).not.toHaveProperty("mobileOptimizedPresentation");
   });

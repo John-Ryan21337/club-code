@@ -54,7 +54,7 @@ import {
   SETTINGS_PROFILE_LIBRARY_STORAGE_KEY,
   settingsProfileLibraryStore,
 } from "../../settingsProfiles";
-import { youtubeUrlQueueLibraryStore, youtubeUrlQueueStore } from "../../youtubeUrlQueue";
+import { __resetYouTubeUrlQueueForTests, youtubeUrlQueueStore } from "../../youtubeUrlQueue";
 import { toastManager } from "../ui/toast";
 import { ConnectionsSettings } from "./ConnectionsSettings";
 import { DiagnosticsSettingsPanel } from "./DiagnosticsSettings";
@@ -274,6 +274,7 @@ function createOutdatedProvider(
       status: "behind_latest",
       currentVersion: "1.0.0",
       latestVersion: "1.1.0",
+      approvedVersion: null,
       message: "Update available.",
       checkedAt: "2026-05-04T10:00:00.000Z",
       updateCommand,
@@ -679,6 +680,18 @@ function installClientSettingsNativeApi(desktopBridge: DesktopBridge) {
   const updateClientSettings = vi
     .fn<LocalApi["server"]["updateClientSettings"]>()
     .mockResolvedValue(DEFAULT_CLIENT_SETTINGS);
+  const getHardwareLightingStatus = vi
+    .fn<LocalApi["server"]["getHardwareLightingStatus"]>()
+    .mockResolvedValue({
+      state: "unavailable",
+      adapter: "OpenRGB SDK (loopback)",
+      detail: "OpenRGB is not available in the settings browser fixture.",
+      protocolVersion: null,
+      controllers: [],
+      selectedControllerCount: 0,
+      lastFrameAt: null,
+      lastDisposition: null,
+    });
   window.nativeApi = {
     dialogs: {
       pickFolder: desktopBridge.pickFolder,
@@ -691,6 +704,7 @@ function installClientSettingsNativeApi(desktopBridge: DesktopBridge) {
     server: {
       updateSettings,
       updateClientSettings,
+      getHardwareLightingStatus,
     },
     shell: {
       openExternal: async (url: string) => {
@@ -742,7 +756,7 @@ describe("settings panels", () => {
     localMediaStore.clear();
     localStorage.clear();
     settingsProfileLibraryStore.resetForTests();
-    youtubeUrlQueueLibraryStore.resetForTests();
+    __resetYouTubeUrlQueueForTests();
     useUiStateStore.setState({ defaultAdvertisedEndpointKey: null });
     authAccessHarness.reset();
   });
@@ -758,7 +772,7 @@ describe("settings panels", () => {
     Reflect.deleteProperty(window, "nativeApi");
     document.body.innerHTML = "";
     settingsProfileLibraryStore.resetForTests();
-    youtubeUrlQueueLibraryStore.resetForTests();
+    __resetYouTubeUrlQueueForTests();
     resetServerStateForTests();
     await __resetLocalApiForTests();
     localMediaStore.clear();
@@ -1567,6 +1581,15 @@ describe("settings panels", () => {
       expect(updateClientSettings).toHaveBeenCalledWith({ showSidebarAttribution: false });
     });
 
+    await expect.element(page.getByText("Prompt automation controls")).toBeInTheDocument();
+    await page.getByLabelText("Show prompt automation controls").click();
+
+    await vi.waitFor(() => {
+      expect(updateClientSettings).toHaveBeenCalledWith({
+        showComposerThreadAutomationControls: true,
+      });
+    });
+
     await expect.element(page.getByText("Background animations")).toBeInTheDocument();
     await page.getByLabelText("Keep animations running in background").click();
 
@@ -1586,15 +1609,15 @@ describe("settings panels", () => {
     const snowEffect = page.getByRole("radio", { name: "Snow", exact: true });
     const rainEffect = page.getByRole("radio", { name: "Rain", exact: true });
     const matrixEffect = page.getByRole("radio", { name: "Matrix", exact: true });
-    await expect.element(snowEffect).toHaveAttribute("aria-checked", "true");
-    await rainEffect.click();
-    await vi.waitFor(() => {
-      expect(updateClientSettings).toHaveBeenCalledWith({ fallingEffectKind: "rain" });
-    });
     await expect.element(rainEffect).toHaveAttribute("aria-checked", "true");
     await snowEffect.click();
     await vi.waitFor(() => {
       expect(updateClientSettings).toHaveBeenCalledWith({ fallingEffectKind: "snow" });
+    });
+    await expect.element(snowEffect).toHaveAttribute("aria-checked", "true");
+    await rainEffect.click();
+    await vi.waitFor(() => {
+      expect(updateClientSettings).toHaveBeenCalledWith({ fallingEffectKind: "rain" });
     });
     await matrixEffect.click();
 
@@ -1656,14 +1679,20 @@ describe("settings panels", () => {
       name: "Agent / delegation",
       exact: true,
     });
+    const workActivityInput = page.getByRole("checkbox", {
+      name: "Work / tool",
+      exact: true,
+    });
     await expect.element(networkActivityInput).toHaveAttribute("aria-checked", "true");
     await expect.element(databaseActivityInput).toHaveAttribute("aria-checked", "true");
     await expect.element(buildActivityInput).toHaveAttribute("aria-checked", "true");
     await expect.element(agentActivityInput).toHaveAttribute("aria-checked", "true");
+    await expect.element(workActivityInput).toHaveAttribute("aria-checked", "true");
     await networkActivityInput.click();
     await databaseActivityInput.click();
     await buildActivityInput.click();
     await agentActivityInput.click();
+    await workActivityInput.click();
     await page.getByRole("radio", { name: "Follow Matrix colors", exact: true }).click();
     await page.getByRole("radio", { name: "Random independent", exact: true }).click();
     await page.getByRole("radio", { name: "Follow Matrix colors", exact: true }).click();
@@ -1681,6 +1710,9 @@ describe("settings panels", () => {
       });
       expect(updateClientSettings).toHaveBeenCalledWith({
         fallingEffectActivityLinkAgentEnabled: false,
+      });
+      expect(updateClientSettings).toHaveBeenCalledWith({
+        fallingEffectActivityLinkWorkEnabled: false,
       });
       expect(updateClientSettings).toHaveBeenCalledWith({
         fallingEffectActivityLinkColorMode: "random",
@@ -1705,6 +1737,7 @@ describe("settings panels", () => {
     await page.getByLabelText("Increase falling effect opacity").click();
     await page.getByLabelText("Increase falling effect speed").click();
     await page.getByLabelText("Increase falling effect density").click();
+    await page.getByLabelText("Make rain and snow react to aggregate token usage").click();
     await page.getByLabelText("Increase Japanese stream ratio").click();
     await page.getByLabelText("Use 2ch-inspired Matrix enrichment").click();
     await page.getByLabelText("Use live work vocabulary in Matrix rain").click();
@@ -1713,6 +1746,7 @@ describe("settings panels", () => {
       expect(updateClientSettings).toHaveBeenCalledWith({ fallingEffectOpacity: 0.4 });
       expect(updateClientSettings).toHaveBeenCalledWith({ fallingEffectSpeed: 1.25 });
       expect(updateClientSettings).toHaveBeenCalledWith({ fallingEffectDensity: 1.25 });
+      expect(updateClientSettings).toHaveBeenCalledWith({ fallingEffectUsageReactive: true });
       expect(updateClientSettings).toHaveBeenCalledWith({ fallingEffectJapaneseRatio: 0.5 });
       expect(updateClientSettings).toHaveBeenCalledWith({ fallingEffect2chEnriched: true });
       expect(updateClientSettings).toHaveBeenCalledWith({
@@ -1883,25 +1917,8 @@ describe("settings panels", () => {
       )
       .toBeInTheDocument();
     await expect
-      .element(page.getByRole("button", { name: "K-pop", exact: true }))
-      .toBeInTheDocument();
-    await page.getByRole("button", { name: "EDM", exact: true }).click();
-    await expect.element(page.getByText("URL 1 of 30")).toBeInTheDocument();
-    await expect.element(page.getByText(/Accepted 30; skipped 1 invalid/)).toBeInTheDocument();
-    await expect
-      .element(page.getByRole("button", { name: "EDM", exact: true }))
-      .toHaveAttribute("aria-pressed", "true");
-    await page.getByRole("button", { name: "Japanese music", exact: true }).click();
-    await expect.element(page.getByText("URL 1 of 71")).toBeInTheDocument();
-    await expect.element(page.getByText(/Accepted 71; skipped 3 invalid/)).toBeInTheDocument();
-    await expect
-      .element(page.getByRole("button", { name: "Japanese music", exact: true }))
-      .toHaveAttribute("aria-pressed", "true");
-    await page.getByRole("button", { name: "K-pop", exact: true }).click();
-    await expect.element(page.getByText("URL 1 of 8")).toBeInTheDocument();
-    await expect
-      .element(page.getByRole("button", { name: "K-pop", exact: true }))
-      .toHaveAttribute("aria-pressed", "true");
+      .element(page.getByRole("button", { name: "Bundled Playlist", exact: true }))
+      .not.toBeInTheDocument();
 
     const queueInput = document.querySelector(
       'input[aria-label="Choose YouTube URL queue text file"]',
@@ -1910,19 +1927,33 @@ describe("settings panels", () => {
     Object.defineProperty(queueInput, "files", {
       configurable: true,
       value: [
-        new File(["https://youtu.be/dQw4w9WgXcQ"], "EDMYoutubeList.txt", {
+        new File(["https://youtu.be/testVideo01"], "Study Mix.txt", {
           type: "text/plain",
         }),
       ],
     });
     queueInput!.dispatchEvent(new Event("change", { bubbles: true }));
-    await expect.element(page.getByText(/EDM replaced\./)).toBeInTheDocument();
+    await expect.element(page.getByText(/Study Mix added\./)).toBeInTheDocument();
     await expect.element(page.getByText("URL 1 of 1")).toBeInTheDocument();
     expect(
       Array.from(document.querySelectorAll("button")).filter(
-        (button) => button.textContent?.trim() === "EDM",
+        (button) => button.textContent?.trim() === "Study Mix",
       ),
     ).toHaveLength(1);
+
+    Object.defineProperty(queueInput, "files", {
+      configurable: true,
+      value: [
+        new File(
+          [["https://youtu.be/testVideo01", "https://youtu.be/testVideo02"].join("\n")],
+          "Study Mix.txt",
+          { type: "text/plain" },
+        ),
+      ],
+    });
+    queueInput!.dispatchEvent(new Event("change", { bubbles: true }));
+    await expect.element(page.getByText(/Study Mix replaced\./)).toBeInTheDocument();
+    await expect.element(page.getByText("URL 1 of 2")).toBeInTheDocument();
 
     Object.defineProperty(queueInput, "files", {
       configurable: true,
@@ -1937,7 +1968,7 @@ describe("settings panels", () => {
     queueInput!.dispatchEvent(new Event("change", { bubbles: true }));
     await expect.element(page.getByText(/Night Drive added\./)).toBeInTheDocument();
     await expect.element(page.getByText("URL 1 of 2")).toBeInTheDocument();
-    await page.getByRole("button", { name: "Japanese music", exact: true }).click();
+    await page.getByRole("button", { name: "Study Mix", exact: true }).click();
     await page.getByRole("button", { name: "Night Drive", exact: true }).click();
     await expect.element(page.getByText("URL 1 of 2")).toBeInTheDocument();
     await expect

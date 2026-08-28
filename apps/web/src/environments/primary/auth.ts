@@ -65,6 +65,36 @@ let resolvedAuthenticatedGateState: ServerAuthGateState | null = null;
 let authBootstrapStateGeneration = 0;
 const AUTH_SESSION_ESTABLISH_TIMEOUT_MS = 2_000;
 const AUTH_SESSION_ESTABLISH_STEP_MS = 100;
+const AUTH_HTTP_REQUEST_TIMEOUT_MS = 4_000;
+
+const pairingLinkAuthGateState = (): ServerAuthGateState => ({
+  status: "requires-auth",
+  auth: {
+    policy: "remote-reachable",
+    bootstrapMethods: ["one-time-token"],
+    sessionMethods: ["browser-session-cookie"],
+    // This provisional descriptor only renders the pairing-token form. The
+    // authoritative server descriptor replaces it after token exchange.
+    sessionCookieName: "t3_session",
+  },
+});
+
+export function resolvePairingLinkAuthGateState(): ServerAuthGateState | null {
+  return peekPairingTokenFromUrl() ? pairingLinkAuthGateState() : null;
+}
+
+export async function fetchBootstrapRequest(
+  input: RequestInfo | URL,
+  init: RequestInit = {},
+): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), AUTH_HTTP_REQUEST_TIMEOUT_MS);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
 
 export function peekPairingTokenFromUrl(): string | null {
   return getPairingTokenFromUrl(new URL(window.location.href));
@@ -97,9 +127,12 @@ function getDesktopBootstrapCredential(): string | null {
 
 export async function fetchSessionState(): Promise<AuthSessionState> {
   return retryTransientBootstrap(async () => {
-    const response = await fetch(resolvePrimaryEnvironmentHttpUrl("/api/auth/session"), {
-      credentials: "include",
-    });
+    const response = await fetchBootstrapRequest(
+      resolvePrimaryEnvironmentHttpUrl("/api/auth/session"),
+      {
+        credentials: "include",
+      },
+    );
     if (!response.ok) {
       throw new BootstrapHttpError({
         message: `Failed to load server auth session state (${response.status}).`,
@@ -157,14 +190,17 @@ function toFriendlyBootstrapErrorMessage(status: number, message: string): strin
 async function exchangeBootstrapCredential(credential: string): Promise<AuthBootstrapResult> {
   return retryTransientBootstrap(async () => {
     const payload: AuthBootstrapInput = { credential };
-    const response = await fetch(resolvePrimaryEnvironmentHttpUrl("/api/auth/bootstrap"), {
-      body: JSON.stringify(payload),
-      credentials: "include",
-      headers: {
-        "content-type": "application/json",
+    const response = await fetchBootstrapRequest(
+      resolvePrimaryEnvironmentHttpUrl("/api/auth/bootstrap"),
+      {
+        body: JSON.stringify(payload),
+        credentials: "include",
+        headers: {
+          "content-type": "application/json",
+        },
+        method: "POST",
       },
-      method: "POST",
-    });
+    );
 
     if (!response.ok) {
       const message = toFriendlyBootstrapErrorMessage(response.status, await response.text());
@@ -191,14 +227,17 @@ async function exchangePasswordCredential(
   input: AuthPasswordBootstrapInput,
 ): Promise<AuthBootstrapResult> {
   return retryTransientBootstrap(async () => {
-    const response = await fetch(resolvePrimaryEnvironmentHttpUrl("/api/auth/bootstrap/password"), {
-      body: JSON.stringify(input),
-      credentials: "include",
-      headers: {
-        "content-type": "application/json",
+    const response = await fetchBootstrapRequest(
+      resolvePrimaryEnvironmentHttpUrl("/api/auth/bootstrap/password"),
+      {
+        body: JSON.stringify(input),
+        credentials: "include",
+        headers: {
+          "content-type": "application/json",
+        },
+        method: "POST",
       },
-      method: "POST",
-    });
+    );
 
     if (!response.ok) {
       const message = toFriendlyPasswordBootstrapErrorMessage(
@@ -502,6 +541,11 @@ export async function revokeOtherServerClientSessions(): Promise<number> {
 }
 
 export async function resolveInitialServerAuthGateState(): Promise<ServerAuthGateState> {
+  const pairingLinkState = resolvePairingLinkAuthGateState();
+  if (pairingLinkState) {
+    return pairingLinkState;
+  }
+
   if (resolvedAuthenticatedGateState?.status === "authenticated") {
     return resolvedAuthenticatedGateState;
   }

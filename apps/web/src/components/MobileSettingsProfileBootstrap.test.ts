@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { shouldSeedMobileSettingsProfile } from "./MobileSettingsProfileBootstrap";
+import { DEFAULT_CLIENT_SETTINGS } from "@cafecode/contracts/settings";
+
+import {
+  mobileSettingsProfileBootstrapPayload,
+  shouldSeedMobileSettingsProfile,
+} from "./MobileSettingsProfileBootstrap";
 
 describe("mobile settings profile bootstrap", () => {
   it("seeds only a hydrated mobile renderer with no explicit profiles", () => {
@@ -32,5 +37,15 @@ describe("mobile settings profile bootstrap", () => {
         profileCount: 1,
       }),
     ).toBe(false);
+  });
+
+  it("stores a mobile presentation profile from a desktop-valued responsive snapshot", () => {
+    const payload = mobileSettingsProfileBootstrapPayload(
+      { ...DEFAULT_CLIENT_SETTINGS, mobileOptimizedPresentation: false },
+      "dark",
+    );
+
+    expect(payload.clientSettings.mobileOptimizedPresentation).toBe(true);
+    expect(payload.theme).toBe("dark");
   });
 });

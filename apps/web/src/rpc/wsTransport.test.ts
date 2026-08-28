@@ -1,4 +1,5 @@
 import { DEFAULT_SERVER_SETTINGS, ServerSettings, WS_METHODS } from "@cafecode/contracts";
+import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -427,7 +428,7 @@ describe("WsTransport", () => {
     await transport.dispose();
   });
 
-  it("recycles the websocket session when heartbeat recovery is requested", async () => {
+  it("recycles the websocket session when transport recovery is requested", async () => {
     const transport = createTransport("ws://localhost:3020");
 
     await waitFor(() => {
@@ -446,9 +447,9 @@ describe("WsTransport", () => {
 
     (
       transport as unknown as {
-        scheduleHeartbeatRecovery: () => void;
+        scheduleTransportRecovery: () => void;
       }
-    ).scheduleHeartbeatRecovery();
+    ).scheduleTransportRecovery();
 
     await waitFor(() => {
       expect(sockets).toHaveLength(2);
@@ -464,6 +465,30 @@ describe("WsTransport", () => {
         phase: "connected",
       });
     });
+
+    await transport.dispose();
+  });
+
+  it("recycles a half-open websocket session after an unknown-socket request defect", async () => {
+    const transport = createTransport("ws://localhost:3020");
+
+    await waitFor(() => {
+      expect(sockets).toHaveLength(1);
+    });
+
+    const firstSocket = getSocket();
+    firstSocket.open();
+
+    await expect(
+      transport.request(() => Effect.fail(new Error("RpcClientDefect: Unknown socket error"))),
+    ).rejects.toThrow("Unknown socket error");
+
+    await waitFor(() => {
+      expect(sockets).toHaveLength(2);
+    });
+
+    expect(getSocket()).not.toBe(firstSocket);
+    expect(firstSocket.readyState).toBe(MockWebSocket.CLOSED);
 
     await transport.dispose();
   });

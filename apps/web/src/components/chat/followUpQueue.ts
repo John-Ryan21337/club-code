@@ -25,6 +25,14 @@ export function shouldQueueOperatorFollowUp(input: {
   return input.delivery === "queue" || input.hasEarlierManualFollowUp;
 }
 
+export function shouldQueueDuringProviderHandoff(input: {
+  readonly isSendBusy: boolean;
+  readonly isConnecting: boolean;
+  readonly isDispatchInFlight: boolean;
+}): boolean {
+  return input.isSendBusy || input.isConnecting || input.isDispatchInFlight;
+}
+
 /**
  * Automatic queue draining may start the next turn only from a confirmed
  * ready session. It must never steer an active turn or use a disconnected
@@ -211,6 +219,32 @@ export function hasQueuedFollowUpDispatchBeenObserved(
   );
 }
 
+export function shouldRetainLocalFollowUpShadow(input: {
+  readonly messageId: string;
+  readonly projectedStatus: "reserving" | "queued" | "handoff" | null;
+  readonly projectedMessages: readonly { readonly id: string }[];
+}): boolean {
+  if (input.projectedStatus !== null) {
+    return input.projectedStatus === "reserving";
+  }
+
+  // The server can accept and remove a queued follow-up before the renderer
+  // observes its intermediate queue state. The exact message id proves that
+  // the local shadow was consumed.
+  return !input.projectedMessages.some((message) => message.id === input.messageId);
+}
+
+/**
+ * A handoff item is already represented by its user message in the transcript.
+ * Keep it in durable queue control state until the provider acknowledges it,
+ * but do not keep presenting it as an unsent queued message.
+ */
+export function visibleQueuedManualFollowUps<
+  Item extends { readonly status: "reserving" | "queued" | "handoff" },
+>(items: readonly Item[]): Item[] {
+  return items.filter((item) => item.status !== "handoff");
+}
+
 export function previewQueuedFollowUpText(text: string, fallback = "Image-only follow-up"): string {
   const normalized = text.trim().replace(/\s+/g, " ");
   return normalized.length > 0 ? normalized : fallback;
@@ -233,6 +267,39 @@ export interface QueuedFollowUpActionInput {
   phase: SessionPhase;
   liveSteerAvailable: boolean;
   canDispatchNow: boolean;
+}
+
+export interface RunningQueuedFollowUpActivationInput {
+  phase: SessionPhase;
+  liveSteerAvailable: boolean;
+  hasRetryBlocker: boolean;
+  isConnecting: boolean;
+  isEnvironmentUnavailable: boolean;
+  isDispatchInFlight: boolean;
+  isQueuedDispatchPending: boolean;
+  isSteerInFlight: boolean;
+  headStatus: "reserving" | "queued" | "handoff" | null;
+}
+
+/**
+ * A strict active-turn match already proves that live steer is safe. Do not
+ * require the transport-facing session status too: that field can transiently
+ * lag durable turn state and would make a valid Steer button inert.
+ */
+export function canActivateRunningQueuedFollowUp(
+  input: RunningQueuedFollowUpActivationInput,
+): boolean {
+  return (
+    input.phase === "running" &&
+    input.liveSteerAvailable &&
+    !input.hasRetryBlocker &&
+    !input.isConnecting &&
+    !input.isEnvironmentUnavailable &&
+    !input.isDispatchInFlight &&
+    !input.isQueuedDispatchPending &&
+    !input.isSteerInFlight &&
+    input.headStatus === "queued"
+  );
 }
 
 export function decideQueuedFollowUpAction(input: QueuedFollowUpActionInput): QueuedFollowUpAction {

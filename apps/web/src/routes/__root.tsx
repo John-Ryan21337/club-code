@@ -25,6 +25,8 @@ import { IdleThreadGuardCoordinator } from "../components/IdleThreadGuardCoordin
 import { MobileSettingsProfileBootstrap } from "../components/MobileSettingsProfileBootstrap";
 import { ProviderUpdateLaunchNotification } from "../components/ProviderUpdateLaunchNotification";
 import { WindowAtmosphere } from "../components/WindowAtmosphere";
+import { HardwareLightingMatrixSync } from "../components/HardwareLightingMatrixSync";
+import { HexagonsBackground } from "../components/HexagonsBackground";
 import { WorldClockWidget } from "../components/WorldClockWidget";
 import {
   WebSocketConnectionCoordinator,
@@ -53,7 +55,7 @@ import {
   useServerConfigUpdatedSubscription,
   useServerWelcomeSubscription,
 } from "../rpc/serverState";
-import { selectAnyThreadRunning, useStore } from "../store";
+import { selectAnyThreadRunning, selectBootstrapCompleteForEnvironment, useStore } from "../store";
 import { useUiStateStore } from "../uiStateStore";
 import { syncBrowserChromeTheme } from "../hooks/useTheme";
 import {
@@ -75,8 +77,10 @@ import {
 import {
   ensurePrimaryEnvironmentReady,
   getPrimaryKnownEnvironment,
+  resolvePairingLinkAuthGateState,
   resolveInitialServerAuthGateState,
   updatePrimaryEnvironmentDescriptor,
+  usePrimaryEnvironmentId,
 } from "../environments/primary";
 import { resolveThreadRouteRef } from "../threadRoutes";
 
@@ -84,6 +88,11 @@ export const Route = createRootRouteWithContext<{
   queryClient: QueryClient;
 }>()({
   beforeLoad: async () => {
+    const pairingLinkState = resolvePairingLinkAuthGateState();
+    if (pairingLinkState) {
+      return { authGateState: pairingLinkState };
+    }
+
     const [, authGateState] = await Promise.all([
       ensurePrimaryEnvironmentReady(),
       resolveInitialServerAuthGateState(),
@@ -173,12 +182,10 @@ function RootRouteView() {
         <EnvironmentConnectionManagerBootstrap />
         <AppearanceSettingsSync />
         <MobileSettingsProfileBootstrap />
-        <AmbianceLayer />
         <PowerSaveBlockerSync />
-        <WindowAtmosphere selectedThreadRef={selectedThreadRef} />
-        {primaryEnvironmentAuthenticated ? <WorldClockWidget /> : null}
-        <AtmosphereConsole />
-        <EmbeddedBrowserWorkspace />
+        {primaryEnvironmentAuthenticated ? (
+          <PostBootstrapExperienceLayers selectedThreadRef={selectedThreadRef} />
+        ) : null}
         {primaryEnvironmentAuthenticated ? <BackgroundAutoNudgeCoordinator /> : null}
         {primaryEnvironmentAuthenticated ? <IdleThreadGuardCoordinator /> : null}
         {primaryEnvironmentAuthenticated ? <EventRouter /> : null}
@@ -197,6 +204,33 @@ function RootRouteView() {
         {shutdownOverlay}
       </AnchoredToastProvider>
     </ToastProvider>
+  );
+}
+
+function PostBootstrapExperienceLayers({
+  selectedThreadRef,
+}: {
+  readonly selectedThreadRef: ReturnType<typeof resolveThreadRouteRef>;
+}) {
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const bootstrapComplete = useStore((state) =>
+    selectBootstrapCompleteForEnvironment(state, primaryEnvironmentId),
+  );
+
+  if (!bootstrapComplete) {
+    return null;
+  }
+
+  return (
+    <>
+      <HexagonsBackground />
+      <AmbianceLayer />
+      <WindowAtmosphere selectedThreadRef={selectedThreadRef} />
+      <HardwareLightingMatrixSync />
+      <WorldClockWidget />
+      <AtmosphereConsole />
+      <EmbeddedBrowserWorkspace />
+    </>
   );
 }
 

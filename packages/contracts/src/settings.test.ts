@@ -12,6 +12,8 @@ import {
   CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET,
   CLUB_CODE_FIRST_RUN_CLIENT_SETTINGS,
   DEFAULT_AMBIENT_CLIENT_SETTINGS,
+  DEFAULT_AMBIENT_BACKGROUND_MANUSCRIPT_OPACITY,
+  DEFAULT_AMBIENT_BACKGROUND_SIDEBAR_OPACITY,
   DEFAULT_ATMOSPHERE_CONSOLE_ENABLED,
   DEFAULT_AMBIENT_COLOR,
   DEFAULT_AMBIENT_IMAGE_ASSET,
@@ -55,8 +57,10 @@ import {
   DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_COLOR_MODE,
   DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_DATABASE_ENABLED,
   DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_NETWORK_ENABLED,
+  DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_WORK_ENABLED,
   DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
   DEFAULT_FALLING_EFFECT_DENSITY,
+  DEFAULT_FALLING_EFFECT_USAGE_REACTIVE,
   DEFAULT_FALLING_EFFECT_JAPANESE_RATIO,
   DEFAULT_FALLING_EFFECT_KIND,
   DEFAULT_FALLING_EFFECT_LIVE_WORK_VOCABULARY,
@@ -71,6 +75,12 @@ import {
   DEFAULT_FALLING_EFFECT_SPEED,
   DEFAULT_FALLING_EFFECTS_ENABLED,
   DEFAULT_FALLING_EFFECTS_OVER_CINEMA_ENABLED,
+  DEFAULT_HARDWARE_LIGHTING_BRIGHTNESS,
+  DEFAULT_HARDWARE_LIGHTING_CONTROLLER_IDS,
+  DEFAULT_HARDWARE_LIGHTING_RESTORE_ON_DISABLE,
+  DEFAULT_HARDWARE_LIGHTING_SYNC_ENABLED,
+  DEFAULT_HEXAGONS_BACKGROUND_ENABLED,
+  DEFAULT_HEXAGONS_BACKGROUND_PRESET_JSON,
   FALLING_EFFECT_MATRIX_WALK_FONT_SIZE_STEP,
   DEFAULT_LM_STUDIO_BASE_URL,
   DEFAULT_MOBILE_OPTIMIZED_PRESENTATION,
@@ -79,6 +89,7 @@ import {
   DEFAULT_POWER_SAVE_BLOCKER_MODE,
   DEFAULT_PROVIDER_USAGE_POLL_MINUTES,
   DEFAULT_PROVIDER_USAGE_WIDGET_ENABLED,
+  DEFAULT_SHOW_COMPOSER_THREAD_AUTOMATION_CONTROLS,
   DEFAULT_SHOW_SIDEBAR_ATTRIBUTION,
   DEFAULT_SIDEBAR_BRAND_IMAGE_DATA_URL,
   DEFAULT_SIDEBAR_BRAND_IMAGE,
@@ -101,6 +112,8 @@ import {
   MAX_FALLING_EFFECT_MATRIX_WALK_LIFECYCLE_PERCENT,
   MAX_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
   MAX_FALLING_EFFECT_SPEED,
+  MAX_HEXAGONS_BACKGROUND_PRESET_JSON_LENGTH,
+  MAX_AMBIENT_BACKGROUND_SURFACE_OPACITY,
   MAX_MODEL_PACING_RESERVE_PERCENT,
   MAX_PROVIDER_USAGE_POLL_MINUTES,
   MAX_SIDEBAR_BRAND_IMAGE_DATA_URL_LENGTH,
@@ -118,6 +131,7 @@ import {
   MIN_FALLING_EFFECT_MATRIX_WALK_LIFECYCLE_PERCENT,
   MIN_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
   MIN_FALLING_EFFECT_SPEED,
+  MIN_AMBIENT_BACKGROUND_SURFACE_OPACITY,
   MIN_MODEL_PACING_RESERVE_PERCENT,
   MIN_PROVIDER_USAGE_POLL_MINUTES,
   MIN_AMBIANCE_INTENSITY,
@@ -135,6 +149,7 @@ const decodeClientSettings = Schema.decodeSync(ClientSettingsSchema);
 const decodeClientSettingsPatch = Schema.decodeUnknownSync(ClientSettingsPatch);
 const encodeClientSettings = Schema.encodeSync(ClientSettingsSchema);
 const decodeCodexSettings = Schema.decodeSync(CodexSettings);
+const decodeUnknownJsonString = Schema.decodeUnknownSync(Schema.UnknownFromJsonString);
 const decodeClaudeSettings = Schema.decodeSync(ClaudeSettings);
 const decodeServerSettingsPatch = Schema.decodeUnknownSync(ServerSettingsPatch);
 
@@ -179,6 +194,40 @@ describe("client settings", () => {
     expect(decodeClientSettings({}).powerSaveBlockerMode).toBe("off");
   });
 
+  it("keeps hardware lighting inert and validates its machine-local configuration", () => {
+    const defaults = decodeClientSettings({});
+    expect(defaults.hardwareLightingSyncEnabled).toBe(DEFAULT_HARDWARE_LIGHTING_SYNC_ENABLED);
+    expect(defaults.hardwareLightingControllerIds).toEqual(
+      DEFAULT_HARDWARE_LIGHTING_CONTROLLER_IDS,
+    );
+    expect(defaults.hardwareLightingBrightness).toBe(DEFAULT_HARDWARE_LIGHTING_BRIGHTNESS);
+    expect(defaults.hardwareLightingRestoreOnDisable).toBe(
+      DEFAULT_HARDWARE_LIGHTING_RESTORE_ON_DISABLE,
+    );
+
+    const controllerId = "0123456789abcdef0123456789abcdef";
+    expect(
+      decodeClientSettingsPatch({
+        hardwareLightingSyncEnabled: true,
+        hardwareLightingControllerIds: [controllerId],
+        hardwareLightingBrightness: 0.5,
+        hardwareLightingRestoreOnDisable: false,
+      }),
+    ).toEqual({
+      hardwareLightingSyncEnabled: true,
+      hardwareLightingControllerIds: [controllerId],
+      hardwareLightingBrightness: 0.5,
+      hardwareLightingRestoreOnDisable: false,
+    });
+    expect(() =>
+      decodeClientSettingsPatch({ hardwareLightingControllerIds: [controllerId, controllerId] }),
+    ).toThrow();
+    expect(() =>
+      decodeClientSettingsPatch({ hardwareLightingControllerIds: ["raw-device-path"] }),
+    ).toThrow();
+    expect(() => decodeClientSettingsPatch({ hardwareLightingBrightness: 0 })).toThrow();
+  });
+
   it("defaults chat selection copy to Markdown", () => {
     expect(DEFAULT_CLIENT_SETTINGS.chatCopyFormat).toBe(DEFAULT_CHAT_COPY_FORMAT);
     expect(decodeClientSettings({}).chatCopyFormat).toBe("markdown");
@@ -218,12 +267,56 @@ describe("client settings", () => {
     expect(DEFAULT_CLIENT_SETTINGS.showSidebarSearch).toBe(DEFAULT_SHOW_SIDEBAR_SEARCH);
     expect(DEFAULT_CLIENT_SETTINGS.showSidebarMascot).toBe(DEFAULT_SHOW_SIDEBAR_MASCOT);
     expect(DEFAULT_CLIENT_SETTINGS.showSidebarAttribution).toBe(DEFAULT_SHOW_SIDEBAR_ATTRIBUTION);
+    expect(DEFAULT_CLIENT_SETTINGS.showComposerThreadAutomationControls).toBe(
+      DEFAULT_SHOW_COMPOSER_THREAD_AUTOMATION_CONTROLS,
+    );
     expect(DEFAULT_CLIENT_SETTINGS.brandWordmarkPrefix).toBe(DEFAULT_BRAND_WORDMARK_PREFIX);
     expect(DEFAULT_CLIENT_SETTINGS.sidebarBrandImage).toBe(DEFAULT_SIDEBAR_BRAND_IMAGE);
     expect(DEFAULT_CLIENT_SETTINGS.sidebarBrandImageDataUrl).toBe(
       DEFAULT_SIDEBAR_BRAND_IMAGE_DATA_URL,
     );
     expect(DEFAULT_CLIENT_SETTINGS.sidebarStarSpeed).toBe(DEFAULT_SIDEBAR_STAR_SPEED);
+    expect(DEFAULT_CLIENT_SETTINGS.hexagonsBackgroundEnabled).toBe(
+      DEFAULT_HEXAGONS_BACKGROUND_ENABLED,
+    );
+    expect(DEFAULT_CLIENT_SETTINGS.hexagonsBackgroundPresetJson).toBe(
+      DEFAULT_HEXAGONS_BACKGROUND_PRESET_JSON,
+    );
+    const bundledHexagonsPreset = decodeUnknownJsonString(DEFAULT_HEXAGONS_BACKGROUND_PRESET_JSON);
+    expect(DEFAULT_CLIENT_SETTINGS.hexagonsBackgroundEnabled).toBe(false);
+    expect(bundledHexagonsPreset).toMatchObject({
+      kind: "the-hexagons-background",
+      formatVersion: 1,
+      name: "SeaOfLightsInDarkstaticy",
+      target: "generic",
+      settings: {
+        schemaVersion: 14,
+        ratioPreset: "silver-major",
+        tileBase: "white",
+        diamondColorA: "#000000",
+        diamondColorB: "#ffffff",
+        diamondColorC: "#5c5c5c",
+        behindLightColor: "#f56200",
+        behindPrismMode: "neon",
+        pistonMode: "off",
+        pistonPattern: "individual",
+        meshEnergyPattern: "piston-groups",
+        meshEnergyFlowMode: "natural",
+        meshEnergyFlowAngle: 234,
+        frontLightColor: "#bb00ff",
+        particleCount: 58_900,
+      },
+      activationHints: {
+        backgroundEnabled: false,
+        fallingEffectsEnabled: false,
+      },
+    });
+    expect(DEFAULT_CLIENT_SETTINGS.ambientBackgroundManuscriptOpacity).toBe(
+      DEFAULT_AMBIENT_BACKGROUND_MANUSCRIPT_OPACITY,
+    );
+    expect(DEFAULT_CLIENT_SETTINGS.ambientBackgroundSidebarOpacity).toBe(
+      DEFAULT_AMBIENT_BACKGROUND_SIDEBAR_OPACITY,
+    );
     expect(DEFAULT_CLIENT_SETTINGS.themeAccentColor).toBe(DEFAULT_THEME_ACCENT_COLOR);
     expect(DEFAULT_CLIENT_SETTINGS.appAccentColor).toBe(DEFAULT_APP_ACCENT_COLOR);
     expect(DEFAULT_CLIENT_SETTINGS.workflowObservatoryEnabled).toBe(
@@ -238,6 +331,7 @@ describe("client settings", () => {
     expect(decodeClientSettings({}).showSidebarSearch).toBe(true);
     expect(decodeClientSettings({}).showSidebarMascot).toBe(true);
     expect(decodeClientSettings({}).showSidebarAttribution).toBe(true);
+    expect(decodeClientSettings({}).showComposerThreadAutomationControls).toBe(false);
     expect(decodeClientSettings({}).brandWordmarkPrefix).toBe("Club");
     expect(decodeClientSettings({}).sidebarBrandImage).toBeNull();
     expect(decodeClientSettings({}).sidebarBrandImageDataUrl).toBe("");
@@ -246,6 +340,9 @@ describe("client settings", () => {
     expect(decodeClientSettings({}).appAccentColor).toBe("");
     expect(decodeClientSettings({}).workflowObservatoryEnabled).toBe(true);
     expect(decodeClientSettings({}).workflowStallWarningSeconds).toBe(180);
+    expect(decodeClientSettingsPatch({ showComposerThreadAutomationControls: true })).toEqual({
+      showComposerThreadAutomationControls: true,
+    });
   });
 
   it("round-trips the per-device mobile presentation override", () => {
@@ -261,58 +358,34 @@ describe("client settings", () => {
     expect(() => decodeClientSettingsPatch({ mobileOptimizedPresentation: "mobile" })).toThrow();
   });
 
-  it("keeps conservative defaults separate from the Club Code first-run profile", () => {
+  it("keeps atmospheric activation off in defaults and the Club Code first-run profile", () => {
     expect(DEFAULT_CLIENT_SETTINGS.fallingEffectsEnabled).toBe(false);
     expect(DEFAULT_CLIENT_SETTINGS.fallingEffectsOverCinemaEnabled).toBe(false);
+    expect(DEFAULT_CLIENT_SETTINGS.fallingEffectKind).toBe("rain");
+    expect(DEFAULT_CLIENT_SETTINGS.fallingEffectUsageReactive).toBe(false);
     expect(DEFAULT_CLIENT_SETTINGS.fallingEffectMatrixColorMode).toBe("fixed");
     expect(DEFAULT_CLIENT_SETTINGS.fallingEffectMatrixColorCycleSpeed).toBe(
       DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
     );
     expect(DEFAULT_CLIENT_SETTINGS.ambientVideoEnabled).toBe(false);
     expect(DEFAULT_CLIENT_SETTINGS.ambientImageEnabled).toBe(false);
+    expect(DEFAULT_CLIENT_SETTINGS.atmosphereConsoleEnabled).toBe(false);
+    expect(DEFAULT_CLIENT_SETTINGS.autoNudgeMode).toBe("off");
     expect(DEFAULT_CLIENT_SETTINGS.providerUsageWidgetEnabled).toBe(false);
     expect(DEFAULT_CLIENT_SETTINGS.modelPacingEnabled).toBe(false);
 
     expect(CLUB_CODE_FIRST_RUN_CLIENT_SETTINGS).toEqual({
       ...DEFAULT_CLIENT_SETTINGS,
-      fallingEffectsEnabled: true,
-      fallingEffectKind: "matrix",
-      fallingEffectMatrixColorMode: "rainbow",
-      fallingEffectOpacity: 0.55,
-      fallingEffectSpeed: 4,
-      fallingEffectDensity: 2.5,
-      fallingEffectJapaneseRatio: 0.45,
-      fallingEffect2chEnriched: true,
-      fallingEffectLiveWorkVocabulary: true,
-      fallingEffectActivityLinks: true,
-      fallingEffectActivityLinkNetworkEnabled: true,
-      fallingEffectActivityLinkDatabaseEnabled: true,
-      fallingEffectActivityLinkBuildEnabled: true,
-      fallingEffectActivityLinkAgentEnabled: true,
-      fallingEffectActivityLinkColorMode: "matrix",
-      ambientVideoEnabled: true,
-      ambientVideoSource: null,
-      ambientVideoLayoutMode: "custom",
-      ambientVideoPresetPlacement: "bottom-right",
-      ambientVideoPresetSize: "large",
-      ambientVideoPresentationMode: "floating",
-      ambientVideoGlowEnabled: true,
-      ambientVideoGlowMode: "adaptive",
-      ambientVideoGlowColor: "auto",
-      ambientVideoGlowOpacity: 0.65,
-      ambientImageEnabled: true,
-      ambientImageAsset: CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET,
-      ambientImagePresentationMode: "floating",
-      ambientImageLayoutMode: "custom",
-      ambientImagePresetPlacement: "bottom-left",
-      ambientImagePresetSize: "large",
-      ambientImageGlowEnabled: true,
-      ambientImageGlowColor: "auto",
-      ambientImageGlowOpacity: 0.35,
       workflowObservatoryEnabled: true,
       providerUsagePollMinutes: 2,
       modelPacingReservePercent: 5,
     });
+    expect(CLUB_CODE_FIRST_RUN_CLIENT_SETTINGS.hexagonsBackgroundEnabled).toBe(false);
+    expect(CLUB_CODE_FIRST_RUN_CLIENT_SETTINGS.fallingEffectsEnabled).toBe(false);
+    expect(CLUB_CODE_FIRST_RUN_CLIENT_SETTINGS.atmosphereConsoleEnabled).toBe(false);
+    expect(CLUB_CODE_FIRST_RUN_CLIENT_SETTINGS.ambientVideoEnabled).toBe(false);
+    expect(CLUB_CODE_FIRST_RUN_CLIENT_SETTINGS.ambientImageEnabled).toBe(false);
+    expect(CLUB_CODE_FIRST_RUN_CLIENT_SETTINGS.autoNudgeMode).toBe("off");
     expect(CLUB_CODE_FIRST_RUN_CLIENT_SETTINGS.onboardingCompleted).toBe(false);
     expect(CLUB_CODE_FIRST_RUN_CLIENT_SETTINGS.dismissedFirstRunHints).toEqual([]);
   });
@@ -426,6 +499,7 @@ describe("client settings", () => {
       fallingEffectOpacity: DEFAULT_AMBIENT_OPACITY,
       fallingEffectSpeed: DEFAULT_FALLING_EFFECT_SPEED,
       fallingEffectDensity: DEFAULT_FALLING_EFFECT_DENSITY,
+      fallingEffectUsageReactive: DEFAULT_FALLING_EFFECT_USAGE_REACTIVE,
       fallingEffectJapaneseRatio: DEFAULT_FALLING_EFFECT_JAPANESE_RATIO,
       fallingEffect2chEnriched: DEFAULT_FALLING_EFFECT_2CH_ENRICHED,
       fallingEffectLiveWorkVocabulary: DEFAULT_FALLING_EFFECT_LIVE_WORK_VOCABULARY,
@@ -435,9 +509,14 @@ describe("client settings", () => {
         DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_DATABASE_ENABLED,
       fallingEffectActivityLinkBuildEnabled: DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_BUILD_ENABLED,
       fallingEffectActivityLinkAgentEnabled: DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_AGENT_ENABLED,
+      fallingEffectActivityLinkWorkEnabled: DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_WORK_ENABLED,
       fallingEffectActivityLinkColorMode: DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_COLOR_MODE,
       fallingEffectActivityLinkRetentionSeconds:
         DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
+      hexagonsBackgroundEnabled: DEFAULT_HEXAGONS_BACKGROUND_ENABLED,
+      hexagonsBackgroundPresetJson: DEFAULT_HEXAGONS_BACKGROUND_PRESET_JSON,
+      ambientBackgroundManuscriptOpacity: DEFAULT_AMBIENT_BACKGROUND_MANUSCRIPT_OPACITY,
+      ambientBackgroundSidebarOpacity: DEFAULT_AMBIENT_BACKGROUND_SIDEBAR_OPACITY,
       ambientVideoEnabled: DEFAULT_AMBIENT_VIDEO_ENABLED,
       ambientVideoSource: DEFAULT_AMBIENT_VIDEO_SOURCE,
       ambientVideoLayoutMode: DEFAULT_AMBIENT_VIDEO_LAYOUT_MODE,
@@ -493,6 +572,50 @@ describe("client settings", () => {
     expect(pickAmbientSettings(decoded)).toEqual(DEFAULT_AMBIENT_CLIENT_SETTINGS);
   });
 
+  it("persists a bounded The Hexagons preset without enabling it by default", () => {
+    const preset = '{"kind":"the-hexagons-background"}';
+    expect(
+      decodeClientSettingsPatch({
+        hexagonsBackgroundEnabled: true,
+        hexagonsBackgroundPresetJson: preset,
+      }),
+    ).toEqual({
+      hexagonsBackgroundEnabled: true,
+      hexagonsBackgroundPresetJson: preset,
+    });
+    expect(decodeClientSettingsPatch({ hexagonsBackgroundPresetJson: null })).toEqual({
+      hexagonsBackgroundPresetJson: null,
+    });
+    expect(() => decodeClientSettingsPatch({ hexagonsBackgroundPresetJson: " " })).toThrow();
+    expect(() =>
+      decodeClientSettingsPatch({
+        hexagonsBackgroundPresetJson: "x".repeat(MAX_HEXAGONS_BACKGROUND_PRESET_JSON_LENGTH + 1),
+      }),
+    ).toThrow();
+  });
+
+  it("bounds the ambient background manuscript and sidebar opacity settings", () => {
+    expect(
+      decodeClientSettingsPatch({
+        ambientBackgroundManuscriptOpacity: MIN_AMBIENT_BACKGROUND_SURFACE_OPACITY,
+        ambientBackgroundSidebarOpacity: MAX_AMBIENT_BACKGROUND_SURFACE_OPACITY,
+      }),
+    ).toEqual({
+      ambientBackgroundManuscriptOpacity: MIN_AMBIENT_BACKGROUND_SURFACE_OPACITY,
+      ambientBackgroundSidebarOpacity: MAX_AMBIENT_BACKGROUND_SURFACE_OPACITY,
+    });
+    expect(() =>
+      decodeClientSettingsPatch({
+        ambientBackgroundManuscriptOpacity: MIN_AMBIENT_BACKGROUND_SURFACE_OPACITY - 0.01,
+      }),
+    ).toThrow();
+    expect(() =>
+      decodeClientSettingsPatch({
+        ambientBackgroundSidebarOpacity: MAX_AMBIENT_BACKGROUND_SURFACE_OPACITY + 0.01,
+      }),
+    ).toThrow();
+  });
+
   it("preserves legacy YouTube sources while accepting the additive Spotify source", () => {
     const decoded = decodeClientSettings({
       ambientVideoEnabled: true,
@@ -517,6 +640,7 @@ describe("client settings", () => {
       fallingEffectOpacity: MAX_AMBIENT_OPACITY,
       fallingEffectSpeed: MAX_FALLING_EFFECT_SPEED,
       fallingEffectDensity: MAX_FALLING_EFFECT_DENSITY,
+      fallingEffectUsageReactive: true,
       fallingEffectJapaneseRatio: MAX_FALLING_EFFECT_JAPANESE_RATIO,
       fallingEffect2chEnriched: true,
       fallingEffectLiveWorkVocabulary: true,
@@ -561,6 +685,7 @@ describe("client settings", () => {
       fallingEffectOpacity: MAX_AMBIENT_OPACITY,
       fallingEffectSpeed: MAX_FALLING_EFFECT_SPEED,
       fallingEffectDensity: MAX_FALLING_EFFECT_DENSITY,
+      fallingEffectUsageReactive: true,
       fallingEffectJapaneseRatio: MAX_FALLING_EFFECT_JAPANESE_RATIO,
       fallingEffect2chEnriched: true,
       fallingEffectLiveWorkVocabulary: true,
@@ -794,6 +919,7 @@ describe("client settings", () => {
         fallingEffectOpacity: MIN_AMBIENT_OPACITY,
         fallingEffectSpeed: MIN_FALLING_EFFECT_SPEED,
         fallingEffectDensity: MIN_FALLING_EFFECT_DENSITY,
+        fallingEffectUsageReactive: false,
         fallingEffectJapaneseRatio: MIN_FALLING_EFFECT_JAPANESE_RATIO,
         fallingEffect2chEnriched: false,
         fallingEffectLiveWorkVocabulary: false,
@@ -821,6 +947,7 @@ describe("client settings", () => {
       fallingEffectOpacity: MIN_AMBIENT_OPACITY,
       fallingEffectSpeed: MIN_FALLING_EFFECT_SPEED,
       fallingEffectDensity: MIN_FALLING_EFFECT_DENSITY,
+      fallingEffectUsageReactive: false,
       fallingEffectJapaneseRatio: MIN_FALLING_EFFECT_JAPANESE_RATIO,
       fallingEffect2chEnriched: false,
       fallingEffectLiveWorkVocabulary: false,

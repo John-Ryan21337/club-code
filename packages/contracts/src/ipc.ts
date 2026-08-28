@@ -115,6 +115,7 @@ import type {
   SourceControlRepositoryLookupInput,
 } from "./sourceControl.ts";
 import { EnvironmentId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import type { HardwareLightingFrameInput, HardwareLightingStatus } from "./hardwareLighting.ts";
 
 export interface ContextMenuItem<T extends string = string> {
   id: T;
@@ -697,6 +698,11 @@ export interface LocalApi {
     updateSettings: (patch: ServerSettingsPatch) => Promise<ServerSettings>;
     getClientSettings: () => Promise<ClientSettings>;
     updateClientSettings: (patch: ClientSettingsPatch) => Promise<ClientSettings>;
+    getHardwareLightingStatus: () => Promise<HardwareLightingStatus>;
+    refreshHardwareLighting: () => Promise<HardwareLightingStatus>;
+    applyHardwareLightingFrame: (
+      input: HardwareLightingFrameInput,
+    ) => Promise<HardwareLightingStatus>;
     discoverSourceControl: () => Promise<SourceControlDiscoveryResult>;
     getTraceDiagnostics: () => Promise<ServerTraceDiagnosticsResult>;
     getProcessDiagnostics: () => Promise<ServerProcessDiagnosticsResult>;

@@ -4,9 +4,13 @@ import { usePrimaryEnvironmentId } from "../environments/primary";
 import { getWsConnectionUiState, useWsConnectionStatus } from "../rpc/wsConnectionState";
 import { selectBootstrapCompleteForEnvironment, useStore } from "../store";
 import { useDesktopDebugEnabled } from "../lib/desktopDebugState";
+import { resolveWebUiConnectionSetupUrl } from "../webUiConnectionSetup";
+import { Button } from "./ui/button";
 import { Spinner } from "./ui/spinner";
 import { Skeleton } from "./ui/skeleton";
 import { SidebarMenuSkeleton } from "./ui/sidebar";
+
+export { resolveWebUiConnectionSetupUrl } from "../webUiConnectionSetup";
 
 function describeBootstrapStatus(input: {
   readonly uiState: ReturnType<typeof getWsConnectionUiState>;
@@ -87,6 +91,7 @@ export function InitialBackendBootstrapSurface({ children }: { readonly children
   const status = useWsConnectionStatus();
   const uiState = getWsConnectionUiState(status);
   const desktopDebugEnabled = useDesktopDebugEnabled();
+  const connectionSetupUrl = resolveWebUiConnectionSetupUrl(window.location);
 
   useEffect(() => {
     if (!desktopDebugEnabled) {
@@ -157,6 +162,24 @@ export function InitialBackendBootstrapSurface({ children }: { readonly children
                 <p className="mt-1 max-w-md text-sm leading-6 text-muted-foreground">
                   {copy.detail}
                 </p>
+                {uiState === "error" || uiState === "offline" ? (
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <Button size="sm" type="button" onClick={() => window.location.reload()}>
+                      Reload app
+                    </Button>
+                    {connectionSetupUrl ? (
+                      <Button render={<a href={connectionSetupUrl} />} size="sm" variant="outline">
+                        Open connection setup
+                      </Button>
+                    ) : null}
+                  </div>
+                ) : null}
+                {uiState === "error" && connectionSetupUrl ? (
+                  <p className="mt-3 max-w-lg text-xs leading-5 text-muted-foreground">
+                    If the app does not connect, open connection setup. Install the Club Code
+                    certificate, and then open the secure site again.
+                  </p>
+                ) : null}
               </div>
             </div>
             <StartupMainSkeleton />

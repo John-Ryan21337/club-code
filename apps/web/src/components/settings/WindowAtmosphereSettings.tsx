@@ -1,5 +1,7 @@
 import {
   DEFAULT_AMBIENT_COLOR,
+  DEFAULT_AMBIENT_BACKGROUND_MANUSCRIPT_OPACITY,
+  DEFAULT_AMBIENT_BACKGROUND_SIDEBAR_OPACITY,
   DEFAULT_AMBIENT_OPACITY,
   DEFAULT_ATMOSPHERE_CONSOLE_ENABLED,
   DEFAULT_FALLING_EFFECT_2CH_ENRICHED,
@@ -8,9 +10,11 @@ import {
   DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_COLOR_MODE,
   DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_DATABASE_ENABLED,
   DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_NETWORK_ENABLED,
+  DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_WORK_ENABLED,
   DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
   DEFAULT_FALLING_EFFECT_ACTIVITY_LINKS,
   DEFAULT_FALLING_EFFECT_DENSITY,
+  DEFAULT_FALLING_EFFECT_USAGE_REACTIVE,
   DEFAULT_FALLING_EFFECTS_ENABLED,
   DEFAULT_FALLING_EFFECTS_OVER_CINEMA_ENABLED,
   DEFAULT_FALLING_EFFECT_JAPANESE_RATIO,
@@ -25,6 +29,10 @@ import {
   DEFAULT_FALLING_EFFECT_MATRIX_WALK_LIFECYCLE_PERCENT,
   DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE,
   DEFAULT_FALLING_EFFECT_SPEED,
+  DEFAULT_HARDWARE_LIGHTING_BRIGHTNESS,
+  DEFAULT_HARDWARE_LIGHTING_RESTORE_ON_DISABLE,
+  DEFAULT_HEXAGONS_BACKGROUND_ENABLED,
+  DEFAULT_HEXAGONS_BACKGROUND_PRESET_JSON,
   FALLING_EFFECT_MATRIX_WALK_FONT_SIZE_STEP,
   MAX_AMBIENT_OPACITY,
   MAX_FALLING_EFFECT_DENSITY,
@@ -36,6 +44,7 @@ import {
   MAX_FALLING_EFFECT_MATRIX_WALK_LIFECYCLE_PERCENT,
   MAX_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
   MAX_FALLING_EFFECT_SPEED,
+  MAX_AMBIENT_BACKGROUND_SURFACE_OPACITY,
   MIN_AMBIENT_OPACITY,
   MIN_FALLING_EFFECT_DENSITY,
   MIN_FALLING_EFFECT_JAPANESE_RATIO,
@@ -46,10 +55,18 @@ import {
   MIN_FALLING_EFFECT_MATRIX_WALK_LIFECYCLE_PERCENT,
   MIN_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
   MIN_FALLING_EFFECT_SPEED,
+  MIN_AMBIENT_BACKGROUND_SURFACE_OPACITY,
 } from "@cafecode/contracts/settings";
-import { useEffect, useState } from "react";
+import type { HardwareLightingStatus } from "@cafecode/contracts";
+import { useEffect, useMemo, useRef, useState } from "react";
 
+import {
+  parseStoredHexagonsBackground,
+  readHexagonsBackgroundFile,
+  type ParsedHexagonsBackground,
+} from "../../hexagonsBackgroundPreset";
 import { useSettings, useUpdateSettings } from "../../hooks/useSettings";
+import { ensureLocalApi } from "../../localApi";
 import { useServerConfig } from "../../rpc/serverState";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
@@ -62,6 +79,7 @@ import {
 } from "../ui/number-field";
 import { Radio, RadioGroup } from "../ui/radio-group";
 import { Switch } from "../ui/switch";
+import { stackedThreadToast, toastManager } from "../ui/toast";
 import { ColorWheelPicker } from "./ColorWheelPicker";
 import { SettingResetButton, SettingsRow, SettingsSection } from "./settingsLayout";
 
@@ -204,13 +222,136 @@ function clampFallingEffectOpacityPercent(value: number | null): number {
   return Math.min(MAX_AMBIENT_OPACITY, Math.max(MIN_AMBIENT_OPACITY, opacity));
 }
 
+function clampAmbientBackgroundSurfaceOpacityPercent(
+  value: number | null,
+  fallback: number,
+): number {
+  if (value === null || !Number.isFinite(value)) {
+    return fallback;
+  }
+  const opacity = value / 100;
+  return Math.min(
+    MAX_AMBIENT_BACKGROUND_SURFACE_OPACITY,
+    Math.max(MIN_AMBIENT_BACKGROUND_SURFACE_OPACITY, opacity),
+  );
+}
+
 export function WindowAtmosphereSettings() {
   const settings = useSettings();
-  const { updateSettings } = useUpdateSettings();
+  const { updateSettings, updateClientSettingsConfirmed } = useUpdateSettings();
+  const backgroundFileInputRef = useRef<HTMLInputElement | null>(null);
+  const [backgroundImportBusy, setBackgroundImportBusy] = useState(false);
+  const [lightingStatus, setLightingStatus] = useState<HardwareLightingStatus | null>(null);
+  const [lightingBusy, setLightingBusy] = useState(false);
+  const hexagonsBackground = useMemo(
+    () => parseStoredHexagonsBackground(settings.hexagonsBackgroundPresetJson),
+    [settings.hexagonsBackgroundPresetJson],
+  );
   const serverConfig = useServerConfig();
   const atmosphereAvailable = serverConfig?.ambientExperienceCapabilities.atmosphere === true;
   const controlsEnabled = atmosphereAvailable && settings.fallingEffectsEnabled;
+
+  useEffect(() => {
+    let cancelled = false;
+    void ensureLocalApi()
+      .server.getHardwareLightingStatus()
+      .then((status) => {
+        if (!cancelled) setLightingStatus(status);
+      })
+      .catch(() => {
+        if (!cancelled) setLightingStatus(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const refreshLightingStatus = async (discover: boolean) => {
+    setLightingBusy(true);
+    try {
+      const status = discover
+        ? await ensureLocalApi().server.refreshHardwareLighting()
+        : await ensureLocalApi().server.getHardwareLightingStatus();
+      setLightingStatus(status);
+    } catch (error) {
+      console.error("[HARDWARE_LIGHTING] Status refresh failed", error);
+      setLightingStatus(null);
+    } finally {
+      setLightingBusy(false);
+    }
+  };
+
+  const commitLightingSettings = async (
+    patch: Parameters<typeof updateClientSettingsConfirmed>[0],
+  ) => {
+    try {
+      await updateClientSettingsConfirmed(patch);
+      await refreshLightingStatus(false);
+    } catch {
+      // The settings hook already reports the failed write and rolls back.
+    }
+  };
+
+  const importHexagonsBackground = async (file: File) => {
+    setBackgroundImportBusy(true);
+    try {
+      let imported: ParsedHexagonsBackground;
+      try {
+        imported = await readHexagonsBackgroundFile(file);
+      } catch (error) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Background was not imported",
+            description:
+              error instanceof Error
+                ? error.message
+                : "Club Code could not read the background file.",
+          }),
+        );
+        return;
+      }
+      try {
+        await updateClientSettingsConfirmed({
+          hexagonsBackgroundPresetJson: imported.serialized,
+        });
+      } catch {
+        // The settings hook reports the failed write and restores the prior preset.
+        return;
+      }
+      toastManager.add(
+        stackedThreadToast({
+          type: "success",
+          title: `Imported ${imported.document.name}`,
+          description: "Turn on the background when you are ready.",
+        }),
+      );
+    } finally {
+      setBackgroundImportBusy(false);
+      if (backgroundFileInputRef.current) backgroundFileInputRef.current.value = "";
+    }
+  };
+
+  const removeHexagonsBackground = async () => {
+    setBackgroundImportBusy(true);
+    try {
+      await updateClientSettingsConfirmed({
+        hexagonsBackgroundEnabled: false,
+        hexagonsBackgroundPresetJson: null,
+      });
+      toastManager.add(stackedThreadToast({ type: "success", title: "Background preset removed" }));
+    } catch {
+      // The settings hook reports the failed write and rolls back the optimistic state.
+    } finally {
+      setBackgroundImportBusy(false);
+    }
+  };
+
   const hasNonDefaultValue =
+    settings.hexagonsBackgroundEnabled !== DEFAULT_HEXAGONS_BACKGROUND_ENABLED ||
+    settings.hexagonsBackgroundPresetJson !== DEFAULT_HEXAGONS_BACKGROUND_PRESET_JSON ||
+    settings.ambientBackgroundManuscriptOpacity !== DEFAULT_AMBIENT_BACKGROUND_MANUSCRIPT_OPACITY ||
+    settings.ambientBackgroundSidebarOpacity !== DEFAULT_AMBIENT_BACKGROUND_SIDEBAR_OPACITY ||
     settings.atmosphereConsoleEnabled !== DEFAULT_ATMOSPHERE_CONSOLE_ENABLED ||
     settings.fallingEffectsEnabled !== DEFAULT_FALLING_EFFECTS_ENABLED ||
     settings.fallingEffectsOverCinemaEnabled !== DEFAULT_FALLING_EFFECTS_OVER_CINEMA_ENABLED ||
@@ -232,6 +373,7 @@ export function WindowAtmosphereSettings() {
     settings.fallingEffectOpacity !== DEFAULT_AMBIENT_OPACITY ||
     settings.fallingEffectSpeed !== DEFAULT_FALLING_EFFECT_SPEED ||
     settings.fallingEffectDensity !== DEFAULT_FALLING_EFFECT_DENSITY ||
+    settings.fallingEffectUsageReactive !== DEFAULT_FALLING_EFFECT_USAGE_REACTIVE ||
     settings.fallingEffectJapaneseRatio !== DEFAULT_FALLING_EFFECT_JAPANESE_RATIO ||
     settings.fallingEffect2chEnriched !== DEFAULT_FALLING_EFFECT_2CH_ENRICHED ||
     settings.fallingEffectLiveWorkVocabulary !== DEFAULT_FALLING_EFFECT_LIVE_WORK_VOCABULARY ||
@@ -244,6 +386,8 @@ export function WindowAtmosphereSettings() {
       DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_BUILD_ENABLED ||
     settings.fallingEffectActivityLinkAgentEnabled !==
       DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_AGENT_ENABLED ||
+    settings.fallingEffectActivityLinkWorkEnabled !==
+      DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_WORK_ENABLED ||
     settings.fallingEffectActivityLinkColorMode !==
       DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_COLOR_MODE ||
     settings.fallingEffectActivityLinkRetentionSeconds !==
@@ -251,6 +395,168 @@ export function WindowAtmosphereSettings() {
 
   return (
     <SettingsSection title="Window atmosphere">
+      <SettingsRow
+        title="The Hexagons background"
+        description="Show an imported .hexbg.json design behind Club Code. Club Code keeps control of falling effects and motion safety."
+        status={
+          hexagonsBackground ? (
+            <span className="text-muted-foreground">
+              Imported preset: {hexagonsBackground.document.name}
+            </span>
+          ) : (
+            <span className="text-muted-foreground">
+              Import a preset before you turn on this background.
+            </span>
+          )
+        }
+        control={
+          <Switch
+            checked={settings.hexagonsBackgroundEnabled && hexagonsBackground !== null}
+            disabled={hexagonsBackground === null || backgroundImportBusy}
+            onCheckedChange={(checked) =>
+              void updateClientSettingsConfirmed({
+                hexagonsBackgroundEnabled: Boolean(checked),
+              }).catch(() => {
+                // The settings hook reports the failed write and rolls back the optimistic state.
+              })
+            }
+            aria-label="Show imported The Hexagons background"
+          />
+        }
+      />
+
+      <SettingsRow
+        title="Background preset"
+        description="Create and edit the preset in The Hexagons. Club Code imports the finished design."
+        control={
+          <div className="flex flex-wrap justify-end gap-2">
+            <input
+              ref={backgroundFileInputRef}
+              className="sr-only"
+              type="file"
+              accept=".hexbg.json,application/json"
+              aria-label="Import The Hexagons background preset"
+              onChange={(event) => {
+                const file = event.currentTarget.files?.[0];
+                if (file) void importHexagonsBackground(file);
+              }}
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={backgroundImportBusy}
+              onClick={() => backgroundFileInputRef.current?.click()}
+            >
+              {hexagonsBackground ? "Replace preset" : "Import preset"}
+            </Button>
+            {hexagonsBackground ? (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={backgroundImportBusy}
+                onClick={() => void removeHexagonsBackground()}
+              >
+                Remove preset
+              </Button>
+            ) : null}
+          </div>
+        }
+      />
+
+      <SettingsRow
+        title="Chat backdrop opacity"
+        description="Set the backdrop opacity behind the chat manuscript and prompt when an ambient background is active. The backdrop stays within the prompt width."
+        resetAction={
+          settings.ambientBackgroundManuscriptOpacity !==
+          DEFAULT_AMBIENT_BACKGROUND_MANUSCRIPT_OPACITY ? (
+            <SettingResetButton
+              label="chat backdrop opacity"
+              onClick={() =>
+                updateSettings({
+                  ambientBackgroundManuscriptOpacity: DEFAULT_AMBIENT_BACKGROUND_MANUSCRIPT_OPACITY,
+                })
+              }
+            />
+          ) : null
+        }
+        control={
+          <div className="flex items-center gap-2">
+            <NumberField
+              value={Math.round(settings.ambientBackgroundManuscriptOpacity * 100)}
+              min={Math.round(MIN_AMBIENT_BACKGROUND_SURFACE_OPACITY * 100)}
+              max={Math.round(MAX_AMBIENT_BACKGROUND_SURFACE_OPACITY * 100)}
+              step={1}
+              largeStep={10}
+              size="sm"
+              className="w-28"
+              onValueChange={(value) =>
+                updateSettings({
+                  ambientBackgroundManuscriptOpacity: clampAmbientBackgroundSurfaceOpacityPercent(
+                    value,
+                    DEFAULT_AMBIENT_BACKGROUND_MANUSCRIPT_OPACITY,
+                  ),
+                })
+              }
+            >
+              <NumberFieldGroup>
+                <NumberFieldDecrement aria-label="Decrease chat backdrop opacity" />
+                <NumberFieldInput aria-label="Chat backdrop opacity percent" />
+                <NumberFieldIncrement aria-label="Increase chat backdrop opacity" />
+              </NumberFieldGroup>
+            </NumberField>
+            <span className="text-xs text-muted-foreground">%</span>
+          </div>
+        }
+      />
+
+      <SettingsRow
+        title="Sidebar backdrop opacity"
+        description="Set one backdrop opacity for the left navigation sidebar and right details panels when an ambient background is active. This setting also applies to mobile sheets."
+        resetAction={
+          settings.ambientBackgroundSidebarOpacity !==
+          DEFAULT_AMBIENT_BACKGROUND_SIDEBAR_OPACITY ? (
+            <SettingResetButton
+              label="sidebar backdrop opacity"
+              onClick={() =>
+                updateSettings({
+                  ambientBackgroundSidebarOpacity: DEFAULT_AMBIENT_BACKGROUND_SIDEBAR_OPACITY,
+                })
+              }
+            />
+          ) : null
+        }
+        control={
+          <div className="flex items-center gap-2">
+            <NumberField
+              value={Math.round(settings.ambientBackgroundSidebarOpacity * 100)}
+              min={Math.round(MIN_AMBIENT_BACKGROUND_SURFACE_OPACITY * 100)}
+              max={Math.round(MAX_AMBIENT_BACKGROUND_SURFACE_OPACITY * 100)}
+              step={1}
+              largeStep={10}
+              size="sm"
+              className="w-28"
+              onValueChange={(value) =>
+                updateSettings({
+                  ambientBackgroundSidebarOpacity: clampAmbientBackgroundSurfaceOpacityPercent(
+                    value,
+                    DEFAULT_AMBIENT_BACKGROUND_SIDEBAR_OPACITY,
+                  ),
+                })
+              }
+            >
+              <NumberFieldGroup>
+                <NumberFieldDecrement aria-label="Decrease sidebar backdrop opacity" />
+                <NumberFieldInput aria-label="Sidebar backdrop opacity percent" />
+                <NumberFieldIncrement aria-label="Increase sidebar backdrop opacity" />
+              </NumberFieldGroup>
+            </NumberField>
+            <span className="text-xs text-muted-foreground">%</span>
+          </div>
+        }
+      />
+
       <SettingsRow
         title="Falling effects"
         description="Let snow, rain, or Matrix characters drift across the whole Club Code window."
@@ -267,6 +573,10 @@ export function WindowAtmosphereSettings() {
               label="window atmosphere"
               onClick={() =>
                 updateSettings({
+                  hexagonsBackgroundEnabled: DEFAULT_HEXAGONS_BACKGROUND_ENABLED,
+                  hexagonsBackgroundPresetJson: DEFAULT_HEXAGONS_BACKGROUND_PRESET_JSON,
+                  ambientBackgroundManuscriptOpacity: DEFAULT_AMBIENT_BACKGROUND_MANUSCRIPT_OPACITY,
+                  ambientBackgroundSidebarOpacity: DEFAULT_AMBIENT_BACKGROUND_SIDEBAR_OPACITY,
                   atmosphereConsoleEnabled: DEFAULT_ATMOSPHERE_CONSOLE_ENABLED,
                   fallingEffectsEnabled: DEFAULT_FALLING_EFFECTS_ENABLED,
                   fallingEffectsOverCinemaEnabled: DEFAULT_FALLING_EFFECTS_OVER_CINEMA_ENABLED,
@@ -288,6 +598,7 @@ export function WindowAtmosphereSettings() {
                   fallingEffectOpacity: DEFAULT_AMBIENT_OPACITY,
                   fallingEffectSpeed: DEFAULT_FALLING_EFFECT_SPEED,
                   fallingEffectDensity: DEFAULT_FALLING_EFFECT_DENSITY,
+                  fallingEffectUsageReactive: DEFAULT_FALLING_EFFECT_USAGE_REACTIVE,
                   fallingEffectJapaneseRatio: DEFAULT_FALLING_EFFECT_JAPANESE_RATIO,
                   fallingEffect2chEnriched: DEFAULT_FALLING_EFFECT_2CH_ENRICHED,
                   fallingEffectActivityLinks: DEFAULT_FALLING_EFFECT_ACTIVITY_LINKS,
@@ -299,6 +610,8 @@ export function WindowAtmosphereSettings() {
                     DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_BUILD_ENABLED,
                   fallingEffectActivityLinkAgentEnabled:
                     DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_AGENT_ENABLED,
+                  fallingEffectActivityLinkWorkEnabled:
+                    DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_WORK_ENABLED,
                   fallingEffectActivityLinkColorMode:
                     DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_COLOR_MODE,
                   fallingEffectActivityLinkRetentionSeconds:
@@ -334,6 +647,146 @@ export function WindowAtmosphereSettings() {
           />
         }
       />
+
+      <SettingsRow
+        title="Keyboard & case RGB"
+        description="Mirror the resolved Matrix palette to compatible devices through OpenRGB's local SDK server. Club Code connects only to 127.0.0.1:6742, never scans the network, and restores the previous lighting when sync stops by default."
+        status={
+          <span
+            className={
+              lightingStatus?.state === "active"
+                ? "text-emerald-600 dark:text-emerald-400"
+                : lightingStatus?.state === "error" || lightingStatus?.state === "unavailable"
+                  ? "text-amber-600 dark:text-amber-400"
+                  : undefined
+            }
+          >
+            {lightingStatus?.detail ??
+              "OpenRGB status is not available until the local backend is connected."}
+          </span>
+        }
+        control={
+          <div className="flex items-center gap-2">
+            <Button
+              size="xs"
+              variant="outline"
+              disabled={lightingBusy}
+              onClick={() => void refreshLightingStatus(true)}
+            >
+              {lightingBusy ? "Checking…" : "Refresh devices"}
+            </Button>
+            <Switch
+              checked={settings.hardwareLightingSyncEnabled}
+              disabled={!atmosphereAvailable || lightingBusy}
+              onCheckedChange={(checked) =>
+                void commitLightingSettings({ hardwareLightingSyncEnabled: Boolean(checked) })
+              }
+              aria-label="Sync Matrix palette to keyboard and case RGB"
+            />
+          </div>
+        }
+      >
+        <div className="mt-3 space-y-3 border-t border-border/50 py-3">
+          {lightingStatus?.controllers.length ? (
+            <div className="grid gap-2 sm:grid-cols-2">
+              {lightingStatus.controllers.map((controller) => {
+                const selected = settings.hardwareLightingControllerIds.includes(controller.id);
+                return (
+                  <label
+                    key={controller.id}
+                    className="flex min-w-0 cursor-pointer items-start gap-2 rounded-lg border border-border/55 bg-background/35 px-3 py-2 text-xs has-data-disabled:cursor-not-allowed has-data-disabled:opacity-55"
+                  >
+                    <Checkbox
+                      checked={selected}
+                      disabled={!controller.supported || lightingBusy}
+                      aria-label={`${selected ? "Remove" : "Add"} ${controller.name} lighting controller`}
+                      onCheckedChange={(checked) => {
+                        const next = checked
+                          ? [...settings.hardwareLightingControllerIds, controller.id]
+                          : settings.hardwareLightingControllerIds.filter(
+                              (id) => id !== controller.id,
+                            );
+                        void commitLightingSettings({ hardwareLightingControllerIds: next });
+                      }}
+                    />
+                    <span className="min-w-0">
+                      <span className="block truncate font-medium text-foreground">
+                        {controller.name || "Unnamed OpenRGB controller"}
+                      </span>
+                      <span className="block truncate text-[11px] text-muted-foreground">
+                        {[controller.vendor, controller.type, `${controller.ledCount} LEDs`]
+                          .filter(Boolean)
+                          .join(" · ")}
+                        {controller.supported ? "" : " · Direct color mode unavailable"}
+                      </span>
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              Start OpenRGB, enable its SDK server, then choose Refresh devices. OpenRGB remains the
+              hardware/vendor compatibility layer; Club Code never launches vendor tools.
+            </p>
+          )}
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <label className="flex items-center gap-2 text-xs text-muted-foreground">
+              Brightness
+              <NumberField
+                value={Math.round(settings.hardwareLightingBrightness * 100)}
+                min={5}
+                max={100}
+                step={5}
+                size="sm"
+                className="w-24"
+                onValueCommitted={(value) => {
+                  const percent =
+                    value === null ? DEFAULT_HARDWARE_LIGHTING_BRIGHTNESS * 100 : value;
+                  void commitLightingSettings({
+                    hardwareLightingBrightness: Math.min(1, Math.max(0.05, percent / 100)),
+                  });
+                }}
+              >
+                <NumberFieldGroup>
+                  <NumberFieldDecrement aria-label="Decrease hardware lighting brightness" />
+                  <NumberFieldInput aria-label="Hardware lighting brightness percent" />
+                  <NumberFieldIncrement aria-label="Increase hardware lighting brightness" />
+                </NumberFieldGroup>
+              </NumberField>
+              <span>%</span>
+            </label>
+            <label className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Checkbox
+                checked={settings.hardwareLightingRestoreOnDisable}
+                onCheckedChange={(checked) =>
+                  void commitLightingSettings({
+                    hardwareLightingRestoreOnDisable: Boolean(checked),
+                  })
+                }
+                aria-label="Restore previous lighting when Matrix sync stops"
+              />
+              Restore previous lighting when sync stops
+            </label>
+            {(settings.hardwareLightingBrightness !== DEFAULT_HARDWARE_LIGHTING_BRIGHTNESS ||
+              settings.hardwareLightingRestoreOnDisable !==
+                DEFAULT_HARDWARE_LIGHTING_RESTORE_ON_DISABLE) && (
+              <Button
+                size="xs"
+                variant="ghost"
+                onClick={() =>
+                  void commitLightingSettings({
+                    hardwareLightingBrightness: DEFAULT_HARDWARE_LIGHTING_BRIGHTNESS,
+                    hardwareLightingRestoreOnDisable: DEFAULT_HARDWARE_LIGHTING_RESTORE_ON_DISABLE,
+                  })
+                }
+              >
+                Reset lighting options
+              </Button>
+            )}
+          </div>
+        </div>
+      </SettingsRow>
 
       {controlsEnabled ? (
         <SettingsRow
@@ -689,7 +1142,7 @@ export function WindowAtmosphereSettings() {
             <>
               <SettingsRow
                 title="Activity inputs"
-                description="Choose which safe provider-observed activity categories may create Matrix pulses and connecting lines. Clear every checkbox to show no activity overlay."
+                description="Choose which safe provider-observed activity may create Matrix pulses and connecting lines. Work means an exact tool lifecycle whose narrower category is unknown; it never guesses from command text, paths, or output. Clear every checkbox to show no activity overlay."
                 control={
                   <div
                     role="group"
@@ -739,6 +1192,17 @@ export function WindowAtmosphereSettings() {
                         }
                       />
                       <span>Agent / delegation</span>
+                    </label>
+                    <label className="flex cursor-pointer items-center gap-1.5 text-xs font-medium">
+                      <Checkbox
+                        checked={settings.fallingEffectActivityLinkWorkEnabled}
+                        onCheckedChange={(checked) =>
+                          updateSettings({
+                            fallingEffectActivityLinkWorkEnabled: Boolean(checked),
+                          })
+                        }
+                      />
+                      <span>Work / tool</span>
                     </label>
                   </div>
                 }
@@ -878,6 +1342,32 @@ export function WindowAtmosphereSettings() {
             </NumberField>
             <span className="text-xs text-muted-foreground">%</span>
           </div>
+        }
+      />
+
+      <SettingsRow
+        title="Usage-reactive rain and snow"
+        description="Use aggregate output-token throughput across every thread and project on this Club Code server. Your speed and density settings remain the calm baseline; active output raises them smoothly within the existing renderer caps and fades over about five seconds. No prompts, filenames, or thread identities enter the effect."
+        status={
+          settings.fallingEffectUsageReactive && !settings.usageStatsEnabled ? (
+            <span className="text-amber-600 dark:text-amber-400">
+              Usage collection is off, so the atmosphere will remain at its baseline.
+            </span>
+          ) : settings.fallingEffectKind === "matrix" ? (
+            <span className="text-muted-foreground">
+              Select rain or snow to see token-rate reactivity.
+            </span>
+          ) : null
+        }
+        control={
+          <Switch
+            checked={settings.fallingEffectUsageReactive}
+            disabled={!controlsEnabled}
+            onCheckedChange={(checked) =>
+              updateSettings({ fallingEffectUsageReactive: Boolean(checked) })
+            }
+            aria-label="Make rain and snow react to aggregate token usage"
+          />
         }
       />
 

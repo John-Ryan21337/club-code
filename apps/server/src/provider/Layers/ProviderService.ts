@@ -1479,18 +1479,17 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         ),
       );
       const activeSessions = sessionsByProvider.flatMap((sessions) => sessions);
-      const persistedBindings = yield* directory.listThreadIds().pipe(
-        Effect.flatMap((threadIds) =>
-          Effect.forEach(
-            threadIds,
-            (threadId) =>
-              directory
-                .getBinding(threadId)
-                .pipe(Effect.orElseSucceed(() => Option.none<ProviderRuntimeBinding>())),
-            { concurrency: "unbounded" },
-          ),
-        ),
-        Effect.orElseSucceed(() => [] as Array<Option.Option<ProviderRuntimeBinding>>),
+      // Only live adapter sessions can be returned below. Reading every
+      // historical binding made this prompt-critical RPC scale with the full
+      // lifetime of the database and amplified SQLite contention during heavy
+      // multi-agent runs. Resolve bindings only for the active session set.
+      const persistedBindings = yield* Effect.forEach(
+        activeSessions,
+        (session) =>
+          directory
+            .getBinding(session.threadId)
+            .pipe(Effect.orElseSucceed(() => Option.none<ProviderRuntimeBinding>())),
+        { concurrency: 8 },
       );
       const bindingsByThreadId = new Map<ThreadId, ProviderRuntimeBinding>();
       for (const bindingOption of persistedBindings) {

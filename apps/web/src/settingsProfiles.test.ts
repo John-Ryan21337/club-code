@@ -45,6 +45,7 @@ describe("settings profile library", () => {
       ambianceEnabled: true,
       ambianceReactMode: "live",
       fallingEffectLiveWorkVocabulary: true,
+      fallingEffectUsageReactive: true,
       fallingEffectActivityLinks: true,
       fallingEffectActivityLinkNetworkEnabled: true,
       fallingEffectActivityLinkDatabaseEnabled: true,
@@ -53,6 +54,7 @@ describe("settings profile library", () => {
       ambientVideoLayoutMode: "custom",
       ambientImageGlowOpacity: 0.42,
       mobileOptimizedPresentation: true,
+      showComposerThreadAutomationControls: true,
       timestampFormat: "24-hour",
       notificationsEnabled: true,
       completionAlertSoundEnabled: true,
@@ -66,6 +68,10 @@ describe("settings profile library", () => {
       ambientImageAsset: CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET,
       ambientImageCycleAssets: [CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET],
       ambientImageCycleEnabled: true,
+      hexagonsBackgroundEnabled: true,
+      hexagonsBackgroundPresetJson: '{"kind":"the-hexagons-background"}',
+      ambientBackgroundManuscriptOpacity: 0.44,
+      ambientBackgroundSidebarOpacity: 0.63,
       providerUsageWidgetEnabled: true,
       providerUsagePollMinutes: 1,
       defaultEditor: "vscode",
@@ -103,21 +109,27 @@ describe("settings profile library", () => {
 
     expect(payload.theme).toBe("dark");
     expect(payload.clientSettings.ambientVideoLayoutMode).toBe("custom");
-    expect(payload.clientSettings.ambientVideoEnabled).toBe(true);
+    expect(payload.clientSettings).not.toHaveProperty("ambientVideoEnabled");
     expect(payload.clientSettings.ambientVideoSource).toEqual({
       kind: "video",
       id: "dQw4w9WgXcQ",
     });
-    expect(payload.clientSettings.ambientImageEnabled).toBe(true);
+    expect(payload.clientSettings).not.toHaveProperty("ambientImageEnabled");
     expect(payload.clientSettings.ambientImageAsset).toEqual(
       CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET,
     );
     expect(payload.clientSettings.ambientImageCycleAssets).toEqual([
       CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET,
     ]);
-    expect(payload.clientSettings.ambientImageCycleEnabled).toBe(true);
+    expect(payload.clientSettings).not.toHaveProperty("ambientImageCycleEnabled");
     expect(payload.clientSettings.ambientImageGlowOpacity).toBe(0.42);
+    expect(payload.clientSettings.hexagonsBackgroundPresetJson).toBe(
+      '{"kind":"the-hexagons-background"}',
+    );
+    expect(payload.clientSettings.ambientBackgroundManuscriptOpacity).toBe(0.44);
+    expect(payload.clientSettings.ambientBackgroundSidebarOpacity).toBe(0.63);
     expect(payload.clientSettings.mobileOptimizedPresentation).toBe(true);
+    expect(payload.clientSettings.showComposerThreadAutomationControls).toBe(true);
     expect(payload.clientSettings.timestampFormat).toBe("24-hour");
     expect(Object.keys(payload.clientSettings)).toEqual([...SETTINGS_PROFILE_CLIENT_KEYS]);
     expect(payload.clientSettings).not.toHaveProperty("fallingEffectsEnabled");
@@ -125,7 +137,9 @@ describe("settings profile library", () => {
     expect(payload.clientSettings).not.toHaveProperty("fallingEffectsOverCinemaEnabled");
     expect(payload.clientSettings).not.toHaveProperty("ambianceEnabled");
     expect(payload.clientSettings).not.toHaveProperty("ambianceReactMode");
+    expect(payload.clientSettings).not.toHaveProperty("hexagonsBackgroundEnabled");
     expect(payload.clientSettings).not.toHaveProperty("fallingEffectLiveWorkVocabulary");
+    expect(payload.clientSettings).not.toHaveProperty("fallingEffectUsageReactive");
     expect(payload.clientSettings).not.toHaveProperty("fallingEffectActivityLinks");
     expect(payload.clientSettings).not.toHaveProperty("fallingEffectActivityLinkNetworkEnabled");
     expect(payload.clientSettings).not.toHaveProperty("fallingEffectActivityLinkDatabaseEnabled");
@@ -178,6 +192,7 @@ describe("settings profile library", () => {
       atmosphereConsoleEnabled: "ambient-activation",
       fallingEffectsOverCinemaEnabled: "ambient-activation",
       fallingEffectLiveWorkVocabulary: "live-operational-input",
+      fallingEffectUsageReactive: "live-operational-input",
       fallingEffectActivityLinks: "live-operational-input",
       fallingEffectActivityLinkNetworkEnabled: "live-operational-input",
       fallingEffectActivityLinkDatabaseEnabled: "live-operational-input",
@@ -185,12 +200,16 @@ describe("settings profile library", () => {
       fallingEffectActivityLinkAgentEnabled: "live-operational-input",
       ambianceEnabled: "ambient-activation",
       ambianceReactMode: "live-operational-input",
-      ambientVideoEnabled: "include",
+      ambientVideoEnabled: "external-media-activation",
       ambientVideoSource: "include",
-      ambientImageEnabled: "include",
+      ambientImageEnabled: "external-media-activation",
       ambientImageAsset: "include",
       ambientImageCycleAssets: "include",
-      ambientImageCycleEnabled: "include",
+      ambientImageCycleEnabled: "external-media-activation",
+      hexagonsBackgroundEnabled: "ambient-activation",
+      hexagonsBackgroundPresetJson: "include",
+      ambientBackgroundManuscriptOpacity: "include",
+      ambientBackgroundSidebarOpacity: "include",
       sidebarBrandImage: "local-asset-reference",
       sidebarBrandImageDataUrl: "local-asset-reference",
       providerUsageWidgetEnabled: "provider-operation",
@@ -465,12 +484,9 @@ describe("settings profile library", () => {
     expect(profile?.clientSettings).toEqual({
       fallingEffectOpacity: 0.42,
       timestampFormat: "24-hour",
-      ambientVideoEnabled: true,
       ambientVideoSource: { kind: "video", id: "dQw4w9WgXcQ" },
-      ambientImageEnabled: true,
       ambientImageAsset: CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET,
       ambientImageCycleAssets: [CLUB_CODE_FIRST_RUN_AMBIENT_IMAGE_ASSET],
-      ambientImageCycleEnabled: true,
     });
     expect(profile?.clientSettings).not.toHaveProperty("fallingEffectsEnabled");
     expect(profile?.clientSettings).not.toHaveProperty("atmosphereConsoleEnabled");
@@ -480,6 +496,9 @@ describe("settings profile library", () => {
     expect(profile?.clientSettings).not.toHaveProperty("completionAlertSpeechEnabled");
     expect(profile?.clientSettings).not.toHaveProperty("notificationsEnabled");
     expect(profile?.clientSettings).not.toHaveProperty("worldClockWeatherEnabled");
+    expect(profile?.clientSettings).not.toHaveProperty("ambientVideoEnabled");
+    expect(profile?.clientSettings).not.toHaveProperty("ambientImageEnabled");
+    expect(profile?.clientSettings).not.toHaveProperty("ambientImageCycleEnabled");
     expect(profile?.clientSettings).not.toHaveProperty("providerUsageWidgetEnabled");
     expect(profile?.clientSettings).not.toHaveProperty("providerUsagePollMinutes");
     expect(profile?.clientSettings).not.toHaveProperty("defaultEditor");
@@ -575,7 +594,7 @@ describe("settings profile library", () => {
     });
   });
 
-  it("retains ambient media while re-scrubbing unsafe fields in a current document", () => {
+  it("retains safe media configuration while scrubbing activation from a current document", () => {
     const storage = createStorage({
       [SETTINGS_PROFILE_LIBRARY_STORAGE_KEY]: JSON.stringify({
         version: SETTINGS_PROFILE_LIBRARY_VERSION,
@@ -603,12 +622,11 @@ describe("settings profile library", () => {
 
     expect(restored.resolve("profile:desktop")?.clientSettings).toEqual({
       chatCopyFormat: "plainText",
-      ambientImageEnabled: true,
     });
     expect(persisted.profiles[0].clientSettings).toEqual({
       chatCopyFormat: "plainText",
-      ambientImageEnabled: true,
     });
+    expect(persisted.profiles[0].clientSettings).not.toHaveProperty("ambientImageEnabled");
     expect(persisted.profiles[0].clientSettings).not.toHaveProperty("ambientVideoSource");
     expect(persisted.profiles[0].clientSettings).not.toHaveProperty("ambientImageAsset");
     expect(persisted.profiles[0].clientSettings).not.toHaveProperty("serverPassword");

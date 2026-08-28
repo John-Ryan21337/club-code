@@ -43,6 +43,7 @@ import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/unstable/process";
@@ -88,6 +89,15 @@ const isCodexResumeCursorSchema = Schema.is(CodexResumeCursorSchema);
 const PROVIDER = ProviderDriverKind.make("codex");
 const CODEX_TRANSPORT_POLICY_FILENAME = "codex-transport-policy.json";
 const CODEX_TRANSPORT_POLICY_PERSISTENCE_ENV = "CAFE_CODE_PERSIST_CODEX_HTTP_FALLBACK";
+// Operator policy (2026-08-28): Codex model streaming always uses the HTTPS
+// Responses transport. Codex CLI 0.150.x's Responses WebSocket link is closed
+// by the server before `response.completed` on long-context threads, and each
+// fresh app-server session burned five reconnect attempts before its official
+// fallback, which showed up as a hard stall after every prompt. Set
+// `CAFE_CODE_CODEX_RESPONSES_WEBSOCKETS=1` to restore upstream-parity
+// WebSocket-first behavior for comparison runs.
+const CODEX_RESPONSES_WEBSOCKETS_ENV = "CAFE_CODE_CODEX_RESPONSES_WEBSOCKETS";
+const CODEX_HTTPS_ONLY_POLICY_REASON = "operator_policy_https_only";
 const CODEX_WEBSOCKET_FALLBACK_REASON = "responses_websocket_stream_disconnected";
 const CODEX_TURN_DIFF_PREVIEW_CHARS = 4_096;
 const CODEX_HOOK_OUTPUT_PREVIEW_CHARS = 4_096;
@@ -177,6 +187,23 @@ function readPayload<A>(
 ): A | undefined {
   const isPayload = Schema.is(schema);
   return isPayload(payload) ? payload : undefined;
+}
+
+function normalizeToolRequestUserInputPayload(
+  payload: ProviderEvent["payload"],
+): ProviderEvent["payload"] {
+  if (
+    payload === null ||
+    typeof payload !== "object" ||
+    Array.isArray(payload) ||
+    "isBlocking" in payload
+  ) {
+    return payload;
+  }
+
+  // Codex 0.147 publishes isBlocking as required, while its wire decoder still
+  // accepts older app-server requests without it and treats those as blocking.
+  return { ...payload, isBlocking: true };
 }
 
 function trimText(value: string | undefined | null): string | undefined {
@@ -305,6 +332,11 @@ function isCodexAuthInvalidatedEvent(event: ProviderEvent): boolean {
 
 function isCodexTransportPolicyPersistenceEnabled(environment: NodeJS.ProcessEnv): boolean {
   const value = environment[CODEX_TRANSPORT_POLICY_PERSISTENCE_ENV]?.trim().toLowerCase();
+  return value === "1" || value === "true" || value === "yes";
+}
+
+export function isCodexResponsesWebsocketsAllowed(environment: NodeJS.ProcessEnv): boolean {
+  const value = environment[CODEX_RESPONSES_WEBSOCKETS_ENV]?.trim().toLowerCase();
   return value === "1" || value === "true" || value === "yes";
 }
 
@@ -1196,9 +1228,12 @@ function mapToRuntimeEvents(
 
   if (event.kind === "request") {
     if (event.method === "item/tool/requestUserInput") {
+      const normalizedPayload = normalizeToolRequestUserInputPayload(event.payload);
       const payload =
-        readPayload(EffectCodexSchema.ServerRequest__ToolRequestUserInputParams, event.payload) ??
-        readPayload(EffectCodexSchema.ToolRequestUserInputParams, event.payload);
+        readPayload(
+          EffectCodexSchema.ServerRequest__ToolRequestUserInputParams,
+          normalizedPayload,
+        ) ?? readPayload(EffectCodexSchema.ToolRequestUserInputParams, normalizedPayload);
       const questions = payload ? toUserInputQuestions(payload.questions) : undefined;
       if (!questions) {
         return [];
@@ -2463,12 +2498,29 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     binaryPath: codexConfig.binaryPath,
     ...(codexConfig.homePath ? { homePath: codexConfig.homePath } : {}),
   });
-  const transportPolicyPersistenceEnabled = isCodexTransportPolicyPersistenceEnabled(
-    options?.environment ?? process.env,
-  );
-  const initialTransportPolicy = transportPolicyPersistenceEnabled
-    ? yield* loadCodexTransportPolicy(transportPolicyPath, transportPolicyKey)
-    : undefined;
+  const adapterEnvironment = options?.environment ?? process.env;
+  const transportPolicyPersistenceEnabled =
+    isCodexTransportPolicyPersistenceEnabled(adapterEnvironment);
+  const responsesWebsocketsAllowed = isCodexResponsesWebsocketsAllowed(adapterEnvironment);
+  const initialTransportPolicy: CodexTransportPolicyEntry | undefined = responsesWebsocketsAllowed
+    ? transportPolicyPersistenceEnabled
+      ? yield* loadCodexTransportPolicy(transportPolicyPath, transportPolicyKey)
+      : undefined
+    : {
+        responsesWebsockets: "disabled",
+        reason: CODEX_HTTPS_ONLY_POLICY_REASON,
+        observedAt: DateTime.formatIso(yield* DateTime.now),
+        source: "cafe.operator-policy",
+      };
+  if (!responsesWebsocketsAllowed) {
+    yield* Effect.logInfo("codex.transportPolicy.httpsOnly", {
+      instanceId: boundInstanceId,
+      reason: CODEX_HTTPS_ONLY_POLICY_REASON,
+      optIn: CODEX_RESPONSES_WEBSOCKETS_ENV,
+      semantics:
+        "Every Codex app-server launched by Club Code uses a Cafe-scoped OpenAI provider with supports_websockets=false, so model streaming goes over the HTTPS Responses transport without WebSocket reconnect attempts.",
+    });
+  }
   const transportPolicyRef = yield* Ref.make<CodexTransportPolicyEntry | undefined>(
     initialTransportPolicy,
   );
@@ -2483,7 +2535,61 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     options?.nativeEventLogger === undefined ? nativeEventLogger : undefined;
   const runtimeEventQueue = yield* Queue.unbounded<ProviderRuntimeEvent>();
   const sessions = new Map<ThreadId, CodexAdapterSessionContext>();
+  type SessionLifecycleLockEntry = {
+    readonly semaphore: Semaphore.Semaphore;
+    readonly users: number;
+  };
+  const sessionLifecycleLocksRef = yield* Ref.make<
+    ReadonlyMap<ThreadId, SessionLifecycleLockEntry>
+  >(new Map());
   const prepareRuntimeHome = options?.prepareRuntimeHome ?? Effect.void;
+
+  const acquireSessionLifecycleLock = Effect.fn("CodexAdapter.acquireSessionLifecycleLock")(
+    function* (threadId: ThreadId) {
+      const created = yield* Semaphore.make(1);
+      return yield* Ref.modify(sessionLifecycleLocksRef, (locks) => {
+        const existing = locks.get(threadId);
+        const entry = existing
+          ? { semaphore: existing.semaphore, users: existing.users + 1 }
+          : { semaphore: created, users: 1 };
+        const next = new Map(locks);
+        next.set(threadId, entry);
+        return [entry, next] as const;
+      });
+    },
+  );
+
+  const releaseSessionLifecycleLock = Effect.fn("CodexAdapter.releaseSessionLifecycleLock")(
+    function* (threadId: ThreadId, entry: SessionLifecycleLockEntry) {
+      yield* Ref.update(sessionLifecycleLocksRef, (locks) => {
+        const current = locks.get(threadId);
+        if (!current || current.semaphore !== entry.semaphore) {
+          return locks;
+        }
+        const next = new Map(locks);
+        if (current.users <= 1) {
+          next.delete(threadId);
+        } else {
+          next.set(threadId, { semaphore: current.semaphore, users: current.users - 1 });
+        }
+        return next;
+      });
+    },
+  );
+
+  const withSessionLifecycleLock = <A, E, R>(
+    threadId: ThreadId,
+    effect: Effect.Effect<A, E, R>,
+  ): Effect.Effect<A, E, R> =>
+    Effect.flatMap(acquireSessionLifecycleLock(threadId), (entry) =>
+      // Count waiters as well as the current holder. Removing the keyed lock
+      // only after the last participant exits prevents a late waiter from
+      // acquiring a different semaphore while an earlier operation still
+      // owns this thread, without retaining one lock per historical thread.
+      entry.semaphore
+        .withPermits(1)(effect)
+        .pipe(Effect.ensuring(releaseSessionLifecycleLock(threadId, entry))),
+    );
 
   const prepareRuntimeHomeForSession = Effect.fn("CodexAdapter.prepareRuntimeHomeForSession")(
     function* (threadId: ThreadId, operation: string) {
@@ -2639,7 +2745,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
   ): Effect.Effect<void> =>
     retireSession(threadId, reason, "codex.session.retired-after-transport-fallback");
 
-  const startSession: CodexAdapterShape["startSession"] = (input) =>
+  const startSessionUnlocked: CodexAdapterShape["startSession"] = (input) =>
     Effect.scoped(
       Effect.gen(function* () {
         if (input.provider !== undefined && input.provider !== PROVIDER) {
@@ -2683,6 +2789,9 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
             ? { resumeCursor: input.resumeCursor }
             : {}),
           runtimeMode: input.runtimeMode,
+          ...(input.codexSubagentThreadLimit !== undefined
+            ? { codexSubagentThreadLimit: input.codexSubagentThreadLimit }
+            : {}),
           autoCompactTokenLimit: effectiveAutoCompactTokenLimit,
           ultraCaching: codexConfig.ultraCaching,
           ossMode: codexConfig.ossMode,
@@ -2870,6 +2979,9 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
         return started;
       }),
     );
+
+  const startSession: CodexAdapterShape["startSession"] = (input) =>
+    withSessionLifecycleLock(input.threadId, startSessionUnlocked(input));
 
   const resolveAttachment = Effect.fn("resolveAttachment")(function* (
     method: "turn/start" | "turn/steer",
@@ -3114,13 +3226,16 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
   });
 
   const stopSession: CodexAdapterShape["stopSession"] = (threadId) =>
-    Effect.gen(function* () {
-      const session = sessions.get(threadId);
-      if (!session) {
-        return;
-      }
-      yield* stopSessionInternal(session);
-    });
+    withSessionLifecycleLock(
+      threadId,
+      Effect.gen(function* () {
+        const session = sessions.get(threadId);
+        if (!session) {
+          return;
+        }
+        yield* stopSessionInternal(session);
+      }),
+    );
 
   const listSessions: CodexAdapterShape["listSessions"] = () =>
     Effect.forEach(

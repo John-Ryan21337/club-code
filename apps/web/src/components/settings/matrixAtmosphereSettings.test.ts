@@ -25,6 +25,7 @@ describe("global Matrix atmosphere reset", () => {
       fallingEffectActivityLinkDatabaseEnabled: false,
       fallingEffectActivityLinkBuildEnabled: false,
       fallingEffectActivityLinkAgentEnabled: false,
+      fallingEffectActivityLinkWorkEnabled: false,
       fallingEffectActivityLinkColorMode: "matrix" as const,
       fallingEffectActivityLinkRetentionSeconds: 90,
     };
@@ -60,6 +61,7 @@ describe("global Matrix atmosphere reset", () => {
       fallingEffectActivityLinkDatabaseEnabled: true,
       fallingEffectActivityLinkBuildEnabled: true,
       fallingEffectActivityLinkAgentEnabled: true,
+      fallingEffectActivityLinkWorkEnabled: true,
       fallingEffectActivityLinkColorMode: "random",
       fallingEffectActivityLinkRetentionSeconds: 30,
     });

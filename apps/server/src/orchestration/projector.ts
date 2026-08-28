@@ -800,6 +800,16 @@ export function projectEvent(
                   item.status === "reserving" ||
                   item.activationCommandId !== payload.activationCommandId,
               ),
+              session:
+                thread.session?.status === "running" && thread.session.activeTurnId !== null
+                  ? {
+                      ...thread.session,
+                      updatedAt:
+                        thread.session.updatedAt > payload.acceptedAt
+                          ? thread.session.updatedAt
+                          : payload.acceptedAt,
+                    }
+                  : thread.session,
               updatedAt: payload.acceptedAt,
             }),
           };
@@ -983,6 +993,13 @@ export function projectEvent(
           event.type,
           "session",
         );
+        if (
+          thread.session !== null &&
+          session.status === "starting" &&
+          session.updatedAt < thread.session.updatedAt
+        ) {
+          return nextBase;
+        }
         const existingActiveTurnId =
           thread.session?.activeTurnId ??
           (thread.latestTurn?.state === "running" ? thread.latestTurn.turnId : null);
@@ -1223,7 +1240,10 @@ export function projectEvent(
           .toSorted((left, right) => left.checkpointTurnCount - right.checkpointTurnCount)
           .slice(-MAX_THREAD_CHECKPOINTS);
 
-        const preservesTurnLifecycle = payload.status === "missing";
+        const preservesTurnLifecycle =
+          payload.status === "missing" ||
+          (thread.session?.activeTurnId === payload.turnId &&
+            thread.session.updatedAt > payload.completedAt);
         const promotesLatestTurn =
           thread.latestTurn === null || thread.latestTurn.turnId === payload.turnId;
 

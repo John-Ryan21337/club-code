@@ -738,6 +738,96 @@ it.effect("keeps automatic follow-ups queued across Stop until an operator expli
   }),
 );
 
+it.effect("starts a new operator follow-up queued after an interrupted terminal boundary", () =>
+  Effect.gen(function* () {
+    const interruptedThread = makeThread();
+    let readModel = makeReadModel({
+      ...interruptedThread,
+      latestTurn: interruptedThread.latestTurn
+        ? {
+            ...interruptedThread.latestTurn,
+            state: "interrupted",
+            completedAt: "2026-07-28T11:59:59.000Z",
+          }
+        : null,
+      session: interruptedThread.session
+        ? {
+            ...interruptedThread.session,
+            status: "interrupted",
+            // A late provider-history replay can update the session after the
+            // follow-up was queued. This is not an explicit Stop barrier.
+            updatedAt: "2026-07-28T12:00:01.000Z",
+          }
+        : null,
+    });
+    readModel = yield* projectEvents(readModel, yield* reserveAndEnqueue(readModel, 1));
+
+    const activated = asEvents(
+      yield* decideOrchestrationCommand({
+        readModel,
+        command: {
+          type: "thread.manual-follow-up.activate",
+          commandId: CommandId.make("command-activate-after-interrupted-boundary"),
+          threadId: THREAD_ID,
+          followUpId: ManualFollowUpId.make("follow-up-1"),
+          activationMode: "automatic-after-settlement",
+          createdAt: NOW,
+        },
+      }),
+    );
+
+    assert.deepStrictEqual(
+      activated.map((event) => event.type),
+      ["thread.manual-follow-up-activated", "thread.message-sent", "thread.turn-start-requested"],
+    );
+  }),
+);
+
+it.effect("keeps an older queued follow-up behind a later explicit Stop barrier", () =>
+  Effect.gen(function* () {
+    const completedThread = makeThread();
+    let readModel = makeReadModel({
+      ...completedThread,
+      latestTurn: completedThread.latestTurn
+        ? {
+            ...completedThread.latestTurn,
+            completedAt: "2026-07-28T11:59:59.000Z",
+          }
+        : null,
+    });
+    readModel = yield* projectEvents(readModel, yield* reserveAndEnqueue(readModel, 1));
+    const queuedBeforeStop = readModel.threads[0];
+    assert.ok(queuedBeforeStop);
+    readModel = makeReadModel({
+      ...queuedBeforeStop,
+      session: queuedBeforeStop.session
+        ? {
+            ...queuedBeforeStop.session,
+            status: "stopped",
+            updatedAt: "2026-07-28T12:00:01.000Z",
+          }
+        : null,
+    });
+
+    const automatic = yield* Effect.flip(
+      decideOrchestrationCommand({
+        readModel,
+        command: {
+          type: "thread.manual-follow-up.activate",
+          commandId: CommandId.make("command-activate-queued-before-stop"),
+          threadId: THREAD_ID,
+          followUpId: ManualFollowUpId.make("follow-up-1"),
+          activationMode: "automatic-after-settlement",
+          createdAt: "2026-07-28T12:00:02.000Z",
+        },
+      }),
+    );
+
+    assert.match(automatic.detail, /not authoritatively ready/i);
+    assert.equal(readModel.threads[0]?.manualFollowUps[0]?.status, "queued");
+  }),
+);
+
 it.effect("server-blocks raced automatic activation but permits an explicit FIFO steer", () =>
   Effect.gen(function* () {
     let readModel = makeReadModel(makeThread({ running: true }));

@@ -1,6 +1,15 @@
 import type { ScopedThreadRef } from "@cafecode/contracts";
 import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
 
+import {
+  createAtmosphereUsageActivityState,
+  observeAtmosphereUsageSnapshot,
+  readAtmosphereUsageActivity,
+  resetAtmosphereUsageActivity,
+  resolveAtmosphereUsageModulation,
+  resolveUsageReactiveCapacityDensity,
+} from "../atmosphereUsageActivity";
+import { getPrimaryEnvironmentConnection } from "../environments/runtime";
 import { useSettings } from "../hooks/useSettings";
 import { useTheme } from "../hooks/useTheme";
 import {
@@ -24,6 +33,7 @@ import { useStore } from "../store";
 import {
   advanceAtmosphereSceneInPlace,
   applyMatrixWorkVocabularyInPlace,
+  calculateAtmosphereParticleCount,
   createMatrixColorAnimationState,
   createAtmosphereScene,
   createSeededRandom,
@@ -229,6 +239,7 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
   const opacity = useSettings((settings) => settings.fallingEffectOpacity);
   const speed = useSettings((settings) => settings.fallingEffectSpeed);
   const density = useSettings((settings) => settings.fallingEffectDensity);
+  const usageReactive = useSettings((settings) => settings.fallingEffectUsageReactive);
   const japaneseRatio = useSettings((settings) => settings.fallingEffectJapaneseRatio);
   const enriched2ch = useSettings((settings) => settings.fallingEffect2chEnriched);
   const liveWorkVocabularyEnabled = useSettings(
@@ -246,6 +257,9 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
   );
   const activityLinkAgentEnabled = useSettings(
     (settings) => settings.fallingEffectActivityLinkAgentEnabled,
+  );
+  const activityLinkWorkEnabled = useSettings(
+    (settings) => settings.fallingEffectActivityLinkWorkEnabled,
   );
   const activityLinkColorMode = useSettings(
     (settings) => settings.fallingEffectActivityLinkColorMode,
@@ -273,6 +287,7 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
   const lastMatrixPaletteDefinitionRef = useRef<string | null>(null);
   const invalidateCommittedFrameRef = useRef<(() => void) | null>(null);
   const invalidateStaticMatrixColorFrameRef = useRef<(() => void) | null>(null);
+  const usageActivityStateRef = useRef(createAtmosphereUsageActivityState());
   const matrixWorkVocabularyKey = useStore((state) =>
     liveWorkVocabularyEnabled && kind === "matrix"
       ? selectMatrixWorkVocabularyKey(state, selectedThreadRef)
@@ -304,6 +319,7 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
             database: activityLinkDatabaseEnabled,
             build: activityLinkBuildEnabled,
             agent: activityLinkAgentEnabled,
+            work: activityLinkWorkEnabled,
           },
           {
             nowMs: Date.now(),
@@ -353,6 +369,28 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
   useLayoutEffect(() => {
     invalidateCommittedFrameRef.current?.();
   }, [matrixActivityEvents]);
+
+  useEffect(() => {
+    const activityState = usageActivityStateRef.current;
+    resetAtmosphereUsageActivity(activityState, Date.now());
+    if (
+      !atmosphereAvailable ||
+      !enabled ||
+      !usageReactive ||
+      (kind !== "rain" && kind !== "snow")
+    ) {
+      return;
+    }
+
+    const connection = getPrimaryEnvironmentConnection();
+    const unsubscribe = connection.client.server.subscribeUsageStats((snapshot) => {
+      observeAtmosphereUsageSnapshot(activityState, snapshot, Date.now());
+    });
+    return () => {
+      unsubscribe();
+      resetAtmosphereUsageActivity(activityState, Date.now());
+    };
+  }, [atmosphereAvailable, enabled, kind, usageReactive]);
 
   useLayoutEffect(() => {
     const canvas = cinemaOverlayCanvasRef.current;
@@ -602,6 +640,7 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
     let staticReducedMotionMatrixColorFrame: MatrixColorFrame | null = null;
     let staticColorTimestamp: number | null = null;
     let hasCommittedFrame = false;
+    let baseFallingParticleCount = 0;
 
     const clearBitmap = (
       targetCanvas: HTMLCanvasElement,
@@ -709,12 +748,17 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
         resizeAtmosphereCanvasBitmap(consoleOverlayCanvas, bitmapWidth, bitmapHeight);
         consoleOverlayContext.setTransform(dpr, 0, 0, dpr, 0, 0);
       }
+      baseFallingParticleCount = calculateAtmosphereParticleCount(kind, width, height, density);
+      const capacityDensity =
+        usageReactive && (kind === "rain" || kind === "snow")
+          ? resolveUsageReactiveCapacityDensity(density)
+          : density;
       scene = createAtmosphereScene(
         kind,
         width,
         height,
         createSeededRandom(sceneSeed(kind, width, height)),
-        density,
+        capacityDensity,
         japaneseRatio,
         enriched2ch,
         matrixWorkVocabularyRef.current,
@@ -735,13 +779,28 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
       if (!reducedMotionActive) {
         lastFrameTime = timestamp;
       }
+      const usageActivity = readAtmosphereUsageActivity(usageActivityStateRef.current, Date.now());
+      const usageModulation = resolveAtmosphereUsageModulation({
+        baseParticleCount: baseFallingParticleCount,
+        baseSpeed: speed,
+        capacityParticleCount: scene.particles.length,
+        enabled: usageReactive,
+        intensity: usageActivity.intensity,
+        kind,
+      });
+      canvas.dataset.atmosphereUsageReactive = usageReactive ? "true" : "false";
+      canvas.dataset.atmosphereUsageTokensPerSecond = usageActivity.tokensPerSecond.toFixed(1);
+      canvas.dataset.atmosphereUsageIntensity = usageActivity.intensity.toFixed(3);
+      canvas.dataset.atmosphereUsageActiveSessions = String(usageActivity.activeSessionCount);
+      canvas.dataset.atmosphereActiveParticleCount = String(usageModulation.activeParticleCount);
       advanceAtmosphereSceneInPlace(
         scene,
         elapsedSeconds,
-        speed,
+        usageModulation.speed,
         motionMode,
         matrixWalkLifecyclePercent,
         matrixCenterWindIntensity,
+        usageModulation.activeParticleCount,
       );
       if (!reducedMotionActive) {
         staticReducedMotionMatrixColorFrame = null;
@@ -789,10 +848,10 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
         matrixGpuCanvas.style.visibility = matrixGpuRendered ? "visible" : "hidden";
       }
       if (matrixGpuRendered) {
-        sceneContext.clearRect(0, 0, scene.width, scene.height);
-        if (frameContext !== null) {
-          commitAtmosphereCanvasBitmap(canvas, context, frameCanvas);
-        }
+        // The WebGL canvas already contains the complete glyph frame. Clear
+        // the transparent activity overlay directly. Copying an empty 4K
+        // Canvas2D bitmap here caused a full-surface upload on every frame.
+        clearBitmap(canvas, context);
         canvas.dataset.atmosphereRenderer = "webgl2-glyph-atlas";
         canvas.dataset.atmosphereRendererAcceleration = "gpu";
         canvas.dataset.atmosphereTextRasterization = "gpu-glyph-atlas";
@@ -807,6 +866,7 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
           walkStartFontSize,
           walkEndFontSize,
           matrixBaseFontSize,
+          usageModulation.activeParticleCount,
         );
         if (frameContext !== null) {
           commitAtmosphereCanvasBitmap(canvas, context, frameCanvas);
@@ -884,6 +944,7 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
             walkStartFontSize,
             walkEndFontSize,
             matrixBaseFontSize,
+            usageModulation.activeParticleCount,
           );
         }
       }
@@ -1044,6 +1105,7 @@ export function WindowAtmosphere({ selectedThreadRef = null }: WindowAtmosphereP
     opacity,
     resolvedTheme,
     speed,
+    usageReactive,
     walkEndFontSize,
     walkStartFontSize,
     matrixGpuFrameCollector,

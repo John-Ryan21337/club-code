@@ -75,7 +75,7 @@ export class WsTransport {
   private activeSessionId = 0;
   private session: TransportSession;
   private lastHeartbeatPongAt = 0;
-  private heartbeatRecoveryInFlight = false;
+  private transportRecoveryInFlight = false;
   private readonly streamRequestStartListeners = new Set<(info: StreamRequestStartInfo) => void>();
 
   constructor(
@@ -97,7 +97,19 @@ export class WsTransport {
 
     const session = this.session;
     const client = await session.clientPromise;
-    return await session.runtime.runPromise(Effect.suspend(() => execute(client)));
+    try {
+      return await session.runtime.runPromise(Effect.suspend(() => execute(client)));
+    } catch (error) {
+      // Effect RPC can report an "Unknown socket" defect without delivering a
+      // close event. In that half-open state the HTTP health check still passes,
+      // but every renderer command keeps targeting the unusable session. Replace
+      // the transport for the next command; do not replay this command here,
+      // because only callers with a durable idempotency key may retry safely.
+      if (isTransportConnectionErrorMessage(formatErrorMessage(error))) {
+        this.scheduleTransportRecovery();
+      }
+      throw error;
+    }
   }
 
   async requestStream<TValue>(
@@ -251,23 +263,23 @@ export class WsTransport {
     await reconnectOperation;
   }
 
-  private scheduleHeartbeatRecovery() {
-    if (this.disposed || this.heartbeatRecoveryInFlight) {
+  private scheduleTransportRecovery() {
+    if (this.disposed || this.transportRecoveryInFlight) {
       return;
     }
 
-    this.heartbeatRecoveryInFlight = true;
+    this.transportRecoveryInFlight = true;
     queueMicrotask(() => {
       void this.reconnect()
         .catch((error) => {
           if (!this.disposed) {
-            console.warn("WebSocket heartbeat recovery failed", {
+            console.warn("WebSocket transport recovery failed", {
               error: formatErrorMessage(error),
             });
           }
         })
         .finally(() => {
-          this.heartbeatRecoveryInFlight = false;
+          this.transportRecoveryInFlight = false;
         });
     });
   }
@@ -311,7 +323,7 @@ export class WsTransport {
           },
           onHeartbeatTimeout: () => {
             this.lifecycleHandlers?.onHeartbeatTimeout?.();
-            this.scheduleHeartbeatRecovery();
+            this.scheduleTransportRecovery();
           },
           onRequestStart: (info) => {
             this.lifecycleHandlers?.onRequestStart?.(info);

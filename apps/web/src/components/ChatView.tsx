@@ -116,7 +116,6 @@ import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
 import { useCommandPaletteStore } from "../commandPaletteStore";
 import { buildTemporaryWorktreeBranchName } from "@cafecode/shared/git";
 import { useHasOnScreenKeyboard, useIsMobile, useMediaQuery } from "../hooks/useMediaQuery";
-import { RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY } from "../rightPanelLayout";
 import { BranchToolbar } from "./BranchToolbar";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
 import PlanSidebar from "./PlanSidebar";
@@ -153,6 +152,7 @@ import {
 import {
   appendOperatorFollowUp,
   canAutomaticallyActivateQueuedFollowUp,
+  canActivateRunningQueuedFollowUp,
   canAutoStartQueuedFollowUpTurn,
   canExpandQueuedFollowUpText,
   canStartQueuedFollowUpTurn,
@@ -170,8 +170,11 @@ import {
   rekeyQueuedFollowUpsForActiveThread,
   releaseQueuedFollowUpDispatchClaim,
   selectQueuedFollowUpDispatchCandidate,
+  shouldRetainLocalFollowUpShadow,
+  shouldQueueDuringProviderHandoff,
   shouldQueueOperatorFollowUp,
   tryClaimQueuedFollowUpDispatch,
+  visibleQueuedManualFollowUps,
 } from "./chat/followUpQueue";
 import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
@@ -243,6 +246,7 @@ import {
 } from "~/rpc/serverState";
 import {
   describeSendFailureMessage,
+  isActiveTurnStartConflict,
   isIndeterminateTransportError,
   sanitizeThreadErrorMessage,
 } from "~/rpc/transportError";
@@ -1427,7 +1431,10 @@ const EMPTY_PROVIDERS: ServerProvider[] = [];
 const EMPTY_PROVIDER_SKILLS: ServerProvider["skills"] = [];
 const EMPTY_PENDING_USER_INPUT_ANSWERS: Record<string, PendingUserInputDraftAnswer> = {};
 const EMPTY_FOLLOW_UP_QUEUE: FollowUpQueueItem[] = [];
-const FOLLOW_UP_QUEUE_WATCHDOG_INTERVAL_MS = 1000;
+// Projection and connection changes start normal queue delivery immediately.
+// This interval is only a safety check for a lost notification.
+// A short interval can repeat a rejected request while the renderer has stale state.
+const FOLLOW_UP_QUEUE_WATCHDOG_INTERVAL_MS = 15_000;
 type EnvironmentUnavailableState = {
   readonly environmentId: EnvironmentId;
   readonly label: string;
@@ -1954,7 +1961,7 @@ function useLocalDispatchState(input: {
 }
 
 export default function ChatView(props: ChatViewProps) {
-  const { registerChatAnchor, localMediaBackgroundEffective } = useAmbientVideoWorkspace();
+  const { registerChatAnchor } = useAmbientVideoWorkspace();
   const {
     environmentId,
     threadId,
@@ -2125,10 +2132,14 @@ export default function ChatView(props: ChatViewProps) {
   const [draftPlanSidebarOpenByThreadKey, setDraftPlanSidebarOpenByThreadKey] = useState<
     Record<string, boolean>
   >({});
-  const viewportUsesPlanSidebarSheet = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
   const viewportMatchesMobile = useMediaQuery("max-md");
   const isMobile = useIsMobile();
-  const shouldUsePlanSidebarSheet = isMobile || viewportUsesPlanSidebarSheet;
+  // Desktop presentation owns a persistent inline workspace panel, even when
+  // the window is narrower than the normal responsive breakpoint. A modal
+  // sheet dismisses on an outside press, which made the Plan / Workflow panel
+  // disappear whenever the operator returned to the chat. Mobile presentation
+  // keeps the dismissible sheet so it does not permanently cover the thread.
+  const shouldUsePlanSidebarSheet = isMobile;
   const hasOnScreenKeyboard = useHasOnScreenKeyboard();
   const draftPlanSidebarOpen =
     routeKind === "draft" ? draftPlanSidebarOpenByThreadKey[routeThreadKey] : undefined;
@@ -2459,14 +2470,18 @@ export default function ChatView(props: ChatViewProps) {
           item,
         ]),
       );
-      if (projectedItemsById.size === 0) {
-        continue;
-      }
+      const projectedMessages = threadsByKey.get(threadKey)?.messages ?? [];
       const retained: FollowUpQueueItem[] = [];
       let removedAny = false;
       for (const item of items) {
         const projectedItem = projectedItemsById.get(item.id);
-        if (projectedItem === undefined || projectedItem.status === "reserving") {
+        if (
+          shouldRetainLocalFollowUpShadow({
+            messageId: item.messageId,
+            projectedStatus: projectedItem?.status ?? null,
+            projectedMessages,
+          })
+        ) {
           retained.push(item);
           continue;
         }
@@ -3617,6 +3632,10 @@ export default function ChatView(props: ChatViewProps) {
   activeFollowUpThreadKeyRef.current = activeFollowUpThreadKey;
   const activeProjectedManualFollowUps =
     isServerThread && activeThread ? activeThread.manualFollowUps : EMPTY_MANUAL_FOLLOW_UPS;
+  const activeVisibleProjectedManualFollowUps = useMemo(
+    () => visibleQueuedManualFollowUps(activeProjectedManualFollowUps),
+    [activeProjectedManualFollowUps],
+  );
   const activeProjectedManualFollowUpIds = useMemo(
     () => new Set(activeProjectedManualFollowUps.map((item) => item.id)),
     [activeProjectedManualFollowUps],
@@ -3755,6 +3774,8 @@ export default function ChatView(props: ChatViewProps) {
   const firstActiveFollowUpQueueItem =
     firstActiveProjectedManualFollowUp === null ? (activeFollowUpQueue[0] ?? null) : null;
   const activeVisibleFollowUpQueueLength =
+    activeVisibleProjectedManualFollowUps.length + activeFollowUpQueue.length;
+  const activePendingFollowUpQueueLength =
     activeProjectedManualFollowUps.length + activeFollowUpQueue.length;
   const firstActiveAutomaticSteerRetryBlocker =
     activeThread !== undefined && firstActiveFollowUpQueueItem !== null
@@ -3789,7 +3810,7 @@ export default function ChatView(props: ChatViewProps) {
   });
   const followUpQueueViewItems = useMemo<readonly FollowUpQueueViewItem[]>(
     () => [
-      ...activeProjectedManualFollowUps.map((item) => {
+      ...activeVisibleProjectedManualFollowUps.map((item) => {
         const itemKey =
           activeThread === undefined
             ? ""
@@ -3803,11 +3824,9 @@ export default function ChatView(props: ChatViewProps) {
           ? "Cancelling this queued follow-up…"
           : item.status === "reserving"
             ? (localItem?.blockedReason ?? "Receiving this operator follow-up\u2026")
-            : item.status === "handoff"
-              ? "Waiting for the provider to accept this follow-up."
-              : manualFollowUpActivationInFlightKeysRef.current.has(itemKey)
-                ? "Handing this follow-up to the provider…"
-                : null;
+            : manualFollowUpActivationInFlightKeysRef.current.has(itemKey)
+              ? "Handing this follow-up to the provider…"
+              : null;
         return {
           id: item.id,
           preview:
@@ -3844,7 +3863,7 @@ export default function ChatView(props: ChatViewProps) {
     [
       activeFollowUpQueue,
       activeLocalFollowUps,
-      activeProjectedManualFollowUps,
+      activeVisibleProjectedManualFollowUps,
       activeThread,
       expandedDurableManualFollowUpIds,
       manualFollowUpUiRevision,
@@ -3870,7 +3889,7 @@ export default function ChatView(props: ChatViewProps) {
   );
   const activeSteeringFollowUpInFlight = steeringFollowUpViewItems.length > 0;
   const hasEarlierManualFollowUpForActiveThread =
-    activeVisibleFollowUpQueueLength > 0 ||
+    activePendingFollowUpQueueLength > 0 ||
     activeQueuedFollowUpPendingDispatch ||
     activeSteeringFollowUpInFlight ||
     Boolean(
@@ -3886,17 +3905,17 @@ export default function ChatView(props: ChatViewProps) {
     !followUpQueueDispatchInFlight &&
     !activeQueuedFollowUpPendingDispatch &&
     !activeSteeringFollowUpInFlight;
-  const canActivateRunningFollowUpQueueAction =
-    followUpQueuePhase === "running" &&
-    activeProviderLiveSteerAvailable &&
-    activeThread?.session?.status === "running" &&
-    firstActiveAutomaticSteerRetryBlocker === null &&
-    !isComposerConnecting &&
-    !activeEnvironmentUnavailable &&
-    !followUpQueueDispatchInFlight &&
-    !activeQueuedFollowUpPendingDispatch &&
-    !activeSteeringFollowUpInFlight &&
-    firstActiveProjectedManualFollowUp?.status === "queued";
+  const canActivateRunningFollowUpQueueAction = canActivateRunningQueuedFollowUp({
+    phase: followUpQueuePhase,
+    liveSteerAvailable: activeProviderLiveSteerAvailable,
+    hasRetryBlocker: firstActiveAutomaticSteerRetryBlocker !== null,
+    isConnecting: isComposerConnecting,
+    isEnvironmentUnavailable: activeEnvironmentUnavailable,
+    isDispatchInFlight: followUpQueueDispatchInFlight,
+    isQueuedDispatchPending: activeQueuedFollowUpPendingDispatch,
+    isSteerInFlight: activeSteeringFollowUpInFlight,
+    headStatus: firstActiveProjectedManualFollowUp?.status ?? null,
+  });
   const followUpQueueAction = decideQueuedFollowUpAction({
     phase: followUpQueuePhase,
     liveSteerAvailable: activeProviderLiveSteerAvailable,
@@ -4664,7 +4683,6 @@ export default function ChatView(props: ChatViewProps) {
     },
     [draftId, routeThreadRef, serverThread, setStoreThreadError],
   );
-
   const focusComposer = useCallback(() => {
     readComposerHandle(composerRef)?.focusAtEnd();
   }, [composerRef]);
@@ -5989,15 +6007,7 @@ export default function ChatView(props: ChatViewProps) {
     // authorization before touching the provider.
     recordManualAutoNudgeActivity();
     const api = readEnvironmentApi(environmentId);
-    if (
-      !api ||
-      !activeThread ||
-      isSendBusy ||
-      isComposerConnecting ||
-      activeEnvironmentUnavailable ||
-      sendInFlightRef.current
-    )
-      return;
+    if (!api || !activeThread || activeEnvironmentUnavailable) return;
     if (activePendingProgress) {
       onAdvanceActivePendingUserInput();
       return;
@@ -6017,6 +6027,21 @@ export default function ChatView(props: ChatViewProps) {
       prompt: promptForSend,
       imageCount: composerImages.length,
     });
+    if (
+      shouldQueueDuringProviderHandoff({
+        isSendBusy,
+        isConnecting: isComposerConnecting,
+        isDispatchInFlight: sendInFlightRef.current,
+      })
+    ) {
+      if (!hasSendableContent) return;
+      // A provider handoff can take time, but it is not an input lock. Keep the
+      // new operator message in the durable FIFO while the earlier send starts.
+      updateManualStopBarrier(activeThread.environmentId, activeThread.id, null);
+      pinTimelineToEndForLocalMessage();
+      enqueueFollowUpSnapshot(snapshot);
+      return;
+    }
     const standaloneGoalCommand =
       composerImages.length === 0 && goalControlsSupported
         ? parseStandaloneComposerGoalCommand(trimmed)
@@ -6312,11 +6337,9 @@ export default function ChatView(props: ChatViewProps) {
       });
       turnStartSucceeded = true;
     })().catch(async (err: unknown) => {
-      if (
-        !turnStartSucceeded &&
-        promptRef.current.length === 0 &&
-        composerImagesRef.current.length === 0
-      ) {
+      const recoverAsQueuedFollowUp =
+        !turnStartSucceeded && isServerThread && isActiveTurnStartConflict(err);
+      const removeFailedOptimisticMessage = () => {
         setOptimisticUserMessages((existing) => {
           const removed = existing.filter((message) => message.id === messageIdForSend);
           for (const message of removed) {
@@ -6325,6 +6348,25 @@ export default function ChatView(props: ChatViewProps) {
           const next = existing.filter((message) => message.id !== messageIdForSend);
           return next.length === existing.length ? existing : next;
         });
+      };
+      if (recoverAsQueuedFollowUp) {
+        removeFailedOptimisticMessage();
+        // The server is authoritative about whether a turn is active. A
+        // renderer can briefly retain an idle projection after reconnect or
+        // while a fresh running snapshot is in flight. Preserve this exact
+        // operator payload through the durable FIFO instead of restoring it
+        // as a draft and asking the operator to retry. A newer draft already
+        // in the composer remains untouched. The original turn.start
+        // invariant remains strict for every other conflict.
+        enqueueFollowUpSnapshot(snapshot);
+        return;
+      }
+      if (
+        !turnStartSucceeded &&
+        promptRef.current.length === 0 &&
+        composerImagesRef.current.length === 0
+      ) {
+        removeFailedOptimisticMessage();
         promptRef.current = snapshot.draftPromptText;
         const retryComposerImages = composerImagesSnapshot.map(cloneComposerImageForRetry);
         composerImagesRef.current = retryComposerImages;
@@ -6892,13 +6934,7 @@ export default function ChatView(props: ChatViewProps) {
   const onSteer = async (e?: { preventDefault: () => void }) => {
     e?.preventDefault();
     recordManualAutoNudgeActivity();
-    if (
-      !activeThread ||
-      isSendBusy ||
-      isComposerConnecting ||
-      activeEnvironmentUnavailable ||
-      sendInFlightRef.current
-    ) {
+    if (!activeThread || activeEnvironmentUnavailable) {
       return;
     }
     if (activePendingProgress) {
@@ -6912,6 +6948,18 @@ export default function ChatView(props: ChatViewProps) {
       imageCount: snapshot.images.length,
     });
     if (!hasSendableContent) return;
+    if (
+      shouldQueueDuringProviderHandoff({
+        isSendBusy,
+        isConnecting: isComposerConnecting,
+        isDispatchInFlight: sendInFlightRef.current,
+      })
+    ) {
+      updateManualStopBarrier(activeThread.environmentId, activeThread.id, null);
+      pinTimelineToEndForLocalMessage();
+      enqueueFollowUpSnapshot(snapshot);
+      return;
+    }
     updateManualStopBarrier(activeThread.environmentId, activeThread.id, null);
     const delivery = decideFollowUpDelivery({
       phase: followUpQueuePhase,
@@ -7938,6 +7986,20 @@ export default function ChatView(props: ChatViewProps) {
       settings,
     ],
   );
+  const onPersistThreadModelSelection = useCallback(
+    async (modelSelection: ModelSelection) => {
+      if (!activeThread) return;
+      const api = readEnvironmentApi(activeThread.environmentId);
+      if (!api) return;
+      await api.orchestration.dispatchCommand({
+        type: "thread.meta.update",
+        commandId: newCommandId(),
+        threadId: activeThread.id,
+        modelSelection,
+      });
+    },
+    [activeThread],
+  );
   const onEnvModeChange = useCallback(
     (mode: DraftThreadEnvMode) => {
       if (canOverrideServerThreadEnvMode) {
@@ -7990,10 +8052,8 @@ export default function ChatView(props: ChatViewProps) {
 
   return (
     <div
-      className={cn(
-        "group/chat-view flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden bg-background",
-        localMediaBackgroundEffective && "bg-background/55 backdrop-blur-[1px]",
-      )}
+      className="group/chat-view flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden bg-background"
+      data-chat-view-shell="true"
       data-chat-presentation={isMobile ? "mobile" : "desktop"}
     >
       {/* Top bar — hidden while the mobile composer has the on-screen keyboard
@@ -8049,9 +8109,18 @@ export default function ChatView(props: ChatViewProps) {
       {/* Main content area with optional plan sidebar */}
       <div className="flex min-h-0 min-w-0 flex-1">
         {/* Chat column */}
-        <div className="@container/chat-column flex min-h-0 min-w-0 flex-1 flex-col">
+        <div className="@container/chat-column relative isolate flex min-h-0 min-w-0 flex-1 flex-col">
+          <div
+            aria-hidden="true"
+            className={cn(
+              "pointer-events-none absolute inset-y-0 left-[calc(env(safe-area-inset-left)+0.75rem)] right-[calc(env(safe-area-inset-right)+0.75rem)] z-0 mx-auto max-w-208",
+              !isMobile &&
+                "sm:left-[calc(env(safe-area-inset-left)+1.25rem)] sm:right-[calc(env(safe-area-inset-right)+1.25rem)]",
+            )}
+            data-chat-manuscript-scrim="true"
+          />
           {/* Messages Wrapper */}
-          <div ref={registerChatAnchor} className="relative flex min-h-0 flex-1 flex-col">
+          <div ref={registerChatAnchor} className="relative z-10 flex min-h-0 flex-1 flex-col">
             {activeProject ? (
               <ProjectTelemetryGraph
                 environmentId={activeProject.environmentId}
@@ -8116,7 +8185,7 @@ export default function ChatView(props: ChatViewProps) {
           <div
             data-chat-input-bar="true"
             className={cn(
-              "pl-[calc(env(safe-area-inset-left)+0.75rem)] pr-[calc(env(safe-area-inset-right)+0.75rem)] pt-1.5",
+              "relative z-10 pl-[calc(env(safe-area-inset-left)+0.75rem)] pr-[calc(env(safe-area-inset-right)+0.75rem)] pt-1.5",
               !isMobile &&
                 "sm:pl-[calc(env(safe-area-inset-left)+1.25rem)] sm:pr-[calc(env(safe-area-inset-right)+1.25rem)] sm:pt-2",
               // NOTE: intentionally NOT adding env(safe-area-inset-bottom) here.
@@ -8131,44 +8200,46 @@ export default function ChatView(props: ChatViewProps) {
             <div className="relative isolate">
               <ComposerBannerStack className="relative z-0" items={composerBannerItems} />
               <div className="relative z-10">
-                <div
-                  className="mx-auto grid w-full min-w-0 max-w-208 grid-cols-1 items-start gap-2 sm:grid-cols-2"
-                  data-composer-thread-automation-controls="true"
-                >
-                  <AutoNudgeControl
-                    mode={autoNudgeMode}
-                    disabled={!isServerThread || !activeAutoNudgeConfig}
-                    arming={autoNudgeArming}
-                    backgroundEnabled={activeAutoNudgeConfig?.backgroundContinuation ?? false}
-                    roundsDispatched={activeAutoNudgeConfig?.roundsDispatched ?? 0}
-                    maxRounds={activeAutoNudgeConfig?.maxRounds ?? 5}
-                    globallySuppressed={autoNudgeSuppressed}
-                    promptScopeKey={autoNudgeContextKey ?? routeThreadKey}
-                    persistedPrompt={activeAutoNudgeConfig?.prompt ?? ""}
-                    promptMaxLength={THREAD_AUTO_NUDGE_PROMPT_MAX_CHARS}
-                    promptSaving={autoNudgePendingWrite?.kind === "prompt"}
-                    promptEditable={Boolean(isServerThread && activeAutoNudgeConfig)}
-                    onSavePrompt={onSaveAutoNudgePrompt}
-                    limitsSaving={autoNudgePendingWrite?.kind === "limits"}
-                    onSaveLimits={onSaveAutoNudgeLimits}
-                    onModeChange={onAutoNudgeModeChange}
-                    onBackgroundChange={onAutoNudgeBackgroundChange}
-                    onStop={onStopAutoNudgeThread}
-                    onEmergencyStopAll={onEmergencyStopAllAutoNudge}
-                    onAllowAutoNudgeAgain={onAllowAutoNudgeAgain}
-                  />
-                  <IdleThreadGuardControl
-                    scope={
-                      isServerThread && activeThread
-                        ? {
-                            environmentId: activeThread.environmentId,
-                            threadId: activeThread.id,
-                          }
-                        : null
-                    }
-                    disabled={!isServerThread || !activeThread}
-                  />
-                </div>
+                {settings.showComposerThreadAutomationControls ? (
+                  <div
+                    className="mx-auto grid w-full min-w-0 max-w-208 grid-cols-1 items-start gap-2 sm:grid-cols-2"
+                    data-composer-thread-automation-controls="true"
+                  >
+                    <AutoNudgeControl
+                      mode={autoNudgeMode}
+                      disabled={!isServerThread || !activeAutoNudgeConfig}
+                      arming={autoNudgeArming}
+                      backgroundEnabled={activeAutoNudgeConfig?.backgroundContinuation ?? false}
+                      roundsDispatched={activeAutoNudgeConfig?.roundsDispatched ?? 0}
+                      maxRounds={activeAutoNudgeConfig?.maxRounds ?? 5}
+                      globallySuppressed={autoNudgeSuppressed}
+                      promptScopeKey={autoNudgeContextKey ?? routeThreadKey}
+                      persistedPrompt={activeAutoNudgeConfig?.prompt ?? ""}
+                      promptMaxLength={THREAD_AUTO_NUDGE_PROMPT_MAX_CHARS}
+                      promptSaving={autoNudgePendingWrite?.kind === "prompt"}
+                      promptEditable={Boolean(isServerThread && activeAutoNudgeConfig)}
+                      onSavePrompt={onSaveAutoNudgePrompt}
+                      limitsSaving={autoNudgePendingWrite?.kind === "limits"}
+                      onSaveLimits={onSaveAutoNudgeLimits}
+                      onModeChange={onAutoNudgeModeChange}
+                      onBackgroundChange={onAutoNudgeBackgroundChange}
+                      onStop={onStopAutoNudgeThread}
+                      onEmergencyStopAll={onEmergencyStopAllAutoNudge}
+                      onAllowAutoNudgeAgain={onAllowAutoNudgeAgain}
+                    />
+                    <IdleThreadGuardControl
+                      scope={
+                        isServerThread && activeThread
+                          ? {
+                              environmentId: activeThread.environmentId,
+                              threadId: activeThread.id,
+                            }
+                          : null
+                      }
+                      disabled={!isServerThread || !activeThread}
+                    />
+                  </div>
+                ) : null}
                 <ChatComposer
                   composerRef={composerRef}
                   composerDraftTarget={composerDraftTarget}
@@ -8240,6 +8311,7 @@ export default function ChatView(props: ChatViewProps) {
                     onChangeActivePendingUserInputCustomAnswer
                   }
                   onProviderModelSelect={onProviderModelSelect}
+                  onPersistThreadModelSelection={onPersistThreadModelSelection}
                   toggleInteractionMode={toggleInteractionMode}
                   handleRuntimeModeChange={handleRuntimeModeChange}
                   handleInteractionModeChange={handleInteractionModeChange}

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  CODEX_SUBAGENT_THREAD_LIMIT_OPTION_ID,
   ProviderDriverKind,
   ProviderInstanceId,
   type ProviderOptionDescriptor,
@@ -137,6 +138,56 @@ describe("getComposerProviderState", () => {
       promptEffort: null,
       modelOptionsForDispatch: selections(["thinking", false]),
     });
+  });
+
+  it("preserves the reserved thread-bound Codex agent ceiling through descriptor filtering", () => {
+    const state = getComposerProviderState({
+      provider: PROVIDER,
+      model: MODEL,
+      models: modelWith([booleanDescriptor("thinking")]),
+      prompt: "",
+      modelOptions: selections(["thinking", false], [CODEX_SUBAGENT_THREAD_LIMIT_OPTION_ID, "64"]),
+    });
+
+    expect(state.modelOptionsForDispatch).toEqual(
+      selections(["thinking", false], [CODEX_SUBAGENT_THREAD_LIMIT_OPTION_ID, "64"]),
+    );
+  });
+
+  it("leaves an unsaved Codex agent ceiling implicit for the server default", () => {
+    const state = getComposerProviderState({
+      provider: PROVIDER,
+      model: MODEL,
+      models: modelWith([]),
+      prompt: "",
+      modelOptions: undefined,
+    });
+
+    expect(state.modelOptionsForDispatch).toBeUndefined();
+  });
+
+  it("does not normalize malformed Codex agent ceilings into a different runtime value", () => {
+    const state = getComposerProviderState({
+      provider: PROVIDER,
+      model: MODEL,
+      models: modelWith([]),
+      prompt: "",
+      modelOptions: selections([CODEX_SUBAGENT_THREAD_LIMIT_OPTION_ID, " 64 "]),
+    });
+
+    expect(state.modelOptionsForDispatch).toBeUndefined();
+  });
+
+  it("does not attach the Codex agent ceiling to a Claude thread", () => {
+    const state = getComposerProviderState({
+      provider: ProviderDriverKind.make("claudeAgent"),
+      model: MODEL,
+      models: modelWith([]),
+      prompt: "",
+      modelOptions: selections([CODEX_SUBAGENT_THREAD_LIMIT_OPTION_ID, "64"]),
+    });
+
+    expect(state.modelOptionsForDispatch).toBeUndefined();
   });
 
   it("derives promptEffort from the first select descriptor and preserves all others for dispatch", () => {

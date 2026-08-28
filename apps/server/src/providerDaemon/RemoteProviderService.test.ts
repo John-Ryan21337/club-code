@@ -4,7 +4,10 @@ import { assert, describe, it } from "@effect/vitest";
 import {
   attachCommandIdToMutatingProviderDaemonRequest,
   isVoidProviderDaemonRpcMethod,
+  PROVIDER_DAEMON_MUTATING_RPC_TIMEOUT_MS,
+  PROVIDER_DAEMON_PROMPT_ROUTING_READ_TIMEOUT_MS,
   ProviderDaemonRpcResponseError,
+  providerDaemonRpcTimeoutMs,
   remoteProviderCursorProjectorForConfig,
   toRemoteRequestError,
 } from "./RemoteProviderService.ts";
@@ -54,6 +57,30 @@ describe("RemoteProviderService", () => {
 
     assert.equal(request.method, "listSessions");
     assert.isFalse("commandId" in request);
+  });
+
+  it("allows session and turn mutations to outlive the short daemon read timeout", () => {
+    assert.equal(
+      providerDaemonRpcTimeoutMs("startSession"),
+      PROVIDER_DAEMON_MUTATING_RPC_TIMEOUT_MS,
+    );
+    assert.equal(providerDaemonRpcTimeoutMs("sendTurn"), PROVIDER_DAEMON_MUTATING_RPC_TIMEOUT_MS);
+    assert.equal(providerDaemonRpcTimeoutMs("steerTurn"), PROVIDER_DAEMON_MUTATING_RPC_TIMEOUT_MS);
+    assert.equal(
+      providerDaemonRpcTimeoutMs("listSessions"),
+      PROVIDER_DAEMON_PROMPT_ROUTING_READ_TIMEOUT_MS,
+    );
+    assert.equal(
+      providerDaemonRpcTimeoutMs("getCapabilities"),
+      PROVIDER_DAEMON_PROMPT_ROUTING_READ_TIMEOUT_MS,
+    );
+    assert.equal(
+      providerDaemonRpcTimeoutMs("getInstanceInfo"),
+      PROVIDER_DAEMON_PROMPT_ROUTING_READ_TIMEOUT_MS,
+    );
+    assert.isUndefined(providerDaemonRpcTimeoutMs("interruptTurn"));
+    assert.isUndefined(providerDaemonRpcTimeoutMs("stopSession"));
+    assert.isUndefined(providerDaemonRpcTimeoutMs("restartProviderRuntime"));
   });
 
   it("does not treat restartProviderRuntime as a void daemon RPC", () => {

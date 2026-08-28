@@ -338,7 +338,7 @@ export function SettingsProfiles() {
               {notice.message}
             </span>
           ) : (
-            "Profiles capture the theme, UI appearance and layout, ambient YouTube/GIF activation and configuration, and inert usability preferences. GIF entries are content-addressed server assets; profiles never store their source file paths or image bytes. Profiles do not include permissions or consent, destructive-action confirmations, completion-alert activation, live thread/provider-fed visuals, keybindings, playback position or URL-queue progress, local files, uploaded sounds, native host controls, provider/auth or server/network settings, model identity or pacing, project-specific state, or exact-thread Auto Nudge and Idle Thread Guard authority."
+            "Profiles save the theme, layout, media configuration, and other presentation settings. Profiles do not start media, image cycles, or visual effects. Profiles do not save local files, uploaded sounds, playback state, permissions, consent, or native controls. Profiles exclude provider, server, network, model, and project settings. Profiles never save per-thread Auto Nudge or Idle Thread Guard authority."
           )
         }
       >

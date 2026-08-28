@@ -80,7 +80,40 @@ const MUTATING_RPC_METHODS = new Set<ProviderDaemonRpcRequest["method"]>([
   "clearGoal",
   "rollbackConversation",
 ]);
+const LONG_RUNNING_HANDOFF_RPC_METHODS = new Set<ProviderDaemonRpcRequest["method"]>([
+  "startSession",
+  "sendTurn",
+  "steerTurn",
+]);
+const PROMPT_ROUTING_READ_RPC_METHODS = new Set<ProviderDaemonRpcRequest["method"]>([
+  "listSessions",
+  "getCapabilities",
+  "getInstanceInfo",
+]);
 const PROVIDER_DAEMON_REPLAY_OVERLAP_EVENTS = 1_000;
+// Session materialization can legitimately exceed the transport's 30-second
+// default when Codex resumes a large thread and replays its snapshot. A client
+// timeout is especially harmful for mutating RPCs: the daemon keeps executing
+// the command ledger entry while the backend marks the user's message failed,
+// leaving a healthy provider turn detached from Cafe's queue projection.
+// Keep short reads on the shared default, but allow the idempotent mutating
+// boundary enough quiet time to return its authoritative acknowledgement.
+export const PROVIDER_DAEMON_MUTATING_RPC_TIMEOUT_MS = 5 * 60_000;
+// These reads sit in front of every prompt handoff. If the daemon is busy,
+// waiting for the generic 30-second HTTP timeout more than once makes an
+// accepted prompt look lost. Callers can safely recover from a missing routing
+// snapshot through the durable provider binding, so fail these reads quickly.
+export const PROVIDER_DAEMON_PROMPT_ROUTING_READ_TIMEOUT_MS = 5_000;
+
+export function providerDaemonRpcTimeoutMs(
+  method: ProviderDaemonRpcRequest["method"],
+): number | undefined {
+  return LONG_RUNNING_HANDOFF_RPC_METHODS.has(method)
+    ? PROVIDER_DAEMON_MUTATING_RPC_TIMEOUT_MS
+    : PROMPT_ROUTING_READ_RPC_METHODS.has(method)
+      ? PROVIDER_DAEMON_PROMPT_ROUTING_READ_TIMEOUT_MS
+      : undefined;
+}
 
 function providerDaemonUrl(config: ProviderDaemonClientConfig, path: string): URL {
   return new URL(
@@ -149,9 +182,11 @@ const rpc = <M extends ProviderDaemonRpcRequest["method"]>(
   Effect.tryPromise({
     try: async () => {
       const requestWithCommandId = attachCommandIdToMutatingProviderDaemonRequest(request);
+      const timeoutMs = providerDaemonRpcTimeoutMs(requestWithCommandId.method);
       const response = await requestProviderDaemonJson(daemonConfig, PROVIDER_DAEMON_RPC_PATH, {
         method: "POST",
         body: encodeRpcRequestJson(requestWithCommandId),
+        ...(timeoutMs === undefined ? {} : { timeoutMs }),
       });
       const envelope = decodeRpcEnvelopeJson(response.body);
       if (!envelope.ok) {

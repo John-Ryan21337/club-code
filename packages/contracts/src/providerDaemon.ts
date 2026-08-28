@@ -365,6 +365,8 @@ export const ProviderDaemonLiveness = Schema.Struct({
   runtimeBuildId: Schema.optional(Schema.String),
   startedAt: IsoDateTime,
   transport: Schema.optional(ProviderDaemonTransport),
+  activeRpcCount: Schema.optional(NonNegativeInt),
+  oldestActiveRpcAgeMs: Schema.optional(NonNegativeInt),
 });
 export type ProviderDaemonLiveness = typeof ProviderDaemonLiveness.Type;
 

@@ -38,7 +38,17 @@ const DESKTOP_BACKEND_PORT_PROBE_HOSTS = ["127.0.0.1", "0.0.0.0", "::"] as const
 const DESKTOP_SHUTDOWN_BACKEND_STOP_TIMEOUT = Duration.seconds(5);
 const PROVIDER_DAEMON_STARTING_ENDPOINT_POLL_INTERVAL = Duration.millis(10);
 const PROVIDER_DAEMON_HEALTH_CHECK_INTERVAL = Duration.seconds(5);
-const PROVIDER_DAEMON_HEALTH_FAILURE_THRESHOLD = 3;
+export const PROVIDER_DAEMON_LIVE_FAILURE_THRESHOLD = 12;
+// A live daemon whose oldest in-flight RPC is older than this is replaced.
+// Replacing the daemon discards every Claude and Codex session it owns, so the
+// bound must sit well above legitimate slow provider work. Resuming a Codex
+// thread with a multi-hundred-megabyte rollout takes Codex itself several
+// seconds and previously froze the daemon for 40-50 s while it decoded the
+// full history; with bounded snapshot decoding that is now seconds, but the
+// former 45 s bound turned every slow resume into a daemon kill loop that
+// orphaned all running turns. Genuinely dead daemons are still detected by
+// the process-exit and consecutive-probe-failure paths.
+export const PROVIDER_DAEMON_STALLED_RPC_THRESHOLD_MS = 180_000;
 const PROVIDER_DAEMON_RECOVERY_BACKEND_STOP_TIMEOUT = Duration.seconds(10);
 
 const makeDesktopRunId = Random.nextUUIDv4.pipe(
@@ -237,7 +247,7 @@ export const runProviderDaemonHealthWatchdog = Effect.fn("desktop.providerDaemon
     const checkInterval = input.checkInterval ?? PROVIDER_DAEMON_HEALTH_CHECK_INTERVAL;
     const failureThreshold = Math.max(
       1,
-      Math.trunc(input.failureThreshold ?? PROVIDER_DAEMON_HEALTH_FAILURE_THRESHOLD),
+      Math.trunc(input.failureThreshold ?? PROVIDER_DAEMON_LIVE_FAILURE_THRESHOLD),
     );
     let consecutiveFailures = 0;
 
@@ -254,26 +264,37 @@ export const runProviderDaemonHealthWatchdog = Effect.fn("desktop.providerDaemon
           }).pipe(Effect.as(Option.none())),
         ),
       );
-      if (Option.isSome(liveness)) {
+      const oldestActiveRpcAgeMs = Option.getOrUndefined(liveness)?.oldestActiveRpcAgeMs;
+      const providerRpcIsStalled =
+        oldestActiveRpcAgeMs !== undefined &&
+        oldestActiveRpcAgeMs >= PROVIDER_DAEMON_STALLED_RPC_THRESHOLD_MS;
+      if (Option.isSome(liveness) && !providerRpcIsStalled) {
         consecutiveFailures = 0;
         continue;
       }
 
-      consecutiveFailures += 1;
+      if (!providerRpcIsStalled) {
+        consecutiveFailures += 1;
+      }
       const daemonSnapshot = yield* input.providerDaemonManager.snapshot;
       const daemonPid = Option.getOrUndefined(daemonSnapshot.pid);
       const processIsKnownDead = daemonPid !== undefined && !isPidAlive(daemonPid);
-      if (!processIsKnownDead && consecutiveFailures < failureThreshold) {
+      // A cold provider resume can delay daemon IPC for tens of seconds. Keep
+      // the live process during that bounded delay. Recover a dead process now.
+      if (!providerRpcIsStalled && !processIsKnownDead && consecutiveFailures < failureThreshold) {
         continue;
       }
 
-      const reason = processIsKnownDead
-        ? `provider daemon process ${daemonPid} exited`
-        : `provider daemon failed ${consecutiveFailures} consecutive liveness probes`;
+      const reason = providerRpcIsStalled
+        ? `provider daemon RPC remained active for ${oldestActiveRpcAgeMs}ms`
+        : processIsKnownDead
+          ? `provider daemon process ${daemonPid} exited`
+          : `provider daemon failed ${consecutiveFailures} consecutive liveness probes`;
       yield* logDaemonWatchdogWarning("provider daemon recovery starting", {
         reason,
         consecutiveFailures,
         daemonPid: daemonPid ?? null,
+        oldestActiveRpcAgeMs: oldestActiveRpcAgeMs ?? null,
         lastError: Option.getOrNull(daemonSnapshot.lastError),
       });
 

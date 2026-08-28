@@ -554,11 +554,18 @@ export function advanceAtmosphereSceneInPlace(
   motionMode: FallingEffectMatrixMotionMode = "flat",
   matrixWalkLifecyclePercent = DEFAULT_FALLING_EFFECT_MATRIX_WALK_LIFECYCLE_PERCENT,
   matrixCenterWindIntensity = DEFAULT_FALLING_EFFECT_MATRIX_CENTER_WIND_INTENSITY,
+  maxFallingParticleCount = Number.POSITIVE_INFINITY,
 ): void {
   const deltaSeconds = Math.min(MAX_ATMOSPHERE_FRAME_DELTA_SECONDS, Math.max(0, elapsedSeconds));
   const speed = clampFallingEffectSpeed(requestedSpeed);
+  const activeParticleCount =
+    scene.kind !== "matrix" && Number.isFinite(maxFallingParticleCount)
+      ? Math.min(scene.particles.length, Math.max(0, Math.floor(maxFallingParticleCount)))
+      : scene.particles.length;
 
-  for (const [particleIndex, particle] of scene.particles.entries()) {
+  for (let particleIndex = 0; particleIndex < activeParticleCount; particleIndex += 1) {
+    const particle = scene.particles[particleIndex];
+    if (particle === undefined) continue;
     if (scene.kind === "matrix" && isMatrixWalkMotionMode(motionMode)) {
       const lifecycleDistance = resolveMatrixWalkLifecycleDistance(
         scene.height,
@@ -1231,6 +1238,7 @@ export function drawAtmosphereScene(
   walkStartFontSize = DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE,
   walkEndFontSize = DEFAULT_FALLING_EFFECT_MATRIX_WALK_END_FONT_SIZE,
   matrixBaseFontSize = DEFAULT_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE,
+  maxFallingParticleCount = Number.POSITIVE_INFINITY,
 ): void {
   context.clearRect(0, 0, scene.width, scene.height);
   const normalizedOpacity = Math.min(1, Math.max(0, opacity));
@@ -1244,10 +1252,15 @@ export function drawAtmosphereScene(
   const matrixBaseFontScale = resolveMatrixBaseFontScale(matrixBaseFontSize);
   const projectedFrom: AtmosphereProjectedPoint = { x: 0, y: 0, scale: 1, depthScale: 1 };
   const projectedTo: AtmosphereProjectedPoint = { x: 0, y: 0, scale: 1, depthScale: 1 };
+  const fallingParticleCount = Number.isFinite(maxFallingParticleCount)
+    ? Math.min(scene.particles.length, Math.max(0, Math.floor(maxFallingParticleCount)))
+    : scene.particles.length;
 
   if (scene.kind === "snow") {
     context.globalAlpha = normalizedOpacity;
-    for (const particle of scene.particles) {
+    for (let particleIndex = 0; particleIndex < fallingParticleCount; particleIndex += 1) {
+      const particle = scene.particles[particleIndex];
+      if (particle === undefined) continue;
       resolveAtmosphereProjectedPointInPlace(
         projectedFrom,
         scene,
@@ -1271,7 +1284,9 @@ export function drawAtmosphereScene(
   } else if (scene.kind === "rain") {
     context.globalAlpha = normalizedOpacity;
     context.lineCap = "round";
-    for (const particle of scene.particles) {
+    for (let particleIndex = 0; particleIndex < fallingParticleCount; particleIndex += 1) {
+      const particle = scene.particles[particleIndex];
+      if (particle === undefined) continue;
       resolveAtmosphereProjectedPointInPlace(
         projectedFrom,
         scene,

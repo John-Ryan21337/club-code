@@ -1,6 +1,7 @@
 import {
   EventId,
   MessageId,
+  ProviderDriverKind,
   ThreadId,
   TurnId,
   type OrchestrationThreadActivity,
@@ -14,6 +15,7 @@ import {
   deriveHistoricalWorkLogSummaries,
   derivePendingApprovals,
   derivePendingUserInputs,
+  derivePhase,
   deriveTimelineEntries,
   deriveWorkLogEntries,
   findLatestProposedPlan,
@@ -24,6 +26,47 @@ import {
   hasToolActivityForTurn,
   isLatestTurnSettled,
 } from "./session-logic";
+
+describe("derivePhase", () => {
+  it("keeps the composer in running mode while orchestration continues after provider response", () => {
+    expect(
+      derivePhase({
+        status: "ready",
+        provider: ProviderDriverKind.make("codex"),
+        orchestrationStatus: "running",
+        activeTurnId: TurnId.make("turn-orchestrator-running"),
+        createdAt: "2026-08-08T07:59:00.000Z",
+        updatedAt: "2026-08-08T08:00:00.000Z",
+      }),
+    ).toBe("running");
+  });
+
+  it("returns to ready when both durable activity signals are ready", () => {
+    expect(
+      derivePhase({
+        status: "ready",
+        provider: ProviderDriverKind.make("codex"),
+        orchestrationStatus: "ready",
+        activeTurnId: TurnId.make("turn-orphaned-after-provider-crash"),
+        createdAt: "2026-08-08T07:59:00.000Z",
+        updatedAt: "2026-08-08T08:00:00.000Z",
+      }),
+    ).toBe("ready");
+  });
+
+  it("keeps a closed session disconnected even if orchestration state is stale", () => {
+    expect(
+      derivePhase({
+        status: "closed",
+        provider: ProviderDriverKind.make("codex"),
+        orchestrationStatus: "running",
+        activeTurnId: TurnId.make("turn-stale-after-close"),
+        createdAt: "2026-08-08T07:59:00.000Z",
+        updatedAt: "2026-08-08T08:00:00.000Z",
+      }),
+    ).toBe("disconnected");
+  });
+});
 
 function makeActivity(overrides: {
   id?: string;
