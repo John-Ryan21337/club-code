@@ -2188,6 +2188,238 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect("isolates colliding tool block indexes between orchestrator and sub-agent", () => {
+    // The Agent SDK forwards a sub-agent's tool_use/tool_result blocks into the
+    // parent stream with their own block indexes, which restart at 0 per nested
+    // turn. While in-flight tools were keyed by the raw block index, a
+    // sub-agent's block 0 clobbered the orchestrator's block 0: the parent's
+    // input deltas landed on the child's entry and the parent tool_use was
+    // orphaned instead of completing with its own result.
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const context = yield* Effect.context<never>();
+      const runFork = Effect.runForkWith(context);
+      const adapter = yield* ClaudeAdapter;
+      const runtimeEvents: Array<ProviderRuntimeEvent> = [];
+
+      const runtimeEventsFiber = runFork(
+        Stream.runForEach(adapter.streamEvents, (event) =>
+          Effect.sync(() => {
+            runtimeEvents.push(event);
+          }),
+        ),
+      );
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "delegate the review",
+        attachments: [],
+      });
+      yield* Effect.yieldNow;
+      yield* Effect.yieldNow;
+      yield* Effect.yieldNow;
+      runtimeEvents.length = 0;
+
+      // The orchestrator opens block 0.
+      harness.query.emit({
+        type: "stream_event",
+        session_id: "sdk-session-block-collision",
+        uuid: "stream-main-tool-start",
+        parent_tool_use_id: null,
+        event: {
+          type: "content_block_start",
+          index: 0,
+          content_block: {
+            type: "tool_use",
+            id: "main-tool-1",
+            name: "Read",
+            input: {},
+          },
+        },
+      } as unknown as SDKMessage);
+
+      // The sub-agent opens its own block 0 in the same forwarded stream.
+      harness.query.emit({
+        type: "stream_event",
+        session_id: "sdk-session-block-collision",
+        uuid: "stream-nested-tool-start",
+        parent_tool_use_id: "toolu_parent_agent_2",
+        event: {
+          type: "content_block_start",
+          index: 0,
+          content_block: {
+            type: "tool_use",
+            id: "nested-tool-1",
+            name: "Grep",
+            input: {},
+          },
+        },
+      } as unknown as SDKMessage);
+
+      // Interleaved input deltas, both on block index 0.
+      harness.query.emit({
+        type: "stream_event",
+        session_id: "sdk-session-block-collision",
+        uuid: "stream-main-tool-input",
+        parent_tool_use_id: null,
+        event: {
+          type: "content_block_delta",
+          index: 0,
+          delta: {
+            type: "input_json_delta",
+            partial_json: '{"file_path":"main.ts"}',
+          },
+        },
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
+        type: "stream_event",
+        session_id: "sdk-session-block-collision",
+        uuid: "stream-nested-tool-input",
+        parent_tool_use_id: "toolu_parent_agent_2",
+        event: {
+          type: "content_block_delta",
+          index: 0,
+          delta: {
+            type: "input_json_delta",
+            partial_json: '{"pattern":"nested"}',
+          },
+        },
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
+        type: "stream_event",
+        session_id: "sdk-session-block-collision",
+        uuid: "stream-nested-tool-stop",
+        parent_tool_use_id: "toolu_parent_agent_2",
+        event: {
+          type: "content_block_stop",
+          index: 0,
+        },
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
+        type: "stream_event",
+        session_id: "sdk-session-block-collision",
+        uuid: "stream-main-tool-stop",
+        parent_tool_use_id: null,
+        event: {
+          type: "content_block_stop",
+          index: 0,
+        },
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
+        type: "user",
+        session_id: "sdk-session-block-collision",
+        uuid: "user-nested-tool-result",
+        parent_tool_use_id: "toolu_parent_agent_2",
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "nested-tool-1",
+              content: "nested result",
+              is_error: false,
+            },
+          ],
+        },
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
+        type: "user",
+        session_id: "sdk-session-block-collision",
+        uuid: "user-main-tool-result",
+        parent_tool_use_id: null,
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "main-tool-1",
+              content: "main result",
+              is_error: false,
+            },
+          ],
+        },
+      } as unknown as SDKMessage);
+
+      for (let index = 0; index < 12; index += 1) {
+        yield* Effect.yieldNow;
+      }
+
+      const mainStarted = runtimeEvents.find(
+        (event) => event.type === "item.started" && String(event.itemId) === "main-tool-1",
+      );
+      assert.equal(mainStarted?.type, "item.started");
+      if (mainStarted?.type === "item.started") {
+        const data = mainStarted.payload.data as Record<string, unknown>;
+        assert.equal(data.toolName, "Read");
+        assert.equal("parentToolUseId" in data, false);
+      }
+
+      const nestedStarted = runtimeEvents.find(
+        (event) => event.type === "item.started" && String(event.itemId) === "nested-tool-1",
+      );
+      assert.equal(nestedStarted?.type, "item.started");
+      if (nestedStarted?.type === "item.started") {
+        const data = nestedStarted.payload.data as Record<string, unknown>;
+        assert.equal(data.toolName, "Grep");
+        assert.equal(data.parentToolUseId, "toolu_parent_agent_2");
+      }
+
+      // Both calls resolve, and neither borrows the other's streamed input or
+      // tool_result payload.
+      const completedItemIds = runtimeEvents
+        .filter((event) => event.type === "item.completed")
+        .map((event) => String(event.itemId));
+      assert.deepEqual([...completedItemIds].sort(), ["main-tool-1", "nested-tool-1"]);
+
+      const mainCompleted = runtimeEvents.find(
+        (event) => event.type === "item.completed" && String(event.itemId) === "main-tool-1",
+      );
+      assert.equal(mainCompleted?.type, "item.completed");
+      if (mainCompleted?.type === "item.completed") {
+        assert.equal(mainCompleted.payload.status, "completed");
+        const data = mainCompleted.payload.data as {
+          readonly toolName?: string;
+          readonly input?: Record<string, unknown>;
+          readonly result?: Record<string, unknown>;
+        };
+        assert.equal(data.toolName, "Read");
+        assert.deepEqual(data.input, { file_path: "main.ts" });
+        assert.equal(data.result?.content, "main result");
+      }
+
+      const nestedCompleted = runtimeEvents.find(
+        (event) => event.type === "item.completed" && String(event.itemId) === "nested-tool-1",
+      );
+      assert.equal(nestedCompleted?.type, "item.completed");
+      if (nestedCompleted?.type === "item.completed") {
+        assert.equal(nestedCompleted.payload.status, "completed");
+        const data = nestedCompleted.payload.data as {
+          readonly toolName?: string;
+          readonly input?: Record<string, unknown>;
+          readonly result?: Record<string, unknown>;
+        };
+        assert.equal(data.toolName, "Grep");
+        assert.deepEqual(data.input, { pattern: "nested" });
+        assert.equal(data.result?.content, "nested result");
+      }
+
+      runtimeEventsFiber.interruptUnsafe();
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("leaves an orchestrator tool call unattributed", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
