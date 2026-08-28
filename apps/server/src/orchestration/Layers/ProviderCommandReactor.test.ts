@@ -32,6 +32,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
+import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
@@ -47,6 +48,11 @@ import {
   ProviderService,
   type ProviderServiceShape,
 } from "../../provider/Services/ProviderService.ts";
+import {
+  ProviderSessionDirectory,
+  type ProviderRuntimeBindingWithMetadata,
+  type ProviderSessionDirectoryShape,
+} from "../../provider/Services/ProviderSessionDirectory.ts";
 import { TextGeneration, type TextGenerationShape } from "../../textGeneration/TextGeneration.ts";
 import { RepositoryIdentityResolverLive } from "../../project/Layers/RepositoryIdentityResolver.ts";
 import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
@@ -153,6 +159,48 @@ async function waitFor(
   }
 }
 
+/**
+ * `listSessionsInventory` separates "the daemon says there are no sessions"
+ * from "the daemon never answered". It is declared here as an intersection so
+ * the harness keeps typechecking both before and after the ProviderService
+ * layer adopts it.
+ */
+interface ProviderSessionInventoryResult {
+  readonly available: boolean;
+  readonly sessions: ReadonlyArray<ProviderSession>;
+}
+
+type ProviderServiceTestShape = ProviderServiceShape & {
+  readonly listSessionsInventory: () => Effect.Effect<ProviderSessionInventoryResult>;
+};
+
+const LIVE_RUNTIME_OWNER_UUID = "0d1a3f5e-6b7c-4d8e-9f01-23456789abcd";
+
+function liveRuntimeOwnerPayload(extra?: Record<string, unknown>): Record<string, unknown> {
+  const nowIso = new Date().toISOString();
+  return {
+    ...extra,
+    runtimeOwnerId: LIVE_RUNTIME_OWNER_UUID,
+    // This process is guaranteed to be signal-addressable from itself, which is
+    // exactly the liveness proof `hasLiveProviderRuntimeOwner` looks for.
+    runtimeOwnerPid: process.pid,
+    runtimeOwnerStartedAt: nowIso,
+    runtimeOwnerHeartbeatAt: nowIso,
+  };
+}
+
+function staleRuntimeOwnerPayload(extra?: Record<string, unknown>): Record<string, unknown> {
+  const startedAt = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+  const heartbeatAt = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+  return {
+    ...extra,
+    runtimeOwnerId: LIVE_RUNTIME_OWNER_UUID,
+    runtimeOwnerPid: process.pid,
+    runtimeOwnerStartedAt: startedAt,
+    runtimeOwnerHeartbeatAt: heartbeatAt,
+  };
+}
+
 describe("ProviderCommandReactor", () => {
   let runtime: ManagedRuntime.ManagedRuntime<
     OrchestrationEngineService | ProviderCommandReactor | ProjectionSnapshotQuery,
@@ -237,6 +285,8 @@ describe("ProviderCommandReactor", () => {
     readonly threadGoals?: "supported" | "unsupported";
     readonly startReactor?: boolean;
     readonly listSessions?: ProviderServiceShape["listSessions"];
+    readonly listSessionsInventory?: ProviderServiceTestShape["listSessionsInventory"];
+    readonly providerBindings?: ReadonlyArray<ProviderRuntimeBindingWithMetadata>;
   }) {
     const now = "2026-01-01T00:00:00.000Z";
     const baseDir = input?.baseDir ?? fs.mkdtempSync(path.join(os.tmpdir(), "t3code-reactor-"));
@@ -451,7 +501,36 @@ describe("ProviderCommandReactor", () => {
     );
 
     const unsupported = () => Effect.die(new Error("Unsupported provider call in test")) as never;
-    const service: ProviderServiceShape = {
+    const listSessions = input?.listSessions ?? (() => Effect.succeed(runtimeSessions));
+    const providerBindings = new Map<string, ProviderRuntimeBindingWithMetadata>(
+      (input?.providerBindings ?? []).map(
+        (binding) => [String(binding.threadId), binding] as const,
+      ),
+    );
+    const setProviderBinding = (binding: ProviderRuntimeBindingWithMetadata): void => {
+      providerBindings.set(String(binding.threadId), binding);
+    };
+    const listBindings = vi.fn<ProviderSessionDirectoryShape["listBindings"]>(() =>
+      Effect.succeed([...providerBindings.values()]),
+    );
+    const providerSessionDirectory: ProviderSessionDirectoryShape = {
+      upsert: (binding) =>
+        Effect.sync(() => {
+          setProviderBinding({ ...binding, lastSeenAt: now } as ProviderRuntimeBindingWithMetadata);
+        }),
+      getProvider: (threadId) => {
+        const binding = providerBindings.get(String(threadId));
+        return binding === undefined
+          ? Effect.die(new Error(`No provider binding for thread '${threadId}' in test`))
+          : Effect.succeed(binding.provider);
+      },
+      getBinding: (threadId) =>
+        Effect.succeed(Option.fromNullishOr(providerBindings.get(String(threadId)))),
+      listThreadIds: () =>
+        Effect.succeed([...providerBindings.values()].map((binding) => binding.threadId)),
+      listBindings,
+    };
+    const service: ProviderServiceTestShape = {
       startSession: startSession as ProviderServiceShape["startSession"],
       sendTurn: sendTurn as ProviderServiceShape["sendTurn"],
       steerTurn: steerTurn as ProviderServiceShape["steerTurn"],
@@ -460,7 +539,11 @@ describe("ProviderCommandReactor", () => {
       respondToUserInput: respondToUserInput as ProviderServiceShape["respondToUserInput"],
       stopSession: stopSession as ProviderServiceShape["stopSession"],
       restartProviderRuntime: () => unsupported(),
-      listSessions: input?.listSessions ?? (() => Effect.succeed(runtimeSessions)),
+      listSessions,
+      listSessionsInventory:
+        input?.listSessionsInventory ??
+        (() =>
+          listSessions().pipe(Effect.map((sessions) => ({ available: true, sessions }) as const))),
       getCapabilities,
       getInstanceInfo: (instanceId) => {
         const raw = String(instanceId);
@@ -515,6 +598,7 @@ describe("ProviderCommandReactor", () => {
       Layer.provideMerge(orchestrationLayer),
       Layer.provideMerge(projectionSnapshotLayer),
       Layer.provideMerge(Layer.succeed(ProviderService, service)),
+      Layer.provideMerge(Layer.succeed(ProviderSessionDirectory, providerSessionDirectory)),
       Layer.provideMerge(
         Layer.mock(GitWorkflowService)({
           renameBranch,
@@ -624,6 +708,8 @@ describe("ProviderCommandReactor", () => {
       generateBranchName,
       generateThreadTitle,
       runtimeSessions,
+      setProviderBinding,
+      listBindings,
       stateDir,
       systemPromptPath,
       startReactor,
@@ -1183,6 +1269,459 @@ describe("ProviderCommandReactor", () => {
         (message) => message.text === "Club Code restarted, continue what you were doing",
       ),
     ).toBe(false);
+  });
+
+  it("skips restart recovery entirely when the provider session inventory is unavailable", async () => {
+    const listSessionsInventory = vi.fn(() =>
+      Effect.succeed({ available: false, sessions: [] as ReadonlyArray<ProviderSession> }),
+    );
+    const harness = await createHarness({ startReactor: false, listSessionsInventory });
+    const threadId = ThreadId.make("thread-1");
+    const interruptedTurnId = asTurnId("turn-during-daemon-stall");
+    const now = "2026-01-01T00:00:00.000Z";
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-running-turn-before-inventory-outage"),
+        threadId,
+        message: {
+          messageId: asMessageId("user-message-before-inventory-outage"),
+          role: "user",
+          text: "long provider turn",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-running-session-before-inventory-outage"),
+        threadId,
+        session: {
+          threadId,
+          status: "running",
+          providerName: ProviderDriverKind.make("codex"),
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          runtimeMode: "approval-required",
+          activeTurnId: interruptedTurnId,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+
+    await harness.startReactor();
+    await waitForEventLoopTurn();
+    await harness.drain();
+
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+    // An unreachable daemon must not even be asked which bindings look orphaned.
+    expect(harness.listBindings).not.toHaveBeenCalled();
+    const thread = (await harness.readModel()).threads.find((entry) => entry.id === threadId);
+    expect(thread?.session?.status).toBe("running");
+    expect(thread?.session?.activeTurnId).toBe(interruptedTurnId);
+    expect(
+      thread?.activities.some((activity) => activity.kind === "runtime.restart-recovery"),
+    ).toBe(false);
+  });
+
+  it("does not continue a projected running turn while a durable runtime owner lease is live", async () => {
+    const harness = await createHarness({ startReactor: false });
+    const threadId = ThreadId.make("thread-1");
+    const interruptedTurnId = asTurnId("turn-owned-by-detached-daemon");
+    const now = "2026-01-01T00:00:00.000Z";
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-running-turn-owned-by-daemon"),
+        threadId,
+        message: {
+          messageId: asMessageId("user-message-owned-by-daemon"),
+          role: "user",
+          text: "the detached daemon still owns this",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-running-session-owned-by-daemon"),
+        threadId,
+        session: {
+          threadId,
+          status: "running",
+          providerName: ProviderDriverKind.make("codex"),
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          runtimeMode: "approval-required",
+          activeTurnId: interruptedTurnId,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+    // The local ProviderService reports no session, but the shared directory
+    // still carries a live owner lease from the process that owns the turn.
+    harness.setProviderBinding({
+      threadId,
+      provider: ProviderDriverKind.make("codex"),
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      status: "running",
+      runtimeMode: "approval-required",
+      runtimePayload: liveRuntimeOwnerPayload({ activeTurnId: String(interruptedTurnId) }),
+      lastSeenAt: now,
+    });
+
+    await harness.startReactor();
+    await waitForEventLoopTurn();
+    await harness.drain();
+
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+    const thread = (await harness.readModel()).threads.find((entry) => entry.id === threadId);
+    expect(thread?.session?.status).toBe("running");
+    expect(thread?.session?.activeTurnId).toBe(interruptedTurnId);
+    expect(
+      thread?.messages.some(
+        (message) => message.text === "Club Code restarted, continue what you were doing",
+      ),
+    ).toBe(false);
+  });
+
+  it("continues a projected running turn when the durable runtime owner lease is stale", async () => {
+    const harness = await createHarness({ startReactor: false });
+    const threadId = ThreadId.make("thread-1");
+    const interruptedTurnId = asTurnId("turn-with-stale-owner-lease");
+    const now = "2026-01-01T00:00:00.000Z";
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-running-turn-stale-owner"),
+        threadId,
+        message: {
+          messageId: asMessageId("user-message-stale-owner"),
+          role: "user",
+          text: "the owning daemon died",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-running-session-stale-owner"),
+        threadId,
+        session: {
+          threadId,
+          status: "running",
+          providerName: ProviderDriverKind.make("codex"),
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          runtimeMode: "approval-required",
+          activeTurnId: interruptedTurnId,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+    harness.setProviderBinding({
+      threadId,
+      provider: ProviderDriverKind.make("codex"),
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      status: "running",
+      runtimeMode: "approval-required",
+      runtimePayload: staleRuntimeOwnerPayload({ activeTurnId: String(interruptedTurnId) }),
+      lastSeenAt: now,
+    });
+
+    await harness.startReactor();
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+    expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+      threadId,
+      input: "Club Code restarted, continue what you were doing",
+    });
+    const thread = (await harness.readModel()).threads.find((entry) => entry.id === threadId);
+    expect(
+      thread?.activities.some((activity) => activity.kind === "runtime.restart-recovery"),
+    ).toBe(true);
+  });
+
+  it("never continues a stopped projected session after restart", async () => {
+    const harness = await createHarness({ startReactor: false });
+    const threadId = ThreadId.make("thread-1");
+    const stoppedTurnId = asTurnId("turn-stopped-by-user");
+    const now = "2026-01-01T00:00:00.000Z";
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-running-turn-before-user-stop"),
+        threadId,
+        message: {
+          messageId: asMessageId("user-message-before-user-stop"),
+          role: "user",
+          text: "the user pressed stop on this",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-stopped-session-after-user-stop"),
+        threadId,
+        session: {
+          threadId,
+          status: "stopped",
+          providerName: ProviderDriverKind.make("codex"),
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          runtimeMode: "approval-required",
+          activeTurnId: stoppedTurnId,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+
+    await harness.startReactor();
+    await waitForEventLoopTurn();
+    await harness.drain();
+
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+    const thread = (await harness.readModel()).threads.find((entry) => entry.id === threadId);
+    expect(
+      thread?.messages.some(
+        (message) => message.text === "Club Code restarted, continue what you were doing",
+      ),
+    ).toBe(false);
+    expect(
+      thread?.activities.some((activity) => activity.kind === "runtime.restart-recovery"),
+    ).toBe(false);
+  });
+
+  it("switches providers instead of steering a stale active runtime turn", async () => {
+    const harness = await createHarness({
+      threadModelSelection: {
+        instanceId: ProviderInstanceId.make("claudeAgent"),
+        model: "claude-sonnet-4-6",
+      },
+      liveSteer: "supported",
+    });
+    const threadId = ThreadId.make("thread-1");
+    const createdAt = "2026-01-01T00:00:00.000Z";
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-claude-session-before-provider-switch"),
+        threadId,
+        session: {
+          threadId,
+          status: "ready",
+          providerName: ProviderDriverKind.make("claudeAgent"),
+          providerInstanceId: ProviderInstanceId.make("claudeAgent"),
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: createdAt,
+        },
+        createdAt,
+      }),
+    );
+    // The Claude runtime still reports an active turn while the projection has
+    // already settled. Steering it would deliver the message to the outgoing
+    // provider and silently drop the switch the user asked for.
+    harness.runtimeSessions.push({
+      threadId,
+      provider: ProviderDriverKind.make("claudeAgent"),
+      providerInstanceId: ProviderInstanceId.make("claudeAgent"),
+      status: "running",
+      runtimeMode: "approval-required",
+      model: "claude-sonnet-4-6",
+      activeTurnId: asTurnId("stale-claude-active-turn"),
+      resumeCursor: { opaque: "resume-claude" },
+      createdAt,
+      updatedAt: createdAt,
+    });
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-codex-provider-switch"),
+        threadId,
+        message: {
+          messageId: asMessageId("user-message-codex-provider-switch"),
+          role: "user",
+          text: "continue with codex",
+          attachments: [],
+        },
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5.6-sol",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: "2026-01-01T00:00:01.000Z",
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+    expect(harness.steerTurn).not.toHaveBeenCalled();
+    expect(harness.startSession).toHaveBeenCalledOnce();
+    expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
+      provider: ProviderDriverKind.make("codex"),
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      modelSelection: {
+        instanceId: ProviderInstanceId.make("codex"),
+        model: "gpt-5.6-sol",
+      },
+    });
+    expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+      threadId,
+      modelSelection: {
+        instanceId: ProviderInstanceId.make("codex"),
+        model: "gpt-5.6-sol",
+      },
+    });
+  });
+
+  it("re-materializes the provider session when runtime mode changed during a provider stall", async () => {
+    const harness = await createHarness({ listSessions: () => Effect.succeed([]) });
+    const threadId = ThreadId.make("thread-1");
+    const createdAt = "2026-01-01T00:00:01.000Z";
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-ready-session-before-runtime-mode-change"),
+        threadId,
+        session: {
+          threadId,
+          status: "ready",
+          providerName: ProviderDriverKind.make("codex"),
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          runtimeMode: "full-access",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: createdAt,
+        },
+        createdAt,
+      }),
+    );
+    // The durable binding records what the running session was actually started
+    // with. During the stall the runtime-mode change never reached the provider.
+    harness.setProviderBinding({
+      threadId,
+      provider: ProviderDriverKind.make("codex"),
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      status: "running",
+      runtimeMode: "full-access",
+      runtimePayload: { cwd: null, additionalDirectories: [], model: "gpt-5-codex" },
+      lastSeenAt: createdAt,
+    });
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-after-runtime-mode-change"),
+        threadId,
+        message: {
+          messageId: asMessageId("user-message-after-runtime-mode-change"),
+          role: "user",
+          text: "run this under the stricter mode",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: "2026-01-01T00:00:02.000Z",
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+    // The fabricated route would have skipped ensureSessionForThread and run
+    // the turn under the previous, more permissive session.
+    expect(harness.startSession).toHaveBeenCalledOnce();
+    expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
+      runtimeMode: "approval-required",
+    });
+  });
+
+  it("keeps the fabricated route when the durable binding still matches the thread settings", async () => {
+    const harness = await createHarness({ listSessions: () => Effect.succeed([]) });
+    const threadId = ThreadId.make("thread-1");
+    const createdAt = "2026-01-01T00:00:01.000Z";
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-ready-session-matching-binding"),
+        threadId,
+        session: {
+          threadId,
+          status: "ready",
+          providerName: ProviderDriverKind.make("codex"),
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: createdAt,
+        },
+        createdAt,
+      }),
+    );
+    harness.setProviderBinding({
+      threadId,
+      provider: ProviderDriverKind.make("codex"),
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      status: "running",
+      runtimeMode: "approval-required",
+      runtimePayload: { cwd: null, additionalDirectories: [], model: "gpt-5-codex" },
+      lastSeenAt: createdAt,
+    });
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-matching-binding"),
+        threadId,
+        message: {
+          messageId: asMessageId("user-message-matching-binding"),
+          role: "user",
+          text: "keep this accepted prompt moving",
+          attachments: [],
+        },
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: "2026-01-01T00:00:02.000Z",
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(harness.startSession).not.toHaveBeenCalled();
   });
 
   it("reacts to thread.turn.start by ensuring session and sending provider turn", async () => {

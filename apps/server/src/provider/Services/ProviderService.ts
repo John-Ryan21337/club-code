@@ -147,6 +147,20 @@ export interface ProviderServiceShape {
   readonly listSessions: () => Effect.Effect<ReadonlyArray<ProviderSession>>;
 
   /**
+   * List active provider sessions together with an explicit availability flag.
+   *
+   * `listSessions` collapses "the runtime reports no sessions" and "the runtime
+   * could not be reached" into the same empty array. Reconcilers must not treat
+   * an unreachable provider daemon as proof that every session stopped, so this
+   * variant reports `available: false` when the inventory could not be read.
+   * The local layer always owns its adapters, so it always reports `true`.
+   */
+  readonly listSessionsInventory: () => Effect.Effect<
+    { readonly available: boolean; readonly sessions: ReadonlyArray<ProviderSession> },
+    never
+  >;
+
+  /**
    * Read capabilities for the adapter bound to a configured provider instance.
    */
   readonly getCapabilities: (

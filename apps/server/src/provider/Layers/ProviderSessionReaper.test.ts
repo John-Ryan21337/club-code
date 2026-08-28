@@ -143,6 +143,8 @@ describe("ProviderSessionReaper", () => {
       stopSession,
       restartProviderRuntime: () => unsupported(),
       listSessions: () => Effect.succeed(input.liveSessions ?? []),
+      listSessionsInventory: () =>
+        Effect.succeed({ available: true, sessions: input.liveSessions ?? [] }),
       getCapabilities: () =>
         Effect.succeed({ sessionModelSwitch: "in-session", liveSteer: "unsupported" }),
       getInstanceInfo: (instanceId) => {
