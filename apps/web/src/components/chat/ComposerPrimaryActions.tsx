@@ -24,6 +24,7 @@ interface ComposerPrimaryActionsProps {
   isEnvironmentUnavailable: boolean;
   isPreparingWorktree: boolean;
   hasSendableContent: boolean;
+  canQueueDuringHandoff: boolean;
   preserveComposerFocusOnPointerDown?: boolean;
   onPreviousPendingQuestion: () => void;
   onInterrupt: () => void;
@@ -48,6 +49,17 @@ export const formatPendingPrimaryActionLabel = (input: {
   return input.questionIndex > 0 ? "Submit answers" : "Submit answer";
 };
 
+export const isComposerPrimaryActionDisabled = (input: {
+  readonly isSendBusy: boolean;
+  readonly isConnecting: boolean;
+  readonly isEnvironmentUnavailable: boolean;
+  readonly hasSendableContent: boolean;
+  readonly canQueueDuringHandoff: boolean;
+}): boolean =>
+  input.isEnvironmentUnavailable ||
+  !input.hasSendableContent ||
+  ((input.isSendBusy || input.isConnecting) && !input.canQueueDuringHandoff);
+
 const preventPointerFocus: PointerEventHandler<HTMLElement> = (event) => {
   event.preventDefault();
 };
@@ -63,6 +75,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   isEnvironmentUnavailable,
   isPreparingWorktree,
   hasSendableContent,
+  canQueueDuringHandoff,
   preserveComposerFocusOnPointerDown = false,
   onPreviousPendingQuestion,
   onInterrupt,
@@ -150,7 +163,13 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
           type="submit"
           className="flex size-8 enabled:cursor-pointer items-center justify-center rounded-full bg-primary/90 text-primary-foreground transition-all duration-150 hover:bg-primary disabled:pointer-events-none disabled:opacity-30"
           {...pointerFocusProps}
-          disabled={isSendBusy || isConnecting || isEnvironmentUnavailable}
+          disabled={isComposerPrimaryActionDisabled({
+            isSendBusy,
+            isConnecting,
+            isEnvironmentUnavailable,
+            hasSendableContent,
+            canQueueDuringHandoff,
+          })}
           aria-label="Queue message"
         >
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
@@ -227,20 +246,28 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
       type="submit"
       className="flex h-9 w-9 enabled:cursor-pointer items-center justify-center rounded-full bg-primary/90 text-primary-foreground transition-all duration-150 hover:bg-primary hover:scale-105 disabled:pointer-events-none disabled:opacity-30 disabled:hover:scale-100 sm:h-8 sm:w-8"
       {...pointerFocusProps}
-      disabled={isSendBusy || isConnecting || isEnvironmentUnavailable || !hasSendableContent}
+      disabled={isComposerPrimaryActionDisabled({
+        isSendBusy,
+        isConnecting,
+        isEnvironmentUnavailable,
+        hasSendableContent,
+        canQueueDuringHandoff,
+      })}
       aria-label={
         isEnvironmentUnavailable
           ? "Environment disconnected"
-          : isConnecting
-            ? "Connecting"
-            : isPreparingWorktree
-              ? "Preparing worktree"
-              : isSendBusy
-                ? "Sending"
-                : "Send message"
+          : (isConnecting || isSendBusy) && canQueueDuringHandoff
+            ? "Queue message"
+            : isConnecting
+              ? "Connecting"
+              : isPreparingWorktree
+                ? "Preparing worktree"
+                : isSendBusy
+                  ? "Sending"
+                  : "Send message"
       }
     >
-      {isConnecting || isSendBusy ? (
+      {(isConnecting || isSendBusy) && !canQueueDuringHandoff ? (
         <svg
           width="14"
           height="14"

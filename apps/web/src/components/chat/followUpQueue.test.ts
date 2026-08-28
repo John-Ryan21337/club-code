@@ -22,6 +22,7 @@ import {
   releaseQueuedFollowUpDispatchClaim,
   selectQueuedFollowUpDispatchCandidate,
   shouldRetainLocalFollowUpShadow,
+  shouldQueueDuringProviderHandoff,
   shouldQueueOperatorFollowUp,
   tryClaimQueuedFollowUpDispatch,
   visibleQueuedManualFollowUps,
@@ -57,6 +58,30 @@ describe("followUpQueue", () => {
         liveSteerSupported: true,
       }),
     ).toBe("queue");
+  });
+
+  it("queues new operator input while the previous provider handoff is pending", () => {
+    expect(
+      shouldQueueDuringProviderHandoff({
+        isSendBusy: true,
+        isConnecting: false,
+        isDispatchInFlight: false,
+      }),
+    ).toBe(true);
+    expect(
+      shouldQueueDuringProviderHandoff({
+        isSendBusy: false,
+        isConnecting: true,
+        isDispatchInFlight: false,
+      }),
+    ).toBe(true);
+    expect(
+      shouldQueueDuringProviderHandoff({
+        isSendBusy: false,
+        isConnecting: false,
+        isDispatchInFlight: false,
+      }),
+    ).toBe(false);
   });
 
   it("keeps the queued item visible during a running turn until Steer is explicit", () => {

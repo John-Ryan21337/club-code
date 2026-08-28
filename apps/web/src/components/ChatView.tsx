@@ -171,6 +171,7 @@ import {
   releaseQueuedFollowUpDispatchClaim,
   selectQueuedFollowUpDispatchCandidate,
   shouldRetainLocalFollowUpShadow,
+  shouldQueueDuringProviderHandoff,
   shouldQueueOperatorFollowUp,
   tryClaimQueuedFollowUpDispatch,
   visibleQueuedManualFollowUps,
@@ -6006,15 +6007,7 @@ export default function ChatView(props: ChatViewProps) {
     // authorization before touching the provider.
     recordManualAutoNudgeActivity();
     const api = readEnvironmentApi(environmentId);
-    if (
-      !api ||
-      !activeThread ||
-      isSendBusy ||
-      isComposerConnecting ||
-      activeEnvironmentUnavailable ||
-      sendInFlightRef.current
-    )
-      return;
+    if (!api || !activeThread || activeEnvironmentUnavailable) return;
     if (activePendingProgress) {
       onAdvanceActivePendingUserInput();
       return;
@@ -6034,6 +6027,21 @@ export default function ChatView(props: ChatViewProps) {
       prompt: promptForSend,
       imageCount: composerImages.length,
     });
+    if (
+      shouldQueueDuringProviderHandoff({
+        isSendBusy,
+        isConnecting: isComposerConnecting,
+        isDispatchInFlight: sendInFlightRef.current,
+      })
+    ) {
+      if (!hasSendableContent) return;
+      // A provider handoff can take time, but it is not an input lock. Keep the
+      // new operator message in the durable FIFO while the earlier send starts.
+      updateManualStopBarrier(activeThread.environmentId, activeThread.id, null);
+      pinTimelineToEndForLocalMessage();
+      enqueueFollowUpSnapshot(snapshot);
+      return;
+    }
     const standaloneGoalCommand =
       composerImages.length === 0 && goalControlsSupported
         ? parseStandaloneComposerGoalCommand(trimmed)
@@ -6926,13 +6934,7 @@ export default function ChatView(props: ChatViewProps) {
   const onSteer = async (e?: { preventDefault: () => void }) => {
     e?.preventDefault();
     recordManualAutoNudgeActivity();
-    if (
-      !activeThread ||
-      isSendBusy ||
-      isComposerConnecting ||
-      activeEnvironmentUnavailable ||
-      sendInFlightRef.current
-    ) {
+    if (!activeThread || activeEnvironmentUnavailable) {
       return;
     }
     if (activePendingProgress) {
@@ -6946,6 +6948,18 @@ export default function ChatView(props: ChatViewProps) {
       imageCount: snapshot.images.length,
     });
     if (!hasSendableContent) return;
+    if (
+      shouldQueueDuringProviderHandoff({
+        isSendBusy,
+        isConnecting: isComposerConnecting,
+        isDispatchInFlight: sendInFlightRef.current,
+      })
+    ) {
+      updateManualStopBarrier(activeThread.environmentId, activeThread.id, null);
+      pinTimelineToEndForLocalMessage();
+      enqueueFollowUpSnapshot(snapshot);
+      return;
+    }
     updateManualStopBarrier(activeThread.environmentId, activeThread.id, null);
     const delivery = decideFollowUpDelivery({
       phase: followUpQueuePhase,

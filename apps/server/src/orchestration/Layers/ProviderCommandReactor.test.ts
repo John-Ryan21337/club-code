@@ -998,13 +998,8 @@ describe("ProviderCommandReactor", () => {
     expect(harness.sendTurn).toHaveBeenCalledOnce();
   });
 
-  it("delivers an accepted prompt through its durable binding when session inventory times out", async () => {
-    let failInventoryReads = false;
-    const listSessions = vi.fn(() =>
-      failInventoryReads
-        ? Effect.die(new Error("provider daemon listSessions request timed out"))
-        : Effect.succeed<ReadonlyArray<ProviderSession>>([]),
-    );
+  it("delivers an accepted prompt through its durable binding when remote inventory masks a timeout as empty", async () => {
+    const listSessions = vi.fn(() => Effect.succeed<ReadonlyArray<ProviderSession>>([]));
     const harness = await createHarness({
       listSessions,
       getCapabilitiesFailureDetail: "provider daemon request timed out",
@@ -1030,8 +1025,6 @@ describe("ProviderCommandReactor", () => {
         createdAt,
       }),
     );
-    failInventoryReads = true;
-
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.start",
@@ -2942,13 +2935,8 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
-  it("routes an accepted steer through durable active-turn state when daemon reads time out", async () => {
-    let failInventoryReads = false;
-    const listSessions = vi.fn(() =>
-      failInventoryReads
-        ? Effect.die(new Error("provider daemon listSessions request timed out"))
-        : Effect.succeed<ReadonlyArray<ProviderSession>>([]),
-    );
+  it("routes an accepted steer through durable active-turn state when remote inventory masks a timeout as empty", async () => {
+    const listSessions = vi.fn(() => Effect.succeed<ReadonlyArray<ProviderSession>>([]));
     const harness = await createHarness({
       listSessions,
       getCapabilitiesFailureDetail: "provider daemon request timed out",
@@ -2975,8 +2963,6 @@ describe("ProviderCommandReactor", () => {
         createdAt: now,
       }),
     );
-    failInventoryReads = true;
-
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.steer",
@@ -2996,6 +2982,7 @@ describe("ProviderCommandReactor", () => {
     await harness.drain();
 
     const thread = (await harness.readModel()).threads.find((entry) => entry.id === threadId);
+    expect(listSessions).toHaveBeenCalled();
     expect(harness.getCapabilities).not.toHaveBeenCalled();
     expect(harness.sendTurn).not.toHaveBeenCalled();
     expect(harness.steerTurn).toHaveBeenCalledOnce();
@@ -3333,21 +3320,38 @@ describe("ProviderCommandReactor", () => {
   });
 
   it("does not route steer requests to providers without live steering support", async () => {
-    const harness = await createHarness({ liveSteer: "unsupported" });
     const now = "2026-01-01T00:00:00.000Z";
+    const threadId = ThreadId.make("thread-1");
+    const activeTurnId = asTurnId("turn-1");
+    const harness = await createHarness({
+      liveSteer: "unsupported",
+      listSessions: () =>
+        Effect.succeed([
+          {
+            threadId,
+            status: "running",
+            provider: ProviderDriverKind.make("codex"),
+            providerInstanceId: ProviderInstanceId.make("codex"),
+            runtimeMode: "approval-required",
+            activeTurnId,
+            createdAt: now,
+            updatedAt: now,
+          },
+        ]),
+    });
 
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.session.set",
         commandId: CommandId.make("cmd-session-set-steer-unsupported"),
-        threadId: ThreadId.make("thread-1"),
+        threadId,
         session: {
-          threadId: ThreadId.make("thread-1"),
+          threadId,
           status: "running",
           providerName: "codex",
           providerInstanceId: ProviderInstanceId.make("codex"),
           runtimeMode: "approval-required",
-          activeTurnId: asTurnId("turn-1"),
+          activeTurnId,
           lastError: null,
           updatedAt: now,
         },
@@ -3359,7 +3363,7 @@ describe("ProviderCommandReactor", () => {
       harness.engine.dispatch({
         type: "thread.turn.steer",
         commandId: CommandId.make("cmd-turn-steer-unsupported"),
-        threadId: ThreadId.make("thread-1"),
+        threadId,
         message: {
           messageId: asMessageId("user-message-steer-unsupported"),
           role: "user",
@@ -3374,8 +3378,8 @@ describe("ProviderCommandReactor", () => {
     expect(harness.sendTurn.mock.calls.length).toBe(0);
     expect(harness.steerTurn.mock.calls.length).toBe(0);
     const readModel = await harness.readModel();
-    const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
-    expect(thread?.activities.at(-1)).toMatchObject({
+    const projectedThread = readModel.threads.find((entry) => entry.id === threadId);
+    expect(projectedThread?.activities.at(-1)).toMatchObject({
       kind: "provider.turn.steer.failed",
       payload: {
         detail:

@@ -41,6 +41,7 @@ import {
   detectComposerTrigger,
   expandCollapsedComposerCursor,
   replaceTextRange,
+  shouldDisableComposerEditor,
 } from "../../composer-logic";
 import {
   EMBEDDED_BROWSER_DRAFT_HANDOFF_EVENT,
@@ -424,6 +425,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
   isConnecting: boolean;
   isEnvironmentUnavailable: boolean;
   hasSendableContent: boolean;
+  canQueueDuringHandoff: boolean;
   pendingStatusLabel: string | null;
   preserveComposerFocusOnPointerDown?: boolean;
   onPreviousPendingQuestion: () => void;
@@ -452,6 +454,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
         isEnvironmentUnavailable={props.isEnvironmentUnavailable}
         isPreparingWorktree={props.isPreparingWorktree}
         hasSendableContent={props.hasSendableContent}
+        canQueueDuringHandoff={props.canQueueDuringHandoff}
         preserveComposerFocusOnPointerDown={props.preserveComposerFocusOnPointerDown ?? false}
         onPreviousPendingQuestion={props.onPreviousPendingQuestion}
         onInterrupt={props.onInterrupt}
@@ -1678,11 +1681,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   // is overlaid on the editor instead. Approval state keeps its own footer.
   const showMobileComposerActionsOverlay =
     isOnScreenKeyboardDevice && !isComposerCollapsedMobile && !isComposerApprovalState;
-  const composerEditorDisabled =
-    isSendBusy ||
-    isConnecting ||
-    isComposerApprovalState ||
-    (environmentUnavailable !== null && activePendingProgress === null);
+  const composerEditorDisabled = shouldDisableComposerEditor({
+    isSendBusy,
+    isConnecting,
+    isApprovalState: isComposerApprovalState,
+    environmentUnavailable: environmentUnavailable !== null,
+    hasPendingProgress: activePendingProgress !== null,
+  });
   const previousComposerEditorDisabledRef = useRef(composerEditorDisabled);
 
   // ------------------------------------------------------------------
@@ -3256,6 +3261,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                       isEnvironmentUnavailable={environmentUnavailable !== null}
                       isPreparingWorktree={false}
                       hasSendableContent={false}
+                      canQueueDuringHandoff={false}
                       preserveComposerFocusOnPointerDown
                       onPreviousPendingQuestion={onPreviousActivePendingUserInputQuestion}
                       onInterrupt={handleInterruptPrimaryAction}
@@ -3477,6 +3483,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     isEnvironmentUnavailable={environmentUnavailable !== null}
                     isPreparingWorktree={isPreparingWorktree}
                     hasSendableContent={composerSendState.hasSendableContent}
+                    canQueueDuringHandoff={!isVideoReferenceBusy}
                     preserveComposerFocusOnPointerDown
                     onPreviousPendingQuestion={onPreviousActivePendingUserInputQuestion}
                     onInterrupt={handleInterruptPrimaryAction}
@@ -3633,6 +3640,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   isEnvironmentUnavailable={environmentUnavailable !== null}
                   isPreparingWorktree={isPreparingWorktree}
                   hasSendableContent={composerSendState.hasSendableContent}
+                  canQueueDuringHandoff={!isVideoReferenceBusy}
                   pendingStatusLabel={composerPendingStatusLabel}
                   preserveComposerFocusOnPointerDown
                   onPreviousPendingQuestion={onPreviousActivePendingUserInputQuestion}

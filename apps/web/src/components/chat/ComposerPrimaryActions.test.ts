@@ -1,6 +1,44 @@
 import { describe, expect, it } from "vitest";
 
-import { formatPendingPrimaryActionLabel } from "./ComposerPrimaryActions";
+import {
+  formatPendingPrimaryActionLabel,
+  isComposerPrimaryActionDisabled,
+} from "./ComposerPrimaryActions";
+
+describe("isComposerPrimaryActionDisabled", () => {
+  it("keeps the queue action enabled during a provider handoff", () => {
+    expect(
+      isComposerPrimaryActionDisabled({
+        isSendBusy: true,
+        isConnecting: true,
+        isEnvironmentUnavailable: false,
+        hasSendableContent: true,
+        canQueueDuringHandoff: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps unsafe or incomplete actions disabled", () => {
+    expect(
+      isComposerPrimaryActionDisabled({
+        isSendBusy: true,
+        isConnecting: false,
+        isEnvironmentUnavailable: false,
+        hasSendableContent: true,
+        canQueueDuringHandoff: false,
+      }),
+    ).toBe(true);
+    expect(
+      isComposerPrimaryActionDisabled({
+        isSendBusy: false,
+        isConnecting: false,
+        isEnvironmentUnavailable: false,
+        hasSendableContent: false,
+        canQueueDuringHandoff: true,
+      }),
+    ).toBe(true);
+  });
+});
 
 describe("formatPendingPrimaryActionLabel", () => {
   it("returns 'Submitting...' while responding", () => {

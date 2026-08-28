@@ -1369,11 +1369,12 @@ const make = Effect.gen(function* () {
     const requestedModelSelection =
       input.modelSelection ?? threadModelSelections.get(input.threadId) ?? thread.modelSelection;
     const projectedSessionCanRoute =
-      !providerSessionResolution.inventoryAvailable &&
+      activeSession === undefined &&
       thread.session !== null &&
       thread.session.status !== "stopped" &&
       thread.session.providerName !== null &&
-      thread.session.providerInstanceId !== undefined;
+      thread.session.providerInstanceId !== undefined &&
+      requestedModelSelection.instanceId === thread.session.providerInstanceId;
     const shouldBootstrapProviderContext =
       !projectedSessionCanRoute && input.modelSelection !== undefined
         ? yield* shouldBootstrapProviderContinuationContext({
@@ -1382,10 +1383,15 @@ const make = Effect.gen(function* () {
             activeSession,
           })
         : false;
-    // A transient inventory timeout says nothing about whether the bound
-    // provider session exists. When the durable projection has an exact
-    // provider binding, let ProviderService.sendTurn perform its authoritative
-    // hasSession/recovery check instead of abandoning the accepted prompt.
+    // A missing inventory entry says nothing about whether the bound provider
+    // session can be resumed. The remote provider boundary historically
+    // converted an inventory timeout into an empty list, so checking only the
+    // `inventoryAvailable` flag caused a production-only false "no session"
+    // result and a duplicate startSession attempt. When the durable projection
+    // has the exact requested provider binding, let ProviderService.sendTurn
+    // perform its authoritative hasSession/recovery check instead of abandoning
+    // the accepted prompt. An explicit provider-instance switch still takes the
+    // normal ensureSession path.
     const ensuredSession = projectedSessionCanRoute
       ? ({
           provider: ProviderDriverKind.make(thread.session!.providerName!),
@@ -2598,12 +2604,15 @@ const make = Effect.gen(function* () {
         createdAt: event.payload.createdAt,
       }).pipe(Effect.ensuring(releaseManualFollowUp()));
     }
-    // When inventory is temporarily unavailable, the durable running-session
-    // projection is enough to attempt the steer. The provider's authoritative
-    // steer operation will still reject an unsupported or stale active turn,
-    // and the recovery below preserves the follow-up. Do not strand accepted
-    // input on a second diagnostic RPC to the same busy daemon.
-    const liveSteer = !providerSessionResolution.inventoryAvailable
+    const activeSessionUsesDurableProjection =
+      runtimeActiveSession === undefined && activeSession === projectedSession;
+    // Remote inventory masks transport failures as an empty list. When the
+    // durable projection is the only running-session evidence, it is enough to
+    // attempt the steer. The provider's authoritative steer operation will
+    // still reject an unsupported or stale active turn, and the recovery below
+    // preserves the follow-up. Do not strand accepted input on a second
+    // diagnostic RPC to the same busy daemon.
+    const liveSteer = activeSessionUsesDurableProjection
       ? Option.some("supported" as const)
       : yield* providerService.getCapabilities(providerInstanceId).pipe(
           Effect.map((capabilities) => Option.some(capabilities.liveSteer)),

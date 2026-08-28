@@ -25,6 +25,14 @@ export function shouldQueueOperatorFollowUp(input: {
   return input.delivery === "queue" || input.hasEarlierManualFollowUp;
 }
 
+export function shouldQueueDuringProviderHandoff(input: {
+  readonly isSendBusy: boolean;
+  readonly isConnecting: boolean;
+  readonly isDispatchInFlight: boolean;
+}): boolean {
+  return input.isSendBusy || input.isConnecting || input.isDispatchInFlight;
+}
+
 /**
  * Automatic queue draining may start the next turn only from a confirmed
  * ready session. It must never steer an active turn or use a disconnected
