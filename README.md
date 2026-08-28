@@ -4,7 +4,7 @@
 
 ![Club Code desktop screenshot](./docs/images/club-code-desktop.jpg)
 
-[▶ Watch the Club Code demo (WebM)](./docs/images/ClubCodeDemo.webm)
+[⬇ Download the Club Code demo (WebM)](https://github.com/John-Ryan21337/club-code/raw/refs/heads/main/docs/images/ClubCodeDemo.webm)
 
 Made in Japan with love, too much glitter, and absolutely no chance of catching
 the last train.
