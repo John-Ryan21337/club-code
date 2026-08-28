@@ -17,6 +17,20 @@ const isCodexAppServerError = Schema.is(CodexError.CodexAppServerError);
 const RAW_INCOMING_NOTIFICATION_QUEUE_CAPACITY = 2_048;
 const RAW_INCOMING_REQUEST_QUEUE_CAPACITY = 256;
 const MAX_PROTOCOL_DIAGNOSTIC_LENGTH = 8_000;
+/**
+ * A newline-delimited protocol cannot leave one line unbounded: without a
+ * ceiling the reader keeps retaining peer-controlled text until the process
+ * runs out of memory, because JSON decoding (and therefore any schema limit)
+ * only runs once the line terminator arrives.
+ *
+ * Club Code deliberately sits far above upstream Cafe Code's 64 MiB ceiling.
+ * The operator's real `thread/resume` and `thread/read(includeTurns)` responses
+ * for long-lived threads exceed 64 MiB - a 95,153,363-character single line was
+ * observed in production - so a 64 MiB cap would reject working threads. This
+ * value keeps a finite memory bound while leaving those threads readable, and
+ * callers with a stricter boundary can lower it per client.
+ */
+export const DEFAULT_CODEX_APP_SERVER_MAX_INCOMING_LINE_BYTES = 512 * 1024 * 1024;
 
 export interface CodexAppServerProtocolLogEvent {
   readonly direction: "incoming" | "outgoing";
@@ -44,6 +58,12 @@ export interface CodexAppServerIncomingRequest {
 
 export interface CodexAppServerPatchedProtocolOptions {
   readonly stdio: Stdio.Stdio;
+  /**
+   * Maximum UTF-8 byte length of one newline-delimited app-server message.
+   * Values that are not safe integers >= 1 fall back to
+   * {@link DEFAULT_CODEX_APP_SERVER_MAX_INCOMING_LINE_BYTES}.
+   */
+  readonly maxIncomingLineBytes?: number;
   readonly terminationError?: Effect.Effect<CodexError.CodexAppServerError>;
   readonly logIncoming?: boolean;
   readonly logOutgoing?: boolean;
@@ -93,42 +113,122 @@ function isObject(value: unknown): value is Record<string, unknown> {
  * enough for the desktop watchdog to kill the daemon). This buffer only scans
  * the newly arrived chunk for newlines and joins the pending parts once, when a
  * line terminator is actually seen.
+ *
+ * Assembly is also bounded: `maxBytes` caps the UTF-8 length of one line, so a
+ * runaway or hostile peer cannot make the reader retain memory without limit
+ * while it waits for a terminator that never arrives.
  */
 export interface IncomingLineBuffer {
   parts: Array<string>;
   pendingLength: number;
+  /**
+   * UTF-8 byte length of the retained `parts`. It is accumulated per appended
+   * segment and never recomputed from the joined line, so enforcing the byte
+   * cap stays linear in the number of bytes read.
+   */
+  pendingBytes: number;
+  /**
+   * Set after an over-limit line was dropped. Everything up to the next line
+   * terminator is discarded so the reader resynchronizes on a real line
+   * boundary instead of emitting a truncated fragment as if it were a message.
+   */
+  discarding: boolean;
+  /** Resolved UTF-8 byte ceiling for one line. */
+  readonly maxBytes: number;
 }
 
-export function makeIncomingLineBuffer(): IncomingLineBuffer {
-  return { parts: [], pendingLength: 0 };
+export type IncomingLineResult =
+  | { readonly ok: true; readonly lines: ReadonlyArray<string> }
+  | {
+      readonly ok: false;
+      readonly error: CodexError.CodexAppServerIncomingMessageTooLargeError;
+    };
+
+export type IncomingLineFlushResult =
+  | { readonly ok: true; readonly line: string }
+  | {
+      readonly ok: false;
+      readonly error: CodexError.CodexAppServerIncomingMessageTooLargeError;
+    };
+
+export function resolveMaxIncomingLineBytes(maxIncomingLineBytes?: number): number {
+  return maxIncomingLineBytes !== undefined &&
+    Number.isSafeInteger(maxIncomingLineBytes) &&
+    maxIncomingLineBytes >= 1
+    ? maxIncomingLineBytes
+    : DEFAULT_CODEX_APP_SERVER_MAX_INCOMING_LINE_BYTES;
+}
+
+export function makeIncomingLineBuffer(maxIncomingLineBytes?: number): IncomingLineBuffer {
+  return {
+    parts: [],
+    pendingLength: 0,
+    pendingBytes: 0,
+    discarding: false,
+    maxBytes: resolveMaxIncomingLineBytes(maxIncomingLineBytes),
+  };
+}
+
+const NO_INCOMING_LINES: IncomingLineResult = { ok: true, lines: [] };
+
+function releaseIncomingLineParts(buffer: IncomingLineBuffer): void {
+  // Drop the references immediately rather than waiting for the enclosing
+  // scope: the retained parts are the memory the cap exists to bound.
+  buffer.parts = [];
+  buffer.pendingLength = 0;
+  buffer.pendingBytes = 0;
+}
+
+function incomingLineTooLarge(buffer: IncomingLineBuffer): IncomingLineResult {
+  releaseIncomingLineParts(buffer);
+  buffer.discarding = true;
+  return {
+    ok: false,
+    error: new CodexError.CodexAppServerIncomingMessageTooLargeError({
+      maxBytes: buffer.maxBytes,
+    }),
+  };
 }
 
 function stripTrailingCarriageReturn(line: string): string {
   return line.endsWith("\r") ? line.slice(0, -1) : line;
 }
 
-export function appendIncomingChunk(
-  buffer: IncomingLineBuffer,
-  chunk: string,
-): ReadonlyArray<string> {
-  let newlineIndex = chunk.indexOf("\n");
-  if (newlineIndex === -1) {
-    if (chunk.length > 0) {
-      buffer.parts.push(chunk);
-      buffer.pendingLength += chunk.length;
+/**
+ * Consume one decoded chunk. Complete lines are returned in order; the trailing
+ * partial line stays retained until its terminator arrives.
+ *
+ * Returns the typed limit error as soon as the pending line would pass
+ * `buffer.maxBytes`, without ever joining or measuring the over-limit text. The
+ * caller decides what that means: the stdin protocol reader fails the stream so
+ * the error travels the normal termination path, while a diagnostic reader such
+ * as stderr can warn and keep going. Any lines already completed earlier in the
+ * same chunk are dropped together with the over-limit one, and the rest of the
+ * chunk is discarded until the next terminator, so a reader that continues
+ * always resumes on a genuine line boundary.
+ */
+export function appendIncomingChunk(buffer: IncomingLineBuffer, chunk: string): IncomingLineResult {
+  let start = 0;
+  if (buffer.discarding) {
+    const resyncIndex = chunk.indexOf("\n");
+    if (resyncIndex === -1) {
+      return NO_INCOMING_LINES;
     }
-    return [];
+    buffer.discarding = false;
+    start = resyncIndex + 1;
   }
 
   const lines: Array<string> = [];
-  let start = 0;
+  let newlineIndex = chunk.indexOf("\n", start);
   while (newlineIndex !== -1) {
     const segment = chunk.slice(start, newlineIndex);
+    if (buffer.pendingBytes + Buffer.byteLength(segment, "utf8") > buffer.maxBytes) {
+      return incomingLineTooLarge(buffer);
+    }
     if (buffer.parts.length > 0) {
       buffer.parts.push(segment);
       lines.push(stripTrailingCarriageReturn(buffer.parts.join("")));
-      buffer.parts = [];
-      buffer.pendingLength = 0;
+      releaseIncomingLineParts(buffer);
     } else {
       lines.push(stripTrailingCarriageReturn(segment));
     }
@@ -137,18 +237,38 @@ export function appendIncomingChunk(
   }
 
   if (start < chunk.length) {
-    const rest = chunk.slice(start);
+    const rest = start === 0 ? chunk : chunk.slice(start);
+    const restBytes = Buffer.byteLength(rest, "utf8");
+    if (buffer.pendingBytes + restBytes > buffer.maxBytes) {
+      return incomingLineTooLarge(buffer);
+    }
     buffer.parts.push(rest);
     buffer.pendingLength += rest.length;
+    buffer.pendingBytes += restBytes;
   }
-  return lines;
+
+  return lines.length === 0 ? NO_INCOMING_LINES : { ok: true, lines };
 }
 
-export function flushIncomingLineBuffer(buffer: IncomingLineBuffer): string {
+/**
+ * Take the unterminated trailing line at end of stream. Reports the typed limit
+ * error instead of a line when the stream ended inside an over-limit line,
+ * because only a truncated fragment of that message was ever retained.
+ */
+export function flushIncomingLineBuffer(buffer: IncomingLineBuffer): IncomingLineFlushResult {
+  if (buffer.discarding || buffer.pendingBytes > buffer.maxBytes) {
+    releaseIncomingLineParts(buffer);
+    buffer.discarding = false;
+    return {
+      ok: false,
+      error: new CodexError.CodexAppServerIncomingMessageTooLargeError({
+        maxBytes: buffer.maxBytes,
+      }),
+    };
+  }
   const line = buffer.parts.join("");
-  buffer.parts = [];
-  buffer.pendingLength = 0;
-  return line;
+  releaseIncomingLineParts(buffer);
+  return { ok: true, line };
 }
 
 /**
@@ -541,14 +661,20 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
     // The stdin reader is the only consumer of this buffer and runs on one
     // fiber, so a plain mutable buffer is safe and avoids re-copying the
     // accumulated text for every chunk of a very large single-line response.
-    const incomingLineBuffer = makeIncomingLineBuffer();
+    const incomingLineBuffer = makeIncomingLineBuffer(options.maxIncomingLineBytes);
     yield* options.stdio.stdin.pipe(
       Stream.decodeText(),
-      Stream.runForEach((chunk) => {
-        const lines = appendIncomingChunk(incomingLineBuffer, chunk);
-        return lines.length === 0
+      Stream.runForEach((chunk): Effect.Effect<void, CodexError.CodexAppServerError> => {
+        const result = appendIncomingChunk(incomingLineBuffer, chunk);
+        if (!result.ok) {
+          // Fail the stream so the over-limit line travels the same termination
+          // path as any other incoming transport error: pending requests are
+          // rejected with the typed error instead of waiting forever.
+          return Effect.fail(result.error);
+        }
+        return result.lines.length === 0
           ? Effect.void
-          : Effect.forEach(lines, handleLine, { discard: true });
+          : Effect.forEach(result.lines, handleLine, { discard: true });
       }),
       Effect.matchEffect({
         onFailure: (error) =>
@@ -556,8 +682,13 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
             Effect.succeed(normalizeIncomingError(error, "Codex App Server input stream failed")),
           ),
         onSuccess: () =>
-          Effect.sync(() => flushIncomingLineBuffer(incomingLineBuffer)).pipe(
-            Effect.flatMap((line) => (line.trim().length === 0 ? Effect.void : handleLine(line))),
+          Effect.suspend((): Effect.Effect<void, CodexError.CodexAppServerError> => {
+            const flushed = flushIncomingLineBuffer(incomingLineBuffer);
+            if (!flushed.ok) {
+              return Effect.fail(flushed.error);
+            }
+            return flushed.line.trim().length === 0 ? Effect.void : handleLine(flushed.line);
+          }).pipe(
             Effect.matchEffect({
               onFailure: (error) => handleTermination(() => Effect.succeed(error)),
               onSuccess: () =>

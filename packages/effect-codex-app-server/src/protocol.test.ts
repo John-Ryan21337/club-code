@@ -354,6 +354,67 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
     }),
   );
 
+  it.effect(
+    "fails the protocol with the typed limit error when one incoming line passes the byte cap",
+    () =>
+      Effect.gen(function* () {
+        const { stdio, input, output } = yield* makeInMemoryStdio();
+        const terminated = yield* Deferred.make<CodexError.CodexAppServerError>();
+        const transport = yield* CodexProtocol.makeCodexAppServerPatchedProtocol({
+          stdio,
+          maxIncomingLineBytes: 32,
+          onTermination: (error) => Deferred.succeed(terminated, error).pipe(Effect.asVoid),
+        });
+
+        const pending = yield* transport.request("x/read").pipe(Effect.forkScoped);
+        yield* Queue.take(output);
+
+        // Neither chunk is individually over the limit. The reader has to
+        // account for the retained prefix incrementally instead of waiting for
+        // a newline and joining an unbounded peer-controlled string first.
+        yield* Queue.offer(input, encoder.encode('{"id":1,"result":"'));
+        yield* Queue.offer(input, encoder.encode("private-wire-sentinel-that-must-not-leak"));
+
+        const error = yield* Fiber.join(pending).pipe(Effect.flip);
+        assert.instanceOf(error, CodexError.CodexAppServerIncomingMessageTooLargeError);
+        if (error instanceof CodexError.CodexAppServerIncomingMessageTooLargeError) {
+          assert.equal(error.maxBytes, 32);
+        }
+        assert.equal(String(error).includes("private-wire-sentinel"), false);
+        assert.equal(JSON.stringify(error).includes("private-wire-sentinel"), false);
+
+        // The same typed error is what the protocol reports as its termination
+        // cause, so callers see one consistent reason for the dead transport.
+        const terminationError = yield* Deferred.await(terminated);
+        assert.instanceOf(terminationError, CodexError.CodexAppServerIncomingMessageTooLargeError);
+      }),
+  );
+
+  it.effect("counts fragmented multibyte input in UTF-8 bytes and accepts the exact cap", () =>
+    Effect.gen(function* () {
+      const wire = encodeJsonl({ id: 1, result: "\u{1F642}" });
+      const lineBytes = wire.byteLength - 1;
+      const emojiStart = wire.findIndex((byte) => byte === 0xf0);
+      assert.notEqual(emojiStart, -1);
+
+      const { stdio, input, output } = yield* makeInMemoryStdio();
+      const transport = yield* CodexProtocol.makeCodexAppServerPatchedProtocol({
+        stdio,
+        maxIncomingLineBytes: lineBytes,
+      });
+      const pending = yield* transport.request("x/read").pipe(Effect.forkScoped);
+      yield* Queue.take(output);
+
+      // Split inside the four-byte scalar. Stream.decodeText must preserve it,
+      // and the cap must measure the reconstructed UTF-8 line.
+      const splitAt = emojiStart + 2;
+      yield* Queue.offer(input, wire.slice(0, splitAt));
+      yield* Queue.offer(input, wire.slice(splitAt));
+
+      assert.equal(yield* Fiber.join(pending), "\u{1F642}");
+    }),
+  );
+
   it.effect("keeps reading notifications after onNotification defects", () =>
     Effect.gen(function* () {
       const { stdio, input } = yield* makeInMemoryStdio();
@@ -423,20 +484,35 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
 });
 
 describe("incoming line buffer", () => {
+  const takeLines = (
+    buffer: CodexProtocol.IncomingLineBuffer,
+    chunk: string,
+  ): ReadonlyArray<string> => {
+    const result = CodexProtocol.appendIncomingChunk(buffer, chunk);
+    assert.equal(result.ok, true);
+    return result.ok ? result.lines : [];
+  };
+
+  const takeFlushedLine = (buffer: CodexProtocol.IncomingLineBuffer): string => {
+    const result = CodexProtocol.flushIncomingLineBuffer(buffer);
+    assert.equal(result.ok, true);
+    return result.ok ? result.line : "";
+  };
+
   it("assembles lines across arbitrary chunk boundaries without re-scanning", () => {
     const buffer = CodexProtocol.makeIncomingLineBuffer();
     const lines: string[] = [];
-    lines.push(...CodexProtocol.appendIncomingChunk(buffer, '{"a":'));
+    lines.push(...takeLines(buffer, '{"a":'));
     assert.deepEqual(lines, []);
     assert.equal(buffer.pendingLength, 5);
-    lines.push(...CodexProtocol.appendIncomingChunk(buffer, '1}\r\n{"b":2}\n{"c"'));
+    lines.push(...takeLines(buffer, '1}\r\n{"b":2}\n{"c"'));
     assert.deepEqual(lines, ['{"a":1}', '{"b":2}']);
     assert.equal(buffer.pendingLength, 4);
-    lines.push(...CodexProtocol.appendIncomingChunk(buffer, ":3}"));
+    lines.push(...takeLines(buffer, ":3}"));
     assert.deepEqual(lines, ['{"a":1}', '{"b":2}']);
-    assert.equal(CodexProtocol.flushIncomingLineBuffer(buffer), '{"c":3}');
+    assert.equal(takeFlushedLine(buffer), '{"c":3}');
     assert.equal(buffer.pendingLength, 0);
-    assert.deepEqual(CodexProtocol.appendIncomingChunk(buffer, "\n\n"), ["", ""]);
+    assert.deepEqual(takeLines(buffer, "\n\n"), ["", ""]);
   });
 
   it("handles a very large single-line message delivered in many chunks in linear time", () => {
@@ -446,15 +522,113 @@ describe("incoming line buffer", () => {
     const startedAt = performance.now();
     let emitted: ReadonlyArray<string> = [];
     for (let index = 0; index < chunkCount; index += 1) {
-      emitted = CodexProtocol.appendIncomingChunk(buffer, chunk);
+      emitted = takeLines(buffer, chunk);
       assert.equal(emitted.length, 0);
     }
-    emitted = CodexProtocol.appendIncomingChunk(buffer, "\n");
+    emitted = takeLines(buffer, "\n");
     const elapsedMs = performance.now() - startedAt;
     assert.equal(emitted.length, 1);
     assert.equal(emitted[0]?.length, chunk.length * chunkCount);
     assert.equal(buffer.pendingLength, 0);
     // The quadratic implementation needed minutes for this input.
     assert.isBelow(elapsedMs, 10_000);
+  });
+
+  it("accepts a 96,000,000-byte line under the default cap", () => {
+    // Regression for the operator's production thread: one `thread/resume`
+    // response line of 95,153,363 characters must still be assembled. Upstream
+    // Cafe Code's 64 MiB ceiling would reject it, so Club Code's default has to
+    // stay above it.
+    const buffer = CodexProtocol.makeIncomingLineBuffer();
+    assert.equal(buffer.maxBytes, CodexProtocol.DEFAULT_CODEX_APP_SERVER_MAX_INCOMING_LINE_BYTES);
+    assert.isAbove(CodexProtocol.DEFAULT_CODEX_APP_SERVER_MAX_INCOMING_LINE_BYTES, 96_000_000);
+
+    const chunk = "x".repeat(1_000_000);
+    for (let index = 0; index < 96; index += 1) {
+      assert.equal(takeLines(buffer, chunk).length, 0);
+    }
+    assert.equal(buffer.pendingBytes, 96_000_000);
+    const emitted = takeLines(buffer, "\n");
+    assert.equal(emitted.length, 1);
+    assert.equal(emitted[0]?.length, 96_000_000);
+    assert.equal(buffer.pendingBytes, 0);
+  });
+
+  it("leaves lines under the configured cap unaffected", () => {
+    const buffer = CodexProtocol.makeIncomingLineBuffer(16);
+    assert.equal(buffer.maxBytes, 16);
+    assert.deepEqual(takeLines(buffer, '{"a":1}\n{"b":2}\n'), ['{"a":1}', '{"b":2}']);
+    assert.deepEqual(takeLines(buffer, "0123456789abcdef\n"), ["0123456789abcdef"]);
+    assert.equal(buffer.pendingBytes, 0);
+  });
+
+  it("falls back to the default cap for values that are not safe integers >= 1", () => {
+    for (const invalid of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 2 ** 53]) {
+      assert.equal(
+        CodexProtocol.makeIncomingLineBuffer(invalid).maxBytes,
+        CodexProtocol.DEFAULT_CODEX_APP_SERVER_MAX_INCOMING_LINE_BYTES,
+      );
+    }
+    assert.equal(CodexProtocol.makeIncomingLineBuffer(1).maxBytes, 1);
+  });
+
+  it("measures the cap in UTF-8 bytes rather than UTF-16 code units", () => {
+    // Two UTF-16 code units, four UTF-8 bytes: exactly at the cap.
+    const withinCap = CodexProtocol.makeIncomingLineBuffer(4);
+    assert.deepEqual(takeLines(withinCap, "\u{1F642}\n"), ["\u{1F642}"]);
+
+    const overCap = CodexProtocol.makeIncomingLineBuffer(4);
+    assert.equal(CodexProtocol.appendIncomingChunk(overCap, "\u{1F642}x\n").ok, false);
+  });
+
+  it("reports the typed limit error and releases the retained prefix mid-line", () => {
+    const buffer = CodexProtocol.makeIncomingLineBuffer(32);
+    assert.equal(takeLines(buffer, '{"id":1,"result":"').length, 0);
+    assert.equal(buffer.pendingBytes, 18);
+
+    const result = CodexProtocol.appendIncomingChunk(
+      buffer,
+      "private-wire-sentinel-that-must-not-leak",
+    );
+    assert.equal(result.ok, false);
+    if (!result.ok) {
+      assert.instanceOf(result.error, CodexError.CodexAppServerIncomingMessageTooLargeError);
+      assert.equal(result.error.maxBytes, 32);
+      assert.equal(result.error.message.includes("private-wire-sentinel"), false);
+      assert.equal(JSON.stringify(result.error).includes("private-wire-sentinel"), false);
+    }
+    // The retained prefix is released immediately, so the cap is a real memory
+    // bound rather than only a decode guard.
+    assert.deepEqual(buffer.parts, []);
+    assert.equal(buffer.pendingLength, 0);
+    assert.equal(buffer.pendingBytes, 0);
+  });
+
+  it("reports the cap on the trailing flush when input ends inside an over-limit line", () => {
+    const buffer = CodexProtocol.makeIncomingLineBuffer(8);
+    assert.equal(CodexProtocol.appendIncomingChunk(buffer, "0123456789").ok, false);
+
+    // Only a truncated fragment of that message was ever retained, so the final
+    // flush must report the limit instead of handing back a partial line.
+    const flushed = CodexProtocol.flushIncomingLineBuffer(buffer);
+    assert.equal(flushed.ok, false);
+    if (!flushed.ok) {
+      assert.instanceOf(flushed.error, CodexError.CodexAppServerIncomingMessageTooLargeError);
+      assert.equal(flushed.error.maxBytes, 8);
+    }
+    assert.equal(buffer.pendingBytes, 0);
+    // The buffer stays usable for a caller that drops the line and warns.
+    assert.deepEqual(takeLines(buffer, "ok\n"), ["ok"]);
+  });
+
+  it("resynchronizes on the next line boundary for a caller that drops and warns", () => {
+    const buffer = CodexProtocol.makeIncomingLineBuffer(8);
+    assert.equal(CodexProtocol.appendIncomingChunk(buffer, "over-limit-tail").ok, false);
+    // Still inside the dropped line: nothing is emitted and the same line does
+    // not raise a second error.
+    assert.deepEqual(takeLines(buffer, "still-the-same-line"), []);
+    // The terminator resynchronizes, and later lines survive intact.
+    assert.deepEqual(takeLines(buffer, "\nnext\n"), ["next"]);
+    assert.equal(buffer.pendingBytes, 0);
   });
 });
