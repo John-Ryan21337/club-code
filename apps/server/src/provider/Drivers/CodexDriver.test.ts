@@ -1,14 +1,29 @@
 import assert from "node:assert/strict";
 
-import { CodexSettings, ProviderInstanceId } from "@cafecode/contracts";
+import {
+  CodexSettings,
+  ProviderDriverKind,
+  ProviderInstanceId,
+  type ServerProvider,
+} from "@cafecode/contracts";
+import * as Duration from "effect/Duration";
+import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import { ChildProcess } from "effect/unstable/process";
 import { describe, it } from "vitest";
 
 import {
+  CODEX_PROBE_POLICY,
   resolveCodexRuntimeEnvironment,
   resolveCodexShadowHomeAuthSource,
   withDefaultCodexShadowHome,
 } from "./CodexDriver.ts";
+import {
+  CODEX_CLI_LOGIN_STATUS_TIMEOUT_MESSAGE,
+  isCodexCliLoginStatusProbeInconclusive,
+  makeCodexHealthProbeCommand,
+} from "../Layers/CodexProvider.ts";
+import { terminateProbeChild } from "../providerSnapshot.ts";
 
 const decodeCodexSettings = Schema.decodeSync(CodexSettings);
 
@@ -114,5 +129,133 @@ describe("resolveCodexShadowHomeAuthSource", () => {
       ),
       "shared",
     );
+  });
+});
+
+describe("CODEX_PROBE_POLICY", () => {
+  it("delegates initial admission to the registry and bounds inconclusive retention", () => {
+    assert.equal(CODEX_PROBE_POLICY.initialRefresh, "external");
+    assert.equal(CODEX_PROBE_POLICY.inconclusiveFailureThreshold, 3);
+    assert.equal(CODEX_PROBE_POLICY.isInconclusiveSnapshot, isCodexCliLoginStatusProbeInconclusive);
+  });
+
+  it("classifies only the bounded login-status timeout as inconclusive", () => {
+    const timeoutSnapshot = {
+      instanceId: ProviderInstanceId.make("codex"),
+      driver: ProviderDriverKind.make("codex"),
+      enabled: true,
+      installed: true,
+      version: "0.133.0",
+      status: "warning",
+      auth: { status: "unknown" },
+      checkedAt: "2026-04-10T00:00:00.000Z",
+      message: CODEX_CLI_LOGIN_STATUS_TIMEOUT_MESSAGE,
+      models: [],
+      slashCommands: [],
+      skills: [],
+    } as const satisfies ServerProvider;
+
+    assert.equal(CODEX_PROBE_POLICY.isInconclusiveSnapshot(timeoutSnapshot), true);
+    // A conclusive signed-out answer must stay visible immediately.
+    assert.equal(
+      CODEX_PROBE_POLICY.isInconclusiveSnapshot({
+        ...timeoutSnapshot,
+        status: "error",
+        auth: { status: "unauthenticated" },
+        message: "Codex CLI is not authenticated.",
+      }),
+      false,
+    );
+    // A missing CLI is not a timeout either.
+    assert.equal(
+      CODEX_PROBE_POLICY.isInconclusiveSnapshot({
+        ...timeoutSnapshot,
+        installed: false,
+        message: "Codex CLI (`codex`) is not installed or not on PATH.",
+      }),
+      false,
+    );
+    // Another driver reusing the same wording must not borrow Codex's policy.
+    assert.equal(
+      CODEX_PROBE_POLICY.isInconclusiveSnapshot({
+        ...timeoutSnapshot,
+        driver: ProviderDriverKind.make("claudeAgent"),
+      }),
+      false,
+    );
+  });
+});
+
+describe("Codex CLI health probe command", () => {
+  it("isolates POSIX descendants and gives scope cleanup a SIGKILL backstop", () => {
+    const command = makeCodexHealthProbeCommand(
+      decodeCodexSettings({
+        binaryPath: "/opt/codex/bin/codex",
+        homePath: "/private/codex-home",
+      }),
+      ["--version"],
+      { PATH: "/usr/bin" },
+    );
+
+    assert.equal(command.command, "/opt/codex/bin/codex");
+    assert.deepEqual([...command.args], ["--version"]);
+    // Windows keeps the platform default so the spawner's child-tree
+    // termination path (taskkill) still owns descendant cleanup.
+    assert.equal(command.options.detached, process.platform !== "win32");
+    assert.equal(command.options.shell, process.platform === "win32");
+    assert.equal(command.options.killSignal, "SIGKILL");
+    assert.equal(command.options.env?.PATH, "/usr/bin");
+    assert.equal(command.options.env?.CODEX_HOME, "/private/codex-home");
+  });
+
+  it("waits for graceful exit before escalating a stubborn probe to SIGKILL", async () => {
+    const signals: Array<string> = [];
+    const child = {
+      isRunning: Effect.succeed(true),
+      kill: (options?: ChildProcess.KillOptions) => {
+        signals.push(options?.killSignal ?? "SIGTERM");
+        return options?.killSignal === "SIGTERM" ? Effect.never : Effect.void;
+      },
+    };
+
+    const timedOut = await Effect.runPromise(
+      Effect.never.pipe(
+        Effect.ensuring(terminateProbeChild(child, Duration.millis(5))),
+        Effect.timeoutOption(Duration.millis(5)),
+      ),
+    );
+
+    assert.equal(timedOut._tag, "None");
+    assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
+  });
+
+  it("never signals a probe child that already exited", async () => {
+    const signals: Array<string> = [];
+    const child = {
+      isRunning: Effect.succeed(false),
+      kill: (options?: ChildProcess.KillOptions) => {
+        signals.push(options?.killSignal ?? "SIGTERM");
+        return Effect.void;
+      },
+    };
+
+    await Effect.runPromise(terminateProbeChild(child, Duration.millis(5)));
+
+    assert.deepEqual(signals, []);
+  });
+
+  it("still escalates when the running check itself fails", async () => {
+    const signals: Array<string> = [];
+    const child = {
+      isRunning: Effect.fail(new Error("handle closed")),
+      kill: (options?: ChildProcess.KillOptions) => {
+        signals.push(options?.killSignal ?? "SIGTERM");
+        return Effect.void;
+      },
+    };
+
+    await Effect.runPromise(terminateProbeChild(child, Duration.millis(5)));
+
+    assert.deepEqual(signals, ["SIGTERM"]);
   });
 });
