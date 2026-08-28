@@ -45,8 +45,11 @@ import * as SchemaIssue from "effect/SchemaIssue";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import * as CodexClient from "effect-codex-app-server/client";
 import * as CodexErrors from "effect-codex-app-server/errors";
+import * as CodexProtocol from "effect-codex-app-server/protocol";
 import * as CodexRpc from "effect-codex-app-server/rpc";
 import * as EffectCodexSchema from "effect-codex-app-server/schema";
+
+import { applyStderrWarningBudget, makeStderrWarningBudgetState } from "../stderrWarningBudget.ts";
 
 import { buildCodexInitializeParams } from "./CodexProvider.ts";
 import { expandHomePath } from "../../pathExpansion.ts";
@@ -94,6 +97,17 @@ export const CODEX_ULTRA_CACHING_COMPACT_PROMPT = [
 // durable events arbitrarily far into the future.
 const CODEX_NOTIFICATION_MAX_FUTURE_SKEW_MS = 5 * 60_000;
 const CODEX_SNAPSHOT_BACKFILL_TURN_LIMIT = 1;
+// `thread/resume` and `thread/read(includeTurns)` return every turn of the
+// provider thread. Cafe only ever consumes the in-progress turn, the focus
+// turn of a backfill, and a short tail, but decoding hundreds of megabytes of
+// history through Effect Schema froze the provider daemon event loop for
+// tens of seconds per request on long-lived threads. Trim the raw payload to
+// this bounded tail before decoding; explicitly referenced and in-progress
+// turns are always retained.
+export const CODEX_SNAPSHOT_DECODE_TURN_LIMIT = 8;
+// `readThread` feeds journal repair, which searches upstream text for one
+// specific message. Keep a larger but still bounded window for that path.
+export const CODEX_READ_THREAD_DECODE_TURN_LIMIT = 50;
 const CODEX_SEND_TURN_SNAPSHOT_BACKFILL_DELAYS = [
   "2 seconds",
   "10 seconds",
@@ -187,6 +201,82 @@ const decodeV2ThreadStartResponse = Schema.decodeUnknownEffect(
 const decodeV2ThreadResumeResponse = Schema.decodeUnknownEffect(
   EffectCodexSchema.V2ThreadResumeResponse,
 );
+const decodeV2ThreadReadResponse = Schema.decodeUnknownEffect(
+  EffectCodexSchema.V2ThreadReadResponse,
+);
+
+export interface CodexThreadSnapshotTrimResult {
+  readonly value: unknown;
+  readonly totalTurnCount: number;
+  readonly keptTurnCount: number;
+  readonly wireLength: number | undefined;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Bounds a raw `thread/resume`, `thread/read`, or `thread/rollback` response
+ * before Schema decoding. Keeps the last `tailLimit` turns plus every turn
+ * that is still `inProgress` or explicitly listed in `keepTurnIds`, preserving
+ * upstream order. The untouched `thread.status` and metadata still describe
+ * the whole thread, so active-turn selection and status reconciliation see the
+ * same truth as before; only historical turn payloads are dropped.
+ */
+export function trimCodexThreadSnapshotForDecode(
+  raw: unknown,
+  options: {
+    readonly tailLimit: number;
+    readonly keepTurnIds?: ReadonlyArray<string> | undefined;
+  },
+): CodexThreadSnapshotTrimResult {
+  const wireLength = CodexProtocol.readWireMessageLength(raw);
+  if (!isPlainRecord(raw) || !isPlainRecord(raw.thread) || !Array.isArray(raw.thread.turns)) {
+    return { value: raw, totalTurnCount: 0, keptTurnCount: 0, wireLength };
+  }
+  const turns = raw.thread.turns as ReadonlyArray<unknown>;
+  const tailLimit = Math.max(0, Math.trunc(options.tailLimit));
+  if (turns.length <= tailLimit) {
+    return { value: raw, totalTurnCount: turns.length, keptTurnCount: turns.length, wireLength };
+  }
+  const keepTurnIds = new Set(options.keepTurnIds ?? []);
+  const tailStart = turns.length - tailLimit;
+  const kept = turns.filter((turn, index) => {
+    if (index >= tailStart) {
+      return true;
+    }
+    if (!isPlainRecord(turn)) {
+      return false;
+    }
+    return (
+      (typeof turn.id === "string" && keepTurnIds.has(turn.id)) || turn.status === "inProgress"
+    );
+  });
+  return {
+    value: { ...raw, thread: { ...raw.thread, turns: kept } },
+    totalTurnCount: turns.length,
+    keptTurnCount: kept.length,
+    wireLength,
+  };
+}
+
+const logCodexSnapshotTrim = (input: {
+  readonly method: "thread/start" | "thread/resume" | "thread/read";
+  readonly threadId: ThreadId;
+  readonly trimmed: CodexThreadSnapshotTrimResult;
+}): Effect.Effect<void> =>
+  input.trimmed.keptTurnCount === input.trimmed.totalTurnCount
+    ? Effect.void
+    : Effect.logInfo("codex.snapshot.decode.trimmed", {
+        method: input.method,
+        threadId: input.threadId,
+        totalTurnCount: input.trimmed.totalTurnCount,
+        keptTurnCount: input.trimmed.keptTurnCount,
+        wireLength: input.trimmed.wireLength ?? null,
+        semantics:
+          "Club Code decodes only the bounded tail, in-progress, and focus turns of large Codex thread snapshots so the provider daemon event loop stays responsive. The durable Cafe transcript remains the source of historical turns.",
+      });
 
 type CodexThreadStartParamsWithRuntimeWorkspaceRoots =
   typeof CodexThreadStartParamsWithRuntimeWorkspaceRoots.Type;
@@ -1606,22 +1696,34 @@ const requestCodexThreadOpen = <M extends CodexThreadOpenMethod>(
   client: CodexThreadOpenClient,
   method: M,
   payload: CodexThreadOpenPayloadByMethod[M],
+  threadId: ThreadId,
 ): Effect.Effect<CodexRpc.ClientRequestResponsesByMethod[M], CodexErrors.CodexAppServerError> =>
   client.raw.request(method, payload).pipe(
     Effect.flatMap((rawResponse) => {
+      const trimmed = trimCodexThreadSnapshotForDecode(rawResponse, {
+        tailLimit: CODEX_SNAPSHOT_DECODE_TURN_LIMIT,
+      });
       if (method === "thread/start") {
-        return decodeV2ThreadStartResponse(rawResponse).pipe(
-          Effect.mapError((error) =>
-            toProtocolParseError("Invalid thread/start response payload", error),
+        return logCodexSnapshotTrim({ method, threadId, trimmed }).pipe(
+          Effect.andThen(
+            decodeV2ThreadStartResponse(trimmed.value).pipe(
+              Effect.mapError((error) =>
+                toProtocolParseError("Invalid thread/start response payload", error),
+              ),
+            ),
           ),
         ) as Effect.Effect<
           CodexRpc.ClientRequestResponsesByMethod[M],
           CodexErrors.CodexAppServerError
         >;
       }
-      return decodeV2ThreadResumeResponse(rawResponse).pipe(
-        Effect.mapError((error) =>
-          toProtocolParseError("Invalid thread/resume response payload", error),
+      return logCodexSnapshotTrim({ method: "thread/resume", threadId, trimmed }).pipe(
+        Effect.andThen(
+          decodeV2ThreadResumeResponse(trimmed.value).pipe(
+            Effect.mapError((error) =>
+              toProtocolParseError("Invalid thread/resume response payload", error),
+            ),
+          ),
         ),
       ) as Effect.Effect<
         CodexRpc.ClientRequestResponsesByMethod[M],
@@ -1656,13 +1758,18 @@ export const openCodexThread = (input: {
   });
 
   if (resumeThreadId === undefined) {
-    return requestCodexThreadOpen(input.client, "thread/start", startParams);
+    return requestCodexThreadOpen(input.client, "thread/start", startParams, input.threadId);
   }
 
-  return requestCodexThreadOpen(input.client, "thread/resume", {
-    threadId: resumeThreadId,
-    ...startParams,
-  }).pipe(
+  return requestCodexThreadOpen(
+    input.client,
+    "thread/resume",
+    {
+      threadId: resumeThreadId,
+      ...startParams,
+    },
+    input.threadId,
+  ).pipe(
     Effect.catchIf(isRecoverableThreadResumeError, (error) =>
       Effect.logWarning("codex app-server thread resume fell back to fresh start", {
         threadId: input.threadId,
@@ -1670,7 +1777,11 @@ export const openCodexThread = (input: {
         resumeThreadId,
         recoverable: true,
         cause: error.message,
-      }).pipe(Effect.andThen(requestCodexThreadOpen(input.client, "thread/start", startParams))),
+      }).pipe(
+        Effect.andThen(
+          requestCodexThreadOpen(input.client, "thread/start", startParams, input.threadId),
+        ),
+      ),
     ),
   );
 };
@@ -3254,6 +3365,45 @@ export const makeCodexSessionRuntime = (
         yield* Queue.offerAll(events, unseenEvents).pipe(Effect.asVoid);
       });
 
+    /**
+     * `thread/read(includeTurns: true)` returns the complete provider history.
+     * Request it raw, drop historical turns Cafe does not consume, and only
+     * then run Schema decoding so a multi-hundred-megabyte snapshot cannot
+     * block the daemon event loop (and trip the desktop watchdog) on every
+     * backfill or reconciliation read.
+     */
+    const readThreadSnapshotBounded = (input: {
+      readonly providerThreadId: string;
+      readonly focusTurnId?: string | undefined;
+      readonly tailLimit?: number | undefined;
+    }): Effect.Effect<EffectCodexSchema.V2ThreadReadResponse, CodexErrors.CodexAppServerError> =>
+      client.raw
+        .request("thread/read", {
+          threadId: input.providerThreadId,
+          includeTurns: true,
+        })
+        .pipe(
+          Effect.flatMap((rawResponse) => {
+            const trimmed = trimCodexThreadSnapshotForDecode(rawResponse, {
+              tailLimit: input.tailLimit ?? CODEX_SNAPSHOT_DECODE_TURN_LIMIT,
+              ...(input.focusTurnId !== undefined ? { keepTurnIds: [input.focusTurnId] } : {}),
+            });
+            return logCodexSnapshotTrim({
+              method: "thread/read",
+              threadId: options.threadId,
+              trimmed,
+            }).pipe(
+              Effect.andThen(
+                decodeV2ThreadReadResponse(trimmed.value).pipe(
+                  Effect.mapError((error) =>
+                    toProtocolParseError("Invalid thread/read response payload", error),
+                  ),
+                ),
+              ),
+            );
+          }),
+        );
+
     const readAndBackfillSnapshot = (input: {
       readonly providerThreadId: string;
       readonly focusTurnId: TurnId;
@@ -3267,12 +3417,10 @@ export const makeCodexSessionRuntime = (
         timeout: CODEX_SEND_TURN_SNAPSHOT_BACKFILL_READ_TIMEOUT,
       }).pipe(
         Effect.andThen(
-          client
-            .request("thread/read", {
-              threadId: input.providerThreadId,
-              includeTurns: true,
-            })
-            .pipe(Effect.timeoutOption(CODEX_SEND_TURN_SNAPSHOT_BACKFILL_READ_TIMEOUT)),
+          readThreadSnapshotBounded({
+            providerThreadId: input.providerThreadId,
+            focusTurnId: input.focusTurnId,
+          }).pipe(Effect.timeoutOption(CODEX_SEND_TURN_SNAPSHOT_BACKFILL_READ_TIMEOUT)),
         ),
         Effect.flatMap(
           Option.match({
@@ -3443,12 +3591,10 @@ export const makeCodexSessionRuntime = (
         timeout: CODEX_SEND_TURN_SNAPSHOT_BACKFILL_READ_TIMEOUT,
       }).pipe(
         Effect.andThen(
-          client
-            .request("thread/read", {
-              threadId: input.providerThreadId,
-              includeTurns: true,
-            })
-            .pipe(Effect.timeoutOption(CODEX_SEND_TURN_SNAPSHOT_BACKFILL_READ_TIMEOUT)),
+          readThreadSnapshotBounded({
+            providerThreadId: input.providerThreadId,
+            focusTurnId: input.turnId,
+          }).pipe(Effect.timeoutOption(CODEX_SEND_TURN_SNAPSHOT_BACKFILL_READ_TIMEOUT)),
         ),
         Effect.flatMap(
           Option.match({
@@ -4624,38 +4770,50 @@ export const makeCodexSessionRuntime = (
       Effect.forkIn(runtimeScope),
     );
 
-    const stderrRemainderRef = yield* Ref.make("");
-    const stderrCommandFailureDetailsRef = yield* Ref.make(false);
+    // The stderr reader is a single fiber, so plain mutable state is safe.
+    // Line assembly is linear in the chunk size, and the warning budget keeps
+    // a copied command-output dump from becoming thousands of durable
+    // work-log activities; the native provider log still gets every line.
+    const stderrLineBuffer = CodexProtocol.makeIncomingLineBuffer();
+    const stderrWarningBudget = makeStderrWarningBudgetState(yield* Clock.currentTimeMillis);
+    let stderrSuppressCommandFailureDetails = false;
     yield* child.stderr.pipe(
       Stream.decodeText(),
       Stream.runForEach((chunk) =>
-        Ref.modify(stderrRemainderRef, (current) => {
-          const combined = current + chunk;
-          const lines = combined.split("\n");
-          const remainder = lines.pop() ?? "";
-          return [lines.map((line) => line.replace(/\r$/, "")), remainder] as const;
-        }).pipe(
-          Effect.flatMap((lines) =>
-            Ref.modify(stderrCommandFailureDetailsRef, (suppressCommandFailureDetails) => {
-              const classified = classifyCodexStderrLines(lines, suppressCommandFailureDetails);
-              return [classified.messages, classified.suppressCommandFailureDetails] as const;
-            }).pipe(
-              Effect.flatMap((messages) =>
-                Effect.forEach(
-                  messages,
-                  (message) =>
-                    emitEvent({
-                      kind: "notification",
-                      threadId: options.threadId,
-                      method: "process/stderr",
-                      message,
-                    }),
-                  { discard: true },
-                ),
-              ),
-            ),
-          ),
-        ),
+        Effect.gen(function* () {
+          const lines = CodexProtocol.appendIncomingChunk(stderrLineBuffer, chunk);
+          if (lines.length === 0) {
+            return;
+          }
+          const classified = classifyCodexStderrLines(lines, stderrSuppressCommandFailureDetails);
+          stderrSuppressCommandFailureDetails = classified.suppressCommandFailureDetails;
+          if (classified.messages.length === 0) {
+            return;
+          }
+          const nowMs = yield* Clock.currentTimeMillis;
+          const budgeted = applyStderrWarningBudget(
+            stderrWarningBudget,
+            nowMs,
+            classified.messages,
+          );
+          if (budgeted.suppressedCount > 0) {
+            yield* Effect.logDebug("codex.stderr.budget.suppressed", {
+              threadId: options.threadId,
+              suppressedCount: budgeted.suppressedCount,
+            });
+          }
+          yield* Effect.forEach(
+            budgeted.messages,
+            (message) =>
+              emitEvent({
+                kind: "notification",
+                threadId: options.threadId,
+                method: "process/stderr",
+                message,
+              }),
+            { discard: true },
+          );
+        }),
       ),
       Effect.forkIn(runtimeScope),
     );
@@ -5269,9 +5427,9 @@ export const makeCodexSessionRuntime = (
       }),
       readThread: Effect.gen(function* () {
         const providerThreadId = yield* readProviderThreadId;
-        const response = yield* client.request("thread/read", {
-          threadId: providerThreadId,
-          includeTurns: true,
+        const response = yield* readThreadSnapshotBounded({
+          providerThreadId,
+          tailLimit: CODEX_READ_THREAD_DECODE_TURN_LIMIT,
         });
         return parseThreadSnapshot(response);
       }),

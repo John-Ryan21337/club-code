@@ -39,7 +39,16 @@ const DESKTOP_SHUTDOWN_BACKEND_STOP_TIMEOUT = Duration.seconds(5);
 const PROVIDER_DAEMON_STARTING_ENDPOINT_POLL_INTERVAL = Duration.millis(10);
 const PROVIDER_DAEMON_HEALTH_CHECK_INTERVAL = Duration.seconds(5);
 export const PROVIDER_DAEMON_LIVE_FAILURE_THRESHOLD = 12;
-export const PROVIDER_DAEMON_STALLED_RPC_THRESHOLD_MS = 45_000;
+// A live daemon whose oldest in-flight RPC is older than this is replaced.
+// Replacing the daemon discards every Claude and Codex session it owns, so the
+// bound must sit well above legitimate slow provider work. Resuming a Codex
+// thread with a multi-hundred-megabyte rollout takes Codex itself several
+// seconds and previously froze the daemon for 40-50 s while it decoded the
+// full history; with bounded snapshot decoding that is now seconds, but the
+// former 45 s bound turned every slow resume into a daemon kill loop that
+// orphaned all running turns. Genuinely dead daemons are still detected by
+// the process-exit and consecutive-probe-failure paths.
+export const PROVIDER_DAEMON_STALLED_RPC_THRESHOLD_MS = 180_000;
 const PROVIDER_DAEMON_RECOVERY_BACKEND_STOP_TIMEOUT = Duration.seconds(10);
 
 const makeDesktopRunId = Random.nextUUIDv4.pipe(

@@ -89,6 +89,15 @@ const isCodexResumeCursorSchema = Schema.is(CodexResumeCursorSchema);
 const PROVIDER = ProviderDriverKind.make("codex");
 const CODEX_TRANSPORT_POLICY_FILENAME = "codex-transport-policy.json";
 const CODEX_TRANSPORT_POLICY_PERSISTENCE_ENV = "CAFE_CODE_PERSIST_CODEX_HTTP_FALLBACK";
+// Operator policy (2026-08-28): Codex model streaming always uses the HTTPS
+// Responses transport. Codex CLI 0.150.x's Responses WebSocket link is closed
+// by the server before `response.completed` on long-context threads, and each
+// fresh app-server session burned five reconnect attempts before its official
+// fallback, which showed up as a hard stall after every prompt. Set
+// `CAFE_CODE_CODEX_RESPONSES_WEBSOCKETS=1` to restore upstream-parity
+// WebSocket-first behavior for comparison runs.
+const CODEX_RESPONSES_WEBSOCKETS_ENV = "CAFE_CODE_CODEX_RESPONSES_WEBSOCKETS";
+const CODEX_HTTPS_ONLY_POLICY_REASON = "operator_policy_https_only";
 const CODEX_WEBSOCKET_FALLBACK_REASON = "responses_websocket_stream_disconnected";
 const CODEX_TURN_DIFF_PREVIEW_CHARS = 4_096;
 const CODEX_HOOK_OUTPUT_PREVIEW_CHARS = 4_096;
@@ -323,6 +332,11 @@ function isCodexAuthInvalidatedEvent(event: ProviderEvent): boolean {
 
 function isCodexTransportPolicyPersistenceEnabled(environment: NodeJS.ProcessEnv): boolean {
   const value = environment[CODEX_TRANSPORT_POLICY_PERSISTENCE_ENV]?.trim().toLowerCase();
+  return value === "1" || value === "true" || value === "yes";
+}
+
+export function isCodexResponsesWebsocketsAllowed(environment: NodeJS.ProcessEnv): boolean {
+  const value = environment[CODEX_RESPONSES_WEBSOCKETS_ENV]?.trim().toLowerCase();
   return value === "1" || value === "true" || value === "yes";
 }
 
@@ -2484,12 +2498,29 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     binaryPath: codexConfig.binaryPath,
     ...(codexConfig.homePath ? { homePath: codexConfig.homePath } : {}),
   });
-  const transportPolicyPersistenceEnabled = isCodexTransportPolicyPersistenceEnabled(
-    options?.environment ?? process.env,
-  );
-  const initialTransportPolicy = transportPolicyPersistenceEnabled
-    ? yield* loadCodexTransportPolicy(transportPolicyPath, transportPolicyKey)
-    : undefined;
+  const adapterEnvironment = options?.environment ?? process.env;
+  const transportPolicyPersistenceEnabled =
+    isCodexTransportPolicyPersistenceEnabled(adapterEnvironment);
+  const responsesWebsocketsAllowed = isCodexResponsesWebsocketsAllowed(adapterEnvironment);
+  const initialTransportPolicy: CodexTransportPolicyEntry | undefined = responsesWebsocketsAllowed
+    ? transportPolicyPersistenceEnabled
+      ? yield* loadCodexTransportPolicy(transportPolicyPath, transportPolicyKey)
+      : undefined
+    : {
+        responsesWebsockets: "disabled",
+        reason: CODEX_HTTPS_ONLY_POLICY_REASON,
+        observedAt: DateTime.formatIso(yield* DateTime.now),
+        source: "cafe.operator-policy",
+      };
+  if (!responsesWebsocketsAllowed) {
+    yield* Effect.logInfo("codex.transportPolicy.httpsOnly", {
+      instanceId: boundInstanceId,
+      reason: CODEX_HTTPS_ONLY_POLICY_REASON,
+      optIn: CODEX_RESPONSES_WEBSOCKETS_ENV,
+      semantics:
+        "Every Codex app-server launched by Club Code uses a Cafe-scoped OpenAI provider with supports_websockets=false, so model streaming goes over the HTTPS Responses transport without WebSocket reconnect attempts.",
+    });
+  }
   const transportPolicyRef = yield* Ref.make<CodexTransportPolicyEntry | undefined>(
     initialTransportPolicy,
   );

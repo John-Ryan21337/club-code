@@ -8,7 +8,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { assert, it } from "@effect/vitest";
+import { assert, describe, it } from "@effect/vitest";
 
 import * as CodexError from "./errors.ts";
 import * as CodexProtocol from "./protocol.ts";
@@ -420,4 +420,41 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
       assert.equal(String(diagnosticPayload["cause"]).includes("must-not-be-logged"), false);
     }),
   );
+});
+
+describe("incoming line buffer", () => {
+  it("assembles lines across arbitrary chunk boundaries without re-scanning", () => {
+    const buffer = CodexProtocol.makeIncomingLineBuffer();
+    const lines: string[] = [];
+    lines.push(...CodexProtocol.appendIncomingChunk(buffer, '{"a":'));
+    assert.deepEqual(lines, []);
+    assert.equal(buffer.pendingLength, 5);
+    lines.push(...CodexProtocol.appendIncomingChunk(buffer, '1}\r\n{"b":2}\n{"c"'));
+    assert.deepEqual(lines, ['{"a":1}', '{"b":2}']);
+    assert.equal(buffer.pendingLength, 4);
+    lines.push(...CodexProtocol.appendIncomingChunk(buffer, ":3}"));
+    assert.deepEqual(lines, ['{"a":1}', '{"b":2}']);
+    assert.equal(CodexProtocol.flushIncomingLineBuffer(buffer), '{"c":3}');
+    assert.equal(buffer.pendingLength, 0);
+    assert.deepEqual(CodexProtocol.appendIncomingChunk(buffer, "\n\n"), ["", ""]);
+  });
+
+  it("handles a very large single-line message delivered in many chunks in linear time", () => {
+    const buffer = CodexProtocol.makeIncomingLineBuffer();
+    const chunk = "x".repeat(64 * 1024);
+    const chunkCount = 4_096; // 256 MiB of characters on one line
+    const startedAt = performance.now();
+    let emitted: ReadonlyArray<string> = [];
+    for (let index = 0; index < chunkCount; index += 1) {
+      emitted = CodexProtocol.appendIncomingChunk(buffer, chunk);
+      assert.equal(emitted.length, 0);
+    }
+    emitted = CodexProtocol.appendIncomingChunk(buffer, "\n");
+    const elapsedMs = performance.now() - startedAt;
+    assert.equal(emitted.length, 1);
+    assert.equal(emitted[0]?.length, chunk.length * chunkCount);
+    assert.equal(buffer.pendingLength, 0);
+    // The quadratic implementation needed minutes for this input.
+    assert.isBelow(elapsedMs, 10_000);
+  });
 });

@@ -29,13 +29,24 @@ export function HardwareLightingMatrixSync() {
     let sequence = 0;
     let lastSentAt = Number.NEGATIVE_INFINITY;
     let scheduled: ReturnType<typeof setTimeout> | null = null;
+    // At most one frame RPC is in flight. Frames are a fire-and-forget palette
+    // sample, so when the WebSocket is busy (a large thread snapshot, a
+    // reconnect) the newest frame replaces any waiting one instead of queueing
+    // thousands of 20 Hz requests behind the stalled transport.
+    let inFlight = false;
+    let pendingActive: boolean | null = null;
 
     const send = (active: boolean) => {
       if (disposed) return;
+      if (inFlight) {
+        pendingActive = active;
+        return;
+      }
       const snapshot = matrixColorFrameStore.getSnapshot();
       if (active && snapshot === null) return;
       lastSentAt = performance.now();
       sequence += 1;
+      inFlight = true;
       void ensureLocalApi()
         .server.applyHardwareLightingFrame({
           sequence,
@@ -44,6 +55,13 @@ export function HardwareLightingMatrixSync() {
         })
         .catch((error) => {
           console.error("[HARDWARE_LIGHTING] Matrix frame delivery failed", error);
+        })
+        .finally(() => {
+          inFlight = false;
+          if (disposed || pendingActive === null) return;
+          const nextActive = pendingActive;
+          pendingActive = null;
+          send(nextActive);
         });
     };
 

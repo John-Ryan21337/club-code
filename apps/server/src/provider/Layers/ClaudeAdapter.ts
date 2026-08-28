@@ -81,6 +81,7 @@ import { ServerConfig } from "../../config.ts";
 import { getAgentBrowserBridge } from "../AgentBrowserBridge.ts";
 import { makeClaudeEnvironment } from "../Drivers/ClaudeHome.ts";
 import { spawnProviderProcessAtLowerPriority } from "../ProviderProcessPriority.ts";
+import { applyStderrWarningBudget, makeStderrWarningBudgetState } from "../stderrWarningBudget.ts";
 import {
   getClaudeModelCapabilities,
   normalizeClaudeCliEffort,
@@ -4837,8 +4838,17 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           providerInstanceId: boundInstanceId,
         }),
       );
+      // Bounded work-log budget for stderr: the complete stream still reaches
+      // the native provider log, but a copied output dump must not become
+      // thousands of durable runtime.warning activities.
+      const stderrWarningBudget = makeStderrWarningBudgetState(Date.now());
       const handleClaudeStderr = (data: string) => {
-        const lines = splitClaudeStderrLines(data);
+        const candidateLines = splitClaudeStderrLines(data);
+        if (candidateLines.length === 0) {
+          return;
+        }
+        const budgeted = applyStderrWarningBudget(stderrWarningBudget, Date.now(), candidateLines);
+        const lines = budgeted.messages;
         if (lines.length === 0) {
           return;
         }
@@ -4850,6 +4860,12 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
                 lines,
               });
               return;
+            }
+            if (budgeted.suppressedCount > 0) {
+              yield* Effect.logDebug("claude.stderr.budget.suppressed", {
+                threadId: context.session.threadId,
+                suppressedCount: budgeted.suppressedCount,
+              });
             }
             for (const line of lines) {
               yield* emitClaudeProcessStderr(context, line);
