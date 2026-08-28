@@ -2,7 +2,9 @@
 
 ### The original Cafe Code, after hours — with the Club Code sign lit
 
-![Club Code desktop screenshot](./docs/images/cafe-code-desktop.png)
+![Club Code desktop screenshot](./docs/images/club-code-desktop.jpg)
+
+[▶ Watch the Club Code demo (WebM)](./docs/images/ClubCodeDemo.webm)
 
 Made in Japan with love, too much glitter, and absolutely no chance of catching
 the last train.
