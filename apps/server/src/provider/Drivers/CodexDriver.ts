@@ -27,7 +27,9 @@ import {
   ProviderDriverKind,
   ServerProviderRateLimitResetCreditError,
   type ServerProvider,
+  type ServerProviderProbePhaseDiagnostics,
 } from "@cafecode/contracts";
+import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -49,12 +51,16 @@ import {
   checkCodexProviderStatus,
   consumeCodexRateLimitResetCredit,
   discoverLmStudioModels,
+  isCodexCliLoginStatusProbeInconclusive,
   makePendingCodexProvider,
   readCodexAccountRateLimits,
   reconcileLmStudioModelDiscovery,
 } from "../Layers/CodexProvider.ts";
 import { ProviderEventLoggers } from "../Layers/ProviderEventLoggers.ts";
-import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
+import {
+  makeManagedServerProvider,
+  type ManagedProviderProbePolicy,
+} from "../makeManagedServerProvider.ts";
 import type { ProviderDriver, ProviderInstance } from "../ProviderDriver.ts";
 import type { ServerProviderDraft } from "../providerSnapshot.ts";
 import { mergeProviderInstanceEnvironment } from "../ProviderInstanceEnvironment.ts";
@@ -80,6 +86,24 @@ const DRIVER_KIND = ProviderDriverKind.make("codex");
 // neither path creates hidden Codex app-server sessions or repeated CLI probe
 // queues.
 const PERIODIC_SNAPSHOT_REFRESH_INTERVAL = Duration.minutes(5);
+
+/**
+ * Probe admission and transient-failure policy for every Codex instance.
+ * Exported so the wiring is directly testable without constructing a live
+ * instance (which spawns Codex processes and materializes shadow homes).
+ */
+export const CODEX_PROBE_POLICY = {
+  // ProviderRegistry owns bounded initial admission across every configured
+  // provider. Avoid a second unbounded startup fiber here.
+  initialRefresh: "external",
+  // An isolated bounded `codex login status` timeout is not evidence
+  // that an already-authenticated session became unhealthy. Retain
+  // known-good state twice, then surface the third consecutive timeout
+  // so a persistently wedged CLI remains visible and diagnosable.
+  isInconclusiveSnapshot: isCodexCliLoginStatusProbeInconclusive,
+  inconclusiveFailureThreshold: 3,
+} as const satisfies ManagedProviderProbePolicy;
+
 /**
  * Redemption spawns an app-server and makes one network round trip, so it needs
  * far more headroom than the badge probe — but it must still be bounded, since
@@ -352,15 +376,32 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
           : effectiveConfig.ossMode
             ? checkCodexProviderStatus(effectiveConfig, undefined, effectiveEnvironment)
             : checkCodexCliProviderStatus(effectiveConfig, effectiveEnvironment);
-      const checkProvider = refreshCodexShadowHome.pipe(
-        Effect.catch((cause) =>
-          Effect.logWarning("codex.home.authRefreshBeforeStatusFailed", {
-            instanceId,
-            detail: cause.message,
+      const checkProvider = Effect.gen(function* () {
+        const prepareStartedAtMs = yield* Clock.currentTimeMillis;
+        let prepareOutcome: ServerProviderProbePhaseDiagnostics["outcome"] = "success";
+        yield* refreshCodexShadowHome.pipe(
+          Effect.catch((cause) => {
+            prepareOutcome = "error";
+            return Effect.logWarning("codex.home.authRefreshBeforeStatusFailed", {
+              instanceId,
+              detail: cause.message,
+            });
           }),
-        ),
-        Effect.andThen(checkCodexStatus),
-        Effect.map(stampIdentity),
+        );
+        const prepareFinishedAtMs = yield* Clock.currentTimeMillis;
+        const checked = yield* checkCodexStatus;
+        return stampIdentity({
+          ...checked,
+          probePhases: [
+            {
+              phase: "prepare-runtime-home",
+              outcome: prepareOutcome,
+              durationMs: Math.max(0, Math.floor(prepareFinishedAtMs - prepareStartedAtMs)),
+            },
+            ...(checked.probePhases ?? []),
+          ],
+        });
+      }).pipe(
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
         Effect.provideService(FileSystem.FileSystem, fileSystem),
         Effect.provideService(Path.Path, path),
@@ -471,6 +512,7 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
             Effect.flatMap((enrichedSnapshot) => publishSnapshot(enrichedSnapshot)),
           ),
         refreshInterval: PERIODIC_SNAPSHOT_REFRESH_INTERVAL,
+        probePolicy: CODEX_PROBE_POLICY,
       }).pipe(
         Effect.mapError(
           (cause) =>

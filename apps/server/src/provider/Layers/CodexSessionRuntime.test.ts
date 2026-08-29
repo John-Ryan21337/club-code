@@ -29,6 +29,7 @@ import {
   codexChildConversationThreadIdsForTurn,
   codexElapsedDelayMilliseconds,
   codexElapsedDelayRemainingMilliseconds,
+  codexTerminalSessionPatch,
   isRecoverableThreadResumeError,
   isCodexContextCompactionItemType,
   isCodexChildConversationWorkNotification,
@@ -314,6 +315,51 @@ describe("buildCodexAppServerArgs", () => {
       "-c",
       "model_providers.cafecode-openai-http.supports_websockets=false",
     ]);
+  });
+});
+
+describe("codexTerminalSessionPatch", () => {
+  it("keeps a prior failure message when a failed terminal outcome carries none", () => {
+    // Codex can emit the failure text on an earlier `error` notification and then
+    // close the turn with a message-less `failed` status. Omitting `lastError`
+    // from the patch leaves that earlier message on the session.
+    assert.deepStrictEqual(codexTerminalSessionPatch({ turnStatus: "failed" }), {
+      status: "error",
+      activeTurnId: undefined,
+    });
+  });
+
+  it("clears a previous runtime error after a successful terminal outcome", () => {
+    assert.deepStrictEqual(codexTerminalSessionPatch({ turnStatus: "completed" }), {
+      status: "ready",
+      activeTurnId: undefined,
+      lastError: undefined,
+    });
+  });
+
+  it("clears a previous runtime error for any non-failed terminal status", () => {
+    assert.deepStrictEqual(
+      codexTerminalSessionPatch({ turnStatus: "aborted", errorMessage: "stale failure" }),
+      {
+        status: "ready",
+        activeTurnId: undefined,
+        lastError: undefined,
+      },
+    );
+  });
+
+  it("keeps the current failure message after a failed terminal outcome", () => {
+    assert.deepStrictEqual(
+      codexTerminalSessionPatch({
+        turnStatus: "failed",
+        errorMessage: "current turn failed",
+      }),
+      {
+        status: "error",
+        activeTurnId: undefined,
+        lastError: "current turn failed",
+      },
+    );
   });
 });
 
@@ -1480,6 +1526,22 @@ describe("isRecoverableThreadResumeError", () => {
         new CodexErrors.CodexAppServerRequestError({
           code: -32603,
           errorMessage: "Thread does not exist",
+        }),
+      ),
+      true,
+    );
+  });
+
+  it("matches Codex thread-store rollout path resolution failures", () => {
+    // Codex rust-v0.149.1 thread-store wording for a deleted or archived
+    // thread record. It never says "thread", so the generic snippets alone
+    // would let this fail the resume instead of starting a fresh thread.
+    assert.equal(
+      isRecoverableThreadResumeError(
+        new CodexErrors.CodexAppServerRequestError({
+          code: -32603,
+          errorMessage:
+            "failed to resolve rollout path `/tmp/rollout-x.jsonl`: file does not exist",
         }),
       ),
       true,

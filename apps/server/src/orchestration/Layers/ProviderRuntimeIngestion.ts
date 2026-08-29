@@ -24,6 +24,7 @@ import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
@@ -1777,7 +1778,14 @@ const make = Effect.gen(function* () {
     },
   );
 
-  const processRuntimeEvent = (event: ProviderRuntimeEvent) =>
+  type DeferredTerminalTurnSessionSet = {
+    current: Extract<OrchestrationCommand, { readonly type: "thread.session.set" }> | null;
+  };
+
+  const processRuntimeEventInto = (
+    event: ProviderRuntimeEvent,
+    deferredCompletedTurnSessionSet: DeferredTerminalTurnSessionSet,
+  ) =>
     Effect.gen(function* () {
       const thread = yield* resolveThreadShell(event.threadId);
       if (!thread) return;
@@ -1795,10 +1803,6 @@ const make = Effect.gen(function* () {
       const now = event.createdAt;
       const eventTurnId = toTurnId(event.turnId);
       const activeTurnId = thread.session?.activeTurnId ?? null;
-      let deferredCompletedTurnSessionSet: Extract<
-        OrchestrationCommand,
-        { readonly type: "thread.session.set" }
-      > | null = null;
 
       if (event.type === "thread.goal.updated" || event.type === "thread.goal.cleared") {
         const goalIsActive =
@@ -2155,7 +2159,7 @@ const make = Effect.gen(function* () {
             // finalized buffered assistant text and its derived activities,
             // so the renderer cannot enqueue an automated send in the middle
             // of completion ingestion. This is event ordering, not a timer.
-            deferredCompletedTurnSessionSet = sessionSetCommand;
+            deferredCompletedTurnSessionSet.current = sessionSetCommand;
           } else {
             yield* orchestrationEngine.dispatch(sessionSetCommand);
           }
@@ -2396,7 +2400,26 @@ const make = Effect.gen(function* () {
                 hasProjectedMessage: findMessageById(messages, assistantMessageId) !== undefined,
               }),
             { concurrency: 1 },
-          ).pipe(Effect.asVoid);
+          ).pipe(
+            Effect.asVoid,
+            // Finalization is derived projection work. A failure here must not
+            // abort the event: the terminal session write would then only run
+            // from the exit finalizer, publishing completion with the failure
+            // unlogged. Log it and let the normal completion path proceed.
+            Effect.catchCause((cause) =>
+              Cause.hasInterruptsOnly(cause)
+                ? Effect.failCause(cause)
+                : Effect.logWarning(
+                    "provider runtime ingestion failed to finalize assistant messages",
+                    {
+                      eventId: event.eventId,
+                      threadId: thread.id,
+                      turnId,
+                      cause: Cause.pretty(cause),
+                    },
+                  ),
+            ),
+          );
           yield* clearAssistantMessageIdsForTurn(thread.id, turnId);
           yield* clearAssistantSegmentStateForTurn(thread.id, turnId);
 
@@ -2407,7 +2430,18 @@ const make = Effect.gen(function* () {
             planId: proposedPlanIdForTurn(thread.id, turnId),
             turnId,
             updatedAt: now,
-          });
+          }).pipe(
+            Effect.catchCause((cause) =>
+              Cause.hasInterruptsOnly(cause)
+                ? Effect.failCause(cause)
+                : Effect.logWarning("provider runtime ingestion failed to finalize proposed plan", {
+                    eventId: event.eventId,
+                    threadId: thread.id,
+                    turnId,
+                    cause: Cause.pretty(cause),
+                  }),
+            ),
+          );
         }
       }
 
@@ -2491,19 +2525,83 @@ const make = Effect.gen(function* () {
       }
 
       const activities = runtimeEventToActivities(event);
+      // Work-log appends are derived, best-effort projections of this runtime
+      // event, and they are the last work an event performs. Isolating each
+      // dispatch keeps one failing append from discarding the remaining ones
+      // and from aborting the event before it can be marked processed.
       yield* Effect.forEach(activities, (activity) =>
-        orchestrationEngine.dispatch({
-          type: "thread.activity.append",
-          commandId: providerCommandId(event, "thread-activity-append", activity.id),
-          threadId: thread.id,
-          activity,
-          createdAt: activity.createdAt,
-        }),
+        orchestrationEngine
+          .dispatch({
+            type: "thread.activity.append",
+            commandId: providerCommandId(event, "thread-activity-append", activity.id),
+            threadId: thread.id,
+            activity,
+            createdAt: activity.createdAt,
+          })
+          .pipe(
+            // A transient SQLITE_BUSY should not cost the work log an entry: retry
+            // briefly before giving up, since the event is marked processed
+            // afterwards and replay will not deliver it again.
+            Effect.retry({ times: 2 }),
+            Effect.catchCause((cause) =>
+              // Interruption is the one cause that must still unwind: the fiber
+              // owning this ingestion is being torn down, so there is nothing
+              // left to release.
+              Cause.hasInterruptsOnly(cause)
+                ? Effect.failCause(cause)
+                : Effect.logWarning("provider runtime ingestion failed to append activity", {
+                    eventId: event.eventId,
+                    eventType: event.type,
+                    threadId: thread.id,
+                    activityId: activity.id,
+                    activityKind: activity.kind,
+                    cause: Cause.pretty(cause),
+                  }),
+            ),
+          ),
       ).pipe(Effect.asVoid);
+    });
 
-      if (deferredCompletedTurnSessionSet !== null) {
-        yield* orchestrationEngine.dispatch(deferredCompletedTurnSessionSet);
-      }
+  /**
+   * `turn.completed` deliberately withholds its terminal `thread.session.set`
+   * until this same runtime event has finalized buffered assistant text and the
+   * activities derived from it, so Auto Nudge cannot observe completion mid-way
+   * through ingestion. That ordering must not become a durability hazard: the
+   * terminal session write is the only release of the thread's active-turn
+   * marker, so a failure anywhere in the finalization work would otherwise leave
+   * the thread projected `running` until the next Club Code restart. Dispatch it
+   * from an exit handler instead, and keep the write itself non-fatal.
+   */
+  const processRuntimeEvent = (event: ProviderRuntimeEvent) =>
+    Effect.suspend(() => {
+      const deferredCompletedTurnSessionSet: DeferredTerminalTurnSessionSet = { current: null };
+      const dispatchDeferredCompletedTurnSessionSet = Effect.suspend(() => {
+        const command = deferredCompletedTurnSessionSet.current;
+        deferredCompletedTurnSessionSet.current = null;
+        return command === null
+          ? Effect.void
+          : orchestrationEngine.dispatch(command).pipe(
+              Effect.catchCause((cause) =>
+                Effect.logWarning(
+                  "provider runtime ingestion failed to write the terminal turn session",
+                  {
+                    eventId: event.eventId,
+                    eventType: event.type,
+                    threadId: event.threadId,
+                    turnId: event.turnId,
+                    cause: Cause.pretty(cause),
+                  },
+                ),
+              ),
+            );
+      });
+      return processRuntimeEventInto(event, deferredCompletedTurnSessionSet).pipe(
+        Effect.onExit((exit) =>
+          // Interruption is tearing this ingestion fiber down; writing a
+          // durable command from that finalizer would race shutdown.
+          Exit.hasInterrupts(exit) ? Effect.void : dispatchDeferredCompletedTurnSessionSet,
+        ),
+      );
     });
 
   const processDomainEvent = (event: RuntimeIngestionDomainEvent) =>

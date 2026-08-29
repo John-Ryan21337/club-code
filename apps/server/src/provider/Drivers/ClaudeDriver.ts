@@ -39,7 +39,10 @@ import {
 } from "../Layers/ClaudeProvider.ts";
 import { installBundledAuditAndRepairSkill } from "../BundledAuditAndRepairSkill.ts";
 import { ProviderEventLoggers } from "../Layers/ProviderEventLoggers.ts";
-import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
+import {
+  makeManagedServerProvider,
+  type ManagedProviderProbePolicy,
+} from "../makeManagedServerProvider.ts";
 import {
   defaultProviderContinuationIdentity,
   type ProviderDriver,
@@ -63,6 +66,22 @@ const decodeClaudeSettings = Schema.decodeSync(ClaudeSettings);
 
 const DRIVER_KIND = ProviderDriverKind.make("claudeAgent");
 const SNAPSHOT_REFRESH_INTERVAL = Duration.minutes(5);
+
+/**
+ * Probe admission policy for every Claude instance. Exported so the wiring is
+ * directly testable without constructing a live instance (which spawns the
+ * Claude CLI and resolves a per-instance HOME).
+ */
+export const CLAUDE_PROBE_POLICY = {
+  // ProviderRegistry performs the one bounded startup refresh for all
+  // instances. The managed provider still owns staggered periodic and
+  // explicit manual refreshes after that admission boundary.
+  initialRefresh: "external",
+  // The Claude status probe has no separately classifiable "could not tell"
+  // outcome today: its bounded CLI failures are conclusive errors. Leave
+  // `isInconclusiveSnapshot` unset so nothing is masked.
+} as const satisfies ManagedProviderProbePolicy;
+
 const CAPABILITIES_PROBE_TTL = Duration.minutes(5);
 const CLAUDE_ACCOUNT_USAGE_MINIMUM_VERSION = "2.1.216";
 const APPROVED_CLAUDE_CODE_VERSION = approvedProviderCliVersion("claude");
@@ -313,6 +332,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
             Effect.flatMap((enrichedSnapshot) => publishSnapshot(enrichedSnapshot)),
           ),
         refreshInterval: SNAPSHOT_REFRESH_INTERVAL,
+        probePolicy: CLAUDE_PROBE_POLICY,
       }).pipe(
         Effect.mapError(
           (cause) =>

@@ -734,6 +734,7 @@ const buildAppUnderTest = (options?: {
               stoppedSessionCount: 0,
             }),
           listSessions: () => Effect.succeed([]),
+          listSessionsInventory: () => Effect.succeed({ available: true, sessions: [] }),
           getCapabilities: () => Effect.die("unexpected getCapabilities"),
           getInstanceInfo: (instanceId) =>
             Effect.succeed({

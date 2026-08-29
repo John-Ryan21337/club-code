@@ -152,6 +152,11 @@ function createProviderServiceHarness(
     stopSession: () => unsupported(),
     restartProviderRuntime: () => unsupported(),
     listSessions,
+    listSessionsInventory: () =>
+      Effect.map(listSessions() as Effect.Effect<ReadonlyArray<ProviderSession>>, (sessions) => ({
+        available: true,
+        sessions,
+      })),
     getCapabilities: () =>
       Effect.succeed({ sessionModelSwitch: "in-session", liveSteer: "unsupported" }),
     getInstanceInfo: (instanceId) =>

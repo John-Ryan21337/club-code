@@ -81,6 +81,9 @@ import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogg
 import type { CodexShadowHomeError } from "../Drivers/CodexHomeLayout.ts";
 const isCodexAppServerProcessExitedError = Schema.is(CodexErrors.CodexAppServerProcessExitedError);
 const isCodexAppServerTransportError = Schema.is(CodexErrors.CodexAppServerTransportError);
+const isCodexAppServerIncomingMessageTooLargeError = Schema.is(
+  CodexErrors.CodexAppServerIncomingMessageTooLargeError,
+);
 const isCodexSessionRuntimeThreadIdMissingError = Schema.is(
   CodexSessionRuntimeThreadIdMissingError,
 );
@@ -145,7 +148,14 @@ function mapCodexRuntimeError(
   method: string,
   error: CodexSessionRuntimeError,
 ): ProviderAdapterError {
-  if (isCodexAppServerProcessExitedError(error) || isCodexAppServerTransportError(error)) {
+  if (
+    isCodexAppServerProcessExitedError(error) ||
+    isCodexAppServerTransportError(error) ||
+    // An over-limit stdout line terminates the JSON-RPC reader while the
+    // app-server child may still be running. The session cannot make progress
+    // on that protocol again, so it must be retired and restarted, not retried.
+    isCodexAppServerIncomingMessageTooLargeError(error)
+  ) {
     return new ProviderAdapterSessionClosedError({
       provider: PROVIDER,
       threadId,

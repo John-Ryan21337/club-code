@@ -148,13 +148,27 @@ const CODEX_AGGREGATE_CHILD_LIVENESS_POLL_DELAYS = [
 const CODEX_APP_SERVER_CHILD_PROCESS_WARNING_LIMIT = 8;
 const CODEX_APP_SERVER_CHILD_PROCESS_COMMAND_PREVIEW_LENGTH = 180;
 export const CODEX_COMPLETED_AGENT_MESSAGE_LEDGER_LIMIT = 512;
+// stderr is diagnostic text, never a JSON-RPC payload. A single stderr line has
+// no legitimate reason to approach the stdout cap, so bound it far tighter: an
+// over-limit line is dropped with a counted warning and the reader resyncs.
+export const CODEX_STDERR_MAX_LINE_BYTES = 16 * 1024 * 1024;
 const RECOVERABLE_THREAD_RESUME_ERROR_SNIPPETS = [
   "not found",
   "missing thread",
   "no such thread",
   "unknown thread",
   "does not exist",
+  // Codex rust-v0.149.1 thread-store reports a deleted or archived thread
+  // record as "failed to resolve rollout path `<path>`: file does not exist".
+  // The rollout file is the thread's on-disk record, so this is the same
+  // recoverable condition as an unknown thread id: Club Code must start a
+  // fresh provider thread instead of surfacing a hard resume failure.
 ];
+// Codex thread-store wording names the thread's on-disk record ("rollout")
+// instead of the word "thread", so both tokens identify a thread-scoped error.
+// Without this, a generic snippet such as "does not exist" would still be
+// gated out and the resume would fail hard.
+const THREAD_RESUME_ERROR_IDENTITY_TOKENS = ["thread", "rollout"];
 
 export const CodexResumeCursorSchema = Schema.Struct({
   threadId: Schema.String,
@@ -1667,7 +1681,7 @@ export function classifyCodexStderrLines(
 
 export function isRecoverableThreadResumeError(error: unknown): boolean {
   const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
-  if (!message.includes("thread")) {
+  if (!THREAD_RESUME_ERROR_IDENTITY_TOKENS.some((token) => message.includes(token))) {
     return false;
   }
   return RECOVERABLE_THREAD_RESUME_ERROR_SNIPPETS.some((snippet) => message.includes(snippet));
@@ -2433,6 +2447,36 @@ function updateSession(
       updatedAt,
     }));
   });
+}
+
+/**
+ * Session patch for a turn that reached a terminal Codex status, shared by the
+ * live `turn/completed` path and by `thread/read` reconciliation so both agree.
+ */
+export function codexTerminalSessionPatch(input: {
+  readonly turnStatus: string;
+  readonly errorMessage?: string | undefined;
+}): Partial<ProviderSession> {
+  const failed = input.turnStatus === "failed";
+  // Both the live `turn/completed` path and the thread/read reconciliation path
+  // can hand over an empty message; treat it as absent so it never blanks a
+  // meaningful earlier failure.
+  const errorMessage = input.errorMessage?.trim() ? input.errorMessage : undefined;
+  return {
+    status: failed ? "error" : "ready",
+    activeTurnId: undefined,
+    // `lastError` describes the current runtime outcome, not an append-only
+    // diagnostic. A successful completion must clear a prior failure, otherwise
+    // a later session poll or a reconnect reconciliation resurrects an error
+    // Club Code has already recovered from. A failure that arrives without its
+    // own message keeps the message an earlier `error` notification recorded
+    // for the same turn instead of blanking it.
+    ...(failed
+      ? errorMessage !== undefined
+        ? { lastError: errorMessage }
+        : {}
+      : { lastError: undefined }),
+  };
 }
 
 function parseThreadSnapshot(
@@ -3538,13 +3582,17 @@ export const makeCodexSessionRuntime = (
         }
 
         const observedAt = yield* nowIso;
-        yield* updateSession(sessionRef, {
-          status: input.turn.status === "failed" ? "error" : "ready",
-          activeTurnId: undefined,
-          ...(input.turn.status === "failed" && input.turn.error?.message
-            ? { lastError: input.turn.error.message }
-            : {}),
-        });
+        // An authoritative terminal snapshot supersedes an older runtime error.
+        // Apply the same patch as the live completion path so reconnect
+        // reconciliation cannot replay a failure the session already recovered
+        // from.
+        yield* updateSession(
+          sessionRef,
+          codexTerminalSessionPatch({
+            turnStatus: input.turn.status,
+            errorMessage: input.turn.error?.message,
+          }),
+        );
         yield* Effect.logInfo("codex.turnProgress.reconciledFromThreadRead", {
           threadId: options.threadId,
           providerInstanceId: options.providerInstanceId ?? PROVIDER,
@@ -4226,11 +4274,13 @@ export const makeCodexSessionRuntime = (
             const turnStatus = readNotificationTurnStatus(notification);
             const errorMessage =
               turnStatus === "failed" ? readNotificationErrorMessage(notification) : undefined;
-            yield* updateSession(sessionRef, {
-              status: turnStatus === "failed" ? "error" : "ready",
-              activeTurnId: undefined,
-              ...(errorMessage ? { lastError: errorMessage } : {}),
-            });
+            yield* updateSession(
+              sessionRef,
+              codexTerminalSessionPatch({
+                turnStatus: turnStatus ?? "completed",
+                errorMessage,
+              }),
+            );
             return;
           }
           case "thread/status/changed": {
@@ -4774,14 +4824,30 @@ export const makeCodexSessionRuntime = (
     // Line assembly is linear in the chunk size, and the warning budget keeps
     // a copied command-output dump from becoming thousands of durable
     // work-log activities; the native provider log still gets every line.
-    const stderrLineBuffer = CodexProtocol.makeIncomingLineBuffer();
+    const stderrLineBuffer = CodexProtocol.makeIncomingLineBuffer(CODEX_STDERR_MAX_LINE_BYTES);
     const stderrWarningBudget = makeStderrWarningBudgetState(yield* Clock.currentTimeMillis);
     let stderrSuppressCommandFailureDetails = false;
+    let stderrOversizedLineCount = 0;
     yield* child.stderr.pipe(
       Stream.decodeText(),
       Stream.runForEach((chunk) =>
         Effect.gen(function* () {
-          const lines = CodexProtocol.appendIncomingChunk(stderrLineBuffer, chunk);
+          const read = CodexProtocol.appendIncomingChunk(stderrLineBuffer, chunk);
+          if (!read.ok) {
+            // stderr is diagnostic only, so the same byte cap that terminates
+            // the JSON-RPC stdout reader must not terminate the session here.
+            // The over-limit line is released and the reader resynchronizes on
+            // the next line boundary. Log a count only: the dropped text is
+            // unbounded and can hold copied command output.
+            stderrOversizedLineCount += 1;
+            yield* Effect.logWarning("codex.stderr.line.too-large", {
+              threadId: options.threadId,
+              providerInstanceId: options.providerInstanceId ?? PROVIDER,
+              maxBytes: read.error.maxBytes,
+              droppedLineCount: stderrOversizedLineCount,
+            });
+          }
+          const lines = read.lines;
           if (lines.length === 0) {
             return;
           }

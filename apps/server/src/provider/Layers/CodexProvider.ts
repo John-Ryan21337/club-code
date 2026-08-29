@@ -34,7 +34,11 @@ import type {
   ServerProviderAccountRateLimitResetCredit,
   ServerProviderPaidUsage,
 } from "@cafecode/contracts";
-import { normalizeLmStudioBaseUrl, ServerSettingsError } from "@cafecode/contracts";
+import {
+  normalizeLmStudioBaseUrl,
+  ProviderDriverKind,
+  ServerSettingsError,
+} from "@cafecode/contracts";
 
 import { createModelCapabilities } from "@cafecode/shared/model";
 import {
@@ -60,6 +64,13 @@ const MAX_PROVIDER_EMAIL_LENGTH = 320;
 const CODEX_ACCOUNT_RATE_LIMIT_TIMEOUT_MS = 3_000;
 const CODEX_CHATGPT_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
 const CODEX_ORIGINATOR = "cafecode_desktop";
+export const CODEX_CLI_LOGIN_STATUS_TIMEOUT_MESSAGE =
+  "Codex CLI login status check timed out. Provider sessions may still work.";
+/**
+ * A disposable health probe gets one graceful interval to exit before the
+ * scope finalizer's SIGKILL backstop runs.
+ */
+const CODEX_HEALTH_PROBE_TERMINATION_GRACE = Duration.seconds(1);
 const LM_STUDIO_DISCOVERY_TIMEOUT_MS = 3_000;
 const MAX_LM_STUDIO_MODEL_RESPONSE_BYTES = 2 * 1024 * 1024;
 const MAX_LM_STUDIO_DISCOVERED_MODELS = 256;
@@ -1512,20 +1523,37 @@ export function reconcileLmStudioModelDiscovery(
   };
 }
 
-const runCodexCommand = Effect.fn("runCodexCommand")(function* (
+export function makeCodexHealthProbeCommand(
   codexSettings: CodexSettings,
   args: ReadonlyArray<string>,
   environment: NodeJS.ProcessEnv = process.env,
-) {
+): ChildProcess.StandardCommand {
   const resolvedHomePath = codexSettings.homePath ? expandHomePath(codexSettings.homePath) : "";
-  const command = ChildProcess.make(codexSettings.binaryPath, [...args], {
+  return ChildProcess.make(codexSettings.binaryPath, [...args], {
     env: {
       ...environment,
       ...(resolvedHomePath.length > 0 ? { CODEX_HOME: resolvedHomePath } : {}),
     },
     shell: process.platform === "win32",
+    // POSIX probes use their own process group so cleanup reaches descendants;
+    // Windows keeps the platform default (no `detached`) and relies on the
+    // platform child-tree termination path. The scoped backstop is SIGKILL
+    // because `runCodexCommand` performs the graceful, bounded
+    // SIGTERM -> SIGKILL sequence before scope release.
+    killSignal: "SIGKILL",
+    detached: process.platform !== "win32",
   });
-  return yield* spawnAndCollect(codexSettings.binaryPath, command);
+}
+
+const runCodexCommand = Effect.fn("runCodexCommand")(function* (
+  codexSettings: CodexSettings,
+  args: ReadonlyArray<string>,
+  environment: NodeJS.ProcessEnv = process.env,
+) {
+  const command = makeCodexHealthProbeCommand(codexSettings, args, environment);
+  return yield* spawnAndCollect(codexSettings.binaryPath, command, {
+    terminationGrace: CODEX_HEALTH_PROBE_TERMINATION_GRACE,
+  });
 });
 
 function codexAuthProbeStatusFromLoginStatusResult(result: {
@@ -1967,7 +1995,7 @@ export const checkCodexCliProviderStatus = Effect.fn("checkCodexCliProviderStatu
         version: parsedVersion,
         status: "warning",
         auth: { status: "unknown" },
-        message: "Codex CLI login status check timed out. Provider sessions may still work.",
+        message: CODEX_CLI_LOGIN_STATUS_TIMEOUT_MESSAGE,
       },
     });
   }
@@ -1997,6 +2025,20 @@ export const checkCodexCliProviderStatus = Effect.fn("checkCodexCliProviderStatu
     },
   });
 });
+
+/**
+ * A login-status timeout is different from a conclusive authentication
+ * failure: Codex sessions may remain usable and the bounded subprocess simply
+ * failed to answer in time. Keep this classification colocated with the probe
+ * that emits it so the managed provider never has to infer lifecycle meaning
+ * from arbitrary provider output.
+ */
+export const isCodexCliLoginStatusProbeInconclusive = (snapshot: ServerProvider): boolean =>
+  snapshot.driver === ProviderDriverKind.make("codex") &&
+  snapshot.installed &&
+  snapshot.status === "warning" &&
+  snapshot.auth.status === "unknown" &&
+  snapshot.message === CODEX_CLI_LOGIN_STATUS_TIMEOUT_MESSAGE;
 
 // NOTE: the singleton `CodexProviderLive` Layer has been removed as part of
 // the per-instance-driver refactor. `CodexDriver.create()` builds a managed

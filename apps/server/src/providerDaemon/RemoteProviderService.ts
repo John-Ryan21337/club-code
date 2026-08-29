@@ -11,6 +11,7 @@ import {
   ProviderDaemonRpcRequest,
   ProviderDaemonRpcResultByMethod,
   type ProviderRuntimeEvent,
+  type ProviderSession,
   type ProviderDaemonClientConfig,
 } from "@cafecode/contracts";
 import {
@@ -113,6 +114,38 @@ export function providerDaemonRpcTimeoutMs(
     : PROMPT_ROUTING_READ_RPC_METHODS.has(method)
       ? PROVIDER_DAEMON_PROMPT_ROUTING_READ_TIMEOUT_MS
       : undefined;
+}
+
+/**
+ * Builds the availability-aware session inventory reader for a remote runtime.
+ *
+ * `listSessions` cannot distinguish "the daemon reports no sessions" from "the
+ * daemon could not be reached", because both collapse to an empty array. A
+ * reconciler that treats an unreachable daemon as proof of zero live sessions
+ * will retire healthy provider turns. This wrapper keeps that failure visible
+ * as `available: false` while leaving the legacy empty-array contract intact
+ * for callers that only need a best-effort list.
+ */
+export function makeRemoteListSessionsInventory(
+  readRemoteSessions: () => Effect.Effect<
+    ReadonlyArray<ProviderSession>,
+    ProviderAdapterRequestError
+  >,
+): ProviderServiceShape["listSessionsInventory"] {
+  return () =>
+    readRemoteSessions().pipe(
+      Effect.map((sessions) => ({ available: true, sessions })),
+      Effect.catch((error) =>
+        Effect.logWarning("provider daemon listSessions failed", {
+          detail: error.message,
+        }).pipe(
+          Effect.as({
+            available: false,
+            sessions: [] as ReadonlyArray<ProviderSession>,
+          }),
+        ),
+      ),
+    );
 }
 
 function providerDaemonUrl(config: ProviderDaemonClientConfig, path: string): URL {
@@ -392,6 +425,10 @@ const makeRemoteProviderService = Effect.gen(function* () {
     }
   }).pipe(Effect.forkScoped);
 
+  const listSessionsInventory = makeRemoteListSessionsInventory(() =>
+    rpc(daemonConfig, { method: "listSessions", payload: {} }),
+  );
+
   const service: ProviderServiceShape = {
     grantAgentBrowser: (input) =>
       rpc(daemonConfig, { method: "agentBrowserGrant", payload: input }),
@@ -414,14 +451,8 @@ const makeRemoteProviderService = Effect.gen(function* () {
     stopSession: (input) => rpc(daemonConfig, { method: "stopSession", payload: input }),
     restartProviderRuntime: (input) =>
       rpc(daemonConfig, { method: "restartProviderRuntime", payload: input }),
-    listSessions: () =>
-      rpc(daemonConfig, { method: "listSessions", payload: {} }).pipe(
-        Effect.catch((error) =>
-          Effect.logWarning("provider daemon listSessions failed", {
-            detail: error.message,
-          }).pipe(Effect.as([])),
-        ),
-      ),
+    listSessions: () => listSessionsInventory().pipe(Effect.map((inventory) => inventory.sessions)),
+    listSessionsInventory,
     getCapabilities: (instanceId) =>
       rpc(daemonConfig, { method: "getCapabilities", payload: { instanceId } }).pipe(
         Effect.map(
