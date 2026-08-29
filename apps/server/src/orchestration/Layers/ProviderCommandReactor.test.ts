@@ -159,21 +159,6 @@ async function waitFor(
   }
 }
 
-/**
- * `listSessionsInventory` separates "the daemon says there are no sessions"
- * from "the daemon never answered". It is declared here as an intersection so
- * the harness keeps typechecking both before and after the ProviderService
- * layer adopts it.
- */
-interface ProviderSessionInventoryResult {
-  readonly available: boolean;
-  readonly sessions: ReadonlyArray<ProviderSession>;
-}
-
-type ProviderServiceTestShape = ProviderServiceShape & {
-  readonly listSessionsInventory: () => Effect.Effect<ProviderSessionInventoryResult>;
-};
-
 const LIVE_RUNTIME_OWNER_UUID = "0d1a3f5e-6b7c-4d8e-9f01-23456789abcd";
 
 function liveRuntimeOwnerPayload(extra?: Record<string, unknown>): Record<string, unknown> {
@@ -285,7 +270,7 @@ describe("ProviderCommandReactor", () => {
     readonly threadGoals?: "supported" | "unsupported";
     readonly startReactor?: boolean;
     readonly listSessions?: ProviderServiceShape["listSessions"];
-    readonly listSessionsInventory?: ProviderServiceTestShape["listSessionsInventory"];
+    readonly listSessionsInventory?: ProviderServiceShape["listSessionsInventory"];
     readonly providerBindings?: ReadonlyArray<ProviderRuntimeBindingWithMetadata>;
   }) {
     const now = "2026-01-01T00:00:00.000Z";
@@ -530,7 +515,7 @@ describe("ProviderCommandReactor", () => {
         Effect.succeed([...providerBindings.values()].map((binding) => binding.threadId)),
       listBindings,
     };
-    const service: ProviderServiceTestShape = {
+    const service: ProviderServiceShape = {
       startSession: startSession as ProviderServiceShape["startSession"],
       sendTurn: sendTurn as ProviderServiceShape["sendTurn"],
       steerTurn: steerTurn as ProviderServiceShape["steerTurn"],

@@ -252,6 +252,9 @@ describe("Codex CLI health probe command", () => {
         signals.push(options?.killSignal ?? "SIGTERM");
         return Effect.void;
       },
+      // A well-behaved process leaves promptly after SIGTERM, so no SIGKILL
+      // follows. (A handle without an exit signal is treated as never exiting.)
+      exitCode: Effect.void,
     };
 
     await Effect.runPromise(terminateProbeChild(child, Duration.millis(5)));

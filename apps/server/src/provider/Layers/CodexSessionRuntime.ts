@@ -163,7 +163,6 @@ const RECOVERABLE_THREAD_RESUME_ERROR_SNIPPETS = [
   // The rollout file is the thread's on-disk record, so this is the same
   // recoverable condition as an unknown thread id: Club Code must start a
   // fresh provider thread instead of surfacing a hard resume failure.
-  "failed to resolve rollout path",
 ];
 // Codex thread-store wording names the thread's on-disk record ("rollout")
 // instead of the word "thread", so both tokens identify a thread-scoped error.
@@ -2459,6 +2458,10 @@ export function codexTerminalSessionPatch(input: {
   readonly errorMessage?: string | undefined;
 }): Partial<ProviderSession> {
   const failed = input.turnStatus === "failed";
+  // Both the live `turn/completed` path and the thread/read reconciliation path
+  // can hand over an empty message; treat it as absent so it never blanks a
+  // meaningful earlier failure.
+  const errorMessage = input.errorMessage?.trim() ? input.errorMessage : undefined;
   return {
     status: failed ? "error" : "ready",
     activeTurnId: undefined,
@@ -2469,8 +2472,8 @@ export function codexTerminalSessionPatch(input: {
     // own message keeps the message an earlier `error` notification recorded
     // for the same turn instead of blanking it.
     ...(failed
-      ? input.errorMessage !== undefined
-        ? { lastError: input.errorMessage }
+      ? errorMessage !== undefined
+        ? { lastError: errorMessage }
         : {}
       : { lastError: undefined }),
   };
@@ -4843,7 +4846,6 @@ export const makeCodexSessionRuntime = (
               maxBytes: read.error.maxBytes,
               droppedLineCount: stderrOversizedLineCount,
             });
-            return;
           }
           const lines = read.lines;
           if (lines.length === 0) {

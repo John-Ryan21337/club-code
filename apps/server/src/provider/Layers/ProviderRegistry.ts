@@ -63,6 +63,7 @@ import {
   reconcileInconclusiveProviderProbeStreak,
   retainConclusiveProviderState,
 } from "../providerProbePolicy.ts";
+import { isSameAuthenticatedProviderAccount } from "../providerAccountBinding.ts";
 
 /**
  * Status probes spawn provider-owned subprocesses and may read shared auth
@@ -134,13 +135,14 @@ export const mergeProviderSnapshot = (
     previousProvider,
     nextProvider,
   );
-  const reconciledProvider =
+  const retainedInconclusive =
     streakReconciledProvider.probeDiagnostics?.lastOutcome === "inconclusive" &&
     streakReconciledProvider.probeDiagnostics.consecutiveInconclusiveCount <
       DEFAULT_PROVIDER_INCONCLUSIVE_FAILURE_THRESHOLD &&
-    hasConclusiveProviderAuthState(previousProvider)
-      ? retainConclusiveProviderState(previousProvider, streakReconciledProvider)
-      : streakReconciledProvider;
+    hasConclusiveProviderAuthState(previousProvider);
+  const reconciledProvider = retainedInconclusive
+    ? retainConclusiveProviderState(previousProvider, streakReconciledProvider)
+    : streakReconciledProvider;
 
   return {
     ...reconciledProvider,
@@ -156,6 +158,10 @@ export const mergeProviderSnapshot = (
     // retention-reconciled one: inconclusive retention republishes the previous
     // auth identity, which would otherwise make an OSS -> cloud rebuild look
     // like an unchanged catalog and merge cloud slugs into LM Studio's list.
+    // An inconclusive probe still reveals the instance's mode: OSS snapshots
+    // carry `auth.type: "local"` unconditionally, so a missing type means a
+    // cloud probe. After an OSS -> cloud rebuild the cloud catalog must replace
+    // the LM Studio list even while auth presentation is retained.
     models:
       (nextProvider.driver === ProviderDriverKind.make("codex") &&
         nextProvider.auth.type === "local") ||
@@ -182,11 +188,7 @@ export const mergeProviderSnapshot = (
     previousProvider.accountRateLimits !== undefined &&
     nextProvider.driver !== ProviderDriverKind.make("codex") &&
     previousProvider.driver === nextProvider.driver &&
-    previousProvider.auth.status === "authenticated" &&
-    nextProvider.auth.status === "authenticated" &&
-    previousProvider.auth.type === nextProvider.auth.type &&
-    previousProvider.auth.email !== undefined &&
-    previousProvider.auth.email === nextProvider.auth.email
+    isSameAuthenticatedProviderAccount(previousProvider.auth, nextProvider.auth)
       ? { accountRateLimits: previousProvider.accountRateLimits }
       : {}),
   };

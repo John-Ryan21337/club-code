@@ -27,6 +27,10 @@ import {
   hasConclusiveProviderAuthState,
   retainConclusiveProviderState,
 } from "./providerProbePolicy.ts";
+import {
+  hasProviderAccountBindingChanged,
+  normalizedAccountBinding,
+} from "./providerAccountBinding.ts";
 
 interface ProviderSnapshotState {
   readonly snapshot: ServerProvider;
@@ -101,27 +105,6 @@ const classifyProbeOutcome = (
   }
   return snapshot.status;
 };
-
-function normalizedAccountBinding(value: string | undefined): string | undefined {
-  const normalized = value?.trim().toLowerCase();
-  return normalized ? normalized : undefined;
-}
-
-function hasProviderAccountBindingChanged(
-  previous: ServerProvider["auth"],
-  next: ServerProvider["auth"],
-): boolean {
-  if (previous.status !== next.status) {
-    return true;
-  }
-  if (previous.status !== "authenticated" || next.status !== "authenticated") {
-    return false;
-  }
-  return (
-    normalizedAccountBinding(previous.email) !== normalizedAccountBinding(next.email) ||
-    normalizedAccountBinding(previous.type) !== normalizedAccountBinding(next.type)
-  );
-}
 
 interface SingleFlight<A, E> {
   readonly current: Effect.Effect<Deferred.Deferred<A, E> | null>;

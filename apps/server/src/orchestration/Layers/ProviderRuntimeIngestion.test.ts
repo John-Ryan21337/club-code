@@ -118,15 +118,7 @@ function createProviderServiceHarness() {
   const runtimeSessions: ProviderSession[] = [];
 
   const unsupported = () => Effect.die(new Error("Unsupported provider call in test")) as never;
-  // Declared as an intersection so this harness keeps typechecking both before
-  // and after `ProviderServiceShape` adopts `listSessionsInventory`.
-  type ProviderServiceTestShape = ProviderServiceShape & {
-    readonly listSessionsInventory: () => Effect.Effect<{
-      readonly available: boolean;
-      readonly sessions: ReadonlyArray<ProviderSession>;
-    }>;
-  };
-  const service: ProviderServiceTestShape = {
+  const service: ProviderServiceShape = {
     startSession: () => unsupported(),
     sendTurn: () => unsupported(),
     steerTurn: () => unsupported(),

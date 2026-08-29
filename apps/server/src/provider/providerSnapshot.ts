@@ -71,6 +71,8 @@ export function isCommandMissingCause(error: { readonly message: string }): bool
 interface TerminableChildProcess {
   readonly isRunning: Effect.Effect<boolean, unknown>;
   readonly kill: (options?: ChildProcess.KillOptions) => Effect.Effect<void, unknown>;
+  /** Resolves once the process has exited; optional so narrow test doubles still type. */
+  readonly exitCode?: Effect.Effect<unknown, unknown>;
 }
 
 /**
@@ -89,13 +91,25 @@ export const terminateProbeChild = (
     Effect.catch(() => Effect.succeed(true)),
     Effect.flatMap((running) => {
       if (!running) return Effect.void;
+      // `kill` resolves as soon as the signal is dispatched, so the grace must be
+      // measured against the exit itself: send SIGTERM, wait up to `grace` for
+      // the process to leave, then escalate to SIGKILL and wait once more.
+      // A handle without an exit signal is treated as never exiting so the
+      // escalation below still runs and the wait stays bounded by `grace`.
+      const awaitExit = (child.exitCode ?? Effect.never).pipe(Effect.ignore);
+      // Each stage bounds signal dispatch and the exit wait together, so a
+      // handle whose `kill` itself stalls still escalates on schedule.
       return child.kill({ killSignal: "SIGTERM" }).pipe(
+        Effect.andThen(awaitExit),
         Effect.timeoutOrElse({
           duration: grace,
           orElse: () =>
             child
               .kill({ killSignal: "SIGKILL" })
-              .pipe(Effect.timeoutOrElse({ duration: grace, orElse: () => Effect.void })),
+              .pipe(
+                Effect.andThen(awaitExit),
+                Effect.timeoutOrElse({ duration: grace, orElse: () => Effect.void }),
+              ),
         }),
         Effect.ignore,
       );
@@ -118,7 +132,7 @@ export const spawnAndCollect = (
       ],
       { concurrency: "unbounded" },
     );
-    const [stdout, stderr, exitCode] = yield* options?.terminationGrace
+    const [stdout, stderr, exitCode] = yield* options?.terminationGrace !== undefined
       ? collect.pipe(Effect.ensuring(terminateProbeChild(child, options.terminationGrace)))
       : collect;
 

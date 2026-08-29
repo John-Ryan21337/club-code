@@ -2400,7 +2400,26 @@ const make = Effect.gen(function* () {
                 hasProjectedMessage: findMessageById(messages, assistantMessageId) !== undefined,
               }),
             { concurrency: 1 },
-          ).pipe(Effect.asVoid);
+          ).pipe(
+            Effect.asVoid,
+            // Finalization is derived projection work. A failure here must not
+            // abort the event: the terminal session write would then only run
+            // from the exit finalizer, publishing completion with the failure
+            // unlogged. Log it and let the normal completion path proceed.
+            Effect.catchCause((cause) =>
+              Cause.hasInterruptsOnly(cause)
+                ? Effect.failCause(cause)
+                : Effect.logWarning(
+                    "provider runtime ingestion failed to finalize assistant messages",
+                    {
+                      eventId: event.eventId,
+                      threadId: thread.id,
+                      turnId,
+                      cause: Cause.pretty(cause),
+                    },
+                  ),
+            ),
+          );
           yield* clearAssistantMessageIdsForTurn(thread.id, turnId);
           yield* clearAssistantSegmentStateForTurn(thread.id, turnId);
 
@@ -2411,7 +2430,18 @@ const make = Effect.gen(function* () {
             planId: proposedPlanIdForTurn(thread.id, turnId),
             turnId,
             updatedAt: now,
-          });
+          }).pipe(
+            Effect.catchCause((cause) =>
+              Cause.hasInterruptsOnly(cause)
+                ? Effect.failCause(cause)
+                : Effect.logWarning("provider runtime ingestion failed to finalize proposed plan", {
+                    eventId: event.eventId,
+                    threadId: thread.id,
+                    turnId,
+                    cause: Cause.pretty(cause),
+                  }),
+            ),
+          );
         }
       }
 
@@ -2509,6 +2539,10 @@ const make = Effect.gen(function* () {
             createdAt: activity.createdAt,
           })
           .pipe(
+            // A transient SQLITE_BUSY should not cost the work log an entry: retry
+            // briefly before giving up, since the event is marked processed
+            // afterwards and replay will not deliver it again.
+            Effect.retry({ times: 2 }),
             Effect.catchCause((cause) =>
               // Interruption is the one cause that must still unwind: the fiber
               // owning this ingestion is being torn down, so there is nothing

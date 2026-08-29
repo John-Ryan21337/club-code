@@ -79,6 +79,14 @@ export const hydrateCachedProvider = (input: {
       ? {
           probeDiagnostics: {
             ...cachedProbeDiagnostics,
+            // The cached observation timestamps came from another process's
+            // wall clock. Carrying them forward lets a backwards clock step
+            // (NTP correction, VM restore, RTC drift) make every live probe look
+            // "older" than the cache and freeze the merged provider state until
+            // the clock catches up. Only the counters and last outcome are
+            // restart-durable; the fresh scope owns the timestamps.
+            lastStartedAt: null,
+            lastFinishedAt: null,
             periodicIntervalMs: fallbackProbeDiagnostics.periodicIntervalMs,
             periodicPhaseOffsetMs: fallbackProbeDiagnostics.periodicPhaseOffsetMs,
             nextScheduledAt: fallbackProbeDiagnostics.nextScheduledAt,

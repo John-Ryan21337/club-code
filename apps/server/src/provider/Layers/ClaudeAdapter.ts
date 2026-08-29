@@ -2843,12 +2843,18 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       typeof message.parent_tool_use_id === "string" && message.parent_tool_use_id.length > 0
         ? message.parent_tool_use_id
         : undefined;
-    const normalizedUsage = normalizeClaudeMessageTokenUsage(
-      claudeStreamEventUsagePayload(message),
-      context.selectedContextWindowTokens ?? context.lastKnownContextWindow,
-    );
-    if (normalizedUsage) {
-      yield* emitThreadTokenUsageUpdate(context, normalizedUsage);
+    // Usage on a sub-agent's stream describes that child's fresh context, not
+    // the orchestrator's. Replacing the thread's last-known usage with it made
+    // the context-window meter drop to the child's size and flap for the rest
+    // of the turn.
+    if (parentToolUseId === undefined) {
+      const normalizedUsage = normalizeClaudeMessageTokenUsage(
+        claudeStreamEventUsagePayload(message),
+        context.selectedContextWindowTokens ?? context.lastKnownContextWindow,
+      );
+      if (normalizedUsage) {
+        yield* emitThreadTokenUsageUpdate(context, normalizedUsage);
+      }
     }
 
     if (event.type === "content_block_delta") {
@@ -2856,6 +2862,13 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         (event.delta.type === "text_delta" || event.delta.type === "thinking_delta") &&
         context.turnState
       ) {
+        if (parentToolUseId !== undefined) {
+          // The Agent SDK withholds sub-agent prose by default; if a build ever
+          // forwards it, its block indexes restart at 0 and would splice into
+          // (or prematurely close) the orchestrator's own text block at the
+          // same index. Delegated tool blocks are keyed separately below.
+          return;
+        }
         const deltaText =
           event.delta.type === "text_delta"
             ? event.delta.text
@@ -3007,6 +3020,9 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     if (event.type === "content_block_start") {
       const { index, content_block: block } = event;
       if (block.type === "text") {
+        if (parentToolUseId !== undefined) {
+          return;
+        }
         yield* ensureAssistantTextBlock(context, index, {
           fallbackText: extractContentBlockText(block),
         });
@@ -3078,7 +3094,13 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
 
     if (event.type === "content_block_stop") {
       const { index } = event;
-      const assistantBlock = context.turnState?.assistantTextBlocks.get(index);
+      // Sub-agent blocks never own an assistant text block (see the delta and
+      // start guards), so their stop must not close the orchestrator's block at
+      // the same index.
+      const assistantBlock =
+        parentToolUseId === undefined
+          ? context.turnState?.assistantTextBlocks.get(index)
+          : undefined;
       if (assistantBlock) {
         assistantBlock.streamClosed = true;
         yield* completeAssistantTextBlock(context, assistantBlock, {

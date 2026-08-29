@@ -20,8 +20,17 @@ export interface ProviderRuntimeOwnerEvidence {
   readonly runtimeOwnerHeartbeatAt: string;
 }
 
+// The three windows are chosen together. A live owner rewrites its lease every
+// minute; a lease is trusted for three intervals so two consecutive heartbeats
+// can be lost to SQLite contention or an event-loop stall (the same stalls that
+// motivated restart recovery) without a live turn being declared orphaned, while
+// a crashed owner is disowned within three minutes even if its PID is reused.
+// The future-skew allowance covers wall-clock adjustment between the backend
+// and the detached daemon; anything further in the future is treated as
+// malformed rather than as proof of life.
 export const PROVIDER_RUNTIME_OWNER_HEARTBEAT_INTERVAL_MS = 60_000;
-export const PROVIDER_RUNTIME_OWNER_MAX_HEARTBEAT_AGE_MS = 3 * 60_000;
+export const PROVIDER_RUNTIME_OWNER_MAX_HEARTBEAT_AGE_MS =
+  3 * PROVIDER_RUNTIME_OWNER_HEARTBEAT_INTERVAL_MS;
 export const PROVIDER_RUNTIME_OWNER_MAX_FUTURE_SKEW_MS = 60_000;
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;

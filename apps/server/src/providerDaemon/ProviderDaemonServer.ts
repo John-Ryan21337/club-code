@@ -41,7 +41,7 @@ import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
-import { type ProviderServiceError } from "../provider/Errors.ts";
+import { ProviderAdapterRequestError, type ProviderServiceError } from "../provider/Errors.ts";
 import {
   ProviderService,
   type ProviderServiceShape,
@@ -760,7 +760,23 @@ const executeRpcRequest = (
     case "restartProviderRuntime":
       return providerService.restartProviderRuntime(request.payload);
     case "listSessions":
-      return providerService.listSessions();
+      // Never collapse an unreachable upstream inventory into an empty list.
+      // The backend treats a failed RPC as "unavailable" and a successful `[]`
+      // as authoritative absence; a daemon proxying to a supervisor must keep
+      // that distinction intact.
+      return providerService.listSessionsInventory().pipe(
+        Effect.flatMap((inventory) =>
+          inventory.available
+            ? Effect.succeed(inventory.sessions)
+            : Effect.fail(
+                new ProviderAdapterRequestError({
+                  provider: "provider-daemon",
+                  method: "listSessions",
+                  detail: "Provider session inventory is unavailable.",
+                }),
+              ),
+        ),
+      );
     case "getCapabilities":
       return providerService.getCapabilities(request.payload.instanceId);
     case "getInstanceInfo":
@@ -921,9 +937,17 @@ export async function handleProviderDaemonEventStream(
     }
     try {
       const queued = encodeRecord(record);
+      // While the boundary snapshot is still being read, most of what arrives
+      // here is replay responsibility that will be purged once the cursor is
+      // known. Counting it toward the finite live limit turned a slow boundary
+      // query under SQLite contention into a lagging disconnect before the
+      // stream had written a byte, i.e. the reconnect loop this handler exists
+      // to prevent. Keep a wider, still finite, allowance until then.
+      const liveLimitMultiplier = replayBoundaryCursor === null ? 4 : 1;
       if (
-        liveQueue.length >= PROVIDER_PIPELINE_POLICY.daemonWriterMaxRecords ||
-        liveQueueBytes + queued.bytes > PROVIDER_PIPELINE_POLICY.daemonWriterMaxBytes
+        liveQueue.length >= PROVIDER_PIPELINE_POLICY.daemonWriterMaxRecords * liveLimitMultiplier ||
+        liveQueueBytes + queued.bytes >
+          PROVIDER_PIPELINE_POLICY.daemonWriterMaxBytes * liveLimitMultiplier
       ) {
         addProviderDaemonStreamDiagnostics({ laggingDisconnectCount: 1 });
         cleanup(new Error("provider daemon event stream live queue exceeded its finite limit"));

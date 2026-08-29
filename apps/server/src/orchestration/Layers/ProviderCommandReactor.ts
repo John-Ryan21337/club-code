@@ -33,6 +33,7 @@ import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { makeDrainableWorker } from "@cafecode/shared/DrainableWorker";
@@ -45,6 +46,12 @@ import { increment, orchestrationEventsProcessedTotal } from "../../observabilit
 import { ProviderAdapterProcessError, ProviderAdapterRequestError } from "../../provider/Errors.ts";
 import type { ProviderServiceError } from "../../provider/Errors.ts";
 import { hasLiveProviderRuntimeOwner } from "../../provider/providerRuntimeOwnerEvidence.ts";
+import {
+  readPersistedAdditionalDirectories,
+  readPersistedActiveTurnId,
+  readPersistedCwd,
+  readPersistedModelSelection,
+} from "../../provider/providerRuntimeBindingPayload.ts";
 import { TextGeneration } from "../../textGeneration/TextGeneration.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import {
@@ -110,73 +117,6 @@ function mapProviderSessionStatusToOrchestrationStatus(
   }
 }
 
-/**
- * Durable provider session bindings persist the settings a runtime session was
- * actually started with (`cwd`, `additionalDirectories`, `model`). The
- * orchestration projection only carries `runtimeMode` and `providerInstanceId`,
- * so the binding is the only restart-durable record of the rest. These readers
- * deliberately mirror `ProviderService`'s private payload readers instead of
- * importing them: that module is provider-owned and must not grow an
- * orchestration import edge.
- */
-function readProviderBindingPayload(
-  runtimePayload: ProviderRuntimeBinding["runtimePayload"],
-): Readonly<Record<string, unknown>> | undefined {
-  return runtimePayload !== null &&
-    runtimePayload !== undefined &&
-    typeof runtimePayload === "object" &&
-    !Array.isArray(runtimePayload)
-    ? (runtimePayload as Readonly<Record<string, unknown>>)
-    : undefined;
-}
-
-function readBoundProviderCwd(
-  runtimePayload: ProviderRuntimeBinding["runtimePayload"],
-): string | undefined {
-  const payload = readProviderBindingPayload(runtimePayload);
-  const rawCwd = payload?.cwd;
-  if (typeof rawCwd !== "string") {
-    return undefined;
-  }
-  const trimmed = rawCwd.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
-function readBoundProviderAdditionalDirectories(
-  runtimePayload: ProviderRuntimeBinding["runtimePayload"],
-): ReadonlyArray<string> | undefined {
-  const payload = readProviderBindingPayload(runtimePayload);
-  const rawDirectories = payload?.additionalDirectories;
-  if (!Array.isArray(rawDirectories)) {
-    return undefined;
-  }
-  return rawDirectories.filter(
-    (entry): entry is string => typeof entry === "string" && entry.trim().length > 0,
-  );
-}
-
-function readBoundProviderModel(
-  runtimePayload: ProviderRuntimeBinding["runtimePayload"],
-): string | undefined {
-  const payload = readProviderBindingPayload(runtimePayload);
-  const rawModel = payload?.model;
-  if (typeof rawModel === "string" && rawModel.trim().length > 0) {
-    return rawModel;
-  }
-  const rawModelSelection = payload?.modelSelection;
-  if (
-    rawModelSelection !== null &&
-    typeof rawModelSelection === "object" &&
-    !Array.isArray(rawModelSelection)
-  ) {
-    const nestedModel = (rawModelSelection as Readonly<Record<string, unknown>>).model;
-    if (typeof nestedModel === "string" && nestedModel.trim().length > 0) {
-      return nestedModel;
-    }
-  }
-  return undefined;
-}
-
 function areStringArraysEqual(
   left: ReadonlyArray<string> | undefined,
   right: ReadonlyArray<string> | undefined,
@@ -197,6 +137,11 @@ const serverCommandId = (tag: string): CommandId =>
 
 const HANDLED_TURN_START_KEY_MAX = 10_000;
 const HANDLED_TURN_START_KEY_TTL = Duration.minutes(30);
+// Startup repairs retry while the daemon is busy at boot: four attempts spaced
+// 15 s apart cover a journal replay or a large thread resume without leaving a
+// genuinely lost turn projected as running until the next restart.
+const STARTUP_REPAIR_RETRY_DELAY = Duration.seconds(15);
+const STARTUP_REPAIR_RETRY_LIMIT = 4;
 const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
 const DEFAULT_THREAD_TITLE = "New thread";
 const RESTART_RECOVERY_PROMPT = "Club Code restarted, continue what you were doing";
@@ -816,6 +761,12 @@ const make = Effect.gen(function* () {
       .pipe(Effect.map(Option.getOrUndefined));
   });
 
+  // A backend that restarts while the daemon is briefly busy (journal replay,
+  // a large resume) must not lose its one chance to repair stale projections.
+  // The inventory-dependent repairs record an unavailable inventory here and
+  // are re-run a bounded number of times from `start()`.
+  const startupInventoryUnavailableRef = yield* Ref.make(false);
+
   const recoverInterruptedTurnStartsOnStartup = Effect.fn("recoverInterruptedTurnStartsOnStartup")(
     function* () {
       // This startup repair only needs thread shell/session state. Do not use
@@ -832,6 +783,7 @@ const make = Effect.gen(function* () {
         yield* Effect.logWarning("provider.restart-recovery.inventory-unavailable", {
           repair: "interrupted-turn-starts",
         });
+        yield* Ref.set(startupInventoryUnavailableRef, true);
         return;
       }
       const shellSnapshot = yield* projectionSnapshotQuery.getShellSnapshot();
@@ -851,12 +803,47 @@ const make = Effect.gen(function* () {
         return;
       }
       const recoveredAt = yield* Effect.map(DateTime.now, DateTime.formatIso);
+      const observedAtMs = DateTime.toEpochMillis(yield* DateTime.now);
       yield* Effect.forEach(
         interruptedThreads,
         (thread) =>
           Effect.gen(function* () {
             const session = thread.session;
             if (session === null) {
+              return;
+            }
+            // The inventory answered, but this backend is not necessarily the
+            // only runtime: the detached daemon (mid-adoption) or an auxiliary
+            // backend may still own the start. A binding with a live owner lease
+            // is that proof; fabricating a start failure over it would race
+            // real provider work.
+            const bindingLookup = yield* providerSessionDirectory.getBinding(thread.id).pipe(
+              Effect.map((binding) => ({
+                available: true as const,
+                binding: Option.getOrUndefined(binding),
+              })),
+              Effect.catchCause((cause) =>
+                Effect.logWarning("provider.restart-recovery.bindings-unavailable", {
+                  repair: "interrupted-turn-starts",
+                  threadId: thread.id,
+                  cause: Cause.pretty(cause),
+                }).pipe(Effect.as({ available: false as const, binding: undefined })),
+              ),
+            );
+            if (!bindingLookup.available) {
+              return;
+            }
+            const binding = bindingLookup.binding;
+            if (
+              binding !== undefined &&
+              (binding.status === "starting" || binding.status === "running") &&
+              hasLiveProviderRuntimeOwner(binding.runtimePayload, observedAtMs)
+            ) {
+              yield* Effect.logDebug("provider.restart-recovery.live-runtime-owner", {
+                repair: "interrupted-turn-starts",
+                threadId: thread.id,
+                bindingStatus: binding.status,
+              });
               return;
             }
             yield* setThreadSession({
@@ -981,6 +968,7 @@ const make = Effect.gen(function* () {
         yield* Effect.logWarning("provider.restart-recovery.inventory-unavailable", {
           repair: "orphaned-running-turns",
         });
+        yield* Ref.set(startupInventoryUnavailableRef, true);
         return;
       }
       const shellSnapshot = yield* projectionSnapshotQuery.getShellSnapshot();
@@ -1016,23 +1004,6 @@ const make = Effect.gen(function* () {
       // (fresh heartbeat plus a live PID) is the restart-durable proof that some
       // process still owns the turn, so an absent local session alone is not
       // grounds for continuing it here.
-      const durableBindings = yield* providerSessionDirectory.listBindings().pipe(
-        Effect.catchCause((cause) =>
-          Effect.logWarning("provider.restart-recovery.bindings-unavailable", {
-            repair: "orphaned-running-turns",
-            cause: Cause.pretty(cause),
-          }).pipe(Effect.as(undefined)),
-        ),
-      );
-      if (durableBindings === undefined) {
-        // Without the directory there is no way to distinguish a lost turn from
-        // one a live runtime still owns. Preserving provider work is the only
-        // non-destructive choice.
-        return;
-      }
-      const bindingByThreadId = new Map(
-        durableBindings.map((binding) => [String(binding.threadId), binding] as const),
-      );
       const observedAtMs = DateTime.toEpochMillis(yield* DateTime.now);
       let recoveredCount = 0;
 
@@ -1040,10 +1011,39 @@ const make = Effect.gen(function* () {
         candidates,
         (shellThread) =>
           Effect.gen(function* () {
-            const binding = bindingByThreadId.get(String(shellThread.id));
+            // Point lookups: the directory holds every binding ever written, while
+            // the candidates are the few projected-running threads missing from
+            // the live inventory. Scanning the whole table here scaled with the
+            // lifetime of the database.
+            const bindingLookup = yield* providerSessionDirectory.getBinding(shellThread.id).pipe(
+              Effect.map((binding) => ({
+                available: true as const,
+                binding: Option.getOrUndefined(binding),
+              })),
+              Effect.catchCause((cause) =>
+                Effect.logWarning("provider.restart-recovery.bindings-unavailable", {
+                  repair: "orphaned-running-turns",
+                  threadId: shellThread.id,
+                  cause: Cause.pretty(cause),
+                }).pipe(Effect.as({ available: false as const, binding: undefined })),
+              ),
+            );
+            if (!bindingLookup.available) {
+              // Without the directory there is no way to distinguish a lost turn
+              // from one a live runtime still owns. Preserve provider work.
+              return;
+            }
+            const binding = bindingLookup.binding;
             if (
               binding !== undefined &&
               (binding.status === "starting" || binding.status === "running") &&
+              // The lease proves a process is alive, not that it still owns THIS
+              // turn: a session whose turn completed while the backend was down
+              // keeps a fresh heartbeat with `activeTurnId: null`, and that thread
+              // must still be repaired rather than left projected as running.
+              shellThread.session?.activeTurnId != null &&
+              readPersistedActiveTurnId(binding.runtimePayload) ===
+                String(shellThread.session.activeTurnId) &&
               hasLiveProviderRuntimeOwner(binding.runtimePayload, observedAtMs)
             ) {
               yield* Effect.logDebug("provider.restart-recovery.live-runtime-owner", {
@@ -1563,7 +1563,7 @@ const make = Effect.gen(function* () {
       thread,
       projects: project ? [project] : [],
     });
-    const boundCwd = readBoundProviderCwd(binding.runtimePayload);
+    const boundCwd = readPersistedCwd(binding.runtimePayload);
     if (
       boundCwd !== undefined &&
       workspaceDirectories.cwd !== undefined &&
@@ -1575,9 +1575,7 @@ const make = Effect.gen(function* () {
       });
       return false;
     }
-    const boundAdditionalDirectories = readBoundProviderAdditionalDirectories(
-      binding.runtimePayload,
-    );
+    const boundAdditionalDirectories = readPersistedAdditionalDirectories(binding.runtimePayload);
     if (
       boundAdditionalDirectories !== undefined &&
       !areStringArraysEqual(boundAdditionalDirectories, workspaceDirectories.additionalDirectories)
@@ -1588,15 +1586,21 @@ const make = Effect.gen(function* () {
       });
       return false;
     }
-    const boundModel = readBoundProviderModel(binding.runtimePayload);
+    // Compare the whole persisted selection (model plus options such as
+    // reasoning effort or thinking level) against the requested one. The
+    // binding's `modelSelection` is the raw selection written on the last
+    // accepted turn, so this is apples-to-apples; the adapter-resolved `model`
+    // slug is deliberately not used (Claude appends `[1m]`, Codex normalizes
+    // aliases, which would report a change on every turn). Any difference falls
+    // through to `ensureSessionForThread`, which owns model-switch semantics.
+    const boundModelSelection = readPersistedModelSelection(binding.runtimePayload);
     if (
-      boundModel !== undefined &&
-      input.requestedModelSelection.model !== undefined &&
-      boundModel !== input.requestedModelSelection.model
+      boundModelSelection !== undefined &&
+      !Equal.equals(boundModelSelection, input.requestedModelSelection)
     ) {
       yield* Effect.logDebug("provider.projected-route.settings-changed", {
         threadId: thread.id,
-        setting: "model",
+        setting: "modelSelection",
       });
       return false;
     }
@@ -2202,7 +2206,13 @@ const make = Effect.gen(function* () {
       event.payload.threadId,
     );
     const runtimeActiveSession = providerSessionResolution.session;
-    const desiredModelSelection = event.payload.modelSelection ?? thread.modelSelection;
+    // Resolve the desired selection exactly as `buildSendTurnRequestForThread`
+    // does: an explicit payload selection, else the reactor's per-thread cache
+    // (set by an earlier explicit turn), else the projected thread default.
+    // Reading only the projection here misclassified a follow-up without a
+    // selection as a provider switch and stopped the running turn.
+    const desiredModelSelection =
+      event.payload.modelSelection ?? threadModelSelections.get(thread.id) ?? thread.modelSelection;
     // A live runtime turn only justifies steering when it belongs to the exact
     // provider instance this turn asked for. When the user switched providers
     // (or instances) while the previous turn was still running, steering would
@@ -3470,6 +3480,41 @@ const make = Effect.gen(function* () {
           cause: Cause.pretty(cause),
         }),
       ),
+    );
+
+    // Bounded re-run of the inventory-dependent repairs when the daemon could
+    // not answer at boot. Forked so startup readiness is not delayed; each
+    // pass is idempotent (deterministic command ids, projection re-checked).
+    yield* Effect.forkScoped(
+      Effect.gen(function* () {
+        for (let attempt = 1; attempt <= STARTUP_REPAIR_RETRY_LIMIT; attempt += 1) {
+          if (!(yield* Ref.get(startupInventoryUnavailableRef))) {
+            return;
+          }
+          yield* Effect.sleep(STARTUP_REPAIR_RETRY_DELAY);
+          yield* Ref.set(startupInventoryUnavailableRef, false);
+          yield* Effect.logInfo("provider.restart-recovery.retry", { attempt });
+          yield* recoverInterruptedTurnStartsOnStartup().pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning(
+                "provider command reactor failed to clear interrupted turn starts on retry",
+                { attempt, cause: Cause.pretty(cause) },
+              ),
+            ),
+          );
+          yield* recoverOrphanedRunningTurnsOnStartup().pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning(
+                "provider command reactor failed to continue orphaned turns on retry",
+                {
+                  attempt,
+                  cause: Cause.pretty(cause),
+                },
+              ),
+            ),
+          );
+        }
+      }),
     );
   });
 

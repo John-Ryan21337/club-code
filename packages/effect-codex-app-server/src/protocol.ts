@@ -7,6 +7,7 @@ import * as Scope from "effect/Scope";
 import * as Schema from "effect/Schema";
 import * as Stdio from "effect/Stdio";
 import * as Stream from "effect/Stream";
+import * as NodeBuffer from "node:buffer";
 
 import * as CodexError from "./errors.ts";
 import { JsonRpcId, JsonRpcResponseEnvelope } from "./_internal/shared.ts";
@@ -30,7 +31,16 @@ const MAX_PROTOCOL_DIAGNOSTIC_LENGTH = 8_000;
  * value keeps a finite memory bound while leaving those threads readable, and
  * callers with a stricter boundary can lower it per client.
  */
-export const DEFAULT_CODEX_APP_SERVER_MAX_INCOMING_LINE_BYTES = 512 * 1024 * 1024;
+// V8 cannot materialize a string longer than `MAX_STRING_LENGTH` code units, and
+// a line is joined into one string once its terminator arrives. UTF-8 bytes are
+// never fewer than UTF-16 code units, so clamping the byte cap to that limit
+// guarantees the typed error fires before `parts.join` could throw a RangeError
+// defect that would bypass the protocol's termination path.
+export const MAX_CODEX_APP_SERVER_INCOMING_LINE_BYTES = NodeBuffer.constants.MAX_STRING_LENGTH;
+export const DEFAULT_CODEX_APP_SERVER_MAX_INCOMING_LINE_BYTES = Math.min(
+  512 * 1024 * 1024,
+  MAX_CODEX_APP_SERVER_INCOMING_LINE_BYTES,
+);
 
 export interface CodexAppServerProtocolLogEvent {
   readonly direction: "incoming" | "outgoing";
@@ -142,6 +152,13 @@ export type IncomingLineResult =
   | {
       readonly ok: false;
       readonly error: CodexError.CodexAppServerIncomingMessageTooLargeError;
+      /**
+       * Lines that completed inside the same chunk before or after the
+       * over-limit one. The stdin protocol reader ignores them because it
+       * terminates the stream; a keep-going reader such as stderr still gets
+       * every valid neighbour instead of losing them with the dropped line.
+       */
+      readonly lines: ReadonlyArray<string>;
     };
 
 export type IncomingLineFlushResult =
@@ -155,7 +172,7 @@ export function resolveMaxIncomingLineBytes(maxIncomingLineBytes?: number): numb
   return maxIncomingLineBytes !== undefined &&
     Number.isSafeInteger(maxIncomingLineBytes) &&
     maxIncomingLineBytes >= 1
-    ? maxIncomingLineBytes
+    ? Math.min(maxIncomingLineBytes, MAX_CODEX_APP_SERVER_INCOMING_LINE_BYTES)
     : DEFAULT_CODEX_APP_SERVER_MAX_INCOMING_LINE_BYTES;
 }
 
@@ -179,15 +196,12 @@ function releaseIncomingLineParts(buffer: IncomingLineBuffer): void {
   buffer.pendingBytes = 0;
 }
 
-function incomingLineTooLarge(buffer: IncomingLineBuffer): IncomingLineResult {
-  releaseIncomingLineParts(buffer);
-  buffer.discarding = true;
-  return {
-    ok: false,
-    error: new CodexError.CodexAppServerIncomingMessageTooLargeError({
-      maxBytes: buffer.maxBytes,
-    }),
-  };
+function incomingLineTooLargeError(
+  buffer: IncomingLineBuffer,
+): CodexError.CodexAppServerIncomingMessageTooLargeError {
+  return new CodexError.CodexAppServerIncomingMessageTooLargeError({
+    maxBytes: buffer.maxBytes,
+  });
 }
 
 function stripTrailingCarriageReturn(line: string): string {
@@ -198,14 +212,15 @@ function stripTrailingCarriageReturn(line: string): string {
  * Consume one decoded chunk. Complete lines are returned in order; the trailing
  * partial line stays retained until its terminator arrives.
  *
- * Returns the typed limit error as soon as the pending line would pass
- * `buffer.maxBytes`, without ever joining or measuring the over-limit text. The
- * caller decides what that means: the stdin protocol reader fails the stream so
- * the error travels the normal termination path, while a diagnostic reader such
- * as stderr can warn and keep going. Any lines already completed earlier in the
- * same chunk are dropped together with the over-limit one, and the rest of the
- * chunk is discarded until the next terminator, so a reader that continues
- * always resumes on a genuine line boundary.
+ * Reports the typed limit error as soon as a line would pass `buffer.maxBytes`,
+ * without ever joining or measuring the over-limit text. The caller decides
+ * what that means: the stdin protocol reader fails the stream so the error
+ * travels the normal termination path, while a diagnostic reader such as
+ * stderr can warn and keep going. When the over-limit line's own terminator is
+ * inside this chunk the reader resumes right after it, so neighbouring valid
+ * lines in the same chunk are still returned; only when the terminator has not
+ * arrived yet is the remainder discarded until the next one, so a continuing
+ * reader always resumes on a genuine line boundary.
  */
 export function appendIncomingChunk(buffer: IncomingLineBuffer, chunk: string): IncomingLineResult {
   let start = 0;
@@ -219,13 +234,16 @@ export function appendIncomingChunk(buffer: IncomingLineBuffer, chunk: string): 
   }
 
   const lines: Array<string> = [];
+  let error: CodexError.CodexAppServerIncomingMessageTooLargeError | undefined;
   let newlineIndex = chunk.indexOf("\n", start);
   while (newlineIndex !== -1) {
     const segment = chunk.slice(start, newlineIndex);
     if (buffer.pendingBytes + Buffer.byteLength(segment, "utf8") > buffer.maxBytes) {
-      return incomingLineTooLarge(buffer);
-    }
-    if (buffer.parts.length > 0) {
+      // The over-limit line ends here, so no resync is needed: release what was
+      // retained for it and carry on with the next line in this chunk.
+      releaseIncomingLineParts(buffer);
+      error ??= incomingLineTooLargeError(buffer);
+    } else if (buffer.parts.length > 0) {
       buffer.parts.push(segment);
       lines.push(stripTrailingCarriageReturn(buffer.parts.join("")));
       releaseIncomingLineParts(buffer);
@@ -240,13 +258,21 @@ export function appendIncomingChunk(buffer: IncomingLineBuffer, chunk: string): 
     const rest = start === 0 ? chunk : chunk.slice(start);
     const restBytes = Buffer.byteLength(rest, "utf8");
     if (buffer.pendingBytes + restBytes > buffer.maxBytes) {
-      return incomingLineTooLarge(buffer);
+      // The terminator has not arrived: drop the retained prefix now and skip
+      // the rest of this over-limit line when it shows up.
+      releaseIncomingLineParts(buffer);
+      buffer.discarding = true;
+      error ??= incomingLineTooLargeError(buffer);
+    } else {
+      buffer.parts.push(rest);
+      buffer.pendingLength += rest.length;
+      buffer.pendingBytes += restBytes;
     }
-    buffer.parts.push(rest);
-    buffer.pendingLength += rest.length;
-    buffer.pendingBytes += restBytes;
   }
 
+  if (error !== undefined) {
+    return { ok: false, error, lines };
+  }
   return lines.length === 0 ? NO_INCOMING_LINES : { ok: true, lines };
 }
 
@@ -402,6 +428,9 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
     );
     const nextRequestId = yield* Ref.make(1);
     const terminationHandled = yield* Ref.make(false);
+    const terminationErrorRef = yield* Ref.make<CodexError.CodexAppServerError | undefined>(
+      undefined,
+    );
 
     const logProtocol = (event: CodexAppServerProtocolLogEvent) => {
       if (
@@ -438,6 +467,7 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
         return [
           Effect.gen(function* () {
             const error = yield* classify();
+            yield* Ref.set(terminationErrorRef, error);
             yield* failAllPending(error);
             yield* Queue.end(outgoing);
             if (options.onTermination) {
@@ -461,7 +491,22 @@ export const makeCodexAppServerPatchedProtocol = Effect.fn("makeCodexAppServerPa
           stage: "raw",
           payload: encoded,
         });
-        yield* Queue.offer(outgoing, encoded).pipe(Effect.asVoid);
+        const accepted = yield* Queue.offer(outgoing, encoded);
+        if (!accepted) {
+          // The outgoing queue is ended only by termination. Fail the caller now
+          // with the recorded cause instead of registering a response deferred
+          // that no reader will ever complete: after an over-limit line or a
+          // transport failure the app-server child may still be alive, and a
+          // request that silently hangs would keep the session looking healthy.
+          const terminated = yield* Ref.get(terminationErrorRef);
+          return yield* Effect.fail(
+            terminated ??
+              new CodexError.CodexAppServerTransportError({
+                detail: "Codex App Server protocol has terminated",
+                cause: undefined,
+              }),
+          );
+        }
       });
 
     const removePending = (requestId: string) =>

@@ -621,6 +621,20 @@ describe("incoming line buffer", () => {
     assert.deepEqual(takeLines(buffer, "ok\n"), ["ok"]);
   });
 
+  it("keeps neighbouring valid lines when the over-limit line ends inside the chunk", () => {
+    const buffer = CodexProtocol.makeIncomingLineBuffer(10);
+    const result = CodexProtocol.appendIncomingChunk(buffer, `before\n${"x".repeat(20)}\nafter\n`);
+    assert.equal(result.ok, false);
+    if (!result.ok) {
+      assert.instanceOf(result.error, CodexError.CodexAppServerIncomingMessageTooLargeError);
+      // The dropped line was terminated in this chunk, so its neighbours on
+      // both sides survive and no resync is pending.
+      assert.deepEqual(result.lines, ["before", "after"]);
+    }
+    assert.equal(buffer.discarding, false);
+    assert.deepEqual(takeLines(buffer, "next\n"), ["next"]);
+  });
+
   it("resynchronizes on the next line boundary for a caller that drops and warns", () => {
     const buffer = CodexProtocol.makeIncomingLineBuffer(8);
     assert.equal(CodexProtocol.appendIncomingChunk(buffer, "over-limit-tail").ok, false);

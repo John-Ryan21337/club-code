@@ -169,6 +169,10 @@ it.layer(NodeServices.layer)("providerStatusCache", (it) => {
 
     assert.deepStrictEqual(hydrated.probeDiagnostics, {
       ...cachedCodex.probeDiagnostics!,
+      // Observation timestamps belong to the previous process's wall clock and
+      // are reset on hydration; only the counters and outcome survive.
+      lastStartedAt: null,
+      lastFinishedAt: null,
       periodicIntervalMs: fallbackCodex.probeDiagnostics?.periodicIntervalMs ?? null,
       periodicPhaseOffsetMs: fallbackCodex.probeDiagnostics?.periodicPhaseOffsetMs ?? null,
       nextScheduledAt: null,

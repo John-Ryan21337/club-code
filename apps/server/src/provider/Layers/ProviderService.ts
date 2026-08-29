@@ -72,13 +72,17 @@ import {
   type ProviderRuntimeOwnerEvidence,
 } from "../providerRuntimeOwnerEvidence.ts";
 import {
+  readPersistedAdditionalDirectories,
+  readPersistedCwd,
+  readPersistedModelSelection,
+} from "../providerRuntimeBindingPayload.ts";
+import {
   ProviderSessionDirectory,
   type ProviderRuntimeBinding,
 } from "../Services/ProviderSessionDirectory.ts";
 import { type EventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import { ProviderEventLoggers } from "./ProviderEventLoggers.ts";
 import { closeAgentBrowserBridge, getAgentBrowserBridge } from "../AgentBrowserBridge.ts";
-const isModelSelection = Schema.is(ModelSelection);
 const isProviderAdapterProcessError = Schema.is(ProviderAdapterProcessError);
 // Codex historically rejected missing native threads with "no rollout found".
 // As of rust-v0.149.1, thread-store can instead reject the same stale cursor
@@ -228,45 +232,6 @@ function toRuntimePayloadFromSession(
       : {}),
     ...makeProviderRuntimeOwnerPayload(runtimeOwner, runtimeOwnerHeartbeatAt),
   };
-}
-
-function readPersistedModelSelection(
-  runtimePayload: ProviderRuntimeBinding["runtimePayload"],
-): ModelSelection | undefined {
-  if (!runtimePayload || typeof runtimePayload !== "object" || Array.isArray(runtimePayload)) {
-    return undefined;
-  }
-  const raw = "modelSelection" in runtimePayload ? runtimePayload.modelSelection : undefined;
-  return isModelSelection(raw) ? raw : undefined;
-}
-
-function readPersistedCwd(
-  runtimePayload: ProviderRuntimeBinding["runtimePayload"],
-): string | undefined {
-  if (!runtimePayload || typeof runtimePayload !== "object" || Array.isArray(runtimePayload)) {
-    return undefined;
-  }
-  const rawCwd = "cwd" in runtimePayload ? runtimePayload.cwd : undefined;
-  if (typeof rawCwd !== "string") return undefined;
-  const trimmed = rawCwd.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
-function readPersistedAdditionalDirectories(
-  runtimePayload: ProviderRuntimeBinding["runtimePayload"],
-): ReadonlyArray<string> | undefined {
-  if (!runtimePayload || typeof runtimePayload !== "object" || Array.isArray(runtimePayload)) {
-    return undefined;
-  }
-  const rawDirectories =
-    "additionalDirectories" in runtimePayload ? runtimePayload.additionalDirectories : undefined;
-  if (!Array.isArray(rawDirectories)) {
-    return undefined;
-  }
-  const directories = rawDirectories.filter(
-    (entry): entry is string => typeof entry === "string" && entry.trim().length > 0,
-  );
-  return directories.length > 0 ? directories : [];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -1540,12 +1505,42 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     ).pipe(Effect.map((sessionsByProvider) => sessionsByProvider.flatMap((sessions) => sessions)));
   });
 
+  const refreshBindingHeartbeat = (threadId: ThreadId) =>
+    Effect.gen(function* () {
+      const current = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      if (
+        current === undefined ||
+        (current.status !== "running" && current.status !== "starting")
+      ) {
+        // The row moved on (stopped, errored, or was retired) after the adapter
+        // snapshot selected it; a heartbeat must never resurrect it.
+        runtimeOwnerHeartbeatWrittenAt.delete(threadId);
+        return;
+      }
+      const runtimeOwnerHeartbeatAt = yield* nowIso;
+      yield* directory.upsert({
+        ...current,
+        runtimePayload: {
+          ...(isRecord(current.runtimePayload) ? current.runtimePayload : {}),
+          ...makeProviderRuntimeOwnerPayload(runtimeOwner, runtimeOwnerHeartbeatAt),
+        },
+      });
+      runtimeOwnerHeartbeatWrittenAt.set(threadId, Date.parse(runtimeOwnerHeartbeatAt));
+    });
+
   const refreshRuntimeOwnerHeartbeats = (sessions: ReadonlyArray<ProviderSession>) =>
     runtimeOwnerHeartbeatSemaphore.withPermit(
       Effect.gen(function* () {
         const observedAtMs = yield* Clock.currentTimeMillis;
         const dueSessions = sessions.filter((session) => {
-          if (session.status !== "running" || session.activeTurnId === undefined) {
+          // A running turn and an in-progress start are both work this process
+          // owns; a start that outlives the heartbeat window must not present a
+          // stale lease to restart recovery.
+          const owned =
+            session.status === "running"
+              ? session.activeTurnId !== undefined
+              : session.status === "connecting";
+          if (!owned) {
             return false;
           }
           const lastWrittenAt = runtimeOwnerHeartbeatWrittenAt.get(session.threadId);
@@ -1558,11 +1553,15 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         // Heartbeats update one bounded runtime row per live turn. They never
         // append orchestration events, provider text, or credentials, and they
         // are serialized to avoid creating SQLite write contention under a
-        // large set of long-running sessions.
+        // large set of long-running sessions. Each write re-reads its row inside
+        // the permit and touches only the lease keys: the adapter snapshot that
+        // selected the session is stale by now and must not overwrite a newer
+        // lifecycle row (a `stopped` or `error` persisted meanwhile) with
+        // `running`, a cleared error, or an old resume cursor.
         yield* Effect.forEach(
           dueSessions,
           (session) =>
-            upsertSessionBinding(session, session.threadId).pipe(
+            refreshBindingHeartbeat(session.threadId).pipe(
               Effect.catchCause((cause) =>
                 Effect.logWarning("provider.runtime.owner-heartbeat-write-failed", {
                   threadId: session.threadId,
@@ -1639,7 +1638,9 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         }
         sessions.push(Object.assign({}, session, overrides));
       }
-      yield* refreshRuntimeOwnerHeartbeats(sessions);
+      // Heartbeats are written only by the scoped sweeper below. This RPC is on
+      // the prompt-critical path and must stay a read: blocking it behind
+      // serialized SQLite writes would recreate the contention it exists to avoid.
       return sessions;
     },
   );
