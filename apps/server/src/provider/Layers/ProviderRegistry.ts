@@ -57,6 +57,20 @@ import {
 import type { ProviderInstance } from "../ProviderDriver.ts";
 import { makeManualOnlyProviderMaintenanceCapabilities } from "../providerMaintenance.ts";
 import type { ProviderSnapshotSource } from "../builtInProviderCatalog.ts";
+import {
+  DEFAULT_PROVIDER_INCONCLUSIVE_FAILURE_THRESHOLD,
+  hasConclusiveProviderAuthState,
+  reconcileInconclusiveProviderProbeStreak,
+  retainConclusiveProviderState,
+} from "../providerProbePolicy.ts";
+import { isSameAuthenticatedProviderAccount } from "../providerAccountBinding.ts";
+
+/**
+ * Status probes spawn provider-owned subprocesses and may read shared auth
+ * homes. Bound startup/rebuild admission across the whole registry so a
+ * multi-instance configuration cannot create a CPU/I/O thundering herd.
+ */
+export const INITIAL_PROVIDER_REFRESH_CONCURRENCY = 2;
 
 const loadProviders = (
   providerSources: ReadonlyArray<ProviderSnapshotSource>,
@@ -107,49 +121,78 @@ const mergeProviderModels = (
 export const mergeProviderSnapshot = (
   previousProvider: ServerProvider | undefined,
   nextProvider: ServerProvider,
-): ServerProvider =>
-  !previousProvider
-    ? nextProvider
-    : {
-        ...nextProvider,
-        // Codex cloud and Codex OSS are different model catalogs even when
-        // they share an instance id. Never carry cloud slugs into LM Studio
-        // (or stale local slugs back into cloud mode) across a settings-driven
-        // instance rebuild. LM Studio's current `/v1/models` response is also
-        // authoritative on every refresh: preserving or appending models from
-        // an older local snapshot would keep unloaded models selectable after
-        // an empty, partial, failed, or authentication-required discovery.
-        models:
-          (nextProvider.driver === ProviderDriverKind.make("codex") &&
-            nextProvider.auth.type === "local") ||
-          (previousProvider.driver === ProviderDriverKind.make("codex") &&
-            nextProvider.driver === ProviderDriverKind.make("codex") &&
-            previousProvider.auth.type !== nextProvider.auth.type &&
-            previousProvider.auth.type === "local")
-            ? nextProvider.models
-            : mergeProviderModels(previousProvider.models, nextProvider.models),
-        // Carry forward a known-good event-sourced or polled account snapshot
-        // when a same-account refresh omits it (for example, a transient usage
-        // endpoint failure). Never carry it across logout or observable account
-        // identity churn.
-        //
-        // Codex is different: its account-usage snapshots are account-bound probe
-        // results from upstream `account/rateLimits/read` or the equivalent usage
-        // endpoint. Upstream TUI clears account-derived reset/usage state on account
-        // changes, and an omitted Codex usage snapshot after auth churn should render
-        // as unknown instead of preserving stale percentages from a previous account.
-        ...(nextProvider.accountRateLimits === undefined &&
-        previousProvider.accountRateLimits !== undefined &&
-        nextProvider.driver !== ProviderDriverKind.make("codex") &&
-        previousProvider.driver === nextProvider.driver &&
-        previousProvider.auth.status === "authenticated" &&
-        nextProvider.auth.status === "authenticated" &&
-        previousProvider.auth.type === nextProvider.auth.type &&
-        previousProvider.auth.email !== undefined &&
-        previousProvider.auth.email === nextProvider.auth.email
-          ? { accountRateLimits: previousProvider.accountRateLimits }
-          : {}),
-      };
+): ServerProvider => {
+  if (!previousProvider) {
+    return nextProvider;
+  }
+
+  // A backend restart hydrates the last conclusive provider snapshot from the
+  // private status cache, while the newly-created managed provider begins its
+  // own consecutive-attempt counter at zero. Apply the same bounded retention
+  // rule at this merge boundary so one or two startup timeouts do not create a
+  // false auth-loss banner; the third timeout still becomes visible.
+  const streakReconciledProvider = reconcileInconclusiveProviderProbeStreak(
+    previousProvider,
+    nextProvider,
+  );
+  const retainedInconclusive =
+    streakReconciledProvider.probeDiagnostics?.lastOutcome === "inconclusive" &&
+    streakReconciledProvider.probeDiagnostics.consecutiveInconclusiveCount <
+      DEFAULT_PROVIDER_INCONCLUSIVE_FAILURE_THRESHOLD &&
+    hasConclusiveProviderAuthState(previousProvider);
+  const reconciledProvider = retainedInconclusive
+    ? retainConclusiveProviderState(previousProvider, streakReconciledProvider)
+    : streakReconciledProvider;
+
+  return {
+    ...reconciledProvider,
+    // Codex cloud and Codex OSS are different model catalogs even when
+    // they share an instance id. Never carry cloud slugs into LM Studio
+    // (or stale local slugs back into cloud mode) across a settings-driven
+    // instance rebuild. LM Studio's current `/v1/models` response is also
+    // authoritative on every refresh: preserving or appending models from
+    // an older local snapshot would keep unloaded models selectable after
+    // an empty, partial, failed, or authentication-required discovery.
+    //
+    // This decision reads the raw incoming `nextProvider` auth rather than the
+    // retention-reconciled one: inconclusive retention republishes the previous
+    // auth identity, which would otherwise make an OSS -> cloud rebuild look
+    // like an unchanged catalog and merge cloud slugs into LM Studio's list.
+    // An inconclusive probe still reveals the instance's mode: OSS snapshots
+    // carry `auth.type: "local"` unconditionally, so a missing type means a
+    // cloud probe. After an OSS -> cloud rebuild the cloud catalog must replace
+    // the LM Studio list even while auth presentation is retained.
+    models:
+      (nextProvider.driver === ProviderDriverKind.make("codex") &&
+        nextProvider.auth.type === "local") ||
+      (previousProvider.driver === ProviderDriverKind.make("codex") &&
+        nextProvider.driver === ProviderDriverKind.make("codex") &&
+        previousProvider.auth.type !== nextProvider.auth.type &&
+        previousProvider.auth.type === "local")
+        ? reconciledProvider.models
+        : mergeProviderModels(previousProvider.models, reconciledProvider.models),
+    // Carry forward a known-good event-sourced or polled account snapshot
+    // when a same-account refresh omits it (for example, a transient usage
+    // endpoint failure). Never carry it across logout or observable account
+    // identity churn.
+    //
+    // Codex is different: its account-usage snapshots are account-bound probe
+    // results from upstream `account/rateLimits/read` or the equivalent usage
+    // endpoint. Upstream TUI clears account-derived reset/usage state on account
+    // changes, and an omitted Codex usage snapshot after auth churn should render
+    // as unknown instead of preserving stale percentages from a previous account.
+    //
+    // Retention already restores the previous account usage alongside the
+    // previous auth identity, so this branch only fires for conclusive probes.
+    ...(reconciledProvider.accountRateLimits === undefined &&
+    previousProvider.accountRateLimits !== undefined &&
+    nextProvider.driver !== ProviderDriverKind.make("codex") &&
+    previousProvider.driver === nextProvider.driver &&
+    isSameAuthenticatedProviderAccount(previousProvider.auth, nextProvider.auth)
+      ? { accountRateLimits: previousProvider.accountRateLimits }
+      : {}),
+  };
+};
 
 export const mergeProviderSnapshots = (
   previousProviders: ReadonlyArray<ServerProvider>,
@@ -672,7 +715,8 @@ export const ProviderRegistryLive = Layer.effect(
      *     attachment race that otherwise drops the initial probe;
      *   - prune `providersRef` of instances that no longer exist.
      *
-     * Initial refreshes are awaited in parallel rather than forked, so
+     * Initial refreshes are awaited with bounded parallelism rather than
+     * forked, so
      * callers (layer build; `streamChanges` watcher) see fully-probed
      * state on return. This matters for layer build in particular:
      * consumers reading `getProviders` immediately after layer build
@@ -718,10 +762,12 @@ export const ProviderRegistryLive = Layer.effect(
         }
 
         // Fork long-lived subscriptions to each new/rebuilt instance's
-        // change stream BEFORE kicking off refreshes — if the driver's
-        // own initial probe (line 140 in `makeManagedServerProvider`)
-        // wins the refreshSemaphore race, its PubSub publish must land
-        // in an active subscriber or the result is dropped.
+        // change stream BEFORE kicking off refreshes. ProviderRegistry is the
+        // sole owner of production initial-refresh admission; managed Codex
+        // and Claude snapshots intentionally disable their old independent
+        // startup fibers so this global bound cannot be bypassed. Any driver
+        // that still runs its own background startup probe must still land its
+        // PubSub publish in an active subscriber or the result is dropped.
         for (const [, instance] of newlyAdded) {
           const source = buildSnapshotSource(instance);
           yield* Stream.runForEach(source.streamChanges, (provider) =>
@@ -729,17 +775,17 @@ export const ProviderRegistryLive = Layer.effect(
           ).pipe(Effect.forkScoped);
         }
 
-        // Force-refresh every new/rebuilt instance in parallel and wait
-        // for them all to complete. The refresh's result is piped
-        // directly into `syncProvider`, so `providersRef` is populated
-        // deterministically by the time this block returns — regardless
-        // of PubSub subscription timing. Failures are logged and
+        // Force-refresh every new/rebuilt instance with a small global
+        // concurrency bound and wait for them all to complete. The refresh's
+        // result is piped directly into `syncProvider`, so `providersRef` is
+        // populated deterministically by the time this block returns —
+        // regardless of PubSub subscription timing. Failures are logged and
         // swallowed so one bad driver can't wedge the whole registry.
         yield* Effect.forEach(
           newlyAdded,
           ([, instance]) =>
             refreshOneSource(buildSnapshotSource(instance)).pipe(Effect.ignoreCause({ log: true })),
-          { concurrency: "unbounded", discard: true },
+          { concurrency: INITIAL_PROVIDER_REFRESH_CONCURRENCY, discard: true },
         );
         yield* upsertProviders(unavailableProviders, {
           persist: false,
