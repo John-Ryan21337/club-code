@@ -892,6 +892,7 @@ function makeThreadOpenResponse(
       id: threadId,
       modelProvider: "openai",
       preview: "",
+      projectId: null,
       sessionId: "session-1",
       source: "cli",
       turns: [],
