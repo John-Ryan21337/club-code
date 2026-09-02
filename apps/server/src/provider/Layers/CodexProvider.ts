@@ -61,6 +61,7 @@ const CODEX_PRESENTATION = {
 } as const;
 
 const MAX_PROVIDER_EMAIL_LENGTH = 320;
+const CODEX_ACCOUNT_RATE_LIMIT_TIMEOUT = Duration.seconds(10);
 const CODEX_ACCOUNT_RATE_LIMIT_TIMEOUT_MS = 3_000;
 const CODEX_CHATGPT_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
 const CODEX_ORIGINATOR = "cafecode_desktop";
@@ -781,51 +782,88 @@ function parseCodexAccountRateLimitsPayload(
   };
 }
 
+/**
+ * Read only the redacted ChatGPT account-usage snapshot used by Codex.
+ *
+ * Codex owns credential-store, account-id, FedRAMP, and backend routing details.
+ * Using its versioned app-server request keeps this refresh compatible when
+ * those implementation details change. Only the schema-bounded usage summary
+ * leaves this module.
+ */
+export const readCodexAccountRateLimitsViaAppServer = Effect.fn(
+  "readCodexAccountRateLimitsViaAppServer",
+)(function* (
+  codexSettings: CodexSettings,
+  environment: NodeJS.ProcessEnv,
+  checkedAt: string,
+): Effect.fn.Return<
+  ServerProviderAccountRateLimits | undefined,
+  never,
+  FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
+> {
+  const resolvedHomePath = codexSettings.homePath
+    ? expandHomePath(codexSettings.homePath)
+    : undefined;
+  return yield* Effect.scoped(
+    Effect.gen(function* () {
+      const clientContext = yield* Layer.build(
+        CodexClient.layerCommand({
+          command: codexSettings.binaryPath,
+          args: buildCodexProviderAppServerArgs(),
+          cwd: process.cwd(),
+          env: {
+            ...environment,
+            ...(resolvedHomePath ? { CODEX_HOME: resolvedHomePath } : {}),
+          },
+        }),
+      );
+      const client = yield* Effect.service(CodexClient.CodexAppServerClient).pipe(
+        Effect.provide(clientContext),
+      );
+      yield* client.request("initialize", {
+        clientInfo: {
+          name: "cafecode_desktop",
+          title: "Club Code Desktop",
+          version: packageJson.version,
+        },
+        capabilities: { experimentalApi: true },
+      });
+      yield* client.notify("initialized", undefined);
+      return yield* client.request("account/rateLimits/read", undefined).pipe(
+        Effect.map((response) => codexAppServerRateLimitsToServer(response, checkedAt)),
+        Effect.timeout(CODEX_ACCOUNT_RATE_LIMIT_TIMEOUT),
+      );
+    }).pipe(Effect.option, Effect.map(Option.getOrUndefined)),
+  );
+});
+
 async function fetchCodexAccountRateLimits(input: {
   readonly credentials: CodexUsageCredentials;
   readonly checkedAt: string;
 }): Promise<ServerProviderAccountRateLimits | undefined> {
   try {
-    // Upstream Codex 0.143.0 fetches ChatGPT-backed account usage from
-    // `{chatgpt_base_url}/wham/usage` via BackendClient::get_rate_limits_many
-    // and sends Authorization plus ChatGPT-Account-ID when available. Cafe's
-    // provider badge path intentionally avoids spawning a hidden app-server, so
-    // this lightweight probe mirrors that HTTP request shape without logging or
-    // returning any credential-bearing fields.
     const headers: Record<string, string> = {
       authorization: `Bearer ${input.credentials.accessToken}`,
       originator: CODEX_ORIGINATOR,
       "user-agent": `${CODEX_ORIGINATOR}/${packageJson.version}`,
     };
-    if (input.credentials.accountId) {
-      headers["ChatGPT-Account-ID"] = input.credentials.accountId;
-    }
-    if (input.credentials.isFedrampAccount) {
-      headers["X-OpenAI-Fedramp"] = "true";
-    }
-
+    if (input.credentials.accountId) headers["ChatGPT-Account-ID"] = input.credentials.accountId;
+    if (input.credentials.isFedrampAccount) headers["X-OpenAI-Fedramp"] = "true";
     const response = await fetch(CODEX_CHATGPT_USAGE_URL, {
       method: "GET",
       headers,
       signal: AbortSignal.timeout(CODEX_ACCOUNT_RATE_LIMIT_TIMEOUT_MS),
     });
-    if (!response.ok) {
-      return undefined;
-    }
+    if (!response.ok) return undefined;
     return parseCodexAccountRateLimitsPayload(await response.json(), input.checkedAt);
   } catch {
     return undefined;
   }
 }
 
-/**
- * Read only the redacted ChatGPT account-usage snapshot used by Codex.
- *
- * This deliberately performs no Codex CLI or app-server process operation.
- * Callers must continue to use the full provider-status path when they need
- * installation, version, or authentication truth. Credentials stay inside
- * this module and only the schema-bounded usage summary is returned.
- */
+/** Legacy lightweight status-probe path. Manual and scheduled usage refreshes
+ * use the versioned app-server method above; keeping this read here avoids
+ * turning every full health probe into a second CLI process. */
 export const readCodexAccountRateLimits = Effect.fn("readCodexAccountRateLimits")(function* (
   codexSettings: CodexSettings,
   environment: NodeJS.ProcessEnv,
@@ -836,9 +874,7 @@ export const readCodexAccountRateLimits = Effect.fn("readCodexAccountRateLimits"
   FileSystem.FileSystem | Path.Path
 > {
   const credentials = yield* readCodexUsageCredentials(codexSettings, environment);
-  if (!credentials) {
-    return undefined;
-  }
+  if (!credentials) return undefined;
   return yield* Effect.promise(() => fetchCodexAccountRateLimits({ credentials, checkedAt }));
 });
 

@@ -430,7 +430,8 @@ function renderSchemaMap(
       const schemaName = typeName(entry);
       const rendered = schemaName === "undefined" ? "undefined" : `CodexSchema.${schemaName}`;
       const wrapped =
-        options?.wrapOptionalParams === true && entry.optionalParams === true &&
+        options?.wrapOptionalParams === true &&
+        entry.optionalParams === true &&
         rendered !== "undefined"
           ? `Schema.UndefinedOr(${rendered})`
           : rendered;

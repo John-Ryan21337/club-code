@@ -54,6 +54,7 @@ import {
   isCodexCliLoginStatusProbeInconclusive,
   makePendingCodexProvider,
   readCodexAccountRateLimits,
+  readCodexAccountRateLimitsViaAppServer,
   reconcileLmStudioModelDiscovery,
 } from "../Layers/CodexProvider.ts";
 import { ProviderEventLoggers } from "../Layers/ProviderEventLoggers.ts";
@@ -434,8 +435,9 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
             Effect.andThen(DateTime.now),
             Effect.map(DateTime.formatIso),
             Effect.flatMap((checkedAt) =>
-              readCodexAccountRateLimits(settings, effectiveEnvironment, checkedAt),
+              readCodexAccountRateLimitsViaAppServer(settings, effectiveEnvironment, checkedAt),
             ),
+            Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
             Effect.provideService(FileSystem.FileSystem, fileSystem),
             Effect.provideService(Path.Path, path),
           );
