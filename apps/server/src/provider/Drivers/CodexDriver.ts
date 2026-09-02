@@ -53,7 +53,6 @@ import {
   discoverLmStudioModels,
   isCodexCliLoginStatusProbeInconclusive,
   makePendingCodexProvider,
-  readCodexAccountRateLimits,
   readCodexAccountRateLimitsViaAppServer,
   reconcileLmStudioModelDiscovery,
 } from "../Layers/CodexProvider.ts";
