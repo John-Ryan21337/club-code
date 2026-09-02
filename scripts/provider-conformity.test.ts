@@ -209,19 +209,19 @@ describe("provider conformity workflow", () => {
 
   it("accepts source pins only when all compatibility boundaries match", () => {
     const texts = new Map([
-      ["apps/server/package.json", '{"dependencies":{"@anthropic-ai/claude-agent-sdk":"0.3.224"}}'],
-      ["scripts/package.json", '{"dependencies":{"@anthropic-ai/claude-agent-sdk":"0.3.224"}}'],
+      ["apps/server/package.json", '{"dependencies":{"@anthropic-ai/claude-agent-sdk":"0.3.239"}}'],
+      ["scripts/package.json", '{"dependencies":{"@anthropic-ai/claude-agent-sdk":"0.3.239"}}'],
       [
         "packaging/desktop-runtime/package.json",
-        '{"dependencies":{"@anthropic-ai/claude-agent-sdk":"0.3.224"}}',
+        '{"dependencies":{"@anthropic-ai/claude-agent-sdk":"0.3.239"}}',
       ],
       [
         "packages/effect-codex-app-server/scripts/generate.ts",
-        "be6e8eac029b183056b7e4402879f15d2c85f61b",
+        "5adb68a49933ae446bf11935662c83dba55a0804",
       ],
       [
         "apps/desktop/resources/managed-runtime/install-managed-provider-runtime.ps1",
-        'Install-ProviderPackage -PackageName "@openai/codex" -Version "0.147.0"\nInstall-ProviderPackage -PackageName "@anthropic-ai/claude-code" -Version "2.1.224"',
+        'Install-ProviderPackage -PackageName "@openai/codex" -Version "0.152.1"\nInstall-ProviderPackage -PackageName "@anthropic-ai/claude-code" -Version "2.1.224"',
       ],
     ]);
     expect(
@@ -234,19 +234,19 @@ describe("provider conformity workflow", () => {
 
   it("rejects managed installer versions paired with the wrong provider package", () => {
     const texts = new Map([
-      ["apps/server/package.json", '{"dependencies":{"@anthropic-ai/claude-agent-sdk":"0.3.224"}}'],
-      ["scripts/package.json", '{"dependencies":{"@anthropic-ai/claude-agent-sdk":"0.3.224"}}'],
+      ["apps/server/package.json", '{"dependencies":{"@anthropic-ai/claude-agent-sdk":"0.3.239"}}'],
+      ["scripts/package.json", '{"dependencies":{"@anthropic-ai/claude-agent-sdk":"0.3.239"}}'],
       [
         "packaging/desktop-runtime/package.json",
-        '{"dependencies":{"@anthropic-ai/claude-agent-sdk":"0.3.224"}}',
+        '{"dependencies":{"@anthropic-ai/claude-agent-sdk":"0.3.239"}}',
       ],
       [
         "packages/effect-codex-app-server/scripts/generate.ts",
-        "be6e8eac029b183056b7e4402879f15d2c85f61b",
+        "5adb68a49933ae446bf11935662c83dba55a0804",
       ],
       [
         "apps/desktop/resources/managed-runtime/install-managed-provider-runtime.ps1",
-        'Install-ProviderPackage -PackageName "@openai/codex" -Version "2.1.224"\nInstall-ProviderPackage -PackageName "@anthropic-ai/claude-code" -Version "0.147.0"',
+        'Install-ProviderPackage -PackageName "@openai/codex" -Version "2.1.224"\nInstall-ProviderPackage -PackageName "@anthropic-ai/claude-code" -Version "0.152.1"',
       ],
     ]);
     expect(
@@ -387,9 +387,9 @@ describe("provider conformity workflow", () => {
     const provider = {
       provider: "codex",
       binaryPath: "/usr/bin/codex",
-      installedVersion: "0.147.0",
-      registryVersion: "0.147.0",
-      approvedVersion: "0.147.0",
+      installedVersion: "0.152.1",
+      registryVersion: "0.152.1",
+      approvedVersion: "0.152.1",
       installKind: "npm",
     };
     expect(() =>
@@ -420,9 +420,9 @@ describe("provider conformity workflow", () => {
           {
             provider: "codex",
             binaryPath: "/usr/bin/codex",
-            installedVersion: "0.147.0",
+            installedVersion: "0.152.1",
             registryVersion: null,
-            approvedVersion: "0.147.0",
+            approvedVersion: "0.152.1",
             installKind: "npm",
           },
         ],
