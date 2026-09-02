@@ -564,36 +564,51 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
     return nextSnapshot;
   });
 
-  const refreshAccountUsageSnapshot = Effect.fn("refreshAccountUsageSnapshot")(function* () {
-    // A full status refresh may include account usage. Share it first, then
-    // issue a usage-only refresh only when that result is not itself fresh
-    // (Claude's health probe intentionally does not scan account usage).
-    const activeFullRefresh = yield* fullRefreshSingleFlight.current;
-    if (activeFullRefresh !== null) {
-      const refreshed = yield* Deferred.await(activeFullRefresh);
-      const now = yield* Clock.currentTimeMillis;
-      const checkedAt = refreshed.accountRateLimits
-        ? Date.parse(refreshed.accountRateLimits.checkedAt)
-        : Number.NaN;
-      if (Number.isFinite(checkedAt) && now - checkedAt < ACCOUNT_USAGE_REFRESH_COOLDOWN_MS) {
-        return refreshed;
-      }
-    }
-    return yield* accountUsageSingleFlight.run(
-      Effect.gen(function* () {
+  const refreshAccountUsageSnapshot = Effect.fn("refreshAccountUsageSnapshot")(
+    function* (options?: { readonly force?: boolean }) {
+      // A full status refresh may include account usage. Share it first, then
+      // issue a usage-only refresh only when that result is not itself fresh
+      // (Claude's health probe intentionally does not scan account usage).
+      const activeFullRefresh = yield* fullRefreshSingleFlight.current;
+      if (activeFullRefresh !== null) {
+        const refreshed = yield* Deferred.await(activeFullRefresh);
         const now = yield* Clock.currentTimeMillis;
-        const admitted = yield* Ref.modify(lastAccountUsageAttemptRef, (lastAttempt) =>
-          lastAttempt !== null && now - lastAttempt < ACCOUNT_USAGE_REFRESH_COOLDOWN_MS
-            ? ([false, lastAttempt] as const)
-            : ([true, now] as const),
-        );
-        if (!admitted) {
-          return (yield* Ref.get(snapshotStateRef)).snapshot;
+        const checkedAt = refreshed.accountRateLimits
+          ? Date.parse(refreshed.accountRateLimits.checkedAt)
+          : Number.NaN;
+        if (
+          options?.force !== true &&
+          Number.isFinite(checkedAt) &&
+          now - checkedAt < ACCOUNT_USAGE_REFRESH_COOLDOWN_MS
+        ) {
+          return refreshed;
         }
+      }
+      if (options?.force === true) {
+        // A click is an operator request, not another poll. Queue behind any
+        // current snapshot mutation, then make a new upstream request even when
+        // a poll just completed or is still clearing its single-flight state.
+        yield* Ref.set(lastAccountUsageAttemptRef, yield* Clock.currentTimeMillis);
         return yield* snapshotMutationSemaphore.withPermits(1)(applyAccountUsageBase());
-      }),
-    );
-  });
+      }
+      return yield* accountUsageSingleFlight.run(
+        Effect.gen(function* () {
+          const now = yield* Clock.currentTimeMillis;
+          const admitted = yield* Ref.modify(lastAccountUsageAttemptRef, (lastAttempt) =>
+            options?.force !== true &&
+            lastAttempt !== null &&
+            now - lastAttempt < ACCOUNT_USAGE_REFRESH_COOLDOWN_MS
+              ? ([false, lastAttempt] as const)
+              : ([true, now] as const),
+          );
+          if (!admitted) {
+            return (yield* Ref.get(snapshotStateRef)).snapshot;
+          }
+          return yield* snapshotMutationSemaphore.withPermits(1)(applyAccountUsageBase());
+        }),
+      );
+    },
+  );
 
   const consumeRateLimitResetCredit = Effect.fn("consumeRateLimitResetCredit")(
     function* (consumeInput: { readonly attemptId: string; readonly creditId?: string }) {
@@ -724,10 +739,11 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
     refresh: refreshSnapshot().pipe(Effect.tapError(Effect.logError), Effect.orDie),
     ...(input.refreshAccountUsage
       ? {
-          refreshAccountUsage: refreshAccountUsageSnapshot().pipe(
-            Effect.tapError(Effect.logError),
-            Effect.orDie,
-          ),
+          refreshAccountUsage: (options?: { readonly force?: boolean }) =>
+            refreshAccountUsageSnapshot(options).pipe(
+              Effect.tapError(Effect.logError),
+              Effect.orDie,
+            ),
         }
       : {}),
     ...(input.consumeRateLimitResetCredit

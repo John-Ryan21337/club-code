@@ -1087,6 +1087,7 @@ const makeWsRpcLayer = (
                       settings.providerUsageWidgetEnabled
                         ? providerRegistry.refreshInstanceAccountUsage(
                             input.instanceId as ProviderInstanceId,
+                            { force: input.force === true },
                           )
                         : providerRegistry.getProviders,
                     ),

@@ -491,7 +491,7 @@ describe("makeManagedServerProvider", () => {
 
         yield* provider.refresh;
         yield* Effect.yieldNow;
-        yield* provider.refreshAccountUsage!;
+        yield* provider.refreshAccountUsage!();
         assert.strictEqual(yield* Ref.get(usageCalls), 1);
 
         // Case/whitespace-only differences are the same account binding, so the
@@ -499,14 +499,14 @@ describe("makeManagedServerProvider", () => {
         const renormalized = yield* provider.refresh;
         assert.deepStrictEqual(renormalized.accountRateLimits, refreshedAccountRateLimits);
         yield* Effect.yieldNow;
-        yield* provider.refreshAccountUsage!;
+        yield* provider.refreshAccountUsage!();
         assert.strictEqual(yield* Ref.get(usageCalls), 1);
 
         const retained = yield* provider.refresh;
         assert.strictEqual(retained.auth.status, "authenticated");
         assert.deepStrictEqual(retained.accountRateLimits, refreshedAccountRateLimits);
         yield* Effect.yieldNow;
-        yield* provider.refreshAccountUsage!;
+        yield* provider.refreshAccountUsage!();
         assert.strictEqual(yield* Ref.get(usageCalls), 1);
       }).pipe(Effect.provide(TestClock.layer())),
     ),
@@ -824,7 +824,7 @@ describe("makeManagedServerProvider", () => {
           return;
         }
 
-        const usageRefreshes = yield* Effect.all([refreshAccountUsage, refreshAccountUsage], {
+        const usageRefreshes = yield* Effect.all([refreshAccountUsage(), refreshAccountUsage()], {
           concurrency: "unbounded",
         }).pipe(Effect.forkChild);
         yield* Deferred.await(usageStarted);
@@ -885,12 +885,51 @@ describe("makeManagedServerProvider", () => {
         assert.isDefined(refreshAccountUsage);
         if (!refreshAccountUsage) return;
 
-        const first = yield* refreshAccountUsage;
-        const second = yield* refreshAccountUsage;
+        const first = yield* refreshAccountUsage();
+        const second = yield* refreshAccountUsage();
 
         assert.strictEqual(yield* Ref.get(usageCalls), 1);
         assert.deepStrictEqual(first.accountRateLimits, refreshedAccountRateLimits);
         assert.deepStrictEqual(second.accountRateLimits, refreshedAccountRateLimits);
+      }),
+    ),
+  );
+
+  it.effect("lets an explicit usage refresh bypass the polling cooldown", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const releaseInitialCheck = yield* Deferred.make<void>();
+        const usageCalls = yield* Ref.make(0);
+        const provider = yield* makeManagedServerProvider<TestSettings>({
+          maintenanceCapabilities,
+          getSettings: Effect.succeed({ enabled: true }),
+          streamSettings: Stream.empty,
+          haveSettingsChanged: (previous, next) => previous.enabled !== next.enabled,
+          initialSnapshot: () => Effect.succeed(initialSnapshot),
+          checkProvider: Deferred.await(releaseInitialCheck).pipe(Effect.as(refreshedSnapshot)),
+          refreshAccountUsage: () =>
+            Ref.update(usageCalls, (count) => count + 1).pipe(
+              Effect.as(refreshedAccountRateLimits),
+            ),
+          refreshInterval: "1 hour",
+        });
+
+        const initialUpdate = yield* Stream.take(provider.streamChanges, 1).pipe(
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+        yield* Effect.yieldNow;
+        yield* Deferred.succeed(releaseInitialCheck, undefined);
+        yield* Fiber.join(initialUpdate);
+
+        const refreshAccountUsage = provider.refreshAccountUsage;
+        assert.isDefined(refreshAccountUsage);
+        if (!refreshAccountUsage) return;
+
+        yield* refreshAccountUsage();
+        yield* refreshAccountUsage({ force: true });
+
+        assert.strictEqual(yield* Ref.get(usageCalls), 2);
       }),
     ),
   );
@@ -943,7 +982,7 @@ describe("makeManagedServerProvider", () => {
         if (!refreshAccountUsage) return;
 
         // This failed attempt starts the per-account cooldown.
-        assert.strictEqual((yield* refreshAccountUsage).accountRateLimits, undefined);
+        assert.strictEqual((yield* refreshAccountUsage()).accountRateLimits, undefined);
         assert.strictEqual(yield* Ref.get(usageCalls), 1);
 
         // A full status refresh observes the completed sign-in.
@@ -959,7 +998,7 @@ describe("makeManagedServerProvider", () => {
         // The first post-login poll must run immediately instead of returning
         // the blank snapshot from the failed pre-login attempt.
         yield* Ref.set(usageResult, refreshedAccountRateLimits);
-        const refreshed = yield* refreshAccountUsage;
+        const refreshed = yield* refreshAccountUsage();
         assert.strictEqual(yield* Ref.get(usageCalls), 2);
         assert.deepStrictEqual(refreshed.accountRateLimits, refreshedAccountRateLimits);
       }),

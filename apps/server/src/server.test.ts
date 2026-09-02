@@ -4858,7 +4858,9 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
   it.effect("supports lightweight provider usage refreshes over RPC", () =>
     Effect.gen(function* () {
       const instanceId = ProviderInstanceId.make("codex_personal");
-      const usageRefreshCalls = yield* Ref.make<ReadonlyArray<ProviderInstanceId>>([]);
+      const usageRefreshCalls = yield* Ref.make<
+        ReadonlyArray<{ readonly instanceId: ProviderInstanceId; readonly force: boolean }>
+      >([]);
       const fullRefreshCalls = yield* Ref.make(0);
       const usageWidgetEnabled = yield* Ref.make(false);
       const provider = {
@@ -4881,10 +4883,11 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             getProviders: Effect.succeed([provider]),
             refreshInstance: () =>
               Ref.update(fullRefreshCalls, (count) => count + 1).pipe(Effect.as([provider])),
-            refreshInstanceAccountUsage: (refreshedInstanceId) =>
-              Ref.update(usageRefreshCalls, (calls) => [...calls, refreshedInstanceId]).pipe(
-                Effect.as([provider]),
-              ),
+            refreshInstanceAccountUsage: (refreshedInstanceId, options) =>
+              Ref.update(usageRefreshCalls, (calls) => [
+                ...calls,
+                { instanceId: refreshedInstanceId, force: options?.force === true },
+              ]).pipe(Effect.as([provider])),
           },
           clientSettings: {
             getSettings: Ref.get(usageWidgetEnabled).pipe(
@@ -4919,7 +4922,21 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         ),
       );
       assert.deepEqual(result.providers, [provider]);
-      assert.deepEqual(yield* Ref.get(usageRefreshCalls), [instanceId]);
+      assert.deepEqual(yield* Ref.get(usageRefreshCalls), [{ instanceId, force: false }]);
+
+      yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.serverRefreshProviders]({
+            instanceId,
+            usageOnly: true,
+            force: true,
+          }),
+        ),
+      );
+      assert.deepEqual(yield* Ref.get(usageRefreshCalls), [
+        { instanceId, force: false },
+        { instanceId, force: true },
+      ]);
       assert.equal(yield* Ref.get(fullRefreshCalls), 0);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );

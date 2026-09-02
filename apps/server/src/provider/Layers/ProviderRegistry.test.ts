@@ -1894,7 +1894,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
               }),
               getSnapshot: Effect.succeed(cachedProvider),
               refresh: Effect.die(new Error("simulated refresh failure")),
-              refreshAccountUsage: Effect.succeed(usageRefreshedProvider),
+              refreshAccountUsage: () => Effect.succeed(usageRefreshedProvider),
               streamChanges: Stream.empty,
             },
             adapter: {} as ProviderInstance["adapter"],

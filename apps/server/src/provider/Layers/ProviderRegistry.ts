@@ -639,19 +639,22 @@ export const ProviderRegistryLive = Layer.effect(
 
     const refreshInstanceAccountUsage = Effect.fn("refreshInstanceAccountUsage")(function* (
       instanceId: ProviderInstanceId,
+      options?: { readonly force?: boolean },
     ) {
       const sources = yield* getLiveSources;
       const providerSource = sources.find((candidate) => candidate.instanceId === instanceId);
       if (!providerSource?.refreshAccountUsage) {
         return yield* Ref.get(providersRef);
       }
-      return yield* providerSource.refreshAccountUsage.pipe(
-        Effect.flatMap((nextProvider) =>
-          correlateSnapshotWithSource(providerSource, nextProvider).pipe(
-            Effect.flatMap(syncProvider),
+      return yield* providerSource
+        .refreshAccountUsage(options)
+        .pipe(
+          Effect.flatMap((nextProvider) =>
+            correlateSnapshotWithSource(providerSource, nextProvider).pipe(
+              Effect.flatMap(syncProvider),
+            ),
           ),
-        ),
-      );
+        );
     });
 
     const consumeInstanceRateLimitResetCredit = Effect.fn("consumeInstanceRateLimitResetCredit")(
@@ -906,8 +909,13 @@ export const ProviderRegistryLive = Layer.effect(
         refresh(provider).pipe(Effect.catchCause(recoverRefreshFailure)),
       refreshInstance: (instanceId: ProviderInstanceId) =>
         refreshInstance(instanceId).pipe(Effect.catchCause(recoverRefreshFailure)),
-      refreshInstanceAccountUsage: (instanceId: ProviderInstanceId) =>
-        refreshInstanceAccountUsage(instanceId).pipe(Effect.catchCause(recoverRefreshFailure)),
+      refreshInstanceAccountUsage: (
+        instanceId: ProviderInstanceId,
+        options?: { readonly force?: boolean },
+      ) =>
+        refreshInstanceAccountUsage(instanceId, options).pipe(
+          Effect.catchCause(recoverRefreshFailure),
+        ),
       consumeInstanceRateLimitResetCredit,
       getProviderMaintenanceCapabilitiesForInstance,
       setProviderMaintenanceActionState,

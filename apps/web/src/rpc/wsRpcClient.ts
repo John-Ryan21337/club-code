@@ -117,7 +117,8 @@ export interface WsRpcClient {
     /**
      * Refresh provider snapshots. Pass `{ instanceId }` to refresh a single
      * configured instance; add `usageOnly: true` for its account/rate-limit
-     * metadata only. Pass no argument (or `{}`) to refresh all.
+     * metadata only. Add `force: true` only for an explicit user refresh.
+     * Pass no argument (or `{}`) to refresh all.
      */
     readonly refreshProviders: (
       input?: RpcInput<typeof WS_METHODS.serverRefreshProviders>,
