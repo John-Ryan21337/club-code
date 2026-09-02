@@ -174,6 +174,8 @@ function codexAccountAuthLabel(account: CodexSchema.V2GetAccountResponse["accoun
     case "enterprise":
       return "ChatGPT Enterprise Subscription";
     case "edu":
+    case "edu_plus":
+    case "edu_pro":
       return "ChatGPT Edu Subscription";
     case "unknown":
       return "ChatGPT Subscription";
