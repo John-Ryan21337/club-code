@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { deriveProviderInstanceEntries } from "./providerInstances";
 import {
   getAppModelOptionsForInstance,
+  resolveAppModelSelection,
   resolveAppModelSelectionForInstance,
   resolveAppModelSelectionState,
 } from "./modelSelection";
@@ -53,6 +54,27 @@ function settingsWithProviderInstances(): UnifiedSettings {
     },
   };
 }
+
+describe("model selection before provider hydration", () => {
+  it("preserves an explicit Codex selection instead of replacing it with Astra", () => {
+    expect(
+      resolveAppModelSelection(
+        ProviderDriverKind.make("codex"),
+        DEFAULT_UNIFIED_SETTINGS,
+        [],
+        "gpt-5.6-sol",
+      ),
+    ).toBe("gpt-5.6-sol");
+    expect(
+      resolveAppModelSelection(
+        ProviderDriverKind.make("codex"),
+        DEFAULT_UNIFIED_SETTINGS,
+        [],
+        null,
+      ),
+    ).toBe("gpt-6-astra");
+  });
+});
 
 describe("instance-scoped model selection", () => {
   it("keeps custom models on the provider instance that declared them", () => {

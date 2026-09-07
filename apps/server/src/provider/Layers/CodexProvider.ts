@@ -894,7 +894,11 @@ function mapCodexModelCapabilities(
         },
   );
   const defaultReasoning = reasoningOptions.find((option) => option.isDefault)?.id;
-  const supportsFastMode = (model.additionalSpeedTiers ?? []).includes("fast");
+  // Codex 0.153.4 advertises Fast with the `priority` service-tier wire id.
+  // Keep the deprecated `additionalSpeedTiers` alias for older compatible CLIs.
+  const supportsFastMode =
+    model.serviceTiers?.some((tier) => tier.id === "priority") === true ||
+    (model.additionalSpeedTiers ?? []).includes("fast");
   return createModelCapabilities({
     optionDescriptors: [
       ...(reasoningOptions.length > 0
@@ -969,7 +973,7 @@ function makeStaticCodexReasoningCapabilities(input: {
 
 const CODEX_STANDARD_REASONING_EFFORTS = ["low", "medium", "high", "xhigh"] as const;
 const CODEX_MAX_REASONING_EFFORTS = [...CODEX_STANDARD_REASONING_EFFORTS, "max"] as const;
-// Mirrors Codex app-server `model/list` from codex-cli 0.144.0. The live
+// Mirrors Codex app-server `model/list` from codex-cli 0.153.4. The live
 // app-server response remains authoritative when available; this fallback keeps
 // fresh installs usable before the full Codex probe refreshes provider cache.
 const CODEX_ULTRA_REASONING_EFFORTS = [...CODEX_MAX_REASONING_EFFORTS, "ultra"] as const;
@@ -977,7 +981,23 @@ const CODEX_ULTRA_REASONING_EFFORTS = [...CODEX_MAX_REASONING_EFFORTS, "ultra"] 
 // Lightweight provider status deliberately avoids `codex app-server`; keep a
 // conservative model fallback so a fresh install still has selectable Codex
 // models before the full app-server diagnostic path has ever populated cache.
+const ASTRA_CODEX_MODEL: ServerProviderModel = {
+  slug: "gpt-6-astra",
+  name: "GPT-6-Astra",
+  isCustom: false,
+  capabilities: makeStaticCodexReasoningCapabilities({
+    defaultEffort: "low",
+    supportedEfforts: CODEX_ULTRA_REASONING_EFFORTS,
+    supportsFastMode: true,
+  }),
+};
+
+const KNOWN_CUSTOM_CODEX_MODELS: ReadonlyMap<string, ServerProviderModel> = new Map([
+  [ASTRA_CODEX_MODEL.slug, { ...ASTRA_CODEX_MODEL, isCustom: true }],
+]);
+
 const STATIC_CODEX_MODELS: ReadonlyArray<ServerProviderModel> = [
+  ASTRA_CODEX_MODEL,
   {
     slug: "gpt-5.6-sol",
     name: "GPT-5.6-Sol",
@@ -1077,6 +1097,11 @@ function appendCustomCodexModels(
       continue;
     }
     seen.add(slug);
+    const knownCustomModel = KNOWN_CUSTOM_CODEX_MODELS.get(slug);
+    if (knownCustomModel) {
+      customEntries.push(knownCustomModel);
+      continue;
+    }
     customEntries.push({
       slug,
       name: slug,
@@ -1303,7 +1328,9 @@ const customCodexModelsFromSettings = (codexSettings: CodexSettings): ServerProv
       capabilities: null,
     }));
 
-const fallbackCodexModelsFromSettings = (codexSettings: CodexSettings): ServerProvider["models"] =>
+export const fallbackCodexModelsFromSettings = (
+  codexSettings: CodexSettings,
+): ServerProvider["models"] =>
   appendCustomCodexModels(STATIC_CODEX_MODELS, codexSettings.customModels);
 
 const configuredCodexModels = (codexSettings: CodexSettings): ServerProvider["models"] =>

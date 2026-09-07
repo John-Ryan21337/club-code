@@ -2421,6 +2421,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
           assert.deepStrictEqual(
             status.models.map((model) => model.slug),
             [
+              "gpt-6-astra",
               "gpt-5.6-sol",
               "gpt-5.6-terra",
               "gpt-5.6-luna",

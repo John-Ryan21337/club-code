@@ -106,6 +106,19 @@ const CODEX_TURN_DIFF_PREVIEW_CHARS = 4_096;
 const CODEX_HOOK_OUTPUT_PREVIEW_CHARS = 4_096;
 const CODEX_PLUGIN_ATTRIBUTION_MAX_CHARS = 512;
 
+function codexServiceTierOverride(
+  modelSelection: ProviderSendTurnInput["modelSelection"],
+  instanceId: ProviderInstanceId,
+): Pick<CodexSessionRuntimeOptions, "serviceTier"> {
+  if (modelSelection?.instanceId !== instanceId) {
+    return {};
+  }
+  const fastMode = getModelSelectionBooleanOptionValue(modelSelection, "fastMode");
+  // Codex 0.153.4 uses `priority` for Fast and `default` for an explicit
+  // standard route. Omission preserves the session's existing default.
+  return fastMode === undefined ? {} : { serviceTier: fastMode ? "priority" : "default" };
+}
+
 class CodexTransportPolicyFileError extends Data.TaggedError("CodexTransportPolicyFileError")<{
   readonly cause: unknown;
 }> {
@@ -2809,10 +2822,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           ...(input.modelSelection?.instanceId === boundInstanceId
             ? { model: input.modelSelection.model }
             : {}),
-          ...(input.modelSelection?.instanceId === boundInstanceId &&
-          getModelSelectionBooleanOptionValue(input.modelSelection, "fastMode") === true
-            ? { serviceTier: "fast" }
-            : {}),
+          ...codexServiceTierOverride(input.modelSelection, boundInstanceId),
           ...(currentTransportPolicy !== undefined
             ? { transportPolicy: currentTransportPolicy }
             : {}),
@@ -3039,10 +3049,6 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
       input.modelSelection?.instanceId === boundInstanceId
         ? getModelSelectionStringOptionValue(input.modelSelection, "reasoningEffort")
         : undefined;
-    const fastMode =
-      input.modelSelection?.instanceId === boundInstanceId
-        ? getModelSelectionBooleanOptionValue(input.modelSelection, "fastMode")
-        : undefined;
     return yield* session.runtime
       .sendTurn({
         ...(input.input !== undefined ? { input: input.input } : {}),
@@ -3054,7 +3060,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
               effort: reasoningEffort as EffectCodexSchema.V2TurnStartParams__ReasoningEffort,
             }
           : {}),
-        ...(fastMode === true ? { serviceTier: "fast" } : {}),
+        ...codexServiceTierOverride(input.modelSelection, boundInstanceId),
         ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
         ...(codexAttachments.length > 0 ? { attachments: codexAttachments } : {}),
       })
