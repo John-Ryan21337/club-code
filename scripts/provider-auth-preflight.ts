@@ -238,25 +238,37 @@ function record(value: unknown): Record<string, unknown> | undefined {
 }
 
 function failureStatus(detail: string): AccessStatus {
+  const httpStatuses = new Set(
+    [
+      ...detail.matchAll(
+        /\b(?:http(?:\/\d\.\d)?(?:\s+status)?|status(?:\s+code)?|api\s+error)\s*[:=]?\s*(401|403|429)\b/giu,
+      ),
+    ].map((match) => match[1]),
+  );
+  const matches: AccessStatus[] = [];
   if (
-    /\b(?:401|unauthorized|authentication_error|invalid_api_key)\b|oauth.*(?:expired|refresh)|not logged in|failed to authenticate|please (?:log|sign) in/iu.test(
+    httpStatuses.has("401") ||
+    /\b(?:unauthorized|authentication_error|invalid_api_key)\b|oauth.*(?:expired|refresh)|not logged in|failed to authenticate|please (?:log|sign) in/iu.test(
       detail,
     )
   )
-    return "authentication-required";
+    matches.push("authentication-required");
   if (
-    /\b(?:403|permission_denied|access_denied)\b|account.*(?:disabled|suspended)|(?:model|subscription|plan).*(?:not supported|not available|access denied)|insufficient_quota|credit balance/iu.test(
+    httpStatuses.has("403") ||
+    /\b(?:permission_denied|access_denied)\b|account.*(?:disabled|suspended)|(?:model|subscription|plan).*(?:not supported|not available|access denied)|insufficient_quota|credit balance/iu.test(
       detail,
     )
   )
-    return "account-restricted";
+    matches.push("account-restricted");
   if (
-    /\b(?:429|rate_limit_error|rate_limit_exceeded)\b|rate limit|usage limit|too many requests/iu.test(
+    httpStatuses.has("429") ||
+    /\b(?:rate_limit_error|rate_limit_exceeded)\b|rate limit|usage limit|too many requests/iu.test(
       detail,
     )
   )
-    return "rate-limited";
-  return "unverified";
+    matches.push("rate-limited");
+  // Do not turn reference numbers or conflicting failure descriptions into an auth verdict.
+  return matches.length === 1 ? matches[0]! : "unverified";
 }
 
 export function classifyAccessOutput(
@@ -266,6 +278,7 @@ export function classifyAccessOutput(
 ): { status: AccessStatus; reason: string } {
   if (provider === "codex") return { status: "unverified", reason: "tool-isolation-unavailable" };
   if (output.failure) return { status: "unverified", reason: output.failure };
+  if (!expected.trim()) return { status: "unverified", reason: "invalid-expected-token" };
   let events: Record<string, unknown>[];
   try {
     events = output.stdout

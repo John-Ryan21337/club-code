@@ -140,6 +140,14 @@ describe("external CLI access preflight", () => {
     ["403 permission_denied", "account-restricted"],
     ["The model is not available for this subscription", "account-restricted"],
     ["429 rate_limit_error", "rate-limited"],
+    ["API Error: 401", "authentication-required"],
+    ["HTTP status 403", "account-restricted"],
+    ["HTTP/1.1 401", "authentication-required"],
+    ["status code: 429", "rate-limited"],
+    ["Request failed; trace reference 429", "unverified"],
+    ["Request failed; reference numbers 401 and 403", "unverified"],
+    ["429 rate_limit_exceeded: please sign in again to refresh oauth", "unverified"],
+    ["HTTP 401; HTTP 429", "unverified"],
     ["Network connection failed", "unverified"],
   ])("classifies an actual failed terminal result: %s", (message, status) => {
     expect(
@@ -161,6 +169,16 @@ describe("external CLI access preflight", () => {
       classifyAccessOutput("claude", output([{ ...success, result: "rate limit" }]), expected)
         .status,
     ).toBe("unverified");
+  });
+
+  it("rejects an empty challenge even when a successful terminal result is also empty", () => {
+    expect(classifyAccessOutput("claude", output([{ ...success, result: "" }]), "")).toEqual({
+      status: "unverified",
+      reason: "invalid-expected-token",
+    });
+    expect(classifyAccessOutput("claude", output([{ ...success, result: " " }]), " ").status).toBe(
+      "unverified",
+    );
   });
 
   it("keeps Codex unverified without starting a live request that cannot disable every tool", async () => {
