@@ -814,12 +814,16 @@ describe("ProjectTelemetryGraph", () => {
 
   it("replaces stale values with an explicit outage state after a successful sample", async () => {
     const diagnostic = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const outage = deferred<void>();
     const readTelemetry = vi
       .fn()
       .mockResolvedValueOnce(
         telemetryFixture({ projectId: projectA, minimumSampleIntervalMs: 250 }),
       )
-      .mockRejectedValue({ _tag: "TelemetryOffline" });
+      .mockImplementation(async () => {
+        await outage.promise;
+        throw { _tag: "TelemetryOffline", message: "private telemetry failure detail" };
+      });
     const mounted = await render(
       <ProjectTelemetryGraph
         environmentId={environmentA}
@@ -832,6 +836,8 @@ describe("ProjectTelemetryGraph", () => {
     try {
       await page.getByLabelText("Expand Resources").click();
       await expect.element(page.getByLabelText(/Host CPU: 42%/i)).toBeVisible();
+      await vi.waitFor(() => expect(readTelemetry).toHaveBeenCalledTimes(2));
+      outage.resolve();
       await expect
         .element(page.getByLabelText(/Host CPU: Unavailable. Telemetry unavailable/i))
         .toBeVisible();
@@ -839,9 +845,15 @@ describe("ProjectTelemetryGraph", () => {
         .element(page.getByLabelText(/Host GPU: Unavailable. Telemetry unavailable/i))
         .toBeVisible();
       expect(document.body.textContent).toContain("last successful");
+      expect(document.querySelector('[aria-label^="Host CPU: 42%"]')).toBeNull();
+      expect(document.body.textContent).not.toContain("private telemetry failure detail");
+      expect(diagnostic.mock.calls).toEqual([
+        ["[PROJECT_TELEMETRY] read failed", "TelemetryOffline"],
+      ]);
     } finally {
-      diagnostic.mockRestore();
+      outage.resolve();
       await mounted.unmount();
+      diagnostic.mockRestore();
     }
   });
 
