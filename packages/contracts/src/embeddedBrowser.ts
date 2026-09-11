@@ -3,7 +3,11 @@ import * as Schema from "effect/Schema";
 import { IsoDateTime, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 
+// These transport schemas define browser messages only. Decoding a message does
+// not authorize a URL, origin, tab, thread, provider, or snapshot target. The
+// native browser and agent bridge must enforce ownership and current grants.
 export const EMBEDDED_BROWSER_MAX_URL_CHARS = 4_096;
+export const EMBEDDED_BROWSER_MAX_TABS = 8;
 export const EMBEDDED_BROWSER_MAX_TYPE_CHARS = 4_096;
 export const EMBEDDED_BROWSER_MAX_SNAPSHOT_TEXT_CHARS = 24_000;
 export const EMBEDDED_BROWSER_MAX_SNAPSHOT_TARGETS = 200;
@@ -20,6 +24,19 @@ export const AGENT_BROWSER_GRANT_DEFAULT_SECONDS = 300;
 export const AGENT_BROWSER_MAX_REQUESTS_PER_GRANT = 40;
 export const AGENT_BROWSER_MAX_QUEUED_REQUESTS = 4;
 export const AGENT_BROWSER_REQUEST_TIMEOUT_MS = 90_000;
+
+// Keep browser deadlines as canonical UTC strings. The shared IsoDateTime
+// primitive is intentionally broad and does not validate Date.parse inputs.
+const EmbeddedBrowserTimestampSchema = IsoDateTime.check(
+  Schema.isMaxLength(24),
+  Schema.makeFilter(
+    (value) => Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value,
+  ),
+);
+const EmbeddedBrowserThreadIdSchema = ThreadId.check(
+  Schema.isMaxLength(512),
+  Schema.isPattern(/^[^\u0000-\u001f\u007f]+$/),
+);
 
 export const EmbeddedBrowserTabIdSchema = TrimmedNonEmptyString.check(
   Schema.isMaxLength(128),
@@ -77,6 +94,7 @@ export type EmbeddedBrowserTabInput = typeof EmbeddedBrowserTabInputSchema.Type;
 export const EmbeddedBrowserSetBoundsInputSchema = Schema.Struct({
   tabId: EmbeddedBrowserTabIdSchema,
   bounds: EmbeddedBrowserBoundsSchema,
+  visible: Schema.optionalKey(Schema.Boolean),
 });
 export type EmbeddedBrowserSetBoundsInput = typeof EmbeddedBrowserSetBoundsInputSchema.Type;
 
@@ -142,7 +160,7 @@ export const EmbeddedBrowserSnapshotSchema = Schema.Struct({
   mode: Schema.Literals(["dom-accessibility", "ocr"]),
   displayUrl: Schema.String.check(Schema.isMaxLength(EMBEDDED_BROWSER_MAX_URL_CHARS)),
   title: Schema.String.check(Schema.isMaxLength(512)),
-  capturedAt: IsoDateTime,
+  capturedAt: EmbeddedBrowserTimestampSchema,
   text: Schema.String.check(Schema.isMaxLength(EMBEDDED_BROWSER_MAX_SNAPSHOT_TEXT_CHARS)),
   targets: Schema.Array(EmbeddedBrowserSnapshotTargetSchema).check(
     Schema.isMaxLength(EMBEDDED_BROWSER_MAX_SNAPSHOT_TARGETS),
@@ -194,7 +212,7 @@ export const AgentBrowserRequestIdSchema = TrimmedNonEmptyString.check(
 export type AgentBrowserRequestId = typeof AgentBrowserRequestIdSchema.Type;
 
 export const AgentBrowserGrantInputSchema = Schema.Struct({
-  threadId: ThreadId,
+  threadId: EmbeddedBrowserThreadIdSchema,
   providerInstanceId: ProviderInstanceId,
   tabId: EmbeddedBrowserTabIdSchema,
   origin: TrimmedNonEmptyString.check(Schema.isMaxLength(512)),
@@ -210,11 +228,16 @@ export type AgentBrowserGrantInput = typeof AgentBrowserGrantInputSchema.Type;
 export const AgentBrowserSessionContextSchema = Schema.Struct({
   tabId: EmbeddedBrowserTabIdSchema,
   origin: TrimmedNonEmptyString.check(Schema.isMaxLength(512)),
+  defaultAccess: Schema.optionalKey(Schema.Boolean),
+  disabledThreadIds: Schema.optionalKey(
+    Schema.Array(EmbeddedBrowserThreadIdSchema).check(Schema.isMaxLength(10_000)),
+  ),
 });
 export type AgentBrowserSessionContext = typeof AgentBrowserSessionContextSchema.Type;
 
 export const AgentBrowserRevokeInputSchema = Schema.Struct({
   reason: Schema.Literals(["operator", "origin-changed", "tab-closed", "thread-changed"]),
+  threadId: Schema.optionalKey(EmbeddedBrowserThreadIdSchema),
 });
 export type AgentBrowserRevokeInput = typeof AgentBrowserRevokeInputSchema.Type;
 
@@ -263,14 +286,14 @@ export type AgentBrowserAction = typeof AgentBrowserActionSchema.Type;
 export const AgentBrowserRequestSchema = Schema.Struct({
   requestId: AgentBrowserRequestIdSchema,
   grantId: AgentBrowserGrantIdSchema,
-  threadId: ThreadId,
+  threadId: EmbeddedBrowserThreadIdSchema,
   providerInstanceId: ProviderInstanceId,
   tabId: EmbeddedBrowserTabIdSchema,
   origin: TrimmedNonEmptyString.check(Schema.isMaxLength(512)),
   action: AgentBrowserActionSchema,
   summary: Schema.String.check(Schema.isMaxLength(512)),
-  createdAt: IsoDateTime,
-  expiresAt: IsoDateTime,
+  createdAt: EmbeddedBrowserTimestampSchema,
+  expiresAt: EmbeddedBrowserTimestampSchema,
 });
 export type AgentBrowserRequest = typeof AgentBrowserRequestSchema.Type;
 
@@ -301,12 +324,12 @@ const AgentBrowserInactiveGrantStateSchema = Schema.Struct({
 const AgentBrowserActiveGrantStateSchema = Schema.Struct({
   status: Schema.Literal("active"),
   grantId: AgentBrowserGrantIdSchema,
-  threadId: ThreadId,
+  threadId: EmbeddedBrowserThreadIdSchema,
   providerInstanceId: ProviderInstanceId,
   tabId: EmbeddedBrowserTabIdSchema,
   origin: TrimmedNonEmptyString.check(Schema.isMaxLength(512)),
-  grantedAt: IsoDateTime,
-  expiresAt: IsoDateTime,
+  grantedAt: EmbeddedBrowserTimestampSchema,
+  expiresAt: EmbeddedBrowserTimestampSchema,
   requestCount: Schema.Int.check(
     Schema.isBetween({ minimum: 0, maximum: AGENT_BROWSER_MAX_REQUESTS_PER_GRANT }),
   ),

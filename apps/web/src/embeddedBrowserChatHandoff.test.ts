@@ -47,7 +47,9 @@ describe("embedded browser chat handoff", () => {
     expect(text).not.toContain("https://portal.example/account");
     expect(text).toContain("e0 · button · Continue");
     expect(text).toContain("e1 · textbox · sensitive · Verification code");
-    expect(text).toContain("Ask the user to approve each browser click or typing action");
+    expect(text).toContain("does not grant control");
+    expect(text).toContain("current origin authorization and fresh snapshot targets");
+    expect(text).toContain("Passwords and 2FA remain operator-only");
     expect(text).not.toContain("snapshot-1");
     expect(text.length).toBeLessThanOrEqual(EMBEDDED_BROWSER_DRAFT_HANDOFF_MAX_CHARS);
   });

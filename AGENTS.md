@@ -282,8 +282,13 @@ Codex threads receive the process-local embedded-browser MCP server through per-
 `mcp_servers.club_browser` config. Keep the bearer credential in the child-only
 `CAFE_CODE_AGENT_BROWSER_MCP_AUTHORIZATION` environment variable referenced by
 `env_http_headers`; never put its value in app-server JSON-RPC params, argv, durable session input,
-or diagnostics. The MCP server still requires the exact Cafe thread/provider headers and a live
-operator grant before it queues any browser action.
+or diagnostics. The MCP server requires the exact Cafe thread/provider headers. Thread access is
+on by default while the desktop polls an open, explicitly shared page. Persist per-thread opt-outs
+in backend-authoritative `agentBrowserDisabledThreadIds`; exclude them from presentation profiles.
+Do not require a timed thread grant or revoke access because the visible chat changed. Reject
+disabled or retired identities and bind snapshot targets to their requesting identity. Browser
+minimize uses WebContentsView visibility and preserves the tab/session; resume must not call open.
+Restore the selected tab before agent actions. Sharing grants routine snapshots, OCR, clicks, non-sensitive typing, and same-origin navigation without repeated dialogs; native checks must still bind the current origin/document and fresh target. Revocation, leaving the origin, renderer loss, and session end remove authorization. Sensitive agent entry remains prohibited; operator sensitive-entry and navigation to a new origin still require explicit consent. The panel Close and Minimize controls hide the view and retain tabs in a bottom strip. End tab session clears only that tab; app quit clears all temporary partitions. Each owner can retain up to eight independent tabs, with only the selected tab visible and available to the agent broker. Background tab events must not change selection. Floating browser windows support moving and resizing; split mode reflows chat and browser around an adjustable 50/50 divider.
 
 The generated `packages/effect-codex-app-server` protocol surface is currently aligned to upstream Codex `rust-v0.147.0` tag object `3ed6f04f6bf8b7c46299d1cb1ff99c74ce21a51d` (commit `be6e8eac029b183056b7e4402879f15d2c85f61b`). This release adds portable Agent Plugin discovery metadata, provider-private thread sections/manual ordering, paginated history metadata, MCP 2026-07-28 compatibility, and additional submission, environment, and permission metadata. Regenerate from the exact stable commit when a future target changes protocol types; never hand-edit generated schemas.
 

@@ -6,6 +6,8 @@ import type {
   EmbeddedBrowserState,
 } from "@cafecode/contracts";
 import { useParams } from "@tanstack/react-router";
+import { EMBEDDED_BROWSER_MAX_TABS } from "@cafecode/contracts";
+import { useEmbeddedBrowserLayout } from "../hooks/useEmbeddedBrowserLayout";
 import {
   ArrowLeft,
   ArrowRight,
@@ -16,6 +18,12 @@ import {
   Globe2,
   LoaderCircle,
   MessageSquarePlus,
+  Minus,
+  Columns2,
+  Maximize2,
+  PanelsTopLeft,
+  Plus,
+  Grip,
   MousePointerClick,
   RefreshCw,
   ScanText,
@@ -34,6 +42,7 @@ import { getPrimaryKnownEnvironment } from "../environments/primary";
 import { useStore } from "../store";
 import { resolveThreadRouteRef } from "../threadRoutes";
 import { copyTextToClipboard } from "../lib/copyToClipboard";
+import { useClientSettingsHydrated, useSettings, useUpdateSettings } from "../hooks/useSettings";
 
 const CLOSED_STATE: EmbeddedBrowserState = {
   status: "closed",
@@ -56,6 +65,10 @@ export function EmbeddedBrowserWorkspace() {
   const available = typeof bridge?.openEmbeddedBrowser === "function";
   const [visible, setVisible] = useState(false);
   const [state, setState] = useState<EmbeddedBrowserState>(CLOSED_STATE);
+  const [tabs, setTabs] = useState<EmbeddedBrowserState[]>([]);
+  const tabsRef = useRef(tabs);
+  const [agentExecuting, setAgentExecuting] = useState(false);
+  const [geometryRevision, setGeometryRevision] = useState(0);
   const [url, setUrl] = useState("");
   const [snapshot, setSnapshot] = useState<EmbeddedBrowserSnapshot | null>(null);
   const [ocrLanguage, setOcrLanguage] = useState<"eng" | "jpn">("eng");
@@ -66,20 +79,36 @@ export function EmbeddedBrowserWorkspace() {
   const [busy, setBusy] = useState(false);
   const [agentGrant, setAgentGrant] = useState<AgentBrowserGrantState>({
     status: "inactive",
-    reason: "No active operator grant.",
+    reason: "No pending browser action.",
   });
   const [agentStatus, setAgentStatus] = useState(
-    "Agent controls are off. Sharing a page does not grant an agent control.",
+    "Thread access is on by default. Share a page to make it available to agents.",
   );
-  const [now, setNow] = useState(Date.now());
+  const settingsHydrated = useClientSettingsHydrated();
+  const disabledThreadIds = useSettings((settings) => settings.agentBrowserDisabledThreadIds);
+  const { updateClientSettingsConfirmed } = useUpdateSettings();
+  const disabledThreadIdsRef = useRef(disabledThreadIds);
+  disabledThreadIdsRef.current = disabledThreadIds;
+  const pendingThreadDenialsRef = useRef(new Set<string>());
   const viewportRef = useRef<HTMLDivElement | null>(null);
+  const viewportHiddenRef = useRef(true);
+  const viewportBoundsRef = useRef({ x: 0, y: 0, width: 1, height: 1 });
   const tabIdRef = useRef<string | null>(null);
   const busyRef = useRef(false);
   const agentBusyRef = useRef(false);
+  const layout = useEmbeddedBrowserLayout(visible, tabs.length > 0, (hidden) => {
+    viewportHiddenRef.current = hidden || !visible;
+    const tabId = tabIdRef.current;
+    if (hidden && tabId && bridge) {
+      void bridge
+        .setEmbeddedBrowserBounds({ tabId, bounds: viewportBoundsRef.current, visible: false })
+        .catch(() => setStatus("Could not hide the browser view."));
+    }
+    setGeometryRevision((value) => value + 1);
+  });
+  const executedRequestIdsRef = useRef(new Set<string>());
   const agentGrantRef = useRef(agentGrant);
   agentGrantRef.current = agentGrant;
-  const agentGrantTabId = agentGrant.status === "active" ? agentGrant.tabId : null;
-  const agentGrantOrigin = agentGrant.status === "active" ? agentGrant.origin : null;
   const routeThreadRef = useParams({
     strict: false,
     select: (params) => resolveThreadRouteRef(params),
@@ -105,7 +134,6 @@ export function EmbeddedBrowserWorkspace() {
 
   const revokeAgentGrant = useCallback(
     async (reason: "operator" | "origin-changed" | "tab-closed" | "thread-changed") => {
-      if (agentGrantRef.current.status !== "active") return;
       agentGrantRef.current = {
         status: "inactive",
         reason: `Grant revoked: ${reason}.`,
@@ -124,13 +152,29 @@ export function EmbeddedBrowserWorkspace() {
 
   const updateState = useCallback(
     (nextState: EmbeddedBrowserState) => {
+      if (nextState.tabId) {
+        // Native startup and discarded tabs can still emit queued events. Only
+        // the explicit open/select path may introduce a tab into this workspace.
+        if (
+          nextState.tabId !== tabIdRef.current &&
+          !tabsRef.current.some((tab) => tab.tabId === nextState.tabId)
+        )
+          return;
+        const remaining = tabsRef.current.filter((tab) => tab.tabId !== nextState.tabId);
+        const existing = tabsRef.current.some((tab) => tab.tabId === nextState.tabId);
+        tabsRef.current = existing
+          ? tabsRef.current.map((tab) => (tab.tabId === nextState.tabId ? nextState : tab))
+          : [...remaining, nextState];
+        setTabs(tabsRef.current);
+        // Background navigation must never select a tab or change agent authority.
+        if (tabIdRef.current !== nextState.tabId) return;
+      }
       const grant = agentGrantRef.current;
       if (
-        grant.status === "active" &&
-        (nextState.status !== "open" ||
-          nextState.tabId !== grant.tabId ||
-          !nextState.shared ||
-          nextState.sharedOrigin !== grant.origin)
+        nextState.status !== "open" ||
+        !nextState.shared ||
+        (grant.status === "active" &&
+          (nextState.tabId !== grant.tabId || nextState.sharedOrigin !== grant.origin))
       ) {
         void revokeAgentGrant(nextState.status === "closed" ? "tab-closed" : "origin-changed");
       }
@@ -145,24 +189,6 @@ export function EmbeddedBrowserWorkspace() {
     },
     [revokeAgentGrant],
   );
-
-  useEffect(() => {
-    const grant = agentGrantRef.current;
-    if (grant.status !== "active") return;
-    if (
-      !requester ||
-      requester.threadId !== grant.threadId ||
-      requester.providerInstanceId !== grant.providerInstanceId
-    ) {
-      void revokeAgentGrant("thread-changed");
-    }
-  }, [requester, revokeAgentGrant]);
-
-  useEffect(() => {
-    if (agentGrant.status !== "active") return;
-    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
-    return () => window.clearInterval(timer);
-  }, [agentGrant.status]);
 
   useEffect(() => {
     if (!available || !bridge) return;
@@ -181,17 +207,31 @@ export function EmbeddedBrowserWorkspace() {
       if (frame !== null) window.cancelAnimationFrame(frame);
       frame = window.requestAnimationFrame(() => {
         frame = null;
+        if (viewportHiddenRef.current || tabIdRef.current !== state.tabId) return;
         const bounds = viewport.getBoundingClientRect();
-        if (bounds.width < 1 || bounds.height < 1) return;
+        if (bounds.width < 1 || bounds.height < 1) {
+          // Native views are outside DOM clipping. A collapsed viewport must
+          // explicitly hide the old bounds until layout has room again.
+          void bridge
+            .setEmbeddedBrowserBounds({
+              tabId: state.tabId!,
+              bounds: viewportBoundsRef.current,
+              visible: false,
+            })
+            .catch(() => setStatus("Could not hide the browser view."));
+          return;
+        }
+        viewportBoundsRef.current = {
+          x: Math.max(0, Math.round(bounds.left)),
+          y: Math.max(0, Math.round(bounds.top)),
+          width: Math.max(1, Math.round(bounds.width)),
+          height: Math.max(1, Math.round(bounds.height)),
+        };
         void bridge
           .setEmbeddedBrowserBounds({
             tabId: state.tabId!,
-            bounds: {
-              x: Math.max(0, Math.round(bounds.left)),
-              y: Math.max(0, Math.round(bounds.top)),
-              width: Math.max(1, Math.round(bounds.width)),
-              height: Math.max(1, Math.round(bounds.height)),
-            },
+            bounds: viewportBoundsRef.current,
+            visible: true,
           })
           .catch(() => {
             setStatus("Could not position the isolated browser view.");
@@ -209,14 +249,27 @@ export function EmbeddedBrowserWorkspace() {
       window.removeEventListener("resize", updateBounds);
       if (frame !== null) window.cancelAnimationFrame(frame);
     };
-  }, [available, bridge, state.status, state.tabId, visible]);
+  }, [
+    available,
+    bridge,
+    state.status,
+    state.tabId,
+    visible,
+    layout.panel.left,
+    layout.panel.top,
+    layout.panel.width,
+    layout.panel.height,
+    geometryRevision,
+  ]);
 
   useEffect(
     () => () => {
-      const tabId = tabIdRef.current;
-      if (tabId && bridge) {
+      if (bridge) {
         void revokeAgentGrant("tab-closed");
-        void bridge.closeEmbeddedBrowser({ tabId }).catch(() => undefined);
+        for (const tab of tabsRef.current) {
+          if (tab.tabId)
+            void bridge.closeEmbeddedBrowser({ tabId: tab.tabId }).catch(() => undefined);
+        }
       }
     },
     [bridge, revokeAgentGrant],
@@ -224,10 +277,49 @@ export function EmbeddedBrowserWorkspace() {
 
   const executeAgentRequest = useCallback(
     async (request: AgentBrowserRequest) => {
-      if (!bridge || agentBusyRef.current) return;
+      if (
+        !bridge ||
+        agentBusyRef.current ||
+        busyRef.current ||
+        layout.interacting.current ||
+        Date.now() >= Date.parse(request.expiresAt) ||
+        tabIdRef.current !== request.tabId
+      )
+        return;
+      if (
+        disabledThreadIdsRef.current.includes(request.threadId) ||
+        pendingThreadDenialsRef.current.has(request.threadId)
+      )
+        return;
+      // Heartbeat polls continue during native approval. A delayed poll response
+      // can repeat a request after completion; never execute that action twice.
+      const executed = executedRequestIdsRef.current;
+      if (executed.has(request.requestId)) return;
+      executed.add(request.requestId);
+      if (executed.size > 128) executed.delete(executed.values().next().value!);
       agentBusyRef.current = true;
-      setAgentStatus(`Agent requested: ${request.summary}. Waiting for your native approval.`);
+      setAgentExecuting(true);
+      setAgentStatus(`Agent requested: ${request.summary}. Using the shared origin authorization.`);
       try {
+        // Restore the same tab before the requested action so the operator sees
+        // the page. The frame boundary lets the viewport restore its bounds.
+        viewportHiddenRef.current = false;
+        setVisible(true);
+        await bridge.setEmbeddedBrowserBounds({
+          tabId: request.tabId,
+          bounds: viewportBoundsRef.current,
+          visible: true,
+        });
+        await new Promise<void>((resolve) =>
+          window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve())),
+        );
+        if (
+          tabIdRef.current !== request.tabId ||
+          Date.now() >= Date.parse(request.expiresAt) ||
+          disabledThreadIdsRef.current.includes(request.threadId) ||
+          pendingThreadDenialsRef.current.has(request.threadId)
+        )
+          return;
         let result;
         switch (request.action.type) {
           case "snapshot": {
@@ -304,39 +396,41 @@ export function EmbeddedBrowserWorkspace() {
         setAgentGrant(completion.grant);
         setAgentStatus(
           completion.accepted
-            ? "Agent action completed through the operator approval bridge."
+            ? "Agent action completed on the shared page."
             : "Agent action result was stale because its grant was revoked.",
         );
       } catch {
         setAgentStatus("Agent action stopped safely; no result was returned to the provider.");
       } finally {
         agentBusyRef.current = false;
+        setAgentExecuting(false);
       }
     },
-    [bridge, updateState],
+    [bridge, updateState, layout.interacting],
   );
 
   useEffect(() => {
     if (
-      agentGrant.status !== "active" ||
+      !settingsHydrated ||
+      state.status !== "open" ||
+      !state.shared ||
       !state.tabId ||
-      !state.sharedOrigin ||
-      agentGrantTabId !== state.tabId ||
-      agentGrantOrigin !== state.sharedOrigin
+      !state.sharedOrigin
     ) {
       return;
     }
     let disposed = false;
     const poll = async () => {
-      if (disposed || agentBusyRef.current) return;
+      if (disposed || tabIdRef.current !== state.tabId) return;
       try {
         const next = await getPrimaryEnvironmentConnection().client.agentBrowser.poll({
           tabId: state.tabId!,
           origin: state.sharedOrigin!,
+          defaultAccess: true,
         });
-        if (disposed) return;
+        if (disposed || tabIdRef.current !== state.tabId) return;
         setAgentGrant(next.grant);
-        if (next.request) await executeAgentRequest(next.request);
+        if (next.request && !agentBusyRef.current) await executeAgentRequest(next.request);
       } catch {
         if (!disposed) setAgentStatus("Could not reach the process-local agent browser broker.");
       }
@@ -348,18 +442,19 @@ export function EmbeddedBrowserWorkspace() {
       window.clearInterval(timer);
     };
   }, [
-    agentGrant.status,
-    agentGrantTabId,
-    agentGrantOrigin,
+    settingsHydrated,
+    state.status,
+    state.shared,
     state.tabId,
     state.sharedOrigin,
     executeAgentRequest,
+    disabledThreadIds,
   ]);
 
   if (!available || !bridge) return null;
 
-  const run = async (operation: () => Promise<void>) => {
-    if (busyRef.current) return;
+  const run = async (operation: () => Promise<void>, allowDuringAgent = false) => {
+    if (busyRef.current || (agentBusyRef.current && !allowDuringAgent)) return;
     busyRef.current = true;
     setBusy(true);
     try {
@@ -375,22 +470,96 @@ export function EmbeddedBrowserWorkspace() {
   const open = () =>
     run(async () => {
       setVisible(true);
+      viewportHiddenRef.current = false;
+      if (tabIdRef.current) {
+        await bridge.setEmbeddedBrowserBounds({
+          tabId: tabIdRef.current,
+          bounds: viewportBoundsRef.current,
+          visible: true,
+        });
+        return;
+      }
       setStatus("Opening an isolated, temporary browser tab…");
       const nextState = await bridge.openEmbeddedBrowser({});
+      tabIdRef.current = nextState.tabId;
       updateState(nextState);
-      setStatus("Browser ready. Navigation and sharing require explicit approval.");
+      setStatus("Browser ready. Share an origin once to authorize routine agent actions.");
+    });
+
+  const selectTab = async (tab: EmbeddedBrowserState) => {
+    if (!tab.tabId) return;
+    const previous = tabIdRef.current;
+    if (previous !== tab.tabId) {
+      // Clear selection before awaiting revocation so stale requests cannot run.
+      tabIdRef.current = null;
+      if (previous)
+        await bridge.setEmbeddedBrowserBounds({
+          tabId: previous,
+          bounds: viewportBoundsRef.current,
+          visible: false,
+        });
+      await revokeAgentGrant("operator");
+    }
+    tabIdRef.current = tab.tabId;
+    // A retained background tab may have navigated while revocation was pending.
+    // Never overwrite its current sharing/origin state with the clicked render.
+    updateState(tabsRef.current.find((current) => current.tabId === tab.tabId) ?? tab);
+    viewportHiddenRef.current = false;
+    setVisible(true);
+    await bridge.setEmbeddedBrowserBounds({
+      tabId: tab.tabId,
+      bounds: viewportBoundsRef.current,
+      visible: true,
+    });
+    setGeometryRevision((value) => value + 1);
+  };
+
+  const newTab = () =>
+    run(async () => {
+      if (tabsRef.current.length >= EMBEDDED_BROWSER_MAX_TABS) return;
+      const next = await bridge.openEmbeddedBrowser({});
+      await selectTab(next);
+      setStatus("New tab ready.");
     });
 
   const close = () =>
     run(async () => {
       const tabId = tabIdRef.current;
+      tabIdRef.current = null;
+      viewportHiddenRef.current = true;
       setTypeValue("");
       setSnapshot(null);
       setSelectedTargetId("");
-      if (tabId) await bridge.closeEmbeddedBrowser({ tabId });
+      await revokeAgentGrant("tab-closed");
+      if (tabId) {
+        await bridge.closeEmbeddedBrowser({ tabId });
+        tabsRef.current = tabsRef.current.filter((tab) => tab.tabId !== tabId);
+        setTabs(tabsRef.current);
+      }
+      const remaining = tabsRef.current[0];
+      if (remaining) {
+        await selectTab(remaining);
+        setStatus("Tab session ended and its site storage cleared.");
+        return;
+      }
       updateState(CLOSED_STATE);
       setVisible(false);
       setStatus("Browser closed and temporary site storage cleared.");
+    });
+
+  const minimize = () =>
+    run(async () => {
+      viewportHiddenRef.current = true;
+      if (!state.tabId) {
+        setVisible(false);
+        return;
+      }
+      await bridge.setEmbeddedBrowserBounds({
+        tabId: state.tabId,
+        bounds: viewportBoundsRef.current,
+        visible: false,
+      });
+      if (viewportHiddenRef.current) setVisible(false);
     });
 
   const navigate = () =>
@@ -424,25 +593,36 @@ export function EmbeddedBrowserWorkspace() {
       });
       updateState(result.state);
       setStatus(actionMessage(result));
-    });
+    }, state.shared);
 
-  const grantAgentControl = () =>
-    run(async () => {
-      if (!requester || !state.tabId || !state.shared || !state.sharedOrigin) return;
-      const grant = await getPrimaryEnvironmentConnection().client.agentBrowser.grant({
-        ...requester,
-        tabId: state.tabId,
-        origin: state.sharedOrigin,
-        durationSeconds: 300,
-      });
-      setAgentGrant(grant);
-      setNow(Date.now());
-      setAgentStatus(
-        grant.status === "active"
-          ? "Agent control granted. Every requested action still requires native approval."
-          : grant.reason,
-      );
-    });
+  const toggleThreadAccess = () =>
+    run(
+      async () => {
+        if (!requester || !settingsHydrated) return;
+        const disabled = disabledThreadIds.includes(requester.threadId);
+        const next = disabled
+          ? disabledThreadIds.filter((id) => id !== requester.threadId)
+          : [...disabledThreadIds, requester.threadId];
+        // Block locally before waiting for persistence; the server also rejects
+        // queued requests when the confirmed settings update disables a thread.
+        disabledThreadIdsRef.current = next;
+        if (!disabled) pendingThreadDenialsRef.current.add(requester.threadId);
+        try {
+          await updateClientSettingsConfirmed({ agentBrowserDisabledThreadIds: next });
+        } catch (error) {
+          disabledThreadIdsRef.current = disabledThreadIds;
+          throw error;
+        } finally {
+          pendingThreadDenialsRef.current.delete(requester.threadId);
+        }
+        setAgentStatus(
+          disabled
+            ? "Agent Browser access enabled for this thread."
+            : "Agent Browser access disabled for this thread.",
+        );
+      },
+      requester !== null && !disabledThreadIds.includes(requester.threadId),
+    );
 
   const takeSnapshot = (mode: "dom-accessibility" | "ocr") =>
     run(async () => {
@@ -521,10 +701,10 @@ export function EmbeddedBrowserWorkspace() {
     });
   };
 
-  if (!visible) {
+  if (!visible && tabs.length === 0) {
     return (
       <Button
-        aria-label="Open isolated browser"
+        aria-label={state.status === "open" ? "Resume Agent Browser" : "Open isolated browser"}
         className="fixed right-5 bottom-5 z-[180] rounded-full shadow-xl"
         onClick={open}
         size="icon-xl"
@@ -535,344 +715,477 @@ export function EmbeddedBrowserWorkspace() {
   }
 
   const selectedTarget = snapshot?.targets.find((target) => target.targetId === selectedTargetId);
-  const grantSecondsRemaining =
-    agentGrant.status === "active"
-      ? Math.max(0, Math.ceil((Date.parse(agentGrant.expiresAt) - now) / 1_000))
-      : 0;
+  const threadAccessDisabled = requester ? disabledThreadIds.includes(requester.threadId) : false;
 
   return (
-    <section
-      aria-label="Isolated browser workspace"
-      className="fixed inset-3 z-[180] flex min-h-0 flex-col overflow-hidden rounded-2xl border border-border bg-background shadow-2xl sm:inset-6"
-    >
-      <header className="flex shrink-0 items-center gap-2 border-b border-border bg-card px-3 py-2">
-        <div className="mr-1 flex min-w-0 items-center gap-2">
-          <ShieldCheck className="size-4 text-primary" aria-hidden="true" />
-          <div className="min-w-0">
-            <div className="truncate text-sm font-semibold">
-              {state.title || "Isolated browser"}
-            </div>
-            <div className="truncate text-[11px] text-muted-foreground">
-              Temporary session · no Node.js · downloads and popups blocked
-            </div>
+    <>
+      {tabs.length > 0 && (
+        <nav
+          aria-label="Browser tabs"
+          className="fixed inset-x-0 bottom-0 z-[181] flex h-12 items-center gap-2 border-t border-border bg-card px-3 [-webkit-app-region:no-drag]"
+        >
+          <Globe2 className="size-4 shrink-0 text-primary" />
+          <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
+            {tabs.map((tab) => (
+              <Button
+                key={tab.tabId}
+                aria-label={`${!visible && tab.tabId === state.tabId ? "Resume Agent Browser" : "Open browser tab"}: ${tab.title || "New tab"}`}
+                aria-pressed={tab.tabId === state.tabId}
+                disabled={busy || agentExecuting}
+                className="max-w-60 shrink-0"
+                size="sm"
+                variant={tab.tabId === state.tabId ? "secondary" : "ghost"}
+                onClick={() => run(() => selectTab(tab))}
+              >
+                <span className="truncate">{tab.title || "New tab"}</span>
+              </Button>
+            ))}
           </div>
-        </div>
-        <div className="ml-auto flex items-center gap-1">
           <Button
-            aria-label={state.shared ? "Revoke page sharing" : "Share current origin"}
-            disabled={busy || state.status !== "open" || state.displayUrl === "about:blank"}
-            onClick={toggleShare}
-            size="sm"
-            variant={state.shared ? "default" : "outline"}
-          >
-            {state.shared ? <Eye /> : <EyeOff />}
-            {state.shared ? "Shared" : "Private"}
-          </Button>
-          <Button
-            aria-label="Close isolated browser"
-            disabled={busy}
-            onClick={close}
+            aria-label="New browser tab"
+            disabled={busy || agentExecuting || tabs.length >= EMBEDDED_BROWSER_MAX_TABS}
+            onClick={newTab}
             size="icon-sm"
             variant="ghost"
           >
-            <X />
+            <Plus />
           </Button>
-        </div>
-      </header>
-
-      <div className="flex shrink-0 items-center gap-1.5 border-b border-border bg-card/70 px-3 py-2">
-        <Button
-          aria-label="Go back"
-          disabled={busy || !state.canGoBack}
-          onClick={() => history("back")}
-          size="icon-sm"
-          variant="outline"
-        >
-          <ArrowLeft />
-        </Button>
-        <Button
-          aria-label="Go forward"
-          disabled={busy || !state.canGoForward}
-          onClick={() => history("forward")}
-          size="icon-sm"
-          variant="outline"
-        >
-          <ArrowRight />
-        </Button>
-        <Button
-          aria-label={state.loading ? "Stop loading" : "Reload"}
-          disabled={busy || state.status !== "open"}
-          onClick={() => history(state.loading ? "stop" : "reload")}
-          size="icon-sm"
-          variant="outline"
-        >
-          {state.loading ? <Square /> : <RefreshCw />}
-        </Button>
-        <label className="sr-only" htmlFor="embedded-browser-url">
-          Browser address
-        </label>
-        <input
-          autoCapitalize="none"
-          autoComplete="off"
-          className="h-8 min-w-0 flex-1 rounded-lg border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          id="embedded-browser-url"
-          onChange={(event) => setUrl(event.currentTarget.value)}
+        </nav>
+      )}
+      {visible && layout.mode === "split" && (
+        <div
+          role="separator"
+          tabIndex={0}
+          aria-label="Resize chat and browser"
+          aria-orientation={layout.stacked ? "horizontal" : "vertical"}
+          aria-valuenow={Math.round(layout.split)}
+          aria-valuemin={25}
+          aria-valuemax={75}
+          className="fixed z-[182] touch-none bg-border hover:bg-primary focus:bg-primary [-webkit-app-region:no-drag]"
+          style={
+            layout.stacked
+              ? {
+                  left: 0,
+                  top: layout.splitPosition - 4,
+                  width: "100%",
+                  height: 8,
+                  cursor: "row-resize",
+                }
+              : {
+                  left: layout.splitPosition - 4,
+                  top: layout.topInset,
+                  width: 8,
+                  height: layout.height - layout.topInset,
+                  cursor: "col-resize",
+                }
+          }
+          {...layout.controls("split")}
           onKeyDown={(event) => {
-            if (event.key === "Enter") void navigate();
-          }}
-          placeholder="https://portal.example"
-          spellCheck={false}
-          value={url}
-        />
-        <Button
-          aria-label="Navigate"
-          disabled={busy || !state.tabId || url.trim().length === 0}
-          onClick={navigate}
-          size="icon-sm"
-        >
-          <Send />
-        </Button>
-      </div>
-
-      <div
-        className="relative min-h-40 flex-1 bg-black"
-        data-testid="embedded-browser-viewport"
-        ref={viewportRef}
-      >
-        {state.status !== "open" ? (
-          <div className="absolute inset-0 grid place-items-center text-sm text-white/70">
-            <LoaderCircle className="mr-2 inline size-4 animate-spin" />
-            Opening isolated browser…
-          </div>
-        ) : null}
-      </div>
-
-      <div className="max-h-[38vh] shrink-0 overflow-auto border-t border-border bg-card px-3 py-2">
-        <div className="flex flex-wrap items-center gap-2">
-          <Button
-            disabled={busy || !state.shared}
-            onClick={() => takeSnapshot("dom-accessibility")}
-            size="xs"
-            variant="outline"
-          >
-            <Camera />
-            Page snapshot
-          </Button>
-          <Button
-            disabled={busy || !state.shared}
-            onClick={() => takeSnapshot("ocr")}
-            size="xs"
-            title="Runs bounded offline OCR on only the currently visible isolated-browser viewport."
-            variant="outline"
-          >
-            <ScanText />
-            Visible image text
-          </Button>
-          <label className="sr-only" htmlFor="embedded-browser-ocr-language">
-            OCR language
-          </label>
-          <select
-            className="h-7 rounded-lg border border-input bg-background px-2 text-xs"
-            disabled={busy}
-            id="embedded-browser-ocr-language"
-            onChange={(event) =>
-              setOcrLanguage(event.currentTarget.value === "jpn" ? "jpn" : "eng")
+            if (["ArrowLeft", "ArrowUp", "ArrowRight", "ArrowDown", "Home"].includes(event.key)) {
+              event.preventDefault();
+              layout.setSplit(
+                event.key === "Home"
+                  ? 50
+                  : Math.max(
+                      25,
+                      Math.min(
+                        75,
+                        layout.split + (["ArrowLeft", "ArrowUp"].includes(event.key) ? -2 : 2),
+                      ),
+                    ),
+              );
             }
-            title="Packaged offline OCR language"
-            value={ocrLanguage}
-          >
-            <option value="eng">English OCR</option>
-            <option value="jpn">Japanese OCR</option>
-          </select>
-          <Button
-            disabled={busy || !snapshot}
-            onClick={addSnapshotToDraft}
-            size="xs"
-            variant="outline"
-          >
-            <MessageSquarePlus />
-            Add to one-time chat context
-          </Button>
-          <span
-            aria-live="polite"
-            className={state.shared ? "text-xs text-emerald-600" : "text-xs text-muted-foreground"}
-          >
-            {state.shared
-              ? `Shared only with ${state.sharedOrigin}; every snapshot and control asks again.`
-              : "Private: page content and agent-style controls are unavailable."}
-          </span>
-        </div>
-
-        <p className="mt-1.5 text-[11px] leading-4 text-muted-foreground">
-          Direct interactions in the page are yours. Never share an inbox or secret-bearing page;
-          paste credentials or 2FA codes only into the transient sensitive field below.
-        </p>
-
-        <div className="mt-2 rounded-lg border border-border bg-background/70 p-2">
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="mr-auto">
-              <div className="text-xs font-semibold">Bounded agent control</div>
-              <div className="text-[11px] text-muted-foreground">
-                One thread, one provider, this tab and origin only. OCR is visible-viewport-only,
-                transient, offline, and separately approved. No image storage, credentials,
-                passwords, or verification codes.
+          }}
+        />
+      )}
+      {visible && (
+        <section
+          aria-label="Isolated browser workspace"
+          style={layout.panel}
+          className="fixed z-[180] flex min-h-0 flex-col overflow-hidden rounded-xl border border-border bg-background shadow-2xl [-webkit-app-region:no-drag]"
+        >
+          <header className="flex shrink-0 items-center gap-2 border-b border-border bg-card px-3 py-2">
+            <div
+              role={layout.mode === "floating" ? "button" : undefined}
+              tabIndex={layout.mode === "floating" ? 0 : undefined}
+              aria-label={layout.mode === "floating" ? "Move browser" : undefined}
+              className={`mr-1 flex min-w-0 flex-1 items-center gap-2 ${layout.mode === "floating" ? "cursor-move touch-none" : ""}`}
+              {...(layout.mode === "floating" ? layout.controls("move") : {})}
+            >
+              <ShieldCheck className="size-4 text-primary" aria-hidden="true" />
+              <div className="min-w-0">
+                <div className="truncate text-sm font-semibold">
+                  {state.title || "Isolated browser"}
+                </div>
+                <div className="truncate text-[11px] text-muted-foreground">
+                  Tabs stay open when hidden
+                </div>
               </div>
             </div>
-            {agentGrant.status === "active" ? (
+            <div className="ml-auto flex items-center gap-1">
               <Button
-                onClick={() => void revokeAgentGrant("operator")}
-                size="xs"
-                variant="destructive"
-              >
-                <Unplug />
-                Revoke now
-              </Button>
-            ) : (
-              <Button
-                disabled={
-                  busy || !requester || !state.shared || !state.tabId || !state.sharedOrigin
+                aria-label={
+                  layout.mode === "split" ? "Use floating browser" : "Split chat and browser"
                 }
-                onClick={grantAgentControl}
+                title={layout.mode === "split" ? "Use floating browser" : "Split chat and browser"}
+                size="icon-sm"
+                variant="ghost"
+                onClick={() => layout.setMode(layout.mode === "split" ? "floating" : "split")}
+              >
+                {layout.mode === "split" ? <PanelsTopLeft /> : <Columns2 />}
+              </Button>
+              <Button
+                aria-label={
+                  layout.mode === "maximized" ? "Restore browser size" : "Maximize browser"
+                }
+                size="icon-sm"
+                variant="ghost"
+                onClick={() =>
+                  layout.setMode(layout.mode === "maximized" ? "floating" : "maximized")
+                }
+              >
+                <Maximize2 />
+              </Button>
+              <Button
+                aria-label="Minimize Agent Browser"
+                title="Keep this tab and login session open"
+                disabled={busy || state.status !== "open"}
+                onClick={minimize}
+                size="icon-sm"
+                variant="ghost"
+              >
+                <Minus />
+              </Button>
+              <Button
+                aria-label={state.shared ? "Revoke page sharing" : "Share current origin"}
+                disabled={busy || state.status !== "open" || state.displayUrl === "about:blank"}
+                onClick={toggleShare}
+                size="sm"
+                variant={state.shared ? "default" : "outline"}
+              >
+                {state.shared ? <Eye /> : <EyeOff />}
+                {state.shared ? "Shared" : "Private"}
+              </Button>
+              <Button
+                aria-label="Hide Agent Browser"
+                title="Hide browser and keep tabs open"
+                disabled={busy}
+                onClick={minimize}
+                size="icon-sm"
+                variant="ghost"
+              >
+                <X />
+              </Button>
+            </div>
+          </header>
+
+          <div className="flex shrink-0 items-center gap-1.5 border-b border-border bg-card/70 px-3 py-2">
+            <Button
+              aria-label="Go back"
+              disabled={busy || !state.canGoBack}
+              onClick={() => history("back")}
+              size="icon-sm"
+              variant="outline"
+            >
+              <ArrowLeft />
+            </Button>
+            <Button
+              aria-label="Go forward"
+              disabled={busy || !state.canGoForward}
+              onClick={() => history("forward")}
+              size="icon-sm"
+              variant="outline"
+            >
+              <ArrowRight />
+            </Button>
+            <Button
+              aria-label={state.loading ? "Stop loading" : "Reload"}
+              disabled={busy || state.status !== "open"}
+              onClick={() => history(state.loading ? "stop" : "reload")}
+              size="icon-sm"
+              variant="outline"
+            >
+              {state.loading ? <Square /> : <RefreshCw />}
+            </Button>
+            <label className="sr-only" htmlFor="embedded-browser-url">
+              Browser address
+            </label>
+            <input
+              autoCapitalize="none"
+              autoComplete="off"
+              className="h-8 min-w-0 flex-1 rounded-lg border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              id="embedded-browser-url"
+              onChange={(event) => setUrl(event.currentTarget.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") void navigate();
+              }}
+              placeholder="https://portal.example"
+              spellCheck={false}
+              value={url}
+            />
+            <Button
+              aria-label="Navigate"
+              disabled={busy || !state.tabId || url.trim().length === 0}
+              onClick={navigate}
+              size="icon-sm"
+            >
+              <Send />
+            </Button>
+          </div>
+
+          <div
+            className="relative min-h-0 flex-1 bg-black"
+            data-testid="embedded-browser-viewport"
+            ref={viewportRef}
+          >
+            {state.status !== "open" ? (
+              <div className="absolute inset-0 grid place-items-center text-sm text-white/70">
+                <LoaderCircle className="mr-2 inline size-4 animate-spin" />
+                Opening isolated browser…
+              </div>
+            ) : null}
+          </div>
+
+          <details className="max-h-[38%] shrink-0 overflow-auto border-t border-border bg-card px-3 py-2">
+            <summary className="cursor-pointer text-xs text-muted-foreground">
+              Browser tools
+            </summary>
+            <Button
+              disabled={busy || agentExecuting}
+              onClick={close}
+              size="xs"
+              variant="outline"
+              className="my-2"
+            >
+              End tab session
+            </Button>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                disabled={busy || !state.shared}
+                onClick={() => takeSnapshot("dom-accessibility")}
                 size="xs"
                 variant="outline"
               >
-                <ShieldCheck />
-                Grant 5 minutes
+                <Camera />
+                Page snapshot
               </Button>
-            )}
-          </div>
-          {agentGrant.status === "active" ? (
-            <dl className="mt-2 grid gap-x-3 gap-y-1 text-[11px] sm:grid-cols-[auto_1fr]">
-              <dt className="font-medium">Requester</dt>
-              <dd className="min-w-0 break-all">
-                thread {agentGrant.threadId} · provider {agentGrant.providerInstanceId}
-              </dd>
-              <dt className="font-medium">Page</dt>
-              <dd className="min-w-0 break-all">
-                tab {agentGrant.tabId} · {agentGrant.origin}
-              </dd>
-              <dt className="font-medium">Limits</dt>
-              <dd>
-                {grantSecondsRemaining}s remaining · {agentGrant.requestCount}/
-                {agentGrant.requestLimit} requests
-              </dd>
-              <dt className="font-medium">Pending</dt>
-              <dd>{agentGrant.pendingAction ?? "None"}</dd>
-            </dl>
-          ) : (
-            <div className="mt-1 text-[11px] text-muted-foreground">
-              {requester
-                ? `Ready for thread ${requester.threadId} · provider ${requester.providerInstanceId}.`
-                : "Open a local chat thread to select the exact requester."}
-            </div>
-          )}
-          <div aria-live="polite" className="mt-1 text-[11px] text-muted-foreground">
-            {agentStatus}
-          </div>
-        </div>
-
-        {snapshot ? (
-          <div className="mt-2 grid gap-2 border-t border-border/70 pt-2 lg:grid-cols-[minmax(15rem,0.8fr)_minmax(0,1.2fr)]">
-            <div className="grid content-start gap-2">
-              <label className="grid gap-1 text-xs font-medium" htmlFor="embedded-browser-target">
-                Approved snapshot target
-                <select
-                  className="h-8 min-w-0 rounded-lg border border-input bg-background px-2 text-sm"
-                  id="embedded-browser-target"
-                  onChange={(event) => setSelectedTargetId(event.currentTarget.value)}
-                  value={selectedTargetId}
-                >
-                  {snapshot.targets.map((target) => (
-                    <option key={target.targetId} value={target.targetId}>
-                      {target.sensitive ? "Sensitive · " : ""}
-                      {target.role}: {target.name || target.text || target.targetId}
-                    </option>
-                  ))}
-                </select>
+              <Button
+                disabled={busy || !state.shared}
+                onClick={() => takeSnapshot("ocr")}
+                size="xs"
+                title="Runs bounded offline OCR on only the currently visible isolated-browser viewport."
+                variant="outline"
+              >
+                <ScanText />
+                Visible image text
+              </Button>
+              <label className="sr-only" htmlFor="embedded-browser-ocr-language">
+                OCR language
               </label>
-              <div className="flex flex-wrap gap-1.5">
+              <select
+                className="h-7 rounded-lg border border-input bg-background px-2 text-xs"
+                disabled={busy}
+                id="embedded-browser-ocr-language"
+                onChange={(event) =>
+                  setOcrLanguage(event.currentTarget.value === "jpn" ? "jpn" : "eng")
+                }
+                title="Packaged offline OCR language"
+                value={ocrLanguage}
+              >
+                <option value="eng">English OCR</option>
+                <option value="jpn">Japanese OCR</option>
+              </select>
+              <Button
+                disabled={busy || !snapshot}
+                onClick={addSnapshotToDraft}
+                size="xs"
+                variant="outline"
+              >
+                <MessageSquarePlus />
+                Add to one-time chat context
+              </Button>
+              <span
+                aria-live="polite"
+                className={
+                  state.shared ? "text-xs text-emerald-600" : "text-xs text-muted-foreground"
+                }
+              >
+                {state.shared
+                  ? `Shared origin: ${state.sharedOrigin}. Routine agent actions are authorized until sharing is revoked.`
+                  : "Private: page content and agent-style controls are unavailable."}
+              </span>
+            </div>
+
+            <p className="mt-1.5 text-[11px] leading-4 text-muted-foreground">
+              Direct interactions in the page are yours. Never share an inbox or secret-bearing
+              page; paste credentials or 2FA codes only into the transient sensitive field below.
+            </p>
+
+            <div className="mt-2 rounded-lg border border-border bg-background/70 p-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="mr-auto">
+                  <div className="text-xs font-semibold">Agent Browser access</div>
+                  <div className="text-[11px] text-muted-foreground">
+                    Threads have access by default. Disable access for the current thread below.
+                    Sharing authorizes routine actions on this origin until you revoke access.
+                  </div>
+                </div>
                 <Button
-                  disabled={busy || !selectedTarget}
-                  onClick={clickTarget}
+                  disabled={busy || !requester || !settingsHydrated}
+                  onClick={toggleThreadAccess}
                   size="xs"
                   variant="outline"
                 >
-                  <MousePointerClick />
-                  Click once
+                  {threadAccessDisabled ? <ShieldCheck /> : <Unplug />}
+                  {threadAccessDisabled ? "Enable for this thread" : "Disable for this thread"}
                 </Button>
               </div>
-              <label className="flex items-center gap-2 text-xs">
-                <input
-                  checked={sensitive}
-                  onChange={(event) => setSensitive(event.currentTarget.checked)}
-                  type="checkbox"
-                />
-                Sensitive credential / 2FA entry
-              </label>
-              <div className="flex gap-1.5">
-                <label className="sr-only" htmlFor="embedded-browser-type-value">
-                  One-time text to enter
-                </label>
-                <input
-                  autoComplete="off"
-                  className="h-8 min-w-0 flex-1 rounded-lg border border-input bg-background px-2 text-sm"
-                  id="embedded-browser-type-value"
-                  onChange={(event) => setTypeValue(event.currentTarget.value)}
-                  placeholder={sensitive ? "Transient sensitive value" : "Text to type once"}
-                  type={sensitive ? "password" : "text"}
-                  value={typeValue}
-                />
-                <Button
-                  disabled={busy || !selectedTarget || typeValue.length === 0}
-                  onClick={typeIntoTarget}
-                  size="xs"
-                >
-                  Type once
-                </Button>
+              {agentGrant.status === "active" ? (
+                <dl className="mt-2 grid gap-x-3 gap-y-1 text-[11px] sm:grid-cols-[auto_1fr]">
+                  <dt className="font-medium">Requester</dt>
+                  <dd className="min-w-0 break-all">
+                    thread {agentGrant.threadId} · provider {agentGrant.providerInstanceId}
+                  </dd>
+                  <dt className="font-medium">Page</dt>
+                  <dd className="min-w-0 break-all">
+                    tab {agentGrant.tabId} · {agentGrant.origin}
+                  </dd>
+                  <dt className="font-medium">Pending</dt>
+                  <dd>{agentGrant.pendingAction ?? "None"}</dd>
+                </dl>
+              ) : (
+                <div className="mt-1 text-[11px] text-muted-foreground">
+                  {requester
+                    ? `Ready for thread ${requester.threadId} · provider ${requester.providerInstanceId}.`
+                    : "Open a local chat thread to select the exact requester."}
+                </div>
+              )}
+              <div aria-live="polite" className="mt-1 text-[11px] text-muted-foreground">
+                {agentStatus}
               </div>
             </div>
-            <div className="min-w-0">
-              <div className="text-[11px] text-muted-foreground">{snapshot.redactionNotice}</div>
-              <pre className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap rounded-lg border border-border bg-background p-2 text-xs">
-                {snapshot.text || "No visible DOM text was returned."}
-              </pre>
-              {snapshot.ocr ? (
-                <div className="mt-2">
-                  <div className="flex items-center gap-2">
-                    <div className="mr-auto text-[11px] font-medium">
-                      Visible-viewport offline OCR
-                      {snapshot.ocr.status === "completed"
-                        ? ` · ${snapshot.ocr.language} · ${snapshot.ocr.confidence.toFixed(1)} confidence`
-                        : ""}
-                    </div>
-                    {snapshot.ocr.status === "completed" ? (
-                      <Button
-                        disabled={busy}
-                        onClick={copyOcrText}
-                        size="xs"
-                        title="Copy the redacted OCR preview"
-                        variant="outline"
-                      >
-                        <Copy />
-                        Copy OCR
-                      </Button>
-                    ) : null}
+
+            {snapshot ? (
+              <div className="mt-2 grid gap-2 border-t border-border/70 pt-2 lg:grid-cols-[minmax(15rem,0.8fr)_minmax(0,1.2fr)]">
+                <div className="grid content-start gap-2">
+                  <label
+                    className="grid gap-1 text-xs font-medium"
+                    htmlFor="embedded-browser-target"
+                  >
+                    Approved snapshot target
+                    <select
+                      className="h-8 min-w-0 rounded-lg border border-input bg-background px-2 text-sm"
+                      id="embedded-browser-target"
+                      onChange={(event) => setSelectedTargetId(event.currentTarget.value)}
+                      value={selectedTargetId}
+                    >
+                      {snapshot.targets.map((target) => (
+                        <option key={target.targetId} value={target.targetId}>
+                          {target.sensitive ? "Sensitive · " : ""}
+                          {target.role}: {target.name || target.text || target.targetId}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <div className="flex flex-wrap gap-1.5">
+                    <Button
+                      disabled={busy || !selectedTarget}
+                      onClick={clickTarget}
+                      size="xs"
+                      variant="outline"
+                    >
+                      <MousePointerClick />
+                      Click once
+                    </Button>
+                  </div>
+                  <label className="flex items-center gap-2 text-xs">
+                    <input
+                      checked={sensitive}
+                      onChange={(event) => setSensitive(event.currentTarget.checked)}
+                      type="checkbox"
+                    />
+                    Sensitive credential / 2FA entry
+                  </label>
+                  <div className="flex gap-1.5">
+                    <label className="sr-only" htmlFor="embedded-browser-type-value">
+                      One-time text to enter
+                    </label>
+                    <input
+                      autoComplete="off"
+                      className="h-8 min-w-0 flex-1 rounded-lg border border-input bg-background px-2 text-sm"
+                      id="embedded-browser-type-value"
+                      onChange={(event) => setTypeValue(event.currentTarget.value)}
+                      placeholder={sensitive ? "Transient sensitive value" : "Text to type once"}
+                      type={sensitive ? "password" : "text"}
+                      value={typeValue}
+                    />
+                    <Button
+                      disabled={busy || !selectedTarget || typeValue.length === 0}
+                      onClick={typeIntoTarget}
+                      size="xs"
+                    >
+                      Type once
+                    </Button>
+                  </div>
+                </div>
+                <div className="min-w-0">
+                  <div className="text-[11px] text-muted-foreground">
+                    {snapshot.redactionNotice}
                   </div>
                   <pre className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap rounded-lg border border-border bg-background p-2 text-xs">
-                    {snapshot.ocr.status === "completed"
-                      ? snapshot.ocr.text || "No OCR text was returned."
-                      : snapshot.ocr.reason}
+                    {snapshot.text || "No visible DOM text was returned."}
                   </pre>
+                  {snapshot.ocr ? (
+                    <div className="mt-2">
+                      <div className="flex items-center gap-2">
+                        <div className="mr-auto text-[11px] font-medium">
+                          Visible-viewport offline OCR
+                          {snapshot.ocr.status === "completed"
+                            ? ` · ${snapshot.ocr.language} · ${snapshot.ocr.confidence.toFixed(1)} confidence`
+                            : ""}
+                        </div>
+                        {snapshot.ocr.status === "completed" ? (
+                          <Button
+                            disabled={busy}
+                            onClick={copyOcrText}
+                            size="xs"
+                            title="Copy the redacted OCR preview"
+                            variant="outline"
+                          >
+                            <Copy />
+                            Copy OCR
+                          </Button>
+                        ) : null}
+                      </div>
+                      <pre className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap rounded-lg border border-border bg-background p-2 text-xs">
+                        {snapshot.ocr.status === "completed"
+                          ? snapshot.ocr.text || "No OCR text was returned."
+                          : snapshot.ocr.reason}
+                      </pre>
+                    </div>
+                  ) : null}
                 </div>
-              ) : null}
-            </div>
-          </div>
-        ) : null}
+              </div>
+            ) : null}
 
-        <div aria-live="polite" className="mt-1.5 text-xs text-muted-foreground" role="status">
-          {busy ? "Waiting for approval…" : status}
-        </div>
-      </div>
-    </section>
+            <div aria-live="polite" className="mt-1.5 text-xs text-muted-foreground" role="status">
+              {busy ? "Waiting for approval…" : status}
+            </div>
+          </details>
+          {layout.mode === "floating" && (
+            <div className="flex h-5 shrink-0 justify-end bg-card">
+              <button
+                aria-label="Resize browser"
+                title="Drag to resize"
+                className="flex w-8 touch-none cursor-se-resize items-center justify-center text-muted-foreground"
+                {...layout.controls("resize")}
+              >
+                <Grip className="size-3" />
+              </button>
+            </div>
+          )}
+        </section>
+      )}
+    </>
   );
 }

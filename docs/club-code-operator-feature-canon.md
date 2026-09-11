@@ -148,6 +148,12 @@ authority.
 
 ## Prompt, workflow, and operator surfaces
 
+- Agent Browser access is on by default for supported live provider threads.
+  Preserve a durable per-thread disable option instead of requiring a timed
+  thread grant. Keep page sharing, one-time origin authorization, identity binding,
+  and sensitive-field restrictions. Minimize and Resume retain the same tab
+  and login session. Hide also preserves tabs in a bottom strip. End tab session clears only that tab; app restart ends all tab sessions. Up to eight independent tabs are supported, with a movable, resizable floating panel and adjustable 50/50 chat/browser split view. Agent requests can
+  restore a minimized browser to show the requested action.
 - Preserve exact-thread drafts, visible manual FIFO follow-ups, provider-native
   steering only when active-turn evidence proves it safe, Stop authority, and
   recovery after provider-requested input.
