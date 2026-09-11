@@ -6,6 +6,12 @@
 
 [⬇ Download the Club Code demo (WebM)](https://github.com/John-Ryan21337/club-code/raw/refs/heads/main/docs/images/ClubCodeDemo.webm)
 
+🏮 [Join the Club Code Discord](https://discord.gg/dYwu6cRCr5) — Get setup help,
+share playlists and projects, and discuss contributions.
+
+🏮 [Club CodeのDiscordに参加](https://discord.gg/dYwu6cRCr5) — 導入の相談、
+プレイリストや作品の共有、開発参加の相談はこちら。
+
 Made in Japan with love, too much glitter, and absolutely no chance of catching
 the last train.
 
