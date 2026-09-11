@@ -339,7 +339,7 @@ validationLayer("CodexAdapterLive validation", (it) => {
         model: "gpt-5.3-codex",
         ossMode: false,
         providerInstanceId: ProviderInstanceId.make("codex"),
-        serviceTier: "fast",
+        serviceTier: "priority",
         threadId: asThreadId("thread-1"),
         runtimeMode: "full-access",
         autoCompactTokenLimit: CODEX_DEFAULT_AUTO_COMPACT_TOKEN_LIMIT,
@@ -414,7 +414,7 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
         input: "hello",
         model: "gpt-5.3-codex",
         effort: "high",
-        serviceTier: "fast",
+        serviceTier: "priority",
       });
     }),
   );
@@ -499,7 +499,7 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
         input: "hello",
         model: "gpt-5.3-codex",
         effort: "high",
-        serviceTier: "fast",
+        serviceTier: "priority",
       });
     }).pipe(Effect.provide(customLayer));
   });
@@ -811,7 +811,7 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
               networkAccess: true,
               writableRoots: ["/private/workspace", "/private/secondary-root"],
             },
-            serviceTier: "fast",
+            serviceTier: "priority",
             summary: "detailed",
           },
         },
@@ -827,7 +827,7 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
         model: "gpt-5.4",
         modelProvider: "openai",
         effort: "ultra",
-        serviceTier: "fast",
+        serviceTier: "priority",
         personality: "pragmatic",
         summary: "detailed",
         approvalPolicy: "on-request",

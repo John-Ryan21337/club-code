@@ -5,6 +5,7 @@ import { assert, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import { afterEach, beforeEach, vi } from "vitest";
 
 import {
   MANAGED_WINDOWS_NODE_VERSION,
@@ -26,7 +27,17 @@ import {
 import { BRAND_ASSET_PATHS } from "./lib/brand-assets.ts";
 
 it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
-  it("always emits deterministic official updater metadata", () => {
+  beforeEach(() => {
+    // CI supplies GITHUB_REPOSITORY; each case must choose its own updater source.
+    vi.stubEnv("CAFE_CODE_DESKTOP_UPDATE_REPOSITORY", undefined);
+    vi.stubEnv("GITHUB_REPOSITORY", undefined);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("emits official updater metadata when repository settings are absent", () => {
     assert.deepStrictEqual(resolveGitHubPublishConfig("latest"), {
       provider: "github",
       owner: "cafeai",
@@ -41,6 +52,93 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       channel: "nightly",
     });
   });
+
+  it("uses the GitHub workflow repository for fork releases", () => {
+    vi.stubEnv("GITHUB_REPOSITORY", "John-Ryan21337/club-code");
+    assert.deepStrictEqual(resolveGitHubPublishConfig("latest"), {
+      provider: "github",
+      owner: "John-Ryan21337",
+      repo: "club-code",
+      releaseType: "release",
+    });
+    assert.deepStrictEqual(resolveGitHubPublishConfig("nightly"), {
+      provider: "github",
+      owner: "John-Ryan21337",
+      repo: "club-code",
+      releaseType: "prerelease",
+      channel: "nightly",
+    });
+  });
+
+  it("prefers an explicit updater repository over the workflow repository", () => {
+    vi.stubEnv("CAFE_CODE_DESKTOP_UPDATE_REPOSITORY", " release-owner/desktop-releases ");
+    vi.stubEnv("GITHUB_REPOSITORY", "John-Ryan21337/club-code");
+    assert.deepStrictEqual(resolveGitHubPublishConfig("latest"), {
+      provider: "github",
+      owner: "release-owner",
+      repo: "desktop-releases",
+      releaseType: "release",
+    });
+  });
+
+  it("ignores blank repository settings when selecting the fallback", () => {
+    vi.stubEnv("CAFE_CODE_DESKTOP_UPDATE_REPOSITORY", "  ");
+    vi.stubEnv("GITHUB_REPOSITORY", " John-Ryan21337/club-code ");
+    assert.equal(resolveGitHubPublishConfig("latest")?.owner, "John-Ryan21337");
+    assert.equal(resolveGitHubPublishConfig("latest")?.repo, "club-code");
+
+    vi.stubEnv("GITHUB_REPOSITORY", "  ");
+    assert.deepStrictEqual(resolveGitHubPublishConfig("latest"), {
+      provider: "github",
+      owner: "cafeai",
+      repo: "cafe-code",
+      releaseType: "release",
+    });
+  });
+
+  it("does not replace a malformed explicit target with another updater repository", () => {
+    vi.stubEnv("CAFE_CODE_DESKTOP_UPDATE_REPOSITORY", "invalid/owner/repository");
+    vi.stubEnv("GITHUB_REPOSITORY", "John-Ryan21337/club-code");
+    assert.equal(resolveGitHubPublishConfig("latest"), undefined);
+  });
+
+  it.effect("stamps the same configured publish identity into the packaged manifest", () =>
+    Effect.gen(function* () {
+      for (const [workflowRepository, explicitRepository, owner, repo] of [
+        [undefined, undefined, "cafeai", "cafe-code"],
+        ["John-Ryan21337/club-code", undefined, "John-Ryan21337", "club-code"],
+        [
+          "John-Ryan21337/club-code",
+          "release-owner/desktop-releases",
+          "release-owner",
+          "desktop-releases",
+        ],
+      ]) {
+        vi.stubEnv("GITHUB_REPOSITORY", workflowRepository);
+        vi.stubEnv("CAFE_CODE_DESKTOP_UPDATE_REPOSITORY", explicitRepository);
+        const config = yield* createBuildConfig(
+          "win",
+          "nsis",
+          "0.0.17-nightly.20260413.42",
+          false,
+          false,
+          undefined,
+        );
+        assert.deepStrictEqual(config.extraMetadata, {
+          cafeCodeUpdateTarget: { provider: "github", owner, repo },
+        });
+        assert.deepStrictEqual(config.publish, [
+          {
+            provider: "github",
+            owner,
+            repo,
+            releaseType: "prerelease",
+            channel: "nightly",
+          },
+        ]);
+      }
+    }),
+  );
 
   it("resolves the dedicated nightly updater channel from nightly versions", () => {
     assert.equal(resolveDesktopUpdateChannel("0.0.17-nightly.20260413.42"), "nightly");

@@ -633,44 +633,47 @@ export function ProviderUsageWidget() {
     [nowMs, providers, settings.providerUsagePollMinutes],
   );
 
-  const refresh = useCallback(async () => {
-    if (
-      refreshInFlight.current ||
-      document.visibilityState !== "visible" ||
-      refreshableInstanceIds.length === 0
-    ) {
-      return;
-    }
-    refreshInFlight.current = true;
-    setRefreshing(true);
-    try {
-      const connection = getPrimaryEnvironmentConnection();
-      const results = await Promise.allSettled(
-        refreshableInstanceIds.map((instanceId) =>
-          connection.client.server.refreshProviders({ instanceId, usageOnly: true }),
-        ),
-      );
-      let failed = false;
-      for (const result of results) {
-        if (result.status === "fulfilled") {
-          applyProvidersUpdated(result.value);
-        } else {
-          failed = true;
-        }
+  const refresh = useCallback(
+    async (force = false) => {
+      if (
+        refreshInFlight.current ||
+        document.visibilityState !== "visible" ||
+        refreshableInstanceIds.length === 0
+      ) {
+        return;
       }
-      setRefreshFailed(failed);
-      setNowMs(Date.now());
-    } catch {
-      // The primary environment can disappear between the visibility check
-      // and the RPC lookup. Polling is optional UI telemetry; contain that
-      // race and report an incomplete refresh instead of leaking an unhandled
-      // rejection into the renderer.
-      setRefreshFailed(true);
-    } finally {
-      refreshInFlight.current = false;
-      setRefreshing(false);
-    }
-  }, [refreshableInstanceIds]);
+      refreshInFlight.current = true;
+      setRefreshing(true);
+      try {
+        const connection = getPrimaryEnvironmentConnection();
+        const results = await Promise.allSettled(
+          refreshableInstanceIds.map((instanceId) =>
+            connection.client.server.refreshProviders({ instanceId, usageOnly: true, force }),
+          ),
+        );
+        let failed = false;
+        for (const result of results) {
+          if (result.status === "fulfilled") {
+            applyProvidersUpdated(result.value);
+          } else {
+            failed = true;
+          }
+        }
+        setRefreshFailed(failed);
+        setNowMs(Date.now());
+      } catch {
+        // The primary environment can disappear between the visibility check
+        // and the RPC lookup. Polling is optional UI telemetry; contain that
+        // race and report an incomplete refresh instead of leaking an unhandled
+        // rejection into the renderer.
+        setRefreshFailed(true);
+      } finally {
+        refreshInFlight.current = false;
+        setRefreshing(false);
+      }
+    },
+    [refreshableInstanceIds],
+  );
 
   const redeemResetCredit = useCallback(async (instanceId: ServerProvider["instanceId"]) => {
     setRedeemingInstanceId(instanceId);
@@ -703,14 +706,14 @@ export function ProviderUsageWidget() {
     if (!settings.providerUsageWidgetEnabled) {
       return;
     }
-    void refresh();
+    void refresh(false);
     const intervalId = window.setInterval(
-      () => void refresh(),
+      () => void refresh(false),
       settings.providerUsagePollMinutes * 60_000,
     );
     const onVisibilityChange = () => {
       if (document.visibilityState === "visible") {
-        void refresh();
+        void refresh(false);
       }
     };
     document.addEventListener("visibilitychange", onVisibilityChange);
@@ -767,7 +770,7 @@ export function ProviderUsageWidget() {
           aria-label="Refresh provider usage"
           className="rounded p-1 text-sidebar-foreground/55 hover:bg-sidebar-accent hover:text-sidebar-foreground disabled:opacity-45"
           disabled={refreshing || refreshableInstanceIds.length === 0}
-          onClick={() => void refresh()}
+          onClick={() => void refresh(true)}
           title={refreshFailed ? "Last refresh was incomplete" : "Refresh usage"}
           type="button"
         >

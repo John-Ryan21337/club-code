@@ -167,11 +167,23 @@ function RootRouteView() {
   }
 
   const appShell = (
-    <CommandPalette>
-      <AppSidebarLayout>
-        <Outlet />
-      </AppSidebarLayout>
-    </CommandPalette>
+    <div
+      className="club-browser-chat-shell"
+      style={{
+        position: "relative",
+        contain: "layout",
+        width: "var(--club-browser-chat-width, 100%)",
+        height: "var(--club-browser-chat-height, 100dvh)",
+        minWidth: 0,
+        overflow: "hidden",
+      }}
+    >
+      <CommandPalette>
+        <AppSidebarLayout>
+          <Outlet />
+        </AppSidebarLayout>
+      </CommandPalette>
+    </div>
   );
 
   return (

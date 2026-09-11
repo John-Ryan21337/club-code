@@ -128,7 +128,7 @@ documentation use Club Code.
 | Persistent Auto Nudge                                     | Landed - validation pending | Exact-thread editable prompts, completion-event-only dispatch, manual-FIFO priority, minimized status controls, hard round caps, durable dedupe, and Stop                               |
 | Idle Thread Guard                                         | Landed - validation pending | Separate opt-in running-turn silence guard; hard 1-hour floor, activity reset, one-shot fail-closed dispatch, and explicit paid-usage warning                                           |
 | Matrix depth/perspective motion                           | Implemented                 | Full-viewport Flat/Forward/Reverse/Warp/Walk modes; whole-pixel Walk endpoints, bounded travel/fade, center wind, corners, and depth-scaled lines                                       |
-| Renderer-local Mobile optimized presentation              | Partial                     | One composer toggle now applies a matching presentation profile; its no-profile fallback changes layout only, so the requested Matrix-on guarantee needs repair                         |
+| Renderer-local Mobile optimized presentation              | Partial                     | One composer toggle applies a matching profile; its no-profile fallback enables Rain and preserves other effect settings. Navigation remains viewport/input-driven                      |
 | Camera prompt attachments                                 | Implemented                 | Explicit camera button, front/rear switching where supported, preview-before-attach, system-camera fallback, exact-thread pinning                                                       |
 | Local settings profiles                                   | Landed - validation pending | Exhaustively classified safe presentation fields, confirmed writes/rollback/locks, canonical Desktop/Mobile profile resolution, and mobile-first bootstrap                              |
 | World clock and optional weather                          | Landed - validation pending | One-to-six-city transparent clock; weather is default-off renderer-local consent, excluded from profiles and other clients                                                              |
@@ -1244,7 +1244,7 @@ panels remain clamped and reachable. Native fullscreen remains owned by its
 player.
 
 The composer exposes one touch-sized Desktop/Mobile presentation toggle. It
-reuses the existing responsive sidebar, run-context, chat-padding, and
+reuses the existing responsive run-context, chat-padding, and
 right-panel branches; no second copy of the application UI exists. The active
 layout flag is stored by that browser or desktop renderer and is never
 forwarded through the environment-wide client-settings RPC, so a phone cannot
@@ -1252,23 +1252,27 @@ force a connected desktop into its layout.
 
 At the current head, the toggle first resolves a canonical `Desktop Profile`
 or `Mobile Profile` (or the sole saved profile whose layout flag matches) and
-applies its allowlisted visual settings. Layout is applied before shared visual
-settings so a profile does not render for an intermediate frame in the wrong
-layout. An active Desktop profile may intentionally request desktop layout even
+applies its allowlisted visual settings through one confirmed settings write.
+An active Desktop profile may intentionally request desktop chat layout even
 on a narrow phone. On a mobile renderer with an empty local profile library,
 Club Code seeds one operator-owned `Mobile Profile` snapshot from the current
 safe settings; it does not ship or overwrite a Desktop profile. When no matching
-profile exists, the toggle changes only the renderer-local layout flag.
+profile exists, Mobile enables Rain and preserves the other effect settings;
+Desktop changes only the renderer-local layout flag and leaves Rain on.
 
-That no-profile fallback is a known gap against the earlier requirement that
-explicit Mobile enable must also select and enable Matrix without resetting its
-appearance. The legacy helper and tests still describe that Matrix-on patch,
-but the current profile-authoritative toggle does not call it. Until repaired
-and live-validated, do not claim that every Mobile toggle turns Matrix on or
-that returning to Desktop necessarily preserves a Matrix state created by that
-same toggle. Orientation and safe-area behavior remain viewport-driven,
+Commit `ee84ad0f29fa1709a6021f01de3c4e22153849ec` deliberately changed this fallback
+from Matrix to Rain, including its unit tests. The mounted browser regression
+checks the saved Rain patch and local layout flag together. Navigation follows
+physical viewport/input state, independently of the selected chat profile.
+Toggle labels describe the layout action because a saved profile may select
+different effect settings. Orientation and safe-area behavior remain viewport-driven,
 virtual-keyboard detection remains touch-capability-driven, and any active
 Matrix presentation continues to obey reduced-motion policy.
+
+保存済みプロファイルがある場合は、その表示設定を適用します。該当するプロファイルが
+ない場合、Mobile は Rain（雨）を有効にし、その他のエフェクト設定を保持します。
+プロファイルなしで Desktop に戻しても雨は継続します。ナビゲーションは表示プロファイル
+ではなく、実際の画面幅と入力方式に従います。
 
 Long sessions must not accumulate particles, animation frames, timers,
 listeners, iframes, object URLs, capture tracks, audio graphs, VLC processes,
@@ -1341,10 +1345,9 @@ complete:
     current release tree with mergeable bases, current gate evidence, and no
     unpublished prerequisite branch. Until then, the existing PRs are partial
     review slices rather than a complete reconstruction path.
-15. Repair and verify the profile-authoritative Mobile toggle's no-profile
-    fallback. It must either apply the requested Matrix-on behavior without
-    resetting the operator's Matrix appearance or make the absence of a Mobile
-    profile explicit; dead helper tests are not production proof.
+15. Preserve the verified Mobile no-profile fallback: enable Rain, retain other
+    effect settings, and persist the layout flag locally. Keep mounted browser
+    coverage for desktop navigation, mobile chat/diff layout, and keyboard focus.
 16. Resolve the authority boundary for automatic orphaned-turn continuation
     after restart. The current one-shot deterministic send is visible and
     deduplicated, but it still needs explicit opt-in or an operator-confirmed

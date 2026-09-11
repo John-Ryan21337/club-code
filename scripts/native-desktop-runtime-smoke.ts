@@ -1,13 +1,24 @@
 import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:net";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdir, mkdtemp, open, rm } from "node:fs/promises";
+import { constants as osConstants, tmpdir } from "node:os";
 import { join, posix, resolve, win32 } from "node:path";
-
-import { readJsonFile } from "./json-file.ts";
 
 const SELF_TEST_SWITCH = "--cafe-runtime-self-test";
 const SELF_TEST_RESULT_ENV = "CAFE_CODE_RUNTIME_SELF_TEST_RESULT";
+const SELF_TEST_OUTPUT_PREFIX = "CAFE_CODE_RUNTIME_SELF_TEST=";
+const MAX_SELF_TEST_RESULT_BYTES = 16_384;
+const SELF_TEST_CHECK_NAMES = [
+  "safeStorage",
+  "sqlite",
+  "pty",
+  "packagedResources",
+  "packagedArtifactAudit",
+  "updateMetadata",
+  "managedRuntime",
+  "windowOpacity",
+] as const;
+const SELF_TEST_FAILURE_NAMES = [...SELF_TEST_CHECK_NAMES, "bootstrap", "resultFile"] as const;
 const DISABLE_CHROMIUM_SANDBOX_ENV = "CAFE_CODE_NATIVE_SMOKE_DISABLE_CHROMIUM_SANDBOX";
 const ENVIRONMENT_ENDPOINT_PATH = "/.well-known/cafe-code/environment";
 const DEBUG_URL_PATTERN = /\[Club Code debug\]\s+(http:\/\/127\.0\.0\.1:\d+\/debug)\b/;
@@ -259,6 +270,92 @@ export function assertRuntimeSelfTestResult(
   return value as RuntimeSelfTestResult;
 }
 
+function readStructuredSelfTestReport(value: unknown): Record<string, unknown> | undefined {
+  const record = readRecord(value);
+  return typeof record?.ok === "boolean" && readRecord(record.checks) ? record : undefined;
+}
+
+function readSelfTestOutput(output: string): Record<string, unknown> | undefined {
+  const lines = output.slice(-MAX_SELF_TEST_RESULT_BYTES).split(/\r?\n/);
+  for (const line of lines.toReversed()) {
+    if (!line.startsWith(SELF_TEST_OUTPUT_PREFIX)) continue;
+    try {
+      const report = readStructuredSelfTestReport(
+        JSON.parse(line.slice(SELF_TEST_OUTPUT_PREFIX.length)),
+      );
+      if (report) return report;
+    } catch {
+      // Unstructured native output is never included in failure diagnostics.
+    }
+  }
+  return undefined;
+}
+
+export function assertRuntimeSelfTestProcessResult(
+  processResult: ProcessResult,
+  report: unknown,
+  expectedPlatform: NodeJS.Platform = process.platform,
+  expectedArch: string = process.arch,
+): RuntimeSelfTestResult {
+  if (processResult.exitCode === 0) {
+    try {
+      return assertRuntimeSelfTestResult(report, expectedPlatform, expectedArch);
+    } catch {
+      // A successful exit still requires the persisted, complete runtime report.
+    }
+  }
+  const fileReport = readStructuredSelfTestReport(report);
+  const stdoutReport = readSelfTestOutput(processResult.stdout);
+  const stderrReport = readSelfTestOutput(processResult.stderr);
+  const diagnosticReport = fileReport ?? stdoutReport ?? stderrReport;
+  const checks = readRecord(diagnosticReport?.checks);
+  const failedChecks = Array.isArray(diagnosticReport?.failedChecks)
+    ? diagnosticReport.failedChecks
+    : [];
+  const diagnostics = {
+    exitCode: Number.isInteger(processResult.exitCode) ? processResult.exitCode : null,
+    signal:
+      processResult.signal && Object.hasOwn(osConstants.signals, processResult.signal)
+        ? processResult.signal
+        : null,
+    reportSource: fileReport
+      ? "file"
+      : stdoutReport
+        ? "stdout"
+        : stderrReport
+          ? "stderr"
+          : "unavailable",
+    ok: typeof diagnosticReport?.ok === "boolean" ? diagnosticReport.ok : null,
+    isPackaged:
+      typeof diagnosticReport?.isPackaged === "boolean" ? diagnosticReport.isPackaged : null,
+    platformMatches: diagnosticReport?.platform === expectedPlatform,
+    archMatches: diagnosticReport?.arch === expectedArch,
+    checks: Object.fromEntries(
+      SELF_TEST_CHECK_NAMES.map((name) => [
+        name,
+        typeof checks?.[name] === "boolean" || checks?.[name] === null ? checks[name] : "missing",
+      ]),
+    ),
+    failedChecks: SELF_TEST_FAILURE_NAMES.filter((name) => failedChecks.includes(name)),
+  };
+  throw new Error(`Packaged desktop runtime self-test failed: ${JSON.stringify(diagnostics)}`);
+}
+
+async function readBoundedSelfTestReport(resultPath: string): Promise<unknown> {
+  const handle = await open(resultPath, "r").catch(() => undefined);
+  if (!handle) return undefined;
+  try {
+    const bytes = Buffer.alloc(MAX_SELF_TEST_RESULT_BYTES + 1);
+    const { bytesRead } = await handle.read(bytes, 0, bytes.length, 0);
+    if (bytesRead > MAX_SELF_TEST_RESULT_BYTES) return undefined;
+    return JSON.parse(bytes.subarray(0, bytesRead).toString("utf8"));
+  } catch {
+    return undefined;
+  } finally {
+    await handle.close();
+  }
+}
+
 async function runPackagedRuntimeSelfTest(
   appPath: string,
   environment: NodeJS.ProcessEnv,
@@ -270,9 +367,8 @@ async function runPackagedRuntimeSelfTest(
     ["--disable-gpu", ...desktopSmokeChromiumSwitches(environment), SELF_TEST_SWITCH],
     { env: { ...environment, [SELF_TEST_RESULT_ENV]: resultPath } },
   );
-  if (result.exitCode !== 0) throw new Error("Packaged desktop runtime self-test exited nonzero.");
-  const decoded = await readJsonFile(resultPath);
-  return assertRuntimeSelfTestResult(decoded);
+  const decoded = await readBoundedSelfTestReport(resultPath);
+  return assertRuntimeSelfTestProcessResult(result, decoded);
 }
 
 async function stopPackagedProcessTree(

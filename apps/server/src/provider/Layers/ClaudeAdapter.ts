@@ -336,7 +336,7 @@ interface ClaudeSessionContext {
     id: TurnId;
     items: Array<unknown>;
   }>;
-  readonly inFlightTools: Map<number, ToolInFlight>;
+  readonly inFlightTools: Map<string, ToolInFlight>;
   readonly backgroundTaskIds: Set<string>;
   readonly promptLifecycleByUuid: Map<string, ClaudePromptLifecycleState>;
   readonly capabilities: Set<string>;
@@ -424,6 +424,26 @@ function recordValue(value: unknown): Record<string, unknown> | undefined {
 
 function trimmedStringValue(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+/**
+ * Key for {@link ClaudeSessionContext.inFlightTools}.
+ *
+ * The Agent SDK forwards a sub-agent's `tool_use`/`tool_result` blocks into the
+ * parent stream with their own block indexes, which restart at 0 per nested
+ * turn. Keying in-flight tools by the raw block index therefore lets a
+ * sub-agent's block 0 overwrite the orchestrator's block 0, so the parent's
+ * `content_block_stop` / `tool_result` resolves against the child's entry and
+ * the parent call is orphaned or completed with the wrong payload. Scoping the
+ * key by `parent_tool_use_id` keeps the two streams in separate namespaces.
+ *
+ * A length prefix makes this unambiguous even if an upstream tool id itself
+ * contains separators. This key remains internal and is never persisted.
+ */
+function claudeStreamBlockKey(parentToolUseId: string | undefined, blockIndex: number): string {
+  return parentToolUseId === undefined
+    ? `root:${blockIndex}`
+    : `child:${parentToolUseId.length}:${parentToolUseId}:${blockIndex}`;
 }
 
 function isClaudeCommandLifecycleState(value: unknown): value is ClaudeCommandLifecycleState {
@@ -2614,7 +2634,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       return;
     }
 
-    for (const [index, tool] of context.inFlightTools.entries()) {
+    for (const [blockKey, tool] of context.inFlightTools.entries()) {
       const toolStamp = yield* makeEventStamp();
       yield* offerRuntimeEvent({
         type: "item.completed",
@@ -2643,7 +2663,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           payload: result ?? { status },
         },
       });
-      context.inFlightTools.delete(index);
+      context.inFlightTools.delete(blockKey);
     }
     // Clear any remaining stale entries (e.g. from interrupted content blocks).
     context.inFlightTools.clear();
@@ -2815,12 +2835,26 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     }
 
     const { event } = message;
-    const normalizedUsage = normalizeClaudeMessageTokenUsage(
-      claudeStreamEventUsagePayload(message),
-      context.selectedContextWindowTokens ?? context.lastKnownContextWindow,
-    );
-    if (normalizedUsage) {
-      yield* emitThreadTokenUsageUpdate(context, normalizedUsage);
+    // A non-empty `parent_tool_use_id` means these blocks belong to a
+    // sub-agent's turn, not the orchestrator's. Treat only a non-empty string
+    // as attribution so a malformed value degrades to "unattributed" rather
+    // than inventing a delegating tool that does not exist.
+    const parentToolUseId =
+      typeof message.parent_tool_use_id === "string" && message.parent_tool_use_id.length > 0
+        ? message.parent_tool_use_id
+        : undefined;
+    // Usage on a sub-agent's stream describes that child's fresh context, not
+    // the orchestrator's. Replacing the thread's last-known usage with it made
+    // the context-window meter drop to the child's size and flap for the rest
+    // of the turn.
+    if (parentToolUseId === undefined) {
+      const normalizedUsage = normalizeClaudeMessageTokenUsage(
+        claudeStreamEventUsagePayload(message),
+        context.selectedContextWindowTokens ?? context.lastKnownContextWindow,
+      );
+      if (normalizedUsage) {
+        yield* emitThreadTokenUsageUpdate(context, normalizedUsage);
+      }
     }
 
     if (event.type === "content_block_delta") {
@@ -2828,6 +2862,13 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         (event.delta.type === "text_delta" || event.delta.type === "thinking_delta") &&
         context.turnState
       ) {
+        if (parentToolUseId !== undefined) {
+          // The Agent SDK withholds sub-agent prose by default; if a build ever
+          // forwards it, its block indexes restart at 0 and would splice into
+          // (or prematurely close) the orchestrator's own text block at the
+          // same index. Delegated tool blocks are keyed separately below.
+          return;
+        }
         const deltaText =
           event.delta.type === "text_delta"
             ? event.delta.text
@@ -2880,7 +2921,8 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       }
 
       if (event.delta.type === "input_json_delta") {
-        const tool = context.inFlightTools.get(event.index);
+        const blockKey = claudeStreamBlockKey(parentToolUseId, event.index);
+        const tool = context.inFlightTools.get(blockKey);
         if (!tool || typeof event.delta.partial_json !== "string") {
           return;
         }
@@ -2899,7 +2941,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           parsedInput && Object.keys(parsedInput).length > 0
             ? toolInputFingerprint(parsedInput)
             : undefined;
-        context.inFlightTools.set(event.index, nextTool);
+        context.inFlightTools.set(blockKey, nextTool);
 
         if (
           !parsedInput ||
@@ -2913,7 +2955,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           ...nextTool,
           lastEmittedInputFingerprint: nextFingerprint,
         };
-        context.inFlightTools.set(event.index, nextTool);
+        context.inFlightTools.set(blockKey, nextTool);
 
         const stamp = yield* makeEventStamp();
         yield* offerRuntimeEvent({
@@ -2978,6 +3020,9 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     if (event.type === "content_block_start") {
       const { index, content_block: block } = event;
       if (block.type === "text") {
+        if (parentToolUseId !== undefined) {
+          return;
+        }
         yield* ensureAssistantTextBlock(context, index, {
           fallbackText: extractContentBlockText(block),
         });
@@ -3002,15 +3047,6 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       const inputFingerprint =
         Object.keys(toolInput).length > 0 ? toolInputFingerprint(toolInput) : undefined;
 
-      // A non-empty `parent_tool_use_id` means this block belongs to a
-      // sub-agent's turn, not the orchestrator's. Treat only a non-empty
-      // string as attribution so a malformed value degrades to "unattributed"
-      // rather than inventing a delegating tool that does not exist.
-      const parentToolUseId =
-        typeof message.parent_tool_use_id === "string" && message.parent_tool_use_id.length > 0
-          ? message.parent_tool_use_id
-          : undefined;
-
       const tool: ToolInFlight = {
         itemId,
         itemType,
@@ -3022,7 +3058,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         ...(inputFingerprint ? { lastEmittedInputFingerprint: inputFingerprint } : {}),
         ...(parentToolUseId ? { parentToolUseId } : {}),
       };
-      context.inFlightTools.set(index, tool);
+      context.inFlightTools.set(claudeStreamBlockKey(parentToolUseId, index), tool);
 
       const stamp = yield* makeEventStamp();
       yield* offerRuntimeEvent({
@@ -3058,7 +3094,13 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
 
     if (event.type === "content_block_stop") {
       const { index } = event;
-      const assistantBlock = context.turnState?.assistantTextBlocks.get(index);
+      // Sub-agent blocks never own an assistant text block (see the delta and
+      // start guards), so their stop must not close the orchestrator's block at
+      // the same index.
+      const assistantBlock =
+        parentToolUseId === undefined
+          ? context.turnState?.assistantTextBlocks.get(index)
+          : undefined;
       if (assistantBlock) {
         assistantBlock.streamClosed = true;
         yield* completeAssistantTextBlock(context, assistantBlock, {
@@ -3067,7 +3109,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         });
         return;
       }
-      const tool = context.inFlightTools.get(index);
+      const tool = context.inFlightTools.get(claudeStreamBlockKey(parentToolUseId, index));
       if (!tool) {
         return;
       }
@@ -3094,7 +3136,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         continue;
       }
 
-      const [index, tool] = toolEntry;
+      const [blockKey, tool] = toolEntry;
       const itemStatus = toolResult.isError ? "failed" : "completed";
       const toolData = {
         toolName: tool.toolName,
@@ -3180,7 +3222,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         },
       });
 
-      context.inFlightTools.delete(index);
+      context.inFlightTools.delete(blockKey);
     }
   });
 
@@ -4436,7 +4478,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
 
       const pendingApprovals = new Map<ApprovalRequestId, PendingApproval>();
       const pendingUserInputs = new Map<ApprovalRequestId, PendingUserInput>();
-      const inFlightTools = new Map<number, ToolInFlight>();
+      const inFlightTools = new Map<string, ToolInFlight>();
 
       const contextRef = yield* Ref.make<ClaudeSessionContext | undefined>(undefined);
 

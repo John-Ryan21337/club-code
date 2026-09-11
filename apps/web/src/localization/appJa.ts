@@ -5,6 +5,12 @@
  * and repository content must not be translated through this catalog.
  */
 export const APP_JA: Readonly<Record<string, string>> = {
+  "Turn off Mobile optimized presentation for this screen":
+    "この画面のモバイル最適化表示をオフにする",
+  "Switch to desktop presentation": "デスクトップ表示に切り替える",
+  "Mobile layout is active for this screen; switch to Mobile optimized presentation":
+    "この画面はモバイルレイアウトです。モバイル最適化表示に切り替える",
+  "Switch to Mobile optimized presentation": "モバイル最適化表示に切り替える",
   // Common actions and status
   Access: "アクセス",
   Add: "追加",

@@ -10,9 +10,11 @@ import type {
   ServerProviderState,
   ServerProviderRuntimeCapabilities,
   ServerProviderAccountRateLimits,
+  ServerProviderProbePhaseDiagnostics,
 } from "@cafecode/contracts";
 import * as Effect from "effect/Effect";
 import * as Data from "effect/Data";
+import * as Duration from "effect/Duration";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { normalizeModelSlug } from "@cafecode/shared/model";
@@ -44,6 +46,7 @@ export interface ProviderProbeResult {
   readonly authActions?: ServerProviderAuthActions;
   readonly message?: string;
   readonly accountRateLimits?: ServerProviderAccountRateLimits;
+  readonly phases?: ReadonlyArray<ServerProviderProbePhaseDiagnostics>;
 }
 
 export interface ServerProviderPresentation {
@@ -65,11 +68,63 @@ export function isCommandMissingCause(error: { readonly message: string }): bool
   return lower.includes("enoent") || lower.includes("notfound");
 }
 
-export const spawnAndCollect = (binaryPath: string, command: ChildProcess.Command) =>
+interface TerminableChildProcess {
+  readonly isRunning: Effect.Effect<boolean, unknown>;
+  readonly kill: (options?: ChildProcess.KillOptions) => Effect.Effect<void, unknown>;
+  /** Resolves once the process has exited; optional so narrow test doubles still type. */
+  readonly exitCode?: Effect.Effect<unknown, unknown>;
+}
+
+/**
+ * Gives a disposable probe child one graceful interval, then escalates to an
+ * actual SIGKILL and waits one more bounded interval. Effect's Node spawner
+ * currently applies `forceKillAfter` only around signal dispatch, which is
+ * synchronous on POSIX; it does not bound the subsequent wait for process
+ * exit. Running this cleanup before the scope finalizer ensures a timeout
+ * cannot leave that finalizer waiting forever on an ignored SIGTERM.
+ */
+export const terminateProbeChild = (
+  child: TerminableChildProcess,
+  grace: Duration.Input,
+): Effect.Effect<void> =>
+  child.isRunning.pipe(
+    Effect.catch(() => Effect.succeed(true)),
+    Effect.flatMap((running) => {
+      if (!running) return Effect.void;
+      // `kill` resolves as soon as the signal is dispatched, so the grace must be
+      // measured against the exit itself: send SIGTERM, wait up to `grace` for
+      // the process to leave, then escalate to SIGKILL and wait once more.
+      // A handle without an exit signal is treated as never exiting so the
+      // escalation below still runs and the wait stays bounded by `grace`.
+      const awaitExit = (child.exitCode ?? Effect.never).pipe(Effect.ignore);
+      // Each stage bounds signal dispatch and the exit wait together, so a
+      // handle whose `kill` itself stalls still escalates on schedule.
+      return child.kill({ killSignal: "SIGTERM" }).pipe(
+        Effect.andThen(awaitExit),
+        Effect.timeoutOrElse({
+          duration: grace,
+          orElse: () =>
+            child
+              .kill({ killSignal: "SIGKILL" })
+              .pipe(
+                Effect.andThen(awaitExit),
+                Effect.timeoutOrElse({ duration: grace, orElse: () => Effect.void }),
+              ),
+        }),
+        Effect.ignore,
+      );
+    }),
+  );
+
+export const spawnAndCollect = (
+  binaryPath: string,
+  command: ChildProcess.Command,
+  options?: { readonly terminationGrace?: Duration.Input },
+) =>
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const child = yield* spawner.spawn(command);
-    const [stdout, stderr, exitCode] = yield* Effect.all(
+    const collect = Effect.all(
       [
         collectStreamAsString(child.stdout),
         collectStreamAsString(child.stderr),
@@ -77,6 +132,9 @@ export const spawnAndCollect = (binaryPath: string, command: ChildProcess.Comman
       ],
       { concurrency: "unbounded" },
     );
+    const [stdout, stderr, exitCode] = yield* options?.terminationGrace !== undefined
+      ? collect.pipe(Effect.ensuring(terminateProbeChild(child, options.terminationGrace)))
+      : collect;
 
     const result: CommandResult = { stdout, stderr, code: exitCode };
     if (isWindowsCommandNotFound(exitCode, stderr)) {
@@ -232,6 +290,7 @@ export function buildServerProvider(input: {
     slashCommands: [...(input.slashCommands ?? [])],
     skills: [...(input.skills ?? [])],
     ...(input.probe.accountRateLimits ? { accountRateLimits: input.probe.accountRateLimits } : {}),
+    ...(input.probe.phases ? { probePhases: [...input.probe.phases] } : {}),
     runtimeCapabilities: input.runtimeCapabilities ?? {
       liveSteer: "unsupported",
       accountUsage: "unsupported",

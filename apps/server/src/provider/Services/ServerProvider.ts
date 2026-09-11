@@ -16,7 +16,9 @@ export interface ServerProviderShape {
    * binary health/authentication probes. Providers that do not expose a
    * bounded usage-only path omit this capability.
    */
-  readonly refreshAccountUsage?: Effect.Effect<ServerProvider>;
+  readonly refreshAccountUsage?: (options?: {
+    readonly force?: boolean;
+  }) => Effect.Effect<ServerProvider>;
   /**
    * Redeem one usage-limit reset credit and return both the upstream outcome
    * and the provider snapshot re-read afterwards. Providers whose accounts

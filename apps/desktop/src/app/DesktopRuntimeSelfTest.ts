@@ -275,40 +275,52 @@ export async function collectDesktopRuntimeSelfTestResult(
   };
 }
 
-export async function runDesktopRuntimeSelfTestAndExit(): Promise<void> {
-  let result: DesktopRuntimeSelfTestResult;
+// The opacity check closes its temporary window while other checks can still
+// be running. Keep Electron alive until the report is written and we exit.
+function keepRuntimeSelfTestAlive(): void {}
+
+export async function runDesktopRuntimeSelfTestAndExit(
+  dependencies?: DesktopRuntimeSelfTestDependencies,
+): Promise<void> {
+  Electron.app.on("window-all-closed", keepRuntimeSelfTestAlive);
   try {
-    result = await collectDesktopRuntimeSelfTestResult(makeRealDependencies());
-  } catch {
-    result = {
-      ok: false,
-      platform: process.platform,
-      arch: process.arch,
-      isPackaged: Electron.app.isPackaged,
-      checks: {
-        safeStorage: false,
-        sqlite: false,
-        pty: false,
-        packagedResources: false,
-        packagedArtifactAudit: false,
-        updateMetadata: false,
-        managedRuntime: process.platform === "win32" ? false : null,
-        windowOpacity: process.platform === "win32" || process.platform === "darwin" ? false : null,
-      },
-      failedChecks: ["bootstrap"],
-    };
-  }
-
-  const encoded = `${JSON.stringify(result)}\n`;
-  const resultPath = process.env[DESKTOP_RUNTIME_SELF_TEST_RESULT_ENV]?.trim();
-  if (resultPath) {
+    let result: DesktopRuntimeSelfTestResult;
     try {
-      await writeFile(resultPath, encoded, { encoding: "utf8", flag: "wx", mode: 0o600 });
+      result = await collectDesktopRuntimeSelfTestResult(dependencies ?? makeRealDependencies());
     } catch {
-      result = { ...result, ok: false, failedChecks: [...result.failedChecks, "resultFile"] };
+      result = {
+        ok: false,
+        platform: process.platform,
+        arch: process.arch,
+        isPackaged: Electron.app.isPackaged,
+        checks: {
+          safeStorage: false,
+          sqlite: false,
+          pty: false,
+          packagedResources: false,
+          packagedArtifactAudit: false,
+          updateMetadata: false,
+          managedRuntime: process.platform === "win32" ? false : null,
+          windowOpacity:
+            process.platform === "win32" || process.platform === "darwin" ? false : null,
+        },
+        failedChecks: ["bootstrap"],
+      };
     }
-  }
 
-  console.info(`${DESKTOP_RUNTIME_SELF_TEST_OUTPUT_PREFIX}${JSON.stringify(result)}`);
-  Electron.app.exit(result.ok ? 0 : 1);
+    const encoded = `${JSON.stringify(result)}\n`;
+    const resultPath = process.env[DESKTOP_RUNTIME_SELF_TEST_RESULT_ENV]?.trim();
+    if (resultPath) {
+      try {
+        await writeFile(resultPath, encoded, { encoding: "utf8", flag: "wx", mode: 0o600 });
+      } catch {
+        result = { ...result, ok: false, failedChecks: [...result.failedChecks, "resultFile"] };
+      }
+    }
+
+    console.info(`${DESKTOP_RUNTIME_SELF_TEST_OUTPUT_PREFIX}${JSON.stringify(result)}`);
+    Electron.app.exit(result.ok ? 0 : 1);
+  } finally {
+    Electron.app.removeListener("window-all-closed", keepRuntimeSelfTestAlive);
+  }
 }

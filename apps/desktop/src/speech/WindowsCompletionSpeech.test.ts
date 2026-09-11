@@ -1,9 +1,14 @@
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import {
   getWindowsCompletionSpeechCapability,
   synthesizeWindowsCompletionSpeech,
+  type WindowsCompletionSpeechDependencies,
 } from "./WindowsCompletionSpeech.ts";
+
+const speechFixtureDirectory = join(tmpdir(), "cafe-code-speech-fixture");
 
 function shortPcmWav(durationSeconds = 0.01): Buffer {
   const bytesPerSecond = 8_000;
@@ -78,41 +83,49 @@ describe("WindowsCompletionSpeech", () => {
 
   it("synthesizes only the fixed enum request and cleans its temporary directory", async () => {
     const removeTempDirectory = vi.fn(async () => {});
-    const runPowerShell = vi.fn(async (script, environment) => {
-      const haruka = script.indexOf("Microsoft Haruka Desktop");
-      const ayumi = script.indexOf("Microsoft Ayumi Desktop");
-      const zira = script.indexOf("Microsoft Zira Desktop");
-      expect(haruka).toBeGreaterThan(-1);
-      expect(ayumi).toBeGreaterThan(haruka);
-      expect(zira).toBeGreaterThan(ayumi);
-      expect(script).toContain("$match = $matches | Select-Object -First 1");
-      expect(script).toContain("作業が完了しました。");
-      expect(environment).toEqual({
-        CAFE_CODE_SPEECH_LANGUAGE: "ja",
-        CAFE_CODE_SPEECH_GENDER: "female",
-        CAFE_CODE_SPEECH_OUTPUT: "C:\\safe-temp\\completion.wav",
-      });
-      return JSON.stringify({
-        unavailable: false,
-        name: "Japanese Voice",
-        language: "ja",
-        culture: "ja-JP",
-        gender: "female",
-      });
-    });
+    const runPowerShell = vi.fn<NonNullable<WindowsCompletionSpeechDependencies["runPowerShell"]>>(
+      async () =>
+        JSON.stringify({
+          unavailable: false,
+          name: "Japanese Voice",
+          language: "ja",
+          culture: "ja-JP",
+          gender: "female",
+        }),
+    );
+    const readWav = vi.fn(async () => shortPcmWav());
     const result = await synthesizeWindowsCompletionSpeech(
       { language: "ja", gender: "female" },
       {
         platform: "win32",
         runPowerShell,
-        makeTempDirectory: async () => "C:\\safe-temp",
-        readWav: async () => shortPcmWav(),
+        makeTempDirectory: async () => speechFixtureDirectory,
+        readWav,
         removeTempDirectory,
       },
     );
+    // Assert after synthesis: the native boundary intentionally catches runner
+    // errors, which would otherwise conceal a failing assertion in the mock.
+    expect(runPowerShell).toHaveBeenCalledOnce();
+    const [script, environment] = runPowerShell.mock.calls[0]!;
+    const haruka = script.indexOf("Microsoft Haruka Desktop");
+    const ayumi = script.indexOf("Microsoft Ayumi Desktop");
+    const zira = script.indexOf("Microsoft Zira Desktop");
+    expect(haruka).toBeGreaterThan(-1);
+    expect(ayumi).toBeGreaterThan(haruka);
+    expect(zira).toBeGreaterThan(ayumi);
+    expect(script).toContain("$match = $matches | Select-Object -First 1");
+    expect(script).toContain("作業が完了しました。");
+    expect(environment).toEqual({
+      CAFE_CODE_SPEECH_LANGUAGE: "ja",
+      CAFE_CODE_SPEECH_GENDER: "female",
+      CAFE_CODE_SPEECH_OUTPUT: join(speechFixtureDirectory, "completion.wav"),
+    });
+    expect(readWav).toHaveBeenCalledExactlyOnceWith(join(speechFixtureDirectory, "completion.wav"));
     expect(result.clip?.voice.name).toBe("Japanese Voice");
     expect(result.clip?.wavBase64).toBe(shortPcmWav().toString("base64"));
-    expect(removeTempDirectory).toHaveBeenCalledWith("C:\\safe-temp");
+    expect(result.reason).toBeNull();
+    expect(removeTempDirectory).toHaveBeenCalledExactlyOnceWith(speechFixtureDirectory);
   });
 
   it("does not substitute a different voice when the requested match is absent", async () => {
@@ -121,7 +134,7 @@ describe("WindowsCompletionSpeech", () => {
       {
         platform: "win32",
         runPowerShell: async () => JSON.stringify({ unavailable: true }),
-        makeTempDirectory: async () => "C:\\safe-temp",
+        makeTempDirectory: async () => speechFixtureDirectory,
         removeTempDirectory: async () => {},
       },
     );
@@ -143,7 +156,7 @@ describe("WindowsCompletionSpeech", () => {
             culture: "en-US",
             gender: "female",
           }),
-        makeTempDirectory: async () => "C:\\safe-temp",
+        makeTempDirectory: async () => speechFixtureDirectory,
         readWav: async () => Buffer.alloc(1_000_001),
         removeTempDirectory,
       },
@@ -156,7 +169,7 @@ describe("WindowsCompletionSpeech", () => {
   it("rejects malformed, overlong, and culture-mismatched native results", async () => {
     const baseDependencies = {
       platform: "win32" as const,
-      makeTempDirectory: async () => "C:\\safe-temp",
+      makeTempDirectory: async () => speechFixtureDirectory,
       removeTempDirectory: async () => {},
     };
     const metadata = {

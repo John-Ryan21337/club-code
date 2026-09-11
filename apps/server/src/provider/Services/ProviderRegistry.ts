@@ -59,6 +59,7 @@ export interface ProviderRegistryShape {
    */
   readonly refreshInstanceAccountUsage: (
     instanceId: ProviderInstanceId,
+    options?: { readonly force?: boolean },
   ) => Effect.Effect<ReadonlyArray<ServerProvider>>;
 
   /**

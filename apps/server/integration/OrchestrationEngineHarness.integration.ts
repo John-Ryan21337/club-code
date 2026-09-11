@@ -327,6 +327,10 @@ export const makeOrchestrationIntegrationHarness = (
       Layer.provideMerge(gitWorkflowLayer),
       Layer.provideMerge(textGenerationLayer),
       Layer.provideMerge(serverSettingsLayer),
+      // Startup recovery reads the durable provider session bindings to tell a
+      // turn that a live runtime still owns from one whose runtime was lost.
+      // The same memoized directory instance already backs `providerLayer`.
+      Layer.provide(providerSessionDirectoryLayer),
     );
     const checkpointReactorLayer = CheckpointReactorLive.pipe(
       Layer.provideMerge(runtimeServicesLayer),

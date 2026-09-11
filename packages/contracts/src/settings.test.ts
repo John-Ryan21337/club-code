@@ -233,6 +233,14 @@ describe("client settings", () => {
     expect(decodeClientSettings({}).chatCopyFormat).toBe("markdown");
   });
 
+  it("defaults browser access on and preserves explicit thread opt-outs", () => {
+    expect(decodeClientSettings({}).agentBrowserDisabledThreadIds).toEqual([]);
+    const patch = { agentBrowserDisabledThreadIds: ["thread-disabled"] };
+    expect(decodeClientSettingsPatch(patch)).toEqual(patch);
+    expect(decodeClientSettings(patch).agentBrowserDisabledThreadIds).toEqual(["thread-disabled"]);
+    expect(() => decodeClientSettingsPatch({ agentBrowserDisabledThreadIds: [""] })).toThrow();
+  });
+
   it("accepts only supported chat copy formats in patches", () => {
     expect(decodeClientSettingsPatch({ chatCopyFormat: "plainText" })).toEqual({
       chatCopyFormat: "plainText",

@@ -190,6 +190,7 @@ export const SETTINGS_PROFILE_CLIENT_FIELD_POLICY = {
   sidebarThreadPreviewCount: "include",
   timestampFormat: "include",
   chatCopyFormat: "include",
+  agentBrowserDisabledThreadIds: "exact-thread-authority",
 } as const satisfies Record<keyof ClientSettings, SettingsProfileClientFieldPolicy>;
 
 export type SettingsProfileClientKey = {

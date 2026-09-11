@@ -1,7 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import { DatabaseSync } from "node:sqlite";
 import { constants } from "node:fs";
-import { extname, isAbsolute, relative, resolve, sep } from "node:path";
+import { basename, dirname, extname, isAbsolute, relative, resolve, sep } from "node:path";
 import { lstat, open, opendir, realpath, stat } from "node:fs/promises";
 
 import {
@@ -496,7 +496,13 @@ export class WorkspaceObservatory {
     await this.assertWorkspaceAllowed(input.cwd);
     if (input.database === "club-code-state") {
       if (!(await isSqliteFile(this.stateDbPath))) fail("Club Code state database is unavailable.");
-      return this.stateDbPath;
+      // Parent aliases (for example /var -> /private/var) identify the same
+      // configured database. Keep the final component unresolved so O_NOFOLLOW
+      // still rejects a substituted file symlink when the descriptor is pinned.
+      const parent = await realpath(dirname(this.stateDbPath)).catch(() =>
+        fail("Club Code state database is unavailable."),
+      );
+      return resolve(parent, basename(this.stateDbPath));
     }
     const target = (await resolveWorkspaceTarget(input.cwd, input.database)).target;
     if (!(await isSqliteFile(target))) fail("Database must be a verified SQLite file.");

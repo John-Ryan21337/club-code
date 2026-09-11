@@ -6,6 +6,7 @@ import { performance } from "node:perf_hooks";
 import { setImmediate as waitForEventLoopTurn } from "node:timers/promises";
 
 import {
+  type OrchestrationCommand,
   OrchestrationReadModel,
   ProviderDriverKind,
   ProviderRuntimeEvent,
@@ -127,6 +128,8 @@ function createProviderServiceHarness() {
     stopSession: () => unsupported(),
     restartProviderRuntime: () => unsupported(),
     listSessions: () => Effect.succeed([...runtimeSessions]),
+    listSessionsInventory: () =>
+      Effect.succeed({ available: true, sessions: [...runtimeSessions] }),
     getCapabilities: () =>
       Effect.succeed({ sessionModelSwitch: "in-session", liveSteer: "unsupported" }),
     getInstanceInfo: (instanceId) => {
@@ -243,11 +246,18 @@ describe("ProviderRuntimeIngestion", () => {
     }
   });
 
-  async function createHarness(options?: { serverSettings?: Partial<ServerSettings> }) {
+  async function createHarness(options?: {
+    serverSettings?: Partial<ServerSettings>;
+    /**
+     * Fail specific orchestration commands so a test can prove that derived,
+     * best-effort writes cannot strand the terminal turn session write.
+     */
+    failDispatch?: (command: OrchestrationCommand) => boolean;
+  }) {
     const workspaceRoot = makeTempDir("t3-provider-project-");
     fs.mkdirSync(path.join(workspaceRoot, ".git"));
     const provider = createProviderServiceHarness();
-    const orchestrationLayer = OrchestrationEngineLive.pipe(
+    const baseOrchestrationLayer = OrchestrationEngineLive.pipe(
       Layer.provide(OrchestrationProjectionSnapshotQueryLive),
       Layer.provide(OrchestrationProjectionPipelineLive),
       Layer.provide(OrchestrationEventStoreLive),
@@ -255,6 +265,29 @@ describe("ProviderRuntimeIngestion", () => {
       Layer.provide(RepositoryIdentityResolverTest),
       Layer.provide(SqlitePersistenceMemory),
     );
+    const failDispatch = options?.failDispatch;
+    const rejectedCommands: Array<OrchestrationCommand> = [];
+    const orchestrationLayer =
+      failDispatch === undefined
+        ? baseOrchestrationLayer
+        : Layer.effect(
+            OrchestrationEngineService,
+            Effect.gen(function* () {
+              const inner = yield* OrchestrationEngineService;
+              return {
+                ...inner,
+                dispatch: (command: OrchestrationCommand) => {
+                  if (!failDispatch(command)) {
+                    return inner.dispatch(command);
+                  }
+                  rejectedCommands.push(command);
+                  return Effect.die(
+                    new Error(`Test rejected orchestration command '${command.type}'.`),
+                  );
+                },
+              };
+            }),
+          ).pipe(Layer.provide(baseOrchestrationLayer));
     const projectionSnapshotLayer = OrchestrationProjectionSnapshotQueryLive.pipe(
       Layer.provide(RepositoryIdentityResolverTest),
       Layer.provide(SqlitePersistenceMemory),
@@ -343,6 +376,7 @@ describe("ProviderRuntimeIngestion", () => {
       emit: provider.emit,
       setProviderSession: provider.setSession,
       receiptBus,
+      rejectedCommands,
       drain,
     };
   }
@@ -709,6 +743,134 @@ describe("ProviderRuntimeIngestion", () => {
     );
     expect(finalMessageIndex).toBeGreaterThanOrEqual(0);
     expect(completedSessionIndex).toBeGreaterThan(finalMessageIndex);
+  });
+
+  it("still writes the terminal turn session when completion finalization fails", async () => {
+    const harness = await createHarness({
+      serverSettings: { enableAssistantStreaming: false },
+      // The terminal `thread.session.set` is deferred until buffered assistant
+      // text has been finalized. A failure in that finalization must not keep
+      // the thread projected `running` until the next Club Code restart.
+      failDispatch: (command) => command.type === "thread.message.assistant.complete",
+    });
+    const threadId = asThreadId("thread-1");
+    const turnId = asTurnId("turn-completion-finalize-failure");
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-turn-started-before-finalize-failure"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      turnId,
+    });
+    await waitForThread(
+      harness.readModel,
+      (thread) => thread.session?.status === "running" && thread.session.activeTurnId === turnId,
+    );
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-buffered-text-before-finalize-failure"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId,
+      createdAt: "2026-01-01T00:00:01.000Z",
+      turnId,
+      itemId: asItemId("item-buffered-text-finalize-failure"),
+      payload: {
+        streamKind: "assistant_text",
+        delta: "Final response",
+      },
+    });
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-turn-completed-after-finalize-failure"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId,
+      createdAt: "2026-01-01T00:00:02.000Z",
+      turnId,
+      payload: { state: "completed" },
+    });
+
+    const thread = await waitForThread(
+      harness.readModel,
+      (entry) => entry.session?.status === "ready" && entry.session.activeTurnId === null,
+    );
+    expect(
+      harness.rejectedCommands.some(
+        (command) => command.type === "thread.message.assistant.complete",
+      ),
+    ).toBe(true);
+    expect(thread.session?.status).toBe("ready");
+    expect(thread.session?.activeTurnId).toBeNull();
+  });
+
+  it("keeps ingesting a turn when a derived activity append fails", async () => {
+    const harness = await createHarness({
+      failDispatch: (command) => command.type === "thread.activity.append",
+    });
+    const threadId = asThreadId("thread-1");
+    const turnId = asTurnId("turn-activity-append-failure");
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-turn-started-before-activity-failure"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      turnId,
+    });
+    await waitForThread(
+      harness.readModel,
+      (thread) => thread.session?.status === "running" && thread.session.activeTurnId === turnId,
+    );
+
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-command-completed-activity-failure"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:01.000Z",
+      threadId,
+      turnId,
+      itemId: asItemId("item-command-activity-failure"),
+      payload: {
+        itemType: "command_execution",
+        status: "completed",
+        title: "Ran command",
+        detail: "yarn lint",
+        data: {
+          toolCallId: "tool-command-activity-failure",
+          kind: "execute",
+          command: "yarn lint",
+        },
+      },
+    });
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-turn-completed-after-activity-failure"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId,
+      createdAt: "2026-01-01T00:00:02.000Z",
+      turnId,
+      payload: { state: "completed" },
+    });
+
+    const thread = await waitForThread(
+      harness.readModel,
+      (entry) => entry.session?.status === "ready" && entry.session.activeTurnId === null,
+    );
+    expect(
+      harness.rejectedCommands.some((command) => command.type === "thread.activity.append"),
+    ).toBe(true);
+    // The work-log entry is lost, but it never blocks the durable turn lifecycle.
+    expect(
+      thread.activities.some(
+        (activity: ProviderRuntimeTestActivity) =>
+          activity.id === "evt-command-completed-activity-failure",
+      ),
+    ).toBe(false);
+    expect(thread.session?.status).toBe("ready");
+    expect(thread.session?.activeTurnId).toBeNull();
   });
 
   it("does not write redundant session heartbeats for active content deltas", async () => {

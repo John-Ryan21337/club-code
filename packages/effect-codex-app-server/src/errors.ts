@@ -46,6 +46,24 @@ export class CodexAppServerProtocolParseError extends Schema.TaggedErrorClass<Co
   }
 }
 
+/**
+ * The app-server emits one JSON-RPC object per stdout line. This typed error is
+ * raised as soon as a single line passes the configured byte ceiling, before
+ * the retained parts are joined or decoded, and deliberately carries only the
+ * configured public limit - not provider response content, filesystem paths, or
+ * a nested cause that could escape into Club Code diagnostics.
+ */
+export class CodexAppServerIncomingMessageTooLargeError extends Schema.TaggedErrorClass<CodexAppServerIncomingMessageTooLargeError>()(
+  "CodexAppServerIncomingMessageTooLargeError",
+  {
+    maxBytes: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)),
+  },
+) {
+  override get message() {
+    return `Codex App Server protocol message exceeded the ${this.maxBytes}-byte input limit`;
+  }
+}
+
 export class CodexAppServerTransportError extends Schema.TaggedErrorClass<CodexAppServerTransportError>()(
   "CodexAppServerTransportError",
   {
@@ -139,6 +157,7 @@ export const CodexAppServerError = Schema.Union([
   CodexAppServerSpawnError,
   CodexAppServerProcessExitedError,
   CodexAppServerProtocolParseError,
+  CodexAppServerIncomingMessageTooLargeError,
   CodexAppServerTransportError,
 ]);
 

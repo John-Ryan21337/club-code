@@ -1,9 +1,16 @@
-import { ProviderInstanceId, ThreadId } from "@cafecode/contracts";
+import {
+  ProviderDriverKind,
+  ProviderInstanceId,
+  ThreadId,
+  type ProviderSession,
+} from "@cafecode/contracts";
 import { assert, describe, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
 
 import {
   attachCommandIdToMutatingProviderDaemonRequest,
   isVoidProviderDaemonRpcMethod,
+  makeRemoteListSessionsInventory,
   PROVIDER_DAEMON_MUTATING_RPC_TIMEOUT_MS,
   PROVIDER_DAEMON_PROMPT_ROUTING_READ_TIMEOUT_MS,
   ProviderDaemonRpcResponseError,
@@ -98,6 +105,35 @@ describe("RemoteProviderService", () => {
       remoteProviderCursorProjectorForConfig({ providerSupervisor: {} }),
       PROVIDER_SUPERVISOR_RUNTIME_CURSOR_PROJECTOR,
     );
+  });
+
+  it("reports a reachable daemon inventory as available", async () => {
+    const session: ProviderSession = {
+      provider: ProviderDriverKind.make("codex"),
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      status: "running",
+      runtimeMode: "full-access",
+      threadId: ThreadId.make("thread-inventory"),
+      createdAt: "2026-08-28T00:00:00.000Z",
+      updatedAt: "2026-08-28T00:00:00.000Z",
+    };
+    const listSessionsInventory = makeRemoteListSessionsInventory(() => Effect.succeed([session]));
+
+    const inventory = await Effect.runPromise(listSessionsInventory());
+
+    assert.isTrue(inventory.available);
+    assert.deepEqual(inventory.sessions, [session]);
+  });
+
+  it("reports an unreachable daemon as unavailable instead of an empty session list", async () => {
+    const listSessionsInventory = makeRemoteListSessionsInventory(() =>
+      Effect.fail(toRemoteRequestError("listSessions", new Error("connect ECONNREFUSED"))),
+    );
+
+    const inventory = await Effect.runPromise(listSessionsInventory());
+
+    assert.isFalse(inventory.available);
+    assert.deepEqual(inventory.sessions, []);
   });
 
   it("retains a typed remote RPC error tag on adapter request errors", () => {
