@@ -1,7 +1,9 @@
 import * as Effect from "effect/Effect";
 import type * as NodeChildProcess from "node:child_process";
 import { EventEmitter } from "node:events";
+import * as NodePath from "node:path";
 import { PassThrough } from "node:stream";
+import { pathToFileURL } from "node:url";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("electron", () => ({
@@ -10,10 +12,22 @@ vi.mock("electron", () => ({
   net: { fetch: vi.fn() },
 }));
 
+// Keep imported timer calls on the same fake clock as the test on every host.
+vi.mock("node:timers", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:timers")>()),
+  setTimeout: (callback: () => void, delay?: number) => globalThis.setTimeout(callback, delay),
+  clearTimeout: (timer: ReturnType<typeof setTimeout>) => globalThis.clearTimeout(timer),
+}));
+
 import type * as ElectronProtocol from "../electron/ElectronProtocol.ts";
 import * as DesktopVlcMedia from "./DesktopVlcMedia.ts";
 
 const noop = (): void => undefined;
+// Command policy is simulated independently of the host's filesystem syntax.
+const fixturePath = (...parts: string[]) => NodePath.resolve("vlc-test-fixtures", ...parts);
+const mediaPath = (folder: string, name: string) => fixturePath("private-user", folder, name);
+const playlistPath = (id: string) => fixturePath("temp", `cafecode-media-${id}.xspf`);
+const configPath = (id: string) => fixturePath("temp", `cafecode-media-${id}.conf`);
 
 class MockVlcChild extends EventEmitter {
   readonly pid = 12_345;
@@ -85,8 +99,8 @@ function makeHarness(input?: {
   const dependencies: DesktopVlcMedia.DesktopVlcMediaDependencies = {
     platform: input?.platform ?? "win32",
     env: {
-      ProgramFiles: "C:\\Program Files",
-      "ProgramFiles(x86)": "C:\\Program Files (x86)",
+      ProgramFiles: fixturePath("Program Files"),
+      "ProgramFiles(x86)": fixturePath("Program Files (x86)"),
     },
     exists: vi.fn(async () => input?.exists ?? true),
     getFileSize: vi.fn(async () => 1024),
@@ -94,21 +108,13 @@ function makeHarness(input?: {
       canceled: input?.canceled ?? false,
       filePaths: input?.canceled
         ? []
-        : [
-            ...(input?.filePaths ?? [
-              input?.filePath ?? "C:\\Users\\private-user\\Videos\\holiday.flv",
-            ]),
-          ],
+        : [...(input?.filePaths ?? [input?.filePath ?? mediaPath("Videos", "holiday.flv")])],
     })),
     spawn,
     reserveLoopbackPort: vi.fn(async () => 45_555),
     waitForLoopbackListener: vi.fn(async () => undefined),
-    createPrivatePlaylist: vi.fn(
-      async (_mediaUrl, sessionId) => `C:\\Temp\\cafecode-media-${sessionId}.xspf`,
-    ),
-    createPrivateConfig: vi.fn(
-      async (_sout, sessionId) => `C:\\Temp\\cafecode-media-${sessionId}.conf`,
-    ),
+    createPrivatePlaylist: vi.fn(async (_mediaUrl, sessionId) => playlistPath(sessionId)),
+    createPrivateConfig: vi.fn(async (_sout, sessionId) => configPath(sessionId)),
     removePrivateFile: vi.fn(async () => undefined),
     randomToken: () => tokens.shift() ?? "z".repeat(43),
     fetch,
@@ -150,7 +156,7 @@ describe("DesktopVlcMedia", () => {
     expect(JSON.stringify(selection)).not.toContain("u".repeat(43));
 
     const [executable, args, options] = harness.spawn.mock.calls[0] ?? [];
-    expect(executable).toBe("C:\\Program Files\\VideoLAN\\VLC\\vlc.exe");
+    expect(executable).toBe(fixturePath("Program Files", "VideoLAN", "VLC", "vlc.exe"));
     expect(args).toContain("--http-host=127.0.0.1");
     expect(args).toContain("--no-one-instance");
     expect(args).toContain("--no-video-title-show");
@@ -171,17 +177,15 @@ describe("DesktopVlcMedia", () => {
     });
     expect(harness.children[0]?.writes).toEqual([]);
     expect(harness.dependencies.createPrivatePlaylist).toHaveBeenCalledWith(
-      "file:///C:/Users/private-user/Videos/holiday.flv",
+      pathToFileURL(mediaPath("Videos", "holiday.flv")).href,
       "v".repeat(43),
     );
-    expect(args).toContain(`C:\\Temp\\cafecode-media-${"v".repeat(43)}.xspf`);
-    expect(args).toContain(`--config=C:\\Temp\\cafecode-media-${"v".repeat(43)}.conf`);
+    expect(args).toContain(playlistPath("v".repeat(43)));
+    expect(args).toContain(`--config=${configPath("v".repeat(43))}`);
     expect(harness.dependencies.removePrivateFile).toHaveBeenCalledWith(
-      `C:\\Temp\\cafecode-media-${"v".repeat(43)}.xspf`,
+      playlistPath("v".repeat(43)),
     );
-    expect(harness.dependencies.removePrivateFile).toHaveBeenCalledWith(
-      `C:\\Temp\\cafecode-media-${"v".repeat(43)}.conf`,
-    );
+    expect(harness.dependencies.removePrivateFile).toHaveBeenCalledWith(configPath("v".repeat(43)));
 
     const protocol = harness.getCapturedProtocol();
     expect(protocol?.scheme).toBe("cafecode-media");
@@ -211,7 +215,7 @@ describe("DesktopVlcMedia", () => {
   });
 
   it("rejects a selected container outside the explicit VLC format allowlist", async () => {
-    const harness = makeHarness({ filePath: "C:\\Users\\private-user\\Videos\\archive.mxf" });
+    const harness = makeHarness({ filePath: mediaPath("Videos", "archive.mxf") });
 
     await expect(Effect.runPromise(harness.media.pick({ id: 42 }))).rejects.toThrow(
       "unsupported media format",
@@ -249,10 +253,7 @@ describe("DesktopVlcMedia", () => {
 
   it("owns a multi-file queue and lazily replaces one VLC child during navigation", async () => {
     const harness = makeHarness({
-      filePaths: [
-        "C:\\Users\\private-user\\Music\\first.mp3",
-        "C:\\Users\\private-user\\Videos\\second.flv",
-      ],
+      filePaths: [mediaPath("Music", "first.mp3"), mediaPath("Videos", "second.flv")],
     });
     const owner = { id: 42, isDestroyed: () => false, once: vi.fn() };
 
@@ -287,9 +288,9 @@ describe("DesktopVlcMedia", () => {
   it("bounded-skips a VLC startup failure without launching the whole queue", async () => {
     const harness = makeHarness({
       filePaths: [
-        "C:\\Users\\private-user\\Videos\\broken.flv",
-        "C:\\Users\\private-user\\Music\\working.mp3",
-        "C:\\Users\\private-user\\Videos\\later.mp4",
+        mediaPath("Videos", "broken.flv"),
+        mediaPath("Music", "working.mp3"),
+        mediaPath("Videos", "later.mp4"),
       ],
     });
     let readinessCalls = 0;
@@ -313,10 +314,7 @@ describe("DesktopVlcMedia", () => {
 
   it("terminates after one bounded pass when every VLC queue item fails", async () => {
     const harness = makeHarness({
-      filePaths: [
-        "C:\\Users\\private-user\\Videos\\broken.flv",
-        "C:\\Users\\private-user\\Music\\also-broken.mp3",
-      ],
+      filePaths: [mediaPath("Videos", "broken.flv"), mediaPath("Music", "also-broken.mp3")],
     });
     vi.mocked(harness.dependencies.waitForLoopbackListener).mockRejectedValue(
       new Error("decoder rejected input"),
@@ -350,10 +348,7 @@ describe("DesktopVlcMedia", () => {
 
   it("rejects queue count and aggregate byte caps before launching VLC", async () => {
     const tooMany = makeHarness({
-      filePaths: Array.from(
-        { length: 65 },
-        (_, index) => `C:\\Users\\private-user\\Videos\\clip-${index}.mp4`,
-      ),
+      filePaths: Array.from({ length: 65 }, (_, index) => mediaPath("Videos", `clip-${index}.mp4`)),
     });
     await expect(Effect.runPromise(tooMany.media.pick({ id: 42 }))).rejects.toThrow(
       "no more than 64",
@@ -362,10 +357,7 @@ describe("DesktopVlcMedia", () => {
     expect(tooMany.dependencies.getFileSize).not.toHaveBeenCalled();
 
     const tooLarge = makeHarness({
-      filePaths: [
-        "C:\\Users\\private-user\\Videos\\one.mp4",
-        "C:\\Users\\private-user\\Videos\\two.mp4",
-      ],
+      filePaths: [mediaPath("Videos", "one.mp4"), mediaPath("Videos", "two.mp4")],
     });
     vi.mocked(tooLarge.dependencies.getFileSize).mockResolvedValue(40 * 1024 * 1024 * 1024);
     await expect(Effect.runPromise(tooLarge.media.pick({ id: 42 }))).rejects.toThrow("too large");
@@ -374,10 +366,7 @@ describe("DesktopVlcMedia", () => {
 
   it("rejects duplicate picker paths before it starts VLC", async () => {
     const harness = makeHarness({
-      filePaths: [
-        "C:\\Users\\private-user\\Videos\\same.mp4",
-        "C:\\Users\\private-user\\Videos\\SAME.mp4",
-      ],
+      filePaths: [mediaPath("Videos", "same.mp4"), mediaPath("Videos", "SAME.mp4")],
     });
 
     await expect(Effect.runPromise(harness.media.pick({ id: 42 }))).rejects.toThrow("only once");
@@ -386,7 +375,7 @@ describe("DesktopVlcMedia", () => {
   });
 
   it("removes bidi controls from the only title returned to the renderer", async () => {
-    const harness = makeHarness({ filePath: "C:\\Users\\private-user\\Videos\\clip\u202Emp4.mkv" });
+    const harness = makeHarness({ filePath: mediaPath("Videos", "clip\u202Emp4.mkv") });
 
     const selection = await Effect.runPromise(harness.media.pick({ id: 42 }));
 
@@ -439,7 +428,7 @@ describe("DesktopVlcMedia", () => {
       platform: "linux",
       // Filesystem fixtures stay host-native even while command policy is
       // simulated as Linux.
-      filePath: "C:\\Users\\private-user\\Music\\song.flac",
+      filePath: mediaPath("Music", "song.flac"),
     });
 
     const selection = await Effect.runPromise(harness.media.pick({ id: 42 }));
@@ -452,7 +441,7 @@ describe("DesktopVlcMedia", () => {
     expect(options?.stdio).toEqual(["pipe", "ignore", "ignore"]);
     expect(harness.dependencies.createPrivatePlaylist).not.toHaveBeenCalled();
     expect(harness.children[0]?.writes).toEqual([
-      'add "file:///C:/Users/private-user/Music/song.flac"\n',
+      `add "${pathToFileURL(mediaPath("Music", "song.flac")).href}"\n`,
     ]);
   });
 
@@ -493,7 +482,14 @@ describe("DesktopVlcMedia", () => {
         protocol?.handler(new Request(selection!.playbackUrl)) ??
           Effect.succeed(new Response(null, { status: 500 })),
       );
-      await vi.advanceTimersByTimeAsync(8_000);
+      await vi.waitFor(() => expect(harness.fetch).toHaveBeenCalledTimes(1));
+      let settled = false;
+      void response.then(() => {
+        settled = true;
+      });
+      await vi.advanceTimersByTimeAsync(7_000);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1_000);
       expect((await response).status).toBe(502);
     } finally {
       vi.useRealTimers();
@@ -648,7 +644,7 @@ describe("DesktopVlcMedia", () => {
 
   it("never consults PATH while discovering VLC", async () => {
     const harness = makeHarness({ exists: false });
-    harness.dependencies.env.PATH = "C:\\untrusted-bin";
+    harness.dependencies.env.PATH = fixturePath("untrusted-bin");
 
     await Effect.runPromise(harness.media.capability);
 
