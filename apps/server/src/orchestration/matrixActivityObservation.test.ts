@@ -139,6 +139,8 @@ describe("classifyMatrixActivityObservation", () => {
     ["pnpm run compile:contracts", "build"],
     ["npm run bundle:web", "build"],
     ["npx vite build", "build"],
+    ["npx tsc --build", "build"],
+    ["npm run typecheck", "build"],
     ["corepack yarn build", "build"],
     ["docker build .", "build"],
     ["docker pull node:latest", "network"],
@@ -338,6 +340,8 @@ describe("classifyMatrixActivityObservation", () => {
     "yarn workspace @cafecode/web lint",
     "corepack yarn workspace @cafecode/web dev",
     "npm run build/desktop",
+    "unlisted-runner run build",
+    "unlisted-executor tsc --build",
   ])(
     "does not infer a category from an argument, path, URL, SQL, or freeform text: %s",
     (command) => {

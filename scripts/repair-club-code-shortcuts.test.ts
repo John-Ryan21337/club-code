@@ -1,6 +1,9 @@
 // @effect-diagnostics nodeBuiltinImport:off
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { execFile } from "node:child_process";
+import { homedir } from "node:os";
+import { promisify } from "node:util";
+import { rm } from "node:fs/promises";
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import * as NodePath from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
@@ -14,28 +17,40 @@ const powershellPath = NodePath.join(
   "v1.0",
   "powershell.exe",
 );
-const shortcutRepairTestTimeoutMs = process.platform === "win32" ? 45_000 : 15_000;
+const shortcutRepairTestTimeoutMs = process.platform === "win32" ? 90_000 : 15_000;
+const execFileAsync = promisify(execFile);
 
-afterEach(() => {
+async function runShortcutFixture(fixturePath: string): Promise<string> {
+  // One native process avoids repeated PowerShell/COM cold starts under CI load.
+  // Its own deadline stays below the test deadline, and stdin is closed so the
+  // child cannot wait for terminal input while holding the fixture directory.
+  const result = execFileAsync(
+    powershellPath,
+    ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", fixturePath],
+    { encoding: "utf8", timeout: 60_000, windowsHide: true, maxBuffer: 64 * 1_024 },
+  );
+  result.child.stdin?.end();
+  return (await result).stdout;
+}
+
+afterEach(async () => {
   for (const directory of temporaryDirectories.splice(0)) {
-    rmSync(directory, { recursive: true, force: true });
+    const target = NodePath.resolve(directory);
+    if (
+      NodePath.dirname(target) !== NodePath.resolve(homedir()) ||
+      !NodePath.basename(target).startsWith("club-code-shortcut-test-")
+    ) {
+      throw new Error("Refusing cleanup outside the owned shortcut fixture.");
+    }
+    await rm(target, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
   }
 });
 
 describe("Club Code shortcut repair", () => {
   it.skipIf(process.platform !== "win32")(
     "rewrites only a shortcut already bound to the validated checkout",
-    () => {
-      const userProfileRoot = execFileSync(
-        powershellPath,
-        [
-          "-NoProfile",
-          "-NonInteractive",
-          "-Command",
-          "[Environment]::GetFolderPath('UserProfile')",
-        ],
-        { encoding: "utf8" },
-      ).trim();
+    async () => {
+      const userProfileRoot = homedir();
       const root = mkdtempSync(NodePath.join(userProfileRoot, "club-code-shortcut-test-"));
       temporaryDirectories.push(root);
       const repoRoot = NodePath.join(root, "checkout");
@@ -71,75 +86,6 @@ describe("Club Code shortcut repair", () => {
         `$powershellOwned.WorkingDirectory = '${repoRoot.replaceAll("'", "''")}'`,
         "$powershellOwned.Save()",
       ].join("; ");
-      execFileSync(powershellPath, ["-NoProfile", "-NonInteractive", "-Command", createScript], {
-        stdio: "ignore",
-      });
-
-      execFileSync(
-        powershellPath,
-        [
-          "-NoProfile",
-          "-NonInteractive",
-          "-ExecutionPolicy",
-          "Bypass",
-          "-File",
-          scriptPath,
-          "-RepoRoot",
-          repoRoot,
-          "-CandidatePaths",
-          recognized,
-        ],
-        { stdio: "ignore" },
-      );
-      execFileSync(
-        powershellPath,
-        [
-          "-NoProfile",
-          "-NonInteractive",
-          "-ExecutionPolicy",
-          "Bypass",
-          "-File",
-          scriptPath,
-          "-RepoRoot",
-          repoRoot,
-          "-CandidatePaths",
-          powershellOwned,
-        ],
-        { stdio: "ignore" },
-      );
-      execFileSync(
-        powershellPath,
-        [
-          "-NoProfile",
-          "-NonInteractive",
-          "-ExecutionPolicy",
-          "Bypass",
-          "-File",
-          scriptPath,
-          "-RepoRoot",
-          repoRoot,
-          "-CandidatePaths",
-          workingOnly,
-        ],
-        { stdio: "ignore" },
-      );
-      execFileSync(
-        powershellPath,
-        [
-          "-NoProfile",
-          "-NonInteractive",
-          "-ExecutionPolicy",
-          "Bypass",
-          "-File",
-          scriptPath,
-          "-RepoRoot",
-          repoRoot,
-          "-CandidatePaths",
-          foreign,
-        ],
-        { stdio: "ignore" },
-      );
-
       const inspectScript = [
         "$shell = New-Object -ComObject WScript.Shell",
         `$known = $shell.CreateShortcut('${recognized.replaceAll("'", "''")}')`,
@@ -147,13 +93,28 @@ describe("Club Code shortcut repair", () => {
         `$other = $shell.CreateShortcut('${unrelated.replaceAll("'", "''")}')`,
         `$workingOnly = $shell.CreateShortcut('${workingOnly.replaceAll("'", "''")}')`,
         `$powershellOwned = $shell.CreateShortcut('${powershellOwned.replaceAll("'", "''")}')`,
-        "[PSCustomObject]@{ KnownTarget = $known.TargetPath; KnownArguments = $known.Arguments; KnownWorking = $known.WorkingDirectory; ForeignTarget = $foreign.TargetPath; OtherTarget = $other.TargetPath; WorkingOnlyTarget = $workingOnly.TargetPath; PowershellOwnedArguments = $powershellOwned.Arguments } | ConvertTo-Json -Compress",
+        "[PSCustomObject]@{ KnownTarget = $known.TargetPath; KnownArguments = $known.Arguments; KnownWorking = $known.WorkingDirectory; ForeignTarget = $foreign.TargetPath; OtherTarget = $other.TargetPath; WorkingOnlyTarget = $workingOnly.TargetPath; PowershellOwnedArguments = $powershellOwned.Arguments; EncodingProbe = '日本語' } | ConvertTo-Json -Compress",
       ].join("; ");
-      const observed = JSON.parse(
-        execFileSync(powershellPath, ["-NoProfile", "-NonInteractive", "-Command", inspectScript], {
-          encoding: "utf8",
-        }),
-      ) as {
+      const candidateList = [recognized, powershellOwned, workingOnly, foreign, unrelated]
+        .map((candidate) => `'${candidate.replaceAll("'", "''")}'`)
+        .join(", ");
+      const repairInvocation = `& '${scriptPath.replaceAll("'", "''")}' -RepoRoot '${repoRoot.replaceAll("'", "''")}' -CandidatePaths @(${candidateList}) | Out-Null`;
+      const fixturePath = NodePath.join(root, "verify-shortcuts.ps1");
+      // Windows PowerShell 5 needs a BOM for the fixture and explicit UTF-8 for
+      // redirected output; otherwise the JSON probe loses non-ASCII characters.
+      writeFileSync(
+        fixturePath,
+        "\uFEFF" +
+          [
+            "$ErrorActionPreference = 'Stop'",
+            "[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)",
+            createScript,
+            repairInvocation,
+            inspectScript,
+          ].join("\n"),
+        "utf8",
+      );
+      const observed = JSON.parse(await runShortcutFixture(fixturePath)) as {
         KnownTarget: string;
         KnownArguments: string;
         KnownWorking: string;
@@ -161,6 +122,7 @@ describe("Club Code shortcut repair", () => {
         OtherTarget: string;
         WorkingOnlyTarget: string;
         PowershellOwnedArguments: string;
+        EncodingProbe: string;
       };
       expect(observed.KnownTarget.toLowerCase()).toBe(powershellPath.toLowerCase());
       expect(observed.KnownArguments).toContain(NodePath.join(repoRoot, "Start-CafeCode.ps1"));
@@ -176,6 +138,7 @@ describe("Club Code shortcut repair", () => {
       );
       expect(observed.PowershellOwnedArguments).toContain("-NoLogo -NoProfile");
       expect(observed.PowershellOwnedArguments).toContain("-Wait");
+      expect(observed.EncodingProbe).toBe("日本語");
     },
     shortcutRepairTestTimeoutMs,
   );

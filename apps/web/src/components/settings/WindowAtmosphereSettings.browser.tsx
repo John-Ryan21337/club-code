@@ -9,6 +9,7 @@ import {
   DEFAULT_FALLING_EFFECT_MATRIX_WALK_LIFECYCLE_PERCENT,
   DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE,
   DEFAULT_FALLING_EFFECT_MATRIX_MOTION_MODE,
+  DEFAULT_HEXAGONS_BACKGROUND_PRESET_JSON,
   DEFAULT_UNIFIED_SETTINGS,
   MAX_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE,
   MIN_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE,
@@ -117,6 +118,7 @@ describe("WindowAtmosphereSettings motion", () => {
   });
 
   it("persists the renderer-local Atmosphere console kill switch", async () => {
+    mocks.settings = { ...mocks.settings, atmosphereConsoleEnabled: true };
     const mounted = await render(<WindowAtmosphereSettings />);
     const toggle = page.getByRole("switch", { name: "Show Atmosphere console" });
 
@@ -358,6 +360,7 @@ describe("WindowAtmosphereSettings motion", () => {
   });
 
   it("imports, activates, and removes a finished The Hexagons preset", async () => {
+    mocks.settings = { ...mocks.settings, hexagonsBackgroundPresetJson: null };
     const mounted = await render(<WindowAtmosphereSettings />);
     const toggle = page.getByRole("switch", {
       name: "Show imported The Hexagons background",
@@ -541,7 +544,7 @@ describe("WindowAtmosphereSettings motion", () => {
         fallingEffect2chEnriched: false,
         fallingEffectsOverCinemaEnabled: false,
         hexagonsBackgroundEnabled: false,
-        hexagonsBackgroundPresetJson: null,
+        hexagonsBackgroundPresetJson: DEFAULT_HEXAGONS_BACKGROUND_PRESET_JSON,
         ambientBackgroundManuscriptOpacity: DEFAULT_AMBIENT_BACKGROUND_MANUSCRIPT_OPACITY,
         ambientBackgroundSidebarOpacity: DEFAULT_AMBIENT_BACKGROUND_SIDEBAR_OPACITY,
       }),

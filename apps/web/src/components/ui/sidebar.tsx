@@ -234,8 +234,8 @@ function Sidebar({
           <SheetPopup
             backdropClassName="cafe-sidebar-sheet-backdrop"
             className={cn(
-              // This Sheet branch renders below `md` or when the operator has
-              // explicitly forced Mobile optimized presentation.
+              // Navigation follows the physical viewport and input device;
+              // a presentation profile does not force this Sheet branch.
               // Phones (max-sm) get a near-full-bleed Sheet; the 640-767px band
               // (folding-phone covers, split-screen, small tablets) gets a fixed
               // slide-over drawer over still-visible content instead of a

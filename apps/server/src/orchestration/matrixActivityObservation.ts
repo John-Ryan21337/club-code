@@ -181,7 +181,8 @@ const BUILD_EXECUTABLES = new Set([
   "xbuild",
   "xcodebuild",
 ]);
-const BUILD_RUNNERS = new Set(["bun", "npm", "pnpm", "yarn"]);
+// Retired toolchains must not regain recognition through observed build commands.
+const BUILD_RUNNERS = new Set(["npm", "pnpm", "yarn"]);
 const GIT_NETWORK_SUBCOMMANDS = new Set(["clone", "fetch", "ls-remote", "pull", "push"]);
 const MAVEN_BUILD_GOALS = new Set(["compile", "install", "package", "verify"]);
 const DIRECT_BUILD_TOOLS = new Set([
@@ -603,7 +604,7 @@ function classifyBuildRunner(tokens: ReadonlyArray<string>): MatrixActivityType 
 
 function classifyBuildToolRunner(tokens: ReadonlyArray<string>): MatrixActivityType | undefined {
   const runner = executableName(tokens[0]);
-  if (runner !== "npx" && runner !== "bunx") {
+  if (runner !== "npx") {
     return undefined;
   }
   const tool = executableName(tokens[1]);

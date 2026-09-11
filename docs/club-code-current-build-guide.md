@@ -38,7 +38,7 @@ operator observability, media, and extensive presentation controls.
 | Prompt workflow      | Exact-thread draft recovery, visible queued follow-ups, provider-aware **Steer**, durable FIFO ordering, image and bounded `.txt` attachments, and a camera button with preview, front/rear selection, retake, and system-camera fallback.                                                                                                                                                                                                                                           |
 | Auto Nudge           | Exact-thread mode, editable standing-order text, a per-thread round cap, foreground or opt-in background continuation, minimized controls, per-thread Stop, an emergency stop for known connected threads, and normal-history messages. Server-accepted operator work goes first.                                                                                                                                                                                                    |
 | Atmosphere           | Optional full-window snow, rain, or Matrix; Roman/Japanese mix; 2ch glyph enrichment; fixed, rainbow, per-stream rainbow, and music-reactive colors; shimmer speed; live-work vocabulary; and Flat, Forward, Reverse, Warp, Walk Forward, and Walk Reverse motion. `SeaOfLightsInDarkstaticy` is the only bundled Hexagons preset. All atmosphere activation controls are off by default. Matrix Walk adds randomized bounded lifecycle distance and adjustable outward center wind. |
-| Mobile presentation  | A touch-sized composer toggle switches the current renderer between responsive Desktop and forced Mobile optimized layout. Explicit Mobile also enables/selects Matrix without resetting its appearance; returning to Desktop leaves Matrix on.                                                                                                                                                                                                                                      |
+| Mobile presentation  | A touch-sized composer toggle applies a matching Desktop/Mobile profile. Without a matching profile, Mobile enables Rain and Desktop leaves it on. Chat layout is renderer-local; navigation follows the physical viewport and input device.                                                                                                                                                                                                                                         |
 | Clock and weather    | An optional transparent, movable multi-city clock offers rainbow shimmer, amber nixie, analog, and old-school LED styles. Weather is separately disabled by default and requires renderer-local network consent.                                                                                                                                                                                                                                                                     |
 | Verified activity    | Optional Matrix routes for provider-observed network, database, build, and agent-delegation activity. Safe reported filenames may enrich the bounded live-work vocabulary. Lines, packets, trails, endpoints, and telemetry never use prompts, commands, SQL, secrets, or invented traffic.                                                                                                                                                                                          |
 | Ambient media        | YouTube, Spotify embeds, direct local media, desktop VLC playback, a single image/GIF or bounded image-directory cycle, floating/custom/Theater/Cinema layouts, adaptive glow, and a Spectrum or bundled 395-preset MilkDrop/Butterchurn visualizer.                                                                                                                                                                                                                                 |
@@ -202,18 +202,21 @@ still determines whether the resulting attachment can be sent.
 
 The touch-sized presentation control beside the composer shows whether the
 current renderer has explicitly selected **Mobile optimized** or normal
-responsive **Desktop** presentation. Mobile optimized reuses the existing
-compact sidebar, run-context, chat-padding, and right-panel layout even on a
-wide desktop screen; it does not maintain a second copy of the UI. Natural
-phone-width responsiveness still works without writing the override.
+responsive **Desktop** presentation. Mobile optimized reuses the compact chat,
+run-context, padding, and right-panel layout on a wide screen. Navigation stays
+bound to the physical viewport and input device. Natural phone responsiveness
+still works without writing the override.
 
-Turning Mobile optimized on also enables the falling layer and selects Matrix.
-It preserves the operator's current Matrix colors, shimmer, density, speed,
-font sizes, perspective, and activity-line choices. Returning to Desktop
-removes only the layout override, so Matrix remains on until the operator
-changes it separately. The override is persisted for that browser/Desktop
-renderer: a phone cannot force another connected desktop renderer into its
-compact layout.
+The toggle applies a matching saved presentation profile when available.
+Without a matching profile, Mobile enables **Rain** and preserves all other
+effect settings. Returning to Desktop without a matching profile changes only
+the layout override, so Rain stays on. The override is saved in that renderer;
+a phone cannot force another connected desktop into its compact chat layout.
+
+対応する保存済みプロファイルがある場合、切り替え時にその設定を適用します。
+該当するプロファイルがない場合、Mobile は **Rain（雨）** を有効にし、その他の
+エフェクト設定を保持します。プロファイルなしで Desktop に戻しても雨は継続します。
+レイアウト設定は各画面に保存され、ナビゲーションは実際の画面幅と入力方式に従います。
 
 ### World clock and optional weather
 
