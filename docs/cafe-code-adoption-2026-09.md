@@ -76,7 +76,46 @@ need native lifecycle testing; schema tests alone cannot verify them.
 完成した実装はClub Codeで参照できます。ネイティブ表示、リクエスト管理、プロバイダー連携、
 OCR、チャットへの一時的な受け渡しは、依存関係を確認して個別に取り込めます。
 
-## Existing Cafe proposals
+## Coverage and thread agent limits
+
+The complete Club source is published, but not every feature has a current Cafe
+adoption PR. In particular, browser PRs 63 and 64 cover foundations only; the
+native browser, request broker, and full renderer integration still need ports.
+
+[Cafe PR #66](https://github.com/cafeai/cafe-code/pull/66) now adds the missing
+per-thread agent-count control on current `dev`. It supports Codex and Claude,
+accepts an optional ceiling from 1 to 64, and inherits Cafe's existing
+provider-instance policy when empty. This is a maximum, not an exact spawn
+target. Active work continues; changes apply on the next idle start or resume.
+Claude applies its limit to Agent-tool launches; resumed agents and team
+workflows can exceed it. The PR preserves current Codex V1 and V2 launch handling.
+It includes screenshots, a recording, and independent review repairs.
+
+Club's earlier composer control is Codex-only, with a range of 1–128 and a
+default of 16. The separate Hardcore fan out prompt encourages delegation;
+it does not enforce an exact count. The Cafe proposal deliberately preserves
+Cafe's newer provider defaults and bounds.
+
+[Club PR #67](https://github.com/John-Ryan21337/club-code/pull/67) adds the
+[Claude access check](./provider-access-check.md). It is separate from the
+fan-out adoption PR and has not been ported to Cafe in this proposal.
+
+日本語：Clubの全ソースは公開済みですが、全機能の現行Cafe向けPRが揃っているわけでは
+ありません。ブラウザーPR 63・64は基盤のみで、ネイティブ表示、リクエスト管理、
+画面との完全な連携は今後の移植が必要です。
+
+Cafe PR 66で、未提出だったスレッド別エージェント数の設定を追加しました。
+CodexとClaudeに対応し、1～64の上限を指定できます。空欄ではCafeの接続単位の設定を
+継承します。指定数を必ず起動する機能ではありません。実行中の作業を中断せず、
+次のアイドル状態での開始・再開時に反映します。ClaudeではAgentツールによる起動に
+適用され、再開したエージェントやチーム処理は上限を超える場合があります。
+Codexの現行V1・V2起動処理を維持し、画像・動画と独立レビューによる修正を含めています。
+
+Clubの以前の操作はCodex専用で、1～128、既定値16です。別機能のHardcore fan outは
+委任を促すプロンプトであり、数を強制しません。Cafe向けPRは、Cafeの新しい既定値と
+上限を維持します。Club PR 67のClaude接続確認は別の変更で、このPRではCafeへ移植していません。
+
+## Earlier Cafe proposals
 
 These proposals already exist. Review their current diff and prerequisites before adoption.
 This inventory does not claim they all merge cleanly against the comparison baseline.

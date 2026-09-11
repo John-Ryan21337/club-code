@@ -25,6 +25,7 @@ import type {
   ProviderDriverKind,
   ProviderInstanceEnvironment,
   ProviderInstanceId,
+  ServerProviderAccessResult,
 } from "@cafecode/contracts";
 import type * as Effect from "effect/Effect";
 import type * as Schema from "effect/Schema";
@@ -71,6 +72,8 @@ export interface ProviderInstance {
   readonly snapshot: ServerProviderShape;
   readonly adapter: ProviderAdapterShape<ProviderAdapterError>;
   readonly textGeneration: TextGenerationShape;
+  /** Explicit, disposable live access check; never part of background status polling. */
+  readonly checkAccess?: (model: string) => Effect.Effect<ServerProviderAccessResult>;
 }
 
 export interface ProviderContinuationIdentity {

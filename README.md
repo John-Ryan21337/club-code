@@ -399,6 +399,10 @@ Club Code supports these provider integrations:
 
 ## Local Development
 
+Before a long Claude task or external CLI fan-out, use the
+[provider access check](./docs/provider-access-check.md). Saved credentials alone
+do not prove that a live request will succeed.
+
 Run the app from a checkout:
 
 ```bash
@@ -727,6 +731,10 @@ Codex は `codex login`、Claude は `claude auth login` が必要。OpenCode �
 専用 row で設定します。
 
 ### Local development
+
+長時間のClaude作業や外部CLIの並列実行の前に、
+[プロバイダーの接続確認](./docs/provider-access-check.md)を使ってください。
+認証情報が保存されているだけでは、実リクエストの成功は確認できません。
 
 checkout から app を動かす基本 command:
 

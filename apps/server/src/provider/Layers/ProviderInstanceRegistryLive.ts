@@ -370,7 +370,15 @@ export const makeProviderInstanceRegistry = <R>(input: {
     yield* reconcile(input.configMap);
 
     const registry: ProviderInstanceRegistryShape = {
-      getInstance: (id) => Ref.get(entries).pipe(Effect.map((map) => map.get(id)?.instance)),
+      getInstance: (id, expectedConfig) =>
+        Ref.get(entries).pipe(
+          Effect.map((map) => {
+            const live = map.get(id);
+            return live && (expectedConfig === undefined || entryEqual(live.entry, expectedConfig))
+              ? live.instance
+              : undefined;
+          }),
+        ),
       listInstances: Ref.get(entries).pipe(
         Effect.map(
           (map) =>
