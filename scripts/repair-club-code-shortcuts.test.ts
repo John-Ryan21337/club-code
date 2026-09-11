@@ -31,7 +31,10 @@ async function runShortcutFixture(fixturePath: string): Promise<string> {
   );
   result.child.stdin?.end();
   try {
-    return (await result).stdout;
+    const completed = await result;
+    expect(completed.stderr).toContain("shortcut-repair:entered");
+    expect(completed.stderr).toContain("shortcut-repair:complete");
+    return completed.stdout;
   } catch (error) {
     const failure = error as Error & {
       code?: string | number;
@@ -134,7 +137,7 @@ describe("Club Code shortcut repair", () => {
       const candidateList = [recognized, powershellOwned, workingOnly, foreign, unrelated]
         .map((candidate) => `'${candidate.replaceAll("'", "''")}'`)
         .join(", ");
-      const repairInvocation = `$repairStep = 0; & '${scriptPath.replaceAll("'", "''")}' -RepoRoot '${repoRoot.replaceAll("'", "''")}' -CandidatePaths @(${candidateList}) | ForEach-Object { $repairStep++; [Console]::Error.WriteLine("shortcut-fixture:repair:step:$repairStep") }`;
+      const repairInvocation = `$repairStep = 0; & '${scriptPath.replaceAll("'", "''")}' -RepoRoot '${repoRoot.replaceAll("'", "''")}' -CandidatePaths @(${candidateList}) -Verbose 4>&1 | ForEach-Object { if ($_ -is [System.Management.Automation.VerboseRecord]) { [Console]::Error.WriteLine($_.Message) } else { $repairStep++; [Console]::Error.WriteLine("shortcut-fixture:repair:step:$repairStep") } }`;
       const fixturePath = NodePath.join(root, "verify-shortcuts.ps1");
       // Windows PowerShell 5 needs a BOM for the fixture and explicit UTF-8 for
       // redirected output; otherwise the JSON probe loses non-ASCII characters.
