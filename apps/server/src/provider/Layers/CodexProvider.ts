@@ -34,7 +34,11 @@ import type {
   ServerProviderAccountRateLimitResetCredit,
   ServerProviderPaidUsage,
 } from "@cafecode/contracts";
-import { normalizeLmStudioBaseUrl, ServerSettingsError } from "@cafecode/contracts";
+import {
+  normalizeLmStudioBaseUrl,
+  ProviderDriverKind,
+  ServerSettingsError,
+} from "@cafecode/contracts";
 
 import { createModelCapabilities } from "@cafecode/shared/model";
 import {
@@ -57,9 +61,17 @@ const CODEX_PRESENTATION = {
 } as const;
 
 const MAX_PROVIDER_EMAIL_LENGTH = 320;
+const CODEX_ACCOUNT_RATE_LIMIT_TIMEOUT = Duration.seconds(10);
 const CODEX_ACCOUNT_RATE_LIMIT_TIMEOUT_MS = 3_000;
 const CODEX_CHATGPT_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
 const CODEX_ORIGINATOR = "cafecode_desktop";
+export const CODEX_CLI_LOGIN_STATUS_TIMEOUT_MESSAGE =
+  "Codex CLI login status check timed out. Provider sessions may still work.";
+/**
+ * A disposable health probe gets one graceful interval to exit before the
+ * scope finalizer's SIGKILL backstop runs.
+ */
+const CODEX_HEALTH_PROBE_TERMINATION_GRACE = Duration.seconds(1);
 const LM_STUDIO_DISCOVERY_TIMEOUT_MS = 3_000;
 const MAX_LM_STUDIO_MODEL_RESPONSE_BYTES = 2 * 1024 * 1024;
 const MAX_LM_STUDIO_DISCOVERED_MODELS = 256;
@@ -163,6 +175,8 @@ function codexAccountAuthLabel(account: CodexSchema.V2GetAccountResponse["accoun
     case "enterprise":
       return "ChatGPT Enterprise Subscription";
     case "edu":
+    case "edu_plus":
+    case "edu_pro":
       return "ChatGPT Edu Subscription";
     case "unknown":
       return "ChatGPT Subscription";
@@ -768,51 +782,88 @@ function parseCodexAccountRateLimitsPayload(
   };
 }
 
+/**
+ * Read only the redacted ChatGPT account-usage snapshot used by Codex.
+ *
+ * Codex owns credential-store, account-id, FedRAMP, and backend routing details.
+ * Using its versioned app-server request keeps this refresh compatible when
+ * those implementation details change. Only the schema-bounded usage summary
+ * leaves this module.
+ */
+export const readCodexAccountRateLimitsViaAppServer = Effect.fn(
+  "readCodexAccountRateLimitsViaAppServer",
+)(function* (
+  codexSettings: CodexSettings,
+  environment: NodeJS.ProcessEnv,
+  checkedAt: string,
+): Effect.fn.Return<
+  ServerProviderAccountRateLimits | undefined,
+  never,
+  FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
+> {
+  const resolvedHomePath = codexSettings.homePath
+    ? expandHomePath(codexSettings.homePath)
+    : undefined;
+  return yield* Effect.scoped(
+    Effect.gen(function* () {
+      const clientContext = yield* Layer.build(
+        CodexClient.layerCommand({
+          command: codexSettings.binaryPath,
+          args: buildCodexProviderAppServerArgs(),
+          cwd: process.cwd(),
+          env: {
+            ...environment,
+            ...(resolvedHomePath ? { CODEX_HOME: resolvedHomePath } : {}),
+          },
+        }),
+      );
+      const client = yield* Effect.service(CodexClient.CodexAppServerClient).pipe(
+        Effect.provide(clientContext),
+      );
+      yield* client.request("initialize", {
+        clientInfo: {
+          name: "cafecode_desktop",
+          title: "Club Code Desktop",
+          version: packageJson.version,
+        },
+        capabilities: { experimentalApi: true },
+      });
+      yield* client.notify("initialized", undefined);
+      return yield* client.request("account/rateLimits/read", undefined).pipe(
+        Effect.map((response) => codexAppServerRateLimitsToServer(response, checkedAt)),
+        Effect.timeout(CODEX_ACCOUNT_RATE_LIMIT_TIMEOUT),
+      );
+    }).pipe(Effect.option, Effect.map(Option.getOrUndefined)),
+  );
+});
+
 async function fetchCodexAccountRateLimits(input: {
   readonly credentials: CodexUsageCredentials;
   readonly checkedAt: string;
 }): Promise<ServerProviderAccountRateLimits | undefined> {
   try {
-    // Upstream Codex 0.143.0 fetches ChatGPT-backed account usage from
-    // `{chatgpt_base_url}/wham/usage` via BackendClient::get_rate_limits_many
-    // and sends Authorization plus ChatGPT-Account-ID when available. Cafe's
-    // provider badge path intentionally avoids spawning a hidden app-server, so
-    // this lightweight probe mirrors that HTTP request shape without logging or
-    // returning any credential-bearing fields.
     const headers: Record<string, string> = {
       authorization: `Bearer ${input.credentials.accessToken}`,
       originator: CODEX_ORIGINATOR,
       "user-agent": `${CODEX_ORIGINATOR}/${packageJson.version}`,
     };
-    if (input.credentials.accountId) {
-      headers["ChatGPT-Account-ID"] = input.credentials.accountId;
-    }
-    if (input.credentials.isFedrampAccount) {
-      headers["X-OpenAI-Fedramp"] = "true";
-    }
-
+    if (input.credentials.accountId) headers["ChatGPT-Account-ID"] = input.credentials.accountId;
+    if (input.credentials.isFedrampAccount) headers["X-OpenAI-Fedramp"] = "true";
     const response = await fetch(CODEX_CHATGPT_USAGE_URL, {
       method: "GET",
       headers,
       signal: AbortSignal.timeout(CODEX_ACCOUNT_RATE_LIMIT_TIMEOUT_MS),
     });
-    if (!response.ok) {
-      return undefined;
-    }
+    if (!response.ok) return undefined;
     return parseCodexAccountRateLimitsPayload(await response.json(), input.checkedAt);
   } catch {
     return undefined;
   }
 }
 
-/**
- * Read only the redacted ChatGPT account-usage snapshot used by Codex.
- *
- * This deliberately performs no Codex CLI or app-server process operation.
- * Callers must continue to use the full provider-status path when they need
- * installation, version, or authentication truth. Credentials stay inside
- * this module and only the schema-bounded usage summary is returned.
- */
+/** Legacy lightweight status-probe path. Manual and scheduled usage refreshes
+ * use the versioned app-server method above; keeping this read here avoids
+ * turning every full health probe into a second CLI process. */
 export const readCodexAccountRateLimits = Effect.fn("readCodexAccountRateLimits")(function* (
   codexSettings: CodexSettings,
   environment: NodeJS.ProcessEnv,
@@ -823,9 +874,7 @@ export const readCodexAccountRateLimits = Effect.fn("readCodexAccountRateLimits"
   FileSystem.FileSystem | Path.Path
 > {
   const credentials = yield* readCodexUsageCredentials(codexSettings, environment);
-  if (!credentials) {
-    return undefined;
-  }
+  if (!credentials) return undefined;
   return yield* Effect.promise(() => fetchCodexAccountRateLimits({ credentials, checkedAt }));
 });
 
@@ -845,7 +894,11 @@ function mapCodexModelCapabilities(
         },
   );
   const defaultReasoning = reasoningOptions.find((option) => option.isDefault)?.id;
-  const supportsFastMode = (model.additionalSpeedTiers ?? []).includes("fast");
+  // Codex 0.153.4 advertises Fast with the `priority` service-tier wire id.
+  // Keep the deprecated `additionalSpeedTiers` alias for older compatible CLIs.
+  const supportsFastMode =
+    model.serviceTiers?.some((tier) => tier.id === "priority") === true ||
+    (model.additionalSpeedTiers ?? []).includes("fast");
   return createModelCapabilities({
     optionDescriptors: [
       ...(reasoningOptions.length > 0
@@ -920,7 +973,7 @@ function makeStaticCodexReasoningCapabilities(input: {
 
 const CODEX_STANDARD_REASONING_EFFORTS = ["low", "medium", "high", "xhigh"] as const;
 const CODEX_MAX_REASONING_EFFORTS = [...CODEX_STANDARD_REASONING_EFFORTS, "max"] as const;
-// Mirrors Codex app-server `model/list` from codex-cli 0.144.0. The live
+// Mirrors Codex app-server `model/list` from codex-cli 0.153.4. The live
 // app-server response remains authoritative when available; this fallback keeps
 // fresh installs usable before the full Codex probe refreshes provider cache.
 const CODEX_ULTRA_REASONING_EFFORTS = [...CODEX_MAX_REASONING_EFFORTS, "ultra"] as const;
@@ -928,7 +981,23 @@ const CODEX_ULTRA_REASONING_EFFORTS = [...CODEX_MAX_REASONING_EFFORTS, "ultra"] 
 // Lightweight provider status deliberately avoids `codex app-server`; keep a
 // conservative model fallback so a fresh install still has selectable Codex
 // models before the full app-server diagnostic path has ever populated cache.
+const ASTRA_CODEX_MODEL: ServerProviderModel = {
+  slug: "gpt-6-astra",
+  name: "GPT-6-Astra",
+  isCustom: false,
+  capabilities: makeStaticCodexReasoningCapabilities({
+    defaultEffort: "low",
+    supportedEfforts: CODEX_ULTRA_REASONING_EFFORTS,
+    supportsFastMode: true,
+  }),
+};
+
+const KNOWN_CUSTOM_CODEX_MODELS: ReadonlyMap<string, ServerProviderModel> = new Map([
+  [ASTRA_CODEX_MODEL.slug, { ...ASTRA_CODEX_MODEL, isCustom: true }],
+]);
+
 const STATIC_CODEX_MODELS: ReadonlyArray<ServerProviderModel> = [
+  ASTRA_CODEX_MODEL,
   {
     slug: "gpt-5.6-sol",
     name: "GPT-5.6-Sol",
@@ -1028,6 +1097,11 @@ function appendCustomCodexModels(
       continue;
     }
     seen.add(slug);
+    const knownCustomModel = KNOWN_CUSTOM_CODEX_MODELS.get(slug);
+    if (knownCustomModel) {
+      customEntries.push(knownCustomModel);
+      continue;
+    }
     customEntries.push({
       slug,
       name: slug,
@@ -1254,7 +1328,9 @@ const customCodexModelsFromSettings = (codexSettings: CodexSettings): ServerProv
       capabilities: null,
     }));
 
-const fallbackCodexModelsFromSettings = (codexSettings: CodexSettings): ServerProvider["models"] =>
+export const fallbackCodexModelsFromSettings = (
+  codexSettings: CodexSettings,
+): ServerProvider["models"] =>
   appendCustomCodexModels(STATIC_CODEX_MODELS, codexSettings.customModels);
 
 const configuredCodexModels = (codexSettings: CodexSettings): ServerProvider["models"] =>
@@ -1512,20 +1588,37 @@ export function reconcileLmStudioModelDiscovery(
   };
 }
 
-const runCodexCommand = Effect.fn("runCodexCommand")(function* (
+export function makeCodexHealthProbeCommand(
   codexSettings: CodexSettings,
   args: ReadonlyArray<string>,
   environment: NodeJS.ProcessEnv = process.env,
-) {
+): ChildProcess.StandardCommand {
   const resolvedHomePath = codexSettings.homePath ? expandHomePath(codexSettings.homePath) : "";
-  const command = ChildProcess.make(codexSettings.binaryPath, [...args], {
+  return ChildProcess.make(codexSettings.binaryPath, [...args], {
     env: {
       ...environment,
       ...(resolvedHomePath.length > 0 ? { CODEX_HOME: resolvedHomePath } : {}),
     },
     shell: process.platform === "win32",
+    // POSIX probes use their own process group so cleanup reaches descendants;
+    // Windows keeps the platform default (no `detached`) and relies on the
+    // platform child-tree termination path. The scoped backstop is SIGKILL
+    // because `runCodexCommand` performs the graceful, bounded
+    // SIGTERM -> SIGKILL sequence before scope release.
+    killSignal: "SIGKILL",
+    detached: process.platform !== "win32",
   });
-  return yield* spawnAndCollect(codexSettings.binaryPath, command);
+}
+
+const runCodexCommand = Effect.fn("runCodexCommand")(function* (
+  codexSettings: CodexSettings,
+  args: ReadonlyArray<string>,
+  environment: NodeJS.ProcessEnv = process.env,
+) {
+  const command = makeCodexHealthProbeCommand(codexSettings, args, environment);
+  return yield* spawnAndCollect(codexSettings.binaryPath, command, {
+    terminationGrace: CODEX_HEALTH_PROBE_TERMINATION_GRACE,
+  });
 });
 
 function codexAuthProbeStatusFromLoginStatusResult(result: {
@@ -1967,7 +2060,7 @@ export const checkCodexCliProviderStatus = Effect.fn("checkCodexCliProviderStatu
         version: parsedVersion,
         status: "warning",
         auth: { status: "unknown" },
-        message: "Codex CLI login status check timed out. Provider sessions may still work.",
+        message: CODEX_CLI_LOGIN_STATUS_TIMEOUT_MESSAGE,
       },
     });
   }
@@ -1997,6 +2090,20 @@ export const checkCodexCliProviderStatus = Effect.fn("checkCodexCliProviderStatu
     },
   });
 });
+
+/**
+ * A login-status timeout is different from a conclusive authentication
+ * failure: Codex sessions may remain usable and the bounded subprocess simply
+ * failed to answer in time. Keep this classification colocated with the probe
+ * that emits it so the managed provider never has to infer lifecycle meaning
+ * from arbitrary provider output.
+ */
+export const isCodexCliLoginStatusProbeInconclusive = (snapshot: ServerProvider): boolean =>
+  snapshot.driver === ProviderDriverKind.make("codex") &&
+  snapshot.installed &&
+  snapshot.status === "warning" &&
+  snapshot.auth.status === "unknown" &&
+  snapshot.message === CODEX_CLI_LOGIN_STATUS_TIMEOUT_MESSAGE;
 
 // NOTE: the singleton `CodexProviderLive` Layer has been removed as part of
 // the per-instance-driver refactor. `CodexDriver.create()` builds a managed

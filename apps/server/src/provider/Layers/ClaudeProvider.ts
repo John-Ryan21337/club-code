@@ -9,6 +9,7 @@ import {
   type ServerProviderSlashCommand,
 } from "@cafecode/contracts";
 import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
@@ -41,6 +42,8 @@ import {
 import { makeClaudeEnvironment } from "../Drivers/ClaudeHome.ts";
 import { parseClaudeAccountUsage } from "../claudeAccountUsage.ts";
 import claudeModelCatalog from "./ClaudeModelCatalog.json" with { type: "json" };
+
+const CLAUDE_HEALTH_PROBE_TERMINATION_GRACE = Duration.seconds(1);
 
 const DEFAULT_CLAUDE_MODEL_CAPABILITIES: ModelCapabilities = createModelCapabilities({
   optionDescriptors: [],
@@ -591,7 +594,11 @@ const runClaudeCommand = Effect.fn("runClaudeCommand")(function* (
     env: claudeEnvironment,
     shell: process.platform === "win32",
   });
-  return yield* spawnAndCollect(claudeSettings.binaryPath, command);
+  // A wedged `claude` probe must not pin one of the two startup admission
+  // slots or leave the scope finalizer waiting on an ignored SIGTERM.
+  return yield* spawnAndCollect(claudeSettings.binaryPath, command, {
+    terminationGrace: CLAUDE_HEALTH_PROBE_TERMINATION_GRACE,
+  });
 });
 
 export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(function* (

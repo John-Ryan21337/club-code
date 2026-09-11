@@ -269,6 +269,11 @@ export const WsServerRefreshProvidersRpc = Rpc.make(WS_METHODS.serverRefreshProv
      * It is valid only with `instanceId`.
      */
     usageOnly: Schema.optional(Schema.Boolean),
+    /**
+     * Bypass the usage polling cooldown. Use this only for an explicit user
+     * refresh. Automatic polling must leave this unset.
+     */
+    force: Schema.optional(Schema.Boolean),
   }),
   success: ServerProviderUpdatedPayload,
 });

@@ -54,6 +54,7 @@ import {
 } from "../Services/ProviderAdapterRegistry.ts";
 import { ProviderService } from "../Services/ProviderService.ts";
 import { ProviderSessionDirectory } from "../Services/ProviderSessionDirectory.ts";
+import { hasLiveProviderRuntimeOwner } from "../providerRuntimeOwnerEvidence.ts";
 import { makeProviderServiceLive } from "./ProviderService.ts";
 import { NoOpProviderEventLoggers, ProviderEventLoggers } from "./ProviderEventLoggers.ts";
 import { ProviderSessionDirectoryLive } from "./ProviderSessionDirectory.ts";
@@ -1577,14 +1578,80 @@ routing.layer("ProviderServiceLive routing", (it) => {
             activeTurnId: string | null;
             lastError: string | null;
             lastRuntimeEvent: string | null;
+            runtimeOwnerId: string;
+            runtimeOwnerPid: number;
+            runtimeOwnerStartedAt: string;
+            runtimeOwnerHeartbeatAt: string;
           };
           assert.equal(runtimePayload.cwd, session.cwd);
           assert.equal(runtimePayload.model, null);
           assert.equal(runtimePayload.activeTurnId, `turn-${String(session.threadId)}`);
           assert.equal(runtimePayload.lastError, null);
           assert.equal(runtimePayload.lastRuntimeEvent, "provider.sendTurn");
+          assert.match(runtimePayload.runtimeOwnerId, /^[0-9a-f-]{36}$/u);
+          assert.equal(runtimePayload.runtimeOwnerPid, process.pid);
+          assert.equal(Number.isNaN(Date.parse(runtimePayload.runtimeOwnerStartedAt)), false);
+          assert.equal(Number.isNaN(Date.parse(runtimePayload.runtimeOwnerHeartbeatAt)), false);
         }
       }
+    }),
+  );
+
+  it.effect("reports a locally owned session inventory as available", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+
+      const emptyInventory = yield* provider.listSessionsInventory();
+      assert.isTrue(emptyInventory.available);
+      assert.equal(emptyInventory.sessions.length, 0);
+
+      const threadId = asThreadId("thread-inventory-available");
+      yield* provider.startSession(threadId, {
+        provider: ProviderDriverKind.make("codex"),
+        providerInstanceId: codexInstanceId,
+        threadId,
+        runtimeMode: "full-access",
+      });
+
+      const inventory = yield* provider.listSessionsInventory();
+      assert.isTrue(inventory.available);
+      assert.deepEqual(
+        inventory.sessions.map((session) => session.threadId),
+        [threadId],
+      );
+    }),
+  );
+
+  it.effect("writes a live runtime owner lease for every listed running session", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const runtimeRepository = yield* ProviderSessionRuntimeRepository;
+
+      const threadId = asThreadId("thread-runtime-owner-lease");
+      const session = yield* provider.startSession(threadId, {
+        provider: ProviderDriverKind.make("codex"),
+        providerInstanceId: codexInstanceId,
+        threadId,
+        runtimeMode: "full-access",
+      });
+      yield* provider.sendTurn({
+        threadId: session.threadId,
+        input: "hello",
+        attachments: [],
+      });
+      yield* provider.listSessions();
+
+      const persisted = yield* runtimeRepository.getByThreadId({ threadId: session.threadId });
+      assert.equal(Option.isSome(persisted), true);
+      if (Option.isNone(persisted)) {
+        return;
+      }
+      const payload = persisted.value.runtimePayload as Record<string, unknown>;
+      assert.equal(
+        hasLiveProviderRuntimeOwner(payload, Date.parse(String(payload.runtimeOwnerHeartbeatAt))),
+        true,
+      );
+      assert.equal(payload.runtimeOwnerPid, process.pid);
     }),
   );
 
@@ -1763,7 +1830,12 @@ routing.layer("ProviderServiceLive routing", (it) => {
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
-  it.effect("starts fresh when a persisted Codex resume cursor points at a missing rollout", () =>
+  // Codex reports a stale rollout with two different wordings depending on the
+  // native runtime version. Both must trigger exactly one fresh-start retry.
+  const expectCodexStaleRolloutRecovery = (scenario: {
+    readonly threadSuffix: string;
+    readonly detail: string;
+  }) =>
     Effect.gen(function* () {
       const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "t3-provider-service-codex-rollout-"));
       const dbPath = path.join(tempDir, "orchestration.sqlite");
@@ -1775,7 +1847,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         Layer.provide(runtimeRepositoryLayer),
       );
 
-      const threadId = asThreadId("thread-codex-missing-rollout");
+      const threadId = asThreadId(`thread-codex-missing-rollout-${scenario.threadSuffix}`);
       const staleResumeCursor = { threadId: "019ea1bf-c1d5-7800-9813-0ccf59d77847" };
 
       yield* Effect.gen(function* () {
@@ -1799,7 +1871,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
           new ProviderAdapterProcessError({
             provider: CODEX_DRIVER,
             threadId: input.threadId,
-            detail: "no rollout found for thread id 019ea1bf-c1d5-7800-9813-0ccf59d77847",
+            detail: scenario.detail,
           }),
         ),
       );
@@ -1839,7 +1911,21 @@ routing.layer("ProviderServiceLive routing", (it) => {
       }
 
       fs.rmSync(tempDir, { recursive: true, force: true });
-    }).pipe(Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.provide(NodeServices.layer));
+
+  it.effect("starts fresh when a persisted Codex resume cursor points at a missing rollout", () =>
+    expectCodexStaleRolloutRecovery({
+      threadSuffix: "no-rollout-found",
+      detail: "no rollout found for thread id 019ea1bf-c1d5-7800-9813-0ccf59d77847",
+    }),
+  );
+
+  it.effect("starts fresh when Codex cannot resolve the persisted rollout path", () =>
+    expectCodexStaleRolloutRecovery({
+      threadSuffix: "unresolvable-rollout-path",
+      detail:
+        "failed to resolve rollout path `/tmp/rollout-019ea1bf-c1d5-7800-9813-0ccf59d77847.jsonl`: file does not exist",
+    }),
   );
 
   it.effect("starts fresh when a persisted Claude resume cursor is rejected", () =>
