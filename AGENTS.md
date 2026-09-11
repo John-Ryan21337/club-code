@@ -258,6 +258,8 @@ Important files:
 
 ## Codex Integration
 
+- The per-session Codex worker limit excludes the coordinator. For pinned Codex `rust-v0.153.4`, emit both `agents.max_concurrent_threads_per_session=N` and `features.multi_agent_v2.max_concurrent_threads_per_session=N+1`. The V2-specific value takes precedence over the general value. Validate the existing 1–128 worker range before constructing process arguments, and leave both keys absent when no limit is selected. Preserve this mapping in normal, OSS, and HTTP fallback startup. The pinned structured-feature merger retains an existing boolean toggle as `enabled`, including explicit false, when a nested CLI limit is merged; do not add an unconditional V2 enable flag. See the [pinned resolver](https://github.com/openai/codex/blob/rust-v0.153.4/codex-rs/core/src/config/mod.rs#L2690), [precedence regression](https://github.com/openai/codex/blob/rust-v0.153.4/codex-rs/core/src/config/config_tests.rs#L11506), and [boolean-preserving merge](https://github.com/openai/codex/blob/rust-v0.153.4/codex-rs/config/src/merge.rs#L71).
+
 Cafe Code's Codex adapter uses `codex app-server`, which speaks JSON-RPC over stdio by default. Official docs describe the app-server protocol as JSON-RPC-like messages where requests have `id`, responses echo the `id`, and notifications omit `id`. The official app-server websocket listener is experimental/unsupported; Cafe should keep using stdio JSONL for local app-server control unless upstream changes that recommendation.
 
 Codex OSS instances may use the pinned built-in LM Studio provider by launching

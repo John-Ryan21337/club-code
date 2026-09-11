@@ -1,5 +1,6 @@
 import {
   ApprovalRequestId,
+  CodexSubagentThreadLimit,
   DEFAULT_MODEL,
   EventId,
   ProviderDriverKind,
@@ -71,6 +72,7 @@ const decodeV2TurnSteerResponse = Schema.decodeUnknownEffect(EffectCodexSchema.V
 const isV2ItemCompletedNotification = Schema.is(EffectCodexSchema.V2ItemCompletedNotification);
 const isV2TurnCompletedNotification = Schema.is(EffectCodexSchema.V2TurnCompletedNotification);
 const decodeProviderThreadGoal = Schema.decodeUnknownEffect(ProviderThreadGoal);
+const isCodexSubagentThreadLimit = Schema.is(CodexSubagentThreadLimit);
 
 const PROVIDER = ProviderDriverKind.make("codex");
 
@@ -356,10 +358,28 @@ export function buildCodexAppServerArgs(
   ossMode = false,
   codexSubagentThreadLimit?: number,
 ): ReadonlyArray<string> {
+  if (
+    codexSubagentThreadLimit !== undefined &&
+    !isCodexSubagentThreadLimit(codexSubagentThreadLimit)
+  ) {
+    throw new RangeError("Codex worker limit must be an integer from 1 to 128.");
+  }
+  // Codex rust-v0.153.4 config/mod.rs resolves agents.N as N spawned workers.
+  // Its V2-specific setting takes precedence and counts the coordinator too.
+  // Set both keys so a saved V2 value cannot override this session's limit.
+  // https://github.com/openai/codex/blob/rust-v0.153.4/codex-rs/core/src/config/mod.rs#L2690
+  // The pinned config merger preserves an existing boolean feature toggle as
+  // `enabled`, so this nested limit does not enable a disabled V2 backend.
+  // https://github.com/openai/codex/blob/rust-v0.153.4/codex-rs/config/src/merge.rs#L71
   const subagentThreadLimitArgs =
     codexSubagentThreadLimit === undefined
       ? []
-      : ["-c", `agents.max_concurrent_threads_per_session=${codexSubagentThreadLimit}`];
+      : [
+          "-c",
+          `agents.max_concurrent_threads_per_session=${codexSubagentThreadLimit}`,
+          "-c",
+          `features.multi_agent_v2.max_concurrent_threads_per_session=${codexSubagentThreadLimit + 1}`,
+        ];
   if (ossMode) {
     // Keep documented global flags before the app-server subcommand and name
     // LM Studio explicitly so a non-interactive session never opens Codex's
