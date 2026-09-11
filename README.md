@@ -12,6 +12,22 @@ share playlists and projects, and discuss contributions.
 🏮 [Club CodeのDiscordに参加](https://discord.gg/dYwu6cRCr5) — 導入の相談、
 プレイリストや作品の共有、開発参加の相談はこちら。
 
+**Agent Browser:** Keep pages and logins open while you hide or minimize the browser.
+Use up to eight tabs, a movable and resizable panel, or adjustable chat/browser split view.
+Codex and Claude can act on a shared origin with a saved per-thread disable option.
+Passwords and two-factor codes remain operator-only; app restart ends all tab sessions.
+
+**Agent Browser：** 非表示・最小化してもページとログインを保持します。最大8タブ、
+移動・サイズ変更できるパネル、調整できるチャットとの分割表示を利用できます。
+Codex・Claudeは共有したオリジンを操作でき、スレッドごとに無効化できます。
+パスワードと二要素認証コードの入力は利用者のみが行い、アプリ再起動で全タブを終了します。
+
+[Cafe Code feature adoption guide](./docs/cafe-code-adoption-2026-09.md) — Current upstream comparison,
+focused PRs, dependencies, and implementation boundaries for maintainers.
+
+[Cafe Code向け機能導入ガイド](./docs/cafe-code-adoption-2026-09.md) — 現行上流版との比較、
+機能別PR、依存関係、実装範囲を保守担当者向けにまとめています。
+
 Made in Japan with love, too much glitter, and absolutely no chance of catching
 the last train.
 
