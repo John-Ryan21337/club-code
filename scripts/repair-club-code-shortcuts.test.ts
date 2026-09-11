@@ -20,14 +20,22 @@ const powershellPath = NodePath.join(
 const shortcutRepairTestTimeoutMs = process.platform === "win32" ? 90_000 : 15_000;
 const execFileAsync = promisify(execFile);
 
-async function runShortcutFixture(fixturePath: string): Promise<string> {
+async function runShortcutFixture(
+  fixturePath: string,
+  inheritedEnvironment: NodeJS.ProcessEnv,
+): Promise<string> {
   // One native process avoids repeated PowerShell/COM cold starts under CI load.
   // Its own deadline stays below the test deadline, and stdin is closed so the
   // child cannot wait for terminal input while holding the fixture directory.
+  // A pwsh -> Node -> powershell.exe launch keeps incompatible PS7 module
+  // paths unless the intermediate process removes this inherited variable.
+  const env = Object.fromEntries(
+    Object.entries(inheritedEnvironment).filter(([key]) => key.toUpperCase() !== "PSMODULEPATH"),
+  );
   const result = execFileAsync(
     powershellPath,
     ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", fixturePath],
-    { encoding: "utf8", timeout: 60_000, windowsHide: true, maxBuffer: 64 * 1_024 },
+    { env, encoding: "utf8", timeout: 60_000, windowsHide: true, maxBuffer: 64 * 1_024 },
   );
   result.child.stdin?.end();
   try {
@@ -80,6 +88,10 @@ describe("Club Code shortcut repair", () => {
       const foreignLauncher = NodePath.join(foreignRepoRoot, "Start-CafeCode.ps1");
       writeFileSync(foreignLauncher, "# foreign fixture\n");
       const unrelatedExecutable = process.execPath;
+      // Exercise a launch from an intermediate process whose module search
+      // path belongs to another PowerShell host, including Windows key casing.
+      const foreignModuleRoot = NodePath.join(root, "foreign-host-modules");
+      mkdirSync(foreignModuleRoot);
 
       const recognized = NodePath.join(root, "Club Code.lnk");
       const foreign = NodePath.join(root, "Foreign Club Code.lnk");
@@ -88,11 +100,17 @@ describe("Club Code shortcut repair", () => {
       const powershellOwned = NodePath.join(root, "PowerShell Owned Club Code.lnk");
       const createScript = [
         "[Console]::Error.WriteLine('shortcut-fixture:create:start')",
+        "[Console]::Error.WriteLine('shortcut-fixture:apartment:' + [Threading.Thread]::CurrentThread.GetApartmentState())",
         "$shell = New-Object -ComObject WScript.Shell",
+        "[Console]::Error.WriteLine('shortcut-fixture:create:com-created')",
         `$known = $shell.CreateShortcut('${recognized.replaceAll("'", "''")}')`,
+        "[Console]::Error.WriteLine('shortcut-fixture:create:known-created')",
         `$known.TargetPath = '${NodePath.join(repoRoot, "Start-CafeCode.ps1").replaceAll("'", "''")}'`,
+        "[Console]::Error.WriteLine('shortcut-fixture:create:target-set')",
         `$known.WorkingDirectory = '${repoRoot.replaceAll("'", "''")}'`,
+        "[Console]::Error.WriteLine('shortcut-fixture:create:working-set')",
         "$known.Save()",
+        "[Console]::Error.WriteLine('shortcut-fixture:create:saved')",
         "[void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($known)",
         "[Console]::Error.WriteLine('shortcut-fixture:create:known')",
         `$foreign = $shell.CreateShortcut('${foreign.replaceAll("'", "''")}')`,
@@ -129,7 +147,7 @@ describe("Club Code shortcut repair", () => {
         `$other = $shell.CreateShortcut('${unrelated.replaceAll("'", "''")}')`,
         `$workingOnly = $shell.CreateShortcut('${workingOnly.replaceAll("'", "''")}')`,
         `$powershellOwned = $shell.CreateShortcut('${powershellOwned.replaceAll("'", "''")}')`,
-        "[PSCustomObject]@{ KnownTarget = $known.TargetPath; KnownArguments = $known.Arguments; KnownWorking = $known.WorkingDirectory; ForeignTarget = $foreign.TargetPath; OtherTarget = $other.TargetPath; WorkingOnlyTarget = $workingOnly.TargetPath; PowershellOwnedArguments = $powershellOwned.Arguments; EncodingProbe = '日本語' } | ConvertTo-Json -Compress",
+        `[PSCustomObject]@{ KnownTarget = $known.TargetPath; KnownArguments = $known.Arguments; KnownWorking = $known.WorkingDirectory; ForeignTarget = $foreign.TargetPath; OtherTarget = $other.TargetPath; WorkingOnlyTarget = $workingOnly.TargetPath; PowershellOwnedArguments = $powershellOwned.Arguments; InheritedModulePathPresent = ($env:PSModulePath -split ';') -contains '${foreignModuleRoot.replaceAll("'", "''")}'; EncodingProbe = '日本語' } | ConvertTo-Json -Compress`,
         "foreach ($link in @($known, $foreign, $other, $workingOnly, $powershellOwned)) { [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($link) }",
         "[void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell)",
         "[Console]::Error.WriteLine('shortcut-fixture:inspect:complete')",
@@ -155,7 +173,13 @@ describe("Club Code shortcut repair", () => {
           ].join("\n"),
         "utf8",
       );
-      const observed = JSON.parse(await runShortcutFixture(fixturePath)) as {
+      const observed = JSON.parse(
+        await runShortcutFixture(fixturePath, {
+          ...process.env,
+          PSModulePath: foreignModuleRoot,
+          psmodulepath: foreignModuleRoot,
+        }),
+      ) as {
         KnownTarget: string;
         KnownArguments: string;
         KnownWorking: string;
@@ -163,6 +187,7 @@ describe("Club Code shortcut repair", () => {
         OtherTarget: string;
         WorkingOnlyTarget: string;
         PowershellOwnedArguments: string;
+        InheritedModulePathPresent: boolean;
         EncodingProbe: string;
       };
       expect(observed.KnownTarget.toLowerCase()).toBe(powershellPath.toLowerCase());
@@ -173,6 +198,7 @@ describe("Club Code shortcut repair", () => {
       expect(observed.WorkingOnlyTarget.toLowerCase()).toBe(unrelatedExecutable.toLowerCase());
       expect(observed.PowershellOwnedArguments).toContain("-NoLogo -NoProfile");
       expect(observed.PowershellOwnedArguments).toContain("-Wait");
+      expect(observed.InheritedModulePathPresent).toBe(false);
       expect(observed.EncodingProbe).toBe("日本語");
     },
     shortcutRepairTestTimeoutMs,
