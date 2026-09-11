@@ -1,8 +1,9 @@
 import { DatabaseSync } from "node:sqlite";
-import { mkdtemp, mkdir, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { copyFile, mkdtemp, mkdir, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { WorkspaceObservatoryDatabaseInput } from "@cafecode/contracts";
 
 import { WorkspaceObservatory } from "./WorkspaceObservatory.ts";
 
@@ -29,6 +30,51 @@ async function fixture() {
 }
 
 describe("WorkspaceObservatory", () => {
+  it("reads the configured state database through a canonical parent-directory alias", async () => {
+    const { workspace, state } = await fixture();
+    const alias = join(temporaryRoot!, "state-parent-alias");
+    await symlink(temporaryRoot!, alias, process.platform === "win32" ? "junction" : "dir");
+    const observatory = new WorkspaceObservatory(join(alias, "state.sqlite"), workspace);
+
+    await expect(
+      observatory.tables({ cwd: workspace, database: "club-code-state" }),
+    ).resolves.toEqual([{ name: "secrets", type: "table" }]);
+    await expect(
+      observatory.rows({ cwd: workspace, database: "club-code-state", table: "secrets" }),
+    ).resolves.toMatchObject({
+      rows: [["1", "[redacted]", '{"nestedSecret":"[redacted]"}']],
+    });
+    // The aliased read must release its handle to the actual database.
+    await rename(state, `${state}.moved`);
+    await rename(`${state}.moved`, state);
+  });
+
+  it("rejects a configured parent alias retargeted after database path resolution", async () => {
+    const { workspace, state } = await fixture();
+    const alias = join(temporaryRoot!, "state-parent-alias");
+    const replacement = join(temporaryRoot!, "replacement-parent");
+    await mkdir(replacement);
+    await copyFile(state, join(replacement, "state.sqlite"));
+    const linkType = process.platform === "win32" ? "junction" : "dir";
+    await symlink(temporaryRoot!, alias, linkType);
+    const observatory = new WorkspaceObservatory(join(alias, "state.sqlite"), workspace);
+    // Pause at the lookup/open boundary to make the path-retarget race deterministic.
+    const lookup = observatory as unknown as {
+      databasePath: (input: WorkspaceObservatoryDatabaseInput) => Promise<string>;
+    };
+    const original = lookup.databasePath.bind(observatory);
+    vi.spyOn(lookup, "databasePath").mockImplementationOnce(async (input) => {
+      const filename = await original(input);
+      await rename(alias, `${alias}-previous`);
+      await symlink(replacement, alias, linkType);
+      return filename;
+    });
+
+    await expect(
+      observatory.tables({ cwd: workspace, database: "club-code-state" }),
+    ).rejects.toThrow("Database path changed while it was being opened");
+  });
+
   it("rejects traversal and binary workspace reads", async () => {
     const { workspace, observatory } = await fixture();
     await expect(
