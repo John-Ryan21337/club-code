@@ -937,6 +937,13 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   const publishConfig = resolveGitHubPublishConfig(updateChannel);
   if (publishConfig) {
     buildConfig.publish = [publishConfig];
+    buildConfig.extraMetadata = {
+      cafeCodeUpdateTarget: {
+        provider: publishConfig.provider,
+        owner: publishConfig.owner,
+        repo: publishConfig.repo,
+      },
+    };
   } else if (mockUpdates) {
     buildConfig.publish = [
       {
