@@ -53,6 +53,10 @@ The first proposals are small foundations against current Cafe `dev`.
 They do not activate a browser, endpoint, provider tool, or permission.
 The complete working implementation is available in Club Code for reference.
 
+- [Cafe PR #63: bounded browser contracts](https://github.com/cafeai/cafe-code/pull/63) is based directly on current `dev`.
+- [Cafe PR #64: URL and redaction helpers](https://github.com/cafeai/cafe-code/pull/64) is independent of #63 and also based on current `dev`.
+- [Club PR #66: complete source publication](https://github.com/John-Ryan21337/club-code/pull/66) contains the working browser and this guide.
+
 | Unit                               | Source to review                                                                                          | Prerequisites and integration work                                                           |
 | ---------------------------------- | --------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
 | Bounded browser contracts          | `packages/contracts/src/embeddedBrowser.ts`                                                               | Direct-to-dev schema proposal; runtime must enforce authorization.                           |
@@ -97,6 +101,26 @@ Clipboard reliability [20](https://github.com/cafeai/cafe-code/pull/20) is alrea
 日本語：既存PRは上の表から選択できます。すべてが現在のブランチへそのままマージできるとは
 確認していません。26・27のプロバイダーバージョンは現行Cafeより古く、更新手順としては
 使わないでください。クリップボード修正20はマージ済みです。
+
+## Browser UI review media
+
+These captures show the actual browser panel component in a synthetic test harness.
+The chat and page are sample content; the native browser view is mocked.
+They compare floating, split, and minimized states, not historical application versions.
+They do not prove native login persistence or include any account data.
+
+[Watch the split, resize, minimize, and resume recording](./images/agent-browser-20260911/browser-layout-ui-harness.webm).
+
+| Floating panel                                                                                      | Chat/browser split                                                                     |
+| --------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| ![Floating browser in the UI harness](./images/agent-browser-20260911/01-floating-before-split.png) | ![Split browser in the UI harness](./images/agent-browser-20260911/02-split-after.png) |
+
+[Minimized tabs](./images/agent-browser-20260911/03-minimized-tabs.png) and
+[resumed split](./images/agent-browser-20260911/04-resumed-split.png) show the retained tab strip.
+
+日本語：これは実際のパネル部品を使ったテスト画面です。チャットとページはサンプルで、
+ネイティブブラウザーは模擬しています。実アカウントの情報は含みません。
+表示状態の比較であり、過去版との比較やネイティブのログイン保持の証明ではありません。
 
 ## Review evidence
 
