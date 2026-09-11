@@ -17,7 +17,11 @@
  *
  * @module provider/Services/ProviderInstanceRegistry
  */
-import type { ProviderInstanceId, ServerProvider } from "@cafecode/contracts";
+import type {
+  ProviderInstanceConfig,
+  ProviderInstanceId,
+  ServerProvider,
+} from "@cafecode/contracts";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
 import type * as PubSub from "effect/PubSub";
@@ -34,6 +38,8 @@ export interface ProviderInstanceRegistryShape {
    */
   readonly getInstance: (
     instanceId: ProviderInstanceId,
+    /** Return only an instance built from this exact saved configuration, when supplied. */
+    expectedConfig?: ProviderInstanceConfig,
   ) => Effect.Effect<ProviderInstance | undefined>;
   /**
    * Every available (driver-registered, successfully created) instance,

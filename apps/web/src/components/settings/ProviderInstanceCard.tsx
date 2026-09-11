@@ -52,6 +52,8 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import type { DriverOption } from "./providerDriverMeta";
 import { ProviderSettingsForm } from "./ProviderSettingsForm";
 import { ProviderModelsSection } from "./ProviderModelsSection";
+import { ProviderAccessCheck } from "./ProviderAccessCheck";
+import { ensureLocalApi } from "../../localApi";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
 import { RedactedSensitiveText } from "./RedactedSensitiveText";
 import { isLmStudioProviderInstance } from "../../providerInstances";
@@ -953,7 +955,7 @@ export function ProviderInstanceCard({
 
   const authRowNode = (
     <p className="flex min-w-0 flex-wrap items-center gap-x-1 text-xs text-muted-foreground/80">
-      {hasAuthenticatedEmail ? (
+      {hasAuthenticatedEmail && instance.driver !== "claudeAgent" ? (
         <>
           <span>Authenticated as</span>
           <ProviderAuthEmail email={authEmail} />
@@ -1208,6 +1210,14 @@ export function ProviderInstanceCard({
           </DialogHeader>
           <DialogPanel className="px-0 pb-4">
             <div className="space-y-0">
+              {instance.driver === "claudeAgent" ? (
+                <ProviderAccessCheck
+                  instanceId={instanceId}
+                  instance={instance}
+                  models={modelsForDisplay}
+                  checkAccess={(input) => ensureLocalApi().server.checkProviderAccess(input)}
+                />
+              ) : null}
               {driverOption !== undefined ? (
                 <div className="border-t border-border/60 px-4 py-3 sm:px-5 first:border-t-0">
                   <ProviderInstanceDefaultsSection

@@ -40,6 +40,30 @@ export const ServerConfigIssue = Schema.Union([
 export type ServerConfigIssue = typeof ServerConfigIssue.Type;
 
 const ServerConfigIssues = Schema.Array(ServerConfigIssue);
+
+export const ServerProviderAccessInput = Schema.Struct({
+  instanceId: ProviderInstanceId,
+  model: TrimmedNonEmptyString.check(
+    Schema.isMaxLength(256),
+    Schema.isPattern(/^[^\u0000-\u001f\u007f]+$/u),
+  ),
+});
+export type ServerProviderAccessInput = typeof ServerProviderAccessInput.Type;
+
+export const ServerProviderAccessResult = Schema.Struct({
+  ...ServerProviderAccessInput.fields,
+  checkedAt: IsoDateTime,
+  status: Schema.Literals([
+    "verified",
+    "authentication-required",
+    "account-restricted",
+    "rate-limited",
+    "unverified",
+    "unsupported",
+    "busy",
+  ]),
+});
+export type ServerProviderAccessResult = typeof ServerProviderAccessResult.Type;
 const Percent = Schema.Number.check(Schema.isBetween({ minimum: 0, maximum: 100 }));
 
 export const ServerProviderState = Schema.Literals(["ready", "warning", "error", "disabled"]);

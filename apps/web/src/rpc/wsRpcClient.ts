@@ -132,6 +132,7 @@ export interface WsRpcClient {
       typeof WS_METHODS.serverConsumeProviderRateLimitResetCredit
     >;
     readonly loginProvider: RpcUnaryMethod<typeof WS_METHODS.serverLoginProvider>;
+    readonly checkProviderAccess: RpcUnaryMethod<typeof WS_METHODS.serverCheckProviderAccess>;
     readonly updateProvider: RpcUnaryMethod<typeof WS_METHODS.serverUpdateProvider>;
     readonly restartProviderRuntime: RpcUnaryMethod<typeof WS_METHODS.serverRestartProviderRuntime>;
     readonly openSystemPromptFile: RpcUnaryNoArgMethod<
@@ -324,6 +325,8 @@ export function createWsRpcClient(transport: WsTransport): WsRpcClient {
         ),
       loginProvider: (input) =>
         transport.request((client) => client[WS_METHODS.serverLoginProvider](input)),
+      checkProviderAccess: (input) =>
+        transport.request((client) => client[WS_METHODS.serverCheckProviderAccess](input)),
       updateProvider: (input) =>
         transport.request((client) => client[WS_METHODS.serverUpdateProvider](input)),
       restartProviderRuntime: (input) =>

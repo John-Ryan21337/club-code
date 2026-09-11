@@ -24,6 +24,7 @@ import * as Struct from "effect/Struct";
 import * as Equal from "effect/Equal";
 import { applyClientSettingsPatch } from "@cafecode/shared/clientSettings";
 import { toastManager } from "../components/ui/toast";
+import { trackServerSettingsWrite } from "../serverSettingsWriteState";
 import { applyServerSettingsPatch } from "@cafecode/shared/serverSettings";
 import {
   applyClientSettingsUpdated,
@@ -217,34 +218,36 @@ async function applyUnifiedSettingsPatch(patch: Partial<UnifiedSettings>): Promi
   const localClientPatch = currentServerConfig ? localPatch : clientPatch;
 
   if (Object.keys(serverPatch).length > 0) {
-    if (currentServerConfig) {
-      const previousSettings = currentServerConfig.settings;
-      const optimisticSettings = applyServerSettingsPatch(previousSettings, serverPatch);
-      markPatchRevision(serverPatch, serverFieldRevisions, revision);
-      applySettingsUpdated(optimisticSettings);
-      writes.push(
-        ensureLocalApi()
-          .server.updateSettings(serverPatch)
-          .catch((error) => {
-            const latestSettings = getServerConfig()?.settings;
-            if (latestSettings) {
-              applySettingsUpdated(
-                rollbackOptimisticPatch(
-                  latestSettings,
-                  previousSettings,
-                  optimisticSettings,
-                  serverPatch,
-                  serverFieldRevisions,
-                  revision,
-                ),
-              );
-            }
-            throw error;
-          }),
-      );
-    } else {
-      writes.push(ensureLocalApi().server.updateSettings(serverPatch));
-    }
+    writes.push(
+      trackServerSettingsWrite(async () => {
+        if (currentServerConfig) {
+          const previousSettings = currentServerConfig.settings;
+          const optimisticSettings = applyServerSettingsPatch(previousSettings, serverPatch);
+          markPatchRevision(serverPatch, serverFieldRevisions, revision);
+          applySettingsUpdated(optimisticSettings);
+          await ensureLocalApi()
+            .server.updateSettings(serverPatch)
+            .catch((error) => {
+              const latestSettings = getServerConfig()?.settings;
+              if (latestSettings) {
+                applySettingsUpdated(
+                  rollbackOptimisticPatch(
+                    latestSettings,
+                    previousSettings,
+                    optimisticSettings,
+                    serverPatch,
+                    serverFieldRevisions,
+                    revision,
+                  ),
+                );
+              }
+              throw error;
+            });
+        } else {
+          await ensureLocalApi().server.updateSettings(serverPatch);
+        }
+      }),
+    );
   }
 
   if (Object.keys(sharedClientPatch).length > 0 && currentServerConfig) {

@@ -156,6 +156,11 @@ describe("ProviderInstanceRegistryLive — multi-instance codex slice", () => {
       const work = yield* registry.getInstance(workId);
       expect(personal).toBeDefined();
       expect(work).toBeDefined();
+      expect(yield* registry.getInstance(personalId, configMap[personalId])).toBe(personal);
+      expect(yield* registry.getInstance(personalId, structuredClone(configMap[personalId]))).toBe(
+        personal,
+      );
+      expect(yield* registry.getInstance(personalId, configMap[workId])).toBeUndefined();
       expect(personal!.adapter).not.toBe(work!.adapter);
       expect(personal!.textGeneration).not.toBe(work!.textGeneration);
       expect(personal!.snapshot).not.toBe(work!.snapshot);
