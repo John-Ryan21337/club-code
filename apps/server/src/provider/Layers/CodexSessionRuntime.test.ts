@@ -269,24 +269,49 @@ describe("buildCodexAppServerArgs", () => {
     ]);
   });
 
-  it("passes the per-session spawned-agent thread ceiling to every Codex app-server mode", () => {
-    const subagentThreadLimitArgs = ["-c", "agents.max_concurrent_threads_per_session=16"];
-    assert.deepStrictEqual(buildCodexAppServerArgs(undefined, false, 16), [
-      "app-server",
-      ...subagentThreadLimitArgs,
-    ]);
-    assert.deepStrictEqual(buildCodexAppServerArgs({ responsesWebsockets: "disabled" }, true, 16), [
-      "--oss",
-      "--local-provider",
-      "lmstudio",
-      "app-server",
-      ...subagentThreadLimitArgs,
-    ]);
-    assert.deepStrictEqual(
-      buildCodexAppServerArgs({ responsesWebsockets: "disabled" }, false, 16).slice(-2),
-      subagentThreadLimitArgs,
-    );
+  it.each([1, 16, 128])(
+    "overrides both Codex worker limits for %i workers in every app-server mode",
+    (limit) => {
+      const subagentThreadLimitArgs = [
+        "-c",
+        `agents.max_concurrent_threads_per_session=${limit}`,
+        "-c",
+        `features.multi_agent_v2.max_concurrent_threads_per_session=${limit + 1}`,
+      ];
+      assert.deepStrictEqual(buildCodexAppServerArgs(undefined, false, limit), [
+        "app-server",
+        ...subagentThreadLimitArgs,
+      ]);
+      assert.deepStrictEqual(
+        buildCodexAppServerArgs({ responsesWebsockets: "disabled" }, true, limit),
+        ["--oss", "--local-provider", "lmstudio", "app-server", ...subagentThreadLimitArgs],
+      );
+      assert.deepStrictEqual(
+        buildCodexAppServerArgs({ responsesWebsockets: "disabled" }, false, limit).slice(-4),
+        subagentThreadLimitArgs,
+      );
+    },
+  );
+
+  it("preserves Codex worker defaults when no session limit is selected", () => {
+    for (const args of [
+      buildCodexAppServerArgs(undefined),
+      buildCodexAppServerArgs(undefined, true),
+      buildCodexAppServerArgs({ responsesWebsockets: "disabled" }),
+    ]) {
+      assert.equal(
+        args.some((arg) => arg.includes("max_concurrent_threads_per_session")),
+        false,
+      );
+    }
   });
+
+  it.each([0, -1, 129, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
+    "rejects invalid worker limit %s before building launch arguments",
+    (limit) => {
+      assert.throws(() => buildCodexAppServerArgs(undefined, false, limit), RangeError);
+    },
+  );
 
   it("uses the Codex OSS transport for local LM Studio sessions", () => {
     assert.deepStrictEqual(buildCodexAppServerArgs({ responsesWebsockets: "disabled" }, true), [
