@@ -3,7 +3,7 @@
 ## Task Completion Requirements
 
 - When code changes are made, all of `yarn fmt`, `yarn lint`, and `yarn typecheck` must pass before considering tasks completed.
-- Run tests with `yarn test` (runs Vitest through the Turbo task graph).
+- Run tests with `yarn test` (runs Vitest through the Turbo task graph with at most two concurrent workspace tasks). Each workspace also starts test workers; keep this default to limit competition for host resources without omitting tests or extending their deadlines.
 - When a change touches Electron packaging, backend bootstrap, provider daemon startup, or generated bundle boundaries, also run `yarn build:desktop`.
 - Rust takes a while to compile. Do not prematurely kill Rust/cargo builds.
 - Integration tests that require live provider binaries, real provider credentials, process reaping, or detached daemon handoff should be explicit `*.e2e.test.ts` or documented opt-in commands. Do not silently put flaky external-provider assumptions on the default test path.

@@ -3295,13 +3295,24 @@ describe("ProviderCommandReactor", () => {
 
     await waitFor(async () => {
       const readModel = await harness.readModel();
-      return readModel.threads.find((entry) => entry.id === threadId)?.goal?.status === "paused";
+      const thread = readModel.threads.find((entry) => entry.id === threadId);
+      // Goal synchronization precedes the separate interrupt-completed activity dispatch.
+      return (
+        thread?.goal?.status === "paused" &&
+        thread.activities.some(
+          (activity) =>
+            activity.kind === "provider.turn.interrupt.completed" && activity.turnId === turnId,
+        )
+      );
     });
     const readModel = await harness.readModel();
     const thread = readModel.threads.find((entry) => entry.id === threadId);
     expect(thread?.goal?.status).toBe("paused");
     expect(
-      thread?.activities.some((activity) => activity.kind === "provider.turn.interrupt.completed"),
+      thread?.activities.some(
+        (activity) =>
+          activity.kind === "provider.turn.interrupt.completed" && activity.turnId === turnId,
+      ),
     ).toBe(true);
   });
 

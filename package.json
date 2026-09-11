@@ -28,7 +28,7 @@
     "build:desktop": "turbo run build --filter=@cafecode/desktop --filter=@cafeai/cafe-code",
     "typecheck": "turbo run typecheck",
     "lint": "oxlint --report-unused-disable-directives",
-    "test": "turbo run test",
+    "test": "turbo run test --concurrency=2",
     "test:desktop-smoke": "turbo run smoke-test --filter=@cafecode/desktop",
     "test:native-desktop-runtime": "node scripts/native-desktop-runtime-smoke.ts",
     "test:native-window-opacity": "node scripts/run-window-opacity-native-smoke.ts",
