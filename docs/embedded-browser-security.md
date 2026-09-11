@@ -1,6 +1,6 @@
 # Embedded browser security and MVP boundary
 
-The desktop app includes one isolated, temporary browser tab that is rendered inside the main
+The desktop app includes up to eight isolated, temporary browser tabs rendered inside the main
 window. It is intended for user-supervised portal work. The browser is private by default: page
 content cannot be snapshotted and app-assisted controls cannot run until the user explicitly shares
 the current origin.
@@ -9,14 +9,14 @@ the current origin.
 
 - Opening an empty tab, closing it, stopping a load, moving its view, and revoking sharing are safe
   local controls and do not prompt.
-- URL navigation, reload, back, and forward each use a native desktop approval dialog.
-- Sharing uses a native dialog and is scoped to the exact current origin. Cross-origin navigation,
-  renderer loss, or tab close revokes it.
-- A share grant does not expose page content by itself. Every DOM/accessibility snapshot requires a
-  separate native approval.
-- Every app-assisted click and typing operation requires a fresh approved snapshot plus its own
-  native approval. Snapshot grants are invalidated when an action is requested or when navigation,
-  loading, or title state changes.
+- Sharing uses one native dialog that authorizes page text reads, local visible-viewport OCR,
+  clicks, non-sensitive typing, and routine navigation for the current origin. Routine actions
+  then run without a new dialog. The operator can revoke this authorization at any time.
+- Explicit address navigation to a different origin requires approval. Clicked links and back/forward may leave the shared origin,
+  but access to the destination ends until that origin is shared. Cross-origin navigation,
+  renderer loss, or ending the tab session revokes sharing.
+- Clicks and typing still require a fresh snapshot target. Snapshot targets are invalidated when
+  an action is requested or when navigation, loading, or title state changes.
 - Credential and 2FA entry is visibly marked as sensitive, uses a warning approval, never displays
   the value in that dialog, and is rejected on cleartext remote HTTP pages. Loopback HTTP is allowed
   for local development.
@@ -24,33 +24,56 @@ the current origin.
   does not add another prompt. The approval rules above apply to the app-assisted controls below the
   page.
 
-The service records the page URL before an approval dialog and verifies that the exact page and
-share grant are still current afterward. This prevents a page from navigating underneath an open
+The service verifies the exact page URL, share grant, and per-tab control revision across asynchronous
+operations and any remaining approval dialog. Revocation, re-sharing, and navigation advance the
+revision, so returning to the same URL cannot restore a pending action. This prevents a page from navigating underneath an open
 approval dialog and receiving an action intended for the previous page. Click and typing targets
 are also rebound to their snapshot-time role, accessible name, and text immediately before the
 native input is sent; an occluding element or replaced target fails closed.
 
 ## Agent handoff and bounded provider tools
 
-After approving a snapshot, the user can choose **Add to one-time chat context**. A second native
-confirmation adds a bounded, redacted summary to an editable context field beside the currently
+After taking a snapshot under the current origin's sharing authorization, the user can choose
+**Add to one-time chat context**. A separate native confirmation adds a bounded, redacted summary to an editable context field beside the currently
 visible chat composer. It is never sent automatically. The field is held only in component memory,
 is excluded from the persisted composer draft, and is removed after a successful send or explicit
 removal. Failed sends restore it in memory for review rather than copying it into persisted draft
-storage. Target IDs are included so the agent can ask the user to approve a specific click or
-typing operation in the browser panel.
+storage. Target IDs describe the captured page. This handoff does not grant control: agents must use
+the live browser tool's current origin authorization and fresh snapshot targets for actions.
 
 Codex and Claude sessions receive a process-local MCP tool surface for redacted snapshots, bounded
 offline OCR, navigation, snapshot-target clicks, non-sensitive typing, and history controls. OpenCode is
 explicitly unavailable for this bridge until its current runtime can receive an equivalent
 per-session, non-persistent authenticated MCP configuration.
 
-The tools remain unusable until the operator grants the exact active thread and provider instance
-access to the exact shared tab and origin. A grant lasts five minutes by default, never exceeds ten
-minutes, permits at most 40 requests, and has a bounded queue and per-request timeout. Only one grant
-exists in the provider process. Closing the tab, changing the origin, changing the active thread or
-provider, reaching a limit, timing out, or clicking **Revoke now** revokes it and rejects queued
-work.
+Codex and Claude threads have access by default once the desktop opens and shares a page.
+The operator can select **Disable for this thread** or **Enable for this thread** in Agent Browser.
+Opt-outs persist in backend-authoritative settings and are excluded from presentation profiles.
+Switching the visible chat does not revoke access for other enabled threads.
+
+The desktop polls the broker while the shared tab remains open, including while minimized.
+Each request retains its exact thread, provider, tab, and origin. Requests enter one bounded queue
+with a per-request timeout. A disconnected desktop cannot authorize new requests. Disabling a
+thread rejects its queued work; provider retirement invalidates that provider's credentials.
+Snapshot controls belong to the requesting identity and cannot be reused by another thread.
+Closing the tab or revoking page sharing ends access. Origin changes require sharing the new page.
+The legacy timed-grant RPC remains for protocol compatibility; the current UI does not use it.
+
+**Minimize Agent Browser** hides the native view and keeps the same tab, cookies, and login session.
+**Resume Agent Browser** restores that tab without opening a new partition. An agent request restores
+the browser before running the requested action. The panel **Hide** button also preserves tabs. **End tab session** clears only the selected tab and its temporary storage. App restart ends all tab sessions.
+
+The bottom tab strip restores retained pages without opening new partitions. Each tab has its own isolated session. Only the selected shared tab is polled for agent work; switching tabs revokes the previous broker context and snapshot authority. Background navigation updates its own tab label and cannot select that tab. Native actions and tab changes are serialized.
+
+Browser panels and the split divider reserve the native window-control area using the reported title-bar geometry. Geometry changes update the inset; floating panels cannot move above it. Browser controls use non-draggable regions so native window dragging cannot intercept them.
+
+The floating panel can be moved and resized. Split view starts at 50/50 and resizes the actual chat area, with an adjustable divider and a stacked layout on narrow windows. The native view is hidden during pointer resizing so it cannot capture the drag; its current bounds are restored when the drag ends.
+
+The main trust boundaries remain the authenticated provider identity, the trusted desktop renderer,
+and isolated remote web content. The changed policy grants enabled local threads access to an
+operator-shared page; it does not expose raw cookies or allow sensitive-field automation. Regression
+tests cover cross-thread targets, explicit opt-outs, provider retirement, disconnected polling,
+minimize/resume without session cleanup, independent tab storage, selected-tab visibility, and cleanup when a tab session ends.
 
 The MCP listener binds to an ephemeral `127.0.0.1` port and requires a process-generated,
 256-bit bearer credential bound to one exact thread/provider identity plus matching identity
@@ -59,8 +82,8 @@ in provider-session start contracts, the daemon command ledger, settings, browse
 diagnostic payloads. Broker grants, queued type values, and results are memory-only.
 
 A model request is only a request. The renderer polls the broker and invokes the existing desktop
-bridge, so every DOM snapshot, visible-viewport OCR, navigation, click, type, and history action
-still displays the existing native approval. Results are the same compact redacted contracts used
+bridge. The native service checks the current origin authorization for each action, without
+repeating the consent dialog for routine actions on the shared origin. Results are the same compact redacted contracts used
 by the manual UI. The tool cannot receive screenshot bytes, read cookies/storage/form values, or
 access credentials.
 Agent-requested typing always sets `sensitive: false`; the broker independently rejects targets
@@ -110,7 +133,7 @@ draft must be reviewed before sending.
 
 ## OCR and accessibility limitations
 
-Choosing **Visible image text** requires the origin share plus a separate native approval. It
+Choosing **Visible image text** uses the current origin authorization without another dialog. It
 captures only the current isolated `WebContentsView` viewport, never another window or the
 background screen. The capture is rejected above 4,096 pixels on either edge or 16,777,216 source
 pixels, downscaled to at most 2,048 pixels on either edge and 2,097,152 OCR input pixels, and

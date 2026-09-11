@@ -20,6 +20,7 @@ import type {
 } from "@cafecode/contracts";
 import {
   EMBEDDED_BROWSER_MAX_IMAGE_REGIONS,
+  EMBEDDED_BROWSER_MAX_TABS,
   EMBEDDED_BROWSER_MAX_SNAPSHOT_TARGETS,
   EMBEDDED_BROWSER_MAX_SNAPSHOT_TEXT_CHARS,
   EMBEDDED_BROWSER_OCR_MAX_CAPTURE_EDGE,
@@ -74,12 +75,14 @@ interface SnapshotTargetLocator {
 
 interface ClaimedSnapshotTarget {
   readonly documentUrl: string;
+  readonly controlRevision: number;
   readonly target: SnapshotTargetLocator;
 }
 
 interface SnapshotGrant {
   readonly id: string;
   readonly documentUrl: string;
+  readonly controlRevision: number;
   readonly targets: ReadonlyMap<string, SnapshotTargetLocator>;
 }
 
@@ -90,6 +93,7 @@ interface OwnedTab {
   readonly view: Electron.WebContentsView;
   readonly isolatedSession: Electron.Session;
   sharedOrigin: string | null;
+  controlRevision: number;
   bounds: EmbeddedBrowserBounds | null;
   snapshot: SnapshotGrant | null;
   closed: boolean;
@@ -263,7 +267,7 @@ export function redactEmbeddedBrowserText(rawText: string, maxLength: number): s
       "[redacted token]",
     )
     .replace(
-      /\b(password|passwd|pwd|client[- ]secret|recovery[- ]code)(\s*[:=]\s*)\S{2,128}/gi,
+      /\b(password|passwd|pwd|client[- ]secret|recovery[- ]code)(\s*[:=]\s*)\S+/gi,
       "$1$2[redacted secret]",
     )
     .replace(/\b\d{4,8}\b/g, "[redacted numeric code]")
@@ -368,7 +372,12 @@ function locateTarget(
   targetId: string,
 ): SnapshotTargetLocator | null {
   const grant = tab.snapshot;
-  if (!grant || grant.id !== snapshotId || grant.documentUrl !== tab.view.webContents.getURL()) {
+  if (
+    !grant ||
+    grant.id !== snapshotId ||
+    grant.controlRevision !== tab.controlRevision ||
+    grant.documentUrl !== tab.view.webContents.getURL()
+  ) {
     return null;
   }
   return grant.targets.get(targetId) ?? null;
@@ -383,7 +392,7 @@ function claimTarget(
   const target = locateTarget(tab, snapshotId, targetId);
   if (!grant || !target) return null;
   tab.snapshot = null;
-  return { documentUrl: grant.documentUrl, target };
+  return { documentUrl: grant.documentUrl, controlRevision: grant.controlRevision, target };
 }
 
 function sendTrustedClick(tab: OwnedTab, point: { x: number; y: number }): void {
@@ -451,7 +460,8 @@ export class DesktopEmbeddedBrowser extends Context.Service<
 export function makeDesktopEmbeddedBrowser(
   platform: EmbeddedBrowserPlatform,
 ): DesktopEmbeddedBrowserShape {
-  const tabsByOwner = new Map<DesktopIpcWebContents, OwnedTab>();
+  const tabsByOwner = new Map<DesktopIpcWebContents, Map<string, OwnedTab>>();
+  const observedOwners = new WeakSet<DesktopIpcWebContents>();
 
   const notify = (tab: OwnedTab): void => {
     if (tab.closed || tab.owner.isDestroyed?.() === true) return;
@@ -462,8 +472,8 @@ export function makeDesktopEmbeddedBrowser(
   };
 
   const getOwnedTab = (owner: DesktopIpcWebContents, tabId: string): OwnedTab => {
-    const tab = tabsByOwner.get(owner);
-    if (!tab || tab.id !== tabId || tab.closed) {
+    const tab = tabsByOwner.get(owner)?.get(tabId);
+    if (!tab || tab.closed) {
       throw new Error("The embedded browser tab is closed or belongs to another renderer.");
     }
     return tab;
@@ -472,9 +482,12 @@ export function makeDesktopEmbeddedBrowser(
   const closeTab = async (tab: OwnedTab): Promise<void> => {
     if (tab.closed) return;
     tab.closed = true;
+    tab.controlRevision += 1;
     tab.sharedOrigin = null;
     tab.snapshot = null;
-    tabsByOwner.delete(tab.owner);
+    const ownerTabs = tabsByOwner.get(tab.owner);
+    ownerTabs?.delete(tab.id);
+    if (ownerTabs?.size === 0) tabsByOwner.delete(tab.owner);
     try {
       tab.ownerWindow.contentView.removeChildView(tab.view);
     } catch {
@@ -501,11 +514,20 @@ export function makeDesktopEmbeddedBrowser(
   const approveSharedAction = async (
     tab: OwnedTab,
     input: Parameters<EmbeddedBrowserPlatform["confirm"]>[1],
+    requireConfirmation = false,
   ): Promise<boolean> => {
     if (!ensureShared(tab)) return false;
     const approvedUrl = tab.view.webContents.getURL();
-    const approved = await confirm(tab, input);
-    return approved && ensureShared(tab) && tab.view.webContents.getURL() === approvedUrl;
+    const approvedRevision = tab.controlRevision;
+    // Sharing grants routine controls for this origin until revocation. Keep
+    // document checks across async boundaries and separate sensitive entry.
+    const approved = !requireConfirmation || (await confirm(tab, input));
+    return (
+      approved &&
+      ensureShared(tab) &&
+      tab.controlRevision === approvedRevision &&
+      tab.view.webContents.getURL() === approvedUrl
+    );
   };
 
   const configureTab = (tab: OwnedTab): void => {
@@ -530,6 +552,7 @@ export function makeDesktopEmbeddedBrowser(
     contents.on("will-redirect", guardNavigation);
 
     const navigationChanged = (): void => {
+      tab.controlRevision += 1;
       invalidateSnapshot(tab);
       const currentOrigin = originFor(contents.getURL());
       if (tab.sharedOrigin !== null && currentOrigin !== tab.sharedOrigin) {
@@ -538,6 +561,7 @@ export function makeDesktopEmbeddedBrowser(
       notify(tab);
     };
     contents.on("did-start-loading", () => {
+      tab.controlRevision += 1;
       invalidateSnapshot(tab);
       notify(tab);
     });
@@ -550,6 +574,7 @@ export function makeDesktopEmbeddedBrowser(
       notify(tab);
     });
     contents.on("render-process-gone", () => {
+      tab.controlRevision += 1;
       tab.sharedOrigin = null;
       tab.snapshot = null;
       notify(tab);
@@ -564,14 +589,18 @@ export function makeDesktopEmbeddedBrowser(
     if (!ownerWindow || ownerWindow.isDestroyed()) {
       throw new Error("The embedded browser requires a live desktop window.");
     }
-    const previous = tabsByOwner.get(owner);
-    if (previous) await closeTab(previous);
+    const ownerTabs = tabsByOwner.get(owner) ?? new Map<string, OwnedTab>();
+    if (ownerTabs.size >= EMBEDDED_BROWSER_MAX_TABS) {
+      throw new Error(`Agent Browser supports up to ${EMBEDDED_BROWSER_MAX_TABS} open tabs.`);
+    }
 
     const id = platform
       .randomId()
       .replace(/[^A-Za-z0-9_-]/g, "")
       .slice(0, 128);
+    if (!id || ownerTabs.has(id)) throw new Error("Could not allocate a browser tab.");
     const view = platform.createView(`club-code-embedded-${id}`);
+    view.setVisible(false);
     const tab: OwnedTab = {
       id,
       owner,
@@ -579,20 +608,24 @@ export function makeDesktopEmbeddedBrowser(
       view,
       isolatedSession: view.webContents.session,
       sharedOrigin: null,
+      controlRevision: 0,
       bounds: null,
       snapshot: null,
       closed: false,
     };
-    tabsByOwner.set(owner, tab);
-    configureTab(tab);
-    ownerWindow.contentView.addChildView(view);
-    owner.once?.("destroyed", () => {
-      void closeTab(tab);
-    });
-    ownerWindow.once("closed", () => {
-      void closeTab(tab);
-    });
+    ownerTabs.set(id, tab);
+    tabsByOwner.set(owner, ownerTabs);
+    if (!observedOwners.has(owner)) {
+      observedOwners.add(owner);
+      const closeOwnerTabs = () => {
+        void Promise.all([...(tabsByOwner.get(owner)?.values() ?? [])].map(closeTab));
+      };
+      owner.once?.("destroyed", closeOwnerTabs);
+      ownerWindow.once("closed", closeOwnerTabs);
+    }
     try {
+      configureTab(tab);
+      ownerWindow.contentView.addChildView(view);
       await view.webContents.loadURL(BLANK_URL);
 
       if (input.initialUrl) {
@@ -603,7 +636,7 @@ export function makeDesktopEmbeddedBrowser(
             detail: `Open ${navigationApprovalUrl(normalized)} in this isolated tab?`,
             approveLabel: "Open site",
           });
-          if (approved) await view.webContents.loadURL(normalized);
+          if (approved && !tab.closed) await view.webContents.loadURL(normalized);
         }
       }
     } catch {
@@ -639,6 +672,15 @@ export function makeDesktopEmbeddedBrowser(
     };
     tab.bounds = bounds;
     tab.view.setBounds(bounds);
+    if (input.visible !== false) {
+      // A renderer can retain several tabs, but only its selected native view
+      // may cover the chat surface. Hidden tabs keep their own isolated session.
+      for (const other of tabsByOwner.get(owner)?.values() ?? []) {
+        if (other !== tab) other.view.setVisible(false);
+      }
+    }
+    // Visibility changes preserve the WebContents and its temporary login session.
+    tab.view.setVisible(input.visible ?? true);
     return snapshotState(tab);
   };
 
@@ -648,25 +690,32 @@ export function makeDesktopEmbeddedBrowser(
   ): Promise<EmbeddedBrowserActionResult> => {
     const tab = getOwnedTab(owner, input.tabId);
     if (!input.shared) {
+      tab.controlRevision += 1;
       tab.sharedOrigin = null;
       tab.snapshot = null;
       notify(tab);
       return completed(tab, "Page sharing revoked.");
     }
     const currentOrigin = originFor(tab.view.webContents.getURL());
+    const approvedRevision = tab.controlRevision;
     if (!currentOrigin) return result(tab, "failed", "Navigate to an HTTP or HTTPS page first.");
     const approved = await confirm(tab, {
       title: "Share this browser tab",
       detail:
-        `Allow agent-requested snapshots and separately approved controls on ${currentOrigin}? ` +
-        "Sharing does not read the page until you approve a snapshot, click, or typing action.",
+        `Allow agents to read page text, run local OCR of the currently visible viewport, click, type non-sensitive text, and navigate within ${currentOrigin} without asking for each action? ` +
+        "Page text may include content below the viewport. You can revoke access with Shared. Access ends when this tab leaves the origin or its session ends. Passwords and verification codes remain operator-only for agents.",
       approveLabel: "Share this origin",
     });
     if (!approved) return result(tab, "denied", "Page sharing was not approved.");
-    if (tab.closed || originFor(tab.view.webContents.getURL()) !== currentOrigin) {
+    if (
+      tab.closed ||
+      tab.controlRevision !== approvedRevision ||
+      originFor(tab.view.webContents.getURL()) !== currentOrigin
+    ) {
       return result(tab, "stale", "The page changed while sharing approval was open.");
     }
     tab.sharedOrigin = currentOrigin;
+    tab.controlRevision += 1;
     tab.snapshot = null;
     notify(tab);
     return completed(tab, `Shared ${currentOrigin}.`);
@@ -679,12 +728,20 @@ export function makeDesktopEmbeddedBrowser(
     const tab = getOwnedTab(owner, input.tabId);
     const normalized = normalizeEmbeddedBrowserUrl(input.url);
     if (!normalized) return result(tab, "failed", "Only HTTP and HTTPS navigation is allowed.");
-    const approved = await confirm(tab, {
+    const approvedRevision = tab.controlRevision;
+    const navigationPrompt = {
       title: "Approve browser navigation",
       detail: `Navigate this isolated tab to ${navigationApprovalUrl(normalized)}?`,
       approveLabel: "Navigate",
-    });
+    };
+    const approved =
+      ensureShared(tab) && originFor(normalized) === tab.sharedOrigin
+        ? await approveSharedAction(tab, navigationPrompt)
+        : await confirm(tab, navigationPrompt);
     if (!approved || tab.closed) return result(tab, "denied", "Navigation was not approved.");
+    if (tab.controlRevision !== approvedRevision) {
+      return result(tab, "stale", "The page or its sharing permission changed before navigation.");
+    }
     invalidateSnapshot(tab);
     try {
       await tab.view.webContents.loadURL(normalized);
@@ -704,16 +761,20 @@ export function makeDesktopEmbeddedBrowser(
       return completed(tab, "Loading stopped.");
     }
     const currentUrl = tab.view.webContents.getURL();
-    const approved = await confirm(tab, {
+    const approvedRevision = tab.controlRevision;
+    const historyPrompt = {
       title: "Approve browser navigation",
       detail: `Allow the ${input.action} action in this isolated tab?`,
       approveLabel:
         input.action === "reload" ? "Reload" : input.action === "back" ? "Go back" : "Go forward",
-    });
+    };
+    const approved = ensureShared(tab)
+      ? await approveSharedAction(tab, historyPrompt)
+      : await confirm(tab, historyPrompt);
     if (!approved || tab.closed) {
       return result(tab, "denied", "History navigation was not approved.");
     }
-    if (currentUrl !== tab.view.webContents.getURL()) {
+    if (tab.controlRevision !== approvedRevision || currentUrl !== tab.view.webContents.getURL()) {
       return result(tab, "stale", "The page changed while navigation approval was open.");
     }
     invalidateSnapshot(tab);
@@ -738,6 +799,7 @@ export function makeDesktopEmbeddedBrowser(
   ): Promise<EmbeddedBrowserSnapshot | null> => {
     const tab = getOwnedTab(owner, input.tabId);
     const approvedDocumentUrl = tab.view.webContents.getURL();
+    const approvedRevision = tab.controlRevision;
     const approved = await approveSharedAction(tab, {
       title: input.mode === "ocr" ? "Approve local image analysis" : "Approve page snapshot",
       detail:
@@ -747,7 +809,7 @@ export function makeDesktopEmbeddedBrowser(
         "Do not approve it on an inbox or page containing secrets you do not want shared.",
       approveLabel: input.mode === "ocr" ? "Analyze locally" : "Create snapshot",
     });
-    if (!approved) return null;
+    if (!approved || tab.controlRevision !== approvedRevision) return null;
 
     let raw: RawDomSnapshot;
     try {
@@ -763,7 +825,11 @@ export function makeDesktopEmbeddedBrowser(
       invalidateSnapshot(tab);
       return null;
     }
-    if (!ensureShared(tab) || tab.view.webContents.getURL() !== approvedDocumentUrl) {
+    if (
+      !ensureShared(tab) ||
+      tab.controlRevision !== approvedRevision ||
+      tab.view.webContents.getURL() !== approvedDocumentUrl
+    ) {
       invalidateSnapshot(tab);
       return null;
     }
@@ -800,7 +866,11 @@ export function makeDesktopEmbeddedBrowser(
           captured = undefined;
         }
       }
-      if (!ensureShared(tab) || tab.view.webContents.getURL() !== approvedDocumentUrl) {
+      if (
+        !ensureShared(tab) ||
+        tab.controlRevision !== approvedRevision ||
+        tab.view.webContents.getURL() !== approvedDocumentUrl
+      ) {
         invalidateSnapshot(tab);
         return null;
       }
@@ -849,7 +919,12 @@ export function makeDesktopEmbeddedBrowser(
       .replace(/[^A-Za-z0-9_-]/g, "")
       .slice(0, 128);
     const documentUrl = approvedDocumentUrl;
-    tab.snapshot = { id: snapshotId, documentUrl, targets: targetLocators };
+    tab.snapshot = {
+      id: snapshotId,
+      documentUrl,
+      controlRevision: approvedRevision,
+      targets: targetLocators,
+    };
     return {
       snapshotId,
       mode: input.mode,
@@ -962,12 +1037,19 @@ export function makeDesktopEmbeddedBrowser(
       approveLabel: "Click once",
     });
     if (!approved) return result(tab, "denied", "The click was not approved.");
-    if (tab.view.webContents.getURL() !== claimed.documentUrl) {
+    if (
+      tab.controlRevision !== claimed.controlRevision ||
+      tab.view.webContents.getURL() !== claimed.documentUrl
+    ) {
       return result(tab, "stale", "The page changed while click approval was open.");
     }
     const point = await targetPoint(tab, claimed.target, false);
     if (!point) return result(tab, "stale", "The target moved or is no longer visible.");
-    if (!ensureShared(tab) || tab.view.webContents.getURL() !== claimed.documentUrl) {
+    if (
+      !ensureShared(tab) ||
+      tab.controlRevision !== claimed.controlRevision ||
+      tab.view.webContents.getURL() !== claimed.documentUrl
+    ) {
       return result(tab, "stale", "The page changed before the approved click could be sent.");
     }
     try {
@@ -999,21 +1081,32 @@ export function makeDesktopEmbeddedBrowser(
     }
     const claimed = claimTarget(tab, input.snapshotId, input.targetId);
     if (!claimed) return result(tab, "stale", "Take a new snapshot before controlling this page.");
-    const approved = await approveSharedAction(tab, {
-      title: sensitive ? "Approve credential or 2FA entry" : "Approve browser typing",
-      detail:
-        `${sensitive ? "Type a sensitive value" : "Type text"} into ${claimed.target.name || input.targetId} ` +
-        `at ${snapshotState(tab).displayUrl}? The value is not shown in this prompt or retained by Club Code.`,
-      approveLabel: sensitive ? "Type sensitive value once" : "Type once",
-      destructive: sensitive,
-    });
+    const approved = await approveSharedAction(
+      tab,
+      {
+        title: sensitive ? "Approve credential or 2FA entry" : "Approve browser typing",
+        detail:
+          `${sensitive ? "Type a sensitive value" : "Type text"} into ${claimed.target.name || input.targetId} ` +
+          `at ${snapshotState(tab).displayUrl}? The value is not shown in this prompt or retained by Club Code.`,
+        approveLabel: sensitive ? "Type sensitive value once" : "Type once",
+        destructive: sensitive,
+      },
+      sensitive,
+    );
     if (!approved) return result(tab, "denied", "Typing was not approved.");
-    if (tab.view.webContents.getURL() !== claimed.documentUrl) {
+    if (
+      tab.controlRevision !== claimed.controlRevision ||
+      tab.view.webContents.getURL() !== claimed.documentUrl
+    ) {
       return result(tab, "stale", "The page changed while typing approval was open.");
     }
     const point = await targetPoint(tab, claimed.target, true);
     if (!point) return result(tab, "stale", "The target moved or is no longer visible.");
-    if (!ensureShared(tab) || tab.view.webContents.getURL() !== claimed.documentUrl) {
+    if (
+      !ensureShared(tab) ||
+      tab.controlRevision !== claimed.controlRevision ||
+      tab.view.webContents.getURL() !== claimed.documentUrl
+    ) {
       return result(tab, "stale", "The page changed before the approved text could be entered.");
     }
     if (!point.editable) return result(tab, "failed", "The selected target is not editable.");
@@ -1043,7 +1136,9 @@ export function makeDesktopEmbeddedBrowser(
     click,
     type,
     closeAll: async () => {
-      await Promise.all([...tabsByOwner.values()].map(closeTab));
+      await Promise.all(
+        [...tabsByOwner.values()].flatMap((tabs) => [...tabs.values()]).map(closeTab),
+      );
       await platform.ocr.close();
     },
   };

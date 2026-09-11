@@ -2,7 +2,7 @@ import * as Effect from "effect/Effect";
 import * as Duration from "effect/Duration";
 import * as Schema from "effect/Schema";
 import * as SchemaTransformation from "effect/SchemaTransformation";
-import { TrimmedNonEmptyString, TrimmedString } from "./baseSchemas.ts";
+import { ThreadId, TrimmedNonEmptyString, TrimmedString } from "./baseSchemas.ts";
 import { DEFAULT_GIT_TEXT_GENERATION_MODEL, ProviderOptionSelections } from "./model.ts";
 import { ModelSelection } from "./orchestration.ts";
 import { ProviderInstanceConfig, ProviderInstanceId } from "./providerInstance.ts";
@@ -1100,6 +1100,9 @@ export const ClientSettingsSchema = Schema.Struct({
   chatCopyFormat: ChatCopyFormat.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_CHAT_COPY_FORMAT)),
   ),
+  agentBrowserDisabledThreadIds: Schema.Array(ThreadId)
+    .check(Schema.isMaxLength(10_000))
+    .pipe(Schema.withDecodingDefault(Effect.succeed([]))),
 });
 export type ClientSettings = typeof ClientSettingsSchema.Type;
 
@@ -2074,5 +2077,8 @@ export const ClientSettingsPatch = Schema.Struct({
   sidebarThreadPreviewCount: Schema.optionalKey(SidebarThreadPreviewCount),
   timestampFormat: Schema.optionalKey(TimestampFormat),
   chatCopyFormat: Schema.optionalKey(ChatCopyFormat),
+  agentBrowserDisabledThreadIds: Schema.optionalKey(
+    Schema.Array(ThreadId).check(Schema.isMaxLength(10_000)),
+  ),
 });
 export type ClientSettingsPatch = typeof ClientSettingsPatch.Type;

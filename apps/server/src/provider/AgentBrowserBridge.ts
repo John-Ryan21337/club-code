@@ -141,6 +141,10 @@ export class AgentBrowserBridge {
   readonly #identitiesByCredential = new Map<string, AgentIdentity>();
   readonly #queue: PendingRequest[] = [];
   readonly #snapshots = new Map<string, EmbeddedBrowserSnapshot>();
+  readonly #snapshotOwners = new Map<string, string>();
+  #automaticContext: AgentBrowserSessionContext | undefined;
+  #lastPollAt = 0;
+  #disabledThreadIds = new Set<ThreadId>();
   #active: ActiveGrant | undefined;
   #inFlight: PendingRequest | undefined;
   #grantTimer: ReturnType<typeof setTimeout> | undefined;
@@ -193,6 +197,7 @@ export class AgentBrowserBridge {
   }
 
   grant(input: AgentBrowserGrantInput): AgentBrowserGrantState {
+    this.#automaticContext = undefined;
     this.#expireIfNeeded();
     this.#revokeInternal("Replaced by a newer operator grant.");
     let parsedOrigin: URL;
@@ -224,22 +229,36 @@ export class AgentBrowserBridge {
   }
 
   revoke(input: AgentBrowserRevokeInput): AgentBrowserGrantState {
+    if (input.threadId) {
+      this.#disabledThreadIds.add(input.threadId);
+      this.#rejectMatchingRequests((request) => request.threadId === input.threadId);
+      return this.#state();
+    }
+    this.#automaticContext = undefined;
     this.#revokeInternal(`Grant revoked: ${input.reason}.`);
     return inactive(`Grant revoked: ${input.reason}.`);
   }
 
   revokeForIdentity(identity: AgentIdentity, reason: string): void {
+    if (this.#automaticContext) {
+      this.#rejectMatchingRequests((request) => isSameIdentity(request, identity));
+      this.#forgetIdentity(identity);
+      return;
+    }
     const grant = this.#active;
     if (grant && isSameIdentity(grant, identity)) this.#revokeInternal(reason);
     this.#forgetIdentity(identity);
   }
 
   revokeForProviderInstance(providerInstanceId: ProviderInstanceId, reason: string): void {
-    if (this.#active?.providerInstanceId === providerInstanceId) this.#revokeInternal(reason);
-    for (const [credential, identity] of this.#identitiesByCredential) {
+    if (this.#automaticContext) {
+      this.#rejectMatchingRequests((request) => request.providerInstanceId === providerInstanceId);
+    }
+    if (!this.#automaticContext && this.#active?.providerInstanceId === providerInstanceId)
+      this.#revokeInternal(reason);
+    for (const identity of this.#identitiesByCredential.values()) {
       if (identity.providerInstanceId === providerInstanceId) {
-        this.#identitiesByCredential.delete(credential);
-        this.#credentialsByIdentity.delete(identityKey(identity));
+        this.#forgetIdentity(identity);
       }
     }
   }
@@ -248,14 +267,51 @@ export class AgentBrowserBridge {
     threadId: ThreadId,
     providerInstanceId: ProviderInstanceId,
   ): void {
+    // Retire stale bearers even while the browser is closed or unshared. A later
+    // default-access poll must not restore access to a previous provider session.
+    for (const identity of this.#identitiesByCredential.values()) {
+      if (identity.threadId === threadId && identity.providerInstanceId !== providerInstanceId) {
+        this.revokeForIdentity(identity, "The thread changed provider instance.");
+      }
+    }
     const grant = this.#active;
-    if (grant && grant.threadId === threadId && grant.providerInstanceId !== providerInstanceId) {
+    if (
+      !this.#automaticContext &&
+      grant &&
+      grant.threadId === threadId &&
+      grant.providerInstanceId !== providerInstanceId
+    ) {
       this.#revokeInternal("Grant revoked because the thread changed provider instance.");
       this.#forgetIdentity(grant);
     }
   }
 
   poll(context: AgentBrowserSessionContext): AgentBrowserPollResult {
+    if (context.defaultAccess) {
+      let origin: URL;
+      try {
+        origin = new URL(context.origin);
+      } catch {
+        this.revoke({ reason: "origin-changed" });
+        return { grant: inactive("Open and share a browser page first."), request: null };
+      }
+      if (
+        !/^https?:$/.test(origin.protocol) ||
+        origin.origin !== context.origin ||
+        origin.username ||
+        origin.password
+      ) {
+        this.revoke({ reason: "origin-changed" });
+        return { grant: inactive("The browser origin is invalid."), request: null };
+      }
+      if (!this.#automaticContext || !this.#matchesContext(context)) {
+        this.#revokeInternal("The browser page changed.");
+      }
+      this.#automaticContext = context;
+      this.#lastPollAt = Date.now();
+      this.#disabledThreadIds = new Set(context.disabledThreadIds ?? []);
+      this.#rejectMatchingRequests((request) => this.#disabledThreadIds.has(request.threadId));
+    }
     this.#expireIfNeeded();
     if (!this.#matchesContext(context)) {
       this.#revokeInternal("Grant revoked because the tab or origin changed.");
@@ -294,7 +350,12 @@ export class AgentBrowserBridge {
     this.#inFlight = undefined;
     if (input.result.type === "snapshot" && input.result.snapshot) {
       this.#snapshots.clear();
+      this.#snapshotOwners.clear();
       this.#snapshots.set(input.result.snapshot.snapshotId, input.result.snapshot);
+      this.#snapshotOwners.set(input.result.snapshot.snapshotId, identityKey(pending.request));
+    } else if (input.result.type === "action") {
+      this.#snapshots.clear();
+      this.#snapshotOwners.clear();
     }
     pending.resolve(input.result);
     return { accepted: true, grant: this.#state() };
@@ -321,9 +382,37 @@ export class AgentBrowserBridge {
     action: AgentBrowserAction,
   ): Promise<AgentBrowserExecutionResult> {
     this.#expireIfNeeded();
+    if (this.#disabledThreadIds.has(identity.threadId)) {
+      throw new Error("Agent Browser access is disabled for this thread.");
+    }
+    const automatic = this.#automaticContext;
+    if (automatic) {
+      if (!this.#credentialsByIdentity.has(identityKey(identity))) {
+        throw new Error("The browser requester is not a live provider session.");
+      }
+      if (Date.now() - this.#lastPollAt > 5_000) {
+        this.revoke({ reason: "tab-closed" });
+        throw new Error("The Agent Browser is disconnected. Open it in Club Code.");
+      }
+      const now = Date.now();
+      // Default access is request-scoped. Queue bounds and action timeouts remain
+      // enforced; no thread can renew, replace, or consume another thread's grant.
+      this.#active = {
+        ...identity,
+        tabId: automatic.tabId,
+        origin: automatic.origin,
+        durationSeconds: 90,
+        grantId: randomUUID(),
+        grantedAt: new Date(now).toISOString(),
+        expiresAt: new Date(now + AGENT_BROWSER_REQUEST_TIMEOUT_MS).toISOString(),
+        requestCount: 0,
+      };
+    }
     const grant = this.#active;
     if (!grant)
-      throw new Error("No live browser grant. Ask the operator to grant this thread access.");
+      throw new Error(
+        "Open Agent Browser in Club Code and share the current page. Thread access is on by default.",
+      );
     if (
       grant.threadId !== identity.threadId ||
       grant.providerInstanceId !== identity.providerInstanceId
@@ -340,6 +429,11 @@ export class AgentBrowserBridge {
       );
     }
     if (action.type === "click" || action.type === "type") {
+      if (this.#snapshotOwners.get(action.snapshotId) !== identityKey(identity)) {
+        throw new Error(
+          "The control target is missing or stale. Take a new snapshot in this thread.",
+        );
+      }
       const target = this.#snapshots
         .get(action.snapshotId)
         ?.targets.find((candidate) => candidate.targetId === action.targetId);
@@ -385,7 +479,7 @@ export class AgentBrowserBridge {
       }
       if (target.origin !== grant.origin) {
         throw new Error(
-          "Agent navigation cannot leave the exact granted origin. The operator must navigate and grant the new origin.",
+          "Agent navigation cannot leave the shared origin. Open and share the new site in Agent Browser.",
         );
       }
     }
@@ -427,6 +521,23 @@ export class AgentBrowserBridge {
   }
 
   #state(): AgentBrowserGrantState {
+    if (this.#automaticContext) {
+      const request = this.#inFlight?.request ?? this.#queue[0]?.request;
+      if (!request) return inactive("No pending browser action.");
+      return {
+        status: "active",
+        grantId: request.grantId,
+        threadId: request.threadId,
+        providerInstanceId: request.providerInstanceId,
+        tabId: request.tabId,
+        origin: request.origin,
+        grantedAt: request.createdAt,
+        expiresAt: request.expiresAt,
+        requestCount: 1,
+        requestLimit: AGENT_BROWSER_MAX_REQUESTS_PER_GRANT,
+        pendingAction: request.summary,
+      };
+    }
     const grant = this.#active;
     if (!grant) return inactive("No active operator grant.");
     return {
@@ -445,7 +556,7 @@ export class AgentBrowserBridge {
   }
 
   #matchesContext(context: AgentBrowserSessionContext): boolean {
-    const grant = this.#active;
+    const grant = this.#automaticContext ?? this.#active;
     return grant?.tabId === context.tabId && grant.origin === context.origin;
   }
 
@@ -485,6 +596,12 @@ export class AgentBrowserBridge {
   }
 
   #forgetIdentity(identity: AgentIdentity): void {
+    for (const [snapshotId, owner] of this.#snapshotOwners) {
+      if (owner === identityKey(identity)) {
+        this.#snapshotOwners.delete(snapshotId);
+        this.#snapshots.delete(snapshotId);
+      }
+    }
     const key = identityKey(identity);
     const credential = this.#credentialsByIdentity.get(key);
     if (credential) this.#identitiesByCredential.delete(credential);
@@ -492,16 +609,22 @@ export class AgentBrowserBridge {
   }
 
   #expireIfNeeded(): void {
-    if (this.#active && Date.now() >= Date.parse(this.#active.expiresAt)) {
+    if (
+      !this.#automaticContext &&
+      this.#active &&
+      Date.now() >= Date.parse(this.#active.expiresAt)
+    ) {
       this.#revokeInternal("The operator grant expired.");
     }
   }
 
   #revokeInternal(reason: string): void {
+    this.#automaticContext = undefined;
     if (this.#grantTimer) clearTimeout(this.#grantTimer);
     this.#grantTimer = undefined;
     this.#active = undefined;
     this.#snapshots.clear();
+    this.#snapshotOwners.clear();
     const pending = [this.#inFlight, ...this.#queue].filter(
       (entry): entry is PendingRequest => entry !== undefined,
     );
@@ -510,6 +633,20 @@ export class AgentBrowserBridge {
     for (const entry of pending) {
       clearTimeout(entry.timer);
       entry.reject(new Error(reason));
+    }
+  }
+
+  #rejectMatchingRequests(matches: (request: AgentBrowserRequest) => boolean): void {
+    for (const pending of [this.#inFlight, ...this.#queue]) {
+      if (pending && matches(pending.request)) {
+        this.#rejectPending(pending, "Agent Browser access ended for this thread or provider.");
+      }
+    }
+    for (const [snapshotId, owner] of this.#snapshotOwners) {
+      if (this.#disabledThreadIds.has(owner.split("\u0000")[0] as ThreadId)) {
+        this.#snapshots.delete(snapshotId);
+        this.#snapshotOwners.delete(snapshotId);
+      }
     }
   }
 
@@ -557,7 +694,7 @@ export class AgentBrowserBridge {
       return fail(415, "JSON content is required.");
     }
 
-    const server = this.#makeMcpServer(authorizedIdentity);
+    const server = this.#makeMcpServer(authorizedIdentity, authorization!);
     const transport = new StreamableHTTPServerTransport();
     response.once("close", () => {
       void transport.close();
@@ -573,10 +710,13 @@ export class AgentBrowserBridge {
     }
   }
 
-  #makeMcpServer(identity: AgentIdentity): McpServer {
+  #makeMcpServer(identity: AgentIdentity, authorization: string): McpServer {
     const server = new McpServer({ name: "club-code-browser", version: "1.0.0" });
     const run = async (action: AgentBrowserAction) => {
       try {
+        if (this.#credentialsByIdentity.get(identityKey(identity)) !== authorization) {
+          throw new Error("The browser requester is not a live provider session.");
+        }
         const result = await this.enqueue(identity, action);
         return { content: [{ type: "text" as const, text: JSON.stringify(result) }] };
       } catch (error) {
@@ -592,7 +732,7 @@ export class AgentBrowserBridge {
       }
     };
     const approval =
-      "Requires a live operator grant and a visible native approval for this action.";
+      "Thread access is on by default unless disabled. Requires an open, shared Agent Browser page. Sharing authorizes routine actions for that origin until revoked; explicit address navigation to a new origin requires approval, and leaving the shared origin revokes access.";
     server.registerTool(
       "club_browser_snapshot",
       {

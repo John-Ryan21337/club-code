@@ -61,6 +61,167 @@ describe("AgentBrowserBridge", () => {
     await bridge?.close();
   });
 
+  it("allows live threads by default and isolates snapshot targets and opt-outs", async () => {
+    bridge = new AgentBrowserBridge();
+    const other = { ...identity, threadId: ThreadId.make("other-thread") };
+    await bridge.mcpConfig(identity);
+    await bridge.mcpConfig(other);
+    const automatic = { ...context, defaultAccess: true };
+    bridge.poll(automatic);
+
+    const first = bridge.enqueue(identity, { type: "snapshot" });
+    const second = bridge.enqueue(other, { type: "snapshot" });
+    const firstPoll = bridge.poll(automatic);
+    const request = firstPoll.request!;
+    expect(request.threadId).toBe(identity.threadId);
+    expect(firstPoll.grant).toMatchObject({ ...identity, grantId: request.grantId });
+    bridge.complete({
+      context,
+      requestId: request.requestId,
+      result: { type: "snapshot", snapshot },
+    });
+    await expect(first).resolves.toMatchObject({ type: "snapshot" });
+    await expect(
+      bridge.enqueue(other, {
+        type: "click",
+        snapshotId: snapshot.snapshotId,
+        targetId: "e1",
+      }),
+    ).rejects.toThrow("Take a new snapshot in this thread");
+    const otherRequest = bridge.poll(automatic).request!;
+    expect(otherRequest.threadId).toBe(other.threadId);
+    bridge.complete({
+      context,
+      requestId: otherRequest.requestId,
+      result: { type: "snapshot", snapshot },
+    });
+    await expect(second).resolves.toMatchObject({ type: "snapshot" });
+    expect(bridge.poll(automatic).grant.status).toBe("inactive");
+
+    const pending = bridge.enqueue(identity, { type: "snapshot" });
+    const rejected = expect(pending).rejects.toThrow("access ended");
+    bridge.poll({ ...automatic, disabledThreadIds: [identity.threadId] });
+    await rejected;
+    await expect(bridge.enqueue(identity, { type: "snapshot" })).rejects.toThrow(
+      "disabled for this thread",
+    );
+    const allowed = bridge.enqueue(other, { type: "snapshot" });
+    const allowedRequest = bridge.poll({
+      ...automatic,
+      disabledThreadIds: [identity.threadId],
+    }).request!;
+    bridge.complete({
+      context,
+      requestId: allowedRequest.requestId,
+      result: { type: "snapshot", snapshot },
+    });
+    await allowed;
+
+    bridge.poll(automatic);
+    const enabledAgain = bridge.enqueue(identity, { type: "snapshot" });
+    const enabledRequest = bridge.poll(automatic).request!;
+    bridge.complete({
+      context,
+      requestId: enabledRequest.requestId,
+      result: { type: "snapshot", snapshot },
+    });
+    await enabledAgain;
+  });
+
+  it("ends default access when the browser disconnects or its provider is revoked", async () => {
+    bridge = new AgentBrowserBridge();
+    await bridge.mcpConfig(identity);
+    bridge.poll({ ...context, defaultAccess: true });
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 5_001);
+    await expect(bridge.enqueue(identity, { type: "snapshot" })).rejects.toThrow("disconnected");
+    vi.restoreAllMocks();
+    bridge.poll({ ...context, defaultAccess: true });
+    bridge.revokeForIdentity(identity, "Session closed.");
+    await expect(bridge.enqueue(identity, { type: "snapshot" })).rejects.toThrow(
+      "not a live provider session",
+    );
+    bridge.revoke({ reason: "tab-closed" });
+    await expect(bridge.enqueue(identity, { type: "snapshot" })).rejects.toThrow(
+      "Open Agent Browser",
+    );
+  });
+
+  it("retires old provider identities even when a thread switches before sharing a page", async () => {
+    bridge = new AgentBrowserBridge();
+    const replacement = { ...identity, providerInstanceId: ProviderInstanceId.make("claudeAgent") };
+    const retired = await bridge.mcpConfig(identity);
+    await bridge.mcpConfig(replacement);
+    bridge.revokeWhenThreadProviderChanges(threadId, replacement.providerInstanceId);
+    bridge.poll({ ...context, defaultAccess: true });
+
+    await expect(bridge.enqueue(identity, { type: "snapshot" })).rejects.toThrow(
+      "not a live provider session",
+    );
+    const response = await fetch(retired.url, {
+      method: "POST",
+      headers: {
+        Authorization: retired.authorization,
+        "Content-Type": "application/json",
+        "X-Cafe-Browser-Thread": threadId,
+        "X-Cafe-Browser-Provider": providerInstanceId,
+      },
+      body: "{}",
+    });
+    expect(response.status).toBe(401);
+  });
+
+  it("keeps other threads queued when the last requester changes provider", async () => {
+    bridge = new AgentBrowserBridge();
+    const other = { ...identity, threadId: ThreadId.make("other-thread") };
+    const replacement = ProviderInstanceId.make("claudeAgent");
+    await bridge.mcpConfig(identity);
+    await bridge.mcpConfig(other);
+    const automatic = { ...context, defaultAccess: true };
+    bridge.poll(automatic);
+    const otherResult = bridge.enqueue(other, { type: "snapshot" });
+    const retiredResult = bridge.enqueue(identity, { type: "snapshot" });
+    const rejected = expect(retiredResult).rejects.toThrow("access ended");
+    bridge.revokeWhenThreadProviderChanges(threadId, replacement);
+    await rejected;
+
+    const next = bridge.poll(automatic).request!;
+    expect(next.threadId).toBe(other.threadId);
+    bridge.complete({
+      context,
+      requestId: next.requestId,
+      result: { type: "snapshot", snapshot },
+    });
+    await expect(otherResult).resolves.toMatchObject({ type: "snapshot" });
+    await expect(bridge.enqueue(identity, { type: "snapshot" })).rejects.toThrow(
+      "not a live provider session",
+    );
+  });
+
+  it("discards provider-owned targets before a replacement session can use them", async () => {
+    bridge = new AgentBrowserBridge();
+    await bridge.mcpConfig(identity);
+    const automatic = { ...context, defaultAccess: true };
+    bridge.poll(automatic);
+    const pending = bridge.enqueue(identity, { type: "snapshot" });
+    const request = bridge.poll(automatic).request!;
+    bridge.complete({
+      context,
+      requestId: request.requestId,
+      result: { type: "snapshot", snapshot },
+    });
+    await pending;
+
+    bridge.revokeForProviderInstance(providerInstanceId, "Provider restarted.");
+    await bridge.mcpConfig(identity);
+    await expect(
+      bridge.enqueue(identity, {
+        type: "click",
+        snapshotId: snapshot.snapshotId,
+        targetId: "e1",
+      }),
+    ).rejects.toThrow("missing or stale");
+  });
+
   it("binds one grant to an exact provider, thread, tab, and origin", async () => {
     bridge = new AgentBrowserBridge();
     expect(
@@ -88,7 +249,7 @@ describe("AgentBrowserBridge", () => {
     const poll = bridge.poll({ ...context, origin: "https://other.test" });
     expect(poll.grant.status).toBe("inactive");
     await expect(bridge.enqueue(identity, { type: "snapshot" })).rejects.toThrow(
-      "No live browser grant",
+      "Thread access is on by default",
     );
   });
 

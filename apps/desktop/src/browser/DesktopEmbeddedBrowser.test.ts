@@ -1,4 +1,5 @@
 import type * as Electron from "electron";
+import { EMBEDDED_BROWSER_MAX_TABS } from "@cafecode/contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import type { DesktopIpcWebContents } from "../ipc/DesktopIpc.ts";
@@ -136,6 +137,7 @@ function createHarness() {
 
   const view = {
     setBounds: vi.fn(),
+    setVisible: vi.fn(),
     webContents,
   };
 
@@ -195,6 +197,7 @@ function createHarness() {
   };
 
   return {
+    platform,
     browser: makeDesktopEmbeddedBrowser(platform),
     capturedPngs,
     confirmations,
@@ -203,6 +206,9 @@ function createHarness() {
     createdPartitions,
     emitContent,
     emitSession,
+    emitOwner: (event: string) => {
+      for (const listener of ownerListeners.get(event) ?? []) listener();
+    },
     executedScripts,
     navigationHistory,
     owner,
@@ -265,6 +271,14 @@ describe("embedded browser security helpers", () => {
     expect(redacted).toContain("[redacted");
   });
 
+  it("redacts whole labelled secrets, including one-character and long values", () => {
+    for (const value of ["x", "x".repeat(129), "x".repeat(2_000)]) {
+      expect(redactEmbeddedBrowserText(`password=${value}\nNext line`, 3_000)).toBe(
+        "password=[redacted secret]\nNext line",
+      );
+    }
+  });
+
   it("pins hardened remote-content preferences to an ephemeral partition", () => {
     expect(embeddedBrowserWebPreferences("club-code-embedded-id")).toMatchObject({
       partition: "club-code-embedded-id",
@@ -291,6 +305,327 @@ describe("embedded browser security helpers", () => {
 });
 
 describe("DesktopEmbeddedBrowser", () => {
+  it("reuses origin authorization for routine controls and stops immediately on revocation", async () => {
+    const harness = createHarness();
+    await harness.browser.open(harness.owner, {});
+    harness.setUrl("https://portal.example/start");
+    harness.confirmations.push(true);
+    await harness.browser.share(harness.owner, { tabId: "tab-1", shared: true });
+    const snapshot = await harness.browser.snapshot(harness.owner, {
+      tabId: "tab-1",
+      mode: "dom-accessibility",
+    });
+    expect(
+      (
+        await harness.browser.click(harness.owner, {
+          tabId: "tab-1",
+          snapshotId: snapshot!.snapshotId,
+          targetId: "e0",
+        })
+      ).status,
+    ).toBe("completed");
+    const typing = await harness.browser.snapshot(harness.owner, {
+      tabId: "tab-1",
+      mode: "dom-accessibility",
+    });
+    expect(
+      (
+        await harness.browser.type(harness.owner, {
+          tabId: "tab-1",
+          snapshotId: typing!.snapshotId,
+          targetId: "e0",
+          value: "Club Code",
+          sensitive: false,
+        })
+      ).status,
+    ).toBe("completed");
+    expect(
+      (
+        await harness.browser.navigate(harness.owner, {
+          tabId: "tab-1",
+          url: "https://portal.example/next",
+        })
+      ).status,
+    ).toBe("completed");
+    expect(
+      (await harness.browser.history(harness.owner, { tabId: "tab-1", action: "reload" })).status,
+    ).toBe("completed");
+    expect(harness.confirmationInputs).toHaveLength(1);
+    // A different origin is not included in the existing authorization.
+    expect(
+      (
+        await harness.browser.navigate(harness.owner, {
+          tabId: "tab-1",
+          url: "https://other.example/",
+        })
+      ).status,
+    ).toBe("denied");
+    expect(harness.webContents.getURL()).toBe("https://portal.example/next");
+    await harness.browser.share(harness.owner, { tabId: "tab-1", shared: false });
+    expect(
+      await harness.browser.snapshot(harness.owner, { tabId: "tab-1", mode: "dom-accessibility" }),
+    ).toBeNull();
+    expect(
+      (
+        await harness.browser.navigate(harness.owner, {
+          tabId: "tab-1",
+          url: "https://portal.example/last",
+        })
+      ).status,
+    ).toBe("denied");
+  });
+
+  it("keeps explicit sensitive-entry consent separate from origin authorization", async () => {
+    const harness = createHarness();
+    await harness.browser.open(harness.owner, {});
+    harness.setUrl("https://portal.example/login");
+    harness.confirmations.push(true);
+    await harness.browser.share(harness.owner, { tabId: "tab-1", shared: true });
+    const snapshot = await harness.browser.snapshot(harness.owner, {
+      tabId: "tab-1",
+      mode: "dom-accessibility",
+    });
+    const result = await harness.browser.type(harness.owner, {
+      tabId: "tab-1",
+      snapshotId: snapshot!.snapshotId,
+      targetId: "e1",
+      value: "928401",
+      sensitive: true,
+    });
+    expect(result.status).toBe("denied");
+    expect(harness.webContents.insertText).not.toHaveBeenCalled();
+    expect(harness.confirmationInputs).toHaveLength(2);
+    expect(JSON.stringify(harness.confirmationInputs)).not.toContain("928401");
+  });
+
+  it.each(["snapshot", "ocr", "click", "type"] as const)(
+    "rejects an in-flight %s after revocation and re-sharing the same page",
+    async (action) => {
+      const harness = createHarness();
+      await harness.browser.open(harness.owner, {});
+      harness.setUrl("https://portal.example/account");
+      harness.confirmations.push(true);
+      await harness.browser.share(harness.owner, { tabId: "tab-1", shared: true });
+      const snapshot = await harness.browser.snapshot(harness.owner, {
+        tabId: "tab-1",
+        mode: "dom-accessibility",
+      });
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const delayed = vi.fn(async () => {
+        await gate;
+        return action === "snapshot"
+          ? { title: "Old page", text: "Old page content", targets: [], imageRegions: [] }
+          : {
+              x: 20,
+              y: 30,
+              editable: true,
+              sensitive: false,
+              role: "button",
+              name: "Submit",
+              text: "Submit",
+            };
+      });
+      if (action === "snapshot") harness.setRawSnapshot(delayed);
+      else harness.setTargetPoint(delayed);
+      const delayedOcr = vi.fn(async () => {
+        await gate;
+        return {
+          status: "completed" as const,
+          engine: "test-ocr",
+          language: "eng" as const,
+          confidence: 90,
+          truncated: false,
+          text: "Old OCR content",
+        };
+      });
+      if (action === "ocr") {
+        await harness.browser.setBounds(harness.owner, {
+          tabId: "tab-1",
+          bounds: { x: 0, y: 0, width: 640, height: 480 },
+        });
+        vi.mocked(harness.platform.ocr.recognize).mockImplementationOnce(delayedOcr);
+      }
+      const input = { tabId: "tab-1", snapshotId: snapshot!.snapshotId, targetId: "e0" };
+      const pending =
+        action === "snapshot" || action === "ocr"
+          ? harness.browser.snapshot(harness.owner, {
+              tabId: "tab-1",
+              mode: action === "ocr" ? "ocr" : "dom-accessibility",
+            })
+          : action === "click"
+            ? harness.browser.click(harness.owner, input)
+            : harness.browser.type(harness.owner, {
+                ...input,
+                value: "Club Code",
+                sensitive: false,
+              });
+      await vi.waitFor(() =>
+        expect(action === "ocr" ? delayedOcr : delayed).toHaveBeenCalledOnce(),
+      );
+      await harness.browser.share(harness.owner, { tabId: "tab-1", shared: false });
+      harness.confirmations.push(true);
+      await harness.browser.share(harness.owner, { tabId: "tab-1", shared: true });
+      release();
+      const result = await pending;
+      if (action === "snapshot" || action === "ocr") expect(result).toBeNull();
+      else expect(result).toMatchObject({ status: "stale" });
+      expect(harness.webContents.sendInputEvent).not.toHaveBeenCalled();
+      expect(harness.webContents.insertText).not.toHaveBeenCalled();
+      expect(harness.confirmationInputs).toHaveLength(2);
+      if (action === "ocr") expect(harness.capturedPngs[0]?.every((byte) => byte === 0)).toBe(true);
+    },
+  );
+
+  it("rejects a capture when the same URL reloads during the read", async () => {
+    const harness = createHarness();
+    await harness.browser.open(harness.owner, {});
+    harness.setUrl("https://portal.example/account");
+    harness.confirmations.push(true);
+    await harness.browser.share(harness.owner, { tabId: "tab-1", shared: true });
+    harness.setRawSnapshot(() => {
+      harness.emitContent("did-start-loading");
+      return { title: "Old page", text: "Old content", targets: [], imageRegions: [] };
+    });
+    expect(
+      await harness.browser.snapshot(harness.owner, { tabId: "tab-1", mode: "dom-accessibility" }),
+    ).toBeNull();
+    expect(harness.webContents.getURL()).toBe("https://portal.example/account");
+  });
+
+  it.each(["navigate", "reload"] as const)(
+    "stops %s if sharing is revoked before dispatch",
+    async (action) => {
+      const harness = createHarness();
+      await harness.browser.open(harness.owner, {});
+      harness.setUrl("https://portal.example/account");
+      harness.confirmations.push(true);
+      await harness.browser.share(harness.owner, { tabId: "tab-1", shared: true });
+      const pending =
+        action === "navigate"
+          ? harness.browser.navigate(harness.owner, {
+              tabId: "tab-1",
+              url: "https://portal.example/next",
+            })
+          : harness.browser.history(harness.owner, { tabId: "tab-1", action: "reload" });
+      await harness.browser.share(harness.owner, { tabId: "tab-1", shared: false });
+      expect(await pending).toMatchObject({ status: "stale" });
+      expect(harness.webContents.reload).not.toHaveBeenCalled();
+      expect(harness.webContents.loadURL).toHaveBeenCalledTimes(1);
+      expect(harness.confirmationInputs).toHaveLength(1);
+    },
+  );
+
+  it("does not let an older sharing dialog undo explicit revocation", async () => {
+    const harness = createHarness();
+    await harness.browser.open(harness.owner, {});
+    harness.setUrl("https://portal.example/account");
+    vi.mocked(harness.platform.confirm).mockImplementationOnce(async () => {
+      await harness.browser.share(harness.owner, { tabId: "tab-1", shared: false });
+      return true;
+    });
+    expect(
+      await harness.browser.share(harness.owner, { tabId: "tab-1", shared: true }),
+    ).toMatchObject({ status: "stale", state: { shared: false } });
+    expect(
+      await harness.browser.snapshot(harness.owner, { tabId: "tab-1", mode: "dom-accessibility" }),
+    ).toBeNull();
+  });
+
+  it("rejects duplicate tab IDs and enforces the owner tab limit before allocating a view", async () => {
+    const harness = createHarness();
+    vi.mocked(harness.platform.randomId).mockReturnValue("same-tab");
+    await harness.browser.open(harness.owner, {});
+    await expect(harness.browser.open(harness.owner, {})).rejects.toThrow("allocate a browser tab");
+    expect(harness.platform.createView).toHaveBeenCalledOnce();
+    expect(harness.webContents.close).not.toHaveBeenCalled();
+    let nextId = 1;
+    vi.mocked(harness.platform.randomId).mockImplementation(() => `retained-${nextId++}`);
+    for (let index = 1; index < EMBEDDED_BROWSER_MAX_TABS; index += 1) {
+      const retained = createHarness();
+      vi.mocked(harness.platform.createView).mockReturnValueOnce(
+        retained.view as unknown as Electron.WebContentsView,
+      );
+      await harness.browser.open(harness.owner, {});
+    }
+    await expect(harness.browser.open(harness.owner, {})).rejects.toThrow("up to 8 open tabs");
+    expect(harness.platform.createView).toHaveBeenCalledTimes(EMBEDDED_BROWSER_MAX_TABS);
+    await harness.browser.close(harness.owner, { tabId: "same-tab" });
+    const replacement = await harness.browser.open(harness.owner, {});
+    expect(replacement.status).toBe("open");
+    await harness.browser.closeAll();
+  });
+
+  it("cleans a failed tab attachment without discarding an existing login", async () => {
+    const first = createHarness();
+    const second = createHarness();
+    vi.mocked(first.platform.createView)
+      .mockReturnValueOnce(first.view as unknown as Electron.WebContentsView)
+      .mockReturnValueOnce(second.view as unknown as Electron.WebContentsView);
+    await first.browser.open(first.owner, {});
+    first.contentView.addChildView.mockImplementationOnce(() => {
+      throw new Error("Window closed during attachment");
+    });
+    await expect(first.browser.open(first.owner, {})).rejects.toThrow("could not open");
+    expect(second.webContents.close).toHaveBeenCalledOnce();
+    expect(second.session.clearStorageData).toHaveBeenCalledOnce();
+    expect(first.session.clearStorageData).not.toHaveBeenCalled();
+    first.emitOwner("destroyed");
+    await vi.waitFor(() => expect(first.session.clearAuthCache).toHaveBeenCalledOnce());
+  });
+
+  it("clears every retained session when its owning renderer is destroyed", async () => {
+    const first = createHarness();
+    const second = createHarness();
+    vi.mocked(first.platform.createView)
+      .mockReturnValueOnce(first.view as unknown as Electron.WebContentsView)
+      .mockReturnValueOnce(second.view as unknown as Electron.WebContentsView);
+    await first.browser.open(first.owner, {});
+    await first.browser.open(first.owner, {});
+    first.emitOwner("destroyed");
+    await vi.waitFor(() => {
+      expect(first.session.clearAuthCache).toHaveBeenCalledOnce();
+      expect(second.session.clearAuthCache).toHaveBeenCalledOnce();
+    });
+    expect(first.webContents.close).toHaveBeenCalledOnce();
+    expect(second.webContents.close).toHaveBeenCalledOnce();
+  });
+
+  it("retains independent tabs on open and hide, and clears only the discarded session", async () => {
+    const first = createHarness();
+    const second = createHarness();
+    vi.mocked(first.platform.createView)
+      .mockReturnValueOnce(first.view as unknown as Electron.WebContentsView)
+      .mockReturnValueOnce(second.view as unknown as Electron.WebContentsView);
+    const one = await first.browser.open(first.owner, {});
+    first.setUrl("https://example.test/signed-in");
+    const two = await first.browser.open(first.owner, {});
+    expect(two.tabId).not.toBe(one.tabId);
+    expect(first.webContents.close).not.toHaveBeenCalled();
+    expect(first.session.clearStorageData).not.toHaveBeenCalled();
+    expect(first.webContents.getURL()).toBe("https://example.test/signed-in");
+    first.browser.setBounds(first.owner, {
+      tabId: two.tabId!,
+      bounds: { x: 0, y: 0, width: 400, height: 300 },
+      visible: true,
+    });
+    expect(first.view.setVisible).toHaveBeenLastCalledWith(false);
+    expect(second.view.setVisible).toHaveBeenLastCalledWith(true);
+    first.browser.setBounds(first.owner, {
+      tabId: one.tabId!,
+      bounds: { x: 0, y: 0, width: 400, height: 300 },
+      visible: true,
+    });
+    expect(second.view.setVisible).toHaveBeenLastCalledWith(false);
+    await first.browser.close(first.owner, { tabId: two.tabId! });
+    expect(second.session.clearStorageData).toHaveBeenCalledOnce();
+    expect(first.session.clearStorageData).not.toHaveBeenCalled();
+    await first.browser.closeAll();
+    expect(first.session.clearStorageData).toHaveBeenCalledOnce();
+  });
+
   it("isolates ownership, clamps bounds, denies capabilities, and clears the session", async () => {
     const harness = createHarness();
     const state = await harness.browser.open(harness.owner, {});
@@ -329,6 +664,22 @@ describe("DesktopEmbeddedBrowser", () => {
       }),
     ).rejects.toThrow("belongs to another renderer");
 
+    await harness.browser.setBounds(harness.owner, {
+      tabId: "tab-1",
+      bounds: { x: 0, y: 0, width: 1, height: 1 },
+      visible: false,
+    });
+    expect(harness.view.setVisible).toHaveBeenLastCalledWith(false);
+    expect(harness.webContents.close).not.toHaveBeenCalled();
+    expect(harness.session.clearStorageData).not.toHaveBeenCalled();
+    expect(harness.session.clearAuthCache).not.toHaveBeenCalled();
+    await harness.browser.setBounds(harness.owner, {
+      tabId: "tab-1",
+      bounds: { x: 0, y: 0, width: 500, height: 400 },
+      visible: true,
+    });
+    expect(harness.view.setVisible).toHaveBeenLastCalledWith(true);
+    expect(harness.createdPartitions).toHaveLength(1);
     await harness.browser.close(harness.owner, { tabId: "tab-1" });
     expect(harness.contentView.removeChildView).toHaveBeenCalledWith(harness.view);
     expect(harness.webContents.close).toHaveBeenCalledOnce();
@@ -337,7 +688,7 @@ describe("DesktopEmbeddedBrowser", () => {
     expect(harness.session.clearAuthCache).toHaveBeenCalledOnce();
   });
 
-  it("requires one-time approval, OCRs only the visible viewport, redacts it, and clears bytes", async () => {
+  it("authorizes routine snapshots once per origin, redacts OCR, and clears bytes", async () => {
     const harness = createHarness();
     await harness.browser.open(harness.owner, {});
     harness.setUrl("https://portal.example/account?code=123456");
@@ -376,7 +727,6 @@ describe("DesktopEmbeddedBrowser", () => {
       ],
       imageRegions: [{ alt: "Receipt 1234", labelledBy: "Security code 777777" }],
     });
-    harness.confirmations.push(true);
     const snapshot = await harness.browser.snapshot(harness.owner, {
       tabId: "tab-1",
       mode: "ocr",
@@ -398,14 +748,14 @@ describe("DesktopEmbeddedBrowser", () => {
     expect(snapshot?.ocr?.status === "completed" ? snapshot.ocr.text : "").not.toContain("864209");
     expect(harness.capturedPngs[0]?.every((byte) => byte === 0)).toBe(true);
     expect(harness.confirmationInputs.at(-1)?.detail).toContain("currently visible");
-    expect(harness.confirmationInputs.at(-1)?.detail).toContain("Do not approve");
+    expect(harness.confirmationInputs).toHaveLength(1);
   });
 
   it("uses stale snapshot grants once and never places sensitive values in approvals", async () => {
     const harness = createHarness();
     await harness.browser.open(harness.owner, {});
     harness.setUrl("https://portal.example/login");
-    harness.confirmations.push(true, true);
+    harness.confirmations.push(true);
     await harness.browser.share(harness.owner, { tabId: "tab-1", shared: true });
     const snapshot = await harness.browser.snapshot(harness.owner, {
       tabId: "tab-1",
@@ -413,37 +763,34 @@ describe("DesktopEmbeddedBrowser", () => {
     });
     expect(snapshot).not.toBeNull();
 
-    harness.confirmations.push(false);
-    const denied = await harness.browser.click(harness.owner, {
+    const clickedOnce = await harness.browser.click(harness.owner, {
       tabId: "tab-1",
       snapshotId: snapshot!.snapshotId,
       targetId: "e0",
     });
-    expect(denied.status).toBe("denied");
-    expect(harness.webContents.sendInputEvent).not.toHaveBeenCalled();
+    expect(clickedOnce.status).toBe("completed");
+    expect(harness.webContents.sendInputEvent).toHaveBeenCalledTimes(2);
+    expect(harness.confirmationInputs).toHaveLength(1);
 
-    const reusedAfterDenial = await harness.browser.click(harness.owner, {
+    const reusedAfterClick = await harness.browser.click(harness.owner, {
       tabId: "tab-1",
       snapshotId: snapshot!.snapshotId,
       targetId: "e0",
     });
-    expect(reusedAfterDenial.status).toBe("stale");
+    expect(reusedAfterClick.status).toBe("stale");
 
-    harness.confirmations.push(true);
     const clickSnapshot = await harness.browser.snapshot(harness.owner, {
       tabId: "tab-1",
       mode: "dom-accessibility",
     });
-    harness.confirmations.push(true);
     const clicked = await harness.browser.click(harness.owner, {
       tabId: "tab-1",
       snapshotId: clickSnapshot!.snapshotId,
       targetId: "e0",
     });
     expect(clicked.status).toBe("completed");
-    expect(harness.webContents.sendInputEvent).toHaveBeenCalledTimes(2);
+    expect(harness.webContents.sendInputEvent).toHaveBeenCalledTimes(4);
 
-    harness.confirmations.push(true);
     const nextSnapshot = await harness.browser.snapshot(harness.owner, {
       tabId: "tab-1",
       mode: "dom-accessibility",
@@ -475,15 +822,17 @@ describe("DesktopEmbeddedBrowser", () => {
       sensitive: true,
     });
     expect(typed.status).toBe("completed");
+    expect(harness.confirmationInputs).toHaveLength(2);
+    expect(harness.confirmations).toHaveLength(0);
     expect(harness.webContents.insertText).toHaveBeenCalledWith("928401");
     expect(JSON.stringify(harness.confirmationInputs)).not.toContain("928401");
   });
 
-  it("rejects replaced or occluded targets after action approval", async () => {
+  it("rejects replaced or occluded targets under origin authorization", async () => {
     const harness = createHarness();
     await harness.browser.open(harness.owner, {});
     harness.setUrl("https://portal.example/account");
-    harness.confirmations.push(true, true);
+    harness.confirmations.push(true);
     await harness.browser.share(harness.owner, { tabId: "tab-1", shared: true });
     const snapshot = await harness.browser.snapshot(harness.owner, {
       tabId: "tab-1",
@@ -499,7 +848,6 @@ describe("DesktopEmbeddedBrowser", () => {
       name: "Delete account",
       text: "Delete account",
     });
-    harness.confirmations.push(true);
     const replaced = await harness.browser.click(harness.owner, {
       tabId: "tab-1",
       snapshotId: snapshot!.snapshotId,
@@ -508,13 +856,11 @@ describe("DesktopEmbeddedBrowser", () => {
     expect(replaced.status).toBe("stale");
     expect(harness.webContents.sendInputEvent).not.toHaveBeenCalled();
 
-    harness.confirmations.push(true);
     const nextSnapshot = await harness.browser.snapshot(harness.owner, {
       tabId: "tab-1",
       mode: "dom-accessibility",
     });
     harness.setTargetPoint(null);
-    harness.confirmations.push(true);
     const occluded = await harness.browser.click(harness.owner, {
       tabId: "tab-1",
       snapshotId: nextSnapshot!.snapshotId,
@@ -523,24 +869,22 @@ describe("DesktopEmbeddedBrowser", () => {
     expect(occluded.status).toBe("stale");
     expect(harness.webContents.sendInputEvent).not.toHaveBeenCalled();
     expect(harness.executedScripts.at(-1)).toContain("document.elementFromPoint");
+    expect(harness.confirmationInputs).toHaveLength(1);
   });
 
   it("revokes sharing on cross-origin navigation and blocks approval races", async () => {
     const harness = createHarness();
     await harness.browser.open(harness.owner, {});
     harness.setUrl("https://portal.example/start");
-    harness.confirmations.push(true, true);
+    harness.confirmations.push(true);
     await harness.browser.share(harness.owner, { tabId: "tab-1", shared: true });
     const snapshot = await harness.browser.snapshot(harness.owner, {
       tabId: "tab-1",
       mode: "dom-accessibility",
     });
 
-    harness.confirmations.push(() => {
-      harness.setUrl("https://attacker.example/");
-      harness.emitContent("did-navigate");
-      return true;
-    });
+    harness.setUrl("https://attacker.example/");
+    harness.emitContent("did-navigate");
     const result = await harness.browser.click(harness.owner, {
       tabId: "tab-1",
       snapshotId: snapshot!.snapshotId,
@@ -568,7 +912,6 @@ describe("DesktopEmbeddedBrowser", () => {
         imageRegions: [],
       };
     });
-    harness.confirmations.push(true);
 
     await expect(
       harness.browser.snapshot(harness.owner, {
@@ -582,7 +925,7 @@ describe("DesktopEmbeddedBrowser", () => {
     const harness = createHarness();
     await harness.browser.open(harness.owner, {});
     harness.setUrl("http://portal.example/login");
-    harness.confirmations.push(true, true);
+    harness.confirmations.push(true);
     await harness.browser.share(harness.owner, { tabId: "tab-1", shared: true });
     const snapshot = await harness.browser.snapshot(harness.owner, {
       tabId: "tab-1",

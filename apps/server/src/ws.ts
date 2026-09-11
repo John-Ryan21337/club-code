@@ -7,11 +7,13 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import { type AuthAccessStreamEvent, AuthSessionId } from "@cafecode/contracts/auth";
 import {
   DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL,
   AgentBrowserRpcError,
+  ClientSettingsError,
   CommandId,
   EventId,
   HardwareLightingRpcError,
@@ -193,6 +195,7 @@ const makeWsRpcLayer = (
   orchestrationSubscriptionHub: OrchestrationSubscriptionHubShape,
   hardwareLighting: HardwareLightingServiceShape,
   canPublishHardwareLighting: boolean,
+  agentBrowserAccessSemaphore: Semaphore.Semaphore,
 ) =>
   WsRpcGroup.toLayer(
     Effect.gen(function* () {
@@ -706,6 +709,12 @@ const makeWsRpcLayer = (
           observeRpcEffect(
             WS_METHODS.agentBrowserGrant,
             Effect.gen(function* () {
+              const settings = yield* clientSettings.getSettings;
+              if (settings.agentBrowserDisabledThreadIds.includes(input.threadId)) {
+                return yield* Effect.fail(
+                  new Error("Agent Browser access is disabled for this thread."),
+                );
+              }
               const sessions = yield* providerService.listSessions();
               const exactSession = sessions.some(
                 (session) =>
@@ -753,8 +762,16 @@ const makeWsRpcLayer = (
         [WS_METHODS.agentBrowserPoll]: (input) =>
           observeRpcEffect(
             WS_METHODS.agentBrowserPoll,
-            providerService.pollAgentBrowser?.(input) ??
-              Effect.die(new Error("Agent browser bridge is unavailable.")),
+            clientSettings.getSettings.pipe(
+              Effect.flatMap(
+                (settings) =>
+                  providerService.pollAgentBrowser?.({
+                    ...input,
+                    disabledThreadIds: settings.agentBrowserDisabledThreadIds,
+                  }) ?? Effect.die(new Error("Agent browser bridge is unavailable.")),
+              ),
+              agentBrowserAccessSemaphore.withPermits(1),
+            ),
             { "rpc.aggregate": "agentBrowser" },
           ).pipe(
             Effect.mapError(
@@ -1206,9 +1223,31 @@ const makeWsRpcLayer = (
         [WS_METHODS.serverUpdateClientSettings]: ({ patch }) =>
           observeRpcEffect(
             WS_METHODS.serverUpdateClientSettings,
-            clientSettings
-              .updateSettings(patch)
-              .pipe(Effect.tap((settings) => hardwareLighting.reconcile(settings))),
+            clientSettings.updateSettings(patch).pipe(
+              Effect.tap((settings) =>
+                patch.agentBrowserDisabledThreadIds === undefined
+                  ? Effect.void
+                  : Effect.forEach(
+                      settings.agentBrowserDisabledThreadIds,
+                      (threadId) =>
+                        providerService.revokeAgentBrowser?.({ reason: "operator", threadId }).pipe(
+                          Effect.asVoid,
+                          Effect.mapError(
+                            () =>
+                              new ClientSettingsError({
+                                settingsPath: config.clientSettingsPath,
+                                detail: "Could not apply the Agent Browser thread access setting.",
+                              }),
+                          ),
+                        ) ?? Effect.void,
+                      { discard: true },
+                    ),
+              ),
+              // Share this lock across connections: an older poll must finish
+              // before a persisted deny is applied to the provider daemon.
+              agentBrowserAccessSemaphore.withPermits(1),
+              Effect.tap((settings) => hardwareLighting.reconcile(settings)),
+            ),
             {
               "rpc.aggregate": "server",
             },
@@ -1695,6 +1734,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
     const orchestrationEngine = yield* OrchestrationEngineService;
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
     const hardwareLighting = yield* HardwareLightingService;
+    const agentBrowserAccessSemaphore = yield* Semaphore.make(1);
     const initialSnapshot = yield* projectionSnapshotQuery.getSnapshotSequence().pipe(Effect.orDie);
     const orchestrationSubscriptionHub = yield* makeOrchestrationSubscriptionHub({
       orchestrationEngine,
@@ -1723,6 +1763,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
               orchestrationSubscriptionHub,
               hardwareLighting,
               canPublishHardwareLighting,
+              agentBrowserAccessSemaphore,
             ).pipe(
               Layer.provideMerge(RpcSerialization.layerJson),
               Layer.provide(ProviderJournalMessageRepairLive),
