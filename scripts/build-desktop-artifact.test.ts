@@ -5,6 +5,7 @@ import { assert, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import { afterEach, beforeEach, vi } from "vitest";
 
 import {
   MANAGED_WINDOWS_NODE_VERSION,
@@ -26,7 +27,17 @@ import {
 import { BRAND_ASSET_PATHS } from "./lib/brand-assets.ts";
 
 it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
-  it("always emits deterministic official updater metadata", () => {
+  beforeEach(() => {
+    // CI supplies GITHUB_REPOSITORY; each case must choose its own updater source.
+    vi.stubEnv("CAFE_CODE_DESKTOP_UPDATE_REPOSITORY", undefined);
+    vi.stubEnv("GITHUB_REPOSITORY", undefined);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("emits official updater metadata when repository settings are absent", () => {
     assert.deepStrictEqual(resolveGitHubPublishConfig("latest"), {
       provider: "github",
       owner: "cafeai",
@@ -40,6 +51,55 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       releaseType: "prerelease",
       channel: "nightly",
     });
+  });
+
+  it("uses the GitHub workflow repository for fork releases", () => {
+    vi.stubEnv("GITHUB_REPOSITORY", "John-Ryan21337/club-code");
+    assert.deepStrictEqual(resolveGitHubPublishConfig("latest"), {
+      provider: "github",
+      owner: "John-Ryan21337",
+      repo: "club-code",
+      releaseType: "release",
+    });
+    assert.deepStrictEqual(resolveGitHubPublishConfig("nightly"), {
+      provider: "github",
+      owner: "John-Ryan21337",
+      repo: "club-code",
+      releaseType: "prerelease",
+      channel: "nightly",
+    });
+  });
+
+  it("prefers an explicit updater repository over the workflow repository", () => {
+    vi.stubEnv("CAFE_CODE_DESKTOP_UPDATE_REPOSITORY", " release-owner/desktop-releases ");
+    vi.stubEnv("GITHUB_REPOSITORY", "John-Ryan21337/club-code");
+    assert.deepStrictEqual(resolveGitHubPublishConfig("latest"), {
+      provider: "github",
+      owner: "release-owner",
+      repo: "desktop-releases",
+      releaseType: "release",
+    });
+  });
+
+  it("ignores blank repository settings when selecting the fallback", () => {
+    vi.stubEnv("CAFE_CODE_DESKTOP_UPDATE_REPOSITORY", "  ");
+    vi.stubEnv("GITHUB_REPOSITORY", " John-Ryan21337/club-code ");
+    assert.equal(resolveGitHubPublishConfig("latest")?.owner, "John-Ryan21337");
+    assert.equal(resolveGitHubPublishConfig("latest")?.repo, "club-code");
+
+    vi.stubEnv("GITHUB_REPOSITORY", "  ");
+    assert.deepStrictEqual(resolveGitHubPublishConfig("latest"), {
+      provider: "github",
+      owner: "cafeai",
+      repo: "cafe-code",
+      releaseType: "release",
+    });
+  });
+
+  it("does not replace a malformed explicit target with another updater repository", () => {
+    vi.stubEnv("CAFE_CODE_DESKTOP_UPDATE_REPOSITORY", "invalid/owner/repository");
+    vi.stubEnv("GITHUB_REPOSITORY", "John-Ryan21337/club-code");
+    assert.equal(resolveGitHubPublishConfig("latest"), undefined);
   });
 
   it("resolves the dedicated nightly updater channel from nightly versions", () => {

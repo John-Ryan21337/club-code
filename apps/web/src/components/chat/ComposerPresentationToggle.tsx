@@ -23,11 +23,11 @@ export const ComposerPresentationToggle = memo(function ComposerPresentationTogg
   const effectiveMobile = mobileOptimized || viewportMobile;
   const label = mobileOptimized
     ? viewportMobile
-      ? "Turn off Mobile optimized presentation; mobile layout will remain active for this screen and Matrix will stay on"
-      : "Switch to responsive desktop presentation; Matrix will stay on"
+      ? "Turn off Mobile optimized presentation for this screen"
+      : "Switch to desktop presentation"
     : viewportMobile
-      ? "Mobile layout is active for this screen; turn on Mobile optimized presentation and Matrix"
-      : "Switch to Mobile optimized presentation and turn on Matrix";
+      ? "Mobile layout is active for this screen; switch to Mobile optimized presentation"
+      : "Switch to Mobile optimized presentation";
 
   return (
     <Tooltip>

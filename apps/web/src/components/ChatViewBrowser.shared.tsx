@@ -2966,7 +2966,7 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
       }
     });
 
-    it("shows the send state once bootstrap dispatch is in flight", async () => {
+    it("keeps follow-up entry available while bootstrap dispatch is in flight", async () => {
       useComposerDraftStore.setState({
         draftThreadsByThreadKey: {
           [THREAD_KEY]: {
@@ -3026,7 +3026,7 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
                 (request) => request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand,
               ),
             ).toBe(true);
-            expect(document.querySelector('button[aria-label="Sending"]')).toBeTruthy();
+            expect(document.querySelector('button[aria-label="Queue message"]')).toBeTruthy();
             expect(document.querySelector('button[aria-label="Preparing worktree"]')).toBeNull();
           },
           { timeout: 8_000, interval: 16 },
@@ -3037,7 +3037,7 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
       }
     });
 
-    it("restores composer focus after a send completes", async () => {
+    it("preserves composer focus through a send handoff", async () => {
       let resolveDispatch!: (value: { sequence: number }) => void;
       let dispatchResolved = false;
       const dispatchPromise = new Promise<{ sequence: number }>((resolve) => {
@@ -3078,11 +3078,12 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
                 (request) => request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand,
               ),
             ).toBe(true);
-            expect(document.querySelector('button[aria-label="Sending"]')).toBeTruthy();
+            expect(document.querySelector('button[aria-label="Queue message"]')).toBeTruthy();
             const currentEditor = document.querySelector<HTMLElement>(
               '[data-testid="composer-editor"]',
             );
-            expect(currentEditor?.getAttribute("contenteditable")).toBe("false");
+            expect(currentEditor?.getAttribute("contenteditable")).toBe("true");
+            expect(document.activeElement).toBe(currentEditor);
           },
           { timeout: 8_000, interval: 16 },
         );
@@ -4119,7 +4120,16 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
 
         const rowRect = row.getBoundingClientRect();
         expect(row.scrollWidth).toBeLessThanOrEqual(Math.ceil(row.clientWidth));
-        const icons = Array.from(row.querySelectorAll<SVGElement>("svg"));
+        // The compact worker control intentionally hides only its dropdown chevron.
+        // Keep checking every other icon so a flex-shrunk control still fails.
+        const compactAgentChevron = row.querySelector<SVGElement>(
+          '[data-thread-agent-control="true"] > svg.lucide-chevron-down',
+        );
+        expect(compactAgentChevron).toBeTruthy();
+        expect(getComputedStyle(compactAgentChevron!).display).toBe("none");
+        const icons = Array.from(row.querySelectorAll<SVGElement>("svg")).filter(
+          (icon) => icon !== compactAgentChevron,
+        );
         expect(icons.length).toBeGreaterThan(0);
         for (const icon of icons) {
           const rect = icon.getBoundingClientRect();
@@ -4470,7 +4480,7 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
       }
     });
 
-    it("locks the composer while the provider session is starting", async () => {
+    it("accepts queued follow-ups while the provider session is starting", async () => {
       const mounted = await mountChatView({
         viewport: DEFAULT_VIEWPORT,
         snapshot: createSnapshotForTargetUser({
@@ -4486,16 +4496,16 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
 
         await vi.waitFor(
           () => {
-            const connectingButton = document.querySelector<HTMLButtonElement>(
-              'button[aria-label="Connecting"]',
+            const queueButton = document.querySelector<HTMLButtonElement>(
+              'button[aria-label="Queue message"]',
             );
-            expect(connectingButton).toBeTruthy();
-            expect(connectingButton?.disabled).toBe(true);
-            expect(connectingButton?.querySelector(".animate-spin")).toBeTruthy();
+            expect(queueButton).toBeTruthy();
+            expect(queueButton?.disabled).toBe(false);
+            expect(queueButton?.querySelector(".animate-spin")).toBeNull();
 
             const editor = document.querySelector<HTMLElement>('[data-testid="composer-editor"]');
             expect(editor).toBeTruthy();
-            expect(editor?.getAttribute("contenteditable")).toBe("false");
+            expect(editor?.getAttribute("contenteditable")).toBe("true");
           },
           { timeout: 8_000, interval: 16 },
         );
@@ -7936,7 +7946,7 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
       }
     });
 
-    it("toggles a persisted Mobile optimized reflow without resetting Matrix configuration", async () => {
+    it("toggles persisted mobile chat presentation and Rain without reshaping desktop navigation", async () => {
       const initialMatrixSettings = {
         fallingEffectsEnabled: false,
         fallingEffectKind: "snow" as const,
@@ -8012,7 +8022,7 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
               document
                 .querySelector('[data-slot="sidebar-wrapper"]')
                 ?.getAttribute("data-mobile-layout"),
-            ).toBe("true");
+            ).toBe("false");
             expect(
               document
                 .querySelector('[data-slot="sidebar-wrapper"]')
@@ -8023,9 +8033,11 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
             expect(document.querySelector('[data-desktop-run-context="true"]')).toBeNull();
             expect(getComputedStyle(inputBar!).paddingLeft).toBe("12px");
             expect(
-              document.querySelector<HTMLElement>('[data-slot="sidebar-trigger"]')?.getClientRects()
-                .length,
+              document
+                .querySelector<HTMLElement>('[data-slot="sidebar-container"]')
+                ?.getClientRects().length,
             ).toBeGreaterThan(0);
+            expect(document.querySelector('[data-slot="sidebar"][data-mobile="true"]')).toBeNull();
           },
           { timeout: 8_000, interval: 16 },
         );
@@ -8035,7 +8047,7 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
           ...initialMatrixSettings,
           mobileOptimizedPresentation: false,
           fallingEffectsEnabled: true,
-          fallingEffectKind: "matrix",
+          fallingEffectKind: "rain",
         });
         await vi.waitFor(() => {
           expect(readBrowserClientSettings()?.mobileOptimizedPresentation).toBe(true);
@@ -8046,7 +8058,7 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
         expect(clientSettingsRequests).toHaveLength(1);
         expect(clientSettingsRequests[0]?.patch).toEqual({
           fallingEffectsEnabled: true,
-          fallingEffectKind: "matrix",
+          fallingEffectKind: "rain",
         });
         expect(clientSettingsRequests[0]?.patch).not.toHaveProperty("mobileOptimizedPresentation");
 
@@ -8071,7 +8083,7 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
           ...initialMatrixSettings,
           mobileOptimizedPresentation: false,
           fallingEffectsEnabled: true,
-          fallingEffectKind: "matrix",
+          fallingEffectKind: "rain",
         });
         await vi.waitFor(() => {
           expect(readBrowserClientSettings()?.mobileOptimizedPresentation).toBe(false);
@@ -8087,7 +8099,7 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
       }
     });
 
-    it("keeps natural phone reflow independent from the explicit Matrix-enabling authority", async () => {
+    it("keeps natural phone reflow independent from the explicit Rain-enabling authority", async () => {
       const mounted = await mountChatView({
         viewport: COMPACT_FOOTER_VIEWPORT,
         snapshot: createSnapshotForTargetUser({
@@ -8118,7 +8130,7 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
 
         expect(toggle.getAttribute("aria-pressed")).toBe("false");
         expect(toggle.getAttribute("aria-label")).toBe(
-          "Mobile layout is active for this screen; turn on Mobile optimized presentation and Matrix",
+          "Mobile layout is active for this screen; switch to Mobile optimized presentation",
         );
         expect(toggle.dataset.effectiveMobileLayout).toBe("true");
         expect(toggle.dataset.mobilePresentationSource).toBe("viewport");
@@ -8162,7 +8174,8 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
               document
                 .querySelector('[data-slot="sidebar-wrapper"]')
                 ?.getAttribute("data-mobile-layout"),
-            ).toBe("true");
+            ).toBe("false");
+            expect(document.querySelector('[data-chat-presentation="mobile"]')).toBeTruthy();
             const diffSheet = Array.from(
               document.querySelectorAll<HTMLElement>('[data-slot="sheet-popup"]'),
             ).find(
@@ -8207,7 +8220,8 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
               document
                 .querySelector('[data-slot="sidebar-wrapper"]')
                 ?.getAttribute("data-mobile-layout"),
-            ).toBe("true");
+            ).toBe("false");
+            expect(document.querySelector('[data-chat-presentation="mobile"]')).toBeTruthy();
           },
           { timeout: 8_000, interval: 16 },
         );
@@ -8265,7 +8279,7 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
         await vi.waitFor(() => {
           expect(toggle.getAttribute("aria-pressed")).toBe("true");
           expect(toggle.getAttribute("aria-label")).toBe(
-            "Turn off Mobile optimized presentation; mobile layout will remain active for this screen and Matrix will stay on",
+            "Turn off Mobile optimized presentation for this screen",
           );
         });
       } finally {
