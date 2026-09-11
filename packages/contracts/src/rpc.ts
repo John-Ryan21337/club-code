@@ -58,6 +58,8 @@ import {
 import {
   ServerConfigStreamEvent,
   ServerConfig,
+  ServerProviderAccessInput,
+  ServerProviderAccessResult,
   ServerProviderLoginError,
   ServerProviderLoginInput,
   ServerProviderLoginResult,
@@ -186,6 +188,7 @@ export const WS_METHODS = {
   // Server meta
   serverGetConfig: "server.getConfig",
   serverRefreshProviders: "server.refreshProviders",
+  serverCheckProviderAccess: "server.checkProviderAccess",
   serverConsumeProviderRateLimitResetCredit: "server.consumeProviderRateLimitResetCredit",
   serverLoginProvider: "server.loginProvider",
   serverUpdateProvider: "server.updateProvider",
@@ -276,6 +279,11 @@ export const WsServerRefreshProvidersRpc = Rpc.make(WS_METHODS.serverRefreshProv
     force: Schema.optional(Schema.Boolean),
   }),
   success: ServerProviderUpdatedPayload,
+});
+
+export const WsServerCheckProviderAccessRpc = Rpc.make(WS_METHODS.serverCheckProviderAccess, {
+  payload: ServerProviderAccessInput,
+  success: ServerProviderAccessResult,
 });
 
 /**
@@ -732,6 +740,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetConfigRpc,
   WsServerInterpretAtmosphereCommandRpc,
   WsServerRefreshProvidersRpc,
+  WsServerCheckProviderAccessRpc,
   WsServerConsumeProviderRateLimitResetCreditRpc,
   WsServerLoginProviderRpc,
   WsServerUpdateProviderRpc,

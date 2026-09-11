@@ -6,6 +6,34 @@
  * content, paths, provider output, or other dynamic values.
  */
 export const SETTINGS_JA: Readonly<Record<string, string>> = {
+  "Check access before a long run": "長時間の実行前に接続を確認",
+  "This sends a small live request with the saved Claude connection. It may use quota. Saved credentials alone do not prove access.":
+    "保存済みのClaude接続で小さな実リクエストを送ります。利用枠を消費する場合があります。認証情報が保存されているだけでは、接続の成功は確認できません。",
+  "Model to check": "確認するモデル",
+  "No models available": "利用可能なモデルがありません",
+  "Check access": "接続を確認",
+  "Saved credentials detected": "保存済みの認証情報を検出",
+  "Use Check access in provider settings to verify a live request.":
+    "プロバイダー設定の「接続を確認」で、実リクエストの成功を確認してください。",
+  "Checking access…": "接続を確認中…",
+  "Saving settings…": "設定を保存中…",
+  "Access verified": "接続を確認できました",
+  "Sign in again, then check access.": "再ログインしてから接続を確認してください。",
+  "The account cannot use this model. Check the provider account.":
+    "このアカウントではモデルを利用できません。プロバイダーのアカウントを確認してください。",
+  "The provider reported a usage limit. Check the account before starting work.":
+    "プロバイダーが利用制限を報告しました。作業を始める前にアカウントを確認してください。",
+  "Access could not be verified. Check the connection and try again.":
+    "接続を確認できませんでした。接続状態を確認して、再試行してください。",
+  "This provider does not support the access check.":
+    "このプロバイダーは接続確認に対応していません。",
+  "A check is running or was just completed. Wait, then try again.":
+    "確認中、または確認が終わった直後です。少し待ってから再試行してください。",
+  "Checked model": "確認したモデル",
+  "Access has not been checked for this configuration and model.":
+    "この設定とモデルでは、まだ接続を確認していません。",
+  "A successful check does not guarantee access for the full run. Check each connection you plan to use.":
+    "確認に成功しても、実行中ずっと接続できる保証はありません。使用する接続をそれぞれ確認してください。",
   // Settings shell and navigation
   Settings: "設定",
   "Restore defaults": "既定値に戻す",

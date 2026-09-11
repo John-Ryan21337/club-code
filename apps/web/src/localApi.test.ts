@@ -76,6 +76,7 @@ const rpcClientMock = {
     getConfig: vi.fn(),
     refreshProviders: vi.fn(),
     loginProvider: vi.fn(),
+    checkProviderAccess: vi.fn(),
     updateProvider: vi.fn(),
     restartProviderRuntime: vi.fn(),
     openSystemPromptFile: vi.fn(),
@@ -654,6 +655,20 @@ describe("wsApi", () => {
     expect(rpcClientMock.server.loginProvider).toHaveBeenCalledWith({
       instanceId: ProviderInstanceId.make("codex"),
     });
+  });
+
+  it("keeps provider access checks bound to their selected instance and model", async () => {
+    const input = { instanceId: ProviderInstanceId.make("claude-review"), model: "claude-test" };
+    const result = {
+      ...input,
+      status: "authentication-required",
+      checkedAt: "2026-09-11T21:00:00.000Z",
+    };
+    rpcClientMock.server.checkProviderAccess.mockResolvedValue(result);
+    await expect(
+      createLocalApi(rpcClientMock as never).server.checkProviderAccess(input),
+    ).resolves.toEqual(result);
+    expect(rpcClientMock.server.checkProviderAccess).toHaveBeenCalledExactlyOnceWith(input);
   });
 
   it("forwards provider runtime restarts directly to the RPC client", async () => {
