@@ -13,6 +13,7 @@ import * as LogLevel from "effect/LogLevel";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Context from "effect/Context";
+import type * as Redacted from "effect/Redacted";
 import type { ProviderDaemonClientConfig } from "@cafecode/contracts";
 
 export const DEFAULT_PORT = 3773;
@@ -77,6 +78,9 @@ export interface ServerConfigShape extends ServerDerivedPaths {
   readonly desktopBootstrapToken: string | undefined;
   readonly autoBootstrapProjectFromCwd: boolean;
   readonly logWebSocketEvents: boolean;
+  /** Explicit server opt-in; the API key is never part of renderer settings. */
+  readonly youtubePublicDiscoveryEnabled?: boolean | undefined;
+  readonly youtubePublicDiscoveryApiKey?: Redacted.Redacted<string> | undefined;
   readonly providerDaemon?: ProviderDaemonClientConfig | undefined;
   readonly providerSupervisor?: ProviderDaemonClientConfig | undefined;
   /** Main Cafe backend port for provider-owned MCP clients. Detached provider

@@ -16,6 +16,7 @@ const fixture = vi.hoisted(() => ({
   artwork: vi.fn(async () => null),
 }));
 vi.mock("../../hooks/useSettings", () => ({
+  getClientSettings: () => fixture.settings,
   useSettings: () =>
     useSyncExternalStore(
       (listener) => {

@@ -1,3 +1,8 @@
+import {
+  YouTubePublicDiscovery,
+  YouTubePublicDiscoveryLive,
+  type YouTubePublicDiscoveryShape,
+} from "./ambientMedia/YouTubePublicDiscovery.ts";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeSocket from "@effect/platform-node/NodeSocket";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -447,6 +452,7 @@ const makeBrowserOtlpPayload = (spanName: string) =>
 const buildAppUnderTest = (options?: {
   config?: Partial<ServerConfigShape>;
   layers?: {
+    youtubeDiscovery?: YouTubePublicDiscoveryShape;
     keybindings?: Partial<KeybindingsShape>;
     providerRegistry?: Partial<ProviderRegistryShape>;
     providerService?: Partial<ProviderServiceShape>;
@@ -1012,6 +1018,11 @@ const buildAppUnderTest = (options?: {
       Layer.provide(workspaceAndProjectServicesLayer),
       Layer.provideMerge(FetchHttpClient.layer),
       Layer.provideMerge(BrandingImageStoreLive),
+      Layer.provideMerge(
+        options?.layers?.youtubeDiscovery
+          ? Layer.succeed(YouTubePublicDiscovery, options.layers.youtubeDiscovery)
+          : YouTubePublicDiscoveryLive,
+      ),
       Layer.provide(layerConfig),
     );
 
@@ -1431,6 +1442,76 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       });
 
       assert.equal(response.status, 401);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("keeps public YouTube discovery disabled by default", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+      const token = yield* getAuthenticatedBearerSessionToken();
+      const response = yield* HttpClient.post("/api/ambient-media/youtube/search", {
+        headers: { authorization: `Bearer ${token}` },
+        body: HttpBody.jsonUnsafe({ query: "synthetic" }),
+      });
+      assert.equal(response.status, 503);
+      assert.deepEqual(yield* response.json, { error: "unavailable" });
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("authenticates and bounds public YouTube discovery before service dispatch", () =>
+    Effect.gen(function* () {
+      const requests: Array<{ query: string; maxResults: number; clientId: string }> = [];
+      yield* buildAppUnderTest({
+        config: { youtubePublicDiscoveryEnabled: true },
+        layers: {
+          youtubeDiscovery: {
+            search: (input) =>
+              Effect.sync(() => {
+                requests.push(input);
+                return [
+                  {
+                    kind: "video" as const,
+                    id: "dQw4w9WgXcQ",
+                    title: "Synthetic result",
+                    thumbnail: null,
+                  },
+                ];
+              }),
+          },
+        },
+      });
+      const unauthenticated = yield* HttpClient.post("/api/ambient-media/youtube/search", {
+        body: HttpBody.jsonUnsafe({ query: "synthetic" }),
+      });
+      assert.equal(unauthenticated.status, 401);
+      const token = yield* getAuthenticatedBearerSessionToken();
+      const headers = { authorization: `Bearer ${token}`, "x-forwarded-for": "not-a-session" };
+      const invalid = yield* HttpClient.post("/api/ambient-media/youtube/search", {
+        headers,
+        body: HttpBody.jsonUnsafe({ query: "synthetic", clientId: "forged" }),
+      });
+      assert.equal(invalid.status, 400);
+      const large = yield* HttpClient.post("/api/ambient-media/youtube/search", {
+        headers,
+        body: HttpBody.text("x".repeat(4097)),
+      });
+      assert.equal(large.status, 413);
+      assert.equal(requests.length, 0);
+      const valid = yield* HttpClient.post("/api/ambient-media/youtube/search", {
+        headers,
+        body: HttpBody.jsonUnsafe({ query: " synthetic ", maxResults: 2 }),
+      });
+      assert.equal(valid.status, 200);
+      assert.equal(valid.headers["cache-control"], "no-store");
+      assert.deepEqual(yield* valid.json, {
+        results: [{ kind: "video", id: "dQw4w9WgXcQ", title: "Synthetic result", thumbnail: null }],
+      });
+      assert.equal(requests.length, 1);
+      assert.equal(requests[0]?.query, "synthetic");
+      assert.equal(requests[0]?.maxResults, 2);
+      assert.isNotEmpty(requests[0]!.clientId);
+      assert.notEqual(requests[0]?.clientId, "not-a-session");
+      assert.notEqual(requests[0]?.clientId, "forged");
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

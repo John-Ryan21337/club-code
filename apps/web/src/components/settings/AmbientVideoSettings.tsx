@@ -13,6 +13,7 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Switch } from "../ui/switch";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
+import { YouTubeDiscoverySettings } from "./YouTubeDiscoverySettings";
 
 export function AmbientVideoSettings() {
   const settings = useSettings();
@@ -96,6 +97,14 @@ export function AmbientVideoSettings() {
           </p>
         ) : null}
       </SettingsRow>
+      <YouTubeDiscoverySettings
+        environmentScopeKey={environmentScopeKey}
+        onSelect={(source) => {
+          youtubeUrlQueueStore.stop();
+          updateSettings({ ambientVideoSource: source, ambientVideoEnabled: true });
+          setError(null);
+        }}
+      />
       <SettingsRow
         title="Cinema"
         description="Places the player beside chat when the window has enough space. Escape returns to the floating layout."

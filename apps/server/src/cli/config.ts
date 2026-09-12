@@ -81,6 +81,15 @@ export const logWebSocketEventsFlag = Flag.boolean("log-websocket-events").pipe(
 );
 
 const EnvServerConfig = Config.all({
+  youtubePublicDiscoveryEnabled: cafeCodeConfigWithDefault(
+    "CAFE_CODE_YOUTUBE_PUBLIC_DISCOVERY_ENABLED",
+    Config.boolean,
+    false,
+  ),
+  youtubePublicDiscoveryApiKey: cafeCodeOptionalValueConfig(
+    "CAFE_CODE_YOUTUBE_PUBLIC_DISCOVERY_API_KEY",
+    Config.redacted,
+  ),
   logLevel: cafeCodeConfigWithDefault("CAFE_CODE_LOG_LEVEL", Config.logLevel, "Info"),
   traceMinLevel: cafeCodeConfigWithDefault("CAFE_CODE_TRACE_MIN_LEVEL", Config.logLevel, "Info"),
   traceTimingEnabled: cafeCodeConfigWithDefault(
@@ -370,6 +379,10 @@ export const resolveServerConfig = (
       desktopBootstrapToken,
       autoBootstrapProjectFromCwd,
       logWebSocketEvents,
+      ...(env.youtubePublicDiscoveryEnabled ? { youtubePublicDiscoveryEnabled: true } : {}),
+      ...(env.youtubePublicDiscoveryApiKey
+        ? { youtubePublicDiscoveryApiKey: env.youtubePublicDiscoveryApiKey }
+        : {}),
       providerDaemon: bootstrap?.providerDaemon,
       providerSupervisor: undefined,
     };
