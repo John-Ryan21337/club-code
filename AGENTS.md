@@ -17,6 +17,8 @@
 
 ## Windows-Specific Notes
 
+- External provider access checks use a validated System32 `cmd.exe` only for `.cmd`/`.bat` shims, with fixed quoted arguments, delayed expansion disabled (`/v:off`), and closed stdin. Reject percent expansion, quotes, newlines, and NUL in shim paths or arguments. Resolve `taskkill.exe` from the same validated system directory for bounded process-tree cleanup. POSIX uses direct execution and a dedicated process group. Default tests mock subprocesses and termination.
+
 - The separate scheduled/manual reliability workflow runs the existing Windows native installer/runtime/uninstaller smoke only on disposable GitHub-hosted Windows runners. It does not run on user machines or move process-backed/provider tests into the default suite. macOS uses its isolated DMG/ZIP smoke, and Linux keeps its existing artifact build and pipeline coverage.
 
 - Generic attachment originals and metadata are private `0600` files where POSIX permissions apply; provider-readable derivatives are `0400`. On Windows leave derivatives user-writable under Cafe's user-owned data-directory ACL instead of setting the read-only attribute, which would prevent safe cleanup. File names are inert display metadata and storage uses server-minted identifiers; Windows path separators in dropped names must never become server paths. Document extraction children use the current executable with `ELECTRON_RUN_AS_NODE=1` for packaged Electron backends and preserve only required Windows system-directory environment entries, not provider credentials or user-selected Node hooks. macOS/Linux retain the same isolated child behavior and their native permission checks.
@@ -68,6 +70,8 @@ Core priorities:
 If a tradeoff is required, choose correctness, durability, and debuggability over short-term convenience.
 
 ## Security Requirements
+
+- Run `yarn providers:check-access` with the exact model, executable, home, and inherited environment before external CLI fan-out. Require a real structured terminal response; local credentials or exit zero do not verify access. Keep output bounded and sanitized, disable tools and persistence, and treat unsupported controls or ambiguous failures as unverified. Codex currently remains unverified because an equivalent configuration-preserving empty-tool boundary is not established.
 
 - Write all code as if it will run in a security-conscious environment where adversaries will constantly try to attack local transports, provider sessions, provider credentials, persisted command ledgers, and debug surfaces.
 - Local provider daemon and supervisor transports must be loopback-only or IPC by default, authenticated with high-entropy capability tokens, and must never be exposed on a non-loopback interface without an explicit authenticated design.
