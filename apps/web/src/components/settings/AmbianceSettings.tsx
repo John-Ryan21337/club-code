@@ -29,6 +29,7 @@ import { Slider } from "../ui/slider";
 import { Switch } from "../ui/switch";
 import { ColorWheelPicker } from "./ColorWheelPicker";
 import { YouTubeQueueSettingsSection } from "./YouTubeQueueSettings";
+import { LocalMediaSettings } from "./LocalMediaSettings";
 import { AmbientVideoSettings } from "./AmbientVideoSettings";
 import {
   SettingResetButton,
@@ -382,6 +383,7 @@ export function AmbianceSettingsPanel() {
         />
       </SettingsSection>
       <AmbientVideoSettings />
+      <LocalMediaSettings />
       <YouTubeQueueSettingsSection />
     </SettingsPageContainer>
   );

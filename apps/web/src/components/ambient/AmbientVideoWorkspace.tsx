@@ -31,6 +31,8 @@ import {
   youtubeEmbedUrl,
 } from "../../ambientVideo";
 import { type AmbientEdgePalette, loadYouTubeEdgePalette } from "../../ambientVideoGlow";
+import { localMediaStore, useLocalMediaState, useLocalMediaElement } from "../../localMedia";
+import { LocalMediaPanel } from "../chat/LocalMediaPanel";
 import { spotifyEmbedUrl } from "../../spotify";
 import {
   connectYouTubeQueueIframe,
@@ -398,6 +400,10 @@ export function AmbientVideoWorkspace({
   readonly retainPlayerWithoutAnchor?: boolean;
 }) {
   const settings = useSettings();
+  const localMedia = useLocalMediaState();
+  const localMediaElement = useLocalMediaElement();
+  const [localPaused, setLocalPaused] = useState(true);
+  const localCinemaHeadingRef = useRef<HTMLHeadingElement | null>(null);
   const youtubeUrlQueue = useYouTubeUrlQueue(environmentScopeKey);
   const { updateSettings } = useUpdateSettings();
   const [rootElement, setRootElement] = useState<HTMLDivElement | null>(null);
@@ -411,7 +417,7 @@ export function AmbientVideoWorkspace({
   const animationFrameRef = useRef(0);
   const streamingCinemaHeadingRef = useRef<HTMLHeadingElement | null>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
-  const previousCinemaModeRef = useRef<"streaming" | null>(null);
+  const previousCinemaModeRef = useRef<"local" | "streaming" | null>(null);
   const [playerReadiness, setPlayerReadiness] = useState<{
     readonly sourceKey: string;
     readonly element: HTMLIFrameElement;
@@ -482,10 +488,41 @@ export function AmbientVideoWorkspace({
   const cinemaLayoutFits =
     rootRect !== null &&
     ambientVideoCinemaLayoutFits(rootRect.width, rootRect.height - titlebarInset);
+  const localCinemaRequested =
+    localMedia.source !== null && localMedia.presentationMode === "cinema";
+  const localCinemaEffective = localCinemaRequested && cinemaLayoutFits;
+  const localBackgroundEffective =
+    localMedia.source?.kind === "video" && localMedia.presentationMode === "background";
+  const localPresentationDominant = localCinemaRequested || localBackgroundEffective;
+  const workspaceActive =
+    (settings.ambientVideoEnabled && source !== null) || localMedia.source !== null;
   const streamingCinemaEffective =
-    locallyRenderable && playerReady && cinemaRequested && cinemaLayoutFits;
-  const cinemaEffective = streamingCinemaEffective;
-  const effectiveCinemaMode = streamingCinemaEffective ? "streaming" : null;
+    !localPresentationDominant &&
+    locallyRenderable &&
+    playerReady &&
+    cinemaRequested &&
+    cinemaLayoutFits;
+  const cinemaEffective = localCinemaEffective || streamingCinemaEffective;
+  const effectiveCinemaMode = localCinemaEffective
+    ? "local"
+    : streamingCinemaEffective
+      ? "streaming"
+      : null;
+  useEffect(() => () => localMediaStore.clear(), [environmentScopeKey]);
+  useEffect(() => {
+    if (!localMediaElement) {
+      setLocalPaused(true);
+      return;
+    }
+    const sync = () => setLocalPaused(localMediaElement.paused);
+    sync();
+    for (const event of ["play", "pause", "ended", "emptied"])
+      localMediaElement.addEventListener(event, sync);
+    return () => {
+      for (const event of ["play", "pause", "ended", "emptied"])
+        localMediaElement.removeEventListener(event, sync);
+    };
+  }, [localMediaElement]);
 
   useEffect(() => () => youtubeUrlQueueStore.stop(), [environmentScopeKey]);
 
@@ -663,8 +700,9 @@ export function AmbientVideoWorkspace({
     mountedPlayerRef.current?.sourceKey === sourceKey &&
     mountedPlayerRef.current.element.isConnected;
   const playerShouldMount =
-    ambientVideoPlayerShouldMount(locallyRenderable, floatingVisible, streamingCinemaEffective) ||
-    retainMountedPlayer;
+    !localPresentationDominant &&
+    (ambientVideoPlayerShouldMount(locallyRenderable, floatingVisible, streamingCinemaEffective) ||
+      retainMountedPlayer);
 
   const commitGeometry = useCallback(
     (geometry: NormalizedAmbientMediaGeometry) => {
@@ -786,7 +824,10 @@ export function AmbientVideoWorkspace({
     }
     if (effectiveCinemaMode !== null) {
       const frame = window.requestAnimationFrame(() => {
-        const heading = streamingCinemaHeadingRef.current;
+        const heading =
+          effectiveCinemaMode === "local"
+            ? localCinemaHeadingRef.current
+            : streamingCinemaHeadingRef.current;
         heading?.focus();
       });
       return () => window.cancelAnimationFrame(frame);
@@ -809,11 +850,12 @@ export function AmbientVideoWorkspace({
         return;
       }
       event.preventDefault();
-      updateSettings({ ambientVideoPresentationMode: "floating" });
+      if (localCinemaRequested) localMediaStore.update({ presentationMode: "floating" });
+      else updateSettings({ ambientVideoPresentationMode: "floating" });
     };
     window.addEventListener("keydown", exitCinemaOnEscape);
     return () => window.removeEventListener("keydown", exitCinemaOnEscape);
-  }, [cinemaEffective, updateSettings]);
+  }, [cinemaEffective, localCinemaRequested, updateSettings]);
 
   const nudgeGeometry = useCallback(
     (kind: PointerInteraction["kind"], key: string) => {
@@ -894,16 +936,14 @@ export function AmbientVideoWorkspace({
       <div
         ref={registerRootElement}
         className={cn(
-          settings.ambientVideoEnabled && source !== null
-            ? "relative grid min-h-0 min-w-0 flex-1 overflow-hidden"
-            : "contents",
-          settings.ambientVideoEnabled &&
-            source !== null &&
+          workspaceActive ? "relative grid min-h-0 min-w-0 flex-1 overflow-hidden" : "contents",
+          workspaceActive &&
             (cinemaEffective
               ? "grid-cols-[minmax(356px,1fr)_minmax(320px,40rem)] gap-3 p-3"
               : "grid-cols-1"),
         )}
         data-ambient-video-presentation={cinemaEffective ? "cinema" : "floating"}
+        data-local-media-background={localBackgroundEffective ? "true" : undefined}
         style={
           cinemaEffective && titlebarInset > 0 ? { paddingTop: titlebarInset + 12 } : undefined
         }
@@ -922,9 +962,8 @@ export function AmbientVideoWorkspace({
         ) : null}
         <div
           className={cn(
-            settings.ambientVideoEnabled && source !== null ? "min-h-0 min-w-0" : "contents",
-            settings.ambientVideoEnabled &&
-              source !== null &&
+            workspaceActive ? "relative z-10 min-h-0 min-w-0" : "contents",
+            workspaceActive &&
               (cinemaEffective
                 ? "col-start-2 row-start-1 overflow-hidden rounded-xl border"
                 : "col-start-1 row-start-1"),
@@ -933,6 +972,56 @@ export function AmbientVideoWorkspace({
         >
           {children}
         </div>
+        {localCinemaRequested && !localCinemaEffective ? (
+          <div
+            role="status"
+            className="absolute top-3 left-3 z-40 rounded bg-background p-2 text-xs"
+          >
+            Cinema needs more window space; using the floating layout.
+          </div>
+        ) : null}
+        <LocalMediaPanel
+          cinemaEffective={localCinemaEffective}
+          backgroundEffective={localBackgroundEffective}
+          floatingAnchor={anchorRect}
+          cinemaHeadingRef={localCinemaHeadingRef}
+        />
+        {localBackgroundEffective ? (
+          <div
+            role="toolbar"
+            aria-label="Local video background controls"
+            className="absolute right-3 bottom-3 z-40 flex flex-wrap gap-2 rounded border bg-background p-2 text-xs"
+          >
+            <button
+              disabled={localMedia.navigationPending}
+              onClick={() => void localMediaStore.navigate("previous")}
+            >
+              Previous local video
+            </button>
+            <button
+              disabled={localMedia.navigationPending}
+              onClick={() => void localMediaStore.navigate("next")}
+            >
+              Next local video
+            </button>
+            <button
+              disabled={!localMediaElement}
+              aria-label={
+                localPaused ? "Play local video background" : "Pause local video background"
+              }
+              onClick={() => {
+                if (localMediaElement?.paused) void localMediaElement.play().catch(() => undefined);
+                else localMediaElement?.pause();
+              }}
+            >
+              {localPaused ? "Play" : "Pause"}
+            </button>
+            <button onClick={() => localMediaStore.update({ presentationMode: "floating" })}>
+              Exit background
+            </button>
+            <button onClick={() => localMediaStore.clear()}>Clear local media</button>
+          </div>
+        ) : null}
         <section
           aria-label="Ambient streaming player"
           className={cn(

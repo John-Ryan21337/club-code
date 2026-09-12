@@ -6368,7 +6368,10 @@ export default function ChatView(props: ChatViewProps) {
     (shouldRenderPlanSidebar && !shouldUsePlanSidebarSheet) || sessionRailVisible;
 
   return (
-    <div className="group/chat-view flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden bg-background">
+    <div
+      data-local-media-chat-shell
+      className="group/chat-view flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden bg-background"
+    >
       {/* Top bar — hidden while the mobile composer has the on-screen keyboard
           open (data attribute set by ChatComposer) to maximize vertical room. */}
       <header
