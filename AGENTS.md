@@ -17,6 +17,8 @@
 
 ## Windows-Specific Notes
 
+- Operational application-state previews use a separate fixed, read-only child against Cafe's configured file, with no project copy-size limit. Preserve the child environment, closed stdin, hard deadline and retained admission through close on all platforms. Windows lacks `O_NOFOLLOW`/`O_NONBLOCK`, so final regular-file and identity checks remain necessary; canonical parent aliases are allowed, final links are refused. Unlike project copies, this explicit app-owned-state reader may use SQLite WAL/SHM sidecars and reader locks on every platform. Do not claim logical read-only mode prevents all sidecar effects, change journal mode, or run these checks against a user's live state.
+
 - Workspace SQLite previews run a fixed child program with the current executable and `ELECTRON_RUN_AS_NODE=1`, plus only required Windows system-directory environment values. No inherited Node hooks or provider credentials are passed. The child queries a private, bounded copy of the main database and optional WAL; it never creates SQLite sidecars beside project files. Closed stdin, a hard deadline, output caps and waiting for child close apply equally on Windows, macOS and Linux. Temporary cleanup verifies the exact owned directory; original files are opened read-only and never marked read-only on disk.
 
 - The separate scheduled/manual reliability workflow runs the existing Windows native installer/runtime/uninstaller smoke only on disposable GitHub-hosted Windows runners. It does not run on user machines or move process-backed/provider tests into the default suite. macOS uses its isolated DMG/ZIP smoke, and Linux keeps its existing artifact build and pipeline coverage.

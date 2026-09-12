@@ -39,6 +39,11 @@ import type {
   WorkspaceObservatoryRowsInput,
   WorkspaceObservatoryRowsResult,
 } from "./workspaceObservatory.ts";
+import type {
+  ApplicationStateRowsInput,
+  ApplicationStateRowsResult,
+  ApplicationStateTablesResult,
+} from "./applicationState.ts";
 import type { ProviderInstanceId } from "./providerInstance.ts";
 import type {
   ServerConfig,
@@ -509,6 +514,10 @@ export interface EnvironmentApi {
     rows: (input: WorkspaceObservatoryRowsInput) => Promise<WorkspaceObservatoryRowsResult>;
     tree: (input: WorkspaceObservatoryTreeInput) => Promise<WorkspaceObservatoryTreeResult>;
     readFile: (input: WorkspaceObservatoryFileInput) => Promise<WorkspaceObservatoryFileResult>;
+  };
+  applicationState?: {
+    tables: () => Promise<ApplicationStateTablesResult>;
+    rows: (input: ApplicationStateRowsInput) => Promise<ApplicationStateRowsResult>;
   };
   sourceControl: {
     lookupRepository: (

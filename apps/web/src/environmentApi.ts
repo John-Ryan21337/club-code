@@ -24,6 +24,10 @@ export function createEnvironmentApi(rpcClient: WsRpcClient): EnvironmentApi {
       tree: rpcClient.workspaceObservatory.tree,
       readFile: rpcClient.workspaceObservatory.readFile,
     },
+    applicationState: {
+      tables: () => rpcClient.applicationState.tables(),
+      rows: (input) => rpcClient.applicationState.rows(input),
+    },
     sourceControl: {
       lookupRepository: rpcClient.sourceControl.lookupRepository,
       cloneRepository: rpcClient.sourceControl.cloneRepository,

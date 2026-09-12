@@ -7,6 +7,7 @@ import { cn } from "~/lib/utils";
 import { diffFileLines, type FileLineDiff } from "~/workspaceObservatoryDiff";
 import { Button } from "./ui/button";
 import { WorkspaceDatabaseViewer } from "./WorkspaceDatabaseViewer";
+import { ApplicationStatePreview } from "./ApplicationStatePreview";
 import {
   Dialog,
   DialogDescription,
@@ -569,6 +570,9 @@ function WorkspaceObservatorySession({
           ))}
         </div>
       </section>
+      {databaseConnection ? (
+        <ApplicationStatePreview environmentId={environmentId} connection={databaseConnection} />
+      ) : null}
     </DialogPanel>
   );
 }
