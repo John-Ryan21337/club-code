@@ -4,6 +4,11 @@ import { contextBridge, ipcRenderer } from "electron";
 import * as IpcChannels from "./ipc/channels.ts";
 
 contextBridge.exposeInMainWorld("desktopBridge", {
+  getLocalMediaCapability: () => ipcRenderer.invoke(IpcChannels.GET_LOCAL_MEDIA_CAPABILITY_CHANNEL),
+  pickLocalMedia: () => ipcRenderer.invoke(IpcChannels.PICK_LOCAL_MEDIA_CHANNEL),
+  navigateLocalMedia: (input) =>
+    ipcRenderer.invoke(IpcChannels.NAVIGATE_LOCAL_MEDIA_CHANNEL, input),
+  releaseLocalMedia: (input) => ipcRenderer.invoke(IpcChannels.RELEASE_LOCAL_MEDIA_CHANNEL, input),
   getAppBranding: () => {
     const result = ipcRenderer.sendSync(IpcChannels.GET_APP_BRANDING_CHANNEL);
     if (typeof result !== "object" || result === null) {

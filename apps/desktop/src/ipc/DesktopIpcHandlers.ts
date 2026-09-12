@@ -1,6 +1,12 @@
 import * as Effect from "effect/Effect";
 
 import * as DesktopIpc from "./DesktopIpc.ts";
+import {
+  getLocalMediaCapability,
+  pickLocalMedia,
+  navigateLocalMedia,
+  releaseLocalMedia,
+} from "./methods/localMedia.ts";
 import { getClientSettings, setClientSettings } from "./methods/clientSettings.ts";
 import {
   getSavedEnvironmentRegistry,
@@ -40,6 +46,10 @@ import {
 
 export const installDesktopIpcHandlers = Effect.gen(function* () {
   const ipc = yield* DesktopIpc.DesktopIpc;
+  yield* ipc.handle(getLocalMediaCapability);
+  yield* ipc.handle(pickLocalMedia);
+  yield* ipc.handle(navigateLocalMedia);
+  yield* ipc.handle(releaseLocalMedia);
 
   yield* ipc.handleSync(getAppBranding);
   yield* ipc.handleSync(getLocalEnvironmentBootstrap);

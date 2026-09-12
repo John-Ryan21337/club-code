@@ -541,6 +541,13 @@ const createDesktopBridgeStub = (overrides?: {
   };
 
   return {
+    getLocalMediaCapability: async () => ({
+      available: false as const,
+      engine: { label: "VLC" as const, version: null, reason: "Unavailable in this fixture." },
+    }),
+    pickLocalMedia: async () => null,
+    navigateLocalMedia: async () => null,
+    releaseLocalMedia: async () => false,
     getAppBranding: vi.fn().mockReturnValue(null),
     getLocalEnvironmentBootstrap: () => ({
       label: "Local environment",

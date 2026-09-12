@@ -13,6 +13,7 @@ import * as Electron from "electron";
 import { DesktopEnvironment, type DesktopEnvironmentShape } from "../app/DesktopEnvironment.ts";
 
 export const DESKTOP_SCHEME = "cafecode";
+export const DESKTOP_MEDIA_SCHEME = "cafecode-media";
 
 export class ElectronProtocolRegistrationError extends Data.TaggedError(
   "ElectronProtocolRegistrationError",
@@ -21,7 +22,7 @@ export class ElectronProtocolRegistrationError extends Data.TaggedError(
   readonly cause: unknown;
 }> {
   override get message() {
-    return `Failed to register ${this.scheme}: file protocol.`;
+    return `Failed to register the ${this.scheme}: protocol.`;
   }
 }
 
@@ -43,6 +44,11 @@ export interface ElectronProtocolShape {
       request: Electron.ProtocolRequest,
       cause: Cause.Cause<E>,
     ) => Electron.ProtocolResponse;
+  }) => Effect.Effect<void, ElectronProtocolRegistrationError, R | Scope.Scope>;
+  readonly registerResponseProtocol: <E, R>(input: {
+    readonly scheme: string;
+    readonly handler: (request: Request) => Effect.Effect<Response, E, R>;
+    readonly authorizeRequest?: (requestUrl: string, webContentsId: number | undefined) => boolean;
   }) => Effect.Effect<void, ElectronProtocolRegistrationError, R | Scope.Scope>;
   readonly registerDesktopFileProtocol: Effect.Effect<
     void,
@@ -78,6 +84,16 @@ const registerDesktopSchemePrivileges = Effect.sync(() => {
         secure: true,
         supportFetchAPI: true,
         corsEnabled: true,
+      },
+    },
+    {
+      scheme: DESKTOP_MEDIA_SCHEME,
+      privileges: {
+        standard: true,
+        secure: true,
+        supportFetchAPI: true,
+        corsEnabled: true,
+        stream: true,
       },
     },
   ]);
@@ -226,6 +242,108 @@ const make = Effect.gen(function* () {
     },
   );
 
+  const registerResponseProtocol = Effect.fn("desktop.electron.protocol.registerResponseProtocol")(
+    function* <E, R>({
+      scheme,
+      handler,
+      authorizeRequest,
+    }: {
+      readonly scheme: string;
+      readonly handler: (request: Request) => Effect.Effect<Response, E, R>;
+      readonly authorizeRequest?: (
+        requestUrl: string,
+        webContentsId: number | undefined,
+      ) => boolean;
+    }): Effect.fn.Return<void, ElectronProtocolRegistrationError, R | Scope.Scope> {
+      yield* Effect.annotateCurrentSpan({ scheme });
+      const alreadyRegistered = yield* Ref.get(registeredProtocols).pipe(
+        Effect.map((protocols) => protocols.has(scheme)),
+      );
+      if (alreadyRegistered) {
+        return;
+      }
+
+      const context = yield* Effect.context<R>();
+      const runPromise = Effect.runPromiseWith(context);
+      const requestFilter = { urls: [`${scheme}://*/*`] };
+      let protocolHandled = false;
+      let authorizationInstalled = false;
+      const cleanupResponseProtocol = () => {
+        // Each removal must run even if the other Electron hook throws during shutdown.
+        if (protocolHandled) {
+          protocolHandled = false;
+          try {
+            Electron.protocol.unhandle(scheme);
+          } catch {
+            /* Desktop teardown may have started. */
+          }
+        }
+        if (authorizationInstalled) {
+          authorizationInstalled = false;
+          try {
+            Electron.session.defaultSession.webRequest.onBeforeRequest(requestFilter, null);
+          } catch {
+            /* The session may already be destroyed. */
+          }
+        }
+      };
+
+      yield* Effect.acquireRelease(
+        Effect.try({
+          try: () => {
+            try {
+              Electron.protocol.handle(scheme, (request) =>
+                runPromise(
+                  handler(request).pipe(
+                    Effect.catchCause(() =>
+                      Effect.succeed(
+                        new Response(null, {
+                          status: 502,
+                          headers: { "Cache-Control": "no-store" },
+                        }),
+                      ),
+                    ),
+                    Effect.withSpan("desktop.electron.protocol.handleResponseRequest"),
+                  ),
+                ),
+              );
+              protocolHandled = true;
+              if (authorizeRequest) {
+                Electron.session.defaultSession.webRequest.onBeforeRequest(
+                  requestFilter,
+                  (details, callback) => {
+                    callback({
+                      cancel: !authorizeRequest(details.url, details.webContentsId),
+                    });
+                  },
+                );
+                authorizationInstalled = true;
+              }
+            } catch (cause) {
+              cleanupResponseProtocol();
+              throw cause;
+            }
+          },
+          catch: (cause) => new ElectronProtocolRegistrationError({ scheme, cause }),
+        }).pipe(
+          Effect.andThen(
+            Ref.update(registeredProtocols, (protocols) => new Set(protocols).add(scheme)),
+          ),
+        ),
+        () =>
+          Effect.sync(cleanupResponseProtocol).pipe(
+            Effect.andThen(
+              Ref.update(registeredProtocols, (protocols) => {
+                const next = new Set(protocols);
+                next.delete(scheme);
+                return next;
+              }),
+            ),
+          ),
+      );
+    },
+  );
+
   const registerDesktopFileProtocol = Effect.gen(function* () {
     const environment = yield* DesktopEnvironment;
     if (environment.isDevelopment) return;
@@ -265,6 +383,7 @@ const make = Effect.gen(function* () {
 
   return ElectronProtocol.of({
     registerFileProtocol,
+    registerResponseProtocol,
     registerDesktopFileProtocol,
   });
 });

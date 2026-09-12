@@ -8,6 +8,7 @@ import * as Random from "effect/Random";
 import * as Ref from "effect/Ref";
 
 import type { ProviderDaemonClientConfig } from "@cafecode/contracts";
+import * as DesktopVlcMedia from "../media/DesktopVlcMedia.ts";
 import * as NetService from "@cafecode/shared/Net";
 import * as ElectronApp from "../electron/ElectronApp.ts";
 import * as ElectronDialog from "../electron/ElectronDialog.ts";
@@ -459,6 +460,8 @@ const startup = Effect.gen(function* () {
   yield* logStartupInfo("app ready");
   yield* appIdentity.configure;
   yield* applicationMenu.configure;
+  const vlcMedia = yield* DesktopVlcMedia.DesktopVlcMedia;
+  yield* vlcMedia.registerProtocol;
   yield* electronProtocol.registerDesktopFileProtocol;
   yield* updates.configure;
   yield* sourceUpdates.configure;

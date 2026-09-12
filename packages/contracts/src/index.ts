@@ -5,6 +5,7 @@ export * from "./desktopBootstrap.ts";
 export * from "./dictation.ts";
 export * from "./remoteAccess.ts";
 export * from "./ipc.ts";
+export * from "./localMedia.ts";
 export * from "./provider.ts";
 export * from "./providerGoal.ts";
 export * from "./providerInstance.ts";
