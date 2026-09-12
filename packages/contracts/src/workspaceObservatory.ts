@@ -118,6 +118,21 @@ export const WorkspaceObservatoryRowsResult = Schema.Struct({
   ).check(Schema.isMaxLength(WORKSPACE_DATABASE_LIMITS.rows)),
   truncated: Schema.Boolean,
   redacted: Schema.Boolean,
+  /** Optional for older servers. These describe exact typed key representations,
+   * not SQL collation equivalence or a database change log. */
+  identityColumns: Schema.optionalKey(
+    Schema.Array(
+      Schema.Number.check(
+        Schema.isInt(),
+        Schema.isBetween({ minimum: 0, maximum: WORKSPACE_DATABASE_LIMITS.columns - 1 }),
+      ),
+    ).check(Schema.isMaxLength(WORKSPACE_DATABASE_LIMITS.columns)),
+  ),
+  rowKeys: Schema.optionalKey(
+    Schema.Array(
+      Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/), Schema.isMaxLength(64)),
+    ).check(Schema.isMaxLength(WORKSPACE_DATABASE_LIMITS.rows)),
+  ),
 });
 export type WorkspaceObservatoryRowsResult = typeof WorkspaceObservatoryRowsResult.Type;
 

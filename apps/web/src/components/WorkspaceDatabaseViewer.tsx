@@ -1,5 +1,16 @@
 import type { EnvironmentApi, EnvironmentId, ProjectId } from "@cafecode/contracts";
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import {
+  useEffect,
+  useEffectEvent,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
+import {
+  compareDatabaseSnapshots,
+  type DatabaseSnapshotComparison,
+} from "../workspaceDatabaseComparison";
 
 import { ensureEnvironmentApi } from "~/environmentApi";
 import { readEnvironmentConnection, subscribeEnvironmentConnections } from "~/environments/runtime";
@@ -37,15 +48,20 @@ function DatabaseSession({ environmentId, projectId, relativePath, connection, o
   const [limit, setLimit] = useState(50);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [comparison, setComparison] = useState<DatabaseSnapshotComparison | null>(null);
+  const previous = useRef<{ value: RowResult; limit: number } | null>(null);
+  const [watching, setWatching] = useState(false);
+  const watchEnabled = useRef(false);
   const epoch = useRef(0);
   const admission = useRef(false);
   const alive = useRef(true);
   const owner = useRef(connection);
   const cancelWait = useRef<(() => void) | null>(null);
-  useEffect(() => {
+  useLayoutEffect(() => {
     alive.current = true;
     return () => {
       alive.current = false;
+      watchEnabled.current = false;
       epoch.current += 1;
       cancelWait.current?.();
     };
@@ -55,6 +71,26 @@ function DatabaseSession({ environmentId, projectId, relativePath, connection, o
     alive.current &&
     connection === owner.current &&
     readEnvironmentConnection(environmentId) === owner.current;
+
+  const stopWatching = () => {
+    watchEnabled.current = false;
+    setWatching(false);
+  };
+  const refreshTick = useEffectEvent(() => {
+    if (
+      watchEnabled.current &&
+      selectedTable &&
+      current() &&
+      document.visibilityState === "visible" &&
+      document.hasFocus()
+    )
+      void read("rows", selectedTable);
+  });
+  useEffect(() => {
+    if (!watching || !connected || !selectedTable) return;
+    const timer = setInterval(refreshTick, 10_000);
+    return () => clearInterval(timer);
+  }, [watching, connected, selectedTable]);
 
   async function read(kind: "tables" | "rows", table?: string) {
     if (
@@ -68,7 +104,14 @@ function DatabaseSession({ environmentId, projectId, relativePath, connection, o
     setBusy(true);
     setError(null);
     setRows(null);
+    setComparison(null);
+    if (kind === "rows" && table !== selectedTable) {
+      previous.current = null;
+      stopWatching();
+    }
     if (kind === "tables") {
+      previous.current = null;
+      stopWatching();
       setTables(null);
       setSelectedTable(null);
     } else setSelectedTable(table!);
@@ -90,9 +133,15 @@ function DatabaseSession({ environmentId, projectId, relativePath, connection, o
       if (!current() || epoch.current !== request) return;
       if (result.relativePath !== relativePath) throw new Error("selection changed");
       if (kind === "tables" && "tables" in result) setTables(result);
-      else if (kind === "rows" && "table" in result && result.table === table) setRows(result);
-      else throw new Error("selection changed");
+      else if (kind === "rows" && "table" in result && result.table === table) {
+        const old = previous.current;
+        if (old && old.limit === limit && old.value.table === result.table)
+          setComparison(compareDatabaseSnapshots(old.value, result));
+        previous.current = { value: result, limit };
+        setRows(result);
+      } else throw new Error("selection changed");
     } catch {
+      stopWatching();
       if (current() && epoch.current === request)
         setError(
           "The read was refused or timed out. Retry after the database is stable. / 読み取りが拒否されたか、時間切れになりました。データベースが安定してから再試行してください。",
@@ -146,7 +195,13 @@ function DatabaseSession({ environmentId, projectId, relativePath, connection, o
                 disabled={busy}
                 onChange={(event) => {
                   const next = Number(event.target.value);
-                  if ([25, 50, 100].includes(next)) setLimit(next);
+                  if ([25, 50, 100].includes(next)) {
+                    stopWatching();
+                    previous.current = null;
+                    setComparison(null);
+                    setRows(null);
+                    setLimit(next);
+                  }
                 }}
               >
                 {[25, 50, 100].map((value) => (
@@ -166,7 +221,32 @@ function DatabaseSession({ environmentId, projectId, relativePath, connection, o
                 Refresh rows / 行を更新
               </Button>
             ) : null}
+            {selectedTable ? (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={!watching && busy}
+                className="max-w-full whitespace-normal"
+                onClick={() => {
+                  if (watchEnabled.current) stopWatching();
+                  else if (current()) {
+                    watchEnabled.current = true;
+                    setWatching(true);
+                  }
+                }}
+              >
+                {watching
+                  ? "Stop row refresh / 行の自動更新を停止"
+                  : "Refresh every 10 seconds / 10 秒ごとに更新"}
+              </Button>
+            ) : null}
           </div>
+          {watching ? (
+            <p className="mt-2 text-xs">
+              Refresh pauses while hidden or unfocused. It stops on an error. /
+              非表示やフォーカスがない間は更新を休止します。エラーで停止します。
+            </p>
+          ) : null}
           {busy ? (
             <p role="status" className="mt-2 text-xs">
               Reading snapshot… / スナップショットを読み取り中…
@@ -219,6 +299,67 @@ function DatabaseSession({ environmentId, projectId, relativePath, connection, o
                   Preview truncated at a limit. / 上限により表示を省略しました。
                 </p>
               ) : null}
+              {comparison ? (
+                <section
+                  className="mt-3 rounded border p-2 text-xs"
+                  aria-label="Snapshot comparison / スナップショット比較"
+                >
+                  {comparison.kind === "unavailable" ? (
+                    <p>
+                      Row matching is unavailable for incomplete, masked or incompatible key
+                      metadata. /
+                      一部のみ・マスキング済み・キー情報が一致しない表示は行を照合できません。
+                    </p>
+                  ) : (
+                    <>
+                      <p>
+                        New in snapshot / 今回のみ: {comparison.added}; missing from snapshot /
+                        前回のみ: {comparison.missing}; changed preview values / 表示値の変化:{" "}
+                        {comparison.updated}
+                      </p>
+                      <p className="mt-1 text-muted-foreground">
+                        Matches use typed key representations. These are preview differences, not an
+                        insert/delete log. /
+                        型付きキー表現で照合します。表示の差であり、追加・削除の記録ではありません。
+                      </p>
+                      <ul
+                        className="mt-2 max-h-52 space-y-2 overflow-auto"
+                        aria-label="Changed preview rows / 変化した表示行"
+                      >
+                        {comparison.changes.map((change) => (
+                          <li
+                            key={change.key}
+                            className="break-all whitespace-pre-wrap rounded bg-muted p-2"
+                          >
+                            <strong>
+                              {change.kind === "new"
+                                ? "New / 今回のみ"
+                                : change.kind === "missing"
+                                  ? "Missing / 前回のみ"
+                                  : "Changed / 変化"}
+                            </strong>
+                            {" · "}
+                            {rows.identityColumns
+                              ?.map((index) => (change.after ?? change.before)?.[index])
+                              .join(" · ")}
+                            {change.changedColumns.map((index) => (
+                              <div key={rows.columns[index]}>
+                                {rows.columns[index]}: {change.before?.[index]} →{" "}
+                                {change.after?.[index]}
+                              </div>
+                            ))}
+                          </li>
+                        ))}
+                      </ul>
+                      {comparison.truncated ? (
+                        <p>
+                          Only the first 40 differences are shown. / 差の表示は先頭 40 件までです。
+                        </p>
+                      ) : null}
+                    </>
+                  )}
+                </section>
+              ) : null}
               <div
                 className="mt-2 max-h-80 max-w-full overflow-auto rounded border"
                 tabIndex={0}
@@ -240,8 +381,8 @@ function DatabaseSession({ environmentId, projectId, relativePath, connection, o
                     </tr>
                   </thead>
                   <tbody>
-                    {/* These immutable display snapshots have no row identity or
-                        editable state. Do not invent a primary key from values. */}
+                    {/* Display positions remain stateless. Comparison keys are
+                        separately validated and are never invented from text. */}
                     {rows.rows.map((row, index) => (
                       // eslint-disable-next-line react/no-array-index-key -- Snapshot positions are not persistent row identities.
                       <tr key={index}>

@@ -687,7 +687,7 @@ export function makeWorkspaceObservatory(
             return masked.value;
           }),
         );
-        return { ...result, rows, redacted };
+        return { ...result, rows, redacted, rowKeys: redacted ? [] : (result.rowKeys ?? []) };
       }),
       Effect.mapError(denied),
     );

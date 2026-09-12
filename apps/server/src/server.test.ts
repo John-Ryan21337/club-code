@@ -5706,6 +5706,8 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         relativePath: " data.sqlite",
         table: "items",
         columns: ["id", "title"],
+        identityColumns: [],
+        rowKeys: [],
         rows: [["7", "Synthetic RPC row"]],
         truncated: false,
         redacted: false,

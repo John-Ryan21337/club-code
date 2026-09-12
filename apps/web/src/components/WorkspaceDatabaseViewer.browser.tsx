@@ -82,6 +82,138 @@ afterEach(() => {
 });
 
 describe("WorkspaceDatabaseViewer", () => {
+  it("compares complete typed-key snapshots after explicit refresh and clears at a new limit", async () => {
+    const keyed = (entries: string[][]) => ({
+      relativePath: path,
+      table: "items",
+      columns: ["id", "value"],
+      rows: entries,
+      identityColumns: [0],
+      rowKeys: entries.map((row) => row[0]!.repeat(64)),
+      truncated: false,
+      redacted: false,
+    });
+    api.rows.mockResolvedValueOnce(
+      keyed([
+        ["1", "old"],
+        ["3", "missing"],
+      ]),
+    );
+    api.rows.mockResolvedValueOnce(
+      keyed([
+        ["1", "new"],
+        ["2", "added"],
+      ]),
+    );
+    const screen = await render(<WorkspaceDatabaseViewer {...props()} />);
+    await page.getByRole("button", { name: "Load tables / テーブルを読む" }).click();
+    await page.getByRole("button", { name: "items", exact: true }).click();
+    expect(document.body.textContent).not.toContain("New in snapshot");
+    await page.getByRole("button", { name: "Refresh rows / 行を更新" }).click();
+    await expect
+      .element(page.getByRole("region", { name: "Snapshot comparison / スナップショット比較" }))
+      .toBeVisible();
+    expect(document.body.textContent).toContain("New in snapshot / 今回のみ: 1");
+    expect(document.body.textContent).toContain("missing from snapshot / 前回のみ: 1");
+    expect(document.body.textContent).toContain("changed preview values / 表示値の変化: 1");
+    expect(document.body.textContent).toContain("value: old → new");
+    const limit = page
+      .getByRole("combobox", { name: "Row limit / 行数上限" })
+      .element() as HTMLSelectElement;
+    limit.value = "25";
+    limit.dispatchEvent(new Event("change", { bubbles: true }));
+    await expect.poll(() => document.body.textContent?.includes("New in snapshot")).toBe(false);
+    expect(api.rows).toHaveBeenCalledTimes(2);
+    await screen.unmount();
+  });
+
+  it("starts periodic refresh only on opt-in and fences stop, focus and replacement connection", async () => {
+    const focused = vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    const nativeInterval = window.setInterval.bind(window);
+    let tick: (() => void) | undefined;
+    vi.spyOn(window, "setInterval").mockImplementation((handler, timeout, ...args) => {
+      if (timeout === 10_000 && typeof handler === "function") tick = () => handler(...args);
+      return nativeInterval(handler, timeout, ...args) as unknown as ReturnType<
+        typeof window.setInterval
+      >;
+    });
+    const screen = await render(<WorkspaceDatabaseViewer {...props()} />);
+    await page.getByRole("button", { name: "Load tables / テーブルを読む" }).click();
+    await page.getByRole("button", { name: "items", exact: true }).click();
+    expect(tick).toBeUndefined();
+    await page.getByRole("button", { name: "Refresh every 10 seconds / 10 秒ごとに更新" }).click();
+    await expect.poll(() => tick).toBeDefined();
+    focused.mockReturnValue(false);
+    tick!();
+    expect(api.rows).toHaveBeenCalledTimes(1);
+    focused.mockReturnValue(true);
+    tick!();
+    await expect.poll(() => api.rows.mock.calls.length).toBe(2);
+    await expect
+      .element(page.getByRole("button", { name: "Refresh rows / 行を更新" }))
+      .toBeEnabled();
+    (
+      page
+        .getByRole("button", { name: "Stop row refresh / 行の自動更新を停止" })
+        .element() as HTMLButtonElement
+    ).click();
+    tick!();
+    expect(api.rows).toHaveBeenCalledTimes(2);
+    await page.getByRole("button", { name: "Refresh every 10 seconds / 10 秒ごとに更新" }).click();
+    h.connection = {};
+    tick!();
+    expect(api.rows).toHaveBeenCalledTimes(2);
+    for (const listener of h.listeners) listener();
+    await expect.poll(() => document.body.textContent?.includes("Synthetic row")).toBe(false);
+    await screen.unmount();
+    tick!();
+    expect(api.rows).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps one periodic read in flight and stops after its error without exposing raw details", async () => {
+    vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    const nativeInterval = window.setInterval.bind(window);
+    let tick: (() => void) | undefined;
+    vi.spyOn(window, "setInterval").mockImplementation((handler, timeout, ...args) => {
+      if (timeout === 10_000 && typeof handler === "function") tick = () => handler(...args);
+      return nativeInterval(handler, timeout, ...args) as unknown as ReturnType<
+        typeof window.setInterval
+      >;
+    });
+    const screen = await render(<WorkspaceDatabaseViewer {...props()} />);
+    try {
+      await page.getByRole("button", { name: "Load tables / テーブルを読む" }).click();
+      await page.getByRole("button", { name: "items", exact: true }).click();
+      let reject!: (reason: Error) => void;
+      api.rows.mockImplementationOnce(
+        () =>
+          new Promise((_resolve, fail) => {
+            reject = fail;
+          }),
+      );
+      await page
+        .getByRole("button", { name: "Refresh every 10 seconds / 10 秒ごとに更新" })
+        .click();
+      await expect.poll(() => tick).toBeDefined();
+      tick!();
+      await expect.poll(() => api.rows.mock.calls.length).toBe(2);
+      tick!();
+      tick!();
+      expect(api.rows).toHaveBeenCalledTimes(2);
+      reject(new Error("private-database-path and private-cell-value"));
+      await expect
+        .element(page.getByRole("button", { name: "Refresh every 10 seconds / 10 秒ごとに更新" }))
+        .toBeEnabled();
+      expect(document.body.textContent).toContain("The read was refused or timed out.");
+      expect(document.body.textContent).not.toContain("private-database-path");
+      expect(document.body.textContent).not.toContain("private-cell-value");
+      tick!();
+      expect(api.rows).toHaveBeenCalledTimes(2);
+    } finally {
+      await screen.unmount();
+    }
+  });
+
   it("reads only explicit selections with bounded row limits and fixed snapshot flags", async () => {
     const screen = await render(<WorkspaceDatabaseViewer {...props()} />);
     expect(api.tables).not.toHaveBeenCalled();
