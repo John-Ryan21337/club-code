@@ -578,6 +578,43 @@ describe("ProviderDaemonServer", () => {
     }).pipe(Effect.scoped, Effect.provide(providerDaemonServerTestLayer)),
   );
 
+  it.effect("does not retain invalid browser payloads in RPC diagnostics", () =>
+    Effect.gen(function* () {
+      const port = yield* startProviderDaemonServerOnEphemeralPort({
+        host: "127.0.0.1",
+        token: TEST_TOKEN,
+        version: "test",
+      });
+      const canary = "PRIVATE_BROWSER_PAGE_CANARY";
+      for (const body of [
+        JSON.stringify({
+          method: "agentBrowserComplete",
+          payload: { context: {}, result: canary },
+        }),
+        `{"method":"agentBrowserComplete","payload":${canary}}`,
+      ]) {
+        const response = yield* Effect.promise(() =>
+          fetch(`http://127.0.0.1:${port}/api/provider-daemon/rpc`, {
+            method: "POST",
+            headers: { authorization: `Bearer ${TEST_TOKEN}`, "content-type": "application/json" },
+            body,
+          }),
+        );
+        assert.notEqual(response.status, 200);
+        assert.notInclude(yield* Effect.promise(() => response.text()), canary);
+      }
+      const response = yield* Effect.promise(() =>
+        fetch(`http://127.0.0.1:${port}/api/provider-daemon/health`, {
+          headers: { authorization: `Bearer ${TEST_TOKEN}` },
+        }),
+      );
+      const health = decodeProviderDaemonHealth(yield* Effect.promise(() => response.json()));
+      assert.equal(health.failedCommandCount, 0);
+      assert.equal(health.completedCommandCount, 0);
+      assert.notInclude(JSON.stringify(health.rpc?.recentFailures), canary);
+    }).pipe(Effect.scoped, Effect.provide(providerDaemonServerTestLayer)),
+  );
+
   it.effect("records RPC and command failure diagnostics in health", () =>
     Effect.gen(function* () {
       const port = yield* startProviderDaemonServerOnEphemeralPort({

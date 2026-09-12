@@ -11,6 +11,8 @@ import {
   writeFileSync,
 } from "node:fs";
 import os from "node:os";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import path from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -403,6 +405,42 @@ describe("Claude project directory encoding", () => {
 });
 
 describe("ClaudeAdapterLive", () => {
+  it.effect("uses an in-process browser server and retires it when the session stops", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+      const server = harness.getLastCreateQueryInput()?.options.mcpServers?.cafe_browser;
+      assert.ok(server?.type === "sdk");
+      assert.deepEqual(Object.keys(server).toSorted(), ["instance", "name", "timeout", "type"]);
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      const client = new Client({ name: "claude-adapter-browser-test", version: "1" });
+      yield* Effect.promise(async () => {
+        await server.instance.connect(serverTransport);
+        await client.connect(clientTransport);
+        const tools = await client.listTools();
+        assert.ok(tools.tools.some((tool) => tool.name === "cafe_browser_snapshot"));
+      });
+      yield* adapter.stopSession(THREAD_ID);
+      yield* Effect.promise(async () => {
+        try {
+          const result = await client.callTool({ name: "cafe_browser_snapshot", arguments: {} });
+          assert.equal(result.isError, true);
+          assert.ok(JSON.stringify(result).includes("not a live provider session"));
+        } finally {
+          await client.close();
+          await server.instance.close();
+        }
+      });
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
   it.effect("returns validation error for non-claude provider on startSession", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {

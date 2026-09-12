@@ -12,6 +12,7 @@ export function providerDaemonRequestThreadIds(
   request: ProviderDaemonRpcRequest,
 ): ReadonlyArray<ThreadId> {
   switch (request.method) {
+    case "agentBrowserGrant":
     case "startSession":
     case "sendTurn":
     case "steerTurn":
@@ -29,6 +30,13 @@ export function providerDaemonRequestThreadIds(
     case "rollbackConversation":
     case "readSubagentDetail":
       return [request.payload.threadId];
+    case "agentBrowserRevoke":
+      return request.payload.threadId ? [request.payload.threadId] : [];
+    // These transient controls contain no caller-selected provider identity.
+    // The broker owns the queued request identity and checks its live capability.
+    case "agentBrowserPoll":
+    case "agentBrowserComplete":
+      return [];
     case "forkSession":
       return [request.payload.sourceThreadId, request.payload.targetThreadId];
     case "discardSessionFork":

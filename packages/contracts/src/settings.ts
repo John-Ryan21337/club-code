@@ -14,6 +14,7 @@ import { DEFAULT_GIT_TEXT_GENERATION_MODEL, ProviderOptionSelections } from "./m
 import { ModelSelection } from "./orchestration.ts";
 import { ProviderInstanceConfig, ProviderInstanceId } from "./providerInstance.ts";
 import { EditorId } from "./editor.ts";
+import { EmbeddedBrowserThreadIdSchema } from "./embeddedBrowser.ts";
 
 // ── Client Settings (local-only) ───────────────────────────────
 
@@ -419,6 +420,9 @@ export const ClientSettingsSchema = Schema.Struct({
   chatCopyFormat: ChatCopyFormat.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_CHAT_COPY_FORMAT)),
   ),
+  agentBrowserDisabledThreadIds: Schema.Array(EmbeddedBrowserThreadIdSchema)
+    .check(Schema.isMaxLength(10_000))
+    .pipe(Schema.withDecodingDefault(Effect.succeed([]))),
 });
 export type ClientSettings = typeof ClientSettingsSchema.Type;
 
@@ -1078,5 +1082,8 @@ export const ClientSettingsPatch = Schema.Struct({
   sidebarThreadPreviewCount: Schema.optionalKey(SidebarThreadPreviewCount),
   timestampFormat: Schema.optionalKey(TimestampFormat),
   chatCopyFormat: Schema.optionalKey(ChatCopyFormat),
+  agentBrowserDisabledThreadIds: Schema.optionalKey(
+    Schema.Array(EmbeddedBrowserThreadIdSchema).check(Schema.isMaxLength(10_000)),
+  ),
 });
 export type ClientSettingsPatch = typeof ClientSettingsPatch.Type;

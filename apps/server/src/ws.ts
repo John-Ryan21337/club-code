@@ -1,4 +1,6 @@
 import * as Crypto from "node:crypto";
+import * as Semaphore from "effect/Semaphore";
+import { makeAgentBrowserRpc } from "./provider/agentBrowserRpc.ts";
 
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
@@ -186,6 +188,7 @@ const makeWsRpcLayer = (
   dictation: OpenAiRealtimeDictationShape,
   orchestrationSubscriptionHub: OrchestrationSubscriptionHubShape,
   providerMaintenanceRunner: ProviderMaintenanceRunner.ProviderMaintenanceRunnerShape,
+  agentBrowserAccessSemaphore: Semaphore.Semaphore,
 ) =>
   WsRpcGroup.toLayer(
     Effect.gen(function* () {
@@ -206,6 +209,14 @@ const makeWsRpcLayer = (
       const lifecycleEvents = yield* ServerLifecycleEvents;
       const serverSettings = yield* ServerSettingsService;
       const clientSettings = yield* ServerClientSettingsService;
+      const agentBrowser = makeAgentBrowserRpc({
+        owner: currentSession.role === "owner",
+        secureTransport: secureSecretTransport,
+        provider: providerService,
+        settings: clientSettings,
+        settingsPath: config.clientSettingsPath,
+        semaphore: agentBrowserAccessSemaphore,
+      });
       const usageStats = yield* UsageStatsService;
       const startup = yield* ServerRuntimeStartup;
       const workspaceEntries = yield* WorkspaceEntries;
@@ -640,6 +651,22 @@ const makeWsRpcLayer = (
           .pipe(Effect.ignoreCause({ log: true }), Effect.forkDetach, Effect.asVoid);
 
       return WsRpcGroup.of({
+        [WS_METHODS.agentBrowserGrant]: (input) =>
+          observeRpcEffect(WS_METHODS.agentBrowserGrant, agentBrowser.grant(input), {
+            "rpc.aggregate": "agentBrowser",
+          }),
+        [WS_METHODS.agentBrowserRevoke]: (input) =>
+          observeRpcEffect(WS_METHODS.agentBrowserRevoke, agentBrowser.revoke(input), {
+            "rpc.aggregate": "agentBrowser",
+          }),
+        [WS_METHODS.agentBrowserPoll]: (input) =>
+          observeRpcEffect(WS_METHODS.agentBrowserPoll, agentBrowser.poll(input), {
+            "rpc.aggregate": "agentBrowser",
+          }),
+        [WS_METHODS.agentBrowserComplete]: (input) =>
+          observeRpcEffect(WS_METHODS.agentBrowserComplete, agentBrowser.complete(input), {
+            "rpc.aggregate": "agentBrowser",
+          }),
         [ORCHESTRATION_WS_METHODS.dispatchCommand]: (command) =>
           observeRpcEffect(
             ORCHESTRATION_WS_METHODS.dispatchCommand,
@@ -1166,7 +1193,7 @@ const makeWsRpcLayer = (
         [WS_METHODS.serverUpdateClientSettings]: ({ patch }) =>
           observeRpcEffect(
             WS_METHODS.serverUpdateClientSettings,
-            clientSettings.updateSettings(patch),
+            agentBrowser.updateSettings(patch),
             {
               "rpc.aggregate": "server",
             },
@@ -1545,6 +1572,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
     // boundary.
     const dictation = yield* OpenAiRealtimeDictation;
     const providerMaintenanceRunner = yield* ProviderMaintenanceRunner.ProviderMaintenanceRunner;
+    const agentBrowserAccessSemaphore = yield* Semaphore.make(1);
     return HttpRouter.add(
       "GET",
       "/ws",
@@ -1572,6 +1600,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
               dictation,
               orchestrationSubscriptionHub,
               providerMaintenanceRunner,
+              agentBrowserAccessSemaphore,
             ).pipe(
               Layer.provideMerge(RpcSerialization.layerJson),
               Layer.provide(ProviderJournalMessageRepairLive),

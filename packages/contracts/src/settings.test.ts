@@ -47,6 +47,21 @@ import {
 
 const decodeClientSettings = Schema.decodeSync(ClientSettingsSchema);
 const decodeClientSettingsPatch = Schema.decodeUnknownSync(ClientSettingsPatch);
+
+it("defaults browser access on and bounds durable thread opt-outs", () => {
+  expect(decodeClientSettings({}).agentBrowserDisabledThreadIds).toEqual([]);
+  const patch = { agentBrowserDisabledThreadIds: ["thread-disabled"] };
+  expect(decodeClientSettingsPatch(patch)).toEqual(patch);
+  expect(decodeClientSettings(patch).agentBrowserDisabledThreadIds).toEqual(["thread-disabled"]);
+  for (const ids of [
+    [""],
+    ["x".repeat(513)],
+    ["thread\u0000other"],
+    Array(10_001).fill("thread"),
+  ]) {
+    expect(() => decodeClientSettingsPatch({ agentBrowserDisabledThreadIds: ids })).toThrow();
+  }
+});
 const decodeCodexSettings = Schema.decodeSync(CodexSettings);
 const decodeClaudeSettings = Schema.decodeUnknownSync(ClaudeSettings);
 const decodeGrokSettings = Schema.decodeSync(GrokSettings);

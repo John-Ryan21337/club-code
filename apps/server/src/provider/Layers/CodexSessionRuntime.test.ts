@@ -3637,6 +3637,55 @@ describe("selectCodexActiveSnapshotTurn", () => {
 });
 
 describe("openCodexThread", () => {
+  it("passes browser ownership on start and resume while keeping its bearer out of config", async () => {
+    const calls: Array<{ method: string; payload: unknown }> = [];
+    const client = {
+      raw: {
+        request: (method: "thread/start" | "thread/resume", payload: unknown) => {
+          calls.push({ method, payload });
+          return Effect.succeed(makeThreadOpenResponse("provider-thread"));
+        },
+      },
+    };
+    const browser = {
+      url: "http://127.0.0.1:12345/mcp",
+      authorization: "Bearer PRIVATE_TEST_CAPABILITY",
+      threadId: ThreadId.make("thread-browser"),
+      providerInstanceId: ProviderInstanceId.make("codex"),
+    };
+    for (const resumeThreadId of [undefined, "provider-thread"]) {
+      await Effect.runPromise(
+        openCodexThread({
+          client,
+          threadId: browser.threadId,
+          runtimeMode: "full-access",
+          cwd: "/tmp/project",
+          requestedModel: undefined,
+          serviceTier: undefined,
+          resumeThreadId,
+          agentBrowserMcp: browser,
+        }),
+      );
+    }
+    assert.deepEqual(
+      calls.map((call) => call.method),
+      ["thread/start", "thread/resume"],
+    );
+    for (const call of calls) {
+      const config = (call.payload as { config: { mcp_servers: Record<string, unknown> } }).config;
+      assert.deepEqual(config.mcp_servers.cafe_browser, {
+        url: browser.url,
+        env_http_headers: { Authorization: "CAFE_CODE_AGENT_BROWSER_MCP_AUTHORIZATION" },
+        http_headers: {
+          "X-Cafe-Browser-Thread": browser.threadId,
+          "X-Cafe-Browser-Provider": browser.providerInstanceId,
+        },
+        startup_timeout_sec: 5,
+        tool_timeout_sec: 95,
+      });
+      assert.equal(JSON.stringify(call.payload).includes(browser.authorization), false);
+    }
+  });
   it.each(["list_turns", "list_items"])(
     "preserves the native thread when its SQLite history rejects %s",
     async (operation) => {
