@@ -3,8 +3,9 @@
  *
  * Exposes bounded directory listings and bounded UTF-8 text previews for the
  * workspace root of a project that the server's own projection already knows.
- * The service never writes, never executes, and never accepts a caller-supplied
- * root.
+ * The service never writes to a project and never accepts a caller-supplied
+ * root or SQL. SQLite previews query bounded private snapshots in an isolated
+ * fixed-program child, with no provider credentials or inherited Node hooks.
  *
  * @module WorkspaceObservatory
  */
@@ -17,6 +18,10 @@ import type {
   WorkspaceObservatoryFileResult,
   WorkspaceObservatoryTreeInput,
   WorkspaceObservatoryTreeResult,
+  WorkspaceObservatoryTablesInput,
+  WorkspaceObservatoryTablesResult,
+  WorkspaceObservatoryRowsInput,
+  WorkspaceObservatoryRowsResult,
 } from "@cafecode/contracts";
 
 /**
@@ -60,6 +65,12 @@ export class WorkspaceObservatoryDeniedError extends Schema.TaggedErrorClass<Wor
  * WorkspaceObservatoryShape - Service API for read-only workspace observation.
  */
 export interface WorkspaceObservatoryShape {
+  readonly tables: (
+    input: WorkspaceObservatoryTablesInput,
+  ) => Effect.Effect<WorkspaceObservatoryTablesResult, WorkspaceObservatoryDeniedError>;
+  readonly rows: (
+    input: WorkspaceObservatoryRowsInput,
+  ) => Effect.Effect<WorkspaceObservatoryRowsResult, WorkspaceObservatoryDeniedError>;
   /**
    * List one directory inside the selected project's workspace root.
    */

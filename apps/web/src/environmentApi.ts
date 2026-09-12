@@ -19,6 +19,8 @@ export function createEnvironmentApi(rpcClient: WsRpcClient): EnvironmentApi {
       browse: rpcClient.filesystem.browse,
     },
     workspaceObservatory: {
+      tables: rpcClient.workspaceObservatory.tables,
+      rows: rpcClient.workspaceObservatory.rows,
       tree: rpcClient.workspaceObservatory.tree,
       readFile: rpcClient.workspaceObservatory.readFile,
     },

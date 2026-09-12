@@ -5,6 +5,8 @@ import * as NodeCrypto from "node:crypto";
 // @effect-diagnostics-next-line nodeBuiltinImport:off - The compression test must construct the production Node HTTP server layer directly.
 import * as NodeHttp from "node:http";
 import * as NodeNet from "node:net";
+// @effect-diagnostics-next-line nodeBuiltinImport:off - Synthetic database proves the real SQLite RPC path.
+import { DatabaseSync } from "node:sqlite";
 import { brotliCompressSync, constants as zlibConstants, gzipSync } from "node:zlib";
 
 import {
@@ -5635,6 +5637,14 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         await writeFile(join(workspaceRoot, ".env"), "API_KEY=synthetic-not-real", "utf8");
         await writeFile(join(workspaceRoot, "session.pem"), "synthetic-not-a-key", "utf8");
         await writeFile(join(fixtureRoot, "outside", "secret.txt"), "outside content", "utf8");
+        const database = new DatabaseSync(join(workspaceRoot, " data.sqlite"));
+        try {
+          database.exec(
+            "CREATE TABLE items(id INTEGER, title TEXT); INSERT INTO items VALUES(7,'Synthetic RPC row')",
+          );
+        } finally {
+          database.close();
+        }
       });
 
       yield* buildAppUnderTest({
@@ -5668,6 +5678,38 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.equal(file.relativePath, "src/index.ts");
       assert.equal(file.content, "export const value = 1;");
       assert.equal(file.truncated, false);
+
+      const tables = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.workspaceObservatoryTables]({
+            projectId: observedProjectId,
+            relativePath: " data.sqlite",
+          }),
+        ),
+      );
+      assert.deepEqual(tables, {
+        relativePath: " data.sqlite",
+        tables: [{ name: "items" }],
+        truncated: false,
+      });
+      const rows = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.workspaceObservatoryRows]({
+            projectId: observedProjectId,
+            relativePath: " data.sqlite",
+            table: "items",
+            limit: 25,
+          }),
+        ),
+      );
+      assert.deepEqual(rows, {
+        relativePath: " data.sqlite",
+        table: "items",
+        columns: ["id", "title"],
+        rows: [["7", "Synthetic RPC row"]],
+        truncated: false,
+        redacted: false,
+      });
 
       const denialMessageFor = (relativePath: string, projectId = observedProjectId) =>
         Effect.scoped(

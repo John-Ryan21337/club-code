@@ -2,9 +2,11 @@ import type { EnvironmentId, ProjectId, WorkspaceObservatoryTreeEntry } from "@c
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ensureEnvironmentApi } from "~/environmentApi";
+import { readEnvironmentConnection } from "~/environments/runtime";
 import { cn } from "~/lib/utils";
 import { diffFileLines, type FileLineDiff } from "~/workspaceObservatoryDiff";
 import { Button } from "./ui/button";
+import { WorkspaceDatabaseViewer } from "./WorkspaceDatabaseViewer";
 import {
   Dialog,
   DialogDescription,
@@ -133,6 +135,11 @@ function WorkspaceObservatorySession({
   const [panes, setPanes] = useState<readonly FilePane[]>([]);
   const [paused, setPaused] = useState(true);
   const [refreshSeconds, setRefreshSeconds] = useState(DEFAULT_REFRESH_SECONDS);
+  const [databasePath, setDatabasePath] = useState<string | null>(null);
+  const databaseConnection = useMemo(
+    () => readEnvironmentConnection(environmentId),
+    [environmentId],
+  );
 
   const panesRef = useRef<readonly FilePane[]>(panes);
   useEffect(() => {
@@ -430,6 +437,19 @@ function WorkspaceObservatorySession({
                     void loadDirectory(entry.relativePath);
                     return;
                   }
+                  if (/\.(?:db|sqlite|sqlite3)$/i.test(entry.relativePath)) {
+                    if (
+                      databaseConnection &&
+                      readEnvironmentConnection(environmentId) === databaseConnection
+                    ) {
+                      setDatabasePath(entry.relativePath);
+                    } else {
+                      setPaneError(
+                        "Connection changed or unavailable. Reopen the observatory. / 接続が変わったか、利用できません。観測画面を開き直してください。",
+                      );
+                    }
+                    return;
+                  }
                   void openFilePane(entry.relativePath);
                 }}
               >
@@ -452,6 +472,16 @@ function WorkspaceObservatorySession({
       </section>
 
       <section className="min-w-0" aria-label="Observatory panes">
+        {databasePath && databaseConnection ? (
+          <WorkspaceDatabaseViewer
+            environmentId={environmentId}
+            projectId={projectId}
+            relativePath={databasePath}
+            connection={databaseConnection}
+            onClose={() => setDatabasePath(null)}
+          />
+        ) : null}
+        <h3 className="mb-2 mt-3 text-sm font-medium">File previews / ファイル表示</h3>
         <div className="flex flex-wrap items-center gap-2 text-xs">
           <span data-testid="observatory-pane-count">
             {panes.length}/{WORKSPACE_OBSERVATORY_MAX_PANES} panes

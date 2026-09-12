@@ -44,6 +44,8 @@ const rpcClientMock = {
     writeFile: vi.fn(),
   },
   workspaceObservatory: {
+    tables: vi.fn(),
+    rows: vi.fn(),
     tree: vi.fn(),
     readFile: vi.fn(),
   },
@@ -525,6 +527,33 @@ describe("wsApi", () => {
     expect(rpcClientMock.workspaceObservatory.readFile).toHaveBeenCalledWith({
       projectId,
       relativePath: " README.md",
+    });
+    const tables = { relativePath: " data.sqlite", tables: [{ name: "items" }], truncated: false };
+    const rows = {
+      relativePath: " data.sqlite",
+      table: "items",
+      columns: ["id"],
+      rows: [["1"]],
+      truncated: false,
+      redacted: false,
+    };
+    rpcClientMock.workspaceObservatory.tables.mockResolvedValue(tables);
+    rpcClientMock.workspaceObservatory.rows.mockResolvedValue(rows);
+    await expect(observatory.tables({ projectId, relativePath: " data.sqlite" })).resolves.toEqual(
+      tables,
+    );
+    await expect(
+      observatory.rows({ projectId, relativePath: " data.sqlite", table: "items", limit: 25 }),
+    ).resolves.toEqual(rows);
+    expect(rpcClientMock.workspaceObservatory.tables).toHaveBeenCalledExactlyOnceWith({
+      projectId,
+      relativePath: " data.sqlite",
+    });
+    expect(rpcClientMock.workspaceObservatory.rows).toHaveBeenCalledExactlyOnceWith({
+      projectId,
+      relativePath: " data.sqlite",
+      table: "items",
+      limit: 25,
     });
   });
 
