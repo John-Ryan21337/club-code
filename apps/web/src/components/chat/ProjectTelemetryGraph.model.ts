@@ -1,9 +1,14 @@
 import type { ServerProjectSystemTelemetryResult } from "@cafecode/contracts";
 import * as DateTime from "effect/DateTime";
+import {
+  temperatureCategoryValues,
+  type TemperatureCategoryValues,
+} from "./ProjectTemperatureHistory.model";
 
 export const PROJECT_TELEMETRY_HISTORY_LIMIT = 48;
 
 export interface ProjectTelemetryHistoryPoint {
+  readonly temperatures: TemperatureCategoryValues;
   readonly sampledAtMs: number;
   readonly cpuPercent: number | null;
   readonly memoryPercent: number | null;
@@ -125,6 +130,7 @@ export function toProjectTelemetryHistoryPoint(
 ): ProjectTelemetryHistoryPoint {
   return {
     sampledAtMs: DateTime.toEpochMillis(telemetry.sampledAt),
+    temperatures: temperatureCategoryValues(telemetry.temperatures),
     cpuPercent: telemetry.cpu.status === "available" ? telemetry.cpu.utilizationPercent : null,
     memoryPercent:
       telemetry.memory.status === "available" ? telemetry.memory.utilizationPercent : null,

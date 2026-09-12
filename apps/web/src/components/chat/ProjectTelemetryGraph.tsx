@@ -12,15 +12,7 @@ import {
   HardDriveIcon,
   MemoryStickIcon,
 } from "lucide-react";
-import {
-  type ComponentType,
-  useEffect,
-  useId,
-  useLayoutEffect,
-  useRef,
-  useState,
-  useSyncExternalStore,
-} from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import { readEnvironmentApi } from "../../environmentApi";
 import {
@@ -28,10 +20,12 @@ import {
   subscribeCafeDocumentVisibility,
 } from "../../documentVisibility";
 import { cn } from "~/lib/utils";
+import { TelemetryCard } from "./ProjectTelemetryCard";
+import { ProjectTemperatureHistory } from "./ProjectTemperatureHistory";
+import { emptyTemperatureCategoryValues } from "./ProjectTemperatureHistory.model";
 import { ProjectTemperatureReadings } from "./ProjectTemperatureReadings";
 import {
   appendBoundedTelemetryHistory,
-  buildTelemetrySparklinePath,
   formatTelemetryBytes,
   PROJECT_TELEMETRY_HISTORY_LIMIT,
   projectTelemetryGpuAdapter,
@@ -152,6 +146,7 @@ function telemetryErrorDiscriminator(error: unknown): string {
 function telemetryGapPoint(): ProjectTelemetryHistoryPoint {
   return {
     sampledAtMs: Date.now(),
+    temperatures: emptyTemperatureCategoryValues(),
     cpuPercent: null,
     memoryPercent: null,
     projectVolumePercent: null,
@@ -167,77 +162,6 @@ function formatPercent(value: number | null): string {
 
 function exactBytesTitle(label: string, bytes: number | null): string | undefined {
   return bytes === null ? undefined : `${label}: ${bytes.toLocaleString()} bytes`;
-}
-
-function TelemetrySparkline(props: {
-  readonly label: string;
-  readonly color: string;
-  readonly values: readonly (number | null)[];
-}) {
-  const path = buildTelemetrySparklinePath(props.values);
-  const latestIndex = props.values.findLastIndex((value) => value !== null);
-  const latest = latestIndex < 0 ? null : (props.values[latestIndex] ?? null);
-  const latestX =
-    latestIndex < 0 || props.values.length === 1
-      ? 0
-      : (latestIndex * 100) / (props.values.length - 1);
-  const latestY = latest === null ? null : 24 - (Math.max(0, Math.min(100, latest)) / 100) * 24;
-
-  return (
-    <svg
-      aria-label={`${props.label} utilization history`}
-      className="h-7 w-full overflow-visible"
-      role="img"
-      viewBox="0 0 100 24"
-    >
-      <title>{`${props.label} bounded recent utilization history`}</title>
-      <path d="M 0 6 H 100 M 0 12 H 100 M 0 18 H 100" stroke="currentColor" opacity="0.09" />
-      {path ? (
-        <path
-          d={path}
-          fill="none"
-          stroke={props.color}
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          strokeWidth="1.8"
-          style={{ filter: `drop-shadow(0 0 2px ${props.color})` }}
-        />
-      ) : null}
-      {latestY !== null ? <circle cx={latestX} cy={latestY} fill={props.color} r="1.8" /> : null}
-    </svg>
-  );
-}
-
-function TelemetryCard(props: {
-  readonly icon: ComponentType<{ className?: string }>;
-  readonly label: string;
-  readonly value: string;
-  readonly detail: string;
-  readonly title?: string | undefined;
-  readonly color: string;
-  readonly history: readonly (number | null)[];
-}) {
-  const Icon = props.icon;
-  return (
-    <div
-      aria-label={`${props.label}: ${props.value}. ${props.detail}`}
-      className="min-w-0 rounded-lg border border-border/60 bg-background/45 px-2 py-1.5 shadow-inner shadow-black/10"
-      role="group"
-      title={props.title ?? props.detail}
-    >
-      <div className="flex items-center gap-1.5">
-        <Icon className="size-3 shrink-0" />
-        <span className="truncate text-xs font-medium uppercase tracking-[0.1em] text-muted-foreground">
-          {props.label}
-        </span>
-        <span className="ml-auto truncate text-xs font-semibold text-foreground">
-          {props.value}
-        </span>
-      </div>
-      <TelemetrySparkline color={props.color} label={props.label} values={props.history} />
-      <div className="truncate text-xs text-muted-foreground">{props.detail}</div>
-    </div>
-  );
 }
 
 export interface ProjectTelemetryGraphProps {
@@ -518,7 +442,7 @@ export function ProjectTelemetryGraph({
       ) : (
         <aside
           aria-label="Selected project system telemetry"
-          className="pointer-events-auto w-[min(22rem,calc(100%-1rem))] rounded-xl border border-border/70 bg-card/95 p-2 text-foreground shadow-2xl shadow-black/20 backdrop-blur-xl"
+          className="pointer-events-auto max-h-[min(36rem,60dvh)] w-[min(22rem,calc(100%-1rem))] overflow-y-auto rounded-xl border border-border/70 bg-card/95 p-2 text-foreground shadow-2xl shadow-black/20 backdrop-blur-xl"
           data-project-id={projectId}
         >
           <div className="mb-1.5 flex min-w-0 items-center gap-2 px-0.5">
@@ -614,6 +538,10 @@ export function ProjectTelemetryGraph({
               }
             />
           </div>
+          <ProjectTemperatureHistory
+            telemetry={telemetryUnavailable ? undefined : telemetry?.temperatures}
+            history={visibleView.history}
+          />
           <ProjectTemperatureReadings
             telemetry={telemetryUnavailable ? undefined : telemetry?.temperatures}
           />
