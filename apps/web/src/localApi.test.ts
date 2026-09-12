@@ -49,6 +49,7 @@ const rpcClientMock = {
     tree: vi.fn(),
     readFile: vi.fn(),
   },
+  applicationState: { tables: vi.fn(), rows: vi.fn() },
   filesystem: {
     browse: vi.fn(),
   },
@@ -553,6 +554,29 @@ describe("wsApi", () => {
       projectId,
       relativePath: " data.sqlite",
       table: "items",
+      limit: 25,
+    });
+  });
+
+  it("forwards operational state without a project or filesystem path", async () => {
+    const state = createEnvironmentApi(rpcClientMock as never).applicationState;
+    if (!state) throw new Error("Missing operational state namespace");
+    rpcClientMock.applicationState.tables.mockResolvedValue({
+      database: "cafe-code-state",
+      tables: [],
+    });
+    rpcClientMock.applicationState.rows.mockResolvedValue({
+      database: "cafe-code-state",
+      table: "projection_state",
+      columns: [],
+      rows: [],
+      truncated: false,
+    });
+    await state.tables();
+    await state.rows({ table: "projection_state", limit: 25 });
+    expect(rpcClientMock.applicationState.tables).toHaveBeenCalledExactlyOnceWith();
+    expect(rpcClientMock.applicationState.rows).toHaveBeenCalledExactlyOnceWith({
+      table: "projection_state",
       limit: 25,
     });
   });

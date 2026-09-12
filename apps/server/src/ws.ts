@@ -69,6 +69,12 @@ import { ServerClientSettingsService } from "./serverClientSettings.ts";
 import { WorkspaceEntries } from "./workspace/Services/WorkspaceEntries.ts";
 import { WorkspaceFileSystem } from "./workspace/Services/WorkspaceFileSystem.ts";
 import { WorkspaceObservatory } from "./workspace/Services/WorkspaceObservatory.ts";
+import { createApplicationStatePreview } from "./workspace/applicationStatePreview.ts";
+import {
+  applicationStateUnavailable,
+  withApplicationStateAccess,
+} from "./workspace/applicationStateAccess.ts";
+import { ApplicationStateRowsResult, ApplicationStateTablesResult } from "@cafecode/contracts";
 import { WorkspacePathOutsideRootError } from "./workspace/Services/WorkspacePaths.ts";
 import { VcsStatusBroadcaster } from "./vcs/VcsStatusBroadcaster.ts";
 import { VcsProvisioningService } from "./vcs/VcsProvisioningService.ts";
@@ -114,6 +120,8 @@ import {
 import { isLoopbackRemoteAddress } from "./http.ts";
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
 const isWorkspacePathOutsideRootError = Schema.is(WorkspacePathOutsideRootError);
+const decodeApplicationStateTables = Schema.decodeUnknownEffect(ApplicationStateTablesResult);
+const decodeApplicationStateRows = Schema.decodeUnknownEffect(ApplicationStateRowsResult);
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 function isStreamingAssistantMessageEvent(event: OrchestrationEvent): boolean {
@@ -188,6 +196,7 @@ const makeWsRpcLayer = (
   dictation: OpenAiRealtimeDictationShape,
   orchestrationSubscriptionHub: OrchestrationSubscriptionHubShape,
   providerMaintenanceRunner: ProviderMaintenanceRunner.ProviderMaintenanceRunnerShape,
+  applicationState: ReturnType<typeof createApplicationStatePreview>,
 ) =>
   WsRpcGroup.toLayer(
     Effect.gen(function* () {
@@ -1324,6 +1333,23 @@ const makeWsRpcLayer = (
               ),
             { "rpc.aggregate": "workspace" },
           ),
+        [WS_METHODS.applicationStateTables]: () =>
+          withApplicationStateAccess(
+            currentSession,
+            secureSecretTransport,
+            sessions,
+            applicationState.tables,
+          ).pipe(
+            Effect.flatMap(decodeApplicationStateTables),
+            Effect.catch(() => Effect.fail(applicationStateUnavailable())),
+          ),
+        [WS_METHODS.applicationStateRows]: (input) =>
+          withApplicationStateAccess(currentSession, secureSecretTransport, sessions, () =>
+            applicationState.rows(input),
+          ).pipe(
+            Effect.flatMap(decodeApplicationStateRows),
+            Effect.catch(() => Effect.fail(applicationStateUnavailable())),
+          ),
         [WS_METHODS.workspaceObservatoryReadFile]: (input) =>
           observeRpcEffect(
             WS_METHODS.workspaceObservatoryReadFile,
@@ -1598,6 +1624,9 @@ export const websocketRpcRouteLayer = Layer.unwrap(
     // boundary.
     const dictation = yield* OpenAiRealtimeDictation;
     const providerMaintenanceRunner = yield* ProviderMaintenanceRunner.ProviderMaintenanceRunner;
+    const { dbPath } = yield* ServerConfig;
+    const applicationState = createApplicationStatePreview(dbPath);
+    yield* Effect.addFinalizer(() => Effect.promise(() => applicationState.close()));
     return HttpRouter.add(
       "GET",
       "/ws",
@@ -1625,6 +1654,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
               dictation,
               orchestrationSubscriptionHub,
               providerMaintenanceRunner,
+              applicationState,
             ).pipe(
               Layer.provideMerge(RpcSerialization.layerJson),
               Layer.provide(ProviderJournalMessageRepairLive),

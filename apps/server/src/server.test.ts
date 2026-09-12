@@ -62,7 +62,7 @@ import { RpcClient, RpcSerialization } from "effect/unstable/rpc";
 import * as Socket from "effect/unstable/socket/Socket";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { vi } from "vitest";
 
 const TEST_EPOCH = DateTime.makeUnsafe("1970-01-01T00:00:00.000Z");
@@ -5622,6 +5622,81 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
    * websocket RPC path, against a synthetic temporary workspace this test
    * creates and removes. No real user project is involved.
    */
+  it.effect("serves only allowlisted operational state over authenticated owner ws rpc", () =>
+    Effect.gen(function* () {
+      const config = yield* buildAppUnderTest();
+      yield* Effect.promise(async () => {
+        await mkdir(dirname(config.dbPath), { recursive: true });
+        const db = new DatabaseSync(config.dbPath);
+        try {
+          db.exec(
+            "CREATE TABLE usage_stats_days(day TEXT PRIMARY KEY,generating_ms INTEGER,output_tokens INTEGER,user_messages INTEGER,input_tokens INTEGER,cached_input_tokens INTEGER,cache_write_input_tokens INTEGER,reasoning_output_tokens INTEGER); INSERT INTO usage_stats_days VALUES('2026-01-01',10,20,1,30,0,0,0); CREATE TABLE projection_state(projector TEXT PRIMARY KEY,last_applied_sequence INTEGER,updated_at TEXT); CREATE TABLE private_messages(content TEXT); INSERT INTO private_messages VALUES('synthetic-private-prompt');",
+          );
+        } finally {
+          db.close();
+        }
+      });
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const result = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          Effect.gen(function* () {
+            const tables = yield* client[WS_METHODS.applicationStateTables]();
+            const rows = yield* client[WS_METHODS.applicationStateRows]({
+              table: "usage_stats_days",
+              limit: 25,
+            });
+            return { tables, rows };
+          }),
+        ),
+      );
+      assert.deepEqual(result.tables, {
+        database: "cafe-code-state",
+        tables: [{ name: "usage_stats_days" }, { name: "projection_state" }],
+      });
+      assert.deepEqual(result.rows, {
+        database: "cafe-code-state",
+        table: "usage_stats_days",
+        columns: [
+          "day",
+          "generating_ms",
+          "output_tokens",
+          "user_messages",
+          "input_tokens",
+          "cached_input_tokens",
+          "cache_write_input_tokens",
+          "reasoning_output_tokens",
+        ],
+        rows: [["2026-01-01", "10", "20", "1", "30", "0", "0", "0"]],
+        truncated: false,
+      });
+      assert.notInclude(JSON.stringify(result), "synthetic-private-prompt");
+      const ownerCookie = parseSessionCookieFromWsUrl(wsUrl).cookie;
+      assert.isNotNull(ownerCookie);
+      const pairing = yield* HttpClient.post("/api/auth/pairing-token", {
+        headers: { cookie: ownerCookie! },
+      });
+      assert.equal(pairing.status, 200);
+      const pairingBody = (yield* pairing.json) as { readonly credential: string };
+      const pairedCookie = yield* getAuthenticatedSessionCookieHeader(pairingBody.credential);
+      const pairedUrl = appendSessionCookieToWsUrl(
+        parseSessionCookieFromWsUrl(wsUrl).url,
+        pairedCookie,
+      );
+      const refusal = yield* Effect.scoped(
+        withWsRpcClient(pairedUrl, (client) => client[WS_METHODS.applicationStateTables]()),
+      ).pipe(
+        Effect.match({
+          onSuccess: () => null,
+          onFailure: (error) => ({ _tag: error._tag, message: error.message }),
+        }),
+      );
+      assert.deepEqual(refusal, {
+        _tag: "ApplicationStateError",
+        message: "The operational state preview is unavailable.",
+      });
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("serves bounded read-only workspace views over authenticated ws rpc", () =>
     Effect.gen(function* () {
       const observedProjectId = ProjectId.make("project-observatory-rpc");

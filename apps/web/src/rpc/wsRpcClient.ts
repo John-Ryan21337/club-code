@@ -69,6 +69,10 @@ export interface WsRpcClient {
     readonly tree: RpcUnaryMethod<typeof WS_METHODS.workspaceObservatoryTree>;
     readonly readFile: RpcUnaryMethod<typeof WS_METHODS.workspaceObservatoryReadFile>;
   };
+  readonly applicationState: {
+    readonly tables: RpcUnaryNoArgMethod<typeof WS_METHODS.applicationStateTables>;
+    readonly rows: RpcUnaryMethod<typeof WS_METHODS.applicationStateRows>;
+  };
   readonly sourceControl: {
     readonly lookupRepository: RpcUnaryMethod<typeof WS_METHODS.sourceControlLookupRepository>;
     readonly cloneRepository: RpcUnaryMethod<typeof WS_METHODS.sourceControlCloneRepository>;
@@ -214,6 +218,11 @@ export function createWsRpcClient(transport: WsTransport): WsRpcClient {
         transport.request((client) => client[WS_METHODS.workspaceObservatoryTree](input)),
       readFile: (input) =>
         transport.request((client) => client[WS_METHODS.workspaceObservatoryReadFile](input)),
+    },
+    applicationState: {
+      tables: () => transport.request((client) => client[WS_METHODS.applicationStateTables]()),
+      rows: (input) =>
+        transport.request((client) => client[WS_METHODS.applicationStateRows](input)),
     },
     sourceControl: {
       lookupRepository: (input) =>
