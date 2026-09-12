@@ -6,12 +6,13 @@ import {
   type ServerProjectSystemTelemetryResult,
 } from "@cafecode/contracts";
 import * as DateTime from "effect/DateTime";
-import { StrictMode } from "react";
-import { page } from "vitest/browser";
+import { StrictMode, useState } from "react";
+import { page, userEvent } from "vitest/browser";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
 import { ProjectTelemetryGraph } from "./ProjectTelemetryGraph";
+import { PROJECT_TELEMETRY_PANEL_STORAGE_KEY } from "./useTelemetryPanelLayout";
 
 const environmentA = EnvironmentId.make("environment-telemetry-a");
 const environmentB = EnvironmentId.make("environment-telemetry-b");
@@ -66,7 +67,112 @@ function telemetryFixture(input: {
 }
 
 describe("ProjectTelemetryGraph", () => {
-  beforeEach(async () => page.viewport(800, 600));
+  beforeEach(async () => {
+    window.localStorage.removeItem(PROJECT_TELEMETRY_PANEL_STORAGE_KEY);
+    await page.viewport(800, 600);
+  });
+
+  it("persists keyboard and pointer geometry, restores within bounds, and resets without new polls", async () => {
+    await page.viewport(1200, 800);
+    const readTelemetry = vi.fn(async () => telemetryFixture({ projectId: projectA }));
+    const panelAt = (width: number, height: number) => (
+      <div className="relative" style={{ width, height }}>
+        <ProjectTelemetryGraph
+          environmentId={environmentA}
+          projectId={projectA}
+          readTelemetry={readTelemetry}
+          pollIntervalMs={Number.MAX_SAFE_INTEGER}
+        />
+      </div>
+    );
+    const mounted = await render(panelAt(900, 520));
+    try {
+      const panel = page.getByRole("complementary", { name: "Selected project system telemetry" });
+      await vi.waitFor(() => expect(panel.element().style.left).toBe("540px"));
+      const move = page.getByRole("button", { name: "Move project resource graphs" });
+      move.element().focus();
+      await userEvent.keyboard("{ArrowLeft}{ArrowDown}");
+      await vi.waitFor(() => expect(panel.element().style.left).toBe("532px"));
+      expect(panel.element().style.top).toBe("16px");
+      page.getByRole("button", { name: "Resize project resource graphs" }).element().focus();
+      await userEvent.keyboard("{ArrowRight}{ArrowDown}");
+      await vi.waitFor(() => expect(panel.element().style.width).toBe("360px"));
+      expect(panel.element().style.height).toBe("408px");
+      const handle = move.element();
+      Object.defineProperty(handle, "setPointerCapture", { value: vi.fn() });
+      handle.dispatchEvent(
+        new PointerEvent("pointerdown", {
+          bubbles: true,
+          isPrimary: true,
+          button: 0,
+          pointerId: 17,
+          clientX: 600,
+          clientY: 80,
+        }),
+      );
+      window.dispatchEvent(
+        new PointerEvent("pointermove", { pointerId: 17, clientX: 568, clientY: 104 }),
+      );
+      window.dispatchEvent(new PointerEvent("pointerup", { pointerId: 17 }));
+      await vi.waitFor(() => expect(panel.element().style.left).toBe("500px"));
+      expect(
+        JSON.parse(localStorage.getItem(PROJECT_TELEMETRY_PANEL_STORAGE_KEY) ?? "null"),
+      ).toEqual({ x: 500, y: 40, width: 360, height: 408 });
+      expect(readTelemetry).toHaveBeenCalledTimes(1);
+    } finally {
+      await mounted.unmount();
+    }
+    const restored = await render(panelAt(420, 300));
+    try {
+      await page.getByLabelText("Expand Resources").click();
+      const panel = page.getByRole("complementary", { name: "Selected project system telemetry" });
+      await vi.waitFor(() => expect(panel.element().style.height).toBe("284px"));
+      expect(panel.element().style.left).toBe("52px");
+      expect(panel.element().style.top).toBe("8px");
+      await page.getByRole("button", { name: "Reset resource graph position and size" }).click();
+      await vi.waitFor(() =>
+        expect(localStorage.getItem(PROJECT_TELEMETRY_PANEL_STORAGE_KEY)).toBeNull(),
+      );
+      expect(panel.element().style.width).toBe("352px");
+      expect(panel.element().style.left).toBe("60px");
+    } finally {
+      await restored.unmount();
+    }
+  });
+
+  it("hides only unavailable graphs and preserves measurements and the existing poll", async () => {
+    const readTelemetry = vi.fn(async () => telemetryFixture({ projectId: projectA }));
+    function Harness() {
+      const [hidden, setHidden] = useState(false);
+      return (
+        <ProjectTelemetryGraph
+          environmentId={environmentA}
+          projectId={projectA}
+          readTelemetry={readTelemetry}
+          pollIntervalMs={Number.MAX_SAFE_INTEGER}
+          hideUnavailableGraphs={hidden}
+          onHideUnavailableGraphsChange={setHidden}
+        />
+      );
+    }
+    const mounted = await render(<Harness />);
+    try {
+      await page.getByLabelText("Expand Resources").click();
+      await expect.element(page.getByLabelText(/^Host GPU: Unavailable/)).toBeVisible();
+      const toggle = page.getByRole("switch", { name: "Hide unavailable resource graphs" });
+      await toggle.click();
+      await expect.element(toggle).toBeChecked();
+      await expect.element(page.getByLabelText(/^Host GPU: Unavailable/)).not.toBeInTheDocument();
+      await expect.element(page.getByLabelText(/^Host CPU: 42%/)).toBeVisible();
+      expect(document.body.textContent).not.toContain("GPU adapter histories");
+      expect(document.body.textContent).not.toContain("Temperature histories");
+      await toggle.click();
+      await expect.element(page.getByLabelText(/^Host GPU: Unavailable/)).toBeVisible();
+      expect(readTelemetry).toHaveBeenCalledTimes(1);
+    } finally {
+      await mounted.unmount();
+    }
+  });
 
   it("keeps GPU identity through disappearance and reordered samples", async () => {
     const adapter = (index: number, utilizationPercent: number) => ({
@@ -210,9 +316,7 @@ describe("ProjectTelemetryGraph", () => {
       const cpuGraph = page.getByRole("img", { name: "CPU temperature history" }).element();
       expect(cpuGraph.querySelector("circle")).not.toBeNull();
       const panel = page.getByLabelText("Selected project system telemetry").element();
-      expect(panel.getBoundingClientRect().height).toBeLessThanOrEqual(
-        window.innerHeight * 0.6 + 1,
-      );
+      expect(panel.getBoundingClientRect().height).toBeLessThanOrEqual(window.innerHeight - 16);
       const cpuCard = page
         .getByLabelText("CPU temperature: 60 °C. Hottest of 2 reported sensors.")
         .element();
@@ -528,11 +632,11 @@ describe("ProjectTelemetryGraph", () => {
     expect(readTelemetry).toHaveBeenCalledTimes(1);
   });
 
-  it("renders expanded without overlaying the message timeline on a wide viewport", async () => {
+  it("bounds the movable overlay while preserving the full message timeline height", async () => {
     await page.viewport(1_200, 800);
     const readTelemetry = vi.fn(async () => telemetryFixture({ projectId: projectA }));
     const mounted = await render(
-      <div className="flex h-[500px] flex-col">
+      <div className="relative flex h-[500px] flex-col">
         <ProjectTelemetryGraph
           environmentId={environmentA}
           projectId={projectA}
@@ -547,9 +651,9 @@ describe("ProjectTelemetryGraph", () => {
       const panel = document.querySelector('[aria-label="Selected project system telemetry"]');
       const timeline = document.querySelector('[data-testid="telemetry-timeline-space"]');
       expect(panel?.getBoundingClientRect().bottom).toBeLessThanOrEqual(
-        (timeline?.getBoundingClientRect().top ?? 0) + 1,
+        timeline?.getBoundingClientRect().bottom ?? 0,
       );
-      expect(timeline?.getBoundingClientRect().height).toBeGreaterThan(0);
+      expect(timeline?.getBoundingClientRect().height).toBe(500);
       await vi.waitFor(() => expect(readTelemetry).toHaveBeenCalledTimes(1));
     } finally {
       await mounted.unmount();
@@ -657,12 +761,16 @@ describe("ProjectTelemetryGraph", () => {
 
   it("replaces stale values with an explicit outage state after a successful sample", async () => {
     const diagnostic = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const failure = deferred<void>();
     const readTelemetry = vi
       .fn()
       .mockResolvedValueOnce(
         telemetryFixture({ projectId: projectA, minimumSampleIntervalMs: 250 }),
       )
-      .mockRejectedValue({ _tag: "TelemetryOffline" });
+      .mockImplementation(async () => {
+        await failure.promise;
+        throw { _tag: "TelemetryOffline" };
+      });
     const mounted = await render(
       <ProjectTelemetryGraph
         environmentId={environmentA}
@@ -675,6 +783,7 @@ describe("ProjectTelemetryGraph", () => {
     try {
       await page.getByLabelText("Expand Resources").click();
       await expect.element(page.getByLabelText(/Host CPU: 42%/i)).toBeVisible();
+      failure.resolve(undefined);
       await expect
         .element(page.getByLabelText(/Host CPU: Unavailable. Telemetry unavailable/i))
         .toBeVisible();
@@ -683,8 +792,40 @@ describe("ProjectTelemetryGraph", () => {
         .toBeVisible();
       expect(document.body.textContent).toContain("last successful");
     } finally {
-      diagnostic.mockRestore();
+      failure.resolve(undefined);
       await mounted.unmount();
+      diagnostic.mockRestore();
     }
   });
+});
+
+it("keeps geometry controls usable when local persistence is unavailable", async () => {
+  await page.viewport(1000, 700);
+  const write = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+    throw new DOMException("Storage unavailable", "QuotaExceededError");
+  });
+  const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+  const mounted = await render(
+    <div className="relative h-[500px]">
+      <ProjectTelemetryGraph
+        environmentId={environmentA}
+        projectId={projectA}
+        readTelemetry={async () => telemetryFixture({ projectId: projectA })}
+      />
+    </div>,
+  );
+  try {
+    const panel = page.getByRole("complementary", { name: "Selected project system telemetry" });
+    await expect.element(panel).toBeVisible();
+    const before = panel.element().getBoundingClientRect().left;
+    page.getByRole("button", { name: "Move project resource graphs" }).element().focus();
+    await userEvent.keyboard("{ArrowLeft}{ArrowLeft}");
+    await expect.poll(() => panel.element().getBoundingClientRect().left).toBe(before - 16);
+    await page.getByRole("button", { name: "Reset resource graph position and size" }).click();
+    await expect.poll(() => panel.element().getBoundingClientRect().left).toBe(before);
+  } finally {
+    await mounted.unmount();
+    write.mockRestore();
+    log.mockRestore();
+  }
 });

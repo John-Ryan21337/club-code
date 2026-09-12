@@ -7960,7 +7960,7 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
   }
 
   if (chatViewBrowserPart === "layout") {
-    it("keeps selected-project telemetry in flow above the message timeline", async () => {
+    it("keeps selected-project telemetry inside its chat anchor without reducing timeline space", async () => {
       const mounted = await mountChatView({
         viewport: DEFAULT_VIEWPORT,
         snapshot: createSnapshotWithLongProposedPlan(),
@@ -7981,10 +7981,22 @@ describe(`ChatView full app (${chatViewBrowserPart})`, () => {
 
         expect(slot).toBeTruthy();
         expect(timeline).toBeTruthy();
-        expect(panel.getBoundingClientRect().bottom).toBeLessThanOrEqual(
-          (timeline?.getBoundingClientRect().top ?? 0) + 1,
-        );
-        expect(timeline?.getBoundingClientRect().height).toBeGreaterThan(0);
+        const anchor = slot!.parentElement!.getBoundingClientRect();
+        const panelBounds = panel.getBoundingClientRect();
+        const expandedTimeline = timeline!.getBoundingClientRect();
+        expect(panelBounds.left).toBeGreaterThanOrEqual(anchor.left);
+        expect(panelBounds.top).toBeGreaterThanOrEqual(anchor.top);
+        expect(panelBounds.right).toBeLessThanOrEqual(anchor.right + 1);
+        expect(panelBounds.bottom).toBeLessThanOrEqual(anchor.bottom + 1);
+        expect(expandedTimeline.height).toBeGreaterThan(0);
+        panel
+          .querySelector<HTMLButtonElement>(
+            'button[aria-label="Collapse project resource graphs"]',
+          )!
+          .click();
+        await waitForLayout();
+        expect(timeline!.getBoundingClientRect().height).toBeCloseTo(expandedTimeline.height, 0);
+        expect(timeline!.getBoundingClientRect().top).toBeCloseTo(expandedTimeline.top, 0);
         await vi.waitFor(() => {
           expect(
             wsRequests.some(

@@ -22,11 +22,17 @@ const categoryLabels = {
 export function ProjectTemperatureHistory({
   telemetry,
   history,
+  hideUnavailable = false,
 }: {
   readonly telemetry: ServerSystemTemperatureTelemetry | undefined;
   readonly history: readonly ProjectTelemetryHistoryPoint[];
+  readonly hideUnavailable?: boolean;
 }) {
   const categories = projectTemperatureCategories(telemetry);
+  const shown = TEMPERATURE_CATEGORIES.filter(
+    (kind) => !hideUnavailable || categories[kind].celsius !== null,
+  );
+  if (shown.length === 0) return null;
   return (
     <details className="mt-2 rounded-lg border border-border/50 bg-card/70 text-xs">
       <summary className="min-h-9 cursor-pointer px-3 py-2 text-muted-foreground focus-visible:outline-2 focus-visible:outline-ring">
@@ -37,7 +43,7 @@ export function ProjectTemperatureHistory({
           Hottest reported sensor in each category. Graph scale: −20 to 120 °C.
         </p>
         <div className="grid grid-cols-2 gap-2">
-          {TEMPERATURE_CATEGORIES.map((kind) => {
+          {shown.map((kind) => {
             const current = categories[kind];
             return (
               <TelemetryCard
