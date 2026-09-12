@@ -175,6 +175,7 @@ describe("provider conformity workflow", () => {
       argv: [
         String.raw`C:\Windows\System32\cmd.exe`,
         "/d",
+        "/v:off",
         "/s",
         "/c",
         String.raw`""C:\Users\me\AppData\Roaming\npm\claude.cmd" "--version""`,
@@ -191,16 +192,55 @@ describe("provider conformity workflow", () => {
     ).toThrow("cannot be represented safely");
   });
 
+  it("disables expansion while preserving literal exclamation marks in a shim path", () => {
+    const cmd = String.raw`C:\Windows\System32\cmd.exe`;
+    expect(
+      buildProviderInvocation(String.raw`C:\tools!literal!\claude.cmd`, ["a&b"], "win32", cmd),
+    ).toEqual({
+      argv: [cmd, "/d", "/v:off", "/s", "/c", String.raw`""C:\tools!literal!\claude.cmd" "a&b""`],
+      windowsVerbatimArguments: true,
+    });
+  });
+
+  it("binds relative PATH entries to the caller cwd before a probe changes directories", () => {
+    // Keep the fixture on the caller's drive: cross-drive paths are absolute on Windows.
+    const parent = realpathSync(process.cwd());
+    const root = mkdtempSync(NodePath.join(parent, "provider-path-binding-"));
+    const filename = process.platform === "win32" ? "claude.exe" : "claude";
+    const binary = NodePath.join(root, filename);
+    try {
+      writeFileSync(binary, "synthetic fixture");
+      chmodSync(binary, 0o755);
+      const relativePath = NodePath.relative(process.cwd(), root);
+      expect(NodePath.isAbsolute(relativePath)).toBe(false);
+      expect(resolvePathCommand("claude", { PATH: relativePath, PATHEXT: ".EXE" })).toBe(binary);
+    } finally {
+      const resolved = realpathSync(root);
+      const child = NodePath.relative(parent, resolved);
+      if (!child.startsWith("provider-path-binding-") || NodePath.basename(child) !== child) {
+        throw new Error("Unexpected fixture cleanup directory.");
+      }
+      rmSync(resolved, { recursive: true, force: true });
+    }
+  });
+
   it.skipIf(process.platform !== "win32")(
-    "executes a spaced Windows command shim through the verbatim cmd boundary",
+    "executes a spaced Windows shim with literal exclamation marks",
     async () => {
       const root = mkdtempSync(NodePath.join(NodeOS.tmpdir(), "provider-shim-test-"));
-      const shim = NodePath.join(root, "provider shim.cmd");
-      writeFileSync(shim, "@echo off\r\necho codex-cli 0.147.0\r\n");
+      const shim = NodePath.join(root, "provider !literal! shim.cmd");
+      writeFileSync(shim, '@echo off\r\necho codex-cli 0.147.0\r\necho "%~1"\r\n');
       try {
-        const result = await runCommand(buildProviderInvocation(shim, ["--version"]), root, 5_000);
+        const result = await runCommand(
+          buildProviderInvocation(shim, ["--version!literal!"]),
+          root,
+          5_000,
+        );
         expect(result).toMatchObject({ exitCode: 0, timedOut: false });
-        expect(result.stdout.trim()).toBe("codex-cli 0.147.0");
+        expect(result.stdout.trim().split(/\r?\n/u)).toEqual([
+          "codex-cli 0.147.0",
+          '"--version!literal!"',
+        ]);
       } finally {
         rmSync(root, { recursive: true, force: true });
       }
