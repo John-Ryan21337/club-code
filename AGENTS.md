@@ -415,10 +415,11 @@ Codex home rules:
 
 Cafe Code's Claude adapter uses `@anthropic-ai/claude-agent-sdk`, currently pinned to v0.3.239 and compatibility-approved with Claude Code v2.1.240. Cafe passes each configured `pathToClaudeCodeExecutable` to the SDK, so the provider process may be a newer system Claude Code binary; compatibility audits must compare both the imported SDK control surface and the exact configured CLI version. The repository's default 24-hour Yarn package-age quarantine is part of this approval boundary: a newly observed npm release is not an approved upgrade until it ages through that gate, its exact SDK/CLI delta is audited, the compatibility matrix is updated, and the cross-platform PR gates pass.
 
-Claude queries receive the same process-local embedded-browser MCP server through the Agent SDK's
-in-memory HTTP `mcpServers` option. Its bearer and exact thread/provider headers must remain
-process-local and must never be copied into settings, runtime events, query diagnostics, or durable
-resume state.
+Claude queries receive the process-local embedded-browser MCP server through the Agent SDK's
+public `type: "sdk"` transport. SDK 0.3.239 serializes HTTP MCP headers into child arguments;
+the host-owned SDK server keeps the bearer and exact thread/provider identity out of that
+configuration. Never copy this authority into settings, runtime events, query diagnostics,
+or durable resume state. Preserve the same tool handlers, grant checks, and revocation checks.
 
 Claude lifecycle facts to preserve:
 
