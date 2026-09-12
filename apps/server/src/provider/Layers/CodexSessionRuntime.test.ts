@@ -2154,6 +2154,11 @@ const makeTrimSnapshotRaw = (turns: ReadonlyArray<Record<string, unknown>>) => (
   thread: {
     id: "thread-1",
     status: { type: "active" },
+    // Codex 0.154.0 threads carry nullable model/effort/originator metadata.
+    // Trimming only rewrites `turns`; release metadata must pass through.
+    model: "gpt-6-astra",
+    reasoningEffort: "low",
+    originator: null,
     turns,
   },
 });
@@ -2190,6 +2195,14 @@ describe("trimCodexThreadSnapshotForDecode", () => {
     assert.deepEqual((result.value as { thread: { status: unknown } }).thread.status, {
       type: "active",
     });
+    const trimmedThread = (
+      result.value as {
+        thread: { model: unknown; reasoningEffort: unknown; originator: unknown };
+      }
+    ).thread;
+    assert.equal(trimmedThread.model, "gpt-6-astra");
+    assert.equal(trimmedThread.reasoningEffort, "low");
+    assert.equal(trimmedThread.originator, null);
     // The original payload is not mutated.
     assert.equal(raw.thread.turns.length, 20);
   });
