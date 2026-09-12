@@ -1732,3 +1732,8 @@ html[data-cafe-background-animations="paused"][data-cafe-window-focus="blurred"]
     animation: none;
   }
 }
+
+/* Keep the local video behind readable chat surfaces, inside this workspace only. */
+[data-local-media-background="true"] [data-local-media-chat-shell] {
+  background-color: color-mix(in srgb, var(--background) 58%, transparent);
+}
