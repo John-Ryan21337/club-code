@@ -23,6 +23,7 @@ describe("completion alert privacy contract", () => {
   it("keeps a successful exact native side and its fulfilled missing-side reason", async () => {
     const endedListeners = new Set<() => void>();
     class TestAudioContext {
+      readonly state = "running";
       readonly currentTime = 0;
       readonly destination = {} as AudioDestinationNode;
 
@@ -198,6 +199,96 @@ function audioParamStub() {
   return { setValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn() };
 }
 
+describe("completion audio activation", () => {
+  it("resumes audio and waits for both notes to end before reporting playback", async () => {
+    const ended: (() => void)[] = [];
+    const close = vi.fn(async () => {});
+    class ResumableAudioContext {
+      state = "suspended";
+      readonly currentTime = 0;
+      readonly destination = {};
+      async resume() {
+        this.state = "running";
+      }
+      createGain() {
+        return { gain: audioParamStub(), connect: vi.fn() };
+      }
+      createOscillator() {
+        return {
+          frequency: audioParamStub(),
+          connect: vi.fn(),
+          start: vi.fn(),
+          stop: vi.fn(),
+          addEventListener: (_event: string, listener: () => void) => ended.push(listener),
+        };
+      }
+      close = close;
+    }
+    vi.stubGlobal("AudioContext", ResumableAudioContext);
+    vi.stubGlobal("indexedDB", undefined);
+    let reported = false;
+    const playing = playCompletionSound().then((report) => {
+      reported = true;
+      return report;
+    });
+    await vi.waitFor(() => expect(ended).toHaveLength(2));
+    expect(reported).toBe(false);
+    ended[0]!();
+    await Promise.resolve();
+    expect(reported).toBe(false);
+    ended[1]!();
+    await expect(playing).resolves.toMatchObject({ mode: "sound" });
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it("bounds a browser resume request that never settles and closes its context", async () => {
+    vi.useFakeTimers();
+    const close = vi.fn(async () => {});
+    class BlockedAudioContext {
+      readonly state = "suspended";
+      resume = () => new Promise<void>(() => {});
+      close = close;
+    }
+    vi.stubGlobal("AudioContext", BlockedAudioContext);
+    vi.stubGlobal("indexedDB", undefined);
+    try {
+      const assertion = expect(playCompletionSound()).rejects.toThrow(
+        "Audio playback is blocked on this device.",
+      );
+      await vi.advanceTimersByTimeAsync(2_000);
+      await assertion;
+      expect(close).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not report a played ping when the audio context remains suspended", async () => {
+    const close = vi.fn(async () => {});
+    const resume = vi.fn(async () => {});
+    class SuspendedAudioContext {
+      readonly state = "suspended";
+      readonly currentTime = 0;
+      readonly destination = {};
+      createGain() {
+        return { gain: audioParamStub(), connect: vi.fn() };
+      }
+      createOscillator() {
+        return { frequency: audioParamStub(), connect: vi.fn(), start: vi.fn(), stop: vi.fn() };
+      }
+      resume = resume;
+      close = close;
+    }
+    vi.stubGlobal("AudioContext", SuspendedAudioContext);
+    vi.stubGlobal("indexedDB", undefined);
+    await expect(playCompletionSound()).rejects.toThrow(
+      "Audio playback is blocked on this device.",
+    );
+    expect(resume).toHaveBeenCalledOnce();
+    expect(close).toHaveBeenCalledOnce();
+  });
+});
+
 describe("completion alert cancellation", () => {
   it("drops a native speech clip whose IPC response lands after cancellation", async () => {
     const createBufferSource = vi.fn();
@@ -240,6 +331,7 @@ describe("completion alert cancellation", () => {
     const stop = vi.fn();
     const close = vi.fn(async () => {});
     class TestAudioContext {
+      readonly state = "running";
       readonly currentTime = 0;
       readonly destination = {} as AudioDestinationNode;
       createGain() {
@@ -249,6 +341,7 @@ describe("completion alert cancellation", () => {
         return {
           type: "sine",
           frequency: audioParamStub(),
+          addEventListener: vi.fn(),
           connect: vi.fn(),
           start: vi.fn(),
           stop,

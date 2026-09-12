@@ -61,7 +61,7 @@ vi.mock("@tanstack/react-router", () => ({
   useRouter: () => ({ navigate: vi.fn() }),
 }));
 vi.mock("../hooks/useSettings", () => ({
-  useClientSettingsHydrated: () => true,
+  useLocalClientSettingsHydrated: () => true,
   useSettings: () => useSyncExternalStore(harness.subscribe, () => harness.state.settings),
 }));
 

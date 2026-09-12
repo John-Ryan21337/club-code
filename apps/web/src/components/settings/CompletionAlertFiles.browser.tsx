@@ -46,3 +46,28 @@ it("stores local alert files in IndexedDB, cycles them, and removes them", async
   await removeCompletionAlertFile(added[0]!.id);
   expect((await listCompletionAlertFiles()).map((file) => file.name)).toEqual(["second.wav"]);
 });
+
+it("enforces the file limit atomically across concurrent imports", async () => {
+  let decodes = 0;
+  let release!: () => void;
+  const bothImportsValidated = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const decode = async () => {
+    if (++decodes === 10) release();
+    await bothImportsValidated;
+    return 1;
+  };
+  const batch = (prefix: string) =>
+    Array.from(
+      { length: 5 },
+      (_, index) => new File(["synthetic"], `${prefix}-${index}.wav`, { type: "audio/wav" }),
+    );
+  const results = await Promise.allSettled([
+    addCompletionAlertFiles(batch("first"), decode),
+    addCompletionAlertFiles(batch("second"), decode),
+  ]);
+  expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+  expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
+  expect(await listCompletionAlertFiles()).toHaveLength(5);
+});

@@ -7,6 +7,7 @@ import {
   getClientSettings,
   useSettings,
   useUpdateSettings,
+  useLocalClientSettingsHydrated,
 } from "../hooks/useSettings";
 
 const fixture = vi.hoisted(() => ({
@@ -55,6 +56,27 @@ function Control() {
     </button>
   );
 }
+
+function HydrationProbe() {
+  const hydrated = useLocalClientSettingsHydrated();
+  return <span>{hydrated ? "Audio baseline ready" : "Audio baseline waiting"}</span>;
+}
+
+it("waits for device preference hydration even when shared server settings already exist", async () => {
+  let finish!: (value: typeof DEFAULT_CLIENT_SETTINGS) => void;
+  fixture.getPersisted.mockReturnValue(
+    new Promise((resolve) => {
+      finish = resolve;
+    }),
+  );
+  const screen = await render(<HydrationProbe />);
+  try {
+    await expect.element(screen.getByText("Audio baseline waiting", { exact: true })).toBeVisible();
+  } finally {
+    finish(DEFAULT_CLIENT_SETTINGS);
+  }
+  await expect.element(screen.getByText("Audio baseline ready", { exact: true })).toBeVisible();
+});
 
 it("does not inherit server audio activation and saves an explicit choice only on this device", async () => {
   await render(<Control />);

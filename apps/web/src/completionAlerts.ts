@@ -113,12 +113,35 @@ function awaitPlayback(options: {
   });
 }
 
+async function activateAudioContext(context: AudioContext, signal?: AbortSignal): Promise<void> {
+  throwIfCancelled(signal);
+  if (context.state === "running") return;
+  await awaitPlayback({
+    signal,
+    timeoutMs: 2_000,
+    timeoutMessage: "Audio playback is blocked on this device.",
+    start: (finish) => {
+      void context.resume().then(
+        () =>
+          finish(
+            context.state === "running"
+              ? undefined
+              : new Error("Audio playback is blocked on this device."),
+          ),
+        () => finish(new Error("Audio playback is blocked on this device.")),
+      );
+      return () => {};
+    },
+  });
+}
+
 async function playDecodedAudio(data: ArrayBuffer, signal?: AbortSignal): Promise<void> {
   throwIfCancelled(signal);
   const context = makeAudioContext();
   try {
     const buffer = await context.decodeAudioData(data.slice(0));
     throwIfCancelled(signal);
+    await activateAudioContext(context, signal);
     const source = context.createBufferSource();
     source.buffer = buffer;
     source.connect(context.destination);
@@ -163,43 +186,51 @@ export async function playCompletionSound(
 
   throwIfCancelled(signal);
   const context = makeAudioContext();
-  const start = context.currentTime + 0.02;
-  const gain = context.createGain();
-  gain.gain.setValueAtTime(0.0001, start);
-  gain.gain.exponentialRampToValueAtTime(0.055, start + 0.025);
-  gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.58);
-  gain.connect(context.destination);
-
-  // An original, restrained station-like interval: two short sine notes with
-  // a small overlap. It intentionally does not reproduce a railway melody.
-  const scheduled: AudioScheduledSourceNode[] = [];
-  const notes = [
-    { frequency: 587.33, offset: 0, duration: 0.3 },
-    { frequency: 783.99, offset: 0.22, duration: 0.34 },
-  ];
-  for (const note of notes) {
-    const oscillator = context.createOscillator();
-    const noteGain = context.createGain();
-    oscillator.type = "sine";
-    oscillator.frequency.setValueAtTime(note.frequency, start + note.offset);
-    noteGain.gain.setValueAtTime(0.0001, start + note.offset);
-    noteGain.gain.exponentialRampToValueAtTime(0.75, start + note.offset + 0.018);
-    noteGain.gain.exponentialRampToValueAtTime(0.0001, start + note.offset + note.duration);
-    oscillator.connect(noteGain);
-    noteGain.connect(gain);
-    oscillator.start(start + note.offset);
-    oscillator.stop(start + note.offset + note.duration + 0.02);
-    scheduled.push(oscillator);
-  }
   try {
+    await activateAudioContext(context, signal);
+    const start = context.currentTime + 0.02;
+    const gain = context.createGain();
+    gain.gain.setValueAtTime(0.0001, start);
+    gain.gain.exponentialRampToValueAtTime(0.055, start + 0.025);
+    gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.58);
+    gain.connect(context.destination);
+
+    // An original, restrained station-like interval: two short sine notes with
+    // a small overlap. It intentionally does not reproduce a railway melody.
+    const scheduled: AudioScheduledSourceNode[] = [];
+    const notes = [
+      { frequency: 587.33, offset: 0, duration: 0.3 },
+      { frequency: 783.99, offset: 0.22, duration: 0.34 },
+    ];
     await awaitPlayback({
       signal,
       timeoutMs: MAX_AUDIO_PLAYBACK_MS,
       timeoutMessage: "Completion ping playback did not finish.",
       start: (finish) => {
-        const timer = setTimeout(() => finish(), 700);
+        let remaining = notes.length;
+        for (const note of notes) {
+          const oscillator = context.createOscillator();
+          const noteGain = context.createGain();
+          oscillator.type = "sine";
+          oscillator.frequency.setValueAtTime(note.frequency, start + note.offset);
+          noteGain.gain.setValueAtTime(0.0001, start + note.offset);
+          noteGain.gain.exponentialRampToValueAtTime(0.75, start + note.offset + 0.018);
+          noteGain.gain.exponentialRampToValueAtTime(0.0001, start + note.offset + note.duration);
+          oscillator.connect(noteGain);
+          noteGain.connect(gain);
+          oscillator.addEventListener(
+            "ended",
+            () => {
+              remaining -= 1;
+              if (remaining === 0) finish();
+            },
+            { once: true },
+          );
+          oscillator.start(start + note.offset);
+          oscillator.stop(start + note.offset + note.duration + 0.02);
+          scheduled.push(oscillator);
+        }
         return () => {
-          clearTimeout(timer);
           for (const oscillator of scheduled) stopSource(oscillator);
         };
       },
@@ -236,6 +267,7 @@ async function playNativeClips(
       })),
     );
     throwIfCancelled(signal);
+    await activateAudioContext(context, signal);
     const simultaneousStereo =
       decoded.length === 2 && typeof context.createStereoPanner === "function";
     const start = context.currentTime + 0.06;

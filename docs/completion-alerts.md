@@ -57,7 +57,7 @@ six keys are split out of that path by
   never published to the shared profile.
 
 Before hydration finishes, every audio key reads as its `false`/default value,
-which is also why the audio observer waits for `useClientSettingsHydrated()`.
+which is also why the audio observer waits for `useLocalClientSettingsHydrated()`. A shared server snapshot does not satisfy this device-only readiness gate.
 
 ### When an alert fires
 
@@ -71,15 +71,13 @@ separate observers:
 
 The audio observer only alerts when all of these hold:
 
-- client settings have hydrated (`useClientSettingsHydrated`), and
+- local client settings have hydrated (`useLocalClientSettingsHydrated`), and
 - a baseline snapshot already exists, and
 - at least one switch is on, and
 - some observed thread's own running turn reached `completed`.
 
 `collectCompletionTransitionKeys(previous, next)` returns an empty list whenever
-`previous` is `null`. That single rule is what makes hydration, reconnect, store
-refill, and remount silent: nothing was observed running, so nothing may play.
-A thread that appears already `completed` is never an alert.
+`previous` is `null`. This makes initial hydration and remount silent. A thread that appears already `completed`, including after its previous row was removed during a store refill, does not alert. A transport reconnect that retains an observed running row can still produce an alert when that same turn is later reported complete; the watcher does not reset its baseline on transport state alone.
 
 ### Withdrawing consent mid-alert
 
@@ -161,9 +159,16 @@ IndexedDB (`cafe-code-completion-alerts`), never uploaded, and cycle in the
 listed order. An undecodable file falls back to the built-in ping rather than
 failing the alert.
 
+The file-count limit is checked again inside the IndexedDB write transaction.
+Concurrent imports from two tabs cannot both consume the same remaining slots;
+an over-limit batch is rejected without storing part of that batch.
+
 ### Resource cleanup
 
-Every `AudioContext` is closed in a `finally`. Playback promises are bounded at
+Every `AudioContext` is closed in a `finally`. A suspended context gets a
+bounded 2-second resume attempt. If the browser still blocks it, playback fails
+with a fixed message. The ping reports success only after both notes emit
+`ended`, not after a wall-clock delay. Playback stages are bounded at
 17 s, Web Speech utterances at 10 s (then `speechSynthesis.cancel()`), and the
 PowerShell child at 12 s, with the caller settled no later than 12.5 s even if
 the child ignores the kill. Temporary speech directories are removed in a
@@ -256,11 +261,21 @@ Focused suites, all passing:
 | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------- |
 | `yarn workspace @cafecode/contracts test src/ipc.test.ts src/settings.test.ts`                                                                                                                                 | 49 passed                             |
 | `yarn workspace @cafecode/desktop test src/speech`                                                                                                                                                             | 18 passed                             |
-| `yarn workspace @cafecode/web test src/completionAlertRun.test.ts src/completionAlerts.test.ts src/completionAlertTransitions.test.ts src/completionAlertFiles.test.ts src/completionSpeechSupport.test.ts`    | 28 passed                             |
-| `yarn workspace @cafecode/web test:browser src/components/CompletionAlertWatcher.browser.tsx src/components/CompletionAlertLocalSettings.browser.tsx src/components/settings/CompletionAlertFiles.browser.tsx` | 4 passed (real Chromium)              |
+| `yarn workspace @cafecode/web test src/completionAlertRun.test.ts src/completionAlerts.test.ts src/completionAlertTransitions.test.ts src/completionAlertFiles.test.ts src/completionSpeechSupport.test.ts`    | 31 passed                             |
+| `yarn workspace @cafecode/web test:browser src/components/CompletionAlertWatcher.browser.tsx src/components/CompletionAlertLocalSettings.browser.tsx src/components/settings/CompletionAlertFiles.browser.tsx` | 6 passed (real Chromium)              |
 | `yarn workspace @cafecode/web test:browser src/components/settings/SettingsPanels.browser.tsx`                                                                                                                 | 26 passed (real panel, real controls) |
 
-All four browser files together are 30 passed in one Chromium run.
+After independent repair review, all four focused browser files together passed
+32 tests in Chromium. The full browser suite passed 313 tests across 33 files.
+The five focused web unit files passed 31 tests. Contract and desktop results
+remain 49 and 18 respectively.
+
+Review reproduced and repaired three failures: concurrent local imports could
+exceed eight files; a shared server snapshot could satisfy the audio readiness
+gate before device preferences loaded; and a suspended audio context could
+report a played ping. Regression tests fail on the original implementation.
+A second reviewer checked the repairs and reran the affected audio and browser
+tests. Formatting, lint, and all ten typecheck tasks passed on the repaired source.
 
 Plus `yarn fmt`, `yarn lint` (exit 0, zero errors; the only warning in the new
 files is the deliberate control-character range in the `SystemRoot` validator),
@@ -310,7 +325,7 @@ Verified by test:
   satisfy a `ja` request.
 - Transitions: same-turn `running`→`completed` only; `interrupted` and a new
   turn id do not alert; a `null` baseline alerts for nothing (hydration,
-  reconnect, remount); an already-completed turn is not re-reported on a later
+  remount); an already-completed turn is not re-reported on a later
   refill; a vanished thread is ignored.
 - Burst coalescing settles once per window and honors the cooldown; a burst
   arriving while an alert is still playing is dropped rather than stacking a
@@ -354,6 +369,28 @@ Verified against real hardware on this Windows 10 machine, read-only:
   `clip: null` with "No installed Japanese female System.Speech voice is
   available." — the honest path, with no audio and no WAV written, because
   `System.Speech` exits before an output target is opened.
+
+## 日本語の操作ガイド
+
+設定の通知画面で、完了音と音声通知を個別に有効にできます。初期状態は両方とも無効です。
+設定はこの端末だけに保存され、共有サーバーや別の端末には送られません。端末の設定を読み込む前には通知しません。
+
+音声は英語の「Task complete.」、日本語の「作業が完了しました。」、または両方を選べます。
+スレッド名、プロジェクト名、入力、モデルの回答は読み上げません。Windows では指定した言語と性別に一致するインストール済みの音声だけを使います。
+一致する音声がなければ、その理由を表示します。ブラウザーの代替音声は中央から順番に再生し、性別や左右の定位を保証しません。
+両言語のネイティブ音声とステレオ機能が利用できる場合だけ、選択した左右の順序で同時に再生します。
+
+MP3/WAV を最大8個、この端末の IndexedDB に保存できます。各ファイルは5 MiB以下、デコード後15秒以下です。
+音声ファイルはアップロードしません。複数のタブから同時に追加しても8個の上限を超えません。上限を超える一括追加は全部を拒否し、一部だけ保存しません。
+
+通知するのは、監視中の同じターンが実行中から完了に変わったときです。初回読み込み、再マウント、完了済みの行の追加では鳴りません。
+再接続の間も実行中の行を保持していた場合は、そのターンの完了を後から受け取ると通知できます。短時間の完了はまとめて通知します。
+完了音や音声を無効にすると、その種類の再生を中止します。画面を閉じると両方を中止し、遅れて届いた音声結果を再生しません。
+
+ブラウザーが音声を停止状態にした場合は、最大2秒間だけ再開を試みます。再開できなければ失敗を表示し、「再生済み」とは表示しません。
+設定のテストでこの端末の状態を確認できます。会議プライバシーで非表示にしたプロジェクトの通知抑制は、この変更には含まれません。
+
+検証用の画面と自動テストには合成データを使っています。録画に音声はありません。実際のスピーカー出力、左右の聞こえ方、日本語ネイティブ音声は実機検証していません。
 
 ## Media
 

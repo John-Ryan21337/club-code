@@ -172,7 +172,24 @@ export async function addCompletionAlertFiles(
     await new Promise<void>((resolve, reject) => {
       const transaction = database.transaction(STORE_NAME, "readwrite");
       const store = transaction.objectStore(STORE_NAME);
-      for (const record of inspected) store.add(record);
+      let capacityError: Error | null = null;
+      // Read and write within the same serialized transaction. Another tab may
+      // have imported files while this batch was decoding.
+      const count = store.count();
+      count.addEventListener(
+        "success",
+        () => {
+          if (count.result + inspected.length > COMPLETION_ALERT_MAX_FILES) {
+            capacityError = new Error(
+              `Keep at most ${COMPLETION_ALERT_MAX_FILES} custom completion alert files.`,
+            );
+            transaction.abort();
+            return;
+          }
+          for (const record of inspected) store.add(record);
+        },
+        { once: true },
+      );
       transaction.addEventListener("complete", () => resolve(), { once: true });
       transaction.addEventListener(
         "error",
@@ -184,7 +201,9 @@ export async function addCompletionAlertFiles(
         "abort",
         () =>
           reject(
-            transaction.error ?? new Error("Saving local completion alert files was interrupted."),
+            capacityError ??
+              transaction.error ??
+              new Error("Saving local completion alert files was interrupted."),
           ),
         { once: true },
       );
@@ -192,7 +211,7 @@ export async function addCompletionAlertFiles(
   } finally {
     database.close();
   }
-  return [...existing, ...inspected.map(toMetadata)];
+  return listCompletionAlertFiles();
 }
 
 export async function removeCompletionAlertFile(id: string): Promise<void> {

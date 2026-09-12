@@ -12,7 +12,7 @@ import {
 } from "../completionAlertTransitions";
 import { runCompletionAlert, type CompletionAlertRun } from "../completionAlertRun";
 import { isElectron } from "../env";
-import { useClientSettingsHydrated, useSettings } from "../hooks/useSettings";
+import { useLocalClientSettingsHydrated, useSettings } from "../hooks/useSettings";
 import { buildThreadRouteParams, resolveThreadRouteTarget } from "../threadRoutes";
 
 /**
@@ -30,7 +30,7 @@ import { buildThreadRouteParams, resolveThreadRouteTarget } from "../threadRoute
  * - Completion audio runs in the desktop renderer *and* in an open browser tab,
  *   reacts only to the same observed turn moving `running` -> `completed`, and
  *   waits for client settings to hydrate before it seeds a baseline. That
- *   ordering is what stops a hydration, reconnect, or store refill from
+ *   ordering is what stops hydration or a store refill from
  *   replaying audio for work that finished while nobody was listening.
  */
 export function DesktopNotificationWatcher() {
@@ -48,7 +48,7 @@ export function DesktopNotificationWatcher() {
   const notificationsEnabledRef = useRef(settings.notificationsEnabled);
   notificationsEnabledRef.current = settings.notificationsEnabled;
   const runningByKeyRef = useRef<Map<string, boolean> | null>(null);
-  const settingsHydrated = useClientSettingsHydrated();
+  const settingsHydrated = useLocalClientSettingsHydrated();
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
   // Per-turn snapshots for completion audio only. Kept apart from

@@ -20,7 +20,11 @@ import {
   WINDOWS_SPEECH_GUIDE_URL,
 } from "../../completionSpeechSupport";
 import { isElectron } from "../../env";
-import { useClientSettingsHydrated, useSettings, useUpdateSettings } from "../../hooks/useSettings";
+import {
+  useLocalClientSettingsHydrated,
+  useSettings,
+  useUpdateSettings,
+} from "../../hooks/useSettings";
 import { ensureLocalApi } from "../../localApi";
 import {
   disableWebPushNotifications,
@@ -73,7 +77,7 @@ function browserSpeechSummary(): string {
 export function NotificationsSettingsPanel() {
   const settings = useSettings();
   const { updateSettings } = useUpdateSettings();
-  const settingsHydrated = useClientSettingsHydrated();
+  const settingsHydrated = useLocalClientSettingsHydrated();
   const [isApplying, setIsApplying] = useState(false);
   const [toggleError, setToggleError] = useState<string | null>(null);
   const [audioStatus, setAudioStatus] = useState<string | null>(null);

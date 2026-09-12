@@ -175,12 +175,17 @@ export function getClientSettings(): ClientSettings {
 
 export function useClientSettingsHydrated(): boolean {
   const serverConfig = useServerConfig();
-  const localHydrated = useSyncExternalStore(
+  const localHydrated = useLocalClientSettingsHydrated();
+  return serverConfig !== null || localHydrated;
+}
+
+/** Device-owned preferences cannot use a shared server snapshot as hydration. */
+export function useLocalClientSettingsHydrated(): boolean {
+  return useSyncExternalStore(
     subscribeClientSettingsHydration,
     getClientSettingsHydratedSnapshot,
     () => false,
   );
-  return serverConfig !== null || localHydrated;
 }
 
 function useLocalClientSettings(): ClientSettings {
