@@ -113,6 +113,7 @@ function createHarness() {
     close: vi.fn(),
     executeJavaScript: vi.fn(async (script: string) => {
       executedScripts.push(script);
+      if (script === 'document.visibilityState === "visible"') return true;
       const value = script.includes("document.body?.innerText") ? rawSnapshot : targetPoint;
       return typeof value === "function" ? value() : value;
     }),
@@ -136,6 +137,7 @@ function createHarness() {
   };
 
   const view = {
+    getVisible: vi.fn(() => true),
     setBounds: vi.fn(),
     setVisible: vi.fn(),
     webContents,
@@ -439,6 +441,24 @@ describe("DesktopEmbeddedBrowser", () => {
     });
     expect(failed.status).toBe("failed");
     expect(failed.message).not.toContain("928401");
+  });
+
+  it("does not capture pixels from a hidden browser tab", async () => {
+    const harness = createHarness();
+    await harness.browser.open(harness.owner, {});
+    harness.setUrl("https://portal.example/account");
+    harness.confirmations.push(true);
+    await harness.browser.share(harness.owner, { tabId: "tab-1", shared: true });
+    await harness.browser.setBounds(harness.owner, {
+      tabId: "tab-1",
+      bounds: { x: 0, y: 0, width: 640, height: 480 },
+      visible: false,
+    });
+    harness.view.getVisible.mockReturnValue(false);
+    const snapshot = await harness.browser.snapshot(harness.owner, { tabId: "tab-1", mode: "ocr" });
+    expect(snapshot?.ocr?.status).toBe("unavailable");
+    expect(harness.platform.captureVisibleViewport).not.toHaveBeenCalled();
+    expect(harness.platform.ocr!.recognize).not.toHaveBeenCalled();
   });
 
   it.each(["snapshot", "ocr", "click", "type"] as const)(

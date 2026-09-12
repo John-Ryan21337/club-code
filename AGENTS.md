@@ -69,7 +69,7 @@ If a tradeoff is required, choose correctness, durability, and debuggability ove
 
 ## Security Requirements
 
-- Isolated browser tabs use an in-memory Electron session, no preload or Node integration, and exact renderer ownership. Preserve main-process shared-origin grants, document/control revision checks, single-use target references, permission/download/popup denial, and session clearing on close. Native input must reject hidden documents and unfocused owner windows, and must await text insertion failures. OCR remains unavailable until the separate bundled local engine is installed; never substitute a remote OCR service.
+- Isolated browser tabs use an in-memory Electron session, no preload or Node integration, and exact renderer ownership. Preserve main-process shared-origin grants, document/control revision checks, single-use target references, permission/download/popup denial, and session clearing on close. Native input must reject hidden documents and unfocused owner windows, and must await text insertion failures. OCR uses the bundled English/Japanese engine in a bounded child process with a scrubbed environment. Keep language data local and never substitute a remote OCR service.
 
 - Bind desktop IPC authority to both the exact registered `webContents` and its configured renderer origin (or exact production file). Reject other loopback ports, deceptive loopback hostnames, child frames, and destroyed senders. Keep the trusted renderer on this navigation scope. Sender-aware handlers receive the already-validated event; use strict payload decoding for capability-bearing APIs and reject extra fields before running the handler.
 
