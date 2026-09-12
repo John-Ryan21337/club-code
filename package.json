@@ -22,6 +22,7 @@
     "restart:desktop": "node scripts/restart-cafe-code.ts",
     "killall": "node apps/server/src/bin.ts killall",
     "profile:desktop-startup": "node scripts/profile-desktop-startup.ts",
+    "providers:check-access": "node scripts/provider-auth-preflight.ts",
     "start:mock-update-server": "node scripts/mock-update-server.ts",
     "build": "turbo run build",
     "build:desktop": "turbo run build --filter=@cafecode/desktop --filter=@cafeai/cafe-code",
