@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   MAX_AMBIENT_IMAGE_CYCLE_ASSETS,
   MAX_AMBIENT_IMAGE_CYCLE_SECONDS,
@@ -12,6 +12,8 @@ import {
   type AmbientDirectoryImageFile,
 } from "../../ambientImageCycle";
 import {
+  AmbientImageClientError,
+  ambientImageErrorMessage,
   removeAmbientImage,
   resolveAmbientImageSrc,
   uploadAmbientImage,
@@ -34,7 +36,15 @@ export function AmbientImageSettingsSection() {
   const { updateSettings } = useUpdateSettings();
   const fileInput = useRef<HTMLInputElement>(null);
   const folderInput = useRef<HTMLInputElement>(null);
-  const [busy, setBusy] = useState<null | "file" | "folder">(null);
+  const [busy, setBusy] = useState<null | "file" | "folder" | "remove">(null);
+  const operationActive = useRef(false);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -47,9 +57,14 @@ export function AmbientImageSettingsSection() {
    * cleanup race the guard and lose.
    */
   const commitLibrary = async (patch: ClientSettingsPatch) => {
-    const saved = await ensureLocalApi().server.updateClientSettings(patch);
-    applyClientSettingsUpdated(saved);
-    return saved;
+    if (!mounted.current) throw new AmbientImageClientError("Ambient image selection was closed.");
+    try {
+      const saved = await ensureLocalApi().server.updateClientSettings(patch);
+      applyClientSettingsUpdated(saved);
+      return saved;
+    } catch {
+      throw new AmbientImageClientError("Ambient image settings could not be saved.");
+    }
   };
 
   /**
@@ -90,27 +105,55 @@ export function AmbientImageSettingsSection() {
     return stranded;
   };
 
-  const runUpload = async (label: "file" | "folder", work: () => Promise<void>) => {
+  const runUpload = async (
+    label: "file" | "folder" | "remove",
+    work: (uploaded: AmbientImageAsset[]) => Promise<void>,
+  ) => {
+    // Guard synchronously: two input events can arrive before React paints disabled controls.
+    if (operationActive.current) return;
+    operationActive.current = true;
+    const uploaded: AmbientImageAsset[] = [];
     setBusy(label);
     setError(null);
     setNotice(null);
     try {
-      await work();
+      await work(uploaded);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Ambient image upload failed.");
+      const previousIds = new Set(library.map((asset) => asset.id));
+      if (settings.ambientImageAsset) previousIds.add(settings.ambientImageAsset.id);
+      const provisional = uploaded.filter(
+        (asset, index) =>
+          !previousIds.has(asset.id) &&
+          uploaded.findIndex((other) => other.id === asset.id) === index,
+      );
+      const stranded = await discardUnreferenced(provisional);
+      const reason = ambientImageErrorMessage(cause, "Ambient image change failed. Try again.");
+      const cleanup =
+        provisional.length === 0
+          ? ""
+          : stranded > 0
+            ? ` ${stranded} uploaded ${stranded === 1 ? "file is" : "files are"} still stored on the server.`
+            : " The uploaded files were discarded.";
+      if (mounted.current) setError(`${reason}${cleanup}`);
     } finally {
-      setBusy(null);
+      operationActive.current = false;
+      if (mounted.current) setBusy(null);
     }
   };
 
   const addFiles = (files: readonly File[]) =>
-    runUpload("file", async () => {
+    runUpload("file", async (uploaded) => {
       const room = MAX_AMBIENT_IMAGE_CYCLE_ASSETS - library.length;
       if (room <= 0) {
-        throw new Error(`The library already holds ${MAX_AMBIENT_IMAGE_CYCLE_ASSETS} images.`);
+        throw new AmbientImageClientError(
+          `The library already holds ${MAX_AMBIENT_IMAGE_CYCLE_ASSETS} images.`,
+        );
       }
-      const uploaded: AmbientImageAsset[] = [];
-      for (const file of files.slice(0, room)) uploaded.push(await uploadAmbientImage(file));
+      for (const file of files.slice(0, room)) {
+        if (!mounted.current)
+          throw new AmbientImageClientError("Ambient image selection was closed.");
+        uploaded.push(await uploadAmbientImage(file));
+      }
       const merged = [...library];
       // Content addressing means re-uploading a picture that is already in the
       // library yields the same id. Only the genuinely new ids belong to this
@@ -123,36 +166,35 @@ export function AmbientImageSettingsSection() {
         added.push(asset);
       }
       const firstUploaded = uploaded[0];
-      try {
-        // Uploading puts bytes on disk before anything references them, so this
-        // save has to be confirmed too. The fire-and-forget `updateSettings`
-        // path would paint the new thumbnails, report success, and leave a
-        // failed write behind as bytes nothing points at.
-        await commitLibrary({
-          ambientImageCycleAssets: merged,
-          ...(settings.ambientImageAsset || !firstUploaded
-            ? {}
-            : { ambientImageAsset: firstUploaded }),
-        });
-      } catch (cause) {
-        const stranded = await discardUnreferenced(added);
-        const reason =
-          cause instanceof Error ? cause.message : "Ambient image settings could not be saved.";
-        throw new Error(
-          stranded > 0
-            ? `${reason} ${stranded} uploaded ${stranded === 1 ? "file is" : "files are"} still stored on the server.`
-            : `${reason} The uploaded files were discarded.`,
-          { cause },
-        );
-      }
+      // Uploading puts bytes on disk before anything references them, so this
+      // save has to be confirmed too. The fire-and-forget `updateSettings`
+      // path would paint the new thumbnails, report success, and leave a
+      // failed write behind as bytes nothing points at.
+      await commitLibrary({
+        ambientImageCycleAssets: merged,
+        ...(settings.ambientImageAsset || !firstUploaded
+          ? {}
+          : { ambientImageAsset: firstUploaded }),
+      });
       setNotice(`Added ${added.length} ${added.length === 1 ? "image" : "images"}.`);
     });
 
   const addFolder = (picked: readonly AmbientDirectoryImageFile[]) =>
-    runUpload("folder", async () => {
-      const prepared = prepareAmbientImageDirectory(picked);
-      const uploaded: AmbientImageAsset[] = [];
-      for (const file of prepared.files) uploaded.push(await uploadAmbientImage(file));
+    runUpload("folder", async (uploaded) => {
+      let prepared: ReturnType<typeof prepareAmbientImageDirectory>;
+      try {
+        prepared = prepareAmbientImageDirectory(picked);
+      } catch (cause) {
+        // This local validator authors fixed messages and never includes file names or paths.
+        throw new AmbientImageClientError(
+          cause instanceof Error ? cause.message : "Image folder is invalid.",
+        );
+      }
+      for (const file of prepared.files) {
+        if (!mounted.current)
+          throw new AmbientImageClientError("Ambient image selection was closed.");
+        uploaded.push(await uploadAmbientImage(file));
+      }
       const unique: AmbientImageAsset[] = [];
       for (const asset of uploaded) {
         if (!unique.some((entry) => entry.id === asset.id)) unique.push(asset);
@@ -175,17 +217,15 @@ export function AmbientImageSettingsSection() {
       setNotice(`Added ${unique.length} images${skipped}${kept}.`);
     });
 
-  const remove = async (asset: AmbientImageAsset) => {
-    const remaining = library.filter((entry) => entry.id !== asset.id);
-    const nextSelected =
-      settings.ambientImageAsset?.id === asset.id
-        ? (remaining[0] ?? null)
-        : settings.ambientImageAsset;
-    // Drop the reference first: the server refuses to delete bytes the settings
-    // document still points at.
-    setError(null);
-    setNotice(null);
-    try {
+  const remove = (asset: AmbientImageAsset) =>
+    runUpload("remove", async () => {
+      const remaining = library.filter((entry) => entry.id !== asset.id);
+      const nextSelected =
+        settings.ambientImageAsset?.id === asset.id
+          ? (remaining[0] ?? null)
+          : settings.ambientImageAsset;
+      // Drop the reference first: the server refuses to delete bytes the settings
+      // document still points at.
       const saved = await commitLibrary({
         ambientImageCycleAssets: remaining,
         ambientImageAsset: nextSelected,
@@ -200,10 +240,7 @@ export function AmbientImageSettingsSection() {
           ? "Removed from the library, but its file is still stored on the server."
           : "Removed 1 image.",
       );
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Ambient image removal failed.");
-    }
-  };
+    });
 
   return (
     <SettingsSection title="Ambient images">
@@ -295,6 +332,7 @@ export function AmbientImageSettingsSection() {
                     <button
                       type="button"
                       aria-pressed={selected}
+                      disabled={busy !== null}
                       aria-label={`Show ambient image ${asset.id}`}
                       className={`overflow-hidden rounded-md border ${selected ? "border-primary" : "border-border"}`}
                       onClick={() => updateSettings({ ambientImageAsset: asset })}
@@ -308,6 +346,7 @@ export function AmbientImageSettingsSection() {
                     <button
                       type="button"
                       className="text-muted-foreground text-xs hover:text-destructive"
+                      disabled={busy !== null}
                       onClick={() => void remove(asset)}
                     >
                       Remove

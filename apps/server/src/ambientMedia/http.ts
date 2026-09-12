@@ -27,6 +27,7 @@ import {
   AMBIENT_IMAGE_ROUTE_PREFIX,
   AmbientImageError,
   AmbientImageStore,
+  readStoredAmbientImage,
 } from "./AmbientImageStore.ts";
 
 // The shared CORS policy only advertises GET/POST/OPTIONS. Ambient images add a
@@ -145,6 +146,18 @@ export const ambientImageUploadRouteLayer = HttpRouter.add(
               cause,
             }),
         ),
+        // An authenticated slow body must not occupy one of the two slots indefinitely.
+        Effect.timeoutOrElse({
+          duration: "30 seconds",
+          orElse: () =>
+            Effect.fail(
+              new AmbientImageError({
+                code: "invalid-image",
+                status: 408,
+                message: "Ambient image upload timed out.",
+              }),
+            ),
+        }),
       );
       // The declared content type is only ever used to reject a mismatch; the
       // stored MIME type comes from the parsed header bytes.
@@ -175,18 +188,7 @@ export const ambientImageServeRouteLayer = HttpRouter.add(
       });
     }
     const stored = yield* (yield* AmbientImageStore).resolveStoredImage(id);
-    const fileSystem = yield* FileSystem.FileSystem;
-    const data = yield* fileSystem.readFile(stored.filePath).pipe(
-      Effect.mapError(
-        (cause) =>
-          new AmbientImageError({
-            code: "storage-failed",
-            status: 500,
-            message: "Ambient image could not be loaded.",
-            cause,
-          }),
-      ),
-    );
+    const data = yield* readStoredAmbientImage(stored);
     return HttpServerResponse.uint8Array(data, {
       status: 200,
       contentType: stored.mimeType,

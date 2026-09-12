@@ -3469,16 +3469,25 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     yield* fileSystem.makeDirectory(directory, { recursive: true });
 
     const referencedId = ambientImageIdFor(ambientPngBytes, "png");
-    const agedOrphanId = `sha256-${"a".repeat(64)}.png`;
-    const freshOrphanId = `sha256-${"b".repeat(64)}.png`;
+    const agedOrphanBytes = Uint8Array.from(
+      Buffer.from("R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==", "base64"),
+    );
+    const freshOrphanBytes = Uint8Array.from(
+      Buffer.from("UklGRiIAAABXRUJQVlA4IBYAAAAwAQCdASoBAAEADsD+JaQAA3AAAAAA", "base64"),
+    );
+    const agedOrphanId = ambientImageIdFor(agedOrphanBytes, "gif");
+    const freshOrphanId = ambientImageIdFor(freshOrphanBytes, "webp");
     const aged = new Date(Date.now() - AMBIENT_IMAGE_ORPHAN_GRACE_PERIOD_MS - 60_000);
 
-    for (const id of [referencedId, agedOrphanId]) {
+    for (const [id, bytes] of [
+      [referencedId, ambientPngBytes],
+      [agedOrphanId, agedOrphanBytes],
+    ] as const) {
       const filePath = path.join(directory, id);
-      yield* fileSystem.writeFile(filePath, ambientPngBytes);
+      yield* fileSystem.writeFile(filePath, bytes);
       yield* Effect.promise(() => NodeFsPromises.utimes(filePath, aged, aged));
     }
-    yield* fileSystem.writeFile(path.join(directory, freshOrphanId), ambientPngBytes);
+    yield* fileSystem.writeFile(path.join(directory, freshOrphanId), freshOrphanBytes);
 
     return { baseDir, directory, referencedId, agedOrphanId, freshOrphanId };
   });
@@ -3736,6 +3745,50 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       yield* Deferred.succeed(finishHeldBodies, undefined);
       yield* Fiber.interrupt(secondHeld);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("times out stalled ambient bodies and restores upload admission", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+      const cookie = yield* getAuthenticatedSessionCookieHeader();
+      const holdUpload = () =>
+        HttpClient.post("/api/ambient-media/image", {
+          headers: { cookie, "content-type": "image/png" },
+          body: HttpBody.stream(
+            Stream.make(ambientPngBytes.slice(0, 8)).pipe(
+              Stream.concat(Stream.fromEffect(Effect.never)),
+            ),
+            "image/png",
+          ),
+        }).pipe(
+          Effect.map((response) => response.status),
+          Effect.catchTag("HttpClientError", (error) => Effect.succeed(error.reason._tag)),
+          Effect.forkChild({ startImmediately: true }),
+        );
+      const first = yield* holdUpload();
+      const second = yield* holdUpload();
+      let lastStatus = 0;
+      for (let attempt = 0; attempt < 60; attempt++) {
+        const probe = yield* HttpClient.post("/api/ambient-media/image", {
+          headers: { cookie, "content-type": "image/png" },
+          body: HttpBody.uint8Array(ambientPngBytes, "image/png"),
+        });
+        lastStatus = probe.status;
+        if (lastStatus === 429) break;
+        yield* Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, 25)));
+      }
+      assert.equal(lastStatus, 429);
+      yield* TestClock.adjust("31 seconds");
+      // Node destroys an interrupted incoming-body stream. Depending on transport
+      // timing, the client observes the explicit response or a closed connection.
+      assert.include([408, "TransportError"], yield* Fiber.join(first));
+      assert.include([408, "TransportError"], yield* Fiber.join(second));
+      const recovered = yield* HttpClient.post("/api/ambient-media/image", {
+        headers: { cookie, "content-type": "image/png" },
+        body: HttpBody.uint8Array(ambientPngBytes, "image/png"),
+      });
+      assert.equal(recovered.status, 200);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest), Effect.provide(TestClock.layer())),
   );
 
   it.effect("proxies browser OTLP trace exports through the server", () =>

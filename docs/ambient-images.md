@@ -124,6 +124,12 @@ library entry is shown, so an upload is visible without a second click.
 
 ## Settings mutation sequencing
 
+Uploads and folder replacements discard newly uploaded, unreferenced files if a later upload or the settings write fails. Cleanup preserves images that were already selected or in the library. A pending upload that finishes after settings closes is released without saving a new selection. Competing library mutations are blocked until the active operation finishes. If deletion fails, the message states that bytes remain stored.
+
+The client rejects redirects, limits JSON replies to 16 KiB, and keeps a 30-second deadline through response-body reading. HTTP and RPC error bodies are not shown in the settings view. The server also limits incoming-body reads to 30 seconds, then releases the upload slot. Node can close the connection when it interrupts a body, so a timed-out caller can receive either HTTP 408 or a transport error.
+
+Image reads use an opened regular file with a fixed allocation bound and verify its SHA-256 digest against the minted identifier. Replaced or enlarged files are rejected. New files use mode `0600` and the image directory uses `0700` where POSIX permissions apply; Windows uses the application profile's user-owned ACL.
+
 Every mutation that moves bytes uses a **confirmed** settings write: the section
 awaits `server.updateClientSettings`, applies the returned document, and only
 then acts. It does not use the fire-and-forget `useUpdateSettings` path for
@@ -181,12 +187,12 @@ instead of dropping the count on the floor and looking clean.
 
 ## Tested behavior
 
-`apps/server/src/ambientMedia/AmbientImageStore.test.ts` (4 tests): valid GIF and
+`apps/server/src/ambientMedia/AmbientImageStore.test.ts`: valid GIF and
 PNG round-trips with dedup by content hash; rejection of forged/corrupt headers,
 animated PNG, truncated PNG, bad PNG CRC, header-only JPEG, incomplete WebP and
 GIF duration/frame bombs; oversized-file and profile-quota rejection.
 
-`apps/server/src/server.test.ts` (6 tests, real HTTP through
+`apps/server/src/server.test.ts` (real HTTP through
 `NodeHttpServer.layerTest` against the actual route layers): upload → serve →
 delete → 404 round trip with header assertions (`nosniff`, immutable private
 cache, `DELETE` in the advertised methods); the 409 reference guard, proven by
@@ -222,7 +228,7 @@ its interval on unmount.
 > layer and hit-testing, because `elementFromPoint` honours `pointer-events` —
 > the real `pointer-events: none` is asserted separately, in the same test.
 
-`apps/web/src/components/settings/AmbientImageSettings.browser.tsx` (6 tests,
+`apps/web/src/components/settings/AmbientImageSettings.browser.tsx` (11 tests,
 real Chromium, real component): synthetic `File` objects are pushed into the
 hidden inputs with a `DataTransfer` plus a `change` event (file input) and a
 defined `files` list carrying `webkitRelativePath` (folder input) — no OS picker
@@ -236,6 +242,8 @@ the bytes are still stored; a folder selection uploads the sorted supported
 files, saves, and only _then_ deletes the replaced id; a removal saves the
 dropped reference before deleting and keeps the warning when the file survives;
 and a removal whose save fails issues no delete at all.
+
+Additional regressions cover partial file/folder batches, failed folder saves, unmount cleanup and competing selection events. `apps/web/src/ambientImages.test.ts` covers schema consistency, response bounds, timeout cancellation, redirect policy and error privacy. Server regressions verify digest rejection, read bounds, descriptor release and admission recovery after stalled bodies time out.
 
 `apps/web/src/ambientImageCycle.test.ts` (2 tests): directory preparation sorts
 deterministically, skips unsupported files, and rejects selections that exceed
