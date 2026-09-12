@@ -1360,6 +1360,18 @@ const makeWsRpcLayer = (
               ),
             { "rpc.aggregate": "workspace" },
           ),
+        [WS_METHODS.workspaceObservatoryDatabases]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.workspaceObservatoryDatabases,
+            workspaceObservatory
+              .databases(input)
+              .pipe(
+                Effect.mapError(
+                  (cause) => new WorkspaceObservatoryError({ message: cause.detail }),
+                ),
+              ),
+            { "rpc.aggregate": "workspace" },
+          ),
         [WS_METHODS.shellOpenInEditor]: (input) =>
           observeRpcEffect(WS_METHODS.shellOpenInEditor, externalLauncher.launchEditor(input), {
             "rpc.aggregate": "workspace",

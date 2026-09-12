@@ -5679,6 +5679,17 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.equal(file.content, "export const value = 1;");
       assert.equal(file.truncated, false);
 
+      const databases = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.workspaceObservatoryDatabases]({ projectId: observedProjectId }),
+        ),
+      );
+      assert.deepEqual(databases, {
+        databases: [{ relativePath: " data.sqlite" }],
+        truncated: false,
+        redacted: true,
+      });
+
       const tables = yield* Effect.scoped(
         withWsRpcClient(wsUrl, (client) =>
           client[WS_METHODS.workspaceObservatoryTables]({

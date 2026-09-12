@@ -17,6 +17,8 @@
 
 ## Windows-Specific Notes
 
+- Project database discovery uses the same cross-platform path and regular-file checks as previews, with `O_NOFOLLOW` and `O_NONBLOCK` only where available. It reads the fixed 16-byte header and never opens SQLite. Windows has no filesystem FIFO probe; retain the inherited POSIX-only FIFO coverage without claiming it ran on Windows. Scan budgets count denied directory entries and header attempts, and a timed-out filesystem operation retains its admission slot until the real work settles.
+
 - Workspace SQLite previews run a fixed child program with the current executable and `ELECTRON_RUN_AS_NODE=1`, plus only required Windows system-directory environment values. No inherited Node hooks or provider credentials are passed. The child queries a private, bounded copy of the main database and optional WAL; it never creates SQLite sidecars beside project files. Closed stdin, a hard deadline, output caps and waiting for child close apply equally on Windows, macOS and Linux. Temporary cleanup verifies the exact owned directory; original files are opened read-only and never marked read-only on disk.
 
 - The separate scheduled/manual reliability workflow runs the existing Windows native installer/runtime/uninstaller smoke only on disposable GitHub-hosted Windows runners. It does not run on user machines or move process-backed/provider tests into the default suite. macOS uses its isolated DMG/ZIP smoke, and Linux keeps its existing artifact build and pipeline coverage.

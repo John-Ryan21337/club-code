@@ -22,6 +22,8 @@ import type {
   WorkspaceObservatoryTablesResult,
   WorkspaceObservatoryRowsInput,
   WorkspaceObservatoryRowsResult,
+  WorkspaceObservatoryDatabasesInput,
+  WorkspaceObservatoryDatabasesResult,
 } from "@cafecode/contracts";
 
 /**
@@ -65,6 +67,9 @@ export class WorkspaceObservatoryDeniedError extends Schema.TaggedErrorClass<Wor
  * WorkspaceObservatoryShape - Service API for read-only workspace observation.
  */
 export interface WorkspaceObservatoryShape {
+  readonly databases: (
+    input: WorkspaceObservatoryDatabasesInput,
+  ) => Effect.Effect<WorkspaceObservatoryDatabasesResult, WorkspaceObservatoryDeniedError>;
   readonly tables: (
     input: WorkspaceObservatoryTablesInput,
   ) => Effect.Effect<WorkspaceObservatoryTablesResult, WorkspaceObservatoryDeniedError>;

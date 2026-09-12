@@ -44,6 +44,7 @@ const rpcClientMock = {
     writeFile: vi.fn(),
   },
   workspaceObservatory: {
+    databases: vi.fn(),
     tables: vi.fn(),
     rows: vi.fn(),
     tree: vi.fn(),
@@ -519,6 +520,16 @@ describe("wsApi", () => {
     const observatory = api.workspaceObservatory;
     expect(observatory).toBeDefined();
     if (!observatory) throw new Error("The environment API must expose the observatory.");
+    const databases = {
+      databases: [{ relativePath: " nested/data" }],
+      truncated: true,
+      redacted: false,
+    };
+    rpcClientMock.workspaceObservatory.databases.mockResolvedValue(databases);
+    await expect(observatory.databases({ projectId })).resolves.toEqual(databases);
+    expect(rpcClientMock.workspaceObservatory.databases).toHaveBeenCalledExactlyOnceWith({
+      projectId,
+    });
     await expect(observatory.tree({ projectId })).resolves.toEqual(tree);
     await expect(observatory.readFile({ projectId, relativePath: " README.md" })).resolves.toEqual(
       file,

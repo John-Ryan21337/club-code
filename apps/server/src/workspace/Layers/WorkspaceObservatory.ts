@@ -37,6 +37,7 @@ import * as Schema from "effect/Schema";
 import {
   WorkspaceObservatoryRowsResult,
   WorkspaceObservatoryTablesResult,
+  WORKSPACE_DATABASE_DISCOVERY_LIMITS,
 } from "@cafecode/contracts";
 import { readSqlitePreview } from "../sqlitePreview.ts";
 import { WORKSPACE_OBSERVATORY_LIMITS } from "@cafecode/contracts";
@@ -409,7 +410,13 @@ function scannedKindOf(entry: {
 async function listDirectory(
   root: string,
   target: string,
-): Promise<{ entries: WorkspaceObservatoryTreeEntry[]; truncated: boolean; redacted: boolean }> {
+  entryLimit: number = WORKSPACE_OBSERVATORY_LIMITS.treeEntries,
+): Promise<{
+  entries: WorkspaceObservatoryTreeEntry[];
+  truncated: boolean;
+  redacted: boolean;
+  scannedEntries: number;
+}> {
   const targetStat = await stat(target).catch(() =>
     deny("unreadable", "Workspace item is unavailable."),
   );
@@ -422,7 +429,7 @@ async function listDirectory(
   let truncated = false;
   try {
     for await (const entry of handle) {
-      if (scanned.length >= WORKSPACE_OBSERVATORY_LIMITS.treeEntries) {
+      if (scanned.length >= entryLimit) {
         truncated = true;
         break;
       }
@@ -465,7 +472,105 @@ async function listDirectory(
     }
     entries.push({ name, relativePath: entryRelativePath, kind });
   }
-  return { entries, truncated, redacted };
+  return { entries, truncated, redacted, scannedEntries: scanned.length + (truncated ? 1 : 0) };
+}
+
+/** Read only the fixed header; never open the source through SQLite. */
+async function hasSqliteHeader(root: string, relativePath: string): Promise<boolean> {
+  const target = await resolveObservedTarget(root, relativePath);
+  const before = await lstat(target, { bigint: true });
+  if (!before.isFile() || before.isSymbolicLink() || before.size < 16n) return false;
+  const handle = await open(
+    target,
+    constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0),
+  );
+  try {
+    const opened = await handle.stat({ bigint: true });
+    if (!opened.isFile() || opened.dev !== before.dev || opened.ino !== before.ino) return false;
+    const header = Buffer.alloc(16);
+    const { bytesRead } = await handle.read(header, 0, header.length, 0);
+    const after = await handle.stat({ bigint: true });
+    if (
+      after.size !== opened.size ||
+      after.mtimeNs !== opened.mtimeNs ||
+      after.ctimeNs !== opened.ctimeNs
+    )
+      return false;
+    if ((await resolveObservedTarget(root, relativePath)) !== target) return false;
+    const named = await lstat(target, { bigint: true });
+    if (!named.isFile() || named.dev !== opened.dev || named.ino !== opened.ino) return false;
+    return bytesRead === 16 && header.equals(Buffer.from("SQLite format 3\0", "ascii"));
+  } finally {
+    await handle.close();
+  }
+}
+
+async function discoverDatabases(root: string) {
+  const limits = WORKSPACE_DATABASE_DISCOVERY_LIMITS;
+  const queue = [{ relativePath: "", depth: 0 }];
+  const databases: { relativePath: string }[] = [];
+  let scheduled = 1,
+    entries = 0,
+    probes = 0,
+    truncated = false,
+    redacted = false;
+  const deadline = Date.now() + WORKSPACE_OBSERVATORY_OPERATION_TIMEOUT_MS;
+  const checkDeadline = () => {
+    if (Date.now() >= deadline) deny("timed-out", "Workspace discovery timed out.");
+  };
+  while (queue.length) {
+    checkDeadline();
+    if (entries >= limits.entries - 1 || databases.length >= limits.results) {
+      truncated = true;
+      break;
+    }
+    const current = queue.shift()!;
+    let listing: Awaited<ReturnType<typeof listDirectory>>;
+    try {
+      const target = current.relativePath
+        ? await resolveObservedTarget(root, current.relativePath)
+        : root;
+      checkDeadline();
+      listing = await listDirectory(
+        root,
+        target,
+        Math.min(WORKSPACE_OBSERVATORY_LIMITS.treeEntries, limits.entries - entries - 1),
+      );
+    } catch (error) {
+      if (error instanceof WorkspaceObservatoryDeniedError && error.reason === "timed-out")
+        throw error;
+      truncated = true;
+      continue;
+    }
+    entries += listing.scannedEntries;
+    truncated ||= listing.truncated;
+    redacted ||= listing.redacted;
+    for (const entry of listing.entries) {
+      checkDeadline();
+      if (entry.kind === "directory") {
+        if (current.depth >= limits.depth || scheduled >= limits.directories) {
+          truncated = true;
+          continue;
+        }
+        scheduled++;
+        queue.push({ relativePath: entry.relativePath, depth: current.depth + 1 });
+        continue;
+      }
+      if (probes >= limits.headerProbes || databases.length >= limits.results) {
+        truncated = true;
+        continue;
+      }
+      probes++;
+      try {
+        if (await hasSqliteHeader(root, entry.relativePath))
+          databases.push({ relativePath: entry.relativePath });
+      } catch {
+        truncated = true;
+      }
+    }
+  }
+  checkDeadline();
+  return { databases, truncated, redacted };
 }
 
 async function readBoundedFile(
@@ -623,6 +728,22 @@ export function makeWorkspaceObservatory(
   });
 
   const decodeTablesResult = Schema.decodeUnknownEffect(WorkspaceObservatoryTablesResult);
+  const databases: WorkspaceObservatoryShape["databases"] = Effect.fn(
+    "WorkspaceObservatory.databases",
+  )(function* (input) {
+    const root = yield* realRootFor(input.projectId);
+    const result = yield* Effect.tryPromise({
+      try: () => admission.run(() => discoverDatabases(root)),
+      catch: denied,
+    });
+    const currentRoot = yield* realRootFor(input.projectId);
+    if (currentRoot !== root)
+      return yield* new WorkspaceObservatoryDeniedError({
+        reason: "changed-while-reading",
+        detail: "The project changed while finding databases.",
+      });
+    return result;
+  });
   const decodeRowsResult = Schema.decodeUnknownEffect(WorkspaceObservatoryRowsResult);
   const databasePreview = (
     input: { projectId: ProjectId; relativePath: string },
@@ -691,7 +812,7 @@ export function makeWorkspaceObservatory(
       }),
       Effect.mapError(denied),
     );
-  return { tree, readFile, tables, rows } satisfies WorkspaceObservatoryShape;
+  return { tree, readFile, tables, rows, databases } satisfies WorkspaceObservatoryShape;
 }
 
 /**

@@ -38,6 +38,8 @@ import type {
   WorkspaceObservatoryTablesResult,
   WorkspaceObservatoryRowsInput,
   WorkspaceObservatoryRowsResult,
+  WorkspaceObservatoryDatabasesInput,
+  WorkspaceObservatoryDatabasesResult,
 } from "./workspaceObservatory.ts";
 import type { ProviderInstanceId } from "./providerInstance.ts";
 import type {
@@ -507,6 +509,9 @@ export interface EnvironmentApi {
   workspaceObservatory?: {
     tables: (input: WorkspaceObservatoryTablesInput) => Promise<WorkspaceObservatoryTablesResult>;
     rows: (input: WorkspaceObservatoryRowsInput) => Promise<WorkspaceObservatoryRowsResult>;
+    databases: (
+      input: WorkspaceObservatoryDatabasesInput,
+    ) => Promise<WorkspaceObservatoryDatabasesResult>;
     tree: (input: WorkspaceObservatoryTreeInput) => Promise<WorkspaceObservatoryTreeResult>;
     readFile: (input: WorkspaceObservatoryFileInput) => Promise<WorkspaceObservatoryFileResult>;
   };
