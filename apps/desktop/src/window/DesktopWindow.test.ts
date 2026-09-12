@@ -3,9 +3,15 @@ import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as PlatformError from "effect/PlatformError";
 import * as Ref from "effect/Ref";
 
 import type * as Electron from "electron";
+
+import {
+  DEFAULT_DESKTOP_WINDOW_OPACITY,
+  type DesktopWindowOpacityPreference,
+} from "@cafecode/contracts";
 import { vi } from "vitest";
 
 import * as DesktopAssets from "../app/DesktopAssets.ts";
@@ -17,6 +23,7 @@ import * as ElectronShell from "../electron/ElectronShell.ts";
 import * as ElectronTheme from "../electron/ElectronTheme.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as DesktopServerExposure from "../backend/DesktopServerExposure.ts";
+import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopIpc from "../ipc/DesktopIpc.ts";
 import * as DesktopWindow from "./DesktopWindow.ts";
 
@@ -61,6 +68,7 @@ function makeFakeBrowserWindow() {
     once: vi.fn(),
     restore: vi.fn(),
     setBackgroundColor: vi.fn(),
+    setOpacity: vi.fn(),
     setTitle: vi.fn(),
     setTitleBarOverlay: vi.fn(),
     show: vi.fn(),
@@ -70,6 +78,7 @@ function makeFakeBrowserWindow() {
   return {
     window: window as unknown as Electron.BrowserWindow,
     loadURL: window.loadURL,
+    setOpacity: window.setOpacity,
     openDevTools: webContents.openDevTools,
     setPermissionCheckHandler,
     setPermissionRequestHandler,
@@ -142,6 +151,7 @@ function makeTestLayer(input: {
   readonly window: Electron.BrowserWindow;
   readonly createCount: Ref.Ref<number>;
   readonly mainWindow: Ref.Ref<Option.Option<Electron.BrowserWindow>>;
+  readonly settingsLayer?: Layer.Layer<DesktopAppSettings.DesktopAppSettings>;
 }) {
   const electronWindowLayer = Layer.succeed(ElectronWindow.ElectronWindow, {
     create: () => Ref.update(input.createCount, (count) => count + 1).pipe(Effect.as(input.window)),
@@ -168,6 +178,7 @@ function makeTestLayer(input: {
         electronThemeLayer,
         electronWindowLayer,
         desktopIpcLayer,
+        input.settingsLayer ?? DesktopAppSettings.layerTest(),
       ),
     ),
   );
@@ -270,5 +281,230 @@ describe("DesktopWindow", () => {
         assert.deepStrictEqual(cameraResult.mock.calls, [[false]]);
       }).pipe(Effect.provide(layer));
     }),
+  );
+});
+
+/**
+ * These suites drive the production DesktopWindow service with a mocked
+ * Electron window. They assert the native `setOpacity` calls, so no test can
+ * pass on renderer-only styling.
+ */
+const persistingSettingsLayer = (initial?: Partial<DesktopAppSettings.DesktopSettings>) =>
+  DesktopAppSettings.layerTest({
+    ...DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS,
+    ...initial,
+  });
+
+function failingSettingsLayer(settings: DesktopAppSettings.DesktopSettings) {
+  const writes: DesktopWindowOpacityPreference[] = [];
+  const layer = Layer.succeed(DesktopAppSettings.DesktopAppSettings, {
+    get: Effect.succeed(settings),
+    load: Effect.succeed(settings),
+    setServerExposureMode: () => Effect.die("unexpected setServerExposureMode"),
+    setServerHttpsEnabled: () => Effect.die("unexpected setServerHttpsEnabled"),
+    setUpdateChannel: () => Effect.die("unexpected setUpdateChannel"),
+    setWindowOpacityPreference: (preference) => {
+      writes.push(preference);
+      return Effect.fail(
+        new DesktopAppSettings.DesktopSettingsWriteError({
+          cause: new PlatformError.PlatformError(
+            new PlatformError.SystemError({
+              _tag: "PermissionDenied",
+              module: "FileSystem",
+              method: "writeFileString",
+              description: "settings file is read-only",
+            }),
+          ),
+        }),
+      );
+    },
+  } satisfies DesktopAppSettings.DesktopAppSettingsShape);
+  return { layer, writes };
+}
+
+describe("DesktopWindow whole-window opacity", () => {
+  const withWindow = <A, E>(
+    body: (
+      fake: ReturnType<typeof makeFakeBrowserWindow>,
+    ) => Effect.Effect<A, E, DesktopWindow.DesktopWindow>,
+    settingsLayer?: Layer.Layer<DesktopAppSettings.DesktopAppSettings>,
+  ) =>
+    Effect.gen(function* () {
+      const fakeWindow = makeFakeBrowserWindow();
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const layer = makeTestLayer({
+        window: fakeWindow.window,
+        createCount,
+        mainWindow,
+        ...(settingsLayer === undefined ? {} : { settingsLayer }),
+      });
+      return yield* body(fakeWindow).pipe(Effect.provide(layer));
+    });
+
+  it("reports an unsupported platform explicitly and never applies opacity", () => {
+    assert.deepStrictEqual(DesktopWindow.resolveDesktopWindowOpacityCapability("linux", false), {
+      supported: false,
+      reason: "unsupported-platform",
+    });
+    assert.deepStrictEqual(DesktopWindow.resolveDesktopWindowOpacityCapability("win32", false), {
+      supported: true,
+    });
+    assert.deepStrictEqual(DesktopWindow.resolveDesktopWindowOpacityCapability("win32", true), {
+      supported: false,
+      reason: "release-not-validated",
+    });
+    assert.deepStrictEqual(DesktopWindow.resolveDesktopWindowOpacityCapability("darwin", true), {
+      supported: false,
+      reason: "release-not-validated",
+    });
+  });
+
+  it.effect("defaults to a fully opaque supported window", () =>
+    withWindow((fakeWindow) =>
+      Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        const state = yield* desktopWindow.getWindowOpacityState;
+        assert.deepStrictEqual(state, {
+          supported: true,
+          enabled: false,
+          opacity: DEFAULT_DESKTOP_WINDOW_OPACITY,
+          effectiveOpacity: 1,
+          reason: null,
+        });
+        assert.equal(fakeWindow.setOpacity.mock.calls.length, 0);
+      }),
+    ),
+  );
+
+  it.effect("applies the native opacity and persists only after the native call succeeds", () =>
+    withWindow((fakeWindow) =>
+      Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        const state = yield* desktopWindow.setWindowOpacityPreference({
+          enabled: true,
+          opacity: 0.8,
+        });
+        assert.deepStrictEqual(state, {
+          supported: true,
+          enabled: true,
+          opacity: 0.8,
+          effectiveOpacity: 0.8,
+          reason: null,
+        });
+        assert.deepStrictEqual(fakeWindow.setOpacity.mock.calls, [[0.8]]);
+        assert.deepStrictEqual(yield* desktopWindow.getWindowOpacityState, state);
+      }),
+    ),
+  );
+
+  it.effect("restores an opaque window and a safe preference when the native call fails", () =>
+    withWindow((fakeWindow) =>
+      Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        const setOpacity = fakeWindow.setOpacity as unknown as ReturnType<typeof vi.fn>;
+        setOpacity.mockImplementationOnce(() => {
+          throw new Error("native opacity unavailable");
+        });
+
+        const state = yield* desktopWindow.setWindowOpacityPreference({
+          enabled: true,
+          opacity: 0.7,
+        });
+        assert.deepStrictEqual(state, {
+          supported: true,
+          enabled: false,
+          opacity: 1,
+          effectiveOpacity: 1,
+          reason: "apply-failed",
+        });
+        assert.deepStrictEqual(setOpacity.mock.calls, [[0.7], [1]]);
+      }),
+    ),
+  );
+
+  it.effect("rolls the native window back when the preference cannot be persisted", () => {
+    const failing = failingSettingsLayer({
+      ...DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS,
+      windowOpacityEnabled: true,
+      windowOpacity: 0.9,
+    });
+    return withWindow(
+      (fakeWindow) =>
+        Effect.gen(function* () {
+          const desktopWindow = yield* DesktopWindow.DesktopWindow;
+          const state = yield* desktopWindow.setWindowOpacityPreference({
+            enabled: true,
+            opacity: 0.7,
+          });
+          assert.deepStrictEqual(state, {
+            supported: true,
+            enabled: true,
+            opacity: 0.9,
+            effectiveOpacity: 0.9,
+            reason: "persistence-failed",
+          });
+          assert.deepStrictEqual(fakeWindow.setOpacity.mock.calls, [[0.7], [0.9]]);
+        }),
+      failing.layer,
+    );
+  });
+
+  it.effect("reports an unknown live window when the rollback also fails", () => {
+    const failing = failingSettingsLayer(DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS);
+    return withWindow(
+      (fakeWindow) =>
+        Effect.gen(function* () {
+          const desktopWindow = yield* DesktopWindow.DesktopWindow;
+          const setOpacity = fakeWindow.setOpacity as unknown as ReturnType<typeof vi.fn>;
+          setOpacity
+            .mockImplementationOnce(() => undefined)
+            .mockImplementationOnce(() => {
+              throw new Error("native rollback failed");
+            });
+
+          const state = yield* desktopWindow.setWindowOpacityPreference({
+            enabled: true,
+            opacity: 0.7,
+          });
+          assert.equal(state.effectiveOpacity, null);
+          assert.equal(state.reason, "safe-reset-failed");
+          assert.deepStrictEqual(yield* desktopWindow.getWindowOpacityState, state);
+        }),
+      failing.layer,
+    );
+  });
+
+  it.effect("serializes concurrent preference updates", () =>
+    withWindow((fakeWindow) =>
+      Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        yield* Effect.all(
+          [
+            desktopWindow.setWindowOpacityPreference({ enabled: true, opacity: 0.7 }),
+            desktopWindow.setWindowOpacityPreference({ enabled: true, opacity: 0.9 }),
+            desktopWindow.setWindowOpacityPreference({ enabled: false, opacity: 0.9 }),
+          ],
+          { concurrency: "unbounded" },
+        );
+        const applied = fakeWindow.setOpacity.mock.calls.map(([value]) => value);
+        assert.equal(applied.length, 3);
+        // The last accepted request owns the final native and persisted state.
+        const state = yield* desktopWindow.getWindowOpacityState;
+        assert.equal(state.effectiveOpacity, applied.at(-1));
+      }),
+    ),
+  );
+
+  it.effect("applies the persisted opacity to a newly created window", () =>
+    withWindow(
+      (fakeWindow) =>
+        Effect.gen(function* () {
+          const desktopWindow = yield* DesktopWindow.DesktopWindow;
+          yield* desktopWindow.handleBackendReady;
+          assert.deepStrictEqual(fakeWindow.setOpacity.mock.calls, [[0.75]]);
+        }),
+      persistingSettingsLayer({ windowOpacityEnabled: true, windowOpacity: 0.75 }),
+    ),
   );
 });

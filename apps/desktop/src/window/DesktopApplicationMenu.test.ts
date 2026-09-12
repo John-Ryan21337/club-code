@@ -74,6 +74,8 @@ const makeDesktopWindowLayer = (selectedAction: Deferred.Deferred<string>) =>
     handleBackendReady: Effect.void,
     dispatchMenuAction: (action) => Deferred.succeed(selectedAction, action).pipe(Effect.asVoid),
     syncAppearance: Effect.void,
+    getWindowOpacityState: Effect.die("unexpected getWindowOpacityState"),
+    setWindowOpacityPreference: () => Effect.die("unexpected setWindowOpacityPreference"),
   } satisfies DesktopWindow.DesktopWindowShape);
 
 const makeElectronMenuLayer = (

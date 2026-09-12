@@ -154,6 +154,8 @@ function makeLifecycleHarness(options?: {
       handleBackendReady: Effect.void,
       dispatchMenuAction: () => Effect.void,
       syncAppearance: Effect.void,
+      getWindowOpacityState: Effect.die("unexpected getWindowOpacityState"),
+      setWindowOpacityPreference: () => Effect.die("unexpected setWindowOpacityPreference"),
     } satisfies DesktopWindow.DesktopWindowShape);
 
     const desktopEnvironmentLayer = Layer.succeed(DesktopEnvironment.DesktopEnvironment, {

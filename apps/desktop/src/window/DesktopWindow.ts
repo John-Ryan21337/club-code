@@ -4,8 +4,14 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
+import * as Semaphore from "effect/Semaphore";
 
 import type * as Electron from "electron";
+
+import type {
+  DesktopWindowOpacityPreference,
+  DesktopWindowOpacityState,
+} from "@cafecode/contracts";
 
 import { stopStartupCpuProfiler } from "@cafecode/shared/startupProfiler";
 import * as DesktopAssets from "../app/DesktopAssets.ts";
@@ -19,11 +25,38 @@ import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as IpcChannels from "../ipc/channels.ts";
 import * as DesktopIpc from "../ipc/DesktopIpc.ts";
 import * as DesktopServerExposure from "../backend/DesktopServerExposure.ts";
+import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 
 const TITLEBAR_HEIGHT = 40;
 const TITLEBAR_COLOR = "#01000000"; // #00000000 does not work correctly on Linux
 const TITLEBAR_LIGHT_SYMBOL_COLOR = "#1f2937";
 const TITLEBAR_DARK_SYMBOL_COLOR = "#f8fafc";
+/**
+ * Packaged artifacts stay fully opaque until native whole-window opacity smoke
+ * evidence is recorded for that platform here. Development builds stay usable
+ * so that validation can be carried out.
+ */
+const VALIDATED_RELEASE_OPACITY_PLATFORMS = new Set<"darwin" | "win32">([]);
+
+export type DesktopWindowOpacityCapability =
+  | { readonly supported: true }
+  | {
+      readonly supported: false;
+      readonly reason: "unsupported-platform" | "release-not-validated";
+    };
+
+export function resolveDesktopWindowOpacityCapability(
+  platform: string,
+  isPackaged: boolean,
+): DesktopWindowOpacityCapability {
+  if (platform !== "darwin" && platform !== "win32") {
+    return { supported: false, reason: "unsupported-platform" };
+  }
+  if (isPackaged && !VALIDATED_RELEASE_OPACITY_PLATFORMS.has(platform)) {
+    return { supported: false, reason: "release-not-validated" };
+  }
+  return { supported: true };
+}
 
 /**
  * Electron does not apply Chromium's normal permission defaults unless the
@@ -121,6 +154,7 @@ type WindowTitleBarOptions = Pick<
 >;
 
 type DesktopWindowRuntimeServices =
+  | DesktopAppSettings.DesktopAppSettings
   | DesktopEnvironment.DesktopEnvironment
   | DesktopAssets.DesktopAssets
   | DesktopServerExposure.DesktopServerExposure
@@ -152,6 +186,10 @@ export interface DesktopWindowShape {
   readonly handleBackendReady: Effect.Effect<void, DesktopWindowError>;
   readonly dispatchMenuAction: (action: string) => Effect.Effect<void, DesktopWindowError>;
   readonly syncAppearance: Effect.Effect<void>;
+  readonly getWindowOpacityState: Effect.Effect<DesktopWindowOpacityState>;
+  readonly setWindowOpacityPreference: (
+    preference: DesktopWindowOpacityPreference,
+  ) => Effect.Effect<DesktopWindowOpacityState>;
 }
 
 export class DesktopWindow extends Context.Service<DesktopWindow, DesktopWindowShape>()(
@@ -220,6 +258,33 @@ function syncWindowAppearance(
   });
 }
 
+class DesktopWindowOpacityApplyError extends Data.TaggedError("DesktopWindowOpacityApplyError")<{
+  readonly cause: unknown;
+}> {}
+
+function applyWindowOpacity(
+  window: Electron.BrowserWindow,
+  opacity: number,
+): Effect.Effect<void, DesktopWindowOpacityApplyError> {
+  return Effect.try({
+    try: () => {
+      if (!window.isDestroyed()) {
+        window.setOpacity(opacity);
+      }
+    },
+    catch: (cause) => new DesktopWindowOpacityApplyError({ cause }),
+  });
+}
+
+function effectSucceeded<E, R>(effect: Effect.Effect<unknown, E, R>) {
+  return effect.pipe(
+    Effect.match({
+      onFailure: () => false,
+      onSuccess: () => true,
+    }),
+  );
+}
+
 type RevealSubscription = (listener: () => void) => void;
 
 function bindFirstRevealTrigger(
@@ -245,10 +310,118 @@ const make = Effect.gen(function* () {
   const electronTheme = yield* ElectronTheme.ElectronTheme;
   const electronWindow = yield* ElectronWindow.ElectronWindow;
   const desktopIpc = yield* DesktopIpc.DesktopIpc;
+  const desktopSettings = yield* DesktopAppSettings.DesktopAppSettings;
   const serverExposure = yield* DesktopServerExposure.DesktopServerExposure;
   const state = yield* DesktopState.DesktopState;
   const context = yield* Effect.context<DesktopWindowRuntimeServices>();
   const runPromise = Effect.runPromiseWith(context);
+  const opacityCapability = resolveDesktopWindowOpacityCapability(
+    environment.platform,
+    environment.isPackaged,
+  );
+  // Every native opacity write and its persistence run under one permit, so
+  // concurrent renderer requests cannot interleave an apply with a rollback.
+  const opacityMutex = yield* Semaphore.make(1);
+  const observedOpacityState = yield* Ref.make<DesktopWindowOpacityState | null>(null);
+
+  const opacityState = (
+    settings: DesktopAppSettings.DesktopSettings,
+    reason: DesktopWindowOpacityState["reason"] = null,
+  ): DesktopWindowOpacityState => ({
+    supported: opacityCapability.supported,
+    enabled: opacityCapability.supported && settings.windowOpacityEnabled,
+    opacity: opacityCapability.supported ? settings.windowOpacity : 1,
+    effectiveOpacity:
+      opacityCapability.supported && settings.windowOpacityEnabled ? settings.windowOpacity : 1,
+    reason: opacityCapability.supported ? reason : opacityCapability.reason,
+  });
+
+  const applyAllWindowOpacity = (opacity: number) =>
+    electronWindow.syncAllAppearance((window) => applyWindowOpacity(window, opacity));
+
+  const getWindowOpacityState = opacityMutex.withPermits(1)(
+    Effect.gen(function* () {
+      const observed = yield* Ref.get(observedOpacityState);
+      return observed ?? opacityState(yield* desktopSettings.get);
+    }),
+  );
+
+  const setWindowOpacityPreferenceUnlocked = Effect.fn("desktop.window.setWindowOpacityPreference")(
+    function* (preference: DesktopWindowOpacityPreference) {
+      const previous = yield* desktopSettings.get;
+      if (!opacityCapability.supported) {
+        return opacityState(previous);
+      }
+
+      const proposedEffectiveOpacity = preference.enabled ? preference.opacity : 1;
+      if (!(yield* effectSucceeded(applyAllWindowOpacity(proposedEffectiveOpacity)))) {
+        // The native write failed. Return to opaque and store the safe state
+        // instead of persisting a preference the windows never accepted.
+        const resetSucceeded = yield* effectSucceeded(applyAllWindowOpacity(1));
+        const safeSettingsSucceeded = yield* effectSucceeded(
+          desktopSettings.setWindowOpacityPreference({ enabled: false, opacity: 1 }),
+        );
+        const recoveredSettings = yield* desktopSettings.get;
+        return {
+          ...opacityState(recoveredSettings),
+          effectiveOpacity: resetSucceeded ? 1 : null,
+          reason: resetSucceeded && safeSettingsSucceeded ? "apply-failed" : "safe-reset-failed",
+        } satisfies DesktopWindowOpacityState;
+      }
+
+      if (yield* effectSucceeded(desktopSettings.setWindowOpacityPreference(preference))) {
+        return opacityState(yield* desktopSettings.get);
+      }
+
+      // Persistence failed after a successful native write. Undo the native
+      // change so the live window matches what is actually stored on disk.
+      const previousEffectiveOpacity = previous.windowOpacityEnabled ? previous.windowOpacity : 1;
+      const rollbackSucceeded = yield* effectSucceeded(
+        applyAllWindowOpacity(previousEffectiveOpacity),
+      );
+      return {
+        ...opacityState(previous),
+        effectiveOpacity: rollbackSucceeded ? previousEffectiveOpacity : null,
+        reason: rollbackSucceeded ? "persistence-failed" : "safe-reset-failed",
+      } satisfies DesktopWindowOpacityState;
+    },
+  );
+
+  const setWindowOpacityPreference = (preference: DesktopWindowOpacityPreference) =>
+    opacityMutex.withPermits(1)(
+      setWindowOpacityPreferenceUnlocked(preference).pipe(
+        Effect.tap((next) => Ref.set(observedOpacityState, next)),
+      ),
+    );
+
+  const prepareWindowOpacity = (window: Electron.BrowserWindow) =>
+    Effect.gen(function* () {
+      if (!opacityCapability.supported) {
+        return;
+      }
+      const persistedSettings = yield* desktopSettings.get;
+      const effectiveOpacity = persistedSettings.windowOpacityEnabled
+        ? persistedSettings.windowOpacity
+        : 1;
+      if (yield* effectSucceeded(applyWindowOpacity(window, effectiveOpacity))) {
+        return;
+      }
+
+      const resetSucceeded = yield* effectSucceeded(applyAllWindowOpacity(1));
+      const safeSettingsSucceeded = yield* effectSucceeded(
+        desktopSettings.setWindowOpacityPreference({ enabled: false, opacity: 1 }),
+      );
+      yield* Ref.set(observedOpacityState, {
+        ...opacityState(yield* desktopSettings.get),
+        effectiveOpacity: resetSucceeded ? 1 : null,
+        reason: resetSucceeded && safeSettingsSucceeded ? "apply-failed" : "safe-reset-failed",
+      });
+      yield* logWindowWarning(
+        resetSucceeded && safeSettingsSucceeded
+          ? "persisted window opacity could not be applied; restored opaque"
+          : "persisted window opacity recovery could not be confirmed",
+      );
+    });
 
   const createWindow = Effect.fn("desktop.window.createWindow")(function* (
     backendHttpUrl: URL,
@@ -274,6 +447,7 @@ const make = Effect.gen(function* () {
         sandbox: true,
       },
     });
+    yield* opacityMutex.withPermits(1)(prepareWindowOpacity(window));
     yield* desktopIpc.trustWebContents(window.webContents);
 
     const rendererUrl = environment.isDevelopment
@@ -372,7 +546,11 @@ const make = Effect.gen(function* () {
       revealSubscribers.push((fire) => window.webContents.once("did-finish-load", fire));
     }
     bindFirstRevealTrigger(revealSubscribers, () => {
-      void runPromise(electronWindow.reveal(window));
+      void runPromise(
+        opacityMutex.withPermits(1)(
+          prepareWindowOpacity(window).pipe(Effect.andThen(electronWindow.reveal(window))),
+        ),
+      );
       void stopStartupCpuProfiler("desktop-window-revealed");
     });
 
@@ -462,6 +640,8 @@ const make = Effect.gen(function* () {
         syncWindowAppearance(window, shouldUseDarkColors),
       );
     }).pipe(Effect.withSpan("desktop.window.syncAppearance")),
+    getWindowOpacityState,
+    setWindowOpacityPreference,
   });
 });
 

@@ -5,6 +5,8 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 
+import { DEFAULT_DESKTOP_WINDOW_OPACITY } from "@cafecode/contracts";
+
 import * as DesktopConfig from "../app/DesktopConfig.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import {
@@ -19,6 +21,8 @@ const DesktopSettingsPatch = Schema.Struct({
   serverHttpsEnabled: Schema.optionalKey(Schema.Boolean),
   updateChannel: Schema.optionalKey(Schema.Literals(["latest", "nightly"])),
   updateChannelConfiguredByUser: Schema.optionalKey(Schema.Boolean),
+  windowOpacityEnabled: Schema.optionalKey(Schema.Unknown),
+  windowOpacity: Schema.optionalKey(Schema.Unknown),
 });
 
 const decodeDesktopSettingsPatch = Schema.decodeEffect(Schema.fromJsonString(DesktopSettingsPatch));
@@ -92,6 +96,8 @@ describe("DesktopSettings", () => {
       serverHttpsEnabled: true,
       updateChannel: "nightly",
       updateChannelConfiguredByUser: false,
+      windowOpacityEnabled: false,
+      windowOpacity: DEFAULT_DESKTOP_WINDOW_OPACITY,
     } satisfies DesktopSettingsValue);
   });
 
@@ -111,6 +117,8 @@ describe("DesktopSettings", () => {
           serverHttpsEnabled: false,
           updateChannel: "latest",
           updateChannelConfiguredByUser: true,
+          windowOpacityEnabled: false,
+          windowOpacity: DEFAULT_DESKTOP_WINDOW_OPACITY,
         } satisfies DesktopSettingsValue);
 
         const exposure = yield* settings.setServerExposureMode("local-only");
@@ -181,6 +189,8 @@ describe("DesktopSettings", () => {
           serverHttpsEnabled: true,
           updateChannel: "latest",
           updateChannelConfiguredByUser: false,
+          windowOpacityEnabled: false,
+          windowOpacity: DEFAULT_DESKTOP_WINDOW_OPACITY,
         } satisfies DesktopSettingsValue);
       }),
     ),
@@ -238,6 +248,8 @@ describe("DesktopSettings", () => {
           serverHttpsEnabled: true,
           updateChannel: "nightly",
           updateChannelConfiguredByUser: false,
+          windowOpacityEnabled: false,
+          windowOpacity: DEFAULT_DESKTOP_WINDOW_OPACITY,
         } satisfies DesktopSettingsValue);
       }),
       { appVersion: "0.0.17-nightly.20260415.1" },
@@ -259,9 +271,96 @@ describe("DesktopSettings", () => {
           serverHttpsEnabled: true,
           updateChannel: "latest",
           updateChannelConfiguredByUser: true,
+          windowOpacityEnabled: false,
+          windowOpacity: DEFAULT_DESKTOP_WINDOW_OPACITY,
         } satisfies DesktopSettingsValue);
       }),
       { appVersion: "0.0.17-nightly.20260415.1" },
+    ),
+  );
+});
+
+describe("DesktopSettings window opacity", () => {
+  it.effect("retains an enabled default opacity after a sparse save and reload", () =>
+    withSettings(
+      Effect.gen(function* () {
+        const settings = yield* DesktopAppSettings.DesktopAppSettings;
+        yield* settings.setWindowOpacityPreference({
+          enabled: true,
+          opacity: DEFAULT_DESKTOP_WINDOW_OPACITY,
+        });
+        const reloaded = yield* settings.load;
+        assert.isTrue(reloaded.windowOpacityEnabled);
+        assert.equal(reloaded.windowOpacity, DEFAULT_DESKTOP_WINDOW_OPACITY);
+      }),
+    ),
+  );
+  it.effect("defaults to a disabled, fully opaque preference", () =>
+    withSettings(
+      Effect.gen(function* () {
+        const settings = yield* DesktopAppSettings.DesktopAppSettings;
+        const loaded = yield* settings.load;
+        assert.isFalse(loaded.windowOpacityEnabled);
+        assert.equal(loaded.windowOpacity, DEFAULT_DESKTOP_WINDOW_OPACITY);
+      }),
+    ),
+  );
+
+  it.effect("persists a bounded opacity preference sparsely", () =>
+    withSettings(
+      Effect.gen(function* () {
+        const environment = yield* DesktopEnvironment.DesktopEnvironment;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const settings = yield* DesktopAppSettings.DesktopAppSettings;
+
+        const change = yield* settings.setWindowOpacityPreference({
+          enabled: true,
+          opacity: 0.8,
+        });
+        assert.isTrue(change.changed);
+        assert.equal(change.settings.windowOpacity, 0.8);
+
+        const persisted = yield* decodeDesktopSettingsPatch(
+          yield* fileSystem.readFileString(environment.desktopSettingsPath),
+        );
+        assert.deepEqual(persisted, {
+          windowOpacityEnabled: true,
+          windowOpacity: 0.8,
+        } satisfies typeof DesktopSettingsPatch.Type);
+
+        const repeated = yield* settings.setWindowOpacityPreference({
+          enabled: true,
+          opacity: 0.8,
+        });
+        assert.isFalse(repeated.changed);
+      }),
+    ),
+  );
+
+  it.effect("recovers to opaque when the stored opacity is out of bounds or corrupt", () =>
+    withSettings(
+      Effect.gen(function* () {
+        const settings = yield* DesktopAppSettings.DesktopAppSettings;
+
+        yield* writeSettingsPatch({
+          serverExposureMode: "network-accessible",
+          windowOpacityEnabled: true,
+          windowOpacity: 0.2,
+        });
+        const outOfBounds = yield* settings.load;
+        assert.isFalse(outOfBounds.windowOpacityEnabled);
+        assert.equal(outOfBounds.windowOpacity, DEFAULT_DESKTOP_WINDOW_OPACITY);
+        // An unrelated desktop setting must survive the opacity recovery.
+        assert.equal(outOfBounds.serverExposureMode, "network-accessible");
+
+        yield* writeSettingsPatch({
+          windowOpacityEnabled: true,
+          windowOpacity: "0.8",
+        });
+        const corrupt = yield* settings.load;
+        assert.isFalse(corrupt.windowOpacityEnabled);
+        assert.equal(corrupt.windowOpacity, DEFAULT_DESKTOP_WINDOW_OPACITY);
+      }),
     ),
   );
 });
