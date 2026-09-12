@@ -214,6 +214,8 @@ export const ServerProviderThreadGoalSupport = Schema.Literals(["supported", "un
 export type ServerProviderThreadGoalSupport = typeof ServerProviderThreadGoalSupport.Type;
 
 export const ServerProviderRuntimeCapabilities = Schema.Struct({
+  /** Set by the live snapshot source; absent means no bounded polling capability. */
+  accountUsage: Schema.optionalKey(Schema.Boolean),
   liveSteer: ServerProviderLiveSteerSupport.pipe(
     Schema.withDecodingDefault(Effect.succeed("unsupported" as const)),
   ),

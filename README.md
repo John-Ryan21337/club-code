@@ -397,6 +397,8 @@ yarn typecheck
 yarn test
 ```
 
+Optional account counters and advice: [Provider usage and pacing](docs/provider-usage-pacing.md).
+
 ## License
 
 Cafe Code is AGPL-3.0-or-later.

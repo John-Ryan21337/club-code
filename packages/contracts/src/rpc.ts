@@ -213,9 +213,10 @@ export const WsServerRefreshProvidersRpc = Rpc.make(WS_METHODS.serverRefreshProv
     /**
      * `models` invokes only the provider's bounded model-catalogue path. The
      * default `full` behavior preserves the existing installation/auth/status
-     * refresh contract.
+     * refresh contract. `usage` invokes only the existing usage-only path for
+     * an exact instance; an absent instance returns cached snapshots.
      */
-    scope: Schema.optional(Schema.Literals(["full", "models"])),
+    scope: Schema.optional(Schema.Literals(["full", "models", "usage"])),
   }),
   success: ServerProviderUpdatedPayload,
 });
