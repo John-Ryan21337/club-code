@@ -4644,6 +4644,26 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("returns only bounded provider-interpretation fields over the real websocket", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const instanceId = ProviderInstanceId.make("missing-claude");
+      const result = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.serverInterpretAtmosphereCommand]({
+            instanceId,
+            model: "claude-test",
+            request: "synthetic private request",
+            expectedAuth: { status: "authenticated" },
+            expectedConfig: { driver: ProviderDriverKind.make("claudeAgent"), config: {} },
+          }),
+        ),
+      );
+      assert.deepStrictEqual(result, { instanceId, model: "claude-test", status: "stale" });
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   for (const usageDriver of ["codex", "grok"] as const) {
     it.effect(
       `does not refresh ${usageDriver} account usage before a dispatched prompt settles`,

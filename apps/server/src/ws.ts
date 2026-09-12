@@ -61,6 +61,7 @@ import { ProviderService } from "./provider/Services/ProviderService.ts";
 import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
 import * as ProviderLoginLauncher from "./provider/providerLoginLauncher.ts";
 import { checkProviderAccess } from "./provider/providerAccessPreflight.ts";
+import { interpretProviderAtmosphere } from "./provider/providerAtmosphereInterpreter.ts";
 import { ServerLifecycleEvents } from "./serverLifecycleEvents.ts";
 import { UsageStatsService } from "./usageStats/Services/UsageStatsService.ts";
 import { ServerRuntimeStartup } from "./serverRuntimeStartup.ts";
@@ -1041,6 +1042,16 @@ const makeWsRpcLayer = (
             {
               "rpc.aggregate": "server",
             },
+          ),
+        [WS_METHODS.serverInterpretAtmosphereCommand]: (input) =>
+          interpretProviderAtmosphere(input).pipe(
+            Effect.catchCause(() =>
+              Effect.succeed({
+                instanceId: input.instanceId,
+                model: input.model,
+                status: "unavailable" as const,
+              }),
+            ),
           ),
         [WS_METHODS.serverLoginProvider]: (input) =>
           observeRpcEffect(

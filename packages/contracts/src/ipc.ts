@@ -40,6 +40,8 @@ import type {
   ServerProviderLoginResult,
   ServerProviderAccessInput,
   ServerProviderAccessResult,
+  ServerAtmosphereInterpretInput,
+  ServerAtmosphereInterpretResult,
   ServerProviderUpdateInput,
   ServerProviderRuntimeRestartInput,
   ServerProviderRuntimeRestartResult,
@@ -447,6 +449,9 @@ export interface LocalApi {
     }) => Promise<ServerProviderUpdatedPayload>;
     loginProvider: (input: ServerProviderLoginInput) => Promise<ServerProviderLoginResult>;
     checkProviderAccess: (input: ServerProviderAccessInput) => Promise<ServerProviderAccessResult>;
+    interpretAtmosphereCommand: (
+      input: ServerAtmosphereInterpretInput,
+    ) => Promise<ServerAtmosphereInterpretResult>;
     updateProvider: (input: ServerProviderUpdateInput) => Promise<ServerProviderUpdatedPayload>;
     restartProviderRuntime: (
       input: ServerProviderRuntimeRestartInput,

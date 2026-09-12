@@ -18,7 +18,11 @@ import {
 } from "./keybindings.ts";
 import { EditorId, TerminalAvailability } from "./editor.ts";
 import { ModelCapabilities } from "./model.ts";
-import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
+import {
+  ProviderDriverKind,
+  ProviderInstanceId,
+  ProviderInstanceConfig,
+} from "./providerInstance.ts";
 import { ClientSettingsSchema, ServerSettings } from "./settings.ts";
 import { ProviderPipelineDiagnostics } from "./providerPipelineDiagnostics.ts";
 
@@ -82,6 +86,22 @@ export const ServerProviderAuth = Schema.Struct({
   email: Schema.optional(TrimmedNonEmptyString),
 });
 export type ServerProviderAuth = typeof ServerProviderAuth.Type;
+
+export const ServerAtmosphereInterpretInput = Schema.Struct({
+  ...ServerProviderAccessInput.fields,
+  request: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(500)),
+  expectedAuth: ServerProviderAuth,
+  expectedConfig: ProviderInstanceConfig,
+});
+export type ServerAtmosphereInterpretInput = typeof ServerAtmosphereInterpretInput.Type;
+
+export const ServerAtmosphereInterpretResult = Schema.Struct({
+  instanceId: ProviderInstanceId,
+  model: Schema.String.check(Schema.isMaxLength(256)),
+  status: Schema.Literals(["completed", "unsupported", "unavailable", "stale", "busy"]),
+  proposal: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(4096))),
+});
+export type ServerAtmosphereInterpretResult = typeof ServerAtmosphereInterpretResult.Type;
 
 export const ServerProviderAuthActions = Schema.Struct({
   login: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),

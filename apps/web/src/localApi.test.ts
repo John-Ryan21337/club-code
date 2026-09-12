@@ -77,6 +77,7 @@ const rpcClientMock = {
     refreshProviders: vi.fn(),
     loginProvider: vi.fn(),
     checkProviderAccess: vi.fn(),
+    interpretAtmosphereCommand: vi.fn(),
     updateProvider: vi.fn(),
     restartProviderRuntime: vi.fn(),
     openSystemPromptFile: vi.fn(),

@@ -68,6 +68,8 @@ import {
   ServerConfig,
   ServerProviderAccessInput,
   ServerProviderAccessResult,
+  ServerAtmosphereInterpretInput,
+  ServerAtmosphereInterpretResult,
   ServerProviderLoginError,
   ServerProviderLoginInput,
   ServerProviderLoginResult,
@@ -147,6 +149,7 @@ export const WS_METHODS = {
   serverGetConfig: "server.getConfig",
   serverRefreshProviders: "server.refreshProviders",
   serverCheckProviderAccess: "server.checkProviderAccess",
+  serverInterpretAtmosphereCommand: "server.interpretAtmosphereCommand",
   serverLoginProvider: "server.loginProvider",
   serverUpdateProvider: "server.updateProvider",
   serverRestartProviderRuntime: "server.restartProviderRuntime",
@@ -227,6 +230,14 @@ export const WsServerCheckProviderAccessRpc = Rpc.make(WS_METHODS.serverCheckPro
   payload: ServerProviderAccessInput,
   success: ServerProviderAccessResult,
 });
+
+export const WsServerInterpretAtmosphereRpc = Rpc.make(
+  WS_METHODS.serverInterpretAtmosphereCommand,
+  {
+    payload: ServerAtmosphereInterpretInput,
+    success: ServerAtmosphereInterpretResult,
+  },
+);
 
 export const WsServerUpdateProviderRpc = Rpc.make(WS_METHODS.serverUpdateProvider, {
   payload: ServerProviderUpdateInput,
@@ -596,6 +607,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,
   WsServerCheckProviderAccessRpc,
+  WsServerInterpretAtmosphereRpc,
   WsServerLoginProviderRpc,
   WsServerUpdateProviderRpc,
   WsServerRestartProviderRuntimeRpc,

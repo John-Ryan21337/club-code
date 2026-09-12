@@ -32,6 +32,7 @@ import type * as Schema from "effect/Schema";
 import type * as Scope from "effect/Scope";
 
 import type { TextGenerationShape } from "../textGeneration/TextGeneration.ts";
+import type { AtmosphereInterpretation } from "./ClaudeAtmosphereInterpreter.ts";
 import type { ProviderAdapterError, ProviderDriverError } from "./Errors.ts";
 import type { ProviderAdapterShape } from "./Services/ProviderAdapter.ts";
 import type { ServerProviderShape } from "./Services/ServerProvider.ts";
@@ -63,6 +64,10 @@ export interface ProviderDriverMetadata {
  * state.
  */
 export interface ProviderInstance {
+  readonly interpretAtmosphere?: (
+    request: string,
+    model: string,
+  ) => Effect.Effect<AtmosphereInterpretation>;
   readonly instanceId: ProviderInstanceId;
   readonly driverKind: ProviderDriverKind;
   readonly continuationIdentity: ProviderContinuationIdentity;

@@ -43,6 +43,7 @@ import {
   AtmosphereLmStudioError,
   interpretAtmosphereCommandWithLmStudio,
 } from "../atmosphereLmStudio";
+import { AtmosphereProviderError, interpretAtmosphereWithProvider } from "../atmosphereProvider";
 import { usePrimaryEnvironmentId } from "../environments/primary";
 import { getPrimaryEnvironmentConnection } from "../environments/runtime";
 import {
@@ -161,7 +162,13 @@ function AtmosphereConsolePanel({
   const [input, setInput] = useState("");
   const [status, setStatus] = useState(IDLE_STATUS);
   const [busy, setBusy] = useState(false);
-  const [interpreter, setInterpreter] = useState<"local" | "lm-studio">("local");
+  const [interpreter, setInterpreter] = useState<"local" | "lm-studio" | "provider">("local");
+  const [instanceId, setInstanceId] = useState("");
+  const [model, setModel] = useState("");
+  const providers = (serverConfig?.providers ?? []).filter(
+    (entry) => entry.driver === "claudeAgent" || entry.driver === "codex",
+  );
+  const selectedProvider = providers.find((entry) => entry.instanceId === instanceId);
   const [liveGeometry, setLiveGeometry] = useState<Geometry | null>(null);
 
   const panelRef = useRef<HTMLElement | null>(null);
@@ -173,6 +180,12 @@ function AtmosphereConsolePanel({
   const requestGenerationRef = useRef(0);
   const pendingRequestRef = useRef<number | null>(null);
   const interpreterAbortRef = useRef<AbortController | null>(null);
+  const inputConnectionRef = useRef<ReturnType<typeof getPrimaryEnvironmentConnection> | null>(
+    null,
+  );
+  const providerConnectionRef = useRef<ReturnType<typeof getPrimaryEnvironmentConnection> | null>(
+    null,
+  );
   const environmentRef = useRef<EnvironmentId | null | undefined>(undefined);
 
   const storedGeometry = preferences.geometry;
@@ -235,6 +248,11 @@ function AtmosphereConsolePanel({
     pendingRequestRef.current = null;
     setBusy(false);
     setInput("");
+    setInstanceId("");
+    setModel("");
+    setInterpreter("local");
+    inputConnectionRef.current = null;
+    providerConnectionRef.current = null;
     setStatus(ENVIRONMENT_CHANGED_STATUS);
   }, [primaryEnvironmentId]);
 
@@ -348,7 +366,11 @@ function AtmosphereConsolePanel({
       interpreter === "lm-studio" &&
       parsed.commands.length === 0 &&
       parsed.issues.every((issue) => issue.reason === "unknown");
-    if (parsed.commands.length === 0 && !useLocalModel) {
+    const useProvider =
+      interpreter === "provider" &&
+      parsed.commands.length === 0 &&
+      parsed.issues.every((issue) => issue.reason === "unknown");
+    if (parsed.commands.length === 0 && !useLocalModel && !useProvider) {
       setStatus(describeAtmosphereRefusal(parsed.issues));
       return;
     }
@@ -371,6 +393,38 @@ function AtmosphereConsolePanel({
         return;
       }
       let commands = parsed.commands;
+      let providerIsCurrent: (() => boolean) | undefined;
+      if (useProvider) {
+        if (
+          inputConnectionRef.current !== connection ||
+          providerConnectionRef.current !== connection
+        ) {
+          setInput("");
+          setInstanceId("");
+          setModel("");
+          inputConnectionRef.current = null;
+          providerConnectionRef.current = null;
+          setStatus(CONNECTION_CHANGED_STATUS);
+          return;
+        }
+        if (!selectedProvider || !model) throw new AtmosphereProviderError();
+        setStatus("Interpreting with the selected provider…");
+        const proposal = await interpretAtmosphereWithProvider(
+          input,
+          selectedProvider,
+          model,
+          connection.client.server,
+          getServerConfig,
+          () => isCurrent() && getPrimaryEnvironmentConnection() === connection,
+        );
+        commands = proposal.commands;
+        providerIsCurrent = proposal.isCurrent;
+        if (!isCurrent()) return;
+        if (getPrimaryEnvironmentConnection() !== connection) {
+          setStatus(CONNECTION_CHANGED_STATUS);
+          return;
+        }
+      }
       if (useLocalModel) {
         setStatus("Interpreting with local LM Studio…");
         commands = await interpretAtmosphereCommandWithLmStudio(input, interpreterAbort.signal);
@@ -389,6 +443,7 @@ function AtmosphereConsolePanel({
         setStatus(UNAVAILABLE_STATUS);
         return;
       }
+      if (providerIsCurrent && !providerIsCurrent()) throw new AtmosphereProviderError();
       const confirmed = await connection.client.server.updateClientSettings(
         buildAtmospherePatch(commands, getClientSettings()),
       );
@@ -400,9 +455,14 @@ function AtmosphereConsolePanel({
       applyClientSettingsUpdated(confirmed);
       setStatus(describeConfirmedAtmosphere(commands, confirmed));
       setInput("");
+      inputConnectionRef.current = null;
     } catch (error) {
       if (!isCurrent()) return;
-      setStatus(error instanceof AtmosphereLmStudioError ? error.message : WRITE_FAILED_STATUS);
+      setStatus(
+        error instanceof AtmosphereLmStudioError || error instanceof AtmosphereProviderError
+          ? error.message
+          : WRITE_FAILED_STATUS,
+      );
     } finally {
       interpreterAbort.abort();
       if (interpreterAbortRef.current === interpreterAbort) interpreterAbortRef.current = null;
@@ -505,19 +565,82 @@ function AtmosphereConsolePanel({
                 value={interpreter}
                 disabled={busy}
                 onChange={(event) => {
-                  const next = event.currentTarget.value === "lm-studio" ? "lm-studio" : "local";
+                  const value = event.currentTarget.value;
+                  const next = value === "lm-studio" || value === "provider" ? value : "local";
                   setInterpreter(next);
                   setStatus(
                     next === "local"
                       ? IDLE_STATUS
-                      : "Unrecognized wording goes to LM Studio at 127.0.0.1:1234, using its first listed model. Only the typed request is sent.",
+                      : next === "provider"
+                        ? "Choose a Claude instance and model. Unknown wording uses that account's quota. Codex interpretation is not supported."
+                        : "Unrecognized wording goes to LM Studio at 127.0.0.1:1234, using its first listed model. Only the typed request is sent.",
                   );
                 }}
               >
                 <option value="local">Local grammar — no model</option>
                 <option value="lm-studio">LM Studio fallback</option>
+                <option value="provider">Claude provider fallback</option>
               </select>
             </div>
+            {interpreter === "provider" ? (
+              <>
+                <label className="grid gap-1 text-[11px]">
+                  Provider instance
+                  <select
+                    aria-label="Atmosphere provider instance"
+                    className="h-7 min-w-0 rounded-md border border-input bg-background px-1 text-xs"
+                    value={instanceId}
+                    disabled={busy}
+                    onChange={(event) => {
+                      try {
+                        providerConnectionRef.current = getPrimaryEnvironmentConnection();
+                      } catch {
+                        providerConnectionRef.current = null;
+                      }
+                      setInstanceId(event.currentTarget.value);
+                      setModel("");
+                    }}
+                  >
+                    <option value="">Choose an instance</option>
+                    {providers.map((entry) => (
+                      <option
+                        key={entry.instanceId}
+                        value={entry.instanceId}
+                        disabled={!entry.enabled || !entry.installed}
+                      >
+                        {entry.instanceId}
+                        {entry.driver === "codex" ? " — unsupported" : ""}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="grid gap-1 text-[11px]">
+                  Model
+                  <select
+                    aria-label="Atmosphere provider model"
+                    className="h-7 min-w-0 rounded-md border border-input bg-background px-1 text-xs"
+                    value={model}
+                    disabled={busy || selectedProvider?.driver !== "claudeAgent"}
+                    onChange={(event) => setModel(event.currentTarget.value)}
+                  >
+                    <option value="">Choose a model</option>
+                    {(selectedProvider?.driver === "claudeAgent"
+                      ? selectedProvider.models
+                      : []
+                    ).map((entry) => (
+                      <option key={entry.slug} value={entry.slug}>
+                        {entry.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <p className="text-[10px] break-words text-muted-foreground">
+                  {selectedProvider?.driver === "codex"
+                    ? "Codex interpretation is unsupported in this build."
+                    : `Observed account: ${selectedProvider?.auth.email ?? selectedProvider?.auth.label ?? "not reported"}. Provider use may incur charges.`}
+                </p>
+              </>
+            ) : null}
             <label className="text-[11px] text-muted-foreground" htmlFor="atmosphere-command">
               Falling-effect command
             </label>
@@ -530,7 +653,25 @@ function AtmosphereConsolePanel({
                 maxLength={MAX_ATMOSPHERE_COMMAND_LENGTH}
                 placeholder="matrix, motion warp, 日本語 70%"
                 value={input}
-                onChange={(event) => setInput(event.currentTarget.value)}
+                onChange={(event) => {
+                  let connection: ReturnType<typeof getPrimaryEnvironmentConnection> | null = null;
+                  try {
+                    connection = getPrimaryEnvironmentConnection();
+                  } catch {
+                    /* The submit path reports unavailable connections. */
+                  }
+                  if (
+                    inputConnectionRef.current !== null &&
+                    inputConnectionRef.current !== connection
+                  ) {
+                    inputConnectionRef.current = null;
+                    setInput("");
+                    setStatus(CONNECTION_CHANGED_STATUS);
+                    return;
+                  }
+                  inputConnectionRef.current = event.currentTarget.value ? connection : null;
+                  setInput(event.currentTarget.value);
+                }}
               />
               <button
                 type="submit"
@@ -550,9 +691,11 @@ function AtmosphereConsolePanel({
             </p>
           </form>
           <p className="shrink-0 px-2 pb-2 text-[9px] leading-3 text-muted-foreground/80">
-            {interpreter === "lm-studio"
-              ? "Unknown wording goes to LM Studio. Validated commands are saved to the primary Cafe server. No shell is used. At most four commands per request."
-              : "Commands are parsed locally, then saved to the primary Cafe server. No model or shell is used. At most four commands per request."}
+            {interpreter === "provider"
+              ? "Unknown wording goes to the selected Claude account. Tools are disabled. Only validated commands are saved. No project or chat text is sent."
+              : interpreter === "lm-studio"
+                ? "Unknown wording goes to LM Studio. Validated commands are saved to the primary Cafe server. No shell is used. At most four commands per request."
+                : "Commands are parsed locally, then saved to the primary Cafe server. No model or shell is used. At most four commands per request."}
           </p>
         </>
       )}
