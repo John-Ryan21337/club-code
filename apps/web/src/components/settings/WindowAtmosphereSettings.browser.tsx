@@ -82,6 +82,8 @@ describe("WindowAtmosphereSettings", () => {
       fallingEffectSpeed: 2,
       fallingEffectDensity: 2,
       fallingEffectJapaneseRatio: 0.8,
+      fallingEffectMatrixMotionMode: "walk-forward",
+      fallingEffectMatrixWalkEndFontSize: 96,
     };
     const screen = await render(<WindowAtmosphereSettings />);
 
@@ -91,6 +93,13 @@ describe("WindowAtmosphereSettings", () => {
       fallingEffectKind: "snow",
       fallingEffectColor: "auto",
       fallingEffectMatrixColorMode: "fixed",
+      fallingEffectMatrixColorCycleSpeed: 1,
+      fallingEffectMatrixBaseFontSize: 14,
+      fallingEffectMatrixMotionMode: "flat",
+      fallingEffectMatrixWalkStartFontSize: 1,
+      fallingEffectMatrixWalkEndFontSize: 72,
+      fallingEffectMatrixWalkLifecyclePercent: 30,
+      fallingEffectMatrixCenterWindIntensity: 4,
       fallingEffectOpacity: 0.35,
       fallingEffectSpeed: 1,
       fallingEffectDensity: 1,

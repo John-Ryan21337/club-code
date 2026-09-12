@@ -1,7 +1,9 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 
 import { useSettings } from "../hooks/useSettings";
 import { useTheme } from "../hooks/useTheme";
+import { MatrixGpuFrameCollector } from "../matrixGpuFrameCollector";
+import { createMatrixWebGl2Renderer, type MatrixWebGl2Renderer } from "../matrixWebGlRenderer";
 import { useServerConfig } from "../rpc/serverState";
 import {
   advanceAtmosphereSceneInPlace,
@@ -9,13 +11,19 @@ import {
   createSeededRandom,
   drawAtmosphereScene,
   fitAtmosphereDpr,
+  MATRIX_JAPANESE_GLYPHS,
+  MATRIX_ROMAN_GLYPHS,
   resolveAtmosphereColor,
+  resolveAtmosphereRenderOpacity,
   resolveMatrixAtmosphereColorFrame,
   shouldAnimateAtmosphere,
+  shouldShowAtmosphere,
   type AtmosphereScene,
 } from "../windowAtmosphere";
 
 const REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)";
+/** Bounded instance budget shared by the collector and the GPU renderer. */
+const MAX_MATRIX_GPU_GLYPH_INSTANCES = 8_192;
 
 function sceneSeed(kind: "snow" | "rain" | "matrix", width: number, height: number): number {
   const kindSeed = kind === "snow" ? 0x534e4f57 : kind === "rain" ? 0x5241494e : 0x4d415458;
@@ -33,6 +41,21 @@ export function WindowAtmosphere() {
   const kind = useSettings((settings) => settings.fallingEffectKind);
   const configuredColor = useSettings((settings) => settings.fallingEffectColor);
   const matrixColorMode = useSettings((settings) => settings.fallingEffectMatrixColorMode);
+  const matrixColorCycleSpeed = useSettings(
+    (settings) => settings.fallingEffectMatrixColorCycleSpeed,
+  );
+  const matrixBaseFontSize = useSettings((settings) => settings.fallingEffectMatrixBaseFontSize);
+  const motionMode = useSettings((settings) => settings.fallingEffectMatrixMotionMode);
+  const walkStartFontSize = useSettings(
+    (settings) => settings.fallingEffectMatrixWalkStartFontSize,
+  );
+  const walkEndFontSize = useSettings((settings) => settings.fallingEffectMatrixWalkEndFontSize);
+  const walkLifecyclePercent = useSettings(
+    (settings) => settings.fallingEffectMatrixWalkLifecyclePercent,
+  );
+  const centerWindIntensity = useSettings(
+    (settings) => settings.fallingEffectMatrixCenterWindIntensity,
+  );
   const opacity = useSettings((settings) => settings.fallingEffectOpacity);
   const speed = useSettings((settings) => settings.fallingEffectSpeed);
   const density = useSettings((settings) => settings.fallingEffectDensity);
@@ -44,6 +67,81 @@ export function WindowAtmosphere() {
   const serverConfig = useServerConfig();
   const atmosphereAvailable = serverConfig?.ambientExperienceCapabilities.atmosphere === true;
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const matrixGpuCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const matrixGpuRendererRef = useRef<MatrixWebGl2Renderer | null>(null);
+  const matrixGpuAvailableRef = useRef(false);
+  /**
+   * Set by the draw effect while a scene exists. It repaints that exact scene
+   * without advancing, reseeding, or scheduling a frame, so the GPU effect can
+   * recover from a backend change it does not own.
+   */
+  const repaintAtmosphereRef = useRef<(() => void) | null>(null);
+  const matrixGpuFrameCollector = useMemo(
+    () => new MatrixGpuFrameCollector(MAX_MATRIX_GPU_GLYPH_INSTANCES),
+    [],
+  );
+  /**
+   * The atlas is rasterized once per renderer, so it must cover every glyph a
+   * Matrix stream can select. The static Roman and Japanese pools are the only
+   * vocabulary in this slice; operational work vocabulary is a later slice.
+   */
+  const matrixGpuGlyphPool = useMemo(
+    () => [...Array.from(MATRIX_ROMAN_GLYPHS), ...Array.from(MATRIX_JAPANESE_GLYPHS)],
+    [],
+  );
+
+  // Acquiring the WebGL2 context is independent from the draw loop: a GPU
+  // failure must never restart or reseed the shared simulation.
+  useEffect(() => {
+    const gpuCanvas = matrixGpuCanvasRef.current;
+    if (!atmosphereAvailable || !enabled || kind !== "matrix" || gpuCanvas === null) {
+      matrixGpuRendererRef.current = null;
+      matrixGpuAvailableRef.current = false;
+      return;
+    }
+
+    const selection = createMatrixWebGl2Renderer(gpuCanvas, matrixGpuGlyphPool, {
+      maxGlyphInstances: MAX_MATRIX_GPU_GLYPH_INSTANCES,
+      onAvailabilityChange: (availability) => {
+        const available = availability === "available";
+        matrixGpuAvailableRef.current = available;
+        gpuCanvas.dataset.matrixGpuAvailability = availability;
+        // A regained context has not drawn anything yet, and a lost one still
+        // shows its last frame. Only a committed frame may reveal this layer,
+        // so hide it here and let the repaint below decide what is true.
+        gpuCanvas.style.visibility = "hidden";
+        // Backend availability is not a rendered frame: repaint the current
+        // scene through the same commit path so the surviving backend owns the
+        // pixels and the diagnostics. Reduced motion and hidden or unfocused
+        // windows keep their policy; nothing is reseeded and no loop starts.
+        repaintAtmosphereRef.current?.();
+      },
+    });
+    if (selection.kind !== "webgl2") {
+      gpuCanvas.style.visibility = "hidden";
+      gpuCanvas.dataset.matrixGpuAvailability = "unavailable";
+      gpuCanvas.dataset.matrixGpuFallbackReason = selection.reason;
+      matrixGpuRendererRef.current = null;
+      matrixGpuAvailableRef.current = false;
+      repaintAtmosphereRef.current?.();
+      return;
+    }
+
+    delete gpuCanvas.dataset.matrixGpuFallbackReason;
+    gpuCanvas.dataset.matrixGpuAvailability = "available";
+    matrixGpuRendererRef.current = selection.renderer;
+    matrixGpuAvailableRef.current = true;
+    repaintAtmosphereRef.current?.();
+    return () => {
+      selection.renderer.dispose();
+      if (matrixGpuRendererRef.current === selection.renderer) {
+        matrixGpuRendererRef.current = null;
+        matrixGpuAvailableRef.current = false;
+      }
+      gpuCanvas.style.visibility = "hidden";
+      repaintAtmosphereRef.current?.();
+    };
+  }, [atmosphereAvailable, enabled, kind, matrixGpuGlyphPool]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -56,6 +154,15 @@ export function WindowAtmosphere() {
     let animationFrame: number | null = null;
     let resizeFrame: number | null = null;
     let lastFrameTime: number | null = null;
+
+    // One policy source for both the animation loop and an out-of-band repaint.
+    const atmosphereState = () => ({
+      enabled,
+      reducedMotion: reducedMotion.matches,
+      documentVisible: document.visibilityState === "visible",
+      windowFocused: document.hasFocus(),
+      continueBackgroundAnimations,
+    });
 
     const cancelAnimation = () => {
       if (animationFrame !== null) {
@@ -83,6 +190,11 @@ export function WindowAtmosphere() {
       canvas.width = bitmapWidth;
       canvas.height = bitmapHeight;
       context.setTransform(dpr, 0, 0, dpr, 0, 0);
+      const gpuCanvas = matrixGpuCanvasRef.current;
+      if (gpuCanvas !== null) {
+        gpuCanvas.width = bitmapWidth;
+        gpuCanvas.height = bitmapHeight;
+      }
       scene = createAtmosphereScene(
         kind,
         width,
@@ -90,15 +202,26 @@ export function WindowAtmosphere() {
         createSeededRandom(sceneSeed(kind, width, height)),
         density,
         japaneseRatio,
+        motionMode,
+        walkLifecyclePercent,
+        centerWindIntensity,
       );
     };
 
-    const renderScene = (timestamp: number, advance: boolean) => {
+    const renderScene = (timestamp: number, advance: boolean, dimmed = !advance) => {
       if (!scene) return;
+      const staticFrame = dimmed;
       const elapsedSeconds =
         advance && lastFrameTime !== null ? (timestamp - lastFrameTime) / 1_000 : 0;
-      lastFrameTime = timestamp;
-      advanceAtmosphereSceneInPlace(scene, elapsedSeconds, speed);
+      lastFrameTime = advance ? timestamp : null;
+      advanceAtmosphereSceneInPlace(
+        scene,
+        elapsedSeconds,
+        speed,
+        motionMode,
+        walkLifecyclePercent,
+        centerWindIntensity,
+      );
       const matrixColorFrame =
         kind === "matrix"
           ? resolveMatrixAtmosphereColorFrame(
@@ -106,16 +229,80 @@ export function WindowAtmosphere() {
               configuredColor,
               resolvedTheme === "dark",
               timestamp,
+              matrixColorCycleSpeed,
             )
           : undefined;
+      const color =
+        matrixColorFrame?.color ??
+        resolveAtmosphereColor(kind, configuredColor, resolvedTheme === "dark");
+      const renderOpacity = resolveAtmosphereRenderOpacity(opacity, staticFrame);
+
+      const gpuCanvas = matrixGpuCanvasRef.current;
+      const gpuRenderer = matrixGpuRendererRef.current;
+      let matrixGpuRendered = false;
+      if (
+        kind === "matrix" &&
+        gpuCanvas !== null &&
+        gpuRenderer !== null &&
+        matrixGpuAvailableRef.current
+      ) {
+        // One traversal, two backends: the collector replays the authoritative
+        // Canvas2D scene function against a recording context, so GPU and
+        // fallback share projection, occupancy, alpha, color, and glyph order.
+        const gpuFrame = matrixGpuFrameCollector.collect({
+          scene,
+          color,
+          opacity: renderOpacity,
+          matrixColorFrame,
+          motionMode,
+          walkStartFontSize,
+          walkEndFontSize,
+          matrixBaseFontSize,
+          devicePixelRatio: window.devicePixelRatio,
+        });
+        const result = gpuRenderer.render(gpuFrame);
+        matrixGpuRendered = result.status === "rendered" || result.status === "empty";
+        gpuCanvas.style.visibility = matrixGpuRendered ? "visible" : "hidden";
+        canvas.dataset.atmosphereFrameCommit = result.status;
+      }
+
+      if (matrixGpuRendered) {
+        // The WebGL canvas already holds the complete glyph frame; keep the
+        // Canvas2D layer transparent instead of uploading an empty bitmap.
+        clearCanvasBitmap();
+        canvas.dataset.atmosphereRenderer = "webgl2-glyph-atlas";
+        canvas.dataset.atmosphereTextRasterization = "gpu-glyph-atlas";
+        return;
+      }
+
       drawAtmosphereScene(
         context,
         scene,
-        matrixColorFrame?.color ??
-          resolveAtmosphereColor(kind, configuredColor, resolvedTheme === "dark"),
-        opacity,
+        color,
+        renderOpacity,
         matrixColorFrame,
+        motionMode,
+        walkStartFontSize,
+        walkEndFontSize,
+        matrixBaseFontSize,
       );
+      canvas.dataset.atmosphereRenderer = "canvas2d";
+      canvas.dataset.atmosphereTextRasterization = "main-thread";
+      canvas.dataset.atmosphereFrameCommit = "canvas2d";
+    };
+
+    /**
+     * Recommits the current scene after a backend change. The simulation is not
+     * advanced and never reseeded, the reduced-motion presentation keeps its
+     * dimmed single frame, and no animation frame is scheduled: a hidden or
+     * unfocused window without background continuation stays blank until its
+     * own policy allows drawing again.
+     */
+    const repaintCurrentScene = () => {
+      if (scene === null) return;
+      if (animationFrame !== null) return;
+      if (!shouldShowAtmosphere(atmosphereState())) return;
+      renderScene(performance.now(), false, reducedMotion.matches);
     };
 
     const drawFrame = (timestamp: number) => {
@@ -125,16 +312,20 @@ export function WindowAtmosphere() {
     };
 
     const syncAnimation = () => {
-      const canAnimate = shouldAnimateAtmosphere({
-        enabled,
-        reducedMotion: reducedMotion.matches,
-        documentVisible: document.visibilityState === "visible",
-        windowFocused: document.hasFocus(),
-        continueBackgroundAnimations,
-      });
+      const state = atmosphereState();
+      const visible = shouldShowAtmosphere(state);
+      const canAnimate = shouldAnimateAtmosphere(state);
       if (!canAnimate) {
         cancelAnimation();
-        if (scene) context.clearRect(0, 0, scene.width, scene.height);
+        // Reduced motion is a supported presentation, not a blank screen: draw
+        // exactly one dimmed static frame and schedule no animation loop.
+        if (visible && reducedMotion.matches) {
+          renderScene(performance.now(), false);
+          return;
+        }
+        clearCanvasBitmap();
+        const gpuCanvas = matrixGpuCanvasRef.current;
+        if (gpuCanvas !== null) gpuCanvas.style.visibility = "hidden";
         return;
       }
       if (animationFrame === null) {
@@ -152,6 +343,7 @@ export function WindowAtmosphere() {
     };
 
     resize();
+    repaintAtmosphereRef.current = repaintCurrentScene;
     syncAnimation();
     document.addEventListener("visibilitychange", syncAnimation);
     window.addEventListener("focus", syncAnimation);
@@ -160,6 +352,9 @@ export function WindowAtmosphere() {
     reducedMotion.addEventListener("change", syncAnimation);
 
     return () => {
+      if (repaintAtmosphereRef.current === repaintCurrentScene) {
+        repaintAtmosphereRef.current = null;
+      }
       cancelAnimation();
       if (resizeFrame !== null) window.cancelAnimationFrame(resizeFrame);
       clearCanvasBitmap();
@@ -171,26 +366,49 @@ export function WindowAtmosphere() {
     };
   }, [
     atmosphereAvailable,
+    centerWindIntensity,
     configuredColor,
     continueBackgroundAnimations,
     density,
     enabled,
     japaneseRatio,
     kind,
+    matrixBaseFontSize,
+    matrixColorCycleSpeed,
     matrixColorMode,
+    matrixGpuFrameCollector,
+    motionMode,
     opacity,
     resolvedTheme,
     speed,
+    walkEndFontSize,
+    walkLifecyclePercent,
+    walkStartFontSize,
   ]);
 
   if (!enabled || !atmosphereAvailable) return null;
 
   return (
-    <canvas
-      ref={canvasRef}
-      aria-hidden="true"
-      className="pointer-events-none fixed inset-0 z-40 h-full w-full overflow-hidden"
-      data-testid="window-atmosphere"
-    />
+    <>
+      {kind === "matrix" ? (
+        <canvas
+          ref={matrixGpuCanvasRef}
+          aria-hidden="true"
+          className="pointer-events-none fixed inset-0 z-40 h-full w-full overflow-hidden"
+          data-testid="window-atmosphere-matrix-gpu"
+          style={{ pointerEvents: "none", visibility: "hidden" }}
+        />
+      ) : null}
+      <canvas
+        ref={canvasRef}
+        aria-hidden="true"
+        className="pointer-events-none fixed inset-0 z-40 h-full w-full overflow-hidden"
+        data-atmosphere-renderer="pending"
+        data-atmosphere-text-rasterization="main-thread"
+        data-atmosphere-frame-commit="pending"
+        data-testid="window-atmosphere"
+        style={{ pointerEvents: "none" }}
+      />
+    </>
   );
 }
