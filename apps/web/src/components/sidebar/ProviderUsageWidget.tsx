@@ -133,77 +133,114 @@ export function ProviderUsageWidget() {
           <p role="status">Usage refresh was incomplete. Last reported values remain visible.</p>
         ) : null}
         {rows.length === 0 ? <p>No configured providers.</p> : null}
-        {rows.map(({ provider, windows, stale, checkedAt, resetCredits, exhausted }) => (
-          <div key={provider.instanceId} className="mb-3 space-y-1.5">
-            <h3 className="truncate font-medium">{provider.displayName || provider.driver}</h3>
-            {providerUsageState(provider) ? (
-              <p className="text-muted-foreground">{providerUsageState(provider)}</p>
-            ) : null}
-            {checkedAt ? (
-              <time dateTime={checkedAt} className="block text-[10px] text-muted-foreground">
-                Checked {new Date(checkedAt).toLocaleTimeString()}
-              </time>
-            ) : null}
-            {stale && windows.length > 0 ? (
-              <p role="status" className="text-amber-600">
-                Stale: showing last reported values.
-              </p>
-            ) : null}
-            {exhausted ? (
-              <p role="status">The provider reports an exhausted usage or spend limit.</p>
-            ) : null}
-            <p className="text-muted-foreground">Reset credits: {resetCredits ?? "unknown"}</p>
-            {windows.map((row) => {
-              const pacing =
-                settings.modelPacingEnabled &&
-                !stale &&
-                !exhausted &&
-                providerUsageState(provider) === null
-                  ? calculateModelPacing({
-                      window: row.window,
-                      nowMs,
-                      reservePercent: settings.modelPacingReservePercent,
-                    })
-                  : null;
-              return (
-                <div key={row.key} className="rounded-lg border border-sidebar-border p-2">
-                  <div>
-                    {row.identity.label} · {row.kind}
-                  </div>
-                  <div>
-                    {row.usedPercent === null
-                      ? "Usage unknown"
-                      : `${Math.round(row.usedPercent)}% used`}
-                  </div>
-                  {row.usedPercent !== null ? (
-                    <progress
-                      className="h-1.5 w-full"
-                      value={row.usedPercent}
-                      max={100}
-                      aria-label={`${row.identity.label} ${row.kind} usage`}
-                    />
+        {rows.map(
+          ({
+            provider,
+            windows,
+            stale,
+            checkedAt,
+            resetCredits,
+            exhausted,
+            paidUsage,
+            paidUsageStale,
+          }) => (
+            <div key={provider.instanceId} className="mb-3 space-y-1.5">
+              <h3 className="truncate font-medium">{provider.displayName || provider.driver}</h3>
+              {providerUsageState(provider) ? (
+                <p className="text-muted-foreground">{providerUsageState(provider)}</p>
+              ) : null}
+              {checkedAt ? (
+                <time dateTime={checkedAt} className="block text-[10px] text-muted-foreground">
+                  Checked {new Date(checkedAt).toLocaleTimeString()}
+                </time>
+              ) : null}
+              {stale && windows.length > 0 ? (
+                <p role="status" className="text-amber-600">
+                  Stale: showing last reported values.
+                </p>
+              ) : null}
+              {exhausted ? (
+                <p role="status">The provider reports an exhausted usage or spend limit.</p>
+              ) : null}
+              <p className="text-muted-foreground">Reset credits: {resetCredits ?? "unknown"}</p>
+              {paidUsage ? (
+                <div
+                  className="rounded-lg border border-sidebar-border p-2"
+                  aria-label="Paid usage"
+                >
+                  <p>Paid usage: {paidUsage.status}</p>
+                  {paidUsageStale ? (
+                    <p role="status">Stale paid usage: showing last reported values.</p>
                   ) : null}
-                  {row.resetsAt !== null ? (
-                    <div className="text-muted-foreground">
-                      Resets {new Date(row.resetsAt * 1_000).toLocaleString()}
-                    </div>
-                  ) : (
-                    <div className="text-muted-foreground">Reset time unknown</div>
-                  )}
-                  {pacing ? (
-                    <div className="mt-1 text-[10px]" data-pacing-status={pacing.status}>
-                      <p>{pacing.recommendation}</p>
-                      <p>
-                        {formatModelPacingDuration(pacing.timeToResetMs)} ·{" "}
-                        {settings.modelPacingReservePercent}% reserve
-                      </p>
-                    </div>
+                  <p>
+                    Used: {paidUsage.used ?? "unknown"} · Limit: {paidUsage.limit ?? "unknown"}
+                  </p>
+                  <p>
+                    {paidUsage.currency
+                      ? `Currency: ${paidUsage.currency}`
+                      : "Provider units; currency not reported."}
+                  </p>
+                  {paidUsage.utilizationPercent != null ? (
+                    <p>{Math.round(paidUsage.utilizationPercent)}% of paid limit used</p>
                   ) : null}
                 </div>
-              );
-            })}
-          </div>
-        ))}
+              ) : null}
+              {windows.map((row) => {
+                const pacing =
+                  settings.modelPacingEnabled &&
+                  !stale &&
+                  !row.stale &&
+                  !exhausted &&
+                  providerUsageState(provider) === null
+                    ? calculateModelPacing({
+                        window: row.window,
+                        nowMs,
+                        reservePercent: settings.modelPacingReservePercent,
+                      })
+                    : null;
+                return (
+                  <div key={row.key} className="rounded-lg border border-sidebar-border p-2">
+                    <div>
+                      {row.identity.label} · {row.kind}
+                    </div>
+                    {row.stale && !stale ? (
+                      <p role="status">Stale window: showing last reported values.</p>
+                    ) : null}
+                    <div>
+                      {row.usedPercent === null
+                        ? "Usage unknown"
+                        : `${Math.round(row.usedPercent)}% used`}
+                    </div>
+                    {row.usedPercent !== null ? (
+                      <progress
+                        className="h-1.5 w-full"
+                        value={row.usedPercent}
+                        max={100}
+                        aria-label={`${row.identity.label} ${row.kind} usage`}
+                      />
+                    ) : null}
+                    {row.resetsAt !== null ? (
+                      <div className="text-muted-foreground">
+                        Resets {new Date(row.resetsAt * 1_000).toLocaleString()}
+                      </div>
+                    ) : (
+                      <div className="text-muted-foreground">Reset time unknown</div>
+                    )}
+                    {pacing ? (
+                      <div className="mt-1 text-[10px]" data-pacing-status={pacing.status}>
+                        <p>{pacing.recommendation}</p>
+                        <p>
+                          {formatModelPacingDuration(pacing.timeToResetMs)} ·{" "}
+                          {settings.modelPacingReservePercent}% reserve
+                        </p>
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
+          ),
+        )}
         {settings.modelPacingEnabled ? (
           <p className="text-[10px] text-muted-foreground">
             Pacing is advice only. Shared account limits do not identify a specific model. It never

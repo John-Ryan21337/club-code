@@ -23,6 +23,24 @@ export const provider = (overrides: Partial<ServerProvider> = {}): ServerProvide
 });
 const now = Date.parse("2026-09-12T00:00:00Z");
 describe("provider usage facts", () => {
+  it("does not refresh older windows or paid metadata when another usage event arrives", () => {
+    const old = new Date(now - 720_000).toISOString();
+    const result = buildProviderUsageRows(
+      provider({
+        accountRateLimits: {
+          checkedAt: new Date(now).toISOString(),
+          rateLimits: { primary: { usedPercent: 25, checkedAt: old } },
+          paidUsage: { status: "enabled", used: "12.5", limit: "100", checkedAt: old },
+        },
+      }),
+      now,
+      2,
+    );
+    expect(result.stale).toBe(false);
+    expect(result.windows[0]?.stale).toBe(true);
+    expect(result.paidUsageStale).toBe(true);
+    expect(result.paidUsage?.currency).toBeUndefined();
+  });
   it("does not infer polling support from a known driver or old usage data", () => {
     const { runtimeCapabilities: _capability, ...withoutCapability } = provider();
     expect(canRefreshProviderUsage(withoutCapability)).toBe(false);

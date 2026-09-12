@@ -2,6 +2,8 @@
 
 ## Task Completion Requirements
 
+- Claude account-usage checks use the pinned SDK control request with `skipBehaviors: true`, no yielded prompt, no tools/hooks/external MCP, and a disposable query. Bind the initialized account to the selected instance and preserve leaf observation dates when merging live quota events. Keep default tests synthetic; do not redeem real credits or inspect private transcript data for usage verification.
+
 - This repository is Yarn-and-Node-only. Use the repository-pinned Yarn 4.17.1 release through Corepack for package operations and Node for JavaScript/TypeScript execution. Do not add or invoke any alternate JavaScript runtime or package manager in source, tests, fixtures, documentation, scripts, or CI.
 - When code changes are made, all of `yarn fmt`, `yarn lint`, and `yarn typecheck` must pass before considering tasks completed.
 - Run tests with `yarn test` (runs Vitest through the Turbo task graph).

@@ -987,8 +987,16 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
         assert.deepStrictEqual(merged.rateLimits, {
           limitId: "codex",
           planType: "pro",
-          primary: { usedPercent: 1, windowDurationMins: 10_080 },
-          secondary: { usedPercent: 20, windowDurationMins: 10_080 },
+          primary: {
+            usedPercent: 1,
+            windowDurationMins: 10_080,
+            checkedAt: "2026-08-12T10:01:00.000Z",
+          },
+          secondary: {
+            usedPercent: 20,
+            windowDurationMins: 10_080,
+            checkedAt: "2026-08-12T10:00:00.000Z",
+          },
         });
         assert.deepStrictEqual(merged.rateLimitsByLimitId?.codex, merged.rateLimits);
         assert.strictEqual(merged.rateLimitsByLimitId?.codex_bengalfox?.primary?.usedPercent, 5);
