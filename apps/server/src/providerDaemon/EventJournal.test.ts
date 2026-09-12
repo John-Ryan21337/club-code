@@ -148,6 +148,52 @@ describe("ProviderDaemonEventJournal", () => {
     );
   });
 
+  it("preserves assistant completion detail whitespace across the persistent round-trip", async () => {
+    // Journal repair and ingestion verify assistant `detail` as an exact
+    // UTF-16 prefix commitment against streamed deltas. The journal is the
+    // durable handoff for those events, so its encode/decode round-trip must
+    // not rewrite the completion (a trimmed " The" prefix or a stripped
+    // trailing newline both strand prefix repair).
+    const sourceText = " The final answer.\n";
+    const assistantEvent: ProviderRuntimeEvent = {
+      eventId: EventId.make("event-assistant-whitespace"),
+      provider: ProviderDriverKind.make("codex"),
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      threadId: ThreadId.make("thread-1"),
+      turnId: TurnId.make("turn-1"),
+      createdAt: "1970-01-01T00:00:00.000Z",
+      type: "item.completed",
+      payload: {
+        itemType: "assistant_message",
+        status: "completed",
+        detail: sourceText,
+      },
+    };
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const journal = yield* makePersistentProviderDaemonEventJournal({ capacity: 10 });
+        const published = yield* journal.publish(assistantEvent);
+        // `publish` returns the record decoded back from the stored row, so
+        // this asserts the persisted JSON itself, not the in-memory input.
+        expect(published.event.type).toBe("item.completed");
+        if (published.event.type !== "item.completed") {
+          throw new Error("expected item.completed");
+        }
+        expect(published.event.payload.detail).toBe(sourceText);
+
+        const freshJournal = yield* makePersistentProviderDaemonEventJournal({ capacity: 10 });
+        const replayed = yield* freshJournal.replayAfter(0);
+        const replayedEvent = replayed[0]?.event;
+        expect(replayedEvent?.type).toBe("item.completed");
+        if (replayedEvent?.type !== "item.completed") {
+          throw new Error("expected replayed item.completed");
+        }
+        expect(replayedEvent.payload.detail).toBe(sourceText);
+      }).pipe(Effect.scoped, Effect.provide(SqlitePersistenceMemory)),
+    );
+  });
+
   it("persists events for replay from a fresh journal instance", async () => {
     await Effect.runPromise(
       Effect.gen(function* () {

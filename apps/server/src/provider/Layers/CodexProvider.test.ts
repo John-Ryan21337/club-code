@@ -8,7 +8,7 @@ import { fallbackCodexModelsFromSettings, parseCodexModelListResponse } from "./
 const decodeCodexSettings = Schema.decodeSync(CodexSettings);
 
 describe("parseCodexModelListResponse", () => {
-  it("discovers Astra Fast support from the 0.153.4 service tier", () => {
+  it("discovers Astra Fast support from the 0.154.0 service tier", () => {
     const [astra] = parseCodexModelListResponse({
       data: [
         {
