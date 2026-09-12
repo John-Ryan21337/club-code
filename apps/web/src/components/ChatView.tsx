@@ -116,7 +116,7 @@ import { cn } from "~/lib/utils";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { newCommandId, newDraftId, newMessageId, newThreadId } from "~/lib/utils";
 import { getProviderModelCapabilities, resolveSelectableProvider } from "../providerModels";
-import { useSettings } from "../hooks/useSettings";
+import { useSettings, useUpdateSettings } from "../hooks/useSettings";
 import { getWsConnectionDiagnostics } from "../rpc/wsConnectionState";
 import { getUsageStatsDetailDiagnostics } from "./stats/usageStatsDetailResource";
 import { getDictationDiagnosticSnapshot } from "../dictation/diagnostics";
@@ -829,6 +829,7 @@ export default function ChatView(props: ChatViewProps) {
   const sessionRailDocked = useUiStateStore((store) => store.sessionRailDocked);
   const setSessionRailDocked = useUiStateStore((store) => store.setSessionRailDocked);
   const settings = useSettings();
+  const { updateSettings } = useUpdateSettings();
   const setStickyComposerModelSelection = useComposerDraftStore(
     (store) => store.setStickyModelSelection,
   );
@@ -6408,6 +6409,10 @@ export default function ChatView(props: ChatViewProps) {
             {activeProject ? (
               <ProjectTelemetryGraph
                 environmentId={activeProject.environmentId}
+                hideUnavailableGraphs={settings.projectTelemetryHideUnavailableGraphs}
+                onHideUnavailableGraphsChange={(checked) =>
+                  updateSettings({ projectTelemetryHideUnavailableGraphs: checked })
+                }
                 projectId={activeProject.id}
                 projectName={activeProject.name}
               />

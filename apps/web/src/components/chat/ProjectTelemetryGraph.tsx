@@ -9,16 +9,21 @@ import {
   ChevronUpIcon,
   CpuIcon,
   GaugeIcon,
+  GripHorizontalIcon,
+  ScalingIcon,
+  RotateCcwIcon,
   HardDriveIcon,
   MemoryStickIcon,
 } from "lucide-react";
-import { useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useId, useRef, useState, useSyncExternalStore } from "react";
 
 import { readEnvironmentApi } from "../../environmentApi";
 import {
   readCafeDocumentVisibilitySnapshot,
   subscribeCafeDocumentVisibility,
 } from "../../documentVisibility";
+import { useTelemetryPanelLayout } from "./useTelemetryPanelLayout";
+import { Switch } from "~/components/ui/switch";
 import { cn } from "~/lib/utils";
 import { TelemetryCard } from "./ProjectTelemetryCard";
 import { ProjectGpuAdapterHistory } from "./ProjectGpuAdapterHistory";
@@ -39,7 +44,6 @@ import {
 const DEFAULT_POLL_INTERVAL_MS = 3_000;
 const ERROR_RETRY_INTERVAL_MS = 10_000;
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
-const NARROW_TELEMETRY_WIDTH_PX = 900;
 
 type ReadProjectTelemetry = (
   environmentId: EnvironmentId,
@@ -104,26 +108,6 @@ function useDocumentVisible(): boolean {
   );
 }
 
-function useNarrowTelemetryContainer() {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [isNarrow, setIsNarrow] = useState(
-    () => typeof window !== "undefined" && window.innerWidth < NARROW_TELEMETRY_WIDTH_PX,
-  );
-
-  useLayoutEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
-    const update = () => setIsNarrow(container.clientWidth < NARROW_TELEMETRY_WIDTH_PX);
-    update();
-    if (typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(update);
-    observer.observe(container);
-    return () => observer.disconnect();
-  }, []);
-
-  return [containerRef, isNarrow] as const;
-}
-
 const safeTelemetryErrorTag = (value: unknown) =>
   typeof value === "string" && /^[A-Za-z][A-Za-z0-9_.:-]{0,63}$/.test(value) ? value : null;
 
@@ -167,6 +151,8 @@ function exactBytesTitle(label: string, bytes: number | null): string | undefine
 }
 
 export interface ProjectTelemetryGraphProps {
+  readonly hideUnavailableGraphs?: boolean;
+  readonly onHideUnavailableGraphsChange?: (checked: boolean) => void;
   readonly environmentId: EnvironmentId;
   readonly projectId: ProjectId;
   readonly projectName?: string;
@@ -186,8 +172,11 @@ export function ProjectTelemetryGraph({
   readTelemetry = readSelectedProjectTelemetry,
   pollIntervalMs = DEFAULT_POLL_INTERVAL_MS,
   historyLimit = PROJECT_TELEMETRY_HISTORY_LIMIT,
+  hideUnavailableGraphs = false,
+  onHideUnavailableGraphsChange,
 }: ProjectTelemetryGraphProps) {
-  const [containerRef, isNarrow] = useNarrowTelemetryContainer();
+  const layout = useTelemetryPanelLayout();
+  const { containerRef, isNarrow } = layout;
   const documentVisible = useDocumentVisible();
   const panelId = useId();
   const [manuallyCollapsed, setManuallyCollapsed] = useState(false);
@@ -422,7 +411,7 @@ export function ProjectTelemetryGraph({
   return (
     <div
       className={cn(
-        "pointer-events-none z-20 mt-2 flex w-full shrink-0 justify-end pr-2",
+        "pointer-events-none absolute inset-0 z-20 flex items-start justify-end p-2",
         className,
       )}
       data-project-telemetry-slot="true"
@@ -444,10 +433,16 @@ export function ProjectTelemetryGraph({
       ) : (
         <aside
           aria-label="Selected project system telemetry"
-          className="pointer-events-auto max-h-[min(36rem,60dvh)] w-[min(22rem,calc(100%-1rem))] overflow-y-auto rounded-xl border border-border/70 bg-card/95 p-2 text-foreground shadow-2xl shadow-black/20 backdrop-blur-xl"
+          className="pointer-events-auto absolute flex min-h-0 flex-col overflow-hidden rounded-xl border border-border/70 bg-card/95 p-2 text-foreground shadow-2xl shadow-black/20 backdrop-blur-xl"
+          style={{
+            left: layout.geometry.x,
+            top: layout.geometry.y,
+            width: layout.geometry.width,
+            height: layout.geometry.height,
+          }}
           data-project-id={projectId}
         >
-          <div className="mb-1.5 flex min-w-0 items-center gap-2 px-0.5">
+          <div className="mb-1.5 flex shrink-0 min-w-0 items-center gap-2 px-0.5">
             <GaugeIcon className="size-3.5 shrink-0 text-cyan-500 dark:text-cyan-300" />
             <div className="min-w-0">
               <div className="truncate text-xs font-semibold uppercase tracking-[0.1em]">
@@ -460,6 +455,28 @@ export function ProjectTelemetryGraph({
                   : ""}
               </div>
             </div>
+            <button
+              type="button"
+              aria-label="Move project resource graphs"
+              className="ml-auto min-h-9 min-w-9 cursor-move touch-none rounded-md text-muted-foreground focus-visible:outline-2 focus-visible:outline-ring"
+              title="Drag to move. Arrow keys move 8 pixels; Shift+Arrow moves 1 pixel."
+              onPointerDown={(event) => layout.begin("move", event)}
+              onLostPointerCapture={layout.finish}
+              onKeyDown={(event) => {
+                if (layout.adjustWithKeyboard("move", event.key, event.shiftKey))
+                  event.preventDefault();
+              }}
+            >
+              <GripHorizontalIcon className="mx-auto size-4" />
+            </button>
+            <button
+              type="button"
+              aria-label="Reset resource graph position and size"
+              className="min-h-9 min-w-9 rounded-md text-muted-foreground focus-visible:outline-2 focus-visible:outline-ring"
+              onClick={layout.reset}
+            >
+              <RotateCcwIcon className="mx-auto size-4" />
+            </button>
             <button
               aria-controls={panelId}
               aria-expanded={true}
@@ -476,81 +493,119 @@ export function ProjectTelemetryGraph({
           <div className="mb-1.5 truncate px-0.5 text-xs text-muted-foreground">
             Host metrics: selected environment · disk: selected project volume
           </div>
-          <div className="grid grid-cols-2 gap-1.5" id={panelId}>
-            <TelemetryCard
-              color={colors.cpu}
-              detail={cpuDetail}
-              history={visibleView.history.map((point) => point.cpuPercent)}
-              icon={CpuIcon}
-              label="Host CPU"
-              value={telemetry?.cpu.status === "warming" ? "Warming" : formatPercent(cpuPercent)}
+          <label className="mb-2 flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
+            <Switch
+              aria-label="Hide unavailable resource graphs"
+              checked={hideUnavailableGraphs}
+              disabled={!onHideUnavailableGraphsChange}
+              onCheckedChange={(checked) => onHideUnavailableGraphsChange?.(checked)}
             />
-            <TelemetryCard
-              color={colors.memory}
-              detail={memoryDetail}
-              history={visibleView.history.map((point) => point.memoryPercent)}
-              icon={MemoryStickIcon}
-              label="Host RAM"
-              title={exactBytesTitle(
-                "Available memory on selected environment",
-                telemetry?.memory.status === "available" ? telemetry.memory.availableBytes : null,
-              )}
-              value={formatPercent(memoryPercent)}
+            Hide unavailable graphs
+          </label>
+          <div className="min-h-0 flex-1 overflow-auto" id={panelId}>
+            <div className="grid grid-cols-2 gap-1.5">
+              <TelemetryCard
+                color={colors.cpu}
+                detail={cpuDetail}
+                history={visibleView.history.map((point) => point.cpuPercent)}
+                icon={CpuIcon}
+                label="Host CPU"
+                hidden={hideUnavailableGraphs && cpuPercent === null}
+                value={telemetry?.cpu.status === "warming" ? "Warming" : formatPercent(cpuPercent)}
+              />
+              <TelemetryCard
+                color={colors.memory}
+                detail={memoryDetail}
+                history={visibleView.history.map((point) => point.memoryPercent)}
+                icon={MemoryStickIcon}
+                label="Host RAM"
+                hidden={hideUnavailableGraphs && memoryPercent === null}
+                title={exactBytesTitle(
+                  "Available memory on selected environment",
+                  telemetry?.memory.status === "available" ? telemetry.memory.availableBytes : null,
+                )}
+                value={formatPercent(memoryPercent)}
+              />
+              <TelemetryCard
+                color={colors.disk}
+                detail={diskDetail}
+                history={visibleView.history.map((point) => point.projectVolumePercent)}
+                icon={HardDriveIcon}
+                label="Project disk"
+                hidden={hideUnavailableGraphs && diskPercent === null}
+                title={exactBytesTitle(
+                  "Free space on selected project volume",
+                  telemetry?.projectVolume.status === "available"
+                    ? telemetry.projectVolume.availableBytes
+                    : null,
+                )}
+                value={formatPercent(diskPercent)}
+              />
+              <TelemetryCard
+                color={colors.gpu}
+                detail={gpuDetail}
+                history={visibleView.history.map((point) => point.gpuPercent)}
+                icon={GaugeIcon}
+                label="Host GPU"
+                hidden={
+                  hideUnavailableGraphs &&
+                  (telemetryUnavailable || visibleView.gpu.gpuPercent === null)
+                }
+                value={
+                  gpuLoading
+                    ? "Waiting"
+                    : formatPercent(telemetryUnavailable ? null : visibleView.gpu.gpuPercent)
+                }
+              />
+              <TelemetryCard
+                color={colors.vram}
+                detail={vramDetail}
+                history={visibleView.history.map((point) => point.vramPercent)}
+                icon={MemoryStickIcon}
+                label="Host VRAM"
+                hidden={
+                  hideUnavailableGraphs &&
+                  (telemetryUnavailable || visibleView.gpu.vramPercent === null)
+                }
+                title={exactBytesTitle(
+                  "Available GPU memory on selected environment",
+                  telemetryUnavailable ? null : visibleView.gpu.vramAvailableBytes,
+                )}
+                value={
+                  gpuLoading
+                    ? "Waiting"
+                    : formatPercent(telemetryUnavailable ? null : visibleView.gpu.vramPercent)
+                }
+              />
+            </div>
+            <ProjectGpuAdapterHistory
+              hideUnavailable={hideUnavailableGraphs}
+              telemetry={telemetryUnavailable ? undefined : telemetry?.gpu}
+              history={visibleView.history}
             />
-            <TelemetryCard
-              color={colors.disk}
-              detail={diskDetail}
-              history={visibleView.history.map((point) => point.projectVolumePercent)}
-              icon={HardDriveIcon}
-              label="Project disk"
-              title={exactBytesTitle(
-                "Free space on selected project volume",
-                telemetry?.projectVolume.status === "available"
-                  ? telemetry.projectVolume.availableBytes
-                  : null,
-              )}
-              value={formatPercent(diskPercent)}
+            <ProjectTemperatureHistory
+              hideUnavailable={hideUnavailableGraphs}
+              telemetry={telemetryUnavailable ? undefined : telemetry?.temperatures}
+              history={visibleView.history}
             />
-            <TelemetryCard
-              color={colors.gpu}
-              detail={gpuDetail}
-              history={visibleView.history.map((point) => point.gpuPercent)}
-              icon={GaugeIcon}
-              label="Host GPU"
-              value={
-                gpuLoading
-                  ? "Waiting"
-                  : formatPercent(telemetryUnavailable ? null : visibleView.gpu.gpuPercent)
-              }
-            />
-            <TelemetryCard
-              color={colors.vram}
-              detail={vramDetail}
-              history={visibleView.history.map((point) => point.vramPercent)}
-              icon={MemoryStickIcon}
-              label="Host VRAM"
-              title={exactBytesTitle(
-                "Available GPU memory on selected environment",
-                telemetryUnavailable ? null : visibleView.gpu.vramAvailableBytes,
-              )}
-              value={
-                gpuLoading
-                  ? "Waiting"
-                  : formatPercent(telemetryUnavailable ? null : visibleView.gpu.vramPercent)
-              }
+            <ProjectTemperatureReadings
+              telemetry={telemetryUnavailable ? undefined : telemetry?.temperatures}
             />
           </div>
-          <ProjectGpuAdapterHistory
-            telemetry={telemetryUnavailable ? undefined : telemetry?.gpu}
-            history={visibleView.history}
-          />
-          <ProjectTemperatureHistory
-            telemetry={telemetryUnavailable ? undefined : telemetry?.temperatures}
-            history={visibleView.history}
-          />
-          <ProjectTemperatureReadings
-            telemetry={telemetryUnavailable ? undefined : telemetry?.temperatures}
-          />
+          <button
+            type="button"
+            aria-label="Resize project resource graphs"
+            className="ml-auto min-h-9 min-w-9 shrink-0 cursor-se-resize touch-none rounded-md text-muted-foreground focus-visible:outline-2 focus-visible:outline-ring"
+            title="Drag to resize. Arrow keys resize 8 pixels; Shift+Arrow resizes 1 pixel."
+            onPointerDown={(event) => layout.begin("resize", event)}
+            onLostPointerCapture={layout.finish}
+            onKeyDown={(event) => {
+              if (layout.adjustWithKeyboard("resize", event.key, event.shiftKey))
+                event.preventDefault();
+            }}
+          >
+            <ScalingIcon className="mx-auto size-4" />
+          </button>
         </aside>
       )}
     </div>

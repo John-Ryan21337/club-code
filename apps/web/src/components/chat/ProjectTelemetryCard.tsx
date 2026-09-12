@@ -44,6 +44,7 @@ function TelemetrySparkline(props: {
 }
 
 export function TelemetryCard(props: {
+  readonly hidden?: boolean;
   readonly icon: ComponentType<{ className?: string }>;
   readonly label: string;
   readonly value: string;
@@ -53,6 +54,7 @@ export function TelemetryCard(props: {
   readonly history: readonly (number | null)[];
   readonly measurement?: "utilization" | "temperature";
 }) {
+  if (props.hidden) return null;
   const Icon = props.icon;
   return (
     <div

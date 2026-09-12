@@ -12,11 +12,14 @@ import { gpuAdapterHistory, projectGpuAdapterDetails } from "./ProjectGpuAdapter
 export function ProjectGpuAdapterHistory({
   telemetry,
   history,
+  hideUnavailable = false,
 }: {
   readonly telemetry: ServerSystemGpuTelemetry | undefined;
   readonly history: readonly ProjectTelemetryHistoryPoint[];
+  readonly hideUnavailable?: boolean;
 }) {
   const adapters = projectGpuAdapterDetails(telemetry);
+  if (hideUnavailable && adapters.length === 0) return null;
   return (
     <details className="mt-2 rounded-lg border border-border/50 bg-card/70 text-xs">
       <summary className="min-h-9 cursor-pointer px-3 py-2 text-muted-foreground focus-visible:outline-2 focus-visible:outline-ring">
@@ -44,6 +47,7 @@ export function ProjectGpuAdapterHistory({
                   />
                   <TelemetryCard
                     label={`${label} VRAM`}
+                    hidden={hideUnavailable && adapter.memoryUtilizationPercent === null}
                     icon={MemoryStickIcon}
                     color="var(--cafe-project-telemetry-vram, #7c3aed)"
                     value={
@@ -60,6 +64,7 @@ export function ProjectGpuAdapterHistory({
                   />
                   <TelemetryCard
                     label={`${label} temperature`}
+                    hidden={hideUnavailable && adapter.temperatureCelsius === null}
                     icon={ThermometerIcon}
                     color="var(--cafe-project-telemetry-temperature, #dc2626)"
                     measurement="temperature"
