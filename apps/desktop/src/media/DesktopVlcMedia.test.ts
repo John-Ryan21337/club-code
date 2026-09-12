@@ -221,6 +221,11 @@ describe("DesktopVlcMedia", () => {
         expect.stringContaining("channels=2,samplerate=48000"),
         expect.any(String),
       );
+      const bitrate = extension === "wav" ? 96 : 128;
+      expect(harness.dependencies.createPrivateConfig).toHaveBeenCalledWith(
+        expect.stringContaining(`aenc=vorbis{min-bitrate=${bitrate},max-bitrate=${bitrate}}`),
+        expect.any(String),
+      );
       await Effect.runPromise(harness.media.shutdown);
     },
   );
