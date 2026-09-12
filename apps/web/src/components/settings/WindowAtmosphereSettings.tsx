@@ -60,6 +60,7 @@ import {
 import { Radio, RadioGroup } from "../ui/radio-group";
 import { Switch } from "../ui/switch";
 import { ColorWheelPicker } from "./ColorWheelPicker";
+import { HardwareLightingSettings } from "./HardwareLightingSettings";
 import { SettingResetButton, SettingsRow, SettingsSection } from "./settingsLayout";
 
 const DEFAULT_ATMOSPHERE_PICKER_COLOR = "#38bdf8";
@@ -73,7 +74,7 @@ const ATMOSPHERE_MOTION_MODES: ReadonlyArray<readonly [FallingEffectMatrixMotion
   ["walk-reverse", "Walk Reverse"],
 ];
 
-export function WindowAtmosphereSettings() {
+function WindowAtmosphereControls() {
   const settings = useSettings();
   const { updateSettings } = useUpdateSettings();
   const serverConfig = useServerConfig();
@@ -579,5 +580,14 @@ export function WindowAtmosphereSettings() {
         }
       />
     </SettingsSection>
+  );
+}
+
+export function WindowAtmosphereSettings() {
+  return (
+    <>
+      <WindowAtmosphereControls />
+      <HardwareLightingSettings />
+    </>
   );
 }

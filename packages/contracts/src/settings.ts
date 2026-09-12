@@ -14,6 +14,24 @@ import { DEFAULT_GIT_TEXT_GENERATION_MODEL, ProviderOptionSelections } from "./m
 import { ModelSelection } from "./orchestration.ts";
 import { ProviderInstanceConfig, ProviderInstanceId } from "./providerInstance.ts";
 import { EditorId } from "./editor.ts";
+import {
+  HardwareLightingControllerId,
+  MAX_HARDWARE_LIGHTING_CONTROLLERS,
+} from "./hardwareLighting.ts";
+
+export const HardwareLightingControllerIds = Schema.Array(HardwareLightingControllerId).check(
+  Schema.isMaxLength(MAX_HARDWARE_LIGHTING_CONTROLLERS),
+  Schema.makeFilter((ids) =>
+    new Set(ids).size === ids.length ? undefined : "must not contain duplicate controller IDs",
+  ),
+);
+export const HardwareLightingBrightness = Schema.Number.check(
+  Schema.isBetween({ minimum: 0.05, maximum: 1 }),
+);
+export const DEFAULT_HARDWARE_LIGHTING_SYNC_ENABLED = false;
+export const DEFAULT_HARDWARE_LIGHTING_CONTROLLER_IDS: readonly string[] = [];
+export const DEFAULT_HARDWARE_LIGHTING_BRIGHTNESS = 1;
+export const DEFAULT_HARDWARE_LIGHTING_RESTORE_ON_DISABLE = true;
 
 // ── Client Settings (local-only) ───────────────────────────────
 
@@ -461,6 +479,18 @@ export const ClientSettingsSchema = Schema.Struct({
   ),
   fallingEffectsEnabled: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECTS_ENABLED)),
+  ),
+  hardwareLightingSyncEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_HARDWARE_LIGHTING_SYNC_ENABLED)),
+  ),
+  hardwareLightingControllerIds: HardwareLightingControllerIds.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_HARDWARE_LIGHTING_CONTROLLER_IDS)),
+  ),
+  hardwareLightingBrightness: HardwareLightingBrightness.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_HARDWARE_LIGHTING_BRIGHTNESS)),
+  ),
+  hardwareLightingRestoreOnDisable: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_HARDWARE_LIGHTING_RESTORE_ON_DISABLE)),
   ),
   fallingEffectKind: FallingEffectKind.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_KIND)),
@@ -1229,6 +1259,10 @@ export const ClientSettingsPatch = Schema.Struct({
   interfaceScalePercent: Schema.optionalKey(InterfaceScalePercent),
   continueBackgroundAnimations: Schema.optionalKey(Schema.Boolean),
   fallingEffectsEnabled: Schema.optionalKey(Schema.Boolean),
+  hardwareLightingSyncEnabled: Schema.optionalKey(Schema.Boolean),
+  hardwareLightingControllerIds: Schema.optionalKey(HardwareLightingControllerIds),
+  hardwareLightingBrightness: Schema.optionalKey(HardwareLightingBrightness),
+  hardwareLightingRestoreOnDisable: Schema.optionalKey(Schema.Boolean),
   fallingEffectKind: Schema.optionalKey(FallingEffectKind),
   fallingEffectColor: Schema.optionalKey(AmbientColor),
   fallingEffectMatrixColorMode: Schema.optionalKey(FallingEffectMatrixColorMode),

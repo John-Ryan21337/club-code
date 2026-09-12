@@ -3,6 +3,7 @@ import { useEffect, useEffectEvent, useMemo, useRef } from "react";
 import { useSettings } from "../hooks/useSettings";
 import { useTheme } from "../hooks/useTheme";
 import { MatrixGpuFrameCollector } from "../matrixGpuFrameCollector";
+import { matrixColorFrameStore } from "../matrixColorFrameStore";
 import { createMatrixWebGl2Renderer, type MatrixWebGl2Renderer } from "../matrixWebGlRenderer";
 import { useServerConfig } from "../rpc/serverState";
 import {
@@ -178,6 +179,8 @@ export function WindowAtmosphere() {
     if (!atmosphereAvailable || !enabled || !canvas) return;
     const context = canvas.getContext("2d");
     if (!context) return;
+    const paletteOwner = {};
+    if (kind === "matrix") matrixColorFrameStore.claim(paletteOwner);
 
     const reducedMotion = window.matchMedia(REDUCED_MOTION_QUERY);
     let scene: AtmosphereScene | null = null;
@@ -200,6 +203,7 @@ export function WindowAtmosphere() {
         animationFrame = null;
       }
       lastFrameTime = null;
+      if (kind === "matrix") matrixColorFrameStore.freeze(paletteOwner);
     };
 
     const clearCanvasBitmap = () => {
@@ -319,6 +323,12 @@ export function WindowAtmosphere() {
         clearCanvasBitmap();
         canvas.dataset.atmosphereRenderer = "webgl2-glyph-atlas";
         canvas.dataset.atmosphereTextRasterization = "gpu-glyph-atlas";
+        if (matrixColorFrame)
+          matrixColorFrameStore.publish(
+            paletteOwner,
+            matrixColorFrame,
+            advance ? "animated" : "frozen",
+          );
         return;
       }
 
@@ -336,6 +346,12 @@ export function WindowAtmosphere() {
       canvas.dataset.atmosphereRenderer = "canvas2d";
       canvas.dataset.atmosphereTextRasterization = "main-thread";
       canvas.dataset.atmosphereFrameCommit = "canvas2d";
+      if (matrixColorFrame)
+        matrixColorFrameStore.publish(
+          paletteOwner,
+          matrixColorFrame,
+          advance ? "animated" : "frozen",
+        );
     };
 
     /**
@@ -406,6 +422,7 @@ export function WindowAtmosphere() {
       }
       if (syncPresentationRef.current === syncAnimation) syncPresentationRef.current = null;
       cancelAnimation();
+      if (kind === "matrix") matrixColorFrameStore.release(paletteOwner);
       if (resizeFrame !== null) window.cancelAnimationFrame(resizeFrame);
       clearCanvasBitmap();
       document.removeEventListener("visibilitychange", syncAnimation);

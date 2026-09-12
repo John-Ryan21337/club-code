@@ -5,6 +5,11 @@ import { render } from "vitest-browser-react";
 
 import { WindowAtmosphereSettings } from "./WindowAtmosphereSettings";
 
+// Device RPC and confirmed writes have their own real component browser suite.
+vi.mock("./HardwareLightingSettings", () => ({
+  HardwareLightingSettings: () => <div data-testid="hardware-lighting-settings-slot" />,
+}));
+
 const testState = vi.hoisted(() => ({
   settings: null as UnifiedSettings | null,
   atmosphereAvailable: true,
@@ -40,6 +45,7 @@ describe("WindowAtmosphereSettings", () => {
     const screen = await render(<WindowAtmosphereSettings />);
 
     await expect.element(page.getByText("Window atmosphere", { exact: true })).toBeInTheDocument();
+    await expect.element(page.getByTestId("hardware-lighting-settings-slot")).toBeInTheDocument();
     await expect.element(page.getByText("Matrix color mode", { exact: true })).toBeInTheDocument();
     await expect
       .element(page.getByText("Roman / Japanese mix", { exact: true }))

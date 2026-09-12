@@ -1,3 +1,4 @@
+import type { HardwareLightingFrameInput, HardwareLightingStatus } from "./hardwareLighting.ts";
 import type {
   ProviderRespondToInteractionInput,
   ProviderResolveInteractionUrlInput,
@@ -454,6 +455,11 @@ export interface LocalApi {
     getSettings: () => Promise<ServerSettings>;
     updateSettings: (patch: ServerSettingsPatch) => Promise<ServerSettings>;
     getClientSettings: () => Promise<ClientSettings>;
+    getHardwareLightingStatus: () => Promise<HardwareLightingStatus>;
+    refreshHardwareLighting: () => Promise<HardwareLightingStatus>;
+    applyHardwareLightingFrame: (
+      input: HardwareLightingFrameInput,
+    ) => Promise<HardwareLightingStatus>;
     updateClientSettings: (patch: ClientSettingsPatch) => Promise<ClientSettings>;
     discoverSourceControl: () => Promise<SourceControlDiscoveryResult>;
     getTraceDiagnostics: () => Promise<ServerTraceDiagnosticsResult>;

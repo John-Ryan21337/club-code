@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
 import { MAX_ATMOSPHERE_CANVAS_PIXELS } from "../windowAtmosphere";
+import { matrixColorFrameStore } from "../matrixColorFrameStore";
 import { WindowAtmosphere } from "./WindowAtmosphere";
 
 const testState = vi.hoisted(() => ({
@@ -271,6 +272,10 @@ describe("WindowAtmosphere", () => {
     drawAt(1_100);
     expect(vi.mocked(context.fillText).mock.calls).toEqual(positions);
     expect(context.fillStyle).toBe("#ff0000");
+    expect(matrixColorFrameStore.getSnapshot()).toMatchObject({
+      frame: { color: "#ff0000", perStream: false },
+      motion: "animated",
+    });
     await screen.unmount();
   });
 
@@ -306,6 +311,10 @@ describe("WindowAtmosphere", () => {
     expect(vi.mocked(context.fillText).mock.calls).toEqual(positions);
     expect(context.fillStyle).toBe("#ff0000");
     expect(context.clearRect).toHaveBeenCalledTimes(1);
+    expect(matrixColorFrameStore.getSnapshot()).toMatchObject({
+      frame: { color: "#ff0000", perStream: false },
+      motion: "frozen",
+    });
     expect(frames.size).toBe(0);
     await screen.unmount();
   });

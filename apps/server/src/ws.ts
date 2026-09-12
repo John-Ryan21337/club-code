@@ -28,6 +28,8 @@ import {
   ThreadId,
   ServerProviderRuntimeRestartError,
   DictationError,
+  ClientSettingsError,
+  HardwareLightingRpcError,
   ProviderInteractionError,
   WS_METHODS,
   WsRpcGroup,
@@ -65,6 +67,15 @@ import { UsageStatsService } from "./usageStats/Services/UsageStatsService.ts";
 import { ServerRuntimeStartup } from "./serverRuntimeStartup.ts";
 import { redactServerSettingsForClient, ServerSettingsService } from "./serverSettings.ts";
 import { ServerClientSettingsService } from "./serverClientSettings.ts";
+import {
+  HardwareLightingService,
+  HardwareLightingServiceLive,
+  type HardwareLightingServiceShape,
+} from "./lighting/HardwareLightingService.ts";
+import {
+  canManageHardwareLighting,
+  changesHardwareLightingSettings,
+} from "./lighting/HardwareLightingAuthority.ts";
 import { WorkspaceEntries } from "./workspace/Services/WorkspaceEntries.ts";
 import { WorkspaceFileSystem } from "./workspace/Services/WorkspaceFileSystem.ts";
 import { WorkspacePathOutsideRootError } from "./workspace/Services/WorkspacePaths.ts";
@@ -186,10 +197,21 @@ const makeWsRpcLayer = (
   dictation: OpenAiRealtimeDictationShape,
   orchestrationSubscriptionHub: OrchestrationSubscriptionHubShape,
   providerMaintenanceRunner: ProviderMaintenanceRunner.ProviderMaintenanceRunnerShape,
+  hardwareLighting: HardwareLightingServiceShape,
 ) =>
   WsRpcGroup.toLayer(
     Effect.gen(function* () {
       const currentSessionId = currentSession.sessionId;
+      const requireLightingOwner = Effect.suspend(() =>
+        canManageHardwareLighting(currentSession.role, secureSecretTransport)
+          ? Effect.void
+          : Effect.fail(
+              new HardwareLightingRpcError({
+                detail:
+                  "Hardware lighting requires an owner session over HTTPS or a same-machine Cafe connection.",
+              }),
+            ),
+      );
       const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
       const orchestrationEngine = yield* OrchestrationEngineService;
       const providerRuntimeIngestion = yield* ProviderRuntimeIngestionService;
@@ -1167,13 +1189,53 @@ const makeWsRpcLayer = (
         [WS_METHODS.serverUpdateClientSettings]: ({ patch }) =>
           observeRpcEffect(
             WS_METHODS.serverUpdateClientSettings,
-            clientSettings.updateSettings(patch),
+            Effect.gen(function* () {
+              if (
+                changesHardwareLightingSettings(patch) &&
+                !canManageHardwareLighting(currentSession.role, secureSecretTransport)
+              ) {
+                return yield* Effect.fail(
+                  new ClientSettingsError({
+                    settingsPath: "client",
+                    detail:
+                      "Hardware lighting settings require an owner session over HTTPS or a same-machine Cafe connection.",
+                  }),
+                );
+              }
+              const settings = yield* clientSettings.updateSettings(patch);
+              yield* hardwareLighting.reconcile(settings);
+              return settings;
+            }),
             {
               "rpc.aggregate": "server",
             },
           ),
         [WS_METHODS.dictationGetStatus]: (_input) =>
           observeRpcEffect(WS_METHODS.dictationGetStatus, dictationStatus()),
+        [WS_METHODS.serverGetHardwareLightingStatus]: (_input) =>
+          observeRpcEffect(
+            WS_METHODS.serverGetHardwareLightingStatus,
+            requireLightingOwner.pipe(
+              Effect.andThen(clientSettings.getSettings),
+              Effect.flatMap(hardwareLighting.getStatus),
+            ),
+          ),
+        [WS_METHODS.serverRefreshHardwareLighting]: (_input) =>
+          observeRpcEffect(
+            WS_METHODS.serverRefreshHardwareLighting,
+            requireLightingOwner.pipe(
+              Effect.andThen(clientSettings.getSettings),
+              Effect.flatMap(hardwareLighting.refresh),
+            ),
+          ),
+        [WS_METHODS.serverApplyHardwareLightingFrame]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverApplyHardwareLightingFrame,
+            requireLightingOwner.pipe(
+              Effect.andThen(clientSettings.getSettings),
+              Effect.flatMap((settings) => hardwareLighting.applyFrame(settings, input)),
+            ),
+          ),
         [WS_METHODS.dictationSetApiKey]: ({ apiKey }) =>
           observeRpcEffect(
             WS_METHODS.dictationSetApiKey,
@@ -1546,6 +1608,8 @@ export const websocketRpcRouteLayer = Layer.unwrap(
     // boundary.
     const dictation = yield* OpenAiRealtimeDictation;
     const providerMaintenanceRunner = yield* ProviderMaintenanceRunner.ProviderMaintenanceRunner;
+    // One device coordinator per server route, shared across all accepted sockets.
+    const hardwareLighting = yield* HardwareLightingService;
     return HttpRouter.add(
       "GET",
       "/ws",
@@ -1573,6 +1637,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
               dictation,
               orchestrationSubscriptionHub,
               providerMaintenanceRunner,
+              hardwareLighting,
             ).pipe(
               Layer.provideMerge(RpcSerialization.layerJson),
               Layer.provide(ProviderJournalMessageRepairLive),
@@ -1608,4 +1673,4 @@ export const websocketRpcRouteLayer = Layer.unwrap(
       }).pipe(Effect.catchTag("AuthError", respondToAuthError)),
     );
   }),
-).pipe(Layer.provide(ProviderMaintenanceRunner.layer));
+).pipe(Layer.provide(ProviderMaintenanceRunner.layer), Layer.provide(HardwareLightingServiceLive));

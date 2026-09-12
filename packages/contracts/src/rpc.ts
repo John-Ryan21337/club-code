@@ -17,6 +17,11 @@ import {
 } from "./dictation.ts";
 import { AuthAccessStreamEvent } from "./auth.ts";
 import {
+  HardwareLightingFrameInput,
+  HardwareLightingRpcError,
+  HardwareLightingStatus,
+} from "./hardwareLighting.ts";
+import {
   FilesystemBrowseInput,
   FilesystemBrowseResult,
   FilesystemBrowseError,
@@ -154,6 +159,9 @@ export const WS_METHODS = {
   serverUpdateSettings: "server.updateSettings",
   serverGetClientSettings: "server.getClientSettings",
   serverUpdateClientSettings: "server.updateClientSettings",
+  serverGetHardwareLightingStatus: "server.getHardwareLightingStatus",
+  serverRefreshHardwareLighting: "server.refreshHardwareLighting",
+  serverApplyHardwareLightingFrame: "server.applyHardwareLightingFrame",
   serverDiscoverSourceControl: "server.discoverSourceControl",
   serverGetTraceDiagnostics: "server.getTraceDiagnostics",
   serverGetProcessDiagnostics: "server.getProcessDiagnostics",
@@ -281,6 +289,33 @@ export const WsServerUpdateClientSettingsRpc = Rpc.make(WS_METHODS.serverUpdateC
   success: ClientSettingsSchema,
   error: ClientSettingsError,
 });
+
+export const WsServerGetHardwareLightingStatusRpc = Rpc.make(
+  WS_METHODS.serverGetHardwareLightingStatus,
+  {
+    payload: Schema.Struct({}),
+    success: HardwareLightingStatus,
+    error: Schema.Union([HardwareLightingRpcError, ClientSettingsError]),
+  },
+);
+
+export const WsServerRefreshHardwareLightingRpc = Rpc.make(
+  WS_METHODS.serverRefreshHardwareLighting,
+  {
+    payload: Schema.Struct({}),
+    success: HardwareLightingStatus,
+    error: Schema.Union([HardwareLightingRpcError, ClientSettingsError]),
+  },
+);
+
+export const WsServerApplyHardwareLightingFrameRpc = Rpc.make(
+  WS_METHODS.serverApplyHardwareLightingFrame,
+  {
+    payload: HardwareLightingFrameInput,
+    success: HardwareLightingStatus,
+    error: Schema.Union([HardwareLightingRpcError, ClientSettingsError]),
+  },
+);
 
 export const WsDictationGetStatusRpc = Rpc.make(WS_METHODS.dictationGetStatus, {
   payload: Schema.Struct({}),
@@ -598,6 +633,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetSettingsRpc,
   WsServerUpdateSettingsRpc,
   WsServerGetClientSettingsRpc,
+  WsServerGetHardwareLightingStatusRpc,
+  WsServerRefreshHardwareLightingRpc,
+  WsServerApplyHardwareLightingFrameRpc,
   WsServerUpdateClientSettingsRpc,
   WsDictationGetStatusRpc,
   WsDictationSetApiKeyRpc,

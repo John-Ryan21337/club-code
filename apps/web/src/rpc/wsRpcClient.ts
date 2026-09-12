@@ -129,6 +129,15 @@ export interface WsRpcClient {
       patch: ServerSettingsPatch,
     ) => ReturnType<RpcUnaryMethod<typeof WS_METHODS.serverUpdateSettings>>;
     readonly getClientSettings: RpcUnaryNoArgMethod<typeof WS_METHODS.serverGetClientSettings>;
+    readonly getHardwareLightingStatus: RpcUnaryNoArgMethod<
+      typeof WS_METHODS.serverGetHardwareLightingStatus
+    >;
+    readonly refreshHardwareLighting: RpcUnaryNoArgMethod<
+      typeof WS_METHODS.serverRefreshHardwareLighting
+    >;
+    readonly applyHardwareLightingFrame: RpcUnaryMethod<
+      typeof WS_METHODS.serverApplyHardwareLightingFrame
+    >;
     readonly updateClientSettings: (
       patch: ClientSettingsPatch,
     ) => ReturnType<RpcUnaryMethod<typeof WS_METHODS.serverUpdateClientSettings>>;
@@ -286,6 +295,12 @@ export function createWsRpcClient(transport: WsTransport): WsRpcClient {
         transport.request((client) => client[WS_METHODS.serverUpdateSettings]({ patch })),
       getClientSettings: () =>
         transport.request((client) => client[WS_METHODS.serverGetClientSettings]({})),
+      getHardwareLightingStatus: () =>
+        transport.request((client) => client[WS_METHODS.serverGetHardwareLightingStatus]({})),
+      refreshHardwareLighting: () =>
+        transport.request((client) => client[WS_METHODS.serverRefreshHardwareLighting]({})),
+      applyHardwareLightingFrame: (input) =>
+        transport.request((client) => client[WS_METHODS.serverApplyHardwareLightingFrame](input)),
       updateClientSettings: (patch) =>
         transport.request((client) => client[WS_METHODS.serverUpdateClientSettings]({ patch })),
       discoverSourceControl: () =>
