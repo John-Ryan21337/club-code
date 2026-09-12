@@ -2,6 +2,7 @@ import { DEFAULT_UNIFIED_SETTINGS, type UnifiedSettings } from "@cafecode/contra
 import { page } from "vitest/browser";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
+import "../../index.css";
 
 import { WindowAtmosphereSettings } from "./WindowAtmosphereSettings";
 
@@ -36,6 +37,41 @@ describe("WindowAtmosphereSettings", () => {
     testState.updateSettings.mockReset();
   });
 
+  it("keeps music descriptions readable and all choices inside narrow settings panes", async () => {
+    await page.viewport(1200, 850);
+    const view = await render(
+      <div style={{ width: 570 }}>
+        <WindowAtmosphereSettings />
+      </div>,
+    );
+    try {
+      const group = page.getByRole("radiogroup", { name: "Matrix color mode" }).element();
+      const row = group.closest(".border-t")!;
+      const description = row.querySelector("p")!;
+      expect(description.getBoundingClientRect().width).toBeGreaterThan(400);
+      expect(group.getBoundingClientRect().top).toBeGreaterThanOrEqual(
+        description.getBoundingClientRect().bottom,
+      );
+      await view.rerender(
+        <div style={{ width: 320 }}>
+          <WindowAtmosphereSettings />
+        </div>,
+      );
+      const bounds = row.getBoundingClientRect();
+      for (const label of group.querySelectorAll("label")) {
+        const choice = label.getBoundingClientRect();
+        expect(choice.left).toBeGreaterThanOrEqual(bounds.left);
+        expect(choice.right).toBeLessThanOrEqual(bounds.right);
+      }
+      await page.getByText("Music Extra", { exact: true }).click();
+      expect(testState.updateSettings).toHaveBeenCalledWith({
+        fallingEffectMatrixColorMode: "music-reactive-extra",
+      });
+    } finally {
+      await view.unmount();
+    }
+  });
+
   it("offers only the base Matrix settings and persists selections", async () => {
     const screen = await render(<WindowAtmosphereSettings />);
 
@@ -53,6 +89,10 @@ describe("WindowAtmosphereSettings", () => {
     await page.getByText("Rainbow Extra", { exact: true }).click();
     expect(testState.updateSettings).toHaveBeenCalledWith({
       fallingEffectMatrixColorMode: "rainbow-extra",
+    });
+    await page.getByText("Music Extra", { exact: true }).click();
+    expect(testState.updateSettings).toHaveBeenCalledWith({
+      fallingEffectMatrixColorMode: "music-reactive-extra",
     });
 
     await screen.unmount();

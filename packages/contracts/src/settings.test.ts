@@ -276,6 +276,12 @@ describe("client settings", () => {
   });
 
   it("validates bounded falling-effect patches and supported palette modes", () => {
+    for (const mode of ["music-reactive", "music-reactive-extra"] as const) {
+      expect(decodeClientSettingsPatch({ fallingEffectMatrixColorMode: mode })).toEqual({
+        fallingEffectMatrixColorMode: mode,
+      });
+    }
+    expect(decodeClientSettings({}).fallingEffectMatrixColorMode).toBe("fixed");
     expect(
       decodeClientSettingsPatch({
         fallingEffectsEnabled: true,
@@ -299,7 +305,7 @@ describe("client settings", () => {
     });
     expect(() => decodeClientSettingsPatch({ fallingEffectKind: "fog" })).toThrow();
     expect(() =>
-      decodeClientSettingsPatch({ fallingEffectMatrixColorMode: "music-reactive" }),
+      decodeClientSettingsPatch({ fallingEffectMatrixColorMode: "unverified-audio-mode" }),
     ).toThrow();
     expect(() => decodeClientSettingsPatch({ fallingEffectOpacity: 0 })).toThrow();
     expect(() => decodeClientSettingsPatch({ fallingEffectSpeed: 10 })).toThrow();

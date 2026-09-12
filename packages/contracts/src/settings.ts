@@ -67,7 +67,13 @@ export const AmbientOpacity = Schema.Number.check(
   Schema.isBetween({ minimum: MIN_AMBIENT_OPACITY, maximum: MAX_AMBIENT_OPACITY }),
 );
 export type AmbientOpacity = typeof AmbientOpacity.Type;
-export const FallingEffectMatrixColorMode = Schema.Literals(["fixed", "rainbow", "rainbow-extra"]);
+export const FallingEffectMatrixColorMode = Schema.Literals([
+  "fixed",
+  "rainbow",
+  "rainbow-extra",
+  "music-reactive",
+  "music-reactive-extra",
+]);
 export type FallingEffectMatrixColorMode = typeof FallingEffectMatrixColorMode.Type;
 export const DEFAULT_FALLING_EFFECT_MATRIX_COLOR_MODE: FallingEffectMatrixColorMode = "fixed";
 
