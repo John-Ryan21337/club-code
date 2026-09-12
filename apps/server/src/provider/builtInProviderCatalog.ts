@@ -14,6 +14,7 @@ export type ProviderSnapshotSource = {
   readonly getSnapshot: ServerProviderShape["getSnapshot"];
   readonly refresh: ServerProviderShape["refresh"];
   readonly refreshAccountUsage: ServerProviderShape["refreshAccountUsage"];
+  readonly consumeResetCredit?: ServerProviderShape["consumeResetCredit"];
   readonly refreshModels: ServerProviderShape["refreshModels"];
   readonly streamChanges: Stream.Stream<ServerProvider>;
 };

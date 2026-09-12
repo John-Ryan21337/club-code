@@ -28,6 +28,7 @@ import {
   FilesystemBrowseError,
   ThreadId,
   ServerProviderRuntimeRestartError,
+  ServerProviderResetCreditError,
   DictationError,
   ProviderInteractionError,
   WS_METHODS,
@@ -1031,6 +1032,9 @@ const makeWsRpcLayer = (
             ).pipe(Effect.map((providers) => ({ providers }))),
             { "rpc.aggregate": "server" },
           ),
+        [WS_METHODS.serverConsumeResetCredit]: (input) =>
+          providerRegistry.consumeResetCredit?.(input) ??
+          Effect.fail(new ServerProviderResetCreditError({ reason: "unavailable" })),
         [WS_METHODS.serverUpdateProvider]: (input) =>
           observeRpcEffect(
             WS_METHODS.serverUpdateProvider,

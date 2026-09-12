@@ -24,6 +24,8 @@
  */
 import {
   CodexSettings,
+  ServerProviderResetCreditError,
+  type ServerProviderResetCreditInput,
   ProviderDriverKind,
   type ServerProvider,
   type ServerProviderProbePhaseDiagnostics,
@@ -37,6 +39,8 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import * as Ref from "effect/Ref";
+import { consumeCodexResetCredit } from "../codexResetCredit.ts";
 import { HttpClient } from "effect/unstable/http";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
@@ -401,6 +405,76 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
         ),
       );
 
+      let resetCreditActive = true;
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          resetCreditActive = false;
+        }),
+      );
+      const resetCreditBusy = yield* Ref.make(false);
+      const consumeResetCredit = (request: ServerProviderResetCreditInput) =>
+        Effect.acquireUseRelease(
+          Ref.modify(resetCreditBusy, (busy) => [!busy, true] as const),
+          (admitted) =>
+            !admitted
+              ? Effect.fail(new ServerProviderResetCreditError({ reason: "unavailable" }))
+              : Effect.gen(function* () {
+                  const current = yield* snapshot.getSnapshot;
+                  if (
+                    !resetCreditActive ||
+                    request.instanceId !== instanceId ||
+                    !enabled ||
+                    current.auth.status !== "authenticated" ||
+                    current.auth.type !== "chatgpt" ||
+                    !current.auth.email?.trim()
+                  )
+                    return yield* Effect.fail(
+                      new ServerProviderResetCreditError({ reason: "unavailable" }),
+                    );
+                  const expectedEmail = current.auth.email;
+                  if (
+                    expectedEmail.trim().toLowerCase() !==
+                    request.expectedEmail.trim().toLowerCase()
+                  )
+                    return yield* Effect.fail(
+                      new ServerProviderResetCreditError({ reason: "account-changed" }),
+                    );
+                  yield* refreshCodexShadowHome;
+                  return yield* consumeCodexResetCredit({
+                    ...request,
+                    binaryPath: effectiveConfig.binaryPath,
+                    homePath: effectiveConfig.homePath,
+                    cwd: serverConfig.stateDir,
+                    environment: effectiveEnvironment,
+                    expectedEmail,
+                    isCurrent: () =>
+                      snapshot.getSnapshot.pipe(
+                        Effect.map(
+                          (latest) =>
+                            resetCreditActive &&
+                            latest.auth.status === "authenticated" &&
+                            latest.auth.type === "chatgpt" &&
+                            latest.auth.email === expectedEmail,
+                        ),
+                      ),
+                  });
+                }).pipe(
+                  Effect.scoped,
+                  Effect.timeoutOption(Duration.seconds(15)),
+                  Effect.flatMap((result) =>
+                    result._tag === "Some"
+                      ? Effect.succeed(result.value)
+                      : Effect.fail(new ServerProviderResetCreditError({ reason: "unverified" })),
+                  ),
+                  Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+                  Effect.provideService(FileSystem.FileSystem, fileSystem),
+                  Effect.provideService(Path.Path, path),
+                  Effect.catchCause(() =>
+                    Effect.fail(new ServerProviderResetCreditError({ reason: "unverified" })),
+                  ),
+                ),
+          (admitted) => (admitted ? Ref.set(resetCreditBusy, false) : Effect.void),
+        );
       return {
         instanceId,
         driverKind: DRIVER_KIND,
@@ -408,7 +482,7 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
         displayName,
         accentColor,
         enabled,
-        snapshot,
+        snapshot: { ...snapshot, consumeResetCredit },
         adapter,
         textGeneration,
       } satisfies ProviderInstance;

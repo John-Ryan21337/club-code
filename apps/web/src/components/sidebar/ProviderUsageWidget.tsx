@@ -11,6 +11,7 @@ import {
 import { calculateModelPacing, formatModelPacingDuration } from "../../modelPacing";
 import { Button } from "../ui/button";
 import { ProviderUsageScrollRegion } from "./ProviderUsageScrollRegion";
+import { ProviderResetCredit } from "./ProviderResetCredit";
 
 export function ProviderUsageWidget() {
   const settings = useSettings();
@@ -153,6 +154,11 @@ export function ProviderUsageWidget() {
               <p role="status">The provider reports an exhausted usage or spend limit.</p>
             ) : null}
             <p className="text-muted-foreground">Reset credits: {resetCredits ?? "unknown"}</p>
+            <ProviderResetCredit
+              key={`${provider.instanceId}:${provider.auth.email ?? ""}`}
+              provider={provider}
+              stale={stale}
+            />
             {windows.map((row) => {
               const pacing =
                 settings.modelPacingEnabled &&

@@ -37,6 +37,8 @@ import type {
   ServerProcessResourceHistoryInput,
   ServerProcessResourceHistoryResult,
   ServerProviderLoginInput,
+  ServerProviderResetCreditInput,
+  ServerProviderResetCreditOutcome,
   ServerProviderLoginResult,
   ServerProviderUpdateInput,
   ServerProviderRuntimeRestartInput,
@@ -444,6 +446,9 @@ export interface LocalApi {
       readonly scope?: "full" | "models" | "usage";
     }) => Promise<ServerProviderUpdatedPayload>;
     loginProvider: (input: ServerProviderLoginInput) => Promise<ServerProviderLoginResult>;
+    consumeResetCredit: (
+      input: ServerProviderResetCreditInput,
+    ) => Promise<ServerProviderResetCreditOutcome>;
     updateProvider: (input: ServerProviderUpdateInput) => Promise<ServerProviderUpdatedPayload>;
     restartProviderRuntime: (
       input: ServerProviderRuntimeRestartInput,

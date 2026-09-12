@@ -67,6 +67,9 @@ import {
   ServerConfigStreamEvent,
   ServerConfig,
   ServerProviderLoginError,
+  ServerProviderResetCreditInput,
+  ServerProviderResetCreditOutcome,
+  ServerProviderResetCreditError,
   ServerProviderLoginInput,
   ServerProviderLoginResult,
   ServerProviderUpdateError,
@@ -144,6 +147,7 @@ export const WS_METHODS = {
   // Server meta
   serverGetConfig: "server.getConfig",
   serverRefreshProviders: "server.refreshProviders",
+  serverConsumeResetCredit: "server.consumeResetCredit",
   serverLoginProvider: "server.loginProvider",
   serverUpdateProvider: "server.updateProvider",
   serverRestartProviderRuntime: "server.restartProviderRuntime",
@@ -225,6 +229,12 @@ export const WsServerUpdateProviderRpc = Rpc.make(WS_METHODS.serverUpdateProvide
   payload: ServerProviderUpdateInput,
   success: ServerProviderUpdatedPayload,
   error: ServerProviderUpdateError,
+});
+
+export const WsServerConsumeResetCreditRpc = Rpc.make(WS_METHODS.serverConsumeResetCredit, {
+  payload: ServerProviderResetCreditInput,
+  success: ServerProviderResetCreditOutcome,
+  error: ServerProviderResetCreditError,
 });
 
 export const WsServerLoginProviderRpc = Rpc.make(WS_METHODS.serverLoginProvider, {
@@ -588,6 +598,7 @@ export const WsSubscribeUsageStatsRpc = Rpc.make(WS_METHODS.subscribeUsageStats,
 export const WsRpcGroup = RpcGroup.make(
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,
+  WsServerConsumeResetCreditRpc,
   WsServerLoginProviderRpc,
   WsServerUpdateProviderRpc,
   WsServerRestartProviderRuntimeRpc,
