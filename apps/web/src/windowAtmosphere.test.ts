@@ -4,6 +4,9 @@ import {
   MAX_ATMOSPHERE_FRAME_DELTA_SECONDS,
   MAX_ATMOSPHERE_PARTICLES_BY_KIND,
   MATRIX_JAPANESE_GLYPHS,
+  MATRIX_2CH_AA_TOKENS,
+  MATRIX_2CH_ENRICHED_GLYPHS,
+  applyMatrixEnrichmentInPlace,
   MATRIX_RAINBOW_CYCLE_MS,
   MATRIX_ROMAN_GLYPHS,
   advanceAtmosphereSceneInPlace,
@@ -22,6 +25,52 @@ import {
 } from "./windowAtmosphere";
 
 describe("window atmosphere model", () => {
+  it("keeps enrichment opt-in, Japanese-only and separate from simulation state", () => {
+    const japanese = createAtmosphereScene("matrix", 1280, 720, createSeededRandom(42), 2, 1);
+    expect(japanese.particles.every((particle) => particle.matrixToken === null)).toBe(true);
+    const before = structuredClone(japanese.particles);
+    applyMatrixEnrichmentInPlace(japanese, true, () => 0);
+    expect(
+      japanese.particles.every((particle) => particle.glyphs === MATRIX_2CH_ENRICHED_GLYPHS),
+    ).toBe(true);
+    expect(
+      japanese.particles.every((particle) => particle.matrixToken === MATRIX_2CH_AA_TOKENS[0]),
+    ).toBe(true);
+    expect(
+      japanese.particles.map((particle) => ({
+        ...particle,
+        glyphs: MATRIX_JAPANESE_GLYPHS,
+        matrixToken: null,
+      })),
+    ).toEqual(before);
+    applyMatrixEnrichmentInPlace(japanese, false, () => 0);
+    expect(japanese.particles).toEqual(before);
+    const roman = createAtmosphereScene("matrix", 1280, 720, createSeededRandom(42), 2, 0);
+    const romanBefore = structuredClone(roman.particles);
+    applyMatrixEnrichmentInPlace(roman, true, () => 0);
+    expect(roman.particles).toEqual(romanBefore);
+    for (const kind of ["snow", "rain"] as const) {
+      const scene = createAtmosphereScene(kind, 320, 240, createSeededRandom(1));
+      const particles = structuredClone(scene.particles);
+      applyMatrixEnrichmentInPlace(scene, true, () => 0);
+      expect(scene.particles).toEqual(particles);
+    }
+  });
+
+  it("selects only the seven intact cat tokens and respects the rare-head threshold", () => {
+    expect(MATRIX_2CH_AA_TOKENS).toHaveLength(7);
+    const scene = createAtmosphereScene("matrix", 320, 240, createSeededRandom(1), 1, 1);
+    for (const token of MATRIX_2CH_AA_TOKENS) {
+      const index = MATRIX_2CH_AA_TOKENS.indexOf(token);
+      let draws = 0;
+      applyMatrixEnrichmentInPlace(scene, true, () =>
+        draws++ % 2 === 0 ? 0.079 : (index + 0.5) / 7,
+      );
+      expect(scene.particles.every((particle) => particle.matrixToken === token)).toBe(true);
+    }
+    applyMatrixEnrichmentInPlace(scene, true, () => 0.08);
+    expect(scene.particles.every((particle) => particle.matrixToken === null)).toBe(true);
+  });
   it("creates deterministic bounded scenes for each effect", () => {
     for (const kind of ["snow", "rain", "matrix"] as const) {
       const first = createAtmosphereScene(kind, 1920, 1080, createSeededRandom(42));

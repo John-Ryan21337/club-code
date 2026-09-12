@@ -11,11 +11,14 @@ import { decodeMatrixWorkVocabulary, selectMatrixWorkVocabularyKey } from "../ma
 import {
   advanceAtmosphereSceneInPlace,
   applyMatrixWorkVocabularyInPlace,
+  applyMatrixEnrichmentInPlace,
   createAtmosphereScene,
   createSeededRandom,
   drawAtmosphereScene,
   fitAtmosphereDpr,
   MATRIX_JAPANESE_GLYPHS,
+  MATRIX_2CH_AA_TOKENS,
+  MATRIX_2CH_ENRICHED_GLYPHS,
   MATRIX_ROMAN_GLYPHS,
   MAX_ATMOSPHERE_CANVAS_PIXELS,
   resolveAtmosphereColor,
@@ -67,6 +70,8 @@ export function WindowAtmosphere({
   const speed = useSettings((settings) => settings.fallingEffectSpeed);
   const density = useSettings((settings) => settings.fallingEffectDensity);
   const japaneseRatio = useSettings((settings) => settings.fallingEffectJapaneseRatio);
+  const enriched2ch = useSettings((settings) => settings.fallingEffect2chEnriched);
+  const enriched2chRef = useRef(enriched2ch);
   const liveWorkVocabularyEnabled = useSettings(
     (settings) => settings.fallingEffectLiveWorkVocabularyEnabled,
   );
@@ -135,20 +140,22 @@ export function WindowAtmosphere({
     () => [
       ...Array.from(MATRIX_ROMAN_GLYPHS),
       ...Array.from(MATRIX_JAPANESE_GLYPHS),
+      ...(enriched2ch ? [...Array.from(MATRIX_2CH_ENRICHED_GLYPHS), ...MATRIX_2CH_AA_TOKENS] : []),
       ...vocabulary.english,
       ...vocabulary.japanese,
     ],
-    [vocabulary],
+    [vocabulary, enriched2ch],
   );
 
   // Clear the old route's pixels before paint, even with a queued RAF or reduced
   // motion. The replacement atlas is installed later; Canvas can draw new labels now.
   useLayoutEffect(() => {
     vocabularyRef.current = vocabulary;
+    enriched2chRef.current = enriched2ch;
     matrixGpuAvailableRef.current = false;
     if (matrixGpuCanvasRef.current) matrixGpuCanvasRef.current.style.visibility = "hidden";
     updateVocabularyRef.current?.();
-  }, [vocabulary]);
+  }, [vocabulary, enriched2ch]);
 
   // Acquiring the WebGL2 context is independent from the draw loop: a GPU
   // failure must never restart or reseed the shared simulation.
@@ -277,6 +284,7 @@ export function WindowAtmosphere({
         vocabularyRef.current,
         createSeededRandom(0x574f524b),
       );
+      applyMatrixEnrichmentInPlace(scene, enriched2chRef.current, createSeededRandom(0x324348));
     };
 
     const renderScene = (timestamp: number, advance: boolean, dimmed = !advance) => {
@@ -400,6 +408,7 @@ export function WindowAtmosphere({
         vocabularyRef.current,
         createSeededRandom(0x574f524b),
       );
+      applyMatrixEnrichmentInPlace(scene, enriched2chRef.current, createSeededRandom(0x324348));
       if (shouldShowAtmosphere(atmosphereState())) {
         renderScene(performance.now(), false, reducedMotion.matches);
       } else {

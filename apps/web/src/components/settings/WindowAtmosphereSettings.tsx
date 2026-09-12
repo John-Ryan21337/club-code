@@ -88,6 +88,7 @@ export function WindowAtmosphereSettings() {
     settings.fallingEffectDensity !== DEFAULT_FALLING_EFFECT_DENSITY ||
     settings.fallingEffectJapaneseRatio !== DEFAULT_FALLING_EFFECT_JAPANESE_RATIO ||
     settings.fallingEffectLiveWorkVocabularyEnabled ||
+    settings.fallingEffect2chEnriched ||
     settings.fallingEffectMatrixColorCycleSpeed !==
       DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED ||
     settings.fallingEffectMatrixBaseFontSize !== DEFAULT_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE ||
@@ -141,6 +142,7 @@ export function WindowAtmosphereSettings() {
                   fallingEffectDensity: DEFAULT_FALLING_EFFECT_DENSITY,
                   fallingEffectJapaneseRatio: DEFAULT_FALLING_EFFECT_JAPANESE_RATIO,
                   fallingEffectLiveWorkVocabularyEnabled: false,
+                  fallingEffect2chEnriched: false,
                 })
               }
             />
@@ -295,6 +297,19 @@ export function WindowAtmosphereSettings() {
                   updateSettings({ fallingEffectLiveWorkVocabularyEnabled: Boolean(checked) })
                 }
                 aria-label="Live work vocabulary / 作業語彙"
+              />
+            }
+          />
+          <SettingsRow
+            title="2ch-style cat AA / 2ch風の猫AA"
+            description="Add fixed half-width kana and occasional intact cat faces to Japanese Matrix streams. This setting does not access a website. / 日本語の Matrix の流れに、固定の半角カナと、ときどき猫の顔文字を追加します。外部サイトには接続しません。"
+            control={
+              <Switch
+                checked={settings.fallingEffect2chEnriched}
+                onCheckedChange={(checked) =>
+                  updateSettings({ fallingEffect2chEnriched: Boolean(checked) })
+                }
+                aria-label="2ch-style cat AA / 2ch風の猫AA"
               />
             }
           />

@@ -3,12 +3,52 @@ import { describe, expect, it } from "vitest";
 import { MatrixGpuFrameCollector, parseMatrixGpuColor } from "./matrixGpuFrameCollector";
 import {
   applyMatrixWorkVocabularyInPlace,
+  applyMatrixEnrichmentInPlace,
+  MATRIX_2CH_AA_TOKENS,
   createAtmosphereScene,
   createSeededRandom,
   MATRIX_ROMAN_GLYPHS,
 } from "./windowAtmosphere";
 
 describe("MatrixGpuFrameCollector", () => {
+  it.each(["flat", "forward", "reverse", "tunnel", "walk-forward", "walk-reverse"] as const)(
+    "keeps cat tokens intact at heads and gives work labels priority in %s",
+    (motionMode) => {
+      const scene = createAtmosphereScene(
+        "matrix",
+        1280,
+        720,
+        createSeededRandom(42),
+        2,
+        1,
+        motionMode,
+      );
+      applyMatrixEnrichmentInPlace(scene, true, () => 0);
+      const collector = new MatrixGpuFrameCollector();
+      const collect = () =>
+        collector.collect({
+          scene,
+          color: "#00ff00",
+          opacity: 1,
+          matrixColorFrame: undefined,
+          motionMode,
+          walkStartFontSize: 12,
+          walkEndFontSize: 72,
+          matrixBaseFontSize: 14,
+          devicePixelRatio: 1,
+        });
+      const heads = collect().glyphs.filter((glyph) => String(glyph.glyph).length > 1);
+      expect(heads.length).toBeGreaterThan(0);
+      expect(heads.length).toBeLessThanOrEqual(scene.particles.length);
+      expect(heads.every((glyph) => glyph.glyph === MATRIX_2CH_AA_TOKENS[0])).toBe(true);
+      applyMatrixWorkVocabularyInPlace(scene, { english: [], japanese: ["作業"] }, () => 0);
+      expect(collect().glyphs.some((glyph) => glyph.glyph === "作業")).toBe(true);
+      expect(collect().glyphs.some((glyph) => glyph.glyph === MATRIX_2CH_AA_TOKENS[0])).toBe(false);
+      applyMatrixWorkVocabularyInPlace(scene, { english: [], japanese: [] }, () => 0);
+      applyMatrixEnrichmentInPlace(scene, false, () => 0);
+      expect(collect().glyphs.every((glyph) => String(glyph.glyph).length === 1)).toBe(true);
+    },
+  );
   it.each(["flat", "walk-forward", "walk-reverse"] as const)(
     "keeps whole work labels at stream heads in %s",
     (motionMode) => {

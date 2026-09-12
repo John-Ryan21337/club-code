@@ -509,6 +509,7 @@ export const ClientSettingsSchema = Schema.Struct({
   fallingEffectLiveWorkVocabularyEnabled: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(false)),
   ),
+  fallingEffect2chEnriched: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   showSidebarSearch: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SHOW_SIDEBAR_SEARCH)),
   ),
@@ -1251,6 +1252,7 @@ export const ClientSettingsPatch = Schema.Struct({
   fallingEffectDensity: Schema.optionalKey(FallingEffectDensity),
   fallingEffectJapaneseRatio: Schema.optionalKey(FallingEffectJapaneseRatio),
   fallingEffectLiveWorkVocabularyEnabled: Schema.optionalKey(Schema.Boolean),
+  fallingEffect2chEnriched: Schema.optionalKey(Schema.Boolean),
   showSidebarSearch: Schema.optionalKey(Schema.Boolean),
   showSidebarMascot: Schema.optionalKey(Schema.Boolean),
   showSidebarAttribution: Schema.optionalKey(Schema.Boolean),

@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vitest";
 import * as Schema from "effect/Schema";
 
+it("defaults cat AA enrichment off and persists explicit enable and disable", () => {
+  const decode = Schema.decodeUnknownSync(ClientSettingsSchema);
+  expect(decode({}).fallingEffect2chEnriched).toBe(false);
+  expect(decode({ fallingEffect2chEnriched: true }).fallingEffect2chEnriched).toBe(true);
+  expect(
+    Schema.decodeUnknownSync(ClientSettingsPatch)({ fallingEffect2chEnriched: false }),
+  ).toEqual({ fallingEffect2chEnriched: false });
+  expect(() => decode({ fallingEffect2chEnriched: "true" })).toThrow();
+});
+
 it("requires explicit Matrix work vocabulary opt-in and preserves a stored disable", () => {
   const decode = Schema.decodeUnknownSync(ClientSettingsSchema);
   expect(decode({}).fallingEffectLiveWorkVocabularyEnabled).toBe(false);
