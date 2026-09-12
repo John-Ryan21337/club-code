@@ -123,6 +123,10 @@ Matrix activity overlay: [Club #113](https://github.com/John-Ryan21337/club-code
 
 日本語：Club #113 は分類 #110 を前提とし、既定でオフの選択スレッド経路、分類・色・保持時間の設定を Canvas と GPU の文字層へ追加します。描画前に古い経路を消し、落下を初期化しません。動きを減らす設定でも、プロバイダー更新がない間に期限を処理します。装飾された報告であり、実通信の計測・認証済み関係・実行の証明ではありません。別のコンソール・プライバシー・プロファイルとの統合は別です。
 
+Project SQLite previews: [Club #114](https://github.com/John-Ryan21337/club-code/pull/114), `4ae938a5`, is based on the file observatory [Cafe #94](https://github.com/cafeai/cafe-code/pull/94), `67d19445`. Explicit project-file and table selections produce bounded read-only snapshot rows, with best-effort masking and exact connection guards. Synthetic SQLite/WAL and browser checks passed. Recursive discovery, primary-key comparisons and global application-state database access remain separate.
+
+日本語：Club #114 は Cafe #94 のファイル表示を前提とし、選択プロジェクトの SQLite ファイルとテーブルを明示的に選んで、上限付きの読み取り専用スナップショットを表示します。マスキングと正確な接続の検査を行いますが、非公開の値が残る場合があります。合成 SQLite・WAL とブラウザーの検査が成功しました。再帰的な検索、主キーによる比較、アプリケーション全体の状態データベースは別です。
+
 ## Browser adoption order
 
 1. [Cafe #63](https://github.com/cafeai/cafe-code/pull/63) defines bounded contracts;
@@ -183,13 +187,13 @@ The following remain separate from the published ports above:
 - Claude console interpretation is now #106. Codex still requires a verified containment boundary before it can be called supported.
 - Routed live work vocabulary is #105, optional cat AA/kana enrichment is #108, the fixed provider-observation producer is #110, and the activity overlay is #113. [Cafe issue #102](https://github.com/cafeai/cafe-code/issues/102) links both activity slices. Historical Club fork #4/#7/#18 proposed pieces on older lineages; neither those proposals nor individually green sibling PRs establish combined console/privacy/profile integration.
 - The bundled visualizer engine is #109, local-player activation is #112, and the native current-frame capture grant is #111. Renderer capture controls and Matrix music-reactive integration remain follow-ups. These published slices do not imply those additional capabilities.
-- SQLite/database observatory views and additional attribution are outside the file-only observatory #94. Cafe intentionally retired its diff viewer and worker-pool caller in `a4d4e3768e38f9c967f4715a4a4e9cbdc5c66992`; a pool-only transplant would be inert, and a diff-viewer return needs its own product proposal. Any further enrichment or collaboration claim needs concrete production-caller and existing-PR reconciliation.
+- Project SQLite previews are #114 on the file-only observatory Cafe #94. Recursive discovery, primary-key comparison/refresh and owner-scoped global application-state database access remain separate. Cafe intentionally retired its diff viewer and worker-pool caller in `a4d4e3768e38f9c967f4715a4a4e9cbdc5c66992`; a pool-only transplant would be inert, and a diff-viewer return needs its own product proposal. Any further enrichment or collaboration claim needs concrete production-caller and existing-PR reconciliation.
 
 日本語：Club の全実装機能が現行 dev 向け PR になったという主張ではありません。
 公開 YouTube 検索・ローカル所有者のアカウント接続・Claude によるコンソール解釈・選択スレッドの作業語彙は、上の新しいドラフトにあります。
 永続的なアカウントライブラリや Google への実接続を確認したという意味ではありません。
 猫AA装飾は #108、固定の活動分類は #110、活動表示は #113、描画エンジンは #109、ローカルプレーヤーでの有効化は #112、フレーム音声取得のネイティブ基盤は #111 として公開済みです。画面からの音声取得操作、Matrix の音楽反応、
-データベース表示などには、別の移植・確認作業が残っています。
+再帰的なデータベース検索、主キー比較、アプリケーション全体の状態データベースなどには、別の移植・確認作業が残っています。選択プロジェクトの SQLite 表示は #114 として公開済みです。
 古い系統の提案が存在しても、現行 dev で統合済みとは扱いません。Codex の解釈機能には、
 安全な実行制限の確認が必要です。
 
