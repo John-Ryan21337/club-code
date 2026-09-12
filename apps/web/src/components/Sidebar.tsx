@@ -209,6 +209,8 @@ import {
 } from "../sidebarProjectGrouping";
 import { SidebarProviderUpdatePill } from "./sidebar/SidebarProviderUpdatePill";
 import { SidebarTriggerWithUnreadDot } from "./sidebar/unseenCompletions";
+import { MeetingPrivacyControls } from "./sidebar/MeetingPrivacyControls";
+import { filterProjectsForMeetingPrivacy, filterThreadsForMeetingPrivacy } from "../meetingPrivacy";
 const SIDEBAR_SORT_LABELS: Record<SidebarProjectSortOrder, string> = {
   updated_at: "Last user message",
   created_at: "Created at",
@@ -1135,6 +1137,18 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     ),
   );
   const allProjects = useStore(useShallow(selectProjectsAcrossEnvironments));
+  const meetingPrivacyEnabled = useUiStateStore((state) => state.meetingPrivacyEnabled);
+  const meetingPrivacyHiddenProjectKeys = useUiStateStore(
+    (state) => state.meetingPrivacyHiddenProjectKeys,
+  );
+  const meetingVisibleProjects = useMemo(
+    () =>
+      filterProjectsForMeetingPrivacy(allProjects, {
+        enabled: meetingPrivacyEnabled,
+        hiddenProjectKeys: meetingPrivacyHiddenProjectKeys,
+      }),
+    [allProjects, meetingPrivacyEnabled, meetingPrivacyHiddenProjectKeys],
+  );
   const sidebarThreadByKey = useMemo(
     () =>
       new Map(
@@ -1637,7 +1651,14 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
 
         const actionHandlers = new Map<string, () => Promise<void> | void>();
         const makeLeaf = (
-          action: "rename" | "directories" | "grouping" | "copy-path" | "delete",
+          action:
+            | "rename"
+            | "directories"
+            | "grouping"
+            | "copy-path"
+            | "meeting-hide"
+            | "meeting-unhide"
+            | "delete",
           member: SidebarProjectGroupMember,
           options?: {
             destructive?: boolean;
@@ -1659,6 +1680,16 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
               case "copy-path":
                 copyPathToClipboard(member.cwd, { path: member.cwd });
                 return;
+              case "meeting-hide":
+                useUiStateStore
+                  .getState()
+                  .setProjectMeetingPrivacyHidden(member.physicalProjectKey, true);
+                return;
+              case "meeting-unhide":
+                useUiStateStore
+                  .getState()
+                  .setProjectMeetingPrivacyHidden(member.physicalProjectKey, false);
+                return;
               case "delete":
                 return handleRemoveProject(member);
             }
@@ -1673,7 +1704,14 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         };
 
         const buildTargetedItem = (
-          action: "rename" | "directories" | "grouping" | "copy-path" | "delete",
+          action:
+            | "rename"
+            | "directories"
+            | "grouping"
+            | "copy-path"
+            | "meeting-hide"
+            | "meeting-unhide"
+            | "delete",
           label: string,
           options?: {
             destructive?: boolean;
@@ -1709,6 +1747,18 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
             buildTargetedItem("directories", "Configure additional directories…"),
             buildTargetedItem("grouping", "Project grouping…"),
             buildTargetedItem("copy-path", "Copy Project Path"),
+            buildTargetedItem("meeting-hide", "Hide during meetings", {
+              isDisabled: (member) =>
+                useUiStateStore
+                  .getState()
+                  .meetingPrivacyHiddenProjectKeys.includes(member.physicalProjectKey),
+            }),
+            buildTargetedItem("meeting-unhide", "Show during meetings", {
+              isDisabled: (member) =>
+                !useUiStateStore
+                  .getState()
+                  .meetingPrivacyHiddenProjectKeys.includes(member.physicalProjectKey),
+            }),
             buildTargetedItem("delete", "Remove project", {
               destructive: true,
             }),
@@ -2177,12 +2227,14 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
   const getThreadMoveCandidates = useCallback(
     (thread: SidebarThreadSummary) =>
       sortThreadMoveCandidates(
-        allProjects.filter(
+        // A hidden folder must not appear as a move destination while meeting
+        // privacy is on; otherwise the move dialog would name it.
+        meetingVisibleProjects.filter(
           (candidate) =>
             candidate.environmentId === thread.environmentId && candidate.id !== thread.projectId,
         ),
       ),
-    [allProjects],
+    [meetingVisibleProjects],
   );
 
   const openThreadMoveDialog = useCallback(
@@ -3146,6 +3198,7 @@ const SidebarChromeFooter = memo(function SidebarChromeFooter() {
   const atriumEnabled = useSettings((settings) => settings.ambianceAtriumEnabled);
   const atriumOpen = useTaskAtriumStore((state) => state.open);
   const setAtriumOpen = useTaskAtriumStore((state) => state.setOpen);
+  const meetingPrivacyEnabled = useUiStateStore((state) => state.meetingPrivacyEnabled);
   const isOnSettingsFooter = pathname.startsWith("/settings");
   const handleAtriumClick = useCallback(() => {
     if (isMobile) {
@@ -3162,6 +3215,16 @@ const SidebarChromeFooter = memo(function SidebarChromeFooter() {
 
   return (
     <SidebarFooter className="p-2">
+      {/* Standing reminder that the sidebar lists are filtered, so the
+          operator cannot forget the mode is still on after a meeting. */}
+      {meetingPrivacyEnabled ? (
+        <div
+          role="status"
+          className="rounded-md border border-primary/20 bg-primary/8 px-2 py-1 text-[10px] font-medium text-primary"
+        >
+          Meeting privacy is on
+        </div>
+      ) : null}
       <SidebarProviderUpdatePill />
       <SidebarUpdatePill />
       <SidebarFooterNavigation
@@ -3176,6 +3239,8 @@ const SidebarChromeFooter = memo(function SidebarChromeFooter() {
 });
 
 interface SidebarProjectsContentProps {
+  allProjects: readonly Project[];
+  meetingPrivacyEnabled: boolean;
   primaryEnvironmentBootstrapped: boolean;
   bootstrappedEnvironmentIds: ReadonlySet<string>;
   showArm64IntelBuildWarning: boolean;
@@ -3226,6 +3291,8 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
   props: SidebarProjectsContentProps,
 ) {
   const {
+    allProjects,
+    meetingPrivacyEnabled,
     primaryEnvironmentBootstrapped,
     bootstrappedEnvironmentIds,
     showArm64IntelBuildWarning,
@@ -3357,6 +3424,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
             Projects
           </span>
           <div className="flex items-center gap-1">
+            <MeetingPrivacyControls projects={allProjects} />
             <ProjectSortMenu
               projectSortOrder={projectSortOrder}
               threadSortOrder={threadSortOrder}
@@ -3473,7 +3541,9 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
 
         {primaryEnvironmentBootstrapped && projectsLength === 0 && (
           <div className="px-2 pt-4 text-center text-xs text-muted-foreground/60">
-            No projects yet
+            {meetingPrivacyEnabled && allProjects.length > 0
+              ? "Project list hidden for meeting privacy"
+              : "No projects yet"}
           </div>
         )}
       </SidebarGroup>
@@ -3525,8 +3595,31 @@ export default function Sidebar() {
     () => new Set(bootstrappedEnvironmentIds),
     [bootstrappedEnvironmentIds],
   );
-  const projects = useStore(useShallow(selectProjectsAcrossEnvironments));
-  const sidebarThreads = useStore(useShallow(selectSidebarThreadsAcrossEnvironments));
+  const allProjects = useStore(useShallow(selectProjectsAcrossEnvironments));
+  const allSidebarThreads = useStore(useShallow(selectSidebarThreadsAcrossEnvironments));
+  const meetingPrivacyEnabled = useUiStateStore((store) => store.meetingPrivacyEnabled);
+  const meetingPrivacyHiddenProjectKeys = useUiStateStore(
+    (store) => store.meetingPrivacyHiddenProjectKeys,
+  );
+  // Presentation filter only. The unfiltered lists stay available above so
+  // background work, counts the operator opted out of, and the privacy
+  // manager keep working on the full set.
+  const projects = useMemo(
+    () =>
+      filterProjectsForMeetingPrivacy(allProjects, {
+        enabled: meetingPrivacyEnabled,
+        hiddenProjectKeys: meetingPrivacyHiddenProjectKeys,
+      }),
+    [allProjects, meetingPrivacyEnabled, meetingPrivacyHiddenProjectKeys],
+  );
+  const sidebarThreads = useMemo(
+    () =>
+      filterThreadsForMeetingPrivacy(allSidebarThreads, allProjects, {
+        enabled: meetingPrivacyEnabled,
+        hiddenProjectKeys: meetingPrivacyHiddenProjectKeys,
+      }),
+    [allProjects, allSidebarThreads, meetingPrivacyEnabled, meetingPrivacyHiddenProjectKeys],
+  );
   const projectExpandedById = useUiStateStore((store) => store.projectExpandedById);
   const projectOrder = useUiStateStore((store) => store.projectOrder);
   const reorderProjects = useUiStateStore((store) => store.reorderProjects);
@@ -3560,7 +3653,7 @@ export default function Sidebar() {
   const showAddProjectHint = shouldShowAddProjectHint({
     onboardingCompleted,
     dismissedHints: dismissedFirstRunHints,
-    projectCount: projects.length,
+    projectCount: allProjects.length,
   });
   const dismissAddProjectHint = useCallback(() => {
     updateSettings({
@@ -4153,6 +4246,8 @@ export default function Sidebar() {
         <>
           <div className="flex min-h-0 flex-1 flex-col">
             <SidebarProjectsContent
+              allProjects={allProjects}
+              meetingPrivacyEnabled={meetingPrivacyEnabled}
               primaryEnvironmentBootstrapped={primaryEnvironmentBootstrapped}
               bootstrappedEnvironmentIds={bootstrappedEnvironmentIdSet}
               showArm64IntelBuildWarning={showArm64IntelBuildWarning}

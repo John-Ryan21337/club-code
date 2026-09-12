@@ -4,6 +4,7 @@ import { useEffect } from "react";
 
 import { isElectron } from "../../env";
 import { useSettings } from "../../hooks/useSettings";
+import { useUiStateStore } from "../../uiStateStore";
 import { cn, isWindowsPlatform } from "../../lib/utils";
 import { TaskAtriumBoard } from "./TaskAtrium";
 import { useTaskAtriumStore } from "./taskAtriumStore";
@@ -30,6 +31,9 @@ export function TaskAtriumOverlay() {
   const enabled = useSettings((settings) => settings.ambianceAtriumEnabled);
   const open = useTaskAtriumStore((state) => state.open);
   const setOpen = useTaskAtriumStore((state) => state.setOpen);
+  const meetingPrivacyActive = useUiStateStore(
+    (state) => state.meetingPrivacyEnabled && state.meetingPrivacyHiddenProjectKeys.length > 0,
+  );
   const reserveNativeTitlebar = isElectron && isWindowsPlatform(navigator.platform);
 
   // Close if the feature is switched off while the panel happens to be open.
@@ -70,7 +74,13 @@ export function TaskAtriumOverlay() {
           >
             <X className="size-4" />
           </DialogPrimitive.Close>
-          <TaskAtriumBoard />
+          {meetingPrivacyActive ? (
+            <p role="status" className="m-auto max-w-md p-6 text-center text-muted-foreground">
+              Task Atrium is hidden while meeting privacy is on. Active provider turns continue.
+            </p>
+          ) : (
+            <TaskAtriumBoard />
+          )}
         </DialogPrimitive.Popup>
       </DialogPrimitive.Portal>
     </DialogPrimitive.Root>

@@ -1,7 +1,9 @@
 import { EnvironmentId, ProjectId, ThreadId } from "@cafecode/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { MAX_MEETING_PRIVACY_HIDDEN_PROJECTS } from "./meetingPrivacy";
 import {
+  clearMeetingPrivacyHiddenProjects,
   clearThreadUi,
   hydratePersistedProjectState,
   hydratePersistedUiState,
@@ -12,8 +14,10 @@ import {
   removeThreadUiForNonPrimaryEnvironment,
   reorderProjects,
   setDefaultAdvertisedEndpointKey,
+  setMeetingPrivacyEnabled,
   setNavigationSidebarOpen,
   setProjectExpanded,
+  setProjectMeetingPrivacyHidden,
   setSessionRailDocked,
   setThreadPlanSidebarOpen,
   syncProjects,
@@ -27,12 +31,58 @@ function makeUiState(overrides: Partial<UiState> = {}): UiState {
     projectOrder: [],
     threadLastVisitedAtById: {},
     threadPlanSidebarOpenById: {},
+    meetingPrivacyEnabled: false,
+    meetingPrivacyHiddenProjectKeys: [],
     defaultAdvertisedEndpointKey: null,
     navigationSidebarOpen: true,
     sessionRailDocked: false,
     ...overrides,
   };
 }
+
+describe("uiStateStore meeting privacy", () => {
+  it("toggles the mode and the hidden list without touching project layout state", () => {
+    const initialState = makeUiState({
+      projectExpandedById: { "environment-local:/secret": true },
+      projectOrder: ["environment-local:/secret"],
+    });
+
+    const hidden = setProjectMeetingPrivacyHidden(initialState, "environment-local:/secret", true);
+    const enabled = setMeetingPrivacyEnabled(hidden, true);
+    const revealed = setProjectMeetingPrivacyHidden(enabled, "environment-local:/secret", false);
+
+    expect(initialState.meetingPrivacyEnabled).toBe(false);
+    expect(enabled.meetingPrivacyEnabled).toBe(true);
+    expect(enabled.meetingPrivacyHiddenProjectKeys).toEqual(["environment-local:/secret"]);
+    // Hiding is presentation-only: manual order and expand state are untouched
+    // so the layout returns unchanged when the operator turns the mode off.
+    expect(enabled.projectExpandedById).toBe(initialState.projectExpandedById);
+    expect(enabled.projectOrder).toBe(initialState.projectOrder);
+    expect(revealed.meetingPrivacyHiddenProjectKeys).toEqual([]);
+    expect(setMeetingPrivacyEnabled(enabled, true)).toBe(enabled);
+    expect(clearMeetingPrivacyHiddenProjects(revealed)).toBe(revealed);
+  });
+
+  it("rejects malformed identities and bounds the hidden list", () => {
+    expect(
+      setProjectMeetingPrivacyHidden(makeUiState(), "environment-local:/bad\nkey", true)
+        .meetingPrivacyHiddenProjectKeys,
+    ).toEqual([]);
+    expect(
+      setProjectMeetingPrivacyHidden(makeUiState(), "", true).meetingPrivacyHiddenProjectKeys,
+    ).toEqual([]);
+
+    const saturated = makeUiState({
+      meetingPrivacyHiddenProjectKeys: Array.from(
+        { length: MAX_MEETING_PRIVACY_HIDDEN_PROJECTS },
+        (_, index) => `environment-local:/project-${index}`,
+      ),
+    });
+    const overflowed = setProjectMeetingPrivacyHidden(saturated, "environment-local:/extra", true);
+
+    expect(overflowed).toBe(saturated);
+  });
+});
 
 describe("uiStateStore pure functions", () => {
   it("markThreadVisited stores the provided server timestamp", () => {
@@ -486,6 +536,42 @@ describe("uiStateStore persistence round-trip", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it("persists the device-local meeting privacy mode and hidden project identities", () => {
+    const state = setMeetingPrivacyEnabled(
+      setProjectMeetingPrivacyHidden(makeUiState(), "environment-local:C:\\private\\client", true),
+      true,
+    );
+
+    persistState(state);
+
+    const persisted = JSON.parse(
+      localStorageStub.getItem(PERSISTED_STATE_KEY) ?? "{}",
+    ) as PersistedUiState;
+    expect(persisted.meetingPrivacyEnabled).toBe(true);
+    expect(persisted.meetingPrivacyHiddenProjectKeys).toEqual([
+      "environment-local:C:\\private\\client",
+    ]);
+  });
+
+  it("defaults meeting privacy to off and drops corrupt hidden identities on hydrate", () => {
+    const hydrated = hydratePersistedUiState({
+      meetingPrivacyHiddenProjectKeys: [
+        "environment-local:/kept",
+        "environment-local:/bad\nkey",
+        42,
+      ] as unknown as string[],
+    });
+
+    expect(hydrated.meetingPrivacyEnabled).toBe(false);
+    expect(hydrated.meetingPrivacyHiddenProjectKeys).toEqual(["environment-local:/kept"]);
+    expect(hydratePersistedUiState({}).meetingPrivacyEnabled).toBe(false);
+    expect(
+      hydratePersistedUiState({
+        meetingPrivacyEnabled: "yes" as unknown as boolean,
+      }).meetingPrivacyEnabled,
+    ).toBe(false);
   });
 
   it("preserves all-collapsed project state across restart", () => {

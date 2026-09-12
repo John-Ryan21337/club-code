@@ -1,9 +1,15 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { useParams, useRouter } from "@tanstack/react-router";
 import { useShallow } from "zustand/react/shallow";
 import { scopedThreadKey, scopeThreadRef } from "@cafecode/client-runtime";
 
-import { selectSidebarThreadsAcrossEnvironments, useStore } from "../store";
+import {
+  selectProjectsAcrossEnvironments,
+  selectSidebarThreadsAcrossEnvironments,
+  useStore,
+} from "../store";
+import { filterThreadsForMeetingPrivacy } from "../meetingPrivacy";
+import { useUiStateStore } from "../uiStateStore";
 import { isElectron } from "../env";
 import { useSettings } from "../hooks/useSettings";
 import { buildThreadRouteParams, resolveThreadRouteTarget } from "../threadRoutes";
@@ -17,7 +23,23 @@ import { buildThreadRouteParams, resolveThreadRouteTarget } from "../threadRoute
  */
 export function DesktopNotificationWatcher() {
   const settings = useSettings();
-  const threads = useStore(useShallow(selectSidebarThreadsAcrossEnvironments));
+  const allThreads = useStore(useShallow(selectSidebarThreadsAcrossEnvironments));
+  const allProjects = useStore(useShallow(selectProjectsAcrossEnvironments));
+  const meetingPrivacyEnabled = useUiStateStore((state) => state.meetingPrivacyEnabled);
+  const meetingPrivacyHiddenProjectKeys = useUiStateStore(
+    (state) => state.meetingPrivacyHiddenProjectKeys,
+  );
+  // Native notifications carry the thread title into the OS notification
+  // centre, where a screen share can show it. Filter the same way the sidebar
+  // does. The turn itself keeps running; only the announcement is suppressed.
+  const threads = useMemo(
+    () =>
+      filterThreadsForMeetingPrivacy(allThreads, allProjects, {
+        enabled: meetingPrivacyEnabled,
+        hiddenProjectKeys: meetingPrivacyHiddenProjectKeys,
+      }),
+    [allProjects, allThreads, meetingPrivacyEnabled, meetingPrivacyHiddenProjectKeys],
+  );
   const router = useRouter();
   const routeTarget = useParams({
     strict: false,
