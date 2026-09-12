@@ -246,6 +246,27 @@ describe("Matrix WebGL2 renderer", () => {
     expect(canvas.height).toBe(1_200);
   });
 
+  it.each([
+    [3_001, 1_500],
+    [8_000, 4_000],
+    [1, 100_000_000],
+    [100_000_000, 1],
+  ])("keeps the hard backing pixel cap for a %s by %s viewport", (width, height) => {
+    const canvas = createCanvas();
+    const gl = createWebGl2Context();
+    const selection = createMatrixWebGl2Renderer(canvas as unknown as HTMLCanvasElement, ["0"], {
+      acquireContext: () => gl,
+      createCanvas: createAtlasCanvas,
+    });
+    expect(selection.kind).toBe("webgl2");
+    if (selection.kind !== "webgl2") return;
+    selection.renderer.render({ ...frame([]), width, height, devicePixelRatio: 4 });
+    expect(canvas.width).toBeGreaterThan(0);
+    expect(canvas.height).toBeGreaterThan(0);
+    expect(canvas.width * canvas.height).toBeLessThanOrEqual(8_388_608);
+    selection.renderer.dispose();
+  });
+
   it("uses double-buffered presentation and preserves the Canvas2D token-width bound", () => {
     const canvas = createCanvas();
     const gl = createWebGl2Context();

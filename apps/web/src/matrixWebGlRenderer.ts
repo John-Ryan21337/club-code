@@ -640,8 +640,14 @@ export class MatrixWebGl2Renderer {
       requestedDpr,
       Math.sqrt(this.#maxBackingPixels / Math.max(1, width * height)),
     );
-    const backingWidth = Math.max(1, Math.round(width * fittedDpr));
-    const backingHeight = Math.max(1, Math.round(height * fittedDpr));
+    const backingWidth = Math.min(
+      this.#maxBackingPixels,
+      Math.max(1, Math.floor(width * fittedDpr)),
+    );
+    const backingHeight = Math.min(
+      Math.floor(this.#maxBackingPixels / backingWidth),
+      Math.max(1, Math.floor(height * fittedDpr)),
+    );
     if (this.#canvas.width !== backingWidth) this.#canvas.width = backingWidth;
     if (this.#canvas.height !== backingHeight) this.#canvas.height = backingHeight;
 

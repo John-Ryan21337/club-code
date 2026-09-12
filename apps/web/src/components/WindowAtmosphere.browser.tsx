@@ -240,6 +240,40 @@ describe("WindowAtmosphere", () => {
     expect(frames.size).toBe(0);
   });
 
+  it.each([
+    [1, 100_000_000],
+    [100_000_000, 1],
+  ])("keeps the Canvas backing cap for a %s by %s viewport", async (width, height) => {
+    HTMLCanvasElement.prototype.getBoundingClientRect = vi.fn(() => ({ width, height }) as DOMRect);
+    const screen = await render(<WindowAtmosphere />);
+    const canvas = document.querySelector<HTMLCanvasElement>('[data-testid="window-atmosphere"]')!;
+    expect(canvas.width).toBeGreaterThan(0);
+    expect(canvas.height).toBeGreaterThan(0);
+    expect(canvas.width * canvas.height).toBeLessThanOrEqual(MAX_ATMOSPHERE_CANVAS_PIXELS);
+    await screen.unmount();
+  });
+
+  it("keeps the advanced scene when only its palette changes", async () => {
+    const screen = await render(<WindowAtmosphere />);
+    const drawAt = (timestamp: number) => {
+      const frame = Array.from(frames.values())[0]!;
+      frames.clear();
+      frame(timestamp);
+    };
+    drawAt(1_000);
+    vi.mocked(context.fillText).mockClear();
+    drawAt(1_100);
+    const positions = vi.mocked(context.fillText).mock.calls.map((call) => [...call]);
+    expect(positions.length).toBeGreaterThan(0);
+    testState.settings = { ...testState.settings!, fallingEffectColor: "#ff0000" };
+    await screen.rerender(<WindowAtmosphere />);
+    vi.mocked(context.fillText).mockClear();
+    drawAt(1_100);
+    expect(vi.mocked(context.fillText).mock.calls).toEqual(positions);
+    expect(context.fillStyle).toBe("#ff0000");
+    await screen.unmount();
+  });
+
   it("draws one dimmed static frame and schedules no animation under reduced motion", async () => {
     reducedMotion = true;
     const screen = await render(<WindowAtmosphere />);
@@ -249,6 +283,7 @@ describe("WindowAtmosphere", () => {
     // frame is scheduled.
     expect(context.fillText).toHaveBeenCalled();
     const staticFrameDraws = (context.fillText as ReturnType<typeof vi.fn>).mock.calls.length;
+    expect(context.clearRect).toHaveBeenCalledTimes(1);
     expect(frames.size).toBe(0);
     expect((context.fillText as ReturnType<typeof vi.fn>).mock.calls.length).toBe(staticFrameDraws);
 
@@ -258,6 +293,21 @@ describe("WindowAtmosphere", () => {
 
     await screen.unmount();
     expect(removeMediaChangeListener).toHaveBeenCalledWith("change", expect.any(Function));
+  });
+
+  it("repaints a reduced-motion palette change without creating a loop", async () => {
+    reducedMotion = true;
+    const screen = await render(<WindowAtmosphere />);
+    const positions = vi.mocked(context.fillText).mock.calls.map((call) => [...call]);
+    vi.mocked(context.fillText).mockClear();
+    vi.mocked(context.clearRect).mockClear();
+    testState.settings = { ...testState.settings!, fallingEffectColor: "#ff0000" };
+    await screen.rerender(<WindowAtmosphere />);
+    expect(vi.mocked(context.fillText).mock.calls).toEqual(positions);
+    expect(context.fillStyle).toBe("#ff0000");
+    expect(context.clearRect).toHaveBeenCalledTimes(1);
+    expect(frames.size).toBe(0);
+    await screen.unmount();
   });
 
   it("cancels a running frame when reduced motion becomes active", async () => {

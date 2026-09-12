@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useEffectEvent, useMemo, useRef } from "react";
 
 import { useSettings } from "../hooks/useSettings";
 import { useTheme } from "../hooks/useTheme";
@@ -13,6 +13,7 @@ import {
   fitAtmosphereDpr,
   MATRIX_JAPANESE_GLYPHS,
   MATRIX_ROMAN_GLYPHS,
+  MAX_ATMOSPHERE_CANVAS_PIXELS,
   resolveAtmosphereColor,
   resolveAtmosphereRenderOpacity,
   resolveMatrixAtmosphereColorFrame,
@@ -76,6 +77,35 @@ export function WindowAtmosphere() {
    * recover from a backend change it does not own.
    */
   const repaintAtmosphereRef = useRef<(() => void) | null>(null);
+  const syncPresentationRef = useRef<(() => void) | null>(null);
+  const presentation = useMemo(
+    () => ({
+      configuredColor,
+      continueBackgroundAnimations,
+      matrixBaseFontSize,
+      matrixColorCycleSpeed,
+      matrixColorMode,
+      opacity,
+      resolvedTheme,
+      speed,
+      walkEndFontSize,
+      walkStartFontSize,
+    }),
+    [
+      configuredColor,
+      continueBackgroundAnimations,
+      matrixBaseFontSize,
+      matrixColorCycleSpeed,
+      matrixColorMode,
+      opacity,
+      resolvedTheme,
+      speed,
+      walkEndFontSize,
+      walkStartFontSize,
+    ],
+  );
+  const readPresentation = useEffectEvent(() => presentation);
+  const appliedPresentationRef = useRef(presentation);
   const matrixGpuFrameCollector = useMemo(
     () => new MatrixGpuFrameCollector(MAX_MATRIX_GPU_GLYPH_INSTANCES),
     [],
@@ -161,7 +191,7 @@ export function WindowAtmosphere() {
       reducedMotion: reducedMotion.matches,
       documentVisible: document.visibilityState === "visible",
       windowFocused: document.hasFocus(),
-      continueBackgroundAnimations,
+      continueBackgroundAnimations: readPresentation().continueBackgroundAnimations,
     });
 
     const cancelAnimation = () => {
@@ -184,8 +214,14 @@ export function WindowAtmosphere() {
       const width = resolveCanvasDimension(bounds.width, window.innerWidth);
       const height = resolveCanvasDimension(bounds.height, window.innerHeight);
       const requestedDpr = fitAtmosphereDpr(window.devicePixelRatio, width, height);
-      const bitmapWidth = Math.max(1, Math.floor(width * requestedDpr));
-      const bitmapHeight = Math.max(1, Math.floor(height * requestedDpr));
+      const bitmapWidth = Math.min(
+        MAX_ATMOSPHERE_CANVAS_PIXELS,
+        Math.max(1, Math.floor(width * requestedDpr)),
+      );
+      const bitmapHeight = Math.min(
+        Math.floor(MAX_ATMOSPHERE_CANVAS_PIXELS / bitmapWidth),
+        Math.max(1, Math.floor(height * requestedDpr)),
+      );
       const dpr = Math.min(bitmapWidth / width, bitmapHeight / height);
       canvas.width = bitmapWidth;
       canvas.height = bitmapHeight;
@@ -210,6 +246,17 @@ export function WindowAtmosphere() {
 
     const renderScene = (timestamp: number, advance: boolean, dimmed = !advance) => {
       if (!scene) return;
+      const {
+        configuredColor,
+        matrixBaseFontSize,
+        matrixColorCycleSpeed,
+        matrixColorMode,
+        opacity,
+        resolvedTheme,
+        speed,
+        walkEndFontSize,
+        walkStartFontSize,
+      } = readPresentation();
       const staticFrame = dimmed;
       const elapsedSeconds =
         advance && lastFrameTime !== null ? (timestamp - lastFrameTime) / 1_000 : 0;
@@ -344,6 +391,8 @@ export function WindowAtmosphere() {
 
     resize();
     repaintAtmosphereRef.current = repaintCurrentScene;
+    syncPresentationRef.current = syncAnimation;
+    appliedPresentationRef.current = readPresentation();
     syncAnimation();
     document.addEventListener("visibilitychange", syncAnimation);
     window.addEventListener("focus", syncAnimation);
@@ -355,6 +404,7 @@ export function WindowAtmosphere() {
       if (repaintAtmosphereRef.current === repaintCurrentScene) {
         repaintAtmosphereRef.current = null;
       }
+      if (syncPresentationRef.current === syncAnimation) syncPresentationRef.current = null;
       cancelAnimation();
       if (resizeFrame !== null) window.cancelAnimationFrame(resizeFrame);
       clearCanvasBitmap();
@@ -367,24 +417,22 @@ export function WindowAtmosphere() {
   }, [
     atmosphereAvailable,
     centerWindIntensity,
-    configuredColor,
-    continueBackgroundAnimations,
     density,
     enabled,
     japaneseRatio,
     kind,
-    matrixBaseFontSize,
-    matrixColorCycleSpeed,
-    matrixColorMode,
     matrixGpuFrameCollector,
     motionMode,
-    opacity,
-    resolvedTheme,
-    speed,
-    walkEndFontSize,
     walkLifecyclePercent,
-    walkStartFontSize,
   ]);
+
+  // Appearance and animation policy change the current scene's presentation.
+  // Only geometry and scene-forming inputs above may recreate its particles.
+  useEffect(() => {
+    if (appliedPresentationRef.current === presentation) return;
+    appliedPresentationRef.current = presentation;
+    syncPresentationRef.current?.();
+  }, [presentation]);
 
   if (!enabled || !atmosphereAvailable) return null;
 

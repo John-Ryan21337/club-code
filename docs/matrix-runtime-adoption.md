@@ -21,10 +21,10 @@ Ported surgically from Club Code:
 
 | Cafe file                                      | Club source                       |
 | ---------------------------------------------- | --------------------------------- |
-| `apps/web/src/matrixWebGlRenderer.ts`          | same path (verbatim)              |
-| `apps/web/src/matrixGpuFrameCollector.ts`      | same path (verbatim)              |
+| `apps/web/src/matrixWebGlRenderer.ts`          | same path (with adoption fixes)   |
+| `apps/web/src/matrixGpuFrameCollector.ts`      | same path (with adoption fixes)   |
 | `apps/web/src/windowAtmosphere.ts`             | same path, reduced (see below)    |
-| `apps/web/src/matrixWebGlRenderer.test.ts`     | same path (verbatim)              |
+| `apps/web/src/matrixWebGlRenderer.test.ts`     | same path (with adoption fixes)   |
 | `apps/web/src/matrixGpuFrameCollector.test.ts` | same path, minus work-label cases |
 
 New settings, in `ClientSettings`, `ClientSettingsPatch`, and the Appearance
@@ -153,6 +153,13 @@ verify actual GL pixels. Driver context loss is real; success and failure of
 reacquisition are driven separately because restoration behavior varies by host.
 No hardware-acceleration claim is made.
 
+Independent adoption review repaired two boundaries: presentation-only changes
+now preserve the advanced particle scene, and integer backing dimensions obey
+the hard pixel cap even at extreme aspect ratios. The WebGL renderer and tests
+therefore include a small bounds correction beyond the original Club copies.
+Before-fix regressions reproduced both failures. Reduced-motion palette changes
+repaint once without starting an animation loop.
+
 Component regressions verify that reduced-motion context loss and restoration
 repaint the same scene without starting a loop, and that hidden/unfocused policy
 still prevents drawing. Frame diagnostics change only after a frame is committed.
@@ -164,3 +171,28 @@ The named capture configuration is outside the default unit/browser test paths.
 Its before view uses foundation defaults in the new component; it is not a
 screenshot of an older application binary. Capture notes distinguish production
 acquisition, forced Canvas fallback, and software WebGL context exercises.
+
+## 日本語の操作ガイド
+
+外観設定の「Falling effects」で、雪、雨、Matrix文字の背景を有効にできます。初期状態は無効です。
+動きは Flat、Forward、Reverse、Warp、Walk Forward、Walk Reverse の6種類です。
+Walk は文字の開始サイズと終了サイズの間を移動します。初期値は1pxと72pxです。
+色は固定、全体の虹色、流れごとに位相が異なる虹色を選べます。日本語文字の割合も設定できます。
+色、透明度、速度などの表示設定を変更しても、移動済みの粒子を初期位置に戻しません。
+
+Matrix文字は利用可能な場合に WebGL2 でまとめて描画します。GPU の初期化やコンテキスト復旧に失敗すると、同じ場面を Canvas2D で描画します。
+雪と雨は Canvas2D を使います。描画方式を変えても、動き、文字、配置の仕様は共通です。
+DPR は最大2、描画面は最大8,388,608ピクセル、フレーム間隔は最大0.1秒として処理します。
+極端に細長い画面でもピクセル上限を超えません。
+
+背景のレイヤーはクリックを遮りません。通常は非表示・非フォーカス時に停止します。
+背景での継続を明示的に有効にした場合だけ、その状態でも動かします。
+動きを減らす設定では暗めの静止画を1回描画し、アニメーションのループを開始しません。
+表示を終了するとイベント、フレーム予約、GPU リソースを解放します。
+
+この変更に音楽連動、作業内容の文字表示、活動経路、映画・コンソール用コピーは含みません。
+表示する文字は固定の英字・日本語文字集だけです。プロンプト、ファイル内容、プロバイダーのイベントを読みません。
+設定プロフィールと UI 翻訳は別の採用変更です。音楽や作業内容の入力がない状態で対応済みとは表示しません。
+
+検証用の画面は実際の描画・設定コンポーネントに合成データを渡したものです。
+このホストのドライバーは SwiftShader でした。ソフトウェア WebGL と Canvas フォールバックを検証していますが、ハードウェア GPU の性能は実測していません。
