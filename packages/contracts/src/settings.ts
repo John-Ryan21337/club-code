@@ -403,30 +403,6 @@ const TaskAtriumErrorDismissals = Schema.Array(TaskAtriumErrorDismissal).check(
 // Ambient media values are inert configuration in Cafe Code. The renderer
 // does not activate or fetch these sources unless a later feature supplies an
 // explicit playback surface. Activation defaults stay off at this boundary.
-export const MIN_AMBIENT_OPACITY = 0.05;
-export const MAX_AMBIENT_OPACITY = 1;
-export const DEFAULT_AMBIENT_OPACITY = 0.35;
-
-export const HexColor = TrimmedNonEmptyString.check(Schema.isPattern(/^#[0-9A-Fa-f]{6}$/)).pipe(
-  Schema.decodeTo(
-    Schema.String,
-    SchemaTransformation.transformOrFail({
-      decode: (value) => Effect.succeed(value.toLowerCase()),
-      encode: (value) => Effect.succeed(value.toLowerCase()),
-    }),
-  ),
-);
-export type HexColor = typeof HexColor.Type;
-
-export const AmbientColor = Schema.Union([Schema.Literal("auto"), HexColor]);
-export type AmbientColor = typeof AmbientColor.Type;
-export const DEFAULT_AMBIENT_COLOR: AmbientColor = "auto";
-
-export const AmbientOpacity = Schema.Number.check(
-  Schema.isBetween({ minimum: MIN_AMBIENT_OPACITY, maximum: MAX_AMBIENT_OPACITY }),
-);
-export type AmbientOpacity = typeof AmbientOpacity.Type;
-
 export const YouTubeVideoId = TrimmedNonEmptyString.check(Schema.isPattern(/^[A-Za-z0-9_-]{11}$/));
 export type YouTubeVideoId = typeof YouTubeVideoId.Type;
 export const YouTubePlaylistId = TrimmedNonEmptyString.check(

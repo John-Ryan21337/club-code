@@ -29,6 +29,22 @@ const now = () => new Date("2026-08-01T12:00:00.000Z");
 const payload = () => captureSettingsProfile(DEFAULT_UNIFIED_SETTINGS, "dark");
 
 describe("settings profiles", () => {
+  it("does not widen profile authority when the atmosphere and media drafts are combined", () => {
+    const result = captureSettingsProfile(
+      {
+        ...DEFAULT_UNIFIED_SETTINGS,
+        themeAccentColor: "#123456",
+        fallingEffectsEnabled: true,
+        fallingEffectMatrixColorMode: "rainbow-extra",
+        fallingEffectSpeed: 2,
+      },
+      "dark",
+    );
+    expect(result.clientSettings.themeAccentColor).toBe("#123456");
+    expect(result.clientSettings).not.toHaveProperty("fallingEffectsEnabled");
+    expect(result.clientSettings).not.toHaveProperty("fallingEffectMatrixColorMode");
+    expect(result.clientSettings).not.toHaveProperty("fallingEffectSpeed");
+  });
   it("captures only explicitly allowed presentation fields", () => {
     const source = {
       ...DEFAULT_UNIFIED_SETTINGS,
