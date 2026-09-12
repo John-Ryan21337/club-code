@@ -679,3 +679,7 @@ Use these as implementation references when designing protocol handling, UX flow
 - Codex-Monitor reference implementation: `https://github.com/Dimillian/CodexMonitor`
 
 Provider integrations change frequently. Before implementing or changing Codex, Claude, or OpenCode lifecycle behavior, check the current official docs plus the version-pinned local package/source used by this repository, then document the relevant assumption in code comments and tests.
+
+## Native current-frame audio capture
+
+- `apps/desktop/src/window/DesktopDisplayMediaCapture.ts` binds explicit display-media requests to the exact visible, focused trusted main frame and current session owner. Accept only the origin or its root-slash serialization. Never substitute system loopback, a different frame or a microphone fallback. Keep callback rejection and old-owner teardown bounded. The renderer Start/Stop control is a separate prerequisite; see `docs/display-frame-audio-capture.md`.

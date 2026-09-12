@@ -1,3 +1,4 @@
+import { installTrustedFrameAudioCapture } from "./DesktopDisplayMediaCapture.ts";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
@@ -279,6 +280,12 @@ const make = Effect.gen(function* () {
       : backendHttpUrl;
     yield* desktopIpc.trustWebContents(window.webContents, rendererUrl.href);
     installTrustedAudioPermissionPolicy(window.webContents, rendererUrl);
+    const removeDisplayAudioCapture = installTrustedFrameAudioCapture(
+      window.webContents,
+      rendererUrl.origin,
+    );
+    window.once("closed", removeDisplayAudioCapture);
+    window.webContents.once("destroyed", removeDisplayAudioCapture);
     const guardRendererNavigation = (
       event: Electron.Event<Electron.WebContentsWillNavigateEventParams>,
     ) => {
