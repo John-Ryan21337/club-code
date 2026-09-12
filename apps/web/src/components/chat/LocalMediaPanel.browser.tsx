@@ -7,6 +7,32 @@ import { render } from "vitest-browser-react";
 
 import { localMediaStore, registerLocalMediaElement } from "../../localMedia";
 import { LocalMediaPanel } from "./LocalMediaPanel";
+import { LocalMediaAudioVisualizer } from "./LocalMediaAudioVisualizer";
+
+it("replaces visualization canvases only when the exact media input changes", async () => {
+  const first = document.createElement("audio");
+  const second = document.createElement("audio");
+  const screen = await render(<LocalMediaAudioVisualizer enabled={false} mediaElement={first} />);
+  try {
+    const original = document.querySelector('[data-testid="local-media-audio-visualizer"] canvas');
+    expect(original).not.toBeNull();
+    await screen.rerender(
+      <LocalMediaAudioVisualizer enabled={false} style="milkdrop" mediaElement={first} />,
+    );
+    expect(document.querySelector('[data-testid="local-media-audio-visualizer"] canvas')).toBe(
+      original,
+    );
+    await screen.rerender(
+      <LocalMediaAudioVisualizer enabled={false} style="milkdrop" mediaElement={second} />,
+    );
+    expect(document.querySelector('[data-testid="local-media-audio-visualizer"] canvas')).not.toBe(
+      original,
+    );
+    expect(original!.isConnected).toBe(false);
+  } finally {
+    await screen.unmount();
+  }
+});
 
 function writeAscii(view: DataView, offset: number, value: string): void {
   for (let index = 0; index < value.length; index += 1) {
@@ -289,5 +315,64 @@ it("ignores a failed navigation result after the queue has been replaced", async
   } finally {
     await view.unmount();
     navigate.mockRestore();
+  }
+});
+
+it("keeps narrow native controls usable when the optional visualizer is enabled", async () => {
+  localMediaStore.selectFile(silentWavFile());
+  const screen = await render(
+    <LocalMediaPanel
+      backgroundEffective={false}
+      cinemaEffective={false}
+      cinemaHeadingRef={createRef<HTMLHeadingElement>()}
+      floatingAnchor={{ left: 0, top: 0, width: 280, height: 400 }}
+    />,
+  );
+  try {
+    await page.getByLabelText("Toggle local media audio visualizer").click();
+    expect(localMediaStore.getSnapshot().visualizerEnabled).toBe(true);
+    const panel = page
+      .getByRole("region", { name: "Local media player" })
+      .element()
+      .getBoundingClientRect();
+    for (const label of [
+      "Toggle local media audio visualizer",
+      "Next local media",
+      "Clear local media",
+    ]) {
+      const control = page.getByLabelText(label).element().getBoundingClientRect();
+      expect(control.left).toBeGreaterThanOrEqual(panel.left);
+      expect(control.right).toBeLessThanOrEqual(panel.right);
+    }
+    const audio = document.querySelector("audio")!;
+    expect(audio.controls).toBe(true);
+    expect(document.querySelector('[data-testid="local-media-audio-visualizer"]')).not.toBeNull();
+    await page.getByLabelText("Toggle local media audio visualizer").click();
+    expect(localMediaStore.getSnapshot().visualizerEnabled).toBe(false);
+    expect(audio.isConnected).toBe(true);
+  } finally {
+    await screen.unmount();
+  }
+});
+
+it("shows playback guidance before loading a MilkDrop preset for paused media", async () => {
+  localMediaStore.selectFile(silentWavFile());
+  localMediaStore.update({ visualizerEnabled: true, visualizerStyle: "milkdrop" });
+  const focused = vi.spyOn(document, "hasFocus").mockReturnValue(true);
+  const screen = await render(
+    <LocalMediaPanel
+      backgroundEffective={false}
+      cinemaEffective={false}
+      cinemaHeadingRef={createRef<HTMLHeadingElement>()}
+      floatingAnchor={{ left: 0, top: 0, width: 600, height: 400 }}
+    />,
+  );
+  try {
+    await expect.element(page.getByText("Play media to start the visualizer.")).toBeVisible();
+    await expect.element(page.getByLabelText("Next MilkDrop preset")).toBeDisabled();
+    expect(document.body.textContent).not.toContain("Loading MilkDrop");
+  } finally {
+    await screen.unmount();
+    focused.mockRestore();
   }
 });

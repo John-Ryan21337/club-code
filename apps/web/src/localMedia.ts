@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import type { LocalMediaVisualizerStyle } from "./localMediaAudioVisualizer";
 
 import {
   MAX_DESKTOP_LOCAL_MEDIA_QUEUE_BYTES,
@@ -51,6 +52,12 @@ export interface LocalMediaState {
   readonly glowColor: string;
   readonly glowOpacity: number;
   readonly backgroundOpacity: number;
+  readonly visualizerEnabled: boolean;
+  readonly visualizerStyle: LocalMediaVisualizerStyle;
+  readonly visualizerPresetName: string | null;
+  readonly visualizerAutoCycle: boolean;
+  readonly visualizerCycleSeconds: number;
+  readonly visualizerBlendSeconds: number;
 }
 
 export interface LocalMediaUrlApi {
@@ -107,6 +114,12 @@ export const DEFAULT_LOCAL_MEDIA_STATE: LocalMediaState = {
   glowColor: "#7dd3fc",
   glowOpacity: 0.35,
   backgroundOpacity: 0.4,
+  visualizerEnabled: false,
+  visualizerStyle: "spectrum",
+  visualizerPresetName: null,
+  visualizerAutoCycle: false,
+  visualizerCycleSeconds: 30,
+  visualizerBlendSeconds: 4,
 };
 
 export interface LocalMediaFile extends Blob {
@@ -523,15 +536,27 @@ export function createLocalMediaStore(
       selectionRevision += 1;
       browserQueue = [];
       failedIndexes = new Set();
-      if (state.source !== null || state.queue !== null || state.navigationPending) {
-        replace({ ...state, source: null, queue: null, navigationPending: false });
-      }
+      replace({
+        ...state,
+        source: null,
+        queue: null,
+        navigationPending: false,
+        visualizerEnabled: false,
+        visualizerStyle: DEFAULT_LOCAL_MEDIA_STATE.visualizerStyle,
+        visualizerPresetName: null,
+        visualizerAutoCycle: DEFAULT_LOCAL_MEDIA_STATE.visualizerAutoCycle,
+        visualizerCycleSeconds: DEFAULT_LOCAL_MEDIA_STATE.visualizerCycleSeconds,
+        visualizerBlendSeconds: DEFAULT_LOCAL_MEDIA_STATE.visualizerBlendSeconds,
+      });
       releaseSource(previousSource);
     },
     update: (patch) => {
       const next = { ...state, ...patch };
       replace({
         ...next,
+        visualizerStyle: next.visualizerStyle === "milkdrop" ? "milkdrop" : "spectrum",
+        visualizerCycleSeconds: clampFinite(next.visualizerCycleSeconds, 3, 3600, 30),
+        visualizerBlendSeconds: clampFinite(next.visualizerBlendSeconds, 0, 30, 4),
         glowMode: next.glowMode === "adaptive" ? "adaptive" : "fixed",
         glowOpacity: clampFinite(next.glowOpacity, 0, 1, DEFAULT_LOCAL_MEDIA_STATE.glowOpacity),
         backgroundOpacity: clampFinite(
