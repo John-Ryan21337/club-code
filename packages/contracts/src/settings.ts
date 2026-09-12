@@ -184,6 +184,50 @@ export const DEFAULT_AMBIENT_IMAGE_CYCLE_ASSETS: AmbientImageCycleAssets = [];
 export const DEFAULT_AMBIENT_IMAGE_CYCLE_ENABLED = false;
 export const DEFAULT_AMBIENT_IMAGE_CYCLE_SECONDS = 20;
 export const DEFAULT_AMBIENT_IMAGE_PRESENTATION_MODE: AmbientImagePresentationMode = "floating";
+
+// ── Ambient image panel presentation ──────────────────────────────
+// These keys describe *how* the ambient image is presented. They are separate
+// from the activation and library keys above, which decide *whether* an image
+// is shown and *which* bytes it uses. Cafe has no named ambient profile yet;
+// when one arrives, a profile must carry the presentation keys and must not
+// carry the activation or library keys. `docs/ambient-image-panel.md` records
+// the exact split.
+//
+// Custom panel geometry (x, y, width) is intentionally absent. Geometry is a
+// per-device value and lives in browser storage, never in this
+// backend-authoritative document.
+export const AmbientImageLayoutMode = Schema.Literals(["preset", "custom"]);
+export type AmbientImageLayoutMode = typeof AmbientImageLayoutMode.Type;
+export const AmbientImagePresetPlacement = Schema.Literals([
+  "top-left",
+  "top-right",
+  "bottom-left",
+  "bottom-right",
+]);
+export type AmbientImagePresetPlacement = typeof AmbientImagePresetPlacement.Type;
+export const AmbientImagePresetSize = Schema.Literals(["small", "medium", "large"]);
+export type AmbientImagePresetSize = typeof AmbientImagePresetSize.Type;
+/** `auto` follows the theme accent; any other value must be an explicit sRGB hex triplet. */
+export const AmbientImageGlowColor = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(7),
+  Schema.isPattern(/^(?:auto|#[0-9a-f]{6})$/),
+);
+export type AmbientImageGlowColor = typeof AmbientImageGlowColor.Type;
+export const MIN_AMBIENT_IMAGE_GLOW_OPACITY = 0.05;
+export const MAX_AMBIENT_IMAGE_GLOW_OPACITY = 1;
+export const AmbientImageGlowOpacity = Schema.Number.check(
+  Schema.isBetween({
+    minimum: MIN_AMBIENT_IMAGE_GLOW_OPACITY,
+    maximum: MAX_AMBIENT_IMAGE_GLOW_OPACITY,
+  }),
+);
+export type AmbientImageGlowOpacity = typeof AmbientImageGlowOpacity.Type;
+export const DEFAULT_AMBIENT_IMAGE_LAYOUT_MODE: AmbientImageLayoutMode = "preset";
+export const DEFAULT_AMBIENT_IMAGE_PRESET_PLACEMENT: AmbientImagePresetPlacement = "bottom-right";
+export const DEFAULT_AMBIENT_IMAGE_PRESET_SIZE: AmbientImagePresetSize = "medium";
+export const DEFAULT_AMBIENT_IMAGE_GLOW_ENABLED = false;
+export const DEFAULT_AMBIENT_IMAGE_GLOW_COLOR: AmbientImageGlowColor = "auto";
+export const DEFAULT_AMBIENT_IMAGE_GLOW_OPACITY = 0.35;
 export const SidebarStarSpeed = Schema.Number.check(
   Schema.isBetween({
     minimum: MIN_SIDEBAR_STAR_SPEED,
@@ -534,6 +578,24 @@ export const ClientSettingsSchema = Schema.Struct({
   ),
   ambientImagePresentationMode: AmbientImagePresentationMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_IMAGE_PRESENTATION_MODE)),
+  ),
+  ambientImageLayoutMode: AmbientImageLayoutMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_IMAGE_LAYOUT_MODE)),
+  ),
+  ambientImagePresetPlacement: AmbientImagePresetPlacement.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_IMAGE_PRESET_PLACEMENT)),
+  ),
+  ambientImagePresetSize: AmbientImagePresetSize.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_IMAGE_PRESET_SIZE)),
+  ),
+  ambientImageGlowEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_IMAGE_GLOW_ENABLED)),
+  ),
+  ambientImageGlowColor: AmbientImageGlowColor.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_IMAGE_GLOW_COLOR)),
+  ),
+  ambientImageGlowOpacity: AmbientImageGlowOpacity.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_IMAGE_GLOW_OPACITY)),
   ),
 });
 export type ClientSettings = typeof ClientSettingsSchema.Type;
@@ -1203,5 +1265,11 @@ export const ClientSettingsPatch = Schema.Struct({
   ambientImageCycleEnabled: Schema.optionalKey(Schema.Boolean),
   ambientImageCycleSeconds: Schema.optionalKey(AmbientImageCycleSeconds),
   ambientImagePresentationMode: Schema.optionalKey(AmbientImagePresentationMode),
+  ambientImageLayoutMode: Schema.optionalKey(AmbientImageLayoutMode),
+  ambientImagePresetPlacement: Schema.optionalKey(AmbientImagePresetPlacement),
+  ambientImagePresetSize: Schema.optionalKey(AmbientImagePresetSize),
+  ambientImageGlowEnabled: Schema.optionalKey(Schema.Boolean),
+  ambientImageGlowColor: Schema.optionalKey(AmbientImageGlowColor),
+  ambientImageGlowOpacity: Schema.optionalKey(AmbientImageGlowOpacity),
 });
 export type ClientSettingsPatch = typeof ClientSettingsPatch.Type;

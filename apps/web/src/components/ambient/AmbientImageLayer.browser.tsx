@@ -243,6 +243,53 @@ describe("AmbientImageLayer", () => {
     expect(new URL(image!.src, window.location.href).pathname.endsWith(".gif")).toBe(true);
   });
 
+  it("keeps floating handles below native captions and follows fullscreen geometry", async () => {
+    const previousBridge = window.desktopBridge;
+    const oldPlatform = Object.getOwnPropertyDescriptor(navigator, "platform");
+    const oldOverlay = Object.getOwnPropertyDescriptor(navigator, "windowControlsOverlay");
+    const events = new EventTarget();
+    const overlay = {
+      visible: true,
+      getTitlebarAreaRect: () => ({ y: 0, height: 40 }),
+      addEventListener: events.addEventListener.bind(events),
+      removeEventListener: events.removeEventListener.bind(events),
+    };
+    Object.defineProperty(navigator, "platform", { configurable: true, value: "Win32" });
+    Object.defineProperty(navigator, "windowControlsOverlay", {
+      configurable: true,
+      value: overlay,
+    });
+    window.desktopBridge = {
+      getLocalEnvironmentBootstrap: () => null,
+    } as unknown as NonNullable<typeof window.desktopBridge>;
+    try {
+      await renderLayer({
+        ambientImageEnabled: true,
+        ambientImageAsset: pngAsset,
+        ambientImagePresetPlacement: "top-right",
+      });
+      const layer = () =>
+        document.querySelector<HTMLElement>('[data-testid="ambient-image-layer"]')!;
+      await vi.waitFor(() => expect(layer().getBoundingClientRect().top).toBe(40));
+      const hide = document.querySelector<HTMLElement>(
+        '[data-testid="ambient-image-hide-button"]',
+      )!;
+      expect(hide.getBoundingClientRect().top).toBeGreaterThanOrEqual(40);
+      overlay.visible = false;
+      events.dispatchEvent(new Event("geometrychange"));
+      await vi.waitFor(() => expect(layer().getBoundingClientRect().top).toBe(0));
+    } finally {
+      mounted?.unmount();
+      mounted = null;
+      if (previousBridge) window.desktopBridge = previousBridge;
+      else Reflect.deleteProperty(window, "desktopBridge");
+      if (oldPlatform) Object.defineProperty(navigator, "platform", oldPlatform);
+      else Reflect.deleteProperty(navigator, "platform");
+      if (oldOverlay) Object.defineProperty(navigator, "windowControlsOverlay", oldOverlay);
+      else Reflect.deleteProperty(navigator, "windowControlsOverlay");
+    }
+  });
+
   it("advances the rotation and clears its timer on unmount", async () => {
     await renderLayer({
       ambientImageEnabled: true,
