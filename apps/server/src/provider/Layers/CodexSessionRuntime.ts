@@ -1,4 +1,8 @@
 import {
+  withAgentBrowserAuthorization,
+  type AgentBrowserMcpConfig,
+} from "../AgentBrowserBridge.ts";
+import {
   ApprovalRequestId,
   CODEX_MAX_CONCURRENT_SUBAGENTS,
   DEFAULT_MODEL,
@@ -386,6 +390,7 @@ export interface CodexSessionRuntimeOptions {
   // `model_auto_compact_token_limit`. When absent, app-server owns threshold
   // resolution exactly as it does for the official Codex CUI.
   readonly autoCompactTokenLimit?: number | undefined;
+  readonly agentBrowserMcp?: AgentBrowserMcpConfig | undefined;
 }
 
 export interface CodexSessionRuntimeSendTurnInput {
@@ -971,6 +976,7 @@ function buildThreadStartParams(input: {
   readonly serviceTier: CodexServiceTier | undefined;
   readonly additionalDirectories?: ReadonlyArray<string> | undefined;
   readonly autoCompactTokenLimit?: number | undefined;
+  readonly agentBrowserMcp?: AgentBrowserMcpConfig | undefined;
 }): CodexThreadStartParamsWithRuntimeWorkspaceRoots {
   const config = runtimeModeToThreadConfig(input.runtimeMode);
   const runtimeWorkspaceRoots = buildRuntimeWorkspaceRoots({
@@ -988,6 +994,23 @@ function buildThreadStartParams(input: {
   // apply its current default (or an explicit user/managed configuration) so
   // Cafe follows the same compaction path as the upstream CLI.
   const threadConfig: Record<string, unknown> = {};
+  // Codex's per-thread MCP config resolves env_http_headers in the app-server
+  // process. Keep the bearer in its private launch environment, never argv or
+  // the persisted thread config. Both thread/start and thread/resume use this.
+  if (input.agentBrowserMcp) {
+    threadConfig.mcp_servers = {
+      cafe_browser: {
+        url: input.agentBrowserMcp.url,
+        env_http_headers: { Authorization: "CAFE_CODE_AGENT_BROWSER_MCP_AUTHORIZATION" },
+        http_headers: {
+          "X-Cafe-Browser-Thread": input.agentBrowserMcp.threadId,
+          "X-Cafe-Browser-Provider": input.agentBrowserMcp.providerInstanceId,
+        },
+        startup_timeout_sec: 5,
+        tool_timeout_sec: 95,
+      },
+    };
+  }
   if (input.autoCompactTokenLimit !== undefined) {
     // This is an explicit user override. App-server still applies its upstream
     // context-window clamp and the user's upstream scope configuration.
@@ -2120,6 +2143,7 @@ export const openCodexThread = (input: {
   readonly resumeThreadId: string | undefined;
   readonly additionalDirectories?: ReadonlyArray<string> | undefined;
   readonly autoCompactTokenLimit?: number | undefined;
+  readonly agentBrowserMcp?: AgentBrowserMcpConfig | undefined;
 }): Effect.Effect<CodexThreadOpenResponse, CodexErrors.CodexAppServerError> => {
   const resumeThreadId = input.resumeThreadId;
   const startParams = buildThreadStartParams({
@@ -2129,6 +2153,7 @@ export const openCodexThread = (input: {
     serviceTier: input.serviceTier,
     additionalDirectories: input.additionalDirectories,
     autoCompactTokenLimit: input.autoCompactTokenLimit,
+    agentBrowserMcp: input.agentBrowserMcp,
   });
 
   if (resumeThreadId === undefined) {
@@ -3904,10 +3929,13 @@ export const makeCodexSessionRuntime = (
     // `child_process.spawn`; `expandHomePath` lets a configured
     // `CODEX_HOME=~/.codex_work` reach codex as an absolute path.
     const resolvedHomePath = options.homePath ? expandHomePath(options.homePath) : undefined;
-    const env = {
-      ...(options.environment ?? process.env),
-      ...(resolvedHomePath ? { CODEX_HOME: resolvedHomePath } : {}),
-    };
+    const env = withAgentBrowserAuthorization(
+      {
+        ...(options.environment ?? process.env),
+        ...(resolvedHomePath ? { CODEX_HOME: resolvedHomePath } : {}),
+      },
+      options.agentBrowserMcp,
+    );
     const appServerArgs = buildCodexAppServerArgs({
       maxConcurrentSubagents: options.maxConcurrentSubagents,
       transportPolicy: options.transportPolicy,
@@ -6111,6 +6139,7 @@ export const makeCodexSessionRuntime = (
         additionalDirectories: options.additionalDirectories,
         resumeThreadId: readResumeCursorThreadId(options.resumeCursor),
         autoCompactTokenLimit: options.autoCompactTokenLimit,
+        agentBrowserMcp: options.agentBrowserMcp,
       });
 
       const providerThreadId = opened.thread.id;

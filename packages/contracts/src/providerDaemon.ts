@@ -1,3 +1,12 @@
+import {
+  AgentBrowserCompleteInputSchema,
+  AgentBrowserCompleteResultSchema,
+  AgentBrowserGrantInputSchema,
+  AgentBrowserGrantStateSchema,
+  AgentBrowserPollResultSchema,
+  AgentBrowserRevokeInputSchema,
+  AgentBrowserSessionContextSchema,
+} from "./embeddedBrowser.ts";
 import * as Schema from "effect/Schema";
 import {
   ProviderRespondToInteractionInput,
@@ -494,6 +503,23 @@ export type ProviderDaemonSubagentDetail = typeof ProviderDaemonSubagentDetail.T
 
 export const ProviderDaemonRpcRequest = Schema.Union([
   Schema.Struct({
+    method: Schema.Literal("agentBrowserGrant"),
+    payload: AgentBrowserGrantInputSchema,
+  }),
+  Schema.Struct({
+    method: Schema.Literal("agentBrowserRevoke"),
+    payload: AgentBrowserRevokeInputSchema,
+  }),
+  Schema.Struct({
+    method: Schema.Literal("agentBrowserPoll"),
+    payload: AgentBrowserSessionContextSchema,
+  }),
+  Schema.Struct({
+    method: Schema.Literal("agentBrowserComplete"),
+    payload: AgentBrowserCompleteInputSchema,
+  }),
+
+  Schema.Struct({
     method: Schema.Literal("startSession"),
     commandId: Schema.optional(ProviderDaemonCommandId),
     payload: ProviderSessionStartInput,
@@ -601,6 +627,10 @@ export const ProviderDaemonRpcRequest = Schema.Union([
 export type ProviderDaemonRpcRequest = typeof ProviderDaemonRpcRequest.Type;
 
 export const ProviderDaemonRpcResultByMethod = {
+  agentBrowserGrant: AgentBrowserGrantStateSchema,
+  agentBrowserRevoke: AgentBrowserGrantStateSchema,
+  agentBrowserPoll: AgentBrowserPollResultSchema,
+  agentBrowserComplete: AgentBrowserCompleteResultSchema,
   startSession: ProviderSession,
   forkSession: ProviderSessionForkResult,
   discardSessionFork: Schema.Void,

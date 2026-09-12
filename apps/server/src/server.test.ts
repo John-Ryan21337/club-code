@@ -1,4 +1,5 @@
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
+import { AgentBrowserBridge } from "./provider/AgentBrowserBridge.ts";
 import * as NodeSocket from "@effect/platform-node/NodeSocket";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeCrypto from "node:crypto";
@@ -3610,6 +3611,78 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       );
       assert.equal(response.status, 404);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("routes browser execution through authenticated WebSocket polling and completion", () =>
+    Effect.gen(function* () {
+      const bridge = yield* Effect.acquireRelease(
+        Effect.sync(() => new AgentBrowserBridge()),
+        (bridge) => Effect.promise(() => bridge.close()),
+      );
+      const identity = {
+        threadId: ThreadId.make("browser-wire-test"),
+        providerInstanceId: ProviderInstanceId.make("codex"),
+      };
+      const disabled = ThreadId.make("browser-disabled-test");
+      yield* Effect.promise(() => bridge.mcpConfig(identity));
+      yield* Effect.promise(() => bridge.mcpConfig({ ...identity, threadId: disabled }));
+      yield* buildAppUnderTest({
+        layers: {
+          providerService: {
+            pollAgentBrowser: (input) => Effect.sync(() => bridge.poll(input)),
+            completeAgentBrowser: (input) => Effect.sync(() => bridge.complete(input)),
+          },
+          clientSettings: {
+            getSettings: Effect.succeed({
+              ...DEFAULT_CLIENT_SETTINGS,
+              agentBrowserDisabledThreadIds: [disabled],
+            }),
+          },
+        },
+      });
+      const wsUrl = yield* getWsServerUrl("/ws");
+      yield* withWsRpcClient(wsUrl, (client) =>
+        Effect.gen(function* () {
+          const context = {
+            tabId: "browser-wire-tab",
+            origin: "https://example.test",
+            defaultAccess: true,
+            disabledThreadIds: [],
+          };
+          yield* client[WS_METHODS.agentBrowserPoll](context);
+          const denied = yield* Effect.promise(() =>
+            bridge
+              .enqueue({ ...identity, threadId: disabled }, { type: "snapshot" })
+              .catch((error) => error),
+          );
+          assert.ok(denied instanceof Error);
+          const pending = bridge.enqueue(identity, { type: "snapshot" });
+          const poll = yield* client[WS_METHODS.agentBrowserPoll](context);
+          assert.ok(poll.request);
+          const completed = yield* client[WS_METHODS.agentBrowserComplete]({
+            context,
+            requestId: poll.request.requestId,
+            result: {
+              type: "snapshot",
+              snapshot: {
+                snapshotId: "wire-snapshot",
+                mode: "dom-accessibility",
+                displayUrl: "https://example.test/",
+                title: "Synthetic page",
+                capturedAt: new Date().toISOString(),
+                text: "Synthetic content",
+                targets: [],
+                imageRegions: [],
+                ocr: null,
+                redactionNotice: "Form values omitted.",
+              },
+            },
+          });
+          assert.equal(completed.accepted, true);
+          assert.equal((yield* Effect.promise(() => pending)).type, "snapshot");
+        }),
+      );
+    }).pipe(Effect.scoped, Effect.provide(NodeHttpServer.layerTest)),
   );
 
   it.effect("routes websocket rpc server.upsertKeybinding", () =>

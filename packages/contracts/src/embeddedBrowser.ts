@@ -33,7 +33,7 @@ const EmbeddedBrowserTimestampSchema = IsoDateTime.check(
     (value) => Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value,
   ),
 );
-const EmbeddedBrowserThreadIdSchema = ThreadId.check(
+export const EmbeddedBrowserThreadIdSchema = ThreadId.check(
   Schema.isMaxLength(512),
   Schema.isPattern(/^[^\u0000-\u001f\u007f]+$/),
 );
