@@ -54,6 +54,8 @@ import { TraitsPicker } from "../chat/TraitsPicker";
 import { useTheme } from "../../hooks/useTheme";
 import { useSettings, useUpdateSettings } from "../../hooks/useSettings";
 import { useThreadActions } from "../../hooks/useThreadActions";
+import { isProjectHiddenForMeeting } from "../../meetingPrivacy";
+import { useUiStateStore } from "../../uiStateStore";
 import {
   setDesktopSourceUpdateStateQueryData,
   useDesktopSourceUpdateState,
@@ -2120,6 +2122,14 @@ export function ArchivedThreadsPanel() {
     isLoading: isLoadingArchive,
     refresh: refreshArchivedThreads,
   } = useArchivedThreadSnapshots(environmentIds);
+  const meetingPrivacyEnabled = useUiStateStore((state) => state.meetingPrivacyEnabled);
+  const meetingPrivacyHiddenProjectKeys = useUiStateStore(
+    (state) => state.meetingPrivacyHiddenProjectKeys,
+  );
+  const meetingPrivacyHiddenProjectKeySet = useMemo(
+    () => new Set(meetingPrivacyHiddenProjectKeys),
+    [meetingPrivacyHiddenProjectKeys],
+  );
 
   const archivedGroups = useMemo(() => {
     const projectsByEnvironmentAndId = new Map(
@@ -2145,7 +2155,18 @@ export function ArchivedThreadsPanel() {
       })),
     );
 
+    // Archive snapshots carry their own project titles and workspace roots, so
+    // they must be filtered here too. Otherwise the archive page would name a
+    // folder the sidebar is hiding.
     return [...projectsByEnvironmentAndId.values()]
+      .filter(
+        (project) =>
+          !isProjectHiddenForMeeting({
+            enabled: meetingPrivacyEnabled,
+            hiddenProjectKeys: meetingPrivacyHiddenProjectKeySet,
+            project,
+          }),
+      )
       .map((project) => ({
         project,
         threads: threads
@@ -2160,7 +2181,7 @@ export function ArchivedThreadsPanel() {
           }),
       }))
       .filter((group) => group.threads.length > 0);
-  }, [archivedSnapshots]);
+  }, [archivedSnapshots, meetingPrivacyEnabled, meetingPrivacyHiddenProjectKeySet]);
 
   const handleArchivedThreadContextMenu = useCallback(
     async (threadRef: ScopedThreadRef, position: { x: number; y: number }) => {
@@ -2300,6 +2321,14 @@ export function RecentlyDeletedThreadsPanel() {
     isLoading: isLoadingDeleted,
     refresh: refreshDeletedThreads,
   } = useDeletedThreadSnapshots(environmentIds);
+  const meetingPrivacyEnabled = useUiStateStore((state) => state.meetingPrivacyEnabled);
+  const meetingPrivacyHiddenProjectKeys = useUiStateStore(
+    (state) => state.meetingPrivacyHiddenProjectKeys,
+  );
+  const meetingPrivacyHiddenProjectKeySet = useMemo(
+    () => new Set(meetingPrivacyHiddenProjectKeys),
+    [meetingPrivacyHiddenProjectKeys],
+  );
 
   const deletedGroups = useMemo(() => {
     const projectsByEnvironmentAndId = new Map(
@@ -2325,7 +2354,17 @@ export function RecentlyDeletedThreadsPanel() {
       })),
     );
 
+    // Same reasoning as the archive panel: recycle-bin snapshots name projects
+    // independently of the live project list.
     return [...projectsByEnvironmentAndId.values()]
+      .filter(
+        (project) =>
+          !isProjectHiddenForMeeting({
+            enabled: meetingPrivacyEnabled,
+            hiddenProjectKeys: meetingPrivacyHiddenProjectKeySet,
+            project,
+          }),
+      )
       .map((project) => ({
         project,
         threads: threads
@@ -2340,7 +2379,7 @@ export function RecentlyDeletedThreadsPanel() {
           }),
       }))
       .filter((group) => group.threads.length > 0);
-  }, [deletedSnapshots]);
+  }, [deletedSnapshots, meetingPrivacyEnabled, meetingPrivacyHiddenProjectKeySet]);
   const deletedThreadRefs = useMemo(
     () => collectRecentlyDeletedThreadRefs(deletedGroups),
     [deletedGroups],

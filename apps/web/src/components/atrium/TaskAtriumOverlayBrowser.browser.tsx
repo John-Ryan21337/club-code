@@ -16,6 +16,7 @@ vi.mock("./TaskAtrium", () => ({
 
 import { TaskAtriumOverlay } from "./TaskAtriumOverlay";
 import { useTaskAtriumStore } from "./taskAtriumStore";
+import { useUiStateStore } from "../../uiStateStore";
 
 it("preserves browser placement on Windows even with a window-controls overlay", async () => {
   const root = document.documentElement;
@@ -40,5 +41,30 @@ it("preserves browser placement on Windows even with a window-controls overlay",
     await screen.unmount();
     root.classList.toggle("wco", originalWco);
     platformSpy.mockRestore();
+  }
+});
+
+it("removes an open Atrium board when meeting privacy becomes active", async () => {
+  const previous = useUiStateStore.getState();
+  useUiStateStore.setState({ meetingPrivacyEnabled: false, meetingPrivacyHiddenProjectKeys: [] });
+  useTaskAtriumStore.getState().setOpen(true);
+  const screen = await render(<TaskAtriumOverlay />);
+  try {
+    await expect.element(page.getByText("Atrium content", { exact: true })).toBeVisible();
+    useUiStateStore.setState({
+      meetingPrivacyEnabled: true,
+      meetingPrivacyHiddenProjectKeys: ["synthetic-project"],
+    });
+    await expect.element(page.getByText("Atrium content", { exact: true })).not.toBeInTheDocument();
+    await expect
+      .element(page.getByRole("status"))
+      .toHaveTextContent("Task Atrium is hidden while meeting privacy is on.");
+  } finally {
+    await screen.unmount();
+    useTaskAtriumStore.getState().setOpen(false);
+    useUiStateStore.setState({
+      meetingPrivacyEnabled: previous.meetingPrivacyEnabled,
+      meetingPrivacyHiddenProjectKeys: previous.meetingPrivacyHiddenProjectKeys,
+    });
   }
 });
