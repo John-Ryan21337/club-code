@@ -6,7 +6,8 @@
  * closed by default and is opened from the Appearance settings panel; opening
  * it renders a panel and nothing else, so no effect turns on without a command.
  *
- * Commands are parsed locally without a shell, `eval`, or provider prompt.
+ * The local grammar runs first. Explicit LM Studio fallback can interpret unknown
+ * wording through fixed loopback endpoints; no shell or `eval` is used.
  * Settings are saved to the primary Cafe server, which can be remote.
  * Commands are recognized by `atmosphereCommandParser` and
  * written through `server.updateClientSettings`, whose confirmed result is what
@@ -38,6 +39,10 @@ import {
   parseAtmosphereCommands,
 } from "../atmosphereCommandParser";
 import { buildAtmospherePatch, describeConfirmedAtmosphere } from "../atmosphereConsoleCommands";
+import {
+  AtmosphereLmStudioError,
+  interpretAtmosphereCommandWithLmStudio,
+} from "../atmosphereLmStudio";
 import { usePrimaryEnvironmentId } from "../environments/primary";
 import { getPrimaryEnvironmentConnection } from "../environments/runtime";
 import {
@@ -45,14 +50,14 @@ import {
   type AtmosphereConsolePreferences,
   useAtmosphereConsolePreferences,
 } from "../atmosphereConsolePreferences";
-import { useSettings } from "../hooks/useSettings";
+import { getClientSettings } from "../hooks/useSettings";
 import { getDesktopTitlebarInset, getWindowControlsOverlay } from "../lib/windowControlsOverlay";
-import { applyClientSettingsUpdated, useServerConfig } from "../rpc/serverState";
+import { applyClientSettingsUpdated, getServerConfig, useServerConfig } from "../rpc/serverState";
 
 const MIN_WIDTH = 296;
 const MIN_HEIGHT = 208;
 const DEFAULT_WIDTH = 372;
-const DEFAULT_HEIGHT = 268;
+const DEFAULT_HEIGHT = 308;
 const VIEWPORT_MARGIN = 12;
 const KEYBOARD_STEP = 8;
 const MINIMIZED_HEIGHT = 36;
@@ -149,7 +154,6 @@ function AtmosphereConsolePanel({
       | ((current: AtmosphereConsolePreferences) => AtmosphereConsolePreferences),
   ) => void;
 }) {
-  const settings = useSettings();
   const serverConfig = useServerConfig();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const atmosphereAvailable = serverConfig?.ambientExperienceCapabilities.atmosphere === true;
@@ -157,6 +161,7 @@ function AtmosphereConsolePanel({
   const [input, setInput] = useState("");
   const [status, setStatus] = useState(IDLE_STATUS);
   const [busy, setBusy] = useState(false);
+  const [interpreter, setInterpreter] = useState<"local" | "lm-studio">("local");
   const [liveGeometry, setLiveGeometry] = useState<Geometry | null>(null);
 
   const panelRef = useRef<HTMLElement | null>(null);
@@ -167,6 +172,7 @@ function AtmosphereConsolePanel({
   /** Bumped whenever a request is superseded, so a late ack cannot land. */
   const requestGenerationRef = useRef(0);
   const pendingRequestRef = useRef<number | null>(null);
+  const interpreterAbortRef = useRef<AbortController | null>(null);
   const environmentRef = useRef<EnvironmentId | null | undefined>(undefined);
 
   const storedGeometry = preferences.geometry;
@@ -186,6 +192,7 @@ function AtmosphereConsolePanel({
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+      interpreterAbortRef.current?.abort();
       // Ignore this component's late confirmation; a sent server write can still finish.
       requestGenerationRef.current += 1;
     };
@@ -224,6 +231,7 @@ function AtmosphereConsolePanel({
     environmentRef.current = primaryEnvironmentId;
     if (previous === undefined || previous === primaryEnvironmentId) return;
     requestGenerationRef.current += 1;
+    interpreterAbortRef.current?.abort();
     pendingRequestRef.current = null;
     setBusy(false);
     setInput("");
@@ -336,7 +344,11 @@ function AtmosphereConsolePanel({
     if (pendingRequestRef.current !== null) return;
 
     const parsed = parseAtmosphereCommands(input);
-    if (parsed.commands.length === 0) {
+    const useLocalModel =
+      interpreter === "lm-studio" &&
+      parsed.commands.length === 0 &&
+      parsed.issues.every((issue) => issue.reason === "unknown");
+    if (parsed.commands.length === 0 && !useLocalModel) {
       setStatus(describeAtmosphereRefusal(parsed.issues));
       return;
     }
@@ -347,6 +359,8 @@ function AtmosphereConsolePanel({
 
     const generation = ++requestGenerationRef.current;
     pendingRequestRef.current = generation;
+    const interpreterAbort = new AbortController();
+    interpreterAbortRef.current = interpreterAbort;
     const isCurrent = () => mountedRef.current && requestGenerationRef.current === generation;
     setBusy(true);
     setStatus("Applying…");
@@ -356,8 +370,27 @@ function AtmosphereConsolePanel({
         setStatus(ENVIRONMENT_CHANGED_STATUS);
         return;
       }
+      let commands = parsed.commands;
+      if (useLocalModel) {
+        setStatus("Interpreting with local LM Studio…");
+        commands = await interpretAtmosphereCommandWithLmStudio(input, interpreterAbort.signal);
+        if (!isCurrent()) return;
+        if (getPrimaryEnvironmentConnection() !== connection) {
+          setStatus(CONNECTION_CHANGED_STATUS);
+          return;
+        }
+        if (commands.length === 0) {
+          setStatus("LM Studio did not return a supported command batch. Nothing changed.");
+          return;
+        }
+        setStatus("Applying…");
+      }
+      if (getServerConfig()?.ambientExperienceCapabilities.atmosphere !== true) {
+        setStatus(UNAVAILABLE_STATUS);
+        return;
+      }
       const confirmed = await connection.client.server.updateClientSettings(
-        buildAtmospherePatch(parsed.commands, settings),
+        buildAtmospherePatch(commands, getClientSettings()),
       );
       if (!isCurrent()) return;
       if (getPrimaryEnvironmentConnection() !== connection) {
@@ -365,12 +398,14 @@ function AtmosphereConsolePanel({
         return;
       }
       applyClientSettingsUpdated(confirmed);
-      setStatus(describeConfirmedAtmosphere(parsed.commands, confirmed));
+      setStatus(describeConfirmedAtmosphere(commands, confirmed));
       setInput("");
-    } catch {
+    } catch (error) {
       if (!isCurrent()) return;
-      setStatus(WRITE_FAILED_STATUS);
+      setStatus(error instanceof AtmosphereLmStudioError ? error.message : WRITE_FAILED_STATUS);
     } finally {
+      interpreterAbort.abort();
+      if (interpreterAbortRef.current === interpreterAbort) interpreterAbortRef.current = null;
       if (pendingRequestRef.current === generation) pendingRequestRef.current = null;
       if (isCurrent()) setBusy(false);
     }
@@ -456,9 +491,33 @@ function AtmosphereConsolePanel({
       {preferences.minimized ? null : (
         <>
           <form
-            className="flex min-h-0 flex-1 flex-col gap-2 p-2"
+            className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-2 [&>*]:shrink-0"
             onSubmit={(event) => void submit(event)}
           >
+            <div className="flex items-center gap-2">
+              <label className="text-[11px] text-muted-foreground" htmlFor="atmosphere-interpreter">
+                Interpreter
+              </label>
+              <select
+                id="atmosphere-interpreter"
+                aria-label="Atmosphere interpreter"
+                className="h-7 min-w-0 flex-1 rounded-md border border-input bg-background px-1 text-xs"
+                value={interpreter}
+                disabled={busy}
+                onChange={(event) => {
+                  const next = event.currentTarget.value === "lm-studio" ? "lm-studio" : "local";
+                  setInterpreter(next);
+                  setStatus(
+                    next === "local"
+                      ? IDLE_STATUS
+                      : "Unrecognized wording goes to LM Studio at 127.0.0.1:1234, using its first listed model. Only the typed request is sent.",
+                  );
+                }}
+              >
+                <option value="local">Local grammar — no model</option>
+                <option value="lm-studio">LM Studio fallback</option>
+              </select>
+            </div>
             <label className="text-[11px] text-muted-foreground" htmlFor="atmosphere-command">
               Falling-effect command
             </label>
@@ -491,8 +550,9 @@ function AtmosphereConsolePanel({
             </p>
           </form>
           <p className="shrink-0 px-2 pb-2 text-[9px] leading-3 text-muted-foreground/80">
-            Commands are parsed locally, then saved to the primary Cafe server. No model or shell is
-            used. At most four commands per request.
+            {interpreter === "lm-studio"
+              ? "Unknown wording goes to LM Studio. Validated commands are saved to the primary Cafe server. No shell is used. At most four commands per request."
+              : "Commands are parsed locally, then saved to the primary Cafe server. No model or shell is used. At most four commands per request."}
           </p>
         </>
       )}

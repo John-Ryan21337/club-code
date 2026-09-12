@@ -57,6 +57,7 @@ const harness = vi.hoisted(() => {
 vi.mock("../hooks/useSettings", async () => {
   const { useSyncExternalStore } = await import("react");
   return {
+    getClientSettings: () => harness.get(),
     useSettings: <T,>(selector?: (settings: UnifiedSettings) => T) => {
       const settings = useSyncExternalStore(harness.subscribe, harness.get, harness.get);
       return selector ? selector(settings) : settings;
@@ -74,6 +75,7 @@ vi.mock("../hooks/useTheme", () => ({
 }));
 
 vi.mock("../rpc/serverState", () => ({
+  getServerConfig: () => ({ ambientExperienceCapabilities: { atmosphere: true } }),
   useServerConfig: () => ({ ambientExperienceCapabilities: { atmosphere: true } }),
   applyClientSettingsUpdated: (settings: ClientSettings) => {
     harness.patch(settings as Partial<UnifiedSettings>);
