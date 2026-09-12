@@ -31,6 +31,27 @@ function activity(
 }
 
 describe("Matrix live work vocabulary", () => {
+  it("uses the projected fixed build category without rendering the source command", () => {
+    expect(
+      deriveMatrixWorkVocabulary([
+        activity("1", {
+          itemType: "command_execution",
+          itemId: "private-provider-item",
+          observed: { providerObserved: true, activityType: "build" },
+          data: { command: "private command text and arguments" },
+        }),
+      ]),
+    ).toEqual({ english: ["BUILD", "RUN"], japanese: ["構築", "実行"] });
+    expect(
+      deriveMatrixWorkVocabulary([
+        activity("2", {
+          itemType: "command_execution",
+          observed: { activityType: "build" },
+          data: { command: "build" },
+        }),
+      ]),
+    ).toEqual({ english: ["RUN"], japanese: ["実行"] });
+  });
   it("shares a traversal budget across the whole activity tail", () => {
     const wide = {
       branches: Array.from({ length: 32 }, () => ({
