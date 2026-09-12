@@ -695,6 +695,10 @@ Provider integrations change frequently. Before implementing or changing Codex, 
 
 - The local player analysis is explicit and session-only. Keep the approved local-source boundary, single owned audio graph, serialized MilkDrop activation, pending-context teardown and fresh approval checks. Retain a stopped renderer across style changes; release its context only when its input owner is removed. Canvas limits and reduced-motion/visibility/focus suspension are required. Capture and Matrix signal consumers are separate follow-ups; see `docs/local-media-visualizer.md`.
 
+## Shared-audio renderer controls
+
+- Shared-audio analysis must start from an explicit user action and use only `getDisplayMedia`, with no microphone fallback. Bind its result to the exact observed connection, source, queue revision and mounted player. Stop all video tracks before approving audio; revoke and stop late or stale results. A pending chooser keeps its admission slot until the real promise settles, even after Stop. Current focus is required at admission; active capture ends on blur, hidden document, reduced motion, disabled visualization or owner teardown. Do not record, upload or persist audio. See `docs/display-audio-capture.md`; synthetic renderer media and native track-grant checks do not prove live service audio capture.
+
 ## Native current-frame audio capture
 
 - `apps/desktop/src/window/DesktopDisplayMediaCapture.ts` binds explicit display-media requests to the exact visible, focused trusted main frame and current session owner. Accept only the origin or its root-slash serialization. Never substitute system loopback, a different frame or a microphone fallback. Keep callback rejection and old-owner teardown bounded. The renderer Start/Stop control is a separate prerequisite; see `docs/display-frame-audio-capture.md`.

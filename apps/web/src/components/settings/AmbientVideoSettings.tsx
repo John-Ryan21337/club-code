@@ -1,3 +1,4 @@
+import { AmbientAudioCaptureControl } from "../ambient/AmbientAudioCaptureControl";
 import { useEffect, useState, useSyncExternalStore } from "react";
 
 import { parseYouTubeSource, youtubeSourceInputValue } from "../../ambientVideo";
@@ -17,7 +18,7 @@ import { SettingsRow, SettingsSection } from "./settingsLayout";
 export function AmbientVideoSettings() {
   const settings = useSettings();
   const { updateSettings } = useUpdateSettings();
-  const { environmentScopeKey } = useAmbientVideoWorkspace();
+  const { environmentScopeKey, audioCaptureOwner } = useAmbientVideoWorkspace();
   const source = settings.ambientVideoSource;
   const sourceInput =
     source?.kind === "spotify" ? spotifySourceInputValue(source) : youtubeSourceInputValue(source);
@@ -66,6 +67,12 @@ export function AmbientVideoSettings() {
           />
         }
       />
+      <SettingsRow
+        title="Shared audio analysis"
+        description="Start only when you want to analyse audio from your chosen source. The capture stops when its player, source or environment changes."
+      >
+        <AmbientAudioCaptureControl owner={audioCaptureOwner} />
+      </SettingsRow>
       <SettingsRow
         title="YouTube or Spotify link"
         description="Only the selected service ID is saved. The embed uses that service's own controls and account rules."

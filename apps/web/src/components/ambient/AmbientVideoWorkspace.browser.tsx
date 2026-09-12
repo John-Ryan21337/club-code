@@ -10,13 +10,25 @@ import { AmbientVideoWorkspace, useAmbientVideoWorkspace } from "./AmbientVideoW
 import { AmbientVideoSettings } from "../settings/AmbientVideoSettings";
 import { localMediaStore, DEFAULT_LOCAL_MEDIA_STATE } from "../../localMedia";
 import { youtubeUrlQueueStore } from "../../youtubeQueuePlayback";
+import { ambientAudioCaptureStore } from "../../ambientAudioCapture";
+import { AmbientAudioCaptureControl } from "./AmbientAudioCaptureControl";
 
 const fixture = vi.hoisted(() => ({
   settings: {} as UnifiedSettings,
   listeners: new Set<() => void>(),
   artwork: vi.fn(async () => null),
+  connection: {} as object,
+  connectionListeners: new Set<() => void>(),
+}));
+vi.mock("../../environments/runtime", () => ({
+  getPrimaryEnvironmentConnection: () => fixture.connection,
+  subscribeEnvironmentConnections: (listener: () => void) => {
+    fixture.connectionListeners.add(listener);
+    return () => fixture.connectionListeners.delete(listener);
+  },
 }));
 vi.mock("../../hooks/useSettings", () => ({
+  getClientSettings: () => fixture.settings,
   useSettings: () =>
     useSyncExternalStore(
       (listener) => {
@@ -65,6 +77,42 @@ function Harness() {
   );
 }
 
+function InitialCaptureControls() {
+  const { audioCaptureOwner } = useAmbientVideoWorkspace();
+  return <AmbientAudioCaptureControl owner={audioCaptureOwner} />;
+}
+
+it("updates Start readiness after the initial player commit and window focus changes", async () => {
+  const focused = vi.spyOn(document, "hasFocus").mockReturnValue(false);
+  fixture.settings = {
+    ...fixture.settings,
+    ambientVideoEnabled: true,
+    ambientVideoSource: { kind: "video", id: "dQw4w9WgXcQ" },
+  };
+  const view = await render(
+    <div className="flex h-[800px] w-[1200px] flex-col">
+      <AmbientVideoWorkspace environmentScopeKey="initial-capture">
+        <Chat />
+        <InitialCaptureControls />
+      </AmbientVideoWorkspace>
+    </div>,
+  );
+  try {
+    await expect.poll(() => document.querySelector("iframe")).not.toBeNull();
+    document.querySelector("iframe")!.dispatchEvent(new Event("load"));
+    const start = page.getByRole("button", { name: "Start shared audio analysis" });
+    await expect.element(start).toBeDisabled();
+    focused.mockReturnValue(true);
+    window.dispatchEvent(new Event("focus"));
+    await expect.element(start).toBeEnabled();
+    focused.mockReturnValue(false);
+    window.dispatchEvent(new Event("blur"));
+    await expect.element(start).toBeDisabled();
+  } finally {
+    await view.unmount();
+  }
+});
+
 beforeEach(async () => {
   await page.viewport(1280, 900);
   localStorage.clear();
@@ -73,10 +121,146 @@ beforeEach(async () => {
   youtubeUrlQueueStore.stop();
   localMediaStore.clear();
   localMediaStore.update(DEFAULT_LOCAL_MEDIA_STATE);
+  fixture.connection = {};
 });
 afterEach(() => {
   youtubeUrlQueueStore.stop();
+  ambientAudioCaptureStore.stop();
+  vi.restoreAllMocks();
   localStorage.clear();
+});
+
+function syntheticCapture() {
+  const audio = new AudioContext();
+  const destination = audio.createMediaStreamDestination();
+  const video = document.createElement("canvas").captureStream(0);
+  const selected = new MediaStream([
+    ...destination.stream.getAudioTracks(),
+    ...video.getVideoTracks(),
+  ]);
+  return { selected, close: () => audio.close() };
+}
+
+async function openCaptureSettings() {
+  vi.spyOn(document, "hasFocus").mockReturnValue(true);
+  fixture.settings = {
+    ...fixture.settings,
+    ambientVideoEnabled: true,
+    ambientVideoSource: { kind: "video", id: "dQw4w9WgXcQ" },
+  };
+  const view = await render(<Harness />);
+  await expect.poll(() => document.querySelector("iframe")).not.toBeNull();
+  document.querySelector("iframe")!.dispatchEvent(new Event("load"));
+  await page.getByRole("button", { name: "Toggle settings route" }).click();
+  await expect
+    .element(page.getByRole("button", { name: "Start shared audio analysis" }))
+    .toBeEnabled();
+  return view;
+}
+
+it("starts only on request, discards video, preserves the iframe and stops active analysis on blur", async () => {
+  const capture = syntheticCapture();
+  const getDisplayMedia = vi
+    .spyOn(navigator.mediaDevices, "getDisplayMedia")
+    .mockResolvedValue(capture.selected);
+  const view = await openCaptureSettings();
+  try {
+    const iframe = document.querySelector("iframe");
+    expect(getDisplayMedia).not.toHaveBeenCalled();
+    await page.getByRole("button", { name: "Start shared audio analysis" }).click();
+    await expect.poll(() => ambientAudioCaptureStore.getSnapshot().status).toBe("active");
+    expect(capture.selected.getVideoTracks()[0]?.readyState).toBe("ended");
+    expect(capture.selected.getAudioTracks()[0]?.readyState).toBe("live");
+    expect(document.querySelector("iframe")).toBe(iframe);
+    window.dispatchEvent(new Event("blur"));
+    await expect.poll(() => ambientAudioCaptureStore.getSnapshot().status).toBe("idle");
+    expect(capture.selected.getAudioTracks()[0]?.readyState).toBe("ended");
+  } finally {
+    await view.unmount();
+    await capture.close();
+  }
+});
+
+it("lets the chooser take focus but discards its result after an environment switch", async () => {
+  const capture = syntheticCapture();
+  let resolve!: (stream: MediaStream) => void;
+  vi.spyOn(navigator.mediaDevices, "getDisplayMedia").mockImplementation(
+    () =>
+      new Promise((done) => {
+        resolve = done;
+      }),
+  );
+  const view = await openCaptureSettings();
+  try {
+    await page.getByRole("button", { name: "Start shared audio analysis" }).click();
+    window.dispatchEvent(new Event("blur"));
+    expect(ambientAudioCaptureStore.getSnapshot().status).toBe("requesting");
+    await page.getByRole("button", { name: "Switch environment" }).click();
+    resolve(capture.selected);
+    await expect.poll(() => capture.selected.getAudioTracks()[0]?.readyState).toBe("ended");
+    expect(ambientAudioCaptureStore.getSnapshot().status).toBe("idle");
+  } finally {
+    await view.unmount();
+    await capture.close();
+  }
+});
+
+it("refuses a stale connection before the settings button rerenders", async () => {
+  const getDisplayMedia = vi.spyOn(navigator.mediaDevices, "getDisplayMedia");
+  const view = await openCaptureSettings();
+  try {
+    fixture.connection = {};
+    (
+      page
+        .getByRole("button", { name: "Start shared audio analysis" })
+        .element() as HTMLButtonElement
+    ).click();
+    expect(getDisplayMedia).not.toHaveBeenCalled();
+    expect(localMediaStore.getSnapshot().visualizerEnabled).toBe(false);
+  } finally {
+    await view.unmount();
+  }
+});
+
+it("stops an active capture synchronously when analysis is switched off", async () => {
+  const capture = syntheticCapture();
+  vi.spyOn(navigator.mediaDevices, "getDisplayMedia").mockResolvedValue(capture.selected);
+  const view = await openCaptureSettings();
+  try {
+    await page.getByRole("button", { name: "Start shared audio analysis" }).click();
+    await expect.poll(() => ambientAudioCaptureStore.getSnapshot().status).toBe("active");
+    localMediaStore.update({ visualizerEnabled: false });
+    expect(capture.selected.getAudioTracks()[0]?.readyState).toBe("ended");
+    expect(ambientAudioCaptureStore.getSnapshot().status).toBe("idle");
+  } finally {
+    await view.unmount();
+    await capture.close();
+  }
+});
+
+it("discards a pending chooser result when analysis is switched off before it settles", async () => {
+  const capture = syntheticCapture();
+  let resolve!: (stream: MediaStream) => void;
+  const chooser = vi.spyOn(navigator.mediaDevices, "getDisplayMedia").mockImplementation(
+    () =>
+      new Promise((done) => {
+        resolve = done;
+      }),
+  );
+  const view = await openCaptureSettings();
+  try {
+    await page.getByRole("button", { name: "Start shared audio analysis" }).click();
+    expect(ambientAudioCaptureStore.getSnapshot().status).toBe("requesting");
+    localMediaStore.update({ visualizerEnabled: false });
+    resolve(capture.selected);
+    await expect.poll(() => capture.selected.getAudioTracks()[0]?.readyState).toBe("ended");
+    expect(capture.selected.getVideoTracks()[0]?.readyState).toBe("ended");
+    expect(ambientAudioCaptureStore.getSnapshot().status).toBe("idle");
+    expect(chooser).toHaveBeenCalledTimes(1);
+  } finally {
+    await view.unmount();
+    await capture.close();
+  }
 });
 
 it("does not mount disabled embeds or load artwork and activates only canonical service URLs", async () => {
