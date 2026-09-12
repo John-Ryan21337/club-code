@@ -290,10 +290,12 @@ function makeSout(kind: DesktopLocalMediaKind, port: number, token: string): str
   // sample rates. A real 8 kHz WAV returned an empty HTTP body without this
   // explicit output format. Keep playback stereo at 48 kHz for both containers.
   // https://github.com/videolan/vlc/blob/3.0.12/modules/codec/vorbis.c#L764-L773
+  // A nominal bitrate alone lets silence produce too few bytes for Chromium
+  // to initialize a live stream. Explicit bounds also cover silent recordings.
   if (kind === "audio") {
-    return `#transcode{acodec=vorb,ab=96,channels=2,samplerate=48000}:standard{access=http,mux=ogg,dst=127.0.0.1:${port}/${token}.ogg}`;
+    return `#transcode{acodec=vorb,aenc=vorbis{min-bitrate=96,max-bitrate=96},ab=96,channels=2,samplerate=48000}:standard{access=http,mux=ogg,dst=127.0.0.1:${port}/${token}.ogg}`;
   }
-  return `#transcode{vcodec=VP80,acodec=vorb,vb=1600,ab=128,channels=2,samplerate=48000,scale=1}:standard{access=http,mux=webm,dst=127.0.0.1:${port}/${token}.webm}`;
+  return `#transcode{vcodec=VP80,acodec=vorb,aenc=vorbis{min-bitrate=128,max-bitrate=128},vb=1600,ab=128,channels=2,samplerate=48000,scale=1}:standard{access=http,mux=webm,dst=127.0.0.1:${port}/${token}.webm}`;
 }
 
 function upstreamUrl(kind: DesktopLocalMediaKind, port: number, token: string): string {
