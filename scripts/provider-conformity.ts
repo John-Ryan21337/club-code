@@ -247,10 +247,12 @@ export function resolvePathCommand(
   const extensions =
     platform === "win32" ? (env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean) : [""];
   for (const directory of pathValue.split(NodePath.delimiter).filter(Boolean)) {
+    // Preserve the selected executable when a later probe changes its cwd.
+    const directoryPath = NodePath.resolve(directory);
     for (const extension of extensions) {
-      const candidate = NodePath.join(directory, `${command}${extension.toLowerCase()}`);
+      const candidate = NodePath.join(directoryPath, `${command}${extension.toLowerCase()}`);
       if (isExecutable(candidate)) return candidate;
-      const originalCaseCandidate = NodePath.join(directory, `${command}${extension}`);
+      const originalCaseCandidate = NodePath.join(directoryPath, `${command}${extension}`);
       if (originalCaseCandidate !== candidate && isExecutable(originalCaseCandidate)) {
         return originalCaseCandidate;
       }
@@ -460,7 +462,7 @@ export function buildProviderInvocation(
   }
   const commandLine = `""${binaryPath}" ${args.map((arg) => `"${arg}"`).join(" ")}"`;
   return {
-    argv: [windowsCmdPath ?? resolveWindowsCmd(), "/d", "/s", "/c", commandLine],
+    argv: [windowsCmdPath ?? resolveWindowsCmd(), "/d", "/v:off", "/s", "/c", commandLine],
     windowsVerbatimArguments: true,
   };
 }
