@@ -24,6 +24,7 @@
  */
 import {
   defaultInstanceIdForDriver,
+  ServerProviderResetCreditError,
   ProviderDriverKind,
   type ProviderInstanceId,
   type ServerProvider,
@@ -268,6 +269,9 @@ const correlateSnapshotWithSource = (
       threadGoals: "unsupported",
       ...snapshot.runtimeCapabilities,
       accountUsage: source.refreshAccountUsage !== undefined,
+      ...(source.consumeResetCredit || snapshot.runtimeCapabilities?.resetCredit !== undefined
+        ? { resetCredit: source.consumeResetCredit !== undefined }
+        : {}),
     },
   });
 };
@@ -292,6 +296,9 @@ const buildSnapshotSource = (instance: ProviderInstance): ProviderSnapshotSource
   getSnapshot: instance.snapshot.getSnapshot,
   refresh: instance.snapshot.refresh,
   refreshAccountUsage: instance.snapshot.refreshAccountUsage,
+  ...(instance.snapshot.consumeResetCredit
+    ? { consumeResetCredit: instance.snapshot.consumeResetCredit }
+    : {}),
   refreshModels: instance.snapshot.refreshModels,
   streamChanges: instance.snapshot.streamChanges,
 });
@@ -955,6 +962,15 @@ export const ProviderRegistryLive = Layer.effect(
 
     return {
       getProviders: Ref.get(providersRef),
+      consumeResetCredit: (input) =>
+        Effect.gen(function* () {
+          const instance = yield* instanceRegistry.getInstance(input.instanceId);
+          if (!instance?.enabled || !instance.snapshot.consumeResetCredit)
+            return yield* Effect.fail(
+              new ServerProviderResetCreditError({ reason: "unavailable" }),
+            );
+          return yield* instance.snapshot.consumeResetCredit(input);
+        }),
       refresh: (provider?: ProviderDriverKind) =>
         refresh(provider).pipe(Effect.catchCause(recoverRefreshFailure)),
       refreshInstance: (instanceId: ProviderInstanceId) =>

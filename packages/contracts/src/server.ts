@@ -141,6 +141,29 @@ export const ServerProviderAccountRateLimitResetCredits = Schema.Struct({
 export type ServerProviderAccountRateLimitResetCredits =
   typeof ServerProviderAccountRateLimitResetCredits.Type;
 
+export const ServerProviderResetCreditInput = Schema.Struct({
+  instanceId: ProviderInstanceId,
+  expectedEmail: TrimmedNonEmptyString.check(Schema.isMaxLength(320)),
+  attemptId: TrimmedNonEmptyString.check(
+    Schema.isPattern(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i),
+  ),
+  creditId: TrimmedNonEmptyString.check(Schema.isMaxLength(256)),
+});
+export type ServerProviderResetCreditInput = typeof ServerProviderResetCreditInput.Type;
+export const ServerProviderResetCreditOutcome = Schema.Literals([
+  "reset",
+  "nothingToReset",
+  "noCredit",
+  "alreadyRedeemed",
+]);
+export type ServerProviderResetCreditOutcome = typeof ServerProviderResetCreditOutcome.Type;
+export class ServerProviderResetCreditError extends Schema.TaggedErrorClass<ServerProviderResetCreditError>()(
+  "ServerProviderResetCreditError",
+  {
+    reason: Schema.Literals(["unavailable", "account-changed", "unverified"]),
+  },
+) {}
+
 export const ServerProviderAccountRateLimits = Schema.Struct({
   rateLimits: ServerProviderAccountRateLimitSnapshot,
   rateLimitsByLimitId: Schema.optionalKey(
@@ -214,6 +237,7 @@ export const ServerProviderThreadGoalSupport = Schema.Literals(["supported", "un
 export type ServerProviderThreadGoalSupport = typeof ServerProviderThreadGoalSupport.Type;
 
 export const ServerProviderRuntimeCapabilities = Schema.Struct({
+  resetCredit: Schema.optionalKey(Schema.Boolean),
   /** Set by the live snapshot source; absent means no bounded polling capability. */
   accountUsage: Schema.optionalKey(Schema.Boolean),
   liveSteer: ServerProviderLiveSteerSupport.pipe(

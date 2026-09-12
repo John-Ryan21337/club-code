@@ -1,9 +1,17 @@
-import type { ServerProvider } from "@cafecode/contracts";
+import type {
+  ServerProvider,
+  ServerProviderResetCreditInput,
+  ServerProviderResetCreditOutcome,
+  ServerProviderResetCreditError,
+} from "@cafecode/contracts";
 import type * as Effect from "effect/Effect";
 import type * as Stream from "effect/Stream";
 import type { ProviderMaintenanceCapabilities } from "../providerMaintenance.ts";
 
 export interface ServerProviderShape {
+  readonly consumeResetCredit?: (
+    input: ServerProviderResetCreditInput,
+  ) => Effect.Effect<ServerProviderResetCreditOutcome, ServerProviderResetCreditError>;
   readonly maintenanceCapabilities: ProviderMaintenanceCapabilities;
   readonly getSnapshot: Effect.Effect<ServerProvider>;
   readonly refresh: Effect.Effect<ServerProvider>;

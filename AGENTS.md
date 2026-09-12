@@ -2,6 +2,8 @@
 
 ## Task Completion Requirements
 
+- Codex reset-credit redemption is an explicit account mutation. Bind confirmation to the exact instance and expected account, use the existing generated consume protocol with a stable UUID attempt and selected credit ID, reject concurrent attempts, and never auto-retry an ambiguous response. Keep tests and media synthetic; do not redeem real credits during validation.
+
 - This repository is Yarn-and-Node-only. Use the repository-pinned Yarn 4.17.1 release through Corepack for package operations and Node for JavaScript/TypeScript execution. Do not add or invoke any alternate JavaScript runtime or package manager in source, tests, fixtures, documentation, scripts, or CI.
 - When code changes are made, all of `yarn fmt`, `yarn lint`, and `yarn typecheck` must pass before considering tasks completed.
 - Run tests with `yarn test` (runs Vitest through the Turbo task graph).
