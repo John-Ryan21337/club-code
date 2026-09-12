@@ -609,7 +609,21 @@ validationLayer("CodexAdapterLive validation", (it) => {
         runtimeMode: "full-access",
       });
 
-      assert.deepStrictEqual(validationRuntimeFactory.factory.mock.calls[0]?.[0], {
+      const input = validationRuntimeFactory.factory.mock.calls[0]?.[0];
+      assert.ok(input);
+      const { agentBrowserMcp, ...sessionOptions } = input;
+      assert.ok(agentBrowserMcp);
+      assert.deepEqual(Object.keys(agentBrowserMcp).toSorted(), [
+        "authorization",
+        "providerInstanceId",
+        "threadId",
+        "url",
+      ]);
+      assert.equal(agentBrowserMcp.threadId, asThreadId("thread-1"));
+      assert.equal(agentBrowserMcp.providerInstanceId, ProviderInstanceId.make("codex"));
+      assert.equal(/^http:\/\/127\.0\.0\.1:\d+\/mcp$/.test(agentBrowserMcp.url), true);
+      assert.equal(/^Bearer [A-Za-z0-9_-]{40,}$/.test(agentBrowserMcp.authorization), true);
+      assert.deepStrictEqual(sessionOptions, {
         appServerCwd: path.join(process.cwd(), "userdata"),
         binaryPath: "codex",
         cwd: process.cwd(),
@@ -715,6 +729,51 @@ const sessionErrorLayer = it.layer(
 );
 
 sessionErrorLayer("CodexAdapterLive session errors", (it) => {
+  it.effect("retires its browser bearer when the exact runtime scope stops", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const threadId = asThreadId("browser-lifecycle");
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("codex"),
+        runtimeMode: "full-access",
+      });
+      const first = sessionRuntimeFactory.factory.mock.lastCall?.[0].agentBrowserMcp;
+      assert.ok(first);
+      assert.equal(first.threadId, threadId);
+      let statusDuringStop: number | undefined;
+      sessionRuntimeFactory.lastRuntime!.closeImpl.mockImplementationOnce(async () => {
+        statusDuringStop = (
+          await fetch(first.url, {
+            method: "POST",
+            headers: { Authorization: first.authorization },
+            body: "{}",
+          })
+        ).status;
+      });
+      yield* adapter.stopSession(threadId);
+      assert.equal(statusDuringStop, 401);
+      const status = yield* Effect.promise(
+        async () =>
+          (
+            await fetch(first.url, {
+              method: "POST",
+              headers: { Authorization: first.authorization },
+              body: "{}",
+            })
+          ).status,
+      );
+      assert.equal(status, 401);
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("codex"),
+        runtimeMode: "full-access",
+      });
+      const next = sessionRuntimeFactory.factory.mock.lastCall?.[0].agentBrowserMcp;
+      assert.ok(next);
+      assert.notEqual(next.authorization, first.authorization);
+    }),
+  );
   it.effect("uses a transient reader without materializing a session or runtime events", () =>
     Effect.gen(function* () {
       const adapter = yield* CodexAdapter;

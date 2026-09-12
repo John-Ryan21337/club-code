@@ -747,8 +747,10 @@ function readJsonBody(request: http.IncomingMessage): Promise<unknown> {
       try {
         const raw = Buffer.concat(chunks).toString("utf8");
         resolve(raw.length === 0 ? {} : JSON.parse(raw));
-      } catch (error) {
-        reject(error);
+      } catch {
+        // Browser completions and private interactions can contain page data.
+        // JSON.parse errors may quote the body before a method can be decoded.
+        reject(new Error("Provider daemon request JSON is invalid."));
       }
     });
   });
@@ -822,6 +824,27 @@ const executeRpcRequest = (
   purgeThread: (threadId: ThreadId) => Effect.Effect<void, ProviderServiceError>,
 ): Effect.Effect<unknown, ProviderServiceError> => {
   switch (request.method) {
+    case "agentBrowserGrant":
+      return (
+        providerService.grantAgentBrowser?.(request.payload) ??
+        Effect.die(new Error("Agent browser bridge is unavailable."))
+      );
+    case "agentBrowserRevoke":
+      return (
+        providerService.revokeAgentBrowser?.(request.payload) ??
+        Effect.die(new Error("Agent browser bridge is unavailable."))
+      );
+    case "agentBrowserPoll":
+      return (
+        providerService.pollAgentBrowser?.(request.payload) ??
+        Effect.die(new Error("Agent browser bridge is unavailable."))
+      );
+    case "agentBrowserComplete":
+      return (
+        providerService.completeAgentBrowser?.(request.payload) ??
+        Effect.die(new Error("Agent browser bridge is unavailable."))
+      );
+
     case "startSession":
       return providerService.startSession(request.payload.threadId, request.payload);
     case "forkSession":
@@ -1642,6 +1665,15 @@ export const runProviderDaemonServer = (
             typeof rawBody === "object" &&
             ((rawBody as { method?: unknown }).method === "respondToInteraction" ||
               (rawBody as { method?: unknown }).method === "resolveInteractionUrl");
+          const privateBrowserRequest =
+            rawBody !== null &&
+            typeof rawBody === "object" &&
+            [
+              "agentBrowserGrant",
+              "agentBrowserRevoke",
+              "agentBrowserPoll",
+              "agentBrowserComplete",
+            ].includes(String((rawBody as { method?: unknown }).method));
           let rpcMethod: ProviderDaemonRpcRequestValue["method"] | null = null;
           let rpcCommandId: string | undefined;
           let envelope: ProviderDaemonRpcEnvelope;
@@ -1676,12 +1708,14 @@ export const runProviderDaemonServer = (
           }
           // Schema decoders and unexpected adapter defects can echo input.
           // Redact before metrics/logs, including failures before method decode.
-          if (privateInteractionRequest && !envelope.ok)
+          if ((privateInteractionRequest || privateBrowserRequest) && !envelope.ok)
             envelope = {
               ok: false,
               error: {
                 tag: "ProviderValidationError",
-                message: "Private interaction is unavailable or invalid.",
+                message: privateBrowserRequest
+                  ? "Agent Browser request is unavailable or invalid."
+                  : "Private interaction is unavailable or invalid.",
               },
             };
           const rpcDurationMs = roundMs(performance.now() - rpcStartedAtMs);

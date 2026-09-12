@@ -1,3 +1,4 @@
+import { getAgentBrowserBridge, type AgentBrowserMcpConfig } from "../AgentBrowserBridge.ts";
 /**
  * ClaudeAdapterLive - Scoped live implementation for the Claude Agent provider adapter.
  *
@@ -444,6 +445,7 @@ interface ClaudeTaskBinding {
 type RuntimeFork = <A, E>(effect: Effect.Effect<A, E, never>) => Fiber.Fiber<A, E>;
 
 interface ClaudeSessionContext {
+  readonly agentBrowserMcp: AgentBrowserMcpConfig;
   session: ProviderSession;
   readonly promptQueue: Queue.Queue<PromptQueueItem>;
   readonly query: ClaudeQueryRuntime;
@@ -6705,6 +6707,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     if (context.stopped) return;
 
     context.stopped = true;
+    getAgentBrowserBridge().releaseMcpConfig(context.agentBrowserMcp);
 
     for (const [requestId, pending] of context.pendingApprovals) {
       yield* Deferred.succeed(pending.decision, "cancel");
@@ -7330,7 +7333,22 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       const existingResumeSessionId = durableResumeState?.resume;
       const resumeBaseTurnCount = durableResumeState?.turnCount ?? 0;
 
+      const browserBridge = getAgentBrowserBridge();
+      const agentBrowserMcp = yield* Effect.promise(() =>
+        browserBridge.mcpConfig({ threadId, providerInstanceId: boundInstanceId }),
+      );
       const queryOptions: ClaudeQueryOptions = {
+        // SDK 0.3.266 serializes HTTP MCP headers into --mcp-config argv.
+        // Its public SDK-server transport sends only type/name to the child.
+        // Keep the live broker and its identity credential in this host process.
+        mcpServers: {
+          cafe_browser: {
+            type: "sdk",
+            name: "cafe_browser",
+            instance: browserBridge.sdkServer(agentBrowserMcp),
+            timeout: 95_000,
+          },
+        },
         ...(input.cwd ? { cwd: input.cwd } : {}),
         ...(apiModelId ? { model: apiModelId } : {}),
         pathToClaudeCodeExecutable: claudeBinaryPath,
@@ -7466,7 +7484,9 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
             detail: toMessage(cause, "Failed to start Claude runtime session."),
             cause,
           }),
-      });
+      }).pipe(
+        Effect.onError(() => Effect.sync(() => browserBridge.releaseMcpConfig(agentBrowserMcp))),
+      );
 
       const initialResumeCursor =
         existingResumeSessionId !== undefined
@@ -7494,6 +7514,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       };
 
       const context: ClaudeSessionContext = {
+        agentBrowserMcp,
         session,
         promptQueue,
         query: queryRuntime,

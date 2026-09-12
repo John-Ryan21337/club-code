@@ -1,3 +1,4 @@
+import { getAgentBrowserBridge } from "../AgentBrowserBridge.ts";
 // @effect-diagnostics nodeBuiltinImport:off
 /**
  * CodexAdapterLive - Scoped live implementation for the Codex provider adapter.
@@ -175,6 +176,7 @@ export interface CodexAdapterLiveOptions {
 }
 
 interface CodexAdapterSessionContext {
+  readonly releaseAgentBrowser: () => void;
   readonly threadId: ThreadId;
   readonly scope: Scope.Closeable;
   readonly runtime: CodexSessionRuntimeShape;
@@ -4318,7 +4320,15 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
         yield* prepareRuntimeHomeForSession(input.threadId, "startSession");
 
         const currentTransportPolicy = toRuntimeTransportPolicy(yield* Ref.get(transportPolicyRef));
+        const browserBridge = getAgentBrowserBridge();
+        const agentBrowserMcp = yield* Effect.promise(() =>
+          browserBridge.mcpConfig({
+            threadId: input.threadId,
+            providerInstanceId: boundInstanceId,
+          }),
+        );
         const runtimeInput: CodexSessionRuntimeOptions = {
+          agentBrowserMcp,
           threadId: input.threadId,
           providerInstanceId: boundInstanceId,
           cwd: input.cwd ?? process.cwd(),
@@ -4352,6 +4362,10 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
             : {}),
         };
         const sessionScope = yield* Scope.make("sequential");
+        yield* Scope.addFinalizer(
+          sessionScope,
+          Effect.sync(() => browserBridge.releaseMcpConfig(agentBrowserMcp)),
+        );
         let sessionScopeTransferred = false;
         yield* Effect.addFinalizer(() =>
           sessionScopeTransferred ? Effect.void : Scope.close(sessionScope, Exit.void),
@@ -4530,6 +4544,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
         );
 
         sessions.set(input.threadId, {
+          releaseAgentBrowser: () => browserBridge.releaseMcpConfig(agentBrowserMcp),
           threadId: input.threadId,
           scope: sessionScope,
           runtime,
@@ -5061,6 +5076,8 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     // projected. Its queue is adapter-owned, so closing the session scope does
     // not discard the resulting canonical task terminals.
     session.stopped = true;
+    // Remove page access before waiting for a slow or failed provider shutdown.
+    session.releaseAgentBrowser();
     sessions.delete(session.threadId);
     yield* session.runtime.close.pipe(Effect.ignore);
     yield* Fiber.interrupt(session.eventFiber).pipe(Effect.ignore);

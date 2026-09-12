@@ -17,6 +17,8 @@
 
 ## Windows-Specific Notes
 
+- Agent Browser's Codex child environment removes case-insensitive aliases of `CAFE_CODE_AGENT_BROWSER_MCP_AUTHORIZATION` before setting the session credential. Preserve the parent environment and POSIX case sensitivity. The Claude SDK transport keeps its credential in the host and needs no environment entry.
+
 - The separate scheduled/manual reliability workflow runs the existing Windows native installer/runtime/uninstaller smoke only on disposable GitHub-hosted Windows runners. It does not run on user machines or move process-backed/provider tests into the default suite. macOS uses its isolated DMG/ZIP smoke, and Linux keeps its existing artifact build and pipeline coverage.
 
 - Generic attachment originals and metadata are private `0600` files where POSIX permissions apply; provider-readable derivatives are `0400`. On Windows leave derivatives user-writable under Cafe's user-owned data-directory ACL instead of setting the read-only attribute, which would prevent safe cleanup. File names are inert display metadata and storage uses server-minted identifiers; Windows path separators in dropped names must never become server paths. Document extraction children use the current executable with `ELECTRON_RUN_AS_NODE=1` for packaged Electron backends and preserve only required Windows system-directory environment entries, not provider credentials or user-selected Node hooks. macOS/Linux retain the same isolated child behavior and their native permission checks.
@@ -327,6 +329,8 @@ Important files:
 
 ## Codex Integration
 
+- Agent Browser uses the current app-server's per-thread `mcp_servers.cafe_browser` override for both start and resume. Keep the bearer in the child-only environment referenced by `env_http_headers`, never argv or persisted config. The loopback endpoint binds each capability to one Cafe thread and provider instance, rotates it for a replacement session, and retires it when that exact runtime scope ends. Do not copy old Club provider adapters or change provider pins for this integration. See `docs/agent-browser-broker.md` for the shared-origin, durable-disable, expiry, and transport boundaries.
+
 Native `item/permissions/requestApproval` and MCP elicitation use the bounded shared `providerInteraction` contract and request-keyed composer card. Grant only the selected subset of the provider's immutable request, preserve mandatory deny entries, and default grants to this turn. Network command approvals show host, protocol and requested rule context. Reject unsupported form constraints rather than silently relaxing validation. Keep at most 64 pending interactions, 32 form fields, 64 options and 64 KiB of answers. Preserve numeric versus string native JSON-RPC request ids when cancelling or completing requests.
 
 Private interaction answers and full authorization URLs never enter domain events, command ledgers, native protocol logs or debug payloads. The authenticated `provider.respondToInteraction` and `provider.resolveInteractionUrl` operations bypass durable mutation ledgers and resolve only a live provider-owned callback for the exact thread/request. Bounded process-local HMAC receipts permit an exact response retry after an uncertain ACK, never a changed answer or duplicate provider operation. Persist only normalized request metadata and URL origin; resolve a URL only on explicit user action, validate the same HTTP(S) origin, and require an explicit external link click without server-side fetching. Cancellation and late sibling notifications must not resolve unrelated requests. These are intentionally ephemeral callbacks, not replayable user messages.
@@ -501,6 +505,8 @@ Codex home rules:
 - If Codex behavior is unclear, compare against the installed Codex CLI/app-server source or generated schema for the exact version in use, then cross-check the official Codex app-server docs.
 
 ## Claude Integration
+
+- Agent Browser uses the public Agent SDK `type: "sdk"` MCP server transport. SDK 0.3.266 serializes HTTP MCP headers into `--mcp-config` arguments, so do not put its browser bearer in an HTTP header option. Keep the broker server and credential in the host process, and release the exact session capability on stop or failed query creation. The SDK child receives only the server metadata. Preserve current permission callbacks, settings sources, query lifecycle, and provider versions.
 
 Claude resume recovery is isolated in `claudeResumeRecovery.ts`. I/O, copy, scan-limit and ambiguous transcript outcomes are inconclusive errors that preserve the durable resume identity; only confirmed absence may select the existing fresh-session policy. Same-directory resumes use a cheap stat. Relocation scans are bounded to 64 KiB chunks, 1 MiB lines, 64 MiB per file, 256 MiB total, 4,096 entries, depth 8 and a cooperative 5-second deadline. Private legacy copies publish only after a complete fsynced staging write and atomic link, never after a partial copy. `claudeDecision.ts` owns cancellation-safe listener registration, immediate pre-aborted checks and final cleanup.
 

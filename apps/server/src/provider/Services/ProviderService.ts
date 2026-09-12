@@ -1,3 +1,12 @@
+import type {
+  AgentBrowserCompleteInput,
+  AgentBrowserCompleteResult,
+  AgentBrowserGrantInput,
+  AgentBrowserGrantState,
+  AgentBrowserPollResult,
+  AgentBrowserRevokeInput,
+  AgentBrowserSessionContext,
+} from "@cafecode/contracts";
 /**
  * ProviderService - Service interface for provider sessions, turns, and checkpoints.
  *
@@ -67,6 +76,20 @@ export interface ProviderSubagentDetailReadResult extends ProviderSubagentDetail
  * ProviderServiceShape - Service API for provider session and turn orchestration.
  */
 export interface ProviderServiceShape {
+  /** Process-local agent browser grant and request broker controls. */
+  readonly grantAgentBrowser?: (
+    input: AgentBrowserGrantInput,
+  ) => Effect.Effect<AgentBrowserGrantState, ProviderServiceError>;
+  readonly revokeAgentBrowser?: (
+    input: AgentBrowserRevokeInput,
+  ) => Effect.Effect<AgentBrowserGrantState, ProviderServiceError>;
+  readonly pollAgentBrowser?: (
+    input: AgentBrowserSessionContext,
+  ) => Effect.Effect<AgentBrowserPollResult, ProviderServiceError>;
+  readonly completeAgentBrowser?: (
+    input: AgentBrowserCompleteInput,
+  ) => Effect.Effect<AgentBrowserCompleteResult, ProviderServiceError>;
+
   /**
    * Start a provider session.
    */

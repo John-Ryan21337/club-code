@@ -1,3 +1,4 @@
+import { closeAgentBrowserBridge, getAgentBrowserBridge } from "../AgentBrowserBridge.ts";
 /**
  * ProviderServiceLive - Cross-provider orchestration layer.
  *
@@ -1017,6 +1018,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           return next;
         });
 
+        getAgentBrowserBridge().revoke({ reason: "operator", threadId: input.threadId });
         const adapters = yield* getAdapterEntries;
         const stopExits = yield* Effect.forEach(
           adapters,
@@ -1469,6 +1471,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           "provider.additional_directories.count": effectiveAdditionalDirectories?.length ?? 0,
         });
         const adapter = yield* registry.getByInstance(resolvedInstanceId);
+        getAgentBrowserBridge().revokeWhenThreadProviderChanges(threadId, resolvedInstanceId);
         const startInput = {
           ...input,
           providerInstanceId: resolvedInstanceId,
@@ -2790,6 +2793,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
 
   yield* Effect.addFinalizer(() =>
     runStopAll().pipe(
+      Effect.ensuring(Effect.promise(() => closeAgentBrowserBridge())),
       Effect.catchCause((cause) =>
         Effect.logWarning("failed to stop provider service", { cause: Cause.pretty(cause) }),
       ),
@@ -2797,6 +2801,10 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   );
 
   return {
+    grantAgentBrowser: (input) => Effect.sync(() => getAgentBrowserBridge().grant(input)),
+    revokeAgentBrowser: (input) => Effect.sync(() => getAgentBrowserBridge().revoke(input)),
+    pollAgentBrowser: (input) => Effect.sync(() => getAgentBrowserBridge().poll(input)),
+    completeAgentBrowser: (input) => Effect.sync(() => getAgentBrowserBridge().complete(input)),
     startSession: (threadId, input) =>
       whileThreadAcceptsProviderWork({
         operation: "ProviderService.startSession",
