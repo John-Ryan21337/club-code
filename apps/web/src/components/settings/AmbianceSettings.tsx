@@ -1,3 +1,4 @@
+import { useUiLocalization } from "../../uiLocalization";
 import { useMemo, type CSSProperties } from "react";
 import {
   DEFAULT_UNIFIED_SETTINGS,
@@ -78,6 +79,8 @@ function AmbianceSurfaceToggle({
 }
 
 export function AmbianceSettingsPanel() {
+  const { t: localizeUiLabel } = useUiLocalization();
+
   const settings = useSettings();
   const { updateSettings } = useUpdateSettings();
 
@@ -98,21 +101,23 @@ export function AmbianceSettingsPanel() {
 
   return (
     <SettingsPageContainer>
-      <SettingsSection title="Ambiance">
+      <SettingsSection title={localizeUiLabel("Ambiance")}>
         <SettingsRow
-          title="Ambiance"
-          description="Draw an animated weather layer over the app. Off keeps the default sidebar stars."
+          title={localizeUiLabel("Ambiance")}
+          description={localizeUiLabel(
+            "Draw an animated weather layer over the app. Off keeps the default sidebar stars.",
+          )}
           control={
             <Switch
               checked={settings.ambianceEnabled}
               onCheckedChange={(checked) => updateSettings({ ambianceEnabled: Boolean(checked) })}
-              aria-label="Enable ambiance"
+              aria-label={localizeUiLabel("Enable ambiance")}
             />
           }
         />
 
         <SettingsRow
-          title="Effect"
+          title={localizeUiLabel("Effect")}
           description="Pick the weather drawn behind your work. Previews are live. GPU effects render with a shader; heavier ones cost more battery."
           resetAction={
             settings.ambianceEffect !== DEFAULT_AMBIANCE_EFFECT ? (
@@ -176,8 +181,8 @@ export function AmbianceSettingsPanel() {
         </SettingsRow>
 
         <SettingsRow
-          title="Intensity"
-          description="Baseline density before the thread has any say."
+          title={localizeUiLabel("Intensity")}
+          description={localizeUiLabel("Baseline density before the thread has any say.")}
           resetAction={
             intensityDirty ? (
               <SettingResetButton
@@ -193,7 +198,7 @@ export function AmbianceSettingsPanel() {
                 min={MIN_AMBIANCE_INTENSITY}
                 max={MAX_AMBIANCE_INTENSITY}
                 step={0.05}
-                aria-label="Ambiance intensity"
+                aria-label={localizeUiLabel("Ambiance intensity")}
                 onValueChange={(value) =>
                   updateSettings({
                     ambianceIntensity: Math.min(
@@ -246,8 +251,8 @@ export function AmbianceSettingsPanel() {
         />
 
         <SettingsRow
-          title="React to thread"
-          description="How much of the run the weather is allowed to hear."
+          title={localizeUiLabel("React to thread")}
+          description={localizeUiLabel("How much of the run the weather is allowed to hear.")}
           resetAction={
             settings.ambianceReactMode !== DEFAULT_AMBIANCE_REACT_MODE ? (
               <SettingResetButton
@@ -265,7 +270,10 @@ export function AmbianceSettingsPanel() {
                 }
               }}
             >
-              <SelectTrigger className="w-full sm:w-44" aria-label="React to thread">
+              <SelectTrigger
+                className="w-full sm:w-44"
+                aria-label={localizeUiLabel("React to thread")}
+              >
                 <SelectValue>{REACT_MODE_LABELS[settings.ambianceReactMode]}</SelectValue>
               </SelectTrigger>
               <SelectPopup align="end" alignItemWithTrigger={false}>
@@ -284,8 +292,10 @@ export function AmbianceSettingsPanel() {
         />
 
         <SettingsRow
-          title="Surfaces"
-          description="Where the weather draws. Turning off the thread area keeps message text on a flat background; the composer surface tints the prompt frame with the current conditions."
+          title={localizeUiLabel("Surfaces")}
+          description={localizeUiLabel(
+            "Where the weather draws. Turning off the thread area keeps message text on a flat background; the composer surface tints the prompt frame with the current conditions.",
+          )}
           control={
             <div className="flex flex-col items-end gap-2">
               <AmbianceSurfaceToggle
@@ -308,8 +318,8 @@ export function AmbianceSettingsPanel() {
         />
 
         <SettingsRow
-          title="Weather color"
-          description="Defaults to the accent color set in Appearance."
+          title={localizeUiLabel("Weather color")}
+          description={localizeUiLabel("Defaults to the accent color set in Appearance.")}
           resetAction={
             settings.ambianceColor !== DEFAULT_UNIFIED_SETTINGS.ambianceColor ? (
               <SettingResetButton

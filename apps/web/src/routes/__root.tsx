@@ -1,3 +1,4 @@
+import { UiText } from "../uiLocalization";
 import { type ServerLifecycleWelcomePayload } from "@cafecode/contracts";
 import { scopedProjectKey, scopeProjectRef } from "@cafecode/client-runtime";
 import {
@@ -235,10 +236,10 @@ function RootRouteErrorView({ error, reset }: ErrorComponentProps) {
 
         <div className="mt-5 flex flex-wrap gap-2">
           <Button size="sm" onClick={() => reset()}>
-            Try again
+            <UiText english={"Try again"} />
           </Button>
           <Button size="sm" variant="outline" onClick={() => window.location.reload()}>
-            Reload app
+            <UiText english={"Reload app"} />
           </Button>
         </div>
 

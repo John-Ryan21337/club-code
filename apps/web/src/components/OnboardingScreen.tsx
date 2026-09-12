@@ -1,3 +1,4 @@
+import { UiText, useUiLocalization } from "../uiLocalization";
 import {
   type ChangeEvent,
   type CSSProperties,
@@ -152,7 +153,9 @@ function ProviderLoginGuidance({
 
   return (
     <div className="mt-2 grid gap-1.5">
-      <span className="text-muted-foreground text-xs">Log in by running:</span>
+      <span className="text-muted-foreground text-xs">
+        <UiText english={"Log in by running:"} />
+      </span>
       <LoginCommand command={loginCommand} />
       {canLogIn ? (
         <Button
@@ -176,12 +179,14 @@ function ProviderLoginGuidance({
 
 /** The login command rendered as a copyable code block. */
 function LoginCommand({ command }: { readonly command: string }) {
+  const { t: localizeUiLabel } = useUiLocalization();
+
   const { copyToClipboard, isCopied } = useCopyToClipboard();
   return (
     <div className="flex items-center gap-2 rounded-md border border-border bg-muted/40 py-1 pr-1 pl-2.5">
       <code className="min-w-0 flex-1 truncate font-mono text-foreground text-xs">{command}</code>
       <button
-        aria-label="Copy command"
+        aria-label={localizeUiLabel("Copy command")}
         className="grid size-6 shrink-0 cursor-pointer place-items-center rounded text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
         onClick={() => copyToClipboard(command, undefined)}
         type="button"
@@ -217,7 +222,9 @@ function ProviderActionArea({
     if (!email?.trim()) return null;
     return (
       <div className="mt-2 flex min-w-0 items-center gap-1.5 text-muted-foreground text-xs">
-        <span>Signed in as</span>
+        <span>
+          <UiText english={"Signed in as"} />
+        </span>
         <RedactedSensitiveText
           ariaLabel="Toggle account email visibility"
           hideTooltip="Click to hide email"
@@ -299,7 +306,9 @@ function IntroPage() {
           Welcome to {APP_BASE_NAME}
         </h1>
         <p className="text-balance text-[0.95rem] text-muted-foreground leading-7">
-          A calm, dependable home for long coding sessions with your AI agents.
+          <UiText
+            english={"A calm, dependable home for long coding sessions with your AI agents."}
+          />
         </p>
       </div>
     </div>
@@ -329,7 +338,9 @@ function ProvidersPage() {
         style={staggerStyle(0)}
       >
         <div className="grid gap-2">
-          <h1 className="font-semibold text-2xl tracking-tight">Connect a provider</h1>
+          <h1 className="font-semibold text-2xl tracking-tight">
+            <UiText english={"Connect a provider"} />
+          </h1>
           <p className="text-balance text-sm text-muted-foreground leading-6">
             {APP_BASE_NAME} works with these coding agents. Install or sign in to whichever you use
             — you can always change this later in Settings.
@@ -350,7 +361,7 @@ function ProvidersPage() {
               className="size-4 transition-transform duration-500 group-hover:rotate-180"
             />
           )}
-          Refresh
+          <UiText english={"Refresh"} />
         </Button>
       </div>
       <ul className="grid gap-3">
@@ -435,6 +446,8 @@ function CustomizeRow({
  * Appearance settings, so changes persist and stay in sync.
  */
 function CustomizePage() {
+  const { t: localizeUiLabel } = useUiLocalization();
+
   const { theme, setTheme } = useTheme();
   const settings = useSettings();
   const { updateSettings } = useUpdateSettings();
@@ -476,7 +489,9 @@ function CustomizePage() {
   return (
     <div className="cafe-onboarding-step grid w-full max-w-xl gap-6">
       <div className="cafe-onboarding-item grid gap-2" style={staggerStyle(0)}>
-        <h1 className="font-semibold text-2xl tracking-tight">Optional — Make it yours</h1>
+        <h1 className="font-semibold text-2xl tracking-tight">
+          <UiText english={"Optional — Make it yours"} />
+        </h1>
         <p className="text-balance text-sm text-muted-foreground leading-6">
           Give {APP_BASE_NAME} your own name, colors, and image — or keep the defaults. You can
           change any of this later in Settings.
@@ -486,7 +501,7 @@ function CustomizePage() {
         <CustomizeRow
           control={
             <DraftInput
-              aria-label="Branding name"
+              aria-label={localizeUiLabel("Branding name")}
               className="w-40"
               maxLength={MAX_BRAND_WORDMARK_PREFIX_LENGTH}
               placeholder={DEFAULT_BRAND_WORDMARK_PREFIX}
@@ -512,9 +527,9 @@ function CustomizePage() {
               value={settings.appAccentColor}
             />
           }
-          description="Used for buttons, focus rings, and highlights."
+          description={localizeUiLabel("Used for buttons, focus rings, and highlights.")}
           index={2}
-          title="Accent color"
+          title={localizeUiLabel("Accent color")}
         />
         <CustomizeRow
           control={
@@ -536,9 +551,9 @@ function CustomizePage() {
               ))}
             </div>
           }
-          description="Match your system, or pick light or dark."
+          description={localizeUiLabel("Match your system, or pick light or dark.")}
           index={3}
-          title="Theme"
+          title={localizeUiLabel("Theme")}
         />
         <CustomizeRow
           control={
@@ -564,7 +579,7 @@ function CustomizePage() {
                 ) : (
                   <UploadIcon aria-hidden="true" className="size-3.5" />
                 )}
-                {usesDefaultImage ? "Upload" : "Replace"}
+                {usesDefaultImage ? "Upload" : <UiText english={"Replace"} />}
               </Button>
               {usesDefaultImage ? null : (
                 <Button
@@ -579,7 +594,7 @@ function CustomizePage() {
                   type="button"
                   variant="ghost"
                 >
-                  Reset
+                  <UiText english={"Reset"} />
                 </Button>
               )}
               <input
@@ -597,7 +612,7 @@ function CustomizePage() {
           }
           descriptionError={Boolean(imageError)}
           index={4}
-          title="Sidebar image"
+          title={localizeUiLabel("Sidebar image")}
         />
       </ul>
     </div>
@@ -670,7 +685,7 @@ export function OnboardingScreen() {
           size="sm"
           variant="ghost"
         >
-          Skip
+          <UiText english={"Skip"} />
         </Button>
       </header>
 
@@ -702,7 +717,7 @@ export function OnboardingScreen() {
                 aria-hidden="true"
                 className="size-4 transition-transform group-hover:-translate-x-0.5"
               />
-              Back
+              <UiText english={"Back"} />
             </Button>
           )}
           {isLastStep ? (
@@ -711,7 +726,7 @@ export function OnboardingScreen() {
             </Button>
           ) : (
             <Button className="group" onClick={goNext} size="sm">
-              Next
+              <UiText english={"Next"} />
               <ArrowRightIcon
                 aria-hidden="true"
                 className="size-4 transition-transform group-hover:translate-x-0.5"

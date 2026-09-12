@@ -1,3 +1,4 @@
+import { UiText } from "../uiLocalization";
 import { SettingsIcon } from "lucide-react";
 import { memo } from "react";
 
@@ -71,7 +72,9 @@ export const SidebarFooterNavigation = memo(function SidebarFooterNavigation({
           onClick={onOpenSettings}
         >
           <SettingsIcon className="size-3.5" />
-          <span className="text-xs">Settings</span>
+          <span className="text-xs">
+            <UiText english={"Settings"} />
+          </span>
         </SidebarMenuButton>
       </SidebarMenuItem>
     </SidebarMenu>

@@ -1,3 +1,4 @@
+import { UiText } from "../../uiLocalization";
 import { type ApprovalRequestId, type ProviderApprovalDecision } from "@cafecode/contracts";
 import { memo } from "react";
 import { Button } from "../ui/button";
@@ -24,7 +25,7 @@ export const ComposerPendingApprovalActions = memo(function ComposerPendingAppro
         disabled={isResponding}
         onClick={() => void onRespondToApproval(requestId, "cancel")}
       >
-        Cancel turn
+        <UiText english={"Cancel turn"} />
       </Button>
       <Button
         size="sm"
@@ -32,7 +33,7 @@ export const ComposerPendingApprovalActions = memo(function ComposerPendingAppro
         disabled={isResponding}
         onClick={() => void onRespondToApproval(requestId, "decline")}
       >
-        Decline
+        <UiText english={"Decline"} />
       </Button>
       <Button
         size="sm"
@@ -40,7 +41,7 @@ export const ComposerPendingApprovalActions = memo(function ComposerPendingAppro
         disabled={isResponding}
         onClick={() => void onRespondToApproval(requestId, "acceptForSession")}
       >
-        Always allow this session
+        <UiText english={"Always allow this session"} />
       </Button>
       <Button
         size="sm"
@@ -48,7 +49,7 @@ export const ComposerPendingApprovalActions = memo(function ComposerPendingAppro
         disabled={isResponding}
         onClick={() => void onRespondToApproval(requestId, "accept")}
       >
-        Approve once
+        <UiText english={"Approve once"} />
       </Button>
     </>
   );

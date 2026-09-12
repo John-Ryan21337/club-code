@@ -19,6 +19,10 @@ import {
   UnifiedSettings,
 } from "@cafecode/contracts/settings";
 import { ensureLocalApi } from "~/localApi";
+import {
+  withoutRendererLocalClientSettings,
+  withRendererLocalClientSettings,
+} from "../rendererLocalClientSettings";
 import * as Struct from "effect/Struct";
 import * as Equal from "effect/Equal";
 import { applyClientSettingsPatch } from "@cafecode/shared/clientSettings";
@@ -100,12 +104,19 @@ async function maybeImportLocalClientSettingsToServer(): Promise<void> {
 
   await hydrateClientSettings();
   const localSettings = getClientSettingsSnapshot();
+  const sharedServerSettings = withoutRendererLocalClientSettings(
+    currentServerConfig.clientSettings,
+  );
+  const sharedLocalSettings = withoutRendererLocalClientSettings(localSettings);
+  const sharedDefaultSettings = withoutRendererLocalClientSettings(DEFAULT_CLIENT_SETTINGS);
   if (
-    Equal.equals(currentServerConfig.clientSettings, DEFAULT_CLIENT_SETTINGS) &&
-    !Equal.equals(localSettings, DEFAULT_CLIENT_SETTINGS)
+    Equal.equals(sharedServerSettings, sharedDefaultSettings) &&
+    !Equal.equals(sharedLocalSettings, sharedDefaultSettings)
   ) {
-    applyClientSettingsUpdated(localSettings);
-    await ensureLocalApi().server.updateClientSettings(localSettings);
+    applyClientSettingsUpdated(
+      applyClientSettingsPatch(currentServerConfig.clientSettings, sharedLocalSettings),
+    );
+    await ensureLocalApi().server.updateClientSettings(sharedLocalSettings);
   }
 }
 
@@ -158,7 +169,8 @@ function splitPatch(patch: Partial<UnifiedSettings>): {
  * settings without subscribing.
  */
 export function getClientSettings(): ClientSettings {
-  return getServerConfig()?.clientSettings ?? getClientSettingsSnapshot();
+  const local = getClientSettingsSnapshot();
+  return withRendererLocalClientSettings(getServerConfig()?.clientSettings ?? local, local);
 }
 
 export function useClientSettingsHydrated(): boolean {
@@ -196,7 +208,10 @@ export function useSettings<T = UnifiedSettings>(selector?: (s: UnifiedSettings)
   const merged = useMemo<UnifiedSettings>(
     () => ({
       ...serverSettings,
-      ...(serverConfig?.clientSettings ?? localClientSettings),
+      ...withRendererLocalClientSettings(
+        serverConfig?.clientSettings ?? localClientSettings,
+        localClientSettings,
+      ),
     }),
     [localClientSettings, serverConfig?.clientSettings, serverSettings],
   );
@@ -233,22 +248,38 @@ export function useUpdateSettings() {
 
     if (Object.keys(clientPatch).length > 0) {
       const currentServerConfig = getServerConfig();
+      if (clientPatch.uiLanguage !== undefined) {
+        const uiLanguage = clientPatch.uiLanguage;
+        // Hydration must finish before merging a local write with the persisted document.
+        void hydrateClientSettings()
+          .then(() => {
+            persistClientSettings(
+              applyClientSettingsPatch(
+                getClientSettingsSnapshot(),
+                currentServerConfig ? { uiLanguage } : clientPatch,
+              ),
+            );
+          })
+          .catch((error) => reportSettingsWriteFailure("client", error));
+      }
       if (currentServerConfig) {
+        const sharedPatch = withoutRendererLocalClientSettings(clientPatch);
+        if (Object.keys(sharedPatch).length === 0) return;
         const nextClientSettings = applyClientSettingsPatch(
           currentServerConfig.clientSettings,
-          clientPatch,
+          sharedPatch,
         );
         applyClientSettingsUpdated(nextClientSettings);
         try {
           void ensureLocalApi()
-            .server.updateClientSettings(clientPatch)
+            .server.updateClientSettings(sharedPatch)
             .catch((error) => {
               reportSettingsWriteFailure("client", error);
             });
         } catch (error) {
           reportSettingsWriteFailure("client", error);
         }
-      } else {
+      } else if (clientPatch.uiLanguage === undefined) {
         persistClientSettings(applyClientSettingsPatch(getClientSettingsSnapshot(), clientPatch));
       }
     }

@@ -1,3 +1,4 @@
+import { UiText, useUiLocalization } from "../uiLocalization";
 import { memo, useState, useCallback } from "react";
 import type { EnvironmentId } from "@cafecode/contracts";
 import { Badge } from "./ui/badge";
@@ -43,6 +44,8 @@ const PlanSidebar = memo(function PlanSidebar({
   className,
   onClose,
 }: PlanSidebarProps) {
+  const { t: localizeUiLabel } = useUiLocalization();
+
   const [proposedPlanExpanded, setProposedPlanExpanded] = useState(false);
   const [isSavingToWorkspace, setIsSavingToWorkspace] = useState(false);
   const { copyToClipboard, isCopied } = useCopyToClipboard();
@@ -125,7 +128,7 @@ const PlanSidebar = memo(function PlanSidebar({
                     size="icon-xs"
                     variant="ghost"
                     className="text-muted-foreground/50 hover:text-foreground/70"
-                    aria-label="Plan actions"
+                    aria-label={localizeUiLabel("Plan actions")}
                   />
                 }
               >
@@ -140,7 +143,7 @@ const PlanSidebar = memo(function PlanSidebar({
                   onClick={handleSaveToWorkspace}
                   disabled={!workspaceRoot || isSavingToWorkspace}
                 >
-                  Save to workspace
+                  <UiText english={"Save to workspace"} />
                 </MenuItem>
               </MenuPopup>
             </Menu>
@@ -192,9 +195,11 @@ const PlanSidebar = memo(function PlanSidebar({
           {/* Empty state */}
           {!planMarkdown ? (
             <div className="flex flex-col items-center justify-center py-12 text-center">
-              <p className="text-[13px] text-muted-foreground/40">No active plan yet.</p>
+              <p className="text-[13px] text-muted-foreground/40">
+                <UiText english={"No active plan yet."} />
+              </p>
               <p className="mt-1 text-[11px] text-muted-foreground/30">
-                Plans will appear here when generated.
+                <UiText english={"Plans will appear here when generated."} />
               </p>
             </div>
           ) : null}

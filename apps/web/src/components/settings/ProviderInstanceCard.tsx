@@ -1,4 +1,5 @@
-"use client";
+import { UiText, useUiLocalization } from "../../uiLocalization";
+("use client");
 
 import {
   ArrowUpCircleIcon,
@@ -201,7 +202,9 @@ function ProviderAccentColorPicker(props: {
 
   return (
     <div className="grid gap-2">
-      <span className="text-xs font-medium text-foreground">Accent color</span>
+      <span className="text-xs font-medium text-foreground">
+        <UiText english={"Accent color"} />
+      </span>
       <div className="flex min-w-0 flex-wrap items-center gap-2">
         <input
           type="color"
@@ -251,12 +254,12 @@ function ProviderAccentColorPicker(props: {
               props.onCommit("");
             }}
           >
-            Clear
+            <UiText english={"Clear"} />
           </Button>
         ) : null}
       </div>
       <span className="text-xs text-muted-foreground">
-        Used to distinguish this instance in picker rails and model lists.
+        <UiText english={"Used to distinguish this instance in picker rails and model lists."} />
       </span>
     </div>
   );
@@ -318,7 +321,9 @@ function ProviderEnvironmentSection(props: {
   return (
     <div className="grid gap-2">
       <div className="flex items-center justify-between gap-3">
-        <span className="text-xs font-medium text-foreground">Environment variables</span>
+        <span className="text-xs font-medium text-foreground">
+          <UiText english={"Environment variables"} />
+        </span>
         <Button
           type="button"
           size="sm"
@@ -337,12 +342,16 @@ function ProviderEnvironmentSection(props: {
           }
         >
           <PlusIcon className="size-3" />
-          Add
+          <UiText english={"Add"} />
         </Button>
       </div>
       {rows.length === 0 ? (
         <p className="text-xs text-muted-foreground">
-          Add variables to pass API keys, base URLs, or other per-instance CLI settings.
+          <UiText
+            english={
+              "Add variables to pass API keys, base URLs, or other per-instance CLI settings."
+            }
+          />
         </p>
       ) : (
         <div className="grid gap-2">
@@ -384,7 +393,7 @@ function ProviderEnvironmentSection(props: {
                     });
                   }}
                 />
-                Sensitive
+                <UiText english={"Sensitive"} />
               </label>
               <Button
                 type="button"
@@ -401,7 +410,11 @@ function ProviderEnvironmentSection(props: {
         </div>
       )}
       <span className="text-xs text-muted-foreground">
-        Sensitive values are stored separately and are not returned to the app after saving.
+        <UiText
+          english={
+            "Sensitive values are stored separately and are not returned to the app after saving."
+          }
+        />
       </span>
     </div>
   );
@@ -549,7 +562,9 @@ function ProviderInstanceDefaultsSection(props: {
   return (
     <div className="grid gap-3">
       <div className="grid gap-0.5">
-        <span className="text-xs font-medium text-foreground">New chat defaults</span>
+        <span className="text-xs font-medium text-foreground">
+          <UiText english={"New chat defaults"} />
+        </span>
         <span className="text-xs text-muted-foreground">
           Applied when a new chat starts on this instance. Traits left on “No default” use the
           model&apos;s own defaults.
@@ -564,12 +579,14 @@ function ProviderInstanceDefaultsSection(props: {
       />
       {props.defaultModel && selectedModel && optionDescriptors.length === 0 ? (
         <p className="text-xs text-muted-foreground">
-          This model does not report configurable options.
+          <UiText english={"This model does not report configurable options."} />
         </p>
       ) : null}
       {props.defaultModel && !selectedModel ? (
         <p className="text-xs text-muted-foreground">
-          Option defaults become editable once the provider reports this model.
+          <UiText
+            english={"Option defaults become editable once the provider reports this model."}
+          />
         </p>
       ) : null}
       {optionDescriptors.map((descriptor) => {
@@ -732,6 +749,8 @@ export function ProviderInstanceCard({
   onRestartRuntime,
   isRestartingRuntime = false,
 }: ProviderInstanceCardProps) {
+  const { t: localizeUiLabel } = useUiLocalization();
+
   const enabled = instance.enabled ?? true;
   // The server-reported status wins when present; otherwise fall back to
   // "disabled"/"warning" based on the local `enabled` flag so the dot
@@ -938,7 +957,9 @@ export function ProviderInstanceCard({
                 </Button>
               }
             />
-            <TooltipPopup side="top">Delete instance</TooltipPopup>
+            <TooltipPopup side="top">
+              <UiText english={"Delete instance"} />
+            </TooltipPopup>
           </Tooltip>
         </span>
       ) : null}
@@ -989,7 +1010,7 @@ export function ProviderInstanceCard({
                             ? "text-warning hover:text-warning"
                             : "text-primary hover:text-primary",
                         )}
-                        aria-label="Update available — view details"
+                        aria-label={localizeUiLabel("Update available — view details")}
                       >
                         <ArrowUpCircleIcon className="size-3.5 [animation:bounce_2.4s_ease-in-out_infinite] motion-reduce:animate-none" />
                       </Button>
@@ -1003,7 +1024,7 @@ export function ProviderInstanceCard({
                     <div className="grid min-w-0 gap-3">
                       <div className="grid gap-0.5">
                         <p className="text-[13px] font-semibold leading-tight text-foreground">
-                          Update available
+                          <UiText english={"Update available"} />
                         </p>
                         <p
                           className={cn(
@@ -1056,13 +1077,15 @@ export function ProviderInstanceCard({
                                       providerName: displayName,
                                     })
                                   }
-                                  aria-label="Copy update command"
+                                  aria-label={localizeUiLabel("Copy update command")}
                                 >
                                   <CopyIcon className="size-3" />
                                 </Button>
                               }
                             />
-                            <TooltipPopup side="top">Copy command</TooltipPopup>
+                            <TooltipPopup side="top">
+                              <UiText english={"Copy command"} />
+                            </TooltipPopup>
                           </Tooltip>
                         </div>
                       ) : null}
@@ -1122,7 +1145,9 @@ export function ProviderInstanceCard({
                     </Button>
                   }
                 />
-                <TooltipPopup side="top">Restart provider runtime</TooltipPopup>
+                <TooltipPopup side="top">
+                  <UiText english={"Restart provider runtime"} />
+                </TooltipPopup>
               </Tooltip>
             ) : null}
             {isDefaultProvider ? (
@@ -1136,12 +1161,12 @@ export function ProviderInstanceCard({
                       aria-label={`Clear ${displayName} as default provider`}
                     >
                       <PinIcon className="size-3" aria-hidden />
-                      Default
+                      <UiText english={"Default"} />
                     </button>
                   }
                 />
                 <TooltipPopup side="top">
-                  New chats start on this provider. Click to clear.
+                  <UiText english={"New chats start on this provider. Click to clear."} />
                 </TooltipPopup>
               </Tooltip>
             ) : enabled ? (
@@ -1160,7 +1185,9 @@ export function ProviderInstanceCard({
                     </Button>
                   }
                 />
-                <TooltipPopup side="top">Use for new chats by default</TooltipPopup>
+                <TooltipPopup side="top">
+                  <UiText english={"Use for new chats by default"} />
+                </TooltipPopup>
               </Tooltip>
             ) : null}
             <Tooltip>
@@ -1178,7 +1205,9 @@ export function ProviderInstanceCard({
                   </Button>
                 }
               />
-              <TooltipPopup side="top">Instance settings</TooltipPopup>
+              <TooltipPopup side="top">
+                <UiText english={"Instance settings"} />
+              </TooltipPopup>
             </Tooltip>
             <Switch
               checked={enabled}
@@ -1197,7 +1226,7 @@ export function ProviderInstanceCard({
               <span className="truncate">{displayName} settings</span>
             </DialogTitle>
             <DialogDescription>
-              New chat defaults and configuration for this provider instance.
+              <UiText english={"New chat defaults and configuration for this provider instance."} />
             </DialogDescription>
           </DialogHeader>
           <DialogPanel className="px-0 pb-4">
@@ -1217,7 +1246,9 @@ export function ProviderInstanceCard({
 
               <div className="border-t border-border/60 px-4 py-3 sm:px-5 first:border-t-0">
                 <label htmlFor={`provider-instance-${instanceId}-display-name`} className="block">
-                  <span className="text-xs font-medium text-foreground">Display name</span>
+                  <span className="text-xs font-medium text-foreground">
+                    <UiText english={"Display name"} />
+                  </span>
                   <DraftInput
                     id={`provider-instance-${instanceId}-display-name`}
                     className="mt-1.5"

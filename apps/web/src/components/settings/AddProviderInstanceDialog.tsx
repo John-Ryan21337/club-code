@@ -1,4 +1,5 @@
-"use client";
+import { UiText, useUiLocalization } from "../../uiLocalization";
+("use client");
 
 import { CheckIcon } from "lucide-react";
 import { Radio as RadioPrimitive } from "@base-ui/react/radio";
@@ -85,6 +86,8 @@ interface AddProviderInstanceDialogProps {
 }
 
 export function AddProviderInstanceDialog({ open, onOpenChange }: AddProviderInstanceDialogProps) {
+  const { t: localizeUiLabel } = useUiLocalization();
+
   const settings = useSettings();
   const { updateSettings } = useUpdateSettings();
 
@@ -211,7 +214,9 @@ export function AddProviderInstanceDialog({ open, onOpenChange }: AddProviderIns
       <DialogPopup className="max-w-xl overflow-hidden">
         <div className="flex min-h-0 flex-col overflow-hidden border-foreground/10 bg-background shadow-2xl">
           <DialogHeader className="border-b border-border/70 bg-background">
-            <DialogTitle>Add provider instance</DialogTitle>
+            <DialogTitle>
+              <UiText english={"Add provider instance"} />
+            </DialogTitle>
             <DialogDescription>
               Configure an additional provider instance — for example, a second Codex install
               pointed at a different workspace.
@@ -268,7 +273,7 @@ export function AddProviderInstanceDialog({ open, onOpenChange }: AddProviderIns
                   id="add-instance-driver-label"
                   className="text-xs font-medium text-foreground"
                 >
-                  Driver
+                  <UiText english={"Driver"} />
                 </span>
                 <RadioGroup
                   value={driver}
@@ -307,20 +312,24 @@ export function AddProviderInstanceDialog({ open, onOpenChange }: AddProviderIns
               </div>
 
               <label className={cn("grid gap-2", wizardStep !== 1 && "hidden")}>
-                <span className="text-xs font-medium text-foreground">Label</span>
+                <span className="text-xs font-medium text-foreground">
+                  <UiText english={"Label"} />
+                </span>
                 <Input
                   className="bg-background"
-                  placeholder="e.g. Work"
+                  placeholder={localizeUiLabel("e.g. Work")}
                   value={label}
                   onChange={(event) => setLabel(event.target.value)}
                 />
                 <span className="text-[11px] text-muted-foreground">
-                  Shown in the provider list. Optional.
+                  <UiText english={"Shown in the provider list. Optional."} />
                 </span>
               </label>
 
               <label className={cn("grid gap-2", wizardStep !== 1 && "hidden")}>
-                <span className="text-xs font-medium text-foreground">Instance ID</span>
+                <span className="text-xs font-medium text-foreground">
+                  <UiText english={"Instance ID"} />
+                </span>
                 <Input
                   className="bg-background"
                   placeholder={`${driver}_work`}
@@ -335,19 +344,25 @@ export function AddProviderInstanceDialog({ open, onOpenChange }: AddProviderIns
                   <span className="text-[11px] text-destructive">{instanceIdError}</span>
                 ) : (
                   <span className="text-[11px] text-muted-foreground">
-                    Routing key used by threads and sessions. Letters, digits, '-', or '_'.
+                    <UiText
+                      english={
+                        "Routing key used by threads and sessions. Letters, digits, '-', or '_'."
+                      }
+                    />
                   </span>
                 )}
               </label>
 
               <div className={cn("grid gap-2", wizardStep !== 1 && "hidden")}>
-                <span className="text-xs font-medium text-foreground">Accent color</span>
+                <span className="text-xs font-medium text-foreground">
+                  <UiText english={"Accent color"} />
+                </span>
                 <div className="flex min-w-0 flex-wrap items-center gap-2">
                   <input
                     type="color"
                     value={normalizeProviderAccentColor(accentColor) ?? PROVIDER_ACCENT_SWATCHES[0]}
                     onChange={(event) => setAccentColor(event.target.value)}
-                    aria-label="Provider instance accent color"
+                    aria-label={localizeUiLabel("Provider instance accent color")}
                     className="h-8 w-10 cursor-pointer rounded-xl border border-input bg-background p-0.5"
                   />
                   <div className="flex flex-wrap gap-1.5">
@@ -378,7 +393,7 @@ export function AddProviderInstanceDialog({ open, onOpenChange }: AddProviderIns
                       className="h-7 px-2 text-xs text-muted-foreground"
                       onClick={() => setAccentColor("")}
                     >
-                      Clear
+                      <UiText english={"Clear"} />
                     </Button>
                   ) : null}
                 </div>
@@ -419,11 +434,11 @@ export function AddProviderInstanceDialog({ open, onOpenChange }: AddProviderIns
                 setWizardStep((step) => Math.max(0, step - 1));
               }}
             >
-              {wizardStep === 0 ? "Cancel" : "Back"}
+              {wizardStep === 0 ? <UiText english={"Cancel"} /> : <UiText english={"Back"} />}
             </Button>
             {wizardStep < wizardSteps.length - 1 ? (
               <Button size="sm" onClick={() => setWizardStep((step) => Math.min(2, step + 1))}>
-                Next
+                <UiText english={"Next"} />
               </Button>
             ) : (
               <Button size="sm" onClick={handleSave}>

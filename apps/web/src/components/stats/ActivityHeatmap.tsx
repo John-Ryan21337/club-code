@@ -1,3 +1,4 @@
+import { UiText, useUiLocalization } from "../../uiLocalization";
 import { useMemo, useState } from "react";
 import type { UsageStatsDay } from "@cafecode/contracts";
 
@@ -125,6 +126,8 @@ export function ActivityHeatmap({
   today?: UsageStatsDay | undefined;
   className?: string;
 }) {
+  const { t: localizeUiLabel } = useUiLocalization();
+
   const [hovered, setHovered] = useState<HoveredCell | null>(null);
 
   const { weeks, monthLabelByWeek, maxMs } = useMemo(() => {
@@ -214,7 +217,9 @@ export function ActivityHeatmap({
             className="relative grid flex-1 gap-[3px]"
             style={{ gridTemplateColumns: `repeat(${WEEKS}, minmax(0, 1fr))` }}
             role="img"
-            aria-label="Daily generating time for the last few months; brighter cells mean more time."
+            aria-label={localizeUiLabel(
+              "Daily generating time for the last few months; brighter cells mean more time.",
+            )}
             onPointerLeave={() => setHovered(null)}
           >
             {weeks.map((column, week) => (
@@ -264,7 +269,9 @@ export function ActivityHeatmap({
               aria-hidden
             />
           ))}
-          <span>More</span>
+          <span>
+            <UiText english={"More"} />
+          </span>
         </div>
       </div>
     </div>

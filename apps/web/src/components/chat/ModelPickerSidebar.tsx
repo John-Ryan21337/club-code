@@ -1,3 +1,4 @@
+import { UiText, useUiLocalization } from "../../uiLocalization";
 import { type ProviderInstanceId } from "@cafecode/contracts";
 import { memo, useMemo } from "react";
 import { SparklesIcon, StarIcon } from "lucide-react";
@@ -59,6 +60,8 @@ export const ModelPickerSidebar = memo(function ModelPickerSidebar(props: {
    */
   newBadgeInstanceIds?: ReadonlySet<ProviderInstanceId>;
 }) {
+  const { t: localizeUiLabel } = useUiLocalization();
+
   const handleSelect = (instanceId: ProviderInstanceId | "favorites") => {
     props.onSelectInstance(instanceId);
   };
@@ -97,7 +100,7 @@ export const ModelPickerSidebar = memo(function ModelPickerSidebar(props: {
                       onClick={() => handleSelect("favorites")}
                       type="button"
                       data-model-picker-provider="favorites"
-                      aria-label="Favorites"
+                      aria-label={localizeUiLabel("Favorites")}
                     >
                       <StarIcon className="size-5 fill-current shrink-0" aria-hidden />
                     </button>
@@ -108,7 +111,7 @@ export const ModelPickerSidebar = memo(function ModelPickerSidebar(props: {
                   align="center"
                   className={PICKER_TOOLTIP_CLASS}
                 >
-                  Favorites
+                  <UiText english={"Favorites"} />
                 </TooltipPopup>
               </Tooltip>
             </div>

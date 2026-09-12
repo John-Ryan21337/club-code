@@ -1,3 +1,4 @@
+import { UiText } from "../../uiLocalization";
 import { useMemo, useState, type ReactNode } from "react";
 import type { ProviderDriverKind, UsageStatsGetResult } from "@cafecode/contracts";
 import { rollUpCost, resolveModelRate, type ModelRate } from "@cafecode/shared/modelPricing";
@@ -512,9 +513,13 @@ export function UsageCostContent({ usage }: { usage: UsageStatsGetResult | null 
           <table className="w-full min-w-[420px] border-collapse text-sm">
             <thead>
               <tr className="text-[11px] uppercase tracking-wide text-muted-foreground">
-                <th className="py-1.5 text-left font-medium">Model</th>
+                <th className="py-1.5 text-left font-medium">
+                  <UiText english={"Model"} />
+                </th>
                 <th className="py-1.5 text-right font-medium">Cost (USD)</th>
-                <th className="py-1.5 text-right font-medium">Tokens</th>
+                <th className="py-1.5 text-right font-medium">
+                  <UiText english={"Tokens"} />
+                </th>
               </tr>
             </thead>
             <tbody>

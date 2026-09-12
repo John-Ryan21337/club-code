@@ -1,3 +1,4 @@
+import { UiText, useUiLocalization } from "../../uiLocalization";
 import { useNavigate } from "@tanstack/react-router";
 import type { ServerProvider } from "@cafecode/contracts";
 import { CircleCheckIcon, DownloadIcon, LoaderIcon, TriangleAlertIcon, XIcon } from "lucide-react";
@@ -73,6 +74,8 @@ export function SidebarProviderUpdatePillContent({
   readonly providers: ReadonlyArray<ServerProvider>;
   readonly onOpenProviderSettings: () => void;
 }) {
+  const { t: localizeUiLabel } = useUiLocalization();
+
   const [transitionState, setTransitionState] = useState<ProviderUpdatePillTransitionState>(
     () => INITIAL_PROVIDER_UPDATE_PILL_TRANSITION_STATE,
   );
@@ -273,7 +276,7 @@ export function SidebarProviderUpdatePillContent({
             render={
               <button
                 type="button"
-                aria-label="Dismiss provider update notice"
+                aria-label={localizeUiLabel("Dismiss provider update notice")}
                 className="relative z-[1] mr-1 inline-flex size-5 items-center justify-center rounded-md opacity-70 transition-opacity hover:opacity-100"
                 onClick={() => startExit(displayedView.key, null, displayedView.key)}
               >
@@ -281,7 +284,9 @@ export function SidebarProviderUpdatePillContent({
               </button>
             }
           />
-          <TooltipPopup side="top">Dismiss until provider status changes</TooltipPopup>
+          <TooltipPopup side="top">
+            <UiText english={"Dismiss until provider status changes"} />
+          </TooltipPopup>
         </Tooltip>
       )}
     </div>

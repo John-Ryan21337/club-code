@@ -1,3 +1,4 @@
+import { UiText, useUiLocalization } from "../../uiLocalization";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { UsageStatsGetResult, UsageStatsSnapshot } from "@cafecode/contracts";
 
@@ -100,6 +101,8 @@ function TokenBreakdownSection({
   usage: UsageStatsGetResult["tokenBreakdown"];
   lifetimeOutputTokens: number;
 }) {
+  const { t: localizeUiLabel } = useUiLocalization();
+
   const breakdown = useMemo(
     () => buildUsageTokenBreakdownView(usage, lifetimeOutputTokens),
     [lifetimeOutputTokens, usage],
@@ -109,7 +112,7 @@ function TokenBreakdownSection({
 
   return (
     <SettingsSection
-      title="Tokens by provider and model"
+      title={localizeUiLabel("Tokens by provider and model")}
       headerAction={
         breakdown.attributedOutputTokens > 0 ? (
           <span className="text-[11px] tabular-nums text-muted-foreground">
@@ -119,7 +122,10 @@ function TokenBreakdownSection({
       }
     >
       {hasRows ? (
-        <div aria-label="Token usage by provider and model" className="divide-y divide-border/60">
+        <div
+          aria-label={localizeUiLabel("Token usage by provider and model")}
+          className="divide-y divide-border/60"
+        >
           {breakdown.providers.map((providerUsage) => {
             const ProviderIcon = PROVIDER_ICON_BY_PROVIDER[providerUsage.provider];
             const providerPercentage = formatUsagePercentage(
@@ -212,7 +218,9 @@ function TokenBreakdownSection({
         </div>
       ) : (
         <p className="px-4 py-6 text-center text-xs text-muted-foreground sm:px-5">
-          Provider and model attribution will appear after output tokens are recorded.
+          <UiText
+            english={"Provider and model attribution will appear after output tokens are recorded."}
+          />
         </p>
       )}
     </SettingsSection>
@@ -220,6 +228,8 @@ function TokenBreakdownSection({
 }
 
 export function UsageStatsPanel() {
+  const { t: localizeUiLabel } = useUiLocalization();
+
   const settings = useSettings();
   const { updateSettings } = useUpdateSettings();
   const detail = useUsageStatsDetail(true);
@@ -258,7 +268,7 @@ export function UsageStatsPanel() {
   return (
     <SettingsPageContainer>
       <SettingsSection
-        title="Usage"
+        title={localizeUiLabel("Usage")}
         headerAction={
           generating ? (
             <span className="flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
@@ -286,7 +296,11 @@ export function UsageStatsPanel() {
           <div className="px-4 py-8">
             {loadError ? (
               <p className="text-center text-xs text-muted-foreground">
-                Usage stats are unavailable right now. Reconnect to the server and try again.
+                <UiText
+                  english={
+                    "Usage stats are unavailable right now. Reconnect to the server and try again."
+                  }
+                />
               </p>
             ) : (
               <div className="grid grid-cols-3 gap-4">
@@ -309,7 +323,7 @@ export function UsageStatsPanel() {
         lifetimeOutputTokens={initial?.totals.outputTokens ?? 0}
       />
 
-      <SettingsSection title="Activity">
+      <SettingsSection title={localizeUiLabel("Activity")}>
         <div className="px-4 py-4 sm:px-5">
           {initial ? (
             <ActivityHeatmap
@@ -326,9 +340,9 @@ export function UsageStatsPanel() {
         </div>
       </SettingsSection>
 
-      <SettingsSection title="Data collection">
+      <SettingsSection title={localizeUiLabel("Data collection")}>
         <SettingsRow
-          title="Collect usage statistics"
+          title={localizeUiLabel("Collect usage statistics")}
           description="Track tokens, chats, and generating time across all your Cafe Code use. Data never leaves this machine; turning collection off pauses the counters without clearing them."
           control={
             <Switch
@@ -336,7 +350,7 @@ export function UsageStatsPanel() {
               onCheckedChange={(checked) => {
                 updateSettings({ usageStatsEnabled: Boolean(checked) });
               }}
-              aria-label="Collect usage statistics"
+              aria-label={localizeUiLabel("Collect usage statistics")}
             />
           }
         />

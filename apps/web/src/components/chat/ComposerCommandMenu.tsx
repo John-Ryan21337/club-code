@@ -1,3 +1,4 @@
+import { UiText } from "../../uiLocalization";
 import {
   type ProjectEntry,
   type ProviderDriverKind,
@@ -172,7 +173,7 @@ export const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
             {props.triggerKind === "skill" ? (
               <CommandGroup>
                 <CommandGroupLabel className="px-0 pt-0 pb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/55">
-                  Skills
+                  <UiText english={"Skills"} />
                 </CommandGroupLabel>
                 <p className="text-muted-foreground/70 text-xs">
                   {props.isLoading

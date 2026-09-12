@@ -1,3 +1,4 @@
+import { UiText, useUiLocalization } from "../../uiLocalization";
 import { DownloadIcon, RotateCwIcon, TriangleAlertIcon, XIcon } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useState } from "react";
@@ -23,6 +24,8 @@ import { Alert, AlertDescription, AlertTitle } from "../ui/alert";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 export function SidebarUpdatePill() {
+  const { t: localizeUiLabel } = useUiLocalization();
+
   const queryClient = useQueryClient();
   const state = useDesktopUpdateState().data ?? null;
   const [dismissed, setDismissed] = useState(false);
@@ -134,7 +137,9 @@ export function SidebarUpdatePill() {
       {showArm64Warning && arm64Description && (
         <Alert variant="warning" className="rounded-2xl border-warning/40 bg-warning/8 text-xs">
           <TriangleAlertIcon />
-          <AlertTitle>Intel build on Apple Silicon</AlertTitle>
+          <AlertTitle>
+            <UiText english={"Intel build on Apple Silicon"} />
+          </AlertTitle>
           <AlertDescription>{arm64Description}</AlertDescription>
         </Alert>
       )}
@@ -159,12 +164,16 @@ export function SidebarUpdatePill() {
                   {action === "install" ? (
                     <>
                       <RotateCwIcon className="size-3.5" />
-                      <span>Restart to update</span>
+                      <span>
+                        <UiText english={"Restart to update"} />
+                      </span>
                     </>
                   ) : action === "manual" ? (
                     <>
                       <DownloadIcon className="size-3.5" />
-                      <span>View macOS update</span>
+                      <span>
+                        <UiText english={"View macOS update"} />
+                      </span>
                     </>
                   ) : state?.status === "downloading" ? (
                     <>
@@ -179,7 +188,9 @@ export function SidebarUpdatePill() {
                   ) : (
                     <>
                       <DownloadIcon className="size-3.5" />
-                      <span>Update available</span>
+                      <span>
+                        <UiText english={"Update available"} />
+                      </span>
                     </>
                   )}
                 </button>
@@ -193,7 +204,7 @@ export function SidebarUpdatePill() {
                 render={
                   <button
                     type="button"
-                    aria-label="Dismiss update"
+                    aria-label={localizeUiLabel("Dismiss update")}
                     className="mr-1 inline-flex size-5 items-center justify-center rounded-md text-primary/60 transition-colors hover:text-primary"
                     onClick={() => setDismissed(true)}
                   >
@@ -201,7 +212,9 @@ export function SidebarUpdatePill() {
                   </button>
                 }
               />
-              <TooltipPopup side="top">Dismiss until next launch</TooltipPopup>
+              <TooltipPopup side="top">
+                <UiText english={"Dismiss until next launch"} />
+              </TooltipPopup>
             </Tooltip>
           )}
         </div>

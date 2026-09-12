@@ -1,3 +1,4 @@
+import { UiText, useUiLocalization } from "../uiLocalization";
 import {
   ArchiveIcon,
   ArrowUpDownIcon,
@@ -375,6 +376,8 @@ function ThreadRepairProgressDialog({
   state: ThreadRepairDialogState | null;
   onClose: () => void;
 }) {
+  const { t: localizeUiLabel } = useUiLocalization();
+
   const running = state?.phase === "running";
   const result = state?.phase === "complete" ? state.result : null;
   const skipped = result ? repairDialogSkippedCount(result) : 0;
@@ -390,7 +393,9 @@ function ThreadRepairProgressDialog({
     >
       <DialogPopup className="max-w-md" showCloseButton={!running}>
         <DialogHeader>
-          <DialogTitle>Repair thread messages</DialogTitle>
+          <DialogTitle>
+            <UiText english={"Repair thread messages"} />
+          </DialogTitle>
           <DialogDescription>
             {state ? `"${state.thread.title}"` : "Repairing selected thread."}
           </DialogDescription>
@@ -400,7 +405,7 @@ function ThreadRepairProgressDialog({
             <div className="space-y-3">
               <div
                 role="progressbar"
-                aria-label="Repair progress"
+                aria-label={localizeUiLabel("Repair progress")}
                 className="h-2 overflow-hidden rounded-full bg-muted"
               >
                 <div className="h-full w-1/2 animate-pulse rounded-full bg-primary" />
@@ -414,27 +419,39 @@ function ThreadRepairProgressDialog({
           {result ? (
             <div className="grid grid-cols-2 gap-2 text-sm">
               <div className="rounded-md border bg-muted/25 px-3 py-2">
-                <span className="block text-xs text-muted-foreground">Messages</span>
+                <span className="block text-xs text-muted-foreground">
+                  <UiText english={"Messages"} />
+                </span>
                 <span className="font-medium">{result.counts.totalMessages}</span>
               </div>
               <div className="rounded-md border bg-muted/25 px-3 py-2">
-                <span className="block text-xs text-muted-foreground">Repaired</span>
+                <span className="block text-xs text-muted-foreground">
+                  <UiText english={"Repaired"} />
+                </span>
                 <span className="font-medium">{result.counts.repaired}</span>
               </div>
               <div className="rounded-md border bg-muted/25 px-3 py-2">
-                <span className="block text-xs text-muted-foreground">Already complete</span>
+                <span className="block text-xs text-muted-foreground">
+                  <UiText english={"Already complete"} />
+                </span>
                 <span className="font-medium">{result.counts.unchanged}</span>
               </div>
               <div className="rounded-md border bg-muted/25 px-3 py-2">
-                <span className="block text-xs text-muted-foreground">Skipped</span>
+                <span className="block text-xs text-muted-foreground">
+                  <UiText english={"Skipped"} />
+                </span>
                 <span className="font-medium">{skipped}</span>
               </div>
               <div className="rounded-md border bg-muted/25 px-3 py-2">
-                <span className="block text-xs text-muted-foreground">Local checks</span>
+                <span className="block text-xs text-muted-foreground">
+                  <UiText english={"Local checks"} />
+                </span>
                 <span className="font-medium">{result.counts.localAttempts}</span>
               </div>
               <div className="rounded-md border bg-muted/25 px-3 py-2">
-                <span className="block text-xs text-muted-foreground">Upstream checks</span>
+                <span className="block text-xs text-muted-foreground">
+                  <UiText english={"Upstream checks"} />
+                </span>
                 <span className="font-medium">{result.counts.upstreamAttempts}</span>
               </div>
             </div>
@@ -443,14 +460,18 @@ function ThreadRepairProgressDialog({
           {state?.phase === "error" ? (
             <Alert variant="error">
               <TriangleAlertIcon className="size-4" />
-              <AlertTitle>Unable to repair thread</AlertTitle>
+              <AlertTitle>
+                <UiText english={"Unable to repair thread"} />
+              </AlertTitle>
               <AlertDescription>{state.message}</AlertDescription>
             </Alert>
           ) : null}
         </DialogPanel>
         {!running ? (
           <DialogFooter>
-            <Button onClick={onClose}>Close</Button>
+            <Button onClick={onClose}>
+              <UiText english={"Close"} />
+            </Button>
           </DialogFooter>
         ) : null}
       </DialogPopup>
@@ -746,7 +767,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                 onPointerDown={stopPropagationOnPointerDown}
                 onClick={handleConfirmArchiveClick}
               >
-                Confirm
+                <UiText english={"Confirm"} />
               </button>
             ) : !isThreadRunning ? (
               appSettingsConfirmThreadArchive ? (
@@ -782,7 +803,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                       </div>
                     }
                   />
-                  <TooltipPopup side="top">Archive</TooltipPopup>
+                  <TooltipPopup side="top">
+                    <UiText english={"Archive"} />
+                  </TooltipPopup>
                 </Tooltip>
               )
             ) : null}
@@ -914,7 +937,9 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
             data-thread-selection-safe
             className="flex h-6 w-full translate-x-0 items-center px-2 text-left text-[10px] text-muted-foreground/60"
           >
-            <span>No threads yet</span>
+            <span>
+              <UiText english={"No threads yet"} />
+            </span>
           </div>
         </SidebarMenuSubItem>
       ) : null}
@@ -1010,6 +1035,8 @@ interface SidebarProjectItemProps {
 }
 
 const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjectItemProps) {
+  const { t: localizeUiLabel } = useUiLocalization();
+
   const {
     project,
     bootstrappedEnvironmentIds,
@@ -2508,7 +2535,11 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
             }
           />
           <TooltipPopup side="top">
-            {newThreadShortcutLabel ? `New thread (${newThreadShortcutLabel})` : "New thread"}
+            {newThreadShortcutLabel ? (
+              `New thread (${newThreadShortcutLabel})`
+            ) : (
+              <UiText english={"New thread"} />
+            )}
           </TooltipPopup>
         </Tooltip>
       </div>
@@ -2561,7 +2592,9 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       >
         <DialogPopup className="max-w-lg">
           <DialogHeader>
-            <DialogTitle>Rename project</DialogTitle>
+            <DialogTitle>
+              <UiText english={"Rename project"} />
+            </DialogTitle>
             <DialogDescription>
               {projectRenameTarget
                 ? `Update the title for ${projectRenameTarget.cwd}.`
@@ -2570,9 +2603,11 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           </DialogHeader>
           <DialogPanel className="space-y-4">
             <div className="grid gap-1.5">
-              <span className="text-xs font-medium text-foreground">Project title</span>
+              <span className="text-xs font-medium text-foreground">
+                <UiText english={"Project title"} />
+              </span>
               <Input
-                aria-label="Project title"
+                aria-label={localizeUiLabel("Project title")}
                 value={projectRenameTitle}
                 onChange={(event) => setProjectRenameTitle(event.target.value)}
                 onKeyDown={(event) => {
@@ -2591,9 +2626,11 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           </DialogPanel>
           <DialogFooter>
             <Button variant="outline" onClick={closeProjectRenameDialog}>
-              Cancel
+              <UiText english={"Cancel"} />
             </Button>
-            <Button onClick={() => void submitProjectRename()}>Save</Button>
+            <Button onClick={() => void submitProjectRename()}>
+              <UiText english={"Save"} />
+            </Button>
           </DialogFooter>
         </DialogPopup>
       </Dialog>
@@ -2608,7 +2645,9 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       >
         <DialogPopup className="max-w-2xl">
           <DialogHeader>
-            <DialogTitle>Additional directories</DialogTitle>
+            <DialogTitle>
+              <UiText english={"Additional directories"} />
+            </DialogTitle>
             <DialogDescription>
               {additionalDirectoriesTarget
                 ? `Configure directories available to agents for ${additionalDirectoriesTarget.cwd}.`
@@ -2617,14 +2656,18 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           </DialogHeader>
           <DialogPanel className="space-y-4">
             <div className="grid gap-1.5">
-              <span className="text-xs font-medium text-foreground">Primary directory</span>
+              <span className="text-xs font-medium text-foreground">
+                <UiText english={"Primary directory"} />
+              </span>
               <div className="min-h-9 overflow-hidden rounded-md border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
                 <span className="block truncate">{additionalDirectoriesTarget?.cwd ?? ""}</span>
               </div>
             </div>
 
             <div className="grid gap-2">
-              <span className="text-xs font-medium text-foreground">Additional directories</span>
+              <span className="text-xs font-medium text-foreground">
+                <UiText english={"Additional directories"} />
+              </span>
               {additionalDirectoriesDraft.length > 0 ? (
                 <div className="grid gap-2">
                   {additionalDirectoriesDraft.map((directory, index) => (
@@ -2646,16 +2689,16 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
                 </div>
               ) : (
                 <p className="rounded-md border border-dashed px-3 py-4 text-xs text-muted-foreground">
-                  No additional directories configured.
+                  <UiText english={"No additional directories configured."} />
                 </p>
               )}
             </div>
 
             <div className="flex flex-col gap-2 sm:flex-row">
               <Input
-                aria-label="Additional directory path"
+                aria-label={localizeUiLabel("Additional directory path")}
                 value={additionalDirectoryInput}
-                placeholder="Absolute path"
+                placeholder={localizeUiLabel("Absolute path")}
                 onChange={(event) => setAdditionalDirectoryInput(event.target.value)}
                 onKeyDown={(event) => {
                   if (event.key === "Enter") {
@@ -2671,7 +2714,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
                   onClick={() => addAdditionalDirectoryDraft(additionalDirectoryInput)}
                 >
                   <PlusIcon className="size-4" />
-                  Add
+                  <UiText english={"Add"} />
                 </Button>
                 <Button
                   type="button"
@@ -2679,7 +2722,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
                   onClick={() => void browseAdditionalDirectory()}
                 >
                   <FolderPlusIcon className="size-4" />
-                  Browse
+                  <UiText english={"Browse"} />
                 </Button>
               </div>
             </div>
@@ -2706,13 +2749,13 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
               onClick={closeAdditionalDirectoriesDialog}
               disabled={additionalDirectoriesSubmitting}
             >
-              Cancel
+              <UiText english={"Cancel"} />
             </Button>
             <Button
               onClick={() => void submitAdditionalDirectories()}
               disabled={additionalDirectoriesSubmitting}
             >
-              Save
+              <UiText english={"Save"} />
             </Button>
           </DialogFooter>
         </DialogPopup>
@@ -2728,7 +2771,9 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       >
         <DialogPopup className="max-w-lg">
           <DialogHeader>
-            <DialogTitle>Project grouping</DialogTitle>
+            <DialogTitle>
+              <UiText english={"Project grouping"} />
+            </DialogTitle>
             <DialogDescription>
               {projectGroupingTarget
                 ? `Choose how ${projectGroupingTarget.cwd} should be grouped in the sidebar.`
@@ -2737,7 +2782,9 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           </DialogHeader>
           <DialogPanel className="space-y-4">
             <div className="grid gap-1.5">
-              <span className="text-xs font-medium text-foreground">Grouping rule</span>
+              <span className="text-xs font-medium text-foreground">
+                <UiText english={"Grouping rule"} />
+              </span>
               <Select
                 value={projectGroupingSelection}
                 onValueChange={(value) => {
@@ -2751,7 +2798,10 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
                   }
                 }}
               >
-                <SelectTrigger className="w-full" aria-label="Project grouping rule">
+                <SelectTrigger
+                  className="w-full"
+                  aria-label={localizeUiLabel("Project grouping rule")}
+                >
                   <SelectValue>
                     {projectGroupingSelection === "inherit"
                       ? `Use global default (${PROJECT_GROUPING_MODE_LABELS[projectGroupingSettings.sidebarProjectGroupingMode]})`
@@ -2760,7 +2810,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
                 </SelectTrigger>
                 <SelectPopup align="end" alignItemWithTrigger={false}>
                   <SelectItem hideIndicator value="inherit">
-                    Use global default
+                    <UiText english={"Use global default"} />
                   </SelectItem>
                   <SelectItem hideIndicator value="repository">
                     {PROJECT_GROUPING_MODE_LABELS.repository}
@@ -2782,9 +2832,11 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           </DialogPanel>
           <DialogFooter>
             <Button variant="outline" onClick={closeProjectGroupingDialog}>
-              Cancel
+              <UiText english={"Cancel"} />
             </Button>
-            <Button onClick={saveProjectGroupingPreference}>Save</Button>
+            <Button onClick={saveProjectGroupingPreference}>
+              <UiText english={"Save"} />
+            </Button>
           </DialogFooter>
         </DialogPopup>
       </Dialog>
@@ -2799,7 +2851,9 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       >
         <DialogPopup className="max-w-lg">
           <DialogHeader>
-            <DialogTitle>Move Thread</DialogTitle>
+            <DialogTitle>
+              <UiText english={"Move Thread"} />
+            </DialogTitle>
             <DialogDescription>
               {threadMoveTarget
                 ? `Move "${threadMoveTarget.title}" to another project folder.`
@@ -2808,7 +2862,9 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           </DialogHeader>
           <DialogPanel className="space-y-4">
             <div className="grid gap-1.5">
-              <span className="text-xs font-medium text-foreground">Project folder</span>
+              <span className="text-xs font-medium text-foreground">
+                <UiText english={"Project folder"} />
+              </span>
               <Select
                 value={threadMoveProjectId ?? ""}
                 onValueChange={(value) => {
@@ -2820,7 +2876,10 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
                   }
                 }}
               >
-                <SelectTrigger className="w-full" aria-label="Destination project folder">
+                <SelectTrigger
+                  className="w-full"
+                  aria-label={localizeUiLabel("Destination project folder")}
+                >
                   <SelectValue>
                     {selectedThreadMoveProject
                       ? selectedThreadMoveProject.name
@@ -2849,7 +2908,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           </DialogPanel>
           <DialogFooter>
             <Button variant="outline" onClick={closeThreadMoveDialog}>
-              Cancel
+              <UiText english={"Cancel"} />
             </Button>
             <Button
               disabled={threadMoveSubmitting || !threadMoveTarget || !selectedThreadMoveProject}
@@ -2880,7 +2939,9 @@ function CafeCodeWordmark() {
   return (
     <span aria-label={`${prefix} Code`} className="shrink-0 text-sm text-foreground">
       <span className="font-bold">{prefix}</span>
-      <span className="font-medium text-muted-foreground"> Code</span>
+      <span className="font-medium text-muted-foreground">
+        <UiText english={" Code"} />
+      </span>
     </span>
   );
 }
@@ -2909,6 +2970,8 @@ function ProjectSortMenu({
   onProjectGroupingModeChange: (mode: SidebarProjectGroupingMode) => void;
   onThreadPreviewCountChange: (count: SidebarThreadPreviewCount) => void;
 }) {
+  const { t: localizeUiLabel } = useUiLocalization();
+
   const handleThreadPreviewCountChange = useCallback(
     (nextValue: number | null) => {
       if (nextValue === null) {
@@ -2933,12 +2996,14 @@ function ProjectSortMenu({
         >
           <ArrowUpDownIcon className="size-3.5" />
         </TooltipTrigger>
-        <TooltipPopup side="right">Sidebar options</TooltipPopup>
+        <TooltipPopup side="right">
+          <UiText english={"Sidebar options"} />
+        </TooltipPopup>
       </Tooltip>
       <MenuPopup align="end" side="bottom" className="min-w-52">
         <MenuGroup>
           <div className="px-2 py-1 sm:text-xs font-medium text-muted-foreground">
-            Sort projects
+            <UiText english={"Sort projects"} />
           </div>
           <MenuRadioGroup
             value={projectSortOrder}
@@ -2957,7 +3022,7 @@ function ProjectSortMenu({
         </MenuGroup>
         <MenuGroup>
           <div className="px-2 pt-2 pb-1 sm:text-xs font-medium text-muted-foreground">
-            Sort threads
+            <UiText english={"Sort threads"} />
           </div>
           <MenuRadioGroup
             value={threadSortOrder}
@@ -2976,11 +3041,11 @@ function ProjectSortMenu({
         </MenuGroup>
         <MenuGroup>
           <div className="px-2 pt-2 pb-1 text-muted-foreground sm:text-xs font-medium">
-            Visible threads
+            <UiText english={"Visible threads"} />
           </div>
           <div className="px-2 py-1">
             <NumberField
-              aria-label="Visible thread count"
+              aria-label={localizeUiLabel("Visible thread count")}
               className="w-28 gap-0"
               max={MAX_SIDEBAR_THREAD_PREVIEW_COUNT}
               min={MIN_SIDEBAR_THREAD_PREVIEW_COUNT}
@@ -2991,11 +3056,11 @@ function ProjectSortMenu({
             >
               <NumberFieldGroup className="h-7 rounded-md sm:h-6.5">
                 <NumberFieldDecrement
-                  aria-label="Decrease visible thread count"
+                  aria-label={localizeUiLabel("Decrease visible thread count")}
                   className="px-2 sm:px-2 [&_svg]:size-3.5"
                 />
                 <NumberFieldInput
-                  aria-label="Visible thread count"
+                  aria-label={localizeUiLabel("Visible thread count")}
                   className="h-7 w-9 grow-0 px-0 text-xs leading-7 sm:h-6.5 sm:leading-6.5"
                   inputMode="numeric"
                   onKeyDownCapture={(event) => {
@@ -3003,7 +3068,7 @@ function ProjectSortMenu({
                   }}
                 />
                 <NumberFieldIncrement
-                  aria-label="Increase visible thread count"
+                  aria-label={localizeUiLabel("Increase visible thread count")}
                   className="px-2 sm:px-2 [&_svg]:size-3.5"
                 />
               </NumberFieldGroup>
@@ -3013,7 +3078,7 @@ function ProjectSortMenu({
         <MenuSeparator />
         <MenuGroup>
           <div className="px-2 pt-2 pb-1 font-medium text-muted-foreground sm:text-xs">
-            Group projects
+            <UiText english={"Group projects"} />
           </div>
           <MenuRadioGroup
             value={projectGroupingMode}
@@ -3081,6 +3146,8 @@ const SidebarChromeHeader = memo(function SidebarChromeHeader({
 }: {
   isElectron: boolean;
 }) {
+  const { t: localizeUiLabel } = useUiLocalization();
+
   const wordmark = (
     <div className="flex min-w-0 flex-1 items-center gap-2">
       <SidebarTriggerWithUnreadDot />
@@ -3101,7 +3168,7 @@ const SidebarChromeHeader = memo(function SidebarChromeHeader({
               </span>
             ) : (
               <Link
-                aria-label="Go to threads"
+                aria-label={localizeUiLabel("Go to threads")}
                 className="ml-1 flex min-w-0 flex-1 cursor-pointer items-center gap-1 rounded-md outline-hidden ring-ring transition-colors hover:text-foreground focus-visible:ring-2"
                 to="/"
               >
@@ -3114,7 +3181,8 @@ const SidebarChromeHeader = memo(function SidebarChromeHeader({
           }
         />
         <TooltipPopup side="bottom" sideOffset={2}>
-          Version {APP_VERSION}
+          <UiText english={"Version "} />
+          {APP_VERSION}
         </TooltipPopup>
       </Tooltip>
     </div>
@@ -3225,6 +3293,8 @@ interface SidebarProjectsContentProps {
 const SidebarProjectsContent = memo(function SidebarProjectsContent(
   props: SidebarProjectsContentProps,
 ) {
+  const { t: localizeUiLabel } = useUiLocalization();
+
   const {
     primaryEnvironmentBootstrapped,
     bootstrappedEnvironmentIds,
@@ -3315,7 +3385,9 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
                 }
               >
                 <SearchIcon className="size-3.5" />
-                <span className="flex-1 truncate text-left text-xs">Search</span>
+                <span className="flex-1 truncate text-left text-xs">
+                  <UiText english={"Search"} />
+                </span>
                 {commandPaletteShortcutLabel ? (
                   <Kbd className="h-4 min-w-0 rounded-sm px-1.5 text-[10px]">
                     {commandPaletteShortcutLabel}
@@ -3330,7 +3402,9 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
         <SidebarGroup className="px-2 pt-2 pb-0">
           <Alert variant="warning" className="rounded-2xl border-warning/40 bg-warning/8">
             <TriangleAlertIcon />
-            <AlertTitle>Intel build on Apple Silicon</AlertTitle>
+            <AlertTitle>
+              <UiText english={"Intel build on Apple Silicon"} />
+            </AlertTitle>
             <AlertDescription>{arm64IntelBuildWarningDescription}</AlertDescription>
             {desktopUpdateButtonAction !== "none" ? (
               <AlertAction>
@@ -3354,7 +3428,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
       <SidebarGroup className="px-2 py-2">
         <div className="mb-1 flex items-center justify-between pl-2 pr-1.5">
           <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">
-            Projects
+            <UiText english={"Projects"} />
           </span>
           <div className="flex items-center gap-1">
             <ProjectSortMenu
@@ -3373,7 +3447,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
                   <button
                     ref={addProjectHintAnchorRef}
                     type="button"
-                    aria-label="Add project"
+                    aria-label={localizeUiLabel("Add project")}
                     data-testid="sidebar-add-project-trigger"
                     className="inline-flex size-5 cursor-pointer items-center justify-center rounded-md text-muted-foreground/60 transition-colors hover:bg-accent hover:text-foreground"
                     onClick={openAddProject}
@@ -3382,7 +3456,9 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
               >
                 <FolderPlusIcon className="size-3.5" />
               </TooltipTrigger>
-              <TooltipPopup side="right">Add project</TooltipPopup>
+              <TooltipPopup side="right">
+                <UiText english={"Add project"} />
+              </TooltipPopup>
             </Tooltip>
             <FirstRunHint
               anchor={addProjectHintAnchorRef}

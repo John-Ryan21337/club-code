@@ -1,4 +1,5 @@
-"use client";
+import { UiText } from "../../uiLocalization";
+("use client");
 
 import { useMemo, type ReactNode } from "react";
 import * as Option from "effect/Option";
@@ -507,7 +508,7 @@ function ProviderSettingsFieldRow({
             className="mt-1 h-6 px-1.5 text-[11px] text-muted-foreground"
             onClick={() => onChange(clearProviderConfigPassword(value, field))}
           >
-            Clear stored password
+            <UiText english={"Clear stored password"} />
           </Button>
         ) : null}
         {description}

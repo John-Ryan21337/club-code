@@ -1,3 +1,4 @@
+import { UiText, useUiLocalization } from "../../uiLocalization";
 import {
   PlusIcon,
   RefreshCcwIcon,
@@ -229,7 +230,9 @@ function SavedEnvironmentRow({
                 <RefreshCcwIcon className="size-4" />
               )}
             </TooltipTrigger>
-            <TooltipPopup>{isConnected ? "Disconnect" : "Reconnect"}</TooltipPopup>
+            <TooltipPopup>
+              {isConnected ? <UiText english={"Disconnect"} /> : "Reconnect"}
+            </TooltipPopup>
           </Tooltip>
 
           <Tooltip>
@@ -250,7 +253,9 @@ function SavedEnvironmentRow({
             >
               <TrashIcon className="size-4" />
             </TooltipTrigger>
-            <TooltipPopup>Remove saved environment</TooltipPopup>
+            <TooltipPopup>
+              <UiText english={"Remove saved environment"} />
+            </TooltipPopup>
           </Tooltip>
         </div>
       </div>
@@ -263,7 +268,9 @@ function SavedEnvironmentRow({
       >
         <AlertDialogPopup>
           <AlertDialogHeader>
-            <AlertDialogTitle>Remove saved environment?</AlertDialogTitle>
+            <AlertDialogTitle>
+              <UiText english={"Remove saved environment?"} />
+            </AlertDialogTitle>
             <AlertDialogDescription>
               This removes {displayLabel} and its saved credential from this client.
             </AlertDialogDescription>
@@ -272,7 +279,7 @@ function SavedEnvironmentRow({
             <AlertDialogClose
               render={<Button variant="outline" disabled={pendingAction !== null} />}
             >
-              Cancel
+              <UiText english={"Cancel"} />
             </AlertDialogClose>
             <Button
               variant="destructive"
@@ -280,7 +287,7 @@ function SavedEnvironmentRow({
               onClick={() => void runAction("remove")}
             >
               {pendingAction === "remove" ? <Spinner className="size-4" /> : null}
-              {pendingAction === "remove" ? "Removing" : "Remove"}
+              {pendingAction === "remove" ? "Removing" : <UiText english={"Remove"} />}
             </Button>
           </AlertDialogFooter>
         </AlertDialogPopup>
@@ -290,6 +297,8 @@ function SavedEnvironmentRow({
 }
 
 function AddSavedEnvironmentDialog({ actions }: { actions: SavedEnvironmentActions }) {
+  const { t: localizeUiLabel } = useUiLocalization();
+
   const [isOpen, setIsOpen] = useState(false);
   const [tab, setTab] = useState<"url" | "code">("url");
   const [label, setLabel] = useState("");
@@ -357,23 +366,27 @@ function AddSavedEnvironmentDialog({ actions }: { actions: SavedEnvironmentActio
             <Button
               variant="ghost"
               size="icon-xs"
-              aria-label="Add environment"
+              aria-label={localizeUiLabel("Add environment")}
               onClick={() => setIsOpen(true)}
             />
           }
         >
           <PlusIcon className="size-4" />
         </TooltipTrigger>
-        <TooltipPopup>Add environment</TooltipPopup>
+        <TooltipPopup>
+          <UiText english={"Add environment"} />
+        </TooltipPopup>
       </Tooltip>
       <DialogPopup showCloseButton={!isSubmitting}>
         <DialogHeader>
-          <DialogTitle>Add saved environment</DialogTitle>
+          <DialogTitle>
+            <UiText english={"Add saved environment"} />
+          </DialogTitle>
           <DialogDescription>Remote Cafe Code server</DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit}>
           <DialogPanel className="flex flex-col gap-4">
-            <Group className="w-full" aria-label="Pairing method">
+            <Group className="w-full" aria-label={localizeUiLabel("Pairing method")}>
               <Button
                 type="button"
                 variant={tab === "url" ? "secondary" : "outline"}
@@ -385,7 +398,7 @@ function AddSavedEnvironmentDialog({ actions }: { actions: SavedEnvironmentActio
                 }}
                 disabled={isSubmitting}
               >
-                Pairing URL
+                <UiText english={"Pairing URL"} />
               </Button>
               <Button
                 type="button"
@@ -398,19 +411,19 @@ function AddSavedEnvironmentDialog({ actions }: { actions: SavedEnvironmentActio
                 }}
                 disabled={isSubmitting}
               >
-                Host + Code
+                <UiText english={"Host + Code"} />
               </Button>
             </Group>
 
             <div className="flex flex-col gap-2">
               <label htmlFor="env-label" className="text-sm font-medium">
-                Label (optional)
+                <UiText english={"Label (optional)"} />
               </label>
               <Input
                 id="env-label"
                 value={label}
                 onChange={(event) => setLabel(event.target.value)}
-                placeholder="Production server"
+                placeholder={localizeUiLabel("Production server")}
                 disabled={isSubmitting}
               />
             </div>
@@ -418,7 +431,7 @@ function AddSavedEnvironmentDialog({ actions }: { actions: SavedEnvironmentActio
             {tab === "url" ? (
               <div className="flex flex-col gap-2">
                 <label htmlFor="env-url" className="text-sm font-medium">
-                  Pairing URL
+                  <UiText english={"Pairing URL"} />
                 </label>
                 <Input
                   id="env-url"
@@ -447,13 +460,13 @@ function AddSavedEnvironmentDialog({ actions }: { actions: SavedEnvironmentActio
                 </div>
                 <div className="flex flex-col gap-2">
                   <label htmlFor="env-code" className="text-sm font-medium">
-                    Pairing code
+                    <UiText english={"Pairing code"} />
                   </label>
                   <Input
                     id="env-code"
                     value={pairingCode}
                     onChange={(event) => setPairingCode(event.target.value)}
-                    placeholder="Pairing code"
+                    placeholder={localizeUiLabel("Pairing code")}
                     required
                     disabled={isSubmitting}
                     autoComplete="off"
@@ -472,7 +485,7 @@ function AddSavedEnvironmentDialog({ actions }: { actions: SavedEnvironmentActio
               onClick={() => handleOpenChange(false)}
               disabled={isSubmitting}
             >
-              Cancel
+              <UiText english={"Cancel"} />
             </Button>
             <Button type="submit" disabled={isSubmitting}>
               {isSubmitting ? (
@@ -496,6 +509,8 @@ export function SavedEnvironmentsSettings({
 }: {
   actions?: SavedEnvironmentActions;
 } = {}) {
+  const { t: localizeUiLabel } = useUiLocalization();
+
   const registryById = useSavedEnvironmentRegistryStore((state) => state.byId);
   const runtimeById = useSavedEnvironmentRuntimeStore((state) => state.byId);
   const records = useMemo(
@@ -505,11 +520,11 @@ export function SavedEnvironmentsSettings({
 
   return (
     <SettingsSection
-      title="Saved environments"
+      title={localizeUiLabel("Saved environments")}
       headerAction={<AddSavedEnvironmentDialog actions={actions} />}
     >
       {records.length === 0 ? (
-        <SettingsRow title="No remote servers paired" description={null} />
+        <SettingsRow title={localizeUiLabel("No remote servers paired")} description={null} />
       ) : (
         records.map((record) => (
           <SavedEnvironmentRow

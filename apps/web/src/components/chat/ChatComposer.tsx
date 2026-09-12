@@ -1,3 +1,4 @@
+import { UiText, useUiLocalization } from "../../uiLocalization";
 import type {
   ApprovalRequestId,
   ChatFileAttachment,
@@ -474,6 +475,8 @@ export function FollowUpQueueShelf(props: {
   onClear: () => void;
   onExpandImage: (preview: ExpandedImagePreview) => void;
 }) {
+  const { t: localizeUiLabel } = useUiLocalization();
+
   const steeringItems = props.steeringItems ?? [];
   if (props.items.length === 0 && steeringItems.length === 0) {
     return null;
@@ -502,7 +505,7 @@ export function FollowUpQueueShelf(props: {
             className="h-7 shrink-0 px-2 text-muted-foreground/80 hover:text-foreground"
             onClick={props.onClear}
           >
-            Clear
+            <UiText english={"Clear"} />
           </Button>
         ) : null}
       </div>
@@ -528,10 +531,12 @@ export function FollowUpQueueShelf(props: {
               </div>
               <span
                 className="h-7 shrink-0 rounded-md border border-border/60 px-2 py-1 text-muted-foreground/85 text-xs"
-                aria-label="Follow-up steering into active turn"
-                title="Follow-up accepted for the active turn; waiting for the provider to act on it."
+                aria-label={localizeUiLabel("Follow-up steering into active turn")}
+                title={localizeUiLabel(
+                  "Follow-up accepted for the active turn; waiting for the provider to act on it.",
+                )}
               >
-                Steering
+                <UiText english={"Steering"} />
               </span>
             </div>
             {item.files && item.environmentId && item.files.length > 0 ? (
@@ -633,7 +638,7 @@ export function FollowUpQueueShelf(props: {
                   variant="ghost"
                   size="icon-sm"
                   className="size-7 shrink-0 text-muted-foreground/75 hover:text-destructive"
-                  aria-label="Remove queued message"
+                  aria-label={localizeUiLabel("Remove queued message")}
                   onClick={() => props.onRemove(item.id)}
                 >
                   <Trash2Icon className="size-4" />
@@ -687,7 +692,7 @@ export function FollowUpQueueShelf(props: {
                   ) : null}
                   <textarea
                     readOnly
-                    aria-label="Queued message prompt"
+                    aria-label={localizeUiLabel("Queued message prompt")}
                     value={item.promptText.trim().length > 0 ? item.promptText : item.preview}
                     className="max-h-36 min-h-20 w-full resize-none overflow-y-auto rounded-md border border-border/30 bg-background/40 p-2 text-muted-foreground text-xs leading-5 outline-none [overflow-wrap:anywhere]"
                     onChange={() => undefined}
@@ -843,6 +848,8 @@ export interface ChatComposerProps extends ComposerInteractionCallbacks {
 // --------------------------------------------------------------------------
 
 export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps) {
+  const { t: localizeUiLabel } = useUiLocalization();
+
   const {
     composerDraftTarget,
     environmentId,
@@ -3061,7 +3068,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 )}
                 onPointerDown={(event) => event.preventDefault()}
                 onClick={expandMobileComposer}
-                aria-label="Expand composer"
+                aria-label={localizeUiLabel("Expand composer")}
               >
                 {activePendingProgress
                   ? activePendingProgress.customAnswer ||
@@ -3252,7 +3259,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                             render={
                               <span
                                 role="img"
-                                aria-label="Draft attachment may not persist"
+                                aria-label={localizeUiLabel("Draft attachment may not persist")}
                                 className="absolute left-1 top-1 inline-flex items-center justify-center rounded bg-background/85 p-0.5 text-amber-600"
                               >
                                 <CircleAlertIcon className="size-3" />

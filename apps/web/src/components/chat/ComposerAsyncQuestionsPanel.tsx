@@ -1,3 +1,4 @@
+import { UiText } from "../../uiLocalization";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
@@ -275,7 +276,7 @@ function ScopedAsyncQuestionsPanel({
             }}
             className="rounded-md px-3 py-1.5 text-xs text-muted-foreground hover:bg-accent disabled:opacity-50"
           >
-            Skip
+            <UiText english={"Skip"} />
           </button>
         </div>
       </div>

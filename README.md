@@ -397,6 +397,8 @@ yarn typecheck
 yarn test
 ```
 
+Interface language: [English, Japanese, and bilingual setup](docs/interface-language.md).
+
 ## License
 
 Cafe Code is AGPL-3.0-or-later.

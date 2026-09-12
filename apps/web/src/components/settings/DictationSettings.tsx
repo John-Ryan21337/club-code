@@ -1,3 +1,4 @@
+import { UiText } from "../../uiLocalization";
 import {
   CheckCircle2Icon,
   KeyRoundIcon,
@@ -83,7 +84,7 @@ function statusBadge(input: {
     return (
       <Badge variant="error" size="sm">
         <TriangleAlertIcon />
-        Unavailable
+        <UiText english={"Unavailable"} />
       </Badge>
     );
   }
@@ -92,7 +93,7 @@ function statusBadge(input: {
     return (
       <Badge variant="secondary" size="sm">
         <Spinner />
-        Checking
+        <UiText english={"Checking"} />
       </Badge>
     );
   }
@@ -108,7 +109,7 @@ function statusBadge(input: {
 
   return (
     <Badge variant="secondary" size="sm">
-      Not configured
+      <UiText english={"Not configured"} />
     </Badge>
   );
 }
@@ -314,7 +315,7 @@ export function DictationSettings() {
                 {operation === "saving" ? (
                   <>
                     <Spinner className="size-3.5" />
-                    Saving…
+                    <UiText english={"Saving…"} />
                   </>
                 ) : (
                   <>
@@ -382,7 +383,7 @@ export function DictationSettings() {
               disabled={operation === "removing"}
               render={<Button variant="outline" disabled={operation === "removing"} />}
             >
-              Cancel
+              <UiText english={"Cancel"} />
             </AlertDialogClose>
             <Button
               type="button"

@@ -1,3 +1,4 @@
+import { UiText } from "../../uiLocalization";
 import { useEffect, useState } from "react";
 import { CircleAlertIcon, LoaderCircleIcon, RefreshCwIcon, WifiOffIcon } from "lucide-react";
 import type { EnvironmentId } from "@cafecode/contracts";
@@ -178,11 +179,17 @@ export function ConnectionStatusIndicator({
       >
         <div className="space-y-1.5 leading-tight">
           <div className="text-[12px] font-medium text-foreground">
-            {issue === "offline" ? "Offline" : `Disconnected from ${connectionDisplayName}`}
+            {issue === "offline" ? (
+              <UiText english={"Offline"} />
+            ) : (
+              `Disconnected from ${connectionDisplayName}`
+            )}
           </div>
           <div className="space-y-0.5 text-[11px] text-muted-foreground">
             {issue === "offline" ? (
-              <div>Waiting for network.</div>
+              <div>
+                <UiText english={"Waiting for network."} />
+              </div>
             ) : issue === "exhausted" ? (
               <div>
                 {attemptLabel

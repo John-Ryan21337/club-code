@@ -1,3 +1,4 @@
+import { useUiLocalization } from "../uiLocalization";
 import { DiffsHighlighter, getSharedHighlighter, SupportedLanguages } from "@pierre/diffs";
 import { CheckIcon, CopyIcon } from "lucide-react";
 import type { ServerProviderSkill } from "@cafecode/contracts";
@@ -211,6 +212,8 @@ function getHighlighterPromise(language: string): Promise<DiffsHighlighter> {
 }
 
 function MarkdownCodeBlock({ code, children }: { code: string; children: ReactNode }) {
+  const { t: localizeUiLabel } = useUiLocalization();
+
   const [copied, setCopied] = useState(false);
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const handleCopy = useCallback(() => {
@@ -244,8 +247,8 @@ function MarkdownCodeBlock({ code, children }: { code: string; children: ReactNo
         type="button"
         className="chat-markdown-copy-button"
         onClick={handleCopy}
-        title={copied ? "Copied" : "Copy code"}
-        aria-label={copied ? "Copied" : "Copy code"}
+        title={copied ? "Copied" : localizeUiLabel("Copy code")}
+        aria-label={copied ? "Copied" : localizeUiLabel("Copy code")}
       >
         {copied ? <CheckIcon className="size-3" /> : <CopyIcon className="size-3" />}
       </button>

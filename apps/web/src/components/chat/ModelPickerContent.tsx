@@ -1,3 +1,4 @@
+import { UiText, useUiLocalization } from "../../uiLocalization";
 import {
   type ProviderInstanceId,
   type ProviderDriverKind,
@@ -82,6 +83,8 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
   onRequestClose?: () => void;
   onInstanceModelChange: (instanceId: ProviderInstanceId, model: string) => void;
 }) {
+  const { t: localizeUiLabel } = useUiLocalization();
+
   const {
     keybindings: providedKeybindings,
     modelOptionsByInstance,
@@ -570,7 +573,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
                 ref={searchInputRef}
                 className="[&_input]:font-sans rounded-md"
                 inputClassName="border-0 shadow-none ring-0 focus-visible:ring-0"
-                placeholder="Search models..."
+                placeholder={localizeUiLabel("Search models...")}
                 showTrigger={false}
                 startAddon={<SearchIcon className="size-4 shrink-0 text-muted-foreground/50" />}
                 value={searchQuery}
@@ -635,7 +638,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
               </ComboboxList>
             </div>
             <ComboboxEmpty className="not-empty:py-6 empty:h-0 text-xs font-normal leading-snug">
-              No models found
+              <UiText english={"No models found"} />
             </ComboboxEmpty>
           </div>
         </Combobox>

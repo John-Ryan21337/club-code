@@ -1,4 +1,5 @@
-"use client";
+import { useUiLocalization } from "../../uiLocalization";
+("use client");
 
 import { Toast } from "@base-ui/react/toast";
 import {
@@ -112,13 +113,15 @@ function handleToastDismissClick(
 }
 
 function CopyErrorButton({ text }: { text: string }) {
+  const { t: localizeUiLabel } = useUiLocalization();
+
   const { copyToClipboard, isCopied } = useCopyToClipboard();
 
   return (
     <button
       className="inline-flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-md p-0 text-muted-foreground/80 transition-colors hover:text-muted-foreground"
       onClick={() => copyToClipboard(text)}
-      title="Copy error"
+      title={localizeUiLabel("Copy error")}
       type="button"
     >
       {isCopied ? <CheckIcon className="size-3 text-success" /> : <CopyIcon className="size-3" />}
@@ -502,6 +505,8 @@ function ToastProvider({ children, position = "top-right", ...props }: ToastProv
 }
 
 function Toasts({ position = "top-right" }: { position: ToastPosition }) {
+  const { t: localizeUiLabel } = useUiLocalization();
+
   const { toasts } = Toast.useToastManager<ThreadToastData>();
   const activeThreadRef = useActiveThreadRefFromRoute();
   const isTop = position.startsWith("top");
@@ -626,7 +631,7 @@ function Toasts({ position = "top-right" }: { position: ToastPosition }) {
               />
               <div className={toastCornerDismissClass}>
                 <button
-                  aria-label="Dismiss notification"
+                  aria-label={localizeUiLabel("Dismiss notification")}
                   className={toastCornerOrbClass}
                   data-slot="toast-close"
                   onClick={() =>
@@ -675,6 +680,8 @@ function AnchoredToastProvider({ children, ...props }: Toast.Provider.Props) {
 }
 
 function AnchoredToasts() {
+  const { t: localizeUiLabel } = useUiLocalization();
+
   const { toasts } = Toast.useToastManager<ThreadToastData>();
   const activeThreadRef = useActiveThreadRefFromRoute();
 
@@ -719,7 +726,7 @@ function AnchoredToasts() {
                     <>
                       <div className={toastCornerDismissClass}>
                         <button
-                          aria-label="Dismiss notification"
+                          aria-label={localizeUiLabel("Dismiss notification")}
                           className={toastCornerOrbClass}
                           data-slot="toast-close"
                           onClick={() =>

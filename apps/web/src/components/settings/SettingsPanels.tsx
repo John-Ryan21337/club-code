@@ -1,3 +1,4 @@
+import { UiText, useUiLocalization } from "../../uiLocalization";
 import {
   ArchiveIcon,
   ArchiveX,
@@ -53,6 +54,7 @@ import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import { TraitsPicker } from "../chat/TraitsPicker";
 import { useTheme } from "../../hooks/useTheme";
 import { useSettings, useUpdateSettings } from "../../hooks/useSettings";
+import { InterfaceLanguageSettings } from "./InterfaceLanguageSettings";
 import { useThreadActions } from "../../hooks/useThreadActions";
 import {
   setDesktopSourceUpdateStateQueryData,
@@ -233,11 +235,15 @@ function ProviderLastChecked({ lastCheckedAt }: { lastCheckedAt: string | null }
     <span className="text-[11px] text-muted-foreground/60">
       {lastCheckedRelative.suffix ? (
         <>
-          Checked <span className="font-mono tabular-nums">{lastCheckedRelative.value}</span>{" "}
+          <UiText english={"Checked "} />
+          <span className="font-mono tabular-nums">{lastCheckedRelative.value}</span>{" "}
           {lastCheckedRelative.suffix}
         </>
       ) : (
-        <>Checked {lastCheckedRelative.value}</>
+        <>
+          <UiText english={"Checked "} />
+          {lastCheckedRelative.value}
+        </>
       )}
     </span>
   );
@@ -303,7 +309,9 @@ function getSourceUpdateDescription(
 function AboutVersionTitle({ state }: { readonly state: DesktopSourceUpdateState | null }) {
   return (
     <span className="inline-flex items-center gap-2">
-      <span>Version</span>
+      <span>
+        <UiText english={"Version"} />
+      </span>
       <code className="text-[11px] font-medium text-muted-foreground">
         {APP_VERSION} ({getSourceUpdateBranchLabel(state)})
       </code>
@@ -355,7 +363,9 @@ function AboutVersionSection() {
             }
           />
           {!hasDesktopBridge ? (
-            <TooltipPopup>Source update checks are only available in the desktop app.</TooltipPopup>
+            <TooltipPopup>
+              <UiText english={"Source update checks are only available in the desktop app."} />
+            </TooltipPopup>
           ) : null}
         </Tooltip>
       }
@@ -537,6 +547,8 @@ export function useSettingsRestore(onRestored?: () => void) {
 }
 
 export function TextGenerationModelSettingsRow() {
+  const { t: localizeUiLabel } = useUiLocalization();
+
   const settings = useSettings();
   const { updateSettings } = useUpdateSettings();
   const serverProviders = useServerProviders();
@@ -565,8 +577,10 @@ export function TextGenerationModelSettingsRow() {
 
   return (
     <SettingsRow
-      title="Text generation model"
-      description="Configure the model used for generated commit messages, PR titles, and similar Git text."
+      title={localizeUiLabel("Text generation model")}
+      description={localizeUiLabel(
+        "Configure the model used for generated commit messages, PR titles, and similar Git text.",
+      )}
       resetAction={
         isGitWritingModelDirty ? (
           <SettingResetButton
@@ -642,6 +656,8 @@ export function GeneralSettingsPanel() {
 }
 
 export function AppearanceSettingsPanel() {
+  const { t: localizeUiLabel } = useUiLocalization();
+
   const { theme, setTheme } = useTheme();
   const settings = useSettings();
   const { updateSettings } = useUpdateSettings();
@@ -723,9 +739,10 @@ export function AppearanceSettingsPanel() {
 
   return (
     <SettingsPageContainer>
-      <SettingsSection title="Appearance">
+      <InterfaceLanguageSettings />
+      <SettingsSection title={localizeUiLabel("Appearance")}>
         <SettingsRow
-          title="Theme"
+          title={localizeUiLabel("Theme")}
           description="Choose how Cafe Code looks across the app."
           resetAction={
             theme !== "system" ? (
@@ -741,7 +758,10 @@ export function AppearanceSettingsPanel() {
                 }
               }}
             >
-              <SelectTrigger className="w-full sm:w-40" aria-label="Theme preference">
+              <SelectTrigger
+                className="w-full sm:w-40"
+                aria-label={localizeUiLabel("Theme preference")}
+              >
                 <SelectValue>
                   {THEME_OPTIONS.find((option) => option.value === theme)?.label ?? "System"}
                 </SelectValue>
@@ -790,8 +810,10 @@ export function AppearanceSettingsPanel() {
         />
 
         <SettingsRow
-          title="Branding prefix"
-          description="Rename the first word of the sidebar wordmark while keeping the Code suffix."
+          title={localizeUiLabel("Branding prefix")}
+          description={localizeUiLabel(
+            "Rename the first word of the sidebar wordmark while keeping the Code suffix.",
+          )}
           resetAction={
             settings.brandWordmarkPrefix !== DEFAULT_UNIFIED_SETTINGS.brandWordmarkPrefix ? (
               <SettingResetButton
@@ -805,7 +827,7 @@ export function AppearanceSettingsPanel() {
           status={`Preview: ${renderedBrandPrefix} Code`}
           control={
             <DraftInput
-              aria-label="Branding prefix"
+              aria-label={localizeUiLabel("Branding prefix")}
               className="w-full sm:w-48"
               maxLength={MAX_BRAND_WORDMARK_PREFIX_LENGTH}
               placeholder={DEFAULT_BRAND_WORDMARK_PREFIX}
@@ -820,8 +842,10 @@ export function AppearanceSettingsPanel() {
         />
 
         <SettingsRow
-          title="Accent color"
-          description="Choose the primary color used for buttons, focused controls, and rings."
+          title={localizeUiLabel("Accent color")}
+          description={localizeUiLabel(
+            "Choose the primary color used for buttons, focused controls, and rings.",
+          )}
           resetAction={
             settings.appAccentColor !== DEFAULT_UNIFIED_SETTINGS.appAccentColor ? (
               <SettingResetButton
@@ -842,8 +866,10 @@ export function AppearanceSettingsPanel() {
         />
 
         <SettingsRow
-          title="Sidebar color"
-          description="Choose the color used by the animated sidebar stars and glow."
+          title={localizeUiLabel("Sidebar color")}
+          description={localizeUiLabel(
+            "Choose the color used by the animated sidebar stars and glow.",
+          )}
           resetAction={
             settings.themeAccentColor !== DEFAULT_UNIFIED_SETTINGS.themeAccentColor ? (
               <SettingResetButton
@@ -864,8 +890,10 @@ export function AppearanceSettingsPanel() {
         />
 
         <SettingsRow
-          title="Sidebar image"
-          description="Use a local PNG, JPEG, GIF, or WebP image at the bottom of the sidebar."
+          title={localizeUiLabel("Sidebar image")}
+          description={localizeUiLabel(
+            "Use a local PNG, JPEG, GIF, or WebP image at the bottom of the sidebar.",
+          )}
           resetAction={
             settings.sidebarBrandImage !== DEFAULT_UNIFIED_SETTINGS.sidebarBrandImage ? (
               <SettingResetButton
@@ -919,7 +947,7 @@ export function AppearanceSettingsPanel() {
                         });
                       }}
                     >
-                      Use default
+                      <UiText english={"Use default"} />
                     </Button>
                   ) : null}
                 </div>
@@ -928,7 +956,7 @@ export function AppearanceSettingsPanel() {
                 ref={sidebarImageInputRef}
                 type="file"
                 accept={SIDEBAR_IMAGE_ACCEPT}
-                aria-label="Sidebar image file"
+                aria-label={localizeUiLabel("Sidebar image file")}
                 className="sr-only"
                 tabIndex={-1}
                 onChange={(event) => void handleSidebarImageChange(event)}
@@ -938,8 +966,8 @@ export function AppearanceSettingsPanel() {
         />
 
         <SettingsRow
-          title="Sidebar search"
-          description="Show the search button at the top of the sidebar."
+          title={localizeUiLabel("Sidebar search")}
+          description={localizeUiLabel("Show the search button at the top of the sidebar.")}
           resetAction={
             settings.showSidebarSearch !== DEFAULT_UNIFIED_SETTINGS.showSidebarSearch ? (
               <SettingResetButton
@@ -952,14 +980,14 @@ export function AppearanceSettingsPanel() {
             <Switch
               checked={settings.showSidebarSearch}
               onCheckedChange={(checked) => updateSettings({ showSidebarSearch: Boolean(checked) })}
-              aria-label="Show sidebar search"
+              aria-label={localizeUiLabel("Show sidebar search")}
             />
           }
         />
 
         <SettingsRow
-          title="Sidebar mascot"
-          description="Show the sidebar image at the bottom of the sidebar."
+          title={localizeUiLabel("Sidebar mascot")}
+          description={localizeUiLabel("Show the sidebar image at the bottom of the sidebar.")}
           resetAction={
             settings.showSidebarMascot !== DEFAULT_UNIFIED_SETTINGS.showSidebarMascot ? (
               <SettingResetButton
@@ -972,14 +1000,14 @@ export function AppearanceSettingsPanel() {
             <Switch
               checked={settings.showSidebarMascot}
               onCheckedChange={(checked) => updateSettings({ showSidebarMascot: Boolean(checked) })}
-              aria-label="Show sidebar mascot"
+              aria-label={localizeUiLabel("Show sidebar mascot")}
             />
           }
         />
 
         <SettingsRow
-          title="Sidebar attribution"
-          description="Show the attribution message below the sidebar image."
+          title={localizeUiLabel("Sidebar attribution")}
+          description={localizeUiLabel("Show the attribution message below the sidebar image.")}
           resetAction={
             settings.showSidebarAttribution !== DEFAULT_UNIFIED_SETTINGS.showSidebarAttribution ? (
               <SettingResetButton
@@ -996,13 +1024,13 @@ export function AppearanceSettingsPanel() {
               onCheckedChange={(checked) =>
                 updateSettings({ showSidebarAttribution: Boolean(checked) })
               }
-              aria-label="Show sidebar attribution"
+              aria-label={localizeUiLabel("Show sidebar attribution")}
             />
           }
         />
 
         <SettingsRow
-          title="Background animations"
+          title={localizeUiLabel("Background animations")}
           description="Keep decorative animations running when Cafe Code is hidden or unfocused."
           resetAction={
             settings.continueBackgroundAnimations !==
@@ -1023,14 +1051,14 @@ export function AppearanceSettingsPanel() {
               onCheckedChange={(checked) =>
                 updateSettings({ continueBackgroundAnimations: Boolean(checked) })
               }
-              aria-label="Keep animations running in background"
+              aria-label={localizeUiLabel("Keep animations running in background")}
             />
           }
         />
 
         <SettingsRow
-          title="Sidebar star speed"
-          description="Adjust how quickly the decorative sidebar stars drift."
+          title={localizeUiLabel("Sidebar star speed")}
+          description={localizeUiLabel("Adjust how quickly the decorative sidebar stars drift.")}
           resetAction={
             settings.sidebarStarSpeed !== DEFAULT_UNIFIED_SETTINGS.sidebarStarSpeed ? (
               <SettingResetButton
@@ -1053,9 +1081,13 @@ export function AppearanceSettingsPanel() {
                 }
               >
                 <NumberFieldGroup>
-                  <NumberFieldDecrement aria-label="Decrease sidebar star speed" />
-                  <NumberFieldInput aria-label="Sidebar star speed multiplier" />
-                  <NumberFieldIncrement aria-label="Increase sidebar star speed" />
+                  <NumberFieldDecrement
+                    aria-label={localizeUiLabel("Decrease sidebar star speed")}
+                  />
+                  <NumberFieldInput aria-label={localizeUiLabel("Sidebar star speed multiplier")} />
+                  <NumberFieldIncrement
+                    aria-label={localizeUiLabel("Increase sidebar star speed")}
+                  />
                 </NumberFieldGroup>
               </NumberField>
               <span className="text-xs text-muted-foreground">x</span>
@@ -1064,8 +1096,10 @@ export function AppearanceSettingsPanel() {
         />
 
         <SettingsRow
-          title="Time format"
-          description="System default follows your browser or OS clock preference."
+          title={localizeUiLabel("Time format")}
+          description={localizeUiLabel(
+            "System default follows your browser or OS clock preference.",
+          )}
           resetAction={
             settings.timestampFormat !== DEFAULT_UNIFIED_SETTINGS.timestampFormat ? (
               <SettingResetButton
@@ -1085,7 +1119,10 @@ export function AppearanceSettingsPanel() {
                 }
               }}
             >
-              <SelectTrigger className="w-full sm:w-40" aria-label="Timestamp format">
+              <SelectTrigger
+                className="w-full sm:w-40"
+                aria-label={localizeUiLabel("Timestamp format")}
+              >
                 <SelectValue>{TIMESTAMP_FORMAT_LABELS[settings.timestampFormat]}</SelectValue>
               </SelectTrigger>
               <SelectPopup align="end" alignItemWithTrigger={false}>
@@ -1108,6 +1145,8 @@ export function AppearanceSettingsPanel() {
 }
 
 export function ChatSettingsPanel() {
+  const { t: localizeUiLabel } = useUiLocalization();
+
   const settings = useSettings();
   const { updateSettings } = useUpdateSettings();
   const [isOpeningSystemPromptFile, setIsOpeningSystemPromptFile] = useState(false);
@@ -1152,10 +1191,12 @@ export function ChatSettingsPanel() {
 
   return (
     <SettingsPageContainer>
-      <SettingsSection title="Chat & Threads">
+      <SettingsSection title={localizeUiLabel("Chat & Threads")}>
         <SettingsRow
-          title="Assistant output"
-          description="Show token-by-token output while a response is in progress."
+          title={localizeUiLabel("Assistant output")}
+          description={localizeUiLabel(
+            "Show token-by-token output while a response is in progress.",
+          )}
           resetAction={
             settings.enableAssistantStreaming !==
             DEFAULT_UNIFIED_SETTINGS.enableAssistantStreaming ? (
@@ -1175,7 +1216,7 @@ export function ChatSettingsPanel() {
               onCheckedChange={(checked) =>
                 updateSettings({ enableAssistantStreaming: Boolean(checked) })
               }
-              aria-label="Stream assistant messages"
+              aria-label={localizeUiLabel("Stream assistant messages")}
             />
           }
         />
@@ -1207,8 +1248,10 @@ export function ChatSettingsPanel() {
         />
 
         <SettingsRow
-          title="Chat selection copy"
-          description="Choose what Ctrl-C and right-click Copy put on the clipboard for selected chat message text."
+          title={localizeUiLabel("Chat selection copy")}
+          description={localizeUiLabel(
+            "Choose what Ctrl-C and right-click Copy put on the clipboard for selected chat message text.",
+          )}
           resetAction={
             settings.chatCopyFormat !== DEFAULT_UNIFIED_SETTINGS.chatCopyFormat ? (
               <SettingResetButton
@@ -1230,15 +1273,18 @@ export function ChatSettingsPanel() {
                 }
               }}
             >
-              <SelectTrigger className="w-full sm:w-44" aria-label="Chat selection copy format">
+              <SelectTrigger
+                className="w-full sm:w-44"
+                aria-label={localizeUiLabel("Chat selection copy format")}
+              >
                 <SelectValue>{CHAT_COPY_FORMAT_LABELS[settings.chatCopyFormat]}</SelectValue>
               </SelectTrigger>
               <SelectPopup align="end" alignItemWithTrigger={false}>
                 <SelectItem hideIndicator value="markdown">
-                  Markdown
+                  <UiText english={"Markdown"} />
                 </SelectItem>
                 <SelectItem hideIndicator value="plainText">
-                  Plain text
+                  <UiText english={"Plain text"} />
                 </SelectItem>
               </SelectPopup>
             </Select>
@@ -1246,8 +1292,10 @@ export function ChatSettingsPanel() {
         />
 
         <SettingsRow
-          title="New threads"
-          description="Pick the default workspace mode for newly created draft threads."
+          title={localizeUiLabel("New threads")}
+          description={localizeUiLabel(
+            "Pick the default workspace mode for newly created draft threads.",
+          )}
           resetAction={
             settings.defaultThreadEnvMode !== DEFAULT_UNIFIED_SETTINGS.defaultThreadEnvMode ? (
               <SettingResetButton
@@ -1269,17 +1317,24 @@ export function ChatSettingsPanel() {
                 }
               }}
             >
-              <SelectTrigger className="w-full sm:w-44" aria-label="Default thread mode">
+              <SelectTrigger
+                className="w-full sm:w-44"
+                aria-label={localizeUiLabel("Default thread mode")}
+              >
                 <SelectValue>
-                  {settings.defaultThreadEnvMode === "worktree" ? "New worktree" : "Local"}
+                  {settings.defaultThreadEnvMode === "worktree" ? (
+                    <UiText english={"New worktree"} />
+                  ) : (
+                    <UiText english={"Local"} />
+                  )}
                 </SelectValue>
               </SelectTrigger>
               <SelectPopup align="end" alignItemWithTrigger={false}>
                 <SelectItem hideIndicator value="local">
-                  Local
+                  <UiText english={"Local"} />
                 </SelectItem>
                 <SelectItem hideIndicator value="worktree">
-                  New worktree
+                  <UiText english={"New worktree"} />
                 </SelectItem>
               </SelectPopup>
             </Select>
@@ -1287,8 +1342,10 @@ export function ChatSettingsPanel() {
         />
 
         <SettingsRow
-          title="System prompt"
-          description="Edit the file prepended to the first message in each new thread."
+          title={localizeUiLabel("System prompt")}
+          description={localizeUiLabel(
+            "Edit the file prepended to the first message in each new thread.",
+          )}
           control={
             <Button
               type="button"
@@ -1310,8 +1367,10 @@ export function ChatSettingsPanel() {
         />
 
         <SettingsRow
-          title="Archive confirmation"
-          description="Require a second click on the inline archive action before a thread is archived."
+          title={localizeUiLabel("Archive confirmation")}
+          description={localizeUiLabel(
+            "Require a second click on the inline archive action before a thread is archived.",
+          )}
           resetAction={
             settings.confirmThreadArchive !== DEFAULT_UNIFIED_SETTINGS.confirmThreadArchive ? (
               <SettingResetButton
@@ -1330,14 +1389,14 @@ export function ChatSettingsPanel() {
               onCheckedChange={(checked) =>
                 updateSettings({ confirmThreadArchive: Boolean(checked) })
               }
-              aria-label="Confirm thread archiving"
+              aria-label={localizeUiLabel("Confirm thread archiving")}
             />
           }
         />
 
         <SettingsRow
-          title="Delete confirmation"
-          description="Ask before deleting a thread and its chat history."
+          title={localizeUiLabel("Delete confirmation")}
+          description={localizeUiLabel("Ask before deleting a thread and its chat history.")}
           resetAction={
             settings.confirmThreadDelete !== DEFAULT_UNIFIED_SETTINGS.confirmThreadDelete ? (
               <SettingResetButton
@@ -1356,7 +1415,7 @@ export function ChatSettingsPanel() {
               onCheckedChange={(checked) =>
                 updateSettings({ confirmThreadDelete: Boolean(checked) })
               }
-              aria-label="Confirm thread deletion"
+              aria-label={localizeUiLabel("Confirm thread deletion")}
             />
           }
         />
@@ -1366,6 +1425,8 @@ export function ChatSettingsPanel() {
 }
 
 export function FilesSettingsPanel() {
+  const { t: localizeUiLabel } = useUiLocalization();
+
   const settings = useSettings();
   const { updateSettings } = useUpdateSettings();
   const availableEditors = useServerAvailableEditors();
@@ -1384,10 +1445,10 @@ export function FilesSettingsPanel() {
 
   return (
     <SettingsPageContainer>
-      <SettingsSection title="Files">
+      <SettingsSection title={localizeUiLabel("Files")}>
         <SettingsRow
-          title="Default editor"
-          description="Choose how file links open from chats and activity."
+          title={localizeUiLabel("Default editor")}
+          description={localizeUiLabel("Choose how file links open from chats and activity.")}
           resetAction={
             settings.defaultEditor !== DEFAULT_UNIFIED_SETTINGS.defaultEditor ? (
               <SettingResetButton
@@ -1410,7 +1471,10 @@ export function FilesSettingsPanel() {
                 }
               }}
             >
-              <SelectTrigger className="w-full sm:w-48" aria-label="Default editor">
+              <SelectTrigger
+                className="w-full sm:w-48"
+                aria-label={localizeUiLabel("Default editor")}
+              >
                 <SelectValue>
                   <DefaultEditorOptionLabel
                     Icon={defaultEditorOption?.Icon}
@@ -1441,7 +1505,7 @@ export function FilesSettingsPanel() {
         />
 
         <SettingsRow
-          title="Add project starts in"
+          title={localizeUiLabel("Add project starts in")}
           description='Leave empty to use "~/" when the Add Project browser opens.'
           resetAction={
             settings.addProjectBaseDirectory !==
@@ -1463,7 +1527,7 @@ export function FilesSettingsPanel() {
               onCommit={(next) => updateSettings({ addProjectBaseDirectory: next })}
               placeholder="~/"
               spellCheck={false}
-              aria-label="Add project base directory"
+              aria-label={localizeUiLabel("Add project base directory")}
             />
           }
         />
@@ -1473,6 +1537,8 @@ export function FilesSettingsPanel() {
 }
 
 export function SystemSettingsPanel() {
+  const { t: localizeUiLabel } = useUiLocalization();
+
   const settings = useSettings();
   const { updateSettings } = useUpdateSettings();
   const observability = useServerObservability();
@@ -1486,9 +1552,9 @@ export function SystemSettingsPanel() {
 
   return (
     <SettingsPageContainer>
-      <SettingsSection title="System">
+      <SettingsSection title={localizeUiLabel("System")}>
         <SettingsRow
-          title="Keep awake"
+          title={localizeUiLabel("Keep awake")}
           description="Prevent your computer and screen from sleeping while Cafe Code is working."
           resetAction={
             settings.powerSaveBlockerMode !== DEFAULT_UNIFIED_SETTINGS.powerSaveBlockerMode ? (
@@ -1511,7 +1577,7 @@ export function SystemSettingsPanel() {
                 }
               }}
             >
-              <SelectTrigger className="w-full sm:w-44" aria-label="Keep awake">
+              <SelectTrigger className="w-full sm:w-44" aria-label={localizeUiLabel("Keep awake")}>
                 <SelectValue>
                   {POWER_SAVE_BLOCKER_LABELS[settings.powerSaveBlockerMode]}
                 </SelectValue>
@@ -1532,14 +1598,14 @@ export function SystemSettingsPanel() {
         />
       </SettingsSection>
 
-      <SettingsSection title="About">
+      <SettingsSection title={localizeUiLabel("About")}>
         <AboutVersionSection />
         <SettingsRow
-          title="Diagnostics"
+          title={localizeUiLabel("Diagnostics")}
           description={diagnosticsDescription}
           control={
             <Button render={<Link to="/settings/diagnostics" />} size="xs" variant="outline">
-              View diagnostics
+              <UiText english={"View diagnostics"} />
             </Button>
           }
         />
@@ -1549,6 +1615,8 @@ export function SystemSettingsPanel() {
 }
 
 export function ProviderSettingsPanel() {
+  const { t: localizeUiLabel } = useUiLocalization();
+
   const settings = useSettings();
   const { updateSettings } = useUpdateSettings();
   const serverProviders = useServerProviders();
@@ -1924,7 +1992,7 @@ export function ProviderSettingsPanel() {
   return (
     <SettingsPageContainer>
       <SettingsSection
-        title="Providers"
+        title={localizeUiLabel("Providers")}
         headerAction={
           <div className="flex items-center gap-1.5">
             <ProviderLastChecked lastCheckedAt={lastCheckedAt} />
@@ -1936,13 +2004,15 @@ export function ProviderSettingsPanel() {
                     variant="ghost"
                     className="size-5 rounded-sm p-0 text-muted-foreground hover:text-foreground"
                     onClick={() => setIsAddInstanceDialogOpen(true)}
-                    aria-label="Add provider instance"
+                    aria-label={localizeUiLabel("Add provider instance")}
                   >
                     <PlusIcon className="size-3" />
                   </Button>
                 }
               />
-              <TooltipPopup side="top">Add provider instance</TooltipPopup>
+              <TooltipPopup side="top">
+                <UiText english={"Add provider instance"} />
+              </TooltipPopup>
             </Tooltip>
             <Tooltip>
               <TooltipTrigger
@@ -1953,7 +2023,7 @@ export function ProviderSettingsPanel() {
                     className="size-5 rounded-sm p-0 text-muted-foreground hover:text-foreground"
                     disabled={isRefreshingProviders}
                     onClick={() => void refreshProviders()}
-                    aria-label="Refresh provider status"
+                    aria-label={localizeUiLabel("Refresh provider status")}
                   >
                     {isRefreshingProviders ? (
                       <LoaderIcon className="size-3 animate-spin" />
@@ -1963,7 +2033,9 @@ export function ProviderSettingsPanel() {
                   </Button>
                 }
               />
-              <TooltipPopup side="top">Refresh provider status</TooltipPopup>
+              <TooltipPopup side="top">
+                <UiText english={"Refresh provider status"} />
+              </TooltipPopup>
             </Tooltip>
           </div>
         }
@@ -2108,6 +2180,8 @@ export function ProviderSettingsPanel() {
 }
 
 export function ArchivedThreadsPanel() {
+  const { t: localizeUiLabel } = useUiLocalization();
+
   const projects = useStore(useShallow(selectProjectsAcrossEnvironments));
   const { unarchiveThread, confirmAndDeleteThread } = useThreadActions();
   const environmentIds = useMemo(
@@ -2201,7 +2275,7 @@ export function ArchivedThreadsPanel() {
   return (
     <SettingsPageContainer>
       {archivedGroups.length === 0 ? (
-        <SettingsSection title="Archived threads">
+        <SettingsSection title={localizeUiLabel("Archived threads")}>
           <SettingsRow
             title={
               <span className="inline-flex items-center gap-2">
@@ -2219,7 +2293,7 @@ export function ArchivedThreadsPanel() {
             }
             description={
               isLoadingArchive
-                ? "Checking connected environments."
+                ? localizeUiLabel("Checking connected environments.")
                 : (archiveError ?? "Archived threads will appear here.")
             }
           />
@@ -2274,7 +2348,9 @@ export function ArchivedThreadsPanel() {
                     }
                   >
                     <ArchiveX className="size-3.5" />
-                    <span>Unarchive</span>
+                    <span>
+                      <UiText english={"Unarchive"} />
+                    </span>
                   </Button>
                 }
               />
@@ -2287,6 +2363,8 @@ export function ArchivedThreadsPanel() {
 }
 
 export function RecentlyDeletedThreadsPanel() {
+  const { t: localizeUiLabel } = useUiLocalization();
+
   const projects = useStore(useShallow(selectProjectsAcrossEnvironments));
   const { restoreThread, hardDeleteThread } = useThreadActions();
   const [isEmptyingRecycleBin, setIsEmptyingRecycleBin] = useState(false);
@@ -2458,14 +2536,16 @@ export function RecentlyDeletedThreadsPanel() {
         ) : (
           <Trash2Icon className="size-3.5" />
         )}
-        <span>Empty Recycle Bin</span>
+        <span>
+          <UiText english={"Empty Recycle Bin"} />
+        </span>
       </Button>
     ) : null;
 
   return (
     <SettingsPageContainer>
       {deletedGroups.length === 0 ? (
-        <SettingsSection title="Recently Deleted">
+        <SettingsSection title={localizeUiLabel("Recently Deleted")}>
           <SettingsRow
             title={
               <span className="inline-flex items-center gap-2">
@@ -2483,7 +2563,7 @@ export function RecentlyDeletedThreadsPanel() {
             }
             description={
               isLoadingDeleted
-                ? "Checking connected environments."
+                ? localizeUiLabel("Checking connected environments.")
                 : (deletedError ?? "Threads moved to the Recycle Bin will appear here.")
             }
           />

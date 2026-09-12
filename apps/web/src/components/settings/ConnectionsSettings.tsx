@@ -1,3 +1,4 @@
+import { UiText, useUiLocalization } from "../../uiLocalization";
 import {
   ChevronDownIcon,
   DownloadIcon,
@@ -322,6 +323,8 @@ const PairingLinkListRow = memo(function PairingLinkListRow({
   revokingPairingLinkId,
   onRevoke,
 }: PairingLinkListRowProps) {
+  const { t: localizeUiLabel } = useUiLocalization();
+
   const nowMs = useRelativeTimeTick(1_000);
   const expiresAtMs = useMemo(
     () => new Date(pairingLink.expiresAt).getTime(),
@@ -433,9 +436,13 @@ const PairingLinkListRow = memo(function PairingLinkListRow({
   const renderPairingCodeMenuItem = (renderDetail = true) => (
     <MenuItem onClick={handleCopyCode}>
       <span className="min-w-0 flex-1">
-        <span className="block truncate">Copy code</span>
+        <span className="block truncate">
+          <UiText english={"Copy code"} />
+        </span>
         {renderDetail ? (
-          <span className="block truncate text-[11px] text-muted-foreground">Token only</span>
+          <span className="block truncate text-[11px] text-muted-foreground">
+            <UiText english={"Token only"} />
+          </span>
         ) : null}
       </span>
     </MenuItem>
@@ -459,7 +466,9 @@ const PairingLinkListRow = memo(function PairingLinkListRow({
       {options?.codeFirst ? (
         <>
           <MenuGroup>
-            <MenuGroupLabel>Pairing code</MenuGroupLabel>
+            <MenuGroupLabel>
+              <UiText english={"Pairing code"} />
+            </MenuGroupLabel>
             {renderPairingCodeMenuItem(false)}
           </MenuGroup>
           {endpointCopyOptions.length > 0 ? <MenuSeparator /> : null}
@@ -470,7 +479,9 @@ const PairingLinkListRow = memo(function PairingLinkListRow({
         <>
           {endpointCopyOptions.length > 0 ? <MenuSeparator /> : null}
           <MenuGroup>
-            <MenuGroupLabel>Pairing code</MenuGroupLabel>
+            <MenuGroupLabel>
+              <UiText english={"Pairing code"} />
+            </MenuGroupLabel>
             {renderPairingCodeMenuItem(false)}
           </MenuGroup>
         </>
@@ -503,7 +514,7 @@ const PairingLinkListRow = memo(function PairingLinkListRow({
                       <button
                         type="button"
                         className="inline-flex size-4 shrink-0 items-center justify-center rounded-sm text-muted-foreground/50 outline-none hover:text-foreground"
-                        aria-label="Show QR code"
+                        aria-label={localizeUiLabel("Show QR code")}
                       />
                     }
                   >
@@ -515,7 +526,7 @@ const PairingLinkListRow = memo(function PairingLinkListRow({
                       size={88}
                       level="M"
                       marginSize={2}
-                      title="Pairing link — scan to open on another device"
+                      title={localizeUiLabel("Pairing link — scan to open on another device")}
                     />
                   </PopoverPopup>
                 </>
@@ -536,7 +547,7 @@ const PairingLinkListRow = memo(function PairingLinkListRow({
             {canCopyToClipboard ? (
               <>
                 {shareablePairingUrl ? (
-                  <Group aria-label="Copy selected endpoint">
+                  <Group aria-label={localizeUiLabel("Copy selected endpoint")}>
                     <Button
                       size="xs"
                       variant="outline"
@@ -555,7 +566,7 @@ const PairingLinkListRow = memo(function PairingLinkListRow({
                           <Button
                             size="icon-xs"
                             variant="outline"
-                            aria-label="Choose endpoint to copy"
+                            aria-label={localizeUiLabel("Choose endpoint to copy")}
                           />
                         }
                       >
@@ -568,7 +579,7 @@ const PairingLinkListRow = memo(function PairingLinkListRow({
                   </Group>
                 ) : (
                   <Button size="xs" variant="outline" onClick={handleCopyCode}>
-                    Copy code
+                    <UiText english={"Copy code"} />
                   </Button>
                 )}
               </>
@@ -579,7 +590,9 @@ const PairingLinkListRow = memo(function PairingLinkListRow({
             )}
             <DialogPopup className="max-w-md">
               <DialogHeader>
-                <DialogTitle>{shareablePairingUrl ? "Pairing link" : "Pairing code"}</DialogTitle>
+                <DialogTitle>
+                  {shareablePairingUrl ? "Pairing link" : <UiText english={"Pairing code"} />}
+                </DialogTitle>
                 <DialogDescription>
                   {shareablePairingUrl
                     ? "Clipboard copy is unavailable here. Open or manually copy this full pairing URL on the device you want to connect."
@@ -602,18 +615,18 @@ const PairingLinkListRow = memo(function PairingLinkListRow({
                       size={132}
                       level="M"
                       marginSize={2}
-                      title="Pairing link — scan to open on another device"
+                      title={localizeUiLabel("Pairing link — scan to open on another device")}
                     />
                   </div>
                 ) : null}
               </DialogPanel>
               <DialogFooter variant="bare">
                 <Button variant="outline" onClick={() => setIsRevealDialogOpen(false)}>
-                  Done
+                  <UiText english={"Done"} />
                 </Button>
                 {canCopyToClipboard ? (
                   <Button variant="outline" size="xs" onClick={handleCopyCode}>
-                    Copy code
+                    <UiText english={"Copy code"} />
                   </Button>
                 ) : null}
               </DialogFooter>
@@ -683,7 +696,7 @@ const ConnectedClientListRow = memo(function ConnectedClientListRow({
             <h3 className="text-sm font-medium text-foreground">{primaryLabel}</h3>
             {clientSession.current ? (
               <span className="text-[10px] text-muted-foreground/80 rounded-md border border-border/50 bg-muted/50 px-1 py-0.5">
-                This device
+                <UiText english={"This device"} />
               </span>
             ) : null}
           </div>
@@ -719,6 +732,8 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
   isRevokingOtherClients,
   onRevokeOtherClients,
 }: AuthorizedClientsHeaderActionProps) {
+  const { t: localizeUiLabel } = useUiLocalization();
+
   const [dialogOpen, setDialogOpen] = useState(false);
   const [pairingLabel, setPairingLabel] = useState("");
   const [isCreatingPairingLink, setIsCreatingPairingLink] = useState(false);
@@ -768,13 +783,15 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
           render={
             <Button size="xs" variant="default">
               <PlusIcon className="size-3" />
-              Create link
+              <UiText english={"Create link"} />
             </Button>
           }
         />
         <DialogPopup className="max-w-sm">
           <DialogHeader>
-            <DialogTitle>Create pairing link</DialogTitle>
+            <DialogTitle>
+              <UiText english={"Create pairing link"} />
+            </DialogTitle>
             <DialogDescription>
               Generate a one-time link that another device can use to pair with this backend as an
               authorized client.
@@ -783,12 +800,12 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
           <DialogPanel>
             <label className="block">
               <span className="mb-1.5 block text-xs font-medium text-foreground">
-                Client label (optional)
+                <UiText english={"Client label (optional)"} />
               </span>
               <Input
                 value={pairingLabel}
                 onChange={(event) => setPairingLabel(event.target.value)}
-                placeholder="e.g. Living room iPad"
+                placeholder={localizeUiLabel("e.g. Living room iPad")}
                 disabled={isCreatingPairingLink}
                 autoFocus
               />
@@ -800,10 +817,10 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
               disabled={isCreatingPairingLink}
               onClick={() => setDialogOpen(false)}
             >
-              Cancel
+              <UiText english={"Cancel"} />
             </Button>
             <Button disabled={isCreatingPairingLink} onClick={() => void handleCreatePairingLink()}>
-              {isCreatingPairingLink ? "Creating…" : "Create link"}
+              {isCreatingPairingLink ? "Creating…" : <UiText english={"Create link"} />}
             </Button>
           </DialogFooter>
         </DialogPopup>
@@ -829,6 +846,8 @@ const AdminPasswordManagementRow = memo(function AdminPasswordManagementRow({
   onSetPassword,
   onClearPassword,
 }: AdminPasswordManagementRowProps) {
+  const { t: localizeUiLabel } = useUiLocalization();
+
   const [passwordDialogOpen, setPasswordDialogOpen] = useState(false);
   const [passwordDialogMode, setPasswordDialogMode] = useState<"enable" | "change">("enable");
   const [disableDialogOpen, setDisableDialogOpen] = useState(false);
@@ -888,8 +907,12 @@ const AdminPasswordManagementRow = memo(function AdminPasswordManagementRow({
   return (
     <>
       <SettingsRow
-        title="Admin password"
-        description={isConfigured ? "Password sign-in is on." : "Password sign-in is off."}
+        title={localizeUiLabel("Admin password")}
+        description={
+          isConfigured
+            ? localizeUiLabel("Password sign-in is on.")
+            : localizeUiLabel("Password sign-in is off.")
+        }
         status={
           error ? (
             <span className="block text-destructive">{error}</span>
@@ -909,7 +932,7 @@ const AdminPasswordManagementRow = memo(function AdminPasswordManagementRow({
                 onClick={() => openPasswordDialog("change")}
               >
                 <KeyRoundIcon className="size-3" />
-                Change
+                <UiText english={"Change"} />
               </Button>
             ) : null}
             <Switch
@@ -923,7 +946,7 @@ const AdminPasswordManagementRow = memo(function AdminPasswordManagementRow({
                   setDialogError(null);
                 }
               }}
-              aria-label="Enable password authentication"
+              aria-label={localizeUiLabel("Enable password authentication")}
             />
           </>
         }
@@ -944,13 +967,13 @@ const AdminPasswordManagementRow = memo(function AdminPasswordManagementRow({
               {passwordDialogMode === "enable" ? "Enable admin password" : "Change admin password"}
             </DialogTitle>
             <DialogDescription>
-              Set the password used for owner login from the pairing screen.
+              <UiText english={"Set the password used for owner login from the pairing screen."} />
             </DialogDescription>
           </DialogHeader>
           <DialogPanel className="space-y-3">
             <label className="block">
               <span className="mb-1.5 block text-xs font-medium text-foreground">
-                Admin password
+                <UiText english={"Admin password"} />
               </span>
               <Input
                 value={password}
@@ -963,7 +986,7 @@ const AdminPasswordManagementRow = memo(function AdminPasswordManagementRow({
             </label>
             <label className="block">
               <span className="mb-1.5 block text-xs font-medium text-foreground">
-                Confirm password
+                <UiText english={"Confirm password"} />
               </span>
               <Input
                 value={confirmPassword}
@@ -984,13 +1007,13 @@ const AdminPasswordManagementRow = memo(function AdminPasswordManagementRow({
                 resetPasswordDialog();
               }}
             >
-              Cancel
+              <UiText english={"Cancel"} />
             </Button>
             <Button disabled={isSaving} onClick={() => void handleSavePassword()}>
               {isSaving ? (
                 <>
                   <Spinner className="size-3.5" />
-                  Saving…
+                  <UiText english={"Saving…"} />
                 </>
               ) : passwordDialogMode === "enable" ? (
                 "Enable"
@@ -1013,7 +1036,9 @@ const AdminPasswordManagementRow = memo(function AdminPasswordManagementRow({
       >
         <AlertDialogPopup>
           <AlertDialogHeader>
-            <AlertDialogTitle>Disable password authentication?</AlertDialogTitle>
+            <AlertDialogTitle>
+              <UiText english={"Disable password authentication?"} />
+            </AlertDialogTitle>
             <AlertDialogDescription>
               This clears the saved admin password. Existing sessions stay active until revoked or
               expired.
@@ -1027,7 +1052,7 @@ const AdminPasswordManagementRow = memo(function AdminPasswordManagementRow({
               disabled={isSaving}
               render={<Button variant="outline" disabled={isSaving} />}
             >
-              Cancel
+              <UiText english={"Cancel"} />
             </AlertDialogClose>
             <Button
               variant="destructive"
@@ -1104,7 +1129,9 @@ const PairingClientsList = memo(function PairingClientsList({
 
       {pairingLinks.length === 0 && clientSessions.length === 0 && !isLoading ? (
         <div className={accessRowClassName(presentation)}>
-          <p className="text-xs text-muted-foreground/60">No pairing links or client sessions.</p>
+          <p className="text-xs text-muted-foreground/60">
+            <UiText english={"No pairing links or client sessions."} />
+          </p>
         </div>
       ) : null}
     </>
@@ -1144,14 +1171,14 @@ const AdvertisedEndpointListRow = memo(function AdvertisedEndpointListRow({
           </p>
           {!isAvailable ? (
             <span className="shrink-0 rounded-md border border-border/70 px-1 py-0.5 text-[10px] text-muted-foreground">
-              Unavailable
+              <UiText english={"Unavailable"} />
             </span>
           ) : null}
         </div>
         <div className="ml-auto flex min-h-6 shrink-0 items-center justify-end gap-2">
           {isDefault ? (
             <span className="rounded-md border border-primary/30 bg-primary/10 px-1 py-0.5 text-[10px] text-primary">
-              Default
+              <UiText english={"Default"} />
             </span>
           ) : null}
           {isAvailable && !isDefault ? (
@@ -1195,7 +1222,9 @@ function NetworkAccessDescription({
 
   return (
     <span className="inline-flex min-w-0 max-w-full items-baseline gap-1">
-      <span className="shrink-0">Reachable at</span>
+      <span className="shrink-0">
+        <UiText english={"Reachable at"} />
+      </span>
       {hiddenEndpointCount > 0 ? (
         <button
           type="button"
@@ -1213,6 +1242,8 @@ function NetworkAccessDescription({
 }
 
 export function ConnectionsSettings() {
+  const { t: localizeUiLabel } = useUiLocalization();
+
   const desktopBridge = window.desktopBridge;
   const [currentSessionRole, setCurrentSessionRole] = useState<"owner" | "client" | null>(
     desktopBridge ? "owner" : null,
@@ -1665,7 +1696,7 @@ export function ConnectionsSettings() {
         setPendingDesktopServerExposureMode(checked ? "network-accessible" : "local-only");
         setIsDesktopServerExposureDialogOpen(true);
       }}
-      aria-label="Enable network access"
+      aria-label={localizeUiLabel("Enable network access")}
     />
   );
   const renderHttpsToggle = () => (
@@ -1676,7 +1707,7 @@ export function ConnectionsSettings() {
         setPendingDesktopServerHttpsEnabled(checked);
         setIsDesktopServerHttpsDialogOpen(true);
       }}
-      aria-label="Enable HTTPS"
+      aria-label={localizeUiLabel("Enable HTTPS")}
     />
   );
   const renderEndpointRows = (presentation: AccessSectionPresentation) =>
@@ -1718,7 +1749,7 @@ export function ConnectionsSettings() {
   );
   const renderNetworkAccessRow = () => (
     <SettingsRow
-      title="Network access"
+      title={localizeUiLabel("Network access")}
       description={
         isLocalBackendNetworkAccessible ? (
           <NetworkAccessDescription
@@ -1750,12 +1781,14 @@ export function ConnectionsSettings() {
   );
   const renderHttpsRow = () => (
     <SettingsRow
-      title="HTTPS"
+      title={localizeUiLabel("HTTPS")}
       description={
         desktopServerExposureState ? (
           desktopServerExposureState.httpsEnabled ? (
             <span className="flex flex-col items-start gap-1.5">
-              <span>WebUI uses HTTPS.</span>
+              <span>
+                <UiText english={"WebUI uses HTTPS."} />
+              </span>
               {/*
                * Phones reject the self-signed certificate until it is installed and
                * trusted. This downloads the public certificate (served by the backend,
@@ -1767,7 +1800,7 @@ export function ConnectionsSettings() {
                 className="inline-flex items-center gap-1 font-medium text-primary hover:underline"
               >
                 <DownloadIcon className="size-3.5" />
-                Download certificate
+                <UiText english={"Download certificate"} />
               </a>
             </span>
           ) : (
@@ -1782,7 +1815,7 @@ export function ConnectionsSettings() {
   );
   const renderDisabledNetworkAccessRow = () => (
     <SettingsRow
-      title="Network access"
+      title={localizeUiLabel("Network access")}
       description={
         currentAuthPolicy === "remote-reachable"
           ? "This backend is already configured for remote access. Network exposure changes must be made where the server is launched."
@@ -1796,7 +1829,7 @@ export function ConnectionsSettings() {
                 <Switch
                   checked={isLocalBackendNetworkAccessible}
                   disabled
-                  aria-label="Enable network access"
+                  aria-label={localizeUiLabel("Enable network access")}
                 />
               </span>
             }
@@ -1815,7 +1848,7 @@ export function ConnectionsSettings() {
       <SavedEnvironmentsSettings />
       {canManageLocalBackend ? (
         <>
-          <SettingsSection title="Manage local backend">
+          <SettingsSection title={localizeUiLabel("Manage local backend")}>
             {primaryVersionMismatch ? (
               <SettingsRow
                 title="Version drift"
@@ -1850,7 +1883,7 @@ export function ConnectionsSettings() {
 
           {isLocalBackendRemotelyReachable ? (
             <SettingsSection
-              title="Authorized clients"
+              title={localizeUiLabel("Authorized clients")}
               headerAction={
                 <AuthorizedClientsHeaderAction
                   clientSessions={desktopClientSessions}
@@ -1890,7 +1923,7 @@ export function ConnectionsSettings() {
                   disabled={isUpdatingDesktopServerExposure}
                   render={<Button variant="outline" disabled={isUpdatingDesktopServerExposure} />}
                 >
-                  Cancel
+                  <UiText english={"Cancel"} />
                 </AlertDialogClose>
                 <Button
                   variant={
@@ -1904,7 +1937,7 @@ export function ConnectionsSettings() {
                   {isUpdatingDesktopServerExposure ? (
                     <>
                       <Spinner className="size-3.5" />
-                      Restarting…
+                      <UiText english={"Restarting…"} />
                     </>
                   ) : pendingDesktopServerExposureMode === "network-accessible" ? (
                     "Restart and enable"
@@ -1939,7 +1972,7 @@ export function ConnectionsSettings() {
                   disabled={isUpdatingDesktopServerHttps}
                   render={<Button variant="outline" disabled={isUpdatingDesktopServerHttps} />}
                 >
-                  Cancel
+                  <UiText english={"Cancel"} />
                 </AlertDialogClose>
                 <Button
                   variant={pendingDesktopServerHttpsEnabled === false ? "destructive" : "default"}
@@ -1951,7 +1984,7 @@ export function ConnectionsSettings() {
                   {isUpdatingDesktopServerHttps ? (
                     <>
                       <Spinner className="size-3.5" />
-                      Restarting…
+                      <UiText english={"Restarting…"} />
                     </>
                   ) : pendingDesktopServerHttpsEnabled ? (
                     "Restart and enable"
@@ -1964,10 +1997,12 @@ export function ConnectionsSettings() {
           </AlertDialog>
         </>
       ) : (
-        <SettingsSection title="Local backend access">
+        <SettingsSection title={localizeUiLabel("Local backend access")}>
           <SettingsRow
             title="Owner tools"
-            description="Pairing links and client-session management are only available to owner sessions for this backend."
+            description={localizeUiLabel(
+              "Pairing links and client-session management are only available to owner sessions for this backend.",
+            )}
           />
         </SettingsSection>
       )}
