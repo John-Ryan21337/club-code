@@ -11,6 +11,7 @@ import {
   AmbientImageStore,
   AmbientImageStoreLive,
   MAX_AMBIENT_IMAGE_PROFILE_BYTES,
+  readStoredAmbientImage,
 } from "./AmbientImageStore.ts";
 
 const tinyPng = Uint8Array.from(
@@ -85,6 +86,7 @@ it.layer(NodeServices.layer)("ambient image store", (it) => {
         declaredMimeType: "image/png",
       });
       const stored = yield* store.resolveStoredImage(first.id);
+      assert.deepEqual(yield* readStoredAmbientImage(stored), tinyPng);
       const [gif, concurrentGif] = yield* Effect.all(
         [
           store.storeUploadedImage({
@@ -274,6 +276,31 @@ it.layer(NodeServices.layer)("ambient image store", (it) => {
       assert.equal(result._tag, "Failure");
       if (result._tag === "Failure") {
         assert.include(String(result.cause), "profile quota is full");
+      }
+    }).pipe(Effect.provide(layer())),
+  );
+  it.effect("refuses changed content and oversized files at the authenticated read boundary", () =>
+    Effect.gen(function* () {
+      const store = yield* AmbientImageStore;
+      const fs = yield* FileSystem.FileSystem;
+      const asset = yield* store.storeUploadedImage({
+        bytes: tinyPng,
+        declaredMimeType: "image/png",
+      });
+      const stored = yield* store.resolveStoredImage(asset.id);
+      const changed = tinyPng.slice();
+      changed[changed.length - 1] = changed[changed.length - 1]! ^ 1;
+      yield* fs.writeFile(stored.filePath, changed);
+      const replaced = yield* readStoredAmbientImage(stored).pipe(Effect.exit);
+      assert.equal(replaced._tag, "Failure");
+      yield* fs.writeFile(stored.filePath, new Uint8Array(MAX_AMBIENT_IMAGE_FILE_BYTES + 1));
+      const enlarged = yield* readStoredAmbientImage(stored).pipe(Effect.exit);
+      assert.equal(enlarged._tag, "Failure");
+      // Failure closes the owned descriptor, so the original image can be restored and read.
+      yield* fs.writeFile(stored.filePath, tinyPng);
+      assert.deepEqual(yield* readStoredAmbientImage(stored), tinyPng);
+      if (process.platform !== "win32") {
+        assert.equal(Number((yield* fs.stat(stored.filePath)).mode) & 0o777, 0o600);
       }
     }).pipe(Effect.provide(layer())),
   );
