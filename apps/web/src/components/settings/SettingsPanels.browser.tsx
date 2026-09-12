@@ -608,6 +608,32 @@ const createDesktopBridgeStub = (overrides?: {
     onUpdateState: () => () => {},
     getSourceUpdateState: vi.fn().mockResolvedValue(sourceUpdateState),
     checkSourceUpdate: overrides?.checkSourceUpdate ?? vi.fn().mockResolvedValue(sourceUpdateState),
+    openEmbeddedBrowser: async () => {
+      throw new Error("openEmbeddedBrowser not implemented in test");
+    },
+    closeEmbeddedBrowser: async () => {
+      throw new Error("closeEmbeddedBrowser not implemented in test");
+    },
+    setEmbeddedBrowserBounds: async () => {
+      throw new Error("setEmbeddedBrowserBounds not implemented in test");
+    },
+    shareEmbeddedBrowser: async () => {
+      throw new Error("shareEmbeddedBrowser not implemented in test");
+    },
+    navigateEmbeddedBrowser: async () => {
+      throw new Error("navigateEmbeddedBrowser not implemented in test");
+    },
+    controlEmbeddedBrowserHistory: async () => {
+      throw new Error("controlEmbeddedBrowserHistory not implemented in test");
+    },
+    snapshotEmbeddedBrowser: async () => null,
+    clickEmbeddedBrowser: async () => {
+      throw new Error("clickEmbeddedBrowser not implemented in test");
+    },
+    typeInEmbeddedBrowser: async () => {
+      throw new Error("typeInEmbeddedBrowser not implemented in test");
+    },
+    onEmbeddedBrowserState: () => () => undefined,
     onSourceUpdateState: () => () => {},
   };
 };

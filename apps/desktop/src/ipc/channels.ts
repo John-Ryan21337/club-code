@@ -32,3 +32,14 @@ export const GET_SERVER_EXPOSURE_STATE_CHANNEL = "desktop:get-server-exposure-st
 export const SET_SERVER_EXPOSURE_MODE_CHANNEL = "desktop:set-server-exposure-mode";
 export const SET_SERVER_HTTPS_ENABLED_CHANNEL = "desktop:set-server-https-enabled";
 export const GET_ADVERTISED_ENDPOINTS_CHANNEL = "desktop:get-advertised-endpoints";
+
+export const EMBEDDED_BROWSER_OPEN_CHANNEL = "desktop:embedded-browser-open";
+export const EMBEDDED_BROWSER_CLOSE_CHANNEL = "desktop:embedded-browser-close";
+export const EMBEDDED_BROWSER_SET_BOUNDS_CHANNEL = "desktop:embedded-browser-set-bounds";
+export const EMBEDDED_BROWSER_SHARE_CHANNEL = "desktop:embedded-browser-share";
+export const EMBEDDED_BROWSER_NAVIGATE_CHANNEL = "desktop:embedded-browser-navigate";
+export const EMBEDDED_BROWSER_HISTORY_CHANNEL = "desktop:embedded-browser-history";
+export const EMBEDDED_BROWSER_SNAPSHOT_CHANNEL = "desktop:embedded-browser-snapshot";
+export const EMBEDDED_BROWSER_CLICK_CHANNEL = "desktop:embedded-browser-click";
+export const EMBEDDED_BROWSER_TYPE_CHANNEL = "desktop:embedded-browser-type";
+export const EMBEDDED_BROWSER_STATE_CHANNEL = "desktop:embedded-browser-state";

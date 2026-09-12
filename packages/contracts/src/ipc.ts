@@ -1,4 +1,18 @@
 import type {
+  EmbeddedBrowserActionResult,
+  EmbeddedBrowserClickInput,
+  EmbeddedBrowserHistoryActionInput,
+  EmbeddedBrowserNavigateInput,
+  EmbeddedBrowserOpenInput,
+  EmbeddedBrowserSetBoundsInput,
+  EmbeddedBrowserShareInput,
+  EmbeddedBrowserSnapshot,
+  EmbeddedBrowserSnapshotInput,
+  EmbeddedBrowserState,
+  EmbeddedBrowserTabInput,
+  EmbeddedBrowserTypeInput,
+} from "./embeddedBrowser.ts";
+import type {
   ProviderRespondToInteractionInput,
   ProviderResolveInteractionUrlInput,
 } from "./providerInteraction.ts";
@@ -371,6 +385,22 @@ export interface DesktopBridge {
   setServerHttpsEnabled: (enabled: boolean) => Promise<DesktopServerExposureState>;
   getAdvertisedEndpoints: () => Promise<readonly AdvertisedEndpoint[]>;
   pickFolder: (options?: PickFolderOptions) => Promise<string | null>;
+  openEmbeddedBrowser: (input?: EmbeddedBrowserOpenInput) => Promise<EmbeddedBrowserState>;
+  closeEmbeddedBrowser: (input: EmbeddedBrowserTabInput) => Promise<EmbeddedBrowserState>;
+  setEmbeddedBrowserBounds: (input: EmbeddedBrowserSetBoundsInput) => Promise<EmbeddedBrowserState>;
+  shareEmbeddedBrowser: (input: EmbeddedBrowserShareInput) => Promise<EmbeddedBrowserActionResult>;
+  navigateEmbeddedBrowser: (
+    input: EmbeddedBrowserNavigateInput,
+  ) => Promise<EmbeddedBrowserActionResult>;
+  controlEmbeddedBrowserHistory: (
+    input: EmbeddedBrowserHistoryActionInput,
+  ) => Promise<EmbeddedBrowserActionResult>;
+  snapshotEmbeddedBrowser: (
+    input: EmbeddedBrowserSnapshotInput,
+  ) => Promise<EmbeddedBrowserSnapshot | null>;
+  clickEmbeddedBrowser: (input: EmbeddedBrowserClickInput) => Promise<EmbeddedBrowserActionResult>;
+  typeInEmbeddedBrowser: (input: EmbeddedBrowserTypeInput) => Promise<EmbeddedBrowserActionResult>;
+  onEmbeddedBrowserState: (listener: (state: EmbeddedBrowserState) => void) => () => void;
   confirm: (message: string) => Promise<boolean>;
   setTheme: (theme: DesktopTheme) => Promise<void>;
   showContextMenu: <T extends string>(

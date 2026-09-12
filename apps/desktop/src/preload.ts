@@ -43,6 +43,34 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     ipcRenderer.invoke(IpcChannels.SET_SERVER_HTTPS_ENABLED_CHANNEL, enabled),
   getAdvertisedEndpoints: () => ipcRenderer.invoke(IpcChannels.GET_ADVERTISED_ENDPOINTS_CHANNEL),
   pickFolder: (options) => ipcRenderer.invoke(IpcChannels.PICK_FOLDER_CHANNEL, options),
+  openEmbeddedBrowser: (input = {}) =>
+    ipcRenderer.invoke(IpcChannels.EMBEDDED_BROWSER_OPEN_CHANNEL, input),
+  closeEmbeddedBrowser: (input) =>
+    ipcRenderer.invoke(IpcChannels.EMBEDDED_BROWSER_CLOSE_CHANNEL, input),
+  setEmbeddedBrowserBounds: (input) =>
+    ipcRenderer.invoke(IpcChannels.EMBEDDED_BROWSER_SET_BOUNDS_CHANNEL, input),
+  shareEmbeddedBrowser: (input) =>
+    ipcRenderer.invoke(IpcChannels.EMBEDDED_BROWSER_SHARE_CHANNEL, input),
+  navigateEmbeddedBrowser: (input) =>
+    ipcRenderer.invoke(IpcChannels.EMBEDDED_BROWSER_NAVIGATE_CHANNEL, input),
+  controlEmbeddedBrowserHistory: (input) =>
+    ipcRenderer.invoke(IpcChannels.EMBEDDED_BROWSER_HISTORY_CHANNEL, input),
+  snapshotEmbeddedBrowser: (input) =>
+    ipcRenderer.invoke(IpcChannels.EMBEDDED_BROWSER_SNAPSHOT_CHANNEL, input),
+  clickEmbeddedBrowser: (input) =>
+    ipcRenderer.invoke(IpcChannels.EMBEDDED_BROWSER_CLICK_CHANNEL, input),
+  typeInEmbeddedBrowser: (input) =>
+    ipcRenderer.invoke(IpcChannels.EMBEDDED_BROWSER_TYPE_CHANNEL, input),
+  onEmbeddedBrowserState: (listener) => {
+    const wrappedListener = (_event: Electron.IpcRendererEvent, state: unknown) => {
+      if (typeof state !== "object" || state === null) return;
+      listener(state as Parameters<typeof listener>[0]);
+    };
+    ipcRenderer.on(IpcChannels.EMBEDDED_BROWSER_STATE_CHANNEL, wrappedListener);
+    return () => {
+      ipcRenderer.removeListener(IpcChannels.EMBEDDED_BROWSER_STATE_CHANNEL, wrappedListener);
+    };
+  },
   confirm: (message) => ipcRenderer.invoke(IpcChannels.CONFIRM_CHANNEL, message),
   setTheme: (theme) => ipcRenderer.invoke(IpcChannels.SET_THEME_CHANNEL, theme),
   showContextMenu: (items, position) =>
