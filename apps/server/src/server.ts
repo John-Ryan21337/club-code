@@ -66,6 +66,12 @@ import { AuxiliaryUsageLive } from "./usageStats/Services/AuxiliaryUsage.ts";
 import { ProviderRegistryLive } from "./provider/Layers/ProviderRegistry.ts";
 import { ServerSettingsLive } from "./serverSettings.ts";
 import { ServerClientSettingsLive } from "./serverClientSettings.ts";
+import {
+  ambientImageDeleteRouteLayer,
+  ambientImageServeRouteLayer,
+  ambientImageUploadRouteLayer,
+} from "./ambientMedia/http.ts";
+import { AmbientImageStoreLive } from "./ambientMedia/AmbientImageStore.ts";
 import { BrandingImageStoreLive } from "./branding/BrandingImageStore.ts";
 import { ProjectFaviconResolverLive } from "./project/Layers/ProjectFaviconResolver.ts";
 import { RepositoryIdentityResolverLive } from "./project/Layers/RepositoryIdentityResolver.ts";
@@ -351,6 +357,9 @@ export const makeRoutesLayer = Layer.mergeAll(
   fileAttachmentRouteLayer,
   brandingSidebarImageServeRouteLayer,
   brandingSidebarImageUploadRouteLayer,
+  ambientImageServeRouteLayer,
+  ambientImageUploadRouteLayer,
+  ambientImageDeleteRouteLayer,
   clientDebugLogRouteLayer,
   cafeMcpRouteLayer,
   orchestrationDispatchRouteLayer,
@@ -414,6 +423,7 @@ export const makeServerLayer = Layer.unwrap(
     return serverApplicationLayer.pipe(
       Layer.provideMerge(RuntimeServicesLive),
       Layer.provideMerge(BrandingImageStoreLive),
+      Layer.provideMerge(AmbientImageStoreLive),
       Layer.provideMerge(ThreadDetailSubscriptionRegistryLive),
       Layer.provideMerge(HttpServerLive),
       Layer.provide(ObservabilityLive),

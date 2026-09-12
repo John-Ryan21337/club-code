@@ -27,6 +27,7 @@ import { cn } from "../../lib/utils";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Slider } from "../ui/slider";
 import { Switch } from "../ui/switch";
+import { AmbientImageSettingsSection } from "./AmbientImageSettings";
 import { ColorWheelPicker } from "./ColorWheelPicker";
 import {
   SettingResetButton,
@@ -379,6 +380,8 @@ export function AmbianceSettingsPanel() {
           }
         />
       </SettingsSection>
+
+      <AmbientImageSettingsSection />
     </SettingsPageContainer>
   );
 }

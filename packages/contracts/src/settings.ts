@@ -88,6 +88,102 @@ export const SidebarBrandImageAsset = Schema.Struct({
   ),
 });
 export type SidebarBrandImageAsset = typeof SidebarBrandImageAsset.Type;
+
+// ── Ambient images ────────────────────────────────────────────────
+// Ambient images deliberately use their own authenticated content-addressed
+// route instead of overloading sidebar branding: the two features have
+// different quotas, different lifetimes and different renderer surfaces. The
+// upload pipeline accepts up to 10 MiB of encoded image data and must
+// additionally enforce total-pixel and GIF work budgets server-side before it
+// mints one of these records.
+export const MAX_AMBIENT_IMAGE_FILE_BYTES = 10 * 1024 * 1024;
+export const MAX_AMBIENT_IMAGE_DIMENSION = 4096;
+export const MAX_AMBIENT_IMAGE_PIXEL_COUNT = 16_777_216;
+export const MAX_AMBIENT_IMAGE_ID_LENGTH = 96;
+export const MAX_AMBIENT_IMAGE_URL_LENGTH = 256;
+export const AmbientImageAssetId = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(MAX_AMBIENT_IMAGE_ID_LENGTH),
+  Schema.isPattern(/^sha256-[a-f0-9]{64}\.(?:gif|jpe?g|png|webp)$/),
+);
+export type AmbientImageAssetId = typeof AmbientImageAssetId.Type;
+export const AmbientImageMimeType = Schema.Literals([
+  "image/gif",
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+]);
+export type AmbientImageMimeType = typeof AmbientImageMimeType.Type;
+const AmbientImageAssetFields = Schema.Struct({
+  id: AmbientImageAssetId,
+  url: TrimmedNonEmptyString.check(
+    Schema.isMaxLength(MAX_AMBIENT_IMAGE_URL_LENGTH),
+    Schema.isPattern(/^\/api\/ambient-media\/image\/sha256-[a-f0-9]{64}\.(?:gif|jpe?g|png|webp)$/),
+  ),
+  mimeType: AmbientImageMimeType,
+  width: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: MAX_AMBIENT_IMAGE_DIMENSION })),
+  height: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: MAX_AMBIENT_IMAGE_DIMENSION })),
+  sizeBytes: Schema.Int.check(
+    Schema.isBetween({ minimum: 1, maximum: MAX_AMBIENT_IMAGE_FILE_BYTES }),
+  ),
+});
+const ambientImageMimeTypeForId = (id: AmbientImageAssetId): AmbientImageMimeType => {
+  const extension = id.slice(id.lastIndexOf(".") + 1);
+  switch (extension) {
+    case "gif":
+      return "image/gif";
+    case "jpg":
+    case "jpeg":
+      return "image/jpeg";
+    case "png":
+      return "image/png";
+    case "webp":
+      return "image/webp";
+    default:
+      // `AmbientImageAssetId` already proves this cannot happen. Keep the
+      // mapping total so changing the ID schema requires updating this check.
+      throw new Error("unsupported ambient image extension");
+  }
+};
+export const AmbientImageAsset = AmbientImageAssetFields.check(
+  Schema.makeFilter((asset) =>
+    asset.url === `/api/ambient-media/image/${asset.id}` &&
+    asset.mimeType === ambientImageMimeTypeForId(asset.id) &&
+    asset.width * asset.height <= MAX_AMBIENT_IMAGE_PIXEL_COUNT
+      ? undefined
+      : "must use a matching authenticated asset URL and MIME type within the ambient image pixel budget",
+  ),
+);
+export type AmbientImageAsset = typeof AmbientImageAsset.Type;
+/** A deliberately small persistent library. Source directories and their file
+ * paths are never part of settings; each entry is an authenticated,
+ * content-addressed server asset. */
+export const MAX_AMBIENT_IMAGE_CYCLE_ASSETS = 24;
+export const AmbientImageCycleAssets = Schema.Array(AmbientImageAsset).check(
+  Schema.isMaxLength(MAX_AMBIENT_IMAGE_CYCLE_ASSETS),
+  Schema.makeFilter((assets) =>
+    new Set(assets.map((asset) => asset.id)).size === assets.length
+      ? undefined
+      : "must not contain duplicate image assets",
+  ),
+);
+export type AmbientImageCycleAssets = typeof AmbientImageCycleAssets.Type;
+export const MIN_AMBIENT_IMAGE_CYCLE_SECONDS = 3;
+export const MAX_AMBIENT_IMAGE_CYCLE_SECONDS = 3_600;
+export const AmbientImageCycleSeconds = Schema.Number.check(
+  Schema.isBetween({
+    minimum: MIN_AMBIENT_IMAGE_CYCLE_SECONDS,
+    maximum: MAX_AMBIENT_IMAGE_CYCLE_SECONDS,
+  }),
+);
+export type AmbientImageCycleSeconds = typeof AmbientImageCycleSeconds.Type;
+export const AmbientImagePresentationMode = Schema.Literals(["floating", "theater"]);
+export type AmbientImagePresentationMode = typeof AmbientImagePresentationMode.Type;
+export const DEFAULT_AMBIENT_IMAGE_ENABLED = false;
+export const DEFAULT_AMBIENT_IMAGE_ASSET: AmbientImageAsset | null = null;
+export const DEFAULT_AMBIENT_IMAGE_CYCLE_ASSETS: AmbientImageCycleAssets = [];
+export const DEFAULT_AMBIENT_IMAGE_CYCLE_ENABLED = false;
+export const DEFAULT_AMBIENT_IMAGE_CYCLE_SECONDS = 20;
+export const DEFAULT_AMBIENT_IMAGE_PRESENTATION_MODE: AmbientImagePresentationMode = "floating";
 export const SidebarStarSpeed = Schema.Number.check(
   Schema.isBetween({
     minimum: MIN_SIDEBAR_STAR_SPEED,
@@ -418,6 +514,26 @@ export const ClientSettingsSchema = Schema.Struct({
   ),
   chatCopyFormat: ChatCopyFormat.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_CHAT_COPY_FORMAT)),
+  ),
+  // Ambient images stay off until the user explicitly enables them; an existing
+  // profile must never start rendering a decorative overlay after an upgrade.
+  ambientImageEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_IMAGE_ENABLED)),
+  ),
+  ambientImageAsset: Schema.NullOr(AmbientImageAsset).pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_IMAGE_ASSET)),
+  ),
+  ambientImageCycleAssets: AmbientImageCycleAssets.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_IMAGE_CYCLE_ASSETS)),
+  ),
+  ambientImageCycleEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_IMAGE_CYCLE_ENABLED)),
+  ),
+  ambientImageCycleSeconds: AmbientImageCycleSeconds.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_IMAGE_CYCLE_SECONDS)),
+  ),
+  ambientImagePresentationMode: AmbientImagePresentationMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_IMAGE_PRESENTATION_MODE)),
   ),
 });
 export type ClientSettings = typeof ClientSettingsSchema.Type;
@@ -1078,5 +1194,14 @@ export const ClientSettingsPatch = Schema.Struct({
   sidebarThreadPreviewCount: Schema.optionalKey(SidebarThreadPreviewCount),
   timestampFormat: Schema.optionalKey(TimestampFormat),
   chatCopyFormat: Schema.optionalKey(ChatCopyFormat),
+  // Ambient image keys must be listed here as well as in `ClientSettingsSchema`:
+  // this struct is the wire payload for `server.updateClientSettings`, so an
+  // omitted key is silently dropped before it ever reaches persistence.
+  ambientImageEnabled: Schema.optionalKey(Schema.Boolean),
+  ambientImageAsset: Schema.optionalKey(Schema.NullOr(AmbientImageAsset)),
+  ambientImageCycleAssets: Schema.optionalKey(AmbientImageCycleAssets),
+  ambientImageCycleEnabled: Schema.optionalKey(Schema.Boolean),
+  ambientImageCycleSeconds: Schema.optionalKey(AmbientImageCycleSeconds),
+  ambientImagePresentationMode: Schema.optionalKey(AmbientImagePresentationMode),
 });
 export type ClientSettingsPatch = typeof ClientSettingsPatch.Type;

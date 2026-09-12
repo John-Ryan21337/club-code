@@ -33,6 +33,7 @@ import {
   type ServerRuntimeLayerDiagnosticsResult,
   DEFAULT_CLIENT_SETTINGS,
 } from "@cafecode/contracts";
+import { MAX_AMBIENT_IMAGE_FILE_BYTES } from "@cafecode/contracts/settings";
 import { assert, it } from "@effect/vitest";
 import { assertFailure, assertInclude, assertTrue } from "@effect/vitest/utils";
 import * as DateTime from "effect/DateTime";
@@ -40,6 +41,7 @@ import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
@@ -112,6 +114,7 @@ import {
   UsageStatsService,
   type UsageStatsServiceShape,
 } from "./usageStats/Services/UsageStatsService.ts";
+import { AmbientImageStoreLive } from "./ambientMedia/AmbientImageStore.ts";
 import { BrandingImageStoreLive } from "./branding/BrandingImageStore.ts";
 import {
   BrowserTraceCollector,
@@ -1012,6 +1015,7 @@ const buildAppUnderTest = (options?: {
       Layer.provide(workspaceAndProjectServicesLayer),
       Layer.provideMerge(FetchHttpClient.layer),
       Layer.provideMerge(BrandingImageStoreLive),
+      Layer.provideMerge(AmbientImageStoreLive),
       Layer.provide(layerConfig),
     );
 
@@ -3296,6 +3300,263 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.isFalse((yield* unsupportedResponse.text).includes("data:image"));
       assert.isFalse((yield* invalidResponse.text).includes("data:image"));
       assert.isFalse((yield* missingResponse.text).includes("data:image"));
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  // ── Ambient images ────────────────────────────────────────────────
+  // These exercise the real routes end to end (auth, body limits, the
+  // content-addressed serve path, the settings reference guard and the upload
+  // admission slot) rather than the store in isolation.
+  const ambientImageIdFor = (bytes: Uint8Array, extension: string) =>
+    `sha256-${NodeCrypto.createHash("sha256").update(bytes).digest("hex")}.${extension}`;
+  // `tinyPngBytes` above is a lenient branding fixture whose IDAT CRC does not
+  // check out. The ambient parser verifies every chunk CRC before it will store
+  // bytes, so ambient tests use a byte-exact 1x1 PNG.
+  const ambientPngBytes = Uint8Array.from(
+    Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=",
+      "base64",
+    ),
+  );
+
+  it.effect("uploads, serves and deletes an unreferenced ambient image", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+      const cookie = yield* getAuthenticatedSessionCookieHeader();
+
+      const uploadResponse = yield* HttpClient.post("/api/ambient-media/image", {
+        headers: { cookie, "content-type": "image/png" },
+        body: HttpBody.uint8Array(ambientPngBytes, "image/png"),
+      });
+      assert.equal(uploadResponse.status, 200);
+      const uploadBody = (yield* uploadResponse.json) as {
+        readonly ambientImage: {
+          readonly id: string;
+          readonly url: string;
+          readonly mimeType: string;
+          readonly width: number;
+          readonly height: number;
+          readonly sizeBytes: number;
+        };
+      };
+      assert.equal(uploadBody.ambientImage.id, ambientImageIdFor(ambientPngBytes, "png"));
+      assert.equal(
+        uploadBody.ambientImage.url,
+        `/api/ambient-media/image/${uploadBody.ambientImage.id}`,
+      );
+      assert.equal(uploadBody.ambientImage.mimeType, "image/png");
+      assert.equal(uploadBody.ambientImage.sizeBytes, ambientPngBytes.byteLength);
+
+      const imageResponse = yield* HttpClient.get(uploadBody.ambientImage.url, {
+        headers: { cookie },
+      });
+      assert.equal(imageResponse.status, 200);
+      assert.include(getHeader(imageResponse.headers, "content-type") ?? "", "image/png");
+      assert.equal(getHeader(imageResponse.headers, "x-content-type-options"), "nosniff");
+      assert.equal(
+        getHeader(imageResponse.headers, "cache-control"),
+        "private, max-age=31536000, immutable",
+      );
+      assert.include(
+        getHeader(imageResponse.headers, "access-control-allow-methods") ?? "",
+        "DELETE",
+      );
+      assert.deepEqual(
+        Array.from(new Uint8Array(yield* imageResponse.arrayBuffer)),
+        Array.from(ambientPngBytes),
+      );
+
+      const deleteResponse = yield* HttpClient.del(uploadBody.ambientImage.url, {
+        headers: { cookie },
+      });
+      assert.equal(deleteResponse.status, 200);
+
+      // Bytes are really gone, so a folder replacement cannot strand them.
+      const afterDelete = yield* HttpClient.get(uploadBody.ambientImage.url, {
+        headers: { cookie },
+      });
+      assert.equal(afterDelete.status, 404);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("refuses to delete an ambient image the settings document still references", () =>
+    Effect.gen(function* () {
+      const referencedId = ambientImageIdFor(ambientPngBytes, "png");
+      yield* buildAppUnderTest({
+        layers: {
+          clientSettings: {
+            getSettings: Effect.succeed({
+              ...DEFAULT_CLIENT_SETTINGS,
+              ambientImageCycleAssets: [
+                {
+                  id: referencedId,
+                  url: `/api/ambient-media/image/${referencedId}`,
+                  mimeType: "image/png",
+                  width: 1,
+                  height: 1,
+                  sizeBytes: ambientPngBytes.byteLength,
+                },
+              ],
+            } as typeof DEFAULT_CLIENT_SETTINGS),
+          },
+        },
+      });
+      const cookie = yield* getAuthenticatedSessionCookieHeader();
+
+      const uploadResponse = yield* HttpClient.post("/api/ambient-media/image", {
+        headers: { cookie, "content-type": "image/png" },
+        body: HttpBody.uint8Array(ambientPngBytes, "image/png"),
+      });
+      assert.equal(uploadResponse.status, 200);
+
+      const deleteResponse = yield* HttpClient.del(`/api/ambient-media/image/${referencedId}`, {
+        headers: { cookie },
+      });
+      assert.equal(deleteResponse.status, 409);
+
+      // The refusal must not have removed bytes another view is still showing.
+      const stillThere = yield* HttpClient.get(`/api/ambient-media/image/${referencedId}`, {
+        headers: { cookie },
+      });
+      assert.equal(stillThere.status, 200);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("rejects unauthenticated ambient image routes", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+      const someId = ambientImageIdFor(ambientPngBytes, "png");
+
+      const upload = yield* HttpClient.post("/api/ambient-media/image", {
+        headers: { "content-type": "image/png" },
+        body: HttpBody.uint8Array(ambientPngBytes, "image/png"),
+      });
+      const serve = yield* HttpClient.get(`/api/ambient-media/image/${someId}`);
+      const remove = yield* HttpClient.del(`/api/ambient-media/image/${someId}`);
+
+      assert.equal(upload.status, 401);
+      assert.equal(serve.status, 401);
+      assert.equal(remove.status, 401);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("bounds ambient image bodies, types and identifiers", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+      const cookie = yield* getAuthenticatedSessionCookieHeader();
+
+      // Oversize is refused from the declared content-length, before any body
+      // byte is read into memory.
+      const oversize = yield* HttpClient.post("/api/ambient-media/image", {
+        headers: { cookie, "content-type": "image/png" },
+        body: HttpBody.uint8Array(new Uint8Array(MAX_AMBIENT_IMAGE_FILE_BYTES + 1), "image/png"),
+      });
+      assert.equal(oversize.status, 413);
+
+      const unsupported = yield* HttpClient.post("/api/ambient-media/image", {
+        headers: { cookie, "content-type": "image/svg+xml" },
+        body: HttpBody.uint8Array(ambientPngBytes, "image/svg+xml"),
+      });
+      assert.equal(unsupported.status, 415);
+
+      const invalid = yield* HttpClient.post("/api/ambient-media/image", {
+        headers: { cookie, "content-type": "image/png" },
+        body: HttpBody.uint8Array(new Uint8Array([1, 2, 3, 4]), "image/png"),
+      });
+      assert.equal(invalid.status, 400);
+
+      // No client-supplied path ever reaches the filesystem.
+      const traversal = yield* HttpClient.get("/api/ambient-media/image/..%2fsecret", {
+        headers: { cookie },
+      });
+      assert.equal(traversal.status, 404);
+      const nested = yield* HttpClient.get("/api/ambient-media/image/nested/secret.png", {
+        headers: { cookie },
+      });
+      assert.equal(nested.status, 404);
+      assert.isFalse((yield* traversal.text).includes("secret"));
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("releases the ambient upload admission slot after every outcome", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+      const cookie = yield* getAuthenticatedSessionCookieHeader();
+
+      // Only two uploads may hold a body in memory at once. If a slot leaked on
+      // any outcome, capacity would decay and a later upload would 429.
+      for (let attempt = 0; attempt < 4; attempt++) {
+        const failed = yield* HttpClient.post("/api/ambient-media/image", {
+          headers: { cookie, "content-type": "image/png" },
+          body: HttpBody.uint8Array(new Uint8Array([1, 2, 3, 4]), "image/png"),
+        });
+        assert.equal(failed.status, 400);
+      }
+      const succeeded = yield* HttpClient.post("/api/ambient-media/image", {
+        headers: { cookie, "content-type": "image/png" },
+        body: HttpBody.uint8Array(ambientPngBytes, "image/png"),
+      });
+      assert.equal(succeeded.status, 200);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("caps simultaneous ambient uploads and frees a slot when one is cancelled", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+      const cookie = yield* getAuthenticatedSessionCookieHeader();
+
+      // Hold two uploads open with bodies that never finish, so both admission
+      // slots are occupied *at the same time*. Sequential requests cannot show
+      // this: each one releases its slot before the next is issued.
+      const finishHeldBodies = yield* Deferred.make<void>();
+      const heldBody = () =>
+        HttpBody.stream(
+          Stream.make(ambientPngBytes.slice(0, 8)).pipe(
+            Stream.concat(
+              Stream.fromEffect(Deferred.await(finishHeldBodies)).pipe(
+                Stream.map(() => ambientPngBytes.slice(8)),
+              ),
+            ),
+          ),
+          "image/png",
+        );
+      const holdUpload = () =>
+        HttpClient.post("/api/ambient-media/image", {
+          headers: { cookie, "content-type": "image/png" },
+          body: heldBody(),
+        }).pipe(Effect.forkChild({ startImmediately: true }));
+
+      const firstHeld = yield* holdUpload();
+      const secondHeld = yield* holdUpload();
+
+      // Probe with a real upload until the cap is observed. Bounded: if the two
+      // held bodies never reach the route, this reports the last status seen
+      // rather than hanging.
+      const probeUntil = (expected: number) =>
+        Effect.gen(function* () {
+          let lastStatus = 0;
+          for (let attempt = 0; attempt < 60; attempt++) {
+            const probe = yield* HttpClient.post("/api/ambient-media/image", {
+              headers: { cookie, "content-type": "image/png" },
+              body: HttpBody.uint8Array(ambientPngBytes, "image/png"),
+            });
+            lastStatus = probe.status;
+            if (lastStatus === expected) return lastStatus;
+            yield* Effect.sleep(Duration.millis(25));
+          }
+          return lastStatus;
+        });
+
+      assert.equal(yield* probeUntil(429), 429);
+
+      // Cancelling one in-flight upload must hand its slot back. A slot that
+      // only came back on normal completion would decay capacity to zero the
+      // first time a renderer navigated away mid-upload.
+      yield* Fiber.interrupt(firstHeld);
+      assert.equal(yield* probeUntil(200), 200);
+
+      yield* Deferred.succeed(finishHeldBodies, undefined);
+      yield* Fiber.interrupt(secondHeld);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
