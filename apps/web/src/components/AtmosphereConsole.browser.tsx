@@ -4,6 +4,7 @@ import "../index.css";
 import type { EnvironmentId } from "@cafecode/contracts";
 import {
   DEFAULT_UNIFIED_SETTINGS,
+  MAX_FALLING_EFFECT_DENSITY,
   type ClientSettings,
   type UnifiedSettings,
 } from "@cafecode/contracts/settings";
@@ -26,6 +27,7 @@ const harness = vi.hoisted(() => {
     connection: { environmentId: "env-alpha" as EnvironmentId },
     applyClientSettingsUpdated: vi.fn(),
     updateClientSettings: vi.fn(),
+    interpret: vi.fn(),
     getEnvironmentId: () => environmentId,
     setEnvironmentId: (next: EnvironmentId | null) => {
       environmentId = next;
@@ -40,12 +42,21 @@ const harness = vi.hoisted(() => {
   };
 });
 
+vi.mock("../atmosphereLmStudio", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../atmosphereLmStudio")>()),
+  interpretAtmosphereCommandWithLmStudio: harness.interpret,
+}));
+
 vi.mock("../hooks/useSettings", () => ({
+  getClientSettings: () => harness.settings,
   useSettings: <T,>(selector?: (settings: UnifiedSettings) => T) =>
     selector ? selector(harness.settings) : harness.settings,
 }));
 
 vi.mock("../rpc/serverState", () => ({
+  getServerConfig: () => ({
+    ambientExperienceCapabilities: { atmosphere: harness.atmosphereAvailable },
+  }),
   useServerConfig: () => ({
     ambientExperienceCapabilities: { atmosphere: harness.atmosphereAvailable },
   }),
@@ -113,6 +124,15 @@ async function apply(request: string): Promise<void> {
   await page.getByRole("button", { name: "Apply" }).click();
 }
 
+async function chooseLocalModel(): Promise<void> {
+  const select = page.getByLabelText("Atmosphere interpreter").element() as HTMLSelectElement;
+  select.value = "lm-studio";
+  select.dispatchEvent(new Event("change", { bubbles: true }));
+  await expect
+    .element(page.getByTestId("atmosphere-console-status"))
+    .toHaveTextContent("Unrecognized wording goes to LM Studio");
+}
+
 describe("AtmosphereConsole", () => {
   beforeEach(() => {
     window.localStorage.clear();
@@ -121,6 +141,7 @@ describe("AtmosphereConsole", () => {
     harness.connection = { environmentId: "env-alpha" as EnvironmentId };
     harness.applyClientSettingsUpdated.mockReset();
     harness.updateClientSettings.mockReset();
+    harness.interpret.mockReset();
     harness.setEnvironmentId("env-alpha" as EnvironmentId);
   });
 
@@ -215,6 +236,173 @@ describe("AtmosphereConsole", () => {
       await screen.unmount();
     }
   });
+
+  it("keeps model interpretation off by default", async () => {
+    openConsole();
+    const screen = await render(<AtmosphereConsole />);
+    await expect.element(page.getByLabelText("Atmosphere interpreter")).toHaveValue("local");
+    await apply("make it feel snowy");
+    expect(harness.interpret).not.toHaveBeenCalled();
+    expect(harness.updateClientSettings).not.toHaveBeenCalled();
+    await screen.unmount();
+  });
+
+  it("uses the local parser first even when LM Studio is selected", async () => {
+    openConsole();
+    harness.updateClientSettings.mockResolvedValue({
+      ...DEFAULT_UNIFIED_SETTINGS,
+      fallingEffectsEnabled: true,
+      fallingEffectKind: "snow",
+    });
+    const screen = await render(<AtmosphereConsole />);
+    await chooseLocalModel();
+    await apply("snow");
+    expect(harness.interpret).not.toHaveBeenCalled();
+    expect(harness.updateClientSettings).toHaveBeenCalledWith({
+      fallingEffectsEnabled: true,
+      fallingEffectKind: "snow",
+    });
+    await screen.unmount();
+  });
+
+  it("saves a supported local-model proposal only after explicit opt-in", async () => {
+    openConsole();
+    harness.interpret.mockResolvedValue([{ kind: "set-effect", effect: "snow" }]);
+    harness.updateClientSettings.mockResolvedValue({
+      ...DEFAULT_UNIFIED_SETTINGS,
+      fallingEffectsEnabled: true,
+      fallingEffectKind: "snow",
+    });
+    const screen = await render(<AtmosphereConsole />);
+    await chooseLocalModel();
+    await apply("make it feel snowy");
+    expect(harness.interpret).toHaveBeenCalledTimes(1);
+    expect(harness.interpret.mock.calls[0]?.[0]).toBe("make it feel snowy");
+    expect(harness.updateClientSettings).toHaveBeenCalledWith({
+      fallingEffectsEnabled: true,
+      fallingEffectKind: "snow",
+    });
+    await expect
+      .element(page.getByTestId("atmosphere-console-status"))
+      .toHaveTextContent("Confirmed: Effect snow.");
+    await screen.unmount();
+  });
+
+  it("does not apply a late proposal after the server withdraws the capability", async () => {
+    openConsole();
+    let release!: (value: unknown) => void;
+    harness.interpret.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    );
+    const screen = await render(<AtmosphereConsole />);
+    await chooseLocalModel();
+    await apply("make it feel snowy");
+    harness.atmosphereAvailable = false;
+    release([{ kind: "set-effect", effect: "snow" }]);
+    await expect
+      .element(page.getByTestId("atmosphere-console-status"))
+      .toHaveTextContent("has not enabled");
+    expect(harness.updateClientSettings).not.toHaveBeenCalled();
+    await screen.unmount();
+  });
+
+  it("describes model use truthfully after opting in", async () => {
+    openConsole();
+    const screen = await render(<AtmosphereConsole />);
+    await chooseLocalModel();
+    expect(panel().textContent).not.toContain("No model or shell is used");
+    expect(panel().querySelector("section > p")?.textContent).toContain("LM Studio");
+    await screen.unmount();
+  });
+
+  it("keeps the command reachable through scrolling in a short console", async () => {
+    vi.spyOn(window, "innerWidth", "get").mockReturnValue(280);
+    vi.spyOn(window, "innerHeight", "get").mockReturnValue(180);
+    openConsole();
+    const screen = await render(<AtmosphereConsole />);
+    const form = panel().querySelector("form")!;
+    expect(form.scrollHeight).toBeGreaterThan(form.clientHeight);
+    expect(getComputedStyle(form).overflowY).toBe("auto");
+    const button = page.getByRole("button", { name: "Apply" }).element();
+    button.scrollIntoView({ block: "nearest" });
+    const visible = form.getBoundingClientRect();
+    const control = button.getBoundingClientRect();
+    expect(control.top).toBeGreaterThanOrEqual(visible.top);
+    expect(control.bottom).toBeLessThanOrEqual(visible.bottom);
+    await screen.unmount();
+  });
+
+  it("uses current settings for a relative proposal after interpretation finishes", async () => {
+    openConsole();
+    let release!: (value: unknown) => void;
+    harness.interpret.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    );
+    harness.updateClientSettings.mockResolvedValue({
+      ...DEFAULT_UNIFIED_SETTINGS,
+      fallingEffectDensity: MAX_FALLING_EFFECT_DENSITY,
+    });
+    const screen = await render(<AtmosphereConsole />);
+    await chooseLocalModel();
+    await apply("make it more dense");
+    harness.settings = { ...harness.settings, fallingEffectDensity: MAX_FALLING_EFFECT_DENSITY };
+    release([{ kind: "adjust", property: "density", direction: "increase" }]);
+    await vi.waitFor(() =>
+      expect(harness.updateClientSettings).toHaveBeenCalledWith({
+        fallingEffectDensity: MAX_FALLING_EFFECT_DENSITY,
+      }),
+    );
+    await screen.unmount();
+  });
+
+  it.each(["density 120", "snow and next song", "snow, rain"])(
+    "does not send a local validation refusal to a model: %s",
+    async (request) => {
+      openConsole();
+      const screen = await render(<AtmosphereConsole />);
+      await chooseLocalModel();
+      await apply(request);
+      expect(harness.interpret).not.toHaveBeenCalled();
+      expect(harness.updateClientSettings).not.toHaveBeenCalled();
+      await screen.unmount();
+    },
+  );
+
+  it.each(["unmount", "environment", "connection"])(
+    "ignores a late model proposal after %s changes",
+    async (ending) => {
+      openConsole();
+      let release!: (value: unknown) => void;
+      let signal!: AbortSignal;
+      harness.interpret.mockImplementation((_input: string, nextSignal: AbortSignal) => {
+        signal = nextSignal;
+        return new Promise((resolve) => {
+          release = resolve;
+        });
+      });
+      const screen = await render(<AtmosphereConsole />);
+      await chooseLocalModel();
+      await apply("make it feel snowy");
+      if (ending === "unmount") await screen.unmount();
+      else if (ending === "environment") {
+        harness.setEnvironmentId("env-beta" as EnvironmentId);
+        await expect
+          .element(page.getByTestId("atmosphere-console-status"))
+          .toHaveTextContent("primary environment changed");
+      } else harness.connection = { environmentId: "env-alpha" as EnvironmentId };
+      if (ending !== "connection") expect(signal.aborted).toBe(true);
+      release([{ kind: "set-effect", effect: "snow" }]);
+      await vi.waitFor(() => expect(signal.aborted).toBe(true));
+      expect(harness.updateClientSettings).not.toHaveBeenCalled();
+      if (ending !== "unmount") await screen.unmount();
+    },
+  );
 
   it("reports the settings the confirming write returned", async () => {
     openConsole();

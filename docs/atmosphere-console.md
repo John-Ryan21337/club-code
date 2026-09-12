@@ -9,6 +9,9 @@ Source of the port: `M:/ClubCode-local-release`, read-only, files
 
 ## What this adds
 
+This guide describes **Local grammar** mode. The optional [LM Studio fallback](atmosphere-local-model.md)
+is a separate opt-in path for unrecognized wording; it does not change the local grammar's refusal rules.
+
 A movable, resizable, minimizable panel that accepts short local commands for
 the falling-effect settings this build already installs. The console is a second
 way to reach the same settings the Appearance panel writes. It adds no new
@@ -107,16 +110,14 @@ frame, and window listeners are released on close and on unmount.
 
 ## Deferred: provider and media integration
 
-The source Club console also offered a model interpreter (LM Studio, Codex, and
-Claude fallbacks for unparsed sentences) and media, 2ch, and visualizer
-commands. None of those were adopted, because this build installs none of the
-backing features. Rather than ship inert menu entries or event-bus listeners
-with no publisher, that vocabulary is recognized only well enough to refuse it
-clearly.
+The source Club console also offered model interpretation and media, 2ch, and
+visualizer commands. This branch includes an opt-in LM Studio path described in
+the separate guide. Claude/Codex interpretation and the media integrations are
+still deferred. Their vocabulary is recognized only well enough to refuse it.
 
 Future extensions, each of which needs its own slice:
 
-- **Model interpreter.** Requires a server `interpretAtmosphereCommand` RPC and
+- **Claude/Codex interpreter.** Requires a server `interpretAtmosphereCommand` RPC and
   a decoder that admits only the same command union this parser produces, so a
   model cannot widen the boundary. Club's `decodeAtmosphereCommandProposal`
   is the reference for that shape. It must stay opt-in and must state which
@@ -188,7 +189,8 @@ Media: `docs/adoption-media/atmosphere-console/`, produced by
 その場合、ページの再読み込み後まで設定を保持することは保証しません。
 保存されたJSONは解析前に4,096文字までに制限し、別タブの変更も反映します。
 
-音楽・動画の操作、ビジュアライザー、2ch補完、モデルによる自由文解釈はこの差分に
-含みません。それらの語句は未対応として説明します。プロジェクト・会話・ファイルの
+音楽・動画の操作、ビジュアライザー、2ch補完、Claude/Codexによる自由文解釈はこの差分に
+含みません。任意で使えるLM Studio経路は別ガイドを参照してください。
+未対応の語句はその旨を説明します。プロジェクト・会話・ファイルの
 内容を解析しません。レビュー用画像と動画は実際のコンポーネントを合成設定で動かした
 もので、アカウントやプロジェクトの情報を含みません。
