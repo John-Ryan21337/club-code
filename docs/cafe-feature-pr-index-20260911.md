@@ -115,6 +115,14 @@ Native frame-audio prerequisite: [Club #111](https://github.com/John-Ryan21337/c
 
 日本語：Club #111 は Cafe IPC #75 を前提とする、フレーム音声取得のネイティブ基盤です。明示された要求を、表示・フォーカス中の正確な Cafe メインフレームからだけ受け付け、そのフレームの音声・映像を選びます。分離した Electron 42.5.1 の検査で合成トラックの取得と停止を確認しました。製品の開始・停止ボタンは追加せず、システム全体の音声取得は許可しません。実メディアの音声や他のOSは未確認です。
 
+Local media visualization: [Club #112](https://github.com/John-Ryan21337/club-code/pull/112), `66408536`, is based on engine #109. It adds explicit visualization controls for the local player, with retained audio-node ownership, preset changes and lifecycle cleanup. A real silent browser fixture and repeated activation were checked. Display capture and Matrix music reaction remain separate.
+
+日本語：Club #112 はエンジン #109 を前提とし、ローカルプレーヤーの明示的な可視化操作、音声ノードの所有権、プリセット切替、終了処理を追加します。実ブラウザーの無音検査と再有効化を確認しました。画面音声の取得と Matrix の音楽反応は別です。
+
+Matrix activity overlay: [Club #113](https://github.com/John-Ryan21337/club-code/pull/113), `e5d6b347`, is based on observations #110. Default-off selected-thread routes, category/color controls and bounded retention work above Canvas or GPU glyphs. Old routes clear before paint without reseeding; static reduced-motion routes expire while the provider is quiet. Decorative reports are not measured traffic, authenticated relationships or verified execution. Sibling console/privacy/profile integration remains separate.
+
+日本語：Club #113 は分類 #110 を前提とし、既定でオフの選択スレッド経路、分類・色・保持時間の設定を Canvas と GPU の文字層へ追加します。描画前に古い経路を消し、落下を初期化しません。動きを減らす設定でも、プロバイダー更新がない間に期限を処理します。装飾された報告であり、実通信の計測・認証済み関係・実行の証明ではありません。別のコンソール・プライバシー・プロファイルとの統合は別です。
+
 ## Browser adoption order
 
 1. [Cafe #63](https://github.com/cafeai/cafe-code/pull/63) defines bounded contracts;
@@ -173,14 +181,14 @@ The following remain separate from the published ports above:
 
 - Public YouTube discovery is #104 and the separate local-owner account/OAuth port is #107. These do not imply persistent account libraries or verified live access to Google.
 - Claude console interpretation is now #106. Codex still requires a verified containment boundary before it can be called supported.
-- Routed live work vocabulary is #105, optional cat AA/kana enrichment is #108, and the fixed provider-observation producer is #110. The full Matrix activity overlay remains under implementation and review at [Cafe issue #102](https://github.com/cafeai/cafe-code/issues/102). Historical Club fork #4/#7/#18 proposed pieces on older lineages; they do not establish a complete current-dev integration.
-- The bundled visualizer engine is #109 and the native current-frame capture grant is #111. Renderer capture controls, music-reactive integration and product visualizer activation remain follow-ups. The local/streaming players and prerequisites do not imply those capabilities.
+- Routed live work vocabulary is #105, optional cat AA/kana enrichment is #108, the fixed provider-observation producer is #110, and the activity overlay is #113. [Cafe issue #102](https://github.com/cafeai/cafe-code/issues/102) links both activity slices. Historical Club fork #4/#7/#18 proposed pieces on older lineages; neither those proposals nor individually green sibling PRs establish combined console/privacy/profile integration.
+- The bundled visualizer engine is #109, local-player activation is #112, and the native current-frame capture grant is #111. Renderer capture controls and Matrix music-reactive integration remain follow-ups. These published slices do not imply those additional capabilities.
 - SQLite/database observatory views and additional attribution are outside the file-only observatory #94. Cafe intentionally retired its diff viewer and worker-pool caller in `a4d4e3768e38f9c967f4715a4a4e9cbdc5c66992`; a pool-only transplant would be inert, and a diff-viewer return needs its own product proposal. Any further enrichment or collaboration claim needs concrete production-caller and existing-PR reconciliation.
 
 日本語：Club の全実装機能が現行 dev 向け PR になったという主張ではありません。
 公開 YouTube 検索・ローカル所有者のアカウント接続・Claude によるコンソール解釈・選択スレッドの作業語彙は、上の新しいドラフトにあります。
 永続的なアカウントライブラリや Google への実接続を確認したという意味ではありません。
-猫AA装飾は #108、固定の活動分類は #110、描画エンジン基盤は #109、フレーム音声取得のネイティブ基盤は #111 として公開済みです。Matrix 活動表示、画面からの音声取得操作、音楽反応、製品内のビジュアライザー有効化、
+猫AA装飾は #108、固定の活動分類は #110、活動表示は #113、描画エンジンは #109、ローカルプレーヤーでの有効化は #112、フレーム音声取得のネイティブ基盤は #111 として公開済みです。画面からの音声取得操作、Matrix の音楽反応、
 データベース表示などには、別の移植・確認作業が残っています。
 古い系統の提案が存在しても、現行 dev で統合済みとは扱いません。Codex の解釈機能には、
 安全な実行制限の確認が必要です。
