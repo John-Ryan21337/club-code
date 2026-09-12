@@ -17,6 +17,8 @@
 
 ## Windows-Specific Notes
 
+- Matrix activity classification can recognize bounded provider-reported PowerShell command wrappers, including the fixed headless null-pipe prefix. This is pure text classification on every platform: never execute or resolve those reported commands, and never infer a category from free-form titles, summaries or output. Keep the same conservative tokenizer and fixed command identities on macOS/Linux.
+
 - The separate scheduled/manual reliability workflow runs the existing Windows native installer/runtime/uninstaller smoke only on disposable GitHub-hosted Windows runners. It does not run on user machines or move process-backed/provider tests into the default suite. macOS uses its isolated DMG/ZIP smoke, and Linux keeps its existing artifact build and pipeline coverage.
 
 - Generic attachment originals and metadata are private `0600` files where POSIX permissions apply; provider-readable derivatives are `0400`. On Windows leave derivatives user-writable under Cafe's user-owned data-directory ACL instead of setting the read-only attribute, which would prevent safe cleanup. File names are inert display metadata and storage uses server-minted identifiers; Windows path separators in dropped names must never become server paths. Document extraction children use the current executable with `ELECTRON_RUN_AS_NODE=1` for packaged Electron backends and preserve only required Windows system-directory environment entries, not provider credentials or user-selected Node hooks. macOS/Linux retain the same isolated child behavior and their native permission checks.

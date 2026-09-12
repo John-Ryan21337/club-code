@@ -3705,6 +3705,60 @@ describe("ProviderRuntimeIngestion", () => {
     expect(rawOutput?.content).toMatch(/^\[content omitted: \d+ chars, \d+ lines\]$/);
   });
 
+  it("projects bounded provider observations through every tool lifecycle while retaining exact item and turn IDs", async () => {
+    const harness = await createHarness();
+    for (const type of ["item.started", "item.updated", "item.completed"] as const) {
+      harness.emit({
+        type,
+        eventId: asEventId(`observed-${type}`),
+        provider: ProviderDriverKind.make("testProvider"),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("observed-turn"),
+        itemId: asItemId("observed-item"),
+        payload: {
+          itemType: "command_execution",
+          status: "completed",
+          data: { command: "yarn build" },
+        },
+      });
+    }
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("unobserved-text"),
+      provider: ProviderDriverKind.make("testProvider"),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("observed-turn"),
+      payload: {
+        itemType: "command_execution",
+        status: "completed",
+        title: "build database web_search",
+        data: { command: "echo build database web_search" },
+      },
+    });
+    const thread = await waitForThread(harness.readModel, (entry) =>
+      entry.activities.some(
+        (activity: ProviderRuntimeTestActivity) => activity.id === "unobserved-text",
+      ),
+    );
+    for (const type of ["item.started", "item.updated", "item.completed"] as const) {
+      const activity = thread.activities.find(
+        (entry: ProviderRuntimeTestActivity) => entry.id === `observed-${type}`,
+      );
+      const payload = activity?.payload as Record<string, unknown>;
+      expect(activity?.turnId).toBe("observed-turn");
+      expect(payload.itemId).toBe("observed-item");
+      expect(payload.observed).toEqual({ providerObserved: true, activityType: "build" });
+      // Started events expose the category without introducing a copy of their command data.
+      if (type === "item.started") expect(payload.data).toBeUndefined();
+    }
+    const ignored = thread.activities.find(
+      (entry: ProviderRuntimeTestActivity) => entry.id === "unobserved-text",
+    );
+    expect((ignored?.payload as Record<string, unknown>).observed).toBeUndefined();
+  });
+
   it("projects Codex context compaction item lifecycle into visible tool activity", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
