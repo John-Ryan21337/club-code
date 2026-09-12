@@ -1,3 +1,14 @@
+import {
+  clickEmbeddedBrowser,
+  closeEmbeddedBrowser,
+  controlEmbeddedBrowserHistory,
+  navigateEmbeddedBrowser,
+  openEmbeddedBrowser,
+  setEmbeddedBrowserBounds,
+  shareEmbeddedBrowser,
+  snapshotEmbeddedBrowser,
+  typeInEmbeddedBrowser,
+} from "./methods/embeddedBrowser.ts";
 import * as Effect from "effect/Effect";
 
 import * as DesktopIpc from "./DesktopIpc.ts";
@@ -61,6 +72,15 @@ export const installDesktopIpcHandlers = Effect.gen(function* () {
   yield* ipc.handle(setServerHttpsEnabled);
   yield* ipc.handle(getAdvertisedEndpoints);
 
+  yield* ipc.handleFromSender(openEmbeddedBrowser);
+  yield* ipc.handleFromSender(closeEmbeddedBrowser);
+  yield* ipc.handleFromSender(setEmbeddedBrowserBounds);
+  yield* ipc.handleFromSender(shareEmbeddedBrowser);
+  yield* ipc.handleFromSender(navigateEmbeddedBrowser);
+  yield* ipc.handleFromSender(controlEmbeddedBrowserHistory);
+  yield* ipc.handleFromSender(snapshotEmbeddedBrowser);
+  yield* ipc.handleFromSender(clickEmbeddedBrowser);
+  yield* ipc.handleFromSender(typeInEmbeddedBrowser);
   yield* ipc.handle(pickFolder);
   yield* ipc.handle(confirm);
   yield* ipc.handle(setTheme);

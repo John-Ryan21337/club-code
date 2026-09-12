@@ -1,3 +1,4 @@
+import * as DesktopEmbeddedBrowser from "./browser/DesktopEmbeddedBrowser.ts";
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -141,6 +142,7 @@ const desktopRuntimeLayer = ElectronProtocol.layerSchemePrivileges.pipe(
       Layer.provideMerge(NodeServices.layer),
       Layer.provideMerge(NodeHttpClient.layerUndici),
       Layer.provideMerge(NetService.layer),
+      Layer.provideMerge(DesktopEmbeddedBrowser.layer),
       Layer.provideMerge(electronLayer),
     ),
   ),
