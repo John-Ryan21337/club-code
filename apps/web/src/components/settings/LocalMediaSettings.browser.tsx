@@ -197,3 +197,30 @@ it("releases a native picker result after its settings owner unmounts", async ()
   await vi.waitFor(() => expect(releaseLocalMedia).toHaveBeenCalledWith({ sessionId }));
   expect(localMediaStore.getSnapshot().source).toBeNull();
 });
+
+it("keeps local analysis opt-in and exposes explicit spectrum or MilkDrop choices", async () => {
+  const screen = await render(<LocalMediaSettings />);
+  try {
+    await expect.element(page.getByLabelText("Enable local media audio visualizer")).toBeDisabled();
+    expect(localMediaStore.getSnapshot().visualizerEnabled).toBe(false);
+    localMediaStore.selectFile(localAudioFile());
+    await page.getByLabelText("Enable local media audio visualizer").click();
+    expect(localMediaStore.getSnapshot()).toMatchObject({
+      visualizerEnabled: true,
+      visualizerStyle: "spectrum",
+      visualizerAutoCycle: false,
+    });
+    await page.getByLabelText("Local media visualizer style").click();
+    await page.getByRole("option", { name: "MilkDrop" }).click();
+    await expect.element(page.getByText(/rapid motion and flashing/)).toBeVisible();
+    await page.getByLabelText("Cycle MilkDrop presets").click();
+    expect(localMediaStore.getSnapshot()).toMatchObject({
+      visualizerStyle: "milkdrop",
+      visualizerAutoCycle: true,
+    });
+    await page.getByLabelText("Enable local media audio visualizer").click();
+    expect(localMediaStore.getSnapshot().visualizerEnabled).toBe(false);
+  } finally {
+    await screen.unmount();
+  }
+});

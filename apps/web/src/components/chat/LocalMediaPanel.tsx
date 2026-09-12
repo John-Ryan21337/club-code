@@ -37,6 +37,7 @@ import {
 } from "../../localMediaVideoGlow";
 import type { AmbientEdgePalette } from "../../ambientVideoGlow";
 import { cn } from "~/lib/utils";
+import { LocalMediaAudioVisualizer } from "./LocalMediaAudioVisualizer";
 
 const WIDTH_BY_SIZE: Record<LocalMediaPresetSize, number> = {
   small: 360,
@@ -551,6 +552,15 @@ export function LocalMediaPanel({
         <div className="flex shrink-0 items-center gap-1">
           <button
             type="button"
+            aria-label="Toggle local media audio visualizer"
+            aria-pressed={state.visualizerEnabled}
+            className="rounded px-1 py-0.5 text-[10px] hover:bg-white/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
+            onClick={() => localMediaStore.update({ visualizerEnabled: !state.visualizerEnabled })}
+          >
+            Visualizer
+          </button>
+          <button
+            type="button"
             aria-label="Previous local media"
             disabled={state.navigationPending}
             className="rounded p-1 hover:bg-white/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white disabled:opacity-40"
@@ -631,6 +641,18 @@ export function LocalMediaPanel({
             data-local-media-source={source.engine}
             tabIndex={backgroundEffective ? -1 : undefined}
           />
+          <LocalMediaAudioVisualizer
+            enabled={state.visualizerEnabled}
+            mediaElement={mediaElement}
+            style={state.visualizerStyle}
+            presetName={state.visualizerPresetName}
+            autoCycle={state.visualizerAutoCycle}
+            cycleSeconds={state.visualizerCycleSeconds}
+            blendSeconds={state.visualizerBlendSeconds}
+            onPresetChange={(visualizerPresetName) =>
+              localMediaStore.update({ visualizerPresetName })
+            }
+          />
         </div>
       ) : (
         <div
@@ -654,6 +676,18 @@ export function LocalMediaPanel({
             preload="metadata"
             src={source.objectUrl}
             data-local-media-source={source.engine}
+          />
+          <LocalMediaAudioVisualizer
+            enabled={state.visualizerEnabled}
+            mediaElement={mediaElement}
+            style={state.visualizerStyle}
+            presetName={state.visualizerPresetName}
+            autoCycle={state.visualizerAutoCycle}
+            cycleSeconds={state.visualizerCycleSeconds}
+            blendSeconds={state.visualizerBlendSeconds}
+            onPresetChange={(visualizerPresetName) =>
+              localMediaStore.update({ visualizerPresetName })
+            }
           />
         </div>
       )}

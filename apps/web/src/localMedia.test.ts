@@ -507,3 +507,30 @@ describe("local media store", () => {
     });
   });
 });
+
+it("bounds optional visualizer timing and clears its session choices with the queue", () => {
+  const store = createLocalMediaStore(createUrlApi().api);
+  expect(store.getSnapshot()).toMatchObject({
+    visualizerEnabled: false,
+    visualizerStyle: "spectrum",
+    visualizerAutoCycle: false,
+  });
+  store.update({
+    visualizerEnabled: true,
+    visualizerStyle: "milkdrop",
+    visualizerCycleSeconds: Infinity,
+    visualizerBlendSeconds: NaN,
+  });
+  expect(store.getSnapshot()).toMatchObject({
+    visualizerEnabled: true,
+    visualizerCycleSeconds: 30,
+    visualizerBlendSeconds: 4,
+  });
+  store.update({ visualizerCycleSeconds: -10, visualizerBlendSeconds: 999 });
+  expect(store.getSnapshot()).toMatchObject({
+    visualizerCycleSeconds: 3,
+    visualizerBlendSeconds: 30,
+  });
+  store.clear();
+  expect(store.getSnapshot()).toEqual(DEFAULT_LOCAL_MEDIA_STATE);
+});

@@ -191,6 +191,65 @@ export function LocalMediaSettings() {
       />
 
       <SettingsRow
+        title="Audio visualizer"
+        description="Analyze the selected local file in this renderer. The visualizer does not record, upload, or request microphone audio. Motion pauses when this window is hidden, unfocused, or uses reduced motion."
+        control={
+          <Switch
+            aria-label="Enable local media audio visualizer"
+            checked={state.visualizerEnabled}
+            disabled={!hasSource}
+            onCheckedChange={(visualizerEnabled) => localMediaStore.update({ visualizerEnabled })}
+          />
+        }
+      />
+      {state.visualizerEnabled ? (
+        <>
+          <SettingsRow
+            title="Visualizer style"
+            description="MilkDrop can contain rapid motion and flashing imagery. Choose Spectrum for a simpler display."
+            control={
+              <Select
+                value={state.visualizerStyle}
+                onValueChange={(value) => {
+                  if (value === "spectrum" || value === "milkdrop")
+                    localMediaStore.update({ visualizerStyle: value });
+                }}
+              >
+                <SelectTrigger className="w-full sm:w-44" aria-label="Local media visualizer style">
+                  <SelectValue>
+                    {state.visualizerStyle === "milkdrop" ? "MilkDrop" : "Spectrum"}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectPopup align="end" alignItemWithTrigger={false}>
+                  <SelectItem hideIndicator value="spectrum">
+                    Spectrum
+                  </SelectItem>
+                  <SelectItem hideIndicator value="milkdrop">
+                    MilkDrop
+                  </SelectItem>
+                </SelectPopup>
+              </Select>
+            }
+          />
+          {state.visualizerStyle === "milkdrop" ? (
+            <SettingsRow
+              title="Cycle MilkDrop presets"
+              description="Change the locally bundled preset every 30 seconds with a four-second blend. Use the player's controls to change it manually."
+              control={
+                <Switch
+                  aria-label="Cycle MilkDrop presets"
+                  checked={state.visualizerAutoCycle}
+                  onCheckedChange={(visualizerAutoCycle) =>
+                    localMediaStore.update({ visualizerAutoCycle })
+                  }
+                />
+              }
+            />
+          ) : null}
+        </>
+      ) : null}
+
+      <SettingsRow
         title="Presentation"
         description="Floating places the player over chat. Cinema places the player beside chat. Video background places the video behind readable chat surfaces."
         control={

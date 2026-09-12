@@ -690,3 +690,7 @@ Use these as implementation references when designing protocol handling, UX flow
 - Codex-Monitor reference implementation: `https://github.com/Dimillian/CodexMonitor`
 
 Provider integrations change frequently. Before implementing or changing Codex, Claude, or OpenCode lifecycle behavior, check the current official docs plus the version-pinned local package/source used by this repository, then document the relevant assumption in code comments and tests.
+
+## Local media visualizer
+
+- The local player analysis is explicit and session-only. Keep the approved local-source boundary, single owned audio graph, serialized MilkDrop activation, pending-context teardown and fresh approval checks. Retain a stopped renderer across style changes; release its context only when its input owner is removed. Canvas limits and reduced-motion/visibility/focus suspension are required. Capture and Matrix signal consumers are separate follow-ups; see `docs/local-media-visualizer.md`.
