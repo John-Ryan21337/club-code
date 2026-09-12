@@ -207,6 +207,8 @@ If a tradeoff is required, choose correctness, durability, and debuggability ove
 
 ## Renderer Ambiance Layer
 
+- The MilkDrop engine is a separate explicit-use prerequisite. Keep Butterchurn 2.6.7 and the six bundled preset packs from 2.4.7 behind dynamic imports; never accept uploaded presets, arbitrary code or external textures through this wrapper. Preset equations are trusted bundled third-party code, not a sandbox. The controller owns one RAF and only its targeted analysis connection; stop/destroy must preserve the caller's audible graph, and the caller owns visibility, audio consent and stale asynchronous activation disposal. Verify the opt-in `node apps/web/scripts/milkdrop-engine-smoke.mjs` with synthetic silent audio; this engine slice does not mount a product UI or acquire audio.
+
 - Local media queues, safe display titles, opaque native tokens and browser object URLs remain current-document state. Environment changes, pagehide and workspace teardown release playback. Preserve native-picker revision checks and release stale results. Cinema/background local presentation removes the streaming iframe. Scope background transparency to the owning workspace and keep controls reachable below the native caption band. Visualizers, system audio capture and MilkDrop are separate adoption slices.
 
 - Ambiance is an optional decorative weather layer drawn on one full-window `pointer-events: none` canvas at z-40 (above app content, below z-50 dialogs/popovers and toasts). It is renderer-only decoration: it consumes already-projected store state and must never synthesize provider lifecycle truth, dispatch commands, or feed anything back into orchestration.
