@@ -9,6 +9,14 @@ import { useServerConfig } from "../rpc/serverState";
 import { useStore } from "../store";
 import { decodeMatrixWorkVocabulary, selectMatrixWorkVocabularyKey } from "../matrixWorkVocabulary";
 import {
+  createMatrixActivityAnimationState,
+  decodeMatrixActivityEvents,
+  drawMatrixActivityAnimation,
+  MATRIX_ACTIVITY_TTL_MS,
+  selectMatrixActivityEventsKey,
+  updateMatrixActivityAnimationInPlace,
+} from "../matrixActivityOverlay";
+import {
   advanceAtmosphereSceneInPlace,
   applyMatrixWorkVocabularyInPlace,
   createAtmosphereScene,
@@ -70,12 +78,54 @@ export function WindowAtmosphere({
   const liveWorkVocabularyEnabled = useSettings(
     (settings) => settings.fallingEffectLiveWorkVocabularyEnabled,
   );
+  const activityLinksEnabled = useSettings((settings) => settings.fallingEffectActivityLinks);
+  const activityNetwork = useSettings(
+    (settings) => settings.fallingEffectActivityLinkNetworkEnabled,
+  );
+  const activityDatabase = useSettings(
+    (settings) => settings.fallingEffectActivityLinkDatabaseEnabled,
+  );
+  const activityBuild = useSettings((settings) => settings.fallingEffectActivityLinkBuildEnabled);
+  const activityAgent = useSettings((settings) => settings.fallingEffectActivityLinkAgentEnabled);
+  const activityWork = useSettings((settings) => settings.fallingEffectActivityLinkWorkEnabled);
+  const activityColorMode = useSettings((settings) => settings.fallingEffectActivityLinkColorMode);
+  const activityRetentionSeconds = useSettings(
+    (settings) => settings.fallingEffectActivityLinkRetentionSeconds,
+  );
   const continueBackgroundAnimations = useSettings(
     (settings) => settings.continueBackgroundAnimations,
   );
   const { resolvedTheme } = useTheme();
   const serverConfig = useServerConfig();
   const atmosphereAvailable = serverConfig?.ambientExperienceCapabilities.atmosphere === true;
+  const activityKey = useStore((state) =>
+    atmosphereAvailable && enabled && kind === "matrix" && activityLinksEnabled
+      ? selectMatrixActivityEventsKey(
+          state,
+          selectedThreadRef,
+          {
+            network: activityNetwork,
+            database: activityDatabase,
+            build: activityBuild,
+            agent: activityAgent,
+            work: activityWork,
+          },
+          { nowMs: Date.now(), requestedTtlMs: activityRetentionSeconds * 1000 },
+        )
+      : "",
+  );
+  const activityEvents = useMemo(() => decodeMatrixActivityEvents(activityKey), [activityKey]);
+  const activityPresentation = useMemo(
+    () => ({
+      events: activityEvents,
+      enabled: activityLinksEnabled,
+      colorMode: activityColorMode,
+      retentionMs: activityRetentionSeconds * 1000,
+    }),
+    [activityEvents, activityLinksEnabled, activityColorMode, activityRetentionSeconds],
+  );
+  const activityRef = useRef(activityPresentation);
+  const updateActivityRef = useRef<(() => void) | null>(null);
   const vocabularyKey = useStore((state) =>
     atmosphereAvailable && enabled && kind === "matrix" && liveWorkVocabularyEnabled
       ? selectMatrixWorkVocabularyKey(state, selectedThreadRef)
@@ -149,6 +199,13 @@ export function WindowAtmosphere({
     if (matrixGpuCanvasRef.current) matrixGpuCanvasRef.current.style.visibility = "hidden";
     updateVocabularyRef.current?.();
   }, [vocabulary]);
+
+  // Operational inputs can change while no RAF runs. Replace the old route
+  // before paint and expire its static frame without restarting the simulation.
+  useLayoutEffect(() => {
+    activityRef.current = activityPresentation;
+    updateActivityRef.current?.();
+  }, [activityPresentation]);
 
   // Acquiring the WebGL2 context is independent from the draw loop: a GPU
   // failure must never restart or reseed the shared simulation.
@@ -237,6 +294,38 @@ export function WindowAtmosphere({
       context.setTransform(1, 0, 0, 1, 0, 0);
       context.clearRect(0, 0, canvas.width, canvas.height);
       context.restore();
+    };
+
+    const activityState = createMatrixActivityAnimationState();
+    let activityExpiryTimer: number | null = null;
+    const cancelActivityExpiry = () => {
+      if (activityExpiryTimer !== null) window.clearTimeout(activityExpiryTimer);
+      activityExpiryTimer = null;
+    };
+    const scheduleActivityExpiry = (nowMs: number) => {
+      cancelActivityExpiry();
+      const activity = activityRef.current;
+      if (!reducedMotion.matches || !activity.enabled || activityState.pulseCount === 0) return;
+      let nearest = Infinity;
+      for (const event of activity.events) {
+        for (const ttl of [
+          MATRIX_ACTIVITY_TTL_MS,
+          ...(activityState.linkCount > 0 ? [activity.retentionMs] : []),
+        ]) {
+          const expiry = event.observedAtMs + ttl;
+          if (Number.isFinite(expiry) && expiry > nowMs) nearest = Math.min(nearest, expiry);
+        }
+      }
+      if (!Number.isFinite(nearest)) return;
+      activityExpiryTimer = window.setTimeout(
+        () => {
+          activityExpiryTimer = null;
+          if (shouldShowAtmosphere(atmosphereState()) && reducedMotion.matches) {
+            renderScene(performance.now(), false, true);
+          }
+        },
+        Math.max(1, Math.ceil(nearest - nowMs) + 1),
+      );
     };
 
     const resize = () => {
@@ -354,23 +443,48 @@ export function WindowAtmosphere({
         clearCanvasBitmap();
         canvas.dataset.atmosphereRenderer = "webgl2-glyph-atlas";
         canvas.dataset.atmosphereTextRasterization = "gpu-glyph-atlas";
-        return;
+      } else {
+        drawAtmosphereScene(
+          context,
+          scene,
+          color,
+          renderOpacity,
+          matrixColorFrame,
+          motionMode,
+          walkStartFontSize,
+          walkEndFontSize,
+          matrixBaseFontSize,
+        );
+        canvas.dataset.atmosphereRenderer = "canvas2d";
+        canvas.dataset.atmosphereTextRasterization = "main-thread";
+        canvas.dataset.atmosphereFrameCommit = "canvas2d";
       }
-
-      drawAtmosphereScene(
-        context,
-        scene,
-        color,
-        renderOpacity,
-        matrixColorFrame,
-        motionMode,
-        walkStartFontSize,
-        walkEndFontSize,
-        matrixBaseFontSize,
-      );
-      canvas.dataset.atmosphereRenderer = "canvas2d";
-      canvas.dataset.atmosphereTextRasterization = "main-thread";
-      canvas.dataset.atmosphereFrameCommit = "canvas2d";
+      const activity = activityRef.current;
+      if (matrixColorFrame && activity.enabled) {
+        const nowMs = Date.now();
+        updateMatrixActivityAnimationInPlace(
+          activityState,
+          activity.events,
+          nowMs,
+          scene.particles.length,
+          reducedMotion.matches,
+          activity.retentionMs,
+        );
+        drawMatrixActivityAnimation(
+          context,
+          scene,
+          activityState,
+          renderOpacity,
+          activity.colorMode,
+          matrixColorFrame,
+          motionMode,
+          walkStartFontSize,
+          walkEndFontSize,
+        );
+        scheduleActivityExpiry(nowMs);
+      } else {
+        cancelActivityExpiry();
+      }
     };
 
     /**
@@ -407,7 +521,16 @@ export function WindowAtmosphere({
       }
     };
 
+    const updateActivity = () => {
+      cancelActivityExpiry();
+      if (scene === null) return;
+      if (shouldShowAtmosphere(atmosphereState()))
+        renderScene(performance.now(), false, reducedMotion.matches);
+      else clearCanvasBitmap();
+    };
+
     const syncAnimation = () => {
+      cancelActivityExpiry();
       const state = atmosphereState();
       const visible = shouldShowAtmosphere(state);
       const canAnimate = shouldAnimateAtmosphere(state);
@@ -441,6 +564,7 @@ export function WindowAtmosphere({
     resize();
     repaintAtmosphereRef.current = repaintCurrentScene;
     updateVocabularyRef.current = updateVocabulary;
+    updateActivityRef.current = updateActivity;
     syncPresentationRef.current = syncAnimation;
     appliedPresentationRef.current = readPresentation();
     syncAnimation();
@@ -451,6 +575,8 @@ export function WindowAtmosphere({
     reducedMotion.addEventListener("change", syncAnimation);
 
     return () => {
+      if (updateActivityRef.current === updateActivity) updateActivityRef.current = null;
+      cancelActivityExpiry();
       if (updateVocabularyRef.current === updateVocabulary) updateVocabularyRef.current = null;
       if (repaintAtmosphereRef.current === repaintCurrentScene) {
         repaintAtmosphereRef.current = null;

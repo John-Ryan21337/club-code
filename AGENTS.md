@@ -17,6 +17,8 @@
 
 ## Windows-Specific Notes
 
+- Matrix activity routes use the same bounded Canvas overlay above either glyph backend on Windows, macOS and Linux. Native occlusion and focus policy must cancel its owned expiry timer with the existing animation lifecycle; reduced-motion routes must still expire while the provider is quiet. Keep the overlay independent of GPU availability and preserve the falling scene across route/category changes. Verify both Canvas and scripted GPU route replacement before the forced desktop build; synthetic captures do not qualify physical graphics hardware.
+
 - Matrix activity classification can recognize bounded provider-reported PowerShell command wrappers, including the fixed headless null-pipe prefix. This is pure text classification on every platform: never execute or resolve those reported commands, and never infer a category from free-form titles, summaries or output. Keep the same conservative tokenizer and fixed command identities on macOS/Linux.
 
 - The separate scheduled/manual reliability workflow runs the existing Windows native installer/runtime/uninstaller smoke only on disposable GitHub-hosted Windows runners. It does not run on user machines or move process-backed/provider tests into the default suite. macOS uses its isolated DMG/ZIP smoke, and Linux keeps its existing artifact build and pipeline coverage.
