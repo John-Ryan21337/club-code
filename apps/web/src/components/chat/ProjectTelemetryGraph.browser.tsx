@@ -68,6 +68,103 @@ function telemetryFixture(input: {
 describe("ProjectTelemetryGraph", () => {
   beforeEach(async () => page.viewport(800, 600));
 
+  it("shows hottest category histories and clears them when the selected project changes", async () => {
+    const readTelemetry = vi.fn(async (_environmentId, projectId) => ({
+      ...telemetryFixture({ projectId }),
+      ...(projectId === projectA
+        ? {
+            temperatures: {
+              version: 1 as const,
+              status: "available" as const,
+              reason: null,
+              detail: null,
+              sensors: [
+                {
+                  kind: "cpu" as const,
+                  label: "Core 1",
+                  source: "linux-hwmon" as const,
+                  temperatureCelsius: 40,
+                },
+                {
+                  kind: "cpu" as const,
+                  label: "Core 2",
+                  source: "linux-hwmon" as const,
+                  temperatureCelsius: 60,
+                },
+                {
+                  kind: "gpu" as const,
+                  label: "GPU",
+                  source: "nvidia-smi" as const,
+                  temperatureCelsius: 0,
+                },
+              ],
+            },
+          }
+        : {}),
+    }));
+    const mounted = await render(
+      <ProjectTelemetryGraph
+        environmentId={environmentA}
+        projectId={projectA}
+        readTelemetry={readTelemetry}
+      />,
+    );
+    try {
+      await page.getByLabelText("Expand Resources").click();
+      await page.getByText("Temperature histories", { exact: true }).click();
+      await expect
+        .element(page.getByLabelText("CPU temperature: 60 °C. Hottest of 2 reported sensors."))
+        .toBeVisible();
+      await expect
+        .element(page.getByLabelText("GPU temperature: 0 °C. Hottest of 1 reported sensor."))
+        .toBeVisible();
+      await expect
+        .element(
+          page.getByLabelText(
+            "RAM temperature: Unavailable. No measured sensor in this category.",
+            { exact: true },
+          ),
+        )
+        .toBeVisible();
+      const cpuGraph = page.getByRole("img", { name: "CPU temperature history" }).element();
+      expect(cpuGraph.querySelector("circle")).not.toBeNull();
+      const panel = page.getByLabelText("Selected project system telemetry").element();
+      expect(panel.getBoundingClientRect().height).toBeLessThanOrEqual(
+        window.innerHeight * 0.6 + 1,
+      );
+      const cpuCard = page
+        .getByLabelText("CPU temperature: 60 °C. Hottest of 2 reported sensors.")
+        .element();
+      cpuCard.scrollIntoView({ block: "nearest" });
+      expect(cpuCard.getBoundingClientRect().top).toBeGreaterThanOrEqual(
+        panel.getBoundingClientRect().top,
+      );
+      expect(cpuCard.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+        panel.getBoundingClientRect().bottom,
+      );
+      await mounted.rerender(
+        <ProjectTelemetryGraph
+          environmentId={environmentA}
+          projectId={projectB}
+          readTelemetry={readTelemetry}
+        />,
+      );
+      await expect
+        .element(
+          page.getByLabelText("CPU temperature: Unavailable. No measured sensor in this category."),
+        )
+        .toBeVisible();
+      expect(
+        page
+          .getByRole("img", { name: "CPU temperature history" })
+          .element()
+          .querySelector("circle"),
+      ).toBeNull();
+    } finally {
+      await mounted.unmount();
+    }
+  });
+
   it("shows reported temperatures and explains missing host sensors without inventing values", async () => {
     const measurement: ServerProjectSystemTelemetryResult = {
       ...telemetryFixture({ projectId: projectA }),
@@ -97,7 +194,11 @@ describe("ProjectTelemetryGraph", () => {
       await page.getByLabelText("Expand Resources").click();
       await page.getByText("Host temperatures (1)").click();
       await expect.element(page.getByText("NVIDIA Test GPU", { exact: true })).toBeVisible();
-      await expect.element(page.getByText("61.5 °C", { exact: true })).toBeVisible();
+      await expect
+        .element(
+          page.getByLabelText("Measured host temperatures").getByText("61.5 °C", { exact: true }),
+        )
+        .toBeVisible();
       await expect.element(page.getByText("Host sensor provider is unavailable.")).toBeVisible();
     } finally {
       await mounted.unmount();
@@ -106,6 +207,10 @@ describe("ProjectTelemetryGraph", () => {
 
   it("removes old temperature values when the next telemetry request fails", async () => {
     const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    let rejectNext!: (error: Error) => void;
+    const nextRead = new Promise<ServerProjectSystemTelemetryResult>((_resolve, reject) => {
+      rejectNext = reject;
+    });
     const readTelemetry = vi
       .fn()
       .mockResolvedValueOnce({
@@ -120,7 +225,7 @@ describe("ProjectTelemetryGraph", () => {
           ],
         },
       })
-      .mockRejectedValue(new Error("synthetic request failure"));
+      .mockImplementation(() => nextRead);
     const mounted = await render(
       <ProjectTelemetryGraph
         environmentId={environmentA}
@@ -132,9 +237,24 @@ describe("ProjectTelemetryGraph", () => {
     try {
       await page.getByLabelText("Expand Resources").click();
       await page.getByText("Host temperatures (1)").click();
-      await expect.element(page.getByText("55.5 °C", { exact: true })).toBeVisible();
+      await expect
+        .element(
+          page.getByLabelText("Measured host temperatures").getByText("55.5 °C", { exact: true }),
+        )
+        .toBeVisible();
+      await page.getByText("Temperature histories", { exact: true }).click();
+      await expect
+        .element(page.getByLabelText("CPU temperature: 55.5 °C. Hottest of 1 reported sensor."))
+        .toBeVisible();
+      await vi.waitFor(() => expect(readTelemetry).toHaveBeenCalledTimes(2));
+      rejectNext(new Error("synthetic request failure"));
       await expect.element(page.getByText("Host temperatures — unavailable")).toBeVisible();
       await expect.element(page.getByText("55.5 °C", { exact: true })).not.toBeInTheDocument();
+      await expect
+        .element(
+          page.getByLabelText("CPU temperature: Unavailable. No measured sensor in this category."),
+        )
+        .toBeVisible();
       expect(errorLog).toHaveBeenCalledTimes(1);
     } finally {
       await mounted.unmount();

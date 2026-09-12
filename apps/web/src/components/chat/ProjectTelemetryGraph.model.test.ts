@@ -1,6 +1,7 @@
 import { ProjectId, type ServerProjectSystemTelemetryResult } from "@cafecode/contracts";
 import * as DateTime from "effect/DateTime";
 import { describe, expect, it } from "vitest";
+import { emptyTemperatureCategoryValues } from "./ProjectTemperatureHistory.model";
 
 import {
   appendBoundedTelemetryHistory,
@@ -62,6 +63,7 @@ function gpuAdapter(overrides: Record<string, unknown> = {}) {
 
 function historyPoint(sampledAtMs: number): ProjectTelemetryHistoryPoint {
   return {
+    temperatures: emptyTemperatureCategoryValues(),
     sampledAtMs,
     cpuPercent: sampledAtMs,
     memoryPercent: sampledAtMs,
