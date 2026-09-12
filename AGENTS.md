@@ -17,6 +17,10 @@
 
 ## Windows-Specific Notes
 
+- VLC helpers receive an explicit environment allowlist and a private launch-directory working directory. Provider credentials, Node hooks, user PATH and VLC plugin overrides must not reach the decoder. Unreaped children retain the global two-child admission budget; each item permits at most four response streams. Keep equivalent isolation and lifetime bounds on macOS/Linux.
+
+- Native local-media playback launches VLC as a separate process. Discover only an absolute `CAFE_CODE_VLC_PATH` override or fixed OS install locations; do not scan PATH or the registry. Keep source paths and loopback capabilities off argv, renderer results and logs. Use private temporary launch files. Windows VLC 3.0.12 does not consume redirected RC stdin, so use an opaque XSPF launch file and retry its owned cleanup after child exit. POSIX retains the encoded file URL over RC stdin. Cross-platform fixture paths must follow the host path policy. Verify lifecycle/protocol tests and an opt-in synthetic VLC playback probe, then the required forced desktop build.
+
 - The separate scheduled/manual reliability workflow runs the existing Windows native installer/runtime/uninstaller smoke only on disposable GitHub-hosted Windows runners. It does not run on user machines or move process-backed/provider tests into the default suite. macOS uses its isolated DMG/ZIP smoke, and Linux keeps its existing artifact build and pipeline coverage.
 
 - Generic attachment originals and metadata are private `0600` files where POSIX permissions apply; provider-readable derivatives are `0400`. On Windows leave derivatives user-writable under Cafe's user-owned data-directory ACL instead of setting the read-only attribute, which would prevent safe cleanup. File names are inert display metadata and storage uses server-minted identifiers; Windows path separators in dropped names must never become server paths. Document extraction children use the current executable with `ELECTRON_RUN_AS_NODE=1` for packaged Electron backends and preserve only required Windows system-directory environment entries, not provider credentials or user-selected Node hooks. macOS/Linux retain the same isolated child behavior and their native permission checks.
@@ -68,6 +72,8 @@ Core priorities:
 If a tradeoff is required, choose correctness, durability, and debuggability over short-term convenience.
 
 ## Security Requirements
+
+- Local-media sessions belong to the exact IPC owner. A native picker supplies source files; renderer input may only navigate or release its opaque session. Keep queues bounded, deny other owners and unknown playback tokens, and terminate owned children and streams when the owner closes or the app exits. Renderer playback uses an owner-authorized custom protocol instead of filesystem or loopback source URLs.
 
 - Bind desktop IPC authority to both the exact registered `webContents` and its configured renderer origin (or exact production file). Reject other loopback ports, deceptive loopback hostnames, child frames, and destroyed senders. Keep the trusted renderer on this navigation scope. Sender-aware handlers receive the already-validated event; use strict payload decoding for capability-bearing APIs and reject extra fields before running the handler.
 

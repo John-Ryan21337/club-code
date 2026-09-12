@@ -1,4 +1,10 @@
 import type {
+  DesktopLocalMediaCapability,
+  DesktopLocalMediaNavigateInput,
+  DesktopLocalMediaReleaseInput,
+  DesktopLocalMediaSelection,
+} from "./localMedia.ts";
+import type {
   ProviderRespondToInteractionInput,
   ProviderResolveInteractionUrlInput,
 } from "./providerInteraction.ts";
@@ -352,6 +358,12 @@ export const DesktopRendererDebugSnapshotSchema = Schema.Record(Schema.String, S
 export type DesktopRendererDebugSnapshot = typeof DesktopRendererDebugSnapshotSchema.Type;
 
 export interface DesktopBridge {
+  getLocalMediaCapability: () => Promise<DesktopLocalMediaCapability>;
+  pickLocalMedia: () => Promise<DesktopLocalMediaSelection | null>;
+  navigateLocalMedia: (
+    input: DesktopLocalMediaNavigateInput,
+  ) => Promise<DesktopLocalMediaSelection | null>;
+  releaseLocalMedia: (input: DesktopLocalMediaReleaseInput) => Promise<boolean>;
   getAppBranding: () => DesktopAppBranding | null;
   getLocalEnvironmentBootstrap: () => DesktopEnvironmentBootstrap | null;
   getDebugEndpointState: () => Promise<DesktopDebugEndpointState>;
