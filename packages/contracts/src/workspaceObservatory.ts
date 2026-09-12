@@ -32,6 +32,24 @@ const RelativePath = Schema.String.check(
   Schema.isMaxLength(WORKSPACE_OBSERVATORY_LIMITS.relativePathLength),
 );
 
+export const WORKSPACE_DATABASE_DISCOVERY_LIMITS = {
+  results: 40,
+  directories: 128,
+  entries: 2000,
+  depth: 6,
+  headerProbes: 64,
+} as const;
+export const WorkspaceObservatoryDatabasesInput = Schema.Struct({ projectId: ProjectId });
+export type WorkspaceObservatoryDatabasesInput = typeof WorkspaceObservatoryDatabasesInput.Type;
+export const WorkspaceObservatoryDatabasesResult = Schema.Struct({
+  databases: Schema.Array(Schema.Struct({ relativePath: RelativePath })).check(
+    Schema.isMaxLength(WORKSPACE_DATABASE_DISCOVERY_LIMITS.results),
+  ),
+  truncated: Schema.Boolean,
+  redacted: Schema.Boolean,
+});
+export type WorkspaceObservatoryDatabasesResult = typeof WorkspaceObservatoryDatabasesResult.Type;
+
 export const WorkspaceObservatoryTreeInput = Schema.Struct({
   projectId: ProjectId,
   relativePath: Schema.optionalKey(RelativePath),

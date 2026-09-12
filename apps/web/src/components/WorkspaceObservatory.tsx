@@ -7,6 +7,7 @@ import { cn } from "~/lib/utils";
 import { diffFileLines, type FileLineDiff } from "~/workspaceObservatoryDiff";
 import { Button } from "./ui/button";
 import { WorkspaceDatabaseViewer } from "./WorkspaceDatabaseViewer";
+import { WorkspaceDatabaseDiscovery } from "./WorkspaceDatabaseDiscovery";
 import {
   Dialog,
   DialogDescription,
@@ -386,6 +387,14 @@ function WorkspaceObservatorySession({
   return (
     <DialogPanel className="grid gap-4 lg:grid-cols-[18rem_1fr]">
       <section className="min-w-0" aria-label="Workspace tree">
+        {databaseConnection ? (
+          <WorkspaceDatabaseDiscovery
+            environmentId={environmentId}
+            projectId={projectId}
+            connection={databaseConnection}
+            onSelect={setDatabasePath}
+          />
+        ) : null}
         <nav className="flex flex-wrap items-center gap-1 text-xs" aria-label="Breadcrumb">
           <Button
             type="button"

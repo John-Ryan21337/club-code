@@ -21,6 +21,7 @@ export function createEnvironmentApi(rpcClient: WsRpcClient): EnvironmentApi {
     workspaceObservatory: {
       tables: rpcClient.workspaceObservatory.tables,
       rows: rpcClient.workspaceObservatory.rows,
+      databases: rpcClient.workspaceObservatory.databases,
       tree: rpcClient.workspaceObservatory.tree,
       readFile: rpcClient.workspaceObservatory.readFile,
     },
