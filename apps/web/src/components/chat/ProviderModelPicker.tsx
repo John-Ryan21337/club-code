@@ -115,8 +115,8 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
             variant={props.triggerVariant ?? "ghost"}
             data-chat-provider-model-picker="true"
             className={cn(
-              "min-w-0 justify-start overflow-hidden whitespace-nowrap px-2 text-muted-foreground/70 hover:text-foreground/80 [&_svg]:mx-0",
-              props.compact ? "max-w-42 shrink-0" : "max-w-48 shrink sm:max-w-56 sm:px-3",
+              "h-auto min-h-7 min-w-0 max-w-full shrink-0 justify-start whitespace-normal px-2 py-1 text-muted-foreground/70 hover:text-foreground/80 [&_svg]:mx-0",
+              !props.compact && "sm:px-3",
               props.triggerClassName,
             )}
             disabled={props.disabled}
@@ -125,8 +125,8 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
       >
         <span
           className={cn(
-            "flex min-w-0 w-full box-border items-center gap-2 overflow-hidden",
-            props.compact ? "max-w-36 sm:pl-1" : undefined,
+            "flex min-w-0 w-full box-border items-center gap-2",
+            props.compact ? "sm:pl-1" : undefined,
           )}
         >
           {activeEntry ? (
@@ -135,7 +135,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
               displayName={activeEntry.displayName}
               accentColor={activeEntry.accentColor}
               showBadge={showInstanceBadge}
-              className={showInstanceBadge ? "size-5" : "size-4"}
+              className={showInstanceBadge ? "size-5 shrink-0" : "size-4 shrink-0"}
               iconClassName={cn("size-4", props.activeProviderIconClassName)}
               badgeClassName="right-[-0.125rem] bottom-[-0.125rem] h-3 min-w-3 text-[7px]"
             />
@@ -145,21 +145,19 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
               render={
                 <span
                   className={cn(
-                    "min-w-0 flex-1 overflow-hidden",
-                    triggerSubtitle
-                      ? "grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-1"
-                      : "truncate",
+                    "min-w-0 flex-1 text-left whitespace-normal [overflow-wrap:anywhere]",
+                    triggerSubtitle ? "flex flex-wrap items-center gap-1" : undefined,
                   )}
                 />
               }
             >
               {triggerSubtitle ? (
                 <>
-                  <span className="min-w-0 truncate">{triggerSubtitle}</span>
+                  <span className="min-w-0">{triggerSubtitle}</span>
                   <span aria-hidden="true" className="shrink-0 opacity-60">
                     ·
                   </span>
-                  <span className="min-w-0 truncate">{triggerTitle}</span>
+                  <span className="min-w-0">{triggerTitle}</span>
                 </>
               ) : (
                 triggerTitle

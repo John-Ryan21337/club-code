@@ -7,7 +7,7 @@ import {
   EnvironmentId,
   type ServerConfig,
 } from "@cafecode/contracts";
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { page } from "vitest/browser";
 import { render } from "vitest-browser-react";
 
@@ -19,7 +19,14 @@ import {
   youtubeUrlQueueStore,
 } from "../../youtubeUrlQueue";
 import { localMediaStore } from "../../localMedia";
+import { ensureLocalApi } from "../../localApi";
 import { AmbientVideoWorkspace, useAmbientVideoWorkspace } from "./AmbientVideoWorkspace";
+import {
+  writeAmbientMediaGeometry,
+  readAmbientMediaGeometry,
+} from "../../ambientMediaGeometryStorage";
+
+vi.mock("../../localApi", { spy: true });
 
 let mounted: Awaited<ReturnType<typeof render>> | null = null;
 
@@ -67,10 +74,10 @@ function makeConfig(
   };
 }
 
-function TestChatAnchor() {
+function TestChatAnchor({ width = 900 }: { width?: number }) {
   const { registerChatAnchor } = useAmbientVideoWorkspace();
   return (
-    <main ref={registerChatAnchor} style={{ width: "900px", height: "600px" }}>
+    <main ref={registerChatAnchor} style={{ width, height: "600px", flexShrink: 0 }}>
       Chat workspace
     </main>
   );
@@ -127,6 +134,8 @@ beforeEach(() => {
 
 afterEach(async () => {
   await mounted?.unmount();
+  vi.restoreAllMocks();
+  vi.mocked(ensureLocalApi).mockReset();
   mounted = null;
   resetServerStateForTests();
   __resetYouTubeUrlQueueForTests();
@@ -185,6 +194,101 @@ it("does not seed a bundled queue or request playback", async () => {
   });
   await expect.element(page.getByTitle("Ambient YouTube URL queue player")).not.toBeInTheDocument();
 });
+
+it.each([900, 500])(
+  "toggles theater and restores the exact rectangle in a %ipx pane without replacing the player",
+  async (anchorWidth) => {
+    await page.viewport(1440, 900);
+    const geometry = { x: 0.1, y: 0.12, width: 0.48 };
+    writeAmbientMediaGeometry("video", geometry);
+    const config = makeConfig({ kind: "video", id: "testVideo01" });
+    let persistedSettings: typeof config.clientSettings = {
+      ...config.clientSettings,
+      ambientVideoEnabled: true,
+      ambientVideoPresentationMode: "floating",
+      ambientVideoLayoutMode: "custom",
+    };
+    const api = ensureLocalApi();
+    vi.spyOn(api.server, "updateClientSettings").mockImplementation(async (patch) => {
+      persistedSettings = { ...persistedSettings, ...patch };
+      return persistedSettings;
+    });
+    vi.mocked(ensureLocalApi).mockReturnValue(api);
+    setServerConfigSnapshot({
+      ...config,
+      clientSettings: persistedSettings,
+    });
+    mounted = await render(
+      <div style={{ display: "flex", width: 1280, height: 720 }}>
+        <AppAtomRegistryProvider>
+          <AmbientVideoWorkspace>
+            <TestChatAnchor width={anchorWidth} />
+          </AmbientVideoWorkspace>
+        </AppAtomRegistryProvider>
+      </div>,
+    );
+    await expect
+      .poll(() => document.querySelector('[data-ambient-video-view-toggle="theater"]'))
+      .not.toBeNull();
+    await waitForTwoAnimationFrames();
+    const frame = document.querySelector<HTMLIFrameElement>(
+      'iframe[title="Ambient YouTube video player"]',
+    )!;
+    expect(frame).not.toBeNull();
+    // Synthetic readiness only: the fixture verifies layout, not live playback.
+    frame.dispatchEvent(new Event("load"));
+    const section = frame.closest<HTMLElement>("section")!;
+    const before = section.getBoundingClientRect();
+    if (import.meta.env.VITE_CAPTURE_COMPOSER === "1" && anchorWidth === 900) {
+      await page.screenshot({
+        path: "../../../../../docs/pr-assets/player-composer/player-floating.png",
+        save: true,
+      });
+    }
+    for (let cycle = 0; cycle < 2; cycle++) {
+      const theaterButton = document.querySelector<HTMLButtonElement>(
+        '[data-ambient-video-view-toggle="theater"]',
+      )!;
+      theaterButton.focus();
+      theaterButton.click();
+      await expect.poll(() => section.dataset.ambientVideoLayout).toBe("cinema");
+      expect(frame.isConnected).toBe(true);
+      expect(section.querySelector("iframe")).toBe(frame);
+      if (import.meta.env.VITE_CAPTURE_COMPOSER === "1" && anchorWidth === 900 && cycle === 0) {
+        await page.screenshot({
+          path: "../../../../../docs/pr-assets/player-composer/player-theater.png",
+          save: true,
+        });
+      }
+      document
+        .querySelector<HTMLButtonElement>('[data-ambient-video-view-toggle="restore"]')!
+        .click();
+      await expect
+        .poll(() => section.dataset.ambientVideoLayout)
+        .toBe(anchorWidth < 640 ? "mobile-docked" : "floating");
+      // ResizeObserver and the retained-anchor RAF settle after the layout commit.
+      await expect
+        .poll(() => {
+          const after = section.getBoundingClientRect();
+          return (["x", "y", "width", "height"] as const).every(
+            (key) => Math.abs(after[key] - before[key]) < 0.5,
+          );
+        })
+        .toBe(true);
+      await expect
+        .poll(() => document.activeElement?.getAttribute("data-ambient-video-view-toggle"))
+        .toBe("theater");
+      expect(section.querySelector("iframe")).toBe(frame);
+      expect(readAmbientMediaGeometry("video")).toEqual(geometry);
+      if (import.meta.env.VITE_CAPTURE_COMPOSER === "1" && anchorWidth === 900 && cycle === 0) {
+        await page.screenshot({
+          path: "../../../../../docs/pr-assets/player-composer/player-restored.png",
+          save: true,
+        });
+      }
+    }
+  },
+);
 
 it("shows an engaged local queue and keeps the same iframe visible through Settings", async () => {
   youtubeUrlQueueStore.load(parseYouTubeUrlQueueText("https://youtu.be/testVideo01"));
@@ -460,6 +564,9 @@ it("keeps one compliant player through portrait, landscape, minimum bounds, and 
   expect(firstFrame!.sandbox.contains("allow-scripts")).toBe(true);
   expect(firstFrame!.sandbox.contains("allow-same-origin")).toBe(true);
   expect(firstFrame!.sandbox.contains("allow-presentation")).toBe(true);
+  const theater = page.getByRole("button", { name: "Theater mode", exact: true });
+  await expect.element(theater).toBeDisabled();
+  await expect.element(theater).toHaveAttribute("title", "Widen the window for theater mode");
   const embedUrl = new URL(firstFrame!.src);
   expect(embedUrl.searchParams.get("playsinline")).toBe("1");
   expect(embedUrl.searchParams.get("origin")).toBe(window.location.origin);

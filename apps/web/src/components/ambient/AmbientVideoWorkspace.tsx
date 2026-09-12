@@ -13,6 +13,8 @@ import {
 } from "react";
 import {
   Maximize2Icon,
+  RectangleHorizontalIcon,
+  PictureInPicture2Icon,
   MoveIcon,
   PanelRightCloseIcon,
   SkipBackIcon,
@@ -52,6 +54,7 @@ import { useYouTubeUrlQueue, youtubeUrlQueueStore } from "../../youtubeUrlQueue"
 import { registerAtmosphereControlHandler } from "../../atmosphereControlBus";
 import { useSettings, useUpdateSettings } from "../../hooks/useSettings";
 import { useServerConfig } from "../../rpc/serverState";
+import { useUiLocalization } from "../../uiLocalization";
 import { LocalMediaPanel } from "../chat/LocalMediaPanel";
 import { LocalMediaAudioVisualizer } from "../chat/LocalMediaAudioVisualizer";
 import { AmbientAudioCaptureControl } from "./AmbientAudioCaptureControl";
@@ -413,6 +416,7 @@ export function AmbientVideoWorkspace({
   readonly retainPlayerWithoutAnchor?: boolean;
 }) {
   const settings = useSettings();
+  const { t } = useUiLocalization();
   const localMedia = useLocalMediaState();
   const audioCapture = useAmbientAudioCapture();
   const youtubeUrlQueue = useYouTubeUrlQueue();
@@ -430,6 +434,8 @@ export function AmbientVideoWorkspace({
   const streamingCinemaHeadingRef = useRef<HTMLHeadingElement | null>(null);
   const localCinemaHeadingRef = useRef<HTMLHeadingElement | null>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
+  const theaterButtonRef = useRef<HTMLButtonElement | null>(null);
+  const restoreTheaterFocusRef = useRef(false);
   const previousCinemaModeRef = useRef<"local" | "streaming" | null>(null);
   const [playerReadiness, setPlayerReadiness] = useState<{
     readonly sourceKey: string;
@@ -1018,9 +1024,12 @@ export function AmbientVideoWorkspace({
     if (effectiveCinemaMode === null && previousMode !== null) {
       const previousFocus = previousFocusRef.current;
       previousFocusRef.current = null;
-      if (previousFocus?.isConnected) {
+      if (restoreTheaterFocusRef.current && theaterButtonRef.current) {
+        theaterButtonRef.current.focus();
+      } else if (previousFocus?.isConnected) {
         previousFocus.focus();
       }
+      restoreTheaterFocusRef.current = false;
     }
   }, [effectiveCinemaMode]);
 
@@ -1386,11 +1395,13 @@ export function AmbientVideoWorkspace({
                 ) : null}
                 <button
                   type="button"
-                  className="inline-flex items-center gap-1 rounded-md px-2 py-1 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  aria-label={t("Restore player position", "プレーヤーの位置を戻す")}
+                  title={t("Restore player position", "プレーヤーの位置を戻す")}
+                  data-ambient-video-view-toggle="restore"
+                  className="inline-flex size-8 shrink-0 items-center justify-center rounded-md hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   onClick={() => updateSettings({ ambientVideoPresentationMode: "floating" })}
                 >
-                  <PanelRightCloseIcon className="size-3.5" />
-                  Exit cinema
+                  <PictureInPicture2Icon className="size-4" />
                 </button>
                 <button
                   type="button"
@@ -1437,6 +1448,29 @@ export function AmbientVideoWorkspace({
               )}
               <button
                 type="button"
+                aria-label={t("Theater mode", "シアターモード")}
+                title={
+                  cinemaLayoutFits
+                    ? t("Theater mode", "シアターモード")
+                    : t(
+                        "Widen the window for theater mode",
+                        "シアターモードにはウィンドウを広げてください",
+                      )
+                }
+                data-ambient-video-view-toggle="theater"
+                ref={theaterButtonRef}
+                disabled={!cinemaLayoutFits}
+                className="inline-flex size-7 shrink-0 items-center justify-center rounded-md hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-40"
+                onClick={(event) => {
+                  restoreTheaterFocusRef.current = document.activeElement === event.currentTarget;
+                  finishInteraction();
+                  updateSettings({ ambientVideoPresentationMode: "cinema" });
+                }}
+              >
+                <RectangleHorizontalIcon className="size-4" />
+              </button>
+              <button
+                type="button"
                 aria-label="Disable ambient video"
                 title="Disable ambient video"
                 className="inline-flex size-7 shrink-0 items-center justify-center rounded-md hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -1449,6 +1483,29 @@ export function AmbientVideoWorkspace({
 
           {!streamingCinemaEffective && floatingVisible && !mobileDockedVisible ? (
             <>
+              <button
+                type="button"
+                aria-label={t("Theater mode", "シアターモード")}
+                title={
+                  cinemaLayoutFits
+                    ? t("Theater mode", "シアターモード")
+                    : t(
+                        "Widen the window for theater mode",
+                        "シアターモードにはウィンドウを広げてください",
+                      )
+                }
+                data-ambient-video-view-toggle="theater"
+                ref={theaterButtonRef}
+                disabled={!cinemaLayoutFits}
+                className="absolute top-1 right-10 z-10 flex size-8 shrink-0 items-center justify-center rounded-md bg-black/65 text-white shadow-sm hover:bg-black focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white disabled:opacity-40"
+                onClick={(event) => {
+                  restoreTheaterFocusRef.current = document.activeElement === event.currentTarget;
+                  finishInteraction();
+                  updateSettings({ ambientVideoPresentationMode: "cinema" });
+                }}
+              >
+                <RectangleHorizontalIcon className="size-4" />
+              </button>
               <button
                 type="button"
                 aria-label="Move ambient video"
