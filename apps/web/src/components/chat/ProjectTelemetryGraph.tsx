@@ -21,6 +21,7 @@ import {
 } from "../../documentVisibility";
 import { cn } from "~/lib/utils";
 import { TelemetryCard } from "./ProjectTelemetryCard";
+import { ProjectGpuAdapterHistory } from "./ProjectGpuAdapterHistory";
 import { ProjectTemperatureHistory } from "./ProjectTemperatureHistory";
 import { emptyTemperatureCategoryValues } from "./ProjectTemperatureHistory.model";
 import { ProjectTemperatureReadings } from "./ProjectTemperatureReadings";
@@ -146,6 +147,7 @@ function telemetryErrorDiscriminator(error: unknown): string {
 function telemetryGapPoint(): ProjectTelemetryHistoryPoint {
   return {
     sampledAtMs: Date.now(),
+    gpuAdapters: [],
     temperatures: emptyTemperatureCategoryValues(),
     cpuPercent: null,
     memoryPercent: null,
@@ -538,6 +540,10 @@ export function ProjectTelemetryGraph({
               }
             />
           </div>
+          <ProjectGpuAdapterHistory
+            telemetry={telemetryUnavailable ? undefined : telemetry?.gpu}
+            history={visibleView.history}
+          />
           <ProjectTemperatureHistory
             telemetry={telemetryUnavailable ? undefined : telemetry?.temperatures}
             history={visibleView.history}
