@@ -10,7 +10,6 @@ import type {
   EmbeddedBrowserHistoryActionInput,
   EmbeddedBrowserNavigateInput,
   EmbeddedBrowserOpenInput,
-  EmbeddedBrowserOcrResult,
   EmbeddedBrowserSetBoundsInput,
   EmbeddedBrowserShareInput,
   EmbeddedBrowserSnapshot,
@@ -33,6 +32,8 @@ import {
 
 import type { DesktopIpcWebContents } from "../ipc/DesktopIpc.ts";
 import { EMBEDDED_BROWSER_STATE_CHANNEL } from "../ipc/channels.ts";
+import { embeddedBrowserOcrEngine, type EmbeddedBrowserOcrEngine } from "./EmbeddedBrowserOcr.ts";
+export type { EmbeddedBrowserOcrEngine } from "./EmbeddedBrowserOcr.ts";
 import {
   canTypeSensitiveValue,
   embeddedBrowserDisplayUrl,
@@ -45,16 +46,6 @@ export {
   normalizeEmbeddedBrowserUrl,
   redactEmbeddedBrowserText,
 } from "./embeddedBrowserSecurity.ts";
-
-export interface EmbeddedBrowserOcrEngine {
-  readonly recognize: (input: {
-    readonly png: Buffer;
-    readonly width: number;
-    readonly height: number;
-    readonly language: "eng" | "jpn";
-  }) => Promise<EmbeddedBrowserOcrResult>;
-  readonly close: () => Promise<void>;
-}
 
 const BLANK_URL = "about:blank";
 const REDACTION_NOTICE =
@@ -789,7 +780,26 @@ export function makeDesktopEmbeddedBrowser(
     let ocr: EmbeddedBrowserSnapshot["ocr"] = null;
     if (input.mode === "ocr") {
       const bounds = tab.bounds;
-      if (!bounds || !platform.ocr) {
+      let visibleDocument = false;
+      if (bounds && platform.ocr && tab.view.getVisible()) {
+        try {
+          visibleDocument =
+            (await tab.view.webContents.executeJavaScript(
+              'document.visibilityState === "visible"',
+            )) === true;
+        } catch {
+          // A destroyed or navigating page cannot supply a visible viewport.
+        }
+      }
+      if (
+        !ensureShared(tab) ||
+        tab.controlRevision !== approvedRevision ||
+        tab.view.webContents.getURL() !== approvedDocumentUrl
+      ) {
+        invalidateSnapshot(tab);
+        return null;
+      }
+      if (!bounds || !platform.ocr || !visibleDocument || !tab.view.getVisible()) {
         ocr = {
           status: "unavailable",
           reason: "Local OCR is unavailable for this browser viewport.",
@@ -1113,6 +1123,7 @@ export function embeddedBrowserWebPreferences(partition: string): Electron.WebPr
 }
 
 const electronPlatform: EmbeddedBrowserPlatform = {
+  ocr: embeddedBrowserOcrEngine,
   createView: (partition) =>
     new Electron.WebContentsView({
       webPreferences: embeddedBrowserWebPreferences(partition),
