@@ -19,6 +19,7 @@ import {
   uploadAmbientImage,
 } from "../../ambientImages";
 import { useSettings, useUpdateSettings } from "../../hooks/useSettings";
+import { AmbientImagePanelSettingsRows } from "./AmbientImagePanelSettings";
 import { Switch } from "../ui/switch";
 import { ensureLocalApi } from "../../localApi";
 import { applyClientSettingsUpdated } from "../../rpc/serverState";
@@ -419,6 +420,8 @@ export function AmbientImageSettingsSection() {
           </select>
         }
       />
+
+      <AmbientImagePanelSettingsRows />
     </SettingsSection>
   );
 }
