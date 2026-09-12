@@ -38,6 +38,8 @@ import type {
   ServerProcessResourceHistoryResult,
   ServerProviderLoginInput,
   ServerProviderLoginResult,
+  ServerProviderAccessInput,
+  ServerProviderAccessResult,
   ServerProviderUpdateInput,
   ServerProviderRuntimeRestartInput,
   ServerProviderRuntimeRestartResult,
@@ -444,6 +446,7 @@ export interface LocalApi {
       readonly scope?: "full" | "models";
     }) => Promise<ServerProviderUpdatedPayload>;
     loginProvider: (input: ServerProviderLoginInput) => Promise<ServerProviderLoginResult>;
+    checkProviderAccess: (input: ServerProviderAccessInput) => Promise<ServerProviderAccessResult>;
     updateProvider: (input: ServerProviderUpdateInput) => Promise<ServerProviderUpdatedPayload>;
     restartProviderRuntime: (
       input: ServerProviderRuntimeRestartInput,

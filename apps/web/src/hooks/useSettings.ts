@@ -22,6 +22,7 @@ import { ensureLocalApi } from "~/localApi";
 import * as Struct from "effect/Struct";
 import * as Equal from "effect/Equal";
 import { applyClientSettingsPatch } from "@cafecode/shared/clientSettings";
+import { trackServerSettingsWrite } from "../serverSettingsWriteState";
 import { applyServerSettingsPatch } from "@cafecode/shared/serverSettings";
 import {
   applyClientSettingsUpdated,
@@ -215,20 +216,16 @@ export function useUpdateSettings() {
     const { serverPatch, clientPatch } = splitPatch(patch);
 
     if (Object.keys(serverPatch).length > 0) {
-      const currentServerConfig = getServerConfig();
-      if (currentServerConfig) {
-        applySettingsUpdated(applyServerSettingsPatch(currentServerConfig.settings, serverPatch));
-      }
-      // Fire-and-forget RPC — push will reconcile on success
-      try {
-        void ensureLocalApi()
-          .server.updateSettings(serverPatch)
-          .catch((error) => {
-            reportSettingsWriteFailure("server", error);
-          });
-      } catch (error) {
+      void trackServerSettingsWrite(async () => {
+        const currentServerConfig = getServerConfig();
+        if (currentServerConfig) {
+          applySettingsUpdated(applyServerSettingsPatch(currentServerConfig.settings, serverPatch));
+        }
+        // The server push reconciles this optimistic update after persistence.
+        await ensureLocalApi().server.updateSettings(serverPatch);
+      }).catch((error) => {
         reportSettingsWriteFailure("server", error);
-      }
+      });
     }
 
     if (Object.keys(clientPatch).length > 0) {

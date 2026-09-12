@@ -66,6 +66,8 @@ import {
 import {
   ServerConfigStreamEvent,
   ServerConfig,
+  ServerProviderAccessInput,
+  ServerProviderAccessResult,
   ServerProviderLoginError,
   ServerProviderLoginInput,
   ServerProviderLoginResult,
@@ -144,6 +146,7 @@ export const WS_METHODS = {
   // Server meta
   serverGetConfig: "server.getConfig",
   serverRefreshProviders: "server.refreshProviders",
+  serverCheckProviderAccess: "server.checkProviderAccess",
   serverLoginProvider: "server.loginProvider",
   serverUpdateProvider: "server.updateProvider",
   serverRestartProviderRuntime: "server.restartProviderRuntime",
@@ -218,6 +221,11 @@ export const WsServerRefreshProvidersRpc = Rpc.make(WS_METHODS.serverRefreshProv
     scope: Schema.optional(Schema.Literals(["full", "models"])),
   }),
   success: ServerProviderUpdatedPayload,
+});
+
+export const WsServerCheckProviderAccessRpc = Rpc.make(WS_METHODS.serverCheckProviderAccess, {
+  payload: ServerProviderAccessInput,
+  success: ServerProviderAccessResult,
 });
 
 export const WsServerUpdateProviderRpc = Rpc.make(WS_METHODS.serverUpdateProvider, {
@@ -587,6 +595,7 @@ export const WsSubscribeUsageStatsRpc = Rpc.make(WS_METHODS.subscribeUsageStats,
 export const WsRpcGroup = RpcGroup.make(
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,
+  WsServerCheckProviderAccessRpc,
   WsServerLoginProviderRpc,
   WsServerUpdateProviderRpc,
   WsServerRestartProviderRuntimeRpc,

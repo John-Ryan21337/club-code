@@ -60,6 +60,7 @@ import { ProviderRegistry } from "./provider/Services/ProviderRegistry.ts";
 import { ProviderService } from "./provider/Services/ProviderService.ts";
 import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
 import * as ProviderLoginLauncher from "./provider/providerLoginLauncher.ts";
+import { checkProviderAccess } from "./provider/providerAccessPreflight.ts";
 import { ServerLifecycleEvents } from "./serverLifecycleEvents.ts";
 import { UsageStatsService } from "./usageStats/Services/UsageStatsService.ts";
 import { ServerRuntimeStartup } from "./serverRuntimeStartup.ts";
@@ -1028,6 +1029,10 @@ const makeWsRpcLayer = (
             ).pipe(Effect.map((providers) => ({ providers }))),
             { "rpc.aggregate": "server" },
           ),
+        [WS_METHODS.serverCheckProviderAccess]: (input) =>
+          observeRpcEffect(WS_METHODS.serverCheckProviderAccess, checkProviderAccess(input), {
+            "rpc.aggregate": "server",
+          }),
         [WS_METHODS.serverUpdateProvider]: (input) =>
           observeRpcEffect(
             WS_METHODS.serverUpdateProvider,
