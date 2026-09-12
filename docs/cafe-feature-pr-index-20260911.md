@@ -1,6 +1,7 @@
 # Cafe feature adoption PR index
 
 This index tracks the missing-feature ports started on 11 September 2026.
+Published heads and remaining work were checked again on 12 September 2026.
 The comparison is Club `886feafcdcda4475c34396dc6d46c77cde7f010e` against
 Cafe dev `99fbaec89da429924171c89d66a8f3455e42d9b0`.
 The [earlier inventory](./cafe-code-adoption-2026-09.md#existing-cafe-proposals)
@@ -56,6 +57,44 @@ qualify every physical device or provider account.
 強制デスクトップビルドを通過しています。実行時の証拠と制限は各PRを確認してください。
 合成データによる検証は、すべての実機やアカウントでの動作保証ではありません。
 
+## Additional published ports checked on 12 September
+
+These rows extend the published table above. PR numbers are repository-specific:
+Cafe #94 and Club #94 are different proposals. All entries below are draft proposals,
+not merged upstream features or installed releases. Each software change passed its
+required checks and forced desktop build before publication; the PR records the exact scope.
+
+日本語：以下は追加の公開済みドラフトです。Cafe #94 と Club #94 は別の提案です。
+上流へのマージやインストール済みリリースを意味しません。各変更は公開前に必須検証と
+強制デスクトップビルドを完了し、検証範囲と制限を各 PR に記録しています。
+
+| Feature / 機能                                                | PR and head                                                                   | Adoption boundary                                                                                                                                                                                         |
+| ------------------------------------------------------------- | ----------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Bundled audit skill / 同梱監査スキル                          | [Club #82](https://github.com/John-Ryan21337/club-code/pull/82), `8b22ba4d`   | Direct to the Cafe adoption base. Managed skill installation using current provider paths.                                                                                                                |
+| NVIDIA GPU telemetry / NVIDIA GPU 計測                        | [Club #83](https://github.com/John-Ryan21337/club-code/pull/83), `51580a72`   | Based on the restacked telemetry foundations. Bounded NVIDIA probe and live Resources integration; not all GPU vendors.                                                                                   |
+| Host temperatures / ホスト温度                                | [Club #84](https://github.com/John-Ryan21337/club-code/pull/84), `7fd2bc84`   | Based on #83. Optional bounded Windows/Linux readers with unavailable states; synthetic tests do not qualify physical sensors.                                                                            |
+| Host network rates / ホスト通信量                             | [Club #85](https://github.com/John-Ryan21337/club-code/pull/85), `da2a4158`   | Sibling of #84, based on #83. Host aggregate counters, not Internet speed or process attribution. Interface-set changes can distort deltas.                                                               |
+| Idle Thread Guard / 待機スレッドの確認                        | [Club #86](https://github.com/John-Ryan21337/club-code/pull/86), `68c669b5`   | Based on localization #81. Opt-in guard; see the proposal for provider and queue limits.                                                                                                                  |
+| Streaming workspace / ストリーミング画面                      | [Club #87](https://github.com/John-Ryan21337/club-code/pull/87), `079e775b`   | Prerequisite base `9cbc7c30` reuses Cafe #53/#60. Retained player, geometry, cinema and saved queues. Public YouTube ready handshake was checked; full service playback/account access was not qualified. |
+| Provider usage and advisory pacing / 使用量と送信間隔の目安   | [Club #88](https://github.com/John-Ryan21337/club-code/pull/88), `e73add1d`   | Direct to the Cafe adoption base. Usage presentation and advisory pacing; not a guaranteed provider rate limiter.                                                                                         |
+| Native local media / ローカルメディアのネイティブ実行         | [Club #89](https://github.com/John-Ryan21337/club-code/pull/89), `5b795366`   | Requires Cafe IPC #75. Owner-bound native selection and VLC transport. Synthetic silent WAV decoding was checked on Windows; physical/platform coverage remains scoped.                                   |
+| Local media player / ローカルメディア画面                     | [Club #90](https://github.com/John-Ryan21337/club-code/pull/90), `6a2496d8`   | Combined base `063db8d5` includes #87/#89. In-memory queue, floating/cinema/background video and one continuation attempt after actual playback ends. No persisted library, capture or visualizer.        |
+| Claude account usage / Claude アカウント使用量                | [Club #91](https://github.com/John-Ryan21337/club-code/pull/91), `3ba8e6d8`   | Based on #88. Account-bound quota and paid-usage display; no claim that every account is currently reachable.                                                                                             |
+| Codex reset credits / Codex リセットクレジット                | [Club #92](https://github.com/John-Ryan21337/club-code/pull/92), `49dc83e0`   | Sibling of #91, based on #88. Explicit selected-credit/account confirmation and bounded native request. No real credit was consumed during verification.                                                  |
+| Temperature histories / 温度履歴                              | [Club #93](https://github.com/John-Ryan21337/club-code/pull/93), `0a2bb641`   | Based on #84. Hottest reported sensor per category with missing-sample gaps and a stated clipped scale.                                                                                                   |
+| Per-GPU histories / GPU 別履歴                                | [Club #94](https://github.com/John-Ryan21337/club-code/pull/94), `3f414435`   | Based on #93. Histories keyed by the reported GPU index, not a permanent physical identity.                                                                                                               |
+| Resource panel geometry / リソース画面の配置                  | [Club #95](https://github.com/John-Ryan21337/club-code/pull/95), `e44cc991`   | Based on #94. Move, resize and hide unavailable graphs; guarded local persistence retains controls on storage failures. Network #85 remains a separate sibling integration.                               |
+| Local image library / ローカル画像ライブラリ                  | [Club #96](https://github.com/John-Ryan21337/club-code/pull/96), `6869f0bf`   | Direct to the Cafe adoption base. Authenticated image storage and presentation; no remote image account integration.                                                                                      |
+| Completion sound and speech / 完了音と読み上げ                | [Club #97](https://github.com/John-Ryan21337/club-code/pull/97), `69ede49a`   | Requires Cafe IPC #75. Optional completion audio and English/Japanese speech; browser/native capability limits remain explicit.                                                                           |
+| Image reference-safe cleanup / 参照を保護する画像整理         | [Club #98](https://github.com/John-Ryan21337/club-code/pull/98), `ae4bae12`   | Based on #96. Shared reference lock and bounded cleanup; malformed/unreadable settings do not authorize deletion.                                                                                         |
+| Movable image panels / 移動可能な画像パネル                   | [Club #99](https://github.com/John-Ryan21337/club-code/pull/99), `d63bf980`   | Sibling of #98, based on #96. Accessible pointer/keyboard geometry and minimized-state handling.                                                                                                          |
+| Advanced Matrix runtime / 高度な Matrix 描画                  | [Club #100](https://github.com/John-Ryan21337/club-code/pull/100), `1fb29f2b` | Based on the Matrix foundations. Six motion modes, bounded GPU glyph rendering and Canvas fallback. Live work vocabulary and activity routes remain separate.                                             |
+| Atmosphere Console / 背景設定コンソール                       | [Club #101](https://github.com/John-Ryan21337/club-code/pull/101), `b94429d6` | Based on #100. Local bounded English/Japanese command parsing and acknowledged settings RPCs. No model or shell is used in this slice.                                                                    |
+| Local-model console interpretation / ローカルモデルによる解釈 | [Club #102](https://github.com/John-Ryan21337/club-code/pull/102), `3ce5c6c6` | Based on #101. Opt-in LM Studio interpretation under the existing command whitelist. This does not add Claude/Codex provider interpretation.                                                              |
+| Matrix hardware lighting / Matrix ハードウェア照明            | [Club #103](https://github.com/John-Ryan21337/club-code/pull/103), `7c5a09a4` | Based on #100. Explicit owner opt-in and selected OpenRGB devices, bounded protocol/runtime and safety lease. No native-client attestation or physical-device qualification; restoration is best effort.  |
+| Workspace file observatory / ワークスペースのファイル表示     | [Cafe #94](https://github.com/cafeai/cafe-code/pull/94), `67d19445`           | Direct to dev. Bounded read-only selected-project file panes, opt-in refresh and snapshot differences. No database inspector or writer attribution; masking is best effort.                               |
+| Recorded workflow observatory / 記録された作業フロー表示      | [Cafe #95](https://github.com/cafeai/cafe-code/pull/95), `b39a169b`           | Direct to dev. Reported task list/graph and observed update spans. No invented relationships, provider runtime duration or new event collector.                                                           |
+
 ## Browser adoption order
 
 1. [Cafe #63](https://github.com/cafeai/cafe-code/pull/63) defines bounded contracts;
@@ -107,22 +146,29 @@ These target Club `main`, not Cafe dev:
 
 日本語：この節の修正はClubのmain向けです。Cafeには、上の表にある現行Cafe用の移植版を使います。
 
-## Work still awaiting publication
+## Remaining current-dev adoption work
 
-The following are implementation or review work, not published feature PRs yet:
-Idle Thread Guard;
-bundled audit skill installation; image/GIF runtime; completion audio and speech;
-GPU/temperature/network telemetry; embedded media playback; advanced GPU Matrix;
-image panel controls and orphan cleanup; local media and visualization;
-activity overlays and hardware lighting; Atmosphere Console; workflow/workspace
-observatories; provider usage display and advisory pacing.
+This is not a claim that every implemented Club feature now has a current-dev PR.
+The following remain separate from the published ports above:
+
+- Public YouTube discovery is in implementation/review under [Cafe issue #96](https://github.com/cafeai/cafe-code/issues/96), on streaming #87. It is not an account library.
+- Claude/Codex provider-mediated console interpretation is not supplied by local-model #102. A Claude port is in progress under [Cafe issue #97](https://github.com/cafeai/cafe-code/issues/97); Codex requires a verified containment boundary before it can be called supported.
+- Routed live work vocabulary and the full Matrix activity overlay remain current-dev gaps. Historical Club fork #4/#7/#18 proposed pieces on older lineages; they do not establish a complete current-dev integration.
+- Media account/OAuth libraries, ambient audio capture, music-reactive integration and visualizers remain follow-ups. The local/streaming players do not imply those capabilities.
+- SQLite/database observatory views and additional attribution are outside the file-only observatory #94. Any further enrichment, diff-pool or collaboration claim needs concrete production-caller and existing-PR reconciliation.
+
+日本語：Club の全実装機能が現行 dev 向け PR になったという主張ではありません。
+YouTube 検索、プロバイダーによるコンソール解釈、作業語彙と Matrix 活動表示、アカウント連携、
+音声取得、音楽反応、ビジュアライザー、データベース表示などは、公開済みの基礎機能とは別です。
+古い系統の提案が存在しても、現行 dev で統合済みとは扱いません。Codex の解釈機能には、
+安全な実行制限の確認が必要です。
 
 Collaboration authorization/journal modules are excluded from runnable-feature
 claims: the audited source wires contracts and a migration, while runtime
 membership/journal callers remain test-only. A module name or passing unit tests
 do not establish an implemented collaboration feature.
 
-日本語：この節は未公開の作業です。公開済みPRの一覧ではありません。
+日本語：この節は残作業と範囲外の項目です。公開済み機能の一覧ではありません。
 共同作業の認可・ジャーナル基盤には実運用の呼び出し元がなく、動作する共同作業機能としては扱いません。
 
 The running Club application and logged-in browser were not restarted during
