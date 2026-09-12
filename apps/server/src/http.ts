@@ -726,115 +726,111 @@ export const projectFaviconRouteLayer = HttpRouter.add(
   }).pipe(Effect.catchTag("AuthError", respondToAuthError)),
 );
 
-export const staticAndDevRouteLayer = HttpRouter.add(
-  "GET",
-  "*",
-  Effect.gen(function* () {
-    const request = yield* HttpServerRequest.HttpServerRequest;
-    const url = HttpServerRequest.toURL(request);
+export const staticAndDevHandler = Effect.gen(function* () {
+  const request = yield* HttpServerRequest.HttpServerRequest;
+  const url = HttpServerRequest.toURL(request);
 
-    if (Option.isNone(url)) {
-      return HttpServerResponse.text("Bad Request", { status: 400 });
+  if (Option.isNone(url)) {
+    return HttpServerResponse.text("Bad Request", { status: 400 });
+  }
+
+  const config = yield* ServerConfig;
+  if (config.devUrl && isLoopbackHostname(url.value.hostname)) {
+    return HttpServerResponse.redirect(resolveDevRedirectUrl(config.devUrl, url.value), {
+      status: 302,
+    });
+  }
+
+  // HTTPS bootstrap: when HTTPS is enabled, do not serve the app over plain
+  // cleartext HTTP to other devices. External clients that did not arrive
+  // through the HTTPS proxy get a page explaining how to trust the self-signed
+  // certificate and a link to the secure site. We only intercept when we can
+  // positively confirm the peer is non-loopback, so the desktop app and the
+  // same-machine browser (loopback HTTP) are never affected. The certificate
+  // download route is a more specific route and is matched before this one, so
+  // it stays reachable over HTTP for bootstrapping.
+  if (config.httpsEnabled && config.httpsPort !== undefined) {
+    const remoteAddress = Option.getOrUndefined(request.remoteAddress);
+    const isExternalPeer = remoteAddress !== undefined && !isLoopbackRemoteAddress(remoteAddress);
+    if (isExternalPeer && !isViaHttpsProxy(request.headers)) {
+      return HttpServerResponse.text(
+        renderHttpsBootstrapPage({
+          hostname: url.value.hostname,
+          httpsPort: config.httpsPort,
+        }),
+        {
+          status: 200,
+          contentType: "text/html; charset=utf-8",
+          headers: { "Cache-Control": "no-store" },
+        },
+      );
     }
+  }
 
-    const config = yield* ServerConfig;
-    if (config.devUrl && isLoopbackHostname(url.value.hostname)) {
-      return HttpServerResponse.redirect(resolveDevRedirectUrl(config.devUrl, url.value), {
-        status: 302,
-      });
-    }
+  const staticDir = config.staticDir ?? (config.devUrl ? yield* resolveStaticDir() : undefined);
+  if (!staticDir) {
+    return HttpServerResponse.text("No static directory configured and no dev URL set.", {
+      status: 503,
+    });
+  }
 
-    // HTTPS bootstrap: when HTTPS is enabled, do not serve the app over plain
-    // cleartext HTTP to other devices. External clients that did not arrive
-    // through the HTTPS proxy get a page explaining how to trust the self-signed
-    // certificate and a link to the secure site. We only intercept when we can
-    // positively confirm the peer is non-loopback, so the desktop app and the
-    // same-machine browser (loopback HTTP) are never affected. The certificate
-    // download route is a more specific route and is matched before this one, so
-    // it stays reachable over HTTP for bootstrapping.
-    if (config.httpsEnabled && config.httpsPort !== undefined) {
-      const remoteAddress = Option.getOrUndefined(request.remoteAddress);
-      const isExternalPeer = remoteAddress !== undefined && !isLoopbackRemoteAddress(remoteAddress);
-      if (isExternalPeer && !isViaHttpsProxy(request.headers)) {
-        return HttpServerResponse.text(
-          renderHttpsBootstrapPage({
-            hostname: url.value.hostname,
-            httpsPort: config.httpsPort,
-          }),
-          {
-            status: 200,
-            contentType: "text/html; charset=utf-8",
-            headers: { "Cache-Control": "no-store" },
-          },
-        );
-      }
-    }
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const staticRoot = path.resolve(staticDir);
+  const staticRequestPath = url.value.pathname === "/" ? "/index.html" : url.value.pathname;
+  const rawStaticRelativePath = staticRequestPath.replace(/^[/\\]+/, "");
+  const hasRawLeadingParentSegment = rawStaticRelativePath.startsWith("..");
+  const staticRelativePath = path.normalize(rawStaticRelativePath).replace(/^[/\\]+/, "");
+  const hasPathTraversalSegment = staticRelativePath.startsWith("..");
+  if (
+    staticRelativePath.length === 0 ||
+    hasRawLeadingParentSegment ||
+    hasPathTraversalSegment ||
+    staticRelativePath.includes("\0")
+  ) {
+    return HttpServerResponse.text("Invalid static file path", { status: 400 });
+  }
 
-    const staticDir = config.staticDir ?? (config.devUrl ? yield* resolveStaticDir() : undefined);
-    if (!staticDir) {
-      return HttpServerResponse.text("No static directory configured and no dev URL set.", {
-        status: 503,
-      });
-    }
+  const isWithinStaticRoot = (candidate: string) =>
+    candidate === staticRoot ||
+    candidate.startsWith(staticRoot.endsWith(path.sep) ? staticRoot : `${staticRoot}${path.sep}`);
 
-    const fileSystem = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
-    const staticRoot = path.resolve(staticDir);
-    const staticRequestPath = url.value.pathname === "/" ? "/index.html" : url.value.pathname;
-    const rawStaticRelativePath = staticRequestPath.replace(/^[/\\]+/, "");
-    const hasRawLeadingParentSegment = rawStaticRelativePath.startsWith("..");
-    const staticRelativePath = path.normalize(rawStaticRelativePath).replace(/^[/\\]+/, "");
-    const hasPathTraversalSegment = staticRelativePath.startsWith("..");
-    if (
-      staticRelativePath.length === 0 ||
-      hasRawLeadingParentSegment ||
-      hasPathTraversalSegment ||
-      staticRelativePath.includes("\0")
-    ) {
-      return HttpServerResponse.text("Invalid static file path", { status: 400 });
-    }
+  let filePath = path.resolve(staticRoot, staticRelativePath);
+  if (!isWithinStaticRoot(filePath)) {
+    return HttpServerResponse.text("Invalid static file path", { status: 400 });
+  }
 
-    const isWithinStaticRoot = (candidate: string) =>
-      candidate === staticRoot ||
-      candidate.startsWith(staticRoot.endsWith(path.sep) ? staticRoot : `${staticRoot}${path.sep}`);
-
-    let filePath = path.resolve(staticRoot, staticRelativePath);
+  const ext = path.extname(filePath);
+  if (!ext) {
+    filePath = path.resolve(filePath, "index.html");
     if (!isWithinStaticRoot(filePath)) {
       return HttpServerResponse.text("Invalid static file path", { status: 400 });
     }
+  }
 
-    const ext = path.extname(filePath);
-    if (!ext) {
-      filePath = path.resolve(filePath, "index.html");
-      if (!isWithinStaticRoot(filePath)) {
-        return HttpServerResponse.text("Invalid static file path", { status: 400 });
-      }
-    }
-
-    const fileInfo = yield* fileSystem
-      .stat(filePath)
+  const fileInfo = yield* fileSystem.stat(filePath).pipe(Effect.catch(() => Effect.succeed(null)));
+  if (!fileInfo || fileInfo.type !== "File") {
+    const indexPath = path.resolve(staticRoot, "index.html");
+    const indexInfo = yield* fileSystem
+      .stat(indexPath)
       .pipe(Effect.catch(() => Effect.succeed(null)));
-    if (!fileInfo || fileInfo.type !== "File") {
-      const indexPath = path.resolve(staticRoot, "index.html");
-      const indexInfo = yield* fileSystem
-        .stat(indexPath)
-        .pipe(Effect.catch(() => Effect.succeed(null)));
-      if (!indexInfo || indexInfo.type !== "File") {
-        return HttpServerResponse.text("Not Found", { status: 404 });
-      }
-      return yield* serveStaticFile({
-        filePath: indexPath,
-        requestPath: url.value.pathname,
-        isHtmlFallback: true,
-        acceptEncoding: request.headers["accept-encoding"],
-      });
+    if (!indexInfo || indexInfo.type !== "File") {
+      return HttpServerResponse.text("Not Found", { status: 404 });
     }
-
     return yield* serveStaticFile({
-      filePath,
+      filePath: indexPath,
       requestPath: url.value.pathname,
-      isHtmlFallback: false,
+      isHtmlFallback: true,
       acceptEncoding: request.headers["accept-encoding"],
     });
-  }),
-);
+  }
+
+  return yield* serveStaticFile({
+    filePath,
+    requestPath: url.value.pathname,
+    isHtmlFallback: false,
+    acceptEncoding: request.headers["accept-encoding"],
+  });
+});
+
+export const staticAndDevRouteLayer = HttpRouter.add("GET", "*", staticAndDevHandler);

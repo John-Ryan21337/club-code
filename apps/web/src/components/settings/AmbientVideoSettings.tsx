@@ -14,6 +14,7 @@ import { Input } from "../ui/input";
 import { Switch } from "../ui/switch";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
 import { YouTubeDiscoverySettings } from "./YouTubeDiscoverySettings";
+import { YouTubeAccountSettings } from "./YouTubeAccountSettings";
 
 export function AmbientVideoSettings() {
   const settings = useSettings();
@@ -98,6 +99,14 @@ export function AmbientVideoSettings() {
         ) : null}
       </SettingsRow>
       <YouTubeDiscoverySettings
+        environmentScopeKey={environmentScopeKey}
+        onSelect={(source) => {
+          youtubeUrlQueueStore.stop();
+          updateSettings({ ambientVideoSource: source, ambientVideoEnabled: true });
+          setError(null);
+        }}
+      />
+      <YouTubeAccountSettings
         environmentScopeKey={environmentScopeKey}
         onSelect={(source) => {
           youtubeUrlQueueStore.stop();
