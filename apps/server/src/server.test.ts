@@ -2611,6 +2611,92 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(makeProductionHttpServerTestLayer())),
   );
 
+  it.effect("gates hardware lighting RPCs and settings before device access", () =>
+    Effect.gen(function* () {
+      let settingsWrites = 0;
+      yield* buildAppUnderTest({
+        config: { host: "0.0.0.0" },
+        layers: {
+          clientSettings: {
+            updateSettings: () =>
+              Effect.sync(() => {
+                settingsWrites += 1;
+                return DEFAULT_CLIENT_SETTINGS;
+              }),
+          },
+        },
+      });
+      const ownerCookie = yield* getAuthenticatedSessionCookieHeader();
+      const ownerUrl = appendSessionCookieToWsUrl(
+        yield* getWsServerUrl("/ws", { authenticated: false }),
+        ownerCookie,
+      );
+      yield* Effect.scoped(
+        withWsRpcClient(ownerUrl, (client) =>
+          Effect.gen(function* () {
+            const status = yield* client[WS_METHODS.serverGetHardwareLightingStatus]({});
+            assert.equal(status.state, "disabled");
+            assert.deepStrictEqual(status.controllers, []);
+            const refusedFrame = yield* client[WS_METHODS.serverApplyHardwareLightingFrame]({
+              sequence: 1,
+              active: true,
+              colors: [{ red: 255, green: 0, blue: 0 }],
+            });
+            assert.equal(refusedFrame.state, "disabled");
+            assert.equal(refusedFrame.lastDisposition, "disabled");
+          }),
+        ),
+      );
+      const pairingResponse = yield* HttpClient.post("/api/auth/pairing-token", {
+        headers: { cookie: ownerCookie },
+      });
+      const pairing = (yield* pairingResponse.json) as { credential: string };
+      const pairedCookie = yield* getAuthenticatedSessionCookieHeader(pairing.credential);
+      const pairedUrl = appendSessionCookieToWsUrl(
+        yield* getWsServerUrl("/ws", { authenticated: false }),
+        pairedCookie,
+      );
+      const denial =
+        "Hardware lighting requires an owner session over HTTPS or a same-machine Cafe connection.";
+      yield* Effect.scoped(
+        withWsRpcClient(pairedUrl, (client) =>
+          Effect.gen(function* () {
+            for (const request of [
+              client[WS_METHODS.serverGetHardwareLightingStatus]({}),
+              client[WS_METHODS.serverRefreshHardwareLighting]({}),
+              client[WS_METHODS.serverApplyHardwareLightingFrame]({
+                sequence: 2,
+                active: false,
+                colors: [],
+              }),
+            ]) {
+              const result = yield* request.pipe(
+                Effect.catchTag("HardwareLightingRpcError", (error) =>
+                  Effect.succeed(error.detail),
+                ),
+              );
+              assert.equal(result, denial);
+            }
+            const settingDenial = yield* client[WS_METHODS.serverUpdateClientSettings]({
+              patch: { hardwareLightingSyncEnabled: false },
+            }).pipe(
+              Effect.catchTag("ClientSettingsError", (error) => Effect.succeed(error.detail)),
+            );
+            assert.equal(
+              settingDenial,
+              "Hardware lighting settings require an owner session over HTTPS or a same-machine Cafe connection.",
+            );
+            assert.equal(settingsWrites, 0);
+            yield* client[WS_METHODS.serverUpdateClientSettings]({
+              patch: { fallingEffectsEnabled: false },
+            });
+            assert.equal(settingsWrites, 1);
+          }),
+        ),
+      );
+    }).pipe(Effect.provide(makeProductionHttpServerTestLayer())),
+  );
+
   it.effect("manages dictation credentials without returning the permanent key", () =>
     Effect.gen(function* () {
       yield* buildAppUnderTest();

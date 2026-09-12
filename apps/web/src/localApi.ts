@@ -199,6 +199,18 @@ function createBrowserLocalApi(rpcClient?: WsRpcClient): LocalApi {
         rpcClient
           ? rpcClient.server.updateClientSettings(patch)
           : Promise.reject(unavailableLocalBackendError()),
+      getHardwareLightingStatus: () =>
+        rpcClient
+          ? rpcClient.server.getHardwareLightingStatus()
+          : Promise.reject(unavailableLocalBackendError()),
+      refreshHardwareLighting: () =>
+        rpcClient
+          ? rpcClient.server.refreshHardwareLighting()
+          : Promise.reject(unavailableLocalBackendError()),
+      applyHardwareLightingFrame: (input) =>
+        rpcClient
+          ? rpcClient.server.applyHardwareLightingFrame(input)
+          : Promise.reject(unavailableLocalBackendError()),
       discoverSourceControl: () =>
         rpcClient
           ? rpcClient.server.discoverSourceControl()

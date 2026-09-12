@@ -20,6 +20,7 @@ import { OnboardingSurface } from "../components/OnboardingSurface";
 import { DesktopNotificationWatcher } from "../components/DesktopNotificationWatcher";
 import { ProviderUpdateLaunchNotification } from "../components/ProviderUpdateLaunchNotification";
 import { WindowAtmosphere } from "../components/WindowAtmosphere";
+import { HardwareLightingMatrixSync } from "../components/HardwareLightingMatrixSync";
 import {
   WebSocketConnectionCoordinator,
   WebSocketConnectionSurface,
@@ -166,6 +167,7 @@ function RootRouteView() {
         <AmbianceLayer />
         <PowerSaveBlockerSync />
         <WindowAtmosphere />
+        <HardwareLightingMatrixSync />
         {primaryEnvironmentAuthenticated ? <EventRouter /> : null}
         {primaryEnvironmentAuthenticated ? <ProviderUpdateLaunchNotification /> : null}
         {primaryEnvironmentAuthenticated ? <DesktopNotificationWatcher /> : null}
