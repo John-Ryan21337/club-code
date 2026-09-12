@@ -19,6 +19,7 @@ const SETTINGS_PROFILES_MAX_CANDIDATES = SETTINGS_PROFILES_MAX_COUNT * 4;
 
 type ProfileFieldPolicy =
   | "include"
+  | "excluded"
   | "bookkeeping"
   | "external-operation"
   | "external-media-activation"
@@ -42,8 +43,7 @@ export const SETTINGS_PROFILE_FIELD_POLICY = {
   confirmThreadArchive: "include",
   confirmThreadDelete: "include",
   dismissedProviderUpdateNotificationKeys: "bookkeeping",
-  diffIgnoreWhitespace: "include",
-  diffWordWrap: "include",
+  interfaceScalePercent: "excluded",
   continueBackgroundAnimations: "include",
   showSidebarSearch: "include",
   showSidebarMascot: "include",
@@ -60,6 +60,11 @@ export const SETTINGS_PROFILE_FIELD_POLICY = {
   ambianceSurfaceThread: "include",
   ambianceSurfaceComposer: "include",
   ambianceColor: "include",
+  ambianceOpacity: "excluded",
+  ambianceAtriumEnabled: "excluded",
+  ambianceAtriumColor: "excluded",
+  dismissedTaskAtriumErrors: "bookkeeping",
+  modelPricingOverrides: "provider-or-model",
   ambientVideoEnabled: "external-media-activation",
   ambientVideoSource: "include",
   ambientVideoLayoutMode: "include",
@@ -136,6 +141,7 @@ const includedKeys = Object.freeze(
 // Exact allowlist from the version-1 document contract. Do not derive this as
 // the complement of newer fields: doing that would let a future `include`
 // policy change silently grant old documents authority over a new setting.
+type RetiredProfileKey = "diffIgnoreWhitespace" | "diffWordWrap";
 const versionOneIncludedKeys = Object.freeze([
   "autoOpenPlanSidebar",
   "confirmThreadArchive",
@@ -156,7 +162,7 @@ const versionOneIncludedKeys = Object.freeze([
   "sidebarThreadPreviewCount",
   "timestampFormat",
   "chatCopyFormat",
-] as const satisfies readonly IncludedKey[]);
+] as const satisfies readonly (IncludedKey | RetiredProfileKey)[]);
 // Exact allowlist written by version 2. Decoding must never consult the live
 // policy because a forged future-looking property in an old document could
 // otherwise gain authority after a later field becomes `include`. To change
@@ -209,7 +215,7 @@ const versionTwoIncludedKeys = Object.freeze([
   "sidebarThreadPreviewCount",
   "timestampFormat",
   "chatCopyFormat",
-] as const satisfies readonly IncludedKey[]);
+] as const satisfies readonly (IncludedKey | RetiredProfileKey)[]);
 const nestedProfileKeys = new Set<IncludedKey>([
   "ambientVideoSource",
   "ambientImageAsset",
@@ -366,11 +372,13 @@ function idForName(name: string): string {
 
 function sanitizeClientSettings(
   value: unknown,
-  keys: readonly IncludedKey[] = includedKeys,
+  keys: readonly (IncludedKey | RetiredProfileKey)[] = includedKeys,
 ): SettingsProfileClientSettings {
   if (!isRecord(value)) throw new SettingsProfileError("The profile settings are invalid.");
   const candidate: Record<string, unknown> = { ...DEFAULT_CLIENT_SETTINGS };
   for (const key of keys) {
+    // Keep old document allowlists exact while ignoring fields retired by Cafe.
+    if (key === "diffIgnoreWhitespace" || key === "diffWordWrap") continue;
     const field = ownValue(value, key);
     if (field === undefined) continue;
     if (nestedProfileKeys.has(key)) {
@@ -391,6 +399,7 @@ function sanitizeClientSettings(
   }
   const result: Partial<Record<IncludedKey, unknown>> = {};
   for (const key of keys) {
+    if (key === "diffIgnoreWhitespace" || key === "diffWordWrap") continue;
     if (ownValue(value, key) !== undefined) {
       result[key] = cloneAndFreezeProfileValue(decoded[key]);
     }

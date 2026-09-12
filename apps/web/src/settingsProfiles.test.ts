@@ -192,6 +192,35 @@ describe("settings profiles", () => {
     expect(profile?.clientSettings).not.toHaveProperty("futurePresentationMode");
   });
 
+  it.each([1, 2])(
+    "preserves version-%s profiles while dropping retired fields and newer controls",
+    (version) => {
+      const raw = JSON.stringify({
+        version,
+        profiles: [
+          {
+            id: "profile:retained",
+            name: "Retained",
+            theme: "dark",
+            clientSettings: {
+              showSidebarMascot: false,
+              diffIgnoreWhitespace: true,
+              diffWordWrap: true,
+              interfaceScalePercent: 150,
+              ambianceAtriumEnabled: true,
+              ambianceOpacity: 0.8,
+              modelPricingOverrides: [],
+            },
+            createdAt: "2026-08-01T12:00:00.000Z",
+          },
+        ],
+      });
+
+      const [profile] = createSettingsProfilesStore(createStorage(raw)).getSnapshot().profiles;
+      expect(profile?.clientSettings).toEqual({ showSidebarMascot: false });
+    },
+  );
+
   it("rejects malformed nested media configuration without publishing it", () => {
     const storage = createStorage();
     const store = createSettingsProfilesStore(storage, now);
