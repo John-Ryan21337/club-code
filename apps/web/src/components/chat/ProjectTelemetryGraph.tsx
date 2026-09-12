@@ -28,6 +28,7 @@ import {
   subscribeCafeDocumentVisibility,
 } from "../../documentVisibility";
 import { cn } from "~/lib/utils";
+import { ProjectTemperatureReadings } from "./ProjectTemperatureReadings";
 import {
   appendBoundedTelemetryHistory,
   buildTelemetrySparklinePath,
@@ -613,6 +614,9 @@ export function ProjectTelemetryGraph({
               }
             />
           </div>
+          <ProjectTemperatureReadings
+            telemetry={telemetryUnavailable ? undefined : telemetry?.temperatures}
+          />
         </aside>
       )}
     </div>

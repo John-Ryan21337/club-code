@@ -17,6 +17,8 @@
 
 ## Windows-Specific Notes
 
+- Windows temperature telemetry reads only the local Libre Hardware Monitor/Open Hardware Monitor `Sensor` classes through fixed system PowerShell and absolute system module paths. Do not install, start, or configure those monitor applications automatically. Keep a bounded single helper, minimal environment, fixed arguments, UTF-8 output for sensor labels, and sanitized status text. Linux uses its separate hwmon reader; macOS reports host sensors unavailable while an independent supported vendor measurement can still remain visible.
+
 - Windows GPU telemetry uses only the fixed `System32/nvidia-smi.exe` location under a validated, unambiguous system-root tuple. Never use inherited PATH, module paths, loader hooks, or user-configured executable locations for recurring hardware probes. Derive the minimal child environment from that root; use hidden shell-free children, closed stdin, and bounded shutdown. Linux keeps its fixed distro paths, and macOS reports this adapter unavailable. The default tests use fake children or isolated Node fixtures; physical GPU checks remain in the opt-in integration suite.
 
 - The separate scheduled/manual reliability workflow runs the existing Windows native installer/runtime/uninstaller smoke only on disposable GitHub-hosted Windows runners. It does not run on user machines or move process-backed/provider tests into the default suite. macOS uses its isolated DMG/ZIP smoke, and Linux keeps its existing artifact build and pipeline coverage.
