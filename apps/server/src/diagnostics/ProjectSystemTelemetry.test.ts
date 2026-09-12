@@ -1,4 +1,6 @@
 import { ProjectId } from "@cafecode/contracts";
+import { unavailableTemperatureTelemetry } from "./TemperatureTelemetry.ts";
+import type { HostTemperatureTelemetrySamplerShape } from "./HostTemperatureTelemetry.ts";
 import { describe, expect, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -61,6 +63,7 @@ function makeFixture(input: {
   readonly hostSample?: HostSystemTelemetrySamplerShape["sample"];
   readonly volumeRead?: ProjectVolumeSamplerShape["read"];
   readonly gpuSampler?: HostGpuTelemetrySamplerShape;
+  readonly temperatureSampler?: HostTemperatureTelemetrySamplerShape;
   readonly platform?: () => string;
   readonly architecture?: () => string;
 }) {
@@ -88,6 +91,9 @@ function makeFixture(input: {
   return {
     telemetry: makeProjectSystemTelemetry({
       hostSampler,
+      temperatureSampler: input.temperatureSampler ?? {
+        sample: async () => unavailableTemperatureTelemetry("unsupported"),
+      },
       volumeSampler,
       gpuSampler: input.gpuSampler ?? { sample: async () => unsupportedGpuTelemetry() },
       runtime,
@@ -98,6 +104,44 @@ function makeFixture(input: {
 }
 
 describe("ProjectSystemTelemetry", () => {
+  it("preserves a measured vendor GPU temperature when host sensors are unavailable", () =>
+    Effect.gen(function* () {
+      const fixture = makeFixture({
+        gpuSampler: {
+          sample: async () => ({
+            status: "available",
+            reason: null,
+            detail: null,
+            adapters: [
+              {
+                index: 0,
+                name: "NVIDIA Test GPU",
+                utilizationPercent: 10,
+                memoryTotalBytes: 1000,
+                memoryUsedBytes: 100,
+                memoryUtilizationPercent: 10,
+                temperatureCelsius: 61,
+              },
+            ],
+          }),
+        },
+        temperatureSampler: {
+          sample: async () => {
+            throw new Error("private WMI diagnostic");
+          },
+        },
+      });
+      const result = yield* fixture.telemetry.read({ projectId, workspaceRoot: "/project" });
+      expect(result.temperatures).toMatchObject({
+        status: "available",
+        sensors: [{ kind: "gpu", temperatureCelsius: 61, source: "nvidia-smi" }],
+        hostSensorProbe: { status: "unavailable", reason: "probe-failed" },
+      });
+      expect(result.cpu).toEqual(availableHost.cpu);
+      expect(result.projectVolume).toEqual(availableVolume);
+      expect(JSON.stringify(result)).not.toContain("private");
+    }));
+
   it("shares one GPU probe across projects while retaining their separate volume reads", () =>
     Effect.gen(function* () {
       let gpuReads = 0;

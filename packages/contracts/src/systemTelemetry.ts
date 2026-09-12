@@ -224,6 +224,117 @@ export const ServerSystemGpuTelemetry = Schema.Union([
 ]);
 export type ServerSystemGpuTelemetry = typeof ServerSystemGpuTelemetry.Type;
 
+export const MAX_TEMPERATURE_SENSORS = 64;
+export const MAX_TEMPERATURE_SENSOR_LABEL_LENGTH = 120;
+const MAX_TEMPERATURE_DETAIL_LENGTH = 180;
+
+export const ServerSystemTemperatureSensorKind = Schema.Literals([
+  "cpu",
+  "gpu",
+  "memory",
+  "vram",
+  "storage",
+  "ambient",
+  "other",
+]);
+export type ServerSystemTemperatureSensorKind = typeof ServerSystemTemperatureSensorKind.Type;
+
+export const ServerSystemTemperatureSource = Schema.Literals([
+  "nvidia-smi",
+  "libre-hardware-monitor",
+  "open-hardware-monitor",
+  "linux-hwmon",
+]);
+export type ServerSystemTemperatureSource = typeof ServerSystemTemperatureSource.Type;
+
+const ServerSystemTemperatureSensorLabel = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(MAX_TEMPERATURE_SENSOR_LABEL_LENGTH),
+  Schema.isPattern(GPU_ADAPTER_NAME_PATTERN),
+);
+
+export const ServerSystemTemperatureSensor = Schema.Struct({
+  kind: ServerSystemTemperatureSensorKind,
+  label: ServerSystemTemperatureSensorLabel,
+  temperatureCelsius: Schema.Number.check(
+    Schema.isBetween({
+      minimum: MIN_HARDWARE_TEMPERATURE_CELSIUS,
+      maximum: MAX_HARDWARE_TEMPERATURE_CELSIUS,
+    }),
+  ),
+  source: ServerSystemTemperatureSource,
+});
+export type ServerSystemTemperatureSensor = typeof ServerSystemTemperatureSensor.Type;
+
+export const ServerSystemTemperatureUnavailableReason = Schema.Literals([
+  "unsupported",
+  "probe-failed",
+  "malformed",
+  "stale",
+]);
+export type ServerSystemTemperatureUnavailableReason =
+  typeof ServerSystemTemperatureUnavailableReason.Type;
+
+/**
+ * Diagnostic state for the platform host-sensor probe, kept separate from the
+ * aggregate temperature status because a vendor GPU source can succeed while
+ * the provider needed for CPU/RAM/storage/case sensors is unavailable.
+ */
+export const ServerSystemTemperatureHostSensorProbeReason = Schema.Literals([
+  "provider-missing",
+  "no-temperature-sensors",
+  "unsupported",
+  "probe-failed",
+  "malformed",
+  "stale",
+]);
+export type ServerSystemTemperatureHostSensorProbeReason =
+  typeof ServerSystemTemperatureHostSensorProbeReason.Type;
+
+export const ServerSystemTemperatureHostSensorProbe = Schema.Union([
+  Schema.Struct({
+    status: Schema.Literal("available"),
+    reason: Schema.Null,
+    detail: Schema.Null,
+  }),
+  Schema.Struct({
+    status: Schema.Literal("unavailable"),
+    reason: ServerSystemTemperatureHostSensorProbeReason,
+    detail: TrimmedNonEmptyString.check(Schema.isMaxLength(MAX_TEMPERATURE_DETAIL_LENGTH)),
+  }),
+]);
+export type ServerSystemTemperatureHostSensorProbe =
+  typeof ServerSystemTemperatureHostSensorProbe.Type;
+
+/**
+ * Versioned, bounded hardware-sensor projection. Only measured Celsius values
+ * cross the RPC boundary; missing sensor classes remain absent rather than
+ * being inferred from utilization or neighbouring components.
+ */
+export const ServerSystemTemperatureTelemetry = Schema.Union([
+  Schema.Struct({
+    version: Schema.Literal(1),
+    status: Schema.Literal("available"),
+    sensors: Schema.Array(ServerSystemTemperatureSensor).check(
+      Schema.isMinLength(1),
+      Schema.isMaxLength(MAX_TEMPERATURE_SENSORS),
+    ),
+    // Optional for compatibility with older already-running backends.
+    hostSensorProbe: Schema.optional(ServerSystemTemperatureHostSensorProbe),
+    reason: Schema.Null,
+    detail: Schema.Null,
+  }),
+  Schema.Struct({
+    version: Schema.Literal(1),
+    status: Schema.Literal("unavailable"),
+    sensors: Schema.Array(ServerSystemTemperatureSensor).check(Schema.isMaxLength(0)),
+    // Optional for compatibility with older already-running backends.
+    hostSensorProbe: Schema.optional(ServerSystemTemperatureHostSensorProbe),
+    reason: ServerSystemTemperatureUnavailableReason,
+    detail: TrimmedNonEmptyString.check(Schema.isMaxLength(MAX_TEMPERATURE_DETAIL_LENGTH)),
+  }),
+]);
+export type ServerSystemTemperatureTelemetry = typeof ServerSystemTemperatureTelemetry.Type;
+
 export const ServerProjectSystemTelemetryResult = Schema.Struct({
   projectId: ProjectId,
   sampledAt: Schema.DateTimeUtc,
@@ -234,6 +345,7 @@ export const ServerProjectSystemTelemetryResult = Schema.Struct({
   memory: ServerSystemMemoryTelemetry,
   // Older remote servers do not provide GPU measurements.
   gpu: Schema.optional(ServerSystemGpuTelemetry),
+  temperatures: Schema.optional(ServerSystemTemperatureTelemetry),
   projectVolume: ServerProjectVolumeTelemetry,
 });
 export type ServerProjectSystemTelemetryResult = typeof ServerProjectSystemTelemetryResult.Type;

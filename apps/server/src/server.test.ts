@@ -3729,6 +3729,20 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       Effect.gen(function* () {
         const authoritativeWorkspaceRoot = "M:\\server-owned\\selected-project";
         let sampledWorkspaceRoot: string | null = null;
+        const temperatures = {
+          version: 1 as const,
+          status: "available" as const,
+          sensors: [
+            {
+              kind: "cpu" as const,
+              source: "linux-hwmon" as const,
+              label: "CPU package",
+              temperatureCelsius: 55.5,
+            },
+          ],
+          reason: null,
+          detail: null,
+        };
         const gpu = {
           status: "available" as const,
           adapters: [
@@ -3762,6 +3776,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                   sampledWorkspaceRoot = input.workspaceRoot;
                   return {
                     gpu,
+                    temperatures,
                     projectId: input.projectId,
                     sampledAt: TEST_EPOCH,
                     minimumSampleIntervalMs: 1_000,
@@ -3809,6 +3824,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         assert.equal(response.projectId, defaultProjectId);
         assert.equal(response.projectVolume.projectVolumeOnly, true);
         assert.deepEqual(response.gpu, gpu);
+        assert.deepEqual(response.temperatures, temperatures);
       }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

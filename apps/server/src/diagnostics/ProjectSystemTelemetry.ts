@@ -32,6 +32,18 @@ import {
   type HostGpuTelemetrySamplerShape,
 } from "./HostGpuTelemetry.ts";
 import { probeFailedGpuTelemetry } from "./GpuTelemetry.ts";
+import {
+  makeHostTemperatureProbeProcess,
+  type HostTemperatureProbeProcessShape,
+} from "./HostTemperatureProbeProcess.ts";
+import {
+  makeHostTemperatureTelemetrySampler,
+  type HostTemperatureTelemetrySamplerShape,
+} from "./HostTemperatureTelemetry.ts";
+import {
+  mergeGpuTemperatureSensors,
+  unavailableTemperatureTelemetry,
+} from "./TemperatureTelemetry.ts";
 
 export const PROJECT_SYSTEM_TELEMETRY_MINIMUM_SAMPLE_INTERVAL_MS = 1_000;
 
@@ -63,6 +75,7 @@ export interface ProjectSystemTelemetryDependencies {
   readonly hostSampler: HostSystemTelemetrySamplerShape;
   readonly volumeSampler: ProjectVolumeSamplerShape;
   readonly gpuSampler: HostGpuTelemetrySamplerShape;
+  readonly temperatureSampler: HostTemperatureTelemetrySamplerShape;
   readonly runtime: ProjectSystemTelemetryRuntime;
 }
 
@@ -195,8 +208,11 @@ export function makeProjectSystemTelemetry(
       Promise.resolve()
         .then(() => dependencies.gpuSampler.sample())
         .catch(probeFailedGpuTelemetry),
+      Promise.resolve()
+        .then(() => dependencies.temperatureSampler.sample())
+        .catch(() => unavailableTemperatureTelemetry("probe-failed")),
     ])
-      .then(([projectVolume, gpu]) => ({
+      .then(([projectVolume, gpu, temperatures]) => ({
         projectId: input.projectId,
         sampledAt: DateTime.makeUnsafe(sampledAtMs),
         minimumSampleIntervalMs: PROJECT_SYSTEM_TELEMETRY_MINIMUM_SAMPLE_INTERVAL_MS,
@@ -205,6 +221,7 @@ export function makeProjectSystemTelemetry(
         cpu: host.cpu,
         memory: host.memory,
         gpu,
+        temperatures: mergeGpuTemperatureSensors(temperatures, gpu),
         projectVolume,
       }))
       .then((result) => {
@@ -261,11 +278,15 @@ function makeLiveRuntime(): ProjectSystemTelemetryRuntime {
 function makeLiveService(input: {
   readonly volumeProbe: ProjectVolumeProbeProcessShape;
   readonly gpuProbe: GpuProbeProcessShape;
+  readonly temperatureProbe: HostTemperatureProbeProcessShape;
 }): ProjectSystemTelemetryShape {
   const runtime = makeLiveRuntime();
   return makeProjectSystemTelemetry({
     hostSampler: makeHostSystemTelemetrySampler(makeLiveHostSystemTelemetryRuntime()),
     gpuSampler: makeHostGpuTelemetrySampler(input.gpuProbe, {
+      nowMonotonicMillis: runtime.nowMonotonicMillis,
+    }),
+    temperatureSampler: makeHostTemperatureTelemetrySampler(input.temperatureProbe, {
       nowMonotonicMillis: runtime.nowMonotonicMillis,
     }),
     volumeSampler: makeProjectVolumeSampler(input.volumeProbe, {
@@ -279,10 +300,11 @@ const liveService = Effect.acquireRelease(
   Effect.sync(() => ({
     volumeProbe: makeProjectVolumeProbeProcess(),
     gpuProbe: makeGpuProbeProcess(),
+    temperatureProbe: makeHostTemperatureProbeProcess(),
   })),
-  ({ volumeProbe, gpuProbe }) =>
+  ({ volumeProbe, gpuProbe, temperatureProbe }) =>
     Effect.promise(async () => {
-      await Promise.allSettled([volumeProbe.close(), gpuProbe.close()]);
+      await Promise.allSettled([volumeProbe.close(), gpuProbe.close(), temperatureProbe.close()]);
     }),
 ).pipe(Effect.map(makeLiveService));
 

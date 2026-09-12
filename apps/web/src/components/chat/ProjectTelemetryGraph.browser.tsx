@@ -68,6 +68,80 @@ function telemetryFixture(input: {
 describe("ProjectTelemetryGraph", () => {
   beforeEach(async () => page.viewport(800, 600));
 
+  it("shows reported temperatures and explains missing host sensors without inventing values", async () => {
+    const measurement: ServerProjectSystemTelemetryResult = {
+      ...telemetryFixture({ projectId: projectA }),
+      temperatures: {
+        version: 1,
+        status: "available",
+        reason: null,
+        detail: null,
+        sensors: [
+          { kind: "gpu", label: "NVIDIA Test GPU", source: "nvidia-smi", temperatureCelsius: 61.5 },
+        ],
+        hostSensorProbe: {
+          status: "unavailable",
+          reason: "provider-missing",
+          detail: "Host sensor provider is unavailable.",
+        },
+      },
+    };
+    const mounted = await render(
+      <ProjectTelemetryGraph
+        environmentId={environmentA}
+        projectId={projectA}
+        readTelemetry={async () => measurement}
+      />,
+    );
+    try {
+      await page.getByLabelText("Expand Resources").click();
+      await page.getByText("Host temperatures (1)").click();
+      await expect.element(page.getByText("NVIDIA Test GPU", { exact: true })).toBeVisible();
+      await expect.element(page.getByText("61.5 °C", { exact: true })).toBeVisible();
+      await expect.element(page.getByText("Host sensor provider is unavailable.")).toBeVisible();
+    } finally {
+      await mounted.unmount();
+    }
+  });
+
+  it("removes old temperature values when the next telemetry request fails", async () => {
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    const readTelemetry = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ...telemetryFixture({ projectId: projectA, minimumSampleIntervalMs: 250 }),
+        temperatures: {
+          version: 1,
+          status: "available",
+          reason: null,
+          detail: null,
+          sensors: [
+            { kind: "cpu", label: "CPU package", source: "linux-hwmon", temperatureCelsius: 55.5 },
+          ],
+        },
+      })
+      .mockRejectedValue(new Error("synthetic request failure"));
+    const mounted = await render(
+      <ProjectTelemetryGraph
+        environmentId={environmentA}
+        projectId={projectA}
+        readTelemetry={readTelemetry}
+        pollIntervalMs={250}
+      />,
+    );
+    try {
+      await page.getByLabelText("Expand Resources").click();
+      await page.getByText("Host temperatures (1)").click();
+      await expect.element(page.getByText("55.5 °C", { exact: true })).toBeVisible();
+      await expect.element(page.getByText("Host temperatures — unavailable")).toBeVisible();
+      await expect.element(page.getByText("55.5 °C", { exact: true })).not.toBeInTheDocument();
+      expect(errorLog).toHaveBeenCalledTimes(1);
+    } finally {
+      await mounted.unmount();
+      errorLog.mockRestore();
+    }
+  });
+
   it("renders measured GPU utilization and combined VRAM from the telemetry response", async () => {
     const measurement: ServerProjectSystemTelemetryResult = {
       ...telemetryFixture({ projectId: projectA }),
@@ -99,9 +173,7 @@ describe("ProjectTelemetryGraph", () => {
       await expect
         .element(page.getByLabelText(/GPU: 62%.*Peak across 1 GPU adapter/))
         .toBeVisible();
-      await expect
-        .element(page.getByLabelText(/VRAM: 25%.*6 GiB available/))
-        .toBeVisible();
+      await expect.element(page.getByLabelText(/VRAM: 25%.*6 GiB available/)).toBeVisible();
     } finally {
       await mounted.unmount();
     }
