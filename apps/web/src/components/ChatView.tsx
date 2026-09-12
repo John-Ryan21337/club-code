@@ -162,6 +162,7 @@ import {
 import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { MessagesTimeline } from "./chat/MessagesTimeline";
+import { useAmbientVideoWorkspace } from "./ambient/AmbientVideoWorkspace";
 import type { SubagentDetailSelection } from "./chat/SubagentDetailView";
 import { useTaskAtriumStore } from "./atrium/taskAtriumStore";
 import {
@@ -798,6 +799,7 @@ function useLocalDispatchState(input: {
 }
 
 export default function ChatView(props: ChatViewProps) {
+  const { registerChatAnchor } = useAmbientVideoWorkspace();
   const { environmentId, threadId, routeKind } = props;
   const draftId = routeKind === "draft" ? props.draftId : null;
   const routeThreadRef = useMemo(
@@ -6403,7 +6405,7 @@ export default function ChatView(props: ChatViewProps) {
         {/* Chat column */}
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           {/* Messages Wrapper */}
-          <div className="relative flex min-h-0 flex-1 flex-col">
+          <div ref={registerChatAnchor} className="relative flex min-h-0 flex-1 flex-col">
             {/* Messages — LegendList handles virtualization and scrolling internally */}
             <MessagesTimeline
               key={activeThread.id}
