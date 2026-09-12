@@ -101,6 +101,8 @@ interface FakeBackendOptions {
   readonly failSave?: boolean;
   /** Fail every DELETE, as a storage error on the server would. */
   readonly failDelete?: boolean;
+  readonly failSecondUpload?: boolean;
+  readonly pendingUpload?: Promise<void>;
 }
 
 /**
@@ -125,7 +127,7 @@ function installFakeBackend(initial: Partial<ClientSettings>, options: FakeBacke
     .fn<LocalApi["server"]["updateClientSettings"]>()
     .mockImplementation(async (patch) => {
       calls.push("save");
-      if (options.failSave) throw new Error("Settings write rejected.");
+      if (options.failSave) throw new Error("SECRET_FROM_SETTINGS_SERVER");
       saved = { ...saved, ...patch } as ClientSettings;
       return saved;
     });
@@ -145,6 +147,10 @@ function installFakeBackend(initial: Partial<ClientSettings>, options: FakeBacke
       const file = init?.body as File;
       const asset = uploadedAssetFor(file.name);
       calls.push(`upload:${file.name}`);
+      await options.pendingUpload;
+      if (options.failSecondUpload && file.name.startsWith("second")) {
+        return new Response("SECRET_FROM_UPLOAD_SERVER", { status: 500 });
+      }
       stored.add(asset.id);
       return new Response(JSON.stringify({ ambientImage: asset }), {
         status: 200,
@@ -288,7 +294,10 @@ describe("AmbientImageSettingsSection", () => {
 
     selectFiles([syntheticFile("first.png", "image/png")]);
 
-    await vi.waitFor(() => expect(errorText()).toContain("Settings write rejected."));
+    await vi.waitFor(() =>
+      expect(errorText()).toContain("Ambient image settings could not be saved."),
+    );
+    expect(errorText()).not.toContain("SECRET_FROM_SETTINGS_SERVER");
     // The failure is the whole point: a fire-and-forget write would have shown
     // the thumbnail and no error, leaving bytes nothing references.
     expect(errorText()).toContain("The uploaded files were discarded.");
@@ -380,10 +389,101 @@ describe("AmbientImageSettingsSection", () => {
 
     await userEvent.click(removeButtonFor(firstAsset));
 
-    await vi.waitFor(() => expect(errorText()).toBe("Settings write rejected."));
+    await vi.waitFor(() => expect(errorText()).toBe("Ambient image settings could not be saved."));
     expect(noticeText()).toBeNull();
     expect(backend.calls).toEqual(["save"]);
     expect(backend.storedIds()).toEqual([firstAsset.id, secondAsset.id]);
     expect(thumbnailIds()).toEqual([firstAsset.id, secondAsset.id]);
+  });
+
+  it.each(["file", "folder"] as const)(
+    "discards a partial %s upload without exposing server text",
+    async (kind) => {
+      const backend = installFakeBackend(
+        { ambientImageCycleAssets: [existingAsset], ambientImageAsset: existingAsset },
+        { failSecondUpload: true },
+      );
+      await renderSection();
+      const files = [
+        syntheticFile("first.png", "image/png"),
+        syntheticFile("second.png", "image/png"),
+      ];
+      if (kind === "file") selectFiles(files);
+      else selectFolder(files.map((file) => ({ file, relativePath: `images/${file.name}` })));
+      await vi.waitFor(() => expect(errorText()).toContain("The uploaded files were discarded."));
+      expect(errorText()).not.toContain("SECRET_FROM_UPLOAD_SERVER");
+      expect(backend.calls).toEqual([
+        "upload:first.png",
+        "upload:second.png",
+        `delete:${firstAsset.id}`,
+      ]);
+      expect(backend.storedIds()).toEqual([existingAsset.id]);
+      expect(backend.updateClientSettings).not.toHaveBeenCalled();
+      expect(thumbnailIds()).toEqual([existingAsset.id]);
+    },
+  );
+
+  it("discards a folder replacement when its settings write fails", async () => {
+    const backend = installFakeBackend(
+      { ambientImageCycleAssets: [existingAsset], ambientImageAsset: existingAsset },
+      { failSave: true },
+    );
+    await renderSection();
+    selectFolder([
+      { file: syntheticFile("first.png", "image/png"), relativePath: "images/first.png" },
+    ]);
+    await vi.waitFor(() => expect(errorText()).toContain("The uploaded files were discarded."));
+    expect(errorText()).not.toContain("SECRET_FROM_SETTINGS_SERVER");
+    expect(backend.storedIds()).toEqual([existingAsset.id]);
+    expect(backend.calls).toEqual(["upload:first.png", "save", `delete:${firstAsset.id}`]);
+  });
+
+  it("releases a late upload after settings unmount without saving a new library", async () => {
+    let complete!: () => void;
+    const backend = installFakeBackend(
+      {},
+      {
+        pendingUpload: new Promise<void>((resolve) => {
+          complete = resolve;
+        }),
+      },
+    );
+    await renderSection();
+    try {
+      selectFiles([syntheticFile("first.png", "image/png")]);
+      await vi.waitFor(() => expect(backend.calls).toEqual(["upload:first.png"]));
+      mounted!.unmount();
+      mounted = null;
+    } finally {
+      complete();
+    }
+    await vi.waitFor(() =>
+      expect(backend.calls).toEqual(["upload:first.png", `delete:${firstAsset.id}`]),
+    );
+    expect(backend.updateClientSettings).not.toHaveBeenCalled();
+    expect(backend.storedIds()).toEqual([]);
+  });
+
+  it("blocks competing removal and selection while an upload is pending", async () => {
+    let complete!: () => void;
+    const backend = installFakeBackend(
+      { ambientImageCycleAssets: [existingAsset], ambientImageAsset: existingAsset },
+      {
+        pendingUpload: new Promise<void>((resolve) => {
+          complete = resolve;
+        }),
+      },
+    );
+    await renderSection();
+    try {
+      selectFiles([syntheticFile("first.png", "image/png")]);
+      await vi.waitFor(() => expect(removeButtonFor(existingAsset).disabled).toBe(true));
+      selectFiles([syntheticFile("second.png", "image/png")]);
+      expect(backend.calls).toEqual(["upload:first.png"]);
+    } finally {
+      complete();
+    }
+    await vi.waitFor(() => expect(noticeText()).toBe("Added 1 image."));
+    expect(backend.calls).toEqual(["upload:first.png", "save"]);
   });
 });

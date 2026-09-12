@@ -49,6 +49,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import {
   FetchHttpClient,
@@ -3558,6 +3559,50 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       yield* Deferred.succeed(finishHeldBodies, undefined);
       yield* Fiber.interrupt(secondHeld);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("times out stalled ambient bodies and restores upload admission", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+      const cookie = yield* getAuthenticatedSessionCookieHeader();
+      const holdUpload = () =>
+        HttpClient.post("/api/ambient-media/image", {
+          headers: { cookie, "content-type": "image/png" },
+          body: HttpBody.stream(
+            Stream.make(ambientPngBytes.slice(0, 8)).pipe(
+              Stream.concat(Stream.fromEffect(Effect.never)),
+            ),
+            "image/png",
+          ),
+        }).pipe(
+          Effect.map((response) => response.status),
+          Effect.catchTag("HttpClientError", (error) => Effect.succeed(error.reason._tag)),
+          Effect.forkChild({ startImmediately: true }),
+        );
+      const first = yield* holdUpload();
+      const second = yield* holdUpload();
+      let lastStatus = 0;
+      for (let attempt = 0; attempt < 60; attempt++) {
+        const probe = yield* HttpClient.post("/api/ambient-media/image", {
+          headers: { cookie, "content-type": "image/png" },
+          body: HttpBody.uint8Array(ambientPngBytes, "image/png"),
+        });
+        lastStatus = probe.status;
+        if (lastStatus === 429) break;
+        yield* Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, 25)));
+      }
+      assert.equal(lastStatus, 429);
+      yield* TestClock.adjust("31 seconds");
+      // Node destroys an interrupted incoming-body stream. Depending on transport
+      // timing, the client observes the explicit response or a closed connection.
+      assert.include([408, "TransportError"], yield* Fiber.join(first));
+      assert.include([408, "TransportError"], yield* Fiber.join(second));
+      const recovered = yield* HttpClient.post("/api/ambient-media/image", {
+        headers: { cookie, "content-type": "image/png" },
+        body: HttpBody.uint8Array(ambientPngBytes, "image/png"),
+      });
+      assert.equal(recovered.status, 200);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest), Effect.provide(TestClock.layer())),
   );
 
   it.effect("proxies browser OTLP trace exports through the server", () =>

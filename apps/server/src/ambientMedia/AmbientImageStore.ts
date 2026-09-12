@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { constants as fsConstants } from "node:fs";
+import { lstat, open } from "node:fs/promises";
 
 import {
   MAX_AMBIENT_IMAGE_DIMENSION,
@@ -71,6 +73,60 @@ export interface StoredAmbientImage {
   readonly filePath: string;
   readonly mimeType: AmbientImageMimeType;
 }
+
+/** Read the opened file under a fixed allocation cap, then prove the minted id.
+ * A changed file must not turn an authenticated image endpoint into a file reader.
+ * O_NONBLOCK avoids hanging on a FIFO substituted between the probe and open;
+ * handle identity and the digest remain authoritative on platforms without O_NOFOLLOW.
+ */
+export const readStoredAmbientImage = (stored: StoredAmbientImage) =>
+  Effect.tryPromise({
+    try: async () => {
+      const before = await lstat(stored.filePath);
+      if (!before.isFile() || before.size <= 0 || before.size > MAX_AMBIENT_IMAGE_FILE_BYTES) {
+        throw new Error("Invalid stored image");
+      }
+      const handle = await open(
+        stored.filePath,
+        fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0),
+      );
+      try {
+        const opened = await handle.stat();
+        if (
+          !opened.isFile() ||
+          opened.dev !== before.dev ||
+          opened.ino !== before.ino ||
+          opened.size !== before.size
+        ) {
+          throw new Error("Stored image changed");
+        }
+        const bytes = new Uint8Array(before.size + 1);
+        let length = 0;
+        while (length < bytes.length) {
+          const { bytesRead } = await handle.read(bytes, length, bytes.length - length, length);
+          if (bytesRead === 0) break;
+          length += bytesRead;
+        }
+        const data = bytes.subarray(0, length);
+        if (
+          length !== before.size ||
+          createHash("sha256").update(data).digest("hex") !== stored.id.slice(7, 71)
+        ) {
+          throw new Error("Stored image content changed");
+        }
+        return data;
+      } finally {
+        await handle.close();
+      }
+    },
+    catch: (cause) =>
+      new AmbientImageError({
+        code: "storage-failed",
+        status: 500,
+        message: "Ambient image could not be loaded.",
+        cause,
+      }),
+  });
 
 export interface AmbientImageStoreShape {
   readonly storeUploadedImage: (input: {
@@ -465,13 +521,13 @@ function makeStore() {
                   status: 413,
                   message: "Ambient image profile quota is full.",
                 });
-              yield* fs.makeDirectory(directory, { recursive: true });
+              yield* fs.makeDirectory(directory, { recursive: true, mode: 0o700 });
               const tempDir = yield* fs.makeTempDirectoryScoped({
                 directory,
                 prefix: `${id}.`,
               });
               const tempPath = path.join(tempDir, `${yield* Random.nextUUIDv4}.tmp`);
-              yield* fs.writeFile(tempPath, input.bytes);
+              yield* fs.writeFile(tempPath, input.bytes, { mode: 0o600 });
               yield* fs
                 .rename(tempPath, filePath)
                 .pipe(
