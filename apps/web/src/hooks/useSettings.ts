@@ -19,6 +19,10 @@ import {
   UnifiedSettings,
 } from "@cafecode/contracts/settings";
 import { ensureLocalApi } from "~/localApi";
+import {
+  splitCompletionAlertSettings,
+  withLocalCompletionAlertSettings,
+} from "../completionAlertSettings";
 import * as Struct from "effect/Struct";
 import * as Equal from "effect/Equal";
 import { applyClientSettingsPatch } from "@cafecode/shared/clientSettings";
@@ -100,12 +104,19 @@ async function maybeImportLocalClientSettingsToServer(): Promise<void> {
 
   await hydrateClientSettings();
   const localSettings = getClientSettingsSnapshot();
+  const sharedServerSettings = splitCompletionAlertSettings(
+    currentServerConfig.clientSettings,
+  ).shared;
+  const sharedLocalSettings = splitCompletionAlertSettings(localSettings).shared;
+  const sharedDefaultSettings = splitCompletionAlertSettings(DEFAULT_CLIENT_SETTINGS).shared;
   if (
-    Equal.equals(currentServerConfig.clientSettings, DEFAULT_CLIENT_SETTINGS) &&
-    !Equal.equals(localSettings, DEFAULT_CLIENT_SETTINGS)
+    Equal.equals(sharedServerSettings, sharedDefaultSettings) &&
+    !Equal.equals(sharedLocalSettings, sharedDefaultSettings)
   ) {
-    applyClientSettingsUpdated(localSettings);
-    await ensureLocalApi().server.updateClientSettings(localSettings);
+    applyClientSettingsUpdated(
+      applyClientSettingsPatch(currentServerConfig.clientSettings, sharedLocalSettings),
+    );
+    await ensureLocalApi().server.updateClientSettings(sharedLocalSettings);
   }
 }
 
@@ -158,17 +169,23 @@ function splitPatch(patch: Partial<UnifiedSettings>): {
  * settings without subscribing.
  */
 export function getClientSettings(): ClientSettings {
-  return getServerConfig()?.clientSettings ?? getClientSettingsSnapshot();
+  const local = getClientSettingsSnapshot();
+  return withLocalCompletionAlertSettings(getServerConfig()?.clientSettings ?? local, local);
 }
 
 export function useClientSettingsHydrated(): boolean {
   const serverConfig = useServerConfig();
-  const localHydrated = useSyncExternalStore(
+  const localHydrated = useLocalClientSettingsHydrated();
+  return serverConfig !== null || localHydrated;
+}
+
+/** Device-owned preferences cannot use a shared server snapshot as hydration. */
+export function useLocalClientSettingsHydrated(): boolean {
+  return useSyncExternalStore(
     subscribeClientSettingsHydration,
     getClientSettingsHydratedSnapshot,
     () => false,
   );
-  return serverConfig !== null || localHydrated;
 }
 
 function useLocalClientSettings(): ClientSettings {
@@ -196,7 +213,10 @@ export function useSettings<T = UnifiedSettings>(selector?: (s: UnifiedSettings)
   const merged = useMemo<UnifiedSettings>(
     () => ({
       ...serverSettings,
-      ...(serverConfig?.clientSettings ?? localClientSettings),
+      ...withLocalCompletionAlertSettings(
+        serverConfig?.clientSettings ?? localClientSettings,
+        localClientSettings,
+      ),
     }),
     [localClientSettings, serverConfig?.clientSettings, serverSettings],
   );
@@ -233,22 +253,36 @@ export function useUpdateSettings() {
 
     if (Object.keys(clientPatch).length > 0) {
       const currentServerConfig = getServerConfig();
+      const { local: audioPatch, shared: sharedPatch } = splitCompletionAlertSettings(clientPatch);
+      if (Object.keys(audioPatch).length > 0) {
+        void hydrateClientSettings()
+          .then(() => {
+            persistClientSettings(
+              applyClientSettingsPatch(
+                getClientSettingsSnapshot(),
+                currentServerConfig ? audioPatch : clientPatch,
+              ),
+            );
+          })
+          .catch((error) => reportSettingsWriteFailure("client", error));
+      }
       if (currentServerConfig) {
+        if (Object.keys(sharedPatch).length === 0) return;
         const nextClientSettings = applyClientSettingsPatch(
           currentServerConfig.clientSettings,
-          clientPatch,
+          sharedPatch,
         );
         applyClientSettingsUpdated(nextClientSettings);
         try {
           void ensureLocalApi()
-            .server.updateClientSettings(clientPatch)
+            .server.updateClientSettings(sharedPatch)
             .catch((error) => {
               reportSettingsWriteFailure("client", error);
             });
         } catch (error) {
           reportSettingsWriteFailure("client", error);
         }
-      } else {
+      } else if (Object.keys(audioPatch).length === 0) {
         persistClientSettings(applyClientSettingsPatch(getClientSettingsSnapshot(), clientPatch));
       }
     }

@@ -3,6 +3,10 @@ import * as Effect from "effect/Effect";
 import * as DesktopIpc from "./DesktopIpc.ts";
 import { getClientSettings, setClientSettings } from "./methods/clientSettings.ts";
 import {
+  getCompletionSpeechCapability,
+  synthesizeCompletionSpeech,
+} from "./methods/completionSpeech.ts";
+import {
   getSavedEnvironmentRegistry,
   getSavedEnvironmentSecret,
   removeSavedEnvironmentSecret,
@@ -46,6 +50,9 @@ export const installDesktopIpcHandlers = Effect.gen(function* () {
 
   yield* ipc.handle(getDebugEndpointState);
   yield* ipc.handle(publishDebugSnapshot);
+
+  yield* ipc.handle(getCompletionSpeechCapability);
+  yield* ipc.handle(synthesizeCompletionSpeech);
 
   yield* ipc.handle(getClientSettings);
   yield* ipc.handle(setClientSettings);
