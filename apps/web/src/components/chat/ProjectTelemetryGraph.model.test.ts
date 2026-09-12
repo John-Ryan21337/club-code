@@ -161,11 +161,12 @@ describe("ProjectTelemetryGraph model", () => {
     });
   });
 
-  it("accepts bounded GPU fields through the independent adapter seam", () => {
+  it("accepts bounded GPU fields from the telemetry contract", () => {
     const telemetry = {
       ...telemetryFixture(),
       gpu: {
         status: "available",
+        reason: null,
         detail: null,
         adapters: [
           {
@@ -186,7 +187,7 @@ describe("ProjectTelemetryGraph model", () => {
           },
         ],
       },
-    } as ServerProjectSystemTelemetryResult;
+    } satisfies ServerProjectSystemTelemetryResult;
 
     expect(projectTelemetryGpuAdapter(telemetry)).toMatchObject({
       gpuPercent: 55,

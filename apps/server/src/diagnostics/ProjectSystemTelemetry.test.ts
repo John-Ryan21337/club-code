@@ -15,6 +15,11 @@ import {
 } from "./ProjectSystemTelemetry.ts";
 import type { ProjectVolumeSamplerShape } from "./ProjectVolumeSampler.ts";
 import { unavailableProjectVolumeTelemetry } from "./ProjectVolumeTelemetry.ts";
+import { probeFailedGpuTelemetry, unsupportedGpuTelemetry } from "./GpuTelemetry.ts";
+import {
+  makeHostGpuTelemetrySampler,
+  type HostGpuTelemetrySamplerShape,
+} from "./HostGpuTelemetry.ts";
 
 const projectId = ProjectId.make("project-system-telemetry-test");
 const availableHost: HostSystemTelemetrySample = {
@@ -55,6 +60,7 @@ function makeFixture(input: {
   readonly now?: () => number;
   readonly hostSample?: HostSystemTelemetrySamplerShape["sample"];
   readonly volumeRead?: ProjectVolumeSamplerShape["read"];
+  readonly gpuSampler?: HostGpuTelemetrySamplerShape;
   readonly platform?: () => string;
   readonly architecture?: () => string;
 }) {
@@ -80,13 +86,64 @@ function makeFixture(input: {
     architecture: input.architecture ?? (() => "arm64"),
   };
   return {
-    telemetry: makeProjectSystemTelemetry({ hostSampler, volumeSampler, runtime }),
+    telemetry: makeProjectSystemTelemetry({
+      hostSampler,
+      volumeSampler,
+      gpuSampler: input.gpuSampler ?? { sample: async () => unsupportedGpuTelemetry() },
+      runtime,
+    }),
     hostCalls,
     volumeRoots,
   };
 }
 
 describe("ProjectSystemTelemetry", () => {
+  it("shares one GPU probe across projects while retaining their separate volume reads", () =>
+    Effect.gen(function* () {
+      let gpuReads = 0;
+      const gpuSampler = makeHostGpuTelemetrySampler(
+        {
+          read: async () => {
+            gpuReads += 1;
+            return unsupportedGpuTelemetry();
+          },
+        },
+        { nowMonotonicMillis: () => 1_000 },
+      );
+      const fixture = makeFixture({ gpuSampler });
+      const [left, right] = yield* Effect.all(
+        [
+          fixture.telemetry.read({ projectId, workspaceRoot: "/left" }),
+          fixture.telemetry.read({
+            projectId: ProjectId.make("gpu-right"),
+            workspaceRoot: "/right",
+          }),
+        ],
+        { concurrency: "unbounded" },
+      );
+      expect(gpuReads).toBe(1);
+      expect(left.gpu).toEqual(unsupportedGpuTelemetry());
+      expect(right.gpu).toBe(left.gpu);
+      expect(fixture.volumeRoots).toEqual(["/left", "/right"]);
+    }));
+
+  it("keeps CPU, RAM and storage available when the GPU sampler rejects", () =>
+    Effect.gen(function* () {
+      const fixture = makeFixture({
+        gpuSampler: {
+          sample: async () => {
+            throw new Error("private driver diagnostic");
+          },
+        },
+      });
+      const result = yield* fixture.telemetry.read({ projectId, workspaceRoot: "/project" });
+      expect(result.gpu).toEqual(probeFailedGpuTelemetry());
+      expect(result.cpu).toEqual(availableHost.cpu);
+      expect(result.memory).toEqual(availableHost.memory);
+      expect(result.projectVolume).toEqual(availableVolume);
+      expect(JSON.stringify(result)).not.toContain("private");
+    }));
+
   it("combines host and exact-project volume telemetry with bounded metadata", () =>
     Effect.gen(function* () {
       const fixture = makeFixture({});

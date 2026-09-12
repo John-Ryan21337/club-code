@@ -68,6 +68,45 @@ function telemetryFixture(input: {
 describe("ProjectTelemetryGraph", () => {
   beforeEach(async () => page.viewport(800, 600));
 
+  it("renders measured GPU utilization and combined VRAM from the telemetry response", async () => {
+    const measurement: ServerProjectSystemTelemetryResult = {
+      ...telemetryFixture({ projectId: projectA }),
+      gpu: {
+        status: "available",
+        reason: null,
+        detail: null,
+        adapters: [
+          {
+            index: 0,
+            name: "NVIDIA Test GPU",
+            utilizationPercent: 62,
+            memoryTotalBytes: 8 * 1024 ** 3,
+            memoryUsedBytes: 2 * 1024 ** 3,
+            memoryUtilizationPercent: 25,
+          },
+        ],
+      },
+    };
+    const mounted = await render(
+      <ProjectTelemetryGraph
+        environmentId={environmentA}
+        projectId={projectA}
+        readTelemetry={async () => measurement}
+      />,
+    );
+    try {
+      await page.getByLabelText("Expand Resources").click();
+      await expect
+        .element(page.getByLabelText(/GPU: 62%.*Peak across 1 GPU adapter/))
+        .toBeVisible();
+      await expect
+        .element(page.getByLabelText(/VRAM: 25%.*6 GiB available/))
+        .toBeVisible();
+    } finally {
+      await mounted.unmount();
+    }
+  });
+
   it("renders selected-project disk free space and honest unavailable GPU fields", async () => {
     const first = deferred<ServerProjectSystemTelemetryResult>();
     const readTelemetry = vi.fn(() => first.promise);

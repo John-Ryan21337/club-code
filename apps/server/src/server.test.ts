@@ -3729,6 +3729,21 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       Effect.gen(function* () {
         const authoritativeWorkspaceRoot = "M:\\server-owned\\selected-project";
         let sampledWorkspaceRoot: string | null = null;
+        const gpu = {
+          status: "available" as const,
+          adapters: [
+            {
+              index: 0,
+              name: "NVIDIA Test GPU",
+              utilizationPercent: 25,
+              memoryTotalBytes: 8_192,
+              memoryUsedBytes: 2_048,
+              memoryUtilizationPercent: 25,
+            },
+          ],
+          reason: null,
+          detail: null,
+        };
 
         yield* buildAppUnderTest({
           layers: {
@@ -3746,6 +3761,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 Effect.sync(() => {
                   sampledWorkspaceRoot = input.workspaceRoot;
                   return {
+                    gpu,
                     projectId: input.projectId,
                     sampledAt: TEST_EPOCH,
                     minimumSampleIntervalMs: 1_000,
@@ -3792,6 +3808,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         assert.equal(sampledWorkspaceRoot, authoritativeWorkspaceRoot);
         assert.equal(response.projectId, defaultProjectId);
         assert.equal(response.projectVolume.projectVolumeOnly, true);
+        assert.deepEqual(response.gpu, gpu);
       }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
