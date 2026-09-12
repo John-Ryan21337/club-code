@@ -1,4 +1,5 @@
-"use client";
+import { UiText, useUiLocalization } from "../uiLocalization";
+("use client");
 
 import { scopeProjectRef, scopeThreadRef } from "@cafecode/client-runtime";
 import {
@@ -412,6 +413,8 @@ function CommandPaletteDialog() {
 }
 
 function OpenCommandPaletteDialog() {
+  const { t: localizeUiLabel } = useUiLocalization();
+
   const navigate = useNavigate();
   const setOpen = useCommandPaletteStore((store) => store.setOpen);
   const openIntent = useCommandPaletteStore((store) => store.openIntent);
@@ -931,7 +934,8 @@ function OpenCommandPaletteDialog() {
         searchTerms: ["new thread", "chat", "create", "draft"],
         title: (
           <>
-            New thread in <span className="font-semibold">{activeProjectTitle}</span>
+            <UiText english={"New thread in "} />
+            <span className="font-semibold">{activeProjectTitle}</span>
           </>
         ),
         icon: <SquarePenIcon className={ITEM_ICON_CLASS} />,
@@ -1503,7 +1507,7 @@ function OpenCommandPaletteDialog() {
 
   return (
     <CommandDialogPopup
-      aria-label="Command palette"
+      aria-label={localizeUiLabel("Command palette")}
       className="overflow-hidden p-0"
       data-testid="command-palette"
       finalFocus={() => {
@@ -1516,7 +1520,7 @@ function OpenCommandPaletteDialog() {
     >
       <Command
         key={`${viewStack.length}-${browseGeneration}-${isBrowsing}-${addProjectCloneFlow?.step ?? "none"}`}
-        aria-label="Command palette"
+        aria-label={localizeUiLabel("Command palette")}
         autoHighlight={isBrowsing || isRemoteProjectCloneFlow ? false : "always"}
         mode="none"
         onItemHighlighted={(value) => {
@@ -1546,7 +1550,7 @@ function OpenCommandPaletteDialog() {
                     <button
                       type="button"
                       className="flex cursor-pointer items-center"
-                      aria-label="Back"
+                      aria-label={localizeUiLabel("Back")}
                       onClick={popView}
                     >
                       <ArrowLeftIcon />
@@ -1682,7 +1686,9 @@ function OpenCommandPaletteDialog() {
               <Kbd>
                 <ArrowDownIcon />
               </Kbd>
-              <span className={cn("text-muted-foreground/80")}>Navigate</span>
+              <span className={cn("text-muted-foreground/80")}>
+                <UiText english={"Navigate"} />
+              </span>
             </KbdGroup>
             {addProjectCloneFlow?.step === "repository" ? (
               <KbdGroup className="items-center gap-1.5">
@@ -1694,18 +1700,24 @@ function OpenCommandPaletteDialog() {
             ) : !canSubmitBrowsePath || hasHighlightedBrowseItem ? (
               <KbdGroup className="items-center gap-1.5">
                 <Kbd>Enter</Kbd>
-                <span className={cn("text-muted-foreground/80")}>Select</span>
+                <span className={cn("text-muted-foreground/80")}>
+                  <UiText english={"Select"} />
+                </span>
               </KbdGroup>
             ) : null}
             {isSubmenu ? (
               <KbdGroup className="items-center gap-1.5">
                 <Kbd>Backspace</Kbd>
-                <span className={cn("text-muted-foreground/80")}>Back</span>
+                <span className={cn("text-muted-foreground/80")}>
+                  <UiText english={"Back"} />
+                </span>
               </KbdGroup>
             ) : null}
             <KbdGroup className="items-center gap-1.5">
               <Kbd>Esc</Kbd>
-              <span className={cn("text-muted-foreground/80")}>Close</span>
+              <span className={cn("text-muted-foreground/80")}>
+                <UiText english={"Close"} />
+              </span>
             </KbdGroup>
           </div>
           {canOpenProjectFromFileManager ? (

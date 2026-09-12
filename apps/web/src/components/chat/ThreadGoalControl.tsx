@@ -1,3 +1,4 @@
+import { UiText, useUiLocalization } from "../../uiLocalization";
 import type { ProviderThreadGoal, ProviderThreadGoalStatus } from "@cafecode/contracts";
 import {
   CheckIcon,
@@ -208,6 +209,8 @@ export const ThreadGoalDialog = memo(function ThreadGoalDialog(props: {
   readonly onSetGoal: (patch: ThreadGoalSetPatch) => Promise<void>;
   readonly onClearGoal: () => Promise<void>;
 }) {
+  const { t: localizeUiLabel } = useUiLocalization();
+
   const [mode, setMode] = useState<ThreadGoalDialogMode>(props.mode);
   const [objective, setObjective] = useState(props.seedObjective ?? props.goal?.objective ?? "");
   const [tokenBudgetText, setTokenBudgetText] = useState(
@@ -326,7 +329,9 @@ export const ThreadGoalDialog = memo(function ThreadGoalDialog(props: {
             {isEditor ? (
               <>
                 <label className="grid gap-1.5">
-                  <span className="font-medium text-sm">Objective</span>
+                  <span className="font-medium text-sm">
+                    <UiText english={"Objective"} />
+                  </span>
                   <Textarea
                     autoFocus
                     value={objective}
@@ -346,14 +351,16 @@ export const ThreadGoalDialog = memo(function ThreadGoalDialog(props: {
                 </label>
 
                 <label className="grid gap-1.5">
-                  <span className="font-medium text-sm">Token budget</span>
+                  <span className="font-medium text-sm">
+                    <UiText english={"Token budget"} />
+                  </span>
                   <Input
                     nativeInput
                     type="number"
                     min={1}
                     step={1}
                     inputMode="numeric"
-                    placeholder="No limit"
+                    placeholder={localizeUiLabel("No limit")}
                     value={tokenBudgetText}
                     aria-invalid={!budgetIsValid ? "true" : undefined}
                     onChange={(event) => setTokenBudgetText(event.currentTarget.value)}
@@ -364,11 +371,17 @@ export const ThreadGoalDialog = memo(function ThreadGoalDialog(props: {
               <>
                 <p className="whitespace-pre-wrap text-sm leading-6">{props.goal.objective}</p>
                 <dl className="grid grid-cols-[auto_1fr] gap-x-5 gap-y-2 border-t border-border/60 pt-4 text-sm">
-                  <dt className="text-muted-foreground">Time</dt>
+                  <dt className="text-muted-foreground">
+                    <UiText english={"Time"} />
+                  </dt>
                   <dd>{formatDuration(effectiveTime, false)}</dd>
-                  <dt className="text-muted-foreground">Tokens</dt>
+                  <dt className="text-muted-foreground">
+                    <UiText english={"Tokens"} />
+                  </dt>
                   <dd>{numberFormatter.format(props.goal.tokensUsed)}</dd>
-                  <dt className="text-muted-foreground">Budget</dt>
+                  <dt className="text-muted-foreground">
+                    <UiText english={"Budget"} />
+                  </dt>
                   <dd>
                     {props.goal.tokenBudget === null
                       ? "No limit"
@@ -385,7 +398,7 @@ export const ThreadGoalDialog = memo(function ThreadGoalDialog(props: {
               <>
                 {props.goal !== null ? (
                   <Button variant="outline" disabled={pending} onClick={() => setMode("summary")}>
-                    Cancel
+                    <UiText english={"Cancel"} />
                   </Button>
                 ) : null}
                 <Button
@@ -404,11 +417,11 @@ export const ThreadGoalDialog = memo(function ThreadGoalDialog(props: {
                   onClick={() => void runOperation(props.onClearGoal)}
                 >
                   <Trash2Icon />
-                  Clear
+                  <UiText english={"Clear"} />
                 </Button>
                 <Button variant="outline" disabled={pending} onClick={() => setMode("edit")}>
                   <PencilIcon />
-                  Edit
+                  <UiText english={"Edit"} />
                 </Button>
                 {props.goal.status === "active" ? (
                   <Button
@@ -416,7 +429,7 @@ export const ThreadGoalDialog = memo(function ThreadGoalDialog(props: {
                     onClick={() => void runOperation(() => props.onSetGoal({ status: "paused" }))}
                   >
                     <CirclePauseIcon />
-                    Pause
+                    <UiText english={"Pause"} />
                   </Button>
                 ) : props.goal.status === "paused" ||
                   props.goal.status === "blocked" ||
@@ -426,7 +439,7 @@ export const ThreadGoalDialog = memo(function ThreadGoalDialog(props: {
                     onClick={() => void runOperation(() => props.onSetGoal({ status: "active" }))}
                   >
                     <CirclePlayIcon />
-                    Resume
+                    <UiText english={"Resume"} />
                   </Button>
                 ) : null}
               </>
@@ -438,13 +451,17 @@ export const ThreadGoalDialog = memo(function ThreadGoalDialog(props: {
       <AlertDialog open={replaceConfirmOpen} onOpenChange={setReplaceConfirmOpen}>
         <AlertDialogPopup>
           <AlertDialogHeader>
-            <AlertDialogTitle>Replace the active goal?</AlertDialogTitle>
+            <AlertDialogTitle>
+              <UiText english={"Replace the active goal?"} />
+            </AlertDialogTitle>
             <AlertDialogDescription>
-              The existing unfinished goal will be replaced.
+              <UiText english={"The existing unfinished goal will be replaced."} />
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogClose render={<Button variant="outline" />}>Cancel</AlertDialogClose>
+            <AlertDialogClose render={<Button variant="outline" />}>
+              <UiText english={"Cancel"} />
+            </AlertDialogClose>
             <Button
               disabled={pending}
               onClick={() => {
@@ -452,7 +469,7 @@ export const ThreadGoalDialog = memo(function ThreadGoalDialog(props: {
                 commitObjective();
               }}
             >
-              Replace
+              <UiText english={"Replace"} />
             </Button>
           </AlertDialogFooter>
         </AlertDialogPopup>

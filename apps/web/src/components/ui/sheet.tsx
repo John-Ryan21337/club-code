@@ -1,4 +1,5 @@
-"use client";
+import { useUiLocalization } from "../../uiLocalization";
+("use client");
 
 import { Dialog as SheetPrimitive } from "@base-ui/react/dialog";
 import { XIcon } from "lucide-react";
@@ -71,6 +72,8 @@ function SheetPopup({
   side?: "right" | "left" | "top" | "bottom";
   variant?: "default" | "inset";
 }) {
+  const { t: localizeUiLabel } = useUiLocalization();
+
   return (
     <SheetPortal keepMounted={keepMounted}>
       <SheetBackdrop />
@@ -96,7 +99,7 @@ function SheetPopup({
           {children}
           {showCloseButton && (
             <SheetPrimitive.Close
-              aria-label="Close"
+              aria-label={localizeUiLabel("Close")}
               className="absolute end-2 top-2"
               render={<Button size="icon" variant="ghost" />}
             >

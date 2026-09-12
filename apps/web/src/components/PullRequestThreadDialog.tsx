@@ -1,3 +1,4 @@
+import { UiText } from "../uiLocalization";
 import type { EnvironmentId, GitResolvePullRequestResult, ThreadId } from "@cafecode/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useDebouncedValue } from "@tanstack/react-pacer";
@@ -265,7 +266,7 @@ export function PullRequestThreadDialog({
             onClick={() => onOpenChange(false)}
             disabled={preparePullRequestThreadMutation.isPending}
           >
-            Cancel
+            <UiText english={"Cancel"} />
           </Button>
           <Button
             type="button"
@@ -281,7 +282,7 @@ export function PullRequestThreadDialog({
               preparePullRequestThreadMutation.isPending
             }
           >
-            {preparingMode === "local" ? "Preparing local..." : "Local"}
+            {preparingMode === "local" ? "Preparing local..." : <UiText english={"Local"} />}
           </Button>
           <Button
             type="button"

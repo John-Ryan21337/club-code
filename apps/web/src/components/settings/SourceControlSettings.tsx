@@ -1,3 +1,4 @@
+import { UiText, useUiLocalization } from "../../uiLocalization";
 import { ChevronDownIcon, GitPullRequestIcon, RefreshCwIcon } from "lucide-react";
 import * as Duration from "effect/Duration";
 import * as Option from "effect/Option";
@@ -166,7 +167,9 @@ function itemSummary({
     if (auth.status === "authenticated") {
       return (
         <>
-          <span>Authenticated</span>
+          <span>
+            <UiText english={"Authenticated"} />
+          </span>
           {authAccount ? (
             <>
               <span aria-hidden>as</span>
@@ -197,7 +200,11 @@ function itemSummary({
     );
   }
 
-  return <span>Available</span>;
+  return (
+    <span>
+      <UiText english={"Available"} />
+    </span>
+  );
 }
 
 function DiscoveryItemRow({
@@ -268,6 +275,8 @@ function DiscoveryItemRow({
 }
 
 function GitFetchIntervalSettings() {
+  const { t: localizeUiLabel } = useUiLocalization();
+
   const automaticGitFetchInterval = useSettings((settings) => settings.automaticGitFetchInterval);
   const { updateSettings } = useUpdateSettings();
   const automaticGitFetchIntervalSeconds = durationToSeconds(automaticGitFetchInterval);
@@ -282,7 +291,9 @@ function GitFetchIntervalSettings() {
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0 space-y-1">
           <div className="flex min-w-0 items-center gap-1">
-            <span className="text-xs font-medium text-foreground">Fetch interval</span>
+            <span className="text-xs font-medium text-foreground">
+              <UiText english={"Fetch interval"} />
+            </span>
             <span
               className={cn(
                 "inline-flex size-5 shrink-0 items-center justify-center transition-opacity",
@@ -321,12 +332,16 @@ function GitFetchIntervalSettings() {
             }
           >
             <NumberFieldGroup>
-              <NumberFieldDecrement aria-label="Decrease fetch interval" />
-              <NumberFieldInput aria-label="Automatic Git fetch interval in seconds" />
-              <NumberFieldIncrement aria-label="Increase fetch interval" />
+              <NumberFieldDecrement aria-label={localizeUiLabel("Decrease fetch interval")} />
+              <NumberFieldInput
+                aria-label={localizeUiLabel("Automatic Git fetch interval in seconds")}
+              />
+              <NumberFieldIncrement aria-label={localizeUiLabel("Increase fetch interval")} />
             </NumberFieldGroup>
           </NumberField>
-          <span className="text-xs text-muted-foreground">seconds</span>
+          <span className="text-xs text-muted-foreground">
+            <UiText english={"seconds"} />
+          </span>
         </div>
       </div>
     </div>
@@ -379,10 +394,12 @@ function EmptySourceControlDiscovery({
   readonly isPending: boolean;
   readonly onScan: () => void;
 }) {
+  const { t: localizeUiLabel } = useUiLocalization();
+
   const hasError = error !== null;
 
   return (
-    <SettingsSection title="Server environment">
+    <SettingsSection title={localizeUiLabel("Server environment")}>
       <Empty className="min-h-88">
         <EmptyMedia variant="icon">
           <GitPullRequestIcon />
@@ -406,7 +423,7 @@ function EmptySourceControlDiscovery({
             disabled={isPending}
           >
             <RefreshCwIcon className={cn("size-3.5", isPending && "animate-spin")} />
-            Scan
+            <UiText english={"Scan"} />
           </Button>
         </EmptyContent>
       </Empty>
@@ -415,6 +432,8 @@ function EmptySourceControlDiscovery({
 }
 
 export function SourceControlSettingsPanel() {
+  const { t: localizeUiLabel } = useUiLocalization();
+
   const discovery = useSourceControlDiscovery();
   const result = discovery.data ?? EMPTY_DISCOVERY_RESULT;
   const hasDiscoveryItems =
@@ -433,13 +452,15 @@ export function SourceControlSettingsPanel() {
             className="size-5 rounded-sm p-0 text-muted-foreground hover:text-foreground"
             onClick={handleScan}
             disabled={discovery.isPending}
-            aria-label="Rescan server environment"
+            aria-label={localizeUiLabel("Rescan server environment")}
           >
             <RefreshCwIcon className={cn("size-3", discovery.isPending && "animate-spin")} />
           </Button>
         }
       />
-      <TooltipPopup side="top">Rescan Git and hosting integrations</TooltipPopup>
+      <TooltipPopup side="top">
+        <UiText english={"Rescan Git and hosting integrations"} />
+      </TooltipPopup>
     </Tooltip>
   );
 
@@ -451,13 +472,16 @@ export function SourceControlSettingsPanel() {
 
       {isInitialScanPending ? (
         <>
-          <SourceControlSectionSkeleton title="Version Control" headerAction={scanButton} />
-          <SourceControlSectionSkeleton title="Source Control Providers" />
+          <SourceControlSectionSkeleton
+            title={localizeUiLabel("Version Control")}
+            headerAction={scanButton}
+          />
+          <SourceControlSectionSkeleton title={localizeUiLabel("Source Control Providers")} />
         </>
       ) : hasDiscoveryItems ? (
         <>
           {result.versionControlSystems.length > 0 ? (
-            <SettingsSection title="Version Control" headerAction={scanButton}>
+            <SettingsSection title={localizeUiLabel("Version Control")} headerAction={scanButton}>
               {result.versionControlSystems.map((item) => (
                 <DiscoveryItemRow key={`vcs:${item.kind}`} item={item}>
                   {item.kind === "git" ? <GitFetchIntervalSettings /> : undefined}
@@ -468,7 +492,7 @@ export function SourceControlSettingsPanel() {
 
           {result.sourceControlProviders.length > 0 ? (
             <SettingsSection
-              title="Source Control Providers"
+              title={localizeUiLabel("Source Control Providers")}
               headerAction={result.versionControlSystems.length === 0 ? scanButton : null}
             >
               {result.sourceControlProviders.map((item) => (

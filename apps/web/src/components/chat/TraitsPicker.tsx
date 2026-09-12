@@ -1,3 +1,4 @@
+import { UiText } from "../../uiLocalization";
 import {
   type ProviderDriverKind,
   type ProviderInstanceId,
@@ -365,8 +366,12 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
                 );
               }}
             >
-              <MenuRadioItem value="on">On</MenuRadioItem>
-              <MenuRadioItem value="off">Off</MenuRadioItem>
+              <MenuRadioItem value="on">
+                <UiText english={"On"} />
+              </MenuRadioItem>
+              <MenuRadioItem value="off">
+                <UiText english={"Off"} />
+              </MenuRadioItem>
             </MenuRadioGroup>
           </MenuGroup>
         </div>

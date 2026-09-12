@@ -1,3 +1,4 @@
+import { UiText } from "../../uiLocalization";
 import { mergeProps } from "@base-ui/react/merge-props";
 import { useRender } from "@base-ui/react/use-render";
 import { cva, type VariantProps } from "class-variance-authority";
@@ -248,8 +249,12 @@ function Sidebar({
             }
           >
             <SheetHeader className="sr-only">
-              <SheetTitle>Sidebar</SheetTitle>
-              <SheetDescription>Displays the mobile sidebar.</SheetDescription>
+              <SheetTitle>
+                <UiText english={"Sidebar"} />
+              </SheetTitle>
+              <SheetDescription>
+                <UiText english={"Displays the mobile sidebar."} />
+              </SheetDescription>
             </SheetHeader>
             <div
               className={cn(
@@ -338,7 +343,9 @@ function SidebarTrigger({ className, onClick, ...props }: React.ComponentProps<t
       {...props}
     >
       {sidebarOpen ? <PanelLeftCloseIcon /> : <PanelLeftIcon />}
-      <span className="sr-only">Toggle Sidebar</span>
+      <span className="sr-only">
+        <UiText english={"Toggle Sidebar"} />
+      </span>
     </Button>
   );
 }

@@ -1,3 +1,4 @@
+import { UiText, useUiLocalization } from "../../uiLocalization";
 import {
   type ProviderDriverKind,
   ProviderInteractionMode,
@@ -101,6 +102,8 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
   onRuntimeModeChange: (mode: RuntimeMode) => void;
   onOpenGoal?: () => void;
 }) {
+  const { t: localizeUiLabel } = useUiLocalization();
+
   const isClaude = props.provider === "claudeAgent";
   const usesNativePermissionModes = isClaude || props.provider === "grok";
   const permissionModeOptions = isClaude
@@ -121,7 +124,7 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
             size="sm"
             variant="ghost"
             className="max-w-40 shrink-0 justify-start gap-1.5 px-2 text-muted-foreground/70 hover:text-foreground/80"
-            aria-label="More composer controls"
+            aria-label={localizeUiLabel("More composer controls")}
             title={props.traitsTriggerLabel ?? undefined}
           />
         }
@@ -142,7 +145,9 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
         {props.showInteractionModeToggle ? (
           <>
             {hasTraits ? <MenuDivider /> : null}
-            <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">Mode</div>
+            <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">
+              <UiText english={"Mode"} />
+            </div>
             <MenuRadioGroup
               value={usesNativePermissionModes ? claudePermissionMode : props.interactionMode}
               onValueChange={(value) => {
@@ -173,8 +178,12 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
                 })
               ) : (
                 <>
-                  <MenuRadioItem value="default">Chat</MenuRadioItem>
-                  <MenuRadioItem value="plan">Plan</MenuRadioItem>
+                  <MenuRadioItem value="default">
+                    <UiText english={"Chat"} />
+                  </MenuRadioItem>
+                  <MenuRadioItem value="plan">
+                    <UiText english={"Plan"} />
+                  </MenuRadioItem>
                 </>
               )}
             </MenuRadioGroup>
@@ -183,7 +192,9 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
         {showAccessControls ? (
           <>
             {hasTraits || props.showInteractionModeToggle ? <MenuDivider /> : null}
-            <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">Access</div>
+            <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">
+              <UiText english={"Access"} />
+            </div>
             <MenuRadioGroup
               value={props.runtimeMode}
               onValueChange={(value) => {

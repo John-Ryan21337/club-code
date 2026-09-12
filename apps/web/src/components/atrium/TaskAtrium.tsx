@@ -1,3 +1,4 @@
+import { UiText } from "../../uiLocalization";
 import {
   memo,
   useCallback,
@@ -940,8 +941,8 @@ export function TaskAtriumBoard() {
                   <CircleCheckIcon className="size-4" />
                 </TooltipTrigger>
                 <TooltipPopup side="bottom">
-                  Clear {snapshot.errorCount} historical{" "}
-                  {snapshot.errorCount === 1 ? "error" : "errors"}
+                  <UiText english={"Clear "} />
+                  {snapshot.errorCount} historical {snapshot.errorCount === 1 ? "error" : "errors"}
                 </TooltipPopup>
               </Tooltip>
             ) : null}

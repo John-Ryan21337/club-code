@@ -1,3 +1,4 @@
+import { useUiLocalization } from "../../uiLocalization";
 import { type ServerProvider } from "@cafecode/contracts";
 import { memo, useState } from "react";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "../ui/alert";
@@ -9,6 +10,8 @@ export const ProviderStatusBanner = memo(function ProviderStatusBanner({
 }: {
   status: ServerProvider | null;
 }) {
+  const { t: localizeUiLabel } = useUiLocalization();
+
   const [dismissedStatusKey, setDismissedStatusKey] = useState<string | null>(null);
 
   if (!status || status.status === "ready" || status.status === "disabled") {
@@ -43,7 +46,7 @@ export const ProviderStatusBanner = memo(function ProviderStatusBanner({
         <AlertAction>
           <button
             type="button"
-            aria-label="Dismiss provider status"
+            aria-label={localizeUiLabel("Dismiss provider status")}
             className="inline-flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-foreground"
             onClick={() => setDismissedStatusKey(statusDismissKey)}
           >

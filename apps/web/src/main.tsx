@@ -8,6 +8,7 @@ import "./index.css";
 
 import { isElectron } from "./env";
 import { getRouter } from "./router";
+import { SettingsUiLocalizationProvider } from "./components/SettingsUiLocalizationProvider";
 import { APP_DISPLAY_NAME } from "./branding";
 import { syncDocumentWindowControlsOverlayClass } from "./lib/windowControlsOverlay";
 import { installMobileDebugLogging } from "./lib/mobileDebugLog";
@@ -46,6 +47,8 @@ document.title = APP_DISPLAY_NAME;
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
-    <RouterProvider router={router} />
+    <SettingsUiLocalizationProvider>
+      <RouterProvider router={router} />
+    </SettingsUiLocalizationProvider>
   </React.StrictMode>,
 );

@@ -1,3 +1,4 @@
+import { UiText, useUiLocalization } from "../uiLocalization";
 import type {
   ProjectScript,
   ProjectScriptIcon,
@@ -105,6 +106,8 @@ export default function ProjectScriptsControl({
   onUpdateScript,
   onDeleteScript,
 }: ProjectScriptsControlProps) {
+  const { t: localizeUiLabel } = useUiLocalization();
+
   const addScriptFormId = React.useId();
   const [editingScriptId, setEditingScriptId] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -218,7 +221,7 @@ export default function ProjectScriptsControl({
   return (
     <>
       {primaryScript ? (
-        <Group aria-label="Project scripts">
+        <Group aria-label={localizeUiLabel("Project scripts")}>
           <Button
             size="xs"
             variant="outline"
@@ -233,7 +236,13 @@ export default function ProjectScriptsControl({
           <GroupSeparator className="hidden @3xl/header-actions:block" />
           <Menu highlightItemOnHover={false}>
             <MenuTrigger
-              render={<Button size="icon-xs" variant="outline" aria-label="Script actions" />}
+              render={
+                <Button
+                  size="icon-xs"
+                  variant="outline"
+                  aria-label={localizeUiLabel("Script actions")}
+                />
+              }
             >
               <ChevronDownIcon className="size-4" />
             </MenuTrigger>
@@ -283,16 +292,21 @@ export default function ProjectScriptsControl({
               })}
               <MenuItem className={dropdownItemClassName} onClick={openAddDialog}>
                 <PlusIcon className="size-4" />
-                Add action
+                <UiText english={"Add action"} />
               </MenuItem>
             </MenuPopup>
           </Menu>
         </Group>
       ) : (
-        <Button size="xs" variant="outline" onClick={openAddDialog} title="Add action">
+        <Button
+          size="xs"
+          variant="outline"
+          onClick={openAddDialog}
+          title={localizeUiLabel("Add action")}
+        >
           <PlusIcon className="size-3.5" />
           <span className="sr-only @3xl/header-actions:not-sr-only @3xl/header-actions:ml-0.5">
-            Add action
+            <UiText english={"Add action"} />
           </span>
         </Button>
       )}
@@ -320,13 +334,19 @@ export default function ProjectScriptsControl({
           <DialogHeader>
             <DialogTitle>{isEditing ? "Edit Action" : "Add Action"}</DialogTitle>
             <DialogDescription>
-              Actions are project-scoped commands you can run from the top bar or keybindings.
+              <UiText
+                english={
+                  "Actions are project-scoped commands you can run from the top bar or keybindings."
+                }
+              />
             </DialogDescription>
           </DialogHeader>
           <DialogPanel>
             <form id={addScriptFormId} className="space-y-4" onSubmit={submitAddScript}>
               <div className="space-y-1.5">
-                <Label htmlFor="script-name">Name</Label>
+                <Label htmlFor="script-name">
+                  <UiText english={"Name"} />
+                </Label>
                 <div className="flex items-center gap-2">
                   <Popover onOpenChange={setIconPickerOpen} open={iconPickerOpen}>
                     <PopoverTrigger
@@ -335,7 +355,7 @@ export default function ProjectScriptsControl({
                           type="button"
                           variant="outline"
                           className="size-9 shrink-0 hover:bg-popover active:bg-popover data-pressed:bg-popover data-pressed:shadow-xs/5 data-pressed:before:shadow-[0_1px_--theme(--color-black/4%)] dark:data-pressed:before:shadow-[0_-1px_--theme(--color-white/6%)]"
-                          aria-label="Choose icon"
+                          aria-label={localizeUiLabel("Choose icon")}
                         />
                       }
                     >
@@ -370,17 +390,19 @@ export default function ProjectScriptsControl({
                   <Input
                     id="script-name"
                     autoFocus
-                    placeholder="Test"
+                    placeholder={localizeUiLabel("Test")}
                     value={name}
                     onChange={(event) => setName(event.target.value)}
                   />
                 </div>
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="script-keybinding">Keybinding</Label>
+                <Label htmlFor="script-keybinding">
+                  <UiText english={"Keybinding"} />
+                </Label>
                 <Input
                   id="script-keybinding"
-                  placeholder="Press shortcut"
+                  placeholder={localizeUiLabel("Press shortcut")}
                   value={keybinding}
                   readOnly
                   onKeyDown={captureKeybinding}
@@ -390,7 +412,9 @@ export default function ProjectScriptsControl({
                 </p>
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="script-command">Command</Label>
+                <Label htmlFor="script-command">
+                  <UiText english={"Command"} />
+                </Label>
                 <Textarea
                   id="script-command"
                   placeholder="yarn test"
@@ -399,7 +423,9 @@ export default function ProjectScriptsControl({
                 />
               </div>
               <label className="flex items-center justify-between gap-3 rounded-md border border-border/70 px-3 py-2 text-sm">
-                <span>Run automatically on worktree creation</span>
+                <span>
+                  <UiText english={"Run automatically on worktree creation"} />
+                </span>
                 <Switch
                   checked={runOnWorktreeCreate}
                   onCheckedChange={(checked) => setRunOnWorktreeCreate(Boolean(checked))}
@@ -416,7 +442,7 @@ export default function ProjectScriptsControl({
                 className="mr-auto"
                 onClick={() => setDeleteConfirmOpen(true)}
               >
-                Delete
+                <UiText english={"Delete"} />
               </Button>
             )}
             <Button
@@ -426,7 +452,7 @@ export default function ProjectScriptsControl({
                 setDialogOpen(false);
               }}
             >
-              Cancel
+              <UiText english={"Cancel"} />
             </Button>
             <Button form={addScriptFormId} type="submit">
               {isEditing ? "Save changes" : "Save action"}
@@ -439,12 +465,16 @@ export default function ProjectScriptsControl({
         <AlertDialogPopup>
           <AlertDialogHeader>
             <AlertDialogTitle>Delete action "{name}"?</AlertDialogTitle>
-            <AlertDialogDescription>This action cannot be undone.</AlertDialogDescription>
+            <AlertDialogDescription>
+              <UiText english={"This action cannot be undone."} />
+            </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogClose render={<Button variant="outline" />}>Cancel</AlertDialogClose>
+            <AlertDialogClose render={<Button variant="outline" />}>
+              <UiText english={"Cancel"} />
+            </AlertDialogClose>
             <Button variant="destructive" onClick={confirmDeleteScript}>
-              Delete action
+              <UiText english={"Delete action"} />
             </Button>
           </AlertDialogFooter>
         </AlertDialogPopup>

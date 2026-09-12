@@ -1,3 +1,4 @@
+import { UiText, useUiLocalization } from "../../uiLocalization";
 import { type ProviderDriverKind, type ProviderInstanceId } from "@cafecode/contracts";
 import { memo } from "react";
 import { StarIcon } from "lucide-react";
@@ -34,6 +35,8 @@ export const ModelListRow = memo(function ModelListRow(props: {
   jumpLabel?: string | null;
   onToggleFavorite: () => void;
 }) {
+  const { t: localizeUiLabel } = useUiLocalization();
+
   const ProviderIcon = PROVIDER_ICON_BY_PROVIDER[props.driverKind] ?? null;
   const providerLabel = props.model.subProvider
     ? `${props.providerDisplayName} · ${props.model.subProvider}`
@@ -90,9 +93,9 @@ export const ModelListRow = memo(function ModelListRow(props: {
             {props.showNewBadge ? (
               <span
                 className="shrink-0 rounded border border-amber-500/35 bg-amber-500/15 px-0.5 py-px text-[10px] font-bold uppercase leading-none tracking-wide text-amber-800 dark:border-amber-400/30 dark:bg-amber-400/12 dark:text-amber-200"
-                aria-label="New model"
+                aria-label={localizeUiLabel("New model")}
               >
-                New
+                <UiText english={"New"} />
               </span>
             ) : null}
           </div>

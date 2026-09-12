@@ -1,3 +1,4 @@
+import { useUiLocalization } from "../../uiLocalization";
 import { memo, useCallback, useState } from "react";
 import type { EnvironmentId, ThreadId } from "@cafecode/contracts";
 import { Alert, AlertAction, AlertDescription } from "../ui/alert";
@@ -22,6 +23,8 @@ export const ThreadErrorBanner = memo(function ThreadErrorBanner({
   environmentId: EnvironmentId;
   threadId: ThreadId;
 }) {
+  const { t: localizeUiLabel } = useUiLocalization();
+
   const [dismissedErrorsByScope, setDismissedErrorsByScope] = useState<
     Readonly<Record<string, string>>
   >({});
@@ -71,7 +74,7 @@ export const ThreadErrorBanner = memo(function ThreadErrorBanner({
         <AlertAction>
           <button
             type="button"
-            aria-label="Dismiss error"
+            aria-label={localizeUiLabel("Dismiss error")}
             className="inline-flex size-6 items-center justify-center rounded-md text-destructive/60 transition-colors hover:text-destructive"
             onClick={dismiss}
           >

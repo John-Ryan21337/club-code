@@ -1,3 +1,4 @@
+import { UiText, useUiLocalization } from "../../uiLocalization";
 import { memo, type PointerEventHandler } from "react";
 import { ChevronDownIcon, ChevronLeftIcon } from "lucide-react";
 import { cn } from "~/lib/utils";
@@ -73,6 +74,8 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   onInterrupt,
   onImplementPlanInNewThread,
 }: ComposerPrimaryActionsProps) {
+  const { t: localizeUiLabel } = useUiLocalization();
+
   if (isQueueEditing) return null;
   const pointerFocusProps = preserveComposerFocusOnPointerDown
     ? { onPointerDown: preventPointerFocus }
@@ -103,7 +106,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
               onClick={onPreviousPendingQuestion}
               disabled={pendingAction.isResponding}
             >
-              Previous
+              <UiText english={"Previous"} />
             </Button>
           )
         ) : null}
@@ -149,7 +152,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
           disabled={
             isSendBusy || isConnecting || isEnvironmentUnavailable || sendTemporarilyGuarded
           }
-          aria-label="Queue message"
+          aria-label={localizeUiLabel("Queue message")}
         >
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
             <path
@@ -170,7 +173,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
         className="flex size-8 cursor-pointer items-center justify-center rounded-full bg-rose-500/90 text-white transition-all duration-150 hover:bg-rose-500 hover:scale-105 sm:h-8 sm:w-8"
         {...pointerFocusProps}
         onClick={onInterrupt}
-        aria-label="Stop generation"
+        aria-label={localizeUiLabel("Stop generation")}
       >
         <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
           <rect x="2" y="2" width="8" height="8" rx="1.5" />
@@ -212,7 +215,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
                 size="sm"
                 variant="default"
                 className="h-9 rounded-l-none rounded-r-full border-l-white/12 px-2 sm:h-8"
-                aria-label="Implementation actions"
+                aria-label={localizeUiLabel("Implementation actions")}
                 {...pointerFocusProps}
                 disabled={isSendBusy || isConnecting || isEnvironmentUnavailable}
               />
@@ -225,7 +228,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
               disabled={isSendBusy || isConnecting || isEnvironmentUnavailable}
               onClick={() => void onImplementPlanInNewThread()}
             >
-              Implement in a new thread
+              <UiText english={"Implement in a new thread"} />
             </MenuItem>
           </MenuPopup>
         </Menu>
@@ -243,12 +246,12 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
         isEnvironmentUnavailable
           ? "Environment disconnected"
           : isConnecting
-            ? "Connecting"
+            ? localizeUiLabel("Connecting")
             : isPreparingWorktree
-              ? "Preparing worktree"
+              ? localizeUiLabel("Preparing worktree")
               : isSendBusy
-                ? "Sending"
-                : "Send message"
+                ? localizeUiLabel("Sending")
+                : localizeUiLabel("Send message")
       }
     >
       {isConnecting || isSendBusy ? (

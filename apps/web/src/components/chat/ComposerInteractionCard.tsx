@@ -1,3 +1,4 @@
+import { UiText } from "../../uiLocalization";
 import { useId, useState } from "react";
 import type {
   ApprovalRequestId,
@@ -332,7 +333,7 @@ export function ComposerInteractionCard({
           disabled={busy || !onRespondToInteraction}
           onClick={() => void submit("decline")}
         >
-          Decline
+          <UiText english={"Decline"} />
         </Button>
         <Button
           type="button"

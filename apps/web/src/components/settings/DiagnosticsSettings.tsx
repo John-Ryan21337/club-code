@@ -1,3 +1,4 @@
+import { UiText, useUiLocalization } from "../../uiLocalization";
 import {
   AlertTriangleIcon,
   ChevronDownIcon,
@@ -269,6 +270,8 @@ function DiagnosticsTable({
 }
 
 function TraceIdCell({ traceId }: { traceId: string }) {
+  const { t: localizeUiLabel } = useUiLocalization();
+
   const [copied, setCopied] = useState(false);
   const copyTraceId = useCallback(() => {
     void copyTextToClipboard(traceId)
@@ -302,7 +305,9 @@ function TraceIdCell({ traceId }: { traceId: string }) {
             <button
               type="button"
               className="inline-flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground"
-              aria-label={copied ? "Copied trace ID" : "Copy trace ID"}
+              aria-label={
+                copied ? localizeUiLabel("Copied trace ID") : localizeUiLabel("Copy trace ID")
+              }
               onClick={copyTraceId}
             >
               <CopyIcon className="size-3" />
@@ -399,7 +404,9 @@ function ProcessSignalActions({
             </button>
           }
         />
-        <TooltipPopup side="top">Send SIGINT</TooltipPopup>
+        <TooltipPopup side="top">
+          <UiText english={"Send SIGINT"} />
+        </TooltipPopup>
       </Tooltip>
       <Tooltip>
         <TooltipTrigger
@@ -414,7 +421,9 @@ function ProcessSignalActions({
             </button>
           }
         />
-        <TooltipPopup side="top">Send SIGKILL</TooltipPopup>
+        <TooltipPopup side="top">
+          <UiText english={"Send SIGKILL"} />
+        </TooltipPopup>
       </Tooltip>
     </div>
   );
@@ -482,13 +491,23 @@ function ProcessDiagnosticsTable({
         </colgroup>
         <thead className="sticky top-0 z-10 border-b border-border/60 bg-card text-[11px] uppercase tracking-[0.08em] text-muted-foreground/70">
           <tr>
-            <th className="px-4 py-2 font-semibold sm:pl-5">Name</th>
+            <th className="px-4 py-2 font-semibold sm:pl-5">
+              <UiText english={"Name"} />
+            </th>
             <th className="px-3 py-2 text-right font-semibold">CPU</th>
-            <th className="px-3 py-2 text-right font-semibold">Memory</th>
-            <th className="px-3 py-2 font-semibold">Command</th>
+            <th className="px-3 py-2 text-right font-semibold">
+              <UiText english={"Memory"} />
+            </th>
+            <th className="px-3 py-2 font-semibold">
+              <UiText english={"Command"} />
+            </th>
             <th className="px-3 py-2 text-right font-semibold">PID</th>
-            <th className="px-3 py-2 font-semibold">Type</th>
-            <th className="p-2 text-right font-semibold sm:pr-4">Kill</th>
+            <th className="px-3 py-2 font-semibold">
+              <UiText english={"Type"} />
+            </th>
+            <th className="p-2 text-right font-semibold sm:pr-4">
+              <UiText english={"Kill"} />
+            </th>
           </tr>
         </thead>
         <tbody className="divide-y divide-border/50">
@@ -711,13 +730,27 @@ function ProcessResourceHistoryTable({
         </colgroup>
         <thead className="sticky top-0 z-10 border-b border-border/60 bg-card text-[11px] uppercase tracking-[0.08em] text-muted-foreground/70">
           <tr>
-            <th className="px-4 py-2 font-semibold sm:pl-5">Process</th>
-            <th className="px-3 py-2 text-right font-semibold">CPU Time</th>
-            <th className="px-3 py-2 text-right font-semibold">Current</th>
-            <th className="px-3 py-2 text-right font-semibold">Average</th>
-            <th className="px-3 py-2 text-right font-semibold">Peak</th>
-            <th className="px-3 py-2 text-right font-semibold">Max Mem</th>
-            <th className="px-3 py-2 font-semibold">Command</th>
+            <th className="px-4 py-2 font-semibold sm:pl-5">
+              <UiText english={"Process"} />
+            </th>
+            <th className="px-3 py-2 text-right font-semibold">
+              <UiText english={"CPU Time"} />
+            </th>
+            <th className="px-3 py-2 text-right font-semibold">
+              <UiText english={"Current"} />
+            </th>
+            <th className="px-3 py-2 text-right font-semibold">
+              <UiText english={"Average"} />
+            </th>
+            <th className="px-3 py-2 text-right font-semibold">
+              <UiText english={"Peak"} />
+            </th>
+            <th className="px-3 py-2 text-right font-semibold">
+              <UiText english={"Max Mem"} />
+            </th>
+            <th className="px-3 py-2 font-semibold">
+              <UiText english={"Command"} />
+            </th>
             <th className="px-3 py-2 text-right font-semibold sm:pr-5">PID</th>
           </tr>
         </thead>
@@ -785,17 +818,25 @@ function DiagnosticsLastChecked({ checkedAt }: { checkedAt: DateTime.Utc | null 
   const relative = checkedAt ? formatRelativeTime(DateTime.formatIso(checkedAt)) : null;
 
   if (!relative) {
-    return <span className="text-[11px] text-muted-foreground/50">Checking</span>;
+    return (
+      <span className="text-[11px] text-muted-foreground/50">
+        <UiText english={"Checking"} />
+      </span>
+    );
   }
 
   return (
     <span className="text-[11px] text-muted-foreground/60">
       {relative.suffix ? (
         <>
-          Checked <span className="font-mono tabular-nums">{relative.value}</span> {relative.suffix}
+          <UiText english={"Checked "} />
+          <span className="font-mono tabular-nums">{relative.value}</span> {relative.suffix}
         </>
       ) : (
-        <>Checked {relative.value}</>
+        <>
+          <UiText english={"Checked "} />
+          {relative.value}
+        </>
       )}
     </span>
   );
@@ -836,17 +877,25 @@ function DiagnosticsLastCheckedIso({ checkedAt }: { checkedAt: string | null }) 
   const relative = checkedAt ? formatRelativeTime(checkedAt) : null;
 
   if (!relative) {
-    return <span className="text-[11px] text-muted-foreground/50">Checking</span>;
+    return (
+      <span className="text-[11px] text-muted-foreground/50">
+        <UiText english={"Checking"} />
+      </span>
+    );
   }
 
   return (
     <span className="text-[11px] text-muted-foreground/60">
       {relative.suffix ? (
         <>
-          Checked <span className="font-mono tabular-nums">{relative.value}</span> {relative.suffix}
+          <UiText english={"Checked "} />
+          <span className="font-mono tabular-nums">{relative.value}</span> {relative.suffix}
         </>
       ) : (
-        <>Checked {relative.value}</>
+        <>
+          <UiText english={"Checked "} />
+          {relative.value}
+        </>
       )}
     </span>
   );
@@ -1072,14 +1121,24 @@ function RuntimeProcessTable({
         </colgroup>
         <thead className="sticky top-0 z-10 border-b border-border/60 bg-card text-[11px] uppercase tracking-[0.08em] text-muted-foreground/70">
           <tr>
-            <th className="px-4 py-2 font-semibold sm:pl-5">Process</th>
-            <th className="px-3 py-2 font-semibold">Role</th>
-            <th className="px-3 py-2 font-semibold">Status</th>
+            <th className="px-4 py-2 font-semibold sm:pl-5">
+              <UiText english={"Process"} />
+            </th>
+            <th className="px-3 py-2 font-semibold">
+              <UiText english={"Role"} />
+            </th>
+            <th className="px-3 py-2 font-semibold">
+              <UiText english={"Status"} />
+            </th>
             <th className="px-3 py-2 text-right font-semibold">PID</th>
             <th className="px-3 py-2 text-right font-semibold">RSS</th>
             <th className="px-3 py-2 text-right font-semibold">CPU</th>
-            <th className="px-3 py-2 font-semibold">Owner</th>
-            <th className="px-3 py-2 font-semibold sm:pr-5">Command</th>
+            <th className="px-3 py-2 font-semibold">
+              <UiText english={"Owner"} />
+            </th>
+            <th className="px-3 py-2 font-semibold sm:pr-5">
+              <UiText english={"Command"} />
+            </th>
           </tr>
         </thead>
         <tbody className="divide-y divide-border/50">
@@ -1164,7 +1223,7 @@ function OrchestratorHealthTables({
           {data.orchestrator.recentEventTypeCounts.length === 0 ? (
             <tr>
               <td colSpan={4} className="px-4 py-4 text-muted-foreground sm:px-5">
-                No recent orchestration events.
+                <UiText english={"No recent orchestration events."} />
               </td>
             </tr>
           ) : (
@@ -1195,7 +1254,7 @@ function OrchestratorHealthTables({
           {data.orchestrator.projectorCursors.length === 0 ? (
             <tr>
               <td colSpan={4} className="px-4 py-4 text-muted-foreground sm:px-5">
-                No projector cursors found.
+                <UiText english={"No projector cursors found."} />
               </td>
             </tr>
           ) : (
@@ -1244,7 +1303,7 @@ function ProviderDaemonTables({
         {data.providerDaemon.recentCommands.length === 0 ? (
           <tr>
             <td colSpan={5} className="px-4 py-4 text-muted-foreground sm:px-5">
-              No recent daemon commands.
+              <UiText english={"No recent daemon commands."} />
             </td>
           </tr>
         ) : (
@@ -1288,7 +1347,7 @@ function ProviderDaemonTables({
         {data.providerDaemon.runtimeEventSummaries.length === 0 ? (
           <tr>
             <td colSpan={3} className="px-4 py-4 text-muted-foreground sm:px-5">
-              No recent daemon runtime events.
+              <UiText english={"No recent daemon runtime events."} />
             </td>
           </tr>
         ) : (
@@ -1328,7 +1387,7 @@ function ProviderSupervisorTable({
       {sessionCounts.length === 0 ? (
         <tr>
           <td colSpan={2} className="px-4 py-4 text-muted-foreground sm:px-5">
-            No supervisor session counts found.
+            <UiText english={"No supervisor session counts found."} />
           </td>
         </tr>
       ) : (
@@ -1346,6 +1405,8 @@ function ProviderSupervisorTable({
 }
 
 export function DiagnosticsSettingsPanel() {
+  const { t: localizeUiLabel } = useUiLocalization();
+
   const observability = useServerObservability();
   const availableEditors = useServerAvailableEditors();
   const canOpenLocalEditor = getLocalShellCapabilities().canOpenLocalEditor;
@@ -1489,7 +1550,7 @@ export function DiagnosticsSettingsPanel() {
   return (
     <SettingsPageContainer>
       <SettingsSection
-        title="Runtime Overview"
+        title={localizeUiLabel("Runtime Overview")}
         headerAction={
           <div className="flex items-center gap-1.5">
             <DiagnosticsLastCheckedIso checkedAt={runtimeData?.readAt ?? null} />
@@ -1538,7 +1599,7 @@ export function DiagnosticsSettingsPanel() {
         <RuntimeLayersTable data={runtimeData} loading={isRuntimeInitialLoading} />
       </SettingsSection>
 
-      <SettingsSection title="Orchestrator Subprocesses">
+      <SettingsSection title={localizeUiLabel("Orchestrator Subprocesses")}>
         <StatsGrid>
           <StatBlock
             label="Processes"
@@ -1561,7 +1622,7 @@ export function DiagnosticsSettingsPanel() {
         />
       </SettingsSection>
 
-      <SettingsSection title="Orchestrator Health">
+      <SettingsSection title={localizeUiLabel("Orchestrator Health")}>
         <StatsGrid>
           <StatBlock
             label="Event Seq"
@@ -1654,7 +1715,7 @@ export function DiagnosticsSettingsPanel() {
         <OrchestratorHealthTables data={runtimeData} loading={isRuntimeInitialLoading} />
       </SettingsSection>
 
-      <SettingsSection title="Provider Daemon">
+      <SettingsSection title={localizeUiLabel("Provider Daemon")}>
         <StatsGrid>
           <StatBlock
             label="Reachable"
@@ -1701,7 +1762,7 @@ export function DiagnosticsSettingsPanel() {
         <ProviderDaemonTables data={runtimeData} loading={isRuntimeInitialLoading} />
       </SettingsSection>
 
-      <SettingsSection title="Provider Pipeline">
+      <SettingsSection title={localizeUiLabel("Provider Pipeline")}>
         <StatsGrid>
           <StatBlock
             label="Loop p99"
@@ -1810,7 +1871,7 @@ export function DiagnosticsSettingsPanel() {
         </StatsGrid>
       </SettingsSection>
 
-      <SettingsSection title="Provider Supervisor">
+      <SettingsSection title={localizeUiLabel("Provider Supervisor")}>
         <StatsGrid>
           <StatBlock
             label="Configured"
@@ -1849,7 +1910,7 @@ export function DiagnosticsSettingsPanel() {
       </SettingsSection>
 
       <SettingsSection
-        title="Live Processes"
+        title={localizeUiLabel("Live Processes")}
         headerAction={
           <div className="flex items-center gap-1.5">
             <DiagnosticsLastChecked checkedAt={processData?.readAt ?? null} />
@@ -1910,7 +1971,7 @@ export function DiagnosticsSettingsPanel() {
       </SettingsSection>
 
       <SettingsSection
-        title="Resource History"
+        title={localizeUiLabel("Resource History")}
         headerAction={
           <div className="flex items-center gap-1.5">
             <ResourceHistoryWindowSelector
@@ -1974,7 +2035,7 @@ export function DiagnosticsSettingsPanel() {
       </SettingsSection>
 
       <SettingsSection
-        title="Trace Diagnostics"
+        title={localizeUiLabel("Trace Diagnostics")}
         headerAction={
           <div className="flex items-center gap-1.5">
             <DiagnosticsLastChecked checkedAt={data?.readAt ?? null} />
@@ -1987,7 +2048,11 @@ export function DiagnosticsSettingsPanel() {
                     className="size-5 rounded-sm p-0 text-muted-foreground hover:text-foreground"
                     disabled={!observability?.logsDirectoryPath || isOpeningLogsDirectory}
                     onClick={openLogsDirectory}
-                    aria-label={canOpenLocalEditor ? "Open logs folder" : "Copy logs folder path"}
+                    aria-label={
+                      canOpenLocalEditor
+                        ? localizeUiLabel("Open logs folder")
+                        : localizeUiLabel("Copy logs folder path")
+                    }
                   >
                     {canOpenLocalEditor ? (
                       <FolderOpenIcon className="size-3" />
@@ -1998,7 +2063,11 @@ export function DiagnosticsSettingsPanel() {
                 }
               />
               <TooltipPopup side="top">
-                {canOpenLocalEditor ? "Open logs folder" : "Copy logs folder path"}
+                {canOpenLocalEditor ? (
+                  <UiText english={"Open logs folder"} />
+                ) : (
+                  <UiText english={"Copy logs folder path"} />
+                )}
               </TooltipPopup>
             </Tooltip>
             <DiagnosticsRefreshButton
@@ -2067,7 +2136,7 @@ export function DiagnosticsSettingsPanel() {
         ) : null}
       </SettingsSection>
 
-      <SettingsSection title="Latest Failures">
+      <SettingsSection title={localizeUiLabel("Latest Failures")}>
         {data && data.latestFailures.length > 0 ? (
           <DiagnosticsTable headers={["Span", "Cause", "Duration", "Ended"]}>
             {data.latestFailures.map((failure) => (
@@ -2092,7 +2161,7 @@ export function DiagnosticsSettingsPanel() {
         )}
       </SettingsSection>
 
-      <SettingsSection title="Most Common Failures">
+      <SettingsSection title={localizeUiLabel("Most Common Failures")}>
         {data && data.commonFailures.length > 0 ? (
           <DiagnosticsTable
             headers={["Span", "Count", "Cause", "Last Seen"]}
@@ -2122,7 +2191,7 @@ export function DiagnosticsSettingsPanel() {
         )}
       </SettingsSection>
 
-      <SettingsSection title="Slowest Spans">
+      <SettingsSection title={localizeUiLabel("Slowest Spans")}>
         {data && data.slowestSpans.length > 0 ? (
           <DiagnosticsTable
             headers={["Span", "Duration", "Ended", "Trace"]}
@@ -2151,7 +2220,7 @@ export function DiagnosticsSettingsPanel() {
         )}
       </SettingsSection>
 
-      <SettingsSection title="Span Logs">
+      <SettingsSection title={localizeUiLabel("Span Logs")}>
         {data && data.latestWarningAndErrorLogs.length > 0 ? (
           <ScrollArea
             chainVerticalScroll
@@ -2169,11 +2238,21 @@ export function DiagnosticsSettingsPanel() {
               </colgroup>
               <thead className="border-b border-border/60 text-[11px] uppercase tracking-[0.08em] text-muted-foreground/70">
                 <tr>
-                  <th className="whitespace-nowrap px-4 py-2.5 font-semibold sm:pl-5">Time</th>
-                  <th className="whitespace-nowrap px-4 py-2.5 font-semibold">Level</th>
-                  <th className="whitespace-nowrap px-4 py-2.5 font-semibold">Span</th>
-                  <th className="whitespace-nowrap px-4 py-2.5 font-semibold">Message</th>
-                  <th className="whitespace-nowrap px-4 py-2.5 font-semibold sm:pr-5">Trace</th>
+                  <th className="whitespace-nowrap px-4 py-2.5 font-semibold sm:pl-5">
+                    <UiText english={"Time"} />
+                  </th>
+                  <th className="whitespace-nowrap px-4 py-2.5 font-semibold">
+                    <UiText english={"Level"} />
+                  </th>
+                  <th className="whitespace-nowrap px-4 py-2.5 font-semibold">
+                    <UiText english={"Span"} />
+                  </th>
+                  <th className="whitespace-nowrap px-4 py-2.5 font-semibold">
+                    <UiText english={"Message"} />
+                  </th>
+                  <th className="whitespace-nowrap px-4 py-2.5 font-semibold sm:pr-5">
+                    <UiText english={"Trace"} />
+                  </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border/60">
@@ -2215,7 +2294,7 @@ export function DiagnosticsSettingsPanel() {
         )}
       </SettingsSection>
 
-      <SettingsSection title="Top Span Names">
+      <SettingsSection title={localizeUiLabel("Top Span Names")}>
         {data && data.topSpansByCount.length > 0 ? (
           <DiagnosticsTable
             headers={["Span", "Count", "Failures", "Average", "Max"]}

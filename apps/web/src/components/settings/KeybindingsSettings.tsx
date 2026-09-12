@@ -1,3 +1,4 @@
+import { UiText, useUiLocalization } from "../../uiLocalization";
 import {
   ChevronDownIcon,
   CircleXIcon,
@@ -107,6 +108,8 @@ function ExpandableHeaderSearch({
   inputRef?: RefObject<HTMLInputElement | null>;
   collapsedAccessory?: ReactNode;
 }) {
+  const { t: localizeUiLabel } = useUiLocalization();
+
   if (!isOpen) {
     return (
       <>
@@ -120,13 +123,15 @@ function ExpandableHeaderSearch({
                 variant="ghost"
                 className="size-5 rounded-sm p-0 text-muted-foreground hover:text-foreground"
                 onClick={() => onOpenChange(true)}
-                aria-label="Search keybindings"
+                aria-label={localizeUiLabel("Search keybindings")}
               >
                 <SearchIcon className="size-3" />
               </Button>
             }
           />
-          <TooltipPopup side="top">Search keybindings</TooltipPopup>
+          <TooltipPopup side="top">
+            <UiText english={"Search keybindings"} />
+          </TooltipPopup>
         </Tooltip>
       </>
     );
@@ -151,8 +156,8 @@ function ExpandableHeaderSearch({
             onOpenChange(false);
           }
         }}
-        placeholder="Search keybindings"
-        aria-label="Search keybindings"
+        placeholder={localizeUiLabel("Search keybindings")}
+        aria-label={localizeUiLabel("Search keybindings")}
         className="h-6 w-44 rounded-md border border-input bg-background pl-7 pr-2 text-[11px] text-foreground outline-none placeholder:text-muted-foreground/72 focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/24"
       />
     </div>
@@ -586,6 +591,8 @@ function WhenExpressionBuilder({
   onChange: (value: KeybindingWhenNode | undefined) => void;
   onValidityChange?: (valid: boolean) => void;
 }) {
+  const { t: localizeUiLabel } = useUiLocalization();
+
   const expression = whenAstToExpression(value);
   const [expressionDraft, setExpressionDraft] = useState(expression);
   const parseResult = useMemo(() => parseWhenExpressionDraft(expressionDraft), [expressionDraft]);
@@ -659,7 +666,7 @@ function WhenExpressionBuilder({
           <Input
             value={expressionDraft}
             onChange={(event) => updateExpressionDraft(event.currentTarget.value)}
-            placeholder="Always"
+            placeholder={localizeUiLabel("Always")}
             aria-invalid={Boolean(parseError)}
             aria-label="When expression"
             className={cn(
@@ -768,6 +775,8 @@ function KeybindingTableRow({
   onReset: (row: KeybindingRow) => void;
   onRemove: (row: KeybindingRow) => void;
 }) {
+  const { t: localizeUiLabel } = useUiLocalization();
+
   const [draft, setDraft] = useReducer(keybindingRowDraftReducer, row, createKeybindingRowDraft);
   const { keyDraft, whenDraft, isRecording, isWhenDraftValid } = draft;
   const whenDraftExpression = whenAstToExpression(whenDraft);
@@ -823,7 +832,7 @@ function KeybindingTableRow({
           >
             <KeybindingPill value={row.key} />
             <span className="text-[10px] uppercase tracking-[0.08em] text-muted-foreground/0 transition-opacity group-hover:text-muted-foreground/70 group-focus-visible:text-muted-foreground/70">
-              Edit
+              <UiText english={"Edit"} />
             </span>
           </button>
         ) : (
@@ -831,7 +840,7 @@ function KeybindingTableRow({
             autoFocus={isRecording}
             aria-label={`Keybinding for ${commandLabel(row.command)}`}
             value={isRecording ? "" : keyDraft}
-            placeholder={isRecording ? "Press shortcut" : "Unassigned"}
+            placeholder={isRecording ? localizeUiLabel("Press shortcut") : "Unassigned"}
             className={cn(
               "h-7 w-44 rounded-md font-mono text-[12px] sm:h-7",
               isRecording && "border-primary/70 bg-primary/5",
@@ -901,7 +910,7 @@ function KeybindingTableRow({
               ) : null}
               {canRemove ? (
                 <MenuItem variant="destructive" disabled={isSaving} onClick={() => onRemove(row)}>
-                  Remove
+                  <UiText english={"Remove"} />
                 </MenuItem>
               ) : null}
             </MenuPopup>
@@ -928,6 +937,8 @@ function NewKeybindingTableRow({
   onSave: (input: ServerUpsertKeybindingInput) => void;
   onCancel: () => void;
 }) {
+  const { t: localizeUiLabel } = useUiLocalization();
+
   const [commandDraft, setCommandDraft] = useState<KeybindingCommand | "">("");
   const [draft, setDraft] = useReducer(keybindingRowDraftReducer, {
     keyDraft: "",
@@ -976,7 +987,7 @@ function NewKeybindingTableRow({
             size="xs"
             className="h-7 min-h-7 w-full max-w-60 rounded-md text-xs sm:h-7"
           >
-            <SelectValue placeholder="Command" />
+            <SelectValue placeholder={localizeUiLabel("Command")} />
           </SelectTrigger>
           <SelectContent
             alignItemWithTrigger={false}
@@ -995,7 +1006,7 @@ function NewKeybindingTableRow({
         <Input
           aria-label={`Keybinding for ${commandLabelText}`}
           value={isRecording ? "" : keyDraft}
-          placeholder={isRecording ? "Press shortcut" : "Unassigned"}
+          placeholder={isRecording ? localizeUiLabel("Press shortcut") : "Unassigned"}
           className={cn(
             "h-7 w-44 rounded-md font-mono text-[12px] sm:h-7",
             isRecording && "border-primary/70 bg-primary/5",
@@ -1011,7 +1022,7 @@ function NewKeybindingTableRow({
           disabled={isSaving || !commandDraft || keyDraft.trim().length === 0 || !isWhenDraftValid}
           onClick={save}
         >
-          {isSaving ? "Saving" : "Save"}
+          {isSaving ? "Saving" : <UiText english={"Save"} />}
         </Button>
       </div>
       <div className="pr-4">
@@ -1047,14 +1058,16 @@ function NewKeybindingTableRow({
                 size="icon-sm"
                 className="size-7 text-muted-foreground hover:text-foreground sm:size-7"
                 disabled={isSaving}
-                aria-label="Cancel new keybinding"
+                aria-label={localizeUiLabel("Cancel new keybinding")}
                 onClick={onCancel}
               />
             }
           >
             <XIcon className="size-3.5" />
           </TooltipTrigger>
-          <TooltipPopup side="top">Cancel</TooltipPopup>
+          <TooltipPopup side="top">
+            <UiText english={"Cancel"} />
+          </TooltipPopup>
         </Tooltip>
       </div>
     </div>
@@ -1062,6 +1075,8 @@ function NewKeybindingTableRow({
 }
 
 export function KeybindingsSettingsPanel() {
+  const { t: localizeUiLabel } = useUiLocalization();
+
   const keybindings = useServerKeybindings();
   const keybindingsConfigPath = useServerKeybindingsConfigPath();
   const canOpenLocalEditor = getLocalShellCapabilities().canOpenLocalEditor;
@@ -1201,7 +1216,7 @@ export function KeybindingsSettingsPanel() {
   return (
     <SettingsPageContainer className="max-w-5xl">
       <SettingsSection
-        title="Keybindings"
+        title={localizeUiLabel("Keybindings")}
         headerAction={
           <div className="flex items-center gap-1.5">
             <ExpandableHeaderSearch
@@ -1221,13 +1236,15 @@ export function KeybindingsSettingsPanel() {
                     variant="ghost"
                     className="size-5 rounded-sm p-0 text-muted-foreground hover:text-foreground"
                     onClick={() => setIsAddingBinding(true)}
-                    aria-label="Add keybinding"
+                    aria-label={localizeUiLabel("Add keybinding")}
                   >
                     <PlusIcon className="size-3" />
                   </Button>
                 }
               />
-              <TooltipPopup side="top">Add keybinding</TooltipPopup>
+              <TooltipPopup side="top">
+                <UiText english={"Add keybinding"} />
+              </TooltipPopup>
             </Tooltip>
             <Tooltip>
               <TooltipTrigger
@@ -1275,10 +1292,16 @@ export function KeybindingsSettingsPanel() {
           className="w-full max-w-full rounded-none"
         >
           <div className="grid min-w-[680px] grid-cols-[minmax(190px,1.1fr)_minmax(220px,0.85fr)_minmax(210px,1fr)_60px] border-b border-border/70 bg-muted/25 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.07em] text-muted-foreground">
-            <div>Command</div>
-            <div>Keybinding</div>
+            <div>
+              <UiText english={"Command"} />
+            </div>
+            <div>
+              <UiText english={"Keybinding"} />
+            </div>
             <div>When</div>
-            <div>Status</div>
+            <div>
+              <UiText english={"Status"} />
+            </div>
           </div>
           <div className="min-w-[680px] divide-y divide-border/60">
             {isAddingBinding ? (
@@ -1305,7 +1328,7 @@ export function KeybindingsSettingsPanel() {
             ))}
             {rows.length === 0 && !isAddingBinding ? (
               <div className="px-4 py-12 text-center text-sm text-muted-foreground">
-                No keybindings match your search.
+                <UiText english={"No keybindings match your search."} />
               </div>
             ) : null}
           </div>

@@ -1,3 +1,4 @@
+import { useUiLocalization } from "../../uiLocalization";
 import { useEffect, useState } from "react";
 
 import { isElectron } from "../../env";
@@ -18,6 +19,8 @@ import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsL
  * when the tab is frozen or closed.
  */
 export function NotificationsSettingsPanel() {
+  const { t: localizeUiLabel } = useUiLocalization();
+
   const settings = useSettings();
   const { updateSettings } = useUpdateSettings();
   const settingsHydrated = useClientSettingsHydrated();
@@ -74,9 +77,9 @@ export function NotificationsSettingsPanel() {
 
   return (
     <SettingsPageContainer>
-      <SettingsSection title="Notifications">
+      <SettingsSection title={localizeUiLabel("Notifications")}>
         <SettingsRow
-          title="Thread completion notifications"
+          title={localizeUiLabel("Thread completion notifications")}
           description={description}
           control={
             <Switch
@@ -85,7 +88,7 @@ export function NotificationsSettingsPanel() {
               onCheckedChange={(checked) => {
                 void handleToggle(Boolean(checked));
               }}
-              aria-label="Enable thread completion notifications"
+              aria-label={localizeUiLabel("Enable thread completion notifications")}
             />
           }
         />

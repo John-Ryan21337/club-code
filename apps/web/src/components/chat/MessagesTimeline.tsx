@@ -1,3 +1,4 @@
+import { UiText, useUiLocalization } from "../../uiLocalization";
 import { FileAttachmentPill } from "./FileAttachmentPill";
 import {
   type EnvironmentId,
@@ -942,7 +943,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     return (
       <div className="flex h-full items-center justify-center">
         <p className="text-sm text-muted-foreground/30">
-          Send a message to start the conversation.
+          <UiText english={"Send a message to start the conversation."} />
         </p>
       </div>
     );
@@ -1221,6 +1222,8 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
 }
 
 function RevertUserMessageButton({ messageId }: { messageId: MessageId }) {
+  const { t: localizeUiLabel } = useUiLocalization();
+
   const ctx = use(TimelineRowCtx);
   const activity = use(TimelineRowActivityCtx);
 
@@ -1231,7 +1234,7 @@ function RevertUserMessageButton({ messageId }: { messageId: MessageId }) {
       variant="outline"
       disabled={activity.isRevertingCheckpoint || activity.isWorking}
       onClick={() => ctx.onRevertUserMessage(messageId)}
-      title="Revert to this message"
+      title={localizeUiLabel("Revert to this message")}
     >
       <Undo2Icon className="size-3" />
     </Button>
@@ -1479,7 +1482,8 @@ function WorkingTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "workin
         <span>
           {row.createdAt ? (
             <>
-              Working for <WorkingTimer createdAt={row.createdAt} />
+              <UiText english={"Working for "} />
+              <WorkingTimer createdAt={row.createdAt} />
             </>
           ) : (
             "Working..."
@@ -1809,7 +1813,7 @@ const HistoricalWorkLogSection = memo(function HistoricalWorkLogSection({
             <span className="truncate text-muted-foreground/45">{compactSummary}</span>
           </span>
           <span className="shrink-0 text-[10px] uppercase tracking-[0.12em] text-muted-foreground/45">
-            Expand
+            <UiText english={"Expand"} />
           </span>
         </button>
       </div>
@@ -1856,7 +1860,9 @@ const HistoricalWorkLogSection = memo(function HistoricalWorkLogSection({
           </div>
         </div>
         {isLoading && visibleEntries.length === 0 ? (
-          <p className="px-0.5 py-1 text-[11px] text-muted-foreground/50">Loading work log...</p>
+          <p className="px-0.5 py-1 text-[11px] text-muted-foreground/50">
+            <UiText english={"Loading work log..."} />
+          </p>
         ) : visibleEntries.length === 0 ? (
           <p className="px-0.5 py-1 text-[11px] text-muted-foreground/50">
             No command or tool entries in this loaded activity page.

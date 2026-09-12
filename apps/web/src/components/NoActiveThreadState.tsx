@@ -1,3 +1,4 @@
+import { UiText } from "../uiLocalization";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "./ui/empty";
 import { SidebarInset } from "./ui/sidebar";
 import { ContentSidebarTriggerWithUnreadDot } from "./sidebar/unseenCompletions";
@@ -19,13 +20,15 @@ export function NoActiveThreadState() {
           {isElectron ? (
             <div className="flex min-w-0 items-center gap-2 wco:pr-[calc(100vw-env(titlebar-area-width)-env(titlebar-area-x)+1em)]">
               <ContentSidebarTriggerWithUnreadDot />
-              <span className="text-xs text-muted-foreground/50">No active thread</span>
+              <span className="text-xs text-muted-foreground/50">
+                <UiText english={"No active thread"} />
+              </span>
             </div>
           ) : (
             <div className="flex items-center gap-2">
               <ContentSidebarTriggerWithUnreadDot />
               <span className="text-sm font-medium text-foreground md:text-muted-foreground/60">
-                No active thread
+                <UiText english={"No active thread"} />
               </span>
             </div>
           )}
@@ -34,9 +37,11 @@ export function NoActiveThreadState() {
         <Empty className="flex-1">
           <div className="w-full max-w-lg rounded-3xl border border-border/55 bg-card/20 px-8 py-12 shadow-sm/5">
             <EmptyHeader className="max-w-none">
-              <EmptyTitle className="text-foreground text-xl">Pick a thread to continue</EmptyTitle>
+              <EmptyTitle className="text-foreground text-xl">
+                <UiText english={"Pick a thread to continue"} />
+              </EmptyTitle>
               <EmptyDescription className="mt-2 text-sm text-muted-foreground/78">
-                Select an existing thread or create a new one to get started.
+                <UiText english={"Select an existing thread or create a new one to get started."} />
               </EmptyDescription>
             </EmptyHeader>
           </div>

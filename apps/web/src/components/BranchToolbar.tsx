@@ -1,3 +1,4 @@
+import { UiText } from "../uiLocalization";
 import { scopeProjectRef, scopeThreadRef } from "@cafecode/client-runtime";
 import type { EnvironmentId, ThreadId } from "@cafecode/contracts";
 import {
@@ -133,7 +134,9 @@ const MobileRunContextSelector = memo(function MobileRunContextSelector({
         {showEnvironmentPicker && availableEnvironments && onEnvironmentChange ? (
           <>
             <MenuGroup>
-              <MenuGroupLabel>Run on</MenuGroupLabel>
+              <MenuGroupLabel>
+                <UiText english={"Run on"} />
+              </MenuGroupLabel>
               <MenuRadioGroup
                 value={environmentId}
                 onValueChange={(value) => onEnvironmentChange(value as EnvironmentId)}

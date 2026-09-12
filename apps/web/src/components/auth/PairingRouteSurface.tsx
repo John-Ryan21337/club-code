@@ -1,3 +1,4 @@
+import { UiText, useUiLocalization } from "../../uiLocalization";
 import type { AuthSessionState } from "@cafecode/contracts";
 import React, { startTransition, useEffect, useRef, useState, useCallback } from "react";
 
@@ -25,10 +26,10 @@ export function PairingPendingSurface() {
           {APP_DISPLAY_NAME}
         </p>
         <h1 className="mt-3 text-2xl font-semibold tracking-tight sm:text-3xl">
-          Pairing with this environment
+          <UiText english={"Pairing with this environment"} />
         </h1>
         <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-          Validating the pairing link and preparing your session.
+          <UiText english={"Validating the pairing link and preparing your session."} />
         </p>
       </section>
     </div>
@@ -44,6 +45,8 @@ export function PairingRouteSurface({
   initialErrorMessage?: string;
   onAuthenticated: () => void;
 }) {
+  const { t: localizeUiLabel } = useUiLocalization();
+
   const autoPairTokenRef = useRef<string | null>(peekPairingTokenFromUrl());
   const supportsPassword = auth.bootstrapMethods.includes("password");
   const supportsPairingToken = auth.bootstrapMethods.includes("one-time-token");
@@ -140,7 +143,7 @@ export function PairingRouteSurface({
           {APP_DISPLAY_NAME}
         </p>
         <h1 className="mt-3 text-2xl font-semibold tracking-tight sm:text-3xl">
-          Pair with this environment
+          <UiText english={"Pair with this environment"} />
         </h1>
         <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
           {describeAuthGate(auth.bootstrapMethods)}
@@ -157,7 +160,7 @@ export function PairingRouteSurface({
                 type="button"
                 variant={authMode === "password" ? "secondary" : "ghost"}
               >
-                Password
+                <UiText english={"Password"} />
               </Button>
               <Button
                 aria-pressed={authMode === "pairing-token"}
@@ -167,7 +170,7 @@ export function PairingRouteSurface({
                 type="button"
                 variant={authMode === "pairing-token" ? "secondary" : "ghost"}
               >
-                Pairing token
+                <UiText english={"Pairing token"} />
               </Button>
             </div>
           ) : null}
@@ -175,7 +178,7 @@ export function PairingRouteSurface({
           {authMode === "password" && supportsPassword ? (
             <div className="space-y-2">
               <label className="text-sm font-medium" htmlFor="admin-password">
-                Admin password
+                <UiText english={"Admin password"} />
               </label>
               <Input
                 id="admin-password"
@@ -183,7 +186,7 @@ export function PairingRouteSurface({
                 disabled={isSubmitting}
                 nativeInput
                 onChange={(event) => setPassword(event.currentTarget.value)}
-                placeholder="Enter the admin password"
+                placeholder={localizeUiLabel("Enter the admin password")}
                 type="password"
                 value={password}
               />
@@ -191,7 +194,7 @@ export function PairingRouteSurface({
           ) : (
             <div className="space-y-2">
               <label className="text-sm font-medium" htmlFor="pairing-token">
-                Pairing token
+                <UiText english={"Pairing token"} />
               </label>
               <Input
                 id="pairing-token"
@@ -201,7 +204,7 @@ export function PairingRouteSurface({
                 disabled={isSubmitting}
                 nativeInput
                 onChange={(event) => setCredential(event.currentTarget.value)}
-                placeholder="Paste a one-time token or pairing secret"
+                placeholder={localizeUiLabel("Paste a one-time token or pairing secret")}
                 spellCheck={false}
                 value={credential}
               />
@@ -216,11 +219,15 @@ export function PairingRouteSurface({
 
           <div className="flex flex-wrap gap-2">
             <Button disabled={isSubmitting} size="sm" type="submit">
-              {isSubmitting
-                ? authMode === "password"
-                  ? "Signing in..."
-                  : "Pairing..."
-                : "Continue"}
+              {isSubmitting ? (
+                authMode === "password" ? (
+                  "Signing in..."
+                ) : (
+                  "Pairing..."
+                )
+              ) : (
+                <UiText english={"Continue"} />
+              )}
             </Button>
             <Button
               disabled={isSubmitting}
@@ -228,7 +235,7 @@ export function PairingRouteSurface({
               size="sm"
               variant="outline"
             >
-              Reload app
+              <UiText english={"Reload app"} />
             </Button>
           </div>
         </form>

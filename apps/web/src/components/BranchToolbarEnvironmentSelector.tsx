@@ -1,3 +1,4 @@
+import { UiText, useUiLocalization } from "../uiLocalization";
 import type { EnvironmentId } from "@cafecode/contracts";
 import { CloudIcon, MonitorIcon } from "lucide-react";
 import { memo, useMemo } from "react";
@@ -26,6 +27,8 @@ export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvir
   availableEnvironments,
   onEnvironmentChange,
 }: BranchToolbarEnvironmentSelectorProps) {
+  const { t: localizeUiLabel } = useUiLocalization();
+
   const activeEnvironment = useMemo(() => {
     return availableEnvironments.find((env) => env.environmentId === environmentId) ?? null;
   }, [availableEnvironments, environmentId]);
@@ -59,7 +62,12 @@ export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvir
       onValueChange={(value) => onEnvironmentChange(value as EnvironmentId)}
       items={environmentItems}
     >
-      <SelectTrigger variant="ghost" size="xs" className="font-medium" aria-label="Run on">
+      <SelectTrigger
+        variant="ghost"
+        size="xs"
+        className="font-medium"
+        aria-label={localizeUiLabel("Run on")}
+      >
         {activeEnvironment?.isPrimary ? (
           <MonitorIcon className="size-3" />
         ) : (
@@ -69,7 +77,9 @@ export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvir
       </SelectTrigger>
       <SelectPopup>
         <SelectGroup>
-          <SelectGroupLabel>Run on</SelectGroupLabel>
+          <SelectGroupLabel>
+            <UiText english={"Run on"} />
+          </SelectGroupLabel>
           {availableEnvironments.map((env) => (
             <SelectItem key={env.environmentId} value={env.environmentId}>
               <span className="inline-flex items-center gap-1.5">

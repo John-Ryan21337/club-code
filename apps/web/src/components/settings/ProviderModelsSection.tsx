@@ -1,4 +1,5 @@
-"use client";
+import { UiText } from "../../uiLocalization";
+("use client");
 
 import {
   ArrowDownIcon,
@@ -184,7 +185,9 @@ export function ProviderModelsSection({
 
   return (
     <div className="border-t border-border/60 px-4 py-3 sm:px-5">
-      <div className="text-xs font-medium text-foreground">Models</div>
+      <div className="text-xs font-medium text-foreground">
+        <UiText english={"Models"} />
+      </div>
       <div className="mt-1 text-xs text-muted-foreground">
         {models.length} model{models.length === 1 ? "" : "s"} available.
       </div>
@@ -399,7 +402,7 @@ export function ProviderModelsSection({
         />
         <Button className="shrink-0" variant="outline" onClick={handleAdd}>
           <PlusIcon className="size-3.5" />
-          Add
+          <UiText english={"Add"} />
         </Button>
       </div>
 

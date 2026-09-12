@@ -1,3 +1,4 @@
+import { UiText } from "../../uiLocalization";
 import {
   type EnvironmentId,
   type DesktopSourceUpdateState,
@@ -99,7 +100,7 @@ export const ChatHeader = memo(function ChatHeader({
         )}
         {activeProjectName && !isGitRepo && (
           <Badge variant="outline" className="shrink-0 text-[10px] text-amber-700">
-            No Git
+            <UiText english={"No Git"} />
           </Badge>
         )}
       </div>
