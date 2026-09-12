@@ -34,6 +34,167 @@ export type PowerSaveBlockerMode = typeof PowerSaveBlockerMode.Type;
 export const DEFAULT_POWER_SAVE_BLOCKER_MODE: PowerSaveBlockerMode = "off";
 
 export const DEFAULT_CONTINUE_BACKGROUND_ANIMATIONS = false;
+export const MIN_AMBIENT_OPACITY = 0.05;
+export const MAX_AMBIENT_OPACITY = 1;
+export const DEFAULT_AMBIENT_OPACITY = 0.35;
+export const MIN_FALLING_EFFECT_SPEED = 0.25;
+export const MAX_FALLING_EFFECT_SPEED = 4;
+export const DEFAULT_FALLING_EFFECT_SPEED = 1;
+export const MIN_FALLING_EFFECT_DENSITY = 0.5;
+export const MAX_FALLING_EFFECT_DENSITY = 2.5;
+export const DEFAULT_FALLING_EFFECT_DENSITY = 1;
+export const MIN_FALLING_EFFECT_JAPANESE_RATIO = 0;
+export const MAX_FALLING_EFFECT_JAPANESE_RATIO = 1;
+export const DEFAULT_FALLING_EFFECT_JAPANESE_RATIO = 0.45;
+export const DEFAULT_FALLING_EFFECTS_ENABLED = false;
+export const FallingEffectKind = Schema.Literals(["snow", "rain", "matrix"]);
+export type FallingEffectKind = typeof FallingEffectKind.Type;
+export const DEFAULT_FALLING_EFFECT_KIND: FallingEffectKind = "snow";
+export const HexColor = TrimmedNonEmptyString.check(Schema.isPattern(/^#[0-9A-Fa-f]{6}$/)).pipe(
+  Schema.decodeTo(
+    Schema.String,
+    SchemaTransformation.transformOrFail({
+      decode: (value) => Effect.succeed(value.toLowerCase()),
+      encode: (value) => Effect.succeed(value.toLowerCase()),
+    }),
+  ),
+);
+export type HexColor = typeof HexColor.Type;
+export const AmbientColor = Schema.Union([Schema.Literal("auto"), HexColor]);
+export type AmbientColor = typeof AmbientColor.Type;
+export const DEFAULT_AMBIENT_COLOR: AmbientColor = "auto";
+export const AmbientOpacity = Schema.Number.check(
+  Schema.isBetween({ minimum: MIN_AMBIENT_OPACITY, maximum: MAX_AMBIENT_OPACITY }),
+);
+export type AmbientOpacity = typeof AmbientOpacity.Type;
+export const FallingEffectMatrixColorMode = Schema.Literals(["fixed", "rainbow", "rainbow-extra"]);
+export type FallingEffectMatrixColorMode = typeof FallingEffectMatrixColorMode.Type;
+export const DEFAULT_FALLING_EFFECT_MATRIX_COLOR_MODE: FallingEffectMatrixColorMode = "fixed";
+
+/**
+ * Baseline Matrix glyph size in CSS pixels. Non-Walk Matrix modes scale their
+ * existing per-stream glyph-size variation around this baseline. Rain and snow
+ * retain their independent drop/flake geometry.
+ */
+export const MIN_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE = 1;
+export const MAX_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE = 72;
+export const DEFAULT_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE = 14;
+export const FallingEffectMatrixBaseFontSize = Schema.Int.check(
+  Schema.isBetween({
+    minimum: MIN_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE,
+    maximum: MAX_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE,
+  }),
+);
+export type FallingEffectMatrixBaseFontSize = typeof FallingEffectMatrixBaseFontSize.Type;
+
+/**
+ * Independent hue-cycle multiplier for the animated Matrix color modes. The
+ * upper bound is intentionally high enough for a visible shimmer, but changes
+ * no particle or canvas draw budget.
+ */
+export const MIN_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED = 0.25;
+export const MAX_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED = 64;
+export const DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED = 1;
+export const FallingEffectMatrixColorCycleSpeed = Schema.Number.check(
+  Schema.isBetween({
+    minimum: MIN_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
+    maximum: MAX_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED,
+  }),
+);
+export type FallingEffectMatrixColorCycleSpeed = typeof FallingEffectMatrixColorCycleSpeed.Type;
+
+/**
+ * Historical Matrix naming is retained for stored-settings compatibility, but
+ * the projection applies to snow and rain as well as Matrix glyph streams.
+ * The user interface labels `tunnel` as Warp.
+ */
+export const FallingEffectMatrixMotionMode = Schema.Literals([
+  "flat",
+  "forward",
+  "reverse",
+  "tunnel",
+  "walk-forward",
+  "walk-reverse",
+]);
+export type FallingEffectMatrixMotionMode = typeof FallingEffectMatrixMotionMode.Type;
+export const DEFAULT_FALLING_EFFECT_MATRIX_MOTION_MODE: FallingEffectMatrixMotionMode = "flat";
+
+/**
+ * Walk endpoint controls and rendered Matrix font strings use whole-pixel
+ * buckets. Projection still interpolates depth and position continuously
+ * between the selected endpoints.
+ */
+export const MIN_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE = 1;
+export const MAX_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE = 144;
+export const FALLING_EFFECT_MATRIX_WALK_FONT_SIZE_STEP = 1;
+/**
+ * Club Code builds accepted two-decimal endpoint settings as low as 0.01px.
+ * Continue decoding those persisted values so an import never discards the
+ * rest of client settings; the user interface and glyph cache normalize new
+ * work onto the cheaper whole-pixel grid.
+ */
+const LEGACY_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE_MINIMUM = 0.01;
+const LEGACY_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE_PRECISION = 0.01;
+export const DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE = 1;
+export const DEFAULT_FALLING_EFFECT_MATRIX_WALK_END_FONT_SIZE = 72;
+export const FallingEffectMatrixWalkFontSize = Schema.Number.check(
+  Schema.isMultipleOf(LEGACY_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE_PRECISION),
+  Schema.isBetween({
+    minimum: LEGACY_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE_MINIMUM,
+    maximum: MAX_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE,
+  }),
+);
+export type FallingEffectMatrixWalkFontSize = typeof FallingEffectMatrixWalkFontSize.Type;
+
+/**
+ * Walk streams complete their depth/font lifecycle after falling this
+ * percentage of the viewport. Keeping this independent from absolute Y lets
+ * streams spawn throughout the background without forcing a top-to-bottom
+ * traversal.
+ */
+export const MIN_FALLING_EFFECT_MATRIX_WALK_LIFECYCLE_PERCENT = 5;
+export const MAX_FALLING_EFFECT_MATRIX_WALK_LIFECYCLE_PERCENT = 100;
+export const DEFAULT_FALLING_EFFECT_MATRIX_WALK_LIFECYCLE_PERCENT = 30;
+export const FallingEffectMatrixWalkLifecyclePercent = Schema.Int.check(
+  Schema.isBetween({
+    minimum: MIN_FALLING_EFFECT_MATRIX_WALK_LIFECYCLE_PERCENT,
+    maximum: MAX_FALLING_EFFECT_MATRIX_WALK_LIFECYCLE_PERCENT,
+  }),
+);
+export type FallingEffectMatrixWalkLifecyclePercent =
+  typeof FallingEffectMatrixWalkLifecyclePercent.Type;
+
+/**
+ * Signed horizontal velocity is derived from each Walk stream's distance from
+ * the viewport center: centered streams barely drift and edge streams fan
+ * outward.
+ */
+export const MIN_FALLING_EFFECT_MATRIX_CENTER_WIND_INTENSITY = 0;
+export const MAX_FALLING_EFFECT_MATRIX_CENTER_WIND_INTENSITY = 10;
+export const DEFAULT_FALLING_EFFECT_MATRIX_CENTER_WIND_INTENSITY = 4;
+export const FallingEffectMatrixCenterWindIntensity = Schema.Int.check(
+  Schema.isBetween({
+    minimum: MIN_FALLING_EFFECT_MATRIX_CENTER_WIND_INTENSITY,
+    maximum: MAX_FALLING_EFFECT_MATRIX_CENTER_WIND_INTENSITY,
+  }),
+);
+export type FallingEffectMatrixCenterWindIntensity =
+  typeof FallingEffectMatrixCenterWindIntensity.Type;
+export const FallingEffectSpeed = Schema.Number.check(
+  Schema.isBetween({ minimum: MIN_FALLING_EFFECT_SPEED, maximum: MAX_FALLING_EFFECT_SPEED }),
+);
+export type FallingEffectSpeed = typeof FallingEffectSpeed.Type;
+export const FallingEffectDensity = Schema.Number.check(
+  Schema.isBetween({ minimum: MIN_FALLING_EFFECT_DENSITY, maximum: MAX_FALLING_EFFECT_DENSITY }),
+);
+export type FallingEffectDensity = typeof FallingEffectDensity.Type;
+export const FallingEffectJapaneseRatio = Schema.Number.check(
+  Schema.isBetween({
+    minimum: MIN_FALLING_EFFECT_JAPANESE_RATIO,
+    maximum: MAX_FALLING_EFFECT_JAPANESE_RATIO,
+  }),
+);
+export type FallingEffectJapaneseRatio = typeof FallingEffectJapaneseRatio.Type;
 export const DEFAULT_SHOW_SIDEBAR_SEARCH = true;
 export const DEFAULT_SHOW_SIDEBAR_MASCOT = true;
 export const DEFAULT_SHOW_SIDEBAR_ATTRIBUTION = true;
@@ -471,6 +632,53 @@ export const ClientSettingsSchema = Schema.Struct({
   ),
   continueBackgroundAnimations: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_CONTINUE_BACKGROUND_ANIMATIONS)),
+  ),
+  fallingEffectsEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECTS_ENABLED)),
+  ),
+  fallingEffectKind: FallingEffectKind.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_KIND)),
+  ),
+  fallingEffectColor: AmbientColor.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_COLOR)),
+  ),
+  fallingEffectMatrixColorMode: FallingEffectMatrixColorMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_MATRIX_COLOR_MODE)),
+  ),
+  fallingEffectMatrixColorCycleSpeed: FallingEffectMatrixColorCycleSpeed.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED)),
+  ),
+  fallingEffectMatrixBaseFontSize: FallingEffectMatrixBaseFontSize.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE)),
+  ),
+  fallingEffectMatrixMotionMode: FallingEffectMatrixMotionMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_MATRIX_MOTION_MODE)),
+  ),
+  fallingEffectMatrixWalkStartFontSize: FallingEffectMatrixWalkFontSize.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_MATRIX_WALK_START_FONT_SIZE)),
+  ),
+  fallingEffectMatrixWalkEndFontSize: FallingEffectMatrixWalkFontSize.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_MATRIX_WALK_END_FONT_SIZE)),
+  ),
+  fallingEffectMatrixWalkLifecyclePercent: FallingEffectMatrixWalkLifecyclePercent.pipe(
+    Schema.withDecodingDefault(
+      Effect.succeed(DEFAULT_FALLING_EFFECT_MATRIX_WALK_LIFECYCLE_PERCENT),
+    ),
+  ),
+  fallingEffectMatrixCenterWindIntensity: FallingEffectMatrixCenterWindIntensity.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_MATRIX_CENTER_WIND_INTENSITY)),
+  ),
+  fallingEffectOpacity: AmbientOpacity.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_AMBIENT_OPACITY)),
+  ),
+  fallingEffectSpeed: FallingEffectSpeed.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_SPEED)),
+  ),
+  fallingEffectDensity: FallingEffectDensity.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_DENSITY)),
+  ),
+  fallingEffectJapaneseRatio: FallingEffectJapaneseRatio.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_JAPANESE_RATIO)),
   ),
   showSidebarSearch: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SHOW_SIDEBAR_SEARCH)),
@@ -1260,6 +1468,25 @@ export const ClientSettingsPatch = Schema.Struct({
   confirmThreadDelete: Schema.optionalKey(Schema.Boolean),
   interfaceScalePercent: Schema.optionalKey(InterfaceScalePercent),
   continueBackgroundAnimations: Schema.optionalKey(Schema.Boolean),
+  fallingEffectsEnabled: Schema.optionalKey(Schema.Boolean),
+  fallingEffectKind: Schema.optionalKey(FallingEffectKind),
+  fallingEffectColor: Schema.optionalKey(AmbientColor),
+  fallingEffectMatrixColorMode: Schema.optionalKey(FallingEffectMatrixColorMode),
+  fallingEffectMatrixColorCycleSpeed: Schema.optionalKey(FallingEffectMatrixColorCycleSpeed),
+  fallingEffectMatrixBaseFontSize: Schema.optionalKey(FallingEffectMatrixBaseFontSize),
+  fallingEffectMatrixMotionMode: Schema.optionalKey(FallingEffectMatrixMotionMode),
+  fallingEffectMatrixWalkStartFontSize: Schema.optionalKey(FallingEffectMatrixWalkFontSize),
+  fallingEffectMatrixWalkEndFontSize: Schema.optionalKey(FallingEffectMatrixWalkFontSize),
+  fallingEffectMatrixWalkLifecyclePercent: Schema.optionalKey(
+    FallingEffectMatrixWalkLifecyclePercent,
+  ),
+  fallingEffectMatrixCenterWindIntensity: Schema.optionalKey(
+    FallingEffectMatrixCenterWindIntensity,
+  ),
+  fallingEffectOpacity: Schema.optionalKey(AmbientOpacity),
+  fallingEffectSpeed: Schema.optionalKey(FallingEffectSpeed),
+  fallingEffectDensity: Schema.optionalKey(FallingEffectDensity),
+  fallingEffectJapaneseRatio: Schema.optionalKey(FallingEffectJapaneseRatio),
   showSidebarSearch: Schema.optionalKey(Schema.Boolean),
   showSidebarMascot: Schema.optionalKey(Schema.Boolean),
   showSidebarAttribution: Schema.optionalKey(Schema.Boolean),

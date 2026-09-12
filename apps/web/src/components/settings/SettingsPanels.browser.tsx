@@ -3,6 +3,7 @@ import {
   type AuthAccessStreamEvent,
   type AuthAccessSnapshot,
   AuthSessionId,
+  DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES,
   DEFAULT_CLIENT_SETTINGS,
   DEFAULT_SERVER_SETTINGS,
   EnvironmentId,
@@ -233,6 +234,7 @@ function createBaseServerConfig(): ServerConfig {
     },
     settings: DEFAULT_SERVER_SETTINGS,
     clientSettings: { ...DEFAULT_CLIENT_SETTINGS, onboardingCompleted: true },
+    ambientExperienceCapabilities: DEFAULT_AMBIENT_EXPERIENCE_CAPABILITIES,
   };
 }
 
@@ -1030,6 +1032,7 @@ describe("settings panels", () => {
       expect(updateClientSettings).toHaveBeenCalledWith({ interfaceScalePercent: 105 });
     });
 
+    await expect.element(page.getByText("Window atmosphere", { exact: true })).toBeInTheDocument();
     setColorInput("Branding prefix", "Acme");
 
     await vi.waitFor(() => {
