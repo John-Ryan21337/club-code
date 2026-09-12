@@ -1,4 +1,8 @@
 export const PICK_FOLDER_CHANNEL = "desktop:pick-folder";
+export const GET_LOCAL_MEDIA_CAPABILITY_CHANNEL = "desktop:get-local-media-capability";
+export const PICK_LOCAL_MEDIA_CHANNEL = "desktop:pick-local-media";
+export const NAVIGATE_LOCAL_MEDIA_CHANNEL = "desktop:navigate-local-media";
+export const RELEASE_LOCAL_MEDIA_CHANNEL = "desktop:release-local-media";
 export const CONFIRM_CHANNEL = "desktop:confirm";
 export const SET_THEME_CHANNEL = "desktop:set-theme";
 export const CONTEXT_MENU_CHANNEL = "desktop:context-menu";

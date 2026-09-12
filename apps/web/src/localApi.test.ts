@@ -169,6 +169,13 @@ function createLocalStorageStub(): Storage {
 
 function makeDesktopBridge(overrides: Partial<DesktopBridge> = {}): DesktopBridge {
   return {
+    getLocalMediaCapability: async () => ({
+      available: false as const,
+      engine: { label: "VLC" as const, version: null, reason: "Unavailable in this fixture." },
+    }),
+    pickLocalMedia: async () => null,
+    navigateLocalMedia: async () => null,
+    releaseLocalMedia: async () => false,
     getAppBranding: () => null,
     getLocalEnvironmentBootstrap: () => null,
     getDebugEndpointState: async () => ({ enabled: false, url: null }),
