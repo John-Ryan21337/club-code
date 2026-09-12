@@ -36,6 +36,11 @@ function createCanvasContext() {
   return {
     arc: vi.fn(),
     beginPath: vi.fn(),
+    clip: vi.fn(),
+    rect: vi.fn(),
+    rotate: vi.fn(),
+    translate: vi.fn(),
+    createLinearGradient: vi.fn(() => ({ addColorStop: vi.fn() })),
     clearRect: vi.fn(),
     fill: vi.fn(),
     fillText: vi.fn(),
@@ -247,6 +252,95 @@ describe("WindowAtmosphere", () => {
     await screen.unmount();
     expect(frames.size).toBe(0);
   });
+
+  it.each([
+    [false, false],
+    [true, false],
+    [false, true],
+    [true, true],
+  ])(
+    "clears selected-thread activity routes before paint and expires quiet static routes (static %s, GPU %s)",
+    async (staticMode, gpuMode) => {
+      reducedMotion = staticMode;
+      scriptedGpu = gpuMode;
+      let now = 1_800_000_000_000;
+      vi.spyOn(Date, "now").mockImplementation(() => now);
+      const timers = vi.spyOn(window, "setTimeout");
+      testState.settings = { ...testState.settings!, fallingEffectActivityLinks: true };
+      const environmentId = EnvironmentId.make("activity-environment");
+      const first = ThreadId.make("activity-first");
+      const second = ThreadId.make("activity-second");
+      const event = (id: string, kind: string) => ({
+        id,
+        kind,
+        tone: "tool",
+        turnId: "activity-turn",
+        createdAt: new Date(now).toISOString(),
+        summary: "private summary must not render",
+        payload: {
+          itemType: "command_execution",
+          itemId: "private-exact-item",
+          observed: { providerObserved: true, activityType: "build" },
+        },
+      });
+      testState.state = {
+        environmentStateById: {
+          [environmentId]: {
+            activityIdsByThreadId: { [first]: ["a", "b"], [second]: [] },
+            activityByThreadId: {
+              [first]: { a: event("a", "tool.started"), b: event("b", "tool.completed") },
+              [second]: {},
+            },
+          },
+        },
+      } as unknown as AppState;
+      const screen = await render(
+        <WindowAtmosphere selectedThreadRef={{ environmentId, threadId: first }} />,
+      );
+      if (!staticMode) {
+        const frame = Array.from(frames.values())[0]!;
+        frames.clear();
+        frame(1000);
+      }
+      expect(context.stroke).toHaveBeenCalled();
+      const glyphInstances = gpuMode ? Array.from(lastUploadedInstances(webgl2Contexts[0]!)) : null;
+      expect(
+        vi.mocked(context.fillText).mock.calls.some(([text]) => /private|activity-turn/.test(text)),
+      ).toBe(false);
+      if (staticMode) {
+        const index = timers.mock.calls.findIndex(
+          ([, delay]) => typeof delay === "number" && delay >= 8000 && delay <= 30001,
+        );
+        expect(index).toBeGreaterThanOrEqual(0);
+        const callback = timers.mock.calls[index]![0];
+        window.clearTimeout(timers.mock.results[index]!.value as number);
+        now += 30_001;
+        vi.mocked(context.stroke).mockClear();
+        vi.mocked(context.clearRect).mockClear();
+        expect(typeof callback).toBe("function");
+        (callback as () => void)();
+        expect(context.clearRect).toHaveBeenCalled();
+        expect(context.stroke).not.toHaveBeenCalled();
+        expect(frames.size).toBe(0);
+      }
+      vi.mocked(context.stroke).mockClear();
+      vi.mocked(context.clearRect).mockClear();
+      await screen.rerender(
+        <WindowAtmosphere selectedThreadRef={{ environmentId, threadId: second }} />,
+      );
+      expect(context.clearRect).toHaveBeenCalled();
+      expect(context.stroke).not.toHaveBeenCalled();
+      expect(frames.size).toBe(staticMode ? 0 : 1);
+      if (glyphInstances)
+        expect(Array.from(lastUploadedInstances(webgl2Contexts[0]!))).toEqual(glyphInstances);
+      testState.settings = { ...testState.settings!, fallingEffectActivityLinks: false };
+      await screen.rerender(
+        <WindowAtmosphere selectedThreadRef={{ environmentId, threadId: first }} />,
+      );
+      expect(context.stroke).not.toHaveBeenCalled();
+      await screen.unmount();
+    },
+  );
 
   it.each([false, true])(
     "clears routed labels without reseeding (reduced motion %s)",

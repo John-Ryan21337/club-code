@@ -34,6 +34,9 @@ import {
   MIN_FALLING_EFFECT_MATRIX_WALK_FONT_SIZE,
   MIN_FALLING_EFFECT_MATRIX_WALK_LIFECYCLE_PERCENT,
   type FallingEffectMatrixMotionMode,
+  DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
+  MIN_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
+  MAX_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
 } from "@cafecode/contracts/settings";
 
 import { useSettings, useUpdateSettings } from "../../hooks/useSettings";
@@ -88,6 +91,15 @@ export function WindowAtmosphereSettings() {
     settings.fallingEffectDensity !== DEFAULT_FALLING_EFFECT_DENSITY ||
     settings.fallingEffectJapaneseRatio !== DEFAULT_FALLING_EFFECT_JAPANESE_RATIO ||
     settings.fallingEffectLiveWorkVocabularyEnabled ||
+    settings.fallingEffectActivityLinks ||
+    !settings.fallingEffectActivityLinkNetworkEnabled ||
+    !settings.fallingEffectActivityLinkDatabaseEnabled ||
+    !settings.fallingEffectActivityLinkBuildEnabled ||
+    !settings.fallingEffectActivityLinkAgentEnabled ||
+    !settings.fallingEffectActivityLinkWorkEnabled ||
+    settings.fallingEffectActivityLinkColorMode !== "random" ||
+    settings.fallingEffectActivityLinkRetentionSeconds !==
+      DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS ||
     settings.fallingEffectMatrixColorCycleSpeed !==
       DEFAULT_FALLING_EFFECT_MATRIX_COLOR_CYCLE_SPEED ||
     settings.fallingEffectMatrixBaseFontSize !== DEFAULT_FALLING_EFFECT_MATRIX_BASE_FONT_SIZE ||
@@ -141,6 +153,15 @@ export function WindowAtmosphereSettings() {
                   fallingEffectDensity: DEFAULT_FALLING_EFFECT_DENSITY,
                   fallingEffectJapaneseRatio: DEFAULT_FALLING_EFFECT_JAPANESE_RATIO,
                   fallingEffectLiveWorkVocabularyEnabled: false,
+                  fallingEffectActivityLinks: false,
+                  fallingEffectActivityLinkNetworkEnabled: true,
+                  fallingEffectActivityLinkDatabaseEnabled: true,
+                  fallingEffectActivityLinkBuildEnabled: true,
+                  fallingEffectActivityLinkAgentEnabled: true,
+                  fallingEffectActivityLinkWorkEnabled: true,
+                  fallingEffectActivityLinkColorMode: "random",
+                  fallingEffectActivityLinkRetentionSeconds:
+                    DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
                 })
               }
             />
@@ -298,6 +319,103 @@ export function WindowAtmosphereSettings() {
               />
             }
           />
+          <SettingsRow
+            title="Provider activity routes / プロバイダー活動経路"
+            description="Show reported activity for the selected thread. Timing can reveal private work; turn this off before screen sharing. Lines and packets are decoration, not measured traffic. / 選択スレッドの報告された活動を表示します。タイミングから非公開の作業が分かる場合があります。画面共有前にオフにしてください。線とパケットは装飾であり、通信量の計測ではありません。"
+            control={
+              <Switch
+                checked={settings.fallingEffectActivityLinks}
+                onCheckedChange={(checked) =>
+                  updateSettings({ fallingEffectActivityLinks: Boolean(checked) })
+                }
+                aria-label="Provider activity routes / プロバイダー活動経路"
+              />
+            }
+          />
+          {settings.fallingEffectActivityLinks ? (
+            <>
+              {(
+                [
+                  ["fallingEffectActivityLinkNetworkEnabled", "Network / 通信"],
+                  ["fallingEffectActivityLinkDatabaseEnabled", "Database / データベース"],
+                  ["fallingEffectActivityLinkBuildEnabled", "Build / 構築"],
+                  ["fallingEffectActivityLinkAgentEnabled", "Agent / エージェント"],
+                  ["fallingEffectActivityLinkWorkEnabled", "Other work / その他の作業"],
+                ] as const
+              ).map(([key, label]) => (
+                <SettingsRow
+                  key={key}
+                  title={label}
+                  description={null}
+                  control={
+                    <Switch
+                      checked={settings[key]}
+                      onCheckedChange={(checked) => updateSettings({ [key]: Boolean(checked) })}
+                      aria-label={`Activity: ${label}`}
+                    />
+                  }
+                />
+              ))}
+              <SettingsRow
+                title="Route color / 経路の色"
+                description="Use a stable color for each route or the current Matrix palette. / 経路別の固定色、または現在の Matrix の色を使います。"
+                control={
+                  <RadioGroup
+                    value={settings.fallingEffectActivityLinkColorMode}
+                    aria-label="Route color / 経路の色"
+                    onValueChange={(value) => {
+                      if (value === "random" || value === "matrix")
+                        updateSettings({ fallingEffectActivityLinkColorMode: value });
+                    }}
+                    className="flex-row flex-wrap gap-4"
+                  >
+                    <label className="flex cursor-pointer items-center gap-1.5 text-xs">
+                      <Radio value="random" />
+                      Stable route color / 経路別の固定色
+                    </label>
+                    <label className="flex cursor-pointer items-center gap-1.5 text-xs">
+                      <Radio value="matrix" />
+                      Matrix palette / Matrix の色
+                    </label>
+                  </RadioGroup>
+                }
+              />
+              <SettingsRow
+                title="Route retention / 経路の保持時間"
+                description="Keep a reported route for 8–120 seconds. This does not change provider activity. / 報告された経路を8～120秒保持します。プロバイダーの活動自体は変更しません。"
+                control={
+                  <NumberField
+                    value={settings.fallingEffectActivityLinkRetentionSeconds}
+                    min={MIN_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS}
+                    max={MAX_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS}
+                    step={1}
+                    size="sm"
+                    className="w-28"
+                    onValueChange={(value) =>
+                      updateSettings({
+                        fallingEffectActivityLinkRetentionSeconds:
+                          typeof value === "number" && Number.isFinite(value)
+                            ? Math.min(
+                                MAX_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
+                                Math.max(
+                                  MIN_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
+                                  Math.round(value),
+                                ),
+                              )
+                            : DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
+                      })
+                    }
+                  >
+                    <NumberFieldGroup>
+                      <NumberFieldDecrement aria-label="Decrease route retention / 保持時間を減らす" />
+                      <NumberFieldInput aria-label="Route retention seconds / 経路の保持秒数" />
+                      <NumberFieldIncrement aria-label="Increase route retention / 保持時間を増やす" />
+                    </NumberFieldGroup>
+                  </NumberField>
+                }
+              />
+            </>
+          ) : null}
           <SettingsRow
             title="Color cycle speed"
             description="Multiplier for the Rainbow hue animation. Fast settings distribute the shimmer across streams instead of flashing the whole field."

@@ -195,6 +195,29 @@ export const FallingEffectJapaneseRatio = Schema.Number.check(
   }),
 );
 export type FallingEffectJapaneseRatio = typeof FallingEffectJapaneseRatio.Type;
+/** Activity timing can reveal work even when all labels are fixed. */
+export const DEFAULT_FALLING_EFFECT_ACTIVITY_LINKS = false;
+export const DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_NETWORK_ENABLED = true;
+export const DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_DATABASE_ENABLED = true;
+export const DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_BUILD_ENABLED = true;
+export const DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_AGENT_ENABLED = true;
+export const DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_WORK_ENABLED = true;
+export const FallingEffectActivityLinkColorMode = Schema.Literals(["random", "matrix"]);
+export type FallingEffectActivityLinkColorMode = typeof FallingEffectActivityLinkColorMode.Type;
+export const DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_COLOR_MODE: FallingEffectActivityLinkColorMode =
+  "random";
+export const MIN_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS = 8;
+export const MAX_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS = 120;
+export const DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS = 30;
+export const FallingEffectActivityLinkRetentionSeconds = Schema.Number.check(
+  Schema.isInt(),
+  Schema.isBetween({
+    minimum: MIN_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
+    maximum: MAX_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS,
+  }),
+);
+export type FallingEffectActivityLinkRetentionSeconds =
+  typeof FallingEffectActivityLinkRetentionSeconds.Type;
 export const DEFAULT_SHOW_SIDEBAR_SEARCH = true;
 export const DEFAULT_SHOW_SIDEBAR_MASCOT = true;
 export const DEFAULT_SHOW_SIDEBAR_ATTRIBUTION = true;
@@ -508,6 +531,36 @@ export const ClientSettingsSchema = Schema.Struct({
   ),
   fallingEffectLiveWorkVocabularyEnabled: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(false)),
+  ),
+  fallingEffectActivityLinks: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_ACTIVITY_LINKS)),
+  ),
+  fallingEffectActivityLinkNetworkEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(
+      Effect.succeed(DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_NETWORK_ENABLED),
+    ),
+  ),
+  fallingEffectActivityLinkDatabaseEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(
+      Effect.succeed(DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_DATABASE_ENABLED),
+    ),
+  ),
+  fallingEffectActivityLinkBuildEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_BUILD_ENABLED)),
+  ),
+  fallingEffectActivityLinkAgentEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_AGENT_ENABLED)),
+  ),
+  fallingEffectActivityLinkWorkEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_WORK_ENABLED)),
+  ),
+  fallingEffectActivityLinkColorMode: FallingEffectActivityLinkColorMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_COLOR_MODE)),
+  ),
+  fallingEffectActivityLinkRetentionSeconds: FallingEffectActivityLinkRetentionSeconds.pipe(
+    Schema.withDecodingDefault(
+      Effect.succeed(DEFAULT_FALLING_EFFECT_ACTIVITY_LINK_RETENTION_SECONDS),
+    ),
   ),
   showSidebarSearch: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SHOW_SIDEBAR_SEARCH)),
@@ -1251,6 +1304,16 @@ export const ClientSettingsPatch = Schema.Struct({
   fallingEffectDensity: Schema.optionalKey(FallingEffectDensity),
   fallingEffectJapaneseRatio: Schema.optionalKey(FallingEffectJapaneseRatio),
   fallingEffectLiveWorkVocabularyEnabled: Schema.optionalKey(Schema.Boolean),
+  fallingEffectActivityLinks: Schema.optionalKey(Schema.Boolean),
+  fallingEffectActivityLinkNetworkEnabled: Schema.optionalKey(Schema.Boolean),
+  fallingEffectActivityLinkDatabaseEnabled: Schema.optionalKey(Schema.Boolean),
+  fallingEffectActivityLinkBuildEnabled: Schema.optionalKey(Schema.Boolean),
+  fallingEffectActivityLinkAgentEnabled: Schema.optionalKey(Schema.Boolean),
+  fallingEffectActivityLinkWorkEnabled: Schema.optionalKey(Schema.Boolean),
+  fallingEffectActivityLinkColorMode: Schema.optionalKey(FallingEffectActivityLinkColorMode),
+  fallingEffectActivityLinkRetentionSeconds: Schema.optionalKey(
+    FallingEffectActivityLinkRetentionSeconds,
+  ),
   showSidebarSearch: Schema.optionalKey(Schema.Boolean),
   showSidebarMascot: Schema.optionalKey(Schema.Boolean),
   showSidebarAttribution: Schema.optionalKey(Schema.Boolean),

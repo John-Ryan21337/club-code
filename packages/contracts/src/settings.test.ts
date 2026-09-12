@@ -74,6 +74,42 @@ const decodeGrokSettings = Schema.decodeSync(GrokSettings);
 const decodeServerSettingsPatch = Schema.decodeUnknownSync(ServerSettingsPatch);
 
 describe("client settings", () => {
+  it("keeps activity routes opt-in and bounds stored route retention", () => {
+    expect(decodeClientSettings({}).fallingEffectActivityLinks).toBe(false);
+    expect(decodeClientSettings({}).fallingEffectActivityLinkRetentionSeconds).toBe(30);
+    const selected = {
+      fallingEffectActivityLinks: true,
+      fallingEffectActivityLinkNetworkEnabled: false,
+      fallingEffectActivityLinkDatabaseEnabled: false,
+      fallingEffectActivityLinkBuildEnabled: true,
+      fallingEffectActivityLinkAgentEnabled: true,
+      fallingEffectActivityLinkWorkEnabled: false,
+      fallingEffectActivityLinkColorMode: "matrix" as const,
+      fallingEffectActivityLinkRetentionSeconds: 120,
+    };
+    expect(decodeClientSettingsPatch(selected)).toEqual(selected);
+    expect(decodeClientSettings(selected)).toMatchObject(selected);
+    for (const value of [0, 7, 121, 8.5, Number.NaN, Infinity, "30", null]) {
+      expect(() =>
+        Schema.decodeUnknownSync(ClientSettingsSchema)({
+          fallingEffectActivityLinkRetentionSeconds: value,
+        }),
+      ).toThrow();
+      expect(() =>
+        decodeClientSettingsPatch({ fallingEffectActivityLinkRetentionSeconds: value }),
+      ).toThrow();
+    }
+    expect(
+      decodeClientSettingsPatch({
+        fallingEffectActivityLinks: false,
+        fallingEffectActivityLinkRetentionSeconds: 8,
+      }),
+    ).toEqual({ fallingEffectActivityLinks: false, fallingEffectActivityLinkRetentionSeconds: 8 });
+    expect(() =>
+      decodeClientSettingsPatch({ fallingEffectActivityLinkColorMode: "unknown" }),
+    ).toThrow();
+  });
+
   it("defaults power-save blocking to off", () => {
     expect(DEFAULT_CLIENT_SETTINGS.powerSaveBlockerMode).toBe(DEFAULT_POWER_SAVE_BLOCKER_MODE);
     expect(decodeClientSettings({}).powerSaveBlockerMode).toBe("off");

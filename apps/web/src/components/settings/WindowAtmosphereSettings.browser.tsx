@@ -52,7 +52,12 @@ describe("WindowAtmosphereSettings", () => {
     expect(testState.updateSettings).toHaveBeenCalledWith({
       fallingEffectLiveWorkVocabularyEnabled: true,
     });
-    await expect.element(page.getByText("Provider activity links")).not.toBeInTheDocument();
+    const routes = page.getByRole("switch", {
+      name: "Provider activity routes / プロバイダー活動経路",
+    });
+    await expect.element(routes).not.toBeChecked();
+    await routes.click();
+    expect(testState.updateSettings).toHaveBeenCalledWith({ fallingEffectActivityLinks: true });
 
     await page.getByText("Rain", { exact: true }).click();
     expect(testState.updateSettings).toHaveBeenCalledWith({ fallingEffectKind: "rain" });
@@ -75,6 +80,29 @@ describe("WindowAtmosphereSettings", () => {
     await expect.element(page.getByLabelText("Show falling effects")).toBeDisabled();
     await expect.element(page.getByText("Effect", { exact: true })).not.toBeInTheDocument();
 
+    await screen.unmount();
+  });
+
+  it("saves route category, palette and bounded retention changes", async () => {
+    testState.settings = { ...testState.settings!, fallingEffectActivityLinks: true };
+    const screen = await render(<WindowAtmosphereSettings />);
+    await page.getByRole("switch", { name: "Activity: Network / 通信" }).click();
+    expect(testState.updateSettings).toHaveBeenCalledWith({
+      fallingEffectActivityLinkNetworkEnabled: false,
+    });
+    await page.getByRole("radio", { name: "Matrix palette / Matrix の色" }).click();
+    expect(testState.updateSettings).toHaveBeenCalledWith({
+      fallingEffectActivityLinkColorMode: "matrix",
+    });
+    await page.getByLabelText("Increase route retention / 保持時間を増やす").click();
+    expect(testState.updateSettings).toHaveBeenCalledWith({
+      fallingEffectActivityLinkRetentionSeconds: 31,
+    });
+    testState.settings = { ...testState.settings!, fallingEffectActivityLinkRetentionSeconds: 120 };
+    await screen.rerender(<WindowAtmosphereSettings />);
+    await expect
+      .element(page.getByLabelText("Increase route retention / 保持時間を増やす"))
+      .toBeDisabled();
     await screen.unmount();
   });
 
@@ -112,6 +140,14 @@ describe("WindowAtmosphereSettings", () => {
       fallingEffectDensity: 1,
       fallingEffectJapaneseRatio: 0.45,
       fallingEffectLiveWorkVocabularyEnabled: false,
+      fallingEffectActivityLinks: false,
+      fallingEffectActivityLinkNetworkEnabled: true,
+      fallingEffectActivityLinkDatabaseEnabled: true,
+      fallingEffectActivityLinkBuildEnabled: true,
+      fallingEffectActivityLinkAgentEnabled: true,
+      fallingEffectActivityLinkWorkEnabled: true,
+      fallingEffectActivityLinkColorMode: "random",
+      fallingEffectActivityLinkRetentionSeconds: 30,
     });
 
     await screen.unmount();
