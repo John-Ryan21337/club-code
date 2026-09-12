@@ -1,4 +1,15 @@
 import {
+  ambientAudioCaptureStore,
+  useAmbientAudioCapture,
+  type AmbientAudioCaptureOwner,
+} from "../../ambientAudioCapture";
+import {
+  getPrimaryEnvironmentConnection,
+  subscribeEnvironmentConnections,
+} from "../../environments/runtime";
+import { LocalMediaAudioVisualizer } from "../chat/LocalMediaAudioVisualizer";
+import { AmbientAudioCaptureControl } from "./AmbientAudioCaptureControl";
+import {
   type CSSProperties,
   createContext,
   type PointerEvent as ReactPointerEvent,
@@ -10,6 +21,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from "react";
 import { Maximize2Icon, MoveIcon, PanelRightCloseIcon, XIcon } from "lucide-react";
 import { cn } from "~/lib/utils";
@@ -42,7 +54,7 @@ import {
   YOUTUBE_PLAYLIST_IFRAME_ID,
 } from "../../youtubeIframeCommands";
 import { useYouTubeUrlQueue, youtubeUrlQueueStore } from "../../youtubeQueuePlayback";
-import { useSettings, useUpdateSettings } from "../../hooks/useSettings";
+import { getClientSettings, useSettings, useUpdateSettings } from "../../hooks/useSettings";
 import { YouTubePlaylistControls } from "./YouTubePlaylistControls";
 import { YouTubeUrlQueueControls } from "./YouTubeUrlQueueControls";
 
@@ -67,12 +79,14 @@ interface AmbientVideoWorkspaceContextValue {
   readonly registerChatAnchor: (element: HTMLElement | null) => void;
   readonly cinemaEffective: boolean;
   readonly environmentScopeKey: string;
+  readonly audioCaptureOwner: AmbientAudioCaptureOwner | null;
 }
 
 const AmbientVideoWorkspaceContext = createContext<AmbientVideoWorkspaceContextValue>({
   registerChatAnchor: () => undefined,
   cinemaEffective: false,
   environmentScopeKey: "unassigned-environment",
+  audioCaptureOwner: null,
 });
 
 export function useAmbientVideoWorkspace(): AmbientVideoWorkspaceContextValue {
@@ -390,6 +404,14 @@ function resolveGlowColor(value: "auto" | string): string {
   return value === "auto" ? "var(--primary)" : value;
 }
 
+function readCaptureConnection() {
+  try {
+    return getPrimaryEnvironmentConnection();
+  } catch {
+    return null;
+  }
+}
+
 export function AmbientVideoWorkspace({
   children,
   environmentScopeKey = "unassigned-environment",
@@ -400,6 +422,12 @@ export function AmbientVideoWorkspace({
   readonly retainPlayerWithoutAnchor?: boolean;
 }) {
   const settings = useSettings();
+  const capture = useAmbientAudioCapture();
+  const captureConnection = useSyncExternalStore(
+    subscribeEnvironmentConnections,
+    readCaptureConnection,
+    () => null,
+  );
   const localMedia = useLocalMediaState();
   const localMediaElement = useLocalMediaElement();
   const [localPaused, setLocalPaused] = useState(true);
@@ -704,6 +732,83 @@ export function AmbientVideoWorkspace({
     (ambientVideoPlayerShouldMount(locallyRenderable, floatingVisible, streamingCinemaEffective) ||
       retainMountedPlayer);
 
+  const captureSettingsKey = JSON.stringify(settings.ambientVideoSource);
+  const captureQueueRevision = youtubeUrlQueueStore.getSnapshot().revision;
+  const audioCaptureOwner = useMemo<AmbientAudioCaptureOwner | null>(() => {
+    if (!playerShouldMount || !sourceKey || !captureConnection || !settings.ambientVideoEnabled)
+      return null;
+    return {
+      isCurrent: () => {
+        const currentSettings = getClientSettings();
+        return (
+          readCaptureConnection() === captureConnection &&
+          currentSettings.ambientVideoEnabled &&
+          JSON.stringify(currentSettings.ambientVideoSource) === captureSettingsKey &&
+          youtubeUrlQueueStore.getSnapshot().revision === captureQueueRevision &&
+          mountedPlayerRef.current?.sourceKey === sourceKey &&
+          mountedPlayerRef.current.element.isConnected &&
+          document.visibilityState === "visible" &&
+          document.hasFocus() &&
+          !window.matchMedia("(prefers-reduced-motion: reduce)").matches
+        );
+      },
+    };
+  }, [
+    captureConnection,
+    captureSettingsKey,
+    captureQueueRevision,
+    playerShouldMount,
+    sourceKey,
+    settings.ambientVideoEnabled,
+  ]);
+  const ownedCaptureStream =
+    capture.status === "active" && ambientAudioCaptureStore.isOwnedBy(audioCaptureOwner)
+      ? capture.stream
+      : null;
+  useLayoutEffect(
+    () => () => {
+      if (audioCaptureOwner) ambientAudioCaptureStore.stop(audioCaptureOwner);
+    },
+    [audioCaptureOwner],
+  );
+  useEffect(() => {
+    const stop = () => {
+      if (audioCaptureOwner) ambientAudioCaptureStore.stop(audioCaptureOwner);
+    };
+    const visibility = () => {
+      if (document.visibilityState !== "visible") stop();
+    };
+    const motion = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const reduced = () => {
+      if (motion.matches) stop();
+    };
+    // A browser chooser can temporarily take focus. Revalidate focus when its
+    // promise resolves; stop established captures as soon as focus is lost.
+    const blur = () => {
+      if (ambientAudioCaptureStore.getSnapshot().status !== "requesting") stop();
+    };
+    window.addEventListener("blur", blur);
+    document.addEventListener("visibilitychange", visibility);
+    motion.addEventListener("change", reduced);
+    return () => {
+      window.removeEventListener("blur", blur);
+      document.removeEventListener("visibilitychange", visibility);
+      motion.removeEventListener("change", reduced);
+    };
+  }, [audioCaptureOwner]);
+  useLayoutEffect(() => {
+    const enforceOptIn = () => {
+      if (!localMediaStore.getSnapshot().visualizerEnabled && audioCaptureOwner)
+        ambientAudioCaptureStore.stop(audioCaptureOwner);
+    };
+    // Revocation is synchronous with the local store write. Waiting for a
+    // passive React effect can admit a late chooser result after the toggle is
+    // already off, or leave active capture running until the next effect flush.
+    const unsubscribe = localMediaStore.subscribe(enforceOptIn);
+    enforceOptIn();
+    return unsubscribe;
+  }, [audioCaptureOwner]);
+
   const commitGeometry = useCallback(
     (geometry: NormalizedAmbientMediaGeometry) => {
       if (!anchorRect) {
@@ -927,8 +1032,8 @@ export function AmbientVideoWorkspace({
     mobileDockedVisible && anchorRect ? mobileDockedPlayerSize(anchorRect).playerHeight : null;
 
   const contextValue = useMemo(
-    () => ({ registerChatAnchor, cinemaEffective, environmentScopeKey }),
-    [cinemaEffective, registerChatAnchor, environmentScopeKey],
+    () => ({ registerChatAnchor, cinemaEffective, environmentScopeKey, audioCaptureOwner }),
+    [cinemaEffective, registerChatAnchor, environmentScopeKey, audioCaptureOwner],
   );
 
   return (
@@ -1117,6 +1222,34 @@ export function AmbientVideoWorkspace({
                       : "Ambient YouTube playlist player"
               }
             />
+          ) : null}
+
+          {ownedCaptureStream ? (
+            <div
+              className="pointer-events-none absolute inset-x-0 z-10"
+              style={{
+                top: streamingCinemaEffective ? 40 : 0,
+                bottom:
+                  !streamingCinemaEffective && (mobileDockedVisible || sourceHasNavigation)
+                    ? 36
+                    : 0,
+              }}
+            >
+              <LocalMediaAudioVisualizer
+                enabled={localMedia.visualizerEnabled}
+                mediaElement={null}
+                mediaStream={ownedCaptureStream}
+                style={localMedia.visualizerStyle}
+                presetName={localMedia.visualizerPresetName}
+                autoCycle={localMedia.visualizerAutoCycle}
+                cycleSeconds={localMedia.visualizerCycleSeconds}
+                blendSeconds={localMedia.visualizerBlendSeconds}
+                onPresetChange={(visualizerPresetName) =>
+                  localMediaStore.update({ visualizerPresetName })
+                }
+              />
+              <AmbientAudioCaptureControl owner={audioCaptureOwner} compact />
+            </div>
           ) : null}
 
           {streamingCinemaEffective ? (
