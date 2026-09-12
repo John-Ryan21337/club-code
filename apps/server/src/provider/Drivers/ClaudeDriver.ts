@@ -25,6 +25,7 @@ import { HttpClient } from "effect/unstable/http";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import { makeClaudeTextGeneration } from "../../textGeneration/ClaudeTextGeneration.ts";
+import { makeClaudeAtmosphereInterpreter } from "../ClaudeAtmosphereInterpreter.ts";
 import { makeClaudeAccessChecker, probeClaudeAccess } from "../ClaudeAccessPreflight.ts";
 import { ServerConfig } from "../../config.ts";
 import { ProviderDriverError } from "../Errors.ts";
@@ -290,7 +291,13 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
           ),
       });
 
+      const interpretAtmosphere = yield* makeClaudeAtmosphereInterpreter(
+        effectiveConfig,
+        effectiveEnvironment,
+      );
+
       return {
+        interpretAtmosphere,
         checkAccess,
         instanceId,
         driverKind: DRIVER_KIND,

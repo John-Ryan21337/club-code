@@ -1,7 +1,12 @@
 // The panel positions itself with fixed-position utility classes, so the real
 // stylesheet has to be loaded for geometry assertions to mean anything.
 import "../index.css";
-import type { EnvironmentId } from "@cafecode/contracts";
+import {
+  ProviderInstanceId,
+  ProviderDriverKind,
+  type EnvironmentId,
+  type ServerProvider,
+} from "@cafecode/contracts";
 import {
   DEFAULT_UNIFIED_SETTINGS,
   MAX_FALLING_EFFECT_DENSITY,
@@ -28,6 +33,8 @@ const harness = vi.hoisted(() => {
     applyClientSettingsUpdated: vi.fn(),
     updateClientSettings: vi.fn(),
     interpret: vi.fn(),
+    providerInterpret: vi.fn(),
+    providers: [] as ServerProvider[],
     getEnvironmentId: () => environmentId,
     setEnvironmentId: (next: EnvironmentId | null) => {
       environmentId = next;
@@ -56,9 +63,13 @@ vi.mock("../hooks/useSettings", () => ({
 vi.mock("../rpc/serverState", () => ({
   getServerConfig: () => ({
     ambientExperienceCapabilities: { atmosphere: harness.atmosphereAvailable },
+    settings: harness.settings,
+    providers: harness.providers,
   }),
   useServerConfig: () => ({
     ambientExperienceCapabilities: { atmosphere: harness.atmosphereAvailable },
+    settings: harness.settings,
+    providers: harness.providers,
   }),
   applyClientSettingsUpdated: (settings: ClientSettings) =>
     harness.applyClientSettingsUpdated(settings),
@@ -73,7 +84,13 @@ vi.mock("../localApi", () => ({
 vi.mock("../environments/runtime", () => ({
   getPrimaryEnvironmentConnection: () =>
     Object.assign(harness.connection, {
-      client: { server: { updateClientSettings: harness.updateClientSettings } },
+      client: {
+        server: {
+          updateClientSettings: harness.updateClientSettings,
+          interpretAtmosphereCommand: harness.providerInterpret,
+          getConfig: async () => ({ settings: harness.settings, providers: harness.providers }),
+        },
+      },
     }),
 }));
 
@@ -142,6 +159,8 @@ describe("AtmosphereConsole", () => {
     harness.applyClientSettingsUpdated.mockReset();
     harness.updateClientSettings.mockReset();
     harness.interpret.mockReset();
+    harness.providerInterpret.mockReset();
+    harness.providers = [];
     harness.setEnvironmentId("env-alpha" as EnvironmentId);
   });
 
@@ -154,6 +173,155 @@ describe("AtmosphereConsole", () => {
   it("stays closed by default and renders nothing at the root", async () => {
     const screen = await render(<AtmosphereConsole />);
     expect(document.querySelector('[data-testid="atmosphere-console"]')).toBeNull();
+    await screen.unmount();
+  });
+
+  function configureProvider() {
+    const instanceId = ProviderInstanceId.make("claude-work");
+    const driver = ProviderDriverKind.make("claudeAgent");
+    harness.providers = [
+      {
+        instanceId,
+        driver,
+        enabled: true,
+        installed: true,
+        auth: { status: "authenticated", email: "work@example.invalid" },
+        models: [{ slug: "claude-test", name: "Claude test", isCustom: true, capabilities: null }],
+      } as unknown as ServerProvider,
+    ];
+    harness.settings = {
+      ...harness.settings,
+      providerInstances: { [instanceId]: { driver, config: { binaryPath: "selected-claude" } } },
+    };
+    harness.providerInterpret.mockResolvedValue({
+      instanceId,
+      model: "claude-test",
+      status: "completed",
+      proposal: '{"commands":[{"kind":"set-effect","effect":"snow"}]}',
+    });
+    harness.updateClientSettings.mockImplementation(async (patch: Partial<ClientSettings>) => ({
+      ...harness.settings,
+      ...patch,
+    }));
+    return instanceId;
+  }
+  async function selectProvider() {
+    for (const [label, value] of [
+      ["Atmosphere interpreter", "provider"],
+      ["Atmosphere provider instance", "claude-work"],
+      ["Atmosphere provider model", "claude-test"],
+    ]) {
+      const select = page.getByLabelText(label!).element() as HTMLSelectElement;
+      select.value = value!;
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+      await expect.element(page.getByLabelText(label!)).toHaveValue(value!);
+    }
+  }
+
+  it("requires explicit provider and model selection, then applies only the validated proposal", async () => {
+    const instanceId = configureProvider();
+    openConsole();
+    const screen = await render(<AtmosphereConsole />);
+    expect(harness.providerInterpret).not.toHaveBeenCalled();
+    await selectProvider();
+    await expect.element(page.getByText(/Observed account: work@example.invalid/)).toBeVisible();
+    await apply("make it feel wintry");
+    await expect
+      .element(page.getByTestId("atmosphere-console-status"))
+      .toHaveTextContent("Confirmed: Effect snow");
+    expect(harness.providerInterpret).toHaveBeenCalledExactlyOnceWith({
+      instanceId,
+      model: "claude-test",
+      request: "make it feel wintry",
+      expectedAuth: harness.providers[0]!.auth,
+      expectedConfig: harness.settings.providerInstances[instanceId],
+    });
+    expect(harness.updateClientSettings).toHaveBeenCalledExactlyOnceWith({
+      fallingEffectsEnabled: true,
+      fallingEffectKind: "snow",
+    });
+    await screen.unmount();
+  });
+
+  it("keeps known local commands local even with a provider selected", async () => {
+    configureProvider();
+    openConsole();
+    const screen = await render(<AtmosphereConsole />);
+    await selectProvider();
+    await apply("snow");
+    await expect
+      .element(page.getByTestId("atmosphere-console-status"))
+      .toHaveTextContent("Confirmed: Effect snow");
+    expect(harness.providerInterpret).not.toHaveBeenCalled();
+    await screen.unmount();
+  });
+
+  it("does not send text or account selection from a replaced connection", async () => {
+    configureProvider();
+    openConsole();
+    const screen = await render(<AtmosphereConsole />);
+    await selectProvider();
+    await page.getByLabelText("Falling-effect command").fill("make it feel wintry");
+    harness.connection = { environmentId: "env-alpha" as EnvironmentId };
+    await page.getByRole("button", { name: "Apply", exact: true }).click();
+    await expect
+      .element(page.getByTestId("atmosphere-console-status"))
+      .toHaveTextContent("connection changed");
+    expect(harness.providerInterpret).not.toHaveBeenCalled();
+    expect(harness.updateClientSettings).not.toHaveBeenCalled();
+    await screen.unmount();
+  });
+
+  it("discards a provider proposal after account change and never writes its settings", async () => {
+    configureProvider();
+    openConsole();
+    let release!: (value: unknown) => void;
+    harness.providerInterpret.mockImplementation(
+      () =>
+        new Promise((done) => {
+          release = done;
+        }),
+    );
+    const screen = await render(<AtmosphereConsole />);
+    await selectProvider();
+    await apply("make it feel wintry");
+    await vi.waitFor(() => expect(harness.providerInterpret).toHaveBeenCalledOnce());
+    harness.providers = [
+      {
+        ...harness.providers[0]!,
+        auth: { status: "authenticated", email: "changed@example.invalid" },
+      },
+    ];
+    release({
+      instanceId: ProviderInstanceId.make("claude-work"),
+      model: "claude-test",
+      status: "completed",
+      proposal: '{"commands":[{"kind":"set-effect","effect":"snow"}]}',
+    });
+    await expect
+      .element(page.getByTestId("atmosphere-console-status"))
+      .toHaveTextContent("Nothing changed.");
+    expect(harness.updateClientSettings).not.toHaveBeenCalled();
+    await screen.unmount();
+  });
+
+  it("rejects unsupported provider output without exposing it", async () => {
+    configureProvider();
+    openConsole();
+    harness.providerInterpret.mockResolvedValue({
+      instanceId: "claude-work",
+      model: "claude-test",
+      status: "completed",
+      proposal: '{"commands":[{"kind":"shell","command":"private detail"}]}',
+    });
+    const screen = await render(<AtmosphereConsole />);
+    await selectProvider();
+    await apply("make it feel wintry");
+    await expect
+      .element(page.getByTestId("atmosphere-console-status"))
+      .toHaveTextContent("Nothing changed.");
+    expect(harness.updateClientSettings).not.toHaveBeenCalled();
+    expect(document.body.textContent).not.toContain("private detail");
     await screen.unmount();
   });
 
