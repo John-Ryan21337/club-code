@@ -266,7 +266,29 @@ export const SidebarThreadPreviewCount = Schema.Int.check(
 export type SidebarThreadPreviewCount = typeof SidebarThreadPreviewCount.Type;
 export const DEFAULT_SIDEBAR_THREAD_PREVIEW_COUNT: SidebarThreadPreviewCount = 6;
 
+export const MIN_MODEL_PACING_RESERVE_PERCENT = 0;
+export const MAX_MODEL_PACING_RESERVE_PERCENT = 50;
+export const ProviderUsagePollMinutes = Schema.Int.check(
+  Schema.isBetween({ minimum: 1, maximum: 5 }),
+);
+export const ModelPacingReservePercent = Schema.Int.check(
+  Schema.isBetween({
+    minimum: MIN_MODEL_PACING_RESERVE_PERCENT,
+    maximum: MAX_MODEL_PACING_RESERVE_PERCENT,
+  }),
+);
+
 export const ClientSettingsSchema = Schema.Struct({
+  providerUsageWidgetEnabled: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(false)),
+  ),
+  providerUsagePollMinutes: ProviderUsagePollMinutes.pipe(
+    Schema.withDecodingDefault(Effect.succeed(2)),
+  ),
+  modelPacingEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  modelPacingReservePercent: ModelPacingReservePercent.pipe(
+    Schema.withDecodingDefault(Effect.succeed(10)),
+  ),
   // The persisted key predates the composer task-progress control. It now
   // applies only to completed authored-plan documents. Runtime checklists
   // stay in the composer popover unless the user docks the separate session
@@ -1012,6 +1034,10 @@ export const ServerSettingsPatch = Schema.Struct({
 export type ServerSettingsPatch = typeof ServerSettingsPatch.Type;
 
 export const ClientSettingsPatch = Schema.Struct({
+  providerUsageWidgetEnabled: Schema.optionalKey(Schema.Boolean),
+  providerUsagePollMinutes: Schema.optionalKey(ProviderUsagePollMinutes),
+  modelPacingEnabled: Schema.optionalKey(Schema.Boolean),
+  modelPacingReservePercent: Schema.optionalKey(ModelPacingReservePercent),
   autoOpenPlanSidebar: Schema.optionalKey(Schema.Boolean),
   onboardingCompleted: Schema.optionalKey(Schema.Boolean),
   dismissedFirstRunHints: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),

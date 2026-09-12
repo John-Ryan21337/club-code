@@ -441,7 +441,7 @@ export interface LocalApi {
      */
     refreshProviders: (input?: {
       readonly instanceId?: ProviderInstanceId;
-      readonly scope?: "full" | "models";
+      readonly scope?: "full" | "models" | "usage";
     }) => Promise<ServerProviderUpdatedPayload>;
     loginProvider: (input: ServerProviderLoginInput) => Promise<ServerProviderLoginResult>;
     updateProvider: (input: ServerProviderUpdateInput) => Promise<ServerProviderUpdatedPayload>;

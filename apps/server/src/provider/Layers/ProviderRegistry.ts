@@ -261,7 +261,15 @@ const correlateSnapshotWithSource = (
       ),
     );
   }
-  return Effect.succeed(snapshot);
+  return Effect.succeed({
+    ...snapshot,
+    runtimeCapabilities: {
+      liveSteer: "unsupported",
+      threadGoals: "unsupported",
+      ...snapshot.runtimeCapabilities,
+      accountUsage: source.refreshAccountUsage !== undefined,
+    },
+  });
 };
 
 /**
@@ -666,16 +674,25 @@ export const ProviderRegistryLive = Layer.effect(
     const refreshInstanceAccountUsage = Effect.fn("refreshInstanceAccountUsage")(function* (
       instanceId: ProviderInstanceId,
     ) {
-      const sources = yield* getLiveSources;
-      const providerSource = sources.find((candidate) => candidate.instanceId === instanceId);
-      if (!providerSource?.refreshAccountUsage) {
+      const instance = yield* instanceRegistry.getInstance(instanceId);
+      const refreshAccountUsage = instance?.snapshot.refreshAccountUsage;
+      if (!instance || !refreshAccountUsage) {
         return yield* Ref.get(providersRef);
       }
-      return yield* providerSource.refreshAccountUsage.pipe(
+      const providerSource = buildSnapshotSource(instance);
+      return yield* refreshAccountUsage.pipe(
         Effect.flatMap((nextProvider) =>
-          correlateSnapshotWithSource(providerSource, nextProvider).pipe(
-            Effect.flatMap(syncProvider),
-          ),
+          instanceRegistry
+            .getInstance(instanceId)
+            .pipe(
+              Effect.flatMap((currentInstance) =>
+                currentInstance !== instance
+                  ? Ref.get(providersRef)
+                  : correlateSnapshotWithSource(providerSource, nextProvider).pipe(
+                      Effect.flatMap(syncProvider),
+                    ),
+              ),
+            ),
         ),
       );
     });

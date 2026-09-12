@@ -1219,6 +1219,11 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
             assert.deepStrictEqual(cachedProvider, {
               ...refreshedProvider,
               models: [...initialProvider.models],
+              runtimeCapabilities: {
+                liveSteer: "unsupported",
+                threadGoals: "unsupported",
+                accountUsage: false,
+              },
             });
           }).pipe(Effect.provide(runtimeServices));
         }),
@@ -1419,17 +1424,27 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
           yield* Effect.gen(function* () {
             const registry = yield* ProviderRegistry;
 
-            assert.deepStrictEqual(yield* registry.getProviders, [cachedProvider]);
-            assert.deepStrictEqual(yield* registry.refresh(codexDriver), [cachedProvider]);
+            const usageCapability = {
+              liveSteer: "unsupported",
+              threadGoals: "unsupported",
+              accountUsage: true,
+            } as const;
+            assert.deepStrictEqual(yield* registry.getProviders, [
+              { ...cachedProvider, runtimeCapabilities: usageCapability },
+            ]);
+            assert.deepStrictEqual(yield* registry.refresh(codexDriver), [
+              { ...cachedProvider, runtimeCapabilities: usageCapability },
+            ]);
             assert.deepStrictEqual(yield* registry.refreshInstance(codexInstanceId), [
-              cachedProvider,
+              { ...cachedProvider, runtimeCapabilities: usageCapability },
             ]);
             assert.deepStrictEqual(yield* registry.refreshInstanceAccountUsage(codexInstanceId), [
-              usageRefreshedProvider,
+              { ...usageRefreshedProvider, runtimeCapabilities: usageCapability },
             ]);
             assert.deepStrictEqual(yield* registry.refreshInstanceModels!(codexInstanceId), [
               {
                 ...modelRefreshedProvider,
+                runtimeCapabilities: usageCapability,
                 accountRateLimits: usageRefreshedProvider.accountRateLimits,
               },
             ]);
@@ -1437,129 +1452,148 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
         }),
       );
 
-      it.effect(
-        "keeps the internal model timeout bounded after caller disconnect without syncing a replaced instance",
-        () =>
-          Effect.gen(function* () {
-            const codexDriver = ProviderDriverKind.make("codex");
-            const codexInstanceId = ProviderInstanceId.make("codex");
-            const refreshStarted = yield* Deferred.make<void>();
-            const refreshTimedOut = yield* Deferred.make<void>();
-            const cachedProvider = {
-              instanceId: codexInstanceId,
-              driver: codexDriver,
-              status: "ready",
-              enabled: true,
-              installed: true,
-              auth: { status: "authenticated" },
-              checkedAt: "2026-04-29T10:00:00.000Z",
-              version: "1.0.0",
-              models: [
-                {
-                  slug: "gpt-current",
-                  name: "GPT Current",
-                  isCustom: false,
-                  capabilities: null,
-                },
-              ],
-              slashCommands: [],
-              skills: [],
-            } as const satisfies ServerProvider;
-            const staleModelProvider = {
-              ...cachedProvider,
-              models: [
-                {
-                  slug: "gpt-stale-old-instance",
-                  name: "GPT Stale Old Instance",
-                  isCustom: false,
-                  capabilities: null,
-                },
-              ],
-            } as const satisfies ServerProvider;
-            const makeInstance = (refreshModels: Effect.Effect<ServerProvider>) =>
-              ({
+      for (const refreshKind of ["models", "usage"] as const) {
+        it.effect(
+          `keeps the ${refreshKind} timeout bounded without syncing a replaced instance`,
+          () =>
+            Effect.gen(function* () {
+              const codexDriver = ProviderDriverKind.make("codex");
+              const codexInstanceId = ProviderInstanceId.make("codex");
+              const refreshStarted = yield* Deferred.make<void>();
+              const refreshTimedOut = yield* Deferred.make<void>();
+              const cachedProvider = {
                 instanceId: codexInstanceId,
-                driverKind: codexDriver,
-                continuationIdentity: {
-                  driverKind: codexDriver,
-                  continuationKey: "codex:instance:codex",
-                },
-                displayName: undefined,
+                driver: codexDriver,
+                status: "ready",
                 enabled: true,
-                snapshot: {
-                  maintenanceCapabilities: makeManualOnlyProviderMaintenanceCapabilities({
-                    provider: codexDriver,
-                    packageName: null,
-                  }),
-                  getSnapshot: Effect.succeed(cachedProvider),
-                  refresh: Effect.succeed(cachedProvider),
-                  refreshModels,
-                  streamChanges: Stream.empty,
-                },
-                adapter: {} as ProviderInstance["adapter"],
-                textGeneration: {} as ProviderInstance["textGeneration"],
-              }) satisfies ProviderInstance;
-            const firstInstance = makeInstance(
-              Deferred.succeed(refreshStarted, undefined).pipe(
-                Effect.andThen(Effect.never),
-                Effect.timeoutOption("15 seconds"),
-                Effect.tap(() => Deferred.succeed(refreshTimedOut, undefined)),
-                Effect.as(staleModelProvider),
-              ),
-            );
-            const replacementInstance = makeInstance(Effect.succeed(cachedProvider));
-            const currentInstanceRef = yield* Ref.make<ProviderInstance>(firstInstance);
-            const instanceRegistryLayer = Layer.succeed(ProviderInstanceRegistry, {
-              getInstance: (instanceId) =>
-                instanceId === codexInstanceId
-                  ? Ref.get(currentInstanceRef).pipe(Effect.map((instance) => instance))
-                  : Effect.succeed(undefined),
-              listInstances: Ref.get(currentInstanceRef).pipe(
-                Effect.map((instance) => [instance] as const),
-              ),
-              listUnavailable: Effect.succeed([]),
-              streamChanges: Stream.empty,
-              subscribeChanges: Effect.flatMap(PubSub.unbounded<void>(), (pubsub) =>
-                PubSub.subscribe(pubsub),
-              ),
-            });
-            const scope = yield* Scope.make();
-            yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
-            const runtimeServices = yield* Layer.build(
-              ProviderRegistryLive.pipe(
-                Layer.provideMerge(instanceRegistryLayer),
-                Layer.provideMerge(
-                  ServerConfig.layerTest(process.cwd(), {
-                    prefix: "t3-provider-registry-stale-model-refresh-",
-                  }),
+                installed: true,
+                auth: { status: "authenticated" },
+                checkedAt: "2026-04-29T10:00:00.000Z",
+                version: "1.0.0",
+                models: [
+                  {
+                    slug: "gpt-current",
+                    name: "GPT Current",
+                    isCustom: false,
+                    capabilities: null,
+                  },
+                ],
+                slashCommands: [],
+                skills: [],
+              } as const satisfies ServerProvider;
+              const staleModelProvider = {
+                ...cachedProvider,
+                models: [
+                  {
+                    slug: "gpt-stale-old-instance",
+                    name: "GPT Stale Old Instance",
+                    isCustom: false,
+                    capabilities: null,
+                  },
+                ],
+              } as const satisfies ServerProvider;
+              const makeInstance = (refreshModels: Effect.Effect<ServerProvider>) =>
+                ({
+                  instanceId: codexInstanceId,
+                  driverKind: codexDriver,
+                  continuationIdentity: {
+                    driverKind: codexDriver,
+                    continuationKey: "codex:instance:codex",
+                  },
+                  displayName: undefined,
+                  enabled: true,
+                  snapshot: {
+                    maintenanceCapabilities: makeManualOnlyProviderMaintenanceCapabilities({
+                      provider: codexDriver,
+                      packageName: null,
+                    }),
+                    getSnapshot: Effect.succeed(cachedProvider),
+                    refresh: Effect.succeed(cachedProvider),
+                    ...(refreshKind === "models"
+                      ? { refreshModels }
+                      : { refreshAccountUsage: refreshModels }),
+                    streamChanges: Stream.empty,
+                  },
+                  adapter: {} as ProviderInstance["adapter"],
+                  textGeneration: {} as ProviderInstance["textGeneration"],
+                }) satisfies ProviderInstance;
+              const firstInstance = makeInstance(
+                Deferred.succeed(refreshStarted, undefined).pipe(
+                  Effect.andThen(Effect.never),
+                  Effect.timeoutOption("15 seconds"),
+                  Effect.tap(() => Deferred.succeed(refreshTimedOut, undefined)),
+                  Effect.as(staleModelProvider),
                 ),
-                Layer.provideMerge(NodeServices.layer),
-              ),
-            ).pipe(Scope.provide(scope));
-
-            yield* Effect.gen(function* () {
-              const registry = yield* ProviderRegistry;
-              const refreshFiber = yield* registry.refreshInstanceModels!(codexInstanceId).pipe(
-                Effect.forkChild,
               );
-              yield* Deferred.await(refreshStarted);
+              const replacementInstance = makeInstance(Effect.succeed(cachedProvider));
+              const currentInstanceRef = yield* Ref.make<ProviderInstance>(firstInstance);
+              const instanceRegistryLayer = Layer.succeed(ProviderInstanceRegistry, {
+                getInstance: (instanceId) =>
+                  instanceId === codexInstanceId
+                    ? Ref.get(currentInstanceRef).pipe(Effect.map((instance) => instance))
+                    : Effect.succeed(undefined),
+                listInstances: Ref.get(currentInstanceRef).pipe(
+                  Effect.map((instance) => [instance] as const),
+                ),
+                listUnavailable: Effect.succeed([]),
+                streamChanges: Stream.empty,
+                subscribeChanges: Effect.flatMap(PubSub.unbounded<void>(), (pubsub) =>
+                  PubSub.subscribe(pubsub),
+                ),
+              });
+              const scope = yield* Scope.make();
+              yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
+              const runtimeServices = yield* Layer.build(
+                ProviderRegistryLive.pipe(
+                  Layer.provideMerge(instanceRegistryLayer),
+                  Layer.provideMerge(
+                    ServerConfig.layerTest(process.cwd(), {
+                      prefix: "t3-provider-registry-stale-model-refresh-",
+                    }),
+                  ),
+                  Layer.provideMerge(NodeServices.layer),
+                ),
+              ).pipe(Scope.provide(scope));
 
-              // Model refresh synchronization deliberately ignores a short-lived
-              // RPC caller disconnect, but that outer uninterruptible boundary
-              // must not mask the driver's own timeout. Start interruption in a
-              // separate fiber because Fiber.interrupt waits for the bounded
-              // critical section to finish.
-              const disconnectFiber = yield* Fiber.interrupt(refreshFiber).pipe(Effect.forkChild);
-              yield* Effect.yieldNow;
-              yield* Ref.set(currentInstanceRef, replacementInstance);
-              yield* TestClock.adjust("15 seconds");
-              yield* Deferred.await(refreshTimedOut);
-              yield* Fiber.join(disconnectFiber);
+              yield* Effect.gen(function* () {
+                const registry = yield* ProviderRegistry;
+                const refreshFiber = yield* (
+                  refreshKind === "models"
+                    ? registry.refreshInstanceModels!(codexInstanceId)
+                    : registry.refreshInstanceAccountUsage(codexInstanceId)
+                ).pipe(Effect.forkChild);
+                yield* Deferred.await(refreshStarted);
 
-              assert.deepStrictEqual(yield* registry.getProviders, [cachedProvider]);
-            }).pipe(Effect.provide(runtimeServices));
-          }),
-      );
+                // Model refresh synchronization deliberately ignores a short-lived
+                // RPC caller disconnect, but that outer uninterruptible boundary
+                // must not mask the driver's own timeout. Start interruption in a
+                // separate fiber because Fiber.interrupt waits for the bounded
+                // critical section to finish.
+                const disconnectFiber =
+                  refreshKind === "models"
+                    ? yield* Fiber.interrupt(refreshFiber).pipe(Effect.forkChild)
+                    : null;
+                yield* Effect.yieldNow;
+                yield* Ref.set(currentInstanceRef, replacementInstance);
+                yield* TestClock.adjust("15 seconds");
+                yield* Deferred.await(refreshTimedOut);
+                if (disconnectFiber) yield* Fiber.join(disconnectFiber);
+                else yield* Fiber.join(refreshFiber);
+
+                assert.deepStrictEqual(yield* registry.getProviders, [
+                  {
+                    ...cachedProvider,
+                    runtimeCapabilities: {
+                      liveSteer: "unsupported",
+                      threadGoals: "unsupported",
+                      accountUsage: refreshKind === "usage",
+                    },
+                  },
+                ]);
+              }).pipe(Effect.provide(runtimeServices));
+            }),
+        );
+      }
 
       it.effect("keeps consuming registry changes after one sync fails", () =>
         Effect.gen(function* () {
@@ -1655,7 +1689,16 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest(), T
 
           yield* Effect.gen(function* () {
             const registry = yield* ProviderRegistry;
-            assert.deepStrictEqual(yield* registry.getProviders, [codexProvider]);
+            assert.deepStrictEqual(yield* registry.getProviders, [
+              {
+                ...codexProvider,
+                runtimeCapabilities: {
+                  liveSteer: "unsupported",
+                  threadGoals: "unsupported",
+                  accountUsage: false,
+                },
+              },
+            ]);
 
             yield* Ref.set(failNextList, true);
             yield* PubSub.publish(changes, undefined);

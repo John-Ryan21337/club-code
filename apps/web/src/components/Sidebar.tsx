@@ -16,6 +16,7 @@ import {
   ThreadStatusLabel,
 } from "./ThreadStatusIndicators";
 import { ProjectFavicon } from "./ProjectFavicon";
+import { ProviderUsageWidget } from "./sidebar/ProviderUsageWidget";
 import { autoAnimate } from "@formkit/auto-animate";
 import React, { useCallback, useEffect, memo, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
@@ -4201,6 +4202,7 @@ export default function Sidebar() {
 
             <SidebarSeparator />
           </div>
+          <ProviderUsageWidget />
           <SidebarChromeFooter />
         </>
       )}

@@ -1,4 +1,5 @@
 import * as Crypto from "node:crypto";
+import { refreshProviderUsage } from "./provider/refreshProviderUsage.ts";
 
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
@@ -1017,14 +1018,16 @@ const makeWsRpcLayer = (
         [WS_METHODS.serverRefreshProviders]: (input) =>
           observeRpcEffect(
             WS_METHODS.serverRefreshProviders,
-            (input.scope === "models"
-              ? input.instanceId !== undefined
-                ? (providerRegistry.refreshInstanceModels?.(input.instanceId) ??
-                  providerRegistry.getProviders)
-                : providerRegistry.getProviders
-              : input.instanceId !== undefined
-                ? providerRegistry.refreshInstance(input.instanceId)
-                : providerRegistry.refresh()
+            (input.scope === "usage"
+              ? refreshProviderUsage(providerRegistry, input.instanceId)
+              : input.scope === "models"
+                ? input.instanceId !== undefined
+                  ? (providerRegistry.refreshInstanceModels?.(input.instanceId) ??
+                    providerRegistry.getProviders)
+                  : providerRegistry.getProviders
+                : input.instanceId !== undefined
+                  ? providerRegistry.refreshInstance(input.instanceId)
+                  : providerRegistry.refresh()
             ).pipe(Effect.map((providers) => ({ providers }))),
             { "rpc.aggregate": "server" },
           ),

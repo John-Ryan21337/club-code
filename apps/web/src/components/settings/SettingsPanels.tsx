@@ -50,6 +50,7 @@ import * as Duration from "effect/Duration";
 import * as Equal from "effect/Equal";
 import { APP_VERSION } from "../../branding";
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
+import { ProviderUsageSettings } from "./ProviderUsageSettings";
 import { TraitsPicker } from "../chat/TraitsPicker";
 import { useTheme } from "../../hooks/useTheme";
 import { useSettings, useUpdateSettings } from "../../hooks/useSettings";
@@ -1923,6 +1924,7 @@ export function ProviderSettingsPanel() {
 
   return (
     <SettingsPageContainer>
+      <ProviderUsageSettings />
       <SettingsSection
         title="Providers"
         headerAction={

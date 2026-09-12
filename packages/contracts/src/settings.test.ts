@@ -532,3 +532,26 @@ describe("provider settings", () => {
     ).toThrow();
   });
 });
+
+it("keeps usage polling and pacing opt-in and bounds their persisted controls", () => {
+  const defaults = Schema.decodeUnknownSync(ClientSettingsSchema)({});
+  expect(defaults.providerUsageWidgetEnabled).toBe(false);
+  expect(defaults.modelPacingEnabled).toBe(false);
+  expect(defaults.providerUsagePollMinutes).toBe(2);
+  expect(defaults.modelPacingReservePercent).toBe(10);
+  for (const patch of [
+    { providerUsagePollMinutes: 0 },
+    { providerUsagePollMinutes: 6 },
+    { providerUsagePollMinutes: 1.5 },
+    { modelPacingReservePercent: -1 },
+    { modelPacingReservePercent: 51 },
+  ]) {
+    expect(() => Schema.decodeUnknownSync(ClientSettingsPatch)(patch)).toThrow();
+  }
+  expect(
+    Schema.decodeUnknownSync(ClientSettingsPatch)({
+      providerUsagePollMinutes: 5,
+      modelPacingReservePercent: 0,
+    }),
+  ).toEqual({ providerUsagePollMinutes: 5, modelPacingReservePercent: 0 });
+});
