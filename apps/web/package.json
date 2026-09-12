@@ -12,6 +12,7 @@
     "test": "vitest run --passWithNoTests",
     "test:browser": "vitest run --config vitest.browser.config.ts",
     "capture:matrix": "vitest run --config vitest.matrix-capture.config.ts",
+    "capture:atmosphere-console": "vitest run --config vitest.atmosphere-console-capture.config.ts",
     "test:browser:install": "playwright install --with-deps chromium"
   },
   "dependencies": {
