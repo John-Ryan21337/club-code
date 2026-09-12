@@ -1,9 +1,59 @@
 import { describe, expect, it } from "vitest";
 
 import { MatrixGpuFrameCollector, parseMatrixGpuColor } from "./matrixGpuFrameCollector";
-import { createAtmosphereScene, createSeededRandom, MATRIX_ROMAN_GLYPHS } from "./windowAtmosphere";
+import {
+  applyMatrixWorkVocabularyInPlace,
+  createAtmosphereScene,
+  createSeededRandom,
+  MATRIX_ROMAN_GLYPHS,
+} from "./windowAtmosphere";
 
 describe("MatrixGpuFrameCollector", () => {
+  it.each(["flat", "walk-forward", "walk-reverse"] as const)(
+    "keeps whole work labels at stream heads in %s",
+    (motionMode) => {
+      const scene = createAtmosphereScene(
+        "matrix",
+        1280,
+        720,
+        createSeededRandom(42),
+        2,
+        0,
+        motionMode,
+      );
+      const before = structuredClone(scene.particles);
+      applyMatrixWorkVocabularyInPlace(
+        scene,
+        { english: ["SafeFile.tsx"], japanese: ["作業"] },
+        () => 0,
+      );
+      expect(scene.particles.map((particle) => ({ ...particle, matrixWorkToken: null }))).toEqual(
+        before,
+      );
+      const collector = new MatrixGpuFrameCollector();
+      const collect = () =>
+        collector.collect({
+          scene,
+          color: "#00ff00",
+          opacity: 1,
+          matrixColorFrame: undefined,
+          motionMode,
+          walkStartFontSize: 12,
+          walkEndFontSize: 72,
+          matrixBaseFontSize: 14,
+          devicePixelRatio: 1,
+        });
+      const frame = collect();
+      const labels = frame.glyphs.filter((glyph) => glyph.glyph === "SafeFile.tsx");
+      expect(labels.length).toBeGreaterThan(0);
+      expect(labels.length).toBeLessThanOrEqual(scene.particles.length);
+      expect(frame.glyphs.filter((glyph) => String(glyph.glyph).length > 1)).toHaveLength(
+        labels.length,
+      );
+      applyMatrixWorkVocabularyInPlace(scene, { english: [], japanese: [] }, () => 0);
+      expect(collect().glyphs.every((glyph) => String(glyph.glyph).length === 1)).toBe(true);
+    },
+  );
   it("converts the existing Matrix geometry traversal into bounded GPU glyph instances", () => {
     const scene = createAtmosphereScene(
       "matrix",

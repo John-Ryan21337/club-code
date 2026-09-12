@@ -1,12 +1,16 @@
-import { useEffect, useEffectEvent, useMemo, useRef } from "react";
+import type { ScopedThreadRef } from "@cafecode/contracts";
+import { useEffect, useEffectEvent, useLayoutEffect, useMemo, useRef } from "react";
 
 import { useSettings } from "../hooks/useSettings";
 import { useTheme } from "../hooks/useTheme";
 import { MatrixGpuFrameCollector } from "../matrixGpuFrameCollector";
 import { createMatrixWebGl2Renderer, type MatrixWebGl2Renderer } from "../matrixWebGlRenderer";
 import { useServerConfig } from "../rpc/serverState";
+import { useStore } from "../store";
+import { decodeMatrixWorkVocabulary, selectMatrixWorkVocabularyKey } from "../matrixWorkVocabulary";
 import {
   advanceAtmosphereSceneInPlace,
+  applyMatrixWorkVocabularyInPlace,
   createAtmosphereScene,
   createSeededRandom,
   drawAtmosphereScene,
@@ -37,7 +41,9 @@ function resolveCanvasDimension(measured: number, viewportFallback: number): num
   return 1;
 }
 
-export function WindowAtmosphere() {
+export function WindowAtmosphere({
+  selectedThreadRef = null,
+}: { readonly selectedThreadRef?: ScopedThreadRef | null } = {}) {
   const enabled = useSettings((settings) => settings.fallingEffectsEnabled);
   const kind = useSettings((settings) => settings.fallingEffectKind);
   const configuredColor = useSettings((settings) => settings.fallingEffectColor);
@@ -61,12 +67,23 @@ export function WindowAtmosphere() {
   const speed = useSettings((settings) => settings.fallingEffectSpeed);
   const density = useSettings((settings) => settings.fallingEffectDensity);
   const japaneseRatio = useSettings((settings) => settings.fallingEffectJapaneseRatio);
+  const liveWorkVocabularyEnabled = useSettings(
+    (settings) => settings.fallingEffectLiveWorkVocabularyEnabled,
+  );
   const continueBackgroundAnimations = useSettings(
     (settings) => settings.continueBackgroundAnimations,
   );
   const { resolvedTheme } = useTheme();
   const serverConfig = useServerConfig();
   const atmosphereAvailable = serverConfig?.ambientExperienceCapabilities.atmosphere === true;
+  const vocabularyKey = useStore((state) =>
+    atmosphereAvailable && enabled && kind === "matrix" && liveWorkVocabularyEnabled
+      ? selectMatrixWorkVocabularyKey(state, selectedThreadRef)
+      : "",
+  );
+  const vocabulary = useMemo(() => decodeMatrixWorkVocabulary(vocabularyKey), [vocabularyKey]);
+  const vocabularyRef = useRef(vocabulary);
+  const updateVocabularyRef = useRef<(() => void) | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const matrixGpuCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const matrixGpuRendererRef = useRef<MatrixWebGl2Renderer | null>(null);
@@ -112,13 +129,26 @@ export function WindowAtmosphere() {
   );
   /**
    * The atlas is rasterized once per renderer, so it must cover every glyph a
-   * Matrix stream can select. The static Roman and Japanese pools are the only
-   * vocabulary in this slice; operational work vocabulary is a later slice.
+   * Matrix stream can select, including bounded labels from the committed route.
    */
   const matrixGpuGlyphPool = useMemo(
-    () => [...Array.from(MATRIX_ROMAN_GLYPHS), ...Array.from(MATRIX_JAPANESE_GLYPHS)],
-    [],
+    () => [
+      ...Array.from(MATRIX_ROMAN_GLYPHS),
+      ...Array.from(MATRIX_JAPANESE_GLYPHS),
+      ...vocabulary.english,
+      ...vocabulary.japanese,
+    ],
+    [vocabulary],
   );
+
+  // Clear the old route's pixels before paint, even with a queued RAF or reduced
+  // motion. The replacement atlas is installed later; Canvas can draw new labels now.
+  useLayoutEffect(() => {
+    vocabularyRef.current = vocabulary;
+    matrixGpuAvailableRef.current = false;
+    if (matrixGpuCanvasRef.current) matrixGpuCanvasRef.current.style.visibility = "hidden";
+    updateVocabularyRef.current?.();
+  }, [vocabulary]);
 
   // Acquiring the WebGL2 context is independent from the draw loop: a GPU
   // failure must never restart or reseed the shared simulation.
@@ -242,6 +272,11 @@ export function WindowAtmosphere() {
         walkLifecyclePercent,
         centerWindIntensity,
       );
+      applyMatrixWorkVocabularyInPlace(
+        scene,
+        vocabularyRef.current,
+        createSeededRandom(0x574f524b),
+      );
     };
 
     const renderScene = (timestamp: number, advance: boolean, dimmed = !advance) => {
@@ -358,6 +393,20 @@ export function WindowAtmosphere() {
       animationFrame = window.requestAnimationFrame(drawFrame);
     };
 
+    const updateVocabulary = () => {
+      if (scene === null) return;
+      applyMatrixWorkVocabularyInPlace(
+        scene,
+        vocabularyRef.current,
+        createSeededRandom(0x574f524b),
+      );
+      if (shouldShowAtmosphere(atmosphereState())) {
+        renderScene(performance.now(), false, reducedMotion.matches);
+      } else {
+        clearCanvasBitmap();
+      }
+    };
+
     const syncAnimation = () => {
       const state = atmosphereState();
       const visible = shouldShowAtmosphere(state);
@@ -391,6 +440,7 @@ export function WindowAtmosphere() {
 
     resize();
     repaintAtmosphereRef.current = repaintCurrentScene;
+    updateVocabularyRef.current = updateVocabulary;
     syncPresentationRef.current = syncAnimation;
     appliedPresentationRef.current = readPresentation();
     syncAnimation();
@@ -401,6 +451,7 @@ export function WindowAtmosphere() {
     reducedMotion.addEventListener("change", syncAnimation);
 
     return () => {
+      if (updateVocabularyRef.current === updateVocabulary) updateVocabularyRef.current = null;
       if (repaintAtmosphereRef.current === repaintCurrentScene) {
         repaintAtmosphereRef.current = null;
       }
