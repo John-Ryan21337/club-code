@@ -33,6 +33,13 @@ const persistedItem = Schema.Struct({
   environmentId: EnvironmentId,
   threadId: ThreadId,
   promptText: Schema.String.check(Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_INPUT_CHARS)),
+  browserContextStart: Schema.optionalKey(
+    Schema.Number.check(
+      Schema.isInt(),
+      Schema.isGreaterThanOrEqualTo(0),
+      Schema.isLessThanOrEqualTo(PROVIDER_SEND_TURN_MAX_INPUT_CHARS),
+    ),
+  ),
   images: Schema.Array(persistedImage).check(
     Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_ATTACHMENTS),
   ),
@@ -69,6 +76,7 @@ export interface FollowUpQueuePersistenceItem {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
   readonly promptText: string;
+  readonly browserContextStart?: number;
   readonly images: readonly ComposerImageAttachment[];
   readonly files?: readonly ChatFileAttachment[];
   readonly provider: ProviderDriverKind;
@@ -166,6 +174,8 @@ function validateItemBounds(items: readonly PersistedItem[]): void {
   const counts = new Map<EnvironmentId, number>();
   for (const item of items) {
     const key = itemKey(item);
+    if (item.browserContextStart !== undefined && item.browserContextStart > item.promptText.length)
+      throw new Error(INVALID_QUEUE);
     if (seen.has(key) || !Number.isFinite(Date.parse(item.queuedAt)))
       throw new Error(INVALID_QUEUE);
     seen.add(key);
@@ -218,6 +228,9 @@ function itemMetadata(item: FollowUpQueuePersistenceItem): PersistedItem {
     environmentId: item.environmentId,
     threadId: item.threadId,
     promptText: item.promptText,
+    ...(item.browserContextStart !== undefined
+      ? { browserContextStart: item.browserContextStart }
+      : {}),
     images: item.images.map(({ id, name, mimeType, sizeBytes }) => ({
       type: "image",
       id,
@@ -303,6 +316,9 @@ function hydrateItem(item: PersistedItem): HydratedFollowUpQueueItem {
     environmentId: item.environmentId,
     threadId: item.threadId,
     promptText: item.promptText,
+    ...(item.browserContextStart !== undefined
+      ? { browserContextStart: item.browserContextStart }
+      : {}),
     images: item.images.map((image) => {
       const file = new File([decodeImage(image)], image.name, { type: image.mimeType });
       knownImagePayloads.set(file, validatedImagePayload(image));

@@ -50,6 +50,12 @@ type RpcInputStreamMethod<TTag extends RpcTag> =
     : never;
 
 export interface WsRpcClient {
+  readonly agentBrowser: {
+    readonly grant: RpcUnaryMethod<typeof WS_METHODS.agentBrowserGrant>;
+    readonly revoke: RpcUnaryMethod<typeof WS_METHODS.agentBrowserRevoke>;
+    readonly poll: RpcUnaryMethod<typeof WS_METHODS.agentBrowserPoll>;
+    readonly complete: RpcUnaryMethod<typeof WS_METHODS.agentBrowserComplete>;
+  };
   readonly dispose: () => Promise<void>;
   readonly reconnect: () => Promise<void>;
   readonly isHeartbeatFresh: () => boolean;
@@ -183,6 +189,14 @@ export interface WsRpcClient {
 
 export function createWsRpcClient(transport: WsTransport): WsRpcClient {
   return {
+    agentBrowser: {
+      grant: (input) => transport.request((client) => client[WS_METHODS.agentBrowserGrant](input)),
+      revoke: (input) =>
+        transport.request((client) => client[WS_METHODS.agentBrowserRevoke](input)),
+      poll: (input) => transport.request((client) => client[WS_METHODS.agentBrowserPoll](input)),
+      complete: (input) =>
+        transport.request((client) => client[WS_METHODS.agentBrowserComplete](input)),
+    },
     dispose: () => transport.dispose(),
     reconnect: async () => {
       resetWsReconnectBackoff();

@@ -1,4 +1,8 @@
 import {
+  buildEphemeralBrowserDispatchPrompt,
+  recoverEphemeralBrowserDraft,
+} from "../embeddedBrowserChatHandoff";
+import {
   type ApprovalRequestId,
   DEFAULT_MODEL,
   defaultInstanceIdForDriver,
@@ -103,6 +107,7 @@ import { useCommandPaletteStore } from "../commandPaletteStore";
 import { buildTemporaryWorktreeBranchName } from "@cafecode/shared/git";
 import { useHasOnScreenKeyboard, useIsMobile, useMediaQuery } from "../hooks/useMediaQuery";
 import { RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY } from "../rightPanelLayout";
+import { useEmbeddedBrowserChatWidth } from "../embeddedBrowserChatLayout";
 import { deriveLatestContextWindowSnapshot } from "../lib/contextWindow";
 import { shouldSurfaceProviderAccountRateLimits } from "../lib/codexRateLimits";
 import { BranchToolbar } from "./BranchToolbar";
@@ -446,6 +451,9 @@ type ChatViewProps =
 
 interface ComposerSendSnapshot {
   promptText: string;
+  draftPromptText?: string;
+  ephemeralBrowserContext?: string;
+  browserContextStart?: number;
   images: ComposerImageAttachment[];
   files: import("@cafecode/contracts").ChatFileAttachment[];
   provider: ProviderDriverKind;
@@ -913,7 +921,10 @@ export default function ChatView(props: ChatViewProps) {
   const [draftPlanSidebarOpenByThreadKey, setDraftPlanSidebarOpenByThreadKey] = useState<
     Record<string, boolean>
   >({});
-  const shouldUsePlanSidebarSheet = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
+  const viewportNeedsPlanSheet = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
+  const browserChatWidth = useEmbeddedBrowserChatWidth();
+  const shouldUsePlanSidebarSheet =
+    viewportNeedsPlanSheet || (browserChatWidth !== null && browserChatWidth <= 980);
   const isMobile = useIsMobile();
   const hasOnScreenKeyboard = useHasOnScreenKeyboard();
   const draftPlanSidebarOpen =
@@ -1132,6 +1143,10 @@ export default function ChatView(props: ChatViewProps) {
     return result;
   });
   const queuePersistenceTailRef = useRef<Promise<unknown>>(Promise.resolve());
+  const browserContextBeforeQueueEditRef = useRef("");
+  useEffect(() => {
+    browserContextBeforeQueueEditRef.current = "";
+  }, [routeThreadKey]);
   const persistFollowUpQueues = useCallback(
     (targetEnvironmentId: EnvironmentId, queues: Record<string, FollowUpQueueItem[]>) => {
       const entries = Object.values(queues)
@@ -3156,7 +3171,10 @@ export default function ChatView(props: ChatViewProps) {
               length: items.length,
               itemIds: items.map((item) => item.id),
               promptPreviews: items.map((item) =>
-                previewQueuedFollowUpText(item.promptText).slice(0, 240),
+                previewQueuedFollowUpText(
+                  recoverEphemeralBrowserDraft(item.promptText, item.browserContextStart)
+                    .persistedDraftPrompt,
+                ).slice(0, 240),
               ),
             },
           ]),
@@ -3176,7 +3194,10 @@ export default function ChatView(props: ChatViewProps) {
                 queuedAt: item.queuedAt,
                 blockedReason: item.blockedReason,
                 promptLength: item.promptText.length,
-                promptPreview: previewQueuedFollowUpText(item.promptText).slice(0, 240),
+                promptPreview: previewQueuedFollowUpText(
+                  recoverEphemeralBrowserDraft(item.promptText, item.browserContextStart)
+                    .persistedDraftPrompt,
+                ).slice(0, 240),
                 imageCount: item.images.length,
                 provider: item.provider,
                 model: item.model,
@@ -3212,7 +3233,12 @@ export default function ChatView(props: ChatViewProps) {
               turnId: pending.turnId,
               dispatchedAt: pending.dispatchedAt,
               promptLength: pending.snapshot.promptText.length,
-              promptPreview: previewQueuedFollowUpText(pending.snapshot.promptText).slice(0, 240),
+              promptPreview: previewQueuedFollowUpText(
+                recoverEphemeralBrowserDraft(
+                  pending.snapshot.promptText,
+                  pending.snapshot.browserContextStart,
+                ).persistedDraftPrompt,
+              ).slice(0, 240),
               imageCount: pending.snapshot.images.length,
               provider: pending.snapshot.provider,
               model: pending.snapshot.model,
@@ -3229,7 +3255,10 @@ export default function ChatView(props: ChatViewProps) {
           blockedReason: item.blockedReason,
           expanded: item.expanded,
           promptLength: item.promptText.length,
-          promptPreview: previewQueuedFollowUpText(item.promptText).slice(0, 240),
+          promptPreview: previewQueuedFollowUpText(
+            recoverEphemeralBrowserDraft(item.promptText, item.browserContextStart)
+              .persistedDraftPrompt,
+          ).slice(0, 240),
           imageCount: item.images.length,
           provider: item.provider,
           model: item.model,
@@ -3997,8 +4026,23 @@ export default function ChatView(props: ChatViewProps) {
       );
       return null;
     }
+    let browserDispatch: ReturnType<typeof buildEphemeralBrowserDispatchPrompt>;
+    try {
+      browserDispatch = buildEphemeralBrowserDispatchPrompt(
+        promptRef.current,
+        sendCtx.ephemeralBrowserContext,
+      );
+    } catch {
+      setThreadError(activeThread.id, "Shorten the draft or browser context before sending.");
+      return null;
+    }
     return {
-      promptText: promptRef.current,
+      promptText: browserDispatch.dispatchPrompt,
+      draftPromptText: browserDispatch.persistedDraftPrompt,
+      ephemeralBrowserContext: browserDispatch.ephemeralBrowserContext,
+      ...(browserDispatch.browserContextStart !== undefined
+        ? { browserContextStart: browserDispatch.browserContextStart }
+        : {}),
       images: [...sendCtx.images],
       files,
       provider: sendCtx.selectedProvider,
@@ -4027,6 +4071,7 @@ export default function ChatView(props: ChatViewProps) {
     if (currentRouteThreadKeyRef.current !== routeThreadKey) return;
     promptRef.current = "";
     composerRef.current?.resetCursorState();
+    composerRef.current?.clearEphemeralBrowserContext();
     // Desktop keeps its efficient type-send-type loop. On touch devices,
     // however, the primary action intentionally dismisses the software
     // keyboard after sending; scheduling focus here would race that dismissal
@@ -4037,9 +4082,14 @@ export default function ChatView(props: ChatViewProps) {
   };
 
   const restoreComposerSnapshotForRetry = (snapshot: ComposerSendSnapshot) => {
+    const recovered = recoverEphemeralBrowserDraft(
+      snapshot.promptText,
+      snapshot.browserContextStart,
+    );
+    const draftPromptText = snapshot.draftPromptText ?? recovered.persistedDraftPrompt;
     const retryComposerImages = snapshot.images.map(cloneComposerImageForRetry);
     const restored = restoreComposerDraftContentIfEmpty(composerDraftTarget, {
-      prompt: snapshot.promptText,
+      prompt: draftPromptText,
       images: retryComposerImages,
       files: snapshot.files.map((file) =>
         composerFileFromAttachment(environmentId, activeThread!.id, file),
@@ -4049,13 +4099,16 @@ export default function ChatView(props: ChatViewProps) {
       for (const image of retryComposerImages) revokeBlobPreviewUrl(image.previewUrl);
       return;
     }
-    promptRef.current = snapshot.promptText;
+    promptRef.current = draftPromptText;
     composerImagesRef.current = retryComposerImages;
     composerRef.current?.resetCursorState({
-      cursor: collapseExpandedComposerCursor(snapshot.promptText, snapshot.promptText.length),
-      prompt: snapshot.promptText,
+      cursor: collapseExpandedComposerCursor(draftPromptText, draftPromptText.length),
+      prompt: draftPromptText,
       detectTrigger: true,
     });
+    composerRef.current?.restoreEphemeralBrowserContext(
+      snapshot.ephemeralBrowserContext ?? recovered.ephemeralBrowserContext,
+    );
     scheduleComposerFocus();
   };
 
@@ -4804,6 +4857,7 @@ export default function ChatView(props: ChatViewProps) {
       promptRef.current = "";
       clearComposerDraftContent(composerDraftTarget);
       composerRef.current?.resetCursorState();
+      composerRef.current?.clearEphemeralBrowserContext();
       scheduleComposerFocus();
       return;
     }
@@ -4834,6 +4888,7 @@ export default function ChatView(props: ChatViewProps) {
       promptRef.current = "";
       clearComposerDraftContent(composerDraftTarget);
       composerRef.current?.resetCursorState();
+      composerRef.current?.clearEphemeralBrowserContext();
       scheduleComposerFocus();
       await onSubmitPlanFollowUp({
         text: followUp.text,
@@ -4850,6 +4905,7 @@ export default function ChatView(props: ChatViewProps) {
       promptRef.current = "";
       clearComposerDraftContent(composerDraftTarget);
       composerRef.current?.resetCursorState();
+      composerRef.current?.clearEphemeralBrowserContext();
       scheduleComposerFocus();
       return;
     }
@@ -4923,6 +4979,7 @@ export default function ChatView(props: ChatViewProps) {
     promptRef.current = "";
     clearComposerDraftContent(sendAttemptComposerDraftTarget);
     composerRef.current?.resetCursorState();
+    composerRef.current?.clearEphemeralBrowserContext();
     scheduleComposerFocus();
 
     let turnStartSucceeded = false;
@@ -5039,7 +5096,7 @@ export default function ChatView(props: ChatViewProps) {
       const draftRestored =
         !turnStartSucceeded &&
         restoreComposerDraftContentIfEmpty(sendAttemptComposerDraftTarget, {
-          prompt: promptForSend,
+          prompt: snapshot.draftPromptText ?? promptForSend,
           images: retryComposerImages,
           files: snapshot.files.map((file) =>
             composerFileFromAttachment(sendAttemptThreadRef.environmentId, threadIdForSend, file),
@@ -5074,13 +5131,14 @@ export default function ChatView(props: ChatViewProps) {
       const sendAttemptIsStillVisible =
         chatViewMountedRef.current && currentRouteThreadKeyRef.current === sendAttemptThreadKey;
       if (draftRestored && sendAttemptIsStillVisible) {
-        promptRef.current = promptForSend;
+        promptRef.current = snapshot.draftPromptText ?? promptForSend;
         composerImagesRef.current = retryComposerImages;
         composerRef.current?.resetCursorState({
-          cursor: collapseExpandedComposerCursor(promptForSend, promptForSend.length),
-          prompt: promptForSend,
+          cursor: collapseExpandedComposerCursor(promptRef.current, promptRef.current.length),
+          prompt: snapshot.draftPromptText ?? promptForSend,
           detectTrigger: true,
         });
+        composerRef.current?.restoreEphemeralBrowserContext(snapshot.ephemeralBrowserContext ?? "");
         scheduleComposerFocus();
       }
       const sendFailureMessage = describeSendFailureMessage(err, "Failed to send message.");
@@ -5470,9 +5528,14 @@ export default function ChatView(props: ChatViewProps) {
       setSendInFlight(false);
       setQueueDispatchInFlight(false);
     }
+    const recoveredBrowserDraft = recoverEphemeralBrowserDraft(
+      item.promptText,
+      item.browserContextStart,
+    );
+    const editedDraftPrompt = item.draftPromptText ?? recoveredBrowserDraft.persistedDraftPrompt;
     if (
       !store.beginQueueEdit(composerDraftTarget, item.id, {
-        prompt: item.promptText,
+        prompt: editedDraftPrompt,
         images: item.images.map(cloneComposerImageForRetry),
         files: item.files.map((attachment) =>
           composerFileFromAttachment(item.environmentId, item.threadId, attachment),
@@ -5492,9 +5555,14 @@ export default function ChatView(props: ChatViewProps) {
       return;
     }
     if (currentRouteThreadKeyRef.current !== routeThreadKey) return;
-    promptRef.current = item.promptText;
+    promptRef.current = editedDraftPrompt;
+    browserContextBeforeQueueEditRef.current =
+      composerRef.current?.getSendContext().ephemeralBrowserContext ?? "";
     composerImagesRef.current = store.getComposerDraft(composerDraftTarget)?.images ?? [];
-    composerRef.current?.resetCursorState({ prompt: item.promptText });
+    composerRef.current?.resetCursorState({ prompt: editedDraftPrompt });
+    composerRef.current?.restoreEphemeralBrowserContext(
+      item.ephemeralBrowserContext ?? recoveredBrowserDraft.ephemeralBrowserContext,
+    );
     scheduleComposerFocus();
   };
 
@@ -5513,6 +5581,8 @@ export default function ChatView(props: ChatViewProps) {
     promptRef.current = restored?.prompt ?? "";
     composerImagesRef.current = restored?.images ?? [];
     composerRef.current?.resetCursorState({ prompt: promptRef.current });
+    composerRef.current?.restoreEphemeralBrowserContext(browserContextBeforeQueueEditRef.current);
+    browserContextBeforeQueueEditRef.current = "";
     scheduleComposerFocus();
   };
 

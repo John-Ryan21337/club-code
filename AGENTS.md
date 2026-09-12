@@ -71,6 +71,8 @@ If a tradeoff is required, choose correctness, durability, and debuggability ove
 
 ## Security Requirements
 
+- Browser workspace controls must preserve native origin/owner checks and the Windows caption band. Keep thread exclusions server-authoritative and publish their local state only after a confirmed settings write; pending denial must block local execution. Continue renderer polling during a pending native action. Browser handoff text stays in memory before Send or Queue, separate from the saved composer draft. Preserve the bounded context offset in submitted queue entries so editing and retrying can restore that suffix separately, and omit the suffix from queue debug previews.
+
 - Isolated browser tabs use an in-memory Electron session, no preload or Node integration, and exact renderer ownership. Preserve main-process shared-origin grants, document/control revision checks, single-use target references, permission/download/popup denial, and session clearing on close. Native input must reject hidden documents and unfocused owner windows, and must await text insertion failures. OCR remains unavailable until the separate bundled local engine is installed; never substitute a remote OCR service.
 
 - Bind desktop IPC authority to both the exact registered `webContents` and its configured renderer origin (or exact production file). Reject other loopback ports, deceptive loopback hostnames, child frames, and destroyed senders. Keep the trusted renderer on this navigation scope. Sender-aware handlers receive the already-validated event; use strict payload decoding for capability-bearing APIs and reject extra fields before running the handler.

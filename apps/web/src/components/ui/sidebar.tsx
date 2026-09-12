@@ -18,6 +18,7 @@ import {
 import { Skeleton } from "~/components/ui/skeleton";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { useIsMobile } from "~/hooks/useMediaQuery";
+import { useEmbeddedBrowserChatWidth } from "~/embeddedBrowserChatLayout";
 import { getLocalStorageItem, setLocalStorageItem } from "~/hooks/useLocalStorage";
 import * as Schema from "effect/Schema";
 
@@ -98,7 +99,9 @@ function SidebarProvider({
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
 }) {
-  const isMobile = useIsMobile();
+  const viewportIsMobile = useIsMobile();
+  const browserChatWidth = useEmbeddedBrowserChatWidth();
+  const isMobile = viewportIsMobile || (browserChatWidth !== null && browserChatWidth < 768);
   const [openMobile, setOpenMobile] = React.useState(false);
 
   // This is the internal state of the sidebar.

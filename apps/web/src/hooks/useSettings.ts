@@ -45,6 +45,7 @@ import {
 
 const CLIENT_SETTINGS_PERSISTENCE_ERROR_SCOPE = "[CLIENT_SETTINGS]";
 let clientSettingsImportAttempted = false;
+let confirmedClientSettingsWrite: Promise<void> = Promise.resolve();
 
 function subscribeClientSettings(listener: () => void): () => void {
   const unsubscribe = subscribeClientSettingsSnapshot(listener);
@@ -211,6 +212,24 @@ export function useSettings<T = UnifiedSettings>(selector?: (s: UnifiedSettings)
  * persisted via RPC. Client keys go through client persistence.
  */
 export function useUpdateSettings() {
+  const updateClientSettingsConfirmed = useCallback((patch: ClientSettingsPatch) => {
+    const write = confirmedClientSettingsWrite.then(async () => {
+      const current = getServerConfig();
+      if (current) {
+        await ensureLocalApi().server.updateClientSettings(patch);
+        const latest = getServerConfig()?.clientSettings ?? current.clientSettings;
+        applyClientSettingsUpdated(applyClientSettingsPatch(latest, patch));
+      } else {
+        await hydrateClientSettings();
+        const next = applyClientSettingsPatch(getClientSettingsSnapshot(), patch);
+        await ensureLocalApi().persistence.setClientSettings(next);
+        replaceClientSettingsSnapshot(next);
+      }
+    });
+    // A failed write must reject for its caller without blocking later writes.
+    confirmedClientSettingsWrite = write.catch(() => {});
+    return write;
+  }, []);
   const updateSettings = useCallback((patch: Partial<UnifiedSettings>) => {
     const { serverPatch, clientPatch } = splitPatch(patch);
 
@@ -259,12 +278,14 @@ export function useUpdateSettings() {
   }, [updateSettings]);
 
   return {
+    updateClientSettingsConfirmed,
     updateSettings,
     resetSettings,
   };
 }
 
 export function __resetClientSettingsPersistenceForTests(): void {
+  confirmedClientSettingsWrite = Promise.resolve();
   clientSettingsImportAttempted = false;
   resetClientSettingsPersistenceStateForTests();
 }
