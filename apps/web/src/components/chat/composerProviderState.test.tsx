@@ -64,6 +64,50 @@ const ULTRATHINK_FRAME_CLASSES = {
 } as const;
 
 describe("getComposerProviderState", () => {
+  it.each([
+    ["codex", "reasoningEffort"],
+    ["claudeAgent", "effort"],
+    ["opencode", "variant"],
+  ])("defaults %s to High without changing saved choices or catalog metadata", (driver, id) => {
+    const models = modelWith([
+      selectDescriptor(id, [
+        { id: "low", label: "Low", isDefault: true },
+        { id: "high", label: "High" },
+      ]),
+    ]);
+    const input = { provider: ProviderDriverKind.make(driver), model: MODEL, models, prompt: "" };
+    expect(getComposerProviderState({ ...input, modelOptions: undefined })).toMatchObject({
+      promptEffort: "high",
+      modelOptionsForDispatch: selections([id, "high"]),
+    });
+    expect(
+      getComposerProviderState({ ...input, modelOptions: selections([id, "low"]) }),
+    ).toMatchObject({
+      promptEffort: "low",
+      modelOptionsForDispatch: selections([id, "low"]),
+    });
+    expect(models[0]?.capabilities?.optionDescriptors?.[0]).toMatchObject({ currentValue: "low" });
+  });
+
+  it("keeps supported defaults when High is unavailable and leaves unrelated selectors alone", () => {
+    const state = getComposerProviderState({
+      provider: PROVIDER,
+      model: MODEL,
+      prompt: "",
+      modelOptions: undefined,
+      models: modelWith([
+        selectDescriptor("effort", [{ id: "medium", label: "Medium", isDefault: true }]),
+        selectDescriptor("agent", [
+          { id: "normal", label: "Normal", isDefault: true },
+          { id: "high", label: "High" },
+        ]),
+      ]),
+    });
+    expect(state.modelOptionsForDispatch).toEqual(
+      selections(["effort", "medium"], ["agent", "normal"]),
+    );
+  });
+
   it("returns descriptor defaults when no selections are provided", () => {
     const state = getComposerProviderState({
       provider: PROVIDER,

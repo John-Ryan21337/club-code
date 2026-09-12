@@ -21,6 +21,12 @@ import {
 import { localMediaStore } from "../../localMedia";
 import { ensureLocalApi } from "../../localApi";
 import { AmbientVideoWorkspace, useAmbientVideoWorkspace } from "./AmbientVideoWorkspace";
+import { YouTubePlayerToggle } from "./YouTubePlayerToggle";
+import { UiLocalizationProvider } from "../../uiLocalization";
+import {
+  replaceClientSettingsSnapshot,
+  setClientSettingsHydrated,
+} from "../../hooks/clientSettingsState";
 import {
   writeAmbientMediaGeometry,
   readAmbientMediaGeometry,
@@ -79,6 +85,7 @@ function TestChatAnchor({ width = 900 }: { width?: number }) {
   return (
     <main ref={registerChatAnchor} style={{ width, height: "600px", flexShrink: 0 }}>
       Chat workspace
+      <YouTubePlayerToggle />
     </main>
   );
 }
@@ -125,6 +132,8 @@ async function expectPlayerGeometry(input: {
 }
 
 beforeEach(() => {
+  replaceClientSettingsSnapshot(DEFAULT_CLIENT_SETTINGS);
+  setClientSettingsHydrated(true);
   resetServerStateForTests();
   __resetYouTubeUrlQueueForTests();
   localMediaStore.clear();
@@ -137,12 +146,124 @@ afterEach(async () => {
   vi.restoreAllMocks();
   vi.mocked(ensureLocalApi).mockReset();
   mounted = null;
+  replaceClientSettingsSnapshot(DEFAULT_CLIENT_SETTINGS);
   resetServerStateForTests();
   __resetYouTubeUrlQueueForTests();
   localMediaStore.clear();
   document.body.innerHTML = "";
   document.documentElement.removeAttribute("data-cafe-local-media-background");
   await page.viewport(1_280, 720);
+});
+
+it("turns a saved playlist off and on from the chat without clearing its source or geometry", async () => {
+  const source = { kind: "playlist", id: "PLtestPlaylist123" } as const;
+  const config = makeConfig(source);
+  const geometry = { x: 0.1, y: 0.12, width: 0.48 };
+  writeAmbientMediaGeometry("video", geometry);
+  let persistedSettings = { ...config.clientSettings, ambientVideoEnabled: false };
+  const api = ensureLocalApi();
+  const update = vi.spyOn(api.server, "updateClientSettings").mockImplementation(async (patch) => {
+    persistedSettings = { ...persistedSettings, ...patch };
+    return persistedSettings;
+  });
+  vi.mocked(ensureLocalApi).mockReturnValue(api);
+  setServerConfigSnapshot({ ...config, clientSettings: persistedSettings });
+  mounted = await render(
+    <div style={{ display: "flex", width: 1280, height: 720 }}>
+      <AppAtomRegistryProvider>
+        <AmbientVideoWorkspace>
+          <TestChatAnchor />
+        </AmbientVideoWorkspace>
+      </AppAtomRegistryProvider>
+    </div>,
+  );
+  for (let cycle = 0; cycle < 2; cycle++) {
+    await page.getByRole("button", { name: "Turn YouTube player on" }).click();
+    await expect.poll(() => document.querySelector("iframe")).not.toBeNull();
+    await expect
+      .element(page.getByRole("button", { name: "Turn YouTube player off" }))
+      .toHaveAttribute("aria-pressed", "true");
+    await page.getByRole("button", { name: "Turn YouTube player off" }).click();
+    await expect.poll(() => document.querySelector("iframe")).toBeNull();
+    await expect.poll(() => persistedSettings.ambientVideoEnabled).toBe(false);
+    expect(persistedSettings.ambientVideoSource).toEqual(source);
+    expect(readAmbientMediaGeometry("video")).toEqual(geometry);
+  }
+  expect(update.mock.calls.map(([patch]) => patch)).toEqual([
+    { ambientVideoEnabled: true },
+    { ambientVideoEnabled: false },
+    { ambientVideoEnabled: true },
+    { ambientVideoEnabled: false },
+  ]);
+});
+
+it.each([
+  null,
+  { kind: "spotify", entityType: "playlist", id: "syntheticPlaylist123456" } as const,
+])("omits the YouTube toggle for a non-YouTube source: %j", async (source) => {
+  setServerConfigSnapshot(makeConfig(source));
+  mounted = await render(
+    <AppAtomRegistryProvider>
+      <YouTubePlayerToggle />
+    </AppAtomRegistryProvider>,
+  );
+  expect(document.querySelector("[data-youtube-player-toggle]")).toBeNull();
+});
+
+it.each(["en", "ja", "dual"] as const)(
+  "shows the queue toggle in %s at phone width",
+  async (uiLanguage) => {
+    await page.viewport(390, 700);
+    youtubeUrlQueueStore.load(
+      parseYouTubeUrlQueueText("https://www.youtube.com/watch?v=testVideo01"),
+    );
+    const queueBefore = youtubeUrlQueueStore.getSnapshot();
+    const config = makeConfig(null);
+    replaceClientSettingsSnapshot({ ...DEFAULT_CLIENT_SETTINGS, uiLanguage });
+    setServerConfigSnapshot({
+      ...config,
+      clientSettings: { ...config.clientSettings, uiLanguage },
+    });
+    mounted = await render(
+      <AppAtomRegistryProvider>
+        <UiLocalizationProvider>
+          <YouTubePlayerToggle />
+        </UiLocalizationProvider>
+      </AppAtomRegistryProvider>,
+    );
+    const button = document.querySelector<HTMLButtonElement>("[data-youtube-player-toggle]")!;
+    expect(button).not.toBeNull();
+    const label = button.getAttribute("aria-label")!;
+    if (uiLanguage !== "ja") expect(label).toContain("Turn YouTube player on");
+    if (uiLanguage !== "en") expect(label).toContain("YouTubeプレーヤーをオンにする");
+    const rect = button.getBoundingClientRect();
+    expect(rect.right).toBeLessThanOrEqual(390);
+    expect(rect.width / rect.height).toBeCloseTo(2.414, 2);
+    expect(youtubeUrlQueueStore.getSnapshot()).toEqual(queueBefore);
+    if (import.meta.env.VITE_CAPTURE_COMPOSER === "1") {
+      await page.screenshot({
+        path: `../../../../../docs/pr-assets/player-composer/youtube-toggle-${uiLanguage}.png`,
+        save: true,
+      });
+    }
+  },
+);
+
+it("does not enable YouTube when the backend capability is disabled", async () => {
+  const config = makeConfig({ kind: "playlist", id: "PLtestPlaylist123" });
+  setServerConfigSnapshot({
+    ...config,
+    ambientExperienceCapabilities: {
+      ...config.ambientExperienceCapabilities,
+      youtubePlayer: false,
+    },
+  });
+  mounted = await render(
+    <AppAtomRegistryProvider>
+      <YouTubePlayerToggle />
+    </AppAtomRegistryProvider>,
+  );
+  await expect.element(page.getByRole("button", { name: "Turn YouTube player on" })).toBeDisabled();
 });
 
 it("marks the document only while a local video background is effective", async () => {

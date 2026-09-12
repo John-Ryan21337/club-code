@@ -1,5 +1,23 @@
 # Player view toggle and composer layout
 
+The chat header shows a YouTube on/off button when a YouTube source or URL queue
+is loaded. Off removes the player and stops playback. On reloads the source;
+the playlist or queue and saved player geometry remain available. Playback time
+inside a YouTube playlist is not restored after turning the player off.
+The button has translated English, Japanese, and bilingual accessible labels.
+Its width follows the silver ratio of its height.
+
+New composer effort defaults to High for models that offer High. Saved choices
+still take precedence. Models without High retain their supported default.
+This applies to Codex reasoning effort, Claude effort, and OpenCode variants.
+The worker-count control currently belongs to the Codex integration only; it
+sets a concurrent worker ceiling and does not request a fixed deployment count.
+
+YouTubeのソースまたはURLキューを読み込むと、チャットヘッダーにオン／オフボタンが表示されます。
+オフにすると再生が停止します。オンにするとソースを再読み込みします。
+プレイリスト、キュー、保存した位置とサイズは維持されます。再生位置は復元されません。
+対応モデルの初期推論強度はHighです。保存済みの選択は優先されます。
+
 The floating YouTube player has a theater icon next to its close control.
 The theater header has a restore icon. Restore returns to the saved floating
 position and size. Both actions keep the same iframe and selected video.
@@ -39,6 +57,7 @@ English, Japanese and dual mode. The screenshots in `pr-assets/player-composer`
 use the real application components with synthetic projects and provider metadata.
 They do not use a personal account or media library.
 
-The final Chromium suite passed all 436 checks in 50 files. The repository test
-graph, formatting, lint, type checks, and forced desktop build passed. Player
+The updated Chromium suite passed all 443 checks in 50 files. The repository test
+graph passed 4,678 tests with three skips. Formatting, lint, type checks, and the
+forced desktop build passed. Player
 checks use a synthetic iframe load; these results do not certify live playback.
